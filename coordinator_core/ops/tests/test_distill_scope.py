@@ -1385,21 +1385,22 @@ def test_logs_are_triage_only_and_a_cited_plan_is_the_only_candidate(tmp_path, m
     assert scope.counts["log_cited_plan_count"] == 1 and _not_admitted(scope).get(cited) is None
     assert scannable_count(root, cohort_specs=_PM_SPECS) == 1
     assert scope.watermark is not None
-    assert scope.watermark.cursor.endswith(cited) and scope.watermark.pass_complete is True
+    assert scope.watermark.cursor.endswith(cited)
+    assert scope.counts["backlog_total"] == 1 and scope.watermark.pass_complete is False
     assert not [rel for rel in scope.keys if rel in logs]
 
 
-def test_admission_refuses_uncited_plans_and_light_plans_and_names_why(fixture_repo):
+def test_admission_refuses_light_plans_and_ranks_uncited_ones_after_cited_ones(fixture_repo, wide_budget):
     uncited = _heavy_plan(fixture_repo, "2026-11-01-uncited")
+    cited = _heavy_plan(fixture_repo, "2026-11-04-cited")
     light = "docs/plans/2026-11-02-light.md"
     _write(fixture_repo / light, "---\nstatus: implemented\n---\nsmall\n")
-    _log(fixture_repo, "2026-11-03", light)
+    _log(fixture_repo, "2026-11-03", light, cited)
     scope = _admit_scope(fixture_repo)
     reasons = _not_admitted(scope)
-    assert reasons[uncited] == "not_log_cited"
-    assert reasons[light] == "below_admission"
-    assert reasons["archive/specs/2026-07-01-alpha.md"] == "not_log_cited"
-    assert uncited not in _batched(scope) and light not in _batched(scope)
+    assert reasons == {light: "below_admission", "archive/specs/2026-07-01-alpha.md": "below_admission"}
+    batched = _batched(scope)
+    assert batched.index(cited) < batched.index(uncited) and light not in batched
     assert scope.counts["not_admitted"] == len(reasons)
 
 
@@ -1417,7 +1418,7 @@ def test_admission_refuses_what_a_guide_or_decision_already_cites(fixture_repo, 
     assert fresh in _batched(scope)
 
 
-def test_a_harvested_log_is_no_target_and_its_citations_admit_nothing(fixture_repo):
+def test_a_harvested_log_is_no_target_and_its_citations_do_not_rank_a_plan(fixture_repo, wide_budget):
     plan = _heavy_plan(fixture_repo, "2026-11-01-big")
     done = _log(fixture_repo, "2026-11-02", plan)
     log = fixture_repo / "state" / "distillation-log.md"
@@ -1428,7 +1429,7 @@ def test_a_harvested_log_is_no_target_and_its_citations_admit_nothing(fixture_re
     scope = _admit_scope(fixture_repo)
     assert done not in scope.manifest["cohorts"]["logs"]
     assert done not in _batched(scope)
-    assert _not_admitted(scope)[plan] == "not_log_cited"
+    assert plan in _batched(scope) and scope.counts["log_cited_plan_count"] == 0
 
 
 def test_log_headers_are_not_log_entries(fixture_repo):
@@ -1451,6 +1452,119 @@ def test_cited_plans_rank_by_citation_count_then_bytes(fixture_repo, wide_budget
     _log(fixture_repo, "2026-11-06", twice, fatter)
     plans = [p for p in _batched(_admit_scope(fixture_repo)) if p.startswith("docs/plans/")]
     assert plans == [fatter, twice, once]
+
+
+def _harvest_log_row(root: Path, rel: str) -> None:
+    log = root / "state" / "distillation-log.md"
+    log.write_text(
+        log.read_text(encoding="utf-8") + f"- {rel} -> DISTILLED, promoted (run: 2026-07-05-00h00)\n", encoding="utf-8"
+    )
+
+
+def _completed(root: Path, name: str, body: str = "") -> str:
+    rel = f"archive/completed/{name}.md"
+    _write(root / rel, f"---\nstatus: pending-release\n---\n{body}{_HEAVY}")
+    return rel
+
+
+def test_all_logs_harvested_still_admits_uncited_plans_oldest_first_plans_before_completion(
+    fixture_repo, wide_budget
+):
+    newer = _heavy_plan(fixture_repo, "2026-11-03-newer")
+    older = _heavy_plan(fixture_repo, "2026-11-01-older")
+    _harvest_log_row(fixture_repo, _log(fixture_repo, "2026-11-10", newer))
+    old_rec = _completed(fixture_repo, "2026-10-01-old-record")
+    new_rec = _completed(fixture_repo, "2026-11-20-new-record")
+    scope = _admit_scope(fixture_repo)
+    batched = _batched(scope)
+    assert scope.counts["log_cited_plan_count"] == 0
+    assert batched == [older, newer, old_rec] and new_rec not in batched
+    assert _not_admitted(scope)[new_rec] == "not_log_cited"
+
+
+def test_fallback_admission_stays_inside_the_batch_file_cap(fixture_repo, wide_budget):
+    for day in ("01", "02", "03", "04"):
+        _heavy_plan(fixture_repo, f"2026-11-{day}-uncited")
+    scope = _admit_scope(fixture_repo, batch_size=2, max_scan_batches=1)
+    assert _batched(scope) == [f"docs/plans/2026-11-0{d}-uncited.md" for d in (1, 2)]
+    assert scope.counts["deferred"] == 2 and scope.counts["backlog_total"] == 2 + 2 + 1
+
+
+def test_harvest_debt_counts_only_unharvested_specs_and_the_old_key_stays_an_alias(fixture_repo):
+    counts = compute_scope(fixture_repo, run_id="r").counts
+    assert counts["archived_spec_total"] == 3
+    assert counts["harvest_debt"] == 2
+    assert counts["harvest_debt_total"] == counts["archived_spec_total"]
+
+
+def test_not_admitted_by_reason_shape_is_reason_to_cohort_to_int(fixture_repo, wide_budget):
+    _heavy_plan(fixture_repo, "2026-11-01-uncited")
+    _completed(fixture_repo, "2026-11-30-unreached")
+    _write(fixture_repo / "docs/plans/2026-11-04-tiny.md", "---\nstatus: implemented\n---\nsmall\n")
+    c = _admit_scope(fixture_repo, batch_size=100, max_scan_batches=1).counts
+    by_reason = c["not_admitted_by_reason"]
+    assert set(by_reason) == {"not_log_cited", "below_admission", "already_captured"}
+    for by_cohort in by_reason.values():
+        assert isinstance(by_cohort, dict)
+        assert set(by_cohort) == {"plans_specs", "completed", "other"}
+        assert all(type(n) is int for n in by_cohort.values())
+    assert sum(sum(v.values()) for v in by_reason.values()) == c["not_admitted"]
+
+
+def test_backlog_total_is_scannable_plus_deferred_plus_not_admitted_less_captured(fixture_repo, wide_budget):
+    uncited = _heavy_plan(fixture_repo, "2026-11-01-uncited")
+    in_guide = _heavy_plan(fixture_repo, "2026-11-02-in-guide")
+    _write(fixture_repo / "docs" / "wiki" / "guide.md", "From docs/plans/2026-11-02-in-guide.md\n")
+    light = "docs/plans/2026-11-03-light.md"
+    _write(fixture_repo / light, "---\nstatus: implemented\n---\n" + "x" * 8000)
+    tiny = "docs/plans/2026-11-04-tiny.md"
+    _write(fixture_repo / tiny, "---\nstatus: implemented\n---\nsmall\n")
+    _harvest_log_row(fixture_repo, "archive/daily-summaries/2026-11-10.md")
+    _log(fixture_repo, "2026-11-10", uncited)
+    unreached = _completed(fixture_repo, "2026-11-30-unreached")
+    scope = _admit_scope(fixture_repo, batch_size=100, max_scan_batches=1)
+    c = scope.counts
+    by_reason = c["not_admitted_by_reason"]
+    assert by_reason == {
+        "not_log_cited": {"plans_specs": 0, "completed": 1, "other": 0},
+        "below_admission": {"plans_specs": 3, "completed": 0, "other": 0},
+        "already_captured": {"plans_specs": 1, "completed": 0, "other": 0},
+    }
+    assert "not_admitted_by_cohort" not in c
+    assert c["below_admission_near_floor"] == 1
+    assert _not_admitted(scope)[unreached] == "not_log_cited" and _not_admitted(scope)[in_guide] == "already_captured"
+    assert c["backlog_total"] == c["scannable"] + c["deferred"] + c["not_admitted"] - 1
+    assert "backlog_total=" in render_summary(scope.manifest, c)
+
+
+def test_a_completion_record_of_a_captured_or_harvested_plan_is_already_captured(fixture_repo, wide_budget):
+    _harvest_log_row(fixture_repo, "archive/daily-summaries/2026-11-10.md")
+    _log(fixture_repo, "2026-11-10", "nothing")
+    _write(fixture_repo / "docs" / "wiki" / "guide.md", "From docs/plans/2026-09-01-captured-plan.md\n")
+    via_wiki = _completed(fixture_repo, "2026-09-02-rec-a", "Delivered docs/plans/2026-09-01-captured-plan.md\n")
+    _harvest_log_row(fixture_repo, "archive/specs/2026-09-03-harvested-plan.md")
+    via_log = _completed(fixture_repo, "2026-09-04-rec-b", "Delivered 2026-09-03-harvested-plan\n")
+    source = _completed(fixture_repo, "2026-09-05-rec-c", "Delivered 2026-09-06-open-plan\n")
+    reasons = _not_admitted(_admit_scope(fixture_repo))
+    assert reasons[via_wiki] == reasons[via_log] == "already_captured"
+    assert source not in reasons
+
+
+def test_pass_complete_holds_only_at_zero_backlog(tmp_path, monkeypatch):
+    from coordinator_core import run_watermark
+
+    monkeypatch.setattr(run_watermark, "registry_get", lambda _key: None)
+    root = tmp_path / "empty-wm"
+    _write(root / "state" / "distillation-log.md", "## Run seed\n")
+    _git_init(root)
+    for argv in (["config", "user.email", "t@example.com"], ["config", "user.name", "T"], ["add", "-A"], ["commit", "-q", "-m", "seed"]):
+        subprocess.run(["git", *argv], cwd=root, check=True, **no_console_passthrough_kwargs())
+    scope = _admit_scope(root)
+    assert scope.counts["backlog_total"] == 0 and scope.watermark.pass_complete is True
+    _heavy_plan(root, "2026-11-01-late")
+    scope = _admit_scope(root)
+    assert scope.counts["backlog_total"] == 1 and scope.watermark.pass_complete is False
+    assert scope.settle([]).pass_complete is False
 
 
 def test_an_ephemeral_fate_stays_mechanical_never_not_admitted(fixture_repo):
@@ -1626,7 +1740,7 @@ def test_the_handler_stages_the_proposal_and_never_the_state_file(tmp_path, monk
     result = _handler({"run_id": "r", "batch_size": 2}, repo_root=root / ".git")
     pending = root / "state" / "scratch" / "artifact-distillation" / "r" / "watermark.pending.json"
     assert result["counts"]["scannable"] == 5 and pending.is_file()
-    assert json.loads(pending.read_text(encoding="utf-8"))["pass_complete"] is True
+    assert json.loads(pending.read_text(encoding="utf-8"))["pass_complete"] is False
     assert not (root / "state" / "run-watermarks").exists()
 
 

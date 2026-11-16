@@ -334,6 +334,12 @@ _SPAWN_COUNT_HIGH_WATER = {
         },
     },
     "dispatch.ask_gate": {
+        "resume_checkpoint_seed_log": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-11-16 at the value it entered with (budget-manifest since 2026-11-15): one git log seeds the landed-trailer record when none exists."
+            ),
+        },
         "resume_checkpoint_log": {
             "ceiling": 1,
             "reason": (

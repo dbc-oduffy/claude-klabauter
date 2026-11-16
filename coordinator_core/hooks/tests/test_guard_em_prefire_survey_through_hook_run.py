@@ -157,7 +157,8 @@ def _decision(body: dict) -> str:
 
 def _nudged(body: dict) -> bool:
     hso = body.get("hookSpecificOutput") or {}
-    return "[engine-ask nag" in str(hso.get("additionalContext", "")) and "permissionDecision" not in hso
+    text = str(hso.get("additionalContext", ""))
+    return ("[engine-ask nag" in text or "[em-prefire-survey]" in text) and "permissionDecision" not in hso
 
 
 def _reason(body: dict) -> str:
@@ -167,13 +168,20 @@ def _reason(body: dict) -> str:
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
-def test_ninth_call_advises_through_the_door_with_fire_step_and_is_allowed(door, monkeypatch, capsys, name):
+def test_ninth_call_advises_through_the_door_with_fire_step_and_is_allowed(door, monkeypatch, capsys, name, tmp_path):
+    # The nag counter is per session and process-wide: point it at this test's dir so the first
+    # nag is deterministically the full text and the next one the terse counted repeat.
+    real_bump = warp_fire._bump
+    monkeypatch.setattr(warp_fire, "_bump", lambda sid, state_dir=None: real_bump(sid, tmp_path / "nag-state"))
     door.history(8, name)
     rc, body = door.run(monkeypatch, capsys, name)
-    assert rc == 0
-    assert _nudged(body)
-    assert _reason(body).startswith("[engine-ask nag")
+    assert rc == 0 and _nudged(body)
+    assert _reason(body).startswith("[em-prefire-survey]")
     assert warp_fire.fire_step().split("call ", 1)[1] in _reason(body)
+    rc, body = door.run(monkeypatch, capsys, name)
+    assert rc == 0 and _nudged(body)
+    assert _reason(body).startswith("[engine-ask nag")
+    assert warp_fire.fire_command() in _reason(body)
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])

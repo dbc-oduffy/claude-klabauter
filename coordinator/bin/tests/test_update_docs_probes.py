@@ -319,6 +319,17 @@ def test_queue_prune_sweep_yaml_leg_missing_wrapper_cli_fails_loud(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _admissible_plans(root: Path, n: int) -> None:
+    """Terminal plans of admission weight: the distill backlog the threshold counts (logs are triage-only)."""
+    from coordinator_core.distill.manifest_schema import PLAN_ADMISSION_MIN_BYTES
+
+    plans = root / "docs" / "plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    body = "x" * (PLAN_ADMISSION_MIN_BYTES + 1)
+    for i in range(n):
+        (plans / f"2026-10-01-p{i}.md").write_text(f"---\nstatus: implemented\n---\n{body}\n", encoding="utf-8")
+
+
 def _touch_md_files(dir_path: Path, n: int) -> None:
     dir_path.mkdir(parents=True, exist_ok=True)
     for i in range(n):
@@ -342,7 +353,7 @@ def test_distill_threshold_under_threshold_no_fire(tmp_path, capsys):
 
 def test_distill_threshold_count_fires(tmp_path, capsys):
     _write_dateless_log(tmp_path)
-    _touch_md_files(tmp_path / "archive" / "daily-summaries", 50)
+    _admissible_plans(tmp_path, 50)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     rc = _mod._cmd_distill_threshold(args)
     assert rc == 1
@@ -351,14 +362,14 @@ def test_distill_threshold_count_fires(tmp_path, capsys):
 
 def test_distill_threshold_dateless_log_count_20_fires(tmp_path):
     _write_dateless_log(tmp_path)
-    _touch_md_files(tmp_path / "archive" / "daily-summaries", 20)
+    _admissible_plans(tmp_path, 20)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     assert _mod._cmd_distill_threshold(args) == 1
 
 
 def test_distill_threshold_missing_log_counts_against_an_empty_baseline_and_fires(tmp_path, capsys):
     """An absent log is distill.scope's empty baseline (dd57eaf5f8): a fresh repo's backlog fires."""
-    _touch_md_files(tmp_path / "archive" / "daily-summaries", 60)
+    _admissible_plans(tmp_path, 60)
     args = _ns(repo_root=str(tmp_path), log_path=None)
     assert _mod._cmd_distill_threshold(args) == 1
     out = capsys.readouterr().out
@@ -369,8 +380,7 @@ def test_distill_threshold_total_matches_distill_scope_scannable(tmp_path, capsy
     from coordinator_core.ops.distill_scope import PM_RULING_2026_08_06_COHORT_SPECS, compute_scope
 
     _write_dateless_log(tmp_path)
-    _touch_md_files(tmp_path / "archive" / "daily-summaries", 21)
-    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    _admissible_plans(tmp_path, 21)
     (tmp_path / "docs" / "plans" / "2026-11-02-draft.md").write_text("---\nstatus: draft\n---\nbody\n", encoding="utf-8")
     args = _ns(repo_root=str(tmp_path), log_path=None)
     assert _mod._cmd_distill_threshold(args) == 1

@@ -609,8 +609,8 @@ def budget_block(
 #: Manifest cohort label for implemented, not-yet-harvested ``docs/plans`` plans.
 PLANS_COHORT = "plans"
 
-#: Cohorts (specs, plans, completed) admitted only when an unharvested log cites them and they
-#: clear the weight floor.
+#: Cohorts (specs, plans, completed) that must clear the weight floor; an unharvested log's
+#: citation ranks them first.
 _GATED_COHORTS = frozenset({"harvest", PLANS_COHORT, "completed"})
 _DECISIONS_DIR = "docs/decisions"
 
@@ -1002,6 +1002,10 @@ class _Cohorts:
     debt_result: _harvest_debt.HarvestDebtResult
     #: Every cohort member's walked entry, keyed by worktree-relative path.
     entries: dict[str, Any]
+    #: Slugified stems of every file the distillation log credits as harvested.
+    harvested_stems: frozenset[str] = frozenset()
+    #: Filename date of the newest harvested log ("" when none is dated or harvested).
+    newest_harvested_log: str = ""
 
     @property
     def harvest_mode_names(self) -> list[str]:
@@ -1099,8 +1103,15 @@ def _gather_cohorts(
             entries[rel] = entry
     for name, members in data_driven.items():
         data_driven[name] = sorted(set(members))
+    newest_harvested_log = ""
     if LOGS_COHORT in data_driven:
-        data_driven[LOGS_COHORT] = _undebted_logs(log, data_driven[LOGS_COHORT])
+        all_logs = data_driven[LOGS_COHORT]
+        data_driven[LOGS_COHORT] = _undebted_logs(log, all_logs)
+        open_logs = set(data_driven[LOGS_COHORT])
+        newest_harvested_log = max((_date_sort_key(rel)[0] for rel in all_logs if rel not in open_logs), default="")
+    harvested_stems = frozenset(
+        slugify_stem(name.rsplit("/", 1)[-1].removesuffix(".md")) for name in (*log["canonical"], *log["legacy"])
+    )
     return _Cohorts(
         harvest=harvest_cohort,
         skip=skip_cohort,
@@ -1110,6 +1121,8 @@ def _gather_cohorts(
         data_driven=data_driven,
         debt_result=debt_result,
         entries=entries,
+        harvested_stems=harvested_stems,
+        newest_harvested_log=newest_harvested_log,
     )
 
 
@@ -1140,11 +1153,14 @@ def _split_scannable(
 
 @dataclass(frozen=True)
 class _Admitted:
-    #: Admitted paths in admission order: cited plans by citation count, the rest by date.
+    #: Admitted paths in admission order: cited plans by citation count, memos by date, then the
+    #: uncited fallback (plans and specs, then completion records) oldest first.
     ranked: list[str]
     not_admitted: list[dict[str, str]]
     #: Plans, specs and completed files an unharvested log cites, before the weight and capture filters.
     log_cited_count: int
+    #: below_admission files within 2x PLAN_ADMISSION_MIN_BYTES.
+    below_near_floor: int = 0
 
 
 def _captured_keys(cache: _ScopeCache, worktree_root: Path, wiki_dirs: list[str]) -> set[str]:
@@ -1169,6 +1185,26 @@ def _captured_keys(cache: _ScopeCache, worktree_root: Path, wiki_dirs: list[str]
     return captured
 
 
+#: Cohorts whose candidates are ripe (implemented/shipped) by construction: terminal, so the
+#: uncited fallback admits them.
+_PLAN_SPEC_COHORTS = frozenset({"harvest", PLANS_COHORT})
+
+
+def _is_captured(
+    stem: str, cohort: str, rel: str, cache: _ScopeCache, gathered: _Cohorts, captured: set[str]
+) -> bool:
+    """A guide or decision already names the file, or, for a completion record, the plan it cites
+    is captured or harvested."""
+    if stem in captured:
+        return True
+    if cohort != "completed":
+        return False
+    return any(
+        key in captured or key in gathered.harvested_stems
+        for key in (stem, *_cites_fact(cache, rel, gathered.entries[rel]))
+    )
+
+
 def _admit(
     cache: _ScopeCache,
     gathered: _Cohorts,
@@ -1176,18 +1212,24 @@ def _admit(
     cohort_of: dict[str, str],
     captured: set[str],
 ) -> _Admitted:
-    """Settle which candidates earn a reading agent. A gated file (spec, plan, completed) needs an
-    unharvested log citing it and PLAN_ADMISSION_MIN_BYTES of weight; any non-log file a guide or
-    decision already cites is captured. Logs are never candidates: they are read here for the
-    citations they hold and nothing else."""
+    """Settle which candidates earn a reading agent. A gated file (spec, plan, completed) needs
+    PLAN_ADMISSION_MIN_BYTES of weight and is admitted first when an unharvested log cites it; an
+    uncited one is admitted after, by terminal status and age: any plan or spec, a completion record
+    older than the newest harvested log. Anything a guide or decision already cites, and a
+    completion record whose plan is captured or harvested, is captured. Logs are never candidates:
+    they are read here for the citations they hold and nothing else."""
     cite_counts: dict[str, int] = {}
     for rel in gathered.data_driven.get(LOGS_COHORT, []):
         for key in _cites_fact(cache, rel, gathered.entries[rel]):
             cite_counts[key] = cite_counts.get(key, 0) + 1
     cited: list[tuple[int, int, tuple[str, str], str]] = []
     others: list[str] = []
+    fallback_plans: list[str] = []
+    fallback_completed: list[str] = []
     not_admitted: list[dict[str, str]] = []
     log_cited = 0
+    near_floor = 0
+    floor = _schema.PLAN_ADMISSION_MIN_BYTES
     for rel in sorted(scannable_set):
         cohort = cohort_of[rel]
         stat = _stat_key(gathered.entries[rel])
@@ -1197,20 +1239,52 @@ def _admit(
         count = cite_counts.get(stem, 0) if gated else 0
         log_cited += bool(count)
         reason: str | None = None
-        if gated and count == 0:
-            reason = "not_log_cited"
-        elif gated and size < _schema.PLAN_ADMISSION_MIN_BYTES:
-            reason = "below_admission"
-        elif stem in captured:
+        if _is_captured(stem, cohort, rel, cache, gathered, captured):
             reason = "already_captured"
+        elif gated and size < floor:
+            reason = "below_admission"
+            near_floor += size >= floor // 2
+        elif gated and count == 0 and not _fallback_eligible(rel, cohort, gathered):
+            reason = "not_log_cited"
         if reason is not None:
             not_admitted.append({"path": rel, "cohort": cohort, "reason": reason})
-        elif gated:
+        elif count:
             cited.append((-count, -size, _date_sort_key(rel), rel))
+        elif gated:
+            (fallback_plans if cohort in _PLAN_SPEC_COHORTS else fallback_completed).append(rel)
         else:
             others.append(rel)
-    ranked = [row[3] for row in sorted(cited)] + sorted(others, key=_date_sort_key)
-    return _Admitted(ranked=ranked, not_admitted=not_admitted, log_cited_count=log_cited)
+    ranked = (
+        [row[3] for row in sorted(cited)]
+        + sorted(others, key=_date_sort_key)
+        + sorted(fallback_plans, key=_date_sort_key)
+        + sorted(fallback_completed, key=_date_sort_key)
+    )
+    return _Admitted(ranked=ranked, not_admitted=not_admitted, log_cited_count=log_cited, below_near_floor=near_floor)
+
+
+def _fallback_eligible(rel: str, cohort: str, gathered: _Cohorts) -> bool:
+    """An uncited gated file admits on terminal status plus age: a plan or spec always (the
+    candidate set is ripe), a completion record only when older than the newest harvested log."""
+    if cohort in _PLAN_SPEC_COHORTS:
+        return True
+    date = _date_sort_key(rel)[0]
+    return bool(date) and date < gathered.newest_harvested_log
+
+
+#: not_admitted cohort -> report group: plans and specs apart from completion records.
+_BREAKDOWN_GROUP = {"harvest": "plans_specs", PLANS_COHORT: "plans_specs", "completed": "completed"}
+_NOT_ADMITTED_REASONS = ("not_log_cited", "below_admission", "already_captured")
+
+
+def _not_admitted_breakdown(not_admitted: list[dict[str, str]]) -> dict[str, dict[str, int]]:
+    """reason -> report group -> count; every reason and group is present, zero or not."""
+    by_reason: dict[str, dict[str, int]] = {
+        reason: dict.fromkeys(("plans_specs", "completed", "other"), 0) for reason in _NOT_ADMITTED_REASONS
+    }
+    for row in not_admitted:
+        by_reason[row["reason"]][_BREAKDOWN_GROUP.get(row["cohort"], "other")] += 1
+    return by_reason
 
 
 def _cohort_excluded_count(
@@ -1450,10 +1524,17 @@ def _plan_watermark(worktree_root: Path, ranked: list[str], budget: int) -> _Wat
     )
 
 
-def _settle_watermark(plan: _WatermarkPlan, overflow: list[str]) -> _run_watermark.Watermark:
+def _settle_watermark(plan: _WatermarkPlan, overflow: list[str], admittable: int = 0) -> _run_watermark.Watermark:
     """The watermark to stage once byte-packing has deferred ``overflow`` files: the cursor stops
     before the first deferred backlog file, and a deferred changed file keeps the base so the next
-    run selects it again."""
+    run selects it again. ``pass_complete`` holds only while ``admittable`` is 0: scannable plus
+    deferred, which already carry every fallback admission. Trap: keying it on backlog_total instead
+    would hold it false forever, since below_admission and non-terminal files never admit."""
+    settled = _settle_cursor(plan, overflow)
+    return replace(settled, pass_complete=False) if admittable > 0 and settled.pass_complete else settled
+
+
+def _settle_cursor(plan: _WatermarkPlan, overflow: list[str]) -> _run_watermark.Watermark:
     if not overflow:
         return plan.proposed
     wm = plan.wm
@@ -1491,8 +1572,9 @@ def compute_scope(
     """Compute the full scope-manifest for one distill.scope run.
 
     ``admit`` is the op's mode: the logs cohort is added first (``cohort_specs`` omitted means the
-    PM-ruling set), a spec, plan or completed file is admitted only when an unharvested log cites it
-    and it clears PLAN_ADMISSION_MIN_BYTES, a file a guide or decision already cites is captured,
+    PM-ruling set), a spec, plan or completed file is admitted when it clears PLAN_ADMISSION_MIN_BYTES
+    (an unharvested log's citation ranks it first; uncited, a plan or spec, or a completion record
+    older than the newest harvested log, ranks after), a file a guide or decision already cites is captured,
     and batches past ``max_scan_batches`` are deferred. ``max_scan_batches`` omitted is the count of
     batches the topic-fitted file cap packs into (``fit_files``: fixed relay plus per-topic synthesis
     against the ``distill`` run budget, at least one): an over-budget backlog narrows and defers, never refuses or shards. Each file settles into exactly one of
@@ -1706,19 +1788,32 @@ def compute_scope(
         "scannable": len(scannable),
         "batches": len(batches),
         "mechanical": len(mechanical),
+        "archived_spec_total": debt_result.total_specs,
+        "harvest_debt": len(debt_result.harvest_debt),
+        # Deprecated alias of archived_spec_total, kept one release for distill_measure.
         "harvest_debt_total": debt_result.total_specs,
         "harvest_debt_warn": int(debt_result.warn),
     }
     counts.update({name: len(paths) for name, paths in data_driven_cohorts.items()})
+    admittable = 0
     if admitted is not None and deferred is not None:
         counts["not_admitted"] = len(admitted.not_admitted)
         counts["deferred"] = len(deferred)
         counts["log_cited_plan_count"] = admitted.log_cited_count
+        by_reason = _not_admitted_breakdown(admitted.not_admitted)
+        counts["not_admitted_by_reason"] = by_reason
+        counts["below_admission_near_floor"] = admitted.below_near_floor
+        admittable = counts["scannable"] + counts["deferred"]
+        counts["backlog_total"] = (
+            counts["scannable"] + counts["deferred"] + counts["not_admitted"] - sum(by_reason["already_captured"].values())
+        )
         if cohort_specs is not None:
             counts["cohort_excluded"] = _cohort_excluded_count(worktree_root, gathered, handoffs_dir, memos_dir)
 
-    proposed = _settle_watermark(wm_plan, overflow) if wm_plan is not None else None
-    settle = (lambda extra: _settle_watermark(wm_plan, overflow + extra)) if wm_plan is not None else None
+    proposed = _settle_watermark(wm_plan, overflow, admittable) if wm_plan is not None else None
+    settle = (
+        (lambda extra: _settle_watermark(wm_plan, overflow + extra, admittable)) if wm_plan is not None else None
+    )
     return ScopeResult(
         manifest=manifest, counts=counts, digests=digests, keys=keys, watermark=proposed, settle=settle,
         fitted_batches=fitted_batches,
@@ -1937,8 +2032,13 @@ _FIXED_COUNT_KEYS = frozenset(
         "scannable",
         "batches",
         "mechanical",
+        "archived_spec_total",
+        "harvest_debt",
         "harvest_debt_total",
         "harvest_debt_warn",
+        "not_admitted_by_reason",
+        "below_admission_near_floor",
+        "backlog_total",
         "not_admitted",
         "deferred",
         "log_cited_plan_count",
@@ -1969,16 +2069,20 @@ def render_summary(manifest: dict[str, Any], counts: dict[str, int]) -> str:
         f"{counts.get('mechanical', 0)} mechanical",
         f"  harvest={counts['harvest']} skip={counts['skip']} "
         f"sidecars={counts['sidecars']}" + (f" {dynamic_part}" if dynamic_part else ""),
-        f"  harvest_debt_total={counts['harvest_debt_total']} "
+        f"  harvest_debt={counts['harvest_debt']} archived_spec_total={counts['archived_spec_total']} "
         f"warn={'yes' if counts['harvest_debt_warn'] else 'no'}",
         f"  wiki_dirs={manifest['wiki_dirs']} wiki_slugs_count={len(manifest['wiki_slugs'])}",
     ]
     if "not_admitted" in counts:
+        by_reason = counts.get("not_admitted_by_reason", {})
         lines.insert(
             1,
             f"  not_admitted={counts['not_admitted']} deferred={counts.get('deferred', 0)} "
             f"log_cited_plans={counts.get('log_cited_plan_count', 0)} "
-            f"cohort_excluded={counts.get('cohort_excluded', 0)}",
+            f"cohort_excluded={counts.get('cohort_excluded', 0)}\n"
+            f"  backlog_total={counts.get('backlog_total', 0)} "
+            + " ".join(f"{reason}={sum(by_cohort.values())}" for reason, by_cohort in by_reason.items())
+            + f" below_admission_near_floor={counts.get('below_admission_near_floor', 0)}",
         )
     return "\n".join(lines)
 

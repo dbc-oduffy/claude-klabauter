@@ -378,7 +378,8 @@ def test_distill_threshold_total_equals_compute_scope_scannable(tmp_path):
 
     result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
     scope = compute_scope(tmp_path, run_id="t", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS), admit=True)
-    assert result.detail["total"] == scope.counts["scannable"] + scope.counts["deferred"] == 10
+    # Logs are triage-only (188eb970cd): 7 plans + the cited spec, never the log itself.
+    assert result.detail["total"] == scope.counts["scannable"] + scope.counts["deferred"] == 8
 
 
 # ---------------------------------------------------------------------------
@@ -855,8 +856,8 @@ def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path):
     out = udg._updatedocs_gates({"gates": ["distill-threshold"]}, repo_root=worktree / ".git")
     gate = out["gates"][0]
 
-    assert gate["detail"]["total"] == 4, (
-        f"gate counted {gate['detail']['total']} of 4 files (3 plans, 1 daily log) — corpus resolved off the worktree"
+    assert gate["detail"]["total"] == 3, (
+        f"gate counted {gate['detail']['total']} of 3 plans (the daily log is triage-only) — corpus resolved off the worktree"
     )
     assert gate["verdict"] != "clean" or gate["detail"]["total"] > 0
 

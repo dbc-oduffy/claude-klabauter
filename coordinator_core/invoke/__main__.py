@@ -351,6 +351,8 @@ Sending a mid-run revision to a warp run:
   withhold_paths ([{path, reason}]); add_paths ([repo-relative path]: write paths the run was not sized
   for; any outside its write set refuses); owned_red ([{nodeid, owner_run_id, reason?}]: failing tests another
   run owns); credit_chunks ([{chunk, evidence}]); build_only (bool);
+  pre_existing ([{nodeid, reason}]: failing tests ruled red at base, not this run's);
+  base_ref (git ref every premise check of the run's plan evaluates against);
   stop_after ("plan": park the run after planning); retract_note ({note_id, reason});
   retract_row ({row_id, reason}: withdraws one open, unclaimed revision row); claim (bool, records the ruling as work; needs verbatim).
   accept_partial ([{chunk, reason}]: rules PARTIAL chunks good enough to release their dependents);
