@@ -76,7 +76,7 @@ def test_default_script_validates_with_zero_errors() -> None:
 def _run(notes: str, reply: object, *, prep: object = None) -> dict:
     script = _script()
     harness = (
-        "const _agentDefsClause = () => ''; let _halted = null; let _alreadyDelivered = null; let _alreadyDeliveredRefusal = '';\n"
+        "const _agentDefsClause = () => ''; const _briefPrecedenceTail = ''; let _halted = null; let _alreadyDelivered = null; let _alreadyDeliveredRefusal = '';\n"
         f"const _reviewPrep = {json.dumps(prep)}; const _verifyOnly = false; const _runId = 'run-1';\n"
         f"const _deliveryNotes = {json.dumps(notes)}; let _agentCalls = []; let _agentReply = {json.dumps(reply)};\n"
         "const agent = async (p, o) => { _agentCalls.push(p); if (_agentReply === 'throw') throw new Error('boom'); return _agentReply; };\n"

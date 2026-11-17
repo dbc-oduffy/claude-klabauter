@@ -45,7 +45,7 @@ def _guard(script: str) -> str:
 def _run(notes: str, reply: object) -> dict:
     script = _script()
     harness = (
-        "const _agentDefsClause = () => ''; let _halted = null; let _alreadyDelivered = null; let _alreadyDeliveredRefusal = '';\n"
+        "const _agentDefsClause = () => ''; const _briefPrecedenceTail = ''; let _halted = null; let _alreadyDelivered = null; let _alreadyDeliveredRefusal = '';\n"
         "const _reviewPrep = null; const _verifyOnly = false; const _runId = 'run-1';\n"
         f"const _deliveryNotes = {json.dumps(notes)}; let _agentCalls = []; let _agentReply = {json.dumps(reply)};\n"
         "const agent = async (p, o) => { _agentCalls.push(p); return _agentReply; };\n"
@@ -119,3 +119,39 @@ def test_op_refusal_on_a_no_sha_claim_still_halts_with_the_reason() -> None:
     assert result["halted"]["halted"].startswith(NO_SLICES_HALT)
     assert "write set not clean" in result["halted"]["reason"]
     assert result["delivered"] is None
+
+
+_FAMILY_OK = (
+    'LR1-2: DONE: LR1-2 via agy {"stage_role":"write","attempts":[{"family":"agy","stage":"write",'
+    '"exit_code":0,"verdict":"OK"}],"reported_family":"agy"}'
+)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@_node
+def test_all_ok_family_stage_notes_close_through_the_op() -> None:
+    """G-EM #85: every family stage OK and nothing to land closes already-landed; the op proves HEAD."""
+    notes = f"{_FAMILY_OK} | {_FAMILY_OK.replace('LR1-2', 'LR2-2')}"
+    result = _run(notes, {"ok": True, "sha": _LANDED, "close": {"queued": False}})
+    assert result["halted"] is None
+    assert result["delivered"]["sha"] == _LANDED
+    assert len(result["calls"]) == 1
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@_node
+@pytest.mark.parametrize(
+    "notes",
+    [
+        _FAMILY_OK.replace('"verdict":"OK"', '"verdict":"WARN"'),
+        _FAMILY_OK.replace('"verdict":"OK"}]', '"verdict":"OK"},{"family":"claude","verdict":"FAILED"}]'),
+        f"{_FAMILY_OK} | r2: DONE (changed x.py)",
+        'LR1-2: DONE: LR1-2 via agy {"stage_role":"write","attempts":[]}',
+    ],
+)
+def test_a_non_ok_or_mixed_family_note_set_still_halts(notes) -> None:
+    result = _run(notes, {"ok": True, "sha": _LANDED})
+    assert result["calls"] == []
+    assert result["halted"]["halted"].startswith(NO_SLICES_HALT)

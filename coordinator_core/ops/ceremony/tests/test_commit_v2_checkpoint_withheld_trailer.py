@@ -104,3 +104,20 @@ def test_a_checkpoint_that_withholds_nothing_has_no_trailer_and_stamps_every_row
     assert "Checkpoint-Withheld" not in _git(repo, "log", "-1", "--format=%B", out["sha"])
     rows = _rows(repo)
     assert rows["C1"]["disposition"] == "coded" and rows["C2"]["disposition"] == "coded"
+
+
+def test_nothing_to_commit_after_a_withhold_names_the_withheld_path(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The withheld path is the only diff: the reply names it and why, never a bare "already match HEAD"."""
+    _withhold_held(monkeypatch)
+    _w(repo / _LANDED, "row\n")
+    _git(repo, "add", _LANDED)
+    _git(repo, "commit", "-q", "-m", "landed earlier")
+    base = _git(repo, "rev-parse", "HEAD")
+    _w(repo / _HELD, "row\n")
+    message = f"checkpoint(wave 0): 1 row — C1\n\nCheckpoint-Plan: {_PLAN}\nCheckpoint-Base: {base}\n"
+
+    out = commit_v2._handler({"paths": [_HELD, _LANDED], "message": message}, repo_root=repo / ".git")
+
+    assert out["committed"] is False and out.get("nothing_to_commit") is True, out
+    assert out["checkpoint_withheld_paths"] == [_HELD]
+    assert _HELD in out["error"] and "no write-time print" in out["error"]

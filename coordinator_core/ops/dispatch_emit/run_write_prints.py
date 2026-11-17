@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -241,3 +242,54 @@ def record(root: Path, run_id: str, paths: Iterable[str]) -> None:
     tmp = target.with_name(f"{PRINTS_FILE}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(merged, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp, target)
+
+
+# A vendor-CLI family-stage call, by the prompt file the runner built under the stage's scratch dir.
+_FAMILY_LEG_RE = re.compile(
+    r"(?:^|[\s;&|(])(?:agy\s+-p|codex\s+exec|grok\s+--prompt-file)\b.*?"
+    r"(scratch/family-stage/[^\s\"')]+?)/([a-z]+)\.prompt\.md"
+)
+
+
+def is_family_leg(command: str) -> bool:
+    """True when `command` runs a family-stage vendor CLI on a staged prompt. Zero spawn."""
+    return bool(command) and _FAMILY_LEG_RE.search(command) is not None
+
+
+def _brief_writes(brief: Path) -> list[str]:
+    """The `writes:` list of a family-stage brief (`stage_family.runner_brief`); empty when absent."""
+    try:
+        lines = brief.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out: list[str] = []
+    inside = False
+    for line in lines:
+        if line.strip() == "writes:":
+            inside = True
+            continue
+        if inside:
+            if not line.startswith("  - "):
+                break
+            out.append(_norm(line[4:].strip()))
+    return [p for p in out if p]
+
+
+def record_family_leg(root: Path, session_id: str, agent_id: str, command: str) -> None:
+    """Print each declared write of a family `write` stage once its vendor CLI call returns.
+
+    Trap: the vendor CLI writes through its own tools inside the runner's Bash call, so the Write/Edit
+    print hook never fires for those bytes; without this print the checkpoint withholds every path the
+    leg wrote and the row commit reports "already match HEAD". Declared paths come from the stage's
+    own `write.brief.md`; a read-only stage prints nothing. Zero spawn; never raises.
+    """
+    if not (session_id and agent_id and command):
+        return
+    try:
+        m = _FAMILY_LEG_RE.search(command)
+        if m is None or m.group(2) != "write":
+            return
+        for rel in _brief_writes(Path(root) / m.group(1) / "write.brief.md"):
+            record_write(Path(root), session_id, agent_id, rel)
+    except Exception:  # noqa: BLE001 -- no print: the checkpoint withholds the file
+        return

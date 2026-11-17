@@ -1006,6 +1006,23 @@ def _half_expectations(
     return {k: v for k, v in expected.items() if k in own}
 
 
+def _name_withheld(error: dict, withheld: list, reasons: dict) -> dict:
+    """`error` naming each checkpoint-withheld path and why, when the landing found nothing to commit.
+
+    Trap: the paths left after a withhold can all match HEAD while a withheld path is the real diff;
+    a bare "already match HEAD" then reads as delivery to a caller that landed nothing.
+    """
+    if not (withheld and error.get("nothing_to_commit")):
+        return error
+    named = "; ".join(f"{p}: {reasons.get(p, 'withheld')}" for p in withheld)
+    return {
+        **error,
+        "error": f"{error.get('error', '')} Withheld from this checkpoint, still differing from HEAD: {named}",
+        "checkpoint_withheld_paths": withheld,
+        "checkpoint_withheld_reasons": reasons,
+    }
+
+
 def _land(
     worktree_root: Path,
     paths: list,
@@ -1900,10 +1917,10 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             result.update(partial=True, sha=landed_halves[0][3])
             return result
         else:
-            return landing.error
+            return _name_withheld(landing.error, checkpoint_withheld, checkpoint_reasons)
     if not landed_halves:
         assert last_error is not None
-        return last_error
+        return _name_withheld(last_error, checkpoint_withheld, checkpoint_reasons)
 
     outcomes = [h[2] for h in landed_halves if h[2] is not None]
     sha = landed_halves[0][3]
