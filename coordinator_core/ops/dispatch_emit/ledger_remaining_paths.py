@@ -302,6 +302,10 @@ def derive_ledger_rows(
         modules = _module_paths(texts, serving, repo_root, spelling=spelling)
         writes: list[str] = []
         for p in drop_excluded([*named, *modules, *serving], exclude):
+            # Trap: a gap line naming a directory resolves (its parent exists), but a directory
+            # in `writes` becomes the row's surface and commit pathspec, which scoped commit refuses.
+            if (repo_root / p).is_dir():
+                continue
             if p not in writes and p not in gated_paths([p]):
                 writes.append(p)
         if rerule and steps:

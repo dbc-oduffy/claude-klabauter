@@ -367,3 +367,24 @@ def test_memo_draft_without_resolvable_receiver_is_underivable_not_an_unstageabl
     )
     assert rows == []
     assert underivable == ["R1"]
+
+
+def test_derived_row_writes_never_carry_a_directory(tmp_path: Path) -> None:
+    """d61dee-2 shape: a gap line naming `state/run-evidence/<run_id>/` must not put the
+    directory into the row's writes; scoped commit refuses a directory pathspec."""
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import derive_ledger_rows
+
+    root = _repo(tmp_path)
+    evidence = "state/run-evidence/ask-20261114T133823-7a3cdc/evidence.md"
+    (root / evidence).parent.mkdir(parents=True)
+    (root / evidence).write_text("x")
+    rem = _rem(
+        "Live engine run with Agy plan-review stage and state/run-evidence/<run_id>/ record (plan row C2, EM-performed)",
+        "no record under state/run-evidence names an agy stage receipt",
+    )
+    notes = ["Ruling #75 (via G-EM): Done = a recorded pass. Write evidence to state/run-evidence/<run_id>/."]
+    rows, _ = derive_ledger_rows(rem, notes, ["R1"], {"R1": ["pkg/mod.py", evidence]}, [], root)
+    writes = rows[0]["writes"]
+    assert evidence in writes
+    assert not [w for w in writes if (root / w).is_dir()]
+    assert rows[0]["writes"][0] != "state/run-evidence"
