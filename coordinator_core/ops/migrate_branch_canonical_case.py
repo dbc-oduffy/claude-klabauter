@@ -159,17 +159,29 @@ def _enumerate_work_refs(repo_root: str) -> list[str]:
     for-each-ref glob the bash oracle used. See module docstring
     Negative-spec: this pattern matches only single-segment names under
     `refs/heads/work/` (FNM_PATHNAME semantics) -- reproduced verbatim, not
-    widened to a recursive match.
+    widened to a recursive match. This box's `<owner>/<machine>/<date>` day
+    branches (`refs/heads/<owner>/*/*`, kept only when they parse as a day
+    branch) ride in the same call; other `<owner>/` branches are never renamed.
     """
+    from coordinator_core.daily_branch import is_allowed_branch, is_work_branch
+    from coordinator_core.machine_resolver import compute_owner
+
+    owner = compute_owner()
+    owner_patterns = [] if owner == "work" else [f"refs/heads/{owner}/*/*"]
     r = _git(
         repo_root,
         "for-each-ref",
         "--format=%(refname:short)",
         "refs/heads/work/*",
+        *owner_patterns,
     )
     if r.returncode != 0:
         return []
-    return [line for line in r.stdout.splitlines() if line]
+    return [
+        line
+        for line in r.stdout.splitlines()
+        if line and (is_work_branch(line) or is_allowed_branch(line))
+    ]
 
 
 def main(argv: list[str]) -> int:

@@ -2157,13 +2157,9 @@ def _try_warm_dispatch_inner(
             # An op whose engine token moved while it was in flight reached the
             # generation that was draining; the successor answers under the new token, so it is
             # re-sent once there, ahead of the cold fallback.
-            # Mutation frames are never re-sent: a draining generation that read and dispatched
-            # before closing would run the op twice. They keep the cold fallback below.
-            if (
-                attempt == 0
-                and not _op_may_mutate(_classified_op_name(msg))
-                and engine_token() != token
-            ):
+            # A mutation is re-sent too: this shape already went cold for it, which double-executes
+            # exactly as a re-send would, and the new token's successor answers where cold spawns.
+            if attempt == 0 and engine_token() != token:
                 continue
             _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
             return None

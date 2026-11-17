@@ -478,8 +478,20 @@ def _is_pair_role_child(proc, parent_pid: Optional[int] = None) -> bool:
     return False
 
 
-def _live_descendants(pid: int, *, psutil_module=None) -> list[int]:
+def _child_snapshot(pid: int, *, psutil_module=None) -> list:
+    """`pid`'s live descendants as psutil handles: one process-table read, no per-child cost."""
+    psutil = psutil_module
+    if psutil is None:
+        import psutil
+    try:
+        return list(psutil.Process(pid).children(recursive=True))
+    except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+        return []
+
+
+def _live_descendants(pid: int, *, psutil_module=None, children=None) -> list[int]:
     """Live descendants of `pid` that are pair-role processes; never an op's launched session.
+    `children` is a `_child_snapshot` taken earlier; the per-child argv reads are the cost.
 
     Trap: a server's ops launch long-lived children (agent_pipe peers, app sessions) that are
     its Windows descendants; ending every descendant on a stop or reap ends those sessions."""
@@ -487,13 +499,42 @@ def _live_descendants(pid: int, *, psutil_module=None) -> list[int]:
     if psutil is None:
         import psutil
     try:
-        return [
-            c.pid
-            for c in psutil.Process(pid).children(recursive=True)
-            if _is_pair_role_child(c, pid)
-        ]
+        found = children if children is not None else psutil.Process(pid).children(recursive=True)
+        return [c.pid for c in found if _is_pair_role_child(c, pid)]
     except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
         return []
+
+
+class _DescendantScan:
+    """Classifies the servers' snapshotted descendants (and records their birth instants) off the
+    thread that asks and drains the server, so the argv reads overlap the drain. `join` blocks."""
+
+    def __init__(self, snapshots: "dict[int, list]", births, psutil_module) -> None:
+        import threading
+
+        self.child_pids: set[int] = set()
+        self.child_born: dict = {}
+        self._error: Optional[BaseException] = None
+        self._snapshots = snapshots
+        self._births = births
+        self._psutil_module = psutil_module
+        self._thread = threading.Thread(target=self._run, name="pair-stop-descendants", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            for spid, children in self._snapshots.items():
+                self.child_pids.update(
+                    _live_descendants(spid, psutil_module=self._psutil_module, children=children)
+                )
+            self.child_born = {c: _create_time(c, self._births) for c in self.child_pids}
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the stopping thread by `join`
+            self._error = exc
+
+    def join(self) -> None:
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
 
 
 def reap_pairs_outside(
@@ -582,16 +623,17 @@ def stop_warm_pair(
     if verified is not None and verified[0] in keep:
         verified = None
     server_pids: set[int] = {p.pid for p in before if p.role == ROLE_SERVER}
-    child_pids: set[int] = set()
     children_seen: set[int] = set()
     if verified is not None:
         server_pids.add(verified[0])
-    for spid in server_pids:
-        child_pids.update(_live_descendants(spid, psutil_module=psutil_module))
     births = psutil_module
     if births is None:
         import psutil as births
-    child_born = {c: _create_time(c, births) for c in child_pids}
+    scan = _DescendantScan(
+        {spid: _child_snapshot(spid, psutil_module=psutil_module) for spid in server_pids},
+        births,
+        psutil_module,
+    )
     if verified is not None:
         pid, epoch_str = verified
         pipe = crumb.get("pipe") if isinstance(crumb, dict) else None
@@ -634,6 +676,8 @@ def stop_warm_pair(
             continue
         _terminate_pid(pid, psutil_module=psutil_module)
 
+    scan.join()
+    child_pids, child_born = scan.child_pids, scan.child_born
     initial = frozenset(seen) | frozenset(sup_pids) | frozenset(server_pids) | frozenset(child_born) | frozenset(fd_pids)
     failures: dict[int, str] = {}
     order = {ROLE_SUPERVISOR: 0, ROLE_FRONT_DOOR: 1, ROLE_SERVER: 2, ROLE_POOL_CHILD: 3}

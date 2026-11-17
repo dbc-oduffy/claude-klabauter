@@ -68,6 +68,7 @@ def test_deletes_pause_between_batches(tmp_path):
     d = tmp_path / f"pytest-of-{getpass.getuser()}" / "pytest-6"
     for i in range(5):
         (d / f"extra{i}").write_text("x")
+    os.utime(d, (OLD, OLD))  # creating children bumped mtime; restore age
     _, sleeps = _sweep(tmp_path, batch_size=2)
     assert not d.exists()
     assert len(sleeps) >= 3

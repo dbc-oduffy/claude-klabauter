@@ -48,6 +48,21 @@ def test_statusline_pass_and_fail(tmp_path):
     assert not setup_check.check_statusline(tmp_path).ok
 
 
+def test_command_head_skips_a_leading_command_substitution_assignment():
+    command = 'S="$(cat "$HOME/.claude/.coordinator-plugin-root" 2>/dev/null)/bin/statusline.py"; python3 "$S" || python "$S"'
+    assert setup_check.command_head(command) == "python3"
+
+
+def test_statusline_passes_on_the_healthy_substitution_form(tmp_path):
+    interpreter = tmp_path / "py"
+    interpreter.write_text("")
+    command = f'S="$(cat "$HOME/.claude/.coordinator-plugin-root" 2>/dev/null)/bin/statusline.py"; "{interpreter}" "$S"'
+    _write_settings(tmp_path, {"statusLine": {"type": "command", "command": command}})
+    assert setup_check.check_statusline(tmp_path).ok
+    _write_settings(tmp_path, {"statusLine": {"type": "command", "command": command.replace(str(interpreter), str(tmp_path / "gone"))}})
+    assert not setup_check.check_statusline(tmp_path).ok
+
+
 def test_statusline_fails_on_a_pinned_plugin_cache_copy(tmp_path):
     stale = ('S="$(ls -d "$HOME"/.claude/plugins/cache/coordinator-claude/coordinator/*/bin/'
              'statusline.py | sort -V | tail -1)"; python3 "$S"')

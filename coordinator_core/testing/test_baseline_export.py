@@ -5,7 +5,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import tarfile
 import time
 from pathlib import Path
 
@@ -126,18 +125,18 @@ def _count_spawns(monkeypatch):
     return seen
 
 
-def test_a_miss_is_two_git_spawns_and_a_hit_is_one(repo, monkeypatch, capsys):
+def test_a_miss_is_three_git_spawns_and_a_hit_is_one(repo, monkeypatch, capsys):
     seen = _count_spawns(monkeypatch)
     code, res, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
     assert code == 0 and res["export"] == "ok"
-    assert seen == ["rev-parse", "archive"]
+    assert seen == ["rev-parse", "clone", "checkout"]
     seen.clear()
     code, res, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
     assert code == 0 and res["export"] == "ok" and res["removed"] is True
     assert seen == ["rev-parse"]
 
 
-def test_link_run_spawns_archive_every_time_in_a_per_pid_root(repo, monkeypatch, capsys, tmp_path):
+def test_link_run_builds_a_clone_every_time_in_a_per_pid_root(repo, monkeypatch, capsys, tmp_path):
     (repo / "node_modules").mkdir()
     seen = _count_spawns(monkeypatch)
     out = tmp_path / "cwd.txt"
@@ -146,7 +145,7 @@ def test_link_run_spawns_archive_every_time_in_a_per_pid_root(repo, monkeypatch,
         code, res, _ = _run(repo, ["--sha", _base(repo), "--link", "node_modules", *_py(probe, str(out))], monkeypatch, capsys)
         assert code == 0 and res["removed"] is True
         assert Path(out.read_text()).parent.name == "scratch" and Path(out.read_text()).name.startswith(be.ROOT_PREFIX)
-    assert seen == ["rev-parse", "archive", "rev-parse", "archive"]
+    assert seen == ["rev-parse", "clone", "checkout", "rev-parse", "clone", "checkout"]
     assert _exports(repo) == [] and not (repo / "scratch" / "baseline-cache").exists()
 
 
@@ -178,30 +177,22 @@ def test_a_run_that_adds_a_file_deep_in_the_entry_evicts_it(repo, monkeypatch, c
     assert not entry.exists()
     seen.clear()
     code, _, _ = _run(repo, ["--sha", sha, *_py("pass")], monkeypatch, capsys)
-    assert code == 0 and seen == ["rev-parse", "archive"] and entry.is_dir()
+    assert code == 0 and seen == ["rev-parse", "clone", "checkout"] and entry.is_dir()
 
 
-def test_archive_stream_failure_exits_3_without_spawning_runner(repo, monkeypatch, capsys, tmp_path):
-    marker = tmp_path / "ran"
-
+def _break_clone(monkeypatch):
     def boom(*a, **k):
-        raise tarfile.ReadError("stream broke")
+        raise be.ExportError("stream broke")
 
-    monkeypatch.setattr(be.tarfile, "open", boom)
+    monkeypatch.setattr(be, "clone_tree", boom)
+
+
+def test_clone_failure_exits_3_without_spawning_runner(repo, monkeypatch, capsys, tmp_path):
+    marker = tmp_path / "ran"
+    _break_clone(monkeypatch)
     code, res, _ = _run(repo, ["--sha", _base(repo), *_py("import sys; open(sys.argv[1], 'w')", str(marker))], monkeypatch, capsys)
     assert code == be.EXIT_EXPORT_FAILED
     assert res["export"] == "failed" and res["removed"] is True and "stream broke" in res["why"]
-    assert not marker.exists() and _exports(repo) == []
-
-
-@POSIX_ONLY
-def test_member_rejected_by_data_filter_exits_3(repo, monkeypatch, capsys, tmp_path):
-    os.symlink("/etc/passwd", repo / "evil")
-    _git(repo, "add", "evil")
-    _git(repo, "commit", "-q", "-m", "evil link")
-    marker = tmp_path / "ran"
-    code, res, _ = _run(repo, ["--sha", _git(repo, "rev-parse", "HEAD"), *_py("import sys; open(sys.argv[1], 'w')", str(marker))], monkeypatch, capsys)
-    assert code == be.EXIT_EXPORT_FAILED and res["export"] == "failed"
     assert not marker.exists() and _exports(repo) == []
 
 
@@ -220,11 +211,8 @@ def test_removal_failure_exits_4_naming_the_path(repo, monkeypatch, capsys):
 
 
 def test_removal_failure_after_export_failure_is_still_exit_4(repo, monkeypatch, capsys):
-    def boom(*a, **k):
-        raise tarfile.ReadError("stream broke")
-
     (repo / "node_modules").mkdir()
-    monkeypatch.setattr(be.tarfile, "open", boom)
+    _break_clone(monkeypatch)
     monkeypatch.setattr(be, "_remove_tree", lambda root: None)
     code, res, err = _run(repo, ["--sha", _base(repo), "--link", "node_modules", *_py("pass")], monkeypatch, capsys)
     left = [repo / "scratch" / n for n in _exports(repo)]
@@ -349,43 +337,111 @@ def test_sigterm_runs_the_finally_and_kills_the_group(repo, tmp_path):
         pytest.fail("grandchild outlived the CLI")
 
 
-def test_export_drains_archive_padding_and_extracts_committed_files(repo, tmp_path, monkeypatch):
-    real = be._git_popen
-    killed = []
-
-    class _StillRunning:
-        """git has not yet exited when the tar end-of-archive marker is read."""
-
-        def __init__(self, proc):
-            self._p = proc
-
-        def poll(self):
-            return None
-
-        def kill(self):
-            killed.append(True)
-            self._p.kill()
-
-        def __getattr__(self, name):
-            return getattr(self._p, name)
-
-    class _Door:
-        def __init__(self, cm):
-            self._cm = cm
-
-        def __enter__(self):
-            return _StillRunning(self._cm.__enter__())
-
-        def __exit__(self, *exc):
-            return self._cm.__exit__(*exc)
-
-    monkeypatch.setattr(be, "_git_popen", lambda *a, **kw: _Door(real(*a, **kw)))
+def test_clone_tree_builds_a_real_detached_clone_at_the_sha(repo, tmp_path):
     root = tmp_path / "out"
     root.mkdir()
-    be.export(str(repo), _git(repo, "rev-parse", "HEAD"), root)
-    assert killed == []
-    assert (root / "a.txt").read_text() == "two\n"
+    sha = _git(repo, "rev-parse", "HEAD~1")
+    be.clone_tree(str(repo), sha, root)
+    be.require_git_root(root)
+    assert (root / "a.txt").read_text() == "one\n"
     assert (root / "pkg" / "b.txt").read_text() == "bee\n"
+    assert Path(os.path.realpath(_git(root, "rev-parse", "--show-toplevel"))) == Path(os.path.realpath(root))
+    assert _git(root, "rev-parse", "HEAD") == sha
+    assert _git(root, "status", "--porcelain") == ""
+
+
+def test_clone_tree_never_checks_out_data_dirs_and_links_read_clean(repo, tmp_path):
+    (repo / "state").mkdir()
+    (repo / "state" / "row.yaml").write_text("at-base\n")
+    _git(repo, "add", "state/row.yaml")
+    _git(repo, "commit", "-q", "-m", "state")
+    root = tmp_path / "out"
+    root.mkdir()
+    be.clone_tree(str(repo), _git(repo, "rev-parse", "HEAD"), root)
+    assert not (root / "state").exists() and (root / "a.txt").exists()
+    be.link(str(repo), root, ("state",))
+    assert (root / "state" / "row.yaml").read_text() == "at-base\n"
+    assert _git(root, "status", "--porcelain") == ""
+    assert be.remove(root) is True
+    assert (repo / "state" / "row.yaml").read_text() == "at-base\n"
+
+
+def test_clone_tree_failure_names_gits_stderr(repo, tmp_path):
+    root = tmp_path / "out"
+    root.mkdir()
+    with pytest.raises(be.ExportError, match="checkout of .* failed"):
+        be.clone_tree(str(repo), "0" * 40, root)
+
+
+def test_require_git_root_refuses_a_git_less_tree(tmp_path):
+    (tmp_path / "x.txt").write_text("x")
+    with pytest.raises(be.ExportError, match="gate tree has no .git"):
+        be.require_git_root(tmp_path)
+    (tmp_path / ".git").mkdir()
+    be.require_git_root(tmp_path)
+
+
+@pytest.mark.parametrize("link", [[], ["node_modules"]])
+def test_main_refuses_a_git_less_tree_without_spawning_the_runner(repo, monkeypatch, capsys, tmp_path, link):
+    (repo / "node_modules").mkdir()
+    marker = tmp_path / "ran"
+
+    def archive_like(toplevel, sha40, root):
+        (Path(root) / "a.txt").write_text("x")
+
+    monkeypatch.setattr(be, "clone_tree", archive_like)
+    argv = ["--sha", _base(repo)]
+    for p in link:
+        argv += ["--link", p]
+    code, res, _ = _run(repo, [*argv, *_py("import sys; open(sys.argv[1], 'w')", str(marker))], monkeypatch, capsys)
+    assert code == be.EXIT_EXPORT_FAILED
+    assert res["export"] == "failed" and "gate tree has no .git" in res["why"] and res["runner_exit"] is None
+    assert not marker.exists() and _exports(repo) == []
+
+
+def test_runner_sees_a_git_root_at_the_run_root(repo, monkeypatch, capsys, tmp_path):
+    out = tmp_path / "git.json"
+    probe = (
+        "import json, os, subprocess, sys\n"
+        "top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True).stdout.strip()\n"
+        "json.dump({'top': os.path.realpath(top), 'cwd': os.path.realpath(os.getcwd()), 'dotgit': os.path.isdir('.git')},"
+        " open(sys.argv[1], 'w'))\n"
+    )
+    code, _, _ = _run(repo, ["--sha", _base(repo), *_py(probe, str(out))], monkeypatch, capsys)
+    assert code == 0
+    seen = json.loads(out.read_text())
+    assert seen["dotgit"] is True and seen["top"] == seen["cwd"]
+
+
+def test_a_runner_git_status_in_the_entry_does_not_evict_it(repo, monkeypatch, capsys):
+    sha = _base(repo)
+    entry = repo / "scratch" / "baseline-cache" / sha
+    probe = "import subprocess; subprocess.run(['git', 'status'], capture_output=True)"
+    code, _, _ = _run(repo, ["--sha", sha, *_py(probe)], monkeypatch, capsys)
+    assert code == 0 and entry.is_dir()
+
+
+def test_a_hit_with_a_dead_alternates_store_is_evicted_and_rebuilt(repo, monkeypatch, capsys):
+    sha = _base(repo)
+    code, _, _ = _run(repo, ["--sha", sha, *_py("pass")], monkeypatch, capsys)
+    entry = repo / "scratch" / "baseline-cache" / sha
+    (entry / ".git" / "objects" / "info" / "alternates").write_text(str(repo / "gone" / "objects") + "\n")
+    seen = _count_spawns(monkeypatch)
+    code, res, _ = _run(repo, ["--sha", sha, *_py("pass")], monkeypatch, capsys)
+    assert code == 0 and res["export"] == "ok"
+    assert seen == ["rev-parse", "clone", "checkout"]
+    assert be._alternates_ok(entry)
+
+
+def test_a_hit_without_a_dot_git_is_a_stale_entry_and_is_rebuilt(repo, monkeypatch, capsys):
+    from coordinator_core.testing import baseline_cache as bc
+
+    sha = _base(repo)
+    code, _, _ = _run(repo, ["--sha", sha, *_py("pass")], monkeypatch, capsys)
+    entry = repo / "scratch" / "baseline-cache" / sha
+    bc._unseal_and_remove(entry / ".git")
+    code, res, _ = _run(repo, ["--sha", sha, *_py("pass")], monkeypatch, capsys)
+    assert code == 0 and res["export"] == "ok" and (entry / ".git").is_dir()
 
 
 def test_runs_as_a_module_process(repo):
@@ -425,7 +481,7 @@ def _hold_all_slots():
     return held
 
 
-def test_a_miss_with_the_slot_held_is_refused_without_a_tree_or_git_archive(repo, monkeypatch, capsys, tmp_path):
+def test_a_miss_with_the_slot_held_is_refused_without_a_tree_or_git_clone(repo, monkeypatch, capsys, tmp_path):
     assert be.EXPORT_SLOT_CAP == 1
     held = _hold_all_slots()
     marker = tmp_path / "ran"
@@ -437,7 +493,7 @@ def test_a_miss_with_the_slot_held_is_refused_without_a_tree_or_git_archive(repo
     assert res["export"] == "refused" and "no free export slot" in res["why"]
     assert res["runner_exit"] is None
     assert not marker.exists() and _exports(repo) == []
-    assert "archive" not in calls
+    assert "clone" not in calls
     assert os.listdir(repo / "scratch" / "baseline-cache") == []
     for s in held:
         be._release_slot(s)
@@ -463,7 +519,7 @@ def test_slot_is_released_after_a_run_and_after_an_export_failure(repo, monkeypa
     assert code == 0
     for s in _hold_all_slots():
         be._release_slot(s)
-    monkeypatch.setattr(be.tarfile, "open", lambda *a, **k: (_ for _ in ()).throw(tarfile.TarError("x")))
+    _break_clone(monkeypatch)
     for _ in range(be.EXPORT_SLOT_CAP + 1):
         code, _, _ = _run(repo, ["--sha", _git(repo, "rev-parse", "HEAD"), *_py("pass")], monkeypatch, capsys)
         assert code == be.EXIT_EXPORT_FAILED

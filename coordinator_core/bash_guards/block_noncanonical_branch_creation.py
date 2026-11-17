@@ -2,7 +2,7 @@
 PreToolUse(Bash) guard closing the branch-creation-seam gap: a
 Bash-typed `git checkout -b`/`git checkout -B`/`git switch -c`/`git switch
 -C`/`git branch <name>` invocation whose target name is neither the
-canonical daily-branch shape (`work/{machine}/{today}` or a same-shape
+canonical daily-branch shape (`{owner}/{machine}/{today}`, legacy `work/` included, or a same-shape
 lowercase span, per `coordinator_core.daily_branch.is_canonical_branch`) nor
 one of a small sanctioned set of longlived prefixes is denied; the
 policy point (`machine_profile.apply_guard_level`) keeps it a deny on an
@@ -319,24 +319,26 @@ def _classify_segment(
 
 def _canonical_example(today: str) -> str:
     """Resolve today's concrete canonical branch name for the deny
-    message's remediation text -- e.g. `work/machine-b/2026-08-01` -- via
-    `coordinator_core.machine_resolver.compute_machine` (the same live
-    resolver `workday-start-day-branch-resolve.py` uses to build
-    `work/{machine}/{date}`). Degrades to the `work/<machine>/{today}`
+    message's remediation text -- e.g. `alice/machine-b/2026-08-01` -- via
+    `compute_owner` and `compute_machine` (the same live
+    resolvers `workday-start-day-branch-resolve.py` uses to build
+    `{owner}/{machine}/{date}`). Degrades to the `<owner>/<machine>/{today}`
     template if the machine component cannot be resolved for any reason.
 
     Called ONLY from `_advisory_reason`, after `_deny`'s fire/no-fire verdict
     is already decided -- this never influences whether the guard denies
     (see module docstring "NEGATIVE SPEC 2")."""
     try:
-        from coordinator_core.machine_resolver import compute_machine
+        from coordinator_core.daily_branch import day_branch_name
+        from coordinator_core.machine_resolver import compute_machine, compute_owner
 
         machine = compute_machine()
+        owner = compute_owner()
     except Exception:  # noqa: BLE001 -- message-text-only, fail open to the template
-        machine = None
-    if not machine:
-        return f"work/<machine>/{today}"
-    return f"work/{machine}/{today}"
+        machine = owner = None
+    if not machine or not owner:
+        return f"<owner>/<machine>/{today}"
+    return day_branch_name(owner, machine, today)
 
 
 def _advisory_parts(name: str) -> "tuple[str, str]":
@@ -344,7 +346,7 @@ def _advisory_parts(name: str) -> "tuple[str, str]":
     canonical = _canonical_example(local_day())
     return (
         "`%s` is not canonical -- daily-branch discipline "
-        "requires `work/{machine}/{date}` (or a longlived prefix: "
+        "requires `{owner}/{machine}/{date}` (or a longlived prefix: "
         "`migration/`, `release/`, `feature/`).\n\n"
         "Use instead:\n"
         "  `git checkout -b %s`\n"

@@ -5,6 +5,7 @@ import copy
 import json
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -308,7 +309,13 @@ def test_address_expands_env_defaults(monkeypatch):
     assert structure._address(REAL_COSTS) == "http://127.0.0.1:9000/mcp"
 
 
-def test_default_post_refused_connection_is_unavailable():
+def test_default_post_refused_connection_is_unavailable(monkeypatch):
+    # A real closed port is not refused promptly on Windows (SYN retries run ~2s, past the
+    # timeout, surfacing TimeoutError); inject the refusal so the mapping is tested, not the OS.
+    def _refuse(*_a, **_k):
+        raise urllib.error.URLError(ConnectionRefusedError(10061, "refused"))
+
+    monkeypatch.setattr(structure.urllib.request, "urlopen", _refuse)
     with pytest.raises(StructureUnavailable, match="unreachable"):
         structure._default_post("http://127.0.0.1:1/mcp", {"jsonrpc": "2.0"}, 1.0)
 

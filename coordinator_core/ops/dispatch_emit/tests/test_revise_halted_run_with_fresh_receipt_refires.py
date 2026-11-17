@@ -98,8 +98,8 @@ def test_halted_note_widens_on_a_named_file_without_an_edit_verb(run):
     assert [w["row"] for w in reply["footprint_widened"]] == ["C1"]
 
 
-def test_live_run_with_the_same_note_stays_live_and_unwidened(run):
-    reply = rl._handler({"run_id": RUN, "note": NOTE}, repo_root=run)
+def test_live_run_with_a_citing_note_stays_live_and_unwidened(run):
+    reply = rl._handler({"run_id": RUN, "note": f"The landed_paths wiring touches {OTHER} and {TEST}."}, repo_root=run)
     assert reply["run_live"] is True
     assert "footprint_widened" not in reply
     assert _plan_writes(run) == [MOD]

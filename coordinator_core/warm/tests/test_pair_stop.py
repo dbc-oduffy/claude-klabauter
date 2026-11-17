@@ -808,3 +808,30 @@ def test_live_descendants_takes_a_direct_pool_child_and_spares_a_session_pool(tm
     session_pool.ppid = lambda: 13
     server.children = lambda recursive=True: [own_worker, session, session_pool]
     assert pair_stop._live_descendants(10, psutil_module=w) == [11]
+
+
+def test_descendant_scan_classifies_a_snapshot_off_thread_and_join_reraises(tmp_path):
+    root = tmp_path / "mirror"
+    w = _World()
+    server = w.add(10, "python.exe", [sys.executable, _script(root, SRV)])
+    own_worker = w.add(11, "python.exe", _spawn_argv(10))
+    session = w.add(13, "python.exe", [sys.executable, "-m", "coordinator_core.agent_pipe"])
+    own_worker.ppid = lambda: 10
+    session.ppid = lambda: 10
+    server.children = lambda recursive=True: [own_worker, session]
+    snapshot = pair_stop._child_snapshot(10, psutil_module=w)
+    scan = pair_stop._DescendantScan({10: snapshot}, w, w)
+    scan.join()
+    assert scan.child_pids == {11}
+    assert set(scan.child_born) == {11}
+
+    class _Boom:
+        NoSuchProcess = _NoSuchProcess
+        AccessDenied = _AccessDenied
+
+        def Process(self, pid):
+            raise RuntimeError("scan failed")
+
+    failing = pair_stop._DescendantScan({10: [own_worker]}, _Boom(), w)
+    with pytest.raises(RuntimeError, match="scan failed"):
+        failing.join()

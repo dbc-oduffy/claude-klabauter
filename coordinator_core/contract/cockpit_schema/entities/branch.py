@@ -13,7 +13,7 @@ Branch-fact data-quality defenses (the Data Science Reviewer P1-D5, github-conne
  - `ahead_by` / `behind_by` come from the REST compare endpoint and may be
    uncomputed at census time, hence nullable. `merge_base_sha` is null when
    `ahead_by` was not computed.
- - machine/date hints are parsed from `work/{machine}/{date}`; null when the
+ - machine/date hints are parsed from `{owner}/{machine}/{date}` (legacy `work/` owner included); null when the
    branch name does not match the pattern (e.g. `main`, `feature/*`).
 
 NULLABILITY CONTRACT (tc-3/tc-4): every nullable field below is present-as-null

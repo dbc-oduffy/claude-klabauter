@@ -297,7 +297,7 @@ def posix_door(tmp_path_factory) -> Path:
         pytest.skip("no C compiler or not POSIX")
     out = tmp_path_factory.mktemp("posix-door") / "coordinator-invoke"
     subprocess.run(
-        [compiler, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', '-DBUILD_ENGINE_ROOT=""', "-o", str(out),
+        [compiler, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', "-o", str(out),
          str(_DOOR_DIR / "door_posix.c"), str(_DOOR_DIR / "door_core.c")],
         check=True, capture_output=True, **no_console_creationflags(),
     )

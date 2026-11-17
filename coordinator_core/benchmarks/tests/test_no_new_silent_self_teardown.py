@@ -59,16 +59,8 @@ class _Site(NamedTuple):
 # (relpath, function) pairs predating this gate. See FROZEN INVENTORY above.
 _KNOWN_SELF_TEARDOWN: frozenset[tuple[str, str]] = frozenset({
     # Scratch dirs with no live process holding them; sole owner removes them best-effort.
-    ("coordinator_core/advisory_census.py", "replay"),
-    ("coordinator_core/benchmarks/ask_spool_write_budget.py", "measure"),
     ("coordinator_core/host_hooks/tests/test_shim_end_to_end.py", "world"),
-    ("coordinator_core/bash_guards/_firing_shape.py", "_trigger_inprocess_search_still_violates"),
-    ("coordinator_core/benchmarks/measure_read_events.py", "measure"),
-    ("coordinator_core/benchmarks/measure_render_status.py", "measure"),
     ("coordinator_core/benchmarks/tests/test_warm_door_process_time_gate.py", "_short_runtime_base"),
-    ("coordinator_core/install/sandbox_check.py", "run_all"),
-    ("coordinator_core/ops/new_project_scaffold.py", "main"),
-    ("coordinator_core/percolate/engine.py", "mktcache_gate_env"),
     ("coordinator_core/tests/_fixtures.py", "isolated_svc_root_impl"),
     ("coordinator_core/warm/tests/test_door_read_deadline_posix.py", "runtime_base"),
 })

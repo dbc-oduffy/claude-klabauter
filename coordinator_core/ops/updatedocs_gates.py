@@ -630,8 +630,10 @@ def _gate_distill_threshold(repo_root: Path, _settings: Path, overrides: dict) -
 
     log_path = Path(overrides["log_path"]) if overrides.get("log_path") else repo_root / "state" / "distillation-log.md"
     try:
-        # The count is distill.scope's scannable set: an absent log is its empty baseline; an unparseable one it refuses, so this gate cannot count.
-        total = scannable_count(repo_root, log_path=str(log_path), cap=_DISTILL_THRESHOLD_TOTAL)
+        # The count is what distill.scope still owes past the run watermark: an absent log is its empty baseline; an unparseable one it refuses, so this gate cannot count.
+        total = scannable_count(
+            repo_root, log_path=str(log_path), cap=_DISTILL_THRESHOLD_TOTAL, owed_since_watermark=True
+        )
     except (DistillationLogMissingError, DistillationLogUnparseableError) as exc:
         return GateResult("distill-threshold", GateVerdict.UNAVAILABLE, f"distill.scope cannot count: {exc}")
     days_ago = _last_distillation_days_ago(log_path)

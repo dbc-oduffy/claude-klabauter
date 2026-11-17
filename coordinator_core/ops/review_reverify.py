@@ -136,6 +136,7 @@ from coordinator_core.ops.dispatch_emit.red_attribution import names_own_path_in
 from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused
 from coordinator_core.ops.owned_red import read_owned_red
 from coordinator_core.ops.pre_existing_ruling import ruled_pre_existing
+from coordinator_core.ops.pre_review_dir import pre_review_dir
 from coordinator_core.ops.review_reverify_findings import applied_rows, invert
 from coordinator_core.ops.review_test_blocker import NOT_FOUND_RE
 from coordinator_core.ops.review_tripwires import TripwireScanUnavailable, literal_namers, names_in, tree_scanners, walked_created
@@ -961,7 +962,7 @@ def review_reverify(
         if "/" in value or "\\" in value or ".." in value:
             return _fail(f"{label} must be a bare name, not a path", revert, shape)
     share = Path(share_dir(str(repo_root), session))
-    snapshot_dir = share / f"{slice_prefix}.pre-review"
+    snapshot_dir = pre_review_dir(share, slice_prefix)
     manifest = _read_manifest(snapshot_dir)
     if manifest is None:
         return _fail(f"no pre-review snapshot for {slice_prefix}", revert, shape)

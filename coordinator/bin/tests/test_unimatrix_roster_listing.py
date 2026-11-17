@@ -114,6 +114,33 @@ def test_a_live_claude_row_is_listed_once_beside_other_rows(roster) -> None:
     assert [r["name"] for r in rows if roster.listed_row(r, rows)] == ["group-em-54", "example-retrieval-repo.machine-b"]
 
 
+def agy_face(roster, tmp_path: Path, monkeypatch, **leg_fields) -> dict:
+    """A router-owned agy face whose peers.json row and leg record sit under the settings home."""
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "agy" / "brain"))
+    base = tmp_path / "home" / "unimatrix"
+    (base / "agy-legs").mkdir(parents=True)
+    name = "agy-conv-1"
+    (base / "peers.json").write_text(json.dumps([{"name": name, "vendor": "agy", "target": "conv-1"}]))
+    (base / "agy-legs" / "conv-1.json").write_text(json.dumps({"conversation": "conv-1", **leg_fields}))
+    me = os.getpid()
+    return {"name": name, "vendor": "agy", "pid": me, "procStart": roster.proc_start(me), "unimatrixRouterPid": me,
+            "messagingSocketPath": "/tmp/cc-socks/agy.sock", "startedAt": now_ms()}
+
+
+@pytest.mark.parametrize("fields", [
+    {"agy_pid": 2 ** 22 + 12345},
+    {"agy_pid": None, "startedAt": now_ms() - 2 * GRACE_MS},
+])
+def test_agy_face_with_no_live_agy_session_is_unlisted(roster, tmp_path, monkeypatch, fields) -> None:
+    face = agy_face(roster, tmp_path, monkeypatch, **fields)
+    assert not roster.entry_listed(face)
+
+
+def test_agy_face_is_listed_while_its_agy_process_lives(roster, tmp_path, monkeypatch) -> None:
+    face = agy_face(roster, tmp_path, monkeypatch, agy_pid=os.getpid())
+    assert roster.entry_listed(face)
+
+
 def test_a_dead_pid_row_is_unlisted(roster) -> None:
     row = local_claude_row(roster, "gone")
     row["pid"], row["procStart"] = 2 ** 22 + 12345, "gone"

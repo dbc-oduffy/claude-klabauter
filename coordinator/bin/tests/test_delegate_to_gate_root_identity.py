@@ -88,6 +88,10 @@ def test_second_call_returns_second_roots_own_answer_not_the_first(monkeypatch, 
     root_a = _build_candidate_root(tmp_path / "root-a", answer="root-a-answer")
     root_b = _build_candidate_root(tmp_path / "root-b", answer="root-b-answer")
 
+    # The harness pins test children to their checkout via this flag, and
+    # `_delegate_to_gate` then returns the candidate path without ever entering
+    # the gate -- the very path this test exists to exercise.
+    monkeypatch.delenv("COORDINATOR_PYTEST_ALLOW_UNSTAMPED_DISPATCH", raising=False)
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(root_a))
     first = _mod._resolve_claude_klabauter_root()
     assert first == "root-a-answer"
@@ -113,6 +117,7 @@ def test_same_tree_short_circuit_returns_canonical_module_not_a_synthetic_copy(m
         pytest.skip("coordinator_core is not ambiently importable with a real __file__ in this env")
     canonical_root = str(Path(canonical.__file__).resolve().parents[1])
 
+    monkeypatch.delenv("COORDINATOR_PYTEST_ALLOW_UNSTAMPED_DISPATCH", raising=False)
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", canonical_root)
     _mod._resolve_claude_klabauter_root()
 

@@ -55,10 +55,10 @@ def commit_close_records(
     ``manifest.json`` and lets it carry no diff, so the closure lands for a run with no record file to flip.
     *covered* (paths a verified landing carries) stands in for the marker landing's paths when a run has no landed marker.
 
-    Returns ``{"records_commit": sha}``; ``{}`` when nothing changed or the record dir is untracked
+    Returns ``{"records_commit": sha}`` plus ``worktree_sync_refused``/``sync_incomplete`` when the worktree sync refused paths; ``{}`` when nothing changed or the record dir is untracked
     scratch; ``{"records_commit_error": ...}`` on a refusal, which never fails the caller's marker write.
     """
-    from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths
+    from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths, sync_report
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE
     from coordinator_core.ops.dispatch_emit.run_artifacts import record_dir_residue
@@ -85,4 +85,4 @@ def commit_close_records(
         return {}
     except (CommitRefused, OSError) as exc:
         return {"records_commit_error": f"{type(exc).__name__}: {exc}"}
-    return {"records_commit": outcome.sha}
+    return {"records_commit": outcome.sha, **sync_report(outcome)}

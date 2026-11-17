@@ -12,7 +12,7 @@ base. The lookup is one ``git log`` spawn, pathspec-scoped like ``review_peer_ba
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from coordinator_core.git.literal_pathspec import git_pathspec, is_magic_pathspec
 from coordinator_core.git.run import LOCAL_PLUMBING_BUDGET_SECS, run_git
@@ -40,12 +40,15 @@ def _carries_review_trailer(body: str) -> bool:
     return any(_BODY_INLINE_REVIEW_RE.match(line.strip()) for line in body.splitlines())
 
 
-def unreviewed_introducer_bases(repo_root: Path, base: str, paths: List[str]) -> Dict[str, str]:
+def unreviewed_introducer_bases(
+    repo_root: Path, base: str, paths: List[str], listed_out: Optional[set] = None,
+) -> Dict[str, str]:
     """Declared ``paths`` -> first-parent sha (``EMPTY_TREE_SHA`` for a root commit) of the newest
     commit reachable from ``base`` that touched the path, only when that commit is unreviewed.
     One ``git log`` spawn; none when ``paths`` is empty. A git failure or timeout returns ``{}``
     (every path keeps the run base). A path with no toucher inside ``_INTRODUCER_COMMIT_CAP``
-    commits is omitted."""
+    commits is omitted. ``listed_out``, when given, receives every sha the walk listed (the commits a
+    revise note may abbreviate)."""
     if not paths or not _has_object_store(repo_root):
         return {}
     in_python = not any(is_magic_pathspec(p) for p in paths)
@@ -61,7 +64,7 @@ def unreviewed_introducer_bases(repo_root: Path, base: str, paths: List[str]) ->
         return {}
     matches = _declared_matcher(paths) if in_python else (lambda _name: True)
     newest: Dict[str, tuple] = {}
-    listed: set = set()
+    listed: set = listed_out if listed_out is not None else set()
     for chunk in proc.stdout.split(_COMMIT_MARK):
         parts = chunk.split(_FIELD_SEP, 3)
         if len(parts) != 4 or not parts[0].strip():

@@ -126,8 +126,8 @@ def _git(args, cwd):
 
 
 def test_pre_commit_gates_refuses_import_of_symbol_bound_nowhere(tmp_path: Path):
-    # A symbol bound nowhere (not even in the worktree) is outside the `leak_gate` import_closure
-    # detector, which reports only definers that exist uncommitted.
+    # A symbol bound nowhere (not even in the worktree) is refused by the `leak_gate` import_closure
+    # detector, which runs ahead of `import_closure_gate` and so supplies the refusal text.
     repo = tmp_path / "repo"
     (repo / "pkg").mkdir(parents=True)
     _git(["init", "-q"], repo)
@@ -146,7 +146,7 @@ def test_pre_commit_gates_refuses_import_of_symbol_bound_nowhere(tmp_path: Path)
     (repo / "pkg/user.py").write_text("from pkg.stage import ARM_BYPASS\n", encoding="utf-8")
     result = commit_v2._handler({"paths": ["pkg/user.py"], "message": "land user\n"}, repo_root=repo / ".git")
     assert result["committed"] is False, result
-    assert "import_closure_gate" in result["error"] and "ARM_BYPASS" in result["error"]
+    assert "import_closure" in result["error"] and "ARM_BYPASS" in result["error"]
     assert "pkg/stage.py" in result["error"]
     assert subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True,

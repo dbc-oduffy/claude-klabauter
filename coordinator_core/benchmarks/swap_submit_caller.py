@@ -40,6 +40,7 @@ from unittest import mock
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from coordinator_core.benchmarks import fixture_settings_home
 from coordinator_core.benchmarks import land_swap_hook_window as lw
 from coordinator_core.benchmarks import swap_continuous_caller as scc
 from coordinator_core.benchmarks import warm_pair_boot_process_time as boot
@@ -357,7 +358,7 @@ def run(
     timeout_s = hook_timeout_s()
     source = source_root if source_root is not None else Path(__file__).resolve().parents[2]
     base = (work_dir if work_dir is not None else make_managed_temp_dir("swap-submit-caller-")).resolve()
-    with fixture_engine(base, source) as (root, repo):
+    with fixture_settings_home(base), fixture_engine(base, source) as (root, repo):
         image = install_door(root, door)
         clock = scc.PhaseClock()
         dispatch = door_submit_dispatch(root, image, repo, timeout_s)

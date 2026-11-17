@@ -4,7 +4,7 @@ Params: ``run_id`` (string, required: the halted or resumed run). A halted or re
 classification when ``superseded_by`` (full commit sha or run id) names its successor: empty evidence and
 dispositions, no git spawn. Fail-closed otherwise: the op writes only when the marker
 is ``halted`` or ``resumed`` (not landed, closed, superseded or with a live successor) and withholds at least one path; the run-stage record is
-``halted`` with a parseable ``last_activity_at`` that resolves to a commit (the halt anchor); every
+``halted`` (or ``staged`` with no live or claimed token: a staged-but-dead run, its marker already ``halted``/``resumed``) with a parseable ``last_activity_at`` that resolves to a commit (the halt anchor); every
 withheld path classifies as exactly one of: ``landed`` (HEAD blob equals the kept blob), ``superseded`` (a commit in
 ``<halt_anchor>..HEAD`` touched it and a HEAD blob exists that differs from the kept blob) or ``scratch-abandoned``
 (under ``scratch/``, untouched since the halt, absent from both the anchor tree and HEAD), ``lost`` (the kept blob
@@ -70,7 +70,12 @@ def _halt_anchor(root: Path, run_id: str) -> tuple:
         if _SHA40.fullmatch(sha):
             return sha, None
         return None, f"{run_id} has no run-stage record and no commit of its halt record; the halt is unanchored"
-    if stage.get("stage") != "halted":
+    if stage.get("stage") == "staged":
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        if run_token.is_live(root, run_id) or run_token._read_rec(root, run_id, claimed=True) is not None:
+            return None, f"{run_id} is staged with a live or claimed token; the halt is unanchored"
+    elif stage.get("stage") != "halted":
         return None, f"{run_id} has no halted run-stage record; the halt is unanchored"
     epoch = _iso_epoch(stage.get("last_activity_at"))
     if epoch is None:

@@ -651,10 +651,9 @@ class _PackIndex(NamedTuple):
 
 
 def _read_loose_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
-    path = os.path.join(os.fspath(common_dir), "objects", sha[:2], sha[2:])
+    path = Path(os.fspath(common_dir), "objects", sha[:2], sha[2:])
     try:
-        with open(path, "rb") as fh:
-            raw = zlib.decompress(fh.read())
+        raw = zlib.decompress(path.read_bytes())
     except (OSError, zlib.error):
         return None
     header, _, payload = raw.partition(b"\x00")

@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from ._git_template import copy_repo, template_repo
+
 pytestmark = pytest.mark.complete
 
 _PUBLISH = Path(__file__).resolve().parents[1] / "publish.py"
@@ -42,18 +44,48 @@ def pub():
     return module
 
 
-@pytest.fixture()
-def repo(tmp_path):
-    root = tmp_path / "repo"
+def _build(root: Path, *, stub: bool) -> None:
     for rel in _FILES:
         f = root / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text("x = 1\n")
-    root.mkdir(exist_ok=True)
     _git(root, "init", "-q")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "init")
-    return root
+    if stub:
+        (root / "coordinator/bin/publish.py").write_text(_STUB)
+        _git(root, "add", ".")
+        _git(root, "commit", "-qm", "stub")
+
+
+@pytest.fixture(scope="session")
+def base_template(tmp_path_factory):
+    return template_repo(tmp_path_factory, "publish-dirty:base", lambda p: _build(p, stub=False))
+
+
+@pytest.fixture(scope="session")
+def stub_template(tmp_path_factory):
+    return template_repo(tmp_path_factory, "publish-dirty:stub", lambda p: _build(p, stub=True))
+
+
+@pytest.fixture(scope="session")
+def base_sha(base_template):
+    return _git(base_template, "rev-parse", "HEAD")
+
+
+@pytest.fixture(scope="session")
+def stub_sha(stub_template):
+    return _git(stub_template, "rev-parse", "HEAD")
+
+
+@pytest.fixture()
+def repo(tmp_path, base_template):
+    return copy_repo(base_template, tmp_path / "repo")
+
+
+@pytest.fixture()
+def stub_repo(tmp_path, stub_template):
+    return copy_repo(stub_template, tmp_path / "repo")
 
 
 @pytest.fixture()
@@ -69,35 +101,27 @@ def isolated_runtime(tmp_path, monkeypatch):
     sys.modules.update(saved_modules)
 
 
-def _stub_commit(repo: Path) -> str:
-    (repo / "coordinator/bin/publish.py").write_text(_STUB)
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-qm", "stub")
-    return _git(repo, "rev-parse", "HEAD")
-
-
 def _prep(pub, repo, monkeypatch):
     monkeypatch.setattr(pub, "_REPO_ROOT", repo)
     monkeypatch.setattr(pub, "_BOOTSTRAP_DONE", False)
     monkeypatch.setattr(pub, "_bootstrap_engine", lambda: pytest.fail("reached bootstrap"))
 
 
-def test_clean_tree_has_no_dirty_paths(pub, repo):
-    assert pub._dirty_publisher_paths(repo, _git(repo, "rev-parse", "HEAD")) == []
+def test_clean_tree_has_no_dirty_paths(pub, repo, base_sha):
+    assert pub._dirty_publisher_paths(repo, base_sha) == []
 
 
 @pytest.mark.parametrize("rel", _FILES)
-def test_dirty_publisher_file_is_named(pub, repo, rel):
+def test_dirty_publisher_file_is_named(pub, repo, base_sha, rel):
     (repo / rel).write_text("x = 2\n")
-    assert pub._dirty_publisher_paths(repo, _git(repo, "rev-parse", "HEAD")) == [rel]
+    assert pub._dirty_publisher_paths(repo, base_sha) == [rel]
 
 
-def test_path_absent_at_sha_is_handled(pub, repo):
-    base = _git(repo, "rev-parse", "HEAD")
+def test_path_absent_at_sha_is_handled(pub, repo, base_sha):
     (repo / "coordinator/bin/lib/new.py").write_text("y = 1\n")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "add")
-    assert pub._dirty_publisher_paths(repo, base) == ["coordinator/bin/lib/new.py"]
+    assert pub._dirty_publisher_paths(repo, base_sha) == ["coordinator/bin/lib/new.py"]
 
 
 def test_untracked_publisher_file_is_named(pub, repo):
@@ -114,9 +138,9 @@ def test_non_publisher_dirt_is_ignored(pub, repo):
 
 
 def test_dirty_publisher_delegates_to_a_commit_clone_without_refusing(
-    pub, repo, isolated_runtime, monkeypatch, capsys
+    pub, stub_repo, stub_sha, isolated_runtime, monkeypatch, capsys
 ):
-    sha = _stub_commit(repo)
+    repo, sha = stub_repo, stub_sha
     (repo / "coordinator/bin/publish.py").write_text("raise RuntimeError('dirty executed')\n")
     _prep(pub, repo, monkeypatch)
     assert pub._main(["--dry-run"]) == 7
@@ -132,9 +156,9 @@ def test_dirty_publisher_delegates_to_a_commit_clone_without_refusing(
 
 
 def test_dirty_publisher_against_explicit_commit_delegates_with_the_commit_argv(
-    pub, repo, isolated_runtime, monkeypatch, capsys
+    pub, stub_repo, stub_sha, isolated_runtime, monkeypatch, capsys
 ):
-    sha = _stub_commit(repo)
+    repo, sha = stub_repo, stub_sha
     (repo / "coordinator_core/percolate/engine.py").write_text("x = 3\n")
     _prep(pub, repo, monkeypatch)
     assert pub._main(["--commit", sha]) == 7
@@ -143,8 +167,8 @@ def test_dirty_publisher_against_explicit_commit_delegates_with_the_commit_argv(
     assert "refused" not in err
 
 
-def test_failed_materialise_refuses_and_runs_no_live_publisher_code(pub, repo, monkeypatch, capsys):
-    _stub_commit(repo)
+def test_failed_materialise_refuses_and_runs_no_live_publisher_code(pub, stub_repo, monkeypatch, capsys):
+    repo = stub_repo
     (repo / "coordinator/bin/publish.py").write_text("raise RuntimeError('dirty executed')\n")
     _prep(pub, repo, monkeypatch)
     cc = pub._commit_clone_module()
@@ -160,9 +184,8 @@ def test_failed_materialise_refuses_and_runs_no_live_publisher_code(pub, repo, m
     assert "dirty executed" not in err
 
 
-def test_a_commit_clone_is_not_delegated_again(pub, repo, isolated_runtime, monkeypatch):
-    sha = _stub_commit(repo)
-    clone = pub._commit_clone_module().materialise_commit_clone(repo, sha, isolated_runtime / "c")
+def test_a_commit_clone_is_not_delegated_again(pub, stub_repo, stub_sha, isolated_runtime, monkeypatch):
+    clone = pub._commit_clone_module().materialise_commit_clone(stub_repo, stub_sha, isolated_runtime / "c")
     (clone / "coordinator/bin/lib/helper.py").write_text("x = 2\n")
 
     class _Reached(Exception):
@@ -178,19 +201,31 @@ def test_a_commit_clone_is_not_delegated_again(pub, repo, isolated_runtime, monk
         pub._main([])
 
 
-def test_source_repo_is_the_live_repo_from_a_clone_and_the_root_otherwise(pub, repo, isolated_runtime, monkeypatch):
+def test_source_repo_is_the_live_repo_from_a_clone_and_the_root_otherwise(
+    pub, repo, base_sha, isolated_runtime, monkeypatch
+):
     monkeypatch.setattr(pub, "_REPO_ROOT", repo)
     assert pub._source_repo() == repo
-    sha = _git(repo, "rev-parse", "HEAD")
-    clone = pub._commit_clone_module().materialise_commit_clone(repo, sha, isolated_runtime / "c")
+    clone = pub._commit_clone_module().materialise_commit_clone(repo, base_sha, isolated_runtime / "c")
     monkeypatch.setattr(pub, "_REPO_ROOT", clone)
     assert pub._source_repo() == repo
 
 
-def test_unresolvable_explicit_commit_still_refuses(pub, repo, monkeypatch, capsys):
-    _prep(pub, repo, monkeypatch)
-    assert pub._main(["--commit", "no-such-ref"]) == 1
-    assert "refused" in capsys.readouterr().err
+def test_unresolvable_explicit_commit_defers_to_the_target_source_check(pub, repo, monkeypatch):
+    # A ref claude-klabauter lacks may name a commit of the target's source repo, so the entry gate must not
+    # refuse it; `_resolve_target_source_ref` refuses once rows load (pinned in
+    # test_percolate_round_named_source_commit.py).
+    class _Reached(Exception):
+        pass
+
+    def _stop():
+        raise _Reached
+
+    monkeypatch.setattr(pub, "_REPO_ROOT", repo)
+    monkeypatch.setattr(pub, "_BOOTSTRAP_DONE", False)
+    monkeypatch.setattr(pub, "_bootstrap_engine", _stop)
+    with pytest.raises(_Reached):
+        pub._main(["--commit", "no-such-ref"])
 
 
 def test_main_passes_the_gate_on_clean_tree(pub, repo, monkeypatch):

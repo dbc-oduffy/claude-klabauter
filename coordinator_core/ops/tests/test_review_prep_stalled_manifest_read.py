@@ -64,8 +64,10 @@ def test_a_read_that_stays_stalled_is_named_stalled_with_ms(repo, monkeypatch):
     gate = threading.Event()
     _stall(monkeypatch, "manifest.json", gate, times=99)
     try:
-        with pytest.raises(ValueError, match=r"no readable manifest for run 'ask-stall': stalled \d+ ms"):
+        with pytest.raises(rp.RunRecordReadStalled, match=r"no readable manifest for run 'ask-stall': stalled \d+ ms"):
             rp.declared_paths_and_held(repo, RUN, own_session="sess-own")
+        reply = rp._handler({"run_id": RUN, "base": "a" * 40, "worktree": True}, repo)
+        assert reply["error"].startswith(rp.REVIEW_PREP_BUSY_PREFIX) and "stalled" in reply["error"]
     finally:
         gate.set()
 

@@ -53,7 +53,7 @@ def _drive_default_round(monkeypatch, tmp_path, run_side_effect):
     monkeypatch.setattr(pr, "_hold_round_slot", lambda dest: contextlib.nullcontext(_Slot()))
     monkeypatch.setattr(pr, "publish_contention_wait_secs", lambda: 0)
     monkeypatch.setattr(pr, "_run", fake_run)
-    args = argparse.Namespace(open_only=False, delta=True, source_ref=None)
+    args = argparse.Namespace(open_only=False, delta=True, source_ref=None, no_publish=False)
     rc = pr._cmd_round_default(args, "row-a", str(tmp_path), str(tmp_path), str(tmp_path), tmp_path)
     return rc, seen
 
@@ -85,8 +85,6 @@ def test_driver_closes_its_own_record_with_the_outcome(monkeypatch: pytest.Monke
 
 
 def test_a_raising_publish_leg_closes_the_record_as_failed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import pytest
-
     def side_effect(cmd, seen):
         raise subprocess.TimeoutExpired(cmd, 1)
 
@@ -110,6 +108,13 @@ def test_driver_does_not_overwrite_a_record_the_child_wrote(monkeypatch: pytest.
 
 def test_hang_dump_is_one_shot(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
+
+    class _InsideCommitClone:
+        @staticmethod
+        def is_commit_clone(root) -> bool:
+            return True
+
+    monkeypatch.setattr(pr, "_commit_clone_module", lambda: _InsideCommitClone)
     monkeypatch.setattr(pr, "_bootstrap_engine", lambda: None)
     monkeypatch.setattr(pr.faulthandler, "dump_traceback_later", lambda *a, **k: calls.append((a, k)))
 

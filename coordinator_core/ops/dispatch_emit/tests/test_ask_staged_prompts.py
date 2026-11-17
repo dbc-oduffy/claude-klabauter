@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import re
+
 import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose, cli, prompt_fragments
@@ -104,6 +106,18 @@ def test_without_staged_out_every_body_stays_inline() -> None:
     assert "You are the run's one closing agent" in script.replace("\\'", "'")
 
 
+def _unshare_precedence(script: str) -> str:
+    """Inline the hoisted precedence-tail const back into each use; staging runs before the share, so only the inline script carries it."""
+    fn = ask_compose._PRECEDENCE_TAIL_FN
+    m = re.search(rf"const {fn} = `([^`]*)`;\n", script)
+    if not m:
+        return script
+    tail = m.group(1)
+    body = script[: m.start()] + script[m.end() :]
+    body = body.replace(f"' + {fn} + '", tail)
+    return re.sub(rf"' \+ {fn}(?![A-Za-z0-9_])", lambda _m: tail + "'", body)
+
+
 def test_pointer_replaced_text_equals_the_inline_script(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
     sink: dict[str, str] = {}
@@ -115,7 +129,7 @@ def test_pointer_replaced_text_equals_the_inline_script(monkeypatch: pytest.Monk
         )
         assert pointer in staged
         staged = staged.replace(pointer, _js_string_literal(text))
-    assert prompt_fragments.fold_literals(staged) == prompt_fragments.fold_literals(inline)
+    assert prompt_fragments.fold_literals(_unshare_precedence(staged)) == prompt_fragments.fold_literals(_unshare_precedence(inline))
 
 
 def test_emit_writes_each_staged_body_beside_the_ask_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

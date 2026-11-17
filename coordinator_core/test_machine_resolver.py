@@ -44,6 +44,8 @@ def _clean_env(monkeypatch):
     for key in (
         "COORDINATOR_MACHINE",
         "COORDINATOR_CONTRIBUTOR",
+        "COORDINATOR_BRANCH_OWNER",
+        "MACHINE_LOCAL_COORDINATOR_BRANCH_OWNER",
         "COMPUTERNAME",
         "HOSTNAME",
         "MACHINE_LOCAL_REGISTRY_DIR",
@@ -98,6 +100,67 @@ def test_compute_machine_always_lowercase(monkeypatch, tmp_path, env_key, raw, e
 def test_compute_machine_live_always_lowercase(monkeypatch, env_key, raw, expected):
     monkeypatch.setenv(env_key, raw)
     assert mr.compute_machine_live() == expected
+
+
+# --- compute_owner: env > registry > OS login > "unknown" ----------------------
+
+
+def _empty_registry(monkeypatch, tmp_path):
+    reg_dir = tmp_path / "machine-local"
+    reg_dir.mkdir(exist_ok=True)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    return reg_dir
+
+
+def test_compute_owner_env_wins_and_is_sanitized(monkeypatch, tmp_path):
+    _empty_registry(monkeypatch, tmp_path)
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "Alice Smith")
+    assert mr.compute_owner() == "alice-smith"
+
+
+def test_compute_owner_env_beats_registry(monkeypatch, tmp_path):
+    reg_dir = _write_registry(tmp_path, "registry.toml", "coordinator.branch_owner", "regowner")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "envowner")
+    assert mr.compute_owner() == "envowner"
+
+
+def test_compute_owner_registry_beats_login(monkeypatch, tmp_path):
+    reg_dir = _write_registry(tmp_path, "registry.toml", "coordinator.branch_owner", "regowner")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    monkeypatch.setattr("getpass.getuser", lambda: "loginuser")
+    assert mr.compute_owner() == "regowner"
+
+
+def test_compute_owner_falls_back_to_login(monkeypatch, tmp_path):
+    _empty_registry(monkeypatch, tmp_path)
+    monkeypatch.setattr("getpass.getuser", lambda: "Login.User")
+    assert mr.compute_owner() == "login-user"
+
+
+def test_compute_owner_unknown_when_login_unavailable(monkeypatch, tmp_path):
+    _empty_registry(monkeypatch, tmp_path)
+
+    def _boom():
+        raise OSError("no login")
+
+    monkeypatch.setattr("getpass.getuser", _boom)
+    assert mr.compute_owner() == "unknown"
+
+
+@pytest.mark.parametrize("bad", ["origin", "main", "ORIGIN", "!!!"])
+def test_compute_owner_never_mints_reserved_or_empty(monkeypatch, tmp_path, bad):
+    _empty_registry(monkeypatch, tmp_path)
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", bad)
+    monkeypatch.setattr("getpass.getuser", lambda: "loginuser")
+    assert mr.compute_owner() == "loginuser"
+
+
+def test_compute_owner_all_sources_reserved_is_unknown(monkeypatch, tmp_path):
+    _empty_registry(monkeypatch, tmp_path)
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "origin")
+    monkeypatch.setattr("getpass.getuser", lambda: "main")
+    assert mr.compute_owner() == "unknown"
 
 
 # --- AC1/AC2/AC3: env > registry > hostname precedence ------------------------

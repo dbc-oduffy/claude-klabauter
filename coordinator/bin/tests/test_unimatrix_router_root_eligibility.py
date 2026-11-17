@@ -109,7 +109,7 @@ def fallback_roster(router,tmp_path: Path,monkeypatch: pytest.MonkeyPatch):
  # source eligibility still uses the actual classifier and observed metadata.
  monkeypatch.setattr(R,'_roster',lambda:SimpleNamespace(
   session_identity=lambda e:{'vendor':e.get('vendor','unknown')},
-  pid_alive=lambda pid:pid in (700,701),proc_start=lambda pid:'birth-'+str(pid),pid_domain=lambda:'test-domain'))
+  pid_alive=lambda pid:pid in (700,701),listed_row=lambda d,rows=():d.get('pid') in (700,701),proc_start=lambda pid:'birth-'+str(pid),pid_domain=lambda:'test-domain'))
  monkeypatch.setattr(R,'_contract',lambda:SimpleNamespace(
   projected_addresses=lambda e:e.get('aliases',[]),
   build_frame=lambda *a,**k:{'msg_id':'fixture-msg'},stamp=lambda f,*a,**k:f,

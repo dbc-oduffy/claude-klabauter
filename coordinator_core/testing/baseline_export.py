@@ -1,11 +1,13 @@
-"""baseline-export: export a commit, run a runner argv inside it, remove the export in a finally.
+"""baseline-export: check out a commit, run a runner argv inside it, remove the tree in a finally.
 
-The CLI owns the `git archive` extraction (tarfile data filter), the runner's process group
+The CLI owns the tree build (`clone --shared --no-checkout` + `checkout --detach`, so the tree is
+a real git clone with a `.git` root, never a bare extract), the runner's process group
 (POSIX) or job object (Windows), and the tree the runner runs in. Without `--link` that tree is
-the shared read-only `baseline_cache` entry for the sha (extracted once, leased for the run,
+the shared read-only `baseline_cache` entry for the sha (built once, leased for the run,
 evicted on drift); with `--link` it is a per-pid root with the links, removed afterwards.
-Git spawns per run: one `rev-parse`, plus one `archive` only on a cache miss (or any `--link` run).
-A cache miss holds the single box-wide extract slot; a hit needs none.
+Git spawns per run: one `rev-parse`, plus `clone` and `checkout` only on a cache miss (or any
+`--link` run). A cache miss holds the single box-wide build slot; a hit needs none.
+A tree without `.git` is refused (`require_git_root`) before the runner spawns.
 Runs as `python -m coordinator_core.testing.baseline_export`.
 """
 from __future__ import annotations
@@ -17,10 +19,10 @@ import re
 import signal
 import subprocess
 import sys
-import tarfile
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
@@ -176,6 +178,7 @@ def export_env(root: PurePath | str, base: dict[str, str] | None = None, *, shar
         env.pop(key, None)
     _rebind_pid_bound_inherits(env)
     env["GIT_CEILING_DIRECTORIES"] = os.fspath(Path(root).parent)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
     # Engine root leads PYTHONPATH on purpose: the live engine shadows any coordinator_core shipped in the export.
     engine_root = os.fspath(Path(__file__).resolve().parents[2])
     env["PYTHONPATH"] = os.pathsep.join(p for p in (engine_root, env.get("PYTHONPATH", "")) if p)
@@ -213,37 +216,73 @@ def resolve(sha: str, cwd: str | os.PathLike[str]) -> tuple[str, str]:
     return os.path.realpath(lines[0]), lines[1]
 
 
-def export(toplevel: str, sha40: str, root: Path) -> None:
-    """Extract `git archive <sha40>` into `root` through tarfile's data filter; one git spawn.
-
-    The stream is drained to EOF after the last member: tarfile stops at the end-of-archive
-    marker and git's trailing block padding would otherwise leave it unreaped and killed.
-    """
+def _git_checked(args: list[str], cwd: str | os.PathLike[str], what: str) -> None:
+    """Run one git spawn to completion; ExportError carrying git's stderr on a non-zero exit."""
     with tempfile.TemporaryFile() as errf:
-        failure: BaseException | None = None
-        with _git_popen(
-            ["--no-optional-locks", "archive", "--format=tar", sha40],
-            toplevel, stderr=errf,
-        ) as proc:
-            try:
-                with tarfile.open(fileobj=proc.stdout, mode="r|") as tf:
-                    for member in tf:
-                        if member.name.split("/", 1)[0] not in DATA_DIRS:
-                            tf.extract(member, path=root, filter="data")
-                while proc.stdout.read(65536):
-                    pass
-            except (tarfile.TarError, OSError) as exc:
-                failure = exc
-            finally:
-                if failure is not None:
-                    with contextlib.suppress(OSError):
-                        proc.kill()
-                rc = proc.wait()
-        if failure is None and rc != 0:
+        with _git_popen(args, cwd, stderr=errf) as proc:
+            proc.stdout.read()
+            rc = proc.wait()
+        if rc != 0:
             errf.seek(0)
-            failure = ExportError(errf.read().decode("utf-8", "replace").strip() or f"git archive exited {rc}")
-        if failure is not None:
-            raise ExportError(f"export of {sha40} failed: {failure}") from failure
+            err = errf.read().decode("utf-8", "replace").strip()
+            raise ExportError(f"{what} failed: {err or f'git exited {rc}'}")
+
+
+def require_git_root(root: PurePath | str) -> None:
+    """Raise ExportError when `<root>/.git` is absent: a gate tree without it lets git climb to an enclosing repo."""
+    if not os.path.lexists(Path(root) / ".git"):
+        raise ExportError(f"gate tree has no .git: {root}")
+
+
+def clone_tree(toplevel: str, sha40: str, root: Path) -> None:
+    """Build `root` as a real clone of `toplevel` checked out detached at `sha40`; two git spawns.
+
+    `root` must be an existing empty directory. Objects stay in `toplevel` (alternates). DATA_DIRS
+    are excluded from the checkout by non-cone sparse patterns, leaving them skip-worktree. Trap:
+    sparseCheckout is switched back off after the checkout, because git clears skip-worktree for
+    any path present in the worktree (a linked data dir) whenever it is on, and the entries then
+    read as deleted. The links are excluded via `info/exclude` so they read as neither untracked nor
+    deleted. autocrlf is pinned off so bytes match the committed blobs.
+    """
+    _git_checked(
+        ["clone", "-q", "--shared", "--no-checkout", toplevel, os.fspath(root)],
+        toplevel, f"clone of {sha40}",
+    )
+    git_dir = Path(root) / ".git"
+    try:
+        info = git_dir / "info"
+        info.mkdir(exist_ok=True)
+        patterns = ["/*", *(f"!/{d}/" for d in DATA_DIRS)]
+        (info / "sparse-checkout").write_text("\n".join(patterns) + "\n", encoding="utf-8", newline="\n")
+        (info / "exclude").write_text("".join(f"/{d}\n" for d in DATA_DIRS), encoding="utf-8", newline="\n")
+        with open(git_dir / "config", "a", encoding="utf-8", newline="\n") as cfg:
+            cfg.write("[core]\n\tsparseCheckout = true\n\tautocrlf = false\n")
+    except OSError as exc:
+        raise ExportError(f"cannot write sparse-checkout for {root}: {exc}") from exc
+    _git_checked(["checkout", "-q", "--detach", sha40], root, f"checkout of {sha40}")
+    try:
+        with open(git_dir / "config", "a", encoding="utf-8", newline="\n") as cfg:
+            cfg.write("[core]\n\tsparseCheckout = false\n")
+    except OSError as exc:
+        raise ExportError(f"cannot finalize config for {root}: {exc}") from exc
+
+
+def _alternates_ok(entry: Path) -> bool:
+    """True when the entry's `.git` alternates name object stores that still exist."""
+    try:
+        lines = (entry / ".git" / "objects" / "info" / "alternates").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    stores = [ln for ln in lines if ln.strip()]
+    return bool(stores) and all(os.path.isdir(ln) for ln in stores)
+
+
+def _head_is(entry: Path, sha40: str) -> bool:
+    """True when the entry's detached `.git/HEAD` still names `sha40` (a runner's checkout moves it)."""
+    try:
+        return (entry / ".git" / "HEAD").read_text(encoding="utf-8").strip() == sha40
+    except OSError:
+        return False
 
 
 def link(toplevel: str, root: Path, paths: tuple[str, ...]) -> None:
@@ -470,7 +509,7 @@ class _AlreadyBuilt(Exception):
     """Another process published the entry while this one waited for the slot."""
 
 
-def _cache_extractor(toplevel: str, sha40: str, entry: Path):
+def _cache_extractor(toplevel: str, sha40: str, entry: Path) -> Callable[[Path], None]:
     """The `ensure_entry` extractor: takes the slot only here (a miss), skips if a peer published meanwhile."""
 
     def extract(partial: Path) -> None:
@@ -482,13 +521,31 @@ def _cache_extractor(toplevel: str, sha40: str, entry: Path):
         try:
             if entry.is_dir() and bc._manifest(entry).exists():
                 raise _AlreadyBuilt
-            export(toplevel, sha40, partial)
+            clone_tree(toplevel, sha40, partial)
             data = tuple(d for d in DATA_DIRS if os.path.isdir(os.path.join(toplevel, d)))
             link(toplevel, partial, data)
         finally:
             _release_slot(slot)
 
     return extract
+
+
+def _ensure_cached(toplevel: str, sha40: str, entry: Path) -> None:
+    """Publish or reuse the cache entry; a hit whose alternates no longer resolve is drift: evicted and rebuilt."""
+    from coordinator_core.testing import baseline_cache as bc
+
+    for attempt in range(3):
+        try:
+            _, built = bc.ensure_entry(toplevel, sha40, _cache_extractor(toplevel, sha40, entry))
+        except _AlreadyBuilt:
+            if attempt:
+                raise ExportError("cache entry kept vanishing between peers' publish and this run's lease")
+            continue
+        if built or (_alternates_ok(entry) and _head_is(entry, sha40)):
+            return
+        if not bc._evict_one(bc.cache_root(toplevel), sha40, ignore_pid=os.getpid()):
+            raise ExportError(f"cache entry {sha40[:8]} lost its objects and a peer holds a lease on it")
+    raise ExportError(f"cache entry {sha40[:8]} could not be rebuilt")
 
 
 def _evict_if_drifted(toplevel: str, sha40: str, entry: Path | None) -> None:
@@ -582,13 +639,7 @@ def main(argv: list[str]) -> int:
                 entry = bc.entry_path(toplevel, sha40)
                 lease_cm = bc.lease(entry)
                 lease_cm.__enter__()
-                for _attempt in range(2):
-                    try:
-                        bc.ensure_entry(toplevel, sha40, _cache_extractor(toplevel, sha40, entry))
-                        break
-                    except _AlreadyBuilt:
-                        if _attempt:
-                            raise ExportError("cache entry kept vanishing between peers' publish and this run's lease")
+                _ensure_cached(toplevel, sha40, entry)
                 run_root = entry
             else:
                 with _signals_blocked(sigs):
@@ -600,11 +651,12 @@ def main(argv: list[str]) -> int:
                         refused = True
                 if refused:
                     raise ExportError(f"export root already exists: {root}")
-                export(toplevel, sha40, root)
+                clone_tree(toplevel, sha40, root)
                 data = tuple(d for d in DATA_DIRS if os.path.isdir(os.path.join(toplevel, d)))
                 links = tuple(p for p in inv.links if p.split("/", 1)[0] not in data)
                 link(toplevel, root, data + links)
                 run_root = root
+            require_git_root(run_root)
             export_state = "ok"
             run_cwd = counterpart_cwd(toplevel, cwd, run_root)
             try:

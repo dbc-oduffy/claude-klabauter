@@ -830,15 +830,24 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "or session claim exist here to release",
         "confirmed": True,
     },
-    # VERIFIED INELIGIBLE by reading the body: no session id anywhere in
-    # `_restore_one` -- it restores a PEER's lost memo (found via the
-    # anchor's own recovery ledger, not this session's own claimed work)
-    # back into this repo's inbox. Same disposition as `ops/
-    # handoff_archive_transition.py::_commit_retained_supersede_flip` above.
-    "ops/fleet/memo_heal.py::_restore_one": {
-        "reason": "ineligible: threads no session id -- it restores a lost "
-        "peer memo into this repo's inbox, not work this session itself "
-        "claimed",
+    "benchmarks/land_blobs_bar_profile.py::_write_landing": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/land_blobs_bar_profile.py::add_live_sibling_runs": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "ops/ceremony/hand_land.py::hand_land": {
+        "reason": "ineligible: lands the caller's named paths through the native "
+        "`commit_paths` writer (the sanctioned committer); threads no session id "
+        "to release a claim with",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/land_blobs.py::_publish": {
+        "reason": "ineligible: lands a reviewed run's declared blobs under the "
+        "run's own recorded holds through `run_landing`'s in-process writer and one "
+        "`cas_ref`; threads no session id to release a claim with",
         "confirmed": True,
     },
     # VERIFIED INELIGIBLE by reading the body: commits into

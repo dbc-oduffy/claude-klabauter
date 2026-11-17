@@ -103,6 +103,8 @@ def _author_graph(root: Path, run_id: str, *, docs: bool, evidence: bool = True)
     _write(root, f"{RUN_DIR_ROOT}/{run_id}/submission.json", json.dumps({"submitted_at": time.time() - 600}))
     _write(root, f"{RECORD_DIR_ROOT}/{run_id}/parent.json", json.dumps({"runs": [{"slice_sizing": SLICE}]}))
     if docs:
+        baseline = _git(["rev-parse", f"HEAD:{DOC}"], root).strip()
+        _write(root, f"{RECORD_DIR_ROOT}/{run_id}/manifest.json", json.dumps({"rows": [], "write_baseline": {DOC: baseline}}))
         _write(root, DOC, "edited by the docs stage\n")
 
 
@@ -324,7 +326,9 @@ def test_a_review_written_file_outside_every_declared_path_is_committed_or_named
             line[3:] for line in _git(["status", "--porcelain", "--untracked-files=all"], repo).splitlines()
             if line and not run_artifacts.is_run_state(line[3:])
         }
-        assert tree_dirty == {REVIEW_FILE}, (tree_dirty, reply)
+        assert REVIEW_FILE not in tree_dirty, (tree_dirty, reply)
+        index = json.loads((repo / RECORD_DIR_ROOT / RUN / "evicted.json").read_text(encoding="utf-8"))
+        assert REVIEW_FILE in index, index
 
 
 def test_a_review_write_stays_unclaimed_while_another_run_holds_the_session(repo):
@@ -367,3 +371,118 @@ def test_the_composed_halt_call_still_carries_the_plan_and_doc_paths(monkeypatch
     assert f"{HALT_PLAN_FIELD}: _planRel" in script
     fn = script[script.index("async function _commitHaltRecord()"):].split("\n", 1)[0]
     assert f"{HALTED_RECORD_PARAM}: _halted" in fn and "doc_paths:" in fn
+
+
+_PEER = "pkg/peer_dirty.py"
+
+
+def _submit(root: Path) -> None:
+    """The submission record the watcher resolves a run from by script path."""
+    from coordinator_core.ops.dispatch_emit.tests import test_halt_lands_or_parks_product as stage
+
+    _write(root, f"{RUN_DIR_ROOT}/{stage.RUN}/submission.json", json.dumps(
+        {"run_id": stage.RUN, "script_path": "run.mjs", "sizing_rel": None, "submitted_at": 1.0}))
+
+
+def _watch_usage_limit(root: Path, monkeypatch) -> None:
+    from coordinator_core import workflow_watch
+    from coordinator_core.workflow_watch.tests.test_watch_writes_usage_limit_halt import RATE_LIMIT_TURN
+
+    run_dir = root / "wfruns" / "wf_abc"
+    run_dir.mkdir(parents=True)
+    journal = run_dir / "journal.jsonl"
+    journal.write_text(json.dumps({"type": "started", "agentId": "a1", "label": "leg:a1", "key": "v2:a1"}) + "\n",
+                       encoding="utf-8")
+    (run_dir / "agent-a1.jsonl").write_text(json.dumps(RATE_LIMIT_TURN) + "\n", encoding="utf-8")
+    workflow_watch._write_usage_limit_halt(str(journal), "run.mjs", root=root)
+
+
+def _watch_returned_halt(root: Path, monkeypatch) -> None:
+    from coordinator_core import workflow_watch
+
+    result = json.dumps({"halted_by": {"halted": "ledger-check", "reason": "row C2 open"}})
+    workflow_watch._write_returned_halt(result, "run.mjs", root=root)
+
+
+def _journal(root: Path) -> str:
+    journal = root / "wfruns" / "wf_abc" / "journal.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps({"type": "started", "agentId": "a1", "label": "leg:a1", "key": "v2:a1"}) + "\n",
+                       encoding="utf-8")
+    return str(journal)
+
+
+def _watch_commit_stage(root: Path, monkeypatch) -> None:
+    from coordinator_core import workflow_watch
+    from coordinator_core.ops.dispatch_emit import commit_stage_halt
+
+    monkeypatch.setattr(commit_stage_halt, "commit_leg_outcome", lambda _t: ("commit", "uncommitted", "x"))
+    workflow_watch._write_commit_stage_halt(_journal(root), "failed", "run.mjs", root=root)
+
+
+def _watch_unrecorded_end(root: Path, monkeypatch) -> None:
+    from coordinator_core import workflow_watch
+
+    workflow_watch._write_unrecorded_end_halt(_journal(root), "failed", "run.mjs", root=root)
+
+
+def _stage_unfinished_run(root: Path) -> tuple[str, tuple[str, str], str]:
+    from coordinator_core.ops.dispatch_emit.tests import test_halt_lands_or_parks_product as stage
+
+    stage._stage_run(root)
+    _submit(root)
+    _write(root, _PEER, "PEER = 1\n")
+    return stage.REC, (stage.DONE_PY, stage.OPEN_PY), stage.UNNAMED
+
+
+def _assert_parked_and_peer_dirty(root: Path, rec: str, run_paths: tuple[str, str], unnamed: str) -> None:
+    from coordinator_core.ops.dispatch_emit import halt_tree_evict
+
+    dirty = {line[3:] for line in _git(["status", "--porcelain", "-uall"], root).splitlines()}
+    assert not dirty & set(run_paths), dirty
+    index = json.loads((root / rec / halt_tree_evict.EVICTED_FILE).read_text(encoding="utf-8"))
+    assert set(run_paths) <= set(index), index
+    for path in run_paths:
+        assert (root / rec / halt_tree_evict.BLOBS_DIR / index[path]["blob"]).is_file()
+    assert {_PEER, unnamed} <= dirty, dirty
+    assert (root / _PEER).read_text(encoding="utf-8") == "PEER = 1\n"
+
+
+@pytest.fixture
+def halt_repo(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"],
+                 ["config", "core.autocrlf", "false"]):
+        _git(args, root)
+    _write(root, "README.md", "seed\n")
+    _write(root, "pkg/done_chunk.py", "VALUE = 0\n")
+    _write(root, "pkg/idle.md", "idle\n")
+    _git(["add", "."], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+    return root
+
+
+def test_a_land_run_halt_parks_the_unfinished_chunks_importable_write(halt_repo):
+    from coordinator_core.ops.dispatch_emit import land_run_halt
+    from coordinator_core.ops.dispatch_emit.tests import test_halt_lands_or_parks_product as stage
+
+    rec, run_paths, unnamed = _stage_unfinished_run(halt_repo)
+    assert (halt_repo / stage.OPEN_PY).read_text(encoding="utf-8") == "OPEN = 1\n"
+
+    out = land_run_halt.land(halt_repo, halt_repo, {
+        "script_path": "run.mjs", "run_id": stage.RUN, HALTED_RECORD_PARAM: stage.LEDGER, "incomplete_chunks": ["C2"],
+    })
+
+    assert out["committed"] is True, out
+    _assert_parked_and_peer_dirty(halt_repo, rec, run_paths, unnamed)
+
+
+@pytest.mark.parametrize("watch", [_watch_usage_limit, _watch_returned_halt, _watch_commit_stage, _watch_unrecorded_end],
+                         ids=["usage-limit", "returned-halted-by", "commit-stage-end", "unrecorded-end"])
+def test_a_watcher_landed_halt_parks_the_runs_unlanded_writes(halt_repo, monkeypatch, watch):
+    rec, run_paths, unnamed = _stage_unfinished_run(halt_repo)
+
+    watch(halt_repo, monkeypatch)
+
+    _assert_parked_and_peer_dirty(halt_repo, rec, run_paths, unnamed)

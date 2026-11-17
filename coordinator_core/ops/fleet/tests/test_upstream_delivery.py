@@ -14,12 +14,14 @@ import pytest
 from coordinator_core.ops.ceremony.tests.fixtures.real_git import real_git_repo
 from coordinator_core.ops.fleet import _memo_push_pending as pp
 from coordinator_core.ops.fleet import _upstream_delivery as ud
+from coordinator_core.ops.fleet._memo_anchor import retire_pin, write_pin
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 BRANCH = "work/testbox/2026-11-13"
 PATH = "cross-repo/inbox/memo.md"
+PIN_PREFIX = "refs/coordinator/inbox-pin/"
 CONTENT = "memo body\n"
 MESSAGE = "deliver memo\n\nSession-Id: s-1\n"
 
@@ -104,6 +106,65 @@ def test_delivers_onto_tracking_tip_and_touches_nothing(receiver, monkeypatch: p
         "blob_sha": out.blob_sha, "message": MESSAGE, "commit_sha": out.commit_sha,
         "parent_sha": receiver["upstream_tip"],
     }
+
+
+def test_pin_resolves_to_the_delivery_commit_and_verify_delivery_passes(receiver) -> None:
+    repo = receiver["repo"]
+    out = ud.deliver_onto_upstream(repo, receiver["sender"], PATH, CONTENT, receiver["msg"])
+
+    assert out.ok, out.error
+    assert _git(["rev-parse", PIN_PREFIX + out.commit_sha], repo) == out.commit_sha
+    assert ud.verify_delivery(repo, out) is None
+
+
+def test_pin_lost_cas_refuses_with_no_record_no_pin_and_no_anchor(receiver, monkeypatch) -> None:
+    repo = receiver["repo"]
+    real_build = ud.git_native.build_new_file_commit
+
+    def _build_then_lock_the_pin(rel_path, content, msg_file, repo_path, **kwargs):
+        result = real_build(rel_path, content, msg_file, repo_path, **kwargs)
+        lock = repo / ".git" / (PIN_PREFIX + result.stdout.strip() + ".lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_bytes(b"held by a peer\n")
+        return result
+
+    monkeypatch.setattr(ud.git_native, "build_new_file_commit", _build_then_lock_the_pin)
+
+    out = ud.deliver_onto_upstream(repo, receiver["sender"], PATH, CONTENT, receiver["msg"])
+
+    assert not out.ok
+    assert out.status == ud.STATUS_ANCHOR_FAILED
+    assert pp.list_pending(receiver["sender"]) == []
+    assert _git(["for-each-ref", "refs/coordinator/inbox"], repo) == ""
+    assert _git(["for-each-ref", PIN_PREFIX], repo) == ""
+
+
+def test_verify_delivery_refuses_a_missing_pin_a_wrong_anchor_and_an_unreadable_tree(receiver) -> None:
+    repo = receiver["repo"]
+    out = ud.deliver_onto_upstream(repo, receiver["sender"], PATH, CONTENT, receiver["msg"])
+
+    assert "anchor" in ud.verify_delivery(repo, out._replace(blob_sha="0" * 40))
+    assert write_pin(repo / ".git", "1" * 40)
+    assert "tree" in ud.verify_delivery(repo, out._replace(commit_sha="1" * 40))
+    assert retire_pin(repo / ".git", "1" * 40)
+    ud.retire_delivery_refs(repo, out)
+    assert "pin" in ud.verify_delivery(repo, out)
+    assert _git(["for-each-ref", PIN_PREFIX, "refs/coordinator/inbox"], repo) == ""
+
+
+def test_rebuild_writes_a_pin_for_the_rebuilt_commit(receiver) -> None:
+    repo = receiver["repo"]
+    ud.deliver_onto_upstream(repo, receiver["sender"], PATH, CONTENT, receiver["msg"])
+    moved = _commit_file(repo, "moved.txt", "m\n")
+    _git(["update-ref", f"refs/remotes/origin/{BRANCH}", moved], repo)
+    _git(["reset", "-q", "--hard", receiver["local_tip"]], repo)
+    old = pp.list_pending(receiver["sender"])[0]
+
+    out = ud.rebuild_and_retarget(old, moved, sender_root=receiver["sender"])
+
+    assert out.ok, out.error
+    assert _git(["rev-parse", PIN_PREFIX + out.commit_sha], repo) == out.commit_sha
+    assert ud.verify_delivery(repo, out) is None
 
 
 def test_without_a_tracking_ref_the_local_branch_tip_is_the_base(receiver) -> None:

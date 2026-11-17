@@ -48,10 +48,11 @@ def test_carried_verdict_gets_no_dirt_credit(tmp_path):
     assert ltt.failed_targeted_tests(record, measured=False) == ([], "pre-existing-only")
 
 
-def test_foreign_id_without_evidence_or_dirt_reason_refuses():
+def test_foreign_id_without_evidence_or_dirt_reason_is_unknown_not_cleared():
     baseline = {"caused": [], "foreign": [DIRT], "evidence": [], "foreign_reason": {}}
     findings, check = ltt.failed_targeted_tests({"status": "fail", "tests_failed": 1, "baseline": baseline})
-    assert check == "failed" and findings[0].path == "test_b.py"
+    assert (findings, check) == ([], ltt.UNKNOWN_ONLY)
+    assert ltt.unevidenced_ids(baseline) == [DIRT]
 
 
 def test_dirt_reason_on_a_non_foreign_id_is_not_credited():

@@ -13,6 +13,8 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+from ._git_template import copy_repo, template_repo
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 _BIN = Path(__file__).resolve().parents[1]
@@ -44,23 +46,40 @@ def _git(cwd: Path, *args: str) -> None:
     )
 
 
-def _door_tree(root: Path, *, commit: bool) -> tuple[Path, Path]:
-    """A tree holding the real coordinator-publish.py, a failing commit_clone, and a sentinel publish.py."""
+_SENTINEL_PUBLISH = (
+    "from pathlib import Path\n"
+    "Path(__file__).resolve().parents[{up}].joinpath({name!r}).write_text('ran')\n"
+)
+_CLONE_STUB = _STUB_COMMIT_CLONE.replace(
+    'raise CommitCloneError("injected materialise failure")',
+    'return Path(__file__).resolve().parents[4] / "clone"',
+)
+
+
+def _build_door_tree(root: Path, *, commit: bool, clone_stub: bool = False) -> None:
     bin_dir = root / "coordinator" / "bin"
     (bin_dir / "lib").mkdir(parents=True)
     (bin_dir / "coordinator-publish.py").write_text(
         (_BIN / "coordinator-publish.py").read_text(encoding="utf-8"), encoding="utf-8"
     )
     (bin_dir / "lib" / "commit_clone.py").write_text(_STUB_COMMIT_CLONE, encoding="utf-8")
-    sentinel = root / "LIVE_PUBLISH_RAN"
     (bin_dir / "publish.py").write_text(
-        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n", encoding="utf-8"
+        _SENTINEL_PUBLISH.format(up=2, name="LIVE_PUBLISH_RAN"), encoding="utf-8"
     )
     _git(root, "init", "-q")
     if commit:
         _git(root, "add", "-A")
         _git(root, "commit", "-q", "-m", "seed")
-    return bin_dir / "coordinator-publish.py", sentinel
+    if clone_stub:
+        (bin_dir / "lib" / "commit_clone.py").write_text(_CLONE_STUB, encoding="utf-8")
+
+
+def _door_tree(tmp_path_factory, root: Path, *, commit: bool) -> tuple[Path, Path]:
+    """A copy of the session door tree: real coordinator-publish.py, a failing commit_clone, a sentinel publish.py."""
+    key = "door-refusal:commit" if commit else "door-refusal:nocommit"
+    template = template_repo(tmp_path_factory, key, lambda p: _build_door_tree(p, commit=commit))
+    copy_repo(template, root)
+    return root / "coordinator" / "bin" / "coordinator-publish.py", root / "LIVE_PUBLISH_RAN"
 
 
 def _run_door(door: Path, cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -70,8 +89,8 @@ def _run_door(door: Path, cwd: Path, *args: str) -> subprocess.CompletedProcess[
     )
 
 
-def test_coordinator_publish_refuses_when_materialise_fails(tmp_path: Path) -> None:
-    door, sentinel = _door_tree(tmp_path / "tree", commit=True)
+def test_coordinator_publish_refuses_when_materialise_fails(tmp_path: Path, tmp_path_factory) -> None:
+    door, sentinel = _door_tree(tmp_path_factory, tmp_path / "tree", commit=True)
     proc = _run_door(door, door.parents[2])
     assert proc.returncode != 0, proc.stdout
     assert "coordinator-publish: refused -- commit clone failed:" in proc.stderr
@@ -81,8 +100,10 @@ def test_coordinator_publish_refuses_when_materialise_fails(tmp_path: Path) -> N
     assert not sentinel.exists()
 
 
-def test_coordinator_publish_refuses_when_the_round_commit_does_not_resolve(tmp_path: Path) -> None:
-    door, sentinel = _door_tree(tmp_path / "tree", commit=False)
+def test_coordinator_publish_refuses_when_the_round_commit_does_not_resolve(
+    tmp_path: Path, tmp_path_factory
+) -> None:
+    door, sentinel = _door_tree(tmp_path_factory, tmp_path / "tree", commit=False)
     proc = _run_door(door, door.parents[2])
     assert proc.returncode != 0, proc.stdout
     assert "coordinator-publish: refused -- commit clone failed:" in proc.stderr
@@ -91,39 +112,35 @@ def test_coordinator_publish_refuses_when_the_round_commit_does_not_resolve(tmp_
     assert not sentinel.exists()
 
 
-def test_coordinator_publish_refuses_an_unresolvable_explicit_commit(tmp_path: Path) -> None:
-    door, sentinel = _door_tree(tmp_path / "tree", commit=True)
+def test_coordinator_publish_refuses_an_unresolvable_explicit_commit(tmp_path: Path, tmp_path_factory) -> None:
+    door, sentinel = _door_tree(tmp_path_factory, tmp_path / "tree", commit=True)
     proc = _run_door(door, door.parents[2], "klabauter", "--commit", _SHA)
     assert proc.returncode != 0, proc.stdout
     assert "coordinator-publish: refused -- commit clone failed:" in proc.stderr
     assert not sentinel.exists()
 
 
-def _clone_door_tree(tmp_path: Path, *, origin: bool) -> tuple[Path, Path, Path, str]:
-    """A door tree whose materialise succeeds into a sentinel-writing clone; optionally with a bare origin."""
-    door, _live = _door_tree(tmp_path / "tree", commit=True)
-    root = door.parents[2]
-    clone = tmp_path / "clone"
-    (clone / "coordinator" / "bin").mkdir(parents=True)
-    ran = tmp_path / "CLONE_PUBLISH_RAN"
-    (clone / "coordinator" / "bin" / "publish.py").write_text(
-        f"from pathlib import Path\nPath({str(ran)!r}).write_text('ran')\n", encoding="utf-8"
+def _build_bare(path: Path) -> None:
+    _git(path, "init", "-q", "--bare", "origin.git")
+
+
+def _clone_door_tree(tmp_path_factory, tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A door tree whose materialise succeeds into a sentinel-writing clone, with a bare origin."""
+    template = template_repo(
+        tmp_path_factory, "door-refusal:clone-stub",
+        lambda p: _build_door_tree(p, commit=True, clone_stub=True),
     )
-    (root / "coordinator" / "bin" / "lib" / "commit_clone.py").write_text(
-        _STUB_COMMIT_CLONE.replace(
-            'raise CommitCloneError("injected materialise failure")', f"return Path({str(clone)!r})"
-        ),
-        encoding="utf-8",
+    root = copy_repo(template, tmp_path / "tree")
+    clone_bin = tmp_path / "clone" / "coordinator" / "bin"
+    clone_bin.mkdir(parents=True)
+    (clone_bin / "publish.py").write_text(
+        _SENTINEL_PUBLISH.format(up=3, name="CLONE_PUBLISH_RAN"), encoding="utf-8"
     )
-    bare = tmp_path / "origin.git"
-    if origin:
-        _git(tmp_path, "init", "-q", "--bare", str(bare))
-        _git(root, "remote", "add", "origin", str(bare))
-    sha = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
-        **no_console_creationflags(),
-    ).stdout.strip()
-    return door, bare, ran, sha
+    bare_tpl = template_repo(tmp_path_factory, "door-refusal:bare-origin", _build_bare)
+    bare = copy_repo(bare_tpl, tmp_path) / "origin.git"
+    with (root / ".git" / "config").open("a", encoding="utf-8") as cfg:
+        cfg.write(f'[remote "origin"]\n\turl = {bare.as_posix()}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n')
+    return root / "coordinator" / "bin" / "coordinator-publish.py", bare, tmp_path / "CLONE_PUBLISH_RAN"
 
 
 def _bare_refs(bare: Path) -> str:
@@ -133,9 +150,9 @@ def _bare_refs(bare: Path) -> str:
     ).stdout
 
 
-def test_the_door_hands_off_without_pushing_the_source_commit(tmp_path: Path) -> None:
+def test_the_door_hands_off_without_pushing_the_source_commit(tmp_path: Path, tmp_path_factory) -> None:
     """The source-commit push lives in publish.py (test_publish_pushes_source_commit_ref); the door only hands off."""
-    door, bare, ran, _sha = _clone_door_tree(tmp_path, origin=True)
+    door, bare, ran = _clone_door_tree(tmp_path_factory, tmp_path)
     proc = _run_door(door, door.parents[2], "klabauter", "--allow-source-rollback")
     assert proc.returncode == 0, proc.stderr
     assert "refs/heads/publish/" not in _bare_refs(bare)

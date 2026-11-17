@@ -216,8 +216,10 @@ from coordinator_core.warm import (
     hook_http,
     idle,
     lifecycle,
+    pool_retire,
     settings_home_claim,
     skew,
+    stall_writer,
     telemetry,
 )
 from dataclasses import replace
@@ -374,6 +376,7 @@ def _executing_bound_secs(method: Optional[str]) -> float:
 _ack_store = dispatch_ack.AckStore(executing_bound=_executing_bound_secs)
 
 _OVERDUE_REAP_GRACE_SECS = 30.0
+_RETIRE_GRACE_SECS = 2.0
 
 
 def _pool_neighbour_futures(pool: Any, overdue: Optional["concurrent.futures.Future"]) -> list:
@@ -390,10 +393,11 @@ def _pool_neighbour_futures(pool: Any, overdue: Optional["concurrent.futures.Fut
     ]
 
 
-def _reap_after_neighbours(pool: Any, proc: Any, neighbours: list) -> None:
-    """Terminate the retired pool's overdue `proc` once every future in `neighbours` has
-    resolved, or after `_OVERDUE_REAP_GRACE_SECS`; at once when there are none. `pool` is already
-    swapped out, so no new work reaches it."""
+def _reap_after_neighbours(pool: Any, proc: Any, neighbours: list, retired: Optional[list] = None) -> None:
+    """Retire the swapped-out `pool` (its overdue worker `proc` included) once every future in
+    `neighbours` has resolved, or after `_OVERDUE_REAP_GRACE_SECS`; at once when there are none.
+    `pool` is already swapped out, so no new work reaches it. `retired` receives the worker handles.
+    `proc` is unused: retirement takes every worker from `pool`, and existing callers pass it positionally."""
     reaped = threading.Event()
     lock = threading.Lock()
     remaining = [len(neighbours)]
@@ -402,14 +406,7 @@ def _reap_after_neighbours(pool: Any, proc: Any, neighbours: list) -> None:
         if reaped.is_set():
             return
         reaped.set()
-        try:
-            proc.terminate()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            pool.shutdown(wait=False)
-        except Exception:  # noqa: BLE001
-            pass
+        pool_retire.retire_pool(pool, grace_secs=_RETIRE_GRACE_SECS, ledger=retired)
 
     def _one_done(_fut: Any) -> None:
         with lock:
@@ -421,10 +418,6 @@ def _reap_after_neighbours(pool: Any, proc: Any, neighbours: list) -> None:
     if not neighbours:
         _reap()
         return
-    try:
-        pool.shutdown(wait=False)
-    except Exception:  # noqa: BLE001
-        pass
     timer = threading.Timer(_OVERDUE_REAP_GRACE_SECS, _reap)
     timer.daemon = True
     timer.start()
@@ -626,7 +619,8 @@ def _pipe_readable_within(handle: int, secs: float) -> bool:
     deadline = time.monotonic() + secs
     while True:
         try:
-            if _winapi.PeekNamedPipe(handle, 0)[0] > 0:
+            available = _winapi.PeekNamedPipe(handle, 0)[0]  # size 0 returns (bytes available, bytes left)
+            if isinstance(available, int) and available > 0:  # typeshed types the size-0 result as int | bytes
                 return True
         except OSError:
             return True
@@ -1750,6 +1744,112 @@ def _holder_drive_probe_ms(repo_root) -> Optional[float]:
         return float(_repo_drive_probe_ms(repo_root))
     except Exception:  # noqa: BLE001 -- "unavailable" / "error:<errno>" is no verdict
         return None
+
+
+#: How long a cached holder drive probe stays fresh.
+_HOLDER_PROBE_TTL_SECS = 2.0
+
+#: Longest `_classify_stalled_holders` waits for the first-ever probe of a drive before it
+#: classifies that drive's holders hung; a stale entry is served at once, never waited on.
+_HOLDER_PROBE_COLD_WAIT_SECS = 0.05
+
+#: Idle seconds after which the holder-probe thread exits (the next miss starts it again).
+_HOLDER_PROBE_IDLE_SECS = 30.0
+
+
+class _HolderProbeCache:
+    """Drive-probe results for `_classify_stalled_holders`, refreshed by one background thread so
+    the dispatching thread never touches the drive. Never raises."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict = {}
+        self._wanted: dict = {}
+        self._waiters: dict = {}
+        self._wake = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def probe_ms(self, root) -> Optional[float]:
+        """The cached `_holder_drive_probe_ms(root)`. Fresh entry: returned. Stale: returned while a
+        refresh is requested. Absent: waits at most `_HOLDER_PROBE_COLD_WAIT_SECS` for the first
+        probe, else None (reads as hung)."""
+        key = os.fspath(root)
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None and time.monotonic() - entry[1] < _HOLDER_PROBE_TTL_SECS:
+                return entry[0]
+            self._wanted[key] = root
+            waiter = self._waiters.setdefault(key, threading.Event()) if entry is None else None
+            self._start_locked()
+        self._wake.set()
+        if entry is not None or waiter is None:
+            return entry[0] if entry is not None else None
+        waiter.wait(_HOLDER_PROBE_COLD_WAIT_SECS)
+        with self._lock:
+            entry = self._entries.get(key)
+        return entry[0] if entry is not None else None
+
+    def _start_locked(self) -> None:
+        if self._thread is not None:
+            return
+        try:
+            thread = threading.Thread(target=self._run, name="holder-drive-probe", daemon=True)
+            thread.start()
+            self._thread = thread
+        except Exception:  # noqa: BLE001 -- no probe thread leaves holders hung, never an error
+            pass
+
+    def _run(self) -> None:
+        while True:
+            if not self._wake.wait(_HOLDER_PROBE_IDLE_SECS):
+                with self._lock:
+                    if not self._wanted:
+                        self._thread = None
+                        return
+                continue
+            self._wake.clear()
+            with self._lock:
+                batch = list(self._wanted.items())
+                self._wanted.clear()
+            for key, root in batch:
+                try:
+                    ms = _holder_drive_probe_ms(root)
+                except Exception:  # noqa: BLE001
+                    ms = None
+                with self._lock:
+                    self._entries[key] = (ms, time.monotonic())
+                    waiter = self._waiters.pop(key, None)
+                if waiter is not None:
+                    waiter.set()
+
+
+_fs_offload_queue: "queue.SimpleQueue" = queue.SimpleQueue()
+_fs_offload_lock = threading.Lock()
+_fs_offload_thread: Optional[threading.Thread] = None
+
+
+def _fs_offload_run() -> None:
+    while True:
+        fn, args = _fs_offload_queue.get()
+        try:
+            fn(*args)
+        except Exception:  # noqa: BLE001 -- offloaded cleanup never fails an op
+            pass
+
+
+def _offload_fs(fn: Callable, *args: Any) -> None:
+    """Run `fn(*args)` on the one fs-offload daemon thread so a dispatching thread never waits on the
+    disk for cleanup. Never blocks, never raises."""
+    global _fs_offload_thread
+    try:
+        with _fs_offload_lock:
+            if _fs_offload_thread is None:
+                thread = threading.Thread(target=_fs_offload_run, name="fs-offload", daemon=True)
+                thread.start()
+                _fs_offload_thread = thread
+        _fs_offload_queue.put((fn, args))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 #: Set when the accept process has first received a pool worker's answer; releases boot housekeeping.
@@ -4638,14 +4738,21 @@ class _ServerContext:
         if self._dispatch_pool is None:
             with self._dispatch_pool_lock:
                 if self._dispatch_pool is None:
-                    stderr_dir = breadcrumb.svc_dir(self.engine_root) / _WORKER_STDERR_DIRNAME
-                    _prune_worker_stderr_logs(stderr_dir)
-                    self._worker_stderr_dir = stderr_dir
-                    self._stall_dir = breadcrumb.svc_dir(self.engine_root) / _STALL_DUMPS_DIRNAME
-                    self._claim_dir = breadcrumb.svc_dir(self.engine_root) / _CLAIMS_DIRNAME
-                    _prune_dispatch_claims(self._claim_dir)
-                    if _ack_store._journal_dir is None:
-                        _ack_store._journal_dir = dispatch_ack.journal_dir_beside(self._claim_dir)
+                    # Directory setup touches the disk: once per engine, so a pool rebuilt after a
+                    # recycle on a dispatching thread does none.
+                    if not self.__dict__.get("_dispatch_dirs_ready"):
+                        self._worker_stderr_dir = breadcrumb.svc_dir(self.engine_root) / _WORKER_STDERR_DIRNAME
+                        _prune_worker_stderr_logs(self._worker_stderr_dir)
+                        self._stall_dir = breadcrumb.svc_dir(self.engine_root) / _STALL_DUMPS_DIRNAME
+                        self._claim_dir = breadcrumb.svc_dir(self.engine_root) / _CLAIMS_DIRNAME
+                        _prune_dispatch_claims(self._claim_dir)
+                        if _ack_store._journal_dir is None:
+                            _ack_store._journal_dir = dispatch_ack.journal_dir_beside(self._claim_dir)
+                        self._dispatch_dirs_ready = True
+                    else:
+                        _offload_fs(_prune_worker_stderr_logs, self._worker_stderr_dir)
+                        _offload_fs(_prune_dispatch_claims, self._claim_dir)
+                    stderr_dir = self._worker_stderr_dir
                     old_stop = self.__dict__.get("_telemetry_drain_stop")
                     if old_stop is not None:
                         old_stop.set()
@@ -4794,17 +4901,9 @@ class _ServerContext:
             if row is not None and row[2] is not None:
                 keys.append(row[2])
         _ack_store.reconcile_restarted(keys)
-        procs = list((getattr(pool, "_processes", None) or {}).values())
-        try:
-            pool.shutdown(wait=False, cancel_futures=True)
-        except Exception:  # noqa: BLE001
-            pass
-        for proc in procs:
-            try:
-                proc.terminate()
-            except Exception:  # noqa: BLE001
-                pass
-        self.__dict__.setdefault("_retired_procs", []).extend(procs)
+        pool_retire.retire_pool(
+            pool, grace_secs=_RETIRE_GRACE_SECS, ledger=self.__dict__.setdefault("_retired_procs", [])
+        )
         self._write_recycle_line(["guard-pool: every worker held an overdue op"], len(keys))
         return True
 
@@ -4844,9 +4943,12 @@ class _ServerContext:
     def _classify_stalled_holders(self) -> tuple:
         """`(hung_ops, io_wait_ops)` over the set `_stalled_holders` returns. A holder is io-wait when
         its repo drive probes slower than `_SLOW_DRIVE_PROBE_MS` and it is younger than
-        `_IO_WAIT_MAX_SECS`; else hung. One probe per drive root per call, uncached: on a slow drive
-        that probe is itself the slow call, on the accept path."""
+        `_IO_WAIT_MAX_SECS`; else hung. The probe is read from `_HolderProbeCache`, refreshed by a
+        background thread: the dispatching thread never touches the drive."""
         now = time.monotonic()
+        cache = self.__dict__.get("_holder_probe_cache")
+        if cache is None:
+            cache = self.__dict__.setdefault("_holder_probe_cache", _HolderProbeCache())
         probes: dict = {}
         hung: list = []
         io_wait: list = []
@@ -4856,7 +4958,7 @@ class _ServerContext:
                 continue
             key = os.fspath(root)
             if key not in probes:
-                probes[key] = _holder_drive_probe_ms(root)
+                probes[key] = cache.probe_ms(root)
             (io_wait if _is_io_wait(probes[key], now - started) else hung).append(op)
         return hung, io_wait
 
@@ -4890,17 +4992,9 @@ class _ServerContext:
                 tasks.pop(fut, None)
         self._admission_gate().note_recycle()
         _ack_store.reconcile_restarted(keys)
-        procs = list((getattr(stuck_pool, "_processes", None) or {}).values())
-        try:
-            stuck_pool.shutdown(wait=False, cancel_futures=True)
-        except Exception:  # noqa: BLE001
-            pass
-        for proc in procs:
-            try:
-                proc.terminate()
-            except Exception:  # noqa: BLE001
-                pass
-        self.__dict__.setdefault("_retired_procs", []).extend(procs)
+        pool_retire.retire_pool(
+            stuck_pool, grace_secs=_RETIRE_GRACE_SECS, ledger=self.__dict__.setdefault("_retired_procs", [])
+        )
         self._write_recycle_line(holders, len(keys))
 
     def _terminate_overdue_worker(
@@ -4933,7 +5027,7 @@ class _ServerContext:
             _ack_store.stamp_killing(dispatch_key, pid, proc.is_alive)
         self._drop_pool(pool)
         neighbours = _pool_neighbour_futures(pool, overdue_future)
-        _reap_after_neighbours(pool, proc, neighbours)
+        _reap_after_neighbours(pool, proc, neighbours, self.__dict__.setdefault("_retired_procs", []))
         return True
 
     def _retired_workers_alive(self) -> int:
@@ -4951,19 +5045,16 @@ class _ServerContext:
         return len(alive)
 
     def _write_recycle_line(self, holders: list, key_count: int) -> None:
-        """One line in the stall dir naming the holders and reconciled key count.
-        Never raises."""
+        """One line in the stall dir naming the holders and reconciled key count, queued on the
+        stall writer so the calling thread does no filesystem work. Never raises."""
         try:
             stall_dir = getattr(self, "_stall_dir", None)
             if stall_dir is None:
                 return
-            stall_dir = Path(stall_dir)
-            stall_dir.mkdir(parents=True, exist_ok=True)
             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-            (stall_dir / f"{stamp}-{os.getpid()}-recycle.txt").write_text(
+            stall_writer.submit(
+                Path(stall_dir) / f"{stamp}-{os.getpid()}-recycle.txt",
                 f"pool recycled: holders={holders} reconciled_keys={key_count}\n",
-                encoding="utf-8",
-                newline="\n",
             )
         except Exception:  # noqa: BLE001 -- diagnostics never stop an op
             pass
@@ -5165,7 +5256,7 @@ class _ServerContext:
             _phase[0] = "result"
             try:
                 out = _await_pool_result(future, _wait_left, _drive_root, count_progress=not _guard_class)
-                _release_claim(claim)
+                _offload_fs(_release_claim, claim)
                 return out
             except _DriveFault as fault:
                 # The worker is left parked, never terminated: killing one pool process breaks the
@@ -5174,7 +5265,7 @@ class _ServerContext:
                 withdrawn = future.cancel() or (
                     claim is not None and _take_claim(claim, os.getpid(), on_error=False)
                 )
-                future.add_done_callback(lambda _f: _release_claim(claim))
+                future.add_done_callback(lambda _f: _offload_fs(_release_claim, claim))
                 if dispatch_key is not None:
                     if withdrawn:
                         _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
@@ -5205,7 +5296,7 @@ class _ServerContext:
                 withdrawn = future.cancel() or (
                     claim is not None and _take_claim(claim, os.getpid(), on_error=False)
                 )
-                future.add_done_callback(lambda _f: _release_claim(claim))
+                future.add_done_callback(lambda _f: _offload_fs(_release_claim, claim))
                 if withdrawn:
                     if dispatch_key is not None:
                         _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
@@ -5269,7 +5360,7 @@ class _ServerContext:
         except concurrent.futures.CancelledError:
             # Shutdown cancelled this still-queued future (`_ctx_shutdown`): no worker ran it, so the
             # determinate not-started reply is the truthful answer, never a transport cut.
-            _release_claim(claim)
+            _offload_fs(_release_claim, claim)
             if dispatch_key is not None:
                 _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
             return _pool_not_started_envelope(
@@ -5836,7 +5927,9 @@ class _ServerContext:
             thread.start()
             self._worker_threads.append(thread)
         self._pool_size = pool_size
-        threading.Thread(target=_with_cached_plugin_root, args=(None,), daemon=True).start()
+        threading.Thread(
+            target=_with_cached_plugin_root, args=(None,), daemon=True, name="warm-plugin-root-prime"
+        ).start()
         for _ in range(_GUARD_LANE_THREADS):
             thread = threading.Thread(target=self._guard_lane_loop, daemon=True)
             thread.start()

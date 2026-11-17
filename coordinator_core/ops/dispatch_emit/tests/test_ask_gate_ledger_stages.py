@@ -57,6 +57,9 @@ def test_non_ledger_verdict_has_no_manifest_key(tmp_path: Path, monkeypatch: pyt
 
 def test_staging_adds_no_spawn_to_the_ledger_resume_gate(halted, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _met_out_of_band(halted)
+    # Both counts are taken warm: the first gate call fills a per-process git-log memo, so a
+    # cold bare call would count one spawn the staged call never pays, whatever the run order.
+    _handler({"sizing_path": SIZING}, repo_root=halted)
 
     with _count_spawns_attributed(monkeypatch) as bare:
         _handler({"sizing_path": SIZING}, repo_root=halted)

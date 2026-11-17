@@ -159,3 +159,30 @@ def test_resolver_spawns_nothing(repo, monkeypatch):
 
     monkeypatch.setattr(rp, "run_git", boom)
     assert rp.declared_paths_for_run(repo, RUN) == ["a/one.py"]
+
+
+def test_two_runs_on_one_base_and_session_each_resolve_only_their_own_prep(repo):
+    run_a, run_b = "warp-aa0f1e-20261116T190110-ebf10b", "warp-720eea-20261116T190245-683d89"
+    _write(repo, ["a/one.py", "b/two.py"], 3)
+    _stage(repo, ["a/one.py"], run_id=run_a)
+    _stage(repo, ["b/two.py"], run_id=run_b)
+    base = _base(repo)
+    reply_a = rp._handler({"base": base, "plan_path": "docs/plans/p.md", "worktree": True,
+                           "session_id": "sess-own", "run_id": run_a}, repo)
+    reply_b = rp._handler({"base": base, "plan_path": "docs/plans/p.md", "worktree": True,
+                           "session_id": "sess-own", "run_id": run_b}, repo)
+    assert reply_a["error"] is None and reply_b["error"] is None
+    prefix_a, prefix_b = run_prep_slice_prefix(run_a, base), run_prep_slice_prefix(run_b, base)
+    assert prefix_a != prefix_b
+    for reply, own, other in ((reply_a, prefix_a, prefix_b), (reply_b, prefix_b, prefix_a)):
+        paths = [reply["whole_diff_path"], reply["sidecar_path"]]
+        paths += [p for s in reply["slices"] for p in (s["diff_path"], s["sidecar_path"])]
+        assert paths and all(own in p for p in paths)
+        assert not any(other in p for p in paths)
+    assert [f for s in reply_a["slices"] for f in s["files"]] == ["a/one.py"]
+    assert [f for s in reply_b["slices"] for f in s["files"]] == ["b/two.py"]
+    stored_a = rp.stored_reply_for_run(repo, "sess-own", base, run_key=run_a)
+    stored_b = rp.stored_reply_for_run(repo, "sess-own", base, run_key=run_b)
+    assert stored_a is not None and stored_b is not None
+    assert prefix_a in stored_a["whole_diff_path"] and prefix_b not in stored_a["whole_diff_path"]
+    assert prefix_b in stored_b["whole_diff_path"] and prefix_a not in stored_b["whole_diff_path"]

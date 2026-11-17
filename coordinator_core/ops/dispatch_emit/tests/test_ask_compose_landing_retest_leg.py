@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
 
 import pytest
 
@@ -99,8 +100,95 @@ def test_a_clean_run_lands_after_the_emitted_retest_command_writes_its_verdict(r
     assert "a.py" in _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
 
 
+def _commit_stage(repo_root: str = "/r") -> str:
+    lines: list = []
+    ask_compose._append_docs_and_commit(
+        lines, head="h", anchor="a", repo_root=repo_root, run_id=RUN, manifest_rel="m.json"
+    )
+    return "\n".join(lines)
+
+
+def _await_loop(stage: str) -> str:
+    start = stage.index("while (!_halted && _commit && _commit.awaiting && _awaits < 2) {")
+    return stage[start:stage.index("\n    }", start)]
+
+
+def test_an_awaiting_reply_waits_detached_then_reinvokes_land_run_without_spending_an_attempt() -> None:
+    stage = _commit_stage()
+    loop = _await_loop(stage)
+
+    assert stage.index("_commit.awaiting") < stage.index("_commit.remedy_step")
+    assert "label: 'retest-await'" in loop
+    assert "--poll --wait --params-file " + params_path("/r", RUN).as_posix() in loop
+    assert "Run it as ONE Bash call with run_in_background: true and no timeout parameter." in loop
+    assert "timeout:" not in loop and "sleep 2" not in loop
+    assert loop.count("label: 'commit'") == 1 and "await _agent" not in loop
+    assert "_retestAttempts = Number" not in loop and "_retestAttempts++" not in loop
+    assert "_awaits++" in loop and "let _awaits = 0;" in stage
+
+
+def test_an_always_awaiting_landing_is_awaited_at_most_twice_then_the_stage_ends_unresolved(tmp_path: Path) -> None:
+    """Runs the emitted commit-stage loop under node with an `agent` stub answering `awaiting` forever."""
+    stage = _commit_stage()
+    start = stage.index("let _retestAttempts = 0;")
+    segment = stage[start:stage.index("if (_ownCloseKey && _commit", start)]
+    program = "\n".join([
+        "const calls = [];",
+        "const agent = async (_p, opts) => { calls.push(opts.label); return opts.label === 'commit' ? { awaiting: true } : { status: 'pass' }; };",
+        "const _haltOnUsageLimit = (e) => { throw e; };",
+        "const _terminalCommitParamsBlock = () => '';",
+        "const _halted = false; const _runId = 'r'; const _RUN_TOKEN = 't';",
+        "const _nextAction = { params: { script_path: 's' } }; const _incompleteChunks = [];",
+        "const _blockedChunks = []; const _testResult = null; const _docs = null;",
+        "(async () => { let _commit = null;",
+        segment,
+        "console.log(JSON.stringify({ calls, awaiting: _commit && _commit.awaiting === true, refused: _commit && _commit.refused === true })); })();",
+    ])
+    script = tmp_path / "stage.mjs"
+    script.write_text(program, encoding="utf-8")
+    done = subprocess.run(["node", str(script)], capture_output=True, text=True, timeout=30, cwd=tmp_path)
+
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout.strip().splitlines()[-1])
+    assert out["calls"] == ["commit", "retest-await", "commit", "retest-await", "commit"], out
+    assert out["awaiting"] is True and out["refused"] is False, out
+
+
+def test_a_refusal_with_a_remedy_step_still_takes_the_remedy_loop_not_the_await_loop() -> None:
+    stage = _commit_stage()
+    remedy_loop = stage[stage.index("_commit.refused && _commit.remedy_step"):]
+
+    assert "label: 'retest-invariant'" in remedy_loop
+    assert "_retestAttempts = Number(_rs.attempt)" in remedy_loop
+    assert "label: 'retest-await'" not in remedy_loop.split("_ownCloseKey && _commit")[0]
+
+
+def test_the_invariant_retest_poll_is_one_background_wait_call_not_a_sleep_loop(tmp_path: Path) -> None:
+    call = ask_compose._invariant_retest_call(head="h", anchor="a", repo_root=str(tmp_path), run_id=RUN)
+
+    assert "--poll --wait" in call
+    assert "run_in_background: true and no timeout parameter" in call
+    assert "sleep 2" not in call
+
+
+def test_the_commit_reply_schema_carries_the_awaiting_block() -> None:
+    assert "awaiting" in ask_compose._COMMIT_SCHEMA["properties"]
+    assert "awaiting," in _commit_stage_prompt_text()
+
+
+def _commit_stage_prompt_text() -> str:
+    return ask_compose._commit_stage_call(head="h", anchor="a", repo_root="/r", run_id=RUN)
+
+
 def test_the_retired_task_output_argument_still_writes_no_record_for_an_unreadable_path(repo) -> None:
     argv = ["--from-task-output", "undefined", "--tests", INV_FILE, "--repo-root", str(repo)]
 
     assert retest_targeted.main(argv, spawn=lambda *a, **k: pytest.fail("must not spawn")) == 2
     assert not landing_retest.fresh_verdict_path(repo, RUN).exists()
+
+
+def test_wait_without_poll_is_refused_not_ignored() -> None:
+    with pytest.raises(SystemExit) as exc:
+        retest_targeted.main(["--wait", "--params-file", "x"])
+
+    assert exc.value.code == 2

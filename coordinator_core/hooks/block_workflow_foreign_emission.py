@@ -301,8 +301,9 @@ def _every_agent_call_is_read_only(script_text: str) -> bool:
 
 
 def _resume_after_revise_reason(script: Path) -> "Optional[str]":
-    """Deny reason when `script` is `<root>/scratch/warp/<run_id>.workflow.mjs` of a halted run
-    revised after its halt, else None. Any failure yields None."""
+    """Deny reason when `script` is `<root>/scratch/warp/<run_id>.workflow.mjs` of a halted run revised
+    after its halt, or of a resumed run revised after its resume consumed the last stamp, else None.
+    Any failure yields None."""
     try:
         from coordinator_core.ops.dispatch_emit import halted_run
         from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
@@ -323,8 +324,10 @@ def _resume_after_revise_reason(script: Path) -> "Optional[str]":
         marker = halted_run._read(rec) or {}
         sizing_rel = marker.get("sizing_rel")
         call = fire_command(sizing_rel if isinstance(sizing_rel, str) and sizing_rel else None)
+        ids = halted_run.unread_revision_ids(rec) if marker.get("status") == halted_run.STATUS_RESUMED else []
+        named = f" (unread: {', '.join(ids)})" if ids else ""
         return (
-            f"Run {run_id} was revised after it halted; a resume replays its stages "
+            f"Run {run_id} was revised after it halted{named}; a resume replays its stages "
             f"without the revision.\nFire fresh: {call}."
         )
     except Exception:

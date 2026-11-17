@@ -63,14 +63,34 @@ for _model, _input, _output, _cache_mult in (
         "effective_from": None,  # The source states current rates, not their start date.
     }
 
+# Gemini 3.8 Flash standard paid tier through 2026-12-31; Google schedules $1.50/$7.50 (cache read
+# $0.15) from 2027-01-01. Re-check the pricing page then. Cache writes carry no surcharge.
+PRICES["gemini-3.8-flash"] = {"input": 0.75, "output": 3.75, "cache_read_mult": 0.1, "cache_write_mult": 1.0}
+RATE_PROVENANCE["gemini-3.8-flash"] = {
+    "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3.8-flash",
+    "verified_at": "2026-11-16", "basis": "API list prices, Standard paid tier, per 1M tokens; output includes thinking",
+    "effective_from": None,  # The page states the rate for a window ending 2026-12-31, not its start.
+}
+
+_GEMINI_EFFORT = r"-(?:minimal|low|medium|high)"
+
 
 def model_family(model: str | None) -> str | None:
-    """Return the PRICES key `model` starts with (dated suffixes drop), else None."""
+    """Return the PRICES key `model` starts with (dated suffixes drop), else None.
+
+    Gemini ids are also accepted in agy's display form (`Gemini 3.8 Flash (Medium)`); an effort
+    suffix or date resolves to the family, any other suffix (`-lite`, `-tts`) is a different model.
+    """
     if not model:
         return None
+    if model.lower().startswith("gemini"):
+        model = re.sub(r"\s*\([^)]*\)\s*$", "", model).strip().lower().replace(" ", "-")
     for key in PRICES:
         if model.startswith(key):
-            if key.startswith("gpt-") and model != key and not re.fullmatch(r"-\d{4}-?\d{2}-?\d{2}", model[len(key):]):
+            rest = model[len(key):]
+            if key.startswith("gpt-") and rest and not re.fullmatch(r"-\d{4}-?\d{2}-?\d{2}", rest):
+                continue
+            if key.startswith("gemini-") and rest and not re.fullmatch(rf"({_GEMINI_EFFORT})?(-\d{{4}}-?\d{{2}}-?\d{{2}})?", rest):
                 continue
             return key
     return None
@@ -109,5 +129,5 @@ def estimate_usd(model: str, usage: Mapping, speed: str | None = None) -> float 
         _n(usage, "input_tokens") * inp
         + _n(usage, "output_tokens") * out
         + cache_read * inp * p.get("cache_read_mult", CACHE_READ_MULT)
-        + cache_write * inp * CACHE_WRITE_MULT
+        + cache_write * inp * p.get("cache_write_mult", CACHE_WRITE_MULT)
     ) / 1_000_000

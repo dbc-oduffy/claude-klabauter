@@ -2811,13 +2811,14 @@ _SCOPED_FOREGROUND_CLAUSE = (
 )
 
 
-def _test_runner_clause(repo_root: Optional[str | Path] = None) -> str:
+def _test_runner_clause(repo_root: Optional[str | Path] = None, scoped_changes: bool = False) -> str:
     """The skip-report, changed-file and scoped-foreground rules, the vitest cap when the box sets one, and the target
     repo's interpreter clause."""
     from coordinator_core.ops.dispatch_emit.interpreter_pin import interpreter_clause
 
     cap = _vitest_cap_clause()
-    base = f"{_SKIP_REPORT_CLAUSE} {_CHANGED_FILES_CLAUSE} {_SCOPED_FOREGROUND_CLAUSE}"
+    changed = _SCOPED_CHANGED_FILES_CLAUSE if scoped_changes else _CHANGED_FILES_CLAUSE
+    base = f"{_SKIP_REPORT_CLAUSE} {changed} {_SCOPED_FOREGROUND_CLAUSE}"
     base = f"{base} {cap}" if cap else base
     return f"{base} {interpreter_clause(repo_root)}"
 
@@ -3828,6 +3829,12 @@ _CHANGED_FILES_CLAUSE = (
     "Changed files come from git only: `git diff --name-only <base>` and "
     "`git ls-files --others --exclude-standard`; never `find`, `ls -R` or a tree walk."
 )
+# A review-only run shares its tree with peers: the unscoped untracked listing would pull their
+# files in, so the edited-set listing above is the only changed-files source.
+_SCOPED_CHANGED_FILES_CLAUSE = (
+    "Changed files come only from the edited-set listing above; run no other changed-files "
+    "listing; never `find`, `ls -R` or a tree walk."
+)
 _FALSIFIER_RESULT_VAR = "_falsifierResult"
 
 
@@ -4091,7 +4098,7 @@ def _scoped_test_steps(
         + run_clause
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
         + (f"{_review_edits_clause(review_edits_base, surface, review_terminal)} " if review_edits_base else "")
-        + f"{_test_runner_clause(repo_root)} "
+        + f"{_test_runner_clause(repo_root, scoped_changes=bool(review_terminal))} "
         + (f"{_owed_gates_clause(owed_gates, slot_rows)} " if owed_gates else "")
         + (
             f"{_baseline_context_clause(review_edits_base, surface, review_terminal)} "
@@ -6381,7 +6388,8 @@ _EXTERNALIZABLE_REVIEWER_TYPES = frozenset({
     "coordinator:falsifier-integrity-reviewer",
 })
 _REVIEWER_RUN_MODULE = "coordinator_core.agent_pipe.reviewer_run"
-_RELAY_AGENT_TYPE = "coordinator:op-relay"
+_RELAY_AGENT_TYPE = "general-purpose"
+_RELAY_MODEL = "sonnet"
 _RELAY_HEREDOC_DELIM = "REVIEWER_BRIEF_EOF_7f3a91"
 #: Reply of `reviewer_run`; a provider failure is verdict FAILED, never a schema refusal.
 _EXTERNAL_REVIEWER_SCHEMA = json.dumps(
@@ -6416,8 +6424,9 @@ def _external_reviewer_thunk_js(
     agent_type_host: Optional[str],
     repo_root: Optional[Path],
 ) -> str:
-    """Use the async runner's engine ops; op-relay never executes an arbitrary Python CLI.
+    """The engine starts the detached worker and polls its result; no op-relay leg is emitted.
 
+    A runner without `engineOp` falls back to one folded general-purpose relay leg.
     Start returns at spawn. Each result call is a refreshing read, and provider execution stays
     in the detached worker. JSON stdin is shell-quoted for the host, never interpolated as code.
     """
@@ -6432,34 +6441,40 @@ def _external_reviewer_thunk_js(
         + ", verdicts: " + json.dumps(_schema_verdict_enum(spec.schema)) + " }"
     )
     relay = _js_string_literal(_degrade_agent_type(_RELAY_AGENT_TYPE, agent_type_host))
-    common = f"phase: {_js_string_literal(spec.phase)}, agentType: {relay}, {_model_opt(_RELAY_AGENT_TYPE)}, effort: 'low'"
-    start_schema = '{ type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }'
-    result_schema = '{ type: "object", properties: { status: { type: "string" }, verdict: { type: ["string", "null"] }, findings: { type: "array" }, error: { type: ["string", "null"] } }, required: ["status"] }'
-    instruction = "Run this one engine command exactly and return its bare JSON reply. Run nothing else.\n"
+    common = f"phase: {_js_string_literal(spec.phase)}, agentType: {relay}, {_model_opt(_RELAY_AGENT_TYPE, _RELAY_MODEL)}, effort: 'low'"
+    schema = '{ type: "object", properties: { status: { type: "string" }, verdict: { type: ["string", "null"] }, findings: { type: "array" }, error: { type: ["string", "null"] } }, required: ["status"] }'
+    start_head = "Run these engine commands in order and return the final bare JSON reply of the second. Run nothing else.\n1. Start the review:\n"
     if windows:
-        head = instruction + "@'\n"
-        tail = "\n'@ | coordinator-invoke codex_runner.start --params-file - --bare"
+        start_cmd = "@'\n"
+        start_tail = "\n'@ | coordinator-invoke codex_runner.start --params-file - --bare"
     else:
-        head = instruction + f"coordinator-invoke codex_runner.start --params-file - --bare <<'{_RELAY_HEREDOC_DELIM}'\n"
-        tail = f"\n{_RELAY_HEREDOC_DELIM}"
+        start_cmd = f"coordinator-invoke codex_runner.start --params-file - --bare <<'{_RELAY_HEREDOC_DELIM}'\n"
+        start_tail = f"\n{_RELAY_HEREDOC_DELIM}"
+    poll = (
+        "\n2. The reply of step 1 carries `run_id`. Run `coordinator-invoke codex_runner.result '{\"run_id\": \"<run_id>\"}' --bare` "
+        "with that run_id, and repeat it while its `status` is `running`, at most 120 reads, then return status `failed` with error `reviewer result poll cap reached`. If step 1 returns no `run_id`, return "
+        "status `failed` with error `reviewer worker did not return a run handle`."
+    )
     return (
         "async () => { try { "
         f"const _request = {params}; "
         # ASCII-only JSON also works through Windows PowerShell's native-command pipeline.
         r"const _json = JSON.stringify(_request).replace(/[\u007f-\uffff]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')); "
-        f"const _started = await agent({_js_string_literal(head)} + _json + {_js_string_literal(tail)}, "
-        f"{{ label: {_js_string_literal(spec.label + ':start')}, {common}, schema: {start_schema} }}); "
+        "let _result; "
+        "if (typeof engineOp === 'function') { "
+        "const _started = await engineOp('codex_runner.start', _request); "
         "if (!_started || !/^named-review-[a-f0-9]{12}$/.test(_started.run_id || '')) "
         "return { verdict: 'FAILED', findings: [], error: 'reviewer worker did not return a run handle' }; "
-        "let _poll = 0; for (;;) { "
-        "const _command = 'coordinator-invoke codex_runner.result ' + String.fromCharCode(39) + JSON.stringify({ run_id: _started.run_id }) + String.fromCharCode(39) + ' --bare'; "
-        f"const _result = await agent({_js_string_literal(instruction)} + _command, "
-        f"{{ label: {_js_string_literal(spec.label + ':result-')} + (++_poll), {common}, schema: {result_schema} }}); "
+        "for (;;) { _result = await engineOp('codex_runner.result', { run_id: _started.run_id }); "
+        "if (!_result || _result.status !== 'running') break; "
+        "await new Promise((res) => setTimeout(res, 5000)); } "
+        "} else { "
+        f"_result = await agent({_js_string_literal(start_head + start_cmd)} + _json + {_js_string_literal(start_tail + poll)}, "
+        f"{{ label: {_js_string_literal(spec.label)}, {common}, schema: {schema} }}); }} "
         "if (!_result || !_result.status) return { verdict: 'FAILED', findings: [], error: 'reviewer result read failed' }; "
-        "if (_result.status === 'running') continue; "
         "return { verdict: _result.verdict || 'FAILED', findings: _result.findings || [], "
         f"provider: {_js_string_literal(choice.provider)}, model: {_js_string_literal(choice.model)}, error: _result.error || null }}; "
-        "} } catch (e) { return { verdict: 'FAILED', findings: [], error: String(e) }; } }"
+        "} catch (e) { return { verdict: 'FAILED', findings: [], error: String(e) }; } }"
     )
 
 

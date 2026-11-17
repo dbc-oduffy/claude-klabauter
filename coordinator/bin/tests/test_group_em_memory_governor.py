@@ -706,10 +706,20 @@ def test_relaunching_parent_costs_under_budget(tmp_path, monkeypatch):
         assert proc.returncode in (0, 5), err
         assert pt._cpu_seconds(proc) < 0.5
     finally:
-        if m:
+        # Trap: "already running pid=N" names the box's live governor; kill only one that
+        # carries this test's own tmp_path log on its cmdline.
+        if m and _launched_by_this_test(int(m.group(1)), tmp_path):
             subprocess.run(["taskkill", "/F", "/T", "/PID", m.group(1).decode()],
                            capture_output=True, check=False,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def _launched_by_this_test(pid: int, tmp_path: Path) -> bool:
+    import psutil
+    try:
+        return any(str(tmp_path) in tok for tok in psutil.Process(pid).cmdline())
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
 
 
 def _headroom(avails, verdicts=None):

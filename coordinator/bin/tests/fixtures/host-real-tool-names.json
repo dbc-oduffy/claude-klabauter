@@ -1,0 +1,27 @@
+{
+  "grok": [
+    {"name": "run_terminal_command", "kind": "shell", "source": "installed Grok CLI docs ~/.grok/docs/user-guide/10-hooks.md § Tool Name Aliases (`Bash` -> `run_terminal_command`)", "version": "grok 1.0.77 (50ca579fa996)"},
+    {"name": "run_terminal_cmd", "kind": "shell", "source": "installed Grok CLI docs ~/.grok/README.md § Tool Filtering (bash tool ID `run_terminal_cmd`)", "version": "grok 1.0.77 (50ca579fa996)"},
+    {"name": "Shell", "kind": "shell", "source": "installed Grok CLI docs ~/.grok/docs/user-guide/10-hooks.md § Tool Name Aliases (`Shell` -> `run_terminal_command`) and ~/.grok/README.md § Tool Filtering (daemon-route names)", "version": "grok 1.0.77 (50ca579fa996)"},
+    {"name": "search_replace", "kind": "edit", "source": "installed Grok CLI docs ~/.grok/docs/user-guide/10-hooks.md § Tool Name Aliases (`Edit`, `Write`, `MultiEdit` -> `search_replace`; daemon file-tool event names)", "version": "grok 1.0.77 (50ca579fa996)"},
+    {"name": "hashline_edit", "kind": "edit", "source": "installed Grok CLI docs ~/.grok/docs/user-guide/10-hooks.md § Tool Name Aliases (`StrReplace` and `EditNotebook` -> `search_replace` and `hashline_edit`)", "version": "grok 1.0.77 (50ca579fa996)"},
+    {"name": "StrReplace", "kind": "edit", "source": "installed Grok CLI docs ~/.grok/README.md § Tool Filtering (daemon-route names) and ~/.grok/docs/user-guide/10-hooks.md § Tool Name Aliases", "version": "grok 1.0.77 (50ca579fa996)"},
+    {"name": "EditNotebook", "kind": "edit", "source": "installed Grok CLI docs ~/.grok/README.md § Tool Filtering (daemon-route names) and ~/.grok/docs/user-guide/10-hooks.md § Tool Name Aliases (names the notebook in `target_notebook`)", "version": "grok 1.0.77 (50ca579fa996)"},
+    {"name": "Delete", "kind": "edit", "source": "installed Grok CLI docs ~/.grok/README.md § Tool Filtering (`Delete` goes with the edit tool)", "version": "grok 1.0.77 (50ca579fa996)"},
+    {"name": "write_file", "kind": "write", "source": "installed Grok CLI docs ~/.grok/docs/user-guide/26-config-reference.md (`write_file` feature row)", "version": "grok 1.0.77 (50ca579fa996)"},
+    {"name": "write", "kind": "write", "source": "installed Grok CLI docs ~/.grok/docs/user-guide/10-hooks.md § Tool Name Aliases (\"On the daemon route, a file tool's event names `read_file`, `grep`, `search_replace` or `write`\")", "version": "grok 1.0.77 (50ca579fa996)"}
+  ],
+  "agy": [
+    {"name": "run_command", "kind": "shell", "source": "coordinator-content-repo docs/research/2026-11-04-peer-hook-surfaces/agy.md at 06d2c90b77 § Shell (`run_command`)", "version": "unrecorded in source"},
+    {"name": "write_file", "kind": "write", "source": "coordinator-content-repo docs/research/2026-11-04-peer-hook-surfaces/agy.md at 06d2c90b77 § File edit/write (`edit_file`, `write_file`)", "version": "unrecorded in source"},
+    {"name": "edit_file", "kind": "edit", "source": "coordinator-content-repo docs/research/2026-11-04-peer-hook-surfaces/agy.md at 06d2c90b77 § File edit/write (`edit_file`, `write_file`)", "version": "unrecorded in source"},
+    {"name": "write_to_file", "kind": "write", "source": "claude-klabauter docs/research/claude-klabauter-klabauter-on-agy-codex-9c3013/2026-11-04-claude-klabauter-klabauter-on-agy-codex-9c3013/outputs/web/synthesis.md (agy tool names `run_command`/`write_to_file`/`call_mcp_tool`)", "version": "unrecorded in source"}
+  ],
+  "codex": [
+    {"name": "Bash", "kind": "shell", "source": "coordinator-content-repo docs/research/2026-11-04-peer-hook-surfaces/codex.md at 06d2c90b77 (shell launch: PreToolUse matcher `Bash`; observed `tool_name: Bash`)", "version": "unrecorded in source"},
+    {"name": "exec_command", "kind": "shell", "source": "coordinator-content-repo docs/research/2026-11-04-peer-hook-surfaces/codex.md at 06d2c90b77 (shell launch `Bash`, including `exec_command`)", "version": "unrecorded in source"},
+    {"name": "apply_patch", "kind": "edit", "source": "coordinator-content-repo docs/research/2026-11-04-peer-hook-surfaces/codex.md at 06d2c90b77 (native file edit/write: PreToolUse `apply_patch`)", "version": "unrecorded in source"},
+    {"name": "Edit", "kind": "edit", "source": "coordinator-content-repo docs/research/2026-11-04-peer-hook-surfaces/codex.md at 06d2c90b77 (`apply_patch`; aliases `Edit` / `Write`)", "version": "unrecorded in source"},
+    {"name": "Write", "kind": "write", "source": "coordinator-content-repo docs/research/2026-11-04-peer-hook-surfaces/codex.md at 06d2c90b77 (`apply_patch`; aliases `Edit` / `Write`)", "version": "unrecorded in source"}
+  ]
+}

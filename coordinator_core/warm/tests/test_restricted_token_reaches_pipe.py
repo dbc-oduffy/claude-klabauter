@@ -1,6 +1,11 @@
 """A same-user restricted token (the codex workspace-write sandbox shape) must
-open the warm pipe `election.elect` creates, and must be denied by the
-pre-restricted-code DACL.
+open the warm pipe `election.elect` creates, and must be denied by a DACL
+without the server's logon-SID ACE.
+
+Each token restricts to Everyone, Users, the RESTRICTED (S-1-5-12) or
+WRITE_RESTRICTED-shaped SID under test, and the logon SID. `election._pipe_sddl`
+scopes the pipe to the server's logon session and carries no RC/WR ACE, so the
+logon-SID ACE is what satisfies the restricting-SID access check.
 
 The restricted token is made with CreateRestrictedToken from the test
 process's own token and impersonated on one worker thread that opens the pipe.
@@ -27,8 +32,15 @@ _TOKEN_ALL_ACCESS = 0xF01FF
 _GENERIC_READ_WRITE = 0xC0000000
 _OPEN_EXISTING = 3
 
-# Everyone and Users keep the token realistic; RC / WR are the SIDs under test.
+# Everyone and Users keep the token realistic; the logon SID is appended per case.
 _BASE_RESTRICTING = ["S-1-1-0", "S-1-5-32-545"]
+
+
+def _with_logon_sid(extra: list[str]) -> list[str]:
+    logon_sid = election.current_logon_sid()
+    if not logon_sid:
+        pytest.skip("test process token carries no logon SID")
+    return _BASE_RESTRICTING + extra + [logon_sid]
 
 
 def _open_pipe_as_restricted_token(pipe: str, restricting_sids: list[str], flags: int) -> int:
@@ -99,20 +111,20 @@ def _open_pipe_as_restricted_token(pipe: str, restricting_sids: list[str], flags
 
 
 @pytest.mark.parametrize(
-    "restricting_sids,flags",
+    "extra_sids,flags",
     [
-        (_BASE_RESTRICTING + ["S-1-5-12"], 0),
-        (_BASE_RESTRICTING + ["S-1-5-33"], _WRITE_RESTRICTED),
+        (["S-1-5-12"], 0),
+        (["S-1-5-33"], _WRITE_RESTRICTED),
     ],
     ids=["restricted-code", "write-restricted"],
 )
-def test_restricted_token_opens_the_election_pipe(restricting_sids, flags):
+def test_restricted_token_opens_the_election_pipe(extra_sids, flags):
     import _winapi
 
     name = election.pipe_name(uuid.uuid4().hex)
     handle = election.elect(name)
     try:
-        assert _open_pipe_as_restricted_token(name, restricting_sids, flags) == 0
+        assert _open_pipe_as_restricted_token(name, _with_logon_sid(extra_sids), flags) == 0
     finally:
         _winapi.CloseHandle(handle)
 
@@ -120,14 +132,15 @@ def test_restricted_token_opens_the_election_pipe(restricting_sids, flags):
 def test_restricted_token_is_denied_by_the_base_dacl(monkeypatch):
     import _winapi
 
+    restricting = _with_logon_sid(["S-1-5-12"])
     monkeypatch.setattr(
         election,
         "_pipe_sddl",
-        lambda sid: f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})",
+        lambda sid, logon_sid=None: f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})",
     )
     name = election.pipe_name(uuid.uuid4().hex)
     handle = election.elect(name)
     try:
-        assert _open_pipe_as_restricted_token(name, _BASE_RESTRICTING + ["S-1-5-12"], 0) == 5
+        assert _open_pipe_as_restricted_token(name, restricting, 0) == 5
     finally:
         _winapi.CloseHandle(handle)

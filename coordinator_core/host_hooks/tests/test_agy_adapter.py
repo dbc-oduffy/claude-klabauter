@@ -1,11 +1,16 @@
 """agy adapter: protojson payload mapping, engine-event shape, verdict rendering, unserved events."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from coordinator_core.host_hooks.agy_adapter import SERVED_EVENTS, AgyAdapter
+from coordinator_core.host_hooks.agy_adapter import SERVED_EVENTS, AgyAdapter, advisory_dir, stash_advisory
 from coordinator_core.host_hooks.contract import Adapter, neutral_fallback
 from coordinator_core.warm import hook_http
+
+_FIXTURE = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "tests" / "fixtures" / "host-real-tool-names.json"
 
 PAYLOAD = {
     "conversationId": "1efd6565-4b6a-434a-989d-f7814c28bdd8",
@@ -45,6 +50,22 @@ def test_edit_tools_map_to_write_guard_names_with_file_path() -> None:
     for name, tool in expected.items():
         ev = AgyAdapter().adapt_event(_edit_call(name, {"TargetFile": "/work/repo/a.py"}))
         assert (ev.tool_name, ev.tool_input["file_path"]) == (tool, "/work/repo/a.py")
+
+
+_AGY_REAL = json.loads(_FIXTURE.read_text(encoding="utf-8"))["agy"]
+
+
+@pytest.mark.parametrize("entry", [e for e in _AGY_REAL if e["kind"] == "shell"], ids=lambda e: e["name"])
+def test_real_agy_shell_tool_maps_to_bash(entry) -> None:
+    ev = AgyAdapter().adapt_event(_edit_call(entry["name"], {"CommandLine": "git push origin main"}))
+    assert (ev.tool_name, ev.tool_input["command"]) == ("Bash", "git push origin main")
+
+
+@pytest.mark.parametrize("entry", [e for e in _AGY_REAL if e["kind"] in ("edit", "write")], ids=lambda e: e["name"])
+def test_real_agy_edit_or_write_tool_maps_to_a_write_guard_tool_with_file_path(entry) -> None:
+    ev = AgyAdapter().adapt_event(_edit_call(entry["name"], {"Path": "/work/repo/a.py"}))
+    assert ev.tool_name in {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+    assert ev.tool_input["file_path"] == "/work/repo/a.py"
 
 
 def test_edit_without_a_path_arg_yields_empty_file_path_and_view_file_stays_unmapped() -> None:
@@ -170,19 +191,78 @@ def test_allow_and_empty_verdict_render_explicit_allow_never_empty_object() -> N
         assert out == {"decision": "allow"}
 
 
-def test_allow_with_additional_context_renders_ask_carrying_the_text_never_allow() -> None:
+@pytest.fixture(autouse=True)
+def _settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    return tmp_path
+
+
+def _stashed(conversation: str = PAYLOAD["conversationId"]) -> list:
+    folder = advisory_dir() / conversation
+    return [p.read_text(encoding="utf-8") for p in sorted(folder.glob("*.txt"))] if folder.is_dir() else []
+
+
+def _visible(text: str) -> dict:
+    # agy documents `injectSteps` on SessionStart and PreInvocation only (hooks.md sections 1, 4; C0 evidence in
+    # docs/plans/2026-11-16-hnd-agy-headless-launch-and-nag-ch-987fbb.evidence.yaml), and `-p` auto-approves
+    # an `ask`: the PreToolUse answer is an allow, and the text waits in the stash for the next PreInvocation.
+    return {"decision": "allow", "reason": text}
+
+
+def test_a_pretool_answer_never_carries_injectsteps_and_stashes_the_text_for_preinvocation() -> None:
+    adapter = AgyAdapter()
+    out = adapter.render(adapter.adapt_event(PAYLOAD), {"decision": "ask", "reason": "heads up"})
+    assert "injectSteps" not in out and out == _visible("heads up")
+    assert _stashed() == ["heads up"]
+
+
+def test_an_advisory_for_an_unusable_conversation_id_is_not_stashed_but_still_allows(tmp_path: Path) -> None:
+    adapter = AgyAdapter()
+    ev = adapter.adapt_event({**PAYLOAD, "conversationId": "../escape"})
+    assert adapter.render(ev, {"decision": "ask", "reason": "x"}) == _visible("x")
+    assert not stash_advisory("", "x") and not (tmp_path / "unimatrix" / "agy-advisories").exists()
+
+
+def test_a_deny_stashes_nothing() -> None:
+    adapter = AgyAdapter()
+    adapter.render(adapter.adapt_event(PAYLOAD), {"decision": "deny", "reason": "no"})
+    assert _stashed() == []
+
+
+def test_allow_with_additional_context_renders_a_model_visible_allow_never_ask() -> None:
     adapter = AgyAdapter()
     ev = adapter.adapt_event(PAYLOAD)
     nested = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "heads up"}}
     for verdict in ({"decision": "allow", "additionalContext": "heads up"}, nested,
                     {"additionalContext": "heads up"}):
-        assert adapter.render(ev, verdict) == {"decision": "ask", "reason": "heads up"}
+        assert adapter.render(ev, verdict) == _visible("heads up")
     assert adapter.render(ev, {"decision": "allow", "additionalContext": "  "}) == {"decision": "allow"}
     deny = adapter.render(ev, {"decision": "deny", "reason": "no", "additionalContext": "heads up"})
     assert deny == {"decision": "deny", "reason": "no"}
 
 
-def test_ask_is_passed_through() -> None:
+@pytest.mark.parametrize("decision", ["ask", "force_ask"])
+def test_ask_without_a_registry_class_is_a_model_visible_allow_never_ask(decision) -> None:
     adapter = AgyAdapter()
-    out = adapter.render(adapter.adapt_event(PAYLOAD), {"decision": "ask", "reason": "confirm"})
-    assert out == {"decision": "ask", "reason": "confirm"}
+    ev = adapter.adapt_event(PAYLOAD)
+    assert adapter.render(ev, {"decision": decision, "reason": "confirm"}) == _visible("confirm")
+    assert adapter.render(ev, {"decision": decision}) == _visible("coordinator: confirm")
+    nested = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
+                                     "permissionDecisionReason": "confirm"}}
+    assert adapter.render(ev, nested) == _visible("confirm")
+
+
+@pytest.mark.parametrize("decision", ["ask", "force_ask"])
+def test_ask_from_a_registry_classed_guard_is_a_deny_with_reason(decision) -> None:
+    adapter = AgyAdapter()
+    ev = adapter.adapt_event(PAYLOAD)
+    out = adapter.render(ev, {"decision": decision, "reason": "pushes to a non-owned remote",
+                              "guard": "block-push-pr-non-owned-remote"})
+    assert out == {"decision": "deny", "reason": "pushes to a non-owned remote"}
+
+
+def test_ask_naming_an_unregistered_guard_stays_an_advisory_never_a_deny() -> None:
+    adapter = AgyAdapter()
+    ev = adapter.adapt_event(PAYLOAD)
+    out = adapter.render(ev, {"decision": "ask", "reason": "confirm", "guard": "bump-foreign-repo-write"})
+    assert out == _visible("confirm")

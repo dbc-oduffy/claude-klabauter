@@ -237,7 +237,9 @@ def test_warm_codex_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, payl
 def test_warm_agy_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool) -> None:
     _engine(monkeypatch, {"result": {"additionalContext": NAG}})
     out = shim.decide("agy", _agy_write(tmp_path, tool))
-    assert _nag_in("agy", out) and out["decision"] == "ask"
+    # An `ask` is auto-approved under agy -p and PreToolUse takes no `injectSteps`: the nag is an explicit allow
+    # whose text is stashed for the next PreInvocation.
+    assert _nag_in("agy", out) and out["decision"] == "allow" and "injectSteps" not in out
 
 
 @pytest.mark.parametrize("payload", [CODEX_EDIT, CODEX_WRITE])

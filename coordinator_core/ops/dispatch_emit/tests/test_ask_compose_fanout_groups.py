@@ -73,9 +73,17 @@ main();
 """
 
 
+def _hoisted(script: str) -> str:
+    """The top-level consts the composer hoists out of prompt literals; a cut block references them."""
+    decl = f"const {ask_compose._PRECEDENCE_TAIL_FN} = "
+    at = script.find(decl)
+    return "" if at < 0 else script[at : script.index("`;\n", at) + 3]
+
+
 def _run(rows: list[dict], reply: str) -> dict:
-    block = _block(_script())
-    program = _HARNESS % {"manifest": json.dumps(_manifest(rows)), "reply": json.dumps(reply), "block": block}
+    script = _script()
+    block = _block(script)
+    program = _hoisted(script) + _HARNESS % {"manifest": json.dumps(_manifest(rows)), "reply": json.dumps(reply), "block": block}
     out = subprocess.run(
         [shutil.which("node"), "-"], input=program, capture_output=True, text=True, timeout=60,
         **no_console_creationflags(),

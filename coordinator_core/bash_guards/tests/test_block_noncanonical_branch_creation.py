@@ -175,14 +175,25 @@ class TestSanctionedLonglivedPrefixes:
 
 
 class TestDenyMessageRemediation:
-    def test_remediation_offers_checkout_dash_b(self):
+    def test_remediation_names_owner_machine_date(self, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
+        monkeypatch.setenv("COORDINATOR_MACHINE", "box1")
+        reason = _reason(_enveloped(guard.check)(_payload("git checkout -b bad-name")))
+        assert "git checkout -b alice/box1/" in reason
+
+    def test_owner_prefixed_branch_passes_beside_legacy(self):
+        assert _enveloped(guard.check)(_payload("git checkout -b alice/box1/2026-07-13")) is None
+        assert _enveloped(guard.check)(_payload("git checkout -b work/box1/2026-07-13")) is None
+
+    def test_remediation_offers_checkout_dash_b(self, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
         # pre-fix, the
         # message offered bare `git checkout <name>`, which errors with
         # "did not match any file(s) known to git" in the common case:
         # this deny fires while the user is CREATING a branch, so today's
         # canonical branch usually doesn't exist as a ref yet either.
         reason = _reason(_enveloped(guard.check)(_payload("git checkout -b bad-name")))
-        assert "git checkout -b work/" in reason
+        assert "git checkout -b alice/" in reason
 
 
 class TestRepoScoping:

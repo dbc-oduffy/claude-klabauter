@@ -62,8 +62,19 @@ def test_no_stamp_is_unchanged(tmp_path: Path) -> None:
     assert _call(_setup(tmp_path, revised=False), tmp_path, resumeFromRunId=RUN_ID) == {}
 
 
-def test_resumed_status_is_unchanged(tmp_path: Path) -> None:
+def test_resumed_status_with_the_revision_consumed_is_unchanged(tmp_path: Path) -> None:
     assert _call(_setup(tmp_path, status="resumed"), tmp_path, resumeFromRunId=RUN_ID) == {}
+
+
+def test_resume_of_a_run_revised_after_its_first_resume_is_denied_naming_the_revision(tmp_path: Path) -> None:
+    script = _setup(tmp_path, status="resumed", revised=False)
+    rec = tmp_path / "state" / "warp" / RUN_ID
+    (rec / "notes.jsonl").write_text(json.dumps({"note": "late ruling", "at": "2026-11-17T09:04:00Z"}) + "\n", encoding="utf-8")
+    assert halted_run.mark_revised(rec, "2026-11-17T09:04:00Z")
+    hso = _call(script, tmp_path, resumeFromRunId=RUN_ID)["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "N1" in hso["permissionDecisionReason"]
+    assert fire_command(SIZING) in hso["permissionDecisionReason"]
 
 
 def test_script_outside_scratch_warp_is_unchanged(tmp_path: Path) -> None:

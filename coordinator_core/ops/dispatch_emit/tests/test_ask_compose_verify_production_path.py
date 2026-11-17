@@ -152,13 +152,20 @@ def test_overlay_interpreter_import_fault_fails_closed_never_passes_open() -> No
 
 
 def test_verify_tests_leg_builds_and_runs_in_the_clean_export() -> None:
-    text = _compose()
-    marker = "clean_overlay_verify --export-run --run-id run-1"
-    assert marker in text
-    leg = text[text.index(marker) - 600 : text.index(marker) + 1600]
-    assert "clean export" in leg and "never fall back to the working tree" in leg
-    assert "appending the test runner argv after the `--`" in leg
-    assert "Run every scoped test target in the working tree" not in leg
+    directive = ask_compose.engine_module_command(
+        ask_compose._OVERLAY_VERIFY_MODULE, "REPO", "--export-run --run-id run-1 --repo-root REPO --"
+    )
+    leg = ask_compose._verify_tests_call(
+        head="h", anchor="a", run_id="run-1", repo_root="REPO", out_path="o.json",
+        test_js=ask_compose._test_instruction_js("HEAD", "REPO", export_command=directive),
+    )
+    assert directive in leg
+    plain = ask_compose._verify_tests_call(
+        head="h", anchor="a", run_id="run-1", repo_root="REPO", out_path="o.json",
+        test_js=ask_compose._test_instruction_js("HEAD", "REPO"),
+    )
+    assert directive not in plain
+    assert directive in _compose()
 
 
 def test_verify_agent_prompt_does_not_run_the_export() -> None:

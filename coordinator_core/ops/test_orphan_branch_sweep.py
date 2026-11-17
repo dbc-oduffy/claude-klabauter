@@ -545,6 +545,54 @@ def test_list_unmerged_work_branches_excludes_merged(tmp_path):
     assert branches == ["work/host/unmerged-one"]
 
 
+def test_list_unmerged_work_branches_reads_owner_prefixed_and_legacy(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
+    repo = _init_repo(tmp_path)
+    for name, fname in (
+        ("alice/Host/2026-11-17", "a.txt"),
+        ("work/host/2026-11-16", "b.txt"),
+        ("bob/host/2026-11-17", "c.txt"),
+        ("alice/other/2026-11-17", "d.txt"),
+    ):
+        _git(repo, "checkout", "-q", "-b", name)
+        _commit(repo, fname, fname)
+        _git(repo, "checkout", "-q", "main")
+
+    branches = list_unmerged_work_branches("host", "main", cwd=repo)
+    assert branches == ["alice/Host/2026-11-17", "work/host/2026-11-16"]
+
+
+def test_detect_unpushed_commits_counts_owner_prefixed_day_branch(tmp_path):
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "alice/box1/2026-11-17")
+    _commit(repo, "a.txt", "a")
+
+    result = detect_unpushed_commits("alice/box1/2026-11-17", cwd=repo)
+    assert result["ahead_count"] == 2 and result["has_origin"] is False
+    other = detect_unpushed_commits("alice/box1/notes", cwd=repo)
+    assert other["ahead_count"] == 0
+
+
+def test_sweep_collects_owner_prefixed_day_branch_and_skips_other_owner_branches(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _no_gh(monkeypatch)
+
+    base_ts = int(time.time()) - 10 * 86400
+    for name in ("alice/box1/2026-11-10", "alice/notes", "work/box1/2026-11-09"):
+        _git(repo, "checkout", "-q", "-b", name)
+        _dated_commit(repo, "f.txt", name, base_ts)
+        _git(repo, "checkout", "-q", "main")
+
+    rc = main(["--format", "json", "--severity-min", "ok", "--max-age-days", "365"])
+    assert rc == 0
+    rows = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.startswith("{")]
+    assert sorted(r["branch"] for r in rows) == ["alice/box1/2026-11-10", "work/box1/2026-11-09"]
+
+
 def test_verify_commit_in_review_window_inclusive_upper_exclusive_lower(tmp_path):
     repo = _init_repo(tmp_path)
     lower = _git(repo, "rev-parse", "HEAD").stdout.strip()

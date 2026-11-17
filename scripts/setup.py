@@ -3091,7 +3091,23 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
         print(f"    machine-local set engine.warm.enabled {str(want_warm).lower()}")
         return
 
+    from coordinator_core.install.install_root_scope import (
+        redirected_install_reason,
+        unregistered_clone_reason,
+    )
+
     value = "true" if want_warm else "false"
+    # The registry is machine-global: a redirected (sandbox) install must neither
+    # write the key nor start a server.
+    redirect = redirected_install_reason()
+    if redirect is not None:
+        print(f"[ADVISORY] engine.warm.enabled registration skipped: {redirect}")
+        if want_warm:
+            print(
+                f"[ADVISORY] warm engine not started: {redirect}; "
+                "a redirected install never starts a resident server"
+            )
+        return
     proc = machine_local_spawn.run_bounded(machine_local_argv + ["set", "engine.warm.enabled", value])
     if proc is None:
         print("[ADVISORY] 'machine-local set engine.warm.enabled' failed to launch or outlived its ceiling.", file=sys.stderr)
@@ -3105,18 +3121,7 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
     _note_change("warm-engine", f"machine-local set engine.warm.enabled = {value}")
 
     if want_warm:
-        from coordinator_core.install.install_root_scope import (
-            redirected_install_reason,
-            unregistered_clone_reason,
-        )
-
-        redirect = redirected_install_reason()
-        if redirect is not None:
-            print(
-                f"[ADVISORY] warm engine not started: {redirect}; "
-                "a redirected install never starts a resident server"
-            )
-        elif (unregistered := unregistered_clone_reason(repo_root)) is not None:
+        if (unregistered := unregistered_clone_reason(repo_root)) is not None:
             print(
                 f"[ADVISORY] warm engine not started: {unregistered}; "
                 "only the registered clone starts a resident server"
@@ -3880,6 +3885,73 @@ def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, arg
         print(f"WARN [retention] skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
 
 
+def user_path_with_entry(raw: str, entry: str) -> str | None:
+    """`raw` (an unexpanded user PATH value) with `entry` appended, or None when already present.
+
+    Presence is compared case-insensitively on both the literal and the `%VAR%`-expanded form, so
+    an entry spelled `%USERPROFILE%\\...` is never duplicated; `raw` itself is never expanded.
+    """
+    def norm(value: str) -> str:
+        return os.path.normcase(os.path.normpath(value.strip().strip('"')))
+
+    want = norm(entry)
+    for part in raw.split(os.pathsep):
+        if part.strip() and want in (norm(part), norm(os.path.expandvars(part))):
+            return None
+    if not raw.strip():
+        return entry
+    return raw.rstrip(os.pathsep) + os.pathsep + entry
+
+
+def _broadcast_environment_change() -> None:
+    """Tell running shells the user environment changed (WM_SETTINGCHANGE); best-effort, no spawn."""
+    import ctypes
+
+    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 2000, None)
+
+
+def ensure_settings_home_bin_on_user_path(args: Args) -> bool:
+    """Windows only: put `<settings-home>/bin` on the persistent user PATH (HKCU\\Environment).
+
+    ADVISORY, non-fatal, idempotent. The raw REG_EXPAND_SZ value is read and written back
+    unexpanded with its registry type preserved. Returns True when PATH changed; the caller's
+    restart notice follows because running Claude Code sessions keep the stale environment.
+    """
+    if sys.platform != "win32":
+        return False
+    print()
+    print("--- Install: settings-home bin on the user PATH ---")
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [path] COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return False
+    try:
+        import winreg
+
+        entry = str(settings_home() / "bin")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                            winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
+            try:
+                raw, kind = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                raw, kind = "", winreg.REG_EXPAND_SZ
+            updated = user_path_with_entry(str(raw), entry)
+            if updated is None:
+                print(f"SKIP [path] {entry} already on the user PATH")
+                return False
+            winreg.SetValueEx(key, "Path", 0, kind, updated)
+        try:
+            _broadcast_environment_change()
+        except Exception:  # noqa: BLE001 - the registry write already landed
+            pass
+        _note_change("user-path", f"appended {entry} to the persistent user PATH (HKCU\\Environment)")
+        print(f"PASS [path] appended {entry} to the user PATH")
+        print("NEXT [path] restart Claude Code (and any open terminal): running shells keep the old PATH")
+        return True
+    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
+        print(f"WARN [path] user PATH not updated ({type(exc).__name__}: {exc})", file=sys.stderr)
+        return False
+
+
 def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
     """Best-effort install-chain step: VERIFIES the native warm-engine door
     (`coordinator-invoke`) at `settings_home() / "bin"` — the same
@@ -4535,6 +4607,14 @@ def install_global_doctrine_files(repo_root: Path, claude_klabauter_root_resolve
         print(f"[ADVISORY] could not write global doctrine/rules: {exc}", file=sys.stderr)
         return
 
+    if claude_md_created or rules_created:
+        _note_change(
+            "global-doctrine",
+            "created " + ", ".join(
+                (["~/.claude/CLAUDE.md"] if claude_md_created else [])
+                + [f"~/.claude/rules/{name}" for name in rules_created]
+            ),
+        )
     if claude_md_created:
         print("PASS [global-doctrine] created ~/.claude/CLAUDE.md")
     else:
@@ -5400,6 +5480,7 @@ def main(argv: list[str]) -> int:
             _print_change_summary()
             return 1
         apply_transcript_retention_default(claude_klabauter_root_resolved, args)
+        ensure_settings_home_bin_on_user_path(args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)
@@ -5434,6 +5515,7 @@ def main(argv: list[str]) -> int:
         print("=== claude-klabauter setup: complete ===")
     if not args.register_only:
         print(CLOSING_CHAIN_WALK_LINE)
+        print(CLOSING_UNIMATRIX_LINE)
     if probe_hard_failure:
         return EXIT_HEALTH_PROBE_HARD_FAILURE
     if dialect_disarmed:
@@ -5443,6 +5525,11 @@ def main(argv: list[str]) -> int:
 
 CLOSING_CHAIN_WALK_LINE = (
     "  For the full chain-walk: python3 coordinator/scripts/chain-walk.py"
+)
+
+
+CLOSING_UNIMATRIX_LINE = (
+    "  NEXT (optional): python3 coordinator/bin/unimatrix-install.py --install"
 )
 
 

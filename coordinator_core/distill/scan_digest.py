@@ -118,7 +118,8 @@ def write_digests(worktree_root: Path, run_dir_rel: str, rel_paths: list[str]) -
             text = (worktree_root / rel).read_bytes().decode("utf-8", errors="replace")
         except OSError:
             continue
-        body = build_digest(text).encode("utf-8")
+        # CRLF-checkout sources must digest identically to LF ones.
+        body = build_digest(text.replace("\r\n", "\n")).encode("utf-8")
         name = digest_name(rel)
         fd, tmp = tempfile.mkstemp(dir=str(digest_dir), suffix=".tmp")
         try:

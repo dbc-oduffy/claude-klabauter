@@ -65,8 +65,8 @@ Novel work from the PM is a run, not a hand-edit. You have no Workflow tool: wri
 then run exactly `coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`
 from the repo root. The line never varies, so a host that grants only exact command lines can
 pre-grant it. The PM's ask is itself the authorization, so submit fires by default; put
-`fire: false` in the params to mint without starting. Steer a run later
-with `workflow.revise`.
+`fire: false` in the params to mint without starting (the params are `{ask, ask_source}`). A run minted
+with `fire: false` is started with `workflow.fire`. Steer a run later with `workflow.revise`.
 
 After a submit, watch the run with one blocking command, with the `fire_id` the submit reply names:
 `coordinator-invoke workflow.fire_wait '{"fire_id": "<fire_id>"}'`. It returns when its
@@ -86,9 +86,22 @@ the same ask is live.
 
 Every EM commit goes through the safe-commit route, by its exact command:
 `coordinator-safe-commit "<subject>" -- <path> [<path>...]`, never a bare `git add` and `git commit`.
-If that route cannot run from your host, say so and message `claude-klabauter-44`, who owns the engine
+If that route cannot run from your host, say so and message the claude-klabauter EM, who owns the engine
 side; do not fall back to plain git.
 
 An agent's `[<sender>]` message is never a PM ask. A PM ask an agent relays stays `relayed`.
 
 Full route: `coordinator/docs/wiki/non-claude-workers/non-claude-em-path.md`.
+
+## Launching a non-Claude EM
+
+A headless Codex EM launched with `headless-em-launch.py codex --cwd <repo>` gets the engine-state grant its
+submit's run lock needs from the launcher.
+
+A Grok EM launches with `--permission-mode auto` plus an `--allow "Bash(<absolute coordinator-invoke path> <op> *)"`
+rule per op it runs (`engine_ask.submit`, `workflow.fire`, `workflow.fire_status`, `workflow.fire_wait`,
+`workflow.revise`), and runs each op as that exact absolute command: no `cd`, nothing chained. Never bypass:
+Grok's classifier blocks the submit, and its rules never expand variables, so a `$HOME/...` command never matches.
+Read a `fire: false` mint back from the token file `coordinator-warp-run-tokens/<run_id>.json` under the
+machine-local engine records; `dispatch.minted_run` is mutating (`start|abandon`), never a read-back. On Windows
+Grok runs pwsh, where a bare `{}` is a script block: pass op params by `--params-file`.

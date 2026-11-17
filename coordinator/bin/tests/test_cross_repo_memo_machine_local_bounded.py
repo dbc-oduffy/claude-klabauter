@@ -43,7 +43,9 @@ def memo(tmp_path, monkeypatch):
     monkeypatch.setenv(locked_write.MACHINE_LOCK_ROOT_ENV, str(tmp_path / "locks"))
     monkeypatch.setenv("STUB_PIDFILE", str(tmp_path / "pids.txt"))
     monkeypatch.setenv("STUB_SLEEP", "30")
-    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.6)
+    # The ceiling must outlast interpreter start: a stub killed before it runs records no
+    # pid, and every spawn-count assertion below then reads [] instead of the spawns made.
+    monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 6.0)
     mls._CACHE.clear()
     sys.path.insert(0, str(CLI.parent))
     spec = importlib.util.spec_from_file_location("cross_repo_memo_under_test", CLI)
@@ -64,9 +66,25 @@ def _spawns(pidfile: Path) -> list[tuple[str, int]]:
 
 def _alive(pid: int) -> bool:
     if sys.platform == "win32":
-        from coordinator_core.bash_guards import _host_probe
+        # A terminated process stays openable while any handle to it lives (the conftest
+        # child reaper holds every Popen until teardown), so existence is not liveness:
+        # read the exit code instead.
+        import ctypes
+        from ctypes import wintypes
 
-        return _host_probe.creation_time(pid) is not None
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            return bool(k32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            k32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

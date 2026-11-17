@@ -1,7 +1,6 @@
 """Close dead `abandoned_at_minted` halt markers so they stop reading as open halts.
 
-A run the stale-minted reaper halted `abandoned_at_minted` was a shell (nothing withheld, no live run
-token). Its marker stays `halted` forever unless closed; `close_abandoned` rewrites it `closed` through `halted_run.mark_closed`, except while a descendant run is active (`_descendant_activity_epoch`).
+A run the stale-minted reaper halted `abandoned_at_minted` was a shell (nothing withheld). Its marker stays `halted` forever unless closed; `close_abandoned` rewrites it `closed` through `halted_run.mark_closed`, except while the run or a descendant is active (`run_activity_epoch`) or a run whose Workflow started still holds a live run token.
 Stat and marker reads only: no git, no subprocess. At most `limit` markers are closed per call, and the scan stops at `SCAN_BUDGET_SECONDS`.
 
 `python -m coordinator_core.ops.dispatch_emit.abandoned_minted_close --root <repo>` closes one bounded batch.
@@ -20,12 +19,17 @@ from typing import Any, Collection, Optional, Sequence
 
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit import halted_run, run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, record_dir
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    PLAN_STARTED_FIELD,
+    RECORD_DIR_ROOT,
+    read_run_stage,
+    record_dir,
+)
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.warp_run_deliverable import (
     ABANDONED_AT_MINTED,
     MINTED_STALE_SECONDS,
-    _descendant_activity_epoch,
+    run_activity_epoch,
 )
 
 CLOSE_REASON = "abandoned_at_minted: shell run with nothing withheld and no live descendant; closed"
@@ -34,14 +38,16 @@ SCAN_BUDGET_SECONDS = 0.2
 
 
 def _closable(wt: Path, run_id: str, marker: dict, now: float) -> bool:
-    """A halted `abandoned_at_minted` marker (the caller filtered on both) with nothing withheld, no live
-    token and no active descendant."""
+    """A halted `abandoned_at_minted` marker (the caller filtered on both) with nothing withheld, no
+    live token when its Workflow started (`plan_started_at`; a token is minted before the Workflow and
+    says nothing of a never-started mint) and no activity within `MINTED_STALE_SECONDS`."""
     if halted_run._withheld_of(marker):
         return False
-    if run_token.is_live(wt, run_id):
+    stage = read_run_stage(wt, run_id) or {}
+    if stage.get(PLAN_STARTED_FIELD) and run_token.is_live(wt, run_id):
         return False
-    child = _descendant_activity_epoch(wt, run_id, now)
-    return child is None or now - child > MINTED_STALE_SECONDS
+    seen = run_activity_epoch(wt, run_id, now, own=False)
+    return seen is None or now - seen > MINTED_STALE_SECONDS
 
 
 def close_abandoned(

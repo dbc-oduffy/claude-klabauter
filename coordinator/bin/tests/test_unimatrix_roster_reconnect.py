@@ -63,6 +63,8 @@ def drive(mod, monkeypatch, tmp_path, outcomes, reap=None):
             raise Stop
 
     monkeypatch.setattr(mod.time, "sleep", sleep)
+    # The loop waits in stop-poll slices; one fake sleep per whole poll keeps the cycle count and clock in poll units.
+    monkeypatch.setattr(mod, "wait_or_stop", lambda seconds, own_start, sleep=None: bool(mod.time.sleep(seconds)))
     log = tmp_path / "roster.log"
     with pytest.raises(Stop):
         mod.main([str(log), "--remote", "example-fleet-pro", "--key", "k"])

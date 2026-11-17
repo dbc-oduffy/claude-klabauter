@@ -138,29 +138,23 @@ def _parse_iso(value: object) -> Optional[float]:
 
 
 def names_this_box(stamped: object, home: Optional[Path] = None) -> bool:
-    """True when ``stamped`` is this box's id, or the same id differing only in case or a ``.local`` suffix
-    (the same fold member_box applies). An unconfigured box (id "local") matches only itself; any other box id
-    never matches."""
+    """True when ``stamped`` is this box's id, or the same id under ``box_registry.fold_box_id`` (case, ``.local``,
+    ``-lan``). An unconfigured box (id "local") matches only itself; any other box id never matches."""
     local = box_registry.local_box_id(home)
     if not isinstance(stamped, str):
         return False
     if stamped == local:
         return True
-
-    def fold(name: str) -> str:
-        low = name.lower()
-        return low[: -len(".local")] if low.endswith(".local") else low
-
-    return local != box_registry.LOCAL_BOX_ID and fold(stamped) == fold(local)
+    return local != box_registry.LOCAL_BOX_ID and box_registry.same_box(stamped, local)
 
 
 def _box_ok(record: dict) -> bool:
     """A record with no ``box_id``, or one stamped "local", is valid anywhere; any other
-    ``box_id`` must equal this box's identity."""
+    ``box_id`` must name this box's identity (``names_this_box``)."""
     stamped = record.get("box_id")
     if stamped is None or stamped == box_registry.LOCAL_BOX_ID:
         return True
-    return stamped == box_registry.local_box_id()
+    return names_this_box(stamped)
 
 
 def _parts(path: str) -> tuple[str, ...]:
@@ -230,7 +224,10 @@ def _far_box(
 ) -> tuple[Optional[dict], str]:
     """The box.json row for ``box_id``, else the row ``member_box`` materialises from verified membership;
     ``(None, reason)`` with ``BOX_UNKNOWN`` (plus the membership failure detail, when not a plain miss)."""
-    box = next((b for b in box_registry.read_boxes(directory) if b.get("box_id") == box_id), None)
+    rows = box_registry.read_boxes(directory)
+    box = next((b for b in rows if b.get("box_id") == box_id), None) or next(
+        (b for b in rows if box_registry.same_box(b.get("box_id"), box_id)), None
+    )
     if box is not None and not _dials_member_host(box):
         return box, ""
     resolved = member_box.resolve_member_box(box_id, home=home)
@@ -270,7 +267,7 @@ def _relay_grant(
         "issuer_name": nomination._holder_name(holder),
         "issuer_box_id": box_registry.local_box_id(home),
         "grantee_session_id": grantee_sid,
-        "grantee_box_id": box_id,
+        "grantee_box_id": box.get("box_id") or box_id,
         "grantee_name": "",
         "issued_at": _iso(issued),
         "expires_at": _iso(issued + ttl_minutes * 60),
@@ -515,11 +512,11 @@ def issue_suite_grant(
     if remote:
         grantee = _member_host_key(grantee, home)
     grantee_box, remote_sid = remote_identity.parse_key(grantee, box_registry.local_box_id(home))
-    if grantee_box != box_registry.local_box_id(home):
+    if not names_this_box(grantee_box, home):
         return _relay_grant(
             sid, holder, grantee_box, remote_sid, note, ttl_minutes, repo, directory, home, now
         )
-    grantee_sid, row = _resolve_grantee(grantee)
+    grantee_sid, row = _resolve_grantee(remote_sid)
     if not _safe_sid(grantee_sid):
         return IssueResult(False, f"{GRANTEE_UNRESOLVED}:{ACCEPTED_GRANTEE_FORMS}", None)
     scope_root = repo or (row.cwd if row is not None else "")
@@ -564,7 +561,7 @@ def _revoke_remote(
             "issuer_box_id": local,
             "issuer_session_id": sid,
             "grantee_session_id": grantee_sid,
-            "grantee_box_id": box_id,
+            "grantee_box_id": box.get("box_id") or box_id,
             "revoked_at": _iso(time.time() if now is None else now),
         },
         home,
@@ -588,7 +585,7 @@ def revoke_suite_grant(
     if isinstance(grantee, str) and ":" in grantee:
         grantee = _member_host_key(grantee, home)
         box_id, bare = remote_identity.parse_key(grantee, box_registry.local_box_id(home))
-        if box_id != box_registry.local_box_id(home):
+        if not names_this_box(box_id, home):
             return _revoke_remote(sid, grantee, directory, home, now)
         grantee = bare
     grantee_sid, _row = _resolve_grantee(grantee)

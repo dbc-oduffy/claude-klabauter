@@ -121,6 +121,30 @@ def test_revoke_removes_the_grant_and_leaves_a_tombstone(homes) -> None:
     assert tomb["revoke"]["grantee_session_id"] == "sess1" and tomb["grant"]["issuer_session_id"] == "iss"
 
 
+@pytest.mark.parametrize("spelling", ["Machine-b", "machine-b", "Machine-b.local", "machine-b-lan", "MACHINE-B-LAN.local"])
+def test_revoke_accepts_every_spelling_of_this_box(homes, spelling) -> None:
+    box_registry._write(
+        box_registry._identity_path(homes["far"]), {"schema_version": 1, "box_id": "Machine-b", "minted_at": 0}
+    )
+    path = _stored(homes, grantee_box_id=spelling)
+    _pin_issuer(homes)
+    out = relayed_grant_peer.receive_relayed_revoke(_revoke(homes, grantee_box_id=spelling), homes["far"])
+    assert out == {"ok": True, "reason": "revoked"}
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("other", ["mac-mini", "Machineb2", "machine-b-lan2"])
+def test_revoke_naming_a_different_box_is_refused(homes, other) -> None:
+    box_registry._write(
+        box_registry._identity_path(homes["far"]), {"schema_version": 1, "box_id": "Machine-b", "minted_at": 0}
+    )
+    path = _stored(homes)
+    _pin_issuer(homes)
+    out = relayed_grant_peer.receive_relayed_revoke(_revoke(homes, grantee_box_id=other), homes["far"])
+    assert (out["ok"], out["reason"]) == (False, "wrong_grantee_box")
+    assert path.exists()
+
+
 @pytest.mark.parametrize(
     ("over", "reason"),
     [

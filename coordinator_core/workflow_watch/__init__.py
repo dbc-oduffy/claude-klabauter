@@ -180,6 +180,54 @@ def _submitted_launch(root, script_path: str):
     return None if best is None else (best[1], best[2], best[0])
 
 
+def _park_halt_writes(base, run_id: str, marker, script_path: str | None) -> dict | None:
+    """Route a just-written halt `marker` through `dispatch.land_run` halted mode so the run's
+    unlanded writes are landed or parked; a refusal is an advisory line and the marker stands.
+    Returns the land reply, else None. Never raises."""
+    if marker is None:
+        return None
+    record_dir = halted = None
+    try:
+        from pathlib import Path
+
+        from coordinator_core.ops.dispatch_emit import halted_run, land_run_halt
+
+        record_dir = Path(marker).parent
+        halted = halted_run.read_strict(record_dir)
+        if not isinstance(halted, dict) or not halted.get("halted"):
+            return None
+        base = Path(base)
+        reply = land_run_halt.land(
+            base, base, {"halted_by": halted, "run_id": run_id, "script_path": script_path},
+        )
+        if isinstance(reply, dict) and not reply.get("error") and not reply.get("refused"):
+            return reply
+        detail = (reply.get("error") or reply.get("refused")) if isinstance(reply, dict) else reply
+        print(f"advisory: halt land refused for {run_id}: {detail}", file=sys.stderr)
+        _restore_marker(record_dir, halted)
+        return reply if isinstance(reply, dict) else None
+    except Exception as exc:
+        try:
+            print(f"advisory: halt land failed for {run_id}: {exc}", file=sys.stderr)
+        except Exception:
+            pass
+        _restore_marker(record_dir, halted)
+        return None
+
+
+def _restore_marker(record_dir, original) -> None:
+    """Put back the marker a refused land rewrote, so the marker the lander wrote stands; never raises."""
+    if record_dir is None or not isinstance(original, dict):
+        return
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_run
+
+        if halted_run.read_strict(record_dir) != original:
+            halted_run._write(record_dir, original)
+    except Exception:
+        pass
+
+
 def _write_usage_limit_halt(journal_path: str, script_path: str | None, root=None) -> None:
     """Land `halted.json` for the ask run launched from `script_path`; never raises."""
     if not script_path:
@@ -199,10 +247,11 @@ def _write_usage_limit_halt(journal_path: str, script_path: str | None, root=Non
         if found is None:
             return
         run_id, sizing_rel = found
-        halt_run_on_usage_limit(
+        marker = halt_run_on_usage_limit(
             ask_contract.record_dir(base, run_id), journal_path,
             sizing_rel=sizing_rel, script_path=script_path, now=time.time(),
         )
+        _park_halt_writes(base, run_id, marker, script_path)
     except Exception:
         pass
 
@@ -230,7 +279,8 @@ def _write_returned_halt(result_text: str | None, script_path: str | None, root=
         if found is None:
             return
         run_id, _sizing_rel, launched_at = found
-        land_returned_halt(ask_contract.record_dir(base, run_id), result, launched_at=launched_at)
+        marker = land_returned_halt(ask_contract.record_dir(base, run_id), result, launched_at=launched_at)
+        _park_halt_writes(base, run_id, marker, script_path)
     except Exception:
         pass
 
@@ -256,10 +306,11 @@ def _write_commit_stage_halt(
         if found is None:
             return
         run_id, sizing_rel, launched_at = found
-        halt_run_on_commit_stage_end(
+        marker = halt_run_on_commit_stage_end(
             ask_contract.record_dir(base, run_id), journal_path,
             terminal_status=terminal_status, sizing_rel=sizing_rel, launched_at=launched_at,
         )
+        _park_halt_writes(base, run_id, marker, script_path)
     except Exception:
         pass
 
@@ -293,9 +344,10 @@ def _write_unrecorded_end_halt(
         outcome = commit_leg_outcome(stall._tail_text(journal_path, stall.JOURNAL_TAIL_BYTES))
         if outcome is not None and outcome[1] == "committed":
             return
-        halt_run_on_unrecorded_end(
+        marker = halt_run_on_unrecorded_end(
             ask_contract.record_dir(base, run_id), terminal_status=terminal_status, sizing_rel=sizing_rel,
         )
+        _park_halt_writes(base, run_id, marker, script_path)
     except Exception:
         pass
 

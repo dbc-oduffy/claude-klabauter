@@ -5,36 +5,29 @@
 # The Windows door (door.c -> door.exe) is NOT built here; it has its own
 # builder, `build.py`, and nothing in this file touches it.
 #
-# Two build-time values are substituted, matching build.py's own
-# `__PYTHON_BIN_W__` / `__BUILD_ENGINE_ROOT_W__` convention:
+# One build-time value is substituted:
 #
 #   PYTHON_BIN         interpreter the fallback spawns. Default `python3`,
 #                      resolved through PATH by posix_spawnp. Pass an
 #                      absolute path to pin it.
-#   BUILD_ENGINE_ROOT  LAST-RESORT fallback engine root, used only if the
-#                      runtime sidecar/env resolution fails. Left empty by
-#                      default ON PURPOSE: an empty/placeholder value fails
-#                      `is_valid_engine_root()`, so the door REFUSES loudly
-#                      rather than guessing an engine. Never bake a value
-#                      you have not checked carries coordinator_core/_engine_stamp.
 #
-# The socket-derivation path does NOT come from either of these -- it is
-# read at runtime from the `door.engine-root.txt` sidecar next to the
-# binary. `build_posix.py` writes that sidecar for you and is the
-# recommended entry point; this Makefile is the no-Python, bare-hands path.
+# The engine root is never baked: it is read at runtime from the
+# `door.engine-root.txt` sidecar next to the binary, and a door with no
+# resolvable root REFUSES loudly. `build_posix.py` writes that sidecar for
+# you and is the recommended entry point; this Makefile is the no-Python,
+# bare-hands path.
 #
-#   make                       # placeholders left in; needs a sidecar
-#   make PYTHON_BIN=/usr/bin/python3 BUILD_ENGINE_ROOT=/opt/klabauter
+#   make                       # needs a sidecar
+#   make PYTHON_BIN=/usr/bin/python3
 #   make clean
 
 CC ?= cc
 PYTHON_BIN ?= python3
-BUILD_ENGINE_ROOT ?=
 
 # -O2 for the same reason build.py passes it: this binary's entire purpose
 # is to be cheaper than starting an interpreter.
 CFLAGS ?= -O2 -Wall -Wextra -std=c11
-CPPFLAGS += -DPYTHON_BIN='"$(PYTHON_BIN)"' -DBUILD_ENGINE_ROOT='"$(BUILD_ENGINE_ROOT)"'
+CPPFLAGS += -DPYTHON_BIN='"$(PYTHON_BIN)"'
 
 TARGET := door
 OBJS := door_posix.o door_core.o
@@ -81,7 +74,7 @@ WIN_CC ?= x86_64-w64-mingw32-gcc
 windows-check:
 	@command -v $(WIN_CC) >/dev/null 2>&1 || { \
 	  echo "windows-check: $(WIN_CC) not found -- brew install mingw-w64"; exit 1; }
-	$(WIN_CC) $(CFLAGS) -DPYTHON_BIN_W='L"python3"' -DBUILD_ENGINE_ROOT_W='L""' \
+	$(WIN_CC) $(CFLAGS) \
 	  -c -o door_win_check.o door.c
 	$(WIN_CC) $(CFLAGS) -c -o door_core_win_check.o door_core.c
 	$(WIN_CC) -O2 -o door_win_check.exe door_win_check.o door_core_win_check.o \

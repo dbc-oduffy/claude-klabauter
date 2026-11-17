@@ -87,7 +87,7 @@ def test_configured_staff_eng_leg_runs_reviewer_run_on_the_codex_opus_equivalent
     assert "coordinator-invoke codex_runner.result" in script
     assert "python -m coordinator_core.agent_pipe.reviewer_run" not in script
     assert match.groups() == (STAFF_ENG, "codex", OPUS_EQUIVALENT_MODELS["codex"])
-    assert "label: 'plan-review:start'" in script
+    assert "label: 'plan-review'" in script
     assert f"agentType: '{STAFF_ENG}'" not in script
 
 

@@ -1093,6 +1093,45 @@ def compute_machine_live() -> str:
     return _tail_slug(m or "unknown")
 
 
+_UNOWNABLE_OWNERS = frozenset({"", "origin", "main"})
+
+
+def compute_owner() -> str:
+    """The branch-owner segment of `<owner>/<machine>/<date>` — whose branch this is.
+
+    Resolution order, first usable hit wins: the COORDINATOR_BRANCH_OWNER env var,
+    then the machine-local registry key coordinator.branch_owner, then the OS
+    login (`getpass.getuser()`), then the literal "unknown". Each candidate is
+    passed through `sanitize_slug`; one that sanitizes to empty, `origin` or
+    `main` is skipped, since the engine never mints those owners.
+
+    Negative spec: zero spawns (no `git config user.name`), pure-read (never
+    writes the registry), never raises.
+    """
+    for source in (_owner_from_env, _owner_from_registry, _owner_from_login):
+        slug = sanitize_slug(source() or "")
+        if slug not in _UNOWNABLE_OWNERS:
+            return slug
+    return "unknown"
+
+
+def _owner_from_env() -> Optional[str]:
+    return os.environ.get("COORDINATOR_BRANCH_OWNER")
+
+
+def _owner_from_registry() -> Optional[str]:
+    return _registry_get("coordinator.branch_owner")
+
+
+def _owner_from_login() -> Optional[str]:
+    import getpass
+
+    try:
+        return getpass.getuser()
+    except Exception:  # noqa: BLE001 - no passwd entry / no login env: fall to "unknown"
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Contributor resolution
 # ---------------------------------------------------------------------------

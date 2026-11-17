@@ -38,7 +38,14 @@ def test_fenced_span_flags(span):
 
 @pytest.mark.parametrize("span", SPANS)
 def test_performer_em_returns_none(span):
-    assert executor_commit_act(_row(f"Run `{span}`.", performer="em")) is None
+    row = _row(f"Run `{span}`.", performer="em", writes=["notes.md"])
+    assert executor_commit_act(row) is None
+
+
+@pytest.mark.parametrize("span", SPANS)
+def test_performer_em_code_deliverable_still_flags(span):
+    # A code write routes to an executor whatever `performer` says (row_is_em_performed).
+    assert executor_commit_act(_row(f"Run `{span}`.", performer="em")) == span
 
 
 @pytest.mark.parametrize(

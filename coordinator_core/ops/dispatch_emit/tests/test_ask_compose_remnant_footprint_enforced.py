@@ -84,14 +84,17 @@ _BASE = "".join(f"line {n}\n" for n in range(1, 11))
 _FOREIGN = _BASE.replace("line 2\n", "FOREIGN 2\n")
 _OWN = _BASE.replace("line 8\n", "OWN 8\n")
 _LEG_WRITES_HOOK = r"""
-  if (label && (label.startsWith('live-snap') || label.startsWith('live-restore'))) {
-    const cmd = String(prompt).split('do not retry it:\n\n')[1].split('\n\nReturn')[0].replace(/\bREPO\b/g, process.env.REPO_ROOT);
-    const out = require('child_process').execFileSync(process.env.BASH_EXE, ['-c', cmd], { encoding: 'utf8' });
-    return JSON.parse(out.trim().split('\n').pop());
-  }
   if (label === 'remnant-complete') {
+    const P = String(prompt);
+    const bash = (cmd) => JSON.parse(require('child_process').execFileSync(process.env.BASH_EXE, ['-c', cmd.replace(/\bREPO\b/g, process.env.REPO_ROOT)], { encoding: 'utf8' }).trim().split('\n').pop());
+    const before = P.split('(1) BEFORE your first edit run:\n\n')[1].split('\n\n(2)')[0];
+    const after = P.split('(2) AFTER your last edit run:\n\n')[1].split('\n\nSkip (2)')[0];
+    const restore = P.split('(3) When ')[1].split('run:\n\n')[1].split('\n\nReturn each')[0];
+    const snapBefore = bash(before);
     for (const [p, c] of Object.entries(cfg.leg_writes ?? {})) require('fs').writeFileSync(p, c);
-    return cfg.replies[label];
+    const snapAfter = bash(after);
+    const rr = snapAfter.live_tree_writes.length ? { restore: bash(restore) } : {};
+    return { ...cfg.replies[label], snap_before: snapBefore, snap_after: snapAfter, ...rr };
   }
 """
 
@@ -116,8 +119,8 @@ def _git_repo(root) -> None:
 
 
 def _drive_remnant(root, monkeypatch, *, leg_writes):
-    """Runs the composed ask script through its remnant loop in `root`, the leg stub writing `leg_writes`; the
-    live-snap and live-restore legs execute their real engine commands."""
+    """Runs the composed ask script through its remnant loop in `root`, the leg stub writing `leg_writes` and
+    executing the real engine bracket commands its prompt names."""
     import shutil
     import subprocess
 
@@ -180,8 +183,8 @@ def test_a_remnant_leg_that_writes_head_plus_own_over_a_foreign_hunk_keeps_the_f
     assert rec["live_tree_writes"] == [_PATH] and rec["live_restored"] == [_PATH]
     assert rec["status"] == "fixed" and "live_refused" not in rec
     labels = [c["label"] for c in out["calls"]]
-    assert labels.index("remnant-complete") < labels.index("live-snap-after:remnant") < labels.index("live-restore:remnant")
-    assert labels.index("live-restore:remnant") < labels.index("remnant-reverify")
+    assert not [lab for lab in labels if lab and lab.startswith("live-")]
+    assert labels.index("remnant-complete") < labels.index("remnant-reverify")
 
 
 def test_a_remnant_leg_whose_write_overlaps_a_foreign_hunk_is_refused_and_not_accepted_as_fixed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -186,6 +186,30 @@ def test_check_drift_reports_a_removed_file_and_a_new_top_level_file(top) -> Non
     assert bc.check_drift(entry2) is True
 
 
+class GitExtractor(Extractor):
+    def __call__(self, partial) -> None:
+        super().__call__(partial)
+        (partial / ".git" / "objects").mkdir(parents=True)
+        (partial / ".git" / "HEAD").write_text("ref\n")
+
+
+def test_top_level_dot_git_is_unsealed_and_never_drift(top) -> None:
+    entry, _ = bc.ensure_entry(top, _sha(1), GitExtractor())
+    head = entry / ".git" / "HEAD"
+    assert os.stat(head).st_mode & stat.S_IWUSR
+    head.write_text("refreshed\n")
+    (entry / ".git" / "index").write_text("idx")
+    assert bc.check_drift(entry) is False
+    (entry / "pkg" / "sub" / "polluted.pyc").write_text("junk")
+    assert bc.check_drift(entry) is True
+
+
+def test_evicting_an_entry_removes_its_dot_git(top) -> None:
+    entry, _ = bc.ensure_entry(top, _sha(1), GitExtractor())
+    assert bc._evict_one(bc.cache_root(top), _sha(1)) is True
+    assert not entry.exists()
+
+
 def test_check_drift_is_true_when_unverifiable(top) -> None:
     entry, _ = _build(top, 1)
     bc._manifest(entry).unlink()

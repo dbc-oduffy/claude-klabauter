@@ -1,6 +1,6 @@
 """The landing retest's export pass must see the landing tree's state/ listing and allowlist.
 
-`baseline_export.export` skips DATA_DIRS (state, archive, docs, tasks) and `build_head_export`
+`baseline_export.clone_tree` skips DATA_DIRS (state, archive, docs, tasks) and `build_head_export`
 never links them, so an export-pass invariant reading the state/ listing or the allowlist hit
 FileNotFoundError. The export now seeds HEAD's allowlist and the tracked state/ first-segment set.
 The phantom red's exact producer (the ['apm-rulings', 'rulings', 'superseding-reviews'] message)
@@ -79,3 +79,18 @@ def test_export_pass_sees_the_landing_trees_state_set_and_allowlist(tmp_path):
     )
     assert segments - allowlist == set()
     assert allowlist == {"alpha", "beta"}
+
+
+def test_export_root_is_told_from_a_live_checkout_though_both_have_a_dot_git(tmp_path):
+    from coordinator_core.ops.dispatch_emit import retest_targeted as rt
+
+    root = tmp_path / "repo"
+    _toy_repo(root)
+    out = root / "scratch" / "warp" / "r1" / "export"
+    le.build_head_export(root, out, [])
+
+    assert (out / ".git").is_dir()
+    assert rt._is_export_root(out) is True
+    assert rt._is_export_root(out / "coordinator_core") is True
+    assert rt._is_export_root(root) is False
+    assert rt._is_export_root(tmp_path) is False

@@ -741,7 +741,6 @@ class TestBlockedByDependentsMany:
         self, worktree: Path, monkeypatch
     ) -> None:
         from coordinator_core.ops import handoff_children
-        from coordinator_core.reconcile import handoff_corpus
 
         handoff_dir = worktree / "state" / "handoffs"
         candidates = [
@@ -756,7 +755,7 @@ class TestBlockedByDependentsMany:
             {"stub_id": "walk-ref", "status": "open", "blocked_by": ["walk-0", "walk-2"]},
         )
 
-        real_collect = handoff_corpus._collect_all_handoffs_for_gate_index
+        real_collect = handoff_children._collect_blocked_by_holders
         calls = 0
 
         def _counting_collect(*args, **kwargs):
@@ -765,7 +764,7 @@ class TestBlockedByDependentsMany:
             return real_collect(*args, **kwargs)
 
         monkeypatch.setattr(
-            handoff_corpus, "_collect_all_handoffs_for_gate_index", _counting_collect
+            handoff_children, "_collect_blocked_by_holders", _counting_collect
         )
 
         result = handoff_children.blocked_by_dependents_many(candidates, worktree)

@@ -94,7 +94,11 @@ def _live_unimatrix_pair_state():
     except OSError:
         lines = []
     ssh = live / ".secrets" / "ssh"
-    return lines, sorted(p.name for p in ssh.iterdir()) if ssh.is_dir() else []
+    try:
+        names = sorted(p.name for p in ssh.iterdir())
+    except OSError:  # absent, or removed between the check and the scan by a concurrent box writer
+        names = []
+    return lines, names
 
 
 @pytest.fixture(autouse=True)

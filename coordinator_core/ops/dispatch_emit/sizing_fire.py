@@ -356,6 +356,26 @@ def flat_plan_edge(plan_rel: str) -> str:
     return re.sub(r"^(docs/plans/)\d{4}-\d{2}/", r"\1", str(plan_rel).replace(chr(92), "/"))
 
 
+def resolve_plan_edge(repo_root: str | Path, plan_rel: str) -> str | None:
+    """The existing plan file a `plan:` edge names, as a forward-slash path, else None.
+
+    Tries the edge, its single-dated twin, the flat `docs/plans/` path, then the `docs/plans/YYYY-MM/`
+    month directory read off a leading date (an undated name gets no month candidate).
+    """
+    root = Path(repo_root)
+    edge = str(plan_rel).replace(chr(92), "/")
+    candidates = [edge, single_dated_plan_edge(edge)]
+    candidates.append(flat_plan_edge(candidates[-1]))
+    head, _, name = candidates[-1].rpartition("/")
+    month = re.match(r"(\d{4}-\d{2})-\d{2}-", name)
+    if month and head == "docs/plans":
+        candidates.append(f"{head}/{month.group(1)}/{name}")
+    for rel in candidates:
+        if (root / rel).is_file():
+            return rel
+    return None
+
+
 #: JS twin of `s_plan_path`, built from the same pattern; the planner prompt names its result.
 PLAN_PATH_JS = (
     "const _planPathFor = (rel) => { const s = String(rel).replace(/\\\\/g, '/').split('/').pop()"
@@ -404,13 +424,7 @@ def resumable_plan(
     root = Path(repo_root)
     plan_rel = edge if isinstance(edge, str) and edge.strip() else (s_plan_located(root, sizing_rel) if arm == ARM_S else None)
     if plan_rel is not None and plan_rel == edge:
-        twin = single_dated_plan_edge(plan_rel)
-        if twin != plan_rel and not (root / plan_rel).is_file():
-            plan_rel = twin
-        if not (root / plan_rel).is_file():
-            flat = flat_plan_edge(plan_rel)
-            if (root / flat).is_file():
-                plan_rel = flat
+        plan_rel = resolve_plan_edge(root, plan_rel) or plan_rel
     if plan_rel is None and arm == ARM_XS:
         plan_rel = _xs_halt_spine(root, sizing_rel)
     if plan_rel is None:
@@ -617,7 +631,7 @@ def _blocking_named_rows(
     if (
         record is None
         or record.sizing_rel != sizing_rel
-        or (record.plan_rel is not None and record.plan_rel != plan_rel)
+        or (record.plan_rel is not None and flat_plan_edge(record.plan_rel) != flat_plan_edge(plan_rel))
     ):
         return record, []
     by_id = {r["id"]: r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
@@ -898,8 +912,14 @@ def _own_pointer(root: Path, plan_rel: str, sizing_rel: str) -> LedgerHalt | Non
         from coordinator_core.git.git_dir import resolve_git_common_dir
 
         pointer = read_ledger_halt(ledger_halt_path(resolve_git_common_dir(root), plan_rel))
-    if pointer is not None and (pointer.plan_rel != plan_rel or pointer.sizing_rel != sizing_rel):
+    if pointer is None or pointer.sizing_rel != sizing_rel:
         return None
+    if pointer.plan_rel != plan_rel:
+        # The pointer path keys on the plan stem, so a plan that moved between the flat and month
+        # layout still finds it; the returned pointer names the form the caller asked for.
+        if flat_plan_edge(pointer.plan_rel) != flat_plan_edge(plan_rel):
+            return None
+        return replace(pointer, plan_rel=plan_rel)
     return pointer
 
 
@@ -932,8 +952,17 @@ def _ledger_halt_for(
 
         state = resume_landed_state(root, plan_rel)
     if pointer is not None and not open_ids:
-        halt_sha = state.run_halts.get(pointer.run_id, (frozenset(), None))[1]
-        return _carry(root, plan_rel, replace(pointer, halt_sha=halt_sha), state)
+        run_id = pointer.run_id
+        if state.ledger_run is not None and state.ledger_run != run_id:
+            newest = read_halt_record(root, state.ledger_run, at_sha=state.ledger_sha) if record is _UNREAD else record
+            if (
+                newest is not None
+                and newest.sizing_rel == sizing_rel
+                and (newest.plan_rel is None or flat_plan_edge(newest.plan_rel) == flat_plan_edge(plan_rel))
+            ):
+                run_id = state.ledger_run
+        halt_sha = state.run_halts.get(run_id, (frozenset(), None))[1]
+        return _carry(root, plan_rel, replace(pointer, run_id=run_id, halt_sha=halt_sha), state)
     if state.ledger_run is None:
         # A halt commit without a `Halt-Plan:` trailer is invisible to `resume_landed_state`; the
         # pointer's run then resumes when that run's halt commit landed every open row.
@@ -949,7 +978,7 @@ def _ledger_halt_for(
     if (
         record is None
         or record.sizing_rel != sizing_rel
-        or (record.plan_rel is not None and record.plan_rel != plan_rel)
+        or (record.plan_rel is not None and flat_plan_edge(record.plan_rel) != flat_plan_edge(plan_rel))
         or not set(open_ids) - ruled - _memo_close_ids(rows, open_ids) <= record.staged
     ):
         return None
@@ -1045,6 +1074,32 @@ def slice_writes(sizing: Mapping) -> list[str]:
     return [w.strip() for w in raw.splitlines() if w.strip()] if isinstance(raw, str) else []
 
 
+def _open_plan_row_ids(plan: Path) -> tuple[str, ...]:
+    """Ids of the plan's dispatchable rows; () when the spine is unreadable.
+
+    An empty `ResumePlan.incomplete` reads downstream as "every row landed", so a plan the
+    gate adopts unreviewed (a stage-refused predecessor's) names its open rows instead.
+    """
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        NON_DISPATCHABLE_DISPOSITIONS,
+        load_rows_memo,
+        with_canonical_disposition,
+    )
+
+    try:
+        result = load_rows_memo(plan.read_text(encoding="utf-8"))
+    except OSError:
+        return ()
+    if result.status is not LocateStatus.LOCATED:
+        return ()
+    return tuple(
+        r["id"]
+        for r in map(with_canonical_disposition, result.rows)
+        if isinstance(r, dict) and isinstance(r.get("id"), str) and r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
+    )
+
+
 def collect_fire_refusals(
     sizing: Mapping,
     *,
@@ -1100,7 +1155,7 @@ def collect_fire_refusals(
         try:
             resumable = resumable_plan(sizing, sizing_rel, Path(repo_root), arm)
             if resumable is None and (Path(repo_root) / plan_rel).exists():
-                resumable = ResumePlan(plan_rel, ())
+                resumable = ResumePlan(plan_rel, _open_plan_row_ids(Path(repo_root) / plan_rel))
             if resume_sink is not None:
                 resume_sink.append(resumable)
         except SizingFireRefused as exc:

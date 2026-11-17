@@ -42,7 +42,7 @@ def test_unrelated_env_flags_never_verify():
 
 def test_unknown_family_and_blank_session_refused_by_writer():
     with pytest.raises(g.HeadlessEmGrantError):
-        g.write_headless_em_grant("sess-1", "claude")
+        g.write_headless_em_grant("sess-1", "gemini")
     with pytest.raises(g.HeadlessEmGrantError):
         g.write_headless_em_grant("  ", "codex")
 

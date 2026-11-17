@@ -1924,11 +1924,17 @@ def revise(
                     "Relay from your own session when the run closes."
                 )
             who = _clean_sender(sender) or "em"
-            if text:
-                pipeline_run.append_revision(root, run_id, text, who, "verbatim")
-            if has_note:
-                pipeline_run.append_revision(root, run_id, str(note), who, "note")
+            mailed: list[str] = []
+            unreached: list[str] = []
+            for body, kind in ((text, "verbatim"), (str(note) if has_note else "", "note")):
+                if not body:
+                    continue
+                pipeline_run.append_revision(root, run_id, body, who, kind)
+                got, missed = pipeline_run.mail_revision(root, run_id, body, who, kind)
+                mailed += [s for s in got if s not in mailed]
+                unreached += [s for s in missed if s not in unreached]
             if outcome is not None:
+                outcome["mailed_stages"], outcome["unreached_stages"] = mailed, unreached
                 outcome["pipeline_revisions"] = pipeline_run.revisions_rel(run_id)
             return Ledger((), False), dir_, None
         if (
@@ -2657,7 +2663,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             (f"revision appended to {outcome['pipeline_revisions']}",), (), params["run_id"],
             run_id=executing or params["run_id"], delivered=True, revisions=outcome["pipeline_revisions"],
             run_live=True if executing else None, item=None,
+            mailed_stages=outcome.get("mailed_stages", []),
             **({"requested_run_id": params["run_id"]} if executing else {}),
+            **({"warning": "revision not mailed to: " + ", ".join(outcome["unreached_stages"])}
+               if outcome.get("unreached_stages") else {}),
             note="appended to the run's revisions file: if the run is still running, each stage reads it "
                  "at its next stage start; a stage already running does not see it.",
         )
@@ -3258,8 +3267,8 @@ def _refire(
     return {
         "next": {"kind": "refire", "call": fire_command(sizing_rel)},
         "note": (
-            "run halted: resumeFromRunId replays its stages and never reads this revision; "
-            "a fresh refire with next.call reads it."
+            "run halted: resumeFromRunId of its stored script replays its stages and never reads this revision; "
+            "the refire with next.call carries it into the resumed run."
             if halted else "run finished: nothing reads this revision until a refire."
         ),
     }

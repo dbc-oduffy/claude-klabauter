@@ -49,3 +49,32 @@ def test_ambiguous_match_prints_unknown(tmp_path: Path, monkeypatch: pytest.Monk
     peers(tmp_path, monkeypatch, [{"vendor": "agy", "target": "s1", "name": "a"},
                                   {"vendor": "agy", "target": "c1", "name": "b"}])
     assert agy.line({"session_id": "s1", "conversation_id": "c1"}).startswith("unknown")
+
+
+PROBE = {
+    "session_id": "s1", "conversation_id": "c1",
+    "model": {"id": "Gemini 3.8 Flash (Medium)", "display_name": "Gemini 3.8 Flash (Medium)", "effort": "medium"},
+    "context_window": {"total_input_tokens": 19482, "total_output_tokens": 33, "context_window_size": 1048576,
+                       "used_percentage": 1.86, "remaining_percentage": 98.14,
+                       "current_usage": {"input_tokens": 14555, "output_tokens": 33,
+                                         "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}},
+}
+
+
+def test_probe_payload_prices_lifetime_tokens_partial_and_context_stays_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    peers(tmp_path, monkeypatch, [{"vendor": "agy", "target": "c1", "name": "agy-one"}])
+    assert agy.line(PROBE) == "agy-one · unknown · ~$0.01+ [coverage incomplete]"
+
+
+def test_unpriced_model_or_zero_tokens_stay_unknown_never_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    peers(tmp_path, monkeypatch, [])
+    other = {**PROBE, "model": {"id": "Gemini 4 Mystery"}}
+    zero = {**PROBE, "context_window": {"total_input_tokens": 0, "total_output_tokens": 0}}
+    no_model = {k: v for k, v in PROBE.items() if k != "model"}
+    for payload in (other, zero, no_model, {**PROBE, "context_window": None}):
+        assert agy.line(payload).endswith("unknown · unknown") and "$" not in agy.line(payload)
+
+
+def test_payload_cost_still_wins_unmarked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    peers(tmp_path, monkeypatch, [])
+    assert agy.line({**PROBE, "cost": 0.5}).endswith("~$0.50")

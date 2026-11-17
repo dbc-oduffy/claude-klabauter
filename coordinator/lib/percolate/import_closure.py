@@ -864,7 +864,7 @@ def _module_defined_names(tree: ast.Module) -> tuple[set[str], bool]:
 
 
 def find_commit_from_import_name_violations(
-    repo: Path, commit: str, roots: tuple[str, ...] = COMMIT_NAME_ROOTS
+    repo: Path, commit: str, roots: tuple[str, ...] = COMMIT_NAME_ROOTS, cache=None
 ) -> tuple[int, list[tuple[str, str]]]:
     """Check every level-0, unguarded `from coordinator_core[.X] import a` in a
     non-test `.py` under `roots` against the blobs of `commit` (never the
@@ -875,9 +875,11 @@ def find_commit_from_import_name_violations(
     `a` resolves when X's top-level namespace defines it or X is a package
     holding submodule `a`. A namespace package (directory without
     `__init__.py`) and a module defining `__getattr__` or star-importing never
-    flag. Raises `CommitReadError` on a failed git read: callers fail closed."""
+    flag. Raises `CommitReadError` on a failed git read: callers fail closed.
+    `cache` (a `GateResultCache`, or None) serves each blob's parse facts by
+    its content hash; resolution still runs against `commit` every time."""
     sources, dirs = _read_commit_py_blobs(repo, commit, roots)
-    return _from_import_violations(sources, dirs, sorted(sources))
+    return _from_import_violations(sources, dirs, sorted(sources), cache)
 
 
 # Textual pre-filter: a blob with no import line naming the package (and no line continuation that
@@ -885,6 +887,10 @@ def find_commit_from_import_name_violations(
 _MAY_IMPORT_PACKAGE = re.compile(r"\b(?:from|import)\b[^\n]*\bcoordinator_core\b")
 _ATTR_NS_DIGEST = "commit-module-attr-namespace"
 _ATTR_IMPORTER_DIGEST = "commit-module-attr-importer"
+# Own digests, not the attr gate's: that namespace also counts `global`-declared names, and
+# sharing it would loosen this gate's verdict.
+_FROM_NS_DIGEST = "commit-from-import-namespace"
+_FROM_IMPORTER_DIGEST = "commit-from-import-importer"
 
 
 def _attr_cached(cache, source: str, digest: str, build):
@@ -1127,6 +1133,28 @@ def find_would_be_tree_from_import_violations(
     return _from_import_violations(sources, dirs, importers)
 
 
+def _from_namespace_facts(tree: ast.Module | None) -> dict:
+    """`{"names": sorted, "opaque": bool}` of a module blob's top-level namespace."""
+    if tree is None:
+        return {"names": [], "opaque": True}
+    names, opaque = _module_defined_names(tree)
+    return {"names": sorted(names), "opaque": opaque}
+
+
+def _from_importer_facts(tree: ast.Module | None) -> dict:
+    """`{"imports": [[module, [name, ...]], ...]}`, one row per unguarded level-0 package from-import."""
+    if tree is None:
+        return {"syntax_error": True}
+    imports: list[list] = []
+    for node in _unguarded_import_nodes(tree):
+        if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+            continue
+        if node.module != PACKAGE_NAME and not node.module.startswith(PACKAGE_NAME + "."):
+            continue
+        imports.append([node.module, [a.name for a in node.names]])
+    return {"imports": imports}
+
+
 def find_would_be_tree_violations(
     repo: Path, base_commit: str, overlay: dict, reader, roots: tuple[str, ...] = COMMIT_NAME_ROOTS
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
@@ -1154,13 +1182,14 @@ def _would_be_tree(repo: Path, base_commit: str, overlay: dict, reader, roots: t
     return sources, dirs, importers
 
 
-def _from_import_violations(sources, dirs: set[str], importers: list[str]) -> tuple[int, list[tuple[str, str]]]:
+def _from_import_violations(
+    sources, dirs: set[str], importers: list[str], cache=None
+) -> tuple[int, list[tuple[str, str]]]:
     """Shared resolution: `importers` checked against the `sources` mapping
-    (`in` / `[]` by repo-relative path) and `dirs`."""
-    # A module may be both an importer and another importer's target. The
-    # namespace cache alone used to parse that same committed source again.
-    # All readers below are read-only, so share its AST for this one immutable
-    # commit snapshot; do not retain it across calls/commits or read worktree data.
+    (`in` / `[]` by repo-relative path) and `dirs`. Parse facts are keyed on blob
+    bytes, so a hit is valid for any commit; only resolution is per-commit."""
+    # On a cache miss a module that is both importer and target is parsed once for this call;
+    # the AST is read-only and never outlives it.
     parsed_cache: dict[str, ast.Module | None] = {}
     namespace_cache: dict[str, tuple[set[str], bool]] = {}
 
@@ -1174,8 +1203,8 @@ def _from_import_violations(sources, dirs: set[str], importers: list[str]) -> tu
 
     def namespace_of(path: str) -> tuple[set[str], bool]:
         if path not in namespace_cache:
-            tree = parsed(path)
-            namespace_cache[path] = _module_defined_names(tree) if tree is not None else (set(), True)
+            facts = _attr_cached(cache, sources[path], _FROM_NS_DIGEST, lambda: _from_namespace_facts(parsed(path)))
+            namespace_cache[path] = (set(facts.get("names", ())), bool(facts.get("opaque", True)))
         return namespace_cache[path]
 
     violations: list[tuple[str, str]] = []
@@ -1186,16 +1215,12 @@ def _from_import_violations(sources, dirs: set[str], importers: list[str]) -> tu
         source = sources[importer]
         if not _COMMIT_FROM_IMPORT_RE.search(source):
             continue
-        tree = parsed(importer)
-        if tree is None:
+        facts = _attr_cached(cache, source, _FROM_IMPORTER_DIGEST, lambda: _from_importer_facts(parsed(importer)))
+        if facts.get("syntax_error"):
             continue
         examined += 1
-        for node in _unguarded_import_nodes(tree):
-            if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
-                continue
-            if node.module != PACKAGE_NAME and not node.module.startswith(PACKAGE_NAME + "."):
-                continue
-            base = node.module.replace(".", "/")
+        for module, names in facts.get("imports", ()):
+            base = module.replace(".", "/")
             init_path, file_path = f"{base}/__init__.py", f"{base}.py"
             if init_path in sources:
                 module_path, is_package = init_path, True
@@ -1204,13 +1229,12 @@ def _from_import_violations(sources, dirs: set[str], importers: list[str]) -> tu
             elif base in dirs:
                 continue
             else:
-                violations.append((importer, node.module))
+                violations.append((importer, module))
                 continue
             defined, opaque = namespace_of(module_path)
             if opaque:
                 continue
-            for alias in node.names:
-                name = alias.name
+            for name in names:
                 if name == "*" or name in defined:
                     continue
                 if is_package and (
@@ -1219,7 +1243,7 @@ def _from_import_violations(sources, dirs: set[str], importers: list[str]) -> tu
                     or f"{base}/{name}" in dirs
                 ):
                     continue
-                violations.append((importer, f"{node.module}.{name}"))
+                violations.append((importer, f"{module}.{name}"))
     return examined, violations
 
 

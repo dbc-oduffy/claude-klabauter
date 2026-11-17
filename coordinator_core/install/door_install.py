@@ -1180,6 +1180,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     # (last writer wins, and both writers agree on the same content for
     # the same `engine_root`).
     door_build.write_sidecar(dest_exe, engine_root)
+    door_build.write_python_sidecar(dest_exe)
 
     relinked = _relink_names_stranded_on(bin_dst, dest_exe, prior_identity)
     if sys.platform == "win32" and windowless_dest.exists():

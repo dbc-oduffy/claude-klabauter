@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from ._git_template import copy_repo, template_repo
+
 pytestmark = pytest.mark.complete
 
 _BIN_DIR = Path(__file__).resolve().parents[1]
@@ -54,9 +56,7 @@ def _managed_temp_under_tmp_path(tmp_path, monkeypatch):
     (tmp_path / "tmp").mkdir()
 
 
-@pytest.fixture()
-def repo(tmp_path):
-    root = tmp_path / "repo"
+def _build(root: Path) -> None:
     for rel in _CHAIN_FILES:
         f = root / rel
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -75,7 +75,21 @@ def repo(tmp_path):
     _git(root, "init", "-q")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "init")
-    return root
+
+
+@pytest.fixture(scope="session")
+def chain_template(tmp_path_factory):
+    return template_repo(tmp_path_factory, "percolate-chain-pin:base", _build)
+
+
+@pytest.fixture(scope="session")
+def head_sha(chain_template):
+    return _git(chain_template, "rev-parse", "HEAD")
+
+
+@pytest.fixture()
+def repo(tmp_path, chain_template):
+    return copy_repo(chain_template, tmp_path / "repo")
 
 
 @pytest.fixture()
@@ -102,9 +116,9 @@ def _main(rnd, argv):
 
 
 @pytest.mark.parametrize("rel", _CHAIN_FILES)
-def test_dirty_chain_file_runs_the_round_from_a_clone_at_head(rnd, repo, delegations, rel):
+def test_dirty_chain_file_runs_the_round_from_a_clone_at_head(rnd, repo, head_sha, delegations, rel):
     (repo / rel).write_text("PINNED = 'dirty'\n")
-    sha = _git(repo, "rev-parse", "HEAD")
+    sha = head_sha
     assert _main(rnd, ["alpha", "--no-publish"]) == 7
     clone, entry_rel, argv = delegations[0]
     assert clone == repo.parent / "cache" / sha
@@ -114,16 +128,16 @@ def test_dirty_chain_file_runs_the_round_from_a_clone_at_head(rnd, repo, delegat
     assert (repo / rel).read_text() == "PINNED = 'dirty'\n"
 
 
-def test_source_ref_names_the_commit_the_clone_is_cut_at(rnd, repo, delegations):
-    first = _git(repo, "rev-parse", "HEAD")
+def test_source_ref_names_the_commit_the_clone_is_cut_at(rnd, repo, head_sha, delegations):
+    first = head_sha
     (repo / "README.md").write_text("later\n")
     _git(repo, "commit", "-qam", "later")
     assert _main(rnd, ["alpha", "--source-ref", first]) == 7
     assert delegations[0][0].name == first
 
 
-def test_a_ref_this_repo_lacks_falls_back_to_head(rnd, repo, delegations):
-    head = _git(repo, "rev-parse", "HEAD")
+def test_a_ref_this_repo_lacks_falls_back_to_head(rnd, repo, head_sha, delegations):
+    head = head_sha
     assert _main(rnd, ["alpha", "--source-ref", "no-such-branch"]) == 7
     assert delegations[0][0].name == head
 
@@ -141,7 +155,7 @@ def test_clone_failure_refuses_before_any_step(rnd, repo, delegations, monkeypat
 
 
 def test_a_materialise_failure_refuses_with_a_runnable_retry_and_runs_no_live_tree_code(
-    rnd, repo, delegations, monkeypatch, capsys
+    rnd, repo, head_sha, delegations, monkeypatch, capsys
 ):
     commit_clone = rnd._commit_clone_module()
 
@@ -153,7 +167,7 @@ def test_a_materialise_failure_refuses_with_a_runnable_retry_and_runs_no_live_tr
     monkeypatch.setattr(rnd, "_cmd_round", lambda args: pytest.fail("live-tree round ran after a refusal"))
     assert _main(rnd, ["alpha"]) == rnd._EXIT_FAIL
     err = capsys.readouterr().err
-    sha = _git(repo, "rev-parse", "HEAD")
+    sha = head_sha
     assert "commit clone" in err and "disk full" in err and "nothing ran from the live tree" in err
     assert f'commit_clone.py" materialise {sha}' in err
     assert delegations == []
@@ -174,11 +188,9 @@ def test_inside_the_clone_the_chain_is_that_checkout_and_the_live_repo_stays_the
     assert in_clone._live_repo_root() == repo
 
 
-def test_inside_a_clone_main_does_not_delegate_again(rnd, repo, delegations, monkeypatch):
+def test_inside_a_clone_main_does_not_delegate_again(rnd, repo, head_sha, delegations, monkeypatch):
     commit_clone = rnd._commit_clone_module()
-    clone = commit_clone.materialise_commit_clone(
-        repo, _git(repo, "rev-parse", "HEAD"), repo.parent / "cache"
-    )
+    clone = commit_clone.materialise_commit_clone(repo, head_sha, repo.parent / "cache")
     in_clone = _load(clone / _ENTRY, "percolate_round_inside_clone_main")
     ran: list = []
     monkeypatch.setattr(in_clone, "_bootstrap_engine", lambda: ran.append("bootstrap"))

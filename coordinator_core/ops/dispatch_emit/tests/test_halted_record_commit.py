@@ -251,3 +251,28 @@ def test_a_halt_without_a_prep_key_records_no_prep_reply(repo):
     from coordinator_core.ops.dispatch_emit.halted_record_commit import HALT_PREP_REPLY_FIELD
 
     assert HALT_PREP_REPLY_FIELD not in _halt_marker(repo, {"halted": "refusal", "reason": "r"})
+
+
+def test_peer_hunk_pass_still_refuses_a_non_coarse_refused_candidate(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_record_commit
+
+    monkeypatch.setattr(
+        halted_record_commit, "_candidate_for", lambda *a, **k: {"refused": "unknown", "foreign": [{"lines": [1]}]}
+    )
+
+    refused, named = halted_record_commit._peer_hunks_excluded(repo, RUN, ["pkg/x.py"], {})
+
+    assert refused == ["pkg/x.py"]
+    assert named == {"foreign_hunks": {"pkg/x.py": [{"lines": [1]}]}}
+
+
+def test_peer_hunk_pass_skips_a_coarse_refused_candidate(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_record_commit
+
+    monkeypatch.setattr(
+        halted_record_commit, "_candidate_for", lambda *a, **k: {"refused": "coarse", "foreign": [{"lines": [1]}]}
+    )
+
+    refused, _named = halted_record_commit._peer_hunks_excluded(repo, RUN, ["pkg/x.py"], {})
+
+    assert refused == []

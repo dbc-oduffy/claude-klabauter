@@ -11,7 +11,8 @@ Shared layer (imported by the family modules, never the reverse):
 Family layer:
   _dc_git_misc     check_no_verify, check_destructive_git_orphan,
                    check_destructive_git_clean, check_destructive_git_revert
-  _dc_rm           check_destructive_rm, check_stale_write
+  _dc_rm           check_destructive_rm (helpers: destructive_rm_support;
+                   check_stale_write: stale_write_guard)
   _dc_blanket_add  check_blanket_git_add
   _dc_commit       check_validate_commit, check_git_commit_safe_commit_advise
   _dc_rewrites     find/grep/sed/heredoc rewrites and advisories, multiprobe banner,
@@ -261,7 +262,8 @@ from coordinator_core.bash_guards._dc_git_misc import (
     check_destructive_git_revert_advisory,
     check_no_verify,
 )
-from coordinator_core.bash_guards._dc_rm import (
+from coordinator_core.bash_guards._dc_rm import check_destructive_rm
+from coordinator_core.bash_guards.destructive_rm_support import (
     _HOME_VAR_RE,
     _PS_RECURSE_NAME,
     _RM_CMD_RE,
@@ -273,9 +275,10 @@ from coordinator_core.bash_guards._dc_rm import (
     _ps_recurse_flag,
     _rm_flush_touch,
     _rm_is_rm_segment,
+)
+from coordinator_core.bash_guards.stale_write_guard import (
     _stale_write_family_claim,
     _stale_write_shape_candidates,
-    check_destructive_rm,
     check_stale_write,
 )
 from coordinator_core.bash_guards._dc_blanket_add import (

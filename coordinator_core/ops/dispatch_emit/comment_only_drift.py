@@ -16,6 +16,7 @@ from typing import Collection, Mapping, Optional, Sequence
 
 from coordinator_core.comment_strip.lang_python import proof_equivalent
 from coordinator_core.git.content_hash import eol_folded_sha256
+from coordinator_core.ops.pre_review_dir import pre_review_dir
 
 _SIDECAR_SUFFIX = ".review-prep.md"
 
@@ -54,7 +55,7 @@ def reviewed_preimages(
     name = sidecar.name
     if not name.endswith(_SIDECAR_SUFFIX):
         return {}
-    snap = sidecar.parent / f"{name[: -len(_SIDECAR_SUFFIX)]}.pre-review"
+    snap = pre_review_dir(sidecar.parent, name[: -len(_SIDECAR_SUFFIX)])
     try:
         files = json.loads((snap / "manifest.json").read_text(encoding="utf-8")).get("files")
     except (OSError, ValueError, AttributeError):

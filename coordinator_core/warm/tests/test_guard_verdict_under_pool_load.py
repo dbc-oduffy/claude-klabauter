@@ -95,26 +95,25 @@ def _no_journal_serialisation(monkeypatch: pytest.MonkeyPatch) -> None:
 def _warm_serve_path(tmp_path: Path) -> None:
     """Serve each op kind once so first-call imports (data_root, tomllib, dispatch_emit) land before a
     measured leg: a warm server has them resident, and a cold import under peer load alone misses the bar."""
-    server_body = server._pool_dispatch_worker_body
-    server._pool_dispatch_worker_body = lambda msg, caller: {
-        "jsonrpc": "2.0", "id": msg.get("id"), "result": {"ok": 1}
-    }
-    telemetry_flush = telemetry.flush_requests
-    telemetry.flush_requests = lambda *_a, **_k: None
-    ctx = server._ServerContext(
-        name="pipe-warm", sid="sid-warm", version_state=_VersionState(), engine_root=tmp_path
-    )
-    ctx._claim_dir = tmp_path / "claims"
-    ctx._claim_dir.mkdir()
-    ctx._dispatch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-    try:
-        for op in (_GUARD_OP, "hooks.preuse_bash_dispatch", _HOLD_OP):
-            ctx._serve_queued(_FakeIO(op, 1), (time.time(), 0), lane="worker")
-    finally:
-        ctx._dispatch_pool.shutdown(wait=True, cancel_futures=True)
-        server._pool_dispatch_worker_body = server_body
-        telemetry.flush_requests = telemetry_flush
-        telemetry._REQUESTS.clear()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            server,
+            "_pool_dispatch_worker_body",
+            lambda msg, caller: {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"ok": 1}},
+        )
+        patch.setattr(telemetry, "flush_requests", lambda *_a, **_k: None)
+        ctx = server._ServerContext(
+            name="pipe-warm", sid="sid-warm", version_state=_VersionState(), engine_root=tmp_path
+        )
+        ctx._claim_dir = tmp_path / "claims"
+        ctx._claim_dir.mkdir()
+        ctx._dispatch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        try:
+            for op in (_GUARD_OP, "hooks.preuse_bash_dispatch", _HOLD_OP):
+                ctx._serve_queued(_FakeIO(op, 1), (time.time(), 0), lane="worker")
+        finally:
+            ctx._dispatch_pool.shutdown(wait=True, cancel_futures=True)
+            telemetry._REQUESTS.clear()
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -383,3 +382,18 @@ def test_ambient_plugin_root_is_resolved_once_and_a_caller_sent_root_wins(monkey
     sent = {"plugin_root": "/sent"}
     assert server._with_cached_plugin_root(sent) is sent
     assert len(calls) == 1
+
+
+def test_ambient_plugin_root_is_re_resolved_only_after_its_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.subagent_sandbox import provision_report
+
+    roots = iter(["/first", "/second"])
+    monkeypatch.setattr(provision_report, "resolve_plugin_root", lambda: next(roots))
+    monkeypatch.setattr(server, "_ambient_plugin_root", None)
+    clock = [1000.0]
+    monkeypatch.setattr(server.time, "monotonic", lambda: clock[0])
+    assert server._with_cached_plugin_root(None) == {"plugin_root": "/first"}
+    clock[0] += server._AMBIENT_PLUGIN_ROOT_TTL_SECS - 1
+    assert server._with_cached_plugin_root(None) == {"plugin_root": "/first"}
+    clock[0] += 2
+    assert server._with_cached_plugin_root(None) == {"plugin_root": "/second"}

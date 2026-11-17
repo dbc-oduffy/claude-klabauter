@@ -217,11 +217,13 @@ def _relay_fields(params: Mapping, count: int) -> list[tuple[Optional[str], Opti
     return out
 
 
-def _context_fields(params: Mapping, count: int) -> list[tuple[Optional[str], tuple[str, ...]]]:
+def _context_fields(
+    params: Mapping, count: int, appended: Optional[Mapping[int, str]] = None,
+) -> list[tuple[Optional[str], tuple[str, ...]]]:
     """Per ask item (prose block, context paths) from its `em_context` and `context`; asks arm only.
 
-    The prose block is `em_context` then the prose `context` entries under one EM-context marker;
-    path-shaped `context` entries are returned stripped. Both None/() when the item carries neither."""
+    The prose block is `em_context` then the prose `context` entries under one EM-context marker,
+    then any `appended` text (a pm item's text outside its recorded turn); path-shaped `context` entries are returned stripped. Both None/() when the item carries neither."""
     raw = params.get("asks")
     if raw is None:
         return [(None, ())] * count
@@ -244,6 +246,8 @@ def _context_fields(params: Mapping, count: int) -> list[tuple[Optional[str], tu
                 if not entry.strip():
                     continue
                 (paths if is_path_shaped(entry) else prose).append(entry.strip())
+        if appended and appended.get(i):
+            prose.append(appended[i])
         block = with_em_context(None, "\n".join(prose)) if prose else None
         out.append((block, tuple(paths)))
     return out
@@ -324,12 +328,27 @@ def _matching_turn(ask: str, recorded: list[dict]) -> Optional[dict]:
     return None
 
 
+def _split_pm_ask(ask: str, recorded: list[dict]) -> tuple[Optional[dict], str]:
+    """(turn, remainder) for a pm item: the turn its text equals (remainder empty), else the newest
+    recorded turn its text contains whitespace-normalised, with the text around it as the remainder."""
+    hit = _matching_turn(ask, recorded)
+    if hit:
+        return hit, ""
+    for turn in recorded:
+        words = turn["text"].split()
+        found = re.search(r"\s+".join(map(re.escape, words)), ask) if words else None
+        if found:
+            return turn, f"{ask[:found.start()]}\n{ask[found.end():]}".strip()
+    return None, ""
+
+
 def _slice_turns(sl: contract.AskSlice, recorded: list[dict]) -> list[dict]:
     """The turns one asks item carries: only an explicit `pm` item binds, to the recorded turn its text
-    equals; an unmarked or relayed item, or a pm item matching no turn, carries none and is stamped relayed."""
+    equals or contains; an unmarked or relayed item, or a pm item matching no turn, carries none and is
+    stamped relayed."""
     if sl.source != ASK_SOURCE_PM:
         return []
-    hit = _matching_turn(sl.ask, recorded)
+    hit = _split_pm_ask(sl.ask, recorded)[0]
     return [hit] if hit else []
 
 
@@ -817,7 +836,9 @@ def _fanout(
     for i in pm_items:
         if not parent_turns and not _slice_turns(slices[i], recorded):
             raise _Refused(
-                f"asks[{i}]: source pm, but its text equals no PM turn this session recorded. "
+                f"asks[{i}]: source pm, but its text holds no PM turn this session recorded. "
+                "Accepted pm shape: ask = the recorded PM turn verbatim, optionally with slice text "
+                "appended or prepended (that text goes to the slice's context). "
                 "Mark it relayed, or submit from the session the PM spoke in."
             )
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -853,7 +874,12 @@ def _fanout(
 
     relay = _relay_fields(params, len(slices))
     route_prefs = _route_fields(params, len(slices))
-    contexts = _context_fields(params, len(slices))
+    appended = {
+        i: _split_pm_ask(sl.ask, recorded)[1]
+        for i, sl in enumerate(slices)
+        if sl.source == ASK_SOURCE_PM and not parent_turns
+    }
+    contexts = _context_fields(params, len(slices), appended)
     stop_afters = _stop_after_fields(params, len(slices))
 
     sources = None

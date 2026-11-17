@@ -57,7 +57,10 @@ def test_freshness_present_only_when_record_exists(tmp_path, monkeypatch, capsys
 
 def test_unstamped_box_still_reports_key(tmp_path, monkeypatch, capsys):
     make_box(tmp_path, monkeypatch, stamp=None)
-    rows = run_roster(load("relay_c", "unimatrix-relay.py"), tmp_path, monkeypatch, capsys)
+    relay = load("relay_c", "unimatrix-relay.py")
+    # The last fallback root is the checkout this copy sits in; a published mirror carries a real stamp there.
+    monkeypatch.setattr(relay, "_engine_roots", lambda: iter([tmp_path / "engine"]))
+    rows = run_roster(relay, tmp_path, monkeypatch, capsys)
     assert "engine_sha" in rows[0] and rows[0]["engine_sha"] is None
 
 

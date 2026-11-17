@@ -79,9 +79,16 @@ def test_bash_write_to_a_doctrine_surface_is_denied(command, cwd) -> None:
         HEREDOC,
     ],
 )
-def test_fresh_sentinel_admits_the_write(command, cwd) -> None:
+def test_fresh_sentinel_admits_the_write_with_an_expiry_advisory(command, cwd) -> None:
+    from coordinator_core.write_guards._doctrine_edit_sentinel import admit_until
+
     (cwd / ".git" / SENTINEL_BASENAME).write_text("")
-    assert _run(command, cwd=cwd) is None
+    result = _run(command, cwd=cwd)
+    hso = result["hookSpecificOutput"]
+    assert "permissionDecision" not in hso
+    assert f"until {admit_until(str(cwd))}" in hso["additionalContext"]
+    assert "Nothing to clean up" in hso["additionalContext"]
+    assert SENTINEL_BASENAME not in hso["additionalContext"]
 
 
 def test_stale_sentinel_still_denies(cwd) -> None:
@@ -125,7 +132,8 @@ def test_gate_on_denies_and_a_fresh_sentinel_admits(monkeypatch: pytest.MonkeyPa
     machine_profile.reset_cache()
     assert _denied(_run(HEREDOC, cwd=cwd))
     (cwd / ".git" / SENTINEL_BASENAME).write_text("")
-    assert _run(HEREDOC, cwd=cwd) is None
+    admitted = _run(HEREDOC, cwd=cwd)
+    assert "permissionDecision" not in admitted["hookSpecificOutput"]
 
 
 def test_any_repos_existing_claude_md_is_denied(tmp_path: Path, cwd) -> None:

@@ -182,6 +182,7 @@ def _stranded_token(root: Path, age_s: float) -> None:
     warp_live.record_submission(
         root, RUN_ID, session_id="sess-real-emit", transcript_path=None, script_path=SCRIPT, sizing_rel=SIZING, tool_use_id=None
     )
+    (root / "state" / "warp" / RUN_ID).mkdir(parents=True, exist_ok=True)
     path = run_token._record_path(root, RUN_ID)
     record = json.loads(path.read_text(encoding="utf-8"))
     record["minted_at"] = time.time() - age_s

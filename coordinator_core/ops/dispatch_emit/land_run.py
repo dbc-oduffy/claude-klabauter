@@ -160,6 +160,9 @@ _SIZING_OBJECT_RESOLUTION = re.compile(r"^[0-9a-f]{7,64}$")
 SCRIPT_READ_LEG = "land_run.script_read"
 
 
+SUBJECT_DECLARED_UNATTRIBUTED = "subject-declared-write-unattributed"
+
+
 def _error(message: str, **extra: object) -> dict:
     return {"committed": False, "sha": None, "error": message, **extra}
 
@@ -344,7 +347,12 @@ def _queue_for_resume(mode: str, root: Path, params: dict, exc: land_deadline.La
 
         from coordinator_core.ops.dispatch_emit import land_resume
 
-        if not land_resume.enqueue(None, run_id, params, exc.leg):
+        from coordinator_core.ops.dispatch_emit.clean_overlay_verify import (
+            REVERIFY_RESUME_DELAY_SECS, REVERIFY_STEP,
+        )
+
+        delay = REVERIFY_RESUME_DELAY_SECS if exc.leg == REVERIFY_STEP else 0.0
+        if not land_resume.enqueue(None, run_id, params, exc.leg, delay):
             return False
         entry = land_resume.load(None, run_id)
         return entry is not None and not land_resume.expired(entry, time.time())
@@ -1260,15 +1268,52 @@ def _subject_rows_left(contributing: Sequence, manifest, left_paths: Sequence[st
     dirty after the commit and is not already reported unlanded. A row owns a path through its chunk paths
     or the manifest row's writes. Pure over the porcelain read already taken."""
     known = {(row, p) for row, p, _r in unlanded}
-    rows: dict = {c.id: set(c.paths) for c in contributing}
-    for mrow in (manifest.rows if manifest is not None else ()):
-        if mrow.id in rows:
-            rows[mrow.id] |= set(mrow.writes)
+    rows = _subject_owned(contributing, manifest)
     reason = "declared write left dirty after the commit"
     return [
         (row, p, reason) for row, owned in sorted(rows.items()) for p in left_paths
         if p in owned and (row, p) not in known
     ]
+
+
+def _subject_owned(contributing: Sequence, manifest) -> dict:
+    """``{row id: owned paths}`` for each subject-named row: its chunk paths plus the manifest row's writes."""
+    rows: dict = {c.id: set(c.paths) for c in contributing}
+    for mrow in (manifest.rows if manifest is not None else ()):
+        if mrow.id in rows:
+            rows[mrow.id] |= set(mrow.writes)
+    return rows
+
+
+def _process_state(rel: str) -> bool:
+    """True for a path in a corpus the run machinery itself writes."""
+    if not rel.startswith("state/"):
+        return False
+    parts = rel.split("/")
+    return len(parts) < 3 or parts[1] in _PROCESS_STATE_CORPORA
+
+
+def _subject_product_paths(contributing: Sequence, manifest) -> set:
+    """Every product path (not run record, process state or never-commit) a subject-named row owns."""
+    from coordinator_core.ops.ceremony.commit_gates import is_never_commit
+
+    skip = (RECORD_DIR_ROOT.rstrip("/") + "/", RUN_DIR_ROOT.rstrip("/") + "/")
+    return {
+        p for ps in _subject_owned(contributing, manifest).values() for p in ps
+        if p and not p.startswith(skip) and not _process_state(p) and not is_never_commit(p)
+    }
+
+
+def _subject_dirty_left(
+    root: Path, contributing: Sequence, manifest, landing: Collection[str], barred: Collection[str],
+) -> list:
+    """Sorted product paths a subject-named row owns that are dirty, present, and neither in ``landing`` nor
+    in ``barred`` (a named withhold or a peer's hold)."""
+    owned = sorted(p for p in _subject_product_paths(contributing, manifest) if p not in landing and p not in barred)
+    if not owned:
+        return []
+    changed, ignored, _head = _dirty_among(root, owned)
+    return [p for p in owned if p in changed and p not in ignored and (root / p).is_file()]
 
 
 def _manifest_declared(manifest_abs: Optional[Path]) -> tuple[list, Optional[str]]:
@@ -1283,17 +1328,11 @@ def _manifest_declared(manifest_abs: Optional[Path]) -> tuple[list, Optional[str
         return [], None
     skip = (RECORD_DIR_ROOT.rstrip("/") + "/", RUN_DIR_ROOT.rstrip("/") + "/")
 
-    def process_state(rel: str) -> bool:
-        if not rel.startswith("state/"):
-            return False
-        parts = rel.split("/")
-        return len(parts) < 3 or parts[1] in _PROCESS_STATE_CORPORA
-
     paths: list = []
     for row in rows if isinstance(rows, list) else ():
         writes = row.get("writes") if isinstance(row, dict) else None
         for w in writes if isinstance(writes, list) else ():
-            if isinstance(w, str) and w and not w.startswith(skip) and not process_state(w) and w not in paths:
+            if isinstance(w, str) and w and not w.startswith(skip) and not _process_state(w) and w not in paths:
                 paths.append(w)
     head = data.get("head_sha")
     return paths, head if isinstance(head, str) and _SHA40.fullmatch(head) else None
@@ -3237,6 +3276,106 @@ LANDING_TREE_DIFFERS = "landing-tree-differs-from-measured"
 VERIFY_OVERLAY_RED = "verify-overlay-red"
 VERIFY_OVERLAY_UNVERIFIED = "verify-overlay-unverified"
 _TRAILER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*: ")
+NEW_RED = "new-red"
+_NEW_RED_BUDGET_S = 100.0
+_NEW_RED_SHOWN = 10
+_TEST_GLOBS = (":(glob)**/test_*.py", ":(glob)**/*_test.py")
+
+
+def _post_land_commit(
+    root: Path, head: str, touched: Sequence[str], deleted: Sequence[str], blobs: Mapping[str, str],
+) -> str:
+    """A dangling commit on `head` carrying the landing's bytes (`blobs` where supplied, else the worktree bytes
+    of each `touched` path; `deleted` removed), built in a throwaway index so neither the real index nor any ref
+    moves. The shared-clone mirror reads it through the object alternates. Raises `ExportError` on a git failure."""
+    import tempfile
+
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    git = cov._git_exe()
+    with tempfile.TemporaryDirectory(prefix="new-red-") as tmp:
+        ident = {f"GIT_{k}_{f}": v for k in ("AUTHOR", "COMMITTER") for f, v in (("NAME", "land-gate"), ("EMAIL", "land-gate@localhost"))}
+        env = {**os.environ, **ident, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+
+        def g(args: list, stdin: Optional[str] = None) -> str:
+            out = cov._run([git, *args], root, cov.TEST_TIMEOUT_S, env=env, stdin_text=stdin)
+            if out.returncode:
+                raise cov.ExportError(f"git {args[0]} failed: {out.stderr.strip()[-300:]}")
+            return out.stdout.strip()
+
+        g(["read-tree", head])
+        supplied = [p for p in touched if p in blobs]
+        worktree = [p for p in touched if p not in blobs and (root / p).is_file()]
+        gone = [*deleted, *(p for p in touched if p not in blobs and not (root / p).is_file())]
+        if supplied:
+            g(["update-index", "-z", "--add", "--index-info"], "".join(f"100644 {blobs[p]}\t{p}\0" for p in supplied))
+        if worktree:
+            g(["update-index", "-z", "--add", "--replace", "--stdin"], "".join(f"{p}\0" for p in worktree))
+        if gone:
+            g(["update-index", "-z", "--force-remove", "--stdin"], "".join(f"{p}\0" for p in gone))
+        tree = g(["write-tree"])
+        return g(["commit-tree", "--no-gpg-sign", tree, "-p", head, "-m", "land-gate post-land tree"])
+
+
+def _tests_could_run(root: Path, head: str, py: Sequence[str]) -> bool:
+    """False only when no touched path is a test file and no tracked test file at `head` names a touched module:
+    the leg's target set is then empty, so no clone is built. A failed scan answers True."""
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    if any(cov._is_test_path(p) for p in py):
+        return True
+    stems = sorted(
+        {PurePosixPath(p).stem for p in py} - {"__init__", "__main__", "conftest"}
+    )
+    if not stems:
+        return False
+    argv = [cov._git_exe(), "grep", "-l", "-q", "-w", "-F", *(a for s in stems for a in ("-e", s)), head, "--", *_TEST_GLOBS]
+    return cov._run(argv, root, cov.TEST_TIMEOUT_S).returncode != 1
+
+
+def _new_red_gate(
+    root: Path, touched: Sequence[str], deleted: Sequence[str], blobs: Mapping[str, str],
+) -> dict:
+    """The test leg over the landing's python paths: their tests plus each module's direct importers, run in the
+    shared-clone mirror at the post-land tree and re-run at the pre-land tip. `{}` when nothing could run;
+    otherwise `new_red` (node ids red post-land and green at the tip, normalized), `pre_existing`,
+    `importer_targets`, `targets_run`, and `advisory` when the leg could not measure (clone, timeout,
+    interpreter): an unmeasured landing proceeds, never refuses. A bulk test, outside the op budget."""
+    from coordinator_core.ops import test_leg_run
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    py = sorted({p.replace("\\", "/") for p in (*touched, *deleted) if p.endswith(".py")})
+    if not py:
+        return {}
+    try:
+        with land_deadline.excepted():
+            head = cov._commit_sha(root, "HEAD")
+            if not _tests_could_run(root, head, py):
+                return {}
+            post = _post_land_commit(root, head, touched, deleted, blobs)
+            result = test_leg_run.run(
+                [], base_sha=head, head_sha=post, base_export_out=None, budget_s=_NEW_RED_BUDGET_S,
+                cwd=str(root), touched=py,
+            )
+    except Exception as exc:  # noqa: BLE001 -- an unmeasurable gate never refuses a recoverable landing
+        return {"new_red": [], "advisory": f"new-red gate not run: {type(exc).__name__}: {exc}"[:300], "base": ""}
+    out = {
+        "base": head, "new_red": list(result.get("new_red") or []), "pre_existing": list(result.get("pre_existing") or []),
+        "importer_targets": list(result.get("importer_targets") or []), "targets_run": list(result.get("targets_run") or []),
+    }
+    if result.get("over_budget") or (result.get("status_after") == "fail" and not out["new_red"] and not out["pre_existing"]):
+        detail = result.get("summary") or "; ".join(str(d.get("message")) for d in result.get("failing_detail") or [])
+        out["advisory"] = f"new-red gate unmeasured: {detail}"[:300]
+    return out
+
+
+def _new_red_refusal(gate: dict) -> str:
+    ids = gate["new_red"]
+    shown = ", ".join(ids[:_NEW_RED_SHOWN]) + (f" (+{len(ids) - _NEW_RED_SHOWN} more)" if len(ids) > _NEW_RED_SHOWN else "")
+    return (
+        f"landing refused: {len(ids)} test node id(s) red after this landing and green at the pre-land tip "
+        f"{gate['base'][:12]}: {shown}. Fix the change or the test, then re-land."
+    )
 
 
 def _verify_reach_dirt(root: Path, record: dict, product: Sequence[str], deleted: Sequence[str]) -> dict:
@@ -4352,6 +4491,27 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             "workflow.revise withhold_paths",
             refused="own-post-checkpoint-hunks-unclaimed", paths=unclaimed,
         )
+    subject_now = set(paths) | set(deleted)
+    subject_left = _subject_dirty_left(
+        root,
+        [c for c in credited_chunks if any(p in subject_now for p in [*c.paths, *(_own_prefix_files(root, c, cache) or [])])],
+        manifest, subject_now, {*named_out, *foreign_held, *halted_clear, *peer_held},
+    )
+    if subject_left:
+        run_covers = _run_owned(root, art_run_id, sibling_run_id).covers
+        subject_own = {p for p in subject_left if run_covers(p)}
+        subject_own |= set(_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review)(
+            [p for p in subject_left if p not in subject_own]
+        ))
+        subject_foreign = [p for p in subject_left if p not in subject_own and not _peer_dirt_only(root, p, run_baseline)]
+        if subject_foreign:
+            _reap_measured_export(root, measured_run)
+            return _error(
+                f"landing refused: {', '.join(subject_foreign)} declared by a subject-named row and dirty, "
+                "with bytes the run did not write. Revert them or withhold them: workflow.revise withhold_paths",
+                refused=SUBJECT_DECLARED_UNATTRIBUTED, paths=subject_foreign,
+            )
+        paths.extend(p for p in subject_left if p in subject_own)
     if token_state.get("since_halt_close") is not None and not candidates and not (set(deleted) - set(art_deleted)):
         _exclude_withheld()
         return {
@@ -4731,14 +4891,21 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             from coordinator_core.ops.dispatch_emit import sibling_claims
 
             remedy += ". " + sibling_claims.reland_remedy(warp_run_deliverable.record_sizing_rel(root, sibling_run_id))
-        from coordinator_core.ops.dispatch_emit.landing_targeted_tests import retest_step
+        from coordinator_core.ops.dispatch_emit.landing_targeted_tests import _is_await, retest_step
 
+        waiting = _li_claims.retest_await(findings, params)
+        if waiting and all(_is_await(f) for f in findings):
+            return _error(
+                f"landing awaiting the run's retest verdict; poll: {waiting['poll']} --wait",
+                refused=None, awaiting=waiting, remedy_step=None,
+                integrity=[{"path": f.path, "reason": f.reason, "detail": f.detail} for f in findings],
+            )
         return _error(
             f"landing refused {first.reason}: {first.path} ({first.detail}){remedy}",
             refused=first.reason,
             integrity=[{"path": f.path, "reason": f.reason, "detail": f.detail} for f in findings],
             remedy_step=retest_step(findings, params),
-            **({"awaiting": waiting} if (waiting := _li_claims.retest_await(findings, params)) else {}),
+            **({"awaiting": waiting} if waiting else {}),
         )
 
     reach_summary: dict = {}
@@ -5161,6 +5328,14 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     abs_outcome = abs_path_citation_gate(root, list(commit_set), _worktree_bytes)
     abs_path_advisory: list = [] if abs_outcome.passed else list(abs_outcome.diagnostics[:5])
 
+    new_red_gate: dict = {}
+    if merge_plan is None:
+        new_red_gate = _new_red_gate(root, sorted(commit_set), list(commit_deleted), settled_blobs)
+        if new_red_gate.get("new_red"):
+            _remove(root, receipt_paths)
+            _reap_measured_export(root, measured_run)
+            return _error(_new_red_refusal(new_red_gate), refused=NEW_RED, new_red=new_red_gate["new_red"])
+
     try:
         land_deadline.check("land_run.commit")
     except land_deadline.LandDeadlineExceeded:
@@ -5298,7 +5473,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     gap_dirty: set = set()
     reply_left_rows: list = []
     review_code = list(manifest.review_code_paths) if manifest is not None else []
-    gap_literals = list(dict.fromkeys([*review_code, *sorted(declared_writes)]))
+    subject_paths = _subject_product_paths(contributing, manifest)
+    gap_literals = list(dict.fromkeys([*review_code, *sorted(declared_writes), *sorted(subject_paths)]))
     if gap_literals:
         try:
             gap_changed, gap_ignored, _gap_head = _dirty_among(root, gap_literals)
@@ -5307,7 +5483,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             declared_left = {
                 p: "declared write left dirty after the commit, neither landed nor withheld"
                 for p in sorted(gap_dirty)
-                if p in declared_writes and p not in set(review_code) and p not in named_out
+                if (p in declared_writes or p in subject_paths) and p not in set(review_code) and p not in named_out
                 and not (p in halted_clear and p in settled_stage)  # the holder's hunks stay by design
             }
         except Exception:  # noqa: BLE001 -- the commit stands; an unreadable store reports no gap
@@ -5404,6 +5580,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         ]
     reply.update(_fence_reply(fence))
     reply.update(_peer_held_left(peer_held))
+    if new_red_gate:
+        reply["new_red_gate"] = {k: v for k, v in new_red_gate.items() if k != "targets_run"}
     if reach_dirt_foreign:
         reply["reach_dirt_foreign"] = reach_dirt_foreign
         if reach_dirt_overlay:

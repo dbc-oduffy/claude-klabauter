@@ -96,13 +96,16 @@ def _slug(text: str) -> str:
 
 
 def worker_branch(agent: str, host: str, date: str) -> str:
-    """`work/<host>/worker-<agent>-<date>`; raises ValueError for an unknown agent or an empty host or date."""
+    """`<owner>/<host>/worker-<agent>-<date>`, owner from `compute_owner()`; raises ValueError for an unknown agent or an empty host or date."""
+    from coordinator_core.daily_branch import day_branch_name
+    from coordinator_core.machine_resolver import compute_owner
+
     if agent not in WORKER_ARGV:
         raise ValueError(f"unknown worker agent: {agent!r}")
     host_slug, date_slug = _slug(host), _slug(date)
     if not host_slug or not date_slug:
         raise ValueError("worker branch needs a non-empty host and date")
-    return f"work/{host_slug}/worker-{agent}-{date_slug}"
+    return day_branch_name(compute_owner(), host_slug, f"worker-{agent}-{date_slug}")
 
 
 def is_protected_branch(branch: str) -> bool:

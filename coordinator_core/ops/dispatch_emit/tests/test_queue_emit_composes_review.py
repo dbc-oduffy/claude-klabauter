@@ -40,5 +40,8 @@ def test_queue_review_prep_freezes_from_the_emit_time_head(tmp_path: Path, monke
     from coordinator_core.ops.dispatch_emit import queue_emit
 
     monkeypatch.setattr(queue_emit, "head_sha", lambda _repo: "c" * 40)
-    prep = _emit(tmp_path).script.split("const _reviewPrep = ", 1)[1].split("\n", 1)[0]
-    assert "c" * 40 in prep
+    # The prep prompt is built in `_prepAsk` ahead of the `_reviewPrep` bind; the emit-time HEAD is frozen into it.
+    script = _emit(tmp_path).script
+    prep_ask = script.split("const _prepAsk = ", 1)[1].split("\n", 1)[0]
+    assert script.index("const _prepAsk = ") < script.index("const _reviewPrep = ")
+    assert "c" * 40 in prep_ask

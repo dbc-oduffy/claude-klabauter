@@ -277,9 +277,63 @@ def _default_shell_family() -> str:
     return "bash"
 
 
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def _same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def _my_documents_dir() -> Optional[str]:
+    """[Environment]::GetFolderPath('MyDocuments'): follows OneDrive redirection.
+
+    None off Windows, when unresolvable, or when HOME is an explicit redirect
+    away from the real profile (a sandbox or test home keeps its own Documents).
+    """
+    if os.name != "nt":
+        return None
+    home, profile = os.environ.get("HOME"), os.environ.get("USERPROFILE")
+    if home and profile and not _same_path(home, profile):
+        return None
+    try:
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(260)
+        # CSIDL_PERSONAL = 5, SHGFP_TYPE_CURRENT = 0
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:
+            return buf.value
+    except (AttributeError, OSError):
+        pass
+    return None
+
+
 def _powershell_profile_path() -> str:
-    home = _resolve_home()
-    return os.path.join(home, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
+    docs = _my_documents_dir() or os.path.join(_resolve_home(), "Documents")
+    return os.path.join(docs, "PowerShell", "Microsoft.PowerShell_profile.ps1")
+
+
+def _shim_bytes(content: bytes, shell_family: str) -> bytes:
+    """PS 5.1 reads BOM-less files as cp1252, which breaks parsing on non-ASCII
+    bytes, so a PowerShell shim is always utf-8-sig."""
+    if shell_family == "powershell" and not content.startswith(_UTF8_BOM):
+        return _UTF8_BOM + content
+    return content
+
+
+def _ensure_utf8_sig(path: str) -> None:
+    """Prefix a UTF-8 BOM on an existing file lacking one."""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return
+    if data.startswith(_UTF8_BOM):
+        return
+    tmp = f"{path}.bom.{os.getpid()}"
+    with open(tmp, "wb") as fh:
+        fh.write(_UTF8_BOM + data)
+    os.replace(tmp, path)
+    declare_write(path)
 
 
 def _reload_hint(shell_family: str, target_rc: str) -> str:
@@ -402,6 +456,7 @@ def main(argv: List[str]) -> int:
         return 1
 
     expected_source_line = _expected_source_line(shell_family)
+    rc_encoding = "utf-8-sig" if shell_family == "powershell" else "utf-8"
 
     claude_home_base = _resolve_claude_home_base()
     claude_dir = os.path.join(claude_home_base, ".claude")
@@ -467,7 +522,7 @@ def main(argv: List[str]) -> int:
         shim_fresh = False
         try:
             with open(tmpl_path, "rb") as fh:
-                content = fh.read()
+                content = _shim_bytes(fh.read(), shell_family)
             with open(tmp_shim, "wb") as fh:
                 fh.write(content)
             shim_lines = content.count(b"\n")
@@ -491,7 +546,7 @@ def main(argv: List[str]) -> int:
                 pass
 
         if os.path.isfile(target_rc):
-            with open(target_rc, "r", encoding="utf-8", errors="replace") as fh:
+            with open(target_rc, "r", encoding="utf-8-sig", errors="replace") as fh:
                 rc_text = fh.read()
             if SENTINEL_BEGIN in rc_text.split("\n"):
                 body = _extract_sentinel_body(rc_text, SENTINEL_BEGIN, SENTINEL_END)
@@ -546,7 +601,7 @@ def main(argv: List[str]) -> int:
     )
     try:
         with open(tmpl_path, "rb") as fh:
-            content = fh.read()
+            content = _shim_bytes(fh.read(), shell_family)
         with os.fdopen(tmp_fd, "wb") as fh:
             fh.write(content)
         os.replace(tmp_shim, shim_dest)
@@ -566,14 +621,14 @@ def main(argv: List[str]) -> int:
             parent = os.path.dirname(target_rc)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-            open(target_rc, "a", encoding="utf-8", newline="\n").close()
+            open(target_rc, "a", encoding=rc_encoding, newline="\n").close()
         except OSError as exc:
             print(f"{_PROG}: ERROR: Cannot create rc file: {target_rc}: {exc}", file=sys.stderr)
             print("claude_shim: failed (see stderr for gen-claude-author-shim.py output)")
             return 1
         print(f"Created rc file: {target_rc}", file=sys.stderr)
 
-    with open(target_rc, "r", encoding="utf-8", errors="replace") as fh:
+    with open(target_rc, "r", encoding="utf-8-sig", errors="replace") as fh:
         rc_text = fh.read()
 
     rc_block_was_noop = False
@@ -584,6 +639,8 @@ def main(argv: List[str]) -> int:
         if body_trimmed == expected_trimmed:
             print(f"rc {target_rc}: sentinel block unchanged (no-op)", file=sys.stderr)
             rc_block_was_noop = True
+            if shell_family == "powershell":
+                _ensure_utf8_sig(target_rc)
         else:
             print(f"ERROR: sentinel block in {target_rc} has been hand-modified.", file=sys.stderr)
             print(f"  Expected body: {expected_trimmed}", file=sys.stderr)
@@ -603,7 +660,7 @@ def main(argv: List[str]) -> int:
         tmp_rc = f"{target_rc}.tmp.{os.getpid()}"
         try:
             new_block = f"\n{SENTINEL_BEGIN}\n{expected_source_line}\n{SENTINEL_END}\n"
-            with open(tmp_rc, "w", encoding="utf-8", newline="\n") as fh:
+            with open(tmp_rc, "w", encoding=rc_encoding, newline="\n") as fh:
                 fh.write(rc_text)
                 fh.write(new_block)
             os.replace(tmp_rc, target_rc)

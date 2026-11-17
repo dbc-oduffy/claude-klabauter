@@ -37,5 +37,5 @@ def test_halt_next_action_names_the_claim_param(monkeypatch: pytest.MonkeyPatch)
     start = script.index("halted: 'ledger-check'")
     text = script[start : script.index("}; }", start)]
     assert f"{CLAIM_PARAM}: true" in text
-    assert "not in the stage manifest rulable_ids" in text
+    assert "are not open register rows" in text
     assert "workflow.revise" in text

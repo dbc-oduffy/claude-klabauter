@@ -4,7 +4,7 @@ The marker is `halted.json` in the run's record dir. It is rewritten to `resumed
 unlinked: terminal_commit drops record-dir deletions, so an unlinked marker would stay an
 uncommitted tracked deletion. The marker may carry `run_base_sha` (the halted run's review base,
 read by `halted_run_base`); `halted_ask_run_for` finds a halted `ask-*` run naming a sizing.
-`revised_at` is stamped by `mark_revised` when workflow.revise lands on a halted run and read by `revised_halt`. Stdlib plus the atomic writer; no git. A halt over a split dependency tree stamps `live_breakage` and spawns one detached unimatrix-send alert to the live Group EM (`halt_split_tree`); no other subprocess.
+`revised_at` is stamped by `mark_revised` when workflow.revise lands on a halted or resumed run and read by `revised_halt`; `mark_resumed` records the stamp it consumed (`revised_consumed_at`), so a resumed marker holds an unread revision only when `revised_at` differs from it (a marker with no consumed key predates the field and holds none). Stdlib plus the atomic writer; no git. A halt over a split dependency tree stamps `live_breakage` and spawns one detached unimatrix-send alert to the live Group EM (`halt_split_tree`); no other subprocess.
 
 `halted_run_for` skips minted-only shell dirs and re-halts a `resumed` marker whose resumer died unstaged.
 Trap: a live resumer still at `minted` looks the same as a dead one, so a second refire in that window re-halts it
@@ -51,6 +51,7 @@ HALT_RUN_BASE_FIELD = "run_base_sha"
 HALT_REASON_FIELD = "reason"
 HALT_RUN_ARTIFACTS_FIELD = "run_artifacts"
 REVISED_AT_FIELD = "revised_at"
+REVISED_CONSUMED_FIELD = "revised_consumed_at"
 HALT_RELEASED_FIELD = "released"
 HALT_NEXT_ACTION_FIELD = "next_action"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
@@ -833,21 +834,39 @@ def halted_withheld_strict(record_dir: Path) -> dict:
 
 
 def mark_revised(record_dir: Path, at: str) -> bool:
-    """Stamp `revised_at` on a `halted` marker; False and no write when it is absent or not halted."""
+    """Stamp `revised_at` on a `halted` or `resumed` marker; False and no write when it is absent or neither."""
     marker = _read(Path(record_dir))
-    if marker is None or marker.get("status") != STATUS_HALTED:
+    if marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
         return False
     _write(Path(record_dir), {**marker, REVISED_AT_FIELD: at})
     return True
 
 
 def revised_halt(record_dir: Path) -> Optional[str]:
-    """The `revised_at` value while the marker is `halted`, else None. One marker read."""
+    """The `revised_at` value of a `halted` marker, or of a `resumed` one whose stamp the resume never consumed
+    (a revision no replayed stage reads), else None. One marker read."""
     marker = _read(Path(record_dir))
-    if marker is None or marker.get("status") != STATUS_HALTED:
+    if marker is None:
+        return None
+    status = marker.get("status")
+    if status not in (STATUS_HALTED, STATUS_RESUMED):
         return None
     value = marker.get(REVISED_AT_FIELD)
-    return value if isinstance(value, str) and value else None
+    if not isinstance(value, str) or not value:
+        return None
+    if status == STATUS_RESUMED and (REVISED_CONSUMED_FIELD not in marker or marker[REVISED_CONSUMED_FIELD] == value):
+        return None
+    return value
+
+
+def unread_revision_ids(record_dir: Path) -> list:
+    """Ids of the run's notes stamped after the revision the last resume consumed, oldest first; [] when none."""
+    marker = _read(Path(record_dir)) or {}
+    consumed = marker.get(REVISED_CONSUMED_FIELD)
+    since = consumed if isinstance(consumed, str) else ""
+    from coordinator_core.ops.dispatch_emit import run_notes
+
+    return [e["id"] for e in run_notes.live(run_notes.entries(Path(record_dir) / "notes.jsonl", "")) if e["at"] > since]
 
 
 def record_released(record_dir: Path, sha: str, reason: str) -> bool:
@@ -865,7 +884,7 @@ def mark_resumed(record_dir: Path) -> bool:
     marker = _read(Path(record_dir))
     if marker is None or marker.get("status") != STATUS_HALTED:
         return False
-    _write(Path(record_dir), {**marker, "status": STATUS_RESUMED})
+    _write(Path(record_dir), {**marker, "status": STATUS_RESUMED, REVISED_CONSUMED_FIELD: marker.get(REVISED_AT_FIELD) or ""})
     _index_call("remove_run", record_dir)
     _live_index_drop(record_dir)
     return True

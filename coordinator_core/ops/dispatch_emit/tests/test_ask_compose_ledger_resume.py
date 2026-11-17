@@ -11,12 +11,12 @@ import pytest
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _script(monkeypatch) -> str:
+def _script(monkeypatch, *, prompt: str | None = None) -> str:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "s")
     return compose_ask_script(
         repo_root="REPO",
-        prompt=None,
-        sizing_rel="state/sizings/x.yaml",
+        prompt=prompt,
+        sizing_rel=None if prompt else "state/sizings/x.yaml",
         run_id="run-1",
         session_id=None,
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]),
@@ -222,4 +222,5 @@ def test_the_ledger_halt_still_precedes_the_commit_on_the_resume_path(monkeypatc
 
 
 def test_the_gate_reply_prompts_name_resume_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert "resume_rows, resume_ledger, pending_rulings and spine_plan" in _script(monkeypatch)
+    # The gate-reply prompts render only on the size-in-run path (a prompt, no pre-sized sizing).
+    assert "resume_rows, resume_ledger, pending_rulings and spine_plan" in _script(monkeypatch, prompt="do x")

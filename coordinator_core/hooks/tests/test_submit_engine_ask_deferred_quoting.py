@@ -73,7 +73,7 @@ def test_chain_follow_command_feeds_the_params_on_stdin_byte_for_byte(tmp_path):
     assert len(chain_prompts) == 1
     prompt = chain_prompts[0]
     # A quoted heredoc does no expansion, so its body between the tag lines is exactly what the command reads on stdin.
-    opener = re.search(r"--params-file - <<'(\w+)'\n", prompt)
+    opener = re.search(r"<<'(\w+)'[^\n]*\n", prompt)
     assert opener, prompt
     tag = opener.group(1)
     body = prompt[opener.end() :].split(f"\n{tag}\n", 1)[0]

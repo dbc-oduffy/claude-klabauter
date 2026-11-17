@@ -323,6 +323,58 @@ def test_write_over_existing_claude_md_advises(two_roots) -> None:
     assert "always-loaded doctrine" in _context(_write(repo / "CLAUDE.md", "# y\n"))
 
 
+def _admit_payload(target, cwd) -> dict:
+    return {
+        "tool_name": "Write",
+        "session_id": "t",
+        "cwd": str(cwd),
+        "tool_input": {"file_path": str(target), "content": "# y\n"},
+    }
+
+
+def _fresh_sentinel(repo) -> str:
+    from coordinator_core.write_guards._doctrine_edit_sentinel import SENTINEL_BASENAME, admit_until
+
+    (repo / ".git" / SENTINEL_BASENAME).write_text("", encoding="utf-8")
+    until = admit_until(str(repo))
+    assert until
+    return until
+
+
+def test_claude_md_sentinel_admit_names_the_expiry_and_that_nothing_needs_removing(two_roots) -> None:
+    _doe, repo = two_roots
+    (repo / "CLAUDE.md").write_text("x", encoding="utf-8")
+    until = _fresh_sentinel(repo)
+    context = _context(guard.check(_admit_payload(repo / "CLAUDE.md", repo)))
+    assert f"until {until}" in context
+    assert "Nothing to clean up" in context
+    assert "always-loaded doctrine" in context
+
+
+def test_rules_sentinel_admit_names_the_expiry_and_that_nothing_needs_removing(
+    two_roots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _doe, repo = two_roots
+    rules = repo / "rules" / "x.md"
+    rules.parent.mkdir()
+    rules.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(guard, "is_rules_path", lambda target: True)
+    until = _fresh_sentinel(repo)
+    context = _context(guard.check(_admit_payload(rules, repo)))
+    assert f"until {until}" in context
+    assert "Nothing to clean up" in context
+
+
+def test_without_a_sentinel_the_claude_md_edit_is_denied(
+    two_roots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _doe, repo = two_roots
+    (repo / "CLAUDE.md").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(guard, "sentinel_present", lambda cwd: False)
+    result = guard.check(_admit_payload(repo / "CLAUDE.md", repo))
+    assert result["hookSpecificOutput"].get("permissionDecision") == "deny"
+
+
 def test_project_type_only_local_config_write_is_quiet(two_roots) -> None:
     _doe, repo = two_roots
     assert _write(repo / "coordinator.local.md", "project_type: general\n") is None

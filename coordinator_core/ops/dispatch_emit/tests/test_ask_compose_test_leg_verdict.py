@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import (
+    STALL_ONLY_COERCE_JS,
     _test_verdict_empty_halt_js,
     _usage_limit_helper_js,
     compose_ask_script,
@@ -160,6 +161,33 @@ def test_ledger_judge_rules_a_stalled_leg_inconclusive_never_not_met():
     assert "stalled or timed out" in rules
     assert "inconclusive evidence, never grounds for 'not_met'" in rules.replace("\n", " ")
     assert rules.index("inconclusive evidence") < rules.index("otherwise 'not_met'")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_stall_only_not_met_is_coerced_inconclusive_and_other_items_stand():
+    import json
+
+    items = [
+        {"id": "a", "status": "not_met", "stall_only": True, "remaining": ["verify leg"]},
+        {"id": "b", "status": "not_met", "remaining": ["real gap"]},
+        {"id": "c", "status": "not_met", "stall_only": False, "remaining": ["real gap"]},
+        {"id": "d", "status": "met", "stall_only": True},
+    ]
+    program = f"const _ledger = {{ items: {json.dumps(items)} }};\n{STALL_ONLY_COERCE_JS}\nconsole.log(JSON.stringify(_ledger.items));"
+    out = subprocess.run(
+        [shutil.which("node"), "-"], input=program, capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+    got = {i["id"]: i for i in json.loads(out)}
+    assert got["a"]["status"] == "inconclusive" and "remaining" not in got["a"]
+    assert [got[k]["status"] for k in "bcd"] == ["not_met", "not_met", "met"]
+
+
+def test_composed_ledger_normaliser_runs_the_stall_coercion(monkeypatch):
+    script = _script(monkeypatch)
+    assert STALL_ONLY_COERCE_JS in script
+    assert "status === 'drifted' || status === 'inconclusive'" in script
 
 
 def test_usage_limit_halt_still_names_journal_replay():

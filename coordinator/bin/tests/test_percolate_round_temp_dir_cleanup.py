@@ -61,7 +61,7 @@ def round_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespac
     fake.check_source_published = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "coordinator_core.percolate.source_preflight", fake)
 
-    def _default(args, target, root, src, dest, tmp, override=None):
+    def _default(args, target, root, src, dest, tmp, **_kwargs):
         seen["tmp"] = tmp
         assert tmp.is_dir()
         assert tmp.name.startswith(f"percolate-round-{os.getpid()}-")
@@ -70,7 +70,7 @@ def round_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespac
     monkeypatch.setattr(_mod, "_cmd_round_default", _default)
     args = SimpleNamespace(
         target="alpha", percolate_root=None, dest_root=None, source_ref=None,
-        allow_source_rollback=False,
+        allow_source_rollback=False, no_publish=False,
     )
     return SimpleNamespace(args=args, seen=seen, root=tmp_path)
 

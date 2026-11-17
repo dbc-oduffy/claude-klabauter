@@ -79,4 +79,5 @@ def test_checker_refuses_a_name_land_run_halt_does_not_define_at_head():
 
 
 def test_unexecuted_withholds_is_the_halt_commits_own_definition():
-    assert halted_record_commit.unexecuted_withholds.__module__ == halted_record_commit.__name__
+    """The halt commit's reader is `land_run_halt`'s, imported (not redefined) so there is one definition."""
+    assert halted_record_commit.unexecuted_withholds.__module__ == _MODULE

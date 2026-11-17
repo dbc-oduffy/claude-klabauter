@@ -18,7 +18,8 @@ FRESH_SECONDS = 1800
 
 DENY_REASON = (
     "[doctrine-surface guard] EM writes to CLAUDE.md and rules files are denied. "
-    "Alternative: a fresh .coordinator-doctrine-edit-approved in the git dir opens one."
+    "Alternative: a PM-approved .coordinator-doctrine-edit-approved in the git dir admits for 30 minutes, "
+    "then removes itself. Nothing to clean up."
 )
 
 
@@ -42,17 +43,52 @@ def git_dir_for(cwd: str) -> Optional[Path]:
     return None
 
 
+def _sentinel_path(cwd: str) -> Optional[Path]:
+    git_dir = git_dir_for(cwd)
+    return None if git_dir is None else git_dir / SENTINEL_BASENAME
+
+
 def sentinel_present(cwd: str) -> bool:
     """True when ``<git dir>/.coordinator-doctrine-edit-approved`` exists and is under
-    ``FRESH_SECONDS`` old. Any filesystem error reads as absent."""
+    ``FRESH_SECONDS`` old. A stale one is unlinked best-effort; an unlink failure still
+    reads as not admitting. Any filesystem error reads as absent."""
     try:
-        git_dir = git_dir_for(cwd)
-        if git_dir is None:
+        path = _sentinel_path(cwd)
+        if path is None:
             return False
-        age = time.time() - (git_dir / SENTINEL_BASENAME).stat().st_mtime
-        return age <= FRESH_SECONDS
+        age = time.time() - path.stat().st_mtime
+        if age <= FRESH_SECONDS:
+            return True
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return False
     except OSError:
         return False
+
+
+def admit_until(cwd: str) -> Optional[str]:
+    """Local ``HH:MM`` at which the present sentinel stops admitting (mtime + ``FRESH_SECONDS``);
+    None when absent or unreadable."""
+    try:
+        path = _sentinel_path(cwd)
+        if path is None:
+            return None
+        expiry = path.stat().st_mtime + FRESH_SECONDS
+    except OSError:
+        return None
+    return time.strftime("%H:%M", time.localtime(expiry))
+
+
+def admit_advisory(cwd: str) -> str:
+    """The advisory text a sentinel admit carries, shared by the Edit/Write and Bash guards."""
+    until = admit_until(cwd)
+    when = f"until {until}" if until else "for 30 minutes"
+    return (
+        f"[doctrine-surface guard] doctrine-edit approval admits this write {when}, "
+        "then removes itself. Nothing to clean up."
+    )
 
 
 def _under(target: str, root: str) -> bool:

@@ -364,10 +364,17 @@ def test_default_invocation_reads_settings_home_peers_json(tmp_path, monkeypatch
     assert str(tmp_path / "unimatrix" / "peers.json") in capsys.readouterr().err
 
 
+@pytest.fixture(autouse=True)
+def _agy_state_under_tmp(tmp_path, monkeypatch):
+    """No agy session probe reads the box's real presence dir or settings home."""
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "agy" / "brain"))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+
+
 def write_leg(legs, conv, pid=None, proc_start="stamp", **extra):
     legs.mkdir(parents=True, exist_ok=True)
     pid = os.getpid() if pid is None else pid
-    rec = {"pid": pid, "conversation": conv, "endpoint": "x", "ls_address": "y", "agy_pid": 1, **extra}
+    rec = {"pid": pid, "conversation": conv, "endpoint": "x", "ls_address": "y", "agy_pid": os.getpid(), **extra}
     if proc_start == "stamp":
         try:
             rec["procStart"] = pr._roster().proc_start(pid)
@@ -426,6 +433,127 @@ def test_leg_records_become_peers_and_peers_json_wins(tmp_path):
     got = pr.load_leg_peers(legs, {p["name"] for p in PEERS}, {p["target"] for p in PEERS})
     assert got == [{"name": pr.readable_peer_name("agy", "conv-new"), "vendor": "agy", "target": "conv-new"}]
     assert pr.load_leg_peers(tmp_path / "missing") == []
+
+
+DEAD_AGY_PID = 2 ** 22 + 12345
+
+
+def _past_grace_ms():
+    return int((time.time() - pr._liveness().AGY_SESSION_GRACE_SECONDS - 30) * 1000)
+
+
+def _hold_presence(conv):
+    """Hold the conversation's agy presence lock the way agy does; returns the file to close."""
+    path = Path(pr.default_presence_dir()) / f"{conv}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\0")
+    held = open(path, "r+b")
+    assert pr._transport().lock_file(held)
+    return held
+
+
+@portable
+def test_leg_whose_agy_session_is_dead_gets_no_peer_though_its_leg_lives(tmp_path):
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-leaked", agy_pid=DEAD_AGY_PID)
+    write_leg(legs, "conv-no-agy-pid", agy_pid=None, startedAt=_past_grace_ms())
+    assert pr.load_leg_peers(legs) == []
+    write_leg(legs, "conv-young", agy_pid=None, startedAt=int(time.time() * 1000))  # inside the grace: unknown
+    write_leg(legs, "conv-live")
+    assert sorted(p["target"] for p in pr.load_leg_peers(legs)) == ["conv-live", "conv-young"]
+
+
+@portable
+def test_leg_target_live_requires_the_agy_session_not_dead(tmp_path):
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-orphan", agy_pid=DEAD_AGY_PID)  # leg pid live, agy app dead
+    assert pr.leg_record_live(json.loads((legs / "conv-orphan.json").read_text()))
+    assert not pr.leg_target_live(legs, "conv-orphan")
+    write_leg(legs, "conv-orphan")
+    assert pr.leg_target_live(legs, "conv-orphan")
+    held = _hold_presence("conv-held")
+    write_leg(legs, "conv-held", agy_pid=DEAD_AGY_PID)
+    try:
+        assert pr.leg_target_live(legs, "conv-held")
+    finally:
+        held.close()
+    assert not pr.leg_target_live(legs, "conv-held")
+
+
+def test_orphaned_leg_with_dead_agy_app_is_not_live_and_its_face_is_not_respawned(box):
+    async def go():
+        legs = box / "legs"
+        static = {"name": "agy-orphan", "vendor": "agy", "target": "conv-orphan"}
+        write_leg(legs, "conv-orphan", agy_pid=DEAD_AGY_PID)
+        r = pr.Router([static], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters([]), legs_dir=legs)
+        await r.start()
+        try:
+            for _ in range(3):
+                await r.refresh_discovered()
+                await r._repair_faces()
+                assert "agy-orphan" in r.dead_holders and "agy-orphan" not in r.faces
+            write_leg(legs, "conv-orphan")  # a live agy app revives it
+            assert pr.leg_target_live(legs, "conv-orphan")
+        finally:
+            await r.stop()
+    run(go())
+
+
+@portable
+def test_leg_with_a_dead_agy_pid_keeps_its_peer_while_the_presence_lock_is_held(tmp_path):
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-held", agy_pid=DEAD_AGY_PID)
+    held = _hold_presence("conv-held")
+    try:
+        assert [p["target"] for p in pr.load_leg_peers(legs)] == ["conv-held"]
+    finally:
+        held.close()
+    assert pr.load_leg_peers(legs) == []
+
+
+@portable
+def test_agy_lock_peers_exist_only_while_the_presence_lock_is_held(tmp_path):
+    d = tmp_path / "presence"
+    d.mkdir()
+    (d / "conv-stale.lock").write_bytes(b"\0")
+    assert pr.load_lock_peers(d, "agy") == []
+    held = _hold_presence("conv-live")
+    try:
+        assert [p["target"] for p in pr.load_lock_peers(pr.default_presence_dir(), "agy")] == ["conv-live"]
+    finally:
+        held.close()
+    assert pr.load_lock_peers(pr.default_presence_dir(), "agy") == []
+
+
+@portable
+def test_lock_held_is_the_liveness_presence_probe(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(pr._liveness(), "agy_presence_held",
+                        lambda conv, presence_dir=None: seen.append((conv, presence_dir)) or True)
+    assert pr.lock_held(tmp_path / "conv-x.lock") is True
+    assert seen == [("conv-x", tmp_path)]
+
+
+def test_router_retires_a_face_once_its_agy_session_goes_dead(box):
+    async def go():
+        legs = box / "legs"
+        r = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters([]), legs_dir=legs)
+        await r.start()
+        try:
+            write_leg(legs, "conv-9")
+            await r.refresh_discovered()
+            name = pr.readable_peer_name("agy", "conv-9")
+            assert name in r.peers and name in r.faces
+            write_leg(legs, "conv-9", agy_pid=DEAD_AGY_PID)  # the leg leaked on; its agy session is gone
+            await r.refresh_discovered()
+            assert name not in r.peers and name not in r.faces and name not in r.discovered
+            await r.refresh_discovered()
+            assert name not in r.peers  # a rescan does not resurrect it
+        finally:
+            await r.stop()
+    run(go())
 
 
 def test_router_registers_a_leg_that_appears_after_start_without_peers_json(box):

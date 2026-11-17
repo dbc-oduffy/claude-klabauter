@@ -1152,7 +1152,14 @@ class TestDeliveryIsAnchored:
                 assert peer_sha is not None
                 # Now force THIS call's own CAS to report a loss even though
                 # the ref is already correct.
-                monkeypatch.setattr(anchor_module, "cas_ref", lambda *a, **k: False)
+                real_cas = anchor_module.cas_ref
+                monkeypatch.setattr(
+                    anchor_module, "cas_ref",
+                    lambda gitdir, ref, *a, **k: (
+                        real_cas(gitdir, ref, *a, **k)
+                        if ref.startswith(anchor_module.PIN_REF_PREFIX) else False
+                    ),
+                )
             return result
 
         monkeypatch.setattr(git_native, "build_new_file_commit", _commit_then_preanchor_and_force_a_loss)

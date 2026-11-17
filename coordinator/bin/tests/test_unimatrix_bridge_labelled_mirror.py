@@ -83,7 +83,8 @@ def test_a_mirror_named_labelled_for_this_box_is_delivered_without_a_marker(brid
     rows = [json.loads(l) for l in bridge.deliveries_path().read_text().splitlines()]
     assert [r["ok"] for r in rows] == [True]
     assert not misroute_marker(bridge).exists()
-    assert bridge.written == []
+    # The only sender notice is the delivery ack; a misroute or failure notice would name the refusal.
+    assert [json.loads(d)["message"].split(" ")[0] for _, d in bridge.written] == ["Delivered"]
 
 
 @pytest.mark.parametrize("name, far_name", [

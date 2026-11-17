@@ -44,6 +44,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "ceremony.workstream_start":            "show_top",
     "ceremony.quick_wrap":                  "show_top",
     "ceremony.result":                      "show_top",
+    "ceremony.hand_land":                   "show_top",
     "workflow.fire":                         "common_dir",
     "engine_ask.submit":                     "common_dir",
     "workflow.fire_status":                  "common_dir",
@@ -280,6 +281,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # test-only ops, and dispatch.emit is neither. Both its siblings above are
     # explicit for the same reason.
     "dispatch.emit":                         "none",
+    # dispatch.test_leg — MUTATING: writes one review-trail sidecar under the common dir.
+    "dispatch.test_leg":                     "common_dir",
     # strategic.generate — fleet-generic, MUTATING op (mirrors the cartography/
     # workflow target-resolution model): explicit REQUIRED `target_root` wire
     # param, any repo, NOT the caller's own dispatching tree. No repo-specific
@@ -387,6 +390,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "memo.check_addressee":                   "common_dir",
     "memo.send":                              "common_dir",
     "memo.reconcile_outbox":                  "common_dir",
+    "memo.sweep_ref_only":                    "common_dir",
     "memo.redeliver":                         "common_dir",
     # memo.check_deliveries — "common_dir", the scope its own handler docstring
     # already declares (`ops/fleet/memo_send.py :: _memo_check_deliveries`). It is a

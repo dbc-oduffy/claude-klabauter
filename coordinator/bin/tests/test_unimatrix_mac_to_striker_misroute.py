@@ -48,7 +48,8 @@ def mirror(sessions, filename, name, mirror_socket, far_endpoint, far_pid) -> No
     (sessions / filename).write_text(json.dumps({
         "pid": os.getpid(), "name": name, "unimatrixFarName": name, "messagingSocketPath": mirror_socket,
         "macSocketPath": far_endpoint, "farPid": far_pid, "unimatrixRemote": "machine-a-lan", "box": "machine-a",
-        "vendor": "claude", "sessionId": f"sid-{name}"}), encoding="utf-8")
+        "vendor": "claude", "sessionId": f"sid-{name}",
+        **router._roster().supervisor_fields(), **router._roster().far_seen_fields()}), encoding="utf-8")
 
 
 def machine_a_roster(tmp_path, far):

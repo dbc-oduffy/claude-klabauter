@@ -60,6 +60,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     stamp_run_stage,
     stop_after_plan_live,
     stop_after_source,
+    touch_run_activity,
     rulable_ids,
 )
 from coordinator_core.ops.dispatch_emit.agent_route import RouteAdmissionError, RouteTableError, route_rows
@@ -113,7 +114,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     commit_pathspec_or_none,
     terminal_test_scope,
 )
-from coordinator_core.ops.dispatch_emit import run_lineage
+from coordinator_core.ops.dispatch_emit import run_cancel, run_lineage
 from coordinator_core.ops.dispatch_emit.inventory_mint import strip_literal_pathspec
 from coordinator_core.ops import scratch_delete
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
@@ -1140,6 +1141,28 @@ def _sizing_plan_edge(root: Path, sizing_rel: str) -> Optional[str]:
     raise AskStageError(f"PLAN-EDGE-DANGLING: {sizing_rel} has plan edge {edge!r}, but that file exists in no layout")
 
 
+def _sizing_named_plan(root: Path, plan_rel: str, sizing_rel: str) -> str:
+    """The plan path to stage when `plan_rel` and the sizing's own plan path share a file name but differ in directory.
+
+    Returns the sizing-named path when that file exists, else `plan_rel` when that file exists (the
+    plan stages where it was actually written, 664092bb10); raises AskStageError `PLAN-PATH-MISMATCH`
+    naming both only when neither exists. A matching path or a differently named plan is returned unchanged.
+    Trap: refusing an existing `plan_rel` denies recoverable work, an engine bug, never a guard."""
+    from coordinator_core.ops.dispatch_emit.sizing_fire import s_plan_path
+
+    named = s_plan_path(sizing_rel)
+    given = plan_rel.replace(chr(92), "/")
+    if given == named or PurePosixPath(given).name != PurePosixPath(named).name:
+        return plan_rel
+    found = contained_path(root / named, [root])
+    if found is not None and found.is_file():
+        return named
+    own = contained_path(root / given, [root])
+    if own is not None and own.is_file():
+        return plan_rel
+    raise AskStageError(f"PLAN-PATH-MISMATCH: plan_path {given!r} is not the sizing-named {named!r}, and neither file exists")
+
+
 def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence[str]) -> None:
     """Raise AskStageError `XS-MINT-MISROUTED` for a sizing the XS mint must not take: one with a
     `plan:` edge or a non-XS `estimate.tshirt`; `XS-MINT-NO-WRITES` for an empty `writes`.
@@ -1599,6 +1622,8 @@ def stage(
         _write(spine_path, spine_text)
         plan_path = spine_path
     else:
+        if commit_sizing_rel:
+            plan_rel = _sizing_named_plan(root, plan_rel, commit_sizing_rel)
         plan_path = contained_path(root / plan_rel, [root])
         if plan_path is None or not plan_path.is_file():
             raise AskStageError(f"plan not found under the repo: {plan_rel!r}")
@@ -2949,7 +2974,6 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             return {"materialised": materialise_briefs(root, run_id, int(params["materialise_wave"]))}
         except (ValueError, OSError) as exc:
             return {"error": f"materialise_wave: {exc}"}
-    stamp_plan_phase(root, run_id)
     park_source = _consume_park_marker(root, run_id)
     if park_source is not None:
         stamp_run_stage(root, run_id, "halted")
@@ -2979,6 +3003,12 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
                     "error": f"{STAGE_RECEIPT_MISSING}: manifest.json landed for run {run_id} with no matching "
                     "stage receipt. Reconcile the run; nothing was written."
                 }
+            # Replies above write nothing; the run-stage heartbeat starts only once the call proceeds.
+            stamp_plan_phase(root, run_id)
+            try:
+                touch_run_activity(prior_dir)
+            except (ValueError, OSError):
+                pass
             parsed: list = []
             escaping = _escaping_write_refusal(
                 root, params.get("plan_path") or None, params.get("only_rows"), parse_out=parsed
@@ -2987,6 +3017,12 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
                 plan_parse = parsed[0]
             if escaping is not None:
                 return {"error": escaping}
+        try:
+            cancelled = run_cancel.cancelled_refusal(prior_dir)
+        except ValueError:  # a corrupt marker is not a cancel; the claim below handles the run as before
+            cancelled = None
+        if cancelled is not None:
+            return {"error": cancelled}
         prior_dir.mkdir(parents=True, exist_ok=True)
         try:
             with leg("claim"):

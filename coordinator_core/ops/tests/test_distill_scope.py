@@ -1755,6 +1755,26 @@ def test_completed_pass_scopes_only_changed_files(tmp_path: Path, monkeypatch: p
     assert delta.counts["deferred"] == len(_LOG_DAYS) - 1
 
 
+def test_owed_since_watermark_counts_changed_plus_past_cursor_with_one_changed_since(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core import run_watermark
+
+    root = _watermarked_repo(tmp_path, monkeypatch)
+    assert scannable_count(root, owed_since_watermark=True) == len(_LOG_DAYS)
+    for _ in range(2):
+        _commit_watermark(root, _slice_scope(root))
+    calls: list[int] = []
+    real = run_watermark.changed_since
+    monkeypatch.setattr(run_watermark, "changed_since", lambda *a, **k: calls.append(1) or real(*a, **k))
+    assert scannable_count(root, owed_since_watermark=True) == 0
+    assert scannable_count(root) == len(_LOG_DAYS)
+    _touch(root, _log_rel(_LOG_DAYS[3]))
+    calls.clear()
+    assert scannable_count(root, owed_since_watermark=True) == 1
+    assert calls == [1]
+
+
 def test_unpromoted_runs_leave_the_watermark_absent_and_rescope_identically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _watermarked_repo(tmp_path, monkeypatch)
     first = _slice_scope(root)

@@ -5,9 +5,13 @@ agy fails closed on `{}`, so every non-deny answer is an explicit decision.
 """
 from __future__ import annotations
 
+import os
+import re
+import time
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-from coordinator_core.host_hooks.codex_adapter import verdict_parts
+from coordinator_core.host_hooks.codex_adapter import ASK_DECISIONS, ask_denies, verdict_parts
 from coordinator_core.host_hooks.contract import HOST_AGY, HostEvent, Verdict, neutral_fallback
 
 #: Pinned equal to `warm.hook_http.SERVED_EVENTS` by test; not imported (hook_http is not cold-start cheap).
@@ -15,7 +19,6 @@ SERVED_EVENTS = frozenset({"PreToolUse"})
 
 # agy's shell tool reaches the Claude-shaped bash guards as `Bash`; its `CommandLine` arg is the command.
 _SHELL_TOOL = "run_command"
-_ASK_DECISIONS = frozenset({"ask", "force_ask"})
 
 #: agy edit tools -> the Claude-shaped write-guard tool names `tool_policy.evaluate` routes to `write_guards.engine`.
 _EDIT_TOOLS = {
@@ -91,26 +94,61 @@ class AgyAdapter:
         }
 
     def render(self, host_event: HostEvent, verdict: Verdict) -> Dict[str, Any]:
-        """agy response: deny, ask (passed through), or an explicit allow; unserved events get the `ask` fallback."""
+        """agy response: deny; an ask or advisory as an allow whose text is stashed for the next PreInvocation; unserved events get the `ask` fallback."""
         if host_event.event not in SERVED_EVENTS:
             return neutral_fallback(HOST_AGY)
         decision, reason = verdict_parts(verdict)
         if decision == "deny":
             return {"decision": "deny", "reason": reason or "denied by coordinator guard"}
-        if decision in _ASK_DECISIONS:
-            return {"decision": decision, "reason": reason or "coordinator: confirm"}
+        if decision in ASK_DECISIONS:
+            if ask_denies(verdict):
+                return {"decision": "deny", "reason": reason or "denied by coordinator guard"}
+            return _model_visible(host_event.session_id, reason or "coordinator: confirm")
         advisory = _advisory_text(verdict)
         if advisory:
-            return {"decision": "ask", "reason": advisory}
+            return _model_visible(host_event.session_id, advisory)
         return {"decision": "allow"}
 
 
-def _advisory_text(verdict: Optional[Mapping[str, Any]]) -> str:
-    """The `additionalContext` of a flat or `hookSpecificOutput`-nested non-deny verdict, or "".
+_CONV_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+#: Undrained advisories kept per conversation; past it the stash refuses so a missing PreInvocation drain cannot grow disk without bound.
+_STASH_CAP = 64
 
-    agy has no advisory field, so an allow carrying one renders as an `ask` whose reason is the text: the
-    nag surfaces and the answer never widens to allow.
+
+def advisory_dir() -> Path:
+    """Where PreToolUse advisories wait for the next PreInvocation; `unimatrix-agy-hook-pretool.py` drains the same path."""
+    env = os.environ.get("COORDINATOR_SETTINGS_HOME")
+    return (Path(env) if env else Path.home() / ".coordinator-claude-settings") / "unimatrix" / "agy-advisories"
+
+
+def stash_advisory(conversation: str, text: str) -> bool:
+    """Queue `text` for the conversation's next PreInvocation `injectSteps`; False when it cannot be queued."""
+    if not _CONV_RE.match(conversation or "") or not text:
+        return False
+    try:
+        folder = advisory_dir() / conversation
+        folder.mkdir(parents=True, exist_ok=True)
+        if sum(1 for _ in folder.iterdir()) >= _STASH_CAP:
+            return False
+        (folder / f"{time.time_ns()}-{os.getpid()}.txt").write_text(text, encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def _model_visible(conversation: str, text: str) -> Dict[str, Any]:
+    """An explicit allow whose advisory reaches the model at the next PreInvocation.
+
+    agy documents no `injectSteps` on a PreToolUse answer (hooks.md section 1), and renders `ask` as a
+    prompt that `-p` auto-approves, so the text is stashed and a PreInvocation hook injects it. `reason`
+    repeats the text so the shim's delivery stamp (`mark_if_delivered`, which walks mappings only) sees the nag.
     """
+    stash_advisory(conversation, text)
+    return {"decision": "allow", "reason": text}
+
+
+def _advisory_text(verdict: Optional[Mapping[str, Any]]) -> str:
+    """The `additionalContext` of a flat or `hookSpecificOutput`-nested non-deny verdict, or ""."""
     if not isinstance(verdict, Mapping):
         return ""
     nested = verdict.get("hookSpecificOutput")

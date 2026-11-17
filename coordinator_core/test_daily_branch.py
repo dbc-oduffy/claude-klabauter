@@ -7,6 +7,7 @@ from pathlib import Path
 pytestmark = pytest.mark.complete
 
 from coordinator_core.daily_branch import (
+    day_branch_name,
     format_span_suffix,
     has_remote_prefix,
     is_allowed_branch,
@@ -52,6 +53,18 @@ def test_sanitize_slug(raw, expected) -> None:
         ("work/m/2026-09-22", True),
         ("work/m/2026-09-22-2", True),
         ("origin/work/m/2026-09-22", True),
+        ("alice/box1/2026-11-17", True),
+        ("alice/box1/2026-11-17to19", True),
+        ("alice/box1/2026-11-17-2", True),
+        ("alice/box1/worker-ada-20261117", True),
+        ("origin/alice/box1/2026-11-17", True),
+        ("origin/box1/2026-11-17", True),
+        ("origin/work/box1/2026-11-17", True),
+        ("origin/origin/box1/2026-11-17", False),
+        ("alice/box1/feature-x", False),
+        ("alice/2026-11-17", False),
+        ("a/b/c/2026-11-17", False),
+        ("Alice/box1/2026-11-17", True),
         ("main", False),
         ("feature/foo", False),
         ("origin/main", False),
@@ -71,6 +84,10 @@ def test_is_work_branch(name, expected) -> None:
     "name,expected",
     [
         ("origin/work/m/2026-09-22", True),
+        ("origin/alice/box1/2026-11-17", True),
+        ("origin/box1/2026-11-17", True),
+        ("alice/box1/2026-11-17", False),
+        ("origin/origin/box1/2026-11-17", False),
         ("work/x", False),
         ("work/m/2026-09-22", False),
         ("work/m/2026-09-22-2", False),
@@ -151,6 +168,58 @@ def test_parse_rejects(name) -> None:
 
 def test_parse_none_input() -> None:
     assert parse_branch_span(None) is None
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("alice/box1/2026-11-17", ("2026-11-17", "2026-11-17")),
+        ("work/box1/2026-11-17", ("2026-11-17", "2026-11-17")),
+        ("alice/box1/2026-11-28to03", ("2026-11-28", "2026-12-03")),
+        ("Alice/Box1/2026-11-17", ("2026-11-17", "2026-11-17")),
+    ],
+)
+def test_parse_new_and_legacy_owner(name, expected) -> None:
+    assert parse_branch_span(name) == expected
+    assert is_allowed_branch(name) is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "alice/box1/feature-x",
+        "feature/foo",
+        "alice/box1/2026-13-01",
+        "a/b/c/2026-11-17",
+        "origin/box1/2026-11-17",
+    ],
+)
+def test_parse_rejects_new_shape_negatives(name) -> None:
+    assert parse_branch_span(name) is None
+    assert is_allowed_branch(name) is False
+    assert is_canonical_branch(name) is False
+
+
+def test_canonical_accepts_owner_branch_and_rejects_mixed_case() -> None:
+    assert is_canonical_branch("alice/box1/2026-11-17") is True
+    assert is_canonical_branch("Alice/box1/2026-11-17") is False
+
+
+def test_day_branch_name_joins_three_segments() -> None:
+    assert day_branch_name("alice", "box1", "2026-11-17") == "alice/box1/2026-11-17"
+    assert parse_branch_span(day_branch_name("alice", "box1", "2026-11-17to19")) == (
+        "2026-11-17",
+        "2026-11-19",
+    )
+
+
+def test_rename_target_owner_keyword() -> None:
+    assert rename_target("box1", "2026-11-17", "2026-11-19", 0, owner="alice") == (
+        "alice/box1/2026-11-19"
+    )
+    assert rename_target("box1", "2026-11-17", "2026-11-19", 2, owner="alice") == (
+        "alice/box1/2026-11-17to19"
+    )
 
 
 @pytest.mark.parametrize(

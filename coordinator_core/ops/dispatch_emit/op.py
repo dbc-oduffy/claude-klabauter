@@ -3433,6 +3433,7 @@ def _dispatch_emit_body(
                 route_preference=ask_ctx["route_preference"],
                 required_reviewers=ask_ctx["required_reviewers"],
                 launcher_child=params.get("launcher_child") is True,
+                chain_hop=bool(ask_ctx.get("chain_parent")),
                 run_base_sha=ask_ctx.get("inherited_base") or (
                     _recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"])
                     if ask_ctx.get("reserved_parent") or ask_ctx.get("rebound")

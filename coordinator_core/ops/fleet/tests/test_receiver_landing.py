@@ -175,6 +175,45 @@ def test_symref_remote_head_is_skipped(repo):
     assert RL.resolve_receiver_landing(repo).ref_relpath == LIVE_REF
 
 
+OWNED = "alice/machine-a/2026-11-17"
+OWNED_REF = f"refs/heads/{OWNED}"
+
+
+@pytest.fixture
+def owner(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
+
+
+def test_owner_prefixed_branch_is_the_live_branch(repo, owner):
+    _set_ref(repo, STALE_REF, _commit(repo, "stale", when=10))
+    _set_ref(repo, OWNED_REF, _commit(repo, "owned", when=99))
+    assert RL.resolve_receiver_landing(repo).ref_relpath == OWNED_REF
+
+
+def test_owner_prefixed_tracking_and_packed_refs_are_seen(repo, owner):
+    tip = _commit(repo, "tracked", when=80)
+    _set_ref(repo, f"refs/remotes/origin/{OWNED}", tip)
+    landing = RL.resolve_receiver_landing(repo)
+    assert (landing.ref_relpath, landing.minted, landing.mint_sha) == (OWNED_REF, True, tip)
+    other = "alice/box2/2026-11-18"
+    packed = _commit(repo, "packed", when=90)
+    (repo / ".git" / "packed-refs").write_text(f"# pack-refs\n{packed} refs/heads/{other}\n")
+    assert RL.resolve_receiver_landing(repo).ref_relpath == f"refs/heads/{other}"
+
+
+def test_legacy_work_branch_still_wins_when_fresher_than_owned(repo, owner):
+    _set_ref(repo, OWNED_REF, _commit(repo, "owned", when=10))
+    _set_ref(repo, LIVE_REF, _commit(repo, "legacy", when=99))
+    assert RL.resolve_receiver_landing(repo).ref_relpath == LIVE_REF
+
+
+def test_other_owner_and_non_day_owner_refs_are_never_candidates(repo, owner):
+    _set_ref(repo, "refs/heads/bob/machine-a/2026-11-17", _commit(repo, "bob", when=999))
+    _set_ref(repo, "refs/heads/alice/notes", _commit(repo, "notes", when=999))
+    landing = RL.resolve_receiver_landing(repo)
+    assert (landing.mode, landing.ref_relpath) == (RL.MODE_HEAD, "refs/heads/main")
+
+
 def test_non_work_branches_are_never_candidates(repo):
     _set_ref(repo, "refs/heads/feature/x", _commit(repo, "feat", when=999))
     _set_ref(repo, "refs/remotes/origin/release/1", _commit(repo, "rel", when=999))

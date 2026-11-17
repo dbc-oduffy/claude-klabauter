@@ -32,7 +32,9 @@ ZERO_RUN_CAUSE_KEY = "zero_run_cause"
 ZERO_RUN_BUDGET = "budget-exhausted"
 ZERO_RUN_COLLECTION = "collection-failure"
 ZERO_RUN_EMPTY = "empty-selection"
+ZERO_RUN_KILLED = "killed"
 _ZERO_RUN_CAUSES = {
+    ZERO_RUN_KILLED: "the test process was killed before any test completed",
     ZERO_RUN_BUDGET: "the verify budget was spent before any test ran",
     ZERO_RUN_COLLECTION: "pytest collection failed, so no test ran",
     ZERO_RUN_EMPTY: "the selection collected no tests",
@@ -282,6 +284,10 @@ def remedy_nodes(findings: Sequence[Finding], params: Optional[Mapping] = None) 
     for f in findings:
         if f.reason not in TEST_EVIDENCE_REASONS:
             continue
+        if f.reason == RETEST_ABANDONED:
+            head = f.detail.split("; re-run:")[0]
+            out += [t.strip() for t in head.split(";")[1:] if _FILE_LIKE.match(_node_file(t.strip()))]
+            continue
         inv = _INVARIANT_NODE.search(f.detail)
         if inv:
             out.append(inv.group(1).rstrip(";,"))
@@ -307,6 +313,13 @@ def retests_spent(params: Optional[Mapping]) -> bool:
     return retests_done(params) >= MAX_IN_RUN_REMEDY_ATTEMPTS
 
 
+def _is_await(finding: Finding) -> bool:
+    """True for the gate's running-retest answer (``landing_integrity.RetestAwait``), never a remedy attempt."""
+    from coordinator_core.ops.dispatch_emit.landing_integrity import RetestAwait
+
+    return isinstance(finding, RetestAwait)
+
+
 def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optional[dict]:
     """The mechanical remedy step for a test-evidence refusal (``TEST_EVIDENCE_REASONS``: failed targeted
     tests, red or indeterminate re-verify, a verdict naming no failure), or None when no such
@@ -316,7 +329,8 @@ def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optio
     with ``retest_attempts`` raised by one; ``exhausted`` once ``params.retest_attempts`` reached
     ``MAX_IN_RUN_REMEDY_ATTEMPTS``, when the refusal is the EM's. The landing spawns the detached retest
     launcher for unrun owed nodes and never pytest in-process."""
-    first = next((f for f in findings if f.reason in TEST_EVIDENCE_REASONS), None)
+    evidence = [f for f in findings if f.reason in TEST_EVIDENCE_REASONS]
+    first = next((f for f in evidence if not _is_await(f)), None)
     if first is None:
         return None
     from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
@@ -331,9 +345,12 @@ def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optio
     }
 
 
+#: Reason of the finding for a ``running`` retest record past its deadline; ``landing_retest`` re-exports it.
+RETEST_ABANDONED = "retest-abandoned"
+
 TEST_EVIDENCE_REASONS = (
     TARGETED_TESTS_FAILED, REVIEW_REVERIFY_FAILED, REVIEW_REVERIFY_INDETERMINATE, ZERO_FAIL_UNATTRIBUTED,
-    INVARIANT_UNMEASURED,
+    INVARIANT_UNMEASURED, RETEST_ABANDONED,
 )
 
 

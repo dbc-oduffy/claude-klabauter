@@ -169,8 +169,7 @@ class TestRegistrationQuad:
         assert op_key in _REGISTRY
         assert OP_CLASSIFICATION[op_key] == OpClass.COMPUTE_ONLY
         assert _OP_KEY_SCOPE[op_key] == "common_dir"
-        # hooks ops map to the package; the module self-registers on package import.
-        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks"
+        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks.subagent_zero_tool_use_surface"
 
 
 def test_a_zero_recorded_before_the_final_call_flushed_is_recounted(tmp_path):

@@ -20,6 +20,30 @@ wm_spec.loader.exec_module(wm)
 PAYLOAD = {"session_id": "thread-1", "cwd": "/nowhere"}
 
 
+@pytest.fixture(autouse=True)
+def _isolated_settings_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+
+
+def test_hook_records_absolute_codex_path_and_never_rewrites_it(tmp_path, monkeypatch):
+    real = tmp_path / "fnm" / "codex"
+    registry = tmp_path / "registry"
+    monkeypatch.setattr(hook.load_sibling("unimatrix-peer-codex").shutil, "which", lambda name: str(real))
+    hook.run(PAYLOAD, tmp_path / "peers.json", registry)
+    record = registry / "codex-binary.path"
+    assert record.read_text().strip() == str(real)
+    mtime = record.stat().st_mtime_ns
+    hook.run(PAYLOAD, tmp_path / "peers.json", registry)
+    assert record.stat().st_mtime_ns == mtime
+
+
+def test_hook_records_nothing_without_an_absolute_codex(tmp_path, monkeypatch):
+    registry = tmp_path / "registry"
+    monkeypatch.setattr(hook.load_sibling("unimatrix-peer-codex").shutil, "which", lambda name: None)
+    hook.run(PAYLOAD, tmp_path / "peers.json", registry)
+    assert not (registry / "codex-binary.path").exists()
+
+
 def test_env_name_comes_from_worker_mode():
     assert hook.worker_env_name() == wm.WORKER_ENV
 

@@ -63,7 +63,7 @@ def forbidden(monkeypatch):
             raise AssertionError(f"{name} called on the land_run op path")
         return raiser
 
-    monkeypatch.setattr(baseline_export, "export", spy("baseline_export.export"))
+    monkeypatch.setattr(baseline_export, "clone_tree", spy("baseline_export.clone_tree"))
     monkeypatch.setattr(landing_export, "build_head_export", spy("landing_export.build_head_export"))
     monkeypatch.setattr(retest_targeted, "_run_pass", spy("retest_targeted._run_pass"))
     return calls

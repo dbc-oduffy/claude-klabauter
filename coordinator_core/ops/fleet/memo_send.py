@@ -947,11 +947,11 @@ def _deliver_upstream(
     *, receiver_repo_path: Path, sender_worktree: Path, rel_path: str, content: str,
     topic: str, from_id: Optional[str], sent_by: str,
 ) -> "_upstream_delivery.UpstreamDelivery":
-    """Build, anchor and record one delivery through `deliver_onto_upstream`.
+    """Build, anchor, pin and record one delivery through `deliver_onto_upstream`.
 
-    A verified outcome only: a delivery commit that is not a readable object
-    in the receiver's store, or whose record write failed, comes back non-ok
-    with no record left behind. Never raises."""
+    A verified outcome only: a delivery whose pin, anchor, tree path or record
+    does not read back comes back non-ok with no record, pin or anchor left
+    behind. Never raises."""
     msg_file = _write_msg_file(_delivery_commit_message(topic, from_id, sent_by))
     try:
         out = _upstream_delivery.deliver_onto_upstream(
@@ -966,17 +966,15 @@ def _deliver_upstream(
             msg_file.unlink()
         except OSError:
             pass
-    if out.ok and not _delivery_commit_is_object(receiver_repo_path, out.commit_sha or ""):
-        _memo_push_pending.remove_pending(sender_worktree, out.commit_sha)
-        if out.anchor_ref:
-            try:
-                (resolve_git_common_dir(receiver_repo_path) / out.anchor_ref).unlink()
-            except OSError:
-                pass
-        return _upstream_delivery.UpstreamDelivery(
-            False, _upstream_delivery.STATUS_REFUSED,
-            error=f"{out.commit_sha!r} is not a commit object in the receiver's repository — not sent",
-        )
+    if out.ok:
+        problem = _upstream_delivery.verify_delivery(receiver_repo_path, out)
+        if problem is not None:
+            _memo_push_pending.remove_pending(sender_worktree, out.commit_sha)
+            _upstream_delivery.retire_delivery_refs(receiver_repo_path, out)
+            return _upstream_delivery.UpstreamDelivery(
+                False, _upstream_delivery.STATUS_REFUSED,
+                error=f"delivery readback failed: {problem} — not sent",
+            )
     return out
 
 
@@ -2438,6 +2436,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         )
     if push_pending_record is not None:
         acted_item["push_pending_record"] = push_pending_record
+        acted_item["push_pending"] = True
     if not sender_commit.ok:
         # The stderr is the whole diagnosis, and a WARNING alone loses it: the
         # engine's log is not retained, so an operator sees only the CLI's

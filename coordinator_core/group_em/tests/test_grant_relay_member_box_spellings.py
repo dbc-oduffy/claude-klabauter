@@ -70,7 +70,19 @@ def _grant(relay, grantee):
 
 
 @pytest.mark.parametrize(
-    "form", ["Machine-b", "machine-b", "MACHINE-B", "Machine-b.local", "machine-b.local", "example-operator@Machine-b.local"]
+    "form",
+    [
+        "Machine-b",
+        "machine-b",
+        "MACHINE-B",
+        "Machine-b.local",
+        "machine-b.local",
+        "example-operator@Machine-b.local",
+        "machine-b-lan",
+        "Machine-b-LAN",
+        "machine-b-lan.local",
+        "example-operator@machine-b-lan",
+    ],
 )
 def test_every_machine_b_form_relays_under_the_membership_box_id(relay, form) -> None:
     result = _grant(relay, f"{form}:{SID}")
@@ -80,9 +92,48 @@ def test_every_machine_b_form_relays_under_the_membership_box_id(relay, form) ->
     assert relay["transport"].envelopes[0]["grantee_session_id"] == SID
 
 
-@pytest.mark.parametrize("form", ["stranger", "stranger.local", "wrong-user@Machine-b.local"])
+@pytest.mark.parametrize(
+    "form", ["stranger", "stranger.local", "stranger-lan", "wrong-user@Machine-b.local", "machine-b-lan2", "machine-b-wan"]
+)
 def test_a_head_the_membership_does_not_name_is_left_as_typed(relay, form) -> None:
     assert suite_grant._member_host_key(f"{form}:{SID}", None) == f"{form}:{SID}"
+
+
+@pytest.mark.parametrize("form", ["machine-b", "MACHINE-B.local", "machine-b-lan"])
+def test_a_registered_row_is_found_in_any_spelling_when_membership_is_unverifiable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, form
+) -> None:
+    class _Unverified(_Mem):
+        def verified_members(self, home, run=None):
+            raise self.MembershipError("unpinned")
+
+    monkeypatch.setattr(member_box, "_membership", lambda: _Unverified())
+    directory = tmp_path / "state" / "group-em"
+    box_registry.register(tmp_path, {}, directory=directory, box_id="Machine-b", transport={"kind": "ssh", "host": "alias"})
+    box, why = suite_grant._far_box(form, directory, tmp_path)
+    assert why == "" and box is not None and box["box_id"] == "Machine-b"
+
+
+@pytest.mark.parametrize("form", ["stranger", "machine_b2", "machine-b-wan"])
+def test_far_box_still_refuses_a_box_no_row_or_member_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, form
+) -> None:
+    monkeypatch.setattr(member_box, "_membership", lambda: _Mem())
+    directory = tmp_path / "state" / "group-em"
+    box_registry.register(tmp_path, {}, directory=directory, box_id="Machine-b", transport={"kind": "ssh", "host": "alias"})
+    box, why = suite_grant._far_box(form, directory, tmp_path)
+    assert box is None and why.startswith(suite_grant.BOX_UNKNOWN)
+
+
+@pytest.mark.parametrize("form", ["machine-a", "MACHINE-A.local", "machine-a-lan"])
+def test_a_grantee_spelling_of_the_issuing_box_is_local_not_relayed(relay, form) -> None:
+    box_registry._write(
+        box_registry._identity_path(relay["dir"].parent.parent), {"schema_version": 1, "box_id": "Machine-a", "minted_at": 0}
+    )
+    assert suite_grant.names_this_box(form, relay["dir"].parent.parent) is True
+    result = _grant(relay, f"{form}:{SID}")
+    assert relay["transport"].envelopes == []
+    assert not result.ok and result.reason.startswith(suite_grant.GRANTEE_UNRESOLVED)
 
 
 @pytest.fixture
@@ -127,7 +178,10 @@ def _envelope(r, grantee_box):
     return box_key.sign(record, r["a"])
 
 
-@pytest.mark.parametrize("stamped", ["Machine-b", "machine-b", "MACHINE-B", "machine-b.local", "Machine-b.local"])
+@pytest.mark.parametrize(
+    "stamped",
+    ["Machine-b", "machine-b", "MACHINE-B", "machine-b.local", "Machine-b.local", "machine-b-lan", "Machine-b-LAN", "machine-b-lan.local"],
+)
 def test_receiver_accepts_an_alias_of_its_own_box_and_check_reads_granted(receiver, stamped) -> None:
     envelope = _envelope(receiver, stamped)
     assert suite_grant.receive_relayed_grant(envelope, now=NOW) == {"ok": True, "reason": "received"}
@@ -137,7 +191,17 @@ def test_receiver_accepts_an_alias_of_its_own_box_and_check_reads_granted(receiv
     assert granted is True
 
 
-@pytest.mark.parametrize("stamped", ["mac-mini", "Machineb2", "other.local", "local", ""])
+@pytest.mark.parametrize("local_id", ["machine-b-lan", "MACHINE-B"])
+@pytest.mark.parametrize("stamped", ["Machine-b", "machine-b-lan", "MACHINE-B.local"])
+def test_receiver_whose_own_id_carries_a_suffix_accepts_every_spelling(receiver, local_id, stamped) -> None:
+    box_registry._write(
+        box_registry._identity_path(receiver["b"]), {"schema_version": 1, "box_id": local_id, "minted_at": 0}
+    )
+    envelope = _envelope(receiver, stamped)
+    assert suite_grant.receive_relayed_grant(envelope, now=NOW) == {"ok": True, "reason": "received"}
+
+
+@pytest.mark.parametrize("stamped", ["mac-mini", "Machineb2", "Machine-b-lan2", "other.local", "-lan", "local", ""])
 def test_receiver_still_refuses_another_box_and_check_reads_ungranted(receiver, stamped) -> None:
     envelope = _envelope(receiver, stamped)
     assert suite_grant.receive_relayed_grant(envelope, now=NOW) == {"ok": False, "reason": "wrong_grantee_box"}

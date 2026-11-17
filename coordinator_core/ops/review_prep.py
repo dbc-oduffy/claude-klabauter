@@ -99,6 +99,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops import review_prep_legs
 from coordinator_core.ops.dispatch_emit.record_paths import is_record_path
 from coordinator_core.ops.dispatch_emit.run_ownership import LiveRun, blocks, holders_from_held, owns_path
+from coordinator_core.ops.pre_review_dir import pre_review_dir
 from coordinator_core.session import claim_index
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
@@ -230,6 +231,50 @@ def _peer_bases(repo_root: Path, base: str, head: Optional[str], paths: List[str
     return peer_path_bases(
         repo_root, base, head, paths, session, _plan_frontmatter_str(repo_root, plan_path, "deliverable_id")
     )
+
+
+def _with_no_delta_bases(
+    repo_root: Path, base: str, head: Optional[str], paths: List[str], run_id: str, found: dict
+) -> dict:
+    """``found`` plus a base for each declared path with no ``base..head`` delta: a live revise note's
+    named commit, and (only when every declared path is no-delta, the zero-slice halt shape) the first
+    parent of the commit that introduced it unreviewed. Named wins over introducer; a peer base is never
+    overridden. Range mode only; a degraded or non-``PeerBases`` result leaves ``found`` as is."""
+    from coordinator_core.ops.review_peer_bases import PeerBases
+
+    if not head or not run_id or not isinstance(found, PeerBases) or found.degraded:
+        return found
+    missing = [p for p in paths if not is_magic_pathspec(p) and not any(c == p or c.startswith(p.rstrip("/") + "/") for c in found.changed)]
+    if not missing:
+        return found
+    from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot
+
+    # A path with uncommitted bytes has a delta the partition measures HEAD->worktree; rebasing it
+    # to an introducer's parent would freeze the whole file. Unprovable (no stat scan) keeps `found`.
+    scanned = stage_dirt_snapshot._stat_dirty(repo_root)
+    if scanned is None:
+        return found
+    dirty, entries = scanned
+    clean = [p for p in missing if p.replace("\\", "/") in entries and p.replace("\\", "/") not in dirty]
+    if not clean:
+        return found
+    all_no_delta = len(clean) == len(paths)
+    missing = clean
+    from coordinator_core.ops.review_named_base import named_review_base
+    from coordinator_core.ops.review_unreviewed_bases import unreviewed_introducer_bases
+
+    extra: Dict[str, str] = {}
+    listed: set = set()
+    if all_no_delta:
+        extra.update(unreviewed_introducer_bases(repo_root, base, missing, listed))
+    extra.update(named_review_base(repo_root, run_id, missing, listed))
+    extra = {p: b for p, b in extra.items() if p not in found and b != base}
+    if not extra:
+        return found
+    merged = PeerBases({**found, **extra})
+    merged.changed = found.changed
+    merged.degraded = found.degraded
+    return merged
 
 
 def _specs_by_base(paths: List[str], base: str, path_bases: dict) -> List[tuple]:
@@ -928,7 +973,8 @@ def _prepare(
     def peer_bases() -> dict:
         if not fresh_bases:
             with review_prep_legs.leg("peer_bases"):
-                fresh_bases.append(_peer_bases(repo_root, base, head, paths, session, plan_path))
+                found = _peer_bases(repo_root, base, head, paths, session, plan_path)
+                fresh_bases.append(_with_no_delta_bases(repo_root, base, head, paths, run_id, found))
         return fresh_bases[0]
 
     def served() -> Optional[dict]:
@@ -1221,7 +1267,7 @@ def _range_blob_bytes(repo_root: Path, head: str, worktree: dict) -> dict:
 
 
 def _manifest_path(share: Path, slice_prefix: str) -> Path:
-    return share / f"{slice_prefix}.pre-review" / "manifest.json"
+    return pre_review_dir(share, slice_prefix) / "manifest.json"
 
 
 def _land_blob(blob: Path, data: bytes) -> bool:
@@ -1312,6 +1358,9 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
 RUN_RECORD_REREAD_DEADLINE_MS = 500.0
 
 
+STALLED_CAUSE = "stalled"
+
+
 def _read_run_record(path: Path) -> Tuple[Optional[dict], str]:
     """``(record, "")``, or ``(None, cause)`` with cause ``absent``, ``malformed`` or ``stalled <N> ms``.
     A stalled first read is retried once, bounded by ``RUN_RECORD_REREAD_DEADLINE_MS``."""
@@ -1324,8 +1373,18 @@ def _read_run_record(path: Path) -> Tuple[Optional[dict], str]:
     if isinstance(got, dict):
         return got, ""
     if got is hrr.STALLED:
-        return None, f"stalled {round((time.monotonic() - t0) * 1000)} ms"
+        return None, f"{STALLED_CAUSE} {round((time.monotonic() - t0) * 1000)} ms"
     return None, "absent" if got is hrr.MISSING else "malformed"
+
+
+class RunRecordReadStalled(ValueError):
+    """A run-record read outlasted both read bounds: transient and retryable, unlike an absent or
+    malformed record. The message is the same one fact a plain ValueError carried."""
+
+
+def _read_failure_type(cause: str) -> type:
+    """Exception type for a `_read_run_record` cause: only the `stalled <N> ms` cause is retryable."""
+    return RunRecordReadStalled if cause.startswith(STALLED_CAUSE) else ValueError
 
 
 MANIFEST_WAIT_S = 0.4
@@ -1363,7 +1422,7 @@ def declared_paths_and_held(
     base = record_dir(repo_root, run_id)
     manifest, cause = _read_manifest(base)
     if manifest is None:
-        raise ValueError(f"no readable manifest for run {run_id!r}: {cause}")
+        raise _read_failure_type(cause)(f"no readable manifest for run {run_id!r}: {cause}")
     declared = manifest.get("review_declared_paths")
     if not isinstance(declared, list) or not all(isinstance(p, str) for p in declared):
         raise ValueError(f"manifest review_declared_paths for run {run_id!r} is not a list of str")
@@ -1371,7 +1430,7 @@ def declared_paths_and_held(
         footprint, cause = _read_run_record(base / LEG_FOOTPRINT_FILE)
         writes = footprint.get("writes") if footprint is not None else None
         if not isinstance(writes, list) or not all(isinstance(p, str) for p in writes):
-            raise ValueError(
+            raise _read_failure_type(cause)(
                 f"no readable leg footprint writes list for run {run_id!r}: "
                 + (cause or "writes is not a list of str")
             )
@@ -1522,6 +1581,8 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
                     paths, held_by_peer = declared_paths_and_held(
                         repo_root, run_id, leg=bool(leg), own_session=str(params.get("session_id") or "")
                     )
+            except RunRecordReadStalled as exc:
+                return _fail(f"{REVIEW_PREP_BUSY_PREFIX} {exc}; re-run the same call")
             except ValueError as exc:
                 return _fail(str(exc))
             with review_prep_legs.leg("handler.undeclared_edits"):

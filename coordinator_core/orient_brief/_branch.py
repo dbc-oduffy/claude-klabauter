@@ -30,7 +30,7 @@ _REF_PREFIX = "ref: refs/heads/"
 def _current_branch(repo_root: Path) -> str:
     """Current branch name, or "" when detached / unreadable. Zero spawns.
 
-    A branch name may contain slashes (`work/<machine>/<date>`), so the full
+    A branch name may contain slashes (`<owner>/<machine>/<date>`), so the full
     suffix after `refs/heads/` is returned.
     """
     git_dir = _repo_root_mod.git_dir(str(repo_root))
@@ -60,9 +60,10 @@ def _span_mismatch(branch: str, repo_root: Path) -> dict | None:
     if end == today:
         return None
 
-    from coordinator_core.machine_resolver import compute_machine
+    from coordinator_core.daily_branch import day_branch_name
+    from coordinator_core.machine_resolver import compute_machine, compute_owner
 
-    expected = "work/" + compute_machine() + "/" + format_span_suffix(start, today)
+    expected = day_branch_name(compute_owner(), compute_machine(), format_span_suffix(start, today))
     return build_directive(
         "d-branch-span-mismatch",
         "workday-start-day-branch-resolve",

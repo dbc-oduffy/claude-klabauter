@@ -299,16 +299,12 @@ class OwnedPrivateEngine:
             raise ValueError('native image lacks compile flag provenance')
         if proof.get('door_c_sha256') != sources.get('door.c'):
             raise ValueError('native main-source digest contradicts the complete source inputs')
-        if any(not isinstance(proof.get(name), str) or not proof[name] for name in ('compiler', 'compiler_version', 'engine_root', 'built_at')):
+        if any(not isinstance(proof.get(name), str) or not proof[name] for name in ('compiler', 'compiler_version', 'built_at')):
             raise ValueError('native image lacks required build provenance')
-        if not Path(proof['engine_root']).is_absolute() or 'builder' not in proof or not isinstance(proof.get('command'), list) or not proof['command'] or any(not isinstance(value, str) for value in proof['command']):
+        if 'builder' not in proof or not isinstance(proof.get('command'), list) or not proof['command'] or any(not isinstance(value, str) for value in proof['command']):
             raise ValueError('native image lacks attributable build inputs')
-        python_bin = proof.get('python_bin')
-        python_path = build.expand_python_bin(python_bin) if isinstance(python_bin, str) else None
-        if python_path is None or not python_path.is_absolute():
-            raise ValueError('native image lacks its absolute Python render input')
         source_text = (self.engine_root / 'coordinator_core/warm/door/door.c').read_text(encoding='utf-8')
-        rendered = build._render(source_text, python_path, Path(proof['engine_root']))
+        rendered = build._render(source_text)
         rendered = '#define DOOR_PRIVATE_REQUIRED 1\n' + rendered
         if hashlib.sha256(rendered.encode('utf-8')).hexdigest() != proof['rendered_source_sha256']:
             raise ValueError('native require-warm rendered-source digest does not reproduce')

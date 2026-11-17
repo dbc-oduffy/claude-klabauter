@@ -359,6 +359,61 @@ def read(record_dir: Path) -> dict:
     }
 
 
+_PLAN_ROWS: dict = {}
+
+
+def _manifest_writes(record_dir: Path, row_id: str) -> Optional[list]:
+    """The normalised ``writes`` the run's own ``manifest.json`` stages for ``row_id``; None when unreadable or absent."""
+    try:
+        rows = json.loads((Path(record_dir) / "manifest.json").read_text(encoding="utf-8")).get("rows")
+    except (OSError, ValueError, AttributeError):
+        return None
+    for r in rows if isinstance(rows, list) else ():
+        if isinstance(r, dict) and r.get("id") == row_id and isinstance(r.get("writes"), list):
+            return [k for k in (_norm(w) for w in r["writes"]) if k is not None]
+    return None
+
+
+def declared_writes(record_dir: Path, root: Path, row_id: str) -> Optional[list]:
+    """The row's declared ``writes``: the halted run's plan spine, else its own ``manifest.json``
+    (a halt marker that names no plan); None when neither names the row."""
+    plan = _plan_writes(record_dir, root, row_id)
+    return plan if plan is not None else _manifest_writes(record_dir, row_id)
+
+
+def _plan_writes(record_dir: Path, root: Path, row_id: str) -> Optional[list]:
+    """The normalised ``writes`` the halted run's plan declares for ``row_id``, or None when the
+    marker names no plan, the plan or its spine is unreadable, or the row is absent. One marker read
+    and one spine parse per plan file version (memoised on mtime and size); no spawn."""
+    try:
+        marker = json.loads((Path(record_dir) / "halted.json").read_text(encoding="utf-8"))
+        plan_rel = _norm(marker.get("plan")) if isinstance(marker, dict) else None
+        if plan_rel is None:
+            return None
+        plan = Path(root) / plan_rel
+        st = plan.stat()
+        key = (str(plan), st.st_mtime_ns, st.st_size)
+        rows: Optional[dict] = _PLAN_ROWS.get(key)
+        if rows is None:
+            # Deferred: plan_tasks_render is not otherwise loaded by this module's callers.
+            from coordinator_core.frontmatter.body_blocks import LocateStatus
+            from coordinator_core.ops.plan_tasks_render import load_rows
+
+            loaded = load_rows(plan.read_text(encoding="utf-8"))
+            if loaded.status is not LocateStatus.LOCATED:
+                return None
+            rows = {str(r.get("id")): r.get("writes") for r in loaded.rows}
+            if len(_PLAN_ROWS) > 8:
+                _PLAN_ROWS.clear()
+            _PLAN_ROWS[key] = rows
+    except (OSError, ValueError, AttributeError):
+        return None
+    writes = rows.get(str(row_id)) if rows else None
+    if not isinstance(writes, list):
+        return None
+    return [k for k in (_norm(w) for w in writes) if k is not None]
+
+
 def still_kept(
     root: Path,
     entry: object,
@@ -368,10 +423,16 @@ def still_kept(
 ) -> bool:
     """True while every recorded path still fingerprints the same and no note names the row or a path.
     A writes-empty entry (``return`` sha, no paths) holds only with ``record_dir`` whose returns.json
-    carries that sha for the row and reads DONE."""
+    carries that sha for the row and reads DONE. With ``record_dir`` whose halt marker names a plan,
+    a row whose declared writes are not all among the recorded paths is not kept: it never finished
+    them, so it runs again."""
     paths = entry.get("paths") if isinstance(entry, Mapping) else None
     if not isinstance(paths, Mapping):
         return False
+    if paths and record_dir is not None:
+        declared = declared_writes(record_dir, root, row_id)
+        if declared and not set(declared) <= {_norm(p) for p in paths}:
+            return False
     if not paths:
         want_sha = entry.get("return")
         if record_dir is None or not isinstance(want_sha, str):

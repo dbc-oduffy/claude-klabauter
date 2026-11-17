@@ -15,6 +15,10 @@ approves the exact command. Every other path also answers "ask": agy fails close
 invalid JSON, or a reply without `decision`, and "ask" keeps agy's own approval behaviour where
 "allow" would silently widen it.
 
+`--event PreInvocation` runs the same script as the PreInvocation hook: it drains the advisories the
+adapter stashed at PreToolUse (agy documents no `injectSteps` on a PreToolUse answer) and injects them as
+`systemMessage` steps; stash format is `coordinator_core/host_hooks/agy_adapter.py :: stash_advisory`.
+
 A headless agy (`-p`/`--print` on the agy ancestor's command line) gets no rewrite and no launcher
 spawn: the guard's answer passes through so agy's own permissions.allow decides.
 
@@ -115,16 +119,25 @@ def _proc_reader():
     return read
 
 
-def agy_ancestor_pid(read=None, start=None, max_depth=MAX_ANCESTOR_DEPTH):
+def _is_agy_name(name) -> bool:
+    """True for the agy CLI exe or its daemon (`agy-*`, `agy_*`, `antigravity*`)."""
+    n = str(name).lower()
+    return n in AGY_EXE_NAMES or n.startswith(("agy-", "agy_", "antigravity"))
+
+
+def agy_ancestor_pid(read=None, start=None, max_depth=MAX_ANCESTOR_DEPTH) -> int | None:
     """Pid of the nearest ancestor of `start` (default: this process) whose exe is agy, else None.
 
     The hook's direct parent is an intermediate launcher that exits with the hook, so getppid() is
     never taken. `read(pid)` returns (parent pid, name) or None; it is the injected process table.
-    No agy ancestor within max_depth, or no table: None, noted on stderr.
+    An ancestor whose exe is the agy CLI (AGY_EXE_NAMES) wins over a nearer daemon; a daemon-named
+    ancestor (agy-*, agy_*, antigravity*) is the fallback when no CLI ancestor exists within max_depth.
+    No agy ancestor within max_depth, or no table: None, silently; stderr stays empty on every path.
     """
     read = read or _proc_reader()
     pid = os.getpid() if start is None else start
     seen = {pid}
+    daemon = None
     for _ in range(max_depth):
         row = read(pid) if read else None
         if not row:
@@ -134,10 +147,11 @@ def agy_ancestor_pid(read=None, start=None, max_depth=MAX_ANCESTOR_DEPTH):
             break
         seen.add(pid)
         parent = read(pid)
-        if parent and str(parent[1]).lower() in AGY_EXE_NAMES:
-            return pid
-    print(f"unimatrix-agy-hook: no agy ancestor within {max_depth} levels; agy_pid not recorded", file=sys.stderr)
-    return None
+        if parent and _is_agy_name(parent[1]):
+            if str(parent[1]).lower() in AGY_EXE_NAMES:
+                return pid
+            daemon = daemon or pid
+    return daemon
 
 
 def _nt_cmdline(pid):
@@ -204,12 +218,53 @@ def process_cmdline(pid):
 PRINT_FLAG_RE = re.compile(r"\s(?:-p|--print)(?:[=\s]|$)")
 
 
-def agy_print_mode(agy_pid, read=None):
-    """True when the agy process runs headless (`-p`/`--print`). Unknown agy pid or unreadable line: False."""
+def child_pids(pid) -> list:
+    """Direct children of `pid` from one process-table read (Windows snapshot, Linux /proc, macOS one `ps`); [] on failure."""
+    if sys.platform == "win32":
+        return [p for p, (ppid, _n) in _nt_process_table().items() if ppid == pid]
+    out = []
+    if sys.platform == "darwin":
+        try:
+            table = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=2,
+                                   stdin=subprocess.DEVNULL).stdout
+        except (OSError, subprocess.SubprocessError):
+            return []
+        for row in table.splitlines():
+            cols = row.split()
+            if len(cols) == 2 and cols[0].isdigit() and cols[1].isdigit() and int(cols[1]) == pid:
+                out.append(int(cols[0]))
+        return out
+    try:
+        for d in Path("/proc").iterdir():
+            if d.name.isdigit():
+                try:
+                    stat = (d / "stat").read_text(encoding="utf-8", errors="replace")
+                    if int(stat[stat.rindex(")") + 2:].split()[1]) == pid:
+                        out.append(int(d.name))
+                except (OSError, ValueError, IndexError):
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def _is_print_line(line) -> bool:
+    return bool(line and PRINT_FLAG_RE.search(" " + line))
+
+
+def agy_print_mode(agy_pid, read=None) -> bool:
+    """True when the agy process runs headless (`-p`/`--print`). Unknown agy pid or unreadable line: False.
+
+    A hook runs under agy's daemon, whose own argv carries no `-p`: when the pid's line is not a print
+    line, its child processes are read too, and any print-mode child makes the answer True (a wrong True
+    skips one leg bootstrap; a wrong False rewrites a headless run's command and breaks its permissions.allow match).
+    """
     if agy_pid is None:
         return False
-    line = (read or process_cmdline)(agy_pid)
-    return bool(line and PRINT_FLAG_RE.search(" " + line))
+    read = read or process_cmdline
+    if _is_print_line(read(agy_pid)):
+        return True
+    return any(_is_print_line(read(c)) for c in child_pids(agy_pid))
 
 
 def pid_alive(pid):
@@ -427,6 +482,41 @@ def engine_root_arg(argv):
     return None
 
 
+def advisory_dir() -> Path:
+    return settings_home() / "unimatrix" / "agy-advisories"
+
+
+def pre_invocation_reply(payload) -> dict:
+    """`injectSteps` carrying each distinct stashed advisory for the payload's conversation, then drained; {} when none."""
+    conv = payload.get("conversationId") if isinstance(payload, dict) else None
+    if not isinstance(conv, str) or not CONV_RE.match(conv):
+        return {}
+    folder = advisory_dir() / conv
+    texts = []
+    try:
+        for path in sorted(folder.glob("*.txt")):
+            try:
+                text = path.read_text(encoding="utf-8").strip()
+                path.unlink()
+            except OSError:
+                continue
+            if text and text not in texts:
+                texts.append(text)
+    except OSError:
+        return {}
+    return {"injectSteps": [{"systemMessage": {"systemMessage": t}} for t in texts]} if texts else {}
+
+
+def _pre_invocation_main() -> int:
+    try:
+        out = pre_invocation_reply(json.loads(sys.stdin.read()))
+    except Exception:
+        out = {}
+    print(json.dumps(out))
+    sys.stdout.flush()
+    return 0
+
+
 def _answer(argv, result):
     """Worker body: the decision into `result["out"]`; any failure is the neutral "ask"."""
     try:
@@ -451,6 +541,8 @@ def main(argv=None):
     decide() runs on a daemon thread joined at HOOK_WALL_SECS; a slow or stuck engine answers the
     advisory ask and the process exits hard, so no worker can hold it past agy's hook timeout."""
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:2] == ["--event", "PreInvocation"]:
+        return _pre_invocation_main()
     result = {}
     worker = threading.Thread(target=_answer, args=(argv, result), daemon=True)
     worker.start()

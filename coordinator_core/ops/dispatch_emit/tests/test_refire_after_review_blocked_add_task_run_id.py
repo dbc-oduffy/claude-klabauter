@@ -68,10 +68,12 @@ def test_a_refire_after_add_task_whose_halted_id_is_not_rebindable_mints_one_suf
     assert reply["output_path_redirect"]["to"].endswith(f"{reply['run_id']}.workflow.mjs")
 
 
-def test_a_second_refire_after_add_task_still_mints_one_suffix(repo) -> None:
+def test_a_second_refire_after_add_task_still_mints_one_suffix(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _halt_review_blocked(repo)
     _add_task_c4(repo)
     first = _fire(repo)["run_id"]
+    # Trap: inside the unfired-resend window an identical re-fire dedupes onto the first run (lost-reply guard).
+    monkeypatch.setattr(op, "_UNFIRED_RESEND_WINDOW_SECS", -1)
     second = _fire(repo)["run_id"]
     assert first == OLDER and second != first
     assert ONE_STAMP.fullmatch(second), second

@@ -8,8 +8,9 @@ Pure stdlib plus in-process git object I/O: zero spawns.
 
 Negative-spec:
     - No receiver HEAD, branch ref, index or worktree is written. The only
-      receiver writes are loose objects and the `refs/coordinator/inbox/`
-      anchor (the commit is reachable only through it until pushed).
+      receiver writes are loose objects, the `refs/coordinator/inbox/`
+      anchor (the memo blob) and the `refs/coordinator/inbox-pin/` pin (the
+      commit, reachable through it until pushed).
     - `resolve_receiver_landing` only decides the branch name (the receiver
       repo's live work branch, never one named for the sender); a receiver
       with none is `STATUS_NO_BASE`. `apply_receiver_landing` is never called.
@@ -20,6 +21,7 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -31,7 +33,15 @@ from coordinator_core.git.git_state import read_commit, read_tree_spine
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet import _memo_push_pending
 from coordinator_core.ops.fleet import _receiver_landing
-from coordinator_core.ops.fleet._memo_anchor import ANCHOR_REF_PREFIX, resolve_anchor, write_anchor
+from coordinator_core.ops.fleet._memo_anchor import (
+    ANCHOR_REF_PREFIX,
+    read_pin,
+    resolve_anchor,
+    retire_anchor,
+    retire_pin,
+    write_anchor,
+    write_pin,
+)
 from coordinator_core.ops.push_outstanding import resolve_push_remote
 from coordinator_core.temp_layout import managed_tempdir
 
@@ -134,13 +144,19 @@ def _build_on_base(
             parent_sha=base, remote=remote, branch=branch,
         )
     filename = rel_path.replace("\\", "/").rsplit("/", 1)[-1]
-    blob_sha = write_anchor(
-        resolve_git_common_dir(receiver_root), filename, commit_sha, content.encode("utf-8")
-    )
+    common_dir = resolve_git_common_dir(receiver_root)
+    blob_sha = write_anchor(common_dir, filename, commit_sha, content.encode("utf-8"))
     if blob_sha is None:
         return _fail(
             STATUS_ANCHOR_FAILED,
             f"anchor for {filename!r} at {commit_sha} could not be written",
+            commit_sha=commit_sha, parent_sha=base, remote=remote, branch=branch,
+        )
+    if not write_pin(common_dir, commit_sha):
+        retire_anchor(common_dir, filename, commit_sha)
+        return _fail(
+            STATUS_ANCHOR_FAILED,
+            f"pin for {commit_sha} could not be written",
             commit_sha=commit_sha, parent_sha=base, remote=remote, branch=branch,
         )
     record = {
@@ -157,6 +173,42 @@ def _build_on_base(
         True, STATUS_DELIVERED, commit_sha, base, remote, branch,
         ANCHOR_REF_PREFIX + filename + "/" + commit_sha, blob_sha, record,
     )
+
+
+def verify_delivery(receiver_root: Union[str, Path], out: UpstreamDelivery) -> Optional[str]:
+    """Read back every claim of a delivered `out`; the error text, or `None` when all hold.
+
+    Checks the pin value, the anchor value, the file in the commit's tree (an
+    unreadable tree fails) and, when `out.record_path` is set, the parsed record.
+    """
+    receiver_root = Path(receiver_root)
+    common_dir = resolve_git_common_dir(receiver_root)
+    sha = out.commit_sha or ""
+    if read_pin(common_dir, sha) != sha:
+        return f"pin ref for {sha!r} does not resolve to the delivery commit"
+    if not out.anchor_ref or git_objects.read_ref_loose_or_packed(common_dir, out.anchor_ref) != out.blob_sha:
+        return f"anchor {out.anchor_ref!r} does not resolve to the memo blob {out.blob_sha!r}"
+    rel_path = (out.record or {}).get("path", "")
+    if not rel_path or path_in_tree(receiver_root, sha, rel_path) is not True:
+        return f"{rel_path!r} is not readable in the tree of {sha!r}"
+    if out.record_path is not None:
+        try:
+            row = json.loads(Path(out.record_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return f"push-pending record {out.record_path} is unreadable"
+        if not isinstance(row, dict) or row.get("commit_sha") != sha:
+            return f"push-pending record {out.record_path} does not name {sha!r}"
+    return None
+
+
+def retire_delivery_refs(receiver_root: Union[str, Path], out: UpstreamDelivery) -> None:
+    """Retire the pin and anchor a refused `out` wrote."""
+    common_dir = resolve_git_common_dir(Path(receiver_root))
+    if out.commit_sha:
+        retire_pin(common_dir, out.commit_sha)
+        if out.anchor_ref and out.anchor_ref.startswith(ANCHOR_REF_PREFIX):
+            filename = out.anchor_ref[len(ANCHOR_REF_PREFIX):].rsplit("/", 1)[0]
+            retire_anchor(common_dir, filename, out.commit_sha)
 
 
 def deliver_onto_upstream(

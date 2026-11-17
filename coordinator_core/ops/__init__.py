@@ -30,7 +30,7 @@ registry as a side effect.
 _eager_import_all() is exposed for callers that deliberately want full registration
 (census enumerators, tests); ipc.py's registry-miss path never calls it on the
 request thread — an op absent from OP_MODULE_MAP is answered not-found, and
-test_registry_miss_never_eager_imports_on_request pins map completeness.
+authz/registration_quad.py and test_eager_op_modules_covers_every_register_op pin map and eager-list completeness.
 
 Resilient-and-loud per-module import (2026-07-21 break-class fix — one op
 module's ImportError used to abort ALL ~80 modules' registration in one shot;
@@ -156,6 +156,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session_ceremonies", "six provider-neutral session ceremony doors"),
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
     ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),
+    ("coordinator_core.ops.ceremony.hand_land", 'registers "ceremony.hand_land"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
     ("coordinator_core.ops.canvas_harvest", 'registers "canvas.harvest"'),
     ("coordinator_core.ops.daily_log", 'registers "changelog.daily_log"'),
@@ -281,6 +282,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.memo_compose", 'registers "memo.compose" (C7 wiring)'),
     ("coordinator_core.ops.fleet.memo_send", 'registers "memo.send" (rebuilt 2026-08-25, C2)'),
     ("coordinator_core.ops.fleet.memo_reconcile_outbox", 'registers "memo.reconcile_outbox"'),
+    ("coordinator_core.ops.fleet.memo_sweep_ref_only", 'registers "memo.sweep_ref_only"'),
     ("coordinator_core.ops.fleet.memo_redeliver", 'registers "memo.redeliver"'),
     ("coordinator_core.ops.fleet.memo_blitz_buckets", 'registers "memo.blitz_buckets"'),
     ("coordinator_core.ops.push_outstanding", 'registers "push.outstanding"'),
@@ -547,6 +549,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.workflow_bind", 'registers "workflow.bind_args"'),
     ("coordinator_core.ops.compute_layer_scaffold.op", 'registers "compute_layer.scaffold"'),
     ("coordinator_core.ops.dispatch_emit.op", 'registers "dispatch.emit"'),
+    ("coordinator_core.ops.dispatch_test_leg", 'registers "dispatch.test_leg"'),
     ("coordinator_core.ops.engine_ask_submit", 'registers "engine_ask.submit"'),
     (
         "coordinator_core.ops.workflow_fire.op",

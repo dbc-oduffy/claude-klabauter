@@ -184,11 +184,65 @@ def plugin_root_source() -> tuple[Path, str]:
     own = Path(__file__).resolve().parents[2]
     if manifest_path(own).is_file():
         return own, "script clone (CLAUDE_PLUGIN_ROOT unset)"
-    tree = doe_tree_from_evidence()
+    tree = doe_tree_from_evidence() or _manifest_bearing_content_root()
     if tree and manifest_path(tree / "coordinator").is_file():
         return (tree / "coordinator",
                 "DoE checkout named by the machine registry (CLAUDE_PLUGIN_ROOT unset)")
     return own, "script clone (CLAUDE_PLUGIN_ROOT unset; no install manifest found there or in a registered DoE checkout)"
+
+
+def _manifest_bearing_content_root() -> Path | None:
+    """A registered `repos.content_root` / `repos.doe_claude` checkout that carries the install
+    manifest under `coordinator/`, with no dev-repo sentinel required; a publish mirror never counts."""
+    flat = _registry_flat()
+    for key in ("repos.content_root", "repos.doe_claude"):
+        value = str(flat.get(key) or "").strip()
+        if value and not _is_registered_publish_mirror(Path(value)) \
+                and manifest_path(Path(value) / "coordinator").is_file():
+            return Path(value)
+    return None
+
+
+def default_plugin_root_env() -> Path | None:
+    """On a DoE box (breadcrumb, `.coordinator-dev-repo` tree, or registered content root) with
+    `CLAUDE_PLUGIN_ROOT` unset, export the DoE plugin root so spawned children resolve it too.
+    Returns the root exported, else None; an unset env on a non-DoE box stays unset."""
+    if os.environ.get("CLAUDE_PLUGIN_ROOT"):
+        return None
+    root, source = plugin_root_source()
+    own_is_doe = source.startswith("script clone (CLAUDE_PLUGIN_ROOT unset)") and is_doe_tree(root.parent)
+    if not (source.startswith(("doctrine breadcrumb", "DoE checkout")) or own_is_doe):
+        return None
+    if not manifest_path(root).is_file():
+        return None
+    os.environ["CLAUDE_PLUGIN_ROOT"] = str(root)
+    return root
+
+
+ENGINE_TARGETS = ("main", "candidate")
+
+
+def register_engine(engine_root: str | None, engine_target: str | None) -> list[str]:
+    """Write `repos.claude_klabauter` / `engine.target` to the registry on a box with no engine
+    yet resolvable; idempotent. Returns the `key=value` pairs asked for. ValueError on a root that
+    is not an engine checkout or a target outside `ENGINE_TARGETS`."""
+    pairs: dict[str, str] = {}
+    if engine_root:
+        root = Path(engine_root).expanduser().resolve()
+        if not (root / "coordinator_core").is_dir():
+            raise ValueError(f"--engine-root {root} holds no coordinator_core/; pass the engine checkout")
+        pairs["repos.claude_klabauter"] = str(root)
+    if engine_target:
+        if engine_target not in ENGINE_TARGETS:
+            raise ValueError(f"--engine-target must be one of {', '.join(ENGINE_TARGETS)}, got {engine_target!r}")
+        pairs["engine.target"] = engine_target
+    if "repos.claude_klabauter" in pairs and pairs["repos.claude_klabauter"] not in sys.path:
+        sys.path.insert(0, pairs["repos.claude_klabauter"])
+    if pairs:
+        from coordinator_core.machine_resolver import registry_set
+        for key, value in pairs.items():
+            registry_set(key, value)
+    return [f"{k}={v}" for k, v in pairs.items()]
 
 
 def manifest_found() -> bool:
@@ -911,25 +965,22 @@ def step_status_lines(ctx: Ctx) -> StepResult:
     if doc is None:
         return _fail("inspection", f"{path} exists but is not a readable JSON object; left untouched",
                      "fix or remove the file, then re-run")
-    wanted = {
-        "statusLine": {"type": "command", "command": STATUS_LINE_CMD.format(script="statusline.py")},
-        "subagentStatusLine": {"type": "command",
-                               "command": STATUS_LINE_CMD.format(script="subagent-statusline.py")},
-    }
+    value = {"type": "command", "command": STATUS_LINE_CMD.format(script="statusline.py")}
+    current = doc.get("statusLine")
     changed = []
-    for key, value in wanted.items():
-        current = doc.get(key)
-        if current == value:
-            continue
-        if key == "statusLine" and isinstance(current, dict) and current.get("command") \
+    if current != value:
+        if isinstance(current, dict) and current.get("command") \
                 and not _is_coordinator_status_line(str(current["command"])):
             inner = settings_home() / "statusline-inner.json"
             if not inner.exists():
                 _write_json(inner, current)
-        doc[key] = value
-        changed.append(key)
+        doc["statusLine"] = value
+        changed.append("statusLine")
+    # subagentStatusLine is deprecated; DoE's AgentRow mod (coordinator/hooks/modules/agent-row.js) renders the row.
+    if doc.pop("subagentStatusLine", None) is not None:
+        changed.append("removed subagentStatusLine")
     if not changed:
-        return StepResult(INHERITED, "statusLine and subagentStatusLine already wired")
+        return StepResult(INHERITED, "statusLine already wired")
     _write_json(path, doc)
     ctx.next_session.append("status lines render next session")
     return StepResult(RAN, "wired " + ", ".join(changed))
@@ -1052,9 +1103,7 @@ STEPS: tuple[Step, ...] = (
     Step("context7", step_context7, ("required_mcp_surfaces:context7",), risky=True, optional=True),
     Step("notebooklm", step_notebooklm,
          ("required_mcp_surfaces:gemini-notebook-mcp|required_mcp_surfaces:notebooklm-mcp",), optional=True),
-    Step("status_lines", step_status_lines,
-         ("required_local_surfaces:statusline-registration",
-          "required_local_surfaces:subagent-statusline-registration")),
+    Step("status_lines", step_status_lines, ("required_local_surfaces:statusline-registration",)),
     Step("hooks_marker", step_hooks_marker, ("required_local_surfaces:hook-delivery",)),
     Step("coordinator_currency", step_currency, exempt="per-repo record, not a machine install surface"),
     Step("open_claude_home", step_open_claude_home, exempt="presentation only", optional=True),
@@ -1085,6 +1134,10 @@ def manifest_entry_ids(manifest: dict) -> set[str]:
 _MANIFEST_RENAMES = {"required_mcp_surfaces:notebooklm-mcp": "required_mcp_surfaces:gemini-notebook-mcp"}
 
 
+# Manifest entries the installer deliberately no longer implements; the DoE manifest drops them later.
+_DEPRECATED_MANIFEST_ENTRIES = frozenset({"required_local_surfaces:subagent-statusline-registration"})
+
+
 def check_manifest_drift(manifest: dict | None = None, steps: tuple[Step, ...] = STEPS) -> list[str]:
     """Problems joining the manifest to the steps; empty means one source of truth holds."""
     manifest = _read_json(manifest_path()) if manifest is None else manifest
@@ -1110,7 +1163,7 @@ def check_manifest_drift(manifest: dict | None = None, steps: tuple[Step, ...] =
                 claimed |= {alt for alt in ref.split("|") if alt in entries}
             else:
                 problems.append(f"step {step.id} claims {ref}, absent from the manifest")
-    for entry in sorted(entries - claimed):
+    for entry in sorted(entries - claimed - _DEPRECATED_MANIFEST_ENTRIES):
         problems.append(f"manifest entry {entry} has no implementing step")
     return problems
 
@@ -1672,7 +1725,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--permission-mode", default=os.environ.get("COORDINATOR_PERMISSION_MODE"),
                     help="harness permission_mode from hook input; adapts defaults")
     ap.add_argument("--format", choices=("json", "text"), default="json")
+    ap.add_argument("--engine-root", help="engine checkout to register as repos.claude_klabauter (cold box)")
+    ap.add_argument("--engine-target", choices=ENGINE_TARGETS, help="engine channel to register as engine.target")
     args = ap.parse_args(argv)
+
+    if args.engine_root or args.engine_target:
+        if args.plan or args.check_drift:
+            ap.error("--engine-root/--engine-target write the registry; not with --plan or --check-drift")
+        try:
+            written = register_engine(args.engine_root, args.engine_target)
+        except (OSError, ValueError, ImportError) as exc:
+            print(json.dumps({"error": f"engine registration failed: {exc}"}), file=sys.stderr)
+            return 2
+        print("registered " + ", ".join(written), file=sys.stderr)
+    default_plugin_root_env()
 
     if args.check_drift:
         problems = check_manifest_drift()

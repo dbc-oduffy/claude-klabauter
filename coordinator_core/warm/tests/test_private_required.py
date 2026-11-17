@@ -25,7 +25,7 @@ def test_required_build_bakes_mode_and_preserves_provenance(tmp_path,monkeypatch
     monkeypatch.setattr(builder,"_find_compiler",lambda *_:("clang","test-clang.exe"))
     monkeypatch.setattr(builder,"_compiler_version",lambda *_:"fixture compiler")
     seen={}
-    def compile_fake(kind,compiler,source,output):
+    def compile_fake(kind,compiler,source,output,*,windowless=False):
         seen["rendered"]=source.read_bytes(); output.write_bytes(b"fixture image")
     monkeypatch.setattr(builder,"_compile",compile_fake)
     output=tmp_path/"door.exe"

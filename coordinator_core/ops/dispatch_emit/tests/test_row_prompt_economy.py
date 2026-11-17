@@ -95,7 +95,7 @@ def test_composed_excerpts_cap_each_row_block(tmp_path):
     )
     block = script.split(EXCERPT_HEADING, 1)[1].split("\\n\\nBatch independent", 1)[0]
     assert len(EXCERPT_HEADING + block) <= EXCERPT_MAX_BYTES + 40
-    assert "(truncated)" in block
+    assert "(cut at a word boundary; full text: " in block
 
 
 def test_composed_excerpts_name_symbol_spans(tmp_path):

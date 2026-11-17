@@ -439,9 +439,13 @@ def _cross_repo_refusal(run_root: Path, own: Optional[Path], research_route: boo
     return cross_repo_run_refusal(run_root, own, research_route=research_route, approved=approved)
 
 
-def _names_registered_sibling(repo_arg: Optional[str], root: Path) -> bool:
-    """True when an explicit absolute `repo` resolved to a checkout in the machine's repo registry."""
+def _names_registered_sibling(repo_arg: Optional[str], root: Path, own: Optional[Path]) -> bool:
+    """True when an explicit absolute `repo` resolved to a registered checkout other than the session's own repo `own`.
+
+    The session's own checkout is no sibling: naming it grants nothing, and an unresolved `own` grants nothing."""
     if not (repo_arg and Path(repo_arg).is_absolute()):
+        return False
+    if own is None or own.resolve() == root.resolve():
         return False
     from coordinator_core.bash_guards._write_bump_applicability import target_is_registered_repo
 
@@ -1062,9 +1066,14 @@ def _minted_start_envelope(
 def _runner_less_run(root: Path, sizing_rel: str, live: Optional[str]) -> Optional[str]:
     """The run for `sizing_rel` that was minted, joined no launch past `warp_live.MINTED_RUNNER_GRACE_SECONDS`
     and so has no runner: `live` itself when it proves none, else a token-held run of that sizing. Resumable
-    through `_MINTED_OP`, never "already working"."""
+    through `_MINTED_OP`, never "already working". A token of the sizing whose run dir is absent (a dead
+    session's stray mint) is consumed and skipped: `_MINTED_OP` start refuses it, so adopting it would
+    strand the refire."""
+    import time
+
     from coordinator_core import warp_live
     from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     if live:
         return live if warp_live.runner_unproven(root, live) else None
@@ -1074,8 +1083,14 @@ def _runner_less_run(root: Path, sizing_rel: str, live: Optional[str]) -> Option
     for record in run_token.live_records(root):
         named = record.get("sizing_rel")
         if isinstance(named, str) and run_token.normalize_sizing_rel(root, named) == rel:
-            if warp_live.runner_unproven(root, record["run_id"]):
-                return record["run_id"]
+            run_id = record["run_id"]
+            if not os.path.isdir(os.path.join(root, RECORD_DIR_ROOT, run_id)):
+                minted_at = record.get("minted_at")
+                if isinstance(minted_at, (int, float)) and time.time() - minted_at > warp_live.MINTED_RUNNER_GRACE_SECONDS:
+                    run_token.consume(root, run_id)
+                continue
+            if warp_live.runner_unproven(root, run_id):
+                return run_id
     return None
 
 
@@ -1291,7 +1306,12 @@ def _spool_envelope(payload: Any, root: Optional[Path], reason: str) -> Optional
 
 def _write_deferred_script(root: Path, params: dict) -> Path:
     """The deferred script for `params`; the hook's call sites resolve this name so a test can replace it."""
-    return write_deferred_script(root, params)
+    script = write_deferred_script(root, params)
+    from coordinator_core.warp_fire import note_minted
+
+    sid = params.get("session_id")
+    note_minted(sid if isinstance(sid, str) else None, script.as_posix())
+    return script
 
 
 _MINTED_START_JS = r"""export const meta = { name: 'engine-ask-minted-start', description: 'Starts runs a submission minted before its hook answered' }
@@ -2747,7 +2767,7 @@ def _multi_root_asks(
     for key, members in groups.items():
         root = roots[members[0]]
         _note_root(root)
-        approved_of[key] = base_ok or _names_registered_sibling(strings[members[0]], root)
+        approved_of[key] = base_ok or _names_registered_sibling(strings[members[0]], root, own)
         if own is not None and root.resolve() != own.resolve():
             cross = _cross_repo_refusal(root, own, False, approved_of[key])
             if cross:
@@ -3561,7 +3581,7 @@ def _evaluate(
     approved = (
         is_remote_venue()
         or (isinstance(call_args, dict) and call_args.get("cross_repo_approved") is True)
-        or _names_registered_sibling(repo_arg, root)
+        or _names_registered_sibling(repo_arg, root, own if own is not None else _repo_root(None, payload))
     )
     if own is not None:
         cross = _cross_repo_refusal(root, own, False, approved)

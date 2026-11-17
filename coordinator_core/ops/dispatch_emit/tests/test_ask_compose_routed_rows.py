@@ -69,6 +69,7 @@ const log = (m) => logs.push(m);
 const REPO_ROOT = 'REPO';
 const _manifest = %(manifest)s;
 const _agentDefsClause = () => '';
+const _briefPrecedenceTail = '';
 const _rowSidecar = () => '';
 const _runBase = 'a'.repeat(40);
 const _rowPlan = {};

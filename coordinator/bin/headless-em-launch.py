@@ -89,14 +89,56 @@ def _run_bg(argv, *, cwd, env, runner, name):
     return 0
 
 
-def _with_settings_bin(environ):
+GROK_ENGINE_OPS = ("engine_ask.submit", "workflow.fire", "workflow.fire_status", "workflow.fire_wait",
+                   "workflow.revise")
+
+
+def _settings_bin_dir(environ) -> str:
+    home = environ.get("COORDINATOR_SETTINGS_HOME") or str(Path.home() / ".coordinator-claude-settings")
+    return str(Path(home) / "bin")
+
+
+def _grok_launch_args(extra, environ, platform) -> list[str]:
+    """`extra` led by `--permission-mode auto` and one `--allow Bash(<abs coordinator-invoke> <op>:*)` per engine op.
+
+    grok does not expand `$HOME` when matching, so each rule names the resolved absolute path. A caller's
+    own `--permission-mode` and any allow rule it already passed are kept, never doubled.
+    """
+    exe = str(Path(_settings_bin_dir(environ)) / ("coordinator-invoke.exe" if platform == "win32"
+                                                  else "coordinator-invoke"))
+    head = [] if any(a == "--permission-mode" or a.startswith("--permission-mode=") for a in extra) \
+        else ["--permission-mode", "auto"]
+    for op in GROK_ENGINE_OPS:
+        rule = f"Bash({exe} {op}:*)"
+        if rule not in extra:
+            head += ["--allow", rule]
+    return [*head, *extra]
+
+
+def _agy_launch_args(extra, cwd) -> list[str]:
+    """`extra` led by `--add-dir <cwd>`, `--add-dir ~/.coordinator` and `--mode accept-edits`.
+
+    agy's workspace is its launch cwd, not `--cwd`, so the grant is explicit. `--dangerously-skip-permissions`
+    is dropped; a caller's own `--mode` and any dir it already granted are kept, never doubled.
+    """
+    rest = [a for a in extra if a != "--dangerously-skip-permissions"]
+    head = []
+    granted = {rest[i + 1] for i, a in enumerate(rest[:-1]) if a == "--add-dir"}
+    for d in (cwd or os.getcwd(), str(Path.home() / ".coordinator")):
+        if d not in granted:
+            head += ["--add-dir", d]
+    if not any(a == "--mode" or a.startswith("--mode=") for a in rest):
+        head += ["--mode", "accept-edits"]
+    return [*head, *rest]
+
+
+def _with_settings_bin(environ) -> str:
     """The caller's PATH with `<settings home>/bin` appended once, so agy's sandbox resolves coordinator-invoke.
 
     Reads the injected `environ`, not `os.environ`, so it mirrors `_settings_home.settings_home()`'s
     COORDINATOR_SETTINGS_HOME / `~/.coordinator-claude-settings` precedence rather than calling it.
     """
-    home = environ.get("COORDINATOR_SETTINGS_HOME") or str(Path.home() / ".coordinator-claude-settings")
-    bin_dir = str(Path(home) / "bin")
+    bin_dir = _settings_bin_dir(environ)
     path_key = next((k for k in environ if k.upper() == "PATH"), None)
     entries = [e for e in (environ[path_key].split(os.pathsep) if path_key else []) if e]
     if bin_dir not in entries:
@@ -162,7 +204,7 @@ def _codex_writable_dirs(extra: list[str], cwd: str | None = None) -> list[str]:
 
 def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, environ=None,
            prepare_only=False, platform=None, native_executable=None, mint=uuid.uuid4,
-           name=None, resume=None, cwd=None, runner=subprocess.run, open_runs=None):
+           name=None, resume=None, cwd=None, runner=subprocess.run, open_runs=None) -> int:
     """Write the grant and run the CLI with the token env; returns an exit code.
 
     claude is not supervised: `claude --bg [-n NAME | --resume ID]` runs captured in `cwd` on both OSes and
@@ -211,9 +253,16 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
     except HeadlessEmGrantError as exc:
         print(f"headless-em-launch: refused: {exc}", file=sys.stderr)
         return REFUSED
-    cmd = [cli, *_codex_writable_dirs(extra, cwd)] if family == "codex" else [cli, *extra]
-    if family == "claude":
+    if family == "codex":
+        cmd = [cli, *_codex_writable_dirs(extra, cwd)]
+    elif family == "grok":
+        cmd = [cli, *_grok_launch_args(extra, environ, platform)]
+    elif family == "agy":
+        cmd = [cli, *_agy_launch_args(extra, cwd)]
+    elif family == "claude":
         cmd = [cli, "--bg", *(["--resume", resume] if resume else ["-n", name] if name else []), *extra]
+    else:
+        cmd = [cli, *extra]
     child = {SESSION_ENV: sid, HEADLESS_EM_TOKEN_ENV: token, PROVIDER_ENV: family}
     if family == "codex" and platform == "win32":
         from coordinator_core.codex_runner.codex_spawn_env import place_installed_pwsh

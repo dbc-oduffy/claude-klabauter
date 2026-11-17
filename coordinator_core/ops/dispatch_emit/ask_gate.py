@@ -67,6 +67,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     read_run_outcome,
     record_dir,
     stamp_plan_phase,
+    touch_run_activity,
     write_run_baton,
     rulable_ids,
     size_misaligned,
@@ -1567,6 +1568,10 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
         if refused is not None:
             return _refuse(refused).to_json()
         stamp_plan_phase(root, params["run_id"])
+        try:
+            touch_run_activity(record_dir(root, params["run_id"]))
+        except (ValueError, OSError):
+            pass
     _credit_split_predecessors(root, sizing_rel)
     recorded = _write_record(root, sizing_rel, record) if record is not None else None
     landed: list = []

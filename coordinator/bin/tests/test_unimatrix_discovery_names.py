@@ -176,6 +176,51 @@ def test_explicit_native_codex_path_is_preserved(tmp_path, monkeypatch):
     assert codex.codex_binary() == configured
 
 
+@pytest.fixture
+def registry(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.delenv("CODEX_BIN", raising=False)
+    monkeypatch.setattr(codex.shutil, "which", lambda name: None)
+    directory = tmp_path / "settings" / "host-sessions" / "codex"
+    directory.mkdir(parents=True)
+    return directory
+
+
+def test_recorded_binary_used_when_path_misses(tmp_path, registry):
+    real = tmp_path / "fnm-codex"
+    real.touch()
+    (registry / codex.RECORDED_BINARY).write_text(str(real) + "\n", encoding="utf-8")
+    assert codex.codex_binary() == str(real)
+
+
+def test_nothing_recorded_falls_back_to_bare_codex(registry):
+    assert codex.codex_binary() == "codex"
+
+
+def test_stale_or_relative_record_is_ignored(tmp_path, registry):
+    record = registry / codex.RECORDED_BINARY
+    record.write_text(str(tmp_path / "gone"), encoding="utf-8")
+    assert codex.codex_binary() == "codex"
+    record.write_text("codex", encoding="utf-8")
+    assert codex.codex_binary() == "codex"
+
+
+def test_codex_bin_beats_recorded_binary(tmp_path, registry, monkeypatch):
+    real = tmp_path / "fnm-codex"
+    real.touch()
+    (registry / codex.RECORDED_BINARY).write_text(str(real), encoding="utf-8")
+    monkeypatch.setenv("CODEX_BIN", "/configured/codex")
+    assert codex.codex_binary() == "/configured/codex"
+
+
+def test_path_hit_beats_recorded_binary(tmp_path, registry, monkeypatch):
+    real = tmp_path / "fnm-codex"
+    real.touch()
+    (registry / codex.RECORDED_BINARY).write_text(str(real), encoding="utf-8")
+    monkeypatch.setattr(codex.shutil, "which", lambda name: "/on/path/codex")
+    assert codex.codex_binary() == "/on/path/codex"
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows npm layout")
 def test_npm_codex_wrapper_resolves_native_binary(tmp_path, monkeypatch):
     wrapper = tmp_path / "codex.CMD"

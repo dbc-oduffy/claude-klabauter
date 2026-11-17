@@ -40,27 +40,6 @@ def _registry(tmp_path, monkeypatch):
     return SimpleNamespace(ml_dir=ml_dir, settings_home=settings_home)
 
 
-def test_missing_target_under_live_tree_names_resolved_root(
-    tmp_path, _registry, monkeypatch, capsys
-):
-    live_root = tmp_path / "live"
-    _make_bin_dir(live_root, with_sentinel=True)
-
-    (_registry.ml_dir / "registry.local.toml").write_text(
-        f"[repos]\nclaude_klabauter = '{live_root.as_posix()}'\n",
-        encoding="utf-8",
-    )
-
-    shim = _load_shim()
-    with pytest.raises(SystemExit) as excinfo:
-        shim.exec_cli("does-not-exist-anywhere.py", argv=[])
-
-    assert excinfo.value.code == 127
-    err = capsys.readouterr().err
-    assert "<engine-clone>" not in err
-    assert f"{live_root.as_posix()}/scripts/setup.py" in err
-
-
 def test_missing_target_under_resolved_engine_names_resolved_root(
     tmp_path, _registry, monkeypatch, capsys
 ):

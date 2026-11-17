@@ -13,7 +13,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import abandoned_minted_close as amc
 from coordinator_core.ops.dispatch_emit import halted_run, minted_parent, run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, write_run_stage_at
+from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, stamp_plan_phase_at, write_run_stage_at
 from coordinator_core.ops.warp_run_deliverable import ABANDONED_AT_MINTED, MINTED_STALE_SECONDS
 
 NOW = time.time() + 2 * MINTED_STALE_SECONDS
@@ -72,12 +72,31 @@ def test_other_halt_kinds_are_left_alone(repo):
     assert _status(rdir) == "halted"
 
 
-def test_live_token_keeps_the_marker(repo):
+def _plan_started(rdir: Path) -> None:
+    stamp = datetime.fromtimestamp(NOW - 3 * MINTED_STALE_SECONDS, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    write_run_stage_at(rdir, "minted", now=stamp)
+    stamp_plan_phase_at(rdir, now=stamp)
+    when = NOW - 3 * MINTED_STALE_SECONDS
+    for entry in [*rdir.iterdir(), rdir]:
+        os.utime(entry, (when, when))
+
+
+def test_live_token_keeps_the_marker_of_a_run_whose_workflow_started(repo):
     rid = "ask-20261101T000000-dddddd"
     rdir = _abandoned(repo, rid)
+    _plan_started(rdir)
     run_token.mint(repo, rid, "ask.mjs", session_id="s")
     assert amc.close_abandoned(repo, NOW) == []
     assert _status(rdir) == "halted"
+
+
+def test_live_token_does_not_keep_the_marker_of_a_never_started_mint(repo):
+    rid = "ask-20261101T000000-dddde1"
+    rdir = _abandoned(repo, rid)
+    run_token.mint(repo, rid, "ask.mjs", session_id="s")
+    assert run_token.is_live(repo, rid)
+    assert amc.close_abandoned(repo, NOW) == [rid]
+    assert _status(rdir) == "closed"
 
 
 def test_active_descendant_keeps_the_marker_and_stale_descendant_does_not(repo):

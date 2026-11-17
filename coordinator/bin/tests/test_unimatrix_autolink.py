@@ -2189,3 +2189,134 @@ def test_supervisor_started_outside_autolink_stamps_itself_and_is_reaped(env):
     env.al.reap_unrecorded(env.roster, env.sdir, lambda m: None, killed.append, {})
     assert killed == [pid]
     assert not stamp.exists()
+
+
+def _seed_box(e, pids=(500, 501), alias="machine-a", stamp_only=()):
+    e.sdir.mkdir(parents=True, exist_ok=True)
+    rec = {"box": alias}
+    for role, pid in zip(("bridge", "inbox"), pids):
+        rec[role] = {"pid": pid, "procStart": f"start-{pid}"}
+        e.live.add(pid)
+        (e.sdir / f"supervisor-{pid}.json").write_text(json.dumps(
+            {"pid": pid, "procStart": f"start-{pid}", "remote": alias, "role": role}))
+    (e.sdir / f"autolink-{alias}.json").write_text(json.dumps(rec))
+    for pid, role in stamp_only:
+        e.live.add(pid)
+        (e.sdir / f"supervisor-{pid}.json").write_text(json.dumps(
+            {"pid": pid, "procStart": f"start-{pid}", "remote": alias, "role": role}))
+
+
+class _RestartRig:
+    def __init__(self, e, honour=True):
+        self.e, self.honour, self.spawned, self.stops, self.sleeps = e, honour, [], [], 0
+
+    def spawn(self, cmd):
+        self.spawned.append(cmd)
+        pid = 900 + len(self.spawned)
+        self.e.live.add(pid)
+        return FakeProc(pid)
+
+    def sleep(self, _):
+        self.sleeps += 1
+        for path in sorted(self.e.sdir.glob("stop-*.json")):
+            req = json.loads(path.read_text())
+            self.stops.append(req)
+            if self.honour:
+                self.e.live.discard(req["pid"])
+
+    def link(self, roster, alias, key, say, spawn):
+        return self.e.al.link_peer(roster, alias, key, say, spawn=spawn, probe_fn=ok)
+
+    def run(self, alias="machine-a"):
+        out = []
+        rc = self.e.al.cmd_restart_box(alias, link=self.link, spawn=self.spawn, sleep=self.sleep, say=out.append,
+                                       roster=self.e.roster)
+        return rc, out
+
+
+def test_restart_box_stops_by_request_then_starts_one_supervisor_per_role(env):
+    add_key(env)
+    _seed_box(env, stamp_only=[(502, "bridge")])
+    rig = _RestartRig(env)
+    rc, out = rig.run()
+    assert rc == 0, out
+    assert sorted(r["pid"] for r in rig.stops) == [500, 501, 502]
+    assert {r["pid"]: r["procStart"] for r in rig.stops}[502] == "start-502"
+    assert sorted(Path(c[1]).name for c in rig.spawned) == ["unimatrix-mirror-all.py", "unimatrix-roster.py"]
+    rec = json.loads((env.sdir / "autolink-machine-a.json").read_text())
+    assert {rec["bridge"]["pid"], rec["inbox"]["pid"]} == {901, 902}
+    assert not list(env.sdir.glob("stop-*.json")) and not (env.sdir / "autolink-machine-a.lock").exists()
+    roles = [json.loads(p.read_text())["role"] for p in env.sdir.glob("supervisor-9*.json")]
+    assert sorted(roles) == ["bridge", "inbox"]
+
+
+def test_restart_box_never_calls_kill(env, monkeypatch):
+    add_key(env)
+    _seed_box(env)
+    calls = []
+    monkeypatch.setattr(env.roster, "tree_kill", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(os, "kill", lambda *a, **k: calls.append(a))
+    rc, _ = _RestartRig(env).run()
+    assert rc == 0 and calls == []
+
+
+def test_restart_box_survivor_fails_the_verb_and_starts_no_replacement(env):
+    add_key(env)
+    _seed_box(env)
+    rig = _RestartRig(env, honour=False)
+    rc, out = rig.run()
+    assert rc == 1 and rig.spawned == []
+    assert "supervisor bridge pid 500 did not honour the stop request" in out
+    assert "supervisor inbox pid 501 did not honour the stop request" in out
+    assert (env.sdir / "autolink-machine-a.json").exists() and not (env.sdir / "autolink-machine-a.lock").exists()
+    assert not list(env.sdir.glob("stop-*.json"))
+    assert len(list(env.sdir.glob("supervisor-*.json"))) == 2
+
+
+def test_restart_box_refuses_while_the_box_link_lock_is_held(env):
+    add_key(env)
+    _seed_box(env)
+    (env.sdir / "autolink-machine-a.lock").write_text("")
+    rig = _RestartRig(env)
+    rc, out = rig.run()
+    assert rc == 1 and out == ["restart-box: link for machine-a mid-spawn"] and rig.stops == [] and rig.spawned == []
+
+
+def test_restart_box_unreachable_box_exits_non_zero_naming_the_role_and_count(env):
+    add_key(env)
+    _seed_box(env)
+    rig = _RestartRig(env)
+    rig.link = lambda roster, alias, key, say, spawn: None
+    rc, out = rig.run()
+    assert rc == 1
+    assert "restart-box: machine-a has 0 live bridge supervisors after handover" in out
+    assert "restart-box: machine-a has 0 live inbox supervisors after handover" in out
+
+
+def test_restart_box_leaves_another_boxs_supervisors_alone(env):
+    add_key(env)
+    _seed_box(env)
+    _seed_box(env, pids=(600, 601), alias="fallbackbox")
+    rig = _RestartRig(env)
+    rc, _ = rig.run()
+    assert rc == 0 and {r["pid"] for r in rig.stops} == {500, 501}
+    assert {600, 601} <= env.live
+
+
+def test_restart_box_hands_over_a_box_with_no_record_from_its_stamps_alone(env):
+    # Bin-copy supervisors started by hand leave stamps and no autolink record; the handover still lands one per role.
+    add_key(env)
+    _seed_box(env, pids=(), stamp_only=[(700, "bridge"), (701, "inbox")])
+    (env.sdir / "autolink-machine-a.json").unlink()
+    rig = _RestartRig(env)
+    rc, out = rig.run()
+    assert rc == 0, out
+    assert sorted(r["pid"] for r in rig.stops) == [700, 701]
+    assert {700, 701}.isdisjoint(env.live)
+    assert sorted(Path(c[1]).name for c in rig.spawned) == ["unimatrix-mirror-all.py", "unimatrix-roster.py"]
+
+
+def test_restart_box_is_dispatched_from_main(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(env.al, "cmd_restart_box", lambda alias: seen.append(alias) or 0)
+    assert env.al.main(["restart-box", "machine-a"]) == 0 and seen == ["machine-a"]

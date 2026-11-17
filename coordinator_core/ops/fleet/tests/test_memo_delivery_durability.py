@@ -43,7 +43,7 @@ from typing import Callable, Dict
 
 import pytest
 
-from coordinator_core.ops.fleet._memo_anchor import anchor_names
+from coordinator_core.ops.fleet._memo_anchor import anchor_names, read_pin
 from coordinator_core.ops.fleet.memo_heal import _memo_heal_inbox
 from coordinator_core.ops.fleet.memo_send import _memo_send
 from coordinator_core.win_portability import no_console_creationflags
@@ -85,6 +85,10 @@ def _make_receiver_repo(tmp_path: Path, name: str = "receiver-repo") -> Path:
     (root / ".gitkeep").write_text("", encoding="utf-8")
     _git(root, "add", ".gitkeep")
     _git(root, "commit", "-m", "init receiver")
+    bare = tmp_path / f"{name}-origin.git"
+    _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
+    _git(root, "remote", "add", "origin", str(bare))
+    _git(root, "push", "-u", "origin", "main")
     return root
 
 
@@ -164,10 +168,13 @@ def _heal(receiver_repo: Path, *, dry_run: bool = False) -> dict:
 
 
 def _archive_and_commit(receiver_repo: Path, filename: str) -> None:
-    (receiver_repo / "cross-repo" / "archive").mkdir(parents=True, exist_ok=True)
+    inbox_file = _resolved_inbox_path(receiver_repo, filename)
+    archive_file = inbox_file.parent.parent / "archive" / filename
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
     _git(
         receiver_repo, "mv",
-        f"cross-repo/inbox/{filename}", f"cross-repo/archive/{filename}",
+        inbox_file.relative_to(receiver_repo).as_posix(),
+        archive_file.relative_to(receiver_repo).as_posix(),
     )
     _git(receiver_repo, "commit", "-m", f"archive {filename}")
 
@@ -258,10 +265,22 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     fname_b = _delivered_filename(result_b["acted"][0])
     fname_d = _delivered_filename(result_d["acted"][0])
     delivery_sha_a = result_a["acted"][0]["delivery_commit_sha"]
-    delivered_bytes_a = (receiver / "cross-repo" / "inbox" / fname_a).read_bytes()
+    delivered_bytes_a = _delivered_bytes(receiver, delivery_sha_a, fname_a)
+
+    # A delivery is object-only: pinned and anchored, on no receiver branch and
+    # in no worktree. The first heal materializes it into the inbox.
+    assert not (receiver / "cross-repo" / "inbox" / fname_a).exists()
+    heal_0 = _heal(receiver)
+    assert heal_0["exit_code"] == 0, heal_0
+    for fname in (fname_a, fname_b, fname_d):
+        assert {"id": fname, "action": "restored"} in heal_0["acted"]
+    restore_sha_a = _anchor_commit(_common_dir(receiver), fname_a)
+    assert restore_sha_a != delivery_sha_a
 
     _archive_and_commit(receiver, fname_b)
-    _delete_and_commit(receiver, f"cross-repo/inbox/{fname_d}")
+    _delete_and_commit(
+        receiver, _resolved_inbox_path(receiver, fname_d).relative_to(receiver).as_posix(),
+    )
 
     heal_1 = _heal(receiver)
     assert heal_1["exit_code"] == 0, heal_1
@@ -269,16 +288,18 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     assert {"id": fname_d, "action": "retired"} in heal_1["acted"]
 
     gesture(receiver, root_sha)
-    assert not _object_present(receiver, delivery_sha_a)
+    assert not _object_present(receiver, restore_sha_a)
+    assert _object_present(receiver, delivery_sha_a)
+    assert read_pin(_common_dir(receiver), delivery_sha_a) == delivery_sha_a
 
     heal_2 = _heal(receiver)
     assert heal_2["exit_code"] == 0, heal_2
     assert {"id": fname_a, "action": "restored"} in heal_2["acted"]
     restored_path = _resolved_inbox_path(receiver, fname_a)
-    assert restored_path.read_bytes() == delivered_bytes_a
+    assert restored_path.read_bytes().replace(b"\r\n", b"\n") == delivered_bytes_a
     restored_relpath = restored_path.relative_to(receiver).as_posix()
     show = _git(receiver, "show", f"HEAD:{restored_relpath}")
-    assert show.stdout.encode("utf-8").replace(b"\r\n", b"\n") == delivered_bytes_a.replace(b"\r\n", b"\n")
+    assert show.stdout.encode("utf-8").replace(b"\r\n", b"\n") == delivered_bytes_a
 
     assert _inbox_names(receiver) == {fname_a}
     anchored = _anchor_filenames(_common_dir(receiver))
@@ -316,6 +337,16 @@ def _common_dir(repo: Path) -> Path:
     return repo / ".git"
 
 
+def _anchor_commit(common_dir: Path, filename: str) -> str:
+    return next(t[1] for t in anchor_names(common_dir) if t[0] == filename)
+
+
+def _delivered_bytes(receiver_repo: Path, commit_sha: str, filename: str) -> bytes:
+    """The memo bytes as the delivery commit carries them, LF-normalized."""
+    shown = _git(receiver_repo, "show", f"{commit_sha}:cross-repo/inbox/{filename}")
+    return shown.stdout.encode("utf-8").replace(b"\r\n", b"\n")
+
+
 def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -327,8 +358,12 @@ def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
 
     result_b = _deliver(sender, "memo-b")
     fname_b = _delivered_filename(result_b["acted"][0])
-    delivered_bytes_b = (receiver / "cross-repo" / "inbox" / fname_b).read_bytes()
+    delivered_bytes_b = _delivered_bytes(
+        receiver, result_b["acted"][0]["delivery_commit_sha"], fname_b,
+    )
 
+    heal_0 = _heal(receiver)
+    assert {"id": fname_b, "action": "restored"} in heal_0["acted"]
     _archive_and_commit(receiver, fname_b)
 
     _gesture_reset_hard_only(receiver, root_sha)
@@ -337,7 +372,7 @@ def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
     assert heal["exit_code"] == 0, heal
     assert {"id": fname_b, "action": "restored"} in heal["acted"]
     restored_path = _resolved_inbox_path(receiver, fname_b)
-    assert restored_path.read_bytes() == delivered_bytes_b
+    assert restored_path.read_bytes().replace(b"\r\n", b"\n") == delivered_bytes_b
     assert fname_b in _anchor_filenames(_common_dir(receiver))
 
 
@@ -353,6 +388,8 @@ def test_reachable_only_from_a_kept_second_branch_is_left_alone(
     result_e = _deliver(sender, "memo-e")
     fname_e = _delivered_filename(result_e["acted"][0])
 
+    heal_0 = _heal(receiver)
+    assert {"id": fname_e, "action": "restored"} in heal_0["acted"]
     _git(receiver, "branch", "side")
 
     _gesture_reset_hard_only(receiver, root_sha)

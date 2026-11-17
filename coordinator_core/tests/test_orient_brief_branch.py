@@ -16,6 +16,7 @@ FORBIDDEN_GIT_VERBS = ("status", "diff-index", "diff", "ls-files", "fetch")
 @pytest.fixture(autouse=True)
 def _machine(monkeypatch):
     monkeypatch.setenv("COORDINATOR_MACHINE", "box")
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +44,7 @@ def test_req_b1_stale_span_emits_directive_at_every_cadence(tmp_path, cadence):
     assert result.judgment_points == []
     (d,) = result.directives
     today = local_day(str(root))
-    expected = "work/box/2020-01-01to" + today.rsplit("-", 1)[-1]
+    expected = "alice/box/2020-01-01to" + today.rsplit("-", 1)[-1]
     assert d["id"] == "d-branch-span-mismatch"
     assert d["cli"] == "workday-start-day-branch-resolve"
     assert d["args"] == ["span-assert"]
@@ -57,7 +58,14 @@ def test_req_b1_single_day_branch_in_the_past_is_a_mismatch(tmp_path):
     root = _on(tmp_path, "work/box/2020-01-01")
     (d,) = _branch.collect("session", repo_root=root).directives
     today = local_day(str(root))
-    assert f"expected rename to `work/box/2020-01-01to{today[-2:]}`" in d["detail"]
+    assert f"expected rename to `alice/box/2020-01-01to{today[-2:]}`" in d["detail"]
+
+
+def test_req_b1_owner_prefixed_stale_span_is_a_mismatch(tmp_path):
+    root = _on(tmp_path, "alice/box/2020-01-01to03")
+    (d,) = _branch.collect("session", repo_root=root).directives
+    today = local_day(str(root))
+    assert f"expected rename to `alice/box/2020-01-01to{today[-2:]}`" in d["detail"]
 
 
 def test_req_b1_span_ending_today_is_silent(tmp_path):

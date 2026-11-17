@@ -42,6 +42,8 @@ _SEED_FILES = frozenset(
     + ("pyproject.toml",)
     # publish.py's end-of-run argv-parity gate reads this baseline; `_is_wanted` skips test dirs.
     + ("coordinator_core/tests/engine_cli_argv_parity_baseline.json",)
+    # publish.py and percolate-round.py load it by path before bootstrap, which the import filler never sees.
+    + ("coordinator_core/temp_layout.py",)
     # coordinator_core/__init__.py imports it eagerly; unseeded, every clone import dies at __init__.
     + ("coordinator_core/op_scopes.py",)
     + tuple(
@@ -475,9 +477,13 @@ def run_entry_from_clone(clone: Path, entry_rel: str, argv: list[str]) -> int:
     live.add(Path(__file__).resolve().parents[3])
     drop = {str(p) for p in live}
     clone_bin = clone / "coordinator" / "bin"
+    # An in-process caller keeps running after the entry returns; it gets its own sys.path and
+    # coordinator_core binding back, else its later imports resolve into a clone with no filler.
+    saved_path = list(sys.path)
+    saved_engine = {m: mod for m, mod in sys.modules.items() if m == "coordinator_core" or m.startswith("coordinator_core.")}
     sys.path[:] = [p for p in sys.path if p not in drop]
     sys.path[:0] = [str(clone_bin), str(clone)]
-    for name in [m for m in sys.modules if m == "coordinator_core" or m.startswith("coordinator_core.")]:
+    for name in saved_engine:
         del sys.modules[name]
     filler = _CommitFill(clone)
     sys.meta_path.append(filler)
@@ -501,6 +507,10 @@ def run_entry_from_clone(clone: Path, entry_rel: str, argv: list[str]) -> int:
         _record_extra(clone)
         if filler in sys.meta_path:
             sys.meta_path.remove(filler)
+        sys.path[:] = saved_path
+        for name in [m for m in sys.modules if m == "coordinator_core" or m.startswith("coordinator_core.")]:
+            del sys.modules[name]
+        sys.modules.update(saved_engine)
     return 0
 
 

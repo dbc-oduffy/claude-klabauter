@@ -290,6 +290,10 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
     # moved, the receipt or terminal marker is forged, or the finalizer is replayed.
     _OPS + "workflow_fire.finalizer:FinalizerRefused": HEAD_INTEGRITY,
     _OPS + "workflow_fire.headless:FinalizerRefused": HEAD_INTEGRITY,
+    # A run landing refuses to move the ref on an unreadable HEAD, a malformed or escaping
+    # request, an unreviewed staged path, or a path that changed while it was read.
+    _OPS + "dispatch_emit.run_landing:_Refused": HEAD_INTEGRITY,
+    _OPS + "dispatch_emit.land_blobs:_Refused": HEAD_INTEGRITY,
     _OPS + "dispatch_emit.ask_brief:EmBriefRefused": _pending("C5"),
     _OPS + "dispatch_emit.co_declared_settle:OwnHunkRefused": _pending("C11"),
     _OPS + "dispatch_emit.own_hunk_stage:OwnHunkRefused": _pending("C11"),
@@ -305,6 +309,8 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
     _OPS + "queue_promote:_OssMirrorWriteRefused": _pending("C8"),
     _OPS + "review_stamp:MintRefusal": _pending("C8"),
     _OPS + "daily_summary_gap:GapRefusal": _pending("822520"),
+    _OPS + "dispatch_emit.run_landing:_Refused": _pending("d67b0abe6510"),
+    _OPS + "dispatch_emit.land_blobs:_Refused": _pending("d67b0abe6510"),
     _OPS + "ceremony.commit_v2:CommitRefused": _pending("fcb310"),
 }
 

@@ -157,6 +157,127 @@ def test_agy_face_with_no_peers_row_is_unbacked_but_an_unreadable_peers_file_is_
     assert lv.agy_face_unbacked({"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}, home) is False
 
 
+@pytest.fixture(autouse=True)
+def _agy_brain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point agy's brain root under tmp so presence locks never read the real home."""
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "agy" / "brain"))
+    presence = tmp_path / "agy" / "presence"
+    presence.mkdir(parents=True)
+    return presence
+
+
+class _Held:
+    """Holds the presence lock for a conversation through the transport probe, as agy does."""
+
+    def __init__(self, presence: Path, conversation: str) -> None:
+        (presence / f"{conversation}.lock").touch()
+        self.file = open(presence / f"{conversation}.lock", "r+b")
+        self.transport = lv._transport()
+        assert self.transport.lock_file(self.file) is True
+
+    def release(self) -> None:
+        self.transport.unlock_file(self.file)
+        self.file.close()
+
+
+def _write_leg(home: Path, conversation: str, rec: dict) -> None:
+    legs = home / "unimatrix" / "agy-legs"
+    legs.mkdir(parents=True, exist_ok=True)
+    (legs / f"{conversation}.json").write_text(json.dumps(rec))
+
+
+def test_agy_presence_held_follows_the_lock(_agy_brain: Path) -> None:
+    assert lv.agy_presence_held("conv-1") is False
+    held = _Held(_agy_brain, "conv-1")
+    try:
+        assert lv.agy_presence_held("conv-1") is True
+        assert lv.agy_presence_held("conv-1", presence_dir=_agy_brain) is True
+        assert lv.agy_presence_held("conv-2") is False
+    finally:
+        held.release()
+    assert lv.agy_presence_held("conv-1") is False
+
+
+def test_agy_presence_held_refuses_unsafe_names(_agy_brain: Path) -> None:
+    for bad in ("../conv-1", "a/b", "a\\b", "", None):
+        assert lv.agy_presence_held(bad) is False
+
+
+def test_agy_session_state_live_when_presence_lock_held(tmp_path: Path, _agy_brain: Path) -> None:
+    held = _Held(_agy_brain, "conv-1")
+    try:
+        rec = {"agy_pid": 2_000_000_000, "startedAt": 1}
+        assert lv.agy_session_state("conv-1", rec, tmp_path) == "live"
+        assert lv.agy_session_state("conv-1", {"agy_pid": None}, tmp_path, now=10**9) == "live"
+    finally:
+        held.release()
+
+
+def test_agy_session_state_dead_pid_without_lock_is_dead(tmp_path: Path) -> None:
+    assert lv.agy_session_state("conv-1", {"agy_pid": 2_000_000_000}, tmp_path) == "dead"
+
+
+def test_agy_session_state_live_pid_without_lock_is_live(tmp_path: Path) -> None:
+    assert lv.agy_session_state("conv-1", {"agy_pid": os.getpid()}, tmp_path) == "live"
+
+
+def test_agy_session_state_reused_pid_is_dead(tmp_path: Path) -> None:
+    rec = {"agy_pid": os.getpid(), "agy_proc_start": "Mon Jan  1 00:00:00 2001"}
+    assert lv.agy_session_state("conv-1", rec, tmp_path) == "dead"
+    rec["agy_proc_start"] = lv.proc_start(os.getpid())
+    assert lv.agy_session_state("conv-1", rec, tmp_path) == "live"
+
+
+def test_agy_session_state_no_pid_is_unknown_inside_grace_and_dead_past_it(tmp_path: Path) -> None:
+    now = time.time()
+    fresh = {"agy_pid": None, "startedAt": int((now - 5) * 1000)}
+    old = {"agy_pid": None, "startedAt": int((now - lv.AGY_SESSION_GRACE_SECONDS - 5) * 1000)}
+    assert lv.agy_session_state("conv-1", fresh, tmp_path, now=now) == "unknown"
+    assert lv.agy_session_state("conv-1", old, tmp_path, now=now) == "dead"
+    assert lv.agy_session_state("conv-1", {"ts": now - lv.AGY_SESSION_GRACE_SECONDS - 5}, tmp_path, now=now) == "dead"
+
+
+def test_agy_session_state_ages_a_stampless_record_by_its_file_mtime(tmp_path: Path) -> None:
+    _write_leg(tmp_path, "conv-1", {"pid": 1, "agy_pid": None})
+    path = tmp_path / "unimatrix" / "agy-legs" / "conv-1.json"
+    now = time.time()
+    os.utime(path, (now, now))
+    assert lv.agy_session_state("conv-1", {"agy_pid": None}, tmp_path, now=now) == "unknown"
+    os.utime(path, (now - lv.AGY_SESSION_GRACE_SECONDS - 5,) * 2)
+    assert lv.agy_session_state("conv-1", {"agy_pid": None}, tmp_path, now=now) == "dead"
+
+
+def test_agy_session_state_unprovable_age_is_unknown(tmp_path: Path) -> None:
+    assert lv.agy_session_state("conv-1", {"agy_pid": None}, tmp_path) == "unknown"
+    assert lv.agy_session_state("a/b", {"agy_pid": None, "ts": 1}, tmp_path) == "dead"
+
+
+def test_agy_face_with_a_dead_or_absent_pid_and_no_lock_is_unbacked_past_grace(tmp_path: Path) -> None:
+    face = {"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}
+    old = int(time.time() - lv.AGY_SESSION_GRACE_SECONDS - 30) * 1000
+    home = _agy_home(tmp_path, None)
+    _write_leg(home, "conv-1", {"pid": 1, "agy_pid": None, "startedAt": old})
+    assert lv.agy_face_unbacked(face, home) is True
+
+
+def test_agy_face_with_no_pid_is_backed_inside_grace(tmp_path: Path) -> None:
+    face = {"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}
+    home = _agy_home(tmp_path, None)
+    _write_leg(home, "conv-1", {"pid": 1, "agy_pid": None, "startedAt": int(time.time() * 1000)})
+    assert lv.agy_face_unbacked(face, home) is False
+
+
+def test_agy_face_with_a_held_presence_lock_is_backed_despite_a_dead_pid(tmp_path: Path, _agy_brain: Path) -> None:
+    face = {"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}
+    home = _agy_home(tmp_path, 2_000_000_000)
+    held = _Held(_agy_brain, "conv-1")
+    try:
+        assert lv.agy_face_unbacked(face, home) is False
+    finally:
+        held.release()
+    assert lv.agy_face_unbacked(face, home) is True
+
+
 def _peer_home(tmp_path, rows, legs=()):
     base = tmp_path / "unimatrix"
     (base / "agy-legs").mkdir(parents=True)

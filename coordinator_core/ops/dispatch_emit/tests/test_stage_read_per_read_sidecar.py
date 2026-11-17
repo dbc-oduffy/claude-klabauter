@@ -36,6 +36,7 @@ def _run_reads(script: str, calls: str) -> list[dict]:
         "const _files = {};\n"
         "const _seen = [];\n"
         "const _agentDefsClause = () => '';\n"
+        "const _briefPrecedenceTail = '';\n"
         "const agent = async (p, opts) => {\n"
         "  const dir = p.match(/sidecar_dir: (\\S+)/)[1];\n"
         "  if (!(dir in _files)) _files[dir] = { stage_reply: { n: Object.keys(_files).length + 1 } };\n"

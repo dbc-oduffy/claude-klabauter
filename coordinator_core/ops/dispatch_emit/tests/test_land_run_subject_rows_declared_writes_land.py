@@ -1,8 +1,10 @@
 """dispatch.land_run: a credited row whose declared path a late hold (set after the credit gate) keeps out of
 the commit is reported unlanded in the subject, ``Lands-Chunks``, ``Row-Unlanded`` and the reply, in the
 wave-0-checkpoint shape (an earlier commit already carries one row's code) and the resume-after-ledger-halt
-shape; a row whose declared path lands is still credited. A subject-named row whose declared write stays dirty
-after the commit is reported in ``rows_unlanded`` with ``ok`` false, never silently under committed:true."""
+shape; a row whose declared path lands is still credited. A subject-named row's dirty declared write (chunk path
+or manifest row write) that is the run's own bytes lands in the commit; one the run did not write refuses before
+the commit. A write that turns dirty only after the commit is reported in ``rows_unlanded`` with ``ok`` false and
+the row is never credited met."""
 
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     RUN_DIR_ROOT,
     TERMINAL_RESUME_LEDGER_PARAM,
+    ManifestRow,
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
@@ -38,6 +41,7 @@ DLV = "dlv-alpha-aaaaaa"
 PLAN = "docs/plans/p.md"
 CODE_ONE = "coordinator_core/one.py"
 CODE_TWO = "coordinator_core/two.py"
+CODE_THREE = "coordinator_core/three.py"
 DOC = "docs/" "wiki/note.md"
 VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 MET = {"status": "met", "observation": "obs", "sidecar": "j.md"}
@@ -78,6 +82,7 @@ def repo(tmp_path, monkeypatch):
     _write(root, "README.md", "seed\n")
     _write(root, CODE_ONE, "a = 0\n")
     _write(root, CODE_TWO, "b = 0\n")
+    _write(root, CODE_THREE, "c = 0\n")
     _write(
         root, SIZING,
         "schema: sizing-object\nintent: Test intent, verbatim.\nestimate:\n  tshirt: XS\n  provisional: true\n"
@@ -119,9 +124,11 @@ def _hold_late(monkeypatch, held: str) -> None:
     monkeypatch.setattr(co_declared_settle, "sibling_halted", lambda root, sibling: False)
 
 
-def _land(root: Path, *, checkpoint: bool, held: str, monkeypatch) -> dict:
+def _land(root: Path, *, checkpoint: bool, held: str, monkeypatch, manifest_extra: str = "", extra_own: bool = True) -> dict:
     """C1 declares CODE_ONE, C2 declares CODE_TWO. ``checkpoint`` commits CODE_ONE before the terminal commit
-    (the wave-0 checkpoint); otherwise CODE_ONE is dirty and lands with it. ``held`` is held late."""
+    (the wave-0 checkpoint); otherwise CODE_ONE is dirty and lands with it. ``held`` is held late.
+    ``manifest_extra`` is a path only C2's manifest row declares (not a chunk path): dirty, the run's own bytes
+    when ``extra_own``, otherwise bytes no run record covers."""
     _write(root, "reports/C1.md", "DONE: C1\n")
     _write(root, "reports/C2.md", "DONE: C2\n")
     _author(root, DOC, "doc\n")
@@ -130,6 +137,8 @@ def _land(root: Path, *, checkpoint: bool, held: str, monkeypatch) -> dict:
         _git(root, "add", CODE_ONE)
         _git(root, "commit", "-q", "-m", "checkpoint(wave 0): 1 rows -- C1", "--", CODE_ONE)
     _author(root, CODE_TWO, "b = 100\n")
+    if manifest_extra:
+        (_author if extra_own else _write)(root, manifest_extra, "c = 100\n")
     request = CommitRequest(
         chunks=(
             ChunkCommit(id="C1", title="t", paths=(DOC, CODE_ONE), report="reports/C1.md"),
@@ -138,8 +147,11 @@ def _land(root: Path, *, checkpoint: bool, held: str, monkeypatch) -> dict:
         deliverable_id=DLV, plan_path=PLAN,
     )
     _write(root, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
+    rows = (
+        (ManifestRow("C2", "executor", "sonnet", "b.md", (CODE_TWO, manifest_extra), 0),) if manifest_extra else ()
+    )
     manifest = StageManifest(
-        run_dir=f"{RUN_DIR_ROOT}/{RUN}", rows=(), review_declared_paths=(), review_code_paths=(),
+        run_dir=f"{RUN_DIR_ROOT}/{RUN}", rows=rows, review_declared_paths=(), review_code_paths=(),
         marker_path=f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt",
     )
     _write(root, f"{RUN_DIR_ROOT}/{RUN}/manifest.json", json.dumps(manifest.to_json()))
@@ -258,6 +270,53 @@ def test_a_resumed_run_subject_named_row_with_a_dirty_declared_write_is_reported
     out = _land(repo, checkpoint=False, held="", monkeypatch=monkeypatch)
 
     _assert_row_reported_unlanded(out)
+
+
+@pytest.mark.parametrize("checkpoint", [True, False], ids=["wave-0-checkpoint", "no-checkpoint"])
+def test_a_subject_row_manifest_declared_dirty_write_of_the_runs_own_lands_in_the_commit(repo, monkeypatch, checkpoint):
+    out = _land(repo, checkpoint=checkpoint, held="", monkeypatch=monkeypatch, manifest_extra=CODE_THREE)
+
+    assert out["committed"] is True, out
+    assert not _dirty(repo, CODE_THREE), out
+    assert CODE_THREE in _git(repo, "show", "--name-only", "--format=", "HEAD").split(), out
+    assert "rows_unlanded" not in out, out
+    assert out.get("ok") is not False, out
+    assert out["criterion_status"] == "met", out
+    assert _trailer(_message(repo), "Row-Unlanded") == [], out
+
+
+def test_a_subject_row_manifest_declared_dirty_write_the_run_did_not_write_refuses_before_the_commit(repo, monkeypatch):
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _land(repo, checkpoint=False, held="", monkeypatch=monkeypatch, manifest_extra=CODE_THREE, extra_own=False)
+
+    assert out["committed"] is False, out
+    assert out["refused"] == land_run.SUBJECT_DECLARED_UNATTRIBUTED, out
+    assert out["paths"] == [CODE_THREE], out
+    assert CODE_THREE in out["error"], out
+    assert _git(repo, "rev-parse", "HEAD") == head
+    assert _dirty(repo, CODE_THREE)
+
+
+def test_a_manifest_declared_write_left_dirty_after_the_commit_gives_no_met_credit(repo, monkeypatch):
+    """The residual race: the path turns dirty between the pre-commit read and the post-commit read."""
+    real = land_run._dirty_among
+    calls = {"n": 0}
+
+    def late(root, paths):
+        changed, ignored, head = real(root, paths)
+        if CODE_THREE in paths:
+            calls["n"] += 1
+            if calls["n"] > 1:
+                changed = set(changed) | {CODE_THREE}
+        return changed, ignored, head
+
+    monkeypatch.setattr(land_run, "_dirty_among", late)
+    out = _land(repo, checkpoint=False, held="", monkeypatch=monkeypatch, manifest_extra=CODE_THREE)
+
+    assert out["rows_unlanded"] == {"C2": [CODE_THREE]}, out
+    assert out["ok"] is False, out
+    assert "C2" not in out["credited_chunks"], out
+    assert out["criterion_status"] == "not_met", out
 
 
 @pytest.mark.parametrize("checkpoint", [True, False], ids=["wave-0-checkpoint", "no-checkpoint"])

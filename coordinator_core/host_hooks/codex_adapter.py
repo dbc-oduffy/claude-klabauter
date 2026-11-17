@@ -35,6 +35,26 @@ def verdict_parts(verdict: Optional[Mapping[str, Any]]) -> Tuple[str, str]:
     return str(decision), str(reason)
 
 
+ASK_DECISIONS = frozenset({"ask", "force_ask"})
+
+
+def guard_name(verdict: Optional[Mapping[str, Any]]) -> str:
+    """The emitting guard's name when the verdict carries one (flat or `hookSpecificOutput`-nested), else ""."""
+    if not isinstance(verdict, Mapping):
+        return ""
+    nested = verdict.get("hookSpecificOutput")
+    name = verdict.get("guard") or (nested.get("guard") if isinstance(nested, Mapping) else None)
+    return name if isinstance(name, str) else ""
+
+
+def ask_denies(verdict: Optional[Mapping[str, Any]]) -> bool:
+    """True when the verdict's guard has a `deny_registry` class: an ask from it renders as a deny, any other ask as an advisory."""
+    from coordinator_core import deny_registry
+
+    guard = guard_name(verdict)
+    return bool(guard) and deny_registry.guard_deny_class(guard) is not None
+
+
 class CodexAdapter:
     """Adapter for Codex command hooks (JSON on stdin, JSON on stdout)."""
 
@@ -81,15 +101,26 @@ class CodexAdapter:
                     "permissionDecisionReason": reason or "denied by coordinator guard",
                 }
             }
-        # Context is supported by Codex; explicit allow/ask and Claude input
-        # rewrites are deliberately not forwarded to native tools.
+        is_ask = decision in ASK_DECISIONS
+        if is_ask and ask_denies(verdict):
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": host_event.event,
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason or "denied by coordinator guard",
+                }
+            }
+        # Context is supported by Codex; explicit allow and Claude input rewrites are deliberately not
+        # forwarded to native tools. Codex has no ask it can surface headless, so a non-registry ask
+        # reaches the model as context.
         if isinstance(verdict, Mapping):
             nested = verdict.get("hookSpecificOutput")
             nested = nested if isinstance(nested, Mapping) else {}
             context = nested.get("additionalContext") or verdict.get("additionalContext")
             message = verdict.get("systemMessage")
-            if isinstance(context, str) or isinstance(message, str):
-                text = "\n".join(x for x in (context, message) if isinstance(x, str) and x)
+            ask_text = (reason or "coordinator: confirm") if is_ask else None
+            if isinstance(context, str) or isinstance(message, str) or ask_text:
+                text = "\n".join(x for x in (ask_text, context, message) if isinstance(x, str) and x)
                 if text:
                     return {"hookSpecificOutput": {"hookEventName": host_event.event,
                                                    "additionalContext": text}}

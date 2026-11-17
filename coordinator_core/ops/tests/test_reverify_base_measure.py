@@ -161,6 +161,49 @@ def test_head_pass_skips_ids_red_at_base_and_still_runs_for_absent_ones(monkeypa
     assert result["red"] == [RED_AT_BASE]
 
 
+def test_head_sha_none_never_runs_head_so_head_only_reds_stay_out(monkeypatch):
+    calls = []
+
+    def fake_run(sha, ids, cwd):
+        calls.append(sha)
+        return "ok", 0, [], []
+
+    monkeypatch.setattr(rbm, "_run", fake_run)
+    result = rbm.measure("base", None, [GREEN], ".")
+    assert calls == ["base"] and result["red"] == []
+
+
+def test_timeout_s_is_one_deadline_and_expiry_reports_timeout(monkeypatch):
+    def slow(argv, *a, **kw):
+        assert kw["timeout"] is not None
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    monkeypatch.setattr(rbm.subprocess, "run", slow)
+    result = rbm.measure("0" * 40, None, [GREEN], ".", timeout_s=5.0)
+    assert result["export"] == "timeout" and result["red"] == [] and result["passed_at_base"] == []
+
+
+def test_without_timeout_s_the_run_is_unbounded(monkeypatch):
+    seen = {}
+
+    def fake(argv, *a, **kw):
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(argv, 0)
+
+    monkeypatch.setattr(rbm.subprocess, "run", fake)
+    rbm.measure("0" * 40, None, [GREEN], ".")
+    assert seen["timeout"] is None
+
+
+def test_write_export_is_byte_identical_to_main(repo, monkeypatch, tmp_path):
+    root, base, _head = repo
+    _code, text = _measure(root, ["--sha", base, "--out", "m.txt", "--", RED_AT_BASE, GREEN], monkeypatch)
+    result = rbm.measure(base, None, [RED_AT_BASE, GREEN], str(root))
+    target = tmp_path / "nested" / "w.txt"
+    rbm.write_export(result, target)
+    assert target.read_bytes() == (root / "m.txt").read_bytes() and text == target.read_text(encoding="utf-8")
+
+
 def test_head_run_exit_one_keeps_the_export_ok(monkeypatch):
     def fake_run(sha, ids, cwd):
         if sha == "base":

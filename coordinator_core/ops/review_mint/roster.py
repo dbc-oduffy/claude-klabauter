@@ -407,6 +407,10 @@ def _resolve_review_agent(
     if "op" in raw_agent:
         if not isinstance(op, str) or not op:
             raise RosterFragmentError(f"{where} 'op' {op!r} must be a non-empty string")
+        from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+        if op not in OP_MODULE_MAP:
+            raise RosterFragmentError(f"{where} 'op' {op!r} is not a registered op")
         for field in ("agentType", "accepts_signals", "model", "effort"):
             if raw_agent.get(field) is not None:
                 raise RosterFragmentError(f"{where} carries both 'op' and '{field}'")

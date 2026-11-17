@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 from dataclasses import dataclass
@@ -30,8 +31,18 @@ def exit_code(items: Iterable[CheckItem]) -> int:
     return 0 if all(i.ok for i in items) else 1
 
 
+_LEADING_SUBSTITUTION = re.compile(r'^\s*[A-Za-z_]\w*="\$\(.*?\)[^"]*"\s*;\s*(\S.*)$', re.DOTALL)
+
+
 def command_head(command: str) -> Optional[str]:
-    """First token of a hook/statusline command after any leading `VAR=val` assignments."""
+    """First token of a hook/statusline command after any leading `VAR=val` assignments.
+
+    A leading `VAR="$(...)..."; rest` shell assignment (the breadcrumb statusLine form) is skipped
+    whole: its command substitution is not a program, the interpreter after `;` is.
+    """
+    substitution = _LEADING_SUBSTITUTION.match(command)
+    if substitution:
+        return command_head(substitution.group(1))
     try:
         tokens = shlex.split(command, posix=os.name != "nt")
     except ValueError:

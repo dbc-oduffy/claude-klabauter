@@ -200,6 +200,9 @@ def test_result_lru_evicts_the_oldest_result_but_keeps_its_state() -> None:
     for i, k in enumerate(keys):
         store.admit(k, "invoke.from_argv")
         store.stamp(k, dispatch_ack.OUTCOME_RESULT, result={"n": i})
+        if k is not keys[-1]:
+            # Only a read result is evictable; an unread one stays resident.
+            assert store.status(k)["result"] == {"n": i}
     first = store.status(keys[0])
     assert first["state"] == dispatch_ack.STATE_FINISHED
     assert "result" not in first
@@ -230,6 +233,7 @@ def test_late_failure_text_survives_result_churn_until_read_and_ten_minutes() ->
         dispatch_ack.OUTCOME_RESULT,
         result={"stdout": "", "stderr": "x" * 5000, "exit_code": 1},
     )
+    assert store.status(late)["failure_text"] == "x" * dispatch_ack.FAILURE_TEXT_BYTES
     _churn(store, dispatch_ack.RESULT_RETAIN_COUNT + 5)
     first = store.status(late)
     assert first["result_dropped"] == "evicted"
@@ -323,6 +327,8 @@ def test_total_result_bytes_are_capped() -> None:
     for k in keys:
         store.admit(k, "invoke.from_argv")
         store.stamp(k, dispatch_ack.OUTCOME_RESULT, result="y" * each)
+        if k is not keys[-1]:
+            assert "result" in store.status(k)
     assert store._results_bytes <= dispatch_ack.RESULT_RETAIN_BYTES
     assert "result" not in store.status(keys[0])
     assert "result" in store.status(keys[-1])

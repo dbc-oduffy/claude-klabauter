@@ -4451,7 +4451,7 @@ def _operand_is_in_repo_scratch(operand: str) -> bool:
     if _cd_precedes_delete(_RAW_CMD.get()):
         return False
     try:
-        from coordinator_core.bash_guards._dc_rm import _resolves_under_repo_scratch
+        from coordinator_core.bash_guards.destructive_rm_support import _resolves_under_repo_scratch
     except ImportError:
         return False
     full = operand if os.path.isabs(operand) else os.path.join(cwd, operand)

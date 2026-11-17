@@ -224,3 +224,38 @@ def test_unparseable_committed_module_is_cached_without_changing_gate_semantics(
     monkeypatch.setattr(ic.ast, 'parse', counted)
     assert ic.find_commit_from_import_name_violations(tmp_path, 'sealed') == (1, [])
     assert calls == Counter({'coordinator_core/a.py': 1, 'coordinator_core/b.py': 1})
+
+
+def test_warm_cache_parses_nothing_and_keeps_the_verdict(tmp_path, monkeypatch):
+    from collections import Counter
+    import percolate.import_closure as ic
+    from coordinator_core.percolate.gate_result_cache import GateResultCache
+
+    sources = {
+        'coordinator_core/__init__.py': '',
+        'coordinator_core/a.py': 'from coordinator_core.shared import present, absent\n',
+        'coordinator_core/shared.py': 'present = 1\n',
+    }
+    monkeypatch.setattr(ic, '_read_commit_py_blobs', lambda *a: (sources, {'coordinator_core'}))
+    calls = Counter()
+    real = ic.ast.parse
+    def counted(source, filename='<unknown>', **kwargs):
+        calls[filename] += 1
+        return real(source, filename=filename, **kwargs)
+    monkeypatch.setattr(ic.ast, 'parse', counted)
+
+    def run():
+        cache = GateResultCache(tmp_path / 'cache', 'commit-from-import', 'v1')
+        result = ic.find_commit_from_import_name_violations(tmp_path, 'c', cache=cache)
+        cache.flush()
+        return result
+
+    expected = (1, [('coordinator_core/a.py', 'coordinator_core.shared.absent')])
+    assert run() == expected
+    cold = sum(calls.values())
+    assert run() == expected
+    assert sum(calls.values()) == cold
+    # A changed blob is a new key: re-parsed, and the verdict follows the new bytes.
+    sources['coordinator_core/shared.py'] += 'absent = 2\n'
+    assert run() == (1, [])
+    assert calls['coordinator_core/shared.py'] == 2

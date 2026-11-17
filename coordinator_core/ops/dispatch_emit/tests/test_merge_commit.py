@@ -27,8 +27,19 @@ def _write(root: Path, name: str, text: str) -> None:
     path.write_text(text, encoding="utf-8", newline="")
 
 
-def _build(tmp_path: Path, n_conflicted: int = 2, n_deleted: int = 1, executable: bool = False):
-    """A real conflicting merge: HEAD is ``ours``; returns ``(root, conflicted, params)``."""
+_SEVEN = "".join(f"line{i}\n" for i in range(1, 8))
+
+
+def _clean_names(n_clean: int) -> list:
+    return ["clean.txt"] + [f"clean{i}.txt" for i in range(1, n_clean)]
+
+
+def _build(tmp_path: Path, n_conflicted: int = 2, n_deleted: int = 1, executable: bool = False,
+           n_clean: int = 1, clean_base: str = "base\n", clean_theirs: str = "from theirs\n"):
+    """A real conflicting merge: HEAD is ``ours``; returns ``(root, conflicted, params)``.
+
+    Theirs changes every ``_clean_names(n_clean)`` file from ``clean_base`` to ``clean_theirs``.
+    """
     root = tmp_path / "repo"
     root.mkdir(parents=True)
     _git(["init", "-q", "-b", "main"], root)
@@ -42,7 +53,8 @@ def _build(tmp_path: Path, n_conflicted: int = 2, n_deleted: int = 1, executable
         _write(root, name, "base\n")
     for name in deleted:
         _write(root, name, "doomed\n")
-    _write(root, "clean.txt", "base\n")
+    for name in _clean_names(n_clean):
+        _write(root, name, clean_base)
     _write(root, "unrelated.txt", "base\n")
     if executable:
         (root / "run.sh").chmod(0o755)
@@ -54,7 +66,8 @@ def _build(tmp_path: Path, n_conflicted: int = 2, n_deleted: int = 1, executable
         _write(root, name, "theirs\n")
     for name in deleted:
         (root / name).unlink()
-    _write(root, "clean.txt", "from theirs\n")
+    for name in _clean_names(n_clean):
+        _write(root, name, clean_theirs)
     _write(root, "added.txt", "new on theirs\n")
     _git(["add", "-A"], root)
     _git(["commit", "-q", "-m", "theirs"], root)
@@ -162,31 +175,62 @@ def test_bad_params_refuse(tmp_path):
         assert out["refused"] == "bad-params", (patch, out)
 
 
-def test_worktree_dirty_path_keeps_its_bytes_and_index_moves_to_new(tmp_path):
-    root, _, params = _build(tmp_path)
-    _write(root, "clean.txt", "local edit\n")
+_THEIRS_FIRST = _SEVEN.replace("line1\n", "THEIRS1\n")
+_LOCAL_LAST = _SEVEN.replace("line7\n", "LOCAL7\n")
+_BOTH = _SEVEN.replace("line1\n", "THEIRS1\n").replace("line7\n", "LOCAL7\n")
+
+
+def _dirty_build(tmp_path: Path, **kw):
+    return _build(tmp_path, clean_base=_SEVEN, clean_theirs=_THEIRS_FIRST, **kw)
+
+
+def test_dirty_path_theirs_changed_is_folded_with_both_hunks(tmp_path):
+    root, _, params = _dirty_build(tmp_path)
+    _write(root, "clean.txt", _LOCAL_LAST)
 
     out = _call(root, params)
 
     assert out["ok"] is True, out
-    assert out["synced"]["index_only"] == ["clean.txt"]
-    assert (root / "clean.txt").read_text() == "local edit\n"
+    assert out["synced"]["folded"] == ["clean.txt"]
+    assert (root / "clean.txt").read_text() == _BOTH
+    assert _git(["show", "HEAD:clean.txt"], root) == _THEIRS_FIRST
     staged = _git(["ls-files", "-s", "clean.txt"], root).split()[1]
     assert staged == _git(["rev-parse", "HEAD:clean.txt"], root).strip()
 
 
-def test_path_staged_differently_before_the_call_is_left_staged(tmp_path):
-    root, _, params = _build(tmp_path)
-    _write(root, "clean.txt", "staged edit\n")
-    _git(["add", "clean.txt"], root)
-    before = _git(["ls-files", "-s", "clean.txt"], root)
+def test_dirty_path_with_overlapping_hunks_refuses_dirty_target_and_changes_nothing(tmp_path):
+    root, _, params = _dirty_build(tmp_path)
+    clash = _SEVEN.replace("line1\n", "LOCAL1\n")
+    _write(root, "clean.txt", clash)
+    old, index = _head(root), _index(root)
 
     out = _call(root, params)
 
-    assert out["ok"] is True, out
-    assert out["left_staged"] == ["clean.txt"]
-    assert _git(["ls-files", "-s", "clean.txt"], root) == before
+    assert out["ok"] is False and out["refused"] == "dirty-target", out
+    assert out["detail"]["unfoldable"] == ["clean.txt"]
+    assert out["detail"]["staged"] == []
+    assert _head(root) == old
+    assert _index(root) == index
+    assert (root / "clean.txt").read_bytes() == clash.encode()
+    assert not (root / "added.txt").exists()
+    assert (root / "gone0.txt").exists()
+
+
+def test_staged_path_theirs_changed_refuses_dirty_target_before_any_mutation(tmp_path):
+    root, _, params = _build(tmp_path)
+    _write(root, "clean.txt", "staged edit\n")
+    _git(["add", "clean.txt"], root)
+    old, index = _head(root), _index(root)
+
+    out = _call(root, params)
+
+    assert out["ok"] is False and out["refused"] == "dirty-target", out
+    assert out["detail"]["staged"] == ["clean.txt"]
+    assert _head(root) == old
+    assert _index(root) == index
     assert (root / "clean.txt").read_text() == "staged edit\n"
+    assert not (root / "added.txt").exists()
+    assert (root / "gone0.txt").exists()
 
 
 def _spy(monkeypatch, replace=None, after=None):
@@ -228,6 +272,58 @@ def test_unexpected_staged_path_refuses_with_head_unmoved_and_sync_restored(tmp_
     assert _git(["diff", "--cached", "--name-only", old], root).split() == ["extra.txt"]
 
 
+@pytest.mark.parametrize("failure", ["cas-lost", "unexpected-staged"])
+def test_failure_after_the_dirty_fold_restores_the_original_bytes(tmp_path, monkeypatch, failure):
+    root, _, params = _dirty_build(tmp_path)
+    _write(root, "clean.txt", _LOCAL_LAST)
+    _write(root, "extra.txt", "intruder\n")
+    old, index = _head(root), _index(root)
+
+    def stage_extra(args):
+        if "checkout" in args:
+            subprocess.run(["git", "-C", str(root), "add", "extra.txt"], check=True, **no_console_creationflags())
+
+    def lose_cas(args):
+        if "update-ref" in args:
+            return GitResult(returncode=1, stdout="", stderr="cannot lock ref", timed_out=False)
+        return None
+
+    if failure == "cas-lost":
+        _spy(monkeypatch, replace=lose_cas)
+    else:
+        _spy(monkeypatch, after=stage_extra)
+
+    out = _call(root, params)
+
+    assert out["ok"] is False, out
+    assert out["refused"] == ("head-moved" if failure == "cas-lost" else "unexpected-staged"), out
+    assert _head(root) == old
+    assert (root / "clean.txt").read_bytes() == _LOCAL_LAST.encode()
+    assert _git(["ls-files", "-s", "clean.txt"], root) == [l for l in index.splitlines(True) if "clean.txt" in l][0]
+
+
+def test_restore_never_overwrites_a_peer_edit_made_after_the_fold(tmp_path, monkeypatch):
+    root, _, params = _dirty_build(tmp_path)
+    _write(root, "clean.txt", _LOCAL_LAST)
+    _write(root, "extra.txt", "intruder\n")
+    old = _head(root)
+    peer = _BOTH + "peer line\n"
+
+    def stage_extra_and_peer_edit(args):
+        if "checkout" in args:
+            subprocess.run(["git", "-C", str(root), "add", "extra.txt"], check=True, **no_console_creationflags())
+            _write(root, "clean.txt", peer)
+
+    _spy(monkeypatch, after=stage_extra_and_peer_edit)
+
+    out = _call(root, params)
+
+    assert out["ok"] is False and out["refused"] == "unexpected-staged", out
+    assert _head(root) == old
+    assert (root / "clean.txt").read_bytes() == peer.encode()
+    assert "clean.txt" in repr(out["detail"]), out
+
+
 def test_sync_failure_before_head_moves_leaves_head_and_deletes_untouched(tmp_path, monkeypatch):
     root, _, params = _build(tmp_path, n_deleted=3)
     old, index = _head(root), _index(root)
@@ -256,6 +352,23 @@ def test_spawn_count_is_independent_of_conflicted_path_count(tmp_path, monkeypat
         calls = _spy(monkeypatch)
         out = _call(root, params)
         assert out["ok"] is True, out
+        counts.append(len(calls))
+        monkeypatch.undo()
+    assert counts[0] == counts[1]
+    assert counts[0] <= 20
+
+
+def test_spawn_count_is_independent_of_dirty_path_count(tmp_path, monkeypatch):
+    counts = []
+    for n in (1, 6):
+        root, _, params = _dirty_build(tmp_path / f"d{n}", n_clean=n)
+        for name in _clean_names(n):
+            _write(root, name, _LOCAL_LAST)
+        calls = _spy(monkeypatch)
+        out = _call(root, params)
+        assert out["ok"] is True, out
+        assert sorted(out["synced"]["folded"]) == sorted(_clean_names(n))
+        assert all((root / name).read_text() == _BOTH for name in _clean_names(n))
         counts.append(len(calls))
         monkeypatch.undo()
     assert counts[0] == counts[1]

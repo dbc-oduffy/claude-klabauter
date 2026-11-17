@@ -212,7 +212,7 @@ def _scope_clause(
         + (f"Scope notice: {notice} Quote it in `summary`. " if notice else "")
         + f"Re-run each red at the run base {base} in an export of it and list in `baseline.pre_existing` "
         "only ids measured red there; a red not re-run or whose export failed is `unverified`, never "
-        "`pre_existing`; a base check that failed in the export itself (`git archive` exit 128, no `.git`) is `unverified`. "
+        "`pre_existing`; a base check that failed in the export itself (no `.git`) is `unverified`. "
     )
 
 
@@ -686,7 +686,7 @@ def _refuse_unless_zero_claim_settled(
 
 #: A base-check failure whose text names the export itself failing (no `.git` in it) measured the
 #: environment, not the test at the base.
-_ENV_FAULT_RE = re.compile(r"git archive\b[^\n]*\bexited\s+128\b|not a git repository", re.IGNORECASE)
+_ENV_FAULT_RE = re.compile(r"not a git repository", re.IGNORECASE)
 
 
 def _entry_id(entry: Any) -> str:

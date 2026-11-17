@@ -1063,6 +1063,9 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
 #: writes its verdict, which the re-sent landing reads.
 REVERIFY_STEP = "clean_overlay_verify.reverify_on_mismatch"
 REVERIFY_STEP_SECS = 8.0
+#: Seconds a parked landing's resume entry waits before the drain re-sends it: the detached overlay
+#: it launched is still running, and a re-send inside that window only parks again.
+REVERIFY_RESUME_DELAY_SECS = 30.0
 
 
 INFLIGHT_FILE = "overlay-inflight"

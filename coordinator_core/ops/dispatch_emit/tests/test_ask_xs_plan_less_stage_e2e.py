@@ -16,7 +16,8 @@ from pathlib import Path
 SIZING_REL = "state/sizings/2026-10-22-xs-plan-less.yaml"
 WRITES = ["src/x.py"]
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
-_STAGE_MARK = "dispatch.ask_stage \\'<params>\\'"
+_STAGE_PARAMS_MARK = "const _stageRecoverParams = () => {"
+_STAGE_PARAMS_END = "_stageRecover = async"
 
 _RUNTIME_VALUES = {
     "_runId": "xs-plan-less-1",
@@ -53,10 +54,11 @@ def _object_literal(text: str, start: int) -> str:
 
 
 def _composed_stage_params(monkeypatch) -> dict:
-    """The params object the gate agent is told to run for ask_stage, resolved against fixed runtime values.
+    """The plan-less params object the composed script hands dispatch.ask_stage, resolved against fixed runtime values.
 
-    Only keys written inside the composed JSON.stringify literal count: a key the prompt asks
-    the agent to add in prose is the agent's choice, not a composed argument.
+    The gate op stages XS itself (stage_act), so the only composed plan-less ask_stage params are
+    the recovery stage's final `return {...}`, the branch taken when no plan path is known. Only
+    keys written inside that literal count.
     """
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
     script = compose_ask_script(
@@ -70,8 +72,9 @@ def _composed_stage_params(monkeypatch) -> dict:
         writes=WRITES,
         **REVIEW_KW,
     )
-    act = script[script.index(_STAGE_MARK) + len(_STAGE_MARK) :]
-    literal = _object_literal(act, act.index("JSON.stringify("))
+    start = script.index(_STAGE_PARAMS_MARK)
+    body = script[start : script.index(_STAGE_PARAMS_END, start)]
+    literal = _object_literal(body, body.rindex("return {"))
     params: dict = {}
     for key, value in re.findall(r"(?<![\w.])(\w+)\s*:\s*(_\w+|\"[^\"]*\")", literal):
         params[key] = _RUNTIME_VALUES[value] if value.startswith("_") else json.loads(value)

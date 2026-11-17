@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import review_prep as rp
+from coordinator_core.ops.tests.conftest import stub_own_write_claims
 from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot as snap
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.win_portability import no_console_creationflags
@@ -84,7 +85,12 @@ def test_unit_clean_declared_returns_nothing_where_the_scan_found_foreign_dirt(r
     assert rp.undeclared_edits_for_run(repo, RUN, [DECLARED], SESSION) == []
 
 
-def test_own_declared_edit_still_adopts_an_undeclared_edit(repo):
+@pytest.fixture
+def own_session_claims(monkeypatch):
+    stub_own_write_claims(monkeypatch, SESSION)
+
+
+def test_own_declared_edit_still_adopts_an_undeclared_edit(repo, own_session_claims):
     (repo / DECLARED).write_text("export const a = 2;\n", encoding="utf-8")
     (repo / FOREIGN).write_text("x = 2\n", encoding="utf-8")
     reply = _prep(repo)
@@ -100,7 +106,7 @@ def test_non_product_declared_path_is_not_proof_of_clean(repo):
     assert rp._declared_provably_clean(repo, ["state/own.md"]) is False
 
 
-def test_untracked_declared_path_is_not_proof_of_clean(repo):
+def test_untracked_declared_path_is_not_proof_of_clean(repo, own_session_claims):
     (repo / "new").mkdir()
     (repo / "new" / "own.py").write_text("y = 1\n", encoding="utf-8")
     (repo / FOREIGN).write_text("x = 2\n", encoding="utf-8")

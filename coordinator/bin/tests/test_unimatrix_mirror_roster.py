@@ -1261,6 +1261,90 @@ def test_a_sigterm_stop_is_logged_and_exits_nonzero(tmp_path: Path, name) -> Non
             p.wait(timeout=10)
 
 
+class _StopLoop(Exception):
+    pass
+
+
+def _main_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, killed: list):
+    """The mirror-all module with settings home, router, sessions and signals stubbed; sync parks one client."""
+    mirror = load("mirror-all")
+    roster = mirror._roster()
+    home = tmp_path / "home"
+    (home / "unimatrix").mkdir(parents=True)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setattr(signal, "signal", lambda *a, **k: None)
+    monkeypatch.setattr(mirror, "ensure_router", lambda say: False)
+    monkeypatch.setattr(mirror, "live_sessions", lambda skip: {})
+    monkeypatch.setattr(mirror, "boot_prune", lambda *a, **k: None)
+    monkeypatch.setattr(roster, "tree_kill", killed.append)
+    calls = []
+
+    def sync(clients, live, cfg, say) -> None:
+        calls.append(1)
+        clients["s"] = (1, FakeProc(4321))
+
+    monkeypatch.setattr(mirror, "sync", sync)
+    return mirror, roster, home, calls
+
+
+def _run_main(mirror, tmp_path: Path):
+    log = tmp_path / "sup.log"
+    mirror.main([str(log), "--remote", "farbox", "--key", "k"])
+    return log.read_text(encoding="utf-8")
+
+
+def test_a_stop_request_ends_the_loop_after_one_pass_and_reaps_only_its_own_clients(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    killed: list = []
+    mirror, roster, home, calls = _main_harness(tmp_path, monkeypatch, killed)
+    own = roster.proc_start(os.getpid())
+    real_sync = mirror.sync
+
+    def sync_then_request(clients, live, cfg, say) -> None:
+        real_sync(clients, live, cfg, say)
+        roster.request_stop(os.getpid(), own, "inbox", "farbox")
+
+    monkeypatch.setattr(mirror, "sync", sync_then_request)
+    text = _run_main(mirror, tmp_path)
+    assert calls == [1] and "STOPPED-BY-REQUEST" in text
+    assert killed == [4321]  # its own client's pid, nothing else
+    assert not (home / "unimatrix" / f"stop-{os.getpid()}.json").exists()
+    assert not (home / "unimatrix" / f"supervisor-{os.getpid()}.json").exists()
+
+
+def test_a_stop_request_already_pending_stops_before_any_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    killed: list = []
+    mirror, roster, home, calls = _main_harness(tmp_path, monkeypatch, killed)
+    own = roster.proc_start(os.getpid())
+    real_stamp = roster.stamp_supervisor
+
+    def stamp_then_request(remote, role=None) -> None:
+        real_stamp(remote, role)
+        assert json.loads((home / "unimatrix" / f"supervisor-{os.getpid()}.json").read_text(encoding="utf-8"))["role"] == "inbox"
+        roster.request_stop(os.getpid(), own, "inbox", remote)
+
+    monkeypatch.setattr(roster, "stamp_supervisor", stamp_then_request)
+    assert "STOPPED-BY-REQUEST" in _run_main(mirror, tmp_path)
+    assert calls == [] and killed == []
+
+
+def test_a_request_for_another_procstart_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    killed: list = []
+    mirror, roster, home, calls = _main_harness(tmp_path, monkeypatch, killed)
+    roster.request_stop(os.getpid(), "some other process life", "inbox", "farbox")
+
+    def sync(clients, live, cfg, say) -> None:
+        calls.append(1)
+        if len(calls) == 3:
+            raise _StopLoop
+
+    monkeypatch.setattr(mirror, "sync", sync)
+    monkeypatch.setattr(roster, "wait_or_stop", lambda seconds, own, sleep=None: roster.stop_requested(own))
+    with pytest.raises(_StopLoop):
+        _run_main(mirror, tmp_path)
+    assert len(calls) == 3
+    assert (home / "unimatrix" / f"stop-{os.getpid()}.json").exists()
+
+
 def test_fetch_roster_retries_one_transient_stall_but_not_a_persistent_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)

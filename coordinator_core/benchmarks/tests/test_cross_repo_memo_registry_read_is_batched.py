@@ -49,7 +49,6 @@ is a number that grows with the registry, which is how this got to 45.
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
@@ -102,14 +101,26 @@ def test_registry_reads_cost_one_process(tmp_path, monkeypatch):
 
     cli = _load_cli_module("_crm_batched_registry_read")
 
-    spawned = []
-    real_run = subprocess.run
+    # Production reads the registry through coordinator_core.machine_local_spawn
+    # (bounded, intentional), never cli.subprocess.run, so the gate counts that
+    # layer: every `dump` batch read and every `run_bounded` per-key spawn.
+    ml = cli._bind_machine_local_spawn()
+    assert ml is not None, "engine machine_local_spawn must be importable"
+    dumps = []
+    bounded = []
+    real_dump = ml.dump
+    real_bounded = ml.run_bounded
 
-    def counting_run(*args, **kwargs):
-        spawned.append(list(args[0]) if args else list(kwargs.get("args") or []))
-        return real_run(*args, **kwargs)
+    def counting_dump(impl, *args, **kwargs):
+        dumps.append((str(impl), *args))
+        return real_dump(impl, *args, **kwargs)
 
-    monkeypatch.setattr(cli.subprocess, "run", counting_run)
+    def counting_bounded(argv, *args, **kwargs):
+        bounded.append(list(argv))
+        return real_bounded(argv, *args, **kwargs)
+
+    monkeypatch.setattr(ml, "dump", counting_dump)
+    monkeypatch.setattr(ml, "run_bounded", counting_bounded)
 
     for _ in range(2):
         for key in _STUB_KEYS:
@@ -119,11 +130,10 @@ def test_registry_reads_cost_one_process(tmp_path, monkeypatch):
         k for k in _STUB_KEYS if k.startswith("repos.")
     )
 
-    assert len(spawned) == 1, (
-        f"expected exactly ONE registry process (the batch `dump`), got "
-        f"{len(spawned)}: {spawned}"
+    assert len(dumps) == 1, (
+        f"expected exactly ONE batch `dump` registry read, got {len(dumps)}: {dumps}"
     )
-    assert spawned[0][-2:] == ["dump", "--include-unset"], spawned[0]
+    assert bounded == [], f"per-key registry spawns after the batch read: {bounded}"
 
 
 def test_batch_read_failure_falls_back_to_per_key_get(tmp_path, monkeypatch):

@@ -142,7 +142,6 @@ from coordinator_core.ops.dispatch_emit.ledger_recovery import (
     LEDGER_FIX_LABEL,
     LEDGER_FIX_PHASE,
     LEDGER_FIX_SCHEMA,
-    LIVE_SNAP_LABEL,
     LIVE_SNAP_MODULE,
     LIVE_SNAP_SCHEMA,
     LIVE_TREE_WRITES_JS,
@@ -1040,6 +1039,7 @@ _COMMIT_SCHEMA = _obj(
         _RESIDUE_REPLY_KEY: {"type": ["array", "null"], "items": {"type": "string"}},
         "credited_chunks": {"type": ["array", "null"], "items": {"type": "string"}},
         "remedy_step": {"type": ["object", "null"]},
+        "awaiting": {"type": ["object", "null"]},
     },
 )
 _RETEST_SCHEMA = _obj(["status"], {"status": _STR, "detail": {"type": ["string", "null"]}})
@@ -1071,6 +1071,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "original_last_edited_at": _STR,
                     "wired": {"type": "boolean"},
                     "superseded_by": _STR,
+                    "stall_only": {"type": "boolean"},
                     "post_commit_acts": {"type": "array", "items": {"type": "string", "enum": list(POST_COMMIT_ACTS)}},
                     "remaining": {"type": "array", "items": _STR},
                     "evidence": _STR,
@@ -1101,9 +1102,11 @@ _LEDGER_ITEMS_RULES = (
     "(bug_close); the terminal commit writes all three "
     "lifecycle acts -- named in "
     "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
-    "by design, so such an act is never a reason for 'not_met'; a verify or test leg that stalled or "
-    "timed out (no output within its window, zero or partial results) is inconclusive evidence, never "
-    "grounds for 'not_met': judge the item from the change itself; otherwise 'not_met'. A 'not_met' item blocks "
+    "by design, so such an act is never a reason for 'not_met'; a TEST leg that completed zero tests "
+    "(tests_run 0, any zero_run_cause) proves nothing: every item a test clause proves is 'not_met', never "
+    "stall_only. Any other verify leg that stalled or timed out (no output within its window, zero or partial "
+    "results) is inconclusive: judge the item from the change itself, and when only that leg could prove it set "
+    "stall_only true on the item; otherwise 'not_met'. A 'not_met' item blocks "
     "the close whatever its essential flag (the gate resets it to true); when the ledger "
     "says all_of_pm_ask yes, every item is mandatory. evidence is one "
     "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
@@ -1131,6 +1134,12 @@ _LEDGER_DOC_WRITES_RULE = (
     ". When a not_met item's only gap is writing one of those paths, name that path "
     "exactly as its own entry in remaining; the engine settles it from the docs step's "
     "report."
+)
+#: Reads a judged ledger item: a `not_met` flagged `stall_only` (its only evidence a stalled or timed-out
+#: leg) becomes `inconclusive`, which `_ledgerBlocking` still holds open but never remediates as a gap.
+STALL_ONLY_COERCE_JS = (
+    "for (const i of (_ledger?.items ?? [])) { "
+    "if (i && i.status === 'not_met' && i.stall_only === true) { i.status = 'inconclusive'; delete i.remaining; } }"
 )
 _GATED_IDS_JS = "(((_manifest?.gated ?? []).map((g) => g.id).join(', ')) || 'none')"
 _OWED_IDS_JS = "(((_manifest?.owed ?? []).map((o) => o.id).join(', ')) || 'none')"
@@ -1934,7 +1943,7 @@ _REVIEW_RECOVER_JS = r"""
 def _review_recover_js(
     *, head: str, anchor: str, session_tail: str, record_dir: str, run_id: str, stager: Optional[Stager] = None,
     run_dir: Optional[str] = None, notes_block: str = "", repo_root: Optional[str] = None,
-    agent_type_host: Optional[str] = None,
+    agent_type_host: Optional[str] = None, run_base_sha: Optional[str] = None,
 ) -> str:
     """`_reviewRecover()` and its one call, composed between the review wave and `_review_blocked_halt_js`.
 
@@ -1963,14 +1972,20 @@ def _review_recover_js(
         fix_prompt, label=HALT_FIX_LABEL, phase=HALT_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
         schema=HALT_FIX_SCHEMA, run_id=run_id, stage_as="halt-fix", stager=stager,
     )
+    from coordinator_core.ops.test_leg_run import TEST_LEG_MINUTES_BUDGET
+
+    _leg_timeout_ms = (TEST_LEG_MINUTES_BUDGET + 1) * 60_000
+    run_abs_out = f"{run_dir or record_dir}/halt-reverify-tests.json"
+    base_flag = f" --base-sha {run_base_sha}" if run_base_sha else ""
     reverify_prompt = _cat(
-        f"{head}\n\n{anchor}\n\nHalt re-verify leg (review). A fix leg just ran. Re-run ONLY these failing test ids and "
-        "the scoped tests of these files (nothing wider), each id run alone: ",
+        f"{head}\n\n{anchor}\n\nHalt re-verify leg (review). A fix leg just ran. Run "
+        f"`python -m coordinator_core.ops.test_leg_run{base_flag} --out {run_abs_out} -- ` followed by these failing test ids and the scoped tests of these files: ",
         "js:idsText",
         " and ",
         "js:fpText",
-        ". An id that also fails at base is listed in `pre_existing`. Return `test` for that run (status_after pass|fail, failing, failing_detail, pre_existing, reverted, "
-        "passed_alone, passed_at_base, diff_named): `passed_alone` lists each failing id that passes when run alone, `passed_at_base` each that passes at the base checkout, "
+        f". Run it ONCE in the foreground with your Bash tool timeout at {_leg_timeout_ms} ms; it is the whole test run; "
+        "read its JSON and run nothing else. Return that JSON as `test` (status_after, failing, failing_detail, pre_existing, reverted, "
+        "passed_at_base, diff_named), adding only `diff_named`: "
         "`diff_named` each failing id whose test file names or monkeypatches a function, class or module-level name the run's diff against run_base added, removed or changed. "
         "Then, for each blocked slice below, read its review sidecar and judge each finding against the current tree: "
         "return `slices` entries with `findings` (the findings that still stand; empty when all are closed) and "
@@ -2347,16 +2362,29 @@ _VERIFY_TEST_RESULT_VAR = "_verifyTest"
 
 
 def _verify_tests_call(
-    *, head: str, anchor: str, test_js: str, run_id: str, stager: Optional[Stager] = None,
-    agent_type_host: Optional[str] = None,
+    *, head: str, anchor: str, test_js: str, run_id: str, repo_root: str = "", out_path: str = "",
+    base_sha: Optional[str] = None, stager: Optional[Stager] = None, agent_type_host: Optional[str] = None,
 ) -> str:
     """The verify stage's scoped-test leg: one haiku test-runner `agent(...)` call EXPRESSION, awaited before
-    the verify agent, which receives its result inline. Carries the verify deadline and hang report."""
+    the verify agent, which receives its result inline.
+
+    The leg runs `test_leg_run` as one background Bash call and waits on its completion notification; the
+    prompt carries no deadline and no Bash timeout, and no JS race wraps the call, so nothing cuts the run
+    before the runner's own budget."""
+    base_flag = f"--base-sha {base_sha} " if base_sha else ""
+    leg_command = engine_module_command(
+        "coordinator_core.ops.test_leg_run", repo_root, f"{base_flag}--out {out_path} -- "
+    )
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nYou run this run's scoped tests and report; you edit, "
         "stage and commit nothing. ",
         f"js:({test_js})",
-        _emit._wave_verify_bound_clause(),
+        " The test run is this one command, replacing any direct pytest invocation above; its scope follows "
+        f"the `--`:\n\n{leg_command}",
+        "js:(_manifest.test_targets ?? []).join(' ')",
+        "\n\nRun it as ONE Bash call with run_in_background: true and no timeout parameter. Wait for its "
+        "completion notification; do not sleep, poll or re-run it. Then Read "
+        f"{out_path} and return its JSON verbatim as the test_result.",
     )
     return _agent(
         prompt, label=VERIFY_TESTS_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
@@ -2435,13 +2463,17 @@ _OVERLAY_SCHEMA = _obj(["exit_code"], {"exit_code": {"type": "integer"}, "detail
 FAMILY_CREDIT_MODULE = "coordinator_core.ops.dispatch_emit.family_credit"
 
 
-def engine_module_command(module: str, repo_root: str, args: str = "") -> str:
+def engine_module_command(module: str, repo_root: str, args: str = "", *, portable: bool = False) -> str:
     """`<engine interpreter> -m <module> <args>` for a command an agent runs to reach `coordinator_core`.
     The interpreter is the repo's resolvable pin, else this process's own absolute `sys.executable`; never a
     bare `python`, which on a host whose PATH python lacks `coordinator_core` fails before the module runs.
-    `PYTHONPATH` names the engine checkout so the module imports from a consumer repo cwd."""
+    `PYTHONPATH` names the engine checkout so the module imports from a consumer repo cwd.
+    Trap: both carry host paths; `portable` drops them for text inside a committed emitted script, which carries
+    no host path (`test_emitted_script_carries_no_host_path`), leaving a bare `python` that needs `coordinator_core` importable."""
     from coordinator_core.ops.dispatch_emit.clean_overlay_verify import engine_python_command
 
+    if portable:
+        return f"python -m {module}" + (f" {args}" if args else "")
     engine_root = Path(__file__).resolve().parents[3].as_posix()
     return (
         f'PYTHONPATH="{engine_root}" {engine_python_command(Path(repo_root))} -m {module}'
@@ -2523,7 +2555,6 @@ def _prompt_parts(text: str) -> list[str]:
     return [("js:" + p) if n % 2 else p for n, p in enumerate(parts) if p]
 
 
-LIVE_RESTORE_LABEL = "live-restore"
 LIVE_RESTORE_MODULE = "coordinator_core.ops.dispatch_emit.live_write_guard"
 _LIVE_RESTORE_SCHEMA = {
     "type": "object",
@@ -2544,57 +2575,49 @@ _LIVE_RESTORE_SCHEMA = {
 }
 
 
-def _live_snap_fn_js(*, repo_root: str, run_id: str, record_dir: str) -> str:
-    """`_liveSnap(kind, sfx, ph, out, arg)` and `_liveRestore(sfx, ph, out)`, declared once: the mechanical legs
-    that measure a writing leg's live-tree writes (`live-snap-<kind>:<sfx>`, `kind` `before` or `after`) and put
-    back the foreign hunks it dropped (`live-restore:<sfx>`). Snapshots run `ledger_recovery`'s CLI (in-process
-    blob shas, loose-object persist of the pre-leg bytes) on snapshot file `out` and shell-quoted footprint JSON
-    `arg`; the restore runs `live_write_guard`'s on that same `out`, merging through `merge_or_refuse`.
-    The engine computes the written list and the merge; the leg only relays its one JSON line.
+def _live_bracket_schema(schema: dict) -> dict:
+    """`schema` (a writing leg's) plus the optional `snap_before`, `snap_after` and `restore` JSON lines the leg relays."""
+    return {
+        **schema,
+        "properties": {
+            **schema["properties"],
+            "snap_before": LIVE_SNAP_SCHEMA,
+            "snap_after": LIVE_SNAP_SCHEMA,
+            "restore": _LIVE_RESTORE_SCHEMA,
+        },
+    }
+
+
+def _live_bracket_parts(*, repo_root: str, run_id: str, record_dir: str) -> list[str]:
+    """`_cat` parts appended to a writing leg's prompt: the engine's live-tree bracket the leg runs itself.
+
+    Before any edit the leg runs `ledger_recovery`'s `before` CLI on `js:_snapOut` and `js:_snapArg` (the shell-quoted
+    footprint JSON); after its last edit the `after` CLI on that file; when `after` lists writes, `live_write_guard`'s
+    `restore` on the same file, which merges through `merge_or_refuse`. The engine computes the written list and the
+    merge; the leg only relays each command's one JSON line as `snap_before`, `snap_after`, `restore`.
+    Trap: the writing leg's own schema must come through `_live_bracket_schema`, and the caller must define `_snapOut`
+    and `_snapArg` before the leg's call.
     """
     root = Path(repo_root).as_posix()
-
-    def one(kind: str) -> str:
-        cmd = engine_module_command(LIVE_SNAP_MODULE, repo_root, f"{kind} --root {root} --out ")
-        parts = [
-            "Run exactly this one command as its own Bash call, no wrapper, no edit to it, and do not retry it:\n\n"
-            f"{cmd}",
-            "js:out",
-            *([" --paths-json '", "js:arg", "'"] if kind == "before" else []),
-            "\n\nReturn `ok` true when it exited 0 and its JSON line says ok, and `live_tree_writes` copied from that "
-            "line. Run nothing else.",
-        ]
-        label = f"{LIVE_SNAP_LABEL}-{kind}"
-        call = _agent(
-            _cat(*parts), label=label, phase=LIVE_SNAP_LABEL, agent_type=_emit._TEST_AGENT_TYPE,
-            effort=_MECHANICAL_EFFORT, schema=LIVE_SNAP_SCHEMA, run_id=run_id,
-        )
-        return call.replace(f"label: {_lit(label)},", f"label: {_lit(label + ':')} + sfx,", 1).replace(
-            f"phase: {_lit(LIVE_SNAP_LABEL)},", "phase: ph,", 1
-        )
-
-    restore_cmd = engine_module_command(
+    snap = lambda kind: engine_module_command(LIVE_SNAP_MODULE, repo_root, f"{kind} --root {root} --out ")  # noqa: E731
+    restore = engine_module_command(
         LIVE_RESTORE_MODULE, repo_root,
         f"restore --root {root} --run-id {run_id} --record-dir {Path(record_dir).as_posix()} --snapshot ",
     )
-    restore_call = _agent(
-        _cat(
-            "Run exactly this one command as its own Bash call, no wrapper, no edit to it, and do not retry it:\n\n"
-            f"{restore_cmd}",
-            "js:out",
-            "\n\nReturn `ok` true when it exited 0 and its JSON line says ok, and `restored`, `refused` and `peer_held` "
-            "copied from that line (each `refused` entry as {path, reason}). Run nothing else.",
-        ),
-        label=LIVE_RESTORE_LABEL, phase=LIVE_SNAP_LABEL, agent_type=_emit._TEST_AGENT_TYPE,
-        effort=_MECHANICAL_EFFORT, schema=_LIVE_RESTORE_SCHEMA, run_id=run_id,
-    ).replace(f"label: {_lit(LIVE_RESTORE_LABEL)},", f"label: {_lit(LIVE_RESTORE_LABEL + ':')} + sfx,", 1).replace(
-        f"phase: {_lit(LIVE_SNAP_LABEL)},", "phase: ph,", 1
-    )
-    return (
-        "function _liveSnap(kind, sfx, ph, out, arg) { return kind === 'before' ? "
-        f"{one('before')} : {one('after')}; }}\n"
-        f"function _liveRestore(sfx, ph, out) {{ return {restore_call}; }}"
-    )
+    return [
+        "\n\nLive-tree bracket, three engine commands, each its own Bash call, no wrapper, no edit to it, never retried. "
+        "(1) BEFORE your first edit run:\n\n" + snap("before"),
+        "js:_snapOut",
+        " --paths-json '",
+        "js:_snapArg",
+        "'\n\n(2) AFTER your last edit run:\n\n" + snap("after"),
+        "js:_snapOut",
+        "\n\nSkip (2) and (3) when (1) did not exit 0 with ok true in its JSON line. "
+        "(3) When (2)'s line lists any `live_tree_writes`, run:\n\n" + restore,
+        "js:_snapOut",
+        "\n\nReturn each command's JSON line unchanged as `snap_before`, `snap_after` and `restore`, omitting the keys "
+        "of a command you did not run.",
+    ]
 
 
 _LEDGER_RECOVER_JS = r"""
@@ -2664,27 +2687,19 @@ _LEDGER_RECOVER_JS = r"""
         const fpText = JSON.stringify(st.footprint);
         const _snapOut = __RECDIR__ + '/live-' + _cid + '.json';
         const _snapArg = JSON.stringify(st.footprint).replace(/'/g, "'\\''");
-        let _sb = null;
-        try { _sb = await _liveSnap('before', _cid, __SNAPPH__, _snapOut, _snapArg); }
-        catch (e) { if (_usageHalted(e)) return null; log('live-snap before leg threw: ' + String((e && e.message) ?? e)); }
         let _res = null;
         try { _res = await __FIXCALL__; }
         catch (e) {
           if (_usageHalted(e)) return null;
           log('ledger-fix leg threw: ' + String((e && e.message) ?? e));
         }
-        let _sa = null;
-        if (!_halted && _sb && _sb.ok === true) {
-          try { _sa = await _liveSnap('after', _cid, __SNAPPH__, _snapOut, _snapArg); }
-          catch (e) { if (_usageHalted(e)) return null; log('live-snap after leg threw: ' + String((e && e.message) ?? e)); }
-        }
+        const _sb = (_res && typeof _res === 'object' && _res.snap_before) || null;
+        const _sa = (_sb && _sb.ok === true && _res.snap_after) || null;
         _lwAttempt[_cid] = (_sb && _sb.ok === true && _sa && _sa.ok === true && Array.isArray(_sa.live_tree_writes)) ? _sa.live_tree_writes.map(String) : null;
         _lwTrunc[_cid] = !!((_sb && _sb.truncated) || (_sa && _sa.truncated));
         if (_lwAttempt[_cid]) st.live_snapshot = _snapOut;
         if (_lwAttempt[_cid] && _lwAttempt[_cid].length && !_halted) {
-          let _rr = null;
-          try { _rr = await _liveRestore(_cid, __SNAPPH__, _snapOut); }
-          catch (e) { if (_usageHalted(e)) return null; log('live-restore leg threw: ' + String((e && e.message) ?? e)); }
+          const _rr = _res.restore ?? null;
           _lwRestore[_cid] = (_rr && _rr.ok === true) ? _rr : { unverified: true };
         }
         return _res;
@@ -2815,12 +2830,12 @@ _LEDGER_FIX_NEEDS_SENTENCE = (
 
 def _ledger_recover_js(
     *, head: str, anchor: str, session_tail: str, record_dir: str, ledger_rel: str, run_id: str, judged: bool, test_var: str,
-    stager: Optional[Stager] = None, notes_block: str = "",
+    repo_root: str, stager: Optional[Stager] = None, notes_block: str = "",
 ) -> str:
     """The `_ledgerRecover()` definition and its one call, composed between the verify leg's ledger and the ledger halt.
 
     The fix legs run in parallel under `LEDGER_FIX_PHASE`; each re-verify judges only the reopened rows.
-    Each fix leg is bracketed by two mechanical `live-snap` legs (`_liveSnap`, from `_live_snap_fn_js`).
+    Each fix leg runs the live-tree bracket itself (`_live_bracket_parts`); no agent leg is emitted for it.
     Trap: it reads `_ledgerBlocking`, `_normaliseLedger` and `_reopenPlan`, which must precede it in the script.
     """
     fix_prompt = _cat(
@@ -2830,11 +2845,13 @@ def _ledger_recover_js(
         "js:(_fixRow.brief_path ?? '(none)')",
         ". ",
         *_prompt_parts(ledger_fix_prompt("remText", "evText", "failTxt", "fpText", f"{record_dir}/notes.jsonl")),
-        f" {_LEDGER_FIX_NEEDS_SENTENCE} {SKILL_WEIGHT_HEADROOM_CLAUSE}{notes_block}{session_tail}",
+        f" {_LEDGER_FIX_NEEDS_SENTENCE} {SKILL_WEIGHT_HEADROOM_CLAUSE}{notes_block}",
+        *_live_bracket_parts(repo_root=repo_root, run_id=run_id, record_dir=record_dir),
+        session_tail,
     )
     fix_call = _agent(
         fix_prompt, label=LEDGER_FIX_LABEL, phase=LEDGER_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=_LEDGER_FIX_SCHEMA_NEEDS, run_id=run_id, stage_as="ledger-fix", stager=stager,
+        schema=_live_bracket_schema(_LEDGER_FIX_SCHEMA_NEEDS), run_id=run_id, stage_as="ledger-fix", stager=stager,
     ).replace(f"label: {_lit(LEDGER_FIX_LABEL)},", f"label: {_lit(LEDGER_FIX_LABEL)} + _cid,", 1)
     reverify_prompt = _cat(
         f"{head}\n\n{anchor}\n\nLedger re-verify leg. Fix legs just ran on the chunks behind these rows. "
@@ -2874,7 +2891,6 @@ def _ledger_recover_js(
         .replace("__XS__", _lit(ARM_XS))
         .replace("__TEST__", test_var)
         .replace("__RECDIR__", _lit(record_dir))
-        .replace("__SNAPPH__", _lit(LEDGER_FIX_PHASE))
         .replace("__FIXCALL__", fix_call)
         .replace("__REVERIFYCALL__", reverify_call)
         .replace("__RECORDCALL__", record_call)
@@ -2911,9 +2927,6 @@ _REMNANT_COMPLETE_JS = r"""
       const rec = { field: 'remnant', loop_owner: 'engine', cap: __CAP__, items: rmItems.map((i) => ({ kind: i.kind, id: i.id })), footprint, status: 'open', paths: [], live_tree_writes: null, last_reason: '' };
       const _snapOut = __RECDIR__ + '/live-remnant.json';
       const _snapArg = JSON.stringify(footprint).replace(/'/g, "'\\''");
-      let _sb = null;
-      try { _sb = await _liveSnap('before', 'remnant', __SNAPPH__, _snapOut, _snapArg); }
-      catch (e) { if (_usageHalted(e)) return; log('live-snap before leg threw: ' + String((e && e.message) ?? e)); }
       let leg = null;
       try { leg = await __REMNANTCALL__; }
       catch (e) {
@@ -2921,12 +2934,8 @@ _REMNANT_COMPLETE_JS = r"""
         log('remnant-complete leg threw: ' + String((e && e.message) ?? e));
       }
       if (_halted) return;
-      let _sa = null;
-      if (_sb && _sb.ok === true) {
-        try { _sa = await _liveSnap('after', 'remnant', __SNAPPH__, _snapOut, _snapArg); }
-        catch (e) { if (_usageHalted(e)) return; log('live-snap after leg threw: ' + String((e && e.message) ?? e)); }
-        if (_halted) return;
-      }
+      const _sb = (leg && typeof leg === 'object' && leg.snap_before) || null;
+      const _sa = (_sb && _sb.ok === true && leg.snap_after) || null;
       const _lw = (_sb && _sb.ok === true && _sa && _sa.ok === true && Array.isArray(_sa.live_tree_writes)) ? _sa.live_tree_writes.map(String) : null;
       rec.live_tree_writes = _lw;
       if (_lw) rec.live_snapshot = _snapOut;
@@ -2934,10 +2943,7 @@ _REMNANT_COMPLETE_JS = r"""
       let _lostFoot = [];
       let _peerHeld = [];
       if (_lw && _lw.length) {
-        let _rr = null;
-        try { _rr = await _liveRestore('remnant', __SNAPPH__, _snapOut); }
-        catch (e) { if (_usageHalted(e)) return; log('live-restore leg threw: ' + String((e && e.message) ?? e)); }
-        if (_halted) return;
+        const _rr = leg.restore ?? null;
         if (_rr && _rr.ok === true) {
           if ((_rr.restored ?? []).length) rec.live_restored = _rr.restored.map(String);
           if ((_rr.refused ?? []).length) { rec.live_refused = _rr.refused; _lostFoot = _rr.refused.map((x) => String(x.path)); }
@@ -3014,10 +3020,11 @@ def _remnant_complete_js(
     docs_parts: Sequence[str],
     verdict_parts: Sequence[str],
     schema: dict,
+    repo_root: str,
 ) -> str:
     """The `_remnantComplete()` definition and its one call, composed right after `_ledger_recover_js`.
 
-    One writing leg over `_remnantItems(...)` bracketed by two mechanical `live-snap` legs, then one re-verify that re-reads `_ledger`, the
+    One writing leg over `_remnantItems(...)` running the live-tree bracket itself (`_live_bracket_parts`), then one re-verify that re-reads `_ledger`, the
     falsifier verdict and `_deliveryVerdict`. A gap still open leaves them not_met, so the close
     halts with today's codes. The attempt lands in recovery.json under `remnant` (loop owner: engine).
     Trap: it reads `_ledgerBlocking`, `_normaliseLedger` and
@@ -3027,11 +3034,13 @@ def _remnant_complete_js(
     leg_prompt = _cat(
         f"{head}\n\n{anchor}\n\nRemnant-completion leg. ",
         *_prompt_parts(remnant_prompt("itemsText", "fpText")),
-        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
+        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}",
+        *_live_bracket_parts(repo_root=repo_root, run_id=run_id, record_dir=record_dir),
+        session_tail,
     )
     leg_call = _agent(
         leg_prompt, label=REMNANT_LABEL, phase=REMNANT_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=LEDGER_FIX_SCHEMA, run_id=run_id,
+        schema=_live_bracket_schema(LEDGER_FIX_SCHEMA), run_id=run_id,
     )
     docs_js = (
         f"js:(rmDocsWanted ? ({_cat(*docs_parts)}) : {_lit(_VERIFY_NO_DOCS)})" if docs_parts else _VERIFY_NO_DOCS
@@ -3080,7 +3089,6 @@ def _remnant_complete_js(
     return (
         _REMNANT_COMPLETE_JS.replace("__CAP__", str(REMNANT_ATTEMPT_CAP))
         .replace("__RECDIR__", _lit(record_dir))
-        .replace("__SNAPPH__", _lit(REMNANT_PHASE))
         .replace("__RL__", RESUME_LEDGER_KEY)
         .replace("__XS__", _lit(ARM_XS))
         .replace("__TEST__", _emit._TEST_RESULT_VAR)
@@ -4317,6 +4325,7 @@ def compose_ask_script(
     run_base_sha: Optional[str] = None,
     route_preference: Optional[_route_pref.RoutePreference] = None,
     launcher_child: bool = False,
+    chain_hop: bool = False,
     objective: Optional[dict] = None,
     staged_out: Optional[dict] = None,
     carried_notes: Sequence[dict] = (),
@@ -4417,7 +4426,9 @@ def compose_ask_script(
         )
     blitz_fn: str = ""
     blitz_phases: list[str] = []
-    if known_arm in (ARM_M_PLUS, ARM_ROADMAP):
+    # Trap: a chained launcher child that sizes in-run can land on M+ whatever tier the hop saw; it carries plan-blitz so that arm runs here, never a second hand-off.
+    chain_hop_sizes = chain_hop and launcher_child and sized_in_run
+    if known_arm in (ARM_M_PLUS, ARM_ROADMAP) or chain_hop_sizes:
         if wrap_stage is None:
             from coordinator_core.ops.dispatch_emit import ask_plan_blitz
 
@@ -6557,6 +6568,7 @@ def compose_ask_script(
         _review_recover_js(
             head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, run_id=run_id, stager=stager,
             run_dir=run_dir, notes_block=notes_block, repo_root=repo_root, agent_type_host=agent_type_host,
+            run_base_sha=run_base_sha,
         )
     )
     b.append(_review_blocked_halt_js(sizing_rel))
@@ -6648,6 +6660,7 @@ def compose_ask_script(
     )
     verify_tests_call = _verify_tests_call(
         head=head, anchor=anchor, run_id=run_id, stager=stager, agent_type_host=agent_type_host,
+        repo_root=repo_root, out_path=f"{record_abs}/test-leg.json", base_sha=run_base_sha,
         test_js=_test_instruction_js(
             run_base_sha or "HEAD", repo_root,
             export_command=engine_module_command(
@@ -6766,6 +6779,7 @@ def compose_ask_script(
         "    const _reconciled = [];\n"
         f"    const _designPrefix = {json.dumps(_DESIGN_ANCHOR_PREFIX)};\n"
         "    const _normaliseLedger = () => {\n"
+        f"    {STALL_ONLY_COERCE_JS}\n"
         "    for (const i of (_ledger?.items ?? [])) {\n"
         "      if (!i || i.status !== 'met' || !String(i.anchor ?? '').startsWith(_designPrefix)) continue;\n"
         "      const _mb = (Array.isArray(i.met_by) ? i.met_by : [i.met_by]).some((m) => typeof m === 'string' && m.trim() && m.trim().toLowerCase() !== 'none');\n"
@@ -6825,7 +6839,7 @@ def compose_ask_script(
         "      const status = i.status === 'not_met' && rem.length && rem.every((a) => _postCommitActs.includes(a)) "
         "? 'post_commit' : i.status;\n"
         "      const acts = status === 'post_commit' && i.status === 'not_met' ? rem : i.post_commit_acts;\n"
-        "      if (status === 'drifted') return true;\n"
+        "      if (status === 'drifted' || status === 'inconclusive') return true;\n"
         "      if (status === 'not_met' && typeof i.withheld_by === 'string' && i.withheld_by) "
         "return !((_manifest?.gated ?? []).map((g) => g.id).includes(i.withheld_by) || _recoveryWithheld.includes(i.withheld_by));\n"
         "      if (status === 'not_met') { if (i.essential === false) i.essential = true; return true; }\n"
@@ -6837,12 +6851,11 @@ def compose_ask_script(
     if known_arm != ARM_XS:
         b.append(REOPEN_PLAN_JS)
         b.append(LIVE_TREE_WRITES_JS)
-        b.append(_live_snap_fn_js(repo_root=repo_root, run_id=run_id, record_dir=record_abs))
         b.append(
             _ledger_recover_js(
                 head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, ledger_rel=ledger_abs,
                 run_id=run_id, judged=judged, test_var=_emit._TEST_RESULT_VAR, stager=stager,
-                notes_block=notes_block,
+                notes_block=notes_block, repo_root=repo_root,
             )
         )
         b.append(REMNANT_ITEMS_JS)
@@ -6852,7 +6865,7 @@ def compose_ask_script(
                 judged=judged, test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
                 docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=f"{record_abs}/manifest.json", root=repo_root_abs) if in_run_commit else (),
                 verdict_parts=verdict_parts,
-                schema=_verify_schema(judge_brief[1] if judged else None),
+                schema=_verify_schema(judge_brief[1] if judged else None), repo_root=repo_root,
             )
         )
     # `out_of_scope` accepts only register rows still open at stage; any other blocking id is named
@@ -8154,7 +8167,13 @@ def _append_docs_and_commit(
         ".replace(/\\\\/g, '/').split('/').pop().replace(/\\.[^.]*$/, '');"
     )
     b.append("    let _retestAttempts = 0;")
+    b.append("    let _awaits = 0;")
     b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append("    while (!_halted && _commit && _commit.awaiting && _awaits < 2) {")
+    b.append("      _awaits++;")
+    b.append(f"      try {{ await {_retest_await_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append(f"      try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append("    }")
     b.append(
         "    while (!_halted && _commit && _commit.refused && _commit.remedy_step "
         "&& _commit.remedy_step.exhausted !== true && Number(_commit.remedy_step.attempt) > _retestAttempts) {"
@@ -8276,12 +8295,43 @@ def _invariant_retest_call(*, head: str, anchor: str, repo_root: str, run_id: st
         f"{head}\n\n{anchor}\n\nphase: commit\n\nThe landing refused on a repo-wide invariant with no fresh passing "
         "retest. Run exactly this command as its own Bash call, no wrapper:\n\n",
         "js:" + start,
-        "\n\nThen run the same command with ` --poll` appended, as its own Bash call, repeating it (sleep 2 "
-        "between) while it exits 3 (running). Exit 0 is pass, 1 fail, 2 error. Return status 'pass', 'fail' or "
-        "'error' and the last output line as detail. Run nothing else.",
+        "\n\nThen run the same command with ` --poll --wait` appended, as its own Bash call. ",
+        _WAIT_CALL_CLAUSE,
+        " Exit 0 is pass, 1 fail, 2 abandoned or error. Return status 'pass', 'fail' or 'error' and the last "
+        "output line as detail. Run nothing else.",
     )
     return _agent(
         prompt, label="retest-invariant", phase="commit", agent_type=_emit._TEST_AGENT_TYPE,
+        schema=_RETEST_SCHEMA, run_id=run_id,
+    )
+
+
+_WAIT_CALL_CLAUSE = (
+    "Run it as ONE Bash call with run_in_background: true and no timeout parameter. Wait for its "
+    "completion notification; do not sleep, poll or re-run it."
+)
+
+
+def _retest_await_call(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
+    """The `retest-await` agent call: waits out the run's in-flight retest to a terminal verdict, so the commit
+    stage re-invokes the landing without spending a remedy attempt. The wait runs off-engine in
+    `retest_targeted --poll --wait` (it ends at the record's own deadline), never in `land_run`."""
+    params_file = params_path(repo_root, run_id)
+    if params_file is None:
+        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
+    wait = engine_module_command(
+        "coordinator_core.ops.dispatch_emit.retest_targeted", repo_root,
+        f"--poll --wait --params-file {params_file.as_posix()}",
+    )
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\nphase: commit\n\nThe landing is awaiting the run's retest verdict. Run exactly "
+        f"this command, no wrapper, no edit to it:\n\n{wait}\n\n",
+        _WAIT_CALL_CLAUSE,
+        " Exit 0 is pass, 1 fail, 2 abandoned or error. Return status 'pass', 'fail' or 'error' and the last "
+        "output line as detail. Run nothing else.",
+    )
+    return _agent(
+        prompt, label="retest-await", phase="commit", agent_type=_emit._TEST_AGENT_TYPE,
         schema=_RETEST_SCHEMA, run_id=run_id,
     )
 
@@ -8326,7 +8376,7 @@ def _commit_stage_call(
         f"doc_paths: {_DOC_PATHS_JS} }})",
         f"\n\n{LAND_RUN_OP} enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
-        f"remedy_step, sizing_shipped, close, fanout, siblings, run_artifacts, run_artifact_residue and {_RESIDUE_REPLY_KEY}, verbatim (null "
+        f"remedy_step, awaiting, sizing_shipped, close, fanout, siblings, run_artifacts, run_artifact_residue and {_RESIDUE_REPLY_KEY}, verbatim (null "
         f"where absent). A non-empty {_RESIDUE_REPLY_KEY} is returned with \"{_RESIDUE_DIRECTIVE}\". Run nothing else."
         + _PARAMS_FILE_ONLY_CLAUSE,
     )

@@ -59,8 +59,8 @@ reimplementing git plumbing.
                                              report divergence)
     git_branch.detect_unpushed_commits    — local HEAD vs. origin ahead-count
                                              for a work/*|feature/* branch
-    git_branch.list_unmerged_work         — work/* branches not merged into
-                                             main_ref, scoped to one machine
+    git_branch.list_unmerged_work         — work/* and <owner>/* branches not merged
+                                             into main_ref, scoped to one machine
     git_branch.verify_commit_in_review_window — inclusive-upper/exclusive-
                                              lower ancestry check for a commit
 
@@ -93,7 +93,9 @@ import time
 from pathlib import Path
 from typing import Any, Optional, Union
 
+from coordinator_core.daily_branch import is_work_branch
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_resolver import compute_owner
 
 _PathLike = Union[str, "Path", None]
 
@@ -149,6 +151,16 @@ def _strip_branch_list_line(line: str) -> str:
 _QUALIFYING_RE = re.compile(r"^(work|feature)/", re.IGNORECASE)
 
 
+def _qualifies(branch: str) -> bool:
+    """work/ and feature/ (any tail), or an `<owner>/<machine>/<date|worker-*>` day branch."""
+    return _QUALIFYING_RE.match(branch) is not None or is_work_branch(branch.lower())
+
+
+def _owner_patterns(*prefixes: str) -> list[str]:
+    """`git branch --list` patterns: each prefix plus this box's `<owner>/*`, deduped in order."""
+    return list(dict.fromkeys([*prefixes, f"{compute_owner()}/*"]))
+
+
 def _collect_branches(raw_list: str, seen: set[str]) -> None:
     for line in raw_list.splitlines():
         branch = _strip_branch_list_line(line)
@@ -156,7 +168,7 @@ def _collect_branches(raw_list: str, seen: set[str]) -> None:
             continue
         if branch == "HEAD":
             continue
-        if _QUALIFYING_RE.match(branch):
+        if _qualifies(branch):
             seen.add(branch)
 
 
@@ -319,11 +331,12 @@ def main(argv: list[str]) -> int:
     user_email = user_email_res.stdout.strip() if user_email_res.returncode == 0 else ""
 
     seen_branches: set[str] = set()
-    local_res = _git(["branch", "--list", "work/*", "feature/*"], cwd=cwd)
+    local_res = _git(["branch", "--list", *_owner_patterns("work/*", "feature/*")], cwd=cwd)
     if local_res.returncode == 0:
         _collect_branches(local_res.stdout, seen_branches)
     if include_remote:
-        remote_res = _git(["branch", "--list", "-r", "origin/work/*", "origin/feature/*"], cwd=cwd)
+        remote_patterns = [f"origin/{p}" for p in _owner_patterns("work/*", "feature/*")]
+        remote_res = _git(["branch", "--list", "-r", *remote_patterns], cwd=cwd)
         if remote_res.returncode == 0:
             _collect_branches(remote_res.stdout, seen_branches)
 
@@ -586,7 +599,10 @@ def detect_unpushed_commits(branch: Optional[str], cwd: _PathLike = None) -> dic
 
     has_origin = _ref_exists(f"refs/remotes/origin/{resolved_branch}", cwd=cwd)
 
-    if not _QUALIFYING_WORK_FEATURE_RE.match(resolved_branch):
+    if not (
+        _QUALIFYING_WORK_FEATURE_RE.match(resolved_branch)
+        or is_work_branch(resolved_branch)
+    ):
         return {"branch": resolved_branch, "ahead_count": 0, "has_origin": has_origin}
 
     if has_origin:
@@ -617,17 +633,17 @@ _BRANCH_LIST_MARKER_RE = re.compile(r"^[* ]*")
 
 
 def list_unmerged_work_branches(machine: str, main_ref: str, cwd: _PathLike = None) -> list[str]:
-    res = _git(["branch", "--list", "work/*", "--no-merged", main_ref], cwd=cwd)
+    res = _git(["branch", "--list", *_owner_patterns("work/*"), "--no-merged", main_ref], cwd=cwd)
     if res.returncode != 0:
         return []
 
-    prefix = f"work/{machine}/".lower()
+    prefixes = tuple(dict.fromkeys((f"work/{machine}/".lower(), f"{compute_owner()}/{machine}/".lower())))
     matches: list[str] = []
     for line in res.stdout.splitlines():
         branch = _BRANCH_LIST_MARKER_RE.sub("", line).strip()
         if not branch:
             continue
-        if branch.lower().startswith(prefix):
+        if branch.lower().startswith(prefixes):
             matches.append(branch)
     return sorted(matches)
 

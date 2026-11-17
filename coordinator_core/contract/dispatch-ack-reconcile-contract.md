@@ -133,8 +133,13 @@ a non-serialisable reply still digests. `result_dropped` names why the full repl
 it once: capacity eviction (§ 5) re-queues a pinned key and the result LRU evicts unpinned results
 first, so a caller that got -32004 and polls later still reads the result. The engine cannot know
 which callers timed out, so the pin is "stamped and not yet read", not an indeterminate mark. The
-pinned set is capped at `RESULT_RETAIN_COUNT`; past it the oldest pinned is unpinned and reads
-`result_dropped: evicted`.
+pinned set is capped at `RESULT_RETAIN_COUNT` in memory, not in reads: past it, or past
+`RESULT_RETAIN_BYTES`, the oldest pinned result whose journal entry was written leaves memory
+and `status` answers it from the journal (`read_outcome`), so the first unread key still reads
+`finished` with its `result`. A pinned key whose journal write failed, or an engine with no
+`journal_dir`, keeps its result resident: an unread reply is never dropped by count or bytes
+(each is at most `RESULT_RETAIN_BYTES // 4` by `_measure`). `result_dropped: evicted` is
+reported only for a result that is neither resident nor journaled.
 
 ## 4. Poll states and the outcome → state mapping
 
@@ -175,6 +180,10 @@ read after the poll, reopening exactly that false negative one layer down.
 regardless of whether the tombstone record for it personally survived eviction. A tombstoned key
 that later gets evicted is still refused, because `low_water_ns` alone is the refusal condition —
 not the tombstone record's continued presence.
+
+**Eviction never drops an unread reply.** Capacity eviction re-queues a pinned key, and the
+result ring spills an unread result to the journal before releasing its memory (§ 3 "Pinned
+until read"); `warm.request_status` after a -32004 therefore always returns the result.
 
 **A poll for `warm.request_status` is never itself subject to `admit`'s tombstone or skew
 refusal.** `_serve_line` intercepts `warm.request_status` and answers it directly from

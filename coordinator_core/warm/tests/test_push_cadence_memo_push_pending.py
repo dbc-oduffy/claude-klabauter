@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops.fleet import _memo_anchor as ma
 from coordinator_core.ops.fleet import _memo_push_pending as pp
 from coordinator_core.ops.fleet import _upstream_delivery as ud
 from coordinator_core.warm import push_cadence
@@ -65,7 +66,16 @@ def world(tmp_path: Path):
     sender.mkdir()
     out = ud.deliver_onto_upstream(recv, sender, PATH, "memo body\n", tmp_path / "msg.txt")
     assert out.ok, out.error
+    assert ma.write_pin(recv / ".git", out.commit_sha)
     return {"recv": recv, "bare": bare, "sender": sender, "out": out, "tmp": tmp_path}
+
+
+def _anchor(recv: Path, sha: str) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ma.ANCHOR_REF_PREFIX}memo.md/{sha}"],
+        cwd=str(recv), capture_output=True, text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout.strip()
 
 
 def _sweep(sender: Path) -> None:
@@ -88,6 +98,8 @@ def test_record_is_pushed_and_removed(world) -> None:
     assert _git(world["bare"], "rev-parse", f"refs/heads/{BRANCH}") == sha
     assert pp.list_pending(world["sender"]) == []
     assert _git(world["recv"], "rev-parse", f"refs/remotes/origin/{BRANCH}") == sha
+    assert ma.read_pin(world["recv"] / ".git", sha) is None
+    assert _anchor(world["recv"], sha)
 
 
 def test_unreachable_remote_keeps_record_and_counts_attempt(world) -> None:
@@ -111,6 +123,19 @@ def test_moved_tip_is_fetched_rebuilt_and_pushed(world) -> None:
     assert _git(world["bare"], "rev-parse", f"{tip}^") == moved
     assert _git(world["bare"], "show", f"{tip}:{PATH}") == "memo body"
     assert pp.list_pending(world["sender"]) == []
+    common = world["recv"] / ".git"
+    old = world["out"].commit_sha
+    assert ma.read_pin(common, old) is None
+    assert ma.read_pin(common, tip) is None
+    assert not _anchor(world["recv"], old)
+    assert _anchor(world["recv"], tip)
+
+
+def test_failed_push_keeps_the_pin(world) -> None:
+    _git(world["recv"], "remote", "set-url", "origin", str(world["tmp"] / "gone.git"))
+    _sweep(world["sender"])
+    sha = world["out"].commit_sha
+    assert ma.read_pin(world["recv"] / ".git", sha) == sha
 
 
 def test_moved_tip_already_holding_path_retires_record_without_push(world) -> None:

@@ -570,6 +570,33 @@ def test_sessionstart_with_only_conversation_id_registers_a_pending_leg(home, mo
     assert out["injectSteps"][0]["systemMessage"] == {"systemMessage": sess.NOTE}
 
 
+def test_stashed_pretool_advisories_are_injected_once_at_preinvocation(home, capsys, monkeypatch):
+    from coordinator_core.host_hooks.agy_adapter import AgyAdapter, advisory_dir
+    adapter = AgyAdapter()
+    ev = adapter.adapt_event({"conversationId": CONV, "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}})
+    adapter.render(ev, {"decision": "ask", "reason": "nag one"})
+    adapter.render(ev, {"decision": "ask", "reason": "nag one"})
+    adapter.render(ev, {"decision": "ask", "reason": "nag two"})
+    assert advisory_dir() == pre.advisory_dir()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"conversationId": CONV, "hookEventName": "PreInvocation"})))
+    assert pre.main(["--event", "PreInvocation"]) == 0
+    steps = json.loads(capsys.readouterr().out)["injectSteps"]
+    assert [s["systemMessage"]["systemMessage"] for s in steps] == ["nag one", "nag two"]
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"conversationId": CONV})))
+    assert pre.main(["--event", "PreInvocation"]) == 0
+    assert json.loads(capsys.readouterr().out) == {}
+
+
+def test_preinvocation_never_delivers_another_conversations_advisory_or_fails_on_bad_stdin(home, capsys, monkeypatch):
+    from coordinator_core.host_hooks.agy_adapter import stash_advisory
+    stash_advisory("other-conv", "theirs")
+    for raw in (json.dumps({"conversationId": CONV}), "not json", json.dumps({"conversationId": "../x"})):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(raw))
+        assert pre.main(["--event", "PreInvocation"]) == 0
+        assert json.loads(capsys.readouterr().out) == {}
+    assert list((pre.advisory_dir() / "other-conv").glob("*.txt"))
+
+
 def test_pending_leg_is_never_current_for_the_pretool_rewrite(home, ls_server):
     write_leg(home, pid=os.getpid(), agy_pid=1234, ls=ls_server)
     path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
@@ -662,7 +689,29 @@ def test_ancestor_walk_takes_the_nearest_agy():
 def test_ancestor_walk_never_takes_a_non_agy_parent(capsys):
     tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (400, "cmd.exe"), 400: (1, "explorer.exe")}
     assert pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID) is None
-    assert "no agy ancestor" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("daemon", ["agy-daemon.exe", "agy_daemon", "antigravity-ls"])
+def test_ancestor_walk_resolves_the_daemon_without_stderr(daemon, capsys):
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (2895, "cmd.exe"), 2895: (1, daemon)}
+    assert pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID) == 2895
+    assert capsys.readouterr().err == ""
+
+
+def test_ancestor_walk_prefers_the_cli_over_a_nearer_daemon_and_reads_print_mode():
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (2895, "cmd.exe"), 2895: (AGY_PID, "agy-daemon.exe"),
+            AGY_PID: (1, "agy.exe")}
+    pid = pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID)
+    assert pid == AGY_PID
+    lines = {AGY_PID: "agy.exe -p hi", 2895: "agy-daemon.exe"}
+    assert pre.agy_print_mode(pid, read=lines.get) is True
+    assert pre.agy_print_mode(2895, read=lines.get) is False
+
+
+def test_ancestor_walk_refuses_look_alike_names(capsys):
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (400, "cmd.exe"), 400: (1, "agyx.exe")}
+    assert pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID) is None
 
 
 def test_ancestor_walk_respects_the_depth_bound():
@@ -740,7 +789,7 @@ def test_sessionstart_with_no_agy_ancestor_records_none(home, agy_env, monkeypat
     _sess_with_tree(monkeypatch, tree, {"conversationId": CONV})
     sess.main()
     assert json.loads(record_path(home).read_text())["agy_pid"] is None
-    assert "no agy ancestor" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize("payload,expected", [
@@ -787,6 +836,58 @@ def test_print_mode_passes_ask_through_with_no_overwrite_and_no_spawn(home, monk
     out = pre.decide(run_payload(cmd="git grep -n x -- coordinator/tests"), 4242)
     assert out == {"decision": "ask"} and "overwrite" not in out
     assert spawned == []
+
+
+DAEMON_PID, CLI_PID = 2895, 3001
+
+
+def _daemon_world(monkeypatch, cli_line, *, spawned=None):
+    """A hook parented by the agy daemon: the walk yields the daemon pid, the headless/interactive CLI is the
+    daemon's child. Source: observed 2026-11-16 (hooks run under agy's daemon pid, not the CLI process)."""
+    lines = {DAEMON_PID: "agy-daemon --serve", CLI_PID: cli_line}
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(pre, "process_cmdline", lines.get)
+    monkeypatch.setattr(pre, "child_pids", lambda pid: [CLI_PID] if pid == DAEMON_PID else [])
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd) if spawned is not None else None)
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (DAEMON_PID, "cmd.exe"), DAEMON_PID: (1, "agy-daemon.exe")}
+    pid = pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID)
+    assert pid == DAEMON_PID
+    return pid
+
+
+def test_headless_cli_under_a_daemon_parented_hook_gets_no_rewrite_through_decide(home, monkeypatch, capsys):
+    spawned = []
+    pid = _daemon_world(monkeypatch, 'agy -p="Run exactly: git grep x" --output-format json', spawned=spawned)
+    stub_guard(monkeypatch, {"decision": "ask"})
+    out = pre.decide(run_payload(cmd="git grep -n x -- coordinator/tests"), pid)
+    assert out == {"decision": "ask"} and "overwrite" not in out
+    assert spawned == [] and capsys.readouterr().err == ""
+
+
+@posix_rewrite
+def test_interactive_cli_under_a_daemon_parented_hook_still_rewrites_through_decide(home, monkeypatch):
+    pid = _daemon_world(monkeypatch, "agy chat")
+    stub_guard(monkeypatch, {"decision": "ask"})
+    assert "overwrite" in pre.decide(run_payload(cmd="ls -la"), pid)
+
+
+def test_print_mode_reads_the_cli_children_of_the_daemon_not_the_daemon_alone(monkeypatch):
+    _daemon_world(monkeypatch, "agy.exe --print hi")
+    assert pre.agy_print_mode(DAEMON_PID) is True
+    monkeypatch.setattr(pre, "process_cmdline", {DAEMON_PID: "agy-daemon", CLI_PID: "agy chat"}.get)
+    assert pre.agy_print_mode(DAEMON_PID) is False
+
+
+def test_child_pids_on_macos_reads_one_ps_table(monkeypatch):
+    monkeypatch.setattr(pre.sys, "platform", "darwin")
+    monkeypatch.setattr(pre.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout="  1 0\n 30 2895\n 31 2895\n 40 31\n junk\n", stderr=""))
+    assert pre.child_pids(2895) == [30, 31]
+
+    def boom(*a, **kw):
+        raise OSError("no ps")
+
+    monkeypatch.setattr(pre.subprocess, "run", boom)
+    assert pre.child_pids(2895) == []
 
 
 @posix_rewrite

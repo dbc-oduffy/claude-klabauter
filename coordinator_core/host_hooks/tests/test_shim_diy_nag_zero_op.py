@@ -50,7 +50,8 @@ def _payload(host, root, sid):
 
 def _shows_nag(host, out):
     if host == "agy":
-        return out.get("decision") == "ask" and NAG in out.get("reason", "")
+        # An `ask` is auto-approved under agy -p; the nag is an explicit allow stashed for the next PreInvocation.
+        return out.get("decision") == "allow" and "injectSteps" not in out and NAG in str(out.get("reason"))
     return NAG in str(out) and "deny" not in str(out)
 
 

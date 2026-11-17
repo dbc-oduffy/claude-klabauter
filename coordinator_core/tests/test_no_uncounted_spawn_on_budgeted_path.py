@@ -7512,8 +7512,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
     "plan.mise_prep_probe": 1,
-    # dispatch.close_plan_checkpoints: one reachable git site, run_git; constant per call.
-    "dispatch.close_plan_checkpoints": 1,
     # ceremony.plan_wiki_map (56c85f, 2026-11-13): two git sites in weekly_doc_files, the batched
     # fallback taken only when no example-retrieval-repo doc_files view serves (`_git`, `_plan_texts`);
     # constant count per call, never per plan.
@@ -8025,6 +8023,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "dispatch.close_halted_run_superseded": 1,
     "dispatch.close_halted_run_rejected": 1,
     "dispatch.land_combined_index": 2,
+    # dispatch.test_leg: one reachable git site (`_committed_at`, committer time of run_base_sha); constant per call.
+    "dispatch.test_leg": 1,
+    # Enrolled 2026-11-16: plan-checkpoint close, pinned at its measured reachable count.
+    "dispatch.close_plan_checkpoints": 1,
     # Enrolled 2026-10-26: objective_* ops, pinned at measured reachable counts (7 (op, site) pairs).
     "dispatch.objective_calibrate": 1,
     "dispatch.objective_check": 4,

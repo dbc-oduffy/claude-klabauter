@@ -11,6 +11,7 @@ import pytest
 import coordinator_core.ops.dispatch_emit as _pkg
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import op as op_module
+from coordinator_core.ops.dispatch_emit.pipeline_compose import CLOSE_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _write_sizing
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "pipeline_research_probe"
@@ -53,8 +54,8 @@ def _emit(repo, capsys, depth):
 
 
 def _scout_lines(script: str) -> str:
-    """The script minus op-runner calls: the in-run research.close leg runs on haiku by design, never as a scout."""
-    return "\n".join(line for line in script.splitlines() if "op-runner" not in line)
+    """The script minus the in-run research.close leg (CLOSE_AGENT_TYPE): it runs on haiku by design, never as a scout."""
+    return "\n".join(line for line in script.splitlines() if CLOSE_AGENT_TYPE not in line)
 
 
 def test_deeper_runs_one_sonnet_scout_per_question(repo, capsys):

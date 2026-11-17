@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import review_prep as rp
+from coordinator_core.ops.tests.conftest import stub_own_write_claims
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -42,18 +43,7 @@ def repo(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _own_session_claims(monkeypatch: pytest.MonkeyPatch) -> None:
-    from coordinator_core.session import claim_index, liveness
-
-    class _Found(dict):
-        recorded_kind = None
-
-    def lookup(paths, **kw):
-        found = _Found({p: [SESSION] for p in paths})
-        found.recorded_kind = {p: {SESSION: "write"} for p in paths}
-        return found
-
-    monkeypatch.setattr(claim_index, "lookup", lookup)
-    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid == SESSION)
+    stub_own_write_claims(monkeypatch, SESSION)
 
 
 def _slice_files(reply: dict) -> set:

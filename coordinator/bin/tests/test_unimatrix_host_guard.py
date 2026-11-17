@@ -339,15 +339,21 @@ def test_agy_engine_non_deny_never_passes_allow_through(tmp_path, monkeypatch, d
         assert answer == {"decision": "ask"}
 
 
-def test_agy_ask_with_advisory_reason_reaches_output_intact_never_allow(tmp_path, monkeypatch):
+def test_agy_advisory_is_stashed_for_preinvocation_while_the_guard_answer_stays_the_never_allow_ask(tmp_path, monkeypatch):
+    # agy -p auto-approves an `ask` and PreToolUse takes no `injectSteps`: delivery is the stash the adapter
+    # writes, drained by the PreInvocation hook; the guard still never forwards an allow.
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.syspath_prepend(str(REPO))
-    from coordinator_core.host_hooks.agy_adapter import AgyAdapter
+    from coordinator_core.host_hooks.agy_adapter import AgyAdapter, advisory_dir
     rendered = AgyAdapter().render(
-        AgyAdapter().adapt_event({"toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}),
+        AgyAdapter().adapt_event({"conversationId": "conv-1",
+                                  "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}),
         {"decision": "allow", "additionalContext": "advisory nag"})
+    assert rendered == {"decision": "allow", "reason": "advisory nag"} and "injectSteps" not in rendered
+    assert [p.read_text(encoding="utf-8") for p in (advisory_dir() / "conv-1").glob("*.txt")] == ["advisory nag"]
     stub_shim(monkeypatch, rendered)
     answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
-    assert answer == {"decision": "ask", "reason": "advisory nag"} and state == hg.NEUTRAL_UNKNOWN
+    assert answer == {"decision": "ask"} and state == hg.NEUTRAL_UNKNOWN
 
 
 def test_other_degrade_causes_are_distinguishable(tmp_path, monkeypatch, settings_home):

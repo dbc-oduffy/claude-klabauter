@@ -95,6 +95,7 @@ CLASSIFICATION: Dict[str, str] = {
     "check_test_suite_invocation": FIXED,
     "_dc_rewrites": FIXED + " (partial; rewrite twins pinned below)",
     "_dc_commit": TOKENIZED,
+    "stale_write_guard": TOKENIZED,
     "block_dev_repo_sentinel_removal": TOKENIZED,
     "block_editor_kill_by_name": TOKENIZED,
     "block_empty_source_push": TOKENIZED,

@@ -103,6 +103,13 @@ def test_agy_argv_carries_model_flag(monkeypatch):
     assert argv[-2:] == ["--model", "gem-x"] and "P" in argv
 
 
+def test_agy_argv_carries_plan_mode_and_sandbox():
+    argv = reviewer_run._agy_argv("P", "gem-x")
+    assert argv[argv.index("--mode") + 1] == "plan"
+    assert "--sandbox" in argv
+    assert argv[argv.index("--model") + 1] == "gem-x"
+
+
 def test_cli_main_prints_json_line(monkeypatch, tmp_path, home, capsys):
     _install_fake(monkeypatch, tmp_path, "ok")
     monkeypatch.setattr(sys, "stdin", __import__("io").StringIO("BRIEF"))

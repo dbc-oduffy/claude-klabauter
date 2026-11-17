@@ -47,7 +47,7 @@ def _checkpoint(repo: Path, rel: str, text: str) -> None:
     f = repo / rel
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(text, encoding="utf-8")
-    _git(repo, "add", "-A")
+    _git(repo, "add", "--", rel)
     _git(repo, "commit", "-q", "-m", f"checkpoint {rel}")
 
 

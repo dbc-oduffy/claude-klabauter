@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
 
-from coordinator_core.host_hooks.codex_adapter import verdict_parts
+from coordinator_core.host_hooks.codex_adapter import ASK_DECISIONS, ask_denies, verdict_parts
 from coordinator_core.host_hooks.contract import HOST_GROK, HostEvent, Verdict, neutral_fallback
 
 #: Pinned equal to `warm.hook_http.SERVED_EVENTS` by test; not imported (hook_http is not cold-start cheap).
 SERVED_EVENTS = frozenset({"PreToolUse"})
 
-_SHELL_TOOLS = frozenset({"Bash", "bash", "shell", "run_command", "run_shell_command"})
+_SHELL_TOOLS = frozenset({"Bash", "bash", "shell", "run_command", "run_shell_command",
+                          "run_terminal_command", "run_terminal_cmd", "Shell"})
 _COMMAND_KEYS = ("command", "cmd")
 
 #: grok edit tools -> the Claude-shaped write-guard tool names `tool_policy.evaluate` routes to `write_guards.engine`.
@@ -25,9 +26,15 @@ _EDIT_TOOLS = {
     "Write": "Write",
     "write_file": "Write",
     "NotebookEdit": "NotebookEdit",
+    "search_replace": "Edit",
+    "hashline_edit": "Edit",
+    "StrReplace": "Edit",
+    "Delete": "Edit",
+    "write": "Write",
+    "EditNotebook": "NotebookEdit",
 }
 #: Arg keys a grok edit tool may carry its target path under; the first non-empty one becomes `file_path`.
-_PATH_KEYS = ("file_path", "path", "Path")
+_PATH_KEYS = ("file_path", "path", "Path", "target_notebook")
 
 
 class GrokAdapter:
@@ -83,15 +90,20 @@ class GrokAdapter:
         }
 
     def render(self, host_event: HostEvent, verdict: Verdict) -> Dict[str, Any]:
-        """Claude-shaped `hookSpecificOutput` for deny, ask and an allow/ask carrying `additionalContext`; else `{}`."""
+        """Claude-shaped `hookSpecificOutput`: deny, an ask from a registry-classed guard as deny, any other ask or advisory as an allow carrying `additionalContext`; else `{}`."""
         if host_event.event not in SERVED_EVENTS:
             return neutral_fallback(HOST_GROK)
         decision, reason = verdict_parts(verdict)
         context = _advisory_text(verdict)
         if decision == "deny":
             return _decision(host_event, "deny", reason or "denied by coordinator guard")
-        if decision in ("ask", "force_ask"):
-            return _decision(host_event, "ask", reason or "coordinator: confirm", context)
+        if decision in ASK_DECISIONS:
+            if ask_denies(verdict):
+                return _decision(host_event, "deny", reason or "denied by coordinator guard")
+            # grok -p has no human to answer an ask: a non-registry ask is an allow whose reason and
+            # advisory reach the model as context.
+            text = "\n".join(x for x in (reason or "coordinator: confirm", context) if x)
+            return _decision(host_event, "allow", reason, text)
         # An advisory with no decision (the DIY nag, warm or cold) is an allow that carries the advisory.
         if decision in ("", "allow") and context:
             return _decision(host_event, "allow", reason, context)

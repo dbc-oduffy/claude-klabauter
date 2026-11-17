@@ -12,6 +12,7 @@ so no guard leaves the next dispatch to the EM's judgment. Leaf module: stdlib p
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +56,15 @@ def fire_command(sizing_rel: Optional[str] = None, host: Optional[str] = None) -
     return f"Workflow({{name: {json.dumps(SUBMIT_WORKFLOW_NAME)}, args: {json.dumps(args)}}})"
 
 
+def minted_step(script_path: Optional[str] = None) -> str:
+    """One sentence for a run already minted but not started (a `fire:false` submit): start it, never re-submit."""
+    target = f" `{script_path}`" if script_path else ""
+    return (
+        f"Next step, the only one: start the minted run by firing its deferred script{target} "
+        "(`coordinator-invoke workflow.fire`), once; do not call engine_ask.submit again."
+    )
+
+
 def fire_step(sizing_rel: Optional[str] = None, host: Optional[str] = None) -> str:
     """One sentence: make the submit call, once."""
     return f"Next step, the only one: call `{fire_command(sizing_rel, host)}`, once."
@@ -67,9 +77,50 @@ def _counter_dir() -> Path:
     return managed_tempdir() / "coordinator-engine-ask-nag"
 
 
+#: A minted-run note older than this no longer describes the session's last submit.
+_MINTED_TTL_S = 600
+
+
+def _safe_sid(session_id: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id) or "none"
+
+
+def note_minted(session_id: Optional[str], script_path: str, state_dir: Optional[Path] = None) -> None:
+    """Record that this session just minted a run whose deferred script is `script_path`.
+
+    The session's next `nag_text` names starting it (`minted_step`) instead of a submit. Best effort."""
+    if not session_id:
+        return
+    try:
+        d = state_dir if state_dir is not None else _counter_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{_safe_sid(session_id)}.minted").write_text(script_path, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _take_minted(session_id: str, state_dir: Optional[Path]) -> Optional[str]:
+    """The script path `note_minted` left for this session ("" when unreadable), consuming it; None when none."""
+    try:
+        f = (state_dir if state_dir is not None else _counter_dir()) / f"{_safe_sid(session_id)}.minted"
+        if not f.is_file():
+            return None
+        if time.time() - f.stat().st_mtime > _MINTED_TTL_S:
+            f.unlink(missing_ok=True)
+            return None
+        try:
+            path = f.read_text(encoding="utf-8").strip()
+        except OSError:
+            path = ""
+        f.unlink(missing_ok=True)
+        return path
+    except OSError:
+        return None
+
+
 def _bump(session_id: str, state_dir: Optional[Path]) -> int:
     """Increment and return this session's nag count; a storage failure counts as the first."""
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id) or "none"
+    safe = _safe_sid(session_id)
     try:
         d = state_dir if state_dir is not None else _counter_dir()
         d.mkdir(parents=True, exist_ok=True)
@@ -100,6 +151,7 @@ def nag_text(
     so the figures are lower bounds and read "at least".
     """
     n = _bump(session_id or "", state_dir)
+    minted = _take_minted(session_id, state_dir) if session_id else None
     lead = ""
     if edit_size is not None:
         from coordinator_core.session import xs_lane_budget
@@ -110,6 +162,8 @@ def nag_text(
             f"past the XS bound "
             f"({xs_lane_budget.BUDGET_FILES} files / {xs_lane_budget.BUDGET_LINES} lines). "
         )
+    if minted is not None:
+        return lead + minted_step(minted or None)
     if n <= 1:
         return lead + fire_step(sizing_rel, host)
     return f"{NAG_REPEAT_PREFIX} #{n}] {lead}call `{fire_command(sizing_rel, host)}`, once."

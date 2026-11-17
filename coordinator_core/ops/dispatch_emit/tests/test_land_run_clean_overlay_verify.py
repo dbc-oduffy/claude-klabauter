@@ -1476,6 +1476,46 @@ def test_an_importer_shard_stall_with_green_seeds_is_green_with_a_note_naming_th
     assert "importer shard stalled: 1 file(s) unverified" in out.detail and "2 test result(s) reported" in out.detail, out.detail
 
 
+def test_an_importer_shard_that_stalls_once_is_re_run_and_its_pass_leaves_no_note(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    real = cov._run
+    windows = []
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv and _IMPORTER in argv:
+            windows.append(kw["stall_s"])
+            if len(windows) == 1:
+                raise cov.PytestStalled(argv, kw["stall_s"], 9, "2 test result(s) reported")
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    out = cov.verify(root, "run1", head, [READER], touched=[_HELPER, READER])
+
+    assert out.verdict == "green" and not out.timed_out, out
+    assert len(windows) == 2 and windows[1] >= cov.PYTEST_STALL_S, windows
+    assert "importer shard" not in out.detail, out.detail
+
+
+def test_an_importer_shard_that_stalls_twice_is_a_note_naming_both_attempts(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    real = cov._run
+    calls = []
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv and _IMPORTER in argv:
+            calls.append(kw["stall_s"])
+            raise cov.PytestStalled(argv, kw["stall_s"], 9, f"{len(calls)} test result(s) reported")
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    out = cov.verify(root, "run1", head, [READER], touched=[_HELPER, READER])
+
+    assert out.verdict == "green" and not out.timed_out, out
+    assert len(calls) == 2, calls
+    assert "importer shard stalled: 1 file(s) unverified" in out.detail, out.detail
+    assert "attempt 1" in out.detail and "attempt 2" in out.detail, out.detail
+
+
 def test_every_pytest_run_is_watched_for_a_stall_and_has_no_total_wall(tmp_path, monkeypatch):
     root, head = _importer_repo(tmp_path)
     seen = []
@@ -1537,14 +1577,67 @@ def test_a_stalled_verify_is_inconclusive_timed_out_and_names_the_last_progress_
     )
     # A Windows pytest cold start alone can take ~20s before the first dot, so a shorter window reads startup as the stall.
     monkeypatch.setattr(cov, "PYTEST_STALL_S", 45)
+    monkeypatch.setattr(cov, "STALL_RETRY_SCALE_MIN", 1.0)
+    monkeypatch.setattr(cov, "STALL_RETRY_SCALE_MAX", 1.0)
 
     started = time.monotonic()
     out = cov.verify(root, "run1", head, [_HANG])
 
     assert out.verdict == "inconclusive" and out.timed_out is True, out
     assert "stalled" in out.detail and "no output for 45s" in out.detail, out.detail
+    assert "attempt 1" in out.detail and "attempt 2" in out.detail, out.detail
     assert "1 test result(s) reported" in out.detail and "last output line" in out.detail, out.detail
-    assert time.monotonic() - started < 150
+    assert time.monotonic() - started < 240
+
+
+def test_a_seeds_stall_is_re_run_once_under_a_window_no_shorter_than_the_stall_interval_then_green(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    real = cov._run
+    windows = []
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv and _IMPORTER not in argv:
+            windows.append(kw["stall_s"])
+            if len(windows) == 1:
+                raise cov.PytestStalled(argv, kw["stall_s"], 9, "3 test result(s) reported")
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == "green" and not out.timed_out, out
+    assert len(windows) == 2 and windows[0] == cov.PYTEST_STALL_S and windows[1] >= cov.PYTEST_STALL_S, windows
+
+
+def test_a_seeds_stall_twice_is_inconclusive_timed_out_naming_both_attempts_after_exactly_one_retry(tmp_path, monkeypatch):
+    root, head = _importer_repo(tmp_path)
+    calls = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" not in argv:
+            return real(argv, cwd, timeout, **kw)
+        calls.append(kw["stall_s"])
+        raise cov.PytestStalled(argv, kw["stall_s"], 9, f"{len(calls)} test result(s) reported")
+
+    monkeypatch.setattr(cov, "_run", spy)
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == "inconclusive" and out.timed_out is True, out
+    assert len(calls) == 2, calls
+    assert "attempt 1" in out.detail and "attempt 2" in out.detail, out.detail
+    assert "1 test result(s) reported" in out.detail and "2 test result(s) reported" in out.detail, out.detail
+
+
+def test_the_retry_window_is_load_scaled_never_below_the_stall_interval_and_portable_without_getloadavg(monkeypatch):
+    monkeypatch.setattr(cov.os, "cpu_count", lambda: 4, raising=False)
+    monkeypatch.delattr(cov.os, "getloadavg", raising=False)
+    assert cov.stall_retry_window() == cov.PYTEST_STALL_S * cov.STALL_RETRY_SCALE_MIN
+
+    monkeypatch.setattr(cov.os, "getloadavg", lambda: (16.0, 0, 0), raising=False)
+    assert cov.stall_retry_window() == cov.PYTEST_STALL_S * 4.0
+    monkeypatch.setattr(cov.os, "getloadavg", lambda: (400.0, 0, 0), raising=False)
+    assert cov.stall_retry_window() == cov.PYTEST_STALL_S * cov.STALL_RETRY_SCALE_MAX
 
 
 def test_a_red_importer_shard_is_red_and_a_seeds_timeout_is_inconclusive_with_timed_out(tmp_path, monkeypatch):

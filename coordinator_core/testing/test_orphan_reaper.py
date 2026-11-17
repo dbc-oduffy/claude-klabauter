@@ -63,6 +63,7 @@ def test_get_basetemp_none_when_no_factory() -> None:
     ],
 )
 def test_is_under_basetemp_path_component_boundary(path, basetemp, expected) -> None:
+    basetemp = Path(*basetemp).parts
     assert orphan_reaper.is_under_basetemp(path, basetemp) is expected
 
 
@@ -190,6 +191,70 @@ def test_find_orphans_prefilters_by_create_time(monkeypatch: pytest.MonkeyPatch)
         basetemp, own_pid, session_start_time=far_future, own_username=own_proc.username()
     )
     assert orphans == []
+
+
+def test_find_orphans_matches_by_cmdline_and_cwd_and_ignores_other_users(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "pytest-fakebase"
+    base.mkdir()
+    kwargs = {"cwd": str(base)}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+    try:
+        own = psutil.Process()
+        deadline = time.monotonic() + 10.0
+        found = []
+        while time.monotonic() < deadline:
+            found = orphan_reaper.find_orphans(str(base), own.pid, 0.0, own.username())
+            if proc.pid in {p.pid for p in found}:
+                break
+            time.sleep(0.1)
+        assert proc.pid in {p.pid for p in found}
+        assert orphan_reaper.find_orphans(str(base), own.pid, 0.0, "nobody-else") == []
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_find_orphans_process_time_under_brightline(tmp_path: Path) -> None:
+    own = psutil.Process()
+    best = None
+    for _ in range(3):
+        start = time.process_time()
+        orphan_reaper.find_orphans(
+            str(tmp_path / "pytest-none"), own.pid, own.create_time(), own.username()
+        )
+        elapsed_ms = (time.process_time() - start) * 1000.0
+        best = elapsed_ms if best is None else min(best, elapsed_ms)
+    assert best is not None and best < 500.0
+
+
+def test_find_orphans_default_username_scan_stays_under_brightline(tmp_path: Path) -> None:
+    own = psutil.Process()
+    best = None
+    for _ in range(3):
+        start = time.process_time()
+        orphan_reaper.find_orphans(str(tmp_path / "pytest-none"), own.pid, own.create_time(), None)
+        elapsed_ms = (time.process_time() - start) * 1000.0
+        best = elapsed_ms if best is None else min(best, elapsed_ms)
+    assert best is not None and best < 500.0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="NtQuerySystemInformation is Windows-only")
+def test_windows_start_times_match_psutil_for_own_process() -> None:
+    starts = orphan_reaper._windows_start_times()
+    assert starts is not None
+    assert starts[os.getpid()] == pytest.approx(psutil.Process().create_time(), abs=0.01)
+
+
+def test_newer_processes_excludes_pids_and_older_processes() -> None:
+    own = psutil.Process()
+    newer = orphan_reaper._newer_processes(0.0, set())
+    assert own.pid in {p.pid for p in newer}
+    assert own.pid not in {p.pid for p in orphan_reaper._newer_processes(0.0, {own.pid})}
+    assert orphan_reaper._newer_processes(time.time() + 10_000, set()) == []
 
 
 def test_pytest_sessionfinish_skips_workers_without_scanning(monkeypatch: pytest.MonkeyPatch) -> None:

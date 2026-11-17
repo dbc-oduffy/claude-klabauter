@@ -428,6 +428,41 @@ def test_pm_item_with_no_recorded_turn_refuses_before_any_write(tmp_path: Path, 
     assert _snapshot(tmp_path) == before
 
 
+def test_pm_item_with_recorded_turn_plus_appended_slice_is_accepted_slice_text_in_context(repo) -> None:
+    slice_text = "[Slice: F15] only the guard, not the skill"
+    out = _go(repo, {"asks": [
+        {"ask": f"{VERBATIM}\n\n{slice_text}", "source": "pm", "context": "caller note", "writes": ["a"]},
+        {"ask": VERBATIM, "source": "pm", "writes": ["b"]},
+    ]})
+    assert out["exit_code"] == 0, out
+    sliced, exact = (_sizing(repo, r["sizing"]) for r in out["ready"])
+    assert [v["text"] for v in sliced["pm_verbatims"]] == [VERBATIM]
+    assert c.slice_ask_source(sliced) is None
+    brief = sliced["em_analysis"][mod.EM_BRIEF_KEY]
+    assert slice_text in brief and "caller note" in brief and VERBATIM not in brief
+    assert [v["text"] for v in exact["pm_verbatims"]] == [VERBATIM]
+    assert slice_text not in exact["em_analysis"].get(mod.EM_BRIEF_KEY, "")
+
+
+def test_pm_item_with_recorded_turn_prefix_slice_text_and_reflowed_whitespace_binds(repo) -> None:
+    reflowed = VERBATIM.replace(" ", "  ", 2)
+    out = _go(repo, {"asks": [{"ask": f"[Slice: F15] {reflowed}", "source": "pm", "writes": ["a"]}]})
+    assert out["exit_code"] == 0, out
+    doc = _sizing(repo, out["ready"][0]["sizing"])
+    brief = doc["em_analysis"][mod.EM_BRIEF_KEY]
+    assert "[Slice: F15]" in brief and "unrelated" not in brief
+    assert [v["text"] for v in doc["pm_verbatims"]] == [VERBATIM]
+
+
+def test_pm_refusal_names_the_accepted_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "hub" / SID).mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
+    out = mod.fanout({"asks": [{"ask": "[Slice: F15] x", "source": "pm", "writes": ["a"]}], "session_id": SID}, tmp_path)
+    assert out["exit_code"] == 1 and out["applied"] is False
+    assert "verbatim" in out["error"] and "appended" in out["error"] and "context" in out["error"] and "relayed" in out["error"]
+
+
 def test_unmarked_item_matching_no_turn_is_relayed_without_pm_verbatims(repo) -> None:
     out = _go(repo, {"asks": [{"ask": "fix a", "writes": ["a"]}, {"ask": f"EM says: {VERBATIM}", "writes": ["b"]}]})
     assert out["exit_code"] == 0, out

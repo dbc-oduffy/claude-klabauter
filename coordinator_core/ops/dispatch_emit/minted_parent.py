@@ -4,8 +4,8 @@ The fan-out writes `scratch/warp/ask-digest/<digest>.json` (`{parent_id, minted_
 record; a resubmission of the same asks finds it here (`find_reusable`) instead of minting a second
 parent, and `reap_orphans` closes indexed parents that aged out unstarted: run records get an
 `ABANDONED_AT_MINTED` halt marker and the scratch footprint is deleted; state/warp and state/sizings files
-are never deleted. Both read the digest index only, never `scratch/warp` or `state/warp` as a corpus;
-every touched path is named from the parent record's run ids. "Never started" is `halted_run._is_shell` and no live run token, the conjunction
+are never deleted. The reuse and reap read the digest index only; `notice_unstarted` alone walks
+`state/warp`, bounded; every touched path is named from the parent record's run ids. "Never started" is `halted_run._is_shell` and no live run token, the conjunction
 `dispatch.emit abandon_run` uses for its minted-only close. Stdlib only: no git, no subprocess.
 
 `python -m coordinator_core.ops.dispatch_emit.minted_parent --reap <parent_id>` reaps one named parent
@@ -20,18 +20,31 @@ import json
 import os
 import shutil
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, NamedTuple, Optional, Sequence
+from typing import Any, Collection, Mapping, NamedTuple, Optional, Sequence
 
+from coordinator_core.ask_spool import notice
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
 from coordinator_core.ops.dispatch_emit import abandoned_minted_close, halted_run, live_run_index, run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    PLAN_STARTED_FIELD,
+    RECORD_DIR_ROOT,
+    RUN_DIR_ROOT,
+    RUN_STAGE_FILE,
+    read_run_stage,
+    record_dir,
+)
 from coordinator_core.ops.dispatch_emit.fan_launcher import launcher_rel
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.ops.warp_run_deliverable import ABANDONED_AT_MINTED, MINTED_STALE_SECONDS
+from coordinator_core.ops.warp_run_deliverable import ABANDONED_AT_MINTED, MINTED_STALE_SECONDS, _stamp_epoch
 
 REUSE_TTL_S = MINTED_STALE_SECONDS
+UNSTARTED_NOTICE_SECONDS = 600
+NOTICED_FIELD = "noticed_unstarted_at"
 REAP_PER_CALL = 8
 DIGEST_DIR_REL = f"{RUN_DIR_ROOT}/ask-digest"
 
@@ -175,10 +188,56 @@ def reap_parent(root: Any, parent_id: str) -> bool:
     return True
 
 
+def notice_unstarted(root: Any, now: float, skip: Collection[str] = ()) -> list[str]:
+    """Send one start notice per run still `minted` with no `plan_started_at` `UNSTARTED_NOTICE_SECONDS` after its
+    `started_at`, to the run-stage's session; returns the noticed run ids. Walks `RECORD_DIR_ROOT` newest id
+    first (an index-less hook mint never enters the digest index), at most `REAP_PER_CALL` notices and
+    `SCAN_BUDGET_SECONDS` of process time. `noticed_unstarted_at` in run-stage.json keeps it to one and is
+    written without touching `last_activity_at`: the notice never postpones the halt."""
+    wt = main_worktree_root(Path(root))
+    deadline = time.process_time() + abandoned_minted_close.SCAN_BUDGET_SECONDS
+    try:
+        names = sorted((e.name for e in os.scandir(wt / RECORD_DIR_ROOT) if e.is_dir()), reverse=True)
+    except OSError:
+        return []
+    noticed: list[str] = []
+    for name in names:
+        if len(noticed) >= REAP_PER_CALL or time.process_time() > deadline:
+            break
+        if name in skip or not safe_id(name):
+            continue
+        rdir = record_dir(wt, name)
+        stage = read_run_stage(wt, name)
+        if not stage or stage.get("stage") != "minted" or PLAN_STARTED_FIELD in stage or NOTICED_FIELD in stage:
+            continue
+        started = _stamp_epoch(stage.get("started_at"))
+        if started is None or now - started < UNSTARTED_NOTICE_SECONDS or (rdir / halted_run.HALTED_FILE).exists():
+            continue
+        session = stage.get("session_id")
+        if not isinstance(session, str):
+            continue
+        stage[NOTICED_FIELD] = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            atomic_write_bytes(rdir / RUN_STAGE_FILE, (json.dumps(stage, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        except OSError:
+            continue
+        if not notice.append_unstarted_notice(str(wt), session, name):
+            current = read_run_stage(wt, name)
+            if current and current.pop(NOTICED_FIELD, None) is not None:
+                try:
+                    atomic_write_bytes(rdir / RUN_STAGE_FILE, (json.dumps(current, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+                except OSError:
+                    pass
+            continue
+        noticed.append(name)
+    return noticed
+
+
 def reap_orphans(root: Any, now: float, limit: int = REAP_PER_CALL) -> list[str]:
     """Reap up to `limit` index entries older than `REUSE_TTL_S`: a minted-not-started parent loses its files,
-    a started or unreadable one only its entry. Then closes dead `abandoned_at_minted` markers with the rest of
-    `limit` (`abandoned_minted_close.close_abandoned`). Returns the parent ids whose files were deleted."""
+    a started or unreadable one only its entry. Then notices unstarted minted runs (`notice_unstarted`, which
+    needs no index entry) and closes dead `abandoned_at_minted` markers with the rest of `limit`
+    (`abandoned_minted_close.close_abandoned`). Returns the parent ids whose files were deleted."""
     wt = main_worktree_root(Path(root))
     index = wt / DIGEST_DIR_REL
     try:
@@ -206,6 +265,10 @@ def reap_orphans(root: Any, now: float, limit: int = REAP_PER_CALL) -> list[str]
             if record is not None:
                 just_halted.update(r.run_id for r in record.runs)
         path.unlink(missing_ok=True)
+    try:
+        notice_unstarted(wt, now, skip=just_halted)
+    except OSError:
+        pass
     if limit > handled:
         try:
             abandoned_minted_close.close_abandoned(wt, now, limit - handled, skip=just_halted)

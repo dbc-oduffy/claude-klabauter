@@ -138,3 +138,12 @@ def test_nothing_withheld_judges_nothing(repo):
 
 def test_an_unreadable_root_returns_empty_and_never_raises(tmp_path):
     assert ohc.close_over(tmp_path / "missing", [CONSUMER], [PRODUCER]) == {}
+
+
+def test_candidate_refuses_a_file_past_the_match_bound_as_coarse(tmp_path):
+    head = "".join(f"line{i}\n" for i in range(1, 1501)).encode()
+    tree = head.replace(b"line1\n", b"EDIT1\n", 1).replace(b"line1500\n", b"EDIT1500\n", 1)
+
+    res = ohc.candidate(tmp_path, "ask-20261114T100000-aaaaaa", "pkg/big.py", head, tree, declared=True)
+
+    assert res["refused"] == ohc.COARSE and "bytes" not in res
