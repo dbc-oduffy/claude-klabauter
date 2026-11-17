@@ -42,6 +42,8 @@ _SEED_FILES = frozenset(
     + ("pyproject.toml",)
     # publish.py's end-of-run argv-parity gate reads this baseline; `_is_wanted` skips test dirs.
     + ("coordinator_core/tests/engine_cli_argv_parity_baseline.json",)
+    # coordinator_core/__init__.py imports it eagerly; unseeded, every clone import dies at __init__.
+    + ("coordinator_core/op_scopes.py",)
     + tuple(
         "coordinator/bin/" + name
         for name in (
