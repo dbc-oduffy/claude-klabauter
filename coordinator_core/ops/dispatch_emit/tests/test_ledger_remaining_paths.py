@@ -388,3 +388,19 @@ def test_derived_row_writes_never_carry_a_directory(tmp_path: Path) -> None:
     assert evidence in writes
     assert not [w for w in writes if (root / w).is_dir()]
     assert rows[0]["writes"][0] != "state/run-evidence"
+
+
+def test_derived_row_writes_never_carry_a_gitignored_path(tmp_path: Path) -> None:
+    """d61dee-2 shape: a footprint-widening row served R1 with `scratch/family-stage/LR1/write.out.md`;
+    the derived row inherited it and commit_v2 refused the gitignored, untracked path."""
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import derive_ledger_rows
+
+    root = _repo(tmp_path)
+    (root / ".git").mkdir()
+    (root / ".gitignore").write_text("scratch/\n")
+    leaked = "scratch/family-stage/LR1/write.out.md"
+    (root / leaked).parent.mkdir(parents=True)
+    (root / leaked).write_text("x")
+    rem = _rem("a plan-review stage routed to Agy whose verdict an engine run consumed")
+    rows, _ = derive_ledger_rows(rem, [], ["R1"], {"R1": ["pkg/mod.py", leaked]}, [], root)
+    assert rows[0]["writes"] == ["pkg/mod.py"]

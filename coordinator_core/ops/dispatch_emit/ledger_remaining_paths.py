@@ -314,6 +314,11 @@ def derive_ledger_rows(
             hits = note_named | {m for m in modules if m in note_mods} | note_serving
             if not any(p not in gated_paths([p]) for p in drop_excluded(sorted(hits), exclude)):
                 continue
+        # Trap: a serving row's gitignored, untracked write (a scratch output) is refused by
+        # commit_v2 at every checkpoint, so a derived row inheriting it can never land.
+        from coordinator_core.ops.dispatch_emit.requirements_ledger import _drop_ignored_untracked
+
+        writes = _drop_ignored_untracked(repo_root, writes)[0]
         dropped = [d for d in dropped if d not in writes]
         if not writes:
             if not rerule:
