@@ -256,23 +256,21 @@ def is_family_leg(command: str) -> bool:
     return bool(command) and _FAMILY_LEG_RE.search(command) is not None
 
 
-def _brief_writes(brief: Path) -> list[str]:
-    """The `writes:` list of a family-stage brief (`stage_family.runner_brief`); empty when absent."""
+def _row_writes(root: Path, run_id: str, row_id: str) -> list[str]:
+    """The run manifest's declared `writes` for `row_id`; empty when absent or unreadable.
+
+    Trap: the runner's own `<stage>.brief.md` is free text the agent authors, so it never sources paths.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_contract  # noqa: PLC0415 -- leg-local
+
     try:
-        lines = brief.read_text(encoding="utf-8").splitlines()
-    except OSError:
+        doc = json.loads((ask_contract.record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return []
-    out: list[str] = []
-    inside = False
-    for line in lines:
-        if line.strip() == "writes:":
-            inside = True
-            continue
-        if inside:
-            if not line.startswith("  - "):
-                break
-            out.append(_norm(line[4:].strip()))
-    return [p for p in out if p]
+    for row in doc.get("rows") or [] if isinstance(doc, dict) else []:
+        if isinstance(row, dict) and row.get("id") == row_id:
+            return [_norm(p) for p in row.get("writes") or [] if isinstance(p, str) and p]
+    return []
 
 
 def record_family_leg(root: Path, session_id: str, agent_id: str, command: str) -> None:
@@ -280,8 +278,8 @@ def record_family_leg(root: Path, session_id: str, agent_id: str, command: str) 
 
     Trap: the vendor CLI writes through its own tools inside the runner's Bash call, so the Write/Edit
     print hook never fires for those bytes; without this print the checkpoint withholds every path the
-    leg wrote and the row commit reports "already match HEAD". Declared paths come from the stage's
-    own `write.brief.md`; a read-only stage prints nothing. Zero spawn; never raises.
+    leg wrote and the row commit reports "already match HEAD". Declared paths are the run manifest row's
+    `writes`, the row named by `scratch/family-stage/<run>/<row>/`; a read-only stage prints nothing. Zero spawn; never raises.
     """
     if not (session_id and agent_id and command):
         return
@@ -289,7 +287,10 @@ def record_family_leg(root: Path, session_id: str, agent_id: str, command: str) 
         m = _FAMILY_LEG_RE.search(command)
         if m is None or m.group(2) != "write":
             return
-        for rel in _brief_writes(Path(root) / m.group(1) / "write.brief.md"):
+        run_id, _, row_id = m.group(1)[len("scratch/family-stage/"):].partition("/")
+        if not run_id or not row_id or "/" in row_id:
+            return
+        for rel in _row_writes(Path(root), run_id, row_id):
             record_write(Path(root), session_id, agent_id, rel)
     except Exception:  # noqa: BLE001 -- no print: the checkpoint withholds the file
         return

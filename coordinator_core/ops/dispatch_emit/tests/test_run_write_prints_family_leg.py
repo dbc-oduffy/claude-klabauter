@@ -20,13 +20,18 @@ SCRATCH = "scratch/family-stage/ask-1/LR1"
 
 
 def _brief(root: Path, stage: str, writes: list[str]) -> None:
+    """The run manifest declares the row's writes; the runner's own brief is free text it authors."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
     d = root / SCRATCH
     d.mkdir(parents=True, exist_ok=True)
-    lines = [f"family: agy", f"stage: {stage}", f"prompt: {SCRATCH}/{stage}.prompt.md", f"scratch: {SCRATCH}"]
-    if writes:
-        lines.append("writes:")
-        lines.extend(f"  - {p}" for p in writes)
-    (d / f"{stage}.brief.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (d / f"{stage}.brief.md").write_text("Declared write paths (free form):\n- ignored.py\n", encoding="utf-8")
+    rec = ask_contract.record_dir(root, "ask-1")
+    rec.mkdir(parents=True, exist_ok=True)
+    rows = [{"id": "LR1", "writes": writes}, {"id": "LR2", "writes": ["other.py"]}]
+    (rec / "manifest.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
 
 
 @pytest.fixture()

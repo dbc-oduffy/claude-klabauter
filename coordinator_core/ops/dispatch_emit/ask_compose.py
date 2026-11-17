@@ -3640,10 +3640,6 @@ def _single_exit_review(blocks: list[str]) -> str:
 _ALREADY_DELIVERED_RE = r"/\bDONE[^|]{0,120}?already delivered[^|]{0,80}?\bcommit\s+([0-9a-f]{4,40})\b/i"
 #: One executor note reporting the work already at HEAD with no commit named (`<row>: DONE (nothing changed)`).
 _AT_HEAD_NO_SHA_RE = r"/^\S+: DONE \((?:nothing changed|already at HEAD)\s*[,)]/i"
-# A family-stage row's DONE note: `<row>: DONE: <row> via <family> {stage record}`. Every attempt
-# OK (G-EM #85) counts as an at-HEAD claim; `record_halted_run_landed` still proves the clean write set.
-_FAMILY_OK_RE = r'/^\S+: DONE: \S+ via [a-z]+ \{.*"verdict":"OK"/'
-_FAMILY_NON_OK_RE = r'/"verdict":"(?!OK")/'
 _ALREADY_DELIVERED_SCHEMA = _obj(
     ["ok"],
     {"ok": {"type": ["boolean", "null"]}, "error": {"type": ["string", "null"]}, "sha": {"type": ["string", "null"]}, "close": {}},
@@ -3674,8 +3670,7 @@ def _already_delivered_fn(*, head: str, anchor: str, repo_root: str, run_id: str
         "    const _sha = _m ? _m[1].toLowerCase() : null;\n"
         "    if (!_sha) {\n"
         "      const _notes = _deliveryNotes.split(' | ').filter((x) => x);\n"
-        "      if (!_notes.length || !_notes.every((n) => "
-        f"{_AT_HEAD_NO_SHA_RE}.test(n) || ({_FAMILY_OK_RE}.test(n) && !{_FAMILY_NON_OK_RE}.test(n)))) return false;\n"
+        f"      if (!_notes.length || !_notes.every((n) => {_AT_HEAD_NO_SHA_RE}.test(n))) return false;\n"
         "    }\n"
         "    let _r = null;\n"
         f"    try {{ _r = await {call}; }} catch (e) {{ _alreadyDeliveredRefusal = 'the close agent failed: ' + "
