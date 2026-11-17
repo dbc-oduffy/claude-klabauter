@@ -64,6 +64,14 @@ def test_passing_fresh_record_is_approved(tmp_path):
     assert (out["verdict"], out["findings"]) == ("APPROVED", 0)
 
 
+def test_a_run_manifest_json_resolves_its_plan_id(tmp_path):
+    root, sha = _repo(tmp_path, date="2020-01-01T00:00:00Z")
+    (root / "manifest.json").write_text('{"plan_id": "%s"}' % PLAN_ID, encoding="utf-8")
+    _record(root, "fail", failed=2)
+    out = leg._test_leg({"plan_path": "manifest.json", "run_base_sha": sha, "repo_root": str(root)})
+    assert (out["verdict"], out["findings"]) == ("REQUIRES_CHANGES", 2)
+
+
 def test_absent_record_is_approved_with_one_note(tmp_path):
     root, sha = _repo(tmp_path, date="2020-01-01T00:00:00Z")
     out = _call(root, sha)

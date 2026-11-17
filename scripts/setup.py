@@ -420,9 +420,9 @@ def _print_change_summary() -> None:
     print()
     print("--- Changes this run ---")
     if not _CHANGES:
-        print("[changes] none: this run altered nothing")
+        print("[changes] none: this run altered nothing outside the repos")
         return
-    print(f"[changes] this run altered {len(_CHANGES)} item(s):")
+    print(f"[changes] this run altered {len(_CHANGES)} item(s) outside the repos:")
     for component, detail in _CHANGES:
         print(f"  - {component}: {detail}")
 
@@ -3832,6 +3832,8 @@ def apply_settings_manifest_env(repo_root: Path, claude_klabauter_root_resolved:
         return False
     applied = ", ".join(record["applied"]) or "nothing to change"
     print(f"PASS [settings-env] {settings_path} ({applied})")
+    if record["applied"]:
+        _note_change("settings.json", f"{settings_path}: {applied}")
     return True
 
 
@@ -3927,6 +3929,8 @@ def ensure_settings_home_bin_on_user_path(args: Args) -> bool:
     try:
         import winreg
 
+        from coordinator_core._settings_home import settings_home
+
         entry = str(settings_home() / "bin")
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
                             winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
@@ -3950,6 +3954,68 @@ def ensure_settings_home_bin_on_user_path(args: Args) -> bool:
     except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
         print(f"WARN [path] user PATH not updated ({type(exc).__name__}: {exc})", file=sys.stderr)
         return False
+
+
+_GIT_CONFIG_PROBE_RE = r"^(core\.autocrlf|core\.longpaths|init\.defaultbranch)$"
+
+
+def _git_config_repairs(current: dict[str, str], platform: str) -> list[tuple[str, str]]:
+    """(key, value) pairs the global git config needs; pure.
+
+    autocrlf is repaired to `false` on every platform when absent or `true`, so repo .gitattributes
+    govern line endings; `false` and `input` fit. longpaths is Windows-only. A set
+    `init.defaultBranch` is the operator's choice and stays.
+    """
+    wanted: list[tuple[str, str]] = []
+    if current.get("core.autocrlf") in (None, "", "true"):
+        wanted.append(("core.autocrlf", "false"))
+    if platform == "win32":
+        if current.get("core.longpaths") != "true":
+            wanted.append(("core.longpaths", "true"))
+    if not current.get("init.defaultbranch"):
+        wanted.append(("init.defaultBranch", "main"))
+    return wanted
+
+
+def install_global_git_config(args: Args) -> list[tuple[str, str]]:
+    """Probe the three fleet keys of the global git config in one spawn and repair what is off.
+
+    Sets global core.autocrlf=false on every platform so repo .gitattributes govern.
+    ADVISORY, non-fatal, idempotent; one extra spawn per key that needs a write.
+    Returns the (key, value) pairs written. Gated by `COORDINATOR_DISABLE_MACHINE_MUTATION`.
+    """
+    print()
+    print("--- Install: global git config (autocrlf=false, longpaths, defaultBranch) ---")
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [git-config] COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return []
+    written: list[tuple[str, str]] = []
+    try:
+        probe = subprocess.run(
+            ["git", "config", "--global", "--get-regexp", _GIT_CONFIG_PROBE_RE],
+            capture_output=True, text=True, timeout=10, **_NO_CONSOLE,
+        )
+        current: dict[str, str] = {}
+        for line in probe.stdout.splitlines():
+            key, _, value = line.partition(" ")
+            current[key.strip().lower()] = value.strip()
+        repairs = _git_config_repairs(current, sys.platform)
+        if not repairs:
+            print("SKIP [git-config] autocrlf, longpaths and defaultBranch already fit")
+        for key, value in repairs:
+            proc = subprocess.run(
+                ["git", "config", "--global", key, value],
+                capture_output=True, text=True, timeout=10, **_NO_CONSOLE,
+            )
+            if proc.returncode != 0:
+                print(f"WARN [git-config] {key} not set: {proc.stderr.strip()}", file=sys.stderr)
+                continue
+            written.append((key, value))
+            _note_change("git-config", f"global {key} {current.get(key.lower()) or '<unset>'} -> {value}")
+            print(f"PASS [git-config] global {key} = {value}")
+    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
+        print(f"WARN [git-config] global git config not probed ({type(exc).__name__}: {exc})", file=sys.stderr)
+    return written
 
 
 def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
@@ -5151,6 +5217,31 @@ def _reset_resolution_journal() -> None:
 _CLAUDE_KLABAUTER_SOURCE_PATH_KEY = "plugin.mirrors.project-makima.source_path"
 
 
+def is_mid_clone(clone: Path) -> bool:
+    """True when `clone`'s `.git` shows a clone or checkout still in flight; reads files, spawns nothing.
+
+    Positive evidence only (a `.git` with no HEAD is not judged): an unborn HEAD (no fetched
+    branch), a missing index under a born HEAD (checkout unfinished), or a `tmp_pack_*` file.
+    """
+    git_dir = clone / ".git"
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if next(iter((git_dir / "objects" / "pack").glob("tmp_pack_*")), None) is not None:
+        return True
+    if head.startswith("ref:"):
+        ref = head[4:].strip()
+        if not (git_dir / ref).is_file():
+            try:
+                packed = (git_dir / "packed-refs").read_text(encoding="utf-8")
+            except OSError:
+                packed = ""
+            if not any(line.rstrip().endswith(" " + ref) for line in packed.splitlines()):
+                return True
+    return not (git_dir / "index").is_file()
+
+
 def install_repo_discovery(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args, *, write=None) -> None:
     """Install-chain step: pin unset `repos.*` keys (and the general-work root) to clones found by origin remote.
 
@@ -5182,7 +5273,11 @@ def install_repo_discovery(repo_root: Path, claude_klabauter_root_resolved: Path
         wanted = {k: v for k, v in wanted.items() if not is_set(k)}
         found, ambiguous = repo_discovery.find_clones(scan_roots, wanted)
         for key, clone in found.items():
+            if is_mid_clone(clone):
+                print(f"[SKIP] {key}: {clone} is mid-clone; re-run scripts/setup.py once it finishes.")
+                continue
             write(key, str(clone))
+            _note_change("registry", f"machine-local set {key} = {clone}")
             print(f"[OK] {key} -> {clone}")
         for key in ambiguous:
             print(f"[ADVISORY] {key}: several clones match by remote; set it by hand.", file=sys.stderr)
@@ -5480,6 +5575,7 @@ def main(argv: list[str]) -> int:
             _print_change_summary()
             return 1
         apply_transcript_retention_default(claude_klabauter_root_resolved, args)
+        install_global_git_config(args)
         ensure_settings_home_bin_on_user_path(args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)

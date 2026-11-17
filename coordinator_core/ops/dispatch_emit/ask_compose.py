@@ -4428,6 +4428,10 @@ def compose_ask_script(
     blitz_phases: list[str] = []
     # Trap: a chained launcher child that sizes in-run can land on M+ whatever tier the hop saw; it carries plan-blitz so that arm runs here, never a second hand-off.
     chain_hop_sizes = chain_hop and launcher_child and sized_in_run
+    xl_open = _xl_exit_open(repo_root, sizing_rel)
+    # Trap: a chain hop's result is final (fan_launcher follows one hop), so every arm it can reach runs here or composition refuses; an open XL exit reaches the roadmap arm, which needs plan-blitz beside it.
+    chain_final = chain_hop and launcher_child
+    chain_hop_sizes = chain_hop_sizes or (chain_final and xl_open)
     if known_arm in (ARM_M_PLUS, ARM_ROADMAP) or chain_hop_sizes:
         if wrap_stage is None:
             from coordinator_core.ops.dispatch_emit import ask_plan_blitz
@@ -4441,7 +4445,6 @@ def compose_ask_script(
         if f"async function {_PLAN_BLITZ_FN}(" not in blitz_fn:
             raise AskComposeRefused(f"wrapped plan-blitz stage does not define async function {_PLAN_BLITZ_FN}")
 
-    xl_open = _xl_exit_open(repo_root, sizing_rel)
     # A raw ask is sized in-run, so any size can reach the XL exit; a known arm is already sized, so only an open XL exit can.
     xl_possible = sized_in_run or xl_open
     rb_fn: str = ""
@@ -4460,6 +4463,11 @@ def compose_ask_script(
                 and not roadmap_in_body
                 and len(blitz_fn.encode("utf-8")) + len(rb_fn.encode("utf-8")) > STAGES_EMBED_BYTE_BUDGET
             ):
+                if chain_final:
+                    raise AskComposeRefused(
+                        "a chained run cannot embed the roadmap arm beside plan-blitz within the embed byte budget; "
+                        "its hand-off would be refused as a second hand-off"
+                    )
                 rb_fn, rb_phases = "", []
             if em_brief and rb_fn:
                 if _TOP_AGENT_DECL.search(rb_fn):
@@ -5423,8 +5431,8 @@ def compose_ask_script(
         "next_action: 'The gate timed out (-32004) and its one refire did not clear it; the gate is retry-safe, refire: ' + "
         f"{_refire_js(sizing_rel)} }}; }}"
     )
-    b.append(_research_split_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after))
-    b.append(_pure_research_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after))
+    b.append(_research_split_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after, chain_final=chain_final))
+    b.append(_pure_research_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after, chain_final=chain_final))
     # A ledger resume re-judges the blocking rows of a run whose executors already landed. It
     # re-stages the plan (the terminal commit needs the manifest) and takes the XS tail: no plan
     # author, review wave or scoped test runs, and execution is skipped by `_resumeLedger`.
@@ -6080,6 +6088,12 @@ def compose_ask_script(
         b.append("    }")
         b.append("  }")
         _append_split_stage(b)
+    elif chain_final:
+        b.append(
+            f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+            "reason: 'a chained run holds no plan-blitz for an M+ arm and cannot hand off again: resubmit Workflow({name: \"coordinator:engine-ask\", "
+            "args: {sizing: \"' + _sizingRel + '\"}})', sizing: _sizingRel, run_id: _runId }; }"
+        )
     elif launcher_child:
         b.append(_launcher_relay_decl_js(head=head, anchor=anchor, run_id=run_id, stop_after=stop_after))
         launcher_relay_declared = True
@@ -6138,6 +6152,12 @@ def compose_ask_script(
                     repo_root=repo_root, run_id=run_id, interaction_mode="ceo",
                     plan_blitz_args=plan_blitz_args, script_path=script_path,
                 )
+            )
+        elif chain_final:
+            b.append(
+                f"    _halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'a chained run holds no roadmap stage and cannot hand off again: "
+                "resubmit Workflow({name: \"coordinator:engine-ask\", args: {sizing: \"' + _sizingRel + '\"}})', "
+                "sizing: _sizingRel, run_id: _runId };"
             )
         elif launcher_child:
             if not launcher_relay_declared:
@@ -7527,8 +7547,18 @@ def _chain_emit_start_lines(
     ]
 
 
+def _chain_final_research_js(guard: str, what: str) -> str:
+    """The research leg of a chain hop: a chained run's result is final, so the halt stays with its `fire` and
+    `chain_error` instead of returning a hand-off the launcher would refuse."""
+    return (
+        f"  if ({guard}) {{ _halted = {{ ..._halted, chain_error: 'a chained run cannot chain {what} again: "
+        "fire it from halted_by.fire' }; }"
+    )
+
+
 def _research_split_chain_js(
     *, head: str, anchor: str, run_id: str, launcher_child: bool = False, stop_after: Optional[str] = None,
+    chain_final: bool = False,
 ) -> str:
     """The in-run leg for a research/build split whose research sibling is ready: the gate halt's `fire` is the
     engine-ask over `split.research.sizing`, so the script chains that run instead of waking the EM to paste it.
@@ -7544,6 +7574,8 @@ def _research_split_chain_js(
         f"&& _halted.split.research.status === 'ready' && typeof {sibling} === 'string' && {sibling} !== '' "
         "&& Array.isArray(_halted.fire) && _halted.fire.length > 0"
     )
+    if chain_final:
+        return _chain_final_research_js(guard, "the research sibling")
     if launcher_child:
         return (
             f"  if ({guard}) {{ return {{ {CHAIN_HANDOFF_KEY}: {_chain_emit_params_js(sibling, research=True, stop_after=stop_after)}, "
@@ -7563,6 +7595,7 @@ def _research_split_chain_js(
 
 def _pure_research_chain_js(
     *, head: str, anchor: str, run_id: str, launcher_child: bool = False, stop_after: Optional[str] = None,
+    chain_final: bool = False,
 ) -> str:
     """The in-run leg for a pure research sizing (research block, no writes, no split): the gate halt's `fire` is
     the engine-ask over this very sizing, so the script chains the research run itself, as the split leg does for
@@ -7574,6 +7607,8 @@ def _pure_research_chain_js(
         f"&& typeof {sibling} === 'string' && {sibling} !== '' "
         "&& Array.isArray(_halted.fire) && _halted.fire.length > 0"
     )
+    if chain_final:
+        return _chain_final_research_js(guard, "the research run")
     if launcher_child:
         return (
             f"  if ({guard}) {{ return {{ {CHAIN_HANDOFF_KEY}: {_chain_emit_params_js(sibling, research=True, stop_after=stop_after)}, "

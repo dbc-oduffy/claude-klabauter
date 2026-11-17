@@ -24,10 +24,19 @@ def recorded(monkeypatch: pytest.MonkeyPatch):
     return calls
 
 
-def _spawn(flags) -> None:
+@pytest.fixture
+def recorded_startupinfo(monkeypatch: pytest.MonkeyPatch):
     import _winapi
 
-    _winapi.CreateProcess(None, "x", None, None, False, flags, None, None, None)
+    seen = []
+    monkeypatch.setattr(_winapi, "CreateProcess", lambda *a: seen.append(a[8]))
+    return seen
+
+
+def _spawn(flags, startupinfo=None) -> None:
+    import _winapi
+
+    _winapi.CreateProcess(None, "x", None, None, False, flags, None, None, startupinfo)
 
 
 @windows_only
@@ -45,6 +54,20 @@ def test_flag_added_only_when_console_less_and_unchosen(recorded, monkeypatch: p
     wp.install_console_less_spawn_default()
     _spawn(flags)
     assert recorded == [expected]
+
+
+@windows_only
+@pytest.mark.parametrize("no_console", [True, False])
+def test_feedback_bit_added_and_callers_flags_kept(recorded_startupinfo, monkeypatch: pytest.MonkeyPatch, no_console) -> None:
+    monkeypatch.setattr(wp, "_process_has_no_console", lambda: no_console)
+    wp.install_console_less_spawn_default()
+    info = subprocess.STARTUPINFO()
+    info.dwFlags = subprocess.STARTF_USESTDHANDLES
+    _spawn(0, info)
+    _spawn(0, None)
+    kept, fresh = recorded_startupinfo
+    assert kept.dwFlags == subprocess.STARTF_USESTDHANDLES | wp.STARTF_FORCEOFFFEEDBACK
+    assert fresh.dwFlags == wp.STARTF_FORCEOFFFEEDBACK
 
 
 @windows_only

@@ -23,6 +23,43 @@ from __future__ import annotations
 import importlib
 import os as _os
 
+
+def _hide_child_consoles() -> None:
+    """Windows: every child any claude-klabauter process spawns opens no console window and raises
+    no AppStarting cursor, unless the call asks for its own console.
+
+    Root of the PM-visible pointer flicker: Python's default spawn shows both, and the box
+    runs thousands of bare git/python spawns a minute. Defaulting it here covers every
+    engine process, CLI, hook body and test without touching each call site. Trap: a
+    caller that passes its own `startupinfo` or CREATE_NEW_CONSOLE / DETACHED_PROCESS keeps it."""
+    import sys
+
+    if sys.platform != "win32":
+        return
+    import subprocess
+
+    real_init = subprocess.Popen.__init__
+    if getattr(real_init, "_hides_consoles", False):
+        return
+    own_console = subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS
+
+    def init(self, *args, **kwargs):
+        flags = kwargs.get("creationflags", 0) or 0
+        if not flags & own_console:
+            kwargs["creationflags"] = flags | subprocess.CREATE_NO_WINDOW
+            if kwargs.get("startupinfo") is None:
+                info = subprocess.STARTUPINFO()
+                info.dwFlags |= subprocess.STARTF_USESHOWWINDOW | 0x80  # STARTF_FORCEOFFFEEDBACK
+                info.wShowWindow = 0  # SW_HIDE
+                kwargs["startupinfo"] = info
+        real_init(self, *args, **kwargs)
+
+    init._hides_consoles = True  # type: ignore[attr-defined]
+    subprocess.Popen.__init__ = init  # type: ignore[method-assign]
+
+
+_hide_child_consoles()
+
 # Hold this import out of a publish swap window at its own engine root. Must never raise.
 try:
     from coordinator_core import _engine_landing

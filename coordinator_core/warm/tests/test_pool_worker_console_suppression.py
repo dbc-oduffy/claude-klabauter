@@ -4,14 +4,15 @@ Separate from `test_pool_worker_parent_watchdog.py` because the subject is
 different: that file pins how a worker DIES, this one pins how it is SPAWNED
 and what its missing stdio costs.
 
-`ProcessPoolExecutor` exposes no `creationflags` seam, so the repo-wide
-`win_portability.no_console_creationflags` discipline cannot reach it —
-multiprocessing builds its own `CreateProcess` call, and a detached warm
-server therefore got a brand-new console per worker. `_suppress_pool_worker_
-consoles` swaps `sys.executable` for `pythonw.exe` before the pool is built.
+`ProcessPoolExecutor` exposes no `creationflags` seam; multiprocessing builds
+its own `CreateProcess` call through `_winapi`, which
+`win_portability.install_console_less_spawn_default` wraps. `_suppress_pool_
+worker_consoles` points multiprocessing at the console-subsystem `python.exe`
+(never the GUI-subsystem `pythonw.exe`, which raises the AppStarting cursor)
+and the seam keeps the workers windowless.
 
-THE INVARIANT THAT MATTERS MOST HERE. Under `pythonw` a worker's
-`sys.stdout`/`sys.stderr` are both `None`, and the repo writes
+THE INVARIANT THAT MATTERS MOST HERE. Whenever a launcher supplies no stdio a
+worker's `sys.stdout`/`sys.stderr` are both `None`, and the repo writes
 `print(..., file=sys.stderr)` at 200+ call sites — including
 `ops/fleet/_common.py::_setup_error`, on the refusal path of every fleet op.
 A code-reviewer flagged (2026-08-19, slice B) that this must raise
@@ -39,35 +40,210 @@ Negative-spec:
       real workers, counting visible windows) is a `spawns_process` cadence
       concern; it was run by hand when this landed — 2 windows unsuppressed,
       0 suppressed.
-    - Does NOT assert `pythonw.exe` exists. A Python install without it is
-      valid; the resolver's contract is to leave `sys.executable` alone then,
-      never to substitute a different interpreter.
+    - Never substitutes a different interpreter: with no `python.exe` beside
+      the server's own `sys.executable`, the pool keeps that executable.
 """
 
 from __future__ import annotations
 
+import ast
+import json
 import os
+import struct
+import subprocess
 import sys
+import textwrap
+from pathlib import Path
 
 import pytest
 
+from coordinator_core import _claude_klabauter_root
+from coordinator_core.telemetry import spawn_counter
 from coordinator_core.warm import server
 
+windows_only = pytest.mark.skipif(os.name != "nt", reason="Windows-only console suppression")
 
-def test_suppression_points_multiprocessing_at_pythonw(monkeypatch) -> None:
-    if os.name != "nt":
-        pytest.skip("Windows-only console suppression")
-    from pathlib import Path
 
-    if not Path(sys.executable).with_name("pythonw.exe").is_file():
-        pytest.skip("no pythonw.exe beside this interpreter")
+def _pe_subsystem(exe: str) -> int:
+    with open(exe, "rb") as fh:
+        head = fh.read(4096)
+    (e_lfanew,) = struct.unpack_from("<I", head, 0x3C)
+    # PE signature (4) + COFF header (20) + Subsystem at offset 68 of the optional header.
+    (subsystem,) = struct.unpack_from("<H", head, e_lfanew + 24 + 68)
+    return subsystem
 
+
+@windows_only
+def test_suppression_points_multiprocessing_at_a_console_exe(monkeypatch) -> None:
     recorded: list[str] = []
     monkeypatch.setattr(server.multiprocessing, "set_executable", recorded.append)
     server._suppress_pool_worker_consoles()
 
     assert len(recorded) == 1, "the pool's interpreter was never redirected"
-    assert Path(recorded[0]).name.lower() == "pythonw.exe"
+    assert Path(recorded[0]).name.lower() != "pythonw.exe"
+    assert _pe_subsystem(recorded[0]) == 3, "pool executable must be console subsystem"
+
+
+@windows_only
+def test_a_pythonw_server_gets_its_python_exe_sibling(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "pythonw.exe").write_bytes(b"")
+    (tmp_path / "python.exe").write_bytes(b"")
+    recorded: list[str] = []
+    monkeypatch.setattr(server.multiprocessing, "set_executable", recorded.append)
+    monkeypatch.setattr(server.sys, "executable", str(tmp_path / "pythonw.exe"))
+    server._suppress_pool_worker_consoles()
+    assert recorded == [str(tmp_path / "python.exe")]
+
+
+@windows_only
+def test_no_console_sibling_leaves_the_executable_alone(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "pythonw.exe").write_bytes(b"")
+    recorded: list[str] = []
+    monkeypatch.setattr(server.multiprocessing, "set_executable", recorded.append)
+    monkeypatch.setattr(server.sys, "executable", str(tmp_path / "pythonw.exe"))
+    server._suppress_pool_worker_consoles()
+    assert recorded == [str(tmp_path / "pythonw.exe")]
+
+
+def test_server_entry_installs_the_seam_and_seeds_before_any_pool() -> None:
+    main = next(
+        n for n in ast.parse(Path(server.__file__).read_text(encoding="utf-8")).body
+        if isinstance(n, ast.FunctionDef) and n.name == "_run_guarded"
+    )
+    order: list[str] = []
+    for node in ast.walk(main):
+        if isinstance(node, ast.Call):
+            f = node.func
+            name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+            if name in {
+                "_suppress_pool_worker_consoles",
+                "install_console_less_spawn_default",
+                "_seed_worker_environment",
+                "ProcessPoolExecutor",
+            }:
+                order.append((node.lineno, name))
+    names = [n for _, n in sorted(order)]
+    assert names[:3] == [
+        "_suppress_pool_worker_consoles",
+        "install_console_less_spawn_default",
+        "_seed_worker_environment",
+    ]
+    assert "ProcessPoolExecutor" not in names[:3]
+
+
+_WINDOW_PROBE = textwrap.dedent(
+    """
+    import ctypes, multiprocessing, sys, time
+    from ctypes import wintypes
+    from pathlib import Path
+
+    def _count_visible(pid):
+        u = ctypes.windll.user32
+        found = []
+        cb_t = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        def cb(hwnd, _):
+            p = wintypes.DWORD()
+            u.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+            if p.value == pid and u.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return True
+        u.EnumWindows(cb_t(cb), 0)
+        return len(found)
+
+    if __name__ == "__main__":
+        sys.path.insert(0, sys.argv[1])
+        from coordinator_core.win_portability import console_python, install_console_less_spawn_default
+        install_console_less_spawn_default()
+        multiprocessing.set_executable(console_python(sys.executable))
+        proc = multiprocessing.Process(target=time.sleep, args=(4,))
+        proc.start()
+        time.sleep(1.5)
+        visible = _count_visible(proc.pid)
+        k = ctypes.windll.kernel32
+        proc.terminate()
+        Path(sys.argv[2]).write_text(f"{visible} {k.GetConsoleCP()}")
+    """
+)
+
+
+@windows_only
+@pytest.mark.parametrize("parent", ["console-less", "create-no-window"])
+def test_a_real_worker_opens_no_visible_window(tmp_path: Path, parent: str) -> None:
+    script = tmp_path / "probe.py"
+    script.write_text(_WINDOW_PROBE)
+    out = tmp_path / "out.txt"
+    root = str(Path(server.__file__).parents[2])
+    if parent == "console-less":
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        if not pythonw.is_file():
+            pytest.skip("no pythonw.exe beside the interpreter to make a console-less parent")
+        argv, kw = [str(pythonw), "-I", str(script), root, str(out)], {}
+    else:
+        argv = [sys.executable, "-I", str(script), root, str(out)]
+        kw = {"creationflags": subprocess.CREATE_NO_WINDOW}
+    subprocess.run(argv, timeout=60, check=True, stdin=subprocess.DEVNULL, **kw)
+    visible, _console_cp = out.read_text().split()
+    assert visible == "0", f"worker opened {visible} visible window(s) under a {parent} parent"
+
+
+def test_seeded_lookup_spawns_nothing(monkeypatch) -> None:
+    _claude_klabauter_root.clear_machine_local_cache()
+    monkeypatch.setenv(
+        _claude_klabauter_root.MACHINE_LOCAL_SEED_ENV, json.dumps({"repos.claude_klabauter": "/seeded/klabauter"})
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(Path(__file__)))  # exists; would spawn if consulted
+    before = spawn_counter.spawn_count()
+    calls: list[object] = []
+    monkeypatch.setattr(_claude_klabauter_root.subprocess, "run", lambda *a, **k: calls.append(a))
+
+    assert _claude_klabauter_root._machine_local_get("repos.claude_klabauter") == "/seeded/klabauter"
+    assert calls == []
+    assert spawn_counter.spawn_count() == before
+
+
+def test_seed_miss_still_spawns_once_and_memoizes(monkeypatch, tmp_path: Path) -> None:
+    _claude_klabauter_root.clear_machine_local_cache()
+    impl = tmp_path / "_machine_local.py"
+    impl.write_text("print('from-spawn')\n")
+    monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl))
+    monkeypatch.setenv(_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV, json.dumps({"other.key": "x"}))
+    before = spawn_counter.spawn_count()
+
+    assert _claude_klabauter_root._machine_local_get("repos.claude_klabauter") == "from-spawn"
+    assert _claude_klabauter_root._machine_local_get("repos.claude_klabauter") == "from-spawn"
+    assert spawn_counter.spawn_count() - before == 1
+    _claude_klabauter_root.clear_machine_local_cache()
+
+
+@pytest.mark.parametrize("raw", ["not json", "[1]", '{"repos.claude_klabauter": ""}'])
+def test_malformed_seed_falls_through(monkeypatch, tmp_path: Path, raw: str) -> None:
+    _claude_klabauter_root.clear_machine_local_cache()
+    impl = tmp_path / "_machine_local.py"
+    impl.write_text("print('from-spawn')\n")
+    monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl))
+    monkeypatch.setenv(_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV, raw)
+    assert _claude_klabauter_root._machine_local_get("repos.claude_klabauter") == "from-spawn"
+    _claude_klabauter_root.clear_machine_local_cache()
+
+
+def test_seed_worker_environment_exports_lookup_and_git_non_interactive(monkeypatch, tmp_path: Path) -> None:
+    _claude_klabauter_root.clear_machine_local_cache()
+    impl = tmp_path / "_machine_local.py"
+    impl.write_text("print('/the/klabauter')\n")
+    monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl))
+    for name in (_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV, "GIT_TERMINAL_PROMPT"):
+        monkeypatch.setenv(name, "x")  # registers the restore
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("GCM_INTERACTIVE", "always")
+
+    server._seed_worker_environment()
+
+    assert json.loads(os.environ[_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV]) == {
+        "repos.claude_klabauter": "/the/klabauter"
+    }
+    assert os.environ["GIT_TERMINAL_PROMPT"] == "0"
+    assert os.environ["GCM_INTERACTIVE"] == "always", "an operator's own setting is kept"
+    _claude_klabauter_root.clear_machine_local_cache()
 
 
 def test_suppression_is_a_no_op_off_windows(monkeypatch) -> None:

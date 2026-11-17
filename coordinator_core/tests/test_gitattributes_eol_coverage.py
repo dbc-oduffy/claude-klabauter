@@ -74,12 +74,25 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [
-    pytest.mark.spawns_process,
-    pytest.mark.cadence,
-]
+pytestmark = pytest.mark.spawns_process
+
+# Whole-tree `git ls-files --eol` costs seconds, so every test reading the
+# `tracked` fixture is cadence; the attribute-file parser and tmp_path fixtures
+# stay in the fast tier.
+cadence = pytest.mark.cadence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+CATCH_ALL = "* text=auto eol=lf"
+
+# Classes whose checkout ending is CRLF by contract, as `.gitattributes` globs.
+CRLF_GLOBS: tuple[str, ...] = ("*.cmd", "*.bat", "*.ps1")
+
+_ISOLATED_GIT_ENV = {
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "LC_ALL": "C",
+}
 
 CORRECTNESS_PINS: dict[str, str] = {
     ".sha": "text eol=lf",
@@ -108,7 +121,14 @@ ACKNOWLEDGED_UNPINNED: frozenset[str] = frozenset(
         ".bak",
         ".bats",
         ".body",
+        ".building",
         ".c",  # compiler reads either ending
+        ".cjwsnswh",  # tracked atomic-write temp in state/warp run artifacts; text, ending-agnostic
+        ".java",
+        ".pre-ruling",
+        ".reds",  # tracked red-set audit lists under state/audits; line-oriented text
+        ".stale-missing-prompts",
+        ".tmp",  # tracked research entry drafts under docs/research; plain text
         ".err",
         ".example",
         ".exe",  # binary; git detects it, no conversion applies
@@ -232,6 +252,7 @@ def tracked() -> list[EolRow]:
     return _ls_files_eol()
 
 
+@cadence
 @pytest.mark.parametrize("ext", sorted(CORRECTNESS_PINS), ids=sorted(CORRECTNESS_PINS))
 def test_correctness_class_carries_its_required_eol_pin(ext, tracked):
     expected = CORRECTNESS_PINS[ext]
@@ -250,6 +271,7 @@ def test_correctness_class_carries_its_required_eol_pin(ext, tracked):
     )
 
 
+@cadence
 @pytest.mark.parametrize("ext", sorted(CORRECTNESS_PINS), ids=sorted(CORRECTNESS_PINS))
 def test_pinned_class_conforms_to_its_pin_in_the_index(ext, tracked):
     expected = CORRECTNESS_PINS[ext]
@@ -269,6 +291,7 @@ def test_pinned_class_conforms_to_its_pin_in_the_index(ext, tracked):
     )
 
 
+@cadence
 @pytest.mark.designed_red
 @pytest.mark.parametrize("ext", sorted(CORRECTNESS_PINS), ids=sorted(CORRECTNESS_PINS))
 def test_pinned_class_worktree_matches_its_checkout_direction(ext, tracked):
@@ -292,6 +315,7 @@ def test_pinned_class_worktree_matches_its_checkout_direction(ext, tracked):
     )
 
 
+@cadence
 def test_no_unclassified_extension_joins_the_tracked_corpus(tracked):
     known = set(CORRECTNESS_PINS) | ACKNOWLEDGED_UNPINNED
     unclassified: dict[str, list[str]] = {}
@@ -370,3 +394,134 @@ def test_every_pin_direction_has_a_worktree_expectation():
         f"WORKTREE_CONFORMANT entry — add the `w/` values a correct checkout "
         f"of that direction produces."
     )
+
+
+def check_gitattributes(text: str) -> list[str]:
+    """Failures of a `.gitattributes` body against the fleet EOL policy.
+
+    Trap: later rules win, so the catch-all must be the FIRST rule line or it
+    would override the class pins that follow it.
+    """
+    rules = [
+        line.split() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")
+    ]
+    failures: list[str] = []
+    if not rules or " ".join(rules[0]) != CATCH_ALL:
+        failures.append(f"first rule line is not the catch-all `{CATCH_ALL}`")
+    for glob in CRLF_GLOBS:
+        if not any(r[0] == glob and "eol=crlf" in r[1:] for r in rules):
+            failures.append(f"missing `{glob} text eol=crlf` pin")
+    return failures
+
+
+def test_repo_gitattributes_carries_catch_all_first_and_crlf_pins():
+    body = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert check_gitattributes(body) == []
+
+
+def test_gitattributes_check_names_a_missing_catch_all_and_a_missing_pin():
+    body = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
+    without_catch_all = "\n".join(line for line in body.splitlines() if line != CATCH_ALL)
+    assert any(CATCH_ALL in f for f in check_gitattributes(without_catch_all))
+
+    catch_all_late = "*.cmd text eol=crlf\n" + CATCH_ALL + "\n"
+    failures = check_gitattributes(catch_all_late)
+    assert any("first rule line" in f for f in failures)
+    assert any("*.bat" in f for f in failures) and any("*.ps1" in f for f in failures)
+    assert not any("*.cmd" in f for f in failures)
+
+
+def scan_rows(rows: list[EolRow]) -> list[str]:
+    """Whole-tree violations: CRLF held in the index of a non-`-text` file, or
+    a text file with no attribute declaration at all."""
+    bad: list[str] = []
+    for r in rows:
+        if r.index in ("i/crlf", "i/mixed") and r.attr != "-text":
+            bad.append(f"{r.path}  {r.index} attr/{r.attr or '(none)'}")
+        elif r.index == "i/lf" and not r.attr:
+            bad.append(f"{r.path}  {r.index} attr/(none)")
+    return sorted(bad)
+
+
+@cadence
+def test_every_tracked_text_file_declares_eol_and_no_index_blob_holds_crlf(tracked):
+    bad = scan_rows(tracked)
+    assert not bad, (
+        f"{len(bad)} tracked file(s) lack an eol/text/-text attribute or hold CRLF in the "
+        f"index. Add the missing `.gitattributes` rule or run `git add --renormalize -- <path>`.\n"
+        + "\n".join(f"  {b}" for b in bad[:20])
+    )
+
+
+def test_scan_rows_flags_missing_attribute_and_crlf_blob_but_spares_text_off():
+    rows = [
+        EolRow("a.yaml", "i/lf", "w/lf", "text=auto eol=lf"),
+        EolRow("no-attr.yaml", "i/lf", "w/lf", ""),
+        EolRow("crlf.txt", "i/crlf", "w/crlf", "text=auto eol=lf"),
+        EolRow("golden.txt", "i/crlf", "w/crlf", "-text"),
+        EolRow("pic.png", "i/-text", "w/-text", "-text"),
+    ]
+    assert [b.split()[0] for b in scan_rows(rows)] == ["crlf.txt", "no-attr.yaml"]
+
+
+def _git(repo: Path, *args: str, autocrlf: str = "true") -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "git",
+            "-c", f"core.autocrlf={autocrlf}",
+            "-c", "user.name=t",
+            "-c", "user.email=t@example.invalid",
+            "-c", "commit.gpgsign=false",
+            *args,
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, **_ISOLATED_GIT_ENV},
+        **no_console_creationflags(),
+    )
+
+
+def _fixture_repo(root: Path, name: str, with_attributes: bool) -> Path:
+    repo = root / name
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    if with_attributes:
+        attrs = (REPO_ROOT / ".gitattributes").read_bytes().replace(b"\r\n", b"\n")
+        (repo / ".gitattributes").write_bytes(attrs)
+    (repo / "x.yaml").write_bytes(b"a: 1\nb: 2\n")
+    return repo
+
+
+def test_lf_yaml_commits_without_warning_and_clones_out_lf_under_any_autocrlf(tmp_path):
+    repo = _fixture_repo(tmp_path, "pinned", with_attributes=True)
+    add = _git(repo, "add", "-A")
+    commit = _git(repo, "commit", "-q", "-m", "init")
+    assert "will be replaced by" not in add.stderr + commit.stderr
+
+    for mode in ("false", "true"):
+        dest = tmp_path / f"clone-{mode}"
+        _git(tmp_path, "clone", "-q", "-c", f"core.autocrlf={mode}", str(repo), str(dest))
+        assert b"\r" not in (dest / "x.yaml").read_bytes(), f"CR on disk under autocrlf={mode}"
+
+
+def test_without_gitattributes_the_same_commit_warns(tmp_path):
+    repo = _fixture_repo(tmp_path, "bare", with_attributes=False)
+    add = _git(repo, "add", "-A")
+    assert "will be replaced by" in add.stderr
+
+
+def test_crlf_file_under_the_lf_pin_is_stored_lf_in_the_index(tmp_path):
+    repo = _fixture_repo(tmp_path, "crlf-pinned", with_attributes=True)
+    (repo / "crlf.yaml").write_bytes(b"a: 1\r\nb: 2\r\n")
+    _git(repo, "add", "-A")
+    rows = {
+        r.path: r for r in _parse_eol_lines(_git(repo, "ls-files", "--eol").stdout)
+    }
+    assert rows["crlf.yaml"].index == "i/lf"
+    assert scan_rows(list(rows.values())) == []
+
+
+def _parse_eol_lines(out: str) -> list[EolRow]:
+    return [_parse_eol_line(line) for line in out.splitlines() if "\t" in line]

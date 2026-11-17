@@ -139,6 +139,12 @@
 #include <wchar.h>
 #include <wctype.h>
 
+/* Suppresses the AppStarting busy cursor a child launch would otherwise
+ * raise; absent from older SDK headers. */
+#ifndef STARTF_FORCEOFFFEEDBACK
+#define STARTF_FORCEOFFFEEDBACK 0x00000080
+#endif
+
 /* THE OS-AGNOSTIC HALF LIVES HERE, and used to live in this file. SHA-1,
  * the growable `buf_t`, the JSON envelope reader, and -- the load-bearing
  * one -- `is_provably_undispatched()` are shared verbatim with the POSIX
@@ -1331,7 +1337,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
     si.hStdInput = in_r;
     si.hStdOutput = out_w;
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
@@ -1454,7 +1460,7 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
      * block a few dozen lines up -- that leg always got this right; this
      * one, the ordinary (non-hook) cold fall-through every install-class CLI
      * takes, did not. */
-    si.dwFlags = STARTF_USESTDHANDLES;
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
@@ -2034,6 +2040,7 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
+    si.dwFlags = STARTF_FORCEOFFFEEDBACK;
     ZeroMemory(&pi, sizeof(pi));
 
     DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT;
@@ -2163,7 +2170,13 @@ static int private_server(HANDLE pipe) {
 #endif
 
 int main(void) {
-    
+#ifdef DOOR_WINDOWLESS
+    /* A GUI-subsystem process shows the AppStarting cursor until it first
+     * touches its message queue; this peek creates the queue and ends the
+     * feedback at once. */
+    MSG door_pump_msg;
+    PeekMessageW(&door_pump_msg, NULL, 0, 0, PM_NOREMOVE);
+#endif
 #if DOOR_PRIVATE_REQUIRED
     if (!private_load()) return private_not_delivered("invalid required private binding or protected path");
     wchar_t *private_settings = utf8_to_wide(g_private.settings_home);

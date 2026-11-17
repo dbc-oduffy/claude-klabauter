@@ -114,12 +114,17 @@ def test_invoke_spawn_keeps_no_window_when_no_console() -> None:
     out = _run(
         "cc_invoke._parent_has_console = lambda: False\n"
         "kw = cc_invoke._invoke_spawn_kw('x')\n"
-        "print(json.dumps({'kw': kw, 'flag': getattr(__import__('subprocess'), 'CREATE_NO_WINDOW', 0)}))\n"
+        "si = kw.get('startupinfo')\n"
+        "print(json.dumps({'keys': sorted(kw), 'cf': kw.get('creationflags'),\n"
+        "    'si_flags': si.dwFlags if si else None, 'si_show': si.wShowWindow if si else None,\n"
+        "    'flag': getattr(__import__('subprocess'), 'CREATE_NO_WINDOW', 0)}))\n"
     )
     if sys.platform == "win32":
-        assert out["kw"] == {"creationflags": out["flag"]}
+        assert out["cf"] == out["flag"]
+        assert out["si_flags"] & 0x80 and out["si_flags"] & 0x1
+        assert out["si_show"] == 0
     else:
-        assert out["kw"] == {}
+        assert out["keys"] == []
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="console probe is Windows-only")

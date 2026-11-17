@@ -76,12 +76,14 @@ atexit.register(_cc._record_extra, _clone)
 # child loses pyyaml). Our directory leaves sys.path; the child no longer needs it.
 _here = Path(__file__).resolve().parent
 sys.path[:] = [p for p in sys.path if not p or Path(p).resolve() != _here]
-del sys.modules["sitecustomize"]
+_self = sys.modules.pop("sitecustomize")
 try:
     import sitecustomize  # noqa: F401
 except ModuleNotFoundError as _exc:
     if _exc.name != "sitecustomize":
         raise
+    # The importer of this file pops its entry on return: leave one there.
+    sys.modules["sitecustomize"] = _self
 """
 # Import root -> clone-relative directories a dotted module name resolves under.
 _FILL_ROOTS = {"coordinator_core": ("",), "coordinator": ("",), "percolate": ("coordinator/lib",)}

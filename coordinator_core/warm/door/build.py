@@ -423,15 +423,34 @@ WINDOWLESS_EXE_NAME = "door-w.exe"
 
 _WINDOWLESS_CLANG_LINK = ["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"]
 _WINDOWLESS_CL_LINK = ["/SUBSYSTEM:WINDOWS", "/ENTRY:mainCRTStartup"]
+# The windowless variant alone defines DOOR_WINDOWLESS (door.c pumps its
+# message queue at main) and links user32 for PeekMessageW.
+_WINDOWLESS_CLANG_DEFS = ["-DDOOR_WINDOWLESS"]
+_WINDOWLESS_CL_DEFS = ["/DDOOR_WINDOWLESS"]
+_WINDOWLESS_CLANG_LIBS = ["-luser32"]
+_WINDOWLESS_CL_LIBS = ["User32.lib"]
 
 
 def _compile_flags(kind: str, windowless: bool = False) -> list[str]:
     """The flag list `_compile` links with, minus the output/source operands --
     also what provenance records, so the two cannot drift."""
     if kind == "clang":
-        flags = ["-O2", "-Wall", "-Wextra", "-I", str(_SOURCE.parent), "-ladvapi32", "-lshell32", "-Xlinker", "/Brepro"]
+        flags = [
+            "-O2", "-Wall", "-Wextra",
+            *(_WINDOWLESS_CLANG_DEFS if windowless else []),
+            "-I", str(_SOURCE.parent), "-ladvapi32", "-lshell32",
+            *(_WINDOWLESS_CLANG_LIBS if windowless else []),
+            "-Xlinker", "/Brepro",
+        ]
         return flags + (_WINDOWLESS_CLANG_LINK if windowless else [])
-    flags = ["/nologo", "/O2", "/W3", "/I" + str(_SOURCE.parent), "/link", "Advapi32.lib", "Shell32.lib", "/Brepro"]
+    flags = [
+        "/nologo", "/O2", "/W3",
+        *(_WINDOWLESS_CL_DEFS if windowless else []),
+        "/I" + str(_SOURCE.parent),
+        "/link", "Advapi32.lib", "Shell32.lib",
+        *(_WINDOWLESS_CL_LIBS if windowless else []),
+        "/Brepro",
+    ]
     return flags + (_WINDOWLESS_CL_LINK if windowless else [])
 
 
@@ -459,18 +478,23 @@ def _compile(
     if kind == "clang":
         cmd = [
             compiler, "-O2", "-Wall", "-Wextra",
+            *(_WINDOWLESS_CLANG_DEFS if windowless else []),
             "-I", include_dir,
             "-o", str(output_path), str(source_path), str(_CORE_SOURCE),
             "-ladvapi32", "-lshell32",
+            *(_WINDOWLESS_CLANG_LIBS if windowless else []),
             "-Xlinker", "/Brepro",
             *(_WINDOWLESS_CLANG_LINK if windowless else []),
         ]
     else:
         cmd = [
             compiler, "/nologo", "/O2", "/W3",
+            *(_WINDOWLESS_CL_DEFS if windowless else []),
             f"/I{include_dir}",
             f"/Fe:{output_path}", str(source_path), str(_CORE_SOURCE),
-            "/link", "Advapi32.lib", "Shell32.lib", "/Brepro",
+            "/link", "Advapi32.lib", "Shell32.lib",
+            *(_WINDOWLESS_CL_LIBS if windowless else []),
+            "/Brepro",
             *(_WINDOWLESS_CL_LINK if windowless else []),
         ]
     try:

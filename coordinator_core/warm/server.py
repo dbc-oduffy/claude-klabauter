@@ -3298,50 +3298,52 @@ def _start_dump_request_poll(engine_root=None) -> "threading.Event":
 
 
 def _suppress_pool_worker_consoles() -> None:
-    """Point multiprocessing's Windows spawn at `pythonw.exe` so pool workers
-    open no console window.
+    """Point multiprocessing's Windows spawn at the console-subsystem
+    interpreter so pool workers open no window and raise no busy cursor.
 
-    `ProcessPoolExecutor` exposes no `creationflags` seam — the whole
-    `win_portability.no_console_creationflags` discipline the rest of this
-    repo follows is unreachable from here, because multiprocessing builds its
-    own `CreateProcess` call. A resident warm server is normally started
-    detached (no console of its own), so every worker Windows spawns for it
-    gets a BRAND NEW console allocated: a focus-stealing window, one per
-    worker, that survives for the pool's whole life. Observed live
-    2026-08-19: four such windows, each showing a worker's op-registry
-    preload output.
+    multiprocessing builds its own `CreateProcess` call, so
+    `win_portability.no_console_creationflags` cannot be splatted into it. The
+    seam is `install_console_less_spawn_default` (which wraps
+    `_winapi.CreateProcess`, the call `multiprocessing.popen_spawn_win32`
+    makes): it adds `CREATE_NO_WINDOW` while this process has no console and
+    ORs `STARTF_FORCEOFFFEEDBACK` in on every launch. A console exe
+    (`python.exe`) under that seam shows no window and no AppStarting cursor;
+    `pythonw.exe` (a GUI-subsystem exe) is what this function used to select
+    and is never chosen now.
 
-    `sys.executable` is what multiprocessing spawns, and `pythonw.exe` is the
-    same interpreter with the console subsystem flag cleared — so swapping it
-    suppresses the window without touching the pipe-based worker protocol,
-    which never used stdio. Worker stdout/stderr become `None`; the one thing
-    that wrote there (a per-worker op-module import failure) is ALSO recorded
-    via `logging` and in `coordinator_core.ops._POISONED_MODULES`, which
-    re-raises the real cause on dispatch — so no diagnostic is lost, only its
-    unread window.
-
-    `None` streams are NOT self-neutralising, and this docstring previously
-    claimed they were. `print(..., file=None)` is a no-op, but an op handler
-    reaching for the stream OBJECT — `sys.stderr.write(...)`, `.flush()` —
-    raises `AttributeError` on `None`, which the dispatcher collapses to a
-    bare `-32603 Internal error: AttributeError` with no traceback (the
-    worker has no stderr to print one to). 138 such call sites across 34 op
-    modules were live when this was found. `_bind_null_std_streams` restores
-    writable sinks in every worker so the swap below stays a console fix and
-    not a behaviour change; see its own docstring.
+    Invariants:
+        - `install_console_less_spawn_default()` MUST run before any pool is
+          built; the server entry calls it right after this function.
+        - Workers have real (console-inherited or hidden-console) stdio, so
+          `_bind_null_std_streams` only fills a `None` stream when a launcher
+          supplies none.
 
     Negative-spec:
-        - Does NOT run off Windows, where there is no console to suppress and
-          `pythonw` does not exist.
-        - Does NOT fall back to some other interpreter if `pythonw.exe` is
-          absent beside `sys.executable`: a popup is a nuisance, spawning a
-          DIFFERENT Python than the server's own is a correctness hazard.
+        - Does NOT run off Windows, where there is no console to suppress.
+        - Does NOT fall back to some other interpreter: `console_python`
+          returns `sys.executable` unchanged when no `python.exe` sibling
+          exists.
     """
     if os.name != "nt":
         return
-    candidate = Path(sys.executable).with_name("pythonw.exe")
-    if candidate.is_file():
-        multiprocessing.set_executable(str(candidate))
+    from coordinator_core.win_portability import console_python
+
+    multiprocessing.set_executable(console_python(sys.executable))
+
+
+def _seed_worker_environment() -> None:
+    """Export what every pool worker would otherwise rediscover into
+    `os.environ`, before the pool spawns: the `repos.claude_klabauter`
+    machine-local lookup (one bounded spawn here replaces one per fresh
+    worker) and git's non-interactive credential mapping, which hook-dispatched
+    work inherits so a credential prompt never opens a window. An already-set
+    git variable is left alone."""
+    from coordinator_core._claude_klabauter_root import seed_machine_local
+    from coordinator_core.git.run import _NON_INTERACTIVE_CREDENTIALS
+
+    seed_machine_local("repos.claude_klabauter")
+    for name, value in _NON_INTERACTIVE_CREDENTIALS.items():
+        os.environ.setdefault(name, value)
 
 
 def _wait_for_parent_exit(parent_pid: int) -> None:
@@ -3566,7 +3568,7 @@ def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) ->
         polite_io.lower_own_priority()
     boosted = _raise_worker_priority()  # after the POSIX nice-19 drop, which it supersedes
     _bind_null_std_streams()
-    # pythonw worker: without this every git/console child it spawns opens a visible console.
+    # Without this a worker's git/console children can open a visible console or raise a busy cursor.
     from coordinator_core.win_portability import install_console_less_spawn_default
 
     install_console_less_spawn_default()
@@ -6403,6 +6405,7 @@ def _run_guarded() -> int:
     from coordinator_core.win_portability import install_console_less_spawn_default
 
     install_console_less_spawn_default()
+    _seed_worker_environment()
 
     # No op registry import here: this process runs no op. Dispatch happens in
     # pool workers, which import each op on first use; the one in-process

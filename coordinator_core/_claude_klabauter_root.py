@@ -19,19 +19,23 @@ state/improvement-queue/2026-07-06-claude-klabauter-live-root-shared-helper-extr
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 from typing import Dict, Optional, Tuple
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.win_portability import console_python, no_console_creationflags
 
 _MACHINE_LOCAL_IMPL_ENV = "MACHINE_LOCAL_IMPL"
 _CLAUDE_HOME_ENV = "CLAUDE_HOME"
 
-_MACHINE_LOCAL_TIMEOUT = 2.0
+#: JSON ``{key: value}`` a parent exports so its pool workers answer a lookup
+#: without a spawn; see ``seed_machine_local``.
+MACHINE_LOCAL_SEED_ENV = "COORDINATOR_MACHINE_LOCAL_SEED"
 
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_MACHINE_LOCAL_TIMEOUT = 2.0
 
 _machine_local_cache: Dict[Tuple[str, str], Optional[str]] = {}
 
@@ -67,9 +71,46 @@ def clear_machine_local_cache() -> None:
     _machine_local_cache.clear()
 
 
+def _seeded_value(key: str) -> Optional[str]:
+    """The parent-seeded value for ``key``, or None when the seed is absent,
+    malformed or lacks the key."""
+    raw = os.environ.get(MACHINE_LOCAL_SEED_ENV)
+    if not raw:
+        return None
+    try:
+        seed = json.loads(raw)
+    except ValueError:
+        return None
+    value = seed.get(key) if isinstance(seed, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def seed_machine_local(*keys: str) -> None:
+    """Resolve each ``key`` once via ``_machine_local_get`` and export the
+    resolved ones into ``MACHINE_LOCAL_SEED_ENV`` so children inheriting the
+    environment (pool workers) skip the per-process spawn. Keys that resolve to
+    None are left out, so their lookups fall through unchanged. Existing seed
+    entries are kept."""
+    try:
+        current = json.loads(os.environ.get(MACHINE_LOCAL_SEED_ENV) or "{}")
+    except ValueError:
+        current = {}
+    if not isinstance(current, dict):
+        current = {}
+    for key in keys:
+        value = _machine_local_get(key)
+        if value:
+            current[key] = value
+    if current:
+        os.environ[MACHINE_LOCAL_SEED_ENV] = json.dumps(current)
+
+
 def _machine_local_get(key: str) -> Optional[str]:
     """Call ``_machine_local.py get <key>`` and return the value, or None on
     any failure (missing impl, nonzero exit, empty stdout, timeout).
+
+    A value seeded by the parent (``MACHINE_LOCAL_SEED_ENV``) answers with no
+    spawn; a missing seed or key falls through to the spawn below.
 
     Memoized per process, keyed by ``(key, resolved impl path)`` -- the impl
     path already folds in every env var that steers *which*
@@ -80,6 +121,9 @@ def _machine_local_get(key: str) -> Optional[str]:
     deterministic function of the impl's on-disk state for the remainder of
     this process, not a transient failure that later calls should retry.
     """
+    seeded = _seeded_value(key)
+    if seeded is not None:
+        return seeded
     impl = _machine_local_impl()
     cache_key = (key, impl)
     if cache_key in _machine_local_cache:
@@ -90,11 +134,11 @@ def _machine_local_get(key: str) -> Optional[str]:
         return None
     try:
         result = subprocess.run(
-            [sys.executable, impl, "get", key],
+            [console_python(sys.executable), impl, "get", key],
             capture_output=True,
             text=True,
             timeout=_MACHINE_LOCAL_TIMEOUT,
-            creationflags=_CREATE_NO_WINDOW,
+            **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         _machine_local_cache[cache_key] = None

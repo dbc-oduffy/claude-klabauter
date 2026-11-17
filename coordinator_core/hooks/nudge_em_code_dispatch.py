@@ -393,6 +393,23 @@ def _nag_line(prefix: str, session_id: str, sizing_rel=None, host=None) -> str:
     return nag if nag.startswith(NAG_REPEAT_PREFIX) else prefix + nag
 
 
+def _ask_behind_session(session_id: str, cwd: object) -> bool:
+    """True when the session has a recorded PM turn that is not a bare slash command: an ask the
+    engine could take. A session with none is operational work, and the nag stays silent. A read
+    failure counts as an ask, so the nag is kept."""
+    from coordinator_core.ops import baton_pm_turns
+
+    try:
+        found = baton_pm_turns.read_turns(session_id, cwd if isinstance(cwd, str) and cwd else None, all_turns=True)
+    except Exception:
+        return True
+    if not found.get("log_path"):
+        return True
+    return any(
+        not str(t.get("prompt", "")).lstrip().startswith("/") for t in found.get("turns") or []
+    )
+
+
 def _unsized_advisory(session_id: str, host=None) -> str:
     return _nag_line("[em-code-dispatch nudge] No sizing this session. ", session_id, host=host)
 
@@ -496,6 +513,8 @@ def op(payload: dict) -> dict | None:
     repeats on every Edit and names the step for the session's sizing state. A subagent
     (`agent_id` present) is denied only as a size-stage run spawn (`_size_stage_write_deny`).
 
+    An unsized session with no recorded PM ask (`_ask_behind_session`) gets no nag and no count.
+
     A recorded XS lane allows in-budget edits and denies the first past 2 files / 30 changed
     lines (`_budget_decision`). A lane closes after GOLF_DENY_LIMIT projected denies.
 
@@ -585,6 +604,8 @@ def op(payload: dict) -> dict | None:
     if has_sizing and resolve_mode("autonomous", session_id):
         return None
     if not has_sizing:
+        if not _ask_behind_session(session_id, payload.get("cwd")):
+            return None
         # Author box (strict): denied until the session sizes. Consumer (warn): advisory.
         return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _unsized_advisory(session_id, _host(payload))))
     if plan_pending:

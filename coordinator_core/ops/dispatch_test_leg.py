@@ -34,10 +34,20 @@ def _root(params: dict, repo_root: Optional[Path]) -> Path:
 
 def _plan_id(plan_file: Path) -> str:
     try:
-        split = split_frontmatter(plan_file.read_text(encoding="utf-8", errors="replace"))
+        text = plan_file.read_text(encoding="utf-8", errors="replace")
     except OSError:
         raise CallerFacingValidationError(f"dispatch.test_leg: plan_path {str(plan_file)!r} is unreadable") from None
-    plan_id = (read_fm_field_unquoted(split.fm_text, "plan_id") or "") if split else ""
+    if plan_file.suffix == ".json":
+        # The review wave passes the run's manifest.json, whose plan_id is a JSON key, not frontmatter.
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            doc = None
+        value = doc.get("plan_id") if isinstance(doc, dict) else None
+        plan_id = value.strip() if isinstance(value, str) else ""
+    else:
+        split = split_frontmatter(text)
+        plan_id = (read_fm_field_unquoted(split.fm_text, "plan_id") or "") if split else ""
     if not plan_id:
         raise CallerFacingValidationError(f"dispatch.test_leg: plan {str(plan_file)!r} carries no plan_id")
     return plan_id

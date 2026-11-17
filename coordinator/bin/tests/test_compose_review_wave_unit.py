@@ -126,6 +126,37 @@ _PM_BRIEF_FIXTURE_TEXT = (
 _NO_BRIEF_FIXTURE_TEXT = "---\ntitle: fixture plan with no brief\n---\n\n# No brief here\n"
 
 
+def test_waste_report_lands_in_working_repo_and_path_resolves_there(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The report is written under the cwd repo, never the engine tree, and the
+    returned repo-relative path resolves against that repo to the written file."""
+    mod = _load_composer_module()
+    work = tmp_path / "work"
+    (work / ".git").mkdir(parents=True)
+    sub = work / "pkg"
+    sub.mkdir()
+    monkeypatch.chdir(sub)
+
+    written = mod._write_waste_report({"changed_paths": []}, "runx", "s1")
+    rel = mod._repo_relative(str(written), mod._working_repo_root())
+
+    assert written.resolve().is_relative_to(work.resolve())
+    assert rel == "state/review-trail/waste-reports/runx.s1.json"
+    assert (work / rel).is_file()
+    assert written.resolve() == (work / rel).resolve()
+
+
+def test_working_repo_root_falls_back_to_engine_root_outside_a_repo(
+    tmp_path: Path, monkeypatch
+) -> None:
+    mod = _load_composer_module()
+    monkeypatch.chdir(tmp_path)
+    if any((p / ".git").exists() for p in (tmp_path.resolve(), *tmp_path.resolve().parents)):
+        pytest.skip("tmp_path sits inside a git repo")
+    assert mod._working_repo_root() == mod._REPO_ROOT
+
+
 def test_k_reviewer_plan_brief_block_unit(tmp_path: Path) -> None:
     """Direct unit coverage of `_reviewer_plan_brief_block`, no subprocess."""
     mod = _load_composer_module()

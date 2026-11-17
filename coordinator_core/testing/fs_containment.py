@@ -20,6 +20,10 @@ test: every worker and subprocess writes it, so an entry cannot be attributed
 to a test. At session finish anything but ``coordinator`` left in it is
 reported and turns a passing exit status into 1; the root is then deleted.
 
+Attribution: a new watched-root entry is charged only when an audit hook saw this
+process touch it during the test; a test that spawned any child is charged for every
+gain, since a child's writes are invisible to the hook.
+
 Index guard: the repo root's staged-vs-HEAD set is baselined at configure and
 re-read after each test only when the index file's stat changed; a test that
 changes it fails, named, with the paths.
@@ -477,10 +481,77 @@ def _index_changes() -> "list[str]":
     return [f"{status} {path}" for status, path in new]
 
 
+_PATH_EVENTS = {
+    "open": (0,),
+    "os.mkdir": (0,),
+    "os.rename": (0, 1),
+    "os.remove": (0,),
+    "os.rmdir": (0,),
+    "os.symlink": (0, 1),
+    "os.link": (0, 1),
+    "shutil.copyfile": (0, 1),
+    "shutil.copytree": (0, 1),
+    "shutil.move": (0, 1),
+    "shutil.rmtree": (0,),
+    "tempfile.mkdtemp": (0,),
+    "tempfile.mkstemp": (0,),
+}
+_SPAWN_EVENTS = frozenset(
+    {"subprocess.Popen", "os.system", "os.exec", "os.spawn", "os.posix_spawn", "os.startfile"}
+)
+_TRACE: "dict" = {"on": False, "installed": False, "touched": set(), "spawned": False}
+
+
+def _audit(event: str, args) -> None:
+    if not _TRACE["on"]:
+        return
+    if event in _SPAWN_EVENTS:
+        _TRACE["spawned"] = True
+        return
+    positions = _PATH_EVENTS.get(event)
+    if positions is None:
+        return
+    for pos in positions:
+        try:
+            raw = args[pos]
+            if isinstance(raw, bytes):
+                raw = os.fsdecode(raw)
+            elif not isinstance(raw, (str, os.PathLike)):
+                continue
+            path = os.path.normcase(os.path.abspath(os.fspath(raw)))
+        except (IndexError, TypeError, ValueError, OSError):
+            continue
+        for root in _WATCHED:
+            prefix = os.path.normcase(str(root)) + os.sep
+            if path.startswith(prefix):
+                _TRACE["touched"].add((os.path.normcase(str(root)), path[len(prefix):].split(os.sep, 1)[0]))
+
+
+def _install_audit() -> None:
+    if not _TRACE["installed"]:
+        _TRACE["installed"] = True
+        sys.addaudithook(_audit)
+
+
+def _own_process_gain(root: Path, name: str) -> bool:
+    """True when this process touched `root/name` during the test, or spawned a child that may have.
+
+    Trap: a child process's writes are invisible to the audit hook, so any spawn in the test
+    window charges every gain; an entry a concurrent session created is excused only for a
+    test that spawned nothing.
+    """
+    return _TRACE["spawned"] or (os.path.normcase(str(root)), os.path.normcase(name)) in _TRACE["touched"]
+
+
 @pytest.fixture(autouse=True)
 def _fs_containment(request: pytest.FixtureRequest):
+    _install_audit()
     before = _snapshot()
+    _TRACE["touched"] = set()
+    _TRACE["spawned"] = False
+    _TRACE["on"] = True
     yield
+    _TRACE["on"] = False
     staged = _index_changes()
     if staged:
         pytest.fail(
@@ -497,6 +568,7 @@ def _fs_containment(request: pytest.FixtureRequest):
         for name in sorted(names - before[root])  # type: ignore[operator]
         if not _leads_into_sanctioned(root, name)
         and not any(fnmatch.fnmatchcase(name, pat) for pat in _AMBIENT)
+        and _own_process_gain(root, name)
     ]
     if gained:
         pytest.fail(

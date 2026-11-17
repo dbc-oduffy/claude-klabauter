@@ -37,6 +37,7 @@ def _isolated_tempdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 _REAL_SIZING_STATE = _mod._session_sizing_state
+_REAL_ASK = _mod._ask_behind_session
 
 
 @pytest.fixture(autouse=True)
@@ -248,6 +249,53 @@ def _unsized(monkeypatch) -> None:
     _set_sizing(monkeypatch, (False, False))
     # No repo root: the XS-lane budget stands down and the sizing branches decide.
     monkeypatch.setattr(sizing, "_repo_root", lambda payload: None)
+    monkeypatch.setattr(_mod, "_ask_behind_session", lambda sid, cwd: True)
+
+
+def _record_turns(monkeypatch, tmp_path: Path, prompts: list[str]) -> None:
+    from coordinator_core.ops import baton_pm_turns as pt
+    from coordinator_core.session_baton import store
+
+    sdir = tmp_path / "hub" / "sess-sizing-1"
+    sdir.mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
+    for p in prompts:
+        pt.append_turn(p, session_id="sess-sizing-1")
+
+
+def test_unsized_session_with_no_ask_is_silent_and_counts_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core import warp_fire
+
+    _unsized(monkeypatch)
+    _level(monkeypatch, "strict")
+    monkeypatch.setattr(_mod, "_ask_behind_session", _REAL_ASK)
+    _record_turns(monkeypatch, tmp_path, ["/clear"])
+    nag_dir = tmp_path / "nag"
+    monkeypatch.setattr(warp_fire, "_counter_dir", lambda: nag_dir)
+    assert op(_payload()) is None
+    assert op(_payload()) is None
+    assert not nag_dir.exists()
+
+
+def test_unsized_session_with_an_ask_gets_full_nag_then_terse_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _unsized(monkeypatch)
+    _level(monkeypatch, "warn")
+    monkeypatch.setattr(_mod, "_ask_behind_session", _REAL_ASK)
+    _record_turns(monkeypatch, tmp_path, ["please fix the retry bug in the loader"])
+    first = _advisory(op(_payload()))
+    second = _advisory(op(_payload()))
+    assert "No sizing" in first and "coordinator:engine-ask" in first
+    assert "[engine-ask nag #2]" in second
+
+
+def test_unsized_session_with_unresolvable_turn_log_keeps_the_nag(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.ops import baton_pm_turns as pt
+
+    _unsized(monkeypatch)
+    _level(monkeypatch, "warn")
+    monkeypatch.setattr(_mod, "_ask_behind_session", _REAL_ASK)
+    monkeypatch.setattr(pt, "read_turns", lambda *a, **k: {"log_path": None, "turns": []})
+    assert "No sizing" in _advisory(op(_payload()))
 
 
 def _advisory(result) -> str:

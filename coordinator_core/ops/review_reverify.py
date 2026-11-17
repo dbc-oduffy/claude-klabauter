@@ -1088,6 +1088,7 @@ def review_reverify(
         from coordinator_core.ops.dispatch_emit import review_edits
 
         sibling_py = {_norm(p) for p in review_edits.live_sibling_declared(repo_root, None, slice_prefix)}
+        sibling_py -= {*rels, *created_set}
     for node, targets in implication.items():
         for target in targets:
             implicated.setdefault(target, []).append(node)

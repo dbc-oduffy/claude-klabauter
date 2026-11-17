@@ -19,12 +19,13 @@ class TestProfilePath(unittest.TestCase):
             got = op._powershell_profile_path()
         self.assertEqual(got, os.path.join(docs, "PowerShell", "Microsoft.PowerShell_profile.ps1"))
 
-    def test_falls_back_to_home_documents_when_unresolvable(self):
+    def test_unresolvable_mydocuments_is_a_typed_refusal_naming_rc_not_a_home_guess(self):
         with mock.patch.object(op, "_my_documents_dir", return_value=None), mock.patch.object(
             op, "_resolve_home", return_value="H"
         ):
-            got = op._powershell_profile_path()
-        self.assertEqual(got, os.path.join("H", "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1"))
+            with self.assertRaises(op._ProfileUnresolved) as ctx:
+                op._powershell_profile_path()
+        self.assertIn("--rc", str(ctx.exception))
 
     def test_explicit_home_redirect_is_not_overridden_by_mydocuments(self):
         with mock.patch.object(op.os, "name", "nt"), mock.patch.dict(

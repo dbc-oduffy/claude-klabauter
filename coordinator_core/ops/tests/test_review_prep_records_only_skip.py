@@ -65,6 +65,40 @@ def test_a_product_path_beside_records_is_never_skipped(repo):
     assert not reply.get("review_skip")
 
 
+RUN_PATHS = ["docs/install/AGENT.md", "MANUAL.md", "plugin/commands/index.md"]
+
+
+@pytest.mark.parametrize("paths", [RUN_PATHS, [p.replace("/", "\\") for p in RUN_PATHS]])
+def test_a_commands_markdown_path_is_never_skipped_as_records_only(repo, paths):
+    for p in RUN_PATHS:
+        (repo / p).parent.mkdir(parents=True, exist_ok=True)
+        (repo / p).write_text("x\n", encoding="utf-8")
+    reply = _prep(repo, paths)
+    assert not reply.get("review_skip")
+
+
+@pytest.mark.parametrize(
+    "paths, expected_skipped",
+    [
+        ([RECORD, RECORD_JSON], True),
+        (["docs/install/AGENT.md", "MANUAL.md"], True),
+        (["docs/reference/hooks.yaml", "state/a.json", "scratch/x/a.py"], False),
+        (RUN_PATHS, False),
+        ([p.replace("/", "\\") for p in RUN_PATHS], False),
+    ],
+)
+def test_a_skipped_path_set_owes_the_floor_no_review(paths, expected_skipped):
+    from coordinator_core.ops.dispatch_emit.record_paths import is_record_path
+    from coordinator_core.ops.dispatch_emit.review_floor import review_owed_paths
+
+    skipped = all(is_record_path(p) for p in paths)
+    assert skipped is expected_skipped
+    if skipped:
+        assert review_owed_paths(p.replace("\\", "/") for p in paths) == []
+    else:
+        assert review_owed_paths(p.replace("\\", "/") for p in paths) != []
+
+
 def test_a_computed_reply_carries_a_null_review_skip_and_stores_the_key(repo):
     (repo / "tracked.py").write_text("t = 2\n", encoding="utf-8")
     reply = _prep(repo, ["tracked.py"])

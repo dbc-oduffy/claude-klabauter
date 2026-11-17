@@ -249,8 +249,9 @@ def test_op_slug_collision_does_not_overwrite(tmp_path: Path, monkeypatch: pytes
     hso = second["hookSpecificOutput"]
     assert "collision" in hso["additionalContext"].lower()
 
-    written = list((repo / "docs" / "plans").glob("*.md"))
+    written = list((repo / "docs" / "plans").rglob("*.md"))
     assert len(written) == 1
+    assert written[0].parent.name == written[0].name[:7]
     assert written[0].read_text(encoding="utf-8") == "# Collide\n\nFirst body."
 
 
@@ -301,5 +302,5 @@ def test_op_routes_meta_repo_to_engine_root(tmp_path: Path, monkeypatch: pytest.
     result = mod._handler({"payload": payload})
     assert result != {}
     assert not (meta_repo / ".claude" / "docs").exists()
-    written = list((fake_engine_root / "docs" / "plans").glob("*meta-plan*.md"))
+    written = list((fake_engine_root / "docs" / "plans").rglob("*meta-plan*.md"))
     assert len(written) == 1

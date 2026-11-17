@@ -51,6 +51,7 @@ def _env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(target, "_session_sizing_state", lambda payload, sid: (False, False))
     monkeypatch.setattr(mp, "guard_level", lambda name: "warn")
     monkeypatch.setattr(mod, "resolve_mode", lambda key, sid: False)
+    monkeypatch.setattr(mod, "_ask_behind_session", lambda sid, cwd: True)
 
 
 def _case(tmp_path: Path, name: str) -> tuple[Path, Path, str]:

@@ -77,6 +77,52 @@ def test_blob_read_spans_chunks_and_still_resolves_every_importer(tmp_path, monk
     assert reads.count("cat-file") == 3
 
 
+def test_both_commit_gates_share_one_blob_read_for_a_full_sha(tmp_path, monkeypatch):
+    import percolate.import_closure as ic
+
+    repo = _repo(tmp_path)
+    sha = _head(repo)
+    reads = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    ic.find_commit_from_import_name_violations(repo, sha)
+    first = len(reads)
+    ic.find_commit_module_attr_violations(repo, sha)
+    assert first == 2 and len(reads) == first
+
+
+def test_warm_cache_serves_the_name_gate_without_reading_a_blob(tmp_path, monkeypatch):
+    import percolate.import_closure as ic
+    from coordinator_core.percolate.gate_result_cache import GateResultCache
+
+    repo = _repo(tmp_path, "from coordinator_core.helpers import present, absent_name\n")
+    sha = _head(repo)
+    cold = GateResultCache(tmp_path / "cache", "commit-from-import", "v1")
+    expected = ic.find_commit_from_import_name_violations(repo, sha, cache=cold)
+    cold.flush()
+    reads = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    warm = GateResultCache(tmp_path / "cache", "commit-from-import", "v1")
+    assert ic.find_commit_from_import_name_violations(repo, sha, cache=warm) == expected
+    assert expected[1] and reads == ["ls-tree"]
+
+
+def test_a_ref_name_is_read_fresh_each_time(tmp_path, monkeypatch):
+    import percolate.import_closure as ic
+
+    repo = _repo(tmp_path)
+    reads = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    ic.find_commit_from_import_name_violations(repo, "HEAD")
+    ic.find_commit_module_attr_violations(repo, "HEAD")
+    assert reads.count("ls-tree") == 2
+
+
 def test_name_only_in_worktree_hunk_is_refused_naming_importer_and_name(tmp_path):
     repo = _repo(tmp_path, "from coordinator_core.helpers import present, spawn_in_capped_job\n")
     _write(

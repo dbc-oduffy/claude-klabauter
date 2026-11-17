@@ -288,7 +288,7 @@ def _my_documents_dir() -> Optional[str]:
     """[Environment]::GetFolderPath('MyDocuments'): follows OneDrive redirection.
 
     None off Windows, when unresolvable, or when HOME is an explicit redirect
-    away from the real profile (a sandbox or test home keeps its own Documents).
+    away from the real profile (a sandbox or test home passes --rc instead).
     """
     if os.name != "nt":
         return None
@@ -307,9 +307,132 @@ def _my_documents_dir() -> Optional[str]:
     return None
 
 
-def _powershell_profile_path() -> str:
-    docs = _my_documents_dir() or os.path.join(_resolve_home(), "Documents")
-    return os.path.join(docs, "PowerShell", "Microsoft.PowerShell_profile.ps1")
+class _ProfileUnresolved(RuntimeError):
+    """No PowerShell profile location can be detected; the caller names --rc."""
+
+
+# (executable on PATH, profile folder under MyDocuments): pwsh 7, then Windows PowerShell 5.1.
+_POWERSHELL_PROFILE_HOSTS = (("pwsh", "PowerShell"), ("powershell", "WindowsPowerShell"))
+
+
+def _powershell_profile_path(folder: str = "PowerShell") -> str:
+    """Profile path under the detected MyDocuments; raises _ProfileUnresolved, never guesses."""
+    docs = _my_documents_dir()
+    if not docs:
+        raise _ProfileUnresolved(
+            "cannot resolve the MyDocuments folder for the PowerShell profile; pass --rc <path>"
+        )
+    return os.path.join(docs, folder, "Microsoft.PowerShell_profile.ps1")
+
+
+def _powershell_profile_paths() -> List[str]:
+    """Profiles of every PowerShell host found on PATH (pwsh 7, 5.1)."""
+    import shutil
+
+    paths = [
+        _powershell_profile_path(folder)
+        for exe, folder in _POWERSHELL_PROFILE_HOSTS
+        if shutil.which(exe)
+    ]
+    if not paths:
+        raise _ProfileUnresolved("no PowerShell (pwsh or powershell) found on PATH; pass --rc <path>")
+    return paths
+
+
+def _check_rc(target_rc: str, expected_source_line: str) -> Optional[str]:
+    """check-only report for one rc; returns the failure status row, None when fine."""
+    if os.path.isfile(target_rc):
+        with open(target_rc, "r", encoding="utf-8-sig", errors="replace") as fh:
+            rc_text = fh.read()
+        if SENTINEL_BEGIN in rc_text.split("\n"):
+            body_trimmed = _nonblank_join(_extract_sentinel_body(rc_text, SENTINEL_BEGIN, SENTINEL_END))
+            expected_trimmed = _nonblank_join(expected_source_line)
+            if body_trimmed == expected_trimmed:
+                print(
+                    f"[check-only] rc {target_rc}: sentinel block present and "
+                    "unmodified (would be no-op)",
+                    file=sys.stderr,
+                )
+                return None
+            print(
+                f"[check-only] rc {target_rc}: sentinel block present but "
+                "HAND-MODIFIED — would fail-loud",
+                file=sys.stderr,
+            )
+            print(f"  Expected: {expected_trimmed}", file=sys.stderr)
+            print(f"  Found:    {body_trimmed}", file=sys.stderr)
+            return "claude_shim: failed in check-only validation (see stderr)"
+        disabled = _commented_out_source_lines(rc_text, expected_source_line)
+        if disabled:
+            # A DISABLED block is a live misconfiguration: this box runs every
+            # session without coordinator, so check-only fails on it.
+            for line in _disabled_block_report(target_rc, disabled):
+                print(f"[check-only] {line}", file=sys.stderr)
+            return "claude_shim: check failed: shim block is disabled (see stderr)"
+    print(f"[check-only] rc {target_rc}: sentinel absent — would add source block", file=sys.stderr)
+    return None
+
+
+def _wire_rc(
+    target_rc: str, expected_source_line: str, shell_family: str, rc_encoding: str
+) -> Optional[bool]:
+    """Ensure the sentinel block in one rc. True = no-op, False = written, None = failed."""
+    failed = "claude_shim: failed (see stderr for gen-claude-author-shim.py output)"
+    if not os.path.isfile(target_rc):
+        try:
+            parent = os.path.dirname(target_rc)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            open(target_rc, "a", encoding=rc_encoding, newline="\n").close()
+        except OSError as exc:
+            print(f"{_PROG}: ERROR: Cannot create rc file: {target_rc}: {exc}", file=sys.stderr)
+            print(failed)
+            return None
+        print(f"Created rc file: {target_rc}", file=sys.stderr)
+
+    with open(target_rc, "r", encoding="utf-8-sig", errors="replace") as fh:
+        rc_text = fh.read()
+
+    if SENTINEL_BEGIN in rc_text.split("\n"):
+        body_trimmed = _nonblank_join(_extract_sentinel_body(rc_text, SENTINEL_BEGIN, SENTINEL_END))
+        expected_trimmed = _nonblank_join(expected_source_line)
+        if body_trimmed == expected_trimmed:
+            print(f"rc {target_rc}: sentinel block unchanged (no-op)", file=sys.stderr)
+            if shell_family == "powershell":
+                _ensure_utf8_sig(target_rc)
+            return True
+        print(f"ERROR: sentinel block in {target_rc} has been hand-modified.", file=sys.stderr)
+        print(f"  Expected body: {expected_trimmed}", file=sys.stderr)
+        print(f"  Found body:    {body_trimmed}", file=sys.stderr)
+        print(
+            f'  To reset: remove the block between "{SENTINEL_BEGIN}" and '
+            f'"{SENTINEL_END}" from {target_rc} and re-run.',
+            file=sys.stderr,
+        )
+        print(failed)
+        return None
+
+    disabled = _commented_out_source_lines(rc_text, expected_source_line)
+    if disabled:
+        for line in _disabled_block_report(target_rc, disabled):
+            print(line, file=sys.stderr)
+    tmp_rc = f"{target_rc}.tmp.{os.getpid()}"
+    try:
+        new_block = f"\n{SENTINEL_BEGIN}\n{expected_source_line}\n{SENTINEL_END}\n"
+        with open(tmp_rc, "w", encoding=rc_encoding, newline="\n") as fh:
+            fh.write(rc_text)
+            fh.write(new_block)
+        os.replace(tmp_rc, target_rc)
+        declare_write(target_rc)
+    except OSError:
+        try:
+            os.remove(tmp_rc)
+        except OSError:
+            print(f"skip: _wire_rc: os.remove(tmp_rc) failed: {sys.exc_info()[1]}", file=sys.stderr)
+        print(failed)
+        raise
+    print(f"rc {target_rc}: source block added", file=sys.stderr)
+    return False
 
 
 def _shim_bytes(content: bytes, shell_family: str) -> bytes:
@@ -491,28 +614,33 @@ def main(argv: List[str]) -> int:
     # ---- resolve target rc, first hit wins: the --rc flag, then the
     # COORDINATOR_SHIM_RC env var, then SHELL-based detection ----
     if rc_override:
-        target_rc = rc_override
+        target_rcs = [rc_override]
     elif os.environ.get("COORDINATOR_SHIM_RC"):
-        target_rc = os.environ["COORDINATOR_SHIM_RC"]
+        target_rcs = [os.environ["COORDINATOR_SHIM_RC"]]
     else:
         home = _resolve_home()
         if shell_family == "powershell":
-            target_rc = _powershell_profile_path()
+            try:
+                target_rcs = _powershell_profile_paths()
+            except _ProfileUnresolved as exc:
+                print(f"{_PROG}: {exc}", file=sys.stderr)
+                print("claude_shim: failed (profile unresolved; pass --rc <path>)")
+                return 1
         elif os.environ.get("MSYSTEM"):
-            target_rc = os.path.join(home, ".bashrc")
+            target_rcs = [os.path.join(home, ".bashrc")]
         else:
             shell_env = os.environ.get("SHELL", "")
             if shell_env.endswith("/zsh") or shell_env.endswith("/zsh.exe"):
-                target_rc = os.path.join(home, ".zshrc")
+                target_rcs = [os.path.join(home, ".zshrc")]
             elif shell_env.endswith("/bash") or shell_env.endswith("/bash.exe"):
-                target_rc = os.path.join(home, ".bashrc")
+                target_rcs = [os.path.join(home, ".bashrc")]
             else:
                 print(
                     f'WARN: $SHELL="{shell_env or "<unset>"}" not recognised; defaulting to '
                     "~/.zshrc. Use --rc to override.",
                     file=sys.stderr,
                 )
-                target_rc = os.path.join(home, ".zshrc")
+                target_rcs = [os.path.join(home, ".zshrc")]
 
     if check_only:
         tmp_fd, tmp_shim = tempfile.mkstemp(
@@ -545,50 +673,11 @@ def main(argv: List[str]) -> int:
                 print(f"skip: main: os.remove(tmp_shim) failed: {sys.exc_info()[1]}", file=sys.stderr)
                 pass
 
-        if os.path.isfile(target_rc):
-            with open(target_rc, "r", encoding="utf-8-sig", errors="replace") as fh:
-                rc_text = fh.read()
-            if SENTINEL_BEGIN in rc_text.split("\n"):
-                body = _extract_sentinel_body(rc_text, SENTINEL_BEGIN, SENTINEL_END)
-                body_trimmed = _nonblank_join(body)
-                expected_trimmed = _nonblank_join(expected_source_line)
-                if body_trimmed == expected_trimmed:
-                    print(
-                        f"[check-only] rc {target_rc}: sentinel block present and "
-                        "unmodified (would be no-op)",
-                        file=sys.stderr,
-                    )
-                else:
-                    print(
-                        f"[check-only] rc {target_rc}: sentinel block present but "
-                        "HAND-MODIFIED — would fail-loud",
-                        file=sys.stderr,
-                    )
-                    print(f"  Expected: {expected_trimmed}", file=sys.stderr)
-                    print(f"  Found:    {body_trimmed}", file=sys.stderr)
-                    print("claude_shim: failed in check-only validation (see stderr)")
-                    return 1
-            else:
-                disabled = _commented_out_source_lines(rc_text, expected_source_line)
-                if disabled:
-                    # A DISABLED block is a live misconfiguration, not a
-                    # pending install: this box is running every session
-                    # without coordinator right now. check-only exists to
-                    # report exactly that, so it fails rather than reporting
-                    # the same "would add source block" as a clean machine.
-                    for line in _disabled_block_report(target_rc, disabled):
-                        print(f"[check-only] {line}", file=sys.stderr)
-                    print("claude_shim: check failed: shim block is disabled (see stderr)")
-                    return 1
-                print(
-                    f"[check-only] rc {target_rc}: sentinel absent — would add source block",
-                    file=sys.stderr,
-                )
-        else:
-            print(
-                f"[check-only] rc {target_rc}: sentinel absent — would add source block",
-                file=sys.stderr,
-            )
+        for target_rc in target_rcs:
+            failure = _check_rc(target_rc, expected_source_line)
+            if failure:
+                print(failure)
+                return 1
         if shim_fresh:
             print(f"claude_shim: ready (no-op) ({shim_dest})")
             return 0
@@ -616,71 +705,19 @@ def main(argv: List[str]) -> int:
         raise
     print(f"Wrote shim: {shim_dest}", file=sys.stderr)
 
-    if not os.path.isfile(target_rc):
-        try:
-            parent = os.path.dirname(target_rc)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            open(target_rc, "a", encoding=rc_encoding, newline="\n").close()
-        except OSError as exc:
-            print(f"{_PROG}: ERROR: Cannot create rc file: {target_rc}: {exc}", file=sys.stderr)
-            print("claude_shim: failed (see stderr for gen-claude-author-shim.py output)")
+    all_noop = True
+    # Not transactional: a failure on a later profile leaves earlier ones wired.
+    for target_rc in target_rcs:
+        status = _wire_rc(target_rc, expected_source_line, shell_family, rc_encoding)
+        if status is None:
             return 1
-        print(f"Created rc file: {target_rc}", file=sys.stderr)
-
-    with open(target_rc, "r", encoding="utf-8-sig", errors="replace") as fh:
-        rc_text = fh.read()
-
-    rc_block_was_noop = False
-    if SENTINEL_BEGIN in rc_text.split("\n"):
-        body = _extract_sentinel_body(rc_text, SENTINEL_BEGIN, SENTINEL_END)
-        body_trimmed = _nonblank_join(body)
-        expected_trimmed = _nonblank_join(expected_source_line)
-        if body_trimmed == expected_trimmed:
-            print(f"rc {target_rc}: sentinel block unchanged (no-op)", file=sys.stderr)
-            rc_block_was_noop = True
-            if shell_family == "powershell":
-                _ensure_utf8_sig(target_rc)
-        else:
-            print(f"ERROR: sentinel block in {target_rc} has been hand-modified.", file=sys.stderr)
-            print(f"  Expected body: {expected_trimmed}", file=sys.stderr)
-            print(f"  Found body:    {body_trimmed}", file=sys.stderr)
-            print(
-                f'  To reset: remove the block between "{SENTINEL_BEGIN}" and '
-                f'"{SENTINEL_END}" from {target_rc} and re-run.',
-                file=sys.stderr,
-            )
-            print("claude_shim: failed (see stderr for gen-claude-author-shim.py output)")
-            return 1
-    else:
-        disabled = _commented_out_source_lines(rc_text, expected_source_line)
-        if disabled:
-            for line in _disabled_block_report(target_rc, disabled):
-                print(line, file=sys.stderr)
-        tmp_rc = f"{target_rc}.tmp.{os.getpid()}"
-        try:
-            new_block = f"\n{SENTINEL_BEGIN}\n{expected_source_line}\n{SENTINEL_END}\n"
-            with open(tmp_rc, "w", encoding=rc_encoding, newline="\n") as fh:
-                fh.write(rc_text)
-                fh.write(new_block)
-            os.replace(tmp_rc, target_rc)
-            declare_write(target_rc)
-        except OSError:
-            try:
-                os.remove(tmp_rc)
-            except OSError:
-                print(f"skip: main: os.remove(tmp_rc) failed: {sys.exc_info()[1]}", file=sys.stderr)
-                pass
-            print("claude_shim: failed (see stderr for gen-claude-author-shim.py output)")
-            raise
-        print(f"rc {target_rc}: source block added", file=sys.stderr)
-
-    print(
-        f"Done. Open a new terminal (or run: {_reload_hint(shell_family, target_rc)}) "
-        "for claude() to take effect.",
-        file=sys.stderr,
-    )
-    print(f"claude_shim: {'ready (no-op)' if rc_block_was_noop else f'installed ({shim_dest})'}")
+        all_noop = all_noop and status
+        print(
+            f"Done. Open a new terminal (or run: {_reload_hint(shell_family, target_rc)}) "
+            "for claude() to take effect.",
+            file=sys.stderr,
+        )
+    print(f"claude_shim: {'ready (no-op)' if all_noop else f'installed ({shim_dest})'}")
     return 0
 
 

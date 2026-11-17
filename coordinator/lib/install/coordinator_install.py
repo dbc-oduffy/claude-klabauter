@@ -1566,6 +1566,10 @@ def record_concluded(results: list[dict], optional_ids: set[str], ctx: Ctx) -> d
     return {"written": rc == 0, "detail": "setup_concluded recorded" if rc == 0 else f"write failed (exit {rc})"}
 
 
+#: The command the closing NEXT line names; the same command scripts/setup.py closes with.
+UNIMATRIX_INSTALL_COMMAND = "python3 coordinator/bin/unimatrix-install.py --install"
+
+
 def execute(answers: dict, only: set[str] | None = None, permission_mode: str | None = None) -> dict:
     ctx = Ctx(answers=answers, permission_mode=permission_mode)
     results = []
@@ -1612,6 +1616,7 @@ def execute(answers: dict, only: set[str] | None = None, permission_mode: str | 
         "restart_needed": ctx.restart_needed,
         "next_session": ctx.next_session,
         "follow_ups": [r["follow_up"] for r in results if r["follow_up"]],
+        "unimatrix_next": UNIMATRIX_INSTALL_COMMAND,
     }
 
 
@@ -1622,6 +1627,8 @@ def render_text(block: dict) -> str:
         lines.append(f"{'RECEIPT':<9} {'setup_concluded':<22} {receipt['detail']}")
     lines += [f"ADDED     {e}" for e in block["added_extras"]]
     lines += [f"NEXT      {f}" for f in block["follow_ups"]]
+    if block.get("unimatrix_next"):
+        lines.append(f"NEXT      (optional) {block['unimatrix_next']}")
     for t in block.get("tour", []):
         lines.append(f"TOUR {t['movement']}   {t['title']}: {t['text']}")
     lines.append("restart needed: " + ("yes" if block["restart_needed"] else "no"))

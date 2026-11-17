@@ -123,6 +123,20 @@ def is_windows() -> bool:
     return False
 
 
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def render_launcher_bytes(tmpl: str) -> bytes:
+    """Return the bytes a launcher is written as: the template verbatim, except a
+    `.ps1` always begins with a UTF-8 BOM (Windows PowerShell 5.1 reads a BOM-less
+    script as cp1252). A template already carrying the BOM is not double-prefixed."""
+    with open(tmpl, "rb") as fh:
+        data = fh.read()
+    if tmpl.lower().endswith((".ps1", ".ps1.tmpl")) and not data.startswith(_UTF8_BOM):
+        data = _UTF8_BOM + data
+    return data
+
+
 def smoke_launcher(dest: str) -> Tuple[int, str]:
     if dest.lower().endswith(".ps1"):
         powershell = shutil.which("powershell")
@@ -235,15 +249,16 @@ def main(argv: List[str]) -> int:
 
     if check_only:
         for kind, tmpl, dest in (("cmd", cmd_tmpl, cmd_dest), ("ps1", ps1_tmpl, ps1_dest)):
-            with open(tmpl, "rb") as fh:
-                lines = fh.read().count(b"\n")
+            rendered = render_launcher_bytes(tmpl)
+            lines = rendered.count(b"\n")
             tmp_fd, tmp_out = tempfile.mkstemp(
                 prefix=f"claude-author-launcher-check-{kind}.",
                 dir=tempfile.gettempdir(),
             )
             os.close(tmp_fd)
             try:
-                shutil.copyfile(tmpl, tmp_out)
+                with open(tmp_out, "wb") as out_fh:
+                    out_fh.write(rendered)
                 if os.path.isfile(dest) and filecmp.cmp(tmp_out, dest, shallow=False):
                     print(
                         f"[check-only] {kind}: up to date ({tmpl}, {lines} lines) -> "
@@ -269,7 +284,8 @@ def main(argv: List[str]) -> int:
     for tmpl, dest in ((cmd_tmpl, cmd_dest), (ps1_tmpl, ps1_dest)):
         tmp_dest = f"{dest}.tmp.{os.getpid()}"
         try:
-            shutil.copyfile(tmpl, tmp_dest)
+            with open(tmp_dest, "wb") as out_fh:
+                out_fh.write(render_launcher_bytes(tmpl))
             os.replace(tmp_dest, dest)
             # DR-276: declared AFTER the write lands, never before — the
             # contract is a report of what was ACTUALLY written, not of an

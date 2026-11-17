@@ -46,6 +46,7 @@ def test_scratch_py_without_an_executor_deny_draws_the_advisory(tmp_path: Path, 
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(mp, "guard_level", lambda name: "warn")
     monkeypatch.setattr(hook, "resolve_mode", lambda key, sid: autonomous)
+    monkeypatch.setattr(hook, "_ask_behind_session", lambda sid, cwd: True)
     monkeypatch.setattr(sizing, "_repo_root", lambda payload: None)
     target = repo / "scratch" / "probe.py"
     result = hook.op({

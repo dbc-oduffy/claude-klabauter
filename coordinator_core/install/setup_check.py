@@ -184,6 +184,113 @@ def check_statusline(claude_dir: Path) -> CheckItem:
     return CheckItem("statusline", True, command)
 
 
+_PROFILE_SHELLS = ("pwsh", "powershell")
+_BLOCKING_POLICIES = frozenset({"restricted", "undefined"})
+_POLICY_QUERY_TIMEOUT_S = 10
+
+
+def _winreg_value(hive: int, path: str, name: str) -> "Optional[object]":
+    import winreg
+
+    try:
+        with winreg.OpenKey(hive, path) as key:
+            return winreg.QueryValueEx(key, name)[0]
+    except OSError:
+        return None
+
+
+def _windows_powershell_policy(read: "Callable[[int, str, str], Optional[object]]" = _winreg_value) -> str:
+    """Windows PowerShell 5.1 effective policy from the registry, in precedence order (group policy
+    machine then user, CurrentUser, LocalMachine, SKU default). Windows PowerShell costs ~1s to start."""
+    import winreg
+
+    gpo = r"Software\Policies\Microsoft\Windows\PowerShell"
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        enabled = read(hive, gpo, "EnableScripts")
+        if enabled == 0:
+            return "Restricted"
+        if enabled == 1:
+            value = read(hive, gpo, "ExecutionPolicy")
+            if isinstance(value, str) and value:
+                return value
+    shell = r"Software\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell"
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        value = read(hive, shell, "ExecutionPolicy")
+        if isinstance(value, str) and value:
+            return value
+    product = read(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\ProductOptions", "ProductType")
+    return "Restricted" if product == "WinNT" else "RemoteSigned"
+
+
+def _query_execution_policy(exe: str) -> str:
+    """Effective execution policy `exe` would apply to a profile, with the env override cleared."""
+    import subprocess
+    import sys
+
+    if sys.platform == "win32" and Path(exe).stem.lower() == "powershell":
+        return _windows_powershell_policy()
+
+    # PSModulePath is dropped too: one inherited from pwsh 7 stops Windows PowerShell loading its Security module.
+    cleared = {"PSEXECUTIONPOLICYPREFERENCE", "PSMODULEPATH"}
+    env = {k: v for k, v in os.environ.items() if k.upper() not in cleared}
+    proc = subprocess.run(
+        [exe, "-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"],
+        capture_output=True,
+        text=True,
+        timeout=_POLICY_QUERY_TIMEOUT_S,
+        env=env,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if proc.returncode != 0:
+        raise OSError(f"exit {proc.returncode}: {proc.stderr.strip()[:120]}")
+    return proc.stdout.strip()
+
+
+def check_execution_policy(
+    platform: Optional[str] = None,
+    which: "Callable[[str], Optional[str]]" = shutil.which,
+    query: "Callable[[str], str]" = _query_execution_policy,
+) -> "list[CheckItem]":
+    """One item per installed profile shell: FAIL when its effective policy is Restricted or
+    Undefined, since the profile the installer writes would not load. Reports; never sets a policy."""
+    import sys
+
+    if (platform or sys.platform) != "win32":
+        return [CheckItem("execution_policy", True, "not applicable off Windows")]
+    items: "list[CheckItem]" = []
+    for shell in _PROFILE_SHELLS:
+        exe = which(shell)
+        if not exe:
+            continue
+        name = f"execution_policy[{shell}]"
+        try:
+            policy = query(exe)
+        except Exception as exc:  # noqa: BLE001 -- an unqueryable shell is a finding, not a crash
+            items.append(CheckItem(name, False, f"could not query {shell}: {exc}"))
+            continue
+        if policy.lower() in _BLOCKING_POLICIES:
+            fix = f'{shell} -NoProfile -Command "Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"'
+            items.append(CheckItem(name, False, f"{shell} policy is {policy}; its profile will not load -- run: {fix}"))
+        else:
+            items.append(CheckItem(name, True, f"{shell} policy is {policy}"))
+    return items or [CheckItem("execution_policy", True, "no PowerShell profile shell on PATH")]
+
+
+def check_python3(
+    platform: Optional[str] = None,
+    which: "Callable[[str], Optional[str]]" = shutil.which,
+) -> CheckItem:
+    """`python3` must resolve on Windows, where the shim from `substrate` is the only provider."""
+    import sys
+
+    if (platform or sys.platform) != "win32":
+        return CheckItem("python3", True, "not applicable off Windows")
+    found = which("python3")
+    if found is None:
+        return CheckItem("python3", False, "python3 does not resolve on PATH -- re-run scripts/setup.py")
+    return CheckItem("python3", True, found)
+
+
 def run_checks(
     claude_klabauter_root: Path,
     settings_home_path: Path,
@@ -198,4 +305,6 @@ def run_checks(
         *check_repo_pointers(required_repo_keys, registry_get),
         check_heavy_admission(registry_get),
         check_statusline(claude_dir),
+        *check_execution_policy(),
+        check_python3(),
     ]

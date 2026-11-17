@@ -422,6 +422,16 @@ def test_the_child_filler_chains_to_the_sitecustomize_it_shadows(cc, repo, tmp_p
     assert os.environ["PYTHONPATH"] == str(other)
 
 
+def test_a_child_python_with_no_shadowed_sitecustomize_prints_no_keyerror(cc, repo, tmp_path: Path, import_state, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    dest = cc.materialise_commit_clone(repo, _head(repo), tmp_path / "cache")
+    _write(dest, "coordinator/bin/bare_entry.py", "import subprocess, sys\nr = subprocess.run([sys.executable, '-c', 'print(1)'], capture_output=True, text=True)\nprint('ERR=' + r.stderr.strip())\nprint('OUT=' + r.stdout.strip())\n")
+    assert cc.run_entry_from_clone(dest, "coordinator/bin/bare_entry.py", ["bare_entry.py"]) == 0
+    out = capsys.readouterr().out
+    assert "KeyError" not in out and "Error in sitecustomize" not in out
+    assert "OUT=1" in out
+
+
 def test_fill_tree_writes_the_committed_non_test_files_under_its_roots(cc, repo, tmp_path: Path) -> None:
     dest = cc.materialise_commit_clone(repo, _head(repo), tmp_path / "cache")
     _write(repo, "coordinator_core/other/lazy.py", "WHERE = 'dirty'\n")

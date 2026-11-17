@@ -49,15 +49,12 @@ The three primitives, and the platform-semantics gap each one exists to absorb:
      with no POSIX equivalent to omit -- there is nothing to suppress there.
      Returns a kwargs mapping meant to be splatted into ``subprocess.run`` /
      ``subprocess.Popen`` as ``**no_console_creationflags()``: empty on POSIX,
-     ``{"creationflags": <CREATE_NO_WINDOW>}`` on Windows. Covers the
-     ``creationflags`` route only -- a call site that also passes
-     ``shell=True`` needs the separate STARTUPINFO route
-     (``STARTF_USESHOWWINDOW`` + ``wShowWindow=SW_HIDE``) instead, because
+     ``{"creationflags": <CREATE_NO_WINDOW>, "startupinfo": <hidden,
+     no-feedback STARTUPINFO>}`` on Windows. A call site that also passes
+     ``shell=True`` still needs care, because
      with ``shell=True`` Python spawns ``cmd.exe`` as an intermediary and
      ``CREATE_NO_WINDOW`` does not suppress that intermediary's own window;
-     see the function's own docstring for this gap. Not built here
-     speculatively -- add it only if a test demonstrates ``CREATE_NO_WINDOW``
-     alone insufficient for a child process type this repo actually spawns.
+     see the function's own docstring for the ``shell=True`` case.
 
 AC-2 finding (home-resolution primitive): NOT built here, by design.
 ``coordinator_core._settings_home.py`` already implements this correctly --
@@ -119,6 +116,8 @@ __all__ = [
     "join_path_list",
     "split_path",
     "no_console_creationflags",
+    "console_python",
+    "STARTF_FORCEOFFFEEDBACK",
     "no_console_passthrough_kwargs",
     "leaf_spawn_creationflags",
     "same_path",
@@ -229,17 +228,29 @@ def _model_windows_split(value: str, maxsplit: int = -1, *, from_right: bool = F
 
 def no_console_creationflags() -> dict:
     """Kwargs mapping to splat into ``subprocess.run`` / ``subprocess.Popen``
-    as ``**no_console_creationflags()`` to suppress the ``conhost.exe`` popup
-    window a Windows child process otherwise allocates.
+    as ``**no_console_creationflags()``: the child opens no ``conhost.exe``
+    window, shows no window of its own, and raises no AppStarting (arrow +
+    hourglass) cursor.
 
-    POSIX: returns ``{}`` -- there is no console-popup defect to suppress
-    there, and an empty mapping splats to no-op kwargs, leaving stdout/stderr
-    capture semantics on every existing call site completely unchanged.
+    POSIX: returns ``{}`` -- there is nothing to suppress, and an empty mapping
+    splats to no-op kwargs, leaving stdio semantics on every call site unchanged.
 
-    Windows: returns ``{"creationflags": <CREATE_NO_WINDOW>}``. This is the
-    ONLY reliable suppression at the ``CreateProcess`` call itself -- it does
-    NOT touch ``stdout``/``stderr``/``stdin`` handling, so a caller's existing
-    ``capture_output=True`` / ``PIPE`` wiring is unaffected.
+    Windows: returns ``{"creationflags": CREATE_NO_WINDOW, "startupinfo": <fresh
+    STARTUPINFO>}`` with ``dwFlags = STARTF_USESHOWWINDOW |
+    STARTF_FORCEOFFFEEDBACK`` and ``wShowWindow = SW_HIDE``. ``CREATE_NO_WINDOW``
+    stops the console window; ``SW_HIDE`` hides a GUI child's first window;
+    ``STARTF_FORCEOFFFEEDBACK`` stops the busy cursor a windowless GUI-subsystem
+    child otherwise raises until it pumps messages. None of it touches
+    ``stdin``/``stdout``/``stderr``, so ``capture_output=True`` / ``PIPE`` wiring
+    is unaffected.
+
+    The mapping is not JSON-serializable and does not equal
+    ``{"creationflags": ...}``: callers compare ``["creationflags"]`` instead.
+    Each call builds a NEW ``STARTUPINFO`` -- ``subprocess`` mutates the object it
+    is handed, so a shared instance would leak one spawn's handles into the next.
+    Never add a ``startupinfo=`` beside the splat (duplicate keyword); spawn through
+    ``console_python()`` for an interpreter and never ``pythonw`` or
+    ``CREATE_NEW_CONSOLE``.
 
     THE CATCH, and it is not optional reading: "unaffected" holds only for a
     caller that wires SOMETHING. A spawn passing this flag and NO
@@ -256,14 +267,10 @@ def no_console_creationflags() -> dict:
     of this function. Gate: ``coordinator_core/tests/
     test_no_output_swallowing_no_console_spawn.py``.
 
-    GAP, not covered here: a call site that also passes ``shell=True`` needs
-    the separate STARTUPINFO route (``STARTF_USESHOWWINDOW`` +
-    ``wShowWindow=SW_HIDE``) instead of (or in addition to) this primitive.
-    With ``shell=True``, Python spawns ``cmd.exe`` as an intermediary process,
-    and ``CREATE_NO_WINDOW`` on the outer call does not suppress that
-    intermediary's own console window -- verified against python.org's
-    ``subprocess`` docs. Callers with ``shell=True`` must not rely on this
-    function alone.
+    ``shell=True``: Python spawns ``cmd.exe`` as an intermediary, and
+    ``CREATE_NO_WINDOW`` alone does not suppress that intermediary's window
+    (python.org ``subprocess`` docs); the ``SW_HIDE`` STARTUPINFO this mapping
+    now carries covers it. Prefer an argv list over ``shell=True``.
 
     SECOND GAP -- REPORTED, THEN UNREPRODUCED; do not cite it as measured.
     This docstring previously stated that applying the flag to a **git-bash /
@@ -301,7 +308,31 @@ def no_console_creationflags() -> dict:
     # is this module's documented monkeypatch seam (see its own docstring),
     # so a test exercising this branch on a real POSIX host must not raise
     # AttributeError reaching for a Windows-only constant that isn't there.
-    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    kwargs: dict = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is not None:
+        info = startupinfo_cls()
+        info.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0x1) | STARTF_FORCEOFFFEEDBACK
+        info.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = info
+    return kwargs
+
+
+def console_python(executable: StrPath) -> str:
+    """The console-subsystem interpreter for ``executable``.
+
+    A ``pythonw.exe`` path maps to its ``python.exe`` sibling when that file
+    exists; anything else is returned unchanged, so the result is never a
+    different interpreter. A console exe never raises the AppStarting cursor, and
+    under ``CREATE_NO_WINDOW`` it opens no window.
+    """
+    path = os.fspath(executable)
+    p = Path(path)
+    if p.name.lower() == "pythonw.exe":
+        sibling = p.with_name("python.exe")
+        if sibling.is_file():
+            return str(sibling)
+    return path
 
 
 def leaf_spawn_creationflags() -> dict:
@@ -361,6 +392,7 @@ def leaf_spawn_creationflags() -> dict:
 _CREATE_NEW_CONSOLE = 0x00000010
 _DETACHED_PROCESS = 0x00000008
 _CREATE_NO_WINDOW = 0x08000000
+STARTF_FORCEOFFFEEDBACK = 0x00000080
 
 
 def _process_has_no_console() -> bool:
@@ -389,6 +421,9 @@ def install_console_less_spawn_default() -> None:
     a ``CREATE_NO_WINDOW`` child has a console but no window, and re-flagging its
     handle-less children would strand their output in a fresh unread console.
     Never alters a launch that chose ``CREATE_NEW_CONSOLE`` or ``DETACHED_PROCESS``.
+    Every launch, console or not, also gets ``STARTF_FORCEOFFFEEDBACK`` ORed into
+    its ``startupinfo.dwFlags`` (a ``None`` startupinfo is replaced by a fresh
+    one carrying only that bit); the caller's other flags are kept.
     Idempotent; composes with any other wrapper of the same attribute.
     """
     if not _is_windows():
@@ -404,6 +439,11 @@ def install_console_less_spawn_default() -> None:
     def CreateProcess(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startupinfo) -> tuple[int, int, int, int]:
         if not (flags & (_CREATE_NEW_CONSOLE | _DETACHED_PROCESS)) and _process_has_no_console():
             flags |= _CREATE_NO_WINDOW
+        if startupinfo is None:
+            import subprocess
+
+            startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= STARTF_FORCEOFFFEEDBACK
         return orig(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startupinfo)
 
     CreateProcess._console_less_default = True  # type: ignore[attr-defined]
