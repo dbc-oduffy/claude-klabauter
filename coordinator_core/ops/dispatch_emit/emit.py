@@ -6193,6 +6193,7 @@ def _checkpoint_commit_js(
         *retry_lines,
         "  const _commitFailures = [];",
         "  const _landed = {};",
+        "  const _famOk = {};",
         "  const _checkpointShas = [];",
         "  const _heldPathsNamed = [];",
         "  const _waveTriggers = [];",
@@ -6248,6 +6249,8 @@ def _checkpoint_commit_js(
         + _checkpoint_trailer_js(plan_path, run_base_sha, prior_run_base, runtime_plan_js)
         + (
             " + (owed.length ? '\\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '')"
+            " + (done.some((i) => _famOk[i]) "
+            "? '\\nCheckpoint-Family-Ok: ' + done.filter((i) => _famOk[i]).join(', ') : '')"
             f" + (stopped.length ? '\\n{STOP_RULE_TRAILER}: ' + stopped.join(', ') : '');"
             if plan_path or runtime_plan_js
             else ";"

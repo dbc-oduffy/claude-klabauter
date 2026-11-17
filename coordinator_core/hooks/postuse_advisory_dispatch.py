@@ -2243,21 +2243,6 @@ def _record_run_write_print_sync(
     run_write_prints.record_write(repo_root, session_id, agent_id, touch_path, tool_input)
 
 
-def _is_family_leg(command: str) -> bool:
-    from coordinator_core.ops.dispatch_emit import run_write_prints  # noqa: PLC0415 -- leg-local
-
-    return run_write_prints.is_family_leg(command)
-
-
-def _record_family_leg_prints_sync(session_id: str, agent_id: str, command: str, repo_root) -> None:
-    """Print a family write stage's declared paths: its vendor CLI wrote them inside this Bash call."""
-    if repo_root is None:
-        return
-    from coordinator_core.ops.dispatch_emit import run_write_prints  # noqa: PLC0415 -- leg-local
-
-    run_write_prints.record_family_leg(repo_root, session_id, agent_id, command)
-
-
 @register_op("hooks.postuse_advisory_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse advisory dispatcher: folds context-pressure + runtime-tripwire +
@@ -2469,11 +2454,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
                 params.get("tool_input") if tool_name == "Edit" else None,
             )
             if tool_name in _TOUCH_RECORDING_TOOLS and touch_path and agent_id
-            else _idle()
-        ),
-        (
-            asyncio.to_thread(_record_family_leg_prints_sync, session_id, agent_id, command, repo_root)
-            if tool_name == "Bash" and agent_id and command and _is_family_leg(command)
             else _idle()
         ),
         return_exceptions=True,

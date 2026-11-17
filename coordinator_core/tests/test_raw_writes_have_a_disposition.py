@@ -438,6 +438,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/bug_blitz/mint.py': ('claims-explicitly', 'in-place tag rewrite of a state/bug-backlog row via tmp + os.replace, declared through declare_write: _write_reuse'),
     'coordinator_core/ops/dispatch_emit/kept_work.py': ('claims-explicitly', 'kept.json under the run record dir, declared through declare_write: write'),
     'coordinator_core/ops/dispatch_emit/row_returns.py': ('claims-explicitly', 'returns.json under the run record dir, declared through declare_write: write'),
+    'coordinator_core/ops/dispatch_emit/family_credit.py': ('claims-explicitly', 'row-start/<row>.json under the run record dir, declared through declare_write: capture'),
     'coordinator_core/git/commit.py': ('in-repo-non-state', 'published-tree classification file rewritten in place with the refused inclusions and added to the commit path list: write_text; the post-landing worktree sync is the sync_landed_paths call, whose writes are listed under coordinator_core/git/worktree_sync.py'),
     'coordinator_core/git/worktree_sync.py': ('in-repo-non-state', 'post-landing 3-way sync of landed paths into the worktree via tmp + os.replace, re-read guarded: _sync_one'),
     'coordinator_core/idle_compact/watcher.py': ('outside-repo', 'injections.jsonl append and armed.json tmp + os.replace under <settings>/state/idle-compact: append_log, save_armed'),

@@ -126,3 +126,21 @@ def test_unminted_sizing_path_carries_the_leg(monkeypatch):
 
     monkeypatch.setattr(ask_compose, "load_sizing", _missing)
     assert ask_compose._family_enabled("REPO", "sizing.yaml") is True
+
+
+def test_family_attempt_runs_the_row_start_snapshot_first(monkeypatch):
+    script = _script(monkeypatch, _OPTED)
+    fn = _family_fn(script)
+    assert "await agent(_famStart(r) + _rowPrompt(r)," in fn
+    start = script[script.index("  const _famStart = (r) => "):]
+    assert f"-m {ask_compose.FAMILY_CREDIT_MODULE} start --root REPO --run-id {_RUN} --row ' + r.id + " in start[:800]
+
+
+def test_checkpoint_message_names_the_family_ok_rows_from_the_commit_scope(monkeypatch):
+    """One `_famOk`, declared beside `_landed`, the map the row loop already writes from the same scope
+    the family leg runs in: a second or nested declaration shadows it and drops the line silently."""
+    script = _script(monkeypatch, _OPTED)
+    assert script.count("const _famOk = {};") == 1
+    assert "  const _landed = {};\n  const _famOk = {};" in script
+    assert "if (typeof _famOk === 'object') _famOk[r.id] = _fam.verdict === 'OK';" in _family_fn(script)
+    assert "'\\nCheckpoint-Family-Ok: ' + done.filter((i) => _famOk[i]).join(', ')" in script

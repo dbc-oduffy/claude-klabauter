@@ -65,6 +65,7 @@ const _isBaselineRed = (id, err) =>
   const _CHECKPOINT_COMMIT_SCHEMA = {"type": "object", "required": ["outcome"], "properties": {"outcome": {"type": "string", "enum": ["committed", "commit-failed"]}, "sha": {"type": "string"}, "reason": {"type": "string"}, "withheld_paths": {"type": "array", "items": {"type": "string"}}, "withheld_reasons": {"type": "object", "additionalProperties": {"type": "string"}}}};
   const _commitFailures = [];
   const _landed = {};
+  const _famOk = {};
   const _checkpointShas = [];
   const _heldPathsNamed = [];
   const _waveTriggers = [];
@@ -91,7 +92,7 @@ const _isBaselineRed = (id, err) =>
     const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows — ' + done.join(', ');
     const owed = done.filter((i) => _gateOwed[i]);
     const stopped = done.filter((i) => _stoppedBy.includes(i));
-    const message = subject + '\n\nCheckpoint-Plan: docs/plans/emit-full-path-plan.md\nCheckpoint-Base: ' + _runBase + '\nCheckpoint-Not-Landed: run-open' + (owed.length ? '\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '') + (stopped.length ? '\nCheckpoint-Stop-Rule: ' + stopped.join(', ') : '');
+    const message = subject + '\n\nCheckpoint-Plan: docs/plans/emit-full-path-plan.md\nCheckpoint-Base: ' + _runBase + '\nCheckpoint-Not-Landed: run-open' + (owed.length ? '\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '') + (done.some((i) => _famOk[i]) ? '\nCheckpoint-Family-Ok: ' + done.filter((i) => _famOk[i]).join(', ') : '') + (stopped.length ? '\nCheckpoint-Stop-Rule: ' + stopped.join(', ') : '');
     let r = null;
     try {
       r = await agent(

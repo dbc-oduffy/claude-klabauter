@@ -2432,6 +2432,9 @@ _OVERLAY_VERIFY_MODULE = "coordinator_core.ops.dispatch_emit.clean_overlay_verif
 _OVERLAY_SCHEMA = _obj(["exit_code"], {"exit_code": {"type": "integer"}, "detail": {"type": ["string", "null"]}})
 
 
+FAMILY_CREDIT_MODULE = "coordinator_core.ops.dispatch_emit.family_credit"
+
+
 def engine_module_command(module: str, repo_root: str, args: str = "") -> str:
     """`<engine interpreter> -m <module> <args>` for a command an agent runs to reach `coordinator_core`.
     The interpreter is the repo's resolvable pin, else this process's own absolute `sys.executable`; never a
@@ -3784,11 +3787,14 @@ def _family_enabled(repo_root: str, sizing_rel: Optional[str]) -> bool:
         return True
 
 
-def _family_run_js(work_label: str, exec_phase: str) -> str:
+def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
     """JS for `_familyRun(r)`: one family attempt, then one claude fallback when that attempt is
     BLOCKED, FAILED or unresolved. The returned row result is a status line plus the stage record
     (`stage_family.stage_record`'s shape), the family attempt first and the fallback tagged
-    `fallback_for`; the fallback is never reported as the family's result."""
+    `fallback_for`; the fallback is never reported as the family's result.
+    The family attempt runs `start_cmd` + the row id first: the row-start snapshot `family_credit`
+    compares against, since the vendor CLI's writes get no write-print. `_famOk[id]` (declared beside
+    `_commitWave`, which reads it) marks an attempt returned OK, for the `Checkpoint-Family-Ok:` line."""
     schema = json.dumps(
         {
             "type": "object",
@@ -3813,15 +3819,24 @@ def _family_run_js(work_label: str, exec_phase: str) -> str:
     failed = " || ".join(f"_fam.verdict === {_lit(v)}" for v in _stage_family.FALLBACK_VERDICTS)
     return (
         f"  const _FAMILY_RESULT_SCHEMA = {schema};\n"
+        "  const _famStart = (r) => "
+        + _js_string_literal(
+            "First, before anything else, run exactly this one command as its own Bash call, no wrapper, "
+            f"no edit to it, and do not retry it:\n\n{start_cmd}"
+        )
+        + " + r.id + "
+        + _js_string_literal("\n\nThen carry out the assignment below.\n\n")
+        + ";\n"
         "  async function _familyRun(r) {\n"
         "    let _fam = null;\n"
-        f"    try {{ const _fr = await agent(_rowPrompt(r), {fam_opts});\n"
+        f"    try {{ const _fr = await agent(_famStart(r) + _rowPrompt(r), {fam_opts});\n"
         "      if (_fr && typeof _fr === 'object' && typeof _fr.verdict === 'string' && typeof _fr.family === 'string') _fam = _fr;\n"
         "    } catch (e) { _fam = null; }\n"
         "    if (!_fam) _fam = { family: r.family, stage: r.stage_role, exit_code: -1, output_path: '', "
         "verdict: 'FAILED', blocked_reason: 'family-stage-runner reply missing or unparseable' };\n"
         f"    if (!({failed})) {{\n"
         "      const _rec = { stage_role: r.stage_role, attempts: [_fam], reported_family: _fam.family };\n"
+        "      if (typeof _famOk === 'object') _famOk[r.id] = _fam.verdict === 'OK';\n"
         "      log(r.id + ': ' + _fam.family + ' attempt ' + _fam.verdict);\n"
         "      return 'DONE: ' + r.id + ' via ' + _fam.family + ' ' + JSON.stringify(_rec);\n"
         "    }\n"
@@ -6316,7 +6331,10 @@ def compose_ask_script(
     family_on = _family_enabled(repo_root, sizing_rel)
     family_arm = "r.family ? _familyRun(r) : " if family_on else ""
     if family_on:
-        b.append(_family_run_js(work_label, exec_phase))
+        start_cmd = engine_module_command(
+            FAMILY_CREDIT_MODULE, repo_root, f"start --root {Path(repo_root).as_posix()} --run-id {run_id} --row "
+        )
+        b.append(_family_run_js(work_label, exec_phase, start_cmd))
     if routed:
         b.append(_route_js.routed_run_js())
         b.append(_ROUTE_ADAPTER_JS)

@@ -468,7 +468,7 @@ def checkpoint_own_blobs(
     withheld: list[str] = []
     try:
         from coordinator_core.ops.dispatch_emit import (
-            own_hunk_stage, peer_hunk_gate, run_credit, run_hunk_claims, run_write_prints,
+            family_credit, own_hunk_stage, peer_hunk_gate, run_credit, run_hunk_claims, run_write_prints,
         )
 
         try:
@@ -485,9 +485,12 @@ def checkpoint_own_blobs(
         prints = run_write_prints.read(root, run_id) or {}
         unprinted = [p for p in dict.fromkeys(pending) if p not in prints]
         credited = run_credit.credited_writes(root, run_id) if unprinted else frozenset()
-        for path in [p for p in unprinted if p not in credited]:
+        uncredited = [p for p in unprinted if p not in credited]
+        family, family_why = family_credit.credit(root, run_id, uncredited, message) if uncredited else (frozenset(), {})
+        credited = credited | family
+        for path in [p for p in uncredited if p not in family]:
             withheld.append(path)
-            why[path] = NO_PRINT_REASON
+            why[path] = family_why.get(path, NO_PRINT_REASON)
         pending = [p for p in pending if p in prints or p in credited]
         if not pending:
             return {}, sorted(set(withheld))
