@@ -46,8 +46,9 @@ def test_ensure_installs_with_one_pip_target_spawn_and_stamps(tmp_path: Path, mo
     assert out == tmp_path / "engine-site"
     assert len(calls) == 1
     assert calls[0][:3] == [sys.executable, "-m", "pip"]
-    assert calls[0][3:6] == ["install", "--target", str(out)]
+    assert calls[0][3:5] == ["install", "--target"]
     assert calls[0][6:] == ["PyYAML>=6"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["engine-site"]
     assert "--break-system-packages" not in calls[0]
     assert (out / "yaml").is_dir()
     assert ei.stamp(tmp_path) == tuple(sys.version_info[:2])
@@ -88,6 +89,18 @@ def test_ensure_failure_raises_and_leaves_no_stamp(tmp_path: Path, monkeypatch: 
     with pytest.raises(RuntimeError, match="engine-site install failed"):
         ei.ensure(sys.executable, ["PyYAML>=6"], tmp_path)
     assert ei.stamp(tmp_path) is None
+
+
+def test_ensure_failure_keeps_the_prior_engine_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    site = ei.engine_site_dir(tmp_path)
+    (site / "yaml").mkdir(parents=True)
+    (site / ".engine-site-stamp").write_text("2.7\nold\n")
+    monkeypatch.setattr(subprocess, "run", _fake_pip([], rc=1, populate=False))
+    with pytest.raises(RuntimeError, match="engine-site install failed"):
+        ei.ensure(sys.executable, ["PyYAML>=6"], tmp_path)
+    assert (site / "yaml").is_dir()
+    assert ei.stamp(tmp_path) == (2, 7)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["engine-site"]
 
 
 def test_ensure_probes_a_foreign_interpreter_version_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
