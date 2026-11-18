@@ -5,6 +5,7 @@ import json
 import os
 import posixpath
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -376,7 +377,7 @@ def test_install_seeds_hooks_json_when_absent(monkeypatch, tmp_path):
     entry = json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY]["PreToolUse"][0]
     assert entry["matcher"] == ui.AGY_TOOL_MATCHER
     cmd = _hook_cmd(hp)
-    assert sys.executable in cmd and str(dest / ui.AGY_HOOK_SCRIPT) in cmd
+    assert _fwd(sys.executable) in cmd and _fwd(dest / ui.AGY_HOOK_SCRIPT) in _shown(cmd)
     assert "coordinator/bin" not in cmd.replace("\\", "/")
 
 
@@ -514,13 +515,15 @@ def test_agy_entry_carries_pretool_and_sessionstart(tmp_path):
     handler = entry["SessionStart"][0]
     # agy's SessionStart is flat: a grouped entry makes agy reject the whole hooks.json.
     assert handler["type"] == "command" and "hooks" not in handler and "matcher" not in handler
-    assert str(tmp_path / ui.AGY_SESSIONSTART_SCRIPT) in handler["command"] and sys.executable in handler["command"]
+    assert _fwd(tmp_path / ui.AGY_SESSIONSTART_SCRIPT) in _shown(handler["command"])
+    assert _fwd(sys.executable) in handler["command"]
 
 
 def test_agy_entry_carries_a_flat_preinvocation_handler_running_the_pretool_script(tmp_path):
     handler = ui.agy_hook_entry(tmp_path)["PreInvocation"][0]
     assert handler["type"] == "command" and "hooks" not in handler and "matcher" not in handler
-    assert str(tmp_path / ui.AGY_HOOK_SCRIPT) in handler["command"] and "--event PreInvocation" in handler["command"]
+    assert _fwd(tmp_path / ui.AGY_HOOK_SCRIPT) in _shown(handler["command"])
+    assert "--event PreInvocation" in _shown(handler["command"])
 
 
 def test_agy_seed_upgrades_entry_lacking_sessionstart(tmp_path):
@@ -552,7 +555,7 @@ def test_codex_seed_is_idempotent_and_keeps_foreign_hooks(tmp_path):
     assert hp.read_text(encoding="utf-8") == once
     groups = json.loads(once)["hooks"]["SessionStart"]
     assert groups[0] == foreign["hooks"]["SessionStart"][0] and len(groups) == 2
-    assert str(tmp_path / ui.CODEX_SESSIONSTART_SCRIPT) in groups[1]["hooks"][0]["command"]
+    assert _fwd(tmp_path / ui.CODEX_SESSIONSTART_SCRIPT) in _shown(groups[1]["hooks"][0]["command"])
 
 
 def test_codex_seed_creates_file_and_unseed_restores_foreign(tmp_path):
@@ -589,7 +592,7 @@ def test_install_seeds_both_and_trusts_codex(monkeypatch, tmp_path):
     assert trusted == [chp]
     assert "SessionStart" in json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY]
     cmd = json.loads(chp.read_text(encoding="utf-8"))["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-    assert str(dest / ui.CODEX_SESSIONSTART_SCRIPT) in cmd
+    assert _fwd(dest / ui.CODEX_SESSIONSTART_SCRIPT) in _shown(cmd)
 
 
 def test_install_fails_nonzero_when_codex_trust_cannot_be_verified(monkeypatch, tmp_path):
@@ -684,7 +687,7 @@ def test_default_install_writes_doctrine_block_for_codex_and_agy(monkeypatch, tm
     for p in (home / ".codex" / "AGENTS.md", home / ".gemini" / "GEMINI.md"):
         text = p.read_text(encoding="utf-8")
         assert ui.DOCTRINE_BEGIN in text and ui.DOCTRINE_END in text
-        assert str(dest / ui.SEND_SCRIPT) in text and "{SEND}" not in text
+        assert _fwd(dest / ui.SEND_SCRIPT) in _shown(text) and "{SEND}" not in text
         assert "--to <sender>" in text and "--list" in text
         assert "`coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`" in text and "{INVOKE}" not in text
 
@@ -749,7 +752,7 @@ def test_grok_install_seeds_peer_doctrine_into_grok_home_rules_and_uninstall_rem
     assert "grok peer doctrine created" in buf.getvalue()
     text = rules.read_text(encoding="utf-8")
     assert "engine_ask.submit" in text and ui.DOCTRINE_BEGIN in text and "{SEND}" not in text
-    assert str(tmp_path / "dest" / ui.SEND_SCRIPT) in text
+    assert _fwd(tmp_path / "dest" / ui.SEND_SCRIPT) in _shown(text)
     assert "`coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`" in text and "{INVOKE}" not in text
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
@@ -806,7 +809,7 @@ def test_agy_seed_repoints_a_stale_script_path(tmp_path):
 def test_codex_send_rule_allows_only_the_send_script_and_uninstalls(tmp_path):
     rule = ui.render_codex_exec_rule(tmp_path)
     assert "prefix_rule(pattern=" in rule and 'decision="allow"' in rule
-    assert json.dumps(str(tmp_path / ui.SEND_SCRIPT)) in rule and rule.count("prefix_rule") == 1
+    assert json.dumps(_fwd(tmp_path / ui.SEND_SCRIPT)) in rule and rule.count("prefix_rule") == 1
     p = tmp_path / "rules" / "unimatrix.rules"
     assert ui.seed_file(p, rule) == "created" and ui.seed_file(p, rule) == "present"
     assert ui.unseed_file(p) == "removed" and not p.exists() and ui.unseed_file(p) == "absent"
@@ -839,10 +842,10 @@ def test_default_install_registers_guards_doctrine_and_skills(monkeypatch, tmp_p
     guard = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]
     assert guard["matcher"] == ".*"
     handler = guard["hooks"][0]
-    assert "unimatrix-host-guard.py" in handler["command"] and "--host codex" in handler["command"]
-    assert str(_engine) in handler["command"] and isinstance(handler["timeout"], int)
+    assert "unimatrix-host-guard.py" in handler["command"] and "--host codex" in _shown(handler["command"])
+    assert _fwd(_engine) in _shown(handler["command"]) and isinstance(handler["timeout"], int)
     agy = _hooks_file(home / ".gemini" / "config" / "hooks.json")[ui.AGY_HOOK_KEY]
-    assert len(agy["PreToolUse"]) == 1 and str(_engine) in agy["PreToolUse"][0]["hooks"][0]["command"]
+    assert len(agy["PreToolUse"]) == 1 and _fwd(_engine) in _shown(agy["PreToolUse"][0]["hooks"][0]["command"])
     assert "hooks" not in agy["SessionStart"][0] and agy["SessionStart"][0]["type"] == "command"
     for rules in (home / ".codex" / "AGENTS.md", home / ".gemini" / "GEMINI.md"):
         text = rules.read_text(encoding="utf-8")
@@ -898,7 +901,7 @@ def test_reinstall_with_changed_engine_root_updates_guard(monkeypatch, tmp_path)
     buf = io.StringIO()
     assert ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
     codex = _hooks_file(home / ".codex" / "hooks.json")["hooks"]
-    assert len(codex["PreToolUse"]) == 1 and str(other) in codex["PreToolUse"][0]["hooks"][0]["command"]
+    assert len(codex["PreToolUse"]) == 1 and _fwd(other) in _shown(codex["PreToolUse"][0]["hooks"][0]["command"])
     assert "codex hook updated" in buf.getvalue()
 
 
@@ -914,6 +917,77 @@ def test_no_claude_on_path_hosts_skip_gate_but_bare_install_refuses(monkeypatch,
     assert "gate skipped" in buf.getvalue() and (home / ".codex" / "hooks.json").exists()
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "claude,codex"], dest_dir=tmp_path / "d", out=buf) == 2
+
+
+def _fwd(path):
+    return str(path).replace("\\", "/")
+
+
+def _shown(command):
+    """A hook command with its single quotes dropped, to assert on its words."""
+    return command.replace("'", "")
+
+
+def _live_shell(name):
+    exe = shutil.which(name)
+    if not exe:
+        pytest.skip(f"{name} not on PATH")
+    flags = ["-NoProfile", "-NonInteractive", "-Command"] if name == "pwsh" else ["-c"]
+    return exe, flags
+
+
+def _run_in_shell(name, command, env):
+    exe, flags = _live_shell(name)
+    probe = subprocess.run([exe, *flags, "python -c pass"], env=env, capture_output=True, timeout=60)
+    if probe.returncode != 0:
+        pytest.skip(f"{name} cannot reach python on this box")
+    done = subprocess.run([exe, *flags, command], env=env, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+@pytest.mark.parametrize("shell", ["bash", "pwsh"])
+def test_hook_command_parses_to_one_argv_under_bash_and_pwsh(monkeypatch, tmp_path, shell):
+    _live_shell(shell)
+    dest = tmp_path / "dest dir"
+    dest.mkdir()
+    (dest / "echo_argv.py").write_text("import json,sys;print(json.dumps(sys.argv[1:]))\n", encoding="utf-8")
+    py = Path(sys.executable)
+    monkeypatch.setattr(ui, "_console_python", lambda: py.name)
+    env = dict(os.environ, PATH=str(py.parent) + os.pathsep + os.environ.get("PATH", ""))
+    engine = str(tmp_path / "engine root").replace("/", os.sep)
+    command = ui._hook_command(dest, "echo_argv.py", "--host", "grok", *ui._engine_args(engine))
+    assert "\\" not in command
+    assert _run_in_shell(shell, command, env) == ["--host", "grok", "--engine-root", engine.replace("\\", "/")]
+
+
+def test_interpreter_with_a_space_takes_its_short_form_and_is_quoted_only_without_one(monkeypatch):
+    spaced = "\\opt\\Program Files\\py\\python.exe"
+    monkeypatch.setattr(ui, "_short_path", lambda exe: "\\opt\\PROGRA~1\\py\\python.exe")
+    assert ui._neutral_command([spaced, "x.py"]) == "/opt/PROGRA~1/py/python.exe 'x.py'"
+    monkeypatch.setattr(ui, "_short_path", lambda exe: exe)
+    assert ui._neutral_command([spaced, "x.py"]) == "\"/opt/Program Files/py/python.exe\" 'x.py'"
+
+
+def test_tui_status_command_has_no_backslash_for_bash_to_strip(monkeypatch):
+    monkeypatch.setattr(ui, "_console_python", lambda: "\\py\\python.exe")
+    for root in ("\\eng\\root", None):
+        cmd = ui._tui_status_command("grok", root)
+        assert "\\" not in cmd
+        assert ui._status_command_ours({"command": cmd}, "grok")
+
+
+def test_hook_command_is_forward_slash_quoted_and_old_forms_are_still_claimed(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "_console_python", lambda: "python.exe")
+    command = ui._hook_command("u\\me\\.coord", ui.GUARD_SCRIPT, "--host", "grok", "--engine-root", "d\\e")
+    assert command == "python.exe 'u/me/.coord/unimatrix-host-guard.py' '--host' 'grok' '--engine-root' 'd/e'"
+    old = [r'python.exe u\me\.coord\unimatrix-host-guard.py --host grok --engine-root d\e',
+           "python 'x/unimatrix-host-guard.py' --host grok"]
+    for cmd in (command, *old):
+        group = {"hooks": [{"type": "command", "command": cmd}]}
+        assert ui._grok_group_ours(group)
+        assert ui._codex_ours({"hooks": [{"type": "command", "command": cmd.replace("grok", "codex")}]})
+    assert not ui._grok_group_ours({"hooks": [{"command": command.replace("grok", "codex")}]})
 
 
 def _grok_guard_commands(hooks_file):
@@ -937,7 +1011,7 @@ def test_hosts_grok_ships_the_adapter_and_registers_only_the_grok_pretooluse_hoo
     assert tomllib.loads((home / ".grok" / "config.toml").read_text())["ui"]["status_line"]["type"] == "command"
     assert not (home / ".grok" / "hooks.json").exists()
     ((matcher, command),) = _grok_guard_commands(home / ".grok" / "hooks" / "coordinator.json")
-    assert "unimatrix-host-guard.py" in command and "--host grok" in command
+    assert "unimatrix-host-guard.py" in command and "--host grok" in _shown(command)
     for tool in ("Bash", "run_command", "Edit", "Write", "MultiEdit", "NotebookEdit", "edit_file", "write_file",
                  "read_file", "spawn_subagent"):
         assert tool in matcher.split("|")
@@ -963,9 +1037,9 @@ def test_default_hosts_register_grok_hook_under_hooks_path_and_leave_grok_home_a
     assert rc in (0, 7), buf.getvalue()
     assert list(grok_home.iterdir()) == []
     ((_, command),) = _grok_guard_commands(hp.with_name("grok-hooks.json"))
-    assert "unimatrix-host-guard.py" in command and "--host grok" in command
+    assert "unimatrix-host-guard.py" in command and "--host grok" in _shown(command)
     # codex's own guard entry is a different host's and is not the grok one
-    assert "--host codex" in chp.read_text(encoding="utf-8")
+    assert "--host codex" in _shown(chp.read_text(encoding="utf-8"))
 
 
 def test_uninstall_removes_only_the_grok_hook_entry(tmp_path):
@@ -1257,7 +1331,7 @@ def test_default_install_resolves_engine_root_through_settings_home_door(monkeyp
     assert "governance DEGRADED" not in out
     codex = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     agy = _hooks_file(home / ".gemini" / "config" / "hooks.json")[ui.AGY_HOOK_KEY]["PreToolUse"][0]["hooks"][0]["command"]
-    assert f"--engine-root {root}" in codex and f"--engine-root {root}" in agy
+    assert f"--engine-root {_fwd(root)}" in _shown(codex) and f"--engine-root {_fwd(root)}" in _shown(agy)
 
 
 def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
@@ -2504,11 +2578,11 @@ def test_codex_lifecycle_hooks_have_short_timeout_and_keep_transport(tmp_path):
     assert len(start) == 2
     assert ui.CODEX_SESSIONSTART_SCRIPT in start[0]["command"]
     assert ui.EXTERNAL_SESSION_SCRIPT in start[1]["command"]
-    assert "--event SessionStart" in start[1]["command"]
+    assert "--event SessionStart" in _shown(start[1]["command"])
     end = events["SessionEnd"]["hooks"][0]
-    assert "--event SessionEnd" in end["command"]
+    assert "--event SessionEnd" in _shown(end["command"])
     assert end["timeout"] <= 3 and start[1]["timeout"] <= 3
-    assert str(tmp_path / "published engine") in end["command"]
+    assert _fwd(tmp_path / "published engine") in _shown(end["command"])
 
 
 def test_codex_install_and_remove_preserve_foreign_handlers_inside_owned_group(tmp_path):
@@ -2648,7 +2722,7 @@ def test_codex_advisory_events_use_one_bounded_owned_handler(tmp_path):
         assert len(group['hooks']) == 1
         hook = group['hooks'][0]
         assert hook['timeout'] <= 3
-        assert '--event '+event in hook['command']
+        assert '--event '+event in _shown(hook['command'])
     assert events['PreToolUse']['matcher'] == '.*'
 
 

@@ -339,12 +339,14 @@ def _files(nodes: Sequence[str]) -> list[str]:
 
 def _split_phases(present: list[str], base_sha: Optional[str], head_sha: Optional[str],
                   cwd: str) -> tuple[list[str], list[str]]:
-    """(first, second): `second` holds the targets whose file is an importer tripwire of the diff; one phase
+    """(first, second): `second` holds the targets whose file is an importer tripwire of the diff, capped or
+    cut (`tripwires` or `tripwires_not_selected`), so the owned-first split holds past the cap; one phase
     (second empty) with no `base_sha`, an unreadable diff, or nothing on either side of the split."""
     if not base_sha:
         return list(present), []
     try:
-        tripwires = set(reverify_scope.select_tests(Path(cwd), base_sha, head_sha or "HEAD").get("tripwires") or ())
+        picked = reverify_scope.select_tests(Path(cwd), base_sha, head_sha or "HEAD")
+        tripwires = set(picked.get("tripwires") or ()) | set(picked.get("tripwires_not_selected") or ())
     except ValueError:
         return list(present), []
     second = [t for t in present if _file_part(t) in tripwires]
@@ -412,6 +414,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
     result: dict = {"status_after": "fail", "failing": [], "failing_detail": [], "pre_existing": [],
                     "reverted": [], "passed_alone": [], "passed_at_base": [], "diff_named": [],
                     "not_a_test": []}
+    phase_one: Optional[tuple[int, list[str]]] = None
+    unreached: list[str] = []
     try:
         if touched:
             try:
@@ -453,6 +457,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         red_non: list[str] = []
         exported: dict = {}
         rc, lines, reds = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non)
+        phase_one = (rc, lines)
+        unreached = _files(second)
         _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported)
         if second:
             try:
@@ -479,7 +485,13 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         _tally(result, rc, lines)
     except subprocess.TimeoutExpired:
         result["status_after"] = "fail"
-        _tally(result, None, ())
+        if phase_one is None:
+            _tally(result, None, ())
+        else:
+            _tally(result, *phase_one)
+            if unreached:
+                result[ltt.IMPORTER_OVERRUN_KEY] = True
+                result[ltt.TRIPWIRES_NOT_RUN_KEY] = unreached
         result["over_budget"] = True
         result["summary"] = f"timeout: {budget_s:g}s"
         result["failing_detail"] = [{"node_id": "test_leg_run", "message": result["summary"]}]

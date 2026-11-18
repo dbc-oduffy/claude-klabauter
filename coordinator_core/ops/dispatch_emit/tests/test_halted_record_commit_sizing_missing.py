@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit.run_artifacts import outcome_rel
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401
     RUN,
     _call,
@@ -41,7 +42,9 @@ def test_a_missing_sizing_is_flagged_not_declared_and_the_halt_still_lands(repo)
     assert out["committed"] is True
     assert out["sizing_missing"] == SIZING
     assert SIZING not in _landed(repo, out, "--name-only")
-    assert any(p.endswith("/run.json") for p in _landed(repo, out, "--name-only"))
+    landed = _landed(repo, out, "--name-only")
+    assert outcome_rel(RUN) in landed
+    assert not any(p.endswith("/run.json") for p in landed)
     message = _git(["log", "-1", "--format=%B", out["sha"]], repo)
     assert f"run sizing {SIZING} is absent on disk" in message
 

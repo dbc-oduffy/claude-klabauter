@@ -323,3 +323,12 @@ class TestExistingCorpusStillValidates:
             )
         finally:
             old_schema_path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("family", ["claude", "codex", "grok", "agy"])
+def test_family_routing_key_validates(family) -> None:
+    assert validate_frontmatter(_minimal_sizing_object(family=family), _SIZING_OBJECT_SCHEMA) == []
+
+
+def test_unknown_family_is_refused() -> None:
+    assert validate_frontmatter(_minimal_sizing_object(family="gpt"), _SIZING_OBJECT_SCHEMA) != []

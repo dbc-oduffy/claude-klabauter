@@ -675,3 +675,68 @@ def test_a_selection_without_tripwires_still_runs_every_target_through_the_real_
     code, data = _main(["--base-sha", BASE, "--", PASS_ID, TRIPWIRE], tmp_path / "o.json")
     assert code == tlr.EXIT_OK and data["tests_run"] == 2 and data["status_after"] == "pass"
     assert ltt.TRIPWIRES_NOT_RUN_KEY not in data
+
+
+def _fake_pytest_then(monkeypatch, replies):
+    """`_pytest` answering each call from `replies` in order; an exception instance is raised."""
+    calls: list[list[str]] = []
+    queue = list(replies)
+
+    def fake(targets, cwd, remaining):
+        calls.append(list(targets))
+        reply = queue.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(tlr, "_pytest", fake)
+    return calls
+
+
+def test_a_second_phase_timeout_keeps_the_phase_one_count_and_names_the_unreached_files(repo, monkeypatch):
+    _tripwires(monkeypatch, [TRIPWIRE])
+    _write_tripwire(repo, "def test_t():\n    assert True\n")
+    calls = _fake_pytest_then(monkeypatch, [(0, ["3 passed in 1s"]), subprocess.TimeoutExpired("pytest", 1)])
+    data = tlr.run([PASS_ID, TRIPWIRE], base_sha=BASE, head_sha=None, base_export_out=None, budget_s=100.0,
+                   cwd=str(repo))
+    assert calls == [[PASS_ID], [TRIPWIRE]]
+    assert data["tests_run"] == 3 and ltt.ZERO_RUN_CAUSE_KEY not in data
+    assert data[ltt.TRIPWIRES_NOT_RUN_KEY] == [TRIPWIRE] and data["over_budget"] is False
+
+
+def test_a_deadline_after_phase_one_keeps_its_count_instead_of_zeroing_it(repo, monkeypatch):
+    _tripwires(monkeypatch, [TRIPWIRE])
+    _write_tripwire(repo, "def test_t():\n    assert True\n")
+    red = f"FAILED {FAIL_ID} - assert 1 == 2"
+    _fake_pytest_then(monkeypatch, [(1, [red, "1 passed, 1 failed in 1s"]), (1, [red, "1 failed in 1s"])])
+    monkeypatch.setattr(tlr.reverify_base_measure, "measure",
+                        lambda *a, **k: {"red": [], "export": "timeout", "runner_exit": None, "passed_at_base": []})
+    data = tlr.run([PASS_ID, FAIL_ID, TRIPWIRE], base_sha=BASE, head_sha=None, base_export_out=None,
+                   budget_s=100.0, cwd=str(repo))
+    assert data["over_budget"] is True and data["tests_run"] == 2 and data["tests_failed"] == 1
+    assert ltt.ZERO_RUN_CAUSE_KEY not in data
+    assert data[ltt.TRIPWIRES_NOT_RUN_KEY] == [TRIPWIRE] and data[ltt.IMPORTER_OVERRUN_KEY] is True
+
+
+def test_a_phase_one_deadline_with_no_completed_phase_still_reports_zero_tests(repo, monkeypatch):
+    _tripwires(monkeypatch, [TRIPWIRE])
+    _write_tripwire(repo, "def test_t():\n    assert True\n")
+    _fake_pytest_then(monkeypatch, [subprocess.TimeoutExpired("pytest", 1)])
+    data = tlr.run([PASS_ID, TRIPWIRE], base_sha=BASE, head_sha=None, base_export_out=None, budget_s=100.0,
+                   cwd=str(repo))
+    assert data["over_budget"] is True and data["tests_run"] == 0
+    assert data[ltt.ZERO_RUN_CAUSE_KEY] == ltt.ZERO_RUN_BUDGET and ltt.TRIPWIRES_NOT_RUN_KEY not in data
+
+
+def test_an_over_cap_importer_stays_in_phase_two_through_tripwires_not_selected(repo, monkeypatch):
+    pool = [f"tests/test_imp_{i:02d}.py" for i in range(tlr.reverify_scope.TRIPWIRE_BOUND + 5)]
+    cap = tlr.reverify_scope.TRIPWIRE_BOUND
+    monkeypatch.setattr(tlr.reverify_scope, "select_tests",
+                        lambda root, base, head="HEAD": {"tests": [], "tripwires": pool[:cap],
+                                                         "tripwires_not_selected": pool[cap:]})
+    first, second = tlr._split_phases([PASS_ID, *pool], BASE, None, str(repo))
+    assert first == [PASS_ID] and second == pool
+    monkeypatch.setattr(tlr.reverify_scope, "select_tests",
+                        lambda root, base, head="HEAD": {"tests": [], "tripwires": pool[:cap]})
+    first, second = tlr._split_phases([PASS_ID, *pool], BASE, None, str(repo))
+    assert first == [PASS_ID, *pool[cap:]] and second == pool[:cap]

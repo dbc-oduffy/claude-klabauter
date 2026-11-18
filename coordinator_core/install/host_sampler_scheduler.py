@@ -105,6 +105,17 @@ def _host_sampler_script_path(repo_root: Path) -> Path:
     return repo_root / "coordinator_core" / "telemetry" / "host_sampler.py"
 
 
+def _windowless_python(python_exe: str) -> str:
+    """The ``pythonw.exe`` sibling of ``python_exe`` when it exists, else
+    ``python_exe``: a console-subsystem interpreter started by Task Scheduler
+    in the user's session opens a focus-stealing console window."""
+    exe = Path(python_exe)
+    if exe.name.lower() != "python.exe":
+        return str(python_exe)
+    sibling = exe.with_name("pythonw.exe")
+    return str(sibling) if sibling.is_file() else str(python_exe)
+
+
 def _task_xml(python_exe: str, repo_root: Path) -> str:
     """Build the full Task Scheduler XML task definition, setting
     ``WorkingDirectory`` NATIVELY (2026-08-16 fix) rather than shelling
@@ -136,7 +147,7 @@ def _task_xml(python_exe: str, repo_root: Path) -> str:
     from xml.sax.saxutils import escape
 
     script = escape(str(_host_sampler_script_path(repo_root)))
-    python_exe_esc = escape(str(python_exe))
+    python_exe_esc = escape(_windowless_python(python_exe))
     repo_root_esc = escape(str(repo_root))
     return (
         '<?xml version="1.0" encoding="UTF-16"?>\n'

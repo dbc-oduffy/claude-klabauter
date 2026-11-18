@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from coordinator_core.ops.dispatch_emit import land_run_halt
+from coordinator_core.ops.dispatch_emit import halted_record_eviction
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
 
@@ -25,7 +25,7 @@ def test_declared_path_the_run_left_untouched_is_not_withheld(repo):
 
     out = _call(repo, {"halted": "refusal", "reason": "x"})
 
-    assert out["withheld"] == {"ran.py": land_run_halt.HALT_RECORD_ONLY}
+    assert out["withheld"] == {"ran.py": halted_record_eviction.EVICTED_PARKED}
     assert "peer.py" not in _git(repo, "show", "--name-only", "--format=", out["sha"]).split()
 
 
@@ -37,7 +37,7 @@ def test_declared_path_changed_since_the_baseline_is_still_withheld(repo):
     out = _call(repo, {"halted": "refusal", "reason": "x"})
 
     assert out["withheld"] == {
-        "ran.py": land_run_halt.HALT_RECORD_ONLY, "peer.py": land_run_halt.HALT_RECORD_ONLY,
+        "ran.py": halted_record_eviction.EVICTED_PARKED, "peer.py": "halt-record-only",
     }
 
 

@@ -1,18 +1,21 @@
 """Reverify scope: the tests covering a run's own changed files, and the pre_existing split.
 
-``select_tests`` names the tests a delivery reverify runs for ``base..head``;
-``split_pre_existing`` keeps a red that already fails at the base off the run's charge.
+``select_tests`` names the tests a delivery reverify runs for ``base..head``, and
+``select_for_paths`` the same for an edited path list (the ``review.reverify`` list reply). Both
+select touched tests + <= ``_SUITE_BOUND`` owners + <= ``TRIPWIRE_BOUND`` tripwires, the remainder
+named in ``tripwires_not_selected``; ``split_pre_existing`` keeps a red that already fails at the base off the run's charge.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path, PurePosixPath
-from typing import Dict, Iterable, List, Set
+from typing import Dict, Iterable, List, Set, Tuple
 
 from coordinator_core.git.run import run_git
 from coordinator_core.diff_scoped_tests import _TEST_FILE_RE, _read_testpaths, _under_testpaths
 
+from coordinator_core.ops.review_tripwires import _by_basename, _names
 from coordinator_core.pyimports import module_name_for_file, resolve_relative_module
 
 
@@ -23,6 +26,9 @@ def _module_files(module: str) -> List[str]:
 
 #: Most owner tests (beyond the touched ones) a reverify adds: past it the run holds the suite mutex like a suite run.
 _SUITE_BOUND = 10
+
+#: Most tripwire tests (importers, then literal namers, beyond the owned ones) a reverify selects; the rest are ``tripwires_not_selected``.
+TRIPWIRE_BOUND = 15
 
 _TEST_STEM_RE = re.compile(r"^test_(.+)\.py$")
 _JS_TEST_STEM_RE = re.compile(r"^(.+)\.(?:test|spec)\.[jt]sx?$")
@@ -72,6 +78,10 @@ def _imported(repo_root: Path, rel: str, sources: Set[str]) -> Set[str]:
         text = (repo_root / rel).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return set()
+    return _imported_text(rel, text, sources)
+
+
+def _imported_text(rel: str, text: str, sources: Set[str]) -> Set[str]:
     hit: Set[str] = set()
     is_pkg = rel.rsplit("/", 1)[-1] == "__init__.py"
     here = module_name_for_file(rel)
@@ -108,8 +118,13 @@ def _tracked_test_index(repo_root: Path, testpaths: List[str]) -> Dict[str, List
     proc = run_git(["ls-files", "--", "*test_*.py", *_JS_TEST_PATHSPECS], cwd=str(repo_root))
     if proc.returncode != 0:
         raise ValueError(f"select_tests: git ls-files failed: {proc.stderr.strip()}")
+    return _stem_index(proc.stdout.splitlines(), lambda rel: _under_testpaths(rel, testpaths))
+
+
+def _stem_index(rels: Iterable[str], in_scope) -> Dict[str, List[str]]:
+    """Basename stem -> test files among ``rels``; a Python test must satisfy ``in_scope``."""
     index: Dict[str, Set[str]] = {}
-    for ln in proc.stdout.splitlines():
+    for ln in rels:
         rel = ln.strip()
         if not rel:
             continue
@@ -119,7 +134,7 @@ def _tracked_test_index(repo_root: Path, testpaths: List[str]) -> Dict[str, List
             index.setdefault(_JS_KEY + js.group(1), set()).add(rel)
             continue
         m = _TEST_STEM_RE.match(name)
-        if m and _under_testpaths(rel, testpaths):
+        if m and in_scope(rel):
             index.setdefault(m.group(1), set()).add(rel)
     return {stem: sorted(paths) for stem, paths in index.items()}
 
@@ -131,13 +146,18 @@ def _mapped(index: Dict[str, List[str]], source: str) -> List[str]:
     return index.get(stem.replace("-", "_"), [])
 
 
-def _importers(repo_root: Path, sources: Set[str]) -> Dict[str, Set[str]]:
-    """Tracked ``.py`` file -> the ``sources`` it imports: one ``git grep`` prefilter, regex-confirmed."""
+def _leaves(sources: Iterable[str]) -> Set[str]:
     leaves = set()
     for src in sources:
         p = PurePosixPath(src)
         leaves.add(p.parent.name if p.stem == "__init__" else p.stem)
     leaves.discard("")
+    return leaves
+
+
+def _importers(repo_root: Path, sources: Set[str]) -> Dict[str, Set[str]]:
+    """Tracked ``.py`` file -> the ``sources`` it imports: one ``git grep`` prefilter, regex-confirmed."""
+    leaves = _leaves(sources)
     if not leaves:
         return {}
     alt = "|".join(re.escape(leaf) for leaf in sorted(leaves))
@@ -160,17 +180,19 @@ def _importers(repo_root: Path, sources: Set[str]) -> Dict[str, Set[str]]:
 
 
 def select_tests(repo_root: Path, base: str, head: str = "HEAD") -> dict:
-    """The touched test files plus the direct test owners of each touched source file.
+    """The touched test files plus the direct test owners of each touched source file, plus capped tripwires.
 
-    A direct owner is the stem-mapped test of a changed module, or a test file importing it. A
-    non-test importer's own tests are never pulled in. Owners beyond
-    ``_SUITE_BOUND`` files (stem-mapped first; touched tests always kept) are dropped and
-    ``notice`` says so.
+    Selection rule: touched tests, plus at most ``_SUITE_BOUND`` owner tests, plus at most
+    ``TRIPWIRE_BOUND`` tripwires. A direct owner is the stem-mapped test of a changed module, or a
+    test file importing it (stem-mapped first; touched tests always kept); a non-test importer's own
+    tests are never pulled in. A tripwire is an importing test that is not in ``tests`` (importers
+    first, same package as an edited source first, then sorted).
 
     Returns ``{"tests": sorted posix paths, "changed": posix paths, "fully_mapped": bool,
-    "notice": str, "tripwires": sorted posix paths}`` (``notice`` is empty unless the selection was narrowed).
-    ``tripwires`` are importing tests that are neither touched nor stem-mapped, not bounded by the
-    suite bound.
+    "notice": str, "tripwires": ranked posix paths, "tripwires_not_selected": ranked posix paths}``.
+    ``tripwires`` holds the first ``TRIPWIRE_BOUND`` of the tripwires and never a file in ``tests``;
+    ``tripwires_not_selected`` is the rest, plus any owner dropped by the owner bound. ``notice`` is
+    empty unless an owner or tripwire bound dropped something.
     ``fully_mapped`` is False when a changed non-test ``.py`` or ``.js/.ts`` source has no mapped or importing test.
     Raises ``ValueError`` when ``base`` is unknown or the diff fails; never an empty set for that.
     """
@@ -179,7 +201,6 @@ def select_tests(repo_root: Path, base: str, head: str = "HEAD") -> dict:
     root = str(repo_root)
     testpaths = _read_testpaths(root)
     tests: Set[str] = set()
-    fully_mapped = True
     changed_src: Set[str] = set()
     index = _tracked_test_index(repo_root, testpaths)
     for path in changed:
@@ -192,34 +213,132 @@ def select_tests(repo_root: Path, base: str, head: str = "HEAD") -> dict:
     touched = set(tests)
     importers = _importers(repo_root, {p for p in changed_src if p.endswith(".py")})
     importing_tests = {imp for imp in importers if _is_test_file(imp, testpaths)}
+    picked = _pick(
+        touched, changed_src, lambda p: _mapped(index, p), importers, importing_tests,
+        lambda imp: _is_test_file(imp, testpaths),
+    )
+    return {
+        "tests": picked["owned"],
+        "changed": changed,
+        "fully_mapped": picked["fully_mapped"],
+        "notice": picked["notice"],
+        "tripwires": picked["tripwires"],
+        "tripwires_not_selected": picked["tripwires_not_selected"],
+    }
+
+
+def _test_package(test: str) -> str:
+    parent = PurePosixPath(test).parent
+    return (parent.parent if parent.name == "tests" else parent).as_posix()
+
+
+def _pick(
+    touched: Set[str], changed_src: Set[str], mapped_for, importers: Dict[str, Set[str]],
+    importing_tests: Set[str], is_test, namers: Iterable[str] = (),
+) -> dict:
+    """The shared ranking behind ``select_tests`` and ``select_for_paths``.
+
+    ``owned`` is touched plus the first ``_SUITE_BOUND`` owners; the tripwire pool is every importing
+    test, ``namers`` and dropped owner not in ``owned``, ranked importers first, then same package as
+    an edited source, then path, and cut at ``TRIPWIRE_BOUND``.
+    """
     mapped: Set[str] = set()
+    fully_mapped = True
     for path in sorted(changed_src):
-        found = set(_mapped(index, path))
+        found = set(mapped_for(path))
         mapped.update(found)
         if not found:
             tests_dir = PurePosixPath(path).parent / "tests"
             found = {
                 imp for imp, hit in importers.items()
-                if path in hit and PurePosixPath(imp).parent == tests_dir and _is_test_file(imp, testpaths)
+                if path in hit and PurePosixPath(imp).parent == tests_dir and is_test(imp)
             }
             mapped.update(found)
         if not found:
             fully_mapped = False
     extras = sorted(mapped - touched) + sorted(importing_tests - touched - mapped)
     kept = extras[:_SUITE_BOUND]
-    notice = ""
+    owned = touched | set(kept)
+    pool = (set(importing_tests) | set(namers) | set(extras[_SUITE_BOUND:])) - owned
+    src_dirs = {PurePosixPath(p).parent.as_posix() for p in changed_src}
+    ranked = sorted(pool, key=lambda t: (t not in importing_tests, _test_package(t) not in src_dirs, t))
+    tripwires, not_selected = ranked[:TRIPWIRE_BOUND], ranked[TRIPWIRE_BOUND:]
+    notices = []
     if len(extras) > len(kept):
-        notice = (
+        notices.append(
             f"reverify selection narrowed: {len(touched) + len(extras)} test files would run, over the "
             f"{_SUITE_BOUND}-owner-file bound; kept {len(touched)} touched and {len(kept)} owner tests, "
             f"dropped {len(extras) - len(kept)} owner tests (importers or stem-mapped); quote this notice with any pass."
         )
+    if not_selected:
+        notices.append(
+            f"reverify tripwires capped at {TRIPWIRE_BOUND}: {len(not_selected)} more test files are in "
+            f"tripwires_not_selected; report them as not run, never as passed."
+        )
     return {
-        "tests": sorted(touched | set(kept)),
-        "changed": changed,
+        "owned": sorted(owned),
         "fully_mapped": fully_mapped,
-        "notice": notice,
-        "tripwires": sorted(importing_tests - touched - mapped),
+        "notice": " ".join(notices),
+        "tripwires": tripwires,
+        "tripwires_not_selected": not_selected,
+    }
+
+
+def select_for_paths(
+    repo_root: Path, paths: Iterable[str], test_bytes: Iterable[Tuple[str, bytes]], namers: Iterable[str] = ()
+) -> dict:
+    """The owned tests and capped tripwires for an edited path list, spawn-free (no git, no sha range).
+
+    Same rule as ``select_tests`` (touched + <= ``_SUITE_BOUND`` owners + <= ``TRIPWIRE_BOUND``
+    tripwires) over ``paths``. ``test_bytes`` is one pass of ``(path, bytes)`` over the tracked test
+    modules (``review_tripwires._tracked_test_bytes``): each is checked once for importing a changed
+    module and for a string literal naming a path, so the scan costs one read of the tests. ``namers``
+    adds literal-naming tests found elsewhere (a created path's tree walkers). Importers rank before
+    namers. With no pytest ``testpaths``, every scanned ``test_*.py`` is in scope.
+    Returns ``{"owned", "tripwires", "tripwires_not_selected", "notice"}``; a path that is gone is skipped.
+    """
+    root = Path(repo_root)
+    testpaths = _read_testpaths(str(root))
+
+    def in_scope(rel: str) -> bool:
+        return not testpaths or _under_testpaths(rel, testpaths)
+
+    def is_test(rel: str) -> bool:
+        return _is_js_test_file(rel) or (bool(_TEST_FILE_RE.match(PurePosixPath(rel).name)) and in_scope(rel))
+
+    touched: Set[str] = set()
+    changed_src: Set[str] = set()
+    for path in sorted({p for p in paths if p}):
+        if not (path.endswith(".py") or _JS_SOURCE_RE.search(path)) or not (root / path).is_file():
+            continue
+        (touched if is_test(path) else changed_src).add(path)
+    importers: Dict[str, Set[str]] = {}
+    named = sorted({p for p in paths if p})
+    found: Set[str] = set(namers)
+    scanned: List[str] = []
+    py_src = {p for p in changed_src if p.endswith(".py")}
+    needles = [leaf.encode("utf-8") for leaf in sorted(_leaves(py_src))]
+    by_base = _by_basename(named)
+    for rel, data in test_bytes:
+        scanned.append(rel)
+        if by_base and _names(data, by_base):
+            found.add(rel)
+        if needles and is_test(rel) and rel not in changed_src and any(n in data for n in needles):
+            try:
+                hit = _imported_text(rel, data.decode("utf-8"), py_src)
+            except UnicodeDecodeError:
+                continue
+            if hit:
+                importers[rel] = hit
+    index = _stem_index(scanned, in_scope)
+    picked = _pick(
+        touched, changed_src, lambda p: _mapped(index, p), importers, set(importers), is_test, found
+    )
+    return {
+        "owned": picked["owned"],
+        "tripwires": picked["tripwires"],
+        "tripwires_not_selected": picked["tripwires_not_selected"],
+        "notice": picked["notice"],
     }
 
 

@@ -467,9 +467,44 @@ def _authors_code(row: Any) -> bool:
     return bool(_row_writes(row)) and not row.verification_runs
 
 
+_DOC_SUFFIXES = frozenset({".md", ".yaml", ".yml", ".txt", ".rst"})
+_UE_CONTENT_SUFFIXES = frozenset({".uasset", ".umap", ".ubulk", ".uexp", ".uplugin", ".uproject"})
+_DOC_TEST_SEGMENTS = frozenset({"docs", "doc", "tests", "test"})
+
+
+def _is_doc_test_yaml(path: str) -> bool:
+    p = _posix(path).rstrip("/").lower()
+    name = p.rsplit("/", 1)[-1]
+    suffix = os.path.splitext(name)[1]
+    if suffix in _UE_CONTENT_SUFFIXES:
+        return False
+    if suffix in _DOC_SUFFIXES:
+        return True
+    segments = p.split("/")[:-1] if "." in name else p.split("/")
+    return (
+        any(s in _DOC_TEST_SEGMENTS for s in segments)
+        or name.startswith("test_")
+        or name.endswith(("_test.py", ".test.ts"))
+    )
+
+
+def writes_are_docs_tests_yaml(writes: Sequence[str]) -> bool:
+    """True when `writes` is non-empty and every path is a doc, test or yaml file, never UE content.
+
+    Paths are POSIX-normalised, so a backslash path classifies like its `/` form. A UE content
+    suffix (`.uasset`, `.umap`, ...) is never a doc or test whatever directory holds it.
+    """
+    return bool(writes) and all(_is_doc_test_yaml(w) for w in writes)
+
+
 def _outside_footprint(cls: WorkClass, writes: Sequence[str]) -> bool:
-    """True when `cls` declares path globs, `writes` is non-empty and none of them matches a glob."""
-    if not cls.paths or not writes:
+    """True when `writes` is non-empty and either all of it is docs/tests/yaml, or `cls` declares
+    path globs and none of the writes matches one."""
+    if not writes:
+        return False
+    if writes_are_docs_tests_yaml(writes):
+        return True
+    if not cls.paths:
         return False
     norm = [_posix(w) for w in writes]
     return not any(fnmatch.fnmatchcase(w, pat) for pat in cls.paths for w in norm)
@@ -491,11 +526,12 @@ def resolve_agent_type(
     and an explicit type naming the class's agent (or its triage agent) is redirected to the
     executor with a note. The class still routes rows that do not author code.
 
-    A matched class that declares path globs does not claim a row whose declared writes all fall
-    outside them (`_outside_footprint`): a derived executor row stays on the executor, an explicit
-    row naming the class's agent (or its triage agent) is redirected to the executor with a note,
-    and any other explicit type is left alone. A class with no path globs, or a row with no
-    declared writes, keeps keyword/tool routing.
+    A matched class does not claim a row whose declared writes all fall outside its path globs, or
+    are all docs/tests/yaml files (`_outside_footprint`, even for a keyword-only class): a derived
+    executor row stays on the executor, an explicit row naming the class's agent (or its triage
+    agent) is redirected to the executor with a note, and any other explicit type is left alone. A
+    row with no declared writes, or a keyword-only class and a row writing other files, keeps
+    keyword/tool routing.
 
     A row whose explicit `agent_type` is the executor is never redirected or refused, inside a
     class footprint or outside it: the row's own naming wins over the table, and `None` is

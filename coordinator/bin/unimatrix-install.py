@@ -1037,8 +1037,51 @@ def _quote_argv(argv):
     return subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(a) for a in argv)
 
 
-def _hook_command(dest_dir, script_name, *args):
-    return _quote_argv([_console_python(), str(Path(dest_dir) / script_name), *args])
+_NEUTRAL_BARE = re.compile(r"[A-Za-z0-9_@%+=:,./~-]+")
+
+
+def _neutral_arg(arg) -> str:
+    """One argument as a word bash and pwsh parse identically: forward slashes, single-quoted."""
+    arg = str(arg).replace("\\", "/")
+    if "'" not in arg:
+        return f"'{arg}'"
+    if not any(c in arg for c in '"$`'):
+        return f'"{arg}"'
+    raise ValueError(f"cannot quote {arg!r} for both bash and pwsh")
+
+
+def _short_path(exe) -> str:
+    """The Windows 8.3 form of an existing path (no spaces), else the path unchanged."""
+    if os.name != "nt":
+        return exe
+    import ctypes
+    buf = ctypes.create_unicode_buffer(32768)
+    n = ctypes.windll.kernel32.GetShortPathNameW(exe, buf, 32768)
+    return buf.value if 0 < n < 32768 else exe
+
+
+def _neutral_exe(exe) -> str:
+    """The interpreter word as _neutral_command emits it: 8.3 short form when the path needs quoting."""
+    exe = str(exe).replace("\\", "/")
+    if not _NEUTRAL_BARE.fullmatch(exe):
+        exe = _short_path(exe).replace("\\", "/")
+    if not _NEUTRAL_BARE.fullmatch(exe) and any(c in exe for c in '"$`'):
+        raise ValueError(f"cannot quote interpreter {exe!r} for bash")
+    return exe
+
+
+def _neutral_command(argv) -> str:
+    """argv as a command line bash and pwsh both run: a quoted first word is an expression in pwsh,
+    so the interpreter stays bare when it can: a path with a space takes its 8.3 short form, and
+    only when none exists is it double-quoted (bash-only)."""
+    exe, *rest = (str(a).replace("\\", "/") for a in argv)
+    exe = _neutral_exe(exe)
+    head = exe if _NEUTRAL_BARE.fullmatch(exe) else f'"{exe}"'
+    return " ".join([head, *(_neutral_arg(a) for a in rest)])
+
+
+def _hook_command(dest_dir, script_name, *args) -> str:
+    return _neutral_command([_console_python(), Path(dest_dir) / script_name, *args])
 
 
 def _engine_args(engine_root):
@@ -1771,12 +1814,12 @@ _TUI_STATUS_BOOT = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
                     f"runpy.run_module('{TUI_STATUS_MODULE}',run_name='__main__')")
 
 
-def _tui_status_command(host, engine_root=None):
+def _tui_status_command(host, engine_root=None) -> str:
     if engine_root:
         argv = [_console_python(), "-c", _TUI_STATUS_BOOT, str(engine_root), host]
     else:
         argv = [_console_python(), "-m", TUI_STATUS_MODULE, host]
-    return _quote_argv(argv)
+    return _quote_argv([str(a).replace("\\", "/") for a in argv])
 
 
 def _status_command_ours(value, host):
@@ -2027,9 +2070,9 @@ def codex_exec_rule_path():
     return codex_hooks_path().parent / "rules" / "unimatrix.rules"
 
 
-def render_codex_exec_rule(dest_dir):
+def render_codex_exec_rule(dest_dir) -> str:
     """An allow rule for the send command alone, so a Codex reply to a peer needs no approval prompt."""
-    argv = [_console_python(), str(Path(dest_dir) / SEND_SCRIPT)]
+    argv = [_neutral_exe(_console_python()), str(Path(dest_dir) / SEND_SCRIPT).replace("\\", "/")]
     return ("# unimatrix: lets Codex answer a peer agent with the send command, without an approval prompt.\n"
             "# Only this one script. Written by unimatrix-install.py --install, removed by --uninstall.\n"
             f"prefix_rule(pattern={json.dumps(argv)}, decision=\"allow\")\n")

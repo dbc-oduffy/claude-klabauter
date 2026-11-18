@@ -422,7 +422,7 @@ def _reland_late_writes(
     second commit leaves the paths changed, so ``residue`` reports them.
     """
     from coordinator_core.ops.dispatch_emit.terminal_commit import _worktree_snapshot
-    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
+    from coordinator_core.warm.entry_seam import OpUnavailableError
 
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     fresh = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
@@ -467,7 +467,7 @@ def _reland_late_writes(
             if session_id is not None:
                 commit_params["session_id"] = session_id
             try:
-                second = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+                second = _commit_v2_retrying_ref_cas(worktree_root, repo_root, commit_params)
             except OpUnavailableError:
                 second = None
             if isinstance(second, dict) and not second.get("error") and not second.get("refused"):
@@ -475,6 +475,30 @@ def _reland_late_writes(
     again = _worktree_snapshot(worktree_root, list(fresh.paths()), [record_dir_rel, RECORD_DIR_ROOT], [])
     still = set(again.changed) if again is not None else set(snap.changed) - set(relanded)
     return fresh, still, relanded
+
+
+def _commit_v2_retrying_ref_cas(worktree_root: Path, repo_root: Path, commit_params: dict) -> object:
+    """``ceremony.commit_v2`` over ``commit_params``, re-called on the new HEAD when a peer commit wins
+    the ref CAS (``git.ref_cas_retry.retry_ref_moved``, bounded). A peer commit that touched one of the
+    named paths ends the loop with ``refused: ref-moved-overlap``. Raises ``OpUnavailableError``.
+    Trap: every call rebuilds from the then-current HEAD and the named paths; never reuse a prior tree."""
+    from coordinator_core.git import ref_cas_retry
+    from coordinator_core.warm.entry_seam import reentrant_dispatch
+
+    def _attempt() -> object:
+        return reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+
+    def _cas_lost(reply: object) -> bool:
+        return (
+            isinstance(reply, dict) and not reply.get("committed") and ref_cas_retry.is_ref_moved_text(reply.get("error"))
+        )
+
+    reply, overlap = ref_cas_retry.retry_ref_moved(
+        worktree_root, [*commit_params.get("paths", ()), *commit_params.get("deleted_paths", ())], _attempt, _cas_lost,
+    )
+    if overlap and isinstance(reply, dict) and isinstance(reply.get("error"), str):
+        reply["refused"] = overlap
+    return reply
 
 
 def _sizing_on_disk(worktree_root: Path, sizing_rel: str) -> bool:
@@ -716,7 +740,7 @@ def _land(
     from coordinator_core.ops.dispatch_emit.credit_gate import KEPT_REVIEW_CHUNK_ID
     from coordinator_core.ops.dispatch_emit.terminal_commit import _worktree_snapshot
     from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import _error
-    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
+    from coordinator_core.warm.entry_seam import OpUnavailableError
 
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import split_sibling_paths
     from coordinator_core.ops.ceremony import commit_v2
@@ -1148,7 +1172,11 @@ def _land(
     ownerless_reply = {"ownerless": ownerless} if ownerless else {}
 
     if process_withheld:
-        process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)
+        # The halt-withheld and halted-run-lookup indexes land under .coordinator-local/ and a foreign
+        # repo carries no ignore rule for it, so they would surface as untracked dirt.
+        process_artifact_policy.exclude_locally(
+            worktree_root, process_withheld, [*artifacts.record_dirs, ".coordinator-local"],
+        )
 
     # The tracked outcome is the halt's landable record when every record-dir file is run state.
     record_present = (worktree_root / record_dir_rel).is_dir()
@@ -1265,7 +1293,7 @@ def _land(
             **base,
         )
     try:
-        reply = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+        reply = _commit_v2_retrying_ref_cas(worktree_root, repo_root, commit_params)
     except OpUnavailableError:
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
@@ -1304,7 +1332,7 @@ def _land(
                 else:
                     commit_params.pop("expected_content_sha256")
             try:
-                reply = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+                reply = _commit_v2_retrying_ref_cas(worktree_root, repo_root, commit_params)
             except OpUnavailableError:
                 return _error("ceremony.commit_v2 is not registered", **base)
             if not isinstance(reply, dict):

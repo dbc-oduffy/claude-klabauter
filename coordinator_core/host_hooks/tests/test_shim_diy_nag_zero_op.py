@@ -202,6 +202,27 @@ def test_host_guard_stamps_after_it_writes_the_grok_nag(monkeypatch, repo, tmp_p
     assert _stamp(tmp_path, "guard-sid").exists()
 
 
+def test_grok_guard_default_budget_delivers_nag_as_hook_additional_context(monkeypatch, repo, tmp_path, capsys):
+    guard_mod = _load_guard()
+    assert guard_mod.DEFAULT_BUDGET_SECS == 0.5
+    monkeypatch.setattr(nag, "advisory_for_dispatch", lambda root, sid, env=None, *a, **k: "STUB-NAG")
+    monkeypatch.setattr(shim, "_dial", lambda request: None)
+    out = _drive_guard(monkeypatch, capsys, repo, "guard-ctx-sid")
+    hook = out["hookSpecificOutput"]
+    assert hook["permissionDecision"] == "allow"
+    assert "STUB-NAG" in hook["additionalContext"]
+    assert _stamp(tmp_path, "guard-ctx-sid").exists()
+
+
+def test_grok_guard_without_advisory_carries_no_additional_context(monkeypatch, repo, tmp_path, capsys):
+    monkeypatch.setattr(nag, "advisory_for_dispatch", lambda root, sid, env=None, *a, **k: "")
+    monkeypatch.setattr(shim, "_dial", lambda request: None)
+    out = _drive_guard(monkeypatch, capsys, repo, "guard-noctx-sid")
+    assert "STUB-NAG" not in str(out)
+    assert "additionalContext" not in str(out)
+    assert not _stamp(tmp_path, "guard-noctx-sid").exists()
+
+
 def test_host_guard_timeout_writes_no_nag_and_no_stamp(monkeypatch, repo, tmp_path, capsys):
     import threading
 

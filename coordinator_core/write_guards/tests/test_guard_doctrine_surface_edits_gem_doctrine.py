@@ -98,6 +98,9 @@ ADMITTED = [
     "coordinator/docs/wiki/coordinator-tripwires/x.md",
     "coordinator/docs/decisions/DR-x.md",
     "docs/decisions/DR-x.md",
+    "CLAUDE.md",
+    "coordinator.local.md",
+    "coordinator/snippets/em-operating-doctrine.md",
 ]
 
 
@@ -156,10 +159,27 @@ def test_unverified_or_stale_standing_lands_with_the_review_advisory(box, state)
     assert guard.edit_admitted(payload, payload["tool_input"]["file_path"]) is True
 
 
-def test_em_operating_doctrine_lands_with_the_review_advisory_for_the_live_gem(box) -> None:
-    snippet = box.payload("coordinator/snippets/em-operating-doctrine.md")
-    assert _REVIEW_MARK in _context(guard.check(snippet))
-    assert guard.edit_admitted(snippet, snippet["tool_input"]["file_path"]) is True
+CONTENT_ROOT_FILES = ["CLAUDE.md", "coordinator.local.md", "coordinator/snippets/em-operating-doctrine.md"]
+
+
+@pytest.mark.parametrize("rel", CONTENT_ROOT_FILES)
+def test_content_root_file_admits_the_live_gem_quietly_and_not_without_standing(
+    box, monkeypatch: pytest.MonkeyPatch, rel
+) -> None:
+    assert guard.check(box.payload(rel)) is None
+    box.state = "vacant"
+    monkeypatch.setattr(guard, "sentinel_present", lambda cwd: False)
+    assert guard.check(box.payload(rel)) is not None
+
+
+def test_content_root_md_without_standing_or_sentinel_is_denied(box, monkeypatch: pytest.MonkeyPatch) -> None:
+    box.state = "vacant"
+    monkeypatch.setattr(guard, "sentinel_present", lambda cwd: False)
+    assert _denied(guard.check(box.payload("CLAUDE.md")))
+
+
+def test_derived_claude_config_copy_is_not_a_surface(box) -> None:
+    assert co.doctrine_surface(str(box.cfg / "CLAUDE.md")) is None
 
 
 def test_engine_plane_is_not_admitted_to_the_live_gem(box) -> None:

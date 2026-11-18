@@ -974,12 +974,23 @@ def _mentions_governed_identifier(text: str, identifiers_lower: Tuple[str, ...])
     governed surface plainly, or one that mentions none -- pays for the fold
     only when the raw text has already missed."""
     lowered = text.lower()
-    if any(identifier in lowered for identifier in identifiers_lower):
+    if any(_identifier_in(identifier, lowered) for identifier in identifiers_lower):
         return True
     folded = _fold_literal_joins(lowered)
     if folded == lowered:
         return False
-    return any(identifier in folded for identifier in identifiers_lower)
+    return any(_identifier_in(identifier, folded) for identifier in identifiers_lower)
+
+
+#: ``claude.md`` is matched as a whole basename: a name that merely ends in it
+#: (``coordinator-content-repo.md``, ``my_claude.md``) is not the doctrine file.
+_BARE_CLAUDE_MD_RE = re.compile(r"(?<![\w.-])claude\.md")
+
+
+def _identifier_in(identifier: str, lowered: str) -> bool:
+    if identifier == "claude.md":
+        return bool(_BARE_CLAUDE_MD_RE.search(lowered))
+    return identifier in lowered
 
 
 def _has_write_marker_for_point3(

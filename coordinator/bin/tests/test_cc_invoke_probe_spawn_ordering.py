@@ -73,7 +73,7 @@ def test_cc_invoke_warm_hit_never_enters_resolve_op_timeouts(monkeypatch):
     _install_warm_hit(monkeypatch, {"ok": True})
     _forbid_resolve_op_timeouts(monkeypatch)
 
-    result = _mod.cc_invoke("some.op", {}, "/repo/root", _claude_klabauter_root="/fake/engine/root")
+    result = _mod.cc_invoke("some.op", {}, "/repo/root", _engine_root="/fake/engine/root")
 
     assert result == {"ok": True}
 
@@ -82,7 +82,7 @@ def test_cc_invoke_bare_warm_hit_never_enters_resolve_op_timeouts(monkeypatch):
     _install_warm_hit(monkeypatch, {"ok": True})
     _forbid_resolve_op_timeouts(monkeypatch)
 
-    result = _mod.cc_invoke_bare("some.op", {}, "/repo/root", _claude_klabauter_root="/fake/engine/root")
+    result = _mod.cc_invoke_bare("some.op", {}, "/repo/root", _engine_root="/fake/engine/root")
 
     assert result == {"ok": True}
 
@@ -102,6 +102,6 @@ def test_cc_invoke_cold_path_still_computes_ceiling_on_a_miss(monkeypatch):
     monkeypatch.setattr(_mod, "_op_timeout_ceiling", _sentinel)
 
     with pytest.raises(RuntimeError, match="stop before an actual subprocess spawn"):
-        _mod.cc_invoke("some.op", {}, "/repo/root", _claude_klabauter_root="/fake/engine/root")
+        _mod.cc_invoke("some.op", {}, "/repo/root", _engine_root="/fake/engine/root")
 
     assert entered == [True]

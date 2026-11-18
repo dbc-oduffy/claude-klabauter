@@ -4563,14 +4563,14 @@ _QUEUE_SCHEMA_PINS = {
 #
 _QUEUE_SCHEMA_AHEAD_PINS: dict = {
     'sizing-object': {
-        'doe_ref': '8a85937400c250b9cfc4df7473b765884ccecba9',
+        'doe_ref': '6a6ec5c06ae54d3af52d713011f9197a6d7810d7',
         'reason': (
-            'research.audience enum on the trail record (sha_memo) is claude-klabauter-first, '
-            'awaiting DoE canonical-first landing; every other leaf equals DoE HEAD'
+            '1.55.0 top-level `family` routing key is claude-klabauter-first (family sizings could not '
+            'author a plan without it), awaiting DoE canonical-first landing'
         ),
         'provenance': (
-            'docs/plans/2026-11/2026-11-16-d0c070-6-research-close-audience-stamp C1; '
-            'memo to coordinator-content-repo-em (topic sizing-object-sha-memo)'
+            'goal 1a family runs 2026-11-18 (sizings 1a-codex/agy/grok, halted on doc-new refusal); '
+            'memo to coordinator-content-repo-em (topic sizing-object-family)'
         ),
     },
 }

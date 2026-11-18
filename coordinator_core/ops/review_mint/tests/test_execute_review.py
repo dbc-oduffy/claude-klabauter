@@ -1877,7 +1877,9 @@ def test_reverify_prompt_names_the_op_the_agent_and_forbids_a_suite_run():
     assert block.count("review.reverify") >= 2
     assert "never a directory, a tier (the fast tier included) or the full suite" in block
     assert "never `git checkout`" in block
-    assert "every file in `tripwires`" in block
+    assert "first ONE pytest call of the test files among them and the `owned` list" in block
+    assert "ONE pytest call of the `tripwires` files" in block
+    assert "`tripwires_not_selected`" in block and "`not_run`" in block
     assert f'\\"slice_prefix\\":\\"{prep_slice_id_for("docs/plans/example.md", "a" * 40)}\\"' in block or (
         f'"slice_prefix":"{prep_slice_id_for("docs/plans/example.md", "a" * 40)}"' in block
     )

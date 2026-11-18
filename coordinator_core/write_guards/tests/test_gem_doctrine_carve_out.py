@@ -67,7 +67,6 @@ def test_claude_rules_hits_without_content_root(roots):
 def test_misses(roots, tmp_path):
     misses = [
         roots["cfg"] / "CLAUDE.md",
-        roots["content"] / "coordinator/snippets/em-operating-doctrine.md",
         roots["content"] / "coordinator/templates/global-doctrine/CLAUDE.md",
         roots["content"] / "global-doctrine",
         tmp_path / "claude-klabauter/coordinator_core/x.py",

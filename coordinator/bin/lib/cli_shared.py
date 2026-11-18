@@ -398,7 +398,7 @@ def claude_klabauter_data_home() -> str | None:
     The engine-root env override names where engine code runs from, which is
     the published mirror on a standard install; that mirror's `state/` is
     gitignored, so a data write there is accepted and lost. Precedence matches
-    the native write seam (`coordinator_core.ops.queue_append._claude_klabauter_root`)
+    the native write seam's engine-root resolver in `coordinator_core.ops.queue_append`
     so a dedup scan and the write it dedups always resolve the same root:
 
       1. COORDINATOR_ENGINE_ROOT, unless it carries the engine

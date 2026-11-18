@@ -50,7 +50,7 @@ def test_reassess_goal_krs_main_non_dict_result(git_repo, monkeypatch, capsys):
 def test_reap_native_non_dict_result(git_repo, monkeypatch, capsys):
     mod = _load_module("reap_integrated_review_findings", "reap-integrated-review-findings.py")
 
-    def _fake(op_name, params, repo_root, _claude_klabauter_root=None):
+    def _fake(op_name, params, repo_root, _engine_root=None):
         assert op_name == "fleet.reap_integrated_findings"
         return ["not", "a", "dict"]
 

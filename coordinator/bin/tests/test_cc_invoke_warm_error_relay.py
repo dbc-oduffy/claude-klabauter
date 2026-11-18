@@ -29,7 +29,7 @@ def test_in_engine_error_dict_reaches_the_refusal_message(monkeypatch):
     monkeypatch.setattr(cc_invoke, "_try_in_engine_dispatch", _refusing_op)
     sink: list = []
 
-    result = cc_invoke.cc_invoke("memo.send", {}, ".", _claude_klabauter_root=".", _stderr_sink=sink)
+    result = cc_invoke.cc_invoke("memo.send", {}, ".", _engine_root=".", _stderr_sink=sink)
 
     assert result["exit_code"] == 1
     message = cc_invoke.mutation_refusal_message("memo.send", result, op_stderr="\n".join(sink))
@@ -41,7 +41,7 @@ def test_in_engine_error_dict_reaches_the_bare_ladder_too(monkeypatch):
     monkeypatch.setattr(cc_invoke, "_try_in_engine_dispatch", _refusing_op)
     sink: list = []
 
-    cc_invoke.cc_invoke_bare("memo.send", {}, ".", _claude_klabauter_root=".", _stderr_sink=sink)
+    cc_invoke.cc_invoke_bare("memo.send", {}, ".", _engine_root=".", _stderr_sink=sink)
 
     assert _REASON in "\n".join(sink)
 
@@ -50,7 +50,7 @@ def test_in_engine_raising_op_keeps_its_stderr_and_raises(monkeypatch, capsys):
     monkeypatch.setattr(cc_invoke, "_try_in_engine_dispatch", _raising_op)
 
     with pytest.raises(RuntimeError, match="in-engine dispatch raised"):
-        cc_invoke.cc_invoke("memo.send", {}, ".", _claude_klabauter_root=".")
+        cc_invoke.cc_invoke("memo.send", {}, ".", _engine_root=".")
 
     assert _REASON in capsys.readouterr().err
 

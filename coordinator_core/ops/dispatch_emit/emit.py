@@ -350,6 +350,8 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     UNDECLARED,
     load_frontmatter_doc,
     read_spine,
+    with_leg_slot,
+    SELF_ADMIT_KILL_CAP_GIB,
 )
 from coordinator_core.ops.dispatch_emit import sibling_split as _sibling_split
 from coordinator_core.ops.dispatch_emit.wave_map import (
@@ -1765,6 +1767,8 @@ class PlanContext:
     row_build_gates: tuple = ()
     #: Ids of spine rows marked ``needs_slot: true``; their briefs are author-only.
     slot_row_ids: frozenset = frozenset()
+    #: ``(row id, declared-leg text)`` pairs for slot rows declaring a ``leg`` (``_leg_declaration``).
+    slot_legs: tuple = ()
     #: Set when ``exit_criterion`` names a typecheck: rows run none for it, the terminal
     #: test phase does.
     criterion_typecheck: Optional[CriterionTypecheck] = None
@@ -2006,11 +2010,18 @@ _HEAVY_PROBE_DECLARED_CLAUSE = (
     "run an uncapped `python -` against a store path."
 )
 
+#: The fleet's self-admit tier for a leg's hard memory ceiling; a larger cap needs a Group EM GO.
+_SELF_ADMIT_TIER_CLAUSE = (
+    f"Self-admit tier: a leg's kill cap is at most {SELF_ADMIT_KILL_CAP_GIB} GiB (spawn gate kill+5). A leg with a "
+    "larger cap is declared on the row for a Group EM GO; never launch it."
+)
+
 #: The per-row head ``_row_prompt`` opens with and ``_row_agent_call_expr``
 #: hoists into one ``_shared`` const, so neither clause is repeated per row.
 _ROW_PROMPT_HEAD = (
     f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_LIVE_PM_DIRECTION_CLAUSE}\n\n"
     f"{_WRITE_TOOL_ONLY_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}\n\n{_HEAVY_PROBE_DECLARED_CLAUSE}"
+    f"\n\n{_SELF_ADMIT_TIER_CLAUSE}"
 )
 
 
@@ -2024,6 +2035,7 @@ _VERIFICATION_ROW_CLAUSE = (
 _VERIFICATION_ROW_PROMPT_HEAD = (
     f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_LIVE_PM_DIRECTION_CLAUSE}\n\n"
     f"{_VERIFICATION_ROW_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}\n\n{_HEAVY_PROBE_DECLARED_CLAUSE}"
+    f"\n\n{_SELF_ADMIT_TIER_CLAUSE}"
 )
 _VERIFICATION_CHANGE_KINDS = frozenset({"verify", "verification"})
 
@@ -2392,13 +2404,31 @@ def _fenced_test_clause(work_class_id: str) -> str:
     )
 
 
-def _slot_row_clause(commands: list) -> str:
+def _leg_declaration(leg: object) -> str:
+    """The declared peak, cap and wall time of a row's ``leg`` mapping, for the EM's GO request."""
+    if not isinstance(leg, dict):
+        return ""
+
+    def _fmt(key: str, unit: str) -> str:
+        value = leg.get(key)
+        return f"{value:g} {unit}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "undeclared"
+
+    return (
+        f"declared peak {_fmt('expected_peak_gib', 'GiB')}, kill cap {_fmt('kill_cap_gib', 'GiB')}, "
+        f"wall {_fmt('wall_minutes', 'min')}"
+    )
+
+
+def _slot_row_clause(commands: list, leg: str = "") -> str:
     """A `needs_slot` row's process (build, compiler, editor) is scheduled by
     the Group EM against box load and never launched by the executor unless the
     Group EM clears it (then START/END go via `groupem.admission_post`, the
     executor having no SendMessage), so the row's build gate becomes the EM's
-    slot leg."""
+    slot leg. ``leg`` (``_leg_declaration``) names the declared leg the EM
+    routes to the Group EM."""
     owed = "".join(f"\n- `{c}`" for c in commands)
+    if leg:
+        owed = f"\nDeclared leg: {leg}. Report it under `Slot leg:`." + owed
     return (
         "Slot row (needs_slot): author only. Launch no build, compiler, UBT, editor, commandlet or "
         "other long-running or memory-heavy process; the EM runs that leg once the Group "
@@ -3339,7 +3369,7 @@ def _row_prompt(
         body += f"\n\n{memo_send_step_block(row.id, memo_send)}"
     if plan_context is not None:
         if is_slot_row:
-            body += f"\n\n{_slot_row_clause(gate_commands)}"
+            body += f"\n\n{_slot_row_clause(gate_commands, dict(plan_context.slot_legs).get(row.id, ''))}"
         else:
             fence = _run_only_fence(row, plan_context.repo_root, memo)
             if gate_commands:
@@ -4523,7 +4553,7 @@ def _withheld_judge_rows(plan_text: Optional[str], excluded_rows: Optional[list]
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import gated_rows, slot_withheld_rows
     from coordinator_core.ops.plan_tasks_render import load_rows
 
-    raw_by_id = {r.get("id"): r for r in load_rows(plan_text).rows if isinstance(r, dict)}
+    raw_by_id = {r.get("id"): with_leg_slot(r) for r in load_rows(plan_text).rows if isinstance(r, dict)}
     gated = [
         {"id": g.id, "title": g.title, "register_rows": list(g.register_rows)}
         for g in gated_rows(excluded_rows or [], raw_by_id)
@@ -4906,13 +4936,15 @@ def _excluded_rows_narration(excluded: list) -> str:
     return "\n".join(lines)
 
 
-def _slot_rows_narration(slot_rows: Sequence[str]) -> str:
+def _slot_rows_narration(slot_rows: Sequence[str], slot_legs: Optional[Mapping[str, str]] = None) -> str:
     """Names the rows marked `needs_slot` (a long-running or memory-heavy
     process) so the Group EM can schedule the run against box load before
-    firing it."""
+    firing it; a row's declared leg (peak, cap, wall) follows its id."""
+    legs = slot_legs or {}
     return (
         "  // ROWS HOLDING A SCARCE SLOT (needs_slot) -- clear box load with the "
-        "Group EM before firing: " + ", ".join(slot_rows)
+        "Group EM before firing: "
+        + ", ".join(f"{rid} ({legs[rid]})" if rid in legs else rid for rid in slot_rows)
     )
 
 
@@ -5982,7 +6014,7 @@ def seam_inputs_for(
                 text = (Path(repo_root) / plan).read_text(encoding="utf-8") if repo_root is not None else None
             except OSError:
                 text = None
-            raws = [r for r in _load(text).rows if isinstance(r, dict)] if text else []
+            raws = [with_leg_slot(r) for r in _load(text).rows if isinstance(r, dict)] if text else []
         targets, declared = _plan_seam_facts(text, raws)
         key = plan if plan is not None else plan_path
         if targets:
@@ -6907,6 +6939,7 @@ def compose_script(
     box_terms: Sequence[str] = (),
     held_rows: Sequence[tuple[str, str]] = (),
     slot_rows: Sequence[str] = (),
+    slot_legs: Optional[Mapping[str, str]] = None,
     seam: Optional[SeamInputs] = None,
     plan_text: Optional[str] = None,
     carried_gate_owed: Optional[dict] = None,
@@ -7988,7 +8021,7 @@ def compose_script(
     if repo_anchor:
         body_blocks.insert(0, _REPO_ROOT_DECLARATION)
     if slot_rows:
-        body_blocks.insert(0, _slot_rows_narration(slot_rows))
+        body_blocks.insert(0, _slot_rows_narration(slot_rows, slot_legs))
     if excluded_rows:
         body_blocks.insert(0, _excluded_rows_narration(excluded_rows))
     body = "\n\n".join(body_blocks)
@@ -9057,7 +9090,7 @@ def emit_script(
     from coordinator_core.ops.plan_tasks_render import load_rows as _load_raw_rows
 
     raw_by_id = {
-        raw.get("id"): raw
+        raw.get("id"): with_leg_slot(raw)
         for raw in _load_raw_rows(plan_text or "").rows
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
@@ -9081,6 +9114,9 @@ def emit_script(
         if _drift:
             raise RegisterPinDriftError(_rr.pin_drift_reason(_drift))
     slot_rows = [row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True]
+    slot_legs = {
+        rid: text for rid in slot_rows if (text := _leg_declaration(raw_by_id.get(rid, {}).get("leg")))
+    }
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
     check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved, session_id=session_id)
@@ -9107,6 +9143,7 @@ def emit_script(
             plan_path=spec_path,
         ),
         slot_row_ids=frozenset(slot_rows),
+        slot_legs=tuple(slot_legs.items()),
         leg_writes=tuple(leg_writes) or _recorded_leg_writes(script_path, repo_root),
     )
 
@@ -9189,6 +9226,7 @@ def emit_script(
         carried_gate_owed=carried_owed_gates,
         held_rows=held_rows,
         slot_rows=slot_rows,
+        slot_legs=slot_legs,
         seam=None if review_only else seam_inputs_for(
             rows_by_plan, spec_path.as_posix(), plan_text, raw_by_id, repo_root, certified_plans
         ),

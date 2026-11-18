@@ -118,6 +118,28 @@ def test_shim_load_failure_is_open_import_error(tmp_path, monkeypatch, settings_
 
 
 @pytest.mark.parametrize("host", ["agy", "codex"])
+def test_import_error_record_names_the_missing_module(tmp_path, monkeypatch, settings_home, host):
+    def boom(root):
+        raise ModuleNotFoundError("No module named 'gone_mod'", name="gone_mod")
+
+    monkeypatch.setattr(hg, "_load_shim", boom)
+    hg.guard(host, CODEX_PAYLOAD, str(tmp_path))
+    rec = degrade_records(settings_home)[0]
+    assert (rec["cause"], rec["exc_type"], rec["exc_module"]) == ("import_error", "ModuleNotFoundError", "gone_mod")
+
+
+def test_run_error_record_names_the_exception_type(tmp_path, monkeypatch, settings_home):
+    def boom(h, t):
+        raise RuntimeError("boom")
+
+    stub_shim(monkeypatch, run=boom)
+    hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))
+    rec = degrade_records(settings_home)[0]
+    assert (rec["cause"], rec["exc_type"]) == ("run_error", "RuntimeError")
+    assert "exc_module" not in rec
+
+
+@pytest.mark.parametrize("host", ["agy", "codex"])
 def test_shim_run_raising_is_open_degraded(tmp_path, monkeypatch, host):
     def boom(h, t):
         raise RuntimeError("boom")

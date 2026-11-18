@@ -1003,6 +1003,9 @@ _REVERIFY_SCHEMA = {
     },
     "required": ["edited", "failing", FAILING_DETAIL_FIELD, "reverted", "status_before"],
 }
+#: Owned-first leg result: `tests_run` counts what ran, `not_run` names the capped remainder.
+_REVERIFY_SCHEMA["properties"]["tests_run"] = {"type": "integer"}
+_REVERIFY_SCHEMA["properties"]["not_run"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["passed_alone"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["passed_at_base"] = {"type": "array", "items": {"type": "string"}}
 #: The classed-red sets `from_reverify` and the ask projection exclude from blockers; a property the schema omits is dropped from the sidecar.
@@ -1045,7 +1048,19 @@ _REVERIFY_DERIVED_CLAUSE = (
 _REVERIFY_NOTHING_RAN_CLAUSE = (
     "Never report pass when no test ran: when no test was selected or run, status_before is "
     '"not_run"; when a selected test could not run (runner missing, errored before any result), it is '
-    f'"{REVERIFY_INDETERMINATE}". pass requires at least one test that ran and passed.'
+    f'"{REVERIFY_INDETERMINATE}". pass requires at least one test that ran and passed. Owned tests that ran and '
+    "passed with a not-run remainder are pass with `not_run` listed, never indeterminate; indeterminate is "
+    "only for a leg where no test ran."
+)
+
+#: Owned-first ordering of the reverify test leg; `{bound}` is `reverify_scope.TRIPWIRE_BOUND`.
+_REVERIFY_OWNED_FIRST_CLAUSE = (
+    "Run in two calls, owned first: first ONE pytest call of the test files among them{extra} and the "
+    "`owned` list{owned_scope}; only after it ends, ONE pytest call of the `tripwires` files{tripwire_scope} "
+    "(never more than {bound}; every file past that cut is `not_run`). Name every file in "
+    "`tripwires_not_selected`, and every file a call did not reach in budget, in `not_run` (a list of paths). "
+    "Return `tests_run`, the number of tests the calls ran (from their summary lines), and `not_run`; both "
+    "are required when any test file was named. "
 )
 
 #: Run-time review sidecar paths of the wave, appended to the re-verify prompt for its `sidecars`.
@@ -1215,6 +1230,14 @@ def _reverify_phase(
     export_path = _base_export_file(run_key, run_id, prep_slice_id)
     base_path_arg = "" if base_ref == "run_base_sha" else f',"base_export_path":"{export_path}"'
     test_leg = _test_leg_clause(base_ref, export_path, _test_leg_file(run_key, run_id, prep_slice_id))
+    from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND
+
+    owned_first = _REVERIFY_OWNED_FIRST_CLAUSE.format(
+        bound=TRIPWIRE_BOUND,
+        extra=", the verify-scope targets named below" if verify_scope_targets else "",
+        owned_scope=" (the union of the `owned` lists)" if group_prefixes else "",
+        tripwire_scope=" (the union in list order)" if group_prefixes else " in list order",
+    )
     export_failing_path = _export_failing_file(run_key, run_id, prep_slice_id) if run_id else ""
     base_path_arg += f',"export_failing_path":"{export_failing_path}"' if export_failing_path else ""
     export_rerun = _export_rerun_clause(run_id, repo_root, export_failing_path)
@@ -1246,20 +1269,21 @@ def _reverify_phase(
             "command word exactly as written (a guard denies the prefix moved into a shell "
             'variable). When a non-empty `session_id:` value is given in this brief, add it as '
             '`"session_id"` to each. The union of their `edited` and `created` lists is the files '
-            "review changed, the union of their `tripwires` lists names the test files whose source "
-            "names one of those files." + _REVERIFY_DERIVED_CLAUSE + " Return the union as `edited`. If every list is empty, "
+            "review changed, the union of their `owned` lists names the test files that own those files, the "
+            "union of their `tripwires` lists the other test files that import or name one, and the union of "
+            "their `tripwires_not_selected` lists the ones the engine cut." + _REVERIFY_DERIVED_CLAUSE + " Return the union as `edited`. If every list is empty, "
             "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + 'reverted [], status_before "not_run". '
             f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
-            "2. Run, and only run, the tests covering those files: the test files among them, every "
-            "file in the `tripwires` union, the test files that import an edited module"
+            "2. Run, and only run, the tests covering those files"
             + (
-                ", and the verify-scope test targets this map names for an edited path "
+                ", plus the verify-scope test targets this map names for an edited path "
                 f"(path to targets): {json.dumps({k: list(v) for k, v in sorted(verify_scope_targets.items())})}"
                 if verify_scope_targets
                 else ""
             )
             + ". Name each test file or node id; never a directory, a tier (the fast tier "
-            "included) or the full suite."
+            "included) or the full suite. "
+            + owned_first
             + _REVERIFY_NODE_TESTS_CLAUSE
             + test_leg
             + "Report every failing node id as `failing` and set "
@@ -1313,13 +1337,14 @@ def _reverify_phase(
         f"'{{{base_args}}}'{repo_pin}`, its command word exactly as written (a guard denies the "
         "prefix moved into a shell variable). When a non-empty `session_id:` value is given in "
         'this brief, add it as `"session_id"`. Its `edited` and `created` lists are the files '
-        "review changed. Its `tripwires` list names the test files whose source names one of "
-        "those files." + _REVERIFY_DERIVED_CLAUSE + " If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
+        "review changed. Its `owned` list names the test files that own those files, its `tripwires` list "
+        "the other test files that import or name one, and its `tripwires_not_selected` list the ones the "
+        "engine cut." + _REVERIFY_DERIVED_CLAUSE + " If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
         'status_before "not_run". '
         f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
-        "2. Run, and only run, the tests covering those files: the test files among them, every "
-        "file in `tripwires`, plus the test files that import an edited module. Name each test file or node id; never a "
-        "directory, a tier (the fast tier included) or the full suite."
+        "2. Run, and only run, the tests covering those files. Name each test file or node id; never a "
+        "directory, a tier (the fast tier included) or the full suite. "
+        + owned_first
         + _REVERIFY_NODE_TESTS_CLAUSE
         + test_leg
         + "Report every failing "

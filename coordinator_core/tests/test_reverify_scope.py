@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.reverify_scope import _SUITE_BOUND, select_tests, split_pre_existing
+from coordinator_core.ops.reverify_scope import _SUITE_BOUND, TRIPWIRE_BOUND, select_tests, split_pre_existing
 
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
@@ -213,20 +213,46 @@ def test_tripwires_hold_the_importing_test_and_never_a_touched_or_mapped_one(rep
     _write(repo, "pkg/tests/test_other.py", "def test_o():\n    assert True\n")
     _commit(repo)
     out = select_tests(repo, base)
-    assert out["tripwires"] == ["pkg/sub/tests/test_wide_beta.py"]
+    assert out["tripwires"] == []
     assert "pkg/tests/test_uses_beta.py" in out["tests"]
-    assert "pkg/tests/test_uses_beta.py" not in out["tripwires"]
-    assert "pkg/tests/test_alpha.py" not in out["tripwires"]
-    assert "pkg/tests/test_other.py" not in out["tripwires"]
-    assert set(out["tripwires"]) <= set(out["tests"])
+    assert "pkg/sub/tests/test_wide_beta.py" in out["tests"]
+    assert not set(out["tripwires"]) & set(out["tests"])
+    assert out["tripwires_not_selected"] == []
 
 
-def test_tripwires_are_not_bounded_by_the_suite_bound(repo: Path) -> None:
+def test_tripwires_are_capped_by_the_tripwire_bound_and_exclude_every_owned_file(repo: Path) -> None:
     base = _wide_graph(repo, importers=5, owners=_SUITE_BOUND + 20)
     out = select_tests(repo, base)
     assert len(out["tests"]) == _SUITE_BOUND
-    assert len(out["tripwires"]) == _SUITE_BOUND + 20
-    assert "pkg/tests/test_hub.py" not in out["tripwires"]
+    assert len(out["tripwires"]) == TRIPWIRE_BOUND
+    assert len(out["tripwires_not_selected"]) == 21 - TRIPWIRE_BOUND
+    assert not set(out["tripwires"]) & set(out["tests"])
+    assert not set(out["tripwires_not_selected"]) & set(out["tests"])
+    assert not set(out["tripwires"]) & set(out["tripwires_not_selected"])
+    assert "reverify tripwires capped" in out["notice"] and "narrowed" in out["notice"]
+
+
+def test_the_selection_never_exceeds_touched_plus_owner_plus_tripwire_bounds(repo: Path) -> None:
+    base = _wide_graph(repo, importers=0, owners=60)
+    out = select_tests(repo, base)
+    assert len(out["tests"]) + len(out["tripwires"]) == _SUITE_BOUND + TRIPWIRE_BOUND
+    assert len(out["tripwires_not_selected"]) == 61 - _SUITE_BOUND - TRIPWIRE_BOUND
+
+
+def test_same_package_tripwires_rank_before_other_packages(repo: Path) -> None:
+    for i in range(TRIPWIRE_BOUND):
+        _write(repo, f"pkg/sub/tests/test_a_{i:03d}.py", "from pkg import beta\n\ndef test_x():\n    assert beta.Y\n")
+    for i in range(_SUITE_BOUND + 2):
+        _write(repo, f"pkg/tests/test_b_{i:03d}.py", "from pkg import beta\n\ndef test_y():\n    assert beta.Y\n")
+    _commit(repo)
+    base = _git(repo, "rev-parse", "HEAD")
+    _write(repo, "pkg/beta.py", "Y = 3\n")
+    _commit(repo)
+    out = select_tests(repo, base)
+    assert all(t.startswith("pkg/tests/") for t in out["tests"])
+    assert all(t.startswith("pkg/tests/") for t in out["tripwires"][:3])
+    assert len(out["tripwires"]) == TRIPWIRE_BOUND
+    assert any(t.startswith("pkg/sub/") for t in out["tripwires_not_selected"])
 
 
 def test_source_with_no_covering_test_is_not_fully_mapped(repo: Path) -> None:

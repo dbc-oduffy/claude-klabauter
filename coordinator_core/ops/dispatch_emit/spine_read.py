@@ -147,7 +147,7 @@ import posixpath
 import re
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, NamedTuple, Optional
+from typing import Any, Mapping, NamedTuple, Optional
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -192,13 +192,37 @@ NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "w
 DISPOSITION_ALIASES = {"done": "coded"}
 
 
-def with_canonical_disposition(row):
-    """`row` with an aliased `disposition` rewritten to its canonical value;
+#: Largest leg kill cap, in GiB, an executor row may launch without a Group EM GO.
+SELF_ADMIT_KILL_CAP_GIB = 20
+
+
+def leg_exceeds_self_admit_tier(row) -> bool:
+    """True when `row` declares a ``leg.kill_cap_gib`` over ``SELF_ADMIT_KILL_CAP_GIB``.
+    A declared cap that is not a positive number cannot be shown safe, so it counts as over."""
+    leg = row.get("leg") if isinstance(row, dict) else None
+    if not isinstance(leg, dict) or "kill_cap_gib" not in leg:
+        return False
+    cap = leg["kill_cap_gib"]
+    if isinstance(cap, bool) or not isinstance(cap, (int, float)) or cap <= 0:
+        return True
+    return cap > SELF_ADMIT_KILL_CAP_GIB
+
+
+def with_leg_slot(row: Any) -> Any:
+    """`row` read as ``needs_slot: true`` when its declared leg is over the self-admit tier;
     any other row (or a non-mapping) is returned as is."""
+    if isinstance(row, dict) and row.get("needs_slot") is not True and leg_exceeds_self_admit_tier(row):
+        return {**row, "needs_slot": True}
+    return row
+
+
+def with_canonical_disposition(row: Any) -> Any:
+    """`row` with an aliased `disposition` rewritten to its canonical value and an over-tier
+    ``leg`` read as ``needs_slot``; any other row (or a non-mapping) is returned as is."""
     if not isinstance(row, dict):
         return row
     alias = DISPOSITION_ALIASES.get(str(row.get("disposition") or "").strip())
-    return {**row, "disposition": alias} if alias else row
+    return with_leg_slot({**row, "disposition": alias} if alias else row)
 
 
 # The schema's COMPLETE enum -- the closed values plus `open`. Named
@@ -226,7 +250,7 @@ KNOWN_ROW_KEYS = frozenset({
     "memo_kind", "delivered_via", "case_against", "kind", "pm_approved", "pm_approved_by",
     "pm_disposition", "receipt", "blocked_on", "host", "appends", "falsifier_review_of",
     "satisfies", "verification_runs", "done_when", "disjoint_parallel", "premise_close",
-    "em_run", "family", "stage_role",
+    "em_run", "family", "stage_role", "leg",
 })
 
 def _premise_close_for(raw: dict, rows_by_id: dict, verdicts: dict, opted_in: bool) -> Optional[dict]:
@@ -1107,7 +1131,7 @@ def _parse_rows(source: str) -> RowsResult:
         return RowsResult(status=LocateStatus.MALFORMED, rows=[])
     if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
         return RowsResult(status=LocateStatus.MALFORMED, rows=[])
-    return RowsResult(status=LocateStatus.LOCATED, rows=rows)
+    return RowsResult(status=LocateStatus.LOCATED, rows=[with_leg_slot(row) for row in rows])
 
 
 def _schema_error_memo(source: str):

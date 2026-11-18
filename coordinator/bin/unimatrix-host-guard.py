@@ -14,7 +14,8 @@ never satisfy an enforcement check. A cold or unreachable warm engine is answere
 recorded in warm/degrade.jsonl, not in this module's log.
 
 Every degrade appends one record {ts, host, cause, budget_secs, cpu_secs} to degrade_log_path(); cpu_secs is the
-process CPU the guard spent. A write failure never alters the answer. The log is append-only and unrotated; the
+process CPU the guard spent. An import_error or run_error record also carries exc_type and, for a missing module,
+exc_module. A write failure never alters the answer. The log is append-only and unrotated; the
 A7 reader owns truncation.
 
 CLI: unimatrix-host-guard.py --host codex|agy|grok [--engine-root PATH]
@@ -138,13 +139,24 @@ def degrade_log_path():
     return home / "host-hooks" / DEGRADE_LOG_NAME
 
 
-def _record_degrade(host, cause, budget_secs, cpu_secs, verdict=None, unchecked=None):
+def _exc_detail(exc):
+    """{exc_type, exc_module?} naming a caught exception; exc_module is ModuleNotFoundError.name when present."""
+    detail = {"exc_type": type(exc).__name__}
+    name = exc.name if isinstance(exc, ImportError) else None
+    if isinstance(name, str) and name:
+        detail["exc_module"] = name
+    return detail
+
+
+def _record_degrade(host, cause, budget_secs, cpu_secs, verdict=None, unchecked=None, detail=None):
     """Append one JSON line naming why the guard degraded; never raises."""
     try:
         path = degrade_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         rec = {"ts": round(time.time(), 3), "host": host, "cause": cause, "budget_secs": budget_secs,
                "cpu_secs": cpu_secs}
+        if detail:
+            rec.update(detail)
         if verdict:
             rec["verdict"] = verdict
         if unchecked:
@@ -180,18 +192,18 @@ def _classify_irreversible(stdin_text, engine_root):
     return box.get("deny"), box.get("unchecked")
 
 
-def _degrade(host, cause, budget_secs, cpu_secs=None, stdin_text=None, engine_root=None):
+def _degrade(host, cause, budget_secs, cpu_secs=None, stdin_text=None, engine_root=None, detail=None):
     """Record the degrade and answer open. agy classifies the command against the irreversible-class denies:
     a match is a deny naming the cause, anything else an allow whose reason says the guard was down; never a bare ask."""
     if host != "agy":
-        _record_degrade(host, cause, budget_secs, cpu_secs)
+        _record_degrade(host, cause, budget_secs, cpu_secs, detail=detail)
         return _neutral(host), "degraded"
     deny, unchecked = _classify_irreversible(stdin_text, engine_root)
     if deny:
-        _record_degrade(host, cause, budget_secs, cpu_secs, verdict="deny")
+        _record_degrade(host, cause, budget_secs, cpu_secs, verdict="deny", detail=detail)
         return {"decision": "deny",
                 "reason": "Klabauter guard unavailable (%s); irreversible-class command denied: %s" % (cause, deny)}, "degraded"
-    _record_degrade(host, cause, budget_secs, cpu_secs, verdict="allow", unchecked=unchecked)
+    _record_degrade(host, cause, budget_secs, cpu_secs, verdict="allow", unchecked=unchecked, detail=detail)
     note = ("irreversible-class check also unavailable (%s)" % unchecked) if unchecked else \
         "no irreversible-class match; every other guard is off"
     return {"decision": "allow",
@@ -201,8 +213,9 @@ def _degrade(host, cause, budget_secs, cpu_secs=None, stdin_text=None, engine_ro
 def _run_shim(host, stdin_text, engine_root, box):
     try:
         shim = _load_shim(engine_root)
-    except Exception:
+    except Exception as exc:
         box["cause"] = "import_error"
+        box["detail"] = _exc_detail(exc)
         return
     try:
         take = getattr(shim, "take_pending_nag", None)
@@ -212,8 +225,9 @@ def _run_shim(host, stdin_text, engine_root, box):
         if take:
             box["nag"] = take()
             box["shim"] = shim
-    except Exception:
+    except Exception as exc:
         box["cause"] = "run_error"
+        box["detail"] = _exc_detail(exc)
 
 
 def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pending=None):
@@ -226,8 +240,8 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pendin
     if host not in NEUTRAL:
         return {}, "degraded"
 
-    def degrade(cause, cpu_secs=None):
-        return _degrade(host, cause, budget_secs, cpu_secs, stdin_text, engine_root)
+    def degrade(cause, cpu_secs=None, detail=None):
+        return _degrade(host, cause, budget_secs, cpu_secs, stdin_text, engine_root, detail)
 
     if not engine_root or not Path(engine_root).is_dir():
         return degrade("no_engine_root")
@@ -243,7 +257,7 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pendin
         if worker.is_alive():
             return degrade("timeout", cpu_secs)
         if "cause" in box:
-            return degrade(box["cause"], cpu_secs)
+            return degrade(box["cause"], cpu_secs, box.get("detail"))
         answer = box.get("answer")
         if not _valid_answer(host, answer):
             return degrade("invalid_answer", cpu_secs)
@@ -261,8 +275,8 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pendin
                 return {"decision": "allow", "reason": reason}, NEUTRAL_UNKNOWN
             return _neutral(host), NEUTRAL_UNKNOWN
         return answer, "engine"
-    except Exception:
-        return degrade("run_error")
+    except Exception as exc:
+        return degrade("run_error", None, _exc_detail(exc))
 
 
 def _argv_value(argv, flag):

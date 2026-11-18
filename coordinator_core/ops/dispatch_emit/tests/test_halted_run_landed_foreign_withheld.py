@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import halted_run_landed as hrl
-from coordinator_core.ops.dispatch_emit import kept_work, land_run_halt
+from coordinator_core.ops.dispatch_emit import halted_record_eviction, kept_work
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_halt_withheld_only_run_changed_paths import _baseline
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_halt_record import (  # noqa: F401
@@ -58,7 +58,7 @@ def test_halt_drops_a_path_only_a_peer_edited_after_the_run_checkpoint(repo) -> 
 
     out = _call(repo, HALT)
 
-    assert out["withheld"] == {"own2.py": land_run_halt.HALT_RECORD_ONLY}
+    assert out["withheld"] == {"own2.py": halted_record_eviction.EVICTED_PARKED}
 
 
 def test_halt_keeps_a_path_its_own_kept_record_fingerprints(repo) -> None:
@@ -82,6 +82,7 @@ def test_halt_withholds_every_path_when_no_checkpoint_landed_it(repo) -> None:
 def test_default_call_records_the_halted_run_landed_with_its_own_sha(repo) -> None:
     _halt_shape(repo)
     assert _call(repo, HALT)["committed"] is True
+    _write(repo, "own2.py", "own2 re-materialized from the record\n")
     landed = _commit(repo, "hand-land own2", "own2.py")
 
     out = hrl._handler({"run_id": RUN, "sha": landed}, repo)

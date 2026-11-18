@@ -393,6 +393,20 @@ class TestEndToEndDelivery:
         assert _git(receiver_repo, "symbolic-ref", "HEAD").stdout.strip() == b"refs/heads/main"
         assert _git(receiver_repo, "branch", "-a", "--list", "*work/*").stdout.strip() == b""
 
+    def test_fresh_send_names_pinned_in_the_sender_receipt_and_reply(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver_repo})))
+        _write_draft(sender_repo, "pinned-topic")
+
+        result = _memo_send({"dry_run": False, "topic": "pinned-topic"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        assert result["acted"][0]["delivery_outcome"] == "pinned"
+        subject = _git(sender_repo, "log", "-1", "--format=%s").stdout.decode("utf-8").strip()
+        assert subject.startswith("memo.send: pinned-topic pinned for ")
+        assert "delivered to" not in subject
+
     def test_happy_path_three_writes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)

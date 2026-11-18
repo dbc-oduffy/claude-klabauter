@@ -127,5 +127,40 @@ def test_explicit_repo_root_overrides_cwd(world) -> None:
     assert f"route to {SPECIALIST}" in _text(out)
 
 
+def _brief(*writes: str) -> str:
+    bullets = "\n".join(f"- `{w}`" for w in writes)
+    return f"fix the metahuman helmet trail\n\n## Files you may write (declared `writes:` scope)\n\n{bullets}\n\nDone.\n"
+
+
+@pytest.mark.parametrize(
+    "writes",
+    [
+        ("docs/research/metahuman/a/trail.yaml", "tests/test_trail.py"),
+        ("docs\\research\\metahuman\\trail.md", "tests\\test_trail.py"),
+    ],
+)
+def test_docs_tests_yaml_only_writes_get_no_advisory(world, writes) -> None:
+    assert guard.evaluate(_payload(world["repo"], prompt=_brief(*writes))) == {}
+
+
+@pytest.mark.parametrize(
+    "writes",
+    [
+        ("Content/MetaHumans/Hero.uasset",),
+        ("Content/Tests/Hero.uasset", "tests/test_trail.py"),
+        ("docs/trail.yaml", "Source/Game/Hero.cpp"),
+    ],
+)
+def test_ue_content_writes_still_get_advisory(world, writes) -> None:
+    out = guard.evaluate(_payload(world["repo"], prompt=_brief(*writes)))
+    assert f"route to {SPECIALIST}" in _text(out)
+
+
+def test_declared_writes_reads_only_the_heading_section() -> None:
+    prompt = "- `Elsewhere/a.uasset`\n## Files you may write\n- `a.md`\n- not a path\n## Next\n- `b.uasset`\n"
+    assert guard.declared_writes(prompt) == ["a.md"]
+    assert guard.declared_writes("no section here") == []
+
+
 def test_registered_op_dispatches(world) -> None:
     assert f"route to {SPECIALIST}" in _text(guard._handler(_payload(world["repo"])))

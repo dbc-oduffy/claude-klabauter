@@ -28,6 +28,14 @@ _DOE_SUBTREES = (
     ("docs/decisions", "decisions"),
 )
 
+# Exact files, not subtrees: the guard's protected set names these, so a carve-out
+# that skips them admits the G-EM everywhere except where the guard actually denies.
+_DOE_FILES = (
+    ("CLAUDE.md", "coordinator-content-repo-md"),
+    ("coordinator.local.md", "doe-local-config"),
+    ("coordinator/snippets/em-operating-doctrine.md", "em-operating-doctrine"),
+)
+
 _content_root_memo: "list[Optional[str]]" = []
 
 
@@ -57,6 +65,9 @@ def _classify(path: str) -> "tuple[Optional[str], Optional[str]]":
     if root:
         for rel, label in _DOE_SUBTREES:
             if _under(folded, os.path.join(root, *rel.split("/")), resolve=False):
+                return label, root
+        for rel, label in _DOE_FILES:
+            if folded == casefold_path(os.path.join(root, *rel.split("/"))):
                 return label, root
     if _under(folded, os.path.join(str(claude_config_dir()), "rules")):
         return "claude-rules", None

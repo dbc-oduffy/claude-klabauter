@@ -2526,7 +2526,8 @@ def compose_grind_script(
     grouped = _group_into_batches(manifest, knobs, profile, repo_root=repo_root, clusters=clusters)
     window = int(knobs.get("window", 6))
     batch_size_knob = knobs.get("batch_size", 4)
-    reserve_batch_size = max(batch_size_knob.values()) if isinstance(batch_size_knob, Mapping) else batch_size_knob
+    knob_ceiling = max(batch_size_knob.values()) if isinstance(batch_size_knob, Mapping) else batch_size_knob
+    reserve_batch_size = max(1, min(int(knob_ceiling), max((len(entries) for _, entries in grouped), default=1)))
     max_agent_calls = knobs.get("max_agent_calls")
     budget_tokens = knobs.get("budget_tokens")
     triage_depth_knob = knobs.get("triage_depth", "standard")
