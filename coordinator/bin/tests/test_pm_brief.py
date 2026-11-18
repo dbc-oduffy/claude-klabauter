@@ -361,6 +361,43 @@ def test_from_sizing_cli(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     assert capsys.readouterr().out == ""
 
 
+def test_render_cli_resolves_relative_plan_against_callers_repo(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative plan path typed in a consumer repo resolves there, never against the
+    engine checkout the CLI file lives in (DoE: FileNotFoundError under claude-klabauter)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "pm_brief_cli_rel", Path(__file__).resolve().parents[1] / "pm-brief.py"
+    )
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+
+    (tmp_path / ".git").mkdir()
+    _sizing(tmp_path, _VERBATIMS)
+    plan = _plan(tmp_path)
+    rel = plan.relative_to(tmp_path).as_posix()
+    nested = tmp_path / "docs"
+    nested.mkdir(exist_ok=True)
+
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["render", "--for", "reviewer", rel]) == 0
+    assert "newest ask" in capsys.readouterr().out
+
+    # From a subdirectory: cwd-relative misses, the enclosing checkout answers.
+    monkeypatch.chdir(nested)
+    assert cli.main(["render", "--for", "reviewer", rel]) == 0
+    assert "newest ask" in capsys.readouterr().out
+
+    # Outside any checkout, --repo-root names the repo explicitly.
+    elsewhere = tmp_path.parent / f"{tmp_path.name}-elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert cli.main(["--repo-root", str(tmp_path), "render", "--for", "reviewer", rel]) == 0
+    assert "newest ask" in capsys.readouterr().out
+
+
 # --- note_carries_pm_words: wordless typed-command notes -------------------------------------
 
 _TYPED = "PM authorized by typed command: /execute-plan (no accompanying words)"

@@ -112,7 +112,7 @@ def _no_sizing_deny(file_path: str) -> Dict[str, Any]:
 
 
 def _nag(session_id: str) -> str:
-    """The session's counted nag: full on the first, one terse line after. No session id: full."""
+    """The session's nag: full on the first, "" after. No session id: full."""
     sizing = "<this session's sizing path>"
     return nag_text(session_id, sizing) if session_id else fire_step(sizing)
 
@@ -124,7 +124,7 @@ def _dispatch_deny(tshirt_display: str, session_id: str = "") -> Dict[str, Any]:
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 f"strict_dispatch: sized {tshirt_display} — EM does not type "
-                "code at ≥S.\n" + _nag(session_id)
+                "code at ≥S." + ("\n" + nag if (nag := _nag(session_id)) else "")
             ),
         }
     }

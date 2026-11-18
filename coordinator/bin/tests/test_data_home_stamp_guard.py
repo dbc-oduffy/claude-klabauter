@@ -61,7 +61,6 @@ def _stub_registry(monkeypatch, registry):
 
 def _clear_env(monkeypatch):
     monkeypatch.delenv(cli_shared.COORDINATOR_ENGINE_ROOT_ENV, raising=False)
-    monkeypatch.delenv(cli_shared.CLAUDE_KLABAUTER_ROOT_ENV, raising=False)
 
 
 def test_data_home_prefers_registry_over_stamped_engine_root(monkeypatch, tmp_path):
@@ -89,7 +88,7 @@ def test_data_home_falls_back_to_env_when_unstamped_and_unregistered(monkeypatch
     _clear_env(monkeypatch)
     dev_root = tmp_path / "dev-checkout"
     dev_root.mkdir()
-    monkeypatch.setenv(cli_shared.CLAUDE_KLABAUTER_ROOT_ENV, str(dev_root))
+    monkeypatch.setenv(cli_shared.COORDINATOR_ENGINE_ROOT_ENV, str(dev_root))
     _stub_registry(monkeypatch, {})
 
     assert cli_shared.claude_klabauter_data_home() == str(dev_root)

@@ -131,6 +131,7 @@ import re
 import shutil
 import subprocess
 import sys
+import types
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -3747,6 +3748,58 @@ def refresh_group_em_home(repo_root: Path, args: Args) -> None:
     print(GROUP_EM_ARMING_NOTE)
 
 
+def adopt_and_link_homes(repo_root: Path, args: Args) -> None:
+    """Adopt existing group-em / ~/.claude GitHub repos, then link both homes into the repos folder.
+
+    Calls DoE's `_home_adopt.adopt_homes` then `_home_links.ensure_home_links` in process (no
+    interpreter spawn). ADVISORY like its siblings: any failure prints WARN and returns.
+    """
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [homes] COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return
+    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    scripts = None if plugin_root is None else plugin_root / "hooks" / "scripts"
+    adopt_py = None if scripts is None else scripts / "_home_adopt.py"
+    links_py = None if scripts is None else scripts / "_home_links.py"
+    if adopt_py is None or not adopt_py.is_file() or not links_py.is_file():
+        print("SKIP [homes] no _home_adopt.py/_home_links.py under the plugin root")
+        return
+    scripts_dir = str(scripts)
+    added = scripts_dir not in sys.path
+    if added:
+        sys.path.insert(0, scripts_dir)  # both modules import siblings (_engine_root, _general_work)
+    try:
+        def _load(name: str, path: Path) -> "types.ModuleType":
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            return module
+
+        for report in _load("_setup_home_adopt", adopt_py).adopt_homes():
+            action = report.get("action", "")
+            line = f"{report.get('home', '')} {action}: {report.get('path', '')}"
+            if report.get("detail"):
+                line += f" ({report['detail']})"
+            print(f"OK   [homes] {line}")
+            if action in ("cloned", "adopted", "attached"):
+                _note_change("homes", line)
+        for report in _load("_setup_home_links", links_py).ensure_home_links():
+            status = report.get("status", "")
+            line = f"link {status}: {report.get('path', '')}"
+            if report.get("detail"):
+                line += f" ({report['detail']})"
+            print(f"OK   [homes] {line}")
+            if status == "created":
+                _note_change("homes", line)
+    except Exception as exc:  # advisory phase -- never fails the install
+        print(f"WARN [homes] adopt/link skipped ({type(exc).__name__}: {exc})")
+    finally:
+        if added and scripts_dir in sys.path:
+            sys.path.remove(scripts_dir)
+
+
 def migrate_group_em_inbox(repo_root: Path, args: Args) -> None:
     """Move memos stranded in the group-em home inbox to the G-EM reroute target.
 
@@ -5568,6 +5621,7 @@ def main(argv: list[str]) -> int:
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         repair_status_lines(claude_klabauter_root_resolved)
+        adopt_and_link_homes(repo_root, args)
         refresh_group_em_home(repo_root, args)
         apply_runtime_gitignore(repo_root, args)
         migrate_group_em_inbox(repo_root, args)

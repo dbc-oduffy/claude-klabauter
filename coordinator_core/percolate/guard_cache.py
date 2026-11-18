@@ -28,6 +28,8 @@ _MEMO_SUBDIR = "percolate-guard-memo"
 _active: "Optional[_RunCache]" = None
 #: Rel-ids this round changed; None means undeterminable, so every file is checked.
 _changed: "Optional[frozenset[str]]" = None
+#: The row the narrowed check belongs to: a rule's pass is per destination tree, never shared.
+_scope = ""
 _memos: "dict[tuple[str, str], CleanMemo]" = {}
 
 
@@ -48,22 +50,23 @@ class _RunCache:
 
 
 @contextlib.contextmanager
-def changed_only(paths: "Optional[frozenset[str]]") -> Iterator[None]:
+def changed_only(paths: "Optional[frozenset[str]]", scope: str = "") -> Iterator[None]:
     """Scope per-file content guards to the files this round changed.
 
     The destination tree is the output of an earlier passing round, so an unchanged
     file already passed. Trap: that holds only under the same rules, so `skip_unchanged`
     narrows only for a memo that already has history under the current identity."""
-    global _changed
+    global _changed, _scope
     prior, _changed = _changed, paths
+    prior_scope, _scope = _scope, scope
     try:
         yield
     finally:
-        _changed = prior
+        _changed, _scope = prior, prior_scope
 
 
 def skip_unchanged(rel: str, memo: "CleanMemo") -> bool:
-    return _changed is not None and rel not in _changed and memo.rule_has_passed()
+    return _changed is not None and rel not in _changed and memo.rule_has_passed(_scope)
 
 
 _RULES_PASSED = "rules-passed.keys"
@@ -203,31 +206,38 @@ class CleanMemo:
         # The rule alone (pattern and params), not the guard code: an edit to guards.py must not
         # make the next publish re-check every unchanged file.
         self._rule_key = hashlib.blake2b(f"{name}\0{rule}".encode("utf-8"), digest_size=16).hexdigest()
-        self._rule_known = self._rule_key in _passed_rules()
+        self._known_at_start: "dict[str, bool]" = {}
 
     def _key(self, data: bytes) -> str:
         return hashlib.blake2b(data, digest_size=16).hexdigest()
 
-    def rule_has_passed(self) -> bool:
-        """This rule passed over a whole destination tree before, so every file this round left
-        unchanged already satisfies it. Read at construction: this run's own pass proves nothing
+    def rule_has_passed(self, scope: str = "") -> bool:
+        """This rule passed over this row's whole destination tree before, so every file this round left
+        unchanged already satisfies it. Read at the scope's first query: this run's own pass proves nothing
         about files it has not reached yet."""
-        return self._rule_known
+        key = self._scoped_key(scope)
+        if key not in self._known_at_start:
+            self._known_at_start[key] = key in _passed_rules()
+        return self._known_at_start[key]
+
+    def _scoped_key(self, scope: str) -> str:
+        return hashlib.blake2b(f"{self._rule_key}:{scope}".encode("utf-8"), digest_size=16).hexdigest()
 
     def rule_passed(self) -> None:
         """Record that this rule just passed over the whole tree. Trap: call only on a pass, or an
         unchanged violating file would be skipped by every later round."""
+        key = self._scoped_key(_scope)
         passed = _passed_rules()
-        if self._rule_key in passed:
+        if key in passed:
             return
-        passed.add(self._rule_key)
+        passed.add(key)
         directory = _memo_dir()
         if directory is None:
             return
         try:
             directory.mkdir(parents=True, exist_ok=True)
             with open(directory / _RULES_PASSED, "a", encoding="ascii", newline="\n") as handle:
-                handle.write(self._rule_key + "\n")
+                handle.write(key + "\n")
         except OSError:
             pass
 

@@ -140,6 +140,6 @@ def advisory_for_dispatch(repo_root, session_id: Optional[str], env: Mapping[str
 
         return warp_fire.nag_text(
             session_id, host=family, edit_size=(files, lines), edit_size_truncated=truncated
-        )
+        ) or None
     except Exception:
         return None

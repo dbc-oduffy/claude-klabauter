@@ -27,10 +27,10 @@ _KILL_SWITCH = "COORDINATOR_HOOK_NUDGE_EM_TURN_BUDGET_DISABLED"
 
 
 def pre_fire_text(turns: int, bar: int, session_id: str = "", host: str | None = None) -> str:
-    """Full text on the session's first nag; a repeat is the one terse counted line. No session id: full."""
+    """Full text on the session's first nag, "" once another caller has spent it. No session id: full."""
     nag = nag_text(session_id, host=host) if session_id else fire_step(host=host)
-    if nag.startswith(NAG_REPEAT_PREFIX):
-        return nag
+    if not nag:
+        return ""
     return f"[em-turn-budget] {turns} turns before the first engine-ask, bar {bar}. " + nag
 
 

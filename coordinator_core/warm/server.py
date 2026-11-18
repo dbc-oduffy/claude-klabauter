@@ -455,6 +455,10 @@ def _land_resume_outcome(response: Any) -> str:
     return "final"
 
 
+#: Wait before re-landing a resume the pool never dispatched; `land_resume.MAX_AGE_SECS` bounds the waits.
+LAND_RESUME_RETRY_DELAY_SECS = 15.0
+
+
 def _land_resume_leg(response: Any) -> str:
     return "land-resume.no-reply" if not isinstance(response, dict) or "error" in response else "land-resume.refused-queued"
 
@@ -5728,7 +5732,11 @@ class _ServerContext:
                 )
             outcome = _land_resume_outcome(response)
             if outcome == "retry":
-                land_resume.enqueue(None, run_id, params, _land_resume_leg(response))
+                # Not dispatched (pool saturated, gate queue, no reply) is a wait, not a failed landing:
+                # counted as an attempt, five 5s ticks during one busy spell expired the run unlanded.
+                land_resume.enqueue(
+                    None, run_id, params, _land_resume_leg(response), delay_secs=LAND_RESUME_RETRY_DELAY_SECS
+                )
                 outcome = "requeued"
         except Exception:  # noqa: BLE001 -- a failed attempt returns the entry to the queue
             if not self.__dict__.get("_land_resume_attempt_logged"):

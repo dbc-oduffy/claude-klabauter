@@ -3216,8 +3216,13 @@ def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: 
     if not plans_directory.is_dir():
         return []
 
+    # Month shards (`docs/plans/YYYY-MM/`) hold plans too; a flat-only scan reported
+    # every sharded plan as "zero candidates" (DoE after f23bba004d).
+    from coordinator_core.session import output_tree_layout
+
     matches: list[Path] = []
-    for plan_path in sorted(plans_directory.glob("*.md")):
+    for rel in sorted(output_tree_layout.iter_entries(str(root), "docs/plans", ".md")):
+        plan_path = root / rel
         try:
             plan_text = plan_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -3291,7 +3296,7 @@ def _evaluate_session_handoff_leg_a(root: Path, frontmatter: dict[str, Any]) -> 
             "total": None,
         }
     if len(matched_plans) > 1:
-        colliding = ", ".join(f"docs/plans/{p.name}" for p in matched_plans)
+        colliding = ", ".join(p.relative_to(root).as_posix() for p in matched_plans)
         return {
             "verdict": "indeterminate",
             "detail": (

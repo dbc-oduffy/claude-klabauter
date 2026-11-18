@@ -70,7 +70,8 @@ def test_real_nag_text_names_size_and_bound(tmp_path):
     assert "7 files / 321 lines" in first
     assert f"{b.BUDGET_FILES} files / {b.BUDGET_LINES} lines" in first
     assert warp_fire.INVOKE_SUBMIT_COMMAND in first
-    again = warp_fire.nag_text("s-size", state_dir=tmp_path, host="codex", edit_size=(7, 321))
+    assert warp_fire.nag_text("s-size", state_dir=tmp_path, host="codex", edit_size=(7, 321)) == ""
+    again = warp_fire.nag_text("s-size", state_dir=tmp_path, host="codex", edit_size=(7, 321), repeat=True)
     assert again.startswith(warp_fire.NAG_REPEAT_PREFIX) and "7 files / 321 lines" in again
     assert "files /" not in warp_fire.nag_text("s-none", state_dir=tmp_path, host="codex")
 

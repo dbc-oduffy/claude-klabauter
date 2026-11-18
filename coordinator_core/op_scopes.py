@@ -172,6 +172,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.sessionstart_ensure_http_forwarder": "none",
     "hooks.guard_hook_generation_self_probe": "none",
     "hooks.session_start_guard_plane_check":  "none",
+    "hooks.session_start_resume_plugin_check": "none",
     "hooks.project_orientation":              "none",
     "hooks.pickup_autofire":                  "none",
     "hooks.mise_autofire":                    "none",
@@ -903,6 +904,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "workflow.revise":                          "common_dir",
     # workflow.cancel — marks a warp run cancelled in the caller's own worktree's record dir and live-run index.
     "workflow.cancel":                          "common_dir",
+    # job.start / job.cancel — read and write only the settings-home job record plus the caller-recorded
+    # lock and staging paths; no repo state, so no worktree key ("none", as install.write_identity_file).
+    "job.start":                                "none",
+    "job.cancel":                               "none",
     # workflow.late_rows — reads the caller's worktree run ledger (verify_read stamps its marker); scope lets --repo supply repo_root.
     "workflow.late_rows":                       "common_dir",
     # workflow.pending_revisions / plan.claim_register_rows — read and claim register rows of the

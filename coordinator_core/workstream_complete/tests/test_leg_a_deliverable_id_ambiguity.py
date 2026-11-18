@@ -45,6 +45,17 @@ def test_single_match_still_resolves_open_verdict(tmp_path: Path) -> None:
     assert result["verdict"] == "open"
 
 
+def test_plan_in_a_month_shard_resolves(tmp_path: Path) -> None:
+    """DoE shards plans into docs/plans/YYYY-MM/; a flat-only scan reported zero candidates."""
+    plans_dir = tmp_path / "docs" / "plans"
+    _write_plan(plans_dir / "2026-11", "a.md", "dlv-sharded", status="reviewed")
+    _write_plan(plans_dir / "sidecars", "a.md", "dlv-sharded")  # not a shard: never a candidate
+    matches = _resolve_session_handoff_plan_by_deliverable_id(tmp_path, "dlv-sharded")
+    assert matches == [plans_dir / "2026-11" / "a.md"]
+    result = _evaluate_session_handoff_leg_a(tmp_path, {"deliverable_id": "dlv-sharded"})
+    assert result["verdict"] == "open"
+
+
 def test_resolver_returns_list_of_matches(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     _write_plan(plans_dir, "a.md", "dlv-dup")

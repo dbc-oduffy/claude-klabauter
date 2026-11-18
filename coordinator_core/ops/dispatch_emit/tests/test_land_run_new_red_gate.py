@@ -101,3 +101,18 @@ def test_an_unmeasurable_gate_lands_with_an_advisory_never_a_refusal(halted, mon
 
     assert out["committed"] is True, out
     assert "no clone today" in out["new_red_gate"]["advisory"], out
+
+
+def test_on_the_warm_request_path_the_gate_never_runs_and_the_landing_proceeds(halted, monkeypatch):  # noqa: F811
+    """The warm caller abandons a land at its op budget; a clone test leg inside it halted every run at commit."""
+    def never(*a, **k):
+        raise AssertionError("clone test leg ran on the warm land path")
+
+    monkeypatch.setattr(test_leg_run, "run", never)
+    monkeypatch.setenv("COORDINATOR_EXECUTION_ROUTE", "warm_server")
+    _commit_at_head(halted, _GREEN)
+
+    out = _land(halted, _RED_1)
+
+    assert out["committed"] is True, out
+    assert "warm land budget" in out["new_red_gate"]["advisory"], out

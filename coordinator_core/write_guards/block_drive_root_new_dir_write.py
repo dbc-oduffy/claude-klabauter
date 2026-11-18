@@ -12,7 +12,12 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from coordinator_core.machine_profile import apply_guard_level
-from coordinator_core.write_guards._drive_root import deny_reason, new_top_level_entry, override_active
+from coordinator_core.write_guards._drive_root import (
+    deny_reason,
+    is_subagent_payload,
+    new_top_level_entry,
+    override_active,
+)
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -25,7 +30,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(tool_input, dict):
             return None
         path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
-        if not path or override_active(payload):
+        if not path or not is_subagent_payload(payload) or override_active(payload):
             return None
         env = payload.get("env")
         name = new_top_level_entry(

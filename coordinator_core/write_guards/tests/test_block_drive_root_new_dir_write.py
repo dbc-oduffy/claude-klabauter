@@ -25,7 +25,8 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
 
 
 def _payload(path, tool: str = "Write", key: str = "file_path", **extra):
-    return {"tool_name": tool, "tool_input": {key: str(path)}, **extra}
+    """A subagent payload (carries `agent_id`) unless `extra` overrides it."""
+    return {"tool_name": tool, "tool_input": {key: str(path)}, "agent_id": "sub-1", **extra}
 
 
 def _reason(out):
@@ -64,6 +65,23 @@ def test_placed_checkout_allowed(world) -> None:
 def test_payload_env_override_allows(world) -> None:
     root, _ = world
     payload = _payload(root / "fresh" / "f.txt", env={"COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR": "1"})
+    assert guard.check(payload) is None
+
+
+def test_main_session_payload_without_agent_id_is_allowed_subagent_denied(world) -> None:
+    root, home = world
+    for target in (root / "fresh" / "f.txt", home / "newdir" / "f.txt"):
+        main = _payload(target)
+        del main["agent_id"]
+        assert guard.check(main) is None
+        assert guard.check({**main, "agent_id": ""}) is None
+        assert _reason(guard.check({**main, "agent_id": "sub-1"}))
+
+
+def test_subagent_with_override_is_allowed(world) -> None:
+    root, _ = world
+    payload = _payload(root / "fresh" / "f.txt", env={"COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR": "1"})
+    assert payload["agent_id"] == "sub-1"
     assert guard.check(payload) is None
 
 

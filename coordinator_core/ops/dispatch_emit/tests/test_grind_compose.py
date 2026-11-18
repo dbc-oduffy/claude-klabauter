@@ -93,7 +93,8 @@ def _without_engine_interpreter(script: str) -> str:
 
     module = ask_compose._OVERLAY_VERIFY_MODULE
     command = ask_compose.engine_module_command(module, ".")
-    return script.replace(command.removesuffix(f" -m {module}"), "<ENGINE_PYTHON>")
+    script = script.replace(command.removesuffix(f" -m {module}"), "<ENGINE_PYTHON>")
+    return script.replace(f"`python -m {module} ", f"`<ENGINE_PYTHON> -m {module} ")
 
 
 # ---------------------------------------------------------------------------

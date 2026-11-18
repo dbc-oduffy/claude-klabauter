@@ -171,13 +171,14 @@ def test_reply_already_requeued_by_land_run_returns_entry_to_pending(ctx, repo, 
         None,
     ],
 )
-def test_transient_failure_requeues_with_attempt_bumped(ctx, repo, monkeypatch: pytest.MonkeyPatch, reply) -> None:
+def test_undispatched_reply_waits_without_spending_an_attempt(ctx, repo, monkeypatch: pytest.MonkeyPatch, reply) -> None:
     _queue(repo, "run-f")
     _recorder(ctx, monkeypatch, reply)
     ctx._idle_tick()
     _drain_thread(ctx)
     pending = _entry("run-f", land_resume.PENDING_SUFFIX)
-    assert pending["attempts"] == 2
+    assert pending["attempts"] == 1
+    assert pending["not_before"] > pending["enqueued_at"]
     assert not (land_resume.queue_dir(None) / ("run-f" + land_resume.DONE_SUFFIX)).exists()
 
 
@@ -202,14 +203,30 @@ def test_attempt_exception_requeues_and_never_escapes_the_tick(ctx, repo, monkey
     assert _entry("run-h", land_resume.PENDING_SUFFIX)["attempts"] == 2
 
 
-def test_retries_are_bounded_by_the_queue_expiry(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_saturated_pool_never_expires_the_run_inside_one_busy_spell(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 9acfd3 strand: five 5s ticks against a saturated pool spent every attempt in 25s."""
     _queue(repo, "run-i")
-    calls = _recorder(ctx, monkeypatch, None)
+    calls = _recorder(ctx, monkeypatch, {"error": {"code": -32010, "message": "pool saturated"}})
+    clock = [1_000_000.0]
+    monkeypatch.setattr(land_resume.time, "time", lambda: clock[0])
+    monkeypatch.setattr(server.time, "time", lambda: clock[0])
     for _ in range(land_resume.MAX_ATTEMPTS + 3):
         ctx._idle_tick()
         _drain_thread(ctx)
-    assert len(calls) == land_resume.MAX_ATTEMPTS
-    assert _entry("run-i", land_resume.DONE_SUFFIX)["outcome"] == land_resume.OUTCOME_EXPIRED
+        clock[0] += 5.0
+    assert len(calls) < land_resume.MAX_ATTEMPTS
+    assert (land_resume.queue_dir(None) / ("run-i" + land_resume.PENDING_SUFFIX)).exists()
+
+
+def test_waits_are_bounded_by_the_queue_age(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    _queue(repo, "run-i2")
+    _recorder(ctx, monkeypatch, None)
+    clock = [land_resume.time.time() + land_resume.MAX_AGE_SECS + 1]
+    monkeypatch.setattr(land_resume.time, "time", lambda: clock[0])
+    monkeypatch.setattr(server.time, "time", lambda: clock[0])
+    ctx._idle_tick()
+    _drain_thread(ctx)
+    assert _entry("run-i2", land_resume.DONE_SUFFIX)["outcome"] == land_resume.OUTCOME_EXPIRED
 
 
 def test_repo_resolved_from_halt_record_when_entry_names_none(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -232,7 +249,7 @@ def test_unresolvable_repo_requeues_without_dispatch(ctx, repo, monkeypatch: pyt
     ctx._idle_tick()
     _drain_thread(ctx)
     assert calls == []
-    assert _entry("run-k", land_resume.PENDING_SUFFIX)["attempts"] == 2
+    assert _entry("run-k", land_resume.PENDING_SUFFIX)["attempts"] == 1
 
 
 def test_empty_queue_dispatches_nothing_and_spawns_nothing(ctx, monkeypatch: pytest.MonkeyPatch) -> None:

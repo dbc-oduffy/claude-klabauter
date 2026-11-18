@@ -101,6 +101,22 @@ def test_override_active_is_caller_keyed(monkeypatch: pytest.MonkeyPatch) -> Non
     assert not dr.override_active({"env": {dr.OVERRIDE_KEY: "0"}})
 
 
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        ({}, False),
+        ({"agent_id": ""}, False),
+        ({"agent_id": None}, False),
+        ({"agent_id": "sub-1"}, True),
+        (None, False),
+        ("agent_id", False),
+        (["agent_id"], False),
+    ],
+)
+def test_is_subagent_payload(payload, expected) -> None:
+    assert dr.is_subagent_payload(payload) is expected
+
+
 def test_configured_drive_roots(monkeypatch: pytest.MonkeyPatch) -> None:
     assert dr.configured_drive_roots({}) == ()
     joined = os.pathsep.join(["a", "", "b"])

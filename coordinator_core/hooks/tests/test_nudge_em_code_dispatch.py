@@ -285,7 +285,7 @@ def test_unsized_session_with_an_ask_gets_full_nag_then_terse_line(monkeypatch: 
     first = _advisory(op(_payload()))
     second = _advisory(op(_payload()))
     assert "No sizing" in first and "coordinator:engine-ask" in first
-    assert "[engine-ask nag #2]" in second
+    assert "coordinator:engine-ask" not in second
 
 
 def test_unsized_session_with_unresolvable_turn_log_keeps_the_nag(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -315,8 +315,7 @@ def test_unsized_advises_and_repeats_at_warn(monkeypatch: pytest.MonkeyPatch) ->
     first = _advisory(op(_payload()))
     second = _advisory(op(_payload()))
     assert "No sizing" in first
-    assert "[engine-ask nag #2]" in second
-    assert "coordinator:engine-ask" in second
+    assert "coordinator:engine-ask" not in second
 
 
 def test_unsized_denies_at_strict(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -344,10 +343,10 @@ def test_sized_advises_and_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_plan_routed_sizing_without_a_plan_advises_and_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_sizing(monkeypatch, (True, True))
     first = _advisory(op(_payload()))
-    second = _advisory(op(_payload()))
+    second = op(_payload())
     assert "routed to a plan" in first and 'args: {"sizing": ' in first
     assert "coordinator:executor" not in first
-    assert "[engine-ask nag #2]" in second and 'args: {"sizing": ' in second
+    assert second is None
 
 
 def test_unsized_advisory_names_the_ask_fire_not_the_express_lane(monkeypatch: pytest.MonkeyPatch) -> None:

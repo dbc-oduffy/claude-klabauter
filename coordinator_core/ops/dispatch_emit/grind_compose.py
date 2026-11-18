@@ -2403,6 +2403,22 @@ _SIZE_PATH_JS = (
 )
 
 
+def _run_key_of(run_dir: Any, repo_root: Any) -> str:
+    """The sidecar/evidence key for a run: the run dir's name, or the repo's name when the run
+    dir is the repo root itself (`--out` directly in `--repo`). Refuses, naming `run_dir`, when
+    no name exists."""
+    run_path = Path(run_dir)
+    key = run_path.name
+    if not key and repo_root is not None:
+        key = Path(posixpath.normpath((Path(repo_root) / run_path).as_posix())).name
+    if not key or key in (".", ".."):
+        raise ValueError(
+            f"run_dir {str(run_dir)!r} has no name to key the run's sidecar paths by: "
+            "pass a named run dir or a repo_root whose directory has a name"
+        )
+    return key
+
+
 def compose_grind_script(
     manifest: Manifest,
     profile: Profile,
@@ -2482,6 +2498,7 @@ def compose_grind_script(
             f"{review_roster_fragment.get('schema_version')!r}, not one of "
             f"{sorted(ACCEPTED_ROSTER_SCHEMA_VERSIONS)}"
         )
+    run_key = _run_key_of(run_dir, repo_root)
     review = parse_execute_review(review_roster_fragment)
     review_blocks = compose_execute_review(
         review,
@@ -2491,13 +2508,12 @@ def compose_grind_script(
         declared_paths_js="_reviewPaths",
         executor_rows_js="_settled.filter((s) => s.outcome === 'committed').length",
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
-        run_key=Path(run_dir).name,
+        run_key=run_key,
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
         reverify=True,
     )
     review_phase_titles = [title for title, _ in review_blocks]
     run_dir_s = Path(run_dir).as_posix()
-    run_key = Path(run_dir).name
     triaged: tuple[dict[str, Any], ...] = ()
     triage_error = ""
     clusters: Mapping[str, int] = {}

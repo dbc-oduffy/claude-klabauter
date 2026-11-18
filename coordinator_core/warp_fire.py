@@ -143,8 +143,12 @@ def nag_text(
     host: Optional[str] = None,
     edit_size: Optional[tuple[int, int]] = None,
     edit_size_truncated: bool = False,
+    repeat: bool = False,
 ) -> str:
-    """The session's nag: full `fire_step` first, then a one-line `[engine-ask nag #N]`. Never empty.
+    """The session's nag: full `fire_step` on the first call, then "" (the nag reaches the model once).
+
+    A pending mint note still answers with `minted_step`. `repeat=True` opts a caller into the terse
+    `[engine-ask nag #N]` line on later calls. "" means no signal: callers must not emit it.
 
     `edit_size` is the measured (files, lines) of the EM's uncommitted hand edit; when given, the
     text leads with it against the XS bound. `edit_size_truncated` says the count stopped early,
@@ -166,4 +170,6 @@ def nag_text(
         return lead + minted_step(minted or None)
     if n <= 1:
         return lead + fire_step(sizing_rel, host)
+    if not repeat:
+        return ""
     return f"{NAG_REPEAT_PREFIX} #{n}] {lead}call `{fire_command(sizing_rel, host)}`, once."

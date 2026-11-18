@@ -627,11 +627,9 @@ class TestRegistryReadTimeoutDistinguishedFromAbsentKey(unittest.TestCase):
         ), unittest.mock.patch.object(
             _engine_bootstrap_mod, "_walk_up_to_checkout", return_value=None
         ), unittest.mock.patch.dict(_mod.os.environ, {}, clear=False):
-            # Rung 1 reads the NEW name since the engine-root rename closed the dual-read
-            # window; popping only the old one left an ambient COORDINATOR_ENGINE_ROOT
-            # answering before the registry rung this test is about ever ran.
+            # An ambient COORDINATOR_ENGINE_ROOT would answer before the registry rung
+            # this test is about ever ran.
             _mod.os.environ.pop(_mod._ENGINE_ROOT_NEW_VAR, None)
-            _mod.os.environ.pop(_mod._ENGINE_ROOT_OLD_VAR, None)
             with unittest.mock.patch(
                 "builtins.open", side_effect=OSError("no pointer file")
             ):

@@ -455,6 +455,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "workflow.late_rows":                     "coordinator_core.ops.dispatch_emit.requirements_ledger",
     "workflow.revise":                        "coordinator_core.ops.dispatch_emit.requirements_ledger",
     "workflow.cancel":                        "coordinator_core.ops.dispatch_emit.run_cancel",
+    "job.start":                              "coordinator_core.ops.job_cancel",
+    "job.cancel":                             "coordinator_core.ops.job_cancel",
     "workflow.pending_revisions":             "coordinator_core.ops.dispatch_emit.revise_absorb",
     "plan.claim_register_rows":               "coordinator_core.ops.dispatch_emit.revise_absorb",
     "engine_ask.submit":                      "coordinator_core.ops.engine_ask_submit",

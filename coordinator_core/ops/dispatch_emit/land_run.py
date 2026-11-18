@@ -3333,6 +3333,12 @@ def _tests_could_run(root: Path, head: str, py: Sequence[str]) -> bool:
     return cov._run(argv, root, cov.TEST_TIMEOUT_S).returncode != 1
 
 
+def _on_warm_request_path() -> bool:
+    from coordinator_core.telemetry.op_latency import ROUTE_ENV, WARM_SERVER
+
+    return os.environ.get(ROUTE_ENV) == WARM_SERVER
+
+
 def _new_red_gate(
     root: Path, touched: Sequence[str], deleted: Sequence[str], blobs: Mapping[str, str],
 ) -> dict:
@@ -3347,6 +3353,11 @@ def _new_red_gate(
     py = sorted({p.replace("\\", "/") for p in (*touched, *deleted) if p.endswith(".py")})
     if not py:
         return {}
+    if _on_warm_request_path():
+        # Trap: the stall-watched clone pytest has no wall clock, and the warm caller abandons the whole
+        # land at its own op budget (30s), reconcile reads never-ran, and every run halts at commit
+        # (3f7e31, 44259b, 2026-11-17). `land_deadline.excepted` moves only the land's own deadlines.
+        return {"new_red": [], "advisory": "new-red gate not run: a clone test leg does not fit the warm land budget", "base": ""}
     try:
         with land_deadline.excepted():
             head = cov._commit_sha(root, "HEAD")

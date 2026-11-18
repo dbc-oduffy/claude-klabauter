@@ -2,18 +2,18 @@
 coordinator/lib/resolve-claude-klabauter/tests/test_resolves_from_published_mirror.py
 
 Chunk C2 (docs/plans/2026-08-16-one-engine-for-the-whole-box.md): proves that
-a process whose LIVE-TREE rungs are unreachable — no ``CLAUDE_KLABAUTER_ROOT`` env var,
-no resolvable ``repos.claude_klabauter`` registry key, no ``.claude-klabauter-live-root``
+a process whose LIVE-TREE rungs are unreachable — no resolvable
+``repos.claude_klabauter`` registry key, no ``.claude-klabauter-live-root``
 sentinel — can still resolve and EXECUTE a real op sourced entirely from the
 published engine mirror (``repos.claude_klabauter``).
 
 "The files are published, therefore it resolves" is exactly the claim this
-row exists to refuse. Pointing ``CLAUDE_KLABAUTER_ROOT``/``.claude-klabauter-live-root`` AT the mirror
+row exists to refuse. Pointing ``.claude-klabauter-live-root`` AT the mirror
 would prove resolution but not unreachability — Rung 1 short-circuits before
 any gate runs. This test instead builds a synthetic settings-home whose
 registry carries ONLY ``repos.claude_klabauter`` (no ``claude_klabauter`` key,
 no ``.claude-klabauter-live-root`` file), points ``MACHINE_LOCAL_REGISTRY_DIR`` at it, and
-clears ``CLAUDE_KLABAUTER_ROOT``/``CLAUDE_PROJECT_DIR`` from the child env — so rungs
+clears ``CLAUDE_PROJECT_DIR`` from the child env — so rungs
 1/1.5/2 all genuinely miss and only the published rung can answer. It then
 loads the MIRROR's own ``coordinator_core/claude_klabauter_root.py`` (never
 this repo's ``engine_root.py``) by path in a subprocess, asserts it resolves
@@ -155,14 +155,14 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
     IMPORTANT — ``claude_klabauter_root.py`` is a genuinely different module
     from source-side ``engine_root.py``, not a straight redacted rename of
     it: ``engine_root.py`` disambiguates a distinct "am I the live tree"
-    rung (``repos.claude_klabauter`` / ``CLAUDE_KLABAUTER_ROOT``) from a distinct
+    rung (``repos.claude_klabauter``) from a distinct
     "published mirror" rung (``repos.claude_klabauter``). This module is
     self-referential — it resolves the identity of the repo it ships
     inside — and has only ONE registry key (``repos.claude_klabauter``) for
     both purposes; whether that key's answer counts as "resolved-engine" vs
     "live-working-tree" is instead decided by the DR-132
     ``engine.working_repos.*`` gate (``_is_engine_working_repo``), not by a
-    second, CLAUDE_KLABAUTER_ROOT-style key. Do NOT "fix" this by trying to make
+    second, claude_klabauter-style key. Do NOT "fix" this by trying to make
     ``repos.claude_klabauter`` absent-yet-present — that key must stay set
     for either class to resolve at all. The unreachability this row proves
     is: the running session is confirmed NOT the registered working repo
@@ -209,7 +209,6 @@ def test_repointed_resolution_resolves_class_from_mirror_only():
 
         env = dict(os.environ)
         env.pop("CLAUDE_KLABAUTER_ROOT", None)
-        env.pop("CLAUDE_KLABAUTER_ROOT", None)
         # Set (not cleared) to a directory that is NOT the registered
         # working repo above — this is what lets `_is_engine_working_repo`
         # return the CONFIRMED `False` this module's gate requires, rather
@@ -247,7 +246,6 @@ def test_real_op_executes_from_mirror_under_unreachable_live_tree():
         cwd.mkdir()
 
         env = dict(os.environ)
-        env.pop("CLAUDE_KLABAUTER_ROOT", None)
         env.pop("CLAUDE_PROJECT_DIR", None)
         # Deliberately no MACHINE_LOCAL_REGISTRY_DIR override here — the op
         # is exec'd directly (not via exec_cli's own resolution ladder), so

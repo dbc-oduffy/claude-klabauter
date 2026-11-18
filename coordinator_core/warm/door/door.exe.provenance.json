@@ -1,6 +1,6 @@
 {
-  "builder": "d3864b3c-3581-4bf4-9f27-7fdc7787a9bb",
-  "built_at": "2026-11-17T20:01:40+00:00",
+  "builder": "8d2385c3-2d1e-4ce2-b932-603080b066ca",
+  "built_at": "2026-11-18T00:41:28+00:00",
   "command": [
     "python.exe",
     "-m",
@@ -19,10 +19,10 @@
     "/Brepro"
   ],
   "compiler": "clang",
-  "compiler_version": "clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)",
+  "compiler_version": "clang version 22.1.2 (https://github.com/llvm/llvm-project 1ab49a973e210e97d61e5db6557180dcb92c3e98)",
   "door_c_sha256": "e63c30f401700a2d512a9ce9e530febebdc8536d1d1e987f59a60e241efbb7c4",
-  "engine_stamp": "sha:70650f6b6c789d3369f7ad99a16ffbee4e76cbc3",
-  "image_sha256": "fac1fab166ee3b3990b7efbe619498153e5c1c88e6d35be285df9cdd6e71f983",
+  "engine_stamp": "sha:d168f492c54b29faf3ea6f7489d47b15d8390ef3",
+  "image_sha256": "15f4affb467e16f31222c8965429f05b22b04a595b962e92d09c76fb60713b3a",
   "python_bin": "~/AppData/Local/Programs/Python/Python313/python.exe",
   "rendered_source_sha256": "e63c30f401700a2d512a9ce9e530febebdc8536d1d1e987f59a60e241efbb7c4",
   "require_warm": false,

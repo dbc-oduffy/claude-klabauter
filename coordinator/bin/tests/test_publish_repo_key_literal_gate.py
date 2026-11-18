@@ -162,14 +162,20 @@ def test_commit_module_attr_gate_second_run_is_served_from_the_destination_git_d
         pass
 
     monkeypatch.setattr(publish, "_bootstrap_engine", lambda: None)
-    monkeypatch.setattr(publish, "find_commit_module_attr_violations", fake_gate)
-    monkeypatch.setattr(publish, "CommitReadError", _ReadError)
+    monkeypatch.setattr(publish, "find_commit_module_attr_violations", fake_gate, raising=False)
+    monkeypatch.setattr(publish, "CommitReadError", _ReadError, raising=False)
+    monkeypatch.setattr(publish, "_COMMIT_GATE_RESULTS", {})
+    monkeypatch.setattr(publish, "commit_blob_reads", None, raising=False)
     assert publish._commit_module_attr_gate(target, "abc123") is True
     assert list((dest / ".git" / "claude-klabauter-gate-result").glob("gate-result-commit-module-attr-*.json"))
+    assert publish._commit_module_attr_gate(target, "abc123") is True
+    assert progress_seen == [True]  # a second row of the same round reuses the verdict
+    publish._COMMIT_GATE_RESULTS.clear()  # a later round: served from the destination's cache
     assert publish._commit_module_attr_gate(target, "abc123") is True
     assert len(judged) == 1
     assert progress_seen == [True, True]
 
+    publish._COMMIT_GATE_RESULTS.clear()
     bare = SimpleNamespace(name="row", source_dir=tmp_path / "src")
     monkeypatch.setattr(publish, "_gate_cache_for", lambda *a: None)
     monkeypatch.setattr(publish, "find_commit_module_attr_violations", lambda *a, cache=None, progress=None: (1, [("f.py", "m.x")]))

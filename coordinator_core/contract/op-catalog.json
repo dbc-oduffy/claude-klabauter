@@ -4467,6 +4467,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "hooks.session_start_resume_plugin_check -- SessionStart advisory: an EM-role session that carries no\ncoordinator agents was resumed with plain `claude --resume`, which drops the coordinator plugin silently.\nNames the `coordinator --resume <id>` relaunch. Advisory only; never denies.",
+      "module": "coordinator_core.hooks.session_start_resume_plugin_check",
+      "name": "hooks.session_start_resume_plugin_check",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "hooks.session_start_resume_plugin_check -- SessionStart advisory: an EM-role session that carries no",
+      "timeout_s": 30.0
+    },
+    {
       "description": "coordinator_core.hooks.session_start_watch_presence — SessionStart op:\nstate who holds this repo's Group EM standing, the watch heartbeat's own\nverdict, and who holds the Uhura comms channel, as one `additionalContext`\nline-set.\n\nPort of: coordinator-content-repo `coordinator/hooks/scripts/session-start-watch-presence.py`\n(PM order: warm-hook migration, claude-klabauter slice). Same three facts, same\nnever-a-solicitation posture, same silent-on-nothing-to-say contract.\n\nShape change from the DoE source: the DoE script shells a subprocess-free\nbut FILE-PATH import of `coordinator/skills/group-em/watch_heartbeat.py`\n(`_watch_module.resolve_watch_module`) and of `coordinator/bin/uhura-mode.py`.\nBoth legs are read in-process here instead:\n\n- The watch-liveness leg reads `coordinator_core.group_em.watch_heartbeat\n  .read_liveness`, the SAME reader `ops/group_em_enter.py`'s own\n  `watch_liveness` leg already uses — one watch-record reader in this\n  engine, not two independently drifting ones.\n- The Uhura leg has no existing port in this engine (`grep -ri uhura\n  coordinator_core/` finds nothing). `_read_uhura_record` below is a\n  MINIMAL port of `uhura-mode.py::read_record` — same record path\n  (`<settings_home>/state/uhura/<repo_key>.json`, via\n  `coordinator_core.group_em.atomic_record.settings_home`/`repo_key`, the\n  identical helpers `read_record`'s own docstring says its DoE sibling\n  shares with the Group EM record), same schema-version fencing, same\n  never-raises contract. Not a new module: `uhura-mode.py` is a CLI with a\n  write path (`enter`/`stand_down`) this hook never needs: only the read\n  leg is ported, inline, because there is nothing else here to hang a\n  package on yet.\n\nPARITY GAP, NAMED RATHER THAN SILENTLY DROPPED: `read_liveness` here never\nreturns a `vacant` verdict (holder-session-no-longer-live) — the DoE reader\nstill models one, but `coordinator_core.group_em.watch_heartbeat.read_liveness`\nalready OMITTED it on this side by an accepted `overengineering-reviewer`\nfinding (see that function's own docstring): no in-repo caller ever passed\nthe `agents` join that verdict requires, and a watcher that exited stops\nstamping and reads `stale` on the next tick anyway — same finding, better\nevidence. This hook therefore renders `stale`/`armed`/`absent` only; a\n`vacant`-worded presence line never fires and holder-named `stale` output\ncovers the same case.\n\nContract, unchanged: never blocks, never raises past this handler, silent\n(`no_advisory()`) when there is nothing to report.",
       "module": "coordinator_core.hooks.session_start_watch_presence",
       "name": "hooks.session_start_watch_presence",
@@ -4644,7 +4655,7 @@
     },
     {
       "description": "coordinator_core.hooks.subagent_zero_tool_use — SubagentStop bookkeeping op.\n\nPurpose: Mechanical subagent tool-use counting, Stage 1 (write side). Counts\n`tool_use` content blocks in the subagent's own transcript JSONL\n(`agent_transcript_path`) and, ONLY on a verified count, appends one durable record to\nthis session's per-session store. This is the write/decision-logic half of a\ncross-repo contract with coordinator-content-repo — DoE owns the thin plumbing shim (hook\nregistration, the \"has unsurfaced\" sentinel, the surfaced-cursor) under the DR-047\ntransport-seam carve-out; this op owns the counting and the durable write.\n\nNaming note (per DoE's 2026-07-25 finding, see\ncross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-store-records-every-count.md):\ndespite the `zero_tool_use` module/op name and the record's `kind: \"zero-tool-use\"`\nfield, this op writes ONE RECORD PER VERIFIED COUNT, not only zero. There is no\n`if tool_use_count != 0` gate here, deliberately — see \"Deliberately no zero-gate\"\nbelow. The name and `kind` identify the DETECTOR that produced the record (this\nmodule owns exactly one kind, \"zero-tool-use\", per the future-multi-kind design\nbelow), not a filter on the record's content. A verified zero is one value\n`tool_use_count` can hold among many, not the thing that makes a record eligible to\nbe written. Any reader — this repo's or DoE's — that treats `kind == \"zero-tool-use\"`\nas synonymous with \"this agent did zero tool calls\" will silently misreport every\nhealthy agent as a zero-tool-use detection; filter on the `tool_use_count` field\nexplicitly instead (see hooks.subagent_zero_tool_use_surface and\nhooks.subagent_zero_tool_use_resolve, which do this).\n\nThe counting mechanism is spike-proven, not re-derived here: a deliberately-toolless\nagent counted 0 `tool_use` blocks; a one-call agent counted 1 — both exactly reproduced\nthe harness notification's own `tool_uses` field. See\ncross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-detection-verdict-viable.md.\n\nNegative-spec:\n    Deliberately no zero-gate: do NOT add `if tool_use_count != 0` before the\n    durable write. This store is a general per-session log of every verified\n    tool-use count (see the Naming note above) — the full-count series supports\n    \"was this agent unusually quiet\" / rate questions that a zero-only subset\n    cannot, the data is already collected at zero marginal cost per this op's own\n    counting pass, and discarding non-zero records to make the store's contents\n    match its name is backwards: change the label, not the data. Callers that only\n    want zero-count records filter at the read side (surface/resolve ops), not here.\n\n    THE load-bearing rule of this op: an ABSENT or UNREADABLE transcript at\n    `agent_transcript_path` MUST resolve to UNKNOWN and MUST NEVER be reported or\n    recorded as a verified zero. 3 of 7 observed spike events had no transcript on\n    disk at all — confirmed never written, not a flush race — making \"no transcript\"\n    the COMMON case, not an edge case. On UNKNOWN this op writes NOTHING to the store\n    and returns an envelope that cannot be confused with a verified 0.\n\n    Do NOT register or handle a `TaskCompleted` case — DoE evaluated and rejected it\n    (no `agent_id`, no transcript pointer in that payload); a handler here would be a\n    dead trigger, never fired.\n\n    Do NOT mark anything \"surfaced\" and do NOT perform \"dispatched but no record\n    arrived\" reconciliation — both are deliberately DoE-side (their own per-session\n    cursor and dispatch-tracking loop already own those concerns end-to-end; see the\n    contract memo). This op's only job is: count, and durable-write on a verified\n    count.\n\n    Do NOT add atomicity/locking machinery to the durable write beyond a plain\n    append — each session owns its own per-session store file; no cross-session or\n    cross-process shared mutable state exists here to race.\n\nDurable record schema (shared with hooks.subagent_zero_tool_use_surface, the read\nside): one compact JSON object per line, fields in this exact order —\n`kind` (literal \"zero-tool-use\", the discriminator), `session_id`, `agent_id`,\n`agent_type`, `tool_use_count` (int, verified), `recorded_at` (ISO-8601 UTC,\nZ-suffixed). `kind` is deliberate, not decorative: DR-084's claim primitive\n(coordinator_core/session/claims.py) is handoff-frontmatter/mkdir-mutex shaped and is\nexplicitly negative-spec'd against hook-subprocess callers, so it cannot serve \"return\nunsurfaced records of kind K for session S\" — this store is the general kind-\ndiscriminated shape instead, built so a future detector can append records of a\ndifferent `kind` to the same per-session store and the surface op's filter still\nworks unmodified.\n\nStore location: `.coordinator-local/coordinator-sessions/<session_id>/subagent-zero-tool-use.jsonl`\n— a sibling of the `dispatched-agents.txt` / `push-failures-cursor.txt` per-session\nconvention this tree already uses (track_dispatched_agents.py, auto_push.py).\n\nSpec backlink: cross-repo/inbox/2026-07-25-coordinator-content-repo-em-zero-tool-use-detection-engine-op-contract.md",
-      "module": "coordinator_core.hooks",
+      "module": "coordinator_core.hooks.subagent_zero_tool_use",
       "name": "hooks.subagent_zero_tool_use",
       "op_class": "mutating",
       "params_schema": {
@@ -4959,6 +4970,28 @@
         "type": "object"
       },
       "summary": "JSON-RPC \"invoke.from_argv\" handler — dispatch a CLI-shaped argv, in-process.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"job.cancel\": params `job_id` (required), `reason` (optional str).\n\nReaps the recorded root's descendants by (pid, ctime) and, when the reap is complete, removes the\nlock and staging and deletes the record. A root that is gone or whose pid was reused reaps nothing\nand still cleans. Replies `{ok, job_id, reaped: [[pid, ctime]...], complete, lock_released,\nstaging_removed, already_gone}` plus `reason` when anything was left in place; `{\"error\": str}`\nfor a malformed request, an unknown job, or a tree that holds this engine.",
+      "module": "coordinator_core.ops.job_cancel",
+      "name": "job.cancel",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"job.cancel\": params `job_id` (required), `reason` (optional str).",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"job.start\": params `job_id` (safe id), `root_pid` (int), `lock_path` / `staging_path`\n(absolute path or absent), `owner_repo`, `command` (all optional str).\n\nReads the root's creation time and writes the job record. Replies `{ok, job_id, root_pid,\nroot_ctime, record}` or `{\"error\": str}` for a malformed request, an unsafe id, a dead root, a\nroot that is this engine or one of its ancestors, or a live record under the same id.",
+      "module": "coordinator_core.ops.job_cancel",
+      "name": "job.start",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"job.start\": params `job_id` (safe id), `root_pid` (int), `lock_path` / `staging_path`",
       "timeout_s": 30.0
     },
     {

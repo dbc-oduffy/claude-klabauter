@@ -39,7 +39,6 @@ def _registry(tmp_path, monkeypatch):
 
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
-    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
 
     return SimpleNamespace(ml_dir=ml_dir, settings_home=settings_home)
 

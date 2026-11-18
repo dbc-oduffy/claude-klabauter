@@ -521,18 +521,6 @@ def _claude_home() -> str:
     return _machine_local_impl_resolver().claude_home()
 
 
-# Cross-reference (C11, pln-an-engine-root-is-not-named-for-the-repo-...):
-# coordinator_core/engine_root.py's `coordinator_engine_root_env`/
-# `coordinator_engine_root_env_exports` (C10) are the dual-read/dual-write seam
-# for this rename everywhere coordinator_core CAN be imported. This module sits
-# on the far side of the same one-way no-import boundary as
-# `_REGISTRY_READ_TIMEOUT_TOKEN` (imported from engine_bootstrap below) — its
-# own engine-root-resolution ladder exists to LOCATE coordinator_core in the
-# first place, so it cannot depend on importing coordinator_core.engine_root
-# to do it — this literal is duplicated by hand in engine_root.py for the
-# same reason, not an oversight.
-_ENGINE_ROOT_OLD_VAR = "CLAUDE_KLABAUTER_ROOT"
-
 _IN_PROCESS_REGISTRY_MEMO: dict[str, str | None] = {}
 
 
@@ -687,10 +675,7 @@ def resolve_engine_root(script_file: str) -> str:
 
       Rung 1: ``COORDINATOR_ENGINE_ROOT`` in the environment, when it names a
               real directory — the explicit operator/test-harness override.
-              (Pre-C14 this rung read ``CLAUDE_KLABAUTER_ROOT``; the dual-read window
-              closed and the old name is no longer consulted here — see
-              ``_ENGINE_ROOT_NEW_VAR``/``_ENGINE_ROOT_OLD_VAR``'s module-level
-              note.)
+              (The retired name is no longer consulted here.)
       Rung 2: self-location — ``_walk_up_to_checkout(script_file)``, the
               nearest enclosing checkout at any depth.
       Rung 3: ``_resolve_claude_klabauter_root()``'s remaining rungs — the
@@ -743,7 +728,6 @@ def resolve_engine_root(script_file: str) -> str:
     THIS function, not on ``ensure_engine_on_path`` — see that function's
     docstring for why the degrading form is the wrong choice there.
     """
-    # _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR's module-level note above).
     env_root = os.environ.get(_ENGINE_ROOT_NEW_VAR) or ""
     if env_root and os.path.isdir(env_root):
         return env_root
@@ -1712,7 +1696,6 @@ def _settings_home_env(base_env: dict[str, str], claude_klabauter_root: str | No
     if base_env.get("COORDINATOR_SETTINGS_HOME"):
         return base_env
 
-    # _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR's module-level note above).
     _root = claude_klabauter_root if claude_klabauter_root is not None else os.environ.get(_ENGINE_ROOT_NEW_VAR)
     _injected_root = _root if _root and _root not in sys.path else None
     if _injected_root is not None:

@@ -3160,6 +3160,13 @@
       "name": "hooks__session_start_repin_cloud_engine_root"
     },
     {
+      "description": "hooks.session_start_resume_plugin_check -- SessionStart advisory: an EM-role session that carries no\ncoordinator agents was resumed with plain `claude --resume`, which drops the coordinator plugin silently.\nNames the `coordinator --resume <id>` relaunch. Advisory only; never denies.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "hooks__session_start_resume_plugin_check"
+    },
+    {
       "description": "coordinator_core.hooks.session_start_watch_presence — SessionStart op:\nstate who holds this repo's Group EM standing, the watch heartbeat's own\nverdict, and who holds the Uhura comms channel, as one `additionalContext`\nline-set.\n\nPort of: coordinator-content-repo `coordinator/hooks/scripts/session-start-watch-presence.py`\n(PM order: warm-hook migration, claude-klabauter slice). Same three facts, same\nnever-a-solicitation posture, same silent-on-nothing-to-say contract.\n\nShape change from the DoE source: the DoE script shells a subprocess-free\nbut FILE-PATH import of `coordinator/skills/group-em/watch_heartbeat.py`\n(`_watch_module.resolve_watch_module`) and of `coordinator/bin/uhura-mode.py`.\nBoth legs are read in-process here instead:\n\n- The watch-liveness leg reads `coordinator_core.group_em.watch_heartbeat\n  .read_liveness`, the SAME reader `ops/group_em_enter.py`'s own\n  `watch_liveness` leg already uses — one watch-record reader in this\n  engine, not two independently drifting ones.\n- The Uhura leg has no existing port in this engine (`grep -ri uhura\n  coordinator_core/` finds nothing). `_read_uhura_record` below is a\n  MINIMAL port of `uhura-mode.py::read_record` — same record path\n  (`<settings_home>/state/uhura/<repo_key>.json`, via\n  `coordinator_core.group_em.atomic_record.settings_home`/`repo_key`, the\n  identical helpers `read_record`'s own docstring says its DoE sibling\n  shares with the Group EM record), same schema-version fencing, same\n  never-raises contract. Not a new module: `uhura-mode.py` is a CLI with a\n  write path (`enter`/`stand_down`) this hook never needs: only the read\n  leg is ported, inline, because there is nothing else here to hang a\n  package on yet.\n\nPARITY GAP, NAMED RATHER THAN SILENTLY DROPPED: `read_liveness` here never\nreturns a `vacant` verdict (holder-session-no-longer-live) — the DoE reader\nstill models one, but `coordinator_core.group_em.watch_heartbeat.read_liveness`\nalready OMITTED it on this side by an accepted `overengineering-reviewer`\nfinding (see that function's own docstring): no in-repo caller ever passed\nthe `agents` join that verdict requires, and a watcher that exited stops\nstamping and reads `stale` on the next tick anyway — same finding, better\nevidence. This hook therefore renders `stale`/`armed`/`absent` only; a\n`vacant`-worded presence line never fires and holder-named `stale` output\ncovers the same case.\n\nContract, unchanged: never blocks, never raises past this handler, silent\n(`no_advisory()`) when there is nothing to report.",
       "inputSchema": {
         "type": "object"
@@ -3473,6 +3480,20 @@
         "type": "object"
       },
       "name": "invoke__from_argv"
+    },
+    {
+      "description": "JSON-RPC \"job.cancel\": params `job_id` (required), `reason` (optional str).\n\nReaps the recorded root's descendants by (pid, ctime) and, when the reap is complete, removes the\nlock and staging and deletes the record. A root that is gone or whose pid was reused reaps nothing\nand still cleans. Replies `{ok, job_id, reaped: [[pid, ctime]...], complete, lock_released,\nstaging_removed, already_gone}` plus `reason` when anything was left in place; `{\"error\": str}`\nfor a malformed request, an unknown job, or a tree that holds this engine.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "job__cancel"
+    },
+    {
+      "description": "JSON-RPC \"job.start\": params `job_id` (safe id), `root_pid` (int), `lock_path` / `staging_path`\n(absolute path or absent), `owner_repo`, `command` (all optional str).\n\nReads the root's creation time and writes the job record. Replies `{ok, job_id, root_pid,\nroot_ctime, record}` or `{\"error\": str}` for a malformed request, an unsafe id, a dead root, a\nroot that is this engine or one of its ancestors, or a live record under the same id.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "job__start"
     },
     {
       "description": "JSON-RPC \"landing.guard_selection\": params `paths`, `repo_root` (optional).\n\nReturns {\"nodes\", \"guards\", \"retest_command\"}; nodes equals\n``landing_invariant_nodes(root, paths, None)``.",

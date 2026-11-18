@@ -1164,7 +1164,10 @@ def claim_held_by_me(
 #:                              (the conservative direction for every caller);
 #:                              what this basis withdraws is the claim that the
 #:                              answer is about THIS session. See
-#:                              `_shared_stable_pids`.
+#:                              `_shared_stable_pids`. A live one carries its
+#:                              own heartbeat ``age_sec`` (see
+#:                              ``_heartbeat_elapsed``) so a caller that must
+#:                              not trust the handle can judge by heartbeat.
 #:   "recency-window"        — Layer 2 recency fallback, ``last_activity``
 #:                              present and parseable.
 #:   "recency-window-mtime"  — Layer 2 recency fallback, but ``last_activity``
@@ -1336,6 +1339,18 @@ def _shared_stable_pids(base: "Optional[str]") -> frozenset:
     return shared
 
 
+def _heartbeat_elapsed(sdir: str, now_epoch: int) -> int:
+    """Seconds since ``sdir``'s last heartbeat (``last_activity``, else the
+    newest non-empty file's mtime), floored at zero -- the same recency source
+    and arithmetic as the Layer-2 arms, for a verdict whose process evidence
+    is a handle shared with another session."""
+    last_iso = core.read_meta_field(sdir, "last_activity")
+    last_epoch = (
+        core.iso_to_epoch(last_iso) if last_iso else _dir_recency_fallback_epoch(sdir)
+    )
+    return max(0, now_epoch - last_epoch)
+
+
 def _verdict_for_sdir(
     sid: str,
     sdir: str,
@@ -1429,6 +1444,8 @@ def _verdict_for_sdir(
                     )
                 except Exception:
                     pass
+            if live and basis == "stable-pid-shared":
+                return (live, basis, _heartbeat_elapsed(sdir, now_epoch))
             return (live, basis, None)
         # stable_pid present, neither witness present -- session_live's
         # Layer-2 fallthrough (A-F1): CLAMPED elapsed.

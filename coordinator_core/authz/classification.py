@@ -477,6 +477,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.sessionstart_ensure_http_forwarder": OpClass.MUTATING,
     "hooks.guard_hook_generation_self_probe": OpClass.MUTATING,
     "hooks.session_start_guard_plane_check": OpClass.MUTATING,
+    "hooks.session_start_resume_plugin_check": OpClass.MUTATING,
     "hooks.project_orientation": OpClass.MUTATING,
     "hooks.pickup_autofire": OpClass.MUTATING,
     "hooks.mise_autofire": OpClass.MUTATING,
@@ -2732,6 +2733,33 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      dispatch.ask_stage and a refire read the marker; peers' overlap checks read the index.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "workflow.cancel": OpClass.MUTATING,
+    # job.start — MUTATING: writes <settings home>/jobs/<job_id>.json (ops/job_cancel.py); nothing else.
+    # DR-208 five-question affirmation (citing job.start handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      One job record under the settings home, atomic tmp + replace; no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      jobs/<job_id>.json under a safe_id job_id.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      The record belongs to the one job named.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      job.cancel reads the record.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "job.start": OpClass.MUTATING,
+    # job.cancel — MUTATING: terminates the (pid, ctime)-verified descendants of the recorded root,
+    # unlinks the recorded lock, removes the recorded staging dir and deletes the record (ops/job_cancel.py).
+    # DR-208 five-question affirmation (citing job.cancel handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Deletes the lock file, the staging dir and the job record; no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Deletions only; staging removal refuses a root, home, settings home or repo ancestor.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      Terminates processes, only those whose (pid, ctime) descend from the recorded root.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The job's processes, lock and staging are gone for every peer.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "job.cancel": OpClass.MUTATING,
     # workflow.pending_revisions — COMPUTE_ONLY: replies the unclaimed register rows of a run's
     # plan; writes nothing (ops/dispatch_emit/revise_absorb.py).
     "workflow.pending_revisions": OpClass.COMPUTE_ONLY,
