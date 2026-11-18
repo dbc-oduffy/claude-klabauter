@@ -1724,6 +1724,19 @@ _CLEAN_WORD_RE = re.compile(r"\bclean\b")
 _CLEAN_FD_RE = re.compile(
     r"(?:^|\s)-[a-zA-Z]*f[a-zA-Z]*d[a-zA-Z]*(?:\s|$)|(?:^|\s)-[a-zA-Z]*d[a-zA-Z]*f[a-zA-Z]*(?:\s|$)"
 )
+_CLEAN_DRY_RUN_RE = re.compile(r"(?:^|\s)-[a-zA-Z]*n[a-zA-Z]*(?:\s|$)|(?:^|\s)--dry-run(?:\s|$)")
+_CLEAN_FORCE_RE = re.compile(r"(?:^|\s)-[a-zA-Z]*f[a-zA-Z]*(?:\s|$)|(?:^|\s)--force(?:\s|$)")
+
+
+def _clean_destroys(text: str, *, anchored: bool) -> bool:
+    """True when a `git clean` argument text deletes untracked content: anything but a dry run.
+
+    `anchored` text is the argv after the `clean` subcommand, so any non-dry run denies. Free text (the legacy
+    path) may be a prose mention of "clean", so it denies only on a force flag or the -fd cluster.
+    """
+    if _CLEAN_DRY_RUN_RE.search(re.split(r"\s--(?:\s|$)", text, maxsplit=1)[0]):
+        return False
+    return anchored or bool(_CLEAN_FD_RE.search(text) or _CLEAN_FORCE_RE.search(text))
 
 #: LEGACY-PATH `worktree`/`remote` second-level classification (2026-07-25
 #: fix, P2(b) -- supersedes the prior minimal patch of the same date).
@@ -3492,8 +3505,8 @@ def _evaluate_git_segment_anchored(
         return "git reflog delete/expire"
     if subcmd in ("filter-branch", "filter-repo"):
         return "git filter-branch/filter-repo"
-    if subcmd == "clean" and _CLEAN_FD_RE.search(seg):
-        return "git clean -fd(x)"
+    if subcmd == "clean" and _clean_destroys(remaining_text, anchored=True):
+        return "git clean (any form but a dry run)"
 
     if _DECLARED_DELETE_CHANNEL_LIVE and subcmd == "rm":
         return _git_rm_verdict(seg, remaining)
@@ -4101,8 +4114,8 @@ def _evaluate_git_segment_legacy(
         return "git reflog delete/expire"
     if _FILTER_BRANCH_REPO_RE.search(seg):
         return "git filter-branch/filter-repo"
-    if _CLEAN_WORD_RE.search(seg) and _CLEAN_FD_RE.search(seg):
-        return "git clean -fd(x)"
+    if _CLEAN_WORD_RE.search(seg) and _clean_destroys(seg, anchored=False):
+        return "git clean (any form but a dry run)"
     if _WORKTREE_MUTATE_RE.search(seg):
         return "git worktree <mutate>"
     if _REMOTE_MUTATE_RE.search(seg):

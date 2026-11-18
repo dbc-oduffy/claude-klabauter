@@ -20,8 +20,8 @@ _REASON_PATHS_SHOWN = 5
 _HOOKS_CONFIG_NAMES = ("hooks.yaml", "hooks.yml")
 
 __all__ = [
-    "HALT_REVIEW_FLOOR", "MANIFEST_KEY",
-    "code_paths", "floor_code_paths", "floor_reason", "floor_trailer", "is_code_path", "receipt",
+    "HALT_REVIEW_FLOOR", "MANIFEST_KEY", "NO_DELTA_JS",
+    "code_paths", "floor_code_paths", "floor_reason", "floor_trailer", "is_code_path", "no_delta_code_paths", "receipt",
     "request_code_paths", "review_owed_paths", "reviewable_paths", "slice_gap_paths", "slice_gap_reason",
     "verdict_count",
 ]
@@ -162,6 +162,31 @@ def floor_reason(code: Sequence[str], n: int) -> Optional[str]:
         return None
     shown = ", ".join(code[:_REASON_PATHS_SHOWN])
     return f"review: 0 verdicts on a code-editing run ({shown})"
+
+
+def _norm(path: str) -> str:
+    return path.replace("\\", "/").removeprefix("./").rstrip("/")
+
+
+def no_delta_code_paths(code_paths: Iterable[str], changed_paths: Iterable[str]) -> bool:
+    """True when every declared code path (a directory entry counts its subtree) is absent from
+    `changed_paths`; an empty code set is False, so a run declaring no code never reads as no-delta."""
+    declared = [_norm(p) for p in code_paths if isinstance(p, str) and _norm(p)]
+    if not declared:
+        return False
+    changed = [_norm(p) for p in changed_paths if isinstance(p, str)]
+    return not any(c == d or c.startswith(d + "/") for d in declared for c in changed)
+
+
+NO_DELTA_JS = """\
+const _noDeltaCodePaths = (codePaths, changedPaths) => {
+  const norm = (p) => String(p).replace(/\\\\/g, '/').replace(/^\\.\\//, '').replace(/\\/+$/, '');
+  const declared = (codePaths ?? []).filter((p) => typeof p === 'string').map(norm).filter((p) => p);
+  if (declared.length === 0) return false;
+  const changed = (changedPaths ?? []).filter((p) => typeof p === 'string').map(norm);
+  return !declared.some((d) => changed.some((c) => c === d || c.startsWith(d + '/')));
+};
+"""
 
 
 def slice_gap_paths(landing_paths: Iterable[str], review_slice: Iterable[str]) -> list[str]:

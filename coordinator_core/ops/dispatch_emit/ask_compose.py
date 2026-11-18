@@ -94,6 +94,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_LANDED_MET_BY_FIELD,
     RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
+    RESUME_LEDGER_SINCE_SHA_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_UNSERVED_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
@@ -239,7 +240,7 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     bad_incomplete_ids_js,
     next_action_parts,
 )
-from coordinator_core.ops.dispatch_emit.review_floor import HALT_REVIEW_FLOOR, MANIFEST_KEY as _REVIEW_CODE_KEY
+from coordinator_core.ops.dispatch_emit.review_floor import HALT_REVIEW_FLOOR, MANIFEST_KEY as _REVIEW_CODE_KEY, NO_DELTA_JS
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.dispatch_emit.write_baseline import DIRTY_BEFORE_RUN_KEY, MEANT_TO_LAND_KEY, NO_CHANGE_REFUSAL
 from coordinator_core.ops.review_mint.execute_review import (
@@ -2410,6 +2411,93 @@ def _verify_tests_call(
         prompt, label=VERIFY_TESTS_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
         schema=json.loads(_emit.stage_schema_literal("test_result")), run_id=run_id, stage_as="verify-tests",
         stager=stager, agent_type_host=agent_type_host,
+    )
+
+
+VERIFY_ACCEPTANCE_LABEL = "verify-acceptance"
+_ACCEPT_ROWS_VAR = "_ACCEPT_ROWS"
+_ACCEPT_RESULTS_VAR = "_acceptResults"
+_ACCEPT_SCHEMA = _obj(
+    ["results"],
+    {"results": {"type": "array", "items": _obj(["row_id"], {"row_id": _STR, "exit": {"type": ["integer", "null"]}})}},
+)
+
+
+def _acceptance_rows(repo_root: str, sizing_rel: Optional[str]) -> list[dict]:
+    """The existing plan's spine rows whose `acceptance:` names a pytest command, as
+    `{row_id, register_rows, argv, command}`; `[]` when no plan exists at compose time (a plan
+    authored in-run is not gated here) or its spine does not parse."""
+    from coordinator_core.ops.dispatch_emit import acceptance_gate
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    plan_rel = _static_plan_rel(repo_root, sizing_rel)
+    if not plan_rel:
+        return []
+    try:
+        rows = load_rows((Path(repo_root) / plan_rel).read_text(encoding="utf-8")).rows
+    except (OSError, UnicodeDecodeError):
+        return []
+    return [
+        {"row_id": row_id, "register_rows": regs, "argv": argv, "command": shlex.join(argv)}
+        for row_id, regs, argv in acceptance_gate.acceptance_test_command_rows(rows)
+        if regs
+    ]
+
+
+def _acceptance_call(
+    *, head: str, anchor: str, run_id: str, repo_root: str, stager: Optional[Stager] = None,
+    agent_type_host: Optional[str] = None,
+) -> str:
+    """The verify stage's acceptance leg: one test-runner `agent(...)` call EXPRESSION that runs each
+    embedded acceptance argv in the clean export and returns `{results: [{row_id, exit}]}`.
+
+    Trap: the leg is an LLM, so a skipped or unreported command carries no exit; `DEMOTE_RED_JS`
+    reads that as red, which is what keeps a row met only by a command that ran green."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV, MEASURED_REV_OP
+
+    export_command = engine_module_command(
+        _OVERLAY_VERIFY_MODULE, repo_root, f"--export-run --run-id {run_id} --repo-root {Path(repo_root).as_posix()} --"
+    )
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nYou run each plan row's acceptance command and "
+        "report its exit status; you edit, stage and commit nothing. ",
+        f"First run `coordinator-invoke {MEASURED_REV_OP}` with run_id ",
+        "js:_runId",
+        " and paths [",
+        "js:(_manifest.review_declared_paths ?? []).join(', ')",
+        "]; it returns a candidate commit sha. Then run every command below through this export command, "
+        f"appending the command's argv after the `--`:\n\n{export_command}\n\n"
+        f"Set {MEASURED_REV_ENV} to the sha in the test process environment. If the op or the export command "
+        "fails, report no exit for the commands it blocked; never fall back to the working tree. "
+        + _emit._test_runner_clause(repo_root)
+        + " Commands (row_id, argv): ",
+        f"js:JSON.stringify({_ACCEPT_ROWS_VAR}.map((r) => ({{ row_id: r.row_id, argv: r.argv }})))",
+        ". Return `results`: one {row_id, exit} per command, exit the process exit status as an integer; "
+        "omit exit for a command you could not run. Report the exit as it was; do not gate.",
+    )
+    return _agent(
+        prompt, label=VERIFY_ACCEPTANCE_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
+        schema=_ACCEPT_SCHEMA, run_id=run_id, stage_as="verify-acceptance", stager=stager,
+        agent_type_host=agent_type_host,
+    )
+
+
+def _acceptance_decls_js(rows: list[dict], call: str) -> str:
+    """Top-level JS for the acceptance gate: the embedded rows, the leg runner, and the exit-to-result map."""
+    from coordinator_core.ops.dispatch_emit.acceptance_gate import DEMOTE_RED_JS
+
+    embedded = json.dumps(rows, separators=(",", ":"))
+    return (
+        f"  const {_ACCEPT_ROWS_VAR} = {embedded};\n"
+        f"  let {_ACCEPT_RESULTS_VAR} = null;\n"
+        f"  const _acceptOf = (rep) => {_ACCEPT_ROWS_VAR}.map((row) => {{ const hit = ((rep && Array.isArray(rep.results)) ? rep.results : [])"
+        ".find((x) => x && x.row_id === row.row_id); "
+        "return { row_id: row.row_id, register_rows: row.register_rows, command: row.command, exit: hit ? hit.exit : undefined }; });\n"
+        f"  const _runAcceptance = async () => {{ if ({_ACCEPT_RESULTS_VAR} !== null) return; "
+        f"try {{ {_ACCEPT_RESULTS_VAR} = _acceptOf(await {call}); }} catch (e) {{ "
+        "if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) throw e; "
+        f"log('verify-acceptance leg threw: ' + String((e && e.message) ?? e)); {_ACCEPT_RESULTS_VAR} = _acceptOf(null); }} }};\n"
+        + "  " + DEMOTE_RED_JS.replace("\n", "\n  ").rstrip(" ")
     )
 
 
@@ -6622,10 +6710,42 @@ def compose_ask_script(
         )
     )
     b.append(_review_blocked_halt_js(sizing_rel))
+    first_halt_changed_call = _agent(
+        _cat(
+            f"{head}\n\n{anchor}\n\n",
+            f"Run, in {repo_root}, `git --literal-pathspecs diff --name-only ",
+            "js:_sinceSha", " -- ", "js:_codePaths.map((p) => JSON.stringify(p)).join(' ')",
+            "` and `git --literal-pathspecs ls-files --others --exclude-standard -- ",
+            "js:_codePaths.map((p) => JSON.stringify(p)).join(' ')",
+            "`. Return `changed`: the union of both outputs, one repo-relative path per entry; [] when both are empty. "
+            "Run nothing else; edit nothing.",
+        ),
+        label="first-halt-changed", phase="review", agent_type=_emit._TEST_AGENT_TYPE,
+        schema=_obj(["changed"], {"changed": {"type": "array", "items": _STR}}),
+        effort=_MECHANICAL_EFFORT, run_id=run_id, agent_type_host=agent_type_host,
+    )
+    # The resumed leg's own prep counts product_files off its own base, so a ledger resume's no-delta
+    # evidence is the declared code paths' diff against the chain's first halt base (`since_sha`).
+    # Any unknown (no base, leg failure, non-array reply) leaves `_firstHaltChanged` null and the floor halts.
+    b.append(
+        "  let _firstHaltChanged = null;\n"
+        f"  if (_resumeLedger && !_halted && !_alreadyDelivered && _codeReviewOwed && !_metBySkipped "
+        f"&& {_VERDICT_COUNT_JS} === 0) {{\n"
+        f"    const _sinceSha = _gate.{RESUME_LEDGER_KEY}?.{RESUME_LEDGER_SINCE_SHA_FIELD};\n"
+        f"    const _codePaths = (_manifest.{_REVIEW_CODE_KEY} ?? []).filter((p) => typeof p === 'string' && p);\n"
+        "    if (typeof _sinceSha === 'string' && /^[0-9a-f]{40}$/.test(_sinceSha) && _codePaths.length) {\n"
+        f"      try {{ const _fc = await {first_halt_changed_call}; "
+        "if (_fc && Array.isArray(_fc.changed)) _firstHaltChanged = _fc.changed.filter((p) => typeof p === 'string'); } "
+        "catch (e) { _firstHaltChanged = null; }\n"
+        "    }\n"
+        "  }"
+    )
     b.append(
         f"  const _reviewVerdicts = {_VERDICT_COUNT_JS};\n"
-        "  const _prepNoProductDelta = !_resumeLedger && !!_reviewPrep && !_reviewPrep.error && _reviewPrep.product_files === 0;\n"
-        "  if (!_prepNoProductDelta) {\n"
+        + NO_DELTA_JS
+        + "  const _prepNoProductDelta = !_resumeLedger && !!_reviewPrep && !_reviewPrep.error && _reviewPrep.product_files === 0;\n"
+        f"  const _resumeNoDelta = _resumeLedger && Array.isArray(_firstHaltChanged) && _noDeltaCodePaths(_manifest.{_REVIEW_CODE_KEY}, _firstHaltChanged);\n"
+        "  if (!_prepNoProductDelta && !_resumeNoDelta) {\n"
         "  if (!_halted && !_alreadyDelivered && _codeReviewOwed && _reviewVerdicts === 0 && !_metBySkipped) { _halted = { halted: "
         f"{_lit(HALT_REVIEW_FLOOR)}, reason: 'review: 0 verdicts on a code-editing run (' + "
         f"_manifest.{_REVIEW_CODE_KEY}.slice(0, 5).join(', ') + ')', run_id: _runId, "
@@ -6724,6 +6844,7 @@ def compose_ask_script(
         "{ status: 'indeterminate', differs_from_baseline: null, observation: 'unjudged: verify leg returned "
         "no verdict', reason: 'verify leg returned no judge verdict', sidecar_path: null }"
     )
+    accept_rows = _acceptance_rows(repo_root, sizing_rel)
     verify_lines = [
         "  if (!_halted && _manifest && !_manifest.error) {",
         f"    phase({_lit(ASK_VERIFY_PHASE)});",
@@ -6748,7 +6869,8 @@ def compose_ask_script(
         f"if (_testWanted) {{ try {{ {_VERIFY_TEST_RESULT_VAR} = await {verify_tests_call}; }} catch (e) {{ "
         f"if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) throw e; log('verify-tests leg threw: ' + String((e && e.message) ?? e)); "
         f"{_VERIFY_TEST_RESULT_VAR} = null; }} }} "
-        f"_verify = await {verify_call}; "
+        + ("await _runAcceptance(); " if accept_rows else "")
+        + f"_verify = await {verify_call}; "
         f"if (_verify && {_VERIFY_TEST_RESULT_VAR} && typeof {_VERIFY_TEST_RESULT_VAR}.status === 'string') _verify.test = {_VERIFY_TEST_RESULT_VAR}; "
         "} catch (e) { const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } _verify = null; } return _verify; };",
@@ -6822,6 +6944,16 @@ def compose_ask_script(
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('ledger-remaining leg threw: ' + _m); } } }\n"
         "    }"
     ]
+    if accept_rows:
+        b.append(
+            _acceptance_decls_js(
+                accept_rows,
+                _acceptance_call(
+                    head=head, anchor=anchor, run_id=run_id, repo_root=repo_root, stager=stager,
+                    agent_type_host=agent_type_host,
+                ),
+            )
+        )
     b.extend(verify_lines)
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
     b.append(_review_blocked_halt_js(sizing_rel, after_join=True, call_only=True))
@@ -6832,11 +6964,30 @@ def compose_ask_script(
         f"    const _designPrefix = {json.dumps(_DESIGN_ANCHOR_PREFIX)};\n"
         "    const _normaliseLedger = () => {\n"
         f"    {STALL_ONLY_COERCE_JS}\n"
-        "    for (const i of (_ledger?.items ?? [])) {\n"
+        + (
+            f"    if (_ledger && Array.isArray(_ledger.items)) _ledger.items = _demoteRed(_ledger.items, {_ACCEPT_RESULTS_VAR} ?? (_halted ? [] : _acceptOf(null)));\n"
+            if accept_rows
+            else ""
+        )
+        + "    for (const i of (_ledger?.items ?? [])) {\n"
         "      if (!i || i.status !== 'met' || !String(i.anchor ?? '').startsWith(_designPrefix)) continue;\n"
         "      const _mb = (Array.isArray(i.met_by) ? i.met_by : [i.met_by]).some((m) => typeof m === 'string' && m.trim() && m.trim().toLowerCase() !== 'none');\n"
         "      if (!_mb) { i.status = 'not_met'; i.essential = true; "
         "i.remaining = ['met_by: the senior-front-end review or ratification file of the design board']; }\n"
+        "    }\n"
+        # A resume whose declared code paths all lack a delta since the chain's first halt did no work: the
+        # rows declaring those paths (else every blocking row) are reported not done, never refused.
+        "    if (_resumeNoDelta) {\n"
+        f"      const _ndp = (_manifest.{_REVIEW_CODE_KEY} ?? []).map((p) => String(p).replace(/\\\\/g, '/').replace(/\\/+$/, ''));\n"
+        "      const _ndRows = (_manifest.rows ?? []).filter((r) => r && [...(r.writes ?? []), ...(r.writes_under ?? [])].some((w) => "
+        "_ndp.some((d) => { const x = String(w).replace(/\\\\/g, '/').replace(/\\/+$/, ''); return x === d || x.startsWith(d + '/'); })));\n"
+        "      const _ndIds = new Set(_ndRows.flatMap((r) => (Array.isArray(r.register_rows) ? r.register_rows : []).map(String)));\n"
+        f"      if (!_ndIds.size) for (const x of (_gate.{RESUME_LEDGER_KEY}?.blocking ?? [])) _ndIds.add(String(x));\n"
+        "      for (const i of (_ledger?.items ?? [])) {\n"
+        "        if (!i || i.status !== 'met' || !_ndIds.has(String(i.id))) continue;\n"
+        "        i.status = 'not_met'; i.essential = true; "
+        "i.remaining = ['no delta on declared code path(s) since the first halt: ' + _ndp.slice(0, 5).join(', ')];\n"
+        "      }\n"
         "    }\n"
         "    if (_preHaltCredit) {\n"
         f"      const _blk = _gate.{RESUME_LEDGER_KEY}.blocking ?? [];\n"

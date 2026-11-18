@@ -5086,3 +5086,92 @@ def test_rm_of_private_temp_index_is_allowed(command) -> None:
 )
 def test_rm_of_other_git_paths_stays_denied(command) -> None:
     assert _rm_verdict(command) == "deny"
+
+
+# ---- git clean: a subagent is denied every form but a dry run ----
+
+_CLEAN_DENIED = ["git clean -f untracked.txt", "git clean -fd", "git clean -fdx", "git clean -xdf", "git clean --force",
+                 "git clean -d", "git -C . clean -f untracked.txt"]
+_CLEAN_DRY = ["git clean -n", "git clean -nd", "git clean -fdn", "git clean --dry-run", "git clean -f --dry-run"]
+
+
+def _clean_verdict(command, **kwargs) -> str:
+    result = _enveloped(guard.check)(_payload(command, **kwargs))
+    return "deny" if result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny" else "allow"
+
+
+@pytest.mark.parametrize("command", _CLEAN_DENIED)
+def test_subagent_git_clean_non_dry_run_denies(command) -> None:
+    assert _clean_verdict(command, agent_type="coordinator:executor") == "deny"
+
+
+@pytest.mark.parametrize("command", _CLEAN_DRY)
+def test_subagent_git_clean_dry_run_allows(command) -> None:
+    assert _clean_verdict(command, agent_type="coordinator:executor") == "allow"
+
+
+@pytest.mark.parametrize("command", _CLEAN_DENIED)
+def test_em_git_clean_is_untouched(command) -> None:
+    assert _clean_verdict(command, agent_id=None) == "allow"
+
+
+def test_legacy_free_text_clean_word_without_force_still_allows() -> None:
+    assert guard._clean_destroys('commit -m "clean up docs"', anchored=False) is False
+    assert guard._clean_destroys("clean -f x", anchored=False) is True
+    assert guard._clean_destroys("clean -fn x", anchored=False) is False
+
+
+def test_dry_run_flag_after_pathspec_separator_is_a_path_not_a_dry_run() -> None:
+    assert guard._clean_destroys("-f -- -n", anchored=True) is True
+    assert guard._clean_destroys("-n -- x", anchored=True) is False
+
+
+_HOST_CLEAN = ("git clean -f untracked.txt", "git clean -fd", "git clean -fdx")
+
+
+@pytest.fixture
+def host_repo(monkeypatch, tmp_path):
+    import subprocess
+
+    from coordinator_core.host_hooks import agy_adapter, shim
+
+    monkeypatch.setattr(shim, "_budgeted", lambda request, budget: ({}, False))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
+    monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(tmp_path / "warm"))
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    monkeypatch.setattr(agy_adapter, "conversations_dir", lambda: tmp_path / "no-agy-store")
+    repo = tmp_path / "owned"
+    repo.mkdir()
+    for args in (("init", "-q", "-b", "main"), ("remote", "add", "origin", "https://github.com/me/thing.git")):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    (repo / "untracked.txt").write_text("u", encoding="utf-8")
+    return repo
+
+
+def _host_denies(host: str, command: str, repo, subagent: bool) -> bool:
+    from coordinator_core.host_hooks import shim
+
+    if host == "agy":
+        payload = {"conversationId": "1efd6565-4b6a-434a-989d-f7814c28bdd8", "workspacePaths": [str(repo)],
+                   "toolCall": {"name": "run_command", "args": {"CommandLine": command}}, "stepIdx": 3}
+        if subagent:
+            payload["agentId"] = "7c1f0e52-3a4b-4d6e-9f10-2b8a5c3d4e60"
+        return shim.decide("agy", payload).get("decision") == "deny"
+    payload = {"hook_event_name": "PreToolUse", "session_id": "clean-s1", "cwd": str(repo),
+               "tool_name": "exec_command" if host == "codex" else "run_command", "tool_input": {"command": command}}
+    if subagent:
+        payload.update({"agent_id": "01a1ec94-2eed-7c02-8753-e7f1d8e8ed56", "agent_type": "worker"})
+    answer = shim.decide(host, payload)
+    return (answer.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("host", ["codex", "agy", "grok"])
+def test_host_shapes_deny_a_subagent_clean_and_allow_dry_run_and_em(host_repo, host) -> None:
+    for command in _HOST_CLEAN:
+        assert _host_denies(host, command, host_repo, subagent=True), (host, command)
+        assert not _host_denies(host, command, host_repo, subagent=False), (host, command)
+    assert not _host_denies(host, "git clean -n", host_repo, subagent=True)
+    assert not _host_denies(host, "git clean --dry-run", host_repo, subagent=True)

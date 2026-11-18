@@ -39,14 +39,14 @@ def _floor_block() -> str:
     return script[start : script.index(_FLOOR_CLOSE, script.index("_halted = { halted:", start)) + len(_FLOOR_CLOSE)]
 
 
-def _floor(*, prep, wave=None, ledger=False) -> dict | None:
+def _floor(*, prep, wave=None, ledger=False, changed=None) -> dict | None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
     harness = (
         "let _halted = null; const _alreadyDelivered = null; const _metBySkipped = null; const _runId = 'run-1';\n"
         f"const _codeReviewOwed = true; const _manifest = {{ review_code_paths: {json.dumps(_CODE)} }};\n"
-        f"const _resumeLedger = {json.dumps(ledger)}; const _reviewPrep = {json.dumps(prep)}; "
+        f"const _resumeLedger = {json.dumps(ledger)}; const _firstHaltChanged = {json.dumps(changed)}; const _reviewPrep = {json.dumps(prep)}; "
         f"const _reviewWave = {json.dumps(wave or [])}; const _waveList = () => _reviewWave;\n"
         f"{_floor_block()}\n"
         "process.stdout.write(JSON.stringify(_halted));\n"
@@ -81,6 +81,20 @@ def test_a_real_or_unreported_delta_with_no_verdicts_still_halts_review_floor(pr
 
 def test_a_ledger_resume_still_halts_because_its_prep_counts_only_the_remaining_leg() -> None:
     assert _floor(prep=_PREP, ledger=True)["halted"] == HALT_REVIEW_FLOOR
+
+
+def test_a_ledger_resume_whose_code_paths_all_lack_a_delta_since_the_first_halt_passes_the_floor() -> None:
+    assert _floor(prep=_PREP, ledger=True, changed=["docs/other.md"]) is None
+    assert _floor(prep=_PREP, ledger=True, changed=[]) is None
+
+
+@pytest.mark.parametrize("changed", [["pkg/declared.py"], ["pkg/declared.py", "x.md"], None, "pkg/declared.py"])
+def test_a_ledger_resume_with_a_delta_or_an_unknown_one_still_halts(changed) -> None:
+    assert _floor(prep=_PREP, ledger=True, changed=changed)["halted"] == HALT_REVIEW_FLOOR
+
+
+def test_a_fresh_run_ignores_the_first_halt_changed_set() -> None:
+    assert _floor(prep={**_PREP, "product_files": 2}, changed=["docs/other.md"])["halted"] == HALT_REVIEW_FLOOR
 
 
 def test_a_verdict_still_satisfies_the_floor_with_a_delta() -> None:

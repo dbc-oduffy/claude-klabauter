@@ -5,10 +5,12 @@ agy fails closed on `{}`, so every non-deny answer is an explicit decision.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -64,9 +66,43 @@ def is_subagent_conversation(conversation: str) -> bool:
             row = con.execute("SELECT data FROM gen_metadata ORDER BY idx LIMIT 1").fetchone()
         finally:
             con.close()
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
+        record_read_failure(conversation, exc)
         return False
     return bool(row and isinstance(row[0], bytes) and b"parent_cascade_id" in row[0])
+
+
+#: Past this size the failure log stops growing; a stuck-failing store cannot fill disk.
+_READ_FAILURE_LOG_CAP = 1_000_000
+
+
+def read_failure_log() -> Path:
+    """The JSONL where an unreadable conversation db is recorded (beside the advisory stash)."""
+    return advisory_dir().parent / "agy-read-failures.jsonl"
+
+
+def record_read_failure(conversation: str, error: BaseException) -> None:
+    """Append one `{"at", "conversation", "error"}` line; never raises, never changes a verdict.
+
+    The EM fallback in `is_subagent_conversation` is what keeps a locked store from denying an EM, so this
+    line is the only trace if a rising read-failure rate is quietly reopening the subagent hole.
+    """
+    try:
+        path = read_failure_log()
+        if path.is_file() and path.stat().st_size >= _READ_FAILURE_LOG_CAP:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(
+            {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "conversation": conversation,
+                "error": f"{type(error).__name__}: {error}",
+            }
+        )
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except Exception:
+        return
 
 
 class AgyAdapter:

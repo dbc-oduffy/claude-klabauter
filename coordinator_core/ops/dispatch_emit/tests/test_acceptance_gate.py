@@ -20,7 +20,7 @@ C1_ACCEPTANCE = (
 
 def test_plan_prose_acceptance_keeps_argv0_as_written_and_drops_exits_clause():
     rows = [{"id": "C1", "acceptance": C1_ACCEPTANCE, "register_rows": ["R1"]}]
-    [(row_id, regs, argv)] = ag.test_command_rows(rows)
+    [(row_id, regs, argv)] = ag.acceptance_test_command_rows(rows)
     assert (row_id, regs) == ("C1", ["R1"])
     assert argv[:3] == ["python", "-m", "pytest"] and argv[0] != sys.executable
     assert argv[-1] == "-q" and "exits" not in argv and "0" not in argv
@@ -28,7 +28,7 @@ def test_plan_prose_acceptance_keeps_argv0_as_written_and_drops_exits_clause():
 
 def test_backticked_pytest_command_is_selected():
     rows = [{"id": "C2", "acceptance": "`pytest tests/test_a.py -q` exits 0", "register_rows": ["R2"]}]
-    assert ag.test_command_rows(rows) == [("C2", ["R2"], ["pytest", "tests/test_a.py", "-q"])]
+    assert ag.acceptance_test_command_rows(rows) == [("C2", ["R2"], ["pytest", "tests/test_a.py", "-q"])]
 
 
 @pytest.mark.parametrize("acceptance", [
@@ -40,11 +40,11 @@ def test_backticked_pytest_command_is_selected():
     7,
 ])
 def test_non_runner_and_prose_acceptance_is_skipped(acceptance):
-    assert ag.test_command_rows([{"id": "C9", "acceptance": acceptance, "register_rows": ["R1"]}]) == []
+    assert ag.acceptance_test_command_rows([{"id": "C9", "acceptance": acceptance, "register_rows": ["R1"]}]) == []
 
 
 def test_row_without_register_rows_yields_empty_list():
-    assert ag.test_command_rows([{"id": "C3", "acceptance": "pytest a.py"}]) == [("C3", [], ["pytest", "a.py"])]
+    assert ag.acceptance_test_command_rows([{"id": "C3", "acceptance": "pytest a.py"}]) == [("C3", [], ["pytest", "a.py"])]
 
 
 def _items():

@@ -1,6 +1,6 @@
 """Acceptance gate: which plan rows name a test command, and demotion of met rows whose command is red.
 
-Pure predicates, no spawn. `test_command_rows` runs at compose time (Python reads the spine);
+Pure predicates, no spawn. `acceptance_test_command_rows` runs at compose time (Python reads the spine);
 `demote_red` runs in the composed script, so it ships a JS twin (`DEMOTE_RED_JS`) that ask_compose
 emits. A result without an integer exit is red: an agent that skipped the command cannot leave a row met.
 """
@@ -12,7 +12,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from coordinator_core.ops.dispatch_emit import objective_check
 
-__all__ = ["DEMOTE_RED_JS", "demote_red", "test_command_rows"]
+__all__ = ["DEMOTE_RED_JS", "acceptance_test_command_rows", "demote_red"]
 
 _RUNNER_HEADS = ("python", "python3", "py")
 
@@ -46,7 +46,7 @@ def _names_test_runner(argv: list) -> bool:
     return head.removesuffix(".exe") in _RUNNER_HEADS and argv[1:3] == ["-m", "pytest"]
 
 
-def test_command_rows(rows: Iterable[Mapping[str, Any]]) -> list:
+def acceptance_test_command_rows(rows: Iterable[Mapping[str, Any]]) -> list:
     """`[(row_id, register_rows, argv)]` for each spine row whose `acceptance:` names pytest or
     `python -m pytest`; prose acceptance is skipped. argv[0] stays as written and a trailing
     `exits <n>` clause is removed."""

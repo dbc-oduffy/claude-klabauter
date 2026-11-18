@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.host_hooks import agy_adapter
 from coordinator_core.host_hooks.agy_adapter import SERVED_EVENTS, AgyAdapter, advisory_dir, stash_advisory
 from coordinator_core.host_hooks.contract import Adapter, neutral_fallback
 from coordinator_core.warm import hook_http
@@ -274,3 +275,39 @@ def test_ask_naming_an_unregistered_guard_stays_an_advisory_never_a_deny() -> No
     ev = adapter.adapt_event(PAYLOAD)
     out = adapter.render(ev, {"decision": "ask", "reason": "confirm", "guard": "bump-foreign-repo-write"})
     assert out == _visible("confirm")
+
+
+def _bad_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conversation: str) -> None:
+    folder = tmp_path / "agy-conversations"
+    folder.mkdir()
+    (folder / f"{conversation}.db").write_text("not sqlite", encoding="utf-8")
+    monkeypatch.setattr(agy_adapter, "conversations_dir", lambda: folder)
+
+
+def test_a_read_failure_answers_em_and_records_one_line_naming_conversation_and_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conversation = "1efd6565-4b6a-434a-989d-f7814c28bdd8"
+    _bad_store(tmp_path, monkeypatch, conversation)
+    assert agy_adapter.is_subagent_conversation(conversation) is False
+    lines = agy_adapter.read_failure_log().read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["conversation"] == conversation
+    assert record["error"].startswith("DatabaseError")
+    assert record["at"]
+
+
+def test_a_failing_record_path_never_raises_and_the_answer_stays_em(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conversation = "1efd6565-4b6a-434a-989d-f7814c28bdd8"
+    _bad_store(tmp_path, monkeypatch, conversation)
+    (tmp_path / "unimatrix").write_text("a file where the log directory must go", encoding="utf-8")
+    assert agy_adapter.is_subagent_conversation(conversation) is False
+
+
+def test_a_readable_or_absent_store_records_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(agy_adapter, "conversations_dir", lambda: tmp_path / "absent")
+    assert agy_adapter.is_subagent_conversation("1efd6565-4b6a-434a-989d-f7814c28bdd8") is False
+    assert not agy_adapter.read_failure_log().exists()
