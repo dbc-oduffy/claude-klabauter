@@ -20,6 +20,8 @@ A7 reader owns truncation.
 CLI: unimatrix-host-guard.py --host codex|agy|grok [--engine-root PATH]
   stdin: one hook payload. stdout: exactly one JSON line. stderr: `state`. Exit 0 always.
 """
+import contextlib
+import io
 import json
 import os
 import sys
@@ -27,7 +29,7 @@ import threading
 import time
 from pathlib import Path
 
-NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}, "grok": {}}
+NEUTRAL = {"agy": {"decision": "allow"}, "codex": {}, "grok": {}}
 NEUTRAL_UNKNOWN = "neutral-unknown"
 DEFAULT_BUDGET_SECS = 0.5
 DEGRADE_LOG_NAME = "host-guard-degrades.jsonl"
@@ -251,13 +253,12 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pendin
             return answer, NEUTRAL_UNKNOWN
         if host == "grok" and answer.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
             return answer, NEUTRAL_UNKNOWN
-        # Trap: the warm engine answers a neutral agy command with "allow"; the guard's contract is
-        # never-allow, so anything but a deny becomes the ask fallback and never counts as governance.
-        # An ask carrying a reason (the agy adapter renders an advisory that way) keeps its text.
+        # Trap: a non-deny agy answer is never forwarded as an ask (agy -p auto-approves it); it becomes an
+        # allow that keeps the advisory reason and never counts as governance.
         if host == "agy" and answer["decision"] != "deny":
             reason = answer.get("reason")
-            if answer["decision"] == "ask" and isinstance(reason, str) and reason:
-                return {"decision": "ask", "reason": reason}, NEUTRAL_UNKNOWN
+            if isinstance(reason, str) and reason:
+                return {"decision": "allow", "reason": reason}, NEUTRAL_UNKNOWN
             return _neutral(host), NEUTRAL_UNKNOWN
         return answer, "engine"
     except Exception:
@@ -284,7 +285,9 @@ def main(argv=None):
             stdin_text = sys.stdin.read()
         except Exception:
             stdin_text = ""
-        answer, state = guard(host, stdin_text, engine_root, pending=pending)
+        # Trap: the in-process shim and engine print notices on stderr; the contract is `state` alone.
+        with contextlib.redirect_stderr(io.StringIO()):
+            answer, state = guard(host, stdin_text, engine_root, pending=pending)
     except Exception:
         try:
             answer, state = _degrade(host, "run_error", DEFAULT_BUDGET_SECS, None, stdin_text, engine_root)

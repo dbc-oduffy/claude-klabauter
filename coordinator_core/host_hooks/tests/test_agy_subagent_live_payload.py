@@ -1,9 +1,7 @@
 """The live agy subagent payload (child conversation UUID, `run_command`) through `shim.decide`, cold engine.
 
 Post-fix contract of the 2076b459c8 live probe: a dry run is an explicit allow (never `guard did not run`), the
-destructive form is still denied, and the dashed conversation UUID resolves as a subagent id. The first two
-`designed_red` tests turn green with the shim fallback fix, the third with the id-shape fix; each fix removes
-its own marker.
+destructive form is still denied, and the dashed conversation UUID resolves as a subagent id.
 """
 from __future__ import annotations
 
@@ -48,7 +46,6 @@ def _live_payload(repo, command: str) -> dict:
     }
 
 
-@pytest.mark.designed_red
 def test_subagent_git_clean_dry_run_is_an_explicit_allow(repo):
     answer = shim.decide("agy", _live_payload(repo, "git clean -n"))
     assert answer["decision"] == "allow"
@@ -61,7 +58,6 @@ def test_subagent_git_clean_force_is_still_denied(repo):
     assert "block-subagent-destructive-action" in answer["reason"]
 
 
-@pytest.mark.designed_red
 @pytest.mark.parametrize("command", ["git clean -n", "git clean -f untracked-b.txt"])
 def test_subagent_conversation_uuid_resolves_so_no_canonicalization_leg_is_logged(repo, capsys, command):
     shim.decide("agy", _live_payload(repo, command))

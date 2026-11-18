@@ -32,7 +32,7 @@ def load():
 
 
 hg = load()
-NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}, "grok": {}}
+NEUTRAL = {"agy": {"decision": "allow"}, "codex": {}, "grok": {}}
 GROK_PAYLOAD = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "edit_file",
                            "tool_input": {"path": "a.py"}, "cwd": "/x"})
 GROK_DENY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
@@ -408,7 +408,7 @@ def test_stray_stderr_never_reaches_stdout(tmp_path):
     root = make_engine(tmp_path, shim_src("sys.stderr.write('noise\\n'); return {'decision': 'ask'}"))
     proc = subprocess.run([sys.executable, str(SCRIPT), "--host", "agy", "--engine-root", root],
                           input=AGY_PAYLOAD, capture_output=True, text=True)
-    assert proc.stdout.strip() == '{"decision": "ask"}'
+    assert proc.stdout.strip() == '{"decision": "allow"}'
     assert "noise" not in proc.stdout
 
 
@@ -465,20 +465,33 @@ def test_real_codex_adapter_renders_nested_deny():
 
 
 @pytest.mark.parametrize("decision", ["allow", "ask", "force_ask"])
-def test_agy_engine_non_deny_never_passes_allow_through(tmp_path, monkeypatch, decision):
-    # The warm engine answers a neutral agy command with "allow"; the guard must answer ask instead.
+def test_agy_engine_non_deny_answers_allow_never_a_bare_ask(tmp_path, monkeypatch, decision):
     stub_shim(monkeypatch, {"decision": decision})
     answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
     assert state != "engine"
     if decision == "force_ask":
         assert state == "degraded" and answer["decision"] == "allow" and answer["reason"]
     else:
-        assert answer == {"decision": "ask"}
+        assert answer == {"decision": "allow"} and state == hg.NEUTRAL_UNKNOWN
 
 
-def test_agy_advisory_is_stashed_for_preinvocation_while_the_guard_answer_stays_the_never_allow_ask(tmp_path, monkeypatch):
-    # agy -p auto-approves an `ask` and PreToolUse takes no `injectSteps`: delivery is the stash the adapter
-    # writes, drained by the PreInvocation hook; the guard still never forwards an allow.
+@pytest.mark.parametrize("decision", ["allow", "ask"])
+def test_agy_engine_non_deny_keeps_the_advisory_reason_as_allow(tmp_path, monkeypatch, decision):
+    stub_shim(monkeypatch, {"decision": decision, "reason": "advisory text"})
+    answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
+    assert answer == {"decision": "allow", "reason": "advisory text"} and state == hg.NEUTRAL_UNKNOWN
+
+
+def test_agy_engine_deny_passes_through_unchanged_as_engine(tmp_path, monkeypatch):
+    deny = {"decision": "deny", "reason": "irreversible"}
+    stub_shim(monkeypatch, dict(deny))
+    answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
+    assert answer == deny and state == "engine"
+
+
+def test_agy_advisory_is_stashed_for_preinvocation_while_the_guard_answer_is_an_allow_with_the_reason(tmp_path, monkeypatch):
+    # PreToolUse takes no `injectSteps`: delivery is the stash the adapter writes, drained by the
+    # PreInvocation hook; the guard answer is an allow carrying the advisory reason.
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.syspath_prepend(str(REPO))
     from coordinator_core.host_hooks.agy_adapter import AgyAdapter, advisory_dir
@@ -490,7 +503,7 @@ def test_agy_advisory_is_stashed_for_preinvocation_while_the_guard_answer_stays_
     assert [p.read_text(encoding="utf-8") for p in (advisory_dir() / "conv-1").glob("*.txt")] == ["advisory nag"]
     stub_shim(monkeypatch, rendered)
     answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
-    assert answer == {"decision": "ask"} and state == hg.NEUTRAL_UNKNOWN
+    assert answer == {"decision": "allow", "reason": "advisory nag"} and state == hg.NEUTRAL_UNKNOWN
 
 
 def test_other_degrade_causes_are_distinguishable(tmp_path, monkeypatch, settings_home):

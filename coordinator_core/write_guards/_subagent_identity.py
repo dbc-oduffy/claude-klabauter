@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from coordinator_core.session.identity import canonicalize_dashed_uuid
 from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 
 _BARE_HEX_RE = re.compile(r"^[a-f0-9]{12,}$")
@@ -91,7 +92,9 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
           directory than the one branch (b) above (and every other
           bookkeeping writer) builds fresh from the live session. See
           ``normalize_teammate_agent_id`` for the full mechanism.
-      (c) Anything else -> ``""`` (fail-closed — unknown agent shape).
+      (e) Lowercase dashed 8-4-4-4-12 UUID (agy conversation id) -> dashless
+          hex via ``session.identity.canonicalize_dashed_uuid``.
+      Anything else -> ``""`` (fail-closed — unknown agent shape).
     """
     if _BARE_HEX_RE.fullmatch(agent_id):
         return agent_id
@@ -107,7 +110,7 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
     if _TEAMMATE_CANONICAL_RE.fullmatch(agent_id):
         return normalize_teammate_agent_id(agent_id, session_id)
 
-    return ""
+    return canonicalize_dashed_uuid(agent_id)
 
 
 def _read_backpointer_subagent_type(

@@ -47,10 +47,10 @@ def test_neutral_fallback_codex_is_empty_object() -> None:
     assert neutral_fallback("codex") == {}
 
 
-def test_neutral_fallback_agy_asks_and_is_never_empty() -> None:
+def test_neutral_fallback_agy_allows_and_is_never_empty() -> None:
     fb = neutral_fallback("agy")
-    assert fb["decision"] == "ask"
-    assert fb != {}
+    assert fb["decision"] == "allow"
+    assert "guard did not run" in fb["reason"]
 
 
 def test_grok_is_a_host_and_its_neutral_fallback_is_empty_object() -> None:

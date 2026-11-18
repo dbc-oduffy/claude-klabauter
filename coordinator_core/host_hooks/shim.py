@@ -107,8 +107,9 @@ def _cold_verdict(event: HostEvent, engine_event: Mapping[str, Any]) -> Optional
 
     Runs only when the engine gave no verdict. A shell command forwards a deny only; a mapped write also
     forwards the advisory (`additionalContext`, the DIY nag), so a cold engine treats a codex or agy EM
-    like the Claude path. A payload carrying `agent_id` gets the subagent limits: the guards advise it
-    nothing. Other tools and any failure return None.
+    like the Claude path. A chain that ran and did not deny answers `{}`, an allow; None means the chain
+    did not run (other tools, a raise, a non-dict answer). A payload carrying `agent_id` gets the subagent
+    limits: the guards advise it nothing.
     """
     shell = event.tool_name == "Bash"
     if not shell and event.tool_name not in _WRITE_TOOLS:
@@ -123,7 +124,7 @@ def _cold_verdict(event: HostEvent, engine_event: Mapping[str, Any]) -> Optional
         return None
     if verdict.get("permissionDecision") == "deny":
         return verdict
-    return None if shell or not verdict.get("additionalContext") else verdict
+    return {} if shell or not verdict.get("additionalContext") else verdict
 
 
 def _nag_text(host: str, event: HostEvent, engine_event: Mapping[str, Any]) -> str:
@@ -237,6 +238,8 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
         _degrade("KIND_HOOK_TIMEOUT", "host_hooks.shim %s: engine dial exceeded %.0fms" % (host, DIAL_BUDGET_SECS * 1000))
     else:
         _degrade("KIND_COLD_RUN", "host_hooks.shim %s: no engine verdict" % host)
+    if cold is not None:
+        return adapter.render(event, cold)
     return neutral_fallback(host)
 
 
