@@ -180,6 +180,7 @@ REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
 from coordinator_core.ops.dispatch_emit import stage_family_binding as _stage_family_binding
+from coordinator_core.ops.dispatch_emit.pipeline_compose import FALLBACK_CAUSE_JS as _FALLBACK_CAUSE_JS
 from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_source
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
 from coordinator_core.ops.dispatch_emit.rag_use import (
@@ -3125,6 +3126,12 @@ _COMMIT_HALT_REASON_JS = (
 _GATE_HALT_CAUSE_JS = "(_gate.halt ? 'gate halt: ' + String(_gate.halt.kind ?? _gate.halt.reason ?? 'halt') : 'apm ruling carried no foldable arm (non-XS arm or resume_plan)')"
 
 
+#: A scout-returned arm in any letter case or padding compares equal to the lowercase arm constants.
+_GATE_ARM_FOLD_CASE_JS = (
+    "  if (typeof _gate.arm === 'string') { _gate = { ..._gate, arm: _gate.arm.trim().toLowerCase() }; }"
+)
+
+
 def _fold_decline_js(clean_js: str, cause_js: Optional[str] = None) -> str:
     """JS `else` clause for a guarded fold site: records into `_noFoldCause` why nothing folded."""
     cause = cause_js or (
@@ -3827,7 +3834,8 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
     failed = " || ".join(f"_fam.verdict === {_lit(v)}" for v in _stage_family.FALLBACK_VERDICTS)
     return (
         f"  const _FAMILY_RESULT_SCHEMA = {schema};\n"
-        "  const _famStart = (r) => "
+        + _FALLBACK_CAUSE_JS
+        + "  const _famStart = (r) => "
         + _js_string_literal(
             "First, before anything else, run exactly this one command as its own Bash call, no wrapper, "
             f"no edit to it, and do not retry it:\n\n{start_cmd}"
@@ -3856,12 +3864,14 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
         "    log(r.id + ': ' + _fam.family + ' attempt ' + _fam.verdict + ' (' + _fam.blocked_reason + '); rerunning on '"
         f" + {_lit(_stage_family.FALLBACK)});\n"
         "    let _fbText = null;\n"
-        f"    try {{ _fbText = await agent(_rowPrompt({{ ...r, brief_path: r.fallback_brief_path }}), {fb_opts}); }} catch (e) {{ _fbText = null; }}\n"
-        "    const _fbOk = typeof _fbText === 'string' && _fbText.trim() !== '' && "
-        "!/(^|\\n)\\s*[*_`]{0,2}(PARTIAL|BLOCKED)[*_`]{0,2}:/.test(_fbText);\n"
+        "    let _fbCause = '';\n"
+        f"    try {{ _fbText = await agent(_rowPrompt({{ ...r, brief_path: r.fallback_brief_path }}), {fb_opts}); }} "
+        "catch (e) { _fbText = null; _fbCause = 'dispatch threw: ' + String((e && e.message) || e).slice(0, 300); }\n"
+        "    if (!_fbCause) _fbCause = _fallbackCause(_fbText, false);\n"
+        "    const _fbOk = _fbCause === '';\n"
         f"    const _fb = {{ family: {_lit(_stage_family.FALLBACK)}, stage: r.stage_role, exit_code: _fbOk ? 0 : 1, output_path: '', "
         "verdict: _fbOk ? 'OK' : 'FAILED' };\n"
-        f"    if (!_fbOk) _fb.blocked_reason = {_lit(_stage_family.FALLBACK + ' fallback reply missing or not DONE')};\n"
+        f"    if (!_fbOk) _fb.blocked_reason = {_lit(_stage_family.FALLBACK + ' fallback ')} + _fbCause;\n"
         "    const _rec = { stage_role: r.stage_role, attempts: [_fam, { ..._fb, fallback_for: _fam.family }], "
         f"reported_family: {_lit(_stage_family.FALLBACK)} }};\n"
         f"    return (_fbOk ? 'DONE: ' : 'BLOCKED: ') + r.id + ' via {_stage_family.FALLBACK} fallback after ' + _fam.family + ' ' + _fam.verdict + ' ' + JSON.stringify(_rec);\n"
@@ -5175,6 +5185,7 @@ def compose_ask_script(
             f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null, chain_emit: _scouted.chain_emit ?? null }}"
             + (")" if launcher_child else "") + ";"
         )
+        b.append(_GATE_ARM_FOLD_CASE_JS)
         # A clean assemble whose scout left the gate unanswered: a known (route, tshirt) yields its arm
         # from values in hand (XS also needs the footprint the gate would otherwise refuse on); only an
         # unmapped pair runs the gate agent, once. A derived arm skips the agent's stage fold, so the

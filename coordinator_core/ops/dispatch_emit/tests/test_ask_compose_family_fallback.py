@@ -1,9 +1,12 @@
 """The emitted family leg: one family attempt, one claude fallback, both results kept.
 
-Assertions read the emitted JS text; the leg is not executed here."""
+Most assertions read the emitted JS text; the fallback-reply tests execute the emitted `_familyRun` in node."""
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -118,6 +121,58 @@ def test_row_without_a_fallback_brief_keeps_the_family_attempt_and_never_reruns_
     assert guard < fn.index("brief_path: r.fallback_brief_path")
     assert "return 'BLOCKED: ' + r.id + ' via ' + _fam.family" in fn[guard : fn.index("brief_path: r.fallback_brief_path")]
     assert fn.count("await agent(") == 2
+
+
+_NODE = shutil.which("node")
+_FAILED_FAMILY = {"family": "codex", "stage": "impl", "exit_code": 1, "output_path": "", "verdict": "FAILED", "blocked_reason": "no stage work"}
+_ROW = {"id": "C1", "family": "codex", "stage_role": "impl", "fallback_brief_path": "b.md", "agent_type": "a", "fallback_agent_type": "b", "model": "m"}
+
+
+def _run_family(monkeypatch, tmp_path, fallback_reply: dict) -> tuple[str, dict]:
+    """Execute the emitted `_familyRun` in node: the family attempt FAILED, the fallback answers `fallback_reply`."""
+    script = _script(monkeypatch, _OPTED)
+    body = script[script.index("  const _FAMILY_RESULT_SCHEMA = ") : script.index("\n  }\n", script.index("  async function _familyRun(r) {")) + 4]
+    prog = (
+        "const _rowPrompt = () => 'P'; const log = () => {}; const _famOk = {};\n"
+        f"const _replies = [{json.dumps({'v': _FAILED_FAMILY})}, {json.dumps(fallback_reply)}]; let _n = 0;\n"
+        "async function agent() { const x = _replies[_n++]; if (x.throw) throw new Error(x.throw); return x.v; }\n"
+        f"{body}\n_familyRun({json.dumps(_ROW)}).then((r) => console.log(r));\n"
+    )
+    path = tmp_path / "family.js"
+    path.write_text(prog, encoding="utf-8")
+    out = subprocess.run(
+        [_NODE, str(path)], capture_output=True, text=True, timeout=30, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout.strip()
+    head, _, rec = out.partition(" {")
+    return head, json.loads("{" + rec)
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+def test_done_fallback_reply_is_consumed_as_an_ok_attempt(monkeypatch, tmp_path):
+    head, rec = _run_family(monkeypatch, tmp_path, {"v": "DONE: C1\nStatus: DONE"})
+    fb = rec["attempts"][1]
+    assert head.startswith("DONE: C1 via claude fallback after codex FAILED")
+    assert (fb["verdict"], fb["exit_code"], fb["fallback_for"]) == ("OK", 0, "codex") and "blocked_reason" not in fb
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+@pytest.mark.parametrize(
+    "reply, cause",
+    [
+        ({"throw": "boom"}, "dispatch threw: boom"),
+        ({"v": None}, "reply missing (dispatch returned nothing)"),
+        ({"v": {"x": 1}}, "reply was not text (object)"),
+        ({"v": "  \n"}, "reply was empty"),
+        ({"v": "PARTIAL: C1\nStatus: PARTIAL\ngate-blocker: codex worker performed no stage work\n"}, "replied PARTIAL, gate-blocker: codex worker performed no stage work"),
+        ({"v": "**BLOCKED:** C1 cannot read the brief\nmore"}, "replied **BLOCKED:** C1 cannot read the brief"),
+    ],
+)
+def test_non_done_fallback_reply_records_its_actual_cause(monkeypatch, tmp_path, reply, cause):
+    head, rec = _run_family(monkeypatch, tmp_path, reply)
+    fb = rec["attempts"][1]
+    assert head.startswith("BLOCKED: C1 via claude fallback after codex FAILED")
+    assert fb["verdict"] == "FAILED" and fb["blocked_reason"] == f"claude fallback {cause}"
 
 
 def test_unminted_sizing_path_carries_the_leg(monkeypatch):

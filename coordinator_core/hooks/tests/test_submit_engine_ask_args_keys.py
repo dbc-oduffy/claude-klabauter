@@ -43,7 +43,7 @@ def test_unknown_top_level_key_denies_naming_it_and_the_accepted_keys(tmp_path):
 
 
 def test_args_keys_cover_every_key_the_hook_reads():
-    assert {"ask", "asks", "sizing", "context", "em_context", "brief", "brief_file", "sender"} <= set(mod._ARGS_KEYS)
+    assert {"ask", "asks", "sizing", "context", "em_context", "brief", "brief_file", "sender", "fresh"} <= set(mod._ARGS_KEYS)
     assert len(set(mod._ARGS_KEYS)) == len(mod._ARGS_KEYS)
 
 

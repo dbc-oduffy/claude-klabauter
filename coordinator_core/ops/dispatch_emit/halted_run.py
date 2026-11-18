@@ -48,6 +48,8 @@ DISPOSITION_SCRATCH = "scratch-abandoned"
 DISPOSITION_LOST = "lost"
 STATUS_CLOSED = "closed"
 HALT_RUN_BASE_FIELD = "run_base_sha"
+HALT_ENGINE_FIELD = "engine_sha"
+SUPERSEDED_BY_REFIRE = "superseded-by-refire"
 HALT_REASON_FIELD = "reason"
 HALT_RUN_ARTIFACTS_FIELD = "run_artifacts"
 REVISED_AT_FIELD = "revised_at"
@@ -293,6 +295,11 @@ def write_halt_marker(
         payload[HALT_NEXT_ACTION_FIELD] = next_action
     if run_base_sha and _SHA40.fullmatch(run_base_sha):
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
+    running_engine = halt_resume_record.engine_sha()
+    if running_engine is not None:
+        payload[HALT_ENGINE_FIELD] = running_engine
     root = _target_root(Path(record_dir))
     splits = find_split_trees(root) if root is not None else []
     if splits:
@@ -931,6 +938,33 @@ def mark_closed(record_dir: Path, reason: str, at: str) -> bool:
     if not reason or marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_CLOSED, "closed": {"reason": reason, "at": at}})
+    _index_call("remove_run", record_dir)
+    _live_index_drop(record_dir)
+    _record_judge(record_dir)
+    return True
+
+
+def ran_under_engine(record_dir: Path) -> Optional[str]:
+    """The engine sha the halt marker stamped (40-hex), else None (absent, unreadable, unstamped).
+
+    Trap: never falls back to `resume.json`; every recompose restamps its `engine_sha` with the current
+    engine, so a run resumed after a swap would read as current."""
+    marker = _read(Path(record_dir))
+    value = marker.get(HALT_ENGINE_FIELD) if marker else None
+    return value if isinstance(value, str) and _SHA40.fullmatch(value) else None
+
+
+def mark_superseded_by_refire(record_dir: Path, *, prior_engine: Optional[str], engine: Optional[str], at: str) -> bool:
+    """Rewrite a `halted` or `resumed` marker as `superseded` with evidence kind `superseded-by-refire`: a
+    fresh refire closes the prior run and credits none of its kept chunks. False and no write for any other
+    status (landed, closed, superseded) or an absent marker."""
+    marker = _read(Path(record_dir))
+    if marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
+        return False
+    evidence = {
+        "kind": SUPERSEDED_BY_REFIRE, "prior_engine": prior_engine, "engine": engine, "at": at, "kept_credit": False,
+    }
+    _write(Path(record_dir), {**marker, "status": STATUS_SUPERSEDED, SUPERSEDED_EVIDENCE_FIELD: evidence})
     _index_call("remove_run", record_dir)
     _live_index_drop(record_dir)
     _record_judge(record_dir)

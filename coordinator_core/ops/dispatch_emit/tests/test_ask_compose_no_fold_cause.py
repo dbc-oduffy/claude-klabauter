@@ -65,6 +65,20 @@ def test_the_three_named_causes_are_composed(script):
     assert "gate halt: " in ask_compose._GATE_HALT_CAUSE_JS
 
 
+def test_a_sized_in_run_scout_arm_is_case_folded_before_the_fold_site_reads_it():
+    sized = _compose(prompt="add a thing", sizing_rel=None, writes=["a.py"])
+    fold = ask_compose._GATE_ARM_FOLD_CASE_JS
+    assert sized.count(fold) == 1
+    gate_at = sized.index("let _gate = ")
+    site = "await _adoptStageReply(_scouted.stage_reply); }"
+    assert gate_at < sized.index(fold) < sized.index(site)
+    assert "_gate.arm === 'xs'" in sized
+
+
+def test_the_case_fold_is_composed_only_where_a_scout_returns_the_arm():
+    assert ask_compose._GATE_ARM_FOLD_CASE_JS not in _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
+
+
 def test_no_change_commit_halts_as_no_op_carrying_the_paths(script):
     assert f"if (_halted?.refused === '{NO_CHANGE_REFUSAL}') {{ Object.assign(_halted, {{ halted: 'no-op'" in script
     assert f"{MEANT_TO_LAND_KEY}: _commit?.{MEANT_TO_LAND_KEY} ?? null" in script

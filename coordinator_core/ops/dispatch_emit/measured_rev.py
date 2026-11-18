@@ -127,6 +127,22 @@ def touched_paths(repo_root: Path, run_id: str) -> list:
     return [p for p in data if isinstance(p, str)] if isinstance(data, list) else []
 
 
+def _run_owning_root(root: Path, run_id: str) -> Path:
+    """The checkout that holds the run's record dir: `root` when it does, else the nearest enclosing
+    checkout (a `.git` entry) that does, else `root`. Stat-only; a nested clone never forks the record."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+
+    def holds(p: Path) -> bool:
+        return (p / RECORD_DIR_ROOT / run_id).is_dir() or (p / RUN_DIR_ROOT / run_id).is_dir()
+
+    if holds(root):
+        return root
+    for parent in root.parents:
+        if (parent / ".git").exists() and holds(parent):
+            return parent
+    return root
+
+
 def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None = None) -> Dict[str, Any]:
     """Params `run_id`, `paths`; returns a dict keyed by `MEASURED_REV_KEYS`
     (`sha`, `base_sha`, `paths`, `removed`, `blobs`, `tree`) plus `reach_dirt`: tracked
@@ -144,6 +160,9 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     path outside the repo, a directory, glob or submodule path in `paths`, or an unsupported checkin filter.
     `repo_root` defaults to the current directory."""
     root = Path(repo_root) if repo_root is not None else Path.cwd()
+    # Trap: called for its ValueError on an unsafe run_id, so `_run_owning_root` never stats a path built from it.
+    measured_rev_record_path(root, run_id)
+    root = _run_owning_root(root, run_id)
     record = measured_rev_record_path(root, run_id)
     base = head_sha(root, fresh=True)
     if base is None:

@@ -295,6 +295,58 @@ def _load_parent(root: Path, rel: str) -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
+_NON_CLAUDE_FAMILIES = ("codex", "grok", "agy")
+_SUPERSEDES_RE = re.compile(
+    r"\bsupersed(?:es|ed|ing)\s+(?:the\s+)?(?:halted\s+)?(?:run\s+|sizing\s+)?"
+    r"((?:warp|ask)-[A-Za-z0-9._-]*[A-Za-z0-9]|state/sizings/[A-Za-z0-9._/-]*\.yaml)",
+    re.IGNORECASE,
+)
+_ROW_FAMILY_RE = re.compile(r"\bsizing family\s*[:=]?\s*(" + "|".join(_NON_CLAUDE_FAMILIES) + r")\b", re.IGNORECASE)
+
+
+def _sizing_family(root: Path, rel: str) -> str:
+    """The non-claude `family` of the sizing at repo-relative `rel`, else ""."""
+    try:
+        found = contained_path(root / rel, [Path(home_dir(str(root), "sizings"))])
+        doc = yaml.safe_load(found.read_text(encoding="utf-8")) if found is not None and found.is_file() else None
+    except (OSError, ValueError, yaml.YAMLError):
+        return ""
+    value = doc.get("family") if isinstance(doc, Mapping) else None
+    return value if value in _NON_CLAUDE_FAMILIES else ""
+
+
+def run_family(root: Path, run_id: str) -> str:
+    """The non-claude family of the sizing the run `run_id` was fired from, else "". One run.json read."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        data = json.loads((record_dir(root, run_id) / "run.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    rel = data.get("sizing_rel") if isinstance(data, Mapping) else None
+    return _sizing_family(root, rel.replace("\\", "/")) if isinstance(rel, str) and rel else ""
+
+
+def named_family(root: Path, texts: list[str], prior_runs: tuple[str, ...] = ()) -> tuple[str, str]:
+    """(family, source) a sizing's predecessor or plan-row prose names, else ("", "").
+
+    A predecessor is a run in `prior_runs` or one `texts` says it supersedes (a run id or a
+    `state/sizings/*.yaml` path); a row names a family by the phrase `sizing family: <name>`. Only a
+    non-claude family counts; each candidate is one record read."""
+    for run_id in prior_runs:
+        if family := run_family(root, run_id):
+            return family, f"its predecessor run {run_id}"
+    for text in texts:
+        for token in dict.fromkeys(_SUPERSEDES_RE.findall(text or "")):
+            is_sizing = token.endswith(".yaml")
+            family = _sizing_family(root, token) if is_sizing else run_family(root, token)
+            if family:
+                return family, f"its superseded {'sizing' if is_sizing else 'run'} {token}"
+        if hit := _ROW_FAMILY_RE.search(text or ""):
+            return hit.group(1).lower(), "the plan row text"
+    return "", ""
+
+
 def _parent_rows(sizing: Mapping) -> list[dict]:
     register = sizing.get(rr.REGISTER_KEY)
     rows = register.get(rr.ROWS_KEY) if isinstance(register, Mapping) else None
@@ -360,9 +412,11 @@ def _slice_record(
     context: tuple[Optional[str], tuple[str, ...]] = (None, ()),
     stop_after: Optional[str] = None,
     sized: Optional[Mapping] = None, deliverable_id: Optional[str] = None,
-    repo_root: Optional[Path] = None,
+    repo_root: Optional[Path] = None, family: str = "",
 ) -> dict:
-    """A slice sizing. A relayed or unmarked asks item (it arrives with no `turns`) is stamped relayed,
+    """A slice sizing; a non-empty `family` is set as its top-level `family` key.
+
+    A relayed or unmarked asks item (it arrives with no `turns`) is stamped relayed,
     carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row.
 
     `sized` ({ruling_ref, mode}) makes a fan_out slice already routed: its estimate, the route from
@@ -423,6 +477,8 @@ def _slice_record(
             record["interaction_mode"] = sized["mode"]
     if deliverable_id:
         record["deliverable_id"] = deliverable_id
+    if family:  # a routing key the sizing schema does not list; the caller validates without it
+        record["family"] = family
     return record
 
 
@@ -903,8 +959,9 @@ def _fanout(
             context=contexts[i], stop_after=stop_afters[i],
             sized=sized, deliverable_id=deliverable_id if sized and sl.label == contract.SEAM_PASS_LABEL else None,
             repo_root=root,
+            family=named_family(worktree, [sl.ask, relay[i][1] or "", contexts[i][0] or ""])[0],
         )
-        errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
+        errors = validate_frontmatter({k: v for k, v in record.items() if k != "family"}, _SIZING_SCHEMA_PATH)
         if errors:
             raise _Refused(f"slice {sl.label!r} failed schema validation: {format_validation_errors(errors)}")
         records.append((rel, yaml.safe_dump(record, sort_keys=False, allow_unicode=True)))

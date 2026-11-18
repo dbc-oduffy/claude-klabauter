@@ -31,7 +31,9 @@ def test_round_trip(tmp_path: Path) -> None:
     d = _dir(tmp_path, "20261016T010000-aaaaaa")
     p = hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
     assert p == d / hr.HALTED_FILE
-    assert json.loads(p.read_text()) == {
+    written = json.loads(p.read_text())
+    written.pop(hr.HALT_ENGINE_FIELD, None)
+    assert written == {
         "status": "halted", "halted": "criterion_not_met", "sizing_rel": SIZING,
     }
     assert hr.halted_run_for(tmp_path, SIZING) == d.name
@@ -83,6 +85,82 @@ def test_mark_superseded_writes_dispositions_only_when_given(tmp_path: Path) -> 
     data = json.loads((b / hr.HALTED_FILE).read_text())
     assert data["status"] == hr.STATUS_SUPERSEDED and hr.PATH_DISPOSITIONS_FIELD not in data
     assert hr.mark_superseded(a, hr._read(a), {"e": 1}, dispositions=disp) is False
+
+
+ENGINE_A = "a" * 40
+ENGINE_B = "b" * 40
+
+
+def _engine(monkeypatch: pytest.MonkeyPatch, sha) -> None:
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
+    monkeypatch.setattr(halt_resume_record, "engine_sha", lambda: sha)
+
+
+def test_halt_marker_stamps_the_running_engine_only_when_resolvable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _engine(monkeypatch, ENGINE_A)
+    stamped = hr.write_halt_marker(_dir(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel=SIZING)
+    assert json.loads(stamped.read_text())[hr.HALT_ENGINE_FIELD] == ENGINE_A
+    _engine(monkeypatch, None)
+    bare = hr.write_halt_marker(_dir(tmp_path, "20261016T020000-bbbbbb"), halted="x", sizing_rel=SIZING)
+    assert hr.HALT_ENGINE_FIELD not in json.loads(bare.read_text())
+
+
+def test_ran_under_engine_reads_the_marker_stamp_and_ignores_resume_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    assert hr.ran_under_engine(d) is None
+    _engine(monkeypatch, ENGINE_A)
+    hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    (d / "resume.json").write_text(json.dumps({"engine_sha": ENGINE_B, "composed_by_engine_sha": ENGINE_B}), encoding="utf-8")
+    assert hr.ran_under_engine(d) == ENGINE_A
+    assert hr.mark_resumed(d) is True
+    assert hr.ran_under_engine(d) == ENGINE_A
+    _engine(monkeypatch, None)
+    bare = _dir(tmp_path, "20261016T020000-bbbbbb")
+    hr.write_halt_marker(bare, halted="x", sizing_rel=SIZING)
+    (bare / "resume.json").write_text(json.dumps({"engine_sha": ENGINE_B}), encoding="utf-8")
+    assert hr.ran_under_engine(bare) is None
+    (bare / hr.HALTED_FILE).write_text(json.dumps({"status": "halted", "engine_sha": "nothex"}), encoding="utf-8")
+    assert hr.ran_under_engine(bare) is None
+
+
+@pytest.mark.parametrize("prior", ["halted", "resumed"])
+def test_mark_superseded_by_refire_closes_a_halted_or_resumed_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prior) -> None:
+    _engine(monkeypatch, ENGINE_A)
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    p = hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    if prior == "resumed":
+        hr.mark_resumed(d)
+    assert hr.mark_superseded_by_refire(d, prior_engine=ENGINE_A, engine=ENGINE_B, at="2026-11-18T00:00:00Z") is True
+    data = json.loads(p.read_text())
+    assert data["status"] == hr.STATUS_SUPERSEDED and data["halted"] == "x" and data[hr.HALT_ENGINE_FIELD] == ENGINE_A
+    assert data[hr.SUPERSEDED_EVIDENCE_FIELD] == {
+        "kind": hr.SUPERSEDED_BY_REFIRE, "prior_engine": ENGINE_A, "engine": ENGINE_B,
+        "at": "2026-11-18T00:00:00Z", "kept_credit": False,
+    }
+    assert hr.halted_run_for(tmp_path, SIZING) is None
+
+
+def test_mark_superseded_by_refire_refuses_every_other_status(tmp_path: Path) -> None:
+    absent = _dir(tmp_path, "20261016T010000-aaaaaa")
+    assert hr.mark_superseded_by_refire(absent, prior_engine=None, engine=ENGINE_B, at="t") is False
+    assert not (absent / hr.HALTED_FILE).exists()
+    for i, close in enumerate((lambda rd: hr.mark_landed(rd, "c" * 40), lambda rd: hr.mark_closed(rd, "r", "t"),
+                               lambda rd: hr.mark_superseded(rd, hr._read(rd), {"e": 1}))):
+        d = _dir(tmp_path, f"2026101{i + 6}T010000-bbbbbb")
+        p = hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+        assert close(d) is True
+        before = p.read_bytes()
+        assert hr.mark_superseded_by_refire(d, prior_engine=None, engine=ENGINE_B, at="t") is False
+        assert p.read_bytes() == before
+
+
+def test_mark_superseded_by_refire_leaves_the_lookup_index(tmp_path: Path) -> None:
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    assert hr._indexed_runs(tmp_path, SIZING) == {d.name}
+    assert hr.mark_superseded_by_refire(d, prior_engine=None, engine=ENGINE_B, at="t") is True
+    assert hr._indexed_runs(tmp_path, SIZING) == set()
 
 
 def test_mark_landed_rewrites_only_a_halted_marker(tmp_path: Path) -> None:

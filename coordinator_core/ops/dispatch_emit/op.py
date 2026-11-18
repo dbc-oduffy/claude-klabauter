@@ -246,7 +246,7 @@ import threading
 import time
 import uuid
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Optional
 
@@ -674,6 +674,24 @@ def _is_halt_resume_hint(root: Path, reserved: object, sizing_doc: Optional[dict
     if parse_ask_parent((sizing_doc.get("em_analysis") or {}).get("ask_parent")) is not None:
         return False
     return reserved == halted_run_for(root, sizing_rel)
+
+
+def _closed_for_fresh_refire(root: Path, run_id: Optional[str]) -> bool:
+    """True when `run_id` ran under a different engine stamp than the running one and was just closed as
+    superseded-by-refire, so the emit mints fresh instead of rebinding onto it. An unstamped run, an unknown
+    running engine, or a marker no longer halted or resumed answers False: the rebind stands."""
+    if not isinstance(run_id, str) or not run_id:
+        return False
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+    from coordinator_core.ops.dispatch_emit.halted_run import mark_superseded_by_refire, ran_under_engine
+
+    rd = record_dir(root, run_id)
+    prior, current = ran_under_engine(rd), halt_resume_record.engine_sha()
+    if not prior or not current or prior == current:
+        return False
+    return mark_superseded_by_refire(
+        rd, prior_engine=prior, engine=current, at=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    )
 
 
 def _reserved_run_landed(root: Path, run_id: str) -> bool:
@@ -2875,6 +2893,8 @@ def _dispatch_emit_body(
             predecessor = halted_run_to_resume(
                 ask_root, sizing_rel, caller_session=_receipt_session_id(params) or None
             )
+            if predecessor != run_id and _closed_for_fresh_refire(ask_root, predecessor):
+                predecessor = None
             resumed_from = predecessor if predecessor != run_id else None
             if resumed_from is None:
                 resumed_from = notes_predecessor(ask_root, sizing_rel, exclude=run_id)
@@ -2891,6 +2911,10 @@ def _dispatch_emit_body(
                 halted_id, preferred_ask = (preferred, None) if preferred.startswith("warp-") else (None, preferred)
             if chain_parent is not None and halted_id == chain_parent:
                 halted_id = None  # a successor never rebinds onto the run it chains from
+            if halted_id and _closed_for_fresh_refire(ask_root, halted_id):
+                halted_id = None
+            if preferred_ask and _closed_for_fresh_refire(ask_root, preferred_ask):
+                preferred_ask = None
             if halted_id:
                 inherited_base = _recorded_run_base(ask_root, halted_id) or halted_run_base(
                     record_dir(ask_root, halted_id)
@@ -2898,6 +2922,8 @@ def _dispatch_emit_body(
             else:
                 resumes_ask = preferred_ask or halted_ask_run_for(ask_root, sizing_rel)
                 if chain_parent is not None and resumes_ask == chain_parent:
+                    resumes_ask = None
+                if resumes_ask and _closed_for_fresh_refire(ask_root, resumes_ask):
                     resumes_ask = None
                 if resumes_ask:
                     inherited_base = _recorded_run_base(ask_root, resumes_ask) or halted_run_base(

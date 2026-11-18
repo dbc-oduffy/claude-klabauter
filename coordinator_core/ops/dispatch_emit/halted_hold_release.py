@@ -115,7 +115,10 @@ def _halted_sizing(root: Path, run_id: str, marker: dict) -> str:
 def _marker_superseded(marker: Optional[dict]) -> bool:
     from coordinator_core.ops.dispatch_emit import halted_run
 
-    return bool(marker) and marker.get("status") == halted_run.STATUS_SUPERSEDED
+    if not marker or marker.get("status") != halted_run.STATUS_SUPERSEDED:
+        return False
+    evidence = marker.get(halted_run.SUPERSEDED_EVIDENCE_FIELD)
+    return not (isinstance(evidence, dict) and evidence.get("kind") == halted_run.SUPERSEDED_BY_REFIRE)
 
 
 def _sizing_superseded(root: Path, run_id: str, marker: dict) -> bool:

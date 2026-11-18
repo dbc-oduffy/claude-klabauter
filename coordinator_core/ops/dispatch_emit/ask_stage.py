@@ -579,6 +579,27 @@ def _refire_prior(record: Path, snap: Optional[resume_snapshot.Snapshot]) -> str
     return snap.kept_run if snap is not None and snap.kept_run else ""
 
 
+def _refuse_unnamed_family(
+    root: Path, sizing: Optional[Mapping], sizing_rel: Optional[str], ask_text: Optional[str],
+    relayed_text: Optional[str], raw_by_id: Mapping[str, Mapping], refire_prior: str,
+) -> None:
+    """Raise when the sizing carries no `family` but a predecessor run, a superseded run or sizing
+    its prose names, or a plan row's text, names a non-claude one: routing it claude would send a
+    family row to the executor."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout import named_family
+
+    analysis = (sizing or {}).get("em_analysis")
+    analysis = analysis if isinstance(analysis, Mapping) else {}
+    texts = [str(v) for v in ((sizing or {}).get("intent"), analysis.get("em_brief"), analysis.get("relayed_text"), ask_text, relayed_text) if v]
+    texts += [str(raw.get(k)) for raw in raw_by_id.values() for k in ("title", "body") if raw.get(k)]
+    family, source = named_family(root, texts, (refire_prior,) if refire_prior else ())
+    if family:
+        raise AskStageError(
+            f"sizing {sizing_rel or ''} names no family but {source} names {family!r}; "
+            f"add `family: {family}` to the sizing"
+        )
+
+
 def _refire_notes(root: Path, run_id: str, prior: str) -> list[dict]:
     """Live revise notes of this run and its halted predecessor (op.py's `_live_carried_notes`); [] when unreadable."""
     from coordinator_core.ops.dispatch_emit.op import _live_carried_notes
@@ -1856,6 +1877,8 @@ def stage(
         if isinstance(exc, AskStageError):
             raise
         raise AskStageError(f"sizing {run_sizing_rel or ''}: {exc}") from exc
+    if sizing_family == "claude" and binding is None:
+        _refuse_unnamed_family(root, run_sizing, run_sizing_rel, ask_text, relayed_text, raw_by_id, refire_prior)
     briefs_rel = _rel_dir(root, run_dir / "briefs")
     try:
         with os.scandir(run_dir / "briefs") as _listing:

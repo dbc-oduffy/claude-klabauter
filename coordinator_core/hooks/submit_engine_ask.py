@@ -89,8 +89,8 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "em_size", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing", "source",
-    "stop_after", "supersedes", "writes",
+    "em_rationale", "em_size", "fresh", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing",
+    "source", "stop_after", "supersedes", "writes",
 )
 _INPUT_KEYS: tuple[str, ...] = ("run_id", "repo")
 _HOOK_ITEM_KEYS: tuple[str, ...] = tuple(dict.fromkeys((*ASKS_ITEM_KEYS, "repo", "chatty")))
@@ -152,6 +152,12 @@ def _resume_run_id(tool_input: Mapping[str, Any]) -> Optional[str]:
     args = tool_input.get("args")
     value = args.get("resume_run_id") if isinstance(args, dict) else None
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _fresh_flag(tool_input: Mapping[str, Any]) -> bool:
+    """True when `args.fresh` is the bool true: the refire closes the prior run and mints a new one."""
+    args = tool_input.get("args")
+    return isinstance(args, dict) and args.get("fresh") is True
 
 
 def _is_peer_delivery(content: Any) -> bool:
@@ -3163,7 +3169,14 @@ def _resume_route(
 
     from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-    from coordinator_core.ops.dispatch_emit.halted_run import AmbiguousHaltedRuns, halted_run_to_resume
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit.halted_run import (
+        AmbiguousHaltedRuns,
+        halted_run_to_resume,
+        mark_superseded_by_refire,
+        ran_under_engine,
+    )
 
     named_id = _resume_run_id(payload.get("tool_input") or {})
     try:
@@ -3210,8 +3223,22 @@ def _resume_route(
             return _taken_as_deferred(root, params), None
     if not isinstance(halted_id, str):
         return None, None
-    _note_resume(halted_id)
     rd = record_dir(root, halted_id)
+    params.pop("fresh", None)
+    prior_engine = ran_under_engine(rd)
+    current_engine = hrr.engine_sha()
+    differs = bool(prior_engine and current_engine and prior_engine != current_engine)
+    if _fresh_flag(payload.get("tool_input") or {}) or differs:
+        # An unmarked or already-terminal run closes False and resumes: a fresh mint beside it would
+        # leave its kept chunks creditable through own_records_run.
+        if mark_superseded_by_refire(
+            rd, prior_engine=prior_engine, engine=current_engine,
+            at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        ):
+            if retired is not None:
+                retired.append(halted_id)
+            return None, None
+    _note_resume(halted_id)
     filed_under = [i for i in (reserved_run_id, ask_parent_id) if isinstance(i, str) and i != halted_id]
     if filed_under:
         from coordinator_core.ops.dispatch_emit.requirements_ledger import carry_inbox

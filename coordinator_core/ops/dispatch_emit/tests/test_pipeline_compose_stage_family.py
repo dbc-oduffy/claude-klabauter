@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
+
+import pytest
 
 from coordinator_core.ops.dispatch_emit import stage_family
 from coordinator_core.ops.dispatch_emit.pipeline_compose import (
@@ -84,6 +88,58 @@ def test_fallback_arm_keys_match_stage_record():
     assert "verdict: 'FAILED', blocked_reason: 'family-stage-runner reply missing or unparseable'" in helper
     for verdict in stage_family.FALLBACK_VERDICTS:
         assert f"fam.verdict === '{verdict}'" in helper
+
+
+_NODE = shutil.which("node")
+_FAILED_FAMILY = {"family": "agy", "stage": "research", "exit_code": 1, "output_path": "", "verdict": "FAILED", "blocked_reason": "no stage work"}
+
+
+def _run_stage(tmp_path, fallback_reply: dict) -> dict:
+    """Execute the emitted `_familyStage` in node: the family attempt FAILED, the fallback answers `fallback_reply`."""
+    script = _mapped()
+    start = script.index("const _FAMILY_BRIEFS")
+    body = script[start : script.index("\n}\n", script.index("async function _familyStage(")) + 3]
+    prog = (
+        "const logs = [];\nconst log = (m) => logs.push(m);\n"
+        f"const _replies = [{json.dumps({'v': _FAILED_FAMILY})}, {json.dumps(fallback_reply)}]; let _n = 0;\n"
+        "async function agent() { const x = _replies[_n++]; if (x.throw) throw new Error(x.throw); return x.v; }\n"
+        f"{body}\n_familyStage('agy', 'research', 'p', 'lbl', {{}}).then(\n"
+        "  (v) => console.log(JSON.stringify({ result: v, logs })),\n"
+        "  (e) => console.log(JSON.stringify({ error: e.message, logs })));\n"
+    )
+    path = tmp_path / "stage.js"
+    path.write_text(prog, encoding="utf-8")
+    out = subprocess.run(
+        [_NODE, str(path)], capture_output=True, text=True, timeout=30, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout
+    return json.loads(out)
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+@pytest.mark.parametrize("reply", ["DONE: lbl\nStatus: DONE", {"structured": True}])
+def test_done_fallback_reply_is_consumed_and_returned(tmp_path, reply):
+    out = _run_stage(tmp_path, {"v": reply})
+    assert out["result"] == reply and "error" not in out
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+@pytest.mark.parametrize(
+    "reply, cause",
+    [
+        ({"throw": "boom"}, "dispatch threw: boom"),
+        ({"v": None}, "reply missing (dispatch returned nothing)"),
+        ({"v": "  \n"}, "reply was empty"),
+        ({"v": "PARTIAL: lbl\ngate-blocker: codex worker performed no stage work\n"}, "replied PARTIAL, gate-blocker: codex worker performed no stage work"),
+        ({"v": "BLOCKED: lbl cannot read the brief\nmore"}, "replied BLOCKED: lbl cannot read the brief"),
+    ],
+)
+def test_non_done_fallback_reply_records_its_actual_cause(tmp_path, reply, cause):
+    out = _run_stage(tmp_path, reply)
+    assert out["error"].endswith(f"fallback: {cause}")
+    rec = json.loads(out["logs"][-1].split("rerunning on claude ", 1)[1])
+    fb = rec["attempts"][1]
+    assert fb["verdict"] == "FAILED" and fb["blocked_reason"] == f"claude fallback {cause}"
 
 
 def test_claude_bound_entry_stays_an_ordinary_agent_call():
