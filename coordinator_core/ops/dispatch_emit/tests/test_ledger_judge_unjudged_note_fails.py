@@ -1,4 +1,4 @@
-"""judge() fails every live revise note the verdict neither judges nor names as superseded_by."""
+"""judge() carries a live revise note the verdict neither judges nor supersedes open, never as a failure."""
 
 from __future__ import annotations
 
@@ -16,23 +16,27 @@ def _failures(items: list[dict], note_ids: list[str]) -> list[dict]:
     return rl.judge(_ledger(), {"items": items}, note_ids=note_ids)["failures"]
 
 
-def test_omitted_live_notes_each_fail_unjudged() -> None:
+def test_omitted_live_notes_are_carried_open_not_failed() -> None:
     result = rl.judge(_ledger(), {"items": [{"id": "R1", "status": "met"}]}, note_ids=["N2", "N3"])
-    assert result["pass"] is False
-    assert result["failures"] == [
-        {"id": "N2", "reason": rl.UNJUDGED_REASON},
-        {"id": "N3", "reason": rl.UNJUDGED_REASON},
+    assert result["pass"] is True
+    assert result["failures"] == []
+    assert result["open"] == [
+        {"id": "N2", "reason": rl.LATE_NOTE_REASON, rl.LATE_NOTE_KEY: True},
+        {"id": "N3", "reason": rl.LATE_NOTE_REASON, rl.LATE_NOTE_KEY: True},
     ]
+    assert "arrived after the check" in rl.LATE_NOTE_REASON
 
 
 def test_judged_met_note_passes() -> None:
     items = [{"id": "R1", "status": "met"}, {"id": "N2", "status": "met"}]
-    assert _failures(items, ["N2"]) == []
+    result = rl.judge(_ledger(), {"items": items}, note_ids=["N2"])
+    assert result["failures"] == [] and result["open"] == []
 
 
 def test_note_named_as_superseded_by_is_not_unjudged() -> None:
     items = [{"id": "R1", "status": "superseded", "superseded_by": "N2"}]
-    assert _failures(items, ["N2"]) == []
+    result = rl.judge(_ledger(), {"items": items}, note_ids=["N2"])
+    assert result["failures"] == [] and result["open"] == []
 
 
 def test_judged_not_met_note_still_fails_not_met_once() -> None:

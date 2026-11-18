@@ -98,6 +98,10 @@ ORIGIN_PLAN_ROW = "plan-row"
 NOT_A_ROW_REASON = "names no requirement row"
 NOTE_NOT_MET_REASON = "revise note not met"
 UNJUDGED_REASON = "unjudged (arrived after the check, or skipped)"
+#: An `open` row key and reason for a live revise note the verdict did not judge: EM context, carried
+#: to the delivery record, never a failure.
+LATE_NOTE_KEY = "late_note"
+LATE_NOTE_REASON = "arrived after the check: carried open, not judged"
 
 _PARAMS = (
     Field("run_id", "nonempty_str", required=True),
@@ -2335,7 +2339,9 @@ def judge(
     `note_ids` are the run's live revise-note ids (`note_ids(run_dir)`): a verdict item under one is
     not a register row and is not `NOT_A_ROW_REASON`; it passes only as `met`, else fails
     `NOTE_NOT_MET_REASON`; a live note id the verdict neither judges nor names as a `superseded_by`
-    fails `UNJUDGED_REASON`; an `N<k>` id when the run stores no note fails `NOT_A_ROW_REASON`.
+    passes, listed in `open` as `LATE_NOTE_REASON` (a note is EM context; a late `verbatim` revision
+    is a register row and fails `UNJUDGED_REASON` through the item loop); an `N<k>` id when the run
+    stores no note fails `NOT_A_ROW_REASON`.
     A `superseded` item may name a live note id as its `superseded_by`.
     Any other unregistered id is ignored and listed in the result's `advisory`
     (`[{id, reason}]`, present only when non-empty): it never fails the verdict."""
@@ -2467,8 +2473,8 @@ def judge(
     superseding = {
         r.get("superseded_by") for r in by_id.values() if r.get("status") == "superseded"
     }
-    failures.extend(
-        {"id": rid, "reason": UNJUDGED_REASON}
+    open_rows.extend(
+        {"id": rid, "reason": LATE_NOTE_REASON, LATE_NOTE_KEY: True}
         for rid in sorted(own_notes - set(by_id) - superseding)
     )
     if not note_ids:
@@ -2883,7 +2889,7 @@ def _land_on_verdict(
     judged = judge(ledger, verdict, repo_root=root, note_ids=note_ids(dir_))
     normalized = normalize_verdict(verdict)
     items = normalized.get("items") if isinstance(normalized, Mapping) else None
-    if not judged["pass"] or judged["open"] or not isinstance(items, list) or any(
+    if not judged["pass"] or any(not r.get(LATE_NOTE_KEY) for r in judged["open"]) or not isinstance(items, list) or any(
         not isinstance(i, Mapping) or i.get("status") != "met" for i in items
     ):
         return None, "verdict does not pass with every row met: " + (
