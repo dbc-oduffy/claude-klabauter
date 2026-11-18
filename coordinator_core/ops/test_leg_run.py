@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional, Sequence
@@ -42,7 +43,12 @@ EXIT_USAGE = 2
 EXIT_TIMEOUT = 3
 USAGE = ("usage: test_leg_run [--base-sha <sha>] [--head-sha <sha>] [--base-export-out <path>] "
          "[--budget-s N] [--touched <path>]... --out <path> -- <ids and test files...>")
-_PYTEST = ["-m", "pytest", "-rfE", "-p", "no:cacheprovider"]
+_PYTEST = ["-rfE", "-p", "no:cacheprovider"]
+#: Runs pytest over the ids listed one per line in `sys.argv[1]`, with `sys.argv[2:]` as its flags: argv carries
+#: no id list, so a list of any size spawns.
+_IDS_RUNNER = ("import sys, pytest\n"
+               "ids = [i for i in open(sys.argv[1], encoding='utf-8').read().split('\\n') if i]\n"
+               "sys.exit(pytest.main([*sys.argv[2:], *ids]))\n")
 
 
 class _Parser(argparse.ArgumentParser):
@@ -66,9 +72,19 @@ def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[s
     subprocess.TimeoutExpired once `remaining` seconds are gone; the child is killed by then."""
     if remaining <= 0:
         raise subprocess.TimeoutExpired("pytest", 0)
-    proc = subprocess.run([sys.executable, *_PYTEST, *targets], cwd=cwd, capture_output=True, text=True,
-                          errors="replace", timeout=remaining, **no_console_creationflags())
+    with tempfile.TemporaryDirectory(prefix="test-leg-ids-") as holder:
+        id_file = _write_ids(Path(holder), targets)
+        proc = subprocess.run([sys.executable, "-c", _IDS_RUNNER, str(id_file), *_PYTEST], cwd=cwd,
+                              capture_output=True, text=True, errors="replace", timeout=remaining,
+                              **no_console_creationflags())
     return proc.returncode, proc.stdout.splitlines()
+
+
+def _write_ids(holder: Path, targets: Sequence[str]) -> Path:
+    """`targets` one per line in `holder/ids.txt`, the file `_IDS_RUNNER` reads in place of argv."""
+    id_file = holder / "ids.txt"
+    id_file.write_text("\n".join(targets) + "\n", encoding="utf-8", newline="\n")
+    return id_file
 
 
 def _reds(lines: list[str]) -> dict[str, str]:
@@ -210,9 +226,13 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], *, missing_onl
 
 
 def _argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str]) -> list:
+    """The clone leg's pytest argv with `targets` moved to `basetemp.parent/ids.txt` (the per-run holder, removed
+    with the run): `_IDS_RUNNER` takes the flags `cov._pytest_argv` built and reads the ids from that file."""
     argv = cov._pytest_argv(root, dest, basetemp, targets)
     argv.insert(argv.index("--rootdir"), "--continue-on-collection-errors")
-    return argv
+    flags = argv[3:len(argv) - len(targets)]
+    id_file = _write_ids(basetemp.parent, targets)
+    return [argv[0], "-c", _IDS_RUNNER, str(id_file), *flags]
 
 
 def _run_phased(root: Path, dest: Path, basetemp: Path, picked: Sequence[str], importers: Sequence[str],
@@ -463,6 +483,14 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         result["over_budget"] = True
         result["summary"] = f"timeout: {budget_s:g}s"
         result["failing_detail"] = [{"node_id": "test_leg_run", "message": result["summary"]}]
+    except OSError as exc:
+        result["status_after"] = "fail"
+        result["over_budget"] = False
+        result["summary"] = f"test leg spawn failed: {type(exc).__name__}: {exc}"
+        result["failing_detail"] = [*result["failing_detail"], {"node_id": "test_leg_run", "message": result["summary"]}]
+        if touched:
+            result.setdefault("new_red", [])
+        _tally(result, 2, ())
     result["elapsed_s"] = round(time.monotonic() - started, 3)
     result["budget_s"] = budget_s
     return result

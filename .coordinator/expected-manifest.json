@@ -2559,8 +2559,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "cf568151cbbb9644fcc4762eb4d5499afc2b4f39",
-    "coordinator_core/_engine_stamp": "fa34781c521c52896844cf13a5980d2fe3910608",
+    "coordinator_core/_engine_published_at": "8b88f4a377b9c3e64aa168550b92afa61c348ce8",
+    "coordinator_core/_engine_stamp": "0ab385d5794beafcba02aae24b6389d18aba7d33",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -9246,7 +9246,7 @@
     "coordinator_core/ops/resolve_mcp_server_cli_path.py": "c05ff47d57e3e36f42381bfc1d90b049b7111fc8",
     "coordinator_core/ops/resolve_swept_baton.py": "6ce9a4c06c0958a8bb22ef73d582b73c437d57bc",
     "coordinator_core/ops/retention_run.py": "630f238f4b3e64d39a700a720bcc95caef342b17",
-    "coordinator_core/ops/reverify_base_measure.py": "e0bd37bee5e6949404edb5a6570daf1c78cc2e58",
+    "coordinator_core/ops/reverify_base_measure.py": "dbd6adc8429dfd6d917fd93a29ea21a32e04dacd",
     "coordinator_core/ops/reverify_callers.py": "f83ed3ee2e3bf41772ead3fa875b02d34752c2e1",
     "coordinator_core/ops/reverify_scope.py": "213a0c4e6c6927219c51f0a3fb35e6f9ec8a7ef9",
     "coordinator_core/ops/review_brightline_gate.py": "f38e7129c50ea05331a7c13ff997e526dbf160be",
@@ -9574,7 +9574,7 @@
     "coordinator_core/ops/test_learn_lessons_config_update.py": "4dd164dd87defdd8e917916d84fb77f991f4ba24",
     "coordinator_core/ops/test_learn_lessons_cutoff.py": "aadbaba302861681e7f2cdaa69a9adb197727e16",
     "coordinator_core/ops/test_learn_lessons_roots.py": "c99f5beb8d5dac76bfc818cb3e3d84d64ff27fba",
-    "coordinator_core/ops/test_leg_run.py": "f639f8233697082bd82c34a89dc14c35b915385b",
+    "coordinator_core/ops/test_leg_run.py": "b55ca471af8f9c66a359a25aa554ed9a9ff86baf",
     "coordinator_core/ops/test_lessons_filter.py": "273bdf05d062e545d1ea24fc80eb4ff9b4aeb30b",
     "coordinator_core/ops/test_list_files_newer_than_marker.py": "80117bff201e4346c0ae956c4f9d04975ab5b594",
     "coordinator_core/ops/test_list_reverse_drift_cmds.py": "d62bf64e1b08ecf2e2dc17b059a74cf21e1a45a0",
@@ -10162,7 +10162,7 @@
     "coordinator_core/ops/tests/test_research_sizing.py": "fd58d5f84aa8326598278b406774721667a8d67d",
     "coordinator_core/ops/tests/test_research_targets_op.py": "b315166509e42f2d67496b3433fb541d82eb4e98",
     "coordinator_core/ops/tests/test_research_trail.py": "b105be0accdc26b230b7aade2e5d475b4bab2a92",
-    "coordinator_core/ops/tests/test_reverify_base_measure.py": "619e998e5bd44e9a2c7bff7643f45e20fdbb918a",
+    "coordinator_core/ops/tests/test_reverify_base_measure.py": "03b375c301b4e3cfc1fc610cede66f80167639c1",
     "coordinator_core/ops/tests/test_reverify_base_plus_declared_e2e.py": "67abab24cf878a6bcd83ec63814ef69bedb3b8f1",
     "coordinator_core/ops/tests/test_reverify_callers.py": "0cccdca31c396c7f3b448b6dfce12bb6550bc89d",
     "coordinator_core/ops/tests/test_reverify_delivery.py": "c6cf2ef80d2d0b50a3801b205434728b84656258",
@@ -10333,7 +10333,7 @@
     "coordinator_core/ops/tests/test_supersede_archives_atomically.py": "d7121643e50a96f5881999d1ba584bc0659831b6",
     "coordinator_core/ops/tests/test_supersede_holderless_is_terminal_only.py": "26ef44ec2f0c16cc43444d9c5e0e04af0ddc132f",
     "coordinator_core/ops/tests/test_test_leg_minutes_budget_ratchet.py": "7911f704f131139214c982fe23799b557bf0fbac",
-    "coordinator_core/ops/tests/test_test_leg_run.py": "dd4a1b0c55b42815ef06452b5cde50994e879035",
+    "coordinator_core/ops/tests/test_test_leg_run.py": "29344619b3abcf97318266cfaf25f7e61c65c361",
     "coordinator_core/ops/tests/test_test_verdict_record_op.py": "b07119cb8026754ca4c0439fcd081519fa9a0bd3",
     "coordinator_core/ops/tests/test_unclaim_parks_a_blocked_baton.py": "25d1bd3d79565ca9f25dcdc1c6ba3d42da7e8eb5",
     "coordinator_core/ops/tests/test_unclaim_strips_mirror_names.py": "b5833ef70d523e8d13d1ffd3b86131aa22a56fc6",
@@ -12912,5 +12912,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "1e131e1ee55e5c776ef084ea86525bb1a0ceb2da"
+  "source_head": "96bdd350a06802c29b352057254e56cef700929b"
 }

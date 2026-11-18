@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -27,10 +28,12 @@ EXIT_USAGE = 2
 _DROPPED = "reverify-base-measure-dropped:\t"
 #: Runs inside the exported tree: pytest names one missing id per run (on stderr), so the retries
 #: that drop each next one stay in this one process; only the final attempt's output is emitted.
+#: `sys.argv[1]` is a file of ids, one per line: argv carries no id list, so its size is unbounded.
 _RETRY_RUNNER = (
     "import contextlib, io, re, sys\n"
     "import pytest\n"
-    "ids, dropped, broken = sys.argv[1:], [], []\n"
+    "ids = [i for i in open(sys.argv[1], encoding='utf-8').read().split('\\n') if i]\n"
+    "dropped, broken = [], []\n"
     "nf = re.compile(r'(not found|found no collectors for):?\\s+(\\S+)')\n"
     "while True:\n"
     "    out, err = io.StringIO(), io.StringIO()\n"
@@ -94,11 +97,14 @@ def _run(sha: str, ids: list[str], cwd: str,
     """One baseline_export run: (export state, runner exit, stdout lines, stderr lines). A `timeout_s`
     expiry reports export "timeout" with no lines."""
     sha = _resolve(sha, cwd)
-    argv = [sys.executable, "-c", _LAUNCH, str(_ENGINE_ROOT), "--sha", sha, "--",
-            sys.executable, "-c", _RETRY_RUNNER, *ids]
     try:
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace",
-                              timeout=timeout_s, **no_console_creationflags())
+        with tempfile.TemporaryDirectory(prefix="reverify-ids-") as holder:
+            id_file = Path(holder) / "ids.txt"
+            id_file.write_text("\n".join(ids) + "\n", encoding="utf-8", newline="\n")
+            argv = [sys.executable, "-c", _LAUNCH, str(_ENGINE_ROOT), "--sha", sha, "--",
+                    sys.executable, "-c", _RETRY_RUNNER, str(id_file)]
+            proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace",
+                                  timeout=timeout_s, **no_console_creationflags())
     except subprocess.TimeoutExpired:
         return "timeout", None, [], []
     lines = proc.stdout.splitlines()

@@ -35,13 +35,24 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
+def _view(argv) -> list[str]:
+    """`argv` with an ids-runner spawn read back as `[exe, -m, pytest, *flags, *ids]`; any other argv unchanged."""
+    argv = list(argv)
+    if tlr._IDS_RUNNER not in argv:
+        return argv
+    at = argv.index(tlr._IDS_RUNNER)
+    ids = [i for i in Path(argv[at + 1]).read_text(encoding="utf-8").split("\n") if i]
+    return [*argv[:at - 1], "-m", "pytest", *argv[at + 2:], *ids]
+
+
 def _spawns(monkeypatch) -> list[list[str]]:
     seen: list[list[str]] = []
     real = subprocess.run
 
     def counting(argv, *a, **kw):
-        if "pytest" in argv:
-            seen.append(list(argv))
+        view = _view(argv)
+        if "pytest" in view:
+            seen.append(view)
         return real(argv, *a, **kw)
 
     monkeypatch.setattr(tlr.subprocess, "run", counting)
@@ -408,7 +419,7 @@ def test_an_importer_overrun_keeps_the_handed_targets_results(landing, tmp_path,
     real = cov._run
 
     def overrun(argv, *a, **k):
-        if "pytest" in argv and "tests/test_importer.py" in argv:
+        if "tests/test_importer.py" in _view(argv):
             raise subprocess.TimeoutExpired("pytest", 1)
         return real(argv, *a, **k)
 
@@ -465,6 +476,73 @@ def test_the_pytest_child_has_no_shell_and_uses_the_running_interpreter(repo, tm
     seen = _spawns(monkeypatch)
     _main(["--", PASS_ID], tmp_path / "o.json")
     assert seen[0][0] == sys.executable and seen[0][1:3] == ["-m", "pytest"]
+
+
+OVERFLOW = 32 * 1024
+
+
+def _many_reds(repo: Path, n: int = 500) -> str:
+    (repo / "tests" / "test_many.py").write_text(
+        "".join(f"def test_red_{i:04d}_{'x' * 40}():\n    assert False\n" for i in range(n)), encoding="utf-8")
+    return "tests/test_many.py"
+
+
+def test_a_reds_list_over_32k_chars_settles_with_no_id_on_argv(repo, monkeypatch):
+    target = _many_reds(repo)
+    argvs: list[list[str]] = []
+    real = subprocess.run
+
+    def watch(argv, *a, **kw):
+        argvs.append(list(argv))
+        return real(argv, *a, **kw)
+
+    measured: list[list[str]] = []
+
+    def fake_measure(sha, head_sha, ids, cwd, timeout_s=None):
+        measured.append(list(ids))
+        return {"red": list(ids), "export": "ok", "runner_exit": 1, "passed_at_base": []}
+
+    monkeypatch.setattr(tlr.subprocess, "run", watch)
+    monkeypatch.setattr(tlr.reverify_base_measure, "measure", fake_measure)
+    data = tlr.run([target], base_sha=BASE, head_sha=None, base_export_out=None, budget_s=300.0, cwd=str(repo))
+    assert len(data["failing"]) == 500 and sum(len(i) for i in data["failing"]) > OVERFLOW
+    assert data["status_after"] == "fail" and data["over_budget"] is False and data["tests_run"] == 500
+    assert data["passed_alone"] == [] and data["pre_existing"] == data["failing"]
+    assert measured == [data["failing"]]
+    assert len(argvs) == 2 and all(sum(len(a) for a in argv) < OVERFLOW for argv in argvs)
+
+
+def test_a_spawn_oserror_is_a_fail_verdict_naming_the_error(repo, monkeypatch):
+    def too_long(targets, cwd, remaining):
+        raise OSError(206, "The filename or extension is too long")
+
+    monkeypatch.setattr(tlr, "_pytest", too_long)
+    data = tlr.run(["tests/test_a.py"], base_sha=None, head_sha=None, base_export_out=None, budget_s=60.0, cwd=str(repo))
+    assert data["status_after"] == "fail" and data["over_budget"] is False and data["status"] == "error"
+    assert data["failing_detail"] and "too long" in data["failing_detail"][-1]["message"]
+    assert "OSError" in data["summary"] and data["zero_run_cause"]
+
+
+def test_a_spawn_oserror_in_the_clone_leg_is_a_fail_verdict_too(repo, monkeypatch):
+    def boom(*a, **k):
+        raise OSError(206, "command line too long")
+
+    monkeypatch.setattr(tlr, "_clone_leg", boom)
+    data = tlr.run(["tests/test_a.py"], base_sha=None, head_sha=None, base_export_out=None, budget_s=60.0,
+                   cwd=str(repo), touched=["pkg/mod.py"])
+    assert data["status_after"] == "fail" and data["new_red"] == []
+    assert "command line too long" in data["failing_detail"][-1]["message"]
+
+
+def test_the_clone_leg_argv_carries_its_ids_in_a_file_under_the_run_holder(repo, tmp_path):
+    ids = [f"tests/test_many.py::test_red_{i:04d}_{'x' * 40}" for i in range(500)]
+    holder = tmp_path / "holder"
+    bt = holder / "bt"
+    bt.mkdir(parents=True)
+    argv = tlr._argv(repo, repo, bt, ids)
+    assert sum(len(a) for a in argv) < OVERFLOW and not set(ids) & set(argv)
+    assert argv[:3] == [argv[0], "-c", tlr._IDS_RUNNER] and "--continue-on-collection-errors" in argv
+    assert Path(argv[3]).parent == holder and Path(argv[3]).read_text(encoding="utf-8").split() == ids
 
 
 BASE = "b" * 40

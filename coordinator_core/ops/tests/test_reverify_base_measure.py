@@ -195,6 +195,40 @@ def test_without_timeout_s_the_run_is_unbounded(monkeypatch):
     assert seen["timeout"] is None
 
 
+def test_an_id_list_over_32k_chars_reaches_the_runner_through_a_file_not_argv(tmp_path, monkeypatch):
+    root = tmp_path / "many"
+    (root / "tests").mkdir(parents=True)
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (root / "tests" / "test_many.py").write_text(
+        "".join(f"def test_ok_{i:04d}_{'x' * 40}():\n    assert True\n" for i in range(500)), encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "base")
+    base = _git(root, "rev-parse", "HEAD")
+    pad = [f"tests/test_many.py::test_ok_{i:04d}_{'x' * 40}" for i in range(500)]
+    argvs: list[list[str]] = []
+    real = subprocess.run
+
+    def watch(argv, *a, **kw):
+        argvs.append(list(argv))
+        return real(argv, *a, **kw)
+
+    monkeypatch.setattr(rbm.subprocess, "run", watch)
+    result = rbm.measure(base, None, pad, str(root))
+    assert sum(len(i) for i in pad) > 32 * 1024
+    assert result["export"] == "ok" and result["red"] == [] and result["passed_at_base"] == pad
+    assert all(sum(len(a) for a in argv) < 32 * 1024 for argv in argvs)
+
+
+def test_a_spawn_oserror_propagates_for_the_leg_to_name(monkeypatch):
+    def too_long(argv, *a, **kw):
+        raise OSError(206, "command line too long")
+
+    monkeypatch.setattr(rbm.subprocess, "run", too_long)
+    with pytest.raises(OSError, match="too long"):
+        rbm.measure("0" * 40, None, [GREEN], ".")
+
+
 def test_write_export_is_byte_identical_to_main(repo, monkeypatch, tmp_path):
     root, base, _head = repo
     _code, text = _measure(root, ["--sha", base, "--out", "m.txt", "--", RED_AT_BASE, GREEN], monkeypatch)
