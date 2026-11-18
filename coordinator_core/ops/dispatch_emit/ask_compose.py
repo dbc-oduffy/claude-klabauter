@@ -1194,6 +1194,18 @@ XS_TEST_TARGET_JS = (
 RESEARCH_HANDOFF_JS = (
     f"(_halted?.halted === {_lit(HALT_RESEARCH)} && Array.isArray(_halted.fire) && _halted.fire.length > 0)"
 )
+#: Marker a ledger-check halt names when the verify leg returned no verdict twice; never a `not_met`.
+VERIFY_LEG_EMPTY = "verify-leg-empty"
+#: JS re-asking `_runVerify` once when its items list came back empty while ledger rows are owed
+#: (a ledger id list that is non-empty once the late ids join it); all-ruled-out stays a pass.
+VERIFY_EMPTY_RETRY_JS = (
+    "{ const _vBase = _manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids : "
+    f"(_gate.{RESUME_LEDGER_KEY}?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null);\n"
+    "      const _vOwed = Array.isArray(_vBase) ? [...new Set([..._vBase, ..._verifyLateIds])] : [];\n"
+    "      if (!_halted && _vOwed.length && _verify && Array.isArray(_verify.items) && _verify.items.length === 0) "
+    "{ log('verify leg returned an empty items list for owed rows ' + _vOwed.join(', ') + ': re-asking once'); "
+    "_verify = await _runVerify(); } }"
+)
 RESEARCH_HANDOFF_NEXT_ACTION_JS = (
     "{ kind: 'fire_research', op: null, params: { run_id: _runId, sizing: _sizingRel, fire: _halted.fire } }"
 )
@@ -6898,6 +6910,8 @@ def compose_ask_script(
         "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), _reverifyJoined ? Promise.resolve(_reviewReverify) : _joinReverify()]);",
         "    _reverifyJoined = true;",
         "    if (!_halted && !_reviewReused && _reviewReverify && ((Array.isArray(_reviewReverify.unapplied) && _reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }",
+        # An empty items list with ledger rows owed is an engine failure, not a verdict: one re-ask, no loop.
+        f"    {VERIFY_EMPTY_RETRY_JS}",
         _OVERLAY_FOLD_JS.replace(
             "__OVERLAY__", _overlay_verify_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)
         ),
@@ -7131,7 +7145,9 @@ def compose_ask_script(
     b.append(
         "    if (!_halted && (!_ledger || _emptyVerdict || _ledgerBlocking(_ledger).length)) "
         "{ _halted = { halted: 'ledger-check', "
-        "items: _emptyVerdict ? _owedIds.map((id) => ({ id, status: 'not_met' })) : (_ledger ? _ledgerBlocking(_ledger) : []), "
+        f"items: _emptyVerdict ? _owedIds.map((id) => ({{ id, status: {_lit(VERIFY_LEG_EMPTY)}, evidence: {_lit(VERIFY_LEG_EMPTY + ': no verdict after one re-ask; an engine failure, the row was not judged')} }})) "
+        ": (_ledger ? _ledgerBlocking(_ledger) : []), "
+        f"...(_emptyVerdict ? {{ {VERIFY_LEG_EMPTY.replace('-', '_')}: true }} : {{}}), "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
         f"{HALT_PLAN_FIELD}: _planRel, {SELF_CORRECTION_FIELD}: _ledgerSc, "
         "next_action: _allOwed ? 'Everything left is EM or operator work: ' + _owedNamed.join('; ') "
@@ -7140,7 +7156,7 @@ def compose_ask_script(
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row.' "
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
-        ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none' : '') + ' block the commit.' "
+        ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none after one re-ask (verify-leg-empty: an engine failure, the code was not judged red)' : '') + ' block the commit.' "
         ": !_ledger ? 'The verify leg returned no items list, so the ledger holds no verdict: the refire re-runs the verify leg.' "
         ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: the refire re-runs the verify leg.') "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
