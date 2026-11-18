@@ -85,6 +85,14 @@ def test_path_key_is_matched_case_insensitively_so_write_file_with_Path_gets_fil
     assert ev.tool_input["file_path"] == ""
 
 
+def test_write_file_Content_reaches_the_guards_as_lowercase_content_and_edit_file_gets_none() -> None:
+    for name in ("write_file", "write_to_file"):
+        ev = AgyAdapter().adapt_event(_edit_call(name, {"Path": "/work/repo/a.py", "Content": "body"}))
+        assert ev.tool_input["content"] == "body"
+    ev = AgyAdapter().adapt_event(_edit_call("edit_file", {"Path": "/work/repo/a.py", "Content": "body"}))
+    assert "content" not in ev.tool_input
+
+
 @pytest.mark.parametrize("path_key", ["TargetFile", "Path"])
 def test_agy_edit_file_event_reaches_write_guards_engine(monkeypatch: pytest.MonkeyPatch, path_key) -> None:
     from coordinator_core.host_hooks import tool_policy

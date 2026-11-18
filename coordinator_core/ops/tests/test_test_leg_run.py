@@ -386,6 +386,81 @@ def test_clone_leg_over_only_slow_tier_tests_passes_instead_of_failing_on_exit_5
     assert data["status_after"] == "pass" and data["new_red"] == [], data
 
 
+def test_clone_leg_runs_the_targets_when_an_importer_fails_to_collect(landing, tmp_path, monkeypatch):
+    monkeypatch.setattr(cov, "xdist_workers", lambda _py, _units: 0)  # a serial run aborts at a collection error
+    root, _base = landing
+    base = _land(root, "tests/test_broken_importer.py", "import nonexistent_dep_xyz  # mod\n\n\ndef test_x():\n    pass\n")
+    post = _land(root, "pkg/mod.py", "VALUE = 1\n# landed\n")
+
+    _code, data = _main(["--base-sha", base, "--head-sha", post, "--touched", "pkg/mod.py", "--", "tests/test_unrelated.py"],
+                        tmp_path / "o.json")
+
+    assert "tests/test_broken_importer.py" in data["importer_targets"]
+    assert data["tests_run"] >= 1 and "zero_run_cause" not in data, data
+    assert "tests/test_unrelated.py::test_other" in data["failing"]
+    assert "tests/test_broken_importer.py" in data["pre_existing"] and "tests/test_broken_importer.py" not in data["new_red"]
+
+
+def test_an_importer_overrun_keeps_the_handed_targets_results(landing, tmp_path, monkeypatch):
+    root, base = landing
+    post = _land(root, "pkg/mod.py", "VALUE = 1\n# landed\n")
+
+    real = cov._run
+
+    def overrun(argv, *a, **k):
+        if "pytest" in argv and "tests/test_importer.py" in argv:
+            raise subprocess.TimeoutExpired("pytest", 1)
+        return real(argv, *a, **k)
+
+    monkeypatch.setattr(cov, "_run", overrun)
+    _code, data = _main(["--base-sha", base, "--head-sha", post, "--touched", "pkg/mod.py", "--", "tests/test_unrelated.py"],
+                        tmp_path / "o.json")
+
+    assert data["importer_overrun"] is True and data["over_budget"] is False
+    assert data["tests_run"] >= 1 and "zero_run_cause" not in data, data
+
+
+def test_a_broken_importer_new_at_the_landing_is_still_a_new_red(landing, tmp_path):
+    root, base = landing
+    post = _land(root, "tests/test_broken_importer.py", "import nonexistent_dep_xyz  # mod\n\n\ndef test_x():\n    pass\n")
+
+    _code, data = _main(["--base-sha", base, "--head-sha", post, "--touched", "tests/test_broken_importer.py", "--",
+                         "tests/test_unrelated.py"], tmp_path / "o.json")
+
+    assert "tests/test_broken_importer.py" in data["new_red"] and data["status_after"] == "fail", data
+
+
+BIN_TEST = "coordinator/bin/tests/test_bin_tool.py"
+
+
+@pytest.fixture
+def bin_repo(tmp_path, monkeypatch):
+    """A git repo holding a test under coordinator/bin/tests, the process started in coordinator/bin."""
+    root = tmp_path / "repo"
+    (root / "coordinator" / "bin" / "tests").mkdir(parents=True)
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (root / BIN_TEST).write_text("def test_bin_tool():\n    assert True\n", encoding="utf-8")
+    _git(root, "init", "-q")
+    monkeypatch.chdir(root / "coordinator" / "bin")
+    return root
+
+
+def test_a_leg_started_below_the_repo_root_finds_a_bin_tests_file(bin_repo, tmp_path, monkeypatch):
+    seen = _spawns(monkeypatch)
+    _code, data = _main(["--", BIN_TEST], tmp_path / "o.json")
+    assert "missing_targets" not in data and "zero_run_cause" not in data
+    assert (data["tests_run"], data["status"], data["status_after"]) == (1, "pass", "pass")
+    assert len(seen) == 1 and BIN_TEST in seen[0]
+
+
+def test_a_leg_started_below_the_repo_root_still_refuses_a_genuinely_absent_target(bin_repo, tmp_path, monkeypatch):
+    seen = _spawns(monkeypatch)
+    gone = "coordinator/bin/tests/test_gone.py"
+    _code, data = _main(["--", gone], tmp_path / "o.json")
+    assert seen == [] and data["missing_targets"] == [gone]
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_MISSING_TARGET
+
+
 def test_the_pytest_child_has_no_shell_and_uses_the_running_interpreter(repo, tmp_path, monkeypatch):
     seen = _spawns(monkeypatch)
     _main(["--", PASS_ID], tmp_path / "o.json")

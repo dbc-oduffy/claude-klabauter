@@ -140,6 +140,45 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], *, missing_onl
     result["status"] = "error"
 
 
+def _argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str]) -> list:
+    argv = cov._pytest_argv(root, dest, basetemp, targets)
+    argv.insert(argv.index("--rootdir"), "--continue-on-collection-errors")
+    return argv
+
+
+def _run_phased(root: Path, dest: Path, basetemp: Path, picked: Sequence[str], importers: Sequence[str],
+                env: dict, left) -> tuple[subprocess.CompletedProcess, bool]:
+    """(result, importer_overrun). The diff-named and handed targets run first; the importer tripwires run second
+    under the remaining deadline, and an overrun there keeps the first phase's results instead of zeroing the leg."""
+    imp = set(importers)
+    first = [t for t in picked if t.split("::", 1)[0] not in imp]
+    second = [t for t in picked if t.split("::", 1)[0] in imp]
+    if not first or not second:
+        return cov._tier_empty_as_green(cov._run_pytest_retrying(_argv(root, dest, basetemp, picked), dest, env)), False
+    one = cov._tier_empty_as_green(cov._run_pytest_retrying(_argv(root, dest, basetemp, first), dest, env))
+    if left() <= 0:
+        return one, True
+    try:
+        two = cov._tier_empty_as_green(cov._run(_argv(root, dest, basetemp, second), dest, max(1, int(left())), env=env))
+    except subprocess.TimeoutExpired:
+        return one, True
+    rcs = [one.returncode, two.returncode]
+    rc = next((r for r in rcs if r not in (0, 5)), 0 if 0 in rcs else 5)
+    counts = {w: 0 for w in ("passed", "failed")}
+    for p in (one, two):
+        for n, w in _COUNT.findall(_summary_line(p.stdout)):
+            counts[w] += int(n)
+    merged = f"{counts['passed']} passed, {counts['failed']} failed in 0s"
+    return subprocess.CompletedProcess(one.args, rc, one.stdout + two.stdout + "\n" + merged + "\n", one.stderr + two.stderr), False
+
+
+def _summary_line(stdout: str) -> str:
+    for raw in reversed(stdout.splitlines()):
+        if _SUMMARY_TAIL.search(raw):
+            return raw
+    return ""
+
+
 def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], post_rev: str, root: Path,
                left) -> dict:
     """The new-red verdict: touched-file tests, `targets` and the direct importers of each touched module run in
@@ -176,8 +215,10 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
             env = cov._mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest)
             if left() <= 0:
                 raise subprocess.TimeoutExpired("pytest", 0)
-            ran = cov._tier_empty_as_green(cov._run_pytest_retrying(cov._pytest_argv(root, dest, basetemp, picked), dest, env))
+            ran, overrun = _run_phased(root, dest, basetemp, picked, importers, env, left)
             text = ran.stdout + ran.stderr
+            if overrun:
+                out["importer_overrun"] = True
             ids = list(cov.failing_ids(text))
             detail = _reds(text.splitlines())
             at_base: frozenset = frozenset()
@@ -268,6 +309,16 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
     return result
 
 
+def _repo_root(start: Path) -> Path:
+    """The nearest ancestor of `start` (itself included) holding a `.git` entry, else `start`. Targets are
+    repo-relative, so a leg started below the root (an agent shell left in `coordinator/bin`) must still
+    partition and run pytest at the root; a directory walk spawns nothing."""
+    for d in (start, *start.parents):
+        if (d / ".git").exists():
+            return d
+    return start
+
+
 def main(argv: list[str]) -> int:
     argv = list(argv)
     if "--" not in argv:
@@ -283,7 +334,7 @@ def main(argv: list[str]) -> int:
         print(f"test_leg_run: bad arguments\n{USAGE}", file=sys.stderr)
         return EXIT_USAGE
     budget_s = args.budget_s if args.budget_s is not None else TEST_LEG_MINUTES_BUDGET * 60.0
-    cwd = os.path.realpath(os.getcwd())
+    cwd = str(_repo_root(Path(os.path.realpath(os.getcwd()))))
     result = run(targets, base_sha=args.base_sha, head_sha=args.head_sha,
                  base_export_out=args.base_export_out, budget_s=budget_s, cwd=cwd, touched=args.touched)
     body = json.dumps(result)

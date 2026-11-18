@@ -121,6 +121,52 @@ def test_sizing_without_family_stays_executor(repo) -> None:
     assert [r.agent_type for r in m.rows] == ["coordinator:executor"]
 
 
+def test_sizing_prose_naming_a_family_without_family_key_stages_claude_with_an_advisory(repo) -> None:
+    doc = _sizing(intent="Port it. sizing family: codex")
+    (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    report: dict = {}
+    m = stage(repo, run_id="x1run", sizing_rel=SIZING_REL, writes=["pkg/a.py"], family_report=report)
+    assert [r.agent_type for r in m.rows] == ["coordinator:executor"]
+    assert any("names no family" in w and "Add `family: codex`" in w for w in report["warnings"])
+    assert "family_inherited" not in report
+
+
+def test_free_text_source_label_matches_what_named_family_emits(repo) -> None:
+    from coordinator_core.ops.dispatch_emit import ask_stage
+    from coordinator_core.ops.dispatch_emit.ask_fanout import named_family
+
+    family, source = named_family(repo, ["Port it. sizing family: codex"])
+    assert family == "codex"
+    assert source == ask_stage._FREE_TEXT_SOURCE
+    assert ask_stage._unnamed_family(repo, {"intent": "sizing family: codex"}, None, None, {}, "") == ("codex", source, False)
+
+
+def test_structured_predecessor_family_is_inherited_and_recorded(repo) -> None:
+    prior_rel = "state/sizings/2026-11-01-prior.yaml"
+    (repo / prior_rel).write_text(yaml.safe_dump(_sizing(family="codex")), encoding="utf-8", newline="\n")
+    doc = _sizing(intent=f"Redo it. supersedes {prior_rel}")
+    (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    report: dict = {}
+    m = stage(repo, run_id="x1run", sizing_rel=SIZING_REL, writes=["pkg/a.py"], family_report=report)
+    assert [r.agent_type for r in m.rows] == ["coordinator:family-stage-runner"]
+    assert report["family_inherited"]["family"] == "codex" and prior_rel in report["family_inherited"]["source"]
+    assert any("inherited 'codex'" in w for w in report["warnings"])
+
+
+def test_sizing_prose_naming_a_family_passes_when_the_sizing_carries_it(repo) -> None:
+    doc = _sizing(intent="Port it. sizing family: codex", family="codex")
+    (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    m = stage(repo, run_id="x1run", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    assert [r.agent_type for r in m.rows] == ["coordinator:family-stage-runner"]
+
+
+def test_sizing_prose_naming_no_family_stays_executor(repo) -> None:
+    doc = _sizing(intent="Port it. mentions codex and agy in passing")
+    (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    m = stage(repo, run_id="x1run", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    assert [r.agent_type for r in m.rows] == ["coordinator:executor"]
+
+
 def test_sizing_unknown_family_is_refused(repo) -> None:
     (repo / SIZING_REL).write_text(yaml.safe_dump(_sizing(family="gpt")), encoding="utf-8", newline="\n")
     with pytest.raises(AskStageError, match="claude"):

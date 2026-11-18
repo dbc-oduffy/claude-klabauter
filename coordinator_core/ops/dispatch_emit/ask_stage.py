@@ -579,13 +579,16 @@ def _refire_prior(record: Path, snap: Optional[resume_snapshot.Snapshot]) -> str
     return snap.kept_run if snap is not None and snap.kept_run else ""
 
 
-def _refuse_unnamed_family(
-    root: Path, sizing: Optional[Mapping], sizing_rel: Optional[str], ask_text: Optional[str],
+_FREE_TEXT_SOURCE = "the plan row text"
+
+
+def _unnamed_family(
+    root: Path, sizing: Optional[Mapping], ask_text: Optional[str],
     relayed_text: Optional[str], raw_by_id: Mapping[str, Mapping], refire_prior: str,
-) -> None:
-    """Raise when the sizing carries no `family` but a predecessor run, a superseded run or sizing
-    its prose names, or a plan row's text, names a non-claude one: routing it claude would send a
-    family row to the executor."""
+) -> tuple[str, str, bool]:
+    """(family, source, structured) for a sizing carrying no `family` whose predecessor run, superseded
+    run or sizing, or free text names a non-claude one; ("", "", False) when none does. `structured` is
+    True for a recorded family (inherit it), False for free text (advise only). Never raises."""
     from coordinator_core.ops.dispatch_emit.ask_fanout import named_family
 
     analysis = (sizing or {}).get("em_analysis")
@@ -593,11 +596,7 @@ def _refuse_unnamed_family(
     texts = [str(v) for v in ((sizing or {}).get("intent"), analysis.get("em_brief"), analysis.get("relayed_text"), ask_text, relayed_text) if v]
     texts += [str(raw.get(k)) for raw in raw_by_id.values() for k in ("title", "body") if raw.get(k)]
     family, source = named_family(root, texts, (refire_prior,) if refire_prior else ())
-    if family:
-        raise AskStageError(
-            f"sizing {sizing_rel or ''} names no family but {source} names {family!r}; "
-            f"add `family: {family}` to the sizing"
-        )
+    return family, source, bool(family) and source != _FREE_TEXT_SOURCE
 
 
 def _refire_notes(root: Path, run_id: str, prior: str) -> list[dict]:
@@ -1877,8 +1876,19 @@ def stage(
         if isinstance(exc, AskStageError):
             raise
         raise AskStageError(f"sizing {run_sizing_rel or ''}: {exc}") from exc
+    family_notes: list[str] = []
+    family_inherited: dict[str, str] = {}
     if sizing_family == "claude" and binding is None:
-        _refuse_unnamed_family(root, run_sizing, run_sizing_rel, ask_text, relayed_text, raw_by_id, refire_prior)
+        named, named_source, structured = _unnamed_family(root, run_sizing, ask_text, relayed_text, raw_by_id, refire_prior)
+        if named and structured:
+            sizing_family = named
+            family_inherited = {"family": named, "source": named_source}
+            family_notes.append(f"sizing {run_sizing_rel or ''} names no family; inherited {named!r} from {named_source}")
+        elif named:
+            family_notes.append(
+                f"sizing {run_sizing_rel or ''} names no family but {named_source} names {named!r}; "
+                f"staged as claude. Add `family: {named}` to the sizing to route it"
+            )
     briefs_rel = _rel_dir(root, run_dir / "briefs")
     try:
         with os.scandir(run_dir / "briefs") as _listing:
@@ -2069,6 +2079,10 @@ def stage(
 
     if family_report is not None:
         family_report.update(_family_routing_report(sizing_family, row_families))
+        if family_inherited:
+            family_report["family_inherited"] = family_inherited
+        if family_notes:
+            family_report["warnings"] = [*family_notes, *family_report.get("warnings", ())]
         _report_interpreter_pin_defect(root, family_report)
     manifest_rows, row_groups = _group_rows(manifest_rows, brief_sizes, raw_by_id)
     owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent, manifest_rows, classify_receiver)

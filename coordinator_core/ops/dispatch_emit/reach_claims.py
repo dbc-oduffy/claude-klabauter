@@ -16,7 +16,11 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
+from coordinator_core.ops.dispatch_emit import land_deadline
+
 REACH_CLAIM_REFUSED = "reach-claim-unreachable"
+#: `reach_gate` reply key listing the judge steps that overran their deadline and are owed.
+REACH_OWED = "owed"
 
 REACH_CLAIM_FORM = (
     'State every claim that one code symbol reaches another as "`X` reaches `Y`", both '
@@ -91,12 +95,26 @@ def reach_gate(
     claims = extract_reach_claims(note_text) if note_text else ()
     if not claims:
         return None, {}
-    from coordinator_core.ops.dispatch_emit.reach_claims_tree import judge_reach_claims
+    from coordinator_core.ops.dispatch_emit.reach_claims_tree import GREP_STEP, judge_reach_claims
 
-    verdicts = judge_reach_claims(
-        root, claims, landing_paths=landing_paths, deleted_paths=deleted_paths,
-        withheld_paths=withheld_paths,
-    )
+    try:
+        verdicts = judge_reach_claims(
+            root, claims, landing_paths=landing_paths, deleted_paths=deleted_paths,
+            withheld_paths=withheld_paths,
+        )
+    except land_deadline.LandDeadlineExceeded as exc:
+        if not (
+            exc.step
+            and exc.leg == GREP_STEP
+            and exc.bound_by in (land_deadline.BOUND_STEP, land_deadline.BOUND_BUDGET)
+        ):
+            raise
+        return None, {
+            "checked": len(claims),
+            "unreachable": [],
+            "undecidable": [c.anchor for c in claims],
+            REACH_OWED: [GREP_STEP],
+        }
     return reach_refusal(verdicts), reach_reply(verdicts)
 
 

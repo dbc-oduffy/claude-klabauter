@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -33,9 +34,39 @@ _EDIT_TOOLS = {
 #: Lowercase arg keys an agy edit tool may carry its target path under (matched case-insensitively, so `Path`
 #: from 1.5.9 write_file/edit_file counts); the first non-empty one becomes `file_path`.
 _PATH_KEYS = ("targetfile", "absolutepath", "filepath", "file_path", "path")
+#: Whole-file writers: their `Content` arg is the body the content-reading write guards expect as lowercase `content`.
+_CONTENT_TOOLS = frozenset({"write_file", "write_to_file"})
 #: Payload keys naming the calling subagent (protojson `agentId`, or snake_case); the engine event carries it
 #: as `agent_id`, which the shim's cold chain and the guards read as "subagent". An EM payload carries neither.
 _AGENT_ID_KEYS = ("agentId", "agent_id")
+
+
+def conversations_dir() -> Path:
+    """Where agy keeps one sqlite file per conversation (`<conversationId>.db`)."""
+    return Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+
+
+def is_subagent_conversation(conversation: str) -> bool:
+    """True when agy's own store names a parent for `conversation`.
+
+    agy hooks fire for `invoke_subagent` child calls but the payload carries no `agentId`; the child is a
+    conversation of its own whose first `gen_metadata` row records `parent_cascade_id`. Any read failure
+    answers False (EM), so a missing or locked store never denies.
+    """
+    if not _CONV_RE.match(conversation or ""):
+        return False
+    db = conversations_dir() / f"{conversation}.db"
+    if not db.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True, timeout=0.25)
+        try:
+            row = con.execute("SELECT data FROM gen_metadata ORDER BY idx LIMIT 1").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+    return bool(row and isinstance(row[0], bytes) and b"parent_cascade_id" in row[0])
 
 
 class AgyAdapter:
@@ -59,6 +90,8 @@ class AgyAdapter:
             tool_input = dict(args)
             lowered = {str(k).lower(): v for k, v in args.items()}
             tool_input["file_path"] = next((str(lowered[k]) for k in _PATH_KEYS if lowered.get(k)), "")
+            if name in _CONTENT_TOOLS and isinstance(lowered.get("content"), str):
+                tool_input["content"] = lowered["content"]
         else:
             tool_name = name
             tool_input = dict(args)
@@ -70,6 +103,9 @@ class AgyAdapter:
         if not cwd and isinstance(payload.get("cwd"), str):
             cwd = payload["cwd"]
         agent_id = next((payload[k] for k in _AGENT_ID_KEYS if isinstance(payload.get(k), str) and payload[k]), "")
+        conversation = str(payload.get("conversationId") or "")
+        if not agent_id and call and is_subagent_conversation(conversation):
+            agent_id = conversation
         return HostEvent(
             host=HOST_AGY,
             event=str(resolved or ""),
