@@ -1411,7 +1411,26 @@ _GC_CLEAN_CMD_RE = re.compile(
     r"\s+clean\b"
 )
 
-def _gc_is_clean_segment(seg: str) -> bool:
+_GC_GROUPING_CHARS_RE = re.compile(r"([()`])")
+
+
+def _gc_clean_is_executed(cmd: str) -> bool:
+    """True iff the WHOLE command has a `git` argv0 whose subcommand is `clean`.
+
+    `_split_segments` is quote-blind, so a quoted `a|git clean` operand yields a
+    `git clean` fragment; shlex over the intact command keeps that operand one
+    token. Grouping chars are space-padded first so `$(git clean)` and
+    `(git clean)` still expose a bare `git` token; padding inside a quoted
+    operand never splits it. Fails closed on an untokenizable command.
+    """
+    return _command_really_invokes(_GC_GROUPING_CHARS_RE.sub(r" \1 ", cmd), "clean")
+
+
+def _gc_is_clean_segment(seg: str, corroborating_cmd: Optional[str] = None) -> bool:
+    """`corroborating_cmd`, when given, is the whole bash command: a plain
+    `git ... clean` head match must then also be a real argv invocation there.
+    The `sh -c`/`eval`/wrapper-word branches skip it -- their payload is one
+    quoted token by design."""
     prev = None
     s = seg
     while s != prev:
@@ -1441,7 +1460,9 @@ def _gc_is_clean_segment(seg: str) -> bool:
     firstword = s.split(None, 1)[0] if s.split(None, 1) else ""
     if firstword in _RM_WRAPPER_WORDS:
         return bool(re.search(r"\bgit\b.*\bclean\b", s))
-    return bool(_GC_CLEAN_CMD_RE.search(probe))
+    if not _GC_CLEAN_CMD_RE.search(probe):
+        return False
+    return corroborating_cmd is None or _gc_clean_is_executed(corroborating_cmd)
 
 
 def check_destructive_git_clean(
@@ -1491,10 +1512,12 @@ def check_destructive_git_clean(
             _clean_oracle_memo[key] = cached
         return cached
 
-    for seg in list(_split_segments(cmd)) + _gc_ps_segments:
+    _gc_bash_segments = list(_split_segments(cmd))
+    for _gc_idx, seg in enumerate(_gc_bash_segments + _gc_ps_segments):
         if not seg.strip():
             continue
-        if not _gc_is_clean_segment(seg):
+        _gc_is_bash_seg = _gc_idx < len(_gc_bash_segments)
+        if not _gc_is_clean_segment(seg, cmd if _gc_is_bash_seg else None):
             continue
 
         c_dir = _extract_git_c_dir(seg)

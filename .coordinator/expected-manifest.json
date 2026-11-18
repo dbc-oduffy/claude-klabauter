@@ -2559,8 +2559,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "4b1c55bbc05a2b85d6ac8b1fdbdafabeee25739b",
-    "coordinator_core/_engine_stamp": "8714adc58cb7917db7bedcfab84c10f74b5f4331",
+    "coordinator_core/_engine_published_at": "8dd2cb0762c71a9ce6bcd1a4ef4ba7428d3b6559",
+    "coordinator_core/_engine_stamp": "70f9b286ce3d86abfd9c8fb1703528e4dd220750",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2776,7 +2776,7 @@
     "coordinator_core/bash_guards/_dc_blanket_add.py": "fa8f75de2875cd09734eec4947c95c01a4459b4d",
     "coordinator_core/bash_guards/_dc_commit.py": "720a6f12f7dd9148c46d7726f34eb29f6b8c46a8",
     "coordinator_core/bash_guards/_dc_commit_named_stage.py": "cb62e0cd6a1f9b8eba532d1474b210018629ff11",
-    "coordinator_core/bash_guards/_dc_git_misc.py": "13930c2027bca4d316879f2680e234f4ed7bf48b",
+    "coordinator_core/bash_guards/_dc_git_misc.py": "9d6f5e8cdc46f5cc83e0069d01926e8e417affc1",
     "coordinator_core/bash_guards/_dc_git_probe.py": "9c2957f7eb055e5366be4998743ddbdf3105438d",
     "coordinator_core/bash_guards/_dc_git_shared.py": "4c5f076297ae51b1bda6e73281ed867cf0443637",
     "coordinator_core/bash_guards/_dc_rewrites.py": "daccc8bedfbe5c04f5f2771dcbe5e067ac58f248",
@@ -2962,6 +2962,7 @@
     "coordinator_core/bash_guards/tests/test_block_subagent_commit_run_token.py": "84618516fe9acfb542a6c9bf12d8cb4ced6c9bc9",
     "coordinator_core/bash_guards/tests/test_block_subagent_commit_terminal_params_file.py": "f5e4c2362612c0578e9e8615fc1e8c6027dbc565",
     "coordinator_core/bash_guards/tests/test_block_subagent_destructive_action.py": "ecb72b8d103dcfaf972deddc235a91b7eb82fe9f",
+    "coordinator_core/bash_guards/tests/test_block_subagent_destructive_action_agy_uuid.py": "b070af0f2cf659bf0824de8e44d25d5e50f38f9f",
     "coordinator_core/bash_guards/tests/test_block_subagent_destructive_action_ceilinged_init.py": "0086018e380d5408781d56467fbead1737d12857",
     "coordinator_core/bash_guards/tests/test_block_subagent_destructive_action_checkout_index_scratch.py": "ad7bc434d036a1b72ae30ec990cfcf6c38f5e7fc",
     "coordinator_core/bash_guards/tests/test_block_subagent_destructive_action_merge_route.py": "ef6c3758663362ec88d534a8e43709ab4f1e6c24",
@@ -3102,6 +3103,7 @@
     "coordinator_core/bash_guards/tests/test_friction_advisories_dispatch.py": "71ffd3a59ffeb1971c460fd65b5e8244752b571a",
     "coordinator_core/bash_guards/tests/test_gem_cross_repo_commit.py": "4757eb5fe4774bf471cd598ece7e73417ab724b1",
     "coordinator_core/bash_guards/tests/test_git_clean_deny_uses_payload_cwd_repo.py": "aa840f94062f05f4d776688f358eada54b2ac278",
+    "coordinator_core/bash_guards/tests/test_git_clean_ignores_quoted_text.py": "34bad271d7064fa808a2653a47ba8ccc5b905f67",
     "coordinator_core/bash_guards/tests/test_git_commit_safe_commit_deny_escalation.py": "5178ba22a7378ba2b3752877db563208afd863b0",
     "coordinator_core/bash_guards/tests/test_git_commit_safe_commit_firing_shape.py": "060b5c108b368d1f660864363e1b9a25306deef6",
     "coordinator_core/bash_guards/tests/test_git_probe_budget_delivery.py": "5a301ca6a337e05fa25efed34444b60d88b1caf1",
@@ -12904,5 +12906,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "45c30f3a83a624fb9e11c833f89791d238d5133c"
+  "source_head": "52cbd00fc5e036301ad87a9cbb2df61f984515f3"
 }
