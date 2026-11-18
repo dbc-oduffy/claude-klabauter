@@ -1,15 +1,19 @@
 """Checkpoint credit for a family-stage row's declared writes.
 
-A family stage (agy, codex, grok) writes through its vendor CLI inside the runner's Bash call, so the
-Write/Edit print hook never prints those writes. A declared path is credited only when both hold:
+A family stage (agy, codex, grok) writes through its vendor CLI, so the Write/Edit print hook never
+prints those writes. A declared path is credited only when all three hold:
 
 - the row's return is a family ``DONE`` whose every attempt's verdict is ``OK``: read from the run's
   ``returns.json``, or, in the fire the row ran in (``returns.json`` is written only at a halt), from the
   checkpoint message's ``Checkpoint-Family-Ok:`` line, which the engine writes from that same reply;
-- the path's bytes differ from the row-start snapshot (``capture``, run as the runner's first command).
+- the path's bytes differ from the row-start snapshot (``capture``, run as the runner's first command);
+- the CLI's own invocation record (``family_invoke_record``) shows the path changed across the CLI
+  process (exit 0, post != pre) and its current bytes equal that record's ``post``.
 
-Trap: an all-OK return alone never credits. A declared path unchanged since the row started holds a
-peer's edit or nothing of the row's, so it is withheld and named. Stdlib only; spawns no process.
+Trap: an all-OK return and a row-start diff never credit alone: a runner that edits directly satisfies both.
+Such a path is withheld with a reason starting ``family_authored:false``. A declared path unchanged since
+the row started holds a peer's edit or nothing of the row's, so it is withheld and named. Stdlib only;
+spawns no process.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 ROW_START_DIR = "row-start"
+AUTHORED_FALSE = "family_authored:false"
 FAMILY_OK_TRAILER = "Checkpoint-Family-Ok"
 _TRAILER_RE = re.compile(rf"^{FAMILY_OK_TRAILER}:\s*(?P<ids>.+)$", re.M)
 _SAFE_ROW_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -97,6 +102,25 @@ def _ok_rows(rec: Path, message: str) -> set[str]:
     return ok
 
 
+def _unauthored_cause(root: Path, run_id: str, row_id: str, path: str) -> Optional[str]:
+    """None when the row's invocation records prove the vendor CLI authored ``path`` and its bytes still
+    equal the latest such record's ``post``; else the cause the withheld reason carries."""
+    from coordinator_core.ops.dispatch_emit import family_invoke_record as rec_mod, write_baseline
+
+    records = rec_mod.read(root, run_id, row_id)
+    if not records:
+        return "no CLI invocation record"
+    authored = [r for r in records if path in rec_mod.authored_paths(r)]
+    if not authored:
+        failed = next((r for r in records if r.get("exit_code") != 0), None)
+        if failed is not None:
+            return f"CLI exit {failed.get('exit_code')}"
+        return rec_mod.UNCHANGED_CAUSE
+    if write_baseline.fingerprint(root, path) != authored[-1]["post"].get(path):
+        return "changed after the CLI exited"
+    return None
+
+
 def credit(root: Path, run_id: str, paths: Iterable[str], message: str = "") -> tuple[frozenset[str], dict[str, str]]:
     """``(credited, why)``: the ``paths`` an all-OK family row of ``run_id`` changed since its start, and
     ``{path: reason}`` for each path a family row declares but this does not credit. Never raises."""
@@ -127,6 +151,10 @@ def credit(root: Path, run_id: str, paths: Iterable[str], message: str = "") -> 
                 elif write_baseline.fingerprint(root, path) == snap[path]:
                     why[path] = f"declared by family row {row_id}, but unchanged since the row started: not the row's write"
                 else:
+                    cause = _unauthored_cause(root, run_id, row_id, path)
+                    if cause:
+                        why[path] = f"{AUTHORED_FALSE}: row {row_id}: {cause}"
+                        continue
                     credited.add(path)
                     why.pop(path, None)
                     break

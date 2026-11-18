@@ -41,6 +41,12 @@ def test_brief_names_runner_fields():
     assert "writes:" not in b
 
 
+@pytest.mark.parametrize("stage", ["size", "review", "write"])
+def test_every_runner_brief_tells_the_runner_to_report_vendor_model(stage):
+    b = sf.runner_brief("grok", stage, "p.md", "scratch/x", ["a.py"])
+    assert sf.VENDOR_MODEL_LINE in b and f"`{sf.VENDOR_MODEL_KEY}`" in b
+
+
 def test_write_stage_lists_paths_and_requires_them():
     b = sf.runner_brief("agy", "write", "p.md", "scratch\\x", ["a.py", "b.py"])
     assert "scratch: scratch/x" in b and "  - a.py" in b and "  - b.py" in b
@@ -75,7 +81,7 @@ def test_record_keeps_failed_family_then_fallback():
 
 def test_record_without_fallback_reports_family():
     rec = sf.stage_record("review", _res("codex", stage="review"))
-    assert rec["attempts"] == [_res("codex", stage="review")]
+    assert rec["attempts"] == [_res("codex", stage="review", vendor_model=None)]
     assert rec["reported_family"] == "codex"
     blocked = sf.stage_record("review", _res("codex", "BLOCKED", blocked_reason="auth"))
     assert blocked["reported_family"] == "codex"
@@ -98,6 +104,33 @@ def test_record_refusals():
         sf.stage_record("research", _res("agy", "FAILED", blocked_reason="x"), fb)
     with pytest.raises(ValueError, match="stage role"):
         sf.stage_record("size", _res("agy"))
+
+
+def test_family_attempt_carries_vendor_model_beside_exit_code_and_stage():
+    rec = sf.stage_record("review", _res("grok", stage="review", vendor_model="grok-4"))
+    attempt = rec["attempts"][0]
+    assert (attempt["vendor_model"], attempt["exit_code"], attempt["stage"]) == ("grok-4", 0, "review")
+    assert "vendor_model" not in sf._RESULT_KEYS
+
+
+def test_fallback_keeps_its_own_model_distinct_from_the_vendor_model():
+    fam = _res("grok", "FAILED", blocked_reason="429", vendor_model="grok-4")
+    rec = sf.stage_record("research", fam, _res("claude", model="sonnet"))
+    vendor, fallback = rec["attempts"]
+    assert vendor["vendor_model"] == "grok-4" and "model" not in vendor
+    assert fallback["model"] == "sonnet" and "vendor_model" not in fallback
+
+
+@pytest.mark.parametrize("extra", [{}, {"vendor_model": None}, {"vendor_model": ""}, {"vendor_model": "  "}])
+def test_unreported_vendor_model_is_an_explicit_null_never_the_fallback_model(extra):
+    fam = _res("agy", "FAILED", blocked_reason="x", **extra)
+    rec = sf.stage_record("research", fam, _res("claude", model="sonnet"))
+    assert "vendor_model" in rec["attempts"][0] and rec["attempts"][0]["vendor_model"] is None
+
+
+def test_non_string_vendor_model_is_refused():
+    with pytest.raises(ValueError, match="vendor_model"):
+        sf.stage_record("research", _res("agy", vendor_model=7))
 
 
 _BOX = {

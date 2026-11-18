@@ -2414,6 +2414,27 @@ def _run_close_block(
     )
 
 
+def _archive_dir_is_record(archive_path: Any) -> bool:
+    """True when files under the archive directory are record paths (a directory has no file name,
+    so a placeholder child is probed)."""
+    return record_paths.is_record_path(str(archive_path).rstrip("/\\") + "/x")
+
+
+def _record_only_close_run(
+    profile: Profile, manifest: Any, has_close_node: bool, close_node_id: Optional[str]
+) -> bool:
+    """True when the expected case is a record-only run: every row and the archive are record
+    paths and the close's confirmed edge lands on a commit, so `_closeDefers` scripts close,
+    commit, sweep and review. Emit-time twin of `_BOOKKEEP_JS`; a row a fix routes to product
+    files runs off this path and is not counted (like size scouts and retries)."""
+    if not has_close_node or close_node_id is None or not manifest.entries:
+        return False
+    confirmed = profile.graph[close_node_id].edges.get("confirmed")
+    if confirmed is not None and (confirmed not in profile.graph or profile.graph[confirmed].kind != "commit"):
+        return False
+    return _archive_dir_is_record(profile.archive_path) and all(record_paths.is_record_path(e.path) for e in manifest.entries)
+
+
 def _verify_mode_for_key(profile: Profile, node_id: str, batch_key: str) -> tuple[str, Optional[str]]:
     node = profile.graph[node_id]
     verify_map = node.verify or {}
@@ -3550,13 +3571,30 @@ def compose_grind_script(
     # and retries fire only off the happy path and are not counted. The adjudicate leg is one
     # post-loop call, counted once via once_per_run_legs.
     fix_legs_per_row = 1 if any(kind == "fix" for kind in node_kind.values()) else 0
-    per_batch_legs = 1 + (1 if has_close_node else 0)
-    per_row_agent_legs = sum(
-        fix_legs_per_row
-        + sum(1 for node_id in verify_node_ids if verify_spec_by_node[node_id][entry.batch_key]["mode"] == "agent")
-        for _, entries in grouped
-        for entry in entries
-    )
+    record_only = _record_only_close_run(profile, manifest, has_close_node, prevet_close_node)
+
+    if record_only:
+        # Record-only close run: the close, commit, sweep and review are scripted
+        # (`dispatch.grind_bookkeep`), and a row ends at the scripted close after its routing verify.
+        # The adjudicate leg calls an agent only over pending PM-bound hand-backs, so the expected
+        # case counts none.
+        per_batch_legs = 1
+        per_row_agent_legs = sum(
+            min(1, sum(1 for n in verify_node_ids
+                       if n in pre_fix_nodes and verify_spec_by_node[n][entry.batch_key]["mode"] == "agent"))
+            for _, entries in grouped
+            for entry in entries
+        )
+        once_run_agents = 0
+    else:
+        per_batch_legs = 1 + (1 if has_close_node else 0)
+        per_row_agent_legs = sum(
+            fix_legs_per_row
+            + sum(1 for node_id in verify_node_ids if verify_spec_by_node[node_id][entry.batch_key]["mode"] == "agent")
+            for _, entries in grouped
+            for entry in entries
+        )
+        once_run_agents = sum(len(AGENT_CALL_RE.findall(scrub(leg))) for leg in once_per_run_legs)
     prevet_legs = (
         -(-len(manifest.entries) // profile.prevet.batch_size) * 2 if profile.prevet is not None else 0
     )
@@ -3567,7 +3605,7 @@ def compose_grind_script(
             agents=prevet_legs
             + len(grouped) * per_batch_legs
             + per_row_agent_legs
-            + sum(len(AGENT_CALL_RE.findall(scrub(leg))) for leg in once_per_run_legs),
+            + once_run_agents,
             basis="expected",
             groups=tuple(tuple(e.row_id for e in entries) for _, entries in grouped),
             row_total_tokens=ROW_TOTAL_TOKENS * len(manifest.entries),

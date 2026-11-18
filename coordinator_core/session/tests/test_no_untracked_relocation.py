@@ -443,6 +443,33 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "downstream readers -- not exercising relocate_touched_path by "
         "design, same shape as this file's other allow-listed test helpers",
 
+    # --- Sites that landed after the last curation; all classified no-strand. ---
+    ("coordinator_core", "install/engine_interpreter.py", "ensure", "os.replace", "os.replace(site, retired)", 1):
+        "displaces the superseded engine-site dir to a pid-suffixed sibling before the staged build is swapped in; "
+        "machine-local engine install tree under the settings home, never a T-claimed work path",
+    ("coordinator_core", "install/engine_interpreter.py", "ensure", "os.replace", "os.replace(staging, site)", 1):
+        "publishes the fully built engine-site staging sibling over the site dir only after the install succeeded; "
+        "machine-local engine install tree under the settings home, never a T-claimed work path",
+    ("coordinator_core", "orientation/regenerate_cache.py", "_reclaim", "os.rename", "os.rename(self._dir, aside)", 1):
+        "stale-lock reclaim: moves the orientation cache's own lock directory aside so exactly one reclaimer wins; "
+        "cache lock machinery, never a claimable work path",
+    ("coordinator_core", "orientation/regenerate_cache.py", "_reclaim", "os.rename", "os.rename(aside, self._dir)", 1):
+        "the put-back leg of the reclaim above, restoring a live holder's lock dir to its original path; an undo, not a relocation",
+    ("coordinator_core", "percolate/shadow_store.py", "adopt", "os.replace", "os.replace(extracted, entry)", 1):
+        "adopts an extracted shadow tree as its keyed store entry; both ends sit in the percolate shadow store, "
+        "a machine-local cache outside the worktree, never a claimable work path",
+    ("coordinator_core", "percolate/shadow_store.py", "_discard", "os.replace", "os.replace(entry, doomed)", 1):
+        "renames a shadow-store entry out of lookup's reach before it is deleted; a delete, not a relocation, "
+        "and the entry is machine-local cache outside the worktree",
+    ("coordinator_core", "housekeeping/tests/test_handoff_layout.py", "_apply", "shutil.move", "shutil.move(str(root / m.src), str(dst))", 1):
+        _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/dispatch_emit/tests/test_grind_bookkeep.py", "close", "Path.replace", "(repo / ROW).replace(repo / ARCHIVE)", 1):
+        "test fixture: stub close op archives a row file inside its tmp_path repo -- outside any session's claimable space",
+    ("coordinator_core", "ops/dispatch_emit/tests/test_grind_one_row_discard_spawns.py", "close", "Path.replace", "(repo / ROW).replace(repo / ARCHIVE)", 1):
+        "test fixture: stub close op archives a row file inside its tmp_path repo -- outside any session's claimable space",
+    ("coordinator_core", "ops/tests/test_plan_readiness_verdict.py", "test_a_plan_moved_mid_blitz_is_judged_and_spine_read_on_its_new_path", "Path.rename", "(tmp_path / REL).rename(moved)", 1):
+        _TMP_FIXTURE_REASON,
+
     # --- Re-keyed 2026-08-29 against the call sites that actually exist. ---
     # --- Same C3 discriminator as every entry above: was the SOURCE path  ---
     # --- claimable by a live session, or is it a closed-out artifact      ---

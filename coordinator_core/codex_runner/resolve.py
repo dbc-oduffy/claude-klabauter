@@ -13,7 +13,7 @@ import subprocess
 import sys
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 _CODEX_REL = ("@openai", "codex", "bin", "codex.js")
 
@@ -67,6 +67,26 @@ def codex_family_stage_argv(prefix: list[str], *tail: str) -> list[str]:
     Single builder for workflow.run_agent, headless_agents.run_agent and execute.run. Any codex sandbox fails every shell call on Windows (CreateFileMapping error 5); `--json` keeps the event stream the runners parse. `tail` follows verbatim (flags, then prompt or `-`).
     """
     return [*prefix, "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", *tail]
+
+
+def codex_scoped_stage_argv(prefix: list[str], writable_roots: Sequence[str], *tail: str) -> list[str]:
+    """argv for a codex family-stage write run confined to `writable_roots`; never the bypass flag.
+
+    `exec --json --sandbox <workspace mode> -c sandbox_workspace_write.writable_roots=[...] -c project_doc_max_bytes=0`,
+    roots as a TOML array. The mode string is read from the worker-mode table so no second spawn-site literal
+    exists here (test_every_codex_spawn_site_shaped keeps this module argv-only). Raises ValueError on no roots.
+    """
+    roots = [str(r) for r in writable_roots]
+    if not roots:
+        raise ValueError("codex_scoped_stage_argv needs at least one writable root")
+    from coordinator_core.agent_pipe.worker_mode import _WorkerArgv
+
+    mode = _WorkerArgv._STATIC["codex"][1]
+    return [
+        *prefix, "exec", "--json", "--sandbox", mode,
+        "-c", f"sandbox_workspace_write.writable_roots={json.dumps(roots)}",
+        "-c", "project_doc_max_bytes=0", *tail,
+    ]
 
 
 def resolve_native_cli(

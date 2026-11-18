@@ -184,6 +184,7 @@ from coordinator_core.ops.dispatch_emit.self_correction import (
 REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
+from coordinator_core.ops.dispatch_emit.family_invoke_record import INVOKE_MODULE as _FAMILY_INVOKE_MODULE
 from coordinator_core.ops.dispatch_emit import stage_family_binding as _stage_family_binding
 from coordinator_core.ops.dispatch_emit.pipeline_compose import FALLBACK_CAUSE_JS as _FALLBACK_CAUSE_JS
 from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_source
@@ -3945,18 +3946,23 @@ def _family_enabled(repo_root: str, sizing_rel: Optional[str]) -> bool:
         return True
 
 
-def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
-    """JS for `_familyRun(r)`: one family attempt, then one claude fallback when that attempt is
-    BLOCKED, FAILED or unresolved. The returned row result is a status line plus the stage record
-    (`stage_family.stage_record`'s shape), the family attempt first and the fallback tagged
-    `fallback_for`; the fallback is never reported as the family's result.
+def _family_run_js(work_label: str, exec_phase: str, start_cmd: str, invoke_cmd: Optional[str] = None) -> str:
+    """JS for `_familyRun(r)`: one family attempt. A read-only role (anything but a `write` stage) gets one
+    claude fallback when that attempt is BLOCKED, FAILED, unresolved or not `family_authored`; a `write` row
+    halts BLOCKED with the reason and never dispatches a claude fallback. The returned row result is a status
+    line plus the stage record (`stage_family.stage_record`'s shape), the family attempt first and the
+    fallback tagged `fallback_for`; the fallback is never reported as the family's result.
     The family attempt runs `start_cmd` + the row id first: the row-start snapshot `family_credit`
-    compares against, since the vendor CLI's writes get no write-print. `_famOk[id]` (declared beside
+    compares against. The runner's only vendor call is `invoke_cmd` (the engine invoker, default
+    `INVOKE_MODULE` bare) + the row's args, whose printed JSON is the family result; a result whose
+    `family_authored` is not true is a family-stage failure. `_famOk[id]` (declared beside
     `_commitWave`, which reads it) marks an attempt returned OK, for the `Checkpoint-Family-Ok:` line."""
+    if invoke_cmd is None:
+        invoke_cmd = engine_module_command(_FAMILY_INVOKE_MODULE, "", "--row ", portable=True)
     schema = json.dumps(
         {
             "type": "object",
-            "required": list(_stage_family._RESULT_KEYS),
+            "required": [*_stage_family._RESULT_KEYS, _stage_family.FAMILY_AUTHORED_KEY],
             "properties": {
                 "family": {"type": "string", "enum": list(_stage_family.FAMILIES)},
                 "stage": {"type": "string"},
@@ -3964,6 +3970,8 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
                 "output_path": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["OK", "WARN", *_stage_family.FALLBACK_VERDICTS]},
                 "blocked_reason": {"type": "string"},
+                _stage_family.VENDOR_MODEL_KEY: {"type": ["string", "null"]},
+                _stage_family.FAMILY_AUTHORED_KEY: {"type": "boolean"},
             },
         },
         sort_keys=True,
@@ -3984,15 +3992,34 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
             f"no edit to it, and do not retry it:\n\n{start_cmd}"
         )
         + " + r.id + "
-        + _js_string_literal("\n\nThen carry out the assignment below.\n\n")
+        + _js_string_literal(
+            "\n\nThen run exactly this one command as its own Bash call, no wrapper, no edit to it, and do not "
+            "retry it. It is the stage's only vendor call: the engine spawns the vendor CLI and records what it "
+            "wrote. Never edit or write a file yourself and never invoke the vendor CLI directly. Return the JSON "
+            f"it prints as your result, unchanged:\n\n{invoke_cmd}"
+        )
+        + " + r.id + ' --family ' + r.family + ' --stage ' + r.stage_role + ' --prompt ' + r.fallback_brief_path"
+        " + ((r.writes ?? []).length ? ' --writes ' + r.writes.map((w) => JSON.stringify(String(w))).join(' ') : '') + "
+        + _js_string_literal("\n\nThe assignment the CLI carries out follows, for your reference only.\n\n")
         + ";\n"
         "  async function _familyRun(r) {\n"
+        "    if (!r.fallback_brief_path) return 'BLOCKED: ' + r.id + ' via ' + r.family + ' FAILED (family row carries no prompt brief for the CLI) '"
+        " + JSON.stringify({ stage_role: r.stage_role, attempts: [{ family: r.family, stage: r.stage_role, exit_code: -1, output_path: '', verdict: 'FAILED', "
+        "blocked_reason: 'family_authored:false: family row carries no prompt brief for the CLI', vendor_model: null, family_authored: false }], reported_family: r.family });\n"
         "    let _fam = null;\n"
         f"    try {{ const _fr = await agent(_famStart(r) + _rowPrompt(r), {fam_opts});\n"
         "      if (_fr && typeof _fr === 'object' && typeof _fr.verdict === 'string' && typeof _fr.family === 'string') _fam = _fr;\n"
         "    } catch (e) { _fam = null; }\n"
         "    if (!_fam) _fam = { family: r.family, stage: r.stage_role, exit_code: -1, output_path: '', "
         "verdict: 'FAILED', blocked_reason: 'family-stage-runner reply missing or unparseable' };\n"
+        f"    {{ const _vm = typeof _fam.{_stage_family.VENDOR_MODEL_KEY} === 'string' ? _fam.{_stage_family.VENDOR_MODEL_KEY}.trim() : '';"
+        f" _fam = {{ ..._fam, {_stage_family.VENDOR_MODEL_KEY}: _vm || null }}; }}\n"
+        f"    if (_fam.{_stage_family.FAMILY_AUTHORED_KEY} !== true) {{\n"
+        "      const _br = _fam.blocked_reason || 'no invocation record shows the vendor CLI authored the diff';\n"
+        f"      _fam = {{ ..._fam, {_stage_family.FAMILY_AUTHORED_KEY}: false, "
+        f"verdict: ({failed}) ? _fam.verdict : 'BLOCKED', "
+        "blocked_reason: _br.startsWith('family_authored:false') ? _br : 'family_authored:false: ' + _br };\n"
+        "    }\n"
         f"    if (!({failed})) {{\n"
         "      const _rec = { stage_role: r.stage_role, attempts: [_fam], reported_family: _fam.family };\n"
         "      if (typeof _famOk === 'object') _famOk[r.id] = _fam.verdict === 'OK';\n"
@@ -4000,9 +4027,10 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
         "      return 'DONE: ' + r.id + ' via ' + _fam.family + ' ' + JSON.stringify(_rec);\n"
         "    }\n"
         "    if (!_fam.blocked_reason) _fam = { ..._fam, blocked_reason: 'family-stage-runner reported ' + _fam.verdict + ' without a reason' };\n"
-        "    if (!r.fallback_brief_path) {\n"
+        "    if (r.stage_role === 'write' || !r.fallback_brief_path) {\n"
         "      const _rec0 = { stage_role: r.stage_role, attempts: [_fam], reported_family: _fam.family };\n"
-        "      return 'BLOCKED: ' + r.id + ' via ' + _fam.family + ' ' + _fam.verdict + ' (row carries no fallback brief) ' + JSON.stringify(_rec0);\n"
+        "      return 'BLOCKED: ' + r.id + ' via ' + _fam.family + ' ' + _fam.verdict + ' (' + _fam.blocked_reason + ') '"
+        " + (r.stage_role === 'write' ? '(write row: no claude fallback) ' : '(row carries no fallback brief) ') + JSON.stringify(_rec0);\n"
         "    }\n"
         "    log(r.id + ': ' + _fam.family + ' attempt ' + _fam.verdict + ' (' + _fam.blocked_reason + '); rerunning on '"
         f" + {_lit(_stage_family.FALLBACK)});\n"
@@ -4012,7 +4040,7 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
         "catch (e) { _fbText = null; _fbCause = 'dispatch threw: ' + String((e && e.message) || e).slice(0, 300); }\n"
         "    if (!_fbCause) _fbCause = _fallbackCause(_fbText, false);\n"
         "    const _fbOk = _fbCause === '';\n"
-        f"    const _fb = {{ family: {_lit(_stage_family.FALLBACK)}, stage: r.stage_role, exit_code: _fbOk ? 0 : 1, output_path: '', "
+        f"    const _fb = {{ family: {_lit(_stage_family.FALLBACK)}, stage: r.stage_role, exit_code: _fbOk ? 0 : 1, output_path: '', model: r.model, "
         "verdict: _fbOk ? 'OK' : 'FAILED' };\n"
         f"    if (!_fbOk) _fb.blocked_reason = {_lit(_stage_family.FALLBACK + ' fallback ')} + _fbCause;\n"
         "    const _rec = { stage_role: r.stage_role, attempts: [_fam, { ..._fb, fallback_for: _fam.family }], "
@@ -6519,7 +6547,10 @@ def compose_ask_script(
         start_cmd = engine_module_command(
             FAMILY_CREDIT_MODULE, repo_root, f"start --root {Path(repo_root).as_posix()} --run-id {run_id} --row "
         )
-        b.append(_family_run_js(work_label, exec_phase, start_cmd))
+        invoke_cmd = engine_module_command(
+            _FAMILY_INVOKE_MODULE, repo_root, f"--root {Path(repo_root).as_posix()} --run-id {run_id} --row "
+        )
+        b.append(_family_run_js(work_label, exec_phase, start_cmd, invoke_cmd))
     if routed:
         b.append(_route_js.routed_run_js())
         b.append(_ROUTE_ADAPTER_JS)

@@ -253,10 +253,21 @@ def classify_with_residue(repo_root: Path) -> tuple[list[MechanicalVerdict], set
 
     Returns the verdicts sorted by path and the repo-relative paths of every open row.
     """
+    verdicts, open_rows, _unreadable = classify_with_unreadable(repo_root)
+    return verdicts, open_rows
+
+
+def classify_with_unreadable(repo_root: Path) -> tuple[list[MechanicalVerdict], set[str], list[str]]:
+    """`classify_with_residue` plus the sorted ids of queue rows whose YAML does not load.
+
+    An unreadable row is in neither the verdicts nor the open-row set; no verdict can close it.
+    """
     rows: list[tuple[str, dict]] = []
+    unreadable: list[str] = []
     for entry in scan_queue(repo_root):
         doc = _load_doc(str(repo_root / entry["row_path"]))
         if doc is None:
+            unreadable.append(entry["row_id"])
             continue
         status = doc.get("status")
         if status is not None and str(status).strip().casefold() != "open":
@@ -308,7 +319,7 @@ def classify_with_residue(repo_root: Path) -> tuple[list[MechanicalVerdict], set
             verdicts[path] = MechanicalVerdict(
                 Path(path).stem, "retag", "", f"retag: scope {doc.get('scope')!s} -> {target}", path, target
             )
-    return [verdicts[p] for p in sorted(verdicts)], {path for path, _doc in rows}
+    return [verdicts[p] for p in sorted(verdicts)], {path for path, _doc in rows}, sorted(unreadable)
 
 
 def repo_relative(path: str, repo_root: Path) -> str:

@@ -460,7 +460,15 @@ def checkpoint_own_blobs(
         credited = credited | family
         for path in [p for p in uncredited if p not in family]:
             withheld.append(path)
-            why[path] = family_why.get(path, NO_PRINT_REASON)
+            why[path] = (
+                (
+                    family_why[path]
+                    if family_why[path].startswith(family_credit.AUTHORED_FALSE)
+                    else f"family-stage failure: {family_why[path]}"
+                )
+                if path in family_why
+                else NO_PRINT_REASON
+            )
         pending = [p for p in pending if p in prints or p in credited]
         if not pending:
             return {}, sorted(set(withheld))

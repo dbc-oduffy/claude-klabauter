@@ -101,7 +101,7 @@ from coordinator_core.learn_lessons_pipeline import (
 )
 from coordinator_core.learn_lessons_pipeline.mechanical_close import (
     apply_verdicts,
-    classify_with_residue,
+    classify_with_unreadable,
     scan_queue,
 )
 from coordinator_core.learn_lessons_pipeline.run_stamp import stamp_run_complete
@@ -261,7 +261,7 @@ def _dispatch_stamp_run_complete(args: list[str], repo_root: Path) -> dict[str, 
 def mechanical_close_dry_run(repo_root: Path) -> dict[str, Any]:
     """Verdicts and token counts for the open queue, writing nothing. `tokens_after` is the
     projection with every dedupe/discard row removed."""
-    verdicts, open_rows = classify_with_residue(repo_root)
+    verdicts, open_rows, unreadable = classify_with_unreadable(repo_root)
     sizes = {r["row_path"]: r["size_bytes"] for r in scan_queue(repo_root)}
     closing = {v.row_path for v in verdicts if v.verdict != "retag"}
     return {
@@ -269,6 +269,7 @@ def mechanical_close_dry_run(repo_root: Path) -> dict[str, Any]:
         "verdicts": [asdict(v) for v in verdicts],
         "closed": {k: sum(1 for v in verdicts if v.verdict == k) for k in ("dedupe", "discard", "wiki-append", "retag")},
         "residue_ids": sorted(Path(p).stem for p in open_rows - {v.row_path for v in verdicts}),
+        "unreadable": unreadable,
         "tokens_before": estimate_tokens(sum(sizes.values())),
         "tokens_after": estimate_tokens(sum(s for p, s in sizes.items() if p not in closing)),
     }
@@ -276,11 +277,12 @@ def mechanical_close_dry_run(repo_root: Path) -> dict[str, Any]:
 
 def mechanical_close(repo_root: Path) -> dict[str, Any]:
     """Applies every mechanical verdict over the open queue in process and declares each moved
-    or rewritten path so `post_run.finish` sees it. Returns `apply_verdicts`' report plus `residue_ids`, the open rows no verdict closed."""
-    verdicts, open_rows = classify_with_residue(repo_root)
+    or rewritten path so `post_run.finish` sees it. Returns `apply_verdicts`' report plus `residue_ids`, the open rows no verdict closed, and `unreadable`, the queue rows whose YAML does not load."""
+    verdicts, open_rows, unreadable = classify_with_unreadable(repo_root)
     result = apply_verdicts(verdicts, repo_root)
     handled = {*result["archived_from"], *result["rewritten"]}
     result["residue_ids"] = sorted(Path(p).stem for p in open_rows - handled)
+    result["unreadable"] = unreadable
     for rel in (*result["archived_from"], *result["archived"], *result["rewritten"], *result["appended"]):
         declare_write(repo_root / rel)
     return result

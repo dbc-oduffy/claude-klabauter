@@ -36,6 +36,9 @@ CAUSE_RESOLVED = "resolved"
 CAUSE_UNREADABLE = "unreadable"
 ABANDONED_STAGES = frozenset({"abandoned", "parked"})
 
+#: Ceiling on file opens per run dir in `census`: halted, stage, then overlay, test-leg, run-outcome.
+MAX_OPENS_PER_RUN_DIR = 5
+
 #: R1 strand causes in match order: (cause, pattern over the halt kind + reason + next_action text).
 STRAND_CAUSES: tuple = (
     ("base-moved", re.compile(r"base[\s_-]*moved|moved[\s_-]*base|run base .*moved", re.I)),
@@ -56,16 +59,27 @@ HANDLED_CAUSES = frozenset({"empty-verify-leg", "test-exit-nonzero-zero-failed",
 NEVER_GREEN_CAUSES = frozenset({"base-moved"})
 
 
-def _json(path: Path) -> Optional[Any]:
+def _read_bytes(path: Any) -> Optional[bytes]:
+    """The single file-open choke point: bytes, or None when the file is absent or unreadable."""
     try:
-        return json.loads(path.read_bytes().decode("utf-8"))
-    except (OSError, ValueError):
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
         return None
 
 
-def _obj(path: Path) -> dict:
-    data = _json(path)
+def _decode(raw: Optional[bytes]) -> dict:
+    if raw is None:
+        return {}
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return {}
     return data if isinstance(data, dict) else {}
+
+
+def _obj(path: Any) -> dict:
+    return _decode(_read_bytes(path))
 
 
 def _text(marker: dict) -> str:
@@ -79,8 +93,8 @@ def _text(marker: dict) -> str:
     return "\n".join(str(p) for p in parts)
 
 
-def _stage(run_dir: Path) -> str:
-    stage = _obj(run_dir / RUN_STAGE_FILE)
+def _stage(run_dir: Any) -> str:
+    stage = _obj(os.path.join(run_dir, RUN_STAGE_FILE))
     for key in ("stage", "status"):
         value = stage.get(key)
         if isinstance(value, str) and value:
@@ -88,22 +102,22 @@ def _stage(run_dir: Path) -> str:
     return ""
 
 
-def _green(run_dir: Path) -> tuple:
+def _green(run_dir: Any) -> tuple:
     """`(green, signals)`: green needs one green signal and no red one, from the run's own records."""
     green: list = []
     red: list = []
-    overlay = _obj(run_dir / OVERLAY_VERDICT_FILE).get("verdict")
+    overlay = _obj(os.path.join(run_dir, OVERLAY_VERDICT_FILE)).get("verdict")
     if overlay == "green":
         green.append("overlay-verdict:green")
     elif overlay == "red":
         red.append("overlay-verdict:red")
-    leg = _obj(run_dir / TEST_LEG_FILE)
+    leg = _obj(os.path.join(run_dir, TEST_LEG_FILE))
     if leg:
         if leg.get("status") == "pass" and leg.get("tests_failed") == 0 and (leg.get("tests_run") or 0) > 0:
             green.append("test-leg:pass-0-failed")
         elif leg.get("status") == "fail" or (leg.get("tests_failed") or 0) > 0:
             red.append("test-leg:fail")
-    outcome = _obj(run_dir / RUN_OUTCOME_FILE)
+    outcome = _obj(os.path.join(run_dir, RUN_OUTCOME_FILE))
     ledger = outcome.get("ledger_verdict")
     items = ledger.get("items") if isinstance(ledger, dict) else None
     if isinstance(items, list) and items:
@@ -126,6 +140,39 @@ def _cause(marker: dict, stage: str) -> tuple:
     if stage in ABANDONED_STAGES:
         return stage, kind
     return CAUSE_OTHER, kind
+
+
+def _scan(run_dir: Any) -> Optional[tuple]:
+    """`(cause, kind, status, stage, green, signals)` for a member dir, None for a non-member.
+
+    Opens `halted.json` once, `run-stage.json` only when membership or the cause needs it, and the
+    three green-signal files only for a run that is neither resolved nor never-green.
+    """
+    raw = _read_bytes(os.path.join(run_dir, HALTED_FILE))
+    marker = _decode(raw)
+    stage = None
+    if raw is None:
+        stage = _stage(run_dir)
+        if stage not in ABANDONED_STAGES:
+            return None
+    status = marker.get("status") if isinstance(marker.get("status"), str) else ""
+    if marker and status and status != "halted":
+        return CAUSE_RESOLVED, marker.get("halted") or "", status, stage or "", False, []
+    kind = marker.get("halted") if isinstance(marker.get("halted"), str) else ""
+    cause = None
+    text = _text(marker)
+    for name, pattern in STRAND_CAUSES:
+        if pattern.search(text):
+            cause = name
+            break
+    if cause is None and not kind and stage is None:
+        stage = _stage(run_dir)
+    if cause is None:
+        cause = kind or (stage if stage in ABANDONED_STAGES else CAUSE_OTHER)
+    if cause in NEVER_GREEN_CAUSES:
+        return cause, kind, status, stage or "", False, []
+    green, signals = _green(run_dir)
+    return cause, kind, status, stage or "", green, signals
 
 
 def classify(run_dir: Any) -> dict:
@@ -170,17 +217,18 @@ def census(warp_root: Any) -> dict:
     rows: dict = {}
     population = 0
     try:
-        names = sorted(os.listdir(root))
+        with os.scandir(root) as it:
+            entries = [e for e in it if e.is_dir()]
     except OSError:
         return {"population": 0, "rows": [], "unreadable": str(root)}
-    for name in names:
-        run_dir = root / name
-        if not run_dir.is_dir() or not is_member(run_dir):
+    for entry in entries:
+        scanned = _scan(entry.path)
+        if scanned is None:
             continue
-        result = classify(run_dir)
-        row = rows.setdefault(result["cause"], {"cause": result["cause"], "runs": 0, "green": 0})
+        cause, green = scanned[0], scanned[4]
+        row = rows.setdefault(cause, {"cause": cause, "runs": 0, "green": 0})
         row["runs"] += 1
-        row["green"] += 1 if result["green"] else 0
+        row["green"] += 1 if green else 0
         population += 1
     ordered = sorted(rows.values(), key=lambda r: (-r["green"], -r["runs"], r["cause"]))
     return {"population": population, "rows": ordered, "handled": sorted(HANDLED_CAUSES)}

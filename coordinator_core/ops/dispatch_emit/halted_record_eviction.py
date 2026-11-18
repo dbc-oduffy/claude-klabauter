@@ -191,15 +191,40 @@ def record_touched_blobs(
         return []
 
 
-def _import_units(root: Path, own_py: list) -> list:
-    """Groups of ``own_py`` paths linked by `halt_tree_check._importers`' stem rule (one file's text
-    names another's module stem, either direction), transitively; groups of one are omitted."""
+def _stem_index(paths: list) -> dict:
+    """``{module stem: [paths]}``; a package ``__init__`` answers to its directory name."""
     stems: dict = {}
-    for p in own_py:
+    for p in paths:
         pp = Path(p)
         stem = pp.parent.name if pp.stem == "__init__" else pp.stem
         if stem:
             stems.setdefault(stem, []).append(p)
+    return stems
+
+
+def _kept_by_outside_importers(root: Path, parked_py: list, outside: list) -> set:
+    """Parked ``.py`` paths a dirty importer that is not parked names (`_import_units`' stem rule),
+    widened to the whole import unit of each, so a unit parks whole or not at all."""
+    stems = _stem_index(parked_py)
+    names = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(stems, key=len, reverse=True))) + r")\b")
+    hit: set = set()
+    for q in outside:
+        try:
+            text = (root / q).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for stem in set(names.findall(text)):
+            hit.update(stems[stem])
+    for unit in _import_units(root, parked_py):
+        if hit.intersection(unit):
+            hit.update(unit)
+    return hit
+
+
+def _import_units(root: Path, own_py: list) -> list:
+    """Groups of ``own_py`` paths linked by `halt_tree_check._importers`' stem rule (one file's text
+    names another's module stem, either direction), transitively; groups of one are omitted."""
+    stems = _stem_index(own_py)
     parent = {p: p for p in own_py}
 
     def find(x: str) -> str:
@@ -230,7 +255,9 @@ def plan_tree_eviction(
     that ``halt_tree_check.broken_paths`` judges unimportable (with its write-set importers) is named
     in ``withheld`` as ``EVICTED_NOT_IMPORTABLE``; every other parked path as ``EVICTED_PARKED``. Paths
     under the record dir and peer-owned paths (``_NOT_RUN_OWNED``) are never parked. The record's
-    ``evicted.json`` plus its blobs are appended to ``paths`` (in place). Call after
+    ``evicted.json`` plus its blobs are appended to ``paths`` (in place). A ``.py`` that a dirty ``.py``
+    in ``changed`` outside the parked set (landed, peer-owned) names stays in the tree with its whole
+    import unit: parking it would leave that importer importing nothing. Call after
     ``_withhold_run_dirt`` and before the nothing-to-commit return. None when nothing is parked."""
     from coordinator_core.authoring_leaks import HeadView
     from coordinator_core.ops.dispatch_emit import halt_tree_check, halt_tree_evict, kept_work
@@ -255,6 +282,14 @@ def plan_tree_eviction(
             prints[p] = kept_work.blob_sha((root / p).read_bytes())
         except OSError:
             continue
+    parked_py = [p for p in own_py if p in prints]
+    outside = [
+        p for p in changed
+        if p.endswith(".py") and p not in prints and not p.startswith(record_dir_rel + "/")
+    ]
+    if parked_py and outside:
+        for p in _kept_by_outside_importers(root, parked_py, outside):
+            del prints[p]
     if not prints:
         return None
     head = HeadView(root, prints)

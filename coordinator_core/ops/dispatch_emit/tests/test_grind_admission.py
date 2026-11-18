@@ -49,18 +49,23 @@ def test_token_bound_and_min_of_bounds() -> None:
     assert len(admit(IDS, max_agent_calls=500, budget_tokens=budget, batch_size=40).admitted) == 7
 
 
-def test_doe_overrun_budget_is_refused_at_admission() -> None:
-    # DoE /learn-lessons: 783,824 total tokens on 3 rows against a 590,200 budget.
-    assert len(admit(IDS[:3], max_agent_calls=None, budget_tokens=590200).admitted) <= 2
+def test_million_token_budget_admits_several_rows_not_one() -> None:
+    # example-market-data-repo 20261118T182350Z: one row cost 107,967 post-a722ba; 1M fit about 9, was admitting 1.
+    a = admit(IDS[:10], max_agent_calls=None, budget_tokens=1_000_000)
+    assert a.arithmetic["bound_by_tokens"] >= 5
+    assert len(a.admitted) == a.arithmetic["bound_by_tokens"] < 10
 
 
-def test_row_charge_covers_worst_receipt_row_at_the_in_run_ratio() -> None:
-    # claude-klabauter 20261116T191317Z: 66,725 output over 2 rows; the in-run estimate is output * ratio.
-    claude_klabauter_row_output = 66725 / 2
-    assert ROW_TOTAL_TOKENS * 100 >= claude_klabauter_row_output * TOTAL_PER_OUTPUT_CENTI
-    # DoE 20261116: 783,824 total / 44,000 output over 3 rows.
+def test_budget_below_measured_cost_admits_no_row() -> None:
+    assert admit(IDS[:3], max_agent_calls=None, budget_tokens=107_967 - 1).admitted == ()
+
+
+def test_row_charge_covers_the_measured_post_a722ba_row() -> None:
+    # example-market-data-repo 20261118T182350Z: 107,967 total over 2 agent calls, one row.
+    assert ROW_TOTAL_TOKENS >= 107_967
+    assert ROW_TOTAL_TOKENS == -(-107_967 * 3 // 2)
+    # DoE 20261116: 783,824 total / 44,000 output over 3 rows fixes the in-run total-per-output ratio.
     assert TOTAL_PER_OUTPUT_CENTI * 44000 >= 783824 * 100
-    assert ROW_TOTAL_TOKENS >= 783824 // 3
 
 
 def test_arithmetic_names_the_total_unit() -> None:

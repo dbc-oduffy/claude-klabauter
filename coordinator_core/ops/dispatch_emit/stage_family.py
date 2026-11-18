@@ -6,6 +6,7 @@ Pure: no subprocess, no git. No default family exists on any agent or tier.
 """
 from __future__ import annotations
 
+import sys
 from typing import Optional, Sequence
 
 FAMILIES = ("claude", "codex", "grok", "agy")
@@ -15,6 +16,10 @@ FALLBACK = "claude"
 FALLBACK_VERDICTS = ("BLOCKED", "FAILED")
 RUNNER_AGENT = "coordinator:family-stage-runner"
 _RESULT_KEYS = ("family", "stage", "exit_code", "output_path", "verdict")
+# Optional so a runner that omits it still validates; stage_record records absence as null.
+VENDOR_MODEL_KEY = "vendor_model"
+# False on a family result whose vendor CLI invocation record does not show it produced the diff.
+FAMILY_AUTHORED_KEY = "family_authored"
 
 
 def resolve(value: Optional[str]) -> str:
@@ -29,6 +34,21 @@ def resolve(value: Optional[str]) -> str:
             f"unknown stage family {value!r}; expected one of {'|'.join(FAMILIES)}"
         )
     return value
+
+
+WIN32_CODEX_WRITE_REASON = "codex workspace-write sandbox hangs on win32 (S0)"
+
+
+def resolve_for_stage(value: Optional[str], stage: str) -> tuple[str, Optional[str]]:
+    """Return `(family, reason)` for a stage's `family` value; `reason` is None unless the family was rerouted.
+
+    On win32 a `write` stage naming codex is routed to `FALLBACK` with `WIN32_CODEX_WRITE_REASON`, never
+    selecting codex and never silently; read-only stages keep codex. Raises ValueError as `resolve` does.
+    """
+    family = resolve(value)
+    if family == "codex" and stage == "write" and sys.platform == "win32":
+        return FALLBACK, WIN32_CODEX_WRITE_REASON
+    return family, None
 
 
 def runner_agent(family: Optional[str]) -> Optional[str]:
@@ -46,6 +66,10 @@ FRESH_INVOKE_LINE = (
 SIGN_IN_LINE = (
     "sign_in: inherit the parent USERPROFILE, HOME, APPDATA, LOCALAPPDATA and GROK_HOME "
     "when set; a cleaned env that drops them fails the stage; never pass an API key"
+)
+VENDOR_MODEL_LINE = (
+    f"report: set `{VENDOR_MODEL_KEY}` in your result to the model id the vendor CLI printed in its "
+    "own output, else the value after `--model`/`-m` in the argv you invoked; null when neither names one"
 )
 
 
@@ -87,6 +111,7 @@ def runner_brief(
         f"scratch: {scratch}",
         FRESH_INVOKE_LINE,
         SIGN_IN_LINE,
+        VENDOR_MODEL_LINE,
     ]
     if stage == "write":
         lines.append("writes:")
@@ -103,6 +128,15 @@ def _checked(label: str, result: dict) -> dict:
     return result
 
 
+def _family_attempt(result: dict) -> dict:
+    """Copy a family result with `vendor_model` always present: a non-blank string, else None."""
+    raw = result.get(VENDOR_MODEL_KEY)
+    if raw is not None and not isinstance(raw, str):
+        raise ValueError(f"family result {VENDOR_MODEL_KEY} must be a string or null")
+    model = raw.strip() if raw else None
+    return {**result, VENDOR_MODEL_KEY: model or None}
+
+
 def stage_record(
     role: str,
     family_result: dict,
@@ -114,11 +148,13 @@ def stage_record(
     FAILED family result must carry `blocked_reason`. The fallback result is
     appended as its own entry tagged `fallback_for: <family>`; `reported_family`
     is then claude, never the family that failed. A fallback beside an OK or
-    WARN family result is refused.
+    WARN family result is refused. The family attempt carries `vendor_model`
+    (the vendor CLI's model id, null when unreported); the fallback attempt
+    keeps its own `model` and never takes the vendor's.
     """
     if role not in ROLES:
         raise ValueError(f"unknown stage role {role!r}; expected one of {'|'.join(ROLES)}")
-    fam = _checked("family", family_result)
+    fam = _family_attempt(_checked("family", family_result))
     failed = fam["verdict"] in FALLBACK_VERDICTS
     if failed and not fam.get("blocked_reason"):
         raise ValueError(
@@ -127,7 +163,7 @@ def stage_record(
     if fallback_result is None:
         return {
             "stage_role": role,
-            "attempts": [dict(fam)],
+            "attempts": [fam],
             "reported_family": fam["family"],
         }
     if not failed:
@@ -140,6 +176,6 @@ def stage_record(
         raise ValueError(f"fallback result family must be {FALLBACK}, got {fb['family']!r}")
     return {
         "stage_role": role,
-        "attempts": [dict(fam), {**fb, "fallback_for": fam["family"]}],
+        "attempts": [fam, {**fb, "fallback_for": fam["family"]}],
         "reported_family": FALLBACK,
     }

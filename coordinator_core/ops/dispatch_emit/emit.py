@@ -5143,18 +5143,25 @@ def _held_halt_record_js() -> str:
 
 def _family_status_js() -> str:
     """JS helpers mapping a family-stage-result onto a contract status line for the row loop.
-    `_famFailed` reads `stage_family.FALLBACK_VERDICTS`, the same set `ask_compose._family_run_js` tests."""
+    `_famFailed` reads `stage_family.FALLBACK_VERDICTS`, the same set `ask_compose._family_run_js` tests, and
+    also fires when `family_authored` is not true: the vendor CLI's invocation record never proved it wrote."""
     from coordinator_core.ops.dispatch_emit import stage_family as _sf
 
     failed = " || ".join(f"f.verdict === {_js_string_literal(v)}" for v in _sf.FALLBACK_VERDICTS)
+    authored = f"f.{_sf.FAMILY_AUTHORED_KEY} !== true"
     return (
-        f"  function _famFailed(f) {{ return {failed}; }}\n"
+        f"  function _famFailed(f) {{ return {failed} || {authored}; }}\n"
         "  function _isFamilyResult(x) {\n"
         "    return !!x && typeof x === 'object' && typeof x.verdict === 'string' && typeof x.family === 'string';\n"
         "  }\n"
         "  function _familyStatusLine(id, f) {\n"
-        "    return (_famFailed(f) ? 'BLOCKED: ' : 'DONE: ') + id + ' via ' + f.family + ' ' + f.verdict"
-        " + (f.blocked_reason ? ' (' + f.blocked_reason + ')' : '') + ' ' + JSON.stringify(f);\n"
+        f"    const _un = {authored};\n"
+        "    const _br = f.blocked_reason ? String(f.blocked_reason) : '';\n"
+        "    const _why = _un ? (_br.startsWith('family_authored:false') ? _br : 'family_authored:false: ' + "
+        "(_br || 'no invocation record shows the vendor CLI authored the diff')) : _br;\n"
+        f"    const _v = _un && !({failed}) ? 'BLOCKED' : f.verdict;\n"
+        "    return (_famFailed(f) ? 'BLOCKED: ' : 'DONE: ') + id + ' via ' + f.family + ' ' + _v"
+        " + (_why ? ' (' + _why + ')' : '') + ' ' + JSON.stringify(f);\n"
         "  }\n"
     )
 

@@ -96,6 +96,53 @@ def test_unlinked_pair_is_judged_independently(tmp_path, monkeypatch) -> None:
     assert "import-linked" not in ev.refused["b.py"]
 
 
+def _plan(root: Path, parked: list[str], changed: set[str]):
+    return plan_tree_eviction(root, REC, parked, changed, parked, {}, [], run_id=RUN)
+
+
+def _evicted_index(root: Path) -> dict:
+    path = root / REC / "evicted.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def test_module_with_a_dirty_importer_outside_the_parked_set_is_kept(tmp_path, monkeypatch) -> None:
+    root = _world(tmp_path, monkeypatch, foreign=set())
+    ev = _plan(root, ["b.py", "c.py"], {"a.py", "b.py", "c.py"})
+    assert ev is not None
+    ev.apply()
+    assert _bytes(root, "b.py") == RUN_BYTES["b.py"]
+    assert _bytes(root, "c.py") == HEAD["c.py"]
+    assert set(_evicted_index(root)) == {"c.py"}
+    assert ev.evicted == ["c.py"]
+
+
+def test_outside_importer_keeps_the_whole_import_unit(tmp_path, monkeypatch) -> None:
+    root = _world(tmp_path, monkeypatch, foreign=set())
+    (root / "x.py").write_bytes(b"import a\n")
+    ev = _plan(root, ["a.py", "b.py"], {"x.py", "a.py", "b.py"})
+    assert ev is None
+    assert _bytes(root, "a.py") == RUN_BYTES["a.py"] and _bytes(root, "b.py") == RUN_BYTES["b.py"]
+    assert _evicted_index(root) == {}
+
+
+def test_unrelated_dirty_outside_file_keeps_nothing(tmp_path, monkeypatch) -> None:
+    root = _world(tmp_path, monkeypatch, foreign=set())
+    (root / "x.py").write_bytes(b"import unrelated\n")
+    ev = _plan(root, ["b.py"], {"x.py", "b.py"})
+    assert ev is not None
+    ev.apply()
+    assert _bytes(root, "b.py") == HEAD["b.py"]
+
+
+def test_clean_importer_outside_the_changed_set_keeps_nothing(tmp_path, monkeypatch) -> None:
+    # a.py names b but is not dirty (not in `changed`): HEAD's b still satisfies it, so b parks.
+    root = _world(tmp_path, monkeypatch, foreign=set())
+    ev = _plan(root, ["b.py"], {"b.py"})
+    assert ev is not None
+    ev.apply()
+    assert _bytes(root, "b.py") == HEAD["b.py"]
+
+
 def test_no_units_leaves_siblings_reset_as_before(tmp_path, monkeypatch) -> None:
     from coordinator_core.ops.dispatch_emit import halt_tree_evict
 

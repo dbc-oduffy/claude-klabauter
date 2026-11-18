@@ -1023,12 +1023,17 @@ def _halt_commit(root: Path, record_dir: Path) -> tuple[Optional[str], Optional[
 
 
 def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -> Optional[str]:
-    """Refusal naming the first ``met_by`` row whose sha is not a blocking row's commit at or after the halt, else None.
+    """Refusal naming the first ``met_by`` row whose sha is not a blocking row's commit after the halt, else None.
 
-    *met_by* holds full shas already proven ancestors of HEAD (*reached*). At-or-after the halt is
-    equal to the halt commit or not an ancestor of it: one batched ``rev-list`` for all rows.
+    *met_by* holds full shas already proven ancestors of HEAD (*reached*). The bound is the marker's
+    ``run_base_sha`` when it names a commit (a halt record that never committed, or committed late,
+    still places the credit): a sha equal to or an ancestor of it refuses. A marker without one falls
+    back to the halt record's commit (``_halt_commit``): equal to it or not an ancestor of it.
+    One batched ``rev-list`` for all rows either way.
     """
     from coordinator_core import git_ancestry
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
     try:
@@ -1044,6 +1049,15 @@ def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -
             return f"met_by row {row} is not a blocking row of {run_id}"
         if sha not in reached:
             return f"met_by row {row}: {sha} is not an ancestor of HEAD; pass the commit that met the row"
+    base = marker.get(halted_run.HALT_RUN_BASE_FIELD)
+    if isinstance(base, str) and _FULL_SHA.fullmatch(base) and commit_meta(resolve_git_common_dir(root), base):
+        read_ok, before = git_ancestry.ancestors_of(list(met_by.values()), base, cwd=str(root))
+        if not read_ok:
+            return "ancestry of the met_by shas could not be read; retry"
+        for row, sha in met_by.items():
+            if sha in before:
+                return f"met_by row {row}: {sha} is not after the run base {base}; pass a commit made after the halt"
+        return None
     halt, read_failure = _halt_commit(root, record_dir)
     if read_failure:
         return f"{run_id} halt commit could not be read: {read_failure}; retry"

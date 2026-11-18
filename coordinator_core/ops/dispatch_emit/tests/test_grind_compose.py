@@ -3685,8 +3685,9 @@ def test_reserve_with_no_admitted_batches_is_one_row() -> None:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_default_run_at_the_claude_klabauter_receipt_row_output_settles_every_admitted_row(tmp_path: Path) -> None:
-    seen = _run_spend_harness(tmp_path, 33_363)
+def test_a_default_run_at_the_measured_post_a722ba_row_output_settles_every_admitted_row(tmp_path: Path) -> None:
+    # example-market-data-repo 20261118T182350Z: 107,967 total tokens per row = 6,059 output at the in-run ratio.
+    seen = _run_spend_harness(tmp_path, 6_059)
     assert seen["exhausted"] == 0 and seen["settled"] == 7
 
 

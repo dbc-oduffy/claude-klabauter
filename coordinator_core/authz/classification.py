@@ -81,6 +81,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "box_memory.release": OpClass.MUTATING,  # Removes the admission-file reservation.
     "codex_status.snapshot": OpClass.MUTATING,  # Derived status cache only; no routing/UI writes.
     "ping": OpClass.COMPUTE_ONLY,
+    "spawn_orphans.reap": OpClass.MUTATING,  # Terminates OS processes; writes no coordinator substrate.
     # invoke.from_argv — MUTATING (fail-closed default, DR-208 § Classification
     # correctness discipline): a generic CLI-argv-to-op dispatcher
     # (ops/invoke_from_argv.py::_invoke_from_argv) — its whole purpose is to
@@ -2435,13 +2436,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "dispatch.land_run": OpClass.MUTATING,
     # dispatch.land_blobs — MUTATING: index-only landing of a run's declared blobs, one CAS on the ref (ops/dispatch_emit/land_blobs.py).
     "dispatch.land_blobs": OpClass.MUTATING,
-    # dispatch.land_credited — MUTATING: commits a run's credited paths via a CAS ref move and writes a receipt.
     # dispatch.grind_bookkeep — MUTATING (DR-208 five-question test, ops/dispatch_emit/grind_bookkeep.py):
     #   1. Writes outside its own process?  YES: archives closed grind rows, writes the run record, ledgers and evidence files.
     #   2. Moves a ref?                     YES: land_run_grind.commit_grind_rows commits the closed rows and the run record.
     #   3. Persistent state across processes? YES: the commit sha, the archived rows and the swept ledgers persist.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.grind_bookkeep": OpClass.MUTATING,
+    # dispatch.land_credited — MUTATING: commits a run's credited paths via a CAS ref move and writes a receipt.
     "dispatch.land_credited": OpClass.MUTATING,
     # close.background — MUTATING: pays a run's queued close legs off the critical path
     # (ops/ceremony/close_background.py). DR-208 five-question affirmation:

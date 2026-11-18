@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
-from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit import ask_compose, stage_family
 from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused, compose_ask_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import WAKE_DIGEST_COMMIT_OP
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -1097,3 +1098,25 @@ def test_share_brief_precedence_shares_tail_for_repeated_clause():
 def test_share_brief_precedence_leaves_single_use_untouched():
     script = _precedence_script(1)
     assert ask_compose._share_brief_precedence(script) == script
+
+
+def _family_js() -> str:
+    return ask_compose._family_run_js("'w:'", "'Execute'", "start-cmd ")
+
+
+def test_family_result_schema_names_vendor_model_nullable_and_optional():
+    js = _family_js()
+    schema = json.loads(re.search(r"_FAMILY_RESULT_SCHEMA = (\{.*\});", js).group(1))
+    assert schema["properties"][stage_family.VENDOR_MODEL_KEY] == {"type": ["string", "null"]}
+    assert stage_family.VENDOR_MODEL_KEY not in schema["required"]
+    assert schema["required"] == [*stage_family._RESULT_KEYS, stage_family.FAMILY_AUTHORED_KEY]
+
+
+def test_family_attempt_normalizes_vendor_model_to_string_or_null_and_fallback_keeps_r_model():
+    js = _family_js()
+    norm = js.index("const _vm = typeof _fam.vendor_model === 'string'")
+    assert js.index("if (!_fam) _fam = {") < norm < js.index("_fam.verdict === 'BLOCKED'")
+    assert "vendor_model: _vm || null" in js
+    fb = re.search(r"const _fb = \{[^}]*\}", js).group(0)
+    assert "model: r.model" in fb and "vendor_model" not in fb
+    assert "_fam.model" not in js

@@ -4821,6 +4821,30 @@
       "name": "skill__preconditions"
     },
     {
+      "description": "Stop the python `spawn_main` workers that name a dead `parent_pid`.\n\nParams: `parent_pid` (int, required: the pid the caller recorded at spawn), `min_age_s` (number,\noptional: workers younger than this are left and listed under `young`), `dry_run` (bool: match, stop nothing).\nReply: `{ok, parent_pid, dry_run, matched, stopped, failed, young}` (`matched` is `[{pid, cmdline}]`,\n`stopped` pids, `failed` `[{pid, reason}]`), or `{ok: false, refused: \"parent_alive\", parent_pid, stopped: []}`\nwith nothing signalled while a process holds `parent_pid` and was born no later than a worker.\nTrap: a worker younger than a live process at `parent_pid` is a reused pid's leftover and is still reaped.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "min_age_s": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "parent_pid": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "parent_pid"
+        ],
+        "type": "object"
+      },
+      "name": "spawn_orphans__reap"
+    },
+    {
       "description": "JSON-RPC \"spec_backlink.resolve\" handler — COMPUTE_ONLY, sync.\n\nParams:\n    id (str) — a `pln-<slug>-<hash>` or `dlv-<slug>-<hash>` id, optionally\n               `<repo>:`-qualified for a named peer repo (e.g. Coordinator-content-repo).\n\nReturns one of three typed outcome shapes:\n    {\"outcome\": \"hit\",       \"queried_id\": ..., \"path\": \"<str>\"}\n    {\"outcome\": \"miss\",      \"queried_id\": ..., \"path\": None}\n    {\"outcome\": \"ambiguity\", \"queried_id\": ..., \"path\": None, \"candidates\": [...]}\n\nrepo_root is the .git common dir (common_dir keying, per op_scopes.py);\nthe worktree is derived via main_worktree_root(repo_root), never from\nrepo_root directly (scanning .git/docs/plans instead of <worktree>/docs/plans\nwould be a silent scan-miss).",
       "inputSchema": {
         "type": "object"

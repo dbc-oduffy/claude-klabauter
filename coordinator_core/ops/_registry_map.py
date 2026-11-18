@@ -38,6 +38,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "box_memory.release": "coordinator_core.ops.box_memory_admit",
     "codex_status.snapshot": "coordinator_core.ops.codex_status",
     "ping":                                   "coordinator_core.ops.ping",
+    "spawn_orphans.reap":                     "coordinator_core.ops.spawn_orphan_reap",
     "invoke.from_argv":                       "coordinator_core.ops.invoke_from_argv",
     "cutover.gate":                           "coordinator_core.ops.cutover_gate",
     "cutover.advance":                        "coordinator_core.ops.cutover_advance",

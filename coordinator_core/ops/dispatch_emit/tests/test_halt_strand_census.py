@@ -1,6 +1,7 @@
 """halt_strand_census: classification, green-code, population sum and the Mini key row."""
 
 import json
+from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import halt_strand_census as hsc
 
@@ -59,6 +60,45 @@ def test_population_sum_mixes_halted_abandoned_parked_and_non_halted(tmp_path):
     assert sum(r["runs"] for r in result["rows"]) == result["population"]
     causes = {r["cause"] for r in result["rows"]}
     assert {"abandoned", "parked", "resolved", "commit"} <= causes
+
+
+def test_census_opens_a_bounded_number_of_files_per_run_dir(tmp_path, monkeypatch):
+    green = {"overlay-verdict.json": {"verdict": "green"}, "test-leg.json": GREEN_LEG,
+             "run-outcome.json": {"ledger_verdict": {"items": [{"status": "met"}]}},
+             "withheld-prints.json": {"a": 1}}
+    _run(tmp_path, "open", {"status": "halted", "halted": "commit"}, stage={"stage": "x"}, files=green)
+    _run(tmp_path, "resolved", {"status": "resumed", "halted": "commit"}, stage={"stage": "x"}, files=green)
+    _run(tmp_path, "moved", {"status": "halted", "halted": "commit", "reason": "base moved"}, files=green)
+    _run(tmp_path, "parked", stage={"stage": "parked"}, files=green)
+    _run(tmp_path, "live", stage={"stage": "staged"}, files=green)
+    opened: list = []
+    real = hsc._read_bytes
+    monkeypatch.setattr(hsc, "_read_bytes", lambda p: (opened.append(p), real(p))[1])
+    result = hsc.census(tmp_path)
+    per_dir: dict = {}
+    opened = [Path(p) for p in opened]
+    for p in opened:
+        per_dir[p.parent.name] = per_dir.get(p.parent.name, 0) + 1
+    assert result["population"] == 4
+    assert max(per_dir.values()) <= hsc.MAX_OPENS_PER_RUN_DIR
+    assert per_dir["resolved"] == 1 and per_dir["moved"] == 1
+    assert not any(p.name == hsc.WITHHELD_PRINTS_FILE for p in opened)
+
+
+def test_census_rows_match_classify_per_run(tmp_path):
+    _run(tmp_path, "g", {"status": "halted", "halted": "test_verdict_empty"}, files={"test-leg.json": GREEN_LEG})
+    _run(tmp_path, "r", {"status": "halted", "halted": "commit"},
+         files={"overlay-verdict.json": {"verdict": "green"}, "test-leg.json": {"status": "fail", "tests_failed": 1}})
+    _run(tmp_path, "p", stage={"stage": "parked"}, files={"test-leg.json": GREEN_LEG})
+    _run(tmp_path, "z", {"status": "resumed", "halted": "commit"})
+    expected: dict = {}
+    for d in tmp_path.iterdir():
+        c = hsc.classify(d)
+        row = expected.setdefault(c["cause"], [0, 0])
+        row[0] += 1
+        row[1] += 1 if c["green"] else 0
+    got = {r["cause"]: [r["runs"], r["green"]] for r in hsc.census(tmp_path)["rows"]}
+    assert got == expected
 
 
 def test_mini_key_absent_yields_typed_unreadable_row(tmp_path):

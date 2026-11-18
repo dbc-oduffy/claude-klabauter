@@ -33,6 +33,7 @@ _REDIRECT = {
     "guard-heavy-command-admission": "the engine's heavy-run admission",
     "block-external-workspace-vcs-write": "the workspace's own owner",
     "block-editor-kill-by-name": "close the editor by pid",
+    "deny-kill-by-port-or-tree": "close the process by a pid you started, or by its owner's own stop command",
     "blanket-git-add": "ceremony.commit_v2 with literal paths",
     "stale-temp-index-base": "rebuild the temp index from current HEAD, or ceremony.commit_v2 with literal paths",
     "check-test-suite-invocation": "a scoped pytest run of named test files, or the EM's scheduled suite leg",

@@ -81,7 +81,8 @@ async def _learn_lessons_pipeline_mechanical_close(
 ) -> dict[str, Any]:
     """MUTATING adapter over `mechanical_close` -- closes duplicate, content-free, wiki-append
     and out-of-enum-scope lesson rows in process, no model call; the report's `residue_ids`
-    are the rows left for the agent.
+    are the rows left for the agent and `unreadable` the rows whose YAML does not parse
+    (named, never closed or repaired).
 
     params:
         repo: optional absolute path of the queue's repo root; defaults to the op's repo_root.

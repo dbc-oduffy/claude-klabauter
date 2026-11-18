@@ -100,6 +100,7 @@ from coordinator_core.ops import review_prep_legs
 from coordinator_core.ops.dispatch_emit.record_paths import is_record_path
 from coordinator_core.ops.dispatch_emit.run_ownership import LiveRun, blocks, holders_from_held, owns_path
 from coordinator_core.ops.pre_review_dir import pre_review_dir
+from coordinator_core.ops.review_slice_id import RUN_PREP_PLAN_STEM
 from coordinator_core.session import claim_index
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
@@ -674,17 +675,31 @@ def _read_pointer(path: Path) -> Optional[dict]:
     return got if isinstance(got, dict) else None
 
 
+def _named_for_run(name: str, run_key: Optional[str], base: Optional[str]) -> bool:
+    """True when the pointer-named sidecar ``name`` may serve this selection. A run-owned
+    ``manifest-<run key>-<base[:12]>-prep`` sidecar serves only its own run key (and base when
+    given); a run-less selection never takes one; other names pass."""
+    if not name.startswith(f"{RUN_PREP_PLAN_STEM}-"):
+        return True
+    if not run_key:
+        return False
+    safe = re.escape(_UNSAFE_NAME.sub("-", run_key))
+    tail = re.escape(base[:12]) if base else "[0-9a-f]{12}"
+    return re.fullmatch(rf"{RUN_PREP_PLAN_STEM}-{safe}-{tail}-prep\.review-prep\.md", name) is not None
+
+
 def _write_pointers(share: Path, sidecar: Path, base: str, slice_prefix: str, plan_path: str) -> None:
     """Point the run-keyed, run-only and base-only names at ``sidecar``. A name already pointing at
     another existing sidecar is marked ``ambiguous``, which the reader answers ``None``. Written
-    only for a prefix of the ``<plan stem>-<run key>-<base[:12]>-prep`` shape."""
+    only for a prefix of the ``<plan stem>-<run key>-<base[:12]>-prep`` shape. A run-owned
+    ``manifest-`` prefix writes no base-only pointer: that name is shared by every run at the base."""
     tail = f"-{base[:12]}-prep"
     if not slice_prefix.endswith(tail):
         return
     stem = _UNSAFE_NAME.sub("-", Path(plan_path.replace("\\", "/")).stem)
     head = slice_prefix[: -len(tail)]
     run_key = head[len(stem) + 1:] if head.startswith(stem + "-") else ""
-    names = {_pointer_name(None, base)}
+    names = set() if slice_prefix.startswith(f"{RUN_PREP_PLAN_STEM}-") else {_pointer_name(None, base)}
     if run_key:
         names.update({_pointer_name(run_key, base), _pointer_name(run_key, None)})
     for name in sorted(names):
@@ -722,7 +737,9 @@ def stored_reply_for_run(
     Never walks the share dir: it opens the run-keyed pointer ``_write_pointers`` wrote when the
     reply was stored (``ptr-run-<run_key>-<base[:12]>``, ``ptr-run-<run_key>`` when ``base`` is
     ``None``, ``ptr-base-<base[:12]>`` when ``run_key`` is ``None``) and the sidecar it names, plus the
-    ask route's canonical ``manifest-<run_key>-<base[:12]>-prep`` sidecar. A candidate is kept when
+    ask route's canonical ``manifest-<run_key>-<base[:12]>-prep`` sidecar. A run-owned reply writes
+    no ``ptr-base-`` pointer, and a pointer naming another run's ``manifest-`` sidecar is not taken.
+    A candidate is kept when
     its ``agent_type`` is ``engine:prep-freeze``, its ``run_base_sha`` is ``base`` and, when
     ``within`` is non-empty, every ``paths`` entry is in it.
     ``covering=True`` (keyword-only, default off) flips that check: a file is kept when every
@@ -743,7 +760,7 @@ def stored_reply_for_run(
         return None
     candidates: List[Path] = []
     named = pointer.get("sidecar") if pointer else None
-    if isinstance(named, str) and named and Path(named).name == named:
+    if isinstance(named, str) and named and Path(named).name == named and _named_for_run(named, run_key, base):
         candidates.append(share / named)
     if run_key and base:
         from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
@@ -843,9 +860,12 @@ def review_prep(
     live_runs: Optional[Mapping[str, LiveRun]] = None,
     undeclared_edits: Sequence[str] = (),
     peer_held: Sequence[str] = (),
+    own_hunk_bytes: Optional[Mapping[str, bytes]] = None,
 ) -> dict:
     """Freeze, partition and claim-check one run's diff once per ``slice_prefix``; see the module
-    docstring. ``undeclared_edits`` names the members of ``paths`` that no row declared and that
+    docstring. ``own_hunk_bytes`` maps a worktree-mode path that also carries a halted peer's hunks to
+    its HEAD bytes plus only the run's own hunks: the frozen diff holds that view for the path.
+    ``undeclared_edits`` names the members of ``paths`` that no row declared and that
     changed since the stage dirt snapshot; the reply and sidecar carry them as ``undeclared_edits``.
     ``peer_held`` names members of ``paths`` a live session touches; they stay in review and ride on
     the reply's ``peer_held`` next to those ``live_runs`` withholds. An unparseable ``.py`` among
@@ -935,7 +955,7 @@ def review_prep(
             return _for_group(zero, group_index, group_count)
     reply = _prepare(
         repo_root, base, paths, slice_prefix, plan_path, head, session_id, group_index, group_count,
-        run_id, excluded, peer_held, undeclared_edits,
+        run_id, excluded, peer_held, undeclared_edits, own_hunk_bytes,
     )
     if foreign_unparseable and not reply.get("error"):
         reply = {**reply, "foreign_unparseable": foreign_unparseable}
@@ -956,6 +976,7 @@ def _prepare(
     excluded: List[dict],
     peer_held: List[str],
     undeclared_edits: Sequence[str],
+    own_hunk_bytes: Optional[Mapping[str, bytes]] = None,
 ) -> dict:
     """The claim, serve-or-compute and group-slice tail of ``review_prep`` once the parse gate passed."""
     session = session_id or resolve_session_id(str(repo_root))
@@ -985,7 +1006,7 @@ def _prepare(
         try:
             return served() or _compute(
                 repo_root, base, paths, slice_prefix, plan_path, head, session, share, sidecar, peer_bases(),
-                excluded, peer_held, list(undeclared_edits),
+                excluded, peer_held, list(undeclared_edits), own_hunk_bytes,
             )
         finally:
             try:
@@ -1031,6 +1052,7 @@ def _compute(
     excluded: Optional[List[dict]] = None,
     peer_held: Optional[List[str]] = None,
     undeclared_edits: Optional[List[str]] = None,
+    own_hunk_bytes: Optional[Mapping[str, bytes]] = None,
 ) -> dict:
     if peer_bases is None:
         peer_bases = _peer_bases(repo_root, base, head, paths, session, plan_path)
@@ -1086,6 +1108,8 @@ def _compute(
                     got = _heavy("freeze_diff")(
                         repo_root, base, slice_prefix, paths + _untracked_under_declared(repo_root, paths), worktree=True
                     )
+                if own_hunk_bytes and not got.get("error"):
+                    _narrow_frozen_diff(repo_root, base, Path(got["diff_path"]), own_hunk_bytes)
         except ValueError as exc:
             got = {"error": str(exc)}
         frozen_whole.append(got)
@@ -1197,6 +1221,80 @@ def _compute(
     out.pop("declared_sha256", None)
     out.pop("peer_bases", None)
     return out
+
+
+def _own_hunk_views(repo_root: Path, run_id: str, paths: Sequence[str]) -> Dict[str, Optional[bytes]]:
+    """``{path: view}`` for each of ``paths`` (declared by ``run_id``, dirty beside a halted peer's
+    hunks) that holds a hunk of the run's own. ``view`` is HEAD plus only the run's hunks
+    (``own_hunk_candidate.candidate``), or None when the worktree bytes carry no foreign hunk. A path with
+    no own hunk, an unreadable side or a refused attribution is absent: the caller drops it. Spawns nothing."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.ops.dispatch_emit import kept_work, own_hunk_candidate
+
+    views: Dict[str, Optional[bytes]] = {}
+    try:
+        common = resolve_git_common_dir(repo_root)
+        entries = git_state.head_blobs(repo_root, list(paths))
+    except Exception:  # noqa: BLE001 -- no view is a drop, as before
+        return views
+    for path in paths:
+        try:
+            entry = entries.get(path)
+            stored = read_object(common, entry[1]) if entry else None
+            tree = kept_work.checkin_form(repo_root, path, (repo_root / path).read_bytes())
+            if stored is None or tree is None:
+                continue
+            res = own_hunk_candidate.candidate(repo_root, run_id, path, stored[1], tree, declared=True)
+        except (OSError, ValueError):
+            continue
+        if "bytes" not in res:
+            continue
+        if not res["excluded"]:
+            views[path] = None
+        elif res["bytes"] != stored[1]:
+            views[path] = res["bytes"]
+    return views
+
+
+def _own_section(path: str, old: bytes, new: bytes) -> str:
+    """One ``diff --git`` stanza of ``old`` -> ``new`` for ``path``; empty when they are equal."""
+    import difflib
+
+    def lines(blob: bytes) -> List[str]:
+        return blob.decode("utf-8", "surrogateescape").splitlines(True)
+
+    body = []
+    for line in difflib.unified_diff(lines(old), lines(new), f"a/{path}", f"b/{path}", n=3, lineterm="\n"):
+        body.append(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n")
+    return f"diff --git a/{path} b/{path}\n" + "".join(body) if body else ""
+
+
+def _narrow_frozen_diff(repo_root: Path, base: str, diff_path: Path, own: Mapping[str, bytes]) -> None:
+    """Rewrite the frozen worktree diff at ``diff_path`` so each path of ``own`` carries ``base`` -> its
+    own-hunk view, never the halted peer's hunks beside it. Raises ValueError when a base blob is
+    unreadable: a diff that still holds the foreign hunks is never served."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.rollback_check import _blob_at_commit
+
+    common = resolve_git_common_dir(repo_root)
+    text = diff_path.read_bytes().decode("utf-8")
+    out = []
+    for part in re.split(r"(?m)^(?=diff --git )", text):
+        hit = next((p for p in own if part.startswith(f"diff --git a/{p} b/{p}\n")), None)
+        if hit is None:
+            out.append(part)
+            continue
+        sha = _blob_at_commit(common, base, hit)
+        stored = read_object(common, sha) if isinstance(sha, str) else None
+        if stored is None:
+            raise ValueError(f"own-hunk view of {hit}: base blob at {base[:12]} unreadable")
+        out.append(_own_section(hit, stored[1], own[hit]))
+    narrowed = "".join(out)
+    if narrowed != text:
+        diff_path.write_text(narrowed, encoding="utf-8", newline="\n")
+        declare_write(diff_path)
 
 
 def _cover_index(files: Sequence[str]) -> frozenset:
@@ -1615,6 +1713,7 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
         return _fail("review.prep params.live_runs must map run ids to objects")
     run_id = str(params.get("run_id") or "")
     halted_foreign: List[str] = []
+    own_hunk_bytes: Dict[str, Optional[bytes]] = {}
     if live_runs is None and run_id:
         from coordinator_core.git.call_io_scope import call_io_scope
         from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
@@ -1624,7 +1723,8 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
         if not head:
             halted_foreign = [str(p) for p in paths if str(p) in held]
             if halted_foreign:
-                gone = set(halted_foreign)
+                own_hunk_bytes = _own_hunk_views(repo_root, run_id, halted_foreign)
+                gone = {p for p in halted_foreign if p not in own_hunk_bytes}
                 paths = [p for p in paths if str(p) not in gone]
                 held_by_peer = {p: v for p, v in held_by_peer.items() if p not in gone}
                 undeclared = [p for p in undeclared if p not in gone]
@@ -1647,6 +1747,7 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
             live_runs=live_runs,
             undeclared_edits=undeclared,
             peer_held=list(held_by_peer),
+            own_hunk_bytes={p: b for p, b in own_hunk_bytes.items() if b is not None and p in paths},
         )
     if halted_foreign and not reply.get("error"):
         reply = {**reply, "foreign_claims": sorted({*(reply.get("foreign_claims") or []), *halted_foreign})}
