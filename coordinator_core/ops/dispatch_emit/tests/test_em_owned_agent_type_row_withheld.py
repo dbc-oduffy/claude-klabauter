@@ -13,7 +13,7 @@ def _plan(tmp_path, agent_type):
         "- id: A1\n  title: agent row\n  change_kind: code-edit\n  surface: a.py\n"
         "  writes: [a.py]\n  disposition: open\n  body: write a\n"
         "- id: M1\n  title: em merge\n  change_kind: code-edit\n  surface: b.py\n"
-        f"  writes: [b.py]\n  agent_type: {agent_type}\n  disposition: open\n  body: merge b\n"
+        f"  writes: [b.md]\n  agent_type: {agent_type}\n  disposition: open\n  body: merge b\n"
     )
     path = tmp_path / "p.md"
     path.write_text(

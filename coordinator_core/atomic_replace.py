@@ -134,6 +134,72 @@ def _replace_with_retry(src: str, dst: str) -> None:
             delay = min(delay * 2, 0.16)
 
 
+_TEMP_PREFIX = ".atomic-write."
+_SWEEP_INTERVAL_SECS = 60.0
+_SWEEP_MEMO_MAX = 256
+_last_sweep: dict[tuple[str, str], float] = {}
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether ``pid`` names a live process. Windows uses OpenProcess: ``os.kill(pid, 0)`` there
+    terminates the process. An undecidable probe reads as alive, so a temp is never swept wrongly."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if handle:
+            code = ctypes.c_ulong()
+            k32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+            ok = k32.GetExitCodeProcess(handle, ctypes.byref(code))
+            k32.CloseHandle.argtypes = [ctypes.c_void_p]
+            k32.CloseHandle(handle)
+            return not ok or code.value == 259  # STILL_ACTIVE; an exited process with an open handle is dead
+        return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such pid
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _sweep_dead_temps(out_dir: Path, name: str) -> None:
+    """Unlink ``<_TEMP_PREFIX><name>.<pid>.<rand>`` temps whose writer pid is dead (a hard-killed writer).
+
+    Scans a directory at most once per ``_SWEEP_INTERVAL_SECS`` per target. The remainder after the
+    target name must be exactly ``<digits>.<one dot-free token>``, so a dotted sibling target's temp
+    (``out.txt.123`` as a target name) and live-pid temps are spared."""
+    key = (str(out_dir), name)
+    now = time.monotonic()
+    last = _last_sweep.get(key)
+    if last is not None and now - last < _SWEEP_INTERVAL_SECS:
+        return
+    if len(_last_sweep) >= _SWEEP_MEMO_MAX:
+        _last_sweep.clear()
+    _last_sweep[key] = now
+    head = f"{_TEMP_PREFIX}{name}."
+    try:
+        with os.scandir(str(out_dir)) as it:
+            names = [e.name for e in it if e.name.startswith(head)]
+    except OSError:
+        return
+    for entry in names:
+        pid_s, dot, rand = entry[len(head):].partition(".")
+        if not (dot and pid_s.isdigit() and rand and "." not in rand):
+            continue
+        if _pid_alive(int(pid_s)):
+            continue
+        try:
+            os.remove(out_dir / entry)
+        except OSError:
+            pass
+
+
 def atomic_write_bytes(
     target: Union[str, Path], data: bytes, *, preserve_mode: bool = True
 ) -> None:

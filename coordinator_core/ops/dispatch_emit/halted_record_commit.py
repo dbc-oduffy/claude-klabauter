@@ -521,6 +521,116 @@ def print_verdicts(worktree_root: Path, record_dir_rel: str, paths) -> tuple[set
     return matched, mismatched
 
 
+def retry_indeterminate(worktree_root: Path, paths: list, warnings: list, holds: list, own_sid: Optional[str]) -> list:
+    """`warnings` after one re-read when any says "claim state indeterminate": the batched lookup runs
+    again and its holds join `holds`, so a live hold seen on either read still withholds. A determinate
+    first read is returned as is."""
+    if not any(w.startswith("claim state indeterminate") for w in warnings):
+        return warnings
+    from coordinator_core.ops.ceremony import commit_v2
+
+    again: list = []
+    second = commit_v2._peer_claim_warnings(worktree_root, paths, again, own_sid=own_sid)
+    holds.extend(h for h in again if h not in holds)
+    return second
+
+
+def indeterminate_credited(worktree_root: Path, record_dir_rel: str, paths) -> set:
+    """The `paths` an unanswerable peer claim cannot withhold: those whose blob equals this run's own
+    print, plus those in the run's manifest `review_declared_paths` unless a present print differs from
+    the blob. One record read, one manifest read, one file read per printed path, no git spawn."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    matched, mismatched = print_verdicts(worktree_root, record_dir_rel, paths)
+    declared = {
+        idx._norm(p) for p in _manifest_doc(worktree_root / record_dir_rel).get("review_declared_paths") or ()
+        if isinstance(p, str)
+    }
+    return matched | {p for p in paths if idx._norm(p) in declared and p not in mismatched}
+
+
+#: A run minted longer ago than this holds no token; a manifest of such a run is never read as a claim.
+TERMINAL_CLAIM_WINDOW_SECONDS = 7 * 24 * 3600
+
+
+def claimant_runs(worktree_root: Path, own_run_id: str, paths) -> dict:
+    """`{path: {run_id: stage}}` for each of `paths` that another run's manifest declares (exact path or
+    directory prefix), over the record dirs minted inside `TERMINAL_CLAIM_WINDOW_SECONDS`. `stage` is the
+    run's `run-stage.json` stage, `""` when absent. In-process reads only; never raises."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+    from coordinator_core.ops.warp_run_deliverable import _manifest_declared
+
+    wanted = {p.replace("\\", "/"): p for p in paths}
+    found: dict = {}
+    if not wanted:
+        return found
+    now = time.time()
+    try:
+        runs = halted_hold_release.record_stamps(worktree_root)
+    except Exception:  # noqa: BLE001 -- an unreadable listing names no claimant
+        return found
+    for run_id, stamp in runs:
+        if run_id == own_run_id or stamp is None or now - stamp > TERMINAL_CLAIM_WINDOW_SECONDS:
+            continue
+        try:
+            declared, prefixes, _unreadable = _manifest_declared(run_id, worktree_root)
+        except Exception:  # noqa: BLE001
+            continue
+        hit = [
+            orig for norm, orig in wanted.items()
+            if norm in declared or any(norm == pre or norm.startswith(pre + "/") for pre in prefixes)
+        ]
+        if not hit:
+            continue
+        stage = (read_run_stage(worktree_root, run_id) or {}).get("stage")
+        for orig in hit:
+            found.setdefault(orig, {})[run_id] = stage if isinstance(stage, str) else ""
+    return found
+
+
+def terminal_only_claimed(claimants: Mapping[str, Mapping[str, str]], paths) -> set:
+    """The `paths` with at least one claimant manifest whose every claimant run is `landed` or `halted`:
+    a terminal run holds nothing, so its manifest is no peer claim. A path with no claimant manifest, or
+    one live (any other stage) claimant, is not in the result. Pure."""
+    return {
+        p for p in paths
+        if claimants.get(p) and all(stage in ("landed", "halted") for stage in claimants[p].values())
+    }
+
+
+def overlay_partners(worktree_root: Path, withheld, seeded) -> set:
+    """The `withheld` python paths that a `seeded` path of the same run tests or imports: a clean-overlay
+    verify seeded with the importer but not the module judges a partial change. A stem match on
+    `test_<stem>.py` or an import line naming the stem counts; an unreadable file counts for nothing."""
+    import re
+
+    partners: set = set()
+    texts: dict = {}
+    for path in withheld:
+        if not path.endswith(".py"):
+            continue
+        stem = Path(path).stem
+        pattern = re.compile(rf"^\s*(?:from|import)\s[^\n]*\b{re.escape(stem)}\b", re.MULTILINE)
+        for other in seeded:
+            if other == path or not other.endswith(".py"):
+                continue
+            if Path(other).name == f"test_{stem}.py":
+                partners.add(path)
+                break
+            if other not in texts:
+                try:
+                    texts[other] = (worktree_root / other).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    texts[other] = ""
+            if pattern.search(texts[other]):
+                partners.add(path)
+                break
+    return partners
+
+
 def _own_recorded_cleared(worktree_root: Path, run_id: str, unproduced: list) -> tuple:
     """`(findings, {"foreign_hunks": {path: [{lines, owner}]}}, supplied)`: a finding whose path's every hunk the run
     recorded (`own_hunk_candidate`) is dropped, so an own hunk a peer also recorded lands instead of
@@ -848,6 +958,9 @@ def _land(
     warnings = commit_v2._peer_claim_warnings(
         worktree_root, product + gone + art_paths + art_deleted, holds, own_sid=session_id
     )
+    warnings = retry_indeterminate(
+        worktree_root, product + gone + art_paths + art_deleted, warnings, holds, session_id
+    )
     held = {p for p, _sid in holds}
     withheld.update({p: "peer-held" for p in sorted(held)})
     peer_held_by: dict = {}
@@ -864,8 +977,15 @@ def _land(
             p for p in product + gone
             if p not in held and (everywhere or f"claim state indeterminate for {p!r}" in indeterminate)
         ]
-        own = own_print_credited(worktree_root, record_dir_rel, unanswered)
-        withheld.update({p: "peer-claim-indeterminate" for p in unanswered if p not in own})
+        own = indeterminate_credited(worktree_root, record_dir_rel, unanswered)
+        rest = [p for p in unanswered if p not in own]
+        claimants = claimant_runs(worktree_root, run_id, rest) if rest else {}
+        own = own | terminal_only_claimed(claimants, rest)
+        rest = [p for p in rest if p not in own]
+        seeded = [p for p in product + gone if p in owner and p not in rest]
+        partners = overlay_partners(worktree_root, [p for p in rest if p in owner], seeded)
+        rest = [p for p in rest if p not in partners]
+        withheld.update({p: "peer-claim-indeterminate" for p in rest})
     gated = halt_product_gates.gate_halt_product(
         worktree_root, run_id,
         [p for p in product if p not in withheld and p not in (sizing_rel, baton_rel)],

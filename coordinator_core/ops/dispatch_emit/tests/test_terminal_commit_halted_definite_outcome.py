@@ -74,7 +74,8 @@ def test_short_deadline_before_commit_v2_replies_committed_false_naming_the_step
         dispatch_abandon.DEADLINE.reset(token)
 
     assert out["committed"] is False and out["sha"] is None
-    assert "ceremony.commit_v2" in out["error"] and "nothing committed" in out["error"]
+    assert out["error"].startswith("land-deadline: leg ") and "did not start" in out["error"]
+    assert "nothing committed" in out["error"]
     assert _git(repo, "rev-parse", "HEAD") == head
 
 

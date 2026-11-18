@@ -188,7 +188,8 @@ def unexecuted_withholds(worktree_root: Path, script_path: object, halted: dict,
             return {}
     ran = {c.id for c in request.chunks if c.report and (worktree_root / c.report).is_file()}
     ran.update(i for i in (halted.get("stopped_rows") or ()) if isinstance(i, str))
-    ids = upr.unexecuted_plan_rows(rows, ran)
+    freed = upr.satisfied_blocks(request.chunks, lambda rel: _report_text(worktree_root, rel, {}))
+    ids = upr.unexecuted_plan_rows(rows, ran, freed)
     if not ids:
         return {}
     text = upr.message(ids)
@@ -812,6 +813,9 @@ def _land(
     warnings = commit_v2._peer_claim_warnings(
         root, product + removed + art_paths + art_deleted, holds, own_sid=session_id
     )
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import indeterminate_credited, retry_indeterminate
+
+    warnings = retry_indeterminate(root, product + removed + art_paths + art_deleted, warnings, holds, session_id)
     held = {p for p, _sid in holds}
     withheld.update({p: PEER_HELD for p in sorted(held)})
     peer_held_by: dict = {}
@@ -822,13 +826,11 @@ def _land(
     indeterminate = [w for w in warnings if w.startswith("claim state indeterminate")]
     if indeterminate:
         everywhere = any(w.startswith("claim state indeterminate (") for w in indeterminate)
-        from coordinator_core.ops.dispatch_emit.halted_record_commit import own_print_credited
-
         unanswered = [
             p for p in product + removed
             if p not in held and (everywhere or f"claim state indeterminate for {p!r}" in indeterminate)
         ]
-        own = own_print_credited(root, record_dir_rel, unanswered)
+        own = indeterminate_credited(root, record_dir_rel, unanswered)
         withheld.update({p: PEER_INDETERMINATE for p in unanswered if p not in own})
     product = [p for p in product if p not in withheld]
     removed = [p for p in removed if p not in withheld]

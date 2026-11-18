@@ -736,3 +736,41 @@ def test_dispatch_emit_per_group_without_block_names_amend_route(repo):
     with pytest.raises(PipelineEmitRefused) as excinfo:
         _dispatch_emit({"from_sizing": rel, "per_group": True}, repo)
     assert "sizing-assemble --amend-route" in str(excinfo.value)
+
+
+def _sibling_layout(tmp_path: Path) -> Path:
+    root = tmp_path / "main"
+    root.mkdir()
+    (root / "src").mkdir()
+    sibling = tmp_path / "sibling"
+    (sibling / ".git").mkdir(parents=True)
+    return root
+
+
+def test_writes_needing_check_drops_only_cleared_plain_segments(tmp_path):
+    from coordinator_core.ops.dispatch_emit.op import _writes_needing_cross_repo_check
+
+    root = _sibling_layout(tmp_path)
+    kept = _writes_needing_cross_repo_check(
+        ["src/a.py", "src/b/c.py", "sibling/x.py", "sibling/y.py"], root
+    )
+    assert kept == ["sibling/x.py", "sibling/y.py"]
+
+
+def test_writes_needing_check_passes_dotdot_and_absolute_through(tmp_path):
+    from coordinator_core.ops.dispatch_emit.op import _writes_needing_cross_repo_check
+
+    root = _sibling_layout(tmp_path)
+    absolute = str(tmp_path / "elsewhere" / "f.py")
+    writes = ["src/a.py", "src/../sibling/z.py", "../sibling/w.py", absolute, "src/ok.py"]
+    kept = _writes_needing_cross_repo_check(writes, root)
+    assert kept == ["src/../sibling/z.py", "../sibling/w.py", absolute]
+
+
+def test_run_checks_memoized_returns_fresh_list_per_call():
+    from coordinator_core.ops.dispatch_emit import op
+
+    first = op._run_checks_memoized("export const x = 1\n")
+    first.append("poison")
+    second = op._run_checks_memoized("export const x = 1\n")
+    assert "poison" not in second

@@ -2177,6 +2177,23 @@ def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
         )
 
 
+_RUN_CHECKS_MEMO: dict = {}
+_RUN_CHECKS_MEMO_MAX = 8
+
+
+def _run_checks_memoized(script: str) -> list:
+    """``run_checks(script)``, remembered per script text for this process: the contract is a pure
+    function of the script, and a refire re-emits the bytes it just checked. Bounded, oldest first out."""
+    key = hashlib.sha256(script.encode("utf-8")).hexdigest()
+    hit = _RUN_CHECKS_MEMO.get(key)
+    if hit is None:
+        hit = tuple(run_checks(script))
+        while len(_RUN_CHECKS_MEMO) >= _RUN_CHECKS_MEMO_MAX:
+            _RUN_CHECKS_MEMO.pop(next(iter(_RUN_CHECKS_MEMO)))
+        _RUN_CHECKS_MEMO[key] = hit
+    return list(hit)
+
+
 def _emit_script_file(
     path: Path,
     script: str,
@@ -2202,7 +2219,7 @@ def _emit_script_file(
         claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
         agent_type_host=agent_type_host,
     )
-    findings = [*run_checks(script), *plan_findings]
+    findings = [*_run_checks_memoized(script), *plan_findings]
     finding_dicts = [
         {
             "severity": f.severity.value,
@@ -4256,6 +4273,28 @@ def _resolve_plan_blitz_args(sizing_abs: Optional[str], chatty_run_id: Optional[
 _dispatch_emit.__doc__ = _dispatch_emit_body.__doc__
 
 
+def _writes_needing_cross_repo_check(writes: list, root: Path) -> list:
+    """``writes`` minus the plain relative paths whose first segment already proved not to name a
+    sibling repo: that verdict is per segment, so one probe answers a recorded footprint of
+    thousands of paths under one directory. Absolute, drive-lettered, dotted and ``..`` paths and
+    every path of a flagged segment pass through for the full check."""
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import paths_outside_repo_root
+
+    clear: set[str] = set()
+    out: list = []
+    for p in writes:
+        parts = p.replace("\\", "/").split("/") if isinstance(p, str) else ()
+        seg = parts[0] if parts else ""
+        plain = bool(seg) and ":" not in seg and seg not in (".", "..") and ".." not in parts
+        if plain and seg in clear:
+            continue
+        if plain and not paths_outside_repo_root([p], root):
+            clear.add(seg)
+            continue
+        out.append(p)
+    return out
+
+
 def _gate_sizing_at_emit(
     root: Path,
     sizing_rel: str,
@@ -4292,8 +4331,9 @@ def _gate_sizing_at_emit(
 
         writes = recorded_xs_writes(Path(root), sizing_rel)
     try:
+        to_check = _writes_needing_cross_repo_check(writes, Path(root))
         check_cross_repo_writes(
-            [SimpleNamespace(id="--writes", writes=list(writes), writes_under=())],
+            [SimpleNamespace(id="--writes", writes=to_check, writes_under=())],
             Path(root), approved=cross_repo_approved,
         )
     except CrossRepoWriteError as exc:

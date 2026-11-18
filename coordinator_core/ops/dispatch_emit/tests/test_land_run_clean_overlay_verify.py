@@ -596,6 +596,47 @@ def test_land_run_refuses_an_inconclusive_verdict(halted, monkeypatch):  # noqa:
     assert FIXTURE in result["reach_dirt_foreign"]
 
 
+def test_the_refusal_names_the_unclaimed_reach_path_and_never_asserts_peer_dirt(halted, monkeypatch):  # noqa: F811
+    _no_spawn(monkeypatch)
+
+    _, result = _dirty_land(halted, "red")
+
+    assert result["refused"] == "verify-overlay-red", result
+    assert f"{FIXTURE} (uncommitted, no run claims it)" in result["error"], result
+    assert "peer dirt" not in result["error"], result
+
+
+_REVERIFY = "coordinator_core/ops/reverify_base_measure.py"
+_REVERIFY_TEST = "coordinator_core/ops/tests/test_reverify_base_measure.py"
+
+
+def test_the_ae535d_shape_names_the_run_own_withheld_paths_and_their_claimant_run_ids():
+    from coordinator_core.ops.dispatch_emit.land_run import _overlay_refusal_text
+
+    text = _overlay_refusal_text(
+        {_REVERIFY: "12ed92-91b9c0, 15d3ff-77f927", _REVERIFY_TEST: "unattributed", "t/peer.py": "9b617f-0d919a"},
+        {_REVERIFY: "peer-claim-indeterminate", _REVERIFY_TEST: "peer-claim-indeterminate"},
+        "red", "7 failed", "Run the verify, then re-land",
+    )
+
+    assert f"{_REVERIFY} (this run's own path, withheld from the landing: peer-claim-indeterminate; claimant run 12ed92-91b9c0, 15d3ff-77f927)" in text
+    assert f"{_REVERIFY_TEST} (this run's own path, withheld from the landing: peer-claim-indeterminate)" in text
+    assert "t/peer.py (claimed by run 9b617f-0d919a)" in text
+    assert "leaves the overlay partial" in text
+    assert "peer dirt" not in text
+    assert text.startswith("landing refused: the clean-overlay verdict is red: 7 failed.")
+    assert text.endswith("Run the verify, then re-land")
+
+
+def test_a_refusal_without_a_run_withheld_path_does_not_blame_a_partial_overlay():
+    from coordinator_core.ops.dispatch_emit.land_run import _overlay_refusal_text
+
+    text = _overlay_refusal_text({"t/x.py": "unattributed"}, {}, "inconclusive", "no test ran", "remedy")
+
+    assert "t/x.py (uncommitted, no run claims it)" in text
+    assert "partial" not in text
+
+
 def test_land_run_lands_a_pre_existing_verdict_with_an_advisory_trailer(halted, monkeypatch):  # noqa: F811
     _no_spawn(monkeypatch)
 

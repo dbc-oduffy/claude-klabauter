@@ -57,6 +57,7 @@ def halted_incident_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     repo = tmp_path / "repo"
     repo.mkdir()
+    # A populated tree so the emit's repo-nested-name scan has real directories to walk.
     for top in range(30):
         for sub in range(15):
             (repo / f"top{top}" / f"sub{sub}").mkdir(parents=True)
@@ -79,6 +80,43 @@ def _refire(repo: Path) -> dict:
     return op._dispatch_emit(
         {"ask": True, "sizing_path": bench.SIZING_REL, "session_id": bench._SESSION_ID}, repo
     )
+
+
+_SCRIPT = (
+    "// anchor\n"
+    "const a = '" + "A repeated sentence long enough to hoist into a const. " * 2 + "';\n"
+    "const b = '" + "A repeated sentence long enough to hoist into a const. " * 2 + "';\n"
+)
+
+
+def test_hoist_memo_serves_the_same_script_and_recomputes_a_changed_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    real = prompt_fragments._hoist_repeated_fragments
+
+    def counting(script: str, *, anchor: str) -> str:
+        calls.append(script)
+        return real(script, anchor=anchor)
+
+    monkeypatch.setattr(prompt_fragments, "_hoist_repeated_fragments", counting)
+    monkeypatch.setattr(prompt_fragments, "_HOIST_MEMO", {})
+    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
+    first = prompt_fragments.hoist_repeated_fragments(_SCRIPT, anchor="anchor")
+    assert prompt_fragments.hoist_repeated_fragments(_SCRIPT, anchor="anchor") == first
+    assert len(calls) == 1
+    changed = _SCRIPT.replace("const a", "const aa")
+    assert prompt_fragments.hoist_repeated_fragments(changed, anchor="anchor") != first
+    assert len(calls) == 2
+
+
+def test_json_candidates_repeated_only_is_the_repeated_subset_of_the_full_scan() -> None:
+    schema = '{"type": "object", "required": ["alpha", "beta", "gamma"]}'
+    once = '{"type": "string", "enum": ["one", "two", "three", "four"]}'
+    script = f"const x = {schema};\nconst y = {schema};\nconst z = {once};\nconst s = '{schema}';\n"
+    full = prompt_fragments._json_candidates(script)
+    only = prompt_fragments._json_candidates(script, repeated_only=True)
+    assert once in full and once not in only
+    assert only == {t: p for t, p in full.items() if len(p) > 1}
+    assert len(only[schema]) == 2
 
 
 def test_fixture_is_the_incident_size(halted_incident_run: Path) -> None:

@@ -126,11 +126,16 @@ def test_reach_superset_over_read_spine_live_rows_is_strict(root):
     assert any(e["path"] == "l.py" for e in lean.edges_added)
 
     # strict: rows read_spine drops are ordered here and not there
-    for name, path in (("dfr", "d.py"), ("em", "e.py"), ("gate", "g.py"), ("trans", "t.py")):
+    for name, path in (("dfr", "d.py"), ("gate", "g.py"), ("trans", "t.py")):
         a, b = sorted((plans[f"{name}-1"], plans[f"{name}-2"]))
         assert not _reaches(ref.graph, b, a) and not _reaches(ref.graph, a, b), name
         assert _reaches(lean.graph, b, a), name
         assert any(e["path"] == path for e in lean.edges_added), name
+    # performer:em rows are still owed (held for the EM): read_spine keeps them, so both orderings reach
+    # the pair and lean still records the e.py edge
+    em_a, em_b = sorted((plans["em-1"], plans["em-2"]))
+    assert _reaches(ref.graph, em_b, em_a) and _reaches(lean.graph, em_b, em_a)
+    assert any(e["path"] == "e.py" for e in lean.edges_added)
 
 
 def test_closed_rows_add_no_write_and_no_edge(root):

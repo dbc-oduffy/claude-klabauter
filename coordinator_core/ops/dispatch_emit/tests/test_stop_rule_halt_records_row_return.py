@@ -54,6 +54,8 @@ def _run_wrap(wrap: str, stopped: list, halted, rows: dict, by_hold: bool = Fals
         f"let _halted = {json.dumps(halted)}; let _consumedReturns = {json.dumps(consumed or {})};\n"
         f"const _rows = {{}}; for (const [k, v] of Object.entries({json.dumps(rows)})) _rows[k] = Promise.resolve(v);\n"
         "const _sizingRel = 's.yaml', _runId = 'r';\n"
+        + ask_compose._usage_limit_helper_js()
+        + "\n"
         + wrap
         + "\nconsole.log(JSON.stringify({ halted: _halted, consumed: _consumedReturns }));\n})();"
     )

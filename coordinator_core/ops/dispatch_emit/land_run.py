@@ -3414,6 +3414,34 @@ def _split_reach_dirt(
     return {p: b for p, b in reach_dirt.items() if p not in foreign}, foreign
 
 
+def _overlay_refusal_text(
+    reach_dirt_foreign: dict, own_withheld: dict, verdict: str, detail: object, remedy: str,
+) -> str:
+    """The clean-overlay red/unverified refusal. Each reach path is named with what is known of it: a path
+    this run wrote and withheld (with the reason, which carries the claimant run id), a path a run claims
+    (its id), or an uncommitted path no run claims. "Peer dirt" is never asserted of a path the run itself wrote."""
+    parts = []
+    for p in sorted(reach_dirt_foreign):
+        holder = str(reach_dirt_foreign[p])
+        claimed = holder and holder != "unattributed"
+        if p in own_withheld:
+            parts.append(
+                f"{p} (this run's own path, withheld from the landing: {own_withheld[p]}"
+                f"{'; claimant run ' + holder if claimed else ''})"
+            )
+        elif claimed:
+            parts.append(f"{p} (claimed by run {holder})")
+        else:
+            parts.append(f"{p} (uncommitted, no run claims it)")
+    own = any(p in own_withheld for p in reach_dirt_foreign)
+    return (
+        f"landing refused: the clean-overlay verdict is {verdict}: {detail}. Uncommitted paths in the verified "
+        f"tests' reach, outside the landing set: {'; '.join(parts)}."
+        f"{' A withheld path of this run leaves the overlay partial; land or release it, not the verdict.' if own else ''}"
+        f" {remedy}"
+    )
+
+
 def _measured_record(root: Path, run_id: Optional[str]) -> Optional[dict]:
     """The run's measured-rev record; None when it has none, ``{"unreadable": True}`` when it will not parse."""
     if not run_id:
@@ -5301,8 +5329,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                     else "This run has no measured run: re-measure it in the verify stage, then re-land"
                 )
                 return _error(
-                    f"landing refused: peer dirt is in the verified tests' reach and the clean-overlay verdict "
-                    f"is {overlay.verdict}: {overlay.detail}. {remedy}",
+                    _overlay_refusal_text(
+                        reach_dirt_foreign,
+                        {**art_withheld, **art_dropped, **recorded_reason, **withhold_reason},
+                        overlay.verdict, overlay.detail, remedy,
+                    ),
                     refused=VERIFY_OVERLAY_RED if overlay.red else VERIFY_OVERLAY_UNVERIFIED,
                     reach_dirt_foreign=reach_dirt_foreign,
                     paths=sorted(reach_dirt_foreign),
@@ -5971,11 +6002,19 @@ def unexecuted_withholds(root: Path, request, staged_rows) -> dict:
     from coordinator_core.ops.dispatch_emit import unexecuted_plan_rows as upr
 
     ran = [c.id for c in request.chunks if c.report and (root / c.report).is_file()]
-    ids = upr.unexecuted_plan_rows(staged_rows, ran)
+    freed = upr.satisfied_blocks(request.chunks, lambda rel: _read_text_or_none(root / rel))
+    ids = upr.unexecuted_plan_rows(staged_rows, ran, freed)
     if not ids:
         return {}
     text = upr.message(ids)
     return {p: text for c in request.chunks for p in c.paths}
+
+
+def _read_text_or_none(path: Path) -> Optional[str]:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
 
 
 def _withhold_reasons(root: Path, artifacts, record_dir_rel: Optional[str]) -> dict:
