@@ -158,7 +158,12 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
 from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
 from coordinator_core.ops.dispatch_emit import stage_family
-from coordinator_core.ops.dispatch_emit.em_only_act import em_only_capability, forbidden_sole_act, row_is_em_performed
+from coordinator_core.ops.dispatch_emit.em_only_act import (
+    code_deliverable,
+    em_only_capability,
+    forbidden_sole_act,
+    row_is_em_performed,
+)
 from coordinator_core.ops.plan_tasks_render import RowsResult
 
 
@@ -1253,6 +1258,24 @@ _OWNED_ROOT_REASONS = frozenset({"memo-send", "em-performed", "operator"})
 
 EM_OWNED_REASONS = _OWNED_ROOT_REASONS | {"withheld_by_owed_dependency"}
 
+_EM_RUN_ORACLE = re.compile(r"\bEM-run oracle\b", re.IGNORECASE)
+_GAP_TITLE_HEAD = "Close gap: "
+
+
+def em_run_oracle_text(text: object) -> bool:
+    """True when `text` names an EM-run oracle: a check only the EM session can run."""
+    return isinstance(text, str) and _EM_RUN_ORACLE.search(text) is not None
+
+
+def is_em_run_oracle(raw: dict) -> bool:
+    """True for a row whose closure is an EM-run oracle: its title names one and the row is
+    em-performed or a ledger gap row (`Close gap: ` title). The engine can never execute it, so it
+    holds no code row."""
+    title = raw.get("title")
+    return em_run_oracle_text(title) and (
+        row_is_em_performed(raw) or str(title).startswith(_GAP_TITLE_HEAD)
+    )
+
 
 def em_owned_rows(exclusions: Optional[list]) -> list[str]:
     """`<id> (<detail>)` for each excluded row the EM or an operator still owes."""
@@ -1669,6 +1692,7 @@ def read_spine(
             row_is_em_performed(raw)
             or (_is_memo_send_row(raw) and not memo_row_dispatchable(raw))
             or inbound_close is not None
+            or is_em_run_oracle(raw)
         )
         memo_slug = None
         memo_delivered = False
@@ -1930,6 +1954,14 @@ def read_spine(
     # withheld producer reads a file that does not exist yet.
     consumed_via: dict[str, str] = {}
     consumers_of = _consume_edges(rows, frozenset(satisfied_ids))
+    # An EM-run oracle verifies code; it cannot gate the code, which the engine lands while the
+    # oracle stays open for met_by crediting.
+    oracle_ids = {
+        raw.get("id")
+        for raw in raw_rows
+        if raw.get("id") in blocked_ids and is_em_run_oracle(raw)
+    }
+    code_row_ids = {raw.get("id") for raw in raw_rows if code_deliverable(raw)}
     frontier = list(blocked_ids)
     while frontier:
         current = frontier.pop()
@@ -1937,6 +1969,8 @@ def read_spine(
         hops += [(d, path) for d, path in consumers_of.get(current, ())]
         for dependent_id, path in hops:
             if dependent_id in satisfied_ids or dependent_id in blocked_ids:
+                continue
+            if current in oracle_ids and dependent_id in code_row_ids:
                 continue
             blocked_ids.add(dependent_id)
             transitive_root[dependent_id] = current
@@ -2010,13 +2044,14 @@ def read_spine(
     satisfied_ids -= keep_coded
     excluded_ids = satisfied_ids | blocked_ids
     dispatchable_rows = [row for row in rows if row.id not in excluded_ids]
+    released_ids = satisfied_ids | oracle_ids
     for i, row in enumerate(dispatchable_rows):
         if not row.depends_on:
             continue
         stripped = [
             edge
             for edge in row.depends_on
-            if not (isinstance(edge, dict) and edge.get("chunk") in satisfied_ids)
+            if not (isinstance(edge, dict) and edge.get("chunk") in released_ids)
         ]
         if len(stripped) != len(row.depends_on):
             dispatchable_rows[i] = row._replace(depends_on=stripped)

@@ -2559,8 +2559,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "916181ee1ca1769a2846dd5a6b12e3679f0763e5",
-    "coordinator_core/_engine_stamp": "560cba7b80ea9f12ef804e95af3b1b0e4526b574",
+    "coordinator_core/_engine_published_at": "cf568151cbbb9644fcc4762eb4d5499afc2b4f39",
+    "coordinator_core/_engine_stamp": "fa34781c521c52896844cf13a5980d2fe3910608",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6187,7 +6187,7 @@
     "coordinator_core/ops/dispatch_emit/halt_landing.py": "2e232ae0430b92b4967b9b01edd6b15bbb0f8695",
     "coordinator_core/ops/dispatch_emit/halt_product_gates.py": "b3885d7cb1d47427bcff9068cbc93f5dc5d26ef1",
     "coordinator_core/ops/dispatch_emit/halt_refire.py": "dbaafe8d39c9eeab345eeee3a95ffeb6a18ddfce",
-    "coordinator_core/ops/dispatch_emit/halt_remedy_class.py": "27f70d92d8b8b3608117c6312fbb433fc8ad2a78",
+    "coordinator_core/ops/dispatch_emit/halt_remedy_class.py": "b96297af76b506701d5a72f28b08f1ec043ca2ae",
     "coordinator_core/ops/dispatch_emit/halt_resume_build.py": "79d18a503c7b4d511480f51c4d9fcd17a6ebd85e",
     "coordinator_core/ops/dispatch_emit/halt_resume_record.py": "edd6f46bebf1fa3170da998ccace1505b860db26",
     "coordinator_core/ops/dispatch_emit/halt_review_passed.py": "1a965144cd31ae5d7ff444b14c19e596d3969e90",
@@ -6260,7 +6260,7 @@
     "coordinator_core/ops/dispatch_emit/launcher_staged_twin.py": "d54984e5b4e4f2402e661ff13f82230751c5abbd",
     "coordinator_core/ops/dispatch_emit/ledger_prerule.py": "09b11c70162f66a1d1bfa724977222b34dc30351",
     "coordinator_core/ops/dispatch_emit/ledger_recovery.py": "50417d811d4b4bb8b714786bf476f799049e8140",
-    "coordinator_core/ops/dispatch_emit/ledger_remaining_paths.py": "c27c831444bde2caeef137e5b92f7466b30a1c33",
+    "coordinator_core/ops/dispatch_emit/ledger_remaining_paths.py": "4effff13eba5d752223409407259c34417596b4d",
     "coordinator_core/ops/dispatch_emit/leg_register.py": "b3ae7fcf808da9974bf62c9461352b77778c17a7",
     "coordinator_core/ops/dispatch_emit/live_run_index.py": "ec44af936c136aac2a308ed8219e05cc2bf23840",
     "coordinator_core/ops/dispatch_emit/live_run_writes.py": "86109a89daa830839d1f620974144260e02fab25",
@@ -6405,7 +6405,7 @@
     "coordinator_core/ops/dispatch_emit/slice_supersede.py": "45ecae8bc49b966cc8cac9e91757891109023db7",
     "coordinator_core/ops/dispatch_emit/slot_order.py": "451da44ac8235d79766e41f35dfffa3e185d9f18",
     "coordinator_core/ops/dispatch_emit/source_memo_ref.py": "700cfbcf8e8870a6098d3e13bb56618b8df422ba",
-    "coordinator_core/ops/dispatch_emit/spine_read.py": "7ca32e8cdb2f543a98af564f634747fb9b156fe4",
+    "coordinator_core/ops/dispatch_emit/spine_read.py": "918754a24419512e871616bdff9cc8e7b52e45de",
     "coordinator_core/ops/dispatch_emit/stage_dirt_snapshot.py": "48161c23ab82ae77d41198b1b1a83c3a843ba5b3",
     "coordinator_core/ops/dispatch_emit/stage_family.py": "4aa06f0405831081c52c91cfe22218d9fde9d046",
     "coordinator_core/ops/dispatch_emit/stage_family_binding.py": "3a9a89d0b1b97aa53957115a73572a560ff57aa6",
@@ -6971,6 +6971,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_em_mailbox_watch.py": "e176db70c798bf6b6018f2d00d02b5161e4ab104",
     "coordinator_core/ops/dispatch_emit/tests/test_em_only_act.py": "be104533e04848bcb5671434b8067e6813884c57",
     "coordinator_core/ops/dispatch_emit/tests/test_em_owned_agent_type_row_withheld.py": "6a0604f6d44a9c44bb02d41ece15993a61979e28",
+    "coordinator_core/ops/dispatch_emit/tests/test_em_run_oracle_row_never_holds_code_rows.py": "f658833a1897d68b954abc2af7d6ff7650b7ac95",
     "coordinator_core/ops/dispatch_emit/tests/test_emission_receipt_landing_markers.py": "728557a54227882ea8891af30df2fc12163ad72a",
     "coordinator_core/ops/dispatch_emit/tests/test_emit.py": "957d66a30480aca4202fd233a2e87d793d2ae6af",
     "coordinator_core/ops/dispatch_emit/tests/test_emit_artifact_naming_and_out.py": "20d47c46056cd7d5619edef9588541b284c670b8",
@@ -12911,5 +12912,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "9d384c5f38e5c0093a09217e76c608eb77b22b14"
+  "source_head": "1e131e1ee55e5c776ef084ea86525bb1a0ceb2da"
 }
