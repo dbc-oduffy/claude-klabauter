@@ -56,6 +56,7 @@ def runner_agent(family: Optional[str]) -> Optional[str]:
     return None if resolve(family) == "claude" else RUNNER_AGENT
 
 
+SESSION_ID_FLAG = "--session-id"
 RUN_ID_TOKEN = "<run-id>"
 FRESH_INVOKE_LINE = (
     "fresh: invoke the vendor CLI in this run; a receipt this run's invocation did not "

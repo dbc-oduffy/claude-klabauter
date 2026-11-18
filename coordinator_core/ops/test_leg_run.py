@@ -15,6 +15,7 @@ Usage: python -m coordinator_core.ops.test_leg_run [--base-sha <sha>] [--head-sh
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -68,8 +69,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str]]:
-    """One pytest subprocess over `targets`: (exit code, stdout lines). Raises
-    subprocess.TimeoutExpired once `remaining` seconds are gone; the child is killed by then."""
+    """One pytest subprocess over `targets`: (exit code, stdout lines then the stderr session-Temp residue
+    lines, which pytest's seam prints to stderr). Raises subprocess.TimeoutExpired once `remaining` seconds
+    are gone; the child is killed by then."""
     if remaining <= 0:
         raise subprocess.TimeoutExpired("pytest", 0)
     with tempfile.TemporaryDirectory(prefix="test-leg-ids-") as holder:
@@ -77,7 +79,56 @@ def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[s
         proc = subprocess.run([sys.executable, "-c", _IDS_RUNNER, str(id_file), *_PYTEST], cwd=cwd,
                               capture_output=True, text=True, errors="replace", timeout=remaining,
                               **no_console_creationflags())
-    return proc.returncode, proc.stdout.splitlines()
+    return proc.returncode, [*proc.stdout.splitlines(), *cov.temp_residue_lines(proc.stderr)]
+
+
+def _conftest_constants(*names: str) -> dict[str, str]:
+    """String constants `names` read from the engine conftest's source: importing it mutates sys.path and
+    the environment, so the lines it prints are parsed against its own values without running it."""
+    out: dict[str, str] = {}
+    try:
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "conftest.py").read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return out
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in names and isinstance(node.value, ast.Constant)):
+            out[node.targets[0].id] = node.value.value
+    return out
+
+
+def _temp_leaks(text: str) -> list[tuple[str, str]]:
+    """(node id, message) per session-Temp leak in `text`, [] when it carries no residue forced exit. A
+    `left by <label>: <entry>` line charges the leaving test (the file for an `(after last test)` label); a
+    residue with no such line (a conftest older than the seam) is charged per entry as `managed-temp:<entry>`."""
+    lines = cov.temp_residue_lines(text)
+    if not lines:
+        return []
+    const = _conftest_constants("MANAGED_TEMP_LEFT_BY_PREFIX", "MANAGED_TEMP_AFTER_LAST_TEST")
+    prefix = const.get("MANAGED_TEMP_LEFT_BY_PREFIX")
+    after = const.get("MANAGED_TEMP_AFTER_LAST_TEST", "")
+    leaks: list[tuple[str, str]] = []
+    for ln in lines:
+        if prefix and ln.startswith(prefix):
+            label, _, entry = ln[len(prefix):].rpartition(": ")
+            node = label[:-len(after)] if after and label.endswith(after) else label
+            if node.startswith("<no test>"):
+                node = f"managed-temp:{entry}"
+            leaks.append((node, f"managed-temp leak: {entry} left by {label}"))
+    if leaks:
+        return leaks
+    entry_prefix = f"managed-temp: {cov._RESIDUE_CAUSE}: "
+    return [(f"managed-temp:{ln[len(entry_prefix):]}", f"managed-temp leak: {ln[len(entry_prefix):]} {cov._RESIDUE_CAUSE}")
+            for ln in lines if ln.startswith(entry_prefix)]
+
+
+def _stamp_leaks(result: dict, leaks: Sequence[tuple[str, str]]) -> list[str]:
+    """Record `leaks` as the leg's failures and return their node ids (deduped, first-seen order)."""
+    ids = list(dict.fromkeys(node for node, _ in leaks))
+    result["failing"] = ids
+    result["failing_detail"] = [{"node_id": node, "message": msg} for node, msg in leaks]
+    result["status_after"] = "fail"
+    return ids
 
 
 def _write_ids(holder: Path, targets: Sequence[str]) -> Path:
@@ -228,7 +279,7 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], *, missing_onl
     if result.get("status_after") == "pass" and run_n:
         result["status"] = "pass"
     else:
-        result["status"] = "fail" if counts["failed"] else "error"
+        result["status"] = "fail" if counts["failed"] or result.get("failing") else "error"
     result.pop(ltt.ZERO_RUN_CAUSE_KEY, None)
     result.pop(IMPORT_ERROR_KEY, None)
     if run_n:
@@ -351,7 +402,11 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
     new_red = [i for i in ids if i not in at_base]
     out.update(failing=ids, pre_existing=[i for i in ids if i in at_base], new_red=new_red,
                failing_detail=[{"node_id": i, "message": detail[i]} for i in ids], not_a_test=not_a_test)
-    if ran.returncode not in (0, 1) and not ids and not cov.hygiene_only_exit(ran.returncode, text):
+    leaks = _temp_leaks(text) if ran.returncode == 1 and not ids else []
+    if leaks:
+        new_red = _stamp_leaks(out, leaks)
+        out["new_red"] = new_red
+    elif ran.returncode not in (0, 1) and not ids and not cov.hygiene_only_exit(ran.returncode, text):
         out["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {ran.returncode} with no failing id"}]
         out["status_after"] = "fail"
     else:
@@ -448,6 +503,65 @@ def _own_import_error(result: dict, root: Path) -> None:
         err["run_id"] = max(owners)[1]
 
 
+def _run_blob_paths(root: Path, exclude: str) -> list[str]:
+    """Paths whose worktree bytes are still a blob some run record under `state/warp` wrote, `exclude` left out."""
+    from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
+
+    owned: dict[str, None] = {}
+    for _run_id, _dir, _mtime, rec in stranded_sibling.read_records(root / "state" / "warp"):
+        for path, entry in rec.items():
+            if path != exclude and entry.get("run") and kept_work.fingerprint(root, path) == entry["run"]:
+                owned[path] = None
+    return list(owned)
+
+
+def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[str], root: Path, left) -> None:
+    """A zero-run caused by an import error in a file no run owns says nothing about the run's own change: re-run
+    `targets` on the `base_sha` export overlaid with the run-owned blobs (the foreign file at its base bytes) and
+    fold that verdict into `result`. Any failure to measure there keeps the cwd verdict, noted as
+    `overlay_rerun_skipped`."""
+    err = result.get(IMPORT_ERROR_KEY)
+    if (result.get("tests_run") or not base_sha or not isinstance(err, dict) or err.get("run_id") is not None
+            or not err.get("path")):
+        return
+    run_holder = None
+    try:
+        if left() <= 0:
+            raise subprocess.TimeoutExpired("pytest", 0)
+        overlay = _run_blob_paths(root, err["path"])
+        with cov._mirror_lock(root, "test-leg-run") as mroot:
+            dest = cov._prepare_guarded(root, mroot, cov._commit_sha(root, base_sha), cov._no_leg, overlay)
+            present, _absent = _partition(targets, dest)
+            if not present:
+                return
+            run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"test-leg-{os.getpid()}")
+            env = cov._mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest)
+            ran = cov._tier_empty_as_green(cov._run_pytest_retrying(_argv(root, dest, basetemp, present), dest, env))
+    except (cov.ExportError, subprocess.SubprocessError, OSError) as exc:
+        result["overlay_rerun_skipped"] = f"{type(exc).__name__}: {exc}"[:300]
+        return
+    finally:
+        if run_holder is not None:
+            shutil.rmtree(run_holder, ignore_errors=True)
+    text = ran.stdout + ran.stderr
+    ids, red_non = _split_not_a_test(cov.failing_ids(text))
+    detail = _detail(text, ids)
+    result["failing"] = ids
+    result["failing_detail"] = [{"node_id": i, "message": detail[i]} for i in ids]
+    result["not_a_test"].extend(n for n in red_non if n not in result["not_a_test"])
+    leaks = _temp_leaks(text) if ran.returncode == 1 and not ids else []
+    if leaks:
+        _stamp_leaks(result, leaks)
+    elif ids or (ran.returncode not in (0, 5) and not red_non):
+        result["status_after"] = "fail"
+        if not ids:
+            result["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {ran.returncode} with no failing id"}]
+    else:
+        result["status_after"] = "pass"
+    result["overlay_rerun"] = {"from": err["path"], "overlaid": overlay}
+    _tally(result, ran.returncode, text.splitlines())
+
+
 def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         base_export_out: Optional[str], budget_s: float, cwd: str, touched: Sequence[str] = ()) -> dict:
     """The `test`-shaped verdict for `targets`; `over_budget` true when the deadline expired. With `touched`
@@ -528,9 +642,16 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         if rc == 0 or (red_non and not reds and rc == 1):
             result["status_after"] = "pass"
         elif not reds:
-            result["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {rc} with no failing id"}]
+            leaks = _temp_leaks("\n".join(lines)) if rc == 1 else []
+            if leaks:
+                _stamp_leaks(result, leaks)
+            else:
+                result["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {rc} with no failing id"}]
         result["over_budget"] = False
         _tally(result, rc, lines)
+        if result.get(IMPORT_ERROR_KEY):
+            _own_import_error(result, Path(cwd))
+            _overlay_fallback(result, present, base_sha, Path(cwd), left)
     except subprocess.TimeoutExpired:
         result["status_after"] = "fail"
         if phase_one is None:

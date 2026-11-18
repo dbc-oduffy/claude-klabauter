@@ -38,6 +38,20 @@ from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
+
+@pytest.fixture(autouse=True)
+def _gitignore_filter_defaults_to_a_hermetic_root(monkeypatch, tmp_path) -> None:
+    """A call without ``repo_root`` asks ``git check-ignore`` from the module's own
+    tree; an export under a parent repo's ignored dir (``scratch/``) then drops every
+    row path and the marker vanishes. Default the filter's root to ``tmp_path``."""
+    real = emit._gitignored_paths
+
+    def _hermetic(paths, *, repo_root=None):
+        return real(paths, repo_root=tmp_path if repo_root is None else repo_root)
+
+    monkeypatch.setattr(emit, "_gitignored_paths", _hermetic)
+
+
 _AGENT_CALL_RE = re.compile(r"agent\s*\(")
 _META_PHASE_LINE_RE = re.compile(r"phases\s*:\s*\[([^\]]*)\]")
 _JS_STRING_LITERAL_RE = re.compile(r"'((?:[^'\\]|\\.)*)'")

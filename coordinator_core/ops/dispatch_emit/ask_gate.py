@@ -27,6 +27,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import design_route
+from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
 from coordinator_core.ops.dispatch_emit.ask_exclusions import excluded_paths
 
 RESUME_EXCLUDE_FIELD = "exclude"
@@ -724,6 +725,36 @@ def _nothing_executable_halt(repo_root: Path, plan_rel: str, incomplete: Sequenc
     )
 
 
+_FAMILY_DIRECTIVE = re.compile(
+    r"\bexecuting\s+(?:agent\s+)?family\s*[:=]\s*[`'\"]?(" + "|".join(
+        f for f in _stage_family.FAMILIES if f != _stage_family.FALLBACK
+    ) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _family_named_refusal(sizing: Mapping) -> Optional[str]:
+    """The refusal reason when the sizing's text names a non-claude executing family its top-level `family:` lacks.
+
+    Reads `em_context`, `em_analysis.{em_brief,relayed_text,em_context}` and `intent`; the directive is the
+    `Executing agent family: <family>` phrase. None when no family is named or the top-level family matches.
+    """
+    analysis = sizing.get("em_analysis")
+    texts = [sizing.get("em_context"), sizing.get("intent")]
+    if isinstance(analysis, Mapping):
+        texts += [analysis.get(k) for k in ("em_brief", "relayed_text", "em_context")]
+    declared = sizing.get("family")
+    for text in texts:
+        match = _FAMILY_DIRECTIVE.search(text) if isinstance(text, str) else None
+        if match and str(declared or "").lower() != match.group(1).lower():
+            named = match.group(1).lower()
+            return (
+                f"the ask names executing family {named} but the sizing's top-level family is "
+                f"{declared or 'absent'}; set family: {named} on the sizing and refire"
+            )
+    return None
+
+
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None, run_id: Optional[str] = None, kept_sink: Optional[list] = None,
@@ -741,6 +772,10 @@ def _arm_verdict(
         arm = resolve_arm(sizing)
     except SizingFireRefused as exc:
         return _refuse("; ".join(exc.fields))
+
+    family_reason = _family_named_refusal(sizing)
+    if family_reason:
+        return _refuse(family_reason)
 
     engine_tshirt = sizing["estimate"]["tshirt"]
     if size_misaligned(em_size, engine_tshirt):

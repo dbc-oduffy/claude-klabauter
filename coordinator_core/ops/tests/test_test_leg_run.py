@@ -365,6 +365,47 @@ def test_import_error_run_id_is_the_newest_record_holding_the_worktree_blob(repo
     assert data["import_error"] == {"path": "coordinator_core/dirty.py", "run_id": "run-old"}
 
 
+def _committed_engine_with_dirty_worktree(root: Path) -> str:
+    """A base commit whose `coordinator_core/dirty.py` imports fine, then the worktree copy broken; returns the base sha."""
+    (root / "coordinator_core").mkdir()
+    (root / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "coordinator_core" / "dirty.py").write_text("from coordinator_core.clean import X\n", encoding="utf-8")
+    (root / "coordinator_core" / "clean.py").write_text("X = 1\n", encoding="utf-8")
+    (root / "tests" / "test_dirty.py").write_text(
+        "from coordinator_core import dirty\n\ndef test_a():\n    assert True\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "engine")
+    (root / "coordinator_core" / "dirty.py").write_text("from coordinator_core.clean import _GONE\n", encoding="utf-8")
+    return _git(root, "rev-parse", "HEAD")
+
+
+def test_a_foreign_import_error_reruns_the_targets_on_the_base_export_and_reports_tests_run(landing, tmp_path):
+    root, _base = landing
+    base = _committed_engine_with_dirty_worktree(root)
+
+    _code, data = _main(["--base-sha", base, "--", "tests/test_dirty.py"], tmp_path / "o.json")
+
+    assert data["tests_run"] > 0 and data["status"] == "pass"
+    assert data["overlay_rerun"]["from"] == "coordinator_core/dirty.py"
+    assert data.get("zero_run_cause") != ltt.ZERO_RUN_IMPORT_ERROR
+
+
+def test_an_owned_import_error_keeps_the_zero_run_import_error_verdict(landing, tmp_path):
+    from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
+
+    root, _base = landing
+    base = _committed_engine_with_dirty_worktree(root)
+    blob = kept_work.fingerprint(root, "coordinator_core/dirty.py")
+    stranded_sibling.write(root / "state" / "warp" / "run-mine", {"coordinator_core/dirty.py": {"base": None, "run": blob}})
+
+    _code, data = _main(["--base-sha", base, "--", "tests/test_dirty.py"], tmp_path / "o.json")
+
+    assert data["tests_run"] == 0 and data["status"] == "error"
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_IMPORT_ERROR
+    assert data["import_error"] == {"path": "coordinator_core/dirty.py", "run_id": "run-mine"}
+    assert "overlay_rerun" not in data
+
+
 def test_import_error_outside_the_engine_stays_collection_failure(repo, tmp_path):
     (repo / "tests" / "test_broken.py").write_text("import not_a_real_module_xyz\n", encoding="utf-8")
     _code, data = _main(["--", "tests/test_broken.py"], tmp_path / "o.json")

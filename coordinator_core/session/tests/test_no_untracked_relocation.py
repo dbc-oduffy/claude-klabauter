@@ -465,8 +465,6 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         _TMP_FIXTURE_REASON,
     ("coordinator_core", "ops/dispatch_emit/tests/test_grind_bookkeep.py", "close", "Path.replace", "(repo / ROW).replace(repo / ARCHIVE)", 1):
         "test fixture: stub close op archives a row file inside its tmp_path repo -- outside any session's claimable space",
-    ("coordinator_core", "ops/dispatch_emit/tests/test_grind_one_row_discard_spawns.py", "close", "Path.replace", "(repo / ROW).replace(repo / ARCHIVE)", 1):
-        "test fixture: stub close op archives a row file inside its tmp_path repo -- outside any session's claimable space",
     ("coordinator_core", "ops/tests/test_plan_readiness_verdict.py", "test_a_plan_moved_mid_blitz_is_judged_and_spine_read_on_its_new_path", "Path.rename", "(tmp_path / REL).rename(moved)", 1):
         _TMP_FIXTURE_REASON,
 

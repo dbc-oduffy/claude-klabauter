@@ -1499,6 +1499,18 @@ def _stage_reply_js(launcher_child: bool = False) -> str:
     return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + _ADOPT_STAGE_REPLY_JS
 
 
+#: JS predicate: a gate reply's `resume_plan` is a repo-relative `.md` path. The script has no disk access, so the
+#: shape is the check; a prose verdict string fails it.
+_RESUME_PLAN_SHAPE_JS = r"((p) => typeof p === 'string' && /^(?!\/|[A-Za-z]:)(?!.*\.\.)\S+\.md$/.test(p))"
+#: JS: the halt a malformed `resume_plan` adopts, over the gate variable `g`.
+def _resume_plan_halt_js(g: str) -> str:
+    """JS statement: halt with a named reason when `g.resume_plan` is set but not a repo-relative plan path."""
+    return (
+        f"_halted = {{ halted: {HALT_REFUSAL!r}, reason: 'gate resume_plan is not a repo-relative plan path: ' "
+        f"+ JSON.stringify(String({g}.resume_plan).slice(0, 120)), sizing: _sizingRel, run_id: _runId }};"
+    )
+
+
 #: JS: the `dispatch.ask_stage` params for a recovery stage. Trap: `_gate` may be undeclared or still unassigned
 #: where a fold site runs, so it is read inside try.
 _STAGE_RECOVER_PARAMS_JS = (
@@ -1507,7 +1519,7 @@ _STAGE_RECOVER_PARAMS_JS = (
     "materialise_wave: String(_stageRecoverParams.wave) };\n"
     "    let _g = null;\n"
     "    try { _g = _gate; } catch (e) { _g = null; }\n"
-    "    const _plan = _planRel || (_g && typeof _g.resume_plan === 'string' && _g.resume_plan ? _g.resume_plan : null);\n"
+    "    const _plan = _planRel || (_g && " + _RESUME_PLAN_SHAPE_JS + "(_g.resume_plan) ? _g.resume_plan : null);\n"
     "    if (_plan) {\n"
     "      const _only = (_g && Array.isArray(_g.resume_rows) && _g.resume_rows.length) ? { only_rows: _g.resume_rows } : {};\n"
     "      return { run_id: _runId, plan_path: _plan, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
@@ -3999,6 +4011,7 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str, invoke_cmd:
             f"it prints as your result, unchanged:\n\n{invoke_cmd}"
         )
         + " + r.id + ' --family ' + r.family + ' --stage ' + r.stage_role + ' --prompt ' + r.fallback_brief_path"
+        " + (typeof _SESSION_ID === 'string' && _SESSION_ID ? ' " + _stage_family.SESSION_ID_FLAG + " ' + JSON.stringify(_SESSION_ID) : '')"
         " + ((r.writes ?? []).length ? ' --writes ' + r.writes.map((w) => JSON.stringify(String(w))).join(' ') : '') + "
         + _js_string_literal("\n\nThe assignment the CLI carries out follows, for your reference only.\n\n")
         + ";\n"
@@ -5664,7 +5677,7 @@ def compose_ask_script(
         # act switches to plan_path); the XS mint refuses a sizing with an edge.
         b.append(
             f"  if (!_halted && {_NO_RESUME} && !_resumeLedger && _gate.arm === {_lit(ARM_XS)} && _gate.resume_plan) "
-            "{ _planRel = _gate.resume_plan; }"
+            f"{{ if ({_RESUME_PLAN_SHAPE_JS}(_gate.resume_plan)) {{ _planRel = _gate.resume_plan; }} else {{ {_resume_plan_halt_js('_gate')} }} }}"
         )
     late_replan_call: Optional[str] = None
     if fold_stage:
@@ -5848,7 +5861,7 @@ def compose_ask_script(
         " (<plan_rel> is the plan's repo-relative path.)",
     )
     b.append(f"  if (!_halted && {_NO_RESUME} && _gate.arm === {_lit(ARM_S)}) {{")
-    b.append("    if (_resumeLedger) { /* planRel already the ledger plan */ } else if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {")
+    b.append("    if (_resumeLedger) { /* planRel already the ledger plan */ } else if (_gate.resume_plan) { if (" + _RESUME_PLAN_SHAPE_JS + "(_gate.resume_plan)) { _planRel = _gate.resume_plan; } else { " + _resume_plan_halt_js("_gate") + " } } else {")
     b.append("    phase('plan');")
     plan_call = _agent(
         plan_author, label="plan", phase="plan", agent_type=stage_types["plan"],
@@ -6021,7 +6034,8 @@ def compose_ask_script(
             "review finding to clear one. Return the plan's repo-relative path as plan_rel and the "
             "ruling ids you applied as applied (an empty list, with no edit, when the ledger carries "
             "no ruling). Apply rulings: ",
-            "js:_gate.pending_rulings ? _gate.pending_rulings.join(', ') : '(unlisted: read the ledger)'",
+            "js:(Array.isArray(_gate.pending_rulings) ? (_gate.pending_rulings.length ? _gate.pending_rulings.join(', ') : '(unlisted: read the ledger)') "
+            ": (typeof _gate.pending_rulings === 'string' && _gate.pending_rulings ? _gate.pending_rulings : '(unlisted: read the ledger)'))",
             "." + ledger_clause,
         )
         ruled_call = _agent(
@@ -8417,11 +8431,16 @@ NO_RUN_TOKEN_COMMIT_REASON = "commit stage skipped: no run token"
 
 # Tail of an `else if (!_halted && ...)` arm: a terminal-commit `_nextAction` with no `_RUN_TOKEN`
 # cannot fire the commit stage, so the reply names the halt instead of carrying halted_by null.
+# Exception: `_metBySkipped` (empty prep, every blocking row met by a landed commit) means nothing is
+# left to commit, so the run ends already_delivered naming that sha.
 _NO_RUN_TOKEN_COMMIT_SKIPPED_JS = (
     "_nextAction && _nextAction.kind === 'terminal_commit' && !_RUN_TOKEN) { "
-    "_halted = { halted: 'commit', refused: null, error: null, blob_drift: null, "
+    "if (typeof _metBySkipped !== 'undefined' && _metBySkipped && Array.isArray(_metBySkipped.shas) && _metBySkipped.shas.length) { "
+    "_alreadyDelivered = { sha: _metBySkipped.shas[0], close: null, shas: _metBySkipped.shas }; "
+    "_nextAction = { kind: 'none', op: null, params: { already_delivered: _alreadyDelivered } }; } "
+    "else { _halted = { halted: 'commit', refused: null, error: null, blob_drift: null, "
     f"reason: {json.dumps(NO_RUN_TOKEN_COMMIT_REASON)}, "
-    "plan: (typeof _planRel === 'undefined' ? null : _planRel) ?? null, sizing: _sizingRel ?? null, run_id: _runId }; }"
+    "plan: (typeof _planRel === 'undefined' ? null : _planRel) ?? null, sizing: _sizingRel ?? null, run_id: _runId }; } }"
 )
 
 

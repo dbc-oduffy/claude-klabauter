@@ -11,13 +11,18 @@ from coordinator_core.ops.dispatch_emit import family_invoke as fi
 from coordinator_core.ops.dispatch_emit import family_invoke_record as fir
 
 
+@pytest.fixture(autouse=True)
+def _session_env(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "env-sid")
+
+
 def _setup(tmp_path):
     (tmp_path / "a.txt").write_text("old", encoding="utf-8")
     (tmp_path / "brief.md").write_text("do it", encoding="utf-8")
 
 
 def _writer(text, exit_code=0, backend="agy"):
-    def run(prompt, *, backend: str, repo_root, artifact_dir):
+    def run(prompt, *, backend: str, repo_root, artifact_dir, parent_session_id=None):
         artifact_dir.mkdir(parents=True, exist_ok=True)
         (artifact_dir / "stdout.jsonl").write_text('{"type":"thread.started","model":"m-1"}\n', encoding="utf-8")
         (artifact_dir / "stderr.txt").write_text("warn", encoding="utf-8")
@@ -202,6 +207,75 @@ def test_main_prints_the_result_and_exits_non_zero_unless_authored(tmp_path, cap
                     "--stage", "write", "--prompt", "brief.md", "--writes", "a.txt"])
     printed = json.loads(capsys.readouterr().out)
     assert code == 1 and printed["family_authored"] is False and printed["verdict"] == "FAILED"
+
+
+def _sid_probe(seen):
+    def run(prompt, *, backend, repo_root, artifact_dir, parent_session_id=None):
+        seen.append(parent_session_id)
+        return {"argv": [], "exit_code": 0}
+    return run
+
+
+def _record_launcher(tmp_path, sid):
+    d = tmp_path / "state" / "warp" / "r1"
+    d.mkdir(parents=True)
+    (d / "run-stage.json").write_text(json.dumps({"session_id": sid}), encoding="utf-8")
+
+
+def test_the_explicit_session_id_wins_over_env_and_the_recorded_launcher(tmp_path):
+    _setup(tmp_path)
+    _record_launcher(tmp_path, "launcher-sid")
+    seen: list = []
+    fi.invoke(tmp_path, "r1", "C1", "codex", "scout", "brief.md", runner=_sid_probe(seen), session_id="cli-sid")
+    assert seen == ["cli-sid"]
+
+
+def test_the_env_session_id_reaches_the_runner_without_an_explicit_one(tmp_path):
+    _setup(tmp_path)
+    _record_launcher(tmp_path, "launcher-sid")
+    seen: list = []
+    fi.invoke(tmp_path, "r1", "C1", "agy", "scout", "brief.md", runner=_sid_probe(seen))
+    assert seen == ["env-sid"]
+
+
+@pytest.mark.parametrize("family", ["codex", "agy", "grok"])
+def test_with_no_env_the_runs_recorded_launcher_session_reaches_the_runner(tmp_path, monkeypatch, family):
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    _setup(tmp_path)
+    _record_launcher(tmp_path, "launcher-sid")
+    seen: list = []
+    fi.invoke(tmp_path, "r1", "C1", family, "scout", "brief.md", runner=_sid_probe(seen))
+    assert seen == ["launcher-sid"]
+
+
+def test_a_launcher_record_of_another_run_is_never_consulted(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    _setup(tmp_path)
+    d = tmp_path / "state" / "warp" / "other"
+    d.mkdir(parents=True)
+    (d / "run-stage.json").write_text(json.dumps({"session_id": "stranger"}), encoding="utf-8")
+    seen: list = []
+    fi.invoke(tmp_path, "r1", "C1", "agy", "scout", "brief.md", runner=_sid_probe(seen))
+    assert seen == [None]
+
+
+@pytest.mark.parametrize("family", ["codex", "agy"])
+def test_no_resolvable_session_records_a_failure_naming_that_cause(tmp_path, monkeypatch, family):
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    monkeypatch.setattr(fi.sys, "platform", "linux")
+    _setup(tmp_path)
+    out = _invoke(tmp_path, None, family=family, stage="scout")
+    assert out["family_authored"] is False and "no parent session id" in out["blocked_reason"]
+    assert "no parent session id" in fir.read(tmp_path, "r1", "C1")[0]["error"]
+
+
+def test_the_cli_threads_session_id_to_the_runner(tmp_path, monkeypatch):
+    _setup(tmp_path)
+    seen: list = []
+    monkeypatch.setattr(fi, "_default_runner", _sid_probe(seen))
+    fi.main(["--root", str(tmp_path), "--run-id", "r1", "--row", "C1", "--family", "agy",
+             "--stage", "scout", "--prompt", "brief.md", "--session-id", "cli-sid"])
+    assert seen == ["cli-sid"]
 
 
 def test_the_emitted_invoker_module_exists_and_has_a_cli():

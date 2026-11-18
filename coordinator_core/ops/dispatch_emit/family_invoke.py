@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -22,17 +23,39 @@ from coordinator_core.ops.dispatch_emit import family_invoke_record as rec_mod
 from coordinator_core.ops.dispatch_emit import stage_family
 from coordinator_core.session.claimed_write import replace_bytes, replace_text
 
-__all__ = ("invoke", "main")
+__all__ = ("invoke", "main", "resolve_session_id")
 
 _BACKENDS = ("codex", "grok", "agy")
 _UNCHANGED = rec_mod.UNCHANGED_CAUSE
 _WIN32_CODEX_WRITE = f"{stage_family.WIN32_CODEX_WRITE_REASON}; route this write stage to another family"
 _TIMEOUT_S = 3600
+_NO_SESSION = (
+    "no parent session id: pass --session-id, set COORDINATOR_SESSION_ID, or launch from a run whose "
+    "run-stage.json records its session_id"
+)
 _ARTIFACT_FILES = ("stdout.jsonl", "stderr.txt", "process.json", "last.txt")
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _launcher_session(root: Path, run_id: str) -> Optional[str]:
+    """The `session_id` the run's own `run-stage.json` records as its launcher; None when absent or unreadable."""
+    try:
+        data = json.loads((Path(root) / "state" / "warp" / run_id / "run-stage.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    sid = data.get("session_id") if isinstance(data, dict) else None
+    return sid.strip() if isinstance(sid, str) and sid.strip() else None
+
+
+def resolve_session_id(root: Path, run_id: str, explicit: Optional[str] = None) -> Optional[str]:
+    """Parent session id: `--session-id`, else `COORDINATOR_SESSION_ID`, else the run's recorded launcher."""
+    for cand in (explicit, os.environ.get("COORDINATOR_SESSION_ID")):
+        if isinstance(cand, str) and cand.strip():
+            return cand.strip()
+    return _launcher_session(root, run_id)
 
 
 def _process_exit(artifact_dir: Path) -> Optional[int]:
@@ -43,13 +66,18 @@ def _process_exit(artifact_dir: Path) -> Optional[int]:
     return code if isinstance(code, int) else None
 
 
-def _agent_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: Path) -> dict:
+def _agent_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None) -> dict:
     """agy/grok: `workflow.run_agent`; the CLI's own exit code comes from its process receipt."""
     from coordinator_core.codex_runner import workflow
 
     error: Optional[str] = None
     try:
-        workflow.run_agent(prompt, {"label": "family-stage"}, repo_root=repo_root, artifact_dir=artifact_dir, backend=backend)
+        if not parent_session_id:
+            raise workflow.AgentFailed(_NO_SESSION)
+        workflow.run_agent(
+            prompt, {"label": "family-stage"}, repo_root=repo_root, artifact_dir=artifact_dir, backend=backend,
+            parent_session_id=parent_session_id,
+        )
     except Exception as exc:  # noqa: BLE001 -- AgentFailed and spawn errors alike become the recorded error
         error = f"{type(exc).__name__}: {exc}"[:600]
     code = _process_exit(artifact_dir)
@@ -62,7 +90,7 @@ def _agent_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: P
     return {"argv": argv, "exit_code": code, "error": error}
 
 
-def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path) -> dict:
+def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None) -> dict:
     """codex: `exec` under `--sandbox` with writable roots exactly the worktree and its scratch temp dir."""
     from coordinator_core.codex_runner import workflow
     from coordinator_core.codex_runner.codex_spawn_env import WRITABLE_TEMP_RELPATH, shape_codex_child
@@ -71,6 +99,8 @@ def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path) -> dict:
     from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
     from coordinator_core.warm import sandboxed_spawn
 
+    if not parent_session_id:
+        raise workflow.AgentFailed(_NO_SESSION)
     if sandboxed_spawn.caller_is_sandboxed():
         raise workflow.AgentFailed("codex child would spawn nested in the codex sandbox; fire through the warm engine")
     root = Path(repo_root).absolute()
@@ -89,7 +119,7 @@ def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path) -> dict:
         try:
             proc = workflow._run_admitted(
                 argv, with_worker_preamble("codex", prompt), env=env, repo_root=root, artifact_dir=artifact_dir,
-                backend="codex", options={"label": "family-stage"}, parent_session_id=None, timeout_s=_TIMEOUT_S,
+                backend="codex", options={"label": "family-stage"}, parent_session_id=parent_session_id, timeout_s=_TIMEOUT_S,
                 on_spawn=None, stdout=out, stderr=err,
             )
         finally:
@@ -99,10 +129,10 @@ def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path) -> dict:
     return {"argv": argv, "exit_code": proc.returncode, "error": None if proc.returncode == 0 else f"codex exited {proc.returncode}"}
 
 
-def _default_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: Path) -> dict:
+def _default_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None) -> dict:
     if backend == "codex":
-        return _codex_runner(prompt, repo_root=repo_root, artifact_dir=artifact_dir)
-    return _agent_runner(prompt, backend=backend, repo_root=repo_root, artifact_dir=artifact_dir)
+        return _codex_runner(prompt, repo_root=repo_root, artifact_dir=artifact_dir, parent_session_id=parent_session_id)
+    return _agent_runner(prompt, backend=backend, repo_root=repo_root, artifact_dir=artifact_dir, parent_session_id=parent_session_id)
 
 
 def _vendor_model(artifact_dir: Path, backend: str) -> Optional[str]:
@@ -126,7 +156,7 @@ def _capture(src: Path, dst: Path) -> None:
 
 def invoke(
     root: Path, run_id: str, row: str, family: str, stage: str, prompt_path: str,
-    writes: Sequence[str] = (), runner: Optional[Callable[..., Any]] = None,
+    writes: Sequence[str] = (), runner: Optional[Callable[..., Any]] = None, session_id: Optional[str] = None,
 ) -> dict:
     """Run the vendor CLI for one family stage; return the family result dict.
 
@@ -134,7 +164,8 @@ def invoke(
     path's post fingerprint differs from its pre (both taken here, never reported by the runner). The diff is
     attributed by time window, not by writer: a concurrent edit to a declared path while the CLI runs
     (timeout up to 3600s) is credited as CLI-authored. `runner`
-    replaces the CLI spawn: called as `runner(prompt, backend=, repo_root=, artifact_dir=)`, it returns None
+    replaces the CLI spawn: called as `runner(prompt, backend=, repo_root=, artifact_dir=, parent_session_id=)`
+    (`resolve_session_id`: `session_id`, else env, else the run's recorded launcher), it returns None
     or a dict with `argv`, `exit_code` and `error`. The invocation record is written even when the spawn
     raises; a spawn failure is a FAILED result, never an exception.
     """
@@ -159,7 +190,10 @@ def invoke(
         if family == "codex" and stage == "write" and sys.platform == "win32":
             raise RuntimeError(_WIN32_CODEX_WRITE)
         prompt = (root / prompt_path).read_text(encoding="utf-8")
-        ran = (runner or _default_runner)(prompt, backend=family, repo_root=root, artifact_dir=artifact_dir)
+        ran = (runner or _default_runner)(
+            prompt, backend=family, repo_root=root, artifact_dir=artifact_dir,
+            parent_session_id=resolve_session_id(root, run_id, session_id),
+        )
         info = ran if isinstance(ran, dict) else {}
         argv = [str(a) for a in info.get("argv") or []]
         error = info.get("error") or None
@@ -203,9 +237,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--family", required=True)
     ap.add_argument("--stage", required=True)
     ap.add_argument("--prompt", required=True)
+    ap.add_argument(stage_family.SESSION_ID_FLAG, dest="session_id", default=None)
     ap.add_argument("--writes", nargs="*", default=[])
     ns = ap.parse_args(argv)
-    result = invoke(Path(ns.root), ns.run_id, ns.row, ns.family, ns.stage, ns.prompt, ns.writes)
+    result = invoke(Path(ns.root), ns.run_id, ns.row, ns.family, ns.stage, ns.prompt, ns.writes, session_id=ns.session_id)
     print(json.dumps(result))
     return 0 if result[stage_family.FAMILY_AUTHORED_KEY] else 1
 

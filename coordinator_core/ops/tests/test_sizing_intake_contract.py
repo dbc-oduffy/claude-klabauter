@@ -165,3 +165,13 @@ def test_is_path_shaped() -> None:
     assert not c.is_path_shaped("process_util.py:266")
     assert not c.is_path_shaped("https://example.com/a.md")
     assert c.is_path_shaped("C:\\repo\\a.md")
+
+
+def test_em_context_that_opens_with_the_marker_still_arrives():
+    """An em_context the EM pre-marked digests to the block with_em_context writes (refused 3x on 11-18)."""
+    from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER, em_context_digest, with_em_context
+
+    raw = f"{EM_CONTEXT_MARKER} root cause read this session."
+    brief = with_em_context("the ask", raw)
+    assert brief.count(EM_CONTEXT_MARKER) == 1
+    assert em_context_digest(brief.rsplit(EM_CONTEXT_MARKER, 1)[1]) == em_context_digest(raw)
