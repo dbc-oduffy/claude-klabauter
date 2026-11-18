@@ -97,6 +97,7 @@ ROW_SURFACE = "internal"
 ORIGIN_PLAN_ROW = "plan-row"
 NOT_A_ROW_REASON = "names no requirement row"
 NOTE_NOT_MET_REASON = "revise note not met"
+UNJUDGED_REASON = "unjudged (arrived after the check, or skipped)"
 
 _PARAMS = (
     Field("run_id", "nonempty_str", required=True),
@@ -2333,7 +2334,8 @@ def judge(
 
     `note_ids` are the run's live revise-note ids (`note_ids(run_dir)`): a verdict item under one is
     not a register row and is not `NOT_A_ROW_REASON`; it passes only as `met`, else fails
-    `NOTE_NOT_MET_REASON`; an `N<k>` id when the run stores no note fails `NOT_A_ROW_REASON`.
+    `NOTE_NOT_MET_REASON`; a live note id the verdict neither judges nor names as a `superseded_by`
+    fails `UNJUDGED_REASON`; an `N<k>` id when the run stores no note fails `NOT_A_ROW_REASON`.
     A `superseded` item may name a live note id as its `superseded_by`.
     Any other unregistered id is ignored and listed in the result's `advisory`
     (`[{id, reason}]`, present only when non-empty): it never fails the verdict."""
@@ -2376,7 +2378,7 @@ def judge(
         if row is None and criterion is not None and item.id in credited:
             row = {**criterion, "id": item.id}
         if row is None:
-            failures.append({"id": item.id, "reason": "unjudged (arrived after the check, or skipped)"})
+            failures.append({"id": item.id, "reason": UNJUDGED_REASON})
             continue
         status = row.get("status")
         design = _is_design(item.anchor)
@@ -2461,6 +2463,13 @@ def judge(
     failures.extend(
         {"id": rid, "reason": NOTE_NOT_MET_REASON}
         for rid in sorted(own_notes & set(by_id)) if by_id[rid].get("status") != "met"
+    )
+    superseding = {
+        r.get("superseded_by") for r in by_id.values() if r.get("status") == "superseded"
+    }
+    failures.extend(
+        {"id": rid, "reason": UNJUDGED_REASON}
+        for rid in sorted(own_notes - set(by_id) - superseding)
     )
     if not note_ids:
         fabricated = [rid for rid in unknown if re.fullmatch(r"N\d+", rid)]

@@ -59,14 +59,17 @@ def test_prefix_outside_scratch_is_denied(repo) -> None:
     assert _run("git checkout-index -a --prefix=", repo) is not None
 
 
-def test_rm_is_allowed_only_for_the_export_the_same_command_made(repo) -> None:
+def test_rm_is_allowed_only_below_the_repo_scratch_dir(repo) -> None:
+    """Any rm strictly below `<repo>/scratch/` is allowed (a6f6639f8a), the export's own cleanup
+    included; `scratch` itself and every path outside it stay denied."""
     export = "git checkout-index -a --prefix=scratch/land-1/idx/"
     assert _run(f"{export}; rm -rf scratch/land-1/idx", repo) is None
-    assert _run("rm -rf scratch/land-1", repo) is not None
-    assert _run(f"{export}; rm -rf scratch/other", repo) is not None
+    assert _run("rm -rf scratch/land-1", repo) is None
+    assert _run(f"{export}; rm -rf scratch/other", repo) is None
+    assert _run(f"{export}; rm -rf scratch/land-1/*", repo) is None
     assert _run(f"{export}; rm -rf scratch", repo) is not None
     assert _run(f"{export}; rm -rf src", repo) is not None
-    assert _run(f"{export}; rm -rf scratch/land-1/*", repo) is not None
+    assert _run(f"{export}; rm -rf scratch/../src", repo) is not None
 
 
 @pytest.mark.parametrize(

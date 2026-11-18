@@ -80,6 +80,73 @@ def _reds(lines: list[str]) -> dict[str, str]:
     return reds
 
 
+_SECTION = re.compile(r"^_{3,} (.+?) _{3,}$")
+_PLAIN_ERR = re.compile(r"^\S+:\d+: \w")
+
+
+def _file_part(node: str) -> str:
+    """The forward-slash path before `::` (or pytest's ` > ` chain) of a node id."""
+    return re.split(r"::| > ", node.replace("\\", "/"), maxsplit=1)[0].strip()
+
+
+def _is_non_test(node: str) -> bool:
+    """True when `node` names a `.py` file that is not a test module (`cov._is_test_path` false): pytest collects
+    its production `test_*` helpers as fixture-less tests. Options and directory targets are never non-tests."""
+    if node.startswith("-"):
+        return False
+    path = _file_part(node)
+    return path.endswith(".py") and not cov._is_test_path(path)
+
+
+def _split_not_a_test(nodes: Sequence[str], root: Optional[Path] = None) -> tuple[list[str], list[str]]:
+    """(tests, not_a_test): `not_a_test` is deduped in first-seen order. With `root`, a non-test file that is
+    absent under it stays a target (reported as missing, not as a non-test)."""
+    tests: list[str] = []
+    non: list[str] = []
+    for n in nodes:
+        if _is_non_test(n) and (root is None or (root / _file_part(n)).exists()):
+            if n not in non:
+                non.append(n)
+        else:
+            tests.append(n)
+    return tests, non
+
+
+def _section_line(lines: Sequence[str], node: str) -> str:
+    """The first `E   ` line (else the first `file:line: Error` line) of `node`'s traceback section, or ""."""
+    leaf = node.split("::")[-1]
+    path = _file_part(node)
+    body: list[str] = []
+    inside = False
+    for raw in lines:
+        hit = _SECTION.match(raw.strip())
+        if hit:
+            title = hit.group(1)
+            inside = (title == leaf or title.endswith("." + leaf)
+                      or (title.startswith("ERROR collecting") and path in title.replace("\\", "/")))
+            continue
+        if raw.startswith("====") or raw.startswith("----"):
+            inside = False
+        elif inside:
+            body.append(raw)
+    for raw in body:
+        if raw.startswith("E ") and raw[1:].strip():
+            return raw[1:].strip()
+    return next((r.strip() for r in body if _PLAIN_ERR.match(r.strip())), "")
+
+
+def _detail(text: str, ids: Sequence[str]) -> dict[str, str]:
+    """Red id -> non-empty message: the summary line's text, else the id's traceback assertion line, else a
+    statement that pytest printed none. Summary keys are matched after stripping, as `failing_ids` strips ids."""
+    lines = text.splitlines()
+    reds = {k.strip(): v for k, v in _reds(lines).items()}
+    out: dict[str, str] = {}
+    for i in ids:
+        msg = reds.get(i.strip(), "").strip() or _section_line(lines, i)
+        out[i] = msg or "FAILED; pytest printed no assertion line"
+    return out
+
+
 _COUNT = re.compile(r"(\d+) (passed|failed)\b")
 _SUMMARY_TAIL = re.compile(r"\bin \d+(?:\.\d+)?s\b")
 
@@ -191,6 +258,7 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
         dest = cov._prepare_guarded(root, mroot, post, cov._no_leg)
         rels = [t.replace("\\", "/") for t in touched]
         own = [t for t in rels if cov._is_test_path(t) and (dest / t).is_file()]
+        targets, not_a_test = _split_not_a_test(targets, dest)
         present, absent = _partition(targets, dest)
         seeds = tuple(dict.fromkeys([*present, *own]))
         picked, note = cov._with_importers(dest, seeds, rels)
@@ -200,7 +268,8 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
         except cov.ExportError:
             base_rev = None
         picked = cov.narrow_touched_tests(root, dest, base_rev, post, picked, rels)
-        out: dict = {"importer_targets": importers, "note": note, "new_red": [], "targets_run": list(picked)}
+        out: dict = {"importer_targets": importers, "note": note, "new_red": [], "targets_run": list(picked),
+                     "not_a_test": not_a_test}
         if absent:
             out["missing_targets"] = absent
         if not picked:
@@ -219,8 +288,9 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
             text = ran.stdout + ran.stderr
             if overrun:
                 out["importer_overrun"] = True
-            ids = list(cov.failing_ids(text))
-            detail = _reds(text.splitlines())
+            ids, red_non = _split_not_a_test(cov.failing_ids(text))
+            not_a_test.extend(n for n in red_non if n not in not_a_test)
+            detail = _detail(text, ids)
             at_base: frozenset = frozenset()
             if ids and base_sha:
                 base = cov._commit_sha(root, base_sha)
@@ -231,7 +301,7 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
                 shutil.rmtree(run_holder, ignore_errors=True)
     new_red = [i for i in ids if i not in at_base]
     out.update(failing=ids, pre_existing=[i for i in ids if i in at_base], new_red=new_red,
-               failing_detail=[{"node_id": i, "message": detail.get(i, "")} for i in ids])
+               failing_detail=[{"node_id": i, "message": detail[i]} for i in ids], not_a_test=not_a_test)
     if ran.returncode not in (0, 1) and not ids and not cov.hygiene_only_exit(ran.returncode, text):
         out["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {ran.returncode} with no failing id"}]
         out["status_after"] = "fail"
@@ -252,7 +322,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         return budget_s - (time.monotonic() - started)
 
     result: dict = {"status_after": "fail", "failing": [], "failing_detail": [], "pre_existing": [],
-                    "reverted": [], "passed_alone": [], "passed_at_base": [], "diff_named": []}
+                    "reverted": [], "passed_alone": [], "passed_at_base": [], "diff_named": [],
+                    "not_a_test": []}
     try:
         if touched:
             try:
@@ -262,6 +333,14 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
                 result["failing_detail"] = [{"node_id": "test_leg_run", "message": result["summary"]}]
                 result["new_red"] = []
                 _tally(result, 2, ())
+            result["over_budget"] = False
+            result["elapsed_s"] = round(time.monotonic() - started, 3)
+            result["budget_s"] = budget_s
+            return result
+        targets, result["not_a_test"] = _split_not_a_test(targets, Path(cwd))
+        if not targets:
+            result["status_after"] = "pass"
+            _tally(result, 5, ())
             result["over_budget"] = False
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
@@ -276,10 +355,14 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             result["budget_s"] = budget_s
             return result
         rc, lines = _pytest(present, cwd, left())
-        reds = _reds(lines)
+        all_reds = _reds(lines)
+        kept, red_non = _split_not_a_test(list(all_reds))
+        result["not_a_test"].extend(n for n in red_non if n not in result["not_a_test"])
+        reds = {n: all_reds[n] for n in kept}
+        shown = _detail("\n".join(lines), kept)
         result["failing"] = list(reds)
-        result["failing_detail"] = [{"node_id": n, "message": m} for n, m in reds.items()]
-        if rc == 0:
+        result["failing_detail"] = [{"node_id": n, "message": all_reds[n].strip() or shown[n]} for n in reds]
+        if rc == 0 or (red_non and not reds and rc == 1):
             result["status_after"] = "pass"
         elif not reds:
             result["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {rc} with no failing id"}]

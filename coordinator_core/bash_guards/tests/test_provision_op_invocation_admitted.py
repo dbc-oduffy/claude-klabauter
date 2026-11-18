@@ -13,6 +13,7 @@ from coordinator_core.bash_guards import bump_foreign_repo_write as foreign
 from coordinator_core.bash_guards import bump_outside_repo_write as outside
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     _clean_bump_env,  # noqa: F401 -- autoused fixture
+    _repo_template,  # noqa: F401 -- autoused fixture; `repos` copies its template
     _reset_git_root_cache,  # noqa: F401 -- autoused fixture
     _set_anchor,
     repos,  # noqa: F401 -- fixture

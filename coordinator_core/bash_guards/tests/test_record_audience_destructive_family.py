@@ -29,7 +29,6 @@ _DESTRUCTIVE_DENIES = [
     "rm -rf some_dir",
     "chmod -R 755 some_dir/",
     "git stash drop",
-    "git stash pop",
     "git stash",
     "git mv a.md b.md",
 ]
@@ -66,6 +65,13 @@ def test_git_mv_with_unparseable_operands_keeps_an_adaptable_offer() -> None:
 
 def test_a_command_the_guard_allows_returns_none() -> None:
     assert destructive.check(_payload("rm state/scratch/one-file.txt")) is None
+
+
+def test_git_stash_pop_is_allowed_so_it_has_no_deny_record() -> None:
+    """Pop restores a stash and has been allowed since 2026-11-13; apply and drop still deny."""
+    assert destructive.check(_payload("git stash pop")) is None
+    assert destructive.check(_payload("git stash apply")) is not None
+    assert destructive.check(_payload("git stash drop")) is not None
 
 
 def test_opaque_indirection_is_an_advisory_record_with_a_route() -> None:
