@@ -805,6 +805,7 @@ _NOT_HEAVY = {
     "coordinator_core/ops/dispatch_emit/tranche_chain.py": "detached launcher whose child only emits the next tranche and fires its workflow runner, admitted by the fire op",
     "coordinator_core/ops/session/safe_commit_offer.py": "light detached offer",
     "coordinator_core/ops/workflow_fire/fire.py": "workflow runner launch, admitted by the fire op",
+    "coordinator/bin/bookkeeping-plan-ledger.py": "one attached git cat-file --batch pipe, not a memory-heavy job",
     "coordinator/bin/lib/claude_author_control/relay_posix.py": "relay shim",
     "coordinator/bin/lib/session_detach.py": "detach helper, spawns nothing itself",
     "coordinator/bin/lib/unimatrix_box_mux.py": "ssh relay channel and broker, network-bound, not a memory-heavy job",

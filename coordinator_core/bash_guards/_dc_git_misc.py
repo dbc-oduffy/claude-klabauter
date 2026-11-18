@@ -1305,7 +1305,8 @@ def check_destructive_git_orphan(
                         if not _branch_names or br not in _branch_names:
                             continue
                         rc3, out3 = _memo_run_git(
-                            ["branch", "-a", "--contains", "refs/heads/%s" % br, "--format=%(refname)"],
+                            ["for-each-ref", "--contains", "refs/heads/%s" % br,
+                             "--format=%(refname)", "refs/heads", "refs/remotes", "refs/preserve"],
                             git_cwd,
                         )
                         others = [
@@ -1322,8 +1323,9 @@ def check_destructive_git_orphan(
                                 "deny", "destructive-git-orphan",
                                 "BLOCKED: force-deleting branch '%s' would orphan "
                                 "its commits — they live on NO other ref (no local "
-                                "branch, no remote). '%s' is not contained in any "
-                                "other branch or remote. The lowercase, non-forced "
+                                "branch, no remote, no preserve pin). '%s' is not "
+                                "contained in any other branch, remote or "
+                                "refs/preserve pin. The lowercase, non-forced "
                                 "'git branch -d' refuses exactly this case; the force "
                                 "form ('-D', or '-d --force') overrides that safety."
                                 % (br, br),
@@ -1333,9 +1335,9 @@ def check_destructive_git_orphan(
                                 em_text=(
                                     "BLOCKED: force-deleting branch '%s' would orphan "
                                     "its commits — they live on NO other ref (no local "
-                                    "branch, no remote).\n\n"
-                                    "'%s' is not contained in any other branch or "
-                                    "remote. The lowercase, non-forced 'git branch -d' "
+                                    "branch, no remote, no preserve pin).\n\n"
+                                    "'%s' is not contained in any other branch, "
+                                    "remote or refs/preserve pin. The lowercase, non-forced 'git branch -d' "
                                     "refuses exactly this case; the force form ('-D', or "
                                     "'-d --force') overrides that safety.\n\n"
                                     "To preserve the work first:\n"

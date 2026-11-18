@@ -110,14 +110,25 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from coordinator_core import machine_path_leak
-from coordinator_core.git.divergence import (
-    DivergenceCheckFailed,
-    diverging_paths as _diverging_paths,
-)
-from coordinator_core.git.commit_trailers import (
-    _paragraph_is_trailer_shaped as _ct_paragraph_is_trailer_shaped,
-    _split_paragraphs as _ct_split_paragraphs,
-)
+
+# `coordinator_core.git.divergence` (and the index/state/content-hash modules under it) and
+# `coordinator_core.git.commit_trailers` are imported at their call sites: this module is the only
+# importer of them in the guard graph, so a module-level import made every cold import of the
+# graph read them from disk.
+
+
+def __getattr__(name: str) -> Any:
+    if name == "DivergenceCheckFailed":
+        from coordinator_core.git.divergence import DivergenceCheckFailed
+
+        return DivergenceCheckFailed
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _diverging_paths(paths: List[str], cwd: Optional[str] = None, **kwargs: Any) -> List[str]:
+    from coordinator_core.git.divergence import diverging_paths
+
+    return diverging_paths(paths, cwd, **kwargs)
 
 #: Emitted when the divergence read is INDETERMINATE, never when it is clean.
 #: Register (docs/wiki/guard-messaging.md): one fact, once, plus a terse
@@ -829,6 +840,8 @@ def _diverging_scoped(paths: List[str], cwd: Optional[str]) -> List[str]:
     intersected with a single `git diff --name-only` scoped to those paths (worktree vs index).
     A pathspec that is not a literal file path (glob, directory, magic) names no index entry, as in
     `diverging_paths`. Rows or the prefix unreadable raises `DivergenceCheckFailed`: indeterminate."""
+    from coordinator_core.git.divergence import DivergenceCheckFailed
+
     here = cwd or os.getcwd()
     if not _git_tree_facts.index_over_bound(here):
         return _diverging_paths(paths, cwd, fail_loud=True)
@@ -918,6 +931,8 @@ def check_staged_pathspec_divergence(
     # when it was most needed. Measured at `IndexParseError` 2/200 under 12-way
     # concurrency on one repo, rising with concurrency, on a box specced for
     # 50-70 sessions.
+    from coordinator_core.git.divergence import DivergenceCheckFailed
+
     try:
         diverging = _diverging_scoped(all_paths, cwd)
     except DivergenceCheckFailed:
@@ -1279,12 +1294,14 @@ def check_trailer_demoted_to_body(
     if message is None:
         return None
 
-    paragraphs = _ct_split_paragraphs(message)
+    from coordinator_core.git.commit_trailers import _paragraph_is_trailer_shaped, _split_paragraphs
+
+    paragraphs = _split_paragraphs(message)
     if len(paragraphs) < 3:
         return None
 
     demoted = [
-        p for p in paragraphs[1:-1] if _ct_paragraph_is_trailer_shaped(p)
+        p for p in paragraphs[1:-1] if _paragraph_is_trailer_shaped(p)
     ]
     if not demoted:
         return None

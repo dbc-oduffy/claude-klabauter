@@ -2246,6 +2246,8 @@ def stage(
     except (OSError, ValueError):
         pass
     stamp_run_stage(root, run_id, "staged", steps_planned=len(manifest_rows))
+    if run_sizing_rel:
+        _retire_minted_shells(root, run_id, run_sizing_rel)
     if session_id:
         # Confined reviewers' Edits are admitted only for review-targets.txt
         # paths; the plan route registers them at compose time, the ask route
@@ -2259,6 +2261,45 @@ def stage(
         except LedgerError:
             pass
     return manifest
+
+
+def _retire_minted_shells(root: Path, run_id: str, sizing_rel: str) -> list[str]:
+    """Retire each older `ask-*` run of `sizing_rel` still at stage `minted` as superseded by `run_id`
+    (`halted_run.mark_shell_superseded`): one sizing maps to one live run id, and the minted reaper must not
+    halt a shell whose work continues here. Candidates are the live tokens and live-run index rows only,
+    never a scan of the record root. Returns the retired ids; never raises (the stage already succeeded)."""
+    from datetime import datetime, timezone
+
+    retired: list[str] = []
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_run, live_run_index, live_run_writes, run_token
+
+        stem = PurePosixPath(sizing_rel.replace("\\", "/")).stem
+        candidates = {r.get("run_id"): r.get("sizing_rel") for r in run_token.held_records(root)}
+        rows = live_run_index.read(root, 150.0)
+        for rid in rows if isinstance(rows, dict) else ():
+            candidates.setdefault(rid, None)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for rid, token_sizing in sorted(candidates.items(), key=lambda kv: str(kv[0])):
+            if (
+                not isinstance(rid, str) or not rid.startswith("ask-") or rid == run_id or not safe_id(rid)
+                or halted_run._run_stamp(rid) >= halted_run._run_stamp(run_id)
+            ):
+                continue
+            bound = halted_run.bound_sizing_rel(root, rid) or (token_sizing if isinstance(token_sizing, str) else "")
+            if not bound or PurePosixPath(bound.replace("\\", "/")).stem != stem:
+                continue
+            if not halted_run.mark_shell_superseded(record_dir(root, rid), successor=run_id, sizing_rel=sizing_rel, at=now):
+                continue
+            if run_token._read_rec(root, rid, claimed=True) is None:
+                run_token.discard(root, rid)
+            live_run_writes.index_remove(root, rid)
+            retired.append(rid)
+    except Exception as exc:  # noqa: BLE001
+        import sys
+
+        print(f"advisory: minted shells of {sizing_rel} not retired by {run_id}: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return retired
 
 
 CRITERION_UNREACHABLE_AT_STAGING = "CRITERION-UNREACHABLE-AT-STAGING"

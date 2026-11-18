@@ -181,7 +181,9 @@ def test_prep_resolves_every_python_target_in_one_ls_files_spawn(repo, monkeypat
         {"question": "q", "command": "grep -c x f", "result": "1"},
     ]
     assert prep_gate._census({"census": entries}, repo)["status"] == "PASS"
-    assert len(calls) == 1
+    # The index is read in process (tracked_targets); only an unreadable index falls back to ONE
+    # ls-files for the whole batch, never one per target.
+    assert len(calls) <= 1
     bad = prep_gate._census(
         {"census": [{"question": "q", "command": "python untracked.py", "result": "1"}]}, repo
     )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.ask_contract import RESUMED_RUN_ID_KEY
@@ -432,6 +432,17 @@ def _applied_fix_rows(text: str) -> list:
     return out
 
 
+def _applied_row_paths(text: str) -> list:
+    """The ``file`` of each verified ``applied`` ledger row, whether or not it records its
+    ``before``/``after`` text: the reviewer rewrote that file after judging it."""
+    out = []
+    for row in _ledger_rows(text):
+        f = row.get("file")
+        if row.get("verified") is True and (row.get("status") or "applied") == "applied" and isinstance(f, str) and f:
+            out.append(f.replace("\\", "/"))
+    return out
+
+
 _DISPOSED_STATUSES = frozenset({"suspended", "rejected", "em-rejected", "em_rejected"})
 _VERDICT_RE = re.compile(r"^verdict:\s*['\"]?([A-Za-z_]+)", re.MULTILINE)
 REQUIRES_CHANGES = "REQUIRES_CHANGES"
@@ -526,23 +537,67 @@ def _unverifiable_standing(worktree_root: Path, inline_review: object) -> list:
     return out
 
 
-def _prep_judged_shas(worktree_root: Path, inline_review: object) -> dict:
-    """``judged_sha256`` of the ``review.prep`` sidecar the run's ``inline_review`` names
-    (``prep_sidecar``): the sha of every slice file as the reviewers read it. Empty when unnamed,
-    unreadable, or written before the prep recorded pins."""
+_RUN_KEY_MAX_PIECES = 12  # hyphen-separated prefix pieces tried as a run-key suffix
+_PREP_SIDECAR_TAIL = re.compile(r"^(?P<prefix>.+)-[0-9a-f]{12}-prep\.review-prep\.md$")
+
+
+def _read_prep_pins(worktree_root: Path, rel: str) -> tuple:
+    """``(judged_sha256 map, frontmatter)`` of one prep sidecar; ``({}, {})`` when unreadable."""
     from coordinator_core.frontmatter.primitives import split_frontmatter
     from coordinator_core.ops.review_prep import VERDICT_JUDGED_KEY
 
-    rel = inline_review.get("prep_sidecar") if isinstance(inline_review, dict) else None
-    if not (isinstance(rel, str) and rel):
-        return {}
     try:
         split = split_frontmatter((worktree_root / rel).read_text(encoding="utf-8"))
         fm = _yaml_load(split.fm_text) if split else None
     except Exception:  # noqa: BLE001 -- an unreadable prep sidecar pins nothing
+        return {}, {}
+    if not isinstance(fm, dict):
+        return {}, {}
+    got = fm.get(VERDICT_JUDGED_KEY)
+    pins = {k.replace("\\", "/"): v for k, v in got.items() if isinstance(k, str) and isinstance(v, str) and v} if isinstance(got, dict) else {}
+    return pins, fm
+
+
+def _latest_pass_prep(worktree_root: Path, rel: str) -> Optional[str]:
+    """The run's newest ``review.prep`` sidecar when it is not the one ``rel`` names, else ``None``.
+
+    The run-only pointer (``review_prep._write_pointers``) is rewritten by every pass, so it names
+    the latest prep even once the base-keyed names are ``ambiguous``. The run key is a suffix of the
+    sidecar's own prefix (``manifest-<run>`` on the ask route, ``<plan stem>-<run>`` on the plan route)."""
+    from coordinator_core.ops import review_prep
+
+    parts = PurePosixPath(rel.replace("\\", "/"))
+    tail = _PREP_SIDECAR_TAIL.match(parts.name)
+    if tail is None:
+        return None
+    pieces = tail.group("prefix").split("-")
+    for i in range(min(len(pieces), _RUN_KEY_MAX_PIECES)):
+        pointer = review_prep._read_pointer(worktree_root / parts.parent / review_prep._pointer_name("-".join(pieces[i:]), None))
+        named = pointer.get("sidecar") if pointer else None
+        if isinstance(named, str) and named and PurePosixPath(named).name == named:
+            if named == parts.name or not (worktree_root / parts.parent / named).is_file():
+                return None
+            return (parts.parent / named).as_posix()
+    return None
+
+
+def _prep_judged_shas(worktree_root: Path, inline_review: object) -> dict:
+    """``judged_sha256`` of the ``review.prep`` sidecar the run's ``inline_review`` names
+    (``prep_sidecar``): the sha of every slice file as the reviewers read it. Empty when unnamed,
+    unreadable, or written before the prep recorded pins. A later pass of the same run re-pins the
+    files it reviewed: its pin replaces the named prep's for those paths, so unchanged bytes of a
+    re-review stay pinned to the pass that judged them, and a path only an earlier pass judged keeps
+    its earlier pin."""
+    rel = inline_review.get("prep_sidecar") if isinstance(inline_review, dict) else None
+    if not (isinstance(rel, str) and rel):
         return {}
-    got = fm.get(VERDICT_JUDGED_KEY) if isinstance(fm, dict) else None
-    return {k.replace("\\", "/"): v for k, v in got.items() if isinstance(k, str) and isinstance(v, str) and v} if isinstance(got, dict) else {}
+    pins, _ = _read_prep_pins(worktree_root, rel)
+    latest = _latest_pass_prep(worktree_root, rel)
+    if latest is not None:
+        later, fm = _read_prep_pins(worktree_root, latest)
+        if fm.get("agent_type") == "engine:prep-freeze":
+            pins = {**pins, **later}
+    return pins
 
 
 def verdict_judged_shas(worktree_root: Path, inline_review: object) -> dict:
@@ -567,7 +622,7 @@ def verdict_judged_shas(worktree_root: Path, inline_review: object) -> dict:
         except Exception:  # noqa: BLE001 -- an unreadable or malformed sidecar pins nothing
             continue
         read_any = True
-        fixed.update(_worktree_relative(worktree_root, f) for f, _ in _applied_fix_rows(text))
+        fixed.update(_worktree_relative(worktree_root, f) for f in _applied_row_paths(text))
         own = fm.get(VERDICT_JUDGED_KEY) if isinstance(fm, dict) else None
         for p, sha in (own.items() if isinstance(own, dict) else ()):
             if isinstance(p, str) and isinstance(sha, str) and sha:

@@ -336,6 +336,54 @@ def test_collection_error_reports_collection_failure(repo, tmp_path):
     assert data["zero_run_cause"] == ltt.ZERO_RUN_COLLECTION == "collection-failure"
 
 
+def _engine_import_error(repo: Path) -> None:
+    (repo / "coordinator_core").mkdir()
+    (repo / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "coordinator_core" / "dirty.py").write_text("from coordinator_core.clean import _GONE\n", encoding="utf-8")
+    (repo / "coordinator_core" / "clean.py").write_text("X = 1\n", encoding="utf-8")
+    (repo / "tests" / "test_dirty.py").write_text(
+        "from coordinator_core import dirty\n\ndef test_a():\n    assert True\n", encoding="utf-8")
+
+
+def test_engine_module_import_error_reports_import_error_with_the_dirty_path(repo, tmp_path):
+    _engine_import_error(repo)
+    _code, data = _main(["--", "tests/test_dirty.py"], tmp_path / "o.json")
+    assert data["tests_run"] == 0 and data["status"] == "error"
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_IMPORT_ERROR == "import-error"
+    assert data["import_error"] == {"path": "coordinator_core/dirty.py", "run_id": None}
+    assert "import-error" in ltt.zero_run_cause_note({"zero_run_cause": "import-error"}, "x")
+
+
+def test_import_error_run_id_is_the_newest_record_holding_the_worktree_blob(repo, tmp_path):
+    from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
+
+    _engine_import_error(repo)
+    blob = kept_work.fingerprint(repo, "coordinator_core/dirty.py")
+    for name, run in (("run-old", blob), ("run-other", "0" * 40)):
+        stranded_sibling.write(repo / "state" / "warp" / name, {"coordinator_core/dirty.py": {"base": None, "run": run}})
+    _code, data = _main(["--", "tests/test_dirty.py"], tmp_path / "o.json")
+    assert data["import_error"] == {"path": "coordinator_core/dirty.py", "run_id": "run-old"}
+
+
+def test_import_error_outside_the_engine_stays_collection_failure(repo, tmp_path):
+    (repo / "tests" / "test_broken.py").write_text("import not_a_real_module_xyz\n", encoding="utf-8")
+    _code, data = _main(["--", "tests/test_broken.py"], tmp_path / "o.json")
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_COLLECTION
+    assert "import_error" not in data
+
+
+@pytest.mark.parametrize("lines, path", [
+    (["coordinator_core\\ops\\a.py:3: in <module>", "E   ImportError: cannot import name 'x'"], "coordinator_core/ops/a.py"),
+    (['  File "C:\\r\\coordinator_core\\b.py", line 2, in <module>', "ModuleNotFoundError: No module named 'q'"],
+     "coordinator_core/b.py"),
+    (["coordinator_core/a.py:1: in <module>", "tests/t.py:2: in <module>", "E   ImportError: x"], "coordinator_core/a.py"),
+    (["tests/t.py:2: in <module>", "E   ImportError: x"], None),
+    (["E   ImportError: no frame"], None),
+])
+def test_import_error_path_parse_matches_both_separators_and_picks_the_engine_frame(lines, path):
+    assert tlr._import_error_path(lines) == path
+
+
 def test_empty_selection_reports_empty_selection(repo, tmp_path):
     (repo / "tests" / "empty_dir").mkdir()
     _code, data = _main(["--", "tests/empty_dir"], tmp_path / "o.json")

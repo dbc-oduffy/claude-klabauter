@@ -1514,11 +1514,51 @@ def resolve_op_repo_key_with_file_path_fallback(
             raise exc from None
 
 
+_REALPATH_DEADLINE_SECS = 0.5
+#: Distinct caller-supplied roots are unbounded in principle; at the cap the cache restarts empty.
+_REALPATH_CACHE_MAX = 512
+_REALPATH_CACHE: "dict[str, Path]" = {}
+_REALPATH_CACHE_LOCK = _thread.allocate_lock()
+
+
+def _resolve_root_cached(raw: str) -> Path:
+    """Canonical `Path(raw).resolve()`, resolved once per raw string for the engine's life.
+
+    A miss resolves under `bounded_io.run_bounded`; a realpath the kernel holds past
+    `_REALPATH_DEADLINE_SECS` returns the absolute unresolved Path and is not cached, so the
+    next call retries.
+    """
+    from pathlib import Path
+
+    from coordinator_core.bounded_io import run_bounded
+
+    with _REALPATH_CACHE_LOCK:
+        hit = _REALPATH_CACHE.get(raw)
+    if hit is not None:
+        return hit
+    resolved = run_bounded(
+        f"realpath:{raw}",
+        lambda: Path(raw).resolve(),
+        deadline=_REALPATH_DEADLINE_SECS,
+        default=None,
+    )
+    if resolved is None:
+        return Path(os.path.abspath(raw))
+    with _REALPATH_CACHE_LOCK:
+        if len(_REALPATH_CACHE) >= _REALPATH_CACHE_MAX:
+            _REALPATH_CACHE.clear()
+        _REALPATH_CACHE[raw] = resolved
+    return resolved
+
+
 def resolve_request_repo(msg: dict) -> Optional[Path]:
     """Extract and resolve the _origin_worktree from a JSON-RPC message envelope.
 
     Reads the _ORIGIN_WORKTREE_FIELD top-level envelope field (C1a transport seam) and
     returns the canonical Path (Path.resolve()) if present and non-empty, else None.
+    The canonical Path is cached per raw string; while a realpath is kernel-blocked the
+    return is the absolute unresolved Path (junction, 8.3 or case may differ from the
+    canonical form) until a later call resolves and caches it.
 
     Does NOT validate that the path exists on disk — that is the op handler's job.
     Does NOT enforce that the field is present — enforcement (fail-loud for working-tree
@@ -1550,9 +1590,9 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
                     f"envelope; falling back to {fallback!r} "
                     "(CLAUDE_PROJECT_DIR or process cwd)\n"
                 )
-                return Path(fallback).resolve()
+                return _resolve_root_cached(fallback)
         return None
-    return Path(raw).resolve()
+    return _resolve_root_cached(raw)
 
 
 def resolve_caller_cwd(msg: dict) -> Optional[Path]:

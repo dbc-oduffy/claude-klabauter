@@ -95,6 +95,31 @@ def test_real_verdict_and_unowed_leg_do_not_halt():
     assert _run("null", owed=False) is None
 
 
+_ZERO = "{ status: 'error', sidecar_path: 'a.md', tests_run: 0, zero_run_cause: '%s'%s }"
+_DIRTY = "coordinator_core/ops/reverify_scope.py"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "run_id, named",
+    [("'run-9'", "run run-9"), ("null", "run unowned")],
+)
+def test_import_error_halt_detail_names_the_dirty_path_and_owning_run(run_id, named):
+    extra = f", import_error: {{ path: '{_DIRTY}', run_id: {run_id} }}"
+    halted = _run(_ZERO % ("import-error", extra), owed=True)
+    assert halted["halted"] == "test_verdict_empty"
+    assert f"ran zero tests (import-error): {_DIRTY} ({named})" in halted["detail"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_collection_failure_halt_detail_names_no_path():
+    halted = _run(_ZERO % ("collection-failure", ""), owed=True)
+    assert "ran zero tests (collection-failure);" in halted["detail"]
+    assert "(run " not in halted["detail"]
+
+
 _REVERIFY_PROGRAM = """
 const _TEST_GUARD = true;
 let _halted = null, _runId = 'r', _testResult = null;

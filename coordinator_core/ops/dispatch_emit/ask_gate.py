@@ -683,6 +683,47 @@ def _xs_baton_is_own(repo_root: Path, sizing_rel: str, baton: str) -> bool:
         return False
 
 
+HALT_NOTHING_EXECUTABLE = "nothing-executable"
+
+
+def _nothing_executable_halt(repo_root: Path, plan_rel: str, incomplete: Sequence[str]) -> Optional[GateVerdict]:
+    """A `nothing-executable` halt when none of the bound plan's `incomplete` rows is dispatchable, else None.
+
+    One in-process `read_spine`, the reader `ask_stage` uses, so the gate and the stage-time
+    zero-dispatchable refusal agree. An unreadable plan, or a spine whose every exclusion is a memo
+    close, defers to the stage."""
+    from coordinator_core.ops._path_guard import contained_path
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import own_gate_owners, provisioned_sibling_roots
+    from coordinator_core.ops.dispatch_emit.memo_rows import memo_close_only
+    from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo, read_spine
+
+    root = Path(repo_root)
+    plan = contained_path(root / plan_rel, [root])
+    if plan is None or not plan.is_file() or not incomplete:
+        return None
+    try:
+        text = plan.read_text(encoding="utf-8")
+        raw_by_id = {r["id"]: r for r in load_rows_memo(text).rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
+        exclusions: list = []
+        rows = read_spine(
+            plan, exclusions=exclusions, plan_text=text,
+            cleared_gate_owners=own_gate_owners(raw_by_id.values(), root) | frozenset(provisioned_sibling_roots(raw_by_id.values(), root)),
+        )
+        incomplete_ids = frozenset(incomplete)
+        if any(r.id in incomplete_ids for r in rows) or memo_close_only(exclusions, raw_by_id):
+            return None
+    except Exception:  # noqa: BLE001 -- an unreadable spine is the stage's refusal to name
+        return None
+    dropped = [e for e in exclusions if e.get("id") in incomplete_ids]
+    named = "; ".join(f"{e['id']} ({e.get('reason')}: {e.get('detail') or ''})" for e in dropped)
+    return _halt(
+        HALT_NOTHING_EXECUTABLE,
+        f"the spine of {plan_rel} derives zero dispatchable rows" + (f": {named}" if named else ""),
+        plan=plan_rel,
+        rows=[{"id": e["id"], "reason": e.get("reason"), "detail": e.get("detail") or ""} for e in dropped],
+    )
+
+
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None, run_id: Optional[str] = None, kept_sink: Optional[list] = None,
@@ -835,6 +876,10 @@ def _arm_verdict(
                 refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
         return _refuse("; ".join(refusals))
+    if resume is not None and resume.ledger is None:
+        idle = _nothing_executable_halt(repo_root, resume.plan_rel, resume.incomplete)
+        if idle is not None:
+            return idle
     try:
         resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id, sizing_rel=sizing_rel) if resume else None
     except SizingFireRefused as exc:
@@ -1638,6 +1683,8 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
                     out["restage_rows"] = stale
             return out
         try:
+            if ledger_resume:
+                only_rows = _spine_resume_rows(root, plan_rel, only_rows, out["resume_ledger"])
             if ledger_resume and verdict.arm in (ARM_XS, ARM_S):
                 derived = _derive_resume_rows(root, plan_rel, out["resume_ledger"])
                 out["resume_ledger"][RESUME_LEDGER_DERIVED_FIELD] = derived
@@ -1820,6 +1867,47 @@ def _staged_rows_writes(root: Path, plan_rel: str, row_ids: Sequence[str]) -> li
             if isinstance(w, str) and w not in out:
                 out.append(w)
     return out
+
+
+def _spine_resume_rows(root: Path, plan_rel: str, entries: Sequence[str], resume_out: dict) -> list[str]:
+    """`entries` with every ledger item named by one replaced by the open spine rows serving it.
+
+    An entry is a ledger item when it, or its text before the first `:`, is one of the resume's
+    blocking, rulable or ledger item ids. A spine id passes through, and so does an entry no
+    ledger item names, so `ask_stage` still refuses a genuinely unknown id. Of the open rows serving
+    an item, those the ledger lists unlanded win, so a landed row is not re-staged; it stays in
+    `blocking` for `_derive_resume_rows` and the replan leg. An item no open spine row serves is dropped, so
+    entries that all drop yield an empty list.
+    """
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit import ledger_remaining_paths as lrp
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    items = {
+        *(resume_out.get("blocking") or ()),
+        *(resume_out.get("rulable_ids") or ()),
+        *(resume_out.get("ledger_item_ids") or ()),
+    }
+    unlanded = set(resume_out.get(RESUME_LEDGER_UNLANDED_FIELD) or ())
+    plan = root / plan_rel
+    try:
+        loaded = load_rows(plan.read_text(encoding="utf-8"))
+        if loaded.status is not LocateStatus.LOCATED:
+            raise lrp.PlanRowsUnreadable(f"plan {plan_rel} spine is {loaded.status.name}")
+        spine = {str(r.get("id")) for r in loaded.rows if isinstance(r, dict)}
+        out: list[str] = []
+        for entry in entries:
+            item = next((c for c in (entry, entry.split(":", 1)[0].strip()) if c in items), None)
+            if entry in spine or item is None:
+                out.append(entry)
+                continue
+            owing = [
+                str(r.get("id")) for r in lrp.serving_rows(plan, [item]) if r.get("disposition", "open") == "open"
+            ]
+            out.extend([r for r in owing if r in unlanded] or owing)
+    except (OSError, ValueError, lrp.PlanRowsUnreadable) as exc:
+        raise AskStageError(str(exc)) from exc
+    return list(dict.fromkeys(out))
 
 
 def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str]:

@@ -167,6 +167,27 @@ def _detail(text: str, ids: Sequence[str]) -> dict[str, str]:
 
 _COUNT = re.compile(r"(\d+) (passed|failed)\b")
 _SUMMARY_TAIL = re.compile(r"\bin \d+(?:\.\d+)?s\b")
+_FRAME = re.compile(r"""^\s*(?:File ")?(\S+?\.py)(?:",\s*line |:)(\d+)\b""")
+_IMPORT_FAIL = re.compile(r"^(?:E\s+)?(?:ImportError|ModuleNotFoundError)\b")
+_ENGINE_PATH = re.compile(r"(?:^|/)(coordinator_core/.+\.py)$")
+IMPORT_ERROR_KEY = "import_error"
+
+
+def _import_error_path(lines: Sequence[str]) -> Optional[str]:
+    """Repo-relative POSIX path of the innermost `coordinator_core` `.py` traceback frame (the importing
+    file, not the module the message names) above the first ImportError / ModuleNotFoundError line; None
+    when no engine frame precedes one."""
+    frame: Optional[str] = None
+    for raw in lines:
+        hit = _FRAME.match(raw)
+        if hit:
+            found = _ENGINE_PATH.search(hit.group(1).replace("\\", "/"))
+            if found:
+                frame = found.group(1)
+            continue
+        if _IMPORT_FAIL.match(raw.strip()) and frame:
+            return frame
+    return None
 
 
 def _partition(targets: Sequence[str], root: Path) -> tuple[list[str], list[str]]:
@@ -209,6 +230,7 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], *, missing_onl
     else:
         result["status"] = "fail" if counts["failed"] else "error"
     result.pop(ltt.ZERO_RUN_CAUSE_KEY, None)
+    result.pop(IMPORT_ERROR_KEY, None)
     if run_n:
         return
     if missing_only:
@@ -220,7 +242,12 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], *, missing_onl
     elif rc == 0 or rc == 5:
         cause = ltt.ZERO_RUN_EMPTY
     else:
-        cause = ltt.ZERO_RUN_COLLECTION
+        dirty = _import_error_path(lines)
+        if dirty:
+            cause = ltt.ZERO_RUN_IMPORT_ERROR
+            result[IMPORT_ERROR_KEY] = {"path": dirty, "run_id": None}
+        else:
+            cause = ltt.ZERO_RUN_COLLECTION
     result[ltt.ZERO_RUN_CAUSE_KEY] = cause
     result["status"] = "error"
 
@@ -401,6 +428,26 @@ def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], he
         reverify_base_measure.write_export(exported, Path(base_export_out))
 
 
+def _own_import_error(result: dict, root: Path) -> None:
+    """Fill `import_error.run_id` with the newest run record under `state/warp` whose touched-blobs entry
+    for the dirty path holds the worktree's current blob; None (unowned) when no record claims it."""
+    err = result.get(IMPORT_ERROR_KEY)
+    if not isinstance(err, dict) or not err.get("path"):
+        return
+    from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
+
+    try:
+        blob = kept_work.fingerprint(root, err["path"])
+        if blob is None:
+            return
+        owners = [(mtime, run_id) for run_id, _dir, mtime, rec in stranded_sibling.read_records(root / "state" / "warp")
+                  if (rec.get(err["path"]) or {}).get("run") == blob]
+    except Exception:  # noqa: BLE001 -- ownership is advisory; the leg's verdict never fails on it
+        return
+    if owners:
+        err["run_id"] = max(owners)[1]
+
+
 def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         base_export_out: Optional[str], budget_s: float, cwd: str, touched: Sequence[str] = ()) -> dict:
     """The `test`-shaped verdict for `targets`; `over_budget` true when the deadline expired. With `touched`
@@ -426,6 +473,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
                 result["new_red"] = []
                 _tally(result, 2, ())
             result["over_budget"] = False
+            _own_import_error(result, Path(cwd))
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
             return result
@@ -503,6 +551,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         if touched:
             result.setdefault("new_red", [])
         _tally(result, 2, ())
+    _own_import_error(result, Path(cwd))
     result["elapsed_s"] = round(time.monotonic() - started, 3)
     result["budget_s"] = budget_s
     return result

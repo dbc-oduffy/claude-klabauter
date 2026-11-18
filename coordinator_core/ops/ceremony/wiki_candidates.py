@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from coordinator_core import plan_completion_ledger as _ledger
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
-from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.ops.ceremony import update_docs_worklist as _worklist
 
 SCHEMA = "wiki-update-candidates"
@@ -290,7 +290,8 @@ def _ceremony_wiki_candidates(params: dict, repo_root: Optional[Path] = None) ->
     """JSON-RPC "ceremony.wiki_candidates" handler.
 
     Params: `since` (ISO date/datetime, or a ledger `completing_sha`; overrides the cached
-    `ack_head`), `repo_root` (repo to query; default the invoking repo's main worktree). Returns
+    `ack_head`), `repo_root` (any path inside the repo to query; default the invoking repo). Both sources
+    resolve to the same main worktree root, so --repo, cwd and `repo_root` agree. Returns
     {schema, schema_version, window{since, head, source}, pages[{page, plans[{path, commit_sha,
     tshirt, preview}]}], preview_chars_total, truncated{pages, plans}, empty_reason}. Read-only: writes no file
     and never advances the worklist `ack_head`. Caps: PREVIEW_CHARS, PAGES_CAP, PLANS_CAP.
@@ -298,8 +299,8 @@ def _ceremony_wiki_candidates(params: dict, repo_root: Optional[Path] = None) ->
     p = params or {}
     override = p.get("repo_root")
     if override:
-        root = Path(str(override))
-        if not root.is_dir():
+        base = Path(str(override))
+        if not base.is_dir():
             raise ValueError(f"ceremony.wiki_candidates: repo_root is not a directory: {override!r}")
     elif repo_root is None:
         raise ValueError(
@@ -307,6 +308,11 @@ def _ceremony_wiki_candidates(params: dict, repo_root: Optional[Path] = None) ->
             "(_origin_worktree); repo_root is None."
         )
     else:
-        root = main_worktree_root(repo_root)
+        base = repo_root
+    try:
+        common = base if base.name == ".git" else git_common_dir(base)
+    except RuntimeError as exc:
+        raise ValueError(f"ceremony.wiki_candidates: not inside a git repository: {base!r}") from exc
+    root = main_worktree_root(common)
     since = str(p["since"]).strip() if p.get("since") else None
     return wiki_candidates(root, since)

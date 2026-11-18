@@ -109,6 +109,24 @@ def _stamp_run_id(root: Path, entry_rel: str, run_id: str) -> bool:
     return True
 
 
+def _apply_run_sizing(text: str, root: Path, run_id: str) -> str:
+    """Fill a null ``loe.tshirt`` from the sizing whose ``resolution.run_id`` names this run."""
+    if "\n  tshirt: null" not in text:
+        return text
+    from datetime import date
+
+    from coordinator_core.ops.coordinator_complete_entry import (
+        _apply_sizing_tshirt,
+        _sizing_tshirt_for_run,
+    )
+
+    today = date.today()
+    tshirt = _sizing_tshirt_for_run(str(root), run_id, today) or _sizing_tshirt_for_run(
+        str(root), bare_run_id(run_id), today
+    )
+    return _apply_sizing_tshirt(text, tshirt) if tshirt else text
+
+
 def completion_entry_leg(
     root: Path,
     run_id: str,
@@ -176,7 +194,7 @@ def completion_entry_leg(
             text = residues(text)
         except MutateAbort:
             pass
-        return _stamp_apply(text, entry_rel, run_id)
+        return _apply_run_sizing(_stamp_apply(text, entry_rel, run_id), root, run_id)
 
     try:
         entry_abs.parent.mkdir(parents=True, exist_ok=True)

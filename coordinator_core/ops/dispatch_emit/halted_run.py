@@ -999,6 +999,37 @@ def mark_superseded_by_refire(record_dir: Path, *, prior_engine: Optional[str], 
     return True
 
 
+SUPERSEDED_BY_SUCCESSOR = "superseded-by-successor"
+
+
+def mark_shell_superseded(record_dir: Path, *, successor: str, sizing_rel: str, at: str) -> bool:
+    """Retire a minted-only shell whose sizing a `successor` run id took over: write a `superseded` marker
+    (evidence kind `superseded-by-successor`, `superseded_by` the successor) and stamp the run-stage `halted`,
+    so the minted reaper (`_stale_at_minted`) never halts it abandoned. False and no write when a marker
+    already exists or the run-stage record reads past `minted` (a shell only)."""
+    rd = Path(record_dir)
+    if (rd / HALTED_FILE).exists() or not safe_id(successor):
+        return False
+    try:
+        stage = json.loads((rd / "run-stage.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(stage, dict) or stage.get("stage") not in (None, "minted"):
+        return False
+    _write(rd, {
+        "status": STATUS_SUPERSEDED,
+        "halted": rd.name,
+        "sizing_rel": _norm(sizing_rel),
+        SUPERSEDED_EVIDENCE_FIELD: {"kind": SUPERSEDED_BY_SUCCESSOR, "successor": successor, "at": at, "kept_credit": False},
+        PATH_DISPOSITIONS_FIELD: {},
+        "superseded_by": successor,
+    })
+    _live_index_drop(rd)
+    stamp_run_stage_at(rd, "halted")
+    _record_judge(rd)
+    return True
+
+
 def _record_judge(record_dir: Path) -> None:
     """Record the engine's not_met verdict for a run closed or superseded without one; best-effort."""
     try:

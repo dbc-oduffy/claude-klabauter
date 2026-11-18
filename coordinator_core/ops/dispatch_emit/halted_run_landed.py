@@ -84,6 +84,9 @@ CLOSE_LEGS = (
     "scratch-reap",
 )
 _CLOSE_JOB_WINDOW_MINUTES = 5
+#: Commits from HEAD searched for the commit that added a run's ``halted.json``.
+_HALT_WALK_COMMITS = 2000
+_HALT_RECORD_SUBJECT = re.compile(r"^warp: record halted (.+?) run artifacts(?: \(process files\))?$")
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
@@ -973,21 +976,50 @@ def _withheld_import_problem(root: Path, run_id: str, shas: list, covers: dict) 
 
 
 def _halt_commit(root: Path, record_dir: Path) -> tuple[Optional[str], Optional[str]]:
-    """``(halt_commit, None)`` for the newest commit that added the run's ``halted.json``; ``(None, None)`` when git answered and none added it; ``(None, reason)`` when the git read failed.
+    """``(halt_commit, None)`` for the newest of the last ``_HALT_WALK_COMMITS`` commits from HEAD that records the run's halt; ``(None, None)`` when git answered and none does; ``(None, reason)`` when a git read failed.
 
-    One git spawn. Trap: ``-1`` is load-bearing; without it the path-limited log walks all history,
-    which outruns the local git budget on a large repo and reads as a failure.
+    A commit records the halt when its ``warp: record halted <run id>[, <run id>...] run artifacts``
+    subject names the run, else when it added the run's ``halted.json`` (a record dir git tracks).
+    At most two git spawns: a count-bounded ``log`` of shas and subjects, then one ``diff-tree --stdin``
+    over exactly those shas. Trap: ``state/warp/`` is gitignored here, so ``halted.json`` is usually
+    never in a commit; and a path-limited ``git log -- <path>`` is not bounded by ``-n`` (that bounds
+    matches, not commits walked), so it walks all history. A halt older than the window reads as not found.
     """
     from coordinator_core import git_ancestry
     from coordinator_core.ops.dispatch_emit import halted_run
 
     rel = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
-    result = git_ancestry.run_git(["log", "-1", "--diff-filter=A", "--format=%H", "--", rel], cwd=str(root))
+    run_id = record_dir.name
+    listed = git_ancestry.run_git(["log", "-n", str(_HALT_WALK_COMMITS), "--format=%H %s"], cwd=str(root))
+    if listed.returncode != 0:
+        why = "timed out" if listed.timed_out else f"exit {listed.returncode}"
+        return None, f"git log of HEAD failed ({why})"
+    shas: list = []
+    for line in listed.stdout.splitlines():
+        sha, _, subject = line.partition(" ")
+        if not _FULL_SHA.fullmatch(sha):
+            continue
+        shas.append(sha)
+        match = _HALT_RECORD_SUBJECT.match(subject.strip())
+        if match and run_id in [r.strip() for r in match.group(1).split(",")]:
+            return sha, None
+    if not shas:
+        return None, None
+    result = git_ancestry.run_git(
+        ["diff-tree", "--stdin", "--root", "-r", "--diff-filter=A", "--name-only", "--", rel],
+        cwd=str(root), input="\n".join(shas).encode("ascii") + b"\n",
+    )
     if result.returncode != 0:
         why = "timed out" if result.timed_out else f"exit {result.returncode}"
-        return None, f"git log of {rel} failed ({why})"
-    lines = result.stdout.split()
-    return (lines[0], None) if lines and _FULL_SHA.fullmatch(lines[0]) else (None, None)
+        return None, f"git diff-tree of {rel} failed ({why})"
+    current = None
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if _FULL_SHA.fullmatch(line):
+            current = line
+        elif current is not None and line == rel:
+            return current, None
+    return None, None
 
 
 def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -> Optional[str]:
@@ -1431,6 +1463,17 @@ def _close_checkpointed(root: Path, run_id: str, shas: list, session_id: Optiona
     }
 
 
+def _land_committed(record_dir: Path) -> bool:
+    """True when the run's ``land-legs.json`` records ``outcome: landed``: ``land_run`` wrote it only after a commit, so a partial land (``rows_unlanded``) ran."""
+    from coordinator_core.ops.dispatch_emit import land_leg_record
+
+    try:
+        doc = json.loads((record_dir / land_leg_record.FILE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(doc, dict) and doc.get("outcome") == land_leg_record.OUTCOME_LANDED
+
+
 def _record_solo(
     root: Path, run_id: str, shas: list, session_id: Optional[str] = None, in_run: bool = False,
     met_by: Optional[dict] = None, landed_under: Optional[str] = None, foreign: frozenset = frozenset(),
@@ -1441,6 +1484,8 @@ def _record_solo(
     ``in_run`` admits a marker-less run: it verifies the sha and the clean write set, writes nothing and
     replies ``_close_landed``'s not-applicable close. ``landed_under`` admits a marker-less run whose
     work the named run already landed: no git read, the named run's landed sha is the credit.
+    A marker-less run whose record dir holds a committed land record (``_land_committed``) is closed
+    the same way against the verified sha; with no commit and no record the "never ran" refusal stands.
     """
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
@@ -1467,6 +1512,11 @@ def _record_solo(
             }
     if marker is None:
         closed = _close_checkpointed(root, run_id, shas, session_id)
+        if closed is None and _land_committed(record_dir):
+            sha, problem, echo = _verify(root, run_id, shas, met_by, foreign, dropped)
+            if problem:
+                return _refuse(problem)
+            return {"ok": True, "run_id": run_id, "sha": sha, "written": False, **echo, **_close_landed(root, run_id, sha, session_id)}
         return closed if closed is not None else _refuse(f"{run_id} has no sibling status or halt record; it never ran")
     status = marker.get("status")
     if status == halted_run.STATUS_LANDED:

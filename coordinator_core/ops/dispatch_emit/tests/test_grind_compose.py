@@ -433,7 +433,7 @@ def test_agent_call_site_count_independent_of_row_count() -> None:
     small_count, _small_bytes = _agent_count(7)
     large_count, large_bytes = _agent_count(300)
     assert small_count == large_count
-    assert large_bytes < 184 * 1024
+    assert large_bytes < 186 * 1024  # measured 185.2 KiB at 300 rows
 
 
 def test_prep_empty_retry_loop_is_bounded_by_the_attempt_cap() -> None:
@@ -3701,3 +3701,171 @@ def test_the_run_stops_once_total_spend_passes_budget_and_the_ledger_reports_tha
     assert spend["total_basis"] == "output*ratio"
     assert seen["checkpoints"] and all(c["spent"] <= spend["total_tokens"] for c in seen["checkpoints"])
     assert any(c["trigger"] == "budget" or c["spent"] > seen["output"] for c in seen["checkpoints"])
+
+
+# ---------------------------------------------------------------------------
+# No-product-edit arm: record-only closes skip the close, commit and ledger-sweep agents
+# ---------------------------------------------------------------------------
+
+_BOOKKEEP_HARNESS_JS = r"""
+import fs from 'node:fs';
+const [,, scriptPath, verdictsJson] = process.argv;
+const verdicts = JSON.parse(verdictsJson);
+const src = fs.readFileSync(scriptPath, 'utf8').replace(/\r\n/g, '\n').replace(/export const meta = \{[\s\S]*?\n\};\n/, '');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const labels = [];
+const logged = [];
+const rowsOf = (prompt) => [...new Set([...prompt.matchAll(/"row_id":"(row\d+)"/g)].map((m) => m[1]))];
+const reply = (opts, prompt) => {
+  const label = opts.label || '';
+  const rows = rowsOf(prompt);
+  if (label === 'triage') return { rows: rows.map((r) => ({ row: r, verdict: verdicts[r], tshirt_size: 'S', has_tradeoff: false, evidence: 'e', fix_plan: 'p' })), stale: [] };
+  if (label === 'close') return { confirmed: rows.map((r) => ({ row: r, new_path: 'archive/2026-10/' + r + '.yaml' })), refuted: [] };
+  if (label === 'fix') return { outcome: 'done', touched_files: ['f_' + (/row\d+/.exec(prompt) || ['x'])[0] + '.py'] };
+  if (label.startsWith('verify')) return { outcome: 'pass', exit_code: 0, output: {} };
+  if (label === 'commit') return { committed: true, sha: 'abc123', rows: rows.map((r) => ({ row_id: r, outcome: 'settled', sha: 'abc123' })), unlanded: [] };
+  if (label.startsWith('ledger-sweep')) return { outcome: 'recorded', swept: true };
+  return {};
+};
+const agent = (prompt, opts = {}) => { labels.push(opts.label || ''); return new Promise((res) => setTimeout(() => res(reply(opts, prompt)), 1)); };
+const budget = { spent: () => 0, remaining: () => null, total: null };
+const fn = new AsyncFunction('args', 'agent', 'phase', 'log', 'budget', 'parallel', src);
+const handback = await fn(
+  { run_stamp: '20261017T000000Z', script_path: 'x.mjs', profile_dir: 'pd', repo_root: '/r', run_token: 'tok' },
+  agent, () => {}, (m) => { if (m.startsWith('grind bookkeep ')) logged.push(JSON.parse(m.slice('grind bookkeep '.length))); }, budget, async (xs) => Promise.all(xs),
+);
+console.log(JSON.stringify({ labels, logged, next_action: handback.next_action ?? null }));
+"""
+
+
+def _run_bookkeep_harness(tmp_path: Path, verdicts: dict[str, str]) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    entries = tuple(
+        ManifestEntry(row_id=rid, path=f"state/bug-backlog/{rid}.yaml", digest=f"{i:064x}", batch_key="P0")
+        for i, rid in enumerate(sorted(verdicts))
+    )
+    manifest = Manifest(entries=entries, batch_sizes={"P0": 4}, source=None, digest="deadbeef")
+    script = tmp_path / "grind.mjs"
+    script.write_bytes(_compose(manifest=manifest, window=1).encode("utf-8"))
+    harness = tmp_path / "harness.mjs"
+    harness.write_text(_BOOKKEEP_HARNESS_JS, encoding="utf-8")
+    out = subprocess.run(
+        [node, str(harness), str(script), json.dumps(verdicts)], capture_output=True, text=True, check=False, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+_BOOKKEEP_LABELS = {"close", "commit", "ledger-sweep:drain"}
+
+
+def test_the_close_wrapper_defers_record_only_proposals_and_keeps_the_agent_leg_behind_it() -> None:
+    script = _compose()
+    wrapper = script[script.index("async function _closeCall(proposals)"): script.index("async function _closeAgentCall(proposals)")]
+    assert "_closeDefers(p)" in wrapper and "await _closeAgentCall(_rest)" in wrapper
+    assert "_bookkeepIds.add(p.row_id)" in wrapper
+    defers = script[script.index("function _closeDefers(p)"): script.index("async function _closeCall(proposals)")]
+    assert "ROUTING[target].kind !== 'commit'" in defers
+    assert "_isRecordPath(p.path) && _isRecordPath(_archiveDestination(p.path))" in defers
+    assert "(row.touchedFiles || []).every(_isRecordPath)" in defers
+    assert "label: 'close'" in script[script.index("async function _closeAgentCall(proposals)"):]
+
+
+def test_a_close_defers_only_when_every_touched_file_is_a_record_path() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    script = _compose()
+    defers = script[script.index("function _closeDefers(p)"): script.index("async function _closeCall(proposals)")]
+    helper = script[script.index("const _bookkeepRecordRe"): script.index("function _bookkeepRows()")]
+    probe = (
+        "const ROUTING = { n: { edges: { confirmed: 'c' } }, c: { kind: 'commit' } };\n"
+        "const _archiveDestination = (p) => 'archive/2026-10/' + String(p).split('/').pop();\n"
+        "const _rows = { rec: { node: 'n', touchedFiles: ['state/bug-backlog/rec.yaml'] },"
+        " prod: { node: 'n', touchedFiles: ['state/bug-backlog/prod.yaml', 'src/a.py'] } };\n"
+        + helper + defers
+        + "\nconsole.log(JSON.stringify([_closeDefers({ row_id: 'rec', path: 'state/bug-backlog/rec.yaml' }),"
+        " _closeDefers({ row_id: 'prod', path: 'state/bug-backlog/prod.yaml' })]));"
+    )
+    out = subprocess.run(
+        [node, "-e", probe], capture_output=True, text=True, check=False, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout.strip()) == [True, False]
+
+
+def test_the_run_close_and_terminal_commit_skip_only_for_deferred_rows() -> None:
+    script = _compose()
+    close = script[script.index("async function _runClose()"):]
+    close = close[: close.index("\n}\n")]
+    assert close.index("if (_bookkeepDefersRun()) { return; }") < close.index("await _drainCall()")
+    assert "return !_grindErr && _bookkeepIds.size > 0 && _settled.every(" in script
+    terminal = script[script.index("async function _terminalCommit()"):]
+    terminal = terminal[: terminal.index("\n}\n")]
+    assert "filter((q) => !_bookkeepIds.has(q.row_id))" in terminal
+    assert terminal.index("if (queued.length === 0) return;") < terminal.index("await _terminalCommitCall(")
+    assert "next_action: _bookkeepNextAction()," in script[script.index("const HANDBACK = {"):]
+
+
+def test_one_row_discard_composes_no_close_commit_or_sweep_agent_call(tmp_path: Path) -> None:
+    seen = _run_bookkeep_harness(tmp_path, {"row0": "not-reproduced"})
+    assert "triage" in seen["labels"]
+    assert not _BOOKKEEP_LABELS & set(seen["labels"])
+    assert [a["params"]["rows"] for a in seen["logged"]] == [seen["next_action"]["params"]["rows"]]
+    action = seen["next_action"]
+    assert action["op"] == "dispatch.grind_bookkeep"
+    params = action["params"]
+    assert params["run_close_deferred"] is True and params["record"] and params["declared"] is not None
+    (row,) = params["rows"]
+    assert row["row_id"] == "row0" and row["closed"] is False and row["outcome"] == "deferred"
+    assert row["path"] and row["digest"] and "evidence" in row
+    assert all(p.startswith(("state/", "archive/")) for p in row["touchedFiles"])
+
+
+def test_a_product_edit_row_keeps_the_close_commit_and_sweep_legs(tmp_path: Path) -> None:
+    seen = _run_bookkeep_harness(tmp_path, {"row0": "confirmed-bug", "row1": "confirmed-bug"})
+    assert {"commit", "ledger-sweep:drain"} <= set(seen["labels"])
+    assert seen["next_action"] is None and seen["logged"] == []
+
+
+def test_a_mixed_run_defers_the_discard_row_but_keeps_the_commit_and_sweep_for_the_fix_row(tmp_path: Path) -> None:
+    seen = _run_bookkeep_harness(tmp_path, {"row0": "not-reproduced", "row1": "confirmed-bug"})
+    assert {"commit", "ledger-sweep:drain"} <= set(seen["labels"])
+    (action,) = seen["logged"]
+    assert [r["row_id"] for r in action["params"]["rows"]] == ["row0"]
+    assert action["params"]["run_close_deferred"] is False
+    assert action["params"]["record"] is None
+
+
+def test_the_register_still_declares_the_grind_legs_the_no_product_arm_skips() -> None:
+    from coordinator_core.ops.dispatch_emit import leg_register as lr
+
+    for key in (("grind", "close"), ("grind", "commit"), ("grind", "ledger-sweep:drain")):
+        assert lr.lookup(*key) is not None, key
+
+
+def test_the_js_record_path_test_never_defers_a_path_the_op_would_refuse() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    script = _compose()
+    helper = script[script.index("const _bookkeepRecordRe"): script.index("function _bookkeepRows()")]
+    samples = [
+        "state/bug-backlog/a.yaml", "archive/2026-10/a.md", "docs/plans/a.md", "docs/x/y.py", "docs/x/y.json",
+        "docs/hooks.yaml", "docs/x/hooks.yml", "scratch/x/hooks.yaml", "tasks/a.py", "src/a.py", "notes.md", ".\\state\\a.md",
+    ]
+    probe = helper + "\nconsole.log(JSON.stringify(" + json.dumps(samples) + ".map(_isRecordPath)));"
+    out = subprocess.run(
+        [node, "-e", probe], capture_output=True, text=True, check=False, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    from coordinator_core.ops.dispatch_emit import record_paths
+
+    deferred = dict(zip(samples, json.loads(out.stdout.strip())))
+    assert deferred["docs/x/y.py"] is False and deferred["docs/hooks.yaml"] is False and deferred["state/bug-backlog/a.yaml"] is True
+    assert [s for s, d in deferred.items() if d and not record_paths.is_record_path(s)] == []

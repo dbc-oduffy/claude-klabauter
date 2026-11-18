@@ -853,6 +853,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.land_blobs":                      "common_dir",
     # dispatch.land_credited — MUTATING: commits a run's credited paths via git.commit.commit_paths (CAS ref move);
     # the caller's own worktree, never a params override.
+    # dispatch.grind_bookkeep — MUTATING: closes, lands and ledger-sweeps a no-product-edit grind run
+    # in process; the caller's own worktree, never a params override.
+    "dispatch.grind_bookkeep":                  "common_dir",
     "dispatch.land_credited":                   "common_dir",
     # dispatch.land_verified_remainder — MUTATING: commits a halted run's verified remainder under its run id.
     "dispatch.land_verified_remainder":         "common_dir",

@@ -27,6 +27,8 @@ claude (both OSes) runs `claude --bg -n NAME` (or `claude --bg --resume ID`) cap
 codex on Windows a shaped PATH: real pwsh dir first, Store alias dirs dropped) and execs nothing;
 Windows non-prepare launches are refused because exec must not sit under python.exe.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import os

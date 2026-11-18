@@ -59,6 +59,11 @@ SPINE_REPAIR_CLASSES: dict[str, str] = {
     "SPINE/MemoRowNoReceiptError": (
         "add the row's receipt from the plan's own text; absent there, return the row as a leftover"
     ),
+    # prep_gate's slug check runs before read_spine, so an open memo-send row with no receipt
+    # surfaces under this kind rather than MemoRowNoReceiptError; same repair.
+    "SPINE/memo-send-slugless": (
+        "add the row's receipt from the plan's own text; absent there, return the row as a leftover"
+    ),
     "SPINE/MemoRowNoReceiverError": (
         "add the row's memo_to from the plan's own text; absent there, return the row as a leftover"
     ),

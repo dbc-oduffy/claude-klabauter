@@ -114,6 +114,43 @@ def test_refuses_diverged_tips(repo: Path) -> None:
         compose_daily_summary_gap(repo, DAY, "m1", _topo_tip)
 
 
+def _diverge(repo: Path) -> "tuple[str, str]":
+    _git(repo, "checkout", "-q", "-b", "left")
+    left = _commit(repo, "l.txt", "left", f"{DAY}T09:00:00")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "right")
+    right = _commit(repo, "r.txt", "right", f"{DAY}T10:00:00")
+    return left, right
+
+
+def test_allow_diverged_lists_every_leaf_tip(repo: Path) -> None:
+    left, right = _diverge(repo)
+
+    _, text = compose_daily_summary_gap(repo, DAY, "m1", _topo_tip, allow_diverged=True)
+
+    assert "\n## Leaf Tips\n" in text
+    assert f"- {left} left\n" in text and f"- {right} right\n" in text
+    assert f"\ncovered_tip_sha: {right}\n" in text
+    assert "commits: 2" in text
+
+
+def test_allow_diverged_leaves_a_single_tip_day_unchanged(repo: Path) -> None:
+    _commit(repo, "a.txt", "first", f"{DAY}T09:00:00")
+    second = _commit(repo, "b.txt", "second", f"{DAY}T11:00:00")
+
+    _, text = compose_daily_summary_gap(repo, DAY, "m1", _topo_tip, allow_diverged=True)
+
+    assert "## Leaf Tips" not in text
+    assert f"covered_tip_sha: {second}" in text
+
+
+def test_diverged_still_refused_without_the_flag(repo: Path) -> None:
+    _diverge(repo)
+
+    with pytest.raises(GapRefusal, match="diverged"):
+        compose_daily_summary_gap(repo, DAY, "m1", _topo_tip, allow_diverged=False)
+
+
 @pytest.mark.parametrize("bad", ["2026-1-5", "2026-02-30", ""])
 def test_refuses_a_malformed_date(repo: Path, bad: str) -> None:
     with pytest.raises(GapRefusal):

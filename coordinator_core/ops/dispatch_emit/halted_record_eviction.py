@@ -4,6 +4,7 @@ Imports no sibling ``halted_record_*`` module."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -117,6 +118,7 @@ class TreeEviction:
         self.withheld = withheld
         self.blob_shas = blob_shas or {}
         self.refused: dict = {}
+        self.units: list = []
         self.record_paths: list = []
         self.paths: Optional[list] = None
 
@@ -133,7 +135,7 @@ class TreeEviction:
 
         halt_tree_evict.evict(
             self.root, self.root / self.record_dir_rel, sorted(self.head_blobs), self.head_blobs,
-            run_id=self.run_id, refused=self.refused,
+            run_id=self.run_id, refused=self.refused, units=self.units,
         )
         self.unowned = {**self.unowned, **self.refused}
         if self.withheld is not None:
@@ -189,6 +191,37 @@ def record_touched_blobs(
         return []
 
 
+def _import_units(root: Path, own_py: list) -> list:
+    """Groups of ``own_py`` paths linked by `halt_tree_check._importers`' stem rule (one file's text
+    names another's module stem, either direction), transitively; groups of one are omitted."""
+    stems: dict = {}
+    for p in own_py:
+        pp = Path(p)
+        stem = pp.parent.name if pp.stem == "__init__" else pp.stem
+        if stem:
+            stems.setdefault(stem, []).append(p)
+    parent = {p: p for p in own_py}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for q in own_py:
+        try:
+            text = (root / q).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for stem in set(re.findall(r"\w+", text)) & stems.keys():
+            for p in stems[stem]:
+                parent[find(p)] = find(q)
+    groups: dict = {}
+    for p in own_py:
+        groups.setdefault(find(p), []).append(p)
+    return [sorted(g) for g in groups.values() if len(g) > 1]
+
+
 def plan_tree_eviction(
     root: Path, record_dir_rel: str, run_written: list, changed: set, write_set: list,
     withheld: dict, paths: list, run_id: Optional[str] = None,
@@ -236,5 +269,6 @@ def plan_tree_eviction(
             paths.append(rel)
             appended.append(rel)
     eviction = TreeEviction(root, record_dir_rel, head_blobs, origin, unowned, run_id, withheld, prints)
+    eviction.units = _import_units(root, [p for p in own_py if p in prints])
     eviction.record_paths, eviction.paths = appended, paths
     return eviction

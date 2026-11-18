@@ -35,6 +35,7 @@ IMPORTER_OVERRUN_KEY = "importer_overrun"
 ZERO_RUN_BUDGET = "budget-exhausted"
 ZERO_RUN_COLLECTION = "collection-failure"
 ZERO_RUN_EMPTY = "empty-selection"
+ZERO_RUN_IMPORT_ERROR = "import-error"
 ZERO_RUN_KILLED = "killed"
 #: Engine-side: every handed target was absent from disk (evicted or parked by the run itself), so no pytest ran.
 ZERO_RUN_MISSING_TARGET = "missing-target"
@@ -44,6 +45,7 @@ _ZERO_RUN_CAUSES = {
     ZERO_RUN_BUDGET: "the verify budget was spent before any test ran",
     ZERO_RUN_COLLECTION: "pytest collection failed, so no test ran",
     ZERO_RUN_EMPTY: "the selection collected no tests",
+    ZERO_RUN_IMPORT_ERROR: "an engine module failed to import, so no test ran (a dirty tree path, not a test failure)",
 }
 
 RETEST_LAUNCHER = "emit-dispatch-workflow --retest-targeted"

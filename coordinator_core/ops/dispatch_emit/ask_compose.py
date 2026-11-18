@@ -292,11 +292,13 @@ _WAVE_DIFF_RECONCILE_JS = (
 HALT_TESTS_NOT_RUN = "tests_not_run"
 # A code-editing run whose manifest names no test target and records no reason for it (`no_test_target`),
 # with no passing, failing or indeterminate re-verify (an indeterminate one is the landing's targeted
-# retest, `halt_remedy_class`), ran no tests: it is flagged `tests_not_run` and halts as owed,
-# never committed as green. A degraded `no_test_target` run keeps its own narrated status.
+# retest, `halt_remedy_class`) and no green `status_before` (a green re-verify of any runner leaves
+# `status_after` null; `pass` means a test ran and none failed), ran no tests: it is flagged
+# `tests_not_run` and halts as owed, never committed as green. A degraded `no_test_target` run keeps its own narrated status.
 _TESTS_NOT_RUN_JS = (
     "  if (!_halted && !_reviewReused && _codeReviewOwed && _reviewReverify && typeof _reviewReverify === 'object' "
     "&& !['pass', 'fail', 'indeterminate'].includes(_reviewReverify.status_after) "
+    "&& !(_reviewReverify.status_after == null && _reviewReverify.status_before === 'pass') "
     "&& _manifest && !(_manifest.test_targets ?? []).length && !_manifest.no_test_target) { "
     "_reviewReverify.tests_not_run = true; _halted = { halted: " + json.dumps(HALT_TESTS_NOT_RUN) + ", "
     "reason: 'no test was selected or run for a code-editing run; owed, not green', run_id: _runId, "
@@ -2097,7 +2099,9 @@ _TEST_UNPROVEN_CAUSE_JS = (
     "const _ids = (Array.isArray(_r.failing_ids) ? _r.failing_ids : []).filter((x) => typeof x === 'string' && x.trim()); "
     "if (_ids.length) return ''; "
     "if (typeof _r.tests_run === 'number' && _r.tests_run === 0) "
-    "return 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : ''); "
+    "return 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : '') "
+    "+ ((_r.import_error && typeof _r.import_error === 'object' && typeof _r.import_error.path === 'string') "
+    "? ': ' + _r.import_error.path + ' (run ' + (_r.import_error.run_id || 'unowned') + ')' : ''); "
     "if (['error', 'errored'].includes(_r.status)) return 'errored without a failing id'; "
     "return ''; })()"
 )

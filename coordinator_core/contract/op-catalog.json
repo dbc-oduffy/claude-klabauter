@@ -2146,6 +2146,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "Close, land and ledger-sweep a no-product-edit grind run in process, with no agent.\n\n`bookkeep` over the op's params: `repo_root` (worktree path; else the main worktree of the\ndispatch's common dir), `run_id`, `rows`, plus optional `profile` (else `record.profile`),\n`profile_dir`, `queue`, `record`, `declared`, `run_stamp`, `deliverable_id`, `run_token`,\n`script_path`. A deferred run close (`run_close_deferred` false) writes no record.",
+      "module": "coordinator_core.ops.dispatch_emit.grind_bookkeep",
+      "name": "dispatch.grind_bookkeep",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "Close, land and ledger-sweep a no-product-edit grind run in process, with no agent.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "Op handler: `land(params, repo_root)` under the call's I/O scope.\n\n`dispatch.land_blobs`: lands a reviewed run's declared blobs, and only the run's recorded hunks.\n\nShape: one scandir per declared directory, one read per declared file, the tree, pack and index written in\nprocess by `run_landing`'s writer, one compare-and-swap on the ref, then the worktree 3-way sync of the landed\npaths (`land_blobs_worktree_sync`), no git spawn by default. Product branch only: the record modes stay on\ntheir modules.\n\nInvariant: a declared path whose check-in blob is not in the run's own recorded set (`kept.json`), and a\nmodified path with no own record that carries a hunk another run recorded, refuses the whole landing\n(`FOREIGN_HUNK`) before any object is written.\nTrap: `kept.json` blobs are RAW bytes and the staged blob is check-in form; the two are compared only after\nlifting the recorded blob through `kept_work.checkin_form`.",
       "module": "coordinator_core.ops.dispatch_emit.land_blobs",
       "name": "dispatch.land_blobs",

@@ -1008,10 +1008,17 @@ def halted_only_withholders(root: Path, run_id: str) -> Optional[list]:
         return None
 
 
+_OWNER_RAW: dict = {}  # abs index file -> (st_mtime_ns, st_size, bytes); process-wide, like the index's parse cache
+_OWNER_RAW_MAX = 65536  # per-file byte cap
+_OWNER_RAW_ENTRIES_MAX = 512  # total cap: worst case ~32MB held by a warm engine
+
+
 def _withheld_owners(root: Path, wanted: set) -> dict:
     """`{path: run id}` for the `wanted` paths only, as `withheld_by_path` would map them (lexically last run
-    wins). Each run file is read as bytes and parsed only when it names one of `wanted`, so the cost is one
-    read per run file and a parse per run withholding a wanted path, not a parse of the whole history."""
+    wins). A run file is parsed only when its bytes name one of `wanted`; the bytes of a file whose
+    (mtime_ns, size) is unchanged come from `_OWNER_RAW`, so a warm engine's repeat call reads only the files
+    that changed, never the whole index. The scan stops at the index's read deadline (a stalled disk): the
+    runs not reached read as withholding nothing. Never touches the disk beyond one listing in steady state."""
     import json
     import os
 
@@ -1022,23 +1029,37 @@ def _withheld_owners(root: Path, wanted: set) -> dict:
         idx.rebuild(Path(root))
     needles = [json.dumps(p)[1:-1].encode("utf-8") for p in wanted]
     out: dict = {}
+    base = os.fspath(index)
     try:
-        names = sorted(n for n in os.listdir(index) if n.endswith(".json"))
+        listing = sorted((d for d in os.scandir(base) if d.name.endswith(".json")), key=lambda d: d.name)
     except OSError:
         return out
-    for name in names:
+    live = {d.path for d in listing}
+    for stale in [k for k in _OWNER_RAW if os.path.dirname(k) == base and k not in live]:
+        _OWNER_RAW.pop(stale, None)
+    deadline = idx._clock() + idx.READ_DEADLINE_SECS
+    for de in listing:
+        if idx._clock() >= deadline:
+            break
         try:
-            raw = (index / name).read_bytes()
+            st = de.stat()
+            hit = _OWNER_RAW.get(de.path)
+            if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+                raw = hit[2]
+            else:
+                raw = Path(de.path).read_bytes()
+                if len(raw) <= _OWNER_RAW_MAX and (de.path in _OWNER_RAW or len(_OWNER_RAW) < _OWNER_RAW_ENTRIES_MAX):
+                    _OWNER_RAW[de.path] = (st.st_mtime_ns, st.st_size, raw)
         except OSError:
             continue
         if not any(n in raw for n in needles):
             continue
-        entry = idx._parse(index / name)
+        entry = idx._parse(de.path, st)
         if entry is None:
             continue
         for path in entry.paths:
             if path in wanted:
-                out[path] = name[: -len(".json")]
+                out[path] = de.name[: -len(".json")]
     return out
 
 

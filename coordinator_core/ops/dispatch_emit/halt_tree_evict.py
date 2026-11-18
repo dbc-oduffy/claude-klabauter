@@ -79,6 +79,9 @@ def _reset_plan(
     return spliced, None
 
 
+_LINKED = "evict refused, tree kept: import-linked to "
+
+
 def evict(
     root: Path,
     record_dir: Path,
@@ -86,9 +89,14 @@ def evict(
     head_blobs: Mapping[str, bytes | None],
     run_id: str | None = None,
     refused: dict | None = None,
+    units: Sequence[Sequence[str]] = (),
 ) -> dict:
     """Copy each path's tree bytes into `record_dir`, write `evicted.json`, and reset only the run's
     own hunks of the tree path to HEAD.
+
+    `units` groups paths that import each other: a refusal of one path refuses every path sharing its
+    unit (`import-linked to <path> (<reason>)`), so the tree never holds half of a cross-file edit.
+    Every reset is computed before any byte moves; a refused unit never touches disk.
 
     `head_blobs` maps path to its HEAD bytes, or None when HEAD does not track it (the tree path is
     then removed when wholly the run's). Returns the `evicted.json` mapping. Never touches a path
@@ -101,6 +109,8 @@ def evict(
     root, record_dir = Path(root), Path(record_dir)
     index = _load(record_dir)
     blobs = record_dir / BLOBS_DIR
+    planned: dict[str, tuple[bytes, str, bytes | None, bytes | None]] = {}
+    refusals: dict[str, str] = {}
     for rel in paths:
         data = _read(root, rel)
         if data is None:
@@ -112,17 +122,27 @@ def evict(
             continue
         reset, refusal = _reset_plan(root, run_id, rel, data, head)
         if refusal:
-            if refused is not None:
-                refused[rel] = f"evict refused, tree kept: {refusal}"
+            refusals[rel] = f"evict refused, tree kept: {refusal}"
             continue
         if run_id is not None:
             from coordinator_core.ops.dispatch_emit import live_write_guard
 
             refusal = live_write_guard.check_live_write(root, run_id, rel, reset or b"")
             if refusal:
-                if refused is not None:
-                    refused[rel] = refusal
+                refusals[rel] = refusal
                 continue
+        planned[rel] = (data, sha, head, reset)
+    for unit in units:
+        culprit = next((p for p in unit if p in refusals and not refusals[p].startswith(_LINKED)), None)
+        if culprit is None:
+            continue
+        for p in unit:
+            if p != culprit and p in planned:
+                del planned[p]
+                refusals[p] = f"{_LINKED}{culprit} ({refusals[culprit]})"
+    if refused is not None:
+        refused.update(refusals)
+    for rel, (data, sha, head, reset) in planned.items():
         blobs.mkdir(parents=True, exist_ok=True)
         blob_path = blobs / sha
         blob_path.write_bytes(data)

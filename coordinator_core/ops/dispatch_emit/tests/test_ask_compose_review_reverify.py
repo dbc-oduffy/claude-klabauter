@@ -371,6 +371,20 @@ def test_indeterminate_reverify_with_empty_selection_is_not_tests_not_run(status
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.parametrize(
+    "status_before, halts",
+    [("pass", False), ("not_run", True), (None, True), ("fail", True)],
+)
+def test_green_non_pytest_reverify_with_empty_selection_is_credited(status_before, halts):
+    reverify = {"edited": ["a.test.js", "doc.md"], "status_before": status_before, "status_after": None}
+    out = _tests_not_run(reverify, {"test_targets": []})
+
+    assert (out["halted"] is not None) is halts
+    assert out["rv"].get("tests_not_run", False) is halts
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize(
     "reverify, manifest, code_owed",
     [
         ({"status_after": "pass"}, {"test_targets": []}, True),
