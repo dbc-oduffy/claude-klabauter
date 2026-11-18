@@ -11,8 +11,8 @@ from that grant and `cwd` to the op's repo root; an unbound env session id is re
 `fire` (bool, default true: hand the run to `workflow.fire` with `expected=<sha256>`; false mints without starting),
 `executor` (headless by default, or claude), and `backend` (codex by default; claude, grok or agy opt-in).
 Completion defaults to the submitting session UUID; notify_to explicitly overrides it.
-An empty params object reads the object in `.coordinator-local/em-submit.json` under the repo; a missing or
-non-object file is a `bad-request` refusal naming that path. Non-empty params are used as given.
+An empty params object reads the object in `.coordinator-local/em-submit.json` under the repo; a missing file
+is created as an empty-ask scaffold and refused as `bad-request` naming that path, a non-object file likewise. Non-empty params are used as given.
 
 Reply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when
 `fire` is not false) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that
@@ -31,6 +31,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.workflow_fire.backends import BACKENDS
 
 CANONICAL_PARAMS_PATH = ".coordinator-local/em-submit.json"
+_SCAFFOLD = {"ask": "", "ask_source": "pm"}
 
 _EXTRA_KEYS = (
     "em_context", "context", "brief", "brief_file", "route_preference", "em_rationale", "em_size",
@@ -69,10 +70,22 @@ def _with_grant_bound_identity(params: dict, repo_root: Optional[Path]) -> dict:
 
 
 def _canonical_params(repo_root: Path) -> dict:
-    """Load `.coordinator-local/em-submit.json` under the repo; a refusal dict names the path."""
-    path = repo_root / CANONICAL_PARAMS_PATH
+    """Load `.coordinator-local/em-submit.json` under the main worktree; a refusal dict names the path.
+
+    `repo_root` is the op's common-dir key (`<worktree>/.git`) when served through the CLI.
+    """
+    path = (repo_root.parent if repo_root.name == ".git" else repo_root) / CANONICAL_PARAMS_PATH
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("x", encoding="utf-8") as fh:
+                json.dump(_SCAFFOLD, fh, indent=2)
+        except OSError:
+            pass
+        return {"refused": "bad-request",
+                "reason": f"No ask staged: set `ask` to the PM's words verbatim in {CANONICAL_PARAMS_PATH}, then repeat this call."}
     except (OSError, ValueError) as exc:
         return {"refused": "bad-request",
                 "reason": f"No params given and {CANONICAL_PARAMS_PATH} is unreadable ({type(exc).__name__}); write the params object there."}

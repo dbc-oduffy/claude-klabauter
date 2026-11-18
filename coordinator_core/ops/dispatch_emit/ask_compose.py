@@ -2056,15 +2056,31 @@ def _criterion_blocker_halt_js(sizing_rel: Optional[str]) -> str:
     )
 
 
+#: Why a returned test verdict proved nothing, or '' when it proved something: zero tests run (named by
+#: `zero_run_cause` when the leg reports one), or an error status that names no failing id. A fail
+#: naming ids, and a pass or skip-pass that ran tests, return ''.
+_TEST_UNPROVEN_CAUSE_JS = (
+    "(() => { const _r = _testResult; "
+    "const _ids = (Array.isArray(_r.failing_ids) ? _r.failing_ids : []).filter((x) => typeof x === 'string' && x.trim()); "
+    "if (_ids.length) return ''; "
+    "if (typeof _r.tests_run === 'number' && _r.tests_run === 0) "
+    "return 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : ''); "
+    "if (['error', 'errored'].includes(_r.status)) return 'errored without a failing id'; "
+    "return ''; })()"
+)
+
+
 #: A test leg owed by the manifest whose verdict is absent, has no sidecar, or reads not_run never
 #: reaches the commit as passed. `TEST_GUARD` is substituted with the leg's own owed-condition.
 def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
     """The empty-test-verdict halt; its next_action names the engine-ask refire, which re-runs the
-    verify leg, where journal replay would hand back the cached empty verdict."""
+    verify leg, where journal replay would hand back the cached empty verdict. A verdict that ran
+    zero tests or errored without a failing id halts the same way with the cause in `detail`."""
     return (
         "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
         "&& _testResult.status && _testResult.status !== 'not_run' "
-        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim()) "
+        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim() "
+        "&& !" + _TEST_UNPROVEN_CAUSE_JS + ") "
         "&& !(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object' "
         "&& _reviewReverify.status_after === 'pass' "
         "&& (() => { const _l = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
@@ -2078,7 +2094,10 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "const _rvPre = _rvl(_rvh.pre_existing); "
         "_halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
         "failing: _rvFail, pre_existing: _rvPre, "
-        "detail: 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests' + "
+        "detail: ((_testResult && typeof _testResult.status === 'string' && _testResult.status && _testResult.status !== 'not_run' "
+        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim()) "
+        "? 'the test leg proved nothing: ' + " + _TEST_UNPROVEN_CAUSE_JS + " + '; the run did not pass its tests' "
+        ": 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests') + "
         "(_rvFail.length ? '; re-verify reds not red at the run base: ' + _rvFail.join(', ') : "
         "(_rvPre.length ? '; re-verify reds all pre-existing, none this run\\'s: ' + _rvPre.join(', ') : '')), "
         "next_action: 'Refire to re-run the test leg: ' + " + _refire_js(sizing_rel) + " }; }"

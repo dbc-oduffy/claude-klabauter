@@ -3000,7 +3000,7 @@ def test_default_install_grants_agy_only_the_exact_submit_command(monkeypatch, t
     assert rc == 0
     allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
     launcher = str(ui.settings_home() / "bin" / ("coordinator-invoke.exe" if sys.platform == "win32" else "coordinator-invoke"))
-    assert allow == [f"command({launcher} engine_ask.submit --params-file .coordinator-local/em-submit.json)"]
+    assert allow == [f"command({launcher} engine_ask.submit)"]
     assert Path(launcher).is_absolute() and not any("*" in rule for rule in allow)
 
 
@@ -3084,6 +3084,20 @@ def test_agy_allow_rule_default_grants_absolute_line_and_reports_it(monkeypatch,
     # agy `permissions.allow` entries have the form `command(<cmd>)`.
     inner = allow[0][len("command("):-1]
     assert Path(inner.split(" ", 1)[0]).is_absolute()
+
+
+def test_agy_allow_rule_is_the_advisory_command_and_prior_forms_are_owned(monkeypatch, tmp_path):
+    from coordinator_core import warp_fire
+
+    assert ui.AGY_ALLOW_RULE == f"command({warp_fire.INVOKE_SUBMIT_COMMAND})"
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    mine = "command(keep me)"
+    _tui_main(tmp_path, "--install")
+    agy.write_text(json.dumps({"permissions": {"allow": [mine, ui.AGY_PRIOR_ALLOW_RULE]}}), encoding="utf-8")
+    _tui_main(tmp_path, "--install")
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, ui.agy_absolute_allow_rule()]
+    assert ui.AGY_PRIOR_ALLOW_RULE not in json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
 
 
 def test_agy_allow_rule_migrates_bare_and_legacy_lines_to_absolute_and_uninstalls(monkeypatch, tmp_path):

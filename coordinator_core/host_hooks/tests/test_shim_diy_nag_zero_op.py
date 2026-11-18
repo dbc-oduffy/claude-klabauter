@@ -32,6 +32,11 @@ def repo(tmp_path, monkeypatch):
     for i in range(3):
         (root / f"f{i}.txt").write_text("b\n" * 40)
     monkeypatch.setattr(nag.xs_lane_budget, "lane_path", lambda r, sid: tmp_path / "hub" / sid / "lane.json")
+    # The dirt above is every session's own hand edit: the lane record attributes it to the caller.
+    monkeypatch.setattr(
+        nag.xs_lane_budget, "read_lane",
+        lambda r, sid: {"kind": "xs", "state": "open", "base_sha": "x", "paths": ["f0.txt", "f1.txt", "f2.txt"]},
+    )
     monkeypatch.setattr(warp_fire, "nag_text", lambda sid, sizing_rel=None, state_dir=None, host=None, edit_size=None, edit_size_truncated=False: NAG)
     for key in ("COORDINATOR_AGENT_PROVIDER", "COORDINATOR_AGENT_VENDOR", "COORDINATOR_AGENT_ROLE",
                 "CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID", "AGY_SESSION_ID", "COORDINATOR_SESSION_ID"):
@@ -68,6 +73,13 @@ def test_zero_op_session_gets_advisory_then_throttled(monkeypatch, repo, host, e
     second = shim.run(host, json.dumps(_payload(host, repo, "zero-op")))
     assert not _shows_nag(host, second), second
     assert spawns == []
+
+
+@pytest.mark.parametrize("host", ["codex", "agy", "grok"])
+def test_session_with_no_own_edit_is_not_nagged_for_peer_dirt(monkeypatch, repo, host):
+    monkeypatch.setattr(nag.xs_lane_budget, "read_lane", lambda r, sid: None)
+    monkeypatch.setattr(shim, "_dial", lambda request: None)
+    assert not _shows_nag(host, shim.run(host, json.dumps(_payload(host, repo, "no-own-edit"))))
 
 
 def test_engine_deny_is_untouched(monkeypatch, repo):

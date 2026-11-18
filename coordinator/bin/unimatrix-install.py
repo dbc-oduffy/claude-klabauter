@@ -1908,8 +1908,9 @@ def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=Non
     return "updated" if text is not None else "created"
 
 
-AGY_ALLOW_RULE = "command(coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json)"
+AGY_ALLOW_RULE = "command(coordinator-invoke engine_ask.submit)"
 AGY_LEGACY_ALLOW_RULE = "command(coordinator-invoke *)"
+AGY_PRIOR_ALLOW_RULE = "command(coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json)"
 
 
 def invoke_launcher_path():
@@ -1938,7 +1939,10 @@ def seed_agy_allow_rule(config_path, *, uninstall=False, rule=None) -> str:
     is repaired structurally.
     """
     rule = rule or agy_absolute_allow_rule()
-    owned = (AGY_ALLOW_RULE, agy_absolute_allow_rule(), AGY_LEGACY_ALLOW_RULE)
+    owned = (
+        AGY_ALLOW_RULE, agy_absolute_allow_rule(), AGY_LEGACY_ALLOW_RULE, AGY_PRIOR_ALLOW_RULE,
+        AGY_PRIOR_ALLOW_RULE.replace("command(coordinator-invoke ", f"command({invoke_launcher_path()} ", 1),
+    )
     path = Path(config_path)
     state_path = path.with_name(".coordinator-allow-rule-agy.json")
     text = path.read_bytes().decode("utf-8") if path.exists() else None

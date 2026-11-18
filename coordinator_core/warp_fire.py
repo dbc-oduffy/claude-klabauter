@@ -41,7 +41,15 @@ def is_submit_name(name: object) -> bool:
 NO_WORKFLOW_HOSTS = frozenset({"codex", "agy", "grok"})
 
 #: The non-Claude route; the same text as the agy allow rule (`unimatrix-install.AGY_ALLOW_RULE`).
-INVOKE_SUBMIT_COMMAND = "coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json"
+#: No `--params-file`: the invoke CLI errors on a missing file before the op runs, while empty params make
+#: `engine_ask_submit` read (or scaffold) `CANONICAL_PARAMS_PATH` itself.
+INVOKE_SUBMIT_COMMAND = "coordinator-invoke engine_ask.submit"
+
+#: Appended to `fire_step` for `NO_WORKFLOW_HOSTS`: where the params live, and that the first call stages them.
+INVOKE_PARAMS_NOTE = (
+    " Its params are `.coordinator-local/em-submit.json` (`ask` = the PM's words verbatim, `ask_source` = `pm`);"
+    " a first call with no file writes the scaffold."
+)
 
 
 def fire_command(sizing_rel: Optional[str] = None, host: Optional[str] = None) -> str:
@@ -49,6 +57,7 @@ def fire_command(sizing_rel: Optional[str] = None, host: Optional[str] = None) -
 
     A host in `NO_WORKFLOW_HOSTS` gets `INVOKE_SUBMIT_COMMAND` (the params file carries the args);
     any other host, or none, keeps the `Workflow({...})` call.
+    The sizing is not carried on the CLI route: the params file holds it (`sizing`).
     """
     if host in NO_WORKFLOW_HOSTS:
         return INVOKE_SUBMIT_COMMAND
@@ -67,7 +76,8 @@ def minted_step(script_path: Optional[str] = None) -> str:
 
 def fire_step(sizing_rel: Optional[str] = None, host: Optional[str] = None) -> str:
     """One sentence: make the submit call, once."""
-    return f"Next step, the only one: call `{fire_command(sizing_rel, host)}`, once."
+    note = INVOKE_PARAMS_NOTE if host in NO_WORKFLOW_HOSTS else ""
+    return f"Next step, the only one: call `{fire_command(sizing_rel, host)}`, once.{note}"
 
 
 NAG_REPEAT_PREFIX = "[engine-ask nag"

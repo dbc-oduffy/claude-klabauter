@@ -2,7 +2,8 @@
 
 Spawns no git and never pushes (DR-329): the only mutation is
 `push_cadence.note_commit`, which marks the repo due. `nudged` means "queued
-for the cadence push", never "pushed".
+for the cadence push", never "pushed". A halt commit asks for the command
+form (`command_when_queued`), so its reply never reads `nudged`.
 """
 from __future__ import annotations
 
@@ -41,12 +42,17 @@ def nudge_push(
     worktree_root: Union[str, Path],
     repo_root: Union[str, Path],
     branch: Union[str, None] = None,
+    *,
+    command_when_queued: bool = False,
 ) -> dict:
     """Queue `repo_root` for the cadence push when its branch is an owned work/*.
 
     `branch` is the caller's already-read current branch; None reads HEAD here.
     Returns {status, reason}: `nudged` (queued; not pushed), `not_pushed`
-    (branch/remote policy or nothing ahead; reason says why).
+    (branch/remote policy or nothing ahead; reason says why). With
+    `command_when_queued` a queued branch is still marked due but answers
+    `not_pushed` plus `command` (`git push <remote> HEAD:<branch>`): the caller's
+    commit must reach the remote now, and the cadence gives no such bound.
     """
     try:
         branch = branch or head_branch(worktree_root)
@@ -70,6 +76,11 @@ def nudge_push(
         from coordinator_core.warm import push_cadence
 
         push_cadence.note_commit(repo_root)
+        if command_when_queued:
+            return {
+                **_result("not_pushed", f"{branch} is ahead of {remote}; cadence push queued, not yet pushed"),
+                "command": f"git push {remote} HEAD:{branch}",
+            }
         return _result("nudged", f"{branch} is ahead of {remote}; queued for the cadence push, not yet pushed")
     except Exception as exc:  # noqa: BLE001 -- a push report must never fail the run
         return _result("not_pushed", f"push state unreadable: {type(exc).__name__}")

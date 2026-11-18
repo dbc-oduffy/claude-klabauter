@@ -44,7 +44,7 @@ def _script(monkeypatch) -> str:
 def test_composed_script_halts_on_an_empty_test_verdict(monkeypatch):
     script = _script(monkeypatch)
     halt_at = script.index("halted: \"test_verdict_empty\"")
-    assert "await parallel([" in script[:halt_at]
+    assert "await Promise.all([!_halted ? _runVerify()" in script[:halt_at]
     assert halt_at < script.index("_nextAction = _closeable")
     assert "TEST_GUARD" not in script
 
@@ -158,9 +158,12 @@ def test_test_verdict_empty_halt_names_the_refire_not_journal_replay():
 
 def test_ledger_judge_rules_a_stalled_leg_inconclusive_never_not_met():
     rules = ask_compose._LEDGER_ITEMS_RULES
-    assert "stalled or timed out" in rules
-    assert "inconclusive evidence, never grounds for 'not_met'" in rules.replace("\n", " ")
-    assert rules.index("inconclusive evidence") < rules.index("otherwise 'not_met'")
+    flat = rules.replace("\n", " ")
+    assert "stalled or timed out" in flat
+    assert "is inconclusive: judge the item from the change itself" in flat
+    assert "set stall_only true on the item" in flat
+    assert flat.index("is inconclusive") < flat.index("otherwise 'not_met'")
+    assert "zero_run_cause) proves nothing" in flat and "never stall_only" in flat
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")

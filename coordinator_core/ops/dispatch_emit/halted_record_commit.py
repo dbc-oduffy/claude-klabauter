@@ -248,7 +248,7 @@ def _commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) ->
     if not reply.get("error"):
         from coordinator_core.ops.dispatch_emit import run_push
 
-        reply["push"] = run_push.nudge_push(worktree_root, repo_root)
+        reply["push"] = run_push.nudge_push(worktree_root, repo_root, command_when_queued=True)
     return reply
 
 

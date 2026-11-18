@@ -337,6 +337,24 @@ def test_empty_params_with_a_missing_or_non_object_file_name_the_path(tmp_path: 
     assert seen == []
 
 
+def test_missing_canonical_file_is_scaffolded_and_the_next_call_reads_it(params, tmp_path: Path, seen) -> None:
+    canonical = tmp_path / ".coordinator-local" / "em-submit.json"
+    first = op._engine_ask_submit({}, repo_root=tmp_path)
+    assert first["refused"] == "bad-request" and "No ask staged" in first["reason"] and "unreadable" not in first["reason"]
+    assert json.loads(canonical.read_text(encoding="utf-8")) == {"ask": "", "ask_source": "pm"}
+    assert seen == []
+    canonical.write_text(json.dumps({**params, "fire": False}), encoding="utf-8")
+    assert op._engine_ask_submit({}, repo_root=tmp_path)["run_id"] == "run-abc123"
+
+
+def test_existing_canonical_file_is_never_overwritten_by_the_scaffold(tmp_path: Path, seen) -> None:
+    canonical = tmp_path / ".coordinator-local" / "em-submit.json"
+    canonical.parent.mkdir()
+    canonical.write_text("[1]", encoding="utf-8")
+    result = op._engine_ask_submit({}, repo_root=tmp_path)
+    assert "must hold a JSON object" in result["reason"] and canonical.read_text(encoding="utf-8") == "[1]"
+
+
 def test_explicit_params_ignore_the_canonical_file(params, tmp_path: Path, seen) -> None:
     (tmp_path / ".coordinator-local").mkdir()
     (tmp_path / ".coordinator-local" / "em-submit.json").write_text('{"ask": "other"}', encoding="utf-8")
