@@ -119,12 +119,12 @@ def test_a_verdict_read_that_blocks_past_the_step_parks_at_the_reverify_step(hal
     real = cov.check_verdict
     calls = []
 
-    def slow(root, run_id, measured):
+    def slow(root, run_id, measured, git_root=None):
         calls.append(1)
         if len(calls) > 1:
             time.sleep(0.6)
             return cov.OverlayVerdict("missing", "still unwritten")
-        return real(root, run_id, measured)
+        return real(root, run_id, measured, git_root)
 
     monkeypatch.setattr(cov, "check_verdict", slow)
 

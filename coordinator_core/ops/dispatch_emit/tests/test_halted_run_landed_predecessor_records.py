@@ -80,10 +80,84 @@ def test_own_run_record_path_still_refuses(tmp_path):
     assert out["ok"] is False and own in out["error"]
 
 
+def _git(tmp_path: Path, *a):
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=str(tmp_path),
+                          check=True, capture_output=True, text=True, **no_console_creationflags()).stdout.strip()
+
+
+def _commit_change(tmp_path: Path, paths: list) -> str:
+    for p in paths:
+        (tmp_path / p).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / p).write_text("halt\n", encoding="utf-8")
+    _git(tmp_path, "add", "--", *paths)
+    _git(tmp_path, "commit", "-q", "-m", "halt record")
+    return _git(tmp_path, "rev-parse", "HEAD")
+
+
+def test_predecessor_subpaths_do_not_block_the_landing(tmp_path):
+    subs = [f"state/warp/{OLD[0]}/prompts/row-prompt.md", f"state/warp/{OLD[1]}/prompts/deep/briefs/C1.md"]
+    landed, product, prior = _fixture(tmp_path, subs)
+
+    out = hrl._handler({"run_id": RID, "sha": landed}, tmp_path)
+
+    assert out["ok"] is True and out["written"] is True, out
+    assert sorted(out["voided"]) == sorted(prior + subs)
+
+
+def test_halt_commit_of_only_predecessor_records_is_not_refused_as_changed_none(tmp_path):
+    landed, product, prior = _fixture(tmp_path, [])
+    halt = _commit_change(tmp_path, [f"state/warp/{OLD[0]}/prompts/a.md", f"state/warp/{OLD[1]}/prompts/b.md"])
+
+    out = hrl._handler({"run_id": RID, "shas": [landed, halt]}, tmp_path)
+
+    assert out["ok"] is True and out["written"] is True, out
+    assert out["covers"][landed] == product and out["covers"][halt] == []
+
+
+def test_extra_sha_changing_a_product_path_not_withheld_is_still_refused(tmp_path):
+    landed, _product, _prior = _fixture(tmp_path, [])
+    extra = _commit_change(tmp_path, [f"state/warp/{OLD[0]}/prompts/a.md", "unrelated.py"])
+
+    out = hrl._handler({"run_id": RID, "shas": [landed, extra]}, tmp_path)
+
+    assert out["ok"] is False and f"{extra} changed none of the run's withheld paths" in out["error"]
+
+
+def test_extra_sha_changing_the_own_record_dir_is_still_refused(tmp_path):
+    landed, _product, _prior = _fixture(tmp_path, [])
+    extra = _commit_change(tmp_path, [f"state/warp/{RID}/prompts/a.md"])
+
+    out = hrl._handler({"run_id": RID, "shas": [landed, extra]}, tmp_path)
+
+    assert out["ok"] is False and "changed none of the run's withheld paths" in out["error"]
+
+
+def test_dropped_names_predecessor_subpaths(tmp_path):
+    subs = [f"state/warp/{OLD[0]}/prompts/row-prompt.md", f"state/warp/{OLD[0]}/prompts/row-prompt-2.md"]
+    landed, _product, _prior = _fixture(tmp_path, subs)
+
+    out = hrl._handler({"run_id": RID, "sha": landed, "dropped": subs}, tmp_path)
+
+    assert out["ok"] is True and out["written"] is True, out
+    assert sorted(out["voided"]) == sorted(_prior + subs)
+
+
+def test_dropped_names_own_record_subpath(tmp_path):
+    own = f"state/warp/{RID}/prompts/row-prompt.md"
+    landed, _product, _prior = _fixture(tmp_path, [own])
+
+    out = hrl._handler({"run_id": RID, "sha": landed, "dropped": [own]}, tmp_path)
+
+    assert out["ok"] is True and out["dropped"] == [own], out
+
+
 @pytest.mark.parametrize("path,expected", [
     (f"state/warp/{OLD[0]}/halted.json", True),
     (f"state/warp/{RID}/halted.json", False),
-    (f"state/warp/{OLD[0]}/sub/x.json", False),
+    (f"state/warp/{OLD[0]}/sub/x.json", True),
+    (f"state/warp/{OLD[0]}/prompts/deep/x.md", True),
+    (f"state/warp/{RID}/prompts/x.md", False),
+    (f"state/warp/{OLD[0]}", False),
     ("coordinator_core/x.py", False),
 ])
 def test_predecessor_record_predicate(path, expected):

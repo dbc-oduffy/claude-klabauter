@@ -746,7 +746,8 @@ def main(argv: Sequence[str]) -> int:
 
 @register_op("git.maintenance")
 def _git_maintenance(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC `git.maintenance` handler. `params["tier"]` is required.
+    """JSON-RPC `git.maintenance` handler. `params["tier"]` is required; `params["heavy"]`
+    (default true) false runs daily's light legs, which still run under `pack_deletion_pause`.
 
     Tier validity was checked a third time
     here; `run_tier` already rejects an unknown tier into `result.errors`,
@@ -754,7 +755,7 @@ def _git_maintenance(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     tier = params.get("tier")
     repo = Path(params.get("repo") or repo_root or Path.cwd())
-    result = run_tier(repo, tier)
+    result = run_tier(repo, tier, heavy=params.get("heavy") is not False)
     return {
         "ok": not result.errors,
         "tier": result.tier,

@@ -688,6 +688,28 @@ def test_light_daily_runs_while_paused_and_heavy_stays_deferred(tmp_path: Path, 
     assert not store_hygiene.midx_names_missing_pack(common)
 
 
+def test_handler_light_daily_under_the_pause_covers_a_lagging_midx_and_deletes_no_pack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git import pack_deletion_pause, store_hygiene
+
+    repo = _packed_repo(tmp_path, 3)
+    common = repo / ".git"
+    before = store_hygiene.status(common)
+    assert (before.midx_pack_count or 0) < before.pack_count
+    packs = {p.name for p in (common / "objects" / "pack").glob("pack-*.pack")}
+    monkeypatch.setattr(pack_deletion_pause, "paused", lambda: True)
+
+    deferred = gm._git_maintenance({"tier": "daily", "repo": str(repo)})
+    assert deferred["deferred"] == gm.PAUSED_REASON and deferred["ran"] is False
+
+    light = gm._git_maintenance({"tier": "daily", "heavy": False, "repo": str(repo)})
+
+    assert light["ok"] is True and light["ran"] is True and light["deferred"] is None, light
+    assert light["packs_merged"] == 0 and light["pack_files_reaped"] == 0
+    after = store_hygiene.status(common)
+    assert after.midx_pack_count == after.pack_count == before.pack_count
+    assert {p.name for p in (common / "objects" / "pack").glob("pack-*.pack")} == packs
+
+
 def test_heavy_daily_that_consolidated_pays_one_midx_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A batch that left a current MIDX under the lock makes the trailing write redundant."""
     from coordinator_core.git import store_hygiene

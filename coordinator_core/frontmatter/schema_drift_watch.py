@@ -745,7 +745,9 @@ def _scan(
     # used to produce (state/bug-backlog/2026-09-09-the-drift-scan-has-the-
     # right-rung-and-falls-through-it-silently.yaml).
     resolved_dir, schemas_dir_rung, schemas_dir_degrade_reason = (
-        _resolve_scan_schemas_dir_with_reason(schemas_dir)
+        _resolve_scan_schemas_dir_with_reason(
+            Path(schemas_dir) if schemas_dir is not None else None
+        )
     )
     schema_paths = vendored_schema_paths(resolved_dir)
     source_paths = vendored_source_paths(resolved_dir)

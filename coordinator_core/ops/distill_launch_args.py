@@ -37,6 +37,11 @@ and written as ``launch-args-leg2.json``. Leg 1's file is never rewritten, becau
 params could drift from what leg 1 actually ran on. The reply shape is the same, from ``launch-leg2.workflow.mjs``;
 the Workflow also needs ``resumeFromRunId``.
 
+Sharding: when ``prepared_path`` is ``prepared-NN.json`` (or ``shard`` names NN, accepted on both legs),
+every file name carries ``-NN`` (``launch-NN.workflow.mjs``, ``launch-args-NN.json``, ``launch-leg2-NN.workflow.mjs``,
+``launch-args-leg2-NN.json``), so shards never overwrite each other. Leg 2 reads that shard's leg-1 args file;
+pass the shard's ``prepared_path`` or ``shard`` on leg 2.
+
 The launcher is written before the args file, so a launcher over the cap raises with neither on disk.
 
 Negative-spec: writes only in the run dir (args file, launcher, receipt); no git, no subprocess, no LLM call.
@@ -45,6 +50,7 @@ Negative-spec: writes only in the run dir (args file, launcher, receipt); no git
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +74,7 @@ _PASSTHROUGH_KEYS = (
     "contradictionClusters",
     "contradictionClusterCount",
 )
+_SHARD_RE = re.compile(r"prepared-([0-9]+)\.json")
 _SCRATCH_REL = "state/scratch"
 _MANIFEST_KEYS = frozenset({"run_id", "batches", "wiki_dirs", "wiki_slugs"})
 
@@ -119,7 +126,30 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
         if PACKED_SLUGS_KEY in prepared:
             payload = {k: v for k, v in payload.items() if k != "wikiSlugs"}
         payload = {**payload, PREPARED_KEY: prepared}
-    return _launch(payload, _workflow_script(params), LAUNCHER_FILE_NAME)
+    suffix = _shard_suffix(params)
+    return _launch(
+        payload,
+        _workflow_script(params),
+        _sharded(LAUNCHER_FILE_NAME, suffix),
+        file_name=_sharded(ARGS_FILE_NAME, suffix),
+    )
+
+
+def _shard_suffix(params: dict) -> str:
+    """``-NN`` when ``shard`` or a ``prepared-NN.json`` ``prepared_path`` names a shard, else ``""``."""
+    shard = params.get("shard")
+    if shard is not None:
+        if isinstance(shard, bool) or not isinstance(shard, (int, str)) or not re.fullmatch(r"[0-9]+", str(shard)):
+            raise ValueError("distill.launch_args: shard must be a non-negative integer or digit string")
+        return f"-{int(shard):02d}"
+    rel = params.get("prepared_path")
+    match = _SHARD_RE.fullmatch(Path(rel).name) if isinstance(rel, str) else None
+    return f"-{int(match.group(1)):02d}" if match else ""
+
+
+def _sharded(name: str, suffix: str) -> str:
+    stem, dot, ext = name.partition(".")
+    return f"{stem}{suffix}{dot}{ext}"
 
 
 def _leg2(params: dict, root: Path) -> dict:
@@ -130,11 +160,12 @@ def _leg2(params: dict, root: Path) -> dict:
         raise ValueError("distill.launch_args: leg 2 requires 'run_id'")
     script = _workflow_script(params)
     run_dir = _scratch_target(root, f"{RUN_DIR_REL}/{run_id}", "run_id")
-    leg1 = run_dir / ARGS_FILE_NAME
+    suffix = _shard_suffix(params)
+    leg1 = run_dir / _sharded(ARGS_FILE_NAME, suffix)
     try:
         args = json.loads(leg1.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        raise ValueError(f"distill.launch_args: leg 2 needs leg 1's {RUN_DIR_REL}/{run_id}/{ARGS_FILE_NAME}: {exc}") from exc
+        raise ValueError(f"distill.launch_args: leg 2 needs leg 1's {RUN_DIR_REL}/{run_id}/{leg1.name}: {exc}") from exc
     promoted = _scratch_json(root, params.get("promoted_path"), "promoted_path")
     splice = _scratch_json(root, params.get("splice_report_path"), "splice_report_path")
     if not isinstance(promoted, list):
@@ -145,9 +176,9 @@ def _leg2(params: dict, root: Path) -> dict:
     return _launch(
         {**payload, "promoted": promoted, "spliceReport": splice},
         script,
-        LEG2_LAUNCHER_NAME,
+        _sharded(LEG2_LAUNCHER_NAME, suffix),
         run_dir=run_dir,
-        file_name=LEG2_FILE_NAME,
+        file_name=_sharded(LEG2_FILE_NAME, suffix),
     )
 
 

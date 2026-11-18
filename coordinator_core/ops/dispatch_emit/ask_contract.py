@@ -32,7 +32,10 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.git import call_io_scope

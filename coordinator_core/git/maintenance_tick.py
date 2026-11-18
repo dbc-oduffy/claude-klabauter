@@ -63,22 +63,27 @@ def stamp_path(common_dir: Path, tier: str) -> Path:
 
 
 def _owed(common_dir: Path, tier: str, now: float) -> bool:
+    """True when `tier`'s stamp is older than its interval. A stamp dated in the future (clock skew,
+    a hand touch) is not a claim: it reads as owed, else it would suppress the tier until the clock
+    caught up."""
     try:
-        return now - stamp_path(common_dir, tier).stat().st_mtime >= _INTERVALS[tier]
+        age = now - stamp_path(common_dir, tier).stat().st_mtime
     except FileNotFoundError:
         return True
     except OSError:
         return False
+    return age < 0 or age >= _INTERVALS[tier]
 
 
 def _threshold_cooled(common_dir: Path, now: float) -> bool:
-    """True when the daily stamp is at least THRESHOLD_COOLDOWN_S old. A crossing that daily cannot
-    clear (unreachable loose objects over the slack until the weekly prune) would otherwise relaunch
-    a child every CHECK_INTERVAL_S."""
+    """True when the daily stamp is at least THRESHOLD_COOLDOWN_S old, or dated in the future. A
+    crossing that daily cannot clear (unreachable loose objects over the slack until the weekly
+    prune) would otherwise relaunch a child every CHECK_INTERVAL_S."""
     try:
-        return now - stamp_path(common_dir, "daily").stat().st_mtime >= THRESHOLD_COOLDOWN_S
+        age = now - stamp_path(common_dir, "daily").stat().st_mtime
     except OSError:
         return True
+    return age < 0 or age >= THRESHOLD_COOLDOWN_S
 
 
 def _owed_by_threshold(common_dir: Path) -> bool:

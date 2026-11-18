@@ -677,7 +677,7 @@ def _named_paths(owed: list, named: frozenset) -> list:
 
 
 def _predecessor_record(path: str, run_id: str) -> bool:
-    """True for a file directly in a run record dir (``state/warp/<id>/<file>``) of a run other than *run_id*.
+    """True for a file at any depth in a run record dir (``state/warp/<id>/**``) of a run other than *run_id*.
 
     Pure string test, casefolded, ``<repo>:`` qualifier stripped; the run's own record dir and every
     product path are False.
@@ -687,7 +687,33 @@ def _predecessor_record(path: str, run_id: str) -> bool:
     parts = _tree_path(path).replace("\\", "/").casefold().split("/")
     root_parts = RECORD_DIR_ROOT.casefold().split("/")
     n = len(root_parts)
-    return len(parts) == n + 2 and parts[:n] == root_parts and parts[n] != run_id.casefold()
+    return len(parts) >= n + 2 and parts[:n] == root_parts and parts[n] != run_id.casefold()
+
+
+def _only_predecessor_records(load_dir, before: Optional[str], after: Optional[str], run_id: str, prefix: str = "") -> bool:
+    """True when two trees differ and every differing non-tree path is a predecessor record of a run other than *run_id*.
+
+    Equal subtrees are skipped unread; the walk stops at the first other path. An unreadable tree reads as no difference.
+    """
+    new = (load_dir(after) if after else None) or {}
+    old = (load_dir(before) if before else None) or {}
+    differs = False
+    for name in new.keys() | old.keys():
+        a, b = new.get(name), old.get(name)
+        if a is not None and b is not None and a[1] == b[1]:
+            continue
+        full = f"{prefix}{name}"
+        a_tree, b_tree = bool(a and a[0] == 0o40000), bool(b and b[0] == 0o40000)
+        if a_tree or b_tree:
+            if not _only_predecessor_records(
+                load_dir, b[1] if b and b_tree else None, a[1] if a and a_tree else None, run_id, full + "/",
+            ):
+                return False
+        if (a and not a_tree) or (b and not b_tree):
+            if not _predecessor_record(full, run_id):
+                return False
+        differs = True
+    return differs
 
 
 def _declaring_runs(root: Path, run_id: str, named: list) -> dict:
@@ -764,7 +790,8 @@ def _carries_withheld(
 
     Each sha is compared with its first parent; the union of changed withheld paths must cover the
     withheld list less the paths a revision voided (``voided``, ``_voided_paths``), and every sha must
-    change at least one owed path. ``covers`` maps each sha to the owed paths it changed (empty for a
+    change at least one owed path (a sha that changed only other runs' record-dir files, a predecessor
+    halt commit, is exempt). ``covers`` maps each sha to the owed paths it changed (empty for a
     run withholding nothing or with no marker, which passes). An unreadable commit or tree refuses.
     *dropped* and *foreign* (casefolded tree paths) void owed paths last, kept-fingerprinted or not, and
     only paths no sha changed: *dropped* are left out on purpose; *foreign* need another live or landed run
@@ -820,7 +847,9 @@ def _carries_withheld(
                 return f"{sha} tree is unreadable; retry", {}, []
             if after != before:
                 changed.add(p)
-        if len(shas) > 1 and not changed:
+        if len(shas) > 1 and not changed and not _only_predecessor_records(
+            _dir, parent_meta["tree"] if parent_meta else None, meta["tree"], run_id,
+        ):
             return f"{sha} changed none of the run's withheld paths; drop it from shas", {}, []
         covered |= changed
         covers[sha] = [p for p in withheld if p in changed]
