@@ -18,8 +18,9 @@ from typing import NamedTuple
 
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.session import output_tree_layout as _layout
+from coordinator_core.session import record_homes as _record_homes
 
-LIVE_TREE = "state/handoffs"
+LIVE_TREE = _record_homes.home_rel("handoffs")
 ARCHIVE_TREE = "archive/handoffs"
 
 _HEAD_BYTES = 16384

@@ -1575,19 +1575,55 @@ def test_a_stalled_verify_is_inconclusive_timed_out_and_names_the_last_progress_
     head = _commit_files(
         root, {_HANG: "import time\n\n\ndef test_first():\n    assert True\n\n\ndef test_hangs():\n    time.sleep(600)\n"},
     )
-    # A Windows pytest cold start alone can take ~20s before the first dot, so a shorter window reads startup as the stall.
     monkeypatch.setattr(cov, "PYTEST_STALL_S", 45)
     monkeypatch.setattr(cov, "STALL_RETRY_SCALE_MIN", 1.0)
     monkeypatch.setattr(cov, "STALL_RETRY_SCALE_MAX", 1.0)
 
-    started = time.monotonic()
+    import io
+    import threading
+
+    from coordinator_core.diagnostics import contained_run
+
+    real_spawn = contained_run.spawn_in_capped_job
+
+    class _HungPytest:
+        """A pytest that printed one dot and then goes silent; `wait` returns only after the dot was drained."""
+
+        def __init__(self):
+            self.drained = threading.Event()
+            self.returncode = -9
+            first = io.BytesIO(b".\n")
+
+            class _Out:
+                def read1(_self, n):
+                    data = first.read(n)
+                    if not data:
+                        self.drained.set()
+                    return data
+
+            self.stdout, self.stderr = _Out(), io.BytesIO()
+
+        def wait(self, timeout=None):
+            if timeout is None:
+                return self.returncode
+            self.drained.wait(5)
+            raise subprocess.TimeoutExpired("pytest", timeout)
+
+    def spawn(argv, **kw):
+        if "pytest" in argv:
+            return _HungPytest(), lambda: None
+        return real_spawn(argv, **kw)
+
+    ticks = iter(range(0, 10**6, 1000))
+    monkeypatch.setattr(contained_run, "spawn_in_capped_job", spawn)
+    monkeypatch.setattr(cov, "_now", lambda: next(ticks))
+
     out = cov.verify(root, "run1", head, [_HANG])
 
     assert out.verdict == "inconclusive" and out.timed_out is True, out
     assert "stalled" in out.detail and "no output for 45s" in out.detail, out.detail
     assert "attempt 1" in out.detail and "attempt 2" in out.detail, out.detail
     assert "1 test result(s) reported" in out.detail and "last output line" in out.detail, out.detail
-    assert time.monotonic() - started < 240
 
 
 def test_a_seeds_stall_is_re_run_once_under_a_window_no_shorter_than_the_stall_interval_then_green(tmp_path, monkeypatch):
@@ -1788,3 +1824,99 @@ def test_repo_module_names_falls_back_to_a_walk_when_git_raises(tmp_path, monkey
     names = cov._repo_module_names(tmp_path)
     assert {"pkg", "mod"} <= names
     assert "absent_mod" not in names
+
+
+_TWO_TESTS = "def test_a():\n    assert True\n\n\ndef test_b():\n    assert False\n"
+_TWO_TESTS_A_EDITED = "def test_a():\n    assert 1 == 1\n\n\ndef test_b():\n    assert False\n"
+
+
+def _commit_all(root, msg):
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg)
+    return _git(root, "rev-parse", "HEAD").strip()
+
+
+def _argv_spy(monkeypatch):
+    seen = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        if "pytest" in argv:
+            seen.append(list(argv))
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    return seen
+
+
+def test_the_verify_argv_deselects_the_four_slow_tiers_before_the_targets(tmp_path):
+    argv = cov._pytest_argv(tmp_path, tmp_path, tmp_path / "bt", [READER])
+
+    expr = argv[argv.index("-m", 3) + 1]
+    assert expr == "not cadence and not complete and not pending_fix and not designed_red"
+    assert argv.index("-m", 3) < argv.index("--basetemp")
+    assert argv[argv.index("--basetemp") + 2:] == [READER]
+
+
+def test_the_xdist_worker_count_is_host_derived_bounded_and_serial_when_unsafe(tmp_path, monkeypatch):
+    monkeypatch.setattr(cov.os, "cpu_count", lambda: 24)
+    assert cov.xdist_workers(sys.executable, 2) == 2
+    assert cov.xdist_workers(sys.executable, 50) == cov.XDIST_MAX_WORKERS
+    assert cov.xdist_workers(sys.executable, 1) == 0
+    assert cov.xdist_workers("some/other/python", 5) == 0
+    monkeypatch.setattr(cov.os, "cpu_count", lambda: 4)
+    assert cov.xdist_workers(sys.executable, 5) == 0
+    monkeypatch.setattr(cov.os, "cpu_count", lambda: 8)
+    argv = cov._pytest_argv(tmp_path, tmp_path, tmp_path / "bt", [READER, _SECOND])
+    assert argv[argv.index("-n") + 1] == "2" and argv.index("-n") < argv.index("--rootdir")
+
+
+def test_a_changed_test_selects_only_that_test_and_any_code_outside_a_test_keeps_the_file_whole():
+    src = "import os\n\n\ndef helper():\n    return 1\n\n\ndef test_a():\n    assert helper()\n\n\ndef test_b():\n    assert True\n"
+    assert cov._changed_test_ids("t/x.py", src, [(9, 1)]) == ["t/x.py::test_a"]
+    assert cov._changed_test_ids("t/x.py", src, [(9, 1), (13, 1)]) == ["t/x.py::test_a", "t/x.py::test_b"]
+    assert cov._changed_test_ids("t/x.py", src, [(5, 1)]) is None  # a helper
+    assert cov._changed_test_ids("t/x.py", src, [(1, 1)]) is None  # an import
+    assert cov._changed_test_ids("t/x.py", src, [(9, 0)]) is None  # a pure deletion
+    assert cov._changed_test_ids("t/x.py", src, [(6, 1)]) == []  # a blank line is inert
+    cls = "class TestK:\n    def test_m(self):\n        pass\n\n    def test_n(self):\n        pass\n"
+    assert cov._changed_test_ids("t/k.py", cls, [(6, 1)]) == ["t/k.py::TestK::test_n"]
+
+
+def test_verify_runs_only_the_touched_tests_of_a_touched_file_not_the_whole_file(tmp_path, monkeypatch):
+    root, _head = _repo(tmp_path)
+    _write(root, "t/test_pair.py", _TWO_TESTS)
+    base = _commit_all(root, "pair")
+    _write(root, "t/test_pair.py", _TWO_TESTS_A_EDITED)
+    head = _commit_all(root, "edit a")
+    seen = _argv_spy(monkeypatch)
+
+    out = cov.verify(root, "run1", head, ["t/test_pair.py"], base_sha=base, touched=["t/test_pair.py"])
+
+    assert out.verdict == "green", out
+    assert [a[a.index("--basetemp") + 2:] for a in seen] == [["t/test_pair.py::test_a"]]
+    assert cov.verify(root, "run2", head, ["t/test_pair.py"], touched=["t/test_pair.py"]).verdict == "red"
+
+
+def test_verify_never_runs_a_slow_tier_test_and_a_land_of_only_such_tests_is_green_with_a_note(tmp_path):
+    root, _head = _repo(tmp_path)
+    _write(root, "t/test_tiers.py", "import pytest\n\n\n@pytest.mark.cadence\ndef test_slow():\n    assert False\n")
+    head = _commit_all(root, "cadence only")
+    out = cov.verify(root, "run1", head, ["t/test_tiers.py"])
+    assert out.verdict == "green" and "excluded tier" in out.detail, out
+    for tier in cov.TIER_EXCLUDED:
+        _write(root, "t/test_tiers.py", f"import pytest\n\n\n@pytest.mark.{tier}\ndef test_slow():\n    assert False\n\n\ndef test_fast():\n    assert True\n")
+        head = _commit_all(root, tier)
+        assert cov.verify(root, f"run-{tier}", head, ["t/test_tiers.py"]).verdict == "green", tier
+
+
+def test_verify_runs_two_or_more_targets_under_xdist_and_still_reports_the_red(tmp_path, monkeypatch):
+    pytest.importorskip("xdist")
+    monkeypatch.setattr(cov.os, "cpu_count", lambda: 16)
+    root, base, head = _two_commits(tmp_path, "ok\n", "broken\n")
+    seen = _argv_spy(monkeypatch)
+
+    out = cov.verify(root, "run1", head, [READER, _SECOND], base_sha=base)
+
+    assert out.verdict == "red" and out.failing == (f"{READER}::test_reads_data",), out
+    assert seen[0][seen[0].index("-n") + 1] == "2"

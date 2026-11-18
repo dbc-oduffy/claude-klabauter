@@ -35,7 +35,7 @@ write side, dispatched internally behind this SAME entrypoint (AC4, never a
 second `register_op`). See `docs/plans/2026-08-10-sizing-objects-join-the-deliverable-spine.md`
 § C2 for the full spec, including AC6a's unreadable-record handling below.
 
-Candidate surface (handoff kind, unchanged): `state/handoffs/*.md` ONLY (flat, live corpus) — mirrors
+Candidate surface (handoff kind): `state/handoffs/*.md` and `state/handoffs/YYYY-MM/*.md` ONLY (live corpus, never `archive/`) — mirrors
 `handoff_transition._resolve_path`'s own containment discipline (mutation verbs are live-only;
 archived handoffs are out of scope for a mutation verb by long-standing convention, see
 docs/problems/2026-07-08-op-family-path-containment-investigation.md § 4). A candidate is
@@ -201,7 +201,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.liveness import resolve_live_session_ids
 from coordinator_core.ops import requirement_register
-from coordinator_core.session.output_tree_layout import is_month_dir
+from coordinator_core.session.output_tree_layout import is_month_dir, iter_entries
 from coordinator_core.ops.cascade_baton_rows import resolve_baton_rows
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
@@ -463,7 +463,7 @@ def _claimant(candidate_path: Path, repo_root: Path) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Candidate collection — state/handoffs/*.md only (live, flat; see module docstring)
+# Candidate collection — live state/handoffs/ (flat + YYYY-MM shards; see module docstring)
 # ---------------------------------------------------------------------------
 
 
@@ -549,18 +549,18 @@ def _collect_live_candidates_for_kind(
     if not base_dir.is_dir():
         return matches, True, unreadable
 
-    # The corpus is month-sharded (`<subdir>/YYYY-MM/`) beside legacy flat
-    # records; a flat-only scan misses every record the scaffolder buckets.
+    # Month-sharded (`<subdir>/YYYY-MM/`) beside any flat records; a flat-only scan misses the shards.
+    # `iter_entries` skips an unreadable directory silently, so the root and every shard are
+    # probed here: an unreadable one must surface as scan_incomplete, never as "no candidates".
     try:
-        entries = list(base_dir.iterdir())
-        for shard in [e for e in entries if is_month_dir(e.name) and e.is_dir()]:
-            entries.extend(shard.iterdir())
+        for name in os.listdir(base_dir):
+            if is_month_dir(name) and (base_dir / name).is_dir():
+                os.listdir(base_dir / name)
     except OSError:
         return matches, True, unreadable
 
-    for path in entries:
-        if path.suffix != kind.suffix or not path.is_file():
-            continue
+    for rel in iter_entries(str(worktree_root), kind.corpus_subdir, kind.suffix):
+        path = worktree_root / rel
         try:
             fm = kind.reader(str(path))
         except Exception as exc:  # noqa: BLE001 — quarantine an unreadable/malformed record

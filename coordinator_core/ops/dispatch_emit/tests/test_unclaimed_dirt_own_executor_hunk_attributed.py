@@ -91,11 +91,25 @@ def test_an_unreadable_baseline_still_refuses_unattributed(repo):
     assert refusals == [(PATH, None, "unreadable")]
 
 
-def test_a_mixed_block_that_cannot_be_split_still_refuses_unattributed(repo):
-    """A run insertion that fuses with the dirt line into one differently sized block has no attributable writer."""
-    work = [HEAD[0], "    own_a = 1\n", "    own_b = 2\n", "    own_c = 3\n", *DIRT[1:]]
+def test_a_fused_block_whose_dirt_is_accounted_for_stages_the_own_lines_with_the_dirt_at_head(repo):
+    """A run insertion fusing with a one-line dirt rewrite into one `@@ -2,1 +2,4 @@` block: the dirt line
+    takes the block's one HEAD line, so the staged blob is HEAD plus only the run's lines."""
+    own = ["    own_a = 1\n", "    own_b = 2\n", "    own_c = 3\n"]
+    work = [HEAD[0], *own, *DIRT[1:]]
 
     blobs, refusals = _own(repo, DIRT, work)
 
+    assert refusals == []
+    assert _blob(repo, blobs[PATH]) == [HEAD[0], *own, *HEAD[1:]]
+
+
+def test_a_fused_block_whose_dirt_does_not_account_for_the_head_lines_still_refuses_unattributed(repo):
+    """The dirt grew the one HEAD line into two: the non-own lines no longer map onto the block's HEAD lines,
+    so the block has no attributable writer and must not land."""
+    dirt = [HEAD[0], "    d1 = 1\n", "    d2 = 2\n", *HEAD[2:]]
+    work = [HEAD[0], "    own_a = 1\n", "    own_b = 2\n", "    own_c = 3\n", "    d1 = 1\n", "    d2 = 2\n", *HEAD[2:]]
+
+    blobs, refusals = _own(repo, dirt, work)
+
     assert PATH not in blobs
-    assert refusals == [(PATH, None, "@@ -2,1 +2,4 @@")]
+    assert refusals == [(PATH, None, "@@ -2,1 +2,5 @@")]

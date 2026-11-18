@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN_ID = "run-zl"
 INCIDENT = {"targeted_tests": {"status": "error", "tests_run": 0, "tests_failed": 0, "summary": "timeout: 120s"}}
-CAUSES = ["budget-exhausted", "collection-failure", "empty-selection", "killed"]
+CAUSES = ["budget-exhausted", "collection-failure", "empty-selection", "killed", "missing-target"]
 
 
 def _git(root: Path, *args: str) -> None:
@@ -71,6 +71,17 @@ def test_run_dir_test_leg_record_with_zero_tests_refuses_with_the_cause(repo, ca
     _leg_record(repo, status="error", tests_run=0, tests_failed=0, zero_run_cause=cause)
     findings, check = li.landing_test_gate(repo, {}, RUN_ID)
     assert _refused(findings, check) and cause in findings[0].detail
+
+
+def test_missing_target_leg_record_halts_mechanical_and_names_the_path(repo):
+    from coordinator_core.ops.dispatch_emit import halt_remedy_class as hrc
+
+    _leg_record(repo, status="error", tests_run=0, tests_failed=0, zero_run_cause="missing-target",
+                summary="missing target(s) absent from disk: tests/retrieval/test_gone.py")
+    findings, check = li.landing_test_gate(repo, {}, RUN_ID)
+    assert _refused(findings, check)
+    assert "tests/retrieval/test_gone.py" in findings[0].detail and "engine-side" in findings[0].detail
+    assert hrc.is_mechanical(findings[0].reason) and findings[0].reason != "criterion_not_met"
 
 
 def test_pass_with_zero_tests_run_in_the_leg_record_refuses(repo):

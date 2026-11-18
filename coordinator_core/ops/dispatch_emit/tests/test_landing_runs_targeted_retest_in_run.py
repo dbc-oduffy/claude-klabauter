@@ -75,10 +75,11 @@ def test_a_failure_count_with_no_node_is_a_retest_clearable_harness_error(status
     findings, check = ltt.failed_targeted_tests({"status": status, "tests_failed": 1, "baseline": None})
 
     assert check == "failed"
-    assert [f.reason for f in findings] == [ltt.ZERO_FAIL_UNATTRIBUTED]
-    assert ltt.ZERO_FAIL_UNATTRIBUTED in ltt.TEST_EVIDENCE_REASONS
-    assert "counts only" in findings[0].detail and ltt.NO_NODE_RECORDED in findings[0].detail
-    assert ltt.retest_step(findings, {})["kind"] == ltt.ZERO_FAIL_UNATTRIBUTED
+    assert [f.reason for f in findings] == [ltt.TARGETED_TESTS_FAILED]
+    assert findings[0].path == ""
+    assert "no baseline to attribute them" in findings[0].detail and ltt.NO_NODE_RECORDED in findings[0].detail
+    step = ltt.retest_step(findings, {})
+    assert step["kind"] == ltt.TARGETED_TESTS_FAILED and step["remedy"] == "landing-runs-targeted-retest"
 
 
 @pytest.mark.parametrize("verdict", [

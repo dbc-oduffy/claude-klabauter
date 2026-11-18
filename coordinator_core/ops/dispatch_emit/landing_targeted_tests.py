@@ -33,7 +33,10 @@ ZERO_RUN_BUDGET = "budget-exhausted"
 ZERO_RUN_COLLECTION = "collection-failure"
 ZERO_RUN_EMPTY = "empty-selection"
 ZERO_RUN_KILLED = "killed"
+#: Engine-side: every handed target was absent from disk (evicted or parked by the run itself), so no pytest ran.
+ZERO_RUN_MISSING_TARGET = "missing-target"
 _ZERO_RUN_CAUSES = {
+    ZERO_RUN_MISSING_TARGET: "every target path was absent from disk, so no test ran (an engine-side fault, not a test failure)",
     ZERO_RUN_KILLED: "the test process was killed before any test completed",
     ZERO_RUN_BUDGET: "the verify budget was spent before any test ran",
     ZERO_RUN_COLLECTION: "pytest collection failed, so no test ran",

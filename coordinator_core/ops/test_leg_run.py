@@ -84,11 +84,32 @@ _COUNT = re.compile(r"(\d+) (passed|failed)\b")
 _SUMMARY_TAIL = re.compile(r"\bin \d+(?:\.\d+)?s\b")
 
 
-def _tally(result: dict, rc: Optional[int], lines: Sequence[str]) -> None:
+def _partition(targets: Sequence[str], root: Path) -> tuple[list[str], list[str]]:
+    """(present, absent): a target is absent when its path part (before `::`) does not exist under `root`;
+    an option-shaped target is never a path and stays present."""
+    present: list[str] = []
+    absent: list[str] = []
+    for t in targets:
+        path = t.split("::", 1)[0]
+        (present if t.startswith("-") or (root / path).exists() else absent).append(t)
+    return present, absent
+
+
+def _stamp_all_missing(result: dict, absent: Sequence[str]) -> None:
+    """No handed target exists on disk: no pytest ran. Records `missing_targets` and stamps the engine-side
+    `missing-target` zero-run cause, its summary naming every absent path."""
+    result["missing_targets"] = list(absent)
+    result["summary"] = "missing target(s) absent from disk: " + ", ".join(absent)
+    result["failing_detail"] = [{"node_id": "test_leg_run", "message": result["summary"]}]
+    result["status_after"] = "fail"
+    _tally(result, 5, (), missing_only=True)
+
+
+def _tally(result: dict, rc: Optional[int], lines: Sequence[str], *, missing_only: bool = False) -> None:
     """Stamp `tests_run`, `tests_failed`, `status` and, when no test completed, `zero_run_cause` onto `result`.
     `rc` None is a deadline expiry; a negative `rc` is a POSIX signal kill (a Windows-killed child exits with a
     positive code and reads as collection-failure); the counts come from pytest's terminal summary line
-    (errors are not completed tests)."""
+    (errors are not completed tests). `missing_only`: no pytest ran because every target was absent."""
     counts = {"passed": 0, "failed": 0}
     for raw in reversed(list(lines)):
         if _SUMMARY_TAIL.search(raw):
@@ -105,7 +126,9 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str]) -> None:
     result.pop(ltt.ZERO_RUN_CAUSE_KEY, None)
     if run_n:
         return
-    if rc is None:
+    if missing_only:
+        cause = ltt.ZERO_RUN_MISSING_TARGET
+    elif rc is None:
         cause = ltt.ZERO_RUN_BUDGET
     elif rc < 0:
         cause = ltt.ZERO_RUN_KILLED
@@ -129,19 +152,31 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
         dest = cov._prepare_guarded(root, mroot, post, cov._no_leg)
         rels = [t.replace("\\", "/") for t in touched]
         own = [t for t in rels if cov._is_test_path(t) and (dest / t).is_file()]
-        seeds = tuple(dict.fromkeys([*targets, *own]))
+        present, absent = _partition(targets, dest)
+        seeds = tuple(dict.fromkeys([*present, *own]))
         picked, note = cov._with_importers(dest, seeds, rels)
-        out: dict = {"importer_targets": list(picked[len(seeds):]), "note": note, "new_red": [], "targets_run": list(picked)}
+        importers = list(picked[len(seeds):])
+        try:
+            base_rev = cov._commit_sha(root, base_sha) if base_sha else None
+        except cov.ExportError:
+            base_rev = None
+        picked = cov.narrow_touched_tests(root, dest, base_rev, post, picked, rels)
+        out: dict = {"importer_targets": importers, "note": note, "new_red": [], "targets_run": list(picked)}
+        if absent:
+            out["missing_targets"] = absent
         if not picked:
             out.update(status_after="pass", failing=[], failing_detail=[], pre_existing=[])
-            _tally(out, 5, ())
+            if absent and not present:
+                _stamp_all_missing(out, absent)
+            else:
+                _tally(out, 5, ())
             return out
         try:
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"test-leg-{os.getpid()}")
             env = cov._mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest)
             if left() <= 0:
                 raise subprocess.TimeoutExpired("pytest", 0)
-            ran = cov._run_pytest_retrying(cov._pytest_argv(root, dest, basetemp, picked), dest, env)
+            ran = cov._tier_empty_as_green(cov._run_pytest_retrying(cov._pytest_argv(root, dest, basetemp, picked), dest, env))
             text = ran.stdout + ran.stderr
             ids = list(cov.failing_ids(text))
             detail = _reds(text.splitlines())
@@ -190,7 +225,16 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
             return result
-        rc, lines = _pytest(targets, cwd, left())
+        present, absent = _partition(targets, Path(cwd))
+        if absent:
+            result["missing_targets"] = absent
+        if not present:
+            _stamp_all_missing(result, absent)
+            result["over_budget"] = False
+            result["elapsed_s"] = round(time.monotonic() - started, 3)
+            result["budget_s"] = budget_s
+            return result
+        rc, lines = _pytest(present, cwd, left())
         reds = _reds(lines)
         result["failing"] = list(reds)
         result["failing_detail"] = [{"node_id": n, "message": m} for n, m in reds.items()]

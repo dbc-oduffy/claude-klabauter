@@ -49,31 +49,12 @@ class _FakeLibc:
         self.calls.append(("setiopolicy_np", args))
 
 
-def test_windows_sets_below_normal_then_background_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = []
-    class _Fn:
-        def __init__(self, impl) -> None:
-            self._impl = impl
-
-        def __call__(self, *a):
-            return self._impl(*a)
-
-    kernel32 = types.SimpleNamespace(
-        GetCurrentProcess=_Fn(lambda: "HANDLE"),
-        SetPriorityClass=_Fn(lambda handle, flag: calls.append((handle, flag))),
-    )
-    fake_ctypes = types.SimpleNamespace(
-        WinDLL=lambda name: kernel32, c_void_p="c_void_p", c_uint32="c_uint32", c_int="c_int"
-    )
-    monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
-    monkeypatch.setattr(sys, "platform", "win32")
-    publish.lower_process_priority_self()
-    assert calls == [
-        ("HANDLE", publish._WIN_BELOW_NORMAL_PRIORITY_CLASS),
-        ("HANDLE", publish._WIN_PROCESS_MODE_BACKGROUND_BEGIN),
-    ]
+def test_windows_never_enters_background_mode() -> None:
+    """PROCESS_MODE_BACKGROUND_BEGIN pins a hard 32 MB working-set max; publish must not use it."""
+    source = (_BIN_DIR / "publish.py").read_text(encoding="utf-8")
+    assert "0x100000" not in source
+    assert not hasattr(publish, "_WIN_PROCESS_MODE_BACKGROUND_BEGIN")
     assert publish._WIN_BELOW_NORMAL_PRIORITY_CLASS == 0x4000
-    assert publish._WIN_PROCESS_MODE_BACKGROUND_BEGIN == 0x100000
 
 
 def test_linux_niceness_and_ioprio_idle(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,7 +141,10 @@ def q(cls):
 before = (q(33), q(39))
 m.lower_process_priority_self()
 after = (q(33), q(39))
-print(*before, *after)
+mn = ctypes.c_size_t(); mx = ctypes.c_size_t(); fl = ctypes.c_ulong()
+k.GetProcessWorkingSetSizeEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+k.GetProcessWorkingSetSizeEx(h, ctypes.byref(mn), ctypes.byref(mx), ctypes.byref(fl))
+print(*before, *after, fl.value)
 """
 
 
@@ -175,6 +159,7 @@ def test_windows_real_process_priority_is_lowered_in_live_child() -> None:
         capture_output=True, text=True, timeout=60,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    io_before, page_before, io_after, page_after = (int(x) for x in out.stdout.split()[-4:])
+    io_before, page_before, io_after, page_after, ws_flags = (int(x) for x in out.stdout.split()[-5:])
     assert io_after < io_before, out
     assert page_after < page_before, out
+    assert not ws_flags & 0x4, f"hard working-set max (QUOTA_LIMITS_HARDWS_MAX_ENABLE) set: {out}"

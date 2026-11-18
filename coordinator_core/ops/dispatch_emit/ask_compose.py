@@ -6594,10 +6594,12 @@ def compose_ask_script(
     b.append(_review_blocked_halt_js(sizing_rel))
     b.append(
         f"  const _reviewVerdicts = {_VERDICT_COUNT_JS};\n"
+        "  const _prepNoProductDelta = !_resumeLedger && !!_reviewPrep && !_reviewPrep.error && _reviewPrep.product_files === 0;\n"
+        "  if (!_prepNoProductDelta) {\n"
         "  if (!_halted && !_alreadyDelivered && _codeReviewOwed && _reviewVerdicts === 0 && !_metBySkipped) { _halted = { halted: "
         f"{_lit(HALT_REVIEW_FLOOR)}, reason: 'review: 0 verdicts on a code-editing run (' + "
         f"_manifest.{_REVIEW_CODE_KEY}.slice(0, 5).join(', ') + ')', run_id: _runId, "
-        "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }"
+        "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }\n  }"
     )
     test_guard = (
         f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _reviewApplied > 0 || {XS_TEST_TARGET_JS}) "

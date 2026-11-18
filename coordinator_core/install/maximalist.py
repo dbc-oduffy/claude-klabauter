@@ -1945,6 +1945,17 @@ def _run_body(
         except Exception as exc:  # noqa: BLE001 -- advisory step, never fails the install
             print(f"[ADVISORY] git-perf-config fleet sweep not applied: {exc}", file=sys.stderr)
 
+        orch.phase_header("external-workspace git guard (includeIf hook routing for registered workspaces)")
+        try:
+            from coordinator_core.install.external_workspace_git_guard import (
+                apply as _apply_external_workspace_git_guard,
+            )
+
+            for line in _apply_external_workspace_git_guard():
+                print(f"     external-workspace-git-guard: {line}")
+        except Exception as exc:  # noqa: BLE001 -- advisory step, never fails the install
+            print(f"[ADVISORY] external-workspace git guard not applied: {exc}", file=sys.stderr)
+
     if _is_standalone_plugin_clone(doe_clone):
         orch.skip_note(
             "DoE launch chain (Steps 3.5b-3.5b.2 -- claude-author wrapper, launcher)",

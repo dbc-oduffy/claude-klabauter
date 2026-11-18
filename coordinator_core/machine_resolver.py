@@ -646,6 +646,18 @@ def _mtime_ns(path: Path) -> int:
         return -1
 
 
+def _external_ws_fields(flat: dict) -> dict:
+    """``{workspace name: {field: value}}`` from the flattened registry's ``external_workspaces.*`` keys."""
+    fields: dict = {}
+    for k, v in flat.items():
+        if not k.startswith(_EXTERNAL_WS_PREFIX):
+            continue
+        name, _, field = k[len(_EXTERNAL_WS_PREFIX):].rpartition(".")
+        if name:
+            fields.setdefault(name, {})[field] = v
+    return fields
+
+
 def _external_workspace_state() -> tuple:
     """``(roots, readable, posix_paths)``, cached per process on registry_dir and both files' mtimes.
 
@@ -675,14 +687,7 @@ def _external_workspace_state() -> tuple:
             continue
         flat.update(part)
     if readable:
-        fields: dict = {}
-        for k, v in flat.items():
-            if not k.startswith(_EXTERNAL_WS_PREFIX):
-                continue
-            name, _, field = k[len(_EXTERNAL_WS_PREFIX):].rpartition(".")
-            if name:
-                fields.setdefault(name, {})[field] = v
-        for name, f in fields.items():
+        for name, f in _external_ws_fields(flat).items():
             raw = f.get("path")
             if not isinstance(raw, str) or not raw.strip():
                 continue
@@ -726,6 +731,40 @@ def external_workspace_roots() -> dict:
     Zero spawns; never raises; ``{}`` on any read failure.
     """
     return dict(_external_workspace_state()[0])
+
+
+def external_workspace_registered_paths() -> dict:
+    """``{key: {"path", "url", "ref", "vcs"}}`` over the merged registry, missing directories kept.
+
+    ``path`` is the registered string, stripped; ``url``/``ref``/``vcs`` are the registered
+    strings, ``""`` when absent. An entry without a non-empty ``path`` is dropped. Unlike
+    ``external_workspace_roots`` no existence check applies, so a workspace to rehydrate is
+    listed. Zero spawns; never raises; ``{}`` on any read failure (see
+    ``external_workspace_registry_readable``).
+    """
+    try:
+        reg_dir = registry_dir()
+        flat: dict = {}
+        for name in ("registry.toml", "registry.local.toml"):
+            part = _read_registry_file_strict(reg_dir / name)
+            if part is None:
+                return {}
+            flat.update(part)
+        out: dict = {}
+        for name, f in _external_ws_fields(flat).items():
+            raw = f.get("path")
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            out[name] = {
+                "path": raw.strip(),
+                **{
+                    k: (f[k].strip() if isinstance(f.get(k), str) else "")
+                    for k in ("url", "ref", "vcs")
+                },
+            }
+        return out
+    except Exception:  # noqa: BLE001 — a view must not raise
+        return {}
 
 
 def research_targets() -> list:

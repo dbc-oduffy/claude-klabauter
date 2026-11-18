@@ -180,6 +180,39 @@ def test_init_and_clone_destination_denied(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p("git init", cwd=ws / "slice")))
 
 
+@pytest.fixture
+def ws_missing(ws, monkeypatch: pytest.MonkeyPatch):
+    reg = ws / "ml"
+    missing = ws / "not-yet"
+    with (reg / "registry.local.toml").open("a", encoding="utf-8") as f:
+        f.write(f'[external_workspaces.gone]\npath = "{missing.as_posix()}"\nurl = "https://h/r.git"\n')
+    mr._external_ws_cache.clear()
+    return missing
+
+
+def test_clone_init_worktree_into_missing_registered_workspace_denied(ws, ws_missing) -> None:
+    dest = ws_missing.as_posix()
+    for cmd in (
+        f"git clone https://h/r.git {dest}",
+        f"git clone https://h/r.git {dest}/sub",
+        f"git init {dest}",
+        f"git worktree add {dest}",
+    ):
+        out = _enveloped(guard.check)(_p(cmd, cwd=ws / "sibling"))
+        assert _denied(out), cmd
+        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "external_workspace.rehydrate" in reason and "gone" in reason
+
+
+def test_clone_into_missing_unregistered_path_allowed(ws, ws_missing) -> None:
+    dest = (ws / "other-missing").as_posix()
+    assert _enveloped(guard.check)(_p(f"git clone https://h/r.git {dest}", cwd=ws / "sibling")) is None
+
+
+def test_non_destination_verb_with_missing_registered_dir_allowed(ws, ws_missing) -> None:
+    assert _enveloped(guard.check)(_p(f"git -C {ws_missing.as_posix()} status", cwd=ws / "sibling")) is None
+
+
 def test_clone_from_workspace_to_outside_allowed(ws) -> None:
     root = (ws / "slice").as_posix()
     assert _enveloped(guard.check)(_p(f"git clone {root} {(ws / 'sibling' / 'c').as_posix()}", cwd=ws / "sibling")) is None

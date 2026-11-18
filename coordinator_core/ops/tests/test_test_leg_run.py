@@ -116,12 +116,36 @@ def test_flaky_red_that_passes_on_the_rerun_is_passed_alone(repo, tmp_path):
     assert data["passed_alone"] == ["tests/test_flaky.py::test_flaky"]
 
 
-@pytest.mark.parametrize("target,exit_code", [("tests/test_missing.py", 4), ("tests/empty_dir", 5)])
-def test_pytest_exit_with_no_parsed_red_is_a_fail_never_a_pass(repo, tmp_path, target, exit_code):
+def test_pytest_exit_with_no_parsed_red_is_a_fail_never_a_pass(repo, tmp_path):
     (repo / "tests" / "empty_dir").mkdir()
-    code, data = _main(["--", target], tmp_path / "o.json")
+    code, data = _main(["--", "tests/empty_dir"], tmp_path / "o.json")
     assert code == 0 and data["status_after"] == "fail" and data["failing"] == []
-    assert f"exit {exit_code}" in data["failing_detail"][0]["message"]
+    assert "exit 5" in data["failing_detail"][0]["message"]
+
+
+def test_absent_only_targets_spawn_no_pytest_and_stamp_missing_target(repo, tmp_path, monkeypatch):
+    seen = _spawns(monkeypatch)
+    code, data = _main(["--", "tests/test_gone.py", "tests/test_gone2.py::test_x"], tmp_path / "o.json")
+    assert seen == [] and code == 0 and data["over_budget"] is False
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_MISSING_TARGET == "missing-target"
+    assert data["tests_run"] == 0 and data["status"] == "error" and data["status_after"] == "fail"
+    assert data["missing_targets"] == ["tests/test_gone.py", "tests/test_gone2.py::test_x"]
+    assert "tests/test_gone.py" in data["summary"] and "tests/test_gone2.py" in data["summary"]
+    assert "engine-side" in ltt._ZERO_RUN_CAUSES[ltt.ZERO_RUN_MISSING_TARGET]
+
+
+def test_mixed_present_and_absent_targets_run_only_the_present_ones(repo, tmp_path, monkeypatch):
+    seen = _spawns(monkeypatch)
+    _code, data = _main(["--", PASS_ID, "tests/test_gone.py"], tmp_path / "o.json")
+    assert len(seen) == 1 and "tests/test_gone.py" not in seen[0] and PASS_ID in seen[0]
+    assert data["missing_targets"] == ["tests/test_gone.py"]
+    assert (data["tests_run"], data["status"], data["status_after"]) == (1, "pass", "pass")
+    assert "zero_run_cause" not in data
+
+
+def test_all_present_targets_record_no_missing_targets(repo, tmp_path):
+    _code, data = _main(["--", PASS_ID], tmp_path / "o.json")
+    assert "missing_targets" not in data
 
 
 def test_collection_error_is_a_fail(repo, tmp_path):
@@ -316,13 +340,50 @@ def test_killed_child_reports_killed(repo, tmp_path, monkeypatch):
     assert "killed" in ltt.zero_run_cause_note({"zero_run_cause": "killed"}, "x")
 
 
-def test_clone_leg_with_nothing_selected_is_a_zero_run(landing, tmp_path):
+def test_clone_leg_with_only_absent_targets_is_a_missing_target_zero_run(landing, tmp_path):
     root, _base = landing
     post = _land(root, "README.md", "x\n")
     _code, data = _main(["--head-sha", post, "--touched", "README.md", "--", "tests/nonexistent_dir_placeholder.py"],
                         tmp_path / "o.json")
     assert data["tests_run"] == 0 and data["status"] == "error"
-    assert data["zero_run_cause"] == "collection-failure"
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_MISSING_TARGET
+    assert data["missing_targets"] == ["tests/nonexistent_dir_placeholder.py"]
+
+
+def test_clone_leg_runs_the_present_target_and_records_the_absent_one(landing, tmp_path):
+    root, _base = landing
+    post = _land(root, "README.md", "x\n")
+    _code, data = _main(["--head-sha", post, "--touched", "README.md", "--", "tests/test_unrelated.py", "tests/gone.py"],
+                        tmp_path / "o.json")
+    assert data["missing_targets"] == ["tests/gone.py"]
+    assert data.get("zero_run_cause") != ltt.ZERO_RUN_MISSING_TARGET and data["tests_run"] == 1
+
+
+def test_clone_leg_runs_only_the_touched_tests_of_a_touched_file_and_skips_slow_tiers(landing, tmp_path):
+    root, base = landing
+    (root / "tests" / "test_pair.py").write_text(
+        "import pytest\n\n\ndef test_a():\n    assert True\n\n\ndef test_b():\n    assert False\n\n\n"
+        "@pytest.mark.cadence\ndef test_slow():\n    assert False\n", encoding="utf-8")
+    base = _land(root, "pkg/mod.py", "VALUE = 1\n# pair\n")
+    post = _land(root, "tests/test_pair.py", (root / "tests" / "test_pair.py").read_text(encoding="utf-8").replace("assert True", "assert 1"))
+
+    _code, data = _main(["--base-sha", base, "--head-sha", post, "--touched", "tests/test_pair.py", "--", "tests/test_pair.py"],
+                        tmp_path / "o.json")
+
+    assert data["targets_run"] == ["tests/test_pair.py::test_a"], data
+    assert data["new_red"] == [] and data["status_after"] == "pass" and data["tests_run"] == 1
+
+
+def test_clone_leg_over_only_slow_tier_tests_passes_instead_of_failing_on_exit_5(landing, tmp_path):
+    root, _base = landing
+    (root / "tests" / "test_slow_only.py").write_text(
+        "import pytest\n\n\n@pytest.mark.cadence\ndef test_slow():\n    assert False\n", encoding="utf-8")
+    post = _land(root, "tests/test_slow_only.py", (root / "tests" / "test_slow_only.py").read_text(encoding="utf-8"))
+
+    _code, data = _main(["--head-sha", post, "--touched", "tests/test_slow_only.py", "--", "tests/test_slow_only.py"],
+                        tmp_path / "o.json")
+
+    assert data["status_after"] == "pass" and data["new_red"] == [], data
 
 
 def test_the_pytest_child_has_no_shell_and_uses_the_running_interpreter(repo, tmp_path, monkeypatch):

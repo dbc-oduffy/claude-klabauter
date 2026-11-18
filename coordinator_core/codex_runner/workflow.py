@@ -14,7 +14,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import time
 import threading
 import uuid
@@ -27,10 +26,9 @@ import jsonschema
 from coordinator_core.codex_runner.agy import AgyUnavailable, resolve_agy
 from coordinator_core.codex_runner.grok import GrokUnavailable, resolve_grok
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
-from coordinator_core.codex_runner.resolve import preflight_auth, resolve_codex
+from coordinator_core.codex_runner.resolve import codex_family_stage_argv, preflight_auth, resolve_codex
 from coordinator_core.codex_runner.sandbox_preflight import (
     SandboxSetupRefused,
-    check_workspace_write,
 )
 from coordinator_core.codex_runner.review import (
     CREDENTIAL_CONTEXT_ENV,
@@ -43,7 +41,6 @@ from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
 from coordinator_core.agent_pipe.agy import family_stage_argv
 from coordinator_core.agent_pipe.model_tiers import model_for_tier
-from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv, settings_home_add_dir_argv
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV
 from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
 from coordinator_core._settings_home import settings_home
@@ -994,19 +991,6 @@ def run_agent(
                 "fire the run through the warm engine (engine_ask.submit)"
             )
         preflight_auth(env=env, requested=False)
-        try:
-            try:
-                probe_argv = resolve_codex(env=env)
-            except Exception:
-                probe_argv = None
-            advisory = check_workspace_write(
-                repo_root, repo_root=repo_root, codex_home=env.get("CODEX_HOME"),
-                codex_argv=probe_argv, env=env,
-            )
-            if advisory:
-                print(advisory, file=sys.stderr)
-        except SandboxSetupRefused as exc:
-            raise AgentFailed(str(exc)) from exc
         native_cli = resolve_codex(env=env)
         # Resolve the real native binary before private PATH can affect lookup.
         if private_settings is not None:
@@ -1016,9 +1000,7 @@ def run_agent(
             shape_codex_child(env, writable_root=repo_root)
         except SandboxSetupRefused as exc:
             raise AgentFailed(str(exc)) from exc
-        argv = [*native_cli, "exec", "--json", "--sandbox", "workspace-write",
-                "--ephemeral", "-o", str(last), *settings_home_add_dir_argv(),
-                *lock_and_gitdir_add_dir_argv(repo_root)]
+        argv = codex_family_stage_argv(native_cli, "--ephemeral", "-o", str(last))
         if schema is not None:
             schema_path = artifact_dir / "schema.json"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")

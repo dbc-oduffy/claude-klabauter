@@ -323,6 +323,9 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/host_hooks/agy_adapter.py': ('outside-repo', 'advisory .txt files under <settings-home>/unimatrix/agy-advisories/<conversation>, never the repo: stash_advisory'),
+    'coordinator_core/jobs/job_record.py': ('outside-repo', 'job record json (tmp + os.replace) under <settings-home>/jobs, never the repo: write_record'),
+    'coordinator_core/percolate/shadow_store.py': ('outside-repo', 'materialized publish trees, COMPLETE markers and eviction renames under coordinator_temp_root()/publish-shadow-store, never a clone: ShadowStore'),
     'coordinator_core/post_run/h1_normalize.py': ('in-repo-non-state', 'docs/wiki page rewrites normalising the H1, never state/: normalize'),
     'coordinator_core/post_run/linkfix.py': ('in-repo-non-state', 'docs/wiki and docs/decisions page rewrites repairing links, never state/: fix'),
     'coordinator_core/post_run/nav_index.py': ('in-repo-non-state', 'docs/wiki nav and _index page rewrites, never state/: rebuild'),

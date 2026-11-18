@@ -710,6 +710,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.scratchpad_sweep", 'registers "scratchpad.sweep"'),
     ("coordinator_core.ops.scratch_delete", 'registers "scratch.delete"'),
     ("coordinator_core.ops.ask_spool_withdraw", 'registers "ask_spool.withdraw"'),
+    ("coordinator_core.ops.external_workspace_rehydrate", 'registers "external_workspace.rehydrate"'),
     ("coordinator_core.ops.scratch_record", 'registers "scratch.record_run_path", "scratch.keep"'),
     ("coordinator_core.ops.run_paths_trash", 'registers "run.paths_trash"'),
     ("coordinator_core.ops.memo_fate_partition", 'registers "memo.fate_partition"'),
