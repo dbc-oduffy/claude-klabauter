@@ -54,6 +54,7 @@ from coordinator_core.ops.dispatch_emit.landing_retest import (  # noqa: F401
 )
 from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa: F401
     NOT_RUN_CHECK,
+    RETEST_ABANDONED,
     RETEST_LAUNCHER,
     REVERIFY_INDETERMINATE,
     REVERIFY_KEY,
@@ -65,6 +66,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     UNRUN_OWED,
     ZERO_FAIL_CHECK,
     ZERO_FAIL_UNATTRIBUTED,
+    ZERO_RUN_CAUSE_KEY,
     INVARIANT_UNMEASURED,
     Finding,
     tests_failed_finding,
@@ -72,6 +74,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     zero_run_cause_note,
     _FILE_LIKE,
     _GATE_BLOCKER,
+    _ZERO_RUN_CAUSES,
     _imports_landed,
     _indeterminate_finding,
     _module_files,
@@ -925,24 +928,39 @@ def _landing_test_gate_body(
     A None ``run_id`` skips the fresh read.
 
     A ``running`` retest record answers a ``RetestAwait`` (check ``"retest-running"``) with the poll
-    command; ``landing_test_gate`` then skips the invariant check, since no verdict exists yet.
+    command; ``landing_test_gate`` then skips the invariant check, since no verdict exists yet. A ``running``
+    record past its deadline answers one ``RETEST_ABANDONED`` finding (check ``"failed"``) naming the
+    record's tests ahead of the ``re-run:`` command.
     A recorded fail with no baseline names its failing ids from ``failed_tests`` (top
     level or under ``params.params``), the verdict's, and the task output's digest
     (``params.task_output_path``); with no baseline evidence each id's file is its own refusal (the
     red counts caused, never inferred pre-existing from a path) whose remedy retests that file. With no id known the refusal names the ``failed_tests`` param."""
-    if _retest_record_status(worktree_root, run_id) == RETEST_RUNNING:
+    record = _retest_record(worktree_root, run_id) or {}
+    if record.get("status") == RETEST_RUNNING:
         from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
         from coordinator_core.ops.dispatch_emit.landing_targeted_tests import _in_leg_attempt
+        from coordinator_core.ops.dispatch_emit.retest_targeted import retest_abandoned
 
+        if retest_abandoned(record):
+            ids = [str(t).strip() for t in record.get("tests") or () if str(t).strip()]
+            return [Finding(
+                "", RETEST_ABANDONED,
+                "the run's retest was abandoned past its deadline; " + "".join(f"{i}; " for i in ids)
+                + "re-run: " + retest_remedy(params),
+            )], "failed"
         await_detail = (
-            "the run's retest is still running; poll: " + retest_remedy(params)
-            + " --poll; if poll reports it abandoned past deadline, re-run: " + retest_remedy(params)
+            "the run's retest is still running; poll: " + retest_remedy(params) + " --poll --wait"
         )
         return [remedy_or_halt(
             TARGETED_TESTS_FAILED, _in_leg_attempt,
             lambda _f: RetestAwait("", TARGETED_TESTS_FAILED, await_detail), attempts=1,
         )], "retest-running"
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
+    leg = _zero_test_leg_record(worktree_root, run_id)
+    if leg is not None and not (
+        fresh is not None and fresh.get("status") in ("pass", "pass-with-skips") and not _ran_nothing(fresh.get("tests_run"))
+    ):
+        return [_ran_zero_finding(params, cause_note=_zero_cause_text(leg))], "failed"
     # `not in` (key absent) here: an empty failed_tests list still means the launcher named nothing,
     # unlike the truthiness test below.
     errored_unrun = (
@@ -983,6 +1001,8 @@ def _landing_test_gate_body(
         if zero_run or (unrun_retest and check_now == "no-verdict"):
             if unrun_retest or _targeted_set_exists(worktree_root, params, verdict, run_id):
                 return [_ran_zero_finding(params, _renamed_detail(worktree_root, params, run_id))], "failed"
+            if _zero_cause_text(verdict):
+                return [_ran_zero_finding(params, cause_note=_zero_cause_text(verdict))], "failed"
             if check_now == NOT_RUN_CHECK:
                 return [], NOT_RUN_CHECK
         nodes = list(dict.fromkeys([
@@ -1015,6 +1035,9 @@ def _landing_test_gate_body(
             return [Finding(findings[0].path, findings[0].reason,
                             f"{findings[0].detail}; or pass params.{FAILED_TESTS_PARAM} (failing node ids)"
                             f"{_stale_retest_note(worktree_root, run_id)}")], check
+        if verdict.get("status") == "error" and _ran_nothing(verdict.get("tests_run")):
+            # Trap: an errored retest that ran nothing measured no node, so its named ids are caused-unmeasured, not unknown.
+            return findings, check
         unknown = GateFindings()
         base_red = base_red_ids(params) | sidecar_base_red(worktree_root, params)
         unknown.unknown_ids = list(dict.fromkeys(n for n in nodes if _node_file(n) and n not in base_red))
@@ -1031,9 +1054,20 @@ def _landing_test_gate_body(
         passing = ltt.owed_check_cleared(fresh, owed) if owed else set()
         if passing:
             findings, check = failed_targeted_tests(fresh, retest_remedy(params), cleared=cleared | passing)
+        left_ids = [n for n in owed if n not in passing]
+        if left_ids and check == UNKNOWN_ONLY and ltt._measured_ids(fresh, ltt.OWED_CLEARED_KEY) is not None:
+            # The retest measured the owed ids at HEAD + the run's landing paths and these did not come back
+            # green: the run's own bytes are the only change there, so the red is caused.
+            groups = ltt._group_by_file(left_ids)
+            return [
+                ltt.tests_failed_finding(
+                    path, "; ".join(ns[:3]) + "; red at HEAD plus the run's landing paths (owed base check); "
+                    f"re-run: {retest_remedy(params)}")
+                for path, ns in groups.items()
+            ], "failed"
         if owed and check == UNKNOWN_ONLY:
             unknown = GateFindings(findings)
-            unknown.unknown_ids = [n for n in owed if n not in passing]
+            unknown.unknown_ids = left_ids
             return unknown, check
         if owed and check == "failed":
             left = len(owed) - len(passing)
@@ -1057,7 +1091,9 @@ def _landing_test_gate_body(
             findings, check = failed_targeted_tests(
                 {**fresh, "baseline": moved}, retest_remedy(params), cleared=cleared | base_red)
     if check == "failed" and findings:
-        red_now = {ltt.norm_node_id(n) for n in base_red | sidecar_red | base_red_ids(params)}
+        # Trap: a caller-named base-red id counts only where the retest ran its file or its source reads HEAD
+        # (`cleared`); otherwise it is unmeasured and a caused id never downgrades on the caller's word.
+        red_now = {ltt.norm_node_id(n) for n in base_red | sidecar_red | (base_red_ids(params) & cleared)}
         refusing, reported = ltt.caused_only(findings, red_now)
         # A finding's detail names at most three ids per file; any caused id of that file outside base red keeps it refusing.
         unlisted = {
@@ -1138,10 +1174,45 @@ def _ran_zero_int(tests_run: object) -> bool:
     return isinstance(tests_run, int) and not isinstance(tests_run, bool) and tests_run == 0
 
 
-def _ran_zero_finding(params: Mapping, renamed: str = "") -> Finding:
+def _ran_zero_finding(params: Mapping, renamed: str = "", cause_note: str = "") -> Finding:
     return tests_failed_finding("",
                    "the targeted tests ran 0 tests (nothing collected or run), so nothing "
-                   f"is proven{renamed}; re-run: {retest_remedy(params)}")
+                   f"is proven{renamed}{cause_note}; re-run: {retest_remedy(params)}")
+
+
+TEST_LEG_RECORD = "test-leg.json"
+
+
+def _zero_test_leg_record(worktree_root: Path, run_id: Optional[str]) -> Optional[dict]:
+    """The run's ``test-leg.json`` (beside ``measured-rev.json``) when it observed no completed test: its
+    ``tests_run`` is the integer 0 or is absent/null (a non-pytest leg whose counts were never read); None when
+    the file is absent, unreadable, not an object, or the leg ran tests."""
+    if not run_id:
+        return None
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    try:
+        record = json.loads((measured_rev_record_path(worktree_root, run_id).parent / TEST_LEG_RECORD)
+                            .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    ran = record.get("tests_run")
+    return record if _ran_zero_int(ran) or ran is None else None
+
+
+def _zero_cause_text(record: Optional[Mapping]) -> str:
+    """``"; <cause>"`` for a zero-test result naming why (known ``zero_run_cause``, else ``reason``,
+    ``summary`` or ``error`` text); ``""`` for a bare zero count, which carries no evidence a test was attempted."""
+    if not isinstance(record, Mapping):
+        return ""
+    cause = record.get(ZERO_RUN_CAUSE_KEY)
+    if isinstance(cause, str) and cause in _ZERO_RUN_CAUSES:
+        text = record.get("reason") or record.get("summary") or record.get("note")
+        return f"; {cause}: {_ZERO_RUN_CAUSES[cause]}" + (f" ({text})" if text else "")
+    text = next((str(record[k]) for k in ("reason", "summary", "error") if record.get(k)), "")
+    return f"; recorded cause: {text}" if text else ""
 
 
 def _renamed_detail(worktree_root: Path, params: Mapping, run_id: Optional[str]) -> str:

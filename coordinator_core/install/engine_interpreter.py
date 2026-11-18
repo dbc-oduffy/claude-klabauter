@@ -123,33 +123,44 @@ def ensure(base_python: str, dep_specs: Sequence[str], home: Optional[Path] = No
     """Return the engine-site directory, provisioning it when the stamp does not match.
 
     Idempotent: a stamp matching ``base_python``'s major.minor and ``dep_specs``
-    spawns nothing. A drifted or missing stamp rebuilds the directory with one
-    ``base_python -m pip install --target``; the stamp is written last. Never
+    spawns nothing. A drifted or missing stamp rebuilds into a staging sibling with
+    one ``base_python -m pip install --target``, stamps it, then swaps it in. Never
     passes ``--break-system-packages``. Raises RuntimeError on failure.
+
+    Trap: the live directory is replaced only after pip succeeds. A failed pip
+    (a broken build env, no network) must leave the prior engine-site in place;
+    deleting it first strands every engine import on the box.
     """
     want = _minor_of(base_python)
     digest = _specs_digest(dep_specs)
     if _read_stamp(home) == (want, digest):
         return engine_site_dir(home)
     site = engine_site_dir(home)
-    shutil.rmtree(site, ignore_errors=True)
-    site.mkdir(parents=True, exist_ok=True)
+    staging = site.with_name(f"{_DIR_NAME}.staging-{os.getpid()}")
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
     try:
         proc = subprocess.run(
-            [base_python, "-m", "pip", "install", "--target", str(site), *dep_specs],
+            [base_python, "-m", "pip", "install", "--target", str(staging), *dep_specs],
             capture_output=True,
             text=True,
             timeout=_PIP_TIMEOUT_S,
             **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        shutil.rmtree(site, ignore_errors=True)
+        shutil.rmtree(staging, ignore_errors=True)
         raise RuntimeError(f"engine-site install failed: {exc}") from exc
     if proc.returncode != 0:
-        shutil.rmtree(site, ignore_errors=True)
+        shutil.rmtree(staging, ignore_errors=True)
         raise RuntimeError(
             f"engine-site install failed (rc={proc.returncode}): "
             f"{(proc.stderr or proc.stdout or '').strip()[-400:]}"
         )
-    (site / _STAMP_NAME).write_text(f"{want[0]}.{want[1]}\n{digest}\n", encoding="utf-8")
+    (staging / _STAMP_NAME).write_text(f"{want[0]}.{want[1]}\n{digest}\n", encoding="utf-8")
+    retired = site.with_name(f"{_DIR_NAME}.retired-{os.getpid()}")
+    shutil.rmtree(retired, ignore_errors=True)
+    if site.exists():
+        os.replace(site, retired)
+    os.replace(staging, site)
+    shutil.rmtree(retired, ignore_errors=True)
     return site

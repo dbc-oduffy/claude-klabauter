@@ -146,6 +146,47 @@ def test_halted_terminal_commit_lands_completed_rows_after_token_retired(repo, r
     _assert_record_landed(repo, out)
 
 
+def _refused_product_land(root: Path, token: str, *, settle: bool) -> None:
+    """A product land whose claim ends in a refusal (verdict-pin-stale lands nothing): the claim is
+    redeemed, then settled `landed=False`, which is `land_run._dispatch_mode`'s finally for a refusal."""
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    identity = run_token.redeem_claim(root, RUN, token, SCRIPT)
+    assert identity is not None
+    if settle:
+        land_run._settle_token({"claim": (root, RUN, token, SCRIPT), "identity": identity}, landed=False)
+
+
+@pytest.mark.parametrize("settle", [True, False], ids=["released", "claim-held"])
+def test_halted_commit_admits_own_token_after_refused_product_land(repo, settle: bool) -> None:
+    token = run_token.mint(repo, RUN, SCRIPT)
+    _refused_product_land(repo, token, settle=settle)
+
+    out = _halt(repo, token)
+
+    _assert_record_landed(repo, out)
+
+
+@pytest.mark.parametrize("settle", [True, False], ids=["released", "claim-held"])
+def test_halted_commit_refuses_foreign_token_after_refused_product_land(repo, settle: bool) -> None:
+    token = run_token.mint(repo, RUN, SCRIPT)
+    _refused_product_land(repo, token, settle=settle)
+
+    out = _halt(repo, "0" * 32)
+
+    assert out.get("refused") == "run-token", out
+    assert out["committed"] is False
+
+
+def test_halted_commit_refuses_unminted_run_after_refused_product_land(repo) -> None:
+    token = run_token.mint(repo, RUN, SCRIPT)
+    _refused_product_land(repo, token, settle=True)
+
+    out = _halt(repo, run_token.mint(repo, "ask-20261118T000000-abcdef", SCRIPT))
+
+    assert out.get("refused") == "run-token", out
+
+
 @RETIRERS
 def test_product_commit_with_retired_token_still_refused(repo, retire) -> None:
     token = _aged_retired_token(repo, retire)

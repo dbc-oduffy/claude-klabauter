@@ -149,6 +149,21 @@ def test_stage_then_promote_writes_state_only_on_promote(tmp_path: Path) -> None
     assert rw.load(repo, "distill") == proposed
 
 
+def test_promote_stamps_run_date_and_a_dateless_watermark_still_loads(tmp_path: Path) -> None:
+    repo, run_dir = tmp_path / "repo", tmp_path / "run"
+    assert rw.committed_run_date(repo, "distill") is None
+    rw.stage(run_dir, rw.Watermark("distill", "H1", None, "b", False))
+    rw.promote(repo, run_dir, "distill")
+    stamped = rw.committed_run_date(repo, "distill")
+    assert stamped is not None and len(stamped) == 10
+    path = rw.watermark_path(repo, "distill")
+    path.write_text('{"base_sha": "H0", "cursor": "a"}', encoding="utf-8")
+    assert rw.committed_run_date(repo, "distill") is None
+    assert rw.load(repo, "distill") == rw.Watermark("distill", "H0", None, "a", False)
+    path.write_text('{"base_sha": "H0", "run_date": "not-a-date"}', encoding="utf-8")
+    assert rw.committed_run_date(repo, "distill") is None
+
+
 def test_promote_without_pending_writes_nothing(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     assert rw.promote(repo, tmp_path / "run", "distill") is None

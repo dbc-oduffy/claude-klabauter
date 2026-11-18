@@ -139,7 +139,7 @@ def test_entries_naming_two_repos_fan_out_once_per_repo_and_write_only_there(rep
     entry = Path(out["hookSpecificOutput"]["updatedInput"]["scriptPath"])
     assert a.resolve() in entry.resolve().parents
     body = entry.read_text(encoding="utf-8")
-    assert all(str(p) in body for p in (a, b)) and "r0x0" in _context(out) and "r1x0" in _context(out)
+    assert all(p.as_posix() in body for p in (a, b)) and "r0x0" in _context(out) and "r1x0" in _context(out)
 
 
 def test_two_entries_each_in_their_own_repo_both_fire(repos):

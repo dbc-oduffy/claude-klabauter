@@ -28,15 +28,19 @@ def _normalise(rel: str) -> str:
 
 
 def is_record_path(rel: str) -> bool:
-    """True when `rel` is a record: under a `RECORD_PREFIXES` directory, or any `.md` file.
+    """True when `rel` is a record: under a `RECORD_PREFIXES` directory, or any `.md` file, and
+    `review_floor` owes no review on it (`review_owed_paths`), so a skipped path set is never refused
+    by the floor for zero verdicts.
 
     A bare prefix name with no trailing path (`state`) is not under the directory, matching the JS
     `^(prefix)\\/` test.
     """
+    from coordinator_core.ops.dispatch_emit.review_floor import review_owed_paths
+
     p = _normalise(rel)
-    if p.endswith(".md"):
-        return True
-    return any(p.startswith(prefix + "/") for prefix in RECORD_PREFIXES)
+    if not (p.endswith(".md") or any(p.startswith(prefix + "/") for prefix in RECORD_PREFIXES)):
+        return False
+    return not review_owed_paths([p])
 
 
 def record_prefix_js_regex() -> str:

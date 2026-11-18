@@ -365,8 +365,9 @@ def test_gate_fresh_fail_record_honours_failed_tests_param(repo, tmp_path: Path)
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(record), encoding="utf-8")
     findings, check = li.landing_test_gate(repo, {"failed_tests": ["test_a.py::test_a"]}, RUN_ID)
-    assert check == "pre-existing-only" or findings[0].path == "test_a.py"
-    assert check != "failed" or "no baseline" not in findings[0].detail
+    assert check == "unknown-only"
+    assert list(findings) == []
+    assert findings.unknown_ids == ["test_a.py::test_a"]
 
 
 @pytest.mark.parametrize(
@@ -691,6 +692,54 @@ def test_poll_exit_codes(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert _poll_exit(repo, tmp_path, {"status": "fail"}) == 1
     assert _poll_exit(repo, tmp_path, {"status": "error", "reason": "x"}) == 2
     assert _poll_exit(repo, tmp_path, {"status": "stale"}) == 2
+
+
+def test_retest_abandoned_is_the_one_deadline_rule() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    assert not retest_targeted.retest_abandoned({"deadline": (now + timedelta(hours=1)).isoformat()})
+    assert retest_targeted.retest_abandoned({"deadline": (now - timedelta(seconds=1)).isoformat()})
+    assert retest_targeted.retest_abandoned({}) and retest_targeted.retest_abandoned({"deadline": "junk"})
+    from coordinator_core.ops.dispatch_emit import landing_retest
+
+    assert landing_retest.RETEST_ABANDONED == "retest-abandoned"
+
+
+def test_poll_wait_blocks_until_the_verdict_then_returns_its_code(
+    repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    path = li.fresh_verdict_path(repo, RUN_ID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"status": "running", "deadline": future}), encoding="utf-8")
+    sleeps: list[float] = []
+
+    def fake_sleep(secs: float) -> None:
+        sleeps.append(secs)
+        if len(sleeps) == 2:
+            path.write_text(json.dumps({"status": "pass"}), encoding="utf-8")
+
+    monkeypatch.setattr(retest_targeted.time, "sleep", fake_sleep)
+    args = ["--from-task-output", str(_task_output(tmp_path)), "--repo-root", str(repo), "--poll", "--wait"]
+    assert retest_targeted.main(args) == 0
+    assert sleeps == [2.0, 2.0]
+
+    path.write_text(json.dumps({"status": "running", "deadline": future}), encoding="utf-8")
+    sleeps.clear()
+
+    def abandon(secs: float) -> None:
+        path.write_text(json.dumps({"status": "running", "deadline": "2000-01-01T00:00:00+00:00"}), encoding="utf-8")
+
+    monkeypatch.setattr(retest_targeted.time, "sleep", abandon)
+    assert retest_targeted.main(args) == 2
+    assert "retest-abandoned" in capsys.readouterr().out
+
+    path.write_text(json.dumps({"status": "fail"}), encoding="utf-8")
+    monkeypatch.setattr(retest_targeted.time, "sleep", lambda s: pytest.fail("terminal verdict must not sleep"))
+    assert retest_targeted.main(args) == 1
 
 
 @pytest.mark.parametrize("cmd, expected", [

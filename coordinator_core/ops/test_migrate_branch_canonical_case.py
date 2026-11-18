@@ -199,6 +199,24 @@ def test_enumerate_work_refs_matches_only_single_segment_names(tmp_path, monkeyp
     assert refs == ["work/one-level"]
 
 
+def test_enumerate_work_refs_adds_this_owners_day_branches_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
+    repo = tmp_path / "repo"
+    _mkrepo(repo)
+    for name in (
+        "work/legacy",
+        "alice/Box1/2026-11-17",
+        "alice/Notes",
+        "alice/two/levels",
+        "bob/box1/2026-11-17",
+    ):
+        assert _git(repo, "branch", name).returncode == 0
+
+    refs = mbcc._enumerate_work_refs(str(repo))
+
+    assert sorted(refs) == ["alice/Box1/2026-11-17", "work/legacy"]
+
+
 def test_head_text_fix_rewrites_mixed_case_symbolic_ref(tmp_path, monkeypatch, capsys):
     repo = tmp_path / "repo"
     _mkrepo(repo)

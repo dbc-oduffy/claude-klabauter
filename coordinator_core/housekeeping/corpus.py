@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Tuple, Union
 
 from coordinator_core.housekeeping.head_scan import scan_keys
+from coordinator_core.session.output_tree_layout import is_month_dir
 
 LIVE_CORPUS_KEYS: Tuple[str, ...] = (
     "handoff_id",
@@ -52,14 +53,15 @@ def _scan_error_message(context: PathLike, exc: OSError) -> str:
     return f"{context}: {exc}"
 
 
-def list_live_handoffs(live_dir: PathLike) -> Tuple[List[Path], List[str]]:
-    paths: List[Path] = []
-    gaps: List[str] = []
+def _scan_md_files(
+    directory: PathLike, paths: List[Path], gaps: List[str], shards: List[Path] | None
+) -> None:
+    """Append `directory`'s `.md` files to `paths`; collect `YYYY-MM` child dirs into `shards` when given."""
     try:
-        it = os.scandir(live_dir)
+        it = os.scandir(directory)
     except OSError as exc:
-        gaps.append(_scan_error_message(live_dir, exc))
-        return paths, gaps
+        gaps.append(_scan_error_message(directory, exc))
+        return
 
     try:
         with it:
@@ -69,16 +71,31 @@ def list_live_handoffs(live_dir: PathLike) -> Tuple[List[Path], List[str]]:
                 except StopIteration:
                     break
                 except OSError as exc:
-                    gaps.append(_scan_error_message(live_dir, exc))
+                    gaps.append(_scan_error_message(directory, exc))
                     break
                 try:
-                    if entry.is_file() and entry.name.endswith(".md"):
-                        paths.append(Path(entry.path))
+                    if entry.is_file():
+                        if entry.name.endswith(".md"):
+                            paths.append(Path(entry.path))
+                    elif shards is not None and is_month_dir(entry.name) and entry.is_dir():
+                        shards.append(Path(entry.path))
                 except OSError as exc:
                     gaps.append(_scan_error_message(entry.path, exc))
     except OSError as exc:
-        gaps.append(_scan_error_message(live_dir, exc))
+        gaps.append(_scan_error_message(directory, exc))
 
+
+def list_live_handoffs(live_dir: PathLike) -> Tuple[List[Path], List[str]]:
+    """`.md` files at `live_dir` plus those in each `YYYY-MM` child dir; other subdirs are not descended.
+
+    Every unreadable directory is a named gap, never a silent omission.
+    """
+    paths: List[Path] = []
+    gaps: List[str] = []
+    shards: List[Path] = []
+    _scan_md_files(live_dir, paths, gaps, shards)
+    for shard in shards:
+        _scan_md_files(shard, paths, gaps, None)
     return paths, gaps
 
 

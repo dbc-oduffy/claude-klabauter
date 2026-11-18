@@ -1,5 +1,5 @@
-"""`declared_sibling_split` names a checkpoint row whose declared writes straddle the commit and the
-withheld set; `ceremony.commit_v2` refuses such a checkpoint and leaves HEAD unchanged."""
+"""A checkpoint row whose declared writes straddle the commit and a withheld path carries: `ceremony.commit_v2`
+lands the own paths, withholds the foreign-hunk path with a reason, and leaves the row unstamped."""
 
 from __future__ import annotations
 
@@ -44,29 +44,6 @@ def plan_root(tmp_path):
     (tmp_path / "docs/plans").mkdir(parents=True)
     (tmp_path / PLAN).write_bytes(SPINE.encode())
     return tmp_path
-
-
-def test_row_straddling_commit_and_withheld_is_named(plan_root):
-    split = checkpoint_hunks.declared_sibling_split(
-        plan_root, MESSAGE, ["schema/a.json", "other/c.py"], ["tool/b.py"],
-    )
-
-    assert split == [{"row": "C1", "committed": ["schema/a.json"], "withheld": ["tool/b.py"]}]
-
-
-def test_row_wholly_committed_or_wholly_withheld_is_not_named(plan_root):
-    assert checkpoint_hunks.declared_sibling_split(
-        plan_root, MESSAGE, ["schema/a.json", "tool/b.py"], ["other/c.py"],
-    ) == []
-    assert checkpoint_hunks.declared_sibling_split(
-        plan_root, MESSAGE, ["other/c.py"], ["schema/a.json", "tool/b.py"],
-    ) == []
-
-
-def test_unreadable_plan_or_empty_sets_name_nothing(plan_root):
-    assert checkpoint_hunks.declared_sibling_split(plan_root, "no plan here", ["schema/a.json"], ["tool/b.py"]) == []
-    assert checkpoint_hunks.declared_sibling_split(plan_root, MESSAGE, [], ["tool/b.py"]) == []
-    assert checkpoint_hunks.declared_sibling_split(plan_root, MESSAGE, ["schema/a.json"], []) == []
 
 
 def _git(args, cwd: Path) -> str:
@@ -114,21 +91,23 @@ def _checkpoint(repo: Path) -> dict:
 
 
 @pytest.mark.spawns_process
-def test_commit_refuses_a_row_split_by_a_foreign_hunk_and_head_is_unchanged(repo, monkeypatch):
+def test_commit_carries_a_row_split_by_a_foreign_hunk(repo, monkeypatch):
     monkeypatch.setattr(
         run_hunk_claims, "own_hunks",
         lambda r, run, path, hunks, holders: (
             HunkSplit(unattributed=list(hunks)) if path == "tool/b.py" else HunkSplit(own=list(hunks))
         ),
     )
-    head = _git(["rev-parse", "HEAD"], repo)
 
     result = _checkpoint(repo)
 
-    assert result.get("committed") is not True, result
-    assert "tool/b.py" in str(result), result
-    assert "schema/a.json" in str(result), result
-    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert result["committed"] is True, result
+    assert result["checkpoint_withheld_paths"] == ["tool/b.py"], result
+    assert result["checkpoint_withheld_reasons"]["tool/b.py"], result
+    assert _git(["show", "--name-only", "--format=", "HEAD"], repo).split() == ["schema/a.json"]
+    message = _git(["log", "-1", "--format=%B"], repo)
+    assert message.splitlines()[0] == "checkpoint(wave 1): 0 rows — (none)", message
+    assert "Checkpoint-Withheld-Rows: C1" in message, message
 
 
 @pytest.mark.spawns_process

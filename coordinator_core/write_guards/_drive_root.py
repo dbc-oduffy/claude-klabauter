@@ -44,6 +44,18 @@ def override_active(payload: Optional[Mapping[str, Any]]) -> bool:
     return _override(OVERRIDE_KEY, payload=payload if isinstance(payload, dict) else None)
 
 
+def is_subagent_payload(payload: Any) -> bool:
+    """True when the PreToolUse payload carries a non-empty `agent_id` (a subagent); a payload without one is the main session.
+
+    Reads the payload field only: no env, cwd, role marker or session id.
+    """
+    if not isinstance(payload, dict):
+        return False
+    from coordinator_core.hooks._payload import present
+
+    return present(payload, "agent_id")
+
+
 def deny_reason(name: str) -> str:
     """Refusal text: the entry's leaf name only (no absolute path, no override key) plus the alternative."""
     return (

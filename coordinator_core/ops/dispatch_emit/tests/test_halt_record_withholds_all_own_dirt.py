@@ -113,7 +113,8 @@ def test_touch_record_dirt_reaches_the_halt_record(touch_record_dirt, monkeypatc
 def test_red_without_the_run_dirt_capture(own_dirt, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(halted_record_commit, "_withhold_run_dirt", lambda *_a, **_k: None)
 
-    _call(own_dirt, LEDGER, **PASSING)
+    out = _call(own_dirt, LEDGER, **PASSING)
 
-    held = warp_run_deliverable.halted_withheld_paths(own_dirt, RUN)
-    assert TRACKED not in held and UNTRACKED not in held
+    withheld = out.get("withheld") or {}
+    assert withheld.get(TRACKED) != halted_record_commit.RUN_DIRT_UNCOMMITTED
+    assert withheld.get(UNTRACKED) != halted_record_commit.RUN_DIRT_UNCOMMITTED

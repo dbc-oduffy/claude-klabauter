@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose, prompt_fragments
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.test_ask_staged_prompts import _unshare_precedence
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 _RUN = "run-1"
@@ -41,7 +42,8 @@ def test_staging_every_leg_shrinks_the_script_and_the_text_round_trips(monkeypat
         )
         assert pointer in staged, name
         staged = staged.replace(pointer, _js_string_literal(text))
-    assert prompt_fragments.fold_literals(staged) == prompt_fragments.fold_literals(inline)
+    # Staging precedes the precedence-tail share, so only the inline script carries the shared operand.
+    assert prompt_fragments.fold_literals(_unshare_precedence(staged)) == prompt_fragments.fold_literals(_unshare_precedence(inline))
 
 
 def test_a_name_held_by_other_text_files_the_body_under_a_numbered_name():

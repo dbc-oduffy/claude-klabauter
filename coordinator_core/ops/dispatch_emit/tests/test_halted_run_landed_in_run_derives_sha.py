@@ -48,40 +48,29 @@ def repo(tmp_path):
     return tmp_path
 
 
-def test_clean_run_names_the_newest_commit_that_touched_the_paths(repo):
+def test_clean_run_names_its_own_base_never_an_older_commit(repo):
+    """G-EM: the matched sha is the run's own base. A clean write set is unchanged since that base, so
+    an older commit touching the paths (5585843534 for ask-20261114T133823-7a3cdc) is not this run's."""
     _commit(repo, "a", "v1")
-    sweep = _commit(repo, "a", "v2")
+    _commit(repo, "a", "v2")
     base = _commit(repo, "b")
     _manifest(repo, base, ["a"])
     out = op._handler({"run_id": RUN, "in_run": True}, repo)
-    assert out["ok"] and out["sha"] == sweep and out["written"] is True, out
-    assert sweep[:12] in out["close"]["detail"]
+    assert out["ok"] and out["sha"] == base and out["written"] is True, out
+    assert base[:12] in out["close"]["detail"]
 
 
-def test_merge_on_top_is_skipped_for_the_first_parent_landing(repo):
-    _commit(repo, "a", "v1")
-    landing = _commit(repo, "a", "v2")
-    _git(repo, "checkout", "-q", "-b", "side")
-    _commit(repo, "a", "side")
-    _git(repo, "checkout", "-q", "-")
-    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-ff", "-X", "theirs", "-m", "merge", "side")
-    merge = _git(repo, "rev-parse", "HEAD")
-    _manifest(repo, merge, ["a"])
+def test_a_dirty_row_write_outside_the_review_set_refuses(repo):
+    """The 1a false close: evidence.md sat in a row's `writes` but not in `review_declared_paths`."""
+    base = _commit(repo, "a", "v1")
+    _commit(repo, "evidence.md", "v1")
+    d = repo / "state" / "warp" / RUN
+    d.mkdir(parents=True, exist_ok=True)
+    doc = {"head_sha": base, "review_declared_paths": ["a"], "rows": [{"id": "R1", "writes": ["a", "evidence.md"]}]}
+    (d / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
+    (repo / "evidence.md").write_text("rewritten by the leg", encoding="utf-8")
     out = op._handler({"run_id": RUN, "in_run": True}, repo)
-    assert out["ok"] and out["sha"] == landing and out["sha"] != merge, out
-
-
-def test_no_hit_within_the_bound_refuses_naming_the_run(repo, monkeypatch):
-    _commit(repo, "a")
-    _commit(repo, "b")
-    _commit(repo, "c")
-    base = _commit(repo, "d")
-    _manifest(repo, base, ["a"])
-    monkeypatch.setattr(op, "_DERIVE_WALK_DEPTH", 2)
-    out = op._handler({"run_id": RUN, "in_run": True}, repo)
-    assert not out["ok"] and RUN in out["error"] and "pass sha" in out["error"], out
-    monkeypatch.setattr(op, "_DERIVE_WALK_DEPTH", 4)
-    assert op._handler({"run_id": RUN, "in_run": True}, repo)["ok"]
+    assert not out["ok"] and "not clean" in out["error"] and "evidence.md" in out["error"], out
 
 
 def test_dirty_write_set_still_refuses_without_a_sha(repo):

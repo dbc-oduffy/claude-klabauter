@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -237,6 +238,94 @@ def test_write_cache_and_patch_pinboard_only_serialize_via_same_lock(tmp_path, m
             mod.patch_pinboard_only(cache_file, "note")
     finally:
         os.rmdir(lock_dir)
+
+
+def _dead_pid() -> int:
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def _write_holder(lock_dir: Path, pid: int, session: Optional[str] = "sess-x") -> None:
+    import json
+
+    os.mkdir(lock_dir)
+    (lock_dir / mod._LOCK_HOLDER_FILE).write_text(
+        json.dumps({"pid": pid, "session": session, "acquired_at": "2026-11-16T13:56:00+00:00", "token": "t"}),
+        encoding="utf-8",
+    )
+
+
+def _lock_case(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_LOCK_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(mod, "_LOCK_POLL_S", 0.01)
+    repo = _make_repo(tmp_path)
+    cache_file = _seed_full_cache(repo, pinboard="")
+    return cache_file, cache_file.parent / mod._LOCK_DIR_SUFFIX
+
+
+def test_lock_records_holder_and_release_removes_dir(tmp_path):
+    import json
+
+    lock_dir = tmp_path / mod._LOCK_DIR_SUFFIX
+    with mod._OrientationCacheLock(tmp_path):
+        rec = json.loads((lock_dir / mod._LOCK_HOLDER_FILE).read_text(encoding="utf-8"))
+        assert rec["pid"] == os.getpid()
+        assert "session" in rec and rec["acquired_at"]
+    assert not lock_dir.exists()
+
+
+def test_dead_pid_lock_is_reclaimed_by_default_write_cache(tmp_path, monkeypatch):
+    cache_file, lock_dir = _lock_case(tmp_path, monkeypatch)
+    _write_holder(lock_dir, _dead_pid())
+    mod.write_cache(cache_file, "fresh body")
+    assert "fresh body" in cache_file.read_text(encoding="utf-8")
+    assert not lock_dir.exists()
+
+
+def test_aged_empty_lock_dir_is_reclaimed_by_default_write_cache(tmp_path, monkeypatch):
+    cache_file, lock_dir = _lock_case(tmp_path, monkeypatch)
+    os.mkdir(lock_dir)
+    old = time.time() - mod._LOCK_STALE_S - 60
+    os.utime(lock_dir, (old, old))
+    mod.write_cache(cache_file, "fresh body")
+    assert "fresh body" in cache_file.read_text(encoding="utf-8")
+    assert not lock_dir.exists()
+
+
+def test_aged_lock_with_live_pid_is_reclaimed_by_age(tmp_path, monkeypatch):
+    cache_file, lock_dir = _lock_case(tmp_path, monkeypatch)
+    _write_holder(lock_dir, os.getpid())
+    old = time.time() - mod._LOCK_STALE_S - 60
+    os.utime(lock_dir, (old, old))
+    mod.patch_pinboard_only(cache_file, "note")
+    assert not lock_dir.exists()
+
+
+def test_live_young_holder_blocks_and_timeout_names_path_and_holder(tmp_path, monkeypatch):
+    cache_file, lock_dir = _lock_case(tmp_path, monkeypatch)
+    _write_holder(lock_dir, os.getpid(), session="sess-live")
+    with pytest.raises(TimeoutError) as ei:
+        mod.write_cache(cache_file, "x")
+    msg = str(ei.value)
+    assert str(lock_dir) in msg and "directory lock" in msg
+    assert f"pid={os.getpid()}" in msg and "sess-live" in msg
+    assert lock_dir.exists()
+
+
+def test_reclaim_puts_back_fresh_holderless_dir(tmp_path):
+    lock_dir = tmp_path / mod._LOCK_DIR_SUFFIX
+    os.mkdir(lock_dir)
+    mod._OrientationCacheLock(tmp_path)._reclaim(None)
+    assert lock_dir.is_dir()
+
+
+def test_young_holderless_lock_blocks_and_timeout_says_no_holder(tmp_path, monkeypatch):
+    cache_file, lock_dir = _lock_case(tmp_path, monkeypatch)
+    os.mkdir(lock_dir)
+    with pytest.raises(TimeoutError, match="no holder recorded"):
+        mod.write_cache(cache_file, "x")
+    assert lock_dir.exists()
 
 
 # ---------------------------------------------------------------------------

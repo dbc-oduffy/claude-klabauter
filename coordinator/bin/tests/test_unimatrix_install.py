@@ -4,6 +4,8 @@ import io
 import json
 import os
 import posixpath
+import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -20,7 +22,11 @@ _spec.loader.exec_module(ui)
 
 PLATFORMS = ["win32", "darwin", "linux"]
 _REAL_RESOLVE = ui.resolve_engine_root
-_REAL_AGY_PROBE = ui.agy_resolves_bare_invoke
+_REAL_HOST_PRESENT = ui.host_present
+_REAL_PWSH_ALIAS_REMEDY = ui.pwsh_alias_remedy
+_REAL_POWERSHELL_HOST = ui.powershell_host
+_REAL_OPENSSH_REPORT = ui.openssh_receive_report
+_REAL_IS_SCRATCH_ROOT = ui._seed().is_scratch_root
 
 
 @pytest.fixture(autouse=True)
@@ -71,8 +77,18 @@ def _no_real_scheduler(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_real_agy_login_shell_probe(monkeypatch):
-    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", lambda: True)
+def _hosts_present_and_no_real_powershell(monkeypatch):
+    # Every host counts as installed and no PowerShell is spawned unless a test restores the real predicate.
+    monkeypatch.setattr(ui, "host_present", lambda host: True)
+    monkeypatch.setattr(ui, "pwsh_alias_remedy", lambda *a, **k: None)
+    monkeypatch.setattr(ui, "powershell_host", lambda *a, **k: None)
+    monkeypatch.setattr(ui, "openssh_receive_report", lambda *a, **k: 0)
+
+
+@pytest.fixture(autouse=True)
+def _pytest_tmp_roots_are_not_scratch(monkeypatch):
+    # pytest's tmp_path sits under the system temp dir, which the seeder's scratch predicate refuses.
+    monkeypatch.setattr(ui._seed(), "is_scratch_root", lambda path: False)
 
 
 @pytest.fixture(autouse=True)
@@ -361,7 +377,7 @@ def test_install_seeds_hooks_json_when_absent(monkeypatch, tmp_path):
     entry = json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY]["PreToolUse"][0]
     assert entry["matcher"] == ui.AGY_TOOL_MATCHER
     cmd = _hook_cmd(hp)
-    assert sys.executable in cmd and str(dest / ui.AGY_HOOK_SCRIPT) in cmd
+    assert _fwd(sys.executable) in cmd and _fwd(dest / ui.AGY_HOOK_SCRIPT) in _shown(cmd)
     assert "coordinator/bin" not in cmd.replace("\\", "/")
 
 
@@ -499,7 +515,15 @@ def test_agy_entry_carries_pretool_and_sessionstart(tmp_path):
     handler = entry["SessionStart"][0]
     # agy's SessionStart is flat: a grouped entry makes agy reject the whole hooks.json.
     assert handler["type"] == "command" and "hooks" not in handler and "matcher" not in handler
-    assert str(tmp_path / ui.AGY_SESSIONSTART_SCRIPT) in handler["command"] and sys.executable in handler["command"]
+    assert _fwd(tmp_path / ui.AGY_SESSIONSTART_SCRIPT) in _shown(handler["command"])
+    assert _fwd(sys.executable) in handler["command"]
+
+
+def test_agy_entry_carries_a_flat_preinvocation_handler_running_the_pretool_script(tmp_path):
+    handler = ui.agy_hook_entry(tmp_path)["PreInvocation"][0]
+    assert handler["type"] == "command" and "hooks" not in handler and "matcher" not in handler
+    assert _fwd(tmp_path / ui.AGY_HOOK_SCRIPT) in _shown(handler["command"])
+    assert "--event PreInvocation" in _shown(handler["command"])
 
 
 def test_agy_seed_upgrades_entry_lacking_sessionstart(tmp_path):
@@ -531,7 +555,7 @@ def test_codex_seed_is_idempotent_and_keeps_foreign_hooks(tmp_path):
     assert hp.read_text(encoding="utf-8") == once
     groups = json.loads(once)["hooks"]["SessionStart"]
     assert groups[0] == foreign["hooks"]["SessionStart"][0] and len(groups) == 2
-    assert str(tmp_path / ui.CODEX_SESSIONSTART_SCRIPT) in groups[1]["hooks"][0]["command"]
+    assert _fwd(tmp_path / ui.CODEX_SESSIONSTART_SCRIPT) in _shown(groups[1]["hooks"][0]["command"])
 
 
 def test_codex_seed_creates_file_and_unseed_restores_foreign(tmp_path):
@@ -568,7 +592,7 @@ def test_install_seeds_both_and_trusts_codex(monkeypatch, tmp_path):
     assert trusted == [chp]
     assert "SessionStart" in json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY]
     cmd = json.loads(chp.read_text(encoding="utf-8"))["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-    assert str(dest / ui.CODEX_SESSIONSTART_SCRIPT) in cmd
+    assert _fwd(dest / ui.CODEX_SESSIONSTART_SCRIPT) in _shown(cmd)
 
 
 def test_install_fails_nonzero_when_codex_trust_cannot_be_verified(monkeypatch, tmp_path):
@@ -663,7 +687,7 @@ def test_default_install_writes_doctrine_block_for_codex_and_agy(monkeypatch, tm
     for p in (home / ".codex" / "AGENTS.md", home / ".gemini" / "GEMINI.md"):
         text = p.read_text(encoding="utf-8")
         assert ui.DOCTRINE_BEGIN in text and ui.DOCTRINE_END in text
-        assert str(dest / ui.SEND_SCRIPT) in text and "{SEND}" not in text
+        assert _fwd(dest / ui.SEND_SCRIPT) in _shown(text) and "{SEND}" not in text
         assert "--to <sender>" in text and "--list" in text
         assert "`coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`" in text and "{INVOKE}" not in text
 
@@ -728,7 +752,7 @@ def test_grok_install_seeds_peer_doctrine_into_grok_home_rules_and_uninstall_rem
     assert "grok peer doctrine created" in buf.getvalue()
     text = rules.read_text(encoding="utf-8")
     assert "engine_ask.submit" in text and ui.DOCTRINE_BEGIN in text and "{SEND}" not in text
-    assert str(tmp_path / "dest" / ui.SEND_SCRIPT) in text
+    assert _fwd(tmp_path / "dest" / ui.SEND_SCRIPT) in _shown(text)
     assert "`coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`" in text and "{INVOKE}" not in text
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
@@ -785,7 +809,7 @@ def test_agy_seed_repoints_a_stale_script_path(tmp_path):
 def test_codex_send_rule_allows_only_the_send_script_and_uninstalls(tmp_path):
     rule = ui.render_codex_exec_rule(tmp_path)
     assert "prefix_rule(pattern=" in rule and 'decision="allow"' in rule
-    assert json.dumps(str(tmp_path / ui.SEND_SCRIPT)) in rule and rule.count("prefix_rule") == 1
+    assert json.dumps(_fwd(tmp_path / ui.SEND_SCRIPT)) in rule and rule.count("prefix_rule") == 1
     p = tmp_path / "rules" / "unimatrix.rules"
     assert ui.seed_file(p, rule) == "created" and ui.seed_file(p, rule) == "present"
     assert ui.unseed_file(p) == "removed" and not p.exists() and ui.unseed_file(p) == "absent"
@@ -818,10 +842,10 @@ def test_default_install_registers_guards_doctrine_and_skills(monkeypatch, tmp_p
     guard = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]
     assert guard["matcher"] == ".*"
     handler = guard["hooks"][0]
-    assert "unimatrix-host-guard.py" in handler["command"] and "--host codex" in handler["command"]
-    assert str(_engine) in handler["command"] and isinstance(handler["timeout"], int)
+    assert "unimatrix-host-guard.py" in handler["command"] and "--host codex" in _shown(handler["command"])
+    assert _fwd(_engine) in _shown(handler["command"]) and isinstance(handler["timeout"], int)
     agy = _hooks_file(home / ".gemini" / "config" / "hooks.json")[ui.AGY_HOOK_KEY]
-    assert len(agy["PreToolUse"]) == 1 and str(_engine) in agy["PreToolUse"][0]["hooks"][0]["command"]
+    assert len(agy["PreToolUse"]) == 1 and _fwd(_engine) in _shown(agy["PreToolUse"][0]["hooks"][0]["command"])
     assert "hooks" not in agy["SessionStart"][0] and agy["SessionStart"][0]["type"] == "command"
     for rules in (home / ".codex" / "AGENTS.md", home / ".gemini" / "GEMINI.md"):
         text = rules.read_text(encoding="utf-8")
@@ -877,7 +901,7 @@ def test_reinstall_with_changed_engine_root_updates_guard(monkeypatch, tmp_path)
     buf = io.StringIO()
     assert ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
     codex = _hooks_file(home / ".codex" / "hooks.json")["hooks"]
-    assert len(codex["PreToolUse"]) == 1 and str(other) in codex["PreToolUse"][0]["hooks"][0]["command"]
+    assert len(codex["PreToolUse"]) == 1 and _fwd(other) in _shown(codex["PreToolUse"][0]["hooks"][0]["command"])
     assert "codex hook updated" in buf.getvalue()
 
 
@@ -893,6 +917,77 @@ def test_no_claude_on_path_hosts_skip_gate_but_bare_install_refuses(monkeypatch,
     assert "gate skipped" in buf.getvalue() and (home / ".codex" / "hooks.json").exists()
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "claude,codex"], dest_dir=tmp_path / "d", out=buf) == 2
+
+
+def _fwd(path):
+    return str(path).replace("\\", "/")
+
+
+def _shown(command):
+    """A hook command with its single quotes dropped, to assert on its words."""
+    return command.replace("'", "")
+
+
+def _live_shell(name):
+    exe = shutil.which(name)
+    if not exe:
+        pytest.skip(f"{name} not on PATH")
+    flags = ["-NoProfile", "-NonInteractive", "-Command"] if name == "pwsh" else ["-c"]
+    return exe, flags
+
+
+def _run_in_shell(name, command, env):
+    exe, flags = _live_shell(name)
+    probe = subprocess.run([exe, *flags, "python -c pass"], env=env, capture_output=True, timeout=60)
+    if probe.returncode != 0:
+        pytest.skip(f"{name} cannot reach python on this box")
+    done = subprocess.run([exe, *flags, command], env=env, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+@pytest.mark.parametrize("shell", ["bash", "pwsh"])
+def test_hook_command_parses_to_one_argv_under_bash_and_pwsh(monkeypatch, tmp_path, shell):
+    _live_shell(shell)
+    dest = tmp_path / "dest dir"
+    dest.mkdir()
+    (dest / "echo_argv.py").write_text("import json,sys;print(json.dumps(sys.argv[1:]))\n", encoding="utf-8")
+    py = Path(sys.executable)
+    monkeypatch.setattr(ui, "_console_python", lambda: py.name)
+    env = dict(os.environ, PATH=str(py.parent) + os.pathsep + os.environ.get("PATH", ""))
+    engine = str(tmp_path / "engine root").replace("/", os.sep)
+    command = ui._hook_command(dest, "echo_argv.py", "--host", "grok", *ui._engine_args(engine))
+    assert "\\" not in command
+    assert _run_in_shell(shell, command, env) == ["--host", "grok", "--engine-root", engine.replace("\\", "/")]
+
+
+def test_interpreter_with_a_space_takes_its_short_form_and_is_quoted_only_without_one(monkeypatch):
+    spaced = "\\opt\\Program Files\\py\\python.exe"
+    monkeypatch.setattr(ui, "_short_path", lambda exe: "\\opt\\PROGRA~1\\py\\python.exe")
+    assert ui._neutral_command([spaced, "x.py"]) == "/opt/PROGRA~1/py/python.exe 'x.py'"
+    monkeypatch.setattr(ui, "_short_path", lambda exe: exe)
+    assert ui._neutral_command([spaced, "x.py"]) == "\"/opt/Program Files/py/python.exe\" 'x.py'"
+
+
+def test_tui_status_command_has_no_backslash_for_bash_to_strip(monkeypatch):
+    monkeypatch.setattr(ui, "_console_python", lambda: "\\py\\python.exe")
+    for root in ("\\eng\\root", None):
+        cmd = ui._tui_status_command("grok", root)
+        assert "\\" not in cmd
+        assert ui._status_command_ours({"command": cmd}, "grok")
+
+
+def test_hook_command_is_forward_slash_quoted_and_old_forms_are_still_claimed(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "_console_python", lambda: "python.exe")
+    command = ui._hook_command("u\\me\\.coord", ui.GUARD_SCRIPT, "--host", "grok", "--engine-root", "d\\e")
+    assert command == "python.exe 'u/me/.coord/unimatrix-host-guard.py' '--host' 'grok' '--engine-root' 'd/e'"
+    old = [r'python.exe u\me\.coord\unimatrix-host-guard.py --host grok --engine-root d\e',
+           "python 'x/unimatrix-host-guard.py' --host grok"]
+    for cmd in (command, *old):
+        group = {"hooks": [{"type": "command", "command": cmd}]}
+        assert ui._grok_group_ours(group)
+        assert ui._codex_ours({"hooks": [{"type": "command", "command": cmd.replace("grok", "codex")}]})
+    assert not ui._grok_group_ours({"hooks": [{"command": command.replace("grok", "codex")}]})
 
 
 def _grok_guard_commands(hooks_file):
@@ -916,7 +1011,7 @@ def test_hosts_grok_ships_the_adapter_and_registers_only_the_grok_pretooluse_hoo
     assert tomllib.loads((home / ".grok" / "config.toml").read_text())["ui"]["status_line"]["type"] == "command"
     assert not (home / ".grok" / "hooks.json").exists()
     ((matcher, command),) = _grok_guard_commands(home / ".grok" / "hooks" / "coordinator.json")
-    assert "unimatrix-host-guard.py" in command and "--host grok" in command
+    assert "unimatrix-host-guard.py" in command and "--host grok" in _shown(command)
     for tool in ("Bash", "run_command", "Edit", "Write", "MultiEdit", "NotebookEdit", "edit_file", "write_file",
                  "read_file", "spawn_subagent"):
         assert tool in matcher.split("|")
@@ -942,9 +1037,9 @@ def test_default_hosts_register_grok_hook_under_hooks_path_and_leave_grok_home_a
     assert rc in (0, 7), buf.getvalue()
     assert list(grok_home.iterdir()) == []
     ((_, command),) = _grok_guard_commands(hp.with_name("grok-hooks.json"))
-    assert "unimatrix-host-guard.py" in command and "--host grok" in command
+    assert "unimatrix-host-guard.py" in command and "--host grok" in _shown(command)
     # codex's own guard entry is a different host's and is not the grok one
-    assert "--host codex" in chp.read_text(encoding="utf-8")
+    assert "--host codex" in _shown(chp.read_text(encoding="utf-8"))
 
 
 def test_uninstall_removes_only_the_grok_hook_entry(tmp_path):
@@ -1236,7 +1331,7 @@ def test_default_install_resolves_engine_root_through_settings_home_door(monkeyp
     assert "governance DEGRADED" not in out
     codex = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     agy = _hooks_file(home / ".gemini" / "config" / "hooks.json")[ui.AGY_HOOK_KEY]["PreToolUse"][0]["hooks"][0]["command"]
-    assert f"--engine-root {root}" in codex and f"--engine-root {root}" in agy
+    assert f"--engine-root {_fwd(root)}" in _shown(codex) and f"--engine-root {_fwd(root)}" in _shown(agy)
 
 
 def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
@@ -1400,6 +1495,11 @@ def test_login_agent_guard_is_off_without_the_marker(monkeypatch, tmp_path):
 
 
 def test_linux_login_agent_is_a_oneshot_user_unit_enabled_by_symlink(monkeypatch, tmp_path):
+    probe = tmp_path / "symlink-probe"
+    try:
+        probe.symlink_to(tmp_path)
+    except OSError:
+        pytest.skip("this host cannot create symlinks (Windows without Developer Mode); the Linux unit link needs one")
     monkeypatch.setattr(sys, "platform", "linux")
     units = tmp_path / "systemd" / "user"
     assert ui.register_login_agent(tmp_path / "u", units)[0] == "created"
@@ -2478,11 +2578,11 @@ def test_codex_lifecycle_hooks_have_short_timeout_and_keep_transport(tmp_path):
     assert len(start) == 2
     assert ui.CODEX_SESSIONSTART_SCRIPT in start[0]["command"]
     assert ui.EXTERNAL_SESSION_SCRIPT in start[1]["command"]
-    assert "--event SessionStart" in start[1]["command"]
+    assert "--event SessionStart" in _shown(start[1]["command"])
     end = events["SessionEnd"]["hooks"][0]
-    assert "--event SessionEnd" in end["command"]
+    assert "--event SessionEnd" in _shown(end["command"])
     assert end["timeout"] <= 3 and start[1]["timeout"] <= 3
-    assert str(tmp_path / "published engine") in end["command"]
+    assert _fwd(tmp_path / "published engine") in _shown(end["command"])
 
 
 def test_codex_install_and_remove_preserve_foreign_handlers_inside_owned_group(tmp_path):
@@ -2513,6 +2613,38 @@ def test_missing_session_end_discovery_is_refused(monkeypatch, tmp_path):
     assert not ok and "sessionend" in note
 
 
+LAUNCHER_CPU_BUDGET_S = 0.5
+LAUNCHER_HANG_GUARD_S = 60
+
+
+def _run_for_cpu_seconds(argv, stdin_text):
+    """Run `argv` to completion; return (CompletedProcess, the child's kernel+user CPU seconds).
+
+    Cost is process time, never wall clock: wall clock measures peer load, and a loaded box
+    stretches a 100ms launcher past any fixed wall deadline. The wall timeout is only a hang guard."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        popen = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True, creationflags=flags)
+        out, err = popen.communicate(stdin_text, timeout=LAUNCHER_HANG_GUARD_S)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        times = [wintypes.FILETIME() for _ in range(4)]
+        assert kernel32.GetProcessTimes(wintypes.HANDLE(int(popen._handle)), *map(ctypes.byref, times))
+        cpu_s = sum((t.dwHighDateTime << 32) | t.dwLowDateTime for t in times[2:]) / 1e7
+    else:
+        import resource
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        popen = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out, err = popen.communicate(stdin_text, timeout=LAUNCHER_HANG_GUARD_S)
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        cpu_s = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
+    return subprocess.CompletedProcess(argv, popen.returncode, out, err), cpu_s
+
+
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("event", ["SessionStart", "SessionEnd", "SubagentStart", "UserPromptSubmit", "PostToolUse", "Stop", "SubagentStop", "PreCompact", "PostCompact"])
 def test_external_lifecycle_launcher_calls_published_engine_in_process(tmp_path, event):
@@ -2531,10 +2663,11 @@ def test_external_lifecycle_launcher_calls_published_engine_in_process(tmp_path,
     (hooks / "session_context.py").write_text('def context(payload, env):\n return {"event":payload["hook_event_name"]}\n', encoding="utf-8")
     (hooks / "codex_lifecycle.py").write_text('def handle(payload, env):\n return {"event":payload["hook_event_name"]}\n', encoding="utf-8")
     script = Path(ui.__file__).with_name(ui.EXTERNAL_SESSION_SCRIPT)
-    proc = subprocess.run([sys.executable, str(script), "--engine-root", str(engine), "--event", event],
-                          input=json.dumps({"session_id":"parent-session", **({"agent_id":"child"} if event == "SubagentStart" else {})}), text=True, capture_output=True,
-                          timeout=3, creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+    proc, cpu_s = _run_for_cpu_seconds(
+        [sys.executable, str(script), "--engine-root", str(engine), "--event", event],
+        json.dumps({"session_id":"parent-session", **({"agent_id":"child"} if event == "SubagentStart" else {})}))
     assert proc.returncode == 0, proc.stderr
+    assert cpu_s < LAUNCHER_CPU_BUDGET_S, f"{event} launcher cost {cpu_s:.3f}s process time"
     assert json.loads(proc.stdout) == ({} if event == "SessionEnd" else {"event":event})
     assert (package / "registered").exists() is (event == "SessionStart")
     assert (package / "ended").exists() is (event == "SessionEnd")
@@ -2589,7 +2722,7 @@ def test_codex_advisory_events_use_one_bounded_owned_handler(tmp_path):
         assert len(group['hooks']) == 1
         hook = group['hooks'][0]
         assert hook['timeout'] <= 3
-        assert '--event '+event in hook['command']
+        assert '--event '+event in _shown(hook['command'])
     assert events['PreToolUse']['matcher'] == '.*'
 
 
@@ -2773,7 +2906,7 @@ def test_tui_status_lines_keep_user_customised_lines(monkeypatch, tmp_path):
     rc, out = _tui_main(tmp_path, "--install")
     assert rc == 0 and "agy status line retained-customized" in out and "grok status line retained-customized" in out
     agy_data = json.loads(agy.read_text())
-    assert agy_data["statusLine"] == {"command": "my-line"} and agy_data["permissions"]["allow"] == [ui.AGY_ALLOW_RULE]
+    assert agy_data["statusLine"] == {"command": "my-line"} and agy_data["permissions"]["allow"] == [ui.agy_absolute_allow_rule()]
     assert grok.read_text() == mine_grok
     rc, out = _tui_main(tmp_path, "--uninstall")
     assert "agy status line absent" in out and agy.read_text() == mine_agy and grok.read_text() == mine_grok
@@ -2940,8 +3073,9 @@ def test_default_install_grants_agy_only_the_exact_submit_command(monkeypatch, t
     rc, _ = _tui_main(tmp_path, "--install")
     assert rc == 0
     allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
-    assert allow == ["command(coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json)"]
-    assert not any("*" in rule for rule in allow)
+    launcher = str(ui.settings_home() / "bin" / ("coordinator-invoke.exe" if sys.platform == "win32" else "coordinator-invoke"))
+    assert allow == [f"command({launcher} engine_ask.submit)"]
+    assert Path(launcher).is_absolute() and not any("*" in rule for rule in allow)
 
 
 def test_agy_allow_rule_installs_once_keeps_operator_entries_and_uninstall_restores_bytes(monkeypatch, tmp_path):
@@ -2953,7 +3087,7 @@ def test_agy_allow_rule_installs_once_keeps_operator_entries_and_uninstall_resto
     rc, out = _tui_main(tmp_path, "--install")
     assert rc == 0 and "agy allow rule updated" in out
     allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
-    assert allow == [mine, ui.AGY_ALLOW_RULE]
+    assert allow == [mine, ui.agy_absolute_allow_rule()]
     once = agy.read_bytes()
     rc, out = _tui_main(tmp_path, "--install")
     assert "agy allow rule present" in out and agy.read_bytes() == once
@@ -2989,7 +3123,7 @@ def test_agy_allow_rule_reinstall_migrates_legacy_wildcard_and_uninstall_removes
     rc, out = _tui_main(tmp_path, "--install")
     assert rc == 0 and "agy allow rule updated" in out
     allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
-    assert allow == [mine, ui.AGY_ALLOW_RULE]
+    assert allow == [mine, ui.agy_absolute_allow_rule()]
     once = agy.read_bytes()
     rc, out = _tui_main(tmp_path, "--install")
     assert "agy allow rule present" in out and agy.read_bytes() == once
@@ -2998,7 +3132,7 @@ def test_agy_allow_rule_reinstall_migrates_legacy_wildcard_and_uninstall_removes
 
     agy.write_bytes(json.dumps({"permissions": {"allow": [mine, legacy]}}).encode("utf-8"))
     _tui_main(tmp_path, "--install")
-    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, legacy, ui.AGY_ALLOW_RULE]
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, legacy, ui.agy_absolute_allow_rule()]
     _tui_main(tmp_path, "--uninstall")
 
     _tui_main(tmp_path, "--install")
@@ -3013,17 +3147,35 @@ def test_agy_allow_rule_reinstall_migrates_legacy_wildcard_and_uninstall_removes
     assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine]
 
 
-def test_agy_allow_rule_bare_resolves_grants_bare_line_and_reports_it(monkeypatch, tmp_path):
+def test_agy_allow_rule_default_grants_absolute_line_and_reports_it(monkeypatch, tmp_path):
     _, agy, _ = _tui_home(monkeypatch, tmp_path)
     agy.parent.mkdir(parents=True)
+    absolute = ui.agy_absolute_allow_rule()
     rc, out = _tui_main(tmp_path, "--install")
-    assert rc == 0 and f"agy allow rule granted: {ui.AGY_ALLOW_RULE}" in out
-    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [ui.AGY_ALLOW_RULE]
+    assert rc == 0 and f"agy allow rule granted: {absolute}" in out
+    allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
+    assert allow == [absolute] and ui.AGY_ALLOW_RULE not in allow
+    # agy `permissions.allow` entries have the form `command(<cmd>)`.
+    inner = allow[0][len("command("):-1]
+    assert Path(inner.split(" ", 1)[0]).is_absolute()
 
 
-def test_agy_allow_rule_bare_unresolved_grants_absolute_line_migrates_and_uninstalls(monkeypatch, tmp_path):
+def test_agy_allow_rule_is_the_advisory_command_and_prior_forms_are_owned(monkeypatch, tmp_path):
+    from coordinator_core import warp_fire
+
+    assert ui.AGY_ALLOW_RULE == f"command({warp_fire.INVOKE_SUBMIT_COMMAND})"
     _, agy, _ = _tui_home(monkeypatch, tmp_path)
-    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", lambda: False)
+    agy.parent.mkdir(parents=True)
+    mine = "command(keep me)"
+    _tui_main(tmp_path, "--install")
+    agy.write_text(json.dumps({"permissions": {"allow": [mine, ui.AGY_PRIOR_ALLOW_RULE]}}), encoding="utf-8")
+    _tui_main(tmp_path, "--install")
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, ui.agy_absolute_allow_rule()]
+    assert ui.AGY_PRIOR_ALLOW_RULE not in json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
+
+
+def test_agy_allow_rule_migrates_bare_and_legacy_lines_to_absolute_and_uninstalls(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
     agy.parent.mkdir(parents=True)
     mine = "command(keep me)"
     legacy = "command(coordinator-invoke *)"
@@ -3039,42 +3191,79 @@ def test_agy_allow_rule_bare_unresolved_grants_absolute_line_migrates_and_uninst
     agy.write_text(json.dumps(data), encoding="utf-8")
     _tui_main(tmp_path, "--install")
     assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, absolute]
-    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", lambda: True)
-    _tui_main(tmp_path, "--install")
-    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, ui.AGY_ALLOW_RULE]
-    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", lambda: False)
     _tui_main(tmp_path, "--install")
     rc, _ = _tui_main(tmp_path, "--uninstall")
     assert rc == 0 and agy.read_bytes() == before
 
 
-def test_agy_resolves_bare_invoke_reads_login_shell_probe(monkeypatch):
-    calls = []
+# `"toolPermission": "always-proceed"` in agy's settings.json approves every tool call regardless of --mode.
+_BYPASS = {"toolPermission": "always-proceed"}
 
-    def fake_run(argv, **kw):
-        calls.append(argv)
-        return subprocess.CompletedProcess(argv, fake_run.rc, stdout=fake_run.out, stderr="")
 
-    monkeypatch.setattr(ui, "agy_resolves_bare_invoke", _REAL_AGY_PROBE)
-    monkeypatch.setattr(ui.subprocess, "run", fake_run)
-    monkeypatch.setattr(ui.sys, "platform", "linux")
-    monkeypatch.setenv("SHELL", "/bin/zsh")
-    fake_run.rc, fake_run.out = 0, "/usr/local/bin/coordinator-invoke\n"
-    assert ui.agy_resolves_bare_invoke() is True
-    assert calls == [["/bin/zsh", "-lc", "command -v coordinator-invoke"]]
-    fake_run.rc, fake_run.out = 1, ""
-    assert ui.agy_resolves_bare_invoke() is False
+def test_install_removes_always_proceed_and_uninstall_restores_the_file_byte_for_byte(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    before = json.dumps({**_BYPASS, "theme": "dark"}).encode("utf-8")
+    agy.write_bytes(before)
+    rc, out = _tui_main(tmp_path, "--install")
+    data = json.loads(agy.read_text(encoding="utf-8"))
+    assert rc == 0 and "toolPermission" not in data and "always-proceed" not in agy.read_text(encoding="utf-8")
+    assert data["permissions"]["allow"] == [ui.agy_absolute_allow_rule()] and data["theme"] == "dark"
+    once = agy.read_bytes()
+    rc, out = _tui_main(tmp_path, "--install")
+    assert "agy allow rule present" in out and agy.read_bytes() == once
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and agy.read_bytes() == before
 
-    def boom(argv, **kw):
-        raise OSError("no shell")
 
-    monkeypatch.setattr(ui.subprocess, "run", boom)
-    assert ui.agy_resolves_bare_invoke() is False
-    monkeypatch.setattr(ui.sys, "platform", "win32")
-    monkeypatch.setattr(ui.shutil, "which", lambda name: "C:/x/coordinator-invoke.cmd")
-    assert ui.agy_resolves_bare_invoke() is True
-    monkeypatch.setattr(ui.shutil, "which", lambda name: None)
-    assert ui.agy_resolves_bare_invoke() is False
+def test_install_removes_always_proceed_agy_rewrote_after_install_and_keeps_the_original_restore(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    before = json.dumps({"permissions": {"allow": ["command(keep me)"]}, **_BYPASS}).encode("utf-8")
+    agy.write_bytes(before)
+    _tui_main(tmp_path, "--install")
+    data = json.loads(agy.read_text(encoding="utf-8"))
+    data.update(_BYPASS)
+    agy.write_text(json.dumps(data), encoding="utf-8")
+    rc, out = _tui_main(tmp_path, "--install")
+    assert "agy allow rule updated" in out and "toolPermission" not in json.loads(agy.read_text(encoding="utf-8"))
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and agy.read_bytes() == before
+
+
+def test_uninstall_after_edit_restores_the_recorded_always_proceed_and_keeps_operator_entries(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    agy.write_bytes(json.dumps(_BYPASS).encode("utf-8"))
+    _tui_main(tmp_path, "--install")
+    data = json.loads(agy.read_text(encoding="utf-8"))
+    data["permissions"]["allow"].append("command(keep me)")
+    agy.write_text(json.dumps(data), encoding="utf-8")
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    after = json.loads(agy.read_text(encoding="utf-8"))
+    assert rc == 0 and after == {"permissions": {"allow": ["command(keep me)"]}, **_BYPASS}
+
+
+def test_install_leaves_a_non_bypass_tool_permission_untouched(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    agy.write_bytes(json.dumps({"toolPermission": "request-review"}).encode("utf-8"))
+    _tui_main(tmp_path, "--install")
+    assert json.loads(agy.read_text(encoding="utf-8"))["toolPermission"] == "request-review"
+    rc, _ = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and json.loads(agy.read_text(encoding="utf-8")) == {"toolPermission": "request-review"}
+
+
+def test_install_agy_skills_drops_scratch_roots_and_refuses_a_scratch_skills_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui._seed(), "is_scratch_root", _REAL_IS_SCRATCH_ROOT)
+    seed = ui._seed()
+    sj = tmp_path / "skills.json"
+    # Source: observed ~/.gemini/config/skills.json listing another session's /private/tmp scratchpad (R1 item 5).
+    sj.write_text(json.dumps({"entries": [{"path": "/private/tmp/claude/scratchpad/skills"}, {"path": "/ok/skills"}]}))
+    assert seed.seed_agy_skills(sj, "/p/plugin/skills") == "added"
+    assert [e["path"] for e in json.loads(sj.read_text())["entries"]] == ["/ok/skills", "/p/plugin/skills"]
+    assert seed.seed_agy_skills(sj, "/tmp/x/skills") == "refused"
+    assert [e["path"] for e in json.loads(sj.read_text())["entries"]] == ["/ok/skills", "/p/plugin/skills"]
 
 
 def test_agy_allow_rule_refuses_a_non_list_allow_without_writing(monkeypatch, tmp_path):
@@ -3466,16 +3655,21 @@ def test_custom_agent_dir_without_injected_launchctl_never_touches_launchd(tmp_p
     assert ui.register_login_agent(tmp_path, tmp_path)[0] == "updated"
 
 
-def test_grok_hook_skipped_cleanly_when_grok_absent_and_seeded_once_grok_home_exists(monkeypatch, tmp_path):
+def test_grok_hook_skipped_while_only_a_grok_home_exists_and_seeded_once_grok_is_on_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "host_present", _REAL_HOST_PRESENT)
     _stub_src(monkeypatch, tmp_path)
     home = _home(monkeypatch, tmp_path)
     monkeypatch.delenv("GROK_HOME", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+    (home / ".grok").mkdir(exist_ok=True)
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
     assert "grok hook skipped" in buf.getvalue() and "grok hook created" not in buf.getvalue()
     assert not (home / ".grok" / "hooks").exists()
-    (home / ".grok").mkdir(exist_ok=True)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "grok").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATH", str(bindir))
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
     assert "grok hook created" in buf.getvalue() and (home / ".grok" / "hooks" / "coordinator.json").is_file()
@@ -3491,6 +3685,7 @@ def test_grok_hooks_path_is_the_grok_loaded_hooks_directory(monkeypatch, tmp_pat
 
 
 def test_grok_hook_seeded_when_grok_binary_on_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "host_present", _REAL_HOST_PRESENT)
     _stub_src(monkeypatch, tmp_path)
     home = _home(monkeypatch, tmp_path)
     monkeypatch.delenv("GROK_HOME", raising=False)
@@ -3501,6 +3696,191 @@ def test_grok_hook_seeded_when_grok_binary_on_path(monkeypatch, tmp_path):
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
     assert "grok hook created" in buf.getvalue()
+
+
+def _bare_env(monkeypatch, tmp_path):
+    home = _home(monkeypatch, tmp_path)
+    for var in ("GROK_HOME", "CODEX_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+    monkeypatch.setattr(ui, "host_present", _REAL_HOST_PRESENT)
+    return home
+
+
+def test_install_with_every_host_absent_writes_nothing_for_any_host(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    home = _bare_env(monkeypatch, tmp_path)
+    buf = io.StringIO()
+    assert ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf) in (0, 7), buf.getvalue()
+    for host in ("codex", "agy", "grok"):
+        assert f"{host} hook skipped" in buf.getvalue()
+    assert not any((home / name).exists() for name in (".codex", ".gemini", ".grok", ".agents")), sorted(p.name for p in home.iterdir())
+    written = "\n".join(ln for ln in buf.getvalue().splitlines() if "skipped" not in ln)
+    for surface in ("status line", "peer doctrine", "coordinator doctrine", "send rule", "status footer"):
+        assert surface not in written
+
+
+def test_default_install_with_codex_and_grok_homes_but_not_on_path_writes_no_codex_or_grok_config(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    home = _bare_env(monkeypatch, tmp_path)
+    (home / ".codex").mkdir()
+    (home / ".grok").mkdir()
+    buf = io.StringIO()
+    ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf)
+    assert "codex hook skipped" in buf.getvalue() and "grok hook skipped" in buf.getvalue()
+    assert "no codex home" not in buf.getvalue() and "no grok home" not in buf.getvalue()
+    assert sorted(p.name for p in (home / ".codex").iterdir()) == []
+    assert sorted(p.name for p in (home / ".grok").iterdir()) == []
+
+
+def test_install_seeds_only_the_present_host(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    home = _bare_env(monkeypatch, tmp_path)
+    (home / ".grok").mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "codex").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("PATH", str(bindir))
+    buf = io.StringIO()
+    ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf)
+    assert (home / ".codex" / "hooks.json").is_file() and (home / ".codex" / "AGENTS.md").is_file()
+    assert not (home / ".grok" / "hooks").exists() and not (home / ".gemini").exists()
+    assert "codex hook skipped" not in buf.getvalue() and "agy hook skipped" in buf.getvalue()
+    assert "grok hook skipped" in buf.getvalue()
+
+
+def test_host_present_reads_path_and_home(monkeypatch, tmp_path):
+    _bare_env(monkeypatch, tmp_path)
+    assert not any(ui.host_present(h) for h in ("codex", "agy", "grok"))
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "agy.exe").write_text("x")
+    monkeypatch.setenv("PATH", str(bindir))
+    assert ui.host_present("agy") and not ui.host_present("codex")
+    (Path.home() / ".codex").mkdir()
+    (Path.home() / ".grok").mkdir()
+    assert not ui.host_present("codex") and not ui.host_present("grok")
+    (bindir / "codex.exe").write_text("x")
+    (bindir / "grok.cmd").write_text("x")
+    assert ui.host_present("codex") and ui.host_present("grok")
+
+
+def _env_with_pwsh_dirs(tmp_path, *dirs):
+    for d in dirs:
+        (tmp_path / d).mkdir(parents=True, exist_ok=True)
+        (tmp_path / d / "pwsh.exe").write_text("x")
+    return {"PATH": os.pathsep.join(str(tmp_path / d) for d in dirs)}
+
+
+def test_pwsh_alias_remedy_fires_only_for_a_windowsapps_first_pwsh(tmp_path):
+    env = _env_with_pwsh_dirs(tmp_path, "Microsoft/WindowsApps", "Other")
+    text = _REAL_PWSH_ALIAS_REMEDY(env, "win32")
+    assert "Store/MSIX" in text and "--installer-type wix" in text
+    assert _REAL_PWSH_ALIAS_REMEDY(_env_with_pwsh_dirs(tmp_path, "Other", "Microsoft/WindowsApps"), "win32") is None
+    assert _REAL_PWSH_ALIAS_REMEDY(env, "linux") is None
+    assert _REAL_PWSH_ALIAS_REMEDY({"PATH": str(tmp_path / "none")}, "win32") is None
+
+
+def test_install_prints_the_pwsh_alias_remedy(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(ui, "pwsh_alias_remedy", lambda *a, **k: "pwsh resolves first to the Store/MSIX alias X; remedy: R")
+    buf = io.StringIO()
+    ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf, hooks_path=tmp_path / "h.json")
+    assert "WARN: pwsh resolves first to the Store/MSIX alias X; remedy: R" in buf.getvalue()
+
+
+def test_powershell_host_prefers_msi_then_nonstore_pwsh_then_5_1_and_never_msix(tmp_path):
+    pf, root = tmp_path / "pf", tmp_path / "win"
+    ps51 = root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    ps51.parent.mkdir(parents=True)
+    ps51.write_text("x")
+    env = {"ProgramFiles": str(pf), "SystemRoot": str(root), **_env_with_pwsh_dirs(tmp_path, "Microsoft/WindowsApps")}
+    assert _REAL_POWERSHELL_HOST(env, "win32") == str(ps51)
+    (pf / "PowerShell" / "7").mkdir(parents=True)
+    (pf / "PowerShell" / "7" / "pwsh.exe").write_text("x")
+    assert _REAL_POWERSHELL_HOST(env, "win32") == str(pf / "PowerShell" / "7" / "pwsh.exe")
+    assert _REAL_POWERSHELL_HOST(env, "linux") is None
+
+
+_SSH_OK = {"installed": True, "running": True, "automatic": True, "firewall22": True, "keys_exists": True,
+           "keys_protected": True, "keys_sids": ["S-1-5-18", "S-1-5-32-544"]}
+
+
+def test_openssh_problems_names_each_missing_requirement():
+    assert ui.openssh_problems(_SSH_OK) == []
+    names = [n for n, _ in ui.openssh_problems({})]
+    assert names == ["openssh-server-installed", "openssh-sshd-running", "openssh-sshd-automatic",
+                     "openssh-firewall-22", "openssh-admin-keys-acl"]
+    wide = dict(_SSH_OK, keys_sids=["S-1-5-18", "S-1-5-32-544", "S-1-5-32-545"])
+    assert [n for n, _ in ui.openssh_problems(wide)] == ["openssh-admin-keys-acl"]
+    assert [n for n, _ in ui.openssh_problems(dict(_SSH_OK, keys_protected=False))] == ["openssh-admin-keys-acl"]
+
+
+class _PsRun:
+    """Fake PowerShell: answers the state script from `states` in order and the apply script with `apply_rc`."""
+
+    def __init__(self, states, apply_rc=0):
+        self.states, self.apply_rc, self.argv = list(states), apply_rc, []
+
+    def __call__(self, argv, **kw):
+        self.argv.append(argv)
+        assert kw["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if "NEEDS_ADMIN" in argv[-1]:
+            return subprocess.CompletedProcess(argv, self.apply_rc, "NEEDS_ADMIN" if self.apply_rc == 3 else "OK", "")
+        return subprocess.CompletedProcess(argv, 0, json.dumps(self.states.pop(0)) + "\n", "")
+
+
+def test_openssh_report_complete_incomplete_and_needs_admin(monkeypatch):
+    monkeypatch.setattr(ui, "openssh_receive_report", _REAL_OPENSSH_REPORT)
+    host = "pwsh-stub"
+    out = io.StringIO()
+    assert ui.openssh_receive_report(out, _PsRun([_SSH_OK]), host=host) == 0
+    assert "complete" in out.getvalue()
+    out = io.StringIO()
+    run = _PsRun([{}])
+    assert ui.openssh_receive_report(out, run, host=host) == 1
+    assert "openssh-firewall-22" in out.getvalue() and "--openssh-receive" in out.getvalue()
+    assert len(run.argv) == 1 and run.argv[0][0] == host
+    out = io.StringIO()
+    assert ui.openssh_receive_report(out, _PsRun([{}], apply_rc=3), apply=True, host=host) == 1
+    assert "elevated" in out.getvalue()
+
+
+def test_openssh_apply_runs_the_script_then_rechecks(monkeypatch):
+    monkeypatch.setattr(ui, "openssh_receive_report", _REAL_OPENSSH_REPORT)
+    out, run = io.StringIO(), _PsRun([{}, _SSH_OK])
+    assert ui.openssh_receive_report(out, run, apply=True, host="pwsh-stub") == 0
+    scripts = [a[-1] for a in run.argv]
+    assert "Set-Service" in scripts[1] and "S-1-5-32-544" in scripts[1] and "icacls" in scripts[1]
+    assert len(scripts) == 3
+
+
+def test_main_openssh_receive_flag_drives_the_apply_and_is_windows_only(monkeypatch):
+    monkeypatch.setattr(ui, "openssh_receive_report", _REAL_OPENSSH_REPORT)
+    monkeypatch.setattr(ui, "powershell_host", lambda *a, **k: "pwsh-stub")
+    monkeypatch.setattr(ui.sys, "platform", "linux")
+    buf = io.StringIO()
+    assert ui.main(["--openssh-receive"], out=buf, openssh_run=lambda *a, **k: pytest.fail("ran on linux")) == 0
+    assert "Windows only" in buf.getvalue()
+    monkeypatch.setattr(ui.sys, "platform", "win32")
+    buf, run = io.StringIO(), _PsRun([{}, _SSH_OK])
+    assert ui.main(["--openssh-receive"], out=buf, openssh_run=run) == 0
+    assert "complete" in buf.getvalue()
+
+
+def test_install_reports_the_openssh_receive_side_on_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "openssh_receive_report", _REAL_OPENSSH_REPORT)
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(ui, "powershell_host", lambda *a, **k: "pwsh-stub")
+    monkeypatch.setattr(ui.sys, "platform", "win32")
+    buf = io.StringIO()
+    ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf, hooks_path=tmp_path / "h.json",
+            openssh_run=_PsRun([{}]))
+    assert "openssh receive side incomplete" in buf.getvalue()
+
+
 
 
 def test_agy_matcher_covers_every_adapter_edit_tool():
@@ -3746,3 +4126,38 @@ def test_grok_present_survives_an_unreadable_path_entry(tmp_path, monkeypatch):
         assert ui.grok_present() is False
     finally:
         locked.chmod(0o755)
+
+
+_REAL_NAMES = json.loads((Path(__file__).parent / "fixtures" / "host-real-tool-names.json").read_text(encoding="utf-8"))
+
+
+def _written_matcher(host, tmp_path):
+    """The matcher the installer writes for `host`, read from the entry it builds (grok: the file seed_grok_hook writes)."""
+    if host == "grok":
+        ghp = tmp_path / "hooks" / "coordinator.json"
+        ui.seed_grok_hook(ghp, tmp_path)
+        groups = json.loads(ghp.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+        return next(g["matcher"] for g in groups if any(ui.GUARD_SCRIPT in h["command"] for h in g["hooks"]))
+    if host == "agy":
+        return ui.agy_hook_entry(tmp_path)["PreToolUse"][0]["matcher"]
+    return ui.codex_hook_events(tmp_path)["PreToolUse"]["matcher"]
+
+
+@pytest.mark.parametrize("host", ["grok", "agy", "codex"])
+def test_real_tool_fixture_entries_each_name_a_source_and_cover_shell_edit_and_write(host):
+    entries = _REAL_NAMES[host]
+    assert all(e["name"] and e["source"].strip() and e["version"].strip() for e in entries)
+    assert {e["kind"] for e in entries} <= {"shell", "edit", "write"}
+    assert {"shell", "edit"} <= {e["kind"] for e in entries}
+
+
+@pytest.mark.parametrize("host", ["grok", "agy", "codex"])
+def test_real_tool_names_are_selected_by_the_written_matcher(host, tmp_path):
+    matcher = _written_matcher(host, tmp_path)
+    missing = [e["name"] for e in _REAL_NAMES[host] if not re.fullmatch(matcher, e["name"])]
+    assert not missing, f"{host} matcher {matcher!r} does not select real tool names {missing}"
+
+
+def test_real_tool_grok_matcher_is_not_a_wildcard(tmp_path):
+    matcher = _written_matcher("grok", tmp_path)
+    assert not re.fullmatch(matcher, "web_search") and not re.fullmatch(matcher, "grep")

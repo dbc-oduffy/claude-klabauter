@@ -223,12 +223,24 @@ def _live_eager_modules() -> frozenset[str]:
     return frozenset(module_path for module_path, _note in _EAGER_OP_MODULES)
 
 
+_HOOKS_PACKAGE = "coordinator_core.hooks"
+
+
+def _live_hook_modules() -> frozenset[str]:
+    """`coordinator_core.hooks._EAGER_HOOK_MODULES`: the submodules the lazy hooks package's
+    `_eager_import_all()` imports when `_EAGER_OP_MODULES` names the package."""
+    from coordinator_core.hooks import _EAGER_HOOK_MODULES
+
+    return frozenset(_EAGER_HOOK_MODULES)
+
+
 def check_registration_quad(
     registry: Mapping[str, object] | None = None,
     classification: Mapping[str, object] | None = None,
     scope: Mapping[str, object] | None = None,
     module_map: Mapping[str, object] | None = None,
     eager_modules: "frozenset[str] | set[str] | None" = None,
+    hook_modules: "frozenset[str] | set[str] | None" = None,
 ) -> list[QuadViolation]:
     """For every op in `registry`, verify it also carries an entry in `classification`,
     `scope`, and `module_map`, and that `module_map`'s module path for it appears in
@@ -274,6 +286,9 @@ def check_registration_quad(
     resolved_scope = _live_scope() if scope is None else scope
     resolved_module_map = _live_module_map() if module_map is None else module_map
     resolved_eager_modules = _live_eager_modules() if eager_modules is None else frozenset(eager_modules)
+    if _HOOKS_PACKAGE in resolved_eager_modules:
+        # Trap: the package entry registers nothing by itself; its own list is the eager surface.
+        resolved_eager_modules |= _live_hook_modules() if hook_modules is None else frozenset(hook_modules)
 
     violations: list[QuadViolation] = []
     for op_key in sorted(resolved_registry):

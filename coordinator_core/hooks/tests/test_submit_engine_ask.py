@@ -91,6 +91,14 @@ def test_submit_call_is_what_every_guard_names() -> None:
     assert not warp_fire.is_submit_name("coordinator:plan-blitz")
 
 
+def test_minted_step_names_the_fire_not_the_submit() -> None:
+    text = warp_fire.minted_step("state/warp/x/run.js")
+    assert "state/warp/x/run.js" in text and "workflow.fire" in text
+    assert "do not call engine_ask.submit again" in text
+    assert warp_fire.fire_command() not in text
+    assert warp_fire.fire_command() in warp_fire.fire_step()
+
+
 def test_other_workflow_calls_pass_untouched(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     emit = _Emit()

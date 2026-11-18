@@ -254,6 +254,15 @@ def test_script_file_import_only_allows_and_call_denies(monkeypatch: pytest.Monk
     _denies(monkeypatch, f"python3 {calls_arg}")
 
 
+# Public commit.py functions that are not commit acts: a pure formatter and
+# byte-counter telemetry. Any new public function stays out of this set until
+# someone classifies it, so it fails the ratchet below until it is either
+# added to _GIT_COMMIT_ENTRY_POINTS or deliberately named here.
+_NON_COMMIT_PUBLIC = frozenset(
+    {"sync_report", "bind_byte_counter", "reset_byte_counter", "bytes_read_total"}
+)
+
+
 def test_entry_point_set_matches_commit_module_public_functions() -> None:
     import inspect
 
@@ -264,7 +273,7 @@ def test_entry_point_set_matches_commit_module_public_functions() -> None:
         for n, f in inspect.getmembers(mod, inspect.isfunction)
         if not n.startswith("_") and f.__module__ == mod.__name__
     }
-    assert public == set(guard._GIT_COMMIT_ENTRY_POINTS)
+    assert public - _NON_COMMIT_PUBLIC == set(guard._GIT_COMMIT_ENTRY_POINTS)
 
 
 # ---------------------------------------------------------------------------

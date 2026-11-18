@@ -12,10 +12,12 @@ Window, by ledger `completed_at`: `since` param (ISO date/datetime, or a sha tha
 `completing_sha` in the ledger: rows after that row), else the worklist `ack_head` mapped the same
 way, else the last `DEFAULT_WINDOW_DAYS` days. A sha the ledger does not know falls back to the
 day window and says so in `window.source`. A plan absent from the ledger is a missing row, fixed by
-backfill; no history is walked.
+backfill; no history is walked. With no ledger file at all, completed plans in the window come from
+one `ls-tree` over docs/plans instead (`_scan_completed_plans`); `ledger_missing` then means the
+scan found none.
 
-Spawns, constant in plan count: rev-parse and one `cat-file --batch` over the plan blobs; the
-wiki pages are read in-process.
+Spawns, constant in plan count: rev-parse and one `cat-file --batch` over the plan blobs (plus one
+`ls-tree` when the ledger file is absent); the wiki pages are read in-process.
 
 Self-registration: importing this module registers the op; `ops/__init__.py` imports it at
 start_server() time.
@@ -24,6 +26,7 @@ start_server() time.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -123,6 +126,43 @@ def _read_blobs(root: Path, blobs: List[str]) -> List[str]:
 _PATH_TOKEN = re.compile(r"[A-Za-z0-9_./-]+")
 
 
+_STATUS_RE = re.compile(r"^status:[ \t]*['\"]?(\w+)", re.M)
+_TREE_RE = re.compile(r"^\d+ blob ([0-9a-f]{40,64})\t(docs/plans/(?:[^/]+/)*(\d{4}-\d{2}-\d{2})-[^/]+\.md)$")
+
+
+def _scan_completed_plans(root: Path, since: Optional[str], head: Optional[str]) -> List[Dict[str, Any]]:
+    """Ledger-shaped rows for plans at a completed status, from one `ls-tree` plus one cat-file batch.
+
+    Used only when the ledger file is absent. Trap: a pathspec-limited `git log` over the window
+    costs ~10s on a busy repo, so the window is applied to the plan filename's `YYYY-MM-DD-` prefix
+    over the HEAD tree instead; `completing_sha` is HEAD (the commit the plan is read at).
+    """
+    start = _ledger._parse_instant(since) if since and not _SHA_RE.match(since) else None
+    floor = (start or datetime.now(timezone.utc) - timedelta(days=DEFAULT_WINDOW_DAYS)).date().isoformat()
+    res = run_git(["ls-tree", "-r", "HEAD", "--", "docs/plans"], cwd=str(root), timeout=CEREMONY_BUDGET_SECS)
+    if not res.ok:
+        return []
+    blobs: Dict[str, str] = {}
+    for line in res.stdout.splitlines():
+        m = _TREE_RE.match(line)
+        if m and m.group(3) >= floor:
+            blobs[m.group(2)] = m.group(1)
+    paths = list(blobs)
+    rows: List[Dict[str, Any]] = []
+    for path, text in zip(paths, _read_blobs(root, [blobs[p] for p in paths])):
+        fm = _ledger.frontmatter(text)
+        status = _STATUS_RE.search(fm)
+        writes = _ledger.spine_writes(text)
+        if not status or status.group(1) not in COMPLETED_STATUSES or not writes:
+            continue
+        rows.append({
+            "plan": path, "status": status.group(1), "completing_sha": head,
+            "plan_blob": blobs[path], "tshirt": _ledger.tshirt(root, fm), "writes": writes,
+            "_text": text,
+        })
+    return rows
+
+
 def _citing_pages(root: Path, paths: List[str]) -> Dict[str, List[str]]:
     """{wiki page: touched paths its text cites}, read in-process.
 
@@ -174,16 +214,22 @@ def wiki_candidates(root: Path, since: Optional[str] = None) -> Dict[str, Any]:
     """The contract reply for the repo at `root`: window, ranked pages, preview total, truncation,
     and `empty_reason` (null when pages is non-empty)."""
     rows, base, source = _window(root, since)
+    head_res = run_git(["rev-parse", "HEAD"], cwd=str(root), timeout=CEREMONY_BUDGET_SECS)
+    head = head_res.stdout.strip() if head_res.ok else None
+    if not (root / _ledger.LEDGER).exists():
+        rows = _scan_completed_plans(root, since, head)
     latest: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         if row.get("status") in COMPLETED_STATUSES and row.get("writes") and row.get("plan_blob"):
             latest[str(row.get("plan"))] = row
     chosen = list(latest.values())
-    head_res = run_git(["rev-parse", "HEAD"], cwd=str(root), timeout=CEREMONY_BUDGET_SECS)
-    head = head_res.stdout.strip() if head_res.ok else None
 
     plans: List[Dict[str, Any]] = []
-    for row, text in zip(chosen, _read_blobs(root, [str(r["plan_blob"]) for r in chosen])):
+    texts = (
+        [str(r["_text"]) for r in chosen] if all("_text" in r for r in chosen)
+        else _read_blobs(root, [str(r["plan_blob"]) for r in chosen])
+    )
+    for row, text in zip(chosen, texts):
         plans.append({
             "path": row["plan"], "commit_sha": row.get("completing_sha"), "tshirt": row.get("tshirt"),
             "preview": _ledger.body(text)[:PREVIEW_CHARS], "writes": list(row["writes"]),

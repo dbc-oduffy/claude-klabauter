@@ -65,6 +65,25 @@ def test_an_undecidable_claim_lands_and_is_listed(repo):  # noqa: F811
     assert len(out["reach_claims"]["undecidable"]) == 1 and not out["reach_claims"]["unreachable"]
 
 
+def test_an_overrun_judge_lands_with_the_step_owed(repo, monkeypatch):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit import land_deadline, reach_claims_tree
+
+    _stage(repo, "`project_trace` reaches `load_hookimpl`\n")
+    head = prod._git(["rev-parse", "HEAD"], repo).strip()
+
+    def overrun(*a, **kw):
+        raise land_deadline.LandDeadlineExceeded(reach_claims_tree.GREP_STEP, step=True)
+
+    monkeypatch.setattr(reach_claims_tree, "judge_reach_claims", overrun)
+    out = prod._land(repo)
+
+    assert out["committed"] is True, out
+    assert prod._git(["rev-parse", "HEAD"], repo).strip() != head
+    assert out["reach_claims"]["owed"] == [reach_claims_tree.GREP_STEP], out
+    assert not out["reach_claims"]["unreachable"]
+    assert "parked" not in out and out.get("status") != "not-started", out
+
+
 @pytest.mark.parametrize("note", [None, "no claims here\n"], ids=["no-note", "no-claim"])
 def test_no_note_and_no_claim_land_unchanged(repo, note):  # noqa: F811
     _stage(repo, note)

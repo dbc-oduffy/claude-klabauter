@@ -56,7 +56,7 @@ def git_repo(tmp_path, monkeypatch):
 
 
 def _stub_cc_invoke(monkeypatch, *, result: Dict[str, Any] = None, raises: Exception = None):
-    def _fake(op_name, params, repo_root, _claude_klabauter_root=None):
+    def _fake(op_name, params, repo_root, _engine_root=None):
         assert op_name == "fleet.reap_integrated_findings"
         if raises is not None:
             raise raises
@@ -117,7 +117,7 @@ def test_reap_native_transport_runtime_error_squashed_to_exit_0(git_repo, monkey
 def test_reap_native_summary_passes_limit_param_and_suppresses_raw_json(git_repo, monkeypatch, capsys):
     seen_params = {}
 
-    def _fake(op_name, params, repo_root, _claude_klabauter_root=None):
+    def _fake(op_name, params, repo_root, _engine_root=None):
         seen_params.update(params)
         return {
             "exit_code": 0,
@@ -148,7 +148,7 @@ def test_reap_native_summary_passes_limit_param_and_suppresses_raw_json(git_repo
 def test_reap_native_no_summary_omits_limit_param(git_repo, monkeypatch, capsys):
     seen_params = {}
 
-    def _fake(op_name, params, repo_root, _claude_klabauter_root=None):
+    def _fake(op_name, params, repo_root, _engine_root=None):
         seen_params.update(params)
         return {"exit_code": 0, "dry_run": True, "candidates": [], "reaped": [], "skipped": [], "failed": []}
 

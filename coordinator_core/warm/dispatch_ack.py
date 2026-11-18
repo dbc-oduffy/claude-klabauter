@@ -517,8 +517,8 @@ class AckStore:
         self._order: "deque[str]" = deque()
         self._records: dict = {}
         #: Finished keys not yet returned by `status`/`wait`, oldest first. Capacity
-        #: eviction and result-LRU eviction skip them while the set is within
-        #: RESULT_RETAIN_COUNT; a caller that timed out reads the result later.
+        #: and result-LRU eviction skip them; one leaves memory only once its result
+        #: is journaled, and `status` then reads it back from the journal.
         self._pinned: "OrderedDict[str, None]" = OrderedDict()
 
     def admit(self, key: str, method: Optional[str]) -> bool:
@@ -570,8 +570,9 @@ class AckStore:
             failure = _failure_text_of(result)
         elif outcome == OUTCOME_ERROR and error_message:
             failure = _clip_text(str(error_message))
+        journaled = False
         if self._journal_dir and outcome in _FINISHED_OUTCOMES:
-            record_outcome(
+            journaled = record_outcome(
                 self._journal_dir, key, outcome,
                 result=result, error_code=error_code, error_message=error_message,
             )
@@ -600,6 +601,8 @@ class AckStore:
                 record["failure_text"] = failure
                 record["failure_at"] = self._clock()
                 record["failure_read"] = False
+            if journaled:
+                record["journaled"] = True
             if outcome == OUTCOME_RESULT and result is not None:
                 record["result_offered"] = True
                 record["result_digest"] = digest
@@ -717,13 +720,26 @@ class AckStore:
             if record is not None:
                 record["result_dropped"] = DROPPED_EVICTED
 
+    def _spilled(self, key: str) -> bool:
+        """True when `key`'s result is durable in the journal, so memory may let it go."""
+        record = self._records.get(key)
+        return bool(record is not None and record.get("journaled"))
+
     def _pin(self, key: str) -> None:
-        """Pin a finished key until it is read. Past RESULT_RETAIN_COUNT pinned the
-        oldest is unpinned and its result dropped (`evicted`), never silently."""
+        """Pin a finished key until it is read. Past RESULT_RETAIN_COUNT pinned, the
+        oldest journaled ones leave memory (`status` answers them from the journal);
+        an unread key whose result is not durable stays pinned and resident."""
         self._pinned[key] = None
-        while len(self._pinned) > RESULT_RETAIN_COUNT:
-            oldest, _ = self._pinned.popitem(last=False)
-            self._drop_result(oldest)
+        over = len(self._pinned) - RESULT_RETAIN_COUNT
+        if over <= 0:
+            return
+        for oldest in list(self._pinned):
+            if over <= 0:
+                break
+            if self._spilled(oldest):
+                del self._pinned[oldest]
+                self._drop_result(oldest)
+                over -= 1
 
     def _retain_result(self, key: str, result: Any, size: int) -> None:
         self._results[key] = (result, size)
@@ -733,9 +749,14 @@ class AckStore:
         ):
             victim = next((k for k in self._results if k not in self._pinned and k != key), None)
             if victim is None:
-                # Only pinned results (and this one) remain: the oldest pinned goes.
-                victim = next(iter(self._results))
-                self._pinned.pop(victim, None)
+                # Only unread results (and this one) remain: spill the oldest journaled one.
+                victim = next(
+                    (k for k in self._results if k != key and k in self._pinned and self._spilled(k)),
+                    None,
+                )
+                if victim is None:
+                    return
+                del self._pinned[victim]
             self._drop_result(victim)
 
     def _names_other_engine(self, expect_engine: Any) -> bool:
@@ -754,6 +775,18 @@ class AckStore:
         outcome replaces a non-final one (`unknowable`, or `executing`: a worker that
         landed its op before it was killed, lost or its engine restarted)."""
         answer = self._status_in_memory(key, expect_engine)
+        if (
+            self._journal_dir
+            and answer.get("state") == STATE_FINISHED
+            and answer.get("result_dropped") == DROPPED_EVICTED
+        ):
+            journaled = read_outcome(self._journal_dir, key)
+            if journaled is not None and "result" in journaled:
+                answer = {
+                    k: v for k, v in answer.items() if k not in ("result_digest", "result_dropped")
+                }
+                answer["result"] = journaled["result"]
+            return answer
         if self._journal_dir and answer.get("state") in (STATE_UNKNOWABLE, STATE_EXECUTING):
             journaled = read_outcome(self._journal_dir, key)
             if journaled is not None:

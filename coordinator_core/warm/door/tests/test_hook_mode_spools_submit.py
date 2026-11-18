@@ -45,7 +45,7 @@ def door(tmp_path_factory) -> Path:
         pytest.skip("no C compiler")
     out = tmp_path_factory.mktemp("door") / "coordinator-invoke"
     subprocess.run(
-        [cc, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', '-DBUILD_ENGINE_ROOT=""',
+        [cc, "-O2", "-std=c11", '-DPYTHON_BIN="python3"',
          "-o", str(out), str(_DOOR_DIR / "door_posix.c"), str(_DOOR_DIR / "door_core.c")],
         check=True, capture_output=True, **no_console_creationflags(),
     )

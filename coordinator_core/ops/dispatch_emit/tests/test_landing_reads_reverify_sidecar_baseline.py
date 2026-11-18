@@ -1,6 +1,6 @@
 """The targeted-tests leg counts node ids the run's recorded review.reverify sidecar (reverify.json,
 reached through inline_review.reverify.record) names red at base as pre-existing; a red absent from it
-still refuses."""
+stays unknown (never cleared, never a refusal)."""
 
 from __future__ import annotations
 
@@ -70,13 +70,13 @@ def test_sidecar_pre_existing_clears_a_recorded_fail(tmp_path: Path) -> None:
     assert findings.foreign_evidence == {NODE: [li.FAILING_AT_BASE]}
 
 
-def test_red_absent_from_the_sidecar_still_refuses(tmp_path: Path) -> None:
+def test_red_absent_from_the_sidecar_stays_unknown_never_cleared(tmp_path: Path) -> None:
     _sidecar(tmp_path, failing_at_base=[OTHER])
     _fresh(tmp_path, ["pkg/tests/test_ran.py"], [NODE])
 
     findings, check = li.landing_test_gate(tmp_path, _params(), RUN)
 
-    assert check == "failed" and NODE in findings[0].detail
+    assert check == ltt.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == [NODE]
 
 
 def test_sidecar_naming_nothing_changes_nothing(tmp_path: Path) -> None:
@@ -85,7 +85,7 @@ def test_sidecar_naming_nothing_changes_nothing(tmp_path: Path) -> None:
 
     findings, check = li.landing_test_gate(tmp_path, _params(), RUN)
 
-    assert check == "failed"
+    assert check == ltt.UNKNOWN_ONLY and findings.unknown_ids == [NODE]
 
 
 def test_record_outside_the_worktree_is_ignored(tmp_path: Path) -> None:

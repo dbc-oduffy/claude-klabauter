@@ -12,14 +12,15 @@ root resolution and the transport dial, falls through with no resolved
 engine root -- exactly like `COORDINATOR_WARM`'s own twin gate, which this
 file mirrors call-for-call). A compiled behavioural leg is deliberately not
 attempted here: a pre-resolution fall-through passes `NULL` for the engine
-root, so `fall_through` falls back to this binary's BAKED `BUILD_ENGINE_ROOT_W`
-default rather than any stub root a test could point it at (see
-`build_fallback_cmdline`'s own comment) -- against a real published engine on
-this box, spawning that cold leg would run the REAL install-class CLI, not a
-stub. `door_maybe_spawn_server`/`connect_socket`/`CreateFileW(pipe_name` never
-appearing before the gate's `fall_through` call is the behaviour these tests
-pin instead: proof the engine is never dialled for these names, without ever
-risking a real install side effect.
+root, so the cold leg climbs the sidecar/pointer ladder itself -- against a
+real published engine on this box, spawning that cold leg would run the REAL
+install-class CLI, not a stub. `door_maybe_spawn_server`/`connect_socket`/
+`CreateFileW(pipe_name` never appearing before the gate's `fall_through` call
+is the behaviour these tests pin instead: proof the engine is never dialled
+for these names, without ever risking a real install side effect. With no
+sidecar and no pointer the ladder yields nothing and the cold leg refuses
+loudly and spawns nothing -- no baked engine root exists to fall back to;
+the last two tests pin that.
 """
 
 from __future__ import annotations
@@ -29,6 +30,20 @@ from pathlib import Path
 _DOOR_DIR = Path(__file__).resolve().parents[1]
 _DOOR_WINDOWS_C = _DOOR_DIR / "door.c"
 _DOOR_POSIX_C = _DOOR_DIR / "door_posix.c"
+
+
+def _function_body(source: str, signature: str) -> str:
+    start = source.index(signature)
+    open_at = source.index("{", start)
+    depth = 0
+    for at in range(open_at, len(source)):
+        if source[at] == "{":
+            depth += 1
+        elif source[at] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_at : at + 1]
+    raise AssertionError(f"unbalanced braces after {signature}")
 
 _PREDICATE_W = "door_basename_is_install_class_w"
 _PREDICATE_POSIX = "door_basename_is_install_class"
@@ -154,3 +169,49 @@ def test_gate_runs_before_hook_mode_logic_on_both_doors():
             "install-class gate runs -- the gate must fire unconditionally, "
             "right after the basename resolves"
         )
+
+
+# =============================================================================
+# No baked engine root: no sidecar and no pointer refuses loudly, spawns nothing
+# =============================================================================
+
+_SPAWN_CALLS = ("CreateProcessW", "posix_spawn", "execv", "fork(")
+
+
+def test_neither_door_carries_a_baked_engine_root():
+    for source_path in (_DOOR_WINDOWS_C, _DOOR_POSIX_C):
+        assert "BUILD_ENGINE_ROOT" not in _read(source_path), (
+            f"{source_path.name} still names BUILD_ENGINE_ROOT -- a root baked "
+            "at build time is meaningful only on the box that built it"
+        )
+
+
+def test_windows_cold_leg_with_no_resolved_root_refuses_and_spawns_nothing():
+    source = _read(_DOOR_WINDOWS_C)
+    body = _function_body(source, "static wchar_t *build_fallback_cmdline(")
+    assert "resolve_engine_root(" in body, "the cold leg must climb the sidecar ladder itself"
+    assert "fwprintf(stderr" in body and "return NULL;" in body
+    assert body.index("fwprintf(stderr") < body.index("return NULL;")
+    for call in _SPAWN_CALLS:
+        assert call not in body, f"build_fallback_cmdline reaches {call} itself"
+    # Every caller stops on the NULL command line before any spawn.
+    at = source.find("build_fallback_cmdline(argc")
+    assert at >= 0
+    while at >= 0:
+        tail = source[at : at + 400]
+        assert "if (!cmdline_w)" in tail
+        assert tail.index("if (!cmdline_w)") < (
+            tail.index("CreateProcessW") if "CreateProcessW" in tail else len(tail)
+        )
+        at = source.find("build_fallback_cmdline(argc", at + 1)
+
+
+def test_posix_cold_leg_with_no_resolved_root_refuses_and_spawns_nothing():
+    source = _read(_DOOR_POSIX_C)
+    body = _function_body(source, "static int resolve_fallback_script(")
+    assert "resolve_engine_root(" in body, "the cold leg must climb the sidecar ladder itself"
+    assert "fprintf(stderr" in body and "return 1;" in body
+    assert body.index("fprintf(stderr") < body.index("return 1;")
+    for call in _SPAWN_CALLS:
+        assert call not in body, f"resolve_fallback_script reaches {call} itself"
+    assert "resolve_fallback_script(engine_root, script_path) != 0" in source

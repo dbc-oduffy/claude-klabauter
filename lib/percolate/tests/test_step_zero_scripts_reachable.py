@@ -58,9 +58,12 @@ pytestmark = [pytest.mark.cadence]
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _PORTABLE_TARGETS_PATH = _REPO_ROOT / "setup" / "publish-targets.portable"
 
-_STEP_ZERO_SCRIPTS = ("chain-walk.py", "normalize-env.py", "install-maximalist.py")
+_STEP_ZERO_SCRIPTS = ("chain-walk.py", "install-maximalist.py")
+
+_NORMALIZE_ENV_SPELLINGS = {"normalize-env.py", "normalize-env.cmd", "normalize-env.ps1"}
 
 _UNPUBLISHED_SOURCE_SUBDIR = "coordinator/scripts"
+_NORMALIZE_ENV_ROW = "claude-klabauter-coordinator-scripts"
 
 
 def test_portable_targets_file_exists():
@@ -70,19 +73,31 @@ def test_portable_targets_file_exists():
     )
 
 
-def test_no_row_is_rooted_at_coordinator_scripts():
+def test_only_the_normalize_env_row_is_rooted_at_coordinator_scripts():
     rows = _parse_portable_rows(_PORTABLE_TARGETS_PATH)
     offending = [
         row["name"]
         for row in rows
-        if row["source_subdir"] == _UNPUBLISHED_SOURCE_SUBDIR
-        or row["source_subdir"].startswith(_UNPUBLISHED_SOURCE_SUBDIR + "/")
+        if (
+            row["source_subdir"] == _UNPUBLISHED_SOURCE_SUBDIR
+            or row["source_subdir"].startswith(_UNPUBLISHED_SOURCE_SUBDIR + "/")
+        )
+        and row["name"] != _NORMALIZE_ENV_ROW
     ]
     assert not offending, (
         f"row(s) {offending} root a publish at {_UNPUBLISHED_SOURCE_SUBDIR} -- "
-        "the C8 decision is authoring-only for chain-walk.py/normalize-env.py/"
-        "install-maximalist.py; a row here means one of them is now reachable."
+        "only the normalize-env row may; chain-walk.py/install-maximalist.py stay "
+        "authoring-only (C8)."
     )
+
+
+def test_normalize_env_row_publishes_exactly_its_three_spellings():
+    rows = [row for row in _parse_portable_rows(_PORTABLE_TARGETS_PATH) if row["name"] == _NORMALIZE_ENV_ROW]
+    assert len(rows) == 1, f"expected exactly one {_NORMALIZE_ENV_ROW} row, found {len(rows)}"
+    row = rows[0]
+    assert row["source_subdir"] == _UNPUBLISHED_SOURCE_SUBDIR
+    entries = {entry.strip() for entry in row["allowlist"].split(",") if entry.strip()}
+    assert entries == _NORMALIZE_ENV_SPELLINGS
 
 
 def test_no_row_allowlists_a_step_zero_script_by_basename():

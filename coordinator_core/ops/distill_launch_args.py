@@ -1,14 +1,15 @@
 """
 coordinator_core.ops.distill_launch_args — JSON-RPC "distill.launch_args" operation.
 
-Purpose: hand a distill Workflow its whole input inline. The Workflow VM cannot read the
-filesystem, so without this op each batch and wikislug shard is relayed through a load agent.
-The op composes ``distill.workflow_input``'s payload (batches and wikiSlugs, validated) with the
-curated-clusters file's path and sha256, and writes it through ``launch_args.build``, which
-returns ``{path, sha256, args, args_bytes}``; the PreToolUse(Workflow) hook swaps the
-``{argsFile, argsSha256}`` stub for the file's content.
+Purpose: hand a distill Workflow its whole input without the payload crossing the EM context or the
+Workflow arg cap. The op composes ``distill.workflow_input``'s payload (batches and wikiSlugs,
+validated), writes it through ``launch_args.build`` (``launch-args.json``), then writes a payload-only
+launcher (``launch_script.write_launcher``) that nests the harvest script by scriptPath. The reply is
+``{scriptPath, sha256, launcher_bytes, args_path, args_sha256}``, no ``args``; the EM fires
+``Workflow({scriptPath})``.
 
 Wire params:
+    workflow_script (str, REQUIRED) — absolute path of an existing distill-harvest script, nested by the launcher.
     manifest (dict, REQUIRED) — the scope manifest (input.json), or the distill.scope result, whose
         ``input_json_path`` (repo-relative, under ``state/scratch/``) is loaded; any other shape
         raises ValueError naming the wanted keys.
@@ -33,10 +34,12 @@ Leg 2 (``leg: 2``, the resume after ``distill_mechanical.py finalize``): params 
 finalize-report ``phases.promote.promoted``, a list, and ``phases["synth-splice"]``, an object). Leg 1's
 ``launch-args.json`` in that run dir is reused verbatim, with ``promoted`` and ``spliceReport`` added,
 and written as ``launch-args-leg2.json``. Leg 1's file is never rewritten, because rebuilding it from
-params could drift from what leg 1 actually ran on. The reply shape is the same; the Workflow also needs
-``resumeFromRunId``.
+params could drift from what leg 1 actually ran on. The reply shape is the same, from ``launch-leg2.workflow.mjs``;
+the Workflow also needs ``resumeFromRunId``.
 
-Negative-spec: one write (``launch-args.json`` in the run dir); no git, no subprocess, no LLM call.
+The launcher is written before the args file, so a launcher over the cap raises with neither on disk.
+
+Negative-spec: writes only in the run dir (args file, launcher, receipt); no git, no subprocess, no LLM call.
 """
 
 from __future__ import annotations
@@ -45,7 +48,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from coordinator_core.distill.launch_args import ARGS_FILE_NAME, build, unchunk
+from coordinator_core.distill.launch_args import ARGS_FILE_NAME, INLINED_KEY, build, chunk_arrays, unchunk
+from coordinator_core.distill.launch_script import LAUNCHER_FILE_NAME, write_launcher
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.distill_scope import RUN_DIR_REL
 from coordinator_core.ops.distill_workflow_input import _handler as _workflow_input
@@ -56,6 +60,7 @@ CURATED_TAGS_KEY = "curatedTags"
 PREPARED_KEY = "prepared"
 PACKED_SLUGS_KEY = "wikiSlugsPacked"
 LEG2_FILE_NAME = "launch-args-leg2.json"
+LEG2_LAUNCHER_NAME = "launch-leg2.workflow.mjs"
 _PASSTHROUGH_KEYS = (
     "threshold_applied",
     "threshold_auto",
@@ -88,10 +93,10 @@ def _curated_target(root: Path, rel: str) -> Path:
 def _handler(params: dict, repo_root: Any = None) -> dict:
     """distill.launch_args handler.
 
-    Returns ``{"path", "sha256", "args", "args_bytes"}`` as ``launch_args.build`` does: ``path`` is the
-    written ``launch-args.json``, ``sha256`` is over its bytes, ``args`` is the inlined payload,
-    ``args_bytes`` its size. Raises
-    ValueError on a missing manifest/repo_root or a curated_file outside ``state/scratch/``.
+    Returns ``{"scriptPath", "sha256", "launcher_bytes", "args_path", "args_sha256"}`` with no ``args``:
+    ``scriptPath`` is the written launcher (sha256 over its bytes), ``args_path`` the ``launch-args.json``
+    beside it. Raises ValueError on a missing manifest/repo_root/workflow_script or a curated_file
+    outside ``state/scratch/``.
     The ``repo_root`` handler arg is unused; the param names the root, as in distill.workflow_input.
     """
     root_param = params.get("repo_root")
@@ -114,7 +119,7 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
         if PACKED_SLUGS_KEY in prepared:
             payload = {k: v for k, v in payload.items() if k != "wikiSlugs"}
         payload = {**payload, PREPARED_KEY: prepared}
-    return build(payload)
+    return _launch(payload, _workflow_script(params), LAUNCHER_FILE_NAME)
 
 
 def _leg2(params: dict, root: Path) -> dict:
@@ -123,6 +128,7 @@ def _leg2(params: dict, root: Path) -> dict:
     run_id = params.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ValueError("distill.launch_args: leg 2 requires 'run_id'")
+    script = _workflow_script(params)
     run_dir = _scratch_target(root, f"{RUN_DIR_REL}/{run_id}", "run_id")
     leg1 = run_dir / ARGS_FILE_NAME
     try:
@@ -136,7 +142,31 @@ def _leg2(params: dict, root: Path) -> dict:
     if not isinstance(splice, dict):
         raise ValueError('distill.launch_args: splice_report_path must hold a JSON object (finalize-report phases["synth-splice"])')
     payload = {k: v for k, v in unchunk(args).items() if k != "argsInlined"}
-    return build({**payload, "promoted": promoted, "spliceReport": splice}, run_dir=run_dir, file_name=LEG2_FILE_NAME)
+    return _launch(
+        {**payload, "promoted": promoted, "spliceReport": splice},
+        script,
+        LEG2_LAUNCHER_NAME,
+        run_dir=run_dir,
+        file_name=LEG2_FILE_NAME,
+    )
+
+
+def _workflow_script(params: dict) -> str:
+    script = params.get("workflow_script")
+    if not isinstance(script, str) or not script:
+        raise ValueError("distill.launch_args requires 'workflow_script': the absolute path of the distill-harvest script")
+    if not Path(script).is_absolute() or not Path(script).is_file():
+        raise ValueError(f"distill.launch_args: workflow_script {script!r} must be an absolute path to an existing file")
+    return script
+
+
+def _launch(payload: dict, script: str, launcher_name: str, **build_kw: Any) -> dict:
+    run_dir = build_kw.get("run_dir") or Path(payload["repoRoot"]) / RUN_DIR_REL / payload["runId"]
+    launcher = write_launcher(
+        chunk_arrays({**payload, INLINED_KEY: True}), workflow_script=script, run_dir=Path(run_dir), file_name=launcher_name
+    )
+    built = build(payload, **build_kw)
+    return {**launcher, "args_path": built["path"], "args_sha256": built["sha256"]}
 
 
 def _scratch_json(root: Path, rel: Any, label: str) -> Any:

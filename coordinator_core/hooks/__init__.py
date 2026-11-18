@@ -247,6 +247,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.sessionstart_ensure_http_forwarder",
     "coordinator_core.hooks.guard_hook_generation_self_probe",
     "coordinator_core.hooks.session_start_guard_plane_check",
+    "coordinator_core.hooks.session_start_resume_plugin_check",
     "coordinator_core.hooks.project_orientation",
     "coordinator_core.hooks.pickup_autofire",
     "coordinator_core.hooks.mise_autofire",

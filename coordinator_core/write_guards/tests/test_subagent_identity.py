@@ -15,6 +15,23 @@ class TestBareHex:
         assert _resolve_subagent_identity(agent_id, "short") == agent_id
 
 
+class TestDashedConversationUuid:
+    _UUID = "d8f5a804-4fe2-40a9-a267-0c7e7c9929f3"
+
+    def test_dashed_uuid_resolves_to_the_session_identity_canonical_form(self) -> None:
+        from coordinator_core.session import identity
+
+        resolved = _resolve_subagent_identity(self._UUID, "")
+        assert resolved == "d8f5a8044fe240a9a2670c7e7c9929f3"
+        assert resolved == identity.resolve_subagent_identity(self._UUID, "")
+
+    def test_dashed_uuid_ignores_session_id(self) -> None:
+        assert _resolve_subagent_identity(self._UUID, "short") == "d8f5a8044fe240a9a2670c7e7c9929f3"
+
+    def test_uppercase_uuid_stays_unresolved(self) -> None:
+        assert _resolve_subagent_identity(self._UUID.upper(), "deadbeef1234") == ""
+
+
 class TestNamedTeammate:
     def test_named_teammate_builds_canonical_id(self) -> None:
         agent_id = "aprobe2-teammate-64cd7f42c270a899"

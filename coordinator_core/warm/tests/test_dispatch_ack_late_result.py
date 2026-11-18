@@ -35,12 +35,15 @@ def test_read_result_is_evictable_again():
     assert key not in store._records
 
 
+# Past RESULT_RETAIN_COUNT an unjournaled unread result stays resident: nothing drops silently, so the
+# oldest still reads its result with no result_dropped (contract § 3 "Pinned until read").
 def test_pinned_set_is_capped_and_oldest_drops_honestly():
     store = AckStore()
     keys = [_admit_stamp(store, {"n": i}) for i in range(dispatch_ack.RESULT_RETAIN_COUNT + 1)]
     oldest = store.status(keys[0])
     assert oldest["state"] == dispatch_ack.STATE_FINISHED
-    assert oldest["result_dropped"] == dispatch_ack.DROPPED_EVICTED
+    assert oldest["result"] == {"n": 0}
+    assert "result_dropped" not in oldest
     assert store.status(keys[-1])["result"] == {"n": dispatch_ack.RESULT_RETAIN_COUNT}
 
 

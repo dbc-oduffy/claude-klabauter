@@ -1,11 +1,14 @@
 """Behavior pins for the Klabauter host-guard client: open answer per host, bounded wall, no child, deny pass-through."""
 import importlib.util
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import types
+import uuid
 from pathlib import Path
 
 import pytest
@@ -30,7 +33,7 @@ def load():
 
 
 hg = load()
-NEUTRAL = {"agy": {"decision": "ask"}, "codex": {}, "grok": {}}
+NEUTRAL = {"agy": {"decision": "allow"}, "codex": {}, "grok": {}}
 GROK_PAYLOAD = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "edit_file",
                            "tool_input": {"path": "a.py"}, "cwd": "/x"})
 GROK_DENY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
@@ -45,17 +48,32 @@ def settings_home(tmp_path, monkeypatch):
     return home
 
 
+@pytest.fixture(autouse=True)
+def private_temp_root(tmp_path, monkeypatch):
+    """The real shim and guards write managed state under gettempdir(); keep it inside tmp_path so the session Temp stays empty."""
+    private = tmp_path / "private-temp"
+    private.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(private))
+
+
+@pytest.fixture(autouse=True)
+def classifier_never_abandoned(monkeypatch):
+    """A real shim or classifier thread outliving its wall keeps running after teardown restores the session Temp and writes into it."""
+    monkeypatch.setattr(hg, "CLASSIFY_WALL_SECS", 20.0)
+
+
 def degrade_records(home):
     log = home / "host-hooks" / hg.DEGRADE_LOG_NAME
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
-def assert_open(host, answer):
-    """The host's open answer; agy additionally carries a non-empty advisory reason."""
-    assert {k: v for k, v in answer.items() if k != "reason"} == NEUTRAL[host]
-    if host == "agy":
+def assert_open(host, answer, state="degraded"):
+    """The host's open answer; an agy degrade is an allow, never the bare ask, and carries a non-empty reason."""
+    expected = {"decision": "allow"} if host == "agy" and state == "degraded" else NEUTRAL[host]
+    assert {k: v for k, v in answer.items() if k != "reason"} == expected
+    if host == "agy" and state == "degraded":
         assert isinstance(answer.get("reason"), str) and answer["reason"]
-    else:
+    elif host != "agy":
         assert "reason" not in answer
 
 
@@ -101,6 +119,28 @@ def test_shim_load_failure_is_open_import_error(tmp_path, monkeypatch, settings_
 
 
 @pytest.mark.parametrize("host", ["agy", "codex"])
+def test_import_error_record_names_the_missing_module(tmp_path, monkeypatch, settings_home, host):
+    def boom(root):
+        raise ModuleNotFoundError("No module named 'gone_mod'", name="gone_mod")
+
+    monkeypatch.setattr(hg, "_load_shim", boom)
+    hg.guard(host, CODEX_PAYLOAD, str(tmp_path))
+    rec = degrade_records(settings_home)[0]
+    assert (rec["cause"], rec["exc_type"], rec["exc_module"]) == ("import_error", "ModuleNotFoundError", "gone_mod")
+
+
+def test_run_error_record_names_the_exception_type(tmp_path, monkeypatch, settings_home):
+    def boom(h, t):
+        raise RuntimeError("boom")
+
+    stub_shim(monkeypatch, run=boom)
+    hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))
+    rec = degrade_records(settings_home)[0]
+    assert (rec["cause"], rec["exc_type"]) == ("run_error", "RuntimeError")
+    assert "exc_module" not in rec
+
+
+@pytest.mark.parametrize("host", ["agy", "codex"])
 def test_shim_run_raising_is_open_degraded(tmp_path, monkeypatch, host):
     def boom(h, t):
         raise RuntimeError("boom")
@@ -141,8 +181,126 @@ def test_blocking_shim_returns_open_within_budget_recording_timeout(tmp_path, mo
 
 
 def test_agy_degrade_advisory_names_the_cause(tmp_path):
-    answer, _ = hg.guard("agy", CODEX_PAYLOAD, None)
-    assert answer == {"decision": "ask", "reason": "Klabauter guard unavailable (no_engine_root); proceeding open"}
+    answer, state = hg.guard("agy", CODEX_PAYLOAD, None)
+    assert state == "degraded" and answer["decision"] == "allow"
+    assert "DEGRADED (no_engine_root)" in answer["reason"]
+
+
+def agy_command(command):
+    return json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": command}},
+                       "workspacePaths": ["/x"], "conversationId": "c1"})
+
+
+@pytest.fixture
+def engine_on_path(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO))
+
+
+def degrade_causes(monkeypatch, tmp_path):
+    """One (label, call) per degrade branch of guard(); each call takes the agy stdin and returns (answer, state)."""
+    def run_error(text):
+        stub_shim(monkeypatch, run=lambda h, t: (_ for _ in ()).throw(RuntimeError("boom")))
+        return hg.guard("agy", text, str(tmp_path))
+
+    def invalid_answer(text):
+        stub_shim(monkeypatch, "not a dict")
+        return hg.guard("agy", text, str(tmp_path))
+
+    def timeout(text):
+        release = threading.Event()
+        stub_shim(monkeypatch, run=lambda h, t: release.wait(60))
+        try:
+            return hg.guard("agy", text, str(tmp_path), budget_secs=0.05)
+        finally:
+            release.set()
+
+    return [("no_engine_root", lambda text: hg.guard("agy", text, None)),
+            ("run_error", run_error), ("invalid_answer", invalid_answer), ("timeout", timeout)]
+
+
+IRREVERSIBLE = ["git clean -fd", "git reset --hard", "git push --force", "git push --force origin topic",
+                "git -C sub clean -fdx", "git add . && git reset --hard HEAD~2"]
+
+
+@pytest.mark.parametrize("command", IRREVERSIBLE)
+def test_agy_degrade_denies_irreversible_command_naming_the_cause(tmp_path, monkeypatch, settings_home, engine_on_path, command):
+    for cause, call in degrade_causes(monkeypatch, tmp_path):
+        answer, state = call(agy_command(command))
+        assert state == "degraded", cause
+        assert answer["decision"] == "deny", (cause, answer)
+        assert "(%s)" % cause in answer["reason"], (cause, answer)
+    assert {r["cause"] for r in degrade_records(settings_home)} == {"no_engine_root", "run_error", "invalid_answer", "timeout"}
+    assert {r["verdict"] for r in degrade_records(settings_home)} == {"deny"}
+
+
+@pytest.mark.parametrize("command", ["git status", "git log -3", "git commit -m wip", "git push origin topic",
+                                     "git clean -n", "ls", "echo git reset --hard"])
+def test_agy_degrade_allows_other_commands_with_a_loud_advisory_and_telemetry(tmp_path, monkeypatch, settings_home, engine_on_path, command):
+    for cause, call in degrade_causes(monkeypatch, tmp_path):
+        answer, state = call(agy_command(command))
+        assert state == "degraded", cause
+        assert answer["decision"] == "allow", (cause, answer)
+        assert "DEGRADED (%s)" % cause in answer["reason"] and "proceeding open" in answer["reason"], (cause, answer)
+    records = degrade_records(settings_home)
+    assert len(records) == 4 and {r["verdict"] for r in records} == {"allow"}
+    assert all("unchecked" not in r for r in records)
+
+
+@pytest.mark.parametrize("command", IRREVERSIBLE + ["git status", "ls"])
+def test_agy_degrade_never_answers_a_bare_ask(tmp_path, monkeypatch, engine_on_path, command):
+    for _cause, call in degrade_causes(monkeypatch, tmp_path):
+        answer, _state = call(agy_command(command))
+        assert answer["decision"] in ("allow", "deny") and answer.get("reason")
+    for text in ("", "not json", "[1]", agy_command("")):
+        answer, _state = hg.guard("agy", text, None)
+        assert answer["decision"] in ("allow", "deny") and answer.get("reason")
+
+
+def test_agy_degrade_classification_spawns_nothing(tmp_path, monkeypatch, engine_on_path):
+    def no_spawn(*a, **k):
+        raise AssertionError("the degrade classification spawned a child process")
+
+    monkeypatch.setattr(subprocess, "Popen", no_spawn)
+    for command in IRREVERSIBLE + ["git status"]:
+        answer, _ = hg.guard("agy", agy_command(command), None)
+        assert answer["decision"] in ("allow", "deny")
+
+
+def test_agy_degrade_with_an_unloadable_classifier_allows_and_says_so(tmp_path, monkeypatch, settings_home):
+    def boom(root):
+        raise ImportError("no backstop")
+
+    monkeypatch.setattr(hg, "_load_backstop", boom)
+    answer, state = hg.guard("agy", agy_command("git clean -fd"), None)
+    assert state == "degraded" and answer["decision"] == "allow"
+    assert "irreversible-class check also unavailable (classifier_unavailable)" in answer["reason"]
+    (rec,) = degrade_records(settings_home)
+    assert rec["verdict"] == "allow" and rec["unchecked"] == "classifier_unavailable"
+
+
+def test_agy_degrade_with_a_classifier_timeout_allows_with_the_warning_naming_it(monkeypatch, settings_home):
+    release = threading.Event()
+    monkeypatch.setattr(hg, "_load_backstop", lambda root: release.wait(60))
+    monkeypatch.setattr(hg, "CLASSIFY_WALL_SECS", 0.05)
+    try:
+        answer, state = hg.guard("agy", agy_command("git clean -fd"), None)
+    finally:
+        release.set()
+    assert state == "degraded" and answer["decision"] == "allow"
+    assert answer["reason"] == ("WARNING: Klabauter guard DEGRADED (no_engine_root); irreversible-class check also "
+                                "unavailable (classifier_timeout); proceeding open")
+    (rec,) = degrade_records(settings_home)
+    assert rec["verdict"] == "allow" and rec["unchecked"] == "classifier_timeout"
+
+
+def test_cli_agy_degrade_denies_irreversible_and_allows_status(tmp_path):
+    for command, decision in (("git reset --hard", "deny"), ("git status", "allow")):
+        proc = subprocess.run([sys.executable, str(SCRIPT), "--host", "agy", "--engine-root", str(REPO / "no-such-dir")],
+                              input=agy_command(command), capture_output=True, text=True,
+                              env={**os.environ, "PYTHONPATH": str(REPO)})
+        assert proc.returncode == 0 and proc.stderr.strip() == "degraded"
+        (line,) = proc.stdout.splitlines()
+        assert json.loads(line)["decision"] == decision and json.loads(line)["reason"]
 
 
 def test_guard_hot_path_spawns_no_python_child_and_a_cold_engine_answers_open(monkeypatch, settings_home):
@@ -159,9 +317,9 @@ def test_guard_hot_path_spawns_no_python_child_and_a_cold_engine_answers_open(mo
     monkeypatch.setattr(client, "try_warm_dispatch", lambda *a, **k: None)
     monkeypatch.setattr(subprocess, "Popen", no_spawn)
     for host, payload in (("codex", CODEX_PAYLOAD), ("agy", AGY_PAYLOAD)):
-        answer, state = hg.guard(host, payload, str(REPO))
+        answer, state = hg.guard(host, payload, str(REPO), budget_secs=20.0)
         assert state in ("neutral-unknown", "degraded"), (host, answer, state)
-        assert_open(host, answer)
+        assert_open(host, answer, state)
         assert state != "engine"
     assert spawns == []
 
@@ -273,7 +431,7 @@ def test_stray_stderr_never_reaches_stdout(tmp_path):
     root = make_engine(tmp_path, shim_src("sys.stderr.write('noise\\n'); return {'decision': 'ask'}"))
     proc = subprocess.run([sys.executable, str(SCRIPT), "--host", "agy", "--engine-root", root],
                           input=AGY_PAYLOAD, capture_output=True, text=True)
-    assert proc.stdout.strip() == '{"decision": "ask"}'
+    assert proc.stdout.strip() == '{"decision": "allow"}'
     assert "noise" not in proc.stdout
 
 
@@ -330,24 +488,45 @@ def test_real_codex_adapter_renders_nested_deny():
 
 
 @pytest.mark.parametrize("decision", ["allow", "ask", "force_ask"])
-def test_agy_engine_non_deny_never_passes_allow_through(tmp_path, monkeypatch, decision):
-    # The warm engine answers a neutral agy command with "allow"; the guard must answer ask instead.
+def test_agy_engine_non_deny_answers_allow_never_a_bare_ask(tmp_path, monkeypatch, decision):
     stub_shim(monkeypatch, {"decision": decision})
     answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
-    assert answer["decision"] == "ask" and state != "engine"
-    if decision != "force_ask":
-        assert answer == {"decision": "ask"}
+    assert state != "engine"
+    if decision == "force_ask":
+        assert state == "degraded" and answer["decision"] == "allow" and answer["reason"]
+    else:
+        assert answer == {"decision": "allow"} and state == hg.NEUTRAL_UNKNOWN
 
 
-def test_agy_ask_with_advisory_reason_reaches_output_intact_never_allow(tmp_path, monkeypatch):
+@pytest.mark.parametrize("decision", ["allow", "ask"])
+def test_agy_engine_non_deny_keeps_the_advisory_reason_as_allow(tmp_path, monkeypatch, decision):
+    stub_shim(monkeypatch, {"decision": decision, "reason": "advisory text"})
+    answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
+    assert answer == {"decision": "allow", "reason": "advisory text"} and state == hg.NEUTRAL_UNKNOWN
+
+
+def test_agy_engine_deny_passes_through_unchanged_as_engine(tmp_path, monkeypatch):
+    deny = {"decision": "deny", "reason": "irreversible"}
+    stub_shim(monkeypatch, dict(deny))
+    answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
+    assert answer == deny and state == "engine"
+
+
+def test_agy_advisory_is_stashed_for_preinvocation_while_the_guard_answer_is_an_allow_with_the_reason(tmp_path, monkeypatch):
+    # PreToolUse takes no `injectSteps`: delivery is the stash the adapter writes, drained by the
+    # PreInvocation hook; the guard answer is an allow carrying the advisory reason.
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.syspath_prepend(str(REPO))
-    from coordinator_core.host_hooks.agy_adapter import AgyAdapter
+    from coordinator_core.host_hooks.agy_adapter import AgyAdapter, advisory_dir
     rendered = AgyAdapter().render(
-        AgyAdapter().adapt_event({"toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}),
+        AgyAdapter().adapt_event({"conversationId": "conv-1",
+                                  "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}),
         {"decision": "allow", "additionalContext": "advisory nag"})
+    assert rendered == {"decision": "allow", "reason": "advisory nag"} and "injectSteps" not in rendered
+    assert [p.read_text(encoding="utf-8") for p in (advisory_dir() / "conv-1").glob("*.txt")] == ["advisory nag"]
     stub_shim(monkeypatch, rendered)
     answer, state = hg.guard("agy", AGY_PAYLOAD, str(tmp_path))
-    assert answer == {"decision": "ask", "reason": "advisory nag"} and state == hg.NEUTRAL_UNKNOWN
+    assert answer == {"decision": "allow", "reason": "advisory nag"} and state == hg.NEUTRAL_UNKNOWN
 
 
 def test_other_degrade_causes_are_distinguishable(tmp_path, monkeypatch, settings_home):
@@ -598,3 +777,81 @@ def test_guard_without_a_pending_box_still_returns_the_pair(tmp_path, monkeypatc
     stub_nag_shim(monkeypatch, GROK_NAG_ANSWER)
     answer, state = hg.guard("grok", GROK_PAYLOAD, str(tmp_path))
     assert answer == GROK_NAG_ANSWER and state == "neutral-unknown"
+
+
+COLD_CHILD = (
+    "import importlib.util, json, sys, time\n"
+    "spec = importlib.util.spec_from_file_location('hg_cold', sys.argv[1])\n"
+    "mod = importlib.util.module_from_spec(spec)\n"
+    "spec.loader.exec_module(mod)\n"
+    "answer, state = mod.guard('grok', sys.argv[3], sys.argv[2])\n"
+    "print(json.dumps({'answer': answer, 'state': state, 'process_secs': time.process_time()}))\n"
+)
+
+
+def _nag_repo(root, session_id):
+    """A git repo whose lane record attributes three over-bound uncommitted edits to `session_id`."""
+    root.mkdir()
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                       check=True, capture_output=True, creationflags=flags)
+
+    git("init", "-q")
+    names = [f"f{i}.txt" for i in range(3)]
+    for name in names:
+        (root / name).write_text("a\n" * 5)
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    for name in names:
+        (root / name).write_text("b\n" * 40)
+    sys.path.insert(0, str(REPO))
+    from coordinator_core.session import xs_lane_budget
+
+    lane = xs_lane_budget.lane_path(root, session_id)
+    lane.parent.mkdir(parents=True, exist_ok=True)
+    lane.write_text(json.dumps({"kind": "xs", "state": "open", "base_sha": "x", "paths": names}), encoding="utf-8")
+
+
+def test_cold_process_grok_edit_delivers_the_nag_at_the_default_budget_within_it(tmp_path):
+    """A fresh interpreter, default budget, no warm engine: the DIY nag reaches additionalContext and the
+    whole process spends less CPU than the budget. Process time, never wall clock."""
+    sid = str(uuid.uuid4())
+    repo = tmp_path / "grok-repo"
+    _nag_repo(repo, sid)
+    payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "search_replace", "session_id": sid,
+                          "cwd": str(repo), "tool_input": {"file_path": str(repo / "delta.py"), "old_string": "",
+                                                           "new_string": "x = 1\n" * 20}})
+    env = {**os.environ, "COORDINATOR_AGENT_PROVIDER": "grok", "TMP": tempfile.gettempdir(),
+           "TEMP": tempfile.gettempdir(), "TMPDIR": tempfile.gettempdir()}
+    proc = subprocess.run([sys.executable, "-c", COLD_CHILD, str(SCRIPT), str(REPO), payload], capture_output=True,
+                          text=True, timeout=120, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    row = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert BUDGET == hg.DEFAULT_BUDGET_SECS
+    nested = row["answer"].get("hookSpecificOutput", {})
+    assert nested.get("additionalContext") and "XS bound" in nested["additionalContext"], row
+    assert row["state"] == "neutral-unknown", row
+    assert row["process_secs"] < BUDGET, row
+
+
+def _cold_payload(host, tool, args, cwd):
+    if host == "agy":
+        return json.dumps({"conversationId": "c1", "toolCall": {"name": tool, "args": args}})
+    return json.dumps({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": args,
+                       "session_id": "s1", "cwd": cwd})
+
+
+@pytest.mark.parametrize("host", ["codex", "agy"])
+def test_cold_shell_command_runs_the_chain_and_writes_no_guard_degrade_row(host, tmp_path):
+    """A shell command reaches the in-process chain and is allowed: state neutral-unknown, no guard degrade row,
+    and agy's answer is not the fail-open reason. A tool the chain does not cover (view_file) answers the fail-open reason."""
+    shell = ("run_command", {"CommandLine": "ls"}) if host == "agy" else ("Bash", {"command": "ls"})
+    answer, state = hg.guard(host, _cold_payload(host, *shell, str(tmp_path)), str(REPO))
+    assert state == "neutral-unknown"
+    assert not hg.degrade_log_path().exists()
+    assert "guard did not run" not in json.dumps(answer)
+    if host == "agy":
+        unchained, _ = hg.guard(host, _cold_payload(host, "view_file", {"AbsolutePath": str(tmp_path)}, str(tmp_path)),
+                                str(REPO))
+        assert "guard did not run" in unchained["reason"]

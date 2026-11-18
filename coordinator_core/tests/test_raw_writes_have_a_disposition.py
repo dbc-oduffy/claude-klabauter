@@ -323,6 +323,9 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/host_hooks/agy_adapter.py': ('outside-repo', 'advisory .txt files under <settings-home>/unimatrix/agy-advisories/<conversation>, never the repo: stash_advisory'),
+    'coordinator_core/jobs/job_record.py': ('outside-repo', 'job record json (tmp + os.replace) under <settings-home>/jobs, never the repo: write_record'),
+    'coordinator_core/percolate/shadow_store.py': ('outside-repo', 'materialized publish trees, COMPLETE markers and eviction renames under coordinator_temp_root()/publish-shadow-store, never a clone: ShadowStore'),
     'coordinator_core/post_run/h1_normalize.py': ('in-repo-non-state', 'docs/wiki page rewrites normalising the H1, never state/: normalize'),
     'coordinator_core/post_run/linkfix.py': ('in-repo-non-state', 'docs/wiki and docs/decisions page rewrites repairing links, never state/: fix'),
     'coordinator_core/post_run/nav_index.py': ('in-repo-non-state', 'docs/wiki nav and _index page rewrites, never state/: rebuild'),
@@ -438,8 +441,10 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/bug_blitz/mint.py': ('claims-explicitly', 'in-place tag rewrite of a state/bug-backlog row via tmp + os.replace, declared through declare_write: _write_reuse'),
     'coordinator_core/ops/dispatch_emit/kept_work.py': ('claims-explicitly', 'kept.json under the run record dir, declared through declare_write: write'),
     'coordinator_core/ops/dispatch_emit/row_returns.py': ('claims-explicitly', 'returns.json under the run record dir, declared through declare_write: write'),
+    'coordinator_core/ops/dispatch_emit/family_credit.py': ('claims-explicitly', 'row-start/<row>.json under the run record dir, declared through declare_write: capture'),
     'coordinator_core/git/commit.py': ('in-repo-non-state', 'published-tree classification file rewritten in place with the refused inclusions and added to the commit path list: write_text; the post-landing worktree sync is the sync_landed_paths call, whose writes are listed under coordinator_core/git/worktree_sync.py'),
     'coordinator_core/git/worktree_sync.py': ('in-repo-non-state', 'post-landing 3-way sync of landed paths into the worktree via tmp + os.replace, re-read guarded: _sync_one'),
+    'coordinator_core/ops/dispatch_emit/merge_commit.py': ('in-repo-non-state', "on a refused merge, writes a folded worktree path's own pre-fold bytes back (or unlinks a path the fold created), only while it still holds what the fold wrote; restores existing bytes, no new content: _restore_bytes"),
     'coordinator_core/idle_compact/watcher.py': ('outside-repo', 'injections.jsonl append and armed.json tmp + os.replace under <settings>/state/idle-compact: append_log, save_armed'),
     'coordinator_core/ops/dispatch_emit/abandoned_runs.py': ('ignored-target', 'per-run reap-held marker json under the gitignored .coordinator-local/reap-held/, a non-host repo only, so a held-back run is not re-reaped: the no-host branch of _handler'),
     'coordinator_core/ops/dispatch_emit/ask_fanout.py': ('claims-explicitly', 'ask records staged exclusive-create under .coordinator-local/fanout-staging, published by os.replace with ledger.claim and declare_write: _stage_text, the publish loop'),
@@ -694,6 +699,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/ensure_vscode_readonly.py': ('claims-explicitly', 'claim token in _merge_settings'),
     'coordinator_core/ops/extract_cited_sidecars.py': ('to-fix', 'raw-write site(s): main; runtime observed=yes (n=6), sample=/tmp/pytest-of-root/pytest-716/test_main_writes_both_audit_fi0/state/audits/2026-09-02-cited-subagent-share-sidecars.md'),
     'coordinator_core/ops/fleet/_common.py': ('claims-explicitly', 'claim token in declare_move_claims'),
+    'coordinator_core/ops/fleet/_memo_anchor.py': ('git-internal', "anchor and pin refs under a receiver repo's git common dir (which may be this repo's own .git, as in the incident) via git_objects.cas_ref (CAS under <ref>.lock), plus an O_EXCL <ref>.lock create and loose-ref unlink: write_anchor, write_pin, _delete_loose_ref"),
     'coordinator_core/ops/fleet/_receiver_materialize.py': ('outside-repo', 'O_EXCL memo write into a receiver repo worktree (not this repo) then a hook-free commit via git_native.commit_authored_new_file, plus a commit-message tempfile under managed_tempdir: materialize_memo, write_msg_file'),
     'coordinator_core/ops/fleet/_sweep_receipt.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _truncate_if_oversized, record_sweep_outcome'),
     'coordinator_core/ops/fleet/archive_actioned_memos.py': ('to-fix', "INDIRECTION (D3 caught, static missed): os.open(...O_CREAT|O_EXCL...) lock-file create in _acquire lock helper (~L693/708); state write missed by static regex because the target is a Path variable, not a literal 'state/'/STATE_ROOT token nearby"),
@@ -818,6 +824,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/warm/front_door_routing.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_routing_table'),
     'coordinator_core/warm/polite_io.py': ('in-repo-non-state', 'os.open(O_RDONLY) in open_bulk is a read-only bulk open; no file is written'),
     'coordinator_core/warm/push_cadence.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _try_create_sweep_lock'),
+    'coordinator_core/warm/stall_writer.py': ('in-repo-non-state', 'stall diagnostic files (tmp + os.replace) at a caller-supplied path off the calling thread, never a state/ record: _write'),
     'coordinator_core/warm/server.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _bind_null_std_streams, _wrap_handle'),
     'coordinator_core/warm/skew.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_currency_cache, write_engine_stamp'),
     'coordinator_core/warm/supervisor.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_discovery'),

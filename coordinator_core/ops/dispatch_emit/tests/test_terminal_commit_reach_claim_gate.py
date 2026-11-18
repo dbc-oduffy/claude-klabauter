@@ -74,6 +74,25 @@ def test_an_undecidable_claim_lands_and_is_listed(tree):
     assert len(out["reach_claims"]["undecidable"]) == 1 and not out["reach_claims"]["unreachable"]
 
 
+def test_an_overrun_judge_lands_with_the_step_owed(tree, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import land_deadline, reach_claims_tree
+
+    _write(tree, NOTE, "# Delivery\n\n`a_tool` reaches `apart_fn`.\n")
+    before = _git(tree, "rev-parse", "HEAD")
+
+    def overrun(*a, **kw):
+        raise land_deadline.LandDeadlineExceeded(reach_claims_tree.GREP_STEP, step=True)
+
+    monkeypatch.setattr(reach_claims_tree, "judge_reach_claims", overrun)
+    out = _call(tree)
+
+    assert out["committed"] is True, out
+    assert _git(tree, "rev-parse", "HEAD") != before
+    assert out["reach_claims"]["owed"] == [reach_claims_tree.GREP_STEP], out
+    assert not out["reach_claims"]["unreachable"]
+    assert "parked" not in out and out.get("status") != "not-started", out
+
+
 def test_a_note_with_no_claim_lands_unchanged(tree):
     _write(tree, NOTE, "# Delivery\n\nNothing to check here.\n")
 

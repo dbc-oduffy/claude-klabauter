@@ -4,7 +4,7 @@ The marker is `halted.json` in the run's record dir. It is rewritten to `resumed
 unlinked: terminal_commit drops record-dir deletions, so an unlinked marker would stay an
 uncommitted tracked deletion. The marker may carry `run_base_sha` (the halted run's review base,
 read by `halted_run_base`); `halted_ask_run_for` finds a halted `ask-*` run naming a sizing.
-`revised_at` is stamped by `mark_revised` when workflow.revise lands on a halted run and read by `revised_halt`. Stdlib plus the atomic writer; no git. A halt over a split dependency tree stamps `live_breakage` and spawns one detached unimatrix-send alert to the live Group EM (`halt_split_tree`); no other subprocess.
+`revised_at` is stamped by `mark_revised` when workflow.revise lands on a halted or resumed run and read by `revised_halt`; `mark_resumed` records the stamp it consumed (`revised_consumed_at`), so a resumed marker holds an unread revision only when `revised_at` differs from it (a marker with no consumed key predates the field and holds none). Stdlib plus the atomic writer; no git. A halt over a split dependency tree stamps `live_breakage` and spawns one detached unimatrix-send alert to the live Group EM (`halt_split_tree`); no other subprocess.
 
 `halted_run_for` skips minted-only shell dirs and re-halts a `resumed` marker whose resumer died unstaged.
 Trap: a live resumer still at `minted` looks the same as a dead one, so a second refire in that window re-halts it
@@ -48,11 +48,15 @@ DISPOSITION_SCRATCH = "scratch-abandoned"
 DISPOSITION_LOST = "lost"
 STATUS_CLOSED = "closed"
 HALT_RUN_BASE_FIELD = "run_base_sha"
+HALT_ENGINE_FIELD = "engine_sha"
+SUPERSEDED_BY_REFIRE = "superseded-by-refire"
 HALT_REASON_FIELD = "reason"
 HALT_RUN_ARTIFACTS_FIELD = "run_artifacts"
 REVISED_AT_FIELD = "revised_at"
+REVISED_CONSUMED_FIELD = "revised_consumed_at"
 HALT_RELEASED_FIELD = "released"
 HALT_NEXT_ACTION_FIELD = "next_action"
+HALT_POST_LAND_TRIPWIRE_RED = "post_land_tripwire_red"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
@@ -292,6 +296,11 @@ def write_halt_marker(
         payload[HALT_NEXT_ACTION_FIELD] = next_action
     if run_base_sha and _SHA40.fullmatch(run_base_sha):
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
+    running_engine = halt_resume_record.engine_sha()
+    if running_engine is not None:
+        payload[HALT_ENGINE_FIELD] = running_engine
     root = _target_root(Path(record_dir))
     splits = find_split_trees(root) if root is not None else []
     if splits:
@@ -833,21 +842,39 @@ def halted_withheld_strict(record_dir: Path) -> dict:
 
 
 def mark_revised(record_dir: Path, at: str) -> bool:
-    """Stamp `revised_at` on a `halted` marker; False and no write when it is absent or not halted."""
+    """Stamp `revised_at` on a `halted` or `resumed` marker; False and no write when it is absent or neither."""
     marker = _read(Path(record_dir))
-    if marker is None or marker.get("status") != STATUS_HALTED:
+    if marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
         return False
     _write(Path(record_dir), {**marker, REVISED_AT_FIELD: at})
     return True
 
 
 def revised_halt(record_dir: Path) -> Optional[str]:
-    """The `revised_at` value while the marker is `halted`, else None. One marker read."""
+    """The `revised_at` value of a `halted` marker, or of a `resumed` one whose stamp the resume never consumed
+    (a revision no replayed stage reads), else None. One marker read."""
     marker = _read(Path(record_dir))
-    if marker is None or marker.get("status") != STATUS_HALTED:
+    if marker is None:
+        return None
+    status = marker.get("status")
+    if status not in (STATUS_HALTED, STATUS_RESUMED):
         return None
     value = marker.get(REVISED_AT_FIELD)
-    return value if isinstance(value, str) and value else None
+    if not isinstance(value, str) or not value:
+        return None
+    if status == STATUS_RESUMED and (REVISED_CONSUMED_FIELD not in marker or marker[REVISED_CONSUMED_FIELD] == value):
+        return None
+    return value
+
+
+def unread_revision_ids(record_dir: Path) -> list:
+    """Ids of the run's notes stamped after the revision the last resume consumed, oldest first; [] when none."""
+    marker = _read(Path(record_dir)) or {}
+    consumed = marker.get(REVISED_CONSUMED_FIELD)
+    since = consumed if isinstance(consumed, str) else ""
+    from coordinator_core.ops.dispatch_emit import run_notes
+
+    return [e["id"] for e in run_notes.live(run_notes.entries(Path(record_dir) / "notes.jsonl", "")) if e["at"] > since]
 
 
 def record_released(record_dir: Path, sha: str, reason: str) -> bool:
@@ -865,7 +892,7 @@ def mark_resumed(record_dir: Path) -> bool:
     marker = _read(Path(record_dir))
     if marker is None or marker.get("status") != STATUS_HALTED:
         return False
-    _write(Path(record_dir), {**marker, "status": STATUS_RESUMED})
+    _write(Path(record_dir), {**marker, "status": STATUS_RESUMED, REVISED_CONSUMED_FIELD: marker.get(REVISED_AT_FIELD) or ""})
     _index_call("remove_run", record_dir)
     _live_index_drop(record_dir)
     return True
@@ -905,6 +932,33 @@ def mark_landed(record_dir: Path, sha: str, *, without_verdict: bool = False) ->
     return True
 
 
+def reopen_red(record_dir: Path, sha: str, reds: list) -> Path:
+    """Reopen a run whose post-land tripwire re-run went red: a `landed` or absent marker becomes `halted` /
+    `HALT_POST_LAND_TRIPWIRE_RED` at `sha` carrying `reds`; any other status is kept and only gains `reds`.
+
+    Returns the marker path; never raises (a failed write leaves the marker as it was). A reopened marker with a
+    `sizing_rel` re-enters the lookup and halted-withheld indexes, so the owner's next fire of that sizing resumes it.
+    Not `write_halt_marker`: that schedules a resume build.
+    """
+    rd = Path(record_dir)
+    target = rd / HALTED_FILE
+    try:
+        marker = _read(rd) or {}
+        if marker.get("status") in (None, STATUS_LANDED):
+            payload = {**marker, "status": STATUS_HALTED, "halted": HALT_POST_LAND_TRIPWIRE_RED, "sha": sha, "reds": list(reds)}
+        else:
+            payload = {**marker, "reds": list(reds)}
+        _write(rd, payload)
+        if payload["status"] == STATUS_HALTED:
+            sizing = payload.get("sizing_rel")
+            if isinstance(sizing, str) and sizing:
+                _index_call("add_run", rd, halted_withheld(rd), sizing_rel=sizing)
+            stamp_run_stage_at(rd, "halted")
+    except Exception:  # noqa: BLE001 -- the caller is a detached post-step with no one to catch
+        pass
+    return target
+
+
 def mark_closed(record_dir: Path, reason: str, at: str) -> bool:
     """Rewrite a `halted` or `resumed` marker as `closed` with `{reason, at}`: a terminal end for a
     halt that will never land (nothing withheld, owner gone). False and no write for any other status."""
@@ -912,6 +966,33 @@ def mark_closed(record_dir: Path, reason: str, at: str) -> bool:
     if not reason or marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_CLOSED, "closed": {"reason": reason, "at": at}})
+    _index_call("remove_run", record_dir)
+    _live_index_drop(record_dir)
+    _record_judge(record_dir)
+    return True
+
+
+def ran_under_engine(record_dir: Path) -> Optional[str]:
+    """The engine sha the halt marker stamped (40-hex), else None (absent, unreadable, unstamped).
+
+    Trap: never falls back to `resume.json`; every recompose restamps its `engine_sha` with the current
+    engine, so a run resumed after a swap would read as current."""
+    marker = _read(Path(record_dir))
+    value = marker.get(HALT_ENGINE_FIELD) if marker else None
+    return value if isinstance(value, str) and _SHA40.fullmatch(value) else None
+
+
+def mark_superseded_by_refire(record_dir: Path, *, prior_engine: Optional[str], engine: Optional[str], at: str) -> bool:
+    """Rewrite a `halted` or `resumed` marker as `superseded` with evidence kind `superseded-by-refire`: a
+    fresh refire closes the prior run and credits none of its kept chunks. False and no write for any other
+    status (landed, closed, superseded) or an absent marker."""
+    marker = _read(Path(record_dir))
+    if marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
+        return False
+    evidence = {
+        "kind": SUPERSEDED_BY_REFIRE, "prior_engine": prior_engine, "engine": engine, "at": at, "kept_credit": False,
+    }
+    _write(Path(record_dir), {**marker, "status": STATUS_SUPERSEDED, SUPERSEDED_EVIDENCE_FIELD: evidence})
     _index_call("remove_run", record_dir)
     _live_index_drop(record_dir)
     _record_judge(record_dir)

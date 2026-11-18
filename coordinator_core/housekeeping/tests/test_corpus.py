@@ -30,6 +30,39 @@ def test_list_live_handoffs_is_non_recursive_and_skips_archive_decoys(tmp_path):
     assert not any(p.name in decoy_names for p in paths)
 
 
+def test_list_live_handoffs_descends_month_shards_only(tmp_path):
+    live = tmp_path / "state" / "handoffs"
+    (live / "2026-11").mkdir(parents=True)
+    (live / "not-a-month").mkdir()
+    (live / "2026-11-01-flat.md").write_text("x", encoding="utf-8")
+    (live / "2026-11" / "2026-11-02-sharded.md").write_text("x", encoding="utf-8")
+    (live / "not-a-month" / "2026-11-03-hidden.md").write_text("x", encoding="utf-8")
+
+    paths, gaps = corpus.list_live_handoffs(live)
+
+    assert gaps == []
+    assert sorted(p.name for p in paths) == ["2026-11-01-flat.md", "2026-11-02-sharded.md"]
+
+
+def test_unreadable_month_shard_is_a_gap_not_silence(tmp_path, monkeypatch):
+    live = tmp_path / "handoffs"
+    (live / "2026-11").mkdir(parents=True)
+    (live / "2026-11" / "a.md").write_text("x", encoding="utf-8")
+    real = os.scandir
+
+    def _deny_shard(path):
+        if str(path).endswith("2026-11"):
+            raise PermissionError(13, "permission denied")
+        return real(path)
+
+    monkeypatch.setattr(corpus.os, "scandir", _deny_shard)
+
+    paths, gaps = corpus.list_live_handoffs(live)
+
+    assert paths == []
+    assert len(gaps) == 1 and "permission denied" in gaps[0]
+
+
 def test_list_archived_handoffs_covers_nested_and_root_records(tmp_path):
     fixture = build_corpus(tmp_path)
 

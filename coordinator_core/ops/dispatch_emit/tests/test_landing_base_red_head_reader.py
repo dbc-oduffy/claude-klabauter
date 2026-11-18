@@ -1,5 +1,6 @@
 """A fresh retest red that the run's records name red at the run base, and that the retest ran or that
-reads committed HEAD, is not attributed to the run; a red green at base still refuses."""
+reads committed HEAD, is not attributed to the run; a red absent from them stays unknown (surfaced, never cleared, never a refusal); a caused id refuses
+even when a caller-carried base-red list names it."""
 
 from __future__ import annotations
 
@@ -60,7 +61,7 @@ def test_red_not_named_base_red_still_refuses(tmp_path: Path) -> None:
 
     findings, check = li.landing_test_gate(tmp_path, _params(OTHER), RUN)
 
-    assert check == "failed" and NODE in findings[0].detail
+    assert check == "unknown-only" and list(findings) == [] and findings.unknown_ids == [NODE]
 
 
 def test_base_red_node_the_retest_did_not_run_and_that_reads_no_head_still_refuses(tmp_path: Path) -> None:
@@ -70,7 +71,7 @@ def test_base_red_node_the_retest_did_not_run_and_that_reads_no_head_still_refus
 
     findings, check = li.landing_test_gate(tmp_path, _params(NODE), RUN)
 
-    assert check == "failed" and NODE in findings[0].detail
+    assert check == "unknown-only" and list(findings) == [] and findings.unknown_ids == [NODE]
 
 
 def test_base_red_node_beside_a_caused_one_still_refuses(tmp_path: Path) -> None:

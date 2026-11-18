@@ -94,7 +94,7 @@ path), and `door.provenance.json`.
 Or, without Python:
 
 ```sh
-make PYTHON_BIN=/usr/bin/python3 BUILD_ENGINE_ROOT=/path/to/published/engine
+make PYTHON_BIN=/usr/bin/python3
 ```
 
 — but then you must write `door.engine-root.txt` yourself: one line, the
@@ -323,7 +323,7 @@ not Windows — and mingw-w64 supplies them:
 brew install mingw-w64
 cd coordinator_core/warm/door
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -std=c11 \
-    -DPYTHON_BIN_W='L"python3"' -DBUILD_ENGINE_ROOT_W='L""' \
+    -DPYTHON_BIN_W='L"python3"' \
     -c -o /tmp/door_win.o door.c
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -std=c11 -c -o /tmp/door_core_win.o door_core.c
 x86_64-w64-mingw32-gcc -O2 -o /tmp/door_test.exe /tmp/door_win.o /tmp/door_core_win.o \

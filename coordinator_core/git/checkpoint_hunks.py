@@ -187,36 +187,6 @@ def tests_exercising_withheld_code(
         return {}
 
 
-def declared_sibling_split(
-    root: Path, message: str, committed: Sequence[str], withheld: Sequence[str],
-) -> list[dict]:
-    """`[{row, committed, withheld}]` for each checkpoint row whose declared writes straddle the
-    committed set and the withheld set: a row lands whole or waits. Rows come from the message
-    subject, their `writes` from the `Checkpoint-Plan:` spine. Zero git spawns; an unreadable plan
-    returns `[]`. Never raises."""
-    try:
-        from coordinator_core.git.checkpoint_guard import checkpoint_row_ids
-        from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
-
-        plan, ids = _message_plan(message), set(checkpoint_row_ids((message or "").split("\n", 1)[0]))
-        if not plan or not ids or not withheld or not committed:
-            return []
-        rows = getattr(load_rows_memo((Path(root) / plan).read_text(encoding="utf-8")), "rows", None) or []
-        landed, held = {_norm(p) for p in committed}, {_norm(p) for p in withheld}
-        out: list[dict] = []
-        for row in rows:
-            writes = row.get("writes") if isinstance(row, dict) else None
-            if str(row.get("id") if isinstance(row, dict) else "") not in ids or not isinstance(writes, list):
-                continue
-            norm = [_norm(w) for w in writes if isinstance(w, str)]
-            in_commit, in_held = [w for w in norm if w in landed], [w for w in norm if w in held]
-            if in_commit and in_held:
-                out.append({"row": str(row["id"]), "committed": in_commit, "withheld": in_held})
-        return out
-    except Exception:  # noqa: BLE001 -- unreadable plan: no split is named
-        return []
-
-
 def _definitions(source: Optional[str]) -> tuple[set[str], dict[str, set[str]]]:
     """`(top-level def/class names, {function name: parameter names})` of `source`; empty when it
     is absent or does not parse."""
@@ -468,7 +438,7 @@ def checkpoint_own_blobs(
     withheld: list[str] = []
     try:
         from coordinator_core.ops.dispatch_emit import (
-            own_hunk_stage, peer_hunk_gate, run_credit, run_hunk_claims, run_write_prints,
+            family_credit, own_hunk_stage, peer_hunk_gate, run_credit, run_hunk_claims, run_write_prints,
         )
 
         try:
@@ -485,9 +455,12 @@ def checkpoint_own_blobs(
         prints = run_write_prints.read(root, run_id) or {}
         unprinted = [p for p in dict.fromkeys(pending) if p not in prints]
         credited = run_credit.credited_writes(root, run_id) if unprinted else frozenset()
-        for path in [p for p in unprinted if p not in credited]:
+        uncredited = [p for p in unprinted if p not in credited]
+        family, family_why = family_credit.credit(root, run_id, uncredited, message) if uncredited else (frozenset(), {})
+        credited = credited | family
+        for path in [p for p in uncredited if p not in family]:
             withheld.append(path)
-            why[path] = NO_PRINT_REASON
+            why[path] = family_why.get(path, NO_PRINT_REASON)
         pending = [p for p in pending if p in prints or p in credited]
         if not pending:
             return {}, sorted(set(withheld))

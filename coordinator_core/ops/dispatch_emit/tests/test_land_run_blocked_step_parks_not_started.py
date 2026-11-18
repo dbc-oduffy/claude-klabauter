@@ -175,22 +175,19 @@ def _block_the_definition_grep(monkeypatch, secs: float) -> None:
     monkeypatch.setattr(git_run, "run_git", run_git)
 
 
-def test_a_definition_grep_that_blocks_parks_at_the_reach_claims_step(product_repo, monkeypatch):
+def test_a_definition_grep_that_blocks_lands_with_the_reach_claims_step_owed(product_repo, monkeypatch):
     repo = product_repo  # noqa: F811
     monkeypatch.setattr(land_run, "_ledger_gate", lambda *a, **k: (None, None, []))
     monkeypatch.setattr(reach_claims_tree, "GREP_STEP_SECS", 0.4)
     _stage_claim(repo)
     _block_the_definition_grep(monkeypatch, 3.0)
-    token = run_token.mint(repo, prod.RUN, prod.SCRIPT, session_id=prod.SELF)
-    head = prod._git(["rev-parse", "HEAD"], repo).strip()
     t0 = time.monotonic()
 
-    reply = prod._land(repo, run_token=token)
+    reply = prod._land(repo)
 
-    assert time.monotonic() - t0 < 2.5, "the landing waited on the blocked git instead of parking"
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
-    _parked(reply, reach_claims_tree.GREP_STEP)
-    assert run_token.admits(repo, prod.RUN, token, prod.SCRIPT)
+    assert time.monotonic() - t0 < 2.5, "the landing waited on the blocked git instead of owing the step"
+    assert "parked" not in reply and reply["committed"] is True, reply
+    assert reply["reach_claims"]["owed"] == [reach_claims_tree.GREP_STEP], reply
 
 
 def test_the_same_grep_inside_its_step_still_judges_the_claim(product_repo, monkeypatch):

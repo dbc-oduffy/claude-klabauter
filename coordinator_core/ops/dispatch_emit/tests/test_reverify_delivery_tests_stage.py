@@ -145,7 +145,7 @@ def test_a_superseding_fail_with_an_all_pre_existing_baseline_mints(tmp_path):
     assert stamp["terminal_commit_sha"] == head
 
 
-_ENV_TEXT = "git archive HEAD exited 128 (also fails at base)"
+_ENV_TEXT = "fatal: not a git repository (also fails at base)"
 
 
 def _env_fault_tests(failures):
@@ -166,9 +166,9 @@ def test_an_export_environment_fault_is_never_set_aside_as_pre_existing():
     assert rd.charged_status(tests) == "fail"
 
 
-def test_a_no_dot_git_export_fault_is_never_set_aside_as_pre_existing():
-    tests = _env_fault_tests({"t::a": "fatal: not a git repository (or any parent)", "t::b": "boom"})
-    assert rd.charged_status(tests) == "fail"
+def test_a_retired_archive_exit_128_text_is_an_ordinary_base_red():
+    tests = _env_fault_tests({"t::a": "git archive HEAD exited 128", "t::b": "boom"})
+    assert rd.charged_status(tests) == "pass"
 
 
 def test_a_genuine_base_red_is_still_set_aside():

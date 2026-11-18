@@ -279,6 +279,7 @@ def derive_ledger_rows(
     )
     from coordinator_core.ops.dispatch_emit.emit import _is_immutable_body_path
     from coordinator_core.ops.dispatch_emit.sizing_xs_mint import MemoReceiverUnresolvedError, _memo_receiver
+    from coordinator_core.ops.dispatch_emit.spine_read import em_run_oracle_text
     from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
 
     rerule = note_rerules(notes)
@@ -302,6 +303,10 @@ def derive_ledger_rows(
         modules = _module_paths(texts, serving, repo_root, spelling=spelling)
         writes: list[str] = []
         for p in drop_excluded([*named, *modules, *serving], exclude):
+            # Trap: a gap line naming a directory resolves (its parent exists), but a directory
+            # in `writes` becomes the row's surface and commit pathspec, which scoped commit refuses.
+            if (repo_root / p).is_dir():
+                continue
             if p not in writes and p not in gated_paths([p]):
                 writes.append(p)
         if rerule and steps:
@@ -310,6 +315,11 @@ def derive_ledger_rows(
             hits = note_named | {m for m in modules if m in note_mods} | note_serving
             if not any(p not in gated_paths([p]) for p in drop_excluded(sorted(hits), exclude)):
                 continue
+        # Trap: a serving row's gitignored, untracked write (a scratch output) is refused by
+        # commit_v2 at every checkpoint, so a derived row inheriting it can never land.
+        from coordinator_core.ops.dispatch_emit.requirements_ledger import _drop_ignored_untracked
+
+        writes = _drop_ignored_untracked(repo_root, writes)[0]
         dropped = [d for d in dropped if d not in writes]
         if not writes:
             if not rerule:
@@ -337,6 +347,8 @@ def derive_ledger_rows(
         ] + [(ws, to, f" (memo to {to})") for to, ws in by_receiver.items()]
         if len(partitions) == 1:
             partitions = [(partitions[0][0], partitions[0][1], "")]
+        # A mixed item's title names a code gap, so only an all-oracle item reads as an EM-run oracle row.
+        title_step = next((s for s in steps if not em_run_oracle_text(s)), steps[0] if steps else None)
         lines = [
             f"Ledger item {item} is open. Gaps to close (each line is still true; make it false):",
             *(f"- {s}" for s in steps),
@@ -356,7 +368,7 @@ def derive_ledger_rows(
             taken.add(rid)
             row = {
                 "id": rid,
-                "title": (GAP_TITLE_PREFIX + steps[0] if steps else f"Serve revise note for {item}") + suffix,
+                "title": (GAP_TITLE_PREFIX + title_step if title_step else f"Serve revise note for {item}") + suffix,
                 "change_kind": "code-edit",
                 "writes": part,
                 "register_rows": [item],

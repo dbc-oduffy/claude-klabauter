@@ -62,9 +62,10 @@ def test_lock_and_gitdir_roots_omit_git_dir_outside_a_repo(tmp_path, monkeypatch
     assert wm.lock_and_gitdir_add_dir_argv(bare) == ["--add-dir", str(tmp_path / "lr" / "coordinator-locks")]
 
 
-def test_branch_name_slugs_host_and_never_main() -> None:
+def test_branch_name_slugs_host_and_never_main(monkeypatch) -> None:
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
     b = wm.worker_branch("codex", "Mac-Mini.local", "2026-11-07")
-    assert b == "work/mac-mini-local/worker-codex-2026-11-07"
+    assert b == "alice/mac-mini-local/worker-codex-2026-11-07"
     assert not wm.is_protected_branch(b)
     assert wm.is_protected_branch("main") and wm.is_protected_branch("master")
 

@@ -32,7 +32,7 @@ def test_blob_id_equals_git_hash_object(tmp_path: Path) -> None:
     for data in (b"", b"x\n", "café\r\nline\n".encode("utf-8"), bytes(range(256))):
         f = tmp_path / "f.bin"
         f.write_bytes(data)
-        assert led.blob_id(data) == _git(tmp_path, "hash-object", "f.bin")
+        assert led.blob_id(data) == _git(tmp_path, "hash-object", "--no-filters", "f.bin")
 
 
 def test_append_writes_lf_one_object_per_line_forward_slashes(tmp_path: Path) -> None:

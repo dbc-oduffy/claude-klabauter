@@ -1,11 +1,16 @@
 """grok adapter: edit/shell tool mapping, engine-event shape, verdict rendering, unserved events."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.host_hooks.contract import Adapter, neutral_fallback
 from coordinator_core.host_hooks.grok_adapter import SERVED_EVENTS, GrokAdapter
 from coordinator_core.warm import hook_http
+
+_FIXTURE = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "tests" / "fixtures" / "host-real-tool-names.json"
 
 
 def _payload(name, args, **extra):
@@ -55,6 +60,26 @@ def test_shell_command_falls_back_to_cmd_key() -> None:
     assert ev.tool_input["command"] == "ls"
 
 
+_GROK_REAL = json.loads(_FIXTURE.read_text(encoding="utf-8"))["grok"]
+_GUARD_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# EditNotebook names its file in `target_notebook` (~/.grok/docs/user-guide/10-hooks.md § Tool Name Aliases).
+_REAL_PATH_KEY = {"EditNotebook": "target_notebook"}
+
+
+@pytest.mark.parametrize("entry", [e for e in _GROK_REAL if e["kind"] == "shell"], ids=lambda e: e["name"])
+def test_real_grok_shell_tool_maps_to_bash(entry) -> None:
+    ev = GrokAdapter().adapt_event(_payload(entry["name"], {"command": "git push origin main"}))
+    assert (ev.tool_name, ev.tool_input["command"]) == ("Bash", "git push origin main")
+
+
+@pytest.mark.parametrize("entry", [e for e in _GROK_REAL if e["kind"] in ("edit", "write")], ids=lambda e: e["name"])
+def test_real_grok_edit_or_write_tool_maps_to_a_write_guard_tool_with_file_path(entry) -> None:
+    key = _REAL_PATH_KEY.get(entry["name"], "path")
+    ev = GrokAdapter().adapt_event(_payload(entry["name"], {key: "/a/b.py"}))
+    assert ev.tool_name in _GUARD_TOOLS
+    assert ev.tool_input["file_path"] == "/a/b.py"
+
+
 def test_unknown_tool_passes_through_unchanged() -> None:
     ev = GrokAdapter().adapt_event(_payload("view_file", {"path": "/a"}))
     assert (ev.tool_name, ev.tool_input) == ("view_file", {"path": "/a"})
@@ -87,15 +112,12 @@ def test_unserved_event_has_no_engine_event_and_renders_neutral() -> None:
     assert a.render(ev, {"permissionDecision": "deny"}) == neutral_fallback("grok") == {}
 
 
-def test_render_deny_ask_and_default() -> None:
+def test_render_deny_and_default() -> None:
     a = GrokAdapter()
     ev = a.adapt_event(_payload("Bash", {"command": "ls"}))
     deny = a.render(ev, {"permissionDecision": "deny", "permissionDecisionReason": "no"})
     assert deny == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                            "permissionDecisionReason": "no"}}
-    nested = a.render(ev, {"hookSpecificOutput": {"permissionDecision": "ask", "permissionDecisionReason": "sure?"}})
-    assert nested["hookSpecificOutput"]["permissionDecision"] == "ask"
-    assert a.render(ev, {"decision": "force_ask"})["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert a.render(ev, {}) == {}
     assert a.render(ev, {"permissionDecision": "allow"}) == {}
 
@@ -111,9 +133,43 @@ def test_render_allow_with_advisory_carries_additional_context_and_bare_allow_st
     assert nested["hookSpecificOutput"]["additionalContext"] == "nag"
     assert nested["hookSpecificOutput"]["permissionDecisionReason"] == "why"
     ask = a.render(ev, {"decision": "ask", "reason": "sure?", "additionalContext": "nag"})
-    assert ask["hookSpecificOutput"]["additionalContext"] == "nag"
+    assert "nag" in ask["hookSpecificOutput"]["additionalContext"]
     assert a.render(ev, {"permissionDecision": "allow", "additionalContext": ""}) == {}
     assert a.render(ev, {"permissionDecision": "allow"}) == {}
+
+
+# Premise (unprobed live): grok -p has no human to answer an ask (`grok --help`: --always-approve,
+# --permission-mode default|acceptEdits|auto|dontAsk|bypassPermissions), so the adapter never leaves an ask on
+# the wire. Registry class -> deny; else model-visible context.
+_ASK_FORMS = (
+    {"decision": "ask", "reason": "sure?"},
+    {"decision": "force_ask", "reason": "sure?"},
+    {"hookSpecificOutput": {"permissionDecision": "ask", "permissionDecisionReason": "sure?"}},
+)
+
+
+@pytest.mark.parametrize("verdict", _ASK_FORMS)
+def test_a_non_registry_ask_is_an_allow_carrying_the_reason_as_context_never_an_ask(verdict) -> None:
+    a = GrokAdapter()
+    out = a.render(a.adapt_event(_payload("Bash", {"command": "ls"})), verdict)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "allow"
+    assert "sure?" in out["additionalContext"]
+
+
+@pytest.mark.parametrize("verdict", _ASK_FORMS)
+def test_a_registry_classed_guard_ask_is_a_deny_with_its_reason(verdict) -> None:
+    a = GrokAdapter()
+    verdict = {**verdict, "guard": "block-held-push"}
+    out = a.render(a.adapt_event(_payload("Bash", {"command": "ls"})), verdict)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert out["permissionDecisionReason"] == "sure?"
+
+
+def test_an_unknown_guard_name_is_not_registry_backed_so_its_ask_stays_an_advisory() -> None:
+    a = GrokAdapter()
+    out = a.render(a.adapt_event(_payload("Bash", {"command": "ls"})),
+                   {"decision": "ask", "reason": "r", "guard": "no-such-guard"})["hookSpecificOutput"]
+    assert out["permissionDecision"] == "allow"
 
 
 _CONTRACT_EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "edit_file", "write_file")

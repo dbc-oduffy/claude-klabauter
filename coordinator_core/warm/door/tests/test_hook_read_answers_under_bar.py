@@ -65,7 +65,7 @@ def built_door(tmp_path_factory) -> Path:
     door_dir = Path(__file__).resolve().parents[1]
     out = tmp_path_factory.mktemp("bench-door") / "coordinator-invoke"
     subprocess.run(
-        [compiler, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', '-DBUILD_ENGINE_ROOT=""', "-o", str(out),
+        [compiler, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', "-o", str(out),
          str(door_dir / "door_posix.c"), str(door_dir / "door_core.c")],
         check=True, capture_output=True, **no_console_creationflags(),
     )

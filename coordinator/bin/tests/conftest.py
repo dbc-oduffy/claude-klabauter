@@ -94,7 +94,11 @@ def _live_unimatrix_pair_state():
     except OSError:
         lines = []
     ssh = live / ".secrets" / "ssh"
-    return lines, sorted(p.name for p in ssh.iterdir()) if ssh.is_dir() else []
+    try:
+        names = sorted(p.name for p in ssh.iterdir())
+    except OSError:  # absent, or removed between the check and the scan by a concurrent box writer
+        names = []
+    return lines, names
 
 
 @pytest.fixture(autouse=True)
@@ -109,6 +113,19 @@ def _unimatrix_tests_never_write_a_real_pair_key(request: pytest.FixtureRequest,
     yield
     after = _live_unimatrix_pair_state()
     assert after == before, f"{request.node.nodeid} changed the real unimatrix pair-key state: {before} -> {after}"
+
+
+@pytest.fixture(autouse=True)
+def _publish_shadow_store_is_per_test(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory):
+    """A test never adopts a shadow into the real Temp store: one override in `shadow_store`,
+    honoured by a publish module loaded at any time. Teardown drops the process-local store ownership."""
+    from coordinator_core.percolate import shadow_store
+
+    monkeypatch.setattr(shadow_store, "ROOT_OVERRIDE", tmp_path_factory.mktemp("publish-shadow-store"))
+    yield
+    for module in list(sys.modules.values()):
+        if getattr(module, "_MATERIALIZED_REF_CACHE", None) is not None:
+            getattr(module, "_STORE_SHADOWS", {}).clear()
 
 
 _DESKTOP_NOTIFIERS = frozenset({"osascript", "notify-send"})

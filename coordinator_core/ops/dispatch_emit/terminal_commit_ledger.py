@@ -821,7 +821,11 @@ def _blocking_open_rows(ledger: object, verdict: object, open_rows: object) -> l
         str(i.get("id")) for i in (items if isinstance(items, list) else [])
         if isinstance(i, dict) and i.get("essential") is False and str(i.get("id")) not in design
     } if not getattr(ledger, "all_of_pm_ask", False) else set()
-    return [r for r in (open_rows or []) if not (isinstance(r, dict) and "command" in r and str(r.get("id")) in optional)]
+    return [
+        r for r in (open_rows or [])
+        if not (isinstance(r, dict) and "command" in r and str(r.get("id")) in optional)
+        and not (isinstance(r, dict) and r.get(requirements_ledger.LATE_NOTE_KEY))
+    ]
 
 
 def _ledger_met_observation(ledger: object, verdict: object, open_rows: object) -> Optional[str]:

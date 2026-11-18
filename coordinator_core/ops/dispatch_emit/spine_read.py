@@ -147,7 +147,7 @@ import posixpath
 import re
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, NamedTuple, Optional
+from typing import Any, Mapping, NamedTuple, Optional
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -158,7 +158,12 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
 from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
 from coordinator_core.ops.dispatch_emit import stage_family
-from coordinator_core.ops.dispatch_emit.em_only_act import em_only_capability, forbidden_sole_act, row_is_em_performed
+from coordinator_core.ops.dispatch_emit.em_only_act import (
+    code_deliverable,
+    em_only_capability,
+    forbidden_sole_act,
+    row_is_em_performed,
+)
 from coordinator_core.ops.plan_tasks_render import RowsResult
 
 
@@ -187,13 +192,37 @@ NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "w
 DISPOSITION_ALIASES = {"done": "coded"}
 
 
-def with_canonical_disposition(row):
-    """`row` with an aliased `disposition` rewritten to its canonical value;
+#: Largest leg kill cap, in GiB, an executor row may launch without a Group EM GO.
+SELF_ADMIT_KILL_CAP_GIB = 20
+
+
+def leg_exceeds_self_admit_tier(row) -> bool:
+    """True when `row` declares a ``leg.kill_cap_gib`` over ``SELF_ADMIT_KILL_CAP_GIB``.
+    A declared cap that is not a positive number cannot be shown safe, so it counts as over."""
+    leg = row.get("leg") if isinstance(row, dict) else None
+    if not isinstance(leg, dict) or "kill_cap_gib" not in leg:
+        return False
+    cap = leg["kill_cap_gib"]
+    if isinstance(cap, bool) or not isinstance(cap, (int, float)) or cap <= 0:
+        return True
+    return cap > SELF_ADMIT_KILL_CAP_GIB
+
+
+def with_leg_slot(row: Any) -> Any:
+    """`row` read as ``needs_slot: true`` when its declared leg is over the self-admit tier;
     any other row (or a non-mapping) is returned as is."""
+    if isinstance(row, dict) and row.get("needs_slot") is not True and leg_exceeds_self_admit_tier(row):
+        return {**row, "needs_slot": True}
+    return row
+
+
+def with_canonical_disposition(row: Any) -> Any:
+    """`row` with an aliased `disposition` rewritten to its canonical value and an over-tier
+    ``leg`` read as ``needs_slot``; any other row (or a non-mapping) is returned as is."""
     if not isinstance(row, dict):
         return row
     alias = DISPOSITION_ALIASES.get(str(row.get("disposition") or "").strip())
-    return {**row, "disposition": alias} if alias else row
+    return with_leg_slot({**row, "disposition": alias} if alias else row)
 
 
 # The schema's COMPLETE enum -- the closed values plus `open`. Named
@@ -221,7 +250,7 @@ KNOWN_ROW_KEYS = frozenset({
     "memo_kind", "delivered_via", "case_against", "kind", "pm_approved", "pm_approved_by",
     "pm_disposition", "receipt", "blocked_on", "host", "appends", "falsifier_review_of",
     "satisfies", "verification_runs", "done_when", "disjoint_parallel", "premise_close",
-    "em_run", "family", "stage_role",
+    "em_run", "family", "stage_role", "leg",
 })
 
 def _premise_close_for(raw: dict, rows_by_id: dict, verdicts: dict, opted_in: bool) -> Optional[dict]:
@@ -1102,7 +1131,7 @@ def _parse_rows(source: str) -> RowsResult:
         return RowsResult(status=LocateStatus.MALFORMED, rows=[])
     if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
         return RowsResult(status=LocateStatus.MALFORMED, rows=[])
-    return RowsResult(status=LocateStatus.LOCATED, rows=rows)
+    return RowsResult(status=LocateStatus.LOCATED, rows=[with_leg_slot(row) for row in rows])
 
 
 def _schema_error_memo(source: str):
@@ -1252,6 +1281,24 @@ def contradictory_read_paths(reads, reads_at_head) -> list:
 _OWNED_ROOT_REASONS = frozenset({"memo-send", "em-performed", "operator"})
 
 EM_OWNED_REASONS = _OWNED_ROOT_REASONS | {"withheld_by_owed_dependency"}
+
+_EM_RUN_ORACLE = re.compile(r"\bEM-run oracle\b", re.IGNORECASE)
+_GAP_TITLE_HEAD = "Close gap: "
+
+
+def em_run_oracle_text(text: object) -> bool:
+    """True when `text` names an EM-run oracle: a check only the EM session can run."""
+    return isinstance(text, str) and _EM_RUN_ORACLE.search(text) is not None
+
+
+def is_em_run_oracle(raw: dict) -> bool:
+    """True for a row whose closure is an EM-run oracle: its title names one and the row is
+    em-performed or a ledger gap row (`Close gap: ` title). The engine can never execute it, so it
+    holds no code row."""
+    title = raw.get("title")
+    return em_run_oracle_text(title) and (
+        row_is_em_performed(raw) or str(title).startswith(_GAP_TITLE_HEAD)
+    )
 
 
 def em_owned_rows(exclusions: Optional[list]) -> list[str]:
@@ -1669,6 +1716,7 @@ def read_spine(
             row_is_em_performed(raw)
             or (_is_memo_send_row(raw) and not memo_row_dispatchable(raw))
             or inbound_close is not None
+            or is_em_run_oracle(raw)
         )
         memo_slug = None
         memo_delivered = False
@@ -1930,6 +1978,14 @@ def read_spine(
     # withheld producer reads a file that does not exist yet.
     consumed_via: dict[str, str] = {}
     consumers_of = _consume_edges(rows, frozenset(satisfied_ids))
+    # An EM-run oracle verifies code; it cannot gate the code, which the engine lands while the
+    # oracle stays open for met_by crediting.
+    oracle_ids = {
+        raw.get("id")
+        for raw in raw_rows
+        if raw.get("id") in blocked_ids and is_em_run_oracle(raw)
+    }
+    code_row_ids = {raw.get("id") for raw in raw_rows if code_deliverable(raw)}
     frontier = list(blocked_ids)
     while frontier:
         current = frontier.pop()
@@ -1937,6 +1993,8 @@ def read_spine(
         hops += [(d, path) for d, path in consumers_of.get(current, ())]
         for dependent_id, path in hops:
             if dependent_id in satisfied_ids or dependent_id in blocked_ids:
+                continue
+            if current in oracle_ids and dependent_id in code_row_ids:
                 continue
             blocked_ids.add(dependent_id)
             transitive_root[dependent_id] = current
@@ -2010,13 +2068,14 @@ def read_spine(
     satisfied_ids -= keep_coded
     excluded_ids = satisfied_ids | blocked_ids
     dispatchable_rows = [row for row in rows if row.id not in excluded_ids]
+    released_ids = satisfied_ids | oracle_ids
     for i, row in enumerate(dispatchable_rows):
         if not row.depends_on:
             continue
         stripped = [
             edge
             for edge in row.depends_on
-            if not (isinstance(edge, dict) and edge.get("chunk") in satisfied_ids)
+            if not (isinstance(edge, dict) and edge.get("chunk") in released_ids)
         ]
         if len(stripped) != len(row.depends_on):
             dispatchable_rows[i] = row._replace(depends_on=stripped)

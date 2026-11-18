@@ -104,6 +104,15 @@ def test_day_branch_assert_settled_outcomes_exit_zero(monkeypatch: pytest.Monkey
     assert rc == 0
 
 
+@pytest.mark.parametrize("branch", ["work/host/2026-08-17", "alice/host/2026-08-17"])
+def test_span_assert_expected_rename_uses_owner(monkeypatch: pytest.MonkeyPatch, branch: str) -> None:
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
+    from coordinator_core.daily_branch import format_span_suffix, parse_branch_span
+
+    msg = _wsdbr._span_assert(branch, "2026-08-18", parse_branch_span, format_span_suffix, lambda: "host")
+    assert msg is not None and "`alice/host/2026-08-17to18`" in msg
+
+
 def test_day_branch_assert_failed_outcome_exits_nonzero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     fail_message = banner(
         headline="day-branch NOT cut — tree is still on main",

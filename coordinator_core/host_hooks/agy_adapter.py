@@ -5,9 +5,16 @@ agy fails closed on `{}`, so every non-deny answer is an explicit decision.
 """
 from __future__ import annotations
 
+import json
+import os
+import re
+import sqlite3
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-from coordinator_core.host_hooks.codex_adapter import verdict_parts
+from coordinator_core.host_hooks.codex_adapter import ASK_DECISIONS, ask_denies, verdict_parts
 from coordinator_core.host_hooks.contract import HOST_AGY, HostEvent, Verdict, neutral_fallback
 
 #: Pinned equal to `warm.hook_http.SERVED_EVENTS` by test; not imported (hook_http is not cold-start cheap).
@@ -15,7 +22,6 @@ SERVED_EVENTS = frozenset({"PreToolUse"})
 
 # agy's shell tool reaches the Claude-shaped bash guards as `Bash`; its `CommandLine` arg is the command.
 _SHELL_TOOL = "run_command"
-_ASK_DECISIONS = frozenset({"ask", "force_ask"})
 
 #: agy edit tools -> the Claude-shaped write-guard tool names `tool_policy.evaluate` routes to `write_guards.engine`.
 _EDIT_TOOLS = {
@@ -30,9 +36,73 @@ _EDIT_TOOLS = {
 #: Lowercase arg keys an agy edit tool may carry its target path under (matched case-insensitively, so `Path`
 #: from 1.5.9 write_file/edit_file counts); the first non-empty one becomes `file_path`.
 _PATH_KEYS = ("targetfile", "absolutepath", "filepath", "file_path", "path")
+#: Whole-file writers: their `Content` arg is the body the content-reading write guards expect as lowercase `content`.
+_CONTENT_TOOLS = frozenset({"write_file", "write_to_file"})
 #: Payload keys naming the calling subagent (protojson `agentId`, or snake_case); the engine event carries it
 #: as `agent_id`, which the shim's cold chain and the guards read as "subagent". An EM payload carries neither.
 _AGENT_ID_KEYS = ("agentId", "agent_id")
+
+
+def conversations_dir() -> Path:
+    """Where agy keeps one sqlite file per conversation (`<conversationId>.db`)."""
+    return Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+
+
+def is_subagent_conversation(conversation: str) -> bool:
+    """True when agy's own store names a parent for `conversation`.
+
+    agy hooks fire for `invoke_subagent` child calls but the payload carries no `agentId`; the child is a
+    conversation of its own whose first `gen_metadata` row records `parent_cascade_id`. Any read failure
+    answers False (EM), so a missing or locked store never denies.
+    """
+    if not _CONV_RE.match(conversation or ""):
+        return False
+    db = conversations_dir() / f"{conversation}.db"
+    if not db.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True, timeout=0.25)
+        try:
+            row = con.execute("SELECT data FROM gen_metadata ORDER BY idx LIMIT 1").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        record_read_failure(conversation, exc)
+        return False
+    return bool(row and isinstance(row[0], bytes) and b"parent_cascade_id" in row[0])
+
+
+#: Past this size the failure log stops growing; a stuck-failing store cannot fill disk.
+_READ_FAILURE_LOG_CAP = 1_000_000
+
+
+def read_failure_log() -> Path:
+    """The JSONL where an unreadable conversation db is recorded (beside the advisory stash)."""
+    return advisory_dir().parent / "agy-read-failures.jsonl"
+
+
+def record_read_failure(conversation: str, error: BaseException) -> None:
+    """Append one `{"at", "conversation", "error"}` line; never raises, never changes a verdict.
+
+    The EM fallback in `is_subagent_conversation` is what keeps a locked store from denying an EM, so this
+    line is the only trace if a rising read-failure rate is quietly reopening the subagent hole.
+    """
+    try:
+        path = read_failure_log()
+        if path.is_file() and path.stat().st_size >= _READ_FAILURE_LOG_CAP:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(
+            {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "conversation": conversation,
+                "error": f"{type(error).__name__}: {error}",
+            }
+        )
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except Exception:
+        return
 
 
 class AgyAdapter:
@@ -56,6 +126,8 @@ class AgyAdapter:
             tool_input = dict(args)
             lowered = {str(k).lower(): v for k, v in args.items()}
             tool_input["file_path"] = next((str(lowered[k]) for k in _PATH_KEYS if lowered.get(k)), "")
+            if name in _CONTENT_TOOLS and isinstance(lowered.get("content"), str):
+                tool_input["content"] = lowered["content"]
         else:
             tool_name = name
             tool_input = dict(args)
@@ -67,6 +139,9 @@ class AgyAdapter:
         if not cwd and isinstance(payload.get("cwd"), str):
             cwd = payload["cwd"]
         agent_id = next((payload[k] for k in _AGENT_ID_KEYS if isinstance(payload.get(k), str) and payload[k]), "")
+        conversation = str(payload.get("conversationId") or "")
+        if not agent_id and call and is_subagent_conversation(conversation):
+            agent_id = conversation
         return HostEvent(
             host=HOST_AGY,
             event=str(resolved or ""),
@@ -91,26 +166,61 @@ class AgyAdapter:
         }
 
     def render(self, host_event: HostEvent, verdict: Verdict) -> Dict[str, Any]:
-        """agy response: deny, ask (passed through), or an explicit allow; unserved events get the `ask` fallback."""
+        """agy response: deny; an ask or advisory as an allow whose text is stashed for the next PreInvocation; unserved events get the `ask` fallback."""
         if host_event.event not in SERVED_EVENTS:
             return neutral_fallback(HOST_AGY)
         decision, reason = verdict_parts(verdict)
         if decision == "deny":
             return {"decision": "deny", "reason": reason or "denied by coordinator guard"}
-        if decision in _ASK_DECISIONS:
-            return {"decision": decision, "reason": reason or "coordinator: confirm"}
+        if decision in ASK_DECISIONS:
+            if ask_denies(verdict):
+                return {"decision": "deny", "reason": reason or "denied by coordinator guard"}
+            return _model_visible(host_event.session_id, reason or "coordinator: confirm")
         advisory = _advisory_text(verdict)
         if advisory:
-            return {"decision": "ask", "reason": advisory}
+            return _model_visible(host_event.session_id, advisory)
         return {"decision": "allow"}
 
 
-def _advisory_text(verdict: Optional[Mapping[str, Any]]) -> str:
-    """The `additionalContext` of a flat or `hookSpecificOutput`-nested non-deny verdict, or "".
+_CONV_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+#: Undrained advisories kept per conversation; past it the stash refuses so a missing PreInvocation drain cannot grow disk without bound.
+_STASH_CAP = 64
 
-    agy has no advisory field, so an allow carrying one renders as an `ask` whose reason is the text: the
-    nag surfaces and the answer never widens to allow.
+
+def advisory_dir() -> Path:
+    """Where PreToolUse advisories wait for the next PreInvocation; `unimatrix-agy-hook-pretool.py` drains the same path."""
+    env = os.environ.get("COORDINATOR_SETTINGS_HOME")
+    return (Path(env) if env else Path.home() / ".coordinator-claude-settings") / "unimatrix" / "agy-advisories"
+
+
+def stash_advisory(conversation: str, text: str) -> bool:
+    """Queue `text` for the conversation's next PreInvocation `injectSteps`; False when it cannot be queued."""
+    if not _CONV_RE.match(conversation or "") or not text:
+        return False
+    try:
+        folder = advisory_dir() / conversation
+        folder.mkdir(parents=True, exist_ok=True)
+        if sum(1 for _ in folder.iterdir()) >= _STASH_CAP:
+            return False
+        (folder / f"{time.time_ns()}-{os.getpid()}.txt").write_text(text, encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def _model_visible(conversation: str, text: str) -> Dict[str, Any]:
+    """An explicit allow whose advisory reaches the model at the next PreInvocation.
+
+    agy documents no `injectSteps` on a PreToolUse answer (hooks.md section 1), and renders `ask` as a
+    prompt that `-p` auto-approves, so the text is stashed and a PreInvocation hook injects it. `reason`
+    repeats the text so the shim's delivery stamp (`mark_if_delivered`, which walks mappings only) sees the nag.
     """
+    stash_advisory(conversation, text)
+    return {"decision": "allow", "reason": text}
+
+
+def _advisory_text(verdict: Optional[Mapping[str, Any]]) -> str:
+    """The `additionalContext` of a flat or `hookSpecificOutput`-nested non-deny verdict, or ""."""
     if not isinstance(verdict, Mapping):
         return ""
     nested = verdict.get("hookSpecificOutput")

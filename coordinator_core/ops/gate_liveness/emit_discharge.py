@@ -49,7 +49,6 @@ from typing import Any, Optional
 from coordinator_core.frontmatter.schema_validate import (
     _memo_cf_actioned_decision_requires_realized_by,
 )
-from coordinator_core.ops.fleet._memo_compose import _compose_memo, _render_extra_field
 
 #: The SAME two-member enum as the vendored plan-tasks.schema.json 1.10.0's
 #: `external_gate[].closure_key.kind` (and cross-repo-memo.schema.json
@@ -120,6 +119,8 @@ def validate_discharges_block(closure_key: Any, evidence: Any, landed_at: Any) -
 
 
 def render_discharges_block(closure_key: dict, evidence: str, landed_at: str) -> str:
+    from coordinator_core.ops.fleet._memo_compose import _render_extra_field
+
     return _render_extra_field(
         "discharges",
         {
@@ -154,6 +155,8 @@ def emit_discharge(
         raise ValueError(
             "emit_discharge: invalid discharges block: " + "; ".join(errors)
         )
+
+    from coordinator_core.ops.fleet._memo_compose import _compose_memo
 
     composed = _compose_memo(
         from_id=from_id,

@@ -215,7 +215,9 @@ def test_reread_budget_leaves_unscanned_files_unprunable(repo, monkeypatch):
 
 
 def test_crlf_and_preamble_frontmatter_use_shared_parser(tmp_path):
-    crlf = _write(tmp_path / "a.md", "---\r\nstatus: superseded\r\nsupersedes: docs/plans/x.md\r\n---\r\nbody\r\n")
+    # write_bytes: write_text translates \n on Windows, doubling the \r.
+    crlf = tmp_path / "a.md"
+    crlf.write_bytes(b"---\r\nstatus: superseded\r\nsupersedes: docs/plans/x.md\r\n---\r\nbody\r\n")
     assert uw._frontmatter_fields(str(crlf)) == ("superseded", "docs/plans/x.md", "")
     plain = _write(tmp_path / "b.md", '---\nstatus: "actioned"\npicked_up_at: 2026-01-01T00:00:00Z\n---\n')
     assert uw._frontmatter_fields(str(plain)) == ("actioned", "", "2026-01-01T00:00:00Z")

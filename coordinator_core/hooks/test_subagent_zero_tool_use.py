@@ -447,10 +447,9 @@ class TestRegistrationQuad:
         assert op_key in _REGISTRY
         assert OP_CLASSIFICATION[op_key] == OpClass.MUTATING
         assert _OP_KEY_SCOPE[op_key] == "common_dir"
-        # C2: hooks.* ops map to the package, not the module. Bare package import
-        # never registers ops; the op resolves via the registry-miss SAFE FALLBACK,
-        # which imports the package and walks _EAGER_HOOK_MODULES (this module is listed).
-        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks"
+        # A hooks.* op maps to the module that registers it: a package entry resolves
+        # only through the eager-import fallback, which the owning-module guards refuse.
+        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks.subagent_zero_tool_use"
 
 
 # ---------------------------------------------------------------------------

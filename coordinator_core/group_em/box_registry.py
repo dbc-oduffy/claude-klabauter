@@ -74,6 +74,21 @@ def _valid_id(box_id: object) -> bool:
     )
 
 
+def fold_box_id(name: str) -> str:
+    """The one box-identity fold: lower-case, then a trailing ``.local`` (mDNS), then a trailing ``-lan``.
+    Nothing else is stripped, so distinct boxes never fold equal; a strip that would empty the name is skipped."""
+    folded = name.lower()
+    for suffix in (".local", "-lan"):
+        if folded.endswith(suffix) and len(folded) > len(suffix):
+            folded = folded[: -len(suffix)]
+    return folded
+
+
+def same_box(a: object, b: object) -> bool:
+    """True when ``a`` and ``b`` are strings naming one box under ``fold_box_id``."""
+    return isinstance(a, str) and isinstance(b, str) and fold_box_id(a) == fold_box_id(b)
+
+
 def local_box_id(home: Optional[Path] = None) -> str:
     """The box id stamped in ``<home>/state/group-em/box.json``; "local" when absent or malformed."""
     try:

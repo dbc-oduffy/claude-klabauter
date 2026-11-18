@@ -272,7 +272,99 @@ def test_no_run_stage_anchors_at_committed_halt_record(legacy) -> None:
     assert halted_run._read(record)[halted_run.SUPERSEDED_EVIDENCE_FIELD] == {"a.txt": s1, "b.txt": s2}
 
 
-@pytest.mark.parametrize("stage", [None, "staged", "landed"])
+@pytest.mark.parametrize("marker", ["halted", "resumed"])
+def test_staged_dead_run_anchors_at_last_activity_and_closes_superseded(halted, marker) -> None:
+    root, record, base = halted
+    sha = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    ask_contract.write_run_stage_at(record, "staged", now=HALT_AT)
+    if marker == "resumed":
+        halted_run.mark_resumed(record)
+    reply = _call(root)
+    assert reply["ok"] is True and reply["evidence"] == {"a.txt": sha, "b.txt": sha}
+    assert halted_run._read(record)["status"] == halted_run.STATUS_SUPERSEDED
+    assert not _indexed(root)
+    _assert_closure_commit(root, record, base)
+
+
+def test_staged_dead_run_pre_activity_touch_is_not_evidence(halted) -> None:
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-later"}, date=PRE_HALT)
+    ask_contract.write_run_stage_at(record, "staged", now=HALT_AT)
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    reply = _call(root)
+    assert reply["ok"] is False and "no commit after the halt" in reply["error"]
+    _unchanged(root, record, before)
+
+
+def test_staged_run_with_live_token_refuses(halted) -> None:
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    ask_contract.write_run_stage_at(record, "staged", now=HALT_AT)
+    run_token.mint(root, RUN, "scratch/w.mjs", session_id="s", sizing_rel=None)
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    reply = _call(root)
+    assert reply["ok"] is False and "live or claimed token" in reply["error"]
+    _unchanged(root, record, before)
+
+
+def test_staged_run_with_claimed_token_refuses(halted) -> None:
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    ask_contract.write_run_stage_at(record, "staged", now=HALT_AT)
+    token = run_token.mint(root, RUN, "scratch/w.mjs", session_id="s", sizing_rel=None)
+    assert run_token.redeem_claim(root, RUN, token, "scratch/w.mjs") is not None
+    assert not run_token.is_live(root, RUN)
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    reply = _call(root)
+    assert reply["ok"] is False and "claimed token" in reply["error"]
+    _unchanged(root, record, before)
+
+
+def test_staged_dead_run_with_live_successor_refuses(halted, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.ops.dispatch_emit import halted_run_landed
+
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    ask_contract.write_run_stage_at(record, "staged", now=HALT_AT)
+    monkeypatch.setattr(halted_run_landed, "_live_successor", lambda r, run: "warp-live-1")
+    reply = _call(root)
+    assert reply["ok"] is False and "warp-live-1" in reply["error"]
+
+
+def test_staged_dead_run_deletion_touch_still_refuses(halted) -> None:
+    root, record, _ = halted
+    (root / "a.txt").unlink()
+    _git(root, "add", "--", "a.txt")
+    _git(root, "commit", "-q", "-m", "del", date=POST_HALT)
+    _commit(root, {"b.txt": "b-later"})
+    ask_contract.write_run_stage_at(record, "staged", now=HALT_AT)
+    reply = _call(root)
+    assert reply["ok"] is False and "a.txt" in reply["error"]
+    assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
+
+
+def test_staged_dead_run_spawn_count_is_three(halted, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    ask_contract.write_run_stage_at(record, "staged", now=HALT_AT)
+    _no_close_commit(monkeypatch)
+    spawned = []
+    real_popen = subprocess.Popen
+
+    def counting(*a, **k):
+        spawned.append(a[0] if a else k.get("args"))
+        return real_popen(*a, **k)
+
+    monkeypatch.setattr(subprocess, "Popen", counting)
+    assert _call(root)["ok"] is True
+    assert len(spawned) == 3
+
+
+@pytest.mark.parametrize("stage", [None, "landed"])
 def test_unresolvable_halt_anchor_refuses(halted, stage) -> None:
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})

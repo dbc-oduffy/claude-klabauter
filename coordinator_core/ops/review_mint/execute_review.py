@@ -535,6 +535,38 @@ _CLOSED_ROWS_JS = (
     "? _settled.filter(s => s && s.outcome === 'committed' && (_rows[s.row] || {}).closeResult).length : 0)"
 )
 
+#: Verdict a run-mode prep reply carries once its paths sit under another run's prep prefix.
+FOREIGN_PREP_VERDICT = "foreign-prep-prefix"
+
+
+def _foreign_prep_guard_js(expected_prefix: str) -> str:
+    """JS that empties a reply whose slice, sidecar or whole-diff path names a prep prefix other than
+    ``expected_prefix``, so the slices guard halts it (verdict names the foreign file). Runs before
+    any guard that synthesises a slice from ``whole_diff_path``."""
+    return (
+        "  const _foreignPrepName = (() => {\n"
+        "    if (!_reviewPrep) return null;\n"
+        f"    const _ep = {_js_string_literal(expected_prefix)};\n"
+        "    const _ps = (Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : [])"
+        ".flatMap(s => [s?.diff_path, s?.sidecar_path])"
+        ".concat([_reviewPrep.whole_diff_path, _reviewPrep.whole_diff_sidecars?.kira, "
+        "_reviewPrep.whole_diff_sidecars?.delivery], Array.isArray(_reviewPrep.whole_diff_sidecars?.personas) "
+        "? _reviewPrep.whole_diff_sidecars.personas : []);\n"
+        "    for (const p of _ps) { if (typeof p !== 'string' || !p) continue; "
+        "const b = p.replace(/\\\\/g, '/').split('/').pop(); "
+        "if (b.startsWith('manifest-') && b !== _ep && !b.startsWith(_ep + '-') && !b.startsWith(_ep + '.')) return b; }\n"
+        "    return null; })();\n"
+        "  if (_foreignPrepName !== null) { _reviewPrep.slices = []; "
+        f"_reviewPrep.verdict = {_js_string_literal(FOREIGN_PREP_VERDICT + ': ')} + _foreignPrepName; "
+        "_reviewPrep.error = 'prep reply names another run prep prefix: ' + _foreignPrepName; }\n"
+    )
+
+
+def _prep_guards_js(expected_prefix: Optional[str] = None) -> str:
+    """The prep guards; a run-mode compose passes its prep prefix to refuse a sibling run's reply."""
+    return (_foreign_prep_guard_js(expected_prefix) if expected_prefix else "") + _PREP_GUARDS_JS
+
+
 _PREP_GUARDS_JS = (
     # A single-reviewer-ok verdict over product files is one slice of the
     # whole diff; prep that omitted it is synthesised here, never refused.
@@ -971,6 +1003,9 @@ _REVERIFY_SCHEMA = {
     },
     "required": ["edited", "failing", FAILING_DETAIL_FIELD, "reverted", "status_before"],
 }
+#: Owned-first leg result: `tests_run` counts what ran, `not_run` names the capped remainder.
+_REVERIFY_SCHEMA["properties"]["tests_run"] = {"type": "integer"}
+_REVERIFY_SCHEMA["properties"]["not_run"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["passed_alone"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["passed_at_base"] = {"type": "array", "items": {"type": "string"}}
 #: The classed-red sets `from_reverify` and the ask projection exclude from blockers; a property the schema omits is dropped from the sidecar.
@@ -1013,7 +1048,19 @@ _REVERIFY_DERIVED_CLAUSE = (
 _REVERIFY_NOTHING_RAN_CLAUSE = (
     "Never report pass when no test ran: when no test was selected or run, status_before is "
     '"not_run"; when a selected test could not run (runner missing, errored before any result), it is '
-    f'"{REVERIFY_INDETERMINATE}". pass requires at least one test that ran and passed.'
+    f'"{REVERIFY_INDETERMINATE}". pass requires at least one test that ran and passed. Owned tests that ran and '
+    "passed with a not-run remainder are pass with `not_run` listed, never indeterminate; indeterminate is "
+    "only for a leg where no test ran."
+)
+
+#: Owned-first ordering of the reverify test leg; `{bound}` is `reverify_scope.TRIPWIRE_BOUND`.
+_REVERIFY_OWNED_FIRST_CLAUSE = (
+    "Run in two calls, owned first: first ONE pytest call of the test files among them{extra} and the "
+    "`owned` list{owned_scope}; only after it ends, ONE pytest call of the `tripwires` files{tripwire_scope} "
+    "(never more than {bound}; every file past that cut is `not_run`). Name every file in "
+    "`tripwires_not_selected`, and every file a call did not reach in budget, in `not_run` (a list of paths). "
+    "Return `tests_run`, the number of tests the calls ran (from their summary lines), and `not_run`; both "
+    "are required when any test file was named. "
 )
 
 #: Run-time review sidecar paths of the wave, appended to the re-verify prompt for its `sidecars`.
@@ -1056,10 +1103,29 @@ _SETTLE_CLAUSE = (
 )
 
 
-_PASSED_ALONE_CLAUSE = (
-    "After the batched run, re-run each still-failing id ALONE (one pytest per id) and return "
-    "those that pass as `passed_alone` (`[]` when none or when nothing failed). "
-)
+def _test_leg_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
+    """Run-scoped scratch file the test_leg_run JSON verdict is written to."""
+    token = re.sub(r"[^A-Za-z0-9._-]", "_", run_key or run_id or prep_slice_id) or "run"
+    return f"scratch/reverify-test-leg-{token}.json"
+
+
+def _test_leg_clause(base_ref: str, export_path: str, json_path: str) -> str:
+    """Step 2's single engine command running the pytest targets, base measure included; the base
+    arguments are omitted when the base is the unset placeholder."""
+    from coordinator_core.ops.test_leg_run import TEST_LEG_MINUTES_BUDGET
+
+    base = (
+        ""
+        if base_ref == "run_base_sha"
+        else f"--base-sha {base_ref} --head-sha HEAD --base-export-out {export_path} "
+    )
+    return (
+        f" Run all the pytest targets in ONE command, in the foreground through Bash with timeout {(TEST_LEG_MINUTES_BUDGET + 1) * 60_000} "
+        f"(create `scratch/` first if absent): `python -m coordinator_core.ops.test_leg_run {base}"
+        f"--out {json_path} -- <the pytest targets>`. Run it once: never repeat it, split it per id, "
+        "detach it or wait on it. Its JSON gives `failing`, `failing_detail` and `passed_alone`; the "
+        "node test files above are the only tests run outside it. "
+    )
 
 
 def _base_export_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
@@ -1083,7 +1149,8 @@ def _export_rerun_clause(run_id: str, repo_root: Optional[str], export_failing_p
 
     root = repo_root or "."
     command = engine_module_command(
-        _OVERLAY_VERIFY_MODULE, root, f"--export-run --run-id {run_id} --repo-root {Path(root).as_posix()} --"
+        _OVERLAY_VERIFY_MODULE, root, f"--export-run --run-id {run_id} --repo-root {Path(root).as_posix()} --",
+        portable=True,
     )
     return (
         "First re-run the failing ids ONCE in the run's clean export, never the whole re-verify: "
@@ -1096,29 +1163,25 @@ def _export_rerun_clause(run_id: str, repo_root: Optional[str], export_failing_p
 def _base_measure_clause(
     base_ref: str, owned_red_path: str = "", export_path: str = "", export_rerun: str = ""
 ) -> str:
-    """Prompt step measuring ``failing_at_base``: one reverify_base_measure run over the failing ids at the
-    snapshot base (and HEAD), writing ``export_path`` (revert calls pass it as ``base_export_path``).
-    ``export_rerun`` (the clean-export rerun step) leads the clause. Empty-set fallback when the base is
-    the unset placeholder.
+    """Prompt step reading ``failing_at_base`` from step 2's test_leg_run JSON (its ``pre_existing``),
+    validated against ``export_path``, which the same command wrote (revert calls pass it as
+    ``base_export_path``). ``export_rerun`` (the clean-export rerun step) leads the clause. Empty-set
+    fallback when the base is the unset placeholder.
 
     Its id placeholder must differ from step 4's "<all failing node ids>", which must appear exactly once."""
     owned = export_rerun + _owned_red_clause(owned_red_path)
     if base_ref == "run_base_sha":
         return (
             "The run base is unset: pass `\"failing_at_base\":[]` on every revert call. "
-            + _PASSED_ALONE_CLAUSE
-            + "Return `passed_at_base` [] (the base is unset). "
+            "Return `passed_alone` from step 2's JSON. Return `passed_at_base` [] (the base is unset). "
             + owned
         )
-    return owned + _PASSED_ALONE_CLAUSE + (
-        "Then measure which of the failing ids also fail at the run base, ONCE for all of them "
-        f"(never per test): `python -m coordinator_core.ops.reverify_base_measure --sha {base_ref} "
-        f"--head-sha HEAD --out {export_path} -- <the failing ids above>` (create `scratch/` first if absent; "
-        "it drops ids the run added and re-measures at HEAD itself, so run it once). "
-        "It writes that file: the ids on its `FAILED` lines are `failing_at_base`, valid only when the "
-        "trailing JSON line's `baseline_export` has `export` \"ok\" and `runner_exit` 0, 1 or 4; "
+    return owned + (
+        "Step 2's command already measured the failing ids at the run base: run nothing more for it. "
+        "`failing_at_base` is the JSON's `pre_existing`, valid only when the "
+        f"trailing JSON line of `{export_path}` has `baseline_export` `export` \"ok\" and `runner_exit` 0, 1 or 4; "
         "any other result or a missing file: `failing_at_base` is `[]`. "
-        "Return `passed_at_base` from that trailing line's `passed_at_base` key, under the same "
+        "Return `passed_at_base` from the JSON's `passed_at_base` key, under the same "
         "validity; otherwise `[]`. An id absent from the base is never in it: "
         "absence at base is not a pass. "
     )
@@ -1166,6 +1229,15 @@ def _reverify_phase(
     sidecars_js = _REVERIFY_SIDECARS_JS
     export_path = _base_export_file(run_key, run_id, prep_slice_id)
     base_path_arg = "" if base_ref == "run_base_sha" else f',"base_export_path":"{export_path}"'
+    test_leg = _test_leg_clause(base_ref, export_path, _test_leg_file(run_key, run_id, prep_slice_id))
+    from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND
+
+    owned_first = _REVERIFY_OWNED_FIRST_CLAUSE.format(
+        bound=TRIPWIRE_BOUND,
+        extra=", the verify-scope targets named below" if verify_scope_targets else "",
+        owned_scope=" (the union of the `owned` lists)" if group_prefixes else "",
+        tripwire_scope=" (the union in list order)" if group_prefixes else " in list order",
+    )
     export_failing_path = _export_failing_file(run_key, run_id, prep_slice_id) if run_id else ""
     base_path_arg += f',"export_failing_path":"{export_failing_path}"' if export_failing_path else ""
     export_rerun = _export_rerun_clause(run_id, repo_root, export_failing_path)
@@ -1197,22 +1269,24 @@ def _reverify_phase(
             "command word exactly as written (a guard denies the prefix moved into a shell "
             'variable). When a non-empty `session_id:` value is given in this brief, add it as '
             '`"session_id"` to each. The union of their `edited` and `created` lists is the files '
-            "review changed, the union of their `tripwires` lists names the test files whose source "
-            "names one of those files." + _REVERIFY_DERIVED_CLAUSE + " Return the union as `edited`. If every list is empty, "
+            "review changed, the union of their `owned` lists names the test files that own those files, the "
+            "union of their `tripwires` lists the other test files that import or name one, and the union of "
+            "their `tripwires_not_selected` lists the ones the engine cut." + _REVERIFY_DERIVED_CLAUSE + " Return the union as `edited`. If every list is empty, "
             "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + 'reverted [], status_before "not_run". '
             f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
-            "2. Run, and only run, the tests covering those files: the test files among them, every "
-            "file in the `tripwires` union, the test files that import an edited module"
+            "2. Run, and only run, the tests covering those files"
             + (
-                ", and the verify-scope test targets this map names for an edited path "
+                ", plus the verify-scope test targets this map names for an edited path "
                 f"(path to targets): {json.dumps({k: list(v) for k, v in sorted(verify_scope_targets.items())})}"
                 if verify_scope_targets
                 else ""
             )
             + ". Name each test file or node id; never a directory, a tier (the fast tier "
-            "included) or the full suite."
+            "included) or the full suite. "
+            + owned_first
             + _REVERIFY_NODE_TESTS_CLAUSE
-            + " Report every failing node id as `failing` and set "
+            + test_leg
+            + "Report every failing node id as `failing` and set "
             "status_before to pass when tests ran and none failed, else fail. "
             + _REVERIFY_NOTHING_RAN_CLAUSE
             + f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
@@ -1263,15 +1337,17 @@ def _reverify_phase(
         f"'{{{base_args}}}'{repo_pin}`, its command word exactly as written (a guard denies the "
         "prefix moved into a shell variable). When a non-empty `session_id:` value is given in "
         'this brief, add it as `"session_id"`. Its `edited` and `created` lists are the files '
-        "review changed. Its `tripwires` list names the test files whose source names one of "
-        "those files." + _REVERIFY_DERIVED_CLAUSE + " If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
+        "review changed. Its `owned` list names the test files that own those files, its `tripwires` list "
+        "the other test files that import or name one, and its `tripwires_not_selected` list the ones the "
+        "engine cut." + _REVERIFY_DERIVED_CLAUSE + " If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
         'status_before "not_run". '
         f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
-        "2. Run, and only run, the tests covering those files: the test files among them, every "
-        "file in `tripwires`, plus the test files that import an edited module. Name each test file or node id; never a "
-        "directory, a tier (the fast tier included) or the full suite."
+        "2. Run, and only run, the tests covering those files. Name each test file or node id; never a "
+        "directory, a tier (the fast tier included) or the full suite. "
+        + owned_first
         + _REVERIFY_NODE_TESTS_CLAUSE
-        + " Report every failing "
+        + test_leg
+        + "Report every failing "
         "node id as `failing` and set status_before to pass when tests ran and none failed, else fail. "
         + _REVERIFY_NOTHING_RAN_CLAUSE
         + f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
@@ -1903,7 +1979,7 @@ def compose_execute_review(
                     if slice_filter_js
                     else ""
                 )
-                + _PREP_GUARDS_JS
+                + _prep_guards_js(prep_slice_id if prep_run_id is not None else None)
                 + group_merge,
             )
         )
@@ -2297,7 +2373,7 @@ def compose_execute_review(
             + " } }"
         )
     if prep_in_wave:
-        wave_lines.append(_PREP_FROM_WAVE_JS + _PREP_GUARDS_JS)
+        wave_lines.append(_PREP_FROM_WAVE_JS + _prep_guards_js(prep_slice_id if prep_run_id is not None else None))
     if delivery_index is not None:
         offset_from_end = len(whole_diff_agents) - delivery_index
         wave_lines.append(

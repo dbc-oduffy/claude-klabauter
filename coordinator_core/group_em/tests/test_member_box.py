@@ -49,6 +49,35 @@ def wired(monkeypatch: pytest.MonkeyPatch):
     return wire
 
 
+@pytest.mark.parametrize(
+    ("name", "folded"),
+    [
+        ("Machine-b", "machine-b"),
+        ("machine-b.local", "machine-b"),
+        ("Machine-b-LAN", "machine-b"),
+        ("machine-b-lan.local", "machine-b"),
+        ("mac-mini", "mac-mini"),
+        ("machine-b-lan2", "machine-b-lan2"),
+        ("-lan", "-lan"),
+        (".local", ".local"),
+    ],
+)
+def test_fold_box_id_strips_only_case_dot_local_and_dash_lan(name, folded) -> None:
+    assert box_registry.fold_box_id(name) == folded
+
+
+def test_same_box_is_the_fold_equality() -> None:
+    assert box_registry.same_box("Machine-b.local", "machine-b-lan")
+    assert not box_registry.same_box("machine-b", "machine_b2")
+    assert not box_registry.same_box("machine-b", None)
+
+
+@pytest.mark.parametrize("token", ["machine-b-lan", "Machine-b-LAN", "example-operator@machine-b-lan"])
+def test_lan_spelling_resolves_to_the_member_box_id(tmp_path: Path, wired, token) -> None:
+    wired()
+    assert member_box.member_box_id(token, home=tmp_path) == "machine-b"
+
+
 @pytest.mark.parametrize("token", ["machine-b", "example-operator@machine-b", "machine-b.local", "example-operator@machine-b.local", "Machine-b"])
 def test_member_token_forms_register_an_ssh_row(tmp_path: Path, wired, token) -> None:
     wired()

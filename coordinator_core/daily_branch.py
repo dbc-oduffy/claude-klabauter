@@ -23,12 +23,13 @@ parsing/construction half:
   cs_format_span_suffix -> format_span_suffix
   cs_rename_target      -> rename_target
   cs_should_prompt_rename-> should_prompt_rename
+(no bash origin) day_branch_name — the one builder of <owner>/<machine>/<date>.
 
 is_work_branch / has_remote_prefix (2026-09-22, docs/plans/2026-09-22-work-branch-
 predicates-read-an-origin-prefixed-name.md) are the WORK-BRANCH oracle, distinct
-from is_allowed_branch/is_canonical_branch above: they answer "is this under
-work/, verbatim or behind exactly one leading origin/?", not "is this a
-well-formed work/{machine}/{date} shape?". is_allowed_branch/is_canonical_branch
+from is_allowed_branch/is_canonical_branch above: they answer "is this a work/
+branch or an <owner>/<machine>/<date|worker-*> branch, verbatim or behind exactly
+one leading origin/?", not "is this a well-formed <owner>/{machine}/{date} shape?". is_allowed_branch/is_canonical_branch
 stay narrow on purpose — widening them to accept origin/-prefixed or -N
 collision names would drop real work branches from auto-push (see that plan's
 gated_exit_criteria, right-not-merely-working (a)).
@@ -67,9 +68,18 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
-# work/<machine-segment>/<YYYY-MM-DD>[to<DD>] — the accepted daily/span shape.
-# Mirrors the bash grep -E pattern verbatim.
-_BRANCH_SHAPE_RE = re.compile(r"^work/[^/]+/[0-9]{4}-[0-9]{2}-[0-9]{2}(to[0-9]{2})?$")
+# <owner>/<machine-segment>/<YYYY-MM-DD>[to<DD>] — the accepted daily/span shape.
+# The owner is any one segment (legacy `work` is just one owner value) except
+# `origin`: the engine never mints that owner, so `origin/<x>/<date>` is a
+# remote-tracking ref, not a day branch.
+_BRANCH_SHAPE_RE = re.compile(
+    r"^(?!origin/)[^/]+/[^/]+/[0-9]{4}-[0-9]{2}-[0-9]{2}(to[0-9]{2})?$"
+)
+# Work-oracle tails: date/span (tolerating a -N collision suffix) or `worker-*`.
+# The any-owner form reads a name as written once the one-origin strip failed.
+_WORK_TAIL = r"(?:[0-9]{4}-[0-9]{2}-[0-9]{2}(?:to[0-9]{2})?(?:-[0-9]+)?|worker-[^/]+)"
+_THREE_SEG_ANY_OWNER_RE = re.compile(rf"^[^/]+/[^/]+/{_WORK_TAIL}$")
+_THREE_SEG_NO_ORIGIN_OWNER_RE = re.compile(rf"^(?!origin/)[^/]+/[^/]+/{_WORK_TAIL}$")
 _SPAN_SUFFIX_RE = re.compile(r"to[0-9]{2}$")
 _NON_SLUG_RE = re.compile(r"[^a-z0-9-]")
 
@@ -98,20 +108,20 @@ def sanitize_slug(raw: str) -> str:
 def parse_branch_span(name: str) -> Optional[Tuple[str, str]]:
     """Port of cs_parse_branch_span.
 
-    Given work/{machine}/{date-or-span}, return (start_date, end_date) as
+    Given {owner}/{machine}/{date-or-span} (owner a username, or legacy `work`), return (start_date, end_date) as
     YYYY-MM-DD strings. end_date == start_date for single-day branches. Returns
     None (bash: return 1) if not parseable as a daily/span branch.
 
     Accepted formats:
-      work/<machine>/YYYY-MM-DD       -> (YYYY-MM-DD, YYYY-MM-DD)
-      work/<machine>/YYYY-MM-DDtoDD   -> (YYYY-MM-DD, end) — month/year roll if end-DD < start-DD
+      <owner>/<machine>/YYYY-MM-DD       -> (YYYY-MM-DD, YYYY-MM-DD)
+      <owner>/<machine>/YYYY-MM-DDtoDD   -> (YYYY-MM-DD, end) — month/year roll if end-DD < start-DD
 
     Month/year boundary rule (the Staff Engineer F4, option b): if end-DD < start-DD, advance
     month by 1 (advance year by 1 on Dec->Jan). Advances at most one month —
     spans >~28 days route through the A/B/C reconciliation flow, not this parser.
 
-    Negative spec: rejects feature/foo, work/machine-a/feature-X, or invalid date
-    components (month > 12, day > 31).
+    Negative spec: rejects feature/foo, alice/machine-a/feature-X, a fourth
+    segment, an `origin/` owner, or invalid date components (month > 12, day > 31).
     """
     if name is None:
         return None
@@ -120,8 +130,8 @@ def parse_branch_span(name: str) -> Optional[Tuple[str, str]]:
     if not _BRANCH_SHAPE_RE.match(lc):
         return None
 
-    # Date portion is everything after the second '/'.
-    date_part = re.sub(r"^work/[^/]*/", "", lc)
+    # Date portion is the third segment (the regex guarantees exactly three).
+    date_part = lc.split("/")[2]
 
     start_year = date_part[0:4]
     start_month = date_part[5:7]
@@ -235,23 +245,33 @@ def record_day_branch_designation(repo_root, branch: str) -> bool:
         return False
 
 
-def is_work_branch(name: Optional[str]) -> bool:
-    """The work-branch oracle: is <name> under work/, verbatim or behind exactly
-    one leading origin/?
+def _is_work_shape(name: str, three_seg_re: "re.Pattern[str]") -> bool:
+    return name.startswith("work/") or three_seg_re.match(name) is not None
 
-    Negative spec: NOT a shape oracle (does not check work/{machine}/{date} —
-    use is_allowed_branch/is_canonical_branch for that), does NOT case-fold
-    (case-sensitive, unlike is_allowed_branch), strips at most one leading
-    origin/ (origin/origin/work/x is not a work branch), and does NOT resolve
-    or validate against a repo's actual configured remotes — origin/ is the
-    only literal accepted, per the malformation this oracle exists to read.
-    None returns False.
+
+def is_work_branch(name: Optional[str]) -> bool:
+    """The work-branch oracle: is <name> a work/ branch (legacy, any tail) or an
+    <owner>/<machine>/<date|span|worker-*> branch, verbatim or behind exactly one
+    leading origin/?
+
+    A leading origin/ is stripped only when the remainder is itself a work
+    branch; otherwise the name is tested as written, so `origin/box1/2026-11-17`
+    (owner-less remote read) is a work branch and `origin/origin/box1/2026-11-17`
+    is not.
+
+    Negative spec: NOT a shape oracle (does not check {owner}/{machine}/{date}
+    exactly — use is_allowed_branch/is_canonical_branch for that), does NOT
+    case-fold (case-sensitive, unlike is_allowed_branch), strips at most one
+    leading origin/, and does NOT resolve or validate against a repo's actual
+    configured remotes — origin/ is the only literal accepted. None returns False.
     """
     if name is None:
         return False
-    if name.startswith(_ORIGIN_PREFIX):
-        name = name[len(_ORIGIN_PREFIX):]
-    return name.startswith("work/")
+    if name.startswith(_ORIGIN_PREFIX) and _is_work_shape(
+        name[len(_ORIGIN_PREFIX):], _THREE_SEG_NO_ORIGIN_OWNER_RE
+    ):
+        return True
+    return _is_work_shape(name, _THREE_SEG_ANY_OWNER_RE)
 
 
 def has_remote_prefix(name: Optional[str]) -> bool:
@@ -269,8 +289,8 @@ def has_remote_prefix(name: Optional[str]) -> bool:
 def is_allowed_branch(name: str, configured_day_branch: Optional[str] = None) -> bool:
     """Port of cs_is_allowed_branch — the SHAPE oracle (case-insensitive).
 
-    True iff <name> is main, or any work/{machine}/{date-or-span} that parses via
-    parse_branch_span. Case-insensitive by design so remediation paths (rename
+    True iff <name> is main, or any {owner}/{machine}/{date-or-span} (owner a
+    username or legacy `work`) that parses via parse_branch_span. Case-insensitive by design so remediation paths (rename
     prompts, migration scripts) can recognise mixed-case input as "valid shape,
     wrong case" and fix it. For creation-time canonical-case enforcement use
     is_canonical_branch.
@@ -279,7 +299,7 @@ def is_allowed_branch(name: str, configured_day_branch: Optional[str] = None) ->
     designation), an EXACT match against it is allowed regardless of shape —
     the designated branch IS the day branch, whatever schema minted it.
 
-    Negative spec: rejects feature/foo, work/machine-a/feature-X, hotfix/*, etc.
+    Negative spec: rejects feature/foo, alice/machine-a/feature-X, hotfix/*, etc.
     """
     if name is None:
         return False
@@ -324,27 +344,40 @@ def format_span_suffix(start_date: str, today: str) -> str:
     return f"{start_date}to{end_dd}"
 
 
-def rename_target(machine: str, start_date: str, today: str, commits_ahead) -> str:
+def day_branch_name(owner: str, machine: str, date_part: str) -> str:
+    """The one builder of a day-branch name: <owner>/<machine>/<date-or-span>.
+
+    Negative spec: pure string join — resolves nothing (callers pass
+    `machine_resolver.compute_owner()` / `compute_machine()`), validates nothing,
+    sanitizes nothing.
+    """
+    return f"{owner}/{machine}/{date_part}"
+
+
+def rename_target(
+    machine: str, start_date: str, today: str, commits_ahead, *, owner: str = "work"
+) -> str:
     """Port of cs_rename_target — midnight-rename target chooser (Check 4).
 
     When commits_ahead == 0 the branch history has all merged (or main moved ahead)
     — a span name would misleadingly advertise multi-day WIP that no longer exists,
-    so the target is today-only work/{machine}/{today}. When commits_ahead > 0 the
+    so the target is today-only {owner}/{machine}/{today}. When commits_ahead > 0 the
     span is honest and carries the genuine WIP forward.
 
     Detect-then-fail-loud on non-integer input (the bash `[[ "" -eq 0 ]]` footgun):
     raises ValueError rather than silently selecting the 0-ahead path.
 
     Negative spec: does NOT touch git — the caller supplies commits_ahead so this
-    is unit-testable without a repo.
+    is unit-testable without a repo — and does NOT resolve ``owner``: the caller
+    passes `compute_owner()`; the default `work` is the legacy owner.
     """
     if not re.fullmatch(r"[0-9]+", str(commits_ahead)):
         raise ValueError(
             f"rename_target: commits_ahead must be a non-negative integer, got '{commits_ahead}'"
         )
     if int(commits_ahead) == 0:
-        return f"work/{machine}/{today}"
-    return f"work/{machine}/{format_span_suffix(start_date, today)}"
+        return day_branch_name(owner, machine, today)
+    return day_branch_name(owner, machine, format_span_suffix(start_date, today))
 
 
 def should_prompt_rename(

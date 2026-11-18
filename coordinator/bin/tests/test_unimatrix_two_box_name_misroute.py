@@ -55,7 +55,8 @@ def mirror(far_row, mirror_name, near_sock, far_name=None, sid=None, live: bool 
     return {"name": mirror_name, "unimatrixFarName": far_name or far_row["name"], "vendor": "claude",
             "sessionId": sid or far_row["sessionId"], "messagingSocketPath": near_sock,
             "macSocketPath": far_row["messagingSocketPath"], "farPid": far_row["pid"],
-            "unimatrixRemote": "machine-a-lan", "box": "machine-a", "pid": os.getpid() if live else dead_pid()}
+            "unimatrixRemote": "machine-a-lan", "box": "machine-a", "pid": os.getpid() if live else dead_pid(),
+            **router._roster().supervisor_fields(), **router._roster().far_seen_fields()}
 
 
 def near_box(tmp_path, rows):

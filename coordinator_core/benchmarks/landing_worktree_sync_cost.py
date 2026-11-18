@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import statistics
 import subprocess
 import sys
@@ -24,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.win_portability import no_console_creationflags
 
 BAR_MS = 500.0
@@ -135,7 +135,7 @@ def measure_once() -> dict:
             "sync_alone_git_spawns": sync_spawns,
         }
     finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        rmtree_or_raise(scratch, label="landing-sync-bench")
 
 
 def main(argv: List[str] | None = None) -> int:

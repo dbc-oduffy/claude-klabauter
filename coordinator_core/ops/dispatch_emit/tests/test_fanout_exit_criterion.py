@@ -206,6 +206,7 @@ const REPO_ROOT = 'REPO';
 const _manifest = %(manifest)s;
 const _agentDefsClause = () => '';
 const _rowSidecar = () => '';
+const _briefPrecedenceTail = '';
 const _runBase = 'a'.repeat(40);
 const _rowPlan = {};
 const _verdictReports = [];

@@ -35,7 +35,6 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(agents, "shape_codex_child", functools.partial(
         codex_spawn_env.shape_codex_child, environ={"ProgramFiles": str(pf)}, windows=True))
     monkeypatch.setattr(agents, "preflight_auth", lambda **_kw: None)
-    monkeypatch.setattr(agents, "check_workspace_write", lambda *a, **kw: None)
     monkeypatch.setattr(agents, "resolve_codex", lambda **_kw: ["codex"])
     monkeypatch.setattr(agents, "_protected_observer_path", lambda *a, **kw: None)
     seen = {}

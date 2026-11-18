@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -27,7 +28,6 @@ from coordinator_core.bash_guards import chain_arrival_ledger as cal
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
-from pathlib import Path
 
 _LEDGER_NAME = "chain-arrival-ledger.jsonl"
 

@@ -17,7 +17,7 @@ from pathlib import Path
 
 _OBJ = {"attempts_n": 2, "minutes": 90, "tokens": 1_000_000, "ceiling_spend_usd": 10.0,
         "ceiling_wall_minutes": 480, "falsifier_script": "state/warp/run-1/falsify.py"}
-_LINE = "Objective: read state/warp/run-1/objective.json on entry"
+_LINE = re.compile(r"Objective: read \S*state/warp/run-1/objective\.json on entry")
 
 
 @pytest.fixture
@@ -33,9 +33,9 @@ def test_no_objective_composes_no_objective_leg(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_every_ledger_carrying_prompt_names_the_objective_next_to_the_ledger(script) -> None:
-    assert script.count(_LINE) >= 2
+    assert len(_LINE.findall(script)) >= 2
     for m in re.finditer(r"Requirements ledger: read ", script):
-        assert _LINE in script[m.start(): m.start() + 1500]
+        assert _LINE.search(script[m.start(): m.start() + 1500])
 
 
 def test_calibration_runs_before_the_first_execute_row_and_halts_the_rows_on_failure(script) -> None:

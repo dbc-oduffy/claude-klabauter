@@ -83,7 +83,7 @@ def test_main_copy_gate_result_source_dir_is_the_shadow_not_raw_source(monkeypat
     monkeypatch.setattr(
         publish,
         "_git_materialize_ref",
-        lambda root, ref="HEAD": shadow_path,
+        lambda root, ref="HEAD", **_kw: shadow_path,
     )
 
     result = publish.run_pre_sync_gates(

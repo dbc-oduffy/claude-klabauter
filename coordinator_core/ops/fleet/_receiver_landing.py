@@ -1,7 +1,8 @@
 """Which ref a memo delivery lands on in a receiver clone: the receiver repo's live work branch.
 
-The live branch is the ``work/*`` tip with the newest committer time among the clone's local
-``refs/heads/work/*`` and every remote's ``refs/remotes/<remote>/work/*`` (loose + packed-refs).
+The live branch is the day-branch tip with the newest committer time among the clone's local
+``refs/heads/{work,<owner>}/*`` and every remote's ``refs/remotes/<remote>/{work,<owner>}/*``
+(loose + packed-refs); ``<owner>`` is ``compute_owner()``, legacy ``work/`` stays read.
 The name is read off the receiver's refs, never derived from the sending box or from which
 branch the clone happens to have checked out. Everything here is zero-spawn.
 
@@ -76,6 +77,7 @@ def _work_refs(common_dir: Path) -> dict[str, str]:
     non-hex ref body is dropped.
     """
     refs: dict[str, str] = {}
+    prefixes = _day_branch_prefixes()
     try:
         text = (common_dir / "packed-refs").read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -87,16 +89,41 @@ def _work_refs(common_dir: Path) -> dict[str, str]:
         name = name.strip()
         if not _HEX40.fullmatch(sha):
             continue
-        if name.startswith(_HEADS + _WORK):
+        if name.startswith(_HEADS):
+            branch = name[len(_HEADS):]
+        elif name.startswith(_REMOTES):
+            branch = name[len(_REMOTES):].partition("/")[2]
+        else:
+            continue
+        if _is_day_ref(branch, prefixes):
             refs[name] = sha
-        elif name.startswith(_REMOTES) and name[len(_REMOTES):].partition("/")[2].startswith(_WORK):
-            refs[name] = sha
-    _walk_loose(common_dir / "refs" / "heads" / "work", _HEADS + _WORK, refs)
     remotes = common_dir / "refs" / "remotes"
-    if remotes.is_dir():
-        for remote in remotes.iterdir():
-            _walk_loose(remote / "work", f"{_REMOTES}{remote.name}/{_WORK}", refs)
+    for prefix in prefixes:
+        scratch: dict[str, str] = {}
+        _walk_loose(common_dir / "refs" / "heads" / prefix.rstrip("/"), _HEADS + prefix, scratch)
+        if remotes.is_dir():
+            for remote in remotes.iterdir():
+                _walk_loose(remote / prefix.rstrip("/"), f"{_REMOTES}{remote.name}/{prefix}", scratch)
+        for name, sha in scratch.items():
+            branch = _branch_of(name)
+            if _is_day_ref(branch, prefixes):
+                refs[name] = sha
     return refs
+
+
+def _day_branch_prefixes() -> tuple[str, ...]:
+    """The legacy `work/` prefix plus this box's `<owner>/` prefix, deduped."""
+    from coordinator_core.machine_resolver import compute_owner
+
+    owner = f"{compute_owner()}/"
+    return (_WORK,) if owner == _WORK else (_WORK, owner)
+
+
+def _is_day_ref(branch: str, prefixes: tuple[str, ...]) -> bool:
+    """Legacy `work/` takes any tail; an owner prefix takes only a day/worker branch shape."""
+    if branch.startswith(_WORK):
+        return True
+    return branch.startswith(prefixes[-1]) and daily_branch.is_work_branch(branch)
 
 
 def _branch_of(ref: str) -> str:

@@ -128,7 +128,10 @@ def test_failed_relay_notifies_the_sender_and_status_reports_failed(bridge, monk
 def test_successful_relay_sends_no_notice_and_status_reports_delivered(bridge, monkeypatch):
     stub_ssh(monkeypatch, 0)
     send(bridge)
-    assert bridge.written == []
+    assert failure_notices(bridge) == []
+    # A bare ok names no receiver, so the sender gets an unconfirmed-delivery ack, never a failure.
+    (endpoint, frame), = bridge.written
+    assert endpoint == SENDER and "receiver unconfirmed" in json.loads(frame)["message"]
     assert [s.split()[0] for s in bridge.delivery_status()] == ["delivered"]
 
 
@@ -165,6 +168,10 @@ def test_status_command_runs_at_default_arguments(bridge, monkeypatch, capsys):
     assert capsys.readouterr().out.startswith("FAILED")
 
 
+def failure_notices(bridge):
+    return [w for w in bridge.written if "Delivery failed" in json.loads(w[1])["message"]]
+
+
 def send_many(bridge, n):
     lines = b"".join(json.dumps({"from": "uds:" + SENDER, "message": f"m{i}"}).encode() + b"\n" for i in range(n))
     bridge.relay_send(FakeConn(lines))
@@ -187,7 +194,7 @@ def test_n_lines_go_in_one_ssh_and_each_gets_a_record(bridge, monkeypatch):
     assert len(calls) == 1 and re.fullmatch(SEND_SESSION, calls[0][0])
     assert calls[0][1].count(b"\n") == 3
     assert [s.split()[0] for s in bridge.delivery_status()] == ["delivered", "FAILED", "delivered"]
-    (endpoint, frame), = bridge.written
+    (endpoint, frame), = failure_notices(bridge)
     assert endpoint == SENDER and "gone" in json.loads(frame)["message"]
 
 
@@ -205,7 +212,10 @@ def test_a_reply_less_exit_0_is_acked_from_the_far_receipts(bridge, monkeypatch)
     calls = record_ssh(monkeypatch, far)
     send_many(bridge, 2)
     assert [c[0].split()[0] for c in calls] == ["send-session", "receipts"]
-    assert [s.split()[0] for s in bridge.delivery_status()] == ["delivered", "delivered"] and bridge.written == []
+    assert [s.split()[0] for s in bridge.delivery_status()] == ["delivered", "delivered"]
+    # A bare ok names no receiver, so each sender is told delivery is unconfirmed, not failed.
+    assert failure_notices(bridge) == [] and len(bridge.written) == 2 and all(
+        "receiver unconfirmed" in json.loads(f)["message"] for _, f in bridge.written)
 
 
 def test_old_relay_usage_error_is_a_recorded_failure_not_a_per_line_resend(bridge, monkeypatch):

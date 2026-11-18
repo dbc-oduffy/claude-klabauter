@@ -59,8 +59,12 @@ def check_file(path: Path) -> str:
 
 
 def main(argv: list[str]) -> int:
+    usage = "usage: %s --apply|--check <settings.json>" % argv[0]
+    if len(argv) == 2 and argv[1] in ("-h", "--help"):
+        print(usage)
+        return 0
     if len(argv) != 3 or argv[1] not in ("--apply", "--check"):
-        print("usage: %s --apply|--check <settings.json>" % argv[0], file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
     path = Path(argv[2])
     try:

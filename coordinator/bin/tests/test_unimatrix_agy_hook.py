@@ -87,14 +87,20 @@ def test_no_leg_rewrites_with_detached_launch_and_asks(home):
     assert "nohup" in new and "/Users/" not in new.replace(str(pre.LAUNCH), "").replace(sys.executable, "")
 
 
-def test_current_leg_leaves_command_alone(home, ls_server):
+def test_current_leg_leaves_command_alone(home, ls_server, monkeypatch):
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
+    stub_guard(monkeypatch, {"decision": "ask"})
     assert_bare_ask(pre.decide(run_payload(), 4242))
 
 
 def assert_bare_ask(out):
     """An ask that carries no rewrite; the guard's degrade advisory text may ride along."""
     assert out["decision"] == "ask" and "overwrite" not in out
+
+
+def assert_fail_open(out):
+    """The no-verdict answer: an allow whose reason keeps the fail-open benchmarks' marker."""
+    assert out["decision"] == "allow" and "guard did not run" in out["reason"] and "overwrite" not in out
 
 
 @posix_rewrite
@@ -126,11 +132,15 @@ def test_dead_leg_pid_is_rewritten(home, ls_server, monkeypatch):
     run_payload(conv="../escape"),
     {"conversationId": CONV},
     {"toolCall": None},
-    [1, 2],
-    "text",
 ])
-def test_non_rewrite_inputs_pass_without_overwrite(home, payload):
+def test_non_rewrite_inputs_pass_without_overwrite(home, monkeypatch, payload):
+    stub_guard(monkeypatch, {"decision": "ask"})
     assert_bare_ask(pre.decide(payload, 4242))
+
+
+@pytest.mark.parametrize("payload", [[1, 2], "text", None])
+def test_non_dict_payload_is_a_fail_open_allow(home, payload):
+    assert_fail_open(pre.decide(payload, 4242))
 
 
 def stub_guard(monkeypatch, answer):
@@ -160,15 +170,15 @@ def test_guard_ask_with_current_leg_keeps_guard_reason_without_overwrite(home, l
     assert pre.decide(run_payload(), 4242) == {"decision": "ask", "reason": "guard says look"}
 
 
-def test_guard_down_current_leg_is_bare_ask(home, ls_server):
+def test_guard_down_current_leg_allows_without_overwrite(home, ls_server):
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
-    assert_bare_ask(pre.decide(run_payload(), 4242, str(home / "no-engine")))
-
-
-@posix_rewrite
-def test_guard_down_stale_leg_asks_with_overwrite(home):
     out = pre.decide(run_payload(), 4242, str(home / "no-engine"))
-    assert out["decision"] == "ask" and "overwrite" in out
+    assert out["decision"] == "allow" and "overwrite" not in out
+
+
+def test_guard_down_stale_leg_allows_without_rewrite(home):
+    out = pre.decide(run_payload(), 4242, str(home / "no-engine"))
+    assert out["decision"] == "allow" and "overwrite" not in out
 
 
 def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
@@ -177,17 +187,30 @@ def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
     assert pre.decide(run_payload(name="write_file"), 4242) == deny
 
 
-def test_unloadable_guard_degrades_to_ask(home, monkeypatch):
+def test_unloadable_guard_fails_open_to_allow(home, monkeypatch):
     monkeypatch.setattr(pre, "load_sibling", lambda name: 1 / 0)
-    assert pre.run_guard("{}", None) == {"decision": "ask"}
+    assert_fail_open(pre.run_guard("{}", None))
 
 
-def test_no_path_emits_allow_or_force_ask(home, monkeypatch):
+def test_malformed_guard_answer_fails_open_to_allow(home, monkeypatch):
+    class Guard:
+        answers = iter([{"reason": "no decision"}, {"decision": 7}, "text"])
+
+        def guard(self, host, raw, root):
+            return next(self.answers), "engine"
+
+    monkeypatch.setattr(pre, "load_sibling", lambda name: Guard())
+    for _ in range(3):
+        assert_fail_open(pre.run_guard("{}", None))
+
+
+def test_guard_ask_stays_ask_and_allow_only_comes_from_no_verdict_or_peer_reply(home, monkeypatch):
     for guard_answer in ({"decision": "ask"}, {"decision": "ask", "reason": "r"}):
         stub_guard(monkeypatch, guard_answer)
-        for payload in (run_payload(), run_payload(name="read_file"), {}, []):
-            text = json.dumps(pre.decide(payload, 4242))
-            assert '"allow"' not in text and "force_ask" not in text
+        for payload in (run_payload(), run_payload(name="read_file"), {}):
+            out = pre.decide(payload, 4242)
+            assert out["decision"] == "ask" and "force_ask" not in json.dumps(out)
+        assert_fail_open(pre.decide([], 4242))
 
 
 SEND = str(pre.SEND_SCRIPT)
@@ -240,12 +263,12 @@ def test_engine_root_argument_reaches_the_guard(home, monkeypatch, capsys):
     assert seen[0][1] == "/eng" and json.loads(capsys.readouterr().out)["decision"] == "ask"
 
 
-@posix_rewrite
-def test_entry_point_with_missing_engine_root_still_asks(home):
+def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
     r = subprocess.run([sys.executable, str(PRETOOL), "--engine-root", str(home / "none")],
                        input=json.dumps(run_payload()), capture_output=True, text=True,
                        env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
-    assert r.returncode == 0 and json.loads(r.stdout)["decision"] == "ask" and "overwrite" in json.loads(r.stdout)
+    out = json.loads(r.stdout)
+    assert r.returncode == 0 and out["decision"] == "allow" and "overwrite" not in out
 
 
 def hook(stdin, home):
@@ -257,7 +280,24 @@ def hook(stdin, home):
 def test_entry_point_always_emits_one_decision_and_exits_zero(home, stdin):
     r = hook(stdin, home)
     assert r.returncode == 0
-    assert json.loads(r.stdout)["decision"] == "ask"
+    assert json.loads(r.stdout)["decision"] == "allow"
+
+
+@pytest.mark.parametrize("stdin", ["", "not json", "[]"])
+def test_entry_point_with_no_verdict_input_names_the_guard_did_not_run(home, stdin):
+    r = hook(stdin, home)
+    assert r.returncode == 0
+    assert_fail_open(json.loads(r.stdout))
+
+
+def test_entry_point_stays_under_the_process_time_bar(home, monkeypatch, capsys):
+    import time
+    stub_guard(monkeypatch, {"decision": "allow"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload(name="read_file"))))
+    t0 = time.process_time()
+    assert pre.main() == 0
+    assert time.process_time() - t0 < 0.5
+    assert json.loads(capsys.readouterr().out)["decision"] == "allow"
 
 
 @posix_rewrite
@@ -271,7 +311,33 @@ def test_internal_exception_still_emits_decision(home, monkeypatch, capsys):
     monkeypatch.setattr(pre, "decide", lambda *a: 1 / 0)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
     assert pre.main() == 0
-    assert json.loads(capsys.readouterr().out)["decision"] == "ask"
+    assert_fail_open(json.loads(capsys.readouterr().out))
+
+
+def test_missing_worker_output_fails_open(home, monkeypatch, capsys):
+    monkeypatch.setattr(pre, "_answer", lambda argv, result: None)
+    assert pre.main([]) == 0
+    assert_fail_open(json.loads(capsys.readouterr().out))
+
+
+def test_unrunnable_guard_through_main_fails_open(home, monkeypatch, capsys):
+    monkeypatch.setattr(pre, "load_sibling", lambda name: 1 / 0)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
+    assert pre.main() == 0
+    assert_fail_open(json.loads(capsys.readouterr().out))
+
+
+def test_guard_deny_and_bootstrap_ask_survive_through_main(home, monkeypatch, capsys):
+    stub_guard(monkeypatch, {"decision": "deny", "reason": "blocked"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
+    assert pre.main() == 0
+    assert json.loads(capsys.readouterr().out) == {"decision": "deny", "reason": "blocked"}
+    stub_guard(monkeypatch, {"decision": "ask"})
+    monkeypatch.setattr(pre, "launch_prefix", lambda conv, agy_pid: ("START", "; "))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
+    assert pre.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["decision"] == "ask" and out["overwrite"]["CommandLine"] == "START; ls -la"
 
 
 def test_windows_adds_no_cmd_prefix_and_passes_command_through(home, monkeypatch):
@@ -570,6 +636,33 @@ def test_sessionstart_with_only_conversation_id_registers_a_pending_leg(home, mo
     assert out["injectSteps"][0]["systemMessage"] == {"systemMessage": sess.NOTE}
 
 
+def test_stashed_pretool_advisories_are_injected_once_at_preinvocation(home, capsys, monkeypatch):
+    from coordinator_core.host_hooks.agy_adapter import AgyAdapter, advisory_dir
+    adapter = AgyAdapter()
+    ev = adapter.adapt_event({"conversationId": CONV, "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}})
+    adapter.render(ev, {"decision": "ask", "reason": "nag one"})
+    adapter.render(ev, {"decision": "ask", "reason": "nag one"})
+    adapter.render(ev, {"decision": "ask", "reason": "nag two"})
+    assert advisory_dir() == pre.advisory_dir()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"conversationId": CONV, "hookEventName": "PreInvocation"})))
+    assert pre.main(["--event", "PreInvocation"]) == 0
+    steps = json.loads(capsys.readouterr().out)["injectSteps"]
+    assert [s["systemMessage"]["systemMessage"] for s in steps] == ["nag one", "nag two"]
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"conversationId": CONV})))
+    assert pre.main(["--event", "PreInvocation"]) == 0
+    assert json.loads(capsys.readouterr().out) == {}
+
+
+def test_preinvocation_never_delivers_another_conversations_advisory_or_fails_on_bad_stdin(home, capsys, monkeypatch):
+    from coordinator_core.host_hooks.agy_adapter import stash_advisory
+    stash_advisory("other-conv", "theirs")
+    for raw in (json.dumps({"conversationId": CONV}), "not json", json.dumps({"conversationId": "../x"})):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(raw))
+        assert pre.main(["--event", "PreInvocation"]) == 0
+        assert json.loads(capsys.readouterr().out) == {}
+    assert list((pre.advisory_dir() / "other-conv").glob("*.txt"))
+
+
 def test_pending_leg_is_never_current_for_the_pretool_rewrite(home, ls_server):
     write_leg(home, pid=os.getpid(), agy_pid=1234, ls=ls_server)
     path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
@@ -662,7 +755,29 @@ def test_ancestor_walk_takes_the_nearest_agy():
 def test_ancestor_walk_never_takes_a_non_agy_parent(capsys):
     tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (400, "cmd.exe"), 400: (1, "explorer.exe")}
     assert pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID) is None
-    assert "no agy ancestor" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("daemon", ["agy-daemon.exe", "agy_daemon", "antigravity-ls"])
+def test_ancestor_walk_resolves_the_daemon_without_stderr(daemon, capsys):
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (2895, "cmd.exe"), 2895: (1, daemon)}
+    assert pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID) == 2895
+    assert capsys.readouterr().err == ""
+
+
+def test_ancestor_walk_prefers_the_cli_over_a_nearer_daemon_and_reads_print_mode():
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (2895, "cmd.exe"), 2895: (AGY_PID, "agy-daemon.exe"),
+            AGY_PID: (1, "agy.exe")}
+    pid = pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID)
+    assert pid == AGY_PID
+    lines = {AGY_PID: "agy.exe -p hi", 2895: "agy-daemon.exe"}
+    assert pre.agy_print_mode(pid, read=lines.get) is True
+    assert pre.agy_print_mode(2895, read=lines.get) is False
+
+
+def test_ancestor_walk_refuses_look_alike_names(capsys):
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (400, "cmd.exe"), 400: (1, "agyx.exe")}
+    assert pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID) is None
 
 
 def test_ancestor_walk_respects_the_depth_bound():
@@ -740,7 +855,7 @@ def test_sessionstart_with_no_agy_ancestor_records_none(home, agy_env, monkeypat
     _sess_with_tree(monkeypatch, tree, {"conversationId": CONV})
     sess.main()
     assert json.loads(record_path(home).read_text())["agy_pid"] is None
-    assert "no agy ancestor" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize("payload,expected", [
@@ -789,6 +904,58 @@ def test_print_mode_passes_ask_through_with_no_overwrite_and_no_spawn(home, monk
     assert spawned == []
 
 
+DAEMON_PID, CLI_PID = 2895, 3001
+
+
+def _daemon_world(monkeypatch, cli_line, *, spawned=None):
+    """A hook parented by the agy daemon: the walk yields the daemon pid, the headless/interactive CLI is the
+    daemon's child. Source: observed 2026-11-16 (hooks run under agy's daemon pid, not the CLI process)."""
+    lines = {DAEMON_PID: "agy-daemon --serve", CLI_PID: cli_line}
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(pre, "process_cmdline", lines.get)
+    monkeypatch.setattr(pre, "child_pids", lambda pid: [CLI_PID] if pid == DAEMON_PID else [])
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd) if spawned is not None else None)
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (DAEMON_PID, "cmd.exe"), DAEMON_PID: (1, "agy-daemon.exe")}
+    pid = pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID)
+    assert pid == DAEMON_PID
+    return pid
+
+
+def test_headless_cli_under_a_daemon_parented_hook_gets_no_rewrite_through_decide(home, monkeypatch, capsys):
+    spawned = []
+    pid = _daemon_world(monkeypatch, 'agy -p="Run exactly: git grep x" --output-format json', spawned=spawned)
+    stub_guard(monkeypatch, {"decision": "ask"})
+    out = pre.decide(run_payload(cmd="git grep -n x -- coordinator/tests"), pid)
+    assert out == {"decision": "ask"} and "overwrite" not in out
+    assert spawned == [] and capsys.readouterr().err == ""
+
+
+@posix_rewrite
+def test_interactive_cli_under_a_daemon_parented_hook_still_rewrites_through_decide(home, monkeypatch):
+    pid = _daemon_world(monkeypatch, "agy chat")
+    stub_guard(monkeypatch, {"decision": "ask"})
+    assert "overwrite" in pre.decide(run_payload(cmd="ls -la"), pid)
+
+
+def test_print_mode_reads_the_cli_children_of_the_daemon_not_the_daemon_alone(monkeypatch):
+    _daemon_world(monkeypatch, "agy.exe --print hi")
+    assert pre.agy_print_mode(DAEMON_PID) is True
+    monkeypatch.setattr(pre, "process_cmdline", {DAEMON_PID: "agy-daemon", CLI_PID: "agy chat"}.get)
+    assert pre.agy_print_mode(DAEMON_PID) is False
+
+
+def test_child_pids_on_macos_reads_one_ps_table(monkeypatch):
+    monkeypatch.setattr(pre.sys, "platform", "darwin")
+    monkeypatch.setattr(pre.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout="  1 0\n 30 2895\n 31 2895\n 40 31\n junk\n", stderr=""))
+    assert pre.child_pids(2895) == [30, 31]
+
+    def boom(*a, **kw):
+        raise OSError("no ps")
+
+    monkeypatch.setattr(pre.subprocess, "run", boom)
+    assert pre.child_pids(2895) == []
+
+
 @posix_rewrite
 def test_interactive_agy_still_rewrites_and_unreadable_cmdline_is_not_print_mode(home, monkeypatch):
     assert "overwrite" in pre.decide(run_payload(), 4242)
@@ -814,7 +981,7 @@ def test_process_cmdline_reads_a_real_process():
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked guard holds the hook before the wall answers, a wait CPU time cannot see")
-def test_blocked_guard_answers_open_within_the_wall_and_records_hook_wall(home, monkeypatch, capsys):
+def test_blocked_guard_answers_fail_open_within_the_wall_and_records_hook_wall(home, monkeypatch, capsys):
     import threading
     import time
     release = threading.Event()
@@ -830,7 +997,7 @@ def test_blocked_guard_answers_open_within_the_wall_and_records_hook_wall(home, 
         release.set()
     assert time.monotonic() - t0 < 0.3 + 0.2
     out = json.loads(capsys.readouterr().out)
-    assert out["decision"] == "ask" and out["reason"]
+    assert_fail_open(out)
     assert exits == [0]
     rows = [json.loads(line) for line in
             (home / "host-hooks" / "host-guard-degrades.jsonl").read_text().splitlines()]

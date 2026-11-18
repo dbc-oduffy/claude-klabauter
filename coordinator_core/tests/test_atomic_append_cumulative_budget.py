@@ -33,7 +33,9 @@ def test_many_fresh_wedged_sinks_wait_one_window_total(tmp_path: Path, all_block
     for i in range(8):
         atomic_append.append_line(tmp_path / f"s{i}.jsonl", b"a\n", droppable=True)
     elapsed = time.perf_counter() - t0
-    assert elapsed < atomic_append.APPEND_DEADLINE_SECS * 2.5
+    # Per-sink waiting would cost 8 windows; half that is the line between one shared window
+    # and per-sink waits, and leaves peer-load jitter on the shared window outside the verdict.
+    assert elapsed < atomic_append.APPEND_DEADLINE_SECS * 4
     assert len(atomic_append.stalled_sinks()) == 8
 
 

@@ -127,3 +127,29 @@ def test_a_non_sharing_failure_raises_at_once_and_leaves_no_temp(tmp_path: Path,
 
     assert calls == [1]
     assert [p.name for p in tmp_path.iterdir()] == []
+
+
+def test_the_interpreter_sidecar_retries_a_sharing_violation_and_leaves_no_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exe = tmp_path / "door.exe"
+    real_replace = os.replace
+    calls = []
+
+    def flaky_replace(src, dst) -> None:
+        calls.append(dst)
+        if len(calls) < 3:
+            raise PermissionError(13, "Permission denied")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(door_build.os, "replace", flaky_replace)
+    monkeypatch.setattr(door_build.time, "sleep", lambda _s: None)
+    door_build.write_python_sidecar(exe, tmp_path / "python.exe")
+
+    assert len(calls) == 3
+    assert [p.name for p in tmp_path.iterdir()] == [door_build.PYTHON_SIDECAR_FILENAME]
+
+
+def test_writing_the_engine_root_sidecar_does_not_create_the_interpreter_sidecar(tmp_path: Path) -> None:
+    door_build.write_sidecar(tmp_path / "door.exe", tmp_path)
+    assert not (tmp_path / door_build.PYTHON_SIDECAR_FILENAME).exists()

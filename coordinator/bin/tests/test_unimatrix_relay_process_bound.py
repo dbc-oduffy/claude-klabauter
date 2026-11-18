@@ -118,11 +118,10 @@ def test_dead_codex_face_is_not_mirrored_and_leaves_no_mirror_entry_after_the_bo
     monkeypatch.setattr(mod, "ensure_router", lambda say, wait=3.0: False)
     monkeypatch.setattr(mod.signal, "signal", lambda *a: None)
 
-    def stop(_seconds):
+    def stop(*_a, **_k):
         raise _Stop
 
-    monkeypatch.setattr(mod, "time", SimpleNamespace(
-        strftime=time.strftime, gmtime=time.gmtime, time=time.time, monotonic=time.monotonic, sleep=stop))
+    monkeypatch.setattr(mod._roster(), "wait_or_stop", stop)
     with pytest.raises(_Stop):
         mod.main([str(tmp_path / "m.log"), "--remote", "farbox", "--key", "k"])
     assert not any("codex-dead-face" in part for cmd in spawned for part in cmd), (

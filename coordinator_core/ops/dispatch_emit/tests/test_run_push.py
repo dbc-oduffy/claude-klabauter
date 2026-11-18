@@ -43,6 +43,25 @@ def test_work_branch_owned_remote_nudges(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert calls == [tmp_path]
 
 
+def test_command_when_queued_answers_not_pushed_with_the_push_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, calls
+) -> None:
+    _setup(monkeypatch, "work/machine-a/2026-10-28", remote="upstream")
+    r = run_push.nudge_push(tmp_path, tmp_path, command_when_queued=True)
+    assert r["status"] == "not_pushed"
+    assert r["command"] == "git push upstream HEAD:work/machine-a/2026-10-28"
+    assert calls == [tmp_path]
+
+
+def test_command_when_queued_adds_no_command_to_a_policy_refusal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, calls
+) -> None:
+    _setup(monkeypatch, "main")
+    r = run_push.nudge_push(tmp_path, tmp_path, command_when_queued=True)
+    assert r["status"] == "not_pushed" and "command" not in r
+    assert calls == []
+
+
 def test_main_not_pushed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, calls) -> None:
     _setup(monkeypatch, "main")
     r = run_push.nudge_push(tmp_path, tmp_path)

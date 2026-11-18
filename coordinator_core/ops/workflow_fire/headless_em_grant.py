@@ -33,6 +33,12 @@ def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _binding_digest(token: str, session_id: str, family: str) -> str:
+    """Digest over (session, family, token): editing the stored family invalidates the grant."""
+    material = "\x00".join((session_id, family, token))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 def _settings_home() -> Path:
     override = os.environ.get(SETTINGS_HOME_KEY)
     if override:
@@ -64,7 +70,12 @@ def write_headless_em_grant(session_id: str, family: str) -> str:
     token = secrets.token_hex(32)
     path = grant_path(session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    record = {"session_id": session_id, "family": family, "token_sha256": token_digest(token)}
+    record = {
+        "session_id": session_id,
+        "family": family,
+        "token_sha256": token_digest(token),
+        "binding_sha256": _binding_digest(token, session_id, family),
+    }
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     os.replace(tmp, path)
@@ -96,4 +107,9 @@ def headless_em_grant_matches(env: object, session_id: str, family: str | None =
         return False
     if family is not None and family != granted:
         return False
-    return hmac.compare_digest(token_digest(token), recorded)
+    binding = record.get("binding_sha256")
+    if not (isinstance(binding, str) and binding):
+        return False
+    return hmac.compare_digest(token_digest(token), recorded) and hmac.compare_digest(
+        _binding_digest(token, session_id, granted), binding
+    )

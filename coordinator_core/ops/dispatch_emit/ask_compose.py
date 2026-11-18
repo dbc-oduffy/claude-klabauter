@@ -54,7 +54,11 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import DATE_HEAD_PATTERN, PL
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS, SINCE_HALT_CREDIT_JS
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
 from coordinator_core.ops.dispatch_emit.phase_ledger import RESUME_PHASES_FIELD
-from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_INDETERMINATE
+from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
+    IMPORTER_OVERRUN_KEY,
+    REVERIFY_INDETERMINATE,
+    TRIPWIRES_NOT_RUN_KEY,
+)
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops._anchor_check import GRAMMAR as _ANCHOR_GRAMMAR
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -94,6 +98,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_LANDED_MET_BY_FIELD,
     RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
+    RESUME_LEDGER_SINCE_SHA_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_UNSERVED_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
@@ -142,7 +147,6 @@ from coordinator_core.ops.dispatch_emit.ledger_recovery import (
     LEDGER_FIX_LABEL,
     LEDGER_FIX_PHASE,
     LEDGER_FIX_SCHEMA,
-    LIVE_SNAP_LABEL,
     LIVE_SNAP_MODULE,
     LIVE_SNAP_SCHEMA,
     LIVE_TREE_WRITES_JS,
@@ -181,6 +185,7 @@ REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
 from coordinator_core.ops.dispatch_emit import stage_family_binding as _stage_family_binding
+from coordinator_core.ops.dispatch_emit.pipeline_compose import FALLBACK_CAUSE_JS as _FALLBACK_CAUSE_JS
 from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_source
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
 from coordinator_core.ops.dispatch_emit.rag_use import (
@@ -239,7 +244,7 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     bad_incomplete_ids_js,
     next_action_parts,
 )
-from coordinator_core.ops.dispatch_emit.review_floor import HALT_REVIEW_FLOOR, MANIFEST_KEY as _REVIEW_CODE_KEY
+from coordinator_core.ops.dispatch_emit.review_floor import HALT_REVIEW_FLOOR, MANIFEST_KEY as _REVIEW_CODE_KEY, NO_DELTA_JS
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.dispatch_emit.write_baseline import DIRTY_BEFORE_RUN_KEY, MEANT_TO_LAND_KEY, NO_CHANGE_REFUSAL
 from coordinator_core.ops.review_mint.execute_review import (
@@ -1040,6 +1045,7 @@ _COMMIT_SCHEMA = _obj(
         _RESIDUE_REPLY_KEY: {"type": ["array", "null"], "items": {"type": "string"}},
         "credited_chunks": {"type": ["array", "null"], "items": {"type": "string"}},
         "remedy_step": {"type": ["object", "null"]},
+        "awaiting": {"type": ["object", "null"]},
     },
 )
 _RETEST_SCHEMA = _obj(["status"], {"status": _STR, "detail": {"type": ["string", "null"]}})
@@ -1049,8 +1055,22 @@ _DOC_PATHS_JS = (
 # The scoped-test verdict as a params key; null before the test leg has run (a pre-test halt).
 _TARGETED_TESTS_JS = (
     "targeted_tests: (_testResult && typeof _testResult.status === 'string') ? { status: _testResult.status, "
-    "tests_run: _testResult.tests_run ?? null, tests_failed: _testResult.tests_failed ?? null, baseline: _testResult.baseline ?? null } : null,"
+    "tests_run: _testResult.tests_run ?? null, tests_failed: _testResult.tests_failed ?? null, baseline: _testResult.baseline ?? null, "
+    "...(Array.isArray(_testResult.tripwires_not_run) && _testResult.tripwires_not_run.length "
+    "? { importer_overrun: _testResult.importer_overrun === true, tripwires_not_run: _testResult.tripwires_not_run } : {}) } : null,"
 )
+
+
+def _test_result_schema() -> dict:
+    """The `test_result` stage schema plus the tripwire-overrun keys the engine's `--out` JSON carries;
+    the contract's own `$defs` entry is closed and would strip them from the agent's returned `test`."""
+    schema = json.loads(_emit.stage_schema_literal("test_result"))
+    schema["properties"] = {
+        **schema["properties"],
+        IMPORTER_OVERRUN_KEY: {"type": "boolean"},
+        TRIPWIRES_NOT_RUN_KEY: {"type": "array", "items": _STR},
+    }
+    return schema
 _LEDGER_CHECK_SCHEMA = _obj(
     ["items"],
     {
@@ -1071,6 +1091,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "original_last_edited_at": _STR,
                     "wired": {"type": "boolean"},
                     "superseded_by": _STR,
+                    "stall_only": {"type": "boolean"},
                     "post_commit_acts": {"type": "array", "items": {"type": "string", "enum": list(POST_COMMIT_ACTS)}},
                     "remaining": {"type": "array", "items": _STR},
                     "evidence": _STR,
@@ -1101,9 +1122,13 @@ _LEDGER_ITEMS_RULES = (
     "(bug_close); the terminal commit writes all three "
     "lifecycle acts -- named in "
     "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
-    "by design, so such an act is never a reason for 'not_met'; a verify or test leg that stalled or "
-    "timed out (no output within its window, zero or partial results) is inconclusive evidence, never "
-    "grounds for 'not_met': judge the item from the change itself; otherwise 'not_met'. A 'not_met' item blocks "
+    "by design, so such an act is never a reason for 'not_met'; a TEST leg that completed zero tests "
+    "(tests_run 0, any zero_run_cause) proves nothing: every item a test clause proves is 'not_met', never "
+    "stall_only. A TEST verdict with tests_run above 0 and importer_overrun proves the edited-file items for the "
+    "land only: its evidence names each tripwires_not_run file as NOT RUN, re-run after the land; never a "
+    "test-leg-error. Any other verify leg that stalled or timed out (no output within its window, zero or partial "
+    "results) is inconclusive: judge the item from the change itself, and when only that leg could prove it set "
+    "stall_only true on the item; otherwise 'not_met'. A 'not_met' item blocks "
     "the close whatever its essential flag (the gate resets it to true); when the ledger "
     "says all_of_pm_ask yes, every item is mandatory. evidence is one "
     "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
@@ -1131,6 +1156,12 @@ _LEDGER_DOC_WRITES_RULE = (
     ". When a not_met item's only gap is writing one of those paths, name that path "
     "exactly as its own entry in remaining; the engine settles it from the docs step's "
     "report."
+)
+#: Reads a judged ledger item: a `not_met` flagged `stall_only` (its only evidence a stalled or timed-out
+#: leg) becomes `inconclusive`, which `_ledgerBlocking` still holds open but never remediates as a gap.
+STALL_ONLY_COERCE_JS = (
+    "for (const i of (_ledger?.items ?? [])) { "
+    "if (i && i.status === 'not_met' && i.stall_only === true) { i.status = 'inconclusive'; delete i.remaining; } }"
 )
 _GATED_IDS_JS = "(((_manifest?.gated ?? []).map((g) => g.id).join(', ')) || 'none')"
 _OWED_IDS_JS = "(((_manifest?.owed ?? []).map((o) => o.id).join(', ')) || 'none')"
@@ -1162,6 +1193,18 @@ XS_TEST_TARGET_JS = (
 #: next_action names the entry (the EM reads it to fire the research run) and is never `revise_and_refire`.
 RESEARCH_HANDOFF_JS = (
     f"(_halted?.halted === {_lit(HALT_RESEARCH)} && Array.isArray(_halted.fire) && _halted.fire.length > 0)"
+)
+#: Marker a ledger-check halt names when the verify leg returned no verdict twice; never a `not_met`.
+VERIFY_LEG_EMPTY = "verify-leg-empty"
+#: JS re-asking `_runVerify` once when its items list came back empty while ledger rows are owed
+#: (a ledger id list that is non-empty once the late ids join it); all-ruled-out stays a pass.
+VERIFY_EMPTY_RETRY_JS = (
+    "{ const _vBase = _manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids : "
+    f"(_gate.{RESUME_LEDGER_KEY}?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null);\n"
+    "      const _vOwed = Array.isArray(_vBase) ? [...new Set([..._vBase, ..._verifyLateIds])] : [];\n"
+    "      if (!_halted && _vOwed.length && _verify && Array.isArray(_verify.items) && _verify.items.length === 0) "
+    "{ log('verify leg returned an empty items list for owed rows ' + _vOwed.join(', ') + ': re-asking once'); "
+    "_verify = await _runVerify(); } }"
 )
 RESEARCH_HANDOFF_NEXT_ACTION_JS = (
     "{ kind: 'fire_research', op: null, params: { run_id: _runId, sizing: _sizingRel, fire: _halted.fire } }"
@@ -1934,7 +1977,7 @@ _REVIEW_RECOVER_JS = r"""
 def _review_recover_js(
     *, head: str, anchor: str, session_tail: str, record_dir: str, run_id: str, stager: Optional[Stager] = None,
     run_dir: Optional[str] = None, notes_block: str = "", repo_root: Optional[str] = None,
-    agent_type_host: Optional[str] = None,
+    agent_type_host: Optional[str] = None, run_base_sha: Optional[str] = None,
 ) -> str:
     """`_reviewRecover()` and its one call, composed between the review wave and `_review_blocked_halt_js`.
 
@@ -1963,14 +2006,20 @@ def _review_recover_js(
         fix_prompt, label=HALT_FIX_LABEL, phase=HALT_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
         schema=HALT_FIX_SCHEMA, run_id=run_id, stage_as="halt-fix", stager=stager,
     )
+    from coordinator_core.ops.test_leg_run import TEST_LEG_MINUTES_BUDGET
+
+    _leg_timeout_ms = (TEST_LEG_MINUTES_BUDGET + 1) * 60_000
+    run_abs_out = f"{run_dir or record_dir}/halt-reverify-tests.json"
+    base_flag = f" --base-sha {run_base_sha}" if run_base_sha else ""
     reverify_prompt = _cat(
-        f"{head}\n\n{anchor}\n\nHalt re-verify leg (review). A fix leg just ran. Re-run ONLY these failing test ids and "
-        "the scoped tests of these files (nothing wider), each id run alone: ",
+        f"{head}\n\n{anchor}\n\nHalt re-verify leg (review). A fix leg just ran. Run "
+        f"`python -m coordinator_core.ops.test_leg_run{base_flag} --out {run_abs_out} -- ` followed by these failing test ids and the scoped tests of these files: ",
         "js:idsText",
         " and ",
         "js:fpText",
-        ". An id that also fails at base is listed in `pre_existing`. Return `test` for that run (status_after pass|fail, failing, failing_detail, pre_existing, reverted, "
-        "passed_alone, passed_at_base, diff_named): `passed_alone` lists each failing id that passes when run alone, `passed_at_base` each that passes at the base checkout, "
+        f". Run it ONCE in the foreground with your Bash tool timeout at {_leg_timeout_ms} ms; it is the whole test run; "
+        "read its JSON and run nothing else. Return that JSON as `test` (status_after, failing, failing_detail, pre_existing, reverted, "
+        "passed_at_base, diff_named), adding only `diff_named`: "
         "`diff_named` each failing id whose test file names or monkeypatches a function, class or module-level name the run's diff against run_base added, removed or changed. "
         "Then, for each blocked slice below, read its review sidecar and judge each finding against the current tree: "
         "return `slices` entries with `findings` (the findings that still stand; empty when all are closed) and "
@@ -2040,15 +2089,31 @@ def _criterion_blocker_halt_js(sizing_rel: Optional[str]) -> str:
     )
 
 
+#: Why a returned test verdict proved nothing, or '' when it proved something: zero tests run (named by
+#: `zero_run_cause` when the leg reports one), or an error status that names no failing id. A fail
+#: naming ids, and a pass or skip-pass that ran tests, return ''.
+_TEST_UNPROVEN_CAUSE_JS = (
+    "(() => { const _r = _testResult; "
+    "const _ids = (Array.isArray(_r.failing_ids) ? _r.failing_ids : []).filter((x) => typeof x === 'string' && x.trim()); "
+    "if (_ids.length) return ''; "
+    "if (typeof _r.tests_run === 'number' && _r.tests_run === 0) "
+    "return 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : ''); "
+    "if (['error', 'errored'].includes(_r.status)) return 'errored without a failing id'; "
+    "return ''; })()"
+)
+
+
 #: A test leg owed by the manifest whose verdict is absent, has no sidecar, or reads not_run never
 #: reaches the commit as passed. `TEST_GUARD` is substituted with the leg's own owed-condition.
 def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
     """The empty-test-verdict halt; its next_action names the engine-ask refire, which re-runs the
-    verify leg, where journal replay would hand back the cached empty verdict."""
+    verify leg, where journal replay would hand back the cached empty verdict. A verdict that ran
+    zero tests or errored without a failing id halts the same way with the cause in `detail`."""
     return (
         "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
         "&& _testResult.status && _testResult.status !== 'not_run' "
-        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim()) "
+        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim() "
+        "&& !" + _TEST_UNPROVEN_CAUSE_JS + ") "
         "&& !(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object' "
         "&& _reviewReverify.status_after === 'pass' "
         "&& (() => { const _l = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
@@ -2062,7 +2127,10 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "const _rvPre = _rvl(_rvh.pre_existing); "
         "_halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
         "failing: _rvFail, pre_existing: _rvPre, "
-        "detail: 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests' + "
+        "detail: ((_testResult && typeof _testResult.status === 'string' && _testResult.status && _testResult.status !== 'not_run' "
+        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim()) "
+        "? 'the test leg proved nothing: ' + " + _TEST_UNPROVEN_CAUSE_JS + " + '; the run did not pass its tests' "
+        ": 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests') + "
         "(_rvFail.length ? '; re-verify reds not red at the run base: ' + _rvFail.join(', ') : "
         "(_rvPre.length ? '; re-verify reds all pre-existing, none this run\\'s: ' + _rvPre.join(', ') : '')), "
         "next_action: 'Refire to re-run the test leg: ' + " + _refire_js(sizing_rel) + " }; }"
@@ -2347,21 +2415,121 @@ _VERIFY_TEST_RESULT_VAR = "_verifyTest"
 
 
 def _verify_tests_call(
-    *, head: str, anchor: str, test_js: str, run_id: str, stager: Optional[Stager] = None,
-    agent_type_host: Optional[str] = None,
+    *, head: str, anchor: str, test_js: str, run_id: str, repo_root: str = "", out_path: str = "",
+    base_sha: Optional[str] = None, stager: Optional[Stager] = None, agent_type_host: Optional[str] = None,
 ) -> str:
     """The verify stage's scoped-test leg: one haiku test-runner `agent(...)` call EXPRESSION, awaited before
-    the verify agent, which receives its result inline. Carries the verify deadline and hang report."""
+    the verify agent, which receives its result inline.
+
+    The leg runs `test_leg_run` as one background Bash call and waits on its completion notification; the
+    prompt carries no deadline and no Bash timeout, and no JS race wraps the call, so nothing cuts the run
+    before the runner's own budget."""
+    base_flag = f"--base-sha {base_sha} " if base_sha else ""
+    leg_command = engine_module_command(
+        "coordinator_core.ops.test_leg_run", repo_root, f"{base_flag}--out {out_path} -- "
+    )
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nYou run this run's scoped tests and report; you edit, "
         "stage and commit nothing. ",
         f"js:({test_js})",
-        _emit._wave_verify_bound_clause(),
+        " The test run is this one command, replacing any direct pytest invocation above; its scope follows "
+        f"the `--`:\n\n{leg_command}",
+        "js:(_manifest.test_targets ?? []).join(' ')",
+        "\n\nRun it as ONE Bash call with run_in_background: true and no timeout parameter. Wait for its "
+        "completion notification; do not sleep, poll or re-run it. Then Read "
+        f"{out_path} and return its JSON verbatim as the test_result.",
     )
     return _agent(
         prompt, label=VERIFY_TESTS_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
-        schema=json.loads(_emit.stage_schema_literal("test_result")), run_id=run_id, stage_as="verify-tests",
+        schema=_test_result_schema(), run_id=run_id, stage_as="verify-tests",
         stager=stager, agent_type_host=agent_type_host,
+    )
+
+
+VERIFY_ACCEPTANCE_LABEL = "verify-acceptance"
+_ACCEPT_ROWS_VAR = "_ACCEPT_ROWS"
+_ACCEPT_RESULTS_VAR = "_acceptResults"
+_ACCEPT_SCHEMA = _obj(
+    ["results"],
+    {"results": {"type": "array", "items": _obj(["row_id"], {"row_id": _STR, "exit": {"type": ["integer", "null"]}})}},
+)
+
+
+def _acceptance_rows(repo_root: str, sizing_rel: Optional[str]) -> list[dict]:
+    """The existing plan's spine rows whose `acceptance:` names a pytest command, as
+    `{row_id, register_rows, argv, command}`; `[]` when no plan exists at compose time (a plan
+    authored in-run is not gated here) or its spine does not parse."""
+    from coordinator_core.ops.dispatch_emit import acceptance_gate
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    plan_rel = _static_plan_rel(repo_root, sizing_rel)
+    if not plan_rel:
+        return []
+    try:
+        rows = load_rows((Path(repo_root) / plan_rel).read_text(encoding="utf-8")).rows
+    except (OSError, UnicodeDecodeError):
+        return []
+    return [
+        {"row_id": row_id, "register_rows": regs, "argv": argv, "command": shlex.join(argv)}
+        for row_id, regs, argv in acceptance_gate.acceptance_test_command_rows(rows)
+        if regs
+    ]
+
+
+def _acceptance_call(
+    *, head: str, anchor: str, run_id: str, repo_root: str, stager: Optional[Stager] = None,
+    agent_type_host: Optional[str] = None,
+) -> str:
+    """The verify stage's acceptance leg: one test-runner `agent(...)` call EXPRESSION that runs each
+    embedded acceptance argv in the clean export and returns `{results: [{row_id, exit}]}`.
+
+    Trap: the leg is an LLM, so a skipped or unreported command carries no exit; `DEMOTE_RED_JS`
+    reads that as red, which is what keeps a row met only by a command that ran green."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV, MEASURED_REV_OP
+
+    export_command = engine_module_command(
+        _OVERLAY_VERIFY_MODULE, repo_root, f"--export-run --run-id {run_id} --repo-root {Path(repo_root).as_posix()} --"
+    )
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nYou run each plan row's acceptance command and "
+        "report its exit status; you edit, stage and commit nothing. ",
+        f"First run `coordinator-invoke {MEASURED_REV_OP}` with run_id ",
+        "js:_runId",
+        " and paths [",
+        "js:(_manifest.review_declared_paths ?? []).join(', ')",
+        "]; it returns a candidate commit sha. Then run every command below through this export command, "
+        f"appending the command's argv after the `--`:\n\n{export_command}\n\n"
+        f"Set {MEASURED_REV_ENV} to the sha in the test process environment. If the op or the export command "
+        "fails, report no exit for the commands it blocked; never fall back to the working tree. "
+        + _emit._test_runner_clause(repo_root)
+        + " Commands (row_id, argv): ",
+        f"js:JSON.stringify({_ACCEPT_ROWS_VAR}.map((r) => ({{ row_id: r.row_id, argv: r.argv }})))",
+        ". Return `results`: one {row_id, exit} per command, exit the process exit status as an integer; "
+        "omit exit for a command you could not run. Report the exit as it was; do not gate.",
+    )
+    return _agent(
+        prompt, label=VERIFY_ACCEPTANCE_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
+        schema=_ACCEPT_SCHEMA, run_id=run_id, stage_as="verify-acceptance", stager=stager,
+        agent_type_host=agent_type_host,
+    )
+
+
+def _acceptance_decls_js(rows: list[dict], call: str) -> str:
+    """Top-level JS for the acceptance gate: the embedded rows, the leg runner, and the exit-to-result map."""
+    from coordinator_core.ops.dispatch_emit.acceptance_gate import DEMOTE_RED_JS
+
+    embedded = json.dumps(rows, separators=(",", ":"))
+    return (
+        f"  const {_ACCEPT_ROWS_VAR} = {embedded};\n"
+        f"  let {_ACCEPT_RESULTS_VAR} = null;\n"
+        f"  const _acceptOf = (rep) => {_ACCEPT_ROWS_VAR}.map((row) => {{ const hit = ((rep && Array.isArray(rep.results)) ? rep.results : [])"
+        ".find((x) => x && x.row_id === row.row_id); "
+        "return { row_id: row.row_id, register_rows: row.register_rows, command: row.command, exit: hit ? hit.exit : undefined }; });\n"
+        f"  const _runAcceptance = async () => {{ if ({_ACCEPT_RESULTS_VAR} !== null) return; "
+        f"try {{ {_ACCEPT_RESULTS_VAR} = _acceptOf(await {call}); }} catch (e) {{ "
+        "if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) throw e; "
+        f"log('verify-acceptance leg threw: ' + String((e && e.message) ?? e)); {_ACCEPT_RESULTS_VAR} = _acceptOf(null); }} }};\n"
+        + "  " + DEMOTE_RED_JS.replace("\n", "\n  ").rstrip(" ")
     )
 
 
@@ -2432,13 +2600,20 @@ _OVERLAY_VERIFY_MODULE = "coordinator_core.ops.dispatch_emit.clean_overlay_verif
 _OVERLAY_SCHEMA = _obj(["exit_code"], {"exit_code": {"type": "integer"}, "detail": {"type": ["string", "null"]}})
 
 
-def engine_module_command(module: str, repo_root: str, args: str = "") -> str:
+FAMILY_CREDIT_MODULE = "coordinator_core.ops.dispatch_emit.family_credit"
+
+
+def engine_module_command(module: str, repo_root: str, args: str = "", *, portable: bool = False) -> str:
     """`<engine interpreter> -m <module> <args>` for a command an agent runs to reach `coordinator_core`.
     The interpreter is the repo's resolvable pin, else this process's own absolute `sys.executable`; never a
     bare `python`, which on a host whose PATH python lacks `coordinator_core` fails before the module runs.
-    `PYTHONPATH` names the engine checkout so the module imports from a consumer repo cwd."""
+    `PYTHONPATH` names the engine checkout so the module imports from a consumer repo cwd.
+    Trap: both carry host paths; `portable` drops them for text inside a committed emitted script, which carries
+    no host path (`test_emitted_script_carries_no_host_path`), leaving a bare `python` that needs `coordinator_core` importable."""
     from coordinator_core.ops.dispatch_emit.clean_overlay_verify import engine_python_command
 
+    if portable:
+        return f"python -m {module}" + (f" {args}" if args else "")
     engine_root = Path(__file__).resolve().parents[3].as_posix()
     return (
         f'PYTHONPATH="{engine_root}" {engine_python_command(Path(repo_root))} -m {module}'
@@ -2503,7 +2678,7 @@ def _verify_schema(judge_schema: Optional[dict]) -> dict:
     """The merged leg's result schema: `ask_contract.ASK_VERIFY_RETURN_KEYS`, with the test result
     and the judge verdict nested because their `status` keys collide."""
     properties = {
-        "test": json.loads(_emit.stage_schema_literal("test_result")),
+        "test": _test_result_schema(),
         **_LEDGER_CHECK_SCHEMA["properties"],
         **_DOCS_SCHEMA["properties"],
     }
@@ -2520,7 +2695,6 @@ def _prompt_parts(text: str) -> list[str]:
     return [("js:" + p) if n % 2 else p for n, p in enumerate(parts) if p]
 
 
-LIVE_RESTORE_LABEL = "live-restore"
 LIVE_RESTORE_MODULE = "coordinator_core.ops.dispatch_emit.live_write_guard"
 _LIVE_RESTORE_SCHEMA = {
     "type": "object",
@@ -2541,57 +2715,49 @@ _LIVE_RESTORE_SCHEMA = {
 }
 
 
-def _live_snap_fn_js(*, repo_root: str, run_id: str, record_dir: str) -> str:
-    """`_liveSnap(kind, sfx, ph, out, arg)` and `_liveRestore(sfx, ph, out)`, declared once: the mechanical legs
-    that measure a writing leg's live-tree writes (`live-snap-<kind>:<sfx>`, `kind` `before` or `after`) and put
-    back the foreign hunks it dropped (`live-restore:<sfx>`). Snapshots run `ledger_recovery`'s CLI (in-process
-    blob shas, loose-object persist of the pre-leg bytes) on snapshot file `out` and shell-quoted footprint JSON
-    `arg`; the restore runs `live_write_guard`'s on that same `out`, merging through `merge_or_refuse`.
-    The engine computes the written list and the merge; the leg only relays its one JSON line.
+def _live_bracket_schema(schema: dict) -> dict:
+    """`schema` (a writing leg's) plus the optional `snap_before`, `snap_after` and `restore` JSON lines the leg relays."""
+    return {
+        **schema,
+        "properties": {
+            **schema["properties"],
+            "snap_before": LIVE_SNAP_SCHEMA,
+            "snap_after": LIVE_SNAP_SCHEMA,
+            "restore": _LIVE_RESTORE_SCHEMA,
+        },
+    }
+
+
+def _live_bracket_parts(*, repo_root: str, run_id: str, record_dir: str) -> list[str]:
+    """`_cat` parts appended to a writing leg's prompt: the engine's live-tree bracket the leg runs itself.
+
+    Before any edit the leg runs `ledger_recovery`'s `before` CLI on `js:_snapOut` and `js:_snapArg` (the shell-quoted
+    footprint JSON); after its last edit the `after` CLI on that file; when `after` lists writes, `live_write_guard`'s
+    `restore` on the same file, which merges through `merge_or_refuse`. The engine computes the written list and the
+    merge; the leg only relays each command's one JSON line as `snap_before`, `snap_after`, `restore`.
+    Trap: the writing leg's own schema must come through `_live_bracket_schema`, and the caller must define `_snapOut`
+    and `_snapArg` before the leg's call.
     """
     root = Path(repo_root).as_posix()
-
-    def one(kind: str) -> str:
-        cmd = engine_module_command(LIVE_SNAP_MODULE, repo_root, f"{kind} --root {root} --out ")
-        parts = [
-            "Run exactly this one command as its own Bash call, no wrapper, no edit to it, and do not retry it:\n\n"
-            f"{cmd}",
-            "js:out",
-            *([" --paths-json '", "js:arg", "'"] if kind == "before" else []),
-            "\n\nReturn `ok` true when it exited 0 and its JSON line says ok, and `live_tree_writes` copied from that "
-            "line. Run nothing else.",
-        ]
-        label = f"{LIVE_SNAP_LABEL}-{kind}"
-        call = _agent(
-            _cat(*parts), label=label, phase=LIVE_SNAP_LABEL, agent_type=_emit._TEST_AGENT_TYPE,
-            effort=_MECHANICAL_EFFORT, schema=LIVE_SNAP_SCHEMA, run_id=run_id,
-        )
-        return call.replace(f"label: {_lit(label)},", f"label: {_lit(label + ':')} + sfx,", 1).replace(
-            f"phase: {_lit(LIVE_SNAP_LABEL)},", "phase: ph,", 1
-        )
-
-    restore_cmd = engine_module_command(
+    snap = lambda kind: engine_module_command(LIVE_SNAP_MODULE, repo_root, f"{kind} --root {root} --out ")  # noqa: E731
+    restore = engine_module_command(
         LIVE_RESTORE_MODULE, repo_root,
         f"restore --root {root} --run-id {run_id} --record-dir {Path(record_dir).as_posix()} --snapshot ",
     )
-    restore_call = _agent(
-        _cat(
-            "Run exactly this one command as its own Bash call, no wrapper, no edit to it, and do not retry it:\n\n"
-            f"{restore_cmd}",
-            "js:out",
-            "\n\nReturn `ok` true when it exited 0 and its JSON line says ok, and `restored`, `refused` and `peer_held` "
-            "copied from that line (each `refused` entry as {path, reason}). Run nothing else.",
-        ),
-        label=LIVE_RESTORE_LABEL, phase=LIVE_SNAP_LABEL, agent_type=_emit._TEST_AGENT_TYPE,
-        effort=_MECHANICAL_EFFORT, schema=_LIVE_RESTORE_SCHEMA, run_id=run_id,
-    ).replace(f"label: {_lit(LIVE_RESTORE_LABEL)},", f"label: {_lit(LIVE_RESTORE_LABEL + ':')} + sfx,", 1).replace(
-        f"phase: {_lit(LIVE_SNAP_LABEL)},", "phase: ph,", 1
-    )
-    return (
-        "function _liveSnap(kind, sfx, ph, out, arg) { return kind === 'before' ? "
-        f"{one('before')} : {one('after')}; }}\n"
-        f"function _liveRestore(sfx, ph, out) {{ return {restore_call}; }}"
-    )
+    return [
+        "\n\nLive-tree bracket, three engine commands, each its own Bash call, no wrapper, no edit to it, never retried. "
+        "(1) BEFORE your first edit run:\n\n" + snap("before"),
+        "js:_snapOut",
+        " --paths-json '",
+        "js:_snapArg",
+        "'\n\n(2) AFTER your last edit run:\n\n" + snap("after"),
+        "js:_snapOut",
+        "\n\nSkip (2) and (3) when (1) did not exit 0 with ok true in its JSON line. "
+        "(3) When (2)'s line lists any `live_tree_writes`, run:\n\n" + restore,
+        "js:_snapOut",
+        "\n\nReturn each command's JSON line unchanged as `snap_before`, `snap_after` and `restore`, omitting the keys "
+        "of a command you did not run.",
+    ]
 
 
 _LEDGER_RECOVER_JS = r"""
@@ -2661,27 +2827,19 @@ _LEDGER_RECOVER_JS = r"""
         const fpText = JSON.stringify(st.footprint);
         const _snapOut = __RECDIR__ + '/live-' + _cid + '.json';
         const _snapArg = JSON.stringify(st.footprint).replace(/'/g, "'\\''");
-        let _sb = null;
-        try { _sb = await _liveSnap('before', _cid, __SNAPPH__, _snapOut, _snapArg); }
-        catch (e) { if (_usageHalted(e)) return null; log('live-snap before leg threw: ' + String((e && e.message) ?? e)); }
         let _res = null;
         try { _res = await __FIXCALL__; }
         catch (e) {
           if (_usageHalted(e)) return null;
           log('ledger-fix leg threw: ' + String((e && e.message) ?? e));
         }
-        let _sa = null;
-        if (!_halted && _sb && _sb.ok === true) {
-          try { _sa = await _liveSnap('after', _cid, __SNAPPH__, _snapOut, _snapArg); }
-          catch (e) { if (_usageHalted(e)) return null; log('live-snap after leg threw: ' + String((e && e.message) ?? e)); }
-        }
+        const _sb = (_res && typeof _res === 'object' && _res.snap_before) || null;
+        const _sa = (_sb && _sb.ok === true && _res.snap_after) || null;
         _lwAttempt[_cid] = (_sb && _sb.ok === true && _sa && _sa.ok === true && Array.isArray(_sa.live_tree_writes)) ? _sa.live_tree_writes.map(String) : null;
         _lwTrunc[_cid] = !!((_sb && _sb.truncated) || (_sa && _sa.truncated));
         if (_lwAttempt[_cid]) st.live_snapshot = _snapOut;
         if (_lwAttempt[_cid] && _lwAttempt[_cid].length && !_halted) {
-          let _rr = null;
-          try { _rr = await _liveRestore(_cid, __SNAPPH__, _snapOut); }
-          catch (e) { if (_usageHalted(e)) return null; log('live-restore leg threw: ' + String((e && e.message) ?? e)); }
+          const _rr = _res.restore ?? null;
           _lwRestore[_cid] = (_rr && _rr.ok === true) ? _rr : { unverified: true };
         }
         return _res;
@@ -2812,12 +2970,12 @@ _LEDGER_FIX_NEEDS_SENTENCE = (
 
 def _ledger_recover_js(
     *, head: str, anchor: str, session_tail: str, record_dir: str, ledger_rel: str, run_id: str, judged: bool, test_var: str,
-    stager: Optional[Stager] = None, notes_block: str = "",
+    repo_root: str, stager: Optional[Stager] = None, notes_block: str = "",
 ) -> str:
     """The `_ledgerRecover()` definition and its one call, composed between the verify leg's ledger and the ledger halt.
 
     The fix legs run in parallel under `LEDGER_FIX_PHASE`; each re-verify judges only the reopened rows.
-    Each fix leg is bracketed by two mechanical `live-snap` legs (`_liveSnap`, from `_live_snap_fn_js`).
+    Each fix leg runs the live-tree bracket itself (`_live_bracket_parts`); no agent leg is emitted for it.
     Trap: it reads `_ledgerBlocking`, `_normaliseLedger` and `_reopenPlan`, which must precede it in the script.
     """
     fix_prompt = _cat(
@@ -2827,11 +2985,13 @@ def _ledger_recover_js(
         "js:(_fixRow.brief_path ?? '(none)')",
         ". ",
         *_prompt_parts(ledger_fix_prompt("remText", "evText", "failTxt", "fpText", f"{record_dir}/notes.jsonl")),
-        f" {_LEDGER_FIX_NEEDS_SENTENCE} {SKILL_WEIGHT_HEADROOM_CLAUSE}{notes_block}{session_tail}",
+        f" {_LEDGER_FIX_NEEDS_SENTENCE} {SKILL_WEIGHT_HEADROOM_CLAUSE}{notes_block}",
+        *_live_bracket_parts(repo_root=repo_root, run_id=run_id, record_dir=record_dir),
+        session_tail,
     )
     fix_call = _agent(
         fix_prompt, label=LEDGER_FIX_LABEL, phase=LEDGER_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=_LEDGER_FIX_SCHEMA_NEEDS, run_id=run_id, stage_as="ledger-fix", stager=stager,
+        schema=_live_bracket_schema(_LEDGER_FIX_SCHEMA_NEEDS), run_id=run_id, stage_as="ledger-fix", stager=stager,
     ).replace(f"label: {_lit(LEDGER_FIX_LABEL)},", f"label: {_lit(LEDGER_FIX_LABEL)} + _cid,", 1)
     reverify_prompt = _cat(
         f"{head}\n\n{anchor}\n\nLedger re-verify leg. Fix legs just ran on the chunks behind these rows. "
@@ -2847,7 +3007,7 @@ def _ledger_recover_js(
         ["items"],
         {
             "items": _LEDGER_CHECK_SCHEMA["properties"]["items"],
-            "test": json.loads(_emit.stage_schema_literal("test_result")),
+            "test": _test_result_schema(),
         },
     )
     reverify_call = _agent(
@@ -2871,7 +3031,6 @@ def _ledger_recover_js(
         .replace("__XS__", _lit(ARM_XS))
         .replace("__TEST__", test_var)
         .replace("__RECDIR__", _lit(record_dir))
-        .replace("__SNAPPH__", _lit(LEDGER_FIX_PHASE))
         .replace("__FIXCALL__", fix_call)
         .replace("__REVERIFYCALL__", reverify_call)
         .replace("__RECORDCALL__", record_call)
@@ -2908,9 +3067,6 @@ _REMNANT_COMPLETE_JS = r"""
       const rec = { field: 'remnant', loop_owner: 'engine', cap: __CAP__, items: rmItems.map((i) => ({ kind: i.kind, id: i.id })), footprint, status: 'open', paths: [], live_tree_writes: null, last_reason: '' };
       const _snapOut = __RECDIR__ + '/live-remnant.json';
       const _snapArg = JSON.stringify(footprint).replace(/'/g, "'\\''");
-      let _sb = null;
-      try { _sb = await _liveSnap('before', 'remnant', __SNAPPH__, _snapOut, _snapArg); }
-      catch (e) { if (_usageHalted(e)) return; log('live-snap before leg threw: ' + String((e && e.message) ?? e)); }
       let leg = null;
       try { leg = await __REMNANTCALL__; }
       catch (e) {
@@ -2918,12 +3074,8 @@ _REMNANT_COMPLETE_JS = r"""
         log('remnant-complete leg threw: ' + String((e && e.message) ?? e));
       }
       if (_halted) return;
-      let _sa = null;
-      if (_sb && _sb.ok === true) {
-        try { _sa = await _liveSnap('after', 'remnant', __SNAPPH__, _snapOut, _snapArg); }
-        catch (e) { if (_usageHalted(e)) return; log('live-snap after leg threw: ' + String((e && e.message) ?? e)); }
-        if (_halted) return;
-      }
+      const _sb = (leg && typeof leg === 'object' && leg.snap_before) || null;
+      const _sa = (_sb && _sb.ok === true && leg.snap_after) || null;
       const _lw = (_sb && _sb.ok === true && _sa && _sa.ok === true && Array.isArray(_sa.live_tree_writes)) ? _sa.live_tree_writes.map(String) : null;
       rec.live_tree_writes = _lw;
       if (_lw) rec.live_snapshot = _snapOut;
@@ -2931,10 +3083,7 @@ _REMNANT_COMPLETE_JS = r"""
       let _lostFoot = [];
       let _peerHeld = [];
       if (_lw && _lw.length) {
-        let _rr = null;
-        try { _rr = await _liveRestore('remnant', __SNAPPH__, _snapOut); }
-        catch (e) { if (_usageHalted(e)) return; log('live-restore leg threw: ' + String((e && e.message) ?? e)); }
-        if (_halted) return;
+        const _rr = leg.restore ?? null;
         if (_rr && _rr.ok === true) {
           if ((_rr.restored ?? []).length) rec.live_restored = _rr.restored.map(String);
           if ((_rr.refused ?? []).length) { rec.live_refused = _rr.refused; _lostFoot = _rr.refused.map((x) => String(x.path)); }
@@ -3011,10 +3160,11 @@ def _remnant_complete_js(
     docs_parts: Sequence[str],
     verdict_parts: Sequence[str],
     schema: dict,
+    repo_root: str,
 ) -> str:
     """The `_remnantComplete()` definition and its one call, composed right after `_ledger_recover_js`.
 
-    One writing leg over `_remnantItems(...)` bracketed by two mechanical `live-snap` legs, then one re-verify that re-reads `_ledger`, the
+    One writing leg over `_remnantItems(...)` running the live-tree bracket itself (`_live_bracket_parts`), then one re-verify that re-reads `_ledger`, the
     falsifier verdict and `_deliveryVerdict`. A gap still open leaves them not_met, so the close
     halts with today's codes. The attempt lands in recovery.json under `remnant` (loop owner: engine).
     Trap: it reads `_ledgerBlocking`, `_normaliseLedger` and
@@ -3024,11 +3174,13 @@ def _remnant_complete_js(
     leg_prompt = _cat(
         f"{head}\n\n{anchor}\n\nRemnant-completion leg. ",
         *_prompt_parts(remnant_prompt("itemsText", "fpText")),
-        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
+        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}",
+        *_live_bracket_parts(repo_root=repo_root, run_id=run_id, record_dir=record_dir),
+        session_tail,
     )
     leg_call = _agent(
         leg_prompt, label=REMNANT_LABEL, phase=REMNANT_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=LEDGER_FIX_SCHEMA, run_id=run_id,
+        schema=_live_bracket_schema(LEDGER_FIX_SCHEMA), run_id=run_id,
     )
     docs_js = (
         f"js:(rmDocsWanted ? ({_cat(*docs_parts)}) : {_lit(_VERIFY_NO_DOCS)})" if docs_parts else _VERIFY_NO_DOCS
@@ -3077,7 +3229,6 @@ def _remnant_complete_js(
     return (
         _REMNANT_COMPLETE_JS.replace("__CAP__", str(REMNANT_ATTEMPT_CAP))
         .replace("__RECDIR__", _lit(record_dir))
-        .replace("__SNAPPH__", _lit(REMNANT_PHASE))
         .replace("__RL__", RESUME_LEDGER_KEY)
         .replace("__XS__", _lit(ARM_XS))
         .replace("__TEST__", _emit._TEST_RESULT_VAR)
@@ -3112,6 +3263,12 @@ _COMMIT_HALT_REASON_JS = (
     ".map((x) => String(x).trim()).join(': ').slice(0, 600) || null)"
 )
 _GATE_HALT_CAUSE_JS = "(_gate.halt ? 'gate halt: ' + String(_gate.halt.kind ?? _gate.halt.reason ?? 'halt') : 'apm ruling carried no foldable arm (non-XS arm or resume_plan)')"
+
+
+#: A scout-returned arm in any letter case or padding compares equal to the lowercase arm constants.
+_GATE_ARM_FOLD_CASE_JS = (
+    "  if (typeof _gate.arm === 'string') { _gate = { ..._gate, arm: _gate.arm.trim().toLowerCase() }; }"
+)
 
 
 def _fold_decline_js(clean_js: str, cause_js: Optional[str] = None) -> str:
@@ -3784,11 +3941,14 @@ def _family_enabled(repo_root: str, sizing_rel: Optional[str]) -> bool:
         return True
 
 
-def _family_run_js(work_label: str, exec_phase: str) -> str:
+def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
     """JS for `_familyRun(r)`: one family attempt, then one claude fallback when that attempt is
     BLOCKED, FAILED or unresolved. The returned row result is a status line plus the stage record
     (`stage_family.stage_record`'s shape), the family attempt first and the fallback tagged
-    `fallback_for`; the fallback is never reported as the family's result."""
+    `fallback_for`; the fallback is never reported as the family's result.
+    The family attempt runs `start_cmd` + the row id first: the row-start snapshot `family_credit`
+    compares against, since the vendor CLI's writes get no write-print. `_famOk[id]` (declared beside
+    `_commitWave`, which reads it) marks an attempt returned OK, for the `Checkpoint-Family-Ok:` line."""
     schema = json.dumps(
         {
             "type": "object",
@@ -3813,15 +3973,25 @@ def _family_run_js(work_label: str, exec_phase: str) -> str:
     failed = " || ".join(f"_fam.verdict === {_lit(v)}" for v in _stage_family.FALLBACK_VERDICTS)
     return (
         f"  const _FAMILY_RESULT_SCHEMA = {schema};\n"
+        + _FALLBACK_CAUSE_JS
+        + "  const _famStart = (r) => "
+        + _js_string_literal(
+            "First, before anything else, run exactly this one command as its own Bash call, no wrapper, "
+            f"no edit to it, and do not retry it:\n\n{start_cmd}"
+        )
+        + " + r.id + "
+        + _js_string_literal("\n\nThen carry out the assignment below.\n\n")
+        + ";\n"
         "  async function _familyRun(r) {\n"
         "    let _fam = null;\n"
-        f"    try {{ const _fr = await agent(_rowPrompt(r), {fam_opts});\n"
+        f"    try {{ const _fr = await agent(_famStart(r) + _rowPrompt(r), {fam_opts});\n"
         "      if (_fr && typeof _fr === 'object' && typeof _fr.verdict === 'string' && typeof _fr.family === 'string') _fam = _fr;\n"
         "    } catch (e) { _fam = null; }\n"
         "    if (!_fam) _fam = { family: r.family, stage: r.stage_role, exit_code: -1, output_path: '', "
         "verdict: 'FAILED', blocked_reason: 'family-stage-runner reply missing or unparseable' };\n"
         f"    if (!({failed})) {{\n"
         "      const _rec = { stage_role: r.stage_role, attempts: [_fam], reported_family: _fam.family };\n"
+        "      if (typeof _famOk === 'object') _famOk[r.id] = _fam.verdict === 'OK';\n"
         "      log(r.id + ': ' + _fam.family + ' attempt ' + _fam.verdict);\n"
         "      return 'DONE: ' + r.id + ' via ' + _fam.family + ' ' + JSON.stringify(_rec);\n"
         "    }\n"
@@ -3833,12 +4003,14 @@ def _family_run_js(work_label: str, exec_phase: str) -> str:
         "    log(r.id + ': ' + _fam.family + ' attempt ' + _fam.verdict + ' (' + _fam.blocked_reason + '); rerunning on '"
         f" + {_lit(_stage_family.FALLBACK)});\n"
         "    let _fbText = null;\n"
-        f"    try {{ _fbText = await agent(_rowPrompt({{ ...r, brief_path: r.fallback_brief_path }}), {fb_opts}); }} catch (e) {{ _fbText = null; }}\n"
-        "    const _fbOk = typeof _fbText === 'string' && _fbText.trim() !== '' && "
-        "!/(^|\\n)\\s*[*_`]{0,2}(PARTIAL|BLOCKED)[*_`]{0,2}:/.test(_fbText);\n"
+        "    let _fbCause = '';\n"
+        f"    try {{ _fbText = await agent(_rowPrompt({{ ...r, brief_path: r.fallback_brief_path }}), {fb_opts}); }} "
+        "catch (e) { _fbText = null; _fbCause = 'dispatch threw: ' + String((e && e.message) || e).slice(0, 300); }\n"
+        "    if (!_fbCause) _fbCause = _fallbackCause(_fbText, false);\n"
+        "    const _fbOk = _fbCause === '';\n"
         f"    const _fb = {{ family: {_lit(_stage_family.FALLBACK)}, stage: r.stage_role, exit_code: _fbOk ? 0 : 1, output_path: '', "
         "verdict: _fbOk ? 'OK' : 'FAILED' };\n"
-        f"    if (!_fbOk) _fb.blocked_reason = {_lit(_stage_family.FALLBACK + ' fallback reply missing or not DONE')};\n"
+        f"    if (!_fbOk) _fb.blocked_reason = {_lit(_stage_family.FALLBACK + ' fallback ')} + _fbCause;\n"
         "    const _rec = { stage_role: r.stage_role, attempts: [_fam, { ..._fb, fallback_for: _fam.family }], "
         f"reported_family: {_lit(_stage_family.FALLBACK)} }};\n"
         f"    return (_fbOk ? 'DONE: ' : 'BLOCKED: ') + r.id + ' via {_stage_family.FALLBACK} fallback after ' + _fam.family + ' ' + _fam.verdict + ' ' + JSON.stringify(_rec);\n"
@@ -4302,6 +4474,7 @@ def compose_ask_script(
     run_base_sha: Optional[str] = None,
     route_preference: Optional[_route_pref.RoutePreference] = None,
     launcher_child: bool = False,
+    chain_hop: bool = False,
     objective: Optional[dict] = None,
     staged_out: Optional[dict] = None,
     carried_notes: Sequence[dict] = (),
@@ -4402,7 +4575,13 @@ def compose_ask_script(
         )
     blitz_fn: str = ""
     blitz_phases: list[str] = []
-    if known_arm in (ARM_M_PLUS, ARM_ROADMAP):
+    # Trap: a chained launcher child that sizes in-run can land on M+ whatever tier the hop saw; it carries plan-blitz so that arm runs here, never a second hand-off.
+    chain_hop_sizes = chain_hop and launcher_child and sized_in_run
+    xl_open = _xl_exit_open(repo_root, sizing_rel)
+    # Trap: a chain hop's result is final (fan_launcher follows one hop), so every arm it can reach runs here or composition refuses; an open XL exit reaches the roadmap arm, which needs plan-blitz beside it.
+    chain_final = chain_hop and launcher_child
+    chain_hop_sizes = chain_hop_sizes or (chain_final and xl_open)
+    if known_arm in (ARM_M_PLUS, ARM_ROADMAP) or chain_hop_sizes:
         if wrap_stage is None:
             from coordinator_core.ops.dispatch_emit import ask_plan_blitz
 
@@ -4415,7 +4594,6 @@ def compose_ask_script(
         if f"async function {_PLAN_BLITZ_FN}(" not in blitz_fn:
             raise AskComposeRefused(f"wrapped plan-blitz stage does not define async function {_PLAN_BLITZ_FN}")
 
-    xl_open = _xl_exit_open(repo_root, sizing_rel)
     # A raw ask is sized in-run, so any size can reach the XL exit; a known arm is already sized, so only an open XL exit can.
     xl_possible = sized_in_run or xl_open
     rb_fn: str = ""
@@ -4434,6 +4612,11 @@ def compose_ask_script(
                 and not roadmap_in_body
                 and len(blitz_fn.encode("utf-8")) + len(rb_fn.encode("utf-8")) > STAGES_EMBED_BYTE_BUDGET
             ):
+                if chain_final:
+                    raise AskComposeRefused(
+                        "a chained run cannot embed the roadmap arm beside plan-blitz within the embed byte budget; "
+                        "its hand-off would be refused as a second hand-off"
+                    )
                 rb_fn, rb_phases = "", []
             if em_brief and rb_fn:
                 if _TOP_AGENT_DECL.search(rb_fn):
@@ -5141,6 +5324,7 @@ def compose_ask_script(
             f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null, chain_emit: _scouted.chain_emit ?? null }}"
             + (")" if launcher_child else "") + ";"
         )
+        b.append(_GATE_ARM_FOLD_CASE_JS)
         # A clean assemble whose scout left the gate unanswered: a known (route, tshirt) yields its arm
         # from values in hand (XS also needs the footprint the gate would otherwise refuse on); only an
         # unmapped pair runs the gate agent, once. A derived arm skips the agent's stage fold, so the
@@ -5397,8 +5581,8 @@ def compose_ask_script(
         "next_action: 'The gate timed out (-32004) and its one refire did not clear it; the gate is retry-safe, refire: ' + "
         f"{_refire_js(sizing_rel)} }}; }}"
     )
-    b.append(_research_split_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after))
-    b.append(_pure_research_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after))
+    b.append(_research_split_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after, chain_final=chain_final))
+    b.append(_pure_research_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after, chain_final=chain_final))
     # A ledger resume re-judges the blocking rows of a run whose executors already landed. It
     # re-stages the plan (the terminal commit needs the manifest) and takes the XS tail: no plan
     # author, review wave or scoped test runs, and execution is skipped by `_resumeLedger`.
@@ -6054,6 +6238,12 @@ def compose_ask_script(
         b.append("    }")
         b.append("  }")
         _append_split_stage(b)
+    elif chain_final:
+        b.append(
+            f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+            "reason: 'a chained run holds no plan-blitz for an M+ arm and cannot hand off again: resubmit Workflow({name: \"coordinator:engine-ask\", "
+            "args: {sizing: \"' + _sizingRel + '\"}})', sizing: _sizingRel, run_id: _runId }; }"
+        )
     elif launcher_child:
         b.append(_launcher_relay_decl_js(head=head, anchor=anchor, run_id=run_id, stop_after=stop_after))
         launcher_relay_declared = True
@@ -6112,6 +6302,12 @@ def compose_ask_script(
                     repo_root=repo_root, run_id=run_id, interaction_mode="ceo",
                     plan_blitz_args=plan_blitz_args, script_path=script_path,
                 )
+            )
+        elif chain_final:
+            b.append(
+                f"    _halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'a chained run holds no roadmap stage and cannot hand off again: "
+                "resubmit Workflow({name: \"coordinator:engine-ask\", args: {sizing: \"' + _sizingRel + '\"}})', "
+                "sizing: _sizingRel, run_id: _runId };"
             )
         elif launcher_child:
             if not launcher_relay_declared:
@@ -6316,7 +6512,10 @@ def compose_ask_script(
     family_on = _family_enabled(repo_root, sizing_rel)
     family_arm = "r.family ? _familyRun(r) : " if family_on else ""
     if family_on:
-        b.append(_family_run_js(work_label, exec_phase))
+        start_cmd = engine_module_command(
+            FAMILY_CREDIT_MODULE, repo_root, f"start --root {Path(repo_root).as_posix()} --run-id {run_id} --row "
+        )
+        b.append(_family_run_js(work_label, exec_phase, start_cmd))
     if routed:
         b.append(_route_js.routed_run_js())
         b.append(_ROUTE_ADAPTER_JS)
@@ -6539,15 +6738,50 @@ def compose_ask_script(
         _review_recover_js(
             head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, run_id=run_id, stager=stager,
             run_dir=run_dir, notes_block=notes_block, repo_root=repo_root, agent_type_host=agent_type_host,
+            run_base_sha=run_base_sha,
         )
     )
     b.append(_review_blocked_halt_js(sizing_rel))
+    first_halt_changed_call = _agent(
+        _cat(
+            f"{head}\n\n{anchor}\n\n",
+            f"Run, in {repo_root}, `git --literal-pathspecs diff --name-only ",
+            "js:_sinceSha", " -- ", "js:_codePaths.map((p) => JSON.stringify(p)).join(' ')",
+            "` and `git --literal-pathspecs ls-files --others --exclude-standard -- ",
+            "js:_codePaths.map((p) => JSON.stringify(p)).join(' ')",
+            "`. Return `changed`: the union of both outputs, one repo-relative path per entry; [] when both are empty. "
+            "Run nothing else; edit nothing.",
+        ),
+        label="first-halt-changed", phase="review", agent_type=_emit._TEST_AGENT_TYPE,
+        schema=_obj(["changed"], {"changed": {"type": "array", "items": _STR}}),
+        effort=_MECHANICAL_EFFORT, run_id=run_id, agent_type_host=agent_type_host,
+    )
+    # The resumed leg's own prep counts product_files off its own base, so a ledger resume's no-delta
+    # evidence is the declared code paths' diff against the chain's first halt base (`since_sha`).
+    # Any unknown (no base, leg failure, non-array reply) leaves `_firstHaltChanged` null and the floor halts.
+    b.append(
+        "  let _firstHaltChanged = null;\n"
+        f"  if (_resumeLedger && !_halted && !_alreadyDelivered && _codeReviewOwed && !_metBySkipped "
+        f"&& {_VERDICT_COUNT_JS} === 0) {{\n"
+        f"    const _sinceSha = _gate.{RESUME_LEDGER_KEY}?.{RESUME_LEDGER_SINCE_SHA_FIELD};\n"
+        f"    const _codePaths = (_manifest.{_REVIEW_CODE_KEY} ?? []).filter((p) => typeof p === 'string' && p);\n"
+        "    if (typeof _sinceSha === 'string' && /^[0-9a-f]{40}$/.test(_sinceSha) && _codePaths.length) {\n"
+        f"      try {{ const _fc = await {first_halt_changed_call}; "
+        "if (_fc && Array.isArray(_fc.changed)) _firstHaltChanged = _fc.changed.filter((p) => typeof p === 'string'); } "
+        "catch (e) { _firstHaltChanged = null; }\n"
+        "    }\n"
+        "  }"
+    )
     b.append(
         f"  const _reviewVerdicts = {_VERDICT_COUNT_JS};\n"
+        + NO_DELTA_JS
+        + "  const _prepNoProductDelta = !_resumeLedger && !!_reviewPrep && !_reviewPrep.error && _reviewPrep.product_files === 0;\n"
+        f"  const _resumeNoDelta = _resumeLedger && Array.isArray(_firstHaltChanged) && _noDeltaCodePaths(_manifest.{_REVIEW_CODE_KEY}, _firstHaltChanged);\n"
+        "  if (!_prepNoProductDelta && !_resumeNoDelta) {\n"
         "  if (!_halted && !_alreadyDelivered && _codeReviewOwed && _reviewVerdicts === 0 && !_metBySkipped) { _halted = { halted: "
         f"{_lit(HALT_REVIEW_FLOOR)}, reason: 'review: 0 verdicts on a code-editing run (' + "
         f"_manifest.{_REVIEW_CODE_KEY}.slice(0, 5).join(', ') + ')', run_id: _runId, "
-        "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }"
+        "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }\n  }"
     )
     test_guard = (
         f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _reviewApplied > 0 || {XS_TEST_TARGET_JS}) "
@@ -6630,6 +6864,7 @@ def compose_ask_script(
     )
     verify_tests_call = _verify_tests_call(
         head=head, anchor=anchor, run_id=run_id, stager=stager, agent_type_host=agent_type_host,
+        repo_root=repo_root, out_path=f"{record_abs}/test-leg.json", base_sha=run_base_sha,
         test_js=_test_instruction_js(
             run_base_sha or "HEAD", repo_root,
             export_command=engine_module_command(
@@ -6641,6 +6876,7 @@ def compose_ask_script(
         "{ status: 'indeterminate', differs_from_baseline: null, observation: 'unjudged: verify leg returned "
         "no verdict', reason: 'verify leg returned no judge verdict', sidecar_path: null }"
     )
+    accept_rows = _acceptance_rows(repo_root, sizing_rel)
     verify_lines = [
         "  if (!_halted && _manifest && !_manifest.error) {",
         f"    phase({_lit(ASK_VERIFY_PHASE)});",
@@ -6665,7 +6901,8 @@ def compose_ask_script(
         f"if (_testWanted) {{ try {{ {_VERIFY_TEST_RESULT_VAR} = await {verify_tests_call}; }} catch (e) {{ "
         f"if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) throw e; log('verify-tests leg threw: ' + String((e && e.message) ?? e)); "
         f"{_VERIFY_TEST_RESULT_VAR} = null; }} }} "
-        f"_verify = await {verify_call}; "
+        + ("await _runAcceptance(); " if accept_rows else "")
+        + f"_verify = await {verify_call}; "
         f"if (_verify && {_VERIFY_TEST_RESULT_VAR} && typeof {_VERIFY_TEST_RESULT_VAR}.status === 'string') _verify.test = {_VERIFY_TEST_RESULT_VAR}; "
         "} catch (e) { const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } _verify = null; } return _verify; };",
@@ -6673,6 +6910,8 @@ def compose_ask_script(
         "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), _reverifyJoined ? Promise.resolve(_reviewReverify) : _joinReverify()]);",
         "    _reverifyJoined = true;",
         "    if (!_halted && !_reviewReused && _reviewReverify && ((Array.isArray(_reviewReverify.unapplied) && _reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }",
+        # An empty items list with ledger rows owed is an engine failure, not a verdict: one re-ask, no loop.
+        f"    {VERIFY_EMPTY_RETRY_JS}",
         _OVERLAY_FOLD_JS.replace(
             "__OVERLAY__", _overlay_verify_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)
         ),
@@ -6739,6 +6978,16 @@ def compose_ask_script(
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('ledger-remaining leg threw: ' + _m); } } }\n"
         "    }"
     ]
+    if accept_rows:
+        b.append(
+            _acceptance_decls_js(
+                accept_rows,
+                _acceptance_call(
+                    head=head, anchor=anchor, run_id=run_id, repo_root=repo_root, stager=stager,
+                    agent_type_host=agent_type_host,
+                ),
+            )
+        )
     b.extend(verify_lines)
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
     b.append(_review_blocked_halt_js(sizing_rel, after_join=True, call_only=True))
@@ -6748,11 +6997,31 @@ def compose_ask_script(
         "    const _reconciled = [];\n"
         f"    const _designPrefix = {json.dumps(_DESIGN_ANCHOR_PREFIX)};\n"
         "    const _normaliseLedger = () => {\n"
-        "    for (const i of (_ledger?.items ?? [])) {\n"
+        f"    {STALL_ONLY_COERCE_JS}\n"
+        + (
+            f"    if (_ledger && Array.isArray(_ledger.items)) _ledger.items = _demoteRed(_ledger.items, {_ACCEPT_RESULTS_VAR} ?? (_halted ? [] : _acceptOf(null)));\n"
+            if accept_rows
+            else ""
+        )
+        + "    for (const i of (_ledger?.items ?? [])) {\n"
         "      if (!i || i.status !== 'met' || !String(i.anchor ?? '').startsWith(_designPrefix)) continue;\n"
         "      const _mb = (Array.isArray(i.met_by) ? i.met_by : [i.met_by]).some((m) => typeof m === 'string' && m.trim() && m.trim().toLowerCase() !== 'none');\n"
         "      if (!_mb) { i.status = 'not_met'; i.essential = true; "
         "i.remaining = ['met_by: the senior-front-end review or ratification file of the design board']; }\n"
+        "    }\n"
+        # A resume whose declared code paths all lack a delta since the chain's first halt did no work: the
+        # rows declaring those paths (else every blocking row) are reported not done, never refused.
+        "    if (_resumeNoDelta) {\n"
+        f"      const _ndp = (_manifest.{_REVIEW_CODE_KEY} ?? []).map((p) => String(p).replace(/\\\\/g, '/').replace(/\\/+$/, ''));\n"
+        "      const _ndRows = (_manifest.rows ?? []).filter((r) => r && [...(r.writes ?? []), ...(r.writes_under ?? [])].some((w) => "
+        "_ndp.some((d) => { const x = String(w).replace(/\\\\/g, '/').replace(/\\/+$/, ''); return x === d || x.startsWith(d + '/'); })));\n"
+        "      const _ndIds = new Set(_ndRows.flatMap((r) => (Array.isArray(r.register_rows) ? r.register_rows : []).map(String)));\n"
+        f"      if (!_ndIds.size) for (const x of (_gate.{RESUME_LEDGER_KEY}?.blocking ?? [])) _ndIds.add(String(x));\n"
+        "      for (const i of (_ledger?.items ?? [])) {\n"
+        "        if (!i || i.status !== 'met' || !_ndIds.has(String(i.id))) continue;\n"
+        "        i.status = 'not_met'; i.essential = true; "
+        "i.remaining = ['no delta on declared code path(s) since the first halt: ' + _ndp.slice(0, 5).join(', ')];\n"
+        "      }\n"
         "    }\n"
         "    if (_preHaltCredit) {\n"
         f"      const _blk = _gate.{RESUME_LEDGER_KEY}.blocking ?? [];\n"
@@ -6807,7 +7076,7 @@ def compose_ask_script(
         "      const status = i.status === 'not_met' && rem.length && rem.every((a) => _postCommitActs.includes(a)) "
         "? 'post_commit' : i.status;\n"
         "      const acts = status === 'post_commit' && i.status === 'not_met' ? rem : i.post_commit_acts;\n"
-        "      if (status === 'drifted') return true;\n"
+        "      if (status === 'drifted' || status === 'inconclusive') return true;\n"
         "      if (status === 'not_met' && typeof i.withheld_by === 'string' && i.withheld_by) "
         "return !((_manifest?.gated ?? []).map((g) => g.id).includes(i.withheld_by) || _recoveryWithheld.includes(i.withheld_by));\n"
         "      if (status === 'not_met') { if (i.essential === false) i.essential = true; return true; }\n"
@@ -6819,12 +7088,11 @@ def compose_ask_script(
     if known_arm != ARM_XS:
         b.append(REOPEN_PLAN_JS)
         b.append(LIVE_TREE_WRITES_JS)
-        b.append(_live_snap_fn_js(repo_root=repo_root, run_id=run_id, record_dir=record_abs))
         b.append(
             _ledger_recover_js(
                 head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, ledger_rel=ledger_abs,
                 run_id=run_id, judged=judged, test_var=_emit._TEST_RESULT_VAR, stager=stager,
-                notes_block=notes_block,
+                notes_block=notes_block, repo_root=repo_root,
             )
         )
         b.append(REMNANT_ITEMS_JS)
@@ -6834,7 +7102,7 @@ def compose_ask_script(
                 judged=judged, test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
                 docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=f"{record_abs}/manifest.json", root=repo_root_abs) if in_run_commit else (),
                 verdict_parts=verdict_parts,
-                schema=_verify_schema(judge_brief[1] if judged else None),
+                schema=_verify_schema(judge_brief[1] if judged else None), repo_root=repo_root,
             )
         )
     # `out_of_scope` accepts only register rows still open at stage; any other blocking id is named
@@ -6877,7 +7145,9 @@ def compose_ask_script(
     b.append(
         "    if (!_halted && (!_ledger || _emptyVerdict || _ledgerBlocking(_ledger).length)) "
         "{ _halted = { halted: 'ledger-check', "
-        "items: _emptyVerdict ? _owedIds.map((id) => ({ id, status: 'not_met' })) : (_ledger ? _ledgerBlocking(_ledger) : []), "
+        f"items: _emptyVerdict ? _owedIds.map((id) => ({{ id, status: {_lit(VERIFY_LEG_EMPTY)}, evidence: {_lit(VERIFY_LEG_EMPTY + ': no verdict after one re-ask; an engine failure, the row was not judged')} }})) "
+        ": (_ledger ? _ledgerBlocking(_ledger) : []), "
+        f"...(_emptyVerdict ? {{ {VERIFY_LEG_EMPTY.replace('-', '_')}: true }} : {{}}), "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
         f"{HALT_PLAN_FIELD}: _planRel, {SELF_CORRECTION_FIELD}: _ledgerSc, "
         "next_action: _allOwed ? 'Everything left is EM or operator work: ' + _owedNamed.join('; ') "
@@ -6886,7 +7156,7 @@ def compose_ask_script(
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row.' "
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
-        ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none' : '') + ' block the commit.' "
+        ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none after one re-ask (verify-leg-empty: an engine failure, the code was not judged red)' : '') + ' block the commit.' "
         ": !_ledger ? 'The verify leg returned no items list, so the ledger holds no verdict: the refire re-runs the verify leg.' "
         ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: the refire re-runs the verify leg.') "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
@@ -7496,8 +7766,18 @@ def _chain_emit_start_lines(
     ]
 
 
+def _chain_final_research_js(guard: str, what: str) -> str:
+    """The research leg of a chain hop: a chained run's result is final, so the halt stays with its `fire` and
+    `chain_error` instead of returning a hand-off the launcher would refuse."""
+    return (
+        f"  if ({guard}) {{ _halted = {{ ..._halted, chain_error: 'a chained run cannot chain {what} again: "
+        "fire it from halted_by.fire' }; }"
+    )
+
+
 def _research_split_chain_js(
     *, head: str, anchor: str, run_id: str, launcher_child: bool = False, stop_after: Optional[str] = None,
+    chain_final: bool = False,
 ) -> str:
     """The in-run leg for a research/build split whose research sibling is ready: the gate halt's `fire` is the
     engine-ask over `split.research.sizing`, so the script chains that run instead of waking the EM to paste it.
@@ -7513,6 +7793,8 @@ def _research_split_chain_js(
         f"&& _halted.split.research.status === 'ready' && typeof {sibling} === 'string' && {sibling} !== '' "
         "&& Array.isArray(_halted.fire) && _halted.fire.length > 0"
     )
+    if chain_final:
+        return _chain_final_research_js(guard, "the research sibling")
     if launcher_child:
         return (
             f"  if ({guard}) {{ return {{ {CHAIN_HANDOFF_KEY}: {_chain_emit_params_js(sibling, research=True, stop_after=stop_after)}, "
@@ -7532,6 +7814,7 @@ def _research_split_chain_js(
 
 def _pure_research_chain_js(
     *, head: str, anchor: str, run_id: str, launcher_child: bool = False, stop_after: Optional[str] = None,
+    chain_final: bool = False,
 ) -> str:
     """The in-run leg for a pure research sizing (research block, no writes, no split): the gate halt's `fire` is
     the engine-ask over this very sizing, so the script chains the research run itself, as the split leg does for
@@ -7543,6 +7826,8 @@ def _pure_research_chain_js(
         f"&& typeof {sibling} === 'string' && {sibling} !== '' "
         "&& Array.isArray(_halted.fire) && _halted.fire.length > 0"
     )
+    if chain_final:
+        return _chain_final_research_js(guard, "the research run")
     if launcher_child:
         return (
             f"  if ({guard}) {{ return {{ {CHAIN_HANDOFF_KEY}: {_chain_emit_params_js(sibling, research=True, stop_after=stop_after)}, "
@@ -8136,7 +8421,13 @@ def _append_docs_and_commit(
         ".replace(/\\\\/g, '/').split('/').pop().replace(/\\.[^.]*$/, '');"
     )
     b.append("    let _retestAttempts = 0;")
+    b.append("    let _awaits = 0;")
     b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append("    while (!_halted && _commit && _commit.awaiting && _awaits < 2) {")
+    b.append("      _awaits++;")
+    b.append(f"      try {{ await {_retest_await_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append(f"      try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append("    }")
     b.append(
         "    while (!_halted && _commit && _commit.refused && _commit.remedy_step "
         "&& _commit.remedy_step.exhausted !== true && Number(_commit.remedy_step.attempt) > _retestAttempts) {"
@@ -8258,12 +8549,43 @@ def _invariant_retest_call(*, head: str, anchor: str, repo_root: str, run_id: st
         f"{head}\n\n{anchor}\n\nphase: commit\n\nThe landing refused on a repo-wide invariant with no fresh passing "
         "retest. Run exactly this command as its own Bash call, no wrapper:\n\n",
         "js:" + start,
-        "\n\nThen run the same command with ` --poll` appended, as its own Bash call, repeating it (sleep 2 "
-        "between) while it exits 3 (running). Exit 0 is pass, 1 fail, 2 error. Return status 'pass', 'fail' or "
-        "'error' and the last output line as detail. Run nothing else.",
+        "\n\nThen run the same command with ` --poll --wait` appended, as its own Bash call. ",
+        _WAIT_CALL_CLAUSE,
+        " Exit 0 is pass, 1 fail, 2 abandoned or error. Return status 'pass', 'fail' or 'error' and the last "
+        "output line as detail. Run nothing else.",
     )
     return _agent(
         prompt, label="retest-invariant", phase="commit", agent_type=_emit._TEST_AGENT_TYPE,
+        schema=_RETEST_SCHEMA, run_id=run_id,
+    )
+
+
+_WAIT_CALL_CLAUSE = (
+    "Run it as ONE Bash call with run_in_background: true and no timeout parameter. Wait for its "
+    "completion notification; do not sleep, poll or re-run it."
+)
+
+
+def _retest_await_call(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
+    """The `retest-await` agent call: waits out the run's in-flight retest to a terminal verdict, so the commit
+    stage re-invokes the landing without spending a remedy attempt. The wait runs off-engine in
+    `retest_targeted --poll --wait` (it ends at the record's own deadline), never in `land_run`."""
+    params_file = params_path(repo_root, run_id)
+    if params_file is None:
+        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
+    wait = engine_module_command(
+        "coordinator_core.ops.dispatch_emit.retest_targeted", repo_root,
+        f"--poll --wait --params-file {params_file.as_posix()}",
+    )
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\nphase: commit\n\nThe landing is awaiting the run's retest verdict. Run exactly "
+        f"this command, no wrapper, no edit to it:\n\n{wait}\n\n",
+        _WAIT_CALL_CLAUSE,
+        " Exit 0 is pass, 1 fail, 2 abandoned or error. Return status 'pass', 'fail' or 'error' and the last "
+        "output line as detail. Run nothing else.",
+    )
+    return _agent(
+        prompt, label="retest-await", phase="commit", agent_type=_emit._TEST_AGENT_TYPE,
         schema=_RETEST_SCHEMA, run_id=run_id,
     )
 
@@ -8308,7 +8630,7 @@ def _commit_stage_call(
         f"doc_paths: {_DOC_PATHS_JS} }})",
         f"\n\n{LAND_RUN_OP} enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
-        f"remedy_step, sizing_shipped, close, fanout, siblings, run_artifacts, run_artifact_residue and {_RESIDUE_REPLY_KEY}, verbatim (null "
+        f"remedy_step, awaiting, sizing_shipped, close, fanout, siblings, run_artifacts, run_artifact_residue and {_RESIDUE_REPLY_KEY}, verbatim (null "
         f"where absent). A non-empty {_RESIDUE_REPLY_KEY} is returned with \"{_RESIDUE_DIRECTIVE}\". Run nothing else."
         + _PARAMS_FILE_ONLY_CLAUSE,
     )

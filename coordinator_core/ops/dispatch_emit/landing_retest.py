@@ -10,7 +10,8 @@ import re
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
-from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
+from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa: F401
+    RETEST_ABANDONED,
     RETEST_LAUNCHER,
     named_failures,
 )

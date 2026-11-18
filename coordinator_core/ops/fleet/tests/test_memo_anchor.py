@@ -10,9 +10,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from coordinator_core.ops.fleet._memo_anchor import (  # noqa: E402
     ANCHOR_REF_PREFIX,
+    PIN_REF_PREFIX,
     anchor_names,
+    read_pin,
     resolve_anchor,
+    retire_anchor,
+    retire_pin,
     write_anchor,
+    write_pin,
 )
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
@@ -188,6 +193,98 @@ def test_lost_cas_where_ref_already_matches_returns_the_sha(tmp_path, monkeypatc
         "a lost CAS whose ref already equals the intended blob is not a "
         "loss -- it must return the sha, not None"
     )
+
+
+def test_pin_round_trip_is_invisible_to_anchor_names(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    commit_sha = _seed_commit(repo)
+
+    assert PIN_REF_PREFIX == "refs/coordinator/inbox-pin/"
+    assert read_pin(repo / ".git", commit_sha) is None
+    assert write_pin(repo / ".git", commit_sha) is True
+    assert read_pin(repo / ".git", commit_sha) == commit_sha
+    assert write_pin(repo / ".git", commit_sha) is True
+    assert anchor_names(repo / ".git") == []
+    ref = _git(["rev-parse", PIN_REF_PREFIX + commit_sha], cwd=repo).stdout.strip()
+    assert ref == commit_sha
+
+
+def test_write_pin_refuses_bad_sha_and_a_held_lock(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    commit_sha = _seed_commit(repo)
+
+    assert write_pin(repo / ".git", "abc123") is False
+
+    lock = repo / ".git" / (PIN_REF_PREFIX + commit_sha + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("", encoding="utf-8")
+    assert write_pin(repo / ".git", commit_sha) is False
+    assert read_pin(repo / ".git", commit_sha) is None
+
+
+def test_read_pin_sees_a_packed_pin(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    commit_sha = _seed_commit(repo)
+    assert write_pin(repo / ".git", commit_sha) is True
+    _git(["pack-refs", "--all"], cwd=repo)
+    assert not (repo / ".git" / (PIN_REF_PREFIX + commit_sha)).exists()
+    assert read_pin(repo / ".git", commit_sha) == commit_sha
+
+
+def test_retire_pin_removes_loose_and_is_noop_when_absent(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    commit_sha = _seed_commit(repo)
+
+    assert retire_pin(repo / ".git", commit_sha) is True
+    assert write_pin(repo / ".git", commit_sha) is True
+    assert retire_pin(repo / ".git", commit_sha) is True
+    assert read_pin(repo / ".git", commit_sha) is None
+    assert not (repo / ".git" / (PIN_REF_PREFIX + commit_sha + ".lock")).exists()
+
+
+def test_retire_pin_returns_false_while_the_ref_survives_packed(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    commit_sha = _seed_commit(repo)
+    assert write_pin(repo / ".git", commit_sha) is True
+    _git(["pack-refs", "--all"], cwd=repo)
+
+    assert retire_pin(repo / ".git", commit_sha) is False
+    assert read_pin(repo / ".git", commit_sha) == commit_sha
+
+
+def test_retire_pin_with_a_held_lock_returns_false_and_keeps_the_pin(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    commit_sha = _seed_commit(repo)
+    assert write_pin(repo / ".git", commit_sha) is True
+    lock = repo / ".git" / (PIN_REF_PREFIX + commit_sha + ".lock")
+    lock.write_text("", encoding="utf-8")
+
+    assert retire_pin(repo / ".git", commit_sha) is False
+    assert read_pin(repo / ".git", commit_sha) == commit_sha
+
+
+def test_retire_anchor_deletes_one_anchor_only(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    commit_sha = _seed_commit(repo)
+    blob_a = write_anchor(repo / ".git", "a.md", commit_sha, b"a")
+    blob_b = write_anchor(repo / ".git", "b.md", commit_sha, b"b")
+
+    assert retire_anchor(repo / ".git", "a.md", commit_sha) is True
+    assert anchor_names(repo / ".git") == [("b.md", commit_sha, blob_b)]
+    assert blob_a is not None
+    assert retire_anchor(repo / ".git", "a.md", commit_sha) is True
+    assert retire_anchor(repo / ".git", "bad name", commit_sha) is False
+
+    _git(["pack-refs", "--all"], cwd=repo)
+    assert retire_anchor(repo / ".git", "b.md", commit_sha) is False
+    assert anchor_names(repo / ".git") == [("b.md", commit_sha, blob_b)]
 
 
 def test_lost_cas_with_a_genuine_mismatch_still_returns_none(tmp_path, monkeypatch):

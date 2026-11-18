@@ -477,6 +477,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.sessionstart_ensure_http_forwarder": OpClass.MUTATING,
     "hooks.guard_hook_generation_self_probe": OpClass.MUTATING,
     "hooks.session_start_guard_plane_check": OpClass.MUTATING,
+    "hooks.session_start_resume_plugin_check": OpClass.MUTATING,
     "hooks.project_orientation": OpClass.MUTATING,
     "hooks.pickup_autofire": OpClass.MUTATING,
     "hooks.mise_autofire": OpClass.MUTATING,
@@ -1889,6 +1890,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # dry_run plans and reports only; mutates nothing.
     # Spec: docs/plans/2026-09-11-memo-deliveries-survive-the-receiver-s-o.md § C5
     "memo.heal_inbox": OpClass.MUTATING,
+    # memo.sweep_ref_only — MUTATING: on dry_run:false materialises ref-only memos into inbox/archive (ops/fleet/memo_sweep_ref_only.py); dry run writes nothing.
+    "memo.sweep_ref_only": OpClass.MUTATING,
     # memo.migrate_group_em_inbox — MUTATING: moves memos from the group-em home's inbox into the
     # G-EM reroute target's inbox (O_EXCL + commit_authored_new_file in the receiver repo) and
     # removes the home copy. Spec: docs/plans/2026-10-21-group-em-memo-receive-reroute.md § C3.
@@ -2396,6 +2399,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md § C3
     "ceremony.commit_v2": OpClass.MUTATING,
+    # ceremony.hand_land — MUTATING: lands named paths on HEAD through commit_paths (CAS ref move, worktree sync) (ops/ceremony/hand_land.py).
+    "ceremony.hand_land": OpClass.MUTATING,
     # dispatch.terminal_commit — MUTATING: lands the run's terminal commit via
     # ONE in-process `ceremony.commit_v2` call (ops/dispatch_emit/terminal_commit.py).
     # DR-208 five-question affirmation (citing dispatch.terminal_commit handler):
@@ -2428,6 +2433,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The commit sha, the ref move and the close-job record persist across the box.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.land_run": OpClass.MUTATING,
+    # dispatch.land_blobs — MUTATING: index-only landing of a run's declared blobs, one CAS on the ref (ops/dispatch_emit/land_blobs.py).
+    "dispatch.land_blobs": OpClass.MUTATING,
     # dispatch.land_credited — MUTATING: commits a run's credited paths via a CAS ref move and writes a receipt.
     "dispatch.land_credited": OpClass.MUTATING,
     # close.background — MUTATING: pays a run's queued close legs off the critical path
@@ -2726,6 +2733,33 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      dispatch.ask_stage and a refire read the marker; peers' overlap checks read the index.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "workflow.cancel": OpClass.MUTATING,
+    # job.start — MUTATING: writes <settings home>/jobs/<job_id>.json (ops/job_cancel.py); nothing else.
+    # DR-208 five-question affirmation (citing job.start handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      One job record under the settings home, atomic tmp + replace; no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      jobs/<job_id>.json under a safe_id job_id.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      The record belongs to the one job named.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      job.cancel reads the record.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "job.start": OpClass.MUTATING,
+    # job.cancel — MUTATING: terminates the (pid, ctime)-verified descendants of the recorded root,
+    # unlinks the recorded lock, removes the recorded staging dir and deletes the record (ops/job_cancel.py).
+    # DR-208 five-question affirmation (citing job.cancel handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Deletes the lock file, the staging dir and the job record; no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Deletions only; staging removal refuses a root, home, settings home or repo ancestor.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      Terminates processes, only those whose (pid, ctime) descend from the recorded root.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The job's processes, lock and staging are gone for every peer.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "job.cancel": OpClass.MUTATING,
     # workflow.pending_revisions — COMPUTE_ONLY: replies the unclaimed register rows of a run's
     # plan; writes nothing (ops/dispatch_emit/revise_absorb.py).
     "workflow.pending_revisions": OpClass.COMPUTE_ONLY,
@@ -4556,6 +4590,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   write-ops in this package family use; see op.py module docstring.
     # Spec: docs/plans/2026-08-12-emitter-turns-a-spine-into-one-workflow.md § C5
     "dispatch.emit": OpClass.MUTATING,
+    # dispatch.test_leg — MUTATING: reads the run's recorded test verdict and writes one review-trail sidecar (ops/dispatch_test_leg.py).
+    "dispatch.test_leg": OpClass.MUTATING,
     # workflow.fire — MUTATING: spawns one detached `claude -p` child per emitted
     # workflow script and writes the fire registry record that IS the run handle
     # (ops/workflow_fire/op.py -> fire.py::fire_workflow).

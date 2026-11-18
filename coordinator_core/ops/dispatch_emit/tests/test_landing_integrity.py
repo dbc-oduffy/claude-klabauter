@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import subprocess
 from pathlib import Path
@@ -493,11 +494,14 @@ def test_stale_record_does_not_admit_a_recorded_failure(tmp_path, marker):
     assert li.landing_test_gate(root, passed, "r1")[0] == []
 
 
+_LIVE_DEADLINE = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+
 def test_running_record_refuses_with_poll_remedy(tmp_path):
     root = _repo(tmp_path)
     path = li.fresh_verdict_path(root, "r1")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"run_id": "r1", "status": li.RETEST_RUNNING, "tests": ["t.py"]}), encoding="utf-8")
+    path.write_text(json.dumps({"run_id": "r1", "status": li.RETEST_RUNNING, "tests": ["t.py"], "deadline": _LIVE_DEADLINE}), encoding="utf-8")
     findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
     assert check == "retest-running" and findings[0].reason == li.TARGETED_TESTS_FAILED
     assert "--poll" in findings[0].detail and li.RETEST_LAUNCHER in findings[0].detail
@@ -509,7 +513,7 @@ def _running(tmp_path):
     root = _repo(tmp_path)
     path = li.fresh_verdict_path(root, "r1")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"run_id": "r1", "status": li.RETEST_RUNNING, "tests": ["t.py"]}), encoding="utf-8")
+    path.write_text(json.dumps({"run_id": "r1", "status": li.RETEST_RUNNING, "tests": ["t.py"], "deadline": _LIVE_DEADLINE}), encoding="utf-8")
     return root
 
 

@@ -272,6 +272,21 @@ def _family_of(stage_families: StageFamilies | None, manifest: Manifest, stage: 
     return None if family == _stage_family.FALLBACK else family
 
 
+#: Emitted JS `_fallbackCause(v, objOk)`: '' when the claude fallback reply is a DONE one, else the cause
+#: (missing, non-text, empty, or the PARTIAL/BLOCKED status with its gate-blocker or status line).
+#: `objOk` lets a schema'd object reply count as DONE. Shared by both family fallback emitters.
+FALLBACK_CAUSE_JS = r"""function _fallbackCause(v, objOk) {
+  if (v === null || v === undefined) return 'reply missing (dispatch returned nothing)';
+  if (typeof v !== 'string') return objOk ? '' : 'reply was not text (' + typeof v + ')';
+  if (v.trim() === '') return 'reply was empty';
+  const m = /(^|\n)\s*[*_`]{0,2}(PARTIAL|BLOCKED)[*_`]{0,2}:[^\n]*/.exec(v);
+  if (!m) return '';
+  const g = /(^|\n)[\s>*_`-]*gate-blocker[*_`]{0,2}:\s*([^\n]+)/i.exec(v);
+  return ('replied ' + (g ? m[2] + ', gate-blocker: ' + g[2].trim() : m[0].trim())).slice(0, 300);
+}
+"""
+
+
 def _family_stage_js(stage_families: StageFamilies) -> str:
     """JS declaring `_familyStage(family, role, prompt, label, opts)`: one family attempt through the runner agent, then one claude fallback when that attempt is BLOCKED, FAILED or unresolved.
 
@@ -306,7 +321,8 @@ def _family_stage_js(stage_families: StageFamilies) -> str:
     return (
         f"const _FAMILY_BRIEFS = {json.dumps(briefs, sort_keys=True)};\n"
         f"const _FAMILY_RESULT_SCHEMA = {schema};\n"
-        "async function _familyStage(family, role, prompt, label, opts) {\n"
+        + FALLBACK_CAUSE_JS
+        + "async function _familyStage(family, role, prompt, label, opts) {\n"
         "  let fam = null;\n"
         f"  try {{ const fr = await agent(_FAMILY_BRIEFS[family + ':' + role] + '\\n' + prompt, "
         f"{{ label: label, agentType: {_js_string_literal(runner)}, model: {_js_string_literal(model)}, "
@@ -322,18 +338,20 @@ def _family_stage_js(stage_families: StageFamilies) -> str:
         "  }\n"
         "  if (!fam.blocked_reason) fam = { ...fam, blocked_reason: 'family-stage-runner reported ' + fam.verdict + ' without a reason' };\n"
         "  let fbValue = null;\n"
-        "  try { fbValue = await agent(prompt, { ...opts, label: label + ':fallback' }); } catch (e) { fbValue = null; }\n"
-        "  const fbOk = typeof fbValue === 'string' ? fbValue.trim() !== '' && "
-        "!/(^|\\n)\\s*[*_`]{0,2}(PARTIAL|BLOCKED)[*_`]{0,2}:/.test(fbValue) : fbValue != null;\n"
+        "  let fbCause = '';\n"
+        "  try { fbValue = await agent(prompt, { ...opts, label: label + ':fallback' }); } "
+        "catch (e) { fbValue = null; fbCause = 'dispatch threw: ' + String((e && e.message) || e).slice(0, 300); }\n"
+        "  if (!fbCause) fbCause = _fallbackCause(fbValue, true);\n"
+        "  const fbOk = fbCause === '';\n"
         f"  const fb = {{ family: {fallback}, stage: role, exit_code: fbOk ? 0 : 1, output_path: '', "
         "verdict: fbOk ? 'OK' : 'FAILED' };\n"
-        f"  if (!fbOk) fb.blocked_reason = {_js_string_literal(_stage_family.FALLBACK + ' fallback reply missing or not DONE')};\n"
+        f"  if (!fbOk) fb.blocked_reason = {_js_string_literal(_stage_family.FALLBACK + ' fallback ')} + fbCause;\n"
         "  const rec = { stage_role: role, attempts: [fam, { ...fb, fallback_for: fam.family }], "
         f"reported_family: {fallback} }};\n"
         "  log(label + ': ' + fam.family + ' attempt ' + fam.verdict + ' (' + fam.blocked_reason + '); rerunning on ' + "
         f"{fallback} + ' ' + JSON.stringify(rec));\n"
         "  if (!fbOk) throw new Error('stage ' + label + ' BLOCKED after ' + fam.family + ' ' + fam.verdict + ' and a failed '"
-        f" + {fallback} + ' fallback');\n"
+        f" + {fallback} + ' fallback: ' + fbCause);\n"
         "  return fbValue;\n"
         "}"
     )

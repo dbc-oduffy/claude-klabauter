@@ -71,6 +71,54 @@ def test_seed_block_creates_and_unseed_deletes_empty_file(tmp_path: Path) -> Non
     assert not f.exists()
 
 
+_REAL_IS_SCRATCH_ROOT = ds.is_scratch_root
+
+
+@pytest.fixture(autouse=True)
+def _pytest_tmp_roots_are_not_scratch(monkeypatch: pytest.MonkeyPatch) -> None:
+    # pytest's tmp_path sits under the system temp dir, which the scratch predicate refuses.
+    monkeypatch.setattr(ds, "is_scratch_root", lambda path: False)
+
+
+@pytest.mark.parametrize("path", [
+    "/private/tmp/claude-501/scratchpad/skills",
+    "/tmp/x/skills",
+    "/var/folders/ab/cd/T/skills",
+    "C:\\Users\\u\\AppData\\Local\\Temp\\p\\skills",  # abs-path-ok: fixture string, never touched
+    "/repo/scratch/skills",
+])
+def test_scratch_predicate_flags_tmp_and_scratch_shapes(path: str) -> None:
+    # Source: observed ~/.gemini/config/skills.json holding a /private/tmp scratchpad root (run ask-cb5854 R1 item 5).
+    assert _REAL_IS_SCRATCH_ROOT(path)
+
+
+@pytest.mark.parametrize("path", ["/home/u/tmp/proj/skills", "/Users/u/tmp/skills", "/Users/u/.claude/plugins/coordinator/skills", "C:\\Users\\u\\.claude\\skills", "/p/skills", "/Users/u/scratchpad/proj/skills", "/Users/u/scratch", "/Users/u/proj/scratchpad"])  # abs-path-ok: fixture string; scratchpad outside a temp root and a bare trailing scratch are sanctioned, not scratch
+def test_scratch_predicate_passes_sanctioned_roots(path: str) -> None:
+    assert not _REAL_IS_SCRATCH_ROOT(path)
+
+
+def test_agy_skills_refuses_a_scratch_root_and_still_prunes_scratch_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ds, "is_scratch_root", _REAL_IS_SCRATCH_ROOT)
+    sj = tmp_path / "skills.json"
+    assert ds.seed_agy_skills(sj, "/tmp/x/skills") == "refused"
+    assert not sj.exists()
+    sj.write_text(json.dumps({"entries": [{"path": "/private/tmp/s/skills"}, {"path": "/keep"}]}))
+    assert ds.seed_agy_skills(sj, "/tmp/x/skills") == "refused"
+    assert json.loads(sj.read_text())["entries"] == [{"path": "/keep"}]
+
+
+def test_agy_skills_prunes_scratch_entries_beside_ours_and_adds_a_sanctioned_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ds, "is_scratch_root", _REAL_IS_SCRATCH_ROOT)
+    sj = tmp_path / "skills.json"
+    sj.write_text(json.dumps({"entries": [{"path": "/p/skills"}, {"path": "/private/tmp/s/skills"}]}))
+    assert ds.seed_agy_skills(sj, "/p/skills") == "pruned"
+    assert json.loads(sj.read_text())["entries"] == [{"path": "/p/skills"}]
+    assert ds.seed_agy_skills(sj, "/p/skills") == "present"
+    sj.write_text(json.dumps({"entries": [{"path": "/var/folders/a/T/s"}]}))
+    assert ds.seed_agy_skills(sj, "/p/skills") == "added"
+    assert json.loads(sj.read_text())["entries"] == [{"path": "/p/skills"}]
+
+
 def test_agy_skills_idempotent_and_unseed_only_ours(tmp_path: Path) -> None:
     sj = tmp_path / "skills.json"
     sj.write_text(json.dumps({"entries": [{"path": "/foreign"}]}))

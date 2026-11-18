@@ -162,10 +162,19 @@ def test_named_reason_stops_the_repeat(env):
     assert nb.advisory_text(env.params()) == ""
 
 
-def test_nameless_repeat_is_still_emitted(env):
+def test_a_nag_another_caller_spent_is_not_repeated(env):
     nag_text(SID)  # another caller already spent the full first nag
     env.turns(11)
-    assert nb.advisory_text(env.params()).startswith(NAG_REPEAT_PREFIX)
+    assert nb.advisory_text(env.params()) == ""
+    assert json.loads(env.state.read_text())["pre_fire_signalled"] is True
+
+
+def test_a_prefire_survey_nag_is_not_followed_by_a_turn_budget_nag(env):
+    from coordinator_core.hooks import guard_em_prefire_survey as g
+
+    assert g.prefire_advisory_text(9, 8, SID).startswith("[em-prefire-survey]")
+    env.turns(11)
+    assert nb.advisory_text(env.params()) == ""
 
 
 @pytest.mark.parametrize(

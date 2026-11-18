@@ -41,3 +41,16 @@ def test_the_claude_klabauter_root_gets_the_commit_override(toplevels):
 
 def test_an_unpinned_foreign_root_falls_back_to_head_never_the_claude_klabauter_commit(toplevels):
     assert publish._refresh_source_ref(Path(DOE), {}) == "HEAD"
+
+
+def test_a_target_source_ref_pin_reaches_a_foreign_root_and_never_the_engine(toplevels, monkeypatch):
+    monkeypatch.setattr(publish, "_SOURCE_REF_PINS", {DOE: "d" * 40})
+    assert publish._refresh_source_ref(Path(DOE), {}) == "d" * 40
+    assert publish._source_ref_for(DOE) == "d" * 40
+    assert publish._source_ref_for(ENGINE_TREE) == "m" * 40
+    assert publish._source_ref_for("/repos/other") == ""
+
+
+def test_the_round_pin_wins_over_a_target_source_ref_pin(toplevels, monkeypatch):
+    monkeypatch.setattr(publish, "_SOURCE_REF_PINS", {DOE: "d" * 40})
+    assert publish._refresh_source_ref(Path(DOE), {DOE: "e" * 40}) == "e" * 40

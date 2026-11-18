@@ -4,6 +4,9 @@ Parses `[timing] <row>: <label>: Ns wall / Ns cpu (driver only` lines, sums driv
 phase over every row, and compares an after-log against a baseline log. Exit 0 = every phase
 within bounds; 1 = a phase regressed; 2 = the two logs cover different row sets (no ratio is
 reported, since phase CPU scales with the row set) or a log has no timing lines.
+
+Usage, from the repo root: `python -m coordinator_core.benchmarks.publish_phase_cpu --baseline
+<before.log> <after.log>`. Run by file path it cannot import `coordinator_core`.
 """
 
 from __future__ import annotations

@@ -77,6 +77,52 @@ def test_blob_read_spans_chunks_and_still_resolves_every_importer(tmp_path, monk
     assert reads.count("cat-file") == 3
 
 
+def test_both_commit_gates_share_one_blob_read_for_a_full_sha(tmp_path, monkeypatch):
+    import percolate.import_closure as ic
+
+    repo = _repo(tmp_path)
+    sha = _head(repo)
+    reads = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    ic.find_commit_from_import_name_violations(repo, sha)
+    first = len(reads)
+    ic.find_commit_module_attr_violations(repo, sha)
+    assert first == 2 and len(reads) == first
+
+
+def test_warm_cache_serves_the_name_gate_without_reading_a_blob(tmp_path, monkeypatch):
+    import percolate.import_closure as ic
+    from coordinator_core.percolate.gate_result_cache import GateResultCache
+
+    repo = _repo(tmp_path, "from coordinator_core.helpers import present, absent_name\n")
+    sha = _head(repo)
+    cold = GateResultCache(tmp_path / "cache", "commit-from-import", "v1")
+    expected = ic.find_commit_from_import_name_violations(repo, sha, cache=cold)
+    cold.flush()
+    reads = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    warm = GateResultCache(tmp_path / "cache", "commit-from-import", "v1")
+    assert ic.find_commit_from_import_name_violations(repo, sha, cache=warm) == expected
+    assert expected[1] and reads == ["ls-tree"]
+
+
+def test_a_ref_name_is_read_fresh_each_time(tmp_path, monkeypatch):
+    import percolate.import_closure as ic
+
+    repo = _repo(tmp_path)
+    reads = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    ic.find_commit_from_import_name_violations(repo, "HEAD")
+    ic.find_commit_module_attr_violations(repo, "HEAD")
+    assert reads.count("ls-tree") == 2
+
+
 def test_name_only_in_worktree_hunk_is_refused_naming_importer_and_name(tmp_path):
     repo = _repo(tmp_path, "from coordinator_core.helpers import present, spawn_in_capped_job\n")
     _write(
@@ -224,3 +270,38 @@ def test_unparseable_committed_module_is_cached_without_changing_gate_semantics(
     monkeypatch.setattr(ic.ast, 'parse', counted)
     assert ic.find_commit_from_import_name_violations(tmp_path, 'sealed') == (1, [])
     assert calls == Counter({'coordinator_core/a.py': 1, 'coordinator_core/b.py': 1})
+
+
+def test_warm_cache_parses_nothing_and_keeps_the_verdict(tmp_path, monkeypatch):
+    from collections import Counter
+    import percolate.import_closure as ic
+    from coordinator_core.percolate.gate_result_cache import GateResultCache
+
+    sources = {
+        'coordinator_core/__init__.py': '',
+        'coordinator_core/a.py': 'from coordinator_core.shared import present, absent\n',
+        'coordinator_core/shared.py': 'present = 1\n',
+    }
+    monkeypatch.setattr(ic, '_read_commit_py_blobs', lambda *a: (sources, {'coordinator_core'}))
+    calls = Counter()
+    real = ic.ast.parse
+    def counted(source, filename='<unknown>', **kwargs):
+        calls[filename] += 1
+        return real(source, filename=filename, **kwargs)
+    monkeypatch.setattr(ic.ast, 'parse', counted)
+
+    def run():
+        cache = GateResultCache(tmp_path / 'cache', 'commit-from-import', 'v1')
+        result = ic.find_commit_from_import_name_violations(tmp_path, 'c', cache=cache)
+        cache.flush()
+        return result
+
+    expected = (1, [('coordinator_core/a.py', 'coordinator_core.shared.absent')])
+    assert run() == expected
+    cold = sum(calls.values())
+    assert run() == expected
+    assert sum(calls.values()) == cold
+    # A changed blob is a new key: re-parsed, and the verdict follows the new bytes.
+    sources['coordinator_core/shared.py'] += 'absent = 2\n'
+    assert run() == (1, [])
+    assert calls['coordinator_core/shared.py'] == 2

@@ -449,6 +449,28 @@ def test_ac3_full_day_union_span_picks_global_base_and_tip(repo, monkeypatch, ca
     assert tip != main_mid
 
 
+def test_ac3_union_reads_owner_prefixed_and_legacy_branches(repo, monkeypatch, capsys):
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
+    day = "2026-03-14"
+    root_sha = _commit_on(repo, "2026-03-12", "shared root", fname="root.txt")
+    _branch_commit_from(repo, f"work/m1/{day}", root_sha, day, "08:00:00Z", "legacy early", "m1.txt")
+    _git(repo, "checkout", "main", "-q")
+    owned_late = _branch_commit_from(
+        repo, f"alice/m2/{day}", root_sha, day, "20:00:00Z", "owned late", "m2.txt"
+    )
+    _git(repo, "checkout", "main", "-q")
+    _branch_commit_from(repo, f"bob/m3/{day}", root_sha, day, "22:00:00Z", "other owner", "m3.txt")
+    _git(repo, "checkout", "main", "-q")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-15")
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    line = next(ln for ln in out.splitlines() if ln.startswith(f"{day}\t"))
+    _, count, base, tip = line.split("\t")
+    assert (count, base, tip) == ("2", root_sha, owned_late)
+
+
 def test_ac3_count_exceeds_the_base_tip_range_it_is_reported_beside(
     repo, monkeypatch, capsys
 ):

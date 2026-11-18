@@ -18,7 +18,7 @@ from coordinator_core._hook_envelope import context_only, deny, no_advisory, pay
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
-from coordinator_core.warp_fire import NAG_REPEAT_PREFIX, fire_step, nag_text
+from coordinator_core.warp_fire import fire_step, nag_text
 
 GENERATES: list = []
 
@@ -32,15 +32,15 @@ _ADVISORY_MARK = "\x00advisory\x00"  # _decide's text carries it when the leg wa
 
 
 def prefire_advisory_text(n: int, budget: int, session_id: str = "", host: Optional[str] = None) -> str:
-    """Full text on the session's first nag; a repeat is the one terse counted line. No session id: full."""
+    """Full text on the session's first nag, "" once another caller has spent it. No session id: full."""
     if not session_id:
         return (
             f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (all). "
             + fire_step(host=host) + " Add em_context."
         )
     nag = nag_text(session_id, host=host)
-    if nag.startswith(NAG_REPEAT_PREFIX):
-        return nag
+    if not nag:
+        return ""
     return (
         f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (all). "
         + nag + " Add em_context."
@@ -185,12 +185,17 @@ def _decide(payload: dict) -> Optional[str]:
     if phase == ers.PHASE_UNFIRED:
         if not over or state.get("fire_seen") or state.get("fired") or state.get("disarmed"):
             return None
+        if state.get("pre_fire_advised"):
+            return None
+        state["pre_fire_advised"] = True
+        epw.save_state(path, state)
+        text = prefire_advisory_text(pre_n, PREFIRE_EXPLORATORY_CALLS_MAX, sid, field(payload, "host") or None)
+        if not text:
+            return None
         from coordinator_core.hooks._em_write_budget import arm_advised
 
         arm_advised(root, sid)
-        return _ADVISORY_MARK + prefire_advisory_text(
-            pre_n, PREFIRE_EXPLORATORY_CALLS_MAX, sid, field(payload, "host") or None
-        )
+        return _ADVISORY_MARK + text
     if phase in (ers.PHASE_LANDED_GREEN, ers.PHASE_HALTED) and phase.run_id:
         landings = dict(state.get("landings") or {})
         rec = landings.get(phase.run_id)

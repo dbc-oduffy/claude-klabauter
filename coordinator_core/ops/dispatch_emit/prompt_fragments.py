@@ -14,6 +14,7 @@ decides regex-vs-division from the previous significant character.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from bisect import bisect_right, insort
@@ -316,14 +317,32 @@ def _hoist_constant_runs(body: str) -> tuple[str, list[str]]:
     return body, [f"const {ref} = {expr};\n" for (ref, expr), keep in zip(defs, live) if keep]
 
 
+_HOIST_MEMO: dict[tuple, str] = {}
+_HOIST_MEMO_MAX = 4
+
+
 def hoist_repeated_fragments(script: str, *, anchor: str) -> str:
     """Return ``script`` with repeated chunks hoisted into `const _PFn` lines.
 
     Recurring runs of three or more adjacent constant operands are then hoisted into `const _PFCn` lines.
     The consts go on the lines right after the first line containing ``anchor``, so they precede every use.
+
+    The rewrite is a pure function of ``script``, ``anchor`` and the module knobs, so a refire that
+    composes the same script again reads the result from a small per-process memo (oldest out).
     """
     if not HOIST_ENABLED:
         return script
+    key = (hashlib.sha256(script.encode("utf-8", "surrogatepass")).digest(), anchor, MIN_CHUNK, MIN_JSON)
+    hit = _HOIST_MEMO.get(key)
+    if hit is None:
+        hit = _hoist_repeated_fragments(script, anchor=anchor)
+        while len(_HOIST_MEMO) >= _HOIST_MEMO_MAX:
+            _HOIST_MEMO.pop(next(iter(_HOIST_MEMO)))
+        _HOIST_MEMO[key] = hit
+    return hit
+
+
+def _hoist_repeated_fragments(script: str, *, anchor: str) -> str:
     spans = _scan_literals(script)
     per_literal = [_chunks(_single_quoted_content(script, s, e)) for s, e in spans]
     counts = Counter(c for chunks in per_literal for c in chunks if len(c) >= MIN_CHUNK)
@@ -371,47 +390,68 @@ def hoist_repeated_fragments(script: str, *, anchor: str) -> str:
     return _hoist_json_values(script, anchor=anchor, first=count)
 
 
+#: A double-quoted string, a lone `"` (unterminated), a char that ends a JSON literal, or a bracket.
+_JSON_TOKEN = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|["\'`\n]|[\[\]{}]', re.S)
+
+
 def _json_end(src: str, i: int) -> int | None:
     """End (exclusive) of the balanced double-quoted-JSON bracket group opening at ``i``, or None for anything else."""
-    depth, j, n = 0, i, len(src)
-    while j < n:
-        c = src[j]
-        if c == '"':
-            j += 1
-            while j < n and src[j] != '"':
-                j += 2 if src[j] == "\\" else 1
+    depth = 0
+    for m in _JSON_TOKEN.finditer(src, i):
+        c = m.group()
+        if c[0] == '"':
+            if len(c) == 1:
+                return None
         elif c in "{[":
             depth += 1
         elif c in "}]":
             depth -= 1
             if depth == 0:
-                return j + 1
-        elif c in "'`\n":
+                return m.end()
+        else:
             return None
-        j += 1
     return None
 
 
-def _json_candidates(script: str) -> dict[str, list[int]]:
-    """Source text -> start offsets of each JSON object/array literal of at least MIN_JSON bytes in code position."""
-    lits, dead = _scan(script)
-    skip = sorted(lits + dead)
-    starts = [s for s, _ in skip]
-    out: dict[str, list[int]] = {}
+def _json_candidates(script: str, *, repeated_only: bool = False) -> dict[str, list[int]]:
+    """Source text -> start offsets of each JSON object/array literal of at least MIN_JSON bytes in code position.
+
+    ``repeated_only`` drops texts that occur once as raw text before the literal scan and the JSON parse:
+    a text that never repeats cannot be hoisted, and most literals never do.
+    """
+    found: list[tuple[int, str]] = []
+    count: Counter = Counter()
     for m in _JSON_OPEN.finditer(script):
         i = m.start()
-        k = bisect_right(starts, i) - 1
-        if k >= 0 and skip[k][0] <= i < skip[k][1]:
-            continue
         j = _json_end(script, i)
         if j is None or j - i < MIN_JSON:
             continue
         text = script[i:j]
-        try:
-            json.loads(text)
-        except ValueError:
+        found.append((i, text))
+        count[text] += 1
+    if repeated_only:
+        found = [(i, t) for i, t in found if count[t] > 1]
+    if not found:
+        return {}
+    lits, dead = _scan(script)
+    skip = sorted(lits + dead)
+    starts = [s for s, _ in skip]
+    valid: dict[str, bool] = {}
+    out: dict[str, list[int]] = {}
+    for i, text in found:
+        k = bisect_right(starts, i) - 1
+        if k >= 0 and skip[k][0] <= i < skip[k][1]:
             continue
-        out.setdefault(text, []).append(i)
+        ok = valid.get(text)
+        if ok is None:
+            try:
+                json.loads(text)
+                ok = True
+            except ValueError:
+                ok = False
+            valid[text] = ok
+        if ok:
+            out.setdefault(text, []).append(i)
     return out
 
 
@@ -422,7 +462,7 @@ def _hoist_json_values(script: str, *, anchor: str, first: int) -> str:
     """
     n = first
     while True:
-        cands = _json_candidates(script)
+        cands = _json_candidates(script, repeated_only=True)
         edits: list[tuple[int, int, str]] = []
         taken: list[tuple[int, int]] = []
         defs: list[str] = []

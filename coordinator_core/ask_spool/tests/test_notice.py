@@ -195,6 +195,28 @@ def test_halt_notice_without_run_id_is_dropped_at_read(tmp_path):
     assert notice.consume_notices(str(tmp_path), "s1") == []
 
 
+def test_unstarted_notice_names_the_script_while_minted_and_reads_terminal_once_halted(tmp_path):
+    d = _stale_minted_run(tmp_path)
+    script = tmp_path / "scratch" / "warp" / "run-1.workflow.mjs"
+    script.parent.mkdir(parents=True)
+    script.write_text("// run", encoding="utf-8")
+    assert notice.append_unstarted_notice(str(tmp_path), "s1", "run-1") is True
+    text = notice.advisory_text(str(tmp_path), "s1")
+    assert text.startswith("Your run run-1 is minted, not started. Start it: Workflow({scriptPath: ")
+    assert "run-1.workflow.mjs" in text
+    notice.append_unstarted_notice(str(tmp_path), "s1", "run-1")
+    (d / "halted.json").write_text('{"halted": "x"}', encoding="utf-8")
+    assert notice.advisory_text(str(tmp_path), "s1") == "Your run run-1 was minted and not started; it is now halted, nothing to start."
+
+
+def test_unstarted_notice_without_a_script_still_surfaces_and_refuses_an_unsafe_session(tmp_path):
+    _stale_minted_run(tmp_path)
+    notice.append_unstarted_notice(str(tmp_path), "s1", "run-1")
+    assert notice.advisory_text(str(tmp_path), "s1") == "Your run run-1 is minted, not started."
+    for sid in ("", "../evil", "a/b"):
+        assert notice.append_unstarted_notice(str(tmp_path), sid, "run-1") is False
+
+
 def test_failed_notice_is_surfaced_not_dropped(tmp_path):
     import json
 

@@ -48,7 +48,7 @@
  * the only two acceptable outcomes; a slow-but-working degrade to the
  * wrong engine is worse than an outright error because it hides the
  * engine's real state. This file's fallback satisfies that by construction
- * (see `BUILD_ENGINE_ROOT_W`'s and `fall_through()`'s own comments): it
+ * (see `fall_through()`'s own comment): it
  * spawns the SAME entrypoint (`coordinator-invoke.py`, via
  * `cc_invoke.require_dispatch_engine_on_path()`) that already owns this
  * policy for every other cold caller, rather than deriving a second
@@ -100,10 +100,9 @@
  * script's own self-location-first resolution
  * (the colocated-root resolver's contract) agrees with whatever root
  * THIS file already validated as a real, stamped engine (see
- * `resolve_engine_root()`/`BUILD_ENGINE_ROOT_W` below) -- it is never
+ * `resolve_engine_root()` below) -- it is never
  * handed an unvalidated path to resolve from. `engine_root` -- from
- * `resolve_engine_root()` when available, else `BUILD_ENGINE_ROOT_W` --
- * is therefore load-bearing for the fallback, not optional the way the
+ * `resolve_engine_root()` -- is therefore load-bearing for the fallback, not optional the way the
  * retired `-m` design needed it to be. If NEITHER source names a script
  * that still exists on disk, `CreateProcessW` still succeeds (`python.exe`
  * itself is a real binary) but the spawned interpreter fails to open the
@@ -117,7 +116,7 @@
  * contract, unchanged and un-duplicated here.
  *
  * The engine TOKEN, by contrast, is deliberately NOT cached anywhere
- * (baked or sidecar): it is a generation stamp over
+ * (sidecar or otherwise): it is a generation stamp over
  * `coordinator_core/_engine_stamp`'s bytes and rotates on every publish
  * round (`skew.compute_client_token`). This program re-reads that file
  * and re-hashes it on every invocation, the same way
@@ -140,6 +139,12 @@
 #include <wchar.h>
 #include <wctype.h>
 
+/* Suppresses the AppStarting busy cursor a child launch would otherwise
+ * raise; absent from older SDK headers. */
+#ifndef STARTF_FORCEOFFFEEDBACK
+#define STARTF_FORCEOFFFEEDBACK 0x00000080
+#endif
+
 /* THE OS-AGNOSTIC HALF LIVES HERE, and used to live in this file. SHA-1,
  * the growable `buf_t`, the JSON envelope reader, and -- the load-bearing
  * one -- `is_provably_undispatched()` are shared verbatim with the POSIX
@@ -161,64 +166,13 @@
  * the `_env` loop further down. */
 #include "door_env_set.h"
 
-/* ---- baked at build time by build.py (placeholder substitution, same
- * convention as coordinator/bin/coordinator-invoke.cmd's __PYTHON_BIN__). */
-#ifndef PYTHON_BIN_W
-#define PYTHON_BIN_W L"__PYTHON_BIN_W__"
-#endif
-
-/* THE FALLBACK ENGINE ROOT -- last-resort only, never the primary source.
- * 2026-08-21 correctness fix: an earlier revision of this file had
- * `fall_through()` spawn `{python} -m coordinator_core.invoke` (bare
- * module invocation) specifically so the fallback would need no resolved
- * engine root at all. That was WRONG: verified directly that a bare `-m`
- * on this box resolves `coordinator_core` through the ambient editable-
- * install's `sys.meta_path` finder, which pins to whichever live working
- * tree this box's interpreter has editable-installed (abs-path-ok: this
- * file cites no path of its own; the box-specific example lived only in
- * an earlier prose draft) -- an unstamped, uncommitted, actively-edited
- * checkout DR-315 §2 rules is never an engine. Every fallen-through
- * invocation would silently have executed ops out of the wrong tree.
- * `PYTHONPATH`/engine-root env-var overrides do NOT fix this: the
- * editable-install finder's `sys.meta_path` entry is consulted before
- * `sys.path` is, so it outranks both -- verified this does not work
- * before reaching for this macro instead.
- *
- * The actual fix: `fall_through()` spawns `coordinator-invoke.py`
- * (verified directly, 2026-08-21: that script's own `cc_invoke.
- * require_dispatch_engine_on_path()` call resolves `coordinator_core.
- * __file__` correctly to WHEREVER THAT SCRIPT ITSELF LIVES ON DISK --
- * self-location-first, the colocated-root resolver's own contract --
- * regardless of the ambient editable-install pin). So the door only needs
- * a valid PATH to some `coordinator-invoke.py`, not a working env-var
- * override.
- *
- * The primary path/pipe-derivation still comes from `resolve_engine_root()`
- * (sidecar/env, module docstring) -- this macro is consulted by
- * `fall_through()` ONLY when that runtime resolution failed (no sidecar,
- * unreadable, invalid), so there is no OTHER known-good root to build a
- * script path from. It is the engine root `build.py` was given at build
- * time -- correct by construction on a fresh install (the same value gets
- * written to the sidecar), and still a VALID, CORRECTLY-RESOLVING engine
- * even after a later sidecar edit points this same binary elsewhere (just
- * possibly not that later target) -- never the ambient live-tree pin.
- *
- * READ THIS BEFORE TRUSTING THE STRING YOU JUST FOUND IN THE BINARY: this
- * is a PER-BUILD-MACHINE DEFAULT, not a portable or supported location --
- * whatever path a specific box happened to build this binary against, an
- * install-time hint and nothing more. The shipped, committed `door.exe`
- * therefore carries whichever engine root the machine that ran
- * `build.py` last had -- meaningless on any OTHER machine, customer or
- * otherwise (customers have no authoring-engine install at all, ever). This is why
- * `fall_through()` (see its own comment) VALIDATES this value at runtime
- * via `is_valid_engine_root_w()` before ever trusting it, and REFUSES
- * outright -- no process spawned at all -- rather than attempting to
- * launch a script at a path that turns out not to name a real engine on
- * the machine actually running. Do not read this macro's baked value as
- * a claim about where engines live in general. */
-#ifndef BUILD_ENGINE_ROOT_W
-#define BUILD_ENGINE_ROOT_W L"__BUILD_ENGINE_ROOT_W__"
-#endif
+/* THE COLD-LEG INTERPRETER IS NEVER COMPILED IN. It is resolved at run time
+ * by `python_exe_w()` (below): `door.python.txt` beside this executable, else
+ * the `py -3` launcher. A path baked at build time named the build box's
+ * interpreter, absent everywhere else (exit 127 on every cold fall-through). */
+#define PYTHON_SIDECAR_FILENAME L"door.python.txt"
+#define PYTHON_LAUNCHER_W L"py"
+#define PYTHON_LAUNCHER_ARG_W L"-3"
 
 
 #ifndef DOOR_PRIVATE_REQUIRED
@@ -477,15 +431,58 @@ static char *read_sidecar_utf8(const wchar_t *own_dir, size_t *out_len, int *why
     return read_trimmed_file_utf8(sidecar_path, out_len, why);
 }
 
+/* Interpreter for every cold spawn (fall-through, script-path spawn, server
+ * spawn). Ladder, resolved once per process:
+ *   1. the single line of `door.python.txt` next to this executable, when it
+ *      names an existing file (a stale or empty record falls through);
+ *   2. the `py -3` launcher, located by `CreateProcessW`'s own PATH search.
+ * `python_launcher_arg_w()` is the extra argument rung 2 needs, else NULL. */
+static wchar_t g_python_exe_w[MAX_PATH * 2];
+static int g_python_resolved = 0;
+static int g_python_is_launcher = 1;
+
+static const wchar_t *python_exe_w(void) {
+    if (g_python_resolved) return g_python_exe_w;
+    g_python_resolved = 1;
+    wcscpy(g_python_exe_w, PYTHON_LAUNCHER_W);
+
+    wchar_t own_dir[MAX_PATH * 2];
+    wchar_t sidecar_path[MAX_PATH * 2];
+    if (!get_own_directory(own_dir, MAX_PATH * 2) ||
+        swprintf(sidecar_path, MAX_PATH * 2, L"%s%s", own_dir, PYTHON_SIDECAR_FILENAME) < 0) {
+        return g_python_exe_w;
+    }
+    size_t len = 0;
+    int why = RUNG_UNREADABLE;
+    char *path_u8 = read_trimmed_file_utf8(sidecar_path, &len, &why);
+    if (!path_u8) return g_python_exe_w;
+    wchar_t *path_w = utf8_to_wide(path_u8);
+    free(path_u8);
+    if (!path_w) return g_python_exe_w;
+    WIN32_FILE_ATTRIBUTE_DATA attrs;
+    if (wcslen(path_w) < MAX_PATH * 2 &&
+        GetFileAttributesExW(path_w, GetFileExInfoStandard, &attrs) &&
+        !(attrs.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        wcscpy(g_python_exe_w, path_w);
+        g_python_is_launcher = 0;
+    }
+    free(path_w);
+    return g_python_exe_w;
+}
+
+static const wchar_t *python_launcher_arg_w(void) {
+    python_exe_w();
+    return g_python_is_launcher ? PYTHON_LAUNCHER_ARG_W : NULL;
+}
+
 /* True iff `root_w` carries a real, non-empty `coordinator_core\
  * _engine_stamp` (mirroring `warm.engine_root.is_engine_root`'s own
  * readable-and-non-empty check, reimplemented here rather than imported
  * because this file has no Python to import from). Shared by
- * `resolve_engine_root()` (validating the sidecar/env-supplied root) and
- * `fall_through()` (validating `BUILD_ENGINE_ROOT_W` before trusting it
- * as a last resort) -- ONE validation, not two that could drift, since a
+ * `resolve_engine_root()` (validating the sidecar/env-supplied root) --
+ * ONE validation, since a
  * root failing this check is exactly the kind of doubt the safety
- * property exists for regardless of which of the two sources produced
+ * property exists for regardless of which source produced
  * it. */
 static int is_valid_engine_root_w(const wchar_t *root_w) {
     wchar_t stamp_path[MAX_PATH * 2];
@@ -577,7 +574,7 @@ static int accept_candidate(char *root_u8, size_t root_u8_len, int rung, const w
  *   1. env-var override (`ENGINE_ROOT_ENV_OVERRIDE`)
  *   2. the sidecar file next to this executable
  *   3. <settings-home>\machine-local\.claude-klabauter-root
- * The caller's baked `BUILD_ENGINE_ROOT_W` is rung 4 (`fall_through`).
+ * No rung resolving means `build_fallback_cmdline` refuses.
  *
  * On success, fills `*out_w` (malloc'd wide string, for CreateFileW) and
  * `*out_u8`/`*out_u8_len` (malloc'd UTF-8 bytes, NOT NUL-assumed by the
@@ -1140,17 +1137,13 @@ static int emit_hook_deny(const char *reason) {
  * interpreter reachable at all -- where the warn below never gets a
  * chance to print because the function has already returned.
  *
- * Spawns `{PYTHON_BIN_W} {engine_root}\coordinator\bin\coordinator-invoke.py
+ * Spawns `{python_exe_w()} {engine_root}\coordinator\bin\coordinator-invoke.py
  * <argv>` -- a SCRIPT PATH, deliberately never a bare `-m
- * coordinator_core.invoke` module invocation (see `BUILD_ENGINE_ROOT_W`'s
- * own comment for the incident this fixes: a bare `-m` resolves through
+ * coordinator_core.invoke` module invocation (a bare `-m` resolves through
  * this box's ambient editable-install pin, silently executing the LIVE
  * working tree instead of a published engine -- DR-315 §2 violated
  * through a side door). `engine_root_w` is the caller's already-resolved
- * root (from `resolve_engine_root()`) when available, else
- * `BUILD_ENGINE_ROOT_W` (the build-time fallback) -- either way this
- * function itself performs no resolution of its own, matching the rest
- * of this file's "resolve once, upstream" discipline. */
+ * root (from `resolve_engine_root()`); with none, the function refuses. */
 /* Resolves the cold entrypoint (`<engine>\\coordinator\\bin\\<own basename>.py`,
  * or the extensionless sibling) into `script_path_w` (`MAX_PATH * 2` wide
  * chars) and returns the full interpreter command line, heap-allocated, or
@@ -1161,7 +1154,7 @@ static wchar_t *build_fallback_cmdline(int argc, wchar_t **wargv, const wchar_t 
                                        wchar_t *script_path_w) {
     /* Pre-resolution cold legs (escape hatch, install-class, no argv) arrive
      * with no root: climb the ladder here so they reach this machine's
-     * pointer before the baked default. Freed by process exit. */
+     * pointer. Freed by process exit. */
     if (engine_root_w == NULL) {
         wchar_t *ladder_w = NULL;
         char *ladder_u8 = NULL;
@@ -1171,37 +1164,25 @@ static wchar_t *build_fallback_cmdline(int argc, wchar_t **wargv, const wchar_t 
             engine_root_w = ladder_w;
         }
     }
-    const wchar_t *root = (engine_root_w != NULL) ? engine_root_w : BUILD_ENGINE_ROOT_W;
-
     /* `engine_root_w`, when supplied, was already validated by
-     * `resolve_engine_root()` before this function ever saw it --
-     * re-checking it here would be redundant, not wrong, but this branch
-     * exists for the one case that was NEVER validated at runtime:
-     * `BUILD_ENGINE_ROOT_W` is a build-time string baked into the binary
-     * (see that macro's own comment) -- correct on the machine that built
-     * it, meaningless on any other. PM ruling (2026-08-21): a live op must
-     * execute the published engine or fail loudly -- NEVER degrade to
-     * "spawn whatever Python can import" (the exact `-m` hole already
-     * closed once). So when the caller supplied no resolved root AND the
-     * baked default does not itself validate, this function refuses
-     * outright -- no `CreateProcessW` call at all, not even one that
-     * would merely fail loudly by accident (a missing script produces
-     * Python's own generic "can't open file", which is a nonzero exit
-     * but names no remediation; this is the same failure with one that
-     * does). */
-    if (engine_root_w == NULL && !is_valid_engine_root_w(root)) {
+     * `resolve_engine_root()`. No resolved root refuses outright -- no
+     * process is started at all -- never "run whatever Python can
+     * import" (a bare `-m` resolves through the ambient editable-install
+     * pin and would execute the live working tree). */
+    if (engine_root_w == NULL) {
         const wchar_t *notes[3];
         for (int i = 0; i < 3; i++) {
             notes[i] = g_rung_note[i][0] ? g_rung_note[i] : L"not consulted";
         }
         fwprintf(stderr,
-            L"door: no stamped engine root: %s; %s; %s; baked %s "
-            L"is not a stamped engine root. Reinstall the door "
+            L"door: no stamped engine root: %s; %s; %s. Write the "
+            L"door.engine-root.txt sidecar beside this executable "
             L"(coordinator_core/install/door_install.py) or set "
             L"COORDINATOR_DOOR_ENGINE_ROOT.\n",
-            notes[0], notes[1], notes[2], root);
+            notes[0], notes[1], notes[2]);
         return NULL;
     }
+    const wchar_t *root = engine_root_w;
 
     /* THE NAME-AWARE COLD LEG (C0). Resolves against THIS image's own
      * basename (`door_entrypoint_basename()`, the SAME single resolution the
@@ -1263,8 +1244,13 @@ static wchar_t *build_fallback_cmdline(int argc, wchar_t **wargv, const wchar_t 
     buf_t cmdline;
     if (!buf_init(&cmdline, 4096)) return NULL;
 
-    if (!quote_arg_w(&cmdline, PYTHON_BIN_W)) return NULL;
+    if (!quote_arg_w(&cmdline, python_exe_w())) return NULL;
     if (!buf_append(&cmdline, " ", 1)) return NULL;
+    const wchar_t *python_arg_w = python_launcher_arg_w();
+    if (python_arg_w != NULL) {
+        if (!quote_arg_w(&cmdline, python_arg_w)) return NULL;
+        if (!buf_append(&cmdline, " ", 1)) return NULL;
+    }
 
     if (!quote_arg_w(&cmdline, script_path_w)) return NULL;
 
@@ -1351,7 +1337,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
     si.hStdInput = in_r;
     si.hStdOutput = out_w;
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
@@ -1474,7 +1460,7 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
      * block a few dozen lines up -- that leg always got this right; this
      * one, the ordinary (non-hook) cold fall-through every install-class CLI
      * takes, did not. */
-    si.dwFlags = STARTF_USESTDHANDLES;
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
@@ -1488,7 +1474,7 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
         
         fwprintf(stderr, L"door: could not launch the fallback "
                           L"(python=%s, script=%s) -- cannot fall through\n",
-                          PYTHON_BIN_W, script_path_w);
+                          python_exe_w(), script_path_w);
         return 127;
     }
 
@@ -2004,7 +1990,10 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
     }
 
     wchar_t cmdline[MAX_PATH * 4];
-    if (swprintf(cmdline, MAX_PATH * 4, L"\"%s\" \"%s\"", PYTHON_BIN_W, server_script) < 0) {
+    const wchar_t *server_python_arg_w = python_launcher_arg_w();
+    if (swprintf(cmdline, MAX_PATH * 4, L"\"%s\" %s%s\"%s\"", python_exe_w(),
+                 server_python_arg_w ? server_python_arg_w : L"",
+                 server_python_arg_w ? L" " : L"", server_script) < 0) {
         return;
     }
 
@@ -2051,6 +2040,7 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
+    si.dwFlags = STARTF_FORCEOFFFEEDBACK;
     ZeroMemory(&pi, sizeof(pi));
 
     DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT;
@@ -2180,7 +2170,13 @@ static int private_server(HANDLE pipe) {
 #endif
 
 int main(void) {
-    
+#ifdef DOOR_WINDOWLESS
+    /* A GUI-subsystem process shows the AppStarting cursor until it first
+     * touches its message queue; this peek creates the queue and ends the
+     * feedback at once. */
+    MSG door_pump_msg;
+    PeekMessageW(&door_pump_msg, NULL, 0, 0, PM_NOREMOVE);
+#endif
 #if DOOR_PRIVATE_REQUIRED
     if (!private_load()) return private_not_delivered("invalid required private binding or protected path");
     wchar_t *private_settings = utf8_to_wide(g_private.settings_home);
@@ -2288,8 +2284,8 @@ int main(void) {
     /* ---- 0. engine root -- resolved at runtime, never baked. See
      * `resolve_engine_root`'s own docstring for the sidecar/env-var
      * contract. On failure here `engine_root_w` stays NULL, which
-     * `fall_through`/`fall_through_and_free` treat as "use
-     * BUILD_ENGINE_ROOT_W" (see that macro's own comment) -- so this is
+     * `fall_through`/`fall_through_and_free` re-climb the ladder and
+     * refuse if it still resolves nothing -- so this is
      * exactly as safe to fall through as every other doubt, and NEVER
      * degrades to the unconditional-`-m` shape this file used to have.
      *

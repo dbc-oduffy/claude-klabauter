@@ -263,6 +263,43 @@ def test_metahuman_surface_with_trail_and_test_writes_routes_to_executor(env) ->
         assert (out[0].agent_type or "coordinator:executor") == "coordinator:executor" and routes == {}
 
 
+def _keyword_only_metahuman(env) -> None:
+    cls = {**_table()["work_classes"][0], "match": {"keywords": ["metahuman"]}}
+    _write(env, _table(work_classes=[cls]))
+
+
+@pytest.mark.parametrize(
+    "writes",
+    [
+        ("docs/research/metahuman/a/trail.yaml", "tests/test_trail.py"),
+        ("docs\\research\\metahuman\\trail.md", "tests\\test_trail.py"),
+    ],
+)
+def test_keyword_only_class_leaves_docs_tests_yaml_row_on_executor(env, writes) -> None:
+    _keyword_only_metahuman(env)
+    derived = _row(writes=writes, title="metahuman audience tag")
+    out, routes, notes = ar.route_rows([derived], env)
+    assert out[0].agent_type is None and routes == {} and notes == []
+    explicit = _row(writes=writes, title="metahuman audience tag", agent_type=UE, agent_model="opus")
+    out, routes, notes = ar.route_rows([explicit], env)
+    assert out[0].agent_type == EXECUTOR and routes == {} and "outside" in notes[0]
+
+
+def test_keyword_only_class_still_routes_ue_content_row(env) -> None:
+    _keyword_only_metahuman(env)
+    for writes in (("Content/MetaHumans/Hero.uasset",), ("Content/Tests/Hero.uasset", "tests/test_t.py"), ("docs/a.yaml", "Source/A.cpp")):
+        out, routes, _ = ar.route_rows([_row(writes=writes, title="metahuman hero")], env)
+        assert out[0].agent_type == UE and routes["C1"].work_class == "ue-editor"
+
+
+def test_writes_are_docs_tests_yaml_classifier() -> None:
+    assert ar.writes_are_docs_tests_yaml(("a.md", "x/b.yaml", "tests/c.py", "d/test_e.py", "docs/f.png"))
+    assert not ar.writes_are_docs_tests_yaml(())
+    assert not ar.writes_are_docs_tests_yaml(("a.md", "Content/X.uasset"))
+    assert not ar.writes_are_docs_tests_yaml(("docs/X.uasset",))
+    assert not ar.writes_are_docs_tests_yaml(("coordinator_core/ipc.py",))
+
+
 def test_explicit_covering_row_is_admitted_unchanged(env) -> None:
     _write(env, _table())
     row = _row(agent_type=UE, agent_model="opus")
@@ -621,7 +658,7 @@ def test_undeclared_writes_with_keyword_still_routes_to_ue_agent(env) -> None:
 def test_class_without_path_globs_keeps_keyword_routing_for_any_writes(env) -> None:
     cls = {**_table()["work_classes"][0], "match": {"keywords": ["Blueprint"]}}
     _write(env, _table(work_classes=[cls]))
-    out, routes, _ = ar.route_rows([_row(writes=_C7_WRITES, **_UE_TEXT)], env)
+    out, routes, _ = ar.route_rows([_row(writes=("Source/Game/A.cpp", "tests/test_x.py"), **_UE_TEXT)], env)
     assert out[0].agent_type == UE and routes["C1"].work_class == "ue-editor"
 
 

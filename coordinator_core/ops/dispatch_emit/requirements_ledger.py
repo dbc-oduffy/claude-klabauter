@@ -97,6 +97,11 @@ ROW_SURFACE = "internal"
 ORIGIN_PLAN_ROW = "plan-row"
 NOT_A_ROW_REASON = "names no requirement row"
 NOTE_NOT_MET_REASON = "revise note not met"
+UNJUDGED_REASON = "unjudged (arrived after the check, or skipped)"
+#: An `open` row key and reason for a live revise note the verdict did not judge: EM context, carried
+#: to the delivery record, never a failure.
+LATE_NOTE_KEY = "late_note"
+LATE_NOTE_REASON = "arrived after the check: carried open, not judged"
 
 _PARAMS = (
     Field("run_id", "nonempty_str", required=True),
@@ -1924,11 +1929,17 @@ def revise(
                     "Relay from your own session when the run closes."
                 )
             who = _clean_sender(sender) or "em"
-            if text:
-                pipeline_run.append_revision(root, run_id, text, who, "verbatim")
-            if has_note:
-                pipeline_run.append_revision(root, run_id, str(note), who, "note")
+            mailed: list[str] = []
+            unreached: list[str] = []
+            for body, kind in ((text, "verbatim"), (str(note) if has_note else "", "note")):
+                if not body:
+                    continue
+                pipeline_run.append_revision(root, run_id, body, who, kind)
+                got, missed = pipeline_run.mail_revision(root, run_id, body, who, kind)
+                mailed += [s for s in got if s not in mailed]
+                unreached += [s for s in missed if s not in unreached]
             if outcome is not None:
+                outcome["mailed_stages"], outcome["unreached_stages"] = mailed, unreached
                 outcome["pipeline_revisions"] = pipeline_run.revisions_rel(run_id)
             return Ledger((), False), dir_, None
         if (
@@ -2327,7 +2338,10 @@ def judge(
 
     `note_ids` are the run's live revise-note ids (`note_ids(run_dir)`): a verdict item under one is
     not a register row and is not `NOT_A_ROW_REASON`; it passes only as `met`, else fails
-    `NOTE_NOT_MET_REASON`; an `N<k>` id when the run stores no note fails `NOT_A_ROW_REASON`.
+    `NOTE_NOT_MET_REASON`; a live note id the verdict neither judges nor names as a `superseded_by`
+    passes, listed in `open` as `LATE_NOTE_REASON` (a note is EM context; a late `verbatim` revision
+    is a register row and fails `UNJUDGED_REASON` through the item loop); an `N<k>` id when the run
+    stores no note fails `NOT_A_ROW_REASON`.
     A `superseded` item may name a live note id as its `superseded_by`.
     Any other unregistered id is ignored and listed in the result's `advisory`
     (`[{id, reason}]`, present only when non-empty): it never fails the verdict."""
@@ -2370,7 +2384,7 @@ def judge(
         if row is None and criterion is not None and item.id in credited:
             row = {**criterion, "id": item.id}
         if row is None:
-            failures.append({"id": item.id, "reason": "unjudged (arrived after the check, or skipped)"})
+            failures.append({"id": item.id, "reason": UNJUDGED_REASON})
             continue
         status = row.get("status")
         design = _is_design(item.anchor)
@@ -2455,6 +2469,13 @@ def judge(
     failures.extend(
         {"id": rid, "reason": NOTE_NOT_MET_REASON}
         for rid in sorted(own_notes & set(by_id)) if by_id[rid].get("status") != "met"
+    )
+    superseding = {
+        r.get("superseded_by") for r in by_id.values() if r.get("status") == "superseded"
+    }
+    open_rows.extend(
+        {"id": rid, "reason": LATE_NOTE_REASON, LATE_NOTE_KEY: True}
+        for rid in sorted(own_notes - set(by_id) - superseding)
     )
     if not note_ids:
         fabricated = [rid for rid in unknown if re.fullmatch(r"N\d+", rid)]
@@ -2657,7 +2678,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             (f"revision appended to {outcome['pipeline_revisions']}",), (), params["run_id"],
             run_id=executing or params["run_id"], delivered=True, revisions=outcome["pipeline_revisions"],
             run_live=True if executing else None, item=None,
+            mailed_stages=outcome.get("mailed_stages", []),
             **({"requested_run_id": params["run_id"]} if executing else {}),
+            **({"warning": "revision not mailed to: " + ", ".join(outcome["unreached_stages"])}
+               if outcome.get("unreached_stages") else {}),
             note="appended to the run's revisions file: if the run is still running, each stage reads it "
                  "at its next stage start; a stage already running does not see it.",
         )
@@ -2865,7 +2889,7 @@ def _land_on_verdict(
     judged = judge(ledger, verdict, repo_root=root, note_ids=note_ids(dir_))
     normalized = normalize_verdict(verdict)
     items = normalized.get("items") if isinstance(normalized, Mapping) else None
-    if not judged["pass"] or judged["open"] or not isinstance(items, list) or any(
+    if not judged["pass"] or any(not r.get(LATE_NOTE_KEY) for r in judged["open"]) or not isinstance(items, list) or any(
         not isinstance(i, Mapping) or i.get("status") != "met" for i in items
     ):
         return None, "verdict does not pass with every row met: " + (
@@ -3258,8 +3282,8 @@ def _refire(
     return {
         "next": {"kind": "refire", "call": fire_command(sizing_rel)},
         "note": (
-            "run halted: resumeFromRunId replays its stages and never reads this revision; "
-            "a fresh refire with next.call reads it."
+            "run halted: resumeFromRunId of its stored script replays its stages and never reads this revision; "
+            "the refire with next.call carries it into the resumed run."
             if halted else "run finished: nothing reads this revision until a refire."
         ),
     }

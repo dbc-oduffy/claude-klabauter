@@ -1229,8 +1229,23 @@ def _stamp_met_by(root: Path, run_id: str, met_by: dict) -> None:
         halted_run._write(record_dir, {**marker, MET_BY_FIELD: met_by})
 
 
+def _manifest_write_set(doc: object) -> list:
+    """Every path the run declares: ``review_declared_paths`` plus each row's ``writes``, in order, deduplicated.
+
+    Trap: the review set leaves out process paths (``state/``); judging only it closed a run whose leg
+    had rewritten its evidence file as already delivered (ask-20261114T133823-7a3cdc).
+    """
+    if not isinstance(doc, dict):
+        return []
+    raw = list(doc.get("review_declared_paths") or []) if isinstance(doc.get("review_declared_paths"), list) else []
+    for row in doc.get("rows") or [] if isinstance(doc.get("rows"), list) else []:
+        if isinstance(row, dict) and isinstance(row.get("writes"), list):
+            raw.extend(row["writes"])
+    return list(dict.fromkeys(p.replace("\\", "/") for p in raw if isinstance(p, str) and p))
+
+
 def _in_run_unclean(root: Path, run_id: str) -> Optional[str]:
-    """None when every ``review_declared_paths`` entry of the run manifest has no delta between the manifest's ``head_sha`` and HEAD and the worktree; else the refusal.
+    """None when every path the run manifest declares (``_manifest_write_set``) has no delta between the manifest's ``head_sha`` and HEAD and the worktree; else the refusal.
 
     An unreadable manifest, a missing ``head_sha`` or an empty write set refuses: nothing proves the run delivered nothing.
     """
@@ -1246,8 +1261,7 @@ def _in_run_unclean(root: Path, run_id: str) -> Optional[str]:
     except (OSError, ValueError):
         return f"{run_id} has no readable run manifest; in_run cannot prove the write set is clean"
     base = doc.get("head_sha") if isinstance(doc, dict) else None
-    raw = doc.get("review_declared_paths") if isinstance(doc, dict) else None
-    paths = [p.replace("\\", "/") for p in raw if isinstance(p, str) and p] if isinstance(raw, list) else []
+    paths = _manifest_write_set(doc)
     if not isinstance(base, str) or not _FULL_SHA.fullmatch(base) or not paths:
         return f"{run_id} manifest names no head_sha or no review_declared_paths; in_run cannot prove the write set is clean"
     common = resolve_git_common_dir(root)
@@ -1267,69 +1281,24 @@ def _in_run_unclean(root: Path, run_id: str) -> Optional[str]:
     return None
 
 
-# Bounds the first-parent walk of _derive_landing_sha: a declared path untouched in recent history must refuse, not walk the whole repo.
-_DERIVE_WALK_DEPTH = 512
-
-
 def _derive_landing_sha(root: Path, run_id: str) -> tuple[Optional[str], Optional[str]]:
-    """``(sha, None)``: the newest non-merge commit on HEAD's first-parent chain that changed a manifest ``review_declared_paths`` entry, else ``(None, refusal)``.
+    """``(the run's base sha, None)`` once ``_in_run_unclean`` passes, else ``(None, refusal)``.
 
-    ``_in_run_unclean`` must pass first. A merge is skipped (it diffs against its first parent with the
-    merged side's changes, so it would name the merge, not the landing). In-process object reads only;
-    the walk stops at the first hit or after ``_DERIVE_WALK_DEPTH`` commits.
+    A clean write set is unchanged between the run base and HEAD, so the base is the only sha this run
+    can name; an older commit that touched the paths is not this run's (G-EM ruling, 2026-11-17).
     """
     import json as _json
 
-    from coordinator_core.git.commit_walk import commit_meta
-    from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.git_objects import read_object
-    from coordinator_core.git.git_state import _parse_tree_entries, head_sha
     from coordinator_core.ops.dispatch_emit import ask_contract
 
     problem = _in_run_unclean(root, run_id)
     if problem:
         return None, problem
     try:
-        doc = _json.loads((ask_contract.record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8"))
-        declared = [p for p in doc["review_declared_paths"] if isinstance(p, str) and p]
+        base = _json.loads((ask_contract.record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8"))["head_sha"]
     except (OSError, ValueError, KeyError, TypeError):
-        return None, f"{run_id} manifest is unreadable or lacks review_declared_paths; no landing commit to name"
-    seen: dict = {}
-    tree_paths = [
-        tp for tp in (_own_tree_path(root, p.replace("\\", "/"), seen) for p in declared)
-        if tp is not None
-    ]
-    if not tree_paths:
-        return None, f"{run_id} declares no path in this repo; no landing commit to name"
-    common = resolve_git_common_dir(root)
-    dirs: dict = {}
-
-    def _dir(tree_sha: str):
-        if tree_sha not in dirs:
-            got = read_object(common, tree_sha)
-            dirs[tree_sha] = _parse_tree_entries(got[1]) if got and got[0] == "tree" else None
-        return dirs[tree_sha]
-
-    def _at(tree: Optional[str], tp: str):
-        return frozenset() if tree is None else _casefolded_entries(_dir, tree, tp)
-
-    sha = head_sha(root)
-    for _ in range(_DERIVE_WALK_DEPTH):
-        meta = commit_meta(common, sha) if sha else None
-        if not meta or not meta.get("tree"):
-            break
-        parents = meta.get("parents") or []
-        if len(parents) <= 1:
-            parent_meta = commit_meta(common, parents[0]) if parents else None
-            if parents and not parent_meta:
-                break
-            parent_tree = parent_meta.get("tree") if parent_meta else None
-            if any(_at(meta["tree"], tp) != _at(parent_tree, tp) for tp in tree_paths):
-                return sha, None
-        if not parents:
-            break
-        sha = parents[0]
-    return None, f"{run_id} write set is clean but no commit within {_DERIVE_WALK_DEPTH} first-parent commits of HEAD changed it; pass sha"
+        return None, f"{run_id} manifest is unreadable or lacks head_sha; no landing commit to name"
+    return base, None
 
 
 def _landed_sha(root: Path, other: str, shas: list) -> Optional[str]:

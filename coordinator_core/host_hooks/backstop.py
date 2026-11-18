@@ -2,7 +2,8 @@
 
 `match(host_event)` returns a deny verdict when an irreversible-external bash guard refuses the
 event's shell command, or when that command force-pushes main or master, else None. Guards are
-imported lazily; one that raises is skipped (fails open). Nothing here imports `coordinator_core.warm` or `coordinator_core.ops`.
+imported lazily; one that raises is skipped (fails open). `match` imports neither `coordinator_core.warm` nor
+`coordinator_core.ops`. `degrade_match` adds the data-destroying git verbs for the host guard's degrade path.
 """
 from __future__ import annotations
 
@@ -168,6 +169,57 @@ _FORCE_MAIN_REASON = (
     "which rewrites shared history and can drop commits that exist only on the remote. "
     "Push main as a fast-forward."
 )
+
+
+_DESTRUCTIVE_GUARD = "block-subagent-destructive-action"
+_IRREVERSIBLE_GIT_LABELS = (
+    "git reset --hard", "git push --force", "git clean", "git branch -D", "git tag -d",
+    "git stash drop", "git reflog", "git filter-branch", "git checkout -f", "git switch -f",
+)
+
+
+def _destructive_git(command: str) -> Optional[str]:
+    """The label of a data- or history-destroying git verb in `command`, else None.
+
+    Reuses the subagent destructive-action classifier's verdicts, which parse in-process and spawn
+    nothing; only labels on `_IRREVERSIBLE_GIT_LABELS` count, so its other denies stay advisory.
+    """
+    from coordinator_core import deny_registry
+    from coordinator_core.bash_guards import block_subagent_destructive_action as classifier
+
+    if deny_registry.guard_deny_class(_DESTRUCTIVE_GUARD, subagent=True) not in deny_registry.IRREVERSIBLE_CLASSES:
+        return None
+    # The same argv0/heredoc normalization the classifier's own entry applies, so a spaced Windows git.exe path is seen.
+    command = classifier._normalize_windows_wrapper_argv0(
+        classifier._normalize_windows_argv0_head_path_with_spaces(
+            classifier._strip_heredoc_bodies(command.replace("\r", ""))))
+    if "git" not in command.lower():  # the raw-text surface regex misses a quoted spaced argv0
+        return None
+    verdict = classifier._evaluate_git_surface(command)
+    if verdict and verdict.startswith(_IRREVERSIBLE_GIT_LABELS):
+        return verdict
+    # The classifier labels `reset --hard <ref>` by its ref branch, ahead of the hard-flag branch.
+    if verdict and verdict.startswith("git reset") and "--hard" in command:
+        return "git reset --hard"
+    return None
+
+
+def degrade_match(host_event: HostEvent) -> Optional[Dict[str, str]]:
+    """The deny verdict for an irreversible-class command when the host guard could not evaluate, else None.
+
+    `match` plus the destroy-data git family (`git clean`, `git reset --hard`, any force push). Spawns nothing.
+    """
+    denied = match(host_event)
+    if denied is not None:
+        return denied
+    try:
+        payload = _payload(host_event)
+        label = _destructive_git(payload["tool_input"]["command"]) if payload else None
+    except Exception:  # noqa: BLE001 -- the backstop never breaks the hook
+        return None
+    if label:
+        return {"decision": "deny", "reason": "BLOCKED: %s destroys data or history that cannot be recovered." % label}
+    return None
 
 
 def match(host_event: HostEvent) -> Optional[Dict[str, str]]:

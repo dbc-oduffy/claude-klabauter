@@ -613,6 +613,25 @@ The worker releases the reservation on completion. Its native driver retains
 per-step admission, timeout, and suite-grant checks; the bounded launch is held
 to the 500ms op bar. No arbitrary executable or caller environment is accepted.
 
+## Recorded — fresh-box doctor spawn sites
+
+`scripts/fresh_box_doctor.py` and `scripts/fresh_box/contract.py` spawn nothing. The probe modules
+under `scripts/fresh_box/` spawn only the sites named here; each is `shell=False` argv-form, outside
+shell classes (a)-(h), and is a repair or read the operator invoked the doctor to perform.
+
+Plain-spawn sites (non-shell argv0, not gated by the regrowth detector):
+- `scripts/fresh_box/probes_toolchain.py`: `git config --global` (one `--list` read shared by every
+  git probe; `--global` sets on repair), `gh auth setup-git`, `python -m pip install` (test extras,
+  pywin32, pyright), `winget install` (toolchain repair naming only; elevated runs belong to the EM).
+- `scripts/fresh_box/probes_unimatrix.py`: `unimatrix-doctor.py` via `sys.executable`.
+
+Shell-binary sites (gated; enumerated in the register block only once the call site exists):
+- `scripts/fresh_box/probes_pwsh.py`: `pwsh`/`powershell.exe` self-probes (version, coordinator
+  function load under a clean `PSExecutionPolicyPreference`). Resolved through
+  `coordinator/lib/pwsh_resolve.py`; a new gated site is a violation until the owning row adds its
+  register entry.
+
+
 ## Recorded — example-retrieval-repo freshness-verdict detached reader
 
 `coordinator_core/ops/rag_freshness.py::_spawn_admitted` starts detached, closed-argv,

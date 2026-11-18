@@ -119,6 +119,69 @@ def collect_ancestor_pids(pid: int) -> set:
     return ancestors
 
 
+def _windows_start_times() -> Optional[dict]:
+    """pid -> create_time for every process from one NtQuerySystemInformation
+    call; None off Windows or on any failure. `psutil.Process(pid)` costs ~3ms
+    per process there (OpenProcess), ~2.7s across a loaded box."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import struct
+
+        if ctypes.sizeof(ctypes.c_void_p) != 8:
+            return None
+        nt = ctypes.WinDLL("ntdll")
+        size = 1 << 20
+        for _attempt in range(8):
+            buf = ctypes.create_string_buffer(size)
+            ret = ctypes.c_ulong()
+            status = nt.NtQuerySystemInformation(5, buf, size, ctypes.byref(ret))
+            if status == 0:
+                break
+            if ctypes.c_ulong(status).value != 0xC0000004:
+                return None
+            size = ret.value + (1 << 16)
+        else:
+            return None
+        raw = buf.raw
+        starts: dict = {}
+        off = 0
+        while True:
+            nxt = struct.unpack_from("<I", raw, off)[0]
+            filetime = struct.unpack_from("<q", raw, off + 32)[0]
+            pid = struct.unpack_from("<Q", raw, off + 80)[0]
+            starts[pid] = filetime / 1e7 - 11644473600
+            if not nxt:
+                return starts
+            off += nxt
+    except Exception:
+        return None
+
+
+def _newer_processes(session_start_time: float, exclude_pids: set) -> list:
+    """Processes created at or after `session_start_time`, excluding `exclude_pids`;
+    `create_time` is filtered before any per-process handle is opened."""
+    starts = _windows_start_times()
+    if starts is not None:
+        procs = []
+        for pid, created in starts.items():
+            if pid in exclude_pids or created < session_start_time:
+                continue
+            try:
+                procs.append(psutil.Process(pid))
+            except (psutil.Error, OSError):
+                continue
+        return procs
+    procs = []
+    for proc in psutil.process_iter(["create_time"]):
+        created = proc.info.get("create_time")
+        if proc.pid in exclude_pids or created is None or created < session_start_time:
+            continue
+        procs.append(proc)
+    return procs
+
+
 def find_orphans(
     basetemp: str,
     own_pid: int,
@@ -127,20 +190,23 @@ def find_orphans(
 ) -> List["psutil.Process"]:
     if psutil is None:
         return []
+    if own_username is None:
+        # Unfiltered, `create_time()` on every other user's process takes psutil's slow AccessDenied path (~2.6s over ~700 processes).
+        try:
+            own_username = psutil.Process(own_pid).username()
+        except psutil.Error:
+            own_username = None
     basetemp_parts = Path(basetemp).parts
     exclude_pids = collect_ancestor_pids(own_pid) | {own_pid}
 
     survivors = []
-    for proc in psutil.process_iter():
-        if proc.pid in exclude_pids:
-            continue
-        try:
-            if own_username is not None and proc.username() != own_username:
+    for proc in _newer_processes(session_start_time, exclude_pids):
+        if own_username is not None:
+            try:
+                if proc.username() != own_username:
+                    continue
+            except (psutil.Error, OSError):
                 continue
-            if proc.create_time() < session_start_time:
-                continue
-        except (psutil.Error, OSError):
-            continue
         survivors.append(proc)
 
     orphans = []

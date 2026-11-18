@@ -60,6 +60,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     stamp_run_stage,
     stop_after_plan_live,
     stop_after_source,
+    touch_run_activity,
     rulable_ids,
 )
 from coordinator_core.ops.dispatch_emit.agent_route import RouteAdmissionError, RouteTableError, route_rows
@@ -113,7 +114,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     commit_pathspec_or_none,
     terminal_test_scope,
 )
-from coordinator_core.ops.dispatch_emit import run_lineage
+from coordinator_core.ops.dispatch_emit import run_cancel, run_lineage
 from coordinator_core.ops.dispatch_emit.inventory_mint import strip_literal_pathspec
 from coordinator_core.ops import scratch_delete
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
@@ -576,6 +577,26 @@ def _refire_prior(record: Path, snap: Optional[resume_snapshot.Snapshot]) -> str
     if isinstance(prev, str) and safe_id(prev):
         return prev
     return snap.kept_run if snap is not None and snap.kept_run else ""
+
+
+_FREE_TEXT_SOURCE = "the plan row text"
+
+
+def _unnamed_family(
+    root: Path, sizing: Optional[Mapping], ask_text: Optional[str],
+    relayed_text: Optional[str], raw_by_id: Mapping[str, Mapping], refire_prior: str,
+) -> tuple[str, str, bool]:
+    """(family, source, structured) for a sizing carrying no `family` whose predecessor run, superseded
+    run or sizing, or free text names a non-claude one; ("", "", False) when none does. `structured` is
+    True for a recorded family (inherit it), False for free text (advise only). Never raises."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout import named_family
+
+    analysis = (sizing or {}).get("em_analysis")
+    analysis = analysis if isinstance(analysis, Mapping) else {}
+    texts = [str(v) for v in ((sizing or {}).get("intent"), analysis.get("em_brief"), analysis.get("relayed_text"), ask_text, relayed_text) if v]
+    texts += [str(raw.get(k)) for raw in raw_by_id.values() for k in ("title", "body") if raw.get(k)]
+    family, source = named_family(root, texts, (refire_prior,) if refire_prior else ())
+    return family, source, bool(family) and source != _FREE_TEXT_SOURCE
 
 
 def _refire_notes(root: Path, run_id: str, prior: str) -> list[dict]:
@@ -1140,6 +1161,28 @@ def _sizing_plan_edge(root: Path, sizing_rel: str) -> Optional[str]:
     raise AskStageError(f"PLAN-EDGE-DANGLING: {sizing_rel} has plan edge {edge!r}, but that file exists in no layout")
 
 
+def _sizing_named_plan(root: Path, plan_rel: str, sizing_rel: str) -> str:
+    """The plan path to stage when `plan_rel` and the sizing's own plan path share a file name but differ in directory.
+
+    Returns the sizing-named path when that file exists, else `plan_rel` when that file exists (the
+    plan stages where it was actually written, 664092bb10); raises AskStageError `PLAN-PATH-MISMATCH`
+    naming both only when neither exists. A matching path or a differently named plan is returned unchanged.
+    Trap: refusing an existing `plan_rel` denies recoverable work, an engine bug, never a guard."""
+    from coordinator_core.ops.dispatch_emit.sizing_fire import s_plan_path
+
+    named = s_plan_path(sizing_rel)
+    given = plan_rel.replace(chr(92), "/")
+    if given == named or PurePosixPath(given).name != PurePosixPath(named).name:
+        return plan_rel
+    found = contained_path(root / named, [root])
+    if found is not None and found.is_file():
+        return named
+    own = contained_path(root / given, [root])
+    if own is not None and own.is_file():
+        return plan_rel
+    raise AskStageError(f"PLAN-PATH-MISMATCH: plan_path {given!r} is not the sizing-named {named!r}, and neither file exists")
+
+
 def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence[str]) -> None:
     """Raise AskStageError `XS-MINT-MISROUTED` for a sizing the XS mint must not take: one with a
     `plan:` edge or a non-XS `estimate.tshirt`; `XS-MINT-NO-WRITES` for an empty `writes`.
@@ -1599,6 +1642,8 @@ def stage(
         _write(spine_path, spine_text)
         plan_path = spine_path
     else:
+        if commit_sizing_rel:
+            plan_rel = _sizing_named_plan(root, plan_rel, commit_sizing_rel)
         plan_path = contained_path(root / plan_rel, [root])
         if plan_path is None or not plan_path.is_file():
             raise AskStageError(f"plan not found under the repo: {plan_rel!r}")
@@ -1831,6 +1876,19 @@ def stage(
         if isinstance(exc, AskStageError):
             raise
         raise AskStageError(f"sizing {run_sizing_rel or ''}: {exc}") from exc
+    family_notes: list[str] = []
+    family_inherited: dict[str, str] = {}
+    if sizing_family == "claude" and binding is None:
+        named, named_source, structured = _unnamed_family(root, run_sizing, ask_text, relayed_text, raw_by_id, refire_prior)
+        if named and structured:
+            sizing_family = named
+            family_inherited = {"family": named, "source": named_source}
+            family_notes.append(f"sizing {run_sizing_rel or ''} names no family; inherited {named!r} from {named_source}")
+        elif named:
+            family_notes.append(
+                f"sizing {run_sizing_rel or ''} names no family but {named_source} names {named!r}; "
+                f"staged as claude. Add `family: {named}` to the sizing to route it"
+            )
     briefs_rel = _rel_dir(root, run_dir / "briefs")
     try:
         with os.scandir(run_dir / "briefs") as _listing:
@@ -2021,6 +2079,10 @@ def stage(
 
     if family_report is not None:
         family_report.update(_family_routing_report(sizing_family, row_families))
+        if family_inherited:
+            family_report["family_inherited"] = family_inherited
+        if family_notes:
+            family_report["warnings"] = [*family_notes, *family_report.get("warnings", ())]
         _report_interpreter_pin_defect(root, family_report)
     manifest_rows, row_groups = _group_rows(manifest_rows, brief_sizes, raw_by_id)
     owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent, manifest_rows, classify_receiver)
@@ -2949,7 +3011,6 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             return {"materialised": materialise_briefs(root, run_id, int(params["materialise_wave"]))}
         except (ValueError, OSError) as exc:
             return {"error": f"materialise_wave: {exc}"}
-    stamp_plan_phase(root, run_id)
     park_source = _consume_park_marker(root, run_id)
     if park_source is not None:
         stamp_run_stage(root, run_id, "halted")
@@ -2979,6 +3040,12 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
                     "error": f"{STAGE_RECEIPT_MISSING}: manifest.json landed for run {run_id} with no matching "
                     "stage receipt. Reconcile the run; nothing was written."
                 }
+            # Replies above write nothing; the run-stage heartbeat starts only once the call proceeds.
+            stamp_plan_phase(root, run_id)
+            try:
+                touch_run_activity(prior_dir)
+            except (ValueError, OSError):
+                pass
             parsed: list = []
             escaping = _escaping_write_refusal(
                 root, params.get("plan_path") or None, params.get("only_rows"), parse_out=parsed
@@ -2987,6 +3054,12 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
                 plan_parse = parsed[0]
             if escaping is not None:
                 return {"error": escaping}
+        try:
+            cancelled = run_cancel.cancelled_refusal(prior_dir)
+        except ValueError:  # a corrupt marker is not a cancel; the claim below handles the run as before
+            cancelled = None
+        if cancelled is not None:
+            return {"error": cancelled}
         prior_dir.mkdir(parents=True, exist_ok=True)
         try:
             with leg("claim"):

@@ -202,6 +202,44 @@ def test_cache_never_serves_a_changed_blob_or_a_changed_gate(tmp_path, monkeypat
     assert calls[0] > 0
 
 
+def test_warm_cache_reads_no_blob_and_a_changed_blob_reads_only_itself(tmp_path, monkeypatch):
+    from percolate import import_closure as ic
+
+    repo = _repo(tmp_path)
+    sha = _git(repo, "rev-parse", "HEAD")
+    cold = _cache(tmp_path)
+    expected = find_commit_module_attr_violations(repo, sha, cache=cold)
+    cold.flush()
+    reads: list[str] = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    assert find_commit_module_attr_violations(repo, sha, cache=_cache(tmp_path)) == expected
+    assert reads == ["ls-tree"]
+    _write(repo, "coordinator_core/ledger.py", "def advisory_text():\n    pass\nEXTRA = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "edit")
+    reads.clear()
+    find_commit_module_attr_violations(repo, _git(repo, "rev-parse", "HEAD"), cache=_cache(tmp_path))
+    assert reads == ["ls-tree", "cat-file"]
+
+
+def test_commit_blob_reads_counts_blobs_read_and_is_none_for_an_unlisted_sha(tmp_path, monkeypatch):
+    from percolate import import_closure as ic
+
+    repo = _repo(tmp_path)
+    sha = _git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    assert ic.commit_blob_reads(repo, sha) is None
+    cold = _cache(tmp_path)
+    find_commit_module_attr_violations(repo, sha, cache=cold)
+    cold.flush()
+    assert ic.commit_blob_reads(repo, sha) > 0
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    find_commit_module_attr_violations(repo, sha, cache=_cache(tmp_path))
+    assert ic.commit_blob_reads(repo, sha) == 0
+
+
 def test_progress_is_called_per_file(tmp_path):
     repo = _repo(tmp_path)
     seen: list[tuple[int, int]] = []
@@ -223,3 +261,63 @@ def test_backslash_continued_import_is_still_checked(tmp_path):
     continued = "from \\\n    coordinator_core import ledger\n\ndef gate():\n    return ledger.advisory_text()\n"
     repo = _repo(tmp_path, caller=continued)
     assert _violations(repo) == [("coordinator_core/caller.py", "coordinator_core.ledger.advisory_text")]
+
+
+def test_cold_namespace_modules_are_read_in_one_batch_not_one_spawn_each(tmp_path, monkeypatch):
+    from percolate import import_closure as ic
+
+    repo = _repo(tmp_path)
+    for name in ("alpha", "beta", "gamma"):
+        _write(repo, f"coordinator_core/{name}.py", "def known():\n    pass\n")
+        _write(
+            repo,
+            f"coordinator_core/use_{name}.py",
+            f"from coordinator_core import {name}\n\ndef gate():\n    return {name}.known()\n",
+        )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "more")
+    sha = _git(repo, "rev-parse", "HEAD")
+    cold = _cache(tmp_path)
+    find_commit_module_attr_violations(repo, sha, cache=cold)
+    cold.flush()
+    for name in ("alpha", "beta", "gamma"):
+        _write(repo, f"coordinator_core/{name}.py", "def known():\n    pass\nEXTRA = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "edit namespaces")
+    reads: list[str] = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    find_commit_module_attr_violations(repo, _git(repo, "rev-parse", "HEAD"), cache=_cache(tmp_path))
+    assert reads == ["ls-tree", "cat-file"]
+
+
+def test_importer_lacking_the_package_name_is_not_counted_as_examined(tmp_path):
+    repo = _repo(tmp_path)
+    _write(repo, "coordinator_core/plain.py", "import os\n\ndef f():\n    return os.getcwd()\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "plain")
+    assert find_commit_module_attr_violations(repo, _git(repo, "rev-parse", "HEAD"))[0] == 1
+
+
+def test_warm_cache_reads_nothing_for_a_rebound_alias_whose_namespace_was_never_needed(tmp_path, monkeypatch):
+    from percolate import import_closure as ic
+
+    repo = _repo(tmp_path)
+    _write(
+        repo,
+        "coordinator_core/rebinder.py",
+        "from coordinator_core import ledger\n\nledger = object()\n\ndef gate():\n    return ledger.anything()\n",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "rebinder")
+    sha = _git(repo, "rev-parse", "HEAD")
+    cold = _cache(tmp_path)
+    find_commit_module_attr_violations(repo, sha, cache=cold)
+    cold.flush()
+    reads: list[str] = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_blob_read_memo", {})
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    find_commit_module_attr_violations(repo, sha, cache=_cache(tmp_path))
+    assert reads == ["ls-tree"]

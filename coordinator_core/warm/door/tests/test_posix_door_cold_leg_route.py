@@ -184,20 +184,16 @@ _ECHO_COLD = (
 )
 _HOOK_PAYLOAD = b'{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}'
 
-_behavior = [
-    pytest.mark.spawns_process,
-    pytest.mark.skipif(os.name == "nt", reason="door_posix is a macOS/Linux binary"),
-]
-
-
 @pytest.fixture(scope="module")
 def _door(tmp_path_factory):
+    if os.name == "nt":
+        pytest.skip("door_posix is a macOS/Linux binary")
     cc = shutil.which("cc") or shutil.which("clang")
     if cc is None:
         pytest.skip("no C compiler")
     out = tmp_path_factory.mktemp("door") / "coordinator-invoke"
     subprocess.run(
-        [cc, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', '-DBUILD_ENGINE_ROOT=""',
+        [cc, "-O2", "-std=c11", '-DPYTHON_BIN="python3"',
          "-o", str(out), str(_DOOR_DIR / "door_posix.c"), str(_DOOR_DIR / "door_core.c")],
         check=True, capture_output=True, **no_console_creationflags(),
     )

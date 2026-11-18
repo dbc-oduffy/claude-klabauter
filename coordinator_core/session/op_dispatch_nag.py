@@ -36,18 +36,42 @@ def caller_family(env: Mapping[str, str]) -> Optional[str]:
     return None
 
 
-def _measure(repo_root: str) -> tuple[int, int, bool]:
-    """(files, lines, truncated) of the uncommitted edit: the tracked diff against HEAD plus untracked, non-ignored files.
+def _own_paths(repo_root, session_id: str) -> list[str]:
+    """Repo-relative paths the session's lane record holds: the hand edits attributed to this session.
 
-    A binary row is a file with 0 lines. At most two git spawns; the untracked listing runs only
-    while the tracked diff is still within the XS bound, and the count stops once the bound is passed;
-    `truncated` is true then, and files/lines are lower bounds.
+    Absent or corrupt record, or a path outside the repo, contributes nothing: other sessions'
+    dirt in the shared worktree is never this session's edit.
+    """
+    rec = xs_lane_budget.read_lane(repo_root, session_id)
+    if not rec or rec.get("corrupt"):
+        return []
+    out: list[str] = []
+    for raw in rec["paths"]:
+        if not isinstance(raw, str) or not raw:
+            continue
+        rel = raw.replace("\\", "/")
+        if rel.startswith("/") or (len(rel) > 1 and rel[1] == ":") or rel.split("/", 1)[0] == "..":
+            continue
+        if rel not in out:
+            out.append(rel)
+    return out
+
+
+def _measure(repo_root: str, paths: list[str]) -> tuple[int, int, bool]:
+    """(files, lines, truncated) of the uncommitted edit within `paths`: the tracked diff against HEAD plus untracked, non-ignored files.
+
+    A binary row is a file with 0 lines. At most two git spawns, none for empty `paths`; the
+    untracked listing runs only while the tracked diff is still within the XS bound, and the count
+    stops once the bound is passed; `truncated` is true then, and files/lines are lower bounds.
     `.coordinator-local` and `state/` are engine-written records (untracked until committed), never
     a hand edit, so they are not counted.
     """
+    if not paths:
+        return 0, 0, False
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    literal = [f":(literal){p}" for p in paths]
     proc = subprocess.run(
-        ["git", "-C", str(repo_root), "diff", "--numstat", "HEAD"],
+        ["git", "-C", str(repo_root), "diff", "--numstat", "HEAD", "--", *literal],
         capture_output=True, text=True, timeout=5, check=True, creationflags=flags,
     )
     files = lines = 0
@@ -63,7 +87,7 @@ def _measure(repo_root: str) -> tuple[int, int, bool]:
         return files, lines, True
     listing = subprocess.run(
         ["git", "-C", str(repo_root), "ls-files", "--others", "--exclude-standard", "-z",
-         "--", ".", ":(exclude).coordinator-local", ":(exclude)state"],
+         "--", *literal, ":(exclude).coordinator-local", ":(exclude)state"],
         capture_output=True, timeout=5, check=True, creationflags=flags,
     )
     rows = [raw for raw in listing.stdout.split(b"\0") if raw]
@@ -112,7 +136,10 @@ def mark_nag_emitted(repo_root, session_id: Optional[str]) -> None:
 
 
 def advisory_for_dispatch(repo_root, session_id: Optional[str], env: Mapping[str, str]) -> Optional[str]:
-    """The DIY nag text when a non-Claude EM's uncommitted edit exceeds the XS bound, else None.
+    """The DIY nag text when a non-Claude EM's own uncommitted edit exceeds the XS bound, else None.
+
+    "Own" is the paths in the session's lane record; a session with none is never nagged, however
+    dirty the shared worktree is.
 
     Surface-agnostic: needs no prior op call, only repo root, session id and caller env. A hook on
     a surface the EM always crosses (the only cover for an EM that edits and never invokes an op)
@@ -133,13 +160,13 @@ def advisory_for_dispatch(repo_root, session_id: Optional[str], env: Mapping[str
         if _within(stamp, now, THROTTLE_SECONDS) or _within(checked, now, CHECK_SECONDS):
             return None
         _mark(checked, now)
-        files, lines, truncated = _measure(str(repo_root))
+        files, lines, truncated = _measure(str(repo_root), _own_paths(repo_root, session_id))
         if files <= xs_lane_budget.BUDGET_FILES and lines <= xs_lane_budget.BUDGET_LINES:
             return None
         from coordinator_core import warp_fire
 
         return warp_fire.nag_text(
             session_id, host=family, edit_size=(files, lines), edit_size_truncated=truncated
-        )
+        ) or None
     except Exception:
         return None

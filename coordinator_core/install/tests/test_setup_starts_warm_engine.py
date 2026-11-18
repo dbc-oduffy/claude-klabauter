@@ -177,7 +177,8 @@ def test_redirected_install_never_starts_a_warm_engine(
 
     out = capsys.readouterr().out
     assert started == []
-    assert "PASS [registration] engine.warm.enabled = true" in out
+    assert "PASS [registration]" not in out
+    assert "[ADVISORY] engine.warm.enabled registration skipped: CLAUDE_HOME=" in out
     assert "[ADVISORY] warm engine not started: CLAUDE_HOME=" in out
 
 

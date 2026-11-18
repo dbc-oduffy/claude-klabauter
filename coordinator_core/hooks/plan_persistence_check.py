@@ -152,6 +152,7 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.plan_capture_persist import persist_captured_plan
+from coordinator_core.session.output_tree_layout import write_rel
 
 #: This op's own repo root, the shared `engine_root.ENGINE_CHECKOUT_ROOT`
 #: anchor. Used only for the meta-repo-routing branch below: unlike the source
@@ -439,7 +440,8 @@ def _handler(params: dict, repo_root=None) -> dict:
     slug = _derive_slug(plan_content)
     today = _local_day()
     target_name = f"{today}-{slug}.md"
-    target_path = docs_plans_dir / target_name
+    target_rel = write_rel("docs/plans", target_name)
+    target_path = plans_git_root / target_rel
 
     # --- Routed persist (preferred): direct in-process call, no subprocess ---
     try:
@@ -472,13 +474,12 @@ def _handler(params: dict, repo_root=None) -> dict:
         except Exception:
             existing = ""
         if existing == plan_content:
-            cmd = _commit_cmd(
-                plans_git_root, repo_root_path, [f"docs/plans/{target_name}"], slug
-            )
+            cmd = _commit_cmd(plans_git_root, repo_root_path, [target_rel], slug)
             return post_advisory(_idempotent_text(cmd))
         return post_advisory(_collision_text(str(target_path)))
 
     try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
         with target_path.open("w", encoding="utf-8", newline="") as fh:
             fh.write(plan_content)
     except Exception:
@@ -492,7 +493,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         # same shape plan_capture_persist.readme_row() uses for the routed
         # path; the prior "docs/plans/..." form double-prefixed docs/ for a
         # README that already lives in docs/.
-        readme_line = f"- [`{target_name}`](plans/{target_name})"
+        readme_line = f"- [`{target_name}`]({target_rel.removeprefix('docs/')})"
         try:
             existing_readme = docs_readme.read_text(encoding="utf-8")
         except Exception:
@@ -505,7 +506,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             except Exception:
                 pass  # best-effort README append; a failure must not block the check
 
-    rel_paths = [f"docs/plans/{target_name}"]
+    rel_paths = [target_rel]
     if readme_modified:
         rel_paths.append("docs/README.md")
     cmd = _commit_cmd(plans_git_root, repo_root_path, rel_paths, slug)

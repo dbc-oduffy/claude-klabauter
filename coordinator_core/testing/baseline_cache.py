@@ -1,11 +1,12 @@
-"""baseline-cache: one read-only extracted tree per commit, shared by every baseline run.
+"""baseline-cache: one read-only cloned tree per commit, shared by every baseline run.
 
 Entry: <toplevel>/scratch/baseline-cache/<sha40>/, built in <sha40>.partial-<pid> and published by
 `os.replace` (a lost race discards the partial). Names avoid `test-base-`, so the export reapers
 never touch the cache; it is NOT counted by `export_lifecycle.check_export_cap` and is bounded
 only by CACHE_ENTRY_CAP entries (least recently used, by the `<sha40>.used` touch file, go first).
 A run holds `<sha40>.lease-<pid>` for its whole life; an entry with a live lease is never evicted.
-The extractor is injected: this module spawns no git.
+The extractor is injected: this module spawns no git. A hit costs no git spawn; a miss costs the
+extractor's two (`clone`, `checkout`). The entry's top-level `.git` is neither sealed nor drift-checked.
 
 Traps:
 - DATA_DIRS links point at the LIVE tree. Every walk here stops at a link (`_is_link`); following
@@ -75,10 +76,16 @@ def _used_ns(root: Path, sha: str) -> int:
         return 0
 
 
-def _walk(tree: Path) -> Iterator[tuple[str, list[str]]]:
-    """(directory, regular-file paths) for `tree`, never descending or yielding a link."""
+def _walk(tree: Path, *, with_git: bool = False) -> Iterator[tuple[str, list[str]]]:
+    """(directory, regular-file paths) for `tree`, never descending or yielding a link.
+
+    The top-level `.git` is skipped unless `with_git`: a runner's index refresh must not read as drift.
+    """
     for cur, dirnames, filenames in os.walk(tree, topdown=True, followlinks=False):
-        dirnames[:] = [d for d in dirnames if not _is_link(os.path.join(cur, d))]
+        dirnames[:] = [
+            d for d in dirnames
+            if not _is_link(os.path.join(cur, d)) and (with_git or d != ".git" or cur != os.fspath(tree))
+        ]
         yield cur, [os.path.join(cur, f) for f in filenames if not _is_link(os.path.join(cur, f))]
 
 
@@ -91,7 +98,7 @@ def _seal(tree: Path) -> None:
 
 
 def _unseal_and_remove(path: Path) -> bool:
-    for cur, files in _walk(path):
+    for cur, files in _walk(path, with_git=True):
         _make_writable(cur)
         for f in files:
             _make_writable(f)

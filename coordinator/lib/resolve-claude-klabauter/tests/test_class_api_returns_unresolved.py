@@ -29,7 +29,6 @@ def no_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     for var in (
         "MACHINE_LOCAL_REGISTRY_DIR",
-        "CLAUDE_KLABAUTER_ROOT",
         "COORDINATOR_ENGINE_ROOT",
         "CLAUDE_PROJECT_DIR",
     ):

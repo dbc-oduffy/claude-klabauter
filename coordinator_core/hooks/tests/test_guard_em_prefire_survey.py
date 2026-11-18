@@ -184,17 +184,26 @@ def test_ninth_read_advises_with_fire_step_and_is_allowed(env) -> None:
     assert "cd-prefixed retry" not in reason(res) and "em_context" in reason(res)
 
 
-def test_repeat_advisory_is_one_terse_counted_line_and_still_fires(env) -> None:
+def test_twelve_overbudget_calls_advise_exactly_once_and_a_subagent_never(env) -> None:
     env.write(user())
     env.survey(8)
-    first = reason(g.evaluate(env.payload()))
-    assert warp_fire.fire_step() in first
-    second_res = g.evaluate(env.payload())
-    assert second_res is not None
-    second = reason(second_res)
-    assert second.startswith("[engine-ask nag #2]")
-    assert "Next step, the only one" not in second and "[em-prefire-survey]" not in second
-    assert "\n" not in second
+    results = [g.evaluate(env.payload(tid=f"p{i}")) for i in range(12)]
+    assert results[0] is not None and warp_fire.fire_step() in reason(results[0])
+    assert all(r is None for r in results[1:])
+    assert g.evaluate(env.payload(tid="sub", agent_id="sub-1")) is None
+
+
+def test_a_subagent_payload_never_advises_in_a_fresh_session(env) -> None:
+    env.write(user())
+    env.survey(8)
+    assert g.evaluate(env.payload(agent_id="sub-1")) is None
+
+
+def test_a_nag_another_caller_spent_leaves_the_prefire_leg_silent(env) -> None:
+    env.write(user())
+    env.survey(8)
+    warp_fire.nag_text(SID)
+    assert g.evaluate(env.payload()) is None
 
 
 def test_prefire_deny_arms_the_session_latch_and_under_budget_does_not(env) -> None:
@@ -219,12 +228,11 @@ def test_gem_stamped_opening_is_never_denied_prefire(env) -> None:
     assert g.evaluate(env.payload()) is None
 
 
-def test_unstamped_or_malformed_stamp_stays_armed(env) -> None:
-    for text in ("ingest the feed", "[G-EM fifa-ingest] x", "[G-EM fifa-ingest zz] x"):
-        env.lines = []
-        env.write(user(text))
-        env.survey(8)
-        assert g.evaluate(env.payload()) is not None, text
+@pytest.mark.parametrize("text", ["ingest the feed", "[G-EM fifa-ingest] x", "[G-EM fifa-ingest zz] x"])
+def test_unstamped_or_malformed_stamp_stays_armed(env, text) -> None:
+    env.write(user(text))
+    env.survey(8)
+    assert g.evaluate(env.payload()) is not None, text
 
 
 def test_gem_stamped_opening_is_never_denied_postlanding(env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -440,9 +448,8 @@ def test_open_xs_lane_does_not_exempt(env) -> None:
 
     env.write(user())
     env.survey(8)
-    assert g.evaluate(env.payload()) is not None
     assert xs_lane_budget.open_xs_lane(env.repo, SID, "abc")
-    assert g.evaluate(env.payload(tid="cur2")) is not None
+    assert g.evaluate(env.payload()) is not None
 
 
 @pytest.mark.parametrize("phase", [ers.PHASE_UNKNOWN, ers.PHASE_IN_FLIGHT])

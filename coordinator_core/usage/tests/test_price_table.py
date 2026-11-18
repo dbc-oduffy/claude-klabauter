@@ -110,7 +110,7 @@ def test_json_matches_python_table(pt):
         assert m["input"] == approx(p["input"])
         assert m["output"] == approx(p["output"])
         assert m["cache_read"] == approx(p["input"] * p.get("cache_read_mult", pt.CACHE_READ_MULT))
-        assert m["cache_creation"] == approx(p["input"] * pt.CACHE_WRITE_MULT)
+        assert m["cache_creation"] == approx(p["input"] * p.get("cache_write_mult", pt.CACHE_WRITE_MULT))
         assert m.get("fast_multiplier") == p.get("fast_multiplier")
         tier = m.get("long_prompt_tier")
         if "tier_prompt_tokens" in p:
@@ -121,6 +121,24 @@ def test_json_matches_python_table(pt):
             assert tier["cache_creation"] == approx(p["tier_input"] * pt.CACHE_WRITE_MULT)
         else:
             assert tier is None
+
+
+def test_gemini_flash_prices_at_list_and_has_provenance(pt):
+    u = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert pt.estimate_usd("Gemini 3.8 Flash (Medium)", u) == pytest.approx(4.5)
+    assert pt.estimate_usd("gemini-3.8-flash", {"cache_read_input_tokens": 1_000_000}) == pytest.approx(0.075)
+    assert pt.estimate_usd("gemini-3.8-flash", {"cache_creation_input_tokens": 1_000_000}) == pytest.approx(0.75)
+    prov = pt.RATE_PROVENANCE["gemini-3.8-flash"]
+    assert prov["source"].startswith("https://ai.google.dev/gemini-api/docs/pricing")
+    assert prov["verified_at"]
+
+
+def test_gemini_family_resolves_effort_and_display_forms_but_not_other_models(pt):
+    for ok in ("Gemini 3.8 Flash (Medium)", "gemini-3.8-flash-high", "gemini-3.8-flash", "gemini-3.8-flash-2026-11-01"):
+        assert pt.model_family(ok) == "gemini-3.8-flash"
+    for other in ("Gemini 3.8 Flash TTS", "gemini-3.8-flash-lite", "Gemini 3.1 Pro", "gemini-4-argon-high"):
+        assert pt.model_family(other) is None
+        assert pt.estimate_usd(other, {"input_tokens": 5}) is None
 
 
 def test_sonnet_prices_at_list(pt):

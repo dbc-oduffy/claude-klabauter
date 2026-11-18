@@ -118,3 +118,25 @@ def test_registry_change_invalidates_cache(reg, tmp_path: Path) -> None:
     p.write_text("", encoding="utf-8")
     os.utime(p, ns=(1, 1))
     assert mr.external_workspace_roots() == {}
+
+
+def test_registered_paths_keep_missing_and_carry_url_ref_vcs(reg, tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    gone = tmp_path / "nope"
+    _write(
+        reg,
+        f'[external_workspaces.here]\npath = "{ws.as_posix()}"\nvcs = "p4"\n'
+        f'[external_workspaces.gone]\npath = "{gone.as_posix()}"\nurl = "https://example.invalid/x.git"\nref = "v1"\n'
+        '[external_workspaces.empty]\npath = ""\n',
+    )
+    got = mr.external_workspace_registered_paths()
+    assert got == {
+        "here": {"path": ws.as_posix(), "url": "", "ref": "", "vcs": "p4"},
+        "gone": {"path": gone.as_posix(), "url": "https://example.invalid/x.git", "ref": "v1", "vcs": ""},
+    }
+    assert set(mr.external_workspace_roots()) == {"here"}  # roots keeps existing-dirs-only
+
+
+def test_registered_paths_empty_on_unreadable_registry(reg) -> None:
+    (reg / "registry.local.toml").write_text("this is [not toml", encoding="utf-8")
+    assert mr.external_workspace_registered_paths() == {}

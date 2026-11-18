@@ -251,3 +251,67 @@ def test_a_halt_without_a_prep_key_records_no_prep_reply(repo):
     from coordinator_core.ops.dispatch_emit.halted_record_commit import HALT_PREP_REPLY_FIELD
 
     assert HALT_PREP_REPLY_FIELD not in _halt_marker(repo, {"halted": "refusal", "reason": "r"})
+
+
+def _owned_branch_ahead(monkeypatch, branch: str, remote: str = "origin") -> list:
+    from types import SimpleNamespace
+
+    from coordinator_core.ops import push_outstanding as po
+    from coordinator_core.ops.dispatch_emit import run_push
+    from coordinator_core.warm import push_cadence
+
+    marked: list = []
+    monkeypatch.setattr(run_push, "head_branch", lambda r: branch)
+    monkeypatch.setattr(run_push, "_owned_remote", lambda r, b: (remote, None))
+    monkeypatch.setattr(po, "push_outstanding", lambda w, decide_only=False: SimpleNamespace(skipped=["push:decide-only"]))
+    monkeypatch.setattr(push_cadence, "note_commit", lambda r: marked.append(r))
+    return marked
+
+
+def test_a_landed_halt_commit_on_an_owned_branch_ahead_of_its_remote_replies_not_pushed_with_the_command(
+    repo, monkeypatch
+):
+    marked = _owned_branch_ahead(monkeypatch, "work/machine-a/2026-10-16to17")
+    _write_record(repo, RUN)
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    assert out["push"]["status"] == "not_pushed"
+    assert out["push"]["command"] == "git push origin HEAD:work/machine-a/2026-10-16to17"
+    assert repo in marked
+
+
+def test_a_halt_commit_on_a_non_work_branch_replies_not_pushed_without_a_command(repo, monkeypatch):
+    _owned_branch_ahead(monkeypatch, "main")
+    _write_record(repo, RUN)
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    assert out["push"]["status"] == "not_pushed" and "command" not in out["push"]
+
+
+def test_peer_hunk_pass_still_refuses_a_non_coarse_refused_candidate(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_record_commit
+
+    monkeypatch.setattr(
+        halted_record_commit, "_candidate_for", lambda *a, **k: {"refused": "unknown", "foreign": [{"lines": [1]}]}
+    )
+
+    refused, named = halted_record_commit._peer_hunks_excluded(repo, RUN, ["pkg/x.py"], {})
+
+    assert refused == ["pkg/x.py"]
+    assert named == {"foreign_hunks": {"pkg/x.py": [{"lines": [1]}]}}
+
+
+def test_peer_hunk_pass_skips_a_coarse_refused_candidate(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_record_commit
+
+    monkeypatch.setattr(
+        halted_record_commit, "_candidate_for", lambda *a, **k: {"refused": "coarse", "foreign": [{"lines": [1]}]}
+    )
+
+    refused, _named = halted_record_commit._peer_hunks_excluded(repo, RUN, ["pkg/x.py"], {})
+
+    assert refused == []

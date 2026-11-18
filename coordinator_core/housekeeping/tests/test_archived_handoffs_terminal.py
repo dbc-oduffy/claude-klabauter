@@ -22,7 +22,6 @@ _LEDGER = frozenset({
     "archive/handoffs/2026-07/2026-07-02_230103_roadmap-pcore-03.md",
     "archive/handoffs/2026-07/2026-07-04_220004_roadmap-strang-04.md",
     "archive/handoffs/2026-07/2026-07-04_220009_roadmap-strang-09.md",
-    "archive/handoffs/2026-07/2026-07-23-realized-by-stamping-seam-stamp-at-reali.md",
     "archive/handoffs/2026-08/2026-08-27-the-discriminators-that-already-exist-reach-their-rows.md",
 })
 

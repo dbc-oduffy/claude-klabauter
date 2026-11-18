@@ -88,8 +88,9 @@ def test_an_unrun_invariant_launches_one_detached_retest_and_answers_retest_runn
 
     out = _land(owed)
 
-    assert out["committed"] is False and out["refused"] == "targeted-tests-failed", out
-    assert out["awaiting"]["awaiting"] == "retest" and out["remedy_step"]["nodes"] == [INV], out
+    assert out["committed"] is False and out["refused"] is None and out["remedy_step"] is None, out
+    assert out["awaiting"]["awaiting"] == "retest" and "targeted-tests-failed" not in out["error"], out
+    assert [f["detail"] for f in out["integrity"] if INV in f["detail"]] and len(out["integrity"]) == 1, out
     assert len(spawned) == 1 and "--detached-child" in spawned[0][2] and INV in spawned[0][2]
     record = landing_retest._retest_record(owed, RUN)
     assert record["status"] == landing_retest.RETEST_RUNNING and record["tests"] == [INV]

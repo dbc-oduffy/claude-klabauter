@@ -91,4 +91,5 @@ def test_red_implicating_own_edited_path_is_not_foreign(world):
 def test_red_owned_by_nobody_is_not_foreign(world):
     out = _revert(world, ["tests/test_nobody.py::test_d"])
     assert out["foreign"] == []
-    assert out["unattributed"] == ["tests/test_nobody.py::test_d"]
+    assert out["unattributed"] == []
+    assert out["foreign_red"] == {"tests/test_nobody.py::test_d": ["tests/test_nobody.py"]}

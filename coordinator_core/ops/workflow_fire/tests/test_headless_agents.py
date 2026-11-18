@@ -75,12 +75,8 @@ def test_codex_schema_prompt_label_and_environment(tmp_path: Path, monkeypatch: 
     wire = json.loads(capture.read_text())
     assert wire["prompt"].endswith("Do a thing: café")
     assert wire["argv"][0] == "exec"
-    assert wire["argv"][wire["argv"].index("--sandbox") + 1] == "workspace-write"
+    assert "--dangerously-bypass-approvals-and-sandbox" in wire["argv"] and "--sandbox" not in wire["argv"]
     assert not any("default_permissions" in arg or "permissions.coordinator_workflow" in arg for arg in wire["argv"])
-    from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv, settings_home_add_dir_argv
-    grants = [wire["argv"][i + 1] for i, arg in enumerate(wire["argv"]) if arg == "--add-dir"]
-    expected = [*settings_home_add_dir_argv(), *lock_and_gitdir_add_dir_argv(tmp_path)]
-    assert grants == expected[1::2]
     assert "--output-schema" in wire["argv"]
     assert wire["argv"][wire["argv"].index("--model") + 1] == agents.model_for_tier("codex", "sonnet")
     assert wire["argv"][-1] == "-"
@@ -536,7 +532,7 @@ def test_private_cli_fake_wire_resolves_native_before_private_path(tmp_path: Pat
         else:assert wire['env'][key]==value
     assert 'COORDINATOR_SESSION_ID' not in wire['env'] and 'CODEX_THREAD_ID' not in wire['env']
     assert wire['env']['COORDINATOR_PARENT_SESSION_ID']==kwargs['parent_session_id']
-    assert wire['argv'][wire['argv'].index('--sandbox')+1]=='workspace-write'
+    assert '--dangerously-bypass-approvals-and-sandbox' in wire['argv'] and '--sandbox' not in wire['argv']
     assert not any('default_permissions' in arg for arg in wire['argv'])
     assert 'Preserve every argument exactly' in wire['prompt']
     assert '--params-file abc.json' in wire['prompt']

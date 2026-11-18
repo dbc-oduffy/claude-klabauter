@@ -1455,11 +1455,15 @@ def scannable_count(
     log_path: str = "state/distillation-log.md",
     cohort_specs: list[CohortSpec] | None = None,
     cap: int | None = None,
+    owed_since_watermark: bool = False,
 ) -> int:
     """How many files an admitting distill.scope run owes a reading agent: scanned plus deferred,
-    before the batch budget. ``cohort_specs`` omitted means PM_RULING_2026_08_06_COHORT_SPECS; the
-    logs cohort is always scanned, for citations only. Equals ``compute_scope(..., admit=True)`` ``counts["scannable"]
-    + counts["deferred"]`` on the same tree. ``cap`` clamps the result.
+    before the batch budget. ``owed_since_watermark`` narrows it to what the stored ``distill``
+    watermark still owes (changed since its base plus every candidate past its cursor), through
+    ``_plan_watermark``: at most one ``changed_since``, no per-file spawn; no HEAD or no delta
+    source leaves it unrestricted. ``cohort_specs`` omitted means PM_RULING_2026_08_06_COHORT_SPECS; the
+    logs cohort is always scanned, for citations only. Without ``owed_since_watermark`` it equals
+    ``compute_scope(..., admit=True)`` ``counts["scannable"] + counts["deferred"]`` on the same tree. ``cap`` clamps the result.
     An absent ``log_path`` counts as an empty baseline, as compute_scope does."""
     cache = _ScopeCache(worktree_root)
     gathered = _gather_cohorts(
@@ -1477,7 +1481,12 @@ def scannable_count(
         cache, gathered, scannable_set, cohort_of, _captured_keys(cache, worktree_root, _default_wiki_dirs(worktree_root))
     )
     cache.save()
-    return len(admitted.ranked) if cap is None else min(len(admitted.ranked), cap)
+    owed = len(admitted.ranked)
+    if owed_since_watermark:
+        plan = _plan_watermark(worktree_root, admitted.ranked, len(admitted.ranked))
+        if plan is not None:
+            owed = len(plan.scoped)
+    return owed if cap is None else min(owed, cap)
 
 
 #: The run kind under which distill.scope's coverage watermark is stored.

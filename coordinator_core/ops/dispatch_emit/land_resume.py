@@ -128,10 +128,14 @@ def _fold_into_claim(root: Optional[Path], run_id: str, pending: Path, bumped: d
     _write(claimed_path, claimed)
 
 
-def enqueue(root: Optional[Path], run_id: str, params: dict, leg: Optional[str]) -> bool:
+def enqueue(
+    root: Optional[Path], run_id: str, params: dict, leg: Optional[str], delay_secs: float = 0.0,
+) -> bool:
     """Queue `run_id` for a later landing; True when a live entry now exists for it.
 
-    A second call for a live run_id bumps `attempts` and sets `last_leg` on that entry. False
+    A second call for a live run_id bumps `attempts` and sets `last_leg` on that entry. A positive
+    `delay_secs` is a wait on a running child, not a failed attempt: it sets `not_before` (`next_due`
+    skips the entry until then) and leaves `attempts` unbumped; `MAX_AGE_SECS` still bounds it. False
     when the run already finished, `run_id` is unsafe, or the queue could not be written. The caller
     reads `load` + `expired` afterwards: an enqueue past its bounds is still recorded."""
     if not _safe(run_id):
@@ -145,7 +149,11 @@ def enqueue(root: Optional[Path], run_id: str, params: dict, leg: Optional[str])
             entry = read_entry(path)
             if entry is None:
                 continue
-            entry["attempts"] = int(entry.get("attempts", 0)) + 1
+            if delay_secs > 0:
+                entry["not_before"] = now + delay_secs
+            else:
+                entry["attempts"] = int(entry.get("attempts", 0)) + 1
+                entry.pop("not_before", None)
             entry["last_leg"] = leg
             if suffix == CLAIMED_SUFFIX:
                 entry["requeued"] = True
@@ -162,6 +170,8 @@ def enqueue(root: Optional[Path], run_id: str, params: dict, leg: Optional[str])
             "attempts": 1,
             "last_leg": leg,
         }
+        if delay_secs > 0:
+            entry["not_before"] = now + delay_secs
         _write(_path(root, run_id, PENDING_SUFFIX), entry)
         _log(root, run_id, "enqueued", entry)
         return True
@@ -177,6 +187,14 @@ def expired(entry: dict, now: float) -> bool:
         return now - float(entry.get("enqueued_at", now)) > MAX_AGE_SECS
     except (TypeError, ValueError):
         return True
+
+
+def _waiting(entry: dict, now: float) -> bool:
+    """True when `entry` carries a `not_before` still in the future."""
+    try:
+        return float(entry.get("not_before", 0.0)) > now
+    except (TypeError, ValueError):
+        return False
 
 
 def _reclaim_stale(root: Optional[Path], directory: Path, now: float) -> None:
@@ -227,6 +245,8 @@ def next_due(root: Optional[Path], now: float) -> Optional[Path]:
                 continue
             entry["claimed_by"] = os.getpid()
             _finish_claimed(root, run_id, dst, entry, OUTCOME_EXPIRED)
+            continue
+        if _waiting(entry, now):
             continue
         try:
             os.rename(src, dst)

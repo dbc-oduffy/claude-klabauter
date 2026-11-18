@@ -131,6 +131,7 @@ import re
 import shutil
 import subprocess
 import sys
+import types
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, auto
@@ -420,9 +421,9 @@ def _print_change_summary() -> None:
     print()
     print("--- Changes this run ---")
     if not _CHANGES:
-        print("[changes] none: this run altered nothing")
+        print("[changes] none: this run altered nothing outside the repos")
         return
-    print(f"[changes] this run altered {len(_CHANGES)} item(s):")
+    print(f"[changes] this run altered {len(_CHANGES)} item(s) outside the repos:")
     for component, detail in _CHANGES:
         print(f"  - {component}: {detail}")
 
@@ -3091,7 +3092,23 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
         print(f"    machine-local set engine.warm.enabled {str(want_warm).lower()}")
         return
 
+    from coordinator_core.install.install_root_scope import (
+        redirected_install_reason,
+        unregistered_clone_reason,
+    )
+
     value = "true" if want_warm else "false"
+    # The registry is machine-global: a redirected (sandbox) install must neither
+    # write the key nor start a server.
+    redirect = redirected_install_reason()
+    if redirect is not None:
+        print(f"[ADVISORY] engine.warm.enabled registration skipped: {redirect}")
+        if want_warm:
+            print(
+                f"[ADVISORY] warm engine not started: {redirect}; "
+                "a redirected install never starts a resident server"
+            )
+        return
     proc = machine_local_spawn.run_bounded(machine_local_argv + ["set", "engine.warm.enabled", value])
     if proc is None:
         print("[ADVISORY] 'machine-local set engine.warm.enabled' failed to launch or outlived its ceiling.", file=sys.stderr)
@@ -3105,18 +3122,7 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
     _note_change("warm-engine", f"machine-local set engine.warm.enabled = {value}")
 
     if want_warm:
-        from coordinator_core.install.install_root_scope import (
-            redirected_install_reason,
-            unregistered_clone_reason,
-        )
-
-        redirect = redirected_install_reason()
-        if redirect is not None:
-            print(
-                f"[ADVISORY] warm engine not started: {redirect}; "
-                "a redirected install never starts a resident server"
-            )
-        elif (unregistered := unregistered_clone_reason(repo_root)) is not None:
+        if (unregistered := unregistered_clone_reason(repo_root)) is not None:
             print(
                 f"[ADVISORY] warm engine not started: {unregistered}; "
                 "only the registered clone starts a resident server"
@@ -3742,6 +3748,58 @@ def refresh_group_em_home(repo_root: Path, args: Args) -> None:
     print(GROUP_EM_ARMING_NOTE)
 
 
+def adopt_and_link_homes(repo_root: Path, args: Args) -> None:
+    """Adopt existing group-em / ~/.claude GitHub repos, then link both homes into the repos folder.
+
+    Calls DoE's `_home_adopt.adopt_homes` then `_home_links.ensure_home_links` in process (no
+    interpreter spawn). ADVISORY like its siblings: any failure prints WARN and returns.
+    """
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [homes] COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return
+    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    scripts = None if plugin_root is None else plugin_root / "hooks" / "scripts"
+    adopt_py = None if scripts is None else scripts / "_home_adopt.py"
+    links_py = None if scripts is None else scripts / "_home_links.py"
+    if adopt_py is None or not adopt_py.is_file() or not links_py.is_file():
+        print("SKIP [homes] no _home_adopt.py/_home_links.py under the plugin root")
+        return
+    scripts_dir = str(scripts)
+    added = scripts_dir not in sys.path
+    if added:
+        sys.path.insert(0, scripts_dir)  # both modules import siblings (_engine_root, _general_work)
+    try:
+        def _load(name: str, path: Path) -> "types.ModuleType":
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            return module
+
+        for report in _load("_setup_home_adopt", adopt_py).adopt_homes():
+            action = report.get("action", "")
+            line = f"{report.get('home', '')} {action}: {report.get('path', '')}"
+            if report.get("detail"):
+                line += f" ({report['detail']})"
+            print(f"OK   [homes] {line}")
+            if action in ("cloned", "adopted", "attached"):
+                _note_change("homes", line)
+        for report in _load("_setup_home_links", links_py).ensure_home_links():
+            status = report.get("status", "")
+            line = f"link {status}: {report.get('path', '')}"
+            if report.get("detail"):
+                line += f" ({report['detail']})"
+            print(f"OK   [homes] {line}")
+            if status == "created":
+                _note_change("homes", line)
+    except Exception as exc:  # advisory phase -- never fails the install
+        print(f"WARN [homes] adopt/link skipped ({type(exc).__name__}: {exc})")
+    finally:
+        if added and scripts_dir in sys.path:
+            sys.path.remove(scripts_dir)
+
+
 def migrate_group_em_inbox(repo_root: Path, args: Args) -> None:
     """Move memos stranded in the group-em home inbox to the G-EM reroute target.
 
@@ -3827,6 +3885,8 @@ def apply_settings_manifest_env(repo_root: Path, claude_klabauter_root_resolved:
         return False
     applied = ", ".join(record["applied"]) or "nothing to change"
     print(f"PASS [settings-env] {settings_path} ({applied})")
+    if record["applied"]:
+        _note_change("settings.json", f"{settings_path}: {applied}")
     return True
 
 
@@ -3878,6 +3938,137 @@ def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, arg
         print(f"PASS [retention] cleanupPeriodDays={_RETENTION_DAYS} set in {settings_path} (was {current!r})")
     except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
         print(f"WARN [retention] skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
+
+
+def user_path_with_entry(raw: str, entry: str) -> str | None:
+    """`raw` (an unexpanded user PATH value) with `entry` appended, or None when already present.
+
+    Presence is compared case-insensitively on both the literal and the `%VAR%`-expanded form, so
+    an entry spelled `%USERPROFILE%\\...` is never duplicated; `raw` itself is never expanded.
+    """
+    def norm(value: str) -> str:
+        return os.path.normcase(os.path.normpath(value.strip().strip('"')))
+
+    want = norm(entry)
+    for part in raw.split(os.pathsep):
+        if part.strip() and want in (norm(part), norm(os.path.expandvars(part))):
+            return None
+    if not raw.strip():
+        return entry
+    return raw.rstrip(os.pathsep) + os.pathsep + entry
+
+
+def _broadcast_environment_change() -> None:
+    """Tell running shells the user environment changed (WM_SETTINGCHANGE); best-effort, no spawn."""
+    import ctypes
+
+    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 2000, None)
+
+
+def ensure_settings_home_bin_on_user_path(args: Args) -> bool:
+    """Windows only: put `<settings-home>/bin` on the persistent user PATH (HKCU\\Environment).
+
+    ADVISORY, non-fatal, idempotent. The raw REG_EXPAND_SZ value is read and written back
+    unexpanded with its registry type preserved. Returns True when PATH changed; the caller's
+    restart notice follows because running Claude Code sessions keep the stale environment.
+    """
+    if sys.platform != "win32":
+        return False
+    print()
+    print("--- Install: settings-home bin on the user PATH ---")
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [path] COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return False
+    try:
+        import winreg
+
+        from coordinator_core._settings_home import settings_home
+
+        entry = str(settings_home() / "bin")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                            winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
+            try:
+                raw, kind = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                raw, kind = "", winreg.REG_EXPAND_SZ
+            updated = user_path_with_entry(str(raw), entry)
+            if updated is None:
+                print(f"SKIP [path] {entry} already on the user PATH")
+                return False
+            winreg.SetValueEx(key, "Path", 0, kind, updated)
+        try:
+            _broadcast_environment_change()
+        except Exception:  # noqa: BLE001 - the registry write already landed
+            pass
+        _note_change("user-path", f"appended {entry} to the persistent user PATH (HKCU\\Environment)")
+        print(f"PASS [path] appended {entry} to the user PATH")
+        print("NEXT [path] restart Claude Code (and any open terminal): running shells keep the old PATH")
+        return True
+    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
+        print(f"WARN [path] user PATH not updated ({type(exc).__name__}: {exc})", file=sys.stderr)
+        return False
+
+
+_GIT_CONFIG_PROBE_RE = r"^(core\.autocrlf|core\.longpaths|init\.defaultbranch)$"
+
+
+def _git_config_repairs(current: dict[str, str], platform: str) -> list[tuple[str, str]]:
+    """(key, value) pairs the global git config needs; pure.
+
+    autocrlf is repaired to `false` on every platform when absent or `true`, so repo .gitattributes
+    govern line endings; `false` and `input` fit. longpaths is Windows-only. A set
+    `init.defaultBranch` is the operator's choice and stays.
+    """
+    wanted: list[tuple[str, str]] = []
+    if current.get("core.autocrlf") in (None, "", "true"):
+        wanted.append(("core.autocrlf", "false"))
+    if platform == "win32":
+        if current.get("core.longpaths") != "true":
+            wanted.append(("core.longpaths", "true"))
+    if not current.get("init.defaultbranch"):
+        wanted.append(("init.defaultBranch", "main"))
+    return wanted
+
+
+def install_global_git_config(args: Args) -> list[tuple[str, str]]:
+    """Probe the three fleet keys of the global git config in one spawn and repair what is off.
+
+    Sets global core.autocrlf=false on every platform so repo .gitattributes govern.
+    ADVISORY, non-fatal, idempotent; one extra spawn per key that needs a write.
+    Returns the (key, value) pairs written. Gated by `COORDINATOR_DISABLE_MACHINE_MUTATION`.
+    """
+    print()
+    print("--- Install: global git config (autocrlf=false, longpaths, defaultBranch) ---")
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [git-config] COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return []
+    written: list[tuple[str, str]] = []
+    try:
+        probe = subprocess.run(
+            ["git", "config", "--global", "--get-regexp", _GIT_CONFIG_PROBE_RE],
+            capture_output=True, text=True, timeout=10, **_NO_CONSOLE,
+        )
+        current: dict[str, str] = {}
+        for line in probe.stdout.splitlines():
+            key, _, value = line.partition(" ")
+            current[key.strip().lower()] = value.strip()
+        repairs = _git_config_repairs(current, sys.platform)
+        if not repairs:
+            print("SKIP [git-config] autocrlf, longpaths and defaultBranch already fit")
+        for key, value in repairs:
+            proc = subprocess.run(
+                ["git", "config", "--global", key, value],
+                capture_output=True, text=True, timeout=10, **_NO_CONSOLE,
+            )
+            if proc.returncode != 0:
+                print(f"WARN [git-config] {key} not set: {proc.stderr.strip()}", file=sys.stderr)
+                continue
+            written.append((key, value))
+            _note_change("git-config", f"global {key} {current.get(key.lower()) or '<unset>'} -> {value}")
+            print(f"PASS [git-config] global {key} = {value}")
+    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
+        print(f"WARN [git-config] global git config not probed ({type(exc).__name__}: {exc})", file=sys.stderr)
+    return written
 
 
 def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
@@ -4535,6 +4726,14 @@ def install_global_doctrine_files(repo_root: Path, claude_klabauter_root_resolve
         print(f"[ADVISORY] could not write global doctrine/rules: {exc}", file=sys.stderr)
         return
 
+    if claude_md_created or rules_created:
+        _note_change(
+            "global-doctrine",
+            "created " + ", ".join(
+                (["~/.claude/CLAUDE.md"] if claude_md_created else [])
+                + [f"~/.claude/rules/{name}" for name in rules_created]
+            ),
+        )
     if claude_md_created:
         print("PASS [global-doctrine] created ~/.claude/CLAUDE.md")
     else:
@@ -5071,6 +5270,31 @@ def _reset_resolution_journal() -> None:
 _CLAUDE_KLABAUTER_SOURCE_PATH_KEY = "plugin.mirrors.project-makima.source_path"
 
 
+def is_mid_clone(clone: Path) -> bool:
+    """True when `clone`'s `.git` shows a clone or checkout still in flight; reads files, spawns nothing.
+
+    Positive evidence only (a `.git` with no HEAD is not judged): an unborn HEAD (no fetched
+    branch), a missing index under a born HEAD (checkout unfinished), or a `tmp_pack_*` file.
+    """
+    git_dir = clone / ".git"
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if next(iter((git_dir / "objects" / "pack").glob("tmp_pack_*")), None) is not None:
+        return True
+    if head.startswith("ref:"):
+        ref = head[4:].strip()
+        if not (git_dir / ref).is_file():
+            try:
+                packed = (git_dir / "packed-refs").read_text(encoding="utf-8")
+            except OSError:
+                packed = ""
+            if not any(line.rstrip().endswith(" " + ref) for line in packed.splitlines()):
+                return True
+    return not (git_dir / "index").is_file()
+
+
 def install_repo_discovery(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args, *, write=None) -> None:
     """Install-chain step: pin unset `repos.*` keys (and the general-work root) to clones found by origin remote.
 
@@ -5102,7 +5326,11 @@ def install_repo_discovery(repo_root: Path, claude_klabauter_root_resolved: Path
         wanted = {k: v for k, v in wanted.items() if not is_set(k)}
         found, ambiguous = repo_discovery.find_clones(scan_roots, wanted)
         for key, clone in found.items():
+            if is_mid_clone(clone):
+                print(f"[SKIP] {key}: {clone} is mid-clone; re-run scripts/setup.py once it finishes.")
+                continue
             write(key, str(clone))
+            _note_change("registry", f"machine-local set {key} = {clone}")
             print(f"[OK] {key} -> {clone}")
         for key in ambiguous:
             print(f"[ADVISORY] {key}: several clones match by remote; set it by hand.", file=sys.stderr)
@@ -5393,6 +5621,7 @@ def main(argv: list[str]) -> int:
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         repair_status_lines(claude_klabauter_root_resolved)
+        adopt_and_link_homes(repo_root, args)
         refresh_group_em_home(repo_root, args)
         apply_runtime_gitignore(repo_root, args)
         migrate_group_em_inbox(repo_root, args)
@@ -5400,6 +5629,8 @@ def main(argv: list[str]) -> int:
             _print_change_summary()
             return 1
         apply_transcript_retention_default(claude_klabauter_root_resolved, args)
+        install_global_git_config(args)
+        ensure_settings_home_bin_on_user_path(args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)
@@ -5434,6 +5665,7 @@ def main(argv: list[str]) -> int:
         print("=== claude-klabauter setup: complete ===")
     if not args.register_only:
         print(CLOSING_CHAIN_WALK_LINE)
+        print(CLOSING_UNIMATRIX_LINE)
     if probe_hard_failure:
         return EXIT_HEALTH_PROBE_HARD_FAILURE
     if dialect_disarmed:
@@ -5443,6 +5675,11 @@ def main(argv: list[str]) -> int:
 
 CLOSING_CHAIN_WALK_LINE = (
     "  For the full chain-walk: python3 coordinator/scripts/chain-walk.py"
+)
+
+
+CLOSING_UNIMATRIX_LINE = (
+    "  NEXT (optional): python3 coordinator/bin/unimatrix-install.py --install"
 )
 
 

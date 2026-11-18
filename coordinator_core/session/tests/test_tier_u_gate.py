@@ -113,7 +113,7 @@ class TestEnforceTierUGate:
             )
         assert result.proceed is False
         assert "Tier F" in result.refusal_message
-        assert "tier-u-grant-cli grant pm" in result.refusal_message
+        assert "tier-u-grant-cli group-em-grant" in result.refusal_message
         assert "session.whoami_live" in result.refusal_message
 
     def test_scoped_tier_f_command_proceeds_with_live_grant(self, tmp_path):

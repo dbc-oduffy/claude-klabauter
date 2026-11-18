@@ -102,15 +102,24 @@ def _temp_repos_sign_off_locally(monkeypatch: pytest.MonkeyPatch, tmp_path_facto
 
 
 @pytest.fixture(autouse=True)
-def _reclaim_publish_shadow_trees():
+def _reclaim_publish_shadow_trees(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory):
+    """Points the cross-process shadow store at a per-test dir (one override in `shadow_store`,
+    honoured by a publish module loaded at any time), then reclaims the process-local shadows.
+    A store entry is retained, never rmtree'd, by cleanup; the per-test root keeps a test's
+    adopted tree out of the real Temp store."""
+    from coordinator_core.percolate import shadow_store
+
+    monkeypatch.setattr(shadow_store, "ROOT_OVERRIDE", tmp_path_factory.mktemp("publish-shadow-store"))
     yield
     for module in list(sys.modules.values()):
         cache = getattr(module, "_MATERIALIZED_REF_CACHE", None)
         cleanup = getattr(module, "_cleanup_shadow_roots", None)
-        if cache is None or cleanup is None or not cache:
+        if cache is None or cleanup is None:
             continue
-        cleanup(tuple(cache.values()))
-        cache.clear()
+        if cache:
+            cleanup(tuple(cache.values()))
+            cache.clear()
+        getattr(module, "_STORE_SHADOWS", {}).clear()
 
 
 def _make_stale_uuid_dir(parent: Path, uuid: str, age_days: int = 15) -> Path:

@@ -24,11 +24,9 @@ server already owns argparse; the door only relays.
 derivation reads its target engine root at runtime from a sidecar file
 next to itself (see "Engine root resolution" below), so the SAME
 `door.exe` can be copied to any box and pointed at that box's own engine
-root with no recompile, no C compiler required there. The FALLBACK
-target is also baked in at build time as a last-resort default, used only
-if that runtime sidecar is later missing/unreadable — see "Correctness:
-which engine the fallback executes" below for why, and why that is not a
-regression of the machine-independence property above.
+root with no recompile, no C compiler required there. No root is baked
+in: with no sidecar, env override or pointer the door refuses loudly — see
+"Correctness: which engine the fallback executes" below.
 
 ## The safety property
 
@@ -139,20 +137,12 @@ all, so a degrade-to-claude-klabauter fallback is not a safety net in the field 
 it is a local illusion this repo's own dev boxes are uniquely positioned
 to produce.
 
-`fall_through()`'s two possible roots are handled accordingly:
-
-- **Runtime-resolved** (`resolve_engine_root()`, sidecar/env) — already
-  validated (real `_engine_stamp`) before `fall_through()` ever sees it.
-- **`BUILD_ENGINE_ROOT_W`** (baked at build time, consulted ONLY when the
-  runtime resolution above failed) — this value is a **per-build-machine
-  default, not a portable or supported location**. Whatever engine root
-  happened to be on the box that last ran `build.py` is what ends up
-  baked into the committed binary; on any OTHER machine (a customer's,
-  or simply a box laid out differently) that path is meaningless. So
-  `fall_through()` validates it at runtime the same way the sidecar-
-  supplied root is validated (`is_valid_engine_root_w()`, real
-  `_engine_stamp`) before ever trusting it — and if it does NOT validate,
-  the door **refuses outright: no process is spawned at all**, a custom
+`fall_through()`'s only root is the runtime-resolved one
+(`resolve_engine_root()`, sidecar/env), validated (real `_engine_stamp`)
+before `fall_through()` ever sees it. No root is baked into the binary: a
+machine path baked at build time is meaningless on any other box, so the
+baked rung is gone. When the runtime root does NOT resolve or validate,
+the door **refuses outright: no process is spawned at all**, a custom
   message naming the remediation goes to stderr, and it exits nonzero.
   This is deliberately not "let `CreateProcessW` spawn Python at a path
   that turns out not to exist and let Python's own generic file-not-found
@@ -161,8 +151,7 @@ to produce.
   `claude-klabauter`-shaped path nobody asked for.
 
 Verified directly (see "Verification" below): with no sidecar, no env
-override, and the baked default itself pointing at a since-deleted
-directory, the door prints its own clear refusal and exits 1 — no python
+override, and no settings-home pointer, the door prints its own clear refusal and exits 1 — no python
 process spawned, no partial output, nothing that could be mistaken for a
 real op's result.
 
@@ -270,14 +259,12 @@ Either way, the result is validated against a real, non-empty
 invalid in either case falls through silently — the same "no doubt
 survives" rule as everything else in the safety property, and this
 resolution failing does NOT become a second fatal case layered on top of
-"no pipe": `fall_through()` still has a correct engine root to spawn
-`coordinator-invoke.py` against, because it falls back further to
-`BUILD_ENGINE_ROOT_W` (the value baked at build time — see "Correctness:
-which engine the fallback executes" above). This resolved value (or its
-baked fallback) is used ONLY to build the fallback's script path; it
-plays no role in the pipe-derivation steps above, which already returned
-their own doubt-free "give up" verdict before `fall_through()` is ever
-called.
+"no pipe": with no resolved root `fall_through()` refuses loudly and
+spawns nothing (see "Correctness: which engine the fallback executes"
+above); no root is baked into the binary. The resolved value is used ONLY
+to build the fallback's script path; it plays no role in the
+pipe-derivation steps above, which already returned their own doubt-free
+"give up" verdict before `fall_through()` is ever called.
 
 ## Building
 
@@ -292,29 +279,22 @@ The live working tree (`C:\claude-klabauter`) is never a warm-server host
 
 This does two separate things that happen to share one command:
 
-- **Compiles `door.exe`**, using `engine_root` twice: once resolved into
-  `BUILD_ENGINE_ROOT_W`, the fallback's last-resort script-path root (see
-  "Correctness: which engine the fallback executes" above — this is
-  consulted only if a LATER sidecar goes missing/unreadable, never for
-  pipe derivation), and the fallback Python interpreter path
-  (`__PYTHON_BIN_W__`, defaulting to `sys.executable` at build time) —
-  both baked the same way `coordinator/bin/coordinator-invoke.cmd` bakes
-  its own `__PYTHON_BIN__`.
+- **Compiles `door.exe`**, baking neither an engine root nor an
+  interpreter: door.c reads `door.engine-root.txt` and `door.python.txt`
+  beside the exe (`write_python_sidecar()`, default `sys.executable`; no
+  interpreter sidecar means `py -3`).
 - **Writes the sidecar** (`write_sidecar()`) next to the compiled binary,
   resolving `engine_root` once, in Python, so the clone-hash input the
   door's pipe-name derivation uses is byte-identical to what
   `election.pipe_name` computes — no C-side path-canonicalisation code
   exists anywhere to drift out of sync with `Path.resolve()`. This is the
-  ALWAYS-PREFERRED source for pipe derivation, checked before the baked
-  fallback is ever consulted.
+  ONLY engine-root source.
 
 To ship the SAME compiled `door.exe` to a different box (or point it at a
 different engine root without recompiling), copy the binary and call
-`write_sidecar()` again there — no compiler needed on that box. Pipe
-derivation on that box then targets the NEW root immediately; only the
-fallback's last-resort default stays pinned to whatever `engine_root` the
-binary was originally compiled with, and only matters if that new
-sidecar is later lost.
+`write_sidecar()` again there — no compiler needed on that box. The door
+then targets the NEW root immediately; a box with no sidecar refuses
+loudly.
 
 ### Reproducibility and provenance — `door.exe` is committed, and verifiable
 
@@ -339,8 +319,7 @@ version:
   },
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (...)",
-  "built_at": "2026-08-21T11:49:29+00:00",
-  "engine_root": "C:\\claude-klabauter"
+  "built_at": "2026-08-21T11:49:29+00:00"
 }
 ```
 
@@ -357,16 +336,16 @@ verifier who checks only that legacy field would now miss a change to the
 shared core — which is precisely the safety classification. Check
 `sources`.
 
-`engine_root` is recorded because it is now an INPUT to the build (baked
-as `BUILD_ENGINE_ROOT_W`, "PM ruling" above), not incidental metadata —
-see "What a MATCH does and does not prove" below for why that matters to
-`--verify`.
+`engine_root` is never recorded: it is not a build input to the image, and
+a machine path has no place in a published record.
 
 A mismatch between a recorded hash and the current source is detectable
 with one `sha256sum`, by anyone, without a compiler.
 
 **Two commands** to actually rebuild and verify, same compiler AND the
-same `<engine_root>` argument as the committed binary was built with:
+same engine tree as the committed binary was built with (`<engine_root>`
+feeds only the published-engine check, the sidecar and the stamp, never the
+image):
 
 ```
 python coordinator_core/warm/door/build.py <engine_root>              # rebuild in place
@@ -380,31 +359,18 @@ content-derived value. Verified directly (2026-08-21): without this flag,
 two back-to-back builds from byte-identical `door.c` differed in SHA-256;
 with it, they match exactly.
 
-**What a MATCH does and does not prove.** Since `engine_root` is baked
-into the binary now (`BUILD_ENGINE_ROOT_W`, "PM ruling" above), it is an
-INPUT to the build, not just a side artifact — two people on different
-boxes, or the same person passing two different `<engine_root>` values,
-will get two DIFFERENT binaries from byte-identical `door.c`, correctly
-(the baked default is meant to differ between boxes; that is the whole
-point of it being a per-build-machine default). So:
+**What a MATCH does and does not prove.** The image carries no engine
+root, so the same source and compiler give the same bytes whatever
+`<engine_root>` is passed. So:
 
-- **MATCH** proves: this exact `door.c`, compiled by this exact
-  compiler+version, with this exact `<engine_root>` argument, produces
-  the exact bytes of the committed `door.exe`. It is a claim about
-  *reproducibility of the build*, not a claim that any two builds of this
-  source are interchangeable.
-- **MATCH does NOT prove**: that the committed binary's baked engine root
-  is correct for the box running the verification, or for any box other
-  than the one the committed binary was originally built on. Reproducing
-  the committed binary is not evidence the CONTENT of what got baked
-  into it (a specific path) is meaningful anywhere else.
-- **MISMATCH** with the SAME `<engine_root>` the committed binary was
-  built with is the actionable signal: either the source or the binary
+- **MATCH** proves: this exact source, compiled by this exact
+  compiler+version, produces the exact bytes of the committed `door.exe`.
+  It is a claim about *reproducibility of the build*.
+- **MATCH does NOT prove**: that the binary is correct for the box running
+  the verification; the runtime sidecar decides which engine it reaches.
+- **MISMATCH** is the actionable signal: either the source or the binary
   drifted from each other, or the compiler differs from
-  `door.exe.provenance.json`'s recorded version. A MISMATCH from passing
-  a DIFFERENT `<engine_root>` than the committed binary used is expected
-  and proves nothing — check `door.exe.provenance.json`, not blind trial
-  and error, for what to pass.
+  `door.exe.provenance.json`'s recorded version.
 
 **Running `--verify` from a PUBLISHED MIRROR clone (e.g.
 `C:\claude-klabauter`) is safe, but a manual `sha256sum door.c` there is
@@ -565,8 +531,7 @@ registry rung) and, critically, **never** to the live working tree —
 confirming the fix holds via either resolution rung. Re-verified argv
 fidelity (a tricky op-name argument round-tripped exactly through the
 restored `coordinator-invoke.py` fallback), the missing-sidecar case
-(falls back to `BUILD_ENGINE_ROOT_W` and still reaches a correct
-`coordinator-invoke.py`), and the post-delivery refusal (unaffected by
+(at the time, fell back to a baked root; that rung is since removed and the door now refuses loudly), and the post-delivery refusal (unaffected by
 this fix, re-confirmed against the same fake-pipe-server harness).
 
 ## Install-chain wiring

@@ -25,7 +25,7 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import review_
 from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
-from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+from coordinator_core.ops.dispatch_emit.spine_read import read_spine, with_leg_slot
 from coordinator_core.ops.plan_tasks_render import load_rows
 
 
@@ -232,7 +232,7 @@ class _PlanParse:
 def _parse_plan(root: Path, plan_path: Path, plan_text: str) -> _PlanParse:
     """Parse `plan_text` once; `InvalidChangeKindError` from the spine read propagates."""
     raw_by_id = {
-        raw["id"]: raw
+        raw["id"]: with_leg_slot(raw)
         for raw in load_rows(plan_text).rows
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }

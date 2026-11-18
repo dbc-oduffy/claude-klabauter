@@ -15,7 +15,7 @@ import json
 import os
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 DOCTRINE_BEGIN = "<!-- BEGIN coordinator-doctrine (managed by unimatrix-install; edits inside are overwritten) -->"
 DOCTRINE_END = "<!-- END coordinator-doctrine -->"
@@ -121,8 +121,26 @@ def _load_entries(skills_json):
     return data if isinstance(data, dict) else {}
 
 
-def seed_agy_skills(skills_json, skills_root):
-    """Add one {"path": skills_root} entry to agy skills.json; return "created", "added" or "present"."""
+_SYSTEM_TMP_ROOTS = (("tmp",), ("var", "tmp"), ("private", "tmp"), ("var", "folders"), ("private", "var", "folders"))
+
+
+def is_scratch_root(path) -> bool:
+    """True for a system temp root (/tmp, /var/tmp, /private/tmp, /var/folders, %LOCALAPPDATA%/Temp; the session scratchpad lives under one) or the repo-scratch shape `<repo>/scratch/...`. A `scratchpad` dir outside a temp root is not scratch."""
+    parts = [p.lower() for p in PurePosixPath(str(path).replace("\\", "/")).parts]
+    rooted = parts[1:] if parts and parts[0] == "/" else parts
+    if any(rooted[:len(root)] == list(root) for root in _SYSTEM_TMP_ROOTS):
+        return True
+    if any(parts[i:i + 3] == ["appdata", "local", "temp"] for i in range(len(parts))):
+        return True
+    return any(p == "scratch" and 0 < i < len(parts) - 1 for i, p in enumerate(parts))
+
+
+def seed_agy_skills(skills_json, skills_root) -> str:
+    """Add one {"path": skills_root} entry to agy skills.json and drop scratch/tmp roots.
+
+    Returns "created", "added", "present", "pruned" (ours present, scratch roots dropped) or "refused"
+    (skills_root is itself a scratch/tmp root: never written, existing scratch entries still dropped).
+    """
     path = Path(skills_json)
     existed = path.exists()
     data = _load_entries(path)
@@ -130,12 +148,18 @@ def seed_agy_skills(skills_json, skills_root):
     if not isinstance(entries, list):
         entries = []
     wanted = str(skills_root)
-    if any(isinstance(e, dict) and e.get("path") == wanted for e in entries):
-        return "present"
-    data["entries"] = entries + [{"path": wanted}]
+    kept = [e for e in entries if not (isinstance(e, dict) and isinstance(e.get("path"), str) and is_scratch_root(e["path"]))]
+    pruned = len(kept) != len(entries)
+    refused = is_scratch_root(wanted)
+    has = any(isinstance(e, dict) and e.get("path") == wanted for e in kept)
+    if not pruned and (has or refused):
+        return "refused" if refused else "present"
+    data["entries"] = kept if has or refused else kept + [{"path": wanted}]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return "added" if existed else "created"
+    if refused:
+        return "refused"
+    return "pruned" if has else ("added" if existed else "created")
 
 
 def unseed_agy_skills(skills_json, skills_root) -> str:

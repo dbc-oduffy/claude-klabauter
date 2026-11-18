@@ -393,6 +393,20 @@ class TestEndToEndDelivery:
         assert _git(receiver_repo, "symbolic-ref", "HEAD").stdout.strip() == b"refs/heads/main"
         assert _git(receiver_repo, "branch", "-a", "--list", "*work/*").stdout.strip() == b""
 
+    def test_fresh_send_names_pinned_in_the_sender_receipt_and_reply(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver_repo})))
+        _write_draft(sender_repo, "pinned-topic")
+
+        result = _memo_send({"dry_run": False, "topic": "pinned-topic"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        assert result["acted"][0]["delivery_outcome"] == "pinned"
+        subject = _git(sender_repo, "log", "-1", "--format=%s").stdout.decode("utf-8").strip()
+        assert subject.startswith("memo.send: pinned-topic pinned for ")
+        assert "delivered to" not in subject
+
     def test_happy_path_three_writes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
@@ -1152,7 +1166,14 @@ class TestDeliveryIsAnchored:
                 assert peer_sha is not None
                 # Now force THIS call's own CAS to report a loss even though
                 # the ref is already correct.
-                monkeypatch.setattr(anchor_module, "cas_ref", lambda *a, **k: False)
+                real_cas = anchor_module.cas_ref
+                monkeypatch.setattr(
+                    anchor_module, "cas_ref",
+                    lambda gitdir, ref, *a, **k: (
+                        real_cas(gitdir, ref, *a, **k)
+                        if ref.startswith(anchor_module.PIN_REF_PREFIX) else False
+                    ),
+                )
             return result
 
         monkeypatch.setattr(git_native, "build_new_file_commit", _commit_then_preanchor_and_force_a_loss)

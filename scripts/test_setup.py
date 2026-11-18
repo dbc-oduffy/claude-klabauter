@@ -1226,6 +1226,7 @@ def _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path):
     monkeypatch.setattr(setup_mod, "verify_coordinator_core_importable", lambda *a, **k: None)
     monkeypatch.setattr(setup_mod, "check_dialect_guard_armed", lambda *a, **k: None)
     monkeypatch.setattr(setup_mod, "run_health_probe", lambda *a, **k: False)
+    monkeypatch.setattr(setup_mod, "ensure_settings_home_bin_on_user_path", lambda *a, **k: False)
     for name in (
         "install_bin_forwarders", "install_warm_door",
         "register_live_plugin_root",

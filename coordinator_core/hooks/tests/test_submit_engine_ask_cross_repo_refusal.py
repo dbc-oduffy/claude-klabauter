@@ -142,6 +142,81 @@ def test_an_explicit_repo_naming_a_registered_sibling_is_admitted(repos, monkeyp
     assert emit.calls and emit.calls[0][1].resolve() == other.resolve()
 
 
+def _registry_says_registered(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability.target_is_registered_repo",
+        lambda target, env=None: True,
+    )
+
+
+def test_naming_the_sessions_own_registered_repo_grants_no_approval(repos, monkeypatch):
+    own, _ = repos
+    _registry_says_registered(monkeypatch)
+    emit = _Recorder()
+    mod.evaluate(_payload(own, {"ask": "a", "repo": str(own)}), emit=emit)
+    assert emit.calls and "cross_repo_approved" not in emit.calls[0][0]
+
+
+def test_a_sizing_naming_the_sessions_own_registered_repo_grants_no_approval(repos, monkeypatch):
+    own, _ = repos
+    (own / "state" / "sizings").mkdir(parents=True)
+    (own / SIZING_REL).write_text("title: x\n", encoding="utf-8")
+    _registry_says_registered(monkeypatch)
+    emit = _Recorder()
+    mod.evaluate(_payload(own, {"sizing": SIZING_REL, "repo": str(own)}), emit=emit)
+    assert emit.calls and "cross_repo_approved" not in emit.calls[0][0]
+
+
+def test_the_explicit_flag_still_approves_the_sessions_own_repo(repos, monkeypatch):
+    own, _ = repos
+    _registry_says_registered(monkeypatch)
+    emit = _Recorder()
+    mod.evaluate(_payload(own, {"ask": "a", "repo": str(own), "cross_repo_approved": True}), emit=emit)
+    assert emit.calls and emit.calls[0][0].get("cross_repo_approved") is True
+
+
+def test_a_registered_sibling_still_carries_the_approval(repos, monkeypatch):
+    own, other = repos
+    _registry_says_registered(monkeypatch)
+    emit = _Recorder()
+    mod.evaluate(_payload(own, {"ask": "a", "repo": str(other)}), emit=emit)
+    assert emit.calls and emit.calls[0][0].get("cross_repo_approved") is True
+
+
+def test_a_mint_makes_the_sessions_next_nag_name_the_fire_not_a_submit(repos, monkeypatch, tmp_path):
+    own, _ = repos
+    state = tmp_path / "nag-state"
+    monkeypatch.setattr(warp_fire, "_counter_dir", lambda: state)
+    envelope = mod._premint_deferred_envelope(own, {"ask": "a", "session_id": "sess-mint"}, "ask-run-1")
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "allow"
+    for host in (None, "codex"):
+        if host:
+            mod._premint_deferred_envelope(own, {"ask": "a", "session_id": "sess-mint"}, "ask-run-2")
+        text = warp_fire.nag_text("sess-mint", host=host)
+        assert "workflow.fire" in text and "do not call engine_ask.submit again" in text
+        assert warp_fire.fire_command(host=host) not in text
+    assert warp_fire.nag_text("sess-mint") == "[engine-ask nag #3] call `" + warp_fire.fire_command() + "`, once."
+
+
+def test_another_sessions_nag_and_a_stale_mint_still_name_the_submit(repos, monkeypatch, tmp_path):
+    own, _ = repos
+    state = tmp_path / "nag-state"
+    monkeypatch.setattr(warp_fire, "_counter_dir", lambda: state)
+    mod._premint_deferred_envelope(own, {"ask": "a", "session_id": "sess-mint"}, "ask-run-1")
+    assert warp_fire.nag_text("sess-other") == warp_fire.fire_step()
+    monkeypatch.setattr(warp_fire, "_MINTED_TTL_S", -1)
+    assert warp_fire.fire_command() in warp_fire.nag_text("sess-mint")
+
+
+def test_a_mint_note_with_no_readable_path_still_names_the_fire(monkeypatch, tmp_path):
+    state = tmp_path / "nag-state"
+    monkeypatch.setattr(warp_fire, "_counter_dir", lambda: state)
+    warp_fire.note_minted("sess-blank", "", state)
+    text = warp_fire.nag_text("sess-blank")
+    assert "workflow.fire" in text and warp_fire.fire_command() not in text
+    assert not (state / "sess-blank.minted").exists()
+
+
 def test_an_unregistered_explicit_repo_is_still_refused(repos, monkeypatch):
     own, other = repos
     monkeypatch.setattr(

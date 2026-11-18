@@ -11,6 +11,22 @@ def _clear_clone_root_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_CLONE_ROOT", raising=False)
 
 
+def stub_own_write_claims(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
+    """`session` holds a live write claim on every path: the claim witness review_prep adoption requires."""
+    from coordinator_core.session import claim_index, liveness
+
+    class _Found(dict):
+        recorded_kind = None
+
+    def lookup(paths, **kw):
+        found = _Found({p: [session] for p in paths})
+        found.recorded_kind = {p: {session: "write"} for p in paths}
+        return found
+
+    monkeypatch.setattr(claim_index, "lookup", lookup)
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid == session)
+
+
 def build_spec_backlink_corpus(root: Path) -> dict[str, Path]:
     docs_plans = root / "docs" / "plans"
     archive_specs_dir = root / "archive" / "specs" / "2026-08"

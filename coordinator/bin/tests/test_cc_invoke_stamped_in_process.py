@@ -97,7 +97,7 @@ def test_stamped_matching_root_serves_in_process_without_a_spawn(env):
     env["point"](root)
     env["fake_dispatch"]()
 
-    result = cc_invoke.cc_invoke(_OP, _PARAMS, str(env["tmp"]), _claude_klabauter_root=str(root))
+    result = cc_invoke.cc_invoke(_OP, _PARAMS, str(env["tmp"]), _engine_root=str(root))
 
     assert result == _OK["result"]
     assert len(env["dispatched"]) == 1
@@ -121,7 +121,7 @@ def test_declined_roots_take_the_unchanged_spawn_path(env, leg):
     assert cc_invoke._try_stamped_in_process_dispatch(_OP, _PARAMS, str(env["tmp"]), str(declared_root)) is None
     assert env["dispatched"] == []
 
-    result = cc_invoke.cc_invoke(_OP, _PARAMS, str(env["tmp"]), _claude_klabauter_root=str(declared_root))
+    result = cc_invoke.cc_invoke(_OP, _PARAMS, str(env["tmp"]), _engine_root=str(declared_root))
 
     assert result == _OK["result"]
     assert env["dispatched"] == []
@@ -140,7 +140,7 @@ def test_dispatch_failure_after_entry_raises_and_never_spawns(env):
     env["fake_dispatch"](_boom)
 
     with pytest.raises(RuntimeError, match="reconcile"):
-        cc_invoke.cc_invoke(_OP, _PARAMS, str(env["tmp"]), _claude_klabauter_root=str(root))
+        cc_invoke.cc_invoke(_OP, _PARAMS, str(env["tmp"]), _engine_root=str(root))
 
     assert env["spawns"] == []
 
@@ -254,7 +254,7 @@ def test_in_process_serve_neither_waits_for_the_warm_boot_nor_prints_the_defect_
     env["point"](root)
     env["fake_dispatch"]()
 
-    result = cc_invoke.cc_invoke(_OP, _PARAMS, str(env["tmp"]), _claude_klabauter_root=str(root))
+    result = cc_invoke.cc_invoke(_OP, _PARAMS, str(env["tmp"]), _engine_root=str(root))
 
     assert result == _OK["result"]
     assert cc_invoke.last_rung == "in-process"

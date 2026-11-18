@@ -37,5 +37,5 @@ def test_op_is_in_the_registry_map_and_classified() -> None:
     from coordinator_core.authz.classification import OpClass, OP_CLASSIFICATION
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
-    assert OP_MODULE_MAP[_OP] == "coordinator_core.hooks"
+    assert OP_MODULE_MAP[_OP] == "coordinator_core.hooks.workflow_step_dispatch"
     assert OP_CLASSIFICATION[_OP] is OpClass.COMPUTE_ONLY

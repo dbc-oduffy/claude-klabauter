@@ -523,7 +523,7 @@ def rewrite_tree(engine_root: Path, copy_secs: float, *, new_stamp: str = "sha:s
         data = path.read_bytes()
         staged = path.with_name(path.name + ".swap")
         staged.write_bytes(data)
-        os.replace(staged, path)
+        _replace_retrying(staged, path)
         count += 1
     remaining = copy_secs - (time.monotonic() - began)
     if remaining > 0:
@@ -531,8 +531,22 @@ def rewrite_tree(engine_root: Path, copy_secs: float, *, new_stamp: str = "sha:s
     stamp = package / skew.ENGINE_STAMP_FILENAME
     staged = stamp.with_name(stamp.name + ".swap")
     staged.write_text(new_stamp, encoding="utf-8")
-    os.replace(staged, stamp)
+    _replace_retrying(staged, stamp)
     return count
+
+
+def _replace_retrying(staged: Path, target: Path, *, retry_secs: float = 1.0) -> None:
+    """`os.replace` retried on `PermissionError`: a reader holding `target` open (a hook reading the
+    stamp, a scanner) makes Windows refuse the swap; production's replace retries the same way."""
+    deadline = time.monotonic() + retry_secs
+    while True:
+        try:
+            os.replace(staged, target)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.002)
 
 
 def production_handover(

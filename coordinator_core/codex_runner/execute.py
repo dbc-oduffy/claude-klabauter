@@ -1,4 +1,4 @@
-"""codex_runner.execute -- run one plan chunk under `codex exec --sandbox workspace-write` and audit its writes.
+"""codex_runner.execute -- run one plan chunk under an unrestricted `codex exec` (codex_family_stage_argv) and audit its writes.
 
 Implements ModeRun (contract.py). The chunk row comes from the shared spine reader
 (dispatch_emit.spine_read.read_spine); a chunk with no declared writes, or one the
@@ -26,13 +26,13 @@ from coordinator_core.codex_runner.contract import (
     RunRequest,
     RunResult,
 )
-from coordinator_core.codex_runner.resolve import ApiKeyRefused, CodexUnavailable, preflight_auth, resolve_codex
+from coordinator_core.codex_runner.resolve import (
+    ApiKeyRefused, CodexUnavailable, codex_family_stage_argv, preflight_auth, resolve_codex,
+)
 from coordinator_core.codex_runner.sandbox_preflight import (
     SandboxSetupRefused,
-    check_workspace_write,
 )
 from coordinator_core import tenant_priority
-from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv, settings_home_add_dir_argv
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
 from coordinator_core.codex_runner.review import _LIMIT_MARKERS, _build_env, _usage
 
@@ -149,20 +149,8 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
         preflight_auth(requested=req.allow_api_key)
     except ApiKeyRefused as exc:
         return RunResult(run_id=run_id, status=STATUS_FAILED, error=f"refused: {exc}")
-    advisory = None
     try:
         child_env = shape_codex_child(_child_env(req.allow_api_key), writable_root=req.repo_root)
-        try:
-            probe_argv = resolve_codex()
-        except CodexUnavailable:
-            probe_argv = None
-        advisory = check_workspace_write(
-            req.repo_root,
-            repo_root=req.repo_root,
-            codex_home=child_env.get("CODEX_HOME"),
-            codex_argv=probe_argv,
-            env=child_env,
-        )
     except SandboxSetupRefused as exc:
         return RunResult(run_id=run_id, status=STATUS_FAILED, error=str(exc))
     try:
@@ -173,15 +161,11 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
         argv = resolve_codex()
     except CodexUnavailable as exc:
         return RunResult(run_id=run_id, status=STATUS_FAILED, error=f"codex unavailable: {exc}")
-    argv = argv + ["exec", "--json", "--sandbox", "workspace-write", *settings_home_add_dir_argv(),
-                    *lock_and_gitdir_add_dir_argv(req.repo_root), build_prompt(chunk)]
+    argv = codex_family_stage_argv(argv, build_prompt(chunk))
 
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     with open(run_dir / "codex.stderr", "wb") as err_file:
-        if advisory:
-            err_file.write(f"{advisory}{os.linesep}".encode("utf-8"))
-            err_file.flush()
         try:
             proc = subprocess.Popen(
                 argv,

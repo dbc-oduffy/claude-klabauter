@@ -37,7 +37,11 @@ def _git(root: Path, *argv: str) -> str:
 
 
 def _rel(day: _dt.date) -> str:
-    return f"archive/daily-summaries/{day.isoformat()}.md"
+    return f"state/cross-repo/archive/{day.isoformat()}-memo.md"
+
+
+def _memo(text: str) -> str:
+    return f"---\ndistill_fate: ratification\n---\n- {text}\n"
 
 
 def _days() -> list[_dt.date]:
@@ -50,9 +54,9 @@ def distill_repo(tmp_path: Path, monkeypatch) -> Path:
     root = tmp_path / "repo"
     (root / "state").mkdir(parents=True)
     (root / "state" / "distillation-log.md").write_text("## Run seed\n", encoding="utf-8")
-    (root / "archive" / "daily-summaries").mkdir(parents=True)
+    (root / "state" / "cross-repo" / "archive").mkdir(parents=True)
     for day in _days():
-        (root / _rel(day)).write_text("- a quiet day\n", encoding="utf-8")
+        (root / _rel(day)).write_text(_memo("a quiet day"), encoding="utf-8")
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.com")
     _git(root, "config", "user.name", "T")
@@ -120,14 +124,17 @@ def test_distill_second_run_scopes_changed_files_plus_next_backlog_slice(distill
     _apply_disposal(root, DISTILL_RUN)
     assert _stored(root).is_file()
     assert _git(root, "status", "--porcelain", "--", "state/run-watermarks") == ""
-    assert "state/run-watermarks/distill.json" in _git(root, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert _git(root, "log", "-1", "--format=%s", "--", "state/run-watermarks/distill.json").startswith("distill: apply disposal")
 
     edited = [days[3], days[covered - 7]]
     for day in edited:
-        (root / _rel(day)).write_text("- edited after the first run\n", encoding="utf-8")
+        (root / _rel(day)).write_text(_memo("edited after the first run"), encoding="utf-8")
 
     second, second_spawns = _scope(root, "2026-11-13-02h00", monkeypatch)
-    assert second == {_rel(d) for d in edited} | {_rel(d) for d in days[covered:]}
+    assert {_rel(d) for d in edited} <= second
+    slice_ = second - {_rel(d) for d in edited}
+    assert 10 < len(slice_) < TOTAL - covered
+    assert slice_ == {_rel(d) for d in days[covered : covered + len(slice_)]}
     assert second_spawns == 1
 
 
@@ -137,13 +144,26 @@ def test_distill_run_skipped_at_apply_leaves_the_watermark_byte_identical(distil
     _apply_disposal(root, DISTILL_RUN)
     committed = _stored(root).read_bytes()
 
-    (root / _rel(days[5])).write_text("- edited\n", encoding="utf-8")
+    (root / _rel(days[5])).write_text(_memo("edited"), encoding="utf-8")
     skipped, _ = _scope(root, "2026-11-13-02h00", monkeypatch)
     assert _stored(root).read_bytes() == committed
 
     rerun, _ = _scope(root, "2026-11-13-03h00", monkeypatch)
     assert rerun == skipped
     assert _stored(root).read_bytes() == committed
+
+
+def test_distill_run_that_appends_no_log_header_still_dates_the_threshold_gate(distill_repo, monkeypatch):
+    from coordinator_core.ops import updatedocs_gates as udg
+
+    root = distill_repo
+    log = root / "state" / "distillation-log.md"
+    _scope(root, DISTILL_RUN, monkeypatch)
+    assert udg._last_distillation_days_ago(log, root) is None
+    _apply_disposal(root, DISTILL_RUN)
+    assert log.read_text(encoding="utf-8") == "## Run seed\n"
+    assert udg._last_distillation_days_ago(log, root) == 0
+    assert udg._last_distillation_days_ago(log) is None
 
 
 class _FixedDate(_dt.date):
@@ -174,7 +194,15 @@ def lessons_env(tmp_path: Path, monkeypatch):
 
     for name in ("extract-lessons", "lessons-outbox-drain", "age-sweep-lessons"):
         monkeypatch.setitem(llp_apply._DISPATCH_TABLE, name, stub(name))
-    return tmp_path / "repo", calls, state
+    root = tmp_path / "repo"
+    (root / "state").mkdir(parents=True)
+    (root / "state" / "seed.md").write_text("seed\n", encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "T")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "seed")
+    return root, calls, state
 
 
 def _since(root: Path) -> str | None:

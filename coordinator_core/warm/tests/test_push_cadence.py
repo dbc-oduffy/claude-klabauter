@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.warm import idle, lifecycle, push_cadence, server
-from pathlib import Path
 
 
 @pytest.fixture(autouse=True)

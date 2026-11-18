@@ -350,6 +350,8 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     UNDECLARED,
     load_frontmatter_doc,
     read_spine,
+    with_leg_slot,
+    SELF_ADMIT_KILL_CAP_GIB,
 )
 from coordinator_core.ops.dispatch_emit import sibling_split as _sibling_split
 from coordinator_core.ops.dispatch_emit.wave_map import (
@@ -1765,6 +1767,8 @@ class PlanContext:
     row_build_gates: tuple = ()
     #: Ids of spine rows marked ``needs_slot: true``; their briefs are author-only.
     slot_row_ids: frozenset = frozenset()
+    #: ``(row id, declared-leg text)`` pairs for slot rows declaring a ``leg`` (``_leg_declaration``).
+    slot_legs: tuple = ()
     #: Set when ``exit_criterion`` names a typecheck: rows run none for it, the terminal
     #: test phase does.
     criterion_typecheck: Optional[CriterionTypecheck] = None
@@ -2006,11 +2010,18 @@ _HEAVY_PROBE_DECLARED_CLAUSE = (
     "run an uncapped `python -` against a store path."
 )
 
+#: The fleet's self-admit tier for a leg's hard memory ceiling; a larger cap needs a Group EM GO.
+_SELF_ADMIT_TIER_CLAUSE = (
+    f"Self-admit tier: a leg's kill cap is at most {SELF_ADMIT_KILL_CAP_GIB} GiB (spawn gate kill+5). A leg with a "
+    "larger cap is declared on the row for a Group EM GO; never launch it."
+)
+
 #: The per-row head ``_row_prompt`` opens with and ``_row_agent_call_expr``
 #: hoists into one ``_shared`` const, so neither clause is repeated per row.
 _ROW_PROMPT_HEAD = (
     f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_LIVE_PM_DIRECTION_CLAUSE}\n\n"
     f"{_WRITE_TOOL_ONLY_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}\n\n{_HEAVY_PROBE_DECLARED_CLAUSE}"
+    f"\n\n{_SELF_ADMIT_TIER_CLAUSE}"
 )
 
 
@@ -2024,6 +2035,7 @@ _VERIFICATION_ROW_CLAUSE = (
 _VERIFICATION_ROW_PROMPT_HEAD = (
     f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_LIVE_PM_DIRECTION_CLAUSE}\n\n"
     f"{_VERIFICATION_ROW_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}\n\n{_HEAVY_PROBE_DECLARED_CLAUSE}"
+    f"\n\n{_SELF_ADMIT_TIER_CLAUSE}"
 )
 _VERIFICATION_CHANGE_KINDS = frozenset({"verify", "verification"})
 
@@ -2392,13 +2404,31 @@ def _fenced_test_clause(work_class_id: str) -> str:
     )
 
 
-def _slot_row_clause(commands: list) -> str:
+def _leg_declaration(leg: object) -> str:
+    """The declared peak, cap and wall time of a row's ``leg`` mapping, for the EM's GO request."""
+    if not isinstance(leg, dict):
+        return ""
+
+    def _fmt(key: str, unit: str) -> str:
+        value = leg.get(key)
+        return f"{value:g} {unit}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "undeclared"
+
+    return (
+        f"declared peak {_fmt('expected_peak_gib', 'GiB')}, kill cap {_fmt('kill_cap_gib', 'GiB')}, "
+        f"wall {_fmt('wall_minutes', 'min')}"
+    )
+
+
+def _slot_row_clause(commands: list, leg: str = "") -> str:
     """A `needs_slot` row's process (build, compiler, editor) is scheduled by
     the Group EM against box load and never launched by the executor unless the
     Group EM clears it (then START/END go via `groupem.admission_post`, the
     executor having no SendMessage), so the row's build gate becomes the EM's
-    slot leg."""
+    slot leg. ``leg`` (``_leg_declaration``) names the declared leg the EM
+    routes to the Group EM."""
     owed = "".join(f"\n- `{c}`" for c in commands)
+    if leg:
+        owed = f"\nDeclared leg: {leg}. Report it under `Slot leg:`." + owed
     return (
         "Slot row (needs_slot): author only. Launch no build, compiler, UBT, editor, commandlet or "
         "other long-running or memory-heavy process; the EM runs that leg once the Group "
@@ -2811,13 +2841,14 @@ _SCOPED_FOREGROUND_CLAUSE = (
 )
 
 
-def _test_runner_clause(repo_root: Optional[str | Path] = None) -> str:
+def _test_runner_clause(repo_root: Optional[str | Path] = None, scoped_changes: bool = False) -> str:
     """The skip-report, changed-file and scoped-foreground rules, the vitest cap when the box sets one, and the target
     repo's interpreter clause."""
     from coordinator_core.ops.dispatch_emit.interpreter_pin import interpreter_clause
 
     cap = _vitest_cap_clause()
-    base = f"{_SKIP_REPORT_CLAUSE} {_CHANGED_FILES_CLAUSE} {_SCOPED_FOREGROUND_CLAUSE}"
+    changed = _SCOPED_CHANGED_FILES_CLAUSE if scoped_changes else _CHANGED_FILES_CLAUSE
+    base = f"{_SKIP_REPORT_CLAUSE} {changed} {_SCOPED_FOREGROUND_CLAUSE}"
     base = f"{base} {cap}" if cap else base
     return f"{base} {interpreter_clause(repo_root)}"
 
@@ -3338,7 +3369,7 @@ def _row_prompt(
         body += f"\n\n{memo_send_step_block(row.id, memo_send)}"
     if plan_context is not None:
         if is_slot_row:
-            body += f"\n\n{_slot_row_clause(gate_commands)}"
+            body += f"\n\n{_slot_row_clause(gate_commands, dict(plan_context.slot_legs).get(row.id, ''))}"
         else:
             fence = _run_only_fence(row, plan_context.repo_root, memo)
             if gate_commands:
@@ -3828,6 +3859,12 @@ _CHANGED_FILES_CLAUSE = (
     "Changed files come from git only: `git diff --name-only <base>` and "
     "`git ls-files --others --exclude-standard`; never `find`, `ls -R` or a tree walk."
 )
+# A review-only run shares its tree with peers: the unscoped untracked listing would pull their
+# files in, so the edited-set listing above is the only changed-files source.
+_SCOPED_CHANGED_FILES_CLAUSE = (
+    "Changed files come only from the edited-set listing above; run no other changed-files "
+    "listing; never `find`, `ls -R` or a tree walk."
+)
 _FALSIFIER_RESULT_VAR = "_falsifierResult"
 
 
@@ -4091,7 +4128,7 @@ def _scoped_test_steps(
         + run_clause
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
         + (f"{_review_edits_clause(review_edits_base, surface, review_terminal)} " if review_edits_base else "")
-        + f"{_test_runner_clause(repo_root)} "
+        + f"{_test_runner_clause(repo_root, scoped_changes=bool(review_terminal))} "
         + (f"{_owed_gates_clause(owed_gates, slot_rows)} " if owed_gates else "")
         + (
             f"{_baseline_context_clause(review_edits_base, surface, review_terminal)} "
@@ -4516,7 +4553,7 @@ def _withheld_judge_rows(plan_text: Optional[str], excluded_rows: Optional[list]
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import gated_rows, slot_withheld_rows
     from coordinator_core.ops.plan_tasks_render import load_rows
 
-    raw_by_id = {r.get("id"): r for r in load_rows(plan_text).rows if isinstance(r, dict)}
+    raw_by_id = {r.get("id"): with_leg_slot(r) for r in load_rows(plan_text).rows if isinstance(r, dict)}
     gated = [
         {"id": g.id, "title": g.title, "register_rows": list(g.register_rows)}
         for g in gated_rows(excluded_rows or [], raw_by_id)
@@ -4899,13 +4936,15 @@ def _excluded_rows_narration(excluded: list) -> str:
     return "\n".join(lines)
 
 
-def _slot_rows_narration(slot_rows: Sequence[str]) -> str:
+def _slot_rows_narration(slot_rows: Sequence[str], slot_legs: Optional[Mapping[str, str]] = None) -> str:
     """Names the rows marked `needs_slot` (a long-running or memory-heavy
     process) so the Group EM can schedule the run against box load before
-    firing it."""
+    firing it; a row's declared leg (peak, cap, wall) follows its id."""
+    legs = slot_legs or {}
     return (
         "  // ROWS HOLDING A SCARCE SLOT (needs_slot) -- clear box load with the "
-        "Group EM before firing: " + ", ".join(slot_rows)
+        "Group EM before firing: "
+        + ", ".join(f"{rid} ({legs[rid]})" if rid in legs else rid for rid in slot_rows)
     )
 
 
@@ -5975,7 +6014,7 @@ def seam_inputs_for(
                 text = (Path(repo_root) / plan).read_text(encoding="utf-8") if repo_root is not None else None
             except OSError:
                 text = None
-            raws = [r for r in _load(text).rows if isinstance(r, dict)] if text else []
+            raws = [with_leg_slot(r) for r in _load(text).rows if isinstance(r, dict)] if text else []
         targets, declared = _plan_seam_facts(text, raws)
         key = plan if plan is not None else plan_path
         if targets:
@@ -6193,6 +6232,7 @@ def _checkpoint_commit_js(
         *retry_lines,
         "  const _commitFailures = [];",
         "  const _landed = {};",
+        "  const _famOk = {};",
         "  const _checkpointShas = [];",
         "  const _heldPathsNamed = [];",
         "  const _waveTriggers = [];",
@@ -6248,6 +6288,8 @@ def _checkpoint_commit_js(
         + _checkpoint_trailer_js(plan_path, run_base_sha, prior_run_base, runtime_plan_js)
         + (
             " + (owed.length ? '\\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '')"
+            " + (done.some((i) => _famOk[i]) "
+            "? '\\nCheckpoint-Family-Ok: ' + done.filter((i) => _famOk[i]).join(', ') : '')"
             f" + (stopped.length ? '\\n{STOP_RULE_TRAILER}: ' + stopped.join(', ') : '');"
             if plan_path or runtime_plan_js
             else ";"
@@ -6378,7 +6420,8 @@ _EXTERNALIZABLE_REVIEWER_TYPES = frozenset({
     "coordinator:falsifier-integrity-reviewer",
 })
 _REVIEWER_RUN_MODULE = "coordinator_core.agent_pipe.reviewer_run"
-_RELAY_AGENT_TYPE = "coordinator:op-relay"
+_RELAY_AGENT_TYPE = "general-purpose"
+_RELAY_MODEL = "sonnet"
 _RELAY_HEREDOC_DELIM = "REVIEWER_BRIEF_EOF_7f3a91"
 #: Reply of `reviewer_run`; a provider failure is verdict FAILED, never a schema refusal.
 _EXTERNAL_REVIEWER_SCHEMA = json.dumps(
@@ -6413,8 +6456,9 @@ def _external_reviewer_thunk_js(
     agent_type_host: Optional[str],
     repo_root: Optional[Path],
 ) -> str:
-    """Use the async runner's engine ops; op-relay never executes an arbitrary Python CLI.
+    """The engine starts the detached worker and polls its result; no op-relay leg is emitted.
 
+    A runner without `engineOp` falls back to one folded general-purpose relay leg.
     Start returns at spawn. Each result call is a refreshing read, and provider execution stays
     in the detached worker. JSON stdin is shell-quoted for the host, never interpolated as code.
     """
@@ -6429,34 +6473,40 @@ def _external_reviewer_thunk_js(
         + ", verdicts: " + json.dumps(_schema_verdict_enum(spec.schema)) + " }"
     )
     relay = _js_string_literal(_degrade_agent_type(_RELAY_AGENT_TYPE, agent_type_host))
-    common = f"phase: {_js_string_literal(spec.phase)}, agentType: {relay}, {_model_opt(_RELAY_AGENT_TYPE)}, effort: 'low'"
-    start_schema = '{ type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }'
-    result_schema = '{ type: "object", properties: { status: { type: "string" }, verdict: { type: ["string", "null"] }, findings: { type: "array" }, error: { type: ["string", "null"] } }, required: ["status"] }'
-    instruction = "Run this one engine command exactly and return its bare JSON reply. Run nothing else.\n"
+    common = f"phase: {_js_string_literal(spec.phase)}, agentType: {relay}, {_model_opt(_RELAY_AGENT_TYPE, _RELAY_MODEL)}, effort: 'low'"
+    schema = '{ type: "object", properties: { status: { type: "string" }, verdict: { type: ["string", "null"] }, findings: { type: "array" }, error: { type: ["string", "null"] } }, required: ["status"] }'
+    start_head = "Run these engine commands in order and return the final bare JSON reply of the second. Run nothing else.\n1. Start the review:\n"
     if windows:
-        head = instruction + "@'\n"
-        tail = "\n'@ | coordinator-invoke codex_runner.start --params-file - --bare"
+        start_cmd = "@'\n"
+        start_tail = "\n'@ | coordinator-invoke codex_runner.start --params-file - --bare"
     else:
-        head = instruction + f"coordinator-invoke codex_runner.start --params-file - --bare <<'{_RELAY_HEREDOC_DELIM}'\n"
-        tail = f"\n{_RELAY_HEREDOC_DELIM}"
+        start_cmd = f"coordinator-invoke codex_runner.start --params-file - --bare <<'{_RELAY_HEREDOC_DELIM}'\n"
+        start_tail = f"\n{_RELAY_HEREDOC_DELIM}"
+    poll = (
+        "\n2. The reply of step 1 carries `run_id`. Run `coordinator-invoke codex_runner.result '{\"run_id\": \"<run_id>\"}' --bare` "
+        "with that run_id, and repeat it while its `status` is `running`, at most 120 reads, then return status `failed` with error `reviewer result poll cap reached`. If step 1 returns no `run_id`, return "
+        "status `failed` with error `reviewer worker did not return a run handle`."
+    )
     return (
         "async () => { try { "
         f"const _request = {params}; "
         # ASCII-only JSON also works through Windows PowerShell's native-command pipeline.
         r"const _json = JSON.stringify(_request).replace(/[\u007f-\uffff]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')); "
-        f"const _started = await agent({_js_string_literal(head)} + _json + {_js_string_literal(tail)}, "
-        f"{{ label: {_js_string_literal(spec.label + ':start')}, {common}, schema: {start_schema} }}); "
+        "let _result; "
+        "if (typeof engineOp === 'function') { "
+        "const _started = await engineOp('codex_runner.start', _request); "
         "if (!_started || !/^named-review-[a-f0-9]{12}$/.test(_started.run_id || '')) "
         "return { verdict: 'FAILED', findings: [], error: 'reviewer worker did not return a run handle' }; "
-        "let _poll = 0; for (;;) { "
-        "const _command = 'coordinator-invoke codex_runner.result ' + String.fromCharCode(39) + JSON.stringify({ run_id: _started.run_id }) + String.fromCharCode(39) + ' --bare'; "
-        f"const _result = await agent({_js_string_literal(instruction)} + _command, "
-        f"{{ label: {_js_string_literal(spec.label + ':result-')} + (++_poll), {common}, schema: {result_schema} }}); "
+        "for (;;) { _result = await engineOp('codex_runner.result', { run_id: _started.run_id }); "
+        "if (!_result || _result.status !== 'running') break; "
+        "await new Promise((res) => setTimeout(res, 5000)); } "
+        "} else { "
+        f"_result = await agent({_js_string_literal(start_head + start_cmd)} + _json + {_js_string_literal(start_tail + poll)}, "
+        f"{{ label: {_js_string_literal(spec.label)}, {common}, schema: {schema} }}); }} "
         "if (!_result || !_result.status) return { verdict: 'FAILED', findings: [], error: 'reviewer result read failed' }; "
-        "if (_result.status === 'running') continue; "
         "return { verdict: _result.verdict || 'FAILED', findings: _result.findings || [], "
         f"provider: {_js_string_literal(choice.provider)}, model: {_js_string_literal(choice.model)}, error: _result.error || null }}; "
-        "} } catch (e) { return { verdict: 'FAILED', findings: [], error: String(e) }; } }"
+        "} catch (e) { return { verdict: 'FAILED', findings: [], error: String(e) }; } }"
     )
 
 
@@ -6889,6 +6939,7 @@ def compose_script(
     box_terms: Sequence[str] = (),
     held_rows: Sequence[tuple[str, str]] = (),
     slot_rows: Sequence[str] = (),
+    slot_legs: Optional[Mapping[str, str]] = None,
     seam: Optional[SeamInputs] = None,
     plan_text: Optional[str] = None,
     carried_gate_owed: Optional[dict] = None,
@@ -7970,7 +8021,7 @@ def compose_script(
     if repo_anchor:
         body_blocks.insert(0, _REPO_ROOT_DECLARATION)
     if slot_rows:
-        body_blocks.insert(0, _slot_rows_narration(slot_rows))
+        body_blocks.insert(0, _slot_rows_narration(slot_rows, slot_legs))
     if excluded_rows:
         body_blocks.insert(0, _excluded_rows_narration(excluded_rows))
     body = "\n\n".join(body_blocks)
@@ -9039,7 +9090,7 @@ def emit_script(
     from coordinator_core.ops.plan_tasks_render import load_rows as _load_raw_rows
 
     raw_by_id = {
-        raw.get("id"): raw
+        raw.get("id"): with_leg_slot(raw)
         for raw in _load_raw_rows(plan_text or "").rows
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
@@ -9063,6 +9114,9 @@ def emit_script(
         if _drift:
             raise RegisterPinDriftError(_rr.pin_drift_reason(_drift))
     slot_rows = [row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True]
+    slot_legs = {
+        rid: text for rid in slot_rows if (text := _leg_declaration(raw_by_id.get(rid, {}).get("leg")))
+    }
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
     check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved, session_id=session_id)
@@ -9089,6 +9143,7 @@ def emit_script(
             plan_path=spec_path,
         ),
         slot_row_ids=frozenset(slot_rows),
+        slot_legs=tuple(slot_legs.items()),
         leg_writes=tuple(leg_writes) or _recorded_leg_writes(script_path, repo_root),
     )
 
@@ -9171,6 +9226,7 @@ def emit_script(
         carried_gate_owed=carried_owed_gates,
         held_rows=held_rows,
         slot_rows=slot_rows,
+        slot_legs=slot_legs,
         seam=None if review_only else seam_inputs_for(
             rows_by_plan, spec_path.as_posix(), plan_text, raw_by_id, repo_root, certified_plans
         ),

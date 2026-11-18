@@ -67,9 +67,11 @@ def test_no_marker_mints_a_fresh_id(repo):
     assert reply["run_id"] != OLDER
 
 
-def test_a_resumed_marker_is_not_rebound_twice(repo):
+def test_a_resumed_marker_is_not_rebound_twice(repo, monkeypatch):
     _halt(repo)
     first = _fire(repo)["run_id"]
+    # Trap: inside the unfired-resend window an identical re-fire dedupes onto the first run (lost-reply guard).
+    monkeypatch.setattr(op, "_UNFIRED_RESEND_WINDOW_SECS", -1)
     assert _fire(repo)["run_id"] != first
 
 
@@ -295,11 +297,14 @@ def _halt_kept(root, name, sizing_rel=_KEPT_SIZING):
 
 
 def test_refire_names_the_newest_of_two_halted_runs_with_no_kept_rows(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_run as hr
     from coordinator_core.ops.dispatch_emit import sizing_fire
 
     _halt_kept(tmp_path, _KEPT_OLD)
     _halt_kept(tmp_path, _KEPT_NEW)
-    assert sizing_fire._kept_rows(tmp_path, _KEPT_SIZING, ["C1"]) == ((), _KEPT_NEW)
+    assert hr.halted_ask_run_for(tmp_path, _KEPT_SIZING) == _KEPT_NEW
+    # A run that kept no chunk names no run: `_kept_rows` answers a run id only with kept rows.
+    assert sizing_fire._kept_rows(tmp_path, _KEPT_SIZING, ["C1"]) == ((), None)
 
 
 def test_a_resumed_newest_run_leaves_the_older_halted_one_named(tmp_path):
@@ -310,7 +315,7 @@ def test_a_resumed_newest_run_leaves_the_older_halted_one_named(tmp_path):
     _halt_kept(tmp_path, _KEPT_OLD)
     _halt_kept(tmp_path, _KEPT_NEW)
     hr.mark_resumed(tmp_path / RECORD_DIR_ROOT / _KEPT_NEW)
-    assert sizing_fire._kept_rows(tmp_path, _KEPT_SIZING, ["C1"]) == ((), _KEPT_OLD)
+    assert hr.halted_ask_run_for(tmp_path, _KEPT_SIZING) == _KEPT_OLD
 
 
 def test_no_halted_run_names_none(tmp_path):

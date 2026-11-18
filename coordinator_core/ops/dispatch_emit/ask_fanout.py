@@ -217,11 +217,13 @@ def _relay_fields(params: Mapping, count: int) -> list[tuple[Optional[str], Opti
     return out
 
 
-def _context_fields(params: Mapping, count: int) -> list[tuple[Optional[str], tuple[str, ...]]]:
+def _context_fields(
+    params: Mapping, count: int, appended: Optional[Mapping[int, str]] = None,
+) -> list[tuple[Optional[str], tuple[str, ...]]]:
     """Per ask item (prose block, context paths) from its `em_context` and `context`; asks arm only.
 
-    The prose block is `em_context` then the prose `context` entries under one EM-context marker;
-    path-shaped `context` entries are returned stripped. Both None/() when the item carries neither."""
+    The prose block is `em_context` then the prose `context` entries under one EM-context marker,
+    then any `appended` text (a pm item's text outside its recorded turn); path-shaped `context` entries are returned stripped. Both None/() when the item carries neither."""
     raw = params.get("asks")
     if raw is None:
         return [(None, ())] * count
@@ -244,6 +246,8 @@ def _context_fields(params: Mapping, count: int) -> list[tuple[Optional[str], tu
                 if not entry.strip():
                     continue
                 (paths if is_path_shaped(entry) else prose).append(entry.strip())
+        if appended and appended.get(i):
+            prose.append(appended[i])
         block = with_em_context(None, "\n".join(prose)) if prose else None
         out.append((block, tuple(paths)))
     return out
@@ -291,6 +295,58 @@ def _load_parent(root: Path, rel: str) -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
+_NON_CLAUDE_FAMILIES = ("codex", "grok", "agy")
+_SUPERSEDES_RE = re.compile(
+    r"\bsupersed(?:es|ed|ing)\s+(?:the\s+)?(?:halted\s+)?(?:run\s+|sizing\s+)?"
+    r"((?:warp|ask)-[A-Za-z0-9._-]*[A-Za-z0-9]|state/sizings/[A-Za-z0-9._/-]*\.yaml)",
+    re.IGNORECASE,
+)
+_ROW_FAMILY_RE = re.compile(r"\bsizing family\s*[:=]?\s*(" + "|".join(_NON_CLAUDE_FAMILIES) + r")\b", re.IGNORECASE)
+
+
+def _sizing_family(root: Path, rel: str) -> str:
+    """The non-claude `family` of the sizing at repo-relative `rel`, else ""."""
+    try:
+        found = contained_path(root / rel, [Path(home_dir(str(root), "sizings"))])
+        doc = yaml.safe_load(found.read_text(encoding="utf-8")) if found is not None and found.is_file() else None
+    except (OSError, ValueError, yaml.YAMLError):
+        return ""
+    value = doc.get("family") if isinstance(doc, Mapping) else None
+    return value if value in _NON_CLAUDE_FAMILIES else ""
+
+
+def run_family(root: Path, run_id: str) -> str:
+    """The non-claude family of the sizing the run `run_id` was fired from, else "". One run.json read."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        data = json.loads((record_dir(root, run_id) / "run.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    rel = data.get("sizing_rel") if isinstance(data, Mapping) else None
+    return _sizing_family(root, rel.replace("\\", "/")) if isinstance(rel, str) and rel else ""
+
+
+def named_family(root: Path, texts: list[str], prior_runs: tuple[str, ...] = ()) -> tuple[str, str]:
+    """(family, source) a sizing's predecessor or plan-row prose names, else ("", "").
+
+    A predecessor is a run in `prior_runs` or one `texts` says it supersedes (a run id or a
+    `state/sizings/*.yaml` path); a row names a family by the phrase `sizing family: <name>`. Only a
+    non-claude family counts; each candidate is one record read."""
+    for run_id in prior_runs:
+        if family := run_family(root, run_id):
+            return family, f"its predecessor run {run_id}"
+    for text in texts:
+        for token in dict.fromkeys(_SUPERSEDES_RE.findall(text or "")):
+            is_sizing = token.endswith(".yaml")
+            family = _sizing_family(root, token) if is_sizing else run_family(root, token)
+            if family:
+                return family, f"its superseded {'sizing' if is_sizing else 'run'} {token}"
+        if hit := _ROW_FAMILY_RE.search(text or ""):
+            return hit.group(1).lower(), "the plan row text"
+    return "", ""
+
+
 def _parent_rows(sizing: Mapping) -> list[dict]:
     register = sizing.get(rr.REGISTER_KEY)
     rows = register.get(rr.ROWS_KEY) if isinstance(register, Mapping) else None
@@ -324,12 +380,27 @@ def _matching_turn(ask: str, recorded: list[dict]) -> Optional[dict]:
     return None
 
 
+def _split_pm_ask(ask: str, recorded: list[dict]) -> tuple[Optional[dict], str]:
+    """(turn, remainder) for a pm item: the turn its text equals (remainder empty), else the newest
+    recorded turn its text contains whitespace-normalised, with the text around it as the remainder."""
+    hit = _matching_turn(ask, recorded)
+    if hit:
+        return hit, ""
+    for turn in recorded:
+        words = turn["text"].split()
+        found = re.search(r"\s+".join(map(re.escape, words)), ask) if words else None
+        if found:
+            return turn, f"{ask[:found.start()]}\n{ask[found.end():]}".strip()
+    return None, ""
+
+
 def _slice_turns(sl: contract.AskSlice, recorded: list[dict]) -> list[dict]:
     """The turns one asks item carries: only an explicit `pm` item binds, to the recorded turn its text
-    equals; an unmarked or relayed item, or a pm item matching no turn, carries none and is stamped relayed."""
+    equals or contains; an unmarked or relayed item, or a pm item matching no turn, carries none and is
+    stamped relayed."""
     if sl.source != ASK_SOURCE_PM:
         return []
-    hit = _matching_turn(sl.ask, recorded)
+    hit = _split_pm_ask(sl.ask, recorded)[0]
     return [hit] if hit else []
 
 
@@ -341,9 +412,11 @@ def _slice_record(
     context: tuple[Optional[str], tuple[str, ...]] = (None, ()),
     stop_after: Optional[str] = None,
     sized: Optional[Mapping] = None, deliverable_id: Optional[str] = None,
-    repo_root: Optional[Path] = None,
+    repo_root: Optional[Path] = None, family: str = "",
 ) -> dict:
-    """A slice sizing. A relayed or unmarked asks item (it arrives with no `turns`) is stamped relayed,
+    """A slice sizing; a non-empty `family` is set as its top-level `family` key.
+
+    A relayed or unmarked asks item (it arrives with no `turns`) is stamped relayed,
     carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row.
 
     `sized` ({ruling_ref, mode}) makes a fan_out slice already routed: its estimate, the route from
@@ -404,6 +477,8 @@ def _slice_record(
             record["interaction_mode"] = sized["mode"]
     if deliverable_id:
         record["deliverable_id"] = deliverable_id
+    if family:  # a routing key the sizing schema does not list; the caller validates without it
+        record["family"] = family
     return record
 
 
@@ -817,7 +892,9 @@ def _fanout(
     for i in pm_items:
         if not parent_turns and not _slice_turns(slices[i], recorded):
             raise _Refused(
-                f"asks[{i}]: source pm, but its text equals no PM turn this session recorded. "
+                f"asks[{i}]: source pm, but its text holds no PM turn this session recorded. "
+                "Accepted pm shape: ask = the recorded PM turn verbatim, optionally with slice text "
+                "appended or prepended (that text goes to the slice's context). "
                 "Mark it relayed, or submit from the session the PM spoke in."
             )
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -853,7 +930,12 @@ def _fanout(
 
     relay = _relay_fields(params, len(slices))
     route_prefs = _route_fields(params, len(slices))
-    contexts = _context_fields(params, len(slices))
+    appended = {
+        i: _split_pm_ask(sl.ask, recorded)[1]
+        for i, sl in enumerate(slices)
+        if sl.source == ASK_SOURCE_PM and not parent_turns
+    }
+    contexts = _context_fields(params, len(slices), appended)
     stop_afters = _stop_after_fields(params, len(slices))
 
     sources = None
@@ -877,8 +959,9 @@ def _fanout(
             context=contexts[i], stop_after=stop_afters[i],
             sized=sized, deliverable_id=deliverable_id if sized and sl.label == contract.SEAM_PASS_LABEL else None,
             repo_root=root,
+            family=named_family(worktree, [sl.ask, relay[i][1] or "", contexts[i][0] or ""])[0],
         )
-        errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
+        errors = validate_frontmatter({k: v for k, v in record.items() if k != "family"}, _SIZING_SCHEMA_PATH)
         if errors:
             raise _Refused(f"slice {sl.label!r} failed schema validation: {format_validation_errors(errors)}")
         records.append((rel, yaml.safe_dump(record, sort_keys=False, allow_unicode=True)))

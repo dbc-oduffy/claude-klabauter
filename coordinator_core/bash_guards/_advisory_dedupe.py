@@ -423,24 +423,26 @@ def mark_advised(gitdir: Optional[Path], session_id: str, shape_key: Optional[st
         return
     target_dir = _session_dedupe_dir(gitdir, session_id)
 
-    def _write_and_sweep() -> None:
+    def _write() -> None:
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
             (target_dir / shape_key).touch(exist_ok=True)
         except OSError:
             pass
+
+    def _sweep() -> None:
         try:
             _maybe_sweep_stale_session_dirs(gitdir, session_id)
         except OSError:
             pass
 
-    # A kernel-blocked mkdir/touch drops the marker (an extra advisory later), never the hook.
-    try:
-        run_bounded(
-            "advisory-dedupe-write:%s" % target_dir, _write_and_sweep, deadline=_FS_DEADLINE_SECS, default=None
-        )
-    except Exception:  # noqa: BLE001 -- fail open
-        pass
+    # Separate bounded calls: a slow sweep must not hold the marker write's wait (a first-seen
+    # session pays both), and a kernel-blocked mkdir/touch drops the marker, never the hook.
+    for key, fn in (("write:%s" % target_dir, _write), ("sweep:%s" % (gitdir / _DEDUPE_SUBDIR), _sweep)):
+        try:
+            run_bounded("advisory-dedupe-" + key, fn, deadline=_FS_DEADLINE_SECS, default=None)
+        except Exception:  # noqa: BLE001 -- fail open
+            pass
 
 
 _LAST_SWEEP_SENTINEL = ".last-sweep"
@@ -481,15 +483,15 @@ def _maybe_sweep_stale_session_dirs(gitdir: Path, current_session_id: str) -> in
     try:
         sentinel_mtime = sentinel.stat().st_mtime
     except OSError:
-        removed = _sweep_stale_session_dirs(gitdir, current_session_id)
-        _rotate_known_logs(gitdir)
-        _touch_sweep_sentinel(root, sentinel)
-        return removed
-    if (time.time() - sentinel_mtime) < _SWEEP_THROTTLE_SECONDS:
+        sentinel_mtime = None
+    if sentinel_mtime is not None and (time.time() - sentinel_mtime) < _SWEEP_THROTTLE_SECONDS:
         return 0
+    # Stamped BEFORE the sweep: a sweep that overruns its deadline is abandoned when this
+    # short-lived hook process exits, and a stamp written after it would never land, so every
+    # later first-seen session would re-run (and re-stall on) the same sweep.
+    _touch_sweep_sentinel(root, sentinel)
     removed = _sweep_stale_session_dirs(gitdir, current_session_id)
     _rotate_known_logs(gitdir)
-    _touch_sweep_sentinel(root, sentinel)
     return removed
 
 

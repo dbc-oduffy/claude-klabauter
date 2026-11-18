@@ -4,16 +4,16 @@ Purpose: a gate that fails in the shared worktree may be failing on a peer's unc
 bytes. Re-running the failing target inside this export (HEAD's tree, with the worktree
 bytes of only the paths the run lands) tells the run's own breakage from a peer's.
 
-Arm: overlay an existing run-base export to HEAD. A fresh `git archive HEAD` extraction
+Arm: overlay an existing run-base export to HEAD. A fresh HEAD checkout
 measured 23 s on this repo; the overlay measured 328 ms with zero git spawns (C3), so
-the base export is an input and its absence is a refusal, never a fallback to extraction.
+the base export is an input and its absence is a refusal, never a fallback to a fresh build.
 The tree diff base_sha..HEAD is read from the object store in process; blobs are written
-verbatim (no smudge), as `git archive` writes them.
+verbatim (no smudge).
 
 Negative-spec:
     - `build_landing_export` does NOT build a base export. No `base_export` holding `base_sha`
-      -> LandingExportError. `build_head_export` is the one function that does (one
-      `git archive`, ~23 s); it belongs in the detached child only, never an inline op.
+      -> LandingExportError. `build_head_export` is the one function that does (a
+      `clone` + `checkout`, ~23 s); it belongs in the detached child only, never an inline op.
     - Does NOT leave `base_export` intact: it is moved to `out_dir` and mutated in place
       (copying 40k files costs what extraction costs). A caller that still needs the
       base re-runs against it first.
@@ -283,9 +283,9 @@ def _seed_state_invariant_inputs(common_dir: Path, head_tree: str, dest: Path) -
 def build_head_export(
     worktree_root: Path, out_dir: Path, landing_paths: Sequence[str], sha: Optional[str] = None
 ) -> LandingExport:
-    """Extract `sha` (default HEAD; one git spawn) at `out_dir`, then overlay `landing_paths` worktree bytes.
+    """Clone `sha` (default HEAD; a real `.git` root) at `out_dir`, then overlay `landing_paths` worktree bytes.
 
-    A prior export at `out_dir` is replaced. The extraction goes to the sibling `<out_dir>.base`,
+    A prior export at `out_dir` is replaced. The clone goes to the sibling `<out_dir>.base`,
     which `build_landing_export` consumes; on failure it is removed. DATA_DIRS stay unextracted;
     only HEAD's state allowlist and the tracked state/ first-segment set are seeded.
     """
@@ -310,7 +310,8 @@ def build_head_export(
         if staging.exists() or staging.is_symlink():
             baseline_export.remove(staging)
         staging.mkdir(parents=True)
-        baseline_export.export(root.as_posix(), head, staging)
+        baseline_export.clone_tree(root.as_posix(), head, staging)
+        baseline_export.require_git_root(staging)
         common = resolve_git_common_dir(root)
         _seed_state_invariant_inputs(common, _commit_tree(common, head), staging)
         return build_landing_export(

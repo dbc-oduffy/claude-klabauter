@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import review_prep as rp
+from coordinator_core.ops.tests.conftest import stub_own_write_claims
 from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot as snap
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.win_portability import no_console_creationflags
@@ -87,7 +88,12 @@ def test_peer_dirt_adopted_nothing_when_run_edits_are_all_declared(repo):
     assert _prep(repo)["undeclared_edits"] == []
 
 
-def test_a_few_stray_edits_are_still_adopted(repo):
+@pytest.fixture
+def own_session_claims(monkeypatch):
+    stub_own_write_claims(monkeypatch, SESSION)
+
+
+def test_a_few_stray_edits_are_still_adopted(repo, own_session_claims):
     stray = PEERS[:3]
     for rel in PEERS:
         if rel not in stray:

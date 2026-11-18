@@ -393,7 +393,7 @@ def test_family_receipt_is_written_without_crashing_provenance(tmp_path: Path, m
 def test_builtin_workspace_policy_has_no_custom_permission_selector() -> None:
     import inspect
     source=inspect.getsource(workflow.run_agent)
-    assert '\"--sandbox\", \"workspace-write\"' in source
+    assert 'codex_family_stage_argv(' in source and 'workspace-write' not in source
     assert 'default_permissions' not in source
     assert '_workspace_permissions' not in source
 
@@ -416,7 +416,7 @@ def _unelevated_home(tmp_path, monkeypatch):
     return home
 
 
-def test_codex_stage_runs_when_unelevated_root_unproven_and_probes_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_codex_stage_runs_when_unelevated_root_unproven_without_probing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.codex_runner import sandbox_preflight as sp
     _unelevated_home(tmp_path, monkeypatch)
     monkeypatch.setattr(sp, '_is_windows', lambda: True)
@@ -424,11 +424,10 @@ def test_codex_stage_runs_when_unelevated_root_unproven_and_probes_once(tmp_path
     monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
     from coordinator_core.codex_runner import codex_spawn_env
     monkeypatch.setattr(codex_spawn_env, 'check_pwsh_launchable', lambda env: None)
-    seen = {}
-    monkeypatch.setattr(workflow, 'check_workspace_write', lambda root, **kw: seen.update(kw) or 'advisory: warming')
+    monkeypatch.setattr(sp, 'check_workspace_write', lambda *a, **kw: (_ for _ in ()).throw(AssertionError('probed')))
     calls = _stub_codex(monkeypatch, tmp_path)
     assert _run(tmp_path, 'codex') == {'a': 1}
-    assert seen['codex_argv'] == ['/bin/codex-x'] and calls
+    assert calls and not (tmp_path / sp.WARMUP_RELPATH).exists()
 
 
 def test_codex_stage_argv_unchanged_without_unelevated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -439,14 +438,13 @@ def test_codex_stage_argv_unchanged_without_unelevated_config(tmp_path: Path, mo
     monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
     from coordinator_core.codex_runner import codex_spawn_env
     monkeypatch.setattr(codex_spawn_env, 'check_pwsh_launchable', lambda env: None)
-    probes = []
-    monkeypatch.setattr(workflow, 'check_workspace_write', lambda root, **kw: probes.append(kw) or None)
     assert _run(tmp_path, 'codex') == {'a': 1}
     argv = calls[0][0]
-    assert argv[:7] == ['/bin/codex-x', 'exec', '--json', '--sandbox', 'workspace-write', '--ephemeral', '-o']
-    assert argv[7] == str(tmp_path / 'art' / 'last.txt') and argv[-1] == '-'
+    assert argv[:7] == ['/bin/codex-x', 'exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '--ephemeral', '-o', str(tmp_path / 'art' / 'last.txt')]
+    assert '--sandbox' not in argv
+    assert argv[6] == str(tmp_path / 'art' / 'last.txt') and argv[-1] == '-'
     assert not {'-c', '--config'} & set(argv)
-    assert not (tmp_path / 'codex-home' / 'config.toml').exists() and len(probes) == 1
+    assert not (tmp_path / 'codex-home' / 'config.toml').exists()
 
 
 def _family_model(tmp_path, monkeypatch, backend, events):

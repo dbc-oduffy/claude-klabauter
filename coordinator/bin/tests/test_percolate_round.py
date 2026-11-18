@@ -1431,6 +1431,17 @@ def test_extract_failure_cause_fatal_prefixed():
     assert _mod._extract_failure_cause(mixed, "") == "Error: first"
 
 
+def test_extract_failure_cause_names_the_gate_not_interpreter_noise():
+    noise = "Error in sitecustomize; set PYTHONVERBOSE for traceback:\nKeyError: sitecustomize\n"
+    gate = "  Error: payload parity gate FAILED for claude-klabauter: 3 files differ\n"
+    other = "  Error: some downstream fallout\n"
+    assert _mod._extract_failure_cause("", noise + other + gate) == gate.strip()
+    assert _mod._extract_failure_cause("", noise + other) == other.strip()
+    refused = "  [timing]   row-a: REFUSED: x: 1.0s wall / 0.0s cpu\n"
+    assert _mod._extract_failure_cause(refused, noise) == "row-a: REFUSED: x"
+    assert _mod._extract_failure_cause("", noise).startswith("Error in sitecustomize")
+
+
 def test_extract_failure_cause_publish_refused_line_verbatim():
     refusal = (
         "publish: refused -- publisher code differs from aa24a0395993: "
@@ -3931,3 +3942,15 @@ class TestFoldBarRefusal:
         _rc, reached, err = _drive_bar_round(tmp_path, monkeypatch, _bar_repo(tmp_path, _green()), capsys)
         assert reached == [1]
         assert "fold bar" not in err
+
+
+def test_spooled_text_run_decodes_utf8_and_spawns_python_utf8(tmp_path):
+    code = r"import os,sys; sys.stdout.buffer.write(b'a\xe2\x80\x94b ' + os.environ['PYTHONUTF8'].encode())"
+    done = _mod._spooled_run([sys.executable, "-c", code], timeout=30, text=True)
+    assert done.stdout == "a\u2014b 1"
+
+
+def test_spooled_text_run_replaces_undecodable_bytes(tmp_path):
+    code = r"import sys; sys.stdout.buffer.write(b'x\x97y')"
+    done = _mod._spooled_run([sys.executable, "-c", code], timeout=30, text=True)
+    assert done.stdout == "x\ufffdy"

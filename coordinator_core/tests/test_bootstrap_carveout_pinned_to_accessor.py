@@ -34,7 +34,8 @@ import pytest
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _CC_INVOKE = _REPO_ROOT / "coordinator" / "bin" / "lib" / "cc_invoke.py"
-_PINNED_NAMES = ("_ENGINE_ROOT_NEW_VAR", "_ENGINE_ROOT_OLD_VAR")
+_PINNED_NAMES = ("_ENGINE_ROOT_NEW_VAR",)
+_RETIRED_CONST = "_ENGINE_ROOT_OLD_VAR"
 
 
 def _module_level_str_constants(path: pathlib.Path) -> dict[str, str]:
@@ -81,28 +82,14 @@ def _module_level_str_constants(path: pathlib.Path) -> dict[str, str]:
     return found
 
 
-def _dual_read_expressions(path: pathlib.Path) -> list[str]:
-    """For every boolean expression that reads BOTH pinned names, which is consulted first.
-
-    Returns one entry per such expression, naming the constant that appears first in it.
-    Per-expression rather than per-file on purpose: comparing the two names' offsets across
-    the whole source cannot see a single inverted site, because the other sites still put
-    the new name earlier. That weaker check passed against a deliberately inverted
-    carve-out, which is why this reads the AST instead.
-    """
+def _retired_name_references(path: pathlib.Path) -> list[int]:
+    """Line numbers of every use of the retired constant name, by AST."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    ordered: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.BoolOp):
-            continue
-        names = [
-            sub.id
-            for sub in ast.walk(node)
-            if isinstance(sub, ast.Name) and sub.id in _PINNED_NAMES
-        ]
-        if set(names) == set(_PINNED_NAMES):
-            ordered.append(names[0])
-    return ordered
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id == _RETIRED_CONST
+    ]
 
 
 @pytest.fixture(scope="module")
@@ -111,13 +98,16 @@ def carve_out_constants() -> dict[str, str]:
     return _module_level_str_constants(_CC_INVOKE)
 
 
-def test_carve_out_declares_both_pinned_names(carve_out_constants):
+def test_carve_out_declares_pinned_name_and_not_the_retired_one(carve_out_constants):
     missing = [n for n in _PINNED_NAMES if n not in carve_out_constants]
     assert not missing, (
         f"cc_invoke.py no longer declares {missing}. AC13's carve-out must duplicate the "
         "accessor's precedence rule EXPLICITLY, via named constants that this test can pin. "
         "Inlining the literals back into the call sites removes the seam that makes the "
         "duplication auditable."
+    )
+    assert _RETIRED_CONST not in carve_out_constants, (
+        "cc_invoke.py declares the retired engine-root name again; it has no reader."
     )
 
 
@@ -154,17 +144,11 @@ def test_carve_out_precedence_matches_accessor(monkeypatch):
 
     assert engine_root.coordinator_engine_root_env("test.ac13_precedence") == "new-name-answer"
 
-    dual_reads = _dual_read_expressions(_CC_INVOKE)
-    assert not dual_reads, (
-        f"cc_invoke still has {len(dual_reads)} expression(s) reading BOTH pinned names "
-        f"(first-consulted: {dual_reads}). C14 CLOSED the dual-read window, so the "
-        "carve-out must consult the NEW name alone. Until C14 this assertion ran the "
-        "other way round and required both to be present.\n\n"
-        "This inversion caught a real miss: C14's first pass changed only the rung-1 "
-        "read and the child-env write, leaving TWO further dual-read rungs in this file "
-        "untouched. A precedence-order check cannot see that — both remaining sites put "
-        "the new name first and would have passed — which is why the post-C14 assertion "
-        "is PRESENCE, not order."
+    retired_refs = _retired_name_references(_CC_INVOKE)
+    assert not retired_refs, (
+        f"cc_invoke references the retired engine-root constant at lines {retired_refs}; "
+        "the carve-out must consult the NEW name alone. The check is PRESENCE, not "
+        "order: a precedence-order check cannot see a leftover dual-read rung."
     )
 
 
@@ -223,13 +207,13 @@ def test_carveout_precedence_pins_the_new_name_only():
         and node.func.value.attr == "environ"
         and node.args
         and isinstance(node.args[0], ast.Name)
-        and node.args[0].id in _PINNED_NAMES
+        and node.args[0].id in (*_PINNED_NAMES, _RETIRED_CONST)
     }
     assert "_ENGINE_ROOT_NEW_VAR" in env_reads, (
         "cc_invoke's hand-duplicated rung no longer reads _ENGINE_ROOT_NEW_VAR from "
         "the environment at all; AC13's carve-out must still resolve Rung 1."
     )
-    assert "_ENGINE_ROOT_OLD_VAR" not in env_reads, (
+    assert _RETIRED_CONST not in env_reads, (
         "cc_invoke still falls back to the retired name; C14 removed that rung"
     )
     assert "_ENGINE_ROOT_OLD_VAR: claude_klabauter_root" not in src, (

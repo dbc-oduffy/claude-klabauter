@@ -188,6 +188,62 @@ def _opcodes(a: List[bytes], b: List[bytes]) -> List[Tuple[str, int, int, int, i
     return ops
 
 
+_TOKEN_RE = re.compile(rb"[A-Za-z_]\w{3,}")
+_STOP_TOKENS = frozenset({b"assert", b"return", b"self", b"True", b"False", b"None", b"else", b"import", b"from"})
+STRONGER_REWRITE_GAP = 2
+
+
+def _tokens(line: bytes) -> set:
+    return {t for t in _TOKEN_RE.findall(line) if t not in _STOP_TOKENS}
+
+
+def _stronger_rewrites(
+    ops: Sequence[Tuple[str, int, int, int, int]],
+    head_lines: List[bytes],
+    new_lines: List[bytes],
+    base_texts: set,
+) -> set:
+    """HEAD indices of removed lines the landing rewrites rather than drops: a net-new line (not base text,
+    so a restore of base content never qualifies) in the same hunk or within ``STRONGER_REWRITE_GAP`` equal
+    lines of it shares an identifier with the removed line, each new line excusing one. A reorder that
+    deletes a line and adds a rewritten one two lines on is a rewrite; a bare delete, a revert to base
+    text, and an unrelated nearby insert stay drops. Shared identifiers are the only test: whether the
+    new line is stronger than the removed one is not checked, so a weakening that keeps an identifier is
+    excused too."""
+    net_new = {
+        j
+        for tag, _i1, _i2, j1, j2 in ops
+        if tag in ("insert", "replace")
+        for j in range(j1, j2)
+        if new_lines[j].rstrip(b"\r\n") not in base_texts and _WORD_RE.search(new_lines[j])
+    }
+    if not net_new:
+        return set()
+    used: set = set()
+    excused: set = set()
+    for n, (tag, i1, i2, j1, j2) in enumerate(ops):
+        if tag not in ("delete", "replace"):
+            continue
+        near = {j for j in range(j1, j2) if j in net_new}
+        for step in (-1, 1):
+            gap, m = 0, n + step
+            while 0 <= m < len(ops) and gap <= STRONGER_REWRITE_GAP:
+                t, a1, a2, b1, b2 = ops[m]
+                if t == "equal":
+                    gap += a2 - a1
+                else:
+                    near.update(j for j in range(b1, b2) if j in net_new)
+                m += step
+        for i in range(i1, i2):
+            toks = _tokens(head_lines[i])
+            for j in sorted(near - used):
+                if toks & _tokens(new_lines[j]):
+                    used.add(j)
+                    excused.add(i)
+                    break
+    return excused
+
+
 _BLOB_ID_RE = re.compile(r"[0-9a-f]{40}")
 _RECORD_FILES = ("kept.json", "withheld-prints.json", "measured-rev.json")
 
@@ -367,11 +423,19 @@ def check(
         )
         # A line rewritten in place stays tracked (soft) only to catch one a foreign plan checkpoint added.
         tracked: List[Tuple[int, bool]] = []
+        excused: set = set()
+        if any(op[0] in ("delete", "replace") for op in head_ops):
+            base_lines = _lines(common_dir, base_blob) or []
+            excused = _stronger_rewrites(
+                head_ops, head_lines, new_lines, {l.rstrip(b"\r\n") for l in base_lines}
+            )
         for tag, i1, i2, j1, j2 in head_ops:
             if tag not in ("delete", "replace"):
                 continue
             rewritten_to = i1 + (j2 - j1) if tag == "replace" else i1
             for i in range(i1, i2):
+                if i in excused:
+                    continue
                 text = head_lines[i].rstrip(b"\r\n")
                 if inserted[text] > 0 and _WORD_RE.search(text):
                     inserted[text] -= 1

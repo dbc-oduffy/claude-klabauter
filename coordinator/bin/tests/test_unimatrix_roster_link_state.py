@@ -36,6 +36,8 @@ def run_main(mod, monkeypatch, tmp_path, outcomes, down_msg="roster rc=255: down
             raise Stop
 
     monkeypatch.setattr(mod.time, "sleep", sleep)
+    # With an own start the loop sleeps in stop-poll slices; one sleep per poll keeps the tick count.
+    monkeypatch.setattr(mod, "wait_or_stop", lambda seconds, own_start, sleep=sleep: sleep(seconds) or False)
     log = tmp_path / "roster.log"
     with pytest.raises(Stop):
         mod.main([str(log), "--remote", "example-fleet-pro", "--key", "k"])
@@ -135,6 +137,8 @@ def drive_default_path(mod, monkeypatch, tmp_path, win, fail_first=False):
             raise Stop
 
     monkeypatch.setattr(mod.time, "sleep", sleep)
+    # With an own start the loop sleeps in stop-poll slices; one sleep per poll keeps the tick count.
+    monkeypatch.setattr(mod, "wait_or_stop", lambda seconds, own_start, sleep=sleep: sleep(seconds) or False)
     with pytest.raises(Stop):
         mod.main([str(tmp_path / "roster.log"), "--remote", "example-fleet-pro", "--key", "k"])
     return argvs, dials

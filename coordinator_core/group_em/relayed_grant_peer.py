@@ -81,7 +81,7 @@ def _revoke_checks(envelope: dict, home: Path) -> Optional[str]:
         or not suite_grant._safe_sid(envelope.get("issuer_session_id"))
     ):
         return "bad_record"
-    if envelope.get("grantee_box_id") != box_registry.local_box_id(home):
+    if not suite_grant.names_this_box(envelope.get("grantee_box_id"), home):
         return "wrong_grantee_box"
     return None
 

@@ -71,7 +71,7 @@ def test_a_halt_that_evicts_nothing_still_writes_the_record_and_names_ownerless(
     out = _call(repo)
 
     assert not out.get("error") and not out.get("refused"), out
-    assert "evicted" not in out
+    assert out.get("evicted", []) == []
     rec = stranded_sibling.read(repo / REL)
     assert rec["product.py"] == {"base": blob_sha(HEAD_BYTES), "run": blob_sha(RUN_BYTES)}
     assert out["ownerless"] == ["product.py"]

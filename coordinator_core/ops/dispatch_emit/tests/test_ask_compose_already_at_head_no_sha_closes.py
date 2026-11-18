@@ -45,7 +45,7 @@ def _guard(script: str) -> str:
 def _run(notes: str, reply: object) -> dict:
     script = _script()
     harness = (
-        "const _agentDefsClause = () => ''; let _halted = null; let _alreadyDelivered = null; let _alreadyDeliveredRefusal = '';\n"
+        "const _agentDefsClause = () => ''; const _briefPrecedenceTail = ''; let _halted = null; let _alreadyDelivered = null; let _alreadyDeliveredRefusal = '';\n"
         "const _reviewPrep = null; const _verifyOnly = false; const _runId = 'run-1';\n"
         f"const _deliveryNotes = {json.dumps(notes)}; let _agentCalls = []; let _agentReply = {json.dumps(reply)};\n"
         "const agent = async (p, o) => { _agentCalls.push(p); return _agentReply; };\n"
@@ -119,3 +119,11 @@ def test_op_refusal_on_a_no_sha_claim_still_halts_with_the_reason() -> None:
     assert result["halted"]["halted"].startswith(NO_SLICES_HALT)
     assert "write set not clean" in result["halted"]["reason"]
     assert result["delivered"] is None
+
+
+
+def test_the_close_judges_the_write_set_only_after_every_leg_settles() -> None:
+    """The in-run close reads the worktree; a leg still writing would make a dirty path read clean."""
+    script = _script()
+    rows = script.rfind("await Promise.all(Object.values(_rows));")
+    assert 0 <= rows < script.index("await _alreadyDeliveredClose()")

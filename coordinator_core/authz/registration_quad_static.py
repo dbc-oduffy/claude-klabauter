@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from re import Pattern
 
 _LEDGER_FILE = "coordinator_core/authz/registration_quad.py"
+_HOOKS_PACKAGE = "coordinator_core.hooks"
+_HOOKS_INIT_FILE = "coordinator_core/hooks/__init__.py"
 _SURFACE_PATHS = frozenset(_SURFACE_FILES.values())
 SURFACE_PATHS = _SURFACE_PATHS
 _ALL_SURFACE_FILES = (*_SURFACE_FILES.values(), _LEDGER_FILE)
@@ -167,6 +169,15 @@ def _extract(sources: dict[str, bytes]) -> dict:
             raise _ExtractError(f"_EAGER_OP_MODULES in {eager_path} holds a non-tuple element")
         eager.add(_str_const(elt.elts[0], "_EAGER_OP_MODULES module path", eager_path))
 
+    hook_modules: set[str] = set()
+    hooks_tree = trees.get(_HOOKS_INIT_FILE) if _HOOKS_PACKAGE in eager else None
+    if hooks_tree is not None:
+        hook_modules = set(
+            _str_collection(
+                _binding(hooks_tree, "_EAGER_HOOK_MODULES", _HOOKS_INIT_FILE), "_EAGER_HOOK_MODULES", _HOOKS_INIT_FILE
+            )
+        )
+
     debt = frozenset(
         _str_collection(
             _binding(trees[_LEDGER_FILE], "_KNOWN_UNCLASSIFIED_OPS_DEBT", _LEDGER_FILE),
@@ -187,6 +198,7 @@ def _extract(sources: dict[str, bytes]) -> dict:
         "scope": scope,
         "module_map": module_map,
         "eager_modules": frozenset(eager),
+        "hook_modules": frozenset(hook_modules),
         "debt": debt,
         "incomplete": incomplete,
     }
@@ -239,6 +251,9 @@ def registration_violations(
     if absent:
         return StaticQuadVerdict("refuse", reason="registration surface file absent: " + ", ".join(absent))
 
+    hooks_init = read_source(_HOOKS_INIT_FILE)
+    if hooks_init is not None:
+        sources[_HOOKS_INIT_FILE] = hooks_init
     try:
         tables = _extract(sources)
     except _ExtractError as exc:
@@ -250,6 +265,7 @@ def registration_violations(
         scope=tables["scope"],
         module_map=tables["module_map"],
         eager_modules=tables["eager_modules"],
+        hook_modules=tables["hook_modules"],
     )
     kept = filter_known_violations(
         raw,

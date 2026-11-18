@@ -1,4 +1,4 @@
-"""Tests for distill.launch_args: inlined batches, slugs and curated verdicts, digest-verified file."""
+"""Tests for distill.launch_args: scriptPath launcher carrying batches, slugs and curated verdicts, digest-verified."""
 
 from __future__ import annotations
 
@@ -12,10 +12,33 @@ import pytest
 
 from coordinator_core.distill.manifest_schema import make_scope_manifest
 from coordinator_core.ops import distill_launch_args as dla
+from coordinator_core.ops.dispatch_emit import launcher_staged_twin as twin
 from coordinator_core.ops.distill_workflow_input import validate_workflow_input
 
 RUN_ID = "2026-11-14-10h00"
 _WIKI = "docs" + "/wiki/"
+_TEXT_OPEN = "const ARGS = JSON.parse(_unpackStaged({text: "
+_PLAIN_OPEN = "const ARGS = JSON.parse("
+_REPLY_KEYS = {"scriptPath", "sha256", "launcher_bytes", "args_path", "args_sha256"}
+
+
+def _args_of(out: dict) -> dict:
+    """The args the Workflow VM would see: decode the launcher's ARGS line (python mirror of its unpack)."""
+    source = Path(out["scriptPath"]).read_text(encoding="utf-8")
+    dec = json.JSONDecoder()
+    if _TEXT_OPEN in source:
+        start = source.index(_TEXT_OPEN) + len(_TEXT_OPEN)
+        text, end = dec.raw_decode(source, start)
+        pack, _ = dec.raw_decode(source, end + len(", pack: "))
+        return json.loads(twin._expand(text, pack["m"], pack["t"]))
+    text, _ = dec.raw_decode(source, source.index(_PLAIN_OPEN) + len(_PLAIN_OPEN))
+    return json.loads(text)
+
+
+def _harvest(tmp_path) -> str:
+    target = tmp_path / "harvest.workflow.js"
+    target.write_text("// harvest", encoding="utf-8")
+    return str(target)
 
 
 def _manifest() -> dict:
@@ -29,7 +52,7 @@ def _manifest() -> dict:
 
 
 def _params(tmp_path, **extra) -> dict:
-    return {"manifest": _manifest(), "repo_root": str(tmp_path), **extra}
+    return {"manifest": _manifest(), "repo_root": str(tmp_path), "workflow_script": _harvest(tmp_path), **extra}
 
 
 CURATED = {
@@ -50,16 +73,24 @@ def _write_curated(tmp_path, rel: str | None = None, data=CURATED) -> None:
     target.write_text(data if isinstance(data, str) else json.dumps(data, indent=2), encoding="utf-8")
 
 
-def test_default_call_inlines_batches_slugs_and_curated_tags_and_digest_verifies(tmp_path: Path) -> None:
+def test_default_call_returns_scriptpath_with_no_args_and_launcher_carries_batches_slugs_and_curated_tags(tmp_path: Path) -> None:
     _write_curated(tmp_path)
 
     out = dla._handler(_params(tmp_path))
 
-    written = tmp_path / "state/scratch/artifact-distillation" / RUN_ID / "launch-args.json"
-    assert out["path"] == str(written)
-    assert hashlib.sha256(written.read_bytes()).hexdigest() == out["sha256"]
-    args = out["args"]
+    run_dir = tmp_path / "state/scratch/artifact-distillation" / RUN_ID
+    written = run_dir / "launch-args.json"
+    launcher = run_dir / "launch.workflow.mjs"
+    assert set(out) == _REPLY_KEYS and "args" not in out
+    assert out["scriptPath"] == launcher.resolve().as_posix()
+    assert hashlib.sha256(launcher.read_bytes()).hexdigest() == out["sha256"]
+    assert out["launcher_bytes"] == len(launcher.read_bytes())
+    assert Path(out["scriptPath"] + ".emitted.json").is_file()
+    assert out["args_path"] == str(written)
+    assert hashlib.sha256(written.read_bytes()).hexdigest() == out["args_sha256"]
+    args = _args_of(out)
     assert json.loads(written.read_text(encoding="utf-8")) == args
+    assert launcher.read_text(encoding="utf-8").rstrip().endswith("}, ARGS);")
     assert [b["files"] for b in args["batches"]] == [["a.md", "b.md"], ["c.md"]]
     assert args["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
     assert args["curatedTags"] == CURATED["verdicts"]
@@ -71,6 +102,16 @@ def test_default_call_inlines_batches_slugs_and_curated_tags_and_digest_verifies
     assert validate_workflow_input(args) == []
 
 
+def test_launcher_over_cap_refuses_and_writes_no_args_file_or_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("coordinator_core.distill.launch_script._WORKFLOW_SCRIPT_BYTE_CAP", 10)
+
+    with pytest.raises(ValueError, match="over the Workflow runner cap"):
+        dla._handler(_params(tmp_path))
+
+    run_dir = tmp_path / "state/scratch/artifact-distillation" / RUN_ID
+    assert not (run_dir / "launch-args.json").exists() and not (run_dir / "launch.workflow.mjs").exists()
+
+
 def test_dead_curated_file_constants_are_gone() -> None:
     assert not hasattr(dla, "CURATED_FILE_KEY") and not hasattr(dla, "CURATED_SHA_KEY")
 
@@ -78,14 +119,15 @@ def test_dead_curated_file_constants_are_gone() -> None:
 def test_curated_file_override_is_inlined(tmp_path: Path) -> None:
     rel = "state/scratch/elsewhere/curated.json"
     _write_curated(tmp_path, rel)
-    args = dla._handler(_params(tmp_path, curated_file=rel))["args"]
+    args = _args_of(dla._handler(_params(tmp_path, curated_file=rel)))
     assert args["curatedTags"] == CURATED["verdicts"]
 
 
 def test_absent_curated_file_adds_no_curated_keys_and_still_builds(tmp_path: Path) -> None:
     out = dla._handler(_params(tmp_path))
-    assert "curatedTags" not in out["args"] and "threshold_applied" not in out["args"]
-    assert hashlib.sha256(open(out["path"], "rb").read()).hexdigest() == out["sha256"]
+    args = _args_of(out)
+    assert "curatedTags" not in args and "threshold_applied" not in args
+    assert hashlib.sha256(open(out["scriptPath"], "rb").read()).hexdigest() == out["sha256"]
 
 
 @pytest.mark.parametrize("data", ["{not json", "[1, 2]", json.dumps({"counts": {}}), json.dumps({"verdicts": "x"})])
@@ -100,9 +142,9 @@ def test_realistic_64kb_curated_payload_inlines_whole(tmp_path: Path) -> None:
     data = {**CURATED, "verdicts": verdicts}
     _write_curated(tmp_path, data=data)
     out = dla._handler(_params(tmp_path))
-    assert out["args"]["curatedTags"] == verdicts
+    assert _args_of(out)["curatedTags"] == verdicts
     assert len((tmp_path / "state/scratch/artifact-distillation" / RUN_ID / "curated.json").read_bytes()) > 60_000
-    assert out["args_bytes"] == len(Path(out["path"]).read_bytes()) > 60_000
+    assert len(Path(out["args_path"]).read_bytes()) > 60_000
 
 
 PREPARED_REL = f"state/scratch/artifact-distillation/{RUN_ID}/prepared.json"
@@ -115,21 +157,25 @@ def _leg2_inputs(tmp_path, promoted=(_WIKI + "foo.md",), splice=None):
         target = tmp_path / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(data), encoding="utf-8")
-    return {"leg": 2, "run_id": RUN_ID, "repo_root": str(tmp_path),
+    return {"leg": 2, "run_id": RUN_ID, "repo_root": str(tmp_path), "workflow_script": _harvest(tmp_path),
             "promoted_path": PROMOTED_REL, "splice_report_path": SPLICE_REL}
 
 
 def test_leg2_reuses_leg1_args_and_adds_promoted_and_splice_report(tmp_path):
     _write_curated(tmp_path)
     leg1 = dla._handler(_params(tmp_path))
-    leg1_bytes = Path(leg1["path"]).read_bytes()
+    leg1_bytes = Path(leg1["args_path"]).read_bytes()
     out = dla._handler(_leg2_inputs(tmp_path))
-    assert out["path"].endswith(dla.LEG2_FILE_NAME)
-    assert Path(leg1["path"]).read_bytes() == leg1_bytes
-    assert hashlib.sha256(Path(out["path"]).read_bytes()).hexdigest() == out["sha256"]
-    args = out["args"]
+    assert set(out) == _REPLY_KEYS and "args" not in out
+    assert out["args_path"].endswith(dla.LEG2_FILE_NAME)
+    assert out["scriptPath"].endswith("/launch-leg2.workflow.mjs") and out["scriptPath"] != leg1["scriptPath"]
+    assert Path(out["scriptPath"] + ".emitted.json").is_file()
+    assert Path(leg1["args_path"]).read_bytes() == leg1_bytes
+    assert hashlib.sha256(Path(out["scriptPath"]).read_bytes()).hexdigest() == out["sha256"]
+    assert hashlib.sha256(Path(out["args_path"]).read_bytes()).hexdigest() == out["args_sha256"]
+    args = _args_of(out)
     assert args["promoted"] == [_WIKI + "foo.md"] and args["spliceReport"] == {"dispositions": [], "spliced": []}
-    assert {k: v for k, v in args.items() if k not in ("promoted", "spliceReport")} == leg1["args"]
+    assert {k: v for k, v in args.items() if k not in ("promoted", "spliceReport")} == _args_of(leg1)
 
 
 def test_leg2_without_leg1_args_raises_naming_it(tmp_path):
@@ -164,8 +210,8 @@ def test_prepared_path_inlines_prepared_json_as_args_prepared(tmp_path):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(prepared), encoding="utf-8")
     out = dla._handler(_params(tmp_path, prepared_path=PREPARED_REL))
-    assert out["args"][dla.PREPARED_KEY] == prepared
-    assert json.loads(Path(out["path"]).read_text(encoding="utf-8"))["prepared"] == prepared
+    assert _args_of(out)[dla.PREPARED_KEY] == prepared
+    assert json.loads(Path(out["args_path"]).read_text(encoding="utf-8"))["prepared"] == prepared
 
 
 def _write_prepared(tmp_path, prepared):
@@ -178,23 +224,48 @@ def test_prepared_with_packed_slugs_drops_top_level_wikislugs(tmp_path):
     prepared = {"wikiSlugsPacked": "packed-index", "synth": {}}
     _write_prepared(tmp_path, prepared)
     out = dla._handler(_params(tmp_path, prepared_path=PREPARED_REL))
-    assert "wikiSlugs" not in out["args"]
-    assert out["args"][dla.PREPARED_KEY]["wikiSlugsPacked"] == "packed-index"
-    assert "wikiSlugs" not in json.loads(Path(out["path"]).read_text(encoding="utf-8"))
+    args = _args_of(out)
+    assert "wikiSlugs" not in args
+    assert args[dla.PREPARED_KEY]["wikiSlugsPacked"] == "packed-index"
+    assert "wikiSlugs" not in json.loads(Path(out["args_path"]).read_text(encoding="utf-8"))
 
 
 def test_prepared_without_packed_slugs_keeps_top_level_wikislugs(tmp_path):
     _write_prepared(tmp_path, {"synth": {}})
     out = dla._handler(_params(tmp_path, prepared_path=PREPARED_REL))
-    assert out["args"]["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
+    assert _args_of(out)["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
 
 
 def test_no_prepared_path_keeps_top_level_wikislugs(tmp_path):
-    assert dla._handler(_params(tmp_path))["args"]["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
+    assert _args_of(dla._handler(_params(tmp_path)))["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
 
 
 def test_no_prepared_path_adds_no_prepared_key(tmp_path):
-    assert dla.PREPARED_KEY not in dla._handler(_params(tmp_path))["args"]
+    assert dla.PREPARED_KEY not in _args_of(dla._handler(_params(tmp_path)))
+
+
+@pytest.mark.parametrize("leg2", [False, True])
+@pytest.mark.parametrize("bad", ["missing", "relative.js", 7, ""])
+def test_workflow_script_absent_relative_or_nonexistent_is_refused_and_writes_nothing(tmp_path, leg2, bad):
+    if leg2:
+        dla._handler(_params(tmp_path))
+        params = _leg2_inputs(tmp_path)
+    else:
+        params = _params(tmp_path)
+    run_dir = tmp_path / "state/scratch/artifact-distillation" / RUN_ID
+    before = sorted(p.name for p in run_dir.glob("*")) if run_dir.exists() else []
+    if bad == "missing":
+        del params["workflow_script"]
+    else:
+        params["workflow_script"] = bad
+    with pytest.raises(ValueError, match="workflow_script"):
+        dla._handler(params)
+    assert (sorted(p.name for p in run_dir.glob("*")) if run_dir.exists() else []) == before
+
+
+def test_workflow_script_absolute_but_nonexistent_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="workflow_script"):
+        dla._handler(_params(tmp_path, workflow_script=str(tmp_path / "nope.js")))
 
 
 @pytest.mark.parametrize("data", [None, "{not json", "[1, 2]"])
@@ -236,17 +307,17 @@ def _scope_result(tmp_path) -> dict:
 
 
 def test_scope_result_as_manifest_loads_input_json(tmp_path: Path) -> None:
-    out = dla._handler({"manifest": _scope_result(tmp_path), "repo_root": str(tmp_path)})
+    out = dla._handler({"manifest": _scope_result(tmp_path), "repo_root": str(tmp_path), "workflow_script": _harvest(tmp_path)})
 
-    assert out["args"]["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
-    assert validate_workflow_input(out["args"]) == []
+    assert _args_of(out)["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
+    assert validate_workflow_input(_args_of(out)) == []
 
 
 def test_run_id_alone_loads_that_runs_input_json(tmp_path: Path) -> None:
     _scope_result(tmp_path)
-    out = dla._handler({"run_id": RUN_ID, "repo_root": str(tmp_path)})
+    out = dla._handler({"run_id": RUN_ID, "repo_root": str(tmp_path), "workflow_script": _harvest(tmp_path)})
 
-    assert out["args"]["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
+    assert _args_of(out)["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
 
 
 @pytest.mark.parametrize("bad", [{"run_id": RUN_ID}, {"run_id": RUN_ID, "batches": []}, {}])

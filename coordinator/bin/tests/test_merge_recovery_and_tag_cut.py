@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 from pathlib import Path
 
@@ -316,6 +317,13 @@ def test_ok_verdict_still_runs_recovery_dance(tmp_path: Path, monkeypatch, capsy
     assert "refs/heads/work/testhost/2026-08-07" in _git(
         ["ls-remote", "--heads", "origin"], cwd=work
     ).stdout
+
+
+def test_default_recovery_branch_is_owner_host_date(monkeypatch) -> None:
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
+    monkeypatch.setattr(_mod.socket, "gethostname", lambda: "Box1")
+    name = _mod._default_branch_name()
+    assert re.fullmatch(r"alice/box1/\d{4}-\d{2}-\d{2}", name)
 
 
 def test_cut_tag_tags_fetched_tip_when_tracking_ref_is_stale(tmp_path: Path) -> None:

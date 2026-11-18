@@ -385,3 +385,35 @@ def test_stage_reply_schema_carries_every_key_the_stage_ops_reply_with() -> None
     for mod in (ask_stage, ask_gate):
         if '"twin_path"' in inspect.getsource(mod):
             assert "twin_path" in props, f"{mod.__name__} replies with twin_path; the stage reply schema drops it"
+
+
+#: Verbatim first-time dispatch.ask_stage reply that run ask-20261114T133823-7a3cdc's relay refused
+#: (Machine-b, 2026-11-16): a family-routed stage carries `family_routes`, never `already_staged`.
+_FRESH_FAMILY_ROUTED_REPLY = {
+    "manifest_handle": {
+        "path": "state/warp/ask-20261114T133823-7a3cdc/manifest.json",
+        "sha256": "14204d22952560db2a20f0db14f3b4c81a48e2f07fc49774d9258c43b45bf6e9",
+        "bytes": 6160,
+    },
+    "family_routes": {"LR1-2": "agy", "LR2-2": "agy", "LR3-3": "agy", "EM1": "agy"},
+    "twin_path": "scratch/warp/ask-20261114T133823-7a3cdc.staged-"
+    "14204d22952560db2a20f0db14f3b4c81a48e2f07fc49774d9258c43b45bf6e9.workflow.mjs",
+}
+
+
+def test_stage_reply_schema_relays_a_fresh_and_an_already_staged_family_routed_reply_whole() -> None:
+    jsonschema.validate(_FRESH_FAMILY_ROUTED_REPLY, rs.STAGE_REPLY_SCHEMA)
+    jsonschema.validate({**_FRESH_FAMILY_ROUTED_REPLY, "already_staged": True}, rs.STAGE_REPLY_SCHEMA)
+    jsonschema.validate(
+        {**_FRESH_FAMILY_ROUTED_REPLY, "warnings": ["w"], "interpreter_pin_defect": "d"}, rs.STAGE_REPLY_SCHEMA
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**_FRESH_FAMILY_ROUTED_REPLY, "family_routes": {"C1": 1}}, rs.STAGE_REPLY_SCHEMA)
+
+
+def test_stage_reply_schema_names_every_key_the_family_report_emits() -> None:
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    report = ask_stage._family_routing_report("agy", {"C1": "claude"})
+    report.update(ask_stage._family_routing_report("agy", {"C1": "agy"}))
+    assert set(report) <= set(rs.STAGE_REPLY_SCHEMA["properties"]), set(report) - set(rs.STAGE_REPLY_SCHEMA["properties"])

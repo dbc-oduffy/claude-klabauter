@@ -13,6 +13,12 @@ written, keeps the memo's payload reachable as a blob even after every
 branch/commit that once carried it is gone or garbage-collected -- `git gc`
 never reaps an object a live ref still points at, loose or packed.
 
+Pin: `PIN_REF_PREFIX + <delivery commit sha>` points at the COMMIT itself, so
+the delivery is reachable until the sweep pushes it. It lives outside
+`ANCHOR_REF_PREFIX`, so `anchor_names` never parses it. `retire_pin` and
+`retire_anchor` delete loose refs only and return False for a ref still
+packed.
+
 Negative-spec:
     - `write_anchor` never raises on a lost CAS race and never retries --
       the caller decides whether to retry, this module only reports. It
@@ -52,6 +58,8 @@ from coordinator_core.git.git_objects import (
 )
 
 ANCHOR_REF_PREFIX = "refs/coordinator/inbox/"
+
+PIN_REF_PREFIX = "refs/coordinator/inbox-pin/"
 
 CORPUS_ROOT_RELDIRS = ("state/cross-repo", "cross-repo")
 
@@ -127,6 +135,86 @@ def write_anchor(
             return blob_sha
         return None
     return blob_sha
+
+
+def _read_ref(common_dir: Path, ref: str) -> Optional[str]:
+    value = _read_loose_ref_value(common_dir, ref)
+    if value is None:
+        value = read_packed_ref(common_dir, ref)
+    return value
+
+
+def _delete_loose_ref(common_dir: Path, ref: str) -> bool:
+    """CAS-delete a loose ref under `<ref>.lock`. Absent everywhere is True; a ref
+    that is (also) packed stays live after a loose unlink, so that is False."""
+    from coordinator_core import dispatch_abandon
+
+    if dispatch_abandon.is_abandoned():
+        return False
+    loose = _read_loose_ref_value(common_dir, ref)
+    if read_packed_ref(common_dir, ref) is not None:
+        return False
+    if loose is None:
+        return True
+    ref_path = common_dir / ref
+    lock_path = common_dir / (ref + ".lock")
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except OSError:
+        return False
+    try:
+        os.close(fd)
+        if _read_loose_ref_value(common_dir, ref) != loose:
+            return False
+        try:
+            ref_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+        return True
+    finally:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
+
+def write_pin(common_dir: Union[str, Path], commit_sha: str) -> bool:
+    """Pin the delivery commit itself: create `PIN_REF_PREFIX + commit_sha` at
+    the commit sha. False on an invalid sha or a genuinely lost CAS; a lost CAS
+    whose re-read already equals the sha is success."""
+    if not _valid_commit_sha(commit_sha):
+        return False
+    common_dir = Path(common_dir)
+    ref = PIN_REF_PREFIX + commit_sha
+    if not cas_ref(common_dir, ref, _read_ref(common_dir, ref), commit_sha):
+        return _read_ref(common_dir, ref) == commit_sha
+    return True
+
+
+def read_pin(common_dir: Union[str, Path], commit_sha: str) -> Optional[str]:
+    if not _valid_commit_sha(commit_sha):
+        return None
+    return _read_ref(Path(common_dir), PIN_REF_PREFIX + commit_sha)
+
+
+def retire_pin(common_dir: Union[str, Path], commit_sha: str) -> bool:
+    """Delete the pin's loose ref; absent is True, packed-only is False."""
+    if not _valid_commit_sha(commit_sha):
+        return False
+    return _delete_loose_ref(Path(common_dir), PIN_REF_PREFIX + commit_sha)
+
+
+def retire_anchor(
+    common_dir: Union[str, Path], filename: str, commit_sha: str
+) -> bool:
+    """Delete one anchor's loose ref; absent is True, packed-only is False."""
+    if not _valid_ref_component(filename) or not _valid_commit_sha(commit_sha):
+        return False
+    return _delete_loose_ref(
+        Path(common_dir), ANCHOR_REF_PREFIX + filename + "/" + commit_sha
+    )
 
 
 def anchor_names(common_dir: Union[str, Path]) -> List[Tuple[str, str, str]]:

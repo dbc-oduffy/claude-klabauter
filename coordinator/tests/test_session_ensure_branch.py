@@ -58,6 +58,8 @@ def sandbox_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _run(["git", "push", "-q", "-u", "origin", "master"], str(work))
     _run(["git", "checkout", "-q", "-b", "main"], str(work))
     _run(["git", "push", "-q", "-u", "origin", "main"], str(work))
+    monkeypatch.setenv("COORDINATOR_BRANCH_OWNER", "alice")
+    monkeypatch.setenv("COORDINATOR_MACHINE", "testmachine")
     monkeypatch.chdir(work)
     return work
 
@@ -72,8 +74,8 @@ def test_on_main_zero_ahead_cuts_daily_branch(sandbox_repo) -> None:
         env=dict(os.environ), stderr=sys.stderr,
     )
     assert res.result == "FRESH-CUT"
-    assert res.new_branch == "work/testmachine/2026-07-21"
-    assert "work/testmachine/2026-07-21" in _branches(sandbox_repo)
+    assert res.new_branch == "alice/testmachine/2026-07-21"
+    assert "alice/testmachine/2026-07-21" in _branches(sandbox_repo)
 
 
 def test_parseable_span_branch_zero_ahead_is_noop(sandbox_repo) -> None:
@@ -82,7 +84,7 @@ def test_parseable_span_branch_zero_ahead_is_noop(sandbox_repo) -> None:
         env=dict(os.environ), stderr=sys.stderr,
     )
     res = seb.session_ensure_branch(
-        "testmachine", "2026-07-21", "work/testmachine/2026-07-21", "no", "0",
+        "testmachine", "2026-07-21", "alice/testmachine/2026-07-21", "no", "0",
         env=dict(os.environ), stderr=sys.stderr,
     )
     assert res.result == ""
@@ -100,7 +102,7 @@ def test_detached_head_collision_safe_suffix(sandbox_repo) -> None:
         env=dict(os.environ), stderr=sys.stderr,
     )
     assert res.result == "FRESH-CUT"
-    assert res.new_branch == "work/testmachine/2026-07-21-2"
+    assert res.new_branch == "alice/testmachine/2026-07-21-2"
 
 
 def test_nonspan_branch_with_commits_ahead_is_noop(sandbox_repo) -> None:
@@ -123,7 +125,7 @@ def test_nonspan_branch_zero_ahead_cuts_daily_branch(sandbox_repo) -> None:
         env=dict(os.environ), stderr=sys.stderr,
     )
     assert res.result == "FRESH-CUT"
-    assert res.new_branch == "work/testmachine/2026-07-21"
+    assert res.new_branch == "alice/testmachine/2026-07-21"
 
 
 class _FakeVerdict:
@@ -146,7 +148,7 @@ def test_refused_verdict_blocks_cut_and_leaves_branch_untouched(sandbox_repo, mo
     assert res.result == "REFUSED-LIVE-PEERS"
     assert res.new_branch == ""
     assert _branches(sandbox_repo) == before
-    assert "work/testmachine/2026-07-21" not in _branches(sandbox_repo)
+    assert "alice/testmachine/2026-07-21" not in _branches(sandbox_repo)
 
 
 def test_unknown_verdict_treated_same_as_refused(sandbox_repo, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,8 +178,8 @@ def test_ok_verdict_cuts_as_before(sandbox_repo, monkeypatch: pytest.MonkeyPatch
         env=dict(os.environ), stderr=sys.stderr,
     )
     assert res.result == "FRESH-CUT"
-    assert res.new_branch == "work/testmachine/2026-07-21"
-    assert "work/testmachine/2026-07-21" in _branches(sandbox_repo)
+    assert res.new_branch == "alice/testmachine/2026-07-21"
+    assert "alice/testmachine/2026-07-21" in _branches(sandbox_repo)
 
 
 def _commit(work, name: str) -> None:
@@ -192,10 +194,10 @@ def _sha(work, rev: str) -> str:
 
 def test_boot_advances_a_day_branch_that_main_has_moved_past(sandbox_repo) -> None:
     work = sandbox_repo
-    _run(["git", "checkout", "-q", "-b", "work/testmachine/2026-07-21"], str(work))
+    _run(["git", "checkout", "-q", "-b", "alice/testmachine/2026-07-21"], str(work))
     _commit(work, "on-day-branch.txt")
     _run(["git", "checkout", "-q", "main"], str(work))
-    _run(["git", "merge", "-q", "--ff-only", "work/testmachine/2026-07-21"], str(work))
+    _run(["git", "merge", "-q", "--ff-only", "alice/testmachine/2026-07-21"], str(work))
     _commit(work, "on-main-after-merge.txt")
 
     head_before = _sha(work, "HEAD")
@@ -205,15 +207,15 @@ def test_boot_advances_a_day_branch_that_main_has_moved_past(sandbox_repo) -> No
     )
 
     assert res.result == seb.ADVANCED_TO_HEAD
-    assert res.new_branch == "work/testmachine/2026-07-21"
-    assert _current_branch(work) == "work/testmachine/2026-07-21"
+    assert res.new_branch == "alice/testmachine/2026-07-21"
+    assert _current_branch(work) == "alice/testmachine/2026-07-21"
     assert _sha(work, "HEAD") == head_before
-    assert _sha(work, "work/testmachine/2026-07-21") == head_before
+    assert _sha(work, "alice/testmachine/2026-07-21") == head_before
 
 
 def test_boot_still_refuses_a_day_branch_carrying_commits_head_lacks(sandbox_repo) -> None:
     work = sandbox_repo
-    _run(["git", "checkout", "-q", "-b", "work/testmachine/2026-07-21"], str(work))
+    _run(["git", "checkout", "-q", "-b", "alice/testmachine/2026-07-21"], str(work))
     _commit(work, "unmerged.txt")
     day_sha = _sha(work, "HEAD")
     _run(["git", "checkout", "-q", "main"], str(work))
@@ -228,7 +230,7 @@ def test_boot_still_refuses_a_day_branch_carrying_commits_head_lacks(sandbox_rep
     assert res.result == "REFUSED-LIVE-PEERS"
     assert _current_branch(work) == "main"
     assert _sha(work, "HEAD") == head_before
-    assert _sha(work, "work/testmachine/2026-07-21") == day_sha
+    assert _sha(work, "alice/testmachine/2026-07-21") == day_sha
 
 
 def test_boot_still_adopts_when_head_is_already_at_the_branch_tip(sandbox_repo) -> None:
@@ -236,7 +238,7 @@ def test_boot_still_adopts_when_head_is_already_at_the_branch_tip(sandbox_repo) 
     new one -- the repair must not swallow the every-boot routine case.
     """
     work = sandbox_repo
-    _run(["git", "branch", "work/testmachine/2026-07-21"], str(work))
+    _run(["git", "branch", "alice/testmachine/2026-07-21"], str(work))
     res = seb.session_ensure_branch(
         "testmachine", "2026-07-21", "main", "no", "0",
         env=dict(os.environ), stderr=sys.stderr, caller="boot",

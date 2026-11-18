@@ -37,7 +37,38 @@ def _resolve_run_op_main():
     return run_op_main
 
 
+_USAGE = """\
+Usage: install-claude-author-wrapper.py [OPTIONS]
+
+Installs the claude-author wrapper onto ${CLAUDE_HOME:-$HOME}/.local/bin/claude-author.
+On Windows it also renders the claude-author.cmd and claude-author.ps1 launchers
+(the .ps1 with a UTF-8 BOM) beside it.
+
+Options:
+  --wrapper-src <path>  Wrapper source (default: the sibling claude-author.py)
+  --check-only          Validate without writing any file
+  --no-smoke            Windows: skip the post-render launcher smoke check
+  -h, --help            Show this help and exit
+"""
+
+
+def _render_windows_launchers(argv: "list[str]") -> int:
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen-claude-author-launcher.py")
+    spec = importlib.util.spec_from_file_location("_gen_claude_author_launcher", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    forwarded = [a for a in argv if a in ("--check-only", "--no-smoke")]
+    return mod.main(forwarded)
+
+
 def main(argv: "list[str] | None" = None) -> int:
+    argv = (sys.argv[1:] if argv is None else argv)
+    if "-h" in argv or "--help" in argv:
+        print(_USAGE, end="")
+        return 0
+
     try:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
@@ -50,7 +81,6 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         return 1
 
-    argv = (sys.argv[1:] if argv is None else argv)
     if not any(a == "--wrapper-src" or a.startswith("--wrapper-src=") for a in argv):
         argv = argv + ["--wrapper-src", _default_wrapper_src()]
 
@@ -63,6 +93,9 @@ def main(argv: "list[str] | None" = None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    if code == 0 and os.name == "nt":
+        return _render_windows_launchers(argv)
 
     return code
 

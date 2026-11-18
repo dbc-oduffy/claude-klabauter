@@ -2044,7 +2044,7 @@ class TestRepoFlagScopeGate(unittest.TestCase):
             return mock_proc
 
         with unittest.mock.patch("subprocess.run", side_effect=_capture):
-            _mod.cc_invoke("memo.list", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
+            _mod.cc_invoke("memo.list", {}, "/the/repo", _engine_root="/fake/mr")
 
         cmd = _invoke_argv(captured)
         self.assertNotIn("--repo", cmd)
@@ -2059,7 +2059,7 @@ class TestRepoFlagScopeGate(unittest.TestCase):
             return mock_proc
 
         with unittest.mock.patch("subprocess.run", side_effect=_capture):
-            _mod.cc_invoke("queue.append", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
+            _mod.cc_invoke("queue.append", {}, "/the/repo", _engine_root="/fake/mr")
 
         cmd = _invoke_argv(captured)
         self.assertIn("--repo", cmd)
@@ -2078,7 +2078,7 @@ class TestRepoFlagScopeGate(unittest.TestCase):
             return mock_proc
 
         with unittest.mock.patch("subprocess.run", side_effect=_capture):
-            _mod.cc_invoke_bare("memo.list", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
+            _mod.cc_invoke_bare("memo.list", {}, "/the/repo", _engine_root="/fake/mr")
 
         cmd = _invoke_argv(captured)
         self.assertNotIn("--repo", cmd)
@@ -2096,7 +2096,7 @@ class TestRepoFlagScopeGate(unittest.TestCase):
             return mock_proc
 
         with unittest.mock.patch("subprocess.run", side_effect=_capture):
-            _mod.cc_invoke_bare("queue.append", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
+            _mod.cc_invoke_bare("queue.append", {}, "/the/repo", _engine_root="/fake/mr")
 
         cmd = _invoke_argv(captured)
         self.assertIn("--repo", cmd)
@@ -2121,7 +2121,7 @@ class TestRepoFlagScopeGate(unittest.TestCase):
             return mock_proc
 
         with unittest.mock.patch("subprocess.run", side_effect=_capture):
-            _mod.cc_invoke("workflow.scaffold", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
+            _mod.cc_invoke("workflow.scaffold", {}, "/the/repo", _engine_root="/fake/mr")
 
         cmd = _invoke_argv(captured)
         self.assertNotIn("--repo", cmd)
@@ -2832,7 +2832,7 @@ class TestDiagnosticsProbesEndToEnd(unittest.TestCase):
         if engine_root is None:
             pytest.skip("no stamped engine on this box — a real engine child is unreachable")
         with unittest.mock.patch.object(_mod, "_op_timeout_ceiling", return_value=120):
-            return _mod.cc_invoke(op, {}, str(_REPO_ROOT), _claude_klabauter_root=engine_root)
+            return _mod.cc_invoke(op, {}, str(_REPO_ROOT), _engine_root=engine_root)
 
     @pytest.mark.spawns_process
     def test_always_succeeds_returns_its_result(self) -> None:

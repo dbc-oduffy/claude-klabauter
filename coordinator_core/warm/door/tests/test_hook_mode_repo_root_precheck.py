@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -103,7 +104,9 @@ def _compiler() -> str:
 
 @pytest.fixture(scope="module")
 def selftest(tmp_path_factory) -> Path:
-    out = tmp_path_factory.mktemp("precheck-selftest") / ("selftest.exe" if os.name == "nt" else "selftest")
+    if os.name == "nt":
+        pytest.skip("door_core_selftest.c is POSIX-only (unistd.h, mkdtemp)")
+    out = tmp_path_factory.mktemp("precheck-selftest") / "selftest"
     subprocess.run(
         [_compiler(), "-O1", "-std=c11", "-o", str(out),
          str(_DOOR_DIR / "door_core_selftest.c"), str(_DOOR_DIR / "door_core.c")],
@@ -414,12 +417,13 @@ def test_a_wedged_engine_is_bounded_by_the_hook_deadline_and_still_yields_the_re
     assert "did not run" in json.dumps(body)
 
 
-def _load_setup():
+def _load_setup(monkeypatch):
     import importlib.util
 
     root = Path(__file__).resolve().parents[4]
     spec = importlib.util.spec_from_file_location("_setup_under_test", root / "scripts" / "setup.py")
     mod = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, mod)
     spec.loader.exec_module(mod)
     return mod
 
@@ -431,5 +435,5 @@ def test_state_dir_pointer_follows_the_directory_that_exists(tmp_path, monkeypat
     own = tmp_path / ".renamed-checkout" / "state"
     legacy = tmp_path / ".project-rag" / "state"
     (legacy if legacy_only else own).mkdir(parents=True)
-    pointer = _load_setup().write_rag_state_dir_pointer(tmp_path / "renamed-checkout", tmp_path / "sh")
+    pointer = _load_setup(monkeypatch).write_rag_state_dir_pointer(tmp_path / "renamed-checkout", tmp_path / "sh")
     assert pointer.read_text(encoding="utf-8").strip() == str(legacy if expect_legacy else own)

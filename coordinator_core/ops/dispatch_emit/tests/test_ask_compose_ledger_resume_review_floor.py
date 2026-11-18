@@ -101,6 +101,12 @@ def _run(script: str, *, manifest=_MANIFEST, resume_phases=None, replies=None) -
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+# A test leg that ran and passed: the zero-run verify (`tests_not_run`) must not preempt the floor under test.
+_GREEN_REVERIFY = {
+    "edited": [], "failing": [], "failing_detail": [], "reverted": [], "status_before": "pass", "status_after": "pass",
+}
+
+
 def _prep(product_files: int) -> dict:
     return {
         "prep": {
@@ -111,15 +117,19 @@ def _prep(product_files: int) -> dict:
     }
 
 
-def _resumed(script: str, *, prep_reply: dict, **kw) -> dict:
+def _resumed(script: str, *, prep_reply: dict, replies_extra: dict | None = None, **kw) -> dict:
     """A ledger resume that dispatches the docs-only row C2 and whose review wave yields `prep_reply`."""
-    replies = {"work:C2": "DONE: C2 wrote docs", "review:coordinator:code-reviewer": prep_reply}
+    replies = {
+        "work:C2": "DONE: C2 wrote docs", "review:coordinator:code-reviewer": prep_reply,
+        "review:coordinator:test-runner": _GREEN_REVERIFY, **(replies_extra or {}),
+    }
     return _run(script, replies=replies, **kw)
 
 
 @pytest.fixture(autouse=True)
 def _unlanded_c2(monkeypatch):
     monkeypatch.setitem(_RESUME, "unlanded", ["C2"])
+    monkeypatch.delitem(_RESUME, "since_sha", raising=False)
 
 
 def test_zero_verdicts_over_landed_code_halts_review_floor_and_never_commits(monkeypatch):
@@ -154,6 +164,48 @@ def test_a_manifest_owing_no_code_review_is_not_floored(monkeypatch):
     out = _resumed(_script(monkeypatch), prep_reply=_prep(1), manifest=docs_only)
     res = out["result"]
     assert (res["halted_by"] or {}).get("halted") != HALT_REVIEW_FLOOR, res["halted_by"]
+
+
+_SINCE = "a" * 40
+
+
+def _no_delta_resume(monkeypatch, changed, *, prep_reply=None):
+    monkeypatch.setitem(_RESUME, "since_sha", _SINCE)
+    out = _resumed(
+        _script(monkeypatch), prep_reply=prep_reply or _prep(0),
+        replies_extra={"first-halt-changed": changed},
+    )
+    return out
+
+
+def test_resume_whose_code_paths_all_lack_a_delta_since_the_first_halt_reports_not_done_instead_of_halting(monkeypatch):
+    out = _no_delta_resume(monkeypatch, {"changed": ["docs/unrelated.md"]})
+    res = out["result"]
+    assert (res["halted_by"] or {}).get("halted") != HALT_REVIEW_FLOOR, res["halted_by"]
+    item = next(i for i in res["ledger"]["items"] if i["id"] == "R1")
+    assert item["status"] == "not_met"
+    assert _LANDED_CODE in item["remaining"][0]
+    leg = next(c for c in out["calls"] if c["label"] == "first-halt-changed")
+    assert _SINCE in leg["prompt"] and _LANDED_CODE in leg["prompt"]
+
+
+def test_resume_with_a_delta_on_a_declared_code_path_and_no_verdicts_still_halts(monkeypatch):
+    out = _no_delta_resume(monkeypatch, {"changed": [_LANDED_CODE]})
+    res = out["result"]
+    assert res["halted_by"]["halted"] == HALT_REVIEW_FLOOR, res["halted_by"]
+    assert res["commit"] is None
+
+
+@pytest.mark.parametrize("reply", [{}, {"changed": "pkg/landed_c1.py"}, None])
+def test_resume_whose_delta_probe_is_unanswered_still_halts(monkeypatch, reply):
+    out = _no_delta_resume(monkeypatch, reply)
+    assert out["result"]["halted_by"]["halted"] == HALT_REVIEW_FLOOR
+
+
+def test_resume_without_a_since_sha_never_runs_the_probe_and_still_halts(monkeypatch):
+    out = _resumed(_script(monkeypatch), prep_reply=_prep(0))
+    assert "first-halt-changed" not in [c["label"] for c in out["calls"]]
+    assert out["result"]["halted_by"]["halted"] == HALT_REVIEW_FLOOR
 
 
 # A prep that counts product files off the resumed run's base diff reports 0 for docs-only remaining legs, and the

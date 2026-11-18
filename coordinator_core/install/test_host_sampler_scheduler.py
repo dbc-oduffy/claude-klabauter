@@ -59,6 +59,21 @@ class TestRegisterHostSamplerTask:
         assert "cmd /c" not in xml
         assert fake_py in xml
 
+    def test_task_xml_command_is_pythonw_sibling_when_present(self, tmp_path):
+        py = tmp_path / "python.exe"
+        pyw = tmp_path / "pythonw.exe"
+        py.write_bytes(b"")
+        pyw.write_bytes(b"")
+        xml = hss._task_xml(str(py), tmp_path)
+        assert f"<Command>{pyw}</Command>" in xml
+        assert f"<Command>{py}</Command>" not in xml
+
+    def test_task_xml_keeps_python_exe_when_no_pythonw_sibling(self, tmp_path):
+        py = tmp_path / "python.exe"
+        py.write_bytes(b"")
+        xml = hss._task_xml(str(py), tmp_path)
+        assert f"<Command>{py}</Command>" in xml
+
     def test_schtasks_missing_degrades_to_advisory_false(self, tmp_path):
         with mock.patch.object(hss, "_IS_WINDOWS", True):
             with mock.patch("subprocess.run", side_effect=OSError("not found")):

@@ -45,11 +45,25 @@ def test_halted_marker_makes_the_run_not_live_and_names_the_fresh_refire(tmp_pat
     assert halted_run.revised_halt(dir_)
 
 
-def test_a_resumed_marker_is_left_alone(tmp_path: Path) -> None:
+def test_a_revise_on_a_resumed_marker_is_recorded_unread_and_names_the_refire(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     dir_ = record_dir(root, RUN)
     halted_run.write_halt_marker(dir_, halted="stalled", sizing_rel=REL)
     halted_run.mark_resumed(dir_)
+    assert halted_run.revised_halt(dir_) is None
+    out = _revise(root)
+    assert halted_run.revised_halt(dir_)
+    assert halted_run._read(dir_)["status"] == "resumed"
+    assert out["run_live"] is False
+    assert out["next"] == {"kind": "refire", "call": fire_command(REL)}
+    assert "never reads this revision" in out["note"]
+
+
+def test_a_finished_marker_is_left_alone(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    dir_ = record_dir(root, RUN)
+    halted_run.write_halt_marker(dir_, halted="stalled", sizing_rel=REL)
+    halted_run.mark_closed(dir_, "done", "2026-10-15T00:00:00Z")
     _revise(root)
     assert halted_run.revised_halt(dir_) is None
     assert halted_run.REVISED_AT_FIELD not in halted_run._read(dir_)

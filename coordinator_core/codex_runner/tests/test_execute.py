@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core._settings_home import settings_home
 from coordinator_core.codex_runner import codex_spawn_env, execute
 from coordinator_core.codex_runner.contract import RunRequest
 from typing import TYPE_CHECKING
@@ -110,17 +109,14 @@ def test_in_scope_file_change_is_ok(env) -> None:
     assert pids == [res.codex_pid]
 
 
-def test_spawn_form_is_workspace_write_in_shared_tree(env) -> None:
+def test_spawn_form_is_unrestricted_in_shared_tree(env) -> None:
     root, plan, argv_out, tmp_path, mp = env
     _jsonl(tmp_path, mp, [])
     res, _ = _run(root, plan, "C1", tmp_path)
     assert res.status == "ok"
     argv = json.loads(argv_out.read_text())
-    assert argv[:4] == ["exec", "--json", "--sandbox", "workspace-write"]
-    assert argv[4:6] == ["--add-dir", str(settings_home())]
-    from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv
-    grants = lock_and_gitdir_add_dir_argv(root)
-    assert argv[6:6 + len(grants)] == grants and argv.count("--add-dir") == 1 + len(grants) // 2
+    assert argv[:3] == ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox"]
+    assert "--sandbox" not in argv
     prompt = argv[-1]
     assert "Edit things" in prompt and "Make the edit." in prompt
     assert "- src/a.py" in prompt and "Write only these files" in prompt
@@ -245,24 +241,17 @@ def test_request_flag_admits_api_key_login_and_env(env) -> None:
     assert res.status == "ok" and seen.get("OPENAI_API_KEY") == "sk-x"
 
 
-def test_unelevated_unproven_root_runs_with_advisory(env) -> None:
+def test_unelevated_unproven_root_runs_without_a_sandbox_probe(env) -> None:
     from coordinator_core.codex_runner import sandbox_preflight as sp
     root, plan, argv_out, tmp_path, mp = env
     (tmp_path / "chome" / "config.toml").write_text('[windows]\nsandbox = "unelevated"\n', encoding="utf-8")
     mp.setattr(sp, "_is_windows", lambda: True)
     mp.setattr(codex_spawn_env, "check_pwsh_launchable", lambda env: None)
-    seen = {}
-
-    def fake_check(root_, **kw) -> str:
-        seen.update(kw)
-        return "advisory: warming"
-
-    mp.setattr(execute, "check_workspace_write", fake_check)
+    mp.setattr(sp, "check_workspace_write", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("probed")))
     _jsonl(tmp_path, mp, [str(root / "src" / "a.py")])
     res, pids = _run(root, plan, "C1", tmp_path)
     assert not (res.error or "").startswith("refused:") and pids
-    assert seen["codex_argv"] == [sys.executable, FAKE]
-    assert "advisory: warming" in (tmp_path / "run1" / "codex.stderr").read_text(encoding="utf-8")
+    assert not (root / sp.WARMUP_RELPATH).exists()
 
 
 def test_unelevated_proven_root_still_runs(env) -> None:

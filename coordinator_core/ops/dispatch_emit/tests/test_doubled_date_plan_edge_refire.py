@@ -30,10 +30,22 @@ def test_bind_plan_edge_writes_single_dated_edge(repo):  # noqa: F811
 
     (repo / ".git").mkdir(exist_ok=True)
     _put(repo, tshirt="S", route="spec-dispatch")
+    _plan(repo, rel=SINGLE)  # a flat plan makes the tree flat, so the flat edge is the layout's answer
     sizing = load_sizing(repo, REL)
     assert _bind_plan_edge(repo, sizing, REL, DOUBLED) == SINGLE
     assert sizing["plan"] == SINGLE
     assert yaml.safe_load((repo / REL).read_text(encoding="utf-8"))["plan"] == SINGLE
+
+
+def test_bind_plan_edge_in_an_empty_plans_tree_shards_by_month(repo):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit.ask_gate import _bind_plan_edge
+    from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import _put
+
+    (repo / ".git").mkdir(exist_ok=True)
+    _put(repo, tshirt="S", route="spec-dispatch")
+    sizing = load_sizing(repo, REL)
+    assert _bind_plan_edge(repo, sizing, REL, DOUBLED) == "docs/plans/2026-10/2026-10-30-kane-skull.md"
 
 
 def test_refire_resolves_doubled_edge_to_the_single_dated_plan(repo):  # noqa: F811

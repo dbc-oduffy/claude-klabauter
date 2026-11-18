@@ -1,5 +1,5 @@
 """Halted-record run-dirt and tree eviction: the live-run and review/touch-record write sources,
-the run-dirt withhold, and the plan that moves unimportable run-owned bytes into the record.
+the run-dirt withhold, and the plan that parks every run-owned unlanded write in the record.
 Imports no sibling ``halted_record_*`` module."""
 
 from __future__ import annotations
@@ -94,6 +94,9 @@ def _withhold_run_dirt(withheld: dict, written: list, changed: set, landed: set)
 #: ``withheld`` reason for a run-owned ``.py`` whose bytes were moved into the halted record because
 #: the tree would not import with them.
 EVICTED_NOT_IMPORTABLE = "evicted-not-importable"
+
+#: ``withheld`` reason for any other run-owned unlanded path whose bytes were moved into the halted record.
+EVICTED_PARKED = "evicted-parked"
 
 #: Withheld reasons that mark a path as not this run's: never judged for eviction, never reset.
 _NOT_RUN_OWNED = frozenset({"peer-held", "peer-claim-indeterminate", "sibling-claimed", "foreign-halted-withheld"})
@@ -190,10 +193,12 @@ def plan_tree_eviction(
     root: Path, record_dir_rel: str, run_written: list, changed: set, write_set: list,
     withheld: dict, paths: list, run_id: Optional[str] = None,
 ) -> Optional[TreeEviction]:
-    """Judge the run's own changed ``.py`` files and their write-set importers for importability, in
-    process. Each unimportable run-owned path is named in ``withheld`` as ``EVICTED_NOT_IMPORTABLE``,
-    and the record's ``evicted.json`` plus its blobs are appended to ``paths`` (in place). Call after
-    ``_withhold_run_dirt`` and before the nothing-to-commit return. None when nothing is evicted."""
+    """Park every run-owned, changed, unlanded path (any extension) in the halted record. A ``.py``
+    that ``halt_tree_check.broken_paths`` judges unimportable (with its write-set importers) is named
+    in ``withheld`` as ``EVICTED_NOT_IMPORTABLE``; every other parked path as ``EVICTED_PARKED``. Paths
+    under the record dir and peer-owned paths (``_NOT_RUN_OWNED``) are never parked. The record's
+    ``evicted.json`` plus its blobs are appended to ``paths`` (in place). Call after
+    ``_withhold_run_dirt`` and before the nothing-to-commit return. None when nothing is parked."""
     from coordinator_core.authoring_leaks import HeadView
     from coordinator_core.ops.dispatch_emit import halt_tree_check, halt_tree_evict, kept_work
 
@@ -202,13 +207,15 @@ def plan_tree_eviction(
     landed = set(paths)
     own = [
         p for p in run_written
-        if p.endswith(".py") and p in changed and p not in landed and withheld.get(p) not in _NOT_RUN_OWNED
+        if p in changed and p not in landed and withheld.get(p) not in _NOT_RUN_OWNED
+        and not p.startswith(record_dir_rel + "/")
     ]
     if not own:
         return None
-    broken = halt_tree_check.broken_paths(root, own, write_set)
-    targets = [p for p in own if p in broken]
-    unowned = {p: why for p, why in broken.items() if p not in targets}
+    own_py = [p for p in own if p.endswith(".py")]
+    broken = halt_tree_check.broken_paths(root, own_py, write_set) if own_py else {}
+    targets = own
+    unowned: dict = {}
     prints: dict = {}
     for p in targets:
         try:
@@ -221,7 +228,7 @@ def plan_tree_eviction(
     head_blobs = {p: head.head_bytes(p) for p in prints}
     origin = {p: withheld[p] for p in prints if p in withheld}
     for p in prints:
-        withheld[p] = EVICTED_NOT_IMPORTABLE
+        withheld[p] = EVICTED_NOT_IMPORTABLE if p in broken else EVICTED_PARKED
     appended: list = []
     for rel in (f"{record_dir_rel}/{halt_tree_evict.EVICTED_FILE}",
                 *(f"{record_dir_rel}/{halt_tree_evict.BLOBS_DIR}/{sha}" for sha in prints.values())):

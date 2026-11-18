@@ -30,6 +30,7 @@ if __package__ in (None, ""):
 
 from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.git.run import run_git
+from coordinator_core.temp_layout import mkdtemp_in
 from coordinator_core.win_portability import no_console_creationflags
 
 ARMS = ("base", "hook")
@@ -195,7 +196,7 @@ def measure(arm: str, repo: Path) -> dict:
 def run_arm(arm: str, parent: Path) -> int:
     declare_benchmark_origin()
     parent.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="landing-render-", dir=str(parent)))
+    work = mkdtemp_in("landing-render-", parent)
     try:
         with fixture_settings_home(work):
             repo, _rel = build_fixture(work)

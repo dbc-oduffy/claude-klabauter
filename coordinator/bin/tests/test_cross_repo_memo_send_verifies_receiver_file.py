@@ -47,7 +47,41 @@ def test_send_absent_file_with_anchor_reports_not_materialized(monkeypatch, tmp_
     assert "Receiver-side:" not in out
     assert "not materialized" in out
     assert str(missing) in out
+    assert "memo.heal_inbox" in out
+    assert "/workday-start" in out
+    assert "sweep --apply" in out
+    assert "heal restores it from the anchor" not in out
     assert rc == 0
+
+
+def _sweep_raising(monkeypatch, mod, message):
+    def _raise(op, payload, sender_root, legacy):
+        raise RuntimeError(message)
+
+    monkeypatch.setitem(sys.modules, "cc_invoke", types.SimpleNamespace(route_mutation=_raise))
+    monkeypatch.setattr(mod, "_current_repo_root", lambda: str(_BIN_DIR.parent.parent))
+
+
+def test_sweep_method_not_found_names_stale_engine(monkeypatch, capsys):
+    mod = _load_cli_module()
+    _sweep_raising(monkeypatch, mod, "op error: code=-32601 message=\"Method not found: 'memo.sweep_ref_only'\"")
+
+    rc = mod._cmd_sweep(argparse.Namespace(apply=True, repo=["r"], limit=None))
+    err = capsys.readouterr().err
+
+    assert rc == 1
+    assert "predates `memo.sweep_ref_only`" in err
+
+
+def test_sweep_other_failure_gets_no_stale_engine_hint(monkeypatch, capsys):
+    mod = _load_cli_module()
+    _sweep_raising(monkeypatch, mod, "route_mutation: refused (exit_code=1)")
+
+    rc = mod._cmd_sweep(argparse.Namespace(apply=True, repo=["r"], limit=None))
+    err = capsys.readouterr().err
+
+    assert rc == 1
+    assert "predates" not in err
 
 
 def test_send_absent_file_without_anchor_reports_undelivered(monkeypatch, tmp_path, capsys):
@@ -60,6 +94,7 @@ def test_send_absent_file_without_anchor_reports_undelivered(monkeypatch, tmp_pa
 
     assert "Receiver-side:" not in out
     assert "undelivered" in out
+    assert "memo.heal_inbox" not in out
     assert rc == 1
 
 

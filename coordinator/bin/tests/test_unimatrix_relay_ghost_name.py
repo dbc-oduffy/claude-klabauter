@@ -26,13 +26,22 @@ def _live_row(name, **extra):
     return {"pid": os.getpid(), "name": name, **extra}
 
 
-def test_live_roster_mirror_named_name_lets_the_inbox_open(relay, tmp_path, monkeypatch):
+def test_own_live_mirror_entry_lets_the_inbox_open(relay, tmp_path, monkeypatch):
     row = _live_row("group-em-ad", macSocketPath="/tmp/cc-socks/far.sock", unimatrixMirror=True,
                     messagingSocketPath="/tmp/cc-socks/cc-msg-abc.sock")
     _write(tmp_path, os.getpid(), row)
     monkeypatch.setattr(relay, "mirror_orphaned", lambda d: False)
-    assert relay.check_name_free("group-em-ad") == []
+    assert relay.check_name_free("group-em-ad", own_pid=os.getpid()) == []
     assert (tmp_path / f"{os.getpid()}.json").exists()
+
+
+def test_live_second_roster_mirror_still_refuses(relay, tmp_path, monkeypatch):
+    row = _live_row("group-em-ad", macSocketPath="/tmp/cc-socks/far.sock", unimatrixMirror=True,
+                    messagingSocketPath="/tmp/cc-socks/cc-msg-abc.sock")
+    _write(tmp_path, os.getpid(), row)
+    monkeypatch.setattr(relay, "mirror_orphaned", lambda d: False)
+    with pytest.raises(SystemExit, match="already mirrored by live relay"):
+        relay.check_name_free("group-em-ad", own_pid=os.getpid() + 1)
 
 
 def test_live_roster_mirror_without_mirror_flag_lets_the_inbox_open(relay, tmp_path, monkeypatch):

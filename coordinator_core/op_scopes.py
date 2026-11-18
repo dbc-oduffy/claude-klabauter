@@ -44,6 +44,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "ceremony.workstream_start":            "show_top",
     "ceremony.quick_wrap":                  "show_top",
     "ceremony.result":                      "show_top",
+    "ceremony.hand_land":                   "show_top",
     "workflow.fire":                         "common_dir",
     "engine_ask.submit":                     "common_dir",
     "workflow.fire_status":                  "common_dir",
@@ -171,6 +172,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.sessionstart_ensure_http_forwarder": "none",
     "hooks.guard_hook_generation_self_probe": "none",
     "hooks.session_start_guard_plane_check":  "none",
+    "hooks.session_start_resume_plugin_check": "none",
     "hooks.project_orientation":              "none",
     "hooks.pickup_autofire":                  "none",
     "hooks.mise_autofire":                    "none",
@@ -280,6 +282,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # test-only ops, and dispatch.emit is neither. Both its siblings above are
     # explicit for the same reason.
     "dispatch.emit":                         "none",
+    # dispatch.test_leg — MUTATING: writes one review-trail sidecar under the common dir.
+    "dispatch.test_leg":                     "common_dir",
     # strategic.generate — fleet-generic, MUTATING op (mirrors the cartography/
     # workflow target-resolution model): explicit REQUIRED `target_root` wire
     # param, any repo, NOT the caller's own dispatching tree. No repo-specific
@@ -387,6 +391,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "memo.check_addressee":                   "common_dir",
     "memo.send":                              "common_dir",
     "memo.reconcile_outbox":                  "common_dir",
+    "memo.sweep_ref_only":                    "common_dir",
     "memo.redeliver":                         "common_dir",
     # memo.check_deliveries — "common_dir", the scope its own handler docstring
     # already declares (`ops/fleet/memo_send.py :: _memo_check_deliveries`). It is a
@@ -899,6 +904,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "workflow.revise":                          "common_dir",
     # workflow.cancel — marks a warp run cancelled in the caller's own worktree's record dir and live-run index.
     "workflow.cancel":                          "common_dir",
+    # job.start / job.cancel — read and write only the settings-home job record plus the caller-recorded
+    # lock and staging paths; no repo state, so no worktree key ("none", as install.write_identity_file).
+    "job.start":                                "none",
+    "job.cancel":                               "none",
     # workflow.late_rows — reads the caller's worktree run ledger (verify_read stamps its marker); scope lets --repo supply repo_root.
     "workflow.late_rows":                       "common_dir",
     # workflow.pending_revisions / plan.claim_register_rows — read and claim register rows of the

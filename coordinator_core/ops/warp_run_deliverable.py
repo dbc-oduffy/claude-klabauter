@@ -351,30 +351,56 @@ def _stamp_epoch(value: object) -> Optional[float]:
     return parsed.timestamp()
 
 
-def _freshest_run_artifact_epoch(root: Path, run_id: str) -> Optional[float]:
-    """Newest mtime among the entries of the run's record dir and scratch run dir, plus the mtime of
-    each subdirectory there (a file added under it bumps it); `halted.json` and `run-stage.json` (the
-    stamp is read separately) excluded. A launcher that drives a child's stages leaves its writes
-    here while the child's own `run-stage.json` stays at `minted`. None when neither dir is
-    readable. Stat calls only."""
-    import os
+#: Depth and entry bounds of the artifact walk. The entry cap is shared by one `run_activity_epoch`
+#: call: the run's own dirs and every descendant candidate's.
+ACTIVITY_WALK_DEPTH = 3
+ACTIVITY_WALK_ENTRY_CAP = 2000
 
+
+def _freshest_run_artifact_epoch(
+    root: Path, run_id: str, now: Optional[float] = None, bound: float = MINTED_STALE_SECONDS,
+    budget: Optional[list] = None,
+) -> Optional[float]:
+    """Newest mtime among the entries of the run's record dir and scratch run dir, walked
+    `ACTIVITY_WALK_DEPTH` levels down; `halted.json` and `run-stage.json` at the record dir top (the
+    stamp is read separately) excluded. A launcher that drives a child's stages leaves its writes
+    here while the child's own `run-stage.json` stays at `minted`. With `now`, returns the first
+    mtime within `bound` of it. `budget` is a one-item list holding the entries still allowed to be
+    stat'ed (`ACTIVITY_WALK_ENTRY_CAP` when None); the walk stops at zero, and with `now` an
+    exhausted walk returns `now` (unseen entries are unknown, never quiet). None when nothing was
+    seen. Stat calls only."""
+    if budget is None:
+        budget = [ACTIVITY_WALK_ENTRY_CAP]
     newest: Optional[float] = None
+    skip = ("halted.json", "run-stage.json")
     for base in (record_dir(root, run_id), Path(root) / RUN_DIR_ROOT / run_id):
-        try:
-            with os.scandir(base) as entries:
-                for entry in entries:
-                    if entry.name in ("halted.json", "run-stage.json"):
-                        continue
-                    mtime = entry.stat().st_mtime
-                    if newest is None or mtime > newest:
-                        newest = mtime
-        except OSError:
-            continue
+        pending = [(base, 1)]
+        while pending:
+            directory, depth = pending.pop()
+            try:
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        if depth == 1 and entry.name in skip:
+                            continue
+                        if budget[0] <= 0:
+                            return newest if now is None else now
+                        budget[0] -= 1
+                        mtime = entry.stat(follow_symlinks=False).st_mtime
+                        if now is not None and now - mtime <= bound:
+                            return mtime
+                        if newest is None or mtime > newest:
+                            newest = mtime
+                        if depth < ACTIVITY_WALK_DEPTH and entry.is_dir(follow_symlinks=False):
+                            pending.append((Path(entry.path), depth + 1))
+            except OSError:
+                continue
     return newest
 
 
-def _own_activity_epoch(root: Path, run_id: str) -> Optional[float]:
+def _own_activity_epoch(
+    root: Path, run_id: str, now: Optional[float] = None, bound: float = MINTED_STALE_SECONDS,
+    budget: Optional[list] = None,
+) -> Optional[float]:
     """Later of a run's stage stamp (`last_activity_at`, else `started_at`) and its newest artifact
     (`_freshest_run_artifact_epoch`); None when neither exists."""
     from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
@@ -383,7 +409,9 @@ def _own_activity_epoch(root: Path, run_id: str) -> Optional[float]:
     seen = _stamp_epoch(stage.get("last_activity_at"))
     if seen is None:
         seen = _stamp_epoch(stage.get("started_at"))
-    artifact = _freshest_run_artifact_epoch(root, run_id)
+    if now is not None and seen is not None and now - seen <= bound:
+        return seen
+    artifact = _freshest_run_artifact_epoch(root, run_id, now, bound, budget)
     if artifact is not None and (seen is None or artifact > seen):
         seen = artifact
     return seen
@@ -415,33 +443,61 @@ def _descends_from(root: Path, run_id: str, ancestor: str, ancestor_sizing: str)
     return False
 
 
+def _recent_dir_names(base: Path, now: float, bound: float) -> set:
+    """Names of the subdirectories of `base` whose mtime is within `bound` of `now`; empty when unreadable."""
+    try:
+        with os.scandir(base) as entries:
+            return {e.name for e in entries if e.is_dir() and now - e.stat().st_mtime <= bound}
+    except OSError:
+        return set()
+
+
 def _descendant_activity_epoch(
-    root: Path, run_id: str, now: float, bound: float = MINTED_STALE_SECONDS,
+    root: Path, run_id: str, now: float, bound: float = MINTED_STALE_SECONDS, budget: Optional[list] = None,
 ) -> Optional[float]:
-    """Newest activity epoch among live descendant runs of `run_id` (`_descends_from`), None when no
-    descendant was active within `bound` seconds of `now`. A descendant that is halted or
-    landed does not count. Candidates are the `RECORD_DIR_ROOT` entries whose directory mtime falls
-    in the window (an atomic stage write or a new artifact bumps it), so the scan is one listing plus
-    reads for the few recent dirs; stat/read calls only."""
+    """First activity epoch within `bound` of `now` among live descendant runs of `run_id`
+    (`_descends_from`), None when no descendant was active within `bound` seconds of `now`. A descendant that is halted or
+    landed does not count. Candidates are the `RECORD_DIR_ROOT` or `RUN_DIR_ROOT` entries whose
+    directory mtime falls in the window (an atomic stage write or a new artifact bumps it), so the scan
+    is two listings plus reads for the few recent dirs; stat/read calls only."""
     ask_sizing = _lineage_sizing(root, run_id)
     newest: Optional[float] = None
-    try:
-        with os.scandir(Path(root) / RECORD_DIR_ROOT) as entries:
-            recent = [
-                e.name for e in entries
-                if e.name != run_id and e.is_dir() and now - e.stat().st_mtime <= bound
-            ]
-    except OSError:
-        return None
-    for name in recent:
+    recent = _recent_dir_names(Path(root) / RECORD_DIR_ROOT, now, bound) | _recent_dir_names(
+        Path(root) / RUN_DIR_ROOT, now, bound,
+    )
+    recent.discard(run_id)
+    for name in sorted(recent):
+        if budget is not None and budget[0] <= 0:
+            break
         if not safe_id(name) or not _descends_from(root, name, run_id, ask_sizing):
             continue
         if _halted(root, name) or _landed(root, name):
             continue
-        seen = _own_activity_epoch(root, name)
+        seen = _own_activity_epoch(root, name, now, bound, budget)
         if seen is not None and now - seen <= bound and (newest is None or seen > newest):
             newest = seen
+            break
     return newest
+
+
+def run_activity_epoch(
+    root: Path, run_id: str, now: float, bound: float = MINTED_STALE_SECONDS, *, own: bool = True,
+) -> Optional[float]:
+    """Epoch of the freshest activity of `run_id` or of a live descendant run: the stage stamp
+    (`last_activity_at`, else `started_at`), an artifact in its record or scratch dirs (a bounded
+    walk, `ACTIVITY_WALK_DEPTH` deep, `ACTIVITY_WALK_ENTRY_CAP` entries across the run and all its
+    descendant candidates), or a descendant's (`_descendant_activity_epoch`). Returns the first epoch
+    within `bound` of `now` when one exists, else the newest older one, None when the run has no
+    stamp and no artifact. `own=False` leaves the run's own stamp and artifacts out (a halted run's
+    halt writes are fresh by construction). A run token is never activity. Stat/read calls only."""
+    budget = [ACTIVITY_WALK_ENTRY_CAP]
+    mine = _own_activity_epoch(root, run_id, now, bound, budget) if own else None
+    if mine is not None and now - mine <= bound:
+        return mine
+    child = _descendant_activity_epoch(root, run_id, now, bound, budget)
+    if child is not None and (mine is None or child > mine):
+        return child
+    return mine
 
 
 def _stale_at_minted(root: Path, run_id: str, now: Optional[float] = None) -> bool:
@@ -458,8 +514,7 @@ def _stale_at(root: Path, run_id: str, stage_name: str, bound: float, now: Optio
     """True when the run's `run-stage.json` reads `stage_name` with its freshest activity older than
     `bound` seconds. Freshest activity is the later of the stage stamp (`last_activity_at`,
     else `started_at`), the newest artifact the launcher left in the run's record/scratch dirs
-    (`_freshest_run_artifact_epoch`), and, once those read stale, any live descendant run's activity
-    (`_descendant_activity_epoch`): an ask run driven through a child warp run stays at `minted`.
+    (`_freshest_run_artifact_epoch`), and any live descendant run's activity: `run_activity_epoch`.
     An absent or malformed stage record, any other stage, or no parseable stamp is not stale."""
     import time
 
@@ -468,19 +523,11 @@ def _stale_at(root: Path, run_id: str, stage_name: str, bound: float, now: Optio
     stage = read_run_stage(root, run_id)
     if not stage or stage.get("stage") != stage_name:
         return False
-    seen = _stamp_epoch(stage.get("last_activity_at"))
-    if seen is None:
-        seen = _stamp_epoch(stage.get("started_at"))
-    if seen is None:
+    if _stamp_epoch(stage.get("last_activity_at")) is None and _stamp_epoch(stage.get("started_at")) is None:
         return False
-    artifact = _freshest_run_artifact_epoch(root, run_id)
-    if artifact is not None and artifact > seen:
-        seen = artifact
     current = time.time() if now is None else now
-    if current - seen <= bound:
-        return False
-    child = _descendant_activity_epoch(root, run_id, current, bound)
-    return child is None or current - child > bound
+    seen = run_activity_epoch(root, run_id, current, bound)
+    return seen is None or current - seen > bound
 
 
 def _past_wall_timeout(root: Path, run_id: str, now: Optional[float] = None) -> Optional[float]:

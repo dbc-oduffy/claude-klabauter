@@ -9,8 +9,9 @@ the halt reason in the message. Candidates are named paths, never the dirty tree
 deletion is declared, a deletion git cannot see is dropped, and a path a live peer's claim holds
 is withheld and named. A ``ledger-check`` halt whose targeted-test check is ``pass``/``pass-on-retest``
 (``halt_review_passed.review_passed_chunks``) lands its review-passed chunks' product and test files path
-by path, after every peer, product and hunk-provenance gate; any other halt kind, and any other check,
-lands the record and run artifacts only and withholds chunk product as ``halt-record-only``. A ``review_blocked``/``failing_test`` halt whose every
+by path, after every peer, product and hunk-provenance gate; a ledger-check halt with any other check
+also lands a chunk whose every product path equals the print the run recorded (``print_matched_chunks``).
+Any other chunk product is withheld as ``halt-record-only``, its cause named per path under ``withheld_causes``. A ``review_blocked``/``failing_test`` halt whose every
 failing id is red at run_base lands its finished rows earlier, through ``dispatch.terminal_commit``
 (``terminal_commit_refusals._review_halt_commit_params``); any other halt waits for the resumed
 run's terminal commit. The reply's ``targeted_tests.check`` still reports a carried verdict.
@@ -27,8 +28,9 @@ a function that moved calls its siblings through its new module, so patch it the
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops._path_guard import contained_path, safe_id
@@ -44,6 +46,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_DEPENDENTS_UNSTARTED,
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
+    LEDGER_HALT_KIND,
     RECORD_DIR_ROOT,
     halted_naming_existing_plan,
     halted_record_message,
@@ -89,6 +92,46 @@ from coordinator_core.ops.dispatch_emit.halted_record_eviction import (  # noqa:
     plan_tree_eviction,
     record_touched_blobs,
 )
+
+
+def print_matched_chunks(
+    halted: Mapping[str, Any], finished: Iterable[str], owner: Mapping[str, str],
+    candidates: Iterable[str], matched: Iterable[str],
+) -> frozenset[str]:
+    """Return the finished, unstopped chunk ids of a ledger-check halt whose every candidate product
+    path (`owner` maps path to chunk id) is in `matched`, the paths whose bytes equal the print the
+    run recorded: the print stands in for the test verdict as proof the bytes are the run's own.
+    A chunk with no candidate path, or one unmatched, is left out. Pure: no I/O."""
+    if halted.get("halted") != LEDGER_HALT_KIND:
+        return frozenset()
+    stopped = frozenset(halted.get("stopped_rows") or ())
+    matched = frozenset(matched)
+    paths: dict[str, list[str]] = {}
+    for path in candidates:
+        if path in owner:
+            paths.setdefault(owner[path], []).append(path)
+    return frozenset(
+        c for c in frozenset(finished) - stopped if paths.get(c) and all(p in matched for p in paths[c])
+    )
+
+
+def withheld_cause(
+    halted: Mapping[str, Any], path: str, chunk: str, *, split: Iterable[str], unexecuted: Mapping[str, str],
+    matched: Iterable[str], mismatched: Iterable[str],
+) -> str:
+    """Name why a chunk's product `path` stays withheld at the ledger-check gate: the first of
+    `unexecuted` (its own reason), "stopped-row", "split-chunk" (a sibling path of its chunk is held,
+    or matches its print while the chunk does not), "print-mismatch", then "no-recorded-print"
+    (ledger-check halt) or "not-ledger-check-halt". Pure: no I/O."""
+    if path in unexecuted:
+        return unexecuted[path]
+    if chunk in (halted.get("stopped_rows") or ()):
+        return "stopped-row"
+    if chunk in split or path in matched:
+        return "split-chunk"
+    if path in mismatched:
+        return "print-mismatch"
+    return "no-recorded-print" if halted.get("halted") == LEDGER_HALT_KIND else "not-ledger-check-halt"
 
 
 def _split_run_state(paths: list, record_dir_rel: str, record_ignored: bool) -> tuple[list, list]:
@@ -205,7 +248,7 @@ def _commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) ->
     if not reply.get("error"):
         from coordinator_core.ops.dispatch_emit import run_push
 
-        reply["push"] = run_push.nudge_push(worktree_root, repo_root)
+        reply["push"] = run_push.nudge_push(worktree_root, repo_root, command_when_queued=True)
     return reply
 
 
@@ -379,7 +422,7 @@ def _reland_late_writes(
     second commit leaves the paths changed, so ``residue`` reports them.
     """
     from coordinator_core.ops.dispatch_emit.terminal_commit import _worktree_snapshot
-    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
+    from coordinator_core.warm.entry_seam import OpUnavailableError
 
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     fresh = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
@@ -424,7 +467,7 @@ def _reland_late_writes(
             if session_id is not None:
                 commit_params["session_id"] = session_id
             try:
-                second = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+                second = _commit_v2_retrying_ref_cas(worktree_root, repo_root, commit_params)
             except OpUnavailableError:
                 second = None
             if isinstance(second, dict) and not second.get("error") and not second.get("refused"):
@@ -432,6 +475,30 @@ def _reland_late_writes(
     again = _worktree_snapshot(worktree_root, list(fresh.paths()), [record_dir_rel, RECORD_DIR_ROOT], [])
     still = set(again.changed) if again is not None else set(snap.changed) - set(relanded)
     return fresh, still, relanded
+
+
+def _commit_v2_retrying_ref_cas(worktree_root: Path, repo_root: Path, commit_params: dict) -> object:
+    """``ceremony.commit_v2`` over ``commit_params``, re-called on the new HEAD when a peer commit wins
+    the ref CAS (``git.ref_cas_retry.retry_ref_moved``, bounded). A peer commit that touched one of the
+    named paths ends the loop with ``refused: ref-moved-overlap``. Raises ``OpUnavailableError``.
+    Trap: every call rebuilds from the then-current HEAD and the named paths; never reuse a prior tree."""
+    from coordinator_core.git import ref_cas_retry
+    from coordinator_core.warm.entry_seam import reentrant_dispatch
+
+    def _attempt() -> object:
+        return reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+
+    def _cas_lost(reply: object) -> bool:
+        return (
+            isinstance(reply, dict) and not reply.get("committed") and ref_cas_retry.is_ref_moved_text(reply.get("error"))
+        )
+
+    reply, overlap = ref_cas_retry.retry_ref_moved(
+        worktree_root, [*commit_params.get("paths", ()), *commit_params.get("deleted_paths", ())], _attempt, _cas_lost,
+    )
+    if overlap and isinstance(reply, dict) and isinstance(reply.get("error"), str):
+        reply["refused"] = overlap
+    return reply
 
 
 def _sizing_on_disk(worktree_root: Path, sizing_rel: str) -> bool:
@@ -450,6 +517,142 @@ def _sizing_recoverable(worktree_root: Path, sizing_rel: str) -> bool:
     except LedgerRefused:
         return False
     return True
+
+
+def own_print_credited(worktree_root: Path, record_dir_rel: str, paths) -> set:
+    """The `paths` whose worktree blob equals the print this run's own `withheld-prints.json` recorded:
+    the content is the run's write, so an unanswerable peer claim cannot withhold it. One record read,
+    one file read per path, no git spawn; an absent print, absent file or differing blob is not credited."""
+    return print_verdicts(worktree_root, record_dir_rel, paths)[0]
+
+
+def print_verdicts(worktree_root: Path, record_dir_rel: str, paths) -> tuple[set, set]:
+    """`(matched, mismatched)` over the `paths` this run's `withheld-prints.json` prints: `matched` holds
+    the worktree blob equal to its print, `mismatched` a present print whose blob differs or whose file is
+    gone. A path with no print is in neither. One record read, one file read per path, no git spawn."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+    from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
+
+    prints = {idx._norm(k): v for k, v in idx._read_prints(worktree_root / record_dir_rel).items() if isinstance(v, str) and v}
+    matched: set = set()
+    mismatched: set = set()
+    if not prints:
+        return matched, mismatched
+    for p in paths:
+        want = prints.get(idx._norm(p))
+        if want is not None:
+            (matched if fingerprint(worktree_root, p) == want else mismatched).add(p)
+    return matched, mismatched
+
+
+def retry_indeterminate(worktree_root: Path, paths: list, warnings: list, holds: list, own_sid: Optional[str]) -> list:
+    """`warnings` after one re-read when any says "claim state indeterminate": the batched lookup runs
+    again and its holds join `holds`, so a live hold seen on either read still withholds. A determinate
+    first read is returned as is."""
+    if not any(w.startswith("claim state indeterminate") for w in warnings):
+        return warnings
+    from coordinator_core.ops.ceremony import commit_v2
+
+    again: list = []
+    second = commit_v2._peer_claim_warnings(worktree_root, paths, again, own_sid=own_sid)
+    holds.extend(h for h in again if h not in holds)
+    return second
+
+
+def indeterminate_credited(worktree_root: Path, record_dir_rel: str, paths) -> set:
+    """The `paths` an unanswerable peer claim cannot withhold: those whose blob equals this run's own
+    print, plus those in the run's manifest `review_declared_paths` unless a present print differs from
+    the blob. One record read, one manifest read, one file read per printed path, no git spawn."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    matched, mismatched = print_verdicts(worktree_root, record_dir_rel, paths)
+    declared = {
+        idx._norm(p) for p in _manifest_doc(worktree_root / record_dir_rel).get("review_declared_paths") or ()
+        if isinstance(p, str)
+    }
+    return matched | {p for p in paths if idx._norm(p) in declared and p not in mismatched}
+
+
+#: A run minted longer ago than this holds no token; a manifest of such a run is never read as a claim.
+TERMINAL_CLAIM_WINDOW_SECONDS = 7 * 24 * 3600
+
+
+def claimant_runs(worktree_root: Path, own_run_id: str, paths) -> dict:
+    """`{path: {run_id: stage}}` for each of `paths` that another run's manifest declares (exact path or
+    directory prefix), over the record dirs minted inside `TERMINAL_CLAIM_WINDOW_SECONDS`. `stage` is the
+    run's `run-stage.json` stage, `""` when absent. In-process reads only; never raises."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+    from coordinator_core.ops.warp_run_deliverable import _manifest_declared
+
+    wanted = {p.replace("\\", "/"): p for p in paths}
+    found: dict = {}
+    if not wanted:
+        return found
+    now = time.time()
+    try:
+        runs = halted_hold_release.record_stamps(worktree_root)
+    except Exception:  # noqa: BLE001 -- an unreadable listing names no claimant
+        return found
+    for run_id, stamp in runs:
+        if run_id == own_run_id or stamp is None or now - stamp > TERMINAL_CLAIM_WINDOW_SECONDS:
+            continue
+        try:
+            declared, prefixes, _unreadable = _manifest_declared(run_id, worktree_root)
+        except Exception:  # noqa: BLE001
+            continue
+        hit = [
+            orig for norm, orig in wanted.items()
+            if norm in declared or any(norm == pre or norm.startswith(pre + "/") for pre in prefixes)
+        ]
+        if not hit:
+            continue
+        stage = (read_run_stage(worktree_root, run_id) or {}).get("stage")
+        for orig in hit:
+            found.setdefault(orig, {})[run_id] = stage if isinstance(stage, str) else ""
+    return found
+
+
+def terminal_only_claimed(claimants: Mapping[str, Mapping[str, str]], paths) -> set:
+    """The `paths` with at least one claimant manifest whose every claimant run is `landed` or `halted`:
+    a terminal run holds nothing, so its manifest is no peer claim. A path with no claimant manifest, or
+    one live (any other stage) claimant, is not in the result. Pure."""
+    return {
+        p for p in paths
+        if claimants.get(p) and all(stage in ("landed", "halted") for stage in claimants[p].values())
+    }
+
+
+def overlay_partners(worktree_root: Path, withheld, seeded) -> set:
+    """The `withheld` python paths that a `seeded` path of the same run tests or imports: a clean-overlay
+    verify seeded with the importer but not the module judges a partial change. A stem match on
+    `test_<stem>.py` or an import line naming the stem counts; an unreadable file counts for nothing."""
+    import re
+
+    partners: set = set()
+    texts: dict = {}
+    for path in withheld:
+        if not path.endswith(".py"):
+            continue
+        stem = Path(path).stem
+        pattern = re.compile(rf"^\s*(?:from|import)\s[^\n]*\b{re.escape(stem)}\b", re.MULTILINE)
+        for other in seeded:
+            if other == path or not other.endswith(".py"):
+                continue
+            if Path(other).name == f"test_{stem}.py":
+                partners.add(path)
+                break
+            if other not in texts:
+                try:
+                    texts[other] = (worktree_root / other).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    texts[other] = ""
+            if pattern.search(texts[other]):
+                partners.add(path)
+                break
+    return partners
 
 
 def _own_recorded_cleared(worktree_root: Path, run_id: str, unproduced: list) -> tuple:
@@ -517,7 +720,9 @@ def _peer_hunks_excluded(worktree_root: Path, run_id: str, paths: list, supplied
         if path in supplied:
             continue
         res = _candidate_for(worktree_root, run_id, path, declared=True)
-        if not res or ("excluded" in res and not res["excluded"]):
+        # A file past the match bound is judged by `hunk_provenance.unproduced_hunks` (anchored diff) before
+        # this pass; `candidate` can only refuse it as coarse, which would strip a run's own large edit.
+        if not res or ("excluded" in res and not res["excluded"]) or res.get("refused") == "coarse":
             continue
         hunks = res.get("foreign") or res.get("excluded")
         named[path] = hunks
@@ -535,7 +740,7 @@ def _land(
     from coordinator_core.ops.dispatch_emit.credit_gate import KEPT_REVIEW_CHUNK_ID
     from coordinator_core.ops.dispatch_emit.terminal_commit import _worktree_snapshot
     from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import _error
-    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
+    from coordinator_core.warm.entry_seam import OpUnavailableError
 
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import split_sibling_paths
     from coordinator_core.ops.ceremony import commit_v2
@@ -777,6 +982,9 @@ def _land(
     warnings = commit_v2._peer_claim_warnings(
         worktree_root, product + gone + art_paths + art_deleted, holds, own_sid=session_id
     )
+    warnings = retry_indeterminate(
+        worktree_root, product + gone + art_paths + art_deleted, warnings, holds, session_id
+    )
     held = {p for p, _sid in holds}
     withheld.update({p: "peer-held" for p in sorted(held)})
     peer_held_by: dict = {}
@@ -789,9 +997,19 @@ def _land(
     if indeterminate:
         # Only declared product paths are withheld on an indeterminate claim; run artifacts (record, sizing) still land.
         everywhere = any(w.startswith("claim state indeterminate (") for w in indeterminate)
-        for p in product + gone:
-            if p not in held and (everywhere or f"claim state indeterminate for {p!r}" in indeterminate):
-                withheld[p] = "peer-claim-indeterminate"
+        unanswered = [
+            p for p in product + gone
+            if p not in held and (everywhere or f"claim state indeterminate for {p!r}" in indeterminate)
+        ]
+        own = indeterminate_credited(worktree_root, record_dir_rel, unanswered)
+        rest = [p for p in unanswered if p not in own]
+        claimants = claimant_runs(worktree_root, run_id, rest) if rest else {}
+        own = own | terminal_only_claimed(claimants, rest)
+        rest = [p for p in rest if p not in own]
+        seeded = [p for p in product + gone if p in owner and p not in rest]
+        partners = overlay_partners(worktree_root, [p for p in rest if p in owner], seeded)
+        rest = [p for p in rest if p not in partners]
+        withheld.update({p: "peer-claim-indeterminate" for p in rest})
     gated = halt_product_gates.gate_halt_product(
         worktree_root, run_id,
         [p for p in product if p not in withheld and p not in (sizing_rel, baton_rel)],
@@ -822,14 +1040,28 @@ def _land(
     foreign_hunks_reply: dict = {}
     own_blobs: dict = {}
     finding_details: dict = {}
-    passed = review_passed_chunks(halted, tcheck, (c.id for c in finished))
+    finished_ids = [c.id for c in finished]
+    passed = review_passed_chunks(halted, tcheck, finished_ids)
     unexecuted = unexecuted_withholds(worktree_root, params.get("script_path"), halted, record_dir_rel)
     # A chunk lands whole: one of its declared paths already withheld keeps the rest record-only.
     split = {owner[p] for p in owner if p in withheld}
-    withheld.update({
-        p: unexecuted.get(p, "halt-record-only") for p in product + gone
+    matched: set = set()
+    mismatched: set = set()
+    if halted["halted"] == "ledger-check":
+        # A failing or absent test verdict does not strand a chunk whose bytes still equal the print the run recorded.
+        unpassed = [p for p in product + gone if p in owner and owner[p] not in passed]
+        matched, mismatched = print_verdicts(worktree_root, record_dir_rel, unpassed)
+        passed = passed | print_matched_chunks(halted, finished_ids, owner, unpassed, matched)
+    held_back = [
+        p for p in product + gone
         if p in owner and (owner[p] not in passed or owner[p] in split or p in unexecuted)
-    })
+    ]
+    withheld.update({p: unexecuted.get(p, "halt-record-only") for p in held_back})
+    # `withheld` keeps the reason other readers key on; the cause is why this gate held the path.
+    withheld_causes = {
+        p: withheld_cause(halted, p, owner[p], split=split, unexecuted=unexecuted, matched=matched, mismatched=mismatched)
+        for p in held_back
+    }
     product = [p for p in product if p not in withheld]
     gone = [p for p in gone if p not in withheld]
     # Run artifacts already tracked at HEAD (plan, handoff, sidecars) are staged whole-file too, so
@@ -940,7 +1172,11 @@ def _land(
     ownerless_reply = {"ownerless": ownerless} if ownerless else {}
 
     if process_withheld:
-        process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)
+        # The halt-withheld and halted-run-lookup indexes land under .coordinator-local/ and a foreign
+        # repo carries no ignore rule for it, so they would surface as untracked dirt.
+        process_artifact_policy.exclude_locally(
+            worktree_root, process_withheld, [*artifacts.record_dirs, ".coordinator-local"],
+        )
 
     # The tracked outcome is the halt's landable record when every record-dir file is run state.
     record_present = (worktree_root / record_dir_rel).is_dir()
@@ -969,7 +1205,10 @@ def _land(
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
-            **({"withheld": withheld} if withheld else {}), **peer_held_by,
+            **({"withheld": withheld} if withheld else {}),
+            **({"withheld_causes": {p: c for p, c in withheld_causes.items() if p in withheld}}
+               if any(p in withheld for p in withheld_causes) else {}),
+            **peer_held_by,
             **({"run_artifacts": {"landed": [], "withheld": withheld, "ignored_excluded": sorted(set(ignored_excluded))}}
                if ignored_excluded else {}),
             **({"targeted_tests": targeted} if targeted is not None else {}), **review_reply,
@@ -1054,7 +1293,7 @@ def _land(
             **base,
         )
     try:
-        reply = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+        reply = _commit_v2_retrying_ref_cas(worktree_root, repo_root, commit_params)
     except OpUnavailableError:
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
@@ -1093,7 +1332,7 @@ def _land(
                 else:
                     commit_params.pop("expected_content_sha256")
             try:
-                reply = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+                reply = _commit_v2_retrying_ref_cas(worktree_root, repo_root, commit_params)
             except OpUnavailableError:
                 return _error("ceremony.commit_v2 is not registered", **base)
             if not isinstance(reply, dict):
@@ -1127,6 +1366,9 @@ def _land(
         extra["sizing_missing"] = sizing_missing
     if withheld:
         extra["withheld"] = withheld
+    live_causes = {p: c for p, c in withheld_causes.items() if p in withheld}
+    if live_causes:
+        extra["withheld_causes"] = live_causes
     if dropped:
         extra["dropped"] = dropped
     if targeted is not None:

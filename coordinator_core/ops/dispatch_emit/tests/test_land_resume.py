@@ -167,3 +167,32 @@ def test_log_line_per_state_change(root) -> None:
     lines = (lr.queue_dir(root) / lr.LOG_FILENAME).read_text().splitlines()
     states = [ln.split("state=")[1].split()[0] for ln in lines]
     assert states == ["enqueued", "bumped", "claimed", "finished"]
+
+
+def test_delayed_enqueue_waits_and_does_not_burn_an_attempt(root) -> None:
+    lr.enqueue(root, "run-1", PARAMS, "step")
+    lr.enqueue(root, "run-1", PARAMS, "step", delay_secs=30.0)
+    entry = lr.load(root, "run-1")
+    assert entry["attempts"] == 1 and entry["not_before"] > time.time()
+    assert lr.next_due(root, time.time()) is None
+    assert lr.next_due(root, time.time() + 31.0) is not None
+
+
+def test_an_undelayed_bump_clears_a_pending_wait(root) -> None:
+    lr.enqueue(root, "run-1", PARAMS, "step", delay_secs=30.0)
+    lr.enqueue(root, "run-1", PARAMS, "other")
+    assert "not_before" not in lr.load(root, "run-1")
+    assert lr.next_due(root, time.time()) is not None
+
+
+def test_undelayed_enqueue_still_bumps_and_is_due_at_once(root) -> None:
+    lr.enqueue(root, "run-1", PARAMS, "x")
+    lr.enqueue(root, "run-1", PARAMS, "y")
+    assert lr.load(root, "run-1")["attempts"] == 2
+    assert lr.next_due(root, time.time()) is not None
+
+
+def test_a_waiting_entry_still_expires_by_age(root) -> None:
+    lr.enqueue(root, "run-1", PARAMS, "step", delay_secs=30.0)
+    assert lr.next_due(root, time.time() + lr.MAX_AGE_SECS + 5) is None
+    assert (lr.queue_dir(root) / "run-1.done").exists()

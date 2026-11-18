@@ -48,6 +48,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from functools import lru_cache
@@ -268,6 +269,27 @@ def locate_plan_sidecar(repo_root: str, name: str) -> str:
 
 def cache_dir(repo_root: str) -> str:
     return os.path.join(machinery_root(repo_root), "cache")
+
+
+#: Markers `coordinator/bin/lib/commit_clone.py` writes inside a commit clone's `.git`
+#: (`_MARKER`, `_LEGACY_MARKER`); pinned equal by `test_commit_clone_cache_anchor.py`.
+COMMIT_CLONE_MARKERS = ("commit-clone-v2.json", "commit-clone.json")
+
+
+def durable_cache_dir(repo_root: str) -> str:
+    """`cache_dir` of the live repo a commit clone was built from, else of `repo_root`.
+
+    Trap: publish runs from a fresh clone per pinned sha, so a memo anchored at the
+    clone starts cold every round and re-parses the whole tree."""
+    for name in COMMIT_CLONE_MARKERS:
+        try:
+            with open(os.path.join(repo_root, ".git", name), encoding="utf-8") as fh:
+                source = json.load(fh).get("source_root")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(source, str) and source:
+            return cache_dir(source)
+    return cache_dir(repo_root)
 
 
 def cockpit_emission_path(repo_root: str) -> str:

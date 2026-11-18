@@ -195,3 +195,34 @@ def test_unreadable_file_raises_value_error(tmp_path: Path, mod) -> None:
     directory.mkdir()
     with pytest.raises(ValueError):
         mod._read_frontmatter_scalars(str(directory))
+
+
+_EXPIRED = "---\ntitle: A\nstatus: draft\nprovisional_until: 2020-01-01\n---\nbody\n"
+
+
+def test_closed_status_suppresses_expiry(tmp_path: Path, mod) -> None:
+    path = _write_plan(
+        tmp_path,
+        "closed.md",
+        "---\ntitle: X\nstatus: closed\nprovisional_until: 2026-01-01\n---\nbody\n",
+    )
+    assert mod.find_expired([path], today=datetime.date(2026, 7, 14)) == []
+
+
+def test_layout_tree_directory_reads_month_shards(tmp_path: Path, mod, capsys) -> None:
+    shard = tmp_path / "docs" / "plans" / "2026-07"
+    shard.mkdir(parents=True)
+    (shard / "a.md").write_text(_EXPIRED, encoding="utf-8")
+    assert mod.main([str(tmp_path / "docs" / "plans")]) == 1
+    assert "2026-07" in capsys.readouterr().out
+
+
+def test_plain_directory_reads_month_shards_but_not_other_subdirs(tmp_path: Path, mod) -> None:
+    other = tmp_path / "notes"
+    other.mkdir()
+    (other / "a.md").write_text(_EXPIRED, encoding="utf-8")
+    assert mod.main([str(tmp_path)]) == 0
+    shard = tmp_path / "2026-07"
+    shard.mkdir()
+    (shard / "b.md").write_text(_EXPIRED, encoding="utf-8")
+    assert mod.main([str(tmp_path)]) == 1

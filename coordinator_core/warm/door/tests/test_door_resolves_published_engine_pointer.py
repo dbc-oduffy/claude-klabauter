@@ -1,8 +1,8 @@
-"""The door resolves this machine's published-engine pointer ahead of its baked root.
+"""The door resolves this machine's published-engine pointer at run time; nothing is baked in.
 
 Ladder under test: override, `door.engine-root.txt` sidecar, then
-`<settings-home>/machine-local/.claude-klabauter-root`, then the baked root,
-then a refusal naming each rung. Each leg runs the real image with
+`<settings-home>/machine-local/.claude-klabauter-root`, then a refusal naming
+each rung. Each leg runs the real image with
 `COORDINATOR_WARM=0`, so the cold fall-through's stub entrypoint prints
 `FALLBACK_MARKER` only when the door resolved the stub root.
 """
@@ -112,7 +112,7 @@ def test_absent_pointer_refusal_names_each_rung(tmp_path: Path) -> None:
     assert "COORDINATOR_DOOR_ENGINE_ROOT unset" in result.stderr
     assert "sidecar absent" in result.stderr
     assert f"pointer {home / _POINTER_REL} absent" in result.stderr
-    assert "baked" in result.stderr
+    assert "baked" not in result.stderr  # no build-time root rung: runtime resolution only
 
 
 @WINDOWS_ONLY

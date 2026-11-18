@@ -78,11 +78,17 @@ def _check_verdict(check: dict, repo: Path, applicable: bool, now: float) -> dic
     if (
         rel_path is None
         or rel_path.is_absolute()
+        or rel_path.anchor
         or ".." in rel_path.parts
         or isinstance(max_age, bool)
         or not isinstance(max_age, (int, float))
         or max_age <= 0
     ):
+        out["verdict"] = "unsupported"
+        return out
+    try:
+        (repo / rel_path).resolve().relative_to(repo.resolve())
+    except (OSError, ValueError, RuntimeError):
         out["verdict"] = "unsupported"
         return out
     if not applicable:

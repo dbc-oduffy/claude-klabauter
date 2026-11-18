@@ -135,6 +135,7 @@ from coordinator_core.bash_guards import (
     _dc_git_shared,
     _dc_rewrites,
     _dc_rm,
+    stale_write_guard,
 )
 from coordinator_core.temp_layout import managed_temp_dir
 from coordinator_core.bash_guards import block_approval_sentinel_creation
@@ -291,6 +292,7 @@ _DISPATCH_CHECK_SOURCE_MODULES = (
     _dc,
     _dc_git_misc,
     _dc_rm,
+    stale_write_guard,
     _dc_commit,
     _dc_blanket_add,
     _dc_rewrites,

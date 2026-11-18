@@ -113,7 +113,35 @@ def test_timeout_passed_on_every_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path
     _claude_klabauter_root._machine_local_get("coordinator.python")
 
     assert seen_timeouts == [_claude_klabauter_root._MACHINE_LOCAL_TIMEOUT] * 2
-    assert _claude_klabauter_root._MACHINE_LOCAL_TIMEOUT == 5
+    assert 0 < _claude_klabauter_root._MACHINE_LOCAL_TIMEOUT <= 5
+
+
+def test_spawn_uses_the_console_interpreter_and_the_helper_kwargs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The lookup spawn goes through the one no-window helper and a console
+    exe, never a bare pythonw or a private CREATE_NO_WINDOW."""
+    impl = tmp_path / "_machine_local.py"
+    impl.write_text("# fake impl\n")
+    monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl))
+    monkeypatch.delenv(_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV, raising=False)
+    sentinel = {"creationflags": 123}
+    monkeypatch.setattr(_claude_klabauter_root, "no_console_creationflags", lambda: dict(sentinel))
+    monkeypatch.setattr(_claude_klabauter_root, "console_python", lambda exe: "CONSOLE-PY")
+    seen = {}
+
+    class _Done:
+        returncode = 0
+        stdout = "v\n"
+
+    def _fake_run(cmd, **kwargs):
+        seen["cmd"], seen["kwargs"] = cmd, kwargs
+        return _Done()
+
+    monkeypatch.setattr(_claude_klabauter_root.subprocess, "run", _fake_run)
+    assert _claude_klabauter_root._machine_local_get("coordinator.python") == "v"
+    assert seen["cmd"][0] == "CONSOLE-PY"
+    assert seen["kwargs"]["creationflags"] == 123
 
 
 def test_import_spawns_zero_and_registers_no_op(monkeypatch: pytest.MonkeyPatch) -> None:

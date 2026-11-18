@@ -38,6 +38,10 @@ def test_record_paths_accepted(rel):
         "docs",
         "src/state/a.py",
         "coordinator_local/a.py",
+        "plugin/commands/index.md",
+        "plugin\\commands\\index.md",
+        "skills/x/SKILL.md",
+        "docs/reference/hooks.yaml",
     ],
 )
 def test_product_paths_refused(rel):

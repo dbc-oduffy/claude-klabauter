@@ -82,7 +82,7 @@ def test_a_passing_citation_of_a_force_loaded_file_widens_nothing(tmp_path):
     repo = _make(tmp_path, halted=True)
     for note in (CITATION, "AGENTS.md says nothing about this", "see sub/AGENTS.md and CLAUDE.md for context"):
         assert _uncovered(repo, note) == []
-    reply = rl._handler({"run_id": RUN, "note": CITATION}, repo)
+    reply = rl._handler({"run_id": RUN, "note": "CLAUDE.md already covers this, nothing to do"}, repo)
     assert reply["ok"] is True and "footprint_widened" not in reply
     assert _spine_ids(repo) == ["C1"]
 

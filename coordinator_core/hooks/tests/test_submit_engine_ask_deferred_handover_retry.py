@@ -44,12 +44,12 @@ def _render(tmp_path: Path, monkeypatch) -> str:
 
 
 def _run(text: str, replies: list, tmp_path: Path) -> dict:
-    """Run the script with `agent` answering `replies` in order; returns its result, the agent call count and the waits."""
+    """Run the script with the deferred-emit `agent` answering `replies` in order (receipt-check calls answer found false); returns its result, the emit call count and the waits."""
     body = text.replace("export const meta", "const meta", 1)
     harness = (
         "const replies = " + json.dumps(replies) + ";\n"
         "const calls = []; const waits = [];\n"
-        "const agent = async (prompt, opts) => { calls.push(opts.label); return replies[Math.min(calls.length - 1, replies.length - 1)]; };\n"
+        "const agent = async (prompt, opts) => { if (opts.label !== 'deferred-emit') return { found: false, error: 'stub' }; calls.push(opts.label); return replies[Math.min(calls.length - 1, replies.length - 1)]; };\n"
         "const workflow = async (o) => ({ started: o.scriptPath });\n"
         "const _st = setTimeout;\n"
         "globalThis.setTimeout = (fn, ms) => { waits.push(ms); return _st(fn, 0); };\n"
@@ -87,7 +87,11 @@ def test_other_error_is_refused_at_once(tmp_path, monkeypatch):
     got = _run(text, [{"path": "", "run_id": "", "fire_args": {}, "error": "denied by guard"}, _OK], tmp_path)
     assert got["calls"] == 1
     assert got["waits"] == []
-    assert got["result"] == {"status": "emit_refused", "error": "denied by guard"}
+    assert got["result"] == {
+        "status": "emit_refused",
+        "error": "denied by guard",
+        "halted_by": {"halted": "denied by guard", "reason": "denied by guard"},
+    }
 
 
 def test_wait_is_capped_and_falls_back_when_retry_after_absent(tmp_path, monkeypatch):

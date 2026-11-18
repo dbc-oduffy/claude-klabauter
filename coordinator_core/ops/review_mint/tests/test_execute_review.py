@@ -1877,7 +1877,9 @@ def test_reverify_prompt_names_the_op_the_agent_and_forbids_a_suite_run():
     assert block.count("review.reverify") >= 2
     assert "never a directory, a tier (the fast tier included) or the full suite" in block
     assert "never `git checkout`" in block
-    assert "every file in `tripwires`" in block
+    assert "first ONE pytest call of the test files among them and the `owned` list" in block
+    assert "ONE pytest call of the `tripwires` files" in block
+    assert "`tripwires_not_selected`" in block and "`not_run`" in block
     assert f'\\"slice_prefix\\":\\"{prep_slice_id_for("docs/plans/example.md", "a" * 40)}\\"' in block or (
         f'"slice_prefix":"{prep_slice_id_for("docs/plans/example.md", "a" * 40)}"' in block
     )
@@ -1937,9 +1939,11 @@ def _reverify_phase_block(base_ref, group_prefixes=()):
 @pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
 def test_reverify_prompt_measures_failing_at_base_once_and_passes_it(prefixes):
     block = _reverify_phase_block("b" * 40, prefixes)
-    assert block.count("coordinator_core.ops.reverify_base_measure --sha") == 1
+    assert block.count("coordinator_core.ops.test_leg_run") == 1
+    assert "coordinator_core.ops.reverify_base_measure" not in block
     assert "coordinator_core.testing.baseline_export --sha" not in block
-    assert "--sha " + "b" * 40 + " --head-sha HEAD --out " in block
+    assert "--base-sha " + "b" * 40 + " --head-sha HEAD --base-export-out " in block
+    assert "timeout 600000" in block and "never repeat it" in block
     assert "pytest -rfE" not in block
     assert block.count("failing_at_base") >= 3
     assert block.count('failing_at_base\\":[<failing_at_base ids>]') + block.count(
@@ -1951,7 +1955,7 @@ def test_reverify_prompt_measures_failing_at_base_once_and_passes_it(prefixes):
 def test_reverify_saves_the_base_export_and_every_revert_call_passes_its_path(prefixes):
     block = _reverify_phase_block("b" * 40, prefixes).replace('\\"', '"')
     path = "scratch/reverify-base-export-prep1.txt"
-    assert f"--out {path} -- <the failing ids above>`" in block
+    assert f"--base-export-out {path} --out scratch/reverify-test-leg-prep1.json -- <the pytest targets>`" in block
     assert block.count(f'"base_export_path":"{path}"') == 1
     assert block.count('"failing_at_base":[<failing_at_base ids>]') == 1
 
@@ -1993,6 +1997,8 @@ def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes) -> 
     assert "base_export_path" not in block
     assert "reverify_base_measure" not in block
     assert "baseline_export" not in block
+    assert block.count("coordinator_core.ops.test_leg_run") == 1
+    assert "--base-sha" not in block
     assert "failing_at_base" in block
 
 
@@ -2004,12 +2010,13 @@ def test_reverify_reports_passed_alone_and_passed_at_base(prefixes):
         assert _REVERIFY_SCHEMA["properties"][field] == {"type": "array", "items": {"type": "string"}}
         assert field not in _REVERIFY_SCHEMA["required"]
     measured = _reverify_phase_block("b" * 40, prefixes)
-    assert "ALONE (one pytest per id)" in measured and "`passed_alone`" in measured
+    assert "ALONE" not in measured and "`passed_alone`" in measured
     assert "absence at base is not a pass" in measured
     assert '"ok"' in measured and "`runner_exit` 0, 1 or 4" in measured
     assert "`passed_at_base` key, under the same validity" in measured
+    assert "JSON" in measured and "`pre_existing`, valid only when" in measured
     unset = _reverify_phase_block("run_base_sha", prefixes)
-    assert "ALONE (one pytest per id)" in unset
+    assert "ALONE" not in unset and "`passed_alone`" in unset
     assert "Return `passed_at_base` []" in unset
     assert "absence at base" not in unset
 

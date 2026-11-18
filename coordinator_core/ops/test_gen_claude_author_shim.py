@@ -60,6 +60,11 @@ def _isolated_env(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def _rc_args() -> list:
+    """--rc for a redirected-HOME sandbox: no PowerShell profile is auto-detected there."""
+    return ["--rc", str(Path(os.environ["HOME"]) / "sandbox_rc")]
+
+
 def test_help_exits_zero(tmp_path, capsys):
     rc = main(["--help", "--template", str(_make_template(tmp_path))])
     assert rc == 0
@@ -77,7 +82,7 @@ def test_unknown_argument_is_silently_ignored(tmp_path, monkeypatch, capsys):
     # reflects shim/rc freshness (see § check-only dry-run safety below),
     # which is orthogonal to what this test asserts -- unknown argv tokens
     # must not themselves trip a hard failure.
-    rc = main(["--bogus", "--non-interactive", "--template", str(_make_template(tmp_path))])
+    rc = main(["--bogus", "--non-interactive", "--template", str(_make_template(tmp_path)), *_rc_args()])
     assert rc == 0
 
 
@@ -390,28 +395,28 @@ def test_graceful_skip_unresolved_exits_zero_with_skip_row(tmp_path, monkeypatch
 
 def test_graceful_skip_unresolved_noop_when_resolved(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path))
-    rc = main(["--graceful-skip-unresolved", "--template", str(_make_template(tmp_path))])
+    rc = main(["--graceful-skip-unresolved", "--template", str(_make_template(tmp_path)), *_rc_args()])
     assert rc == 0
     assert "claude_shim: installed (" in capsys.readouterr().out
 
 
 def test_installed_row_on_fresh_render(tmp_path, capsys):
-    rc = main(["--template", str(_make_template(tmp_path))])
+    rc = main(["--template", str(_make_template(tmp_path)), *_rc_args()])
     assert rc == 0
     assert "claude_shim: installed (" in capsys.readouterr().out
 
 
 def test_ready_noop_row_on_second_run(tmp_path, capsys):
     tmpl = str(_make_template(tmp_path))
-    assert main(["--template", tmpl]) == 0
+    assert main(["--template", tmpl, *_rc_args()]) == 0
     capsys.readouterr()
-    rc = main(["--template", tmpl])
+    rc = main(["--template", tmpl, *_rc_args()])
     assert rc == 0
     assert "claude_shim: ready (no-op)" in capsys.readouterr().out
 
 
 def test_would_install_row_under_check_only(tmp_path, capsys):
-    rc = main(["--check-only", "--template", str(_make_template(tmp_path))])
+    rc = main(["--check-only", "--template", str(_make_template(tmp_path)), *_rc_args()])
     assert rc == 1
     out = capsys.readouterr().out
     assert "claude_shim: check failed:" in out
@@ -420,10 +425,10 @@ def test_would_install_row_under_check_only(tmp_path, capsys):
 
 def test_check_only_ready_noop_row_after_real_render(tmp_path, capsys):
     tmpl = str(_make_template(tmp_path))
-    assert main(["--template", tmpl]) == 0
+    assert main(["--template", tmpl, *_rc_args()]) == 0
     capsys.readouterr()
 
-    rc = main(["--template", tmpl, "--check-only"])
+    rc = main(["--template", tmpl, "--check-only", *_rc_args()])
 
     assert rc == 0
     assert "claude_shim: ready (no-op) (" in capsys.readouterr().out
@@ -456,7 +461,7 @@ def test_default_no_flag_follows_platform_not_a_hardcoded_bash_literal(tmp_path)
     the two can never disagree about which family is in play."""
     home = Path(os.environ["HOME"])
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), *_rc_args()])
     assert rc == 0
 
     expected_family = gcds._default_shell_family()
@@ -465,7 +470,7 @@ def test_default_no_flag_follows_platform_not_a_hardcoded_bash_literal(tmp_path)
     if expected_family == "powershell":
         assert (home / ".claude" / "shell" / "claude-author-shim.ps1").exists()
         assert not (home / ".claude" / "shell" / "claude-author-shim.sh").exists()
-        assert Path(gcds._powershell_profile_path()).read_text().count("Test-Path") >= 1
+        assert Path(_rc_args()[1]).read_text().count("Test-Path") >= 1
     else:
         assert (home / ".claude" / "shell" / "claude-author-shim.sh").exists()
         assert EXPECTED_SOURCE_LINE in (home / ".zshrc").read_text()

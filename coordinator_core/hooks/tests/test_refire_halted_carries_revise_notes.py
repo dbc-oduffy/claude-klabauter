@@ -115,7 +115,7 @@ def _resumed_notes(root: Path, run_id: str) -> list:
 
 
 def test_the_older_revised_halt_is_resumed_over_a_newer_unrevised_one(tmp_path):
-    revised = _halt(tmp_path, "warp", "20261029T144404-09eb1f", "2026-10-29T15:00:00Z")
+    revised = _halt(tmp_path, "warp", "20261029T144404-09eb1f", "2026-10-29T20:00:00Z")
     _halt(tmp_path, "warp", "20261029T193744-58fc60")
     assert hr.halted_run_for(tmp_path, SIZING) != revised
     got = hr.halted_run_to_resume(tmp_path, SIZING)

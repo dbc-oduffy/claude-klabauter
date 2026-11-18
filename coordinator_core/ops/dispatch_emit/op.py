@@ -246,7 +246,7 @@ import threading
 import time
 import uuid
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Optional
 
@@ -674,6 +674,24 @@ def _is_halt_resume_hint(root: Path, reserved: object, sizing_doc: Optional[dict
     if parse_ask_parent((sizing_doc.get("em_analysis") or {}).get("ask_parent")) is not None:
         return False
     return reserved == halted_run_for(root, sizing_rel)
+
+
+def _closed_for_fresh_refire(root: Path, run_id: Optional[str]) -> bool:
+    """True when `run_id` ran under a different engine stamp than the running one and was just closed as
+    superseded-by-refire, so the emit mints fresh instead of rebinding onto it. An unstamped run, an unknown
+    running engine, or a marker no longer halted or resumed answers False: the rebind stands."""
+    if not isinstance(run_id, str) or not run_id:
+        return False
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+    from coordinator_core.ops.dispatch_emit.halted_run import mark_superseded_by_refire, ran_under_engine
+
+    rd = record_dir(root, run_id)
+    prior, current = ran_under_engine(rd), halt_resume_record.engine_sha()
+    if not prior or not current or prior == current:
+        return False
+    return mark_superseded_by_refire(
+        rd, prior_engine=prior, engine=current, at=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    )
 
 
 def _reserved_run_landed(root: Path, run_id: str) -> bool:
@@ -2159,6 +2177,23 @@ def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
         )
 
 
+_RUN_CHECKS_MEMO: dict = {}
+_RUN_CHECKS_MEMO_MAX = 8
+
+
+def _run_checks_memoized(script: str) -> list:
+    """``run_checks(script)``, remembered per script text for this process: the contract is a pure
+    function of the script, and a refire re-emits the bytes it just checked. Bounded, oldest first out."""
+    key = hashlib.sha256(script.encode("utf-8")).hexdigest()
+    hit = _RUN_CHECKS_MEMO.get(key)
+    if hit is None:
+        hit = tuple(run_checks(script))
+        while len(_RUN_CHECKS_MEMO) >= _RUN_CHECKS_MEMO_MAX:
+            _RUN_CHECKS_MEMO.pop(next(iter(_RUN_CHECKS_MEMO)))
+        _RUN_CHECKS_MEMO[key] = hit
+    return list(hit)
+
+
 def _emit_script_file(
     path: Path,
     script: str,
@@ -2184,7 +2219,7 @@ def _emit_script_file(
         claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
         agent_type_host=agent_type_host,
     )
-    findings = [*run_checks(script), *plan_findings]
+    findings = [*_run_checks_memoized(script), *plan_findings]
     finding_dicts = [
         {
             "severity": f.severity.value,
@@ -2875,6 +2910,8 @@ def _dispatch_emit_body(
             predecessor = halted_run_to_resume(
                 ask_root, sizing_rel, caller_session=_receipt_session_id(params) or None
             )
+            if predecessor != run_id and _closed_for_fresh_refire(ask_root, predecessor):
+                predecessor = None
             resumed_from = predecessor if predecessor != run_id else None
             if resumed_from is None:
                 resumed_from = notes_predecessor(ask_root, sizing_rel, exclude=run_id)
@@ -2891,6 +2928,10 @@ def _dispatch_emit_body(
                 halted_id, preferred_ask = (preferred, None) if preferred.startswith("warp-") else (None, preferred)
             if chain_parent is not None and halted_id == chain_parent:
                 halted_id = None  # a successor never rebinds onto the run it chains from
+            if halted_id and _closed_for_fresh_refire(ask_root, halted_id):
+                halted_id = None
+            if preferred_ask and _closed_for_fresh_refire(ask_root, preferred_ask):
+                preferred_ask = None
             if halted_id:
                 inherited_base = _recorded_run_base(ask_root, halted_id) or halted_run_base(
                     record_dir(ask_root, halted_id)
@@ -2898,6 +2939,8 @@ def _dispatch_emit_body(
             else:
                 resumes_ask = preferred_ask or halted_ask_run_for(ask_root, sizing_rel)
                 if chain_parent is not None and resumes_ask == chain_parent:
+                    resumes_ask = None
+                if resumes_ask and _closed_for_fresh_refire(ask_root, resumes_ask):
                     resumes_ask = None
                 if resumes_ask:
                     inherited_base = _recorded_run_base(ask_root, resumes_ask) or halted_run_base(
@@ -3433,6 +3476,7 @@ def _dispatch_emit_body(
                 route_preference=ask_ctx["route_preference"],
                 required_reviewers=ask_ctx["required_reviewers"],
                 launcher_child=params.get("launcher_child") is True,
+                chain_hop=bool(ask_ctx.get("chain_parent")),
                 run_base_sha=ask_ctx.get("inherited_base") or (
                     _recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"])
                     if ask_ctx.get("reserved_parent") or ask_ctx.get("rebound")
@@ -4229,6 +4273,28 @@ def _resolve_plan_blitz_args(sizing_abs: Optional[str], chatty_run_id: Optional[
 _dispatch_emit.__doc__ = _dispatch_emit_body.__doc__
 
 
+def _writes_needing_cross_repo_check(writes: list, root: Path) -> list:
+    """``writes`` minus the plain relative paths whose first segment already proved not to name a
+    sibling repo: that verdict is per segment, so one probe answers a recorded footprint of
+    thousands of paths under one directory. Absolute, drive-lettered, dotted and ``..`` paths and
+    every path of a flagged segment pass through for the full check."""
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import paths_outside_repo_root
+
+    clear: set[str] = set()
+    out: list = []
+    for p in writes:
+        parts = p.replace("\\", "/").split("/") if isinstance(p, str) else ()
+        seg = parts[0] if parts else ""
+        plain = bool(seg) and ":" not in seg and seg not in (".", "..") and ".." not in parts
+        if plain and seg in clear:
+            continue
+        if plain and not paths_outside_repo_root([p], root):
+            clear.add(seg)
+            continue
+        out.append(p)
+    return out
+
+
 def _gate_sizing_at_emit(
     root: Path,
     sizing_rel: str,
@@ -4265,8 +4331,9 @@ def _gate_sizing_at_emit(
 
         writes = recorded_xs_writes(Path(root), sizing_rel)
     try:
+        to_check = _writes_needing_cross_repo_check(writes, Path(root))
         check_cross_repo_writes(
-            [SimpleNamespace(id="--writes", writes=list(writes), writes_under=())],
+            [SimpleNamespace(id="--writes", writes=to_check, writes_under=())],
             Path(root), approved=cross_repo_approved,
         )
     except CrossRepoWriteError as exc:

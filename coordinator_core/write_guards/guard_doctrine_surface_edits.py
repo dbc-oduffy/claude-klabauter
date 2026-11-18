@@ -110,6 +110,7 @@ from coordinator_core.write_guards._gem_doctrine_carve_out import (
 )
 from coordinator_core.write_guards._doctrine_edit_sentinel import (
     DENY_REASON,
+    admit_advisory,
     is_rules_path,
     sentinel_present,
 )
@@ -823,6 +824,10 @@ def _match_protected(
     return False, None
 
 
+def _admit_advisory(payload: Dict[str, Any]) -> str:
+    return admit_advisory(payload.get("cwd") or "")
+
+
 def _doctrine_deny(payload: Dict[str, Any]) -> "Optional[Dict[str, Any]]":
     from coordinator_core._hook_envelope import deny
     from coordinator_core.machine_profile import apply_guard_level
@@ -897,7 +902,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     basename = os.path.basename(target)
     if rules:
         if sentinel_present(payload.get("cwd") or ""):
-            return _advisory_envelope(_surface_advisory(target_raw, False), _rot_text(rot), growth)
+            return _advisory_envelope(
+                _admit_advisory(payload), _surface_advisory(target_raw, False), _rot_text(rot), growth
+            )
         return _doctrine_deny(payload)
     is_local_config = basename == "coordinator.local.md"
     if _is_first_time_create(tool_name, tool_input, target):
@@ -920,5 +927,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             strong = _STRONGEST_CLAUDE_MD_WARNING
 
     return _advisory_envelope(
-        strong, _surface_advisory(target_raw, is_local_config), _rot_text(rot), growth
+        _admit_advisory(payload) if basename == "CLAUDE.md" else None,
+        strong,
+        _surface_advisory(target_raw, is_local_config),
+        _rot_text(rot),
+        growth,
     )

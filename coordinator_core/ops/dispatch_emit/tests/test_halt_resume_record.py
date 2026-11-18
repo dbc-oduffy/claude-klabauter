@@ -74,6 +74,29 @@ def test_record_built_before_a_revise_is_not_served_after_it(tmp_path: Path) -> 
     assert hrr.matches(rebuilt, after)
 
 
+def test_record_built_before_a_revise_on_a_resumed_marker_is_not_served_after_it(tmp_path: Path) -> None:
+    import json
+
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    (tmp_path / "plan.md").write_bytes(b"p")
+    (tmp_path / "sizing.yaml").write_bytes(b"s")
+    rd = tmp_path / "rd"
+    rd.mkdir()
+    (rd / "halted.json").write_text(json.dumps({"status": "halted", "run_base_sha": "a" * 40, "plan": None}))
+    assert halted_run.mark_resumed(rd)
+    stored = hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md", "land1")
+    rec = hrr.build_record(
+        composed_script_rel="s", hoisted_fragments={}, gate_verdict={}, landed_state_sha="land1",
+        fingerprint=stored, resume_plan_rel="plan.md",
+    )
+    assert hrr.matches(rec, hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md"))
+    assert halted_run.mark_revised(rd, "2026-11-17T09:04:00Z")
+    after = hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md")
+    assert after["revised_at"] == "2026-11-17T09:04:00Z"
+    assert not hrr.matches(rec, after)
+
+
 def test_changed_resume_plan_resolution_with_same_bytes_mismatches(tmp_path: Path) -> None:
     import json
 

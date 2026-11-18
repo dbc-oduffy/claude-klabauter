@@ -24,6 +24,7 @@ import bisect
 import json
 import sqlite3
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -221,5 +222,23 @@ def promote(repo_root: Path, run_dir: Path, kind: str) -> Optional[Path]:
         return None
     target = watermark_path(repo_root, kind)
     target.parent.mkdir(parents=True, exist_ok=True)
-    body = json.dumps(asdict(wm), indent=2, sort_keys=True) + "\n"
+    payload = {**asdict(wm), "run_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")}
+    body = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     return replace_bytes(target, body.encode("utf-8"))
+
+
+def committed_run_date(repo_root: Path, kind: str) -> Optional[str]:
+    """The UTC ``YYYY-MM-DD`` the committed watermark for ``kind`` was promoted; None when
+    absent, unreadable, or written before ``promote`` stamped a date."""
+    try:
+        data = json.loads(watermark_path(repo_root, kind).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("run_date") if isinstance(data, dict) else None
+    if not isinstance(value, str):
+        return None
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return value

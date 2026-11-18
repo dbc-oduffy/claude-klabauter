@@ -14,6 +14,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -26,10 +28,12 @@ EXIT_USAGE = 2
 _DROPPED = "reverify-base-measure-dropped:\t"
 #: Runs inside the exported tree: pytest names one missing id per run (on stderr), so the retries
 #: that drop each next one stay in this one process; only the final attempt's output is emitted.
+#: `sys.argv[1]` is a file of ids, one per line: argv carries no id list, so its size is unbounded.
 _RETRY_RUNNER = (
     "import contextlib, io, re, sys\n"
     "import pytest\n"
-    "ids, dropped, broken = sys.argv[1:], [], []\n"
+    "ids = [i for i in open(sys.argv[1], encoding='utf-8').read().split('\\n') if i]\n"
+    "dropped, broken = [], []\n"
     "nf = re.compile(r'(not found|found no collectors for):?\\s+(\\S+)')\n"
     "while True:\n"
     "    out, err = io.StringIO(), io.StringIO()\n"
@@ -88,13 +92,21 @@ def _resolve(sha: str, cwd: str) -> str:
     return out if proc.returncode == 0 and _HEX.fullmatch(out) else sha
 
 
-def _run(sha: str, ids: list[str], cwd: str) -> tuple[str, Optional[int], list[str], list[str]]:
-    """One baseline_export run: (export state, runner exit, stdout lines, stderr lines)."""
+def _run(sha: str, ids: list[str], cwd: str,
+         timeout_s: Optional[float] = None) -> tuple[str, Optional[int], list[str], list[str]]:
+    """One baseline_export run: (export state, runner exit, stdout lines, stderr lines). A `timeout_s`
+    expiry reports export "timeout" with no lines."""
     sha = _resolve(sha, cwd)
-    argv = [sys.executable, "-c", _LAUNCH, str(_ENGINE_ROOT), "--sha", sha, "--",
-            sys.executable, "-c", _RETRY_RUNNER, *ids]
-    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace",
-                          **no_console_creationflags())
+    try:
+        with tempfile.TemporaryDirectory(prefix="reverify-ids-") as holder:
+            id_file = Path(holder) / "ids.txt"
+            id_file.write_text("\n".join(ids) + "\n", encoding="utf-8", newline="\n")
+            argv = [sys.executable, "-c", _LAUNCH, str(_ENGINE_ROOT), "--sha", sha, "--",
+                    sys.executable, "-c", _RETRY_RUNNER, str(id_file)]
+            proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace",
+                                  timeout=timeout_s, **no_console_creationflags())
+    except subprocess.TimeoutExpired:
+        return "timeout", None, [], []
     lines = proc.stdout.splitlines()
     stderr_lines = proc.stderr.splitlines()
     tail = next((ln.strip() for ln in reversed(lines) if ln.strip()), "")
@@ -115,9 +127,17 @@ def _is_red(node: str, red: set[str]) -> bool:
     return any(r == node or r.startswith(node + "::") or r.startswith(node.rstrip("/") + "/") for r in red)
 
 
-def measure(sha: str, head_sha: Optional[str], ids: list[str], cwd: str) -> dict:
-    """The red ids and the trailing-line payload for `ids` measured at `sha` (and `head_sha`)."""
-    export, runner_exit, lines, _err = _run(sha, list(ids), cwd)
+def measure(sha: str, head_sha: Optional[str], ids: list[str], cwd: str,
+            timeout_s: Optional[float] = None) -> dict:
+    """The red ids and the trailing-line payload for `ids` measured at `sha` (and `head_sha`).
+    `timeout_s` is ONE deadline across both runs; expiry leaves `export` "timeout"."""
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
+
+    def left() -> Optional[float]:
+        return None if deadline is None else max(deadline - time.monotonic(), 0.0)
+
+    export, runner_exit, lines, _err = _run(sha, list(ids), cwd, left()) if deadline is not None \
+        else _run(sha, list(ids), cwd)
     gone = {ln[len(_DROPPED):] for ln in lines if ln.startswith(_DROPPED)}
     remaining = [i for i in ids if i not in gone]
     red: set[str] = set()
@@ -130,12 +150,25 @@ def measure(sha: str, head_sha: Optional[str], ids: list[str], cwd: str) -> dict
         export = "failed"  # a usage error with ids left measured nothing; "ok" would read as an empty red set
     head_ids = [i for i in ids if not _is_red(i, red)]
     if head_sha and base_ok and head_ids:
-        h_export, h_exit, h_lines, _h_err = _run(head_sha, head_ids, cwd)
+        h_export, h_exit, h_lines, _h_err = _run(head_sha, head_ids, cwd, left()) if deadline is not None \
+            else _run(head_sha, head_ids, cwd)
         if h_export != "ok" or h_exit not in (0, 1):
             export = h_export if h_export != "ok" else "failed"
         else:
             red |= _red(h_lines)
     return {"red": sorted(red), "export": export, "runner_exit": runner_exit, "passed_at_base": passed}
+
+
+def write_export(result: dict, path: Path) -> None:
+    """Writes `measure`'s result to `path` as review.reverify's `base_export_path` file."""
+    body = [f"FAILED {node}" for node in result["red"]]
+    body.append(json.dumps({"baseline_export": {
+        "export": result["export"],
+        "runner_exit": result["runner_exit"],
+        "passed_at_base": result["passed_at_base"],
+    }}))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(body) + "\n", encoding="utf-8")
 
 
 def main(argv: list[str]) -> int:
@@ -145,16 +178,7 @@ def main(argv: list[str]) -> int:
         return EXIT_USAGE
     sha, head_sha, out, ids = parsed
     cwd = os.path.realpath(os.getcwd())
-    result = measure(sha, head_sha, ids, cwd)
-    body = [f"FAILED {node}" for node in result["red"]]
-    body.append(json.dumps({"baseline_export": {
-        "export": result["export"],
-        "runner_exit": result["runner_exit"],
-        "passed_at_base": result["passed_at_base"],
-    }}))
-    path = Path(out) if Path(out).is_absolute() else Path(cwd) / out
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(body) + "\n", encoding="utf-8")
+    write_export(measure(sha, head_sha, ids, cwd), Path(out) if Path(out).is_absolute() else Path(cwd) / out)
     return EXIT_OK
 
 

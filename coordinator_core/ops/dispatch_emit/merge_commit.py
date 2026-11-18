@@ -5,12 +5,16 @@ The merge tree is computed by ``merge-tree --write-tree`` and completed in a pri
 bytes found under ``resolved_dir`` for each conflicted path; the commit has parents ``[HEAD, theirs]``.
 The shared index and worktree are synced to the new commit BEFORE ``update-ref`` moves HEAD (a CAS on
 ``expected_head``), so a sync failure leaves HEAD where it was and the synced paths restored.
-A path whose index entry already differs from HEAD is left staged; a path whose worktree differs from
-HEAD keeps its worktree bytes and has only its index entry moved.
-Reply (ok): ``{ok, commit, parents, synced: {checked_out, removed, index_only}, left_staged}``.
+A path theirs changed whose worktree differs from HEAD is folded: ``sync_landed_paths`` 3-way merges
+ours=worktree, base=old HEAD, theirs=new commit into the worktree before ``update-ref``, then the
+index entry moves to the new commit. A path that cannot be folded, or whose index entry already
+differs from HEAD, refuses ``dirty-target`` with no index or worktree change.
+Reply (ok): ``{ok, commit, parents, synced: {checked_out, removed, folded}}``.
 Reply (refused): ``{ok: false, refused, detail}``, ``refused`` one of ``bad-params``, ``head-moved``,
 ``conflict-set-changed`` (detail ``{new, gone}``), ``resolved-missing``, ``conflict-marker``,
-``unexpected-staged``, ``sync-failed``; HEAD never moves on a refusal.
+``dirty-target`` (detail ``{unfoldable, staged}``), ``unexpected-staged``, ``sync-failed``; HEAD never
+moves on a refusal and the folded worktree bytes are restored; a folded path a peer edited since is
+left as is and the refusal ``detail`` becomes ``{cause, restore_skipped}``.
 The git spawn count is a per-call constant (path lists are chunked at 200), not a function of path count.
 No test step, no hooks: the reflog line is written explicitly.
 """
@@ -164,11 +168,41 @@ def _build_commit(repo: _Repo, common_dir: Path, resolved: Path, tree: str, conf
                 pass
 
 
-def _restore(repo: _Repo, old: str, synced: dict, status: dict) -> None:
-    """Return the synced paths to ``old``: index for all of them, worktree for the checked-out and removed ones."""
-    touched = synced["checked_out"] + synced["removed"] + synced["index_only"]
+def _current_bytes(target: Path) -> Optional[bytes]:
+    """The file's bytes, or ``None`` when absent."""
+    return target.read_bytes() if os.path.lexists(target) else None
+
+
+def _restore_bytes(repo: _Repo, snapshot: dict, rels: Iterable[str]) -> list:
+    """Write each folded path's pre-fold bytes back (``None`` = absent) only while it still holds what the fold wrote.
+
+    ``snapshot[rel]`` is ``[before, written]``. Returns the paths a peer edited since, left as they are.
+    """
+    skipped = []
+    for rel in rels:
+        target = repo.root / rel
+        before, written = snapshot[rel]
+        try:
+            current = _current_bytes(target)
+            if current == before:
+                continue
+            if current != written:
+                skipped.append(rel)
+            elif before is None:
+                target.unlink()
+            else:
+                target.write_bytes(before)
+        except OSError:
+            skipped.append(rel)
+    return skipped
+
+
+def _restore(repo: _Repo, old: str, synced: dict, status: dict, snapshot: dict) -> list:
+    """Return the synced paths to ``old``: index for all, worktree for checked-out, removed and folded ones; returns the folded paths left alone."""
+    touched = synced["checked_out"] + synced["removed"] + synced["folded"]
     if touched:
         repo.over_paths(["reset", "-q", old], touched)
+    skipped = _restore_bytes(repo, snapshot, synced["folded"])
     added = [p for p in synced["checked_out"] if status.get(p) == "A"]
     for rel in added:
         try:
@@ -178,49 +212,95 @@ def _restore(repo: _Repo, old: str, synced: dict, status: dict) -> None:
     back = [p for p in synced["checked_out"] + synced["removed"] if p not in added]
     if back:
         repo.over_paths(["checkout", old], back)
+    return skipped
 
 
-def _sync_shared(repo: _Repo, old: str, new: str):
+def _parse_raw(raw: bytes) -> tuple:
+    """``(status, entries)`` from ``diff --raw -z`` output: ``status[path]`` a letter, ``entries[path]`` the ``(old, new)`` tree entries (``None`` = absent)."""
+    tokens = _nul_split(raw)
+    status, entries = {}, {}
+    for i in range(0, len(tokens) - 1, 2):
+        old_mode, new_mode, old_sha, new_sha, letter = tokens[i].lstrip(":").split(" ")[:5]
+        rel = tokens[i + 1]
+        status[rel] = letter[:1]
+        entries[rel] = (
+            None if int(old_mode, 8) == 0 else (int(old_mode, 8), old_sha),
+            None if int(new_mode, 8) == 0 else (int(new_mode, 8), new_sha),
+        )
+    return status, entries
+
+
+def _fold_dirty(repo: _Repo, dirty: list, entries: dict, snapshot: dict) -> tuple:
+    """Fold theirs' hunks into the dirty worktree paths; ``(folded, unfoldable)``. ``snapshot`` receives each path's prior bytes."""
+    from coordinator_core.git.worktree_sync import sync_landed_paths
+
+    plan, unfoldable = {}, []
+    for rel in dirty:
+        target = repo.root / rel
+        try:
+            snapshot[rel] = [_current_bytes(target), None]
+        except OSError:
+            unfoldable.append(rel)
+            continue
+        plan[rel] = entries[rel]
+    outcome = sync_landed_paths(repo.root, plan)
+    folded = [*outcome.head_equal, *outcome.rebased]
+    for rel in folded:
+        try:
+            snapshot[rel][1] = _current_bytes(repo.root / rel)
+        except OSError:
+            snapshot[rel][1] = snapshot[rel][0]
+    return folded, sorted([*outcome.refused, *unfoldable])
+
+
+def _sync_shared(repo: _Repo, old: str, new: str) -> tuple:
     """Move the shared index/worktree from ``old`` to ``new`` for the paths the merge changes.
 
-    Returns ``(synced, left_staged, status, staged_before, failure)``; ``failure`` is ``None`` on success.
+    Returns ``(synced, status, staged_before, snapshot, failure)``; ``failure`` is ``None`` on success,
+    a ``dirty-target`` refusal dict, or a failure text. A dirty path is folded by ``sync_landed_paths``
+    before any index or clean-path step runs; ``snapshot`` holds the bytes to put back.
     """
-    synced = {"checked_out": [], "removed": [], "index_only": []}
-    res = repo.git(["diff", "--name-status", "--no-renames", "-z", old, new], binary=True)
+    synced = {"checked_out": [], "removed": [], "folded": []}
+    snapshot: dict = {}
+    res = repo.git(["diff", "--raw", "--no-renames", "--no-abbrev", "-z", old, new], binary=True)
     if not res.ok:
-        return synced, [], {}, set(), "diff old new failed"
-    tokens = _nul_split(res.stdout_bytes)
-    status = {tokens[i + 1]: tokens[i][:1] for i in range(0, len(tokens) - 1, 2)}
+        return synced, {}, set(), snapshot, "diff old new failed"
+    status, entries = _parse_raw(res.stdout_bytes)
     changed = sorted(status)
     cached = repo.git(["diff", "--cached", "--name-only", "-z", old], binary=True)
     if not cached.ok:
-        return synced, [], status, set(), "diff --cached old failed"
+        return synced, status, set(), snapshot, "diff --cached old failed"
     staged_before = set(_nul_split(cached.stdout_bytes))
     left_staged = [p for p in changed if p in staged_before]
-    movable = [p for p in changed if p not in staged_before]
-    if not movable:
-        return synced, left_staged, status, staged_before, None
-    dirty_runs = repo.over_paths(["diff", "--name-only", "-z", old], movable, binary=True)
+    if left_staged:
+        return synced, status, staged_before, snapshot, _refuse(
+            "dirty-target", {"unfoldable": [], "staged": left_staged})
+    if not changed:
+        return synced, status, staged_before, snapshot, None
+    dirty_runs = repo.over_paths(["diff", "--name-only", "-z", old], changed, binary=True)
     if dirty_runs is None:
-        return synced, left_staged, status, staged_before, "diff old failed"
+        return synced, status, staged_before, snapshot, "diff old failed"
     dirty = {p for r in dirty_runs for p in _nul_split(r.stdout_bytes)}
-    dirty |= {p for p in movable if status[p] == "A" and os.path.lexists(repo.root / p)}
-    for rel in movable:
+    dirty |= {p for p in changed if status[p] == "A" and os.path.lexists(repo.root / p)}
+    folded, unfoldable = _fold_dirty(repo, sorted(dirty), entries, snapshot)
+    if unfoldable:
+        skipped = _restore_bytes(repo, snapshot, folded)
+        return synced, status, staged_before, snapshot, _refuse(
+            "dirty-target", {"unfoldable": unfoldable, "staged": [], **({"restore_skipped": skipped} if skipped else {})})
+    synced["folded"] = folded
+    for rel in changed:
         if rel in dirty:
-            synced["index_only"].append(rel)
-        elif status[rel] == "D":
-            synced["removed"].append(rel)
-        else:
-            synced["checked_out"].append(rel)
+            continue
+        synced["removed" if status[rel] == "D" else "checked_out"].append(rel)
     steps = (
-        ("index_only", ["reset", "-q", new]),
+        ("folded", ["reset", "-q", new]),
         ("removed", ["rm", "-q"]),
         ("checked_out", ["checkout", new]),
     )
     for key, args in steps:
         if synced[key] and repo.over_paths(args, synced[key]) is None:
-            return synced, left_staged, status, staged_before, f"{args[0]} failed"
-    return synced, left_staged, status, staged_before, None
+            return synced, status, staged_before, snapshot, f"{args[0]} failed"
+    return synced, status, staged_before, snapshot, None
 
 
 def commit_merge(root: Path, params: dict) -> dict:
@@ -266,8 +346,10 @@ def commit_merge(root: Path, params: dict) -> dict:
     if new is None:
         return _refuse("sync-failed", failure)
 
-    synced, left_staged, status, staged_before, failure = _sync_shared(repo, old, new)
+    synced, status, staged_before, snapshot, failure = _sync_shared(repo, old, new)
     refusal = None
+    if isinstance(failure, dict):
+        return failure
     if failure is None:
         after = repo.git(["diff", "--cached", "--name-only", "-z", new], binary=True)
         if not after.ok:
@@ -280,10 +362,13 @@ def commit_merge(root: Path, params: dict) -> dict:
         subject = message.strip().splitlines()[0]
         moved = repo.git(["update-ref", "-m", f"commit (merge): {subject}", "HEAD", new, old])
         if moved.ok:
-            return {"ok": True, "commit": new, "parents": [old, theirs], "synced": synced, "left_staged": left_staged}
+            return {"ok": True, "commit": new, "parents": [old, theirs], "synced": synced}
         refusal = _refuse("head-moved", moved.stderr.strip())
-    _restore(repo, old, synced, status)
-    return refusal or _refuse("sync-failed", failure)
+    skipped = _restore(repo, old, synced, status, snapshot)
+    out = refusal or _refuse("sync-failed", failure)
+    if skipped:
+        out["detail"] = {"cause": out.get("detail"), "restore_skipped": skipped}
+    return out
 
 
 @register_op(OP_NAME)

@@ -156,32 +156,11 @@ extern char **environ;
 #define PATH_MAX 4096
 #endif
 
-/* ---- baked at build time by build_posix.py (placeholder substitution,
- * same convention door.c/build.py use for `__PYTHON_BIN_W__`). A build that
- * substitutes neither (a bare `make` with no arguments) leaves the
- * placeholders below, and the door still behaves correctly: an unresolvable
- * engine root makes `fall_through()` REFUSE loudly rather than guess, which
- * is the designed outcome for "this binary does not know which engine it
- * serves". */
+/* ---- baked at build time by build_posix.py (placeholder substitution).
+ * An unresolvable engine root makes `fall_through()` REFUSE loudly rather
+ * than guess. */
 #ifndef PYTHON_BIN
 #define PYTHON_BIN "__PYTHON_BIN__"
-#endif
-
-/* THE FALLBACK ENGINE ROOT -- last-resort only, never the primary source,
- * and never used for socket derivation. See door.c's `BUILD_ENGINE_ROOT_W`
- * comment for the full incident trail; the short version is that the
- * fallback must spawn `coordinator-invoke.py` as a SCRIPT PATH, never a
- * bare `python -m coordinator_core.invoke`, because a bare `-m` resolves
- * through an ambient editable install's `sys.meta_path` pin and silently
- * executes a LIVE working tree instead of a published engine (DR-315 §2).
- *
- * READ THIS BEFORE TRUSTING THE STRING YOU FIND IN THE BINARY: it is a
- * PER-BUILD-MACHINE DEFAULT, meaningless on any other box, which is why
- * `fall_through()` validates it via `is_valid_engine_root()` at runtime and
- * refuses outright rather than launching a script at a path that names no
- * engine on the machine actually running. */
-#ifndef BUILD_ENGINE_ROOT
-#define BUILD_ENGINE_ROOT "__BUILD_ENGINE_ROOT__"
 #endif
 
 /* Must equal door.c's `ENGINE_ROOT_SIDECAR_FILENAME` and build.py's
@@ -357,8 +336,7 @@ static char *read_whole_file(const char *path, size_t *out_len, size_t max_bytes
 }
 
 /* =========================================================================
- * Engine root resolution -- read at runtime, never baked (except the
- * last-resort fallback, see `BUILD_ENGINE_ROOT`).
+ * Engine root resolution -- read at runtime, never baked.
  * ========================================================================= */
 
 
@@ -436,9 +414,7 @@ static const char *door_entrypoint_basename(void) {
  * check. PM ruling (2026-08-21): a live op must never silently execute the
  * live working tree; the published engine, or a loud failure, are the only
  * two acceptable outcomes. This is the check that enforces it, and it is
- * shared by `resolve_engine_root()` (validating the sidecar/env root) and
- * `fall_through()` (validating `BUILD_ENGINE_ROOT`) so the two cannot
- * drift. */
+ * used by `resolve_engine_root()` (validating the sidecar/env root). */
 static int is_valid_engine_root(const char *root) {
     char stamp_path[PATH_MAX];
     int n = snprintf(stamp_path, sizeof(stamp_path),
@@ -546,7 +522,7 @@ static int accept_candidate(char *root, size_t root_len, int rung, const char *l
  *   1. env-var override (`ENGINE_ROOT_ENV_OVERRIDE`)
  *   2. the sidecar file next to this executable
  *   3. <settings-home>/machine-local/.claude-klabauter-root
- * The baked `BUILD_ENGINE_ROOT` is rung 4 (`fall_through`). Returns 0 with
+ * No rung resolving makes `fall_through` refuse. Returns 0 with
  * `*out` unwritten when no rung yields a stamped root. */
 static int resolve_engine_root(char **out, size_t *out_len) {
     static const char *const labels[3] = {
@@ -974,6 +950,7 @@ _Static_assert(DOOR_HOOK_READ_DEADLINE_MS == DOOR_HOOK_PROBE_MS &&
 
 /* Total ms the hook read actually allowed, set once the plan is known; 0 until then. */
 static int g_hook_read_total_ms = 0;
+static long long g_hook_read_started_ms = 0;
 
 /* Non-consuming: 0 only on EOF or a hard socket error. No bytes pending is "open". */
 static int hook_peer_open(int fd) {
@@ -1010,6 +987,7 @@ static int hook_engine_alive(int fd) {
  * open and its process alive, so a dead or closed engine fails open at the probe. */
 static int read_hook_line(int fd, buf_t *resp) {
     int first = door_hook_first_read_ms(g_hook_op);
+    g_hook_read_started_ms = monotonic_ms();
     g_hook_read_total_ms = first;
     int state = read_line_bounded(fd, resp, door_hook_clamp_to_total(first));
     if (state != READ_DEADLINE) return state;
@@ -1294,35 +1272,31 @@ static int emit_post_delivery_failure(const char *detail, int argc, char **argv,
 static int resolve_fallback_script(const char *engine_root, char *script_path) {
     /* Pre-resolution cold legs (escape hatch, install-class, no argv) arrive
      * with no root: climb the ladder here so they reach this machine's
-     * pointer before the baked default. Freed by process exit. */
+     * pointer. Freed by process exit. */
     char *ladder_root = NULL;
     size_t ladder_len = 0;
     if (engine_root == NULL && resolve_engine_root(&ladder_root, &ladder_len)) {
         engine_root = ladder_root;
     }
-    const char *root = (engine_root != NULL) ? engine_root : BUILD_ENGINE_ROOT;
 
     /* `engine_root`, when supplied, was already validated by
-     * `resolve_engine_root()`. This branch exists for the case that was
-     * NEVER validated at runtime: `BUILD_ENGINE_ROOT` is a build-time string
-     * baked into the binary -- correct on the machine that built it,
-     * meaningless on any other. PM ruling (2026-08-21): a live op must
+     * `resolve_engine_root()`. PM ruling (2026-08-21): a live op must
      * execute the published engine or fail loudly, NEVER degrade to "spawn
-     * whatever Python can import". So when the caller supplied no resolved
-     * root AND the baked default does not itself validate, this refuses
-     * outright -- no spawn at all. */
-    if (engine_root == NULL && !is_valid_engine_root(root)) {
+     * whatever Python can import". No resolved root refuses outright --
+     * no spawn at all. */
+    if (engine_root == NULL) {
         const char *notes[3];
         for (int i = 0; i < 3; i++) {
             notes[i] = g_rung_note[i][0] ? g_rung_note[i] : "not consulted";
         }
         fprintf(stderr,
-            "door: no stamped engine root: %s; %s; %s; baked %s "
-            "is not a stamped engine root. Rebuild the door "
-            "(coordinator_core/warm/door/build_posix.py) or set %s.\n",
-            notes[0], notes[1], notes[2], root, ENGINE_ROOT_ENV_OVERRIDE);
+            "door: no stamped engine root: %s; %s; %s. Write the "
+            ENGINE_ROOT_SIDECAR_FILENAME " sidecar beside this executable "
+            "(coordinator_core/install/door_install.py) or set %s.\n",
+            notes[0], notes[1], notes[2], ENGINE_ROOT_ENV_OVERRIDE);
         return 1;
     }
+    const char *root = engine_root;
 
     /* THE NAME-AWARE COLD LEG, TWO-CANDIDATE, `.py` FIRST -- parity with
      * door.c's own cold leg and with the Python-side `_resolve_entrypoint_
@@ -1836,8 +1810,7 @@ int main(int argc, char **argv) {
 
     /* ---- 0. engine root -- resolved at runtime, never baked for socket
      * derivation. On failure `engine_root` stays NULL, which `fall_through`
-     * treats as "use BUILD_ENGINE_ROOT, and refuse if that does not
-     * validate". Kept ALIVE for the whole function: every fall-through exit
+     * re-climbs and refuses on if nothing resolves. Kept ALIVE for the whole function: every fall-through exit
      * needs it to build the correct script path. */
     char *engine_root = NULL;
     size_t engine_root_len = 0;
@@ -2226,7 +2199,8 @@ int main(int argc, char **argv) {
         }
 
         char detail[160];
-        if (door_hook_total_left_ms() == 0 && g_hook_read_total_ms > 0) {
+        if (door_hook_total_left_ms() == 0 && g_hook_read_total_ms > 0 &&
+            remaining_ms(g_hook_read_started_ms, g_hook_read_total_ms) > 0) {
             snprintf(detail, sizeof(detail),
                      "no response within the %ums submit budget -- the door stopped "
                      "waiting, the engine did not stop working",

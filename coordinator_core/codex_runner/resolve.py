@@ -61,6 +61,14 @@ def resolve_codex(platform: Optional[str] = None, env: Optional[dict] = None) ->
         raise CodexUnavailable(f"{fnm_miss}; codex not on PATH either") from fnm_miss
 
 
+def codex_family_stage_argv(prefix: list[str], *tail: str) -> list[str]:
+    """argv for a codex family-stage write run, unrestricted: `--dangerously-bypass-approvals-and-sandbox`, no `--sandbox`.
+
+    Single builder for workflow.run_agent, headless_agents.run_agent and execute.run. Any codex sandbox fails every shell call on Windows (CreateFileMapping error 5); `--json` keeps the event stream the runners parse. `tail` follows verbatim (flags, then prompt or `-`).
+    """
+    return [*prefix, "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", *tail]
+
+
 def resolve_native_cli(
     family: str, platform: Optional[str] = None, env: Optional[dict] = None, which=None,
     home: Optional[Path] = None,

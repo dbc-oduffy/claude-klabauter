@@ -46,9 +46,9 @@ def _reap(session_id: str, agent_id: str) -> None:
 def _handler(params: dict, repo_root=None) -> dict:
     """Reap the orphan trees of the timed-out launches the stopping subagent left;
     always returns no_advisory()."""
+    payload = payload_of(params)
     try:
         if sys.platform == "win32":
-            payload = payload_of(params)
             session_id, agent_id = payload.get("session_id"), payload.get("agent_id")
             if isinstance(session_id, str) and isinstance(agent_id, str) and session_id and agent_id:
                 _reap(session_id, agent_id)

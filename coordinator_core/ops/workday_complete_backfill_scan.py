@@ -470,7 +470,11 @@ def _collect_union_refs(root: str) -> List[str]:
     `for-each-ref` sweep, PLUS the literal checked-out `HEAD` ref. HEAD is
     included IN THE UNION (not a separate fallback path) so the no-work-refs /
     checked-out-non-work-branch case preserves reach WITHOUT `git log --all`
-    (ANTI-SCOPE forbids `--all`)."""
+    (ANTI-SCOPE forbids `--all`). The `<owner>/*/*` patterns (this box's
+    `compute_owner()`) ride in the same call, beside the legacy `work/` ones."""
+    from coordinator_core.machine_resolver import compute_owner
+
+    owner = compute_owner()
     refs = _git_lines(
         [
             "-C",
@@ -479,6 +483,8 @@ def _collect_union_refs(root: str) -> List[str]:
             "--format=%(refname)",
             "refs/heads/work/*/*",
             "refs/remotes/origin/work/*/*",
+            f"refs/heads/{owner}/*/*",
+            f"refs/remotes/origin/{owner}/*/*",
             "refs/heads/main",
             "refs/remotes/origin/main",
         ]

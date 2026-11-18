@@ -128,7 +128,7 @@ def test_a_stale_staged_peer_with_a_fresh_artifact_is_released_by_the_wall_timeo
     peer = _peer(repo, stage="staged", age=warp_run_deliverable.STAGED_STALE_SECONDS + 600)
     stage_file = peer / "run-stage.json"
     data = json.loads(stage_file.read_text(encoding="utf-8"))
-    data["started_at"] = _stamp(60)
+    data["started_at"] = _stamp(warp_run_deliverable.RUN_WALL_TIMEOUT_SECONDS + 600)
     stage_file.write_text(json.dumps(data), encoding="utf-8")
     (peer / "resume.json").write_text("{}", encoding="utf-8")
     assert _paths(repo) == [PATH]

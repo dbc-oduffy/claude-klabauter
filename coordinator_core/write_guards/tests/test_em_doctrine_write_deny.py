@@ -89,6 +89,49 @@ def test_stale_sentinel_does_not_admit(box, kind) -> None:
     assert out["permissionDecision"] == "deny"
 
 
+@pytest.mark.parametrize("kind", ["claude_md", "rules"])
+def test_stale_sentinel_is_deleted_by_the_guard(box, kind) -> None:
+    repo, home = box
+    target = _targets(repo, home)[kind]
+    target.write_text("# doctrine\n", encoding="utf-8")
+    _touch_sentinel(repo, age=sentinel.FRESH_SECONDS + 60)
+    guard.check(_edit(target, repo))
+    assert not (repo / ".git" / sentinel.SENTINEL_BASENAME).exists()
+
+
+def test_fresh_sentinel_survives_the_check_and_names_its_expiry(box) -> None:
+    repo, _home = box
+    _touch_sentinel(repo, age=60)
+    assert sentinel.sentinel_present(str(repo))
+    assert (repo / ".git" / sentinel.SENTINEL_BASENAME).exists()
+    expected = time.strftime("%H:%M", time.localtime(time.time() - 60 + sentinel.FRESH_SECONDS))
+    assert sentinel.admit_until(str(repo)) == expected
+
+
+def test_failed_unlink_of_a_stale_sentinel_never_admits(box, monkeypatch) -> None:
+    repo, _home = box
+    _touch_sentinel(repo, age=sentinel.FRESH_SECONDS + 60)
+
+    def _boom(self, *a, **k):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(Path, "unlink", _boom)
+    assert sentinel.sentinel_present(str(repo)) is False
+
+
+def test_admit_until_is_none_without_a_sentinel(box) -> None:
+    repo, _home = box
+    assert sentinel.admit_until(str(repo)) is None
+    _touch_sentinel(repo)
+    assert sentinel.admit_until(str(repo)) is not None
+
+
+def test_deny_reason_says_the_sentinel_disarms_itself() -> None:
+    assert "30 minutes" in sentinel.DENY_REASON
+    assert "removes itself" in sentinel.DENY_REASON
+    assert "Nothing to clean up" in sentinel.DENY_REASON
+
+
 def test_write_creating_a_new_rules_file_is_denied(box) -> None:
     repo, home = box
     target = home / ".claude" / "rules" / "new.md"

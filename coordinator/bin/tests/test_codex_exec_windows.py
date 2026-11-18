@@ -17,7 +17,14 @@ _FAKE_PY = """\
 import json, os, sys
 data = sys.stdin.buffer.read()
 open(os.environ["FAKE_CODEX_STDIN"], "wb").write(data)
-sys.stdout.write(json.dumps({"argv": sys.argv[1:], "marker": os.environ.get("FAKE_MARKER", "")}) + "\\n")
+home = os.environ.get("CODEX_HOME", "")
+sys.stdout.write(json.dumps({
+    "argv": sys.argv[1:],
+    "marker": os.environ.get("FAKE_MARKER", ""),
+    "codex_home": home,
+    "agents_md": os.path.isfile(os.path.join(home, "AGENTS.md")) if home else False,
+    "auth": os.path.isfile(os.path.join(home, "auth.json")) if home else False,
+}) + "\\n")
 sys.stdout.flush()
 sys.stdout.buffer.write("caf\\u00e9\\n".encode("utf-8"))
 sys.exit(int(os.environ.get("FAKE_CODEX_RC", "0")))
@@ -105,6 +112,68 @@ def test_only_store_alias_codex_refuses(tmp_path):
     proc, _ = _run(tmp_path, [stub])
     assert proc.returncode == 127
     assert b"codex not found" in proc.stderr
+
+
+def test_child_gets_isolated_worker_home_without_agents_md(tmp_path):
+    real = tmp_path / "real-codex-home"
+    real.mkdir()
+    (real / "AGENTS.md").write_text("EM doctrine: submit via engine_ask.submit", encoding="utf-8")
+    (real / "auth.json").write_text("{}", encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir()
+    good = tmp_path / "good"
+    _install_fake_codex(good, "good")
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_bytes(b"row\n")
+    events = tmp_path / "events.jsonl"
+    env = dict(os.environ)
+    env["PATH"] = str(good)
+    env["CODEX_HOME"] = str(real)
+    env["FAKE_CODEX_STDIN"] = str(tmp_path / "stdin.bin")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--prompt", str(prompt), "--events", str(events), "--json"],
+        env=env,
+        cwd=work,
+        capture_output=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    seen = json.loads(events.read_text(encoding="utf-8").splitlines()[0])
+    assert Path(seen["codex_home"]) == work / "scratch" / "codex-home"
+    assert seen["agents_md"] is False
+    assert seen["auth"] is True
+    assert (real / "AGENTS.md").is_file()
+
+
+def test_unshapeable_worker_env_refuses_without_spawning_codex(tmp_path):
+    not_a_dir = tmp_path / "root-is-a-file"
+    not_a_dir.write_text("x", encoding="utf-8")
+    good = tmp_path / "good"
+    _install_fake_codex(good, "good")
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_bytes(b"row\n")
+    events = tmp_path / "events.jsonl"
+    stdin_capture = tmp_path / "stdin.bin"
+    env = dict(os.environ)
+    env["PATH"] = str(good)
+    env["FAKE_CODEX_STDIN"] = str(stdin_capture)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--prompt", str(prompt), "--events", str(events), "-C", str(not_a_dir)],
+        env=env,
+        capture_output=True,
+        timeout=60,
+    )
+    assert proc.returncode == 126
+    assert b"worker env refused" in proc.stderr
+    assert not stdin_capture.exists()
+
+
+def test_writable_root_prefers_cd_arg_then_cwd(tmp_path, monkeypatch):
+    mod = _load()
+    assert mod.writable_root_of(["--json", "-C", str(tmp_path)]) == tmp_path
+    assert mod.writable_root_of([f"--cd={tmp_path}"]) == tmp_path
+    monkeypatch.chdir(tmp_path)
+    assert mod.writable_root_of(["--json"]) == Path.cwd()
 
 
 def test_clean_path_filters_and_prepends_pwsh(tmp_path):

@@ -82,11 +82,39 @@ def test_deny_without_reason_still_carries_a_reason() -> None:
     assert out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_allow_empty_and_ask_all_render_empty_object() -> None:
+def test_allow_and_empty_render_empty_object() -> None:
     adapter = CodexAdapter()
     ev = adapter.adapt_event(PAYLOAD)
-    for verdict in ({}, {"decision": "allow"}, {"decision": "ask", "reason": "r"}, None):
+    for verdict in ({}, {"decision": "allow"}, None):
         assert adapter.render(ev, verdict) == {}
+
+
+# Premise (unprobed live): codex has no ask it can answer under `codex exec` (`codex exec --help`: approvals
+# are bypassed or auto-reviewed, never put to a human). A `{}` answer drops the ask and its reason: a silent
+# pass. Registry class -> deny; else the reason reaches the model as additionalContext.
+@pytest.mark.parametrize("verdict", [
+    {"decision": "ask", "reason": "r"},
+    {"decision": "force_ask", "reason": "r"},
+    {"hookSpecificOutput": {"permissionDecision": "ask", "permissionDecisionReason": "r"}},
+])
+def test_a_non_registry_ask_reaches_the_model_as_additional_context_never_silently(verdict) -> None:
+    adapter = CodexAdapter()
+    out = adapter.render(adapter.adapt_event(PAYLOAD), verdict)
+    assert out == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "r"}}
+
+
+@pytest.mark.parametrize("decision", ["ask", "force_ask"])
+def test_a_registry_classed_guard_ask_is_a_deny_with_its_reason(decision) -> None:
+    adapter = CodexAdapter()
+    out = adapter.render(adapter.adapt_event(PAYLOAD),
+                         {"decision": decision, "reason": "r", "guard": "block-held-push"})
+    assert out == hook_http.deny_response("PreToolUse", "r")
+
+
+def test_an_unknown_guard_name_is_not_registry_backed_so_its_ask_stays_an_advisory() -> None:
+    adapter = CodexAdapter()
+    out = adapter.render(adapter.adapt_event(PAYLOAD), {"decision": "ask", "reason": "r", "guard": "no-such-guard"})
+    assert out["hookSpecificOutput"]["additionalContext"] == "r"
 
 
 def test_verdict_parts_flat_nested_and_absent() -> None:

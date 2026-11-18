@@ -297,8 +297,26 @@ def _paren_shape(
     return opens, closes, toks, raws
 
 
-def _offence(cmd: str, payload_cwd: Optional[str]) -> Optional[Tuple[str, Optional[str]]]:
-    """(what, workspace key) for the first git write landing in a registered workspace."""
+_DESTINATION_VERBS = frozenset({"git init", "git clone", "git worktree"})
+
+
+def _registered_path_containing(path: str) -> Optional[str]:
+    """Key of a registered workspace (present or missing) whose root equals or contains `path`."""
+    from coordinator_core.machine_resolver import _canon_path, external_workspace_registered_paths
+
+    target = _canon_path(path)
+    for key, entry in external_workspace_registered_paths().items():
+        root = _canon_path(entry["path"])
+        if target == root or target.startswith(root.rstrip(os.sep) + os.sep):
+            return key
+    return None
+
+
+def _offence(cmd: str, payload_cwd: Optional[str]) -> Optional[Tuple[Any, ...]]:
+    """(what, workspace key[, rehydrate]) for the first git write landing in a registered workspace.
+
+    `rehydrate` is True when the destination is a registered workspace that is missing on disk.
+    """
     from coordinator_core.machine_resolver import (
         external_workspace_containing,
         external_workspace_registry_readable,
@@ -348,6 +366,11 @@ def _offence(cmd: str, payload_cwd: Optional[str]) -> Optional[Tuple[str, Option
             key = external_workspace_containing(d)
             if key is not None:
                 return what, key
+        if found[0] in _DESTINATION_VERBS:
+            for d in dirs:
+                key = _registered_path_containing(d)
+                if key is not None:
+                    return what, key, True
         if hidden or cd_hidden:
             key = external_workspace_containing(payload_cwd) if payload_cwd else None
             if key is not None:
@@ -358,7 +381,12 @@ def _offence(cmd: str, payload_cwd: Optional[str]) -> Optional[Tuple[str, Option
 ANCHOR = "NO-VCS-WRITE-IN-AN-EXTERNAL-WORKSPACE"
 
 
-def _deny_reason(what: str, key: Optional[str]) -> str:
+def _deny_reason(what: str, key: Optional[str], rehydrate: bool = False) -> str:
+    if rehydrate:
+        return (
+            f"BLOCKED: {what} into registered external workspace `{key}`. {ANCHOR}. "
+            f"Alternative: external_workspace.rehydrate with key `{key}`."
+        )
     if key is None:
         return (
             f"BLOCKED: {what} while the external-workspace registry is unreadable. {ANCHOR}. "
@@ -390,17 +418,22 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return _deny_record(*offence)
 
 
-def _deny_record(what: str, key: Optional[str]) -> Any:
+def _deny_record(what: str, key: Optional[str], rehydrate: bool = False) -> Any:
     from coordinator_core.guard_messages.alternative_record import (
         AdaptableOffer,
         AlternativeRecord,
         EscalationRoute,
     )
 
-    legacy = _deny_reason(what, key)
+    legacy = _deny_reason(what, key, rehydrate)
     summary, _, _alt = legacy.partition(" Alternative: ")
-    if key is None:
+    if rehydrate:
         member: Any = AdaptableOffer(
+            template=f"external_workspace.rehydrate with key `{key}`",
+            what_to_adapt="the clone to the rehydrate op",
+        )
+    elif key is None:
+        member = AdaptableOffer(
             template="run read verbs only, or fix the machine-local registry",
             what_to_adapt="the command to a read verb",
         )

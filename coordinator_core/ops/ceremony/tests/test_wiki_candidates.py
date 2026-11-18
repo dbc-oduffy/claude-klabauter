@@ -276,7 +276,7 @@ def test_empty_ledger_returns_an_empty_reply_without_grep_or_catfile(repo, monke
     real = wc.run_git
     monkeypatch.setattr(wc, "run_git", lambda args, **kw: (seen.append(args[0]), real(args, **kw))[1])
     out = _run(repo)
-    assert out["pages"] == [] and seen == ["rev-parse"]
+    assert out["pages"] == [] and seen == ["rev-parse", "ls-tree"]
 
 
 def test_repo_root_param_queries_another_repo_and_rejects_a_missing_one(repo, tmp_path: Path) -> None:
@@ -290,9 +290,44 @@ def test_repo_root_param_queries_another_repo_and_rejects_a_missing_one(repo, tm
         wc._ceremony_wiki_candidates({}, repo_root=None)
 
 
-def test_empty_reason_ledger_missing(repo) -> None:
+def _scan_plan(repo: Path, name: str, *, status: str = "landed", day: datetime = _NOW) -> str:
+    """Commit one dated plan with no ledger row (the ledger-less repo shape); returns its path."""
+    rel = f"docs/plans/2026-11/{day.strftime('%Y-%m-%d')}-{name}.md"
+    text = (
+        f"---\ntitle: {name}\nstatus: {status}\n---\n\n# {name}\n\nbody\n\n"
+        "```yaml plan-tasks\n- id: C1\n  writes:\n    - src/a.py\n  body: x\n```\n"
+    )
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))
+    _commit(repo, name)
+    return rel
+
+
+def test_empty_reason_ledger_missing_only_when_the_git_scan_finds_nothing(repo) -> None:
+    _wiki(repo, "alpha", "src/a.py")
+    _scan_plan(repo, "draft", status="draft")
+    _scan_plan(repo, "stale", day=_NOW - timedelta(days=60))
     out = _run(repo)
     assert out["pages"] == [] and out["empty_reason"] == "ledger_missing"
+
+
+def test_ledger_less_repo_selects_completed_plan_from_git_by_the_citation_rule(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    _wiki(repo, "alpha", "src/a.py")
+    _wiki(repo, "beta", "src/unrelated.py")
+    plan = _scan_plan(repo, "done")
+    _scan_plan(repo, "draft", status="draft")
+    sha = _git(repo, "rev-parse", "HEAD")
+    assert not (repo / ledger.LEDGER).exists()
+    seen = []
+    real = wc.run_git
+    monkeypatch.setattr(wc, "run_git", lambda args, **kw: (seen.append(args[0]), real(args, **kw))[1])
+    out = _run(repo)
+    assert [pg["page"] for pg in out["pages"]] == [_WIKI + "alpha.md"]
+    assert [pl["path"] for pl in out["pages"][0]["plans"]] == [plan]
+    assert out["pages"][0]["plans"][0]["commit_sha"] == sha
+    assert out["empty_reason"] is None
+    assert sorted(seen) == ["cat-file", "ls-tree", "rev-parse"]
 
 
 def test_empty_reason_ledger_empty_in_window(repo) -> None:

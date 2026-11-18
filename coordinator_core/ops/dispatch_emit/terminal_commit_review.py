@@ -567,7 +567,7 @@ def verdict_judged_shas(worktree_root: Path, inline_review: object) -> dict:
         except Exception:  # noqa: BLE001 -- an unreadable or malformed sidecar pins nothing
             continue
         read_any = True
-        fixed.update(f.replace("\\", "/") for f, _ in _applied_fix_rows(text))
+        fixed.update(_worktree_relative(worktree_root, f) for f, _ in _applied_fix_rows(text))
         own = fm.get(VERDICT_JUDGED_KEY) if isinstance(fm, dict) else None
         for p, sha in (own.items() if isinstance(own, dict) else ()):
             if isinstance(p, str) and isinstance(sha, str) and sha:
@@ -579,13 +579,104 @@ def verdict_judged_shas(worktree_root: Path, inline_review: object) -> dict:
     return out
 
 
+def _worktree_relative(worktree_root: Path, path: str) -> str:
+    """``path`` as a forward-slash worktree-relative key; an absolute path under the root is
+    relativised, any other path is only slash-normalised."""
+    norm = path.replace("\\", "/")
+    root = str(worktree_root).replace("\\", "/").rstrip("/")
+    if norm.lower().startswith(root.lower() + "/"):
+        return norm[len(root) + 1:]
+    return norm
+
+
+def _reverify_clean(inline_review: object) -> bool:
+    """The run's re-verify record passed, or every failure it lists pre-existed or is foreign:
+    nothing red is the reviewer's own."""
+    block = inline_review.get("reverify") if isinstance(inline_review, dict) else None
+    if not isinstance(block, dict) or str(block.get("reverify_error") or "").strip():
+        return False
+    if block.get("status_after") == "pass":
+        return True
+    failing = block.get("failing")
+    if block.get("status_after") != "fail" or not isinstance(failing, list) or not failing:
+        return False
+    known = {*(block.get("pre_existing") or ()), *(block.get("foreign") or ())}
+    return all(f in known for f in failing) and not block.get("unattributed")
+
+
+def _reviewer_agent_ids(worktree_root: Path, inline_review: object) -> list:
+    """The ``review_receipt.agent_id`` of each wave sidecar: the reviewer agents whose touch sinks
+    record what they wrote."""
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    listed = inline_review.get("wave_sidecar_paths") if isinstance(inline_review, dict) else None
+    out: list = []
+    for w in listed if isinstance(listed, list) else []:
+        if not (isinstance(w, str) and w):
+            continue
+        try:
+            split = split_frontmatter((worktree_root / w).read_text(encoding="utf-8"))
+            fm = _yaml_load(split.fm_text) if split else None
+        except Exception:  # noqa: BLE001 -- an unreadable sidecar names no reviewer
+            continue
+        receipt = fm.get("review_receipt") if isinstance(fm, dict) else None
+        agent = receipt.get("agent_id") if isinstance(receipt, dict) else None
+        if isinstance(agent, str) and agent and "/" not in agent and "\\" not in agent:
+            out.append(agent)
+    return out
+
+
+def _less_reviewer_edits(worktree_root: Path, inline_review: object, stale: list) -> list:
+    """``stale`` less each path whose current bytes equal the reviewer's newest recorded write to it,
+    when the re-verify is clean: the reviewer's post-edit bytes are the reviewed product. A later or
+    foreign edit differs from that hash and stays stale."""
+    if not stale or not _reverify_clean(inline_review):
+        return stale
+    agents = _reviewer_agent_ids(worktree_root, inline_review)
+    if not agents:
+        return stale
+    from coordinator_core.session import core, touch_record
+
+    hub = core.sessions_dir(str(worktree_root))
+    if not hub:
+        return stale
+    wanted = set(stale)
+    written: dict = {}
+    for agent in agents:
+        for p, (sha, at) in _agent_newest_hashed_writes(hub, agent, wanted).items():
+            if at >= written.get(p, (None, float("-inf")))[1]:
+                written[p] = (sha, at)
+    return [
+        p for p in stale
+        if p not in written or touch_record.compute_content_hash(worktree_root / p) != written[p][0]
+    ]
+
+
+def _less_reverify_edits(worktree_root: Path, inline_review: object, stale: list) -> list:
+    """``stale`` less each path the re-verify record names in ``edited`` whose current bytes are the
+    ones that step recorded (``_review_write_events``: ``edited_sha256`` when carried, else an mtime
+    no later than its finish), when the re-verify is clean. A later or foreign edit stays stale."""
+    block = inline_review.get("reverify") if isinstance(inline_review, dict) else None
+    edited = block.get("edited") if isinstance(block, dict) else None
+    if not stale or not isinstance(edited, list) or not _reverify_clean(inline_review):
+        return stale
+    named = {p.replace("\\", "/") for p in edited if isinstance(p, str) and p}
+    claimed = {p: REVIEW_RECORD_AGENT for p in stale if p in named}
+    if not claimed:
+        return stale
+    judged = _review_write_events(worktree_root, claimed, inline_review)
+    return [p for p in stale if p not in judged]
+
+
 def verdict_pin_mismatches(worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None) -> list:
     """Sorted paths (of ``within``, else every pinned path) whose bytes match no sha the verdict
-    pinned: the files that owe re-review. Empty when the verdict pins nothing."""
+    pinned, less a path the reviewer itself last wrote or the clean re-verify recorded as its own
+    edit: the files that owe re-review. Empty when the verdict pins nothing."""
     from coordinator_core.ops.review_prep import judged_mismatches
 
     judged = verdict_judged_shas(worktree_root, inline_review)
-    return judged_mismatches(worktree_root, judged, list(judged) if within is None else [q for q in (str(p).replace("\\", "/") for p in within) if q in judged])
+    stale = judged_mismatches(worktree_root, judged, list(judged) if within is None else [q for q in (str(p).replace("\\", "/") for p in within) if q in judged])
+    return _less_reverify_edits(worktree_root, inline_review, _less_reviewer_edits(worktree_root, inline_review, stale))
 
 
 def verdict_pin_refusal(mismatched: Sequence[str]) -> str:

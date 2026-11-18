@@ -803,25 +803,33 @@ def _quarantine_real_home(request: pytest.FixtureRequest, tmp_path_factory: pyte
 
 
 @pytest.fixture(autouse=True)
-def _fence_real_registry_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+def _fence_real_registry_writes():
     """No test reaches the operator's real registry.
 
     Trap: a fake install path and a cleared kill switch are not a sandbox —
     `_win_user_path_prepend` once replaced a real HKCU PATH with a fixture path
     and `claude` stopped launching. A test that needs the write path installs
     its own fake `winreg` (or monkeypatches these names after this fixture).
+    Trap: this uses a private MonkeyPatch, never the shared `monkeypatch`
+    fixture. The root conftest re-exports it to every testpath, so requesting
+    `monkeypatch` here would instantiate it ahead of coordinator/bin's
+    settings-home tripwire, whose teardown would then see env edits not yet
+    unwound.
     """
     try:
         import winreg
     except ImportError:
+        yield
         return
 
     def _refuse(*_a, **_k):
         raise AssertionError("test reached a real winreg write; inject a fake winreg")
 
-    for name in ("SetValue", "SetValueEx", "DeleteValue", "DeleteKey", "DeleteKeyEx", "CreateKey", "CreateKeyEx"):
-        if hasattr(winreg, name):
-            monkeypatch.setattr(winreg, name, _refuse)
+    with pytest.MonkeyPatch.context() as mp:
+        for name in ("SetValue", "SetValueEx", "DeleteValue", "DeleteKey", "DeleteKeyEx", "CreateKey", "CreateKeyEx"):
+            if hasattr(winreg, name):
+                mp.setattr(winreg, name, _refuse)
+        yield
 
 
 @pytest.fixture(autouse=True)

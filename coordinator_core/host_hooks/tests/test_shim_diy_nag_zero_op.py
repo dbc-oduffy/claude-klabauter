@@ -32,6 +32,11 @@ def repo(tmp_path, monkeypatch):
     for i in range(3):
         (root / f"f{i}.txt").write_text("b\n" * 40)
     monkeypatch.setattr(nag.xs_lane_budget, "lane_path", lambda r, sid: tmp_path / "hub" / sid / "lane.json")
+    # The dirt above is every session's own hand edit: the lane record attributes it to the caller.
+    monkeypatch.setattr(
+        nag.xs_lane_budget, "read_lane",
+        lambda r, sid: {"kind": "xs", "state": "open", "base_sha": "x", "paths": ["f0.txt", "f1.txt", "f2.txt"]},
+    )
     monkeypatch.setattr(warp_fire, "nag_text", lambda sid, sizing_rel=None, state_dir=None, host=None, edit_size=None, edit_size_truncated=False: NAG)
     for key in ("COORDINATOR_AGENT_PROVIDER", "COORDINATOR_AGENT_VENDOR", "COORDINATOR_AGENT_ROLE",
                 "CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID", "AGY_SESSION_ID", "COORDINATOR_SESSION_ID"):
@@ -50,7 +55,8 @@ def _payload(host, root, sid):
 
 def _shows_nag(host, out):
     if host == "agy":
-        return out.get("decision") == "ask" and NAG in out.get("reason", "")
+        # An `ask` is auto-approved under agy -p; the nag is an explicit allow stashed for the next PreInvocation.
+        return out.get("decision") == "allow" and "injectSteps" not in out and NAG in str(out.get("reason"))
     return NAG in str(out) and "deny" not in str(out)
 
 
@@ -67,6 +73,13 @@ def test_zero_op_session_gets_advisory_then_throttled(monkeypatch, repo, host, e
     second = shim.run(host, json.dumps(_payload(host, repo, "zero-op")))
     assert not _shows_nag(host, second), second
     assert spawns == []
+
+
+@pytest.mark.parametrize("host", ["codex", "agy", "grok"])
+def test_session_with_no_own_edit_is_not_nagged_for_peer_dirt(monkeypatch, repo, host):
+    monkeypatch.setattr(nag.xs_lane_budget, "read_lane", lambda r, sid: None)
+    monkeypatch.setattr(shim, "_dial", lambda request: None)
+    assert not _shows_nag(host, shim.run(host, json.dumps(_payload(host, repo, "no-own-edit"))))
 
 
 def test_engine_deny_is_untouched(monkeypatch, repo):
@@ -187,6 +200,27 @@ def test_host_guard_stamps_after_it_writes_the_grok_nag(monkeypatch, repo, tmp_p
     out = _drive_guard(monkeypatch, capsys, repo, "guard-sid")
     assert _shows_nag("grok", out)
     assert _stamp(tmp_path, "guard-sid").exists()
+
+
+def test_grok_guard_default_budget_delivers_nag_as_hook_additional_context(monkeypatch, repo, tmp_path, capsys):
+    guard_mod = _load_guard()
+    assert guard_mod.DEFAULT_BUDGET_SECS == 0.5
+    monkeypatch.setattr(nag, "advisory_for_dispatch", lambda root, sid, env=None, *a, **k: "STUB-NAG")
+    monkeypatch.setattr(shim, "_dial", lambda request: None)
+    out = _drive_guard(monkeypatch, capsys, repo, "guard-ctx-sid")
+    hook = out["hookSpecificOutput"]
+    assert hook["permissionDecision"] == "allow"
+    assert "STUB-NAG" in hook["additionalContext"]
+    assert _stamp(tmp_path, "guard-ctx-sid").exists()
+
+
+def test_grok_guard_without_advisory_carries_no_additional_context(monkeypatch, repo, tmp_path, capsys):
+    monkeypatch.setattr(nag, "advisory_for_dispatch", lambda root, sid, env=None, *a, **k: "")
+    monkeypatch.setattr(shim, "_dial", lambda request: None)
+    out = _drive_guard(monkeypatch, capsys, repo, "guard-noctx-sid")
+    assert "STUB-NAG" not in str(out)
+    assert "additionalContext" not in str(out)
+    assert not _stamp(tmp_path, "guard-noctx-sid").exists()
 
 
 def test_host_guard_timeout_writes_no_nag_and_no_stamp(monkeypatch, repo, tmp_path, capsys):

@@ -184,7 +184,8 @@ def test_no_console_creationflags_posix_returns_empty_mapping(monkeypatch: pytes
 def test_no_console_creationflags_windows_returns_create_no_window_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
     result = no_console_creationflags()
-    assert set(result) == {"creationflags"}
+    assert set(result) <= {"creationflags", "startupinfo"}
+    assert "creationflags" in result
     # Independently-derived expectation, not a re-assertion of the function's
     # own output: subprocess.CREATE_NO_WINDOW when the real host defines it
     # (real Windows), else the documented getattr fallback of 0 (a POSIX host
@@ -195,11 +196,39 @@ def test_no_console_creationflags_windows_returns_create_no_window_flag(monkeypa
     assert result["creationflags"] == expected
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="subprocess.STARTUPINFO is Windows-only")
+def test_no_console_creationflags_windows_startupinfo_is_hidden_and_no_feedback() -> None:
+    import subprocess
+
+    result = no_console_creationflags()
+    info = result["startupinfo"]
+    assert info.dwFlags & subprocess.STARTF_USESHOWWINDOW
+    assert info.dwFlags & 0x80
+    assert win_portability.STARTF_FORCEOFFFEEDBACK == 0x80
+    assert info.wShowWindow == subprocess.SW_HIDE
+    assert no_console_creationflags()["startupinfo"] is not info
+
+
 def test_no_console_creationflags_does_not_set_stdio_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
-    assert set(no_console_creationflags()) <= {"creationflags"}
+    assert set(no_console_creationflags()) <= {"creationflags", "startupinfo"}
     monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
-    assert set(no_console_creationflags()) <= {"creationflags"}
+    assert set(no_console_creationflags()) <= {"creationflags", "startupinfo"}
+
+
+def test_console_python_maps_pythonw_to_existing_python_sibling(tmp_path: Path) -> None:
+    (tmp_path / "python.exe").write_bytes(b"")
+    (tmp_path / "pythonw.exe").write_bytes(b"")
+    assert win_portability.console_python(tmp_path / "pythonw.exe") == str(tmp_path / "python.exe")
+
+
+def test_console_python_keeps_input_when_sibling_absent_or_not_pythonw(tmp_path: Path) -> None:
+    (tmp_path / "pythonw.exe").write_bytes(b"")
+    assert win_portability.console_python(tmp_path / "pythonw.exe") == str(tmp_path / "pythonw.exe")
+    (tmp_path / "python.exe").write_bytes(b"")
+    other = str(tmp_path / "python3.12")
+    assert win_portability.console_python(other) == other
+    assert win_portability.console_python(tmp_path / "python.exe") == str(tmp_path / "python.exe")
 
 
 def test_same_path_uses_samefile_when_both_paths_exist(tmp_path: Path) -> None:

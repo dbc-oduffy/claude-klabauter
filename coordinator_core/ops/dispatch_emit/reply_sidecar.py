@@ -64,6 +64,11 @@ STAGE_REPLY_SCHEMA = {
         # Literals ask_stage_receipt.ALREADY_STAGED_KEY / STAGE_IN_FLIGHT_KEY, pinned equal by test_reply_sidecar.
         "already_staged": {"const": True},
         "stage_in_flight": {"type": "object"},
+        # ask_stage._family_routing_report / _interpreter_pin_report keys. Trap: absent here, every
+        # family-routed stage reply is refused, first-time and already-staged alike.
+        "family_routes": {"type": "object", "additionalProperties": {"type": "string"}},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "interpreter_pin_defect": {"type": "string"},
     },
 }
 

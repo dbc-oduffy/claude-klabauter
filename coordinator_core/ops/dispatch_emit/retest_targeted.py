@@ -65,6 +65,9 @@ RETEST_CHILD_TIMEOUT_SECS = 1800.0
 #: Grace past the child timeout before a ``running`` record reads as abandoned.
 _DEADLINE_GRACE_SECS = 60.0
 
+#: Sleep between ``--poll --wait`` reads of the record.
+_WAIT_INTERVAL_SECS = 2.0
+
 #: ``run`` return value for a launcher killed at the timeout.
 LAUNCH_TIMED_OUT = "timed-out"
 
@@ -80,6 +83,18 @@ _VALUE_OPTIONS = frozenset({
     "--rootdir", "-c", "-p", "--confcutdir", "-m", "-k", "--ignore", "--ignore-glob", "--deselect",
     "-o", "--override-ini", "--maxfail", "--tb", "--durations", "-n", "--basetemp",
 })
+
+
+def _is_export_root(cwd: Path) -> bool:
+    """True when `cwd` sits in a shared clone (an export): the nearest `.git` dir carries `objects/info/alternates`.
+    A live checkout or linked worktree has none."""
+    for cand in (cwd, *cwd.parents):
+        git = cand / ".git"
+        if git.is_dir():
+            return (git / "objects" / "info" / "alternates").is_file()
+        if git.exists():
+            return False
+    return False
 
 
 def _run_argv(
@@ -108,12 +123,12 @@ def _run_argv(
     sink = open(log, "ab" if append else "wb") if log is not None else subprocess.DEVNULL
     from coordinator_core.testing import baseline_export, scoped_pytest
 
-    # An export carries no .git of its own: confine git there so it cannot adopt an enclosing repo.
+    # An export root (clone with .git) runs under the export env; only a live worktree keeps os.environ.
     from coordinator_core.diagnostics.contained_run import spawn_in_capped_job
     from coordinator_core.testing.nested_session_guard import guarded_child_env
 
     env = guarded_child_env(
-        os.environ if (Path(cwd) / ".git").exists() else baseline_export.export_env(cwd)
+        baseline_export.export_env(cwd) if _is_export_root(Path(cwd)) else os.environ
     )
     run_holder: Optional[Path] = None
     try:
@@ -688,8 +703,9 @@ def _read_record(path: Path) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _past_deadline(record: dict) -> bool:
-    """True when a ``running`` record's ``deadline`` has passed; an unparseable one counts as past."""
+def retest_abandoned(record: dict) -> bool:
+    """True when a ``running`` record's ``deadline`` (child timeout plus grace) has passed; an
+    unparseable one counts as past. The one deadline rule for every reader of the record."""
     try:
         return datetime.now(timezone.utc) >= datetime.fromisoformat(str(record["deadline"]))
     except (KeyError, ValueError, TypeError):
@@ -740,8 +756,8 @@ def _poll(path: Path, flag: str, value: str) -> int:
         return 2
     status = record.get("status")
     if status == landing_retest.RETEST_RUNNING:
-        if _past_deadline(record):
-            print(f"{path} error: retest child abandoned past deadline")
+        if retest_abandoned(record):
+            print(f"{path} {landing_retest.RETEST_ABANDONED}: retest child abandoned past deadline")
             return 2
         print(f"{path} running since {record.get('at')}; poll: {_poll_command(flag, value)}")
         return 3
@@ -759,7 +775,7 @@ def _start_detached(
     flag, value = _input_pair(args)
     poll = _poll_command(flag, value)
     existing = _read_record(path)
-    if existing and existing.get("status") == landing_retest.RETEST_RUNNING and not _past_deadline(existing):
+    if existing and existing.get("status") == landing_retest.RETEST_RUNNING and not retest_abandoned(existing):
         print(f"{path} running since {existing.get('at')}; poll: {poll}")
         return 3
     started = datetime.now(timezone.utc)
@@ -1436,8 +1452,11 @@ def main(
     ap.add_argument("--dropped", action="append", default=[], help=argparse.SUPPRESS)
     ap.add_argument("--detached-child", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--poll", action="store_true")
+    ap.add_argument("--wait", action="store_true", help="with --poll: block until a terminal verdict")
     ap.add_argument("--isolated-export", action="store_true")
     args = ap.parse_args(argv)
+    if args.wait and not args.poll:
+        ap.error("--wait requires --poll")
 
     try:
         params = _load_params(args)
@@ -1452,7 +1471,11 @@ def main(
 
     path = landing_retest.fresh_verdict_path(root, run_id)
     if args.poll:
-        return _poll(path, *_input_pair(args))
+        code = _poll(path, *_input_pair(args))
+        while args.wait and code == 3:
+            time.sleep(_WAIT_INTERVAL_SECS)
+            code = _poll(path, *_input_pair(args))
+        return code
 
     tests = _with_invariants(root, _tests_to_run(args.tests, params), dirty, run_id, params)
     if not tests:

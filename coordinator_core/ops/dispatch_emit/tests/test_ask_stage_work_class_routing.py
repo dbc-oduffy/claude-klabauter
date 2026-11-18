@@ -74,6 +74,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     plug = home / ".claude" / "plugins" / "example-game-repo-control" / "agents"
     plug.mkdir(parents=True)
     (plug / "ue-editor.md").write_text(_agent_md("ue-editor", f"Read, {MCP}inspect"), encoding="utf-8")
+    (plug / "ue-reader.md").write_text(_agent_md("ue-reader", "Read"), encoding="utf-8")
     (plug / "ue-triage.md").write_text(_agent_md("ue-triage", "Read", model="haiku"), encoding="utf-8")
     monkeypatch.setattr(bua, "read_content_root", lambda: str(content))
     monkeypatch.setenv("CLAUDE_HOME", str(home))
@@ -123,7 +124,7 @@ def test_no_table_manifest_is_identical_to_unrouted(repo) -> None:
 def test_mismatched_explicit_row_is_refused_naming_row_and_class(repo) -> None:
     _write_table(repo, _table())
     plan = (repo / PLAN_REL).read_text(encoding="utf-8").replace(
-        "  surface: Content/A.uasset\n", "  surface: Content/A.uasset\n  agent_type: coordinator:executor\n  agent_model: sonnet\n"
+        "  surface: Content/A.uasset\n", "  surface: Content/A.uasset\n  agent_type: example-game-repo-control:ue-reader\n  agent_model: sonnet\n"
     )
     (repo / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
     with pytest.raises(AskStageError) as exc:
@@ -135,7 +136,7 @@ def test_mismatched_explicit_row_is_refused_naming_row_and_class(repo) -> None:
 def test_mismatched_explicit_row_is_redirected_under_redirect(repo) -> None:
     _write_table(repo, _table(on_mismatch="redirect"))
     plan = (repo / PLAN_REL).read_text(encoding="utf-8").replace(
-        "  surface: Content/A.uasset\n", "  surface: Content/A.uasset\n  agent_type: coordinator:executor\n  agent_model: sonnet\n"
+        "  surface: Content/A.uasset\n", "  surface: Content/A.uasset\n  agent_type: example-game-repo-control:ue-reader\n  agent_model: sonnet\n"
     )
     (repo / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
     c1 = _by_id(stage(repo, run_id="r1", plan_rel=PLAN_REL))["C1"]

@@ -34,6 +34,8 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     "review_blocked": (DECISION, None),
     "criterion_not_met": (DECISION, None),
     "delivery_fail": (DECISION, None),
+    # A tripwire the land skipped went red on the landed sha: the commit stands, so a human reads the reds.
+    "post_land_tripwire_red": (DECISION, None),
     "objective_calibration": (DECISION, None),
     "objective_impossible": (DECISION, None),
     "objective_escalated": (DECISION, None),

@@ -99,8 +99,8 @@ def _alert_text(run_id: str, splits: list[dict]) -> str:
     return f"LIVE BREAKAGE: run {run_id} halted with dependency tree newer than build in {', '.join(parts)}. Rebuild or restore."
 
 
-def alert_live_gem(root: Path, run_id: str, splits: list[dict]) -> None:
-    """Message the live Group EM about `splits`; no-op without a live holder. Never raises.
+def send_live_gem(root: Path, text: str) -> bool:
+    """Send `text` to the live Group EM; True when handed off, False without a live holder. Never raises.
 
     Skipped under pytest unless `_ALERT_SENDER` is set, so a fixture halt never starts a real process."""
     try:
@@ -108,20 +108,25 @@ def alert_live_gem(root: Path, run_id: str, splits: list[dict]) -> None:
 
         verdict = nomination.identify(str(root))
         if verdict.get("state") != "live":
-            return
+            return False
         name = (verdict.get("holder") or {}).get("name")
         if not name:
-            return
-        text = _alert_text(run_id, splits)
+            return False
         if _ALERT_SENDER is not None:
             _ALERT_SENDER(name, text)
-            return
+            return True
         if os.environ.get("PYTEST_CURRENT_TEST"):
-            return
+            return False
         from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 
         engine_root = Path(__file__).resolve().parents[3]
         script = engine_root / "coordinator" / "bin" / "unimatrix-send.py"
         spawn_detached(str(engine_root), str(script), ["--to", name, text])
+        return True
     except Exception:  # noqa: BLE001 -- alerting is best-effort; the marker is the truth
-        pass
+        return False
+
+
+def alert_live_gem(root: Path, run_id: str, splits: list[dict]) -> None:
+    """Message the live Group EM about `splits`; no-op without a live holder. Never raises."""
+    send_live_gem(root, _alert_text(run_id, splits))

@@ -3494,6 +3494,10 @@ _COMMITTING_OP_NAMES = frozenset(
         "memo.migrate_group_em_inbox",
         "dispatch.terminal_commit",
         "dispatch.land_run",
+        # Verified against handler source: post_run_finish calls
+        # commit_scoped(...); plan_checkpoints_close calls commit_paths(...).
+        "post_run.finish",
+        "dispatch.close_plan_checkpoints",
     }
 )
 # Purpose: memo.send commits only its own receipt and the receiver-side

@@ -12,7 +12,9 @@ file read. `--export-run -- <argv>` runs a test command in the mirror at HEAD pl
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -52,6 +54,8 @@ PYTEST_STARTUP_S = 120
 IMPORTER_CAP = 25
 _PYTEST_FAILED = 1
 _PYTEST_INTERRUPTED = 2
+_PYTEST_NO_TESTS = 5
+_EMPTY_CAUSE = "\n[overlay-verify] collected zero tests serially and unnarrowed with no tier deselection\n"
 _OUTPUT_TAIL = 2000
 _STATE_FILE = "state.json"
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
@@ -123,6 +127,9 @@ def _last_progress(raw: bytes) -> str:
     return f"{done} test result(s) reported, last output line {lines[-1][-200:]!r}"
 
 
+_now = time.monotonic  # the stall clock's seam: tests swap it to cross a stall window without waiting
+
+
 def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedProcess:
     """Drain `proc`'s stdout and stderr on reader threads until it exits; any new output resets the stall clock.
     A silence of `stall_s` (`PYTEST_STARTUP_S` if longer, before the first byte) closes the tree and raises
@@ -132,7 +139,7 @@ def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedPro
 
     arrived: list = []
     streams: tuple = ([], [])
-    clock = [time.monotonic()]
+    clock = [_now()]
     started = clock[0]
 
     def drain(index: int, pipe) -> None:
@@ -143,7 +150,7 @@ def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedPro
                     return
                 streams[index].append(chunk)
                 arrived.append(chunk)
-                clock[0] = time.monotonic()
+                clock[0] = _now()
         except (OSError, ValueError):
             return
 
@@ -158,11 +165,11 @@ def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedPro
                 break
             except subprocess.TimeoutExpired:
                 window = stall_s if arrived else max(stall_s, PYTEST_STARTUP_S)
-                if time.monotonic() - clock[0] >= window:
+                if _now() - clock[0] >= window:
                     progress = _last_progress(b"".join(arrived))
                     close()
                     proc.wait()
-                    raise PytestStalled(argv, window, time.monotonic() - started, progress)
+                    raise PytestStalled(argv, window, _now() - started, progress)
     finally:
         close()
         for reader in readers:
@@ -811,14 +818,146 @@ def _run_pytest_retrying(argv: list, dest: Path, env: dict) -> subprocess.Comple
             raise second.after(first) from None
 
 
+TIER_EXCLUDED = ("cadence", "complete", "pending_fix", "designed_red")
+XDIST_MAX_WORKERS = 4
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+_DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
+
+
+def tier_marker_expr() -> str:
+    """The `-m` expression of a land's verify: the tiers a land never gates on (`TIER_EXCLUDED`) are deselected."""
+    return " and ".join(f"not {m}" for m in TIER_EXCLUDED)
+
+
+def xdist_workers(py: str, units: int) -> int:
+    """The `-n` worker count for `units` pytest targets, 0 for serial. Derived from the host (a quarter of its
+    logical cores, at most `XDIST_MAX_WORKERS`) and from `units`; serial when under two workers would result or
+    when `py` is not this interpreter (a pinned gate interpreter's xdist is not probed)."""
+    if units < 2 or py != sys.executable or importlib.util.find_spec("xdist") is None:
+        return 0
+    workers = min(units, XDIST_MAX_WORKERS, (os.cpu_count() or 1) // 4)
+    return workers if workers >= 2 else 0
+
+
 def _pytest_argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str]) -> list:
     """`--rootdir` is the symlink-resolved mirror: pytest roots node ids at the realpath of each test file, so a
     rootdir behind a symlink (macOS /var -> /private/var) loses the prefix match and every id becomes a file-less
-    `../../..::name`."""
+    `../../..::name`. Every flag precedes `--rootdir`; the targets follow `--basetemp`."""
+    py = _gate_python(root)
+    workers = xdist_workers(py, len(targets))
     return [
-        _gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", str(dest.resolve()),
+        py, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", tier_marker_expr(),
+        *(["-n", str(workers)] if workers else []), "--rootdir", str(dest.resolve()),
         "--basetemp", str(basetemp), *targets,
     ]
+
+
+def _test_spans(source: str) -> Optional[list]:
+    """`(node id suffix, first line, last line)` of each module-level `test_*` function and each `test_*` method
+    of a module-level `Test*` class (decorators included); None when `source` does not parse."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    def span(node) -> tuple:
+        return min([node.lineno, *(d.lineno for d in node.decorator_list)]), node.end_lineno
+
+    spans: list = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+            spans.append((node.name, *span(node)))
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            spans.extend(
+                (f"{node.name}::{sub.name}", *span(sub)) for sub in node.body
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and sub.name.startswith("test")
+            )
+    return spans
+
+
+def _changed_test_ids(rel: str, source: str, hunks: Sequence[tuple]) -> Optional[list]:
+    """The node ids of `rel`'s tests whose lines `hunks` (new-side `(start, count)`) changed. None, meaning run
+    the whole file, when a hunk is a pure deletion or changes a code line outside every test (a fixture, helper,
+    import or class body), or when the source does not parse. Blank and comment lines outside a test are inert."""
+    spans = _test_spans(source)
+    if spans is None or not hunks:
+        return None
+    lines = source.splitlines()
+    chosen: dict = {}
+    for start, count in hunks:
+        if count == 0:
+            return None
+        for ln in range(start, start + count):
+            hit = next((s for s in spans if s[1] <= ln <= s[2]), None)
+            if hit is not None:
+                chosen[hit[0]] = None
+            elif ln <= len(lines) and lines[ln - 1].strip() and not lines[ln - 1].lstrip().startswith("#"):
+                return None
+    return [f"{rel}::{name}" for name, _a, _b in spans if name in chosen]
+
+
+def narrow_touched_tests(root: Path, dest: Path, base: Optional[str], post: str, targets: Sequence[str], touched: Sequence[str]) -> tuple:
+    """`targets` with each touched test file replaced by the node ids of the tests the `base`..`post` diff changed
+    (one `git diff -U0` for all of them). A file whose diff is unknown or reaches code outside a test, and every
+    target not touched, stays whole; an unavailable base or failed diff narrows nothing."""
+    rels = {t.replace("\\", "/") for t in touched}
+    files = [t for t in dict.fromkeys(targets) if t in rels and _is_test_path(t) and t.endswith(".py")]
+    if not files or not base or base == post:
+        return tuple(targets)
+    out = _run([_git_exe(), "diff", "-U0", "--no-color", "--no-ext-diff", base, post, "--", *files], root, TEST_TIMEOUT_S)
+    if out.returncode != 0:
+        return tuple(targets)
+    per_file: dict = {}
+    for chunk in re.split(r"(?m)^diff --git ", out.stdout)[1:]:
+        name = _DIFF_FILE_RE.search(chunk)
+        if name:
+            per_file[name.group(1)] = [(int(a), int(b) if b else 1) for a, b in _HUNK_RE.findall(chunk)]
+    narrowed: dict = {}
+    for rel in files:
+        try:
+            source = (dest / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        ids = _changed_test_ids(rel, source, per_file.get(rel, ()))
+        if ids:
+            narrowed[rel] = ids
+    return tuple(dict.fromkeys(i for t in targets for i in narrowed.get(t, (t,))))
+
+
+def tier_deselected_only(proc: subprocess.CompletedProcess) -> bool:
+    """True when pytest exited 5 because the tier markers deselected every test it collected."""
+    return proc.returncode == 5 and "deselected" in proc.stdout + proc.stderr
+
+
+def _tier_empty_as_green(proc: subprocess.CompletedProcess) -> subprocess.CompletedProcess:
+    """`proc` as a clean exit when `tier_deselected_only`: a land touching only slow-tier tests has nothing a
+    land verify may gate on, and its detail says so."""
+    if not tier_deselected_only(proc):
+        return proc
+    return subprocess.CompletedProcess(
+        proc.args, 0, f"every collected test is in an excluded tier ({', '.join(TIER_EXCLUDED)}): {proc.stdout.strip()[-200:]}\n", proc.stderr,
+    )
+
+
+def _settle_empty_collection(
+    root: Path, dest: Path, basetemp: Path, run_seeds: Sequence[str], seeds: Sequence[str], env: dict, proc: subprocess.CompletedProcess,
+) -> subprocess.CompletedProcess:
+    """`proc` unchanged unless it is an exit 5 whose output names no deselection: xdist workers deselect silently, so
+    the run is repeated serially (the tier line then shows) and, if still empty, over the whole `seeds` instead of
+    the narrowed `run_seeds`. An exit 5 that survives both returns with `_EMPTY_CAUSE` appended to its output."""
+    if proc.returncode != _PYTEST_NO_TESTS or "deselected" in proc.stdout + proc.stderr:
+        return proc
+    first = _pytest_argv(root, dest, basetemp, run_seeds)
+    tries = [first] if "-n" in first else []
+    if tuple(run_seeds) != tuple(seeds):
+        tries.append(_pytest_argv(root, dest, basetemp, seeds))
+    for argv in tries:
+        if "-n" in argv:
+            del argv[argv.index("-n"):argv.index("-n") + 2]
+        proc = _run_pytest_retrying(argv, dest, env)
+        if proc.returncode != _PYTEST_NO_TESTS or "deselected" in proc.stdout + proc.stderr:
+            return proc
+    return subprocess.CompletedProcess(proc.args, proc.returncode, proc.stdout + _EMPTY_CAUSE, proc.stderr)
 
 
 def verify(
@@ -854,6 +993,7 @@ def verify(
             dest = _prepare_guarded(root, mroot, sha, leg)
             picked, scan_note = _with_importers(dest, seeds, touched)
             extras = picked[len(seeds):]
+            run_seeds = narrow_touched_tests(root, dest, base_sha, sha, seeds, touched)
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, run_id)
             run_dirs.append(run_holder)
             env = _mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest)
@@ -861,12 +1001,14 @@ def verify(
             shard: Optional[subprocess.CompletedProcess] = None
             with leg("pytest"):
                 in_seeds = True
-                ran = _run_pytest_retrying(_pytest_argv(root, dest, basetemp, seeds), dest, env)
+                ran = _run_pytest_retrying(_pytest_argv(root, dest, basetemp, run_seeds), dest, env)
+                ran = _settle_empty_collection(root, dest, basetemp, run_seeds, seeds, env, ran)
                 in_seeds = False
+                ran = _tier_empty_as_green(ran)
                 if extras:
                     shard_note = f"importer shard timed out: {len(extras)} file(s) unverified"
                     try:
-                        shard = _run_pytest_retrying(_pytest_argv(root, dest, basetemp, extras), dest, env)
+                        shard = _tier_empty_as_green(_run_pytest_retrying(_pytest_argv(root, dest, basetemp, extras), dest, env))
                         shard_note = ""
                     except PytestStalled as exc:
                         shard_note = f"importer shard stalled: {len(extras)} file(s) unverified ({exc})"
@@ -895,6 +1037,13 @@ def verify(
             ids = tuple(dict.fromkeys(i for r in runs for i in failing_ids(r.stdout + r.stderr)))
             collected = any(collection_error(r.returncode, r.stdout + r.stderr) for r in bad)
             failed = collected or any(r.returncode == _PYTEST_FAILED for r in bad)
+            if ran.returncode == _PYTEST_NO_TESTS:
+                return OverlayVerdict(
+                    ENV_DEFECT,
+                    f"engine fault: pytest exit 5 over {len(seeds)} non-empty seed(s) ({', '.join(seeds)}); "
+                    f"{_EMPTY_CAUSE.strip()}: {tail}",
+                    seeds,
+                )
             if bad:
                 absent = _missing_dependencies("".join(r.stdout + r.stderr for r in bad), root)
                 if absent:
@@ -1063,6 +1212,9 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
 #: writes its verdict, which the re-sent landing reads.
 REVERIFY_STEP = "clean_overlay_verify.reverify_on_mismatch"
 REVERIFY_STEP_SECS = 8.0
+#: Seconds a parked landing's resume entry waits before the drain re-sends it: the detached overlay
+#: it launched is still running, and a re-send inside that window only parks again.
+REVERIFY_RESUME_DELAY_SECS = 30.0
 
 
 INFLIGHT_FILE = "overlay-inflight"

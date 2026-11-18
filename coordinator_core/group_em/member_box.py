@@ -40,15 +40,10 @@ def _roster():
     return _load("unimatrix_roster", "unimatrix-roster.py")
 
 
-def _fold(name: str) -> str:
-    """Case-folded ``name`` without a trailing ``.local`` (the mDNS suffix is never part of a box identity)."""
-    low = name.lower()
-    return low[: -len(".local")] if low.endswith(".local") else low
-
-
 def _matches(member: dict, user: Optional[str], name: str) -> bool:
-    names = {_fold(member["box"]), _fold(member["host"]), member["host"].split(".")[0].lower()}
-    return _fold(name) in names and (user is None or user == member["user"])
+    fold = box_registry.fold_box_id
+    names = {fold(member["box"]), fold(member["host"]), fold(member["host"].split(".")[0])}
+    return fold(name) in names and (user is None or user == member["user"])
 
 
 def _split_token(token: str) -> Optional[tuple[Optional[str], str]]:

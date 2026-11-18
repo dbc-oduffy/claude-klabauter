@@ -60,6 +60,7 @@ pytestmark = [
 # relative to coordinator/bin/, invoked as `python3 <file> --help`.
 _SWEPT_HELP_ENTRYPOINTS = (
     "box-launch-windowless.py",
+    "seed-cross-session-inbound.py",
     "trim-file-cache.py",
     "coordinator-subsession.py",
     "test-verdict.py",

@@ -436,6 +436,8 @@ def check_no_residual_pattern(
     skipped: list[str] = []
     for path in _walk_for_guard(root, params):
         rel = rel_id(path, root)
+        if guard_cache.skip_unchanged(rel, clean_memo):
+            continue
         # Path-component check first, and unconditionally -- this does NOT require
         # reading the file, so it must run (and be able to fail the gate on its own)
         # even for a file the content read below cannot access. A leaking directory
@@ -456,7 +458,16 @@ def check_no_residual_pattern(
             continue
         if not path_scoped and clean_memo.known_clean(data):
             continue
-        content = guard_cache.decode_text(data, errors='ignore')
+        content = guard_cache.read_text(path, data)
+        if (
+            not pattern.search(content)
+            and not (line_allow_marker and line_allow_marker in content)
+            and not any(isinstance(e, str) and e and e in content for e in protected_literals or ())
+            and not path_scoped
+        ):
+            # Nothing to mask and no line to drop: the masked text IS this text, and it is clean.
+            clean_memo.record_clean(data)
+            continue
         masked_content, _ = mask_protected_literals(content, protected_literals, rel)
         if line_allow_marker:
             masked_content = '\n'.join(
@@ -527,6 +538,7 @@ def check_no_residual_pattern(
         )
     # --- end Tier 2 --------------------------------------------------------------
 
+    clean_memo.rule_passed()
     return GuardResult(kind='no-residual-pattern', ok=True)
 
 
@@ -805,6 +817,8 @@ def check_python_syntax_valid(
         if path.suffix != '.py':
             continue
         rel = rel_id(path, root)
+        if guard_cache.skip_unchanged(rel, clean_memo):
+            continue
         try:
             data = guard_cache.read_bytes(path)
             if clean_memo.known_clean(data):
@@ -843,6 +857,7 @@ def check_python_syntax_valid(
             ok=False,
             message=message,
         )
+    clean_memo.rule_passed()
     return GuardResult(kind='python-syntax-valid', ok=True)
 
 

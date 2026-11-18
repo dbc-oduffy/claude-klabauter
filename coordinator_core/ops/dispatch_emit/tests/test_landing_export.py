@@ -181,6 +181,30 @@ def test_head_export_overlays_write_set_over_head_bytes(repo):
     assert not (root / "scratch" / "hout.base").exists()
 
 
+def test_head_export_output_has_a_git_root_and_apply_tree_leaves_it_intact(repo):
+    root, _, _ = repo
+    out = Path(_head_export(root, ["pkg/own.py"]).path)
+    assert (out / ".git").is_dir()
+    assert _git(out, "rev-parse", "--show-toplevel") == out.as_posix()
+    assert _git(out, "rev-parse", "HEAD") == _git(root, "rev-parse", "HEAD")
+
+
+def test_head_export_refuses_a_gitless_clone(repo, monkeypatch):
+    root, _, _ = repo
+    import shutil
+
+    real = le.baseline_export.clone_tree
+
+    def gitless(top, sha, dest):
+        real(top, sha, dest)
+        shutil.rmtree(Path(dest) / ".git", onerror=lambda f, p, e: (Path(p).chmod(0o700), f(p)))
+
+    monkeypatch.setattr(le.baseline_export, "clone_tree", gitless)
+    with pytest.raises(le.LandingExportError, match="no .git"):
+        _head_export(root, ["pkg/own.py"])
+    assert not (root / "scratch" / "hout.base").exists()
+
+
 def test_head_export_at_a_given_sha_extracts_that_tree_and_records_it(repo):
     root, base_sha, _ = repo
     res = le.build_head_export(root, root / "scratch" / "bout", [], base_sha)

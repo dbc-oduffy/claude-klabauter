@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from ._git_template import copy_repo, template_repo
+
 if TYPE_CHECKING:
     from types import ModuleType
 
@@ -47,10 +49,7 @@ def _write(root: Path, rel: str, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-@pytest.fixture()
-def repo(tmp_path: Path) -> Path:
-    root = tmp_path / "live"
-    root.mkdir()
+def _build_repo(root: Path) -> None:
     _write(root, "coordinator/bin/entry.py", "import sys\nprint('ENTRY=' + __file__)\nsys.exit(3)\n")
     _write(root, "coordinator/bin/publish.py", "SEED = 'committed'\n")
     _write(root, "coordinator/bin/lib/helper.py", "VALUE = 'committed'\n")
@@ -72,7 +71,30 @@ def repo(tmp_path: Path) -> Path:
     _git(root, "config", "user.name", "t")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "one")
-    return root
+
+
+_ORPHAN: dict[str, str] = {}
+
+
+def _build_orphan_repo(root: Path) -> None:
+    """The repo plus a commit on no ref (parent: the first commit), its tree holding SEED = 'orphan'."""
+    _build_repo(root)
+    _ORPHAN["first"] = _git(root, "rev-parse", "HEAD")
+    _write(root, "coordinator/bin/publish.py", "SEED = 'orphan'\n")
+    _git(root, "add", "-A")
+    _ORPHAN["sha"] = _git(root, "commit-tree", _git(root, "write-tree"), "-m", "orphan")
+    _git(root, "reset", "-q", "--hard", "HEAD")
+
+
+@pytest.fixture()
+def repo(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return copy_repo(template_repo(tmp_path_factory, "commit-clone:repo", _build_repo), tmp_path / "live")
+
+
+@pytest.fixture()
+def orphan_repo(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    template = template_repo(tmp_path_factory, "commit-clone:orphan", _build_orphan_repo)
+    return copy_repo(template, tmp_path / "live")
 
 
 def _head(root: Path) -> str:
@@ -192,12 +214,10 @@ def test_clone_holds_committed_bytes_not_the_live_edit(cc, repo, tmp_path: Path)
     assert not (dest / "coordinator" / "bin" / "lib" / "untracked.py").exists()
 
 
-def test_sha_on_no_ref_materialises(cc, repo, tmp_path: Path) -> None:
-    first = _head(repo)
-    _write(repo, "coordinator/bin/publish.py", "SEED = 'orphan'\n")
-    _git(repo, "add", "-A")
-    orphan = _git(repo, "commit-tree", _git(repo, "write-tree"), "-m", "orphan")
-    assert orphan != first
+def test_sha_on_no_ref_materialises(cc, orphan_repo, tmp_path: Path) -> None:
+    repo = orphan_repo
+    orphan = _ORPHAN["sha"]
+    assert orphan != _ORPHAN["first"]
     dest = cc.materialise_commit_clone(repo, orphan, tmp_path / "cache")
     assert (dest / "coordinator" / "bin" / "publish.py").read_text(encoding="utf-8") == "SEED = 'orphan'\n"
 
@@ -314,7 +334,24 @@ def test_run_entry_from_clone_runs_clone_file_not_callers(cc, repo, tmp_path: Pa
     assert code == 3
     assert f"ENTRY={dest / 'coordinator' / 'bin' / 'entry.py'}" in out.out
     assert f"running from commit clone {dest}" in out.err
-    assert sys.path[0] == str(dest / "coordinator" / "bin")
+
+
+def test_run_entry_from_clone_restores_the_callers_import_state(cc, repo, tmp_path: Path, import_state, capsys: pytest.CaptureFixture[str]) -> None:
+    # An in-process caller (a test, the coordinator-publish alias under pytest) keeps running after
+    # the entry returns: it must get back its own sys.path and coordinator_core binding, or every
+    # later `import coordinator_core.<x>` resolves against a clone with no filler and fails.
+    dest = cc.materialise_commit_clone(repo, _head(repo), tmp_path / "cache")
+    import coordinator_core
+
+    path_before = list(sys.path)
+    meta_before = list(sys.meta_path)
+    bound_before = {m: sys.modules[m] for m in sys.modules if m.split(".")[0] == "coordinator_core"}
+    assert cc.run_entry_from_clone(dest, "coordinator/bin/lazy_entry.py", ["lazy_entry.py"]) == 0
+    assert "LAZY=committed" in capsys.readouterr().out
+    assert sys.path == path_before
+    assert sys.meta_path == meta_before
+    assert {m: sys.modules[m] for m in sys.modules if m.split(".")[0] == "coordinator_core"} == bound_before
+    assert sys.modules["coordinator_core"] is coordinator_core
 
 
 def test_a_module_outside_the_seed_is_filled_from_the_commit_and_recorded(cc, repo, tmp_path: Path, import_state, capsys: pytest.CaptureFixture[str]) -> None:
@@ -385,6 +422,16 @@ def test_the_child_filler_chains_to_the_sitecustomize_it_shadows(cc, repo, tmp_p
     assert os.environ["PYTHONPATH"] == str(other)
 
 
+def test_a_child_python_with_no_shadowed_sitecustomize_prints_no_keyerror(cc, repo, tmp_path: Path, import_state, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    dest = cc.materialise_commit_clone(repo, _head(repo), tmp_path / "cache")
+    _write(dest, "coordinator/bin/bare_entry.py", "import subprocess, sys\nr = subprocess.run([sys.executable, '-c', 'print(1)'], capture_output=True, text=True)\nprint('ERR=' + r.stderr.strip())\nprint('OUT=' + r.stdout.strip())\n")
+    assert cc.run_entry_from_clone(dest, "coordinator/bin/bare_entry.py", ["bare_entry.py"]) == 0
+    out = capsys.readouterr().out
+    assert "KeyError" not in out and "Error in sitecustomize" not in out
+    assert "OUT=1" in out
+
+
 def test_fill_tree_writes_the_committed_non_test_files_under_its_roots(cc, repo, tmp_path: Path) -> None:
     dest = cc.materialise_commit_clone(repo, _head(repo), tmp_path / "cache")
     _write(repo, "coordinator_core/other/lazy.py", "WHERE = 'dirty'\n")
@@ -422,3 +469,18 @@ def test_cold_clone_of_the_real_repo_meets_the_process_time_bar(tmp_path: Path) 
     )
     assert result["rc"] == 0
     assert result["process_time_ms"] <= 500.0, f"cold commit clone cost {result['process_time_ms']:.0f}ms process time"
+
+
+def test_every_engine_file_the_publisher_loads_by_path_is_seeded(cc: ModuleType) -> None:
+    """A by-path load bypasses the clone's import filler, so the file must be in the static seed."""
+    import re
+
+    bin_dir = _MODULE.parents[1]
+    loaded = {
+        f"coordinator_core/{name}"
+        for entry in cc._SEED_FILES
+        if entry.startswith("coordinator/bin/") and entry.endswith(".py")
+        for name in re.findall(r'"coordinator_core" / "([A-Za-z_]+\.py)"', (bin_dir / entry.split("/")[-1]).read_text(encoding="utf-8"))
+    }
+    assert loaded, "the scan found no by-path load; the pattern no longer matches the publisher"
+    assert sorted(p for p in loaded if not cc._is_wanted(p, frozenset())) == []

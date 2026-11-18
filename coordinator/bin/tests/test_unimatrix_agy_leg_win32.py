@@ -38,6 +38,7 @@ def spool(tmp_path, monkeypatch):
     monkeypatch.setenv("AGY_LEG_SPOOL", str(tmp_path / "q.jsonl"))
     monkeypatch.setenv("AGY_LEG_LOG", str(tmp_path / "leg.log"))
     monkeypatch.setenv("ANTIGRAVITY_CONVERSATION_ID", CONV)
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "brain"))  # no probe reads the box's real presence dir
     monkeypatch.setattr(leg, "fcntl", None)  # force the msvcrt path even when imported where fcntl exists
     return tmp_path / "q.jsonl"
 
@@ -125,7 +126,7 @@ def test_main_serves_a_named_pipe_and_queues_while_pending(spool, monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
     monkeypatch.setattr(leg, "PARENT_POLL_SECS", 0.05)
     gone = threading.Event()
-    monkeypatch.setattr(leg, "parent_gone", gone.is_set)
+    monkeypatch.setattr(leg, "session_gone", gone.is_set)
     endpoint = rf"\\.\pipe\LOCAL\agy-leg-test-{uuid.uuid4().hex}"
     main = threading.Thread(target=leg.main, args=(endpoint,), daemon=True)
     main.start()
@@ -144,7 +145,7 @@ def test_main_live_leg_delivers_through_send(spool, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "t")
     monkeypatch.setattr(leg, "PARENT_POLL_SECS", 0.05)
     gone = threading.Event()
-    monkeypatch.setattr(leg, "parent_gone", gone.is_set)
+    monkeypatch.setattr(leg, "session_gone", gone.is_set)
     seen = []
     monkeypatch.setattr(leg, "send", lambda t: seen.append(t) or {"ok": True, "status": 200, "body": "x"})
     endpoint = rf"\\.\pipe\LOCAL\agy-leg-test-{uuid.uuid4().hex}"
@@ -158,11 +159,11 @@ def test_main_live_leg_delivers_through_send(spool, monkeypatch):
 
 
 @needs_win
-def test_parent_gone_on_windows_does_not_signal_the_process(monkeypatch):
+def test_session_gone_on_windows_does_not_signal_the_process(spool, monkeypatch):
     monkeypatch.setenv("AGY_LEG_PARENT_PID", str(os.getpid()))
-    assert leg.parent_gone() is False  # os.kill(pid, 0) would have terminated this very process
+    assert leg.session_gone() is False  # os.kill(pid, 0) would have terminated this very process
     monkeypatch.setenv("AGY_LEG_PARENT_PID", "4294967")
-    assert leg.parent_gone() is True
+    assert leg.session_gone() is True
 
 
 @needs_win

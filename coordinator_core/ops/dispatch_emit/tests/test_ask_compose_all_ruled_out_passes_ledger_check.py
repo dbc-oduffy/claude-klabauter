@@ -59,8 +59,9 @@ def test_an_owed_but_unjudged_empty_verdict_blocks_on_the_owed_ids(monkeypatch: 
     script = _script(monkeypatch)
     assert "const _owedIds = _emptyVerdict && Array.isArray(_ledgerIds) ? _ledgerIds : [];" in script
     text = _halt(script)
-    assert "_owedIds.map((id) => ({ id, status: 'not_met' }))" in text
-    assert "were owed a verdict and the verify leg returned none" in text
+    assert "_owedIds.map((id) => ({ id, status: 'verify-leg-empty'" in text
+    assert "'not_met' }))" not in text
+    assert "were owed a verdict and the verify leg returned none after one re-ask (verify-leg-empty" in text
 
 
 def test_next_action_has_no_unreadable_label_and_gates_the_refire_on_blocking_ids(monkeypatch: pytest.MonkeyPatch) -> None:

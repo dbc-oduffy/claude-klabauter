@@ -159,7 +159,12 @@ def test_ac5_dirty_worktree_portable_outside_pathspec_lands_regenerated_head_byt
     landed = _field7(repo)
     assert "coordinator/bin||existing_cli.py,unimatrix-file.py\n" in landed
     assert "# peer edit" not in landed
-    assert (repo / "setup" / "publish-targets.portable").read_bytes() == peer.encode("utf-8")
+    synced = _PORTABLE.replace(
+        "coordinator/bin||existing_cli.py", "coordinator/bin||existing_cli.py,unimatrix-file.py"
+    )
+    assert (repo / "setup" / "publish-targets.portable").read_bytes() == (
+        synced + "# peer edit\n"
+    ).encode("utf-8")
     committed = _git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
     assert "setup/publish-targets.portable" in committed
 

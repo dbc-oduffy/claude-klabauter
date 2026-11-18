@@ -127,7 +127,7 @@ def test_the_rerun_set_is_widened_by_the_verify_scope_map_in_group_mode_only():
     grouped = _by_title(_compose(review_groups=_GROUPS, verify_scope_targets=targets))["Review re-verify"]
     step2 = _step(grouped, 2)
     assert "tests/test_one.py" in step2 and "tests/test_three.py" in step2 and "tests/test_x.py" in step2
-    assert "tripwires" in step2 and "import an edited module" in step2
+    assert "owned first" in step2 and "`tripwires` files" in step2
     assert _by_title(_compose(review_groups=_GROUPS))["Review re-verify"] != grouped
     assert _compose(verify_scope_targets=targets) == _compose()
 

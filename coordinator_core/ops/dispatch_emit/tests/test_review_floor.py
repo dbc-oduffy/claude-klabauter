@@ -177,3 +177,37 @@ def test_constants():
 def test_review_owed_paths_drop_scratch_and_bookkeeping_but_keep_product_code():
     assert rf.review_owed_paths(["scratch/p.py", "state/x.py", "a.py"]) == ["a.py"]
     assert rf.code_paths(["scratch/p.py"]) == ["scratch/p.py"]
+
+
+NO_DELTA_CASES = [
+    ("all-absent", ["a.py", "b.py"], ["c.py", "docs/x.md"], True),
+    ("one-changed", ["a.py", "b.py"], ["b.py"], False),
+    ("all-changed", ["a.py"], ["a.py"], False),
+    ("empty-code-set", [], ["a.py"], False),
+    ("empty-changed-set", ["a.py"], [], True),
+    ("dir-prefix-with-delta", ["pkg"], ["pkg/m.py"], False),
+    ("dir-prefix-no-delta", ["pkg/"], ["pkgx/m.py"], True),
+    ("backslash-and-dot-slash", ["./a/b.py"], ["a\\b.py"], False),
+]
+
+
+@pytest.mark.parametrize("name,code,changed,expected", NO_DELTA_CASES, ids=[c[0] for c in NO_DELTA_CASES])
+def test_no_delta_code_paths(name, code, changed, expected):
+    assert rf.no_delta_code_paths(code, changed) is expected
+
+
+@pytest.mark.parametrize("name,code,changed,expected", NO_DELTA_CASES, ids=[c[0] for c in NO_DELTA_CASES])
+def test_no_delta_js_twin_matches_python(name, code, changed, expected):
+    import json
+    import shutil
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    node = shutil.which("node")
+    assert node is not None, "node must be on PATH: the JS twin parity pin cannot skip"
+    harness = f"{rf.NO_DELTA_JS}\nprocess.stdout.write(JSON.stringify(_noDeltaCodePaths({json.dumps(code)}, {json.dumps(changed)})));\n"
+    out = subprocess.run(
+        [node, "-"], input=harness, capture_output=True, text=True, timeout=20, check=True, **no_console_creationflags()
+    )
+    assert json.loads(out.stdout) is expected

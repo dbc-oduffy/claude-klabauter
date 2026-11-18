@@ -185,7 +185,23 @@ def _validate_params(params: dict):
     return dry_run, repos, limit
 
 
-def _fleet(selected: Optional[List[str]]):
+def _resolve_name(raw: str, names: Dict[str, str]) -> Optional[str]:
+    """Registry name for `raw`: exact, else a case/hyphen/underscore-insensitive match on the
+    name or on the checkout directory name; None when absent or ambiguous."""
+    if raw in names:
+        return raw
+
+    def fold(text: str) -> str:
+        return text.lower().replace("-", "_")
+
+    target = fold(raw)
+    hits = {n for n in names if fold(n) == target}
+    if not hits:
+        hits = {n for n, p in names.items() if fold(Path(p).name) == target}
+    return next(iter(hits)) if len(hits) == 1 else None
+
+
+def _fleet(selected: Optional[List[str]]) -> tuple[Dict[str, tuple], List[str]]:
     """`(local, not_local)` from the registry: `local` maps repo name -> (path, aliases) with
     repos sharing one path collapsed onto the first name; `not_local` lists names whose path is
     not a git checkout on this box. Raises `RegistryReadError`; an unknown name in `selected`
@@ -193,10 +209,14 @@ def _fleet(selected: Optional[List[str]]):
     registry = read_registry_repos()
     names = {key[len("repos."):]: path for key, path in registry.items()}
     if selected is not None:
-        wanted = [s[len("repos."):] if s.startswith("repos.") else s for s in selected]
-        missing = [w for w in wanted if w not in names]
+        wanted: List[str] = []
+        missing: List[str] = []
+        for s in selected:
+            raw = s[len("repos."):] if s.startswith("repos.") else s
+            resolved = _resolve_name(raw, names)
+            (wanted if resolved else missing).append(resolved or raw)
         if missing:
-            raise ValueError(f"not in the registry: {sorted(missing)}")
+            raise ValueError(f"not in the registry: {sorted(missing)}; valid names: {sorted(names)}")
         names = {n: names[n] for n in wanted}
     local: Dict[str, tuple] = {}
     not_local: List[str] = []

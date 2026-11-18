@@ -15,7 +15,9 @@ spec.loader.exec_module(router)
 
 def write_session(directory, filename, name, endpoint, **extra) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    entry = {"pid": os.getpid(), "name": name, "messagingSocketPath": endpoint, **extra}
+    mirrored = "macSocketPath" in extra
+    stamps = {**router._roster().supervisor_fields(), **router._roster().far_seen_fields()} if mirrored else {}
+    entry = {"pid": os.getpid(), "name": name, "messagingSocketPath": endpoint, **stamps, **extra}
     (directory / filename).write_text(json.dumps(entry))
     key = directory / router._roster().key_name(os.getpid(), endpoint)
     key.write_text(json.dumps({"peerToken": "a" * 32}))

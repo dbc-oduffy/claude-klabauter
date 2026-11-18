@@ -40,7 +40,6 @@ def box(tmp_path, monkeypatch):
     ml_dir.mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
-    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     shim = _load_shim()

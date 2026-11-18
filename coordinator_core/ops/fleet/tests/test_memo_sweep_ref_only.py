@@ -153,7 +153,8 @@ def test_limit_bounds_one_apply_call_and_remaining_counts_the_rest(fleet):
 
 def test_a_declined_commit_is_a_named_failure_and_the_memo_stays_ref_only(fleet):
     alpha = fleet["alpha"]
-    (alpha / ".git" / "refs" / "heads" / "main.lock").write_text("", encoding="utf-8")
+    branch = _git(alpha, "symbolic-ref", "--short", "HEAD")
+    (alpha / ".git" / "refs" / "heads" / f"{branch}.lock").write_text("", encoding="utf-8")
 
     result = _memo_sweep_ref_only({"dry_run": False, "repos": ["alpha"], "limit": 1}, repo_root=None)
 
@@ -185,6 +186,20 @@ def test_repos_filter_and_unknown_names(fleet):
 
     bad = _memo_sweep_ref_only({"repos": ["nope"]}, repo_root=None)
     assert bad["exit_code"] == 1
+
+
+def test_repos_filter_accepts_hyphenated_and_dir_name_spellings_and_refusal_names_valid_ones(fleet, monkeypatch):
+    sub = fleet["tmp"] / "second-home"
+    sub.mkdir()
+    home = _make_claude_home(sub, {"proj_x": fleet["alpha"], "beta": fleet["beta"]})
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    for spelling in ("proj-x", "repos.proj_x", "alpha-repo"):
+        got = _memo_sweep_ref_only({"repos": [spelling]}, repo_root=None)
+        assert list(got["repos"]) == ["proj_x"], spelling
+
+    with pytest.raises(ValueError, match=r"valid names: \['beta', 'proj_x'\]"):
+        memo_sweep_ref_only._fleet(["nope"])
+    assert _memo_sweep_ref_only({"repos": ["nope"]}, repo_root=None)["exit_code"] == 1
 
 
 @pytest.mark.parametrize("params", [{"dry_run": "no"}, {"limit": 0}, {"repos": "alpha"}, {"surprise": 1}])

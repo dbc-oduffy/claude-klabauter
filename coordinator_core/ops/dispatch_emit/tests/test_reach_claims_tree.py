@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit import land_deadline
 from coordinator_core.ops.dispatch_emit import reach_claims_tree as rct
-from coordinator_core.ops.dispatch_emit.reach_claims import ReachClaim
+from coordinator_core.ops.dispatch_emit.reach_claims import REACH_OWED, ReachClaim, reach_gate
 from coordinator_core.ops.dispatch_emit.reach_claims_tree import REACH_CLOSURE_DEPTH, judge_reach_claims
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -400,3 +401,38 @@ def test_past_the_cap_with_nothing_to_scope_runs_no_grep(tmp_path, monkeypatch):
     v = _judge(repo, "project_trace", "load_hookimpl")
     assert v.verdict == "undecidable"
     assert calls == [] and spawns == []
+
+
+_NOTE = "`project_trace` reaches `load_hookimpl`"
+
+
+def _raise_deadline(monkeypatch, **kw):
+    def boom(*a, **k):
+        raise land_deadline.LandDeadlineExceeded(**kw)
+
+    monkeypatch.setattr(rct, "judge_reach_claims", boom)
+
+
+@pytest.mark.parametrize("bound", [land_deadline.BOUND_STEP, land_deadline.BOUND_BUDGET])
+def test_gate_records_an_overrun_judge_step_as_owed(tmp_path, monkeypatch, bound):
+    _raise_deadline(monkeypatch, leg=rct.GREP_STEP, step=True, bound_by=bound)
+    refusal, reply = reach_gate(tmp_path, _NOTE)
+    assert refusal is None
+    assert reply[REACH_OWED] == [rct.GREP_STEP]
+    assert reply["checked"] == 1 and reply["unreachable"] == [] and len(reply["undecidable"]) == 1
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"leg": "other_leg", "step": True, "bound_by": land_deadline.BOUND_STEP},
+        {"leg": rct.GREP_STEP, "step": False, "bound_by": land_deadline.BOUND_STEP},
+        {"leg": rct.GREP_STEP, "step": True, "bound_by": land_deadline.BOUND_DISPATCHER},
+        {"leg": rct.GREP_STEP, "step": True, "bound_by": land_deadline.BOUND_SERVER_WINDOW},
+        {"leg": rct.GREP_STEP, "step": True, "bound_by": land_deadline.BOUND_WALL_CEILING},
+    ],
+)
+def test_gate_reraises_any_other_breach(tmp_path, monkeypatch, kw):
+    _raise_deadline(monkeypatch, **kw)
+    with pytest.raises(land_deadline.LandDeadlineExceeded):
+        reach_gate(tmp_path, _NOTE)

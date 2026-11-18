@@ -58,8 +58,13 @@ def test_flat_plan_path_stages_the_sizing_named_file_when_it_exists(tmp_path):
     assert "error" not in reply
 
 
-def test_flat_plan_path_refuses_naming_both_when_the_sizing_named_file_is_absent(tmp_path):
+def test_flat_plan_path_stages_where_written_when_the_sizing_named_file_is_absent(tmp_path):
     reply = _stage(tmp_path, plan_path=FLAT, landed=(FLAT,))
+    assert "error" not in reply
+
+
+def test_refuses_naming_both_when_neither_file_exists(tmp_path):
+    reply = _stage(tmp_path, plan_path=FLAT, landed=())
     assert FLAT in reply["error"] and NAMED in reply["error"]
     assert "PLAN-PATH-MISMATCH" in reply["error"]
 

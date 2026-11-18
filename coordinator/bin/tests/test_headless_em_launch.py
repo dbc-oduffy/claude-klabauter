@@ -41,6 +41,21 @@ def _add_dir() -> list[str]:
     return ["--add-dir", str(_machine_lock_dir().parent)]
 
 
+_GROK_OPS = ("engine_ask.submit", "workflow.fire", "workflow.fire_status", "workflow.fire_wait",
+             "workflow.revise")
+
+
+def _grok_head(platform="linux", settings_home=None) -> list[str]:
+    exe = Path(settings_home or Path.home() / ".coordinator-claude-settings") / "bin" / (
+        "coordinator-invoke.exe" if platform == "win32" else "coordinator-invoke")
+    return ["--permission-mode", "auto",
+            *[a for op in _GROK_OPS for a in ("--allow", f"Bash({exe} {op}:*)")]]
+
+
+def _agy_head(cwd=None) -> list[str]:
+    return ["--add-dir", cwd or os.getcwd(), "--add-dir", str(Path.home() / ".coordinator"),
+            "--mode", "accept-edits"]
+
 
 def _run(family="codex", env=None, **kw):
     """Launch with a recording spawn; returns (rc, [(cli, argv)], the child's env, else the caller's env)."""
@@ -73,7 +88,7 @@ EXEC_FAMILIES = tuple(f for f in hel.FAMILIES if f != "claude")
 def test_launched_em_passes_require_fire_authority(family, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, env = _run(family, extra=["-m", "x"])
     assert rc == 0
-    head = _add_dir() if family == "codex" else []
+    head = {"codex": _add_dir(), "grok": _grok_head(), "agy": _agy_head()}.get(family, [])
     assert calls == [(f"/bin/{family}", [f"/bin/{family}", *head, "-m", "x"])]
     assert g.headless_em_grant_matches(env, env[hel.SESSION_ENV], family)
     caller = _fire(monkeypatch, env)
@@ -147,7 +162,8 @@ def _win_prepare(family, which, capsys, **kw):
 @pytest.mark.parametrize("family", hel.FAMILIES)
 def test_windows_native_exe_on_path_used_as_is(family, capsys: pytest.CaptureFixture[str]) -> None:
     rc, out = _win_prepare(family, lambda n: f"pathbin/{n}" if n.endswith(".exe") else None, capsys)
-    tail = ["--bg"] if family == "claude" else _add_dir() if family == "codex" else []
+    tail = ["--bg"] if family == "claude" else _add_dir() if family == "codex" else \
+        _grok_head("win32") if family == "grok" else _agy_head() if family == "agy" else []
     assert rc == 0 and json.loads(out.out)["argv"] == [f"pathbin/{family}.exe", *tail]
 
 
@@ -175,7 +191,7 @@ def test_windows_shim_without_native_package_refused_naming_flag(family, tmp_pat
 
 def test_windows_native_executable_flag_wins_over_path(capsys: pytest.CaptureFixture[str]) -> None:
     rc, out = _win_prepare("agy", lambda n: "pathbin/agy.exe", capsys, native_executable="given/agy.exe")
-    assert rc == 0 and json.loads(out.out)["argv"] == ["given/agy.exe"]
+    assert rc == 0 and json.loads(out.out)["argv"] == ["given/agy.exe", *_agy_head()]
 
 
 def test_main_parses_family_session_and_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -483,10 +499,83 @@ def test_codex_dir_already_passed_is_not_doubled() -> None:
     assert rc == 0 and calls[0][1] == ["/bin/codex", *_add_dir()]
 
 
-@pytest.mark.parametrize("family", ["agy", "grok"])
-def test_other_families_get_no_add_dir(family) -> None:
-    rc, calls, _ = _run(family, env={"PATH": "x"}, extra=["x"])
+def test_grok_gets_no_add_dir() -> None:
+    rc, calls, _ = _run("grok", env={"PATH": "x"}, extra=["x"])
     assert rc == 0 and "--add-dir" not in calls[0][1]
+
+
+def _agy_prepare(capsys, extra=(), cwd=None) -> list[str]:
+    """The agy argv from the default --prepare-only invocation."""
+    rc = hel.launch("agy", list(extra), which=lambda n: None, environ={"PATH": "x"}, platform="linux",
+                    prepare_only=True, native_executable="agy", session_id="s1", cwd=cwd)
+    assert rc == 0
+    return json.loads(capsys.readouterr().out)["argv"]
+
+
+# Flag sources: `agy --help` (1.4.x) lists `--add-dir  Add a directory to the workspace (repeatable)`,
+# `--mode  ... (accept-edits, auto, plan)` and `--dangerously-skip-permissions  Auto-approve all tool
+# permission requests without prompting`; the permissions doc (docs/research/claude-klabauter-klabauter-on-agy-codex-9c3013
+# gap-report) names accept-edits as a per-invocation non-bypass mode.
+def test_agy_prepare_grants_cwd_and_coordinator_home_with_accept_edits(capsys) -> None:
+    argv = _agy_prepare(capsys, ["-p", "hi", "--output-format", "json"], cwd="work/tree")
+    assert argv == ["agy", "--add-dir", "work/tree", "--add-dir", str(Path.home() / ".coordinator"),
+                    "--mode", "accept-edits", "-p", "hi", "--output-format", "json"]
+
+
+def test_agy_prepare_without_cwd_grants_the_launchers_cwd(capsys) -> None:
+    argv = _agy_prepare(capsys, ["-p", "hi"])
+    assert argv[1:3] == ["--add-dir", os.getcwd()]
+
+
+def test_agy_strips_the_bypass_flag_and_keeps_a_callers_mode(capsys) -> None:
+    argv = _agy_prepare(capsys, ["--dangerously-skip-permissions", "--mode", "plan", "-p", "hi"], cwd="w")
+    assert "--dangerously-skip-permissions" not in argv
+    assert argv.count("--mode") == 1 and argv[argv.index("--mode") + 1] == "plan"
+    assert argv[-2:] == ["-p", "hi"]
+
+
+def test_agy_dirs_already_passed_are_not_doubled(capsys) -> None:
+    mine = str(Path.home() / ".coordinator")
+    argv = _agy_prepare(capsys, ["--add-dir", mine, "--add-dir", "w"], cwd="w")
+    assert argv.count("--add-dir") == 2 and argv.count(mine) == 1 and argv.count("w") == 1
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_grok_launch_defaults_auto_with_absolute_path_allow_per_engine_op(platform, capsys) -> None:
+    env = {"PATH": "x", g.SETTINGS_HOME_KEY: os.environ[g.SETTINGS_HOME_KEY], "HOME": "/h"}
+    rc = hel.launch("grok", ["-p", "hi"], which=lambda n: None, environ=env, platform=platform,
+                    prepare_only=True, native_executable="grok.exe", session_id="s1")
+    argv = json.loads(capsys.readouterr().out)["argv"]
+    assert rc == 0 and argv == ["grok.exe", *_grok_head(platform, env[g.SETTINGS_HOME_KEY]), "-p", "hi"]
+    assert argv[1:3] == ["--permission-mode", "auto"]
+    rules = [argv[i + 1] for i, a in enumerate(argv) if a == "--allow"]
+    assert len(rules) == len(_GROK_OPS)
+    for op in _GROK_OPS:
+        (rule,) = [r for r in rules if r.endswith(f" {op}:*)")]
+        prefix = rule[len("Bash("):].rsplit(f" {op}:*)", 1)[0]
+        assert Path(prefix).is_absolute() and Path(prefix).name.startswith("coordinator-invoke")
+    assert not any("$HOME" in a or "~" in a for a in argv)
+    assert not {"--always-approve", "--dangerously-skip-permissions", "--yolo"} & set(argv)
+
+
+def test_grok_callers_permission_mode_and_allow_are_kept_not_doubled() -> None:
+    mine = _grok_head()[-1]
+    rc, calls, _ = _run("grok", extra=["--permission-mode", "plan", "--allow", mine])
+    argv = calls[0][1]
+    assert rc == 0 and argv.count("--permission-mode") == 1 and "auto" not in argv
+    assert argv.count(mine) == 1 and argv.count("--allow") == len(_GROK_OPS)
+
+
+@pytest.mark.parametrize("family", ["codex", "agy"])
+def test_non_grok_families_get_no_permission_mode_or_allow(family) -> None:
+    rc, calls, _ = _run(family, extra=["x"])
+    assert rc == 0 and "--permission-mode" not in calls[0][1] and "--allow" not in calls[0][1]
+
+
+def test_codex_and_grok_launch_never_get_an_agy_mode() -> None:
+    for family in ("codex", "grok"):
+        rc, calls, _ = _run(family, extra=["x"])
+        assert rc == 0 and "--mode" not in calls[0][1]
 
 
 def test_codex_cwd_becomes_the_working_dir_flag() -> None:

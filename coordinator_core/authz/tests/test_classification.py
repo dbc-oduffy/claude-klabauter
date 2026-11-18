@@ -15,8 +15,9 @@ Test convention: pytest. Invoke via
 
 from __future__ import annotations
 
-from coordinator_core.authz.classification import OpClass, classify
 from pathlib import Path
+
+from coordinator_core.authz.classification import OpClass, classify
 
 
 class TestNudgeAutonomousAskuserquestion:

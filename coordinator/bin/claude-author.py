@@ -880,6 +880,34 @@ def _run_supervisor(full_argv: list[str], plugin_dir: str, control_base: str) ->
         return 1
 
 
+_NON_SESSION_ARGS = frozenset({"-p", "--print", "-v", "--version", "--dry-run", "--print-plugin-dir"})
+
+
+def _nested_interactive_launch(argv: list[str]) -> bool:
+    """True when `argv` would start an interactive session from inside one.
+
+    Only `CLAUDECODE` set and no flag that makes the call headless or
+    informational (`-p`, `--version`, `--dry-run`, ...) counts; the
+    dry-run/print-plugin-dir env twins are honoured too.
+    """
+    if not os.environ.get("CLAUDECODE"):
+        return False
+    if os.environ.get("CLAUDE_AUTHOR_DRY_RUN") == "1" or os.environ.get("CLAUDE_AUTHOR_PRINT_PLUGIN_DIR") == "1":
+        return False
+    if os.environ.get(_LEGACY_ENV_PREFIX + "DRY_RUN") == "1" or os.environ.get(_LEGACY_ENV_PREFIX + "PRINT_PLUGIN_DIR") == "1":
+        return False
+    return not any(a in _NON_SESSION_ARGS for a in argv)
+
+
+def _advise_nested(argv: list[str]) -> None:
+    """One advisory stderr line for a nested interactive launch; never a refusal."""
+    if _nested_interactive_launch(argv):
+        sys.stderr.write(
+            "claude-author: running inside a Claude Code session (CLAUDECODE=1); "
+            "the real-launch check is a fresh-terminal step\n"
+        )
+
+
 def main(argv: list[str]) -> int:
     # -------------------------------------------------------------------
     # --help/-h answered here, first, before ANY clone/registry resolution
@@ -894,6 +922,7 @@ def main(argv: list[str]) -> int:
     # Before any resolution: `--vanilla` must work on a box where every rung
     # below is broken, since that is the box that needs it.
     if "--vanilla" in argv:
+        _advise_nested(argv)
         if "--control-socket" in argv:
             sys.stderr.write("claude-author: --control-socket needs the coordinator plugin; not available with --vanilla\n")
             return 2
@@ -1010,6 +1039,8 @@ def main(argv: list[str]) -> int:
 
     if os.environ.get("CLAUDE_AUTHOR_NO_EXEC", os.environ.get(_LEGACY_ENV_PREFIX + "NO_EXEC", "0")) == "1":
         return 0
+
+    _advise_nested(argv)
 
     claude_bin = _resolve_claude_bin()
     if not claude_bin:

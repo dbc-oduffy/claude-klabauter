@@ -179,3 +179,13 @@ def test_publish_call_site_without_a_destination_repo_runs_uncached(tmp_path):
     target = types.SimpleNamespace(name="row", source_dir=tmp_path / "src", dest_dir=None)
 
     assert publish._import_closure_gate(target, tmp_path / "t") == EXPECTED
+
+
+def test_facts_version_tracks_the_fact_builders_not_the_whole_module(monkeypatch):
+    import percolate.import_closure as ic
+
+    before = ic.facts_version()
+    monkeypatch.setattr(ic, "find_commit_module_attr_violations", lambda *a, **k: (0, []))
+    assert ic.facts_version() == before
+    monkeypatch.setattr(ic, "_FACT_BUILDERS", ic._FACT_BUILDERS + (ic._is_test_path,))
+    assert ic.facts_version() != before

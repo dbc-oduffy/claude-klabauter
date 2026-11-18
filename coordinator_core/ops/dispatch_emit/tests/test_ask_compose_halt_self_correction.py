@@ -64,10 +64,20 @@ def test_halt_reverify_carries_the_test_runner_clause_and_degrades_on_a_bare_hos
     assert "model: 'haiku'" in _opts(_recover(agent_type_host=emit._AGENT_TYPE_HOST_DEGRADED), HALT_REVERIFY_LABEL)
 
 
+def test_halt_reverify_names_the_one_engine_test_command_and_no_rerun_loop():
+    js = _recover()
+    prompt = js[js.index("Halt re-verify leg (review).") : js.index(f"label: '{HALT_REVERIFY_LABEL}'")]
+    assert prompt.count("coordinator_core.ops.test_leg_run") == 1
+    assert "halt-reverify-tests.json" in prompt
+    for word in ("alone", "background", "sleep", "poll"):
+        assert word not in prompt.lower()
+
+
 _HARNESS = """
 const log = () => {};
 const _USAGE_LIMIT_RE = /quota/i;
 const _haltOnUsageLimit = (e) => { throw e; };
+const _usageHalted = (e) => { if (!_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) return false; _haltOnUsageLimit(e); return true; };
 let _halted = null;
 const _runId = 'r1';
 const _sizingRel = %(sizing)s, _planRel = 'p.md';

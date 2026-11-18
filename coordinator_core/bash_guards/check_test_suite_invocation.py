@@ -445,8 +445,15 @@ from coordinator_core.bash_guards._dialect import (
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
-    _strip_heredoc_bodies,
+    _strip_heredoc_bodies as _strip_heredoc_bodies_raw,
 )
+
+
+def _strip_heredoc_bodies(cmd: str) -> str:
+    """Heredoc-body strip that leaves a ``<<<`` here-string (no body) alone."""
+    if "<<<" not in cmd:
+        return _strip_heredoc_bodies_raw(cmd)
+    return _strip_heredoc_bodies_raw(cmd.replace("<<<", "\x00")).replace("\x00", "<<<")
 
 CLASS = "hard-deny"
 #: Widened (DR-088 ladder layers 3/5/6 PowerShell-bypass fix) from the
@@ -1530,8 +1537,23 @@ def _classify_pytest(args: Sequence[str], testpaths: Sequence[str],
     if positionals:
         if _STRICT_DIRS.get() and _em_dirs_over_threshold(positionals, testpaths, cwd):
             return label
+        if any(_is_unscoped_directory(a, testpaths, cwd) for a in positionals):
+            return label
         return None if any(_is_real_scope(a, testpaths, cwd, True) for a in positionals) else label
     return None if scoped else label
+
+
+def _is_unscoped_directory(arg: str, testpaths: Sequence[str], cwd: Optional[str]) -> bool:
+    """A directory positional that is not itself a real scope. It makes the run
+    suite-shaped whatever file or node-id operands sit beside it: a scoped
+    sibling must never launder a directory."""
+    raw = arg.replace("\\", "/")
+    if "::" in raw:
+        return False
+    norm = _norm_path(raw)
+    if not norm or _has_glob_magic(norm) or not _names_directory(raw, norm, cwd):
+        return False
+    return not _is_real_scope(arg, testpaths, cwd, True)
 
 
 def _single_dir_is_bounded(dir_args: Sequence[str], cwd: Optional[str],
@@ -4267,13 +4289,45 @@ def _tier_for_cfg_match(cfg_tier: str, generic: Optional[str],
     return "F", _CFG_TIER_DETECTED_LABEL[cfg_tier]
 
 
+_HEREDOC_INTRO_SCAN_RE = re.compile(r"(?<!<)<<(?!<)-?('[^']*'|\"[^\"]*\"|[A-Za-z0-9_.+-]+)")
+
+
+def _heredoc_body_newlines(cmd: str) -> frozenset:
+    """Offsets of the newlines that glue a heredoc's body to its introducing
+    segment: the intro line's own newline and every body line's, never the
+    terminator line's. An unterminated heredoc glues everything after it."""
+    if "<<" not in cmd:
+        return frozenset()
+    glued = set()
+    offset = 0
+    word: Optional[str] = None
+    strip_tabs = False
+    for line in cmd.split("\n"):
+        end = offset + len(line)
+        if word is None:
+            m = _HEREDOC_INTRO_SCAN_RE.search(line)
+            if m:
+                strip_tabs = m.group(0).startswith("<<-")
+                word = m.group(1).strip("'\"")
+                glued.add(end)
+        else:
+            if (line.lstrip("\t") if strip_tabs else line) == word:
+                word = None
+            else:
+                glued.add(end)
+        offset = end + 1
+    return frozenset(glued)
+
+
 def _segments_with_spans(cmd: str) -> List[Tuple[str, int, int]]:
+    """Split ``cmd`` at unquoted ``;``, ``&``, ``|`` and newline."""
     segments: List[Tuple[str, int, int]] = []
     n = len(cmd)
     seg_start = 0
     i = 0
     in_single = False
     in_double = False
+    glued_newlines = _heredoc_body_newlines(cmd)
     while i < n:
         c = cmd[i]
         if in_single:
@@ -4300,7 +4354,7 @@ def _segments_with_spans(cmd: str) -> List[Tuple[str, int, int]]:
             in_double = True
             i += 1
             continue
-        if c in ";&|":
+        if c in ";&|" or (c == "\n" and i not in glued_newlines):
             if i > seg_start:
                 segments.append((cmd[seg_start:i], seg_start, i))
             j = i + 1
@@ -4336,8 +4390,13 @@ def _classify_command_core(
         trail = len(seg_text) - len(seg_text.rstrip())
         spans.append((stripped, start + lead, end - trail, _tokens(stripped)))
 
+    def _gap_joiner(gap: str) -> str:
+        seps = "".join(ch for ch in gap if ch in ";&|")
+        return seps or (";" if "\n" in gap else "")
+
     joiners = [
-        "".join(ch for ch in command[(spans[k - 1][2] if k else 0):spans[k][1]] if ch in ";&|")
+        _gap_joiner(command[spans[k - 1][2]:spans[k][1]]) if k else
+        "".join(ch for ch in command[:spans[0][1]] if ch in ";&|")
         for k in range(len(spans))
     ]
     # Same joiner substitution as _expand_segments, over span tuples.

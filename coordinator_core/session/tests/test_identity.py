@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.session import identity
 
 
@@ -62,6 +64,35 @@ class TestResolveSubagentIdentity:
     def test_always_succeeds_never_raises(self):
         for bad in (None, "", "\n", "😀", "a-16hex-but-not-really"):
             identity.resolve_subagent_identity(bad or "", "abcdef1234567890")
+
+
+class TestDashedConversationUuid:
+    _UUID = "d8f5a804-4fe2-40a9-a267-0c7e7c9929f3"
+    _DASHLESS = "d8f5a8044fe240a9a2670c7e7c9929f3"
+
+    def test_dashed_uuid_resolves_to_canonical_dashless_hex(self):
+        resolved = identity.resolve_subagent_identity(self._UUID, "")
+        assert resolved == self._DASHLESS
+        assert identity.CANONICAL_AGENT_ID_RE.fullmatch(resolved)
+
+    def test_dashed_uuid_ignores_session_id(self):
+        assert identity.resolve_subagent_identity(self._UUID, "short") == self._DASHLESS
+
+    def test_uppercase_uuid_stays_unresolved(self):
+        assert identity.resolve_subagent_identity(self._UUID.upper(), "") == ""
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "d8f5a804-4fe2-40a9-a267-0c7e7c9929f",
+            "d8f5a804-4fe2-40a9-a267-0c7e7c9929f3a",
+            "d8f5a8044fe2-40a9-a267-0c7e7c9929f3",
+            "d8f5a804-4fe2-40a9-a267-0c7e7c9929f3\n",
+            "g8f5a804-4fe2-40a9-a267-0c7e7c9929f3",
+        ],
+    )
+    def test_malformed_uuid_shapes_fail_closed(self, bad):
+        assert identity.resolve_subagent_identity(bad, "abcdef1234567890") == ""
 
 
 class TestFormatOkAndConst:

@@ -169,6 +169,39 @@ def test_host_sampler_bootstraps_the_checkout_root(monkeypatch: pytest.MonkeyPat
     assert str(tmp_path) in sys.path
 
 
+def test_host_sampler_replaces_an_ambient_coordinator_core_lacking_telemetry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    old = tmp_path / "old" / "coordinator_core"
+    old.mkdir(parents=True)
+    (old / "__init__.py").write_text("")
+    new = tmp_path / "new" / "coordinator_core" / "telemetry"
+    new.mkdir(parents=True)
+    for init in (new.parent / "__init__.py", new / "__init__.py"):
+        init.write_text("")
+    (new / "host_sampler.py").write_text("def avail_mb():\n    return (1234, 4096)\n")
+    _without_coordinator_core(monkeypatch)
+    monkeypatch.syspath_prepend(str(tmp_path / "old"))
+    assert host._host_sampler(tmp_path / "new").avail_mb() == (1234, 4096)
+
+
+def test_host_sampler_keeps_the_ambient_package_when_the_checkout_lacks_telemetry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    old = tmp_path / "old" / "coordinator_core"
+    old.mkdir(parents=True)
+    (old / "__init__.py").write_text("")
+    (tmp_path / "new" / "coordinator_core").mkdir(parents=True)
+    (tmp_path / "new" / "coordinator_core" / "__init__.py").write_text("")
+    _without_coordinator_core(monkeypatch)
+    monkeypatch.syspath_prepend(str(tmp_path / "old"))
+    import coordinator_core as ambient
+
+    with pytest.raises(OSError, match="coordinator_core.telemetry"):
+        host._host_sampler(tmp_path / "new")
+    assert sys.modules["coordinator_core"] is ambient
+
+
 def test_host_sampler_names_the_missing_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _without_coordinator_core(monkeypatch)
     with pytest.raises(OSError, match="coordinator_core.telemetry.host_sampler"):

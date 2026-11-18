@@ -8,6 +8,7 @@ from coordinator_core import machine_profile
 from coordinator_core.bash_guards import (
     block_drive_root_new_dir_bash_write as drive_root,
     block_external_workspace_vcs_write as external,
+    block_held_push as held_push,
     block_home_root_bash_write as home_root,
     block_push_pr_non_owned_remote as push_pr,
     block_topic_branch as topic,
@@ -46,7 +47,7 @@ def test_topic_branch_create_or_push_emits_nothing(tmp_path, command):
 
 
 def test_topic_branch_push_hold_carries_no_override():
-    record = topic._hold_reason("main", "frozen")
+    record = held_push._deny_record("main", "frozen")
     assert not _has_override(record)
     assert "push-hold clear" in _text(render(record, Audience.EM))
 

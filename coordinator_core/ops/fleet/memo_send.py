@@ -196,6 +196,7 @@ from coordinator_core.ops.fleet._common import (
 )
 from coordinator_core.ops.fleet._memo_anchor import (
     ANCHOR_REF_PREFIX,
+    PIN_REF_PREFIX,
     anchor_names,
     present_filenames,
 )
@@ -428,6 +429,33 @@ def _portable_delivered_to_form(
     except (ValueError, OSError):
         pass
     return str(delivered_path).replace("\\", "/")
+
+
+def _receipt_subject(
+    topic: str, to: str, *, pinned: bool, sha: Optional[str], delivered_to: str,
+) -> str:
+    """Sender-receipt commit subject naming the real outcome: `delivered to` only
+    when the memo is on the receiver's branch, else `pinned for` with the pin ref
+    and the heal command (`delivered_to`'s `repos.<name>:` key gives the registry
+    spelling `cross-repo-memo sweep --repo` accepts)."""
+    if not pinned:
+        return f"memo.send: {topic} delivered to {to}"
+    head, sep, _ = delivered_to.partition(":")
+    name = head[len("repos."):] if sep and head.startswith("repos.") else "<registry-name>"
+    ref = PIN_REF_PREFIX + (sha or "<sha>")
+    return (
+        f"memo.send: {topic} pinned for {to} ({ref}; "
+        f"heal: cross-repo-memo sweep --apply --repo {name})"
+    )
+
+
+def _on_receiver_branch(receiver_repo_path: Path, branch: str, rel_path: str) -> bool:
+    """True iff the receiver's local `branch` tip tree already holds `rel_path`.
+    In-process object reads, zero spawns; unreadable reads False (pinned)."""
+    tip = read_ref_loose_or_packed(
+        resolve_git_common_dir(receiver_repo_path), _HEADS_PREFIX + branch
+    )
+    return bool(tip) and _upstream_delivery.path_in_tree(receiver_repo_path, tip, rel_path) is True
 
 
 def _normalize_body(text: str) -> str:
@@ -947,11 +975,11 @@ def _deliver_upstream(
     *, receiver_repo_path: Path, sender_worktree: Path, rel_path: str, content: str,
     topic: str, from_id: Optional[str], sent_by: str,
 ) -> "_upstream_delivery.UpstreamDelivery":
-    """Build, anchor and record one delivery through `deliver_onto_upstream`.
+    """Build, anchor, pin and record one delivery through `deliver_onto_upstream`.
 
-    A verified outcome only: a delivery commit that is not a readable object
-    in the receiver's store, or whose record write failed, comes back non-ok
-    with no record left behind. Never raises."""
+    A verified outcome only: a delivery whose pin, anchor, tree path or record
+    does not read back comes back non-ok with no record, pin or anchor left
+    behind. Never raises."""
     msg_file = _write_msg_file(_delivery_commit_message(topic, from_id, sent_by))
     try:
         out = _upstream_delivery.deliver_onto_upstream(
@@ -966,17 +994,15 @@ def _deliver_upstream(
             msg_file.unlink()
         except OSError:
             pass
-    if out.ok and not _delivery_commit_is_object(receiver_repo_path, out.commit_sha or ""):
-        _memo_push_pending.remove_pending(sender_worktree, out.commit_sha)
-        if out.anchor_ref:
-            try:
-                (resolve_git_common_dir(receiver_repo_path) / out.anchor_ref).unlink()
-            except OSError:
-                pass
-        return _upstream_delivery.UpstreamDelivery(
-            False, _upstream_delivery.STATUS_REFUSED,
-            error=f"{out.commit_sha!r} is not a commit object in the receiver's repository — not sent",
-        )
+    if out.ok:
+        problem = _upstream_delivery.verify_delivery(receiver_repo_path, out)
+        if problem is not None:
+            _memo_push_pending.remove_pending(sender_worktree, out.commit_sha)
+            _upstream_delivery.retire_delivery_refs(receiver_repo_path, out)
+            return _upstream_delivery.UpstreamDelivery(
+                False, _upstream_delivery.STATUS_REFUSED,
+                error=f"delivery readback failed: {problem} — not sent",
+            )
     return out
 
 
@@ -2309,8 +2335,16 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     sent_relpath = _relpath(sent_path)
     outbox_relpath = _relpath(draft_path)
     record_relpath = _relpath(record_path)
+    # A fresh upstream delivery is object-only (pin + anchor, never the receiver's
+    # branch); only a reconciled copy can already sit on the branch.
+    on_branch = reconciled is not None and _on_receiver_branch(
+        receiver_repo_path, probe.branch, rel_path
+    )
     sender_message = apply_missing_trailers(
-        f"memo.send: {topic} delivered to {to}\n\n"
+        _receipt_subject(
+            topic, to, pinned=not on_branch, sha=delivery_commit_sha,
+            delivered_to=delivered_to,
+        ) + "\n\n"
         f"Moves the outbox draft to sent/ and writes the sent record.\n",
         sender_worktree,
         [sent_relpath, record_relpath, outbox_relpath],
@@ -2406,6 +2440,9 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         "committed": True,
         "delivery_commit_sha": delivery_commit_sha,
         "anchored": anchored,
+        # Reply twin of the receipt subject: the sending agent reads it to know whether
+        # the receiver must run the sweep heal ("pinned") before the memo is on its branch.
+        "delivery_outcome": "delivered" if on_branch else "pinned",
         "sender_committed": bool(sender_commit.ok),
         # A DELIVERY THAT CANNOT NAME ITS SENDER SAYS SO, AT SEND TIME.
         # The sentinel is otherwise write-only: it lands in the delivered
@@ -2438,6 +2475,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         )
     if push_pending_record is not None:
         acted_item["push_pending_record"] = push_pending_record
+        acted_item["push_pending"] = True
     if not sender_commit.ok:
         # The stderr is the whole diagnosis, and a WARNING alone loses it: the
         # engine's log is not retained, so an operator sees only the CLI's

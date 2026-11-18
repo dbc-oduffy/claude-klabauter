@@ -45,6 +45,21 @@ CANONICAL_AGENT_ID_RE = re.compile(r"^[a-f0-9]{12,}$")
 
 _NAMED_TEAMMATE_RE = re.compile(r"^a(.+)-[a-f0-9]{16}$")
 
+#: Lowercase dashed 8-4-4-4-12 conversation UUID (the agy child-conversation id).
+_DASHED_UUID_RE = re.compile(r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
+
+
+def canonicalize_dashed_uuid(agent_id: str) -> str:
+    """Return the dashless lowercase hex of a dashed 8-4-4-4-12 UUID, else ``""``.
+
+    The single definition of the UUID shape; the result satisfies
+    ``CANONICAL_AGENT_ID_RE``. Uppercase, trailing-newline and mis-grouped
+    input return ``""``.
+    """
+    if _DASHED_UUID_RE.fullmatch(agent_id or ""):
+        return agent_id.replace("-", "")
+    return ""
+
 
 def _format_ok(agent_id: str) -> bool:
     """Port of ``_cs_canonical_agent_id_format_ok <id>``.
@@ -99,7 +114,7 @@ def resolve_subagent_identity(agent_id: str, session_id: str) -> str:
         short = session_id[:8]
         return build_canonical_agent_id(name, short)
 
-    return ""
+    return canonicalize_dashed_uuid(agent_id)
 
 
 def resolves_em_audience(

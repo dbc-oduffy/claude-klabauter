@@ -706,6 +706,29 @@ def _land_tracking_ref(common_dir: Path, remote: str, branch: str, sha: str) -> 
         cas_ref(common_dir, tracking, seen, sha)
 
 
+def _retire_delivery_refs(
+    common_dir: Path,
+    pins: Iterable[Optional[str]],
+    *,
+    anchor: Optional[tuple[str, str]] = None,
+) -> None:
+    """Retire delivery pins (and one superseded `(filename, sha)` anchor); never raises."""
+    from coordinator_core.ops.fleet import _memo_anchor
+
+    for sha in pins:
+        if not sha:
+            continue
+        try:
+            _memo_anchor.retire_pin(common_dir, sha)
+        except Exception:  # noqa: BLE001 -- a retirement must never fail the sweep
+            pass
+    if anchor is not None:
+        try:
+            _memo_anchor.retire_anchor(common_dir, *anchor)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> None:
     """Push one push-pending record as `<sha>:refs/heads/<branch>`; never raises.
 
@@ -734,6 +757,7 @@ def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> 
         if result.ok:
             _memo_push_pending.remove_pending(sender, sha)
             _land_tracking_ref(common_dir, remote, branch, sha)
+            _retire_delivery_refs(common_dir, [sha])
             return
         error = (result.stderr or "").strip()[:500]
         try:
@@ -755,6 +779,7 @@ def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> 
         rebuilt = _upstream_delivery.rebuild_and_retarget(record, tip, sender_root=sender)
         if rebuilt.status == _upstream_delivery.STATUS_COLLISION:
             _memo_push_pending.remove_pending(sender, sha)
+            _retire_delivery_refs(common_dir, [sha])
             return
         if not rebuilt.ok:
             _memo_push_pending.bump_attempt(record, rebuilt.error or error)
@@ -766,6 +791,10 @@ def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> 
         if retry.ok:
             _memo_push_pending.remove_pending(sender, rebuilt.commit_sha)
             _land_tracking_ref(common_dir, remote, branch, rebuilt.commit_sha)
+            filename = str(record["path"]).replace("\\", "/").rsplit("/", 1)[-1]
+            _retire_delivery_refs(
+                common_dir, [rebuilt.commit_sha, sha], anchor=(filename, sha)
+            )
             return
         _memo_push_pending.bump_attempt(
             {**rebuilt.record, _memo_push_pending.RECORD_PATH_KEY: str(rebuilt.record_path)},

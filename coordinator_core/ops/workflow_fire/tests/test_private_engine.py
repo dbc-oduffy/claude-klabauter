@@ -38,7 +38,7 @@ def prepared(tmp_path, monkeypatch):
     for item in build.SOURCES:
         body = b'source\r\n' + item.name.encode()
         if item.name == 'door.c':
-            body += b'\r\n__PYTHON_BIN_W__\r\n__BUILD_ENGINE_ROOT_W__\r\n'
+            body += b'\r\n__PYTHON_BIN_W__\r\n'
         (sources / item.name).write_bytes(body)
         hashes[item.name] = hashlib.sha256((sources / item.name).read_bytes().replace(b'\r', b'')).hexdigest()
     catalog = engine / 'coordinator_core/ops/warm_entrypoint_allowlist.json'
@@ -62,12 +62,11 @@ def prepared(tmp_path, monkeypatch):
     proof_path = tmp_path / 'image.provenance.json'
     proof = {'require_warm': True, 'image_sha256': pe._digest(image), 'sources': hashes,
              'door_c_sha256': hashes['door.c'],
-             'compiler': 'fake-compiler', 'compiler_version': 'not invoked', 'engine_root': str(engine),
+             'compiler': 'fake-compiler', 'compiler_version': 'not invoked',
              'built_at': '2026-11-08T02:00:00+00:00', 'builder': None,
              'command': ['python', '-m', 'coordinator_core.warm.door.build', '<engine_root>'],
-             'python_bin': build.portable_python_bin(Path(sys.executable)), 'compile_flags': ['require-warm-test-flag']}
-    rendered = '#define DOOR_PRIVATE_REQUIRED 1\n' + build._render(
-        (sources / 'door.c').read_text(encoding='utf-8'), build.expand_python_bin(proof['python_bin']), Path(proof['engine_root']))
+             'compile_flags': ['require-warm-test-flag']}
+    rendered = '#define DOOR_PRIVATE_REQUIRED 1\n' + build._render((sources / 'door.c').read_text(encoding='utf-8'))
     proof['rendered_source_sha256'] = hashlib.sha256(rendered.encode('utf-8')).hexdigest()
     proof_path.write_text(json.dumps(proof))
     monkeypatch.setattr(pe, '_module_engine_root', lambda: engine)
@@ -396,20 +395,14 @@ def test_unversioned_token_is_never_private_readiness_evidence(prepared, monkeyp
         prepared.make()
 
 
-@pytest.mark.parametrize('change', ['wrong-digest', 'missing-python', 'relative-python', 'different-python',
-                                   'different-build-root', 'double-prefix'])
+@pytest.mark.parametrize('change', ['wrong-digest', 'double-prefix'])
 def test_required_render_reproduction_refuses_incomplete_or_different_inputs(prepared, change):
     p = prepared
     if change == 'wrong-digest': p.proof['rendered_source_sha256'] = 'f' * 64
-    if change == 'missing-python': del p.proof['python_bin']
-    if change == 'relative-python': p.proof['python_bin'] = 'python.exe'
-    if change == 'different-python': p.proof['python_bin'] = str(p.shared / 'different-python.exe')
-    if change == 'different-build-root': p.proof['engine_root'] = str(p.shared)
     if change == 'double-prefix':
         from coordinator_core.warm.door import build
         rendered = '#define DOOR_PRIVATE_REQUIRED 1\n' * 2 + build._render(
-            (p.sources / 'door.c').read_text(encoding='utf-8'),
-            build.expand_python_bin(p.proof['python_bin']), Path(p.proof['engine_root']))
+            (p.sources / 'door.c').read_text(encoding='utf-8'))
         p.proof['rendered_source_sha256'] = hashlib.sha256(rendered.encode('utf-8')).hexdigest()
     p.proof_path.write_text(json.dumps(p.proof))
     with pytest.raises(ValueError):

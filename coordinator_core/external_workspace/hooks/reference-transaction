@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+# Git runs this hook for every transaction state; only `prepared` can refuse, so the
+# other states exit before paying the engine import.
+if sys.argv[1:2] != ["prepared"]:
+    sys.exit(0)
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from coordinator_core.external_workspace.git_ref_guard import main  # noqa: E402
+
+sys.exit(main(sys.argv, sys.stdin.read()))

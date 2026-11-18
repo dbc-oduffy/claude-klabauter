@@ -36,7 +36,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -550,7 +549,9 @@ def main(argv: list) -> int:
     source = Path(args.source_repo).resolve()
     scratch = source / "scratch"
     scratch.mkdir(exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix="land-blobs-parity-", dir=str(scratch)))
+    from coordinator_core.temp_layout import mkdtemp_in
+
+    workdir = mkdtemp_in("land-blobs-parity-", scratch)
     try:
         with fixture_settings_home(workdir):
             report = run_parity(source, args.last, workdir)

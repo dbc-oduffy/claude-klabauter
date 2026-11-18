@@ -254,7 +254,7 @@ def test_engine_up_allow_is_not_overridden_by_backstop(world, host, payload, exp
 
 @pytest.mark.parametrize("host,payload,expected", [
     ("codex", CODEX_LS, {}),
-    ("agy", AGY_LS, {"decision": "ask", "reason": "coordinator: guard did not run"}),
+    ("agy", AGY_LS, {"decision": "allow"}),
 ])
 def test_engine_down_ordinary_command_gets_the_neutral_fallback(world, host, payload, expected):
     tree, env, _ = world

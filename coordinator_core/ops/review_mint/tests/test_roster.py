@@ -343,6 +343,26 @@ def test_op_entry_with_invalid_op_skips_the_entry(bad):
     _skipped_entry(fragment, "'op'")
 
 
+def test_op_entry_naming_an_unregistered_op_skips_the_entry_naming_it():
+    fragment = _v5_fragment()
+    entry = _op_entry()
+    entry["op"] = "nope.missing"
+    _wave(fragment).append(entry)
+    review = _skipped_entry(fragment, "'nope.missing' is not a registered op")
+    assert "nope.missing" not in {a.agent_type for a in review.review_wave}
+
+
+def test_op_entry_naming_a_registered_op_is_kept(monkeypatch):
+    from coordinator_core.ops import _registry_map
+
+    monkeypatch.setitem(_registry_map.OP_MODULE_MAP, "nope.present", "coordinator_core.ops.dispatch_test_leg")
+    fragment = _v5_fragment()
+    entry = _op_entry()
+    entry["op"] = "nope.present"
+    _wave(fragment).append(entry)
+    assert "nope.present" in {a.agent_type for a in parse_execute_review(fragment).review_wave}
+
+
 def test_op_entry_without_schema_resolves_the_default_schema():
     fragment = _v5_fragment()
     entry = _op_entry()

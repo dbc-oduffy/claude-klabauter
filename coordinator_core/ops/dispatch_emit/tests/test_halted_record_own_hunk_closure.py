@@ -104,3 +104,15 @@ def test_a_path_that_needs_nothing_withheld_still_lands(repo):
     assert OTHER not in out.get("withheld", {})
     assert OTHER in _landed(repo, out, "--name-only")
     assert _git(["show", f"HEAD:{OTHER}"], repo) == OTHER_TREE
+
+
+def test_peer_hunk_pass_skips_a_path_candidate_refuses_as_coarse(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_record_commit
+
+    monkeypatch.setattr(
+        halted_record_commit, "_candidate_for", lambda *a, **k: {"refused": own_hunk_candidate.COARSE}
+    )
+
+    refused, named = halted_record_commit._peer_hunks_excluded(repo, RUN, [OTHER], {})
+
+    assert (refused, named) == ([], {})

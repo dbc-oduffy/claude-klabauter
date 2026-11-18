@@ -190,8 +190,10 @@ Port of: regenerate-orientation-cache.sh (DoE 60489ea9, 2026-07-16)
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -1553,6 +1555,8 @@ def build_cache(
 _LOCK_DIR_SUFFIX = ".orientation_cache.lock"
 _LOCK_TIMEOUT_S = 5.0
 _LOCK_POLL_S = 0.02
+_LOCK_HOLDER_FILE = "holder.json"
+_LOCK_STALE_S = 300.0
 
 
 class _OrientationCacheLock:
@@ -1578,6 +1582,77 @@ class _OrientationCacheLock:
         self._timeout = _LOCK_TIMEOUT_S if timeout is None else timeout
         self._poll_interval = _LOCK_POLL_S if poll_interval is None else poll_interval
         self._acquired = False
+        self._token: Optional[str] = None
+
+    def _read_holder(self) -> Optional[dict]:
+        try:
+            data = json.loads((self._dir / _LOCK_HOLDER_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _write_holder(self) -> None:
+        self._token = f"{os.getpid()}-{time.time_ns()}"
+        record = {
+            "pid": os.getpid(),
+            "session": os.environ.get("CLAUDE_SESSION_ID") or None,
+            "acquired_at": datetime.now(timezone.utc).isoformat(),
+            "token": self._token,
+        }
+        try:
+            (self._dir / _LOCK_HOLDER_FILE).write_text(json.dumps(record), encoding="utf-8")
+        except OSError:
+            pass  # holderless lock stays valid; it is reclaimable by age
+
+    def _is_reclaimable(self, holder: Optional[dict]) -> bool:
+        """Dead recorded pid, or the dir older than the stale age (even when the pid is live)."""
+        pid = holder.get("pid") if holder else None
+        if isinstance(pid, int) and not isinstance(pid, bool):
+            from coordinator_core.session.core import pid_alive
+
+            if not pid_alive(pid):
+                return True
+        try:
+            age = time.time() - os.stat(self._dir).st_mtime
+        except OSError:
+            return False  # vanished: the next mkdir decides
+        return age > _LOCK_STALE_S
+
+    def _reclaim(self, seen: Optional[dict]) -> None:
+        """Atomically move the lock dir aside (exactly one reclaimer's rename wins), then
+        discard it. If the moved dir turns out to hold a different, live holder than the
+        one judged stale, put it back."""
+        aside = self._dir.with_name(f"{_LOCK_DIR_SUFFIX}.reclaim.{os.getpid()}.{time.time_ns()}")
+        try:
+            os.rename(self._dir, aside)
+        except OSError:
+            return  # a peer reclaimed or released first
+        moved = None
+        try:
+            moved = json.loads((aside / _LOCK_HOLDER_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        try:
+            fresh_holderless = (
+                moved is None and seen is None and time.time() - os.stat(aside).st_mtime <= _LOCK_STALE_S
+            )
+        except OSError:
+            fresh_holderless = False
+        if fresh_holderless or (moved or {}).get("token") != (seen or {}).get("token"):
+            try:
+                os.rename(aside, self._dir)  # fails if a new holder already took the path
+                return
+            except OSError:
+                pass
+        shutil.rmtree(aside, ignore_errors=True)
+
+    def _describe_holder(self, holder: Optional[dict]) -> str:
+        if not holder:
+            return "no holder recorded"
+        return (
+            f"holder pid={holder.get('pid')} session={holder.get('session') or 'unknown'} "
+            f"acquired_at={holder.get('acquired_at')}"
+        )
 
     def __enter__(self) -> "_OrientationCacheLock":
         deadline = time.monotonic() + self._timeout
@@ -1585,20 +1660,34 @@ class _OrientationCacheLock:
             try:
                 os.mkdir(self._dir)
                 self._acquired = True
+                self._write_holder()
                 return self
             except FileExistsError:
+                holder = self._read_holder()
+                if self._is_reclaimable(holder):
+                    self._reclaim(holder)
+                    continue
                 if time.monotonic() >= deadline:
                     raise TimeoutError(
-                        f"orientation_cache lock timed out after {self._timeout}s: {self._dir}"
+                        f"orientation_cache lock timed out after {self._timeout}s: "
+                        f"{self._dir} is a directory lock ({self._describe_holder(holder)}); "
+                        f"delete it only if that holder is gone"
                     )
                 time.sleep(self._poll_interval)
 
     def __exit__(self, *exc_info) -> None:
         if self._acquired:
+            held = self._read_holder()
+            if held is not None and held.get("token") != self._token:
+                return  # reclaimed and re-acquired by a peer; not ours to remove
+            try:
+                (self._dir / _LOCK_HOLDER_FILE).unlink()
+            except OSError:
+                pass
             try:
                 os.rmdir(self._dir)
             except OSError:
-                pass  # best-effort release; a stale lock dir self-heals on the next acquire's timeout-free path
+                pass  # best-effort release; a leftover dir is reclaimed by age or dead pid
 
 
 # ---------------------------------------------------------------------------

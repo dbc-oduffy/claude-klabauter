@@ -212,6 +212,7 @@ from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.session import record_homes
 from coordinator_core.write_guards._doctrine_edit_sentinel import (
     DENY_REASON,
+    admit_advisory,
     git_dir_for,
     sentinel_present,
 )
@@ -973,12 +974,23 @@ def _mentions_governed_identifier(text: str, identifiers_lower: Tuple[str, ...])
     governed surface plainly, or one that mentions none -- pays for the fold
     only when the raw text has already missed."""
     lowered = text.lower()
-    if any(identifier in lowered for identifier in identifiers_lower):
+    if any(_identifier_in(identifier, lowered) for identifier in identifiers_lower):
         return True
     folded = _fold_literal_joins(lowered)
     if folded == lowered:
         return False
-    return any(identifier in folded for identifier in identifiers_lower)
+    return any(_identifier_in(identifier, folded) for identifier in identifiers_lower)
+
+
+#: ``claude.md`` is matched as a whole basename: a name that merely ends in it
+#: (``coordinator-content-repo.md``, ``my_claude.md``) is not the doctrine file.
+_BARE_CLAUDE_MD_RE = re.compile(r"(?<![\w.-])claude\.md")
+
+
+def _identifier_in(identifier: str, lowered: str) -> bool:
+    if identifier == "claude.md":
+        return bool(_BARE_CLAUDE_MD_RE.search(lowered))
+    return identifier in lowered
 
 
 def _has_write_marker_for_point3(
@@ -2657,12 +2669,21 @@ def _admitted_edit_target(
 _ADVISORY_EXTRA_IDENTIFIERS = (".claude/rules/", "global-doctrine/rules/")
 
 
+def _sentinel_admit_advisory(cwd: str) -> Dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": admit_advisory(cwd),
+        }
+    }
+
+
 def _class_write_denied(cmd: str, payload: Dict[str, Any], cwd: str) -> Any:
     """The verdict for a write to a CLAUDE.md-class or rules file.
 
     ``None`` when the command writes no such file (the governed-manifest leg decides);
-    ``""`` when it does and the write is admitted (onboarding, or an EM caller with a fresh
-    sentinel); the deny otherwise. A dispatched caller stays denied whatever the sentinel
+    ``""`` when it does and the write is admitted (onboarding); the sentinel-admit advisory
+    envelope for an EM caller with a fresh sentinel; the deny otherwise. A dispatched caller stays denied whatever the sentinel
     says, and is not told about it. A fixed floor: independent of the governed manifest.
     """
     identifiers = tuple(
@@ -2678,7 +2699,7 @@ def _class_write_denied(cmd: str, payload: Dict[str, Any], cwd: str) -> Any:
         return ""
     dispatched = bool(payload.get("agent_id"))
     if not dispatched and sentinel_present(cwd):
-        return ""
+        return _sentinel_admit_advisory(cwd)
     return _levelled_deny(
         _SUBAGENT_CLASS_DENY if dispatched else DENY_REASON,
         doctrine_surface_risk("this command writes a CLAUDE.md-class or rules file."),

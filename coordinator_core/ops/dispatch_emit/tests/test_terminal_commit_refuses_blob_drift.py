@@ -83,7 +83,7 @@ def _review(repo: Path, reviewed: dict, at: float) -> None:
         "verdict": "OK", "basis": "worktree", "whole_diff_path": "d", "product_files": len(reviewed),
         "foreign_claims": [], "slices": [{"id": "s", "files": sorted(reviewed)}],
         "whole_diff_sidecars": {}, "excluded": [],
-        "sidecar_path": "x", "head": None, "paths": sorted(reviewed),
+        "sidecar_path": "x", "head": None, "paths": sorted(reviewed), "review_skip": None,
         "recorded_at": datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "reviewed_sha256": reviewed,
     }

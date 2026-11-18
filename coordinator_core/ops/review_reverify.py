@@ -20,7 +20,8 @@ restores bytes older than HEAD. With no HEAD the baseline is always the snapshot
 anchor tree is unreadable, revert mode returns ``error`` and writes nothing (fail closed); list mode
 keeps the snapshot baseline and adds ``"head_unreadable": true``.
 
-List mode (no ``failing``): ``{"edited", "created", "foreign", "outside_declared", "tripwires", "snapshot", "error"}``,
+List mode (no ``failing``): ``{"edited", "created", "foreign", "outside_declared", "owned", "tripwires",
+"tripwires_not_selected", "notice", "snapshot", "error"}``,
 plus ``head_unreadable`` when applicable. When review changed nothing (``edited`` and ``created`` both
 empty), they are derived from the run diff instead: manifest paths whose bytes differ from the ``base``
 commit's blob (``edited``) or that base lacks (``created``), using HEAD instead for paths moved
@@ -29,9 +30,13 @@ since the snapshot, with ``"derived_from": "run_diff"``.
 that the manifest does not name, no other live run declared, written after the snapshot by an agent this run's own
 record names: a review fix outside the declared writes. Spawn-free (the same session write record as ``created``);
 revert mode treats them as ``foreign``, so they are never reverted.
-``tripwires`` is the sorted tracked test modules (not already edited or created) whose source holds a string
-literal naming an edited or created path; empty for an empty edit set. When the tracked-file index cannot
-be read, ``tripwires`` is empty and ``error`` is ``"tripwire scan unavailable: <reason>"``; the other
+``owned`` is the touched tests plus the stem-mapped or importing tests of the edited paths (at most
+``reverify_scope._SUITE_BOUND`` beyond the touched ones). ``tripwires`` are the other tracked test modules that
+import an edited module, then those whose source holds a string literal naming an edited or created path,
+same package first, cut at ``reverify_scope.TRIPWIRE_BOUND`` and never holding an ``owned`` file;
+``tripwires_not_selected`` is the rest (a coverage gap to report as not run), ``notice`` says what was cut. All
+are empty for an empty edit set. When the tracked-file index cannot
+be read, ``owned`` and ``tripwires`` are empty and ``error`` is ``"tripwire scan unavailable: <reason>"``; the other
 fields stay filled. ``edited`` is every
 manifest path whose bytes now differ from its baseline (a missing file counts); ``created`` is every path the
 session's review stage wrote that the manifest and its declared ``paths`` do not name. ``foreign``
@@ -136,10 +141,18 @@ from coordinator_core.ops.dispatch_emit.red_attribution import names_own_path_in
 from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused
 from coordinator_core.ops.owned_red import read_owned_red
 from coordinator_core.ops.pre_existing_ruling import ruled_pre_existing
+from coordinator_core.ops.pre_review_dir import pre_review_dir
 from coordinator_core.ops.review_reverify_findings import applied_rows, invert
 from coordinator_core.ops.review_test_blocker import NOT_FOUND_RE
-from coordinator_core.ops.review_tripwires import TripwireScanUnavailable, literal_namers, names_in, tree_scanners, walked_created
+from coordinator_core.ops.review_tripwires import (
+    TripwireScanUnavailable,
+    _tracked_test_bytes as tracked_test_bytes,
+    names_in,
+    tree_scanners,
+    walked_created,
+)
 from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
+from coordinator_core.ops.reverify_scope import select_for_paths
 from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
@@ -961,7 +974,7 @@ def review_reverify(
         if "/" in value or "\\" in value or ".." in value:
             return _fail(f"{label} must be a bare name, not a path", revert, shape)
     share = Path(share_dir(str(repo_root), session))
-    snapshot_dir = share / f"{slice_prefix}.pre-review"
+    snapshot_dir = pre_review_dir(share, slice_prefix)
     manifest = _read_manifest(snapshot_dir)
     if manifest is None:
         return _fail(f"no pre-review snapshot for {slice_prefix}", revert, shape)
@@ -998,19 +1011,22 @@ def review_reverify(
             derived = "run_diff" if edited or created else None
         try:
             skip_paths = set(edited) | set(created)
-            found = set(literal_namers(repo_root, edited + created, exclude=skip_paths))
-            if created:
-                found.update(tree_scanners(repo_root, created, exclude=skip_paths))
-            tripwires = sorted(found)
+            walkers = tree_scanners(repo_root, created, exclude=skip_paths) if created else []
+            picked = select_for_paths(
+                repo_root, edited + created, tracked_test_bytes(repo_root, skip_paths), namers=walkers
+            )
         except TripwireScanUnavailable as exc:
-            tripwires = []
+            picked = {"owned": [], "tripwires": [], "tripwires_not_selected": [], "notice": ""}
             scan_error = f"tripwire scan unavailable: {exc}"
         out = {
             "edited": edited,
             "created": created,
             "foreign": foreign,
             "outside_declared": outside,
-            "tripwires": tripwires,
+            "owned": picked["owned"],
+            "tripwires": picked["tripwires"],
+            "tripwires_not_selected": picked["tripwires_not_selected"],
+            "notice": picked["notice"],
             "snapshot": snapshot_rel,
             "error": scan_error,
         }
@@ -1087,6 +1103,7 @@ def review_reverify(
         from coordinator_core.ops.dispatch_emit import review_edits
 
         sibling_py = {_norm(p) for p in review_edits.live_sibling_declared(repo_root, None, slice_prefix)}
+        sibling_py -= {*rels, *created_set}
     for node, targets in implication.items():
         for target in targets:
             implicated.setdefault(target, []).append(node)

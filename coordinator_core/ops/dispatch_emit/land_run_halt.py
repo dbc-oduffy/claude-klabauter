@@ -188,7 +188,8 @@ def unexecuted_withholds(worktree_root: Path, script_path: object, halted: dict,
             return {}
     ran = {c.id for c in request.chunks if c.report and (worktree_root / c.report).is_file()}
     ran.update(i for i in (halted.get("stopped_rows") or ()) if isinstance(i, str))
-    ids = upr.unexecuted_plan_rows(rows, ran)
+    freed = upr.satisfied_blocks(request.chunks, lambda rel: _report_text(worktree_root, rel, {}))
+    ids = upr.unexecuted_plan_rows(rows, ran, freed)
     if not ids:
         return {}
     text = upr.message(ids)
@@ -572,6 +573,27 @@ def _run_left_nothing(root: Path, run_id: str, paths: list) -> set:
         return set()
 
 
+def _baseline_declared_product(root: Path, run_id: str, product: list, withheld: dict, unexecuted: dict) -> list:
+    """Finished chunks' product paths the run's write baseline names whose bytes moved off that
+    baseline: the run's own hunk, so a halt parks it though no touch record listed it. A path
+    outside the baseline, one a peer holds, or one an unexecuted row owns is never claimed."""
+    if not product:
+        return []
+    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+    from coordinator_core.ops.dispatch_emit.halted_record_eviction import _NOT_RUN_OWNED
+
+    try:
+        baseline = hha._baseline(root, run_id)
+    except Exception:  # noqa: BLE001 -- unknown is not the run's
+        return []
+    if not baseline:
+        return []
+    return [
+        p for p in product
+        if p in baseline and p not in unexecuted and withheld.get(p) not in _NOT_RUN_OWNED
+    ]
+
+
 def _measured_own_paths(root: Path, run_id: str, record_dir_rel: str) -> list:
     """Paths ``measured-rev.json`` records as this run's change (written and removed), minus a path
     whose tree bytes still equal the run's write baseline (a peer's dirt) and any record-dir, scratch
@@ -791,6 +813,9 @@ def _land(
     warnings = commit_v2._peer_claim_warnings(
         root, product + removed + art_paths + art_deleted, holds, own_sid=session_id
     )
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import indeterminate_credited, retry_indeterminate
+
+    warnings = retry_indeterminate(root, product + removed + art_paths + art_deleted, warnings, holds, session_id)
     held = {p for p, _sid in holds}
     withheld.update({p: PEER_HELD for p in sorted(held)})
     peer_held_by: dict = {}
@@ -801,9 +826,12 @@ def _land(
     indeterminate = [w for w in warnings if w.startswith("claim state indeterminate")]
     if indeterminate:
         everywhere = any(w.startswith("claim state indeterminate (") for w in indeterminate)
-        for p in product + removed:
-            if p not in held and (everywhere or f"claim state indeterminate for {p!r}" in indeterminate):
-                withheld[p] = PEER_INDETERMINATE
+        unanswered = [
+            p for p in product + removed
+            if p not in held and (everywhere or f"claim state indeterminate for {p!r}" in indeterminate)
+        ]
+        own = indeterminate_credited(root, record_dir_rel, unanswered)
+        withheld.update({p: PEER_INDETERMINATE for p in unanswered if p not in own})
     product = [p for p in product if p not in withheld]
     removed = [p for p in removed if p not in withheld]
     art_paths = [p for p in art_paths if p not in withheld]
@@ -836,6 +864,9 @@ def _land(
 
     run_written = [p for p in _run_written(root, session_id, run_id) if p not in peer_only]
     run_written += [p for p in _measured_own_paths(root, run_id, record_dir_rel) if p not in run_written and p not in peer_only]
+    run_written += [
+        p for p in _baseline_declared_product(root, run_id, product, withheld, unexecuted) if p not in run_written
+    ]
     written_entries = _entries_at(root, None, run_written) if run_written else {}
     if written_entries is None:
         own_changed = {p for p in run_written if (root / p).exists()}

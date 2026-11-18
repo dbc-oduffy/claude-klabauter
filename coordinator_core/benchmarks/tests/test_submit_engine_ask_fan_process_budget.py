@@ -38,7 +38,7 @@ def test_a_fourteen_ask_submission_is_under_the_bar_with_no_spawn_beyond_the_fan
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
     for i in range(200):
-        assert PT.append_turn(f"pm turn number {i} with some words", session_id=SID)["ok"]
+        assert PT.append_turn(f"job {i}", session_id=SID)["ok"]
 
     spawns: list = []
     real_popen = subprocess.Popen

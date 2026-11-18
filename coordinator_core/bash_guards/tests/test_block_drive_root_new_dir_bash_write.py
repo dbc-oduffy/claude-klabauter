@@ -33,8 +33,11 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     machine_profile.reset_cache()
 
 
-def _payload(cmd, tool: str = "Bash", cwd=None, env=None):
+def _payload(cmd, tool: str = "Bash", cwd=None, env=None, agent_id="sub-1"):
+    """A subagent payload (carries `agent_id`) unless `agent_id` is None (the main session)."""
     p = {"tool_name": tool, "tool_input": {"command": cmd}}
+    if agent_id is not None:
+        p["agent_id"] = agent_id
     if cwd is not None:
         p["cwd"] = str(cwd)
     if env is not None:
@@ -158,6 +161,24 @@ def test_override_in_payload_env_allows(world) -> None:
     cmd = f"mkdir {root.as_posix()}/new"
     assert _enveloped(guard.check)(_payload(cmd, "Bash", work, env={"COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR": "1"})) is None
     assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", work, env={"COORDINATOR_DRIVE_ROOTS": str(root)})))
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_main_session_without_agent_id_is_allowed_subagent_denied(world, tool) -> None:
+    root, _, work = world
+    cmd = f"mkdir {root.as_posix()}/new"
+    check = _enveloped(guard.check)
+    assert check(_payload(cmd, tool, work, agent_id=None)) is None
+    assert check(_payload(cmd, tool, work, agent_id="")) is None
+    assert _denied(check(_payload(cmd, tool, work, agent_id="sub-1")))
+
+
+def test_subagent_with_override_is_allowed(world) -> None:
+    root, _, work = world
+    cmd = f"mkdir {root.as_posix()}/new"
+    payload = _payload(cmd, "Bash", work, env={"COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR": "1"})
+    assert payload["agent_id"] == "sub-1"
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_bare_slash_on_windows(world, monkeypatch: pytest.MonkeyPatch) -> None:

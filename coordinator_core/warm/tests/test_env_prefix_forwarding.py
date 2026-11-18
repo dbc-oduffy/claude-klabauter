@@ -117,7 +117,7 @@ def test_the_posix_door_carries_prefixed_names_and_nothing_else(tmp_path, runtim
         pytest.skip("no C compiler")
     door = tmp_path / "door"
     subprocess.run(
-        [cc, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', '-DBUILD_ENGINE_ROOT=""',
+        [cc, "-O2", "-std=c11", '-DPYTHON_BIN="python3"',
          "-o", str(door), str(_DOOR_DIR / "door_posix.c"), str(_DOOR_DIR / "door_core.c")],
         check=True, capture_output=True, **no_console_creationflags(),
     )

@@ -43,9 +43,11 @@ import sys
 
 def _default_template_dir() -> str:
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-    from coordinator_data_root import data_root
+    from coordinator_data_root import data_file
 
-    return os.path.join(str(data_root("templates")), "bin")
+    # Per-file resolution: the co-located templates/bin exists in the engine
+    # repo but does not carry these two DoE-owned templates.
+    return os.path.dirname(str(data_file("templates", "bin", "claude-author-launcher.cmd.tmpl")))
 
 
 def _import_runner():
@@ -58,7 +60,56 @@ def _import_runner():
     return run_op_main
 
 
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def _stage_bom_templates(src_dir: str, dst_dir: str) -> None:
+    """Copy the launcher templates into `dst_dir`, the `.ps1` one prefixed with a
+    UTF-8 BOM (Windows PowerShell 5.1 reads a BOM-less script as cp1252)."""
+    import shutil
+
+    for name in ("claude-author-launcher.cmd.tmpl", "claude-author-launcher.ps1.tmpl"):
+        src = os.path.join(src_dir, name)
+        if not os.path.isfile(src):
+            continue
+        dst = os.path.join(dst_dir, name)
+        if not name.startswith("claude-author-launcher.ps1"):
+            shutil.copyfile(src, dst)
+            continue
+        with open(src, "rb") as fh:
+            data = fh.read()
+        if not data.startswith(_UTF8_BOM):
+            data = _UTF8_BOM + data
+        with open(dst, "wb") as fh:
+            fh.write(data)
+
+
 def main(argv: "list[str] | None" = None) -> int:
+    import tempfile
+
+    argv = (sys.argv[1:] if argv is None else list(argv))
+    if os.name != "nt" or "-h" in argv or "--help" in argv:
+        return _main(argv)
+    with tempfile.TemporaryDirectory(prefix="claude-author-launcher-") as staged:
+        staged_argv = argv
+        try:
+            if "--template-dir" in argv:
+                i = argv.index("--template-dir")
+                src = argv[i + 1] if i + 1 < len(argv) else ""
+                if src and os.path.isdir(src):
+                    _stage_bom_templates(src, staged)
+                    staged_argv = argv[: i + 1] + [staged] + argv[i + 2 :]
+            else:
+                _stage_bom_templates(_default_template_dir(), staged)
+                staged_argv = argv + ["--template-dir", staged]
+        except (RuntimeError, ImportError, OSError):
+            staged_argv = argv
+        if staged_argv is not argv and len(os.listdir(staged)) < 2:
+            staged_argv = argv
+        return _main(staged_argv)
+
+
+def _main(argv: "list[str]") -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:

@@ -131,7 +131,7 @@ def test_rejudge_emits_from_a_recorded_unmet_delivery_verdict(tmp_path, monkeypa
     result = rd.emit_rejudge(repo_root=repo, plan_path=str(plan), out_path=str(out))
 
     assert result["path"] == str(out) and out.exists()
-    assert rd.recorded_unmet_criterion(repo, "x", str(plan)) == {"status": status, "run_base_sha": head}
+    assert rd.recorded_unmet_criterion(repo, "x", str(plan)) == {"status": "not_met", "run_base_sha": head}
 
 
 _STAMP_MET = (
@@ -284,7 +284,7 @@ def test_close_route_fire_fires_and_prints_the_handle(tmp_path, monkeypatch, cap
     monkeypatch.setattr(rd, "emit_rejudge", lambda **_: {"path": str(script)})
     monkeypatch.setattr(rd, "emit_reverify", lambda **_: {"path": str(script)})
     fired = []
-    monkeypatch.setattr(fire_module, "fire_workflow", lambda path, cwd=None: fired.append(path) or {"fire_id": "f1"})
+    monkeypatch.setattr(fire_module, "fire_workflow", lambda path, cwd=None, run_id=None: fired.append(path) or {"fire_id": "f1"})
 
     code = cli.main([*route, "--plan", str(tmp_path / "p.md"), "--repo-root", str(tmp_path), "--fire"])
 

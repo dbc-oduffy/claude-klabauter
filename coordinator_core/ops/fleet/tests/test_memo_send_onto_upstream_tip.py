@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import daily_day, machine_resolver
+from coordinator_core.ops.ceremony import git_native
+from coordinator_core.ops.fleet import _upstream_delivery
 from coordinator_core.ops.fleet.memo_send import _memo_send
 from coordinator_core.ops.fleet.tests.test_memo_send import (
     _git as _run_git,
@@ -112,6 +114,67 @@ def test_behind_and_dirty_receiver_gets_the_memo_on_top_of_upstream_and_pushed(w
     assert _git(receiver, "rev-parse", f"refs/remotes/origin/{day}") == sha
     assert _git(receiver, "rev-parse", f"refs/heads/{day}") == world["local_tip"]
     assert _checkout_state(receiver) == state_before
+
+
+def test_default_send_pins_the_commit_and_says_the_push_is_pending(world) -> None:
+    sender, receiver = world["sender"], world["receiver"]
+    _write_draft(sender, "pin-topic")
+
+    result = _memo_send({"dry_run": False, "topic": "pin-topic"}, repo_root=sender)
+
+    assert result["exit_code"] == 0, result
+    item = result["acted"][0]
+    sha = item["delivery_commit_sha"]
+    assert _git(receiver, "rev-parse", f"{sha}^") == world["upstream_tip"]
+    assert _git(receiver, "rev-parse", f"refs/coordinator/inbox-pin/{sha}") == sha
+    assert item["push_pending"] is True
+    assert [r["commit_sha"] for r in _pending_records(sender)] == [sha]
+    assert _git(receiver, "rev-parse", f"refs/heads/{world['day']}") == world["local_tip"]
+
+
+def test_a_held_pin_lock_refuses_the_send_and_leaves_nothing_owed(world, monkeypatch) -> None:
+    sender, receiver = world["sender"], world["receiver"]
+    _write_draft(sender, "pin-lost-topic")
+    real_build = git_native.build_new_file_commit
+
+    def _build_then_lock_the_pin(rel_path, content, msg_file, repo_path, **kwargs):
+        result = real_build(rel_path, content, msg_file, repo_path, **kwargs)
+        lock = receiver / ".git" / f"refs/coordinator/inbox-pin/{result.stdout.strip()}.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_bytes(b"held by a peer\n")
+        return result
+
+    monkeypatch.setattr(git_native, "build_new_file_commit", _build_then_lock_the_pin)
+
+    result = _memo_send({"dry_run": False, "topic": "pin-lost-topic"}, repo_root=sender)
+
+    assert result["exit_code"] != 0, result
+    assert result["acted"] == []
+    assert "pin" in result["failed"][0]["reason"]
+    assert _pending_records(sender) == []
+    assert _git(receiver, "for-each-ref", "refs/coordinator/inbox", "refs/coordinator/inbox-pin") == ""
+
+
+def test_an_anchor_that_does_not_read_back_refuses_the_send(world, monkeypatch) -> None:
+    sender, receiver = world["sender"], world["receiver"]
+    _write_draft(sender, "anchor-mismatch-topic")
+    real_write_anchor = _upstream_delivery.write_anchor
+
+    def _anchor_then_clobber(common_dir, filename, commit_sha, data):
+        blob = real_write_anchor(common_dir, filename, commit_sha, data)
+        ref = common_dir / "refs" / "coordinator" / "inbox" / filename / commit_sha
+        ref.write_text("0" * 40 + "\n", encoding="utf-8")
+        return blob
+
+    monkeypatch.setattr(_upstream_delivery, "write_anchor", _anchor_then_clobber)
+
+    result = _memo_send({"dry_run": False, "topic": "anchor-mismatch-topic"}, repo_root=sender)
+
+    assert result["exit_code"] != 0, result
+    assert result["acted"] == []
+    assert "anchor" in result["failed"][0]["reason"]
+    assert _pending_records(sender) == []
+    assert _git(receiver, "for-each-ref", "refs/coordinator/inbox-pin") == ""
 
 
 def test_a_failed_push_leaves_a_retryable_record_that_lands_on_the_next_tick(world) -> None:

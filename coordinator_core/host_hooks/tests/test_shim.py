@@ -80,9 +80,27 @@ def test_session_identity_comes_from_payload(monkeypatch: pytest.MonkeyPatch) ->
 def test_engine_down_or_error_is_neutral_fallback_with_degrade_row(monkeypatch: pytest.MonkeyPatch, rows, response) -> None:
     _engine(monkeypatch, response)
     assert shim.run("codex", json.dumps(CODEX_LS)) == {}
-    assert shim.run("agy", json.dumps(AGY_LS))["decision"] == "ask"
+    assert shim.run("agy", json.dumps(AGY_LS))["decision"] == "allow"
     assert [r["kind"] for r in rows] == [telemetry.KIND_COLD_RUN] * 2
     assert all(r["cause"] for r in rows)
+
+
+def test_cold_chain_ran_without_deny_renders_agy_allow_and_a_raising_chain_falls_back_to_allow(monkeypatch: pytest.MonkeyPatch, rows) -> None:
+    from coordinator_core.host_hooks import tool_policy
+
+    _engine(monkeypatch, None)
+    monkeypatch.setattr(tool_policy, "evaluate", lambda event: {"permissionDecision": "allow"})
+    assert shim.run("agy", json.dumps(AGY_LS)) == {"decision": "allow"}
+
+    def boom(event):
+        raise RuntimeError("chain exploded")
+
+    monkeypatch.setattr(tool_policy, "evaluate", boom)
+    answer = shim.run("agy", json.dumps(AGY_LS))
+    assert answer["decision"] == "allow" and "ask" not in str(answer.values())
+
+    monkeypatch.setattr(tool_policy, "evaluate", lambda event: {"permissionDecision": "deny", "permissionDecisionReason": "no"})
+    assert shim.run("agy", json.dumps(AGY_LS))["decision"] == "deny"
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the shim dial budget against a sleeping engine; sleep burns no CPU")
@@ -137,7 +155,7 @@ def test_dial_exception_is_a_miss(monkeypatch: pytest.MonkeyPatch, rows) -> None
 def test_garbage_stdin_is_neutral_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     _engine(monkeypatch, None)
     assert shim.run("codex", "not json") == {}
-    assert shim.run("agy", "not json")["decision"] == "ask"
+    assert shim.run("agy", "not json")["decision"] == "allow"
     assert shim.run("codex", "") == {}
     assert shim.run("nope", "{}") == {}
 
@@ -237,7 +255,9 @@ def test_warm_codex_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, payl
 def test_warm_agy_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool) -> None:
     _engine(monkeypatch, {"result": {"additionalContext": NAG}})
     out = shim.decide("agy", _agy_write(tmp_path, tool))
-    assert _nag_in("agy", out) and out["decision"] == "ask"
+    # An `ask` is auto-approved under agy -p and PreToolUse takes no `injectSteps`: the nag is an explicit allow
+    # whose text is stashed for the next PreInvocation.
+    assert _nag_in("agy", out) and out["decision"] == "allow" and "injectSteps" not in out
 
 
 @pytest.mark.parametrize("payload", [CODEX_EDIT, CODEX_WRITE])

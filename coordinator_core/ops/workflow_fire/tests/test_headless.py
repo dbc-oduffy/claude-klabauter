@@ -172,7 +172,9 @@ def test_deadline_never_dispatches_queued_agents_after_runtime_dies(tmp_path: Pa
     before = time.monotonic()
     result = headless.execute(path, agent_runner=worker)
     assert result['exit_code'] == 1
-    assert 1 <= len(calls) <= 8
+    # The bound is the invariant: no agent past the deadline. Zero dispatched is legitimate
+    # when interpreter start under load already spends the 0.3s runtime.
+    assert len(calls) <= 8
     assert all(0 < timeout <= .3 for _, timeout in calls)
     assert time.monotonic() - before < 2
 

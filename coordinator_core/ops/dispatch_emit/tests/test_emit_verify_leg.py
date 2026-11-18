@@ -274,17 +274,18 @@ def test_the_verify_agent_gets_the_tests_result_inline_and_returns_no_test_of_it
     assert "`test` (step 1" not in script
 
 
-def test_the_tests_leg_prompt_carries_the_deadline_and_the_measured_rev_instruction_the_verify_prompt_dropped():
+def test_the_tests_leg_prompt_carries_the_detached_run_and_the_measured_rev_instruction_the_verify_prompt_dropped():
     from coordinator_core.ops.dispatch_emit import ask_compose
 
     tests = ask_compose._verify_tests_call(
-        head="H", anchor="A", test_js=ask_compose._test_instruction_js("HEAD", "REPO"), run_id="r1"
+        head="H", anchor="A", test_js=ask_compose._test_instruction_js("HEAD", "REPO"), run_id="r1",
+        repo_root="REPO", out_path="/run/test-leg.json",
     )
     verify = ask_compose._verify_call(
         head="H", anchor="A", test_js=ask_compose._test_instruction_js("HEAD", "REPO"), docs_parts=(),
         verdict_parts=("v",), judged=False, schema={}, run_id="r1", test_result_var="_verifyTest",
     )
-    assert "Deadline: return your test_result within" in tests and "dispatch.measured_rev" in tests
+    assert "coordinator_core.ops.test_leg_run" in tests and "dispatch.measured_rev" in tests
     assert "dispatch.measured_rev" not in verify and "Run the scoped test targets" not in verify
 
 

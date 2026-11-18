@@ -56,6 +56,7 @@ REPLY_KEYS: Final = frozenset({
     "merge_parent",
     "merge_artifacts",
     "remedy_step",
+    "awaiting",
 })
 
 #: Reply key: sorted ids this commit landed that `_grade` regraded (EM credit, ledger-met, outside-footprint) or that were credited but absent from the request; the commit arm drops them from the open set.

@@ -55,6 +55,42 @@ def test_pass_requires_a_test_that_ran():
         assert "pass requires at least one test that ran and passed" in block
 
 
+def test_owned_tests_run_first_and_the_capped_remainder_is_not_run_with_tests_run():
+    from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND
+
+    for block in _both():
+        owned_at = block.index("first ONE pytest call of the test files among them")
+        tripwire_at = block.index("ONE pytest call of the `tripwires` files")
+        assert owned_at < tripwire_at
+        assert "`owned`" in block and "`tripwires_not_selected`" in block
+        assert f"never more than {TRIPWIRE_BOUND}" in block
+        assert "every file past that cut is `not_run`" in block
+        assert "Return `tests_run`" in block and "`not_run` (a list of paths)" in block
+        assert "the test files that import an edited module" not in block
+        assert "with a not-run remainder are pass with `not_run` listed, never indeterminate" in block
+        assert "pass requires at least one test that ran and passed" in block
+
+
+def test_group_prompt_runs_the_union_of_owned_lists_first():
+    block = _phase(group_prefixes=["g1", "g2"])
+    assert "`owned` list (the union of the `owned` lists)" in block
+    assert "files (the union in list order)" in block
+
+
+def test_verify_scope_targets_join_the_owned_call():
+    block = _phase(group_prefixes=["g1"], verify_scope_targets={"a.py": ["t/test_a.py"]})
+    assert "among them, the verify-scope targets named below and the `owned` list" in block
+    assert "t/test_a.py" in block
+
+
+def test_schema_declares_tests_run_and_not_run_and_keeps_them_optional():
+    props = er._REVERIFY_SCHEMA["properties"]
+    assert props["tests_run"] == {"type": "integer"}
+    assert props["not_run"] == {"type": "array", "items": {"type": "string"}}
+    assert "tests_run" not in er._REVERIFY_SCHEMA["required"]
+    assert "not_run" not in er._REVERIFY_SCHEMA["required"]
+
+
 def test_node_test_files_are_selected_under_node_test_one_file_at_a_time():
     for block in _both():
         assert "*.test.js" in block

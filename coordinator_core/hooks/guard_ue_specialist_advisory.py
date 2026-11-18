@@ -7,13 +7,15 @@ class of the installed example-game-repo-control route table, in a UE repo, gets
 Forwarder contract. `evaluate(payload, env=None, repo_root=None) -> dict` is the one body behind the
 registered op and the seam a thin external hook script forwards to. It returns `{}` (no advisory) or
 a PreToolUse `additionalContext` envelope. A non-Agent tool, a non-UE repo, no installed example-game-repo
-manifest, a example-game-repo/game-dev `subagent_type`, a specialist missing from the installed roster and
-any internal error all return `{}`. No subprocess; the table and roster come from agent_route's
+manifest, a example-game-repo/game-dev `subagent_type`, a specialist missing from the installed roster, a
+prompt whose declared writes (`declared_writes`) are all docs/tests/yaml and any internal error all
+return `{}`. No subprocess; the table and roster come from agent_route's
 memoised `_plugin_table`.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Mapping, Optional
 
 from coordinator_core._hook_envelope import context_only, no_advisory, payload_of
@@ -21,6 +23,26 @@ from coordinator_core.hooks.guard_agent_route_admission import _path_tokens
 from coordinator_core.ipc import register_op
 
 EXEMPT_PREFIXES = ("example-game-repo-control:", "game-dev:")
+
+
+_WRITES_HEADING_RE = re.compile(r"^#+\s*Files you may write\b", re.IGNORECASE)
+_HEADING_RE = re.compile(r"^#+\s")
+_BULLET_PATH_RE = re.compile(r"^\s*[-*]\s+`([^`\s]+)`\s*$")
+
+
+def declared_writes(prompt: str) -> list[str]:
+    """Backticked bullet paths under the prompt's `## Files you may write` heading, up to the next
+    heading; `[]` when the prompt declares none."""
+    out: list[str] = []
+    inside = False
+    for line in prompt.splitlines():
+        if _WRITES_HEADING_RE.match(line):
+            inside = True
+        elif inside and _HEADING_RE.match(line):
+            inside = False
+        elif inside and (m := _BULLET_PATH_RE.match(line)):
+            out.append(m.group(1))
+    return out
 
 
 def _message(subagent_type: str, class_id: str, specialist: str) -> str:
@@ -62,6 +84,9 @@ def _evaluate(params: dict, repo_root) -> dict:
         return no_advisory()
     table, roster, _note = agent_route._plugin_table(root)
     if table is None or not roster:
+        return no_advisory()
+
+    if agent_route.writes_are_docs_tests_yaml(declared_writes(prompt)):
         return no_advisory()
 
     cls = agent_route.match_work_class(

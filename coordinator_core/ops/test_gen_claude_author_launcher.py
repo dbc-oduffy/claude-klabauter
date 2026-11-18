@@ -4,6 +4,7 @@ Spec backlink: tasks/2026-07-14-install-dogfood-friction.md section F5
 """
 from __future__ import annotations
 
+import codecs
 import os
 from pathlib import Path
 
@@ -152,7 +153,8 @@ def test_render_writes_both_launchers(monkeypatch, tmp_path, capsys):
     cmd_dest = home / ".local" / "bin" / "claude-author.cmd"
     ps1_dest = home / ".local" / "bin" / "claude-author.ps1"
     assert cmd_dest.read_text() == (tmpl_dir / "claude-author-launcher.cmd.tmpl").read_text()
-    assert ps1_dest.read_text() == (tmpl_dir / "claude-author-launcher.ps1.tmpl").read_text()
+    assert ps1_dest.read_text(encoding="utf-8-sig") == (tmpl_dir / "claude-author-launcher.ps1.tmpl").read_text()
+    assert ps1_dest.read_bytes().startswith(codecs.BOM_UTF8)
     err = capsys.readouterr().err
     assert f"Wrote launcher: {cmd_dest}" in err
     assert f"Wrote launcher: {ps1_dest}" in err

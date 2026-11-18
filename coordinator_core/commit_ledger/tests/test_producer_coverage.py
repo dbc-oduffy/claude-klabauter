@@ -115,6 +115,16 @@ _EXEMPT_PRODUCERS = {
         "disposable temp repo so the run-landing spike has a history to land "
         "into; not a production commit path."
     ),
+    "benchmarks/land_blobs_bar_profile.py": (
+        "benchmark fixture builder (`add_live_sibling_runs`) -- commits sibling "
+        "runs into a managed temp fixture repo for the declared-blob landing "
+        "bar profile; not a production commit path."
+    ),
+    "benchmarks/landing_render_spike.py": (
+        "benchmark fixture builder (`build_fixture` seed commit) -- seeds a "
+        "tmp repo the landing render spike lands into; not a production "
+        "commit path."
+    ),
     "gem_inbox_apply.py": (
         "`apply_manifest` lands one scoped `git commit -- <pathspec>` of a "
         "fleet-inbox-blitz apply manifest in the G-EM home repo; no baton or "

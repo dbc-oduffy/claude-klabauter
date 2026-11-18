@@ -475,6 +475,48 @@ def test_really_gated_awaiting_gate_still_refuses(tmp_path, extra):
     assert reason is not None and "live-but-blocked" in reason
 
 
+def test_live_candidates_span_flat_and_month_shards_but_not_archive(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "2026-11-01-flat.md")
+    _seed_handoff(repo, "2026-11/2026-11-02-sharded.md")
+    _seed_handoff(repo, "notes/2026-11-03-nonmonth.md")
+    archived = repo / "archive" / "handoffs" / "2026-11"
+    archived.mkdir(parents=True)
+    (archived / "2026-11-04-archived.md").write_text(
+        "---\ndeployment_state: ready_to_fire\ndeliverable_id: dlv-test-000000\n---\n", encoding="utf-8"
+    )
+
+    matches, incomplete, _ = cascade_mod._collect_live_candidates_for_kind(repo, "dlv-test-000000")
+
+    assert sorted(m["path"].name for m in matches) == ["2026-11-01-flat.md", "2026-11-02-sharded.md"]
+    assert incomplete is False
+
+
+def test_live_candidates_unreadable_shard_is_scan_incomplete(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "2026-11/2026-11-02-sharded.md")
+    real = os.listdir
+
+    def _deny_shard(path):
+        if str(path).endswith("2026-11"):
+            raise PermissionError(13, "denied")
+        return real(path)
+
+    monkeypatch.setattr(cascade_mod.os, "listdir", _deny_shard)
+
+    _, incomplete, _ = cascade_mod._collect_live_candidates_for_kind(repo, "dlv-test-000000")
+
+    assert incomplete is True
+
+
+def test_live_candidates_missing_corpus_is_scan_incomplete(tmp_path):
+    _, incomplete, _ = cascade_mod._collect_live_candidates_for_kind(tmp_path, "dlv-test-000000")
+
+    assert incomplete is True
+
+
 def test_plan_fk_write_is_a_noop_when_the_value_is_unchanged(tmp_path):
     """The cascade's ship leaves a quoted `plan:` that already names the plan byte-identical;
     only the status line differs."""

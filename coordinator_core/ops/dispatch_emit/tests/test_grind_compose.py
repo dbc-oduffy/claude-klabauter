@@ -93,7 +93,8 @@ def _without_engine_interpreter(script: str) -> str:
 
     module = ask_compose._OVERLAY_VERIFY_MODULE
     command = ask_compose.engine_module_command(module, ".")
-    return script.replace(command.removesuffix(f" -m {module}"), "<ENGINE_PYTHON>")
+    script = script.replace(command.removesuffix(f" -m {module}"), "<ENGINE_PYTHON>")
+    return script.replace(f"`python -m {module} ", f"`<ENGINE_PYTHON> -m {module} ")
 
 
 # ---------------------------------------------------------------------------
@@ -3647,6 +3648,39 @@ def test_every_stop_read_and_the_ledger_route_through_the_one_spent_total() -> N
     assert f"const RESERVE_OUT = {gc.batch_reserve(4)};" in script
     assert "(budget.remaining() ?? 0) <= RESERVE_OUT" in script
     assert "(budget.remaining() ?? 0) <= RESERVE)" not in script
+
+
+def _reserve_consts(script: str) -> tuple[str, str]:
+    total = next(ln for ln in script.splitlines() if ln.startswith("const RESERVE = "))
+    out = next(ln for ln in script.splitlines() if ln.startswith("const RESERVE_OUT = "))
+    return total, out
+
+
+def _p0_manifest(count: int, batch_sizes: dict) -> Manifest:
+    entries = tuple(
+        ManifestEntry(row_id=f"row{i}", path=f"state/bug-backlog/row{i}.yaml", digest=f"{i:064x}", batch_key="P0")
+        for i in range(count)
+    )
+    return Manifest(entries=entries, batch_sizes=batch_sizes, source=None, digest="deadbeef")
+
+
+def test_reserve_sizes_to_the_largest_admitted_batch_not_the_knob_ceiling() -> None:
+    script = _compose(manifest=_p0_manifest(1, {"P0": 40}), batch_size={"default": 4, "P0": 40})
+    total, out = _reserve_consts(script)
+    assert total == f"const RESERVE = {gc.total_tokens(gc.batch_reserve(1))};"
+    assert out == f"const RESERVE_OUT = {gc.batch_reserve(1)};"
+
+
+def test_reserve_is_capped_by_the_batch_size_knob() -> None:
+    script = _compose(manifest=_p0_manifest(9, {"P0": 2}), batch_size=2)
+    total, _ = _reserve_consts(script)
+    assert total == f"const RESERVE = {gc.total_tokens(gc.batch_reserve(2))};"
+
+
+def test_reserve_with_no_admitted_batches_is_one_row() -> None:
+    script = _compose(manifest=_p0_manifest(0, {"P0": 4}))
+    total, _ = _reserve_consts(script)
+    assert total == f"const RESERVE = {gc.total_tokens(gc.batch_reserve(1))};"
 
 
 @pytest.mark.spawns_process

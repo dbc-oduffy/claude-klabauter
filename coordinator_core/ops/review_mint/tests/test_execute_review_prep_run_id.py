@@ -123,6 +123,97 @@ def test_run_id_leg_note_never_quotes_a_leg_value_line():
     assert '"leg"' not in _wave_prep_instruction("m", "b", "p", None, grouped=False, paths_literal="[]")
 
 
+_FOREIGN_PREFIX = "manifest-warp-720eea-20261116T190245-683d89-debe14b5896b-prep"
+
+
+def _guard_verdict(expected: str, reply: dict):
+    import json
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops.review_mint.execute_review import _foreign_prep_guard_js
+    from coordinator_core.win_portability import no_console_creationflags
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not on PATH")
+    script = (
+        f"const _reviewPrep = {json.dumps(reply)};\n"
+        f"{_foreign_prep_guard_js(expected)}\n"
+        "console.log(JSON.stringify({slices: _reviewPrep.slices.length, verdict: _reviewPrep.verdict ?? null, "
+        "error: _reviewPrep.error ?? null}));\n"
+    )
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True, **no_console_creationflags())
+    return json.loads(out.stdout)
+
+
+def _reply(prefix: str, sep: str = "/", whole: str = ""):
+    d = f"state{sep}review-trail{sep}diffs{sep}"
+    s = f".coordinator-local{sep}subagent-share{sep}sess{sep}"
+    return {
+        "error": None,
+        "whole_diff_path": f"{d}{whole or prefix}.diff",
+        "whole_diff_sidecars": {"personas": [f"{s}{prefix}.whole-slice.md"]},
+        "slices": [{"id": f"{prefix}-1", "files": ["x.py"], "diff_path": f"{d}{prefix}-1.diff",
+                    "sidecar_path": f"{s}{prefix}.whole-slice.md"}],
+    }
+
+
+def test_foreign_prefix_reply_is_emptied_with_a_verdict_naming_it():
+    from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+    own = run_prep_slice_prefix("warp-aa0f1e-20261116T190110-ebf10b", "d" * 40)
+    verdict = _guard_verdict(own, _reply(_FOREIGN_PREFIX))
+    assert verdict["slices"] == 0
+    assert verdict["verdict"].startswith("foreign-prep-prefix: ") and _FOREIGN_PREFIX in verdict["verdict"]
+    assert verdict["error"]
+
+
+@pytest.mark.parametrize("sep", ["/", "\\"])
+def test_own_prefix_reply_passes_untouched_with_either_separator(sep):
+    from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+    own = run_prep_slice_prefix("warp-aa0f1e-20261116T190110-ebf10b", "d" * 40)
+    verdict = _guard_verdict(own, _reply(own, sep))
+    assert verdict == {"slices": 1, "verdict": None, "error": None}
+
+
+def test_foreign_whole_diff_path_alone_refuses_the_reply():
+    from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+    own = run_prep_slice_prefix("warp-aa0f1e-20261116T190110-ebf10b", "d" * 40)
+    reply = _reply(own, "\\", whole=_FOREIGN_PREFIX)
+    assert _guard_verdict(own, reply)["slices"] == 0
+
+
+@pytest.mark.parametrize("key", ["kira", "delivery"])
+def test_foreign_kira_or_delivery_sidecar_alone_refuses_the_reply(key):
+    from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+    own = run_prep_slice_prefix("warp-aa0f1e-20261116T190110-ebf10b", "d" * 40)
+    reply = _reply(own)
+    reply["whole_diff_sidecars"][key] = f".coordinator-local/subagent-share/sess/{_FOREIGN_PREFIX}.{key}.md"
+    assert _guard_verdict(own, reply)["slices"] == 0
+    reply["whole_diff_sidecars"][key] = f".coordinator-local/subagent-share/sess/{own}.{key}.md"
+    assert _guard_verdict(own, reply)["slices"] == 1
+
+
+def test_run_mode_compose_embeds_the_guard_before_the_slices_guard_and_paths_mode_does_not():
+    from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+    run = "warp-aa0f1e-20261116T190110-ebf10b"
+    base = "d" * 40
+    block = dict(_compose(prep_run_id=run, run_key=run, run_base_sha=base))["Review wave"]
+    assert "_foreignPrepName" in block
+    from coordinator_core.ops.review_mint.execute_review import _js_string_literal
+
+    assert f"const _ep = {_js_string_literal(run_prep_slice_prefix(run, base))};" in block
+    from coordinator_core.ops.review_mint.execute_review import NO_SLICES_HALT
+
+    assert block.index("_foreignPrepName") < block.index(NO_SLICES_HALT)
+    assert "_foreignPrepName" not in dict(_compose())["Review wave"]
+
+
 def test_wave_prep_instruction_refuses_run_id_with_paths_literal():
     from coordinator_core.ops.review_mint.execute_review import _wave_prep_instruction
 

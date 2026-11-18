@@ -33,8 +33,8 @@ def repo(tmp_path, monkeypatch):
 
 def _payload(root, second_writes="d1"):
     asks = [
-        {"ask": "job 0", "source": "pm", "label": "j0", "writes": ["d0"]},
-        {"ask": "job 1", "source": "pm", "label": "j1", "writes": [second_writes]},
+        {"ask": "job 0", "source": "relayed", "label": "j0", "writes": ["d0"]},
+        {"ask": "job 1", "source": "relayed", "label": "j1", "writes": [second_writes]},
     ]
     return {
         "tool_name": "Workflow",

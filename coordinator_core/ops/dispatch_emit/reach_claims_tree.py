@@ -34,7 +34,8 @@ from coordinator_core.ops.dispatch_emit.reach_claims import ReachClaim, ReachVer
 from coordinator_core.ops.review_reachability import _CODE_EXT, _TEST_RE, _WORD
 
 #: Step name and cap of the definition grep inside a land scope; past either the op budget or the
-#: cap it raises `land_deadline.LandDeadlineExceeded(GREP_STEP, step=True)` and the landing parks.
+#: cap it raises `land_deadline.LandDeadlineExceeded(GREP_STEP, step=True)`; `reach_gate` records the
+#: breach as owed (`REACH_OWED`) and the landing commits.
 GREP_STEP = "reach_claims_tree.judge_reach_claims"
 GREP_STEP_SECS = 5.0
 

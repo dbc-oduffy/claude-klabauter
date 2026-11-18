@@ -32,13 +32,16 @@ class HostEvent:
 def neutral_fallback(host: str) -> Dict[str, Any]:
     """The answer that changes nothing on `host` when no verdict exists.
 
-    Codex: `{}` lets the operation continue. agy: `{}` is fail-closed (the call is denied),
-    so the no-verdict answer is an explicit `ask`. grok: `{}` (Claude-shaped, fail-open).
+    Codex: `{}` lets the operation continue. agy: `{}` is fail-closed (the call is denied), and an
+    `ask` stalls a subagent that cannot answer it, so the no-verdict answer is an explicit allow (DR-402:
+    the backstop holds irreversible denies; no other guard denies recoverable work). Its reason keeps
+    "guard did not run": the fail-open benchmarks detect a no-verdict answer by that phrase.
+    grok: `{}` (Claude-shaped, fail-open).
     """
     if host in (HOST_CODEX, HOST_GROK):
         return {}
     if host == HOST_AGY:
-        return {"decision": "ask", "reason": "coordinator: guard did not run"}
+        return {"decision": "allow", "reason": "coordinator: guard did not run, allowing"}
     raise ValueError("unknown host: %r" % (host,))
 
 

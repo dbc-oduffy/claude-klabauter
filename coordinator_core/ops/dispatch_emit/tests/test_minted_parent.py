@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 
 import pytest
 
+from coordinator_core.ask_spool import notice
 from coordinator_core.ops import baton_pm_turns as PT
 from coordinator_core.ops.dispatch_emit import ask_fanout as fan
 from coordinator_core.ops.dispatch_emit import halted_run, live_run_index, run_token
 from coordinator_core.ops.dispatch_emit import minted_parent as mp
-from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, write_run_stage_at
+from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, stamp_plan_phase_at, write_run_stage_at
 from coordinator_core.ops.dispatch_emit.fan_launcher import launcher_rel
 from coordinator_core.ops.warp_run_deliverable import ABANDONED_AT_MINTED, MINTED_STALE_SECONDS
 from coordinator_core.session_baton import store
@@ -263,3 +265,114 @@ def test_cli_reap_of_a_parent_minted_before_the_index_existed(repo, capsys: pyte
     assert mp.main(["--reap", out["parent_id"], "--root", str(repo)]) == 0
     assert json.loads(capsys.readouterr().out)["reaped"] is True
     assert not (repo / "scratch/warp" / out["parent_id"]).exists()
+
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _hook_mint(repo, run_id="ask-20261116T221417-cb5854", at=NOW, session=SID, token=True):
+    """A run minted by the hook: no digest entry, no parent record, a live token and an emitted script."""
+    rdir = record_dir(repo, run_id)
+    rdir.mkdir(parents=True, exist_ok=True)
+    write_run_stage_at(rdir, "minted", now=_iso(at), session_id=session)
+    script = repo / "scratch" / "warp" / f"{run_id}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("// run", encoding="utf-8")
+    if token:
+        run_token.mint(repo, run_id, script.name)
+    return run_id
+
+
+def _notices(repo, session=SID) -> list[str]:
+    return notice.advisory_text(str(repo), session).splitlines()
+
+
+def test_a_hook_minted_run_gets_one_start_notice_naming_its_script_after_600s_and_none_after(repo) -> None:
+    rid = _hook_mint(repo)
+    mp.reap_orphans(repo, NOW + mp.UNSTARTED_NOTICE_SECONDS - 1)
+    assert _notices(repo) == []
+    mp.reap_orphans(repo, NOW + mp.UNSTARTED_NOTICE_SECONDS + 1)
+    lines = _notices(repo)
+    assert len(lines) == 1 and rid in lines[0] and f"{rid}.workflow.mjs" in lines[0] and "Workflow({scriptPath:" in lines[0]
+    mp.reap_orphans(repo, NOW + mp.UNSTARTED_NOTICE_SECONDS + 60)
+    assert _notices(repo) == []
+
+
+def test_the_unstarted_notice_never_postpones_the_halt(repo) -> None:
+    rid = _hook_mint(repo)
+    before = json.loads((record_dir(repo, rid) / "run-stage.json").read_text(encoding="utf-8"))
+    mp.reap_orphans(repo, NOW + mp.UNSTARTED_NOTICE_SECONDS + 1)
+    after = json.loads((record_dir(repo, rid) / "run-stage.json").read_text(encoding="utf-8"))
+    assert after["last_activity_at"] == before["last_activity_at"] and mp.NOTICED_FIELD in after
+    assert {k: v for k, v in after.items() if k != mp.NOTICED_FIELD} == before
+
+
+@pytest.mark.parametrize("how", ["plan-started", "staged", "halted", "no-session", "fresh"])
+def test_a_run_that_is_not_an_unstarted_mint_is_never_noticed(repo, how) -> None:
+    rid = _hook_mint(repo)
+    rdir = record_dir(repo, rid)
+    if how == "no-session":
+        stage = json.loads((rdir / "run-stage.json").read_text(encoding="utf-8"))
+        (rdir / "run-stage.json").write_text(json.dumps({**stage, "session_id": None}), encoding="utf-8")
+    elif how == "plan-started":
+        stamp_plan_phase_at(rdir, now=_iso(NOW + 5))
+    elif how == "staged":
+        write_run_stage_at(rdir, "staged")
+    elif how == "halted":
+        halted_run.write_halt_marker(rdir, halted="x", sizing_rel=None)
+    when = NOW + 30 if how == "fresh" else NOW + mp.UNSTARTED_NOTICE_SECONDS + 1
+    mp.reap_orphans(repo, when)
+    assert _notices(repo) == []
+    assert mp.NOTICED_FIELD not in json.loads((rdir / "run-stage.json").read_text(encoding="utf-8"))
+
+
+def test_a_hook_minted_run_is_noticed_at_601s_halted_past_1800s_and_closed_by_the_next_pass(repo) -> None:
+    rid = _hook_mint(repo)
+    assert run_token.is_live(repo, rid)
+    mp.reap_orphans(repo, NOW + 601)
+    assert len(_notices(repo)) == 1
+    mp.reap_orphans(repo, NOW + 700)
+    assert _notices(repo) == []
+    later = NOW + MINTED_STALE_SECONDS + 1
+    halted_run.write_halt_marker(record_dir(repo, rid), halted=ABANDONED_AT_MINTED, sizing_rel=None)
+    mp.reap_orphans(repo, later)
+    marker = halted_run._read(record_dir(repo, rid))
+    assert marker is not None and marker["status"] == "closed"
+    assert _notices(repo) == []
+
+
+def test_unstarted_notices_per_pass_are_capped(repo) -> None:
+    for n in range(mp.REAP_PER_CALL + 2):
+        _hook_mint(repo, run_id=f"ask-20261116T221417-{n:06d}")
+    mp.reap_orphans(repo, NOW + 601)
+    assert len(_notices(repo)) == mp.REAP_PER_CALL
+    mp.reap_orphans(repo, NOW + 602)
+    assert len(_notices(repo)) == 2
+
+
+def _unstarted_run(repo, rid="ask-20261116T000000-aaaaaa"):
+    rdir = record_dir(repo, rid)
+    rdir.mkdir(parents=True, exist_ok=True)
+    started = datetime.fromtimestamp(NOW - mp.UNSTARTED_NOTICE_SECONDS - 5, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (rdir / "run-stage.json").write_text(
+        json.dumps({"stage": "minted", "started_at": started, "session_id": SID}), encoding="utf-8"
+    )
+    return rid, rdir
+
+
+def test_notice_unstarted_marks_once_after_a_delivered_notice(repo, monkeypatch):
+    rid, rdir = _unstarted_run(repo)
+    sent = []
+    monkeypatch.setattr(notice, "append_unstarted_notice", lambda *a: sent.append(a) or True)
+    assert mp.notice_unstarted(repo, NOW) == [rid]
+    assert mp.notice_unstarted(repo, NOW + 1) == []
+    assert len(sent) == 1
+    assert mp.NOTICED_FIELD in json.loads((rdir / "run-stage.json").read_text(encoding="utf-8"))
+
+
+def test_notice_unstarted_leaves_no_marker_when_the_notice_fails(repo, monkeypatch):
+    rid, rdir = _unstarted_run(repo)
+    monkeypatch.setattr(notice, "append_unstarted_notice", lambda *a: False)
+    assert mp.notice_unstarted(repo, NOW) == []
+    assert mp.NOTICED_FIELD not in json.loads((rdir / "run-stage.json").read_text(encoding="utf-8"))

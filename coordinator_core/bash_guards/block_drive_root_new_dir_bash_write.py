@@ -42,6 +42,7 @@ from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.write_guards._drive_root import (
     configured_drive_roots,
     deny_reason,
+    is_subagent_payload,
     new_top_level_entry,
     override_active,
 )
@@ -398,7 +399,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
         tool_input = payload.get("tool_input") or {}
         cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
-        if not cmd or override_active(payload):
+        if not cmd or not is_subagent_payload(payload) or override_active(payload):
             return None
         cwd = payload.get("cwd")
         env = _env(payload)

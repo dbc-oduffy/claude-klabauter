@@ -134,7 +134,6 @@ def write_provenance(
         "compiler": compiler_path,
         "compiler_version": _compiler_version(compiler_path),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "engine_root": str(Path(engine_root).resolve()),
         "platform": sys.platform,
         **build_attribution("coordinator_core.warm.door.build_posix"),
         # Describes THIS ARTIFACT, not the source. It stays False on a fresh
@@ -167,13 +166,9 @@ def build(
 ) -> Path:
     """Compiles the POSIX `door` binary and writes its engine-root sidecar.
 
-    `engine_root` is used for TWO different jobs, exactly as on Windows.
-    It is written to the sidecar -- the ONLY source for socket derivation,
-    re-read at every invocation of the binary -- and it is baked as
-    `BUILD_ENGINE_ROOT`, consulted by `fall_through()` ONLY when that runtime
-    resolution fails, so a corrupted sidecar still has a correct engine to
-    fall back to rather than silently picking up whatever the ambient
-    interpreter is pinned to.
+    `engine_root` is written to the sidecar -- the ONLY engine-root source,
+    re-read at every invocation of the binary -- and feeds the engine-stamp
+    check. It is never baked into the binary or recorded in provenance.
 
     Refuses an unstamped root up front: the door must be built against a
     published engine, never a live working tree."""
@@ -190,7 +185,6 @@ def build(
     compiler_path = _find_compiler(compiler)
 
     resolved_python = str(python_bin.resolve())
-    resolved_root = str(Path(engine_root).resolve())
 
     output.parent.mkdir(parents=True, exist_ok=True)
     # `-std=c11` selects STRICT ISO C on glibc, which hides every POSIX
@@ -212,7 +206,6 @@ def build(
         "-O2", "-Wall", "-Wextra", "-std=c11",
         *posix_source_flags,
         f'-DPYTHON_BIN="{_shell_safe_define(resolved_python)}"',
-        f'-DBUILD_ENGINE_ROOT="{_shell_safe_define(resolved_root)}"',
         "-o", str(output),
         *[str(path) for path in _SOURCES],
     ]

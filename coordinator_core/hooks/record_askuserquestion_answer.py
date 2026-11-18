@@ -60,8 +60,8 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     Returns ``no_advisory()`` on every path, recorded or not.
     """
+    payload = payload_of(params)
     try:
-        payload = payload_of(params)
         if payload.get("agent_id"):
             return no_advisory()
         session_id = payload.get("session_id")

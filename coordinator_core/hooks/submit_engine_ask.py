@@ -89,8 +89,8 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "em_size", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing", "source",
-    "stop_after", "supersedes", "writes",
+    "em_rationale", "em_size", "fresh", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing",
+    "source", "stop_after", "supersedes", "writes",
 )
 _INPUT_KEYS: tuple[str, ...] = ("run_id", "repo")
 _HOOK_ITEM_KEYS: tuple[str, ...] = tuple(dict.fromkeys((*ASKS_ITEM_KEYS, "repo", "chatty")))
@@ -152,6 +152,12 @@ def _resume_run_id(tool_input: Mapping[str, Any]) -> Optional[str]:
     args = tool_input.get("args")
     value = args.get("resume_run_id") if isinstance(args, dict) else None
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _fresh_flag(tool_input: Mapping[str, Any]) -> bool:
+    """True when `args.fresh` is the bool true: the refire closes the prior run and mints a new one."""
+    args = tool_input.get("args")
+    return isinstance(args, dict) and args.get("fresh") is True
 
 
 def _is_peer_delivery(content: Any) -> bool:
@@ -439,9 +445,13 @@ def _cross_repo_refusal(run_root: Path, own: Optional[Path], research_route: boo
     return cross_repo_run_refusal(run_root, own, research_route=research_route, approved=approved)
 
 
-def _names_registered_sibling(repo_arg: Optional[str], root: Path) -> bool:
-    """True when an explicit absolute `repo` resolved to a checkout in the machine's repo registry."""
+def _names_registered_sibling(repo_arg: Optional[str], root: Path, own: Optional[Path]) -> bool:
+    """True when an explicit absolute `repo` resolved to a registered checkout other than the session's own repo `own`.
+
+    The session's own checkout is no sibling: naming it grants nothing, and an unresolved `own` grants nothing."""
     if not (repo_arg and Path(repo_arg).is_absolute()):
+        return False
+    if own is None or own.resolve() == root.resolve():
         return False
     from coordinator_core.bash_guards._write_bump_applicability import target_is_registered_repo
 
@@ -1062,9 +1072,14 @@ def _minted_start_envelope(
 def _runner_less_run(root: Path, sizing_rel: str, live: Optional[str]) -> Optional[str]:
     """The run for `sizing_rel` that was minted, joined no launch past `warp_live.MINTED_RUNNER_GRACE_SECONDS`
     and so has no runner: `live` itself when it proves none, else a token-held run of that sizing. Resumable
-    through `_MINTED_OP`, never "already working"."""
+    through `_MINTED_OP`, never "already working". A token of the sizing whose run dir is absent (a dead
+    session's stray mint) is consumed and skipped: `_MINTED_OP` start refuses it, so adopting it would
+    strand the refire."""
+    import time
+
     from coordinator_core import warp_live
     from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     if live:
         return live if warp_live.runner_unproven(root, live) else None
@@ -1074,8 +1089,14 @@ def _runner_less_run(root: Path, sizing_rel: str, live: Optional[str]) -> Option
     for record in run_token.live_records(root):
         named = record.get("sizing_rel")
         if isinstance(named, str) and run_token.normalize_sizing_rel(root, named) == rel:
-            if warp_live.runner_unproven(root, record["run_id"]):
-                return record["run_id"]
+            run_id = record["run_id"]
+            if not os.path.isdir(os.path.join(root, RECORD_DIR_ROOT, run_id)):
+                minted_at = record.get("minted_at")
+                if isinstance(minted_at, (int, float)) and time.time() - minted_at > warp_live.MINTED_RUNNER_GRACE_SECONDS:
+                    run_token.consume(root, run_id)
+                continue
+            if warp_live.runner_unproven(root, run_id):
+                return run_id
     return None
 
 
@@ -1291,7 +1312,12 @@ def _spool_envelope(payload: Any, root: Optional[Path], reason: str) -> Optional
 
 def _write_deferred_script(root: Path, params: dict) -> Path:
     """The deferred script for `params`; the hook's call sites resolve this name so a test can replace it."""
-    return write_deferred_script(root, params)
+    script = write_deferred_script(root, params)
+    from coordinator_core.warp_fire import note_minted
+
+    sid = params.get("session_id")
+    note_minted(sid if isinstance(sid, str) else None, script.as_posix())
+    return script
 
 
 _MINTED_START_JS = r"""export const meta = { name: 'engine-ask-minted-start', description: 'Starts runs a submission minted before its hook answered' }
@@ -2747,7 +2773,7 @@ def _multi_root_asks(
     for key, members in groups.items():
         root = roots[members[0]]
         _note_root(root)
-        approved_of[key] = base_ok or _names_registered_sibling(strings[members[0]], root)
+        approved_of[key] = base_ok or _names_registered_sibling(strings[members[0]], root, own)
         if own is not None and root.resolve() != own.resolve():
             cross = _cross_repo_refusal(root, own, False, approved_of[key])
             if cross:
@@ -3143,7 +3169,14 @@ def _resume_route(
 
     from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-    from coordinator_core.ops.dispatch_emit.halted_run import AmbiguousHaltedRuns, halted_run_to_resume
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit.halted_run import (
+        AmbiguousHaltedRuns,
+        halted_run_to_resume,
+        mark_superseded_by_refire,
+        ran_under_engine,
+    )
 
     named_id = _resume_run_id(payload.get("tool_input") or {})
     try:
@@ -3190,8 +3223,22 @@ def _resume_route(
             return _taken_as_deferred(root, params), None
     if not isinstance(halted_id, str):
         return None, None
-    _note_resume(halted_id)
     rd = record_dir(root, halted_id)
+    params.pop("fresh", None)
+    prior_engine = ran_under_engine(rd)
+    current_engine = hrr.engine_sha()
+    differs = bool(prior_engine and current_engine and prior_engine != current_engine)
+    if _fresh_flag(payload.get("tool_input") or {}) or differs:
+        # An unmarked or already-terminal run closes False and resumes: a fresh mint beside it would
+        # leave its kept chunks creditable through own_records_run.
+        if mark_superseded_by_refire(
+            rd, prior_engine=prior_engine, engine=current_engine,
+            at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        ):
+            if retired is not None:
+                retired.append(halted_id)
+            return None, None
+    _note_resume(halted_id)
     filed_under = [i for i in (reserved_run_id, ask_parent_id) if isinstance(i, str) and i != halted_id]
     if filed_under:
         from coordinator_core.ops.dispatch_emit.requirements_ledger import carry_inbox
@@ -3561,7 +3608,7 @@ def _evaluate(
     approved = (
         is_remote_venue()
         or (isinstance(call_args, dict) and call_args.get("cross_repo_approved") is True)
-        or _names_registered_sibling(repo_arg, root)
+        or _names_registered_sibling(repo_arg, root, own if own is not None else _repo_root(None, payload))
     )
     if own is not None:
         cross = _cross_repo_refusal(root, own, False, approved)
