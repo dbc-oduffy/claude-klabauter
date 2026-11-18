@@ -142,6 +142,22 @@ def test_alert_skipped_without_live_holder(tmp_path, monkeypatch, verdict):
     assert sent == []
 
 
+def test_send_live_gem_routes_text_to_live_holder(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(hst, "_ALERT_SENDER", lambda n, t: sent.append((n, t)))
+    _stub_identify(monkeypatch, {"state": "live", "holder": {"name": "group-em-1"}})
+    assert hst.send_live_gem(tmp_path, "hello") is True
+    assert sent == [("group-em-1", "hello")]
+
+
+def test_send_live_gem_sends_nothing_without_live_holder(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(hst, "_ALERT_SENDER", lambda n, t: sent.append((n, t)))
+    _stub_identify(monkeypatch, {"state": "none"})
+    assert hst.send_live_gem(tmp_path, "hello") is False
+    assert sent == []
+
+
 def test_no_process_spawned_under_pytest_without_seam(tmp_path, monkeypatch):
     from coordinator_core.ops.ceremony import detached_spawn
 
@@ -174,5 +190,5 @@ def test_real_alert_spawns_unimatrix_send_with_sender_target_and_text(tmp_path, 
     hst.alert_live_gem(tmp_path, "ask-1", SPLITS)
     [(_cwd, script, argv)] = calls
     assert script.endswith("unimatrix-send.py") and os.path.isfile(script)
-    assert argv[:4] == ["--as", "halted-run", "--to", "group-em-1"]
-    assert "LIVE BREAKAGE" in argv[4] and "ask-1" in argv[4] and len(argv) == 5
+    assert argv[:2] == ["--to", "group-em-1"]
+    assert "LIVE BREAKAGE" in argv[2] and "ask-1" in argv[2] and len(argv) == 3

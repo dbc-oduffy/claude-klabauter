@@ -433,6 +433,49 @@ def test_index_follows_record_withheld_then_mark_resumed(tmp_path: Path) -> None
     assert _indexed(tmp_path) == {}
 
 
+def test_reopen_red_rewrites_a_landed_marker_as_halted(tmp_path: Path) -> None:
+    d = _dir(tmp_path, "20261016T010000-cccccc")
+    hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    assert hr.mark_landed(d, "a" * 40) is True
+    assert hr.halted_run_for(tmp_path, SIZING) is None
+    path = hr.reopen_red(d, "b" * 40, ["test_x"])
+    marker = json.loads(path.read_text())
+    assert (marker["status"], marker["halted"], marker["sha"], marker["reds"]) == (
+        "halted", hr.HALT_POST_LAND_TRIPWIRE_RED, "b" * 40, ["test_x"],
+    )
+    assert marker["sizing_rel"] == SIZING
+    assert hr.halted_run_for(tmp_path, SIZING) == d.name
+    assert json.loads((d / "run-stage.json").read_text())["stage"] == "halted"
+
+
+def test_reopen_red_writes_a_marker_when_absent(tmp_path: Path) -> None:
+    d = _dir(tmp_path, "20261016T010000-dddddd")
+    d.mkdir(parents=True)
+    path = hr.reopen_red(d, "c" * 40, ["t1", "t2"])
+    assert json.loads(path.read_text()) == {
+        "status": "halted", "halted": hr.HALT_POST_LAND_TRIPWIRE_RED, "sha": "c" * 40, "reds": ["t1", "t2"],
+    }
+
+
+@pytest.mark.parametrize("status", ["halted", "resumed", "closed", "superseded"])
+def test_reopen_red_keeps_any_other_status_and_adds_reds(tmp_path: Path, status: str) -> None:
+    d = _dir(tmp_path, "20261016T010000-eeeeee")
+    hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    marker = json.loads((d / hr.HALTED_FILE).read_text())
+    (d / hr.HALTED_FILE).write_text(json.dumps({**marker, "status": status}), encoding="utf-8")
+    after = json.loads(hr.reopen_red(d, "d" * 40, ["t"]).read_text())
+    assert after["status"] == status
+    assert after["halted"] == "criterion_not_met"
+    assert after["reds"] == ["t"]
+    assert "sha" not in after
+
+
+def test_reopen_red_never_raises_on_an_unwritable_record_dir(tmp_path: Path) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    assert hr.reopen_red(blocker / "run", "e" * 40, ["t"]) == blocker / "run" / hr.HALTED_FILE
+
+
 def test_index_follows_mark_landed(tmp_path: Path) -> None:
     d = _dir(tmp_path, "20261016T010000-bbbbbb")
     hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)

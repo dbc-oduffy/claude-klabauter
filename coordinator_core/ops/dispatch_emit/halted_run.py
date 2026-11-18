@@ -56,6 +56,7 @@ REVISED_AT_FIELD = "revised_at"
 REVISED_CONSUMED_FIELD = "revised_consumed_at"
 HALT_RELEASED_FIELD = "released"
 HALT_NEXT_ACTION_FIELD = "next_action"
+HALT_POST_LAND_TRIPWIRE_RED = "post_land_tripwire_red"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
@@ -929,6 +930,33 @@ def mark_landed(record_dir: Path, sha: str, *, without_verdict: bool = False) ->
     _live_index_drop(record_dir)
     stamp_run_stage_at(Path(record_dir), "landed")
     return True
+
+
+def reopen_red(record_dir: Path, sha: str, reds: list) -> Path:
+    """Reopen a run whose post-land tripwire re-run went red: a `landed` or absent marker becomes `halted` /
+    `HALT_POST_LAND_TRIPWIRE_RED` at `sha` carrying `reds`; any other status is kept and only gains `reds`.
+
+    Returns the marker path; never raises (a failed write leaves the marker as it was). A reopened marker with a
+    `sizing_rel` re-enters the lookup and halted-withheld indexes, so the owner's next fire of that sizing resumes it.
+    Not `write_halt_marker`: that schedules a resume build.
+    """
+    rd = Path(record_dir)
+    target = rd / HALTED_FILE
+    try:
+        marker = _read(rd) or {}
+        if marker.get("status") in (None, STATUS_LANDED):
+            payload = {**marker, "status": STATUS_HALTED, "halted": HALT_POST_LAND_TRIPWIRE_RED, "sha": sha, "reds": list(reds)}
+        else:
+            payload = {**marker, "reds": list(reds)}
+        _write(rd, payload)
+        if payload["status"] == STATUS_HALTED:
+            sizing = payload.get("sizing_rel")
+            if isinstance(sizing, str) and sizing:
+                _index_call("add_run", rd, halted_withheld(rd), sizing_rel=sizing)
+            stamp_run_stage_at(rd, "halted")
+    except Exception:  # noqa: BLE001 -- the caller is a detached post-step with no one to catch
+        pass
+    return target
 
 
 def mark_closed(record_dir: Path, reason: str, at: str) -> bool:
