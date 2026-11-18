@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Optional, Sequence
 
-from coordinator_core.ops import reverify_base_measure
+from coordinator_core.ops import reverify_base_measure, reverify_scope
 from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
 from coordinator_core.ops.review_reverify import _RED_LINE
@@ -35,6 +35,8 @@ from coordinator_core.win_portability import no_console_creationflags
 #: Minutes one test leg may occupy the box; the whole command must finish inside the 10-minute
 #: Bash tool ceiling the leg prompts set.
 TEST_LEG_MINUTES_BUDGET = 9
+#: Seconds held back from the cwd leg's deadline for the importer-tripwire phase.
+TRIPWIRE_BUDGET_S = 120.0
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_TIMEOUT = 3
@@ -311,6 +313,72 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
     return out
 
 
+def _files(nodes: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(_file_part(n) for n in nodes))
+
+
+def _split_phases(present: list[str], base_sha: Optional[str], head_sha: Optional[str],
+                  cwd: str) -> tuple[list[str], list[str]]:
+    """(first, second): `second` holds the targets whose file is an importer tripwire of the diff; one phase
+    (second empty) with no `base_sha`, an unreadable diff, or nothing on either side of the split."""
+    if not base_sha:
+        return list(present), []
+    try:
+        tripwires = set(reverify_scope.select_tests(Path(cwd), base_sha, head_sha or "HEAD").get("tripwires") or ())
+    except ValueError:
+        return list(present), []
+    second = [t for t in present if _file_part(t) in tripwires]
+    first = [t for t in present if _file_part(t) not in tripwires]
+    return (first, second) if first and second else (list(present), [])
+
+
+def _cwd_phase(targets: list[str], cwd: str, left, all_reds: dict, shown: dict,
+               red_non: list[str]) -> tuple[int, list[str], list[str]]:
+    """One pytest phase in `cwd`: (rc, lines, charged red ids); folds the phase's reds into the shared maps."""
+    rc, lines = _pytest(targets, cwd, left())
+    found = _reds(lines)
+    kept, non = _split_not_a_test(list(found))
+    red_non.extend(non)
+    all_reds.update({n: found[n] for n in kept})
+    shown.update(_detail("\n".join(lines), kept))
+    return rc, lines, kept
+
+
+def _merge_phases(rc1: int, lines1: list[str], rc2: int, lines2: list[str]) -> tuple[int, list[str]]:
+    """The two phases as one run: first non-green exit, and a summary line carrying the summed counts."""
+    rcs = [rc1, rc2]
+    rc = next((r for r in rcs if r not in (0, 5)), 0 if 0 in rcs else 5)
+    counts = {"passed": 0, "failed": 0}
+    for lines in (lines1, lines2):
+        for n, word in _COUNT.findall(_summary_line("\n".join(lines))):
+            counts[word] += int(n)
+    return rc, [*lines1, *lines2, f"{counts['passed']} passed, {counts['failed']} failed in 0s"]
+
+
+def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], head_sha: Optional[str],
+            base_export_out: Optional[str], left, exported: dict) -> None:
+    """Rerun `reds` alone and measure them at `base_sha`, folding into `result`; `exported` accumulates the
+    measures so the base export file always holds every phase settled so far. Raises TimeoutExpired."""
+    if not reds:
+        return
+    rc, lines = _pytest(list(reds), cwd, left())
+    again = _reds(lines)
+    if rc in (0, 1):
+        result["passed_alone"].extend(n for n in reds if n not in again)
+    if not base_sha:
+        return
+    measured = reverify_base_measure.measure(base_sha, head_sha, list(reds), cwd, max(left(), 0.0))
+    if measured["export"] == "timeout":
+        raise subprocess.TimeoutExpired("baseline_export", 0)
+    result["pre_existing"].extend(measured["red"])
+    result["passed_at_base"].extend(measured["passed_at_base"])
+    if base_export_out:
+        exported.update(export=measured["export"], runner_exit=measured["runner_exit"],
+                        red=[*exported.get("red", []), *measured["red"]],
+                        passed_at_base=[*exported.get("passed_at_base", []), *measured["passed_at_base"]])
+        reverify_base_measure.write_export(exported, Path(base_export_out))
+
+
 def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         base_export_out: Optional[str], budget_s: float, cwd: str, touched: Sequence[str] = ()) -> dict:
     """The `test`-shaped verdict for `targets`; `over_budget` true when the deadline expired. With `touched`
@@ -354,31 +422,39 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
             return result
-        rc, lines = _pytest(present, cwd, left())
-        all_reds = _reds(lines)
-        kept, red_non = _split_not_a_test(list(all_reds))
-        result["not_a_test"].extend(n for n in red_non if n not in result["not_a_test"])
-        reds = {n: all_reds[n] for n in kept}
-        shown = _detail("\n".join(lines), kept)
+        first, second = _split_phases(present, base_sha, head_sha, cwd)
+        reserve = TRIPWIRE_BUDGET_S if second and budget_s > TRIPWIRE_BUDGET_S else 0.0
+
+        def left_first() -> float:
+            return left() - reserve
+
+        all_reds: dict[str, str] = {}
+        shown: dict[str, str] = {}
+        red_non: list[str] = []
+        exported: dict = {}
+        rc, lines, reds = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non)
+        _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported)
+        if second:
+            try:
+                rc2, lines2, reds2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non)
+            except subprocess.TimeoutExpired:
+                result[ltt.IMPORTER_OVERRUN_KEY] = True
+                result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(second)
+            else:
+                rc, lines = _merge_phases(rc, lines, rc2, lines2)
+                reds = [*reds, *reds2]
+                try:
+                    _settle(result, reds2, cwd, base_sha, head_sha, base_export_out, left, exported)
+                except subprocess.TimeoutExpired:
+                    result[ltt.IMPORTER_OVERRUN_KEY] = True
+                    result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(reds2)
+        result["not_a_test"].extend(n for n in dict.fromkeys(red_non) if n not in result["not_a_test"])
         result["failing"] = list(reds)
         result["failing_detail"] = [{"node_id": n, "message": all_reds[n].strip() or shown[n]} for n in reds]
         if rc == 0 or (red_non and not reds and rc == 1):
             result["status_after"] = "pass"
         elif not reds:
             result["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {rc} with no failing id"}]
-        if reds:
-            _rc2, lines2 = _pytest(list(reds), cwd, left())
-            again = _reds(lines2)
-            if _rc2 in (0, 1):
-                result["passed_alone"] = [n for n in reds if n not in again]
-            if base_sha:
-                measured = reverify_base_measure.measure(base_sha, head_sha, list(reds), cwd, max(left(), 0.0))
-                if measured["export"] == "timeout":
-                    raise subprocess.TimeoutExpired("baseline_export", budget_s)
-                result["pre_existing"] = list(measured["red"])
-                result["passed_at_base"] = list(measured["passed_at_base"])
-                if base_export_out:
-                    reverify_base_measure.write_export(measured, Path(base_export_out))
         result["over_budget"] = False
         _tally(result, rc, lines)
     except subprocess.TimeoutExpired:

@@ -8,7 +8,8 @@ process time (this process's CPU plus descendants via `commit_leg_profile._Child
   tests        the test run itself, under the test leg's budget
   base_export  `reverify_base_measure.measure` over the reds the test run found
 
-    python coordinator_core/benchmarks/reverify_test_leg_cost.py [--scratch <dir>] [--json]
+    python coordinator_core/benchmarks/reverify_test_leg_cost.py [--base <rev>] [--head <rev>] [--repo <dir>]
+        [--scratch <dir>] [--budget-s <s>] [--json]
 
 Runs the real suite over the selected files: an EM-run measurement, never an executor's.
 """

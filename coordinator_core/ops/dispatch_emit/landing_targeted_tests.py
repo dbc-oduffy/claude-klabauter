@@ -29,6 +29,9 @@ UNKNOWN_ONLY = "unknown-only"
 
 #: Retest-record key naming why a verify run executed zero tests, and its values.
 ZERO_RUN_CAUSE_KEY = "zero_run_cause"
+#: Test-verdict keys: importer tripwires that did not run, and the overrun flag both test legs stamp.
+TRIPWIRES_NOT_RUN_KEY = "tripwires_not_run"
+IMPORTER_OVERRUN_KEY = "importer_overrun"
 ZERO_RUN_BUDGET = "budget-exhausted"
 ZERO_RUN_COLLECTION = "collection-failure"
 ZERO_RUN_EMPTY = "empty-selection"

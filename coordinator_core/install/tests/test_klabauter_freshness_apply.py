@@ -155,7 +155,8 @@ def test_surface_record_cleared_when_tree_recovers(world):
     assert apply.read_record(world["home"]) is None
 
 
-def test_ac6_current_checkout_with_stale_installed_copy_reinstalls_without_ref_move(world):
+def _stale_copy_box(world):
+    """A current checkout whose installed unimatrix-relay.py differs from its source."""
     box, home = world["box"], world["home"]
     for name in ("unimatrix-bridge.py", "unimatrix-relay.py"):
         _commit(box, f"coordinator/bin/{name}", f"src {name}\n")
@@ -167,6 +168,11 @@ def test_ac6_current_checkout_with_stale_installed_copy_reinstalls_without_ref_m
     dest = home / apply.UNIMATRIX_DEST_DIRNAME
     dest.mkdir()
     (dest / "unimatrix-relay.py").write_text("stale\n", encoding="utf-8")
+    return box, home
+
+
+def test_ac6_current_checkout_with_stale_installed_copy_reinstalls_without_ref_move(world):
+    box, home = _stale_copy_box(world)
     before = _g(box, "rev-parse", "HEAD")
     calls = []
     res = apply.apply_freshness(
@@ -180,6 +186,21 @@ def test_ac6_current_checkout_with_stale_installed_copy_reinstalls_without_ref_m
     assert _g(box, "rev-parse", "HEAD") == before
     assert "unimatrix-relay.py" in res.stale_installs
     assert calls == ["u"]
+
+
+def test_stale_installs_reports_what_remains_after_the_installer(world):
+    """A copy the installer refreshed is not reported stale; the trigger shows in installers_run."""
+    box, home = _stale_copy_box(world)
+
+    def copy_in(checkout, settings_home, _engine_root):
+        src = Path(checkout) / "coordinator" / "bin" / "unimatrix-relay.py"
+        (Path(settings_home) / apply.UNIMATRIX_DEST_DIRNAME / "unimatrix-relay.py").write_bytes(src.read_bytes())
+
+    res = apply.apply_freshness(
+        box, home, hostname="boxy", live_runs=lambda: 0, installers={kf.INSTALLER_UNIMATRIX: copy_in}
+    )
+    assert res.installers_run == [kf.INSTALLER_UNIMATRIX]
+    assert "unimatrix-relay.py" not in res.stale_installs
 
 
 def test_stale_copy_not_reinstalled_during_live_run_deferral(world):

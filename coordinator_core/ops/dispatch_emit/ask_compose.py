@@ -54,7 +54,11 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import DATE_HEAD_PATTERN, PL
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS, SINCE_HALT_CREDIT_JS
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
 from coordinator_core.ops.dispatch_emit.phase_ledger import RESUME_PHASES_FIELD
-from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_INDETERMINATE
+from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
+    IMPORTER_OVERRUN_KEY,
+    REVERIFY_INDETERMINATE,
+    TRIPWIRES_NOT_RUN_KEY,
+)
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops._anchor_check import GRAMMAR as _ANCHOR_GRAMMAR
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -1051,8 +1055,22 @@ _DOC_PATHS_JS = (
 # The scoped-test verdict as a params key; null before the test leg has run (a pre-test halt).
 _TARGETED_TESTS_JS = (
     "targeted_tests: (_testResult && typeof _testResult.status === 'string') ? { status: _testResult.status, "
-    "tests_run: _testResult.tests_run ?? null, tests_failed: _testResult.tests_failed ?? null, baseline: _testResult.baseline ?? null } : null,"
+    "tests_run: _testResult.tests_run ?? null, tests_failed: _testResult.tests_failed ?? null, baseline: _testResult.baseline ?? null, "
+    "...(Array.isArray(_testResult.tripwires_not_run) && _testResult.tripwires_not_run.length "
+    "? { importer_overrun: _testResult.importer_overrun === true, tripwires_not_run: _testResult.tripwires_not_run } : {}) } : null,"
 )
+
+
+def _test_result_schema() -> dict:
+    """The `test_result` stage schema plus the tripwire-overrun keys the engine's `--out` JSON carries;
+    the contract's own `$defs` entry is closed and would strip them from the agent's returned `test`."""
+    schema = json.loads(_emit.stage_schema_literal("test_result"))
+    schema["properties"] = {
+        **schema["properties"],
+        IMPORTER_OVERRUN_KEY: {"type": "boolean"},
+        TRIPWIRES_NOT_RUN_KEY: {"type": "array", "items": _STR},
+    }
+    return schema
 _LEDGER_CHECK_SCHEMA = _obj(
     ["items"],
     {
@@ -1106,7 +1124,9 @@ _LEDGER_ITEMS_RULES = (
     "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
     "by design, so such an act is never a reason for 'not_met'; a TEST leg that completed zero tests "
     "(tests_run 0, any zero_run_cause) proves nothing: every item a test clause proves is 'not_met', never "
-    "stall_only. Any other verify leg that stalled or timed out (no output within its window, zero or partial "
+    "stall_only. A TEST verdict with tests_run above 0 and importer_overrun proves the edited-file items for the "
+    "land only: its evidence names each tripwires_not_run file as NOT RUN, re-run after the land; never a "
+    "test-leg-error. Any other verify leg that stalled or timed out (no output within its window, zero or partial "
     "results) is inconclusive: judge the item from the change itself, and when only that leg could prove it set "
     "stall_only true on the item; otherwise 'not_met'. A 'not_met' item blocks "
     "the close whatever its essential flag (the gate resets it to true); when the ledger "
@@ -2409,7 +2429,7 @@ def _verify_tests_call(
     )
     return _agent(
         prompt, label=VERIFY_TESTS_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
-        schema=json.loads(_emit.stage_schema_literal("test_result")), run_id=run_id, stage_as="verify-tests",
+        schema=_test_result_schema(), run_id=run_id, stage_as="verify-tests",
         stager=stager, agent_type_host=agent_type_host,
     )
 
@@ -2646,7 +2666,7 @@ def _verify_schema(judge_schema: Optional[dict]) -> dict:
     """The merged leg's result schema: `ask_contract.ASK_VERIFY_RETURN_KEYS`, with the test result
     and the judge verdict nested because their `status` keys collide."""
     properties = {
-        "test": json.loads(_emit.stage_schema_literal("test_result")),
+        "test": _test_result_schema(),
         **_LEDGER_CHECK_SCHEMA["properties"],
         **_DOCS_SCHEMA["properties"],
     }
@@ -2975,7 +2995,7 @@ def _ledger_recover_js(
         ["items"],
         {
             "items": _LEDGER_CHECK_SCHEMA["properties"]["items"],
-            "test": json.loads(_emit.stage_schema_literal("test_result")),
+            "test": _test_result_schema(),
         },
     )
     reverify_call = _agent(

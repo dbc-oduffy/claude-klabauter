@@ -4344,6 +4344,9 @@ def _terminal_commit_inner(
                 ],
                 snapshot=snapshot,
             )
+        from coordinator_core.ops.dispatch_emit import tripwire_rerun
+
+        tripwire_rerun.launch(worktree_root, ask_run_dir, str(reply["sha"]), params.get("targeted_tests"))
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)
         receipt_paths = []

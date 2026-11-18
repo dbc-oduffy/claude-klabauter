@@ -129,6 +129,21 @@ def test_a_suite_sized_owner_set_narrows_with_a_notice(repo: Path) -> None:
     assert out["fully_mapped"] is True
 
 
+def test_the_owner_bound_caps_a_reverify_at_ten_owner_files_beside_the_touched(repo: Path) -> None:
+    assert _SUITE_BOUND == 10
+    _wide_graph(repo, importers=0, owners=40)
+    _write(repo, "pkg/tests/test_own_a.py", "def test_a():\n    pass\n")
+    _commit(repo)
+    mid = _git(repo, "rev-parse", "HEAD")
+    _write(repo, "pkg/tests/test_own_a.py", "def test_a():\n    assert True\n")
+    _write(repo, "pkg/hub.py", "V = 3\n")
+    _commit(repo)
+    out = select_tests(repo, mid)
+    assert len(out["tests"]) == 1 + 10
+    assert "pkg/tests/test_own_a.py" in out["tests"]
+    assert "dropped 31 owner tests" in out["notice"]
+
+
 def test_touched_tests_are_never_dropped_by_the_bound(repo: Path) -> None:
     n = _SUITE_BOUND + 5
     for i in range(n):
@@ -187,6 +202,31 @@ def test_live_run_writes_commit_selection_is_bounded_in_one_pass(monkeypatch: py
     assert len([s for s in spawns if s[0] == "grep"]) == 1
     assert [s[0] for s in spawns] == ["diff", "ls-files", "grep"]
     assert elapsed_ms < 500, f"select_tests took {elapsed_ms:.0f}ms process time"
+
+
+def test_tripwires_hold_the_importing_test_and_never_a_touched_or_mapped_one(repo: Path) -> None:
+    _write(repo, "pkg/sub/tests/test_wide_beta.py", "from pkg import beta\n\ndef test_w():\n    assert beta.Y\n")
+    _commit(repo)
+    base = _git(repo, "rev-parse", "HEAD")
+    _write(repo, "pkg/beta.py", "Y = 2\n")
+    _write(repo, "pkg/alpha.py", "X = 2\n")
+    _write(repo, "pkg/tests/test_other.py", "def test_o():\n    assert True\n")
+    _commit(repo)
+    out = select_tests(repo, base)
+    assert out["tripwires"] == ["pkg/sub/tests/test_wide_beta.py"]
+    assert "pkg/tests/test_uses_beta.py" in out["tests"]
+    assert "pkg/tests/test_uses_beta.py" not in out["tripwires"]
+    assert "pkg/tests/test_alpha.py" not in out["tripwires"]
+    assert "pkg/tests/test_other.py" not in out["tripwires"]
+    assert set(out["tripwires"]) <= set(out["tests"])
+
+
+def test_tripwires_are_not_bounded_by_the_suite_bound(repo: Path) -> None:
+    base = _wide_graph(repo, importers=5, owners=_SUITE_BOUND + 20)
+    out = select_tests(repo, base)
+    assert len(out["tests"]) == _SUITE_BOUND
+    assert len(out["tripwires"]) == _SUITE_BOUND + 20
+    assert "pkg/tests/test_hub.py" not in out["tripwires"]
 
 
 def test_source_with_no_covering_test_is_not_fully_mapped(repo: Path) -> None:

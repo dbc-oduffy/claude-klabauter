@@ -307,6 +307,10 @@ def apply_freshness(
             result.installers_run.append(name)
         except Exception as exc:
             result.installer_errors[name] = f"{type(exc).__name__}: {exc}"
+    # stale_installs reports what is still stale after this call, never the pre-install trigger
+    # (installers_run carries that): a fleet reader takes a non-empty list as "this box runs old code".
+    if kf.INSTALLER_UNIMATRIX in to_run:
+        result.stale_installs = list(unimatrix_stale(checkout, settings_home))
 
     state = kf.surfaced_state_for(verdict.action)
     if state is None:

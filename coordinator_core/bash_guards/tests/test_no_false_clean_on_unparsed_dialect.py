@@ -117,8 +117,9 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
         lambda mod: f"Remove-Item {mod._TARGET_BASENAME}"
     ),
     "block_illegal_filename": lambda mod: 'Remove-Item "bad:name.txt"',
-    # 1 TiB `fsutil file createnew`: the bulk-write estimate exceeds any volume's free space.
-    "guard_disk_fill": lambda mod: "fsutil file createnew altlive_probe.img 1099511627776",
+    # 1 PiB `fsutil file createnew`: the bulk-write estimate exceeds any volume's free space.
+    "guard_disk_fill": lambda mod: "fsutil file createnew altlive_probe.img 1125899906842624",
+    "block_held_push": lambda mod: "git push origin HEAD",
     "block_noncanonical_branch_creation": (
         lambda mod: "git checkout -b wip-nonstandard-name"
     ),
@@ -331,6 +332,16 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
             "AGENTS.md",
         ]
     },
+    # A push is judged only against a held branch; supply a hold on the pushed branch.
+    "block_held_push": lambda mod, mp: (
+        mp.setattr(mod, "_git_root", lambda cwd, c_dirs: "/repo"),
+        mp.setattr(mod, "_head_branch", lambda git_root: "held-branch"),
+        mp.setattr(
+            "coordinator_core.push_hold.read_hold_allow",
+            lambda repo, branch: ("freeze", None),
+        ),
+        {},
+    )[-1],
     "block_perforce_submit": lambda mod, mp: (
         mp.setattr(mod, "_armed", lambda: True),
         {},

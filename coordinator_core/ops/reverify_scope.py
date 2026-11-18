@@ -22,7 +22,7 @@ def _module_files(module: str) -> List[str]:
 
 
 #: Most owner tests (beyond the touched ones) a reverify adds: past it the run holds the suite mutex like a suite run.
-_SUITE_BOUND = 30
+_SUITE_BOUND = 10
 
 _TEST_STEM_RE = re.compile(r"^test_(.+)\.py$")
 _JS_TEST_STEM_RE = re.compile(r"^(.+)\.(?:test|spec)\.[jt]sx?$")
@@ -168,7 +168,9 @@ def select_tests(repo_root: Path, base: str, head: str = "HEAD") -> dict:
     ``notice`` says so.
 
     Returns ``{"tests": sorted posix paths, "changed": posix paths, "fully_mapped": bool,
-    "notice": str}`` (``notice`` is empty unless the selection was narrowed).
+    "notice": str, "tripwires": sorted posix paths}`` (``notice`` is empty unless the selection was narrowed).
+    ``tripwires`` are importing tests that are neither touched nor stem-mapped, not bounded by the
+    suite bound.
     ``fully_mapped`` is False when a changed non-test ``.py`` or ``.js/.ts`` source has no mapped or importing test.
     Raises ``ValueError`` when ``base`` is unknown or the diff fails; never an empty set for that.
     """
@@ -217,6 +219,7 @@ def select_tests(repo_root: Path, base: str, head: str = "HEAD") -> dict:
         "changed": changed,
         "fully_mapped": fully_mapped,
         "notice": notice,
+        "tripwires": sorted(importing_tests - touched - mapped),
     }
 
 
