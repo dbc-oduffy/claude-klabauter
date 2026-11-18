@@ -33,6 +33,8 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+from coordinator_core.temp_layout import mkdtemp_in
 from coordinator_core.win_portability import no_console_creationflags
 
 DEFAULT_CREATES = 150
@@ -142,7 +144,7 @@ def survey_dumps(dump_dir: Path) -> dict:
 def probe_creates(base: Path, count: int, name_prefix: str = ".atomic-write.") -> tuple[list[float], list[float]]:
     """mkstemp + write 4 KiB + close + os.replace + unlink, `count` times under `base`."""
     base.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="fs-create-probe-", dir=str(base)))
+    work = mkdtemp_in("fs-create-probe-", base)
     wall: list[float] = []
     cpu: list[float] = []
     payload = b"x" * 4096
@@ -162,7 +164,7 @@ def probe_creates(base: Path, count: int, name_prefix: str = ".atomic-write.") -
             wall.append(w)
             cpu.append(c)
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        rmtree_or_raise(work, label="fs-create-probe")
     return wall, cpu
 
 
@@ -181,7 +183,7 @@ def probe_concurrent_soak(bases: dict[str, Path], seconds: float) -> dict:
 
     def loop(label: str, base: Path) -> None:
         base.mkdir(parents=True, exist_ok=True)
-        work = Path(tempfile.mkdtemp(prefix="fs-soak-", dir=str(base)))
+        work = mkdtemp_in("fs-soak-", base)
         try:
             while time.monotonic() < deadline:
                 def one() -> None:
@@ -197,7 +199,7 @@ def probe_concurrent_soak(bases: dict[str, Path], seconds: float) -> dict:
                         events.append((time.monotonic() - t0, label, w))
                 time.sleep(0.02)
         finally:
-            shutil.rmtree(work, ignore_errors=True)
+            rmtree_or_raise(work, label="fs-soak")
 
     threads = [threading.Thread(target=loop, args=(lbl, b), daemon=True) for lbl, b in bases.items()]
     for t in threads:

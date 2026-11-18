@@ -90,12 +90,6 @@ class _Site(NamedTuple):
 # (relpath, sink) -> why this site is allowed to name its own destination.
 # Measured 2026-08-27: 19 explicit-destination calls across these 8 files.
 _SANCTIONED_SITES: dict[tuple[str, str], str] = {
-    ("coordinator_core/temp_layout.py", "mkdtemp"): (
-        "THE sanctioned helper -- `mkdtemp_in` takes a caller-chosen parent; every engine caller goes through it"
-    ),
-    ("coordinator_core/warm/tests/test_publish_handover_cut_mechanism.py", "mkdtemp"): (
-        "AF_UNIX sun_path budget: the runtime base must be a short /tmp child, not a repo placement"
-    ),
     ("coordinator_core/bash_guards/tests/guard_message_corpus.py", "TemporaryDirectory"): (
         "guard-message corpus fixtures; destination is `_neutral_scratch_parent()`, "
         "a deliberately repo-neutral parent the corpus needs to exercise guard text"

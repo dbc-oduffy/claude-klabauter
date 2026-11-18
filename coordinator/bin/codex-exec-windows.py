@@ -48,9 +48,12 @@ def writable_root_of(codex_args: list[str]) -> Path:
 
 def _shape_worker_env(env: dict[str, str], writable_root: Path) -> dict[str, str]:
     """Shape `env` through the engine's worker isolation: CODEX_HOME becomes a seeded home with no AGENTS.md."""
-    repo_root = str(Path(__file__).resolve().parents[2])
-    if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
+    lib_dir = str(Path(__file__).resolve().parent / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    from cc_invoke import place_engine_root_on_path
+
+    place_engine_root_on_path(str(Path(__file__).resolve().parents[2]))
     from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
 
     return shape_codex_child(env, writable_root=writable_root, environ=os.environ)

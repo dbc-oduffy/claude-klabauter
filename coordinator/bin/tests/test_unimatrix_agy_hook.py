@@ -87,14 +87,20 @@ def test_no_leg_rewrites_with_detached_launch_and_asks(home):
     assert "nohup" in new and "/Users/" not in new.replace(str(pre.LAUNCH), "").replace(sys.executable, "")
 
 
-def test_current_leg_leaves_command_alone(home, ls_server):
+def test_current_leg_leaves_command_alone(home, ls_server, monkeypatch):
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
+    stub_guard(monkeypatch, {"decision": "ask"})
     assert_bare_ask(pre.decide(run_payload(), 4242))
 
 
 def assert_bare_ask(out):
     """An ask that carries no rewrite; the guard's degrade advisory text may ride along."""
     assert out["decision"] == "ask" and "overwrite" not in out
+
+
+def assert_fail_open(out):
+    """The no-verdict answer: an allow whose reason keeps the fail-open benchmarks' marker."""
+    assert out["decision"] == "allow" and "guard did not run" in out["reason"] and "overwrite" not in out
 
 
 @posix_rewrite
@@ -126,11 +132,15 @@ def test_dead_leg_pid_is_rewritten(home, ls_server, monkeypatch):
     run_payload(conv="../escape"),
     {"conversationId": CONV},
     {"toolCall": None},
-    [1, 2],
-    "text",
 ])
-def test_non_rewrite_inputs_pass_without_overwrite(home, payload):
+def test_non_rewrite_inputs_pass_without_overwrite(home, monkeypatch, payload):
+    stub_guard(monkeypatch, {"decision": "ask"})
     assert_bare_ask(pre.decide(payload, 4242))
+
+
+@pytest.mark.parametrize("payload", [[1, 2], "text", None])
+def test_non_dict_payload_is_a_fail_open_allow(home, payload):
+    assert_fail_open(pre.decide(payload, 4242))
 
 
 def stub_guard(monkeypatch, answer):
@@ -160,15 +170,15 @@ def test_guard_ask_with_current_leg_keeps_guard_reason_without_overwrite(home, l
     assert pre.decide(run_payload(), 4242) == {"decision": "ask", "reason": "guard says look"}
 
 
-def test_guard_down_current_leg_is_bare_ask(home, ls_server):
+def test_guard_down_current_leg_allows_without_overwrite(home, ls_server):
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
-    assert_bare_ask(pre.decide(run_payload(), 4242, str(home / "no-engine")))
-
-
-@posix_rewrite
-def test_guard_down_stale_leg_asks_with_overwrite(home):
     out = pre.decide(run_payload(), 4242, str(home / "no-engine"))
-    assert out["decision"] == "ask" and "overwrite" in out
+    assert out["decision"] == "allow" and "overwrite" not in out
+
+
+def test_guard_down_stale_leg_allows_without_rewrite(home):
+    out = pre.decide(run_payload(), 4242, str(home / "no-engine"))
+    assert out["decision"] == "allow" and "overwrite" not in out
 
 
 def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
@@ -177,17 +187,30 @@ def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
     assert pre.decide(run_payload(name="write_file"), 4242) == deny
 
 
-def test_unloadable_guard_degrades_to_ask(home, monkeypatch):
+def test_unloadable_guard_fails_open_to_allow(home, monkeypatch):
     monkeypatch.setattr(pre, "load_sibling", lambda name: 1 / 0)
-    assert pre.run_guard("{}", None) == {"decision": "ask"}
+    assert_fail_open(pre.run_guard("{}", None))
 
 
-def test_no_path_emits_allow_or_force_ask(home, monkeypatch):
+def test_malformed_guard_answer_fails_open_to_allow(home, monkeypatch):
+    class Guard:
+        answers = iter([{"reason": "no decision"}, {"decision": 7}, "text"])
+
+        def guard(self, host, raw, root):
+            return next(self.answers), "engine"
+
+    monkeypatch.setattr(pre, "load_sibling", lambda name: Guard())
+    for _ in range(3):
+        assert_fail_open(pre.run_guard("{}", None))
+
+
+def test_guard_ask_stays_ask_and_allow_only_comes_from_no_verdict_or_peer_reply(home, monkeypatch):
     for guard_answer in ({"decision": "ask"}, {"decision": "ask", "reason": "r"}):
         stub_guard(monkeypatch, guard_answer)
-        for payload in (run_payload(), run_payload(name="read_file"), {}, []):
-            text = json.dumps(pre.decide(payload, 4242))
-            assert '"allow"' not in text and "force_ask" not in text
+        for payload in (run_payload(), run_payload(name="read_file"), {}):
+            out = pre.decide(payload, 4242)
+            assert out["decision"] == "ask" and "force_ask" not in json.dumps(out)
+        assert_fail_open(pre.decide([], 4242))
 
 
 SEND = str(pre.SEND_SCRIPT)
@@ -240,12 +263,12 @@ def test_engine_root_argument_reaches_the_guard(home, monkeypatch, capsys):
     assert seen[0][1] == "/eng" and json.loads(capsys.readouterr().out)["decision"] == "ask"
 
 
-@posix_rewrite
-def test_entry_point_with_missing_engine_root_still_asks(home):
+def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
     r = subprocess.run([sys.executable, str(PRETOOL), "--engine-root", str(home / "none")],
                        input=json.dumps(run_payload()), capture_output=True, text=True,
                        env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
-    assert r.returncode == 0 and json.loads(r.stdout)["decision"] == "ask" and "overwrite" in json.loads(r.stdout)
+    out = json.loads(r.stdout)
+    assert r.returncode == 0 and out["decision"] == "allow" and "overwrite" not in out
 
 
 def hook(stdin, home):
@@ -257,7 +280,24 @@ def hook(stdin, home):
 def test_entry_point_always_emits_one_decision_and_exits_zero(home, stdin):
     r = hook(stdin, home)
     assert r.returncode == 0
-    assert json.loads(r.stdout)["decision"] == "ask"
+    assert json.loads(r.stdout)["decision"] == "allow"
+
+
+@pytest.mark.parametrize("stdin", ["", "not json", "[]"])
+def test_entry_point_with_no_verdict_input_names_the_guard_did_not_run(home, stdin):
+    r = hook(stdin, home)
+    assert r.returncode == 0
+    assert_fail_open(json.loads(r.stdout))
+
+
+def test_entry_point_stays_under_the_process_time_bar(home, monkeypatch, capsys):
+    import time
+    stub_guard(monkeypatch, {"decision": "allow"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload(name="read_file"))))
+    t0 = time.process_time()
+    assert pre.main() == 0
+    assert time.process_time() - t0 < 0.5
+    assert json.loads(capsys.readouterr().out)["decision"] == "allow"
 
 
 @posix_rewrite
@@ -271,7 +311,33 @@ def test_internal_exception_still_emits_decision(home, monkeypatch, capsys):
     monkeypatch.setattr(pre, "decide", lambda *a: 1 / 0)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
     assert pre.main() == 0
-    assert json.loads(capsys.readouterr().out)["decision"] == "ask"
+    assert_fail_open(json.loads(capsys.readouterr().out))
+
+
+def test_missing_worker_output_fails_open(home, monkeypatch, capsys):
+    monkeypatch.setattr(pre, "_answer", lambda argv, result: None)
+    assert pre.main([]) == 0
+    assert_fail_open(json.loads(capsys.readouterr().out))
+
+
+def test_unrunnable_guard_through_main_fails_open(home, monkeypatch, capsys):
+    monkeypatch.setattr(pre, "load_sibling", lambda name: 1 / 0)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
+    assert pre.main() == 0
+    assert_fail_open(json.loads(capsys.readouterr().out))
+
+
+def test_guard_deny_and_bootstrap_ask_survive_through_main(home, monkeypatch, capsys):
+    stub_guard(monkeypatch, {"decision": "deny", "reason": "blocked"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
+    assert pre.main() == 0
+    assert json.loads(capsys.readouterr().out) == {"decision": "deny", "reason": "blocked"}
+    stub_guard(monkeypatch, {"decision": "ask"})
+    monkeypatch.setattr(pre, "launch_prefix", lambda conv, agy_pid: ("START", "; "))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
+    assert pre.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["decision"] == "ask" and out["overwrite"]["CommandLine"] == "START; ls -la"
 
 
 def test_windows_adds_no_cmd_prefix_and_passes_command_through(home, monkeypatch):
@@ -915,7 +981,7 @@ def test_process_cmdline_reads_a_real_process():
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked guard holds the hook before the wall answers, a wait CPU time cannot see")
-def test_blocked_guard_answers_open_within_the_wall_and_records_hook_wall(home, monkeypatch, capsys):
+def test_blocked_guard_answers_fail_open_within_the_wall_and_records_hook_wall(home, monkeypatch, capsys):
     import threading
     import time
     release = threading.Event()
@@ -931,7 +997,7 @@ def test_blocked_guard_answers_open_within_the_wall_and_records_hook_wall(home, 
         release.set()
     assert time.monotonic() - t0 < 0.3 + 0.2
     out = json.loads(capsys.readouterr().out)
-    assert out["decision"] == "ask" and out["reason"]
+    assert_fail_open(out)
     assert exits == [0]
     rows = [json.loads(line) for line in
             (home / "host-hooks" / "host-guard-degrades.jsonl").read_text().splitlines()]

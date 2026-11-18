@@ -287,7 +287,8 @@ def test_codex_host_guard_runs_whole_under_a_denied_git(repo, monkeypatch):
 
     report = json.dumps({"answer": answer, "state": state, "findings": inv.findings}, indent=2, default=str)
     assert inv.findings == [], report
-    assert inv.spawns and all(s["stdin"] in _STDIN_OK for s in inv.spawns), report
+    # The codex guard is spawn-free since 45c30f3a83; any child it does start still gets an explicit stdin pipe.
+    assert all(s["stdin"] in _STDIN_OK for s in inv.spawns), report
     assert _tree(git) == before, report
 
 

@@ -2,18 +2,19 @@
 """agy PreToolUse hook: the Klabauter guard first, then keep a live agy leg for this conversation.
 
 Order: unimatrix-host-guard.py (loaded as a sibling; `--engine-root <path>` selects the engine) answers
-first. A guard answer other than "ask" (a deny) is returned unchanged with no rewrite. An "ask" answer,
-including the guard's own degraded neutral "ask", falls through to the leg bootstrap below; a guard
-reason and the bootstrap rewrite then share one "ask". The one "allow" is a peer reply: a run_command that
-is exactly this interpreter and the installed unimatrix-send.py beside this hook, plain arguments, no shell
-operator or expansion (mirrors the Codex unimatrix.rules send rule); it is never a fallback.
+first. A guard answer other than "ask" (a deny, an allow) is returned unchanged with no rewrite. A
+guard-authored "ask" falls through to the leg bootstrap below; a guard reason and the bootstrap rewrite
+then share one "ask". A peer reply (a run_command that is exactly this interpreter and the installed
+unimatrix-send.py beside this hook, plain arguments, no shell operator or expansion; mirrors the Codex
+unimatrix.rules send rule) answers "allow". A no-verdict answer (guard unrunnable, bad payload, worker
+exception, expired wall) is an allow whose reason keeps "guard did not run": an "ask" has no approver in
+a subagent conversation and reads as a hook failure (DR-402: irreversible denies stay with the backstop).
 
 Hooks do not receive agy's language-server address or token, but run_command children do. When no
 current leg exists, the hook prefixes the command the agent is about to run with a detached start of
 unimatrix-agy-hook-launch.py, which inherits the token. That rewrite answers "ask": the user sees and
-approves the exact command. Every other path also answers "ask": agy fails closed on a non-zero exit,
-invalid JSON, or a reply without `decision`, and "ask" keeps agy's own approval behaviour where
-"allow" would silently widen it.
+approves the exact command. agy fails closed on a non-zero exit, invalid JSON, or a reply without
+`decision`, so every path emits one JSON object with `decision`.
 
 `--event PreInvocation` runs the same script as the PreInvocation hook: it drains the advisories the
 adapter stashed at PreToolUse (agy documents no `injectSteps` on a PreToolUse answer) and injects them as
@@ -48,7 +49,8 @@ HOOK_WALL_SECS = 1.0
 _hard_exit = os._exit
 HERE = Path(__file__).resolve().parent
 LAUNCH = HERE / "unimatrix-agy-hook-launch.py"
-PASS = {"decision": "ask"}
+FAIL_OPEN_REASON = "coordinator: guard did not run, allowing"
+PASS = {"decision": "allow", "reason": FAIL_OPEN_REASON}
 CONV_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -369,8 +371,8 @@ def load_sibling(name):
     return mod
 
 
-def run_guard(raw, engine_root):
-    """The host guard's agy answer for the raw payload text; the neutral "ask" when it cannot run."""
+def run_guard(raw, engine_root) -> dict:
+    """The host guard's agy answer for the raw payload text; the fail-open allow when it cannot run."""
     try:
         answer, _state = load_sibling("unimatrix-host-guard").guard("agy", raw, engine_root)
     except Exception:
@@ -517,8 +519,8 @@ def _pre_invocation_main() -> int:
     return 0
 
 
-def _answer(argv, result):
-    """Worker body: the decision into `result["out"]`; any failure is the neutral "ask"."""
+def _answer(argv, result) -> None:
+    """Worker body: the decision into `result["out"]`; any failure is the fail-open allow."""
     try:
         raw = sys.stdin.read()
         result["out"] = decide(json.loads(raw), agy_ancestor_pid(), engine_root_arg(argv), raw)
@@ -526,13 +528,14 @@ def _answer(argv, result):
         result["out"] = dict(PASS)
 
 
-def _wall_expired():
-    """The advisory ask for a hook that outran HOOK_WALL_SECS, after one hook_wall degrade row."""
+def _wall_expired() -> dict:
+    """The fail-open allow for a hook that outran HOOK_WALL_SECS, after one hook_wall degrade row."""
     try:
         load_sibling("unimatrix-host-guard")._record_degrade("agy", "hook_wall", HOOK_WALL_SECS, None)
     except Exception:
         pass
-    return {"decision": "ask", "reason": "coordinator: guard did not finish within the hook wall; engine cold or unreachable"}
+    return {"decision": "allow",
+            "reason": "coordinator: guard did not run, allowing (did not finish within the hook wall; engine cold or unreachable)"}
 
 
 def main(argv=None):
