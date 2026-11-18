@@ -53,7 +53,7 @@ def test_stage_refire_and_next_action_name_the_gate_bound_path_not_the_computed_
     scout = {
         **_scout("M", []),
         "exit_code": 0, "stdout": json.dumps({"route": "plan"}), "stderr": "",
-        "arm": "S", "halt": None, "baton": None, "sizing_path": BOUND, "tshirt": "M", "route": "plan",
+        "arm": "M_PLUS", "halt": None, "baton": None, "sizing_path": BOUND, "tshirt": "M", "route": "plan",
     }
     out = _run_script(_compose(), {"size": scout, "blitz": {"plan_rel": PLAN_PATH}})
     result = out["result"]

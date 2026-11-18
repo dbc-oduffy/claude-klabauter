@@ -1908,6 +1908,23 @@ def _first_commit_plan_if_untracked(root: Path, rel: str, slug: str) -> bool:
     return True
 
 
+def _is_stale_deferred(plan_path: str, pst) -> bool:
+    """True iff the plan at `plan_path` is `deferred` with a recoverable stale
+    reason (`pst.stale_reopen_target`). One file read; unreadable -> False."""
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+
+    try:
+        text = Path(plan_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    split = split_frontmatter(text.replace("\r\n", "\n"))
+    if split is None:
+        return False
+    if (read_fm_field_unquoted(split.fm_text, "status") or "").strip() != "deferred":
+        return False
+    return pst.stale_reopen_target(read_fm_field_unquoted(split.fm_text, "status_reason")) is not None
+
+
 def claim_plan(
     slug: str,
     cwd: Optional[str] = None,
@@ -2083,6 +2100,16 @@ def claim_plan(
             return False
         from coordinator_core.ops import plan_status_transition
 
+        if _is_stale_deferred(plan_path, plan_status_transition):
+            rc = plan_status_transition.main(["stamp-unstaled", "--plan", plan_path])
+            if rc != 0:
+                print(
+                    f"cs_claim_plan: stamp-unstaled failed for {slug} (exit "
+                    f"{rc}) — claim refused, not left half-applied",
+                    file=sys.stderr,
+                )
+                release_artifact("plan", slug, cwd=cwd)
+                return False
         rc = plan_status_transition.main(["stamp-executing", "--plan", plan_path])
         if rc != 0:
             print(
