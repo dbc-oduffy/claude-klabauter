@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.host_hooks import shim
+from coordinator_core.session import op_dispatch_nag
 
 pytestmark = [pytest.mark.complete, pytest.mark.spawns_process]
 
@@ -25,6 +26,8 @@ def cold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
     monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(tmp_path / "warm"))
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    # The nag text comes from the op's per-session state; stubbed to always answer so only the shim's EM-only gate decides.
+    monkeypatch.setattr(op_dispatch_nag, "advisory_for_dispatch", lambda cwd, session_id, env: _NAG)
     repo = tmp_path / "repo"
     repo.mkdir()
     for args in (("init", "-q", "-b", "main"), ("remote", "add", "origin", "https://github.com/me/thing.git")):

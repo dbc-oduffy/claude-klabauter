@@ -279,7 +279,13 @@ def _handler(params: dict, repo_root: Path | None = None) -> Dict[str, Any]:
             from coordinator_core.lifecycle import main_worktree_root
 
             repo_root = main_worktree_root(repo_root)
-        return measured_rev(run_id, paths, repo_root)
+        from coordinator_core.git.call_io_scope import call_io_scope
+        from coordinator_core.git.git_state import index_read_cache_scope
+
+        # Trap: without these scopes every measured path re-parses the whole .git/index (15.8 MB
+        # on claude-klabauter) through _text_pin_checkin; a many-path run re-read it per path, per call.
+        with call_io_scope(), index_read_cache_scope():
+            return measured_rev(run_id, paths, repo_root)
     except (OSError, ValueError) as exc:
         return {"error": str(exc), "refused": "measured-rev"}
 

@@ -54,6 +54,8 @@ PYTEST_STARTUP_S = 120
 IMPORTER_CAP = 25
 _PYTEST_FAILED = 1
 _PYTEST_INTERRUPTED = 2
+_PYTEST_NO_TESTS = 5
+_EMPTY_CAUSE = "\n[overlay-verify] collected zero tests serially and unnarrowed with no tier deselection\n"
 _OUTPUT_TAIL = 2000
 _STATE_FILE = "state.json"
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
@@ -937,6 +939,27 @@ def _tier_empty_as_green(proc: subprocess.CompletedProcess) -> subprocess.Comple
     )
 
 
+def _settle_empty_collection(
+    root: Path, dest: Path, basetemp: Path, run_seeds: Sequence[str], seeds: Sequence[str], env: dict, proc: subprocess.CompletedProcess,
+) -> subprocess.CompletedProcess:
+    """`proc` unchanged unless it is an exit 5 whose output names no deselection: xdist workers deselect silently, so
+    the run is repeated serially (the tier line then shows) and, if still empty, over the whole `seeds` instead of
+    the narrowed `run_seeds`. An exit 5 that survives both returns with `_EMPTY_CAUSE` appended to its output."""
+    if proc.returncode != _PYTEST_NO_TESTS or "deselected" in proc.stdout + proc.stderr:
+        return proc
+    first = _pytest_argv(root, dest, basetemp, run_seeds)
+    tries = [first] if "-n" in first else []
+    if tuple(run_seeds) != tuple(seeds):
+        tries.append(_pytest_argv(root, dest, basetemp, seeds))
+    for argv in tries:
+        if "-n" in argv:
+            del argv[argv.index("-n"):argv.index("-n") + 2]
+        proc = _run_pytest_retrying(argv, dest, env)
+        if proc.returncode != _PYTEST_NO_TESTS or "deselected" in proc.stdout + proc.stderr:
+            return proc
+    return subprocess.CompletedProcess(proc.args, proc.returncode, proc.stdout + _EMPTY_CAUSE, proc.stderr)
+
+
 def verify(
     root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str], base_sha: Optional[str] = None,
     leg: LegHook = _no_leg, touched: Sequence[str] = (),
@@ -979,6 +1002,7 @@ def verify(
             with leg("pytest"):
                 in_seeds = True
                 ran = _run_pytest_retrying(_pytest_argv(root, dest, basetemp, run_seeds), dest, env)
+                ran = _settle_empty_collection(root, dest, basetemp, run_seeds, seeds, env, ran)
                 in_seeds = False
                 ran = _tier_empty_as_green(ran)
                 if extras:
@@ -1013,6 +1037,13 @@ def verify(
             ids = tuple(dict.fromkeys(i for r in runs for i in failing_ids(r.stdout + r.stderr)))
             collected = any(collection_error(r.returncode, r.stdout + r.stderr) for r in bad)
             failed = collected or any(r.returncode == _PYTEST_FAILED for r in bad)
+            if ran.returncode == _PYTEST_NO_TESTS:
+                return OverlayVerdict(
+                    ENV_DEFECT,
+                    f"engine fault: pytest exit 5 over {len(seeds)} non-empty seed(s) ({', '.join(seeds)}); "
+                    f"{_EMPTY_CAUSE.strip()}: {tail}",
+                    seeds,
+                )
             if bad:
                 absent = _missing_dependencies("".join(r.stdout + r.stderr for r in bad), root)
                 if absent:

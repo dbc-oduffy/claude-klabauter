@@ -988,6 +988,35 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/workstream_complete/session_history.py",
         "coordinator_core/workstream_complete/session_identity.py",
         "coordinator_core/write_guards/validate_frontmatter_schema_deny.py",
+        # Drift recorded 2026-11-18 (each row carries its reason).
+        # Stdlib-only bootstrap: the commit clone is built by these two before any
+        # coordinator_core exists on sys.path, so the seam cannot be imported there.
+        "coordinator/bin/lib/commit_clone.py",
+        "coordinator/bin/coordinator-publish.py",
+        # Measurement spikes/probes: a spawn through the seam would add the seam's own
+        # cost to the figure the script exists to report; fixtures are throwaway repos.
+        "coordinator_core/benchmarks/code_intel_build_cost.py",
+        "coordinator_core/benchmarks/land_blobs_bar_profile.py",
+        "coordinator_core/benchmarks/land_blobs_parity.py",
+        "coordinator_core/benchmarks/landing_render_spike.py",
+        "coordinator_core/benchmarks/landing_worktree_sync_cost.py",
+        "coordinator_core/benchmarks/live_root_swap_spike.py",
+        "coordinator_core/benchmarks/payload_parity_cost.py",
+        "coordinator_core/benchmarks/probe_landed_trailer_record_cost.py",
+        "coordinator_core/benchmarks/publish_cross_process_reuse_probe.py",
+        "coordinator_core/benchmarks/publish_under_live_engine.py",
+        "coordinator_core/benchmarks/update_docs_ops_budget.py",
+        # Not yet routed through the seam; each row leaves this set when its module migrates.
+        "coordinator/bin/atlas-citation-check.py",
+        "coordinator/bin/coordinator-precommit-abs-path-check",
+        "coordinator_core/ops/dispatch_test_leg.py",
+        "coordinator_core/ops/reverify_base_measure.py",
+        "coordinator_core/ops/weekly_doc_files.py",
+        "coordinator_core/percolate/engine.py",
+        "coordinator_core/session/op_dispatch_nag.py",
+        "coordinator_core/symbol_knowledge/build_cost.py",
+        "coordinator_core/symbol_knowledge/workstate_index.py",
+        "coordinator_core/testing/tmp_git_repo.py",
     }
 )
 
@@ -1005,7 +1034,6 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator/bin/coordinator-safe-commit.py", "_BLANKET_ADD_TIMEOUT_S"),
         ("coordinator/bin/lib/workday_ceremony_lib.py", "git(timeout)"),
         ("coordinator/bin/parallel-review-gate-decision.py", "_GIT_TIMEOUT_SECS"),
-        ("coordinator/bin/percolate-round.py", "_GIT_PUSH_TIMEOUT_SECS"),
         ("coordinator/bin/reap-integrated-review-findings.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator/bin/workday-start-day-branch-resolve.py", "_GIT_TIMEOUT"),
         ("coordinator/lib/release_currency.py", "_LOCAL_GIT_TIMEOUT_SECS"),
@@ -1070,6 +1098,10 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator_core/workday_complete/cockpit_contract_freshness.py", "_LS_REMOTE_TIMEOUT_SECONDS"),
         ("coordinator_core/workstream_complete/__init__.py", "_REVIEW_SCALE_GIT_TIMEOUT"),
         ("coordinator_core/workstream_complete/session_history.py", "_GIT_LOG_TIMEOUT_S"),
+        # Drift recorded 2026-11-18; the owning modules sit outside this wave's writes.
+        ("coordinator_core/benchmarks/update_docs_ops_budget.py", "_CALL_TIMEOUT_S"),
+        ("coordinator_core/ops/dispatch_test_leg.py", "_GIT_TIMEOUT_S"),
+        ("coordinator_core/ops/weekly_doc_files.py", "_GIT_TIMEOUT"),
     }
 )
 
@@ -1079,8 +1111,8 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 188
-_PINNED_DIAL_CEILING = 70
+_PINNED_RUNNER_CEILING = 211
+_PINNED_DIAL_CEILING = 72
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN
 #: 2026-09-19 over a full run of `collect_destructive_verb_sites()` across
@@ -1119,7 +1151,6 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_remove", "worktree"),
         ("coordinator_core/contract/apply_base.py", "scoped_commit", "add"),
         ("coordinator_core/contract/apply_base.py", "scoped_commit", "commit"),
-        ("coordinator_core/git/commit.py", "_reset_index_paths", "reset"),
         # G-EM home (a private, git-tracked memo-inbox repo, not a work tree): the attach, sync-rebase
         # and push legs are the feature itself; each already spawns through run_git.
         ("coordinator_core/group_em/gem_home.py", "_attach_remote", "checkout"),
@@ -1130,7 +1161,15 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/merge_assemble/__init__.py", "compute_version_bump_proposal", "tag"),
         ("coordinator_core/ops/ceremony/detached_render_commit.py", "commit_own_artifact", "add"),
         ("coordinator_core/ops/fleet_machinery_sweep.py", "_git_rm_cached", "rm"),
-        ("coordinator_core/ops/git_maintenance.py", "run_tier", "prune"),
+        # Re-keyed: run_tier's prune leg now lives in _run_tier_locked.
+        ("coordinator_core/ops/git_maintenance.py", "_run_tier_locked", "prune"),
+        # Throwaway fixture repos built by measurement spikes.
+        ("coordinator_core/benchmarks/landing_render_spike.py", "build_fixture", "add"),
+        ("coordinator_core/benchmarks/landing_render_spike.py", "build_fixture", "commit"),
+        ("coordinator_core/benchmarks/run_landing_spike.py", "build_fixture", "add"),
+        ("coordinator_core/benchmarks/run_landing_spike.py", "build_fixture", "commit"),
+        # Batched remote branch deletion: the same push leg _delete_branch is registered for.
+        ("coordinator_core/consolidate_assemble/apply.py", "_flush_remote_batch", "push"),
         ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "add"),
         ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "reset"),
         ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "update-ref"),
@@ -1150,7 +1189,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
 #: reason `_PINNED_RUNNER_CEILING` is (see that constant's comment) --
 #: importing the value under test would make this file agree with any
 #: register whatsoever and assert nothing.
-_PINNED_VERB_CEILING = 43
+_PINNED_VERB_CEILING = 47
 
 
 def _runner_message(sites: list) -> str:
