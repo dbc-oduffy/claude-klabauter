@@ -460,6 +460,45 @@ def test_distill_threshold_clears_after_a_drained_run(tmp_path: Path, monkeypatc
     assert result.detail["total"] == 0
 
 
+def _write_distill_watermark(root: Path, run_date: str | None) -> None:
+    body = {"base_sha": "H1", "cursor": "z", "pass_complete": True}
+    if run_date is not None:
+        body["run_date"] = run_date
+    p = root / "state" / "run-watermarks" / "distill.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(body), encoding="utf-8")
+
+
+def test_distill_threshold_dates_a_noop_run_from_the_watermark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run that disposes nothing writes no log header; the promoted watermark still dates it."""
+    from coordinator_core import run_watermark
+    from coordinator_core.ops.distill_scope import compute_scope
+
+    _committed_repo_with_plans(tmp_path, monkeypatch, 0)
+    (tmp_path / "state" / "distillation-log.md").write_text(
+        "# Columns: run | path | disposition | fate\n\n## Run 2026-07-22-23h55\n", encoding="utf-8"
+    )
+    stale = udg._gate_distill_threshold(tmp_path, tmp_path, {})
+    assert stale.detail["days_ago"] > 14
+    result = compute_scope(tmp_path, run_id="noop-0", cohort_specs=[], admit=True)
+    run_dir = tmp_path / "state" / "scratch" / "artifact-distillation" / "noop-0"
+    run_watermark.stage(run_dir, result.watermark)
+    run_watermark.promote(tmp_path, run_dir, "distill")
+    fresh = udg._gate_distill_threshold(tmp_path, tmp_path, {})
+    assert fresh.detail["days_ago"] in (0, 1)
+    assert fresh.verdict == udg.GateVerdict.CLEAN
+
+
+def test_distill_threshold_old_watermark_date_still_fires_and_dateless_watermark_is_ignored(tmp_path: Path) -> None:
+    (tmp_path / "state").mkdir()
+    log = tmp_path / "state" / "distillation-log.md"
+    log.write_text("# log\n\n## Run 2026-07-22-23h55\n", encoding="utf-8")
+    _write_distill_watermark(tmp_path, "2026-08-01")
+    assert udg._last_distillation_days_ago(log, tmp_path) > 14
+    _write_distill_watermark(tmp_path, None)
+    assert udg._last_distillation_days_ago(log, tmp_path) > 14
+
+
 def test_distill_threshold_still_fires_on_admitted_files_past_the_watermark(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

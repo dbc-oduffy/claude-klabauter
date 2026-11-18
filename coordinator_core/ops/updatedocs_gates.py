@@ -608,11 +608,16 @@ _RUN_HEADER_RE = re.compile(r"^##\s+Run\s+(\d{4}-\d{2}-\d{2})", re.MULTILINE)
 _LEGACY_ROW_DATE_RE = re.compile(r"^\|\s*(\d{4}-\d{2}-\d{2})\s*\|", re.MULTILINE)
 
 
-def _last_distillation_days_ago(log_path: Path) -> Optional[int]:
-    if not log_path.is_file():
-        return None
-    text = log_path.read_text(encoding="utf-8", errors="replace")
+def _last_distillation_days_ago(log_path: Path, repo_root: Optional[Path] = None) -> Optional[int]:
+    """Days since the newer of the log's run dates and the committed distill watermark's
+    ``run_date`` (a run that harvests nothing appends no header but still promotes)."""
+    from coordinator_core.run_watermark import committed_run_date
+
+    text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
     dates = _RUN_HEADER_RE.findall(text) + _LEGACY_ROW_DATE_RE.findall(text)
+    wm_date = committed_run_date(repo_root, "distill") if repo_root is not None else None
+    if wm_date:
+        dates.append(wm_date)
     if not dates:
         return None
     latest = max(datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc) for d in dates)
@@ -636,7 +641,7 @@ def _gate_distill_threshold(repo_root: Path, _settings: Path, overrides: dict) -
         )
     except (DistillationLogMissingError, DistillationLogUnparseableError) as exc:
         return GateResult("distill-threshold", GateVerdict.UNAVAILABLE, f"distill.scope cannot count: {exc}")
-    days_ago = _last_distillation_days_ago(log_path)
+    days_ago = _last_distillation_days_ago(log_path, repo_root)
 
     if total >= _DISTILL_THRESHOLD_TOTAL:
         reason, fire = f"total count {total} >= {_DISTILL_THRESHOLD_TOTAL}", True

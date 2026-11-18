@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import types
+import uuid
 from pathlib import Path
 
 import pytest
@@ -776,3 +777,81 @@ def test_guard_without_a_pending_box_still_returns_the_pair(tmp_path, monkeypatc
     stub_nag_shim(monkeypatch, GROK_NAG_ANSWER)
     answer, state = hg.guard("grok", GROK_PAYLOAD, str(tmp_path))
     assert answer == GROK_NAG_ANSWER and state == "neutral-unknown"
+
+
+COLD_CHILD = (
+    "import importlib.util, json, sys, time\n"
+    "spec = importlib.util.spec_from_file_location('hg_cold', sys.argv[1])\n"
+    "mod = importlib.util.module_from_spec(spec)\n"
+    "spec.loader.exec_module(mod)\n"
+    "answer, state = mod.guard('grok', sys.argv[3], sys.argv[2])\n"
+    "print(json.dumps({'answer': answer, 'state': state, 'process_secs': time.process_time()}))\n"
+)
+
+
+def _nag_repo(root, session_id):
+    """A git repo whose lane record attributes three over-bound uncommitted edits to `session_id`."""
+    root.mkdir()
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                       check=True, capture_output=True, creationflags=flags)
+
+    git("init", "-q")
+    names = [f"f{i}.txt" for i in range(3)]
+    for name in names:
+        (root / name).write_text("a\n" * 5)
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    for name in names:
+        (root / name).write_text("b\n" * 40)
+    sys.path.insert(0, str(REPO))
+    from coordinator_core.session import xs_lane_budget
+
+    lane = xs_lane_budget.lane_path(root, session_id)
+    lane.parent.mkdir(parents=True, exist_ok=True)
+    lane.write_text(json.dumps({"kind": "xs", "state": "open", "base_sha": "x", "paths": names}), encoding="utf-8")
+
+
+def test_cold_process_grok_edit_delivers_the_nag_at_the_default_budget_within_it(tmp_path):
+    """A fresh interpreter, default budget, no warm engine: the DIY nag reaches additionalContext and the
+    whole process spends less CPU than the budget. Process time, never wall clock."""
+    sid = str(uuid.uuid4())
+    repo = tmp_path / "grok-repo"
+    _nag_repo(repo, sid)
+    payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "search_replace", "session_id": sid,
+                          "cwd": str(repo), "tool_input": {"file_path": str(repo / "delta.py"), "old_string": "",
+                                                           "new_string": "x = 1\n" * 20}})
+    env = {**os.environ, "COORDINATOR_AGENT_PROVIDER": "grok", "TMP": tempfile.gettempdir(),
+           "TEMP": tempfile.gettempdir(), "TMPDIR": tempfile.gettempdir()}
+    proc = subprocess.run([sys.executable, "-c", COLD_CHILD, str(SCRIPT), str(REPO), payload], capture_output=True,
+                          text=True, timeout=120, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    row = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert BUDGET == hg.DEFAULT_BUDGET_SECS
+    nested = row["answer"].get("hookSpecificOutput", {})
+    assert nested.get("additionalContext") and "XS bound" in nested["additionalContext"], row
+    assert row["state"] == "neutral-unknown", row
+    assert row["process_secs"] < BUDGET, row
+
+
+def _cold_payload(host, tool, args, cwd):
+    if host == "agy":
+        return json.dumps({"conversationId": "c1", "toolCall": {"name": tool, "args": args}})
+    return json.dumps({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": args,
+                       "session_id": "s1", "cwd": cwd})
+
+
+@pytest.mark.parametrize("host", ["codex", "agy"])
+def test_cold_shell_command_runs_the_chain_and_writes_no_guard_degrade_row(host, tmp_path):
+    """A shell command reaches the in-process chain and is allowed: state neutral-unknown, no guard degrade row,
+    and agy's answer is not the fail-open reason. A tool the chain does not cover (view_file) answers the fail-open reason."""
+    shell = ("run_command", {"CommandLine": "ls"}) if host == "agy" else ("Bash", {"command": "ls"})
+    answer, state = hg.guard(host, _cold_payload(host, *shell, str(tmp_path)), str(REPO))
+    assert state == "neutral-unknown"
+    assert not hg.degrade_log_path().exists()
+    assert "guard did not run" not in json.dumps(answer)
+    if host == "agy":
+        unchained, _ = hg.guard(host, _cold_payload(host, "view_file", {"AbsolutePath": str(tmp_path)}, str(tmp_path)),
+                                str(REPO))
+        assert "guard did not run" in unchained["reason"]

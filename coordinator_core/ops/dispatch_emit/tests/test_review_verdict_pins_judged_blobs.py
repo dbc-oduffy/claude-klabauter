@@ -1,6 +1,8 @@
 """A review verdict pins the blobs it judged: land and terminal commit refuse a verdict whose pinned
 ``judged_sha256`` differs from the bytes being committed, naming only the changed files; a matching
-verdict lands."""
+verdict lands. Carve-out: bytes the reviewer itself wrote (its own touch-sink write, or a ledger row
+it applied) and that a clean reverify judged are the reviewed product and keep the pin; any other
+non-comment drift still refuses."""
 
 from __future__ import annotations
 
@@ -296,3 +298,123 @@ def test_terminal_arm_ignores_a_stale_pin_outside_the_commit_set(tmp_path: Path)
 
     assert review_owed_refusal(tmp_path, review, ["a.py"]) is None
     assert review_owed_refusal(tmp_path, review, ["b.py"]) is not None
+
+
+_AGENT = "a0123456789abcdef"
+_PASS = {"status_after": "pass", "failing": [], "pre_existing": [], "foreign": []}
+
+
+def _reviewer_wrote(repo, rel: str, text: str) -> None:
+    """The reviewer edits ``rel`` after prep and its own touch sink records the post-edit hash."""
+    import hashlib
+    import time
+
+    from coordinator_core.session import touch_record
+    from coordinator_core.session_hub_path import hub_for_common
+
+    (repo / rel).write_text(text, encoding="utf-8", newline="\n")
+    agent_dir = hub_for_common(repo / ".git") / ".agents" / _AGENT
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    touch_record.append_event(
+        touch_record.sink_path(agent_dir), session_id="s", agent_id=_AGENT, verb="T", path=rel,
+        content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(), kind="w", timestamp=time.time(),
+    )
+
+
+def _reviewed_with_agent(prep_repo, reverify):
+    """A produced verdict whose reviewer sidecar carries its receipt and a ledger that records no applied row."""
+    _, review = _produced_review(prep_repo)
+    (prep_repo / _SIDECAR).write_text(
+        f"---\nverdict: WARN\nreview_receipt:\n  agent_id: '{_AGENT}'\n---\n"
+        "## Findings Ledger\n\n```json\n"
+        '[{"id": "f1", "file": "b.py", "status": "handed-to-em", "verified": true}]\n```\n',
+        encoding="utf-8", newline="\n",
+    )
+    return {**review, "reverify": reverify, "fixes": 1}
+
+
+def test_a_reviewer_edit_that_passes_reverify_keeps_the_pin(prep_repo) -> None:  # noqa: F811
+    review = _reviewed_with_agent(prep_repo, _PASS)
+    _reviewer_wrote(prep_repo, "b.py", "b = 2\n")
+
+    assert verdict_pin_mismatches(prep_repo, review) == []
+    assert review_owed_refusal(prep_repo, review) is None
+
+
+def test_a_reviewer_edit_whose_reverify_failed_still_refuses(prep_repo) -> None:  # noqa: F811
+    bad = {"status_after": "fail", "failing": ["t.py::x"], "pre_existing": [], "foreign": []}
+    review = _reviewed_with_agent(prep_repo, bad)
+    _reviewer_wrote(prep_repo, "b.py", "b = 2\n")
+
+    assert verdict_pin_mismatches(prep_repo, review) == ["b.py"]
+
+
+def test_a_reviewer_edit_whose_only_failures_pre_existed_keeps_the_pin(prep_repo) -> None:  # noqa: F811
+    known = {"status_after": "fail", "failing": ["t.py::x"], "pre_existing": ["t.py::x"], "foreign": []}
+    review = _reviewed_with_agent(prep_repo, known)
+    _reviewer_wrote(prep_repo, "b.py", "b = 2\n")
+
+    assert verdict_pin_mismatches(prep_repo, review) == []
+
+
+def test_a_non_reviewer_edit_after_the_reviewer_wrote_still_refuses(prep_repo) -> None:  # noqa: F811
+    review = _reviewed_with_agent(prep_repo, _PASS)
+    _reviewer_wrote(prep_repo, "b.py", "b = 2\n")
+    (prep_repo / "b.py").write_text("b = 3\n", encoding="utf-8", newline="\n")
+
+    assert verdict_pin_mismatches(prep_repo, review) == ["b.py"]
+
+
+def test_a_non_reviewer_edit_to_an_unwritten_file_still_refuses_under_a_clean_reverify(prep_repo) -> None:  # noqa: F811
+    review = _reviewed_with_agent(prep_repo, _PASS)
+    _reviewer_wrote(prep_repo, "b.py", "b = 2\n")
+    prep_write(prep_repo, ["a.py"], 5)
+
+    assert verdict_pin_mismatches(prep_repo, review) == ["a.py"]
+
+
+def test_a_ledger_row_naming_an_absolute_path_still_exempts_the_pre_fix_pin(prep_repo) -> None:  # noqa: F811
+    _, review = _produced_review(prep_repo, applied=(str(prep_repo / "b.py").replace("\\", "/"),))
+    prep_write(prep_repo, ["b.py"], 5)
+
+    assert verdict_pin_mismatches(prep_repo, review) == []
+
+
+def _reverified(prep_repo, reverify, now_text):  # noqa: F811
+    """A produced verdict (pinned before the write) whose reviewer wrote nothing, then ``b.py`` becomes
+    ``now_text`` and the re-verify record ``reverify`` is carried."""
+    _, review = _produced_review(prep_repo)
+    (prep_repo / "b.py").write_text(now_text, encoding="utf-8", newline="\n")
+    return {**review, "reverify": reverify}
+
+
+def _sha_of(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_a_reverify_edit_recorded_by_hash_under_a_clean_reverify_keeps_the_pin(prep_repo) -> None:  # noqa: F811
+    review = _reverified(prep_repo, {**_PASS, "edited": ["b.py"], "edited_sha256": {"b.py": _sha_of("b = 2\n")}}, "b = 2\n")
+
+    assert verdict_pin_mismatches(prep_repo, review) == []
+    assert review_owed_refusal(prep_repo, review) is None
+
+
+def test_a_foreign_edit_after_the_reverify_recorded_hash_still_refuses(prep_repo) -> None:  # noqa: F811
+    review = _reverified(prep_repo, {**_PASS, "edited": ["b.py"], "edited_sha256": {"b.py": _sha_of("b = 2\n")}}, "b = 3\n")
+
+    assert verdict_pin_mismatches(prep_repo, review) == ["b.py"]
+
+
+def test_a_reverify_edit_whose_reverify_failed_still_refuses(prep_repo) -> None:  # noqa: F811
+    bad = {"status_after": "fail", "failing": ["t.py::x"], "pre_existing": [], "foreign": []}
+    review = _reverified(prep_repo, {**bad, "edited": ["b.py"], "edited_sha256": {"b.py": _sha_of("b = 2\n")}}, "b = 2\n")
+
+    assert verdict_pin_mismatches(prep_repo, review) == ["b.py"]
+
+
+def test_a_file_the_reverify_did_not_edit_still_refuses_under_a_clean_reverify(prep_repo) -> None:  # noqa: F811
+    review = _reverified(prep_repo, {**_PASS, "edited": ["a.py"], "edited_sha256": {"a.py": _sha_of("b = 2\n")}}, "b = 2\n")
+
+    assert verdict_pin_mismatches(prep_repo, review) == ["b.py"]

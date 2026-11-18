@@ -9,8 +9,9 @@ Per host row: whole_process_secs (process_time at exit, interpreter start includ
 delta around guard(): shim import + run, the span `worker.join(budget_secs)` gates; interpreter start precedes
 the join and is not gated by it), spawned_children (subprocess.Popen calls), children_cpu_secs (POSIX child CPU,
 0 on Windows), answer, state, nag_in_answer (the DIY nag reached `hookSpecificOutput.additionalContext` or a
-top-level `additionalContext`), degrade_rows (rows appended to host-guard-degrades.jsonl plus the shim's
-warm/degrade.jsonl sink). Process time only, never wall clock. `importtime_top10` comes from a second fresh
+top-level `additionalContext`), degrade_rows (rows appended to host-guard-degrades.jsonl: a guard degrade),
+cold_run_rows (rows in the shim's warm/degrade.jsonl sink: the engine gave no verdict, telemetry not a degrade).
+Process time only, never wall clock. `importtime_top10` comes from a second fresh
 interpreter under `-X importtime` (its inflated timing is not a cost figure): the ten largest cumulative-us
 modules. The grok run targets a scratch repo whose lane record holds an over-bound edit (provider env set), so the
 nag path is measured; the codex and agy rows have no nag. The settings home and warm runtime base are fresh scratch dirs, so no warm socket exists; both are
@@ -24,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
@@ -32,12 +34,13 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 CODEX_PAYLOAD = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"},
                  "session_id": "probe-session", "cwd": str(REPO)}
-GROK_PAYLOAD = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"},
-                "session_id": "probe-session", "cwd": str(REPO)}
-AGY_PAYLOAD = {"conversationId": "probe-conv", "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(REPO)}}}
+_GROK_EDIT = {"file_path": "delta.py", "old_string": "", "new_string": "x = 1\n" * 20}
+GROK_PAYLOAD = {"hook_event_name": "PreToolUse", "hookEventName": "pre_tool_use", "tool_name": "search_replace",
+                "toolName": "search_replace", "tool_input": _GROK_EDIT, "toolInput": _GROK_EDIT,
+                "session_id": "probe-session", "sessionId": "probe-session", "cwd": str(REPO),
+                "workspaceRoot": str(REPO), "permissionMode": "auto"}
+AGY_PAYLOAD = {"conversationId": "probe-conv", "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}
 PAYLOADS = {"grok": GROK_PAYLOAD, "codex": CODEX_PAYLOAD, "agy": AGY_PAYLOAD}
-
-NAG_SESSION = "probe-nag-sid"
 
 SHIM_IMPORT_CODE = (
     "import sys, time, json\n"
@@ -45,8 +48,7 @@ SHIM_IMPORT_CODE = (
     "t0 = time.process_time()\n"
     "import coordinator_core.host_hooks.shim\n"
     "dt = time.process_time() - t0\n"
-    "from coordinator_core.warm import telemetry\n"
-    "print(json.dumps({'secs': dt, 'degrade_path': str(telemetry.degrade_path())}))\n"
+    "print(json.dumps({'secs': dt}))\n"
 )
 
 # argv: repo, host, payload json. Prints one JSON line.
@@ -70,9 +72,9 @@ GUARD_CHILD_CODE = (
     "            return sum(1 for line in fh if line.strip())\n"
     "    except OSError:\n"
     "        return 0\n"
-    "def logs():\n"
+    "def cold_runs():\n"
     "    from coordinator_core.warm import telemetry\n"
-    "    return [guard_mod.degrade_log_path(), telemetry.degrade_path()]\n"
+    "    return lines(telemetry.degrade_path())\n"
     "t_before = os.times()\n"
     "p0 = time.process_time()\n"
     "answer, state = guard_mod.guard(host, payload, repo)\n"
@@ -81,13 +83,13 @@ GUARD_CHILD_CODE = (
     "whole = time.process_time()\n"
     "subprocess.Popen = orig\n"
     "try:\n"
-    "    after = sum(lines(p) for p in logs())\n"
+    "    after, cold = lines(guard_mod.degrade_log_path()), cold_runs()\n"
     "except Exception:\n"
-    "    after = 0\n"
+    "    after, cold = 0, 0\n"
     "print(json.dumps({'whole_process_secs': round(whole, 4), 'in_join_secs': round(in_join, 4),\n"
     "    'spawned_children': count[0],\n"
     "    'children_cpu_secs': round((t_after[2] + t_after[3]) - (t_before[2] + t_before[3]), 4),\n"
-    "    'answer': answer, 'state': state, 'degrade_rows': after}))\n"
+    "    'answer': answer, 'state': state, 'degrade_rows': after, 'cold_run_rows': cold}))\n"
 )
 
 
@@ -208,11 +210,15 @@ def guard_row(host, nag_parent=None):
         env = {**os.environ, "COORDINATOR_AGENT_PROVIDER": "grok"}
 
     def argv_for(tag):
-        # Each grok run gets its own repo and session: the nag window and check stamp throttle a repeat.
+        # Each grok run gets its own repo and a fresh session id: the nag fires once per session id (counter in
+        # the managed tempdir, outliving the probe), and the nag window and check stamp throttle a repeat.
         if env is not None:
-            sid = f"{NAG_SESSION}-{tag}"
-            prepare_nag_repo(nag_parent / f"nag-repo-{tag}", sid)
-            payload_obj.update(cwd=str(nag_parent / f"nag-repo-{tag}"), session_id=sid)
+            sid = str(uuid.uuid4())
+            repo = nag_parent / f"nag-repo-{tag}"
+            prepare_nag_repo(repo, sid)
+            tool_input = {**payload_obj["tool_input"], "file_path": str(repo / "delta.py")}
+            payload_obj.update(cwd=str(repo), workspaceRoot=str(repo), session_id=sid, sessionId=sid,
+                               tool_input=tool_input, toolInput=tool_input)
         return [str(REPO), host, json.dumps(payload_obj)]
 
     out = run_child(argv_for("cost"), env=env)
@@ -250,7 +256,7 @@ def main():
 
         guard_mod = load_sibling("unimatrix-host-guard")
         agy_mod = load_sibling("unimatrix-agy-hook-pretool")
-        logs = [guard_mod.degrade_log_path(), Path(info["degrade_path"])]
+        logs = [guard_mod.degrade_log_path()]
         print(json.dumps(measure("agy_hook", lambda: agy_mod.decide(AGY_PAYLOAD, None, str(REPO), json.dumps(AGY_PAYLOAD)), logs)))
         for imp in imports:
             print(json.dumps(imp))
