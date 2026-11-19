@@ -13,6 +13,7 @@ ALLOWLIST = {
     "coordinator_core/ops/session/guard_roster_ops.py": "metadata read, never invoked",
     "coordinator_core/invoke/__main__.py": "--describe reads the docstring, never invoked",
     "coordinator_core/rea_ingest/program_facts.py": "single write op called with an explicit repo_root; a registry-presence check, not a reentry",
+    "coordinator_core/benchmarks/distill_bookkeeping_bench.py": "registry-presence check, never invoked",
 }
 
 

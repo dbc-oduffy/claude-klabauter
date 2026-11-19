@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coordinator_core.benchmarks import hook_ops_process_time as bench
 from coordinator_core.benchmarks.preuse_dispatch_phase_cost import _build_fixture
+from coordinator_core.warm import server
 
 
 def _fixture(tmp_path: Path):
@@ -16,11 +17,24 @@ def _fixture(tmp_path: Path):
     return fx
 
 
-def test_a_wedged_guard_gate_turns_stall_free_red(tmp_path):
-    out = bench.measure_concurrent(_fixture(tmp_path), hooks=6, hold_guard_gate=True, stall_cap_secs=1.5)
+#: The wedge cut is shortened so a held gate answers in test time; the cut's mechanism, not its value, is under test.
+_TEST_BUDGET_SECS = 0.5
+
+
+def test_a_wedged_guard_gate_turns_stall_free_red(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "_HOOK_LANE_BUDGET_SECS", _TEST_BUDGET_SECS)
+    cap = _TEST_BUDGET_SECS / 5
+    out = bench.measure_concurrent(_fixture(tmp_path), hooks=6, hold_guard_gate=True, stall_cap_secs=cap)
     assert out["answered"] == 0
     assert out["stalled"] == 6
     assert out["stall_free"] is False
+
+
+def test_a_wedged_guard_gate_answers_each_hook_within_the_hook_lane_budget(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "_HOOK_LANE_BUDGET_SECS", _TEST_BUDGET_SECS)
+    cap = _TEST_BUDGET_SECS * 3
+    out = bench.measure_concurrent(_fixture(tmp_path), hooks=6, hold_guard_gate=True, stall_cap_secs=cap)
+    assert out["answered"] == 6
 
 
 def test_an_unwedged_guard_gate_stays_stall_free(tmp_path):

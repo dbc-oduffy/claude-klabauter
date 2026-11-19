@@ -20,6 +20,13 @@ import pytest
 _TRACKED_NAME = ".percolate-identity.example"
 
 
+@pytest.fixture(autouse=True)
+def _engine_root_is_this_checkout(monkeypatch):
+    root = str(Path(__file__).resolve().parents[2])
+    resolved = (root, "live-working-tree")
+    monkeypatch.setattr(vtss, "coordinator_engine_root_with_class", lambda: resolved)
+
+
 def test_main_reads_live_setup_from_claude_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plugin_root = tmp_path / "plugin"
     templates_setup = plugin_root / "templates" / "setup"

@@ -37,7 +37,7 @@ def _batched_unique(args, commits_for, input=None):
         return SimpleNamespace(returncode=0, stdout=_show_stdout((input or "").split()), stderr="")
     if args[0] == "log" and len(args) > 1 and args[1].startswith("--format="):
         rows: dict[str, str] = {}
-        for ref in args[2:-1]:
+        for ref in (a for a in args[2:] if not a.startswith("^")):
             chain = commits_for(ref)
             for i, line in enumerate(chain):
                 parent = chain[i + 1].split(" ", 1)[0] if i + 1 < len(chain) else ""

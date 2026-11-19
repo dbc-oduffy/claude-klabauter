@@ -11,9 +11,11 @@ import json
 import os
 from pathlib import Path
 
+from coordinator_core import session_hub_path
+
 #: Run/record/doc corpora grow without bound and never hold a buildable package.
 _SKIP_DIRS = frozenset(
-    {"node_modules", "state", "scratch", "archive", "docs", "tmp", "dist", "coordinator-sessions", "tasks", "__pycache__"}
+    {"node_modules", "state", "scratch", "archive", "docs", "tmp", "dist", session_hub_path.HUB_NAME, "tasks", "__pycache__"}
 )
 _MAX_DEPTH = 2
 #: Per-directory caps: total visits stay <= 1 + 32 + 32*32 whatever the tree holds. Trade-off: a directory

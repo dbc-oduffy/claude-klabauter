@@ -157,16 +157,13 @@ def test_plan_routed_unfired_edit_gets_plan_route_advisory_not_the_deny(env, mon
     assert mod._ROUTE_UNFIRED_DENY not in _ctx(result)
 
 
-def test_plan_route_advisory_repeat_is_one_terse_counted_line_and_still_fires(env, monkeypatch):
+def test_plan_route_advisory_fires_once_per_session(env, monkeypatch):
     root, _ = env
     _patch_both(monkeypatch, "_session_sizing_state", lambda payload, sid: (True, True))
     first = _ctx(mod.op(_edit(root)))
     assert "Next step, the only one" in first
     second_result = mod.op(_edit(root))
-    assert second_result is not None
-    second = _ctx(second_result)
-    assert "[engine-ask nag #2]" in second
-    assert "Next step, the only one" not in second and "[em-code-dispatch nudge]" not in second
+    assert second_result is None
 
 
 def test_escape_sentinel_admits_unfired_s_plus_edit(env, monkeypatch):

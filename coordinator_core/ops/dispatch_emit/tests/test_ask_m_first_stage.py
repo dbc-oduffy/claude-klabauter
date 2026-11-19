@@ -24,7 +24,9 @@ def _resolve_plugin_root():
 
 
 _PLUGIN_ROOT = _resolve_plugin_root()  # resolved at import, before conftest clears the env var
-_ALLOWED_PRE_EXECUTE_HALTS = {"usage_limit", "refusal", "design-review", "parked", "split", "research"}  # research: the replan-capped hand-back; design-review: the PM-requested canvas halt; parked: workflow.revise stop_after=plan; split: a resumed pull whose revise leg recommends splitting
+# A haiku op-relay runs one literal engine command and returns its JSON; it has no judgement to brief.
+_OP_RELAY_MARK = "Run this one engine command exactly and return its bare JSON reply"
+_ALLOWED_PRE_EXECUTE_HALTS = {"usage_limit", "refusal", "design-review", "parked", "split", "research", "indeterminate"}  # indeterminate: a gate -32004 timeout the one refire did not clear; research: the replan-capped hand-back; design-review: the PM-requested canvas halt; parked: workflow.revise stop_after=plan; split: a resumed pull whose revise leg recommends splitting
 
 
 @pytest.fixture
@@ -64,7 +66,7 @@ def _agent_prompts(script: str) -> list[str]:
     # so does the mechanical checkpoint committer, whose whole task is the declared path list.
     return [
         p for p in out
-        if not any(m in p for m in (_VERDICT_WRITER_TAIL, _BLINDED_REVIEWER_TAIL, _CHECKPOINT_COMMITTER_MARK))
+        if not any(m in p for m in (_VERDICT_WRITER_TAIL, _BLINDED_REVIEWER_TAIL, _CHECKPOINT_COMMITTER_MARK, _OP_RELAY_MARK))
     ]
 
 
@@ -94,8 +96,13 @@ def test_every_agent_in_the_emitted_script_is_reached_by_the_brief(
     assert row_prompt_def and EM_BRIEF_VAR in row_prompt_def.group(1)
     group_prompt_def = re.search(r"function _groupPrompt\(g\) \{(.*?)\n  \}", outside, re.S)
     assert group_prompt_def and "_rowPrompt(m)" in group_prompt_def.group(1)
-    via_builder = {"_rowPrompt(r)", "_groupPrompt(r.group)"}
-    assert [p for p in prompts if EM_BRIEF_VAR not in p and p.strip().rstrip("{").strip().rstrip(",") not in via_builder] == []
+    via_builder = {"_rowPrompt(r)", "_groupPrompt(r.group)", "_famStart(r) + _rowPrompt(r)"}
+    assert [
+        p for p in prompts
+        if EM_BRIEF_VAR not in p
+        and p.strip().rstrip("{").strip().rstrip(",") not in via_builder
+        and not p.strip().startswith("_rowPrompt(")
+    ] == []
     assert _agent_prompts(blitz.split("\n", 2)[2])  # plan-blitz agents exist and ride the shadow
 
 

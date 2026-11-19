@@ -1359,6 +1359,22 @@ def _journaled_outcome(dispatch_key: Optional[str]) -> Optional[dict]:
         return None
 
 
+def _abandoned_in_import(dispatch_key: Optional[str]) -> bool:
+    """True when `dispatch_key`'s worker is still in the cold import of its op's module and this
+    call fenced it: the handler will never start, so the op did not run. Failure-path only;
+    never raises."""
+    if not dispatch_key:
+        return False
+    try:
+        from coordinator_core.warm import breadcrumb, dispatch_ack
+        from coordinator_core.warm.engine_root import current_engine_clone
+
+        svc = breadcrumb.svc_dir(current_engine_clone())
+        return dispatch_ack.abandon_import_phase(dispatch_ack.journal_dir_under(svc), dispatch_key)
+    except Exception:  # noqa: BLE001 -- diagnostics never mask the envelope
+        return False
+
+
 _STALL_DUMPS_DIRNAME = "stall-dumps"
 _SAFE_KEY_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
 
@@ -1394,6 +1410,18 @@ def _stall_dump_sentence(dispatch_key: Optional[str]) -> "tuple[str, Optional[st
     )
 
 
+def stall_dir_named() -> str:
+    """The stall-dump dir the engine published at `<settings home>/state/warm-stall-dir.txt`, or
+    `unknown`. One small read, no spawn; never raises."""
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        text = (settings_home() / "state" / "warm-stall-dir.txt").read_text(encoding="utf-8").strip()
+    except Exception:  # noqa: BLE001 -- diagnostics never mask the envelope
+        return "unknown"
+    return text or "unknown"
+
+
 def _indeterminate_envelope(
     msg: dict,
     detail: str,
@@ -1426,6 +1454,13 @@ def _indeterminate_envelope(
     text = _indeterminate_text_for(msg.get("method"))
     message = f"{text} ({detail})"
     data: dict = {"retry_safe": False}
+    if _abandoned_in_import(dispatch_key):
+        data["retry_safe"] = True
+        data["import_phase"] = True
+        message = (
+            f"warm dispatch did not start: the worker was still importing the op's module, "
+            f"so the op never ran and is safe to retry ({detail})"
+        )
     if msg.get("method") == "dispatch.emit":
         data["resend_returns_existing_run"] = True
     if landed is not None:
@@ -1459,8 +1494,10 @@ def _indeterminate_envelope(
             data["stall_dump"] = dump
         else:
             data["stall_dump_absent_reason"] = absent
-    if data:
-        error["data"] = data
+    stall_dir = stall_dir_named()
+    error["message"] = f"{error['message']} stall_dir={stall_dir}"
+    data["stall_dir"] = stall_dir
+    error["data"] = data
     return {
         "jsonrpc": "2.0",
         "id": msg.get("id"),
