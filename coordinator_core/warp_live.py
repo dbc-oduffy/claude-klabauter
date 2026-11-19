@@ -37,7 +37,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from coordinator_core import launch_records as _launch_records_mod
 from coordinator_core.ops.dispatch_emit import run_token as _run_token
@@ -159,7 +159,7 @@ def _launched_task_ids(session_id: str, script_path: str, dirs: list[str]) -> li
     return [task_id for task_id, _ in _launch_records(session_id, script_path, dirs)]
 
 
-_ScopeCache = dict[tuple[str, str], list[str]]
+_ScopeCache = dict[tuple, Any]
 _LISTING_SCOPE: contextvars.ContextVar[Optional[_ScopeCache]] = contextvars.ContextVar(
     "warp_live_listing_scope", default=None
 )
@@ -167,9 +167,10 @@ _LISTING_SCOPE: contextvars.ContextVar[Optional[_ScopeCache]] = contextvars.Cont
 
 @contextlib.contextmanager
 def listing_scope() -> Iterator[None]:
-    """Share one `os.listdir` per launch dir across every `LaunchSnapshot` built in the block: the
-    legacy temp dir holds ~10^5 entries and each listing costs ~25ms. Nests (the outermost scope
-    owns the cache). Trap: a launch record written inside the block is not seen by it."""
+    """Share one `os.listdir` per launch dir, and one `live_run_for_session` answer per
+    (root, session, transcript, tmpdir), across every call in the block: the legacy temp dir holds
+    ~10^5 entries and each listing costs ~25ms. Nests (the outermost scope owns the cache). Trap: a
+    launch record or token written, or a run ended, inside the block is not seen by it."""
     if _LISTING_SCOPE.get() is not None:
         yield
         return
@@ -894,19 +895,103 @@ def live_run_for_session(
     transcript_path: Optional[str] = None,
     tmpdir: Optional[str] = None,
 ) -> Optional[str]:
-    """The run id of a live run whose token names `session_id`, sizing-bound or raw ask."""
+    """The run id of a live run whose token names `session_id`, sizing-bound or raw ask. Inside a
+    `listing_scope` the answer is computed once per (root, session, transcript, tmpdir); across
+    scopes a record's not-live verdict is reused while every input's stat is unchanged."""
     if not session_id:
         return None
     root = Path(repo_root)
+    scope = _LISTING_SCOPE.get()
+    memo_key = ("live_run_for_session", str(root), session_id, transcript_path, tmpdir)
+    if scope is not None and memo_key in scope:
+        return scope[memo_key]
     dirs = _launch_dirs(tmpdir)
+    answer: Optional[str] = None
     for record in _token_records(root):
         if record.get("session_id") != session_id:
             continue
+        cache_key = (str(root), record["run_id"], session_id, transcript_path, tuple(dirs))
+        if _not_live_cached(cache_key):
+            continue
+        read = _liveness_inputs(root, record, transcript_path, dirs)
         if _unfired(root, record, dirs):
+            _remember_not_live(root, record, cache_key, read)
             continue
         if _record_live(root, record, session_id, transcript_path, dirs):
-            return record["run_id"]
-    return None
+            answer = record["run_id"]
+            break
+        _remember_not_live(root, record, cache_key, read)
+    if scope is not None:
+        scope[memo_key] = answer
+    return answer
+
+
+#: Not-live verdicts of `live_run_for_session`, keyed (root, run_id, session, transcript, dirs) and
+#: holding the (path, stat signature) pairs the verdict read. Bounded by key count, oldest evicted.
+#: A live answer is never stored.
+_NOT_LIVE_MAX = 512
+_NOT_LIVE: dict[tuple, "_Reads"] = {}
+
+
+def _stat_sig(path: str) -> Optional[tuple[int, int]]:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+_Reads = tuple[tuple[str, Optional[tuple[int, int]]], ...]
+
+
+def _liveness_inputs(
+    root: Path, record: dict, transcript_path: Optional[str], dirs: list[str]
+) -> _Reads:
+    """(path, stat signature) for every path a record's liveness verdict reads, taken before the
+    verdict: the submission, the halted marker, the run stage, each launch dir of the record's and
+    the submitting session, and the asking and the submitting transcripts."""
+    run_id = record["run_id"]
+    submission = _read_json(_submission_path(root, run_id)) or {}
+    record_dir = _ask_record_dir(root, run_id)
+    paths = [
+        str(_submission_path(root, run_id)),
+        str(record_dir / _HALTED_FILE),
+        str(record_dir / "run-stage.json"),
+    ]
+    sessions = {s for s in (record.get("session_id"), submission.get("session_id")) if isinstance(s, str)}
+    for session in sorted(sessions):
+        if not _SAFE_ID_RE.match(session):
+            continue
+        for tmpdir in dirs:
+            try:
+                paths.append(str(_launch_records_mod.session_dir(tmpdir, session)))
+            except (OSError, ValueError):
+                continue
+    for transcript in (transcript_path, submission.get("transcript_path")):
+        if isinstance(transcript, str) and transcript:
+            paths.append(transcript)
+    return tuple((path, _stat_sig(path)) for path in paths)
+
+
+def _not_live_cached(cache_key: tuple) -> bool:
+    """True when this record was judged not live and no input has changed since."""
+    held = _NOT_LIVE.get(cache_key)
+    if held is None:
+        return False
+    if all(_stat_sig(path) == sig for path, sig in held):
+        return True
+    _NOT_LIVE.pop(cache_key, None)
+    return False
+
+
+def _remember_not_live(root: Path, record: dict, cache_key: tuple, read: _Reads) -> None:
+    """Store a not-live verdict against the stat signatures taken before it. A token the verdict
+    consumed is gone and never stored: the next call must reach `_record_live` if it reappears."""
+    if _run_token.minted_at(root, record["run_id"]) is None:
+        return
+    if len(_NOT_LIVE) >= _NOT_LIVE_MAX:
+        _NOT_LIVE.pop(next(iter(_NOT_LIVE)))
+    _NOT_LIVE[cache_key] = read
 
 
 def _call_refused(transcript_tail: str, tool_use_id: str) -> bool:
