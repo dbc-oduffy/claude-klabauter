@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,8 @@ class Net:
         self.cmds = []
         self.kex, self.scan_ok, self.timeout = set(), set(), set()
         self.wrong_host = set()  # ssh targets whose host key does not match HostKeyAlias
+        self.v6, self.v6_only = {}, {}  # host -> fe80 address resolved alongside / instead of the v4 one
+        self.dialled = []
         self.far_log = {}  # remote -> bytes the unprivileged far-log read returns
 
     def run(self, cmd, **kw):
@@ -73,9 +76,17 @@ class Net:
     def resolve(self, host, port):
         if host in self.dead_dns:
             raise OSError("nodename nor servname provided")
-        return [("addr",)]
+        if host in self.v6:
+            return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", (self.v6[host], 22, 0, 3)),
+                    (socket.AF_INET, socket.SOCK_STREAM, 6, "", (host, 22))]
+        if host in self.v6_only:
+            return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", (self.v6_only[host], 22, 0, 3))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (host, 22))]
 
     def connect(self, ep, timeout):
+        self.dialled.append(ep)
+        if len(ep) != 2 or "%" in ep[0]:
+            raise OverflowError("getsockaddrarg: flowinfo/scope-bearing sockaddr")
         if ep[0] in self.timeout:
             raise TimeoutError("timed out")
         if ep[0] in self.refuse:
@@ -251,6 +262,24 @@ def test_each_failed_leg_of_a_link_is_named_and_stops_the_later_legs(box):
 
 def _lists(**by_key):
     return lambda key: by_key.get(key, "")
+
+
+def test_link_local_v6_resolution_dials_the_v4_address_and_never_raises(box):
+    box.adopt("me", "hop")
+    box.net.v6 = {"hop.local": "fe80::1%en0"}
+    rc, out = box.main()
+    assert "OverflowError" not in out
+    assert ("hop.local", 22) in box.net.dialled and all(len(ep) == 2 for ep in box.net.dialled)
+
+
+def test_link_local_v6_only_resolution_dials_a_scope_free_pair_and_still_reports(box):
+    box.adopt("me", "hop")
+    box.net.v6_only = {"hop.local": "fe80::1%en0"}
+    box.net.refuse = {"fe80::1"}
+    rc, out = box.main()
+    assert ("fe80::1", 22) in box.net.dialled
+    assert not any("%" in ep[0] for ep in box.net.dialled)
+    assert "hop: hop.local refuses TCP 22" in out
 
 
 def test_primary_name_down_but_a_listed_address_answers_is_not_a_problem(box):

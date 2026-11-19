@@ -113,6 +113,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "unimatrix-agy-hook-pretool.py",
     "unimatrix-agy-hook-sessionstart.py",
     "unimatrix-codex-hook-sessionstart.py",
+    "unimatrix-tui-status-launch.py",
     "unimatrix-doctrine-seed.py",
     "unimatrix-host-guard.py",
     "coordinator-external-session.py",

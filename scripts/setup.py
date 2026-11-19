@@ -373,6 +373,7 @@ IMPORT_NAME_OVERRIDES = {
     "pillow": "PIL",
     "beautifulsoup4": "bs4",
     "pytest-xdist": "xdist",
+    "pywin32": "win32api",
 }
 
 # The [project.optional-dependencies] key holding the test tier's tooling.
@@ -686,6 +687,31 @@ def check_git_version() -> None:
         print(f"PASS [soft] git — {'.'.join(str(v) for v in version)}")
 
 
+_MARKER_CLAUSE = re.compile(r"""^\s*(sys_platform|os_name|platform_system)\s*(==|!=)\s*['"]([^'"]*)['"]\s*$""")
+
+
+def _marker_applies(dep: str) -> bool:
+    """Whether a dependency spec's PEP 508 marker holds on this host.
+
+    Evaluates only `and`-joined ==/!= clauses on sys_platform, os_name and
+    platform_system — the shapes this repo declares. Any other marker reads as
+    applying: probing a dep pip skipped fails loudly, while silently dropping one
+    pip installed would hide a missing import."""
+    if ";" not in dep:
+        return True
+    import platform
+
+    host = {"sys_platform": sys.platform, "os_name": os.name, "platform_system": platform.system()}
+    for clause in dep.split(";", 1)[1].split(" and "):
+        m = _MARKER_CLAUSE.match(clause)
+        if not m:
+            return True
+        key, op, value = m.groups()
+        if (host[key] == value) != (op == "=="):
+            return False
+    return True
+
+
 def derive_deps(pyproject_path: Path, extra: str | None = None) -> tuple[list[str], list[str]]:
     """Read a dependency array from pyproject.toml and return (pip specs,
     import-probe names). PyPI distribution names and import names are not
@@ -723,6 +749,10 @@ def derive_deps(pyproject_path: Path, extra: str | None = None) -> tuple[list[st
             _exit_flushed(1)
         dist_name = m.group(1)
         specs.append(dep)
+        # pip skips a spec whose marker excludes this host; the probe must too,
+        # or a win32-only dep can never import and every non-Windows install fails.
+        if not _marker_applies(dep):
+            continue
         normalized = dist_name.lower().replace("-", "_")
         import_names.append(IMPORT_NAME_OVERRIDES.get(dist_name.lower(), normalized))
     return specs, import_names

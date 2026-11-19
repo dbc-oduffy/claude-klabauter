@@ -173,6 +173,24 @@ def test_derive_deps_reads_specs_and_import_names(setup_mod, tmp_path):
     assert import_names == ["pydantic", "yaml", "some_thing"]
 
 
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("darwin", ["psutil"]), ("linux", ["psutil"]), ("win32", ["psutil", "win32api"])],
+)
+def test_derive_deps_probes_only_deps_whose_marker_holds(setup_mod, tmp_path, monkeypatch, platform, expected):
+    # Regression: an unconditional probe of a win32-only dep failed every non-Windows install.
+    monkeypatch.setattr(setup_mod.sys, "platform", platform)
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\n'
+        'name = "fixture"\n'
+        'dependencies = ["psutil>=5.9", "pywin32>=306; sys_platform == \'win32\'"]\n'
+    )
+    specs, import_names = setup_mod.derive_deps(pyproject)
+    assert specs == ["psutil>=5.9", "pywin32>=306; sys_platform == 'win32'"]
+    assert import_names == expected
+
+
 def test_derive_deps_malformed_entry_exits(setup_mod, tmp_path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(

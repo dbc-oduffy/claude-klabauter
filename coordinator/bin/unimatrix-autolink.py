@@ -225,7 +225,7 @@ def pull_membership(roster, remote, key, run=subprocess.run):
 
     A refused snapshot is logged and notified by the library's adopt, then the error propagates."""
     mem = _membership()
-    cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
+    cmd = ["ssh", "-n", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
            "-o", f"ConnectTimeout={PROBE_CONNECT_SECONDS}", remote, "membership", "get"]
     r = run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_SECONDS, creationflags=roster.no_window())
     lines = (r.stdout or b"").decode("utf-8", "replace").splitlines()
@@ -324,7 +324,7 @@ def probe(roster, alias, key, run=subprocess.run, remote=None):
 
     `remote` overrides the dialled name (a stable-name fallback for a stale `alias`)."""
     remote = remote or roster.pick_remote(alias, roster.default_tunnel())
-    cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
+    cmd = ["ssh", "-n", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
            "-o", f"ConnectTimeout={PROBE_CONNECT_SECONDS}", remote, "roster"]
     try:
         r = run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_SECONDS, creationflags=roster.no_window())
@@ -582,7 +582,7 @@ def ipaddress_literal(name):
 
 def relay_boxes(roster, remote, key, run=subprocess.run):
     """Lower-cased `box` names the far relay's `roster` answer reports for itself, or None when it did not answer."""
-    cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
+    cmd = ["ssh", "-n", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
            "-o", f"ConnectTimeout={PROBE_CONNECT_SECONDS}", remote, "roster"]
     try:
         r = run(cmd, capture_output=True, timeout=PROBE_TIMEOUT_SECONDS, creationflags=roster.no_window())

@@ -385,9 +385,10 @@ def test_probe_ssh_argv_carries_only_the_relay_key(env):
 
     assert env.al.probe(env.roster, "machine-a", "/k/relay", run=fake_run) is None
     cmd = seen[0]
-    assert cmd[:3] == ["ssh", "-i", "/k/relay"]
+    # -n: a pwsh-DefaultShell far side never answers while the caller's stdin stays open
+    assert cmd[:4] == ["ssh", "-n", "-i", "/k/relay"]
     assert cmd.count("-i") == 1
-    assert ["-o", "IdentitiesOnly=yes"] == cmd[3:5]
+    assert ["-o", "IdentitiesOnly=yes"] == cmd[4:6]
     assert "BatchMode=yes" in cmd and cmd[-2:] == ["machine-a", "roster"]
 
 
