@@ -1,9 +1,8 @@
 """Pins the production bare-ask script under 90% of the Workflow runner byte cap.
 
-Measured on the production staged script (`staged_out` sink, as dispatch.emit always passes), with
-hoisting on and every production default (no injected wrap_stage, blitz text, review roster or
-REVIEW_KW). The m_plus shapes are pinned in test_m_plus_production_shapes_under_cap.
-An unresolved plugin root raises AskPlanBlitzRefused and fails the test loudly; it is never skipped or stubbed.
+Measured with hoisting on and every production default (no injected wrap_stage, blitz text,
+review roster or REVIEW_KW). An unresolved plugin root raises AskPlanBlitzRefused and fails the
+test loudly; it is never skipped or stubbed.
 
 coordinator_core/conftest.py dispatch_emit autouse fixtures:
 - _unhoisted_ask_scripts: overridden here (HOIST_ENABLED back on); production hoists.
@@ -37,8 +36,6 @@ def measured_bare_ask_bytes(monkeypatch) -> int:
         sizing_rel=None,
         run_id="ask-probe-000000",
         session_id="probe",
-        script_path="scratch/warp/x.mjs",
-        staged_out={},
     )
     n = len(script.encode("utf-8"))
     print(f"bare-ask bytes: {n}")
@@ -64,20 +61,20 @@ def _padded_plan_blitz_text() -> str:
     return text + "\nconst __pad = '" + "x" * (short - 19) + "';\n"
 
 
-def _composed_bytes(monkeypatch, *, label) -> int:
+def _composed_bytes(monkeypatch, *, arm, label) -> int:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _PLUGIN_ROOT)
     monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9)
     text = _padded_plan_blitz_text()
+    if arm:
+        monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: arm)
     script = ask_compose.compose_ask_script(
         repo_root=str(_REPO_ROOT),
         prompt="probe ask",
         sizing_rel=None,
         run_id="ask-probe-000000",
         session_id="probe",
-        script_path="scratch/warp/x.mjs",
         plan_blitz_text=text,
-        staged_out={},
     )
     n = len(script.encode("utf-8"))
     print(f"{label} bytes: {n}")
@@ -85,8 +82,13 @@ def _composed_bytes(monkeypatch, *, label) -> int:
 
 
 def test_raw_ask_with_279kb_plan_blitz_stays_under_ninety_percent(monkeypatch: pytest.MonkeyPatch) -> None:
-    n = _composed_bytes(monkeypatch, label="raw-ask+279KB-blitz")
+    n = _composed_bytes(monkeypatch, arm=None, label="raw-ask+279KB-blitz")
     assert n <= _CEILING, f"raw ask is {n} bytes; ceiling is {_CEILING} (90% of the runner cap)"
+
+
+def test_m_plus_ask_with_279kb_plan_blitz_stays_under_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    n = _composed_bytes(monkeypatch, arm="m_plus", label="m_plus+279KB-blitz")
+    assert n <= 524288, f"m_plus ask is {n} bytes; runner cap is 524288"
 
 
 def test_runner_cap_constant_is_unchanged() -> None:

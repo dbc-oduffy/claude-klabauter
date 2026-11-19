@@ -27,7 +27,6 @@ _PKG = Path(dispatch.__file__).resolve().parent
 #: envelopes and is not listed.
 _LITERAL_EXCEPTIONS: Dict[str, tuple] = {
     "_advisory_value.py": (1, "re-shapes an already rendered envelope (strips additionalContext)"),
-    "guard_doctrine_surface_bash_write.py": (1, "the sentinel-admit advisory is context-only with no permissionDecision, which a record render cannot express"),
 }
 
 _PINNED_DICT_COUNT = 7

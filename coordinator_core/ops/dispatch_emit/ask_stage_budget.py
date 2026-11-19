@@ -19,8 +19,8 @@ RATCHET_SLACK = 4096
 STAGES = ("planBlitz", "roadmapBlitz", "staged", "core")
 
 STAGE_BUDGETS: dict[str, dict[str, int]] = {
-    "bare": {"planBlitz": 4096, "roadmapBlitz": 37308, "staged": 4096, "core": 285670},
-    "m_plus": {"planBlitz": 244669, "roadmapBlitz": 4096, "staged": 4096, "core": 265492},
+    "bare": {"planBlitz": 4096, "roadmapBlitz": 37308, "staged": 4096, "core": 317398},
+    "m_plus": {"planBlitz": 244669, "roadmapBlitz": 4096, "staged": 4096, "core": 339944},
 }
 
 

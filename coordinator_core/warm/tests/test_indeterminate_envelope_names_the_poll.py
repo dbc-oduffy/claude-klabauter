@@ -49,10 +49,7 @@ def test_envelope_without_a_known_engine_carries_no_expect_engine() -> None:
 
 def test_envelope_without_a_key_names_no_poll() -> None:
     envelope = client._indeterminate_envelope(_MSG, "no response within 5s")
-    data = envelope["error"]["data"]
-    assert data["retry_safe"] is False
-    assert "dispatch_key" not in data and "reconcile" not in data
-    assert data["stall_dir"]
+    assert envelope["error"].get("data") == {"retry_safe": False}
 
 
 def test_envelope_with_a_key_carries_dispatch_key_and_reconcile() -> None:

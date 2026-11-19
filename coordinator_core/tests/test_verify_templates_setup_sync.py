@@ -18,21 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops import verify_templates_setup_sync as vtss
 from coordinator_core.ops.verify_templates_setup_sync import (
     PluginRootUnresolved,
     _resolve_plugin_root,
     check_pairs,
     main,
 )
-
-
-@pytest.fixture(autouse=True)
-def _engine_root_is_this_checkout(monkeypatch):
-    root = str(Path(__file__).resolve().parents[2])
-    resolved = (root, "live-working-tree")
-    monkeypatch.setattr(vtss, "coordinator_engine_root_with_class", lambda: resolved)
-
 
 _TRACKED = [
     "publish.sh",
@@ -328,9 +319,10 @@ def test_source_mismatch_on_non_publish_sync_file_is_byte_compared_and_fails(tmp
 def test_tracked_set_equals_union_of_manifest_attrs():
     from coordinator_core.install.setup_template_manifest import _MANIFEST_ATTRS
     from coordinator_core.ops.verify_templates_setup_sync import _tracked_relpaths
+    from coordinator_core.engine_root import coordinator_engine_root_with_class
     import coordinator_core.install.setup_template_manifest as stm
 
-    claude_klabauter_root, _cls = vtss.coordinator_engine_root_with_class()
+    claude_klabauter_root, _cls = coordinator_engine_root_with_class()
     files, exec_files, hook_files = stm._load_setup_template_manifest(Path(claude_klabauter_root))
     expected = list(files) + list(exec_files) + list(hook_files)
 

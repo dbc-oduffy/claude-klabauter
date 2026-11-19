@@ -217,7 +217,6 @@ from coordinator_core.warm import (
     idle,
     lifecycle,
     pool_retire,
-    pool_sizing,
     settings_home_claim,
     skew,
     stall_writer,
@@ -394,18 +393,10 @@ def _pool_neighbour_futures(pool: Any, overdue: Optional["concurrent.futures.Fut
     ]
 
 
-def _reap_after_neighbours(
-    pool: Any,
-    proc: Any,
-    neighbours: list,
-    retired: Optional[list] = None,
-    on_kill: Optional[Callable[[list], None]] = None,
-) -> None:
+def _reap_after_neighbours(pool: Any, proc: Any, neighbours: list, retired: Optional[list] = None) -> None:
     """Retire the swapped-out `pool` (its overdue worker `proc` included) once every future in
     `neighbours` has resolved, or after `_OVERDUE_REAP_GRACE_SECS`; at once when there are none.
     `pool` is already swapped out, so no new work reaches it. `retired` receives the worker handles.
-    `on_kill` receives the neighbours still unresolved at retirement, before their workers die, so
-    their callers are told what killed them. Never raises into the reaper.
     `proc` is unused: retirement takes every worker from `pool`, and existing callers pass it positionally."""
     reaped = threading.Event()
     lock = threading.Lock()
@@ -415,11 +406,6 @@ def _reap_after_neighbours(
         if reaped.is_set():
             return
         reaped.set()
-        if on_kill is not None:
-            try:
-                on_kill([fut for fut in neighbours if not fut.done()])
-            except Exception:  # noqa: BLE001 -- naming the victims never blocks the retirement
-                pass
         pool_retire.retire_pool(pool, grace_secs=_RETIRE_GRACE_SECS, ledger=retired)
 
     def _one_done(_fut: Any) -> None:
@@ -585,75 +571,10 @@ WORKER_POOL_SIZE = 30
 # saturates the disk the whole box shares: 2026-11-04 11:24Z, 20 workers (one
 # at 916 MB of IO) drove the E: queue to 242, and a respawned engine had 18
 # workers within 5 s. C1's plateau (~4 threads) says throughput gains stop at
-# 4 anyway, so `_DISPATCH_POOL_IO_CAP` is the BOOT FLOOR only: once serving, the live size is
-# `_dispatch_pool_size()` (measured RAM/CPU/disk-queue headroom, `pool_sizing`), bounded above by
-# `_dispatch_pool_ceiling()`. `_LIGHT_RESERVE_WORKERS` rides on top and stays small.
+# 4 anyway, so the pool is capped at `_DISPATCH_POOL_IO_CAP`, not at the core
+# count alone. `_LIGHT_RESERVE_WORKERS` rides on top and stays small.
 _DISPATCH_POOL_IO_CAP = 4
-
-
-class _BootPoolFloor(int):
-    """The boot-time heavy-pool size. A plain `int` assigned over `DISPATCH_PROCESS_POOL_SIZE` is an
-    explicit pin (tests, an operator) that `_dispatch_pool_size` returns unchanged."""
-
-
-#: Heavy-pool size before the first headroom sample lands, and the pin-detection sentinel. It is a
-#: floor, never the live size: `_dispatch_pool_size()` is.
-DISPATCH_PROCESS_POOL_SIZE = _BootPoolFloor(min(_DISPATCH_POOL_IO_CAP, WORKER_POOL_SIZE, max(1, os.cpu_count() or 1)))
-
-_pool_size_state: dict = {"value": None, "stamp": 0.0, "refreshing": False, "enabled": False}
-_pool_size_lock = threading.Lock()
-
-
-def _dispatch_pool_ceiling() -> int:
-    """Largest heavy pool the box can hold: the executor's `max_workers` (fixed at construction; its
-    processes start on demand), so growth with headroom needs no rebuild.
-
-    TRAP: a pool built before `_enable_headroom_pool_sizing()` keeps the boot-floor ceiling."""
-    if type(DISPATCH_PROCESS_POOL_SIZE) is not _BootPoolFloor:
-        return int(DISPATCH_PROCESS_POOL_SIZE)
-    if not _pool_size_state["enabled"]:
-        return int(DISPATCH_PROCESS_POOL_SIZE)
-    return max(int(DISPATCH_PROCESS_POOL_SIZE), min(WORKER_POOL_SIZE, max(1, os.cpu_count() or 1)))
-
-
-def _enable_headroom_pool_sizing() -> None:
-    """Switch the serving engine from the boot floor to headroom sizing. Only `main` calls it: a
-    context built elsewhere (a unit test, a harness) keeps the floor until its caller opts in."""
-    _pool_size_state["enabled"] = True
-
-
-def _refresh_dispatch_pool_size() -> int:
-    """Sample box headroom now and store the heavy-pool size it allows, clamped to the ceiling."""
-    try:
-        value = max(1, min(_dispatch_pool_ceiling(), int(pool_sizing.dispatch_pool_size())))
-    except Exception:  # noqa: BLE001 -- an unreadable box keeps the last size
-        value = _pool_size_state["value"] or int(DISPATCH_PROCESS_POOL_SIZE)
-    with _pool_size_lock:
-        _pool_size_state.update(value=value, stamp=time.monotonic(), refreshing=False)
-    return value
-
-
-def _dispatch_pool_size() -> int:
-    """Heavy dispatch slots the box holds now, from measured headroom (free RAM, CPU, disk queue).
-
-    TRAP: the sample reads the volume and counters, so it runs on a daemon thread; this admission-path
-    call returns the last stored size (the boot floor before the first sample) and never blocks."""
-    if type(DISPATCH_PROCESS_POOL_SIZE) is not _BootPoolFloor or not _pool_size_state["enabled"]:
-        return int(DISPATCH_PROCESS_POOL_SIZE)
-    now = time.monotonic()
-    with _pool_size_lock:
-        value = _pool_size_state["value"]
-        stale = value is None or now - _pool_size_state["stamp"] >= pool_sizing.SAMPLE_TTL_SECS
-        start = stale and not _pool_size_state["refreshing"]
-        if start:
-            _pool_size_state["refreshing"] = True
-    if start:
-        try:
-            threading.Thread(target=_refresh_dispatch_pool_size, name="warm-pool-size", daemon=True).start()
-        except Exception:  # noqa: BLE001
-            with _pool_size_lock:
-                _pool_size_state["refreshing"] = False
-    return int(value) if value is not None else int(DISPATCH_PROCESS_POOL_SIZE)
+DISPATCH_PROCESS_POOL_SIZE = min(_DISPATCH_POOL_IO_CAP, WORKER_POOL_SIZE, max(1, os.cpu_count() or 1))
 
 # ACCEPTOR POOL SIZE -- the POSIX accept layer's own bound
 # (`_ServerContext._start_acceptor_pool`). Reuses
@@ -685,14 +606,6 @@ _REQUEST_ROW = threading.local()
 
 #: Reader threads of the reserved guard lane (`_ServerContext._guard_lane_loop`); they never run a heavy op.
 _GUARD_LANE_THREADS = 4
-
-#: Seconds a hook-class op may hold a lane thread and a guard slot before its caller gets the
-#: not-started / indeterminate error the door fails open on. A wedge cut, not the latency bar: it sits
-#: above a loaded box's slow hook tail and inside the door's 8000 ms read deadline.
-#: TRAP: at 0.5 s (the bar itself) every hook a busy box answered in 0.5-2 s failed open, and its
-#: still-running worker counted overdue, so queued hooks missed the cut too: klabauter fcd6d6a9cb
-#: failed every guard open box-wide (2026-11-19 05:08Z) and was rolled back.
-_HOOK_LANE_BUDGET_SECS = 4.0
 
 #: A guard-lane reader waits this long for a request line before handing the connection to the shared queue,
 #: so a silent client cannot hold a lane thread.
@@ -1132,8 +1045,8 @@ def _run_dispatch(
     return response
 
 
-def _run_joining_handler(coro: Any) -> Any:
-    """`asyncio.run` on a pooled loop (`loop_pool`), the default executor joined WITHOUT a bound.
+def _run_joining_handler(coro):
+    """`asyncio.run`, except the default executor is joined WITHOUT a bound.
 
     TRAP: an op past its budget (`ipc._timeout_for`) is abandoned, not
     stopped -- its `asyncio.to_thread` handler thread runs on. `asyncio.run`
@@ -1152,9 +1065,15 @@ def _run_joining_handler(coro: Any) -> Any:
     honest cost -- the op IS still running in it; the connection thread
     already returned its indeterminate envelope on its own deadline.
     """
-    from coordinator_core import loop_pool
+    import asyncio
 
-    return loop_pool.run(coro)
+    with asyncio.Runner() as runner:
+        try:
+            return runner.run(coro)
+        finally:
+            runner.get_loop().run_until_complete(
+                runner.get_loop().shutdown_default_executor()
+            )
 
 
 #: A task running longer than this leaves every thread's stack in its worker's
@@ -1226,33 +1145,6 @@ def _take_claim(path: Path, owner_pid: int, on_error: bool = True) -> bool:
     return True
 
 
-#: Longest the request thread waits on one filesystem step of the overdue path (the claim create, the
-#: overdue-worker kill's claim read, fence and journal writes) before treating it as not done. The
-#: claim take and the kill run in series on the request thread, so twice this is the worst case.
-_OVERDUE_FS_DEADLINE_SECS = 0.2
-
-
-def _bounded_fs_step(key: str, fn: Callable[[], Any], default: Any) -> Any:
-    """`fn()` bounded by `_OVERDUE_FS_DEADLINE_SECS`; `default` when the filesystem does not answer.
-    A kernel-blocked call cannot be cancelled, so the request thread stops waiting on it and the
-    stalled key answers `default` at once until the call returns."""
-    from coordinator_core.bounded_io import run_bounded
-
-    return run_bounded(key, fn, deadline=_OVERDUE_FS_DEADLINE_SECS, default=default)
-
-
-def _withdraw_unstarted(future: "concurrent.futures.Future", claim: Optional[Path]) -> bool:
-    """True when the request provably never ran: the future cancelled, or this process won the claim.
-    A claim create that does not answer reads False (started), the indeterminate side."""
-    if future.cancel():
-        return True
-    if claim is None:
-        return False
-    return bool(
-        _bounded_fs_step(f"claim-take:{claim}", lambda: _take_claim(claim, os.getpid(), on_error=False), False)
-    )
-
-
 def _prune_dispatch_claims(claim_dir) -> None:
     try:
         Path(claim_dir).mkdir(parents=True, exist_ok=True)
@@ -1320,7 +1212,6 @@ class _AdmissionGate:
         self._free = size + reserve
         self._heavy_cap = size
         self._heavy_held = 0
-        self._hook_cap_default = hook_cap is None
         self._hook_cap = max(1, size - 1) if hook_cap is None else max(1, int(hook_cap))
         self._hook_held = 0
         self._lock = threading.Lock()
@@ -1331,20 +1222,6 @@ class _AdmissionGate:
         self._recycled_at: Optional[float] = None
         self._next_heavy_at = 0.0
         self._pace = threading.Event()
-
-    def resize(self, size: int) -> None:
-        """Move the heavy cap to `size`. Growth admits waiters at once; a shrink below the slots held
-        leaves `_free` negative until holders release, so no holder is revoked."""
-        size = max(1, int(size))
-        with self._lock:
-            delta = size - self._heavy_cap
-            if delta == 0:
-                return
-            self._heavy_cap = size
-            self._free += delta
-            if self._hook_cap_default:
-                self._hook_cap = max(1, size - 1)
-            self._grant_waiters_locked()
 
     def note_recycle(self) -> None:
         """Stamp a pool recycle: heavy admission is paced for `_POST_RECYCLE_BACKOFF_SECS`."""
@@ -1459,44 +1336,12 @@ def _pool_dispatch_worker(
     disarm = _arm_stall_dump(stall_secs, claim, probe_root, probe_source)
     dispatch_fence.hold(claim_dir, dispatch_key if claim is not None else None)
     try:
-        if not _import_op_module(msg, claim_dir, dispatch_key):
-            return {_NOT_DISPATCHED_MARKER: True}
         out = _pool_dispatch_worker_body(msg, caller)
         _journal_landed(msg, claim_dir, dispatch_key, out)
         return out
     finally:
         dispatch_fence.release()
         disarm()
-
-
-def _import_op_module(msg: Any, claim_dir: Optional[str], dispatch_key: Optional[str]) -> bool:
-    """Import the module owning `msg`'s op ahead of the handler, so a dispatch still inside that
-    cold import is visible to its caller (`dispatch_ack.abandon_import_phase`). A warm module costs
-    one dict lookup and writes nothing. False only when the caller was told, mid-import, that the
-    op never ran: the handler must not start. An import failure is left for dispatch to report.
-    Never raises."""
-    try:
-        method = _effective_method(msg)
-        if not isinstance(method, str):
-            return True
-        from coordinator_core.ops._registry_map import OP_MODULE_MAP
-
-        module = OP_MODULE_MAP.get(method)
-        loaded = sys.modules.get(module) if module else None
-        if not module or (
-            loaded is not None and not getattr(getattr(loaded, "__spec__", None), "_initializing", False)
-        ):
-            return True
-        marker = dispatch_ack.begin_import_phase(dispatch_ack.journal_dir_beside(claim_dir), dispatch_key)
-        try:
-            import importlib
-
-            importlib.import_module(module)
-        except Exception:  # noqa: BLE001 -- dispatch re-imports and reports the failure itself
-            pass
-        return dispatch_ack.end_import_phase(marker)
-    except Exception:  # noqa: BLE001 -- the import phase never fails an op
-        return True
 
 
 _JOURNAL_DROPPED = object()
@@ -2272,13 +2117,6 @@ def _write_stall_record(
             old.unlink(missing_ok=True)
     except Exception:  # noqa: BLE001 -- diagnostics never stop an op
         return None
-    if _WORKER_STALL_DIR is None:
-        try:
-            from coordinator_core.warm import io_probe
-
-            io_probe.arm(stall_dir.parent, repo_root)
-        except Exception:  # noqa: BLE001 -- the probe never costs the dump or the restart check
-            pass
     _restart_check(stall_dir)
     return final
 
@@ -2780,18 +2618,9 @@ def _is_claimless(method: Any) -> bool:
 #: Pool workers beyond `DISPATCH_PROCESS_POOL_SIZE` that only hook-class and light ops may use.
 _LIGHT_RESERVE_WORKERS = 2
 
-#: A recycle victim's record is dropped this long after it was made if no waiting caller consumed it.
-_RECYCLED_ENTRY_TTL_SECS = 600.0
-
 #: Ceiling on terminated-but-still-alive workers from recycled pools; at it, a stalled pool is
 #: not recycled again and requests are refused as saturated instead of spawning more workers.
-#: Boot-floor value; admission reads `_max_retired_workers()`, which follows the headroom ceiling.
 _MAX_RETIRED_WORKERS = DISPATCH_PROCESS_POOL_SIZE + _LIGHT_RESERVE_WORKERS
-
-
-def _max_retired_workers() -> int:
-    """`_MAX_RETIRED_WORKERS` at the live pool ceiling: a grown pool leaves that many workers behind a recycle."""
-    return _dispatch_pool_ceiling() + _LIGHT_RESERVE_WORKERS
 
 #: Workers started the moment a pool loses one (guard pool; the heavy pool starts one), so the
 #: replacement pool's first frames meet booted workers, not a cold `_worker_process_init`.
@@ -2876,147 +2705,6 @@ def _name_stall_dump(data: dict, dump_note: str) -> None:
         data["stall_dump_absent_reason"] = dump_note.replace("No stall dump written: ", "", 1)
 
 
-def _name_stall_dir(response: Any, stall_dir) -> None:
-    """Append `Stall dir: <dir>.` to a -32004 reply's message and set `error.data.stall_dir`, so a
-    caller whose op was cut finds the dumps. Idempotent; leaves every other reply untouched."""
-    error = response.get("error") if isinstance(response, dict) else None
-    if not stall_dir or not isinstance(error, dict) or error.get("code") != WARM_DISPATCH_INDETERMINATE:
-        return
-    sentence = f"Stall dir: {stall_dir}."
-    # The literal is the suffix `client._indeterminate_envelope` / `ipc._timeout_error_envelope` append.
-    message = str(error.get("message", "")).replace(" stall_dir=unknown", "")
-    if sentence not in message and f"stall_dir={stall_dir}" not in message:
-        message = f"{message} {sentence}".strip()
-    error["message"] = message
-    if not isinstance(error.get("data"), dict):
-        error["data"] = {}
-    if error["data"].get("stall_dir") in (None, "", "unknown"):
-        error["data"]["stall_dir"] = str(stall_dir)
-
-
-#: Longest a recycling thread waits for the killed ops' stall records; a slower disk finishes them late.
-_RECYCLE_DUMP_WAIT_SECS = 0.5
-
-
-def _capture_recycle_stacks(stall_dir, claim_dir, victims: list) -> None:
-    """Write one `<key>-recycle` stall record per victim (`{"op", "dispatch_key", "root"}` dicts) and
-    set its `stall_dump`: the killed worker's own record when one exists, else this record. The
-    `-recycle` suffix keeps the hang-restart count from reading it as a stall. Bounded by
-    `_RECYCLE_DUMP_WAIT_SECS`; a late finish still fills `stall_dump`. Never raises."""
-    from coordinator_core.bounded_io import run_bounded
-
-    def _write() -> None:
-        for info in victims:
-            key = info.get("dispatch_key")
-            safe = key if _is_safe_dispatch_key(key) else "nokey"
-            worker_dump = None
-            try:
-                claim = _claim_path(claim_dir, key) if safe != "nokey" else None
-                pid = int(claim.read_text(encoding="ascii").strip()) if claim is not None else None
-                worker_dump = _stall_record_for(stall_dir, pid, safe)
-            except (OSError, ValueError):
-                worker_dump = None
-            written = _write_stall_record(
-                stall_dir,
-                None,
-                key=f"{safe}-recycle",
-                leg=json.dumps(
-                    {
-                        "leg": "coordinator_core/warm/server.py::_recycle_stalled_pool",
-                        "kind": "kill",
-                        "op": info.get("op"),
-                        "worker_dump": str(worker_dump) if worker_dump else None,
-                    }
-                ),
-                op_ident=threading.get_ident(),
-                repo_root=info.get("root"),
-                full=True,
-                stall_class="pool-recycle",
-                sample_box=False,
-            )
-            chosen = worker_dump or written
-            if chosen is not None:
-                info["stall_dump"] = str(chosen)
-
-    try:
-        run_bounded(f"recycle-dump:{stall_dir}", _write, deadline=_RECYCLE_DUMP_WAIT_SECS, default=None)
-    except Exception:  # noqa: BLE001 -- diagnostics never stop a recycle
-        pass
-
-
-_POOL_RECYCLED_MESSAGE = (
-    "warm dispatch killed: the warm engine recycled its stalled dispatch pool while this op ({op}) "
-    "was running, and its worker was terminated. It was NOT retried. {outcome}"
-)
-
-
-def _pool_recycled_envelope(msg: dict, info: dict, stall_dir) -> dict:
-    """The definite failure a caller gets when a pool recycle killed its op: names the op and the
-    stall dump taken before the kill. A mutating op is `WARM_DISPATCH_INDETERMINATE` (it may have
-    half-applied: reconcile, never resend); a read-only one is `INTERNAL_ERROR`, safe to re-run."""
-    op = info.get("op") or msg.get("method")
-    mutating = _op_may_mutate(_effective_method(msg))
-    outcome = (
-        "It may have partly applied: poll warm.request_status for its dispatch key and reconcile "
-        "against real state; never resend it blind."
-        if mutating
-        else "It is read-only, so re-running it is safe."
-    )
-    dump = info.get("stall_dump")
-    text = _POOL_RECYCLED_MESSAGE.format(op=op, outcome=outcome)
-    text += f" Stall dump: {dump}." if dump else " No stall dump was written before the kill."
-    diagnosis: dict = {"phase": "recycled", "op": op}
-    if dump:
-        diagnosis["stall_dump"] = str(dump)
-    envelope = {
-        "jsonrpc": "2.0",
-        "id": msg.get("id"),
-        "error": {
-            "code": WARM_DISPATCH_INDETERMINATE if mutating else INTERNAL_ERROR,
-            "message": text,
-            "data": {"diagnosis": diagnosis},
-        },
-    }
-    _name_stall_dir(envelope, stall_dir)
-    return envelope
-
-
-class StallDirPointerRefused(RuntimeError):
-    """The settings home that names the stall-dir pointer is absent."""
-
-
-STALL_DIR_POINTER_NAME = "warm-stall-dir.txt"
-
-
-def publish_stall_dir_pointer(stall_dir) -> Path:
-    """Write `stall_dir` to `<settings home>/state/warm-stall-dir.txt`, where a door finds the dumps.
-    Raises `StallDirPointerRefused` naming `COORDINATOR_SETTINGS_HOME` when that home is not a
-    directory. Replaces the file atomically and leaves no temp file behind."""
-    from coordinator_core._settings_home import settings_home
-
-    home = settings_home()
-    if not Path(home).is_dir():
-        raise StallDirPointerRefused(
-            f"COORDINATOR_SETTINGS_HOME resolves to {home}, which is not a directory: "
-            f"the stall dir {stall_dir} was not published."
-        )
-    target = Path(home) / "state" / STALL_DIR_POINTER_NAME
-    target.parent.mkdir(parents=True, exist_ok=True)
-    from coordinator_core.atomic_replace import atomic_write_bytes
-
-    atomic_write_bytes(target, str(stall_dir).encode("utf-8"), preserve_mode=False)
-    return target
-
-
-def _publish_stall_dir_pointer_logged(stall_dir) -> None:
-    try:
-        publish_stall_dir_pointer(stall_dir)
-    except Exception:  # noqa: BLE001 -- a missing pointer never stops dispatch; the refusal is logged
-        import logging
-
-        logging.getLogger(__name__).warning("stall-dir pointer not published", exc_info=True)
-
-
 _POOL_BROKEN_INDETERMINATE_MESSAGE = (
     "warm dispatch indeterminate: this MUTATING op was submitted to the warm "
     "engine's dispatch process pool, and the worker executing it died "
@@ -3084,7 +2772,7 @@ def _pool_saturated_envelope(
     diagnosis: dict = {
         "phase": "saturated",
         "op": msg.get("method"),
-        "pool_size": _dispatch_pool_size(),
+        "pool_size": DISPATCH_PROCESS_POOL_SIZE,
         "holders": holders,
     }
     if hung is not None or io_wait is not None:
@@ -3209,24 +2897,6 @@ def _stamp_pool_future(
         _stamp_pool_future_outcome(dispatch_key, future)
     finally:
         _release_claim(claim)
-
-
-def _worker_locator(claim: Path, pool: Any) -> Callable[[], Optional[tuple]]:
-    """`AckStore.bind_worker` locator for a dispatch submitted to `pool`: the pid the worker wrote into
-    `claim` when it took it, with that worker's `Process.is_alive` when the pool still lists it. None
-    until a worker claims (and when the claim names this process: an accept-side withdrawal)."""
-
-    def locate() -> Optional[tuple]:
-        try:
-            pid = int(claim.read_text(encoding="ascii").strip())
-        except (OSError, ValueError):
-            return None
-        if pid == os.getpid():
-            return None
-        proc = (getattr(pool, "_processes", None) or {}).get(pid)
-        return pid, (proc.is_alive if proc is not None else None)
-
-    return locate
 
 
 def _release_claim(claim: Optional[Path]) -> None:
@@ -3885,15 +3555,7 @@ def _prime_posix_worker() -> bool:
         return False
 
 
-def _start_emit_prewarm() -> threading.Thread:
-    """Run `_prewarm_emit_chain` on a daemon thread and return at once, so the caller is charged
-    no import CPU and a first dispatch blocks on the in-flight import at worst."""
-    thread = threading.Thread(target=_prewarm_emit_chain, name="warm-worker-emit-prewarm", daemon=True)
-    thread.start()
-    return thread
-
-
-def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None, prewarm_emit=False) -> None:
+def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) -> None:
     global _worker_pristine_environ, _WORKER_STALL_DIR
     _WORKER_STALL_DIR = Path(stall_dir) if stall_dir else None
 
@@ -3923,8 +3585,6 @@ def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None, pr
         daemon=True,
     ).start()
     _worker_pristine_environ = dict(os.environ)
-    if prewarm_emit:
-        _start_emit_prewarm()
 
 
 #: Seconds an ambient `plugin_root` resolution is reused; the uncached probe re-parses the machine registry per request.
@@ -5095,7 +4755,6 @@ class _ServerContext:
                         if _ack_store._journal_dir is None:
                             _ack_store._journal_dir = dispatch_ack.journal_dir_beside(self._claim_dir)
                         self._dispatch_dirs_ready = True
-                        _offload_fs(_publish_stall_dir_pointer_logged, self._stall_dir)
                     else:
                         _offload_fs(_prune_worker_stderr_logs, self._worker_stderr_dir)
                         _offload_fs(_prune_dispatch_claims, self._claim_dir)
@@ -5107,10 +4766,10 @@ class _ServerContext:
                     forward_queue = mp_context.Queue(maxsize=_FORWARD_QUEUE_MAX)
                     self._telemetry_drain_stop = _start_telemetry_drain(forward_queue)
                     self._dispatch_pool = concurrent.futures.ProcessPoolExecutor(
-                        max_workers=_dispatch_pool_ceiling() + _LIGHT_RESERVE_WORKERS,
+                        max_workers=DISPATCH_PROCESS_POOL_SIZE + _LIGHT_RESERVE_WORKERS,
                         mp_context=mp_context,
                         initializer=_worker_process_init,
-                        initargs=(str(stderr_dir), str(self._stall_dir), forward_queue, True),
+                        initargs=(str(stderr_dir), str(self._stall_dir), forward_queue),
                     )
         return self._dispatch_pool
 
@@ -5199,12 +4858,12 @@ class _ServerContext:
             pass
 
     def _admission_gate(self) -> "_AdmissionGate":
-        """Per-context heavy slot gate, resized to `_dispatch_pool_size()` on every call."""
-        size = _dispatch_pool_size()
+        """Per-context slot gate sized `DISPATCH_PROCESS_POOL_SIZE`, built on first use."""
         gate = self.__dict__.get("_pool_gate")
         if gate is None:
-            gate = self.__dict__.setdefault("_pool_gate", _AdmissionGate(size, _LIGHT_RESERVE_WORKERS))
-        gate.resize(size)
+            gate = self.__dict__.setdefault(
+                "_pool_gate", _AdmissionGate(DISPATCH_PROCESS_POOL_SIZE, _LIGHT_RESERVE_WORKERS)
+            )
         return gate
 
     def _guard_gate(self) -> "_AdmissionGate":
@@ -5229,11 +4888,11 @@ class _ServerContext:
     def _recycle_wedged_guard_pool(self, pool: Any) -> bool:
         """Swap out and terminate `pool` once every guard worker holds an overdue op, so a wedged hook
         lane is replaced instead of timing out every later hook. Not a recycle while the retired
-        workers of earlier recycles still live (`_max_retired_workers()`). True when it recycled."""
+        workers of earlier recycles still live (`_MAX_RETIRED_WORKERS`). True when it recycled."""
         overdue = self.__dict__.get("_guard_overdue")
         if not overdue or len(overdue) < _guard_pool_workers():
             return False
-        if self._retired_workers_alive() >= _max_retired_workers():
+        if self._retired_workers_alive() >= _MAX_RETIRED_WORKERS:
             return False
         with self._guard_pool_lock:
             if self._guard_pool is not pool:
@@ -5338,59 +4997,11 @@ class _ServerContext:
             for fut, _row in heavy:
                 tasks.pop(fut, None)
         self._admission_gate().note_recycle()
-        _ServerContext._record_recycle_victims(self, heavy)
         _ack_store.reconcile_restarted(keys)
         pool_retire.retire_pool(
             stuck_pool, grace_secs=_RETIRE_GRACE_SECS, ledger=self.__dict__.setdefault("_retired_procs", [])
         )
         self._write_recycle_line(holders, len(keys))
-
-    def _record_recycle_victims(self, victims: list) -> list:
-        """Before a recycle or reap kills `victims` (`(future, task row)` pairs): capture each op's
-        stall record, name op and record on its ack entry (`warm.request_status`), and remember it per
-        future so the waiting caller is answered with a definite failure naming both. Returns the
-        victim infos. Never raises; the dump wait is bounded."""
-        infos: list = []
-        try:
-            stall_dir = getattr(self, "_stall_dir", None)
-            recycled = self.__dict__.setdefault("_recycled_futs", {})
-            stamps = self.__dict__.setdefault("_recycled_at", {})
-            now = time.monotonic()
-            for stale in [f for f, at in stamps.items() if now - at > _RECYCLED_ENTRY_TTL_SECS]:
-                stamps.pop(stale, None)
-                recycled.pop(stale, None)
-            for fut, row in victims:
-                op, _started, key, root = row
-                info = {
-                    "op": op,
-                    "dispatch_key": key,
-                    "root": root,
-                    "stall_dump": None,
-                    "stall_dir": str(stall_dir) if stall_dir else None,
-                }
-                recycled[fut] = info
-                stamps[fut] = now
-                infos.append(info)
-                if key is not None:
-                    _ack_store.note_killed(key, op, info)
-            if stall_dir and infos:
-                _capture_recycle_stacks(stall_dir, getattr(self, "_claim_dir", None), infos)
-        except Exception:  # noqa: BLE001 -- naming the victims never blocks the kill
-            pass
-        return infos
-
-    def _record_reaped_neighbours(self, futures: list) -> None:
-        """`_reap_after_neighbours`'s `on_kill`: the neighbours of an overdue kill still running at reap."""
-        tasks = self.__dict__.get("_pool_tasks", {})
-        self._record_recycle_victims([(fut, tasks[fut]) for fut in futures if fut in tasks])
-
-    def _take_recycled(self, future: Any) -> Optional[dict]:
-        """The info a recycle recorded for `future`, consumed; None when none was recorded."""
-        recycled = self.__dict__.get("_recycled_futs")
-        if not recycled or future is None:
-            return None
-        self.__dict__.get("_recycled_at", {}).pop(future, None)
-        return recycled.pop(future, None)
 
     def _terminate_overdue_worker(
         self,
@@ -5422,32 +5033,8 @@ class _ServerContext:
             _ack_store.stamp_killing(dispatch_key, pid, proc.is_alive)
         self._drop_pool(pool)
         neighbours = _pool_neighbour_futures(pool, overdue_future)
-        _reap_after_neighbours(
-            pool,
-            proc,
-            neighbours,
-            self.__dict__.setdefault("_retired_procs", []),
-            on_kill=self._record_reaped_neighbours,
-        )
+        _reap_after_neighbours(pool, proc, neighbours, self.__dict__.setdefault("_retired_procs", []))
         return True
-
-    def _terminate_overdue_bounded(
-        self,
-        pool: Any,
-        claim: Optional[Path],
-        dispatch_key: Optional[str],
-        overdue_future: Optional["concurrent.futures.Future"] = None,
-    ) -> bool:
-        """`_terminate_overdue_worker` with its claim read, fence and journal writes bounded: a
-        filesystem that does not answer reads as no worker found, so the caller takes the abandoned
-        path instead of holding its thread."""
-        return bool(
-            _bounded_fs_step(
-                f"overdue-kill:{claim or dispatch_key or id(overdue_future)}",
-                lambda: self._terminate_overdue_worker(pool, claim, dispatch_key, overdue_future),
-                False,
-            )
-        )
 
     def _retired_workers_alive(self) -> int:
         """Recycled-pool workers still alive. A worker blocked in a kernel call survives
@@ -5495,7 +5082,6 @@ class _ServerContext:
         row_fields: dict = {}
         try:
             response = self._pool_dispatch_untimed(msg, caller=caller, dispatch_key=dispatch_key)
-            _name_stall_dir(response, getattr(self, "_stall_dir", None))
             if isinstance(response, dict):
                 _fwd = response.pop(_ROW_FIELDS_KEY, None)
                 if isinstance(_fwd, dict):
@@ -5561,7 +5147,6 @@ class _ServerContext:
         called; this method only stamps.
         """
         _disarm_accept = lambda: None  # noqa: E731
-        future = None
         try:
             _eff = _effective_method(msg)
             _guard_class = _guard_pool_applies(self.__dict__) and (_is_hook_lane(_eff) or _is_light_mutating(_eff))
@@ -5575,22 +5160,13 @@ class _ServerContext:
                 pool = self._ensure_guard_pool()
                 if self._recycle_wedged_guard_pool(pool):
                     pool = self._ensure_guard_pool()
-                elif len(self.__dict__.get("_guard_overdue") or ()) >= _guard_pool_workers():
-                    # Every guard worker holds an overdue op and no recycle is allowed: a submit
-                    # would only queue behind them, so answer now with the determinate refusal.
-                    if dispatch_key is not None:
-                        _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
-                    return _pool_not_started_envelope(
-                        msg, {"pool_size": _guard_pool_workers(), "outstanding": self._pool_outstanding()}
-                    )
             else:
                 pool = self._ensure_dispatch_pool()
                 hung, io_wait = self._classify_stalled_holders()
                 holders = hung + io_wait
-                _heavy_size = _dispatch_pool_size()
-                saturated = len(holders) >= _heavy_size
-                recyclable = len(hung) >= _heavy_size
-                if self._saturation_confirmed(recyclable) and self._retired_workers_alive() < _max_retired_workers():
+                saturated = len(holders) >= DISPATCH_PROCESS_POOL_SIZE
+                recyclable = len(hung) >= DISPATCH_PROCESS_POOL_SIZE
+                if self._saturation_confirmed(recyclable) and self._retired_workers_alive() < _MAX_RETIRED_WORKERS:
                     self._recycle_stalled_pool(pool, hung)
                     pool = self._ensure_dispatch_pool()
                 elif saturated and not (_is_hook_lane(_eff) or _is_light_mutating(_eff)):
@@ -5605,8 +5181,6 @@ class _ServerContext:
             _phase = ["gate"]
             _method = msg.get("method")
             _deadline = _withdrawal_deadline_secs(_method, msg)
-            if _guard_class and isinstance(_eff, str) and _eff.startswith(_HOOK_LANE_PREFIXES):
-                _deadline = min(_deadline, _HOOK_LANE_BUDGET_SECS)
             _arm_secs = _stall_arm_secs(_deadline)
             _disarm_accept = _arm_accept_stall(
                 getattr(self, "_stall_dir", None),
@@ -5642,7 +5216,7 @@ class _ServerContext:
                 return _pool_not_started_envelope(
                     msg,
                     {
-                        "pool_size": _dispatch_pool_size(),
+                        "pool_size": DISPATCH_PROCESS_POOL_SIZE,
                         "outstanding": self._pool_outstanding(),
                     },
                 )
@@ -5657,19 +5231,18 @@ class _ServerContext:
             _enqueue_mono = _enqueue_monotonic(getattr(_REQUEST_STAMP, "value", None))
             if _enqueue_mono is not None:
                 _stamped_msg[_ENQUEUE_STAMP_KEY] = _enqueue_mono
-            _submit_args: tuple = (
-                (_stamped_msg, caller)
-                if claim is None
-                else (_stamped_msg, caller, dispatch_key, str(claim.parent), _arm_secs)
-            )
             try:
-                try:
-                    future = pool.submit(_pool_dispatch_worker, *_submit_args)
-                except RuntimeError:
-                    # A concurrent recycle shut `pool` down after this request picked it: nothing
-                    # ran, so submit once to the live replacement instead of answering -32603.
-                    pool = self._ensure_guard_pool() if _guard_class else self._ensure_dispatch_pool()
-                    future = pool.submit(_pool_dispatch_worker, *_submit_args)
+                if claim is None:
+                    future = pool.submit(_pool_dispatch_worker, _stamped_msg, caller)
+                else:
+                    future = pool.submit(
+                        _pool_dispatch_worker,
+                        _stamped_msg,
+                        caller,
+                        dispatch_key,
+                        str(claim.parent),
+                        _arm_secs,
+                    )
             except BaseException:
                 _release_slot()
                 raise
@@ -5686,8 +5259,6 @@ class _ServerContext:
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
             if dispatch_key is not None:
                 future.add_done_callback(lambda _f: _stamp_pool_future(dispatch_key, _f))
-                if claim is not None:
-                    _ack_store.bind_worker(dispatch_key, _worker_locator(claim, pool))
             _phase[0] = "result"
             try:
                 out = _await_pool_result(future, _wait_left, _drive_root, count_progress=not _guard_class)
@@ -5697,24 +5268,23 @@ class _ServerContext:
                 # The worker is left parked, never terminated: killing one pool process breaks the
                 # whole pool and fails every neighbour, and a process blocked on a dead drive
                 # survives terminate() anyway. New ops on this drive are refused at admission.
-                withdrawn = _withdraw_unstarted(future, claim)
+                withdrawn = future.cancel() or (
+                    claim is not None and _take_claim(claim, os.getpid(), on_error=False)
+                )
                 future.add_done_callback(lambda _f: _offload_fs(_release_claim, claim))
                 if dispatch_key is not None:
                     if withdrawn:
                         _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
                     else:
                         _ack_store.mark_withdrawn(dispatch_key)
-                _release_slot()
                 return _with_reconcile_route(
                     _drive_fault_envelope(msg, fault.verdict, started=not withdrawn), dispatch_key
                 )
             except concurrent.futures.TimeoutError:
-                # The caller's budget is spent: the slot frees before any filesystem step below, so
-                # a blocked claim create or kill write never holds it.
-                _release_slot()
                 if _guard_class:
-                    # A guard op is claimless, so nothing below kills its worker; the worker is
-                    # tracked as overdue.
+                    # A guard op is claimless, so nothing below kills its worker; the caller has
+                    # its answer, so the slot frees now and the worker is tracked as overdue.
+                    _release_slot()
                     if not future.cancel():
                         self._note_guard_overdue(future)
                 # NEGATIVE SPEC: CANCEL FIRST. `Future.cancel()` succeeds only
@@ -5729,7 +5299,9 @@ class _ServerContext:
                 # stamp callback): a file unlinked by an op that just finished
                 # would let this create succeed and misreport a landed op as
                 # never run.
-                withdrawn = _withdraw_unstarted(future, claim)
+                withdrawn = future.cancel() or (
+                    claim is not None and _take_claim(claim, os.getpid(), on_error=False)
+                )
                 future.add_done_callback(lambda _f: _offload_fs(_release_claim, claim))
                 if withdrawn:
                     if dispatch_key is not None:
@@ -5737,18 +5309,16 @@ class _ServerContext:
                     return _pool_not_started_envelope(
                         msg,
                         {
-                            "pool_size": _dispatch_pool_size(),
+                            "pool_size": DISPATCH_PROCESS_POOL_SIZE,
                             "outstanding": self._pool_outstanding(),
                         },
                     )
                 if _ml_secs is not None:
                     # A started machine-local read never mutates: the typed timeout is a
                     # RESULT the door relays, never the -32004 that surfaces as exit 1.
-                    if not self._terminate_overdue_bounded(pool, claim, dispatch_key, future):
+                    if not self._terminate_overdue_worker(pool, claim, dispatch_key, future):
                         if dispatch_key is not None:
                             _ack_store.mark_withdrawn(dispatch_key)
-                    _release_slot()
-                    self._take_recycled(future)
                     return _machine_local_timeout_response(msg, _ml_secs)
                 # The task STARTED and is still running: genuinely
                 # indeterminate. `ipc._timeout_error_envelope` classifies via
@@ -5764,11 +5334,6 @@ class _ServerContext:
                     msg.get("method"), _POOL_RESULT_DEADLINE_SECS, msg.get("id")
                 )
                 data = (envelope.get("error") or {}).get("data")
-                if isinstance(data, dict) and dispatch_ack.abandon_import_phase(
-                    dispatch_ack.journal_dir_beside(getattr(self, "_claim_dir", None)), dispatch_key
-                ):
-                    data["retry_safe"] = True
-                    data["import_phase"] = True
                 if isinstance(data, dict) and isinstance(data.get("diagnosis"), dict):
                     data["diagnosis"].update(
                         _running_phase_diagnosis(
@@ -5787,15 +5352,9 @@ class _ServerContext:
                     )
                 else:
                     dump_note = "No stall dump written: no diagnosis block."
-                if not self._terminate_overdue_bounded(pool, claim, dispatch_key, future):
+                if not self._terminate_overdue_worker(pool, claim, dispatch_key, future):
                     if dispatch_key is not None:
                         _ack_store.mark_withdrawn(dispatch_key)
-                # The caller has its answer: the slot frees now, not when a worker blocked in the
-                # kernel (a create or read that survives terminate) finally returns.
-                _release_slot()
-                # The caller is answered here, so a victim record the kill just made for this
-                # future has no waiter left to consume it.
-                self._take_recycled(future)
                 error = envelope.get("error")
                 if isinstance(error, dict):
                     if isinstance(data, dict) and isinstance(data.get("diagnosis"), dict):
@@ -5813,7 +5372,7 @@ class _ServerContext:
             return _pool_not_started_envelope(
                 msg,
                 {
-                    "pool_size": _dispatch_pool_size(),
+                    "pool_size": DISPATCH_PROCESS_POOL_SIZE,
                     "outstanding": self._pool_outstanding(),
                 },
             )
@@ -5825,17 +5384,9 @@ class _ServerContext:
             # request rebuilds a fresh pool.
             # Identity-checked: a straggler of a pool already replaced (an
             # overdue-worker kill) must not drop the successor.
-            recycled = self._take_recycled(future)
-            if recycled is not None:
-                return _with_reconcile_route(
-                    _pool_recycled_envelope(msg, recycled, getattr(self, "_stall_dir", None)), dispatch_key
-                )
             broken = pool
             healed = self._heal_lost_pool(broken, _guard_class) if self._drop_pool(pool) else None
             diagnosis = _dead_worker_diagnosis(broken, getattr(self, "_worker_stderr_dir", None))
-            dead_pid = diagnosis.get("worker_pid")
-            if isinstance(dead_pid, int):
-                _ack_store.mark_worker_dead(dead_pid)
             if broken is not None:
                 try:
                     broken.shutdown(wait=False)
@@ -6944,7 +6495,6 @@ def _run_guarded() -> int:
     if not_ready is not None:
         not_ready.stop()
 
-    _enable_headroom_pool_sizing()
     ctx.start_boot_prewarm()
 
     # Dispatch on WHICH ENDPOINT WAS WON, not on the platform read again.

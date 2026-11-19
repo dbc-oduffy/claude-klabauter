@@ -43,13 +43,6 @@ def _declare(repo: Path, run_id: str, *writes: str, **extra) -> Path:
     return rdir
 
 
-def _index_declared(repo: Path, run_id: str, *paths: str) -> None:
-    """Record the staged footprint in the halted-withheld index, as `ask_stage` does at staging."""
-    from coordinator_core.ops.dispatch_emit import halted_withheld_index
-
-    halted_withheld_index.record_declared(repo, run_id, paths)
-
-
 def _halt(rdir: Path, *withheld: str) -> None:
     marker: dict = {"status": "halted"}
     for p in withheld:
@@ -245,7 +238,6 @@ def test_resumed_run_with_landed_successor_claims_nothing_but_unlanded_successor
     _bind(repo, first, "resumed")
     run_token.mint(repo, first, "a.mjs", session_id=SELF)
     _bind(repo, second, "halted")
-    _index_declared(repo, second, "p/b.py")
     assert sibling_claims._unlanded_run_ids(repo, OWN) == [first, second]
     assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {"p/a.py": first}
     _bind(repo, second, "landed")
@@ -322,7 +314,6 @@ def _spine_only_halted(repo: Path, path: str, withheld: tuple = ()) -> str:
     if withheld:
         marker["run_artifacts"] = {"withheld": {p: "left" for p in withheld}}
     (rdir / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
-    _index_declared(repo, run_id, "docs/plans/sp.md")
     (repo / "state/sizings").mkdir(parents=True, exist_ok=True)
     (repo / "state/sizings/sp.yaml").write_text('plan: "docs/plans/sp.md"\n', encoding="utf-8")
     (repo / "docs/plans").mkdir(parents=True, exist_ok=True)
@@ -459,7 +450,6 @@ def _corrupt(repo: Path, run_id: str) -> None:
 def test_corrupt_marker_run_is_unlanded_and_claims_wanted_paths(repo):
     run = _stamped("c0rr01")
     _declare(repo, run, "p/a.py")
-    _index_declared(repo, run, "p/a.py")
     _corrupt(repo, run)
     assert sibling_claims._unlanded_run_ids(repo, OWN) == [run]
     assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py", "q/z.py"]) == {"p/a.py": run, "q/z.py": run}
@@ -468,7 +458,6 @@ def test_corrupt_marker_run_is_unlanded_and_claims_wanted_paths(repo):
 def test_corrupt_marker_holds_shared_dir_candidates(repo):
     run = _stamped("c0rr02")
     _declare(repo, run, "shared/b.py")
-    _index_declared(repo, run, "shared/b.py")
     _corrupt(repo, run)
     assert sibling_claims.shared_dir_holds(repo, OWN, ["shared/a.py"], ["shared/dirt.py"]) == ["shared/dirt.py"]
 

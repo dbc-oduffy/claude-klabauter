@@ -1419,9 +1419,11 @@ _GC_GROUPING_CHARS_RE = re.compile(r"([()`])")
 def _gc_clean_is_executed(cmd: str) -> bool:
     """True iff the WHOLE command has a `git` argv0 whose subcommand is `clean`.
 
-    `_split_segments` is quote-blind (a quoted `a|git clean` operand yields a `git clean`
-    fragment); shlex over the intact command keeps it one token. Grouping chars are
-    space-padded so `$(git clean)` still exposes a bare `git`. Fails closed on untokenizable input.
+    `_split_segments` is quote-blind, so a quoted `a|git clean` operand yields a
+    `git clean` fragment; shlex over the intact command keeps that operand one
+    token. Grouping chars are space-padded first so `$(git clean)` and
+    `(git clean)` still expose a bare `git` token; padding inside a quoted
+    operand never splits it. Fails closed on an untokenizable command.
     """
     return _command_really_invokes(_GC_GROUPING_CHARS_RE.sub(r" \1 ", cmd), "clean")
 

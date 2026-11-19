@@ -31,11 +31,10 @@ def clean_builder_identity(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_codex_builder_and_warm_caller_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm.entry_seam import per_request_state
 
-    builder = '00000000-0000-4000-8000-0000000000b1'
-    monkeypatch.setenv('CODEX_THREAD_ID', builder)
-    assert door_build.build_attribution()['builder'] == builder
+    monkeypatch.setenv('CODEX_THREAD_ID', 'codex-builder')
+    assert door_build.build_attribution()['builder'] == 'codex-builder'
     sid = '00000000-0000-4000-8000-000000000001'
-    with per_request_state(warm_served=True, isolated=False, env={'COORDINATOR_SESSION_ID': sid}):
+    with per_request_state(warm_served=True, isolated=False, env={'CODEX_THREAD_ID': sid}):
         assert door_build.build_attribution()['builder'] == sid
     with per_request_state(warm_served=True, isolated=False, env={}):
         assert door_build.build_attribution()['builder'] is None

@@ -4,7 +4,7 @@ count, and which side of the verdict key moved.
 Per `--run-id`, two replays, each over a scratch copy of the run's records so the run dir is never written
 (`overlay-inflight` included):
 
-  stored    the on-disk `measured-rev.json` and `measured-touched.json` as the land leg reads them, against the
+  stored    the on-disk `measured-rev.json` and `measured-touched.json` as `land_run` reads them, against the
             run's `overlay-verdict.json`
   rebuilt   `measured_rev.measured_rev` re-run against the repo's current tree (a new base sha, the worktree's
             blobs), its record and touched file redirected into the scratch copy; `moved` is its field-by-field

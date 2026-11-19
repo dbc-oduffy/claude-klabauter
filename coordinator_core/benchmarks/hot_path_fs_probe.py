@@ -277,11 +277,7 @@ def measure(
     spike_secs: float = SPIKE_SECS,
 ) -> dict:
     """Run both legs and the isolation spike in one tmp dir; one record. Never raises on a hold."""
-    from coordinator_core.benchmarks import fixture_settings_home
-
     tmp = make_managed_temp_dir(prefix="hot-path-fs-probe-")
-    settings_scope = fixture_settings_home(tmp)
-    settings_scope.start()
     try:
         for sub in ("calling", "held", "spike-bare", "spike-bounded"):
             (tmp / sub).mkdir()
@@ -291,7 +287,6 @@ def measure(
         )
         spike = _isolation_spike(tmp, pool_size, spike_secs)
     finally:
-        settings_scope.stop()
         rmtree_or_raise(tmp, label="hot-path-fs-probe")
     return {
         "inline_rotation_stats": calling["inline_rotation_stats"],

@@ -912,8 +912,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # job.start / job.cancel — read and write only the settings-home job record plus the caller-recorded
     # lock and staging paths; no repo state, so no worktree key ("none", as install.write_identity_file).
     "job.start":                                "none",
-    # external_workspace.rehydrate — reads the machine-local registry and clones into a registered external path; no repo key.
-    "external_workspace.rehydrate":             "none",
     "job.cancel":                               "none",
     # workflow.late_rows — reads the caller's worktree run ledger (verify_read stamps its marker); scope lets --repo supply repo_root.
     "workflow.late_rows":                       "common_dir",

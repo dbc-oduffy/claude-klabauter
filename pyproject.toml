@@ -39,7 +39,6 @@ dependencies = [
     # (coordinator_core/session/core.py). Without it, every stable_pid session
     # reads DEAD on Windows -> wrongful claim takeover.
     "psutil>=5.9",
-    "pywin32>=306; sys_platform == 'win32'",
     # jsonschema is the load-bearing in-process validator for the vendored
     # cockpit-contract JSON Schema bundle (coordinator_core/ops/emit/validate.py
     # validate_array + _validate_scoped_emission_per_repo) -- a language-neutral

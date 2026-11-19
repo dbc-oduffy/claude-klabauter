@@ -56,8 +56,10 @@ def test_the_ask_row_runner_pushes_behind_the_review_independent_test_guard() ->
     script = _ask_script()
 
     assert "if (!incomplete && verifyScope && (_rowVerifyWanted))" in script
-    assert "_terminalTestsWanted = !!(_gate.arm !== 'xs' && !_xsTail && (_manifest.test_targets ?? []).length);" in script
-    decl = "const _rowVerifyWanted = !_terminalTestsWanted;"
+    decl = (
+        "const _rowVerifyWanted = "
+        "!(_gate.arm !== 'xs' && !_xsTail && (_manifest.test_targets ?? []).length);"
+    )
     assert decl in script
     assert script.index(decl) < script.index("_rows[r.id] = _runRow(")
 

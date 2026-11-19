@@ -1403,7 +1403,7 @@ def _claim_inflight(root: Path, run_id: str) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     for _ in range(2):
         try:
-            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
             return True
         except FileExistsError:
             try:

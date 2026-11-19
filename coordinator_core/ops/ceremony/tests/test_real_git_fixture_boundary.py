@@ -82,7 +82,6 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # test_commit_scoped_agent_provenance.py: the oracle is the trailers on a really
 # landed commit, which a mocked git cannot exhibit.
 _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
-    "test_build_new_file_commit.py",
     "test_commit_admission.py",
     "test_commit_authored_content_edges.py",
     "test_commit_authored_new_file.py",
@@ -91,7 +90,6 @@ _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_commit_leaves_index_agreeing_with_head.py",
     "test_commit_path_legality.py",
     "test_commit_scoped.py",
-    "test_commit_scoped_atlas_freshness.py",
     "test_commit_scoped_agent_provenance.py",
     "test_commit_scoped_edges.py",
     "test_commit_scoped_in_process.py",
@@ -102,7 +100,6 @@ _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_post_commit_tail_completion_fold.py",
     "test_publish_allowlist_admission.py",
     "test_skill_weight_admission.py",
-    "test_untracked_declared_write_never_empty_blob.py",
 })
 
 _IMPORT_PATTERN = re.compile(

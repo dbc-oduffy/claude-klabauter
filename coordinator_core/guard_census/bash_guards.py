@@ -34,8 +34,6 @@ _REDIRECT = {
     "block-external-workspace-vcs-write": "the workspace's own owner",
     "block-editor-kill-by-name": "close the editor by pid",
     "deny-kill-by-port-or-tree": "close the process by a pid you started, or by its owner's own stop command",
-    "block-drive-root-new-dir-bash-write": "create the directory under the repo or scratch",
-    "guard-doctrine-surface-bash-write": "route the doctrine change to the EM, who edits it or sends the owning repo a memo",
     "blanket-git-add": "ceremony.commit_v2 with literal paths",
     "stale-temp-index-base": "rebuild the temp index from current HEAD, or ceremony.commit_v2 with literal paths",
     "check-test-suite-invocation": "a scoped pytest run of named test files, or the EM's scheduled suite leg",

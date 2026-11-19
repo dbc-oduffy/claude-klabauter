@@ -182,7 +182,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.land_credited", 'registers "dispatch.land_credited"'),
     ("coordinator_core.ops.dispatch_emit.land_remainder", 'registers "dispatch.land_verified_remainder"'),
     ("coordinator_core.ops.dispatch_emit.stage_receipts", 'registers "dispatch.write_receipt"'),
-    ("coordinator_core.ops.dispatch_emit.grind_bookkeep", 'registers "dispatch.grind_bookkeep"'),
     ("coordinator_core.ops.ceremony.close_background", 'registers "close.background"'),
     ("coordinator_core.ops.ceremony.close_review", 'registers "close.review"'),
     ("coordinator_core.ops.dispatch_emit.ask_gate", 'registers "dispatch.ask_gate"'),

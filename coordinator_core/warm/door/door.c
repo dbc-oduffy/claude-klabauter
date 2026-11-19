@@ -908,33 +908,18 @@ static void door_log_fail_open(const char *cause) {
     HANDLE h = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
-    /* First line of <settings>\state\warm-stall-dir.txt (written by the engine); "unknown" if absent or empty. */
-    char stall_dir[384] = "unknown";
-    wcscpy(path + home_len, L"\\state\\warm-stall-dir.txt");
-    HANDLE ph = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (ph != INVALID_HANDLE_VALUE) {
-        char raw[sizeof stall_dir];
-        DWORD got = 0;
-        if (ReadFile(ph, raw, (DWORD)sizeof raw - 1, &got, NULL) && got > 0) {
-            size_t len = 0;
-            while (len < got && raw[len] != '\n' && raw[len] != '\r') len++;
-            if (len > 0) { memcpy(stall_dir, raw, len); stall_dir[len] = '\0'; }
-        }
-        CloseHandle(ph);
-    }
     SYSTEMTIME st;
     GetSystemTime(&st);
     unsigned long long elapsed = g_call_started_ticks ? (unsigned long long)(GetTickCount64() - g_call_started_ticks) : 0;
     unsigned long long leg_ms = g_leg_started_ticks ? (unsigned long long)(GetTickCount64() - g_leg_started_ticks) : 0;
-    char line[768];
+    char line[512];
     int n = snprintf(line, sizeof line,
-                     "ts=%04u-%02u-%02uT%02u:%02u:%02uZ deadline_ms=%d elapsed_ms=%llu op=%s door_pid=%lu leg=%s leg_ms=%llu cause=%.160s stall_dir=%.380s\n",
+                     "ts=%04u-%02u-%02uT%02u:%02u:%02uZ deadline_ms=%d elapsed_ms=%llu op=%s door_pid=%lu leg=%s leg_ms=%llu cause=%.160s\n",
                      (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
                      (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond,
                      door_read_deadline_ms_for_mode(),
                      elapsed, g_hook_op[0] ? g_hook_op : "-", (unsigned long)GetCurrentProcessId(),
-                     g_leg, leg_ms, cause ? cause : "-", stall_dir);
+                     g_leg, leg_ms, cause ? cause : "-");
     if (n > 0) {
         if ((size_t)n >= sizeof line) { n = (int)sizeof line - 1; line[n - 1] = '\n'; }
         DWORD wrote = 0;
