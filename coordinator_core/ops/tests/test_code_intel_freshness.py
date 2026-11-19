@@ -37,7 +37,7 @@ def test_op_reports_stale_files_through_the_real_dispatch_path(tmp_path: Path) -
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "init")
     (root / "a.txt").write_text("two\n", encoding="utf-8")
-    (root / "b.txt").write_text("fresh\n", encoding="utf-8")
+    (root / "b.txt").write_bytes(b"fresh\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "change")
     (root / ".project-rag").mkdir()

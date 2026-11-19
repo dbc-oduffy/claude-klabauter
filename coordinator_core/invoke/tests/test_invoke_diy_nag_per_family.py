@@ -48,12 +48,29 @@ def _repo(tmp_path: Path, files: int, lines_each: int) -> Path:
     return repo
 
 
+def _attribute_dirt_to_session(repo: Path, sid: str) -> None:
+    """The nag measures only paths in the session's lane record; record every dirty path as its own edit."""
+    from coordinator_core.session import xs_lane_budget
+
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True, creationflags=_NO_CONSOLE
+    ).stdout.strip()
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain", "-uall"], cwd=repo, check=True, capture_output=True, text=True,
+        creationflags=_NO_CONSOLE,
+    ).stdout.splitlines()
+    xs_lane_budget.open_xs_lane(repo, sid, base)
+    for row in dirty:
+        xs_lane_budget.add_path(repo, sid, row[3:])
+
+
 def _run(monkeypatch, repo: Path, env: dict[str, str], sid: str, extra: tuple[str, ...] = ()):
     for key in _ALL_MARKERS:
         monkeypatch.delenv(key, raising=False)
     from coordinator_core import warp_fire
 
     monkeypatch.setattr(warp_fire, "_counter_dir", lambda: repo.parent / "nag-counter")
+    _attribute_dirt_to_session(repo, sid)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
     for key, val in env.items():
         monkeypatch.setenv(key, val)

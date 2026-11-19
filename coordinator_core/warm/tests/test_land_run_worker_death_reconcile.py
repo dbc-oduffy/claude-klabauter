@@ -446,6 +446,9 @@ def test_terminate_overdue_worker_spares_the_neighbour_and_reaps_the_overdue_wor
         def _drop_pool(self, _pool):
             return True
 
+        def _record_reaped_neighbours(self, _futures):
+            return None
+
     try:
         assert server._ServerContext._terminate_overdue_worker(_Ctx(), pool, claim, None, overdue)
         assert neighbour.result(timeout=30) == "landed"

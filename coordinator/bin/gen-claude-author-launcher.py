@@ -87,10 +87,15 @@ def _stage_bom_templates(src_dir: str, dst_dir: str) -> None:
 def main(argv: "list[str] | None" = None) -> int:
     import tempfile
 
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cli_shared
+
     argv = (sys.argv[1:] if argv is None else list(argv))
     if os.name != "nt" or "-h" in argv or "--help" in argv:
         return _main(argv)
-    with tempfile.TemporaryDirectory(prefix="claude-author-launcher-") as staged:
+    with tempfile.TemporaryDirectory(
+        prefix="claude-author-launcher-", dir=cli_shared.managed_temp_root()
+    ) as staged:
         staged_argv = argv
         try:
             if "--template-dir" in argv:

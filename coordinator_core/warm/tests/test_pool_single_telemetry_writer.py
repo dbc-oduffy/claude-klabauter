@@ -132,8 +132,9 @@ def test_pool_is_built_with_the_forward_queue_as_third_initarg(monkeypatch: pyte
     try:
         assert pool.kwargs["initializer"] is server._worker_process_init
         initargs = pool.kwargs["initargs"]
-        assert len(initargs) == 3
+        assert len(initargs) == 4
         q = initargs[2]
+        assert initargs[3] is True
         assert pool.kwargs["max_workers"] == server.DISPATCH_PROCESS_POOL_SIZE + server._LIGHT_RESERVE_WORKERS
         assert getattr(q, "_maxsize") == server._FORWARD_QUEUE_MAX
     finally:

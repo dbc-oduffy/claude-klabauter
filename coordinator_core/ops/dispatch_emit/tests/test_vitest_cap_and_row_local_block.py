@@ -70,7 +70,7 @@ def test_halt_is_guarded_by_the_row_local_token():
 
 _HARNESS = r"""
 (async () => {
-  const _incompleteChunks = [], _blockedChunks = [], _unansweredBriefs = [], _stoppedBy = [],
+  const _incompleteChunks = [], _blockedChunks = [], _unansweredBriefs = [], _stoppedBy = [], _stoppedText = {},
     _notStarted = [], _verifications = [], _landed = {};
   const _gateOwed = {}, _chunkReason = {};
   let _halted = null;

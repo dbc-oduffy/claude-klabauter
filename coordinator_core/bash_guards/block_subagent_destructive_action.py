@@ -87,8 +87,8 @@ Coordinator-content-repo state/audits/2026-07-29-destructive-git-guard-inconsist
 a `git rm --cached` denied in one repo and silently allowed the identical
 shape in another, and `check()` returning `None` on ANY of the three
 fail-open branches above wrote nothing anywhere, so the incident could not
-be reproduced after the fact. Each fail-open branch (and the main-thread
-`no-agent-id-key` allow, under the label `main-thread-out-of-scope`) now
+be reproduced after the fact. Each fail-open branch (never the main-thread
+allow, which is not a fail-open) now
 appends an identity-resolution-tuple record to a settings-home-rooted,
 guard-specific log (`_fail_open_log_path`) whenever Layer 1 has ALREADY
 flagged the command as touching a dangerous surface -- ordinary benign
@@ -2634,7 +2634,11 @@ _SCRATCH_CTX: "contextvars.ContextVar[Optional[tuple]]" = contextvars.ContextVar
     "_subagent_scratch_clone_ctx", default=None
 )
 _SCRATCH_VERB_RE = re.compile(r"\b(?:clone|merge|init|checkout-index)\b")
-_REPOINTS_GIT_RE = re.compile(r"(?:^|[\s;&|(])cd\s|\s-C\s|--git-dir|--work-tree")
+#: `-C` re-points only as a git option: `tar -x -C scratch/x` in the same chain must not void the
+#: scratch context, or a `git archive | tar -C` export followed by `git init` into scratch is denied.
+_REPOINTS_GIT_RE = re.compile(
+    r"(?:^|[\s;&|(])cd\s|\bgit\s+(?:[^\s;&|]+\s+)*?-C\s|--git-dir|--work-tree"
+)
 #: A single leading `cd <absolute dir> &&`, the one re-point whose landing directory is knowable.
 _LEADING_CD_RE = re.compile(r"""\s*cd\s+["']?([^\s"';&|]+)["']?\s*&&\s*""")
 #: `git clone` options that take a separate argument; `--template`/`--separate-git-dir`/
@@ -2650,7 +2654,9 @@ def _repo_root_of(start: Path) -> Optional[Path]:
     return None
 
 
-_REPOINT_TARGET_RE = re.compile(r"""(?:^|[\s;&|(])(?:cd|git\s+-C|-C)\s+("[^"]*"|'[^']*'|[^\s;&|)]+)""")
+_REPOINT_TARGET_RE = re.compile(
+    r"""(?:^|[\s;&|(])(?:cd|git\s+(?:[^\s;&|]+\s+)*?-C)\s+("[^"]*"|'[^']*'|[^\s;&|)]+)"""
+)
 _REPOINT_OTHER_RE = re.compile(r"--git-dir|--work-tree")
 
 
@@ -2664,7 +2670,7 @@ def _same_repo_repoint(cmd: str, here: Path, root: Path) -> Optional[Path]:
         target = m.group(1).strip("\"'").replace("\\", "/")
         if not target or target.startswith("-") or any(c in target for c in "$`~*?"):
             return None
-        path = Path(target)
+        path = Path(_msys_to_drive(target, os.name == "nt"))
         try:
             landed.add((path if path.is_absolute() else here / path).resolve())
         except OSError:
@@ -2684,9 +2690,10 @@ def _scratch_ctx_for(cmd: str, cwd: Optional[str]) -> Optional[tuple]:
     if _REPOINTS_GIT_RE.search(cmd):
         lead = _LEADING_CD_RE.match(cmd)
         rest = cmd[lead.end():] if lead else ""
-        if not lead or _REPOINTS_GIT_RE.search(rest) or not os.path.isabs(lead.group(1)):
+        target = _msys_to_drive(lead.group(1), os.name == "nt") if lead else ""
+        if not lead or _REPOINTS_GIT_RE.search(rest) or not os.path.isabs(target):
             return None
-        cwd = lead.group(1)
+        cwd = target
     here = Path(cwd).resolve()
     root = _repo_root_of(here)
     if root is None:
@@ -4867,11 +4874,7 @@ def _build_record(
 # Bash call (ls/grep/python/cat) never reaches this code, and it costs
 # nothing extra beyond the log write itself -- no additional
 # `resolve_git_root` subprocess spawn is introduced on the EM main-loop
-# path (branch `no-agent-id-key` logs with git_root left unresolved rather
-# than paying a spawn to fill it in, since that branch fires for the
-# EM's own top-level Bash calls too and this module structurally never
-# adds identity-resolution cost there). That branch is a main-thread allow,
-# not a fail-open: it logs under `_MAIN_THREAD_OUT_OF_SCOPE`.
+# path (the main-thread allow is not a fail-open and logs nothing).
 # ---------------------------------------------------------------------------
 _FAIL_OPEN_LOG_RELPATH = ("state", "destructive-guard-fail-open.log")
 _NOT_ATTEMPTED = "<not-attempted>"
@@ -4951,7 +4954,6 @@ def _log_fail_open(
     agent_type: str = "",
     subagent_type_present: bool = False,
     subagent_type: str = "",
-    label: str = "FAIL-OPEN",
 ) -> None:
     """Best-effort append a fail-open identity-resolution record to the
     settings-home fail-open log (see `_fail_open_log_path`).
@@ -4963,9 +4965,7 @@ def _log_fail_open(
     SECONDARY (`subagent_type`) identity legs -- each distinguishing
     "absent from the payload"/"never computed" from "computed and empty"
     via its own `*_present` flag -- which branch fired, and a
-    safely-truncated command. `label` is the record's
-    leading token: `FAIL-OPEN` by default, `_MAIN_THREAD_OUT_OF_SCOPE` for
-    the main-thread allow (an allow, not a fail-open).
+    safely-truncated command.
 
     A `session_id` matching `_is_synthetic_corpus_session` is dropped before
     any rotation check or write -- this package's own test corpus must never
@@ -4999,16 +4999,13 @@ def _log_fail_open(
             "cmd": _sanitize_command(cmd),
         }
         parts = " ".join(f"{k}={v!r}" for k, v in fields.items())
-        line = f"[{timestamp}] {label} {parts}\n"
+        line = f"[{timestamp}] FAIL-OPEN {parts}\n"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         from coordinator_core.session.claimed_write import append_claimed_line  # noqa: PLC0415 -- deferred: guard hot path
 
         append_claimed_line(log_path, line.encode("utf-8"))
     except Exception:  # noqa: BLE001 -- observability must never raise into check()
         pass
-
-
-_MAIN_THREAD_OUT_OF_SCOPE = "main-thread-out-of-scope"
 
 
 def _payload_names_a_subagent(payload: Dict[str, Any]) -> bool:
@@ -5417,15 +5414,10 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if deny_kind is None:
         return None
 
+    # The main thread is out of scope: an allow, not a fail-open, so it writes nothing. TRAP: a
+    # record here fires on every EM git command; per-call appends to the multi-MB settings-home log
+    # serialised guard workers on Defender's rescan of it (2-4s, 2026-11-19 canary).
     if "agent_id" not in payload and not _payload_names_a_subagent(payload):
-        _log_fail_open(
-            "no-agent-id-key",
-            payload,
-            cmd,
-            agent_type_present="agent_type" in payload,
-            agent_type=payload.get("agent_type") or "",
-            label=_MAIN_THREAD_OUT_OF_SCOPE,
-        )
         return None
 
     git_root = resolve_git_root(payload.get("cwd"))
@@ -5588,15 +5580,10 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ):
         return None
 
+    # The main thread is out of scope: an allow, not a fail-open, so it writes nothing. TRAP: a
+    # record here fires on every EM git command; per-call appends to the multi-MB settings-home log
+    # serialised guard workers on Defender's rescan of it (2-4s, 2026-11-19 canary).
     if "agent_id" not in payload and not _payload_names_a_subagent(payload):
-        _log_fail_open(
-            "no-agent-id-key",
-            payload,
-            cmd,
-            agent_type_present="agent_type" in payload,
-            agent_type=payload.get("agent_type") or "",
-            label=_MAIN_THREAD_OUT_OF_SCOPE,
-        )
         return None
 
     # ------------------------------------------------------------------

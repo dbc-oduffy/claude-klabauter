@@ -1,7 +1,7 @@
 """Per-stage byte budgets for the composed ask script (bare and m_plus arms).
 
-Fixtures follow test_ask_script_byte_headroom: hoisting on, plugin root resolved at import, the
-m_plus arm composed over a blitz padded to 279 KB.
+Both arms are measured on the production staged script (`staged_out` sink, as dispatch.emit always
+passes): bare over a raw ask, m_plus over a known m_plus sizing with a blitz padded to 279 KB.
 """
 
 from pathlib import Path
@@ -11,33 +11,25 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_script_byte_headroom impo
     _PLUGIN_ROOT,
     _padded_plan_blitz_text,
 )
+from coordinator_core.ops.dispatch_emit.tests.test_m_plus_production_shapes_under_cap import staged_m_plus
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
-def _compose(monkeypatch, *, arm, plan_blitz_text=None) -> str:
+def _measure(monkeypatch, tmp_path, arm_key) -> dict[str, int]:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     assert _PLUGIN_ROOT, "plugin root did not resolve at import"
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _PLUGIN_ROOT)
     monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9)
-    if arm:
-        monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: arm)
-    kw = {"plan_blitz_text": plan_blitz_text} if plan_blitz_text is not None else {}
-    return ask_compose.compose_ask_script(
-        repo_root=str(_REPO_ROOT), prompt="probe ask", sizing_rel=None,
-        run_id="ask-probe-000000", session_id="probe", **kw,
-    )
-
-
-def _measure(monkeypatch, arm_key) -> dict[str, int]:
-    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _PLUGIN_ROOT)
     if arm_key == "m_plus":
-        text = _padded_plan_blitz_text()
-        script = _compose(monkeypatch, arm="m_plus", plan_blitz_text=text)
-        wrapped = asb.stage_texts(plan_blitz_text=text)
+        script, _ = staged_m_plus(tmp_path)
+        wrapped = asb.stage_texts(plan_blitz_text=_padded_plan_blitz_text())
     else:
-        script = _compose(monkeypatch, arm=None)
+        script = ask_compose.compose_ask_script(
+            repo_root=str(_REPO_ROOT), prompt="probe ask", sizing_rel=None, run_id="ask-probe-000000",
+            session_id="probe", script_path="scratch/warp/x.mjs", staged_out={},
+        )
         wrapped = asb.stage_texts()
     measured = asb.stage_bytes(script, wrapped)
     print(f"{arm_key} stage bytes: {measured}; roadmap carried: {'async function roadmapBlitz(' in script}")
@@ -45,13 +37,13 @@ def _measure(monkeypatch, arm_key) -> dict[str, int]:
     return measured
 
 
-def test_bare_ask_stages_stay_inside_their_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
-    measured = _measure(monkeypatch, "bare")
+def test_bare_ask_stages_stay_inside_their_budgets(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    measured = _measure(monkeypatch, tmp_path, "bare")
     assert not asb.budget_failures("bare", measured), asb.budget_failures("bare", measured)
 
 
-def test_m_plus_ask_stages_stay_inside_their_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
-    measured = _measure(monkeypatch, "m_plus")
+def test_m_plus_ask_stages_stay_inside_their_budgets(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    measured = _measure(monkeypatch, tmp_path, "m_plus")
     assert measured["planBlitz"] > 0
     assert not asb.budget_failures("m_plus", measured), asb.budget_failures("m_plus", measured)
 

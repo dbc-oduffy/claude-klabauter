@@ -49,7 +49,8 @@ def test_xs_adoption_and_plan_rel_cover_a_gate_reply_with_resume_plan(monkeypatc
     assert "if (!_gate.halt && (_gate.arm === 'xs' || " in script
     assert "{ await _adoptStageReply(_gate.stage_reply); }" in script
     assert "(_gate.arm === 'xs' || (_gate.arm === 's' && _gate.resume_plan)" in script
-    assert "_gate.arm === 'xs' && _gate.resume_plan) { _planRel = _gate.resume_plan; }" in script
+    assert "_gate.arm === 'xs' && _gate.resume_plan) { if (" in script
+    assert "{ _planRel = _gate.resume_plan; }" in script
     assert "sizing_path: _sizingRel, gated: _gated" in script
 
 

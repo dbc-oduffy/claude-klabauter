@@ -51,14 +51,14 @@ def _decision(out):
 
 
 def test_no_flags_demotes_non_floor_deny_to_advisory(consumer) -> None:
-    consumer(_guard("guard_doctrine_surface_edits", 10, "Doctrine edit."))
+    consumer(_guard("guard_a_non_floor_stand_in", 10, "Doctrine edit."))
     out = engine.evaluate(dict(_PAYLOAD))
     assert _decision(out) == "allow"
     assert "Advisory" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_global_strict_does_not_lift_a_non_floor_guard(consumer, monkeypatch: pytest.MonkeyPatch) -> None:
-    consumer(_guard("guard_doctrine_surface_edits", 10, "Doctrine edit."))
+    consumer(_guard("guard_a_non_floor_stand_in", 10, "Doctrine edit."))
     monkeypatch.setenv(_LEVEL, "strict")
     machine_profile.reset_cache()
     assert _decision(engine.evaluate(dict(_PAYLOAD))) == "allow"
@@ -86,7 +86,7 @@ def test_floor_guard_denies_at_the_off_level(consumer, monkeypatch: pytest.Monke
 
 def test_demoted_deny_does_not_hide_a_later_floor_deny(consumer) -> None:
     consumer(
-        _guard("guard_doctrine_surface_edits", 10, "Doctrine edit."),
+        _guard("guard_a_non_floor_stand_in", 10, "Doctrine edit."),
         _guard("destructive_rm", 20, "Destructive rm."),
     )
     out = engine.evaluate(dict(_PAYLOAD))
@@ -95,7 +95,7 @@ def test_demoted_deny_does_not_hide_a_later_floor_deny(consumer) -> None:
 
 
 def test_held_advisory_returned_or_prepended_in_aggregate(consumer) -> None:
-    consumer(_guard("guard_doctrine_surface_edits", 10, "Doctrine edit."))
+    consumer(_guard("guard_a_non_floor_stand_in", 10, "Doctrine edit."))
     assert _decision(engine.evaluate(dict(_PAYLOAD))) == "allow"
     fired = engine.evaluate(dict(_PAYLOAD), aggregate=True)
     assert len(fired) == 1 and _decision(fired[0]) == "allow"

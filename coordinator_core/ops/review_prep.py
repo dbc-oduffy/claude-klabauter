@@ -590,9 +590,11 @@ def _stored_reply(
     paths: List[str],
     head: Optional[str],
     peer_bases: Optional[Callable[[], dict]] = None,
+    run_id: str = "",
 ) -> Optional[dict]:
     """The reply a success sidecar stored, or ``None`` when absent, unreadable, written before
-    replies were stored, written for another base, basis, head or path list, (worktree mode)
+    replies were stored, written for another base, basis, head or path list, (with ``run_id``)
+    not stamped with that run id (every manifest-driven run shares ``plan_id`` ``manifest``), (worktree mode)
     lacking a ``declared_sha256`` map or recorded over declared bytes that have since moved, or
     (when ``peer_bases`` is given) recorded under a ``peer_bases`` map that differs from the one it
     returns now: a peer commit can land without moving the declared bytes."""
@@ -608,6 +610,7 @@ def _stored_reply(
         or fm["basis"] != ("range" if head else "worktree")
         or fm.get("head") != (head or None)
         or fm.get("paths") != paths
+        or (run_id and fm.get("run_id") != run_id)
     ):
         return None
     if not head and not _declared_bytes_unmoved(repo_root, fm.get("declared_sha256")):
@@ -745,6 +748,8 @@ def stored_reply_for_run(
     ``covering=True`` (keyword-only, default off) flips that check: a file is kept when every
     ``within`` entry is in its ``paths``, so a review that read extra paths is still found. It has
     no effect when ``within`` is empty.
+    With ``run_key``, a file stamped with a different ``run_id`` is dropped; one with no ``run_id``
+    (stored before the stamp existed) is still kept.
     Exactly one kept file returns; none, several or an unreadable one return ``None``.
 
     ``base`` may be ``None`` only together with ``run_key``: the base check is skipped, so two
@@ -777,6 +782,8 @@ def stored_reply_for_run(
         if not isinstance(fm, dict) or any(k not in fm for k in _STORED_KEYS):
             continue
         if fm.get("agent_type") != "engine:prep-freeze" or (base and fm["run_base_sha"] != base):
+            continue
+        if run_key and fm.get("run_id") not in (None, run_key):
             continue
         paths = fm.get("paths")
         if allowed:
@@ -1000,13 +1007,13 @@ def _prepare(
 
     def served() -> Optional[dict]:
         with review_prep_legs.leg("stored_reply"):
-            return _stored_reply(repo_root, sidecar, base, paths, head, peer_bases)
+            return _stored_reply(repo_root, sidecar, base, paths, head, peer_bases, run_id)
 
     def compute_locked() -> dict:
         try:
             return served() or _compute(
                 repo_root, base, paths, slice_prefix, plan_path, head, session, share, sidecar, peer_bases(),
-                excluded, peer_held, list(undeclared_edits), own_hunk_bytes,
+                excluded, peer_held, list(undeclared_edits), own_hunk_bytes, run_id,
             )
         finally:
             try:
@@ -1053,6 +1060,7 @@ def _compute(
     peer_held: Optional[List[str]] = None,
     undeclared_edits: Optional[List[str]] = None,
     own_hunk_bytes: Optional[Mapping[str, bytes]] = None,
+    run_id: str = "",
 ) -> dict:
     if peer_bases is None:
         peer_bases = _peer_bases(repo_root, base, head, paths, session, plan_path)
@@ -1216,7 +1224,7 @@ def _compute(
         out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session, scanned, dirty or None)
     out["sidecar_path"] = _rel(sidecar, repo_root)
     with review_prep_legs.leg("write_sidecar"):
-        _write_sidecar(sidecar, out, session, paths, head)
+        _write_sidecar(sidecar, out, session, paths, head, run_id)
         _write_pointers(share, sidecar, base, slice_prefix, plan_path)
     out.pop("declared_sha256", None)
     out.pop("peer_bases", None)
@@ -1425,7 +1433,9 @@ def _write_pre_review_snapshot(
     declare_write(manifest)
 
 
-def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], head: Optional[str]) -> None:
+def _write_sidecar(
+    sidecar: Path, result: dict, session: str, paths: List[str], head: Optional[str], run_id: str = ""
+) -> None:
     fm = {
         "agent_type": "engine:prep-freeze",
         "status": "complete",
@@ -1440,6 +1450,7 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
         "undeclared_edits": result.get("undeclared_edits", []),
         "head": head or None,
         "paths": paths,
+        **({"run_id": run_id} if run_id else {}),
     }
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     text = yaml.dump(

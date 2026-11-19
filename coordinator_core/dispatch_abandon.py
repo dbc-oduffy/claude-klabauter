@@ -42,3 +42,37 @@ REPLY_MARGIN_SECS = 2.0
 def is_abandoned() -> bool:
     ev = ACTIVE.get()
     return ev is not None and ev.is_set()
+
+
+_live_lock = threading.Lock()
+_live_events: set = set()
+_HANDLER_DONE_ATTR = "handler_done"
+
+
+def note_abandoned_mutating(ev: threading.Event) -> Optional[int]:
+    """Count the sync handler thread bound to `ev` as live-after-abandonment.
+
+    Returns the live count after the increment, or None when that thread already finished
+    (a handler that exits between the budget lapsing and this call leaks nothing)."""
+    with _live_lock:
+        if getattr(ev, _HANDLER_DONE_ATTR, False):
+            return None
+        _live_events.add(ev)
+        return len(_live_events)
+
+
+def handler_finished() -> None:
+    """Called from a sync handler thread's own `finally`: retire its abandoned-live count, or
+    mark its Event done so a later `note_abandoned_mutating` ignores it."""
+    ev = ACTIVE.get()
+    if ev is None:
+        return
+    with _live_lock:
+        _live_events.discard(ev)
+        setattr(ev, _HANDLER_DONE_ATTR, True)
+
+
+def abandoned_live_count() -> int:
+    """Mutating handler threads still running after their dispatch was abandoned."""
+    with _live_lock:
+        return len(_live_events)

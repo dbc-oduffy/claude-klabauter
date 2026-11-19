@@ -52,8 +52,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def test_fail_open_log_declares_through_the_seam(tmp_path, monkeypatch):
     """entry-path class: bare process main (hook subprocess, wrapped once at
     dispatch.py::main) x seam entry point: append_claimed_line. Drives
-    `block_subagent_destructive_action.check` (the real fail-open trigger,
-    no-agent-id-key branch) inside a `declared_writes.collecting()` scope
+    `block_subagent_destructive_action._log_fail_open` (a real fail-open
+    branch) inside a `declared_writes.collecting()` scope
     (the same collection `cli_entry.recording_declared_writes` -- which
     `dispatch.main` now opens once, per D4 -- ultimately hands to the
     recorder), and asserts `declare_write` fired for the log path."""
@@ -68,13 +68,11 @@ def test_fail_open_log_declares_through_the_seam(tmp_path, monkeypatch):
     }
 
     with declared_writes.collecting() as declared:
-        result = guard.check(payload)
+        guard._log_fail_open("kind-unresolved-unparseable-agent-id", payload, payload["tool_input"]["command"])
 
-    assert result is None  # fail-open: no verdict, same as pre-migration
-    assert log_path.exists()
     content = log_path.read_text(encoding="utf-8")
-    assert "main-thread-out-of-scope" in content
-    assert "branch='no-agent-id-key'" in content
+    assert " FAIL-OPEN " in content
+    assert "branch='kind-unresolved-unparseable-agent-id'" in content
 
     assert str(log_path) in declared, (
         "block_subagent_destructive_action._log_fail_open's write must be "
