@@ -2497,6 +2497,10 @@ def test_register_claude_klabauter_root_claude_klabauter_identity_writes_both_ke
     out = capsys.readouterr().out
     assert "repos.claude_klabauter" in out
     assert "engine.working_repos.claude_klabauter" in out
+    # The publisher CLIs resolve the authoring checkout through this key; the engine root
+    # (claude_klabauter_root, the klabauter clone on a real box) holds none of them.
+    assert f"set repos.claude_klabauter {repo_root.resolve()}" in out
+    assert f"set repos.claude_klabauter {claude_klabauter_root}" not in out
 
 
 def test_register_claude_klabauter_root_klabauter_identity_writes_only_klabauter_key(setup_mod, tmp_path, monkeypatch, capsys):

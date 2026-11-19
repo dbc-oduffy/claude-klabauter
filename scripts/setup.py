@@ -2808,9 +2808,13 @@ def register_claude_klabauter_root(
 
         pending_advisories.append(_klabauter_identity_advisory)
     elif identity == IDENTITY_AUTHORING:
+        # The authoring checkout, never the engine root: claude-klabauter is never an engine, so
+        # claude_klabauter_root_resolved is the klabauter clone here, and the publisher CLIs
+        # (percolate-round, coordinator-publish) resolve via this key and live only here.
+        authoring_checkout = str(repo_root.resolve())
         key_values = {
-            "repos.claude_klabauter": str(claude_klabauter_root_resolved),
-            "engine.working_repos.claude_klabauter": str(claude_klabauter_root_resolved),
+            "repos.claude_klabauter": authoring_checkout,
+            "engine.working_repos.claude_klabauter": authoring_checkout,
         }
         discovered_klabauter = _discover_klabauter_root(repo_root, plugin_root_str)
         if discovered_klabauter:
