@@ -15,6 +15,7 @@ from coordinator_core.guard_census import BLOCK, GUIDE, Row, enumerate_write_gua
 
 _REDIRECT = {
     "guard-doctrine-surface-edits": "route the CLAUDE.md change to the EM, who edits it or sends the owning repo a memo",
+    "block-drive-root-new-dir-write": "create the directory under the repo or scratch",
 }
 
 _REGISTERED = {**deny_registry.GUARD_DENY_CLASS, **deny_registry.SUBAGENT_DENY_CLASS}

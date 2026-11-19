@@ -2767,6 +2767,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The job's processes, lock and staging are gone for every peer.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "job.cancel": OpClass.MUTATING,
+    # external_workspace.rehydrate — MUTATING: clones or resets a registered external workspace path
+    # (ops/external_workspace_rehydrate.py); `all_missing` mode only reads.
+    "external_workspace.rehydrate": OpClass.MUTATING,
     # workflow.pending_revisions — COMPUTE_ONLY: replies the unclaimed register rows of a run's
     # plan; writes nothing (ops/dispatch_emit/revise_absorb.py).
     "workflow.pending_revisions": OpClass.COMPUTE_ONLY,

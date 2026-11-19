@@ -842,6 +842,19 @@ def _reset_foreign_repo_probe_memo():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_engine_ask_nag_counter(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Point the once-per-session engine-ask nag counter at a per-test directory, so a fixed fake
+    session id never inherits a count from an earlier run on the box."""
+    import sys
+
+    warp_fire = sys.modules.get("coordinator_core.warp_fire")
+    if warp_fire is None:
+        return
+    store = _per_test_dir(request, tmp_path_factory, "engine_ask_nag")
+    monkeypatch.setattr(warp_fire, "_counter_dir", lambda: store)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_advisory_dedupe_gitdir(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     """Point the per-session advisory dedupe store at a per-test directory.
 

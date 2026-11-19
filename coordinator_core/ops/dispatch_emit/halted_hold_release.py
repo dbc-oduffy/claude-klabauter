@@ -509,6 +509,21 @@ def _withheld_keys(record: Path) -> set:
     ))
 
 
+def _seed_withheld_union(root: Path, state: dict) -> frozenset:
+    """The union of every indexed run's declared withheld paths, memoised as the scope's union when no
+    `prefetch_kept_blobs` ran, so the one `dirty_withheld` walk covers all runs. Empty when the index is
+    unreadable: each run is then tested alone."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_halted_view
+
+    union: frozenset = frozenset()
+    with contextlib.suppress(Exception):
+        union = frozenset(halted_withheld_index.withheld_by_path(root))
+    state["memo"][("withheld-union", str(root))] = union
+    if union:
+        landing_halted_view.hint_index(root, union)
+    return union
+
+
 def _dirty_withheld(root: Path, state: dict) -> Optional[frozenset]:
     """Dirty paths among every prefetched halted run's withheld paths, from ONE index walk shared by all
     runs of the scope (`own_left_behind` over the union; its dirtiness and sibling-claim filter are per
@@ -516,6 +531,8 @@ def _dirty_withheld(root: Path, state: dict) -> Optional[frozenset]:
     key = ("dirty-withheld", str(root))
     if key not in state["memo"]:
         union = state["memo"].get(("withheld-union", str(root)))
+        if union is None:
+            union = _seed_withheld_union(root, state)
         dirty = None
         if union:
             from coordinator_core.ops.dispatch_emit import landing_halted_view

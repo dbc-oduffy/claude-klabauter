@@ -49,6 +49,7 @@ def _publish_quiesce(tmp_path, monkeypatch):
     monkeypatch.setattr(
         dr, "fetch_dest_upstream", lambda root, **k: dr.RefreshResult(repo_root=root, ok=True, behind=1)
     )
+    monkeypatch.setattr(dr, "preflight_dest_refresh", lambda result: result)
     monkeypatch.setattr(dr, "fast_forward_dest", lambda result, **k: result)
     stops: list = []
     real_probe = pair_stop.probe_pair_terminable

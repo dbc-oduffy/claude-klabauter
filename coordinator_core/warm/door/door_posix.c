@@ -1022,19 +1022,34 @@ static void door_log_fail_open(const char *cause) {
     if (snprintf(path, sizeof path, "%s/state/door-fail-open.log", home) >= (int)sizeof path) return;
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
     if (fd < 0) return;
+    /* First line of <settings>/state/warm-stall-dir.txt (written by the engine); "unknown" if absent or empty. */
+    char stall_dir[384] = "unknown";
+    if (snprintf(path, sizeof path, "%s/state/warm-stall-dir.txt", home) < (int)sizeof path) {
+        int pfd = open(path, O_RDONLY | O_CLOEXEC);
+        if (pfd >= 0) {
+            char raw[sizeof stall_dir];
+            ssize_t got = read(pfd, raw, sizeof raw - 1);
+            close(pfd);
+            if (got > 0) {
+                size_t len = 0;
+                while (len < (size_t)got && raw[len] != '\n' && raw[len] != '\r') len++;
+                if (len > 0) { memcpy(stall_dir, raw, len); stall_dir[len] = '\0'; }
+            }
+        }
+    }
     time_t now = time(NULL);
     struct tm tmv;
     char ts[32] = "-";
     if (gmtime_r(&now, &tmv)) strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", &tmv);
     long long elapsed = g_call_started_ms ? monotonic_ms() - g_call_started_ms : 0;
     long long leg_ms = g_leg_started_ms ? monotonic_ms() - g_leg_started_ms : 0;
-    char line[512];
+    char line[768];
     int n = snprintf(line, sizeof line,
-                     "ts=%s deadline_ms=%d elapsed_ms=%lld op=%s door_pid=%ld leg=%s leg_ms=%lld cause=%.160s\n",
+                     "ts=%s deadline_ms=%d elapsed_ms=%lld op=%s door_pid=%ld leg=%s leg_ms=%lld cause=%.160s stall_dir=%.380s\n",
                      ts, !g_door_hook_mode ? DOOR_READ_DEADLINE_MS
                          : g_hook_read_total_ms ? g_hook_read_total_ms : door_hook_read_deadline_ms(),
                      elapsed, g_hook_op[0] ? g_hook_op : "-", (long)getpid(),
-                     g_leg, leg_ms, cause ? cause : "-");
+                     g_leg, leg_ms, cause ? cause : "-", stall_dir);
     if (n > 0) {
         if ((size_t)n >= sizeof line) { n = (int)sizeof line - 1; line[n - 1] = '\n'; }
         write_all_fd(fd, line, (size_t)n);

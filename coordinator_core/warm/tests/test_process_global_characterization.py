@@ -510,7 +510,7 @@ def test_file_lock_eviction_is_held_aware(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_engine_root_gate_memo_keys_per_interleaved_session_root(
+def test_engine_root_gate_memo_is_session_independent(
     monkeypatch, tmp_path
 ):
     """C10 -- `coordinator_engine_root_with_class`'s two-tier gate answer is
@@ -552,18 +552,16 @@ def test_engine_root_gate_memo_keys_per_interleaved_session_root(
     assert calls["n"] == 1
     assert result_a1[0] == "/repo/session-a"
 
-    # An interleaved dispatch for a DIFFERENT session/root arrives.
+    # The gate memo keys on the registry mtime pair only: the engine answer is
+    # session-independent, so an interleaved session root is served from the memo.
     current_session_root["root"] = "/repo/session-b"
     result_b1 = engine_root.coordinator_engine_root_with_class()
-    assert calls["n"] == 2
-    assert result_b1[0] == "/repo/session-b"
+    assert calls["n"] == 1
+    assert result_b1 == result_a1
 
     current_session_root["root"] = "/repo/session-a"
     result_a2 = engine_root.coordinator_engine_root_with_class()
-
-    # FIXED BEHAVIOUR (C10): session A's second call hits its own still-valid
-    # memo entry rather than recomputing -- no third gate walk.
-    assert calls["n"] == 2
-    assert result_a2[0] == "/repo/session-a"
+    assert calls["n"] == 1
+    assert result_a2 == result_a1
 
     engine_root._reset_gate_memo()

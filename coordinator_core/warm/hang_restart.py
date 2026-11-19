@@ -323,6 +323,63 @@ def note_stall(
         return None
 
 
+# The question the threshold answers: how many mutating handler threads can be stuck past their
+# abandoned dispatch before the engine has lost enough thread capacity that waiting for a hand
+# stop costs more than a restart? One slow op abandons itself; four wedged at once (the
+# 2026-11-18 io-wait pile-up held three mutating legs) is a leak that does not drain.
+ABANDONED_MUTATING_RECYCLE_THRESHOLD = 4
+ABANDONED_SOURCE = "abandoned-mutating"
+
+
+def maybe_restart_on_abandoned(
+    count: int,
+    *,
+    svc_dir,
+    server_pid: Optional[int] = None,
+    exit_fn: Optional[Callable[[int], None]] = None,
+    threshold: int = ABANDONED_MUTATING_RECYCLE_THRESHOLD,
+    min_interval: float = RESTART_MIN_INTERVAL_SECS,
+    deadline: float = _DECISION_DEADLINE_SECS,
+) -> Optional[str]:
+    """Recycle the server when `count` abandoned mutating threads are still running.
+
+    `count` comes from memory (`dispatch_abandon`), so no filesystem read precedes the exit and
+    the io-stall no-exit carve-out of `maybe_restart` does not apply: the stalled disk is the
+    case this trigger exists for. The hold / backoff / log leg runs on a helper thread bounded by
+    `deadline`; a publish or handover hold or a restart inside the backoff suppresses, an
+    unfinished leg restarts anyway. Replays nothing: admitted records read engine-restarted.
+    Returns `"restart"`, `"suppressed"` or None (below threshold). Never raises.
+    """
+    try:
+        if count < threshold:
+            return None
+        pid = os.getpid() if server_pid is None else server_pid
+        svc = Path(svc_dir)
+        verdict: list = []
+
+        def _leg() -> None:
+            try:
+                with _decision_lock:
+                    lines = _tail_lines(svc / HANG_RESTART_LOG_FILENAME)
+                    verdict.append(
+                        _record_decision(
+                            svc, pid, time.time(), count, 0.0, min_interval, [], ABANDONED_SOURCE, lines
+                        )
+                    )
+            except Exception:  # noqa: BLE001 -- an unreadable hold reads as no hold
+                verdict.append("restart")
+
+        helper = threading.Thread(target=_leg, name="hang-restart-abandoned", daemon=True)
+        helper.start()
+        helper.join(deadline)
+        if verdict and verdict[0] == "suppressed":
+            return "suppressed"
+        (exit_fn or exit_server)(pid)
+        return "restart"
+    except Exception:  # noqa: BLE001 -- the abandon path never raises
+        return None
+
+
 def _report_io_stall(
     svc: Path, pid: int, now: float, stall_dir: Path, since: float, threshold: int, window: float, lines: list
 ) -> Optional[str]:

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import re
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -141,7 +142,7 @@ def test_env_var_rung_no_longer_returns_its_candidate_verbatim(cc_invoke_mod):
         "Rung 1 (CLAUDE_KLABAUTER_ROOT env) regressed to an ambient verbatim return — "
         "it must delegate through _delegate_to_gate()."
     )
-    assert "_delegate_to_gate(existing" in source
+    assert re.search(r"_delegate_to_gate\(\s*existing\b", source)
 
 
 # ---------------------------------------------------------------------------

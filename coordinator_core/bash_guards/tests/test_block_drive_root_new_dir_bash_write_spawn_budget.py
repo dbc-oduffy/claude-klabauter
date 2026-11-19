@@ -41,7 +41,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def _raw(cmd, tool, cwd) -> str:
     return json.dumps(
-        {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(cwd), "session_id": "drive-root-spawn-budget"}
+        {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(cwd), "session_id": "drive-root-spawn-budget", "agent_id": "sub-1"}
     )
 
 
@@ -74,7 +74,7 @@ def test_guard_check_spawns_nothing_when_spawning_is_forbidden(world, tmp_path: 
         if hasattr(os, name):
             monkeypatch.setattr(os, name, forbidden)
     r = world.as_posix()
-    fire = [guard.check({"tool_name": t, "tool_input": {"command": c}, "cwd": str(tmp_path)})
+    fire = [guard.check({"tool_name": t, "tool_input": {"command": c}, "cwd": str(tmp_path), "agent_id": "sub-1"})
             for c, t in ((f"mkdir {r}/new", "Bash"), (f"mkdir {r}/new", "PowerShell"))]
     quiet = [guard.check({"tool_name": "Bash", "tool_input": {"command": c}, "cwd": str(tmp_path)})
              for c in (f"mkdir {r}/existing/a", "echo x > out.txt", "ls /e/some/path")]

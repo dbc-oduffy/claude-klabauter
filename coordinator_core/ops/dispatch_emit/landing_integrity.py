@@ -1285,6 +1285,34 @@ def _targeted_set_exists(
     return bool(_explicit_failed_tests(params) or targeted_set(params, verdict))
 
 
+def committed_image_text(
+    worktree_root: Path, landing_blobs: Mapping[str, "str | bytes | None"],
+) -> Callable[[str], Optional[str]]:
+    """``landed_text`` provider for ``import_closure_findings``: the text HEAD will hold once the
+    landing commits. A path in ``landing_blobs`` reads its blob (None = absent); every other path
+    reads HEAD through ``HeadView``. The worktree is never read, so a name only a peer's dirt binds
+    does not resolve. Non-UTF-8 blobs read as None. Zero spawns."""
+    from coordinator_core.authoring_leaks import HeadView
+
+    blobs = dict(landing_blobs)
+    head_reads: dict[str, Optional[str]] = {}
+
+    def text(rel: str) -> Optional[str]:
+        if rel in blobs:
+            blob = blobs[rel]
+            if blob is None or isinstance(blob, str):
+                return blob
+            try:
+                return blob.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        if rel not in head_reads:
+            head_reads[rel] = HeadView(worktree_root, [rel]).head_text(rel)
+        return head_reads[rel]
+
+    return text
+
+
 def import_closure_findings(
     worktree_root: Path, paths: Sequence[str], deleted: Sequence[str],
     landed_text: Optional[Callable[[str], Optional[str]]] = None,
