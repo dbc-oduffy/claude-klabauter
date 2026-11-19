@@ -3,12 +3,11 @@
 `run_phased` binds leg attribution and a hook deadline around a dispatch chain, then attaches
 `slow_phase` (top leg by wall) and `spans` (top 3) to the request row via `op_row_fields`.
 A guard loop calls `check_deadline(phase)` between guards; it raises `DeadlineStop`, which
-`run_phased` turns into the chain's held verdict (`hold_verdict`), else `no_advisory()`, plus
-`deadline_stop=<phase>`.
+`run_phased` turns into `no_advisory()` plus `deadline_stop=<phase>`.
 
 Invariant: a phase already running is never interrupted and its thread is not killed, but the
-reply does not wait for it: the chain runs in a daemon thread and `run_phased` answers the held
-verdict, else `no_advisory()`, with `deadline_stop=in_flight` once the hook deadline's reply allowance is spent.
+reply does not wait for it: the chain runs in a daemon thread and `run_phased` answers
+`no_advisory()` with `deadline_stop=in_flight` once the hook deadline's reply allowance is spent.
 The abandoned chain stops at its next `check_deadline`. Stdlib-only at import; the door's deadline constant is read lazily.
 """
 
@@ -38,23 +37,6 @@ _REPLY_ALLOWANCE_S = 0.1
 _ABANDONED: contextvars.ContextVar[Optional[threading.Event]] = contextvars.ContextVar(
     "preuse_chain_abandoned", default=None
 )
-
-
-# Verdict slot `run_phased` binds for one chain; `hold_verdict` fills it from the chain thread.
-_HELD: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar("preuse_held_verdict", default=None)
-
-
-def hold_verdict(out: Any) -> None:
-    """Record the chain's computed verdict (first call wins; a non-dict or None is not held).
-    A deadline stop or an in-flight abandonment after this answers `out`, not `no_advisory()`.
-    A no-op outside `run_phased`."""
-    slot = _HELD.get()
-    if slot is not None and isinstance(out, dict) and "verdict" not in slot:
-        slot["verdict"] = out
-
-
-def _held_or_no_advisory(slot: dict) -> Any:
-    return slot["verdict"] if "verdict" in slot else no_advisory()
 
 
 class DeadlineStop(Exception):
@@ -107,13 +89,10 @@ def _wait_budget_s() -> float:
 
 def run_phased(op_name: str, params: dict, chain: Callable[[dict], Any]) -> Any:
     """Run `chain(params)` under leg attribution and the hook deadline; attach `slow_phase` and
-    `spans` to the bound request row. If the chain raises `DeadlineStop` or is still running when the
-    hook deadline's reply allowance is spent, answer the verdict it passed to `hold_verdict`, else
-    `no_advisory()`."""
+    `spans` to the bound request row, and answer `no_advisory()` if the chain raises `DeadlineStop`
+    or is still running when the hook deadline's reply allowance is spent."""
     attr_token = leg_attribution.begin()
     deadline_token = _HOOK_DEADLINE.set(time.monotonic() + _door_deadline_s())
-    held: dict[str, Any] = {}
-    held_token = _HELD.set(held)
     try:
         abandoned = threading.Event()
         box: dict[str, Any] = {}
@@ -133,16 +112,15 @@ def run_phased(op_name: str, params: dict, chain: Callable[[dict], Any]) -> Any:
         if not done.wait(_wait_budget_s()):
             abandoned.set()
             op_row_fields.attach(deadline_stop="in_flight")
-            return _held_or_no_advisory(held)
+            return no_advisory()
         err = box.get("error")
         if err is not None:
             raise err
         return box["value"]
     except DeadlineStop as stop:
         op_row_fields.attach(deadline_stop=stop.phase or op_name)
-        return _held_or_no_advisory(held)
+        return no_advisory()
     finally:
-        _HELD.reset(held_token)
         try:
             spans = leg_attribution.summary(top=3)
             if spans:

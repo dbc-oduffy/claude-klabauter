@@ -45,7 +45,7 @@ def _supervise(repo, popen, provider: str = "codex") -> int:
                             provider=provider, mode="worker", popen=popen)
 
 
-def test_codex_worker_spawns_with_ps7_replacing_windowsapps_alias_and_writable_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_codex_worker_spawns_with_ps7_ahead_of_windowsapps_and_writable_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     apps = _pwsh_dir(tmp_path, "WindowsApps")
     ps7 = _pwsh_dir(tmp_path, "ProgramFiles", "PowerShell", "7")
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "ProgramFiles"))
@@ -60,8 +60,7 @@ def test_codex_worker_spawns_with_ps7_replacing_windowsapps_alias_and_writable_t
 
     assert _supervise(repo, popen) == 0
     entries = seen["PATH"].split(os.pathsep)
-    # Once the installed pwsh exists, the WindowsApps alias entry is dropped (4b55b04370), not ordered after it.
-    assert ps7 in entries and apps not in entries
+    assert entries.index(ps7) < entries.index(apps)
     want = str(repo / "scratch" / "codex-tmp")
     assert seen["TEMP"] == want and seen["TMP"] == want
     assert (repo / "scratch" / "codex-tmp").is_dir()

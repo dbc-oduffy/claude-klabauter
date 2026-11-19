@@ -83,7 +83,7 @@ import time
 from coordinator_core.bash_guards import leg_attribution
 from coordinator_core.bash_guards.leg_attribution import leg
 from coordinator_core.hooks._envelope import allow_advisory, context_only, deny, no_advisory, payload_of
-from coordinator_core.hooks._preuse_phases import DeadlineStop, check_deadline, hold_verdict, run_phased
+from coordinator_core.hooks._preuse_phases import DeadlineStop, check_deadline, run_phased
 from coordinator_core.ipc import register_op
 from coordinator_core.telemetry import op_row_fields
 
@@ -229,23 +229,19 @@ def _run_chain(params: dict) -> dict:
     except Exception as exc:
         return _cannot_evaluate(params, exc, "evaluate")
 
-    hold_verdict(out)
     with leg("render"):
         if _is_deny(out):
             return out
-        from coordinator_core import warp_live
+        check_deadline("prefire_survey")
+        guard_deny = _prefire_deny(params)
+        if guard_deny:
+            return guard_deny
+        if isinstance(out, dict):
+            return out
+        try:
+            from coordinator_core.hooks import nudge_em_turn_budget
 
-        with warp_live.listing_scope():
-            check_deadline("prefire_survey")
-            guard_deny = _prefire_deny(params)
-            if guard_deny:
-                return guard_deny
-            if isinstance(out, dict):
-                return out
-            try:
-                from coordinator_core.hooks import nudge_em_turn_budget
-
-                text = nudge_em_turn_budget.advisory_text(params)
-                return context_only("PreToolUse", text) if text else no_advisory()
-            except Exception:
-                return no_advisory()
+            text = nudge_em_turn_budget.advisory_text(params)
+            return context_only("PreToolUse", text) if text else no_advisory()
+        except Exception:
+            return no_advisory()

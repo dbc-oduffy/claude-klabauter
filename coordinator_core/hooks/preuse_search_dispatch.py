@@ -286,18 +286,15 @@ def _chain(params: dict) -> dict:
     if not isinstance(session_id, str) or not session_id_is_real(session_id):
         return no_advisory()
 
-    from coordinator_core import warp_live
+    check_deadline("prefire_survey")
+    with leg("prefire_survey"):
+        denied = _prefire_deny(params)
+    if denied:
+        return denied
 
-    with warp_live.listing_scope():
-        check_deadline("prefire_survey")
-        with leg("prefire_survey"):
-            denied = _prefire_deny(params)
-        if denied:
-            return denied
-
-        check_deadline("turn_budget")
-        with leg("turn_budget"):
-            turn_text = _turn_budget_text(params)
+    check_deadline("turn_budget")
+    with leg("turn_budget"):
+        turn_text = _turn_budget_text(params)
 
     def _only_turn_text() -> dict:
         return context_only("PreToolUse", turn_text) if turn_text else no_advisory()

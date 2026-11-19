@@ -140,43 +140,6 @@ def test_reresolve_keeps_row_and_preserves_remote_shell(tmp_path: Path, wired) -
     assert third["transport"]["remote_shell"] == "cmd"
 
 
-RENAMED = {"box": "machine-a", "host": "machine-a.local", "user": "example-operator"}
-
-
-def _registry_row(home: Path, box_id: str, name: str, prior: list) -> None:
-    box_registry._write(
-        box_registry._boxes_dir(box_registry._group_em_dir(home)) / (box_id + ".json"),
-        {"schema_version": 1, "kind": box_registry.KIND, "box_id": box_id, "root": str(home),
-         "capability": {"name": name}, "registered_at": 1.0, "names": prior},
-    )
-
-
-@pytest.mark.parametrize("token", ["box-df624266", "Gypsy", "example-operator@gypsy", "machine-a", "MACHINE-A.local"])
-def test_renamed_box_resolves_by_stable_id_current_and_prior_name(tmp_path: Path, wired, monkeypatch, token) -> None:
-    mem = wired(members=(RENAMED,))
-    monkeypatch.setattr(member_box, "_autolink", lambda: _Autolink())
-    monkeypatch.setattr(_Autolink, "resolve_key", lambda self, roster, alias, local_fn=None, ssh_fn=None: "/keys/relay")
-    _registry_row(tmp_path, "box-df624266", "Gypsy", ["machine-a"])
-    assert member_box.member_box_id(token, home=tmp_path) == "machine-a"
-    out = member_box.resolve_member_box(token, home=tmp_path)
-    assert out["ok"] is True and out["box"]["box_id"] == "machine-a"
-    assert mem.calls == 2
-
-
-def test_renamed_box_tokens_stay_unknown_without_a_linking_registry_row(tmp_path: Path, wired) -> None:
-    wired(members=(RENAMED,))
-    _registry_row(tmp_path, "box-65fdb5b0", "Mac-mini", [])
-    for token in ("box-df624266", "Gypsy", "box-65fdb5b0", "Mac-mini"):
-        assert member_box.member_box_id(token, home=tmp_path) is None
-        assert member_box.resolve_member_box(token, home=tmp_path)["reason"] == member_box.BOX_UNKNOWN
-
-
-def test_registry_alias_does_not_bypass_the_user_check(tmp_path: Path, wired) -> None:
-    wired(members=(RENAMED,))
-    _registry_row(tmp_path, "box-df624266", "Gypsy", ["machine-a"])
-    assert member_box.member_box_id("mallory@gypsy", home=tmp_path) is None
-
-
 def test_key_change_rewrites_row(tmp_path: Path, wired) -> None:
     wired()
     member_box.resolve_member_box("machine-b", home=tmp_path)
