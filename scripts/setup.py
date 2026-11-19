@@ -3631,7 +3631,16 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
     print()
     print("--- Verification: post-install health probe ---")
 
-    probe = claude_klabauter_root_resolved / "bin" / "claude-klabauter-doctor-probe.py"
+    # The engine root is the klabauter clone, where percolate ships the probe under the
+    # mirror's name; the claude-klabauter name serves an authoring tree.
+    probe = next(
+        (
+            claude_klabauter_root_resolved / "bin" / name
+            for name in ("claude-klabauter-doctor-probe.py", "claude-klabauter-doctor-probe.py")
+            if (claude_klabauter_root_resolved / "bin" / name).is_file()
+        ),
+        claude_klabauter_root_resolved / "bin" / "claude-klabauter-doctor-probe.py",
+    )
     if not probe.is_file():
         print("[ADVISORY] bin/claude-klabauter-doctor-probe not found at expected path — skipping post-install health check.")
         print("  Run 'python bin/claude-klabauter-doctor-probe.py --triage' after setup completes.")
