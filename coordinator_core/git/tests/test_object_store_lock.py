@@ -116,6 +116,7 @@ def test_two_real_processes_never_overlap(common_dir: Path, tmp_path: Path):
         assert prev_end <= next_start, "two holders were inside the lock at once"
 
 
+@pytest.mark.deliberate_wall_clock(reason="raising busy inside the caller's wait deadline is the behaviour under test")
 def test_held_elsewhere_raises_busy_within_wait(common_dir: Path, tmp_path: Path):
     ready = tmp_path / "ready"
     holder = _spawn(_HOLDER_CHILD, str(common_dir), str(ready), stdin=subprocess.PIPE)

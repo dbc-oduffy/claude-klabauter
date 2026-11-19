@@ -1017,6 +1017,45 @@ def _open_pipe(endpoint: str):
     return io
 
 
+#: Bounded pre-delivery wait for a free pipe instance on Windows, inside the liveness read deadline.
+PIPE_BUSY_WAIT_SECS = 1.5
+_PIPE_BUSY_POLL_SECS = 0.02
+_PIPE_BUSY_WAIT_SLICE_SECS = 0.25
+
+
+def _open_pipe_waiting(endpoint: str) -> Any:
+    """`_open_pipe`, retried for up to `PIPE_BUSY_WAIT_SECS` while every pipe instance is busy
+    (Windows `ERROR_PIPE_BUSY` / `EINVAL`), so each call makes its own round trip instead of failing
+    open. Pre-delivery only: nothing has been sent, so a retry cannot duplicate a request. The last
+    busy error is re-raised once the wait is spent; every other error passes through at once."""
+    deadline = time.monotonic() + PIPE_BUSY_WAIT_SECS
+    while True:
+        try:
+            return _open_pipe(endpoint)
+        except OSError as exc:
+            busy = getattr(exc, "winerror", None) == ERROR_PIPE_BUSY or (
+                sys.platform == "win32" and exc.errno == errno.EINVAL
+            )
+            left = deadline - time.monotonic()
+            if not busy or left <= 0:
+                raise
+            _wait_pipe_instance(endpoint, min(left, _PIPE_BUSY_WAIT_SLICE_SECS))
+
+
+def _wait_pipe_instance(endpoint: str, secs: float) -> None:
+    """Block until the pipe has a free instance (`WaitNamedPipeW`) or `secs` pass; a short sleep where
+    the call is unavailable or fails."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            if ctypes.windll.kernel32.WaitNamedPipeW(endpoint, max(1, int(secs * 1000))):
+                return
+        except (AttributeError, OSError):
+            pass
+    time.sleep(min(secs, _PIPE_BUSY_POLL_SECS))
+
+
 #: Sentinel distinguishing "the deadline expired" from "the server sent an
 #: empty frame". The old `Optional[bytes]` return conflated them, which was
 #: harmless while both went cold and is not once they diverge.
@@ -1551,8 +1590,12 @@ def _run_bounded(fn, deadline: float):
     return box[0] if box else None
 
 
-def _count_unanswered(token: str, now: float) -> int:
-    """One more unanswered call for `token`; the run restarts at 1 for another token or a stale file."""
+def _count_unanswered(token: str, now: float, started: Optional[float] = None) -> int:
+    """One more unanswered call for `token`; the run restarts at 1 for another token or a stale file.
+
+    A call that began before the last counted one gave up (`started` < its stamp) was in flight
+    beside it, so it is the same delay seen twice: it adds nothing and the count is returned as is.
+    """
     path = _unanswered_path()
     count = 1
     # Read-modify-write is unlocked: a concurrent caller can lose an increment, which only delays
@@ -1560,6 +1603,8 @@ def _count_unanswered(token: str, now: float) -> int:
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
         if record.get("token") == token and 0.0 <= now - float(record["last"]) < _UNANSWERED_CHAIN_SECS:
+            if started is not None and started < float(record["last"]):
+                return int(record["count"])
             count = int(record["count"]) + 1
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass
@@ -1609,12 +1654,13 @@ def _request_restart(count: int) -> Optional[str]:
     )
 
 
-def _note_unanswered(token: str) -> Optional[str]:
-    """Count one unanswered call against `token`; at `UNANSWERED_RESTART_K` request a backed-off
-    restart. Returns a note for the caller's text, or None for "no decision" (below K, a dead
-    pid, any OSError or overrun). Never raises."""
+def _note_unanswered(token: str, started: Optional[float] = None) -> Optional[str]:
+    """Count one unanswered call (begun at wall-clock `started`) against `token`; at
+    `UNANSWERED_RESTART_K` request a backed-off restart. Calls overlapping an already counted
+    one add nothing, so one delay seen by concurrent hooks never reaches K. Returns a note for the
+    caller's text, or None for "no decision" (below K, a dead pid, any OSError or overrun). Never raises."""
     try:
-        count = _run_bounded(lambda: _count_unanswered(token, time.time()), _UNANSWERED_DEADLINE_SECS)
+        count = _run_bounded(lambda: _count_unanswered(token, time.time(), started), _UNANSWERED_DEADLINE_SECS)
         if count is None or count < UNANSWERED_RESTART_K:
             return None
         note = _run_bounded(lambda: _request_restart(count), _UNANSWERED_DEADLINE_SECS)
@@ -1970,13 +2016,14 @@ def _try_warm_dispatch_inner(
             json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n",
         )
 
+    call_started = time.time()
     for attempt in range(2):
         if attempt:
             rebuilt = _retoken(token)
             if rebuilt:
                 token, pipe, payload = rebuilt
         try:
-            fh = _open_pipe(pipe)
+            fh = _open_pipe_waiting(pipe)
         except (FileNotFoundError, ConnectionRefusedError):
             # The engine stamp can flip between this call's token read and its open (a publish
             # handover): the pipe named for the old token is gone and the successor serves the new
@@ -2024,16 +2071,17 @@ def _try_warm_dispatch_inner(
             # never spawn (spawning here is the storm the table forbids).
             # Raised by `settimeout`, which sets NO errno, so it cannot be
             # classified by the `exc.errno` tests below.
-            _note_unanswered(token)
+            _note_unanswered(token, call_started)
             _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
         except OSError as exc:
             if getattr(exc, "winerror", None) == ERROR_PIPE_BUSY:
-                _note_unanswered(token)
+                # Busy after the bounded wait: a contended server, not evidence of a hung one, so it
+                # never counts toward UNANSWERED_RESTART_K.
                 _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
                 return None
             if exc.errno in _CONTENDED_ERRNOS:
-                _note_unanswered(token)
+                _note_unanswered(token, call_started)
                 # The same contended-server outcome reached without the
                 # deadline firing: a non-blocking-ish refusal from the
                 # accept queue (EAGAIN), or a connection the kernel set up
@@ -2043,13 +2091,13 @@ def _try_warm_dispatch_inner(
                 _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
                 return None
             if exc.errno == errno.EINVAL:
-                _note_unanswered(token)
                 # A second, distinct contended-pipe outcome -- see the
                 # module docstring's anti-storm table row for this branch
                 # (problem 4 of the 2026-08-19 concurrency problem set).
                 # Never a named winerror==231 case (that branch above would
                 # already have caught it), but empirically just as much
-                # "server up, contended" as ERROR_PIPE_BUSY is -- go cold,
+                # "server up, contended" as ERROR_PIPE_BUSY is (so, like it, never
+                # counted toward UNANSWERED_RESTART_K) -- go cold,
                 # never spawn, and never fall through to Backstop 2's
                 # generic stderr write for a classified outcome.
                 _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
@@ -2086,7 +2134,7 @@ def _try_warm_dispatch_inner(
             if ml_secs is not None:
                 line = pending.wait(ml_secs)
                 if line is _TIMED_OUT:
-                    _note_unanswered(token)
+                    _note_unanswered(token, call_started)
                     return _machine_local_timeout_response(msg, ml_secs)
             else:
                 line = pending.wait(liveness_secs)
@@ -2097,13 +2145,13 @@ def _try_warm_dispatch_inner(
                 # it is WORKING. Keep waiting on the SAME read (never a second
                 # request) up to the mutation's own deadline.
                 if not _op_may_mutate(_classified_op_name(msg)):
-                    _note_unanswered(token)
+                    _note_unanswered(token, call_started)
                     _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
                     return None
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
-                    restart_note = _note_unanswered(token)
+                    restart_note = _note_unanswered(token, call_started)
                     if _frame_is_replay_safe(msg):
                         _last_cold_bucket = COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY
                         _params = msg.get("params")

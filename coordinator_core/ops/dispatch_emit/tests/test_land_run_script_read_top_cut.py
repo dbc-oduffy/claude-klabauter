@@ -66,7 +66,7 @@ import time
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import halted_run, halted_withheld_index, sibling_claims
+from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, halted_withheld_index, sibling_claims
 from coordinator_core.session import core as session_core
 
 WANTED = "src/landing.py"
@@ -154,7 +154,9 @@ def test_a_run_without_an_index_entry_has_its_marker_read(repo, marker_reads) ->
     halted_withheld_index.remove_run(repo, holder)
     marker_reads.clear()
     assert sibling_claims.index_clear_runs(repo, [WANTED]) == frozenset()
-    assert [r.name for r, _ in sibling_claims.halted_records(repo, "ask-own", [WANTED])] == [holder]
+    with halted_hold_release.release_scope():
+        halted_hold_release.record_stamps(repo)  # the landing's own pass holds this view
+        assert [r.name for r, _ in sibling_claims.halted_records(repo, "ask-own", [WANTED])] == [holder]
     assert holder in marker_reads
 
 

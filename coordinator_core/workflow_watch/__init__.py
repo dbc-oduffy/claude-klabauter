@@ -342,7 +342,7 @@ def _write_unrecorded_end_halt(
             return
         run_id, sizing_rel, _launched_at = found
         outcome = commit_leg_outcome(stall._tail_text(journal_path, stall.JOURNAL_TAIL_BYTES))
-        if outcome is not None and outcome[1] == "committed":
+        if outcome is not None and outcome[1] in ("committed", "rows-unlanded"):
             return
         marker = halt_run_on_unrecorded_end(
             ask_contract.record_dir(base, run_id), terminal_status=terminal_status, sizing_rel=sizing_rel,

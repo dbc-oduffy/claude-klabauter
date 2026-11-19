@@ -11,7 +11,12 @@ the join and is not gated by it), spawned_children (subprocess.Popen calls), chi
 0 on Windows), answer, state, nag_in_answer (the DIY nag reached `hookSpecificOutput.additionalContext` or a
 top-level `additionalContext`), degrade_rows (rows appended to host-guard-degrades.jsonl: a guard degrade),
 cold_run_rows (rows in the shim's warm/degrade.jsonl sink: the engine gave no verdict, telemetry not a degrade).
-Process time only, never wall clock. `importtime_top10` comes from a second fresh
+in_join_wall_secs is the perf_counter delta around the same span (the budget's clock; reported, never gated:
+wall time measures peer load). The `grok_fresh` row is a live-shaped first call: fresh uuid session id, empty
+settings home and warm base, scratch repo apart from the engine root; `phases` is cProfile cumulative seconds of
+the top in-join functions (second fresh run). The `grok_live` row runs the exact hook command line
+(`unimatrix-host-guard.py --host grok --engine-root <HOST_GUARD_PROBE_ENGINE_ROOT or this repo>`, payload on stdin) as
+a fresh process on a search_replace payload and reports whole-process `wall_secs`, answer, state and `phases`. `importtime_top10` comes from a second fresh
 interpreter under `-X importtime` (its inflated timing is not a cost figure): the ten largest cumulative-us
 modules. The grok run targets a scratch repo whose lane record holds an over-bound edit (provider env set), so the
 nag path is measured; the codex and agy rows have no nag. The settings home and warm runtime base are fresh scratch dirs, so no warm socket exists; both are
@@ -75,18 +80,36 @@ GUARD_CHILD_CODE = (
     "def cold_runs():\n"
     "    from coordinator_core.warm import telemetry\n"
     "    return lines(telemetry.degrade_path())\n"
+    "prof = []\n"
+    "if len(sys.argv) > 4 and sys.argv[4] == 'profile':\n"
+    "    import cProfile\n"
+    "    real_run = guard_mod._run_shim\n"
+    "    def profiled(*a):\n"
+    "        pr = cProfile.Profile()\n"
+    "        prof.append(pr)\n"
+    "        pr.runcall(real_run, *a)\n"
+    "    guard_mod._run_shim = profiled\n"
     "t_before = os.times()\n"
-    "p0 = time.process_time()\n"
+    "p0, w0 = time.process_time(), time.perf_counter()\n"
     "answer, state = guard_mod.guard(host, payload, repo)\n"
-    "in_join = time.process_time() - p0\n"
+    "in_join, in_join_wall = time.process_time() - p0, time.perf_counter() - w0\n"
     "t_after = os.times()\n"
     "whole = time.process_time()\n"
     "subprocess.Popen = orig\n"
+    "phases = None\n"
+    "if prof:\n"
+    "    import pstats\n"
+    "    st = pstats.Stats(prof[0]).stats\n"
+    "    want = ('_measure', 'nag_text', 'lane_path', 'advisory_for_dispatch', 'decide', '_execute_child', 'hub_dir', 'resolve_hub')\n"
+    "    rows = [(v[3], k) for k, v in st.items() if k[2] in want or (repo in k[0] and not k[0].startswith('<'))]\n"
+    "    rows.sort(reverse=True)\n"
+    "    phases = {os.path.basename(k[0]) + ':' + k[2]: round(ct, 4) for ct, k in rows[:14]}\n"
     "try:\n"
     "    after, cold = lines(guard_mod.degrade_log_path()), cold_runs()\n"
     "except Exception:\n"
     "    after, cold = 0, 0\n"
     "print(json.dumps({'whole_process_secs': round(whole, 4), 'in_join_secs': round(in_join, 4),\n"
+    "    'in_join_wall_secs': round(in_join_wall, 4), 'phases': phases,\n"
     "    'spawned_children': count[0],\n"
     "    'children_cpu_secs': round((t_after[2] + t_after[3]) - (t_before[2] + t_before[3]), 4),\n"
     "    'answer': answer, 'state': state, 'degrade_rows': after, 'cold_run_rows': cold}))\n"
@@ -158,6 +181,129 @@ def carries_nag(answer):
     if isinstance(nested, dict) and nested.get("additionalContext"):
         return True
     return bool(answer.get("additionalContext"))
+
+
+def grok_fresh_env(work):
+    """Env for a live-shaped fresh Grok call: provider grok, settings home and warm base empty dirs under `work`."""
+    home, warm = work / "fresh-home", work / "fresh-warm"
+    home.mkdir(exist_ok=True)
+    warm.mkdir(exist_ok=True)
+    return {**os.environ, "COORDINATOR_AGENT_PROVIDER": "grok", "COORDINATOR_SETTINGS_HOME": str(home),
+            "COORDINATOR_WARM_RUNTIME_BASE": str(warm)}
+
+
+def grok_fresh_argv(work, tag, profile=False):
+    """argv for GUARD_CHILD_CODE: engine root REPO, a fresh uuid session id, and a scratch repo (separate from the
+    engine) whose .coordinator-local holds only the lane record prepare_nag_repo writes."""
+    sid = str(uuid.uuid4())
+    repo = work / f"fresh-repo-{tag}"
+    prepare_nag_repo(repo, sid)
+    tool_input = {**GROK_PAYLOAD["tool_input"], "file_path": str(repo / "delta.py")}
+    payload = {**GROK_PAYLOAD, "cwd": str(repo), "workspaceRoot": str(repo), "session_id": sid, "sessionId": sid,
+               "tool_input": tool_input, "toolInput": tool_input}
+    argv = [str(REPO), "grok", json.dumps(payload)]
+    return argv + ["profile"] if profile else argv
+
+
+def grok_fresh_row(work):
+    """The grok_fresh row: a fresh interpreter, fresh session id, empty settings home and warm base; wall and process
+    time around guard(), plus a cProfile `phases` map from a second fresh run (profiling inflates its own timing)."""
+    out = run_child(grok_fresh_argv(work, "cost"), env=grok_fresh_env(work))
+    try:
+        row = json.loads(out.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        row = {"error": "child_failed", "returncode": out.returncode, "stderr_tail": out.stderr[-400:]}
+    row["host"] = "grok_fresh"
+    row["nag_in_answer"] = carries_nag(row.get("answer"))
+    prof = run_child(grok_fresh_argv(work, "profile", profile=True), env=grok_fresh_env(work))
+    try:
+        row["phases"] = json.loads(prof.stdout.strip().splitlines()[-1]).get("phases")
+    except (IndexError, ValueError):
+        row["phases"] = {"error": prof.stderr[-300:]}
+    return row
+
+
+# argv: hook script, engine root, then the hook CLI argv. Loads the real hook script, profiles the worker-thread
+# _run_shim (cProfile sees only its own thread), then runs main() on the stdin payload; prints the phases map.
+LIVE_PROFILE_CODE = (
+    "import cProfile, importlib.util, io, json, os, pstats, sys\n"
+    "script, engine = sys.argv[1], sys.argv[2]\n"
+    "sys.path.insert(0, engine)\n"
+    "spec = importlib.util.spec_from_file_location('unimatrix_host_guard', script)\n"
+    "gm = importlib.util.module_from_spec(spec)\n"
+    "spec.loader.exec_module(gm)\n"
+    "prof = []\n"
+    "real = gm._run_shim\n"
+    "def profiled(*a):\n"
+    "    pr = cProfile.Profile()\n"
+    "    prof.append(pr)\n"
+    "    pr.runcall(real, *a)\n"
+    "gm._run_shim = profiled\n"
+    "out = sys.stdout\n"
+    "sys.stdout = io.StringIO()\n"
+    "gm.main(sys.argv[3:])\n"
+    "sys.stdout = out\n"
+    "st = pstats.Stats(prof[0]).stats if prof else {}\n"
+    "rows = sorted(((v[3], k) for k, v in st.items() if not k[0].startswith('<') and 'coordinator' in k[0].replace(chr(92), '/')), reverse=True)\n"
+    "print(json.dumps({os.path.basename(k[0]) + ':' + k[2]: round(ct, 4) for ct, k in rows[:14]}))\n"
+)
+
+
+def live_engine_root():
+    """Engine root for the live-command row: HOST_GUARD_PROBE_ENGINE_ROOT (e.g. the klabauter checkout), else REPO."""
+    return os.environ.get("HOST_GUARD_PROBE_ENGINE_ROOT") or str(REPO)
+
+
+def grok_live_cli(engine_root):
+    """The Grok hook command line, argv form: `python unimatrix-host-guard.py --host grok --engine-root <engine>`."""
+    return [str(BIN / "unimatrix-host-guard.py"), "--host", "grok", "--engine-root", str(engine_root)]
+
+
+def grok_live_payload(work, tag, lane=True):
+    """(stdin payload JSON, repo) for one live-shaped search_replace PreToolUse call on a fresh uuid session. With
+    `lane`, the scratch repo's `.coordinator-local` holds only the lane record (the nag answers before the guard
+    chain); without, the cwd is a bare directory with no lane record, so the write-guard chain runs (the shape that
+    timed out live)."""
+    sid = str(uuid.uuid4())
+    repo = work / f"live-repo-{tag}-{'lane' if lane else 'nolane'}"
+    if lane:
+        prepare_nag_repo(repo, sid)
+    else:
+        repo.mkdir()
+    tool_input = {"file_path": str(repo / "x.txt"), "old_string": "", "new_string": "x = 1\n" * 20}
+    payload = {**GROK_PAYLOAD, "cwd": str(repo), "workspaceRoot": str(repo), "session_id": sid, "sessionId": sid,
+               "tool_input": tool_input, "toolInput": tool_input}
+    return json.dumps(payload), repo
+
+
+def grok_live_row(work, lane=True):
+    """The grok_live row: the exact hook command run as a fresh process on a search_replace payload, wall clock around
+    the whole process (`wall_secs`: interpreter start, import, guard, write), the answer, the degrade rows it
+    appended, and a `phases` map (cProfile cumulative seconds of the in-join functions, second fresh run)."""
+    engine = live_engine_root()
+    env = grok_fresh_env(work)
+    stdin, _ = grok_live_payload(work, "cost", lane)
+    t0 = time.perf_counter()
+    out = subprocess.run([sys.executable, *grok_live_cli(engine)], input=stdin, capture_output=True, text=True,
+                         timeout=120, creationflags=NO_WINDOW, env=env)
+    wall = time.perf_counter() - t0
+    try:
+        answer = json.loads(out.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        answer = None
+    state = (out.stderr.strip().splitlines() or [""])[-1]
+    log = Path(env["COORDINATOR_SETTINGS_HOME"]) / "host-hooks" / "host-guard-degrades.jsonl"
+    row = {"host": "grok_live" if lane else "grok_live_nolane", "engine_root": engine, "wall_secs": round(wall, 4), "answer": answer,
+           "state": state, "nag_in_answer": carries_nag(answer), "degrade_rows": count_lines(log)}
+    pstdin, _ = grok_live_payload(work, "profile", lane)
+    prof = subprocess.run([sys.executable, "-c", LIVE_PROFILE_CODE, *grok_live_cli(engine)[:1], engine,
+                           *grok_live_cli(engine)[1:]], input=pstdin, capture_output=True, text=True, timeout=120,
+                          creationflags=NO_WINDOW, env=grok_fresh_env(work))
+    try:
+        row["phases"] = json.loads(prof.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        row["phases"] = {"error": prof.stderr[-300:]}
+    return row
 
 
 def run_child(argv, extra_flags=(), env=None):
@@ -253,6 +399,10 @@ def main():
             row, imp = guard_row(host, work)
             print(json.dumps(row))
             imports.append(imp)
+
+        print(json.dumps(grok_fresh_row(work)))
+        print(json.dumps(grok_live_row(work)))
+        print(json.dumps(grok_live_row(work, lane=False)))
 
         guard_mod = load_sibling("unimatrix-host-guard")
         agy_mod = load_sibling("unimatrix-agy-hook-pretool")

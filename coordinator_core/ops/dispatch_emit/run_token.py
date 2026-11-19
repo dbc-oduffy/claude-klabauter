@@ -755,7 +755,7 @@ def admits(repo_root: Path, run_id: object, token: object, script_path: object) 
     it. Claims nothing, so a guard that admits a command whose op then fails to parse strands
     no record; two racing invocations can both pass here and `redeem` refuses the loser.
     An admit is real run activity: it also throttle-stamps the run's `last_activity_at`
-    (`ask_contract.touch_run_activity`); that heartbeat never fails the admit."""
+    (`ask_contract.touch_run_activity_deferred`, off the caller's path); that heartbeat never fails the admit."""
     if not _well_formed(run_id, token, script_path):
         return False
     admitted = _matches(_read_rec(repo_root, run_id), run_id, token, script_path, repo_root)
@@ -766,10 +766,10 @@ def admits(repo_root: Path, run_id: object, token: object, script_path: object) 
 
 def _heartbeat(repo_root: Path, run_id: str) -> None:
     try:
-        from coordinator_core.ops.dispatch_emit.ask_contract import touch_run_activity
+        from coordinator_core.ops.dispatch_emit.ask_contract import touch_run_activity_deferred
         from coordinator_core.session import record_homes
 
-        touch_run_activity(Path(record_homes.home_dir(str(repo_root), "warp")) / run_id)
+        touch_run_activity_deferred(Path(record_homes.home_dir(str(repo_root), "warp")) / run_id)
     except Exception:  # noqa: BLE001 -- a heartbeat must never fail an admit
         pass
 

@@ -1265,11 +1265,15 @@ def _append_rows(
 
 def render(ledger: Ledger, run_id: str) -> str:
     where = f"the requirement_register of {ledger.sizing_rel}" if ledger.sizing_rel else "this run (sizing not yet bound)"
+    relayed = any(item.origin == ORIGIN_RELAYED for item in ledger.items)
+    ask_clause = (
+        "the ask (origin `relayed`: an EM's relay, not the PM's words; a `pm_verbatims` row outranks it)"
+        if relayed else "the ask (origin `ask`: the PM's own words as submitted)"
+    )
     lines = [
         f"# Requirements -- run {run_id}",
         "",
-        f"Every row of {where} still to deliver: the PM's words, the ask (origin `relayed`: an EM's relay, "
-        "not the PM's words; a `pm_verbatims` row outranks it), and each revision the EM "
+        f"Every row of {where} still to deliver: the PM's words, {ask_clause}, and each revision the EM "
         "(or a peer session, named in `from`) sent while the run was in flight, in the order they "
         "arrived. A revision governs over an earlier row it changes.",
         "",
@@ -3194,9 +3198,21 @@ def _token_not_a_runner(root: Path, run_id: str) -> bool:
         marker = halted_run._read(record_dir(root, run_id))
         if marker and ABANDONED_AT_MINTED in (marker.get("halted"), marker.get(halted_run.HALT_REASON_FIELD)):
             return True
-        return bool(warp_live.runner_unproven(root, run_id))
+        return _fire_worker_exited(root, run_id) or bool(warp_live.runner_unproven(root, run_id))
     except Exception:  # noqa: BLE001 -- unknown never reports a run dead
         return False
+
+
+def _fire_worker_exited(root: Path, run_id: str) -> bool:
+    """True when the fire registry holds a record for `run_id` and every one is `exited`: the worker
+    is gone, so the run is dead. Registry reads only; a read failure answers False."""
+    try:
+        from coordinator_core.ops.workflow_fire import fire
+
+        records = [r for r in fire._list_records(fire._registry_dir(str(root))) if r.get("run_id") == run_id]
+    except Exception:  # noqa: BLE001 -- unknown never reports a run dead
+        return False
+    return bool(records) and all(r.get("state") == "exited" for r in records)
 
 
 def _rows_owe_work(root: Path, sizing_rel: Optional[str], ids: Sequence[str]) -> bool:
@@ -3233,6 +3249,8 @@ def _own_token_unproven(root: Path, run_id: str, run_token) -> bool:
             return False
         marker = halted_run.read_strict(record_dir(root, run_id))
         if marker and ABANDONED_AT_MINTED in (marker.get("halted"), marker.get(halted_run.HALT_REASON_FIELD)):
+            return False
+        if _fire_worker_exited(root, run_id):
             return False
         return bool(warp_live.runner_unproven(root, run_id))
     except Exception:  # noqa: BLE001 -- unknown never words a run unproven

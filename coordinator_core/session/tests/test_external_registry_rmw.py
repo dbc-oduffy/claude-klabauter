@@ -170,8 +170,12 @@ def test_registry_reuses_observed_cli_audience_for_native_start(live,monkeypatch
     import psutil
     host=psutil.Process(0).parents()[0]
     host.cmdline=lambda:argv
-    for name in ('COORDINATOR_AGENT_ROLE','COORDINATOR_AGENT_WORKER','COORDINATOR_JOB_MODE'):
+    for name in ('COORDINATOR_AGENT_ROLE','COORDINATOR_AGENT_WORKER','COORDINATOR_JOB_MODE','COORDINATOR_PARENT_SESSION_ID'):
         monkeypatch.delenv(name,raising=False)
+    if expected=='worker':
+        # A root `codex exec` with no engine-issued contract classifies em by design (3f73298f59);
+        # the worker audience needs the parent-session stamp an engine child carries.
+        monkeypatch.setenv('COORDINATOR_PARENT_SESSION_ID',SID)
     row=registry.register_current({'session_id':SID,'cwd':str(live),'hook_event_name':'SessionStart','source':'startup'},live)
     assert row['role']==expected
 

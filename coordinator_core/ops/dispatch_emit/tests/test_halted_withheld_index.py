@@ -230,3 +230,59 @@ def test_record_withheld_mirrors_sizing_and_prints_into_index(tmp_path: Path) ->
     assert list(entry.prints) == ["a.py"] and len(entry.prints["a.py"]) == 40
     halted_run.mark_resumed(rec)
     assert idx.entries(tmp_path) == {}
+
+
+def _settled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(idx, "_SNAPSHOT_SETTLE_NS", -1)
+
+
+def test_a_settled_listing_is_kept_and_an_add_or_remove_drops_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _settled(monkeypatch)
+    idx.rebuild(tmp_path)
+    idx.add_run(tmp_path, "run-a", ["a.py"])
+    assert list(idx.entries(tmp_path)) == ["run-a"]
+    scans = []
+    real = idx._scan
+    monkeypatch.setattr(idx, "_scan", lambda index, state=None: scans.append(1) or real(index, state))
+    assert list(idx.entries(tmp_path)) == ["run-a"]
+    assert scans == []
+    idx.add_run(tmp_path, "run-b", ["b.py"])
+    assert sorted(idx.entries(tmp_path)) == ["run-a", "run-b"]
+    idx.remove_run(tmp_path, "run-a")
+    assert list(idx.entries(tmp_path)) == ["run-b"]
+
+
+def test_a_listing_inside_the_settle_window_is_not_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(idx, "_SNAPSHOT_SETTLE_NS", 10**15)
+    idx.rebuild(tmp_path)
+    idx.add_run(tmp_path, "run-a", ["a.py"])
+    idx.entries(tmp_path)
+    assert os.fspath(idx._dir(tmp_path)) not in idx._SNAPSHOT
+
+
+def test_a_truncated_scan_is_not_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _settled(monkeypatch)
+    idx.rebuild(tmp_path)
+    idx.add_run(tmp_path, "run-a", ["a.py"])
+    monkeypatch.setattr(idx, "READ_DEADLINE_SECS", -1.0)
+    assert idx.entries(tmp_path) == {}
+    assert os.fspath(idx._dir(tmp_path)) not in idx._SNAPSHOT
+
+
+def test_rebuild_names_every_halted_run_and_a_file_a_peer_created_mid_scan_keeps_its_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _marker(tmp_path, "run-a", "halted", {"a.py": "x"})
+    _marker(tmp_path, "run-b", "halted", {"b.py": "y"})
+    real = idx._publish_bare
+
+    def peer_first(file: str, data: bytes):
+        if file.endswith("run-a.json"):
+            idx.add_run(tmp_path, "run-a", ["peer.py"])  # a peer's halt lands between the listing and the write
+        return real(file, data)
+
+    monkeypatch.setattr(idx, "_publish_bare", peer_first)
+    idx.rebuild(tmp_path)
+    got = idx.entries(tmp_path)
+    assert sorted(got) == ["run-a", "run-b"]
+    assert set(got["run-a"].paths) == {"a.py", "peer.py"}

@@ -89,7 +89,19 @@ def test_no_marker_written_means_no_land(tmp_path: Path, lands: list) -> None:
     assert lands == []
 
 
-@pytest.mark.parametrize("reply", [{"committed": False, "error": "nope", "refused": "x"}, "boom"])
+def test_rows_unlanded_commit_leg_writes_no_unrecorded_end_halt(
+    tmp_path: Path, lands: list, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record_dir, journal = _setup(tmp_path)
+    from coordinator_core.ops.dispatch_emit import commit_stage_halt
+
+    monkeypatch.setattr(commit_stage_halt, "commit_leg_outcome", lambda _t: ("commit", "rows-unlanded", "a.py"))
+    workflow_watch._write_unrecorded_end_halt(journal, "failed", SCRIPT, root=tmp_path)
+    assert lands == []
+    assert halted_run.read_strict(record_dir) is None
+
+
+@pytest.mark.parametrize("reply", [{"committed": False,"error": "nope", "refused": "x"}, "boom"])
 def test_land_refusal_or_failure_leaves_marker_and_logs_advisory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, reply
 ) -> None:

@@ -52,7 +52,7 @@ def fake_cli(tmp_path, monkeypatch, *, result: str = '{"ok":true}', exit_code: i
         f"time.sleep({delay!r})\n"
         "args=sys.argv[1:]\n"
         "prompt=sys.stdin.read()\n"
-        f"open({str(tmp_path / 'capture.json')!r},'w',encoding='utf-8').write(json.dumps({{'argv':args,'prompt':prompt,'env':dict(os.environ),'cwd':os.getcwd()}}))\n"
+        f"open({str(tmp_path / 'capture.json')!r},'w',encoding='utf-8').write(json.dumps({{'argv':args,'prompt':prompt,'env':{{k:v for k,v in os.environ.items() if k=='PATH' or k.startswith(('COORDINATOR_','CODEX_','OPENAI_'))}},'cwd':os.getcwd()}}))\n"
         f"open(args[args.index('-o')+1],'w',encoding='utf-8').write({result!r})\n"
         f"events={events!r}\n"
         "for event in (events if events is not None else [{'type':'turn.completed'}]): print(json.dumps(event))\n"

@@ -22,6 +22,13 @@ def test_full_payload_prints_name_before_compact_and_spend(tmp_path: Path, monke
     assert out.startswith("grok-one · ") and "40% ctx" in out and out.endswith("~$1.23")
 
 
+def test_threshold_nested_under_context_window_renders_before_compact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    peers(tmp_path, monkeypatch, [{"vendor": "grok", "target": "s1", "name": "grok-one"}])
+    out = grok.line({"session_id": "s1", "context_window": {"remaining_percentage": 72, "auto_compact_threshold_percent": 80},
+                     "cost": {"total_cost_usd": 1.5}})
+    assert out.startswith("grok-one · ") and "52% ctx" in out and out.endswith("~$1.50")
+
+
 def test_absent_keys_print_unknown_in_each_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     peers(tmp_path, monkeypatch, [])
     assert grok.line({}) == "unknown · unknown · unknown"

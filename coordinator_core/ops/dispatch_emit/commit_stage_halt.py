@@ -42,6 +42,19 @@ def _committed(result: object) -> bool:
     return parsed is not None and (parsed.get("committed") is True or parsed.get("already_landed") is True)
 
 
+def _rows_unlanded_reason(result: object) -> Optional[str]:
+    """The halt reason for a committed reply carrying a non-empty `rows_unlanded` mapping, else None."""
+    parsed = _parsed(result)
+    left = parsed.get("rows_unlanded") if parsed is not None else None
+    if not isinstance(left, dict):
+        return None
+    paths = sorted({str(p) for v in left.values() for p in (v if isinstance(v, (list, tuple)) else [v]) if p})
+    if not paths:
+        return None
+    ids = ", ".join(sorted(str(k) for k in left))
+    return f"subject-named row(s) {ids} have declared writes still dirty after the commit: {', '.join(paths)}"
+
+
 def _refusal(result: object) -> Optional[str]:
     """`<refused>: <error>` from an uncommitted leg's parsed result, else None."""
     parsed = _parsed(result)
@@ -62,7 +75,8 @@ def _reason(event: dict) -> Optional[str]:
 def commit_leg_outcome(journal_text: str) -> Optional[tuple[str, str, Optional[str]]]:
     """(label, state, reason) of the run's last commit-stage leg, else None.
 
-    `state` is `committed`, `unsettled`, `failed` or `uncommitted` (a result with no committed reply).
+    `state` is `committed`, `rows-unlanded` (committed, but the reply names subject rows whose declared writes
+    stay dirty; `reason` names them), `unsettled`, `failed` or `uncommitted` (a result with no committed reply).
     The watcher's own stamp line is not a leg event and is ignored.
     """
     legs: dict[str, dict] = {}
@@ -90,7 +104,9 @@ def commit_leg_outcome(journal_text: str) -> Optional[tuple[str, str, Optional[s
         elif ident in legs:
             if kind == "result":
                 if _committed(event.get("result")):
-                    legs[ident]["state"] = "committed"
+                    unlanded = _rows_unlanded_reason(event.get("result"))
+                    legs[ident]["state"] = "rows-unlanded" if unlanded else "committed"
+                    legs[ident]["reason"] = unlanded
                 else:
                     legs[ident]["state"] = "uncommitted"
                     legs[ident]["reason"] = _refusal(event.get("result"))
@@ -112,7 +128,8 @@ def halt_run_on_commit_stage_end(
     launched_at: float,
 ) -> Optional[Path]:
     """Write `halted: commit_stage` into `record_dir` when the run ended with its commit leg unsettled,
-    failed, or (on a killed, stopped or failed task) answered without a committed reply.
+    failed, answered without a committed reply (on a killed, stopped or failed task), or committed with
+    `rows_unlanded` naming subject rows whose declared writes stay dirty.
 
     Returns the marker path, else None. A `halted.json` written since `launched_at`, or one already
     landed, closed or superseded, is left alone. Never raises.
@@ -133,7 +150,9 @@ def halt_run_on_commit_stage_end(
         ):
             return None
         reason = f"commit stage: {label} leg {state}, task {terminal_status}"
-        if leg_reason:
+        if state == "rows-unlanded":
+            reason = leg_reason or reason
+        elif leg_reason:
             reason = f"{reason}: {leg_reason}"
         return remedy_or_halt(
             HALT_COMMIT_STAGE,

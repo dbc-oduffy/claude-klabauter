@@ -43,7 +43,7 @@ from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov  # no
 from coordinator_core.ops.dispatch_emit import land_deadline, measured_rev  # noqa: E402
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path  # noqa: E402
 
-_RECORD_FILES = ("measured-rev.json", "measured-touched.json", cov.VERDICT_FILE)
+_RECORD_FILES = ("measured-rev.json", "measured-touched.json", cov.VERDICT_FILE, "kept.json", "evicted.json")
 _FIELDS_COMPARED = ("base_sha", "sha", "overlay_sha", "tree")
 
 
@@ -70,7 +70,7 @@ def _redirected_records(scratch_root: Path) -> Generator[None, None, None]:
     real = measured_rev.measured_rev_record_path
 
     def record(repo_root: Path, run_id: str) -> Path:
-        real(repo_root, run_id)
+        real(repo_root, run_id)  # called for its run-id validation (raises ValueError); the path it returns is discarded
         return measured_rev_record_path(scratch_root, run_id)
 
     def touched(repo_root: Path, run_id: str) -> Path:
@@ -86,7 +86,7 @@ def _redirected_records(scratch_root: Path) -> Generator[None, None, None]:
         setattr(measured_rev, "touched_record_path", saved[1])
 
 
-def replay(scratch_root: Path, run_id: str, measured: dict) -> dict:
+def replay(scratch_root: Path, run_id: str, measured: dict, git_root: Optional[Path] = None) -> dict:
     """The landing's overlay read over `measured` in `scratch_root`: `check_verdict`, then `reverify_on_mismatch`
     on a mismatch, with a counting no-launch spawn. Returns `verdict`, `parked`, `process_time_ms`, `spawns`,
     `detail`."""
@@ -98,10 +98,10 @@ def replay(scratch_root: Path, run_id: str, measured: dict) -> dict:
 
     parked = False
     started = time.process_time()
-    outcome = cov.check_verdict(scratch_root, run_id, measured)
+    outcome = cov.check_verdict(scratch_root, run_id, measured, git_root)
     if outcome.verdict == "mismatch":
         try:
-            outcome = cov.reverify_on_mismatch(scratch_root, run_id, measured, outcome, spawn=spawn)
+            outcome = cov.reverify_on_mismatch(scratch_root, run_id, measured, outcome, spawn=spawn, git_root=git_root)
         except land_deadline.LandDeadlineExceeded:
             parked = True
     elapsed_ms = round((time.process_time() - started) * 1000, 1)
@@ -139,20 +139,26 @@ def probe_run(root: Path, run_id: str, rebuild: bool = True) -> dict:
     with tempfile.TemporaryDirectory(prefix="reverify-park-probe-") as tmp:
         tmp_root = Path(tmp)
         _seed_scratch(run_dir, tmp_root / "stored", run_id, _RECORD_FILES)
-        stored_row = replay(tmp_root / "stored", run_id, stored)
-        row["stored_key_matches"] = cov.landing_key(stored) == _stored_key(run_dir)
+        stored_row = replay(tmp_root / "stored", run_id, stored, root)
+        verdict_data = _verdict_data(run_dir)
+        row["stored_key_matches"] = cov.landing_key(stored) == verdict_data.get("key")
+        row["legacy_key_matches"] = cov.legacy_landing_key(stored) == verdict_data.get("key")
+        row["verdict_file"] = "recorded components" if "keyed" in verdict_data else "legacy (no components)"
         result = stored_row
         row["rebuild_error"] = None
+        row["rebuild_process_time_ms"] = None
+        row["rebuilt_key_matches"] = None
         row["moved"] = []
         if rebuild:
             rebuilt_root = tmp_root / "rebuilt"
-            _seed_scratch(run_dir, rebuilt_root, run_id, ("measured-touched.json", cov.VERDICT_FILE))
+            _seed_scratch(run_dir, rebuilt_root, run_id, ("measured-touched.json", cov.VERDICT_FILE, "kept.json", "evicted.json"))
             started = time.process_time()
             try:
                 with _redirected_records(rebuilt_root):
                     fresh = measured_rev.measured_rev(run_id, list(stored.get("paths") or ()), repo_root=root)
                     row["rebuild_process_time_ms"] = round((time.process_time() - started) * 1000, 1)
-                    result = replay(rebuilt_root, run_id, fresh)
+                    _seed_scratch(run_dir, rebuilt_root, run_id, ("measured-rev.json",))  # the stored record a legacy verdict is checked against
+                    result = replay(rebuilt_root, run_id, fresh, root)
                 row["moved"] = moved_fields(stored, fresh)
                 row["rebuilt_key_matches"] = cov.landing_key(fresh) == _stored_key(run_dir)
             except (OSError, ValueError) as exc:
@@ -163,12 +169,16 @@ def probe_run(root: Path, run_id: str, rebuild: bool = True) -> dict:
     return row
 
 
-def _stored_key(run_dir: Path) -> Optional[str]:
+def _verdict_data(run_dir: Path) -> dict:
     try:
         data = json.loads((run_dir / cov.VERDICT_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
-    return data.get("key") if isinstance(data, dict) else None
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stored_key(run_dir: Path) -> Optional[str]:
+    return _verdict_data(run_dir).get("key")
 
 
 def main(argv: Optional[list] = None) -> int:

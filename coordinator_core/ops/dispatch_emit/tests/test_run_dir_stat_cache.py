@@ -147,3 +147,66 @@ def test_threads_share_one_computation_per_signature_safely(tmp_path):
     [t.join() for t in ts]
     assert not errors
     assert rc.size("ns") == 1
+
+
+def _warp_run(root, run_id):
+    d = root / "state" / "warp" / run_id
+    d.mkdir(parents=True)
+    return d
+
+
+def test_record_dir_is_resolved_once_while_state_dir_keeps_identity(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    d = _warp_run(tmp_path, "ask-1")
+    calls = []
+    real = ask_contract._record_dir
+    monkeypatch.setattr(ask_contract, "_record_dir", lambda r, i: calls.append(i) or real(r, i))
+    first = rc.record_dir(tmp_path, "ask-1")
+    assert first == d.resolve() and rc.record_dir(tmp_path, "ask-1") == first
+    assert calls == ["ask-1"]
+
+
+def test_record_dir_recomputes_when_state_dir_is_replaced(tmp_path):
+    d = _warp_run(tmp_path, "ask-2")
+    scratch = tmp_path / "scratch" / "warp" / "ask-2"
+    scratch.mkdir(parents=True)
+    (scratch / "run.json").write_text("{}", encoding="utf-8")
+    assert rc.record_dir(tmp_path, "ask-2") == d.resolve()
+    d.rmdir()
+    assert rc.record_dir(tmp_path, "ask-2") == scratch.resolve()
+
+
+def test_record_dir_sees_a_state_dir_created_mid_scope(tmp_path):
+    from coordinator_core.git.call_io_scope import call_io_scope
+
+    scratch = tmp_path / "scratch" / "warp" / "ask-3"
+    scratch.mkdir(parents=True)
+    (scratch / "run.json").write_text("{}", encoding="utf-8")
+    with call_io_scope():
+        assert rc.record_dir(tmp_path, "ask-3") == scratch.resolve()
+        d = _warp_run(tmp_path, "ask-3")
+        assert rc.record_dir(tmp_path, "ask-3") == d.resolve()
+
+
+def test_record_dir_memoizes_a_present_dir_per_scope_without_restat(tmp_path, monkeypatch):
+    from coordinator_core.git.call_io_scope import call_io_scope
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    d = _warp_run(tmp_path, "ask-4")
+    probe = os.path.join(os.fspath(tmp_path), ask_contract.RECORD_DIR_ROOT, "ask-4")
+    stats = []
+    real_stat = os.stat
+    monkeypatch.setattr(os, "stat", lambda p, *a, **k: stats.append(os.fspath(p)) or real_stat(p, *a, **k))
+    with call_io_scope():
+        for _ in range(5):
+            assert rc.record_dir(tmp_path, "ask-4") == d.resolve()
+    assert stats.count(probe) == 1
+    with call_io_scope():
+        rc.record_dir(tmp_path, "ask-4")
+    assert stats.count(probe) == 2  # a new scope re-checks
+
+
+def test_record_dir_still_refuses_an_unsafe_run_id(tmp_path):
+    with pytest.raises(ValueError):
+        rc.record_dir(tmp_path, "../escape")

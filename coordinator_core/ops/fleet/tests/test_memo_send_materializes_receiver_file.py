@@ -1,9 +1,9 @@
 """memo.send reports delivered only when the delivery commit carries the memo at the receiver inbox path.
 
-The delivery commit is built object-only on the receiver's upstream tip and anchored; the receiver's
-checkout (HEAD, index, worktree) is never written, so a live session there is never disturbed. A
-different memo already at the path is a collision, never an overwrite. Receivers are real tmp_path
-git repos; `_memo_send` runs at its default params.
+A receiver whose HEAD branch is at its tracking tip gets the delivery commit on that branch: the
+branch advances to it, the memo file appears in the worktree and the index, HEAD's symref stays and
+nothing else in the checkout changes. A different memo already at the path is a collision, never an
+overwrite. Receivers are real tmp_path git repos; `_memo_send` runs at its default params.
 """
 
 from __future__ import annotations
@@ -34,15 +34,6 @@ def _git(cwd, *args) -> str:
     return (out.decode() if isinstance(out, bytes) else out).strip()
 
 
-def _checkout_state(root: Path) -> tuple:
-    return (
-        _git(root, "rev-parse", "HEAD"),
-        _git(root, "symbolic-ref", "HEAD"),
-        (root / ".git" / "index").read_bytes(),
-        _git(root, "status", "--porcelain"),
-    )
-
-
 def _in_commit(receiver: Path, sha: str, rel: str) -> bool:
     return rel in _git(receiver, "ls-tree", "-r", "--name-only", sha).splitlines()
 
@@ -59,20 +50,28 @@ def world(tmp_path, monkeypatch):
     return {"sender": sender, "receiver": receiver, "tmp": tmp_path}
 
 
-def test_default_send_delivers_a_commit_carrying_the_memo_and_leaves_the_checkout_alone(world):
+def _assert_materialized(receiver: Path, sha: str, rel: str, symref: str) -> None:
+    assert _in_commit(receiver, sha, rel)
+    assert _git(receiver, "cat-file", "-t", sha) == "commit"
+    assert _git(receiver, "rev-parse", "HEAD") == sha
+    assert _git(receiver, "symbolic-ref", "HEAD") == symref
+    assert (receiver / rel).exists()
+    assert rel in _git(receiver, "ls-files", "--", rel)
+    assert _git(receiver, "status", "--porcelain") == ""
+
+
+def test_default_send_advances_the_head_branch_and_materializes_the_memo(world):
     sender, receiver = world["sender"], world["receiver"]
     _write_draft(sender, "file-topic")
-    before = _checkout_state(receiver)
+    symref = _git(receiver, "symbolic-ref", "HEAD")
 
     result = _memo_send({"dry_run": False, "topic": "file-topic"}, repo_root=sender)
 
     assert result["exit_code"] == 0, result
-    sha = result["acted"][0]["delivery_commit_sha"]
-    rel = _memo_rel("file-topic")
-    assert _in_commit(receiver, sha, rel)
-    assert _git(receiver, "cat-file", "-t", sha) == "commit"
-    assert _checkout_state(receiver) == before
-    assert not (receiver / rel).exists()
+    assert result["acted"][0]["delivery_outcome"] == "delivered"
+    _assert_materialized(
+        receiver, result["acted"][0]["delivery_commit_sha"], _memo_rel("file-topic"), symref
+    )
 
 
 def test_an_unrelated_dirty_tracked_file_keeps_its_worktree_and_index_bytes(world):
@@ -119,7 +118,7 @@ def test_a_different_memo_already_committed_at_the_path_is_never_overwritten(wor
     assert target.read_text(encoding="utf-8") == "committed elsewhere\n"
 
 
-def test_each_cc_receiver_gets_a_delivery_commit_and_an_untouched_checkout(tmp_path, monkeypatch):
+def test_each_cc_receiver_gets_the_memo_on_its_head_branch(tmp_path, monkeypatch):
     sender = _make_sender_git_repo(tmp_path)
     to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
     cc_repo = _make_receiver_git_repo(tmp_path, name="cc-repo")
@@ -128,12 +127,14 @@ def test_each_cc_receiver_gets_a_delivery_commit_and_an_untouched_checkout(tmp_p
         str(_make_claude_home(tmp_path, {"project_rag": to_repo, "example_cockpit_repo": cc_repo})),
     )
     _write_draft_with_cc(sender, "cc-file-topic", to="example-retrieval-repo-em", cc="example-cockpit-repo-em")
-    before = {r: _checkout_state(r) for r in (to_repo, cc_repo)}
+    symrefs = {r: _git(r, "symbolic-ref", "HEAD") for r in (to_repo, cc_repo)}
 
     result = _memo_send({"dry_run": False, "topic": "cc-file-topic"}, repo_root=sender)
 
     assert result["exit_code"] == 0, result
+    rel = _memo_rel("cc-file-topic")
     for repo in (to_repo, cc_repo):
-        assert _checkout_state(repo) == before[repo]
-        assert not list((repo / "cross-repo" / "inbox").glob("*.md"))
-    assert _in_commit(to_repo, result["acted"][0]["delivery_commit_sha"], _memo_rel("cc-file-topic"))
+        assert _git(repo, "symbolic-ref", "HEAD") == symrefs[repo]
+        assert (repo / rel).exists()
+        assert _git(repo, "status", "--porcelain") == ""
+    assert _in_commit(to_repo, result["acted"][0]["delivery_commit_sha"], rel)

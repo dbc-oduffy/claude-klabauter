@@ -45,8 +45,10 @@ def _now() -> str:
 
 def _launcher_session(root: Path, run_id: str) -> Optional[str]:
     """The `session_id` the run's own `run-stage.json` records as its launcher; None when absent or unreadable."""
+    from coordinator_core.session import record_homes
+
     try:
-        data = json.loads((Path(root) / "state" / "warp" / run_id / "run-stage.json").read_text(encoding="utf-8"))
+        data = json.loads((Path(record_homes.home_dir(str(root), "warp")) / run_id / "run-stage.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     sid = data.get("session_id") if isinstance(data, dict) else None

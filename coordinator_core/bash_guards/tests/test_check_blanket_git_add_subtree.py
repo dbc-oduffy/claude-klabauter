@@ -30,6 +30,7 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
+from coordinator_core.git import repo_root
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 from coordinator_core.guard_messages.testing import envelope_of
 from pathlib import Path
@@ -57,6 +58,7 @@ def _wire_git(monkeypatch, root, *, dry_run_lines=None, dry_run_rc: int = 0):
         raise AssertionError("unexpected git invocation: %r" % (args,))
 
     monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
+    monkeypatch.setattr(repo_root, "show_toplevel", lambda cwd=None: root)
     return calls
 
 
@@ -134,7 +136,7 @@ def test_single_file_add_is_not_denied_and_spawns_no_extra_git(monkeypatch: pyte
     )
 
     assert result is None
-    assert calls == [["rev-parse", "--show-toplevel"]]
+    assert calls == []
 
 
 def test_subtree_add_no_session_id_fails_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

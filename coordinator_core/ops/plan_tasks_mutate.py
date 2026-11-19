@@ -8,7 +8,7 @@ verbs `add-task` (append a chunk row, fail-loud on duplicate `id`), `stamp`
 (write a row's `disposition`/`disposition_ref`/`disposition_detail` atomically,
 refusing an ungated closed disposition — D4); plus `reopen` (id, disposition_detail),
 `depends-on` (id, action, chunk, gate_kind?, note?), `evidence-append` (id, text),
-`em-discharge` (id, text, commit?, evidence? — records an em-performed row as done in
+`em-discharge` (id, text, commit?, evidence?, ue_report? — records an em-performed row as done in
 `<plan-stem>.evidence.yaml` under `em_discharged`, leaving the spine row as is),
 `premise-record` (id, verdict, ref), `note` (id, text) and `clear-gate` (id, owner_repo?, evidence?,
 condition?, gate_index?). Zero-spawn hot-path: validates
@@ -1351,6 +1351,33 @@ def _commit_resolves(common_dir: Path, commit: str) -> Optional[str]:
     return resolved if result.returncode == 0 and _FULL_SHA.fullmatch(resolved) else None
 
 
+def _ue_report_evidence(ue_report: object, worktree: Path) -> "str | dict":
+    """The evidence string naming a UE automation report and its tests when every named test
+    passed, else a typed ``_err`` reply naming the missing or failed tests."""
+    from coordinator_core.ops.dispatch_emit.em_test_criterion import parse_ue_automation_report
+
+    index_json = ue_report.get("index_json") if isinstance(ue_report, dict) else None
+    tests = ue_report.get("tests") if isinstance(ue_report, dict) else None
+    if (
+        not isinstance(index_json, str)
+        or not index_json.strip()
+        or not isinstance(tests, list)
+        or not tests
+        or not all(isinstance(t, str) and t.strip() for t in tests)
+    ):
+        return _err("em-discharge: 'ue_report' must be {index_json: str, tests: [non-empty str, ...]}")
+    report_path = Path(index_json.strip())
+    if not report_path.is_absolute():
+        report_path = worktree / report_path
+    verdict = parse_ue_automation_report(report_path, tests)
+    if not verdict.get("ok"):
+        return _err(
+            f"em-discharge: ue_report refused ({verdict.get('reason', 'tests not passed')}): "
+            f"missing={verdict.get('missing') or []} failed={verdict.get('failed') or []}"
+        )
+    return f"UE automation report {report_path.as_posix()}: passed {', '.join(tests)}"
+
+
 def _em_discharge(
     plan_path: str,
     row_id: str,
@@ -1359,10 +1386,16 @@ def _em_discharge(
     repo_root: Path,
     commit: object = None,
     evidence: object = None,
+    ue_report: object = None,
 ) -> dict:
     """Apply the em-discharge verb: record that the EM performed em-performed row ``row_id``
     (declared ``performer: em``, or derived by ``em_only_act``), or that an executor row is
     satisfied by ``commit`` (a full or abbreviated hex sha resolving to one commit, stored in full) and ``evidence``.
+
+    ``ue_report`` is ``{index_json, tests}``: the discharge is refused unless every named test
+    passed in that UE automation report, and the entry's evidence names the report and the tests.
+    ``index_json`` is taken as given when absolute, else against ``worktree``; it is
+    never containment-checked, since the UE project's Saved dir is usually outside this repo.
 
     Writes only the evidence sidecar; the row's disposition and the plan body are untouched.
     A second discharge of the same row is a no-op, never an overwrite.
@@ -1395,6 +1428,18 @@ def _em_discharge(
 
     commit_s = commit.strip().lower() if isinstance(commit, str) else ""
     evidence_s = evidence.strip() if isinstance(evidence, str) else ""
+    if ue_report is not None:
+        crit = row.get("test_criterion")
+        declared_tests = crit.get("tests") if isinstance(crit, dict) else None
+        named = ue_report.get("tests") if isinstance(ue_report, dict) else None
+        if isinstance(declared_tests, list) and isinstance(named, list):
+            unnamed = [t for t in declared_tests if isinstance(t, str) and t not in named]
+            if unnamed:
+                return _err(f"em-discharge: ue_report omits the row's declared test_criterion tests: {unnamed}")
+        ue_evidence = _ue_report_evidence(ue_report, worktree)
+        if isinstance(ue_evidence, dict):
+            return ue_evidence
+        evidence_s = f"{evidence_s}; {ue_evidence}" if evidence_s else ue_evidence
     executor_row = not row_is_em_performed(row)
     if executor_row and not (commit_s and evidence_s):
         return _err(
@@ -2987,7 +3032,9 @@ async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
                    prefix) or gate_index picks among same-owner_repo gates.
                    Unknown parameters are refused by name.
         em-discharge : id (str), text (str, non-empty), commit (str, optional),
-                   evidence (str, optional) — records that the EM performed
+                   evidence (str, optional), ue_report ({index_json, tests},
+                   optional; refused unless every named test passed in that UE
+                   automation report, which is recorded as evidence) — records that the EM performed
                    `performer: em` row `id` under `em_discharged` in the
                    evidence sidecar; read back with `read_em_discharges`. An
                    executor row is discharged only with both `commit` (a full
@@ -3159,6 +3206,7 @@ async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
             repo_root,
             params.get("commit"),
             params.get("evidence"),
+            params.get("ue_report"),
         )
 
     if verb == "premise-record":

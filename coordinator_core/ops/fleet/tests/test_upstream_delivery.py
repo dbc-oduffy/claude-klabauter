@@ -33,6 +33,13 @@ def _git(args: list[str], cwd: Path) -> str:
     ).stdout.strip()
 
 
+def _git_in(args: list[str], cwd: Path, stdin: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), input=stdin.encode("utf-8"), capture_output=True, check=True,
+        **no_console_creationflags(),
+    ).stdout.decode("utf-8").strip()
+
+
 def _commit_file(repo: Path, name: str, text: str) -> str:
     (repo / name).write_text(text, encoding="utf-8")
     _git(["add", name], repo)
@@ -106,6 +113,239 @@ def test_delivers_onto_tracking_tip_and_touches_nothing(receiver, monkeypatch: p
         "blob_sha": out.blob_sha, "message": MESSAGE, "commit_sha": out.commit_sha,
         "parent_sha": receiver["upstream_tip"],
     }
+
+
+@pytest.fixture
+def ahead_receiver(receiver) -> dict:
+    """BRANCH holds one commit past its tracking ref and is checked out (HEAD arm)."""
+    repo = receiver["repo"]
+    _git(["update-ref", f"refs/remotes/origin/{BRANCH}", receiver["local_tip"]], repo)
+    engine = _commit_file(repo, "engine.txt", "e\n")
+    return {**receiver, "tracking": receiver["local_tip"], "local_tip": engine}
+
+
+@pytest.fixture
+def ahead_ref_direct(ahead_receiver) -> dict:
+    """Same, with HEAD on another branch so the delivery goes ref-direct."""
+    _git(["checkout", "-q", "-b", "other"], ahead_receiver["repo"])
+    return ahead_receiver
+
+
+def _advance_branch(repo: Path, name: str) -> str:
+    """An engine land: a commit on BRANCH's current tip, its ref moved by update-ref."""
+    tip = _git(["rev-parse", f"refs/heads/{BRANCH}"], repo)
+    tree = _git(["rev-parse", f"{tip}^{{tree}}"], repo)
+    new = _git(["commit-tree", tree, "-p", tip, "-m", name], repo)
+    _git(["update-ref", f"refs/heads/{BRANCH}", new, tip], repo)
+    return new
+
+
+def test_local_ahead_of_tracking_lands_on_the_ref_direct_branch(ahead_ref_direct) -> None:
+    repo = ahead_ref_direct["repo"]
+    head_before = _git(["rev-parse", "HEAD"], repo)
+
+    out = ud.deliver_onto_upstream(repo, ahead_ref_direct["sender"], PATH, CONTENT, ahead_ref_direct["msg"])
+
+    assert out.ok, out.error
+    assert out.on_branch
+    assert out.parent_sha == ahead_ref_direct["local_tip"]
+    assert _git(["rev-parse", f"refs/heads/{BRANCH}"], repo) == out.commit_sha
+    assert _git(["show", f"{out.commit_sha}:{PATH}"], repo) == "memo body"
+    assert _git(["show", f"{out.commit_sha}:engine.txt"], repo) == "e"
+    assert _git(["rev-parse", "HEAD"], repo) == head_before
+    assert _git(["symbolic-ref", "HEAD"], repo) == "refs/heads/other"
+    assert ud.verify_delivery(repo, out) is None
+    assert [r["commit_sha"] for r in pp.list_pending(ahead_ref_direct["sender"])] == [out.commit_sha]
+
+
+def test_local_ahead_on_the_checked_out_branch_lands_with_index_and_worktree_in_step(ahead_receiver) -> None:
+    repo = ahead_receiver["repo"]
+
+    out = ud.deliver_onto_upstream(repo, ahead_receiver["sender"], PATH, CONTENT, ahead_receiver["msg"])
+
+    assert out.ok, out.error
+    assert out.on_branch
+    assert out.parent_sha == ahead_receiver["local_tip"]
+    assert _git(["rev-parse", "HEAD"], repo) == out.commit_sha
+    assert _git(["rev-parse", f"refs/heads/{BRANCH}"], repo) == out.commit_sha
+    assert (repo / PATH).read_text(encoding="utf-8") == CONTENT
+    assert PATH not in _git(["status", "--porcelain"], repo)
+    assert ud.verify_delivery(repo, out) is None
+
+
+def test_the_checked_out_branch_landing_spawns_nothing(ahead_receiver, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = ahead_receiver["repo"]
+    _no_spawn(monkeypatch)
+
+    out = ud.deliver_onto_upstream(repo, ahead_receiver["sender"], PATH, CONTENT, ahead_receiver["msg"])
+    monkeypatch.undo()
+
+    assert out.ok and out.on_branch, out.error
+    assert f"A\t{PATH}" not in _git(["diff", "--cached", "--name-status"], repo)
+    assert f"D\t{PATH}" not in _git(["diff", "--cached", "--name-status"], repo)
+
+
+def test_an_unspliceable_index_is_left_byte_identical_and_the_delivery_still_lands(
+    ahead_receiver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = ahead_receiver["repo"]
+    _git(["update-index", "--index-version", "4"], repo)
+    index_before = (repo / ".git" / "index").read_bytes()
+    _no_spawn(monkeypatch)
+
+    out = ud.deliver_onto_upstream(repo, ahead_receiver["sender"], PATH, CONTENT, ahead_receiver["msg"])
+    monkeypatch.undo()
+
+    assert out.ok and out.on_branch, out.error
+    assert (repo / ".git" / "index").read_bytes() == index_before
+
+
+def test_an_unreadable_tip_tree_refuses_before_any_worktree_write_and_spawns_nothing(
+    ahead_receiver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = ahead_receiver["repo"]
+    monkeypatch.setattr(ud.git_state, "read_tree_spine", lambda *a, **k: None)
+    monkeypatch.setattr(ud.git_native, "read_tree_spine", lambda *a, **k: None)
+    _no_spawn(monkeypatch)
+
+    out = ud.deliver_onto_upstream(repo, ahead_receiver["sender"], PATH, CONTENT, ahead_receiver["msg"])
+    monkeypatch.undo()
+
+    assert not out.ok
+    assert not (repo / PATH).exists()
+    assert pp.list_pending(ahead_receiver["sender"]) == []
+
+
+def test_engine_land_and_memo_delivery_sharing_one_parent_both_survive(ahead_ref_direct, monkeypatch) -> None:
+    repo = ahead_ref_direct["repo"]
+    real_build = ud.git_native.build_new_file_commit
+    lands: list[str] = []
+
+    def _build_then_engine_lands(*args, **kwargs):
+        result = real_build(*args, **kwargs)
+        if not lands:
+            lands.append(_advance_branch(repo, "engine land"))
+        return result
+
+    monkeypatch.setattr(ud.git_native, "build_new_file_commit", _build_then_engine_lands)
+
+    out = ud.deliver_onto_upstream(repo, ahead_ref_direct["sender"], PATH, CONTENT, ahead_ref_direct["msg"])
+
+    assert out.ok and out.on_branch, out.error
+    assert out.parent_sha == lands[0]
+    assert _git(["rev-parse", f"refs/heads/{BRANCH}"], repo) == out.commit_sha
+    history = _git(["rev-list", f"refs/heads/{BRANCH}"], repo).split()
+    assert lands[0] in history and ahead_ref_direct["local_tip"] in history
+    assert _git(["show", f"{out.commit_sha}:{PATH}"], repo) == "memo body"
+    assert len(pp.list_pending(ahead_ref_direct["sender"])) == 1
+    assert _git(["for-each-ref", PIN_PREFIX], repo).count("\n") == 0
+
+
+def test_a_lost_cas_whose_new_tip_holds_the_path_is_a_collision_with_no_leftovers(ahead_ref_direct, monkeypatch) -> None:
+    repo = ahead_ref_direct["repo"]
+    real_build = ud.git_native.build_new_file_commit
+    done: list[bool] = []
+
+    def _build_then_a_peer_lands_the_path(*args, **kwargs):
+        result = real_build(*args, **kwargs)
+        if not done:
+            done.append(True)
+            tip = _git(["rev-parse", f"refs/heads/{BRANCH}"], repo)
+            blob = _git_in(["hash-object", "-w", "--stdin"], repo, CONTENT)
+            sub = _git_in(["mktree"], repo, f"100644 blob {blob}\t{PATH.rsplit('/', 1)[-1]}\n")
+            mid = _git_in(["mktree"], repo, f"040000 tree {sub}\tinbox\n")
+            top = _git_in(["mktree"], repo, f"040000 tree {mid}\tcross-repo\n")
+            new = _git(["commit-tree", top, "-p", tip, "-m", "peer"], repo)
+            _git(["update-ref", f"refs/heads/{BRANCH}", new, tip], repo)
+        return result
+
+    monkeypatch.setattr(ud.git_native, "build_new_file_commit", _build_then_a_peer_lands_the_path)
+
+    out = ud.deliver_onto_upstream(repo, ahead_ref_direct["sender"], PATH, CONTENT, ahead_ref_direct["msg"])
+
+    assert not out.ok
+    assert out.status == ud.STATUS_COLLISION
+    assert pp.list_pending(ahead_ref_direct["sender"]) == []
+    assert _git(["for-each-ref", PIN_PREFIX, "refs/coordinator/inbox"], repo) == ""
+
+
+def test_an_exhausted_cas_bound_falls_back_to_the_pinned_tracking_tip_delivery(ahead_ref_direct, monkeypatch) -> None:
+    repo = ahead_ref_direct["repo"]
+    real_build = ud.git_native.build_new_file_commit
+    lands: list[str] = []
+
+    def _build_then_engine_lands_every_time(*args, **kwargs):
+        result = real_build(*args, **kwargs)
+        lands.append(_advance_branch(repo, f"engine land {len(lands)}"))
+        return result
+
+    monkeypatch.setattr(ud.git_native, "build_new_file_commit", _build_then_engine_lands_every_time)
+
+    out = ud.deliver_onto_upstream(repo, ahead_ref_direct["sender"], PATH, CONTENT, ahead_ref_direct["msg"])
+
+    assert out.ok, out.error
+    assert not out.on_branch
+    assert out.parent_sha == ahead_ref_direct["tracking"]
+    assert len(lands) == ud._CAS_ATTEMPTS + 1
+    assert _git(["rev-parse", f"refs/heads/{BRANCH}"], repo) == lands[-1]
+    assert [r["commit_sha"] for r in pp.list_pending(ahead_ref_direct["sender"])] == [out.commit_sha]
+    assert _git(["rev-parse", PIN_PREFIX + out.commit_sha], repo) == out.commit_sha
+    assert len(_git(["for-each-ref", PIN_PREFIX], repo).splitlines()) == 1
+
+
+def test_an_exhausted_head_branch_bound_removes_the_worktree_file_and_pins(ahead_receiver, monkeypatch) -> None:
+    repo = ahead_receiver["repo"]
+    calls: list[str] = []
+
+    def _always_lose(path, *args, **kwargs):
+        calls.append(path)
+        return ud.git_native.GitResult(returncode=1, stdout="", stderr="compare-and-swap failed")
+
+    monkeypatch.setattr(ud.git_native, "commit_authored_new_file", _always_lose)
+
+    out = ud.deliver_onto_upstream(repo, ahead_receiver["sender"], PATH, CONTENT, ahead_receiver["msg"])
+
+    assert out.ok and not out.on_branch, out.error
+    assert len(calls) == ud._CAS_ATTEMPTS
+    assert not (repo / PATH).exists()
+    assert _git(["rev-parse", f"refs/heads/{BRANCH}"], repo) == ahead_receiver["local_tip"]
+    assert out.parent_sha == ahead_receiver["tracking"]
+
+
+def test_an_anchor_failure_after_the_branch_landed_is_ok_with_a_warning_never_failed(ahead_receiver, monkeypatch) -> None:
+    repo = ahead_receiver["repo"]
+    monkeypatch.setattr(ud, "write_anchor", lambda *a, **k: None)
+
+    out = ud.deliver_onto_upstream(repo, ahead_receiver["sender"], PATH, CONTENT, ahead_receiver["msg"])
+
+    assert out.ok and out.status == ud.STATUS_DELIVERED, out.error
+    assert out.on_branch
+    assert "anchor" in out.warning
+    assert _git(["rev-parse", f"refs/heads/{BRANCH}"], repo) == out.commit_sha
+    assert _git(["show", f"{out.commit_sha}:{PATH}"], repo) == "memo body"
+    assert pp.list_pending(ahead_receiver["sender"]) == []
+    assert ud.verify_delivery(repo, out) is None
+
+
+def test_a_worktree_file_already_on_disk_is_never_clobbered_and_the_delivery_pins(ahead_receiver) -> None:
+    repo = ahead_receiver["repo"]
+    (repo / PATH).parent.mkdir(parents=True)
+    (repo / PATH).write_text("someone else's\n", encoding="utf-8")
+
+    out = ud.deliver_onto_upstream(repo, ahead_receiver["sender"], PATH, CONTENT, ahead_receiver["msg"])
+
+    assert out.ok and not out.on_branch, out.error
+    assert (repo / PATH).read_text(encoding="utf-8") == "someone else's\n"
+    assert _git(["rev-parse", f"refs/heads/{BRANCH}"], repo) == ahead_receiver["local_tip"]
+
+
+def test_a_local_behind_tracking_delivery_stays_object_only_and_off_branch(receiver) -> None:
+    repo = receiver["repo"]
+
+    out = ud.deliver_onto_upstream(repo, receiver["sender"], PATH, CONTENT, receiver["msg"])
+
+    assert out.ok and not out.on_branch
+    assert _git(["rev-parse", f"refs/heads/{BRANCH}"], repo) == receiver["local_tip"]
 
 
 def test_pin_resolves_to_the_delivery_commit_and_verify_delivery_passes(receiver) -> None:

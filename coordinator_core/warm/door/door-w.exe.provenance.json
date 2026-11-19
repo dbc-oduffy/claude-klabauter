@@ -1,6 +1,6 @@
 {
-  "builder": "8d2385c3-2d1e-4ce2-b932-603080b066ca",
-  "built_at": "2026-11-19T06:52:40+00:00",
+  "builder": "78e5c1d7-672d-4f30-8c28-66e14475bdc7",
+  "built_at": "2026-11-19T14:03:53+00:00",
   "command": [
     "python.exe",
     "-m",
@@ -25,10 +25,10 @@
     "/ENTRY:mainCRTStartup"
   ],
   "compiler": "clang",
-  "compiler_version": "clang version 22.1.2 (https://github.com/llvm/llvm-project 1ab49a973e210e97d61e5db6557180dcb92c3e98)",
+  "compiler_version": "clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)",
   "door_c_sha256": "9d9bc9d3b857d5ccd424f21f529d51495e6cfbf58df072dd1247074e47f01c73",
-  "engine_stamp": "sha:71e5193f478a1f9c7efcfb74f5a9f14f7818b762",
-  "image_sha256": "57473e319b845b2969d51cb440d45770752bde5b662e6f685b5fd647cf48a22d",
+  "engine_stamp": "sha:177a7f123d8c34e0631543b7de128572413dda5e",
+  "image_sha256": "1243540d476dc839c0e0f699ead32d7b11d5344cc27dd410f2d90078613f4a30",
   "python_bin": "~/AppData/Local/Programs/Python/Python313/python.exe",
   "rendered_source_sha256": "9d9bc9d3b857d5ccd424f21f529d51495e6cfbf58df072dd1247074e47f01c73",
   "require_warm": false,

@@ -19,6 +19,10 @@ PROVENANCE_KINDS = frozenset({
     "cohold-declared-path",
     "halted-run",
     "recovery-withheld-unbacked",
+    "run-touched-left",
+    "review-edit-unlanded",
+    "unreviewed",
+    "xs-over-budget",
 })
 
 

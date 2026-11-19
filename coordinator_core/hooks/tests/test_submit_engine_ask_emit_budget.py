@@ -168,6 +168,7 @@ def _bare_call():
             "gates": [], "session": None, "payload": {"ask": "x"}}
 
 
+@pytest.mark.deliberate_wall_clock(reason="refusing inside the grace deadline while a write stalls is the behaviour under test")
 def test_overrun_with_a_stalled_spool_write_refuses_as_unknown_within_the_grace(monkeypatch):
     import threading
 
@@ -201,6 +202,7 @@ def test_overrun_with_a_premint_answers_the_chosen_id_and_a_deferred_script(tmp_
     assert chosen in text
 
 
+@pytest.mark.deliberate_wall_clock(reason="refusing inside the grace deadline while a write stalls is the behaviour under test")
 def test_overrun_with_a_premint_and_a_stalled_script_write_refuses_within_the_grace(tmp_path, monkeypatch):
     import threading
 
@@ -226,6 +228,7 @@ def test_overrun_with_a_landed_spool_write_still_answers_the_spool_envelope(monk
     assert mod._answer_overran(_bare_call()) is spooled
 
 
+@pytest.mark.deliberate_wall_clock(reason="the join deadline a stalled log write cannot hold past is the behaviour under test")
 def test_fail_open_log_write_that_stalls_is_left_on_its_thread_past_the_join(monkeypatch):
     import threading
 
@@ -240,6 +243,7 @@ def test_fail_open_log_write_that_stalls_is_left_on_its_thread_past_the_join(mon
         release.set()
 
 
+@pytest.mark.deliberate_wall_clock(reason="the deadline a stalled refusal-log write cannot hold past is the behaviour under test")
 def test_refusal_log_write_that_stalls_leaves_the_deny_unchanged_within_its_deadline(monkeypatch):
     import threading
 

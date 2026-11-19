@@ -13,7 +13,7 @@ Wire params:
 
 Reply (always these keys): ``fire_id``, ``found``, ``state``, ``outcome``, ``run_id``,
 ``commit_sha``, ``commit_sha_reason``, ``timed_out``, ``exit_code``, ``timeout_s``,
-``deadline_at``.
+``deadline_at``, ``reason`` (why an exited fire failed, else None).
 
 Negative-spec:
   - Never waits: a running fire replies ``state: running`` with no git spawn.
@@ -62,6 +62,37 @@ def _commit_sha(record: dict, cwd: Optional[str]) -> tuple[Optional[str], Option
     return None, "nothing landed" if done.returncode == 0 else "git log failed"
 
 
+def _failure_reason(record: dict) -> Optional[str]:
+    """Why an exited fire failed, from the record's own evidence; None when it did not fail.
+
+    Failed means a nonzero ``exit_code`` or a non-clean settled ``outcome``. The parts are
+    the outcome, its failure subtype and basis, the execution note, then the last startup-log
+    line, so a nonzero exit never reaches the caller as a bare number.
+    """
+    if record.get("state") != "exited":
+        return None
+    code = record.get("exit_code")
+    outcome = record.get("outcome")
+    failed_code = isinstance(code, int) and not isinstance(code, bool) and code != 0
+    if not failed_code and outcome not in ("failed", "denied", "truncated", "not_landed"):
+        return None
+    parts = []
+    if failed_code:
+        parts.append(f"workflow exit_code={code}")
+    if outcome:
+        parts.append(f"outcome={outcome}")
+    for key in ("failure_subtype", "outcome_basis", "execution_note"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(f"{key}={value.strip()}")
+    tail = record.get("startup_log_tail")
+    if isinstance(tail, str):
+        lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+        if lines:
+            parts.append(f"log tail: {lines[-1]}")
+    return "; ".join(parts) if parts else "workflow failed; the fire record carries no reason"
+
+
 @register_op("workflow.fire_wait")
 def _workflow_fire_wait(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.fire_wait" handler -- see module docstring for the wire contract.
@@ -80,6 +111,7 @@ def _workflow_fire_wait(params: dict, repo_root: Optional[Path] = None) -> dict:
             "fire_id": fire_id, "found": False, "state": None, "outcome": None, "run_id": None,
             "commit_sha": None, "commit_sha_reason": "no record for fire_id", "timed_out": False,
             "exit_code": None, "timeout_s": None, "deadline_at": None,
+            "reason": "no record for fire_id",
         }
 
     state = record.get("state")
@@ -88,6 +120,7 @@ def _workflow_fire_wait(params: dict, repo_root: Optional[Path] = None) -> dict:
     if state == "exited":
         sha, reason = _commit_sha(record, str(repo_root) if repo_root is not None else record.get("repo_root"))
     return {
+        "reason": _failure_reason(record),
         "fire_id": fire_id,
         "found": True,
         "state": state,

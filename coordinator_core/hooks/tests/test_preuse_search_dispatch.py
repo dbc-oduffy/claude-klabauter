@@ -300,6 +300,22 @@ def test_hook_deadline_stops_before_the_first_leg(indexed_repo, monkeypatch: pyt
     assert not called
 
 
+def test_prefire_survey_and_turn_budget_scan_live_runs_once(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import warp_live
+
+    scans: list[Path] = []
+    monkeypatch.setattr(warp_live, "_token_records", lambda root: scans.append(root) or iter(()))
+    sid = str(uuid.uuid4())
+
+    def _lookup(_params) -> None:
+        warp_live.live_run_for_session(indexed_repo, sid)
+
+    monkeypatch.setattr(m, "_prefire_deny", lambda params: _lookup(params))
+    monkeypatch.setattr(m, "_turn_budget_text", lambda params: _lookup(params) or "")
+    m._handler(_payload(indexed_repo, pattern="some text", session_id=sid))
+    assert len(scans) == 1
+
+
 def _count(repo, sid, suffix: str = "") -> int:
     from pathlib import Path
 

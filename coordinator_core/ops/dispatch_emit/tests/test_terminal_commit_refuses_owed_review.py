@@ -59,3 +59,26 @@ def test_the_same_landing_commits_once_the_owed_finding_is_disposed(repo):
     out = _fire(repo, "ok.py", inline_review=_review(repo, rows))
 
     assert out["committed"] is True, out
+
+
+def _ledger_refusal(paths: list, tests: dict):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import _tests_not_run_refusal
+
+    request = SimpleNamespace(chunks=[SimpleNamespace(id="c1", paths=paths, prefixes=[])])
+    item = {"id": "AC-1", "status": "met", "evidence": "UE automation not run; owed to EM"}
+    return _tests_not_run_refusal(None, {"ledger_verdict": {"items": [item]}}, request, {"tests": tests})
+
+
+def test_em_owed_ue_criterion_lets_a_not_run_ledger_item_land():
+    assert _ledger_refusal(["Source/tests/a.cpp"], {"status": "degraded", "owed_to": "em"}) is None
+
+
+def test_the_exemption_still_refuses_python_and_unowed_runs():
+    from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import REFUSED_TESTS_NOT_RUN
+
+    py = _ledger_refusal(["tests/test_a.py"], {"status": "degraded", "owed_to": "em"})
+    unowed = _ledger_refusal(["Source/tests/a.cpp"], {"status": "degraded"})
+    not_run = _ledger_refusal(["tests/test_a.py"], {"status": "not_run", "owed_to": "em"})
+    assert py["refused"] == unowed["refused"] == not_run["refused"] == REFUSED_TESTS_NOT_RUN

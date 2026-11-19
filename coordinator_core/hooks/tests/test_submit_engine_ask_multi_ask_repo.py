@@ -117,7 +117,7 @@ def _reason(out: dict) -> str:
 
 
 def test_asks_item_keys_carry_repo_before_writes():
-    assert "repo" in ASKS_ITEM_KEYS and ASKS_ITEM_KEYS[-2:] == ("writes", "stop_after")
+    assert "repo" in ASKS_ITEM_KEYS and ASKS_ITEM_KEYS[-3:] == ("family", "writes", "stop_after")
 
 
 def test_entries_naming_two_repos_fan_out_once_per_repo_and_write_only_there(repos):

@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 import time
 
 import pytest
@@ -320,6 +321,16 @@ def test_untracked_break_on_the_last_row_is_exact(repo):
     assert nag._measure(str(repo), ["only.txt", "only2.txt"]) == (1, 200, False)
     (repo / "only2.txt").write_text("n\n")
     assert nag._measure(str(repo), ["only.txt", "only2.txt"])[2] is True
+
+
+def test_nag_module_import_does_not_load_the_git_object_reader():
+    """The hook path reads the lane record only; the object reader loads when a budget measure needs it."""
+    code = (
+        "import sys; from coordinator_core.session import op_dispatch_nag; "
+        "print('coordinator_core.git.git_objects' in sys.modules)"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, creationflags=_NO_WINDOW)
+    assert out.stdout.strip() == "False", out.stderr
 
 
 def test_real_nag_text_says_at_least_only_when_truncated(tmp_path):

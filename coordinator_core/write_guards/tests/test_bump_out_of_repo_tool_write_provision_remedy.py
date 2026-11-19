@@ -46,23 +46,23 @@ def _payload(path, own):
 
 
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_write_into_provisioned_target_denies_and_names_route(world) -> None:
+def test_write_into_provisioned_target_advises_and_names_route(world) -> None:
     result = guard.check(_payload(world["provisioned"] / "a.txt", world["own"]))
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert _reason(result).endswith(ROUTE_REMEDY)
 
 
-def test_write_into_absent_sibling_names_route_when_it_denies(world) -> None:
+def test_write_into_absent_sibling_names_route_when_it_advises(world) -> None:
     from coordinator_core.ops.sibling_repo_provision_contract import remedy_applies
 
     assert remedy_applies(world["absent"] / "a.txt", world["own"]) is True
     result = guard.check(_payload(world["absent"] / "a.txt", world["own"]))
     if result is not None:
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert _reason(result).endswith(ROUTE_REMEDY)
 
 

@@ -90,6 +90,7 @@ def test_size_mismatching_bytes_are_filtered(repo, monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs a POSIX named pipe")
+@pytest.mark.deliberate_wall_clock(reason="the bounded read returning inside its deadline on a writerless fifo is the behaviour under test")
 def test_fifo_without_writer_returns_promptly(repo) -> None:
     os.mkfifo(repo / "pipe.txt")
     t0 = time.monotonic()

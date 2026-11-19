@@ -216,6 +216,14 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "deny-kill-by-port-or-tree",
+        "deny-kill-by-port-or-tree-fire",
+        "taskkill /F /T /PID 1",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+    ),
+    CorpusRow(
         "block-topic-branch",
         "block-topic-branch-fire",
         "git checkout -b topic/shape-probe",

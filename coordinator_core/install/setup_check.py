@@ -22,15 +22,18 @@ class CheckItem:
     name: str
     ok: bool
     detail: str
+    warn: bool = False
 
     def line(self) -> str:
-        return f"{'PASS' if self.ok else 'FAIL'} [{self.name}] {self.detail}"
+        label = "FAIL" if not self.ok else ("WARN" if self.warn else "PASS")
+        return f"{label} [{self.name}] {self.detail}"
 
 
 def exit_code(items: Iterable[CheckItem]) -> int:
     return 0 if all(i.ok for i in items) else 1
 
 
+_STATUS_LINE_LAUNCHER = "statusline-launch.py"
 _LEADING_SUBSTITUTION = re.compile(r'^\s*[A-Za-z_]\w*="\$\(.*?\)[^"]*"\s*;\s*(\S.*)$', re.DOTALL)
 
 
@@ -89,6 +92,40 @@ def check_door(settings_home_path: Path) -> CheckItem:
     if verdict.status != "ok":
         return CheckItem("door", False, f"provenance {verdict.status}: {verdict.detail}")
     return CheckItem("door", True, f"built and current at {bin_dst}")
+
+
+_FORWARDER_SUFFIXES = (".exe", ".cmd") if os.name == "nt" else (".exe", ".cmd", "")
+
+
+def _bare_forwarder(bin_dst: Path) -> Optional[Path]:
+    """The bare `coordinator-invoke` a caller's PATH lookup reaches first: `.exe`, `.cmd`, then extensionless
+    (the extensionless shim is not launchable on Windows, so it is not a candidate there)."""
+    for suffix in _FORWARDER_SUFFIXES:
+        candidate = bin_dst / f"coordinator-invoke{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def check_forwarder_launch(
+    settings_home_path: Path,
+    *,
+    probe: "Optional[Callable[[Path], tuple[bool, str]]]" = None,
+) -> CheckItem:
+    """Launches the bare `coordinator-invoke` once; a blocked launch FAILs with the probe's diagnosis.
+
+    `probe(image) -> (ok, detail)` is injectable; the default is `door_launch_probe.probe_launch`.
+    An absent forwarder is `check_forwarders`' finding, so it is a WARN here.
+    """
+    image = _bare_forwarder(settings_home_path / "bin")
+    if image is None:
+        return CheckItem("forwarder-launch", True, f"no coordinator-invoke in {settings_home_path / 'bin'} to launch", warn=True)
+    if probe is None:
+        from coordinator_core.install.door_launch_probe import probe_launch as probe
+    ok, detail = probe(image)
+    if ok:
+        return CheckItem("forwarder-launch", True, f"{image.name}: {detail}")
+    return CheckItem("forwarder-launch", False, f"{image.name}: {detail}")
 
 
 def _settings_json(claude_dir: Path) -> "tuple[dict, Optional[str]]":
@@ -174,6 +211,15 @@ def check_statusline(claude_dir: Path) -> CheckItem:
     if not command:
         return CheckItem("statusline", False, f"no statusLine.command in {claude_dir / 'settings.json'}")
     normalized = command.replace("\\", "/")
+    if _STATUS_LINE_LAUNCHER in normalized:
+        # The command names `python`/`python3` and a home-relative launcher; the shell resolves
+        # both at run time, so verify the same two facts here.
+        if not (claude_dir / _STATUS_LINE_LAUNCHER).is_file():
+            return CheckItem("statusline", False,
+                             f"statusLine launcher {claude_dir / _STATUS_LINE_LAUNCHER} is missing -- re-run scripts/setup.py")
+        if not any(shutil.which(name) for name in ("python", "python3")):
+            return CheckItem("statusline", False, f"statusLine command needs python or python3 on PATH: {command}")
+        return CheckItem("statusline", True, command)
     if ("coordinator" in normalized and "/bin/statusline.py" in normalized
             and ".coordinator-plugin-root" not in normalized):
         return CheckItem("statusline", False,
@@ -246,31 +292,46 @@ def _query_execution_policy(exe: str) -> str:
     return proc.stdout.strip()
 
 
+def engine_shell(which: "Callable[[str], Optional[str]]" = shutil.which) -> Optional[str]:
+    """The PowerShell the engine launches for a Windows hook. `wrap_hook_command_guarded(windows=True)`
+    emits PowerShell syntax naming no binary, so the shell is the first `_PROFILE_SHELLS` entry on
+    PATH (PowerShell 7 ahead of Windows PowerShell). None when neither is installed."""
+    return next((s for s in _PROFILE_SHELLS if which(s)), None)
+
+
 def check_execution_policy(
     platform: Optional[str] = None,
     which: "Callable[[str], Optional[str]]" = shutil.which,
     query: "Callable[[str], str]" = _query_execution_policy,
 ) -> "list[CheckItem]":
-    """One item per installed profile shell: FAIL when its effective policy is Restricted or
-    Undefined, since the profile the installer writes would not load. Reports; never sets a policy."""
+    """One item per installed profile shell. Only the engine shell (`engine_shell`) FAILs, when its
+    effective policy is Restricted or Undefined or it cannot be queried; any other shell's block or
+    query failure is a WARN naming the engine shell. Reports; never sets a policy."""
     import sys
 
     if (platform or sys.platform) != "win32":
         return [CheckItem("execution_policy", True, "not applicable off Windows")]
     items: "list[CheckItem]" = []
+    engine = engine_shell(which)
     for shell in _PROFILE_SHELLS:
         exe = which(shell)
         if not exe:
             continue
         name = f"execution_policy[{shell}]"
+        is_engine = shell == engine
+        advisory = "" if is_engine else f" (advisory: the engine launches {engine})"
         try:
             policy = query(exe)
         except Exception as exc:  # noqa: BLE001 -- an unqueryable shell is a finding, not a crash
-            items.append(CheckItem(name, False, f"could not query {shell}: {exc}"))
+            items.append(CheckItem(name, not is_engine, f"could not query {shell}: {exc}{advisory}", warn=not is_engine))
             continue
         if policy.lower() in _BLOCKING_POLICIES:
             fix = f'{shell} -NoProfile -Command "Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"'
-            items.append(CheckItem(name, False, f"{shell} policy is {policy}; its profile will not load -- run: {fix}"))
+            items.append(CheckItem(
+                name, not is_engine,
+                f"{shell} policy is {policy}; its profile will not load{advisory} -- run: {fix}",
+                warn=not is_engine,
+            ))
         else:
             items.append(CheckItem(name, True, f"{shell} policy is {policy}"))
     return items or [CheckItem("execution_policy", True, "no PowerShell profile shell on PATH")]
@@ -297,10 +358,12 @@ def run_checks(
     claude_dir: Path,
     required_repo_keys: "list[str]",
     registry_get: "Callable[[str], Optional[str]]",
+    launch_probe: "Optional[Callable[[Path], tuple[bool, str]]]" = None,
 ) -> "list[CheckItem]":
     return [
         check_forwarders(settings_home_path, claude_klabauter_root),
         check_door(settings_home_path),
+        check_forwarder_launch(settings_home_path, probe=launch_probe),
         check_guards(claude_klabauter_root, claude_dir),
         *check_repo_pointers(required_repo_keys, registry_get),
         check_heavy_admission(registry_get),

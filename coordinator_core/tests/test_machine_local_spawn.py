@@ -91,6 +91,7 @@ def _wait_dead(pid: int, timeout: float = 5.0) -> bool:
     return not _alive(pid)
 
 
+@pytest.mark.deliberate_wall_clock(reason="the spawn timeout bound is the behaviour under test")
 def test_run_bounded_timeout_returns_none_and_reaps_child(env, monkeypatch):
     monkeypatch.setenv("STUB_SLEEP", "30")
     monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 1.5)  # outlasts interpreter start so the pid is written
@@ -102,6 +103,7 @@ def test_run_bounded_timeout_returns_none_and_reaps_child(env, monkeypatch):
     assert _wait_dead(pid)
 
 
+@pytest.mark.deliberate_wall_clock(reason="the clamp on the spawn timeout is the behaviour under test")
 def test_run_bounded_clamps_a_larger_timeout(env, monkeypatch):
     monkeypatch.setenv("STUB_SLEEP", "30")
     monkeypatch.setattr(mls, "ML_SPAWN_TIMEOUT_S", 0.5)
@@ -562,6 +564,7 @@ def test_a_killed_caller_leaves_no_surviving_stub_child(env, monkeypatch):
     assert all(_wait_dead(pid, timeout=5.0) for pid in pids)
 
 
+@pytest.mark.deliberate_wall_clock(reason="the slot wait timeout bound is the behaviour under test")
 def test_slot_timeout_returns_none_and_spawns_nothing(env, monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_MAX_INFLIGHT", "1")
     state, fd = mls._claim_slot()

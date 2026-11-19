@@ -481,7 +481,7 @@ def test_plugin_registered_fails_when_missing_from_known_marketplaces(tmp_path: 
     assert "known_marketplaces.json" in err
 
 
-def test_plugin_registered_fails_when_directory_exists_but_not_registered(tmp_path: Path, capsys) -> None:
+def test_plugin_registered_fails_when_directory_exists_but_not_registered(tmp_path: Path, capsys, monkeypatch) -> None:
     """Headline regression: a `~/.claude/plugins/<name>/` runtime-data
     directory reads as 'installed' to every eyeball check, but that
     directory alone must never pass this subcommand."""
@@ -495,23 +495,17 @@ def test_plugin_registered_fails_when_directory_exists_but_not_registered(tmp_pa
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "mcp-session-state").mkdir()
 
-    old_home = os.environ.get("HOME")
-    try:
-        os.environ["HOME"] = str(fake_home)
-        ns = _mod.build_parser().parse_args([
-            "check-plugin-registered",
-            "--plugin", "project-rag",
-            "--marketplace", "project-rag",
-            "--installed-plugins", str(installed),
-            "--known-marketplaces", str(known),
-        ])
-        rc = ns.func(ns)
-        err = capsys.readouterr().err
-    finally:
-        if old_home is None:
-            os.environ.pop("HOME", None)
-        else:
-            os.environ["HOME"] = old_home
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    ns = _mod.build_parser().parse_args([
+        "check-plugin-registered",
+        "--plugin", "project-rag",
+        "--marketplace", "project-rag",
+        "--installed-plugins", str(installed),
+        "--known-marketplaces", str(known),
+    ])
+    rc = ns.func(ns)
+    err = capsys.readouterr().err
 
     assert rc == 1
     assert "FAIL" in err

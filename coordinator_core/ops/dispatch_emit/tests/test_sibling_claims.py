@@ -596,3 +596,139 @@ def test_unrecorded_submitter_is_empty_and_excludes_nothing(repo):
     _declare(repo, live, "p/b.py")
     run_token.mint(repo, live, "g.mjs", session_id=SELF)
     assert sibling_claims._unlanded_run_ids(repo, OWN) == [live]
+
+
+def test_a_built_index_that_lost_a_runs_entry_names_it_only_inside_the_ttl(repo):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index
+
+    fresh = _stamped("fb0001")
+    old = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime(time.time() - run_token.TTL_SECONDS - 3600))}-fb0002"
+    for run_id in (fresh, old):
+        _halt(_declare(repo, run_id, "p/x.py"), "p/x.py")
+    halted_withheld_index.rebuild(repo)
+    halted_withheld_index.remove_run(repo, fresh)
+    halted_withheld_index.remove_run(repo, old)
+
+    with halted_hold_release.release_scope():
+        halted_hold_release.record_stamps(repo)
+        assert sibling_claims.live_unlanded_candidates(repo) == [fresh]
+
+
+def test_an_unindexed_halted_run_is_named_by_the_landing_view_not_the_sibling_claims_warp_listing(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index
+
+    run_id = _stamped("fb0005")
+    _halt(_declare(repo, run_id, "p/w.py"), "p/w.py")
+    halted_withheld_index.rebuild(repo)
+    halted_withheld_index.remove_run(repo, run_id)
+    monkeypatch.setattr(sibling_claims, "_warp_run_names", lambda root: pytest.fail("state/warp listed"))
+
+    with halted_hold_release.release_scope():
+        halted_hold_release.record_stamps(repo)
+        assert sibling_claims.live_unlanded_candidates(repo) == [run_id]
+
+
+def _live_and_lost(repo):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+    live, lost = _stamped("fb0006"), _stamped("fb0007")
+    _declare(repo, live, "p/z.py")
+    run_token.mint(repo, live, "a.mjs", session_id=SELF)
+    _halt(_declare(repo, lost, "p/w.py"), "p/w.py")
+    halted_withheld_index.rebuild(repo)
+    halted_withheld_index.remove_run(repo, lost)
+    return live, lost
+
+
+def test_a_halted_run_in_neither_index_is_named_by_a_record_dir_view_the_scope_already_holds(repo):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    live, lost = _live_and_lost(repo)
+    with halted_hold_release.release_scope():
+        halted_hold_release.record_stamps(repo)
+        assert sibling_claims.live_unlanded_candidates(repo) == sorted([live, lost])
+
+
+def test_a_halted_run_in_neither_index_never_costs_a_new_record_dir_listing_while_the_live_index_is_built(
+    repo, monkeypatch
+):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    live, _lost = _live_and_lost(repo)
+    monkeypatch.setattr(halted_hold_release, "record_stamps", lambda root: pytest.fail("record dirs listed"))
+    with halted_hold_release.release_scope():
+        assert sibling_claims.live_unlanded_candidates(repo) == [live]
+
+
+def test_an_unreadable_index_file_names_its_run_without_a_warp_listing(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+    live, run_id = _stamped("fb0004"), _stamped("fb0003")
+    _declare(repo, live, "p/z.py")
+    run_token.mint(repo, live, "a.mjs", session_id=SELF)
+    _halt(_declare(repo, run_id, "p/y.py"), "p/y.py")
+    halted_withheld_index.rebuild(repo)
+    (repo / halted_withheld_index.INDEX_DIR / f"{run_id}.json").write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(sibling_claims, "_warp_run_names", lambda root: pytest.fail("state/warp listed"))
+
+    assert sibling_claims.live_unlanded_candidates(repo) == sorted([live, run_id])
+
+
+def test_a_pass_whose_every_candidate_a_halted_run_withholds_weighs_no_other_source(repo, monkeypatch):
+    run_id = _stamped("fc0001")
+    _halt(_declare(repo, run_id, "p/a.py", "p/b.py"), "p/a.py", "p/b.py")
+    monkeypatch.setattr(sibling_claims, "_unlanded_run_ids", lambda *a, **k: pytest.fail("extras weighed"))
+    monkeypatch.setattr(sibling_claims, "_held_extras", lambda *a, **k: pytest.fail("extras weighed"))
+
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py", "p/b.py"]) == {"p/a.py": run_id, "p/b.py": run_id}
+
+
+def test_a_pass_with_one_candidate_no_halted_run_withholds_still_weighs_the_extras(repo, monkeypatch):
+    weighed: list = []
+    real = sibling_claims._unlanded_run_ids
+    monkeypatch.setattr(sibling_claims, "_unlanded_run_ids", lambda *a, **k: weighed.append(1) or real(*a, **k))
+    run_id = _stamped("fc0002")
+    rdir = _declare(repo, run_id, "p/a.py", review_declared_paths=["p/r.py"])
+    _halt(rdir, "p/a.py", "p/r.py")
+    other = _stamped("fc0003")
+    _halt(_declare(repo, other, "p/c.py"), "p/c.py")
+
+    claims = sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py", "p/c.py", "p/free.py"])
+
+    assert claims == {"p/a.py": run_id, "p/c.py": other}
+    assert weighed
+
+
+def test_a_run_dir_created_mid_scope_is_seen_and_a_present_one_is_resolved_once(tmp_path, monkeypatch):
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.ops.dispatch_emit import ask_contract, run_dir_stat_cache
+
+    resolved: list = []
+    real = ask_contract._record_dir
+    monkeypatch.setattr(ask_contract, "_record_dir", lambda r, i: resolved.append(i) or real(r, i))
+    run_id = _stamped("fc0004")
+    state_dir = tmp_path / ask_contract.RECORD_DIR_ROOT / run_id
+    with call_io_scope.call_io_scope():
+        run_dir_stat_cache.record_dir(tmp_path, run_id)
+        run_dir_stat_cache.record_dir(tmp_path, run_id)
+        assert len(resolved) == 1  # absent: re-validated by stat, resolved once
+        state_dir.mkdir(parents=True)
+        seen = run_dir_stat_cache.record_dir(tmp_path, run_id)
+        assert len(resolved) == 2 and seen == state_dir.resolve()  # created mid-scope: resolved afresh
+        run_dir_stat_cache.record_dir(tmp_path, run_id)
+        assert len(resolved) == 2  # present: held for the rest of the scope
+
+
+def test_a_scratch_record_file_created_after_an_absent_answer_is_seen(tmp_path):
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.ops.dispatch_emit import ask_contract, run_dir_stat_cache
+
+    run_id = _stamped("fc0005")
+    scratch = tmp_path / ask_contract.RUN_DIR_ROOT / run_id
+    with call_io_scope.call_io_scope():
+        absent = run_dir_stat_cache.record_dir(tmp_path, run_id)
+        assert absent == (tmp_path / ask_contract.RECORD_DIR_ROOT / run_id).resolve()
+        scratch.mkdir(parents=True)
+        assert run_dir_stat_cache.record_dir(tmp_path, run_id) == absent  # no record file yet: still state
+        (scratch / ask_contract.RUN_RECORD_FILES[0]).write_text("{}", encoding="utf-8")
+        assert run_dir_stat_cache.record_dir(tmp_path, run_id) == scratch.resolve()

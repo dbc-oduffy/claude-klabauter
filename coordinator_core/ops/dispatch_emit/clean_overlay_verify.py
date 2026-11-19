@@ -34,7 +34,7 @@ from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
 from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, resolve_targeted_test_python
 from coordinator_core.session.record_homes import home_rel
-from coordinator_core.testing import scoped_pytest
+from coordinator_core.testing import scoped_pytest, spawn_depth
 from coordinator_core.win_portability import no_console_creationflags
 
 VERDICT_FILE = "overlay-verdict.json"
@@ -383,6 +383,26 @@ def failing_ids(output: str) -> tuple:
     FAILED/ERROR line whose remainder is not node-id-shaped (a summary or count line) yields none."""
     found = (m.strip() for m in _FAILED_ID_RE.findall(output))
     return tuple(dict.fromkeys(i for i in found if _node_id_shaped(i)))
+
+
+_SETUP_ERROR_RE = re.compile(r"^_+ ERROR (?:at setup of|collecting) (.+?) _+$", re.MULTILINE)
+_SECTION_END_RE = re.compile(r"^(?:_+ .* _+|={3,} .* ={3,})$", re.MULTILINE)
+_SETUP_HEAD_LINES = 6
+_SETUP_CAUSE_LINES = 6
+
+
+def first_setup_error(output: str) -> str:
+    """The head of the first `ERROR at setup of` or `ERROR collecting` traceback in `output`: its header, its
+    first lines and its `E` cause lines, so a verdict detail cut to the output tail still names the failure
+    that errored every test behind it; `""` when the output holds none."""
+    output = output.replace("\r\n", "\n")
+    start = _SETUP_ERROR_RE.search(output)
+    if start is None:
+        return ""
+    end = _SECTION_END_RE.search(output, start.end())
+    section = output[start.start():end.start() if end else len(output)].strip().splitlines()
+    cause = [ln for ln in section[_SETUP_HEAD_LINES:] if ln.startswith("E ")][:_SETUP_CAUSE_LINES]
+    return "first setup ERROR: " + " | ".join(ln.strip() for ln in (*section[:_SETUP_HEAD_LINES], *cause))[:_OUTPUT_TAIL]
 
 
 LegHook = Callable[[str], ContextManager]
@@ -739,6 +759,17 @@ def _mirror_env(env: dict, dest: Path) -> dict:
     return {**env, "PYTHONPATH": str(dest), "PYTHONDONTWRITEBYTECODE": "1"}
 
 
+def _pytest_env(tmp: Path, dest: Path, selection: Sequence[str]) -> dict:
+    """The mirror env of a pytest child: depth-stamped and per-run tmp. `OSError` naming the refusal when the
+    nesting depth or a selection that collects the calling test forbids the spawn."""
+    refusal = spawn_depth.refusal_for_spawn(os.environ) or spawn_depth.selection_includes_spawner(
+        selection, os.environ, str(dest)
+    )
+    if refusal:
+        raise OSError(refusal)
+    return _mirror_env(spawn_depth.child_env(scoped_pytest.tmp_env(os.environ, tmp)), dest)
+
+
 def run_in_export(root: Path, run_id: str, paths: Sequence[str], argv: Sequence[str]) -> subprocess.CompletedProcess:
     """Run `argv` in the clean export of `paths` (cwd and PYTHONPATH the mirror) under the mirror lock; the lock
     is held across the command. `ExportError` when the export fails; `TimeoutExpired` at `TEST_TIMEOUT_S`."""
@@ -796,7 +827,7 @@ def _base_failing_body(
         run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"{run_id}-base")
         ran = _run(
             _pytest_argv(root, dest, basetemp, ids), dest, None, stall_s=PYTEST_STALL_S,
-            env=_mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest),
+            env=_pytest_env(tmp, dest, ids),
         )
     except (OSError, subprocess.SubprocessError):
         return frozenset()
@@ -996,7 +1027,7 @@ def verify(
             run_seeds = narrow_touched_tests(root, dest, base_sha, sha, seeds, touched)
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, run_id)
             run_dirs.append(run_holder)
-            env = _mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest)
+            env = _pytest_env(tmp, dest, [*run_seeds, *extras])
             shard_note = ""
             shard: Optional[subprocess.CompletedProcess] = None
             with leg("pytest"):
@@ -1088,7 +1119,9 @@ def verify(
                 "pre_existing", f"every failing test also fails at base {str(base_sha)[:12]}: {', '.join(ids)}: {tail}", seeds,
                 failing=ids,
             )
-        return OverlayVerdict("red", f"test collection failed: {tail}" if collected else tail, seeds, failing=ids)
+        setup = first_setup_error(full)
+        body = f"test collection failed: {tail}" if collected else tail
+        return OverlayVerdict("red", f"{setup}; {body}" if setup else body, seeds, failing=ids)
     return OverlayVerdict("inconclusive", f"pytest exit {bad[0].returncode}: {tail}", seeds)
 
 

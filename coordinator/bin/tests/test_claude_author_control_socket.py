@@ -22,7 +22,7 @@ def ca(tmp_path, monkeypatch):
     plugin.mkdir(parents=True)
     base = tmp_path / "rt"
     monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(base))
-    for var in ("CLAUDE_AUTHOR_DRY_RUN", "CLAUDE_AUTHOR_PRINT_PLUGIN_DIR", "CLAUDE_AUTHOR_NO_EXEC"):
+    for var in ("CLAUDE_AUTHOR_DRY_RUN", "CLAUDE_AUTHOR_PRINT_PLUGIN_DIR", "CLAUDE_AUTHOR_NO_EXEC", "CLAUDECODE"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(mod, "_resolve_doe_clone", lambda _cli: str(clone))
     monkeypatch.setattr(mod, "_resolve_plugin_root", lambda _c: str(plugin))
@@ -61,12 +61,26 @@ def test_flag_consumed_and_stub_receives_full_argv(ca, tmp_path):
     assert ca._test.launched == []
 
 
-def test_missing_package_exits_1_without_launch(ca, capsys):
+def test_missing_package_exits_1_without_launch(ca, capsys, monkeypatch):
     rc = ca.main(["--control-socket"])
     assert rc == 1
     assert ca._test.launched == []
     err = capsys.readouterr().err
     assert "supervisor" in err and err.count("\n") == 1
+
+    monkeypatch.setenv("CLAUDECODE", "1")
+    rc = ca.main(["--control-socket"])
+    assert rc == 1
+    assert ca._test.launched == []
+    err = capsys.readouterr().err
+    assert "supervisor" in err and err.count("\n") == 1
+
+
+def test_nested_advisory_emitted_once_when_supervisor_loads(ca, capsys, monkeypatch):
+    _stub_supervisor(ca._test.plugin, "def run(argv, plugin_dir, control_base):\n    return 0\n")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    assert ca.main(["--control-socket"]) == 0
+    assert capsys.readouterr().err.count("running inside a Claude Code session") == 1
 
 
 def test_supervisor_exception_exits_1_without_launch(ca, capsys):

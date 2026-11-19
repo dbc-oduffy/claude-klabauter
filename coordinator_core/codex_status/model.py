@@ -73,7 +73,7 @@ def counts(raw: dict) -> dict:
 
 
 def observe_usage(state: dict, sid: str, turn_id: str | None, usage: dict, observed_at=None,
-                  pricing_model=_UNSET, pricing_speed=_UNSET):
+                  pricing_model=_UNSET, pricing_speed=_UNSET) -> None:
     owner = thread(state, sid)
     total = counts(usage.get("total", usage.get("total_token_usage", {})))
     last = counts(usage.get("last", usage.get("last_token_usage", {})))
@@ -113,9 +113,11 @@ def observe_usage(state: dict, sid: str, turn_id: str | None, usage: dict, obser
         old["unpriced_events"] -= 1
         old["observations"] -= 1
         old[state.setdefault("pending_counters", {}).pop(key, "native_events")] -= 1
+        state.setdefault("pending_models", {}).pop(key, None)
     if price is None:
         pending[key] = sid
         state.setdefault("pending_counters", {})[key] = "native_events"
+        state.setdefault("pending_models", {})[key] = priced_model
     else:
         state["seen"][key] = True
     owner["observations"] += 1
@@ -136,7 +138,7 @@ def observe_usage(state: dict, sid: str, turn_id: str | None, usage: dict, obser
         warn(state, "some usage predates the first priced observation")
 
 
-def ingest(state: dict, event: dict, source: dict):
+def ingest(state: dict, event: dict, source: dict) -> None:
     kind, payload = event.get("type"), event.get("payload") or {}
     method, params = event.get("method"), event.get("params") or {}
     if kind == "coordinator_usage":
@@ -176,9 +178,11 @@ def ingest(state: dict, event: dict, source: dict):
             # A native observation can be repaired by canonical data and vice versa.
             prior_counter = state.setdefault("pending_counters", {}).pop(key, counter)
             old[prior_counter] -= 1
+            state.setdefault("pending_models", {}).pop(key, None)
         if price is None:
             pending[key] = sid
             state.setdefault("pending_counters", {})[key] = counter
+            state.setdefault("pending_models", {})[key] = payload.get("model")
         else:
             state["seen"][key] = True
         row["observations"] += 1
@@ -241,6 +245,19 @@ def ingest(state: dict, event: dict, source: dict):
         observe_usage(state, sid, source.get("turn_id"), payload["info"], event.get("timestamp"), source.get("model"), source.get("speed"))
     elif kind == "compacted":
         owner.pop("used", None)  # Lifetime spend survives; old context doesn't.
+
+
+def repriceable_threads(state: dict) -> set[str]:
+    """Threads holding unpriced events whose model the price table now knows."""
+    models = state.get("pending_models", {})
+    threads = state.get("threads", {})
+
+    def known(key: str, sid: str) -> bool:
+        # Pending rows persisted before pending_models existed carry no model; fall back to the thread's.
+        if key in models:
+            return bool(model_family(models[key]))
+        return any(model_family(m) for m in threads.get(sid, {}).get("observed_models", []))
+    return {sid for key, sid in state.get("pending_unpriced", {}).items() if known(key, sid)}
 
 
 def descendants(state: dict) -> set[str]:

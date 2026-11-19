@@ -5,6 +5,9 @@ Fixture: N run dirs shaped `state/warp/<run_id>/{manifest.json, kept.json}` plus
 tracked-looking file per run that its `kept.json` fingerprints. Each axis is driven in-process, twice
 (cold: process-wide caches cleared; warm: the same call again, nothing changed):
 
+  record_dir              `run_dir_stat_cache.record_dir` (the memoized `ask_contract.record_dir`) per run: the path resolution every scan below pays per
+                          run; the kept_fingerprint and manifest_declared axes take it from a precomputed
+                          map so each reports only the leg its cache bounds
   halted_withheld_index   `halted_withheld_index.entries`
   kept_fingerprint        the `kept_work.kept_fingerprints` + `kept_work.fingerprint` loop of
                           `sibling_claims._own_dirt` / `land_run_halt._peer_only_after_checkpoint`
@@ -34,7 +37,7 @@ from typing import Any, Callable, Generator, Optional
 from unittest import mock
 
 DEFAULT_RUN_DIRS = 5000
-AXES = ("halted_withheld_index", "kept_fingerprint", "manifest_declared", "ack_status")
+AXES = ("record_dir", "halted_withheld_index", "kept_fingerprint", "manifest_declared", "ack_status")
 PASSES = ("cold", "warm")
 BAR_MS = 500.0
 
@@ -128,7 +131,7 @@ def _axis_legs(root: Path, ids: list) -> dict:
     from coordinator_core.ops import warp_run_deliverable as wrd
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
     from coordinator_core.ops.dispatch_emit import kept_work
-    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.run_dir_stat_cache import clear as clear_stat_cache, record_dir
     from coordinator_core.warm import dispatch_ack
 
     store = dispatch_ack.AckStore(
@@ -138,21 +141,28 @@ def _axis_legs(root: Path, ids: list) -> dict:
     for key in keys:
         store.admit(key, "land")
 
+    dirs = {run_id: record_dir(root, run_id) for run_id in ids}
+
+    def record_dirs() -> int:
+        return sum(record_dir(root, run_id) is not None for run_id in ids)
+
     def kept_fingerprint() -> int:
         matched = 0
         for run_id in ids:
-            kept = kept_work.kept_fingerprints(record_dir(root, run_id))
+            kept = kept_work.kept_fingerprints(dirs[run_id])
             for rel, blobs in kept.items():
                 matched += kept_work.fingerprint(root, rel) in blobs
         return matched
 
     def manifest_declared() -> int:
-        return sum(len(wrd._manifest_declared(run_id, root)[0]) for run_id in ids)
+        with mock.patch.object(wrd, "record_dir", lambda _root, run_id: dirs[run_id]):
+            return sum(len(wrd._manifest_declared(run_id, root)[0]) for run_id in ids)
 
     def ack_status() -> int:
         return sum(store.status(key).get("state") == dispatch_ack.STATE_EXECUTING for key in keys)
 
     return {
+        "record_dir": (clear_stat_cache, record_dirs),
         "halted_withheld_index": (idx._STAT_CACHE.clear, lambda: len(idx.entries(root))),
         "kept_fingerprint": (lambda: None, kept_fingerprint),
         "manifest_declared": (lambda: None, manifest_declared),
@@ -189,11 +199,11 @@ def run_benchmark(base: Optional[Path] = None, run_dirs: int = DEFAULT_RUN_DIRS)
 
 
 def over_bar(report: dict) -> list:
-    """Axes whose warm pass is over `BAR_MS` process time or reads at least one file per run dir."""
+    """Axes whose warm pass is over `BAR_MS` process time or reads (bytes or text) at least one file per run dir."""
     n = report["run_dirs"]
     return [
         name for name, passes in report["axes"].items()
-        if passes["warm"]["process_ms"] >= BAR_MS or passes["warm"]["read_bytes_calls"] >= n
+        if passes["warm"]["process_ms"] >= BAR_MS or passes["warm"]["read_bytes_calls"] + passes["warm"]["read_text_calls"] >= n
     ]
 
 

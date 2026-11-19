@@ -164,6 +164,7 @@ def test_recycle_line_survives_a_missing_stall_dir(tmp_path: Path, monkeypatch: 
     assert len(list((tmp_path / "gone" / "stall").glob("*-recycle.txt"))) == 1
 
 
+@pytest.mark.deliberate_wall_clock(reason="the recycle line not waiting on a stuck writer is the behaviour under test; the bound is a wait, not CPU cost")
 def test_a_stuck_stall_writer_does_not_slow_the_recycle_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _ctx(tmp_path, monkeypatch)
     release = threading.Event()
@@ -198,6 +199,7 @@ def test_classify_reads_a_cache_a_background_thread_refreshes(tmp_path: Path, mo
     assert probers and ident not in probers
 
 
+@pytest.mark.deliberate_wall_clock(reason="serving a stale entry without waiting on the probe is the behaviour under test; the bound is a wait, not CPU cost")
 def test_classify_reuses_a_fresh_entry_and_serves_a_stale_one_without_waiting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -225,6 +227,7 @@ def test_classify_reuses_a_fresh_entry_and_serves_a_stale_one_without_waiting(
     release.set()
 
 
+@pytest.mark.deliberate_wall_clock(reason="classifying hung inside the cold wait deadline on a wedged probe is the behaviour under test")
 def test_a_wedged_probe_classifies_the_holder_hung_inside_the_cold_wait(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

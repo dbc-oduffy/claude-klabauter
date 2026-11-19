@@ -1173,6 +1173,7 @@ def test_an_interrupted_advance_leaves_the_mirror_marked_and_the_next_verify_reb
     assert len(clones) == 1
 
 
+@pytest.mark.deliberate_wall_clock(reason="failing inside the lock-wait deadline on a busy mirror is the behaviour under test")
 def test_a_busy_mirror_fails_the_verify_naming_the_lock_and_never_runs_unlocked(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
     monkeypatch.setattr(cov, "MIRROR_SLOTS", 1)
@@ -1265,6 +1266,7 @@ def test_a_full_pool_is_waited_on_and_a_slot_freed_mid_wait_is_taken_by_the_defa
     assert "busy" not in out.detail and out.verdict != "inconclusive", out
 
 
+@pytest.mark.deliberate_wall_clock(reason="a free slot taken with no wait and a full pool refused inside the wait deadline are the behaviour under test")
 def test_taking_a_free_slot_never_waits_and_a_pool_still_full_after_the_wait_is_a_typed_busy_error(tmp_path, monkeypatch):
     root, _head = _repo(tmp_path)
     monkeypatch.setattr(cov, "MIRROR_WAIT_S", 0.3)

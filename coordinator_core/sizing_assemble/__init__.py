@@ -346,9 +346,12 @@ def _derive_register_cli(
 
 
 def _read_path_or_stdin(path: str) -> str:
-    """The text of `path`, or of stdin when `path` is `-`. Stdin is decoded from raw bytes by BOM
+    """The text of `path`, of stdin when `path` is `-`, or `path` itself when its stripped text
+    starts with `{` (inline JSON, never opened as a path). Stdin is decoded from raw bytes by BOM
     sniff (UTF-16 BOM -> utf-16, else utf-8-sig) so a PowerShell pipe survives; a stdin without
     `.buffer` falls back to its text read."""
+    if path.lstrip().startswith("{"):
+        return path
     if path == "-":
         import sys
 
@@ -2944,14 +2947,14 @@ def _usage(prog: str, stream=None) -> int:
         "    [--decided-on YYYY-MM-DD] [--supersede] --write <state/sizings/x.yaml>\n"
         "    [--warp-run <run id> (write only; the sizing takes no session XS lane)]\n"
         "    [--no-plan-hand-off (write only; decision carries pm_exit_question, no obligation or acceptance fires)]\n"
-        "    [--scout-register <scout report json|yaml, or - for stdin> (seeds the derived register)]\n"
+        "    [--scout-register <scout report json|yaml path, inline JSON object, or - for stdin> (seeds the derived register)]\n"
         "or: --register <yaml, or - for stdin> [--supersede] --write <state/sizings/x.yaml>\n"
         "    (an overlay on the recorded register: rows merged by id, drop: [ids], unrelated_turns\n"
         "    by turn; --supersede replaces it whole)\n"
         "    register yaml: sources: [{doc, ref}] (at least one)\n"
         "                   rows: [{id, source_text, surface: ui|api|cli|internal|visual, status?}]\n"
         "    status defaults to open, claimed_by to []\n"
-        "or: --derive-register [--scout-register <path|->] [--supersede] --write <state/sizings/x.yaml>\n"
+        "or: --derive-register [--scout-register <path|inline JSON|->] [--supersede] --write <state/sizings/x.yaml>\n"
         "    (records the register derived from the sizing's embedded PM turns)",
         file=stream,
     )

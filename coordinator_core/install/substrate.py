@@ -1694,6 +1694,9 @@ def _write_native_door_forwarder(
         dest = door_install.install_named_forwarder(
             bin_dst, engine_root, name, check_only=check_only, source=source
         )
+    except door_install.DoorRouteDeclined:
+        # `install_door` already said why; the name stays on its Python pair.
+        return None
     except (door_install.DoorInstallError, SystemExit) as exc:
         # check_only=True
         # raises DoorInstallError as its own normal "not yet cut over"
@@ -3960,9 +3963,15 @@ def _write_agent_helper_forwarders(
         # to calling `install_door` itself and degrades exactly as before --
         # this is a perf hoist, never a new failure mode.
         door_source: "Optional[Path]" = None
+        cutover_root = engine_root
         if engine_root is not None and not check_only:
             try:
                 door_source = door_install.install_door(bin_dst, engine_root, check_only=False)
+            except door_install.DoorRouteDeclined:
+                # `py` route or a Smart App Control block: no native image for any
+                # name, and one a prior install left would outrank the Python pair.
+                cutover_root = None
+                door_install.retire_native_images(bin_dst, {*published_only, *agent_helper_target_map})
             except (OSError, door_install.DoorInstallError, SystemExit):
                 door_source = None
         for f, target in sorted({**published_only, **agent_helper_target_map}.items()):
@@ -3990,7 +3999,7 @@ def _write_agent_helper_forwarders(
                     agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
                     continue
                 native_dst = _cut_over_to_native_door(
-                    f, bin_dst, check_only, engine_root=engine_root,
+                    f, bin_dst, check_only, engine_root=cutover_root,
                     static_family_names=static_family_names, source=door_source,
                 )
                 if native_dst is _STATIC_FAMILY_ALREADY_SERVED:

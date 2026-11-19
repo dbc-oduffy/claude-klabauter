@@ -102,6 +102,7 @@ def test_gate_is_released_after_the_block(tmp_path: Path) -> None:
         pass
 
 
+@pytest.mark.deliberate_wall_clock(reason="admission with no wait inside a deadline is the behaviour under test")
 def test_same_holder_run_in_another_process_is_admitted_at_once(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     proc = _start_holder(tmp_path, repo, 5, label="run-1")
@@ -163,6 +164,7 @@ def test_empty_holder_label_never_matches_an_empty_recorded_label(tmp_path: Path
         proc.wait()
 
 
+@pytest.mark.deliberate_wall_clock(reason="reclaiming a dead holder with no wait inside a deadline is the behaviour under test")
 def test_dead_pid_holder_is_reclaimed_at_once(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     proc = _start_holder(tmp_path, repo, 30, label="run-1")
@@ -187,6 +189,7 @@ def test_no_caller_wait_queues_behind_a_live_holder_past_the_default(tmp_path: P
         proc.wait()
 
 
+@pytest.mark.deliberate_wall_clock(reason="reclaiming a dead holder with no caller wait inside a deadline is the behaviour under test")
 def test_no_caller_wait_reclaims_a_dead_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     monkeypatch.setattr(land_byte_gate, "DEFAULT_WAIT_SECS", 0.3)
@@ -199,6 +202,7 @@ def test_no_caller_wait_reclaims_a_dead_holder(tmp_path: Path, monkeypatch: pyte
     assert time.monotonic() - started < 2.0
 
 
+@pytest.mark.deliberate_wall_clock(reason="the follow wait being clamped by the dispatcher deadline is the behaviour under test")
 def test_no_caller_wait_follow_is_bounded_by_the_dispatcher_clamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     proc = _start_holder(tmp_path, repo, 30, label="run-1")

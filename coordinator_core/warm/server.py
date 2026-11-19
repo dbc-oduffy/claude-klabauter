@@ -1458,6 +1458,7 @@ def _pool_dispatch_worker(
     probe_root, probe_source = _stall_probe_root(msg)
     disarm = _arm_stall_dump(stall_secs, claim, probe_root, probe_source)
     dispatch_fence.hold(claim_dir, dispatch_key if claim is not None else None)
+    _bind_hook_lane_budget(msg, stamp)
     try:
         if not _import_op_module(msg, claim_dir, dispatch_key):
             return {_NOT_DISPATCHED_MARKER: True}
@@ -1467,6 +1468,40 @@ def _pool_dispatch_worker(
     finally:
         dispatch_fence.release()
         disarm()
+        _unbind_hook_lane_budget()
+
+
+#: Seconds before `_HOOK_LANE_BUDGET_SECS` at which a hook chain answers its own verdict, so a result
+#: reaches the accept process ahead of the not-answered error that its wait cut would give the caller.
+_HOOK_CHAIN_MARGIN_SECS = 0.5
+
+
+def _unbind_hook_lane_budget() -> None:
+    """Clear the task's chain deadline so no later in-worker `run_phased` inherits a stale end."""
+    try:
+        from coordinator_core.hooks import _preuse_phases
+
+        _preuse_phases.bind_pool_budget(None)
+    except Exception:  # noqa: BLE001 -- an unbind never fails an op
+        pass
+
+
+def _bind_hook_lane_budget(msg: Any, stamp: Optional[float]) -> None:
+    """Bind (or clear) the hook chain's deadline for this worker's task: submit stamp plus the hook-lane
+    budget less `_HOOK_CHAIN_MARGIN_SECS`. A hook that outlives it answers `no_advisory()` as a result,
+    never a -32004 that the client counts toward restarting a live engine. Never raises."""
+    try:
+        from coordinator_core.hooks import _preuse_phases
+
+        method = _effective_method(msg)
+        if isinstance(method, str) and method.startswith(_HOOK_LANE_PREFIXES):
+            # `stamp` is the accept process's time.monotonic(); the OS monotonic clock is shared across processes.
+            start = stamp if isinstance(stamp, (int, float)) else time.monotonic()
+            _preuse_phases.bind_pool_budget(start + _HOOK_LANE_BUDGET_SECS - _HOOK_CHAIN_MARGIN_SECS)
+        else:
+            _preuse_phases.bind_pool_budget(None)
+    except Exception:  # noqa: BLE001 -- a budget bind never fails an op
+        pass
 
 
 def _import_op_module(msg: Any, claim_dir: Optional[str], dispatch_key: Optional[str]) -> bool:

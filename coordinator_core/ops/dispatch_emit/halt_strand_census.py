@@ -260,8 +260,10 @@ def mini_census(home: Optional[Path] = None) -> dict:
 
 def main(argv: Optional[list] = None) -> int:
     """Print the census JSON for `state/warp` under the repo root (or argv[0]) plus the Mini."""
+    from coordinator_core.session import record_homes
+
     args = list(sys.argv[1:] if argv is None else argv)
-    root = Path(args[0]) if args else Path(__file__).resolve().parents[3] / "state" / "warp"
+    root = Path(args[0]) if args else Path(record_homes.home_dir(str(Path(__file__).resolve().parents[3]), "warp"))
     out = {"box": census(root), "mini": mini_census()}
     print(json.dumps(out, indent=2, sort_keys=True))
     return 0

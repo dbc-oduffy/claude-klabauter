@@ -75,7 +75,7 @@ def _local(sandbox: str) -> str:
     return Path(sandbox, "registry.local.toml").read_bytes().decode()
 
 
-def test_subcommand_set_is_the_fifteen_doe_names_plus_retire_publisher_and_require(monkeypatch):
+def test_subcommand_set_is_the_fifteen_doe_names_plus_retire_publisher_require_and_locate(monkeypatch):
     seen: dict = {}
     real = argparse.ArgumentParser.parse_args
 
@@ -94,7 +94,7 @@ def test_subcommand_set_is_the_fifteen_doe_names_plus_retire_publisher_and_requi
         "check", "path", "dir", "set", "unset", "array-append", "array-set",
         "migrate-publish-mirrors",
     }
-    assert seen["names"] == doe_names | {"retire-publisher", "require"}
+    assert seen["names"] == doe_names | {"retire-publisher", "require", "locate"}
 
 
 def test_require_miss_is_typed_exit_3_stdout_empty(tmp_path):

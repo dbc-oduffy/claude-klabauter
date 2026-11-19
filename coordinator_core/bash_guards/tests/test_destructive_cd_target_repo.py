@@ -39,7 +39,7 @@ def _repo(path: Path, dirty: bool) -> Path:
 def repos(tmp_path, monkeypatch):
     monkeypatch.setattr(_dc_rm, "_rm_flush_touch", lambda *_a, **_k: None)
     live = _repo(tmp_path / "live", dirty=True)
-    clone = _repo(tmp_path / "live" / "scratch" / "clone", dirty=False)
+    clone = _repo(tmp_path / "clone", dirty=False)
     return live, clone
 
 

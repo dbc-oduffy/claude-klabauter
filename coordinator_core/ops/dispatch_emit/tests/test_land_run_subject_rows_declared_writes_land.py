@@ -319,6 +319,22 @@ def test_a_manifest_declared_write_left_dirty_after_the_commit_gives_no_met_cred
     assert out["criterion_status"] == "not_met", out
 
 
+def test_a_row_left_dirty_after_the_commit_has_no_met_ledger_item_in_the_reply(repo, monkeypatch):
+    _left_dirty(monkeypatch, CODE_THREE)
+    out = _land(repo, checkpoint=False, held="", monkeypatch=monkeypatch, manifest_extra=CODE_THREE)
+
+    assert out["rows_unlanded"] == {"C2": [CODE_THREE]}, out
+    assert out["ledger_partial"] == {"R1": [CODE_THREE]}, out
+    assert out.get("ledger_met") is None, out
+
+
+def test_a_clean_landing_downgrades_no_ledger_item(repo, monkeypatch):
+    out = _land(repo, checkpoint=False, held="", monkeypatch=monkeypatch, manifest_extra=CODE_THREE)
+
+    assert "rows_unlanded" not in out, out
+    assert "ledger_partial" not in out, out
+
+
 @pytest.mark.parametrize("checkpoint", [True, False], ids=["wave-0-checkpoint", "no-checkpoint"])
 def test_a_clean_landing_reports_no_unlanded_rows(repo, monkeypatch, checkpoint):
     out = _land(repo, checkpoint=checkpoint, held="", monkeypatch=monkeypatch)

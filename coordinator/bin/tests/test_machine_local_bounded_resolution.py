@@ -80,6 +80,7 @@ def test_undeclared_key_still_autodiscovers(reg, tmp_path: Path, monkeypatch: py
     assert rc == 0 and val.endswith("copy0")
 
 
+@pytest.mark.deliberate_wall_clock(reason="the wall-clock deadline a stalled git cannot overrun is the behaviour under test")
 def test_stalled_git_cannot_push_get_past_deadline(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _search_root_with_candidates(tmp_path, reg, "baz", 4)
     calls = []
@@ -140,6 +141,7 @@ def test_unset_key_stays_exit_1(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     assert rc == _ml.EXIT_NOT_FOUND
 
 
+@pytest.mark.deliberate_wall_clock(reason="the watchdog's wall-clock exit bound on a blocked read is the behaviour under test")
 def test_watchdog_exits_with_named_error_when_a_read_blocks(tmp_path: Path) -> None:
     reg = tmp_path / "reg"
     reg.mkdir()

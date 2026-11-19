@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import deny_registry as dr
+from coordinator_core.git import repo_root
 from coordinator_core import machine_profile as mp
 
 ROOT = Path(dr.__file__).resolve().parent
@@ -145,18 +146,17 @@ def test_a_class_outside_the_closed_list_is_red() -> None:
 
 
 def test_lost_definition_landing_refusal_is_head_integrity_and_a_stray_class_is_red() -> None:
-    assert dr.LANDING_REFUSAL_CLASS == {"lost-definition": dr.HEAD_INTEGRITY}
+    assert dr.LANDING_REFUSAL_CLASS["lost-definition"] == dr.HEAD_INTEGRITY
     assert dr.HEAD_INTEGRITY in dr.IRREVERSIBLE_CLASSES
     assert dr.registry_problems(landing_classes={"lost-definition": dr.HEAD_INTEGRITY}) == []
     assert [p[0] for p in dr.registry_problems(landing_classes={"x-reason": "convenience"})] == ["x-reason"]
     assert [p[0] for p in dr.registry_problems(landing_classes={"x-reason": dr.DISRUPTIVE})] == ["x-reason"]
 
 
-def test_every_landing_refusal_kind_is_classed_or_a_guard_owned_kind() -> None:
+def test_every_landing_refusal_kind_is_classed() -> None:
     from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import LANDING_REFUSAL_KINDS
 
-    guard_owned = {"destructive-git", "secret-in-diff"}
-    assert LANDING_REFUSAL_KINDS - guard_owned == set(dr.LANDING_REFUSAL_CLASS)
+    assert LANDING_REFUSAL_KINDS <= set(dr.LANDING_REFUSAL_CLASS)
 
 
 def test_disruptive_is_a_guard_class_and_not_an_op_class() -> None:
@@ -197,6 +197,7 @@ def test_blanket_git_add_denies_at_every_level_and_names_the_commit_op(monkeypat
         raise AssertionError(args)
 
     monkeypatch.setattr(_dc_git_probe, "_run_git", fake_git)
+    monkeypatch.setattr(repo_root, "show_toplevel", lambda cwd=None: str(root))
     result = guard.check_blanket_git_add("git add -A", session_id="s1", hook_payload={})
     assert result is not None
     env = envelope_of(result)

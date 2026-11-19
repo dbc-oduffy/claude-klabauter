@@ -256,6 +256,17 @@ def _authoring_path() -> Optional[str]:
     return root.replace("\\", "/").rstrip("/") + "/global-doctrine/CLAUDE.md"
 
 
+def _is_dev_install() -> bool:
+    """True only where a registered repo carries the ``.coordinator-dev-repo``
+    sentinel; elsewhere the derived copy is the only copy and no re-derive occurs."""
+    try:
+        from coordinator_core._fleet_names import doctrine_repo_name
+
+        return doctrine_repo_name() is not None
+    except Exception:
+        return False
+
+
 def _deny_reason(payload: Optional[Dict[str, Any]] = None) -> str:
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
@@ -281,7 +292,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if surface is None:
         return None
 
-    if _authoring_path() is None:
+    if _authoring_path() is None or not _is_dev_install():
         return None
 
     what = "The derived global-doctrine copy is re-derived from its authoring copy, so this edit may be overwritten."

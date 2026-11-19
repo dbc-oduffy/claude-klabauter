@@ -380,6 +380,34 @@ def test_a_ledger_row_naming_an_absolute_path_still_exempts_the_pre_fix_pin(prep
     assert verdict_pin_mismatches(prep_repo, review) == []
 
 
+def _ledgered(prep_repo, row: str) -> dict:  # noqa: F811
+    """A produced verdict whose reviewer sidecar carries the one ledger ``row`` (a JSON object text)."""
+    _, review = _produced_review(prep_repo)
+    (prep_repo / _SIDECAR).write_text(
+        f"---\nverdict: WARN\n---\n## Findings Ledger\n\n```json\n[{row}]\n```\n", encoding="utf-8", newline="\n",
+    )
+    return review
+
+
+def test_an_applied_verified_row_without_before_after_text_exempts_the_pre_fix_pin(prep_repo) -> None:  # noqa: F811
+    review = _ledgered(prep_repo, '{"id": "f1", "file": "b.py", "status": "applied", "verified": true}')
+    prep_write(prep_repo, ["b.py"], 5)
+
+    assert verdict_pin_mismatches(prep_repo, review) == []
+    assert review_owed_refusal(prep_repo, review) is None
+
+
+def test_a_handed_to_em_or_unverified_row_does_not_exempt_the_pin(prep_repo) -> None:  # noqa: F811
+    for row in (
+        '{"id": "f1", "file": "b.py", "status": "handed-to-em", "verified": true}',
+        '{"id": "f1", "file": "b.py", "status": "applied", "verified": false}',
+    ):
+        review = _ledgered(prep_repo, row)
+        prep_write(prep_repo, ["b.py"], 5)
+
+        assert verdict_pin_mismatches(prep_repo, review) == ["b.py"], row
+
+
 def _reverified(prep_repo, reverify, now_text):  # noqa: F811
     """A produced verdict (pinned before the write) whose reviewer wrote nothing, then ``b.py`` becomes
     ``now_text`` and the re-verify record ``reverify`` is carried."""

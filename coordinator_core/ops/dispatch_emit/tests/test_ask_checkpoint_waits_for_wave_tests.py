@@ -58,7 +58,10 @@ def test_manifest_schema_admits_wave_test_targets():
     assert prop == {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}
 
 
-def _run(waves: list[dict], verdicts: dict, targets: dict, extra: str = "", terminal: bool = False) -> dict:
+def _run(
+    waves: list[dict], verdicts: dict, targets: dict, extra: str = "", terminal: bool = False,
+    landed: dict | None = None,
+) -> dict:
     """Run each wave through the composed `_commitWave` with stubbed legs; `verdicts` maps wave -> verify reply."""
     node = shutil.which("node")
     if node is None:
@@ -70,6 +73,7 @@ let _halted = null; let _terminalTestsWanted = {json.dumps(terminal)}; const _ru
 const _gateOwed = {{}}; const _stoppedBy = []; const _rows = {{}}; const _ROW_VERIFY_SCHEMA = {{}};
 const _seamRelease = {{}}; const _seamHeldPlans = {{}}; const _seamGates = {{}};
 const _manifest = {{ wave_test_targets: {json.dumps(targets)} }};
+const _landedPaths = {json.dumps(landed or {})};
 const _verdicts = {json.dumps(verdicts)}; const spawned = []; const prompts = {{}};
 const log = () => {{}};
 async function agent(prompt, opts) {{
@@ -89,7 +93,7 @@ async function agent(prompt, opts) {{
 (async () => {{
   const waves = {json.dumps(waves)};
   for (const w of waves) {{
-    for (const id of w.ids) _landed[id] = {{ paths: [id + '.py'], declared: [id + '.py'] }};
+    for (const id of w.ids) _landed[id] = {{ paths: _landedPaths[id] ?? [id + '.py'], declared: _landedPaths[id] ?? [id + '.py'] }};
     await _commitWave(w.n, w.ids);
   }}
   {extra}
@@ -169,7 +173,8 @@ def test_wave_verify_prompts_carry_the_deadline_and_the_no_investigate_hang_repo
     owed = emit._owed_gates_green_js(None, repo_root=None, owed_scope={"C0": ["t.py"]})
     for js in (ask, owed):
         assert emit._js_string_literal(emit._test_runner_clause(None) + clause) in js
-        assert "return false" not in js.split("const status")[1]
+    assert "return false" not in owed.split("const status")[1]
+    assert ask.split("const status")[1].count("return false") == 1
 
 
 @pytest.mark.spawns_process
@@ -184,11 +189,55 @@ def test_green_verdict_spawns_exactly_one_commit_leg(status):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_terminal_tests_running_skips_the_wave_verify_leg_and_still_commits():
+def test_terminal_tests_running_skips_the_wave_verify_leg_for_a_wave_adding_no_test_file():
     out = _run(_W0, {"0": _verdict("fail")}, {"0": ["t_a.py"]}, terminal=True)
     assert out["spawned"] == ["commit:wave-0"]
     assert out["shas"] == ["sha-commit:wave-0"]
     assert out["withheld"] == [] and out["halted"] is None
+
+
+_ADDS_TEST = {"C0": ["src/mod.py", "tests/test_mod.py"]}
+_RED_OWN = {**_verdict("fail"), "failing_ids": ["tests/test_mod.py::test_one"]}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_terminal_tests_wave_adding_a_red_test_file_is_withheld_not_committed():
+    out = _run(_W0, {"0": _RED_OWN}, {"0": ["tests/test_mod.py"]}, terminal=True, landed=_ADDS_TEST)
+    assert out["spawned"] == ["verify:wave-0"]
+    assert out["shas"] == [] and out["carried"] == ["C0"]
+    assert [w["wave"] for w in out["withheld"]] == [0]
+    assert out["failures"] == [] and out["halted"] is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_terminal_tests_wave_adding_a_green_test_file_commits_it():
+    out = _run(_W0, {"0": _verdict("pass")}, {"0": ["tests/test_mod.py"]}, terminal=True, landed=_ADDS_TEST)
+    assert out["spawned"] == ["verify:wave-0", "commit:wave-0"]
+    assert out["shas"] == ["sha-commit:wave-0"] and out["carried"] == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_terminal_tests_red_elsewhere_does_not_withhold_a_wave_whose_added_test_is_not_failing():
+    reply = {**_verdict("fail"), "failing_ids": ["tests/test_other.py::test_x"]}
+    out = _run(_W0, {"0": reply}, {"0": ["tests/test_mod.py"]}, terminal=True, landed=_ADDS_TEST)
+    assert out["spawned"] == ["verify:wave-0", "commit:wave-0"]
+    assert out["carried"] == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_withheld_falsifier_lands_with_the_later_wave_that_turns_it_green():
+    waves = [{"n": 0, "ids": ["C0"]}, {"n": 1, "ids": ["C1"]}]
+    targets = {"0": ["tests/test_mod.py"], "1": ["tests/test_mod.py"]}
+    out = _run(
+        waves, {"0": _RED_OWN, "1": _verdict("pass")}, targets, terminal=True,
+        landed={**_ADDS_TEST, "C1": ["src/fix.py"]},
+    )
+    assert out["spawned"] == ["verify:wave-0", "verify:wave-1", "commit:wave-1"]
+    assert out["carried"] == [] and out["shas"] == ["sha-commit:wave-1"]
 
 
 @pytest.mark.spawns_process

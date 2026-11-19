@@ -895,3 +895,16 @@ def test_setup_skill_hint_suppressed_under_trampoline_env(tmp_path, monkeypatch,
     monkeypatch.setattr(scw, "_self_resolve_walker_roots", lambda argv, err=None: (root, root / "lib", "test"))
     assert scw.main([]) == 0
     assert "/coordinator:setup" in capsys.readouterr().out
+
+
+def test_walker_alias_verdict_is_prereq_probes_python_row(monkeypatch):
+    """The walker's python verdict is prereq_probe's row verbatim; setup.py's alias text reads the same module."""
+    from coordinator_core.install import prereq_probe
+
+    row = json.dumps(
+        {"name": "python", "status": "fail", "severity": "hard", "detail": "alias stub", "remediation": "disable alias"}
+    )
+    monkeypatch.setattr(prereq_probe, "probe_all", lambda coordinator_root=None: [row])
+    assert scw.prereq_probe_all_via_bash(Path(".")) == [json.loads(row)]
+    with open(os.devnull, "w") as sink:
+        assert scw.pf_emit_row("python", "fail", "hard", "x", out=sink, err=sink) == (True, False)

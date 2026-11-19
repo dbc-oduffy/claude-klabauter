@@ -32,6 +32,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from coordinator_core.bash_guards import dispatch_checks as guard
+from coordinator_core.git import repo_root
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 from coordinator_core.guard_messages.testing import envelope_of
 from pathlib import Path
@@ -60,6 +61,7 @@ def _wire_git(monkeypatch, root, *, diff_lines=None, diff_rc: int = 0):
         raise AssertionError("unexpected git invocation: %r" % (args,))
 
     monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
+    monkeypatch.setattr(repo_root, "show_toplevel", lambda cwd=None: root)
     return calls
 
 

@@ -69,6 +69,52 @@ def test_stage_js_lands_verbatim() -> None:
     assert "stage: null" in hr.refire_next_action_js("C", "L", "K", "D")
 
 
+_ASK_CALL = 'Workflow({name: "coordinator:engine-ask", args: {"sizing": "state/sizings/s.yaml", "resume_run_id": "r1"}})'
+_NATIVE = 'coordinator-invoke engine_ask.submit \'{"sizing":"state/sizings/s.yaml"}\''
+
+
+def test_codex_host_refire_is_the_cli_submit_with_no_workflow_call() -> None:
+    env = _env(call=_ASK_CALL, host="codex")
+    assert env["call"] == _NATIVE and "Workflow" not in env["call"]
+    assert hr.is_refire_next_action(env, host="codex")
+
+
+def test_claude_host_refire_is_unchanged_and_codex_validator_refuses_it() -> None:
+    env = _env(call=_ASK_CALL, host=None)
+    assert env["call"] == _ASK_CALL and hr.is_refire_next_action(env)
+    assert not hr.is_refire_next_action(env, host="codex")
+
+
+def test_detect_host_reads_the_launcher_identity_env() -> None:
+    assert hr.detect_host({"CODEX_THREAD_ID": "t1"}) == "codex"
+    assert hr.detect_host({"CLAUDECODE": "1"}) is None and hr.detect_host({}) is None
+    assert _env(call=_ASK_CALL)["call"] == _ASK_CALL
+
+
+def test_workflow_resume_call_is_not_rewritten() -> None:
+    assert hr.host_native_call(_RESUME_CALL, "codex") == _RESUME_CALL
+
+
+def test_js_host_native_only_for_a_workflowless_host() -> None:
+    assert "_hostNativeCall" not in hr.refire_next_action_js("C", "L", "K", "D", host=None)
+    assert "call: _hostNativeCall(_withFootprint(C))" in hr.refire_next_action_js("C", "L", "K", "D", host="codex")
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_js_host_native_call_matches_python(tmp_path: Path) -> None:
+    js = hr.refire_next_action_js(json.dumps(_ASK_CALL), "_halted.next_action", "'refusal'", "'why'", host="codex")
+    script = (
+        "let _runId='r1', _sizingRel='s';\nlet _halted={refused:'', next_action:'x'};\n" + js
+        + "\n_refireNextAction();\nconsole.log(_halted.next_action.call);"
+    )
+    f = tmp_path / "t.js"
+    f.write_text(script)
+    out = subprocess.run(["node", str(f)], capture_output=True, text=True, check=True, **no_console_creationflags()).stdout
+    assert out.strip() == _NATIVE
+
+
 def test_usage_limit_workflow_resume_passes() -> None:
     assert hr.is_refire_next_action(_env(op=hr.OP_WORKFLOW_RESUME, call="resume with resumeFromRunId r1 via Workflow"))
     assert not hr.is_refire_next_action(_env(op=hr.OP_WORKFLOW_RESUME, call="no handle here"))

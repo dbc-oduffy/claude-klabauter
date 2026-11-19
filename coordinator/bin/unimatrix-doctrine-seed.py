@@ -135,31 +135,65 @@ def is_scratch_root(path) -> bool:
     return any(p == "scratch" and 0 < i < len(parts) - 1 for i, p in enumerate(parts))
 
 
-def seed_agy_skills(skills_json, skills_root) -> str:
-    """Add one {"path": skills_root} entry to agy skills.json and drop scratch/tmp roots.
+def _norm(path) -> str:
+    return os.path.normcase(os.path.normpath(str(path)))
 
-    Returns "created", "added", "present", "pruned" (ours present, scratch roots dropped) or "refused"
-    (skills_root is itself a scratch/tmp root: never written, existing scratch entries still dropped).
+
+def _under(path, root) -> bool:
+    return path == root or path.startswith(root.rstrip("/\\") + os.sep)
+
+
+def is_other_profile_path(path, home=None) -> bool:
+    """True when path lies under a sibling of the home directory inside the shared profiles root (`Users`, `home`), outside home itself."""
+    h = Path(home) if home is not None else Path.home()
+    if h.parent == h or h.parent.name.lower() not in ("users", "home"):
+        return False
+    p = _norm(path)
+    return _under(p, _norm(h.parent)) and not _under(p, _norm(h))
+
+
+def is_dead_path(path, home=None) -> bool:
+    """True for a host-registry path that is absent or under another user profile."""
+    return not os.path.exists(str(path)) or is_other_profile_path(path, home)
+
+
+def is_coordinator_skills_tree(path, skills_root=None) -> bool:
+    """True for a coordinator skills source: skills_root, or `.../coordinator/skills` and `.../coordinator/<version>/skills` trees."""
+    if skills_root is not None and _norm(path) == _norm(skills_root):
+        return True
+    parts = [p.lower() for p in PurePosixPath(str(path).replace("\\", "/")).parts]
+    return len(parts) >= 2 and parts[-1] == "skills" and (parts[-2] == "coordinator" or (len(parts) >= 3 and parts[-3] == "coordinator"))
+
+
+def prune_dead_entries(entries, home=None) -> list:
+    """Return entries without dict items whose string `path` is absent or under another user profile."""
+    return [e for e in entries
+            if not (isinstance(e, dict) and isinstance(e.get("path"), str) and is_dead_path(e["path"], home))]
+
+
+def seed_agy_skills(skills_json, skills_root) -> str:
+    """Heal agy skills.json: drop scratch/tmp, absent, other-profile and coordinator skills-tree entries; add nothing.
+
+    The coordinator skills reach agy through the generated agy plugin in plugins.json, so skills.json
+    carries no coordinator source (a second one loads every skill twice). Returns "present" (unchanged;
+    a missing file stays missing) or "pruned".
     """
     path = Path(skills_json)
-    existed = path.exists()
+    if not path.exists():
+        return "present"
     data = _load_entries(path)
     entries = data.get("entries")
     if not isinstance(entries, list):
-        entries = []
-    wanted = str(skills_root)
-    kept = [e for e in entries if not (isinstance(e, dict) and isinstance(e.get("path"), str) and is_scratch_root(e["path"]))]
-    pruned = len(kept) != len(entries)
-    refused = is_scratch_root(wanted)
-    has = any(isinstance(e, dict) and e.get("path") == wanted for e in kept)
-    if not pruned and (has or refused):
-        return "refused" if refused else "present"
-    data["entries"] = kept if has or refused else kept + [{"path": wanted}]
-    path.parent.mkdir(parents=True, exist_ok=True)
+        return "present"
+    live = prune_dead_entries(entries)
+    kept = [e for e in live
+            if not (isinstance(e, dict) and isinstance(e.get("path"), str)
+                    and (is_scratch_root(e["path"]) or is_coordinator_skills_tree(e["path"], skills_root)))]
+    if len(kept) == len(entries):
+        return "present"
+    data["entries"] = kept
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    if refused:
-        return "refused"
-    return "pruned" if has else ("added" if existed else "created")
+    return "pruned"
 
 
 def unseed_agy_skills(skills_json, skills_root) -> str:

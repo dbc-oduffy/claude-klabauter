@@ -45,15 +45,29 @@ RENDER_BAR_MS = 50.0
 LAND_BAR_MS = 500.0
 
 
-def _head_blob(rel: str) -> bytes:
-    return subprocess.run(
-        ["git", "show", f"HEAD:{rel}"], cwd=str(REPO_ROOT), capture_output=True, check=True,
-        **no_console_creationflags(),
+def _head_blobs(rels: list[str]) -> dict[str, bytes]:
+    """`{rel: bytes}` for each of `rels` present at HEAD, read through one `git cat-file --batch`; absent paths are omitted."""
+    if not rels:
+        return {}
+    raw = subprocess.run(
+        ["git", "cat-file", "--batch"], cwd=str(REPO_ROOT), capture_output=True, check=True,
+        input="".join(f"HEAD:{rel}\n" for rel in rels).encode("utf-8"), **no_console_creationflags(),
     ).stdout
+    blobs: dict[str, bytes] = {}
+    at = 0
+    for rel in rels:
+        end = raw.index(b"\n", at)
+        header = raw[at:end].split()
+        at = end + 1
+        if len(header) == 3 and header[1] == b"blob":
+            size = int(header[2])
+            blobs[rel] = raw[at:at + size]
+            at += size + 1
+    return blobs
 
 
-def _single_op_module(map_source: str):
-    """`(op, module file)` of the first module that owns exactly one op, declared by `@register_op`
+def _single_op_module(map_source: str) -> tuple:
+    """`(op, module file, source)` of the first module that owns exactly one op, declared by `@register_op`
     on a handler in its own file and present at HEAD."""
     table = None
     for node in ast.parse(map_source).body:
@@ -67,16 +81,14 @@ def _single_op_module(map_source: str):
     owners: dict = {}
     for op, module in table.items():
         owners.setdefault(module, []).append(op)
-    for module, ops in sorted(owners.items()):
-        if len(ops) != 1:
+    candidates = [(module.replace(".", "/") + ".py", ops[0]) for module, ops in sorted(owners.items()) if len(ops) == 1]
+    blobs = _head_blobs([rel for rel, _op in candidates])
+    for rel, op in candidates:
+        if rel not in blobs:
             continue
-        rel = module.replace(".", "/") + ".py"
-        try:
-            source = _head_blob(rel).decode("utf-8")
-        except subprocess.CalledProcessError:
-            continue
-        if f'@register_op("{ops[0]}")' in source:
-            return ops[0], rel, source
+        source = blobs[rel].decode("utf-8")
+        if f'@register_op("{op}")' in source:
+            return op, rel, source
     raise RuntimeError("no single-op module with a decorated in-file handler at HEAD")
 
 
@@ -115,9 +127,13 @@ def build_fixture(parent: Path) -> tuple:
         ["config", "core.autocrlf", "false"],
     ):
         run_git(args, cwd=str(repo))
-    map_text = _head_blob(REGISTRY_MAP)
+    seeded = _head_blobs([REGISTRY_MAP, *GENERATED])
+    absent = [p for p in (REGISTRY_MAP, *GENERATED) if p not in seeded]
+    if absent:
+        raise RuntimeError(f"not present at HEAD: {absent}")
+    map_text = seeded[REGISTRY_MAP]
     op, rel, source = _single_op_module(map_text.decode("utf-8"))
-    files = {REGISTRY_MAP: map_text, rel: source.encode("utf-8"), **{g: _head_blob(g) for g in GENERATED}}
+    files = {REGISTRY_MAP: map_text, rel: source.encode("utf-8"), **{g: seeded[g] for g in GENERATED}}
     for path, data in files.items():
         target = repo / path
         target.parent.mkdir(parents=True, exist_ok=True)

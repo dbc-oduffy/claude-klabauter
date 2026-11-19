@@ -4363,7 +4363,9 @@ def _terminal_commit_inner(
                 scope["landed"].update(merge_artifacts["paths"])
                 scope["landed"].update(merge_artifacts["deleted"])
         withheld_product = (
-            _withheld_product_files(worktree_root, snapshot, declared_writes, {*all_paths, *deleted_paths})
+            _withheld_product_files(
+                worktree_root, snapshot, declared_writes, {*all_paths, *deleted_paths}, str(reply["sha"]),
+            )
             if ledger is not None else []
         )
         if withheld_product:

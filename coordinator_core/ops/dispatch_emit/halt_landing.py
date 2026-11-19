@@ -55,6 +55,32 @@ def landing_credited(verdict: object, ids: Sequence[object], sha: str) -> bool:
     return True
 
 
+# Must equal the reason ``requirements_ledger.judge`` writes for an essential:false not_met row;
+# test_refire_land_refuses_unmet_essential_row drives the real judge, so drift fails it.
+NON_ESSENTIAL_OPEN_REASON = "non-essential"
+DOWNGRADED_REASON = (
+    "blocked the halted pass and is now judged not_met essential:false; a refire cannot "
+    "downgrade a row that refused the first pass"
+)
+
+
+def blocking_rows_downgraded(resume: object, result: dict) -> list:
+    """``[{id, reason}]`` for each ``resume["blocking"]`` row the judge left open as
+    ``non-essential``. A row that refused the halted pass stays essential on the refire: only the
+    verdict's own ``essential`` flag separates the two, and the checker that wrote it is not the
+    authority on its own downgrade. Gated, operator-owed and revision-withheld rows carry other
+    open reasons and are not matched. Empty when the resume names no blocking row."""
+    blocking = resume.get("blocking") if isinstance(resume, dict) else None
+    if not isinstance(blocking, list) or not blocking:
+        return []
+    held = {str(b) for b in blocking}
+    return [
+        {"id": r["id"], "reason": DOWNGRADED_REASON}
+        for r in result.get("open") or ()
+        if isinstance(r, dict) and r.get("reason") == NON_ESSENTIAL_OPEN_REASON and str(r.get("id")) in held
+    ]
+
+
 def since_halt_close(since_halt: dict, failures: list, verdict: object) -> Optional[str]:
     """The landing sha when every failure is the unchanged-since-halt refusal and each failed row
     is cited at or before the halt or credited by ``landing_credited``; None otherwise."""

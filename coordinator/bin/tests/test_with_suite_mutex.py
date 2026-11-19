@@ -1413,6 +1413,7 @@ def test_ceiling_interrupts_pytest_first_so_its_junit_is_flushed(tmp_path):
 
 
 @_POSIX_ONLY
+@pytest.mark.deliberate_wall_clock(reason="the wall-clock escalation bound on a SIGINT-ignoring child is the behaviour under test")
 def test_kill_tree_interrupts_before_it_terminates_and_still_kills_a_sigint_ignorer(
     tmp_path, monkeypatch
 ):
@@ -1500,6 +1501,7 @@ def test_count_ceiling_scales_with_the_run_and_is_floored():
     assert big > module._DEFAULT_MAX_RUNTIME_SECS
 
 
+@pytest.mark.deliberate_wall_clock(reason="the run finishing inside a wall-clock ceiling derived from the log count is the behaviour under test")
 def test_ceiling_is_derived_from_the_log_count_not_the_fixed_fallback(tmp_path, monkeypatch, capsys):
     module = _load_wrapper_module()
     monkeypatch.setattr(module, "_CEILING_MIN_SECS", 0.0)

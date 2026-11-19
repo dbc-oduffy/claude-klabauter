@@ -292,8 +292,9 @@ def _hand_off_green(run_id: str, entry: dict) -> tuple:
         from coordinator_core.atomic_replace import atomic_write_bytes
         from coordinator_core.ops.dispatch_emit.halt_strand_census import WITHHELD_PRINTS_FILE, _green
         from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE
+        from coordinator_core.session import record_homes
 
-        run_dir = Path(repo_root) / "state" / "warp" / run_id
+        run_dir = Path(record_homes.home_dir(str(repo_root), "warp")) / run_id
         if not run_dir.is_dir():
             return OUTCOME_EXPIRED, "handoff=skipped:no-run-dir"
         marker_path = run_dir / HALTED_FILE

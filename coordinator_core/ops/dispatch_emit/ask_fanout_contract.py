@@ -382,6 +382,7 @@ ASKS_ITEM_KEYS: tuple[str, ...] = (
     "label",
     "after",
     "repo",
+    "family",
     "writes",
     "stop_after",
 )

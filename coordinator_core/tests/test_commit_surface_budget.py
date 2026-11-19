@@ -112,6 +112,31 @@ def test_marker_carrying_lines_do_not_exceed_the_ceiling():
         )
 
 
+LOCALLY_EXCLUDED_MODULES = {
+    "coordinator_core/git/fleet_maintenance_lock.py":
+        "box-wide pack-deletion lock; maintenance path, not the commit route.",
+    "coordinator_core/git/maintenance_tick.py":
+        "idle-tick trigger for lock-holding git maintenance; not the commit route.",
+    "coordinator_core/git/object_store_lock.py":
+        "per-repo objects/pack lock for pack writers and maintenance; not the commit route.",
+    "coordinator_core/git/pack_deletion_pause.py":
+        "pack-deletion stop switch; not a narration holder.",
+    "coordinator_core/git/ref_lock.py":
+        "ref-lock ownership and dead-writer recovery for _cas_ref; lock plumbing, not commit narration.",
+    "coordinator_core/git/worktree_sync.py":
+        "spawn-free 3-way worktree sync after a landing; post-landing helper, not a "
+        "narration holder.",
+    "coordinator_core/ops/ceremony/hand_land.py":
+        "thin ceremony.hand_land wrapper over commit_paths; no commit-route narration of its own.",
+    "coordinator_core/ops/ceremony/plan_wiki_map.py":
+        "update-docs wiki mapping op; off the commit path.",
+    "coordinator_core/ops/ceremony/update_docs_bookkeeping.py":
+        "update-docs inventory and index regen op; off the commit path.",
+    "coordinator_core/ops/ceremony/wiki_candidates.py":
+        "update-docs wiki candidate query op; off the commit path.",
+}
+
+
 def _non_test_modules(directory):
     modules = []
     for p in (REPO_ROOT / directory).glob("*.py"):
@@ -131,7 +156,7 @@ def test_no_module_under_the_two_directories_is_unclassified():
     rather than letting it escape the sweep silently. It does NOT require the
     newcomer to be budgeted -- EXCLUDED with a reason is a legitimate answer.
     """
-    known = set(COMMIT_SURFACE_FILES) | set(EXCLUDED_MODULES)
+    known = set(COMMIT_SURFACE_FILES) | set(EXCLUDED_MODULES) | set(LOCALLY_EXCLUDED_MODULES)
     on_disk = set(_non_test_modules("coordinator_core/git")) | set(
         _non_test_modules("coordinator_core/ops/ceremony")
     )
@@ -146,6 +171,6 @@ def test_no_module_under_the_two_directories_is_unclassified():
 
 
 def test_known_modules_still_exist_on_disk():
-    known = set(COMMIT_SURFACE_FILES) | set(EXCLUDED_MODULES)
+    known = set(COMMIT_SURFACE_FILES) | set(EXCLUDED_MODULES) | set(LOCALLY_EXCLUDED_MODULES)
     missing = {path for path in known if not (REPO_ROOT / path).exists()}
-    assert isinstance(missing, set)
+    assert not missing, f"classified modules missing on disk: {sorted(missing)}"

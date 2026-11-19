@@ -238,17 +238,18 @@ def test_rl05_a_landed_path_leaves_worktree_index_and_head_in_agreement(impl, re
 
 
 @pytest.mark.parametrize("impl", IMPLS)
-def test_rl03_a_staged_path_in_no_reviewed_slice_refuses_and_commits_nothing(impl, repo):
+def test_rl03_a_staged_path_in_no_reviewed_slice_lands_with_unreviewed_provenance(impl, repo):
     (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
     (repo / "b.py").write_text("b = 1\n", encoding="utf-8")
-    head = _head(repo)
 
     out = _fire(impl, repo, {"C1": ["a.py", "b.py"]}, inline_review=_review(["a.py"]))
 
-    assert out["committed"] is False
-    assert out["refused"] == REFUSED_UNREVIEWED
-    assert out["unreviewed_paths"] == ["b.py"]
-    assert _head(repo) == head
+    assert out["committed"] is True, out
+    assert out.get("refused") != REFUSED_UNREVIEWED
+    assert [(e["reason"], e["path"]) for e in out["provenance"] if e["reason"] == "unreviewed"] == [
+        ("unreviewed", "b.py")
+    ]
+    assert _landed_names(repo) >= {"a.py", "b.py"}
 
 
 @pytest.mark.parametrize("impl", IMPLS)

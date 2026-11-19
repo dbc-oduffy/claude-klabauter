@@ -1684,6 +1684,40 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
     return ""
 
 
+def _grind_bookkeep_ran_marker(tmpdir: str, session_id: str, run_id: str) -> str:
+    return os.path.join(tmpdir, f"grind-bookkeep-ran-{session_id}-{run_id}")
+
+
+def _run_grind_bookkeep_on_completion_sync(session_id: str, transcript_path: str) -> None:
+    """Completion seam of the no-agent grind arm: runs `dispatch.grind_bookkeep` once per run for each
+    completed Workflow notification in the transcript tail whose handback carries that `next_action`.
+    The once-per-run marker is written before the op runs, so a refused or failed settle is never
+    re-run on a later tool call. Bookkeeping only; never raises."""
+    try:
+        if not session_id or not transcript_path or not _SAFE_ID_RE.fullmatch(session_id):
+            return
+        from coordinator_core.workflow_watch.tail import TailReader
+
+        text = TailReader(transcript_path, seek_to_tail=True).poll() or ""
+        if "queue-grind-handback/1" not in text:
+            return
+        from coordinator_core.ops.dispatch_emit import grind_bookkeep
+
+        tmpdir = _managed_tmpdir()
+        for action in grind_bookkeep.completed_next_actions(text):
+            run_id = action["params"].get("run_id")
+            if not isinstance(run_id, str) or not _SAFE_ID_RE.fullmatch(run_id):
+                continue
+            marker = _grind_bookkeep_ran_marker(tmpdir, session_id, run_id)
+            if os.path.exists(marker):
+                continue
+            with open(marker, "a", encoding="utf-8"):
+                pass
+            grind_bookkeep.run_next_action(action)
+    except Exception:
+        return
+
+
 def _check_workflow_stall_sync(session_id: str, transcript_path: str) -> str:
     return workflow_stall_resume_text(session_id, transcript_path, time.time())
 
@@ -2456,6 +2490,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
             if tool_name in _TOUCH_RECORDING_TOOLS and touch_path and agent_id
             else _idle()
         ),
+        (
+            asyncio.to_thread(_run_grind_bookkeep_on_completion_sync, session_id, transcript_path)
+            if transcript_path
+            else _idle()
+        ),
         return_exceptions=True,
     )
     labels = (
@@ -2490,6 +2529,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     if isinstance(results[11], BaseException):
         _text_or_breadcrumb("run_write_print", results[11])
+
+    if isinstance(results[12], BaseException):
+        _text_or_breadcrumb("grind_bookkeep_on_completion", results[12])
 
     # One stat when no notice is pending, so it runs inline rather than on a thread.
     try:

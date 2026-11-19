@@ -12,7 +12,7 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, em_size?, stop_after?, chatty?}` (`em_size` is the EM's own size, XS|S|M|L|XL|XXL, forwarded to the emit op as params["em_size"]; the gate halts only when it is M or below against an engine XL/XXL; a value outside the set, or one beside a multi-item `asks`, is refused) (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, repo?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an entry's `repo` (else the top-level `repo`) is the checkout its run starts in and writes to: entries are partitioned by resolved repo, each repo is cross-repo-checked and fanned out once, and the runs start under one launcher per repo; an `after` edge or a `join` across repos is refused; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, em_size?, family?, stop_after?, chatty?}` (`family` is one of stage_family.FAMILIES, forwarded to the emit op as params["family"] and stamped on the minted sizing so composed write rows bind it; an unknown name is refused naming it, and one beside `{sizing}` is refused, the sizing's own `family` key governs; the same key rides each `asks` entry, and a top-level value beside `asks` applies to every entry naming none) (`em_size` is the EM's own size, XS|S|M|L|XL|XXL, forwarded to the emit op as params["em_size"]; the gate halts only when it is M or below against an engine XL/XXL; a value outside the set, or one beside a multi-item `asks`, is refused) (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, repo?, family?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an entry's `repo` (else the top-level `repo`) is the checkout its run starts in and writes to: entries are partitioned by resolved repo, each repo is cross-repo-checked and fanned out once, and the runs start under one launcher per repo; an `after` edge or a `join` across repos is refused; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one
 launcher (`fan_launcher.write_launcher`, given each run's pre-emitted reply) that starts each, with one ready run it fires
@@ -89,7 +89,7 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "em_size", "fresh", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing",
+    "em_rationale", "em_size", "family", "fresh", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing",
     "source", "stop_after", "supersedes", "writes",
 )
 _INPUT_KEYS: tuple[str, ...] = ("run_id", "repo")
@@ -110,6 +110,31 @@ def _em_size_param(tool_input: Mapping[str, Any], multi_ask: bool) -> tuple[Opti
     if multi_ask:
         return None, "em_size rides one run, not a set of sibling runs. Submit each ask on its own."
     return size, None
+
+
+def _family_refusal(where: str, value: Any) -> Optional[str]:
+    """Refusal text for a `family` outside stage_family.FAMILIES; None when absent or accepted."""
+    if value is None:
+        return None
+    from coordinator_core.ops.dispatch_emit import stage_family
+
+    if isinstance(value, str) and value in stage_family.FAMILIES:
+        return None
+    return f"{where}.family {value!r} is not a family the engine runs. Accepted: {'|'.join(stage_family.FAMILIES)}."
+
+
+def _call_family(tool_input: Mapping[str, Any], sizing_submitted: bool) -> tuple[Optional[str], Optional[str]]:
+    """(top-level family or None, refusal) for the optional call-level `family` arg."""
+    args = tool_input.get("args")
+    value = args.get("family") if isinstance(args, dict) else None
+    if value is None:
+        return None, None
+    why = _family_refusal("args", value)
+    if why:
+        return None, why
+    if sizing_submitted:
+        return None, f"family {value!r} rides an ask; a sizing's own `family` key governs."
+    return value, None
 
 
 _ARGS_SHAPE = ARGS_SHAPE.replace(
@@ -1760,6 +1785,9 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         stop_why = _stop_after_refusal(f"asks[{i}]", item.get("stop_after"))
         if stop_why:
             return None, stop_why
+        family_why = _family_refusal(f"asks[{i}]", item.get("family"))
+        if family_why:
+            return None, family_why
     confirm = args.get("confirm_split")
     if confirm is not None and not isinstance(confirm, bool):
         return None, "confirm_split must be true or false."
@@ -3547,6 +3575,9 @@ def _evaluate(
     em_size, em_size_refusal = _em_size_param(payload["tool_input"], asks is not None and len(asks) > 1)
     if em_size_refusal:
         return _refuse(em_size_refusal)
+    call_family, family_refusal = _call_family(payload["tool_input"], sizing_submitted)
+    if family_refusal:
+        return _refuse(family_refusal)
     if source is not None:
         if source not in ASK_SOURCES:
             return _refuse(f"source {source!r} is not one of: {', '.join(ASK_SOURCES)}.")
@@ -3561,6 +3592,8 @@ def _evaluate(
         ]
         if call_stop is not None:
             asks = [{**item, "stop_after": item.get("stop_after", call_stop)} for item in asks]
+        if call_family is not None:
+            asks = [{**item, "family": item.get("family", call_family)} for item in asks]
         if len(asks) == 1 and join is None and not (
             asks[0].get("sender") or asks[0].get("relayed_text") or payload["tool_input"]["args"].get("sender")
         ):
@@ -3569,6 +3602,7 @@ def _evaluate(
                 repo_arg = asks[0]["repo"].strip()
             route_pref, em_rationale = asks[0].get("route_preference"), asks[0].get("em_rationale")
             call_stop = asks[0].get("stop_after")
+            call_family = asks[0].get("family")
             if asks[0].get(_CHATTY_KEY) is not None:
                 call_chatty = asks[0][_CHATTY_KEY]
             item_em_context = asks[0].get("em_context")
@@ -3876,6 +3910,8 @@ def _evaluate(
             params[_CHATTY_KEY] = True
         if em_size is not None:
             params["em_size"] = em_size
+        if call_family is not None and call_family != "claude":
+            params["family"] = call_family
     if approved:
         params["cross_repo_approved"] = True
 

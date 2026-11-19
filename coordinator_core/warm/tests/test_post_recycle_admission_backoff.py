@@ -49,6 +49,7 @@ def test_heavy_grants_are_spaced_after_recycle():
     assert all(g >= SPACING * 0.8 for g in gaps), gaps
 
 
+@pytest.mark.deliberate_wall_clock(reason="admission pacing is a wall-clock interval; that interval is the behaviour under test")
 def test_no_pacing_without_recycle():
     gate = server._AdmissionGate(4, 0)
     start = time.monotonic()
@@ -56,6 +57,7 @@ def test_no_pacing_without_recycle():
     assert times[-1] - start < SPACING
 
 
+@pytest.mark.deliberate_wall_clock(reason="admission pacing is a wall-clock interval; that interval is the behaviour under test")
 def test_pacing_ends_after_window(monkeypatch):
     monkeypatch.setattr(server, "_POST_RECYCLE_BACKOFF_SECS", 0.05)
     gate = server._AdmissionGate(4, 0)
@@ -66,6 +68,7 @@ def test_pacing_ends_after_window(monkeypatch):
     assert times[-1] - start < SPACING
 
 
+@pytest.mark.deliberate_wall_clock(reason="admission pacing is a wall-clock interval; that interval is the behaviour under test")
 def test_hook_and_light_callers_are_not_delayed():
     gate = server._AdmissionGate(4, 2)
     gate.note_recycle()
@@ -76,6 +79,7 @@ def test_hook_and_light_callers_are_not_delayed():
         gate.release(**kwargs)
 
 
+@pytest.mark.deliberate_wall_clock(reason="admission pacing is a wall-clock interval; that interval is the behaviour under test")
 def test_deadline_expiring_in_backoff_is_not_admitted():
     gate = server._AdmissionGate(4, 0)
     gate.note_recycle()

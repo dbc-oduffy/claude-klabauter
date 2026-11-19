@@ -50,6 +50,7 @@ _BASH_CASES = {
     "guard-uncapped-pytest-plugin": ("python -m pytest -p myplugin tests/", False),
     "block-external-workspace-vcs-write": ("git -C {other} commit --allow-empty -m x", False),
     "block-editor-kill-by-name": ("taskkill /F /IM UnrealEditor.exe", False),
+    "deny-kill-by-port-or-tree": ("taskkill /F /T /PID 1", False),
     "blanket-git-add": ("git -C {repo} add -A", False),
     "check-test-suite-invocation": ("pytest", False),
     "runaway-find": ("find / -name x", False),

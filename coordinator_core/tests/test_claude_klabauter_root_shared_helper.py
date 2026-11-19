@@ -14,6 +14,8 @@ Covers exactly the four cases named in that chunk's body:
 from __future__ import annotations
 
 import importlib
+import json
+import os
 import subprocess
 import sys
 
@@ -182,6 +184,51 @@ def test_module_free_of_import_time_register_op_call() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "register_op" not in call_names
+
+
+def _write_dump_impl(tmp_path, payload: dict):
+    impl = tmp_path / "_machine_local.py"
+    impl.write_text(
+        "import json, sys\n"
+        "if sys.argv[1:] == ['dump']:\n"
+        f"    print(json.dumps({payload!r}))\n"
+        "    sys.exit(0)\n"
+        "sys.exit(1)\n"
+    )
+    return impl
+
+
+def test_seed_machine_local_resolves_many_keys_in_one_spawn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    impl = _write_dump_impl(tmp_path, {"a.one": "1", "a.two": "2", "other": "x"})
+    monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl))
+    monkeypatch.setenv(_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV, "{}")
+
+    before = spawn_counter.spawn_count()
+    _claude_klabauter_root.seed_machine_local("a.one", "a.two", "a.missing")
+    delta = spawn_counter.spawn_count() - before
+
+    assert delta == 1
+    assert json.loads(os.environ[_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV]) == {"a.one": "1", "a.two": "2"}
+    monkeypatch.setenv(_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV, "{}")
+    # Missing key was memoized None: no second spawn.
+    before = spawn_counter.spawn_count()
+    assert _claude_klabauter_root._machine_local_get("a.missing") is None
+    assert spawn_counter.spawn_count() == before
+
+
+def test_seed_machine_local_failed_dump_leaves_keys_unresolved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    impl = tmp_path / "_machine_local.py"
+    impl.write_text("import sys\nprint('not json')\nsys.exit(2)\n")
+    monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl))
+    monkeypatch.setenv(_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV, "{}")
+
+    _claude_klabauter_root.seed_machine_local("a.one", "a.two")
+
+    assert os.environ[_claude_klabauter_root.MACHINE_LOCAL_SEED_ENV] == "{}"
 
 
 def test_timeout_expired_treated_as_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -82,6 +82,32 @@ def test_committed_reply_writes_no_marker(tmp_path: Path) -> None:
     assert not (record_dir / "halted.json").exists()
 
 
+def _unlanded_journal(tmp_path, left) -> str:
+    return _journal(tmp_path, [
+        _started("commit"),
+        {"type": "result", "agentId": "a1", "key": "k1",
+         "result": {"committed": True, "ok": False, "rows_unlanded": left}},
+    ])
+
+
+def test_committed_reply_with_rows_unlanded_halts_a_completed_task_naming_each_path(tmp_path: Path) -> None:
+    record_dir = _record_dir(tmp_path)
+    journal = _unlanded_journal(tmp_path, {"C1": ["b.py", "a.py"]})
+    label, state, reason = commit_leg_outcome(Path(journal).read_text(encoding="utf-8"))
+    assert state == "rows-unlanded" and "a.py, b.py" in reason
+    assert _land(record_dir, journal, status="completed") is not None
+    marker = halted_run.read_strict(record_dir)
+    assert marker["halted"] == HALT_COMMIT_STAGE
+    assert "C1" in marker["reason"] and "a.py, b.py" in marker["reason"]
+
+
+def test_committed_reply_with_empty_rows_unlanded_stays_committed(tmp_path: Path) -> None:
+    record_dir = _record_dir(tmp_path)
+    journal = _unlanded_journal(tmp_path, {})
+    assert commit_leg_outcome(Path(journal).read_text(encoding="utf-8"))[1] == "committed"
+    assert _land(record_dir, journal, status="completed") is None
+
+
 def test_already_landed_json_text_reply_writes_no_marker(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [

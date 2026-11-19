@@ -190,13 +190,10 @@ def _own_dirt(root: Path, run_id: str) -> None:
 
 
 def _call_halt(root: Path, params: dict) -> dict:
-    """`dispatch.land_run` resolved through the op registry, called as the IPC dispatcher calls it."""
-    from coordinator_core import ipc
+    """`dispatch.land_run` through the re-entry seam. An unregistered op raises OpUnavailableError."""
+    from coordinator_core.warm.entry_seam import reentrant_dispatch
 
-    handler = ipc.get_op_handler("dispatch.land_run")
-    if handler is None:
-        raise RuntimeError("dispatch.land_run is not registered")
-    return handler(dict(params), repo_root=root / ".git")
+    return reentrant_dispatch("dispatch.land_run", dict(params), repo_root=root / ".git")
 
 
 def _top_functions(prof: cProfile.Profile) -> list:

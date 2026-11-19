@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 
-from coordinator_core.ops.dispatch_emit import run_token
+from coordinator_core.ops.dispatch_emit import ask_contract, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HEARTBEAT_MIN_S,
     RUN_STAGE_FILE,
@@ -76,8 +77,58 @@ def test_a_token_admit_stamps_the_run_and_a_refused_admit_does_not(tmp_path: Pat
     assert _read(d)["last_activity_at"] == T0.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     assert run_token.admits(tmp_path, run_id, token, script) is True
+    _drain_deferred()
     assert _read(d)["last_activity_at"] != T0.strftime("%Y-%m-%dT%H:%M:%SZ")
     assert _read(d)["stage"] == "staged"
+
+
+def _drain_deferred() -> None:
+    for t in list(ask_contract._DEFERRED_HEARTBEATS.values()):
+        t.join(timeout=10)
+
+
+@pytest.mark.deliberate_wall_clock(reason="bounds the admit's wait on a heartbeat write blocked for seconds")
+def test_a_blocked_write_does_not_hold_the_admit_and_a_second_admit_coalesces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id, token, script = "ask-20261105T000000-abcdef", "t" * 32, "/s/script.mjs"
+    monkeypatch.setattr(run_token, "_read_rec", lambda root, rid, **k: {"run_id": rid, "script_path": script})
+    monkeypatch.setattr(run_token, "_matches", lambda rec, rid, tok, sp, *a: tok == token)
+    monkeypatch.setattr(run_token, "TOKEN_RE", __import__("re").compile(r".+"))
+    d = tmp_path / "w" / run_id
+    monkeypatch.setattr(record_homes, "home_dir", lambda root, kind: str(tmp_path / "w"))
+    _stage(d, at=T0)
+
+    release = threading.Event()
+    calls: list[int] = []
+
+    def slow_write(path, data):
+        calls.append(1)
+        release.wait(10)
+        return real_write(path, data)
+
+    real_write = ask_contract.atomic_write_bytes
+    monkeypatch.setattr(ask_contract, "atomic_write_bytes", slow_write)
+    try:
+        assert run_token.admits(tmp_path, run_id, token, script) is True
+        assert run_token.admits(tmp_path, run_id, token, script) is True
+        assert not release.is_set()  # both admits returned with the write still blocked
+        assert _read(d)["last_activity_at"] == T0.strftime("%Y-%m-%dT%H:%M:%SZ")
+    finally:
+        release.set()
+    _drain_deferred()
+    assert len(calls) == 1
+    assert _read(d)["last_activity_at"] != T0.strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert not ask_contract._DEFERRED_HEARTBEATS
+
+
+def test_deferred_touch_never_raises_and_clears_its_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_a, **_k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(ask_contract, "touch_run_activity", boom)
+    t = ask_contract.touch_run_activity_deferred(tmp_path)
+    assert t is not None
+    t.join(timeout=10)
+    assert not ask_contract._DEFERRED_HEARTBEATS
 
 
 RUN = "ask-20261105T000000-abcdef"

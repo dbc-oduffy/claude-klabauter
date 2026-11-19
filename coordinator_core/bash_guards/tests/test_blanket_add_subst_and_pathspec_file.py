@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
+from coordinator_core.git import repo_root
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards._dc_blanket_add import _mask_command_substitutions
 from coordinator_core.guard_messages.testing import envelope_of
@@ -40,6 +41,7 @@ def repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
         raise AssertionError("unexpected git invocation: %r" % (args,))
 
     monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
+    monkeypatch.setattr(repo_root, "show_toplevel", lambda cwd=None: str(root))
 
     def _no_spawn(*a, **k):
         raise AssertionError("guard path spawned a subprocess")
@@ -142,4 +144,4 @@ def test_pathspec_file_stdin_is_advisory_not_deny(repo) -> None:
 def test_pathspec_file_adds_no_git_spawn(repo) -> None:
     (repo.root / "list.txt").write_text("a.py\n", encoding="utf-8")
     assert _check("git add --pathspec-from-file=list.txt") is None
-    assert repo.calls == [["rev-parse", "--show-toplevel"]]
+    assert repo.calls == []

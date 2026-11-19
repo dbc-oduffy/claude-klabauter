@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import struct
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.git.index_write import _build_entry
+from coordinator_core.ops import review_tripwires as rt
 from coordinator_core.ops.review_tripwires import literal_namers, names_in
 
 pytestmark = [pytest.mark.cadence]
@@ -16,11 +18,19 @@ pytestmark = [pytest.mark.cadence]
 EDITED = "ops/coverage-oracles/run_pass.py"
 
 
+def blob_sha(data: bytes) -> str:
+    """The git blob id of `data`: the facts store keys on it, so a fixture index needs the true one."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
 def stage(repo: Path, rels) -> None:
     """Write a v2 `.git/index` tracking `rels`, in process (no git spawn)."""
     entries = b""
+    past = os.stat(repo).st_mtime_ns // 1_000_000_000 - 60
+    for rel in rels:
+        os.utime(repo / rel, (past, past))
     for rel in sorted(rels):
-        entries += _build_entry(rel.encode(), 0o100644, "ab" * 20, os.stat(repo / rel))
+        entries += _build_entry(rel.encode(), 0o100644, blob_sha((repo / rel).read_bytes()), os.stat(repo / rel))
     raw = b"DIRC" + struct.pack(">II", 2, len(rels)) + entries + b"\x00" * 20
     (repo / ".git").mkdir(exist_ok=True)
     (repo / ".git" / "index").write_bytes(raw)
@@ -184,7 +194,7 @@ def test_stray_apostrophe_does_not_hide_literal_tripwire(tmp_path: Path) -> None
     assert list(literal_namers(repo, [EDITED])) == ["tests/test_t.py"]
 
 
-def test_scan_writes_nothing_and_reads_no_index_tripwire(tmp_path: Path) -> None:
+def test_scan_writes_only_the_facts_store_and_reads_no_index_tripwire(tmp_path: Path) -> None:
     from coordinator_core.ops import review_tripwires as rt
 
     for attr in ("git_index", "machinery_paths", "json", "hashlib"):
@@ -192,4 +202,61 @@ def test_scan_writes_nothing_and_reads_no_index_tripwire(tmp_path: Path) -> None
     repo = _repo(tmp_path, {"tests/test_t.py": 'X = "run_pass.py"\n'})
     before = sorted(str(p) for p in repo.rglob("*"))
     assert list(literal_namers(repo, [EDITED])) == ["tests/test_t.py"]
-    assert sorted(str(p) for p in repo.rglob("*")) == before
+    written = sorted(set(str(p) for p in repo.rglob("*")) - set(before))
+    assert written == [str(repo / ".git" / rt._FACTS_FILE)]
+
+
+def _opened_tests(monkeypatch: pytest.MonkeyPatch) -> list:
+    from coordinator_core.ops import review_tripwires as rt
+
+    opened: list = []
+    real_open = os.open
+
+    def counting_open(path, *a, **kw) -> int:
+        if os.path.basename(str(path)).startswith("test_"):
+            opened.append(os.path.basename(str(path)))
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(rt.os, "open", counting_open)
+    return opened
+
+
+def _many(n: int = 30) -> dict:
+    files = {f"tests/test_other_{i:02d}.py": f"X = {i}\n" for i in range(n)}
+    files["tests/test_named.py"] = 'NAME = "run_pass.py"\n'
+    return files
+
+
+def test_warm_namers_call_reads_only_the_naming_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _repo(tmp_path, _many())
+    assert list(literal_namers(repo, [EDITED])) == ["tests/test_named.py"]
+    opened = _opened_tests(monkeypatch)
+    assert list(literal_namers(repo, [EDITED])) == ["tests/test_named.py"]
+    assert opened == ["test_named.py"]
+
+
+def test_a_module_edited_after_staging_is_scanned_not_trusted_to_the_store(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, _many(3))
+    assert list(literal_namers(repo, [EDITED])) == ["tests/test_named.py"]
+    (repo / "tests" / "test_other_01.py").write_text('X = "run_pass.py"\n' * 3, encoding="utf-8")
+    (repo / "tests" / "test_named.py").write_text("X = 1\n", encoding="utf-8")
+    assert list(literal_namers(repo, [EDITED])) == ["tests/test_other_01.py"]
+
+
+def test_an_unreadable_store_is_a_cold_scan_not_an_error(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, _many(3))
+    assert list(literal_namers(repo, [EDITED])) == ["tests/test_named.py"]
+    (repo / ".git" / rt._FACTS_FILE).write_bytes(b"not marshal")
+    assert list(literal_namers(repo, [EDITED])) == ["tests/test_named.py"]
+
+
+def test_a_basename_the_tail_prefilter_cannot_cover_is_still_found(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, {"tests/test_t.py": 'X = "Makefile"\n', "tests/test_u.py": "X = 1\n"})
+    assert list(literal_namers(repo, ["build/Makefile"])) == ["tests/test_t.py"]
+    assert list(literal_namers(repo, ["build/Makefile"])) == ["tests/test_t.py"]
+
+
+def test_the_fast_index_reader_admits_the_shortest_test_names(tmp_path: Path) -> None:
+    body = "X = 'run_pass.py'"
+    repo = _repo(tmp_path, {"test_.py": body, "_test.py": body})
+    assert sorted(literal_namers(repo, [EDITED])) == ["_test.py", "test_.py"]

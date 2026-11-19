@@ -135,6 +135,7 @@ _PARAMS = (
     Field("route_override_reason", "str"),
     Field("require_live_token", "bool"),
     Field("em_size", "nonempty_str"),
+    Field("family", "nonempty_str"),
     Field("stage_act", "bool"),
     Field("gated", "list"),
     Field("chain_emit", "bool"),
@@ -403,6 +404,68 @@ def _design_scope(sizing: dict, writes: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(scope))
 
 
+_FAMILY_LINE = re.compile(r"^family:[ \t]*(.*?)[ \t]*$")
+_STATUS_LINE = re.compile(r"^status:")
+
+
+def _stamp_family(root: Path, sizing_rel: str, family: str) -> Optional[str]:
+    """Write `family` as the sizing's top-level key; the refusal reason, else None.
+
+    `claude` is the absent default and stamps nothing, but still conflicts with a recorded non-claude
+    family. A sizing not on disk is left to the arm verdict's own refusal.
+    """
+    try:
+        wanted = _stage_family.resolve(family)
+    except ValueError as exc:
+        return str(exc)
+    from coordinator_core.locked_write import MutateAbort, locked_rmw
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused, _sizing_path
+
+    try:
+        target = _sizing_path(root, sizing_rel)
+    except (LedgerRefused, SizingFireRefused):
+        return None
+    if not target.is_file():
+        return None
+    crlf = b"\r\n" in target.read_bytes()
+    conflict: list = []
+
+    def mutate(text: str) -> str:
+        lines = text.split("\n")
+        status_at = None
+        for i, line in enumerate(lines):
+            if _STATUS_LINE.match(line) and status_at is None:
+                status_at = i
+            m = _FAMILY_LINE.match(line)
+            if m:
+                recorded = m.group(1).strip("'\"")
+                if recorded != wanted and (recorded or wanted != _stage_family.FALLBACK):
+                    conflict.append(recorded)
+                raise MutateAbort()
+        if wanted == _stage_family.FALLBACK:
+            raise MutateAbort()
+        new_line = f"family: {wanted}"
+        if status_at is not None:
+            lines.insert(status_at + 1, new_line)
+        elif lines and lines[-1] == "":
+            lines.insert(len(lines) - 1, new_line)
+        else:
+            lines.append(new_line)
+        out = "\n".join(lines)
+        return out.replace("\n", "\r\n") if crlf else out
+
+    try:
+        locked_rmw(target, mutate, repo_root=root)
+    except MutateAbort:
+        pass
+    if conflict:
+        return (
+            f"the ask names family {wanted} but the sizing's top-level family is {conflict[0] or 'empty'}; "
+            "the sizing's own key governs: drop the family arg or edit the sizing's family and refire"
+        )
+    return None
+
+
 def gate(
     repo_root: Path,
     sizing_rel: str,
@@ -417,8 +480,12 @@ def gate(
     held_sink: Optional[list] = None,
     reasons_sink: Optional[list] = None,
     em_size: Optional[str] = None,
+    family: Optional[str] = None,
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
+
+    `family` (the ask's executing family) is stamped as the sizing's top-level `family` before the arm is
+    judged; an unknown value, or one differing from a family the sizing already records, refuses naming it.
 
     `kept_sink`, when given, receives `(kept row ids, kept_run)` for a row resume that keeps rows.
     `held_sink`, when given, receives the resume's `ResumePlan.held` on the row and the ledger resume alike.
@@ -438,6 +505,10 @@ def gate(
     from coordinator_core.ops.dispatch_emit import design_conformance as dc
 
     root = Path(repo_root)
+    if family:
+        family_refusal = _stamp_family(root, sizing_rel, family)
+        if family_refusal:
+            return _refuse(family_refusal)
     route_payload = None
     sizing = None
     try:
@@ -1701,6 +1772,7 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
         root, sizing_rel, writes=writes, baton=params.get("baton"),
         mint_design_rows=bool(params.get("run_id")), landed_sink=landed, run_id=params.get("run_id"),
         kept_sink=kept, phase_sink=phases, held_sink=held, reasons_sink=reasons, em_size=params.get("em_size"),
+        family=params.get("family"),
     )
     if landed and verdict.halt is None and verdict.resume_plan and verdict.resume_rows:
         _stamp_landed_rows(root, verdict.resume_plan, landed)

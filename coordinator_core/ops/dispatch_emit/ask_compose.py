@@ -300,7 +300,8 @@ _TESTS_NOT_RUN_JS = (
     "  if (!_halted && !_reviewReused && _codeReviewOwed && _reviewReverify && typeof _reviewReverify === 'object' "
     "&& !['pass', 'fail', 'indeterminate'].includes(_reviewReverify.status_after) "
     "&& !(_reviewReverify.status_after == null && _reviewReverify.status_before === 'pass') "
-    "&& _manifest && !(_manifest.test_targets ?? []).length && !_manifest.no_test_target) { "
+    "&& _manifest && !(_manifest.test_targets ?? []).length && !_manifest.no_test_target "
+    "&& !_manifest.em_owed_test_criterion) { "
     "_reviewReverify.tests_not_run = true; _halted = { halted: " + json.dumps(HALT_TESTS_NOT_RUN) + ", "
     "reason: 'no test was selected or run for a code-editing run; owed, not green', run_id: _runId, "
     "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }"
@@ -1268,6 +1269,7 @@ _MANIFEST_SCHEMA = _obj(
         "test_targets": {"type": "array", "items": _STR},
         "wave_test_targets": {"type": "object", "additionalProperties": {"type": "array", "items": _STR}},
         "no_test_target": {"type": ["object", "null"]},
+        "em_owed_test_criterion": {"type": ["object", "null"]},
         "doc_writes": {"type": "array", "items": _STR},
         "marker_path": _STR,
         "rulable_ids": {"type": "array", "items": _STR},
@@ -2166,6 +2168,7 @@ def _test_verdict_limit_route_js() -> str:
 
 
 _WAVE_TESTS_GATE_FN = "_waveTestsGreen"
+_WAVE_TEST_FILE_RE_JS = r"/(?:^|\/)test_[^\/]*\.py$|_test\.py$/"
 WAVE_REDS_VAR = "_waveReds"
 _WAVE_FAILING_IDS_CLAUSE = (
     " When the status is fail, return `failing_ids`: the node id of each failing test, one string each."
@@ -2181,18 +2184,16 @@ def _wave_tests_green_js(
     With `objective`, the gate opens with `_objectiveWaveCheck(n)`: the wave's falsifier check rides the
     checkpoint leg and never gates the commit.
 
-    An empty scope passes, and so does every scope while `_terminalTestsWanted` holds: the terminal
-    verify-tests leg then runs the whole run's scope, so no agent runs here. Accepted trade-off: a
-    checkpoint commit then lists no wave reds through `dispatch.checkpoint_reds` (`_waveReds[n]` stays
-    unset), and a run that halts before the terminal verify block leaves its landed waves with no test
-    evidence; acceptable only because this gate never gated (it always returns true). The flag is a
-    strict subset of the terminal `test_guard` (`_testWanted`), so the skip never fires on a run whose
-    terminal leg would not.
+    An empty scope passes, and so does a scope while `_terminalTestsWanted` holds unless the wave (with
+    its carried rows) adds or touches a Python test file: the terminal verify-tests leg runs the whole
+    run's scope, so no agent runs here for a wave with no test file. A checkpoint commit skipped this
+    way lists no wave reds through `dispatch.checkpoint_reds`.
     Otherwise one test-runner leg runs the scope, and only the returned
     `status` gates (`pass` / `pass-with-skips` land); a throw, a missing sidecar or any other
     status records the wave's reds in `_checkpointWithheld` and `_waveReds[n]` and the checkpoint
     still commits: the gate returns true, and the commit leg lists each red through
-    `dispatch.checkpoint_reds`. Only a usage-limit throw halts. Base-red evidence does not exist at
+    `dispatch.checkpoint_reds`. Under `_terminalTestsWanted` a `fail` naming one of the wave's own
+    test files withholds the checkpoint (false; rows carry to the next wave). Only a usage-limit throw halts. Base-red evidence does not exist at
     wave time, so the commit leg passes an empty `base_red` and every red classifies introduced; a
     verdict with no `failing_ids` becomes one `<unnamed wave n>` red.
     With `em_brief` the runner prompt opens with `_EM_BRIEF`, like the row verify leg.
@@ -2208,7 +2209,10 @@ def _wave_tests_green_js(
         + ("    await _objectiveWaveCheck(n);\n" if objective else "")
         + "    const scope = ((_manifest && _manifest.wave_test_targets) ?? {})[String(n)] ?? [];\n"
         "    if (!scope.length) return true;\n"
-        "    if (_terminalTestsWanted) return true;\n"
+        f"    const _testRe = {_WAVE_TEST_FILE_RE_JS};\n"
+        "    const _addedTests = [...new Set([..._carried, ...ids].filter((i) => _landed[i]).flatMap((i) => _landed[i].paths))]"
+        ".filter((p) => _testRe.test(p));\n"
+        "    if (_terminalTestsWanted && !_addedTests.length) return true;\n"
         "    let r = null;\n"
         "    try {\n"
         "      r = await agent(\n"
@@ -2229,6 +2233,10 @@ def _wave_tests_green_js(
         "    const _failing = (r && Array.isArray(r.failing_ids) ? r.failing_ids : []).filter((x) => typeof x === 'string' && x);\n"
         f"    {WAVE_REDS_VAR}[n] = {{ ids: _failing.length ? _failing : ['<unnamed wave ' + n + '>'], status }};\n"
         "    _checkpointWithheld.push({ wave: n, ids, status });\n"
+        "    if (_terminalTestsWanted && status === 'fail' && _failing.some((x) => _addedTests.some((p) => x === p || x.startsWith(p + '::')))) {\n"
+        "      log('checkpoint of wave ' + n + ' withheld: its own added test is red');\n"
+        "      return false;\n"
+        "    }\n"
         "    log('checkpoint of wave ' + n + ' commits with reds: scoped tests ' + (status || 'returned no verdict') + ((r && r.summary) ? ': ' + r.summary : ''));\n"
         "    return true;\n"
         "  }"
@@ -4525,6 +4533,7 @@ def compose_ask_script(
     preamble: Optional[str] = None,
     em_brief: Optional[EmBrief] = None,
     em_size: Optional[str] = None,
+    family: Optional[str] = None,
     stop_after: Optional[str] = None,
     in_run_commit: bool = False,
     ask_source: str = "pm",
@@ -4575,7 +4584,9 @@ def compose_ask_script(
     every agent prompt the script composes, plan-blitz's included (through `wrap_stage`'s
     `agent_prefix_var`, which shadows `agent` over the script-level `_askAgent`) and the roadmap
     stage's. `em_size` (the EM's stated size) rides each gate command; the gate halts only when it is M or
-    below against an engine XL/XXL. A roadmap pick with no plan-blitz embedded chains into the `{sizing}`
+    below against an engine XL/XXL. `family` (the ask's executing family) rides each gate command and is
+    stamped on the sizing's top-level `family` there; a roadmap pick carrying it composes in this body, not the standalone roadmap script.
+    A roadmap pick with no plan-blitz embedded chains into the `{sizing}`
     script, as an M+ pick does. A gate verdict's `resume_plan` is staged at S and revises at M+ instead of
     authoring. A raw ask sizes through the scout agent, whose closing acts run
     `sizing-assemble --write` and `dispatch.ask_gate`; a gate halt carries the assemble decision's `pm_exit_question`.
@@ -4656,8 +4667,8 @@ def compose_ask_script(
     xl_possible = sized_in_run or xl_open
     rb_fn: str = ""
     rb_phases: list[str] = []
-    # A roadmap sizing with a brief or an em_size composes in this body, whose gate legs carry both; the standalone roadmap script has neither slot.
-    roadmap_in_body = known_arm == ARM_ROADMAP and bool(em_brief or em_size)
+    # A roadmap sizing with a brief, an em_size or a family composes in this body, whose gate legs carry all three; the standalone roadmap script has none of those slots.
+    roadmap_in_body = known_arm == ARM_ROADMAP and bool(em_brief or em_size or family)
     if xl_possible or roadmap_in_body:
         from coordinator_core.ops.dispatch_emit import ask_roadmap
         from coordinator_core.ops.dispatch_emit.ask_plan_blitz import _TOP_AGENT_DECL, AskPlanBlitzRefused
@@ -4915,6 +4926,7 @@ def compose_ask_script(
             "js:JSON.stringify({ sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
             + (", baton: " + json.dumps(baton["path"]) if baton else "")
             + (", em_size: " + json.dumps(em_size) if em_size else "")
+            + (", family: " + json.dumps(family) if family else "")
             + (f", record: {record_js}" if record_js else "")
             + extra_js
             + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) })"
@@ -5062,6 +5074,7 @@ def compose_ask_script(
             f'{{"sizing_path":"{sizing_write_rel}","run_id":"{run_id}","writes":[<your writes>]'
             + (f',"baton":{json.dumps(baton["path"])}' if baton else "")
             + (f',"em_size":{json.dumps(em_size)}' if em_size else "")
+            + (f',"family":{json.dumps(family)}' if family else "")
             + (f',"route_override_reason":"{_OVERRIDE_SLOT}"' if has_route_pref else "")
             + (f',"declared_writes":{_declared_json}' if _declared else "")
             + "}'" + _repo_flag(repo_root)
@@ -6859,6 +6872,14 @@ def compose_ask_script(
         f"  if (!_halted && _manifest && _manifest.no_test_target) {{ {_emit._TEST_RESULT_VAR} = "
         "{ status: 'degraded', summary: 'No terminal test run: ' + _manifest.no_test_target.reason }; }"
     )
+    em_owed = (
+        f"  if (!_halted && _manifest && _manifest.em_owed_test_criterion) {{ {_emit._TEST_RESULT_VAR} = "
+        "{ status: 'degraded', owed_to: 'em', row: _manifest.em_owed_test_criterion.row ?? null, "
+        "summary: 'UE automation criterion owed to the EM; record it with coordinator-invoke plan.tasks.mutate "
+        "{\"verb\":\"em-discharge\",\"plan_path\":' + JSON.stringify((typeof _planRel !== 'undefined' ? _planRel : null) ?? '') "
+        "+ ',\"id\":' + JSON.stringify(String(_manifest.em_owed_test_criterion.row ?? '')) "
+        "+ ',\"ue_report\":{\"index_json\":\"<report/index.json>\",\"tests\":[...]}}' }; }"
+    )
     review_vars = _emit.review_stage_vars(
         review,
         bookkeeping_stem_literal=_lit(review_wave_bookkeeping_stem(run_id, None)),
@@ -7054,6 +7075,7 @@ def compose_ask_script(
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
     b.append(_review_blocked_halt_js(sizing_rel, after_join=True, call_only=True))
     b.append(no_target)
+    b.append(em_owed)
     b.append("  if (!_halted && _manifest && !_manifest.error) {")
     b.append(
         "    const _reconciled = [];\n"

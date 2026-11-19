@@ -93,11 +93,14 @@ def refire_next_action(
     input: dict | None = None,
     detail: str | None = None,
     stage=None,
+    host: str | None = None,
 ) -> dict:
     """The envelope `{kind, op, call, resume, input, detail}`; `stage` is copied unchanged.
 
-    `resume.phase` is HALT_PHASE[halted] and absent for a kind that map does not name.
+    `resume.phase` is HALT_PHASE[halted] and absent for a kind that map does not name. `host` defaults to
+    `detect_host()`; an engine-ask `call` is rendered host-native by `host_native_call`.
     """
+    call = host_native_call(call, detect_host() if host is None else host) if op == OP_ENGINE_ASK else call
     resume = {"run_id": run_id, "sizing": sizing, "halted": halted, "stage": stage}
     phase = HALT_PHASE.get(halted)
     if phase is not None:
@@ -176,15 +179,60 @@ def _carries_hand_repair(text: object) -> bool:
     return any(marker in low for marker in HAND_REPAIR_MARKERS)
 
 
-def _call_is_one_engine_call(op: str, call: str) -> bool:
+INVOKE_SUBMIT = "coordinator-invoke engine_ask.submit"
+RESUME_RUN_ID_ARG = "resume_run_id"
+# `Workflow(...)` has no counterpart on a host without the Workflow tool; the engine-ask refire there is the CLI submit.
+_ENGINE_ASK_WORKFLOW_CALL = re.compile(r'Workflow\(\{name: "coordinator:engine-ask", args: (\{.*\})\}\)', re.S)
+
+
+def detect_host(env: dict | None = None) -> str | None:
+    """The submitting host's vendor when it has no `Workflow` tool (codex, agy, grok), else None.
+
+    Reads the launcher identity the codex_runner contract carries (`identity_env.IDENTITY_ENV`), through
+    `agent_provenance`; a Claude session or an unrecognised env is None.
+    """
+    import os
+
+    from coordinator_core.git.agent_provenance import detect_agent_provenance
+    from coordinator_core.warp_fire import NO_WORKFLOW_HOSTS
+
+    prov = detect_agent_provenance(os.environ if env is None else env)
+    return prov.vendor if prov is not None and prov.vendor in NO_WORKFLOW_HOSTS else None
+
+
+def host_native_call(call: str, host: str | None) -> str:
+    """`call` as the host runs it: an engine-ask `Workflow(...)` call becomes the CLI submit on a Workflow-less host.
+
+    Any other call, or a Claude host, comes back unchanged. `resume_run_id` is not an `engine_ask.submit` param
+    and is dropped; the halted run resumes through `workflow.revise`.
+    """
+    from coordinator_core.warp_fire import NO_WORKFLOW_HOSTS
+
+    match = _ENGINE_ASK_WORKFLOW_CALL.fullmatch(call) if host in NO_WORKFLOW_HOSTS else None
+    if match is None:
+        return call
+    try:
+        args = json.loads(match.group(1))
+    except ValueError:
+        return call
+    if not isinstance(args, dict):
+        return call
+    args.pop(RESUME_RUN_ID_ARG, None)
+    return f"{INVOKE_SUBMIT} '{json.dumps(args, separators=(',', ':'))}'"
+
+
+def _call_is_one_engine_call(op: str, call: str, host: str | None = None) -> bool:
     if op == OP_ENGINE_ASK:
-        return call.count("Workflow(") == 1
+        if call.count(INVOKE_SUBMIT) == 1 and "Workflow" not in call:
+            return True
+        return host is None and call.count("Workflow(") == 1
     return "resumeFromRunId" in call and call.count("Workflow") <= 1
 
 
-def is_refire_next_action(obj: object) -> bool:
+def is_refire_next_action(obj: object, host: str | None = None) -> bool:
     """True only for an envelope naming one engine call and no hand-repair step.
 
+    `host` names a Workflow-less submitter (see `detect_host`): its engine-ask call must be the CLI submit.
     `input` is not scanned: it carries reviewer and ruling text verbatim.
     """
     if not isinstance(obj, dict) or obj.get("kind") != REFIRE_KIND:
@@ -193,7 +241,7 @@ def is_refire_next_action(obj: object) -> bool:
     if op not in OPS:
         return False
     call = obj.get("call")
-    if not isinstance(call, str) or not call.strip() or not _call_is_one_engine_call(op, call):
+    if not isinstance(call, str) or not call.strip() or not _call_is_one_engine_call(op, call, host):
         return False
     resume = obj.get("resume")
     if not isinstance(resume, dict) or set(resume) - {RESUME_PHASE_KEY} != set(RESUME_KEYS):
@@ -272,6 +320,22 @@ _WITH_FOOTPRINT_JS = "\n".join(
 )
 
 
+# JS twin of `host_native_call`, emitted only for a Workflow-less submitter so a Claude script is unchanged.
+_HOST_NATIVE_JS = "\n".join(
+    [
+        "function _hostNativeCall(_call) {",
+        "  const _m = typeof _call === 'string' && /^Workflow\\(\\{name: \"coordinator:engine-ask\", args: (\\{[\\s\\S]*\\})\\}\\)$/.exec(_call);",
+        "  if (!_m) return _call;",
+        "  let _a;",
+        "  try { _a = JSON.parse(_m[1]); } catch (_e) { return _call; }",
+        "  if (!_a || typeof _a !== 'object' || Array.isArray(_a)) return _call;",
+        f"  delete _a[{json.dumps(RESUME_RUN_ID_ARG)}];",
+        f"  return {json.dumps(INVOKE_SUBMIT + ' ')} + \"'\" + JSON.stringify(_a) + \"'\";",
+        "}",
+    ]
+)
+
+
 def refire_next_action_js(
     call_js: str,
     legacy_js: str,
@@ -280,18 +344,22 @@ def refire_next_action_js(
     stage_js: str = "null",
     run_id_js: str = "_runId",
     sizing_js: str = "_sizingRel",
+    host: str | None = None,
 ) -> str:
     """JS source of `function _refireNextAction()`, which finalises `_halted.next_action` in place.
 
     Every argument is a JS expression: `call_js` the one engine call string, `legacy_js` the
     halt's current next_action, `kind_js` its halted kind, `detail_js` the default detail,
     `stage_js` the resume handle rendered into `resume.stage`. Idempotent; leaves exempt and
-    already-fanned halts alone.
+    already-fanned halts alone. `host` defaults to `detect_host()` at emit time: a Workflow-less
+    submitter gets the engine-ask call as the CLI submit (`_hostNativeCall`).
     """
     j = json.dumps
+    native = (detect_host() if host is None else host) is not None
     return "\n".join(
         [
             _WITH_FOOTPRINT_JS,
+            *([_HOST_NATIVE_JS] if native else []),
             "function _refireNextAction() {",
             "  if (!_halted || typeof _halted !== 'object') return;",
             _exit_route_js(run_id_js),
@@ -324,7 +392,7 @@ def refire_next_action_js(
             "  _halted.next_action = {",
             f"    kind: {j(REFIRE_KIND)},",
             f"    op: _hk === {j(HALT_USAGE_LIMIT)} ? {j(OP_WORKFLOW_RESUME)} : {j(OP_ENGINE_ASK)},",
-            f"    call: _withFootprint({call_js}),",
+            f"    call: {'_hostNativeCall(' if native else ''}_withFootprint({call_js}){')' if native else ''},",
             f"    resume: Object.assign({{ run_id: {run_id_js}, sizing: {sizing_js}, halted: _hk, stage: {stage_js} }}, Object.prototype.hasOwnProperty.call(_haltPhase, _hk) ? {{ {j(RESUME_PHASE_KEY)}: _haltPhase[_hk] }} : {{}}),",
             "    input: _input,",
             "    detail: _detail === undefined ? null : _detail,",

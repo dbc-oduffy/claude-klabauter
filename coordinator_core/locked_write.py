@@ -540,6 +540,10 @@ def _machine_lock_dir() -> Path:
     return Path.home() / ".coordinator" / "coordinator-locks"
 
 
+# Past this the anchor check falls back to abspath, which cannot see symlink/junction nesting.
+_ANCHOR_REALPATH_DEADLINE_SECS = 0.15
+
+
 def _assert_anchor_outside_target(target: Path, lock_dir: Path) -> None:
     """Reject an anchor whose sidecar directory would live inside *target*.
 
@@ -551,8 +555,26 @@ def _assert_anchor_outside_target(target: Path, lock_dir: Path) -> None:
     """
     from pathlib import Path
 
-    real_target = Path(os.path.realpath(str(target)))
-    real_lock_dir = Path(os.path.realpath(str(lock_dir)))
+    from coordinator_core.bounded_io import run_bounded
+
+    def _resolve(resolver) -> "tuple[Path, Path]":
+        return (Path(resolver(str(target))), Path(resolver(str(lock_dir))))
+
+    resolved = run_bounded(
+        f"anchor_realpath:{target}|{lock_dir}",
+        lambda: _resolve(os.path.realpath),
+        deadline=_ANCHOR_REALPATH_DEADLINE_SECS,
+        default=None,
+    )
+    if resolved is None:
+        import sys
+
+        sys.stderr.write(
+            "locked_write: realpath stalled, anchor check degraded to abspath "
+            "(symlink/junction nesting not detected)\n"
+        )
+        resolved = _resolve(os.path.abspath)
+    real_target, real_lock_dir = resolved
     if real_lock_dir == real_target or real_target in real_lock_dir.parents:
         raise LockAnchorError(
             f"refusing to lock {target}: the lock sidecar would live at "

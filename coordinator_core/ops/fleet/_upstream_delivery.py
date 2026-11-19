@@ -1,16 +1,24 @@
 """coordinator_core.ops.fleet._upstream_delivery -- deliver one new file onto a
-receiver's upstream tip as an object-only commit, anchor it, and leave a
-durable push-pending record in the sender's outbox.
+receiver's branch, anchor it, and leave a durable push-pending record in the
+sender's outbox.
 
-Purpose: a delivery commit built on the receiver's fetched tracking tip can
-always be pushed fast-forward; one landed on a stale local branch strands.
-Pure stdlib plus in-process git object I/O: zero spawns.
+Purpose: when the receiver's local branch is at or ahead of its tracking tip
+the delivery lands ON that branch (bounded CAS, rebuilt on the new tip when it
+loses); when local is behind tracking, or the bound is spent, the delivery is
+an object-only commit on the tracking tip, pushable fast-forward.
+Pure stdlib plus in-process git object and index I/O: no git spawn on the fast
+path (`commit_authored_new_file` can fall back to one non-hook spawn).
 
 Negative-spec:
-    - No receiver HEAD, branch ref, index or worktree is written. The only
-      receiver writes are loose objects, the `refs/coordinator/inbox/`
-      anchor (the memo blob) and the `refs/coordinator/inbox-pin/` pin (the
-      commit, reachable through it until pushed).
+    - Object-only arm: no receiver HEAD, branch ref, index or worktree is
+      written. The only receiver writes are loose objects, the
+      `refs/coordinator/inbox/` anchor (the memo blob) and the
+      `refs/coordinator/inbox-pin/` pin (the commit, reachable through it
+      until pushed).
+    - Local-tip arm: one CAS of the branch ref (a non-HEAD branch: ref only;
+      HEAD's branch: `commit_authored_new_file`, which refreshes the index,
+      plus one O_EXCL worktree file). HEAD's symref never moves; no checkout,
+      reset or stash.
     - `resolve_receiver_landing` only decides the branch name (the receiver
       repo's live work branch, never one named for the sender); a receiver
       with none is `STATUS_NO_BASE`. `apply_receiver_landing` is never called.
@@ -25,11 +33,11 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import NamedTuple, Optional, Union
+from typing import Callable, NamedTuple, Optional, Union
 
-from coordinator_core.git import git_objects
+from coordinator_core.git import git_objects, git_state
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.git.git_state import read_commit, read_tree_spine
+from coordinator_core.git.index_write import IndexWriteError, IndexWriteLockBusy, splice_index
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet import _memo_push_pending
 from coordinator_core.ops.fleet import _receiver_landing
@@ -51,8 +59,12 @@ STATUS_NO_REMOTE = "no_remote"
 STATUS_NO_BASE = "no_base"
 STATUS_REFUSED = "refused"
 STATUS_ANCHOR_FAILED = "anchor_failed"
+STATUS_LANDING_LOST = "landing_lost"
 
 _HEADS = "refs/heads/"
+_REMOTES = "refs/remotes/"
+#: Concurrent lands one delivery may race before it falls back to the object-only arm.
+_CAS_ATTEMPTS = 3
 
 
 class UpstreamDelivery(NamedTuple):
@@ -61,6 +73,12 @@ class UpstreamDelivery(NamedTuple):
     `ok` is true only for `STATUS_DELIVERED`. `record` is the push-pending row
     (as written, or built when `rebuild_and_retarget` got no `sender_root`).
     `error` carries the refusal text for every non-delivered status.
+    `on_branch` is true only when the delivery commit was landed on the
+    receiver's local branch ref (the memo is on its working branch); false
+    for the object-only, pinned-only arm. `warning` is set on an ok outcome
+    whose anchor or pin could not be written after the branch landed: the memo
+    is delivered, with no `record`, anchor or pin (the sweep pushes local's own
+    history).
     """
 
     ok: bool
@@ -74,6 +92,8 @@ class UpstreamDelivery(NamedTuple):
     record: Optional[dict] = None
     record_path: Optional[Path] = None
     error: str = ""
+    on_branch: bool = False
+    warning: str = ""
 
 
 def _fail(status: str, error: str, **kw) -> UpstreamDelivery:
@@ -99,11 +119,11 @@ def resolve_base(common_dir: Path, remote: str, branch: str) -> Optional[str]:
 
 def path_in_tree(receiver_root: Path, commit_sha: str, rel_path: str) -> Optional[bool]:
     """Whether `rel_path` exists in `commit_sha`'s tree; `None` when the tree is unreadable."""
-    info = read_commit(receiver_root, commit_sha)
+    info = git_state.read_commit(receiver_root, commit_sha)
     if info is None:
         return None
     normalized = rel_path.replace("\\", "/").strip("/")
-    spine = read_tree_spine(receiver_root, [normalized], root_tree_sha=info.tree)
+    spine = git_state.read_tree_spine(receiver_root, [normalized], root_tree_sha=info.tree)
     if spine is None:
         return None
     parent_dir, _, leaf = normalized.rpartition("/")
@@ -120,7 +140,11 @@ def _build_on_base(
     remote: str,
     branch: str,
     message: str,
+    land: Optional[Callable[[str], bool]] = None,
 ) -> UpstreamDelivery:
+    """Build `rel_path` on `base`, anchor and pin it; with `land`, move the branch ref to the commit
+    after the pin is written and retire the anchor and pin if `land` returns False
+    (`STATUS_LANDING_LOST`)."""
     present = path_in_tree(receiver_root, base, rel_path)
     if present is None:
         return _fail(
@@ -143,6 +167,24 @@ def _build_on_base(
             STATUS_REFUSED, built.stderr.strip() or "build_new_file_commit failed",
             parent_sha=base, remote=remote, branch=branch,
         )
+    return _anchor_and_record(
+        receiver_root, rel_path, content, commit_sha, base,
+        remote=remote, branch=branch, message=message, land=land,
+    )
+
+
+def _anchor_and_record(
+    receiver_root: Path,
+    rel_path: str,
+    content: str,
+    commit_sha: str,
+    base: str,
+    *,
+    remote: str,
+    branch: str,
+    message: str,
+    land: Optional[Callable[[str], bool]] = None,
+) -> UpstreamDelivery:
     filename = rel_path.replace("\\", "/").rsplit("/", 1)[-1]
     common_dir = resolve_git_common_dir(receiver_root)
     blob_sha = write_anchor(common_dir, filename, commit_sha, content.encode("utf-8"))
@@ -158,6 +200,13 @@ def _build_on_base(
             STATUS_ANCHOR_FAILED,
             f"pin for {commit_sha} could not be written",
             commit_sha=commit_sha, parent_sha=base, remote=remote, branch=branch,
+        )
+    if land is not None and not land(commit_sha):
+        retire_pin(common_dir, commit_sha)
+        retire_anchor(common_dir, filename, commit_sha)
+        return _fail(
+            STATUS_LANDING_LOST, f"branch ref moved before {commit_sha} landed",
+            parent_sha=base, remote=remote, branch=branch,
         )
     record = {
         "receiver_root": str(receiver_root),
@@ -184,6 +233,11 @@ def verify_delivery(receiver_root: Union[str, Path], out: UpstreamDelivery) -> O
     receiver_root = Path(receiver_root)
     common_dir = resolve_git_common_dir(receiver_root)
     sha = out.commit_sha or ""
+    if out.warning:
+        landed = git_objects.read_ref_loose_or_packed(common_dir, f"{_HEADS}{out.branch}")
+        if landed != sha:
+            return f"{_HEADS}{out.branch} does not resolve to the delivery commit {sha!r}"
+        return None
     if read_pin(common_dir, sha) != sha:
         return f"pin ref for {sha!r} does not resolve to the delivery commit"
     if not out.anchor_ref or git_objects.read_ref_loose_or_packed(common_dir, out.anchor_ref) != out.blob_sha:
@@ -211,6 +265,119 @@ def retire_delivery_refs(receiver_root: Union[str, Path], out: UpstreamDelivery)
             retire_anchor(common_dir, filename, out.commit_sha)
 
 
+def _local_tip_to_land_on(common_dir: Path, remote: str, branch: str) -> Optional[str]:
+    """The local branch tip when it is at or ahead of its tracking tip (or has none); else `None`."""
+    local = git_objects.read_ref_loose_or_packed(common_dir, f"{_HEADS}{branch}")
+    if not local:
+        return None
+    tracking = git_objects.read_ref_loose_or_packed(common_dir, f"{_REMOTES}{remote}/{branch}")
+    if tracking is None or tracking == local or _receiver_landing._is_ancestor(common_dir, tracking, local):
+        return local
+    return None
+
+
+def _land_on_local_ref(
+    receiver_root: Path, rel_path: str, content: str, msg_file: Union[str, Path],
+    *, remote: str, branch: str, message: str,
+) -> Optional[UpstreamDelivery]:
+    """Non-HEAD branch: build on the local tip and CAS the branch ref, rebuilding on the new tip
+    when the CAS loses, `_CAS_ATTEMPTS` times. `None` when local is not at or ahead of tracking
+    or the bound is spent."""
+    common_dir = resolve_git_common_dir(receiver_root)
+    ref = f"{_HEADS}{branch}"
+    for _ in range(_CAS_ATTEMPTS):
+        tip = _local_tip_to_land_on(common_dir, remote, branch)
+        if tip is None:
+            return None
+
+        def _land(sha: str, tip: str = tip) -> bool:
+            return git_objects.cas_ref(common_dir, ref, tip, sha)
+
+        out = _build_on_base(
+            receiver_root, rel_path, content, msg_file, tip,
+            remote=remote, branch=branch, message=message, land=_land,
+        )
+        if out.status != STATUS_LANDING_LOST:
+            return out._replace(on_branch=True) if out.ok else out
+    return None
+
+
+def _refresh_index_entry(receiver_root: Path, rel_path: str, content: str) -> None:
+    """Stage `rel_path` in the receiver's own index by the in-process `splice_index` (zero spawns;
+    the index is located from `receiver_root`, never from an inherited `GIT_INDEX_FILE`). An index
+    the splice refuses or a peer-held lock leaves the index untouched: best-effort, never raises."""
+    try:
+        blob = git_objects.write_object(resolve_git_common_dir(receiver_root), b"blob", content.encode("utf-8"))
+        splice_index(receiver_root, {rel_path.replace("\\", "/"): (0o100644, blob)})
+    except (OSError, IndexWriteError, IndexWriteLockBusy):
+        pass
+
+
+def _land_on_head_branch(
+    receiver_root: Path, rel_path: str, content: str, msg_file: Union[str, Path],
+    *, remote: str, branch: str, message: str,
+) -> Optional[UpstreamDelivery]:
+    """HEAD's own branch: one O_EXCL worktree file, then `commit_authored_new_file` (index refreshed),
+    retried `_CAS_ATTEMPTS` times on a lost CAS. `None` (worktree file removed) when the file is already
+    on disk, local is not at or ahead of tracking, or the bound is spent."""
+    common_dir = resolve_git_common_dir(receiver_root)
+    first_tip = _local_tip_to_land_on(common_dir, remote, branch)
+    if first_tip is None or path_in_tree(receiver_root, first_tip, rel_path) is None:
+        return None
+    target = receiver_root / rel_path
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(target), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+    except OSError:
+        return None
+
+    def _rollback() -> None:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+
+    for _ in range(_CAS_ATTEMPTS):
+        tip = _local_tip_to_land_on(common_dir, remote, branch)
+        if tip is None:
+            break
+        if path_in_tree(receiver_root, tip, rel_path):
+            _rollback()
+            return _fail(
+                STATUS_COLLISION, f"{rel_path!r} already exists in {tip}",
+                parent_sha=tip, remote=remote, branch=branch,
+            )
+        landed = git_native.commit_authored_new_file(
+            rel_path, content, msg_file, receiver_root, refresh_shared_index=False
+        )
+        sha = landed.stdout.strip()
+        if not landed.ok or not sha:
+            continue
+        info = git_state.read_commit(receiver_root, sha)
+        if info is None:
+            _rollback()
+            return _fail(
+                STATUS_REFUSED, f"landed commit {sha} is not a readable object; not sent",
+                commit_sha=sha, parent_sha=tip, remote=remote, branch=branch,
+            )
+        _refresh_index_entry(receiver_root, rel_path, content)
+        parent = info.parents[0] if info.parents else tip
+        out = _anchor_and_record(
+            receiver_root, rel_path, content, sha, parent,
+            remote=remote, branch=branch, message=message,
+        )
+        if not out.ok:
+            return UpstreamDelivery(
+                True, STATUS_DELIVERED, sha, parent, remote, branch,
+                on_branch=True, warning=out.error,
+            )
+        return out._replace(on_branch=True)
+    _rollback()
+    return None
+
+
 def deliver_onto_upstream(
     receiver_root: Union[str, Path],
     sender_root: Union[str, Path],
@@ -218,7 +385,8 @@ def deliver_onto_upstream(
     content: str,
     msg_file: Union[str, Path],
 ) -> UpstreamDelivery:
-    """Build `content` at `rel_path` as a commit on the receiver's upstream tip.
+    """Deliver `content` at `rel_path`: onto the receiver's local branch tip (`on_branch`) when local
+    is at or ahead of tracking, else as an object-only commit on the upstream tip.
 
     Writes the anchor and one push-pending record under `sender_root`'s outbox.
     Returns a non-`ok` outcome (and writes no record) for a collision, a
@@ -232,18 +400,25 @@ def deliver_onto_upstream(
     remote = resolve_push_remote(receiver_root, branch)
     if remote is None:
         return _fail(STATUS_NO_REMOTE, f"no push remote resolvable for {branch!r}", branch=branch)
-    base = resolve_base(resolve_git_common_dir(receiver_root), remote, branch)
+    common_dir = resolve_git_common_dir(receiver_root)
+    base = resolve_base(common_dir, remote, branch)
     if base is None:
         return _fail(
             STATUS_NO_BASE, f"no tracking, local or main/master tip for {branch!r}",
             remote=remote, branch=branch,
         )
     message = Path(msg_file).read_text(encoding="utf-8")
-    out = _build_on_base(
-        receiver_root, rel_path, content, msg_file, base,
+    land_local = _land_on_head_branch if landing.mode == _receiver_landing.MODE_HEAD else _land_on_local_ref
+    out = land_local(
+        receiver_root, rel_path, content, msg_file,
         remote=remote, branch=branch, message=message,
     )
-    if not out.ok:
+    if out is None:
+        out = _build_on_base(
+            receiver_root, rel_path, content, msg_file, base,
+            remote=remote, branch=branch, message=message,
+        )
+    if not out.ok or out.record is None:
         return out
     written = _memo_push_pending.write_pending(sender_root, out.record)
     return out._replace(record_path=written)
@@ -286,7 +461,7 @@ def rebuild_and_retarget(
             os.unlink(tmp.name)
         except OSError:
             pass
-    if not out.ok or sender_root is None:
+    if not out.ok or sender_root is None or out.record is None:
         return out
     written = _memo_push_pending.retarget_pending(sender_root, record["commit_sha"], out.record)
     return out._replace(record_path=written)

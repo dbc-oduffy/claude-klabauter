@@ -211,8 +211,8 @@ from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.session import record_homes
 from coordinator_core.write_guards._doctrine_edit_sentinel import (
-    DENY_REASON,
     admit_advisory,
+    deny_reason,
     git_dir_for,
     sentinel_present,
 )
@@ -2701,7 +2701,7 @@ def _class_write_denied(cmd: str, payload: Dict[str, Any], cwd: str) -> Any:
     if not dispatched and sentinel_present(cwd):
         return _sentinel_admit_advisory(cwd)
     return _levelled_deny(
-        _SUBAGENT_CLASS_DENY if dispatched else DENY_REASON,
+        _SUBAGENT_CLASS_DENY if dispatched else deny_reason(cwd),
         doctrine_surface_risk("this command writes a CLAUDE.md-class or rules file."),
         offer_edit=False,
         floor=True,

@@ -23,6 +23,7 @@ Commands:
                           orientation_* only -- setup_concluded is a no-op
     check  <milestone>   exit 0 if recorded, 1 if not
     status                print the receipt (or note absence)
+    withheld              print the withheld-run record as JSON; exit 1 if none
     auto-record-if-source-is-live
                           retired no-op: exits 0, writes nothing -- except on a
                           doubled CLAUDE_HOME (see Environment below), which
@@ -123,6 +124,15 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                         "`setup_concluded_at` in the same _atomic_write()."
                     ),
                 ),
+                WriteSurfaceEntry(
+                    kind="structured-file-key",
+                    key="setup_withheld",
+                    path="<CLAUDE_HOME>/.claude/coordinator-setup-state.yaml",
+                    reason=(
+                        "record_setup_withheld() replaces this block in one "
+                        "_atomic_write(); record_setup_concluded() drops it."
+                    ),
+                ),
             ),
         ),
     ),
@@ -138,9 +148,10 @@ backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
 chunk C3g."""
 
 _USAGE = """Usage:
-  coordinator-setup-state.sh record <milestone>
-  coordinator-setup-state.sh check  <milestone>
-  coordinator-setup-state.sh status
+  coordinator-setup-state.py record <milestone>
+  coordinator-setup-state.py check  <milestone>
+  coordinator-setup-state.py status
+  coordinator-setup-state.py withheld    # print the withheld-run record; exit 1 if none
 
   milestone ∈ { setup_concluded | orientation_started | orientation_completed }
 """
@@ -267,10 +278,84 @@ def _receipt_block(receipt: SetupReceipt) -> str:
     )
 
 
+_WITHHELD_BLOCK_RE = re.compile(r"^setup_withheld:[ \t]*\n(?:[ \t]+[^\n]*\n?)*", re.MULTILINE)
+
+
+def _withheld_block(reason: str, blocking_steps: Tuple[str, ...], now: str) -> str:
+    # `at` is nested, never a top-level `*_at` key: status and gating readers
+    # treat any top-level `<x>_at:` line as a concluded milestone.
+    return (
+        "setup_withheld:\n"
+        f"  at: {json.dumps(now)}\n"
+        f"  reason: {json.dumps(reason)}\n"
+        f"  blocking_steps: {json.dumps(list(blocking_steps))}\n"
+    )
+
+
+def record_setup_withheld(
+    reason: str, blocking_steps: Tuple[str, ...] = (), env: Optional[dict] = None
+) -> int:
+    """Record that a run ended without concluding setup, replacing any earlier record.
+
+    Never writes `setup_concluded_at`, so the chaining gate stays closed. Returns 1 on
+    OSError, never raises it.
+    """
+    state_file = _state_file(env)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        if os.path.isfile(state_file):
+            with open(state_file, encoding="utf-8") as fh:
+                content = fh.read()
+        else:
+            content = _SEED_HEADER
+        content = _WITHHELD_BLOCK_RE.sub("", content)
+        if content and not content.endswith("\n"):
+            content += "\n"
+        _atomic_write(state_file, content + _withheld_block(reason, tuple(blocking_steps), now))
+    except OSError as exc:
+        sys.stderr.write(f"coordinator-setup-state: mktemp failed (withheld): {exc}\n")
+        return 1
+    print(f"Recorded setup_withheld: {now} in {state_file}")
+    return 0
+
+
+def read_setup_withheld(env: Optional[dict] = None) -> Optional[dict]:
+    """The withheld-run record as `{at, reason, blocking_steps}`, or None when absent."""
+    state_file = _state_file(env)
+    if not os.path.isfile(state_file):
+        return None
+    try:
+        with open(state_file, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return None
+    match = _WITHHELD_BLOCK_RE.search(content)
+    if not match:
+        return None
+    record: dict = {}
+    for line in match.group(0).splitlines()[1:]:
+        key, _, raw = line.strip().partition(":")
+        try:
+            record[key] = json.loads(raw.strip())
+        except ValueError:
+            record[key] = raw.strip()
+    return record
+
+
+def cmd_withheld(env: Optional[dict] = None) -> int:
+    record = read_setup_withheld(env)
+    if record is None:
+        print("No withheld-run record.")
+        return 1
+    print(json.dumps(record))
+    return 0
+
+
 def record_setup_concluded(receipt: SetupReceipt, env: Optional[dict] = None) -> int:
     """Stamp `setup_concluded_at` plus the `setup_receipt` block in ONE atomic write.
 
-    An existing stamp is left byte-identical. Returns 1 on OSError, never raises it.
+    An existing stamp is left byte-identical. A stale `setup_withheld` block is dropped.
+    Returns 1 on OSError, never raises it.
     """
     state_file = _state_file(env)
     if _key_recorded("setup_concluded_at", state_file):
@@ -283,6 +368,7 @@ def record_setup_concluded(receipt: SetupReceipt, env: Optional[dict] = None) ->
                 content = fh.read()
         else:
             content = _SEED_HEADER
+        content = _WITHHELD_BLOCK_RE.sub("", content)
         if content and not content.endswith("\n"):
             content += "\n"
         _atomic_write(
@@ -396,6 +482,8 @@ def _dispatch(cmd: str, argv: List[str]) -> int:
         return cmd_check(milestone)
     if cmd == "status":
         return cmd_status()
+    if cmd == "withheld":
+        return cmd_withheld()
     if cmd == "auto-record-if-source-is-live":
         return cmd_auto_record_if_source_is_live()
     if cmd in ("--help", "-h"):

@@ -109,6 +109,7 @@ def test_chain_arrival_unfrozen_write_still_lands(tmp_path, monkeypatch):
     assert json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])["session_id"] == "sess-ok"
 
 
+@pytest.mark.deliberate_wall_clock(reason="raising the typed error inside the caller deadline on a frozen write is the behaviour under test")
 def test_ask_file_blocked_write_raises_typed_degraded_error(tmp_path, monkeypatch):
     gate = _Gate()
     real_write_text = Path.write_text

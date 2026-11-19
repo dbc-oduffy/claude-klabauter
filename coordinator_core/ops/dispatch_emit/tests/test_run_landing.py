@@ -143,17 +143,17 @@ def test_a_second_call_with_a_spent_token_answers_already_landed(repo) -> None:
     assert _git(["rev-list", "--count", "HEAD"], repo) == "2"
 
 
-def test_a_refused_landing_releases_the_token_for_a_refire(repo) -> None:
+def test_a_path_in_no_reviewed_slice_lands_with_unreviewed_provenance(repo) -> None:
     (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
     run_id = "ask-20261114T000000-bbbbbb"
     token = run_token.mint(repo, run_id, "run.mjs", session_id="5e1f0000-0000-4000-8000-0000000000f1")
     extra = {"run_id": run_id, "run_token": token if isinstance(token, str) else token["token"]}
 
-    refused = _fire("new", repo, {"C1": ["a.py"]}, inline_review=_review(["other.py"]), **extra)
-    landed = _fire("new", repo, {"C1": ["a.py"]}, **extra)
+    landed = _fire("new", repo, {"C1": ["a.py"]}, inline_review=_review(["other.py"]), **extra)
 
-    assert refused["refused"] == "unreviewed"
     assert landed["committed"] is True, landed
+    assert "refused" not in landed
+    assert [(e["reason"], e["path"]) for e in landed["provenance"] if e["reason"] == "unreviewed"] == [("unreviewed", "a.py")]
 
 
 def test_an_own_kept_blob_for_a_reverted_path_lands_and_converges_the_worktree(repo) -> None:

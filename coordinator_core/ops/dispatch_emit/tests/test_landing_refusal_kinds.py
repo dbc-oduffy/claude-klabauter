@@ -5,8 +5,23 @@ import pytest
 from coordinator_core.ops.dispatch_emit import landing_refusal_kinds as k
 
 
-def test_refusal_kinds_are_exactly_the_three():
+def test_refusal_kinds_are_exactly_the_irreversible_three():
     assert k.LANDING_REFUSAL_KINDS == frozenset({"destructive-git", "secret-in-diff", "lost-definition"})
+
+
+def test_collapsed_leftover_reasons_are_provenance_never_refusals():
+    for reason in ("run-touched-left", "review-edit-unlanded", "unreviewed", "xs-over-budget"):
+        assert reason in k.PROVENANCE_KINDS
+        assert k.is_refusal(reason) is False
+
+
+def test_collapsed_reasons_are_no_engine_bug_in_the_registry():
+    from coordinator_core.ops.dispatch_emit.land_refusal_registry import LAND_REFUSAL_REGISTRY
+
+    for reason in ("run-touched-left", "review-edit-unlanded", "unreviewed", "xs-over-budget"):
+        entry = LAND_REFUSAL_REGISTRY[reason]
+        assert not entry.engine_bug, reason
+    assert LAND_REFUSAL_REGISTRY["xs-over-budget"].denies is False
 
 
 @pytest.mark.parametrize("reason", sorted(k.LANDING_REFUSAL_KINDS))

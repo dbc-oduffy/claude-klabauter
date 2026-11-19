@@ -636,7 +636,7 @@ def bytes_read_total() -> int:
     return 0 if box is None else box.total
 
 
-def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
+def _checkin_blob_sha_read(root: Path, rel: str) -> Optional[str]:
     """The blob sha `git add` would record for the worktree file `rel`, or None.
 
     Hash-only: sha1(b"blob <len>\\0" + `_checkin_bytes` output). Writes no object and
@@ -671,6 +671,33 @@ def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
     digest = hashlib.sha1(b"blob %d\0" % len(out))
     digest.update(out)
     return digest.hexdigest()
+
+
+#: Caller-wait ceiling for one worktree read; past it the hash is "unknown" (None).
+#: TRAP: None also answers a slow-but-live read (a large file, a loaded box), which drift-counting callers
+#: read as "file changed"; the bound is a stall cutoff, not a size limit.
+CHECKIN_READ_DEADLINE_SECS = 0.15
+
+
+def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
+    """`_checkin_blob_sha_read` under a `CHECKIN_READ_DEADLINE_SECS` bound.
+
+    A stalled or slow (past the deadline) stat/open/read answers None, the unreadable-file answer; a
+    stalled path answers None at once until its worker returns. Callers differ in what None means:
+    `land_credited` drops that path's expected blob, `measured_rev`/`terminal_commit` count it drifted.
+    The read runs on a worker under `copy_context`, so the bound byte counter still counts.
+    """
+    import contextvars
+
+    from coordinator_core.bounded_io import run_bounded
+
+    ctx = contextvars.copy_context()
+    return run_bounded(
+        f"checkin_blob_sha:{Path(root) / rel}",
+        lambda: ctx.run(_checkin_blob_sha_read, root, rel),
+        deadline=CHECKIN_READ_DEADLINE_SECS,
+        default=None,
+    )
 
 
 def hash_worktree_blobs_via_spawn(

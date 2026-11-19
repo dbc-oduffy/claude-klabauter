@@ -35,6 +35,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from coordinator_core.benchmarks import fixture_settings_home  # noqa: E402
+from coordinator_core.testing import spawn_depth  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 TEST_FILE = "coordinator_core/ops/dispatch_emit/tests/test_land_reverify_budget_left.py"
@@ -50,7 +51,13 @@ def run_profile(repo: Path = _REPO) -> dict:
     """The scenario's measured row; raises RuntimeError when the pytest child wrote none."""
     with tempfile.TemporaryDirectory(prefix="reverify-profile-") as tmp, fixture_settings_home(tmp):
         out = Path(tmp) / "row.json"
-        env = {**os.environ, OUT_ENV: str(out)}
+        selection = [TEST_FILE]
+        refusal = spawn_depth.refusal_for_spawn(os.environ) or spawn_depth.selection_includes_spawner(
+            selection, os.environ, str(repo)
+        )
+        if refusal:
+            raise RuntimeError(refusal)
+        env = {**spawn_depth.child_env(os.environ), OUT_ENV: str(out)}
         ran = subprocess.run(
             [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", "-x", TEST_FILE,
              "-k", "the_step_is_reached"],

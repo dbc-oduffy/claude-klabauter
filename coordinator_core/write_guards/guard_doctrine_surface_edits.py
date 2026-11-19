@@ -109,8 +109,8 @@ from coordinator_core.write_guards._gem_doctrine_carve_out import (
     gem_admitted,
 )
 from coordinator_core.write_guards._doctrine_edit_sentinel import (
-    DENY_REASON,
     admit_advisory,
+    deny_reason,
     is_rules_path,
     sentinel_present,
 )
@@ -834,7 +834,7 @@ def _doctrine_deny(payload: Dict[str, Any]) -> "Optional[Dict[str, Any]]":
 
     return apply_guard_level(
         "guard-doctrine-surface-edits",
-        deny("PreToolUse", DENY_REASON),
+        deny("PreToolUse", deny_reason(payload.get("cwd") or "")),
         session_id=payload.get("session_id") or "",
         cwd=payload.get("cwd"),
     )

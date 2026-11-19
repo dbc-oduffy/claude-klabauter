@@ -16,7 +16,7 @@ import json
 import os
 import time
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Mapping, NamedTuple, Optional
+from typing import Iterable, Iterator, Mapping, NamedTuple, Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.git import call_io_scope
@@ -69,6 +69,15 @@ _FRESH = "halt-index-fresh"
 
 
 _STAT_CACHE: dict = {}  # abs file path -> (st_mtime_ns, st_size, RunEntry | None); process-wide
+# index dir path -> (dir st_mtime_ns, {run id: RunEntry}, unreadable run ids); process-wide. Valid while the dir mtime is
+# unchanged: every writer replaces by rename or unlinks, which moves it. An in-place rewrite by a peer is
+# not seen. A listing taken within the settle window of the dir mtime is not kept (coarse-clock race).
+_SNAPSHOT: dict = {}
+_SNAPSHOT_SETTLE_NS = 50_000_000
+
+
+def _drop_snapshot(repo_root: Path) -> None:
+    _SNAPSHOT.pop(os.fspath(_dir(repo_root)), None)
 
 
 def _parse(file, st=None) -> Optional[RunEntry]:
@@ -96,6 +105,7 @@ def _parse_stat_keyed(file, key: str, st) -> Optional[RunEntry]:
 
 def _drop_cached(repo_root: Path, run_id: str) -> None:
     _STAT_CACHE.pop(os.fspath(_run_file(repo_root, run_id)), None)
+    _drop_snapshot(repo_root)
 
 
 def _parse_file(file) -> Optional[RunEntry]:
@@ -121,11 +131,13 @@ def _parse_file(file) -> Optional[RunEntry]:
     )
 
 
-def _store(repo_root: Path, run_id: str, entry: RunEntry) -> None:
-    """Write `entry`, or drop the file when it holds neither paths nor declared."""
-    call_io_scope.invalidate(_PARSED)
-    _drop_cached(repo_root, run_id)
-    forget_fresh()
+def _store(repo_root: Path, run_id: str, entry: RunEntry, *, bulk: bool = False) -> None:
+    """Write `entry`, or drop the file when it holds neither paths nor declared. `bulk` (a `rebuild` of
+    a directory made for it) creates the file by `_publish_bare` and seeds the parse cache with `entry`."""
+    if not bulk:  # `rebuild` drops the scope's parses once, and a replaced file's cached stat itself
+        call_io_scope.invalidate(_PARSED)
+        _drop_cached(repo_root, run_id)
+        forget_fresh()
     if not entry.paths and not entry.declared:
         remove_run(repo_root, run_id)
         return
@@ -137,7 +149,42 @@ def _store(repo_root: Path, run_id: str, entry: RunEntry) -> None:
     if entry.declared:
         body["declared"] = list(entry.declared)
     body["at_ns"] = entry.at_ns
-    atomic_write_bytes(_run_file(repo_root, run_id), (json.dumps(body, indent=2) + "\n").encode("utf-8"))
+    data = (json.dumps(body, separators=(",", ":")) + "\n").encode("utf-8")  # no indent: the C encoder, not the Python one
+    file = _run_file(repo_root, run_id)
+    st = _publish_bare(os.fspath(file), data) if bulk else None
+    if st is not None:
+        _STAT_CACHE[os.fspath(file)] = (st.st_mtime_ns, st.st_size, entry)  # a drifted stamp only re-parses
+        return
+    if bulk:  # a peer created the file after `rebuild` listed the dir: keep its paths (add-only)
+        prior = _parse(file)
+        if prior is not None:
+            merged = tuple(dict.fromkeys((*prior.paths, *entry.paths)))
+            _store(repo_root, run_id, entry._replace(paths=merged))
+            return
+    atomic_write_bytes(file, data)
+
+
+def _publish_bare(file: str, data: bytes) -> Optional[os.stat_result]:
+    """Create `file` holding `data` by one exclusive open, with none of `atomic_write_bytes`' temp, sweep
+    or rename; its flushed `fstat`. None when the file exists or the directory is absent: the caller replaces atomically.
+    Trap: the file is briefly partial. Safe only for `rebuild`, which runs while the sentinel is absent
+    (`fresh_entry` reads no entry then) and whose other readers take a partial file as unreadable, so the
+    run's marker is read in its place (`sibling_claims._candidates_read`)."""
+    try:
+        fd = os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
+        try:
+            os.write(fd, data)
+            return os.fstat(fd)
+        finally:
+            os.close(fd)
+    except FileExistsError:
+        return None
+    except OSError:
+        try:
+            os.remove(file)
+        except OSError:
+            pass
+        return None
 
 
 def _clean_sizing(sizing_rel: Optional[str]) -> Optional[str]:
@@ -157,6 +204,14 @@ def add_run(
     """Replace the run's `paths` (never merged). `sizing_rel`, `prints` and `declared` replace the
     stored value when given and keep it when None; `prints` keeps only keys in `paths`. The entry is
     removed when it ends with neither paths nor declared."""
+    _add_run(repo_root, run_id, paths, sizing_rel, prints, declared, at_ns)
+
+
+def _add_run(
+    repo_root: Path, run_id: str, paths: Iterable[str], sizing_rel: Optional[str],
+    prints: Optional[Mapping[str, str]], declared: Optional[Iterable[str]], at_ns: Optional[int],
+    bulk: bool = False,
+) -> None:
     prior = _parse(_run_file(repo_root, run_id)) if None in (sizing_rel, prints, declared) else None
     normed = _norm_all(paths)
     if prints is None:
@@ -170,7 +225,7 @@ def add_run(
         _norm_all(declared) if declared is not None else (prior.declared if prior else ()),
         at_ns if at_ns is not None else time.time_ns(),
     )
-    _store(repo_root, run_id, entry)
+    _store(repo_root, run_id, entry, bulk=bulk)
 
 
 def record_declared(
@@ -201,19 +256,23 @@ def remove_run(repo_root: Path, run_id: str) -> None:
         pass
 
 
-def _read_prints(record_dir: Path) -> dict:
+def _read_prints(record_dir) -> dict:
     try:
-        data = json.loads((record_dir / _PRINTS_FILE).read_text(encoding="utf-8"))
+        raw = call_io_scope.read_bytes(os.path.join(os.fspath(record_dir), _PRINTS_FILE))
+        data = json.loads(raw.decode("utf-8")) if raw is not None else None
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
 
 
-def _manifest_declared(record_dir: Path) -> tuple:
+def _manifest_declared(record_dir) -> tuple:
+    """The run's staged footprint from `manifest.json`, read through the open `call_io_scope` so the
+    claim pass's own manifest read of the same file is a hit."""
     from coordinator_core.ops.dispatch_emit.live_run_writes import manifest_footprint
 
     try:
-        manifest = json.loads((record_dir / _MANIFEST_FILE).read_text(encoding="utf-8"))
+        raw = call_io_scope.read_bytes(os.path.join(os.fspath(record_dir), _MANIFEST_FILE))
+        manifest = json.loads(raw.decode("utf-8")) if raw is not None else None
     except (OSError, ValueError):
         return ()
     return _norm_all(manifest_footprint(manifest)) if isinstance(manifest, dict) else ()
@@ -224,14 +283,18 @@ def rebuild(repo_root: Path) -> None:
     (paths, sizing_rel, prints from `withheld-prints.json`, declared from `manifest.json`, `at_ns` the
     marker's mtime), then write the sentinel. Add-only, so a halt recorded mid-scan is never undone."""
     root = Path(repo_root)
-    warp = root / RECORD_DIR_ROOT
+    warp = os.fspath(root / RECORD_DIR_ROOT)
     try:
         names = sorted(os.listdir(warp))
     except OSError:
         return
+    try:
+        existing = set(os.listdir(_dir(root)))  # names only
+    except OSError:
+        existing = set()
     for name in names:
-        record_dir = warp / name
-        marker = _read(record_dir) if (record_dir / HALTED_FILE).is_file() else None
+        record_dir = os.path.join(warp, name)
+        marker = _read(Path(record_dir))
         if marker is None or marker.get("status") != STATUS_HALTED or not safe_id(name):
             continue
         withheld = _withheld_of(marker)
@@ -239,40 +302,71 @@ def rebuild(repo_root: Path) -> None:
         if not withheld and not declared:
             continue
         try:
-            at_ns = (record_dir / HALTED_FILE).stat().st_mtime_ns
+            at_ns = os.stat(os.path.join(record_dir, HALTED_FILE)).st_mtime_ns
         except OSError:
             at_ns = 0
         sizing = marker.get("sizing_rel")
-        prior = _parse(_run_file(root, name))
-        if prior is not None:
-            withheld = tuple(dict.fromkeys((*prior.paths, *withheld)))
-        add_run(
-            root, name, withheld,
-            sizing_rel=sizing if isinstance(sizing, str) else "",
-            prints=_read_prints(record_dir), declared=declared, at_ns=at_ns,
+        if f"{name}.json" in existing:
+            prior = _parse(_run_file(root, name))
+            if prior is not None:
+                withheld = tuple(dict.fromkeys((*prior.paths, *withheld)))
+            _drop_cached(root, name)
+        _add_run(
+            root, name, withheld, sizing if isinstance(sizing, str) else "",
+            _read_prints(record_dir), declared, at_ns, bulk=True,
         )
+    call_io_scope.invalidate(_PARSED)
+    forget_fresh()
+    _drop_snapshot(root)
     atomic_write_bytes(_dir(root) / SENTINEL, b"")
 
 
-def entries(repo_root: Path) -> dict:
+def entries(repo_root: Path, unreadable: Optional[set] = None) -> dict:
     """`{run id: RunEntry}` over every readable run file, from one directory listing; a malformed file
     is skipped. Runs `rebuild` once when the sentinel is absent. Cost is one parse per run file, and a
     declared-only entry is dropped only by `record_declared([])`/`remove_run`, so callers must not assume
-    the listing is bounded to live runs."""
+    the listing is bounded to live runs. `unreadable`, when given, receives the run ids of the files that
+    did not parse."""
     root = Path(repo_root)
     index = _dir(root)
+    key = os.fspath(index)
+    snap = _SNAPSHOT.get(key)
+    if snap is not None:
+        try:
+            if os.stat(key).st_mtime_ns == snap[0]:
+                if unreadable is not None:
+                    unreadable.update(snap[2])
+                return dict(snap[1])  # the sentinel was present when this was kept; its removal moves the mtime
+        except OSError:
+            pass
+        _SNAPSHOT.pop(key, None)
     if not (index / SENTINEL).exists():
         rebuild(root)
+    try:
+        dir_ns = os.stat(key).st_mtime_ns
+    except OSError:
+        return {}
     out: dict = {}
-    for run_id, entry in _scan(index):
+    bad: set = set()
+    state: list = []
+    for run_id, entry in _scan(index, state):
         if entry is not None:
             out[run_id] = entry
+        else:
+            bad.add(run_id)
+    if unreadable is not None:
+        unreadable.update(bad)
+    if not state and time.time_ns() - dir_ns > _SNAPSHOT_SETTLE_NS:
+        _SNAPSHOT[key] = (dir_ns, dict(out), frozenset(bad))
+    else:
+        _SNAPSHOT.pop(key, None)
     return out
 
 
-def _scan(index: Path):
+def _scan(index: Path, state: Optional[list] = None) -> Iterator[tuple]:
     """`(run id, entry)` per `*.json` in `index`, from one scandir whose entries carry the stat the
-    parse cache keys on; stops at the read deadline (a stalled disk: the rest read as unreadable)."""
+    parse cache keys on; stops at the read deadline (a stalled disk: the rest read as unreadable),
+    appending "truncated" to `state` when it does."""
     try:
         listing = list(os.scandir(index))
     except OSError:
@@ -286,6 +380,8 @@ def _scan(index: Path):
         name = de.name
         if name.endswith(".json"):
             if _clock() >= deadline:
+                if state is not None:
+                    state.append("truncated")
                 return
             try:
                 st = de.stat()

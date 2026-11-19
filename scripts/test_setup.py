@@ -131,7 +131,7 @@ def test_closing_line_names_runnable_chain_walk_command_and_no_doc_pointer(setup
 
 def test_main_prints_the_closing_line_constant(setup_mod):
     src = Path(setup_mod.__file__).read_text(encoding="utf-8")
-    assert "print(CLOSING_CHAIN_WALK_LINE)" in src
+    assert "_absolute_closing_line(CLOSING_CHAIN_WALK_LINE" in src
 
 
 def test_parse_args_unknown_flag_raises(setup_mod):
@@ -1334,7 +1334,7 @@ def test_entry_guard_precedes_coordinator_core_imports_and_any_write():
     guard function is the single version check (resolve_python delegates to it)."""
     src = _SETUP_PY_PATH.read_text(encoding="utf-8")
     guard_call = src.index("\n_require_python_311()")
-    assert guard_call < src.index("from coordinator_core.")
+    assert guard_call < src.index("\nfrom coordinator_core.")
     assert src.count("def _require_python_311") == 1
 
 
@@ -1934,6 +1934,34 @@ def test_ensure_percolate_identity_second_call_is_noop(setup_mod, tmp_path):
 
     assert status == "exists"
     assert path.read_text() == first_content
+
+
+def _run_install_percolate_identity(setup_mod, tmp_path, monkeypatch, profile):
+    import coordinator_core.machine_profile as mp
+
+    settings_home = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mp, "machine_profile", lambda: profile)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    claude_klabauter_root = Path(setup_mod.__file__).resolve().parent.parent
+    setup_mod.install_percolate_identity(repo_root, claude_klabauter_root)
+    return settings_home / ".percolate-identity"
+
+
+def test_install_percolate_identity_skips_on_consumer_profile(setup_mod, tmp_path, monkeypatch, capsys):
+    target = _run_install_percolate_identity(setup_mod, tmp_path, monkeypatch, "consumer")
+
+    out = capsys.readouterr().out
+    assert "PASS [percolate-identity]" not in out
+    assert "SKIP [percolate-identity]" in out
+    assert not target.exists()
+
+
+def test_install_percolate_identity_still_generates_on_author_profile(setup_mod, tmp_path, monkeypatch, capsys):
+    target = _run_install_percolate_identity(setup_mod, tmp_path, monkeypatch, "author")
+
+    assert "PASS [percolate-identity] created" in capsys.readouterr().out
+    assert target.is_file()
 
 
 def test_derive_identity_hints_falls_back_to_placeholders_without_git(setup_mod, tmp_path, monkeypatch):

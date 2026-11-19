@@ -639,9 +639,7 @@ def _empty_private_index_refusal(
 
     `fleet/_common.py :: _empty_private_index_breach` covers the fleet
     path; this module's `commit-tree` seams are the CEREMONY path. Both
-    are pathspec-less by design: the private index IS the commit scope,
-    so a lost index commits the empty tree rather than committing
-    nothing.
+    are pathspec-less: the private index IS the commit scope.
 
     Deliberately trigger-independent — it does not care WHY the index went
     missing (still open as of 2026-08-18), only that a commit is about to
@@ -692,30 +690,23 @@ def status_porcelain(
     takes `.git/index.lock` for — contention noise on this shared worktree.
     Read-only call; never applied to a writing invocation.
 
-    `paths` — an optional pathspec. `None` (the default) keeps the whole-tree
-    scan every existing caller gets. When given, the answer is scoped to those
-    paths: this is the only query on the commit hot path whose cost scales
-    with the TREE rather than with what is being committed.
+    `paths` — an optional pathspec; `None` keeps the whole-tree scan. This is
+    the only query on the commit hot path whose cost scales with the TREE.
 
-    `untracked_files` (default `None`): appends `--untracked-files=<value>`.
-    `quotepath_false` (default `False`): prepends `-c core.quotepath=false`.
-    Both default to a no-op so every existing caller's argv is unchanged.
+    `untracked_files` appends `--untracked-files=<value>`; `quotepath_false`
+    prepends `-c core.quotepath=false`; both default to a no-op.
 
-    Output SHAPE is byte-identical either way — same porcelain v1, same
-    C-quoting, same ` -> ` rename separator — deliberately, so a caller that
-    already parses `status_porcelain()` output can pass a pathspec without
-    touching its parse. That is why this takes a parameter instead of routing
-    to `status_porcelain_scoped()` above, whose `-z`/`-uall` shape answers a
-    different question (a committable path list, not a dirty/clean verdict)
-    and would silently change how a `R`-record or a non-ASCII path reads.
+    Output SHAPE is byte-identical either way (porcelain v1, C-quoting, ` -> `
+    rename separator), so a caller parsing `status_porcelain()` output can pass
+    a pathspec without touching its parse; it does not route to
+    `status_porcelain_scoped()`, whose `-z`/`-uall` shape answers a different
+    question (a committable path list, not a dirty/clean verdict).
 
-    Chunked against the Windows 32767-char argv cap, because failing that cap
-    here is worse than slow: `git` reports `rc=127`, `stdout` comes back
-    empty, and an empty dirty set reads as "tree is clean" — a gate that
-    FAILS OPEN on exactly the large-pathspec batch (percolate-publish scale,
-    ~2000-2700 paths) it most needs to hold. Any chunk that fails short-
-    circuits and is returned as-is, so the caller sees an unsuccessful
-    `GitResult` rather than a partial dirty set that looks complete."""
+    Chunked against the Windows 32767-char argv cap: past it `git` reports
+    `rc=127` with empty stdout, which reads as "tree is clean" — a gate that
+    FAILS OPEN on the large-pathspec batch (~2000-2700 paths) it most needs to
+    hold. Any failing chunk short-circuits and is returned as-is, never a
+    partial dirty set that looks complete."""
     base = ["--no-optional-locks", "status", "--porcelain"]
     if quotepath_false or untracked_all:
         base = ["-c", "core.quotepath=false", *base]
@@ -755,29 +746,18 @@ def dirty_relpaths_from_porcelain(
 
     Shared by `coordinator_core.ops.fleet.
     archive_terminal_handoffs._dirty_handoff_relpaths` and `coordinator_core.
-    ops.fleet.archive_sizings._dirty_sizing_relpaths`, whose porcelain-
-    parsing tails are otherwise a character-for-character copy of one
-    another — same fail-closed warning, same 2-char-status-code skip, same
-    ` -> ` rename-record split, same quote-stripping. Both modules already
-    import `status_porcelain` from this module, so this is the natural
-    shared home for its parsed-output sibling; it is NOT a fork of either
-    fleet module (neither's own budget/in-process/chunking wrapper moved
-    here — see below).
+    ops.fleet.archive_sizings._dirty_sizing_relpaths`, whose porcelain-parsing
+    tails were a character-for-character copy.
 
     NEGATIVE SPEC — deliberately NOT the whole of either caller's rail:
-    `archive_terminal_handoffs._dirty_handoff_relpaths` keeps its own argv-
-    budget overflow fallback and its spawn-free in-process index-walk fast
-    path (`_dirty_relpaths_in_process`) — those are genuinely
-    handoffs-specific (that corpus's own scale motivated them) and are NOT
-    duplicated here. Both callers delegate only the shared TAIL — the actual
-    `git status --porcelain` call, its fail-closed handling, and porcelain
-    parsing — to this function.
+    `_dirty_handoff_relpaths` keeps its own argv-budget overflow fallback and
+    spawn-free in-process index walk (`_dirty_relpaths_in_process`); callers
+    delegate only the shared TAIL (the `git status --porcelain` call, its
+    fail-closed handling, and porcelain parsing).
 
-    Returns the set of repo-relative paths (drawn from `pathspecs`, or
-    discovered via a rename record's `" -> "` new-path half) that carry
-    uncommitted worktree OR index changes — `git status --porcelain` answers
-    both axes (staged-but-uncommitted, and unstaged) in one call, and either
-    side of a rename record being dirty is enough to exclude both paths.
+    Returns the set of repo-relative paths (drawn from `pathspecs`, or from a
+    rename record's `" -> "` new-path half) carrying uncommitted worktree OR
+    index changes; either side of a rename record being dirty excludes both.
 
     FAIL-CLOSED on any git failure: a non-zero exit or launch failure
     returns `set(pathspecs)` — every pathspec treated as dirty — never an
@@ -1858,38 +1838,16 @@ class DeliverableIdAssertionConflictError(RuntimeError):
     frontmatter, ahead of `_check_deliverable_id_precedence`'s call).
 
     Deliberately a SIBLING of `coordinator_core.ops.deliverable_carry.
-    DivergentDeliverableIdError`, not a subclass of it, though the two
-    look alike at a glance (both fire on "two sources disagree on a
-    deliverable_id"). `baton_assemble.brief`'s typed catch on
-    `DivergentDeliverableIdError` converts THAT error into a
-    `j-divergent-deliverable-id` judgment point offering keep-plan /
-    keep-predecessor -- a question that is nonsense here: this error
-    fires on an AUTHORING assertion conflict (one commit call was handed
-    two disagreeing ids for the SAME artifact set being staged), not on
-    two artifacts in a carry-or-mint cascade whose provenance a human
-    could arbitrate by "which came first". Had this stayed a subclass,
-    it would reach that handler and produce a nonsense keep-plan/keep-
-    predecessor round trip against a commit that isn't a carry cascade
-    at all. A sibling class cannot be caught by that typed handler, so
-    it can't be routed there by accident.
+    DivergentDeliverableIdError`, never a subclass: `baton_assemble.brief`'s
+    typed catch on that error turns it into a keep-plan / keep-predecessor
+    judgment point, a question that is nonsense for an AUTHORING assertion
+    conflict (one commit call handed two disagreeing ids for the same artifact
+    set). A sibling cannot be caught by that handler by accident (DR-406).
 
-    DR-406 names this split so a commit assertion conflict gets its own
-    class instead of borrowing the carry system's -- see `docs/decisions/
-    DR-406`.
-
-    `caller_facing_validation` (DR-406): this class's message
-    already names both disagreeing ids and what the caller must do, so it
-    opts into `ipc.py`'s existing duck-type marker rather than inventing a
-    parallel signal -- that module's `CallerFacingValidationError` docstring
-    asks any future validator composing its own caller-facing message to do
-    exactly this. Without it, `_handler_exception_error`'s generic fallback
-    collapses this to `INTERNAL_ERROR: "Internal error:
-    DeliverableIdAssertionConflictError"`, which is indistinguishable on the
-    wire from a genuine engine bug and leaves the operator with a business
-    refusal wearing a crash's clothes. Setting the marker uses the envelope's
-    EXISTING shape (the emitted `code` becomes INVALID_PARAMS) -- it is not
-    an envelope-shape change, which C7's own body reserved for a separate
-    plan.
+    `caller_facing_validation` (DR-406): the message already names both ids and
+    what the caller must do, so the class opts into `ipc.py`'s duck-type marker;
+    without it `_handler_exception_error` collapses this to an
+    `INTERNAL_ERROR`, indistinguishable on the wire from an engine bug.
     """
 
     caller_facing_validation = True

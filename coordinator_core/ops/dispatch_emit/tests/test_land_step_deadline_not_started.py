@@ -170,6 +170,7 @@ def _head(root) -> str:
     return prof._git(["rev-parse", "HEAD"], root).strip()
 
 
+@pytest.mark.deliberate_wall_clock(reason="replying inside the op's invocation timeout on a step breach is the behaviour under test")
 def test_step_breach_before_the_commit_replies_parked_not_started_inside_the_budget(landing, monkeypatch):
     root, base = landing
     before = _head(root)

@@ -105,6 +105,21 @@ def _make_receiver_git_repo(tmp_path: Path, name: str = "receiver-repo") -> Path
     return root
 
 
+def _advance_tracking_past_local(tmp_path: Path, receiver: Path, branch: str) -> None:
+    """Move `branch`'s upstream ahead and fetch it, leaving the receiver's local branch behind
+    its tracking tip, the shape whose delivery is object-only and pinned."""
+    bare = tmp_path / f"{receiver.name}-origin.git"
+    peer = tmp_path / "advance-peer"
+    _git(tmp_path, "clone", "-q", "-b", branch, str(bare), str(peer))
+    _git(peer, "config", "user.email", "peer@claude-klabauter.test")
+    _git(peer, "config", "user.name", "Peer")
+    (peer / "upstream-only.txt").write_text("upstream\n", encoding="utf-8")
+    _git(peer, "add", "-A")
+    _git(peer, "commit", "-q", "-m", "upstream moves on")
+    _git(peer, "push", "-q", "origin", branch)
+    _git(receiver, "fetch", "-q", "origin")
+
+
 def _pending_records(sender: Path) -> list:
     """The push-pending records `sender`'s outbox owes the warm engine."""
     from coordinator_core.ops.fleet import _memo_push_pending
@@ -393,11 +408,27 @@ class TestEndToEndDelivery:
         assert _git(receiver_repo, "symbolic-ref", "HEAD").stdout.strip() == b"refs/heads/main"
         assert _git(receiver_repo, "branch", "-a", "--list", "*work/*").stdout.strip() == b""
 
+    def test_fresh_send_on_a_local_tip_at_tracking_names_delivered(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver_repo})))
+        _write_draft(sender_repo, "landed-topic")
+
+        result = _memo_send({"dry_run": False, "topic": "landed-topic"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        assert result["acted"][0]["delivery_outcome"] == "delivered"
+        sha = result["acted"][0]["delivery_commit_sha"]
+        assert _git(receiver_repo, "rev-parse", "refs/heads/work/test/2026-11-16").stdout.decode().strip() == sha
+        subject = _git(sender_repo, "log", "-1", "--format=%s").stdout.decode("utf-8").strip()
+        assert subject == "memo.send: landed-topic delivered to example-retrieval-repo-em"
+
     def test_fresh_send_names_pinned_in_the_sender_receipt_and_reply(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver_repo})))
         _write_draft(sender_repo, "pinned-topic")
+        _advance_tracking_past_local(tmp_path, receiver_repo, "work/test/2026-11-16")
 
         result = _memo_send({"dry_run": False, "topic": "pinned-topic"}, repo_root=sender_repo)
 
@@ -423,10 +454,10 @@ class TestEndToEndDelivery:
         assert acted["committed"] is True
         assert acted["sender_committed"] is True
 
-        # Write 1: the delivery is an object-only commit on the upstream tip;
-        # the receiver's checkout is untouched.
+        # Write 1: the receiver's local branch is at its tracking tip, so the
+        # delivery lands on that branch with its worktree file and index entry.
         sha = acted["delivery_commit_sha"]
-        assert not list((receiver_repo / "cross-repo" / "inbox").glob("*.md"))
+        assert len(list((receiver_repo / "cross-repo" / "inbox").glob("*.md"))) == 1
         tree = _git(receiver_repo, "ls-tree", "--name-only", f"{sha}:cross-repo/inbox")
         names = [n for n in tree.stdout.decode("utf-8").split() if n != ".gitkeep"]
         assert len(names) == 1
@@ -862,6 +893,7 @@ class TestReceiverCommitDeclineFailsLoud:
             return git_native.GitResult(returncode=1, stdout="", stderr="synthetic decline")
 
         monkeypatch.setattr(git_native, "build_new_file_commit", _fake_decline)
+        monkeypatch.setattr(git_native, "commit_authored_new_file", _fake_decline)
 
         result = _memo_send({"dry_run": False, "topic": "declined-topic"}, repo_root=sender_repo)
 
@@ -895,6 +927,7 @@ class TestReceiverCommitDeclineFailsLoud:
 
         with monkeypatch.context() as patched:
             patched.setattr(git_native, "build_new_file_commit", _fake_decline)
+            patched.setattr(git_native, "commit_authored_new_file", _fake_decline)
             first = _memo_send({"dry_run": False, "topic": "retry-topic"}, repo_root=sender_repo)
         assert first["exit_code"] != 0
 
@@ -930,6 +963,7 @@ class TestUnverifiedDeliveryCommitFailsLoud:
         _write_draft(sender_repo, "unverifiable-topic")
 
         monkeypatch.setattr(git_native, "build_new_file_commit", _fake_ok_but_unverifiable_commit)
+        monkeypatch.setattr(git_native, "commit_authored_new_file", _fake_ok_but_unverifiable_commit)
 
         result = _memo_send(
             {"dry_run": False, "topic": "unverifiable-topic"}, repo_root=sender_repo
@@ -1096,46 +1130,54 @@ class TestDeliveryIsAnchored:
         rows = _read_sent_records(sender_repo)
         assert rows[0]["anchor_ref"] == ANCHOR_REF_PREFIX + filename + "/" + delivery_commit_sha
 
-    def test_lost_anchor_cas_refuses_the_delivery_and_owes_no_push(
+    def test_lost_anchor_cas_after_the_branch_landing_still_reports_delivered_with_a_warning(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Pre-create the anchor's own lock file so `write_anchor`'s CAS
         loses for real (`cas_ref`'s `O_CREAT|O_EXCL` on `<ref>.lock` refuses
         outright against an existing lock) -- simulating a peer holding it.
-        The commit is reachable only through its anchor until pushed, so an
-        unanchored delivery is refused, never recorded as owed a push."""
+        The receiver's HEAD branch already carries the commit, so the memo is
+        delivered: ok, an anchor warning, no push-pending record and no
+        anchor (the sweep pushes the branch's own history)."""
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "anchor-lost-topic")
 
-        real_build = git_native.build_new_file_commit
+        def _lock_after(real):
+            def _wrapped(rel_path, content, msg_file, repo_path, **kwargs):
+                result = real(rel_path, content, msg_file, repo_path, **kwargs)
+                if result.ok:
+                    sha = result.stdout.strip()
+                    filename = Path(rel_path).name
+                    common_dir = resolve_git_common_dir(repo_path)
+                    lock_path = common_dir / (
+                        ANCHOR_REF_PREFIX + filename + "/" + sha + ".lock"
+                    )
+                    lock_path.parent.mkdir(parents=True, exist_ok=True)
+                    lock_path.write_bytes(b"held by a peer\n")
+                return result
+            return _wrapped
 
-        def _build_then_lock_the_anchor(rel_path, content, msg_file, repo_path, **kwargs):
-            result = real_build(rel_path, content, msg_file, repo_path, **kwargs)
-            if result.ok:
-                sha = result.stdout.strip()
-                filename = Path(rel_path).name
-                common_dir = resolve_git_common_dir(repo_path)
-                lock_path = common_dir / (
-                    ANCHOR_REF_PREFIX + filename + "/" + sha + ".lock"
-                )
-                lock_path.parent.mkdir(parents=True, exist_ok=True)
-                lock_path.write_bytes(b"held by a peer\n")
-            return result
-
-        monkeypatch.setattr(git_native, "build_new_file_commit", _build_then_lock_the_anchor)
+        for name in ("build_new_file_commit", "commit_authored_new_file"):
+            monkeypatch.setattr(git_native, name, _lock_after(getattr(git_native, name)))
 
         result = _memo_send(
             {"dry_run": False, "topic": "anchor-lost-topic"}, repo_root=sender_repo
         )
 
-        assert result["exit_code"] != 0, result
-        assert result["acted"] == []
-        assert "anchor" in result["failed"][0]["reason"]
+        assert result["exit_code"] == 0, result
+        assert result["failed"] == []
+        item = result["acted"][0]
+        assert item["delivery_outcome"] == "delivered"
+        assert item["anchored"] is False
+        assert item["anchor_warning"]
+        assert "push_pending_record" not in item
+        sha = item["delivery_commit_sha"]
+        assert _git(receiver_repo, "rev-parse", "HEAD").stdout.decode().strip() == sha
         assert _pending_records(sender_repo) == []
-        assert _read_sent_records(sender_repo) == []
+        assert _read_sent_records(sender_repo)[0]["anchor_ref"] is None
 
     def test_lost_cas_where_the_ref_already_matches_reports_anchored_true_no_warning(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1198,6 +1240,7 @@ class TestDeliveryIsAnchored:
             return git_native.GitResult(returncode=1, stdout="", stderr="synthetic decline")
 
         monkeypatch.setattr(git_native, "build_new_file_commit", _fake_decline)
+        monkeypatch.setattr(git_native, "commit_authored_new_file", _fake_decline)
 
         result = _memo_send(
             {"dry_run": False, "topic": "anchor-declined-topic"}, repo_root=sender_repo
@@ -1215,6 +1258,7 @@ class TestDeliveryIsAnchored:
         _write_draft(sender_repo, "anchor-unverified-topic")
 
         monkeypatch.setattr(git_native, "build_new_file_commit", _fake_ok_but_unverifiable_commit)
+        monkeypatch.setattr(git_native, "commit_authored_new_file", _fake_ok_but_unverifiable_commit)
 
         result = _memo_send(
             {"dry_run": False, "topic": "anchor-unverified-topic"}, repo_root=sender_repo
@@ -1285,8 +1329,8 @@ def _receiver_checkout_state(receiver_repo: Path) -> tuple:
 
 
 class TestReceiverCheckoutIsNeverWritten:
-    """A delivery is an object-only commit on the upstream tip: the receiver's
-    HEAD, index and worktree stay byte-identical, whatever state they are in."""
+    """A delivery behind the tracking tip is an object-only commit on it, leaving the
+    receiver's checkout alone; at or ahead of it, the delivery lands on the local branch."""
 
     def _send(self, tmp_path, monkeypatch, topic, *, prepare=None, env=None):
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1327,25 +1371,27 @@ class TestReceiverCheckoutIsNeverWritten:
 
     def test_an_unspliceable_index_is_irrelevant(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A v4 index is refused by the in-process writer; the delivery never
-        asks for it, so the send lands and the index stays byte-identical."""
+        refuses a splice of it, so the send still lands on the branch and the index stays
+        byte-identical (no spawn fallback)."""
         before: dict = {}
 
         def _prepare(repo: Path) -> None:
             _git(repo, "update-index", "--index-version", "4")
-            before["state"] = _receiver_checkout_state(repo)
+            before["index"] = (repo / ".git" / "index").read_bytes()
 
         result, receiver_repo = self._send(
             tmp_path, monkeypatch, "v4-index-topic", prepare=_prepare,
         )
 
         assert result["exit_code"] == 0, result
-        assert _receiver_checkout_state(receiver_repo) == before["state"]
+        assert result["acted"][0]["delivery_outcome"] == "delivered"
+        assert (receiver_repo / ".git" / "index").read_bytes() == before["index"]
 
     def test_a_held_index_lock_neither_blocks_nor_is_stolen(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A peer holding `index.lock` has no effect on the delivery: it never
-        takes the lock, and leaves the peer's lock in place."""
+        """A peer mid-write on `index.lock` (non-empty, fresh) does not block the
+        delivery, and the lock is left in place."""
         def _hold_lock(repo: Path) -> None:
-            (repo / ".git" / "index.lock").write_bytes(b"")
+            (repo / ".git" / "index.lock").write_bytes(b"DIRC peer is mid-write")
 
         result, receiver_repo = self._send(
             tmp_path, monkeypatch, "held-lock-topic", prepare=_hold_lock

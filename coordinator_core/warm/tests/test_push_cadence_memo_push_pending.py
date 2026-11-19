@@ -66,6 +66,8 @@ def world(tmp_path: Path):
     sender.mkdir()
     out = ud.deliver_onto_upstream(recv, sender, PATH, "memo body\n", tmp_path / "msg.txt")
     assert out.ok, out.error
+    if out.on_branch:
+        _git(recv, "reset", "-q", "--hard", out.parent_sha)
     assert ma.write_pin(recv / ".git", out.commit_sha)
     return {"recv": recv, "bare": bare, "sender": sender, "out": out, "tmp": tmp_path}
 
@@ -148,6 +150,61 @@ def test_moved_tip_already_holding_path_retires_record_without_push(world) -> No
     _git(other, "push", "-q", "origin", BRANCH)
     _sweep(world["sender"])
     assert _git(world["bare"], "rev-parse", f"refs/heads/{BRANCH}") == moved
+    assert pp.list_pending(world["sender"]) == []
+
+
+def _bare_tip(world) -> str:
+    return _git(world["bare"], "rev-parse", f"refs/heads/{BRANCH}")
+
+
+def test_path_already_on_local_tip_retires_record_without_push(world) -> None:
+    recv = world["recv"]
+    before = _bare_tip(world)
+    (recv / "cross-repo/inbox").mkdir(parents=True)
+    _commit(recv, PATH, "restored by hand\n")
+    _sweep(world["sender"])
+    assert _bare_tip(world) == before
+    assert pp.list_pending(world["sender"]) == []
+    assert ma.read_pin(recv / ".git", world["out"].commit_sha) is None
+
+
+def test_parent_diverged_from_local_is_never_pushed_and_keeps_record(world) -> None:
+    recv = world["recv"]
+    sha = world["out"].commit_sha
+    before = _bare_tip(world)
+    _git(recv, "commit", "-q", "--amend", "--allow-empty", "-m", "rewritten")
+    assert _git(recv, "rev-parse", "HEAD") != before
+    _sweep(world["sender"])
+    assert _bare_tip(world) == before
+    rows = pp.list_pending(world["sender"])
+    assert [r["commit_sha"] for r in rows] == [sha]
+    assert rows[0]["attempts"] == 1
+    assert ma.read_pin(recv / ".git", sha) == sha
+
+
+def test_delivery_under_local_is_still_pushed(world) -> None:
+    sha = world["out"].commit_sha
+    _git(world["recv"], "merge", "-q", "--ff-only", sha)
+    _sweep(world["sender"])
+    assert _bare_tip(world) == sha
+    assert pp.list_pending(world["sender"]) == []
+
+
+def test_local_behind_the_delivery_parent_is_still_pushed(world) -> None:
+    recv = world["recv"]
+    pp.remove_pending(world["sender"], world["out"].commit_sha)
+    base = _git(recv, "rev-parse", "HEAD")
+    ahead = _commit(recv, "b.txt", "b")
+    _git(recv, "push", "-q", "origin", BRANCH)
+    _git(recv, "fetch", "-q", "origin")
+    out = ud.deliver_onto_upstream(
+        recv, world["sender"], "cross-repo/inbox/second.md", "second\n", world["tmp"] / "msg.txt"
+    )
+    assert out.ok, out.error
+    _git(recv, "update-ref", f"refs/heads/{BRANCH}", base)
+    _sweep(world["sender"])
+    assert _bare_tip(world) == out.commit_sha
+    assert _git(world["bare"], "rev-parse", f"{out.commit_sha}^") == ahead
     assert pp.list_pending(world["sender"]) == []
 
 

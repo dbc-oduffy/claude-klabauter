@@ -77,6 +77,7 @@ def test_a_manifest_landing_within_one_poll_of_the_claim_is_awaited(repo) -> Non
         t.join()
 
 
+@pytest.mark.deliberate_wall_clock(reason="not waiting out the manifest wait deadline is the behaviour under test")
 def test_no_claim_and_no_manifest_raises_promptly(repo) -> None:
     record_dir(repo, RUN).mkdir(parents=True)
     started = time.monotonic()
@@ -85,6 +86,7 @@ def test_no_claim_and_no_manifest_raises_promptly(repo) -> None:
     assert time.monotonic() - started < rp.MANIFEST_WAIT_S / 2
 
 
+@pytest.mark.deliberate_wall_clock(reason="not waiting out the manifest wait deadline on a stale claim is the behaviour under test")
 def test_a_stale_claim_is_not_waited_on(repo) -> None:
     rd = record_dir(repo, RUN)
     rd.mkdir(parents=True)

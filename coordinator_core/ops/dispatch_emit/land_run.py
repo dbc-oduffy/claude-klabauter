@@ -4879,7 +4879,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         first = needed_refusal[0]
         return _error(
             f"landing refused {NEEDED_PATH_OMITTED}: {first['path']} is changed by this run and read by "
-            f"{first['needed_by'][0]['importer']} ({first['needed_by'][0]['name']}), but is held by {first['holder']}; "
+            f"{first['needed_by'][0]['importer']} ({first['needed_by'][0]['name']}), but is held by {_holders_text(first)}; "
             "land after that holder or release the path, then re-fire",
             refused=NEEDED_PATH_OMITTED, paths=[r["path"] for r in needed_refusal], needed_by=needed_refusal,
         )
@@ -6172,10 +6172,74 @@ def _needed_path_gate(
             "path": t,
             "needed_by": [{"importer": imp, "name": name} for imp, name in hits[t]],
             "holder": (reasons.get(t) or "withheld") if holders[t] == "barred" else holders[t],
+            "holders": _refusal_holders(root, t, **free_kw),
         }
         for t in sorted(holders)
     ]
     return carry, refusal
+
+
+RELEASE_HALTED_PATH_OP = "dispatch.release_halted_path"
+
+
+def _refusal_holders(
+    root: Path, path: str, *, session_id=None, rid=None, script_path=None, plan_rel=None, run_base=None,
+    minted_before=None, own_run_ids: Sequence = (), **_unused,
+) -> list:
+    """Each run or session keeping ``path`` out of the landing: ``{kind: "halted-run", run_id, release}``
+    for a halted run whose hold stands (``release`` the ``dispatch.release_halted_path`` call that frees it),
+    ``{kind: "live-run", run_id}`` for a live run declaring it, ``{kind: "session", session_id}`` for a
+    live touch claim. Empty when none is found. Never raises."""
+    out: list = []
+    own = {str(r) for r in own_run_ids if r}
+    landing_run = next((r for r in reversed(list(own_run_ids)) if r), None)
+    try:
+        from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index
+
+        halted = sorted(r for r, e in halted_withheld_index.entries(root).items() if path in e.paths and r not in own)
+        with halted_hold_release.release_scope():
+            for run in halted:
+                if halted_hold_release.still_held_by_index(root, {path: run}, landing_run, plan_rel):
+                    out.append({
+                        "kind": "halted-run", "run_id": run,
+                        "release": {
+                            "op": RELEASE_HALTED_PATH_OP,
+                            "params": {"run_id": run, "path": path, "reason": "<why this halt no longer protects the path>"},
+                        },
+                    })
+        scan = warp_run_deliverable._live_claim_scan(
+            root, [path], _submitter_session(root, rid), str(root), minted_before, rid if isinstance(rid, str) else None,
+        ) or {}
+        live_sessions = set()
+        for _minted, run, sid in scan.get(path, ()):
+            live_sessions.add(sid)
+            if run not in own:
+                out.append({"kind": "live-run", "run_id": run})
+        for sid in sorted(
+            set(_peer_held(
+                root, [path], session_id, rid, script_path, plan_rel=plan_rel,
+                run_base=run_base if isinstance(run_base, str) else None, minted_before=minted_before,
+            ).get(path, ())) - live_sessions
+        ):
+            out.append({"kind": "session", "session_id": sid})
+    except Exception:  # noqa: BLE001 -- naming the holders is advisory; the refusal stands without it
+        pass
+    return out
+
+
+def _holders_text(entry: Mapping) -> str:
+    """The refusal's holder sentence for one ``_needed_path_gate`` entry: its reason plus each holder run id and,
+    for a halted run, the release call."""
+    named = []
+    for h in entry.get("holders") or ():
+        if h["kind"] == "halted-run":
+            named.append(f"{h['run_id']} (release: {RELEASE_HALTED_PATH_OP} {json.dumps(h['release']['params'])})")
+        elif h["kind"] == "live-run":
+            named.append(f"{h['run_id']} (live run; land after it)")
+        else:
+            named.append(f"session {h['session_id']} (live touch claim)")
+    return f"{entry['holder']}: {'; '.join(named)}" if named else str(entry["holder"])
 
 
 def _carry_withheld_symbol_targets(

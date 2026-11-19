@@ -762,22 +762,7 @@ def lookup(
     if served is not None:
         return served
 
-    sink_names: Dict[str, Set[str]] = {}
-    sid_sinks: Dict[str, Set[str]] = {}
-
-    def _note_sink(sink_path, claimant_sid, stream_claims) -> None:
-        layout = touch_record.sink_layout(sink_path)
-        if layout is None:
-            return
-        sid_sinks.setdefault(claimant_sid, set()).add(layout[1])
-        for key in stream_claims:
-            sink_names.setdefault(key, set()).add(layout[1])
-
-    index_dir = touch_record.claim_index_dir(base)
-    building = _begin_index(base, index_dir)
-    state = _walk(base, _note_sink if building else None)
-    if building:
-        _finish_index(base, index_dir, state, sink_names, sid_sinks, building)
+    state = _build_or_walk(base)
 
     held = _held_from_maps(
         {sid for path in paths for sid in state.claims.get(_normalize_key(path), ())},
@@ -1023,6 +1008,73 @@ def _single_flight(key: str):
             entry[1] -= 1
             if entry[1] == 0:
                 _FLIGHTS.pop(key, None)
+
+
+#: Longest a lookup waits for the background index build before it answers from its own walk.
+#: TRAP: past it the lookup walks a second time while the build's walk still runs, so a sessions dir
+#: whose walk exceeds this pays the walk twice on a cold lookup.
+INDEX_BUILD_WAIT_SECS = 0.15
+
+_BUILDS: Dict[str, "_BuildFlight"] = {}
+_BUILDS_GUARD = threading.Lock()
+
+
+class _BuildFlight:
+    """One in-flight background index build: ``state`` is its walk's result once ``done`` is set."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.state: "Optional[_IndexState]" = None
+
+
+def _run_build(flight: "_BuildFlight", base: str, index_dir: str) -> None:
+    sink_names: Dict[str, Set[str]] = {}
+    sid_sinks: Dict[str, Set[str]] = {}
+
+    def _note_sink(sink_path, claimant_sid, stream_claims) -> None:
+        layout = touch_record.sink_layout(sink_path)
+        if layout is None:
+            return
+        sid_sinks.setdefault(claimant_sid, set()).add(layout[1])
+        for key in stream_claims:
+            sink_names.setdefault(key, set()).add(layout[1])
+
+    try:
+        building = _begin_index(base, index_dir)
+        state = _walk(base, _note_sink if building else None)
+        if building:
+            _finish_index(base, index_dir, state, sink_names, sid_sinks, building)
+        flight.state = state
+    except Exception as exc:  # noqa: BLE001 -- the caller's own walk answers; the next lookup retries
+        print(f"claim-index build of {index_dir} failed: {exc!r}", file=sys.stderr)
+    finally:
+        with _BUILDS_GUARD:
+            _BUILDS.pop(index_dir, None)
+        flight.done.set()
+
+
+def _build_or_walk(base: str) -> "_IndexState":
+    """Answer a lookup the index could not serve. The index build runs single-flight on a daemon
+    thread, so a stalled index-directory write never holds the caller; the caller takes the build's
+    walk when it finishes within ``INDEX_BUILD_WAIT_SECS`` and otherwise walks for itself."""
+    index_dir = touch_record.claim_index_dir(base)
+    flight = _BuildFlight()
+    with _BUILDS_GUARD:
+        started = index_dir not in _BUILDS
+        if started:
+            _BUILDS[index_dir] = flight
+    if started:
+        try:
+            threading.Thread(
+                target=_run_build, args=(flight, base, index_dir), name="claim-index-build", daemon=True
+            ).start()
+        except RuntimeError:
+            with _BUILDS_GUARD:
+                _BUILDS.pop(index_dir, None)
+        else:
+            if flight.done.wait(INDEX_BUILD_WAIT_SECS) and flight.state is not None:
+                return flight.state
+    return _walk(base, None)
 
 
 def _begin_index(base: str, index_dir: str) -> Optional[str]:

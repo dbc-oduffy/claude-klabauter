@@ -492,7 +492,9 @@ def _tests_not_run_refusal(
     (``terminal_commit_review.review_owed_refusal``). Else the ``tests-not-run`` refusal, at every
     arm, when the run declares a test file yet its ``inline_review.tests.status`` is ``not_run`` or
     its ledger verdict calls an item ``met`` on evidence that says the tests were not run, else
-    None. Runs declaring no test file are not gated."""
+    None. Runs declaring no test file are not gated. The ledger-text arm is skipped when
+    ``inline_review.tests.owed_to`` is ``em`` and no declared path is ``.py`` (a UE automation
+    criterion owed to the EM)."""
     from coordinator_core.ops.dispatch_emit.terminal_commit_review import review_owed_refusal
 
     chunks = getattr(request, "chunks", None)
@@ -514,6 +516,8 @@ def _tests_not_run_refusal(
             "run the scoped tests (named test files only) and re-fire with their result",
             refused=REFUSED_TESTS_NOT_RUN,
         )
+    if tests.get("owed_to") == "em" and not any(p.lower().endswith(".py") for p in declared):
+        return None
     verdict = params.get("ledger_verdict")
     items = verdict.get("items") if isinstance(verdict, dict) else None
     for item in items if isinstance(items, list) else ():
@@ -582,6 +586,18 @@ def _staged_outside_slices_refusal(inline_review: object, staged: Sequence[str])
     )
 
 
+def _staged_outside_slices_provenance(inline_review: object, staged: Sequence[str]) -> list:
+    """One ``unreviewed`` provenance row per review-owed ``staged`` path that no ``inline_review.prep``
+    ``slice_files`` entry covers (``review_floor.slice_gap_paths``); the land proceeds. An absent or
+    empty slice list is not a comparison: the zero-product-file floor stays a trailer note. No git."""
+    prep = inline_review.get("prep") if isinstance(inline_review, dict) else None
+    reviewed = prep.get("slice_files") if isinstance(prep, dict) else None
+    if not (isinstance(reviewed, list) and reviewed):
+        return []
+    return [_provenance_entry(REFUSED_UNREVIEWED, "landed path sits in no reviewed slice", p)
+            for p in review_floor.slice_gap_paths(staged, reviewed)]
+
+
 def _error(message: str, **extra: object) -> dict:
     result: dict = {"committed": False, "sha": None, "error": message}
     result.update(extra)
@@ -648,6 +664,12 @@ def _claim_provenance(findings: list) -> tuple[list, list]:
     from coordinator_core.ops.dispatch_emit import landing_integrity
 
     return landing_integrity.split_claim_provenance(findings)
+
+
+def _provenance_entry(reason: str, detail: str, path: str) -> dict:
+    """A ``provenance`` row on a landed reply: ``reason`` is a ``PROVENANCE_KINDS`` member, so the
+    finding is recorded and never denies the land."""
+    return {"path": path, "reason": reason, "detail": detail}
 
 
 def _reverify_export_foreign(params: dict, fresh: Optional[dict]) -> tuple:

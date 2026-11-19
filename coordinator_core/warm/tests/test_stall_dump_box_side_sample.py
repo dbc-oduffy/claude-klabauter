@@ -38,6 +38,7 @@ def _full_record(tmp_path) -> dict:
 
 
 @pytest.mark.skipif(not WINDOWS, reason="live sample reads the Windows process table")
+@pytest.mark.deliberate_wall_clock(reason="the sample window plus margin is a wall-clock bound on the dump; that bound is the behaviour under test")
 def test_full_record_at_default_arguments_carries_the_windows_box_side_lines(tmp_path):
     t0 = time.perf_counter()
     header = _full_record(tmp_path)
@@ -89,6 +90,7 @@ def test_a_raising_sampler_leaves_the_record_with_an_error_value(tmp_path, monke
     assert "fs-probe-ms" in header
 
 
+@pytest.mark.deliberate_wall_clock(reason="the sampler timeout bound is the behaviour under test")
 def test_an_overrunning_sampler_times_out_inside_the_bound(tmp_path, monkeypatch):
     monkeypatch.setattr(box_sample, "WINDOW_SECS", 0.2)
     monkeypatch.setattr(box_sample, "BOUND_MARGIN_SECS", 0.2)

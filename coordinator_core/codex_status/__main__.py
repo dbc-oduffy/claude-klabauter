@@ -13,6 +13,20 @@ from coordinator_core._settings_home import settings_home
 from .collect import advance, discover, load, registered_paths, save
 from .model import ingest, summary, warn
 from .render import render, registered_alias, NATIVE_FOOTER
+from coordinator_core.tui_status.grok import before_compact
+
+
+def _auto_compact_limit() -> int | None:
+    """Configured `model_auto_compact_token_limit` from Codex config.toml; None when absent or unreadable."""
+    import tomllib
+    home = os.environ.get("CODEX_HOME")
+    path = (Path(home) if home else Path.home() / ".codex") / "config.toml"
+    try:
+        with path.open("rb") as handle:
+            limit = tomllib.load(handle).get("model_auto_compact_token_limit")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None
 
 
 def snapshot(params: dict) -> dict:
@@ -26,7 +40,7 @@ def snapshot(params: dict) -> dict:
         return _snapshot_locked(params, sid, cache)
 
 
-def _snapshot_locked(params, sid, cache):
+def _snapshot_locked(params, sid, cache) -> dict:
     state = load(cache, sid)
     paths = [Path(p) for p in params.get("rollouts", [])]
     for directory in params.get("discover_dirs", []):
@@ -60,6 +74,13 @@ def _snapshot_locked(params, sid, cache):
         state["coverage"] = {key: data.get("coverage", {}).get(key) is True for key in ("subagents", "workflows")}
     save(cache, state)
     value = summary(state, registered_alias(sid))
+    limit = _auto_compact_limit()
+    window = value.get("context_window")
+    if limit and isinstance(window, (int, float)) and not isinstance(window, bool) and window > 0:
+        before = before_compact(value.get("remaining_percent"), 100 * limit / window)
+        if before is not None:
+            value["before_compact_percent"] = before
+            value["context_basis"] = f"configured model_auto_compact_token_limit={limit}"
     value["text"] = render(value)
     value["native_footer_items"] = NATIVE_FOOTER
     value["cache_path"] = str(cache)

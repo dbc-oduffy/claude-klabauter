@@ -97,46 +97,72 @@ def test_scratch_predicate_passes_sanctioned_roots(path: str) -> None:
     assert not _REAL_IS_SCRATCH_ROOT(path)
 
 
-def test_agy_skills_refuses_a_scratch_root_and_still_prunes_scratch_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ds, "is_scratch_root", _REAL_IS_SCRATCH_ROOT)
+def test_agy_skills_never_creates_the_file_and_prunes_scratch_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ds, "is_scratch_root", lambda p: str(p).startswith("/private/tmp"))
     sj = tmp_path / "skills.json"
-    assert ds.seed_agy_skills(sj, "/tmp/x/skills") == "refused"
+    keep = tmp_path / "keep"
+    keep.mkdir()
+    assert ds.seed_agy_skills(sj, "/tmp/x/skills") == "present"
     assert not sj.exists()
-    sj.write_text(json.dumps({"entries": [{"path": "/private/tmp/s/skills"}, {"path": "/keep"}]}))
-    assert ds.seed_agy_skills(sj, "/tmp/x/skills") == "refused"
-    assert json.loads(sj.read_text())["entries"] == [{"path": "/keep"}]
+    sj.write_text(json.dumps({"entries": [{"path": "/private/tmp/s/skills"}, {"path": str(keep)}]}))
+    assert ds.seed_agy_skills(sj, "/tmp/x/skills") == "pruned"
+    assert json.loads(sj.read_text())["entries"] == [{"path": str(keep)}]
+    assert ds.seed_agy_skills(sj, "/tmp/x/skills") == "present"
 
 
-def test_agy_skills_prunes_scratch_entries_beside_ours_and_adds_a_sanctioned_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ds, "is_scratch_root", _REAL_IS_SCRATCH_ROOT)
-    sj = tmp_path / "skills.json"
-    sj.write_text(json.dumps({"entries": [{"path": "/p/skills"}, {"path": "/private/tmp/s/skills"}]}))
-    assert ds.seed_agy_skills(sj, "/p/skills") == "pruned"
-    assert json.loads(sj.read_text())["entries"] == [{"path": "/p/skills"}]
-    assert ds.seed_agy_skills(sj, "/p/skills") == "present"
-    sj.write_text(json.dumps({"entries": [{"path": "/var/folders/a/T/s"}]}))
-    assert ds.seed_agy_skills(sj, "/p/skills") == "added"
-    assert json.loads(sj.read_text())["entries"] == [{"path": "/p/skills"}]
-
-
-def test_agy_skills_idempotent_and_unseed_only_ours(tmp_path: Path) -> None:
-    sj = tmp_path / "skills.json"
-    sj.write_text(json.dumps({"entries": [{"path": "/foreign"}]}))
+def test_agy_skills_drops_every_coordinator_skills_source_and_keeps_foreign_live_entries(tmp_path: Path) -> None:
     root = tmp_path / "plugin" / "skills"
-    assert ds.seed_agy_skills(sj, root) == "added"
+    cache = tmp_path / "cache" / "coordinator" / "4.6.21" / "skills"
+    klab = tmp_path / "klab" / "coordinator" / "skills"
+    foreign = tmp_path / "foreign" / "skills"
+    for d in (root, cache, klab, foreign):
+        d.mkdir(parents=True)
+    sj = tmp_path / "skills.json"
+    sj.write_text(json.dumps({"entries": [{"path": str(p)} for p in (root, cache, klab, foreign)]}))
+    assert ds.seed_agy_skills(sj, root) == "pruned"
+    assert json.loads(sj.read_text())["entries"] == [{"path": str(foreign)}]
     assert ds.seed_agy_skills(sj, root) == "present"
-    entries = json.loads(sj.read_text())["entries"]
-    assert entries == [{"path": "/foreign"}, {"path": str(root)}]
+
+
+def test_agy_skills_drops_absent_and_other_profile_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    users = tmp_path / "Users"
+    home, other = users / "me", users / "me_old"
+    (home / "skills").mkdir(parents=True)
+    (other / "skills").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    sj = tmp_path / "skills.json"
+    sj.write_text(json.dumps({"entries": [
+        {"path": str(other / "skills")}, {"path": str(tmp_path / "gone")}, {"path": str(home / "skills")}]}))
+    assert ds.seed_agy_skills(sj, "/p/skills") == "pruned"
+    assert json.loads(sj.read_text())["entries"] == [{"path": str(home / "skills")}]
+
+
+def test_other_profile_needs_a_shared_profiles_root(tmp_path: Path) -> None:
+    home = tmp_path / "Users" / "me"
+    assert ds.is_other_profile_path(tmp_path / "Users" / "me_old" / "x", home)
+    assert not ds.is_other_profile_path(home / "x", home)
+    assert not ds.is_other_profile_path(tmp_path / "elsewhere" / "x", home)
+    assert not ds.is_other_profile_path(tmp_path / "sib" / "x", tmp_path / "proj" / "me")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive-letter paths are win32-shaped")
+def test_other_profile_detects_win32_drive_paths() -> None:
+    home = Path("C:/Users/me")
+    assert ds.is_other_profile_path(r"C:\Users\other\.agy\skills", home)
+    assert ds.is_other_profile_path("c:/users/Other/x", home)
+    assert not ds.is_other_profile_path(r"C:\Users\me\.agy\skills", home)
+    assert not ds.is_other_profile_path(r"C:\Program Files\x", home)
+
+
+def test_unseed_agy_skills_removes_only_the_legacy_root_entry(tmp_path: Path) -> None:
+    sj = tmp_path / "skills.json"
+    root = tmp_path / "plugin" / "skills"
+    sj.write_text(json.dumps({"entries": [{"path": "/foreign"}, {"path": str(root)}]}))
     assert ds.unseed_agy_skills(sj, root) == "removed"
     assert json.loads(sj.read_text())["entries"] == [{"path": "/foreign"}]
     assert ds.unseed_agy_skills(sj, root) == "absent"
-
-
-def test_agy_skills_created_then_file_removed_when_empty(tmp_path: Path) -> None:
-    sj = tmp_path / "d" / "skills.json"
-    assert ds.seed_agy_skills(sj, "/p/skills") == "created"
-    assert json.loads(sj.read_text()) == {"entries": [{"path": "/p/skills"}]}
-    assert ds.unseed_agy_skills(sj, "/p/skills") == "removed"
+    sj.write_text(json.dumps({"entries": [{"path": str(root)}]}))
+    assert ds.unseed_agy_skills(sj, root) == "removed"
     assert not sj.exists()
 
 

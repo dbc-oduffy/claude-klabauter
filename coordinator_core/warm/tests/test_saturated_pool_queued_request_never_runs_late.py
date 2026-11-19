@@ -242,12 +242,13 @@ def test_boot_prewarm_starts_workers_in_both_pools_off_the_calling_thread(tmp_pa
     thread = ctx.start_boot_prewarm()
 
     assert thread is not threading.current_thread()
-    assert _wait_for(lambda: len(pools["guard"].submitted) == server._HEAL_PREWARM_WORKERS)
+    assert _wait_for(lambda: len(pools["guard"].submitted) == server._BOOT_PREWARM_GUARD_WORKERS)
     assert _wait_for(lambda: len(pools["dispatch"].submitted) == 1)
     thread.join(2)
     assert not thread.is_alive()
 
 
+@pytest.mark.deliberate_wall_clock(reason="boot returning while the pools are still warming is a wait bound, not CPU cost; that bound is the behaviour under test")
 def test_boot_prewarm_returns_before_the_pools_finish_warming(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_HEAL_PREWARM_WAIT_SECS", 5.0)
     ctx, pools = _prewarm_ctx(tmp_path)
@@ -256,10 +257,14 @@ def test_boot_prewarm_returns_before_the_pools_finish_warming(tmp_path, monkeypa
     thread = ctx.start_boot_prewarm()
     returned_in = time.monotonic() - t0
 
-    assert _wait_for(lambda: len(pools["dispatch"].submitted) == 1)
+    assert _wait_for(lambda: len(pools["guard"].submitted) == server._BOOT_PREWARM_GUARD_WORKERS)
     assert thread.is_alive()
     assert returned_in < 0.5
-    for fut in pools["guard"].submitted + pools["dispatch"].submitted:
+    for fut in pools["guard"].submitted:
+        fut.set_result(None)
+    assert _wait_for(lambda: len(pools["dispatch"].submitted) == 1)
+    assert thread.is_alive()
+    for fut in pools["dispatch"].submitted:
         fut.set_result(None)
     thread.join(2)
     assert not thread.is_alive()

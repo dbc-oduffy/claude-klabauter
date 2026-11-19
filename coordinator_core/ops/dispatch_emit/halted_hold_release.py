@@ -594,7 +594,6 @@ def stale_release(root: Path, run_id: str, now: Optional[float] = None) -> Optio
     its mtime; only an id that does not parse falls back to one `os.stat` of that mtime. Plus the scope-shared
     token listing, no spawn; never raises (the hold stands)."""
     try:
-        from coordinator_core.ops import warp_run_deliverable as wrd
         from coordinator_core.ops.dispatch_emit import halted_run
 
         root = Path(root)
@@ -608,16 +607,49 @@ def stale_release(root: Path, run_id: str, now: Optional[float] = None) -> Optio
         age = (time.time() if now is None else now) - clock
         if age <= STALE_HOLD_BOUND_SECONDS:
             return None
-        sizing = _halted_sizing(root, run_id, marker)
-        for held in _held_run_records(root):
-            if held.get("run_id") == run_id:
-                return None
-            other = held.get("sizing_rel")
-            if sizing and isinstance(other, str) and wrd._norm(other) == sizing:
-                return None
+        if not _no_token_or_refire(root, run_id, _halted_sizing(root, run_id, marker)):
+            return None
         return RELEASE_STALE_NOT_LIVE
     except Exception:  # noqa: BLE001 -- unknown: the hold stands
         return None
+
+
+def _no_token_or_refire(root: Path, run_id: str, sizing: str) -> bool:
+    """True when no held run-token record is `run_id`'s own or a run of its `sizing` (not live, no refire pending)."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    for held in _held_run_records(root):
+        if held.get("run_id") == run_id:
+            return False
+        other = held.get("sizing_rel")
+        if sizing and isinstance(other, str) and wrd._norm(other) == sizing:
+            return False
+    return True
+
+
+def moved_past_base_paths(root: Path, run_id: str, marker: dict, held) -> frozenset:
+    """The `held` paths a halt holds by its record alone (`kept_work.HALT_RECORD_ONLY`, no kept blob) whose HEAD blob is no
+    longer the blob at the halt's `run_base_sha`: HEAD moved on, so the dirt left on the path is a later
+    session's, and a not-live run with no refire pending protects nothing there. The halt record is untouched.
+    One batched blob read; no base, an unfetchable blob, or a live token or pending refire keeps the hold."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.kept_work import HALT_RECORD_ONLY
+
+    base = _base_sha(marker)
+    if not held or not base or marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
+        return frozenset()
+    record = _record(root, run_id)
+    by_record_only = {wrd._norm(k) for k, r in _withheld_strict(record).items() if r == HALT_RECORD_ONLY}
+    plan = _kept_plan(record)  # a path with a kept blob is resumable work the kept-at-head rules weigh
+    kept = {wrd._norm(p) for p in plan[1]} if plan else set()
+    wanted = sorted(p for p in held if p in by_record_only and p not in kept)
+    if not wanted or not _no_token_or_refire(root, run_id, _halted_sizing(root, run_id, marker)):
+        return frozenset()
+    blobs = _blob_batch(root, [f"HEAD:{p}" for p in wanted] + [f"{base}:{p}" for p in wanted])
+    if not blobs:
+        return frozenset()
+    return frozenset(p for p in wanted if blobs.get(f"HEAD:{p}") != blobs.get(f"{base}:{p}"))
 
 
 def release_reason(
@@ -855,6 +887,8 @@ def _held_tail(root: Path, halted_run_id: str) -> frozenset:
     if held and marker:
         with contextlib.suppress(Exception):  # unknown: the hold stands
             held -= {wrd._norm(p) for p in kept_at_head_paths(root, record, marker)}
+        with contextlib.suppress(Exception):  # unknown: the hold stands
+            held -= moved_past_base_paths(root, halted_run_id, marker, held)
     if held:
         with contextlib.suppress(Exception):  # unknown: the hold stands
             held -= _prints_at_head(root, halted_run_id, held)

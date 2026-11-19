@@ -4,7 +4,7 @@ from __future__ import annotations
 from coordinator_core.tui_status.fields import UNKNOWN, format_line, resolve_name
 
 
-NATIVE_FOOTER = ["thread-name", "model-with-reasoning", "context-remaining"]
+NATIVE_FOOTER = ["thread-name"]
 
 
 def registered_alias(sid: str) -> str | None:

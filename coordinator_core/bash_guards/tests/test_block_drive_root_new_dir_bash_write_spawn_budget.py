@@ -76,7 +76,7 @@ def test_guard_check_spawns_nothing_when_spawning_is_forbidden(world, tmp_path: 
     r = world.as_posix()
     fire = [guard.check({"tool_name": t, "tool_input": {"command": c}, "cwd": str(tmp_path), "agent_id": "sub-1"})
             for c, t in ((f"mkdir {r}/new", "Bash"), (f"mkdir {r}/new", "PowerShell"))]
-    quiet = [guard.check({"tool_name": "Bash", "tool_input": {"command": c}, "cwd": str(tmp_path)})
+    quiet = [guard.check({"tool_name": "Bash", "tool_input": {"command": c}, "cwd": str(tmp_path), "agent_id": "sub-1"})
              for c in (f"mkdir {r}/existing/a", "echo x > out.txt", "ls /e/some/path")]
     assert all(x is not None for x in fire)
     assert all(x is None for x in quiet)

@@ -244,6 +244,32 @@ def test_derive_register_reads_powershell_piped_scout_register(turns_repo, monke
     assert [u["turn"] for u in unrelated] == [2]
 
 
+_INLINE_SCOUT = (
+    '{"register_rows": [{"id": "a", "source_text": "' + _PHRASE + '", "surface": "cli"}],'
+    ' "verbatim_accounting": {"2": "unrelated - chat"}}'
+)
+
+
+def test_derive_register_accepts_inline_json_scout_register(turns_repo):
+    argv = ["--derive-register", "--scout-register", _INLINE_SCOUT, "--write", _REL]
+    assert sa.main(argv) == 0
+    rows = _register_of(turns_repo)["rows"]
+    assert any(r["surface"] == "cli" and _PHRASE in r["source_text"] for r in rows)
+
+
+def test_register_accepts_inline_json_register(repo):
+    inline = '{"sources": [{"doc": "docs/x.md", "ref": "abc"}], "rows": [{"id": "a", "source_text": "text a", "surface": "cli", "status": "open"}]}'
+    assert sa.main(["--register", inline, "--write", _REL]) == 0
+    assert _register_of(repo)["rows"][0]["id"] == "a"
+
+
+def test_inline_json_is_never_opened_as_a_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert sa._read_path_or_stdin('  {"a": 1}') == '  {"a": 1}'
+    with pytest.raises(FileNotFoundError):
+        sa._read_path_or_stdin("not-inline.yaml")
+
+
 _TRAMPOLINE = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "sizing-assemble.py"
 
 

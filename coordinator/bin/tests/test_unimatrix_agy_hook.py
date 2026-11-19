@@ -187,6 +187,18 @@ def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
     assert pre.decide(run_payload(name="write_file"), 4242) == deny
 
 
+@pytest.mark.parametrize("tool", ["run_command", "write_file"])
+@pytest.mark.parametrize("answer", [{"decision": "allow"}, {"decision": "allow", "reason": "ok"}])
+def test_guard_allow_answer_stays_allow_and_never_becomes_ask(home, monkeypatch, tool, answer):
+    stub_guard(monkeypatch, answer)
+    assert pre.decide(run_payload(name=tool), 4242) == answer
+
+
+def test_no_verdict_answer_is_allow_through_the_entry_point(home):
+    r = hook("{}", home)
+    assert r.returncode == 0 and json.loads(r.stdout)["decision"] == "allow"
+
+
 def test_unloadable_guard_fails_open_to_allow(home, monkeypatch):
     monkeypatch.setattr(pre, "load_sibling", lambda name: 1 / 0)
     assert_fail_open(pre.run_guard("{}", None))

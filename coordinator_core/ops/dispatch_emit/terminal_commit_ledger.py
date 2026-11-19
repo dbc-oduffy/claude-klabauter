@@ -23,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.land_run import (
     held_revision_refusal,
 )
 from coordinator_core.ops.dispatch_emit.halt_landing import (
+    blocking_rows_downgraded,
     landed_before_halt as _landed_before_halt,
     since_halt_close as _since_halt_close,
 )
@@ -558,6 +559,7 @@ def _ledger_gate(
             worktree_root, resume_ledger, verdict, manifest_path, plan_rel, since_halt
         )
         stale = [*stale, *_unclosed_halt_gaps(resume_ledger, verdict, _halt_gap_lines(worktree_root, resume_ledger))]
+        stale = [*stale, *blocking_rows_downgraded(resume_ledger, result)]
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
     if result["pass"]:
@@ -774,14 +776,22 @@ def met_row_files(root: Path, verdict: object) -> tuple:
 
 def _withheld_product_files(
     worktree_root: Path, snapshot: Optional[_Snapshot], declared: set, committed: set,
+    landed_sha: Optional[str] = None,
 ) -> list:
-    """Declared writes still changed in the tree that the commit did not carry, sorted.
+    """Declared writes the landed commit does not fully carry, sorted.
 
-    A run whose commit omits a file it changed cannot report its ledger rows met: the claim is
-    checked against the tree, not against the verdict. Unknown change state reads as none.
+    Two sources: a path the pre-commit read saw changed that the commit did not carry, and,
+    given ``landed_sha``, every declared path still differing from that commit (a commit that
+    carried only some of a path's hunks). A run whose commit leaves such a path cannot report its
+    ledger rows met. A peer commit landing a declared path after ``landed_sha`` also reads as
+    withheld. Unknown change state reads as none; one added ``git diff`` spawn, none when
+    ``declared`` is empty.
     """
     changed = _changed(snapshot, worktree_root, sorted(declared))
-    return sorted(changed - committed) if changed else []
+    out = set(changed - committed) if changed else set()
+    if landed_sha and declared:
+        out |= _changed(None, worktree_root, sorted(declared), landed_sha) or set()
+    return sorted(out)
 
 
 def _lifecycle_owed(
@@ -980,12 +990,24 @@ def _own_evidence_append_chunks(
     return out
 
 
-def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
+def _changed_paths(worktree_root: Path, paths: list, against: Optional[str] = None) -> Optional[set]:
     """The subset of ``paths`` whose worktree bytes differ from HEAD (modified,
     added, untracked or deleted): the files a commit over them can carry. One
-    scoped ``git status`` spawn; ``None`` when git could not answer."""
+    scoped ``git status`` spawn; ``None`` when git could not answer. With ``against``
+    a commit sha, the tracked paths differing from that commit, by one ``git diff`` spawn."""
     if not paths:
         return set()
+    if against:
+        diffed = run_git(
+            [
+                "-C", str(worktree_root), "--no-optional-locks", "diff", "--name-only",
+                "-z", "--no-renames", against, "--", *[f":(literal){p}" for p in paths],
+            ],
+            binary=True,
+        )
+        if not diffed.ok:
+            return None
+        return {e.decode("utf-8", "surrogateescape") for e in diffed.stdout_bytes.split(b"\0") if e}
     result = run_git(
         [
             "-C", str(worktree_root), "--no-optional-locks", "status",
@@ -1003,8 +1025,13 @@ def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
     }
 
 
-def _changed(snapshot: Optional[_Snapshot], worktree_root: Path, paths: list) -> Optional[set]:
-    """``_changed_paths`` answered from ``snapshot`` where it covers a path, by a spawn for the rest."""
+def _changed(
+    snapshot: Optional[_Snapshot], worktree_root: Path, paths: list, against: Optional[str] = None,
+) -> Optional[set]:
+    """``_changed_paths`` answered from ``snapshot`` where it covers a path, by a spawn for the rest.
+    ``against`` a commit sha skips the pre-commit snapshot and reads the paths differing from that commit."""
+    if against:
+        return _changed_paths(worktree_root, paths, against)
     if snapshot is None:
         return _changed_paths(worktree_root, paths)
     known = [p for p in paths if snapshot.covers(p)]

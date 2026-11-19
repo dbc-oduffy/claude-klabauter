@@ -81,6 +81,7 @@ def test_row_superseded_by_an_unrecorded_note_refuses_naming_the_id(repo) -> Non
     items = [
         *({"id": m, "status": "met"} for m in met),
         {"id": r3, "status": "superseded", "superseded_by": "N9"},
+        {"id": "N1", "status": "met"},
     ]
     failures = rl.judge(ledger, {"items": items}, note_ids=rl.note_ids(rl.run_dir(repo, RUN)))["failures"]
     assert [f["id"] for f in failures] == [r3] and "N9" in failures[0]["reason"]

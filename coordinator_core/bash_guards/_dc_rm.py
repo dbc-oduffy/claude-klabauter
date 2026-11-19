@@ -469,6 +469,17 @@ def check_destructive_rm(
             ):
                 continue
 
+            # The doctrine-edit approval marker is a zero-byte file in the git
+            # dir; removing it only withdraws an approval, and
+            # `block_approval_sentinel_creation` documents removal as allowed.
+            # FILE only; a same-named directory is still denied.
+            if (
+                is_git_store_target
+                and os.path.basename(tgt_abs) == ".coordinator-doctrine-edit-approved"
+                and os.path.isfile(tgt_abs)
+            ):
+                continue
+
             # The engine's own `claude-klabauter-*.json` caches sit directly under the
             # gitdir, keyed on (size, mtime_ns) and rebuilt on a miss -- not
             # objects, refs, or logs. A file only, directly under `.git`, so a

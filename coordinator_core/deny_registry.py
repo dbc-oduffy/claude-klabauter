@@ -317,7 +317,25 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
 
 #: Landing refusal reasons (``landing_integrity`` finding kinds) allowed to withhold or refuse a
 #: landing, each with its class.
-LANDING_REFUSAL_CLASS: Dict[str, str] = {"lost-definition": HEAD_INTEGRITY}
+LANDING_REFUSAL_CLASS: Dict[str, str] = {
+    **{reason: HEAD_INTEGRITY for reason in (
+        "blob-drift", "branch-mismatch", "branch-unreadable", "destructive-git", "detached-head",
+        "halt-on-run-owned-merge", "head-moved", "import-closure", "kept-blob-stale",
+        "landing-tree-differs-from-measured", "lost-definition", "new-red", "own-hunk-head-moved",
+        "post-commit-path-unlanded", "run-token", "run-token-adopted", "run-token-in-flight",
+        "shared-path-sibling-held", "verify-overlay-red", "verify-overlay-unverified",
+    )},
+    **{reason: MALFORMED_REQUEST for reason in (
+        "both-markers", "close-job-plan-mismatch", "credited-chunk-uncommitted",
+        "credited-prefix-row-zero-paths", "empty-subject", "fanout-no-sizing", "fanout-parent-sizing",
+        "fanout-plan-empty", "fanout-plan-path", "fanout-waves", "grind-params", "halted-run",
+        "malformed-request", "manifest-escapes-run-root", "mode-ambiguous", "needed-path-omitted",
+        "no-close-job", "reach-claim-unreachable", "record-dir-escapes", "run-id-unsafe",
+        "script-missing", "subject-declared-write-unattributed",
+    )},
+    "pack-read-stall": BOX_DEGRADING,
+    "secret-in-diff": IRREVERSIBLE_EXTERNAL,
+}
 
 #: Percolate preflight refusals keyed by reason. ``percolate.source_preflight.check_source_published``
 #: returns a ``Refusal`` string whose ``.reason`` is the key emitted. A publish that

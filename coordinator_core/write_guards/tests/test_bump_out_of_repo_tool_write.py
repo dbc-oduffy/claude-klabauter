@@ -40,6 +40,20 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
+@pytest.fixture(autouse=True)
+def _pre_level_envelope(request, monkeypatch):
+    """The guard's own deny envelope (copy, class, target) is asserted before
+    the level policy rewrites it; tests that take `real_level` run the policy."""
+    if "real_level" in request.fixturenames:
+        return
+    monkeypatch.setattr(guard, "apply_cross_repo_level", lambda _name, envelope, **_kw: envelope)
+
+
+@pytest.fixture
+def real_level():
+    return None
+
+
 def _temp_scratch(path: str) -> bool:
     from coordinator_core.bash_guards._out_of_repo_allowlist import sanctioned_destination
 
@@ -1981,7 +1995,7 @@ def _consumer(monkeypatch):
     machine_profile.reset_cache()
 
 
-def test_consumer_warns_once_per_session_then_stays_silent(tmp_path, monkeypatch):
+def test_consumer_cross_repo_write_resolves_to_one_advisory_allow(tmp_path, monkeypatch, real_level):
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
     session_id = "sess-warn-once"
@@ -1991,23 +2005,23 @@ def test_consumer_warns_once_per_session_then_stays_silent(tmp_path, monkeypatch
     first = guard.check(_payload("Write", str(foreign / "a.txt"), session_id, str(own)))
     hso = first["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: ")
     assert "full context" in hso["additionalContext"]
-    assert "machine-local set coordinator.guard_level" in hso["additionalContext"]
-    assert guard.check(_payload("Write", str(foreign / "b.txt"), session_id, str(own))) is None
+    assert "permissionDecisionReason" not in hso
 
 
-def test_off_level_is_silent_and_strict_override_still_denies(tmp_path, monkeypatch):
+@pytest.mark.parametrize("level", ["off", "warn", "strict"])
+def test_guard_level_never_lifts_the_bump_back_to_a_deny(tmp_path, monkeypatch, real_level, level):
     own = _init_repo(tmp_path, "own-repo")
     foreign = _init_repo(tmp_path, "foreign-repo")
-    session_id = "sess-level-off"
+    session_id = f"sess-level-{level}"
     session_start.write_session_start_record(session_id, launch_cwd=str(own))
     _consumer(monkeypatch)
 
-    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "off")
-    assert guard.check(_payload("Write", str(foreign / "a.txt"), session_id, str(own))) is None
-    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
-    denied = guard.check(_payload("Write", str(foreign / "a.txt"), session_id, str(own)))
-    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
+    out = guard.check(_payload("Write", str(foreign / "a.txt"), session_id, str(own)))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert out["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
 
 
 def test_subagent_marker_does_not_clear_a_publish_destination(tmp_path, monkeypatch):

@@ -44,6 +44,7 @@ def _run_dirs(root):
     return sorted(p.name for p in base.iterdir() if p.is_dir()) if base.is_dir() else []
 
 
+@pytest.mark.deliberate_wall_clock(reason="parking inside the step deadline while a scan blocks is the behaviour under test")
 def test_a_blocked_count_lines_parks_the_emit_not_started_naming_the_step(planned, monkeypatch):
     release = threading.Event()
     real = _anchor_check._count_lines

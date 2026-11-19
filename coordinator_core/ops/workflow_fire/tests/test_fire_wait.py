@@ -93,7 +93,24 @@ def test_unknown_fire_id_is_found_false_with_the_full_key_set(registry, git_call
     reply = call()
     assert reply["found"] is False and reply["timed_out"] is False
     assert set(reply) == {"fire_id", "found", "state", "outcome", "run_id", "commit_sha",
-                          "commit_sha_reason", "timed_out", "exit_code", "timeout_s", "deadline_at"}
+                          "commit_sha_reason", "timed_out", "exit_code", "timeout_s", "deadline_at",
+                          "reason"}
+
+
+def test_failed_exit_carries_the_reason_in_the_result(registry, git_calls):
+    put(registry, state="exited", exit_code=1, outcome="failed", failure_subtype="spawn_denied",
+        startup_log_tail="a\nsandbox denied lock\n")
+    reply = call()
+    assert reply["exit_code"] == 1
+    assert "workflow exit_code=1" in reply["reason"] and "spawn_denied" in reply["reason"]
+    assert "sandbox denied lock" in reply["reason"]
+
+
+def test_clean_exit_and_running_fire_have_no_reason(registry, git_calls):
+    put(registry, state="exited", exit_code=0, outcome="clean", landing={"committed": True, "sha": "d"})
+    assert call()["reason"] is None
+    put(registry, exit_code=None)
+    assert call()["reason"] is None
 
 
 def test_missing_fire_id_is_refused():

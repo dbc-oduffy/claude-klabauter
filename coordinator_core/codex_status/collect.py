@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from coordinator_core.atomic_replace import atomic_write_bytes
-from .model import empty, ingest, thread, warn, attach_parent
+from .model import empty, ingest, thread, warn, attach_parent, repriceable_threads
 
 BYTE_BUDGET = 4 * 1024 * 1024
 
@@ -63,10 +63,27 @@ def bind_subagent_stop(state: dict, parent: str, path: Path) -> dict:
             "ownership_source": "native first session_meta" if actual_parent else "SubagentStop ownership"}
 
 
+def rewind_for_repricing(state: dict) -> None:
+    """Restart the cursor of each source whose thread holds unpriced events the price table can now price.
+
+    Consumed spans are otherwise never re-read, so a rate added after the event was recorded would
+    never reach it. A source mid-rewind (`repricing`) is not rewound again, so a budget-limited
+    re-read converges instead of restarting every refresh.
+    """
+    sids = repriceable_threads(state)
+    if not sids:
+        return
+    for source in state["files"].values():
+        if source.get("thread_id") in sids and source.get("offset") and not source.get("repricing"):
+            source.update(offset=0, repricing=True)
+            source.pop("skip_line", None)
+
+
 def advance(state: dict, paths: list[Path], *, byte_budget: int = BYTE_BUDGET) -> dict:
     """Consume complete appended records only, retaining offsets and unique-event sums."""
     remaining = max(0, byte_budget)
     complete = True
+    rewind_for_repricing(state)
     for path in paths:
         key = str(path.resolve())
         source = state["files"].setdefault(key, {"offset": 0})
@@ -116,6 +133,8 @@ def advance(state: dict, paths: list[Path], *, byte_budget: int = BYTE_BUDGET) -
                     warn(state, "malformed metric record ignored")
             source["offset"] += end + 1
             complete &= source["offset"] >= size
+            if source["offset"] >= size:
+                source.pop("repricing", None)
         except OSError:
             warn(state, "a registered usage source could not be read")
             complete = False

@@ -224,23 +224,6 @@ def _declared(root: Path, request, incomplete: set):
     return list(landing), stranded, chunk_ids, by_chunk
 
 
-def _slice_refusal(inline_review: dict, paths: list) -> None:
-    """RL-03 (ccc7d1): a landed code path no reviewed slice covers refuses before any write. An absent
-    or empty slice list is not a comparison."""
-    from coordinator_core.ops.dispatch_emit import review_floor
-    from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import REFUSED_UNREVIEWED
-
-    prep = inline_review.get("prep")
-    reviewed = prep.get("slice_files") if isinstance(prep, dict) else None
-    if not (isinstance(reviewed, list) and reviewed):
-        return
-    gap = review_floor.slice_gap_paths(paths, reviewed)
-    if gap:
-        shown = ", ".join(gap[:5]) + (f" (+{len(gap) - 5} more)" if len(gap) > 5 else "")
-        raise _Refused(REFUSED_UNREVIEWED, f"{len(gap)} staged path(s) sit in no reviewed slice: {shown}",
-                       unreviewed_paths=gap)
-
-
 def _scandir_all(root: Path, dirs) -> dict:
     """RL-04: `{dir: {name: DirEntry}}` for exactly the directories the run declared, non-recursive.
     A glob character in a directory name is never a pattern: this is a path join, not a pathspec."""
@@ -1014,7 +997,9 @@ def _land(root: Path, params: dict) -> dict:
     onboarded = repo_standing.is_onboarded(root)
     records = _record_paths(root, ask_run_dir) if onboarded else []
     paths = list(dict.fromkeys([*home, *records]))
-    _slice_refusal(params["inline_review"], home)
+    from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import _staged_outside_slices_provenance
+
+    unreviewed = _staged_outside_slices_provenance(params["inline_review"], home)
     if not paths and not siblings:
         return {"committed": False, "nothing_to_commit": True, "ok": True, "stranded": stranded}
 
@@ -1052,6 +1037,8 @@ def _land(root: Path, params: dict) -> dict:
     )
     if dropped:
         reply["dropped_absent"] = dropped
+    if unreviewed and reply.get("committed"):
+        reply["provenance"] = [*reply.get("provenance", ()), *unreviewed]
     if reply.get("committed"):
         reply.update(_land_siblings(siblings, message, params))
     return reply
