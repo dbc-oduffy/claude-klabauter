@@ -398,16 +398,38 @@ def test_builtin_workspace_policy_has_no_custom_permission_selector() -> None:
     assert '_workspace_permissions' not in source
 
 
-def _stub_codex(monkeypatch, tmp_path):
+def _stub_codex(monkeypatch, tmp_path, *, response='{"a": 1}'):
     calls = _stub_family(monkeypatch, tmp_path, stdout_text='')
     inner = workflow._run_admitted
 
     def fake(argv, prompt, **kw):
-        Path(argv[argv.index('-o') + 1]).write_text('{"a": 1}', encoding='utf-8')
+        Path(argv[argv.index('-o') + 1]).write_text(response, encoding='utf-8')
         return inner(argv, prompt, **kw)
 
     monkeypatch.setattr(workflow, '_run_admitted', fake)
     return calls
+
+
+def test_codex_gate_validates_json_rpc_result(tmp_path, monkeypatch):
+    # Captured from the 7f8eb5 gate; fixture paths stand in for the original sizing and baton.
+    result = {
+        "arm": "m_plus", "halt": None, "baton": "state/handoffs/gate.md",
+        "design_route": None, "acceptance": [], "sizing_path": "state/sizings/gate.yaml",
+        "tshirt": "L", "route": "plan",
+    }
+    envelope = {"jsonrpc": "2.0", "id": 1, "result": result}
+    _stub_codex(monkeypatch, tmp_path, response=json.dumps(envelope))
+    monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
+    monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
+    schema = {
+        "type": "object",
+        "properties": {"arm": {"const": "m_plus"}, "halt": {"type": "null"}},
+        "required": ["arm", "halt"],
+    }
+    assert workflow.run_agent(
+        'Gate fixture', {'label': 'gate', 'phase': 'gate', 'schema': schema},
+        repo_root=tmp_path, artifact_dir=tmp_path / 'art', parent_session_id='sid',
+    ) == result
 
 
 def _unelevated_home(tmp_path, monkeypatch):

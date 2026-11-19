@@ -1072,6 +1072,10 @@ def run_agent(
         else:
             text = last.read_text(encoding="utf-8")
             value = json.loads(text) if schema is not None else text
+            if (backend == "codex" and options.get("label") == "gate" and options.get("phase") == "gate"
+                    and isinstance(value, dict) and set(value) == {"jsonrpc", "id", "result"}
+                    and value["jsonrpc"] == "2.0"):
+                value = value["result"]
         if schema is not None:
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
