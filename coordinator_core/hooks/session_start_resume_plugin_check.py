@@ -50,8 +50,9 @@ def build_report(payload: dict) -> "str | None":
 
 @register_op("hooks.session_start_resume_plugin_check")
 def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     try:
-        report = build_report(payload_of(params))
+        report = build_report(params)
     except Exception:
         return no_advisory()
     if not report:

@@ -265,7 +265,7 @@ def test_norm_is_stable_under_windows_path_semantics(_windows_os_path):
     assert a.lower().endswith("claude.md")
 
 
-def test_doctrine_guard_advises_on_windows_shaped_home_claude_md(_windows_os_path, monkeypatch):
+def test_doctrine_guard_denies_on_windows_shaped_home_claude_md(_windows_os_path, monkeypatch):
     windows_home_claude_md = guard_doctrine_surface_edits._norm(
         "C:\\Users\\me\\.claude\\CLAUDE.md"
     )
@@ -285,8 +285,8 @@ def test_doctrine_guard_advises_on_windows_shaped_home_claude_md(_windows_os_pat
     result = guard_doctrine_surface_edits.check(payload)
     assert result is not None
     out = result["hookSpecificOutput"]
-    assert "permissionDecision" not in out
-    assert "always-loaded doctrine" in out["additionalContext"]
+    assert out["permissionDecision"] == "deny"
+    assert "CLAUDE.md and rules files" in out["permissionDecisionReason"]
 
 
 def test_doctrine_guard_allows_unrelated_windows_shaped_path(_windows_os_path, monkeypatch):

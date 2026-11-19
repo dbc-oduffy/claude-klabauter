@@ -76,9 +76,9 @@ def test_halt_reports_each_started_leg_elapsed(clock, monkeypatch: pytest.Monkey
         {"leg": "b", "elapsed_secs": 7.0},
     ]
     assert reply["leg_costs"] == [
-        {"leg": land_deadline.SCOPE_LEG, "elapsed_secs": 0.0, "process_time_ms": 0.0, "spawns": 0},
-        {"leg": "a", "elapsed_secs": 4.0, "process_time_ms": 40.0, "spawns": 0},
-        {"leg": "b", "elapsed_secs": 7.0, "process_time_ms": 70.0, "spawns": 0},
+        {"leg": land_deadline.SCOPE_LEG, "elapsed_secs": 0.0, "process_time_ms": 0.0, "spawns": 0, "bytes_read": 0},
+        {"leg": "a", "elapsed_secs": 4.0, "process_time_ms": 40.0, "spawns": 0, "bytes_read": 0},
+        {"leg": "b", "elapsed_secs": 7.0, "process_time_ms": 70.0, "spawns": 0, "bytes_read": 0},
     ]
 
 

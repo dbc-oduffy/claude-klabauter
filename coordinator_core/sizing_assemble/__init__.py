@@ -1602,6 +1602,55 @@ def _drop_block_list_items(text: str, key: str) -> str:
     return "\n".join(lines)
 
 
+def _yaml_dq(value: str) -> str:
+    """Double-quote a YAML scalar; escape set matches doc-new's `_yaml_quote` (pinned by the
+    byte-identity test)."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def scaffold_sizing_text(
+    title: str,
+    deliverable_id: Optional[str] = None,
+    premise: Optional[str] = None,
+    premise_evidence: Optional[str] = None,
+) -> str:
+    """Default-argument sizing-object skeleton, byte-identical to coordinator-doc-new's
+    `_scaffold_sizing` for these arguments (pinned by test); pure, no I/O."""
+    if premise_evidence:
+        evidence = f"  evidence: {_yaml_dq(premise_evidence)}"
+    else:
+        evidence = (
+            "  evidence: PLACEHOLDER — cite the file:line, test, or command output you actually "
+            "looked at; answered in place, never spun into its own record"
+        )
+    intent_default = "PLACEHOLDER — replace with the PM's ask, verbatim"
+    lines = [
+        "schema: sizing-object",
+        "# name: PLACEHOLDER  # OPTIONAL, <=60 chars — a display LABEL only, nothing joins on it; do NOT slice from intent",
+        f"intent: {_yaml_dq(title if title else intent_default)}",
+        "estimate:",
+        "  tshirt: XS  # XS | S | M | L | XL | XXL — reuses loe.tshirt; coarse ROUTING estimate only",
+        "  provisional: true  # always true — never the committed plan-body LoE",
+        "route: dispatch  # dispatch | spec-dispatch | shape | plan | roadmap | pm-decision | goal-setting",
+        "detents: []  # boundary detents crossed while sizing (e.g. appetite_exceeded); [] if none",
+        "fork: null  # cut_to_fit | raise_appetite | null — set ONLY on genuine appetite/estimate divergence; never auto-resolved",
+        "xl_exit: null  # split | shape | roadmap | accept_multi_session | fan_out | null — the PM's pick at a pm-decision route; null means NOT YET CHOSEN, never 'accepted'",
+        "status: draft  # draft | sized | routed | shipped | declined | superseded",
+        "premise:",
+        f"  provenance: {premise or 'unrecorded'}  # executed | read | not-applicable | unrecorded — how the premise was verified; ADVISORY, never blocks a route",
+        evidence,
+        f"deliverable_id: {_yaml_dq(deliverable_id) if deliverable_id else 'null'}  # durable spine join key — a --deliverable-id join works on a new record or one whose deliverable_id is empty or equal, never a re-key; never hand-edit it",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _scaffold_missing(
     root: Path,
     target: Path,
@@ -1610,24 +1659,14 @@ def _scaffold_missing(
     premise_evidence: Optional[str],
     deliverable_id: Optional[str] = None,
 ) -> None:
-    """Create the sizing-object `--write` points at, via doc-new's own scaffold."""
-    import importlib.util
-
+    """Create the sizing-object `--write` points at, in-engine (no doc-new exec-load)."""
     intent = (decision.get("intent") or "").strip()
     if not intent:
         raise SizingAssembleError(
             f"sizing-object not found on disk: {target.name}; pass --intent to scaffold it"
         )
-    doc_new = root / "coordinator" / "bin" / "coordinator-doc-new.py"
-    if not doc_new.is_file():
-        doc_new = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-doc-new.py"
-    spec = importlib.util.spec_from_file_location("coordinator_doc_new_for_sizing_write", doc_new)
-    mod = importlib.util.module_from_spec(spec)
-    from coordinator_core.bin_lib_binding import exec_module_bin_bound
-
-    exec_module_bin_bound(spec.loader, mod, str(doc_new.parent))
     recorded = premise_provenance not in (None, "unrecorded")
-    text = mod._scaffold_sizing(
+    text = scaffold_sizing_text(
         title=intent,
         deliverable_id=deliverable_id,
         premise=premise_provenance if recorded else None,

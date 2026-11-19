@@ -264,6 +264,24 @@ def test_committer_variants_share_one_weighing_of_the_runs_own_rules(tmp_path: P
     assert heads == [run]
 
 
+def test_withheld_clean_without_a_prefetch_walks_the_declared_withheld_union_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.ops.ceremony import commit_companion
+
+    _repo(tmp_path)
+    halted, committing = _halted_runs(tmp_path)
+    _write(tmp_path / "c.py", BASE_TEXT)  # the third run's withheld path is clean again
+    walked: list = []
+    real = commit_companion.own_left_behind
+    monkeypatch.setattr(
+        commit_companion, "own_left_behind",
+        lambda root, held, sid, spec, *a, **k: (walked.append(tuple(held[sid])), real(root, held, sid, spec, *a, **k))[1],
+    )
+    with hr.blob_scope(tmp_path):
+        verdicts = [hr.release_reason(tmp_path, run, committing, None) for run in halted]
+    assert verdicts == [None, None, hr.RELEASE_WITHHELD_CLEAN]
+    assert walked == [PATHS]
+
+
 def test_sibling_claim_pass_over_halted_runs_walks_the_index_once_and_spawns_no_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import run as git_run
 

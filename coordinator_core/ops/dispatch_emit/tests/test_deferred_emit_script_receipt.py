@@ -132,7 +132,7 @@ def test_a_wrong_but_script_shaped_relay_path_is_skipped_when_it_has_no_receipt(
 
 
 def test_a_windows_style_relay_path_with_doubled_backslashes_is_normalised_and_verified() -> None:
-    win = "E:/claude/scratch/warp/ask-r1.workflow.mjs"  # abs-path-ok: carve-out=test-input-data
+    win = "E:/claude/scratch/warp/ask-r1.workflow.mjs"  # abs-path-ok: synthetic fixture path, never opened
     verdict, asked = _verify({"path": win.replace("/", "\\\\"), "run_id": "ask-r1"}, {win: [_SHA, _SHA]})
     assert verdict == {"path": win}
     assert asked == [win]

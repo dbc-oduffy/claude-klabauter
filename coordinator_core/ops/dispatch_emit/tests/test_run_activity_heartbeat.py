@@ -139,7 +139,7 @@ def test_a_second_ask_stage_call_40_min_into_plan_phase_advances_last_activity(t
 
     d = _minted(tmp_path, FORTY_MIN_AGO)
     monkeypatch.setattr(ask_stage, "main_worktree_root", lambda p: p)
-    monkeypatch.setattr(ask_stage, "_consume_park_marker", lambda *a, **k: (_ for _ in ()).throw(_Reached()))
+    monkeypatch.setattr(ask_stage, "_escaping_write_refusal", lambda *a, **k: (_ for _ in ()).throw(_Reached()))
     with pytest.raises(_Reached):
         ask_stage._run_ask_stage({"run_id": RUN, "writes": []}, tmp_path)
     data = _read(d)
@@ -153,7 +153,7 @@ def test_an_ask_stage_call_inside_the_throttle_writes_nothing(tmp_path: Path, mo
     d = _minted(tmp_path, young)
     before = (d / RUN_STAGE_FILE).read_bytes()
     monkeypatch.setattr(ask_stage, "main_worktree_root", lambda p: p)
-    monkeypatch.setattr(ask_stage, "_consume_park_marker", lambda *a, **k: (_ for _ in ()).throw(_Reached()))
+    monkeypatch.setattr(ask_stage, "_escaping_write_refusal", lambda *a, **k: (_ for _ in ()).throw(_Reached()))
     with pytest.raises(_Reached):
         ask_stage._run_ask_stage({"run_id": RUN, "writes": []}, tmp_path)
     assert (d / RUN_STAGE_FILE).read_bytes() == before

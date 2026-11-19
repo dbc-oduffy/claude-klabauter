@@ -48,7 +48,7 @@ def fake_fs(monkeypatch):
 
 
 def _payload(cmd, cwd, tool="Bash"):
-    return {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": cwd, "env": {}}
+    return {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": cwd, "env": {}, "agent_id": "sub-1"}
 
 
 def test_incident_command_is_denied(fake_fs):

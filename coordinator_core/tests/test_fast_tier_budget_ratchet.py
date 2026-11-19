@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEDGER = _REPO / "state" / "test-tiers" / "fast-tier-ledger.json"
+sys.path.insert(0, str(_REPO / "coordinator" / "bin"))
 _spec = importlib.util.spec_from_file_location(
     "fast_tier_budget", _REPO / "coordinator" / "bin" / "fast-tier-budget.py"
 )

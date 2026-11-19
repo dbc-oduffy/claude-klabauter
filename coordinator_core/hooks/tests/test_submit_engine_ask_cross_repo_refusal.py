@@ -195,7 +195,8 @@ def test_a_mint_makes_the_sessions_next_nag_name_the_fire_not_a_submit(repos, mo
         text = warp_fire.nag_text("sess-mint", host=host)
         assert "workflow.fire" in text and "do not call engine_ask.submit again" in text
         assert warp_fire.fire_command(host=host) not in text
-    assert warp_fire.nag_text("sess-mint") == "[engine-ask nag #3] call `" + warp_fire.fire_command() + "`, once."
+    assert warp_fire.nag_text("sess-mint") == ""
+    assert warp_fire.nag_text("sess-mint", repeat=True) == "[engine-ask nag #4] call `" + warp_fire.fire_command() + "`, once."
 
 
 def test_another_sessions_nag_and_a_stale_mint_still_name_the_submit(repos, monkeypatch, tmp_path):
