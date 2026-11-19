@@ -213,8 +213,8 @@ def test_replay_safe_entrypoint_expiry_goes_cold_once(stuck_warm, capsys: pytest
     response = client.try_warm_dispatch(_door_msg("brief", "--repo", "x", entrypoint="consolidate-assemble"))
     assert response is None
     assert len(stuck_warm.written) == 1
-    assert client._last_cold_bucket == client.COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
-    assert "re-running cold once" not in capsys.readouterr().err
+    assert client._last_cold_bucket == client.COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY
+    assert "consolidate-assemble brief" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

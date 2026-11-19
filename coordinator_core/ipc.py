@@ -2337,7 +2337,7 @@ class _EscapedBaseException(Exception):
         self.wrapped = wrapped
 
 
-def _run_handler_absorbing_base(handler, params, repo_root) -> Any:
+def _run_handler_absorbing_base(handler, params, repo_root):
     """Call a sync op handler, re-raising a bare BaseException as a carrier.
 
     ``asyncio`` is imported in-function, not at module scope: this module is held
@@ -2358,46 +2358,6 @@ def _run_handler_absorbing_base(handler, params, repo_root) -> Any:
         raise _EscapedBaseException(exc) from exc
     finally:
         charge_op_cpu_secs(time.thread_time() - cpu_start)
-        from coordinator_core import dispatch_abandon
-
-        dispatch_abandon.handler_finished()
-
-
-def _recycle_on_abandoned_threads(method: str, abandoned_event: Any) -> None:
-    """Count an abandoned MUTATING sync handler thread and recycle the warm server at the
-    threshold. Warm-served requests only: a cold process has no server to recycle. Never raises."""
-    try:
-        from coordinator_core.session.core import in_warm_served_request  # noqa: PLC0415 - lazy, import budget
-
-        if not in_warm_served_request():
-            return
-        from coordinator_core.warm.client import _op_may_mutate  # noqa: PLC0415 - cycle
-
-        if not _op_may_mutate(method):
-            return
-        from coordinator_core import dispatch_abandon  # noqa: PLC0415
-
-        count = dispatch_abandon.note_abandoned_mutating(abandoned_event)
-        if count is None:
-            return
-        from coordinator_core.warm import hang_restart  # noqa: PLC0415
-
-        if count < hang_restart.ABANDONED_MUTATING_RECYCLE_THRESHOLD:
-            return
-        import os  # noqa: PLC0415
-        import sys  # noqa: PLC0415
-
-        server = sys.modules.get("coordinator_core.warm.server")
-        worker_stall_dir = getattr(server, "_WORKER_STALL_DIR", None)
-        if worker_stall_dir is not None:
-            svc_dir, server_pid = worker_stall_dir.parent, os.getppid()
-        else:
-            from coordinator_core.warm import breadcrumb  # noqa: PLC0415
-
-            svc_dir, server_pid = breadcrumb.svc_dir(), os.getpid()
-        hang_restart.maybe_restart_on_abandoned(count, svc_dir=svc_dir, server_pid=server_pid)
-    except Exception:  # noqa: BLE001 -- counting an abandonment must never turn a timeout into a crash
-        _log().exception("coordinator_core.ipc: abandoned-thread recycle check failed for op %r", method)
 
 
 class LateCompletion:
@@ -2787,11 +2747,8 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     _abandoned = threading.Event()
     _abandoned_token = dispatch_abandon.ACTIVE.set(_abandoned)
 
-    def _abandon(thread: bool = False) -> None:
-        """Set the abandon Event and free any ref lock the abandoned handler still holds.
-
-        `thread`: a sync handler thread outlives this abandonment; a mutating one counts toward
-        the warm engine's self-recycle."""
+    def _abandon() -> None:
+        """Set the abandon Event and free any ref lock the abandoned handler still holds."""
         _abandoned.set()
         try:
             from coordinator_core.git import ref_lock
@@ -2799,8 +2756,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             ref_lock.release_abandoned(_abandoned)
         except Exception:  # noqa: BLE001 -- releasing a lock must never turn a timeout into a crash
             _log().exception("coordinator_core.ipc: ref-lock release failed for op %r", method)
-        if thread:
-            _recycle_on_abandoned_threads(method, _abandoned)
 
     # A cold (IN_PROCESS) mutating sync op that outlives the backstop is awaited, not
     # abandoned (see the sync branch), so no deadline binds: remaining() reads None
@@ -2865,7 +2820,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
                 )
                 if not _await_on_breach:
-                    _abandon(thread=True)
+                    _abandon()
                     if _late is not None:
                         _late.mark_timed_out(id_)
                     return _timeout_error_envelope(method, op_timeout, id_)
@@ -2889,7 +2844,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     if _fut.done():
                         # The handler itself raised TimeoutError; that is its error, not the ceiling.
                         raise
-                    _abandon(thread=True)
+                    _abandon()
                     _attempts.append(_cold_attempt("await_ceiling", _t1, _cpu1, "hung"))
                     _log().error(
                         "coordinator_core.ipc: op %r hung past ceiling %ss; attempts %s",
@@ -3078,7 +3033,6 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
             WARM_DISPATCH_INDETERMINATE,
             _OP_TIMEOUT_INDETERMINATE_MESSAGE,
             _op_may_mutate,
-            stall_dir_named,
         )
     except Exception:  # pragma: no cover - defensive, see negative-spec
         return {
@@ -3104,7 +3058,6 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
                 "warm dispatch indeterminate", "cold-run dispatch indeterminate", 1
             ).replace("inside the warm engine", "in this cold (in-process) run", 1)
         )
-        stall_dir = stall_dir_named()
         return {
             "jsonrpc": "2.0",
             "id": id_,
@@ -3114,12 +3067,10 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
                     f"{lead} "
                     f"(op {method!r} ran {'warm' if warm else 'cold'}, timed out after "
                     f"{op_timeout}s and is hung; its thread is "
-                    f"abandoned, not stopped -- reconcile before any retry; "
-                    f"stall_dir={stall_dir})"
+                    f"abandoned, not stopped -- reconcile before any retry)"
                 ),
                 "data": {
                     "retry_safe": False,
-                    "stall_dir": stall_dir,
                     "diagnosis": {
                         "case": "no_reply",
                         "op": method,

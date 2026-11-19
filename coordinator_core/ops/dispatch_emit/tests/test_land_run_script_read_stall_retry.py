@@ -59,7 +59,7 @@ def _landing(stalls_before_script_read, later_stall: float = 0.0):
             clock.now += STALL
         land_deadline.check("land_run.script_read")
         clock.now += later_stall
-        land_deadline.check("land_run.work")
+        land_deadline.check("land_run.integrity")
         return {"committed": True, "sha": "abc"}
 
     return attempt
@@ -82,7 +82,7 @@ def test_a_repeated_script_read_stall_halts_after_one_retry(run) -> None:
 def test_a_halt_on_a_later_leg_is_not_retried(run) -> None:
     reply = run(_landing(0, later_stall=STALL))
     assert reply["refused"] == land_deadline.REFUSED
-    assert reply["leg"] == "land_run.work"
+    assert reply["leg"] == "land_run.integrity"
     assert len(run.calls) == 1
 
 

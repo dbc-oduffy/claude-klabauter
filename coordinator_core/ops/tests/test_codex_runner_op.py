@@ -101,7 +101,7 @@ def test_fixed_mode_roster_provider_comes_from_actual_backend(tmp_path: Path, mo
     request = contract.RunRequest(mode=mode, repo_root=str(tmp_path), artifact='a.md', provider=provider)
     (tmp_path / 'request.json').write_text(json.dumps(request.to_dict()), encoding='utf-8')
     registrations = []
-    monkeypatch.setattr(roster, 'write_record', lambda *args, **kwargs: registrations.append({'provider': args[5] if len(args) > 5 else 'codex'}))
+    monkeypatch.setattr(roster, 'write_record', lambda *args, **kwargs: registrations.append(kwargs))
     monkeypatch.setattr(roster, 'remove_record', lambda pid: None)
     def backend(req, run_dir, on_spawn):
         on_spawn(123)

@@ -105,24 +105,3 @@ def test_scratchpad_repo_config_is_limited_to_identity_keys(world) -> None:
     (fx / ".git").mkdir(parents=True)
     assert _run(f"git -C {fx} config core.hooksPath {repo}", repo) is not None
     assert _run(f"git -C {fx} config alias.x '!sh'", repo) is not None
-
-
-def test_init_into_repo_scratch_after_a_tar_dash_c_export_is_allowed(world) -> None:
-    """`tar -x -C` is not a git re-point: an archive export then `git init` into scratch passes."""
-    _pad, repo, _ = world
-    (repo / "scratch").mkdir()
-    cmd = "mkdir -p scratch/x && git archive HEAD | tar -x -C scratch/x && git init -q scratch/x"
-    assert _run(cmd, repo) is None
-    assert _run("git -C scratch/x init", repo) is not None
-
-
-def test_init_after_a_leading_msys_cd_into_scratch_is_allowed(world, monkeypatch) -> None:
-    """On Windows a leading `cd /<drive>/...` is an absolute drive path, not a dropped context."""
-    _pad, repo, _ = world
-    (repo / "scratch" / "x").mkdir(parents=True)
-    if guard.os.name != "nt":
-        pytest.skip("msys drive spelling is a Windows-only form")
-    drive, rest = str(repo).replace("\\", "/").split(":", 1)
-    msys = f"/{drive.lower()}{rest}"
-    assert _run(f"cd {msys}/scratch/x && git init -q", repo) is None
-    assert _run(f"cd {msys} && git init -q", repo) is not None

@@ -385,10 +385,6 @@ def test_step1_longpaths_git_config_call_is_hardened(monkeypatch):
             captured["timeout"] = timeout
             return "", ""
 
-        def wait(self, timeout=None):
-            captured["timeout"] = timeout
-            return self.returncode
-
     def _fake_popen(cmd, **kwargs):
         captured["cmd"] = cmd
         captured.update(kwargs)

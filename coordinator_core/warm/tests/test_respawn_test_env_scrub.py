@@ -207,16 +207,9 @@ def test_zero_byte_close_after_a_flip_resends_a_compute_only_frame(monkeypatch):
     assert b'"_engine_token": "t2"' in second.written
 
 
-def test_zero_byte_close_after_a_flip_resends_a_mutation_to_the_successor(monkeypatch):
+def test_zero_byte_close_after_a_flip_never_resends_a_mutation(monkeypatch):
     r = _Retoken(monkeypatch, mutates=True)
     r.script = {"pipe-t1": [_FakeFh(b"", on_read=r.flip)], "pipe-t2": [_FakeFh(OK)]}
-    assert client._try_warm_dispatch_inner(dict(MSG))["result"] == 7
-    assert r.opens == ["pipe-t1", "pipe-t2"]
-
-
-def test_zero_byte_close_with_an_unmoved_token_never_resends_a_mutation(monkeypatch):
-    r = _Retoken(monkeypatch, mutates=True)
-    r.script = {"pipe-t1": [_FakeFh(b"")], "pipe-t2": [_FakeFh(OK)]}
     assert client._try_warm_dispatch_inner(dict(MSG)) is None
     assert r.opens == ["pipe-t1"]
 

@@ -28,7 +28,7 @@ def _run(tmp_path: Path, queue_dir: Path, **kw):
 
 def test_first_select_writes_a_mark_and_second_declines_by_mark(tmp_path):
     queue_dir = _outbox(tmp_path)
-    win_path = str(PureWindowsPath("C:/abs/x.md"))  # abs-path-ok: synthetic fixture path, never opened
+    win_path = str(PureWindowsPath("C:/abs/x.md"))  # abs-path-ok: key=paths.data_root
     _write_legacy(queue_dir / "bare.yaml", path=win_path)
     first = _run(tmp_path, queue_dir, write_handback_marks=True)
     assert first.entries == () and [d.row_id for d in first.declined] == ["bare"]

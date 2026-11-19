@@ -146,10 +146,7 @@ def test_main_default_args_when_no_argv(tmp_path, monkeypatch):
     assert rc == 0
     cmd = captured["cmd"]
     assert cmd[-7:] == [str(gen), "--project-root", ".", "--budget", "4000", "--profile", "balanced"]
-    got = dict(captured["kwargs"])
-    want = no_console_passthrough_kwargs()
-    assert type(got.pop("startupinfo", None)) is type(want.pop("startupinfo", None))
-    assert got == want
+    assert captured["kwargs"] == no_console_passthrough_kwargs()
 
 
 def test_main_passthrough_args_take_precedence(tmp_path, monkeypatch):

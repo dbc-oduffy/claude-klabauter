@@ -54,7 +54,7 @@ def _run(repo, stub_wm, agent="codex", extra=(), which=lambda n: f"/bin/{n}", **
 def test_clean_tree_checks_out_worker_branch_and_execs_argv(repo, stub_wm):
     rc, calls, env = _run(repo, stub_wm, extra=["-m", "x"])
     assert rc == 0
-    assert _g(repo, "rev-parse", "--abbrev-ref", "HEAD") == wm.worker_branch("codex", "Mac-Mini", "2026-11-07")
+    assert _g(repo, "rev-parse", "--abbrev-ref", "HEAD") == "work/mac-mini/worker-codex-2026-11-07"
     assert calls == [("/bin/codex", ["/bin/codex", *wm.WORKER_ARGV["codex"], "-m", "x"])]
     assert env[wm.WORKER_ENV] == "codex"
 
@@ -64,7 +64,7 @@ def test_existing_worker_branch_is_reused(repo, stub_wm):
     _g(repo, "checkout", "-q", "work/feature")
     rc, calls, _ = _run(repo, stub_wm)
     assert rc == 0 and calls
-    assert _g(repo, "rev-parse", "--abbrev-ref", "HEAD") == wm.worker_branch("codex", "Mac-Mini", "2026-11-07")
+    assert _g(repo, "rev-parse", "--abbrev-ref", "HEAD") == "work/mac-mini/worker-codex-2026-11-07"
 
 
 def test_dirty_tree_is_refused_and_branch_unchanged(repo, stub_wm):

@@ -2634,11 +2634,7 @@ _SCRATCH_CTX: "contextvars.ContextVar[Optional[tuple]]" = contextvars.ContextVar
     "_subagent_scratch_clone_ctx", default=None
 )
 _SCRATCH_VERB_RE = re.compile(r"\b(?:clone|merge|init|checkout-index)\b")
-#: `-C` re-points only as a git option: `tar -x -C scratch/x` in the same chain must not void the
-#: scratch context, or a `git archive | tar -C` export followed by `git init` into scratch is denied.
-_REPOINTS_GIT_RE = re.compile(
-    r"(?:^|[\s;&|(])cd\s|\bgit\s+(?:[^\s;&|]+\s+)*?-C\s|--git-dir|--work-tree"
-)
+_REPOINTS_GIT_RE = re.compile(r"(?:^|[\s;&|(])cd\s|\s-C\s|--git-dir|--work-tree")
 #: A single leading `cd <absolute dir> &&`, the one re-point whose landing directory is knowable.
 _LEADING_CD_RE = re.compile(r"""\s*cd\s+["']?([^\s"';&|]+)["']?\s*&&\s*""")
 #: `git clone` options that take a separate argument; `--template`/`--separate-git-dir`/
@@ -2654,9 +2650,7 @@ def _repo_root_of(start: Path) -> Optional[Path]:
     return None
 
 
-_REPOINT_TARGET_RE = re.compile(
-    r"""(?:^|[\s;&|(])(?:cd|git\s+(?:[^\s;&|]+\s+)*?-C)\s+("[^"]*"|'[^']*'|[^\s;&|)]+)"""
-)
+_REPOINT_TARGET_RE = re.compile(r"""(?:^|[\s;&|(])(?:cd|git\s+-C|-C)\s+("[^"]*"|'[^']*'|[^\s;&|)]+)""")
 _REPOINT_OTHER_RE = re.compile(r"--git-dir|--work-tree")
 
 
@@ -2670,7 +2664,7 @@ def _same_repo_repoint(cmd: str, here: Path, root: Path) -> Optional[Path]:
         target = m.group(1).strip("\"'").replace("\\", "/")
         if not target or target.startswith("-") or any(c in target for c in "$`~*?"):
             return None
-        path = Path(_msys_to_drive(target, os.name == "nt"))
+        path = Path(target)
         try:
             landed.add((path if path.is_absolute() else here / path).resolve())
         except OSError:
@@ -2690,10 +2684,9 @@ def _scratch_ctx_for(cmd: str, cwd: Optional[str]) -> Optional[tuple]:
     if _REPOINTS_GIT_RE.search(cmd):
         lead = _LEADING_CD_RE.match(cmd)
         rest = cmd[lead.end():] if lead else ""
-        target = _msys_to_drive(lead.group(1), os.name == "nt") if lead else ""
-        if not lead or _REPOINTS_GIT_RE.search(rest) or not os.path.isabs(target):
+        if not lead or _REPOINTS_GIT_RE.search(rest) or not os.path.isabs(lead.group(1)):
             return None
-        cwd = target
+        cwd = lead.group(1)
     here = Path(cwd).resolve()
     root = _repo_root_of(here)
     if root is None:

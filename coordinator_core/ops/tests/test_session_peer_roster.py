@@ -71,7 +71,7 @@ def test_row_shape(monkeypatch: pytest.MonkeyPatch) -> None:
         "pid",
     }
     assert row["kind"] == "claude"
-    assert row["pid"] == 1
+    assert row["pid"] is None
     assert row["is_self"] is True
     assert re.fullmatch(r"claude-klabauter-57 \[[0-9a-f]{6,12}\]", row["address"])
     assert row["self_determination"] == "resolved"

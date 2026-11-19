@@ -27,7 +27,7 @@ def test_s_arm_stages_resume_plan_and_authors_only_without_one() -> None:
     script = _compose()
     start = script.index("_gate.arm === 's') {\n    if (_resumeLedger)")
     s_arm = script[start:script.index("_gate.arm === 'm_plus'", start)]
-    assert "else if (_gate.resume_plan) {" in s_arm and "{ _planRel = _gate.resume_plan; }" in s_arm
+    assert "if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {" in s_arm
     assert s_arm.index("_gate.resume_plan") < s_arm.index("phase('plan')") < s_arm.index("label: 'plan'")
     # The plan author (which also runs the prep gate) and its capped repair are the only agents.
     assert s_arm.count("agent(") == 2
@@ -47,7 +47,7 @@ def test_resume_rows_ride_the_gate_into_the_folded_stage_calls() -> None:
     assert "resume_rows: _scouted.resume_rows ?? null" in script
     spread = "...(_gate.resume_plan && _gate.resume_rows ? { only_rows: _gate.resume_rows } : {})"
     assert script.count(spread) >= 1
-    rest = script.replace(spread, "").replace("{ only_rows: _g.resume_rows }", "").replace("resume_rows", "").replace("' with only_rows added,", "").replace("' with only_rows set to the ids of exactly the rows you added'", "").replace("and add `only_rows` set to its  when present", "")
+    rest = script.replace(spread, "").replace("resume_rows", "").replace("' with only_rows added,", "").replace("' with only_rows set to the ids of exactly the rows you added'", "").replace("and add `only_rows` set to its  when present", "")
     assert "only_rows" not in rest
 
 
