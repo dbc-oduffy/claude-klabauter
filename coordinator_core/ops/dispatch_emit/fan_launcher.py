@@ -133,6 +133,10 @@ const BATCH_SCHEMA = {
 };
 const EMITTED = __EMITTED__;
 const ABANDON_IDS = [];
+// Per-child progress by run id: the last leg entered (emit, start), whether a start returned, and the throw that ended a child.
+const LEGS = {};
+const STARTED = {};
+const THREW = {};
 const TWIN_PREFIX = __TWIN_PREFIX__;
 const TWIN_MIDDLE = __TWIN_MIDDLE__;
 const TWIN_SUFFIX = __TWIN_SUFFIX__;
@@ -275,6 +279,7 @@ async function _startLoopRun(child, firstPath, state) {
     try {
       result = await workflow({ scriptPath: scriptPath });
       state.started = true;
+      STARTED[child.run_id] = true;
     } catch (e) {
       return { run_id: child.run_id, status: 'failed', error: String(e && e.message ? e.message : e) };
     }
@@ -379,11 +384,13 @@ function _abandonId(runId, chainedFrom) {
 }
 
 async function _runChild(child, emitted) {
+  LEGS[child.run_id] = 'emit';
   const refusal = _emitRefusal(child, emitted, false);
   if (refusal !== null) {
     _abandonRedirect(child, emitted);
     return { run_id: child.run_id, status: 'emit_refused', error: refusal };
   }
+  LEGS[child.run_id] = 'start';
   const first = await _startLoop(child, _normEmitPath(emitted.path));
   if (first.status !== 'ok') _abandonRedirect(child, emitted);
   const handoff = first.status === 'ok' ? _handoffOf(first.result) : null;
@@ -391,17 +398,40 @@ async function _runChild(child, emitted) {
   return handoff === null ? firstOut : _chainHop(child, handoff, _pathRunId(emitted.path));
 }
 
+// The throw is recorded and re-raised: parallel() still resolves the child to null, so _settleRuns reads the cause from THREW.
+async function _guardedChild(child, emitted) {
+  try {
+    return await _runChild(child, emitted);
+  } catch (e) {
+    THREW[child.run_id] = String(e && e.message ? e.message : e);
+    throw e;
+  }
+}
+
 async function _startAll() {
-  return parallel(CHILDREN.map((child, i) => () => _runChild(child, EMITTED[i])));
+  return parallel(CHILDREN.map((child, i) => () => _guardedChild(child, EMITTED[i])));
+}
+
+// A child with no entry, or one whose entry carries no status, whose start never returned is not_started, naming the leg it last entered; a child whose start returned and then threw stays failed.
+function _settleRuns(settled) {
+  return CHILDREN.map((child, i) => {
+    const s = settled[i];
+    if (s !== null && s !== undefined && typeof s === 'object' && typeof s.status === 'string') return s;
+    if (STARTED[child.run_id]) {
+      const cause = Object.prototype.hasOwnProperty.call(THREW, child.run_id) ? ': ' + THREW[child.run_id] : '';
+      return { run_id: child.run_id, status: 'failed', error: 'child threw' + cause };
+    }
+    const leg = LEGS[child.run_id] || 'emit';
+    const how = Object.prototype.hasOwnProperty.call(THREW, child.run_id)
+      ? 'threw before its start returned: ' + THREW[child.run_id]
+      : 'settled without a start';
+    return { run_id: child.run_id, status: 'not_started', reason: leg + ' leg ' + how };
+  });
 }
 
 const _settled = await _startAll();
 await _abandonAll();
-const runs = CHILDREN.map((child, i) => (
-  _settled[i] === null || _settled[i] === undefined
-    ? { run_id: child.run_id, status: 'failed', error: 'child threw' }
-    : _settled[i]
-));
+const runs = _settleRuns(_settled);
 return { parent_id: PARENT_ID, runs: runs };
 """
 
@@ -473,7 +503,8 @@ def write_launcher(
     script, no args; (3) stage hand-back, on a ``STAGE_PENDING_KEY`` return with a 64-hex
     ``handle.sha256`` the launcher starts the staged twin at ``staged_twin_rel`` the same way, with no
     agent leg between the two rounds. Returns
-    ``{parent_id, runs: [{run_id, status, result|error}]}``. An emission receipt is recorded.
+    ``{parent_id, runs: [{run_id, status, result|error|reason}]}``; a child whose start never
+    returned is ``not_started`` with a ``reason`` naming its last leg. An emission receipt is recorded.
 
     Raises ``ValueError`` for no children, an ``emitted`` that is not one reply per child, a
     duplicate run_id or an unsafe ``parent_id``, and

@@ -251,6 +251,8 @@ def _record_kept(
         returns=persisted,
         finished=[r for r in persisted if r not in owning and r not in (halted.get("stopped_rows") or ())],
     )
+    # A row whose own return is not DONE never finished: its bytes ride post_checkpoint, not a kept chunk.
+    chunks = {c: e for c, e in chunks.items() if c not in returns or row_returns.is_done(returns[c])}
     gate = kept_work.plan_gate(halted, root)
     # A path owned by a chunk that was not kept (a peer co-declares it) is still recorded under
     # post_checkpoint, so the terminal landing has this run's own blob for it.

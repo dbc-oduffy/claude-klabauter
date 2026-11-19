@@ -41,8 +41,12 @@ def coordinator_temp_root(repo_root: Path | str) -> Path:
 
 
 def fleet_temp_root() -> Path:
-    """``<gettempdir()>/coordinator/_fleet/``: host-scoped, never a purge root."""
-    return _coordinator_root() / FLEET_DIRNAME
+    """``<gettempdir()>/coordinator/_fleet/``: host-scoped, never a purge root.
+
+    Inside a managed session dir (Temp redirected under ``coordinator/_fleet/run-temp/``) it is
+    the enclosing real fleet root, so no nested ``coordinator/_fleet`` is created in the session dir.
+    """
+    return _managed_run_dir_fleet_root() or _coordinator_root() / FLEET_DIRNAME
 
 
 def pytest_basetemp_root(repo_root: Path | str) -> Path:
@@ -160,11 +164,19 @@ def _reap_dead_owner_dirs(run_temp: Path) -> None:
             pass
 
 
+def _managed_run_dir_fleet_root() -> Path | None:
+    """The ``coordinator/_fleet`` enclosing ``gettempdir()`` when it is under ``run-temp/``, else None."""
+    parts = Path(tempfile.gettempdir()).parts
+    want = (_ROOT_DIRNAME, FLEET_DIRNAME, RUN_TEMP_DIRNAME)
+    for i in range(len(parts) - 2):
+        if parts[i : i + 3] == want:
+            return Path(*parts[: i + 2])
+    return None
+
+
 def _temp_is_managed_run_dir() -> bool:
     """True when ``gettempdir()`` is already a dir under ``coordinator/_fleet/run-temp/``."""
-    parts = _coordinator_root().parent.parts
-    want = (_ROOT_DIRNAME, FLEET_DIRNAME, RUN_TEMP_DIRNAME)
-    return any(parts[i : i + 3] == want for i in range(len(parts) - 2))
+    return _managed_run_dir_fleet_root() is not None
 
 
 def _create(

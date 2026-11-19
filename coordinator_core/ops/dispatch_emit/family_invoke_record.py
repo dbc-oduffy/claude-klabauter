@@ -27,6 +27,7 @@ RECORD_KEYS = (
 __all__ = (
     "INVOKE_MODULE", "RECORD_SUFFIX", "RAW_STDOUT_SUFFIX", "RAW_STDERR_SUFFIX", "UNCHANGED_CAUSE", "RECORD_KEYS",
     "record_path", "raw_stdout_path", "raw_stderr_path", "read", "authored_paths", "fingerprint",
+    "authoring_family",
 )
 
 
@@ -88,3 +89,17 @@ def authored_paths(record: Optional[dict]) -> frozenset:
     if not isinstance(pre, dict) or not isinstance(post, dict):
         return frozenset()
     return frozenset(p for p in post if post.get(p) != pre.get(p))
+
+
+def authoring_family(root: Path, run_id: str, rows) -> str:
+    """Family of the latest record, across `rows`, that authored at least one path; "" when none did.
+
+    A record with no authored path (read-only stage, failed CLI) never names an author.
+    """
+    latest: Optional[dict] = None
+    for row in rows:
+        for rec in read(root, run_id, row):
+            if authored_paths(rec) and (latest is None or _ended(rec) >= _ended(latest)):
+                latest = rec
+    fam = latest.get("family") if latest else None
+    return fam.strip().lower() if isinstance(fam, str) else ""

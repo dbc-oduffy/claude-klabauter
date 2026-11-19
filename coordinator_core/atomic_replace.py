@@ -38,6 +38,7 @@ Negative-spec (RAG-bait):
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -168,12 +169,24 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _in_submit_hook_budget() -> bool:
+    """Whether the submit hook's read budget is open on this context (a directory scan is bulk IO there).
+
+    Read through ``sys.modules`` so this leaf imports no hook; the hook is loaded whenever its budget is bound."""
+    hook = sys.modules.get("coordinator_core.hooks.submit_engine_ask")
+    var = getattr(hook, "_BUDGET_VAR", None)
+    return var is not None and var.get() is not None
+
+
 def _sweep_dead_temps(out_dir: Path, name: str) -> None:
     """Unlink ``<_TEMP_PREFIX><name>.<pid>.<rand>`` temps whose writer pid is dead (a hard-killed writer).
 
-    Scans a directory at most once per ``_SWEEP_INTERVAL_SECS`` per target. The remainder after the
+    Scans a directory at most once per ``_SWEEP_INTERVAL_SECS`` per target and never inside the submit
+    hook's budget (the next write outside it sweeps). The remainder after the
     target name must be exactly ``<digits>.<one dot-free token>``, so a dotted sibling target's temp
     (``out.txt.123`` as a target name) and live-pid temps are spared."""
+    if _in_submit_hook_budget():
+        return
     key = (str(out_dir), name)
     now = time.monotonic()
     last = _last_sweep.get(key)
@@ -232,14 +245,15 @@ def atomic_write_bytes(
     prior_mode = None
     if preserve_mode and target.is_file():
         prior_mode = os.stat(target).st_mode
-    fd, tmp_name = tempfile.mkstemp(prefix=".atomic-write.", dir=str(out_dir))
+    _sweep_dead_temps(out_dir, target.name)
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{_TEMP_PREFIX}{target.name}.{os.getpid()}.", dir=str(out_dir))
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         if prior_mode is not None:
             os.chmod(tmp_name, prior_mode)
         _replace_with_retry(tmp_name, str(target))
-    except Exception:
+    except BaseException:
         try:
             os.remove(tmp_name)
         except OSError:

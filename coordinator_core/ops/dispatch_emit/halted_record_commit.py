@@ -1221,6 +1221,7 @@ def _land(
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
         _stamp_ignored_excluded(worktree_root / record_dir_rel, ignored_excluded)
         _record_withheld_prints(worktree_root, record_dir_rel, withheld, paths)
+        _record_withheld_own_delta(worktree_root, record_dir_rel, withheld, paths, run_id)
     kept_reply = _record_kept(
         worktree_root, record_dir_rel, owner, eviction.kept_view(withheld) if eviction else withheld,
         halted, paths, params.get(CONSUMED_RETURNS_PARAM),
@@ -1376,3 +1377,75 @@ def _land(
     if tfind:
         extra["advisory"] = landing_targeted_tests.advisory_entries(tfind)
     return {**reply, "paths": paths + deleted, **extra, **base}  # paths: everything the commit names
+
+
+def _own_delta_image(root: Path, common_dir: Path, head, path: str, pre_sha: Optional[str]) -> Optional[bytes]:
+    """HEAD's LF bytes of `path` plus only the run's pre->post change; None when the run's pre blob is
+    unreadable, an image has no LF form, the worktree holds no file, or a peer hunk collides."""
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.own_delta_merge import apply_own_delta
+    from coordinator_core.ops.dispatch_emit.grind_landing_select import _image_form
+
+    pre_raw = b""
+    if pre_sha is not None:
+        got = read_object(common_dir, pre_sha)
+        if got is None or got[0] != "blob":
+            return None
+        pre_raw = got[1]
+    try:
+        post_raw = (root / path).read_bytes()
+    except OSError:
+        return None
+    head_raw = head.head_bytes(path) if head.entry(path) is not None else b""
+    if head_raw is None:
+        return None
+    pre, post, tip = (_image_form(root, path, raw, head_raw) for raw in (pre_raw, post_raw, head_raw))
+    if pre is None or post is None or tip is None:
+        return None
+    return post if pre == tip else apply_own_delta(pre, post, tip)
+
+
+def _record_withheld_own_delta(root: Path, record_dir_rel: str, withheld: dict, paths: list, run_id: str) -> None:
+    """Write ``WITHHELD_OWN_DELTA_FILE`` beside the marker: per withheld path the run baselined, the
+    persisted blob of HEAD's LF bytes plus only this run's pre->post change (``own_delta_merge``), so a
+    hand land commits the run's hunks and never the whole-image blob a peer's hunks or CRLF ride in.
+    A path with no landable delta is named under ``unlandable``. The file joins ``paths`` (in place)."""
+    import json
+    from pathlib import PurePosixPath
+
+    from coordinator_core.atomic_replace import atomic_write_bytes
+    from coordinator_core.authoring_leaks import HeadView
+    from coordinator_core.git import kept_pin
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import write_object
+    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution
+    from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
+
+    baseline = halted_hunk_attribution._baseline(root, run_id) or {}
+    wanted = [p for p in sorted(withheld) if isinstance(p, str) and p in baseline]
+    if not wanted:
+        return
+    common = resolve_git_common_dir(root)
+    head = HeadView(root, wanted)
+    deltas: dict = {}
+    unlandable: list = []
+    for p in wanted:
+        try:
+            image = _own_delta_image(root, common, head, p, baseline[p])
+            if image is None:
+                unlandable.append(p)
+            elif head.entry(p) is None or image != head.head_bytes(p):
+                deltas[p] = {"blob": write_object(common, b"blob", image)}
+        except OSError:
+            unlandable.append(p)
+    if not deltas and not unlandable:
+        return
+    kept_pin.pin_kept(common, PurePosixPath(record_dir_rel).name, [d["blob"] for d in deltas.values()])
+    rel = f"{record_dir_rel}/{WITHHELD_OWN_DELTA_FILE}"
+    doc = {"paths": deltas, **({"unlandable": unlandable} if unlandable else {})}
+    try:
+        atomic_write_bytes(root / rel, (json.dumps(doc, indent=2) + "\n").encode("utf-8"))
+    except OSError:
+        return
+    if rel not in paths:
+        paths.append(rel)

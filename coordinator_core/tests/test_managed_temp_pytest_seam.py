@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.conftest import MANAGED_TEMP_AFTER_LAST_TEST, MANAGED_TEMP_LEFT_BY_PREFIX
 from coordinator_core.temp_layout import RUN_TEMP_DIRNAME
 
 pytest_plugins = ["pytester"]
@@ -21,6 +22,35 @@ def pytest_sessionstart(session):
 
 
 def pytest_sessionfinish(session, exitstatus):
+    managed_temp_session_finish(session, exitstatus)
+"""
+
+
+_ATTRIBUTING_CONFTEST = """
+import os
+import tempfile
+
+import pytest
+
+from coordinator_core.conftest import (
+    managed_temp_note_test,
+    managed_temp_session_finish,
+    managed_temp_session_start,
+)
+
+
+def pytest_sessionstart(session):
+    managed_temp_session_start(session)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item, nextitem):
+    managed_temp_note_test(item.session, item.nodeid)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if os.environ.get("SEAM_LEAK_AT_FINISH"):
+        os.mkdir(os.path.join(tempfile.gettempdir(), "leaked-after-last-test"))
     managed_temp_session_finish(session, exitstatus)
 """
 
@@ -90,3 +120,49 @@ def test_session_dir_is_removed_after_a_failing_session(pytester, monkeypatch):
     assert result.ret != 0
     probe = os.environ["SEAM_PROBE_DIR"]
     assert probe and not Path(probe).exists()
+
+
+def test_leak_is_attributed_to_the_test_that_left_it(pytester):
+    pytester.makeconftest(_ATTRIBUTING_CONFTEST)
+    pytester.makepyfile(
+        test_attr="""
+        import tempfile
+
+        def test_clean_first():
+            pass
+
+        def test_leaks():
+            tempfile.mkdtemp(prefix="leaked-attr-probe-")
+
+        def test_clean_last():
+            pass
+        """
+    )
+    result = _run(pytester)
+    result.assert_outcomes(passed=3)
+    assert result.ret != 0
+    lines = [ln for ln in result.stderr.str().splitlines() if ln.startswith(MANAGED_TEMP_LEFT_BY_PREFIX)]
+    assert len(lines) == 1
+    nodeid, _, entry = lines[0][len(MANAGED_TEMP_LEFT_BY_PREFIX):].partition(": ")
+    assert nodeid.endswith("test_attr.py::test_leaks")
+    assert entry.startswith("leaked-attr-probe-")
+
+
+def test_entry_appearing_after_the_last_test_is_charged_to_the_file(pytester, monkeypatch):
+    monkeypatch.setenv("SEAM_LEAK_AT_FINISH", "1")
+    pytester.makeconftest(_ATTRIBUTING_CONFTEST)
+    pytester.makepyfile(test_late="def test_ok():\n    pass\n")
+    result = _run(pytester)
+    result.assert_outcomes(passed=1)
+    assert result.ret != 0
+    err = result.stderr.str()
+    assert f"{MANAGED_TEMP_LEFT_BY_PREFIX}test_late.py{MANAGED_TEMP_AFTER_LAST_TEST}: leaked-after-last-test" in err
+    assert "test_late.py::test_ok: leaked-after-last-test" not in err
+
+
+def test_clean_attributing_session_prints_no_left_by_line(pytester):
+    pytester.makeconftest(_ATTRIBUTING_CONFTEST)
+    pytester.makepyfile(test_ok="def test_ok():\n    pass\n")
+    result = _run(pytester)
+    assert result.ret == 0
+    assert MANAGED_TEMP_LEFT_BY_PREFIX not in result.stderr.str()

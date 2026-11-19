@@ -238,6 +238,27 @@ def test_write_export_is_byte_identical_to_main(repo, monkeypatch, tmp_path):
     assert target.read_bytes() == (root / "m.txt").read_bytes() and text == target.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("sep", ["\\", "/"])
+def test_a_backslash_printed_red_id_is_red_not_passed_at_base(monkeypatch, sep):
+    printed = RED_AT_BASE.replace("/", sep)
+
+    def fake_run(sha, ids, cwd):
+        return "ok", 1, [f"FAILED {printed} - assert"], []
+
+    monkeypatch.setattr(rbm, "_run", fake_run)
+    result = rbm.measure("base", None, [RED_AT_BASE, GREEN], ".")
+    assert result["red"] == [RED_AT_BASE]
+    assert result["passed_at_base"] == [GREEN]
+
+
+def test_a_backslash_red_id_is_written_forward_slash(monkeypatch, tmp_path):
+    printed = RED_AT_BASE.replace("/", "\\")
+    monkeypatch.setattr(rbm, "_run", lambda sha, ids, cwd: ("ok", 1, [f"FAILED {printed} - assert"], []))
+    target = tmp_path / "m.txt"
+    rbm.write_export(rbm.measure("base", None, [RED_AT_BASE], "."), target)
+    assert target.read_text(encoding="utf-8").splitlines()[0] == f"FAILED {RED_AT_BASE}"
+
+
 def test_head_run_exit_one_keeps_the_export_ok(monkeypatch):
     def fake_run(sha, ids, cwd):
         if sha == "base":

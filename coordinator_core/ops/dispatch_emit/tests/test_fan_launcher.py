@@ -133,7 +133,7 @@ def test_every_start_passes_script_path_only(tmp_path: Path) -> None:
 def test_children_run_under_parallel_with_isolated_failure(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert "return parallel(CHILDREN.map(" in script
-    assert "_runChild(child, EMITTED[i])" in script
+    assert "_guardedChild(child, EMITTED[i])" in script
     assert "status: 'emit_refused'" in script  # a refused emit is that child's entry, never a throw
 
 
@@ -819,6 +819,68 @@ def test_start_all_starts_each_child_from_its_own_emitted_reply(tmp_path: Path) 
     assert statuses == ["ok", "ok"]
     assert calls == [f"{root}/scratch/warp/ask-r1.workflow.mjs", f"{root}/scratch/warp/ask-r2.workflow.mjs"]
     assert legs == []
+
+
+def _settle_under_node(tmp_path: Path, workflow_js: str, pre: str = "", ids=("ask-r1", "ask-r2"), settled_js: str | None = None) -> list:
+    """Run _startAll then _settleRuns under node; parallel() maps a thrown thunk to null as the harness does."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    _, script = _write(tmp_path, ids=ids)
+    body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
+    code = (
+        "const agent = async () => ({});\n"
+        f"const workflow = async (o) => {workflow_js};\n"
+        "const parallel = async (fns) => Promise.all(fns.map((f) => f().catch(() => null)));\n" + body
+        + f"\n{pre}\n"
+        + (f"console.log(JSON.stringify(_settleRuns({settled_js})));\n" if settled_js is not None
+           else "_startAll().then((s) => console.log(JSON.stringify(_settleRuns(s))));\n")
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+def test_a_child_that_threw_before_its_start_returned_is_not_started_with_its_leg_and_cause(tmp_path: Path) -> None:
+    # _runChild throwing settles the child to null under parallel(); only the recorded leg and cause can explain it.
+    _, script = _write(tmp_path / "s", ids=("ask-r1",))
+    assert "status: 'not_started'" in script
+    pre = (
+        "const _real = _runChild;\n"
+        "_runChild = async (child, emitted) => {\n"
+        "  if (child.run_id !== 'ask-r1') return _real(child, emitted);\n"
+        "  LEGS[child.run_id] = 'start';\n"
+        "  throw new Error('spawn failed');\n"
+        "};\n"
+    )
+    runs = _settle_under_node(tmp_path / "a", "({ done: true })", pre)
+    by_id = {r["run_id"]: r for r in runs}
+    assert by_id["ask-r1"] == {"run_id": "ask-r1", "status": "not_started", "reason": "start leg threw before its start returned: spawn failed"}
+    assert by_id["ask-r2"]["status"] == "ok"
+
+
+@pytest.mark.spawns_process
+def test_a_child_that_settled_to_null_without_a_start_is_not_started_naming_its_last_leg(tmp_path: Path) -> None:
+    # A child that settled before any start was entered is explained by the emit leg alone.
+    pre = "LEGS['ask-r2'] = 'start'; STARTED['ask-r2'] = true;"
+    runs = _settle_under_node(tmp_path, "({ done: true })", pre, settled_js="[null, undefined]")
+    first, second = runs
+    assert first == {"run_id": "ask-r1", "status": "not_started", "reason": "emit leg settled without a start"}
+    assert second == {"run_id": "ask-r2", "status": "failed", "error": "child threw"}  # a start that returned stays failed
+
+
+@pytest.mark.spawns_process
+def test_started_children_keep_ok_and_a_thrown_workflow_stays_failed_never_not_started(tmp_path: Path) -> None:
+    runs = _settle_under_node(tmp_path / "ok", "({ done: true })")
+    assert [r["status"] for r in runs] == ["ok", "ok"]
+    assert all("reason" not in r for r in runs)
+    runs = _settle_under_node(tmp_path / "boom", "(() => { throw new Error('boom'); })()")
+    assert [r["status"] for r in runs] == ["failed", "failed"]
 
 
 @pytest.mark.spawns_process

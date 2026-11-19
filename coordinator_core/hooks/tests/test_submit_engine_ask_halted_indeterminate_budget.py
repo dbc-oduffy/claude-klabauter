@@ -141,11 +141,30 @@ def _assert_answered(envelope: dict, elapsed: float, leg: str, *, names: tuple[s
 _RESUME_NAMES = (RUN_ID, "outran the hook budget")
 
 
-def _on_main_thread(real, stall: _Stall, match):
-    """`real`, except the hook's own (main) thread entering `match` blocks: the worker legs stay untouched."""
+_OVERRUN_STARTED = threading.Event()
+
+
+@pytest.fixture(autouse=True)
+def _overrun_marker(monkeypatch):
+    """Set once the overrun answer begins, so a stall armed on it never touches the worker's own legs."""
+    _OVERRUN_STARTED.clear()
+    real = mod._answer_overran
+
+    def marked(call):
+        _OVERRUN_STARTED.set()
+        return real(call)
+
+    monkeypatch.setattr(mod, "_answer_overran", marked)
+    yield
+    _OVERRUN_STARTED.clear()
+
+
+def _during_overrun(real, stall: _Stall, match):
+    """`real`, except a leg of the overrun answer entering `match` blocks, on whichever thread it runs
+    (the answer moves its legs onto daemon threads): the worker legs stay untouched."""
 
     def wrapper(*args, **kwargs):
-        if threading.current_thread() is threading.main_thread() and match(*args, **kwargs):
+        if _OVERRUN_STARTED.is_set() and match(*args, **kwargs):
             return stall.block()
         return real(*args, **kwargs)
 
@@ -243,22 +262,22 @@ def _overrun_by_recompose(mp, stalls):
 def _fail_open_append(mp, root, stall):
     from coordinator_core import atomic_append
 
-    mp.setattr(atomic_append, "append_line", _on_main_thread(atomic_append.append_line, stall, _named("door-fail-open.log")))
+    mp.setattr(atomic_append, "append_line", _during_overrun(atomic_append.append_line, stall, _named("door-fail-open.log")))
 
 
 def _fail_open_mkdir(mp, root, stall):
     state = settings_home() / "state"
-    mp.setattr(Path, "mkdir", _on_main_thread(Path.mkdir, stall, lambda path, *a, **k: Path(path) == state))
+    mp.setattr(Path, "mkdir", _during_overrun(Path.mkdir, stall, lambda path, *a, **k: Path(path) == state))
 
 
 def _refusal_log_mkdir(mp, root, stall):
     log_dir = root / mod.REFUSAL_LOG_REL
-    mp.setattr(Path, "mkdir", _on_main_thread(Path.mkdir, stall, lambda path, *a, **k: Path(path) == log_dir.parent))
+    mp.setattr(Path, "mkdir", _during_overrun(Path.mkdir, stall, lambda path, *a, **k: Path(path) == log_dir.parent))
 
 
 def _refusal_log_append(mp, root, stall):
     name = Path(mod.REFUSAL_LOG_REL).name
-    mp.setattr(Path, "open", _on_main_thread(Path.open, stall, lambda path, *a, **k: Path(path).name == name))
+    mp.setattr(Path, "open", _during_overrun(Path.open, stall, lambda path, *a, **k: Path(path).name == name))
 
 
 def _refusal_log_trim(mp, root, stall):
@@ -267,7 +286,7 @@ def _refusal_log_trim(mp, root, stall):
     log = root / mod.REFUSAL_LOG_REL
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_bytes(b'{"refusal": "old"}\n' * ((mod._REFUSAL_LOG_CAP_BYTES // 19) + 8))
-    mp.setattr(atomic_replace, "atomic_write_bytes", _on_main_thread(atomic_replace.atomic_write_bytes, stall, lambda *a, **k: True))
+    mp.setattr(atomic_replace, "atomic_write_bytes", _during_overrun(atomic_replace.atomic_write_bytes, stall, lambda *a, **k: True))
 
 
 _CALLER_LEGS = {
@@ -288,6 +307,40 @@ def test_stalled_caller_thread_leg_after_the_join_answers_inside_the_budget(leg,
     envelope, elapsed = _drive(root)
     assert stall.entered.is_set(), f"{leg}: the overrun answer never reached the leg"
     _assert_answered(envelope, elapsed, leg, names=_RESUME_NAMES)
+
+
+def test_stalled_reconcile_running_on_a_running_predecessor_answers_inside_the_budget(tmp_path, monkeypatch, stalls):
+    """Control: `_status_of` reconciles a `running` predecessor on the worker; the join bounds it."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
+    from coordinator_core.ops.dispatch_emit import sibling_hold
+
+    root = _repo(tmp_path, monkeypatch, ask_parent=True)
+    pred = "ask-20261118T135959-cccccc"
+    record = c.ParentRecord(
+        parent_id=PARENT_ID,
+        runs=(c.SiblingRun(pred, "a", status=c.STATUS_RUNNING), c.SiblingRun(RESERVED_ID, "b", after=(pred,), status=c.STATUS_AFTER)),
+    )
+    for rel, body in ((c.parent_record_rel(PARENT_ID), record.to_json()), (c.status_rel(pred), {"status": "running", "parent_id": PARENT_ID})):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(json.dumps(body), encoding="utf-8")
+    stall = stalls()
+    monkeypatch.setattr(sibling_hold, "reconcile_running", stall.block)
+    envelope, elapsed = _drive(root)
+    assert stall.entered.is_set(), "the refire never reached reconcile_running"
+    _assert_answered(envelope, elapsed, "sibling_hold.reconcile_running", names=_RESUME_NAMES + (pred, "has not landed"))
+
+
+def test_stalled_leg_cases_stay_under_the_process_time_bar(tmp_path, monkeypatch, stalls):
+    """AC4: the hook's own CPU across a stalled-leg answer stays under 500ms (DR-344)."""
+    root = _repo(tmp_path, monkeypatch)
+    _overrun_by_recompose(monkeypatch, stalls)
+    _refusal_log_append(monkeypatch, root, stalls())
+    started = time.process_time()
+    envelope, elapsed = _drive(root)
+    assert time.process_time() - started < 0.5
+    _assert_answered(envelope, elapsed, "process-time", names=_RESUME_NAMES)
 
 
 def test_overrun_refire_answers_a_named_refusal_with_every_caller_leg_healthy(tmp_path, monkeypatch, stalls):

@@ -1128,8 +1128,9 @@ def _resolve_sidecar_leg(
 
 DOCS_CHECKER_AGENT_TYPE = "coordinator:docs-checker"
 DOCS_CHECKER_RAG_CLAUSE = (
-    "example-retrieval-repo is installed: use it for every claim you check. If its tools are absent or "
-    "fail, reply verdict rag_down with ABORT: example-retrieval-repo cannot answer"
+    "example-retrieval-repo is installed: use it for every claim you check. If its tools are absent or a "
+    "structural call fails, reply verdict rag_down with ABORT: example-retrieval-repo cannot answer. A "
+    "semantic miss, partial_coverage or semantic timeout is not a failure: read the source and cite file:line"
 )
 
 

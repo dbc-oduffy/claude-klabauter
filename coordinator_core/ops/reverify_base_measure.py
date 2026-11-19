@@ -119,11 +119,19 @@ def _run(sha: str, ids: list[str], cwd: str,
     return str(result.get("export")), result.get("runner_exit"), lines, stderr_lines
 
 
+def _slashed(node: str) -> str:
+    """`node` with the path half (before the first `::`) forward-slashed. pytest prints the OS
+    separator, so on Windows a printed id never equals the forward-slash id it was asked for."""
+    path, sep, rest = node.partition("::")
+    return path.replace("\\", "/") + sep + rest
+
+
 def _red(lines: list[str]) -> set[str]:
-    return {hit.group(1) for hit in (_RED_LINE.match(ln.strip()) for ln in lines) if hit}
+    return {_slashed(hit.group(1)) for hit in (_RED_LINE.match(ln.strip()) for ln in lines) if hit}
 
 
 def _is_red(node: str, red: set[str]) -> bool:
+    node = _slashed(node)
     return any(r == node or r.startswith(node + "::") or r.startswith(node.rstrip("/") + "/") for r in red)
 
 

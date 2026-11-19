@@ -71,11 +71,15 @@ ALL_OWED_PREFIX = "Everything left is EM or operator work:"
 NEEDS_DOWNSTREAM_PREFIX = "Held rows need a row downstream of them:"
 
 EM_RULE_KEY = "em_rule"
+# Per-run record file mapping each withheld path to the blob of HEAD plus only the run's own LF change.
+WITHHELD_OWN_DELTA_FILE = "withheld-own-delta.json"
 # The one rule for when the EM may act after a halt; the halt next_action emits it verbatim (same text, no paraphrase).
 EM_ACTION_AFTER_HALT_RULE = (
     "The engine is an affordance, not a mandate: it earns use by being the pleasanter path, and hand work stays "
     "legitimate. After a halt, a refire or workflow.revise resumes the run with the work already done kept. "
-    "Landing this run's withheld paths by hand commit is also fine: a halted run holds nothing."
+    "Landing this run's withheld paths by hand commit is also fine: a halted run holds nothing. "
+    f"Land a withheld path's `blob` from the run record's {WITHHELD_OWN_DELTA_FILE} (HEAD plus only this run's "
+    "LF change); the raw worktree or kept.json blob can carry a peer's hunks and CRLF."
 )
 
 

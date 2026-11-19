@@ -136,12 +136,124 @@ def test_premint_overrun_before_the_record_write_mints_the_chosen_id_and_defers(
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow", env
     found = re.search(r"\bask-\d{8}T\d{6}-[0-9a-f]{6}\b", hso["additionalContext"])
-    assert found and "nothing was taken" not in str(env)
+    assert found and "nothing was taken" not in str(env), env
     text = Path(hso["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
     params_file = re.search(r'^const PARAMS_FILE = "(.*)";$', text, re.MULTILINE)
     if params_file and params_file.group(1):
         text += Path(params_file.group(1)).read_text(encoding="utf-8")
     assert found.group(0) in text  # the deferred emit adopts the chosen id
+
+
+def test_premint_marker_oserror_retracts_the_deferred_id_before_an_overrun(repo, monkeypatch):
+    """A marker that never published leaves no chosen id to defer: the overrun answer must not name it."""
+    import threading
+
+    from coordinator_core.ops.dispatch_emit import run_token as rt
+
+    chosen = "ask-20261118T190000-abcdef"
+    monkeypatch.setattr(rt, "new_ask_run_id", lambda: chosen)
+    monkeypatch.setattr(mod, "_premint_marker", lambda params, root, run_id=None: (_ for _ in ()).throw(OSError("no git dir")))
+    release = threading.Event()
+    monkeypatch.setattr(mod, "_default_emit", lambda params, root: release.wait(30) and {})
+    monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1.0")
+    try:
+        env = mod.evaluate(real._payload(repo, {"ask": "build the thing", "source": "relayed"}))
+    finally:
+        release.set()
+    assert chosen not in json.dumps(env), env
+
+
+def _bare_call():
+    return {"t0": time.monotonic(), "wall0": time.time(), "roots": [], "minted": [], "gate": run_token.WriteGate(),
+            "gates": [], "session": None, "payload": {"ask": "x"}}
+
+
+def test_overrun_with_a_stalled_spool_write_refuses_as_unknown_within_the_grace(monkeypatch):
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(mod, "_spool_envelope", lambda payload, root, reason: release.wait(30))
+    monkeypatch.setattr(mod, "_ENVELOPE_GRACE_S", 0.05)
+    monkeypatch.setattr(mod, "_log_fail_open", lambda *a, **k: None)
+    start = time.monotonic()
+    try:
+        env = mod._answer_overran(_bare_call())
+    finally:
+        release.set()
+    assert time.monotonic() - start < 1.0
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny" and "whether the ask was spooled is unknown" in hso["permissionDecisionReason"]
+
+
+def test_overrun_with_a_premint_answers_the_chosen_id_and_a_deferred_script(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_log_fail_open", lambda *a, **k: None)
+    chosen = "ask-20261118T190000-abcdef"
+    call = _bare_call()
+    call["premint"] = (tmp_path, {"ask": "x"}, chosen)
+    env = mod._answer_overran(call)
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow", env
+    assert chosen in hso["permissionDecisionReason"]
+    text = Path(hso["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    params_file = re.search(r'^const PARAMS_FILE = "(.*)";$', text, re.MULTILINE)
+    if params_file and params_file.group(1):
+        text += Path(params_file.group(1)).read_text(encoding="utf-8")
+    assert chosen in text
+
+
+def test_overrun_with_a_premint_and_a_stalled_script_write_refuses_within_the_grace(tmp_path, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(mod, "_premint_deferred_envelope", lambda root, params, run_id: release.wait(30))
+    monkeypatch.setattr(mod, "_ENVELOPE_GRACE_S", 0.05)
+    monkeypatch.setattr(mod, "_log_fail_open", lambda *a, **k: None)
+    call = _bare_call()
+    call["premint"] = (tmp_path, {"ask": "x"}, "ask-20261118T190000-abcdef")
+    start = time.monotonic()
+    try:
+        env = mod._answer_overran(call)
+    finally:
+        release.set()
+    assert time.monotonic() - start < 1.0
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
+
+
+def test_overrun_with_a_landed_spool_write_still_answers_the_spool_envelope(monkeypatch):
+    spooled = {"hookSpecificOutput": {"permissionDecision": "allow"}}
+    monkeypatch.setattr(mod, "_spool_envelope", lambda payload, root, reason: spooled)
+    monkeypatch.setattr(mod, "_log_fail_open", lambda *a, **k: None)
+    assert mod._answer_overran(_bare_call()) is spooled
+
+
+def test_fail_open_log_write_that_stalls_is_left_on_its_thread_past_the_join(monkeypatch):
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(mod, "_append_fail_open_line", lambda cause, call: release.wait(30))
+    monkeypatch.setattr(mod, "_FAIL_OPEN_LOG_JOIN_S", 0.05)
+    start = time.monotonic()
+    try:
+        assert mod._log_fail_open("stalled disk") is None
+        assert time.monotonic() - start < 1.0
+    finally:
+        release.set()
+
+
+def test_refusal_log_write_that_stalls_leaves_the_deny_unchanged_within_its_deadline(monkeypatch):
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(mod, "_append_refusal_log", lambda payload, full: release.wait(30))
+    reason = "x" * 600
+    env = {"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": reason}}
+    start = time.monotonic()
+    try:
+        out = mod._durable_refusal({"cwd": "."}, env, time.monotonic() + 0.1)
+    finally:
+        release.set()
+    assert time.monotonic() - start < 1.0
+    assert out["hookSpecificOutput"]["permissionDecisionReason"] == reason
 
 
 def _stall_record_write(monkeypatch):
@@ -209,6 +321,28 @@ def test_default_ask_answers_with_a_run_id_before_any_bulk_io_on_a_slow_disk(rep
     assert not [s for s in charger.report() if s["bulk"]], charger.report()
     assert (_token_dir(repo) / f"{found.group(0)}.json").is_file()
     assert not (repo / "scratch" / "warp" / found.group(0)).exists()  # the prompts are the run's own emit, later
+
+
+@pytest.mark.spawns_process
+def test_dead_temp_sweep_is_skipped_inside_the_hook_budget_and_runs_outside_it(tmp_path):
+    import subprocess
+    import sys
+
+    from coordinator_core import atomic_replace
+
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    dead = tmp_path / f".atomic-write.out.txt.{p.pid}.abc123"
+    dead.write_bytes(b"leftover")
+    atomic_replace._last_sweep.clear()
+    token = mod._BUDGET_VAR.set([1.0])
+    try:
+        atomic_replace.atomic_write_bytes(tmp_path / "out.txt", b"in-hook")
+    finally:
+        mod._BUDGET_VAR.reset(token)
+    assert dead.exists() and (tmp_path / "out.txt").read_bytes() == b"in-hook"
+    atomic_replace.atomic_write_bytes(tmp_path / "out.txt", b"outside")
+    assert not dead.exists() and (tmp_path / "out.txt").read_bytes() == b"outside"
 
 
 def test_unwritable_deferred_script_refuses_and_drops_the_minted_marker(repo, monkeypatch):
@@ -431,6 +565,8 @@ def test_default_deferred_script_emits_the_ask_as_a_launcher_child(tmp_path):
 
 @pytest.mark.spawns_process
 def test_default_deferred_script_hops_the_chain_at_depth_one(tmp_path):
+    import json
+
     handoff = {"chain": {"ask": "do it", "sizing_path": "state/sizings/s.yaml"}, "run_id": "ask-1"}
     got = _run_deferred(
         tmp_path, {"ask": "build the thing", "session_id": ""},
@@ -440,7 +576,10 @@ def test_default_deferred_script_hops_the_chain_at_depth_one(tmp_path):
     starts = [c["workflow"]["scriptPath"] for c in got["calls"] if "workflow" in c]
     assert [Path(s).name for s in starts] == ["ask-1.workflow.mjs", "chain-2.workflow.mjs"]
     chain_emit = [c["agent"] for c in got["calls"] if "agent" in c][1]
-    assert '"launcher_child":true' in chain_emit
+    carry_files = list((tmp_path / "scratch" / "warp").glob("defer-*.carry.json"))
+    assert len(carry_files) == 1
+    assert json.loads(carry_files[0].read_text(encoding="utf-8"))["launcher_child"] is True
+    assert carry_files[0].as_posix() in chain_emit and "launcher_child" not in chain_emit
     assert got["out"] == {"done": True, "chained_from": "ask-1"}
 
 

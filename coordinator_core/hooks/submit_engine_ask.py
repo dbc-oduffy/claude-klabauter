@@ -783,9 +783,26 @@ _MINTED_OP = "dispatch.minted_run"
 _ENVELOPE_GRACE_S = 0.35
 
 
+#: The wait the answer gives the fail-open log line: a healthy append lands in milliseconds, a stalled
+#: one is left on its daemon thread rather than holding the answer.
+_FAIL_OPEN_LOG_JOIN_S = 0.05
+#: Fraction of the caller budget by which the refusal-log write must have answered.
+_TAIL_SHARE = 0.95
+
+
 def _log_fail_open(cause: str, call: Optional[dict] = None) -> None:
     """Appends one line to `<settings>/state/door-fail-open.log`, the same shape the door twins write
-    (`door_log_fail_open`). Never raises and never changes the verdict."""
+    (`door_log_fail_open`), on a daemon thread joined `_FAIL_OPEN_LOG_JOIN_S`. Never raises, never
+    blocks past that join and never changes the verdict."""
+    try:
+        thread = threading.Thread(target=_in_scope(lambda: _append_fail_open_line(cause, call)), daemon=True)
+        thread.start()
+        thread.join(_FAIL_OPEN_LOG_JOIN_S)
+    except Exception:
+        return
+
+
+def _append_fail_open_line(cause: str, call: Optional[dict]) -> None:
     import time
     from datetime import datetime, timezone
 
@@ -838,8 +855,26 @@ def _answer_overran(call: dict) -> dict:
             f"The refire of run {resuming} outran the hook budget; the engine is reachable and "
             "nothing was spooled. Re-submit once: it resumes the same run."
         )
-    spooled = _spool_envelope(call.get("payload"), roots[0] if roots else None, "reach-budget-no-run")
-    if spooled is not None:
+    premint = call.get("premint")
+    if premint is not None:  # nothing published under the chosen id: the deferred emit mints it
+        state, deferred = _write_leg("deferred script", lambda: _premint_deferred_envelope(*premint), join_s=_ENVELOPE_GRACE_S)
+        if state == "done":
+            return deferred
+        return _refuse(
+            "The submission outran the hook budget and the deferred script write "
+            f"{'raised' if state == 'raised' else 'stalled'}, so the run may not start. "
+            f"Check the run state before re-submitting: a second submit may start a second run. {_minted_remedy([premint[2]])}"
+        )
+    state, spooled = _write_leg(
+        "ask spool", lambda: _spool_envelope(call.get("payload"), roots[0] if roots else None, "reach-budget-no-run"),
+        join_s=_ENVELOPE_GRACE_S,
+    )
+    if state == "detached":
+        return _refuse(
+            "The submission outran the hook budget and the spool write stalled, so whether the ask was spooled is "
+            "unknown. Check the pending ask spool before re-submitting: a second submit may start a second run."
+        )
+    if state == "done" and spooled is not None:
         return spooled
     return _refuse("The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once.")
 
@@ -1987,8 +2022,9 @@ def _fan_tail(root: Path, reply: Mapping[str, Any], started: Sequence[str], laun
         )
     if launcher:
         parts.append(
-            "The launcher's completion is your one wake; it carries each run's result, and an emit "
-            "refused at a child's start is named there with its reason."
+            "The launcher's completion is your one wake; it carries each run's result, an emit "
+            "refused at a child's start is named there with its reason, and a run that never started "
+            "is named `not_started` with the leg it stopped at."
         )
     else:
         parts.append("Each run's completion is its own wake.")
@@ -3354,46 +3390,55 @@ _DENY_CAP = 280
 _REFUSAL_LOG_CAP_BYTES = 1 << 20  # past this the log keeps its newest half, whole lines only
 
 
-def _durable_refusal(payload: Mapping[str, Any], envelope: dict) -> dict:
+def _append_refusal_log(payload: Mapping[str, Any], full: str) -> bool:
+    """Appends `full` to the repo's refusal log; True when it landed, False when no root resolves."""
+    import json
+    from datetime import datetime, timezone
+
+    root = _repo_root(None, dict(payload))
+    if root is None:
+        cwd = payload.get("cwd")
+        root = Path(cwd) if isinstance(cwd, str) and cwd else None
+    if root is None:
+        return False
+    log = root / REFUSAL_LOG_REL
+    log.parent.mkdir(parents=True, exist_ok=True)
+    if log.is_file() and log.stat().st_size > _REFUSAL_LOG_CAP_BYTES:
+        from coordinator_core.atomic_replace import atomic_write_bytes
+
+        # Atomic so a crash never empties the log; an append racing the trim can lose its one line.
+        tail = log.read_bytes()[-(_REFUSAL_LOG_CAP_BYTES // 2):]
+        atomic_write_bytes(log, tail[tail.find(b"\n") + 1:])
+    line = json.dumps(
+        {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "session_id": payload.get("session_id"),
+            "refusal": full,
+        },
+        ensure_ascii=False,
+    )
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    return True
+
+
+def _durable_refusal(payload: Mapping[str, Any], envelope: dict, deadline: Optional[float] = None) -> dict:
     """Append the whole refusal to the repo's refusal log and lead the deny with its cause and that path.
 
     A downstream surface caps the deny near 280 characters; the lead keeps cause and path inside it, the
-    full text follows. A log failure leaves the deny as it was."""
+    full text follows. The log write runs on a daemon thread joined to the monotonic `deadline` (default
+    `_ENVELOPE_GRACE_S` out); a failed or stalled write leaves the deny as it was."""
+    import time
+
     hso = envelope.get("hookSpecificOutput") if isinstance(envelope, dict) else None
     if not isinstance(hso, dict) or hso.get("permissionDecision") != "deny":
         return envelope
     full = str(hso.get("permissionDecisionReason") or "")
     if not full:
         return envelope
-    try:
-        import json
-        from datetime import datetime, timezone
-
-        root = _repo_root(None, dict(payload))
-        if root is None:
-            cwd = payload.get("cwd")
-            root = Path(cwd) if isinstance(cwd, str) and cwd else None
-        if root is None:
-            return envelope
-        log = root / REFUSAL_LOG_REL
-        log.parent.mkdir(parents=True, exist_ok=True)
-        if log.is_file() and log.stat().st_size > _REFUSAL_LOG_CAP_BYTES:
-            from coordinator_core.atomic_replace import atomic_write_bytes
-
-            # Atomic so a crash never empties the log; an append racing the trim can lose its one line.
-            tail = log.read_bytes()[-(_REFUSAL_LOG_CAP_BYTES // 2):]
-            atomic_write_bytes(log, tail[tail.find(b"\n") + 1:])
-        line = json.dumps(
-            {
-                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "session_id": payload.get("session_id"),
-                "refusal": full,
-            },
-            ensure_ascii=False,
-        )
-        with log.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except Exception:
+    if deadline is None:
+        deadline = time.monotonic() + _ENVELOPE_GRACE_S
+    if not _quick(lambda: _append_refusal_log(payload, full), deadline):
         return envelope
     if len(full) <= _DENY_CAP:
         return envelope
@@ -3417,6 +3462,7 @@ def evaluate(
     import time
 
     budget_token = _BUDGET_VAR.set([_READ_DEADLINE_MS])
+    tail_deadline: Optional[float] = None
     try:
         if is_submission(payload):
             from coordinator_core.ops.dispatch_emit.run_token import WriteGate
@@ -3427,6 +3473,7 @@ def evaluate(
                 "t0": time.monotonic() - _engine_wait_s(), "wall0": time.time(), "roots": [], "minted": [], "gate": WriteGate(), "gates": [],
                 "session": session if isinstance(session, str) and session else None, "payload": payload,
             }
+            tail_deadline = call["t0"] + _caller_budget_s() * _TAIL_SHARE
             box: dict = {}
 
             def body() -> None:
@@ -3451,7 +3498,7 @@ def evaluate(
     finally:
         _BUDGET_VAR.reset(budget_token)
     if is_submission(payload):
-        return _durable_refusal(payload, envelope)
+        return _durable_refusal(payload, envelope, tail_deadline)
     return envelope
 
 
@@ -3845,6 +3892,9 @@ def _evaluate(
         from coordinator_core.ops.dispatch_emit import run_token as _rt
 
         chosen = _rt.new_ask_run_id()
+        premint_call = _CALL.get()
+        if premint_call is not None:  # a slow preamble can reach the answer deadline first: it defers this id
+            premint_call["premint"] = (root, params, chosen)
         try:
             minted = _emit_within_budget(lambda p, r: _premint_marker(p, r, chosen), params, root, scan=False)
         except _EmitOverran as over:
@@ -3855,7 +3905,8 @@ def _evaluate(
             # Unminted overrun: the deferred emit adopts the chosen id and mints it in the background.
             return _premint_deferred_envelope(root, params, chosen)
         except (OSError, ValueError):  # no git dir to hold the marker: the inline emit hands the commit back to the EM
-            pass
+            if premint_call is not None:  # the chosen id was never published: the inline emit mints its own
+                premint_call.pop("premint", None)
         if minted is not None:
             _note_minted(minted["run_id"])
             return _premint_deferred_envelope(root, params, minted["run_id"])
@@ -4071,15 +4122,21 @@ def _handler(params: dict, repo_root=None) -> dict:
     if submission and _denies(envelope):
         return _named_deny(envelope)  # a deny skips apply_guard_level: warn/off lowers it to a rewrite-less allow
     resolved = apply_guard_level(GUARD_NAME, envelope)
-    if not resolved and submission:
+    if not submission:
+        return resolved or no_advisory()
+    if not resolved:
         return deny("PreToolUse", "The submit hook resolved to an empty reply. Check for an existing run record before re-submitting.")
-    if submission and resolved and resolved.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
-        if not resolved.get("hookSpecificOutput", {}).get("updatedInput"):
-            return deny(
-                "PreToolUse",
-                "The engine answered the submission with no run and no refusal. Check for an existing run record before re-submitting.",
-            )
-    return resolved or no_advisory()
+    hso = resolved.get("hookSpecificOutput") if isinstance(resolved, dict) else None
+    if not isinstance(hso, dict):
+        return deny("PreToolUse", "The submit hook answered with no decision. Check for an existing run record before re-submitting.")
+    if hso.get("permissionDecision") == "deny":
+        return _named_deny(resolved)
+    if not hso.get("updatedInput"):
+        return deny(
+            "PreToolUse",
+            "The engine answered the submission with no run and no refusal. Check for an existing run record before re-submitting.",
+        )
+    return resolved
 
 
 __all__ = [

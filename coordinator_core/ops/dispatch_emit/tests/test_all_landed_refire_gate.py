@@ -125,11 +125,13 @@ def test_em_discharged_rows_count_landed_and_the_gate_resumes_at_the_ledger(repo
     assert read_reply(repo, out["manifest_handle"])["rows"] is not None
 
 
-def test_an_undischarged_em_row_keeps_the_row_resume(repo) -> None:  # noqa: F811
+def test_an_undischarged_em_row_halts_nothing_executable_naming_it(repo) -> None:  # noqa: F811
+    # An em-only remainder derives zero dispatchable rows: the gate halts before arming (52abfdad84).
     _example_game_repo_shape(repo, ["E1"])
     v = gate(repo, REL)
-    assert v.arm == "m_plus" and v.resume_ledger is None
-    assert list(v.resume_rows) == ["E2"]
+    assert v.arm is None and v.resume_ledger is None and v.resume_rows is None
+    assert v.halt["kind"] == "nothing-executable"
+    assert [r["id"] for r in v.halt["rows"]] == ["E2"]
 
 
 def test_the_all_landed_resume_is_never_persisted(repo) -> None:  # noqa: F811

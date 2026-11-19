@@ -924,11 +924,14 @@ def _arm_verdict(
     if landed_sink is not None and resume_rows:
         landed_sink.extend(resume.landed_open)
     if kept_sink is not None and resume_rows and resume.kept:
-        kept_sink.append((list(resume.kept), resume.kept_run))
+        row_kept = _drop_absent_named_rows(repo_root, list(resume.kept), resume.kept_run)
+        if row_kept:
+            kept_sink.append((row_kept, resume.kept_run))
     elif kept_sink is not None and resume_ledger is not None:
         ledger_kept = _ledger_kept_rows(repo_root, resume_ledger)
-        if ledger_kept[0]:
-            kept_sink.append(ledger_kept)
+        ledger_rows = _drop_absent_named_rows(repo_root, ledger_kept[0], ledger_kept[1])
+        if ledger_rows:
+            kept_sink.append((ledger_rows, ledger_kept[1]))
     if held_sink is not None and resume:
         held_sink.extend(resume.held)
     if reasons_sink is not None and resume:
@@ -1161,6 +1164,41 @@ def _discharged_em_items(blocking: Sequence[str], discharged: Mapping, plan_path
         ):
             out.add(item)
     return out
+
+
+_ABSENT_WORD = re.compile(r"\b(absent|missing|not (?:present|found|landed))\b", re.IGNORECASE)
+
+
+def _drop_absent_named_rows(repo_root: Path, kept: Sequence[str], kept_run: Optional[str]) -> list[str]:
+    """`kept` less each row the `criterion_not_met` halt of `kept_run` names as absent while the row's recorded
+    writes are empty or not all on disk: that row runs again. Any other halt kind, a halt text not naming the
+    row beside an absence word, or a row whose recorded writes all hold keeps it. One marker and one
+    kept.json read; no git spawn."""
+    rows = list(kept)
+    if not rows or not kept_run:
+        return rows
+    from coordinator_core.ops.dispatch_emit import halted_run, kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        record = record_dir(Path(repo_root), kept_run)
+        marker = halted_run._read(record)
+        if not isinstance(marker, dict) or marker.get("halted") != "criterion_not_met":
+            return rows
+        reason = str(marker.get(halted_run.HALT_REASON_FIELD) or "")
+        if not _ABSENT_WORD.search(reason):
+            return rows
+        chunks = kept_work.read(record)["chunks"]
+    except (ValueError, OSError):
+        return rows
+
+    def absent(row_id: str) -> bool:
+        if not re.search(r"(?<![A-Za-z0-9_])" + re.escape(row_id) + r"(?![A-Za-z0-9_])", reason):
+            return False
+        paths = (chunks.get(row_id) or {}).get("paths") or {}
+        return not paths or any(not (Path(repo_root) / p).exists() for p in paths)
+
+    return [r for r in rows if not absent(r)]
 
 
 def _ledger_kept_rows(repo_root: Path, resume_ledger: Mapping) -> tuple[list[str], Optional[str]]:

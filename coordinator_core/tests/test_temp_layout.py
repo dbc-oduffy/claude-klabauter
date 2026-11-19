@@ -307,6 +307,20 @@ def test_managed_dir_does_not_renest_the_skeleton_inside_a_session_dir(fake_temp
     assert not (session / "coordinator").exists()
 
 
+def test_fleet_root_inside_a_session_dir_is_the_enclosing_real_fleet_root(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_fleet = fake_temp / "coordinator" / "_fleet"
+    session = real_fleet / "run-temp" / "1-abcdef-pytest-session"
+    session.mkdir(parents=True)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(session))
+    assert temp_layout.fleet_temp_root() == real_fleet
+    assert temp_layout.managed_tempdir() == real_fleet
+    assert os.listdir(session) == []
+
+
+def test_fleet_root_outside_a_session_dir_is_unchanged(fake_temp) -> None:
+    assert temp_layout.fleet_temp_root() == fake_temp / "coordinator" / "_fleet"
+
+
 def test_managed_dir_outside_a_session_dir_still_uses_the_skeleton(fake_temp) -> None:
     made = temp_layout.make_managed_temp_dir("y-")
     assert made.parent == fake_temp / "coordinator" / "_fleet" / "run-temp"

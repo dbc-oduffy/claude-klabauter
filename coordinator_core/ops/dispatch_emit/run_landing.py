@@ -555,7 +555,11 @@ def _message(root: Path, params: dict, request, chunk_ids: list, deleted: list, 
     trailers += run_closed_trailer_lines(b for b in bases if b)
     if book is not None:
         trailers += [f"Completion-Receipt: {rid}" for rid in book.local_receipt_ids]
-    attribution = attribution_value()
+    from coordinator_core.git.provider_attribution import ATTRIBUTIONS
+    from coordinator_core.ops.dispatch_emit import family_invoke_record
+
+    family = family_invoke_record.authoring_family(root, run_id, chunk_ids)
+    attribution = ATTRIBUTIONS.get(family) or attribution_value()
     if attribution:
         trailers.append(f"Co-Authored-By: {attribution}")
     paragraphs.append("\n".join(trailers))

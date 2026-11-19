@@ -174,8 +174,10 @@ def test_without_the_evidence_sidecar_the_gate_returns_the_row_resume_the_real_r
     _example_game_repo_shape(repo)
     (repo / PLAN_REL).with_suffix(".evidence.yaml").unlink()
     out = _handler({"sizing_path": REL, "run_id": _RUN}, repo_root=repo)
-    assert out["arm"] == "m_plus" and out.get("resume_ledger") is None
-    assert out["resume_plan"] == PLAN_REL and out["resume_rows"] == list(_EM_ROWS)
+    # Undischarged em rows derive zero dispatchable rows: the gate halts before arming (52abfdad84).
+    assert out["arm"] is None and out.get("resume_ledger") is None and out.get("resume_rows") is None
+    assert out["halt"]["kind"] == "nothing-executable"
+    assert [r["id"] for r in out["halt"]["rows"]] == list(_EM_ROWS)
 
 
 def test_an_all_done_refire_reaches_verify_then_commit_with_no_executor(repo, m_plus_known_arm):  # noqa: F811

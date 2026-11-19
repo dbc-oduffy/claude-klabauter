@@ -372,7 +372,7 @@ def _result_failure(value, *, landing: bool = False) -> str | None:
         return 'engine wake digest requires ' + action['kind']
     status = value.get('status')
     if status in ('emit_refused', 'failed', 'halted', 'blocked', 'refused', 'error',
-                  'stage_pending', 'minted', 'sized', 'planned', 'not_committed'):
+                  'stage_pending', 'minted', 'sized', 'planned', 'not_committed', 'not_started'):
         return f'engine returned {status}: {value.get("error") or value.get("reason") or "not completed"}'
     if value.get('stage_pending'):
         return 'engine returned an unresolved stage_pending handoff'

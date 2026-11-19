@@ -8685,6 +8685,21 @@ def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
     return resume_landed_state(repo_root, plan).rows
 
 
+def _gate_owed_of_commit(common_dir: Path, sha: str) -> set:
+    """Row ids on the ``Checkpoint-Gate-Owed:`` lines of commit ``sha`` (in-process object read; empty
+    when the commit is unreadable): a gate-owed row's bytes are committed but it is not landed."""
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import CHECKPOINT_GATE_OWED_LINE
+
+    meta = commit_meta(common_dir, sha) if sha else None
+    if meta is None:
+        return set()
+    owed: set = set()
+    for m in CHECKPOINT_GATE_OWED_LINE.finditer(meta.get("message") or ""):
+        owed.update(i for i in re.split(r"[,\s]+", m.group("v")) if i)
+    return owed
+
+
 def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     """Row ids of ``plan`` already landed: checkpoint commits (as ``checkpoint_landed_state``) plus
     the ``Lands-Chunks:`` ids of commits whose ``Halt-Plan:`` names ``plan`` and whose
@@ -8698,6 +8713,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     from coordinator_core.ops.dispatch_emit import landed_trailer_record
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id
 
+    common_dir = resolve_git_common_dir(repo_root)
     entries = landed_trailer_record.trailer_entries(repo_root)
     if entries is None:
         head_before = head_sha(repo_root)
@@ -8743,6 +8759,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
         stop_ids = {i for i in re.split(r"[,\s\x1d]+", stop_rule) if i}
         if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
             checkpoint_ids = set(plan_commit_row_ids(without_process_half(subject))) - stop_ids
+            checkpoint_ids -= _gate_owed_of_commit(common_dir, sha)
             _land(checkpoint_ids, sha, subject)
             if sha:
                 checkpoint_shas.append(sha)

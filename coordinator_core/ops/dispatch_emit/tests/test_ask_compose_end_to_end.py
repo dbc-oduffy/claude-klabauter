@@ -166,7 +166,7 @@ def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger() -> N
     for gone in ("label: 'docs'", "label: 'ledger-check'", "coordinator:criterion-judge", "label: 'test:terminal'"):
         assert gone not in script, gone
     assert "phase('ledger-check')" not in script and "phase('docs')" not in script
-    assert re.findall(r"label: '([^']+)'", after) == ["ledger-fix:", "ledger-reverify", "ledger-recovery-record", "remnant-complete", "remnant-reverify", "remnant-record", "commit", "retest-invariant", "commit"]
+    assert re.findall(r"label: '([^']+)'", after) == ["ledger-fix:", "ledger-reverify", "ledger-recovery-record", "remnant-complete", "remnant-reverify", "remnant-record", "commit", "retest-await", "commit", "retest-invariant", "commit"]
     assert "_ledgerBlocking" in after and "halted: 'ledger-check'" in after
 
 
@@ -379,7 +379,8 @@ def test_the_ledger_never_stands_in_for_the_verifier_judge_or_falsifier() -> Non
     wave = script[script.index("phase('Review wave')"):script.rindex("phase('Verify')")].replace(_verdict_def(script), "")
     # Nothing in the review stage (delivery verifier, terminal judge, falsifier) reads the ledger:
     # the verify leg's ledger verdict runs after it as one more gate, at every size.
-    assert not re.search(r"_ledger\w*", wave)
+    # The one carve-out is `resume_ledger.since_sha`, the review floor's no-delta base (12705bd76d), never a verdict.
+    assert not re.search(r"(?<!resume)_ledger\w*", wave)
     assert "delivery: _deliveryVerdict" in script
 
 
