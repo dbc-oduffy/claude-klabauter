@@ -31,6 +31,7 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     "parked": (MECHANICAL, "halt-record-carries-refire-next-action"),
     # ask_compose terminal halts.
     "usage_limit": (DECISION, None),
+    "family_cli_failure": (DECISION, None),
     "review_blocked": (DECISION, None),
     "criterion_not_met": (DECISION, None),
     "delivery_fail": (DECISION, None),
@@ -115,6 +116,7 @@ IRREVERSIBLE_KINDS: dict[str, str] = {
     "objective_escalated": "objective escalated to the PM",
     # External or terminal-verdict: the halt is the run's true end state.
     "usage_limit": "third-party quota exhausted: no engine remedy exists",
+    "family_cli_failure": "family CLI auth or launch failed: a login renewal is a human act",
     "review_blocked": "review blocked the code: landing it is shipping rejected work",
     "review_floor": "review floor unmet: landing it is shipping unreviewed work",
     "criterion_not_met": "exit criterion unmet: continuing claims a false completion",

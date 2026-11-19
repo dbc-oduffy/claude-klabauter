@@ -655,7 +655,7 @@ def candidate_test_additions(
     declared_names = {name for _parent, name, _stem, _suffix in split}
     candidates: list[str] = []
     for parent_s, name, stem, suffix in split:
-        if suffix != ".py" or name.startswith("test_"):
+        if suffix != ".py" or name.startswith("test_") or stem.endswith("_test"):
             continue
         if "tests" in parent_s.split("/"):
             # A non-test helper already living under tests/ is its own file;
@@ -797,7 +797,7 @@ def _normalized_test_name(stem: str) -> str | None:
 
 
 def _is_test_file(path: PurePosixPath) -> bool:
-    return path.name.startswith("test_") and path.suffix == ".py"
+    return path.suffix == ".py" and (path.name.startswith("test_") or path.stem.endswith("_test"))
 
 
 def _locator_source_suffix(pattern: str) -> str:

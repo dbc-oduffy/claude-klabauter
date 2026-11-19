@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -34,6 +35,8 @@ _NO_SESSION = (
     "run-stage.json records its session_id"
 )
 _ARTIFACT_FILES = ("stdout.jsonl", "stderr.txt", "process.json", "last.txt")
+_LINE_CAP = 300
+_AUTH_RE = re.compile(r"refresh token|not logged in|unauthori[sz]ed|\b401\b|\blog ?in\b|\bauthentication\b", re.IGNORECASE)
 
 
 def _now() -> str:
@@ -93,7 +96,7 @@ def _agent_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: P
 def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None) -> dict:
     """codex: `exec` under `--sandbox` with writable roots exactly the worktree and its scratch temp dir."""
     from coordinator_core.codex_runner import workflow
-    from coordinator_core.codex_runner.codex_spawn_env import WRITABLE_TEMP_RELPATH, shape_codex_child
+    from coordinator_core.codex_runner.codex_spawn_env import WRITABLE_TEMP_RELPATH, shape_codex_child, writeback_codex_auth
     from coordinator_core.codex_runner.resolve import codex_scoped_stage_argv, preflight_auth, resolve_codex
     from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
     from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
@@ -123,6 +126,7 @@ def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path, parent_se
                 on_spawn=None, stdout=out, stderr=err,
             )
         finally:
+            writeback_codex_auth(env)
             for handle, name in ((out, "stdout.jsonl"), (err, "stderr.txt")):
                 handle.seek(0)
                 replace_bytes(artifact_dir / name, handle.read())
@@ -152,6 +156,28 @@ def _capture(src: Path, dst: Path) -> None:
     except OSError:
         data = b""
     replace_bytes(dst, data)
+
+
+def _stderr_line(artifact_dir: Path) -> str:
+    """The stderr line naming the failure: the last auth-matching line, else the last non-empty line; "" when none."""
+    try:
+        text = (artifact_dir / "stderr.txt").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for ln in reversed(lines):
+        if _AUTH_RE.search(ln):
+            return ln[:_LINE_CAP]
+    return lines[-1][:_LINE_CAP] if lines else ""
+
+
+def _classify_failure(artifact_dir: Path, error: Optional[str], raised: bool) -> tuple:
+    """`(cli_failure, blocked_reason)` for a non-zero exit: kind auth|launch|exit plus the quoted cause line."""
+    first = (error or "").strip().splitlines()[0][:_LINE_CAP] if (error or "").strip() else ""
+    line = first if raised else (_stderr_line(artifact_dir) or first)
+    kind = "auth" if _AUTH_RE.search(line) or _AUTH_RE.search(error or "") else "launch" if raised else "exit"
+    reason = error if not error or line in error else f"{error}: {line}"
+    return {"kind": kind, "stderr_line": line}, reason
 
 
 def invoke(
@@ -184,6 +210,7 @@ def invoke(
     error: Optional[str] = None
     model: Optional[str] = None
     record: dict = {}
+    raised = False
     try:
         if family not in _BACKENDS:
             raise ValueError(f"family {family!r} has no vendor CLI; expected one of {'|'.join(_BACKENDS)}")
@@ -203,6 +230,7 @@ def invoke(
     except Exception as exc:  # noqa: BLE001 -- every failure becomes a recorded FAILED result
         error = f"{type(exc).__name__}: {exc}"[:600]
         exit_code = 1
+        raised = True
     finally:
         post = {p: rec_mod.fingerprint(root, p) for p in paths}
         _capture(artifact_dir / "stdout.jsonl", out_path)
@@ -223,6 +251,8 @@ def invoke(
         "verdict": "OK" if authored else "FAILED" if exit_code else "BLOCKED",
         stage_family.VENDOR_MODEL_KEY: model, stage_family.FAMILY_AUTHORED_KEY: authored,
     }
+    if exit_code != 0:
+        result["cli_failure"], reason = _classify_failure(artifact_dir, error or f"{family} exited {exit_code}", raised)
     if reason and not authored:
         result["blocked_reason"] = reason
     return result

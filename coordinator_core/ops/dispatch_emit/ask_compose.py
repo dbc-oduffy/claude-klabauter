@@ -1744,6 +1744,7 @@ _USAGE_LIMIT_RE = (
 #: Captures the stated reset ("Nov 17, 3am") and its parenthesised zone ("Europe/London"); never converted.
 _USAGE_LIMIT_RESET_RE = r"/resets\s+((?:[a-z]{3,9}\.?\s+\d{1,2},?\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?:\s*\(([^)]+)\))?/i"
 HALT_USAGE_LIMIT = "usage_limit"
+HALT_FAMILY_CLI_FAILURE = "family_cli_failure"
 HALT_REVIEW_BLOCKED = "review_blocked"
 HALT_CRITERION_NOT_MET = "criterion_not_met"
 HALT_DELIVERY_FAIL = "delivery_fail"
@@ -3984,6 +3985,14 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str, invoke_cmd:
                 "blocked_reason": {"type": "string"},
                 _stage_family.VENDOR_MODEL_KEY: {"type": ["string", "null"]},
                 _stage_family.FAMILY_AUTHORED_KEY: {"type": "boolean"},
+                "cli_failure": {
+                    "type": "object",
+                    "required": ["kind", "stderr_line"],
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["auth", "launch", "exit"]},
+                        "stderr_line": {"type": "string"},
+                    },
+                },
             },
         },
         sort_keys=True,
@@ -4042,6 +4051,10 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str, invoke_cmd:
         "    if (!_fam.blocked_reason) _fam = { ..._fam, blocked_reason: 'family-stage-runner reported ' + _fam.verdict + ' without a reason' };\n"
         "    if (r.stage_role === 'write' || !r.fallback_brief_path) {\n"
         "      const _rec0 = { stage_role: r.stage_role, attempts: [_fam], reported_family: _fam.family };\n"
+        "      if (r.stage_role === 'write' && _fam.cli_failure && !_halted) _halted = { halted: "
+        + json.dumps(HALT_FAMILY_CLI_FAILURE)
+        + ", run_id: _runId, reason: _fam.family + ' CLI ' + _fam.cli_failure.kind + ' failure: ' + _fam.cli_failure.stderr_line, "
+        "plan: (typeof _planRel !== 'undefined' ? _planRel : null) };\n"
         "      return 'BLOCKED: ' + r.id + ' via ' + _fam.family + ' ' + _fam.verdict + ' (' + _fam.blocked_reason + ') '"
         " + (r.stage_role === 'write' ? '(write row: no claude fallback) ' : '(row carries no fallback brief) ') + JSON.stringify(_rec0);\n"
         "    }\n"

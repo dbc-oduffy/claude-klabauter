@@ -2817,11 +2817,18 @@ CHANGED_AFTER_REVIEW = "changed-after-review"
 VERDICT_PIN_STALE = "verdict-pin-stale"
 
 
-def _changed_after_review(root: Path, rel: str, reviewed_hash: object) -> bool:
-    """True when the worktree bytes of a reviewed path no longer match its ``reviewed_sha256`` entry."""
+def _changed_after_review(root: Path, rel: str, reviewed_hash: object, measured_blob: object = None) -> bool:
+    """True when the worktree bytes of a reviewed path match neither its ``reviewed_sha256`` entry nor the
+    blob the run's measured-rev record verified for it."""
     from coordinator_core.session import touch_record
 
-    return isinstance(reviewed_hash, str) and touch_record.compute_content_hash(root / rel) != reviewed_hash
+    if not isinstance(reviewed_hash, str) or touch_record.compute_content_hash(root / rel) == reviewed_hash:
+        return False
+    if isinstance(measured_blob, str):
+        from coordinator_core.git.commit import checkin_blob_sha
+
+        return checkin_blob_sha(root, rel) != measured_blob
+    return True
 
 
 def _recorded_fingerprints(
@@ -3886,6 +3893,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     script_path = params["script_path"]
     incomplete = set(params["incomplete_chunks"]) - set(params.get("landed_chunks") or [])
+    from coordinator_core.ops.dispatch_emit.landing_integrity import with_leg_record
+
+    _leg_run_id = params.get("run_id")
+    params = dict(with_leg_record(
+        root, params,
+        _leg_run_id if isinstance(_leg_run_id, str) and _leg_run_id else PurePosixPath(script_path.replace("\\", "/")).stem,
+    ))
     inline_review = params.get("inline_review")
     session_id = params.get("session_id")
     if not (isinstance(session_id, str) and _UUID_RE.fullmatch(session_id)):
@@ -4401,7 +4415,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 unmeasured.append(p)
         elif p in reverted:
             recorded_reason[p] = "reverted"
-        elif p in reviewed_bytes and _changed_after_review(root, p, reviewed_bytes[p]):
+        elif p in reviewed_bytes and _changed_after_review(
+            root, p, reviewed_bytes[p],
+            (measured.get("blobs") or {}).get(p)
+            if isinstance(measured, dict) and not measured.get("unreadable") and isinstance(measured.get("blobs"), dict)
+            else None,
+        ):
             recorded_reason[p] = CHANGED_AFTER_REVIEW
     candidates = [p for p in declared_changed if p not in withhold_reason]
     candidates += [p for p in recorded_changed if p not in recorded_reason and p not in candidates]
@@ -4633,7 +4652,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             ledger_met = None
     ledger_partial: dict = {}
 
-    def _downgrade_ledger() -> None:
+    def _downgrade_ledger(rewrite_note: bool = True) -> None:
         nonlocal ledger_met, ledger_partial
         if not (unlanded and isinstance(params.get("ledger_verdict"), dict)):
             return
@@ -4649,7 +4668,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if ledger_met:
                 met_ids = _ledger_met_ids(downgraded)
                 ledger_met = ("ledger-met: " + ", ".join(met_ids))[:_UNDONE_CAP] if met_ids else None
-            if ask_run_dir is not None:
+            if rewrite_note and ask_run_dir is not None:
                 _tcl.rewrite_note_verdicts(
                     root / delivery_note_locate(root, ask_run_dir.name), downgraded, inline_review, root,
                 )
@@ -5546,6 +5565,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         if left_rows:
             unlanded_rows = {row for row, _p, _r in unlanded}
             reply_left_rows = sorted({row for row, _p, _r in left_rows})
+            _downgrade_ledger(rewrite_note=False)
     merge_artifacts_reply: Optional[dict] = None
     if merge_plan is not None:
         merge_owner.clear(root)

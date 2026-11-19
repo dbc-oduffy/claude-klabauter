@@ -20,7 +20,7 @@ from typing import Any, Callable
 import jsonschema
 
 from coordinator_core import tenant_priority
-from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
 from coordinator_core.codex_runner.resolve import codex_family_stage_argv, preflight_auth, resolve_codex
 from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.codex_runner.review import _unattended_env
@@ -343,6 +343,9 @@ def run_agent(
         raise AgentFailed(f"{backend} agent timed out after {timeout_s}s") from exc
     except OSError as exc:
         raise AgentFailed(f"{backend} spawn failed: {exc}") from exc
+    finally:
+        if backend == "codex":
+            writeback_codex_auth(env)
     (artifact_dir / "process.json").write_text(json.dumps({"pid": proc.pid, "exit_code": proc.returncode,
         "backend": backend, "label": options.get("label")}), encoding="utf-8")
     if proc.returncode != 0:

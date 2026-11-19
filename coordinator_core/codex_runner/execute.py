@@ -33,7 +33,7 @@ from coordinator_core.codex_runner.sandbox_preflight import (
     SandboxSetupRefused,
 )
 from coordinator_core import tenant_priority
-from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
 from coordinator_core.codex_runner.review import _LIMIT_MARKERS, _build_env, _usage
 
 EXECUTE_TIMEOUT_S = 3600
@@ -153,6 +153,14 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
         child_env = shape_codex_child(_child_env(req.allow_api_key), writable_root=req.repo_root)
     except SandboxSetupRefused as exc:
         return RunResult(run_id=run_id, status=STATUS_FAILED, error=str(exc))
+    try:
+        return _run_shaped(req, run_id, run_dir, on_spawn, child_env)
+    finally:
+        writeback_codex_auth(child_env)
+
+
+def _run_shaped(req: RunRequest, run_id: str, run_dir: Path, on_spawn: OnSpawn, child_env: dict) -> RunResult:
+    """`run` after env shaping; the caller writes the rotated auth back on every exit path."""
     try:
         chunk = load_chunk(req.plan, req.chunk)
     except ChunkRefused as exc:

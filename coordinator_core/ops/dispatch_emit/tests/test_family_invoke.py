@@ -281,3 +281,80 @@ def test_the_cli_threads_session_id_to_the_runner(tmp_path, monkeypatch):
 def test_the_emitted_invoker_module_exists_and_has_a_cli():
     assert importlib.util.find_spec(fir.INVOKE_MODULE) is not None
     assert callable(fi.main)
+
+
+def _failing(stderr, exit_code=1):
+    def run(prompt, *, backend: str, repo_root, artifact_dir, parent_session_id=None):
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        (artifact_dir / "stderr.txt").write_text(stderr, encoding="utf-8")
+        return {"argv": ["codex"], "exit_code": exit_code, "error": f"codex exited {exit_code}"}
+    return run
+
+
+_AUTH_LINE = "Failed to refresh token: refresh token was already used"
+
+
+def test_an_auth_failure_is_classified_and_quotes_the_stderr_line(tmp_path, monkeypatch):
+    monkeypatch.setattr(fi.sys, "platform", "linux")
+    _setup(tmp_path)
+    out = _invoke(tmp_path, _failing(_AUTH_LINE + "\n"), family="codex")
+    assert out["verdict"] == "FAILED" and out["cli_failure"] == {"kind": "auth", "stderr_line": _AUTH_LINE}
+    assert _AUTH_LINE in out["blocked_reason"] and out["blocked_reason"].startswith("codex exited 1")
+
+
+def test_the_auth_line_wins_over_trailing_noise(tmp_path, monkeypatch):
+    monkeypatch.setattr(fi.sys, "platform", "linux")
+    _setup(tmp_path)
+    out = _invoke(tmp_path, _failing(f"{_AUTH_LINE}\r\nrun `codex --help` for usage\r\n"), family="codex")
+    assert out["cli_failure"] == {"kind": "auth", "stderr_line": _AUTH_LINE}
+
+
+def test_a_launch_raise_is_kind_launch_quoting_the_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr(fi.sys, "platform", "linux")
+    _setup(tmp_path)
+
+    def boom(prompt, **kw):
+        raise RuntimeError("codex binary not found")
+
+    out = _invoke(tmp_path, boom, family="codex")
+    assert out["cli_failure"] == {"kind": "launch", "stderr_line": "RuntimeError: codex binary not found"}
+    assert out["blocked_reason"] == "RuntimeError: codex binary not found"
+
+
+def test_a_raised_auth_error_is_kind_auth(tmp_path, monkeypatch):
+    monkeypatch.setattr(fi.sys, "platform", "linux")
+    _setup(tmp_path)
+
+    def boom(prompt, **kw):
+        raise RuntimeError("codex is not logged in")
+
+    assert _invoke(tmp_path, boom, family="codex")["cli_failure"]["kind"] == "auth"
+
+
+def test_a_non_auth_non_zero_exit_is_kind_exit(tmp_path, monkeypatch):
+    monkeypatch.setattr(fi.sys, "platform", "linux")
+    _setup(tmp_path)
+    out = _invoke(tmp_path, _failing("panic: index out of range\n"), family="codex")
+    assert out["cli_failure"] == {"kind": "exit", "stderr_line": "panic: index out of range"}
+
+
+def test_empty_stderr_quotes_the_error_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(fi.sys, "platform", "linux")
+    _setup(tmp_path)
+    out = _invoke(tmp_path, _failing(""), family="codex")
+    assert out["cli_failure"] == {"kind": "exit", "stderr_line": "codex exited 1"}
+    assert out["blocked_reason"] == "codex exited 1"
+
+
+def test_authored_is_not_an_auth_match(tmp_path, monkeypatch):
+    monkeypatch.setattr(fi.sys, "platform", "linux")
+    _setup(tmp_path)
+    out = _invoke(tmp_path, _failing("authored 3 files\n"), family="codex")
+    assert out["cli_failure"]["kind"] == "exit"
+
+
+def test_exit_zero_carries_no_cli_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(fi.sys, "platform", "linux")
+    _setup(tmp_path)
+    assert "cli_failure" not in _invoke(tmp_path, _writer("new"))
+    assert "cli_failure" not in _invoke(tmp_path, _writer(None))

@@ -11,7 +11,7 @@ from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv
 from coordinator_core.codex_runner import roster
 from coordinator_core.codex_runner.resolve import resolve_codex, preflight_auth
 from coordinator_core.codex_runner.execute import _child_env
-from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
 from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant
@@ -134,6 +134,8 @@ def supervise(repo: Path, prompt: str, assignment: dict, argv: list[str], *,
     finally:
         _cleanup(capacity.release_spawn, key, parent_pid)
         if proc is not None:
+            if provider == "codex":
+                _cleanup(writeback_codex_auth, env)
             _cleanup(roster.remove_record, proc.pid)
             _cleanup(admission_post.post, "END", sid, pids=[proc.pid], run=run)
 

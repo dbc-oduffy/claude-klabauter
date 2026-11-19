@@ -871,6 +871,7 @@ def _landing_test_gate(
 ) -> tuple[list[Finding], str]:
     """``_landing_test_gate_body`` with each ``targeted-tests-failed`` finding naming the peer runs whose
     uncommitted hunks sit in the run's declared paths (the measured-rev record's ``peer_hunks``)."""
+    params = with_leg_record(worktree_root, params, run_id)
     findings, check = _landing_test_gate_body(worktree_root, params, run_id)
     if not findings:
         return findings, check
@@ -1183,10 +1184,10 @@ def _ran_zero_finding(params: Mapping, renamed: str = "", cause_note: str = "") 
 TEST_LEG_RECORD = "test-leg.json"
 
 
-def _zero_test_leg_record(worktree_root: Path, run_id: Optional[str]) -> Optional[dict]:
-    """The run's ``test-leg.json`` (beside ``measured-rev.json``) when it observed no completed test: its
-    ``tests_run`` is the integer 0 or is absent/null (a non-pytest leg whose counts were never read); None when
-    the file is absent, unreadable, not an object, or the leg ran tests."""
+def test_leg_record(worktree_root: Path, run_id: Optional[str]) -> Optional[dict]:
+    """The run's ``test-leg.json`` the test leg wrote (beside ``measured-rev.json``, the same
+    ``<RECORD_DIR_ROOT>/<run_id>`` the leg's ``--out`` names; a refire of the run rewrites it); None when the
+    file is absent, unreadable or not an object."""
     if not run_id:
         return None
     from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
@@ -1196,10 +1197,58 @@ def _zero_test_leg_record(worktree_root: Path, run_id: Optional[str]) -> Optiona
                             .read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(record, dict):
+    return record if isinstance(record, dict) else None
+
+
+def _zero_test_leg_record(worktree_root: Path, run_id: Optional[str]) -> Optional[dict]:
+    """The run's ``test-leg.json`` when it observed no completed test: its ``tests_run`` is the integer 0 or is
+    absent/null (a non-pytest leg whose counts were never read); None when the file is absent, unreadable, not an
+    object, or the leg ran tests."""
+    record = test_leg_record(worktree_root, run_id)
+    if record is None:
         return None
     ran = record.get("tests_run")
     return record if _ran_zero_int(ran) or ran is None else None
+
+
+def with_leg_record(worktree_root: Path, params: Mapping, run_id: Optional[str]) -> Mapping:
+    """``params`` with the test verdict the carried params hold replaced by the leg's own ``test-leg.json``
+    counts when that record shows tests run and the carried verdict (``targeted_tests`` and each
+    ``inline_review.tests``) reports none run; the same object back otherwise. A carried verdict that
+    already shows a run, and a record that ran nothing, are left to their own gates."""
+    record = test_leg_record(worktree_root, run_id)
+    ran = record.get("tests_run") if record else None
+    if not (isinstance(ran, int) and not isinstance(ran, bool) and ran > 0):
+        return params
+    out = dict(params)
+    changed = False
+    verdict = targeted_test_verdict(params)
+    if verdict is None or _ran_nothing(verdict.get("tests_run")):
+        carried = params.get(TARGETED_TESTS_PARAM)
+        out[TARGETED_TESTS_PARAM] = {
+            **(carried if isinstance(carried, Mapping) else {}),
+            **{k: record[k] for k in ("status", "tests_run", "tests_failed", "baseline") if k in record},
+        }
+        changed = True
+
+    def _patched(review: object) -> object:
+        nonlocal changed
+        tests = review.get("tests") if isinstance(review, Mapping) else None
+        if not isinstance(tests, Mapping) or not _ran_nothing(tests.get("run")):
+            return review
+        changed = True
+        fields = {"run": ran, "failed": record.get("tests_failed"), "sidecar": record.get("sidecar_path")}
+        merged = {**tests, "run": ran, **{k: v for k, v in fields.items() if v is not None}}
+        if isinstance(record.get("status"), str):
+            merged["status"] = "pass" if record["status"] == "pass-with-skips" else record["status"]
+        return {**review, "tests": merged}
+
+    if "inline_review" in params:
+        out["inline_review"] = _patched(params["inline_review"])
+    outcome = params.get("run_outcome")
+    if isinstance(outcome, Mapping) and "inline_review" in outcome:
+        out["run_outcome"] = {**outcome, "inline_review": _patched(outcome["inline_review"])}
+    return out if changed else params
 
 
 def _zero_cause_text(record: Optional[Mapping]) -> str:

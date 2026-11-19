@@ -259,6 +259,89 @@ def test_argv_only_modules_are_not_sites(argv_only: str) -> None:
     assert not _is_codex_spawn_site(_tree(path)), f"{argv_only} now spawns; treat it as a site"
 
 
+_WRITEBACK = "writeback_codex_auth"
+
+WRITEBACK_SITES = (
+    "ops/dispatch_emit/family_invoke.py",
+    "codex_runner/execute.py",
+    "codex_runner/workflow.py",
+    "ops/workflow_fire/headless_agents.py",
+    "worker_contracts/worker.py",
+    "agent_pipe/__main__.py",
+)
+WRITEBACK_BIN_SITE = CORE.parent / "coordinator" / "bin" / "codex-exec-windows.py"
+
+
+def _names_writeback(node: ast.AST) -> bool:
+    """A reference to the write-back helper: a call, or a callable handed to a cleanup wrapper."""
+    return any(
+        (isinstance(n, ast.Name) and n.id == _WRITEBACK) or (isinstance(n, ast.Attribute) and n.attr == _WRITEBACK)
+        for n in ast.walk(node)
+    )
+
+
+def _finally_writes_back(fn: ast.AST) -> bool:
+    """A `finally:` block in `fn` names the write-back helper, so every exit path of the child reaches it."""
+    return any(isinstance(n, ast.Try) and any(_names_writeback(s) for s in n.finalbody) for n in ast.walk(fn))
+
+
+def _rooted_shape_call(n: ast.AST) -> bool:
+    return (
+        isinstance(n, ast.Call)
+        and _call_is_shape(n)
+        and any(kw.arg == "writable_root" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None) for kw in n.keywords)
+    )
+
+
+def _functions_missing_writeback(tree: ast.AST) -> list[str]:
+    """Functions calling shape_codex_child(writable_root=<a root>) with no write-back in a `finally`."""
+    return sorted(
+        fn.name
+        for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(_rooted_shape_call(n) for n in ast.walk(fn))
+        and not _finally_writes_back(fn)
+    )
+
+
+@pytest.mark.parametrize("site", WRITEBACK_SITES)
+def test_writable_root_site_writes_back_auth_in_a_finally(site: str) -> None:
+    tree = _tree(CORE / site)
+    assert any(_rooted_shape_call(n) for n in ast.walk(tree)), f"{site} no longer shapes with a writable_root"
+    assert _functions_missing_writeback(tree) == [], f"{site} shapes a writable_root child with no {_WRITEBACK} in a finally"
+
+
+def test_every_writable_root_shape_site_is_a_pinned_writeback_site() -> None:
+    found = {
+        p.relative_to(CORE).as_posix()
+        for p in CORE.rglob("*.py")
+        if "tests" not in p.relative_to(CORE).parts
+        and p.name != "codex_spawn_env.py"
+        and any(_rooted_shape_call(n) for n in ast.walk(_tree(p)))
+    }
+    assert found == set(WRITEBACK_SITES), f"writable_root shape sites differ from WRITEBACK_SITES: {sorted(found ^ set(WRITEBACK_SITES))}"
+
+
+def test_codex_exec_windows_writes_back_auth_in_a_finally() -> None:
+    tree = ast.parse(WRITEBACK_BIN_SITE.read_text(encoding="utf-8"))
+    assert any(_rooted_shape_call(n) for n in ast.walk(tree))
+    assert _finally_writes_back(tree), f"codex-exec-windows.py has no {_WRITEBACK} in a finally"
+
+
+@pytest.mark.parametrize(
+    "src, missing",
+    [
+        ("def go(a):\n    env = shape_codex_child({}, writable_root=a)\n    run(a)\n", ["go"]),
+        ("def go(a):\n    env = shape_codex_child({}, writable_root=a)\n    run(a)\n    writeback_codex_auth(env)\n", ["go"]),
+        ("def go(a):\n    env = shape_codex_child({}, writable_root=a)\n    try:\n        run(a)\n    finally:\n        writeback_codex_auth(env)\n", []),
+        ("def go(a):\n    env = shape_codex_child({}, writable_root=a)\n    try:\n        run(a)\n    finally:\n        cleanup(writeback_codex_auth, env)\n", []),
+        ("def go(a):\n    env = shape_codex_child({}, writable_root=None)\n    run(a)\n", []),
+    ],
+)
+def test_writeback_pin_accepts_only_a_finally_write_back(src: str, missing: list[str]) -> None:
+    assert _functions_missing_writeback(ast.parse(src)) == missing
+
+
 _ADD_DIR = "settings_home_add_dir_argv"
 _ADD_DIR_TABLE = CORE / "agent_pipe" / "worker_mode.py"
 

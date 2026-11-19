@@ -25,7 +25,7 @@ import jsonschema
 
 from coordinator_core.codex_runner.agy import AgyUnavailable, resolve_agy
 from coordinator_core.codex_runner.grok import GrokUnavailable, resolve_grok
-from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
 from coordinator_core.codex_runner.resolve import codex_family_stage_argv, preflight_auth, resolve_codex
 from coordinator_core.codex_runner.sandbox_preflight import (
     SandboxSetupRefused,
@@ -1043,6 +1043,9 @@ def run_agent(
         raise AgentFailed(f"{backend} agent timed out after {timeout_s}s") from exc
     except OSError as exc:
         raise AgentFailed(f"{backend} spawn failed: {exc}") from exc
+    finally:
+        if backend == "codex":
+            writeback_codex_auth(env)
     _save_process(artifact_dir, proc, backend, options, model if backend == "codex" else options.get("model"),
                   broker_root_session_id=parent_session_id, broker_request_id=request_id,
                   broker_fire_id=fire_id)
