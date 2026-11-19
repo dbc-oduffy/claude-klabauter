@@ -55,29 +55,6 @@ REASON_ENGINE_RESTARTED = "engine-restarted"
 REASON_EXPIRED = "expired"
 REASON_NO_RESIDENT_ENGINE = "no-resident-engine"
 REASON_FOREIGN_ENGINE = "foreign-engine"
-#: The pool worker that owned an admitted dispatch is gone: a pool-worker liveness fact, never
-#: derived from abandonment. Terminal; rides on `unknowable` so the state set is unchanged.
-REASON_WORKER_DEAD = "worker_dead"
-
-#: Two readings of one pid's start time further apart than this name different processes.
-_START_TIME_TOLERANCE_SECS = 1.0
-
-#: Longest a status poll waits on a worker locator's claim-file read; a read that does not answer leaves
-#: the record unresolved until the next poll, so a stalled filesystem never holds `warm.request_status`.
-_LOCATE_DEADLINE_SECS = 0.05
-
-
-def pid_start_time(pid: Optional[int]) -> Optional[float]:
-    """`pid`'s process start time (epoch seconds) where psutil is importable, else None. Distinguishes
-    the process that held a pid from a later one that reused it. Never raises."""
-    if pid is None:
-        return None
-    try:
-        import psutil
-
-        return float(psutil.Process(int(pid)).create_time())
-    except Exception:  # noqa: BLE001 -- no psutil, no such pid, access denied: no reading
-        return None
 
 OUTCOME_RESULT = "result"
 OUTCOME_ERROR = "error"
@@ -435,67 +412,6 @@ def read_land_intent(journal_dir: Any, key: str) -> Optional[dict]:
     return record if isinstance(record, dict) else None
 
 
-_IMPORTING_SUFFIX = ".importing"
-_IMPORT_GATE_SUFFIX = ".import-gate"
-
-
-def _create_exclusive(path: str) -> Optional[bool]:
-    """Atomic create of an empty `path`, bucket dir included: True when this caller created
-    it, False when it already existed, None when the filesystem refused. Never raises."""
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
-    except FileExistsError:
-        return False
-    except OSError:
-        return None
-    return True
-
-
-def begin_import_phase(journal_dir: Any, key: Any) -> Optional[str]:
-    """Worker side: mark `key` as inside the cold import of its op's module, before any
-    handler code runs. Returns the marker path to hand `end_import_phase`, or None when
-    the marker could not be written (the dispatch then stays indeterminate). Never raises."""
-    path = _write_path(journal_dir, key, _IMPORTING_SUFFIX)
-    if path is None or _create_exclusive(path) is not True:
-        return None
-    return path
-
-
-def end_import_phase(marker: Optional[str]) -> bool:
-    """Worker side: the import is done; True when the handler may now run. The gate is one
-    O_EXCL create shared with `abandon_import_phase`, so exactly one of them wins: False
-    means the caller was already told the op never ran, and the handler must not start.
-    No marker answers True. A filesystem that refuses the gate also answers True, after removing
-    the importing marker so a later `abandon_import_phase` finds no import in flight and never
-    reports the running handler as retry-safe. Never raises."""
-    if marker is None:
-        return True
-    gate = marker[: -len(_IMPORTING_SUFFIX)] + _IMPORT_GATE_SUFFIX
-    won = _create_exclusive(gate)
-    if won is None:
-        try:
-            os.unlink(marker)
-        except OSError:
-            pass
-    return won is not False
-
-
-def abandon_import_phase(journal_dir: Any, key: Any) -> bool:
-    """Caller side: True only when `key`'s worker is still inside module import and this call
-    won the gate, so its handler will never run and a retry cannot double-execute. False for
-    a warm module (no marker), a worker already past import, or an unreadable journal. Never raises."""
-    for marker in _read_paths(journal_dir, key, _IMPORTING_SUFFIX):
-        try:
-            if not os.path.exists(marker):
-                continue
-        except OSError:
-            return False
-        gate = marker[: -len(_IMPORTING_SUFFIX)] + _IMPORT_GATE_SUFFIX
-        return _create_exclusive(gate) is True
-    return False
-
-
 def prune_journal(
     journal_dir: Any, now: Optional[float] = None, budget: int = PRUNE_ENTRY_BUDGET
 ) -> bool:
@@ -674,7 +590,7 @@ class AckStore:
                 and outcome in _FINISHED_OUTCOMES
             ):
                 return
-            for stale in ("is_alive", "worker_pid", "worker_dead", "worker_start", "locate"):
+            for stale in ("is_alive", "worker_pid", "worker_dead"):
                 record.pop(stale, None)
             if record.get("restarted") and outcome in _UNKNOWABLE_OUTCOMES:
                 return
@@ -713,113 +629,7 @@ class AckStore:
             record["error_code"] = None
             record["worker_pid"] = worker_pid
             record["is_alive"] = is_alive
-            record["worker_start"] = pid_start_time(worker_pid)
-            record.pop("locate", None)
             self._changed.notify_all()
-
-    def bind_worker(self, key: str, locate: Callable[[], Optional[tuple]]) -> None:
-        """Register `locate() -> (worker pid, is_alive probe | None) | None` for an admitted `key`:
-        the dispatch was handed to the pool and its worker claims it later. `status` and
-        `mark_worker_dead` resolve it once, outside the lock; a worker found dead makes the record
-        read `unknowable/worker_dead`. A no-op on an unknown or non-admitted key; never raises."""
-        with self._lock:
-            record = self._records.get(key)
-            if record is not None and record["state"] == _ADMITTED:
-                record["locate"] = locate
-
-    def _resolve_worker(self, key: str) -> None:
-        """Run an admitted, unresolved `key`'s locator and keep its pid, probe and the pid's start time
-        on the record. The locator runs without the lock (it reads a claim file)."""
-        with self._lock:
-            record = self._records.get(key)
-            locate = None
-            if record is not None and record["state"] == _ADMITTED and not record.get("queued"):
-                locate = record.get("locate") if "worker_pid" not in record else None
-        if locate is None:
-            return
-        try:
-            from coordinator_core.bounded_io import run_bounded
-
-            found = run_bounded(f"locate-worker:{key}", locate, deadline=_LOCATE_DEADLINE_SECS, default=None)
-        except Exception:  # noqa: BLE001 -- a locator that cannot answer leaves the record unresolved
-            found = None
-        if not found:
-            return
-        pid, probe = found
-        start = pid_start_time(pid)
-        with self._lock:
-            record = self._records.get(key)
-            if record is None or record["state"] != _ADMITTED or "worker_pid" in record:
-                return
-            record["worker_pid"] = pid
-            record["worker_start"] = start
-            if probe is not None:
-                record["is_alive"] = probe
-            record.pop("locate", None)
-
-    def mark_worker_dead(self, pid: int) -> int:
-        """Flag every admitted record owned by pool worker `pid` as `worker_dead` and return the count.
-        A record whose locator has not resolved yet is resolved first. `status` then answers
-        `unknowable/worker_dead` for it and never `executing` again."""
-        with self._lock:
-            pending = [k for k, r in self._records.items() if r["state"] == _ADMITTED and "locate" in r]
-        for key in pending:
-            self._resolve_worker(key)
-        count = 0
-        with self._lock:
-            for record in self._records.values():
-                if record["state"] == _ADMITTED and record.get("worker_pid") == pid and not record.get("worker_dead"):
-                    record["worker_dead"] = True
-                    count += 1
-            if count:
-                self._changed.notify_all()
-        return count
-
-    @staticmethod
-    def _worker_alive(record: dict) -> bool:
-        """Whether the record's worker still runs: its probe reads alive and the pid's start time is
-        the one captured when the record was bound (a reused pid is another process). No probe or a
-        raising probe reads dead."""
-        probe = record.get("is_alive")
-        if probe is None:
-            return False
-        try:
-            if not probe():
-                return False
-        except Exception:  # noqa: BLE001 -- a probe that cannot answer reads dead
-            return False
-        start = record.get("worker_start")
-        if start is None:
-            return True
-        now = pid_start_time(record.get("worker_pid"))
-        return now is not None and abs(now - start) <= _START_TIME_TOLERANCE_SECS
-
-    @classmethod
-    def _alive_of(cls, record: dict, alive: Optional[bool]) -> bool:
-        return cls._worker_alive(record) if alive is None else alive
-
-    def note_killed(self, key: str, op: Optional[str], dump: Any = None) -> None:
-        """Name the op a recycle or overdue kill took from `key`'s caller: `status` then adds `op` and,
-        once `dump` resolves, `stall_dump`. `dump` is a path or a dict whose `stall_dump` entry the
-        dump writer fills late. A no-op on an unknown key; never raises."""
-        with self._lock:
-            record = self._records.get(key)
-            if record is None:
-                return
-            record["killed_op"] = op or record.get("method")
-            if dump is not None:
-                record["killed_dump"] = dump
-
-    @staticmethod
-    def _killed_facts(record: dict) -> dict:
-        facts: dict = {}
-        if record.get("killed_op"):
-            facts["op"] = record["killed_op"]
-        dump = record.get("killed_dump")
-        path = dump.get("stall_dump") if isinstance(dump, dict) else dump
-        if path:
-            facts["stall_dump"] = str(path)
-        return facts
 
     def reconcile_restarted(self, keys: Optional[Any] = None) -> int:
         """Mark every still-admitted record (or only `keys`) engine-restarted and
@@ -964,8 +774,7 @@ class AckStore:
         """The poll answer for `key`: the in-memory answer, except that a journaled
         outcome replaces a non-final one (`unknowable`, or `executing`: a worker that
         landed its op before it was killed, lost or its engine restarted)."""
-        self._resolve_worker(key)
-        answer = self._status_in_memory(key, expect_engine, self._probe_worker(key))
+        answer = self._status_in_memory(key, expect_engine)
         if (
             self._journal_dir
             and answer.get("state") == STATE_FINISHED
@@ -1018,21 +827,8 @@ class AckStore:
             }
         return {**answer, "land_record": {"verdict": LAND_VERDICT_UNRESOLVED}}
 
-    def _probe_worker(self, key: str) -> Optional[bool]:
-        """`key`'s worker liveness read without the store lock (the probe and the pid start time are
-        kernel queries a stalled box blocks on); None when the record carries no probe."""
-        with self._lock:
-            record = self._records.get(key)
-            if record is None or "is_alive" not in record:
-                return None
-            snapshot = {k: record.get(k) for k in ("is_alive", "worker_pid", "worker_start")}
-        return self._worker_alive(snapshot)
-
-    def _status_in_memory(
-        self, key: str, expect_engine: Optional[dict] = None, alive: Optional[bool] = None
-    ) -> dict:
-        """The in-memory answer. `alive` is a liveness read taken outside the lock by `_probe_worker`;
-        None reads it inline. `expect_engine` is the delivering engine the
+    def _status_in_memory(self, key: str, expect_engine: Optional[dict] = None) -> dict:
+        """The in-memory answer. `expect_engine` is the delivering engine the
         caller was told (`error.data.engine_pid`/`engine_boot_ns`): when it names a
         different engine and this store holds no record of `key`, the answer is
         `unknowable/foreign-engine` and nothing is tombstoned -- this engine cannot
@@ -1062,21 +858,7 @@ class AckStore:
                 return {"state": STATE_NOT_RECEIVED, "outcome": OUTCOME_NOT_DISPATCHED}
             if record["state"] == _ADMITTED:
                 if record.get("restarted"):
-                    return {
-                        "state": STATE_UNKNOWABLE,
-                        "reason": REASON_ENGINE_RESTARTED,
-                        **self._killed_facts(record),
-                    }
-                if record.get("worker_dead") or ("is_alive" in record and not self._alive_of(record, alive)):
-                    record["worker_dead"] = True
-                    record.pop("is_alive", None)
-                    return {
-                        "state": STATE_UNKNOWABLE,
-                        "reason": REASON_WORKER_DEAD,
-                        "worker_alive": False,
-                        "worker_pid": record.get("worker_pid"),
-                        **self._killed_facts(record),
-                    }
+                    return {"state": STATE_UNKNOWABLE, "reason": REASON_ENGINE_RESTARTED}
                 if record.get("withdrawn"):
                     return {"state": STATE_UNKNOWABLE, "reason": OUTCOME_ABANDONED}
                 if record.get("queued"):
@@ -1121,13 +903,19 @@ class AckStore:
                 return payload
             if outcome == OUTCOME_KILLED and ("is_alive" in record or record.get("worker_dead")):
                 pid = record.get("worker_pid")
-                if self._alive_of(record, alive):
+                alive = False
+                probe = record.get("is_alive")
+                if probe is not None:
+                    try:
+                        alive = bool(probe())
+                    except Exception:  # noqa: BLE001 -- a probe that cannot answer reads dead
+                        alive = False
+                if alive:
                     return {
                         "state": STATE_EXECUTING,
                         "overdue": True,
                         "worker_alive": True,
                         "worker_pid": pid,
-                        **self._killed_facts(record),
                     }
                 record.pop("is_alive", None)
                 record["worker_dead"] = True
@@ -1136,7 +924,6 @@ class AckStore:
                     "reason": OUTCOME_KILLED,
                     "worker_alive": False,
                     "worker_pid": pid,
-                    **self._killed_facts(record),
                 }
             if outcome in _UNKNOWABLE_OUTCOMES:
                 # No named reason in § 6 covers a stamped abandoned/worker-lost

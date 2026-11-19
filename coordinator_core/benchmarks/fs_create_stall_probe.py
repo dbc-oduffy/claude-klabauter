@@ -8,8 +8,8 @@ Three read-only-to-the-box measurements (no Defender or filesystem configuration
 2. create/open timing -- `mkstemp`+write+close+replace+unlink, and first-touch `read_text` of engine-clone `.py`
    files, per location (repo tree, system temp, the engine svc dir, any `--path`), each reported as wall ms and
    thread CPU ms with MsMpEng's CPU delta over the location's run;
-3. Defender state (`Get-MpComputerStatus`, read-only; exclusions need admin and are reported as unreadable),
-   the ScheduledDefrag last-run time, and open-handle holders of each probe dir (psutil, time-boxed).
+3. Defender state (`Get-MpComputerStatus`, read-only; exclusions need admin and are reported as unreadable) and
+   open-handle holders of each probe dir (psutil, time-boxed).
 
 Wall ms is an I/O-block signal here (CPU ~0 while wall is large); the DR-344 bar is read off CPU ms.
 Run: `python -m coordinator_core.benchmarks.fs_create_stall_probe [--creates N] [--reads N] [--path DIR ...]`.
@@ -255,27 +255,6 @@ def defender_state() -> dict:
     return data
 
 
-def defrag_state() -> dict:
-    """Read-only ScheduledDefrag last-run time (UTC) and result, to line up against stall-dump timestamps."""
-    if sys.platform != "win32":
-        return {"available": False}
-    script = (
-        "$i=Get-ScheduledTaskInfo -TaskPath '\\Microsoft\\Windows\\Defrag\\' -TaskName 'ScheduledDefrag' "
-        "-ErrorAction Stop; $t=Get-ScheduledTask -TaskPath '\\Microsoft\\Windows\\Defrag\\' -TaskName 'ScheduledDefrag'; "
-        "$f={param($d) if($d -and $d.Year -gt 1999){$d.ToUniversalTime().ToString('o')}else{$null}}; "
-        "[pscustomobject]@{state=[string]$t.State;last=(& $f $i.LastRunTime);"
-        "result=$i.LastTaskResult;next=(& $f $i.NextRunTime)}|ConvertTo-Json -Compress"
-    )
-    try:
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script],
-            capture_output=True, text=True, timeout=20, **no_console_creationflags(),
-        )
-        return json.loads(out.stdout.strip() or "{}") or {"available": False, "error": out.stderr.strip()[:200]}
-    except Exception as exc:  # noqa: BLE001
-        return {"available": False, "error": repr(exc)}
-
-
 def handle_holders(dirs: Iterable[Path]) -> list[str]:
     """Processes whose open files or cwd sit under any probe dir (psutil, time-boxed)."""
     try:
@@ -342,7 +321,7 @@ def measure(
 ) -> dict:
     """The structured result the report is printed from."""
     repo = Path(__file__).resolve().parents[2]
-    result: dict = {"locations": {}, "defender": defender_state(), "defrag": defrag_state()}
+    result: dict = {"locations": {}, "defender": defender_state()}
     svc = live_svc_dir()
     result["dump_survey"] = survey_dumps(svc / "stall-dumps")
     locs = _locations(extra or [])
@@ -370,8 +349,6 @@ def measure(
 def render(result: dict) -> str:
     lines = ["== defender (read-only) =="]
     lines.append(json.dumps(result["defender"]))
-    lines.append("== ScheduledDefrag (read-only) ==")
-    lines.append(json.dumps(result.get("defrag", {})))
     s = result["dump_survey"]
     lines.append(f"== dump survey {s['dump_dir']} ==")
     lines.append(f"dumps={s['dumps']} dumps-with-fs-stall(>={STALL_MS}ms)={s['fs_stall_dumps']}")

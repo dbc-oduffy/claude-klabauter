@@ -58,7 +58,6 @@ CONFINEMENT_DENY_NAMES = [
     "block-held-push",
     "deploy-dirty-tree",
     "block-editor-kill-by-name",
-    "deny-kill-by-port-or-tree",
     "block-whole-filesystem-scan",
     "guard-uncapped-pytest-plugin",
     "block-approval-sentinel-creation",

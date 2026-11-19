@@ -5,8 +5,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import landing_refusal_kinds as k
 
 
-def test_refusal_kinds_are_exactly_the_three():
-    assert k.LANDING_REFUSAL_KINDS == frozenset({"destructive-git", "secret-in-diff", "lost-definition"})
+def test_refusal_kinds_are_exactly_the_two():
+    assert k.LANDING_REFUSAL_KINDS == frozenset({"destructive-git", "secret-in-diff"})
 
 
 @pytest.mark.parametrize("reason", sorted(k.LANDING_REFUSAL_KINDS))

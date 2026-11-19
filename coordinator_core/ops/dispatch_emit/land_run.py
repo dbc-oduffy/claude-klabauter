@@ -3284,7 +3284,6 @@ VERIFY_OVERLAY_RED = "verify-overlay-red"
 VERIFY_OVERLAY_UNVERIFIED = "verify-overlay-unverified"
 _TRAILER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*: ")
 NEW_RED = "new-red"
-COMMIT_SET_NOT_RECORDED_HUNKS = "commit-set-not-recorded-hunks"
 _NEW_RED_BUDGET_S = 100.0
 _NEW_RED_SHOWN = 10
 _TEST_GLOBS = (":(glob)**/test_*.py", ":(glob)**/*_test.py")
@@ -4750,7 +4749,6 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 | {h for hs in measured_released.values() for h in hs}
             ),
             settled=settled_stage,
-            landing_blobs=_measured_own_blobs(measured, set(paths)) if measured is not None else None,
         )
     except land_deadline.LandDeadlineExceeded:
         _remove(root, receipt_paths)
@@ -5359,29 +5357,6 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                     reach_dirt_foreign=reach_dirt_foreign,
                     paths=sorted(reach_dirt_foreign),
                 )
-
-    if (
-        measured is not None and merge_plan is None and not measured.get("unreadable")
-        and not (anchor_only or request.review_only) and manifest is not None and manifest.write_baseline
-    ):
-        judged = [p for p, b in manifest.write_baseline.items() if b is not None]
-        accounted = {
-            *art_present, *receipt_paths, bookkeeping_path, *art_withheld, *art_dropped,
-            *recorded_reason, *withhold_reason, *named_out,
-        }
-        accounted |= set(_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review)(judged))
-        unrecorded = _unrecorded_hunk_lines(
-            root, set(commit_set), set(commit_deleted), settled_blobs, manifest.write_baseline, measured, accounted,
-        )
-        if unrecorded:
-            _remove(root, receipt_paths)
-            _reap_measured_export(root, measured_run)
-            return _error(
-                "landing refused: the commit set is not the run's recorded hunks: " + "; ".join(unrecorded)
-                + ". Remedy: land the recorded hunks of these paths only (declare each under writes), "
-                "then re-land; a peer's hunk never rides this commit",
-                refused=COMMIT_SET_NOT_RECORDED_HUNKS, paths=sorted({u.partition(":")[0] for u in unrecorded}),
-            )
 
     stale_verdict = verdict_pin_mismatches(root, inline_review, [p for p in commit_set if p not in settled_blobs])
     if stale_verdict:
@@ -6271,72 +6246,12 @@ def _is_test_path(rel: str) -> bool:
     )
 
 
-def _hunk_header(hunk: tuple) -> str:
-    """A short, printable name for one ``_hunk_blocks`` key: its first changed line."""
-    old, new = hunk
-    line = (new or old or (b"",))[0]
-    text = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
-    return f"{'+' if new else '-'}{text.strip()[:80]!r}"
-
-
-def _unrecorded_hunk_lines(
-    root: Path, commit_set: Collection[str], commit_deleted: Collection[str], settled_blobs: Mapping,
-    baseline: Mapping, measured: Mapping, skip: Collection[str],
-) -> list:
-    """One refusal line per path whose commit image is not exactly the run's recorded hunks: a hunk
-    over the write baseline the measured record does not hold (``carries``), or a recorded hunk HEAD
-    lacks that the commit omits (``omits``, a baseline path absent from the commit set included).
-    A path with no baseline blob, no readable measured end state, no recorded hunk (the run changed
-    nothing there, so what it lands is pre-existing dirt, not run work), or in *skip* is not judged."""
-    import collections
-
-    from coordinator_core.git import git_objects
-    from coordinator_core.git.git_dir import resolve_git_common_dir
-
-    blobs = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
-    own = measured.get("own_blobs") if isinstance(measured.get("own_blobs"), dict) else {}
-    common = resolve_git_common_dir(root)
-    lines: list = []
-    for p, base in sorted(baseline.items()):
-        if not isinstance(base, str) or not base or p in skip or p in commit_deleted or not (root / p).is_file():
-            continue
-        end = own.get(p) if isinstance(own.get(p), str) and own.get(p) else blobs.get(p)
-        obj = git_objects.read_object(common, end) if isinstance(end, str) else None
-        if obj is None:
-            continue
-        try:
-            recorded = _own_hunks(root, p, base, obj[1])
-            if p in commit_set:
-                landed_bytes = _landed_bytes(root, p, settled_blobs)
-                landing = None if landed_bytes is None else _own_hunks(root, p, base, landed_bytes)
-            else:
-                landing = collections.Counter()
-        except Exception:  # noqa: BLE001 -- an unreadable side proves nothing; the measured-record gate judges it
-            continue
-        if recorded is None or landing is None or not recorded:
-            continue
-        for hunk in sorted(landing - recorded, key=repr)[:1]:
-            lines.append(f"{p}: carries unrecorded hunk {_hunk_header(hunk)}")
-        for hunk in sorted(recorded - landing, key=repr)[:1]:
-            where = "omits recorded hunk" if p in commit_set else "is absent from the landing set; recorded hunk"
-            lines.append(f"{p}: {where} {_hunk_header(hunk)}")
-    return lines
-
-
-def _landing_bytes(root: Path, paths: Iterable[str], settled_blobs: Optional[Mapping] = None) -> dict:
-    """``{path: bytes the commit lands}`` for the landing paths: the settled own-only blob where
-    *settled_blobs* names one, else the worktree bytes; None when unreadable."""
-    settled = dict(settled_blobs or {})
-    return {p: _landed_bytes(root, p, settled) for p in paths}
-
-
 def _integrity(
     root: Path, params: dict, paths: list, deleted: list, record_abs: Optional[Path], run_id: str,
     plan: Optional[str], *, residue_py: Sequence[str] = (), own_declared: Sequence[str] = (),
     session_id: Optional[str] = None, minted_before: Optional[tuple] = None,
     deleted_notes: Optional[list] = None, released_holders: frozenset = frozenset(),
     settled: Optional[dict] = None, foreign_evidence: Optional[dict] = None,
-    landing_blobs: Optional[Mapping] = None,
 ) -> list:
     """Pre-commit findings over the landing set: unparseable ``.py``, a ``.py`` importing what the
     commit leaves out of HEAD, a dirty declared ``.py`` the landing leaves behind that imports what
@@ -6362,20 +6277,12 @@ def _integrity(
     land_deadline.check("land_run._integrity.import_closure")
     # The merge commit carries every merge path, so an import of a merge-carried module is landed,
     # not uncommitted.
-    # A landing path reads the blob the commit lands (*landing_blobs* names the settled own-only blob,
-    # else its worktree bytes); every other path reads HEAD, so a name only a peer's dirt binds does
-    # not resolve.
     if owned is not None:
-        closure_paths = sorted({*live, *owned.present})
         findings += li.import_closure_findings(
-            root, closure_paths, sorted({*deleted, *owned.deleted}),
-            landed_text=li.committed_image_text(root, _landing_bytes(root, closure_paths, landing_blobs)),
+            root, sorted({*live, *owned.present}), sorted({*deleted, *owned.deleted}),
         )
     else:
-        findings += li.import_closure_findings(
-            root, live, deleted,
-            landed_text=li.committed_image_text(root, _landing_bytes(root, live, landing_blobs)),
-        )
+        findings += li.import_closure_findings(root, live, deleted)
     try:
         from coordinator_core.authoring_leaks import import_closure
 

@@ -80,8 +80,7 @@ def _stage(repo: Path, body: str = "plain row", **sizing_over):
     sizing = {"intent": "Fix", "exit_criterion": {"statement": "ok"}, "deliverable_id": "dlv-xs-abc123"}
     sizing.update(sizing_over)
     (repo / SIZING_REL).write_text(yaml.safe_dump(sizing), encoding="utf-8", newline="\n")
-    _stage.report = {}
-    return stage(repo, run_id="r1", plan_rel=PLAN_REL, commit_sizing_rel=SIZING_REL, family_report=_stage.report)
+    return stage(repo, run_id="r1", plan_rel=PLAN_REL, commit_sizing_rel=SIZING_REL)
 
 
 def test_mint_carries_the_family_of_the_run_it_supersedes(repo) -> None:
@@ -102,23 +101,17 @@ def test_mint_names_no_family_when_the_predecessor_has_none_or_is_only_mentioned
     assert "family" not in _mint(repo, em_context=f"see run {PRIOR_RUN} for background")
 
 
-def _family_advice(_m) -> list[str]:
-    return list(_stage.report.get("warnings", ()))
-
-
-def test_stage_inherits_the_family_of_a_structured_superseded_run_instead_of_refusing(repo) -> None:
+def test_stage_refuses_a_sizing_with_no_family_whose_superseded_run_names_one(repo) -> None:
     _predecessor(repo)
-    m = _stage(repo, em_analysis={"em_brief": f"supersedes halted run {PRIOR_RUN}"})
-    assert m.rows[0].agent_type == RUNNER
-    assert _stage.report["family_inherited"]["family"] == "codex"
-    assert PRIOR_RUN in _stage.report["family_inherited"]["source"]
+    with pytest.raises(AskStageError) as exc:
+        _stage(repo, em_analysis={"em_brief": f"supersedes halted run {PRIOR_RUN}"})
+    assert "'codex'" in str(exc.value) and PRIOR_RUN in str(exc.value) and "family: codex" in str(exc.value)
 
 
-def test_stage_advises_never_refuses_a_sizing_with_no_family_whose_plan_row_names_one(repo) -> None:
-    m = _stage(repo, body="this run's sizing family: codex routes this row to the runner")
-    assert m.rows[0].agent_type != RUNNER
-    advice = " ".join(_family_advice(m))
-    assert "'codex'" in advice and "plan row" in advice
+def test_stage_refuses_a_sizing_with_no_family_whose_plan_row_names_one(repo) -> None:
+    with pytest.raises(AskStageError) as exc:
+        _stage(repo, body="this run's sizing family: codex routes this row to the runner")
+    assert "'codex'" in str(exc.value) and "plan row" in str(exc.value)
 
 
 def test_stage_still_accepts_the_sizing_that_names_the_family(repo) -> None:

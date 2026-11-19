@@ -614,7 +614,7 @@ def _write_ticket(qdir: Path, name: str, meta: dict, *, replace: bool) -> bool:
                 _unlink_quiet(tmp)
                 raise
             return True
-        fd = os.open(str(qdir / name), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        fd = os.open(str(qdir / name), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(body)
         return True

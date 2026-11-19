@@ -49,7 +49,7 @@ def test_unavailable_scan_is_an_error_with_other_fields_kept(root, monkeypatch):
     def unavailable(*_a, **_k):
         raise TripwireScanUnavailable("split index")
 
-    monkeypatch.setattr(rr, "tracked_test_bytes", unavailable)
+    monkeypatch.setattr(rr, "literal_namers", unavailable)
     out = _list(root)
     assert out["error"] == "tripwire scan unavailable: split index"
     assert out["tripwires"] == []
@@ -60,7 +60,7 @@ def test_unavailable_scan_is_an_error_with_other_fields_kept(root, monkeypatch):
 
 
 def test_available_scan_has_no_error(root, monkeypatch):
-    monkeypatch.setattr(rr, "tracked_test_bytes", lambda *_a, **_k: [("tests/test_x.py", b'X = "pkg/mod.py"')])
+    monkeypatch.setattr(rr, "literal_namers", lambda *_a, **_k: {"tests/test_x.py"})
     out = _list(root)
     assert out["error"] is None
     assert out["tripwires"] == ["tests/test_x.py"]
@@ -68,7 +68,7 @@ def test_available_scan_has_no_error(root, monkeypatch):
 
 def _with_created(monkeypatch, created):
     monkeypatch.setattr(rr, "_created", lambda *_a, **_k: (list(created), []))
-    monkeypatch.setattr(rr, "tracked_test_bytes", lambda *_a, **_k: [])
+    monkeypatch.setattr(rr, "literal_namers", lambda *_a, **_k: {})
 
 
 def test_list_unions_tree_scanners_when_created(root, monkeypatch):

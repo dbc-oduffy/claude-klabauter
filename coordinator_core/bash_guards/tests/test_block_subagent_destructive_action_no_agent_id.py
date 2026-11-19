@@ -2,7 +2,7 @@
 
 Pins both the bash and powershell legs: a payload carrying `agent_type` or
 `subagent_type` and no `agent_id` is classified (never allowed as main thread),
-and the genuine main-thread allow writes nothing (it is not a fail-open).
+and the genuine main-thread allow logs `main-thread-out-of-scope`, not FAIL-OPEN.
 """
 
 from __future__ import annotations
@@ -31,11 +31,14 @@ def _payload(tool, command, **extra):
 
 
 @pytest.mark.parametrize("tool,command", LEGS)
-def test_no_identity_keys_is_main_thread_and_writes_nothing(tool, command, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_identity_keys_is_main_thread_and_logs_new_label(tool, command, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     assert envelope_of(guard.check(_payload(tool, command))) is None
-    assert not log_path.exists()
+    content = log_path.read_text(encoding="utf-8")
+    assert "main-thread-out-of-scope" in content
+    assert "FAIL-OPEN" not in content
+    assert "branch='no-agent-id-key'" in content
 
 
 @pytest.mark.parametrize("tool,command", LEGS)
@@ -44,7 +47,7 @@ def test_agent_type_without_agent_id_is_never_main_thread(tool, command, tmp_pat
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     result = envelope_of(guard.check(_payload(tool, command, agent_type="coordinator:executor")))
     assert result is not None
-    assert not log_path.exists() or "no-agent-id-key" not in log_path.read_text(encoding="utf-8")
+    assert not log_path.exists() or "main-thread-out-of-scope" not in log_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("tool,command", LEGS)
@@ -53,7 +56,7 @@ def test_subagent_type_without_agent_id_is_never_main_thread(tool, command, tmp_
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     result = envelope_of(guard.check(_payload(tool, command, subagent_type="coordinator:executor")))
     assert result is not None
-    assert not log_path.exists() or "no-agent-id-key" not in log_path.read_text(encoding="utf-8")
+    assert not log_path.exists() or "main-thread-out-of-scope" not in log_path.read_text(encoding="utf-8")
 
 
 def test_other_fail_open_sites_keep_their_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

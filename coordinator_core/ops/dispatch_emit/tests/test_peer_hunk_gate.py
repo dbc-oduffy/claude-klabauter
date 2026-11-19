@@ -228,11 +228,7 @@ def test_sibling_spines_inside_release_scope_parse_each_plan_once_across_calls(r
         second = peer_hunk_gate._sibling_spines(repo, [run_id])
     assert first == second and parses == ["docs/plans/b.md"]
     peer_hunk_gate._sibling_spines(repo, [run_id])
-    assert len(parses) == 1  # outside the scope the unchanged plan is answered from run_dir_stat_cache
-    plan = repo / "docs" / "plans" / "b.md"
-    plan.write_text(plan.read_text(encoding="utf-8") + "\n<!-- edited -->\n", encoding="utf-8")
-    peer_hunk_gate._sibling_spines(repo, [run_id])
-    assert len(parses) == 2  # a changed stat re-parses
+    assert len(parses) == 2
 
 
 def test_many_siblings_share_one_sizing_read_and_one_deadline_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:

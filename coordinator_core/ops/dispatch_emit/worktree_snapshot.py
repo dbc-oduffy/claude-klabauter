@@ -13,7 +13,6 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.atomic_replace import _TEMP_PREFIX
 from coordinator_core.git.run import run_git
 from coordinator_core.ops._path_guard import contained_path
 
@@ -187,8 +186,7 @@ def record_dir_changes(worktree_root: Path, record_dir_rel: str, changed: set) -
     present: list = []
     deleted: list = []
     for rel in sorted(changed):
-        name = rel[len(prefix):]
-        if not rel.startswith(prefix) or "/" in name or name.startswith(_TEMP_PREFIX):
+        if not rel.startswith(prefix) or "/" in rel[len(prefix):]:
             continue
         (present if (worktree_root / rel).is_file() else deleted).append(rel)
     return present, deleted

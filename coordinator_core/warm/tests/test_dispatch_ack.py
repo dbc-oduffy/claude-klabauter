@@ -387,31 +387,11 @@ def test_overdue_record_inside_the_ceiling_reads_executing_overdue(monkeypatch: 
     store = _bounded(10.0)
     key = _key(1, 1_000_100)
     store.admit(key, "m")
-    store.bind_worker(key, lambda: (os.getpid(), lambda: True))
     clock = time.monotonic()
     monkeypatch.setattr(time, "monotonic", lambda: clock + 10.0)
     assert store.status(key) == {"state": dispatch_ack.STATE_EXECUTING, "overdue": True}
     monkeypatch.setattr(time, "monotonic", lambda: clock + 9.0)
     assert store.status(key) == {"state": dispatch_ack.STATE_EXECUTING}
-
-
-def test_overdue_record_whose_worker_probe_reads_dead_is_terminal_worker_dead(monkeypatch: pytest.MonkeyPatch) -> None:
-    store = _bounded(10.0)
-    key = _key(1, 1_000_100)
-    store.admit(key, "m")
-    alive = [True]
-    store.bind_worker(key, lambda: (os.getpid(), lambda: alive[0]))
-    clock = time.monotonic()
-    monkeypatch.setattr(time, "monotonic", lambda: clock + 10.0)
-    assert store.status(key)["state"] == dispatch_ack.STATE_EXECUTING
-    alive[0] = False
-    for _ in range(2):
-        assert store.status(key) == {
-            "state": dispatch_ack.STATE_UNKNOWABLE,
-            "reason": dispatch_ack.REASON_WORKER_DEAD,
-            "worker_alive": False,
-            "worker_pid": os.getpid(),
-        }
 
 
 def test_record_past_the_overdue_ceiling_reads_abandoned(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -799,36 +779,3 @@ def test_fresh_tmp_entries_alone_do_not_stall_the_legacy_sweep(tmp_path) -> None
     assert dispatch_ack.prune_journal(tmp_path, budget=2) is True
     assert (tmp_path / dispatch_ack._LEGACY_MARKER).exists()
     assert all(os.path.exists(p) for p in tmps)
-
-
-def test_refused_import_gate_leaves_no_retry_safe_claim(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    journal = str(tmp_path / "journal")
-    key = _key(1, 1_000_100)
-    marker = dispatch_ack.begin_import_phase(journal, key)
-    assert marker is not None
-    real = dispatch_ack._create_exclusive
-    monkeypatch.setattr(
-        dispatch_ack, "_create_exclusive", lambda p: None if p.endswith(dispatch_ack._IMPORT_GATE_SUFFIX) else real(p)
-    )
-    assert dispatch_ack.end_import_phase(marker) is True
-    monkeypatch.setattr(dispatch_ack, "_create_exclusive", real)
-    assert dispatch_ack.abandon_import_phase(journal, key) is False
-
-
-def test_status_reads_worker_liveness_outside_the_store_lock(monkeypatch: pytest.MonkeyPatch) -> None:
-    store = _store()
-    key = _key(1, 1_000_100)
-    store.admit(key, "ceremony.commit_v2")
-    held: list = []
-
-    def probe() -> bool:
-        held.append(store._lock.acquire(blocking=False))
-        if held[-1]:
-            store._lock.release()
-        return True
-
-    store._records[key]["is_alive"] = probe
-    store._records[key]["worker_pid"] = os.getpid()
-    monkeypatch.setattr(dispatch_ack, "pid_start_time", lambda pid: held.append(store._lock.acquire(blocking=False)) or None)
-    assert store.status(key)["state"] == dispatch_ack.STATE_EXECUTING
-    assert held and all(held)

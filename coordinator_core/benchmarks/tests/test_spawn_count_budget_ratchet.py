@@ -513,14 +513,6 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
-    "dispatch.test_leg": {
-        "run_base_committer_time": {
-            "ceiling": 1,
-            "reason": (
-                "First recorded 2026-11-19 at the value it entered with: one git spawn reads the committer time of run_base_sha to judge the test record's freshness."
-            ),
-        },
-    },
 }
 
 _MIN_REASON_LEN = 40

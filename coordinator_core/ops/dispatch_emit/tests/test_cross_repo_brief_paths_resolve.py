@@ -19,7 +19,7 @@ _RECORD_PATH = re.compile(r"(?<![\w/.])((?:/|[A-Za-z]:/)?" + re.escape(RECORD_DI
 
 
 # Repo-relative values the engine parses (script marker, op params, result fields), never read by an agent as a path.
-_DATA_PREFIXES = ("ask-run-manifest v1 ", "plan_path: ", "ledger: '", "manifest: '", '"plan_path": "')
+_DATA_PREFIXES = ("ask-run-manifest v1 ", "plan_path: ", "ledger: '", "manifest: '")
 
 
 def _emit(target: Path, out: Path, ask: str) -> tuple[str, Path]:

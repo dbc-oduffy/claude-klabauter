@@ -74,14 +74,13 @@ def _sibling_spines(root: Path, run_ids: Iterable[str]) -> dict:
     """`{run_id: set | Exception}`: each run's plan-spine `writes` (a set; empty when the run records no
     sizing or its sizing or plan file is absent) or the exception its read raised (the caller holds).
     One pass: each sizing is read once and each distinct plan path is parsed once, however many runs
-    share it. Sizing and plan reads are answered from `run_dir_stat_cache` while the file's stat is
-    unchanged (a parse Exception is cached too). Inside a `halted_hold_release.release_scope()` the
-    answers are also memoised per (root, run_id) and per plan path in the scope's state."""
+    share it. Inside a `halted_hold_release.release_scope()` the answers are memoised per
+    (root, run_id) and per plan path in the scope's state."""
     import yaml
 
     from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
     from coordinator_core.ops import warp_run_deliverable
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, run_dir_stat_cache
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
 
     state = halted_hold_release._SCOPE.get()
     if state is None:
@@ -104,31 +103,22 @@ def _sibling_spines(root: Path, run_ids: Iterable[str]) -> dict:
                 if sizing_rel:
                     sizing_key = (str(root), sizing_rel)
                     if sizing_key not in sizings_memo:
-                        def _read_sizing_plan(p: str) -> str:
-                            try:
-                                sizing = yaml.load(Path(p).read_text(encoding="utf-8"), Loader=SAFE_LOADER) or {}
-                            except FileNotFoundError:
-                                sizing = {}
-                            return _norm(sizing.get("plan")) if isinstance(sizing, dict) else ""
-
-                        sizings_memo[sizing_key] = run_dir_stat_cache.cached(
-                            "sibling-sizing-plan", root / sizing_rel, _read_sizing_plan,
-                        )
+                        try:
+                            sizing = yaml.load(
+                                (root / sizing_rel).read_text(encoding="utf-8"),
+                                Loader=SAFE_LOADER,
+                            ) or {}
+                        except FileNotFoundError:
+                            sizing = {}
+                        sizings_memo[sizing_key] = _norm(sizing.get("plan")) if isinstance(sizing, dict) else ""
                     plan_rel = sizings_memo[sizing_key]
                     if plan_rel:
                         plan_key = (str(root), plan_rel)
                         if plan_key not in plans_memo:
-                            def _read_plan_spine(_p: str, _plan_rel: str = plan_rel) -> object:
-                                try:
-                                    return _plan_spine_writes(root, _plan_rel)
-                                except OSError:
-                                    raise  # a transient read failure must not outlive the stat it was read under
-                                except Exception as exc:  # noqa: BLE001 -- a parse failure is cached and carried to every sharing run
-                                    return exc
-
-                            plans_memo[plan_key] = run_dir_stat_cache.cached(
-                                "sibling-plan-spine", root / plan_rel, _read_plan_spine,
-                            )
+                            try:
+                                plans_memo[plan_key] = _plan_spine_writes(root, plan_rel)
+                            except Exception as exc:  # noqa: BLE001 -- carried to every sharing run
+                                plans_memo[plan_key] = exc
                         spine = plans_memo[plan_key]
             except Exception as exc:  # noqa: BLE001 -- this run's spine unknown: the caller holds
                 spine = exc
@@ -392,53 +382,14 @@ def _names_path(finding: str, path: str, basename_unique: bool) -> bool:
 _ARM_OUT_OF_ASK = "out-of-ask"
 _ARM_CRITICAL = "critical"
 _ARM_CONFORMANCE = "conformance"
-_ARM_FOREIGN_HUNKS = "foreign-hunks"
 LEDGER_CONFLICT_STEM = "ledger-conflict"
-
-
-def _carries_foreign_hunks(root: Path, run_id: str, path: str) -> bool:
-    """True when the worktree `path` holds a hunk over HEAD that is not one of the run's own recorded
-    hunks (`land_run._own_hunks`: the run's changes over its `write_baseline` blob, taken from the
-    blob its `measured-rev.json` records for the path, else from the worktree). Peer dirt present at
-    stage, or added after the measure, counts. False when the run records no baseline blob for the
-    path, the path is untracked at HEAD, or a side is unreadable: nothing measured, nothing held.
-    Zero spawns; never raises."""
-    try:
-        from coordinator_core.git import git_objects
-        from coordinator_core.git.git_dir import resolve_git_common_dir
-        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution, kept_work, landing_integrity, own_hunk_stage
-        from coordinator_core.ops.dispatch_emit.land_run import _hunk_blocks, _own_hunks
-
-        base_blob = (halted_hunk_attribution._baseline(root, run_id) or {}).get(path)
-        diff = own_hunk_stage.read_diff(root, [path]).get(path)
-        if not base_blob or diff is None:
-            return False
-        content = (root / path).read_bytes()
-        record = landing_integrity._measured_record(root, run_id) or {}
-        blobs = record.get("blobs")
-        measured = blobs.get(path) if isinstance(blobs, dict) else None
-        recorded = content
-        if isinstance(measured, str):
-            obj = git_objects.read_object(resolve_git_common_dir(root), measured)
-            if obj is None:
-                return False
-            recorded = obj[1]
-        own = _own_hunks(root, path, base_blob, recorded)
-        form = kept_work.checkin_form(root, path, content)
-        if own is None or form is None:
-            return False
-        total = _hunk_blocks(diff.head_bytes.splitlines(keepends=True), form.splitlines(keepends=True))
-        return bool(total - own)
-    except Exception:  # noqa: BLE001 -- unmeasurable: no foreign-hunk hold
-        return False
 
 
 def _unresolved_out_of_ask(text: str) -> list:
     """`(label, naming_text, arm)` for each unresolved findings-ledger row (status not applied or
     em-rejected; a row with no explicit status is unresolved): one carrying the structured
     `out_of_ask: true` marker (arm `out-of-ask`), else one whose `severity` canonicalises to P0
-    (arm `critical`), else any other (arm `foreign-hunks`, which `_scan_holds` keeps only for a path
-    `_carries_foreign_hunks` measures). Prose is never read."""
+    (arm `critical`). Prose is never read."""
     from coordinator_core.ops.review_findings_ledger import LedgerError, _parse_ledger_rows
     from coordinator_core.ops.review_mint.wave_bookkeeping import _canonical_severity
 
@@ -455,7 +406,7 @@ def _unresolved_out_of_ask(text: str) -> list:
         elif _canonical_severity(row.get("severity")) == "P0":
             arm = _ARM_CRITICAL
         else:
-            arm = _ARM_FOREIGN_HUNKS
+            continue
         files = row.get("files") if isinstance(row.get("files"), list) else [row.get("file")]
         named = " ".join(str(f) for f in files if isinstance(f, str))
         label = str(row.get("summary") or row.get("title") or row.get("id") or arm)
@@ -688,7 +639,6 @@ def _scan_holds(
             return []
         names = [p.rpartition("/")[2] for p in paths]
         holds = set()
-        foreign: dict = {}
         for stem in (s for s in stems if isinstance(s, str) and s):
             land_deadline.check("peer_hunk_gate.out_of_ask_holds")
             try:
@@ -701,14 +651,8 @@ def _scan_holds(
             )
             for label, named, arm in rows:
                 for path, name in zip(paths, names):
-                    if not _names_path(named, path, names.count(name) == 1):
-                        continue
-                    if arm == _ARM_FOREIGN_HUNKS:
-                        if path not in foreign:
-                            foreign[path] = _carries_foreign_hunks(root, run_id, path)
-                        if not foreign[path]:
-                            continue
-                    holds.add((path, stem, label, arm))
+                    if _names_path(named, path, names.count(name) == 1):
+                        holds.add((path, stem, label, arm))
     except Exception:  # noqa: BLE001 -- record unknown: hold nothing
         return []
     return sorted(holds)

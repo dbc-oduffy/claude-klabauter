@@ -817,7 +817,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"ceremony.wiki_candidates\" handler.\n\nParams: `since` (ISO date/datetime, or a ledger `completing_sha`; overrides the cached\n`ack_head`), `repo_root` (any path inside the repo to query; default the invoking repo). Both sources\nresolve to the same main worktree root, so --repo, cwd and `repo_root` agree. Returns\n{schema, schema_version, window{since, head, source}, pages[{page, plans[{path, commit_sha,\ntshirt, preview}]}], preview_chars_total, truncated{pages, plans}, empty_reason}. Read-only: writes no file\nand never advances the worklist `ack_head`. Caps: PREVIEW_CHARS, PAGES_CAP, PLANS_CAP.",
+      "description": "JSON-RPC \"ceremony.wiki_candidates\" handler.\n\nParams: `since` (ISO date/datetime, or a ledger `completing_sha`; overrides the cached\n`ack_head`), `repo_root` (repo to query; default the invoking repo's main worktree). Returns\n{schema, schema_version, window{since, head, source}, pages[{page, plans[{path, commit_sha,\ntshirt, preview}]}], preview_chars_total, truncated{pages, plans}, empty_reason}. Read-only: writes no file\nand never advances the worklist `ack_head`. Caps: PREVIEW_CHARS, PAGES_CAP, PLANS_CAP.",
       "module": "coordinator_core.ops.ceremony.wiki_candidates",
       "name": "ceremony.wiki_candidates",
       "op_class": "compute_only",
@@ -2564,7 +2564,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "Submit one ask or sizing through the shared gates; see the module docstring for the wire contract.\n\ncoordinator_core.ops.engine_ask_submit -- JSON-RPC \"engine_ask.submit\": the engine-ask door for a\ncaller with no Workflow tool (Codex).\n\nWire params: `ask` xor `sizing`; `ask_source` (\"pm\" | \"relayed\", required with `ask`); `session_id`,\n`caller` (identity string) and absolute `cwd`, all required. A launcher-spawned headless EM may omit\nthem: with `session_id` absent, `COORDINATOR_SESSION_ID` from the caller env is taken only when the\nheadless-EM grant binds it (`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN`), `caller` defaults to `<family>-em`\nfrom that grant and `cwd` to the op's repo root; an unbound env session id is refused as absent. Optional\n`repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,\n`em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and\n`fire` (bool, default true: hand the run to `workflow.fire` with `expected=<sha256>`; false mints without starting),\n`executor` (headless by default, or claude), and `backend` (codex by default; claude, grok or agy opt-in).\nCompletion defaults to the submitting session UUID; notify_to explicitly overrides it.\nAn empty params object reads the object in `.coordinator-local/em-submit.json` under the repo; a missing file\nis created as an empty-ask scaffold and refused as `bad-request` naming that path, a non-object file likewise. Non-empty params are used as given.\n\nReply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when\n`fire` is not false) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that\nis refused or raises after a successful submit keeps the run handle and adds `fire_error` naming the cause.\n\nSpec backlink: docs/plans/2026-11/2026-11-07-7402bb-2-engine-ask-op-side-submit.md § C1",
+      "description": "Submit one ask or sizing through the shared gates; see the module docstring for the wire contract.\n\ncoordinator_core.ops.engine_ask_submit -- JSON-RPC \"engine_ask.submit\": the engine-ask door for a\ncaller with no Workflow tool (Codex).\n\nWire params: `ask` xor `sizing`; `ask_source` (\"pm\" | \"relayed\", required with `ask`); `session_id`,\n`caller` (identity string) and absolute `cwd`, all required. A launcher-spawned headless EM may omit\nthem: with `session_id` absent, `COORDINATOR_SESSION_ID` from the caller env is taken only when the\nheadless-EM grant binds it (`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN`), `caller` defaults to `<family>-em`\nfrom that grant and `cwd` to the op's repo root; an unbound env session id is refused as absent. Optional\n`repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,\n`em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and\n`fire` (bool, default true: hand the run to `workflow.fire` with `expected=<sha256>`; false mints without starting),\n`executor` (headless by default, or claude), and `backend` (codex by default; claude, grok or agy opt-in).\nCompletion defaults to the submitting session UUID; notify_to explicitly overrides it.\nAn empty params object reads the object in `.coordinator-local/em-submit.json` under the repo; a missing or\nnon-object file is a `bad-request` refusal naming that path. Non-empty params are used as given.\n\nReply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when\n`fire` is not false) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that\nis refused or raises after a successful submit keeps the run handle and adds `fire_error` naming the cause.\n\nSpec backlink: docs/plans/2026-11/2026-11-07-7402bb-2-engine-ask-op-side-submit.md § C1",
       "module": "coordinator_core.ops.engine_ask_submit",
       "name": "engine_ask.submit",
       "op_class": "mutating",
@@ -2572,29 +2572,6 @@
         "type": "object"
       },
       "summary": "Submit one ask or sizing through the shared gates; see the module docstring for the wire contract.",
-      "timeout_s": 30.0
-    },
-    {
-      "description": "JSON-RPC \"external_workspace.rehydrate\": params `key` xor `all_missing`.\n\nReturns {\"key\", \"path\", \"url\", \"ref\", \"action\"} with action \"cloned\", \"reset\" or \"noop\" for\n`key`; {\"missing\": [{key, path, url, ref}, ...]} for `all_missing`, with nothing cloned.",
-      "module": "coordinator_core.ops.external_workspace_rehydrate",
-      "name": "external_workspace.rehydrate",
-      "op_class": "mutating",
-      "params_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "all_missing": {
-            "description": "Report the missing registered workspaces; clones none.",
-            "type": "boolean"
-          },
-          "key": {
-            "description": "Registered external_workspaces key to clone or reset.",
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "summary": "JSON-RPC \"external_workspace.rehydrate\": params `key` xor `all_missing`.",
       "timeout_s": 30.0
     },
     {
@@ -3005,14 +2982,14 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC `git.maintenance` handler. `params[\"tier\"]` is required; `params[\"heavy\"]`\n(default true) false runs daily's light legs, which still run under `pack_deletion_pause`.\n\nTier validity was checked a third time\nhere; `run_tier` already rejects an unknown tier into `result.errors`,\nwhich this handler already serialises, so the pre-check bought nothing.",
+      "description": "JSON-RPC `git.maintenance` handler. `params[\"tier\"]` is required.\n\nTier validity was checked a third time\nhere; `run_tier` already rejects an unknown tier into `result.errors`,\nwhich this handler already serialises, so the pre-check bought nothing.",
       "module": "coordinator_core.ops.git_maintenance",
       "name": "git.maintenance",
       "op_class": "mutating",
       "params_schema": {
         "type": "object"
       },
-      "summary": "JSON-RPC `git.maintenance` handler. `params[\"tier\"]` is required; `params[\"heavy\"]`",
+      "summary": "JSON-RPC `git.maintenance` handler. `params[\"tier\"]` is required.",
       "timeout_s": 30.0
     },
     {
@@ -4028,7 +4005,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "coordinator_core.hooks.guard_ue_specialist_advisory -- PreToolUse (Agent) op.\n\nAdvisory-only: a direct Agent dispatch of a non-example-game-repo `subagent_type` whose brief matches a work\nclass of the installed example-game-repo-control route table, in a UE repo, gets a context line naming\n`route to example-game-repo-control:<specialist>`. It never denies and never rewrites `updatedInput`.\n\nForwarder contract. `evaluate(payload, env=None, repo_root=None) -> dict` is the one body behind the\nregistered op and the seam a thin external hook script forwards to. It returns `{}` (no advisory) or\na PreToolUse `additionalContext` envelope. A non-Agent tool, a non-UE repo, no installed example-game-repo\nmanifest, a example-game-repo/game-dev `subagent_type`, a specialist missing from the installed roster, a\nprompt whose declared writes (`declared_writes`) are all docs/tests/yaml and any internal error all\nreturn `{}`. No subprocess; the table and roster come from agent_route's\nmemoised `_plugin_table`.",
+      "description": "coordinator_core.hooks.guard_ue_specialist_advisory -- PreToolUse (Agent) op.\n\nAdvisory-only: a direct Agent dispatch of a non-example-game-repo `subagent_type` whose brief matches a work\nclass of the installed example-game-repo-control route table, in a UE repo, gets a context line naming\n`route to example-game-repo-control:<specialist>`. It never denies and never rewrites `updatedInput`.\n\nForwarder contract. `evaluate(payload, env=None, repo_root=None) -> dict` is the one body behind the\nregistered op and the seam a thin external hook script forwards to. It returns `{}` (no advisory) or\na PreToolUse `additionalContext` envelope. A non-Agent tool, a non-UE repo, no installed example-game-repo\nmanifest, a example-game-repo/game-dev `subagent_type`, a specialist missing from the installed roster and\nany internal error all return `{}`. No subprocess; the table and roster come from agent_route's\nmemoised `_plugin_table`.",
       "module": "coordinator_core.hooks.guard_ue_specialist_advisory",
       "name": "hooks.guard_ue_specialist_advisory",
       "op_class": "mutating",
@@ -5068,7 +5045,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "MUTATING adapter over `mechanical_close` -- closes duplicate, content-free, wiki-append\nand out-of-enum-scope lesson rows in process, no model call; the report's `residue_ids`\nare the rows left for the agent and `unreadable` the rows whose YAML does not parse\n(named, never closed or repaired).\n\nparams:\n    repo: optional absolute path of the queue's repo root; defaults to the op's repo_root.\n        A path that is not an existing directory is refused naming `repo`.\n    dry_run: optional bool (default false); true returns verdicts and token counts\n        without writing.",
+      "description": "MUTATING adapter over `mechanical_close` -- closes duplicate, content-free, wiki-append\nand out-of-enum-scope lesson rows in process, no model call; the report's `residue_ids`\nare the rows left for the agent.\n\nparams:\n    repo: optional absolute path of the queue's repo root; defaults to the op's repo_root.\n        A path that is not an existing directory is refused naming `repo`.\n    dry_run: optional bool (default false); true returns verdicts and token counts\n        without writing.",
       "module": "coordinator_core.learn_lessons_pipeline.ops",
       "name": "learn_lessons_pipeline.apply_mechanical",
       "op_class": "mutating",
@@ -5098,7 +5075,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "MUTATING adapter over `mechanical_close` -- closes duplicate, content-free, wiki-append\nand out-of-enum-scope lesson rows in process, no model call; the report's `residue_ids`\nare the rows left for the agent and `unreadable` the rows whose YAML does not parse\n(named, never closed or repaired).\n\nparams:\n    repo: optional absolute path of the queue's repo root; defaults to the op's repo_root.\n        A path that is not an existing directory is refused naming `repo`.\n    dry_run: optional bool (default false); true returns verdicts and token counts\n        without writing.",
+      "description": "MUTATING adapter over `mechanical_close` -- closes duplicate, content-free, wiki-append\nand out-of-enum-scope lesson rows in process, no model call; the report's `residue_ids`\nare the rows left for the agent.\n\nparams:\n    repo: optional absolute path of the queue's repo root; defaults to the op's repo_root.\n        A path that is not an existing directory is refused naming `repo`.\n    dry_run: optional bool (default false); true returns verdicts and token counts\n        without writing.",
       "module": "coordinator_core.learn_lessons_pipeline.ops",
       "name": "learn_lessons_pipeline.mechanical_close",
       "op_class": "mutating",

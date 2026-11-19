@@ -3489,7 +3489,7 @@ def test_git_subcommand_and_remaining_for_segment_bare_git_still_none_subcmd() -
 # ---------------------------------------------------------------------------
 
 
-def test_main_thread_no_agent_id_key_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_thread_no_agent_id_key_logs_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     payload = {
@@ -3499,7 +3499,11 @@ def test_main_thread_no_agent_id_key_writes_nothing(tmp_path: Path, monkeypatch:
         "cwd": "/some/repo",
     }
     assert _enveloped(guard.check)(payload) is None
-    assert not log_path.exists()
+    content = log_path.read_text(encoding="utf-8")
+    assert "main-thread-out-of-scope" in content
+    assert "FAIL-OPEN" not in content
+    assert "branch='no-agent-id-key'" in content
+    assert "git rm --cached secret.txt" in content
 
 
 def test_kind_unresolved_unparseable_agent_id_logs_branch_and_denies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

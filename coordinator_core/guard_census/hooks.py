@@ -70,7 +70,6 @@ DENY_ONLY_CANDIDATES = (
 _HELPERS = (
     "bin-impl-drift",
     "cockpit-session",
-    "commit-resolution",
     "foreground-dispatch-strip",
     "forwarder-resolve",
     "git-common-dir",
@@ -79,7 +78,6 @@ _HELPERS = (
     "message-envelope",
     "named-dispatch-strip",
     "next-move-ledger",
-    "peer-identity",
     "plan-path-bridge",
     "posture",
     "sentinel-write-guard",
@@ -119,7 +117,6 @@ _TEST_MODULES = (
 
 _DISPATCHED = (
     "agent-completion-log",
-    "agent-stop-reaper",
     "agent-postuse-dispatch",
     "allow-emitted-workflow-fire",
     "auto-push",
@@ -187,11 +184,9 @@ _DISPATCHED = (
     "pickup-autofire",
     "platform-localize",
     "posix-invocation-detect",
-    "preuse-workflow-args-inline",
     "project-orientation",
     "example-retrieval-repo-detect",
     "receiver-state-sensor",
-    "record-askuserquestion-answer",
     "repin-cloud-engine-root",
     "rewrite-sendmessage-peer-name",
     "runtime-tripwire-stop-watcher",
@@ -199,7 +194,6 @@ _DISPATCHED = (
     "session-start-announce-job-mode",
     "session-start-cloud-focus",
     "session-start-guard-plane-check",
-    "session-start-resume-plugin-check",
     "session-start-register-published-engine",
     "session-start-repair-prepare-commit-msg-hook",
     "session-start-watch-presence",

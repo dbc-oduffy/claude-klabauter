@@ -67,12 +67,12 @@ def _hold_in_file_io(bench_dir: Path) -> None:
             pass
 
 
-def _bench_worker_init(stderr_dir=None, stall_dir=None, forward_queue=None, prewarm_emit=False) -> None:
+def _bench_worker_init(stderr_dir=None, stall_dir=None, forward_queue=None) -> None:
     """Pool-worker initializer: the engine's own init, then a body wrapper that parks `HOLD_OP`
     and stamps each op's worker CPU ms and spawn count into its reply as `_bench`."""
     from coordinator_core.warm import server
 
-    (_ORIGINAL_INIT or server._worker_process_init)(stderr_dir, stall_dir, forward_queue, prewarm_emit)
+    (_ORIGINAL_INIT or server._worker_process_init)(stderr_dir, stall_dir, forward_queue)
     from coordinator_core import ipc
 
     ipc.allow_unstamped_dispatch()

@@ -25,9 +25,7 @@ _BUDGET = 460800
 #: inline agent prompt prose). APM ruling: state/apm-rulings/2026-11-16-ask-script-base-margin-repin.md.
 #: Trap: a one-time re-pin. The next red needs a fresh ruling, with moving prompts out of the script the
 #: default option; never raise this number again by reflex.
-#: 2026-11-19: condition 3's default remedy (B, prompts out of the script) is production's staging; the
-#: base is now measured on the staged shape (280_482) and the margin lowered to it plus 4096; condition 2 holds.
-_BASE_MARGIN = 284578
+_BASE_MARGIN = 310000
 #: The largest real stage-prompt pair measured 2026-11-16: the refire shape, 424_123 full minus 280_081 base.
 _LARGEST_STAGE_PAIR = 144_042
 _SIZING_REL = "state/sizings/2026-10-26-budget-probe.yaml"
@@ -118,9 +116,9 @@ def _breakdown(root: Path, shape: str, assets: dict, monkeypatch) -> str:
 
 
 def _base_bytes(root: Path, shape: str, monkeypatch) -> int:
-    """Bytes of the production staged script (`staged_out` sink, as dispatch.emit always passes) with both embedded stage prompts stubbed."""
+    """Bytes with both embedded stage prompts stubbed: the script's own weight over the stage-prompt baseline."""
     monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9)
-    return _bytes(_compose(root, shape, staged_out={}, **_STUB_BLITZ, **_STUB_ROADMAP))
+    return _bytes(_compose(root, shape, **_STUB_BLITZ, **_STUB_ROADMAP))
 
 
 @pytest.mark.parametrize("shape", ["bare_relayed", "raw", "refire", "launcher_child"])
