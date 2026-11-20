@@ -909,6 +909,21 @@ def _gate_envelope_result(value: Any) -> Any:
     return value
 
 
+def _gate_redundant_halt_payload(text: str) -> dict | None:
+    """Recover the payload for retry comparison, without accepting the invalid wrapper."""
+    try:
+        outer = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(outer, dict) or set(outer) != {"jsonrpc", "id", "result", "halt"}:
+        return None
+    payload = outer["result"]
+    if (outer["jsonrpc"] == "2.0" and outer["halt"] is None
+            and isinstance(payload, dict) and "halt" in payload and payload["halt"] is None):
+        return payload
+    return None
+
+
 def run_agent(
     prompt: str,
     options: dict[str, Any] | None,
@@ -1121,6 +1136,7 @@ def run_agent(
         remaining = min(_GATE_REASK_SECONDS, timeout_s - (time.monotonic() - started))
         if text and len(text) <= _GATE_REPLY_LIMIT and remaining > 0 and private_cli is None:
             retry_dir = artifact_dir / "gate-reask"
+            wrapper_payload = _gate_redundant_halt_payload(text)
             retry_prompt = (
                 "Repair JSON syntax in the following data. Do not run any tools or repeat the gate operation. "
                 "Preserve every key, value and its order, including trailing fields. "
@@ -1128,6 +1144,13 @@ def run_agent(
                 "If that is impossible, return null.\n"
                 + json.dumps({"diagnostic": diagnostic, "reply": text}, ensure_ascii=False)
             )
+            if wrapper_payload is not None:
+                retry_prompt = (
+                    "Return only the JSON-RPC result object from the following data, byte values "
+                    "and key order unchanged. The outer halt:null duplicates the inner halt:null. "
+                    "Do not run any tools or repeat the gate operation.\n"
+                    + json.dumps({"diagnostic": diagnostic, "reply": text}, ensure_ascii=False)
+                )
             try:
                 repaired = run_agent(
                     retry_prompt, options, repo_root=repo_root, artifact_dir=retry_dir,
@@ -1137,7 +1160,10 @@ def run_agent(
                 )
                 repaired_text = (retry_dir / "last.txt").read_text(encoding="utf-8")
                 # A schema-valid prefix can still omit acceptance or manifest fields.
-                if _GATE_SCALARS.findall(text) == _GATE_SCALARS.findall(repaired_text):
+                if wrapper_payload is not None:
+                    if json.dumps(wrapper_payload) == json.dumps(repaired):
+                        value = repaired
+                elif _GATE_SCALARS.findall(text) == _GATE_SCALARS.findall(repaired_text):
                     value = repaired
             except (AgentFailed, OSError):
                 pass

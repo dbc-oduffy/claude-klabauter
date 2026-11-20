@@ -446,6 +446,16 @@ def test_codex_gate_validates_json_rpc_result(tmp_path, monkeypatch, annotated):
                  '{"arm":"m_plus","halt":null}', None, "Extra data", id="56fbcaba-no-prefix"),
     pytest.param('{"arm":"s","halt":null}}', '{"arm":"s","halt":null}',
                  "s", "Extra data", id="a6e58670-extra-delimiter"),
+    pytest.param(
+        '{"jsonrpc":"2.0","id":1,"result":{"arm":"m_plus","halt":null,"resume_rows":["C0","C4"]},"halt":null}',
+        '{"arm":"m_plus","halt":null,"resume_rows":["C0","C4"]}',
+        "m_plus", "'arm' is a required property", id="bf67037d-redundant-outer-halt",
+    ),
+    pytest.param(
+        '{"jsonrpc":"2.0","id":1,"result":{"arm":"m_plus","halt":null,"resume_rows":["C0","C4"]},"halt":null}',
+        '{"arm":"m_plus","halt":null,"resume_rows":["C0"]}',
+        None, "'arm' is a required property", id="bf67037d-do-not-drop-resume-row",
+    ),
     pytest.param('{"arm":"s" "halt":null}', '{"arm":"s" "halt":null}',
                  None, "Expecting ',' delimiter", id="retry-exhausted"),
 ])
