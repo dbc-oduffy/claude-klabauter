@@ -2573,8 +2573,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "b5a4046f44e4734043af38643b4659eeca49488a",
-    "coordinator_core/_engine_stamp": "e654384eacffd569e211c841e803aedb1f02e51c",
+    "coordinator_core/_engine_published_at": "8deaeabda8369f0ee0b39aad6bf75e6d495283d2",
+    "coordinator_core/_engine_stamp": "05a744f3efa666d16e28d6b43a82fb6590ae0ee4",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -10564,7 +10564,7 @@
     "coordinator_core/ops/workflow_fire/op.py": "00b40bcaa9f0f57aaefb7f054f8c29908edf824e",
     "coordinator_core/ops/workflow_fire/private_engine.py": "2b3fa2c72fb8130a4c95150f929f473353342334",
     "coordinator_core/ops/workflow_fire/receipt.py": "24a1497fc418fb270f035ece8b817695f5ae055d",
-    "coordinator_core/ops/workflow_fire/runtime.mjs": "f0d47bfa5a5465cf9f007d9a3e5434f04d3f4fb0",
+    "coordinator_core/ops/workflow_fire/runtime.mjs": "dceacfb96b8dadf57352f07a7e315c1c8fa6bfee",
     "coordinator_core/ops/workflow_fire/session_runs.py": "b54fd14500935f51c6fcc1d514626a63028ab0ca",
     "coordinator_core/ops/workflow_fire/tests/conftest.py": "a23b42767983c4e1de6cab9e33840855e85d8d2a",
     "coordinator_core/ops/workflow_fire/tests/test_acceptance.py": "dbf7d97f8d89b1b4a11cc1476490abc49b48a4e6",
@@ -10592,7 +10592,7 @@
     "coordinator_core/ops/workflow_fire/tests/test_headless_idempotent.py": "bac95e141bdc6d176a90227fc543c2dbf660ca3e",
     "coordinator_core/ops/workflow_fire/tests/test_headless_notify_shared_path.py": "639428628501d4d64cec815ae3d4a4bd6b251c32",
     "coordinator_core/ops/workflow_fire/tests/test_headless_published_root.py": "72ee870e30a844bea7ce7b06f46c494c693dabe7",
-    "coordinator_core/ops/workflow_fire/tests/test_headless_runtime.py": "c8119d50ffe63dacaac045b9a8188e9a22ff727e",
+    "coordinator_core/ops/workflow_fire/tests/test_headless_runtime.py": "569981c0c4a68d3194c7e36bbd64c7b5a7224502",
     "coordinator_core/ops/workflow_fire/tests/test_headless_sandboxed_forward.py": "3392f9e4245b8ebc97c50b4e3c5c5b5b7d9cbd0a",
     "coordinator_core/ops/workflow_fire/tests/test_private_engine.py": "b8907485b8d75ad4ced3e828a9d46f8a60fe9669",
     "coordinator_core/ops/workflow_fire/tests/test_private_plumbing.py": "a7eb86d6c8cf6d3e1da182dae0067baeffc6657f",
@@ -13076,5 +13076,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "e51ab651b44ac4b240d9d756c7afa8a1e1fcf0a8"
+  "source_head": "6c19d8e1e5a7c34fd83df28c1093bae93c46573b"
 }

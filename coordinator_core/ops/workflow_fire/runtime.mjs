@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 export const MAX_WORKFLOW_DEPTH = 32;
 
@@ -102,11 +103,16 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
     work.then(() => active.delete(work), () => active.delete(work));
     return work;
   } : undefined;
-  const workflow = async (options) => {
+  const workflow = async (options, positionalArgs) => {
     if (!options || typeof options.scriptPath !== 'string' || !options.scriptPath.trim()) {
       throw new TypeError('workflow requires a scriptPath');
     }
-    const nestedArgs = options.args ?? {};
+    if (options.args !== undefined && positionalArgs !== undefined &&
+        !isDeepStrictEqual(options.args, positionalArgs)) {
+      throw new TypeError('workflow options.args and positional args disagree');
+    }
+    const nestedArgs = options.args !== undefined ? options.args :
+      positionalArgs !== undefined ? positionalArgs : {};
     if (!nestedArgs || typeof nestedArgs !== 'object' || Array.isArray(nestedArgs)) {
       throw new TypeError('workflow args must be an object');
     }
