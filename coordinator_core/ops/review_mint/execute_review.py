@@ -1254,7 +1254,7 @@ def _reverify_phase(
 
     owned_first = _REVERIFY_OWNED_FIRST_CLAUSE.format(
         bound=TRIPWIRE_BOUND,
-        extra=", the verify-scope targets named below" if verify_scope_targets else "",
+        extra=", the verify-scope targets named below" if verify_scope_targets and group_prefixes else "",
         owned_scope=" (the union of the `owned` lists)" if group_prefixes else "",
         tripwire_scope=" (the union in list order)" if group_prefixes else " in list order",
     )
@@ -1667,8 +1667,8 @@ def compose_execute_review(
     integration stage's final-review mandate is emitted only when ``criterion`` is given.
     Re-verify lists, probes and reverts for every group prefix and the main prefix, each revert
     with the same failing set. A group starts nothing once a stop rule has halted the run.
-    ``verify_scope_targets`` (path -> test targets, read only in this mode) adds the verify-scope
-    targets of every review-edited path to the re-verify rerun set. ``None`` keeps the output
+    ``verify_scope_targets`` (path -> test targets) adds the verify-scope targets of every
+    review-edited path to the group re-verify rerun set; in every mode it reaches the host test leg. ``None`` keeps the output
     byte-identical; so does a roster with no slice agent at the tier.
 
     ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
@@ -2513,7 +2513,7 @@ def compose_execute_review(
                 host_degraded=host_degraded,
                 sc=_sc,
                 group_prefixes=group_prefixes,
-                verify_scope_targets=verify_scope_targets if group_prefixes else None,
+                verify_scope_targets=verify_scope_targets,
                 owned_red_path=owned_red_path,
                 run_id=safe_run_id,
                 deferred=reverify_deferred,

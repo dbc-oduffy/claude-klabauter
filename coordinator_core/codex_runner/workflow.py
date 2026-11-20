@@ -1105,6 +1105,7 @@ def run_agent(
     fire_id: str | None = None,
     on_native_thread: Callable[[dict], None] | None = None,
     private_cli: dict | None = None,
+    run_id: str | None = None,
     _gate_reask: bool = False,
 ) -> Any:
     """Return the schema-validated agent value; persist stdout/stderr and result.
@@ -1159,6 +1160,12 @@ def run_agent(
             "and all write evidence requirements. Do not edit when the stage is read-only.\n\n"
         ) + full_prompt
     full_prompt = with_worker_preamble(backend, full_prompt)
+    if run_id:
+        from coordinator_core.ops.dispatch_emit import engine_identity
+
+        full_prompt += "\n\n" + engine_identity.PROMPT_LINE.format(run_id=run_id)
+        on_spawn = engine_identity.spawn_recorder(
+            repo_root, run_id, str(options.get("label") or Path(artifact_dir).name), on_spawn)
     native_schema = _codex_schema(schema) if schema is not None else None
     if schema is not None and (backend in _FAMILY_BACKENDS or (backend == "codex" and native_schema is None)):
         full_prompt += (
@@ -1347,7 +1354,7 @@ def run_agent(
                     repo_root=repo_root, artifact_dir=retry_dir,
                     backend=backend, timeout_s=remaining, parent_session_id=parent_session_id,
                     request_id=f"{request_id}:gate-reask" if request_id is not None else None,
-                    fire_id=fire_id, _gate_reask=True,
+                    fire_id=fire_id, run_id=run_id, _gate_reask=True,
                 )
                 repaired_text = (retry_dir / "last.txt").read_text(encoding="utf-8")
                 # A schema-valid prefix can still omit acceptance or manifest fields.

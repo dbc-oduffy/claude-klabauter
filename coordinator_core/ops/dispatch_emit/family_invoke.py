@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
+from coordinator_core.ops.dispatch_emit import engine_identity
 from coordinator_core.ops.dispatch_emit import family_invoke_record as rec_mod
 from coordinator_core.ops.dispatch_emit import stage_family
 from coordinator_core.session.claimed_write import replace_bytes, replace_text
@@ -71,7 +72,8 @@ def _process_exit(artifact_dir: Path) -> Optional[int]:
     return code if isinstance(code, int) else None
 
 
-def _agent_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None) -> dict:
+def _agent_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None,
+                  on_spawn: Optional[Callable[[int], None]] = None) -> dict:
     """agy/grok: `workflow.run_agent`; the CLI's own exit code comes from its process receipt."""
     from coordinator_core.codex_runner import workflow
 
@@ -81,7 +83,7 @@ def _agent_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: P
             raise workflow.AgentFailed(_NO_SESSION)
         workflow.run_agent(
             prompt, {"label": "family-stage"}, repo_root=repo_root, artifact_dir=artifact_dir, backend=backend,
-            parent_session_id=parent_session_id,
+            parent_session_id=parent_session_id, on_spawn=on_spawn,
         )
     except Exception as exc:  # noqa: BLE001 -- AgentFailed and spawn errors alike become the recorded error
         error = f"{type(exc).__name__}: {exc}"[:600]
@@ -95,7 +97,8 @@ def _agent_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: P
     return {"argv": argv, "exit_code": code, "error": error}
 
 
-def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None) -> dict:
+def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None,
+                  on_spawn: Optional[Callable[[int], None]] = None) -> dict:
     """codex: `exec` under `--sandbox` with writable roots exactly the worktree and its scratch temp dir."""
     from coordinator_core.codex_runner import workflow
     from coordinator_core.codex_runner.codex_spawn_env import WRITABLE_TEMP_RELPATH, shape_codex_child, writeback_codex_auth
@@ -125,7 +128,7 @@ def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path, parent_se
             proc = workflow._run_admitted(
                 argv, with_worker_preamble("codex", prompt), env=env, repo_root=root, artifact_dir=artifact_dir,
                 backend="codex", options={"label": "family-stage"}, parent_session_id=parent_session_id, timeout_s=_TIMEOUT_S,
-                on_spawn=None, stdout=out, stderr=err,
+                on_spawn=on_spawn, stdout=out, stderr=err,
             )
         finally:
             writeback_codex_auth(env)
@@ -135,10 +138,11 @@ def _codex_runner(prompt: str, *, repo_root: Path, artifact_dir: Path, parent_se
     return {"argv": argv, "exit_code": proc.returncode, "error": None if proc.returncode == 0 else f"codex exited {proc.returncode}"}
 
 
-def _default_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None) -> dict:
+def _default_runner(prompt: str, *, backend: str, repo_root: Path, artifact_dir: Path, parent_session_id: Optional[str] = None,
+                    on_spawn: Optional[Callable[[int], None]] = None) -> dict:
     if backend == "codex":
-        return _codex_runner(prompt, repo_root=repo_root, artifact_dir=artifact_dir, parent_session_id=parent_session_id)
-    return _agent_runner(prompt, backend=backend, repo_root=repo_root, artifact_dir=artifact_dir, parent_session_id=parent_session_id)
+        return _codex_runner(prompt, repo_root=repo_root, artifact_dir=artifact_dir, parent_session_id=parent_session_id, on_spawn=on_spawn)
+    return _agent_runner(prompt, backend=backend, repo_root=repo_root, artifact_dir=artifact_dir, parent_session_id=parent_session_id, on_spawn=on_spawn)
 
 
 def _vendor_model(artifact_dir: Path, backend: str) -> Optional[str]:
@@ -219,9 +223,11 @@ def invoke(
         if family == "codex" and stage == "write" and sys.platform == "win32":
             raise RuntimeError(_WIN32_CODEX_WRITE)
         prompt = (root / prompt_path).read_text(encoding="utf-8")
+        # The default runner records the engine-identity receipt at spawn; an injected runner keeps its signature.
+        spawn_kw = {} if runner else {"on_spawn": engine_identity.spawn_recorder(root, run_id, stage)}
         ran = (runner or _default_runner)(
             prompt, backend=family, repo_root=root, artifact_dir=artifact_dir,
-            parent_session_id=resolve_session_id(root, run_id, session_id),
+            parent_session_id=resolve_session_id(root, run_id, session_id), **spawn_kw,
         )
         info = ran if isinstance(ran, dict) else {}
         argv = [str(a) for a in info.get("argv") or []]

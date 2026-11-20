@@ -7746,7 +7746,7 @@ def compose_script(
         review_terminal_sha=review_terminal_sha if review_only else None,
         reverify=True,
         review_groups=pipelined_groups,
-        verify_scope_targets=_verify_scope_by_path(flat_rows, repo_root) if pipelined_groups else None,
+        verify_scope_targets=_verify_scope_by_path(flat_rows, repo_root),
     ):
         phase_titles.append(title)
         if title == REVIEW_GROUPS_PHASE:

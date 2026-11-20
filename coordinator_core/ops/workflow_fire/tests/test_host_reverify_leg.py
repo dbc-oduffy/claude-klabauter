@@ -186,3 +186,43 @@ def test_host_verify_exit_4_never_downgrades_a_run_that_ran_tests(tmp_path, monk
     measured = {"status": "pass", "tests_run": 3, "pytest_phases": [{"exit_code": 0}]}
     result = _infra_run(tmp_path, ["tests/test_a.py"], measured, monkeypatch)
     assert "test_infra_failure" not in result and result["status"] == "pass"
+
+
+def _selected_targets(tmp_path, monkeypatch, scope, owned, edited=("module.py",)):
+    repo = tmp_path / "product"
+    repo.mkdir()
+    for name in ("test_scoped.py", "test_owned.py", "test_wire.py"):
+        (repo / name).write_text("def test_x():\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(headless, "_invoke_source", lambda *_args: {"inventories": [{
+        "edited": list(edited), "created": [], "owned": owned, "tripwires": ["test_wire.py"],
+        "tripwires_not_selected": [], "error": None,
+    }], "error": None})
+    seen = []
+
+    def _leg(_root, _out, _artifacts, selected, *_rest):
+        seen.extend(selected)
+        return 0, {"tests_run": len(selected), "status": "pass", "status_after": "pass"}
+
+    monkeypatch.setattr(headless, "_run_pinned_test_leg", _leg)
+    params = {"base": "a" * 40, "slice_prefixes": ["prep"], "run_key": "run"}
+    if scope is not None:
+        params["verify_scope_targets"] = scope
+    headless._reverify_test_leg(params, str(repo), tmp_path / "operations", 30)
+    return seen
+
+
+def test_a_declared_verify_scope_replaces_the_whole_owned_inventory(tmp_path, monkeypatch):
+    seen = _selected_targets(tmp_path, monkeypatch, {"module.py": ["test_scoped.py"]}, ["test_owned.py"])
+    assert seen == ["test_scoped.py", "test_wire.py"]
+
+
+def test_no_verify_scope_keeps_the_owned_inventory(tmp_path, monkeypatch):
+    seen = _selected_targets(tmp_path, monkeypatch, None, ["test_owned.py"])
+    assert seen == ["test_owned.py", "test_wire.py"]
+
+
+def test_a_partly_scoped_edit_set_keeps_the_owned_inventory(tmp_path, monkeypatch):
+    seen = _selected_targets(
+        tmp_path, monkeypatch, {"module.py": ["test_scoped.py"]}, ["test_owned.py"], edited=("module.py", "other.py"),
+    )
+    assert seen == ["test_owned.py", "test_scoped.py", "test_wire.py"]

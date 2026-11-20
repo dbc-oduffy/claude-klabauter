@@ -2773,6 +2773,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # workflow.pending_revisions — COMPUTE_ONLY: replies the unclaimed register rows of a run's
     # plan; writes nothing (ops/dispatch_emit/revise_absorb.py).
     "workflow.pending_revisions": OpClass.COMPUTE_ONLY,
+    # run.engine_identity — COMPUTE_ONLY: replies the latest engine-identity receipt of a run's record dir
+    # (ops/dispatch_emit/engine_identity.py); writes nothing.
+    "run.engine_identity": OpClass.COMPUTE_ONLY,
     # workflow.late_rows — MUTATING: replies the live ledger items the staged manifest holds no work for
     # (ops/dispatch_emit/requirements_ledger.py); with verify_read it first stamps the run dir's
     # verify-late-read marker (workflow.revise reads it to answer lands_on_refire).

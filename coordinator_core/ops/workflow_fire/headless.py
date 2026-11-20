@@ -602,7 +602,10 @@ def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float)
     scoped = [test for path in edited for test in scope.get(path, [])]
     from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND, _is_js_test_file
 
-    owned = list(dict.fromkeys(owned + scoped))
+    # Every edited path with a declared scope: the declared targets replace the whole owned inventory.
+    # A partly scoped edit set keeps the inventory, which is the only cover for the unscoped paths.
+    owned = scoped if scoped and all(scope.get(path) for path in edited) else owned + scoped
+    owned = list(dict.fromkeys(owned))
     tripwires = [target for target in tripwires if target not in owned]
     targets = owned + tripwires[:TRIPWIRE_BOUND]
 
@@ -878,7 +881,8 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                             repo_root=Path(record['repo_root']), artifact_dir=artifacts / 'agents' / str(event['id']),
                             backend=record['backend'], timeout_s=remaining,
                             parent_session_id=record.get('caller_session_id'),
-                            request_id=request_id, fire_id=record['fire_id'], **extra)
+                            request_id=request_id, fire_id=record['fire_id'],
+                            **({'run_id': record['run_id']} if record.get('run_id') else {}), **extra)
                             if record.get('backend') == 'codex' and record.get('run_id'):
                                 from coordinator_core.ops.dispatch_emit import run_write_prints
                                 run_write_prints.record_codex_writes(
