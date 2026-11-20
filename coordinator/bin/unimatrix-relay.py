@@ -772,24 +772,6 @@ def _confirm_server(server_pid):
             + (f" (session {addressed})" if addressed else ""))
 
 
-def unregistered_sender(line) -> "str | None":
-    """The `from` of message `line` when no live registry entry on this box owns it, else None.
-
-    The harness drops, without an ack, a frame whose `from` is not a registered local address; the
-    socket protocol has no response, so a write alone proves nothing. A line with no `from` passes."""
-    try:
-        frame = json.loads(line)
-    except ValueError:
-        return None
-    addr = frame.get("from") if isinstance(frame, dict) else None
-    if not isinstance(addr, str) or not addr:
-        return None
-    bare = addr[4:] if addr.startswith("uds:") else addr
-    if any(d.get("messagingSocketPath") == bare for _, d, _ in entries()):
-        return None
-    return addr
-
-
 def _write_line(path, line):
     """Deliver one message line to the session endpoint `path` (pipe on Windows, unix socket elsewhere)."""
     line = local_reply_address(line)
@@ -841,10 +823,6 @@ def send_batch(pid, expected_digest=None, expected_name_digest=None, expected_se
         try:
             if not line.strip():
                 raise ValueError("empty message line")
-            unregistered = unregistered_sender(local_reply_address(line))
-            if unregistered:
-                raise TargetMismatch(f"sender address {unregistered} is not registered on this box; "
-                                     "the session would drop the frame")
             _write_line(path, line)
             reply = {"ok": True, "written": True}
             if expected_session_id:
