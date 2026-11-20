@@ -1156,21 +1156,27 @@ def run_agent(
         value = {"arm": None, "halt": {"kind": "gate-reply-invalid", "reason": diagnostic}}
         remaining = min(_GATE_REASK_SECONDS, timeout_s - (time.monotonic() - started))
         if text and len(text) <= _GATE_REPLY_LIMIT and remaining > 0 and private_cli is None:
+            from coordinator_core.ops.dispatch_emit.run_truth_contract import ARMS
+
             retry_dir = artifact_dir / "gate-reask"
             wrapper_payload = _gate_redundant_halt_payload(text)
+            retry_data = json.dumps(
+                {"diagnostic": diagnostic, "allowed_arm_values": [*ARMS, None], "reply": text},
+                ensure_ascii=False,
+            )
             retry_prompt = (
                 "Repair JSON syntax in the following data. Do not run any tools or repeat the gate operation. "
                 "Preserve every key, value and its order, including trailing fields. "
                 "Return the complete original reply with only JSON punctuation or whitespace repaired. "
                 "If that is impossible, return null.\n"
-                + json.dumps({"diagnostic": diagnostic, "reply": text}, ensure_ascii=False)
+                + retry_data
             )
             if wrapper_payload is not None:
                 retry_prompt = (
                     "Return only the JSON-RPC result object from the following data, byte values "
                     "and key order unchanged. The outer halt:null duplicates the inner halt:null. "
                     "Do not run any tools or repeat the gate operation.\n"
-                    + json.dumps({"diagnostic": diagnostic, "reply": text}, ensure_ascii=False)
+                    + retry_data
                 )
             try:
                 repaired = run_agent(

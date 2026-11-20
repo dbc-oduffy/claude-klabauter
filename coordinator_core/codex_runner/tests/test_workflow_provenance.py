@@ -486,6 +486,9 @@ def test_codex_gate_reasks_once_then_returns_a_typed_halt(tmp_path, monkeypatch,
     assert len(calls) == 2
     retry_argv, retry_prompt = calls[1]
     assert error in retry_prompt and 'Do not run any tools' in retry_prompt
+    retry_data = json.loads(next(line for line in retry_prompt.splitlines() if line.startswith('{"diagnostic":')))
+    assert retry_data["allowed_arm_values"] == ["xs", "s", "m_plus", "roadmap", None]
+    assert error in retry_data["diagnostic"]
     assert 'Run the gate once' not in retry_prompt
     assert '--dangerously-bypass-approvals-and-sandbox' not in retry_argv
     assert (folder / "last.txt").read_text(encoding="utf-8") == initial
