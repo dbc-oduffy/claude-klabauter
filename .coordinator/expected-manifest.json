@@ -2432,7 +2432,7 @@
     "coordinator/lib/home_resolution_lint.py": "e460e1416840217cc0981c93e065e8535610d4c5",
     "coordinator/lib/install-substrate.cmd": "b8e10652c5b00bf8aa7711c3707f8de6bf941965",
     "coordinator/lib/install-substrate.py": "f12a39ccb2f845c7e5cccf0c66c090bb0d32765f",
-    "coordinator/lib/install/coordinator_install.py": "f866b0027b7142a4313b111db1ff30e201c99d7d",
+    "coordinator/lib/install/coordinator_install.py": "184b181a13393b9d5d301b62341715c043e2483e",
     "coordinator/lib/markdown_style.py": "3ae304d1229dc5bf1bfd362c826419829100d254",
     "coordinator/lib/oss-repo-constants.py": "ec7d046ce93e6eada5dd073751d9f2b58e04b065",
     "coordinator/lib/output_tree_layout.py": "9b42aec5ca42032764f1a08c99a1b3c461ca4c48",
@@ -2572,8 +2572,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "84c062e4aa9658a181039e4fc3a6c6c8c77c4b26",
-    "coordinator_core/_engine_stamp": "33e57dd8aad95a47e5bc4b1b2dac96e0ea7b7016",
+    "coordinator_core/_engine_published_at": "a0d03eeeed386147ef13eae424fa7d0892e48d62",
+    "coordinator_core/_engine_stamp": "95e2f5829d978e35ff15cf39c958dbc3cfb9fe1b",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2824,7 +2824,7 @@
     "coordinator_core/bash_guards/_sanctioned_remedy.py": "44ddbfab5c6d3086742774b47fe8cecc28b2f24c",
     "coordinator_core/bash_guards/_sentinel_creation_guard.py": "5c0140491070acd8745e50c6bc6a921025808ff8",
     "coordinator_core/bash_guards/_sentinel_removal_guard.py": "c237982a65537b7caa236b5e6a7b023903428078",
-    "coordinator_core/bash_guards/_session_census.py": "abe56b037728d7fac2d9cb836fd7ce2fb109f98c",
+    "coordinator_core/bash_guards/_session_census.py": "6ca5b3f3d10efb6d6057dffe072fd406034e71f7",
     "coordinator_core/bash_guards/_shape_classifier.py": "0736689963010cff9478eda018d5aa1b5fbad657",
     "coordinator_core/bash_guards/_shell_write_projection.py": "209ee59d3d0c63d24d6af82d7ec160d6d28b55a8",
     "coordinator_core/bash_guards/_stale_index_base.py": "8db53602f8c2334f0cf3630e5370f72caac96188",
@@ -12948,7 +12948,7 @@
     "lib/home_resolution_lint.py": "e460e1416840217cc0981c93e065e8535610d4c5",
     "lib/install-substrate.cmd": "b8e10652c5b00bf8aa7711c3707f8de6bf941965",
     "lib/install-substrate.py": "f12a39ccb2f845c7e5cccf0c66c090bb0d32765f",
-    "lib/install/coordinator_install.py": "f866b0027b7142a4313b111db1ff30e201c99d7d",
+    "lib/install/coordinator_install.py": "184b181a13393b9d5d301b62341715c043e2483e",
     "lib/markdown_style.py": "3ae304d1229dc5bf1bfd362c826419829100d254",
     "lib/oss-repo-constants.py": "ec7d046ce93e6eada5dd073751d9f2b58e04b065",
     "lib/percolate/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
@@ -13075,5 +13075,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "02d6417c4476265ceaf0faedd3bf42cfa58e4afc"
+  "source_head": "b6947d9f6a69e80f7b08b8ab942fe8b102add3a1"
 }

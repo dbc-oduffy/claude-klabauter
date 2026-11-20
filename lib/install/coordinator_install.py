@@ -1420,15 +1420,17 @@ def step_currency(ctx: Ctx) -> StepResult:
     return StepResult(RAN, "wrote docs/coordinator-currency.yaml") if rc == 0 else _fail_run("load", rc, out)
 
 
-def _engine_root() -> tuple[bool, str]:
-    # A bundled installer and its engine are released together. Plugin-only
-    # installs still need the registered engine.
-    own_root = next(
+def _bundled_engine_root() -> Path | None:
+    return next(
         (parent for parent in Path(__file__).resolve().parents
          if (parent / "coordinator_core" / "__init__.py").is_file()
          and (parent / "scripts" / "setup.py").is_file()),
         None,
     )
+
+
+def _engine_root() -> tuple[bool, str]:
+    own_root = _bundled_engine_root()
     if own_root is not None:
         return True, str(own_root)
     rc, out = run(_py(str(plugin_root() / "hooks" / "scripts" / "_engine_root.py")), timeout=60)
@@ -2262,6 +2264,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--host", action="append", choices=HOSTS,
                     help="host whose own plugin registry the plan probes (repeatable; claude is always probed)")
     args = ap.parse_args(argv)
+    # Registry discovery can import coordinator_core before any step runs.
+    # A later path change cannot replace an already imported package.
+    if own_root := _bundled_engine_root():
+        sys.path.insert(0, str(own_root))
 
     if args.engine_root or args.engine_target:
         if args.plan or args.check_drift:

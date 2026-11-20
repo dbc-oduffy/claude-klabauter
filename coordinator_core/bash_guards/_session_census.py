@@ -39,9 +39,12 @@ def _stem(name: str) -> str:
     return low[:-4] if low.endswith(".exe") else low
 
 
+def _is_claude(name: str) -> bool:
+    return _stem(name).startswith("claude")
+
+
 def _is_session_host(name: str) -> bool:
-    stem = _stem(name)
-    return stem.startswith("claude") or stem == "codex"
+    return _is_claude(name) or _stem(name) == "codex"
 
 
 def _payload_pid(payload: Mapping[str, Any]) -> Optional[int]:
