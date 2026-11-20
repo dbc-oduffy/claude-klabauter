@@ -914,7 +914,7 @@ def _open_probe(
 ) -> dict:
     from coordinator_core.ops.dispatch_emit import kept_work
 
-    held = kept_work.held_paths(repo_root, implicated)
+    held = kept_work.held_paths(repo_root, implicated, run_id or None)
     writes: Dict[str, bytes] = {}
     for rel in sorted(implicated):
         target = repo_root / rel

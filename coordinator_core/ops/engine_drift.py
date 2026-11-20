@@ -363,4 +363,10 @@ def _engine_drift(params: dict, repo_root=None) -> dict:
     Returns probe_engine_drift()'s result: state, running_sha (the source-head
     checked), floor_sha, basis, engine_head, plus offer/notice/cause per state.
     """
-    return probe_engine_drift()
+    result = probe_engine_drift()
+    from coordinator_core import agy_grant_guard
+
+    tamper = agy_grant_guard.read_marker()
+    if tamper:
+        result["agy_grant_tamper"] = tamper
+    return result

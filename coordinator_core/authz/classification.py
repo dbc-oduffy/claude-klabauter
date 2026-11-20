@@ -4576,6 +4576,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "scratch.keep": OpClass.MUTATING,
     # run.paths_trash — MUTATING: renames a chunk's declared repo paths into scratch/.deleted/ (ops/run_paths_trash.py).
     "run.paths_trash": OpClass.MUTATING,
+    # scratch.remove, proc.stop_own_child — MUTATING: rename a worker-owned scratch path; stop one descendant pid (ops/worker_cleanup.py).
+    "scratch.remove": OpClass.MUTATING,
+    "proc.stop_own_child": OpClass.MUTATING,
     # dispatch.emit — MUTATING: writes the composed Workflow .mjs script text
     # to a caller-named path (ops/dispatch_emit/op.py). The only handler in
     # the dispatch-emit pipeline that touches disk — every upstream module

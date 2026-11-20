@@ -145,3 +145,44 @@ def test_host_verify_reports_a_missing_declared_target_as_a_skip_not_a_pass(tmp_
     result = headless._verify_test_leg(params, str(tmp_path), tmp_path / "art", 60, run_id="r1")
     assert result["status"] == "pass-with-skips" and result["tests_run"] == 19
     assert [s["test"] for s in result["skipped"]] == ["tests/test_memory.py"]
+
+
+def _infra_run(tmp_path, targets, measured, monkeypatch):
+    def fake(repo, output, artifacts, targets_, base, timeout, baseline_output=None):
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "test-leg-start.json").write_text(json.dumps({"argv": ["py", "--", *targets_]}), encoding="utf-8")
+        return 0, measured
+
+    monkeypatch.setattr(headless, "_run_pinned_test_leg", fake)
+    params = _evicted_run(tmp_path, targets, [])
+    return headless._verify_test_leg(params, str(tmp_path), tmp_path / "art", 60, run_id="r1")
+
+
+def test_host_verify_maps_pytest_exit_4_to_typed_test_infra_failure(tmp_path, monkeypatch):
+    """e60147: pytest exit 4 on a missing named target read as a plain error with no named cause."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_here.py").write_text("", encoding="utf-8")
+    measured = {"status": "error", "tests_run": 0, "tests_failed": 0,
+                "pytest_phases": [{"exit_code": 4, "stderr": "", "stdout": ""}]}
+    result = _infra_run(tmp_path, ["tests/test_here.py", "tests/test_gone.py"], measured, monkeypatch)
+    infra = result["test_infra_failure"]
+    assert result["status"] == "error" and infra["kind"] == "test_infra_failure"
+    assert infra["pytest_exit_code"] == 4 and infra["bad_targets"] == ["tests/test_gone.py"]
+    assert infra["argv"][-2:] == ["tests/test_here.py", "tests/test_gone.py"]
+    assert "tests/test_gone.py" in result["summary"]
+
+
+def test_host_verify_maps_pytest_exit_5_and_all_missing_to_typed_test_infra_failure(tmp_path, monkeypatch):
+    measured = {"status": "error", "tests_run": 0, "pytest_phases": [{"exit_code": 5}]}
+    result = _infra_run(tmp_path, ["tests/test_a.py"], measured, monkeypatch)
+    assert result["status"] == "error" and result["test_infra_failure"]["pytest_exit_code"] == 5
+
+    measured = {"status": "error", "tests_run": 0, "missing_targets": ["tests/test_a.py"]}
+    result = _infra_run(tmp_path / "m", ["tests/test_a.py"], measured, monkeypatch)
+    assert result["status"] == "error" and result["test_infra_failure"]["bad_targets"] == ["tests/test_a.py"]
+
+
+def test_host_verify_exit_4_never_downgrades_a_run_that_ran_tests(tmp_path, monkeypatch):
+    measured = {"status": "pass", "tests_run": 3, "pytest_phases": [{"exit_code": 0}]}
+    result = _infra_run(tmp_path, ["tests/test_a.py"], measured, monkeypatch)
+    assert "test_infra_failure" not in result and result["status"] == "pass"

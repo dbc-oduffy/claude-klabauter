@@ -584,6 +584,56 @@ def _canvas_brief(canvas: list, registry_rel: Optional[str]) -> str:
     return "\n".join(lines)
 
 
+HALT_PLAN_NOT_CONTINUABLE = "plan-not-continuable"
+#: Plan statuses a cited plan cannot be continued from: the work it described is over.
+_PLAN_ENDED_STATUSES = frozenset({"completed", "abandoned", "landed", "implemented", "superseded", "archived"})
+_PLAN_STATUS_RE = re.compile(r"^status:[ 	]*['\"]?([A-Za-z_-]+)", re.MULTILINE)
+
+
+def _cited_plan_continuation(repo_root: Path, sizing: Mapping, sizing_rel: str) -> "Optional[str] | GateVerdict":
+    """The plan an M+ sizing's `plan:` edge cites, when the run continues it in place; a typed halt when it cannot.
+
+    Only reached when `resumable_plan` found no rows to resume (an unreadable spine or a stopped,
+    unreviewed plan), where the plan-blitz wave would otherwise scaffold and be refused because the
+    sizing already cites the file. An existing plan in any live status (approved, ready, executing,
+    drafts) is handed to plan-blitz as `planPath`, which revises it in place. An ended status
+    (`_PLAN_ENDED_STATUSES`) halts `plan-not-continuable`; so does a missing file, but only on a refire
+    (a halted run of this sizing exists), since a fresh sizing may cite the path its plan is about to
+    take. None when the sizing cites nothing.
+    """
+    from coordinator_core.ops._path_guard import contained_path
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_ask_run_for
+
+    edge = sizing.get("plan")
+    if not (isinstance(edge, str) and edge.strip()):
+        return None
+    root = Path(repo_root)
+    rel = edge.strip().replace("\\", "/")
+    path = contained_path(root / rel, [root / "docs" / "plans"])
+    status = None
+    if path is not None and path.is_file():
+        try:
+            head = path.read_text(encoding="utf-8")[:4096]
+        except (OSError, ValueError):
+            head = ""
+        found = _PLAN_STATUS_RE.search(head)
+        status = found.group(1) if found else "unknown"
+        if status not in _PLAN_ENDED_STATUSES:
+            return rel
+    elif halted_ask_run_for(root, sizing_rel) is None:
+        return None
+    where = f"status {status}" if status else "no such file"
+    return _halt(
+        HALT_PLAN_NOT_CONTINUABLE,
+        f"the sizing cites {rel}, which cannot be continued ({where})",
+        plan=rel,
+        plan_status=status,
+        next_action=(
+            f"restore or re-point `plan:` of {sizing_rel} to a live plan, or remove the `plan:` edge so the run authors a fresh one, then refire"
+        ),
+    )
+
+
 _SIZING_STEM_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(?:[0-9a-f]{6}-\d+-)?")
 
 
@@ -980,6 +1030,12 @@ def _arm_verdict(
                 resume = resumable_plan(sizing, sizing_rel, repo_root, arm)
             except SizingFireRefused as exc:
                 refusals.extend(f for f in exc.fields if f not in refusals)
+    cited_plan: Optional[str] = None
+    if resume is None and arm == ARM_M_PLUS and not refusals:
+        cited = _cited_plan_continuation(repo_root, sizing, sizing_rel)
+        if isinstance(cited, GateVerdict):
+            return cited
+        cited_plan = cited
     if refusals:
         return _refuse("; ".join(refusals))
     if resume is not None and resume.ledger is None:
@@ -990,7 +1046,7 @@ def _arm_verdict(
         resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id, sizing_rel=sizing_rel) if resume else None
     except SizingFireRefused as exc:
         return _refuse("; ".join(exc.fields))
-    resume_plan = resume.plan_rel if resume and resume_ledger is None else None
+    resume_plan = resume.plan_rel if resume and resume_ledger is None else cited_plan
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
     if landed_sink is not None and resume_rows:
         landed_sink.extend(resume.landed_open)
@@ -1046,7 +1102,7 @@ def _arm_verdict(
     deliverable_id = str(sizing.get("deliverable_id") or "").strip()
     if deliverable_id:
         minted["deliverableId"] = deliverable_id
-    spine, spine_refusal = (None, None) if resume else _spine_plan(repo_root, sizing, sizing_rel)
+    spine, spine_refusal = (None, None) if resume or cited_plan else _spine_plan(repo_root, sizing, sizing_rel)
     if spine_refusal:
         return _refuse(spine_refusal)
     resume_ready = bool(resume_plan) and pending_rulings == [] and plan_ready(resume_plan)
@@ -1237,6 +1293,46 @@ def _discharged_em_items(blocking: Sequence[str], discharged: Mapping, plan_path
     return out
 
 
+def _evidenced_since_halt_items(blocking: Sequence[str], halt, repo_root: Path) -> set[str]:
+    """Blocking items a serving plan row gained `evidence-append` evidence for after the halt run stopped.
+
+    The carried `remaining` gap lines and `evidence` prose are the halt's snapshot; evidence recorded since
+    makes them stale, and a re-plan fed them mints a row for a gap already closed. Such an item owes no
+    re-plan: the verify leg re-judges it against the current sidecar. The halt instant is the halted run's
+    `run-stage.json` `last_activity_at`; no stamp, no sidecar or an unreadable plan credits nothing.
+    Trap: ISO-Z strings compare lexically; `recorded_at` and the stamp share that shape."""
+    if not blocking:
+        return set()
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import PlanRowsUnreadable, serving_rows
+    from coordinator_core.ops.plan_tasks_mutate import read_row_evidence
+
+    stage = read_run_stage(Path(repo_root), halt.run_id) if halt.run_id else None
+    halted_at = stage.get("last_activity_at") if isinstance(stage, dict) and stage.get("stage") == "halted" else None
+    if not isinstance(halted_at, str) or not halted_at:
+        return set()
+    plan_path = Path(repo_root) / halt.plan_rel
+    evidence = read_row_evidence(plan_path)
+    if not evidence:
+        return set()
+
+    def fresh(row_id: str) -> bool:
+        return any(
+            isinstance(e, dict) and isinstance(e.get("recorded_at"), str) and e["recorded_at"] > halted_at
+            for e in evidence.get(row_id) or ()
+        )
+
+    out: set[str] = set()
+    for item in blocking:
+        try:
+            rows = serving_rows(plan_path, [item])
+        except PlanRowsUnreadable:
+            return set()
+        if any(fresh(str(r.get("id"))) for r in rows):
+            out.add(item)
+    return out
+
+
 _ABSENT_WORD = re.compile(r"\b(absent|missing|not (?:present|found|landed))\b", re.IGNORECASE)
 
 
@@ -1419,6 +1515,15 @@ def _resume_ledger(
         if isinstance(r, dict) and _origin(r.get("anchor"))[0] == ORIGIN_REVISION
     }
     em_done = _discharged_em_items(blocking, discharged, Path(repo_root) / halt.plan_rel)
+    evidenced = _evidenced_since_halt_items(blocking, halt, repo_root) - em_done
+
+    def _carried_remaining(k: str, v: object) -> object:
+        if k in em_done and isinstance(v, dict):
+            return {**v, "remaining": []}
+        if k in evidenced and isinstance(v, dict):
+            return {key: val for key, val in v.items() if key != "evidence"} | {"remaining": []}
+        return _without_gate_verdicts(k, v)
+
     verdict = {
         "run_id": halt.run_id,
         "plan": halt.plan_rel,
@@ -1433,11 +1538,7 @@ def _resume_ledger(
         RESUME_LEDGER_SINCE_SHA_FIELD: halt.since_sha,
         RESUME_LEDGER_SINCE_HALT_SHAS_FIELD: list(halt.since_halt_shas),
         RESUME_LEDGER_REMAINING_FIELD: {
-            k: (
-                {**v, "remaining": []}
-                if k in em_done and isinstance(v, dict)
-                else _without_gate_verdicts(k, v)
-            )
+            k: _carried_remaining(k, v)
             for k, v in halt.remaining.items() if k in blocking
         },
         RESUME_LEDGER_UNLANDED_FIELD: list(halt.unlanded),

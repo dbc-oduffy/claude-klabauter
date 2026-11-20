@@ -3387,6 +3387,14 @@ _GATE_HALT_CAUSE_JS = "(_gate.halt ? 'gate halt: ' + String(_gate.halt.kind ?? _
 
 
 #: A scout-returned arm in any letter case or padding compares equal to the lowercase arm constants.
+#: A relay that returns the op's raw JSON-RPC reply hoists only `arm` and `halt` and leaves `baton`,
+#: `resume_plan`, `resume_rows` and `resume_phases` under `result`; read as top-level keys they are absent
+#: and a refire re-plans a plan it should continue. Top-level non-null keys win over the envelope's.
+_GATE_UNWRAP_JS = (
+    "  const _gateUnwrap = (g) => (g && typeof g === 'object' && !Array.isArray(g) && g.result && typeof g.result === 'object' "
+    "&& !Array.isArray(g.result)) ? { ...g.result, ...Object.fromEntries(Object.entries(g).filter(([k, v]) => "
+    "k !== 'result' && k !== 'jsonrpc' && k !== 'id' && v !== null && v !== undefined)) } : g;"
+)
 _GATE_ARM_FOLD_CASE_JS = (
     "  if (typeof _gate.arm === 'string') { _gate = { ..._gate, arm: _gate.arm.trim().toLowerCase() }; }"
 )
@@ -5557,7 +5565,8 @@ def compose_ask_script(
         _gate_call = f"await {_gate_agent_call('gate', 'gate', stage_act=True)}"
         if launcher_child:
             _gate_call = f"_STAGED_RESUME ? {_gate_seed_js} : ({_gate_call})"
-        b.append(f"  let _gate = {_gate_call};")
+        b.append(_GATE_UNWRAP_JS)
+        b.append(f"  let _gate = _gateUnwrap({_gate_call});")
     if fold_stage:
         # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
         clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"

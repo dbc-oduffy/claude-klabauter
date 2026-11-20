@@ -324,7 +324,8 @@ def _deny_record(label: str, where: str) -> Any:
     place = f" in script {where}" if where else ""
     text = (
         f"BLOCKED: {label}{place}. A kill chosen by port, name or process tree reaches jobs this "
-        f"session never spawned. {ANCHOR}."
+        f"session never spawned. {ANCHOR}. "
+        f"Instead: `coordinator-invoke proc.stop_own_child '{{\"pid\":<pid>}}'` (a descendant you spawned)."
     )
     return _build(
         GUARD_NAME,

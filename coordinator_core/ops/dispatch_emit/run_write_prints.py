@@ -241,3 +241,38 @@ def record(root: Path, run_id: str, paths: Iterable[str]) -> None:
     tmp = target.with_name(f"{PRINTS_FILE}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(merged, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp, target)
+
+
+def codex_written_paths(stdout_path: Path) -> list[str]:
+    """Paths of every completed `file_change` item in a codex `--json` event stream, in first-seen
+    order, as written (absolute or relative). Trap: a codex worker writes through apply_patch, which
+    no PostToolUse hook sees, so `record_write` never prints it; the stream is the only record."""
+    seen: dict[str, None] = {}
+    try:
+        lines = Path(stdout_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for raw in lines:
+        try:
+            item = json.loads(raw).get("item")
+        except (ValueError, AttributeError):
+            continue
+        if not isinstance(item, dict) or item.get("type") != "file_change" or item.get("status") != "completed":
+            continue
+        for change in item.get("changes") or ():
+            path = change.get("path") if isinstance(change, dict) else None
+            if isinstance(path, str) and path:
+                seen.setdefault(path)
+    return list(seen)
+
+
+def record_codex_writes(root: Path, run_id: str, stdout_path: Path) -> list[str]:
+    """Print each path a codex row's `file_change` events wrote, for `run_id`, so the checkpoint reads
+    them as the run's own bytes. Returns the repo-relative paths printed. Zero spawn; never raises."""
+    try:
+        rels = [r for r in (_repo_relative(Path(root), p) for p in codex_written_paths(stdout_path)) if r]
+        if rels:
+            record(Path(root), run_id, rels)
+        return rels
+    except Exception:  # noqa: BLE001 -- no print: the checkpoint withholds the file
+        return []

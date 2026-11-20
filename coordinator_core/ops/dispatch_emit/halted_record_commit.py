@@ -751,6 +751,9 @@ def _land(
 
     base = {"record_dir": record_dir_rel, "halted": halted["halted"]}
     halt_reason = _held_reason(halted) if halted["halted"] == HALT_DEPENDENTS_UNSTARTED else None
+    # A failed fire's named cause (stage id, next action) lives only in `reason`; the marker rewrite below would drop it.
+    if halt_reason is None and halted["halted"] in ("stage_pending_unresolved", "run_failed") and isinstance(halted.get("reason"), str):
+        halt_reason = halted["reason"]
     run_base = landing_integrity.run_base_for(worktree_root, run_id, params)
     session_id: Optional[str] = params.get("session_id")
     if not (isinstance(session_id, str) and _UUID_RE.fullmatch(session_id)):

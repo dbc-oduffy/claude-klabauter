@@ -96,12 +96,13 @@ def matches_committed(root: Path, rel: str, raw_sha: object, committed_sha: obje
     return form is not None and blob_sha(form) == committed_sha
 
 
-def held_paths(root: Path, rels: Iterable[str]) -> dict[str, str]:
+def held_paths(root: Path, rels: Iterable[str], own_run_id: Optional[str] = None) -> dict[str, str]:
     """``{rel: run_id}`` for each normalised ``rel`` listed in ``kept.json`` (``chunks[*].paths`` or
     ``post_checkpoint``) of a still-halted run, i.e. one in the withheld index and not superseded
     (``halted_hold_release.supersession_reason``). Trap: ``withheld_by_path``
     maps a path two runs hold to the lexically last run only, so the run set is that map's values plus
-    every indexed run file. Spawn-free; an unreadable index or record contributes nothing."""
+    every indexed run file. A run on `own_run_id`'s `resumed_from` chain is its own dead predecessor and holds
+    nothing against it. Spawn-free; an unreadable index or record contributes nothing."""
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_hold_release, halted_withheld_index
 
     wanted = {k for k in (_norm(r) for r in rels) if k is not None}
@@ -115,6 +116,7 @@ def held_paths(root: Path, rels: Iterable[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     heads: Optional[dict] = None
     with halted_hold_release.release_scope():
+        run_ids -= halted_hold_release._lineage(root, own_run_id) if own_run_id else frozenset()
         for run_id in sorted(run_ids):
             if (
                 halted_hold_release.supersession_reason(root, run_id) is not None

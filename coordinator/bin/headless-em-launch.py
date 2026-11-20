@@ -117,17 +117,28 @@ def _grok_launch_args(extra, environ, platform) -> list[str]:
     return [*head, *extra]
 
 
-def _agy_launch_args(extra, cwd) -> list[str]:
-    """`extra` led by `--add-dir <cwd>`, `--add-dir ~/.coordinator` and `--mode accept-edits`.
+def _agy_launch_args(extra, cwd, environ=None) -> list[str]:
+    """`extra` led by one `--add-dir` per workspace root and `--mode accept-edits`.
 
-    agy's workspace is its launch cwd, not `--cwd`, so the grant is explicit. `--dangerously-skip-permissions`
-    is dropped; a caller's own `--mode` and any dir it already granted are kept, never doubled.
+    agy's workspace is its add-dirs, not `--cwd`, and a `read_file` outside it is auto-denied headless.
+    Roots: the launch cwd, `~/.coordinator`, and `agy_grant_guard.grant_dirs` (the generated plugin skills,
+    the only outside subtree a stage was measured reading). Never the settings home or engine root whole.
+    `--dangerously-skip-permissions` is dropped; a caller's own `--mode` and any dir it already granted are
+    kept, never doubled.
+
+    Trap: agy has no read-only grant, so each add-dir is writable; `launch` hashes the granted dirs around
+    the stage (`agy_grant_tamper`). When agy ships read-only grants, switch to them and drop the hash guard.
     """
+    from coordinator_core import agy_grant_guard
+
     rest = [a for a in extra if a != "--dangerously-skip-permissions"]
     head = []
     granted = {rest[i + 1] for i, a in enumerate(rest[:-1]) if a == "--add-dir"}
-    for d in (cwd or os.getcwd(), str(Path.home() / ".coordinator")):
+    roots = [cwd or os.getcwd(), str(Path.home() / ".coordinator"),
+             *map(str, agy_grant_guard.grant_dirs(environ))]
+    for d in roots:
         if d not in granted:
+            granted.add(d)
             head += ["--add-dir", d]
     if not any(a == "--mode" or a.startswith("--mode=") for a in rest):
         head += ["--mode", "accept-edits"]
@@ -160,6 +171,35 @@ def _spawn(cmd, env):
     finally:
         signal.signal(signal.SIGINT, prior)
     return 128 - code if code < 0 else code
+
+
+def _spawn_captured(cmd, env):
+    """Run the CLI with captured output: (exit code, stdout bytes, stderr bytes)."""
+    done = subprocess.run(cmd, env=env, capture_output=True)
+    return done.returncode, done.stdout, done.stderr
+
+
+def _run_agy_guarded(cmd, env, spawn_captured):
+    """Run an agy stage over hash-watched grant dirs; (code, refusal paths).
+
+    The stage's output is held and released only when no granted file changed; a changed file discards
+    it and returns the paths for the typed `agy_grant_tamper` refusal.
+    """
+    from coordinator_core import agy_grant_guard
+
+    dirs = [cmd[i + 1] for i, a in enumerate(cmd[:-1]) if a == "--add-dir"]
+    watched = [Path(d) for d in dirs if Path(d) in set(agy_grant_guard.grant_dirs(env))]
+    before = agy_grant_guard.snapshot(watched)
+    code, out, err = spawn_captured(cmd, env)
+    changed = agy_grant_guard.changed_paths(before, agy_grant_guard.snapshot(watched))
+    if changed:
+        agy_grant_guard.write_marker(changed)
+        return code, changed
+    sys.stdout.buffer.write(out)
+    sys.stdout.flush()
+    sys.stderr.buffer.write(err)
+    sys.stderr.flush()
+    return code, []
 
 
 def exit_check(session_id, cwd=None, *, open_runs=None):
@@ -206,7 +246,8 @@ def _codex_writable_dirs(extra: list[str], cwd: str | None = None) -> list[str]:
 
 def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, environ=None,
            prepare_only=False, platform=None, native_executable=None, mint=uuid.uuid4,
-           name=None, resume=None, cwd=None, runner=subprocess.run, open_runs=None) -> int:
+           name=None, resume=None, cwd=None, runner=subprocess.run, open_runs=None,
+           spawn_captured=_spawn_captured) -> int:
     """Write the grant and run the CLI with the token env; returns an exit code.
 
     claude is not supervised: `claude --bg [-n NAME | --resume ID]` runs captured in `cwd` on both OSes and
@@ -260,7 +301,7 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
     elif family == "grok":
         cmd = [cli, *_grok_launch_args(extra, environ, platform)]
     elif family == "agy":
-        cmd = [cli, *_agy_launch_args(extra, cwd)]
+        cmd = [cli, *_agy_launch_args(extra, cwd, environ)]
     elif family == "claude":
         cmd = [cli, "--bg", *(["--resume", resume] if resume else ["-n", name] if name else []), *extra]
     else:
@@ -282,7 +323,13 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
         return 0
     if family == "claude":
         return _run_bg(cmd, cwd=cwd, env={**environ, **child}, runner=runner, name=name)
-    code = spawn(cmd, {**environ, **child})
+    if family == "agy" and any(a == "-p" or a.startswith("--print") for a in cmd):
+        code, tampered = _run_agy_guarded(cmd, {**environ, **child}, spawn_captured)
+        if tampered:
+            print(json.dumps({"refused": "agy_grant_tamper", "paths": tampered}), file=sys.stderr)
+            return REFUSED
+    else:
+        code = spawn(cmd, {**environ, **child})
     gate = exit_check(sid, cwd, open_runs=open_runs)
     return gate if code == 0 else code
 
