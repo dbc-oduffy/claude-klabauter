@@ -2573,8 +2573,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "df7998ee9c0d9f2779ecb7a15b5bd7d40160177b",
-    "coordinator_core/_engine_stamp": "56e93599dd815c9722b10bc07d9a9de0e534a19a",
+    "coordinator_core/_engine_published_at": "d098602101747fe6b0df6dec4931bd646fcb6817",
+    "coordinator_core/_engine_stamp": "600c50469a7510274a397d1547b613bdc43c4a16",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -9703,7 +9703,7 @@
     "coordinator_core/ops/test_learn_lessons_config_update.py": "4dd164dd87defdd8e917916d84fb77f991f4ba24",
     "coordinator_core/ops/test_learn_lessons_cutoff.py": "aadbaba302861681e7f2cdaa69a9adb197727e16",
     "coordinator_core/ops/test_learn_lessons_roots.py": "34eb7594c00d0e50309e8edee46962a9d301b932",
-    "coordinator_core/ops/test_leg_run.py": "253d01bd3af178bf5025b4353ad0cb2a63db88ed",
+    "coordinator_core/ops/test_leg_run.py": "6ebc48693acf1e7b118203c93064bc19e4ce902a",
     "coordinator_core/ops/test_lessons_filter.py": "273bdf05d062e545d1ea24fc80eb4ff9b4aeb30b",
     "coordinator_core/ops/test_list_files_newer_than_marker.py": "80117bff201e4346c0ae956c4f9d04975ab5b594",
     "coordinator_core/ops/test_list_reverse_drift_cmds.py": "d62bf64e1b08ecf2e2dc17b059a74cf21e1a45a0",
@@ -10471,7 +10471,7 @@
     "coordinator_core/ops/tests/test_supersede_archives_atomically.py": "d7121643e50a96f5881999d1ba584bc0659831b6",
     "coordinator_core/ops/tests/test_supersede_holderless_is_terminal_only.py": "26ef44ec2f0c16cc43444d9c5e0e04af0ddc132f",
     "coordinator_core/ops/tests/test_test_leg_minutes_budget_ratchet.py": "7911f704f131139214c982fe23799b557bf0fbac",
-    "coordinator_core/ops/tests/test_test_leg_run.py": "e544127e1a139ada3fe62b4f9e62db65a21c9175",
+    "coordinator_core/ops/tests/test_test_leg_run.py": "8957d1c7b077a898a7734ec92bc8d59c67d9c9d6",
     "coordinator_core/ops/tests/test_test_verdict_record_op.py": "b07119cb8026754ca4c0439fcd081519fa9a0bd3",
     "coordinator_core/ops/tests/test_unclaim_parks_a_blocked_baton.py": "25d1bd3d79565ca9f25dcdc1c6ba3d42da7e8eb5",
     "coordinator_core/ops/tests/test_unclaim_strips_mirror_names.py": "b5833ef70d523e8d13d1ffd3b86131aa22a56fc6",
@@ -13077,5 +13077,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "c6be2eacceab5819e0f5effd9f3665f654582bb4"
+  "source_head": "f960750d227fb4f0adc2127ed1f07f9267f88a00"
 }

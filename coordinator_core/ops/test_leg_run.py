@@ -45,6 +45,7 @@ EXIT_TIMEOUT = 3
 USAGE = ("usage: test_leg_run [--base-sha <sha>] [--head-sha <sha>] [--base-export-out <path>] "
          "[--budget-s N] [--touched <path>]... --out <path> -- <ids and test files...>")
 _PYTEST = ["-rfE", "-p", "no:cacheprovider"]
+_DIAGNOSTIC_PYTEST_CALLS: list[dict] = []
 #: Runs pytest over the ids listed one per line in `sys.argv[1]`, with `sys.argv[2:]` as its flags: argv carries
 #: no id list, so a list of any size spawns.
 _IDS_RUNNER = ("import sys, pytest\n"
@@ -68,17 +69,31 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str], str]:
-    """Return pytest's exit code, output lines and stderr. Raises subprocess.TimeoutExpired once `remaining` seconds
-    are gone; the child is killed by then."""
+def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str]]:
+    """Return pytest's exit code and output lines, including bounded stderr on abnormal exits.
+
+    On ordinary exits retain only the session-Temp residue diagnostics from stderr. A timeout
+    kills the child before raising subprocess.TimeoutExpired.
+    """
     if remaining <= 0:
         raise subprocess.TimeoutExpired("pytest", 0)
     with tempfile.TemporaryDirectory(prefix="test-leg-ids-") as holder:
         id_file = _write_ids(Path(holder), targets)
-        proc = subprocess.run([sys.executable, "-c", _IDS_RUNNER, str(id_file), *_PYTEST], cwd=cwd,
-                              capture_output=True, text=True, errors="replace", timeout=remaining,
-                              **no_console_creationflags())
-    return proc.returncode, [*proc.stdout.splitlines(), *proc.stderr.splitlines()], proc.stderr
+        argv = [sys.executable, "-c", _IDS_RUNNER, str(id_file), *_PYTEST]
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace",
+                              timeout=remaining, **no_console_creationflags())
+        _DIAGNOSTIC_PYTEST_CALLS.append({
+            "argv": argv, "pytest_argv": [*_PYTEST, *targets], "cwd": cwd,
+            "sys_executable": sys.executable, "module_file": __file__,
+            "settings_home": os.environ.get("COORDINATOR_SETTINGS_HOME"),
+            "exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr,
+        })
+    stderr_lines = (
+        proc.stderr[-2000:].splitlines()
+        if proc.returncode not in (0, 1)
+        else cov.temp_residue_lines(proc.stderr)
+    )
+    return proc.returncode, [*proc.stdout.splitlines(), *stderr_lines]
 
 
 def _conftest_constants(*names: str) -> dict[str, str]:
@@ -150,6 +165,7 @@ def _reds(lines: list[str]) -> dict[str, str]:
 
 _SECTION = re.compile(r"^_{3,} (.+?) _{3,}$")
 _PLAIN_ERR = re.compile(r"^\S+:\d+: \w")
+_EXCEPTION_LINE = re.compile(r"^(?:\w+\.)*\w*(?:Error|Exception|Unresolved)(?::|$)")
 
 
 def _file_part(node: str) -> str:
@@ -198,8 +214,11 @@ def _section_line(lines: Sequence[str], node: str) -> str:
         elif inside:
             body.append(raw)
     for raw in body:
-        if raw.startswith("E ") and raw[1:].strip():
-            return raw[1:].strip()
+        line = raw.strip()
+        if line.startswith("E ") and line[1:].strip():
+            return line[1:].strip()
+        if _EXCEPTION_LINE.match(line):
+            return line
     return next((r.strip() for r in body if _PLAIN_ERR.match(r.strip())), "")
 
 
@@ -211,7 +230,9 @@ def _detail(text: str, ids: Sequence[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for i in ids:
         msg = reds.get(i.strip(), "").strip() or _section_line(lines, i)
-        out[i] = msg or "FAILED; pytest printed no assertion line"
+        if re.search(r"\bSettingsKeyUnresolved:", msg):
+            msg = f"environment: machine-local settings key unreadable ({msg})"
+        out[i] = msg or "FAILED; pytest printed no exception or assertion detail"
     return out
 
 
@@ -261,15 +282,11 @@ def _stamp_all_missing(result: dict, absent: Sequence[str]) -> None:
     _tally(result, 5, (), missing_only=True)
 
 
-def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Optional[str] = None,
-           *, missing_only: bool = False) -> None:
+def _tally(result: dict, rc: Optional[int], lines: Sequence[str], *, missing_only: bool = False) -> None:
     """Stamp `tests_run`, `tests_failed`, `status` and, when no test completed, `zero_run_cause` onto `result`.
-    `rc` None is a deadline expiry; a negative `rc` is a POSIX signal kill.
-    The counts come from pytest's terminal summary line
+    `rc` None is a deadline expiry; a negative `rc` is a POSIX signal kill (a Windows-killed child exits with a
+    positive code and reads as collection-failure); the counts come from pytest's terminal summary line
     (errors are not completed tests). `missing_only`: no pytest ran because every target was absent."""
-    if stderr is not None:
-        result["pytest_exit_code"] = rc
-        result["pytest_stderr"] = stderr[-4096:]
     counts = {"passed": 0, "failed": 0}
     for raw in reversed(list(lines)):
         if _SUMMARY_TAIL.search(raw):
@@ -300,12 +317,18 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
         if dirty:
             cause = ltt.ZERO_RUN_IMPORT_ERROR
             result[IMPORT_ERROR_KEY] = {"path": dirty, "run_id": None}
-        elif cov.collection_error(rc, "\n".join(lines)):
-            cause = ltt.ZERO_RUN_COLLECTION
         else:
-            cause = ltt.ZERO_RUN_PROCESS_ERROR
+            cause = ltt.ZERO_RUN_COLLECTION
     result[ltt.ZERO_RUN_CAUSE_KEY] = cause
     result["status"] = "error"
+    # A mirror leg can collect tests and then deliberately exclude their entire tier.
+    if rc == 0 and any(line.startswith("every collected test is in an excluded tier (") for line in lines):
+        return
+    result["status_after"] = "fail"
+    if not result.get("failing_detail"):
+        result["failing_detail"] = [
+            {"node_id": "test_leg_run", "message": f"ran zero tests ({cause})"},
+        ]
 
 
 def _argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str]) -> list:
@@ -416,7 +439,7 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
         out["status_after"] = "fail"
     else:
         out["status_after"] = "fail" if new_red else "pass"
-    _tally(out, ran.returncode, text.splitlines(), ran.stderr)
+    _tally(out, ran.returncode, text.splitlines())
     return out
 
 
@@ -442,15 +465,15 @@ def _split_phases(present: list[str], base_sha: Optional[str], head_sha: Optiona
 
 
 def _cwd_phase(targets: list[str], cwd: str, left, all_reds: dict, shown: dict,
-               red_non: list[str]) -> tuple[int, list[str], list[str], str]:
+               red_non: list[str]) -> tuple[int, list[str], list[str]]:
     """One pytest phase in `cwd`: (rc, lines, charged red ids); folds the phase's reds into the shared maps."""
-    rc, lines, stderr = _pytest(targets, cwd, left())
+    rc, lines = _pytest(targets, cwd, left())
     found = _reds(lines)
     kept, non = _split_not_a_test(list(found))
     red_non.extend(non)
     all_reds.update({n: found[n] for n in kept})
     shown.update(_detail("\n".join(lines), kept))
-    return rc, lines, kept, stderr
+    return rc, lines, kept
 
 
 def _merge_phases(rc1: int, lines1: list[str], rc2: int, lines2: list[str]) -> tuple[int, list[str]]:
@@ -470,7 +493,7 @@ def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], he
     measures so the base export file always holds every phase settled so far. Raises TimeoutExpired."""
     if not reds:
         return
-    rc, lines, _stderr = _pytest(list(reds), cwd, left())
+    rc, lines = _pytest(list(reds), cwd, left())
     again = _reds(lines)
     if rc in (0, 1):
         result["passed_alone"].extend(n for n in reds if n not in again)
@@ -564,7 +587,7 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
     else:
         result["status_after"] = "pass"
     result["overlay_rerun"] = {"from": err["path"], "overlaid": overlay}
-    _tally(result, ran.returncode, text.splitlines(), ran.stderr)
+    _tally(result, ran.returncode, text.splitlines())
 
 
 def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
@@ -580,7 +603,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
     result: dict = {"status_after": "fail", "failing": [], "failing_detail": [], "pre_existing": [],
                     "reverted": [], "passed_alone": [], "passed_at_base": [], "diff_named": [],
                     "not_a_test": []}
-    phase_one: Optional[tuple[int, list[str], str]] = None
+    phase_one: Optional[tuple[int, list[str]]] = None
     unreached: list[str] = []
     try:
         if touched:
@@ -598,7 +621,6 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             return result
         targets, result["not_a_test"] = _split_not_a_test(targets, Path(cwd))
         if not targets:
-            result["status_after"] = "pass"
             _tally(result, 5, ())
             result["over_budget"] = False
             result["elapsed_s"] = round(time.monotonic() - started, 3)
@@ -623,19 +645,18 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         shown: dict[str, str] = {}
         red_non: list[str] = []
         exported: dict = {}
-        rc, lines, reds, stderr = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non)
-        phase_one = (rc, lines, stderr)
+        rc, lines, reds = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non)
+        phase_one = (rc, lines)
         unreached = _files(second)
         _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported)
         if second:
             try:
-                rc2, lines2, reds2, stderr2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non)
+                rc2, lines2, reds2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non)
             except subprocess.TimeoutExpired:
                 result[ltt.IMPORTER_OVERRUN_KEY] = True
                 result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(second)
             else:
                 rc, lines = _merge_phases(rc, lines, rc2, lines2)
-                stderr = "\n".join(filter(None, (stderr, stderr2)))
                 reds = [*reds, *reds2]
                 try:
                     _settle(result, reds2, cwd, base_sha, head_sha, base_export_out, left, exported)
@@ -652,9 +673,12 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             if leaks:
                 _stamp_leaks(result, leaks)
             else:
-                result["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {rc} with no failing id"}]
+                message = f"pytest exit {rc} with no failing id"
+                if rc not in (0, 1) and lines:
+                    message += "\n" + "\n".join(lines)[-2000:]
+                result["failing_detail"] = [{"node_id": "pytest", "message": message}]
         result["over_budget"] = False
-        _tally(result, rc, lines, stderr)
+        _tally(result, rc, lines)
         if result.get(IMPORT_ERROR_KEY):
             _own_import_error(result, Path(cwd))
             _overlay_fallback(result, present, base_sha, Path(cwd), left)
@@ -710,12 +734,14 @@ def main(argv: list[str]) -> int:
         return EXIT_USAGE
     budget_s = args.budget_s if args.budget_s is not None else TEST_LEG_MINUTES_BUDGET * 60.0
     cwd = str(_repo_root(Path(os.path.realpath(os.getcwd()))))
+    _DIAGNOSTIC_PYTEST_CALLS.clear()
     result = run(targets, base_sha=args.base_sha, head_sha=args.head_sha,
                  base_export_out=args.base_export_out, budget_s=budget_s, cwd=cwd, touched=args.touched)
     body = json.dumps(result)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(body + "\n", encoding="utf-8")
+    diagnostic = {**result, "diagnostic_pytest_calls": _DIAGNOSTIC_PYTEST_CALLS}
+    out.write_text(json.dumps(diagnostic) + "\n", encoding="utf-8")
     print(body)
     return EXIT_TIMEOUT if result["over_budget"] else EXIT_OK
 
