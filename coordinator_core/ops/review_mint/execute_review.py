@@ -48,6 +48,7 @@ from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -1204,6 +1205,7 @@ def _reverify_phase(
     deferred: bool = False,
     integration_bound: bool = False,
     run_key: str = "",
+    snapshot_session_id: str = "",
 ) -> Tuple[str, str]:
     """The ``Review re-verify`` phase: a test-runner lists what review changed (``review.reverify``
     list mode), runs only the tests covering it, and reverts the implicated files in revert mode
@@ -1222,8 +1224,13 @@ def _reverify_phase(
     the same value."""
     agent_type, role = _host_native(_REVERIFY_AGENT_TYPE, host_degraded)
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
-    invoke = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+    invoke = (
+        "coordinator-invoke" if os.name == "nt"
+        else '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+    )
     key_args = f',"run_key":{json.dumps(run_key)}' if run_key else ""
+    if snapshot_session_id:
+        key_args += f',"session_id":{json.dumps(snapshot_session_id)}'
     base_args = f'"base":"{base_ref}","slice_prefix":"{prep_slice_id}"{key_args}'
     run_args = f',"run_id":{json.dumps(run_id)},"plan_path":{json.dumps(plan_path)}' if run_id else ""
     sidecars_js = _REVERIFY_SIDECARS_JS
@@ -1510,6 +1517,7 @@ def compose_execute_review(
     owned_red_path: str = "",
     prep_run_id: Optional[str] = None,
     share_prompt_head: Optional[bool] = None,
+    snapshot_session_id: str = "",
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -2462,6 +2470,7 @@ def compose_execute_review(
                 deferred=reverify_deferred,
                 integration_bound=review.integration is not None,
                 run_key=safe_run_id,
+                snapshot_session_id=snapshot_session_id,
             )
         )
 

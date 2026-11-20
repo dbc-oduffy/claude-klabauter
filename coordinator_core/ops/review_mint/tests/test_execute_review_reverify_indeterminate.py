@@ -37,6 +37,28 @@ def test_group_prompt_carries_the_indeterminate_instruction():
     assert "reverify_error" in block
 
 
+def test_windows_reverify_commands_carry_the_snapshot_identity(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(er, "os", SimpleNamespace(name="nt"))
+    session = "01a1f576-c271-7602-b740-b7a76c816332"
+    for prefixes in ([], ["g1", "g2"]):
+        block = _phase(
+            group_prefixes=prefixes,
+            repo_root="C:/dev/repo",
+            snapshot_session_id=session,
+            run_key="ask-fixture",
+        )
+        commands = [
+            part.split("`", 1)[0]
+            for part in block.split("`coordinator-invoke review.reverify ")[1:]
+        ]
+        assert len(commands) == (6 if prefixes else 4)
+        assert all(f'"session_id":"{session}"' in command for command in commands)
+        assert all("--repo \\'C:/dev/repo\\'" in command for command in commands)
+        assert "${COORDINATOR_SETTINGS_HOME:-" not in block
+
+
 def _both() -> list[str]:
     return [_phase(), _phase(group_prefixes=["g1", "g2"])]
 

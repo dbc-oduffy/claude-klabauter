@@ -4831,6 +4831,7 @@ def compose_ask_script(
         tshirt_js="_gate?.tshirt",
         reverify=True,
         reverify_deferred=True,
+        snapshot_session_id=session_id or "",
         delivery_notes_js="_deliveryNotes",
         slice_filter_js=_RESUME_SLICE_IDS_CALL_JS,
     )

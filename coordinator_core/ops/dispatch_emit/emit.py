@@ -2857,9 +2857,11 @@ def _test_runner_clause(repo_root: Optional[str | Path] = None, scoped_changes: 
 # outlive it: dozens per run filled a cloud container's disk mid-run.
 _SCRATCH_HYGIENE_CLAUSE = (
     "Scratch: anything you build outside the repo (a clone, venv, wheel, "
-    "export, tarball) goes under one directory named for this row, and you "
-    "delete that directory before you write your report. Reuse an existing "
-    "venv or clone rather than making another."
+    "export, tarball) goes under one directory named for this row. Before you "
+    "write your report, remove only that row-owned directory if policy permits. "
+    "If cleanup is denied, report its path and continue with the row verdict "
+    "based on the work and its evidence. Reuse an existing venv or clone "
+    "rather than making another."
 )
 
 

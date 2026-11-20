@@ -1120,3 +1120,15 @@ def test_family_attempt_normalizes_vendor_model_to_string_or_null_and_fallback_k
     fb = re.search(r"const _fb = \{[^}]*\}", js).group(0)
     assert "model: r.model" in fb and "vendor_model" not in fb
     assert "_fam.model" not in js
+
+
+def test_composed_ask_reverify_uses_the_dispatch_snapshot_session():
+    session_id = "d7b9dc1a-1455-43e8-922f-87e734b5634e"
+    script = _compose(session_id=session_id).replace(chr(92), "")
+    commands = re.findall(r"review\.reverify '({.*?})'([^\x60]*?)\x60", script)
+    assert len(commands) == 4
+    for payload, flags in commands:
+        assert f'"session_id":"{session_id}"' in payload
+        assert f'"base":"{_FAKE_BASE_SHA}"' in payload
+        assert f'"slice_prefix":"manifest-{_RUN_ID}-{_FAKE_BASE_SHA[:12]}-prep"' in payload
+        assert " --repo " in flags
