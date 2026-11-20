@@ -61,7 +61,7 @@ Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
                             [--claude-klabauter-live-root <path>] [--coordinator-root <path>]
                             [--with-test-deps]
-                            [--register-only] [--deps-only] [--check] [--host codex,agy]
+                            [--register-only] [--deps-only] [--check] [--host codex,agy,grok]
                             [--warm on|off] [--repair forwarders] [--help]
 
 Negative-spec:
@@ -252,12 +252,36 @@ def _require_python_311() -> None:
         "https://www.python.org/downloads/ if none exists.",
         file=sys.stderr,
     )
-    print(
-        "  On Windows: disable App Execution Alias stubs (Settings > Apps > App execution "
-        "aliases) before installing.",
-        file=sys.stderr,
-    )
+    alias_line = _python_alias_stub_line()
+    if alias_line:
+        print(alias_line, file=sys.stderr)
     _exit_flushed(1)
+
+
+def _python_alias_stub_line() -> "str | None":
+    """Remediation line for a python App Execution Alias stub on PATH, else None.
+
+    Detection is `prereq_probe`'s (the module `setup_chain_walker` gates on), so this
+    script and the chain-walk agree. None off Windows, or when the probe cannot load
+    (a pre-3.11 interpreter reaches here before `coordinator_core` is importable).
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        root = str(Path(__file__).resolve().parents[1])
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from coordinator_core.install import prereq_probe
+
+        hit = prereq_probe._stub_class_ahead_of_resolved(sys.executable or "")
+    except Exception:  # noqa: BLE001 - diagnostic only; the caller's verdict stands
+        return None
+    if hit is None or hit[0] != "WindowsApps App Execution Alias":
+        return None
+    return (
+        f"  WindowsApps App Execution Alias stub on PATH ({hit[1]}): disable it "
+        "(Settings > Apps > Advanced app settings > App execution aliases), then re-run."
+    )
 
 
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
@@ -330,7 +354,7 @@ Options:
                                       (no registration, forwarders or verification)
   --check                            Verify the install, one PASS/FAIL line per item (forwarders, door,
                                       guards, repos.* pointers, statusline); exits 1 on any FAIL
-  --host <csv>                       Host-only install for Codex / agy (codex, agy): writes only the
+  --host <csv>                       Host-only install for Codex / agy / Grok (codex, agy, grok): writes only the
                                       example-retrieval-repo MCP entry; no root registration, warm
                                       opt-in or seeding. Advisory: one [host:<id>] report each, never
                                       changes the exit status; with --check it writes nothing. An
@@ -349,6 +373,7 @@ IMPORT_NAME_OVERRIDES = {
     "pillow": "PIL",
     "beautifulsoup4": "bs4",
     "pytest-xdist": "xdist",
+    "pywin32": "win32api",
 }
 
 # The [project.optional-dependencies] key holding the test tier's tooling.
@@ -401,7 +426,11 @@ def setup_invocation() -> str:
 
 
 #: Foreign-host ids `--host` accepts; mirrors coordinator_core.install.host_targets.HOSTS.
-FOREIGN_HOSTS = ("codex", "agy")
+FOREIGN_HOSTS = ("codex", "agy", "grok")
+
+#: Hosts this script reports on without writing an MCP entry: Grok's plugin and MCP wiring is
+#: installed by coordinator_install.py, which has no per-host writer in coordinator_core.install.
+REPORT_ONLY_HOSTS = ("grok",)
 
 
 WARM_CHOICES = ("on", "off")
@@ -658,6 +687,31 @@ def check_git_version() -> None:
         print(f"PASS [soft] git — {'.'.join(str(v) for v in version)}")
 
 
+_MARKER_CLAUSE = re.compile(r"""^\s*(sys_platform|os_name|platform_system)\s*(==|!=)\s*['"]([^'"]*)['"]\s*$""")
+
+
+def _marker_applies(dep: str) -> bool:
+    """Whether a dependency spec's PEP 508 marker holds on this host.
+
+    Evaluates only `and`-joined ==/!= clauses on sys_platform, os_name and
+    platform_system — the shapes this repo declares. Any other marker reads as
+    applying: probing a dep pip skipped fails loudly, while silently dropping one
+    pip installed would hide a missing import."""
+    if ";" not in dep:
+        return True
+    import platform
+
+    host = {"sys_platform": sys.platform, "os_name": os.name, "platform_system": platform.system()}
+    for clause in dep.split(";", 1)[1].split(" and "):
+        m = _MARKER_CLAUSE.match(clause)
+        if not m:
+            return True
+        key, op, value = m.groups()
+        if (host[key] == value) != (op == "=="):
+            return False
+    return True
+
+
 def derive_deps(pyproject_path: Path, extra: str | None = None) -> tuple[list[str], list[str]]:
     """Read a dependency array from pyproject.toml and return (pip specs,
     import-probe names). PyPI distribution names and import names are not
@@ -695,6 +749,10 @@ def derive_deps(pyproject_path: Path, extra: str | None = None) -> tuple[list[st
             _exit_flushed(1)
         dist_name = m.group(1)
         specs.append(dep)
+        # pip skips a spec whose marker excludes this host; the probe must too,
+        # or a win32-only dep can never import and every non-Windows install fails.
+        if not _marker_applies(dep):
+            continue
         normalized = dist_name.lower().replace("-", "_")
         import_names.append(IMPORT_NAME_OVERRIDES.get(dist_name.lower(), normalized))
     return specs, import_names
@@ -1809,12 +1867,17 @@ _DEV_CLONE_GENERIC_MARKERS = (
 _DEV_CLONE_GENERIC_MIN_COUNT = 2
 
 
-def _install_module():
+def _install_module_script(claude_klabauter_root_resolved: Path) -> Path:
+    """The one authoritative coordinator_install.py: the engine tree's, never a plugin copy."""
+    return Path(claude_klabauter_root_resolved) / "coordinator" / "lib" / "install" / "coordinator_install.py"
+
+
+def _install_module() -> "types.ModuleType":
     """coordinator_install.py loaded by path (stdlib-only; it owns the DoE-presence predicate)."""
     name = "_setup_coordinator_install"
     if name in sys.modules:
         return sys.modules[name]
-    script = Path(__file__).resolve().parents[1] / "coordinator" / "lib" / "install" / "coordinator_install.py"
+    script = _install_module_script(Path(__file__).resolve().parents[1])
     spec = importlib.util.spec_from_file_location(name, script)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module  # its dataclasses resolve their module by name
@@ -2390,6 +2453,23 @@ def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, st
     return Path(engine), f"engine ladder ({resolution})"
 
 
+def _check_durable_install_root(root: Path, args: Args) -> bool:
+    """A dispatch override cannot select a new durable install target."""
+    override = os.environ.get("COORDINATOR_ENGINE_ROOT")
+    if args.claude_klabauter_root or not override or Path(override).resolve() != root.resolve():
+        return True
+    published = _engine_root_module().published_engine_mirror_path()
+    if published and Path(published).resolve() == root.resolve():
+        return True
+    print(
+        "ERROR: COORDINATOR_ENGINE_ROOT is process-local and cannot register a new engine "
+        "or change the installed door or shared editable package. Unset it and re-run from the registered engine, "
+        "or pass --claude-klabauter-live-root explicitly to select a durable engine.",
+        file=sys.stderr,
+    )
+    return False
+
+
 def _engine_root_module():
     """`coordinator_core.engine_root`, looked up at call time."""
     import coordinator_core.engine_root as engine_root_mod
@@ -2745,9 +2825,13 @@ def register_claude_klabauter_root(
 
         pending_advisories.append(_klabauter_identity_advisory)
     elif identity == IDENTITY_AUTHORING:
+        # The authoring checkout, never the engine root: claude-klabauter is never an engine, so
+        # claude_klabauter_root_resolved is the klabauter clone here, and the publisher CLIs
+        # (percolate-round, coordinator-publish) resolve via this key and live only here.
+        authoring_checkout = str(repo_root.resolve())
         key_values = {
-            "repos.claude_klabauter": str(claude_klabauter_root_resolved),
-            "engine.working_repos.claude_klabauter": str(claude_klabauter_root_resolved),
+            "repos.claude_klabauter": authoring_checkout,
+            "engine.working_repos.claude_klabauter": authoring_checkout,
         }
         discovered_klabauter = _discover_klabauter_root(repo_root, plugin_root_str)
         if discovered_klabauter:
@@ -2783,6 +2867,19 @@ def register_claude_klabauter_root(
                 if not registry_get("publish.mirrors.claude_klabauter.owner"):
                     key_values["publish.mirrors.claude_klabauter.owner"] = "claude-klabauter-em"
             key_values["repos.claude_klabauter"] = discovered_klabauter
+            if "publish.mirrors.claude_klabauter.track_ref" not in key_values:
+
+                def _engine_target_advisory(discovered_klabauter=discovered_klabauter) -> None:
+                    current_branch = _git_current_branch(Path(discovered_klabauter))
+                    if current_branch is not None and current_branch != "candidate":
+                        print()
+                        print(
+                            "[ADVISORY] engine.target declares 'candidate', but "
+                            f"{discovered_klabauter} is checked out on {current_branch!r}. Reconcile with:"
+                        )
+                        print("    python coordinator/bin/klabauter-channel.py --set candidate")
+
+                pending_advisories.append(_engine_target_advisory)
             if "publish.mirrors.claude_klabauter.track_ref" in key_values:
 
                 def _track_ref_advisory(discovered_klabauter=discovered_klabauter) -> None:
@@ -3551,7 +3648,16 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
     print()
     print("--- Verification: post-install health probe ---")
 
-    probe = claude_klabauter_root_resolved / "bin" / "claude-klabauter-doctor-probe.py"
+    # The engine root is the klabauter clone, where percolate ships the probe under the
+    # mirror's name; the claude-klabauter name serves an authoring tree.
+    probe = next(
+        (
+            claude_klabauter_root_resolved / "bin" / name
+            for name in ("claude-klabauter-doctor-probe.py", "claude-klabauter-doctor-probe.py")
+            if (claude_klabauter_root_resolved / "bin" / name).is_file()
+        ),
+        claude_klabauter_root_resolved / "bin" / "claude-klabauter-doctor-probe.py",
+    )
     if not probe.is_file():
         print("[ADVISORY] bin/claude-klabauter-doctor-probe not found at expected path — skipping post-install health check.")
         print("  Run 'python bin/claude-klabauter-doctor-probe.py --triage' after setup completes.")
@@ -3839,7 +3945,7 @@ def repair_status_lines(claude_klabauter_root_resolved: Path) -> None:
     (declined, or the operator's own command) is left untouched. Runs step 5's own step so the
     two can never disagree on the wanted shape. ADVISORY like its siblings.
     """
-    script = claude_klabauter_root_resolved / "coordinator" / "lib" / "install" / "coordinator_install.py"
+    script = _install_module_script(claude_klabauter_root_resolved)
     try:
         import importlib.util
         spec = importlib.util.spec_from_file_location("_setup_coordinator_install", script)
@@ -4002,7 +4108,7 @@ def ensure_settings_home_bin_on_user_path(args: Args) -> bool:
             pass
         _note_change("user-path", f"appended {entry} to the persistent user PATH (HKCU\\Environment)")
         print(f"PASS [path] appended {entry} to the user PATH")
-        print("NEXT [path] restart Claude Code (and any open terminal): running shells keep the old PATH")
+        print(f"NEXT [path] restart Claude Code (and any open terminal) to pick up {entry}: running shells keep the old PATH")
         return True
     except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
         print(f"WARN [path] user PATH not updated ({type(exc).__name__}: {exc})", file=sys.stderr)
@@ -4649,6 +4755,12 @@ def install_percolate_identity(repo_root: Path, claude_klabauter_root_resolved: 
     if str(claude_klabauter_root_resolved) not in sys.path:
         sys.path.insert(0, str(claude_klabauter_root_resolved))
     from coordinator_core._settings_home import settings_home
+    from coordinator_core import machine_profile as _mp
+
+    # Publishing is author-only: a consumer box never runs publish, so a PASS here would be noise.
+    if _mp.machine_profile() == "consumer":
+        print("SKIP [percolate-identity] consumer machine_profile: publish-audit config is author-only.")
+        return
 
     try:
         settings_home_path = settings_home()
@@ -4804,6 +4916,26 @@ def install_machine_identity(repo_root: Path, claude_klabauter_root_resolved: Pa
         print(f"PASS [identity] {key} = {value}")
 
 
+def _register_with_elevation_hint(register, repo_root: Path, label: str) -> bool:
+    """Run a schtasks-backed `register(repo_root)`, replaying its output; when it was
+    refused with "Access is denied", add the elevation hint. Advisory, never raises."""
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ok = register(repo_root)
+    text = buf.getvalue()
+    if text:
+        sys.stdout.write(text)
+    if not ok and "access is denied" in text.lower():
+        print(
+            f"[ADVISORY] {label} job needs elevation: re-run `python3 {Path(__file__).resolve()}` "
+            "from an Administrator terminal to register it. Everything else is installed."
+        )
+    return ok
+
+
 def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
     """Install-chain step: register the Windows Task Scheduler entry that
     fires ``coordinator_core.telemetry.host_sampler`` on a fixed cadence.
@@ -4840,7 +4972,7 @@ def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: P
             )
             return
 
-    if register_host_sampler_task(repo_root):
+    if _register_with_elevation_hint(register_host_sampler_task, repo_root, "host-sampler"):
         _note_change("host-sampler", "host-resource sampler scheduled job registered or refreshed")
 
 
@@ -4865,7 +4997,7 @@ def install_pruner_task(repo_root: Path, claude_klabauter_root_resolved: Path) -
             )
             return
 
-    if register_pruner_task(repo_root):
+    if _register_with_elevation_hint(register_pruner_task, repo_root, "pruner"):
         _note_change("pruner", "periodic scratch-hygiene pruner scheduled job registered or refreshed")
 
 
@@ -5341,20 +5473,73 @@ def install_repo_discovery(repo_root: Path, claude_klabauter_root_resolved: Path
         print(f"[ADVISORY] repo discovery skipped ({exc}); re-run scripts/setup.py.", file=sys.stderr)
 
 
-def install_general_work_ensure(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args, *, ensure=None) -> None:
-    """Install-chain step: run DoE's `general-work-root ensure` once; never fatal.
+_GENERAL_WORK_REMOTE_KEY = "coordinator.general_work_remote"
+_GENERAL_WORK_ROOT_KEYS = ("repos.general_work", "coordinator.general_work_root")
+_OWNER_REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
 
-    A refused root or a missing DoE script is an [ADVISORY], not an install failure.
+
+def _offer_general_work_clone(args: Args, *, registry_get=None, clone=None, ask=None) -> None:
+    """Offer to clone the registered general-work remote when its root is absent; never fatal.
+
+    Interactive runs ask (default yes); a non-interactive run prints the command instead.
+    `registry_get`/`clone`/`ask` are injection seams for tests.
+    """
+    if registry_get is None:
+        from coordinator_core import machine_resolver
+
+        registry_get = machine_resolver.registry_get
+    remote = str(registry_get(_GENERAL_WORK_REMOTE_KEY) or "").strip()
+    root = next((str(v).strip() for k in _GENERAL_WORK_ROOT_KEYS if (v := registry_get(k))), "")
+    if not remote or not root or Path(root).exists():
+        return
+    url = f"https://github.com/{remote}.git" if _OWNER_REPO_RE.match(remote) else remote
+    if url.startswith("-") or root.startswith("-"):
+        print(f"[ADVISORY] general-work remote or root begins with '-'; refusing to pass it to git clone: {remote!r} {root!r}")
+        return
+    command = f"git clone {url} {root}"
+    interactive = _stdin_can_answer() and not getattr(args, "agent_mode", False)
+    if not interactive:
+        print(f"[ADVISORY] general-work remote {remote} is registered but {root} is absent; clone it with: {command}")
+        return
+    if ask is None:
+        def ask(prompt: str) -> str:
+            try:
+                return input(prompt)
+            except (EOFError, RuntimeError):
+                return "n"
+
+    if ask(f"  Clone your general-work remote {remote} into {root}? [Y/n]: ").strip().lower() in ("n", "no"):
+        print(f"[SKIP] general-work clone declined; later: {command}")
+        return
+    if clone is None:
+        from coordinator_core.install.clone_sibling_repo import clone_idempotent as clone
+    try:
+        result = clone(url, root)
+    except Exception as exc:  # noqa: BLE001 -- advisory
+        print(f"[ADVISORY] general-work clone failed ({exc}); run: {command}", file=sys.stderr)
+        return
+    print(f"[OK] general-work cloned -> {result.get('path', root)}")
+    _note_change("general-work", f"cloned {remote} into {root}")
+
+
+def install_general_work_ensure(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args, *, ensure=None) -> None:
+    """Install-chain step: run claude-klabauter's own `general-work-root ensure` once; never fatal.
+
+    A refused root or a missing script is an [ADVISORY], not an install failure. A registered
+    general-work remote whose root is absent is offered as a clone first.
     """
     print()
     print("--- Install: general-work root ---")
     try:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        _offer_general_work_clone(args)
+    except Exception as exc:  # noqa: BLE001 -- the offer is advisory
+        print(f"[ADVISORY] general-work clone offer skipped ({exc})", file=sys.stderr)
+    try:
         if ensure is None:
-            if str(claude_klabauter_root_resolved) not in sys.path:
-                sys.path.insert(0, str(claude_klabauter_root_resolved))
             from coordinator_core.install.general_work_ensure import ensure_general_work_root as ensure
-        coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
-        outcome = ensure(coord_path)
+        outcome = ensure(claude_klabauter_root_resolved)
     except Exception as exc:
         print(f"[ADVISORY] general-work root ensure skipped ({exc}); re-run scripts/setup.py.", file=sys.stderr)
         return
@@ -5430,6 +5615,13 @@ def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, chec
         return
     writers = {"codex": host_install_codex.apply, "agy": host_install_agy.apply}
     for host in args.hosts:
+        if host in REPORT_ONLY_HOSTS:
+            binary = shutil.which(host)
+            print(f"[host:{host}] binary={binary or 'absent'} mcp=not-managed config=-")
+            print("  writes: nothing (no example-retrieval-repo MCP writer for this host; plugin install: coordinator_install.py)")
+            if binary is None:
+                print(f"  unreachable: {host} binary not found on PATH")
+            continue
         try:
             hp = plan(host)
             result = writers[host](check=check)
@@ -5458,6 +5650,8 @@ def run_deps_only(args: Args) -> int:
     in a different interpreter (a fallback venv those scripts will not use)."""
     repo_root = Path(__file__).resolve().parent.parent
     claude_klabauter_root, _ = resolve_claude_klabauter_root(repo_root, args)
+    if not _check_durable_install_root(claude_klabauter_root, args):
+        return 1
     py = resolve_python()
     engine_py, _ = provision_deps(
         claude_klabauter_root,
@@ -5519,6 +5713,9 @@ def main(argv: list[str]) -> int:
         install_foreign_hosts(claude_klabauter_root_resolved, args, check=True)
         return check_rc
 
+    if not (args.hosts and args.repair != "forwarders") and not _check_durable_install_root(claude_klabauter_root_resolved, args):
+        return 1
+
     if args.repair == "forwarders":
         return run_repair_forwarders(repo_root, claude_klabauter_root_resolved, args)
 
@@ -5544,6 +5741,9 @@ def main(argv: list[str]) -> int:
         )
         py_version = (version_proc.stdout or version_proc.stderr).strip().split()[-1]
         print(f"PASS [hard] python — {py_version} ({py})")
+        alias_line = _python_alias_stub_line()
+        if alias_line:
+            print(f"WARN [python] {alias_line.strip()}", file=sys.stderr)
         check_git_version()
         apply_git_perf_config(claude_klabauter_root_resolved)
         apply_merge_driver_config(claude_klabauter_root_resolved)
@@ -5664,8 +5864,8 @@ def main(argv: list[str]) -> int:
     else:
         print("=== claude-klabauter setup: complete ===")
     if not args.register_only:
-        print(CLOSING_CHAIN_WALK_LINE)
-        print(CLOSING_UNIMATRIX_LINE)
+        print(_absolute_closing_line(CLOSING_CHAIN_WALK_LINE, claude_klabauter_root_resolved))
+        print(_absolute_closing_line(CLOSING_UNIMATRIX_LINE, claude_klabauter_root_resolved))
     if probe_hard_failure:
         return EXIT_HEALTH_PROBE_HARD_FAILURE
     if dialect_disarmed:
@@ -5681,6 +5881,19 @@ CLOSING_CHAIN_WALK_LINE = (
 CLOSING_UNIMATRIX_LINE = (
     "  NEXT (optional): python3 coordinator/bin/unimatrix-install.py --install"
 )
+
+
+def _absolute_closing_line(line: str, claude_klabauter_root_resolved: Path) -> str:
+    """The closing line with its repo-relative `coordinator/...` script path made absolute.
+
+    The relative form is only runnable from a dev clone's cwd; a consumer box runs this
+    script from elsewhere, and the scripts live under the engine root.
+    """
+    return re.sub(
+        r"(?<=\s)(coordinator/\S+)",
+        lambda m: str(Path(claude_klabauter_root_resolved) / m.group(1)),
+        line,
+    )
 
 
 if __name__ == "__main__":

@@ -136,6 +136,7 @@ VENDORED_SCRIPTS = (
     "unimatrix-file-relay.py",
     "unimatrix-passphrase.py",
     "unimatrix-control.py",
+    "unimatrix-tui-status-launch.py",
     "headless-em-launch.py",
 )
 
@@ -982,11 +983,12 @@ def _plugin_entry_matches(entry, tree):
     return os.path.normcase(os.path.normpath(str(entry.get("path", "")))) == os.path.normcase(os.path.normpath(str(tree.parent)))
 
 
-def seed_agy_plugin(path, tree):
-    """Register the generated agy plugin tree in agy's plugins.json; return "created", "added" or "present".
+def seed_agy_plugin(path, tree) -> str:
+    """Register the generated agy plugin tree in agy's plugins.json; return "created", "added", "pruned" or "present".
 
     agy scans each `entries` path one level deep, so the entry names the tree's parent and
-    `include_only` narrows it to the tree. Other entries and keys are preserved; a re-run adds nothing.
+    `include_only` narrows it to the tree. Entries whose path is absent or under another user profile
+    are dropped; other entries and keys are preserved; a re-run changes nothing.
     """
     path, tree = Path(path), Path(tree)
     data = {}
@@ -998,13 +1000,18 @@ def seed_agy_plugin(path, tree):
         if not isinstance(data, dict) or not isinstance(data.get("entries", []), list):
             raise ValueError(f"{path} has an unexpected shape (want an object with an `entries` list)")
     entries = data.setdefault("entries", [])
-    if any(_plugin_entry_matches(e, tree) for e in entries):
+    live = _seed().prune_dead_entries(entries)
+    pruned = len(live) != len(entries)
+    has = any(_plugin_entry_matches(e, tree) for e in live)
+    if has and not pruned:
         return "present"
-    entries.append({"path": str(tree.parent), "include_only": [tree.name]})
+    if not has:
+        live.append({"path": str(tree.parent), "include_only": [tree.name]})
+    data["entries"] = live
     existed = path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return "added" if existed else "created"
+    return "pruned" if has else ("added" if existed else "created")
 
 
 def unseed_agy_plugin(path, tree):
@@ -1135,9 +1142,9 @@ def external_session_capability(engine_root):
     return True, "published registration, context, advisory and usage lifecycle present"
 
 
-def codex_hook_events(dest_dir, engine_root=None):
+def codex_hook_events(dest_dir, engine_root=None) -> dict:
     """Transport discovery plus engine lifecycle registration and shell guard."""
-    start = _hook_group(dest_dir, CODEX_SESSIONSTART_SCRIPT)
+    start = _hook_group(dest_dir, CODEX_SESSIONSTART_SCRIPT, args=_engine_args(engine_root))
     start["hooks"].append({**_hook_handler(
         dest_dir, EXTERNAL_SESSION_SCRIPT, "--event", "SessionStart", *_engine_args(engine_root)), "timeout": 3})
     end = _hook_group(dest_dir, EXTERNAL_SESSION_SCRIPT,
@@ -1333,11 +1340,11 @@ def _codex_expected_handlers(hooks_path):
     return expected
 
 
-_STATUS_DEFAULT = ["thread-name", "model-with-reasoning", "context-remaining"]
+_STATUS_DEFAULT = ["thread-name"]
 _STATUS_PATHS = {"current-dir", "project-root", "project", "project-name"}
 
 
-def _status_profile(current):
+def _status_profile(current) -> list[str]:
     if current is None or current == []:
         return list(_STATUS_DEFAULT)
     if not isinstance(current, list) or not all(isinstance(item, str) for item in current):
@@ -1349,10 +1356,6 @@ def _status_profile(current):
             result.append(item)
     if "thread-name" not in result:
         result.insert(0, "thread-name")
-    if "model-with-reasoning" not in result and not ("reasoning" in result and any(item in result for item in ("model", "model-name"))):
-        result.append("model-with-reasoning")
-    if "context-remaining" not in result:
-        result.append("context-remaining")
     return result
 
 
@@ -1443,7 +1446,7 @@ def _footer_state(path):
     return state
 
 
-def seed_codex_status_line(config_path, *, uninstall=False):
+def seed_codex_status_line(config_path, *, uninstall=False) -> str:
     """Own only the footer value; restore only while it remains our exact value."""
     path = Path(config_path)
     state_path = path.with_name(".coordinator-status-line.json")
@@ -1465,7 +1468,15 @@ def seed_codex_status_line(config_path, *, uninstall=False):
         _footer_write(path, replacement)
         state_path.unlink()
         return "restored"
-    wanted = _status_profile(current)
+    prior = None
+    if state_path.exists():
+        try:
+            prior = _footer_state(state_path)
+        except ValueError:
+            prior = None
+    # A footer we seeded earlier re-derives from its pre-install value, dropping natives we added.
+    base = prior["original"] if prior is not None and current == prior["managed"] else current
+    wanted = _status_profile(base)
     if wanted == current:
         return "present"
     replacement = _status_edit(text, wanted)
@@ -1790,6 +1801,22 @@ def seed_grok_hook(hooks_path, dest_dir, engine_root=None):
     return "created" if not existed else "updated" if had_owned else "added"
 
 
+def refresh_grok_hook(hooks_path, dest_dir, engine_root=None) -> str:
+    """Bring an installed Grok group to current emitter output; return "absent", "present" or "updated".
+
+    One small JSON read and no spawn. Creates nothing: a file with no owned group is "absent" and stays
+    untouched, and a current file is not rewritten. An unresolved engine root is "absent" too, so a
+    working `--engine-root` is never rendered away."""
+    path = Path(hooks_path)
+    if engine_root is None or not path.is_file():
+        return "absent"
+    hooks = _load_hooks(path).get("hooks")
+    events = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+    if not isinstance(events, list) or not any(_grok_group_ours(g) for g in events):
+        return "absent"
+    return seed_grok_hook(path, dest_dir, engine_root)
+
+
 def unseed_grok_hook(hooks_path):
     """Remove only our handler from PreToolUse; return "removed" or "absent"."""
     path = Path(hooks_path)
@@ -1808,21 +1835,48 @@ def unseed_grok_hook(hooks_path):
 
 
 TUI_STATUS_MODULE = "coordinator_core.tui_status"
+TUI_STATUS_LAUNCHER = "unimatrix-tui-status-launch.py"
 # Trap: agy and Grok run the status line from a cwd with no coordinator_core on sys.path, so a bare
-# `-m` fails on every render; the engine root rides in argv and is put on sys.path first.
+# `-m` fails on every render; the launcher puts the engine root on sys.path. agy on Windows splits a
+# `-c` one-liner at its spaces and quotes, so no argument may hold either. The -c form below is kept
+# only to recognise (and replace) entries an earlier install wrote.
 _TUI_STATUS_BOOT = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
                     f"runpy.run_module('{TUI_STATUS_MODULE}',run_name='__main__')")
 
 
-def _tui_status_command(host, engine_root=None) -> str:
+GROK_STATUS_SCRIPT = "coordinator-statusline.ps1"
+
+
+def _grok_ps1_form(host) -> bool:
+    """True when this host's status line is a path-only `.ps1`: Grok on Windows starts `command` as one process image."""
+    return host == "grok" and os.name == "nt"
+
+
+def _grok_status_script_text(engine_root, dest_dir=None) -> str:
+    """The `.ps1` body: stdin piped through the console python to the launcher, every path single-quoted."""
+    launcher = (Path(dest_dir) if dest_dir else settings_home() / "unimatrix") / TUI_STATUS_LAUNCHER
+    q = lambda v: "'" + str(v).replace("'", "''") + "'"
+    return (f"$py = {q(_console_python())}\r\n$launcher = {q(launcher)}\r\n$root = {q(engine_root)}\r\n"
+            "$input | & $py $launcher $root 'grok'\r\n")
+
+
+def _tui_status_command(host, engine_root=None, dest_dir=None, config_dir=None) -> str:
+    """The status-line command: the installed launcher script run by the console python, one bare word per argument.
+
+    Grok on Windows (with a `config_dir`) gets only the path of the `.ps1` that runs it.
+    """
+    if engine_root and config_dir and _grok_ps1_form(host):
+        script = Path(config_dir) / GROK_STATUS_SCRIPT
+        return (_short_path(str(script)) if " " in str(script) and script.exists() else str(script)).replace("\\", "/")
     if engine_root:
-        argv = [_console_python(), "-c", _TUI_STATUS_BOOT, str(engine_root), host]
+        launcher = (Path(dest_dir) if dest_dir else settings_home() / "unimatrix") / TUI_STATUS_LAUNCHER
+        argv = [_console_python(), launcher, str(engine_root), host]
     else:
         argv = [_console_python(), "-m", TUI_STATUS_MODULE, host]
-    return _quote_argv([str(a).replace("\\", "/") for a in argv])
+    return _quote_argv([(_short_path(str(a)) if " " in str(a) else str(a)).replace("\\", "/") for a in argv])
 
 
-def _status_command_ours(value, host):
+def _status_command_ours(value, host) -> bool:
     """True when a host's status-line value is one this installer wrote, in any engine root or form."""
     cmd = value.get("command") if isinstance(value, dict) else None
     if not isinstance(cmd, str):
@@ -1832,7 +1886,11 @@ def _status_command_ours(value, host):
     except ValueError:
         return False
     argv = [a.strip('"') for a in argv]
+    if len(argv) == 1 and host == "grok" and Path(argv[0].replace("\\", "/")).name == GROK_STATUS_SCRIPT:
+        return True
     if argv[-3:] == ["-m", TUI_STATUS_MODULE, host]:
+        return True
+    if len(argv) == 4 and Path(argv[1].replace("\\", "/")).name == TUI_STATUS_LAUNCHER and argv[3] == host:
         return True
     return len(argv) == 5 and argv[1] == "-c" and argv[2] == _TUI_STATUS_BOOT and argv[4] == host
 
@@ -1880,7 +1938,7 @@ def _host_status_state(path):
     return state
 
 
-def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=None):
+def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=None, dest_dir=None) -> str:
     """Own only the agy `statusLine` / Grok `[ui.status_line]` value; restore only while it remains our exact value.
 
     The ownership record keeps the pre-install text, so an untouched file returns byte for byte; a file
@@ -1889,7 +1947,8 @@ def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=Non
     path = Path(config_path)
     state_path = path.with_name(f".coordinator-status-line-{host}.json")
     text = path.read_bytes().decode("utf-8") if path.exists() else None
-    command = _tui_status_command(host, engine_root)
+    command = _tui_status_command(host, engine_root, dest_dir, path.parent)
+    script = path.with_name(GROK_STATUS_SCRIPT)
     if uninstall:
         if not state_path.exists():
             return "absent"
@@ -1920,6 +1979,7 @@ def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=Non
             tomllib.loads(replacement)
             _footer_write(path, replacement)
         state_path.unlink()
+        script.unlink(missing_ok=True)
         return "restored"
     current, wanted = _host_status_value(host, text, command)
     if current == wanted:
@@ -1928,8 +1988,10 @@ def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=Non
     if current is not None and _status_command_ours(current, host) and (state is None or text != state["after"]):
         # Our own older value (another engine root, or the bare `-m` form) in an edited file: swap
         # only the command literal so the user's other edits survive.
-        old_literal = json.dumps(current["command"], ensure_ascii=False)
-        if old_literal not in text:
+        old_cmd = current["command"]
+        old_literal = next((lit for lit in (json.dumps(old_cmd, ensure_ascii=False), f"'''{old_cmd}'''", f"'{old_cmd}'")
+                            if lit in text), None)
+        if old_literal is None:
             return "retained-customized"
         base = state["before"] if state else text
         existed = state["existed"] if state else True
@@ -1945,6 +2007,8 @@ def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=Non
     if _host_status_value(host, replacement, command)[0] != wanted:
         raise ValueError("status-line edit did not address the host's status line")
     path.parent.mkdir(parents=True, exist_ok=True)
+    if engine_root and _grok_ps1_form(host):
+        _footer_write(script, _grok_status_script_text(engine_root, dest_dir))
     record = {"version": 1, "host": host, "existed": existed, "before": base, "after": replacement, "managed": wanted}
     _footer_write(state_path, json.dumps(record, ensure_ascii=False) + "\n")
     _footer_write(path, replacement)
@@ -1965,6 +2029,21 @@ def agy_absolute_allow_rule():
     """The submit grant naming coordinator-invoke by its settings-home path, for hosts where the bare name does not resolve."""
     exe = invoke_launcher_path()
     return AGY_ALLOW_RULE.replace("command(coordinator-invoke ", f"command({exe} ", 1)
+
+
+def launcher_sac_blocked() -> bool:
+    """True when Windows Smart App Control is enforcing, so the unsigned `.exe` launcher an allow rule names cannot run.
+
+    Reads one registry value; no process is spawned. Any other platform, an unreadable value or an evaluation-mode state is False.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\CI\Policy") as key:
+            return winreg.QueryValueEx(key, "VerifiedAndReputablePolicyState")[0] == 1
+    except (OSError, ImportError):
+        return False
 
 
 AGY_TOOL_PERMISSION_KEY = "toolPermission"
@@ -2145,12 +2224,14 @@ def _write_pin(interp):
     return rec.returncode == 0
 
 
-def record_python_pin(agent_dir=None):
-    """Pin `unimatrix.python` when unset; return the recorded interpreter, else None (a pin, even a stale
-    one, is never overwritten). The pin is the interpreter the login agent already runs (it holds the macOS
-    Local Network grant), else this installer's: later reinstalls from another python keep that binary."""
+def record_python_pin(agent_dir=None) -> str | None:
+    """Pin `unimatrix.python` when unset or when the pinned file is absent; return the recorded interpreter,
+    else None (a pin naming an existing file is never overwritten). The pin is the interpreter the login agent
+    already runs (it holds the macOS Local Network grant), else this installer's: later reinstalls from
+    another python keep that binary."""
     try:
-        if _pin_raw():
+        raw = _pin_raw()
+        if raw and os.path.isfile(raw):
             return None
     except (OSError, subprocess.SubprocessError):
         return None
@@ -2794,8 +2875,9 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
          codex_hooks=None, codex_trust=None, codex_rules=None, agy_rules=None, codex_exec_rule=None,
          agy_skills_json=None, codex_skills=None, agent_dir=None, schtasks=None, pair_run=None,
          router_live=None, restart_router=None, launchctl=None, relay_ps=None, relay_kill=None, authorized_keys=None,
-         openssh_run=None):
-    """`openssh_run` (argv -> CompletedProcess) replaces the PowerShell run behind the Windows OpenSSH receive-side
+         openssh_run=None, sac_blocked=None):
+    """`sac_blocked` (() -> bool) replaces the Smart App Control probe that gates the agy allow rule.
+    `openssh_run` (argv -> CompletedProcess) replaces the PowerShell run behind the Windows OpenSSH receive-side
     check, which an overridden `hooks_path` otherwise skips. `authorized_keys` overrides the local file whose stale forced-command interpreters --install rewrites;
     an overridden `hooks_path` otherwise skips it. `launchctl` (argv tail -> CompletedProcess), `relay_ps` (() -> ps text) and `relay_kill` (pid -> None)
     replace the real launchctl, `ps` and SIGTERM, which an overridden `hooks_path` otherwise skips.
@@ -2848,9 +2930,14 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--install", action="store_true", help="copy the vendored scripts into the settings home")
     ap.add_argument("--uninstall", action="store_true", help="remove everything --install seeded for Codex and agy")
+    ap.add_argument("--refresh-hooks", action="store_true", help="re-render an already-installed Grok hook to the current emitter output "
+                    "(session-start and adoption trigger; creates nothing, no script copy, no Claude gate)")
     ap.add_argument("--force", action="store_true", help="warn instead of refusing outside the verified range")
-    ap.add_argument("--hosts", help="comma list of claude,codex,agy,grok (grok installs a status line, the peer doctrine rules file and a PreToolUse host-guard hook); default codex,agy,grok with the Claude range gate. "
-                    "Naming no claude skips the gate when `claude` is not on PATH")
+    ap.add_argument("--hosts", help="comma list of claude,codex,agy,grok (grok installs a status line, the peer doctrine rules file and a PreToolUse host-guard hook); "
+                    "--install seeds only the relay and no host unless named here (--uninstall and --refresh-hooks default to all hosts). "
+                    "Naming no claude skips the Claude range gate when `claude` is not on PATH")
+    ap.add_argument("--autolink", action="store_true", help="with --install: register the login autolink (Windows Run key, "
+                    "macOS launch agent); default off")
     ap.add_argument("--openssh-receive", action="store_true", help="Windows: install and start OpenSSH Server, set it "
                     "Automatic, open firewall TCP 22 and ACL administrators_authorized_keys to Administrators+SYSTEM "
                     "(needs an elevated shell; driven through MSI pwsh or Windows PowerShell 5.1, never the MSIX alias)")
@@ -2978,6 +3065,18 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     want_agy = hosts is None or "agy" in hosts
     want_grok = hosts is None or "grok" in hosts
 
+    if args.refresh_hooks:
+        if not want_grok:
+            return 0
+        try:
+            res = refresh_grok_hook(grok_hp, Path(dest_dir) if dest_dir else settings_home() / "unimatrix",
+                                    resolve_engine_root()[0])
+        except (ValueError, OSError) as exc:
+            print(f"REFUSE: {exc}; grok hook not refreshed", file=out)
+            return 4
+        print(f"grok hook {res} in {grok_hp}", file=out)
+        return 0
+
     if args.uninstall:
         hp = Path(hooks_path) if hooks_path else agy_hooks_path()
         steps = []
@@ -3044,6 +3143,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     if not args.install:
         return 0
 
+    want_codex, want_agy, want_grok = (hosts is not None and h in hosts for h in ("codex", "agy", "grok"))
     absent = [h for h, wanted in (("codex", want_codex), ("agy", want_agy), ("grok", want_grok))
               if wanted and not host_present(h)]
     for h in absent:
@@ -3154,16 +3254,19 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         if not wanted:
             continue
         try:
-            res = seed_host_status_line(config, host, engine_root=engine_root)
+            res = seed_host_status_line(config, host, engine_root=engine_root, dest_dir=dest)
             print(f"{label} status line {res} in {config}", file=out)
         except (OSError, ValueError) as exc:
             missing.append(f"{label} status line")
             print(f"WARN: {label} status line not installed: {exc}", file=out)
     if want_agy:
         try:
-            agy_rule = agy_absolute_allow_rule()
-            print(f"agy allow rule {seed_agy_allow_rule(agy_status, rule=agy_rule)} in {agy_status}", file=out)
-            print(f"agy allow rule granted: {agy_rule}", file=out)
+            if (sac_blocked or launcher_sac_blocked)():
+                print("agy allow rule skipped: Smart App Control blocks the coordinator-invoke forwarder", file=out)
+            else:
+                agy_rule = agy_absolute_allow_rule()
+                print(f"agy allow rule {seed_agy_allow_rule(agy_status, rule=agy_rule)} in {agy_status}", file=out)
+                print(f"agy allow rule granted: {agy_rule}", file=out)
         except (OSError, ValueError) as exc:
             missing.append("agy allow rule")
             print(f"WARN: agy allow rule not installed: {exc}", file=out)
@@ -3209,11 +3312,12 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     pinned = record_python_pin(agent_dir)
     if pinned:
         print(f"unimatrix.python pinned: {pinned}", file=out)
-    try:
-        state, where = register_login_agent(dest, agent_dir, schtasks, launchctl)
-        print(f"login agent {state}: {where}" if state != "skipped" else f"WARN: login agent not registered: {where}", file=out)
-    except OSError as exc:
-        print(f"WARN: login agent not registered: {exc}", file=out)
+    if args.autolink:
+        try:
+            state, where = register_login_agent(dest, agent_dir, schtasks, launchctl)
+            print(f"login agent {state}: {where}" if state != "skipped" else f"WARN: login agent not registered: {where}", file=out)
+        except OSError as exc:
+            print(f"WARN: login agent not registered: {exc}", file=out)
     try:
         for label in remove_legacy_login_agents(agent_dir, launchctl):
             print(f"legacy login agent removed: {label}", file=out)

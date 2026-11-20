@@ -114,13 +114,27 @@ class LandDeadlineExceeded(BaseException):
     named `leg` ran out of its own deadline (see `step`)."""
 
     def __init__(
-        self, leg: str, legs: Optional[list] = None, bound_by: str = BOUND_BUDGET, step: bool = False
+        self,
+        leg: str,
+        legs: Optional[list] = None,
+        bound_by: str = BOUND_BUDGET,
+        step: bool = False,
+        left_secs: Optional[float] = None,
     ) -> None:
         super().__init__(leg)
         self.leg = leg
         self.legs = legs or []
         self.bound_by = bound_by
         self.step = step
+        #: Seconds of op budget the step had when it was entered (0.0 when refused on entry);
+        #: None when unknown or no budget was bound.
+        self.left_secs = left_secs
+
+    @property
+    def spent_by(self) -> str:
+        """The started leg with the largest wall cost, the one that spent the budget; empty with no legs."""
+        spenders = [e for e in self.legs if e.get("elapsed_secs") is not None]
+        return max(spenders, key=lambda e: e["elapsed_secs"])["leg"] if spenders else ""
 
 
 @contextmanager
@@ -239,7 +253,7 @@ def check(leg: str) -> None:
 #: `bound_by` of a step that ran out of its own cap before the op budget did.
 BOUND_STEP = "step"
 
-#: `(name, wall_deadline, bound_by)` of the innermost `step`; None outside one.
+#: `(name, wall_deadline, bound_by, left_secs_at_entry)` of the innermost `step`; None outside one.
 _STEP: ContextVar[Optional[tuple]] = ContextVar("land_run_step", default=None)
 
 
@@ -266,10 +280,11 @@ def step(name: str, cap_secs: Optional[float] = None) -> Iterator[Optional[float
     if outer is not None:
         candidates.append((outer[1], outer[2]))
     deadline, bound_by = min(candidates, default=(None, BOUND_STEP), key=lambda c: c[0])
+    left = None if limit is None or limit == float("inf") else max(0.0, limit - now)
     if deadline is not None and deadline <= now:
-        raise LandDeadlineExceeded(name, _legs_elapsed(now), bound_by, step=True)
+        raise LandDeadlineExceeded(name, _legs_elapsed(now), bound_by, step=True, left_secs=left)
     _record(name, now)
-    token = _STEP.set(None if deadline is None else (name, deadline, bound_by))
+    token = _STEP.set(None if deadline is None else (name, deadline, bound_by, left))
     try:
         yield None if deadline is None else deadline - now
     finally:
@@ -289,21 +304,30 @@ def step_check() -> None:
     if held is not None:
         now = _now()
         if now >= held[1]:
-            raise LandDeadlineExceeded(held[0], _legs_elapsed(now), held[2], step=True)
+            raise LandDeadlineExceeded(held[0], _legs_elapsed(now), held[2], step=True, left_secs=held[3])
 
 
 def parked_fields(exc: LandDeadlineExceeded) -> dict:
     """The reply fields of a step breach before any ref moved: a determinate not-started answer
-    naming the step, never an indeterminate timeout. The run token stays live; a re-send proceeds."""
-    return {
+    naming the step, never an indeterminate timeout, the op budget left when the step began, the
+    bound that ended it and the leg that spent the time. The run token stays live; a re-send proceeds."""
+    fields = {
         "status": "not-started",
         "parked": True,
         "step": exc.leg,
-        "error": (
-            f"land-deadline: step {exc.leg} did not finish inside its deadline; parked, not started: "
-            "nothing committed, nothing verified past that step. Re-send the landing."
-        ),
+        "bound_by": exc.bound_by,
+        "left_secs": exc.left_secs,
+        "spent_by": exc.spent_by,
+        "legs": [{"leg": e["leg"], "elapsed_secs": e["elapsed_secs"]} for e in exc.legs],
     }
+    spent = f"; budget left at entry {exc.left_secs:.2f}s" if exc.left_secs is not None else ""
+    spent += f", bound by {exc.bound_by}"
+    spent += f", spent by {exc.spent_by}" if exc.spent_by else ""
+    fields["error"] = (
+        f"land-deadline: step {exc.leg} did not finish inside its deadline{spent}; parked, not started: "
+        "nothing committed, nothing verified past that step. Re-send the landing."
+    )
+    return fields
 
 
 def _reserved_refusal(now: float) -> Optional[str]:

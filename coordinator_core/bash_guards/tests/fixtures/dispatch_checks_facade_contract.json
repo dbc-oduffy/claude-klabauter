@@ -318,6 +318,7 @@
   "block-held-push": "bash_guards/block_held_push.py",
   "deploy-dirty-tree": "bash_guards/guard_deploy_dirty_tree.py",
   "block-editor-kill-by-name": "bash_guards/block_editor_kill_by_name.py",
+  "deny-kill-by-port-or-tree": "bash_guards/block_kill_by_port_or_tree.py",
   "block-whole-filesystem-scan": "bash_guards/block_whole_filesystem_scan.py",
   "block-noncanonical-branch-creation": "bash_guards/block_noncanonical_branch_creation.py",
   "block-subagent-plan-body-bash-write": "bash_guards/block_subagent_plan_body_bash_write.py",

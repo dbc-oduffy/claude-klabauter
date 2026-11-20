@@ -37,6 +37,44 @@ def test_dump_repos_uses_kernel_when_present_else_forwarder(tmp_path, monkeypatc
     assert seen == ["/fwd/machine-local", str(kernel)]
 
 
+@pytest.mark.parametrize("n_roots", [3, 30])
+def test_machine_local_reads_independent_of_root_count(tmp_path, monkeypatch, n_roots):
+    import subprocess
+
+    from coordinator_core import machine_local_spawn
+    from coordinator_core.ops import learn_lessons_roots as llr
+
+    repos = {}
+    for i in range(n_roots):
+        d = tmp_path / f"r{i}"
+        d.mkdir()
+        repos[f"repos.r{i}"] = str(d)
+    denied = tmp_path / "denied"
+    denied.mkdir()
+    repos["repos.coordinator_claude"] = str(denied)
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    repos["repos.mirror"] = str(mirror)
+
+    calls = []
+    monkeypatch.setattr(machine_local_spawn, "dump", lambda impl, args=(), **kw: calls.append("dump") or repos)
+    monkeypatch.setattr(
+        machine_local_spawn, "get",
+        lambda impl, key, **kw: calls.append("get") or (f"m|t|s|{mirror}", True),
+    )
+
+    def _no_spawn(*a, **k):
+        raise AssertionError("per-root subprocess spawned")
+
+    monkeypatch.setattr(subprocess, "run", _no_spawn)
+    monkeypatch.setattr(subprocess, "Popen", _no_spawn)
+
+    roots = llr._registry_roots("/fwd/machine-local")
+    assert len(calls) == 2
+    assert str(denied) not in roots and str(mirror) not in roots
+    assert len(roots) == n_roots
+
+
 def _make_machine_local(bin_dir: Path, repos: dict, publish_targets=(), extra=None) -> Path:
     extra_dict = extra or {}
     python_body = f"""
@@ -220,8 +258,7 @@ sys.exit(_main())
         cc_repo.mkdir()
         _make_machine_local(
             claude_home / "bin",
-            repos={"cc": str(cc_repo)},
-            extra={"repos.coordinator_claude": str(cc_repo)},
+            repos={"cc": str(cc_repo), "coordinator_claude": str(cc_repo)},
         )
 
         env = _env_for(tmp_path)

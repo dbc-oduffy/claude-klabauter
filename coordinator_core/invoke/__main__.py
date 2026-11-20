@@ -729,11 +729,16 @@ def _in_band_failure_line(response: dict, method: object, prior_stderr: str) -> 
     result = response.get("result")
     if not isinstance(result, dict):
         return None
+    refused = _refusal_code(result) if method in _REFUSAL_FAILS_PROCESS else None
+    if refused is not None:
+        reason = result.get("reason")
+        text = reason.strip() if isinstance(reason, str) and reason.strip() else "no reason given"
+        return f"[invoke] {method} REFUSED ({refused}) with process exit 1. Reason (result.reason): {text}"
     code = result.get("exit_code")
     if isinstance(code, bool) or not isinstance(code, int) or code == 0:
         return None
     proc = 1 if method in _IN_BAND_EXIT_FAILS_PROCESS else 0
-    for field in ("error", "message"):
+    for field in ("error", "message", "reason"):
         value = result.get(field)
         if isinstance(value, str) and value.strip():
             return (
@@ -750,7 +755,23 @@ def _in_band_failure_line(response: dict, method: object, prior_stderr: str) -> 
 
 #: Ops whose nonzero in-band `result.exit_code` (a refusal or a partial
 #: delivery) is a process failure; every other op keeps exit 0 on a JSON-RPC success.
-_IN_BAND_EXIT_FAILS_PROCESS = frozenset({"memo.send"})
+_IN_BAND_EXIT_FAILS_PROCESS = frozenset({"memo.send", "workflow.fire_wait"})
+
+
+#: Ops whose gate refusal (`{"refused": code, "reason": ...}`, no `exit_code`) is a
+#: process failure; every other op keeps exit 0 on a JSON-RPC success.
+_REFUSAL_FAILS_PROCESS = frozenset({"engine_ask.submit"})
+
+
+def _refusal_code(result: object) -> Optional[str]:
+    """The `refused` code of a gate-refusal result (`{"refused": code, "reason": ...}`), else None.
+
+    Callers gate on `_REFUSAL_FAILS_PROCESS`.
+    """
+    if not isinstance(result, dict):
+        return None
+    code = result.get("refused")
+    return code if isinstance(code, str) and code else None
 
 
 def _exit_code_for_response(
@@ -770,8 +791,10 @@ def _exit_code_for_response(
     """
     error = response.get("error")
     if error is None:
+        result = response.get("result")
+        if method in _REFUSAL_FAILS_PROCESS and _refusal_code(result) is not None:
+            return 1
         if method in _IN_BAND_EXIT_FAILS_PROCESS:
-            result = response.get("result")
             code = result.get("exit_code") if isinstance(result, dict) else None
             if isinstance(code, int) and not isinstance(code, bool) and code != 0:
                 return 1

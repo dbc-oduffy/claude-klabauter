@@ -25,7 +25,7 @@ import jsonschema
 
 from coordinator_core.codex_runner.agy import AgyUnavailable, resolve_agy
 from coordinator_core.codex_runner.grok import GrokUnavailable, resolve_grok
-from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
 from coordinator_core.codex_runner.resolve import codex_family_stage_argv, preflight_auth, resolve_codex
 from coordinator_core.codex_runner.sandbox_preflight import (
     SandboxSetupRefused,
@@ -42,6 +42,7 @@ from coordinator_core.group_em import admission_post, slot_grant, slot_wait
 from coordinator_core.agent_pipe.agy import family_stage_argv
 from coordinator_core.agent_pipe.model_tiers import model_for_tier
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV
+from coordinator_core.ops.workflow_fire.headless_agents import fill_omitted_nullable, unwrap_rpc_envelope
 from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
 from coordinator_core._settings_home import settings_home
 from coordinator_core.locked_write import held_lock
@@ -123,6 +124,8 @@ def _environment() -> dict[str, str]:
     # bootstrap ladder; never silently dispatch back into another live clone.
     from coordinator_core.warm.engine_root import current_engine_clone
     env['COORDINATOR_ENGINE_ROOT'] = str(current_engine_clone())
+    # The native door uses its own override ahead of the installed sidecar.
+    env['COORDINATOR_DOOR_ENGINE_ROOT'] = env['COORDINATOR_ENGINE_ROOT']
     # Native tools/hooks need these Windows and coordinator runtime locations.
     for key in ("TEMP", "TMP", "COMSPEC", "PATHEXT", "SYSTEMROOT", "MACHINE_LOCAL_REGISTRY_DIR",
                 *USER_PROFILE_ENV, *CREDENTIAL_CONTEXT_ENV, *CREDENTIAL_CONTEXT_ENV_WINDOWS):
@@ -891,6 +894,94 @@ def _write_commit_params(repo_root: Path, prompt: str) -> None:
         return
 
 
+_GATE_REASK_SECONDS = 60
+_GATE_REPLY_LIMIT = 128 * 1024
+_GATE_SCALARS = re.compile(r'"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b')
+
+
+def _gate_envelope_result(value: Any) -> Any:
+    if not isinstance(value, dict) or value.get("jsonrpc") != "2.0":
+        return value
+    keys = set(value)
+    if keys == {"jsonrpc", "id", "result"} or (
+        keys == {"jsonrpc", "id", "result", "note"} and isinstance(value["note"], str)
+    ):
+        return value["result"]
+    return value
+
+
+def _bind_gate_manifest_digest(value: Any, repo_root: Path, run_id: Any) -> Any:
+    """Repair a malformed duplicate digest after verifying the outer handle."""
+    if not isinstance(value, dict) or not isinstance(run_id, str):
+        return value
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_id):
+        return value
+    stage = value.get("stage_reply")
+    outer = value.get("manifest_handle")
+    inner = stage.get("manifest_handle") if isinstance(stage, dict) else None
+    from coordinator_core.ops.dispatch_emit import ask_stage_receipt, reply_sidecar
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    if not all(isinstance(handle, dict) and set(handle) == set(reply_sidecar.HANDLE_KEYS)
+               for handle in (outer, inner)):
+        return value
+    root = repo_root.resolve()
+    directory = record_dir(root, run_id)
+    path = directory / ask_stage_receipt.MANIFEST_NAME
+    if (not path.is_relative_to(root) or path.resolve() != path
+            or (directory / ask_stage_receipt.RECEIPT_NAME).is_symlink()):
+        return value
+    expected = path.relative_to(root).as_posix()
+    if any(handle["path"] != expected for handle in (outer, inner)):
+        return value
+    sealed = ask_stage_receipt.landed(directory, ask_stage_receipt.GATE_DIGEST)
+    if sealed is None or sealed["path"] != expected or outer["sha256"] != sealed["sha256"]:
+        return value
+    if any(type(handle["bytes"]) is not int or handle["bytes"] != sealed["bytes"]
+           for handle in (outer, inner)):
+        return value
+    digest = inner["sha256"]
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+        return value
+    return {**value, "stage_reply": {**stage, "manifest_handle": {**inner, "sha256": sealed["sha256"]}}}
+
+
+_GATE_WRAPPER_PREFIX = re.compile(
+    r'^\s*\{\s*"jsonrpc"\s*:\s*"2\.0"\s*,\s*"id"\s*:\s*'
+    r'(?:-?\d+|"(?:[^"\\]|\\.)*"|null)\s*,\s*"result"\s*:\s*(?=\{)'
+)
+
+
+def _gate_reask_preserves_scalars(initial: str, retry: str) -> bool:
+    expected = _GATE_SCALARS.findall(initial)
+    if expected == _GATE_SCALARS.findall(retry):
+        return True
+    # A schema-bound repair may return the bare payload. Only disregard the
+    # proven leading wrapper fields on a syntactically invalid JSON reply.
+    try:
+        json.loads(initial)
+    except ValueError:
+        wrapper = _GATE_WRAPPER_PREFIX.match(initial)
+        if wrapper is not None:
+            return _GATE_SCALARS.findall(initial[wrapper.end():]) == _GATE_SCALARS.findall(retry)
+    return False
+
+
+def _gate_redundant_halt_payload(text: str) -> dict | None:
+    """Recover the payload for retry comparison, without accepting the invalid wrapper."""
+    try:
+        outer = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(outer, dict) or set(outer) != {"jsonrpc", "id", "result", "halt"}:
+        return None
+    payload = outer["result"]
+    if (outer["jsonrpc"] == "2.0" and outer["halt"] is None
+            and isinstance(payload, dict) and "halt" in payload and payload["halt"] is None):
+        return payload
+    return None
+
+
 def run_agent(
     prompt: str,
     options: dict[str, Any] | None,
@@ -905,6 +996,7 @@ def run_agent(
     fire_id: str | None = None,
     on_native_thread: Callable[[dict], None] | None = None,
     private_cli: dict | None = None,
+    _gate_reask: bool = False,
 ) -> Any:
     """Return the schema-validated agent value; persist stdout/stderr and result.
 
@@ -913,6 +1005,7 @@ def run_agent(
     a success-shaped value that a Workflow could mistake for completed work.
     """
     options = {} if options is None else options
+    started = time.monotonic()
     if not isinstance(prompt, str) or not isinstance(options, dict):
         raise AgentFailed("agent requires a string prompt and object options")
     if timeout_s <= 0 or timeout_s > 86400:
@@ -922,6 +1015,9 @@ def run_agent(
     if not repo_root.is_dir():
         raise AgentFailed(f"agent cwd does not exist: {repo_root}")
     schema = options.get("schema")
+    codex_gate = (backend == "codex" and schema is not None
+                  and options.get("label") == "gate" and options.get("phase") == "gate")
+    codex_structured_reply = backend == "codex" and schema is not None
     if schema is not None:
         try:
             jsonschema.validators.validator_for(schema).check_schema(schema)
@@ -930,6 +1026,11 @@ def run_agent(
     if options.get("agentType") == _COMMIT_AGENT_TYPE:
         _write_commit_params(repo_root, prompt)
     persona = _persona(options.get("agentType"))
+    if os.name == "nt" and codex_gate and not _gate_reask:
+        from coordinator_core.ops.dispatch_emit.ask_compose import _INVOKE
+        from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_GATE
+
+        prompt = prompt.replace(f"{_INVOKE} {OP_ASK_GATE} ", f"coordinator-invoke {OP_ASK_GATE} ")
     full_prompt = (f"Agent definition ({options['agentType']}):\n{persona}\n\n" if persona else "") + prompt
     if os.name == 'nt':
         full_prompt = (
@@ -941,6 +1042,13 @@ def run_agent(
             'variable assignment, pipeline or semicolon; the working directory is already set, so run no cd or '
             'Set-Location even where the task text asks for one. '
             'Use Python or native PowerShell for file operations. Preserve all operation arguments and JSON payloads.\n\n'
+        ) + full_prompt
+    if backend == "codex":
+        full_prompt = (
+            "Codex edit tool: if the assigned stage calls for a Write or Edit on a declared "
+            "path, use apply_patch for that edit. The Claude tool names in the brief describe "
+            "the action, not a requirement to discover those tools. Keep the same file scope "
+            "and all write evidence requirements. Do not edit when the stage is read-only.\n\n"
         ) + full_prompt
     full_prompt = with_worker_preamble(backend, full_prompt)
     native_schema = _codex_schema(schema) if schema is not None else None
@@ -1000,7 +1108,14 @@ def run_agent(
             shape_codex_child(env, writable_root=repo_root)
         except SandboxSetupRefused as exc:
             raise AgentFailed(str(exc)) from exc
-        argv = codex_family_stage_argv(native_cli, "--ephemeral", "-o", str(last))
+        if _gate_reask:
+            argv = [
+                *native_cli, "exec", "--json", "--ephemeral", "--ignore-user-config",
+                "--sandbox", "read-only", "--disable", "shell_tool", "--disable", "unified_exec",
+                "--disable", "plugins", "--disable", "apps", "-c", "mcp_servers={}", "-o", str(last),
+            ]
+        else:
+            argv = codex_family_stage_argv(native_cli, "--ephemeral", "-o", str(last))
         if schema is not None:
             schema_path = artifact_dir / "schema.json"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
@@ -1043,11 +1158,15 @@ def run_agent(
         raise AgentFailed(f"{backend} agent timed out after {timeout_s}s") from exc
     except OSError as exc:
         raise AgentFailed(f"{backend} spawn failed: {exc}") from exc
+    finally:
+        if backend == "codex":
+            writeback_codex_auth(env)
     _save_process(artifact_dir, proc, backend, options, model if backend == "codex" else options.get("model"),
                   broker_root_session_id=parent_session_id, broker_request_id=request_id,
                   broker_fire_id=fire_id)
     if proc.returncode != 0:
         raise AgentFailed(f"{backend} agent exited {proc.returncode}; see {artifact_dir / 'stderr.txt'}")
+    text = None
     try:
         if backend == "claude":
             envelope = json.loads((artifact_dir / "stdout.jsonl").read_text(encoding="utf-8"))
@@ -1069,9 +1188,83 @@ def run_agent(
         else:
             text = last.read_text(encoding="utf-8")
             value = json.loads(text) if schema is not None else text
+            if codex_gate:
+                value = _bind_gate_manifest_digest(
+                    _gate_envelope_result(value), repo_root, options.get("gateManifestRunId"),
+                )
         if schema is not None:
+            if not codex_gate:
+                value = fill_omitted_nullable(unwrap_rpc_envelope(value, schema), schema)
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
-        raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
+        if not codex_structured_reply or _gate_reask:
+            raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
+        diagnostic = (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:400]
+        value = {"arm": None, "halt": {"kind": "gate-reply-invalid", "reason": diagnostic}} if codex_gate else None
+        if (codex_gate and isinstance(exc, json.JSONDecodeError)
+                and exc.pos == len(text) and _GATE_WRAPPER_PREFIX.match(text)):
+            try:
+                closed = _bind_gate_manifest_digest(
+                    _gate_envelope_result(json.loads(text + "}")),
+                    repo_root, options.get("gateManifestRunId"),
+                )
+                jsonschema.validate(closed, schema)
+            except (ValueError, jsonschema.ValidationError):
+                pass
+            else:
+                (artifact_dir / "result.json").write_text(json.dumps(closed, ensure_ascii=False), encoding="utf-8")
+                return closed
+        remaining = min(_GATE_REASK_SECONDS, timeout_s - (time.monotonic() - started))
+        if text and len(text) <= _GATE_REPLY_LIMIT and remaining > 0 and private_cli is None:
+            from coordinator_core.ops.dispatch_emit.run_truth_contract import ARMS
+
+            retry_dir = artifact_dir / ("gate-reask" if codex_gate else "reply-reask")
+            wrapper_payload = _gate_redundant_halt_payload(text) if codex_gate else None
+            context = {"diagnostic": diagnostic, "reply": text}
+            if codex_gate:
+                context["allowed_arm_values"] = [*ARMS, None]
+            retry_data = json.dumps(
+                context,
+                ensure_ascii=False,
+            )
+            retry_prompt = (
+                "Repair JSON syntax in the following data. Do not run any tools or repeat the operation. "
+                "Preserve every key, value and its order, including trailing fields. "
+                "Return the complete original reply with only JSON punctuation or whitespace repaired. "
+                "If that is impossible, return null.\n"
+                + retry_data
+            )
+            if wrapper_payload is not None:
+                retry_prompt = (
+                    "Return only the JSON-RPC result object from the following data, byte values "
+                    "and key order unchanged. The outer halt:null duplicates the inner halt:null. "
+                    "Do not run any tools or repeat the gate operation.\n"
+                    + retry_data
+                )
+            try:
+                repaired = run_agent(
+                    retry_prompt, {k: v for k, v in options.items() if k != "agentType"},
+                    repo_root=repo_root, artifact_dir=retry_dir,
+                    backend=backend, timeout_s=remaining, parent_session_id=parent_session_id,
+                    request_id=f"{request_id}:gate-reask" if request_id is not None else None,
+                    fire_id=fire_id, _gate_reask=True,
+                )
+                repaired_text = (retry_dir / "last.txt").read_text(encoding="utf-8")
+                # A schema-valid prefix can still omit acceptance or manifest fields.
+                if wrapper_payload is not None:
+                    bound_payload = _bind_gate_manifest_digest(
+                        wrapper_payload, repo_root, options.get("gateManifestRunId"),
+                    )
+                    if json.dumps(bound_payload) == json.dumps(repaired):
+                        value = repaired
+                elif codex_gate and _gate_reask_preserves_scalars(text, repaired_text):
+                    value = repaired
+                elif not codex_gate and _GATE_SCALARS.findall(text) == _GATE_SCALARS.findall(repaired_text):
+                    value = repaired
+            except (AgentFailed, OSError):
+                pass
+        if value is None:
+            raise AgentFailed(f"{backend} returned no schema-valid result; structured reply could not be repaired: {diagnostic}") from exc
+        jsonschema.validate(value, schema)
     (artifact_dir / "result.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
     return value

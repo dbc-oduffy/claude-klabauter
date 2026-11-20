@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -97,3 +98,30 @@ def test_engine_check_deadline_is_inert_when_phases_module_unloaded(monkeypatch)
 
     monkeypatch.delitem(sys.modules, "coordinator_core.hooks._preuse_phases", raising=False)
     engine._check_deadline("any")
+
+
+def _dedupe_raises(monkeypatch, exc):
+    def gate(name, out, params):
+        raise exc
+
+    monkeypatch.setattr(mod, "gate_once_per_session", gate)
+
+
+def test_deadline_stop_in_dedupe_returns_the_evaluate_verdict(monkeypatch):
+    guards = [_guard("deny_guard", "hard-deny", 0, lambda payload: _DENY)]
+    _dedupe_raises(monkeypatch, pp.DeadlineStop("dedupe"))
+    out, fields = _drive(monkeypatch, guards, door_s=60.0)
+    assert out == _DENY
+    assert fields["deadline_stop"] == "dedupe"
+
+
+@pytest.mark.deliberate_wall_clock(reason="bounds the door deadline a blocked dedupe leg must not outwait; blocked time burns no CPU")
+def test_in_flight_dedupe_returns_the_evaluate_verdict(monkeypatch):
+    release = threading.Event()
+    guards = [_guard("deny_guard", "hard-deny", 0, lambda payload: _DENY)]
+    monkeypatch.setattr(mod, "gate_once_per_session", lambda name, out, params: release.wait(3.0) or out)
+    monkeypatch.setattr(pp.dispatch_abandon, "REPLY_MARGIN_SECS", 0.05)
+    out, fields = _drive(monkeypatch, guards, door_s=0.5)
+    release.set()
+    assert out == _DENY
+    assert fields["deadline_stop"] == "in_flight"

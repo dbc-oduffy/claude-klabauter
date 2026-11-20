@@ -103,6 +103,7 @@ from coordinator_core.housekeeping.terminal import (
     TerminalEntry,
     compute_terminal_set,
 )
+from coordinator_core.git_lock_retry import is_lock_contention
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.locked_write import MutateAbort, locked_rmw
@@ -271,6 +272,26 @@ def _restore_clears(
             _LOG.warning("cycle.run: could not restore %s after a failed commit", cid, exc_info=True)
 
 
+def _archived_none_reason(
+    archived: List[str],
+    failed: List[Dict[str, Any]],
+    terminal_total: int,
+    retained_total: int,
+    handoff_moves: List[Move],
+) -> Optional[str]:
+    """Why `archived` is empty: none-terminal, all-excluded, lock-held or all-failed.
+    None when something was archived."""
+    if archived:
+        return None
+    if failed and len(failed) == len(handoff_moves):
+        if all(is_lock_contention(str(item.get("reason", ""))) for item in failed):
+            return "lock-held"
+        return "all-failed"
+    if terminal_total == 0 and retained_total > 0:
+        return "all-excluded"
+    return "none-terminal"
+
+
 def run(
     repo_root: PathLike,
     cap: int,
@@ -305,7 +326,11 @@ def run(
     `landed_parked` (plans parked at landed past the day threshold), and
     `invariant` (every run, close or not): `archive_nonterminal`
     (`{id, deployment_state}` for archived records not in a terminal state,
-    read after this cycle's own moves) and `gate_dead_blockers` (`{id,
+    read after this cycle's own moves), `remaining` (int: archivable terminal
+    handoffs this call did not attempt, cap-deferred; a re-call picks them up
+    because candidates re-derive from disk), `more` (`remaining > 0`) and
+    `archived_none_reason` (None, or one of none-terminal, all-failed,
+    all-excluded, lock-held when `archived` is empty), and `gate_dead_blockers` (`{id,
     blocker_id, reason}` for gated records that can never clear: no blocker
     named, or an ambiguous id) and `gate_unresolvable_blockers` (same shape,
     for gated records whose blocker id matches no handoff: unknown, not dead,
@@ -448,6 +473,12 @@ def run(
         return rel in excluded or rel in dirty_rels
 
     terminal_entries = compute_terminal_set(records, cap, retained=_retained)
+    terminal_total = sum(
+        1 for path, record in records.items()
+        if record.get("deployment_state") in TERMINAL_DEPLOYMENT_STATES
+        and not _retained(path, record)
+    )
+    retained_total = len(candidate_rels) - terminal_total
 
     handoff_moves = [
         Move(
@@ -507,6 +538,10 @@ def run(
     memos_failed = [item for item in failed if item["id"] in memo_move_ids]
     archived = [item["id"] for item in acted if item["id"] in handoff_move_ids]
     failed = [item for item in failed if item["id"] in handoff_move_ids]
+    remaining = max(0, terminal_total - len(archived) - len(failed))
+    archived_none_reason = _archived_none_reason(
+        archived, failed, terminal_total, retained_total, handoff_moves
+    )
 
     index_changed = (
         bool(archive_index_mod.revalidate(archive_idx)) if archive_dir_exists else False
@@ -594,6 +629,9 @@ def run(
         "conflicts": conflicts,
         "archived": archived,
         "failed": failed,
+        "remaining": remaining,
+        "more": remaining > 0,
+        "archived_none_reason": archived_none_reason,
         "memos_archived": memos_archived,
         "memos_failed": memos_failed,
         "memos_skipped": memos_skipped,

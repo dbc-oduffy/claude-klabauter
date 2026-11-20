@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.group_em import session_registry
 from coordinator_core.ops.dispatch_emit import reply_sidecar
 
@@ -30,6 +31,8 @@ CLAIM_STALE_SECS = 900.0
 _UNREADABLE_CLAIM_GRACE_SECS = 5.0
 # Under the DoE hook's 12s client timeout, so a stalled create answers the submitter.
 CLAIM_CREATE_DEADLINE_SECS = 5.0
+CLAIM_UNLINK_DEADLINE_SECS = 2.0
+_UNLINK_STALLED = object()
 RECEIPT_NAME = "stage-receipt.json"
 MANIFEST_NAME = "manifest.json"
 HALTED_NAME = "halted.json"
@@ -197,11 +200,19 @@ def claim(record_dir: Path, digest: str) -> bool:
             elif _claim_live(data):
                 return False
             try:
-                path.unlink()
+                unlinked = run_bounded(
+                    f"ask-stage-claim-unlink:{path}",
+                    path.unlink,
+                    deadline=CLAIM_UNLINK_DEADLINE_SECS,
+                    default=_UNLINK_STALLED,
+                )
             except FileNotFoundError:
                 pass
             except PermissionError:
                 return False
+            else:
+                if unlinked is _UNLINK_STALLED:
+                    return False
             continue
         try:
             os.write(fd, payload)

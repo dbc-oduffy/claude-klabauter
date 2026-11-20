@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from coordinator_core.codex_status import hook
+from coordinator_core.tui_status.fields import PARTIAL_MARK
 import pytest
 
 SID = "01a1b63c-040a-76f2-a9b9-929d9a0d0098"
@@ -33,9 +34,9 @@ def test_metadata_title_write_requires_loaded_namespace_and_preserved_task(tmp_p
         return {"session_id": sid, "original_task_title": title}
     monkeypatch.setattr(hook.external_registry, "preserve_task_title", preserve, raising=False)
     result = hook.apply_title(value(), str(tmp_path))
-    assert result == {"updated": True, "title": "actual-route · ~$1.23"}
+    assert result == {"updated": True, "title": "actual-route · unknown · unknown · unknown · ~$1.23"}
     assert [call[0] for call in calls] == ["thread/loaded/list", "thread/read", "preserve", "thread/name/set"]
-    assert calls[-1][1] == {"threadId": SID, "name": "actual-route · ~$1.23"}
+    assert calls[-1][1] == {"threadId": SID, "name": "actual-route · unknown · unknown · unknown · ~$1.23"}
 
 
 def test_other_namespace_never_renames_or_starts_a_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,3 +110,57 @@ def test_subagent_stop_never_substitutes_parent_uuid_for_child(tmp_path: Path) -
     with pytest.raises(ValueError, match="parent, not a child"):
         bind_subagent_stop(state, SID, path)
     assert state["files"] == {} and state["threads"] == {}
+
+
+def _sol_rollout(path: Path, model: str) -> None:
+    count = {"input_tokens": 1000, "cached_input_tokens": 500, "output_tokens": 100, "total_tokens": 1100}
+    rows = [{"type": "session_meta", "payload": {"id": SID}},
+            {"type": "turn_context", "payload": {"turn_id": "sol-turn", "model": model, "effort": "low"}},
+            {"type": "event_msg", "payload": {"type": "token_count", "info": {
+                "last_token_usage": count, "total_token_usage": count, "model_context_window": 475000}}}]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+
+def test_gpt_62_sol_cached_input_prices_through_the_hook_with_plus_while_coverage_is_incomplete(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.codex_status.render import render
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    rollout = tmp_path / "rollout.jsonl"
+    _sol_rollout(rollout, "gpt-6.2-sol")
+    value = hook.handle({"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(rollout)}, "Stop")["snapshot"]
+    assert value["priced_events"] == 1 and value["unpriced_events"] == 0
+    assert value["usd"] == pytest.approx(0.00205)  # 500 uncached @2 + 500 cached @0.10 + 100 out @10, per 1M
+    assert hook.status_title({**value, "alias": "actual-route"}) == f"actual-route · gpt-6.2-sol · low · unknown · ~$0.00{PARTIAL_MARK}"
+    assert "$" in value["text"] and value["text"] == render(value)
+    assert value["coverage"] == {"subagents": False, "workflows": False}
+
+
+def test_status_title_is_the_render_line_with_model_effort_and_gauge_slots() -> None:
+    value = {"alias": "actual-route", "model": "gpt-6.2-sol", "effort": "high", "before_compact_percent": 42.0,
+             "usd": 1.5, "priced_events": 1, "backlog_complete": True, "coverage": {"subagents": True, "workflows": True}}
+    title = hook.status_title(value)
+    assert title == hook.render(value)
+    assert title.startswith("actual-route · gpt-6.2-sol · high · ") and "42" in title and title.endswith("~$1.50")
+    assert hook.status_title({k: v for k, v in value.items() if k != "before_compact_percent"}).count("unknown") == 1
+    with pytest.raises(ValueError, match="no exact registered route alias"):
+        hook.status_title({**value, "alias": None})
+
+
+def test_previously_unpriced_gpt_62_sol_events_reprice_on_the_next_refresh(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.codex_status import model as status_model
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    rollout = tmp_path / "rollout.jsonl"
+    _sol_rollout(rollout, "gpt-6.2-sol")
+    payload = {"session_id": SID, "cwd": str(tmp_path), "transcript_path": str(rollout)}
+    priced = status_model.estimate_usd
+    monkeypatch.setattr(status_model, "estimate_usd", lambda *a, **kw: None)  # the table before the rate existed
+    before = hook.handle(payload, "Stop")["snapshot"]
+    assert before["priced_events"] == 0 and before["unpriced_events"] == 1
+    assert hook.status_title({**before, "alias": "actual-route"}) == "actual-route · gpt-6.2-sol · low · unknown · unknown"
+    monkeypatch.setattr(status_model, "estimate_usd", priced)
+    after = hook.handle(payload, "Stop")["snapshot"]
+    assert after["priced_events"] == 1 and after["unpriced_events"] == 0
+    assert after["usd"] == pytest.approx(0.00205)
+    assert hook.status_title({**after, "alias": "actual-route"}) == f"actual-route · gpt-6.2-sol · low · unknown · ~$0.00{PARTIAL_MARK}"
+    assert "~$" in after["text"] and not after["text"].endswith("unknown")

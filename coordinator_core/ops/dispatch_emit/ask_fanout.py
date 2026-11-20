@@ -78,6 +78,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     STOP_AFTER_PLAN,
 )
 from coordinator_core.ops.dispatch_emit.route_preference import RoutePreference, parse, refusal, to_em_analysis
+from coordinator_core.ops.dispatch_emit.stage_family import FAMILIES as _STAGE_FAMILIES
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.ops.sizing_intake_contract import (
@@ -282,6 +283,23 @@ def _stop_after_fields(params: Mapping, count: int) -> list[Optional[str]]:
     return out
 
 
+def _family_fields(params: Mapping, count: int) -> list[str]:
+    """Per ask item its non-claude `family` ("" when absent or claude); asks arm only."""
+    raw = params.get("asks")
+    if raw is None:
+        return [""] * count
+    out = []
+    for i, item in enumerate(raw):
+        value = item.get("family")
+        if value is not None and value != "claude" and value not in _NON_CLAUDE_FAMILIES:
+            raise _Refused(
+                f"asks[{i}].family {value!r} is not a family the engine runs. "
+                f"Accepted: claude|{'|'.join(_NON_CLAUDE_FAMILIES)}."
+            )
+        out.append(value if value in _NON_CLAUDE_FAMILIES else "")
+    return out
+
+
 def _load_parent(root: Path, rel: str) -> dict:
     from coordinator_core.session.record_homes import home_dir
 
@@ -295,7 +313,7 @@ def _load_parent(root: Path, rel: str) -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
-_NON_CLAUDE_FAMILIES = ("codex", "grok", "agy")
+_NON_CLAUDE_FAMILIES = tuple(f for f in _STAGE_FAMILIES if f != "claude")
 _SUPERSEDES_RE = re.compile(
     r"\bsupersed(?:es|ed|ing)\s+(?:the\s+)?(?:halted\s+)?(?:run\s+|sizing\s+)?"
     r"((?:warp|ask)-[A-Za-z0-9._-]*[A-Za-z0-9]|state/sizings/[A-Za-z0-9._/-]*\.yaml)",
@@ -477,7 +495,7 @@ def _slice_record(
             record["interaction_mode"] = sized["mode"]
     if deliverable_id:
         record["deliverable_id"] = deliverable_id
-    if family:  # a routing key the sizing schema does not list; the caller validates without it
+    if family:
         record["family"] = family
     return record
 
@@ -937,6 +955,7 @@ def _fanout(
     }
     contexts = _context_fields(params, len(slices), appended)
     stop_afters = _stop_after_fields(params, len(slices))
+    families = _family_fields(params, len(slices))
 
     sources = None
     if parent_doc is not None:
@@ -959,9 +978,9 @@ def _fanout(
             context=contexts[i], stop_after=stop_afters[i],
             sized=sized, deliverable_id=deliverable_id if sized and sl.label == contract.SEAM_PASS_LABEL else None,
             repo_root=root,
-            family=named_family(worktree, [sl.ask, relay[i][1] or "", contexts[i][0] or ""])[0],
+            family=families[i] or named_family(worktree, [sl.ask, relay[i][1] or "", contexts[i][0] or ""])[0],
         )
-        errors = validate_frontmatter({k: v for k, v in record.items() if k != "family"}, _SIZING_SCHEMA_PATH)
+        errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
         if errors:
             raise _Refused(f"slice {sl.label!r} failed schema validation: {format_validation_errors(errors)}")
         records.append((rel, yaml.safe_dump(record, sort_keys=False, allow_unicode=True)))

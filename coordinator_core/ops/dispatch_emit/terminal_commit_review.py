@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
-from typing import Optional, Sequence
+from pathlib import Path, PurePosixPath
+from typing import Callable, Optional, Sequence
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.ask_contract import RESUMED_RUN_ID_KEY
 from coordinator_core.ops.dispatch_emit.commit_request import CommitRequest
@@ -432,6 +432,17 @@ def _applied_fix_rows(text: str) -> list:
     return out
 
 
+def _applied_row_paths(text: str) -> list:
+    """The ``file`` of each verified ``applied`` ledger row, whether or not it records its
+    ``before``/``after`` text: the reviewer rewrote that file after judging it."""
+    out = []
+    for row in _ledger_rows(text):
+        f = row.get("file")
+        if row.get("verified") is True and (row.get("status") or "applied") == "applied" and isinstance(f, str) and f:
+            out.append(f.replace("\\", "/"))
+    return out
+
+
 _DISPOSED_STATUSES = frozenset({"suspended", "rejected", "em-rejected", "em_rejected"})
 _VERDICT_RE = re.compile(r"^verdict:\s*['\"]?([A-Za-z_]+)", re.MULTILINE)
 REQUIRES_CHANGES = "REQUIRES_CHANGES"
@@ -526,23 +537,67 @@ def _unverifiable_standing(worktree_root: Path, inline_review: object) -> list:
     return out
 
 
-def _prep_judged_shas(worktree_root: Path, inline_review: object) -> dict:
-    """``judged_sha256`` of the ``review.prep`` sidecar the run's ``inline_review`` names
-    (``prep_sidecar``): the sha of every slice file as the reviewers read it. Empty when unnamed,
-    unreadable, or written before the prep recorded pins."""
+_RUN_KEY_MAX_PIECES = 12  # hyphen-separated prefix pieces tried as a run-key suffix
+_PREP_SIDECAR_TAIL = re.compile(r"^(?P<prefix>.+)-[0-9a-f]{12}-prep\.review-prep\.md$")
+
+
+def _read_prep_pins(worktree_root: Path, rel: str) -> tuple:
+    """``(judged_sha256 map, frontmatter)`` of one prep sidecar; ``({}, {})`` when unreadable."""
     from coordinator_core.frontmatter.primitives import split_frontmatter
     from coordinator_core.ops.review_prep import VERDICT_JUDGED_KEY
 
-    rel = inline_review.get("prep_sidecar") if isinstance(inline_review, dict) else None
-    if not (isinstance(rel, str) and rel):
-        return {}
     try:
         split = split_frontmatter((worktree_root / rel).read_text(encoding="utf-8"))
         fm = _yaml_load(split.fm_text) if split else None
     except Exception:  # noqa: BLE001 -- an unreadable prep sidecar pins nothing
+        return {}, {}
+    if not isinstance(fm, dict):
+        return {}, {}
+    got = fm.get(VERDICT_JUDGED_KEY)
+    pins = {k.replace("\\", "/"): v for k, v in got.items() if isinstance(k, str) and isinstance(v, str) and v} if isinstance(got, dict) else {}
+    return pins, fm
+
+
+def _latest_pass_prep(worktree_root: Path, rel: str) -> Optional[str]:
+    """The run's newest ``review.prep`` sidecar when it is not the one ``rel`` names, else ``None``.
+
+    The run-only pointer (``review_prep._write_pointers``) is rewritten by every pass, so it names
+    the latest prep even once the base-keyed names are ``ambiguous``. The run key is a suffix of the
+    sidecar's own prefix (``manifest-<run>`` on the ask route, ``<plan stem>-<run>`` on the plan route)."""
+    from coordinator_core.ops import review_prep
+
+    parts = PurePosixPath(rel.replace("\\", "/"))
+    tail = _PREP_SIDECAR_TAIL.match(parts.name)
+    if tail is None:
+        return None
+    pieces = tail.group("prefix").split("-")
+    for i in range(min(len(pieces), _RUN_KEY_MAX_PIECES)):
+        pointer = review_prep._read_pointer(worktree_root / parts.parent / review_prep._pointer_name("-".join(pieces[i:]), None))
+        named = pointer.get("sidecar") if pointer else None
+        if isinstance(named, str) and named and PurePosixPath(named).name == named:
+            if named == parts.name or not (worktree_root / parts.parent / named).is_file():
+                return None
+            return (parts.parent / named).as_posix()
+    return None
+
+
+def _prep_judged_shas(worktree_root: Path, inline_review: object) -> dict:
+    """``judged_sha256`` of the ``review.prep`` sidecar the run's ``inline_review`` names
+    (``prep_sidecar``): the sha of every slice file as the reviewers read it. Empty when unnamed,
+    unreadable, or written before the prep recorded pins. A later pass of the same run re-pins the
+    files it reviewed: its pin replaces the named prep's for those paths, so unchanged bytes of a
+    re-review stay pinned to the pass that judged them, and a path only an earlier pass judged keeps
+    its earlier pin."""
+    rel = inline_review.get("prep_sidecar") if isinstance(inline_review, dict) else None
+    if not (isinstance(rel, str) and rel):
         return {}
-    got = fm.get(VERDICT_JUDGED_KEY) if isinstance(fm, dict) else None
-    return {k.replace("\\", "/"): v for k, v in got.items() if isinstance(k, str) and isinstance(v, str) and v} if isinstance(got, dict) else {}
+    pins, _ = _read_prep_pins(worktree_root, rel)
+    latest = _latest_pass_prep(worktree_root, rel)
+    if latest is not None:
+        later, fm = _read_prep_pins(worktree_root, latest)
+        if fm.get("agent_type") == "engine:prep-freeze":
+            pins = {**pins, **later}
+    return pins
 
 
 def verdict_judged_shas(worktree_root: Path, inline_review: object) -> dict:
@@ -567,7 +622,7 @@ def verdict_judged_shas(worktree_root: Path, inline_review: object) -> dict:
         except Exception:  # noqa: BLE001 -- an unreadable or malformed sidecar pins nothing
             continue
         read_any = True
-        fixed.update(_worktree_relative(worktree_root, f) for f, _ in _applied_fix_rows(text))
+        fixed.update(_worktree_relative(worktree_root, f) for f in _applied_row_paths(text))
         own = fm.get(VERDICT_JUDGED_KEY) if isinstance(fm, dict) else None
         for p, sha in (own.items() if isinstance(own, dict) else ()):
             if isinstance(p, str) and isinstance(sha, str) and sha:
@@ -668,15 +723,59 @@ def _less_reverify_edits(worktree_root: Path, inline_review: object, stale: list
     return [p for p in stale if p not in judged]
 
 
-def verdict_pin_mismatches(worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None) -> list:
+def run_agent_pin_events(
+    worktree_root: Path, session_id: Optional[str], run_id: Optional[str], inline_review: object,
+) -> Callable[[Sequence[str]], dict]:
+    """A ``paths -> {path: (sha256, epoch)}`` reader of the run's own dispatched agents' newest hashed
+    writes (``_run_agent_write_events``: a revise-leg executor included, which the review-writer map
+    never sees). Lazy: the sinks are opened only when a pin already mismatches."""
+
+    def read(paths: Sequence[str]) -> dict:
+        read_run, read_session = _resumed_review_source(worktree_root, inline_review, run_id, session_id)
+        return _run_agent_write_events(
+            worktree_root, read_session, _review_since(worktree_root, read_run, inline_review), list(paths)
+        )
+
+    return read
+
+
+def _less_run_agent_edits(
+    worktree_root: Path, inline_review: object, stale: list, run_agent_events: Optional[Callable[[Sequence[str]], dict]],
+) -> list:
+    """``stale`` less each path whose current bytes equal the newest hashed write of an agent this run
+    dispatched, when the re-verify is clean and that write is no later than the re-verify step's
+    finish (``_reverify_finished_at``; unknown finish keeps it stale): a fix-leg edit the re-verify
+    judged is the reviewed product, as the commit's blob-drift gate already treats it. A later or
+    peer write, or an agent write after the re-verify, stays stale."""
+    if not stale or run_agent_events is None or not _reverify_clean(inline_review):
+        return stale
+    from coordinator_core.session import touch_record
+
+    finished = _reverify_finished_at(worktree_root, inline_review)
+    if finished is None:
+        return stale
+    events = run_agent_events(stale)
+    return [
+        p for p in stale
+        if p not in events or events[p][1] > finished
+        or touch_record.compute_content_hash(worktree_root / p) != events[p][0]
+    ]
+
+
+def verdict_pin_mismatches(
+    worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None,
+    run_agent_events: Optional[Callable[[Sequence[str]], dict]] = None,
+) -> list:
     """Sorted paths (of ``within``, else every pinned path) whose bytes match no sha the verdict
-    pinned, less a path the reviewer itself last wrote or the clean re-verify recorded as its own
-    edit: the files that owe re-review. Empty when the verdict pins nothing."""
+    pinned, less a path the reviewer itself last wrote, the clean re-verify recorded as its own
+    edit, or (given ``run_agent_events``) a run-dispatched agent last wrote: the files that owe
+    re-review. Empty when the verdict pins nothing."""
     from coordinator_core.ops.review_prep import judged_mismatches
 
     judged = verdict_judged_shas(worktree_root, inline_review)
     stale = judged_mismatches(worktree_root, judged, list(judged) if within is None else [q for q in (str(p).replace("\\", "/") for p in within) if q in judged])
-    return _less_reverify_edits(worktree_root, inline_review, _less_reviewer_edits(worktree_root, inline_review, stale))
+    stale = _less_reverify_edits(worktree_root, inline_review, _less_reviewer_edits(worktree_root, inline_review, stale))
+    return _less_run_agent_edits(worktree_root, inline_review, stale, run_agent_events)
 
 
 def verdict_pin_refusal(mismatched: Sequence[str]) -> str:
@@ -685,10 +784,13 @@ def verdict_pin_refusal(mismatched: Sequence[str]) -> str:
     return f"review verdict judged other bytes than the tree carries for {len(mismatched)} file(s); re-review only: {names}"
 
 
-def _real_pin_mismatches(worktree_root: Path, inline_review: object, within: Optional[Sequence[str]]) -> list:
+def _real_pin_mismatches(
+    worktree_root: Path, inline_review: object, within: Optional[Sequence[str]],
+    run_agent_events: Optional[Callable[[Sequence[str]], dict]] = None,
+) -> list:
     """``verdict_pin_mismatches`` less the comment-only edits the land arm tolerates: a path whose
     pre-review snapshot proves the drift comment-only is no different reviewed product."""
-    stale = verdict_pin_mismatches(worktree_root, inline_review, within)
+    stale = verdict_pin_mismatches(worktree_root, inline_review, within, run_agent_events)
     if not stale or not isinstance(inline_review, dict):
         return stale
     from coordinator_core.ops.dispatch_emit.comment_only_drift import tolerated_drift
@@ -713,6 +815,7 @@ def _real_pin_mismatches(worktree_root: Path, inline_review: object, within: Opt
 
 def review_owed_refusal(
     worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None,
+    run_agent_events: Optional[Callable[[Sequence[str]], dict]] = None,
 ) -> Optional[str]:
     """The refusal reason when a ``REQUIRES_CHANGES`` verdict is unresolved, else ``None``: a
     reviewer's findings not all in the landed tree, or a standing verdict no ledger can resolve
@@ -723,7 +826,7 @@ def review_owed_refusal(
     owed = list(derived[1]) if derived is not None else []
     owed.extend(_unverifiable_standing(worktree_root, inline_review))
     if not owed:
-        stale = _real_pin_mismatches(worktree_root, inline_review, within)
+        stale = _real_pin_mismatches(worktree_root, inline_review, within, run_agent_events)
         return verdict_pin_refusal(stale) if stale else None
     applied = derived[0] if derived is not None else 0
     return (

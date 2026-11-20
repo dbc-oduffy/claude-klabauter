@@ -132,6 +132,46 @@ def test_default_send_pins_the_commit_and_says_the_push_is_pending(world) -> Non
     assert _git(receiver, "rev-parse", f"refs/heads/{world['day']}") == world["local_tip"]
 
 
+def test_object_only_delivery_reports_pinned_while_the_branch_lacks_the_memo(world) -> None:
+    sender, receiver = world["sender"], world["receiver"]
+    _write_draft(sender, "pinned-outcome-topic")
+
+    result = _memo_send({"dry_run": False, "topic": "pinned-outcome-topic"}, repo_root=sender)
+
+    assert result["exit_code"] == 0, result
+    assert result["acted"][0]["delivery_outcome"] == "pinned"
+    assert "pinned-outcome-topic" not in _git(
+        receiver, "ls-tree", "--name-only", f"refs/heads/{world['day']}:cross-repo/inbox"
+    )
+
+
+def test_local_branch_ahead_of_tracking_gets_the_memo_in_its_tip_and_reports_delivered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _make_sender_git_repo(tmp_path)
+    receiver = _make_receiver_git_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
+    day = f"work/{machine_resolver.compute_machine()}/{daily_day.local_day(str(receiver))}"
+    _git(receiver, "checkout", "-q", "-b", day)
+    _git(receiver, "push", "-q", "-u", "origin", day)
+    tracking_tip = _git(receiver, "rev-parse", day)
+    (receiver / "engine-land.txt").write_text("local only\n", encoding="utf-8")
+    _git(receiver, "add", "engine-land.txt")
+    _git(receiver, "commit", "-q", "-m", "engine land")
+    local_tip = _git(receiver, "rev-parse", day)
+    assert local_tip != tracking_tip
+    _write_draft(sender, "ahead-topic")
+
+    result = _memo_send({"dry_run": False, "topic": "ahead-topic"}, repo_root=sender)
+
+    assert result["exit_code"] == 0, result
+    assert result["acted"][0]["delivery_outcome"] == "delivered"
+    tip = _git(receiver, "rev-parse", f"refs/heads/{day}")
+    assert _git(receiver, "merge-base", "--is-ancestor", local_tip, tip) == ""
+    assert "ahead-topic" in _git(receiver, "ls-tree", "--name-only", f"{tip}:cross-repo/inbox")
+    assert (receiver / "engine-land.txt").exists()
+
+
 def test_a_held_pin_lock_refuses_the_send_and_leaves_nothing_owed(world, monkeypatch) -> None:
     sender, receiver = world["sender"], world["receiver"]
     _write_draft(sender, "pin-lost-topic")

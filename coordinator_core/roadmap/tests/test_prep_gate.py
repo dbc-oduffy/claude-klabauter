@@ -1407,18 +1407,18 @@ def test_a_row_editing_an_existing_dr_is_not_refused(tmp_path):
 @pytest.mark.parametrize(
     "value, expected",
     [
-        ("../example-retrieval-repo/x.py", "project-rag"),
-        ("..\\example-retrieval-repo\\x.py", "project-rag"),
-        ("./../example-retrieval-repo", "project-rag"),
-        ("example-retrieval-repo-ue-addon/x.py", "example-retrieval-repo-ue-addon"),
-        ("../example-retrieval-repo-ue-addon/x.py", "example-retrieval-repo-ue-addon"),
-        ("example-retrieval-repo@x.py", "project-rag"),
-        ("example-retrieval-repo-other/x.py", None),
-        ("example_retrieval_repo_two/x.py", None),
+        ("../fixture-app/x.py", "fixture-app"),
+        ("..\\fixture-app\\x.py", "fixture-app"),
+        ("./../fixture-app", "fixture-app"),
+        ("fixture-app-addon/x.py", "fixture-app-addon"),
+        ("../fixture-app-addon/x.py", "fixture-app-addon"),
+        ("fixture-app@x.py", "fixture-app"),
+        ("fixture-app-other/x.py", None),
+        ("fixture-app_two/x.py", None),
     ],
 )
 def test_matched_sibling_normalises_paths_and_matches_names_exactly(value, expected):
-    assert pg._matched_sibling(value, ("project-rag", "example-retrieval-repo-ue-addon")) == expected
+    assert pg._matched_sibling(value, ("fixture-app", "fixture-app-addon")) == expected
 
 
 def test_a_dotdot_sibling_read_is_cleared_by_its_ungated_entry(tmp_path):
@@ -1523,6 +1523,18 @@ def _doc_gate_plan(tmp_path, *, statement, acceptance):
     fm = _CLEAN_FM.replace("the four fields land and validate", statement)
     spine = _CLEAN_SPINE + f"  acceptance: {json.dumps(acceptance)}\n"
     return _write_plan(tmp_path, frontmatter=fm, spine=spine)
+
+
+def test_spine_rejects_contradictory_executor_and_em_routes(tmp_path):
+    plan = _write_plan(
+        tmp_path, frontmatter=_CLEAN_FM,
+        spine=_workflow_spine("docs/report.md", extra=(
+            "  agent_type: coordinator:executor\n  em_run: true\n  needs_slot: true\n"
+        )),
+    )
+    defect = _gate(tmp_path, plan)["classes"]["SPINE"]
+    assert defect["kind"] == "conflicting-executor-route"
+    assert "C1" in defect["detail"] and "needs_slot" in defect["detail"]
 
 
 def test_a_spine_row_acceptance_requiring_pm_approval_of_a_doc_is_refused(tmp_path):

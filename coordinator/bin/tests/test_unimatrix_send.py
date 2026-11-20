@@ -217,6 +217,31 @@ def test_send_without_router_names_sendmessage_and_fails(capsys: pytest.CaptureF
     assert "SendMessage" in err
 
 
+class _DownRouter(_FakeRouter):
+    def request_line(self, ctl, req):
+        raise FileNotFoundError(2, "The system cannot find the file specified", None, 2, None)
+
+
+def test_list_with_router_down_names_the_local_records_fallback_on_stderr(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(us, "_router", lambda: _DownRouter({}))
+    monkeypatch.setattr(us, "_list_from_sessions", lambda: print("ROWS"))
+    assert us.main(["--list"]) == 0
+    cap = capsys.readouterr()
+    assert cap.out == "ROWS\n"
+    assert "local session records" in cap.err and "no router is listening on ctl" in cap.err
+
+
+def test_send_with_router_down_names_a_missing_endpoint_not_a_bare_winerror(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(us, "_router", lambda: _DownRouter({}))
+    assert us.main(["--to", "x", "hi"]) == 1
+    err = capsys.readouterr().err
+    assert "no router is listening on ctl" in err and "SendMessage" in err
+
+
+def test_a_non_missing_oserror_keeps_its_own_text_only() -> None:
+    assert us._unreachable_why(PermissionError(13, "denied"), "ctl") == str(PermissionError(13, "denied"))
+
+
 def test_send_to_a_mirror_whose_far_relay_failed_is_undelivered_not_sent(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(us, "_is_mirror", lambda n: True)
     monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"ok": False, "error": "far relay lacks send-session; upgrade it"})
@@ -252,6 +277,13 @@ def test_hostless_mirror_rows_still_count_as_mirrors(monkeypatch: pytest.MonkeyP
 def test_a_plain_local_row_is_not_a_mirror(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(us, "_session_entries", lambda: [{"name": "grp", "pid": 7}])
     assert us._mirror_name("grp") == "" and not us._is_mirror("grp")
+
+
+def test_short_machine_a_alias_uses_canonical_delivery_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(us, "_session_entries", lambda: [
+        {"name": "grp.machine-a.local", "unimatrixFarName": "grp", "unimatrixBox": "machine-a", "pid": 7}
+    ])
+    assert us._mirror_name("grp.machine-a") == "grp.machine-a.local"
 
 
 def test_send_to_a_non_mirror_never_waits_for_a_relay_outcome(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

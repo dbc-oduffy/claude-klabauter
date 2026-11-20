@@ -821,3 +821,26 @@ class TestSidecarOpenRefusalNamesTheCause:
                 locked_rmw(target, lambda s: s + "b", repo_root=tmp_path)
         finally:
             release.set()
+
+
+class TestAnchorCheckBounded:
+    @pytest.mark.deliberate_wall_clock(reason="bounds the caller's wait on a realpath blocked for seconds")
+    def test_stalled_realpath_degrades_to_abspath_and_still_refuses_nesting(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        import threading
+
+        from coordinator_core.locked_write import LockAnchorError, _assert_anchor_outside_target
+
+        release = threading.Event()
+        monkeypatch.setattr(os.path, "realpath", lambda p, *a, **k: release.wait(10) or p)
+        target = tmp_path / "t"
+        try:
+            with pytest.raises(LockAnchorError):
+                _assert_anchor_outside_target(target, target / "locks")
+            assert not release.is_set()  # decided while realpath was still blocked
+            assert "anchor check degraded" in capsys.readouterr().err
+            # Disjoint paths still pass on the degraded branch.
+            _assert_anchor_outside_target(target, tmp_path / "elsewhere")
+        finally:
+            release.set()

@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import subprocess
 
+import pytest
+
 from coordinator_core.git import commit
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -54,3 +56,37 @@ def test_nested_bind_shares_the_outer_box(tmp_path):
         assert commit.bind_byte_counter() is None
     finally:
         commit.reset_byte_counter(outer)
+
+
+def test_bounded_read_still_counts_bytes_on_the_worker(tmp_path):
+    root = _repo(tmp_path)
+    (root / "a.txt").write_bytes(b"a" * 7)
+    token = commit.bind_byte_counter()
+    try:
+        assert commit.checkin_blob_sha(root, "a.txt") is not None
+        assert commit.bytes_read_total() == 7
+    finally:
+        commit.reset_byte_counter(token)
+
+
+@pytest.mark.deliberate_wall_clock(reason="bounds the caller's wait on a stat blocked for seconds")
+def test_stalled_read_answers_none_within_the_caller_bound(tmp_path, monkeypatch):
+    import os
+    import threading
+
+    root = _repo(tmp_path)
+    (root / "slow.txt").write_bytes(b"x\n")
+    release = threading.Event()
+    real_stat = os.stat
+
+    def _blocked(path, *a, **k):
+        if str(path).endswith("slow.txt"):
+            release.wait(10)
+        return real_stat(path, *a, **k)
+
+    monkeypatch.setattr(os, "stat", _blocked)
+    try:
+        assert commit.checkin_blob_sha(root, "slow.txt") is None
+        assert not release.is_set()  # returned while the stat was still blocked
+    finally:
+        release.set()

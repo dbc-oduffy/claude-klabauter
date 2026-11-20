@@ -329,6 +329,67 @@ def test_paused_tick_with_a_current_midx_spawns_nothing(repo, spawned, monkeypat
     assert spawned == []
 
 
+def _store(common: Path, packs: int, midx_packs: int) -> None:
+    pack_dir = common / "objects" / "pack"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(packs):
+        (pack_dir / f"pack-{i:040x}.idx").write_bytes(b"")
+    (pack_dir / "multi-pack-index").write_bytes(b"MIDX" + bytes([1, 1, 0, 0]) + midx_packs.to_bytes(4, "big"))
+
+
+def _future_stamp(common: Path, tier: str) -> None:
+    _age(common, tier, -30 * 24 * 3600)
+
+
+def test_paused_tick_fires_for_a_midx_missing_one_pack_despite_a_future_dated_stamp(
+    repo, spawned, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pause(monkeypatch)
+    common = repo / ".git"
+    _store(common, packs=5, midx_packs=4)
+    _future_stamp(common, "daily")
+    assert mt.on_idle_tick([repo]) is True
+    assert spawned == [(repo.resolve(), ["daily"])]
+    assert time.time() - mt.stamp_path(common, "daily").stat().st_mtime < 60
+
+
+def test_paused_tick_with_a_midx_covering_every_pack_spawns_nothing(
+    repo, spawned, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pause(monkeypatch)
+    common = repo / ".git"
+    _store(common, packs=5, midx_packs=5)
+    _future_stamp(common, "daily")
+    assert mt.on_idle_tick([repo]) is False
+    assert spawned == []
+
+
+def test_a_future_dated_stamp_is_owed_not_a_claim(repo) -> None:
+    common = repo / ".git"
+    _future_stamp(common, "daily")
+    assert mt._owed(common, "daily", time.time()) is True
+    assert mt._threshold_cooled(common, time.time()) is True
+
+
+def test_paused_child_runs_the_daily_tier_light(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git import fleet_maintenance_lock, store_hygiene
+    from coordinator_core.ops import git_maintenance
+
+    _pause(monkeypatch)
+    common = repo / ".git"
+    _store(common, packs=5, midx_packs=4)
+    seen: list[tuple[str, bool]] = []
+    monkeypatch.setattr(store_hygiene, "_box_busy", lambda: False)
+    monkeypatch.setattr(
+        git_maintenance,
+        "run_tier",
+        lambda r, tier, heavy=True: seen.append((tier, heavy)) or SimpleNamespace(rc=0, deferred=False, errors=[]),
+    )
+    monkeypatch.setattr(fleet_maintenance_lock, "hold", lambda **kw: __import__("contextlib").nullcontext())
+    assert mt.run_due(repo, ["daily"]) == 0
+    assert seen == [("daily", False)]
+
+
 def test_child_backdates_a_deferred_weekly(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_child(monkeypatch, busy=False, deferred=True)
     common = repo / ".git"

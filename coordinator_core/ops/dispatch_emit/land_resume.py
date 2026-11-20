@@ -39,6 +39,9 @@ CLAIM_STALE_SECS = 300.0
 
 OUTCOME_LANDED = "landed"
 OUTCOME_EXPIRED = "expired"
+OUTCOME_HANDED_OFF = "handed_off"
+#: `next_action.kind` of the land call an expired green entry leaves on its run's halt marker.
+HANDOFF_KIND = "land"
 
 FILE_MODE = 0o600
 DIR_MODE = 0o700
@@ -223,8 +226,8 @@ def _reclaim_stale(root: Optional[Path], directory: Path, now: float) -> None:
 def next_due(root: Optional[Path], now: float) -> Optional[Path]:
     """Claim the oldest pending entry and return its claimed path; None when none is due.
 
-    An expired entry is finished as `expired` and skipped. The empty-queue cost is one failed
-    `listdir`. A claim is a rename, so only one drainer wins an entry."""
+    An expired entry is finished as `expired` (or `handed_off`, see `_hand_off_green`) and skipped.
+    The empty-queue cost is one failed `listdir`. A claim is a rename, so only one drainer wins an entry."""
     directory = queue_dir(root)
     try:
         _reclaim_stale(root, directory, now)
@@ -244,7 +247,8 @@ def next_due(root: Optional[Path], now: float) -> Optional[Path]:
             except OSError:
                 continue
             entry["claimed_by"] = os.getpid()
-            _finish_claimed(root, run_id, dst, entry, OUTCOME_EXPIRED)
+            outcome, note = _hand_off_green(run_id, entry)
+            _finish_claimed(root, run_id, dst, entry, outcome, note)
             continue
         if _waiting(entry, now):
             continue
@@ -263,26 +267,91 @@ def next_due(root: Optional[Path], now: float) -> Optional[Path]:
     return None
 
 
-def _finish_claimed(root: Optional[Path], run_id: str, claimed: Path, entry: dict, outcome: str) -> None:
-    if entry.get("requeued") and outcome != OUTCOME_EXPIRED:
+def _land_call(entry: dict) -> str:
+    """The one `dispatch.land_run` call that resumes the entry's run: its run id, mode and root."""
+    raw = entry.get("params")
+    params: dict = raw if isinstance(raw, dict) else {}
+    args = {"run_id": entry["run_id"]}
+    for key in ("mode", "root"):
+        if isinstance(params.get(key), str) and params[key]:
+            args[key] = params[key]
+    return "coordinator-invoke dispatch.land_run '" + json.dumps(args, separators=(",", ":")) + "'"
+
+
+def _hand_off_green(run_id: str, entry: dict) -> tuple:
+    """`(outcome, log note)` for an expired entry: `handed_off` after stamping the run's halt marker
+    with one land-call `next_action` when the run's own records are green, else `expired`.
+
+    No hand-off is invented without the run's records: an empty `repo_root`, a missing run dir, an
+    unreadable or non-halted marker, a red or signal-less run, or a failed write all stay `expired`.
+    Pure file reads and one atomic write; no git."""
+    repo_root = entry.get("repo_root")
+    if not isinstance(repo_root, str) or not repo_root:
+        return OUTCOME_EXPIRED, "handoff=skipped:no-repo-root"
+    try:
+        from coordinator_core.atomic_replace import atomic_write_bytes
+        from coordinator_core.ops.dispatch_emit.halt_strand_census import WITHHELD_PRINTS_FILE, _green
+        from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE
+        from coordinator_core.session import record_homes
+
+        run_dir = Path(record_homes.home_dir(str(repo_root), "warp")) / run_id
+        if not run_dir.is_dir():
+            return OUTCOME_EXPIRED, "handoff=skipped:no-run-dir"
+        marker_path = run_dir / HALTED_FILE
+        try:
+            marker = json.loads(marker_path.read_bytes().decode("utf-8"))
+        except (OSError, ValueError):
+            marker = None
+        if not isinstance(marker, dict) or marker.get("status", "halted") != "halted":
+            return OUTCOME_EXPIRED, "handoff=skipped:marker-unreadable"
+        green, _signals = _green(run_dir)
+        if not green:
+            return OUTCOME_EXPIRED, "handoff=skipped:not-green"
+        arts = marker.get("run_artifacts")
+        withheld = arts.get("withheld") if isinstance(arts, dict) else None
+        if not isinstance(withheld, dict) or not withheld:
+            try:
+                withheld = json.loads((run_dir / WITHHELD_PRINTS_FILE).read_bytes().decode("utf-8"))
+            except (OSError, ValueError):
+                withheld = {}
+        paths = sorted(p for p in withheld if isinstance(p, str)) if isinstance(withheld, dict) else []
+        marker["next_action"] = {
+            "kind": HANDOFF_KIND,
+            "op": "dispatch.land_run",
+            "call": _land_call(entry),
+            "run_id": run_id,
+            "last_leg": entry.get("last_leg"),
+            "withheld_paths": paths,
+        }
+        atomic_write_bytes(marker_path, json.dumps(marker, indent=2).encode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 -- the drain path never raises; today's `expired` stands
+        return OUTCOME_EXPIRED, f"handoff=failed:{type(exc).__name__}"
+    return OUTCOME_HANDED_OFF, f"handoff=land-call paths={len(paths)}"
+
+
+def _finish_claimed(
+    root: Optional[Path], run_id: str, claimed: Path, entry: dict, outcome: str, note: str = "",
+) -> None:
+    tail = f"outcome={outcome}" + (f" {note}" if note else "")
+    if entry.get("requeued") and outcome not in (OUTCOME_EXPIRED, OUTCOME_HANDED_OFF):
         entry.pop("requeued", None)
         entry.pop("claimed_by", None)
         _write(claimed, entry)
         os.replace(claimed, claimed.with_name(run_id + PENDING_SUFFIX))
-        _log(root, run_id, "requeued", entry, f"outcome={outcome}")
+        _log(root, run_id, "requeued", entry, tail)
         return
     entry["outcome"] = outcome
     entry["finished_at"] = time.time()
     _write(claimed, entry)
     os.replace(claimed, claimed.with_name(run_id + DONE_SUFFIX))
-    _log(root, run_id, "finished", entry, f"outcome={outcome}")
+    _log(root, run_id, "finished", entry, tail)
 
 
 def finish(root: Optional[Path], run_id: str, outcome: str) -> bool:
     """Close the claimed entry for `run_id` with `outcome`; True when it changed state.
 
-    An entry re-enqueued during its own claim goes back to pending instead (unless `outcome` is
-    `expired`)."""
+    `outcome` is `landed`, `expired` or `handed_off`. An entry re-enqueued during its own claim goes
+    back to pending instead (unless `outcome` is `expired` or `handed_off`)."""
     if not _safe(run_id):
         return False
     claimed = _path(root, run_id, CLAIMED_SUFFIX)

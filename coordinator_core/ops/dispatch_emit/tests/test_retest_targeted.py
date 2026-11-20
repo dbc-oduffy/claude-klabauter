@@ -1543,3 +1543,25 @@ def test_peer_held_reds_looks_up_at_most_the_cap_and_keeps_a_held_path_within_it
 
     assert len(seen[0]) == retest_targeted._MAX_NAMED_PATHS
     assert out == {"test_a.py::t0": [paths[0]]}
+
+
+def test_missing_plugin_options_retry_without_them_and_pass(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pytest rejecting `--timeout`/`-n` for an absent plugin must not halt the landing: the session reruns without them."""
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q --timeout=300 -n 3 --dist=loadfile")
+    seen = []
+
+    def run(argv, cwd, *, log, append: bool = False, **_kw) -> int:
+        seen.append(list(argv))
+        if any(a.startswith("--timeout") or a in ("-n", "--dist=loadfile") for a in argv):
+            with open(log, "a" if append else "w", encoding="utf-8") as fh:
+                fh.write("pytest: error: unrecognized arguments: --timeout=300 -n 3 --dist=loadfile\n")
+            return 4
+        return 0
+
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=run,
+    )
+    assert rc == 0, seen
+    assert li.fresh_targeted_verdict(repo, RUN_ID)["status"] == "pass"
+    assert "3" not in seen[-1] and "test_a.py" in seen[-1]

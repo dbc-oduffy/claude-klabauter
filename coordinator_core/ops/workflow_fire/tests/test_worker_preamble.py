@@ -1,6 +1,8 @@
 """Both headless executors write prompt.txt for a codex/agy/grok agent beginning with the WORKER ROLE preamble."""
 from __future__ import annotations
 
+import os
+import shlex
 import sys
 
 import pytest
@@ -17,6 +19,25 @@ _DOE_PREAMBLE = (
     "names that exact command. Touch only the paths this brief declares, do only the stage\n"
     "below, and answer with its result."
 )
+
+
+def test_grok_sizing_prompt_contains_installed_command(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_contract import SIZING_ASSEMBLE_CMD
+    from coordinator_core.ops.workflow_fire import worker_preamble
+
+    home = tmp_path / "settings home"
+    monkeypatch.setattr(worker_preamble, "settings_home", lambda: home)
+    name = "sizing-assemble.exe" if os.name == "nt" else "sizing-assemble"
+    path = (home / "bin" / name).as_posix()
+    command = f"& '{path}'" if os.name == "nt" else shlex.quote(path)
+    door = """coordinator-invoke plan.tasks.mutate '{"verb":"evidence-append","id":"C0"}'"""
+    brief = f"Run `{SIZING_ASSEMBLE_CMD} --json`. Then run `{door}`."
+    for backend in WORKER_BACKENDS:
+        rendered = with_worker_preamble(backend, brief)
+        assert f"Run `{command} --json`." in rendered
+        assert SIZING_ASSEMBLE_CMD not in rendered
+        assert f"Then run `{door}`." in rendered
+    assert with_worker_preamble("claude", brief) == brief
 
 
 class _Spawned(Exception):
@@ -67,6 +88,10 @@ def test_workflow_executor_prompt_begins_with_preamble(tmp_path, spawned, backen
     assert text.startswith(PREAMBLE + "\n\n")
     # On Windows the executor adds its platform note after the preamble; WORKER ROLE must still lead.
     body = text[len(PREAMBLE) + 2:]
+    if backend == "codex":
+        edit_note, body = body.split("\n\n", 1)
+        assert "use apply_patch for that edit" in edit_note
+        assert "Do not edit when the stage is read-only." in edit_note
     if body.startswith("Native execution platform: Windows."):
         body = body.split("\n\n", 1)[1]
     assert body.startswith("Agent definition (coordinator:sizing-scout)")

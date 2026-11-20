@@ -29,10 +29,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.git import call_io_scope
@@ -1406,6 +1410,41 @@ def touch_run_activity(record_path: Path, *, now: "datetime | None" = None) -> b
     return True
 
 
+_DEFERRED_HEARTBEATS: dict[str, "threading.Thread"] = {}
+_DEFERRED_GUARD = threading.Lock()
+
+
+def touch_run_activity_deferred(record_path: Path) -> "threading.Thread | None":
+    """`touch_run_activity` on a daemon thread, one pending stamp per `record_path`: the caller never
+    waits on the read or the write. Returns the thread, or None when a stamp for this run is already
+    pending (the second call coalesces into it) or no thread could start. Never raises.
+    Trap: a process that exits before the thread writes loses that one throttle stamp; the stamp is
+    liveness, not truth."""
+    key = str(record_path)
+
+    def run() -> None:
+        try:
+            touch_run_activity(Path(key))
+        except Exception:  # noqa: BLE001 -- a liveness stamp never surfaces a failure
+            pass
+        finally:
+            with _DEFERRED_GUARD:
+                _DEFERRED_HEARTBEATS.pop(key, None)
+
+    thread = threading.Thread(target=run, name="run-activity-heartbeat", daemon=True)
+    with _DEFERRED_GUARD:
+        if key in _DEFERRED_HEARTBEATS:
+            return None
+        _DEFERRED_HEARTBEATS[key] = thread
+    try:
+        thread.start()
+    except RuntimeError:
+        with _DEFERRED_GUARD:
+            _DEFERRED_HEARTBEATS.pop(key, None)
+        return None
+    return thread
+
+
 PLAN_STARTED_FIELD = "plan_started_at"
 
 
@@ -1763,6 +1802,9 @@ class StageManifest:
     gated: tuple[GatedRow, ...] = ()
     test_targets: tuple[str, ...] = ()
     no_test_target: dict[str, Any] | None = None
+    #: `{row, kind, tests}` when the run's only test obligation is an EM-performed UE automation
+    #: criterion (`em_test_criterion.em_owed_test_criterion`); None otherwise.
+    em_owed_test_criterion: dict[str, Any] | None = None
     doc_writes: tuple[str, ...] = ()
     #: Rows delivered in the engine plane, in the owner-clause row shape `{id, owner_repo,
     #: owner_root, root_class, engine}`; an absent key reads as ``()``.
@@ -1838,6 +1880,7 @@ class StageManifest:
             "gated": [g.to_json() for g in self.gated],
             "test_targets": list(self.test_targets),
             "no_test_target": self.no_test_target,
+            "em_owed_test_criterion": self.em_owed_test_criterion,
             "doc_writes": list(self.doc_writes),
         }
 
@@ -1853,6 +1896,7 @@ class StageManifest:
             gated=tuple(GatedRow.from_json(g) for g in data.get("gated") or ()),
             test_targets=tuple(data.get("test_targets") or ()),
             no_test_target=data.get("no_test_target"),
+            em_owed_test_criterion=data.get("em_owed_test_criterion"),
             doc_writes=tuple(data.get("doc_writes") or ()),
             engine_rows=tuple(dict(r) for r in data.get("engine_rows") or ()),
             owed=tuple(OwedRow.from_json(o) for o in data.get("owed") or ()),

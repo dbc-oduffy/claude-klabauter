@@ -244,6 +244,70 @@ def test_no_prepared_path_adds_no_prepared_key(tmp_path):
     assert dla.PREPARED_KEY not in _args_of(dla._handler(_params(tmp_path)))
 
 
+def _shard_rel(n: int) -> str:
+    return f"state/scratch/artifact-distillation/{RUN_ID}/prepared-{n:02d}.json"
+
+
+def _write_shards(tmp_path) -> None:
+    for n in (1, 2):
+        target = tmp_path / _shard_rel(n)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"synth": {"shard": n}}), encoding="utf-8")
+
+
+def test_two_shard_calls_write_distinct_launcher_and_args_files(tmp_path):
+    _write_shards(tmp_path)
+    outs = [dla._handler(_params(tmp_path, prepared_path=_shard_rel(n))) for n in (1, 2)]
+    run_dir = tmp_path / "state/scratch/artifact-distillation" / RUN_ID
+    assert Path(outs[0]["scriptPath"]).name == "launch-01.workflow.mjs"
+    assert Path(outs[1]["scriptPath"]).name == "launch-02.workflow.mjs"
+    assert Path(outs[0]["args_path"]).name == "launch-args-01.json"
+    assert Path(outs[1]["args_path"]).name == "launch-args-02.json"
+    assert not (run_dir / "launch.workflow.mjs").exists() and not (run_dir / "launch-args.json").exists()
+    for n, out in zip((1, 2), outs):
+        assert _args_of(out)[dla.PREPARED_KEY] == {"synth": {"shard": n}}
+        assert hashlib.sha256(Path(out["scriptPath"]).read_bytes()).hexdigest() == out["sha256"]
+
+
+def test_leg2_after_two_shard_calls_reads_the_named_shards_args(tmp_path):
+    _write_shards(tmp_path)
+    for n in (1, 2):
+        dla._handler(_params(tmp_path, prepared_path=_shard_rel(n)))
+    out = dla._handler({**_leg2_inputs(tmp_path), "prepared_path": _shard_rel(1)})
+    assert _args_of(out)[dla.PREPARED_KEY] == {"synth": {"shard": 1}}
+    assert Path(out["args_path"]).name == "launch-args-leg2-01.json"
+    assert Path(out["scriptPath"]).name == "launch-leg2-01.workflow.mjs"
+    other = dla._handler({**_leg2_inputs(tmp_path), "shard": 2})
+    assert _args_of(other)[dla.PREPARED_KEY] == {"synth": {"shard": 2}}
+    assert Path(other["args_path"]).name == "launch-args-leg2-02.json"
+
+
+def test_leg2_for_shard_without_that_shards_leg1_args_raises(tmp_path):
+    _write_shards(tmp_path)
+    dla._handler(_params(tmp_path, prepared_path=_shard_rel(1)))
+    with pytest.raises(ValueError, match="launch-args-02.json"):
+        dla._handler({**_leg2_inputs(tmp_path), "shard": 2})
+
+
+def test_non_shard_prepared_name_keeps_unsuffixed_files(tmp_path):
+    _write_prepared(tmp_path, {"synth": {}})
+    assert Path(dla._handler(_params(tmp_path, prepared_path=PREPARED_REL))["args_path"]).name == "launch-args.json"
+
+
+def test_shard_spellings_of_one_shard_share_one_suffix(tmp_path):
+    _write_shards(tmp_path)
+    names = {
+        Path(dla._handler(_params(tmp_path, shard=spelling))["args_path"]).name for spelling in (1, "1", "01")
+    }
+    assert names == {"launch-args-01.json"}
+
+
+@pytest.mark.parametrize("shard", ["x", -1, True, 1.5])
+def test_bad_shard_param_is_refused(tmp_path, shard):
+    with pytest.raises(ValueError, match="shard"):
+        dla._handler(_params(tmp_path, shard=shard))
+
+
 @pytest.mark.parametrize("leg2", [False, True])
 @pytest.mark.parametrize("bad", ["missing", "relative.js", 7, ""])
 def test_workflow_script_absent_relative_or_nonexistent_is_refused_and_writes_nothing(tmp_path, leg2, bad):

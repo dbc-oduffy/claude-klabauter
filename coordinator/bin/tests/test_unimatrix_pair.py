@@ -338,6 +338,24 @@ def test_local_member_passes_member_boxes_to_the_lister_and_matches_aliases_case
     mem._validate_member(m)
 
 
+def test_local_member_keys_relay_pubs_by_box_for_aliases_resolving_by_hostname(tmp_path: Path) -> None:
+    rec = _recorded(tmp_path, "machine-a-lan", "example-operator@10.0.0.9", "gipsy", "stray-lan")
+    hosts = {"machine-a-lan": "Machine-a.local", "example-operator@10.0.0.9": "10.0.0.9", "stray-lan": "elsewhere.example"}
+    asked = []
+    m = up.local_member("gipsy", [], _no_mint(tmp_path), lambda peers=None: rec, {"gipsy", "machine-a"},
+                        lambda a: asked.append(a) or hosts.get(a))
+    assert m["relay_pubs"] == {"gipsy": f"ssh-ed25519 {rec['gipsy'][1]}", "machine-a": f"ssh-ed25519 {rec['machine-a-lan'][1]}"}
+    assert "gipsy" not in asked
+    mem._validate_member(m)
+
+
+def test_local_member_name_match_wins_over_hostname_match_for_the_same_box(tmp_path: Path) -> None:
+    rec = _recorded(tmp_path, "machine-a", "a-lan")
+    m = up.local_member("gipsy", [], _no_mint(tmp_path), lambda peers=None: rec, {"gipsy", "machine-a"},
+                        lambda a: "machine-a.local")
+    assert m["relay_pubs"] == {"machine-a": f"ssh-ed25519 {rec['machine-a'][1]}"}
+
+
 def test_local_member_with_no_recorded_key_refuses(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="no recorded pair key for alpha"):
         up.local_member("alpha", [], _no_mint(tmp_path), lambda peers=None: {})
@@ -460,16 +478,34 @@ def test_fetch_resolves_the_key_through_the_host_alias(rig) -> None:
     assert rc == 1 and asked == ["macmini-lan", "Mac-mini"] and rig.pushes == []
 
 
-def test_host_alias_matches_ssh_hostname_case_insensitively_ignoring_dot_local(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_run(cmd, **kw) -> "CompletedProcess[str]":
-        host = {"macmini-lan": "mac-mini.local", "macmini": "100.64.0.9"}[cmd[-1]]
-        return subprocess.CompletedProcess(cmd, 0, f"user x\nhostname {host}\n", "")
+def _ssh_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: str) -> None:
+    (tmp_path / ".ssh").mkdir(exist_ok=True)
+    (tmp_path / ".ssh" / "config").write_text(config, encoding="utf-8")
+    monkeypatch.setattr(up.Path, "home", staticmethod(lambda: tmp_path))
 
-    monkeypatch.setattr(up.subprocess, "run", fake_run)
+    def no_spawn(*a, **k):
+        raise AssertionError("ssh spawned")
+
+    monkeypatch.setattr(up.subprocess, "run", no_spawn)
+
+
+def test_host_alias_matches_ssh_hostname_case_insensitively_ignoring_dot_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _ssh_home(tmp_path, monkeypatch, "Host macmini-lan\n  HostName mac-mini.local\nHost macmini\n  HostName=100.64.0.9\n")
     alias_fn = up.make_host_alias_fn(lambda: {"macmini": ("p", "b"), "macmini-lan": ("p2", "b2")})
     assert alias_fn("Mac-mini.local") == "macmini-lan"
     assert alias_fn("100.64.0.9") == "macmini"
     assert alias_fn("elsewhere.local") is None
+
+
+def test_ssh_hostname_reads_config_in_process_first_match_wins_and_defaults_to_the_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / ".ssh").mkdir()
+    (tmp_path / ".ssh" / "extra").write_text("Host inc-*\n  HostName included.local\n", encoding="utf-8")
+    _ssh_home(tmp_path, monkeypatch, "Include extra\nHost one\n  HostName first\nHost one !skip\n  HostName second\n"
+                                     "Host *-lan\n  HostName %h.example\n")
+    assert up._ssh_hostname("one") == "first"
+    assert up._ssh_hostname("inc-1") == "included.local"
+    assert up._ssh_hostname("x-lan") == "x-lan.example"
+    assert up._ssh_hostname("example-operator@10.0.0.9") == "10.0.0.9"
 
 
 def test_default_own_key_is_adopt_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -521,6 +557,8 @@ def test_push_and_fetch_dial_ipv4_only(rig) -> None:
     rig.pushes.clear()
     rig.call(["fetch", "u@alpha.local"])
     assert rig.pushes and all("AddressFamily=inet" in c for c, _ in rig.pushes)
+    # fetch sends no input: -n, else a pwsh-DefaultShell far side waits on the caller's open stdin
+    assert all(c[1] == "-n" for c, _ in rig.pushes)
 
 
 def _approve_with_recorded(rig, rec, member):

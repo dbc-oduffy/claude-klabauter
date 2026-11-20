@@ -14,6 +14,7 @@ import tempfile
 import pytest
 
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
+from coordinator_core.git import repo_root
 from coordinator_core.bash_guards import block_subagent_commit as commit_guard
 from coordinator_core.bash_guards import block_subagent_destructive_action as destructive
 from coordinator_core.bash_guards import dispatch_checks as blanket
@@ -55,6 +56,7 @@ def _blanket_deny(monkeypatch, tmp_path, cmd) -> str:
         raise AssertionError("unexpected git invocation: %r" % (args,))
 
     monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
+    monkeypatch.setattr(repo_root, "show_toplevel", lambda cwd=None: str(root))
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda r: True)
     monkeypatch.chdir(root)
     result = envelope_of(blanket.check_blanket_git_add(cmd, session_id="sess1", hook_payload={}))

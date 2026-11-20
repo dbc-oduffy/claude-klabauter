@@ -141,5 +141,19 @@ def test_gemini_family_resolves_effort_and_display_forms_but_not_other_models(pt
         assert pt.estimate_usd(other, {"input_tokens": 5}) is None
 
 
+def test_gpt_62_sol_prices_cached_input_at_list_and_has_provenance(pt):
+    assert pt.model_family("gpt-6.2-sol") == "gpt-6.2-sol"
+    assert pt.model_family("gpt-6.2-sol-2026-11-01") == "gpt-6.2-sol"
+    assert pt.model_family("gpt-6.2-sol-mini") is None
+    u = {"input_tokens": 100_000, "cache_read_input_tokens": 100_000, "output_tokens": 100_000}
+    assert pt.estimate_usd("gpt-6.2-sol", u) == pytest.approx(0.2 + 0.01 + 1.0)
+    assert pt.estimate_usd("gpt-6.2-sol", {"input_tokens": 300_000}) == pytest.approx(1.2)
+    assert pt.estimate_usd("gpt-6.2-sol", {"input_tokens": 200_000}, speed="fast") == pytest.approx(0.8)
+    prov = pt.RATE_PROVENANCE["gpt-6.2-sol"]
+    assert prov["source"] == "https://developers.openai.com/api/docs/pricing"
+    assert prov["verified_at"] == "2026-11-19"
+    assert _json_table()["models"]["gpt-6.2-sol"]["provenance"]["verified_at"] == prov["verified_at"]
+
+
 def test_sonnet_prices_at_list(pt):
     assert pt.estimate_usd("claude-sonnet-5-5", {"input_tokens": 1_000_000, "output_tokens": 1_000_000}) == 12.0

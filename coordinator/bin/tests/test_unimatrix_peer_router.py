@@ -2049,6 +2049,22 @@ def test_two_null_target_rows_for_different_sessions_on_one_endpoint_are_ambiguo
 
 
 @portable
+def test_short_machine_a_alias_resolves_current_mirror_and_refuses_collision(dirs):
+    row = {
+        **FAR_ROW, "name": "agent-a.machine-a.local", "unimatrixFarName": "agent-a",
+        "unimatrixRemote": "machine-a.local", "pid": os.getpid(),
+        "messagingSocketPath": "/s/machine-a.sock", "sessionId": "first",
+    }
+    (dirs / "sessions" / "far.json").write_text(json.dumps(row))
+    router = pr.Router([], sessions_dir=dirs / "sessions", state_dir=dirs / "state", endpoint_dir=dirs / "eps", adapters={})
+    assert router.resolve_sender("agent-a.machine-a") == "/s/machine-a.sock"
+    local = {"name": "agent-a.machine-a", "pid": os.getpid(), "messagingSocketPath": "/s/other.sock", "sessionId": "second"}
+    (dirs / "sessions" / "local.json").write_text(json.dumps(local))
+    assert router.resolve_sender("agent-a.machine-a") == ""
+    assert "ambiguous" in router.last_refusal
+
+
+@portable
 def test_two_null_target_rows_for_one_session_on_one_endpoint_still_resolve(tmp_path):
     r = _two_null_target_rows_on_one_endpoint(tmp_path, "sid-live", "sid-live")
     assert r.resolve_sender("dup") == "/s/one.sock"

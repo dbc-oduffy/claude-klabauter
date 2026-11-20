@@ -21,7 +21,7 @@ _ANSWER_BUDGET_SECS = 0.5
 _HEAL_WAIT_SECS = 60.0
 
 
-def _light_init(stderr_dir=None, stall_dir=None, forward_queue=None) -> None:
+def _light_init(stderr_dir=None, stall_dir=None, forward_queue=None, prewarm_emit=False) -> None:
     time.sleep(_INIT_SECS)
 
 
@@ -61,6 +61,12 @@ def _live(pool) -> int:
     return sum(1 for p in (getattr(pool, "_processes", None) or {}).values() if p.is_alive())
 
 
+def _boot_guard_workers(ctx):
+    """Hook-lane frames are withdrawn at `_HOOK_LANE_BUDGET_SECS`, shorter than the 1s init: boot first."""
+    done, _ = server.concurrent.futures.wait(ctx._prewarm_pool(True), timeout=_HEAL_WAIT_SECS)
+    assert done, "the guard workers never booted"
+
+
 def _shutdown(ctx):
     for pool in (ctx._dispatch_pool, ctx._guard_pool):
         if pool is not None:
@@ -75,8 +81,9 @@ def ctx(tmp_path, monkeypatch):
 
 
 def test_lost_worker_is_replaced_and_prewarmed_without_another_request(ctx, tmp_path):
+    _boot_guard_workers(ctx)
     out = ctx._pool_dispatch(_frame(["hooks.preuse_write_dispatch"], 1))
-    assert out.get("result") or out.get("error"), out
+    assert out.get("result"), out
     marker = tmp_path / "died"
     lost = ctx._guard_pool
     ctx._pool_dispatch(_frame(["hooks.preuse_write_dispatch"], 2, die_marker=str(marker)))
@@ -90,6 +97,7 @@ def test_lost_worker_is_replaced_and_prewarmed_without_another_request(ctx, tmp_
 
 @pytest.mark.deliberate_wall_clock(reason="stall bound: a frame after worker loss must not wait on a cold worker start")
 def test_frame_after_the_loss_is_answered_by_a_booted_worker(ctx, tmp_path):
+    _boot_guard_workers(ctx)
     ctx._pool_dispatch(_frame(["hooks.preuse_write_dispatch"], 1, die_marker=str(tmp_path / "died")))
     assert ctx.__dict__["_pool_healing"][True].wait(_HEAL_WAIT_SECS)
 

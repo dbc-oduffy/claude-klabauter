@@ -46,7 +46,7 @@ def _fixture(root: Path, *, release: bool = False) -> tuple[str, str, str]:
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "base")
     base = _git(root, "rev-parse", "HEAD")
-    kept = _git(root, "hash-object", "-w", "--stdin", stdin="kept-never-landed\n")
+    kept = _git(root, "hash-object", "-w", "--stdin", stdin=HELD_BYTES)
     halted = _rid(300, "aaaaaa")
     rec = root / "state/warp" / halted
     sizing = "state/sizings/s.yaml"

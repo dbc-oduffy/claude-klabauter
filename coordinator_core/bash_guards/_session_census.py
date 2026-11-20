@@ -18,7 +18,7 @@ HEAVY_IMAGES = frozenset(
      "ubt", "runuat"}
 )
 SHELL_IMAGES = frozenset({"bash", "sh", "zsh", "pwsh", "powershell", "cmd"})
-# The harness runs Bash/PowerShell tool commands under one of these as a direct child of claude.
+# The harness runs Bash/PowerShell tool commands under one of these as a direct child of the session host.
 # MCP and language servers are direct children too, but never under these (Windows wraps a
 # stdio MCP server in cmd.exe, which is why cmd is not a tool shell).
 TOOL_SHELL_IMAGES = frozenset({"bash", "sh", "zsh", "pwsh", "powershell"})
@@ -43,6 +43,10 @@ def _is_claude(name: str) -> bool:
     return _stem(name).startswith("claude")
 
 
+def _is_session_host(name: str) -> bool:
+    return _is_claude(name) or _stem(name) == "codex"
+
+
 def _payload_pid(payload: Mapping[str, Any]) -> Optional[int]:
     raw = payload.get("pid")
     if isinstance(raw, bool):
@@ -58,10 +62,10 @@ def resolve_anchor(
     primitives: ProcessPrimitives,
     snapshot: Optional[Sequence[ProcRow]] = None,
 ) -> Optional[ProcRow]:
-    """Nearest claude-named ancestor of payload["pid"], or None (the guard then denies).
+    """Nearest Claude or Codex ancestor of payload["pid"], or None (the guard then denies).
 
     None on: no usable pid, unreadable snapshot, a missing hop, a hop whose parent is not older
-    than its child (pid reuse), a cycle, or no claude ancestor.
+    than its child (pid reuse), a cycle, or no session host ancestor.
     """
     pid = _payload_pid(payload)
     if pid is None:
@@ -74,7 +78,7 @@ def resolve_anchor(
     for _ in range(_MAX_HOPS):
         if node is None:
             return None
-        if _is_claude(node.name):
+        if _is_session_host(node.name):
             return node
         parent = by_pid.get(node.ppid)
         if parent is None or parent.pid == node.pid or parent.ctime > node.ctime:
@@ -95,7 +99,7 @@ def session_census(
     Only the anchor's direct tool-shell children (TOOL_SHELL_IMAGES) are descended, so MCP and
     language servers, which the harness starts as other direct children, are never counted.
     shells is those tool shells; heavy is every heavy-image process below them. Descent stops at
-    a nested claude. A child older than its parent is a reused pid and is not descended.
+    a nested session host. A child older than its parent is a reused pid and is not descended.
     exclude_pids drops the caller's own wrapper chain from the counts.
 
     TRAP: a process whose parent has exited cannot be attributed to a session on Windows, so it is
@@ -128,7 +132,7 @@ def session_census(
             if child.pid in seen or child.ctime < cur.ctime:
                 continue
             seen.add(child.pid)
-            if _is_claude(child.name):
+            if _is_session_host(child.name):
                 continue
             if child.pid not in skip and _stem(child.name) in HEAVY_IMAGES:
                 heavy.append(child)
@@ -250,14 +254,14 @@ def _children(rows: Sequence[ProcRow]) -> Dict[int, List[ProcRow]]:
 
 
 def _subtree(root: ProcRow, children: Mapping[int, List[ProcRow]]) -> List[ProcRow]:
-    """root and its live descendants, never descending into a reused pid or a nested claude."""
+    """root and its live descendants, never descending into a reused pid or a nested session host."""
     out = [root]
     stack = [root]
     seen = {root.pid}
     while stack:
         cur = stack.pop()
         for child in children.get(cur.pid, ()):
-            if child.pid in seen or child.ctime < cur.ctime or _is_claude(child.name):
+            if child.pid in seen or child.ctime < cur.ctime or _is_session_host(child.name):
                 continue
             seen.add(child.pid)
             out.append(child)
@@ -284,8 +288,8 @@ class OrphanTree:
 
 
 def _is_orphan_root(row: ProcRow, by_pid: Mapping[int, ProcRow]) -> bool:
-    """A non-claude row whose parent has exited, or whose ppid now names a younger (reused) pid."""
-    if _is_claude(row.name):
+    """A non-session-host row whose parent has exited, or whose ppid now names a younger (reused) pid."""
+    if _is_session_host(row.name):
         return False
     parent = by_pid.get(row.ppid)
     return parent is None or parent.ctime > row.ctime

@@ -68,7 +68,7 @@ def test_overrun_verdict_with_edited_file_tests_run_does_not_halt():
 )
 def test_zero_test_verdict_still_halts_even_when_it_names_tripwires(result):
     halted = _halt(result)
-    assert halted and halted["halted"] == "test_verdict_empty" and "ran zero tests" in halted["detail"]
+    assert halted and halted["halted"] == "test_infra_failure" and "ran zero tests" in halted["detail"]
 
 
 @pytest.mark.skipif(_NODE is None, reason="node absent")

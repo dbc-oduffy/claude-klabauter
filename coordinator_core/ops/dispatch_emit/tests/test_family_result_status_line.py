@@ -53,8 +53,21 @@ def _fam(verdict, **extra):
 
 @pytest.mark.parametrize("verdict", ["OK", "WARN"])
 def test_ok_or_warn_family_result_object_is_done(verdict) -> None:
-    out = _go(_fam(verdict))
+    out = _go(_fam(verdict, family_authored=True))
     assert out["incomplete"] == [] and out["unanswered"] == []
+
+
+@pytest.mark.parametrize("verdict", ["OK", "WARN"])
+@pytest.mark.parametrize("authored", [{}, {"family_authored": False}, {"family_authored": "true"}])
+def test_ok_or_warn_result_without_family_authored_true_is_blocked_naming_it(verdict, authored) -> None:
+    out = _go(_fam(verdict, **authored))
+    assert out["incomplete"] == ["X"] and out["blocked"] == ["X"] and out["unanswered"] == []
+    assert "family_authored:false" in out["reason"]["X"]
+
+
+def test_authorship_failure_keeps_the_runners_own_reason_after_the_prefix() -> None:
+    out = _go(_fam("FAILED", exit_code=1, family_authored=False, blocked_reason="codex exit 2"))
+    assert "family_authored:false: codex exit 2" in out["reason"]["X"]
 
 
 @pytest.mark.parametrize("verdict", ["FAILED", "BLOCKED"])

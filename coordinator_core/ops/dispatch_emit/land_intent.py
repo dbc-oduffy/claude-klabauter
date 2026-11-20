@@ -12,6 +12,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+KIND_LAND_RUN = "land_run"
+KIND_HALTED_RECORD_COMMIT = "halted_record_commit"
+
 PHASE_CLAIMED = "claimed"
 PHASE_COMMITTING = "committing"
 PHASE_COMMITTED = "committed"
@@ -21,9 +24,11 @@ PHASE_COMMITTED = "committed"
 _held: Optional[tuple] = None
 
 
-def record(root: Path, params: dict, *, script_path: object = None, kind: str = "land_run") -> bool:
+def record(root: Path, params: dict, *, script_path: object = None, kind: str = KIND_LAND_RUN) -> bool:
     """Write the "claimed" record for the dispatch this process runs; True when written.
-    A no-op outside a keyed dispatch. Call only from the call that won the claim."""
+    A no-op outside a keyed dispatch. Call only from the call that won the claim, or, for
+    `KIND_HALTED_RECORD_COMMIT` (which wins no claim), with empty `params` so `resolve` matches
+    no spent landing by run identity."""
     global _held
     _held = None
     from coordinator_core.warm import dispatch_ack, dispatch_fence

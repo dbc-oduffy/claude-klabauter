@@ -26,15 +26,23 @@ def _load(name, filename):
 gen = _load("unimatrix_plugin_gen", "unimatrix-plugin-gen.py")
 ui = _load("unimatrix_install_for_gen", "unimatrix-install.py")
 
+_DOOR = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/hook-run"'
+_PASS2 = "; rc=$?; [ $rc -eq 2 ] && rc=0; exit $rc"
+
+
+def _door_cmd(name) -> str:
+    return f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.{name}"
+
+
 HOOKS = {
     "description": "top level string agy refuses",
     "hooks": {
         "PreToolUse": [
-            {"matcher": "Bash", "hooks": [{"type": "command", "description": "d",
-                                           "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run.py"}]},
-            {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "x"}]},
-            {"matcher": "Weird", "hooks": [{"type": "command", "command": "y"}]},
+            {"matcher": "Bash", "hooks": [{"type": "command", "description": "d", "command": _door_cmd("a")}]},
+            {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": _door_cmd("b")}]},
+            {"matcher": "Weird", "hooks": [{"type": "command", "command": _door_cmd("c")}]},
         ],
+        "SessionStart": [{"hooks": [{"type": "command", "command": "python ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run.py"}]}],
         "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "z"}]}],
     },
 }
@@ -108,7 +116,9 @@ def test_hooks_at_root_schema_matchers_and_plugin_root(plugin, tmp_path: Path) -
     pre = data["pre-tool-use"]["PreToolUse"]
     assert [g["matcher"] for g in pre] == ["run_command", "edit_file|write_file", "Weird"]
     assert "description" not in pre[0]["hooks"][0]
-    assert pre[0]["hooks"][0]["command"] == f"python {out.resolve().as_posix()}/hooks/scripts/run.py"
+    assert pre[0]["hooks"][0]["command"].endswith(" hooks.a")
+    (start,) = data["session-start"]["SessionStart"]
+    assert start["command"] == f"python {out.resolve().as_posix()}/hooks/scripts/run.py"
     assert not any("UserPromptSubmit" in v for v in data.values())
     assert {("matcher", "hooks/hooks.json"), ("hook-event", "hooks/hooks.json")} <= _unmapped(report)
 
@@ -133,9 +143,9 @@ def test_hooks_json_is_keyed_by_hook_name_with_count_matching_source_events(plug
 def test_claude_only_tool_names_are_rewritten_in_matchers(plugin, tmp_path: Path) -> None:
     claude_only = {"Read", "Grep", "Glob", "MultiEdit", "NotebookEdit"}
     hooks = {"hooks": {"PreToolUse": [
-        {"matcher": "Read|Grep|Glob", "hooks": [{"type": "command", "command": "a"}]},
-        {"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "b"}]},
-        {"matcher": "Write|Edit|MultiEdit|Bash|PowerShell", "hooks": [{"type": "command", "command": "c"}]},
+        {"matcher": "Read|Grep|Glob", "hooks": [{"type": "command", "command": _door_cmd("a")}]},
+        {"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": _door_cmd("b")}]},
+        {"matcher": "Write|Edit|MultiEdit|Bash|PowerShell", "hooks": [{"type": "command", "command": _door_cmd("c")}]},
     ]}}
     (plugin / "hooks" / "hooks.json").write_text(json.dumps(hooks), encoding="utf-8")
     out = tmp_path / "out"
@@ -207,8 +217,8 @@ def test_agy_plugin_validate_accepts_generated_tree(plugin, tmp_path: Path) -> N
     hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     hooks["hooks"]["SessionStart"] = [{"hooks": [{"type": "command", "command": "s"}]}]
     hooks["hooks"]["PreToolUse"] = [
-        {"matcher": "Read|Grep|Glob", "hooks": [{"type": "command", "command": "a"}]},
-        {"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "b"}]}]
+        {"matcher": "Read|Grep|Glob", "hooks": [{"type": "command", "command": _door_cmd("a")}]},
+        {"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": _door_cmd("b")}]}]
     (plugin / "hooks" / "hooks.json").write_text(json.dumps(hooks), encoding="utf-8")
     out = tmp_path / "out"
     gen.generate(plugin, out, "agy")
@@ -358,10 +368,6 @@ def test_out_without_install_seeds_nothing_and_generator_failure_is_partial(plug
     assert (foreign / "keep.txt").exists()
 
 
-_DOOR = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/hook-run"'
-_PASS2 = "; rc=$?; [ $rc -eq 2 ] && rc=0; exit $rc"
-
-
 def _door_hooks(plugin, commands) -> None:
     groups = [{"matcher": "Bash", "hooks": [{"type": "command", "shell": "bash", "timeout": 5, "command": c}]}
               for c in commands]
@@ -400,6 +406,36 @@ def test_agy_door_hook_commands_are_shell_neutral_and_keep_semantics(plugin, tmp
     assert "${PLUGIN_ROOT}" not in (out / "hooks.json").read_text(encoding="utf-8")
     assert (out / "hooks" / "agy-hook-run.py").is_file()
     assert "hook-command" not in {u["kind"] for u in report["unmapped"]}
+
+
+@pytest.mark.parametrize("exe", ["python", "python3"])
+def test_no_pretooluse_command_bypasses_the_agy_adapter(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exe) -> None:
+    monkeypatch.setattr(gen, "_agy_python", lambda: exe)
+    foreign = {"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/guard-recursive-grep-repo-root.py"}
+    folded = {"type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/scripts/preuse-write-dispatch.py"]}
+    door = {"type": "command", "command": _door_cmd("preuse_write_dispatch")}
+    groups = [{"matcher": "Bash", "hooks": [door, foreign]},
+              {"matcher": "Write|Edit", "hooks": [folded]},
+              {"matcher": "Write", "hooks": [door]}]
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": groups, "SessionStart": [{"hooks": [foreign]}]}}), encoding="utf-8")
+    out = tmp_path / "out"
+    report = gen.generate(plugin, out, "agy")
+    data = json.loads((out / "hooks.json").read_text(encoding="utf-8"))
+    pre = data["pre-tool-use"]["PreToolUse"]
+    assert [g["matcher"] for g in pre] == ["run_command", "write_file"]
+    handlers = [h["command"] for g in pre for h in g["hooks"]]
+    assert len(handlers) == 2 and all(c.startswith(f"{exe} ") and "agy-hook-run.py" in c for c in handlers)
+    assert not any("guard-recursive-grep" in c or "preuse-write-dispatch.py" in c for c in handlers)
+    assert len([u for u in report["unmapped"] if u["kind"] == "hook-command"]) == 2
+    assert data["session-start"]["SessionStart"][0]["command"].endswith("guard-recursive-grep-repo-root.py")
+
+
+def test_pretooluse_with_no_adapted_command_is_not_emitted(plugin, tmp_path: Path) -> None:
+    _door_hooks(plugin, ["python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run.py"])
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    assert "pre-tool-use" not in json.loads((out / "hooks.json").read_text(encoding="utf-8"))
+    assert not (out / "hooks" / "agy-hook-run.py").exists()
 
 
 def test_unrecognised_bash_only_hook_command_is_reported_not_silently_shipped(plugin, tmp_path: Path) -> None:
@@ -720,12 +756,11 @@ def test_args_form_hook_entries_run_their_script_not_the_stdin_payload(plugin, t
         encoding="utf-8")
     entry = {"type": "command", "command": "python3",
              "args": ["-c", _LOADER, "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/pre.py", "boot arg"]}
-    groups = [{"matcher": "Bash", "hooks": [entry]}]
-    (plugin / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": groups}}), encoding="utf-8")
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [entry]}]}}), encoding="utf-8")
     out = tmp_path / "out"
     gen.generate(plugin, out, "agy")
     data = json.loads((out / "hooks.json").read_text(encoding="utf-8"))
-    handlers = [h for g in data["pre-tool-use"]["PreToolUse"] for h in g["hooks"]]
+    handlers = data["session-start"]["SessionStart"]
     assert len(handlers) == 1 and all("args" not in h for h in handlers)
     for h in handlers:
         r = _run_generated(h["command"], _JSON_PAYLOAD)

@@ -241,6 +241,82 @@ def test_history_blobs_unreadable_commit_is_not_cached(walk_repo, monkeypatch):
     assert len(hr._history_blobs(root, base, ["a.py"])["a.py"]) == 5
 
 
+def _index_runs(root: Path, count: int) -> list:
+    """`count` withholding runs, each with one index file naming `src/r<i>.py`; sentinel written."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    names = []
+    for i in range(count):
+        run_id = _rid(300 + i, f"{i:06x}")
+        _write(idx._dir(root) / f"{run_id}.json", json.dumps({"paths": [f"src/r{i}.py"], "at_ns": 1}))
+        names.append(run_id)
+    _write(idx._dir(root) / idx.SENTINEL, "")
+    return names
+
+
+def _count_index_reads(monkeypatch) -> list:
+    reads: list = []
+    real = Path.read_bytes
+
+    def counting(self):
+        if "halt-withheld" in str(self):
+            reads.append(self.name)
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting)
+    return reads
+
+
+def test_withheld_owners_repeat_call_reads_only_the_index_files_that_changed(tmp_path, monkeypatch):
+    """A warm engine's second scan reads no unchanged run file; a rewritten one is re-read and answered anew."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    hr._OWNER_RAW.clear()
+    names = _index_runs(tmp_path, 40)
+    reads = _count_index_reads(monkeypatch)
+    assert hr._withheld_owners(tmp_path, {"src/r7.py"}) == {"src/r7.py": names[7]}
+    assert len(reads) == 40 + 1  # every file once, plus the parse of the one that names the wanted path
+    reads.clear()
+    assert hr._withheld_owners(tmp_path, {"src/r7.py"}) == {"src/r7.py": names[7]}
+    assert reads == []
+
+    _write(idx._dir(tmp_path) / f"{names[3]}.json", json.dumps({"paths": ["src/r7.py", "src/new.py"], "at_ns": 2}))
+    assert hr._withheld_owners(tmp_path, {"src/r7.py", "src/new.py"}) == {
+        "src/r7.py": max(names[3], names[7]), "src/new.py": names[3],  # lexically last run wins
+    }
+    assert names[3] + ".json" in reads and len(reads) <= 3
+
+
+def test_withheld_owners_forgets_a_deleted_index_file(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    hr._OWNER_RAW.clear()
+    names = _index_runs(tmp_path, 3)
+    assert hr._withheld_owners(tmp_path, {"src/r1.py"}) == {"src/r1.py": names[1]}
+    (idx._dir(tmp_path) / f"{names[1]}.json").unlink()
+    assert hr._withheld_owners(tmp_path, {"src/r1.py"}) == {}
+    assert not any(k.endswith(names[1] + ".json") for k in hr._OWNER_RAW)
+
+
+def test_withheld_owners_stops_at_the_read_deadline_instead_of_reading_on(tmp_path, monkeypatch):
+    """A stalled disk spends the deadline once; the files not reached read as withholding nothing."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    hr._OWNER_RAW.clear()
+    names = _index_runs(tmp_path, 40)
+    ticks = iter(range(10_000))
+    monkeypatch.setattr(idx, "_clock", lambda: float(next(ticks)))  # one "second" per check
+    reads = _count_index_reads(monkeypatch)
+    got = hr._withheld_owners(tmp_path, {f"src/r{i}.py" for i in range(40)})
+    assert len(reads) <= int(idx.READ_DEADLINE_SECS) + 1 + len(got)
+    assert 0 < len(got) < 40
+    assert all(got[f"src/r{i}.py"] == names[i] for i in range(40) if f"src/r{i}.py" in got)
+
+    monkeypatch.undo()
+    hr._OWNER_RAW.clear()
+    assert len(hr._withheld_owners(tmp_path, {f"src/r{i}.py" for i in range(40)})) == 40  # unbounded clock: all read
+
+
 @pytest.mark.parametrize("count", [1, 6])
 def test_foreign_halted_withheld_fetches_only_blobs_of_runs_withholding_a_wanted_path(tmp_path, monkeypatch, count):
     """A landing whose paths no halted run withholds reads no blob; the one run that does is read alone."""

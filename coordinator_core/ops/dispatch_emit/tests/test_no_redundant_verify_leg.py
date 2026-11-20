@@ -37,8 +37,9 @@ def _emit_script(tmp_path, *, with_test: bool) -> str:
 def test_ask_wave_gate_returns_before_its_agent_call_when_the_terminal_tests_run() -> None:
     body = _wave_gate_body(_ask_script())
 
-    assert f"if ({_FLAG}) return true;" in body
-    assert body.index(f"if ({_FLAG}) return true;") < body.index("agent(")
+    skip = f"if ({_FLAG} && !_addedTests.length) return true;"
+    assert skip in body
+    assert body.index(skip) < body.index("agent(")
 
 
 def test_ask_terminal_tests_flag_is_a_top_level_binding_the_wave_gate_can_read() -> None:

@@ -27,6 +27,7 @@ import re
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional, Tuple
 
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.hooks.support.session_hub import ensure_session_dir
 from coordinator_core.session_hub_path import session_dir_for
 
@@ -113,19 +114,30 @@ def role_marker_present(directory: str) -> bool:
     return os.path.isfile(os.path.join(directory, ROLE_MARKER_NAME))
 
 
+#: Longest a caller waits on one record write; the write is best-effort, a drop returns False.
+WRITE_DEADLINE_SECS = 0.15
+
+
 def _atomic_write(directory: str, name: str, payload: str) -> bool:
-    tmp = os.path.join(directory, f".{name}.{os.getpid()}.tmp")
-    try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(payload)
-        os.replace(tmp, os.path.join(directory, name))
-        return True
-    except OSError:
+    """tmp + replace of `directory/name`; False on OSError or when the write has not finished within
+    `WRITE_DEADLINE_SECS` (the worker completes late; `bounded_io` drops later calls on that target meanwhile)."""
+    target = os.path.join(directory, name)
+
+    def write() -> bool:
+        tmp = os.path.join(directory, f".{name}.{os.getpid()}.tmp")
         try:
-            os.remove(tmp)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            os.replace(tmp, target)
+            return True
         except OSError:
-            pass
-        return False
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return False
+
+    return run_bounded(target, write, deadline=WRITE_DEADLINE_SECS, default=False)
 
 
 def write_role_marker(directory: str, session_id: str) -> bool:

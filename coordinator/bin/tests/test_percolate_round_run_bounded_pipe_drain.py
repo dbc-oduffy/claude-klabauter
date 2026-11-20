@@ -56,6 +56,7 @@ def stop_file(tmp_path):
     path.write_text("stop", encoding="utf-8")
 
 
+@pytest.mark.deliberate_wall_clock(reason="returning at child exit rather than at pipe close is a wall-clock bound; that bound is the behaviour under test")
 def test_run_returns_when_child_exits_though_grandchild_holds_stdout(stop_file):
     started = time.monotonic()
     result = _mod._run([sys.executable, "-c", _CHILD_SRC, str(stop_file)], timeout=300.0)
@@ -74,6 +75,7 @@ def test_run_timeout_still_returns_124_with_partial_output():
     assert "timed out after 3.0s" in result.stderr
 
 
+@pytest.mark.deliberate_wall_clock(reason="returning at git exit rather than at pipe close is a wall-clock bound; that bound is the behaviour under test")
 def test_git_bytes_returns_when_git_exits_though_a_holder_keeps_the_pipe(tmp_path, monkeypatch, stop_file):
     real_run = subprocess.run
     seen = {}

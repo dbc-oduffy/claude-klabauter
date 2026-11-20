@@ -23,6 +23,15 @@ DENY_REASON = (
 )
 
 
+def deny_reason(cwd: str) -> str:
+    """``DENY_REASON`` plus the human ``!`` touch of the approval marker at the absolute git dir
+    governing ``cwd`` (forward slashes, so it runs in any shell); bare ``DENY_REASON`` when no git dir resolves."""
+    marker = _sentinel_path(cwd)
+    if marker is None:
+        return DENY_REASON
+    return f'{DENY_REASON} Human: `! touch "{Path(os.path.abspath(marker)).as_posix()}"`.'
+
+
 def git_dir_for(cwd: str) -> Optional[Path]:
     """The git dir governing ``cwd``, read off the filesystem (no spawn); a
     ``.git`` file (worktree / submodule) is followed to its ``gitdir:`` target."""

@@ -8,8 +8,12 @@ listed path with the same attribution `land_run` uses (`run_hunk_claims.own_hunk
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional, Sequence
+
+
+_RUN_ID_TRAILER = re.compile(r"^Checkpoint-Run-Id:([^\r\n]*)", re.M)
 
 
 def _norm(path: str) -> str:
@@ -47,6 +51,9 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
         plan = _message_plan(message)
         if not plan:
             return None
+        requested = [value.strip() for value in _RUN_ID_TRAILER.findall(message)]
+        if len(requested) > 1 or requested == [""]:
+            return None
         from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import run_token
@@ -56,6 +63,7 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
             record["run_id"]
             for record in run_token.live_records(root)
             if record.get("session_id") == session_id
+            and (not requested or record["run_id"] == requested[0])
             and (own := _sizing_plan(
                 root, record.get("sizing_rel") or warp_run_deliverable.record_sizing_rel(root, record["run_id"])
             ))
@@ -227,13 +235,16 @@ def _new_definitions(live: Optional[str], head: Optional[str]) -> tuple[set[str]
     return live_names - head_names, new_params
 
 
-def _uses_new_definition(
+def uses_new_definition(
     source: str, module: str, new_names: set[str], new_params: dict[str, set[str]],
+    package: Optional[str] = None, star: bool = False,
 ) -> Optional[str]:
     """What `source` uses from `module`'s new definitions, or None. A consumer must import `module`
-    (dotted) by `import m`, `from m import x` or `from parent import leaf`. Relative imports
-    (`from . import x`) are not resolved, so such a consumer is not held; an attribute or keyword
-    match is by name alone, so an unrelated same-named attribute over-holds (the safe side)."""
+    (dotted) by `import m`, `from m import x` or `from parent import leaf`. A relative import
+    (`from . import leaf`, `from .leaf import x`) resolves against `package`, the dotted package of
+    the consumer; with `package=None` it is not resolved, so such a consumer is not held. An
+    attribute or keyword match is by name alone, so an unrelated same-named attribute over-holds
+    (the safe side). `star=True` also judges a bare name use in a `from module import *` consumer."""
     import ast
 
     try:
@@ -241,15 +252,24 @@ def _uses_new_definition(
     except (SyntaxError, ValueError):
         return None
     parent, _, leaf = module.rpartition(".")
+    pkg_parts = package.split(".") if package else []
     imported = False
+    starred = False
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.level == 0:
-            if node.module == module:
+        if isinstance(node, ast.ImportFrom):
+            from_module = node.module
+            if node.level:
+                keep = len(pkg_parts) - (node.level - 1)
+                if package is None or keep < 0 or (keep == 0 and not node.module):
+                    continue
+                from_module = ".".join([*pkg_parts[:keep], *([node.module] if node.module else [])])
+            if from_module == module:
                 imported = True
+                starred = starred or any(a.name == "*" for a in node.names)
                 for alias in node.names:
                     if alias.name in new_names:
                         return f"imports {module}.{alias.name}"
-            elif node.module == parent and any(a.name == leaf for a in node.names):
+            elif from_module == parent and any(a.name == leaf for a in node.names):
                 imported = True
         elif isinstance(node, ast.Import) and any(a.name == module for a in node.names):
             imported = True
@@ -258,6 +278,8 @@ def _uses_new_definition(
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and node.attr in new_names:
             return f"uses {module}.{node.attr}"
+        if star and starred and isinstance(node, ast.Name) and node.id in new_names:
+            return f"uses {module}.{node.id} via import *"
         if isinstance(node, ast.Call):
             fn = node.func
             callee = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
@@ -321,7 +343,7 @@ def consumers_of_withheld_definitions(
                     src = sources.get(path)
                     if path in found or not src:
                         continue
-                    why = _uses_new_definition(src, module, names, params)
+                    why = uses_new_definition(src, module, names, params)
                     if why:
                         found[path] = f"{why}, defined only in withheld {prod}"
                         held.add(path)
@@ -460,7 +482,15 @@ def checkpoint_own_blobs(
         credited = credited | family
         for path in [p for p in uncredited if p not in family]:
             withheld.append(path)
-            why[path] = family_why.get(path, NO_PRINT_REASON)
+            why[path] = (
+                (
+                    family_why[path]
+                    if family_why[path].startswith(family_credit.AUTHORED_FALSE)
+                    else f"family-stage failure: {family_why[path]}"
+                )
+                if path in family_why
+                else NO_PRINT_REASON
+            )
         pending = [p for p in pending if p in prints or p in credited]
         if not pending:
             return {}, sorted(set(withheld))

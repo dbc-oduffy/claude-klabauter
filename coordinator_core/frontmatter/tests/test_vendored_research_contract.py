@@ -47,7 +47,7 @@ def test_vendored_versions() -> None:
     # 3.23 -> 3.24: claude-klabauter-first bump adding optional `expect_partial`; pinned at 3.24.0.
     # test_register_rows_shape tracks 3.24.0 too (minItems dropped).
     # DoE re-sync is out of scope here.
-    assert _version(_SIZING) == "1.54.0"
+    assert _version(_SIZING) == "1.55.0"
     assert _version(_HANDOFF) == "11.7.1"
     assert _version(_PLAN_TASKS) == "3.24.0"
 

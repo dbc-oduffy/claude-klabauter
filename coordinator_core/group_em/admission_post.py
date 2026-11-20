@@ -85,6 +85,20 @@ def record_undelivered(artifact_dir: Path, posted: dict) -> None:
         print(f"admission_post: undelivered record not written to {artifact_dir}: {exc}", file=sys.stderr)
 
 
+def _holder_denial(directory: Optional[Path]) -> Optional[str]:
+    """``box_holder_denied:<exc>`` when the OS denies reading the box holder record, else None.
+
+    ``nomination.box_holder`` folds a denied read into None; an absent record stays None here.
+    """
+    try:
+        nomination._box_record_path(directory).read_bytes()
+    except PermissionError as exc:
+        return f"box_holder_denied:{type(exc).__name__}:{exc}"
+    except OSError:
+        return None
+    return None
+
+
 def post(
     phase: str,
     session_id: str,
@@ -99,7 +113,8 @@ def post(
     """Append one admission line for the box Group EM; return a structured reply.
 
     ``posted`` is False with ``reason`` ``bad_phase``, ``bad_peak`` (REQUEST without a valid
-    ``declared_peak_mb``) or ``no_box_holder`` when nothing was
+    ``declared_peak_mb``), ``no_box_holder`` (record absent) or ``box_holder_denied:*`` (record
+    present but the OS denied reading it, e.g. a sandbox) when nothing was
     written. ``delivered`` is True only when this call's line was verified present at
     ``path``; otherwise ``posted`` and ``delivered`` are False, ``reason`` names the failure
     (``write_failed:*``, ``short_write``, ``not_found_at_path``) and a stderr line is printed.
@@ -119,6 +134,9 @@ def post(
     holder = nomination.fleet_holder(directory, now) or nomination.box_holder(directory, now)
     if holder is None:
         if require_holder:
+            denial = _holder_denial(directory)
+            if denial:
+                return {"posted": False, "reason": denial}
             return {"posted": False, "reason": "no_box_holder"}
         holder = {}
     live: list[int] = []

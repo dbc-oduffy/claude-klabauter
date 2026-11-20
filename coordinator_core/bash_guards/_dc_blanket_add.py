@@ -42,6 +42,7 @@ from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 from coordinator_core.bash_guards._rewrite_support import _alt_record, _crlf_strip, _offer, _override
+from coordinator_core.git import repo_root
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 
@@ -386,8 +387,8 @@ def check_blanket_git_add(
     _ga_dash_c_cwd = _ga_candidates[0]
     git_root = ""
     for _cand in _ga_candidates:
-        rc, out = _dc_git_probe._run_git(["rev-parse", "--show-toplevel"], cwd=_cand)
-        _root = out.strip() if rc == 0 else ""
+        _top = repo_root.show_toplevel(_cand)
+        _root = Path(_top).as_posix() if _top else ""
         if not _root:
             continue
         if not git_root:

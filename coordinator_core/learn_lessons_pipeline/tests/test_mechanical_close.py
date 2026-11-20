@@ -359,6 +359,31 @@ def test_op_write_reports_residue_ids_and_defaults_to_repo_root(tmp_path: Path) 
     assert _call("learn_lessons_pipeline.mechanical_close", {"dry_run": True}, tmp_path)["report"]["verdicts"] == []
 
 
+def _bad_row(home: Path, name: str) -> Path:
+    p = home / f"{name}.yaml"
+    p.write_text("title: x\nkey: text: more\n", encoding="utf-8")
+    return p
+
+
+def test_unreadable_row_is_named_in_dry_run_and_write_reports(tmp_path: Path) -> None:
+    _mixed_queue(tmp_path)
+    bad = _bad_row(_home(tmp_path), "z-bad")
+    before = bad.read_bytes()
+    dry = _call("learn_lessons_pipeline.apply_mechanical", {"dry_run": True}, tmp_path)["report"]
+    assert dry["unreadable"] == ["z-bad"] and "z-bad" not in dry["residue_ids"]
+    written = _call("learn_lessons_pipeline.apply_mechanical", {}, tmp_path)["report"]
+    assert written["unreadable"] == ["z-bad"] and "z-bad" not in written["residue_ids"]
+    assert bad.read_bytes() == before
+
+
+def test_unreadable_is_empty_and_sorted_when_all_parse_or_several_fail(tmp_path: Path) -> None:
+    _mixed_queue(tmp_path)
+    assert _call("learn_lessons_pipeline.apply_mechanical", {"dry_run": True}, tmp_path)["report"]["unreadable"] == []
+    _bad_row(_home(tmp_path), "y-bad")
+    _bad_row(_home(tmp_path), "x-bad")
+    assert _call("learn_lessons_pipeline.apply_mechanical", {"dry_run": True}, tmp_path)["report"]["unreadable"] == ["x-bad", "y-bad"]
+
+
 def test_unknown_repo_is_refused_naming_the_param(tmp_path: Path) -> None:
     for name in ("learn_lessons_pipeline.apply_mechanical", "learn_lessons_pipeline.mechanical_close"):
         for dry in (True, False):

@@ -115,6 +115,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     terminal_test_scope,
 )
 from coordinator_core.ops.dispatch_emit import run_cancel, run_lineage
+from coordinator_core.ops.dispatch_emit.em_test_criterion import em_owed_test_criterion
 from coordinator_core.ops.dispatch_emit.inventory_mint import strip_literal_pathspec
 from coordinator_core.ops import scratch_delete
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
@@ -369,6 +370,14 @@ def _test_scope(waves, root: Path, probes: Optional[dict] = None) -> tuple[tuple
         }
     except NoWritesDeclaredError as exc:
         return (), {"reason": str(exc), "unmapped_paths": [], "testable_omissions": []}
+
+
+_CPP_SUFFIXES = (".cpp", ".h", ".hpp", ".inl")
+
+
+def _is_cpp_target(target: str) -> bool:
+    """A C++ test target: pytest collects zero from it, so it never reaches the pytest leg."""
+    return target.split("::", 1)[0].lower().endswith(_CPP_SUFFIXES)
 
 
 def _wave_test_scopes(waves, root: Path, probes: Optional[dict] = None) -> dict[str, tuple[str, ...]]:
@@ -1083,6 +1092,19 @@ def _family_routing_report(sizing_family: str, row_families: Mapping[str, str]) 
             "(none, pinned to another agent_type, or already routed); all rows run on claude"
         ]
     return out
+
+
+def _unbound_family_refusal(
+    sizing_rel: Optional[str], sizing_family: str, row_families: Mapping[str, str], inherited: bool
+) -> Optional[str]:
+    """Refusal text when the sizing's own top-level non-claude `family` is bound by no row; None otherwise.
+    An inherited family (`inherited`) keeps the routing report's warning."""
+    if inherited or sizing_family == "claude" or sizing_family in row_families.values():
+        return None
+    return (
+        f"sizing {sizing_rel or ''} family {sizing_family!r} reached no row: no executor row was free to take it "
+        "(none, pinned to another agent_type, or already routed). Free a write row or drop `family`."
+    )
 
 
 def _staged_dependencies(raw: Mapping, staged: Sequence[ManifestRow]) -> tuple[tuple[str, ...], int]:
@@ -2077,6 +2099,9 @@ def stage(
         if unchanged:
             raise AskStageError(unchanged)
 
+    unbound = _unbound_family_refusal(run_sizing_rel, sizing_family, row_families, bool(family_inherited))
+    if unbound:
+        raise AskStageError(unbound)
     if family_report is not None:
         family_report.update(_family_routing_report(sizing_family, row_families))
         if family_inherited:
@@ -2196,6 +2221,14 @@ def stage(
         review_code = _dedupe_preserve_order(
             [*review_code, *review_floor.code_paths(commit_pathspec_or_none(dropped_landed) or [])]
         )
+    em_owed = em_owed_test_criterion(list(raw_by_id.values()), declared)
+    if em_owed:
+        test_targets = tuple(t for t in test_targets if not _is_cpp_target(t))
+        wave_test_targets = {
+            k: v for k, v in ((k, tuple(t for t in v if not _is_cpp_target(t))) for k, v in wave_test_targets.items()) if v
+        }
+        if test_targets:
+            em_owed = None
     with leg("baseline"):
         write_baseline = _stage_write_baseline(root, manifest_rows, record, run_sizing_rel)
     manifest = StageManifest(
@@ -2210,6 +2243,7 @@ def stage(
         engine_rows=_engine_rows(root, plan_path, raw_by_id, gated, run_sizing, sibling_roots),
         test_targets=test_targets,
         no_test_target=no_test_target,
+        em_owed_test_criterion=em_owed,
         wave_test_targets=wave_test_targets,
         fanout=fanout.meta_dict(),
         doc_writes=docs,
@@ -2246,6 +2280,8 @@ def stage(
     except (OSError, ValueError):
         pass
     stamp_run_stage(root, run_id, "staged", steps_planned=len(manifest_rows))
+    if run_sizing_rel:
+        _retire_minted_shells(root, run_id, run_sizing_rel)
     if session_id:
         # Confined reviewers' Edits are admitted only for review-targets.txt
         # paths; the plan route registers them at compose time, the ask route
@@ -2259,6 +2295,45 @@ def stage(
         except LedgerError:
             pass
     return manifest
+
+
+def _retire_minted_shells(root: Path, run_id: str, sizing_rel: str) -> list[str]:
+    """Retire each older `ask-*` run of `sizing_rel` still at stage `minted` as superseded by `run_id`
+    (`halted_run.mark_shell_superseded`): one sizing maps to one live run id, and the minted reaper must not
+    halt a shell whose work continues here. Candidates are the live tokens and live-run index rows only,
+    never a scan of the record root. Returns the retired ids; never raises (the stage already succeeded)."""
+    from datetime import datetime, timezone
+
+    retired: list[str] = []
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_run, live_run_index, live_run_writes, run_token
+
+        stem = PurePosixPath(sizing_rel.replace("\\", "/")).stem
+        candidates = {r.get("run_id"): r.get("sizing_rel") for r in run_token.held_records(root)}
+        rows = live_run_index.read(root, 150.0)
+        for rid in rows if isinstance(rows, dict) else ():
+            candidates.setdefault(rid, None)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for rid, token_sizing in sorted(candidates.items(), key=lambda kv: str(kv[0])):
+            if (
+                not isinstance(rid, str) or not rid.startswith("ask-") or rid == run_id or not safe_id(rid)
+                or halted_run._run_stamp(rid) >= halted_run._run_stamp(run_id)
+            ):
+                continue
+            bound = halted_run.bound_sizing_rel(root, rid) or (token_sizing if isinstance(token_sizing, str) else "")
+            if not bound or PurePosixPath(bound.replace("\\", "/")).stem != stem:
+                continue
+            if not halted_run.mark_shell_superseded(record_dir(root, rid), successor=run_id, sizing_rel=sizing_rel, at=now):
+                continue
+            if run_token._read_rec(root, rid, claimed=True) is None:
+                run_token.discard(root, rid)
+            live_run_writes.index_remove(root, rid)
+            retired.append(rid)
+    except Exception as exc:  # noqa: BLE001
+        import sys
+
+        print(f"advisory: minted shells of {sizing_rel} not retired by {run_id}: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return retired
 
 
 CRITERION_UNREACHABLE_AT_STAGING = "CRITERION-UNREACHABLE-AT-STAGING"

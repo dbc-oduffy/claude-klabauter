@@ -48,6 +48,7 @@ from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -1005,6 +1006,7 @@ _REVERIFY_SCHEMA = {
 }
 #: Owned-first leg result: `tests_run` counts what ran, `not_run` names the capped remainder.
 _REVERIFY_SCHEMA["properties"]["tests_run"] = {"type": "integer"}
+_REVERIFY_SCHEMA["properties"]["zero_run_cause"] = {"type": "string"}
 _REVERIFY_SCHEMA["properties"]["not_run"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["passed_alone"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["passed_at_base"] = {"type": "array", "items": {"type": "string"}}
@@ -1109,9 +1111,12 @@ def _test_leg_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
     return f"scratch/reverify-test-leg-{token}.json"
 
 
-def _test_leg_clause(base_ref: str, export_path: str, json_path: str) -> str:
+def _test_leg_clause(
+    base_ref: str, export_path: str, json_path: str, *, repo_root: str, shell: str,
+) -> str:
     """Step 2's single engine command running the pytest targets, base measure included; the base
     arguments are omitted when the base is the unset placeholder."""
+    from coordinator_core.ops.dispatch_emit.ask_compose import engine_module_command
     from coordinator_core.ops.test_leg_run import TEST_LEG_MINUTES_BUDGET
 
     base = (
@@ -1119,12 +1124,18 @@ def _test_leg_clause(base_ref: str, export_path: str, json_path: str) -> str:
         if base_ref == "run_base_sha"
         else f"--base-sha {base_ref} --head-sha HEAD --base-export-out {export_path} "
     )
+    command = engine_module_command(
+        "coordinator_core.ops.test_leg_run", repo_root, f"{base}--out {json_path} --",
+        portable=True, shell=shell,
+    )
     return (
-        f" Run all the pytest targets in ONE command, in the foreground through Bash with timeout {(TEST_LEG_MINUTES_BUDGET + 1) * 60_000} "
-        f"(create `scratch/` first if absent): `python -m coordinator_core.ops.test_leg_run {base}"
-        f"--out {json_path} -- <the pytest targets>`. Run it once: never repeat it, split it per id, "
+        f" Run all the pytest targets in ONE foreground command using the native shell, with timeout "
+        f"{(TEST_LEG_MINUTES_BUDGET + 1) * 60_000} (create `scratch/` first if absent): "
+        f"`{command} <the pytest targets>`. Run it once: never repeat it, split it per id, "
         "detach it or wait on it. Its JSON gives `failing`, `failing_detail` and `passed_alone`; the "
-        "node test files above are the only tests run outside it. "
+        "node test files above are the only tests run outside it. If the runner receipt has tests_run 0 and "
+        "status error with zero_run_cause, return tests_run 0, status_before indeterminate, and that "
+        "zero_run_cause. Return empty failing, failing_detail and reverted lists and stop before probe or revert. "
     )
 
 
@@ -1204,6 +1215,7 @@ def _reverify_phase(
     deferred: bool = False,
     integration_bound: bool = False,
     run_key: str = "",
+    snapshot_session_id: str = "",
 ) -> Tuple[str, str]:
     """The ``Review re-verify`` phase: a test-runner lists what review changed (``review.reverify``
     list mode), runs only the tests covering it, and reverts the implicated files in revert mode
@@ -1222,14 +1234,22 @@ def _reverify_phase(
     the same value."""
     agent_type, role = _host_native(_REVERIFY_AGENT_TYPE, host_degraded)
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
-    invoke = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+    invoke = (
+        "coordinator-invoke" if os.name == "nt"
+        else '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+    )
     key_args = f',"run_key":{json.dumps(run_key)}' if run_key else ""
+    if snapshot_session_id:
+        key_args += f',"session_id":{json.dumps(snapshot_session_id)}'
     base_args = f'"base":"{base_ref}","slice_prefix":"{prep_slice_id}"{key_args}'
     run_args = f',"run_id":{json.dumps(run_id)},"plan_path":{json.dumps(plan_path)}' if run_id else ""
     sidecars_js = _REVERIFY_SIDECARS_JS
     export_path = _base_export_file(run_key, run_id, prep_slice_id)
     base_path_arg = "" if base_ref == "run_base_sha" else f',"base_export_path":"{export_path}"'
-    test_leg = _test_leg_clause(base_ref, export_path, _test_leg_file(run_key, run_id, prep_slice_id))
+    test_leg = _test_leg_clause(
+        base_ref, export_path, _test_leg_file(run_key, run_id, prep_slice_id),
+        repo_root=repo_root or ".", shell="powershell" if os.name == "nt" else "bash",
+    )
     from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND
 
     owned_first = _REVERIFY_OWNED_FIRST_CLAUSE.format(
@@ -1397,11 +1417,45 @@ def _reverify_phase(
     prefix = f"agent({_prompt_literal(prompt)}, "
     if not call.startswith(prefix):
         raise ValueError("re-verify agent call does not open with its prompt literal")
-    call = f"agent({_prompt_literal(prompt)} + '\\n' + {sidecars_js}, " + call[len(prefix):]
+    host_intro = (
+        "The workflow host already ran the initial test leg. Use the host receipt as the "
+        "initial verdict and evidence. Do not rerun that leg. Follow only failure reconciliation. "
+        "Host test receipt: "
+    )
+    before_leg, separator, after_leg = prompt.partition(test_leg)
+    if not separator:
+        raise ValueError("re-verify prompt omitted its test leg")
+    prompt_js = (
+        f"{_prompt_literal(before_leg)} + "
+        f"(_hostReverify ? ' Use the completed host test receipt. ' : {_prompt_literal(test_leg)}) + "
+        f"{_prompt_literal(after_leg)}"
+    )
+    host_prompt_js = (
+        f"(_hostReverify ? {_prompt_literal(host_intro)} + JSON.stringify(_hostReverify) + '\\n\\n' : '')"
+    )
+    call = f"agent({host_prompt_js} + _reviewPrompt + '\\n' + {sidecars_js}, " + call[len(prefix):]
     call = sc(call, "reverify", agent_type)
+    host_params = json.dumps({
+        "base": base_ref, "slice_prefixes": [*group_prefixes, prep_slice_id],
+        "session_id": snapshot_session_id, "run_key": run_key or run_id or prep_slice_id,
+        "verify_scope_targets": dict(verify_scope_targets or {}),
+    })
     run_js = (
-        f"((r) => r ? {{ ...r, unapplied: {_REVERIFY_UNAPPLIED_JS} }} : null)"
-        f"(await {_degrading(call)})"
+        "(await (async () => {"
+        " const _hostReverify = typeof engineOp === 'function'"
+        f" ? await engineOp('review.reverify.host_test_leg', {host_params}).catch(error => ({{"
+        " edited: [], failing: [], failing_detail: [], reverted: [], tests_run: 0,"
+        " status_before: 'indeterminate', reverify_error: String(error) })) : null;"
+        f" const _reviewPrompt = {prompt_js};"
+        " const worker = _hostReverify && _hostReverify.status_before !== 'fail' ? null :"
+        f" await {_degrading(call)};"
+        " const r = _hostReverify ? { ...worker, ..._hostReverify,"
+        " reverted: worker?.reverted ?? _hostReverify.reverted,"
+        " status_after: worker?.status_after ?? null,"
+        " ...Object.fromEntries(['not_run','pre_existing','passed_alone','passed_at_base'].map("
+        " k => [k, [...new Set([...(_hostReverify[k] ?? []), ...(worker?.[k] ?? [])])]])) } : worker;"
+        f" return r ? {{ ...r, unapplied: {_REVERIFY_UNAPPLIED_JS} }} : null;"
+        " })())"
     )
     if deferred:
         block = (
@@ -1510,6 +1564,7 @@ def compose_execute_review(
     owned_red_path: str = "",
     prep_run_id: Optional[str] = None,
     share_prompt_head: Optional[bool] = None,
+    snapshot_session_id: str = "",
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -1855,7 +1910,9 @@ def compose_execute_review(
     whole_diff_agents = [a for a in all_whole_diff_agents if _runs_at_compile_tier(a)]
 
     item_lines: List[str] = []
-    wave_mode_args = f"\"head\":\"{review_terminal_sha}\"" if review_terminal_sha else "\"worktree\":true"
+    wave_mode_args = (
+        f"\"head\":\"{review_terminal_sha}\",\"committed_only\":true" if review_terminal_sha else "\"worktree\":true"
+    )
     # review.prep takes exactly one of paths or run_id: paths mode carries no run_id.
     if safe_run_id and prep_run_id is not None:
         wave_mode_args += f",\"run_id\":{json.dumps(safe_run_id)}"
@@ -2462,6 +2519,7 @@ def compose_execute_review(
                 deferred=reverify_deferred,
                 integration_bound=review.integration is not None,
                 run_key=safe_run_id,
+                snapshot_session_id=snapshot_session_id,
             )
         )
 

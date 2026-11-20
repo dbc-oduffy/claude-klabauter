@@ -17,6 +17,7 @@ Traps:
 - Last, `run` sweeps `.minted` entries (`_sweep_minted_without_dispatch`): a run still at stage `minted`
   `MINTED_DISPATCH_DEADLINE_SECONDS` after its mint, with no activity on it or any chained child, is halted
   `minted_without_dispatch` and its submitting session noticed. Halts are not part of the counts.
+  Then `_sweep_stalled_launcher_children` halts a launcher child (no `.minted` entry) at `minted`/`executing` with no run dir.
 """
 
 from __future__ import annotations
@@ -494,22 +495,29 @@ def _chained_child_active(root: Path, run_id: str, now: float, bound: float) -> 
     return False
 
 
-def _halt_minted_without_dispatch(root: Path, run_id: str, session: object, age: float) -> bool:
-    """Halt `run_id` as `minted_without_dispatch` and notice `session`; False when the marker could not be written."""
+def _halt_minted_without_dispatch(
+    root: Path, run_id: str, session: object, age: float, *, cause: Optional[str] = None
+) -> bool:
+    """Halt `run_id` as `minted_without_dispatch` and notice `session`; False when the marker could not be written.
+
+    A non-None `cause` is the whole halt reason; None words it for a spool entry that was never dispatched."""
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
 
-    script = root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
-    cause = (
-        "no launcher started the run's workflow"
-        if script.is_file()
-        else "its workflow script is absent, so nothing could start it"
-    )
-    reason = (
-        f"never dispatched: minted {int(age)}s ago (bound {int(MINTED_DISPATCH_DEADLINE_SECONDS)}s) and still at stage "
-        f"minted with no activity on the run or any chained child; {cause}. "
-        "Instead: re-fire the ask, or start the run's workflow script."
-    )
+    if cause is not None:
+        reason = cause
+    else:
+        script = root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
+        why = (
+            "no launcher started the run's workflow"
+            if script.is_file()
+            else "its workflow script is absent, so nothing could start it"
+        )
+        reason = (
+            f"never dispatched: minted {int(age)}s ago (bound {int(MINTED_DISPATCH_DEADLINE_SECONDS)}s) and still at stage "
+            f"minted with no activity on the run or any chained child; {why}. "
+            "Instead: re-fire the ask, or start the run's workflow script."
+        )
     try:
         halted_run.write_halt_marker(
             record_dir(root, run_id),
@@ -558,6 +566,66 @@ def _sweep_minted_without_dispatch(repo_root: str, now: float) -> None:
                 continue
             _halt_minted_without_dispatch(root, run_id, header.get("session_id"), age)
         except Exception:  # noqa: BLE001 - one unreadable entry never blocks the rest
+            continue
+
+
+def _has_run_dir(path: Path) -> bool:
+    """True when `path` holds anything beyond `submission.json` (drain writes that before any start)."""
+    try:
+        with os.scandir(path) as it:
+            return any(e.name != _SUBMISSION for e in it)
+    except OSError:
+        return False
+
+
+def _sweep_stalled_launcher_children(repo_root: str, now: float) -> None:
+    """Halt each record dir whose run-stage reads `minted`/`executing`, with no run dir, silent past `MINTED_DISPATCH_DEADLINE_SECONDS`.
+
+    Launcher children have no spool `.minted` entry, so `_sweep_minted_without_dispatch` never sees them. One scandir of
+    the record root; a read only for dirs whose mtime lies between the deadline and `MINTED_SWEEP_LOOKBACK_SECONDS` ago.
+    Halted, landed and chained-child-active runs are untouched. Never raises."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, read_run_stage
+
+    root = Path(repo_root)
+    names: list = []
+    try:
+        with os.scandir(root / RECORD_DIR_ROOT) as it:
+            for e in it:
+                try:
+                    if not _SAFE_NAME.match(e.name):
+                        continue
+                    mtime = e.stat().st_mtime
+                    if MINTED_DISPATCH_DEADLINE_SECONDS <= now - mtime <= MINTED_SWEEP_LOOKBACK_SECONDS and e.is_dir():
+                        names.append((e.name, mtime))
+                except OSError:  # an entry that vanished mid-scan never aborts the rest
+                    continue
+    except OSError:
+        return
+    for run_id, mtime in names:
+        try:
+            stage = read_run_stage(root, run_id)
+            if not stage or stage.get("stage") != "minted" or stage.get("phase") != "executing":
+                continue
+            if _has_run_dir(root / RUN_DIR_ROOT / run_id):
+                continue
+            if wrd._halted(root, run_id) or wrd._landed(root, run_id):
+                continue
+            if not wrd._stale_at(root, run_id, "minted", MINTED_DISPATCH_DEADLINE_SECONDS, now):
+                continue
+            if _chained_child_active(root, run_id, now, MINTED_DISPATCH_DEADLINE_SECONDS):
+                continue
+            seen = wrd._stamp_epoch(stage.get("last_activity_at"))
+            if seen is None:
+                seen = wrd._stamp_epoch(stage.get("started_at"))
+            age = now - (seen if seen is not None else mtime)
+            cause = (
+                f"stalled at minted/executing with no run dir: no activity for {int(age)}s "
+                f"(bound {int(MINTED_DISPATCH_DEADLINE_SECONDS)}s); the child may never have started or may have stopped. "
+                "Instead: re-fire the child's ask."
+            )
+            _halt_minted_without_dispatch(root, run_id, stage.get("session_id"), age, cause=cause)
+        except Exception:  # noqa: BLE001 - one unreadable record never blocks the rest
             continue
 
 
@@ -658,6 +726,8 @@ def run(
             counts["notified"] += 1
         record.mark_minted(repo_root, sid)
         counts["coalesced" if coalesced else "minted" if minted_now else "skipped"] += 1
-    _sweep_minted_without_dispatch(repo_root, time.time() if now is None else now)
+    sweep_now = time.time() if now is None else now
+    _sweep_minted_without_dispatch(repo_root, sweep_now)
+    _sweep_stalled_launcher_children(repo_root, sweep_now)
     return counts
 

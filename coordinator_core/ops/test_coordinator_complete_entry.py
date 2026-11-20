@@ -1500,4 +1500,5 @@ def test_loe_tshirt_is_measured_session_effort_not_the_cited_sizing(tmp_path, mo
 
     assert "agent_dispatches: 71" in block
     assert 'tshirt: "XL"' in block
-    assert "sizing" not in Path(m.__file__).read_text(encoding="utf-8").lower().replace("sizing-object", "")
+    assert "tshirt_source" not in block
+    assert m._apply_sizing_tshirt(block, "S") == block

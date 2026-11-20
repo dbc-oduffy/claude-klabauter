@@ -182,6 +182,47 @@ def test_the_declared_growth_file_and_the_recorded_cut_land_in_the_same_commit(r
     assert not _git(repo, "status", "--porcelain", "--", CUT).strip()
 
 
+def _measure(root: Path, rel: str) -> None:
+    """A measured-rev record that pins *rel* at its current worktree blob."""
+    from coordinator_core.git.commit import checkin_blob_sha
+    from coordinator_core.ops.dispatch_emit.measured_rev import measured_rev_record_path
+
+    record = measured_rev_record_path(root, RUN)
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({"paths": [rel], "removed": [], "blobs": {rel: checkin_blob_sha(root, rel)}}), encoding="utf-8")
+
+
+def test_a_reviewed_path_at_the_runs_measured_blob_is_not_changed_after_review(repo, monkeypatch):
+    real = land_run._handler
+
+    def measured_handler(*a, **k):
+        _measure(repo, CUT)
+        return real(*a, **k)
+
+    monkeypatch.setattr(land_run, "_handler", measured_handler)
+    out = _land(repo, drift=True)
+
+    assert out["committed"] is True, out
+    assert CUT not in (out.get("withheld") or {}), out
+    assert CUT in _landed(repo), _landed(repo)
+
+
+def test_changed_after_review_decision_pins_both_sides(repo):
+    _write(repo, CUT, "reviewed\n")
+    reviewed_hash = touch_record.compute_content_hash(repo / CUT)
+    _git(repo, "add", CUT)
+    measured_blob = _git(repo, "rev-parse", f":{CUT}").strip()
+    _write(repo, CUT, "edited after review\n")
+    _git(repo, "add", CUT)
+    edited_blob = _git(repo, "rev-parse", f":{CUT}").strip()
+
+    assert land_run._changed_after_review(repo, CUT, reviewed_hash) is True
+    assert land_run._changed_after_review(repo, CUT, reviewed_hash, measured_blob) is True
+    assert land_run._changed_after_review(repo, CUT, reviewed_hash, edited_blob) is False
+    _write(repo, CUT, "reviewed\n")
+    assert land_run._changed_after_review(repo, CUT, reviewed_hash, None) is False
+
+
 def test_a_reviewed_edit_changed_after_review_is_named_never_silently_dropped(repo):
     out = _land(repo, drift=True)
 

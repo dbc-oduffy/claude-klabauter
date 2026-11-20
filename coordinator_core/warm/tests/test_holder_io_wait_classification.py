@@ -96,11 +96,10 @@ def test_real_probe_on_a_tmp_dir_is_healthy(tmp_path: Path) -> None:
 
 
 def test_real_probe_cost_on_a_healthy_drive_stays_inside_the_brightline(tmp_path: Path) -> None:
-    server._holder_drive_probe_ms(tmp_path)
-    t0 = time.perf_counter()
-    for _ in range(5):
-        server._holder_drive_probe_ms(tmp_path)
-    assert (time.perf_counter() - t0) / 5 < 0.05
+    from coordinator_core.benchmarks.process_time import in_process_time_ms
+
+    cost = in_process_time_ms(lambda: server._holder_drive_probe_ms(tmp_path))
+    assert cost["process_time_ms"] < 50
 
 
 def test_drive_verdict_stall_reads_as_infinitely_slow(monkeypatch: pytest.MonkeyPatch) -> None:

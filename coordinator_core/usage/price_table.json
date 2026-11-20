@@ -30,6 +30,29 @@
         "cache_creation": 0.625
       }
     },
+    "gpt-6.2-sol": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.1,
+      "cache_creation": 2.5,
+      "fast_multiplier": 2.0,
+      "ultrafast_multiplier": 6.0,
+      "flex_multiplier": 0.5,
+      "batch_multiplier": 0.5,
+      "long_prompt_tier": {
+        "prompt_tokens_over": 272000,
+        "input": 4.0,
+        "output": 15.0,
+        "cache_read": 0.2,
+        "cache_creation": 5.0
+      },
+      "provenance": {
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "verified_at": "2026-11-19",
+        "basis": "API list prices; 30m cache writes",
+        "effective_from": null
+      }
+    },
     "gpt-6.1-sol": {
       "input": 2.0,
       "output": 10.0,

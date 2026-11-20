@@ -34,6 +34,7 @@ def _bare_ctx(tmp_path, monkeypatch):
     return ctx
 
 
+@pytest.mark.deliberate_wall_clock(reason="pool init not waiting on a blocked prune is the behaviour under test; the bound is a wait, not CPU cost")
 def test_pool_init_starts_no_journal_prune(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list = []
     monkeypatch.setattr(dispatch_ack, "prune_journal", lambda *a, **k: calls.append(a))
@@ -48,6 +49,7 @@ def test_pool_init_starts_no_journal_prune(tmp_path: Path, monkeypatch: pytest.M
     assert calls == []
 
 
+@pytest.mark.deliberate_wall_clock(reason="the probe deadline on a blocked open is the behaviour under test")
 def test_fs_probe_returns_within_bound_while_the_open_is_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = threading.Event()
     real_open = server.os.open
@@ -76,6 +78,7 @@ def _journal_msg():
     return {"method": "dispatch.emit", "params": {}}
 
 
+@pytest.mark.deliberate_wall_clock(reason="the caller deadline on a blocked record_outcome is the behaviour under test")
 def test_journal_landed_returns_within_bound_while_record_outcome_is_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = threading.Event()
     landed: list = []
@@ -111,6 +114,7 @@ def test_journal_landed_still_journals_on_a_healthy_dir(tmp_path: Path, monkeypa
     assert seen == [("k2", dispatch_ack.OUTCOME_RESULT)]
 
 
+@pytest.mark.deliberate_wall_clock(reason="the caller deadline on a blocked write is the behaviour under test")
 def test_boot_timing_row_returns_within_bound_while_the_write_is_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = threading.Event()
 

@@ -170,7 +170,7 @@ function _normPath(p) {
     const pending = (result !== null && typeof result === 'object') ? result.__PENDING_KEY__ : null;
     if (!pending) return { ok: true, result: result };
     if (round >= MAX_STAGE_ROUNDS) return { ok: false, error: 'stage_pending after ' + MAX_STAGE_ROUNDS + ' stage rounds' };
-    const base = firstPath.split('/').pop();
+    const base = _normPath(firstPath).split('/').pop();
     if (!base.endsWith(RUN_SCRIPT_SUFFIX) || base.length === RUN_SCRIPT_SUFFIX.length || base.indexOf('.staged-') !== -1) {
       return { ok: false, error: 'stage resume path is not a run script: ' + firstPath };
     }

@@ -290,6 +290,26 @@ def test_repo_root_param_queries_another_repo_and_rejects_a_missing_one(repo, tm
         wc._ceremony_wiki_candidates({}, repo_root=None)
 
 
+def test_dispatch_key_cwd_subdir_linked_worktree_and_param_give_identical_output(repo, tmp_path: Path) -> None:
+    _wiki(repo, "alpha", "src/a.py")
+    _plan(repo, "p1", tshirt="L")
+    linked = tmp_path / "linked"
+    _git(repo, "worktree", "add", "-q", "-b", "side", str(linked))
+    sub = repo / "src"
+    sub.mkdir()
+
+    via_common_dir = wc._ceremony_wiki_candidates({}, repo_root=repo / ".git")
+    via_worktree_root = wc._ceremony_wiki_candidates({}, repo_root=repo)
+    via_subdir = wc._ceremony_wiki_candidates({}, repo_root=sub)
+    via_linked = wc._ceremony_wiki_candidates({}, repo_root=linked)
+    via_param = wc._ceremony_wiki_candidates({"repo_root": str(repo)}, repo_root=None)
+    via_param_linked = wc._ceremony_wiki_candidates({"repo_root": str(linked)}, repo_root=None)
+
+    assert via_common_dir["pages"] and via_common_dir["preview_chars_total"] > 0
+    for other in (via_worktree_root, via_subdir, via_linked, via_param, via_param_linked):
+        assert other == via_common_dir
+
+
 def _scan_plan(repo: Path, name: str, *, status: str = "landed", day: datetime = _NOW) -> str:
     """Commit one dated plan with no ledger row (the ledger-less repo shape); returns its path."""
     rel = f"docs/plans/2026-11/{day.strftime('%Y-%m-%d')}-{name}.md"

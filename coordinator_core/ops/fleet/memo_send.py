@@ -2194,6 +2194,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     anchored = False
     anchor_ref = None
     push_pending_record = None
+    delivery_warning = ""
 
     if reconciled is not None:
         delivery_commit_sha = reconciled.sha
@@ -2230,9 +2231,12 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             }])
         delivery_commit_sha = delivered.commit_sha
         delivery_branch = _HEADS_PREFIX + (delivered.branch or probe.branch)
-        anchored = True
+        anchored = bool(delivered.anchor_ref)
         anchor_ref = delivered.anchor_ref
-        push_pending_record = str(delivered.record_path)
+        if delivered.record_path is not None:
+            push_pending_record = str(delivered.record_path)
+        if delivered.warning:
+            delivery_warning = delivered.warning
 
     delivered_to = _portable_delivered_to_form(receiver_repo_path, target_file, all_repos)
 
@@ -2335,11 +2339,9 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     sent_relpath = _relpath(sent_path)
     outbox_relpath = _relpath(draft_path)
     record_relpath = _relpath(record_path)
-    # A fresh upstream delivery is object-only (pin + anchor, never the receiver's
-    # branch); only a reconciled copy can already sit on the branch.
-    on_branch = reconciled is not None and _on_receiver_branch(
-        receiver_repo_path, probe.branch, rel_path
-    )
+    # "delivered" is reported only when the receiver's local branch tip holds the
+    # memo, whichever arm (fresh, local-tip CAS, reconciled) put it there.
+    on_branch = _on_receiver_branch(receiver_repo_path, probe.branch, rel_path)
     sender_message = apply_missing_trailers(
         _receipt_subject(
             topic, to, pinned=not on_branch, sha=delivery_commit_sha,
@@ -2473,6 +2475,8 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             f"command-and-output block — paste the command and its output in "
             f"a fenced block."
         )
+    if delivery_warning:
+        acted_item["anchor_warning"] = delivery_warning
     if push_pending_record is not None:
         acted_item["push_pending_record"] = push_pending_record
         acted_item["push_pending"] = True

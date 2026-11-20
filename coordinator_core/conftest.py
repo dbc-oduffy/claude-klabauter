@@ -842,6 +842,19 @@ def _reset_foreign_repo_probe_memo():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_engine_ask_nag_counter(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Point the once-per-session engine-ask nag counter at a per-test directory, so a fixed fake
+    session id never inherits a count from an earlier run on the box."""
+    import sys
+
+    warp_fire = sys.modules.get("coordinator_core.warp_fire")
+    if warp_fire is None:
+        return
+    store = _per_test_dir(request, tmp_path_factory, "engine_ask_nag")
+    monkeypatch.setattr(warp_fire, "_counter_dir", lambda: store)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_advisory_dedupe_gitdir(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     """Point the per-session advisory dedupe store at a per-test directory.
 
@@ -2035,6 +2048,49 @@ def managed_temp_session_start(session: pytest.Session) -> None:
     tempfile.tempdir = str(path)
 
 
+MANAGED_TEMP_LEFT_BY_PREFIX = "managed-temp: left by "
+MANAGED_TEMP_AFTER_LAST_TEST = " (after last test)"
+_SESSION_TEMP_SEEN_ATTR = "_managed_temp_seen"
+
+
+def managed_temp_note_test(session: pytest.Session, nodeid: str) -> None:
+    """One ``os.listdir`` of the session dir after a test: each new top-level name is charged to ``nodeid``.
+
+    Limit: the first test after which a name appears is blamed, so a legitimate mid-session
+    ``coordinator`` skeleton (pruned at finish) blames its creator, not a later leaker. The tree is
+    never walked.
+    """
+    state = getattr(session.config, _SESSION_TEMP_ATTR, None)
+    if state is None:
+        return
+    seen = getattr(session.config, _SESSION_TEMP_SEEN_ATTR, None)
+    if seen is None:
+        seen = {"names": {}, "last": None}
+        setattr(session.config, _SESSION_TEMP_SEEN_ATTR, seen)
+    seen["last"] = nodeid
+    try:
+        names = os.listdir(state[0])
+    except OSError:
+        return
+    for name in names:
+        seen["names"].setdefault(name, nodeid)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem) -> None:
+    managed_temp_note_test(item.session, item.nodeid)
+
+
+def _managed_temp_left_by(seen: "dict | None", name: str) -> str:
+    """``<nodeid>`` for a name seen after a test; ``<file> (after last test)`` for one that appeared later."""
+    seen = seen or {"names": {}, "last": None}
+    nodeid = seen["names"].get(name)
+    if nodeid is not None:
+        return nodeid
+    last = seen["last"]
+    return (last.split("::", 1)[0] if last else "<no test>") + MANAGED_TEMP_AFTER_LAST_TEST
+
+
 def managed_temp_session_finish(session: pytest.Session, exitstatus) -> None:
     """Restore ``tempfile.tempdir``; any entry left in the session dir fails a passing session.
 
@@ -2045,6 +2101,8 @@ def managed_temp_session_finish(session: pytest.Session, exitstatus) -> None:
     if state is None:
         return
     setattr(session.config, _SESSION_TEMP_ATTR, None)
+    seen = getattr(session.config, _SESSION_TEMP_SEEN_ATTR, None)
+    setattr(session.config, _SESSION_TEMP_SEEN_ATTR, None)
     path, saved = state
     tempfile.tempdir = saved
     for dirpath, _dirs, _files in os.walk(path / "coordinator", topdown=False):
@@ -2058,13 +2116,15 @@ def managed_temp_session_finish(session: pytest.Session, exitstatus) -> None:
         left = []
     for name in left[:20]:
         print(f"managed-temp: left in session Temp: {name}", file=sys.stderr)
+        print(f"{MANAGED_TEMP_LEFT_BY_PREFIX}{_managed_temp_left_by(seen, name)}: {name}", file=sys.stderr)
     if left and int(exitstatus) == 0:
         from coordinator_core.testing.fs_containment import force_exit_status
 
         force_exit_status(
             session,
             pytest.ExitCode.TESTS_FAILED,
-            f"{len(left)} entr{'y' if len(left) == 1 else 'ies'} left in session Temp {path}: {', '.join(left[:3])}",
+            f"{len(left)} entr{'y' if len(left) == 1 else 'ies'} left in session Temp {path}: {', '.join(left[:3])}"
+            f"; {MANAGED_TEMP_LEFT_BY_PREFIX}{_managed_temp_left_by(seen, left[0])}: {left[0]}",
         )
     shutil.rmtree(path, ignore_errors=True)
 

@@ -2,11 +2,11 @@
 import importlib.util
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from coordinator_core.codex_runner import contract
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from types import ModuleType

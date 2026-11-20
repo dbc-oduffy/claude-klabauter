@@ -398,16 +398,167 @@ def test_builtin_workspace_policy_has_no_custom_permission_selector() -> None:
     assert '_workspace_permissions' not in source
 
 
-def _stub_codex(monkeypatch, tmp_path):
+def _stub_codex(monkeypatch, tmp_path, *, response='{"a": 1}', responses=None):
     calls = _stub_family(monkeypatch, tmp_path, stdout_text='')
     inner = workflow._run_admitted
+    replies = iter(responses) if responses is not None else None
 
     def fake(argv, prompt, **kw):
-        Path(argv[argv.index('-o') + 1]).write_text('{"a": 1}', encoding='utf-8')
+        Path(argv[argv.index('-o') + 1]).write_text(
+            next(replies) if replies is not None else response, encoding='utf-8',
+        )
         return inner(argv, prompt, **kw)
 
     monkeypatch.setattr(workflow, '_run_admitted', fake)
     return calls
+
+
+@pytest.mark.parametrize("annotated", [False, True])
+def test_codex_gate_validates_json_rpc_result(tmp_path, monkeypatch, annotated):
+    # Captured from the 7f8eb5 gate; fixture paths stand in for the original sizing and baton.
+    result = {
+        "arm": "m_plus", "halt": None, "baton": "state/handoffs/gate.md",
+        "design_route": None, "acceptance": [], "sizing_path": "state/sizings/gate.yaml",
+        "tshirt": "L", "route": "plan",
+    }
+    envelope = {"jsonrpc": "2.0", "id": 1, "result": result}
+    if annotated:
+        envelope["note"] = "Gate reply was relayed."
+    calls = _stub_codex(monkeypatch, tmp_path, response=json.dumps(envelope))
+    monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
+    monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
+    schema = {
+        "type": "object",
+        "properties": {"arm": {"const": "m_plus"}, "halt": {"type": "null"}},
+        "required": ["arm", "halt"],
+    }
+    assert workflow.run_agent(
+        'Gate fixture', {'label': 'gate', 'phase': 'gate', 'schema': schema},
+        repo_root=tmp_path, artifact_dir=tmp_path / 'art', parent_session_id='sid',
+    ) == result
+    assert len(calls) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows worker prompt")
+def test_windows_codex_gate_uses_native_command_with_original_payload(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_compose import _INVOKE
+
+    calls = _stub_codex(monkeypatch, tmp_path, response='{"arm":"s","halt":null}')
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    args = """dispatch.ask_gate '{"run_id":"ask-revised"}' --repo C:/dev/claude-klabauter"""
+    assert workflow.run_agent(
+        f"Run `{_INVOKE} {args}`",
+        {"label": "gate", "phase": "gate", "schema": {"type": "object"}},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    ) == {"arm": "s", "halt": None}
+    assert f"Run `coordinator-invoke {args}`" in calls[0][1]
+    assert _INVOKE not in calls[0][1]
+
+
+@pytest.mark.parametrize(("initial", "repair", "arm", "error"), [
+    pytest.param('{"arm":"m_plus" "halt":null}', '{"arm":"m_plus","halt":null}',
+                 "m_plus", "Expecting ',' delimiter", id="1cade98f-missing-comma"),
+    pytest.param('{"arm":"m_plus","halt":null},"acceptance":["keep this"]}',
+                 '{"arm":"m_plus","halt":null}', None, "Extra data", id="56fbcaba-no-prefix"),
+    pytest.param('{"arm":"s","halt":null}}', '{"arm":"s","halt":null}',
+                 "s", "Extra data", id="a6e58670-extra-delimiter"),
+    pytest.param(
+        '{"jsonrpc":"2.0","id":1,"result":{"arm":"m_plus","halt":null,"resume_rows":["C0","C4"]},"halt":null}',
+        '{"arm":"m_plus","halt":null,"resume_rows":["C0","C4"]}',
+        "m_plus", "'arm' is a required property", id="bf67037d-redundant-outer-halt",
+    ),
+    pytest.param(
+        '{"jsonrpc":"2.0","id":1,"result":{"arm":"m_plus","halt":null,"resume_rows":["C0","C4"]},"halt":null}',
+        '{"arm":"m_plus","halt":null,"resume_rows":["C0"]}',
+        None, "'arm' is a required property", id="bf67037d-do-not-drop-resume-row",
+    ),
+    pytest.param(
+        '{"jsonrpc":"2.0","id":1,"result":{"arm":"s" "halt":null,"acceptance":["keep"]}}',
+        '{"arm":"s","halt":null,"acceptance":["keep"]}',
+        "s", "Expecting ',' delimiter", id="d10d487a-malformed-wrapped-result",
+    ),
+    pytest.param(
+        '{"jsonrpc":"2.0","id":1,"result":{"arm":"s" "halt":null},"acceptance":["keep"]}',
+        '{"arm":"s","halt":null}',
+        None, "Expecting ',' delimiter", id="d10d487a-do-not-drop-trailing-data",
+    ),
+    pytest.param('{"arm":"s" "halt":null}', '{"arm":"s" "halt":null}',
+                 None, "Expecting ',' delimiter", id="retry-exhausted"),
+])
+def test_codex_gate_reasks_once_then_returns_a_typed_halt(tmp_path, monkeypatch, initial, repair, arm, error):
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[initial, repair])
+    monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
+    monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
+    schema = {
+        "type": "object",
+        "properties": {"arm": {"type": ["string", "null"]}, "halt": {"type": ["object", "null"]}},
+        "required": ["arm", "halt"],
+    }
+    folder = tmp_path / 'art'
+    value = workflow.run_agent(
+        'Run the gate once', {'label': 'gate', 'phase': 'gate', 'schema': schema},
+        repo_root=tmp_path, artifact_dir=folder, parent_session_id='sid',
+    )
+    assert len(calls) == 2
+    retry_argv, retry_prompt = calls[1]
+    assert error in retry_prompt and 'Do not run any tools' in retry_prompt
+    retry_data = json.loads(next(line for line in retry_prompt.splitlines() if line.startswith('{"diagnostic":')))
+    assert retry_data["allowed_arm_values"] == ["xs", "s", "m_plus", "roadmap", None]
+    assert error in retry_data["diagnostic"]
+    assert 'Run the gate once' not in retry_prompt
+    assert '--dangerously-bypass-approvals-and-sandbox' not in retry_argv
+    assert (folder / "last.txt").read_text(encoding="utf-8") == initial
+    assert (folder / "gate-reask" / "last.txt").read_text(encoding="utf-8") == repair
+    assert json.loads((folder / "result.json").read_text(encoding="utf-8")) == value
+    assert value["arm"] == arm
+    if arm is None:
+        assert value["halt"]["kind"] == "gate-reply-invalid"
+    else:
+        assert value["halt"] is None
+
+
+def test_codex_gate_closes_only_missing_outer_brace(tmp_path, monkeypatch):
+    result = {
+        "arm": "s", "halt": None, "acceptance": {"route": "plan"},
+        "manifest_handle": {"path": "manifest.json"}, "resume_phases": {"reuse": ["plan"]},
+    }
+    wrapped = json.dumps({"jsonrpc": "2.0", "id": 1, "result": result})
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[wrapped[:-1]])
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    schema = {"type": "object", "required": ["arm", "halt"]}
+    assert workflow.run_agent(
+        "Run gate", {"label": "gate", "phase": "gate", "schema": schema},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    ) == result
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(("label", "phase", "broken", "diagnostic"), [
+    ("halt-commit", "commit", lambda reply: reply[:-1], "Expecting ',' delimiter"),
+    ("plan-prep-gate", "plan", lambda reply: reply + "}", "Extra data"),
+])
+def test_codex_structured_stage_repairs_reply_without_repeating_operation(
+    tmp_path, monkeypatch, label, phase, broken, diagnostic,
+):
+    repaired = '{"committed":true,"run_artifacts":{"withheld":{"halted.json":"halt-record-only"}}}'
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[broken(repaired), repaired])
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    schema = {
+        "type": "object", "required": ["committed", "run_artifacts"],
+        "properties": {"committed": {"type": "boolean"}, "run_artifacts": {"type": "object"}},
+    }
+    assert workflow.run_agent(
+        "Run operation once", {"label": label, "phase": phase, "schema": schema},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    ) == json.loads(repaired)
+    assert len(calls) == 2
+    argv, prompt = calls[1]
+    assert diagnostic in prompt
+    assert "Run operation once" not in prompt
+    assert argv[argv.index("--sandbox") + 1] == "read-only"
 
 
 def _unelevated_home(tmp_path, monkeypatch):
@@ -539,3 +690,44 @@ def test_family_argv_agy_delegates_to_family_stage_argv_unrestricted(tmp_path: P
     assert argv[argv.index('--input-format') + 1] == 'stream-json'
     assert argv[argv.index('--output-format') + 1] == 'stream-json'
 
+
+
+@pytest.mark.parametrize("outer_matches", [True, False])
+def test_codex_gate_restores_malformed_duplicate_digest_from_engine_receipt(
+    tmp_path, monkeypatch, outer_matches,
+):
+    from coordinator_core.ops.dispatch_emit import ask_stage_receipt, reply_sidecar
+
+    run_id = "warp-2026-11-20-headless-gate-host-result-de0255-20261120T094343-34b2f2"
+    manifest = tmp_path / "state" / "warp" / run_id / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"rows":[]}', encoding="ascii")
+    import hashlib
+
+    raw = manifest.read_bytes()
+    authoritative = {"path": manifest.relative_to(tmp_path).as_posix(),
+                     "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+    ask_stage_receipt.write_gate(manifest.parent, authoritative)
+    malformed = "84596cb9654fa419b0c338f474391ce7755f0e54b1819a36608"
+    result = {
+        "arm": "s", "halt": None,
+        "manifest_handle": {**authoritative, "sha256": authoritative["sha256"] if outer_matches else "0" * 64},
+        "stage_reply": {"manifest_handle": {**authoritative, "sha256": malformed}},
+    }
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[json.dumps(result), "null"])
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    schema = {"type": "object", "required": ["arm", "halt"], "properties": {
+        "manifest_handle": reply_sidecar.HANDLE_SCHEMA,
+        "stage_reply": reply_sidecar.STAGE_REPLY_SCHEMA,
+    }}
+    outcome = workflow.run_agent(
+        "Run gate", {"label": "gate", "phase": "gate", "schema": schema, "gateManifestRunId": run_id},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    )
+    if not outer_matches:
+        assert outcome["halt"]["kind"] == "gate-reply-invalid"
+        return
+    assert outcome["stage_reply"]["manifest_handle"] == authoritative
+    assert outcome["manifest_handle"] == authoritative
+    assert len(calls) == 1

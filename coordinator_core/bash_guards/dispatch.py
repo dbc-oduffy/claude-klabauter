@@ -401,6 +401,7 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "block-whole-filesystem-scan": ("find", "rg", "grep", "egrep", "fgrep", "fd", "fdfind"),
     "guard-uncapped-pytest-plugin": ("pytest", "py.test"),
     "block-editor-kill-by-name": ("taskkill", "stop-process", "spps", "pkill", "killall", "kill"),
+    "deny-kill-by-port-or-tree": ("kill", "stop-process", "spps", "fuser", ".sh", ".bash", ".ps1", ".py"),
     "guard-repo-setup-claude-home-refusal": ("repo-setup-args-and-register", "scaffold_structure"),
 }
 """Per-guard necessary preconditions, used ONLY on the crash path to scope a
@@ -1344,6 +1345,9 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_editor_kill_by_name import (
             MATCHERS as _matchers_editor_kill_by_name,
         )
+        from coordinator_core.bash_guards.block_kill_by_port_or_tree import (
+            MATCHERS as _matchers_kill_by_port_or_tree,
+        )
         from coordinator_core.bash_guards.block_whole_filesystem_scan import (
             MATCHERS as _matchers_whole_filesystem_scan,
         )
@@ -1384,6 +1388,7 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_held_push,
             _matchers_deploy_dirty_tree,
             _matchers_editor_kill_by_name,
+            _matchers_kill_by_port_or_tree,
             _matchers_whole_filesystem_scan,
             _matchers_inprocess_search,
             _matchers_grep_via_bash,
@@ -2493,6 +2498,10 @@ def _build_guard_chain(
         check as _check_editor_kill_by_name,
         MATCHERS as _matchers_editor_kill_by_name,
     )
+    from coordinator_core.bash_guards.block_kill_by_port_or_tree import (
+        check as _check_kill_by_port_or_tree,
+        MATCHERS as _matchers_kill_by_port_or_tree,
+    )
     from coordinator_core.bash_guards.block_whole_filesystem_scan import (
         check as _check_whole_filesystem_scan,
         MATCHERS as _matchers_whole_filesystem_scan,
@@ -2857,6 +2866,15 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_editor_kill_by_name),
+        ),
+        # No kill chosen by listening port, process name or process tree.
+        GuardEntry(
+            "deny-kill-by-port-or-tree",
+            lambda: _check_kill_by_port_or_tree(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_kill_by_port_or_tree),
         ),
         # No search rooted at a whole filesystem or drive.
         GuardEntry(

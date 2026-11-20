@@ -107,6 +107,29 @@ def test_a_slow_record_write_that_never_raises_still_refuses_as_a_stall(repo, mo
     assert STALL in reply["reason"]
 
 
+def test_a_lock_home_denial_is_refused_naming_the_directory_and_the_grant(repo) -> None:
+    from coordinator_core.locked_write import _machine_lock_dir
+
+    lock_dir = _machine_lock_dir()
+
+    def evaluate(payload):
+        raise PermissionError(13, DENIED, str(lock_dir / "x.lock"))
+
+    reply = _submit(repo, evaluate=evaluate)
+    assert reply["refused"] == "gate-refused"
+    assert str(lock_dir) in reply["reason"] and f"--add-dir {lock_dir}" in reply["reason"]
+    assert "stdin" not in reply["reason"]
+
+
+def test_a_permission_error_elsewhere_keeps_the_generic_refusal(repo, tmp_path) -> None:
+    def evaluate(payload):
+        raise PermissionError(13, DENIED, str(tmp_path / "other"))
+
+    reply = _submit(repo, evaluate=evaluate)
+    assert reply["refused"] == "gate-refused"
+    assert "--add-dir" not in reply["reason"] and "The submission gates failed" in reply["reason"]
+
+
 def test_an_allowed_record_write_mints_the_run_and_its_token(repo) -> None:
     reply = _submit(repo)
     assert reply["run_id"], reply

@@ -38,6 +38,11 @@ def _authoring_registered(monkeypatch):
     machine_profile.reset_cache()
 
 
+@pytest.fixture(autouse=True)
+def _dev_install(monkeypatch):
+    monkeypatch.setattr(guard, "_is_dev_install", lambda: True)
+
+
 def _advised(file_path, **kw):
     """The guard is advisory-by-ruling (deny_registry.ADVISORY_BY_RULING): a derived-copy
     write is recoverable, so the policy point answers allow plus one advisory line."""
@@ -198,6 +203,21 @@ class TestAdvisoryTextNamesTheConsequence:
     def test_unregistered_root_allows_the_write(self, monkeypatch):
         monkeypatch.setattr(guard, "registry_get", lambda key: None)
         _allow("/Users/alice/.claude/CLAUDE.md")
+
+    def test_non_dev_box_is_silent(self, monkeypatch):
+        monkeypatch.setattr(guard, "_is_dev_install", lambda: False)
+        _allow("/Users/alice/.claude/CLAUDE.md")
+        _allow("/Users/alice/.claude/rules/rules.md")
+
+    def test_is_dev_install_follows_the_sentinel(self, monkeypatch, tmp_path):
+        from coordinator_core import _fleet_names
+
+        monkeypatch.undo()
+        monkeypatch.setattr(_fleet_names, "_registry_paths", lambda: [str(tmp_path)])
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+        assert guard._is_dev_install() is False
+        (tmp_path / ".coordinator-dev-repo").write_text("1")
+        assert guard._is_dev_install() is True
 
     @pytest.mark.parametrize("level", ["strict", "warn", "off"])
     def test_no_guard_level_lifts_the_advisory_to_a_deny(self, monkeypatch, level):

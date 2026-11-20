@@ -4442,6 +4442,19 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
         }, EXIT_OK)
 
     if classification == "plan":
+        if claim_at_brief:
+            from coordinator_core.ops import plan_status_transition as _pst
+
+            if _claims._is_stale_deferred(str(abs_path), _pst):
+                if _pst.main(["stamp-unstaled", "--plan", str(abs_path)]) == 0:
+                    artifact = resolve_artifact(artifact_path, root)
+                    fm = artifact.get("frontmatter") or {}
+                else:
+                    print(
+                        f"pickup-brief: stamp-unstaled failed for {display_path}; "
+                        "brief shows the plan as deferred",
+                        file=sys.stderr,
+                    )
         return _plan_brief(root, artifact, abs_path, display_path, fm)
 
     if classification == "memo" and fm.get("status") in _MEMO_TERMINAL_STATUS:

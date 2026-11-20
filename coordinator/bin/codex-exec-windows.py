@@ -92,16 +92,21 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # refuse: an unshaped env would load the real home's AGENTS.md
         print(f"codex-exec-windows.py: worker env refused: {exc}", file=sys.stderr)
         return _REFUSED_RC
-    with open(args.prompt, "rb") as stdin_fh, open(args.events, "wb") as events_fh:
-        proc = subprocess.run(
-            [codex, "exec", *codex_args],
-            stdin=stdin_fh,
-            stdout=events_fh,
-            env=env,
-            shell=False,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+    from coordinator_core.codex_runner.codex_spawn_env import writeback_codex_auth
+
+    try:
+        with open(args.prompt, "rb") as stdin_fh, open(args.events, "wb") as events_fh:
+            proc = subprocess.run(
+                [codex, "exec", *codex_args],
+                stdin=stdin_fh,
+                stdout=events_fh,
+                env=env,
+                shell=False,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+    finally:
+        writeback_codex_auth(env)
     return proc.returncode
 
 

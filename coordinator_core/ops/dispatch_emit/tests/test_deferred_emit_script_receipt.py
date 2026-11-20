@@ -43,11 +43,15 @@ def _run_stage_loop(pending: dict, first: str = "/r/scratch/warp/ask-r1.workflow
     return json.loads(out.stdout)
 
 
-def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin() -> None:
+@pytest.mark.parametrize("first", [
+    "/r/scratch/warp/ask-r1.workflow.mjs",
+    r"C:\dev\repo\scratch\warp\ask-r1.workflow.mjs",
+])
+def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin(first) -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     stale, fresh = "3c" * 32, "2d" * 32
-    out, calls = _run_stage_loop({"handle": {"sha256": stale}, "twin_path": staged_twin_rel("ask-r1", fresh)})
+    out, calls = _run_stage_loop({"handle": {"sha256": stale}, "twin_path": staged_twin_rel("ask-r1", fresh)}, first=first)
     assert out["ok"] is True
     assert calls[1] == "/r/" + staged_twin_rel("ask-r1", fresh)
 
@@ -132,7 +136,7 @@ def test_a_wrong_but_script_shaped_relay_path_is_skipped_when_it_has_no_receipt(
 
 
 def test_a_windows_style_relay_path_with_doubled_backslashes_is_normalised_and_verified() -> None:
-    win = "E:/claude/scratch/warp/ask-r1.workflow.mjs"  # abs-path-ok: carve-out=test-input-data
+    win = "E:/claude/scratch/warp/ask-r1.workflow.mjs"  # abs-path-ok: synthetic fixture path, never opened
     verdict, asked = _verify({"path": win.replace("/", "\\\\"), "run_id": "ask-r1"}, {win: [_SHA, _SHA]})
     assert verdict == {"path": win}
     assert asked == [win]

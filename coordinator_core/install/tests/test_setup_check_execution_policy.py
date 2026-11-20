@@ -27,9 +27,38 @@ def test_off_windows_both_checks_pass_without_spawning():
 @pytest.mark.parametrize("policy", ["Restricted", "Undefined"])
 def test_blocking_policy_fails_naming_shell_and_fix(policy):
     items = check_execution_policy("win32", _which({"pwsh", "powershell"}), lambda exe: policy)
-    assert [i.ok for i in items] == [False, False]
+    assert [(i.ok, i.warn) for i in items] == [(False, False), (True, True)]
     assert "pwsh" in items[0].name and "Set-ExecutionPolicy" in items[0].detail
-    assert "powershell" in items[1].name
+    assert "powershell" in items[1].name and "launches pwsh" in items[1].detail
+
+
+def test_only_non_engine_shell_blocked_is_warn_not_fail():
+    pol = {"/fake/pwsh": "RemoteSigned", "/fake/powershell": "Restricted"}
+    items = check_execution_policy("win32", _which({"pwsh", "powershell"}), pol.__getitem__)
+    assert [(i.ok, i.warn) for i in items] == [(True, False), (True, True)]
+    assert "launches pwsh" in items[1].detail
+
+
+def test_engine_is_windows_powershell_when_pwsh_absent():
+    items = check_execution_policy("win32", _which({"powershell"}), lambda exe: "Restricted")
+    assert [(i.ok, i.warn) for i in items] == [(False, False)]
+
+
+def test_unqueryable_non_engine_shell_is_warn():
+    def query(exe):
+        if exe.endswith("powershell"):
+            raise OSError("exit 1")
+        return "RemoteSigned"
+
+    items = check_execution_policy("win32", _which({"pwsh", "powershell"}), query)
+    assert [(i.ok, i.warn) for i in items] == [(True, False), (True, True)]
+    assert "could not query" in items[1].detail
+
+
+def test_engine_shell_prefers_pwsh():
+    assert setup_check.engine_shell(_which({"pwsh", "powershell"})) == "pwsh"
+    assert setup_check.engine_shell(_which({"powershell"})) == "powershell"
+    assert setup_check.engine_shell(_which(set())) is None
 
 
 @pytest.mark.parametrize("policy", ["RemoteSigned", "Bypass", "Unrestricted"])

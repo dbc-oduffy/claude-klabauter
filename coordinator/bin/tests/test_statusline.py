@@ -224,3 +224,20 @@ def test_a_batch_file_executable_is_not_delegated(tmp_path):
     statusline = _load_statusline()
     with pytest.raises(OSError):
         statusline._argv_for(f'"{shim}"')
+
+
+def test_piped_stdout_survives_a_cp1252_default(tmp_path):
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+    env.update(COORDINATOR_SETTINGS_HOME=str(tmp_path), NO_COLOR="1",
+               CLAUDE_CONFIG_DIR=str(tmp_path / "no-claude-config"))
+    payload = json.dumps({
+        "session_id": "sl-cp1252", "cwd": "caf\u00e9\u2192",
+        "model": {"display_name": "Opus 5"},
+        "context_window": {"used_percentage": 10, "context_window_size": 200000},
+    }).encode("utf-8")
+    result = subprocess.run([sys.executable, "-X", "utf8=0", str(_SCRIPT)], input=payload,
+                            capture_output=True, env=env, timeout=30,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert b"UnicodeEncodeError" not in result.stderr
+    assert "\u25b1" in result.stdout.decode("utf-8", "strict")

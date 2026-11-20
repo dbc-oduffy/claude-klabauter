@@ -9,12 +9,14 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
 from coordinator_core.codex_runner.sandbox_preflight import check_pwsh_launchable, is_windowsapps_path
 
 WRITABLE_TEMP_RELPATH = Path("scratch") / "codex-tmp"
+REAL_HOME_MARKER = ".real-codex-home"
 
 
 def _key(env: Mapping[str, str], name: str) -> str | None:
@@ -184,4 +186,51 @@ def _isolate_codex_home(
             cfg.write_text(rekeyed, encoding="utf-8", newline="")
     except (OSError, UnicodeError):
         pass
+    try:
+        (home / REAL_HOME_MARKER).write_text(str(real), encoding="utf-8")
+    except OSError:
+        pass
     env[_key(env, "CODEX_HOME") or "CODEX_HOME"] = str(home)
+
+
+def writeback_codex_auth(env: Mapping[str, str], environ: Mapping[str, str] | None = None) -> bool:
+    """Propagate a rotated auth.json from the child's isolated CODEX_HOME back to the real codex home.
+
+    Call once after a child launched through `shape_codex_child(writable_root=...)` exits, passing the
+    child env. Codex refresh tokens are single-use, so every home must share one token lineage. Copies
+    only auth.json, and only when the isolated copy has a newer mtime and different bytes; the write is
+    same-directory temp + os.replace with the mtime preserved, so a concurrent reader or writer never
+    sees a partial file. The real home is the path `_isolate_codex_home` recorded in the isolated home.
+    Returns True when the real home was updated; a missing home, no marker-or-default real home, or any
+    OSError is a silent False.
+    """
+    environ = os.environ if environ is None else environ
+    k = _key(env, "CODEX_HOME")
+    if not k or not env[k]:
+        return False
+    home = Path(env[k])
+    try:
+        recorded = (home / REAL_HOME_MARKER).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return False
+    real = Path(recorded) if recorded else _real_codex_home({}, environ)
+    if real is None:
+        return False
+    src, dst = home / "auth.json", real / "auth.json"
+    try:
+        if os.path.normcase(os.path.abspath(home)) == os.path.normcase(os.path.abspath(real)):
+            return False
+        if not src.is_file():
+            return False
+        if dst.is_file() and (src.stat().st_mtime <= dst.stat().st_mtime or src.read_bytes() == dst.read_bytes()):
+            return False
+        real.mkdir(parents=True, exist_ok=True)
+        part = real / f"auth.json.{os.getpid()}.{uuid.uuid4().hex}.part"
+        try:
+            shutil.copy2(src, part)
+            os.replace(part, dst)
+        finally:
+            part.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True

@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from coordinator_core import conftest as cc_conftest
@@ -133,6 +135,8 @@ class _FakeRequest:
 def test_append_guard_names_the_test_that_wrote_the_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hub = hub_for_common(tmp_path)
     (hub / "test-c8-litter").mkdir(parents=True)
+    # Backdated: a write in the same mtime tick as the mkdir would read as no change.
+    os.utime(hub / "test-c8-litter", ns=(1_000_000_000, 1_000_000_000))
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.setattr(cc_conftest, "_hub_entry_writers", {})
     monkeypatch.setattr(cc_conftest, "_hub_written", set())
@@ -157,6 +161,8 @@ def test_append_guard_names_the_test_that_wrote_the_entry(tmp_path: Path, monkey
 def test_append_guard_says_so_when_no_writer_was_captured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hub = hub_for_common(tmp_path)
     (hub / "test-c8-litter").mkdir(parents=True)
+    # Backdated: a write in the same mtime tick as the mkdir would read as no change.
+    os.utime(hub / "test-c8-litter", ns=(1_000_000_000, 1_000_000_000))
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.setattr(cc_conftest, "_hub_entry_writers", {})
 

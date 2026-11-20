@@ -226,3 +226,30 @@ def test_canonical_alias_preference_still_requires_actual_transport_projection(t
     assert registered_alias(ROOT) == "canonical-route"
     monkeypatch.setattr(external_registry, "lookup", lambda sid: {"session_id": sid, "address_version": 1, "name": "not-projected"})
     assert registered_alias(ROOT) is None
+
+
+def _snapshot_with_config(tmp_path, monkeypatch, config):
+    from coordinator_core.codex_status.__main__ import snapshot
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    (tmp_path / "codex").mkdir()
+    if config is not None:
+        (tmp_path / "codex" / "config.toml").write_text(config, encoding="utf-8")
+    path = tmp_path / "root.jsonl"
+    write(path, [metadata(ROOT), context("turn"), usage(1000, 500, 100)])
+    return snapshot({"session_id": ROOT, "rollouts": [str(path)]})
+
+
+def test_snapshot_derives_before_compact_from_configured_auto_compact_limit(tmp_path, monkeypatch):
+    value = _snapshot_with_config(tmp_path, monkeypatch, "model_auto_compact_token_limit = 380000\n")
+    assert value["before_compact_percent"] == pytest.approx(value["remaining_percent"] - 20)
+    assert "380000" in value["context_basis"]
+    assert "80% ctx" in value["text"] and "unknown ·" in value["text"]  # alias is unregistered here, so the first slot alone is unknown
+
+
+@pytest.mark.parametrize("config", [None, "model = 'x'\n", "model_auto_compact_token_limit = 0\n",
+                                    "model_auto_compact_token_limit = 'big'\n", "= not toml ["])
+def test_snapshot_without_a_usable_limit_renders_context_unknown(tmp_path, monkeypatch, config):
+    value = _snapshot_with_config(tmp_path, monkeypatch, config)
+    assert "before_compact_percent" not in value and "configured" not in value["context_basis"]
+    assert "ctx" not in value["text"] and value["text"].count("unknown") == 2

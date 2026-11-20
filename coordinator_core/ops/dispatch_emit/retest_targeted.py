@@ -370,6 +370,37 @@ def _missing_plugin_defect(log: Path, offset: int, root: Path) -> Optional[str]:
             f"(pytest rejected{match.group(1).rstrip()}); install with: {sys.executable} -m pip install {specs}")
 
 
+def _plugin_options_rejected(log: Path, offset: int) -> set:
+    """Plugin-owned option names (``_OPTION_PLUGINS``) pytest rejected as ``unrecognized arguments`` in
+    the output past ``offset``: the options a missing plugin leaves unparseable."""
+    try:
+        with open(log, "rb") as handle:
+            handle.seek(offset)
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return set()
+    match = _UNRECOGNIZED_ARGS.search(text)
+    names = {t.split("=")[0] for t in match.group(1).split()} if match else set()
+    return {n for n in names if n in _OPTION_PLUGINS}
+
+
+def _without_options(argv: list, names: set) -> list:
+    """``argv`` minus each option in ``names`` and its value (``--opt=V`` or ``--opt V``). The test session
+    still runs, only without the missing plugin's timeout or parallelism: the outer launch deadline bounds it."""
+    out: list = []
+    skip = False
+    for tok in argv:
+        if skip:
+            skip = False
+        elif tok in names:
+            skip = True
+        elif tok.split("=")[0] in names and tok.startswith("--"):
+            continue
+        else:
+            out.append(tok)
+    return out
+
+
 def _scope_of(root: Path, test: str) -> str:
     """Nearest ancestor directory of the test file, inside ``root``, holding a ``conftest.py`` (repo-relative
     POSIX; ``""`` when none). One pytest session per scope keeps a bare ``from conftest import`` on its own."""
@@ -845,6 +876,10 @@ def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float
             if not isinstance(kept, str) and kept[1] == groups and kept[0] != base:
                 argv = [*kept[0], *group]
                 rc, err = _run_session([*kept[0], *group], run, root, log_path, deadline, True)
+        if rc == 4 and err is None and (rejected := _plugin_options_rejected(log_path, offset)):
+            # A box without pytest-timeout/xdist must still judge the tests: retry once without those options.
+            argv = _without_options(argv, rejected)
+            rc, err = _run_session(argv, run, root, log_path, deadline, True)
         codes.append(rc)
         cmd = shlex.join(argv)
         if err is not None:

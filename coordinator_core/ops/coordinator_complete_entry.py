@@ -123,6 +123,8 @@ from datetime import date
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
+import yaml
+
 from coordinator_core.completion_receipts import store as _receipt_store
 from coordinator_core.completion_receipts.model import TSHIRTS as _TSHIRT_ORDER
 from coordinator_core.chain_attribution import bulk_grep_attributed_shas, shas_touching_paths
@@ -145,6 +147,7 @@ from coordinator_core.ops import migrate_completion_log_legacy as _migrate_mod
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.session_ledger import aggregate_chain_loe as _agg_loe_mod
 from coordinator_core.session import core as _session_core
+from coordinator_core.session import record_homes as _record_homes
 from coordinator_core.loe_thresholds import compute_tshirt_nullable as _compute_tshirt_nullable
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -463,6 +466,10 @@ Options:
   --nature <roadmap|bugfix|tech-debt|infra>
       Work category for the completion entry.
       When omitted: a <!-- NATURE-INFER --> residue placeholder is left in the file.
+  --run-id <id>
+      Warp run id. When the dispatch actuals yield a null loe.tshirt, the
+      tshirt of the sizing whose resolution.run_id equals it is stamped with
+      loe.tshirt_source: sizing; no matching sizing leaves null.
   --help
       Show this message.
 
@@ -491,7 +498,7 @@ Exit codes:
 """
 
 
-def _parse_args(argv: List[str]):
+def _parse_args(argv: List[str]) -> "tuple[Optional[dict], Optional[int]]":
     """Parse argv. Returns (namespace_dict, exit_code_or_None).
 
     exit_code_or_None is non-None (and namespace_dict is None) when parsing
@@ -507,6 +514,7 @@ def _parse_args(argv: List[str]):
     commits: List[str] = []
     commits_source = ""
     authored_by_unknown = False
+    run_id = ""
 
     i = 0
     n = len(argv)
@@ -609,6 +617,17 @@ def _parse_args(argv: List[str]):
             authored_by_unknown = True
             i += 1
             continue
+        if a == "--run-id":
+            if i + 1 >= n or not argv[i + 1]:
+                print("ERROR: --run-id requires a value", file=sys.stderr)
+                return None, 1
+            val = argv[i + 1]
+            if not _SID_RE.match(val) or ".." in val:
+                print(f"ERROR: --run-id contains invalid characters: '{val}'", file=sys.stderr)
+                return None, 1
+            run_id = val
+            i += 2
+            continue
         if a in ("--help", "-h"):
             print(_USAGE)
             return None, 0
@@ -679,6 +698,7 @@ def _parse_args(argv: List[str]):
             "for_date": for_date,
             "commits": commits,
             "authored_by_unknown": authored_by_unknown,
+            "run_id": run_id,
         },
         None,
     )
@@ -1178,6 +1198,63 @@ def _apply_receipts(repo_root: str, joined: List[dict], loe_block: str, commits:
     return entries, derived or commits, "\n".join(out)
 
 
+def _sizing_tshirt_for_run(repo_root: str, run_id: str, today: date) -> Optional[str]:
+    """Tshirt of the sizing whose `resolution.run_id` equals `run_id`: the
+    accepted `exit_criterion.accepted.tshirt`, else `estimate.tshirt`. Scans
+    only the current and previous month directories of `state/sizings`, and
+    parses only a file whose raw text names the run id. No process spawn;
+    fail-open to `None`."""
+    if not run_id:
+        return None
+    base = Path(_record_homes.home_dir(repo_root, "sizings"))
+    for month in (today.strftime("%Y-%m"), _previous_month(today)):
+        try:
+            files = sorted((base / month).glob("*.yaml"))
+        except OSError:
+            continue
+        for f in files:
+            try:
+                raw = f.read_bytes()
+                if run_id.encode("utf-8") not in raw:
+                    continue
+                doc = yaml.safe_load(raw.decode("utf-8", errors="replace"))
+            except (OSError, yaml.YAMLError):
+                continue
+            if not isinstance(doc, dict):
+                continue
+            if (doc.get("resolution") or {}).get("run_id") != run_id:
+                continue
+            accepted = ((doc.get("exit_criterion") or {}).get("accepted") or {}).get("tshirt")
+            for candidate in (accepted, (doc.get("estimate") or {}).get("tshirt")):
+                if candidate in _TSHIRT_ORDER:
+                    return candidate
+    return None
+
+
+def _sizing_tshirt_for_run_or_bare(repo_root: str, run_id: str, today: date) -> Optional[str]:
+    """`_sizing_tshirt_for_run` for `run_id`, then for it without a `.workflow` suffix."""
+    found = _sizing_tshirt_for_run(repo_root, run_id, today)
+    if found or not run_id.endswith(".workflow"):
+        return found
+    return _sizing_tshirt_for_run(repo_root, run_id[: -len(".workflow")], today)
+
+
+def _apply_sizing_tshirt(loe_block: str, tshirt: str) -> str:
+    """Replace a null `loe.tshirt` with `tshirt` and mark `tshirt_source: sizing`;
+    a block whose `loe.tshirt` is already set is returned unchanged."""
+    out: List[str] = []
+    in_loe = False
+    for line in loe_block.split("\n"):
+        if line and not line[0].isspace():
+            in_loe = line.startswith("loe:")
+        if in_loe and line.strip() == "tshirt: null" and line.startswith("  tshirt:"):
+            out.append(f'  tshirt: "{tshirt}"')
+            out.append("  tshirt_source: sizing")
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def _git_log_runner_for_commits(argv: List[str], cwd: Optional[str]) -> tuple[int, str, str]:
     """`chain_attribution.GitRunner` contract for `_resolve_session_commits`'s
     one log walk — "never raises, returns (rc, stdout, stderr)", matching
@@ -1482,6 +1559,7 @@ def main(argv: List[str]) -> int:
     for_date = parsed["for_date"]
     seeded_commits = parsed["commits"]
     authored_by_unknown = parsed["authored_by_unknown"]
+    run_id = parsed["run_id"]
 
     repo_root = git_root()
     if not repo_root:
@@ -1589,6 +1667,10 @@ def main(argv: List[str]) -> int:
         joined = _resolve_joined_receipts(repo_root, deliverable_id, consumed_handoff, today)
         if joined:
             receipts, commits, loe_block = _apply_receipts(repo_root, joined, loe_block, commits)
+        if run_id and "  tshirt: null" in loe_block:
+            sizing_tshirt = _sizing_tshirt_for_run_or_bare(repo_root, run_id, today)
+            if sizing_tshirt:
+                loe_block = _apply_sizing_tshirt(loe_block, sizing_tshirt)
 
     if for_date is not None:
         # `--for-date` is the explicit backfill/finalize leg -- reconstructing

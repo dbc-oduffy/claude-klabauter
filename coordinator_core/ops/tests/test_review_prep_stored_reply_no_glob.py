@@ -100,8 +100,8 @@ def test_run_id_that_prefixes_another_runs_id_finds_its_own_reply(repo, monkeypa
 
 def test_two_bases_for_one_run_stay_ambiguous_without_a_base(repo, monkeypatch):
     _store(repo, "run1")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "second")
+    # Empty commit: `add -A` would index the share dir, whose blob paths exceed MAX_PATH under a long tmp_path.
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "second")
     _store(repo, "run1")
     with _no_walks(monkeypatch):
         assert rp.stored_reply_for_run(repo, SESSION, None, run_key="run1") is None

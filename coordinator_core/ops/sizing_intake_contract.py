@@ -41,14 +41,24 @@ def read_em_brief(doc: Mapping) -> Optional[str]:
     return value.strip() or None
 
 
+def _em_body(text: str) -> str:
+    """`text` stripped, minus any leading copies of the marker.
+    Trap: an em_context that opens with the marker would otherwise be written under it twice, and the
+    arrival check (which hashes what follows the LAST marker) would never match the submitted digest."""
+    body = text.strip()
+    while body.startswith(EM_CONTEXT_MARKER):
+        body = body[len(EM_CONTEXT_MARKER):].strip()
+    return body
+
+
 def em_context_digest(text: str) -> str:
-    """sha256 hex of `text.strip()`: the identity of an EM-context block as `with_em_context` writes it."""
-    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+    """sha256 hex of the EM-context body: the identity of an EM-context block as `with_em_context` writes it."""
+    return hashlib.sha256(_em_body(text).encode("utf-8")).hexdigest()
 
 
 def with_em_context(brief: Optional[str], text: str) -> str:
     """`brief` with the EM's context appended under its own marker; the ask text is never touched."""
-    block = f"{EM_CONTEXT_MARKER}\n{text.strip()}"
+    block = f"{EM_CONTEXT_MARKER}\n{_em_body(text)}"
     return f"{brief}\n\n{block}" if brief else block
 
 

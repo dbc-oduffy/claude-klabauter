@@ -52,6 +52,16 @@ STAGE_REPLY_SCHEMA = {
         # Literals ask_contract.STOP_AFTER_PLAN / ask_stage.STAGE_WAIT_PARKED, pinned equal by test_reply_sidecar.
         "parked": {"enum": ["plan", "stage-wait"]},
         "plan_path": {"type": ["string", "null"]},
+        "plan_executing_stamp": {
+            "type": "object",
+            "required": ["plan", "outcome"],
+            "additionalProperties": False,
+            "properties": {
+                "plan": {"type": "string"},
+                "outcome": {"enum": ["stamped", "refused"]},
+                "error": {"type": "string"},
+            },
+        },
         # Trap: ask_stage emits `remedy` on the stage-wait park; absent here it fails validation and masks the park.
         "remedy": {"type": "string"},
         "waiting": {

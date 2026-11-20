@@ -80,6 +80,21 @@ def test_no_holder_fails_open_and_writes_nothing(tmp_path: Path, monkeypatch: py
     assert not (tmp_path / "box").exists()
 
 
+class _DeniedPath:
+    def read_bytes(self) -> bytes:
+        raise PermissionError(13, "Access is denied")
+
+
+def test_sandbox_denied_holder_record_names_the_denial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _holder(monkeypatch, None)
+    monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: None)
+    monkeypatch.setattr(nomination, "_box_record_path", lambda directory=None: _DeniedPath())
+    r = admission_post.post("START", "s1", [], directory=tmp_path)
+    assert r["posted"] is False
+    assert r["reason"].startswith("box_holder_denied:PermissionError")
+    assert not (tmp_path / "box").exists()
+
+
 def test_holderless_start_written_when_holder_not_required(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, None)
     r = admission_post.post(

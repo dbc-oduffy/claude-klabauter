@@ -1305,7 +1305,8 @@ def check_destructive_git_orphan(
                         if not _branch_names or br not in _branch_names:
                             continue
                         rc3, out3 = _memo_run_git(
-                            ["branch", "-a", "--contains", "refs/heads/%s" % br, "--format=%(refname)"],
+                            ["for-each-ref", "--contains", "refs/heads/%s" % br,
+                             "--format=%(refname)", "refs/heads", "refs/remotes", "refs/preserve"],
                             git_cwd,
                         )
                         others = [
@@ -1322,8 +1323,9 @@ def check_destructive_git_orphan(
                                 "deny", "destructive-git-orphan",
                                 "BLOCKED: force-deleting branch '%s' would orphan "
                                 "its commits — they live on NO other ref (no local "
-                                "branch, no remote). '%s' is not contained in any "
-                                "other branch or remote. The lowercase, non-forced "
+                                "branch, no remote, no preserve pin). '%s' is not "
+                                "contained in any other branch, remote or "
+                                "refs/preserve pin. The lowercase, non-forced "
                                 "'git branch -d' refuses exactly this case; the force "
                                 "form ('-D', or '-d --force') overrides that safety."
                                 % (br, br),
@@ -1333,9 +1335,9 @@ def check_destructive_git_orphan(
                                 em_text=(
                                     "BLOCKED: force-deleting branch '%s' would orphan "
                                     "its commits — they live on NO other ref (no local "
-                                    "branch, no remote).\n\n"
-                                    "'%s' is not contained in any other branch or "
-                                    "remote. The lowercase, non-forced 'git branch -d' "
+                                    "branch, no remote, no preserve pin).\n\n"
+                                    "'%s' is not contained in any other branch, "
+                                    "remote or refs/preserve pin. The lowercase, non-forced 'git branch -d' "
                                     "refuses exactly this case; the force form ('-D', or "
                                     "'-d --force') overrides that safety.\n\n"
                                     "To preserve the work first:\n"
@@ -1417,11 +1419,9 @@ _GC_GROUPING_CHARS_RE = re.compile(r"([()`])")
 def _gc_clean_is_executed(cmd: str) -> bool:
     """True iff the WHOLE command has a `git` argv0 whose subcommand is `clean`.
 
-    `_split_segments` is quote-blind, so a quoted `a|git clean` operand yields a
-    `git clean` fragment; shlex over the intact command keeps that operand one
-    token. Grouping chars are space-padded first so `$(git clean)` and
-    `(git clean)` still expose a bare `git` token; padding inside a quoted
-    operand never splits it. Fails closed on an untokenizable command.
+    `_split_segments` is quote-blind (a quoted `a|git clean` operand yields a `git clean`
+    fragment); shlex over the intact command keeps it one token. Grouping chars are
+    space-padded so `$(git clean)` still exposes a bare `git`. Fails closed on untokenizable input.
     """
     return _command_really_invokes(_GC_GROUPING_CHARS_RE.sub(r" \1 ", cmd), "clean")
 

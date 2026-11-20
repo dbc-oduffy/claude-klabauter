@@ -1265,11 +1265,15 @@ def _append_rows(
 
 def render(ledger: Ledger, run_id: str) -> str:
     where = f"the requirement_register of {ledger.sizing_rel}" if ledger.sizing_rel else "this run (sizing not yet bound)"
+    relayed = any(item.origin == ORIGIN_RELAYED for item in ledger.items)
+    ask_clause = (
+        "the ask (origin `relayed`: an EM's relay, not the PM's words; a `pm_verbatims` row outranks it)"
+        if relayed else "the ask (origin `ask`: the PM's own words as submitted)"
+    )
     lines = [
         f"# Requirements -- run {run_id}",
         "",
-        f"Every row of {where} still to deliver: the PM's words, the ask (origin `relayed`: an EM's relay, "
-        "not the PM's words; a `pm_verbatims` row outranks it), and each revision the EM "
+        f"Every row of {where} still to deliver: the PM's words, {ask_clause}, and each revision the EM "
         "(or a peer session, named in `from`) sent while the run was in flight, in the order they "
         "arrived. A revision governs over an earlier row it changes.",
         "",
@@ -2281,6 +2285,14 @@ def owed_rows(owed: Iterable) -> dict[str, str]:
     return out
 
 
+def _owed_by_open(row: Mapping, operator: Mapping[str, str]) -> bool:
+    """True when `row` is owed only to EM/operator rows the manifest names (`owed_by` all in `operator`)."""
+    owed = row.get("owed_by")
+    return (
+        isinstance(owed, list) and bool(owed) and all(isinstance(o, str) and o in operator for o in owed)
+    )
+
+
 def judge(
     ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None,
     gated: Optional[Iterable[str]] = None, operator: Optional[Mapping[str, str]] = None,
@@ -2456,6 +2468,12 @@ def judge(
                         "id": item.id,
                         "reason": f"withheld_by {withheld} names no gated chunk of the run's manifest",
                     })
+            elif _owed_by_open(row, operator):
+                owed = row["owed_by"]
+                label = "owed-after-publish" if isinstance(operator[owed[0]], AfterPublishCommand) else "awaiting_operator"
+                open_rows.append({
+                    "id": item.id, "reason": f"{label} {', '.join(owed)}", "row": owed[0], "command": operator[owed[0]],
+                })
             elif design or ledger.all_of_pm_ask or row.get("essential", True) is not False:
                 failures.append({
                     "id": item.id,
@@ -3194,9 +3212,43 @@ def _token_not_a_runner(root: Path, run_id: str) -> bool:
         marker = halted_run._read(record_dir(root, run_id))
         if marker and ABANDONED_AT_MINTED in (marker.get("halted"), marker.get(halted_run.HALT_REASON_FIELD)):
             return True
-        return bool(warp_live.runner_unproven(root, run_id))
+        return _fire_worker_exited(root, run_id) or bool(warp_live.runner_unproven(root, run_id))
     except Exception:  # noqa: BLE001 -- unknown never reports a run dead
         return False
+
+
+def _fire_worker_exited(root: Path, run_id: str) -> bool:
+    """True when the fire registry holds a record for `run_id` and every one is `exited`: the worker
+    is gone, so the run is dead. Include staged children and guard against a live successor
+    of their intake fire. Registry reads only; a read failure answers False."""
+    try:
+        from coordinator_core.ops.workflow_fire import fire
+
+        records = fire._list_records(fire._registry_dir(str(root)))
+    except Exception:  # noqa: BLE001 -- unknown never reports a run dead
+        return False
+    child_name = f"{run_id}.workflow.mjs"
+    staged_name = re.compile(rf"{re.escape(run_id)}\.staged-[0-9a-f]{{64}}\.workflow\.mjs")
+    child_dir = root / "scratch" / "warp"
+    matched = [
+        record for record in records
+        if record.get("run_id") == run_id or any(
+            child.parent == child_dir
+            and (child.name == child_name or staged_name.fullmatch(child.name))
+            for path in (record.get("child_workflows") or ())
+            if isinstance(path, str)
+            for child in (Path(path),)
+        )
+    ]
+    intake_ids = {record["run_id"] for record in matched if record.get("run_id")}
+    return (
+        bool(matched)
+        and all(record.get("state") == "exited" for record in matched)
+        and not any(
+            record.get("run_id") in intake_ids and record.get("state") != "exited"
+            for record in records
+        )
+    )
 
 
 def _rows_owe_work(root: Path, sizing_rel: Optional[str], ids: Sequence[str]) -> bool:
@@ -3233,6 +3285,8 @@ def _own_token_unproven(root: Path, run_id: str, run_token) -> bool:
             return False
         marker = halted_run.read_strict(record_dir(root, run_id))
         if marker and ABANDONED_AT_MINTED in (marker.get("halted"), marker.get(halted_run.HALT_REASON_FIELD)):
+            return False
+        if _fire_worker_exited(root, run_id):
             return False
         return bool(warp_live.runner_unproven(root, run_id))
     except Exception:  # noqa: BLE001 -- unknown never words a run unproven

@@ -1387,6 +1387,7 @@ _PARAM_FIELDS = (
     Field("route_preference", "str"),
     Field("em_rationale", "str"),
     Field("em_size", "str"),
+    Field("family", "str"),
     Field("ask_context", "str_list"),
     Field("all_of_pm_ask", "bool"),
     Field("launcher_child", "bool"),
@@ -2805,6 +2806,11 @@ def _dispatch_emit_body(
             em_size = str(params["em_size"]).strip().upper()
             if em_size not in VALID_SIZES:
                 raise ValueError(f"dispatch.emit em_size takes one of {VALID_SIZES}, got {params['em_size']!r}")
+        family: Optional[str] = None
+        if params.get("family") is not None:
+            from coordinator_core.ops.dispatch_emit import stage_family as _stage_family_arg
+
+            family = _stage_family_arg.resolve(str(params["family"]).strip())
         sizing_rel: Optional[str] = None
         relayed_slice_text: Optional[str] = None
         if sizing_path:
@@ -3008,6 +3014,7 @@ def _dispatch_emit_body(
             "relayed_slice_text": relayed_slice_text,
             "route_preference": route_pref,
             "em_size": em_size,
+            "family": family,
             "required_reviewers": list(params.get("required_reviewers") or ()),
             "chatty": bool(params.get("chatty")),
         }
@@ -3470,6 +3477,7 @@ def _dispatch_emit_body(
                 preamble=preamble,
                 em_brief=ask_ctx.get("em_brief"),
                 em_size=ask_ctx.get("em_size"),
+                family=ask_ctx.get("family"),
                 stop_after=ask_ctx.get("stop_after"),
                 in_run_commit=ask_run_token is not None,
                 ask_source=ask_ctx["ask_source"],

@@ -2808,6 +2808,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_review import (  # noqa:
     _fixes_integrated_at,
     _reviewer_applied_fixes,
     _wave_slice_files,
+    run_agent_pin_events,
     verdict_pin_mismatches,
     verdict_pin_refusal,
 )
@@ -2817,11 +2818,18 @@ CHANGED_AFTER_REVIEW = "changed-after-review"
 VERDICT_PIN_STALE = "verdict-pin-stale"
 
 
-def _changed_after_review(root: Path, rel: str, reviewed_hash: object) -> bool:
-    """True when the worktree bytes of a reviewed path no longer match its ``reviewed_sha256`` entry."""
+def _changed_after_review(root: Path, rel: str, reviewed_hash: object, measured_blob: object = None) -> bool:
+    """True when the worktree bytes of a reviewed path match neither its ``reviewed_sha256`` entry nor the
+    blob the run's measured-rev record verified for it."""
     from coordinator_core.session import touch_record
 
-    return isinstance(reviewed_hash, str) and touch_record.compute_content_hash(root / rel) != reviewed_hash
+    if not isinstance(reviewed_hash, str) or touch_record.compute_content_hash(root / rel) == reviewed_hash:
+        return False
+    if isinstance(measured_blob, str):
+        from coordinator_core.git.commit import checkin_blob_sha
+
+        return checkin_blob_sha(root, rel) != measured_blob
+    return True
 
 
 def _recorded_fingerprints(
@@ -3277,6 +3285,7 @@ VERIFY_OVERLAY_RED = "verify-overlay-red"
 VERIFY_OVERLAY_UNVERIFIED = "verify-overlay-unverified"
 _TRAILER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*: ")
 NEW_RED = "new-red"
+COMMIT_SET_NOT_RECORDED_HUNKS = "commit-set-not-recorded-hunks"
 _NEW_RED_BUDGET_S = 100.0
 _NEW_RED_SHOWN = 10
 _TEST_GLOBS = (":(glob)**/test_*.py", ":(glob)**/*_test.py")
@@ -3886,6 +3895,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     script_path = params["script_path"]
     incomplete = set(params["incomplete_chunks"]) - set(params.get("landed_chunks") or [])
+    from coordinator_core.ops.dispatch_emit.landing_integrity import with_leg_record
+
+    _leg_run_id = params.get("run_id")
+    params = dict(with_leg_record(
+        root, params,
+        _leg_run_id if isinstance(_leg_run_id, str) and _leg_run_id else PurePosixPath(script_path.replace("\\", "/")).stem,
+    ))
     inline_review = params.get("inline_review")
     session_id = params.get("session_id")
     if not (isinstance(session_id, str) and _UUID_RE.fullmatch(session_id)):
@@ -4401,7 +4417,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 unmeasured.append(p)
         elif p in reverted:
             recorded_reason[p] = "reverted"
-        elif p in reviewed_bytes and _changed_after_review(root, p, reviewed_bytes[p]):
+        elif p in reviewed_bytes and _changed_after_review(
+            root, p, reviewed_bytes[p],
+            (measured.get("blobs") or {}).get(p)
+            if isinstance(measured, dict) and not measured.get("unreadable") and isinstance(measured.get("blobs"), dict)
+            else None,
+        ):
             recorded_reason[p] = CHANGED_AFTER_REVIEW
     candidates = [p for p in declared_changed if p not in withhold_reason]
     candidates += [p for p in recorded_changed if p not in recorded_reason and p not in candidates]
@@ -4633,7 +4654,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             ledger_met = None
     ledger_partial: dict = {}
 
-    def _downgrade_ledger() -> None:
+    def _downgrade_ledger(rewrite_note: bool = True) -> None:
         nonlocal ledger_met, ledger_partial
         if not (unlanded and isinstance(params.get("ledger_verdict"), dict)):
             return
@@ -4649,7 +4670,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if ledger_met:
                 met_ids = _ledger_met_ids(downgraded)
                 ledger_met = ("ledger-met: " + ", ".join(met_ids))[:_UNDONE_CAP] if met_ids else None
-            if ask_run_dir is not None:
+            if rewrite_note and ask_run_dir is not None:
                 _tcl.rewrite_note_verdicts(
                     root / delivery_note_locate(root, ask_run_dir.name), downgraded, inline_review, root,
                 )
@@ -4730,6 +4751,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 | {h for hs in measured_released.values() for h in hs}
             ),
             settled=settled_stage,
+            landing_blobs=_measured_own_blobs(measured, set(paths)) if measured is not None else None,
         )
     except land_deadline.LandDeadlineExceeded:
         _remove(root, receipt_paths)
@@ -4858,7 +4880,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         first = needed_refusal[0]
         return _error(
             f"landing refused {NEEDED_PATH_OMITTED}: {first['path']} is changed by this run and read by "
-            f"{first['needed_by'][0]['importer']} ({first['needed_by'][0]['name']}), but is held by {first['holder']}; "
+            f"{first['needed_by'][0]['importer']} ({first['needed_by'][0]['name']}), but is held by {_holders_text(first)}; "
             "land after that holder or release the path, then re-fire",
             refused=NEEDED_PATH_OMITTED, paths=[r["path"] for r in needed_refusal], needed_by=needed_refusal,
         )
@@ -5339,7 +5361,33 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                     paths=sorted(reach_dirt_foreign),
                 )
 
-    stale_verdict = verdict_pin_mismatches(root, inline_review, [p for p in commit_set if p not in settled_blobs])
+    if (
+        measured is not None and merge_plan is None and not measured.get("unreadable")
+        and not (anchor_only or request.review_only) and manifest is not None and manifest.write_baseline
+    ):
+        judged = [p for p, b in manifest.write_baseline.items() if b is not None]
+        accounted = {
+            *art_present, *receipt_paths, bookkeeping_path, *art_withheld, *art_dropped,
+            *recorded_reason, *withhold_reason, *named_out,
+        }
+        accounted |= set(_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review)(judged))
+        unrecorded = _unrecorded_hunk_lines(
+            root, set(commit_set), set(commit_deleted), settled_blobs, manifest.write_baseline, measured, accounted,
+        )
+        if unrecorded:
+            _remove(root, receipt_paths)
+            _reap_measured_export(root, measured_run)
+            return _error(
+                "landing refused: the commit set is not the run's recorded hunks: " + "; ".join(unrecorded)
+                + ". Remedy: land the recorded hunks of these paths only (declare each under writes), "
+                "then re-land; a peer's hunk never rides this commit",
+                refused=COMMIT_SET_NOT_RECORDED_HUNKS, paths=sorted({u.partition(":")[0] for u in unrecorded}),
+            )
+
+    stale_verdict = verdict_pin_mismatches(
+        root, inline_review, [p for p in commit_set if p not in settled_blobs],
+        run_agent_pin_events(root, session_id, sibling_run_id or art_run_id, inline_review),
+    )
     if stale_verdict:
         from coordinator_core.ops.dispatch_emit.comment_only_drift import tolerated_drift
         from coordinator_core.session import touch_record
@@ -5546,6 +5594,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         if left_rows:
             unlanded_rows = {row for row, _p, _r in unlanded}
             reply_left_rows = sorted({row for row, _p, _r in left_rows})
+            _downgrade_ledger(rewrite_note=False)
     merge_artifacts_reply: Optional[dict] = None
     if merge_plan is not None:
         merge_owner.clear(root)
@@ -6127,10 +6176,74 @@ def _needed_path_gate(
             "path": t,
             "needed_by": [{"importer": imp, "name": name} for imp, name in hits[t]],
             "holder": (reasons.get(t) or "withheld") if holders[t] == "barred" else holders[t],
+            "holders": _refusal_holders(root, t, **free_kw),
         }
         for t in sorted(holders)
     ]
     return carry, refusal
+
+
+RELEASE_HALTED_PATH_OP = "dispatch.release_halted_path"
+
+
+def _refusal_holders(
+    root: Path, path: str, *, session_id=None, rid=None, script_path=None, plan_rel=None, run_base=None,
+    minted_before=None, own_run_ids: Sequence = (), **_unused,
+) -> list:
+    """Each run or session keeping ``path`` out of the landing: ``{kind: "halted-run", run_id, release}``
+    for a halted run whose hold stands (``release`` the ``dispatch.release_halted_path`` call that frees it),
+    ``{kind: "live-run", run_id}`` for a live run declaring it, ``{kind: "session", session_id}`` for a
+    live touch claim. Empty when none is found. Never raises."""
+    out: list = []
+    own = {str(r) for r in own_run_ids if r}
+    landing_run = next((r for r in reversed(list(own_run_ids)) if r), None)
+    try:
+        from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index
+
+        halted = sorted(r for r, e in halted_withheld_index.entries(root).items() if path in e.paths and r not in own)
+        with halted_hold_release.release_scope():
+            for run in halted:
+                if halted_hold_release.still_held_by_index(root, {path: run}, landing_run, plan_rel):
+                    out.append({
+                        "kind": "halted-run", "run_id": run,
+                        "release": {
+                            "op": RELEASE_HALTED_PATH_OP,
+                            "params": {"run_id": run, "path": path, "reason": "<why this halt no longer protects the path>"},
+                        },
+                    })
+        scan = warp_run_deliverable._live_claim_scan(
+            root, [path], _submitter_session(root, rid), str(root), minted_before, rid if isinstance(rid, str) else None,
+        ) or {}
+        live_sessions = set()
+        for _minted, run, sid in scan.get(path, ()):
+            live_sessions.add(sid)
+            if run not in own:
+                out.append({"kind": "live-run", "run_id": run})
+        for sid in sorted(
+            set(_peer_held(
+                root, [path], session_id, rid, script_path, plan_rel=plan_rel,
+                run_base=run_base if isinstance(run_base, str) else None, minted_before=minted_before,
+            ).get(path, ())) - live_sessions
+        ):
+            out.append({"kind": "session", "session_id": sid})
+    except Exception:  # noqa: BLE001 -- naming the holders is advisory; the refusal stands without it
+        pass
+    return out
+
+
+def _holders_text(entry: Mapping) -> str:
+    """The refusal's holder sentence for one ``_needed_path_gate`` entry: its reason plus each holder run id and,
+    for a halted run, the release call."""
+    named = []
+    for h in entry.get("holders") or ():
+        if h["kind"] == "halted-run":
+            named.append(f"{h['run_id']} (release: {RELEASE_HALTED_PATH_OP} {json.dumps(h['release']['params'])})")
+        elif h["kind"] == "live-run":
+            named.append(f"{h['run_id']} (live run; land after it)")
+        else:
+            named.append(f"session {h['session_id']} (live touch claim)")
+    return f"{entry['holder']}: {'; '.join(named)}" if named else str(entry["holder"])
 
 
 def _carry_withheld_symbol_targets(
@@ -6226,12 +6339,72 @@ def _is_test_path(rel: str) -> bool:
     )
 
 
+def _hunk_header(hunk: tuple) -> str:
+    """A short, printable name for one ``_hunk_blocks`` key: its first changed line."""
+    old, new = hunk
+    line = (new or old or (b"",))[0]
+    text = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
+    return f"{'+' if new else '-'}{text.strip()[:80]!r}"
+
+
+def _unrecorded_hunk_lines(
+    root: Path, commit_set: Collection[str], commit_deleted: Collection[str], settled_blobs: Mapping,
+    baseline: Mapping, measured: Mapping, skip: Collection[str],
+) -> list:
+    """One refusal line per path whose commit image is not exactly the run's recorded hunks: a hunk
+    over the write baseline the measured record does not hold (``carries``), or a recorded hunk HEAD
+    lacks that the commit omits (``omits``, a baseline path absent from the commit set included).
+    A path with no baseline blob, no readable measured end state, no recorded hunk (the run changed
+    nothing there, so what it lands is pre-existing dirt, not run work), or in *skip* is not judged."""
+    import collections
+
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    blobs = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
+    own = measured.get("own_blobs") if isinstance(measured.get("own_blobs"), dict) else {}
+    common = resolve_git_common_dir(root)
+    lines: list = []
+    for p, base in sorted(baseline.items()):
+        if not isinstance(base, str) or not base or p in skip or p in commit_deleted or not (root / p).is_file():
+            continue
+        end = own.get(p) if isinstance(own.get(p), str) and own.get(p) else blobs.get(p)
+        obj = git_objects.read_object(common, end) if isinstance(end, str) else None
+        if obj is None:
+            continue
+        try:
+            recorded = _own_hunks(root, p, base, obj[1])
+            if p in commit_set:
+                landed_bytes = _landed_bytes(root, p, settled_blobs)
+                landing = None if landed_bytes is None else _own_hunks(root, p, base, landed_bytes)
+            else:
+                landing = collections.Counter()
+        except Exception:  # noqa: BLE001 -- an unreadable side proves nothing; the measured-record gate judges it
+            continue
+        if recorded is None or landing is None or not recorded:
+            continue
+        for hunk in sorted(landing - recorded, key=repr)[:1]:
+            lines.append(f"{p}: carries unrecorded hunk {_hunk_header(hunk)}")
+        for hunk in sorted(recorded - landing, key=repr)[:1]:
+            where = "omits recorded hunk" if p in commit_set else "is absent from the landing set; recorded hunk"
+            lines.append(f"{p}: {where} {_hunk_header(hunk)}")
+    return lines
+
+
+def _landing_bytes(root: Path, paths: Iterable[str], settled_blobs: Optional[Mapping] = None) -> dict:
+    """``{path: bytes the commit lands}`` for the landing paths: the settled own-only blob where
+    *settled_blobs* names one, else the worktree bytes; None when unreadable."""
+    settled = dict(settled_blobs or {})
+    return {p: _landed_bytes(root, p, settled) for p in paths}
+
+
 def _integrity(
     root: Path, params: dict, paths: list, deleted: list, record_abs: Optional[Path], run_id: str,
     plan: Optional[str], *, residue_py: Sequence[str] = (), own_declared: Sequence[str] = (),
     session_id: Optional[str] = None, minted_before: Optional[tuple] = None,
     deleted_notes: Optional[list] = None, released_holders: frozenset = frozenset(),
     settled: Optional[dict] = None, foreign_evidence: Optional[dict] = None,
+    landing_blobs: Optional[Mapping] = None,
 ) -> list:
     """Pre-commit findings over the landing set: unparseable ``.py``, a ``.py`` importing what the
     commit leaves out of HEAD, a dirty declared ``.py`` the landing leaves behind that imports what
@@ -6257,12 +6430,20 @@ def _integrity(
     land_deadline.check("land_run._integrity.import_closure")
     # The merge commit carries every merge path, so an import of a merge-carried module is landed,
     # not uncommitted.
+    # A landing path reads the blob the commit lands (*landing_blobs* names the settled own-only blob,
+    # else its worktree bytes); every other path reads HEAD, so a name only a peer's dirt binds does
+    # not resolve.
     if owned is not None:
+        closure_paths = sorted({*live, *owned.present})
         findings += li.import_closure_findings(
-            root, sorted({*live, *owned.present}), sorted({*deleted, *owned.deleted}),
+            root, closure_paths, sorted({*deleted, *owned.deleted}),
+            landed_text=li.committed_image_text(root, _landing_bytes(root, closure_paths, landing_blobs)),
         )
     else:
-        findings += li.import_closure_findings(root, live, deleted)
+        findings += li.import_closure_findings(
+            root, live, deleted,
+            landed_text=li.committed_image_text(root, _landing_bytes(root, live, landing_blobs)),
+        )
     try:
         from coordinator_core.authoring_leaks import import_closure
 

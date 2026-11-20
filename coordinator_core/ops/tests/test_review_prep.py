@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git.content_hash import eol_folded_sha256
 from coordinator_core.ops import review_prep as rp
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -819,3 +820,63 @@ def test_native_blob_parse_finds_the_broken_py_at_head_and_defers_a_non_sha_head
     assert [f.path for f in native] == ["bad.py"]
     assert native == unparseable_py_at(repo, head, paths)
     assert rp._unparseable_py_at_native(repo, "HEAD", paths) is None
+
+
+def _commit_range_with_shared_tree_dirt(repo: Path) -> tuple[str, str]:
+    """Commit a range delta on ``a/own.py``, then dirty the shared tree: an uncommitted foreign hunk on
+    that declared path, and an uncommitted file with no range delta. Returns ``(base, head)``."""
+    base = _base(repo)
+    _write(repo, ["a/own.py"], 3)
+    _git(repo, "add", "a/own.py")
+    _git(repo, "commit", "-q", "-m", "own")
+    head = _base(repo)
+    (repo / "a" / "own.py").write_text("v = 1\n" * 3 + "FOREIGN_HUNK = 1\n", encoding="utf-8")
+    (repo / "a" / "untracked.py").write_text("FOREIGN_UNTRACKED = 1\n", encoding="utf-8")
+    return base, head
+
+
+def test_committed_only_range_slice_never_holds_shared_tree_dirt(repo) -> None:
+    base, head = _commit_range_with_shared_tree_dirt(repo)
+    result = rp.review_prep(
+        repo, base=base, paths=["a/own.py", "a/untracked.py"], slice_prefix="prep-co", plan_path="docs/plans/p.md",
+        session_id=SESSION, head=head, committed_only=True,
+    )
+    assert result["error"] is None
+    diff = Path(result["whole_diff_path"]).read_text(encoding="utf-8")
+    assert "+v = 1" in diff
+    assert "FOREIGN_HUNK" not in diff and "FOREIGN_UNTRACKED" not in diff
+    assert [f for s in result["slices"] for f in s["files"]] == ["a/own.py"]
+    assert result["excluded"] == [{"path": "a/untracked.py", "reason": "no-delta"}]
+    blob = subprocess.run(["git", "-C", str(repo), "show", f"{head}:a/own.py"], capture_output=True, check=True,
+                          **no_console_creationflags()).stdout
+    assert result["reviewed_sha256"] == {"a/own.py": eol_folded_sha256(blob)}
+    fm = _sidecar_fm(repo, result)
+    assert fm["committed_only"] is True
+
+
+def test_default_range_slice_still_carries_worktree_bytes(repo) -> None:
+    base, head = _commit_range_with_shared_tree_dirt(repo)
+    result = rp.review_prep(
+        repo, base=base, paths=["a/own.py", "a/untracked.py"], slice_prefix="prep-dflt", plan_path="docs/plans/p.md",
+        session_id=SESSION, head=head,
+    )
+    assert result["error"] is None
+    diff = Path(result["whole_diff_path"]).read_text(encoding="utf-8")
+    assert "FOREIGN_HUNK" in diff and "FOREIGN_UNTRACKED" in diff
+
+
+def test_committed_only_requires_range_mode(repo) -> None:
+    result = _call(repo, ["seed.py"], committed_only=True)
+    assert "committed_only requires head" in result["error"]
+
+
+def test_a_stored_default_reply_is_not_served_to_a_committed_only_call(repo) -> None:
+    base, head = _commit_range_with_shared_tree_dirt(repo)
+    first = rp.review_prep(
+        repo, base=base, paths=["a/own.py"], slice_prefix="prep-sv", plan_path="docs/plans/p.md",
+        session_id=SESSION, head=head,
+    )
+    sidecar = repo / first["sidecar_path"]
+    args = (repo, sidecar, base, ["a/own.py"], head)
+    assert rp._stored_reply(*args) is not None
+    assert rp._stored_reply(*args, committed_only=True) is None

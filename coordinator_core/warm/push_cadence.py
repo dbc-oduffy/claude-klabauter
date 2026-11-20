@@ -234,6 +234,15 @@ _backoff: "dict[Path, list[int]]" = {}
 #: (1, 2, 4, 8), capped here -- 8 ticks is ~80 minutes at the 600s cadence.
 BACKOFF_MAX_SKIP_SWEEPS = 8
 
+#: Last retire visit per repo (sweep clock). One remote round trip per repo per interval,
+#: not per 600s tick. Guarded by `_cadence_lock`.
+_publish_retired_at: "dict[Path, float]" = {}
+PUBLISH_RETIRE_INTERVAL_SECS = 6 * 3600.0
+#: Whole-call budget for one repo's retire (ls-remote, ancestry, one delete push), and the
+#: least remaining sweep time worth starting it with.
+PUBLISH_RETIRE_BUDGET_SECS = 10.0
+PUBLISH_RETIRE_MIN_BUDGET_SECS = 3.0
+
 _SWEEP_LOCK_NAME = "coordinator-push-cadence-sweep.json"
 #: Headroom over the longest per-repo ladder deadline any repo can resolve to
 #: (`PUSH_CEILING_MAX_SECS`) -- a live long push is never mistaken for stale.
@@ -251,6 +260,7 @@ def reset_cadence_for_test() -> None:
         _foreign_deliveries.clear()
         _due_repos.clear()
         _backoff.clear()
+        _publish_retired_at.clear()
 
 
 def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
@@ -735,7 +745,11 @@ def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> 
     The record is removed only by a landed push or an upstream tree that
     already holds the path. Every other outcome leaves it, with `attempts` + 1.
     """
-    from coordinator_core.ops.fleet import _memo_push_pending, _upstream_delivery
+    from coordinator_core.ops.fleet import (
+        _memo_push_pending,
+        _receiver_landing,
+        _upstream_delivery,
+    )
 
     root = Path(record["receiver_root"])
     branch = record["branch"]
@@ -751,6 +765,22 @@ def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> 
     try:
         common_dir = resolve_git_common_dir(root)
         sha = record["commit_sha"]
+        local = _ref_sha(common_dir, f"refs/heads/{branch}")
+        if local and not _receiver_landing._is_ancestor(common_dir, sha, local):
+            if _upstream_delivery.path_in_tree(root, local, str(record["path"])) is True:
+                _memo_push_pending.remove_pending(sender, sha)
+                _retire_delivery_refs(common_dir, [sha])
+                return
+            parent = record.get("parent_sha")
+            if (
+                parent
+                and not _receiver_landing._is_ancestor(common_dir, local, parent)
+                and not _receiver_landing._is_ancestor(common_dir, parent, local)
+            ):
+                _memo_push_pending.bump_attempt(
+                    record, "parent diverged from the local branch; not pushed"
+                )
+                return
         result = push_refspec(
             root, remote, sha, f"refs/heads/{branch}", timeout=ceiling_secs
         )
@@ -834,6 +864,57 @@ def _sweep_memo_push_pending(
                 _push_pending_record(sender, record, ceiling_secs=ceiling)
             except Exception:  # noqa: BLE001 -- sweep_repos promises never to raise
                 continue
+
+
+def _retire_publish_branches_one(root: Path, remote: str, *, budget_secs: float) -> None:
+    from coordinator_core.warm import publish_branch_retire
+
+    outcome = publish_branch_retire.retire_merged_publish_branches(
+        root, remote, budget_secs=budget_secs
+    )
+    if outcome.error is None:
+        return
+    try:
+        log_failure(
+            str(root), head_branch(root) or "<unknown>", "cadence-sweep",
+            "publish-retire-failed", 1, outcome.error, "", unconfirmed=False,
+        )
+    except Exception:  # noqa: BLE001 -- feeding the detector must never raise
+        pass
+
+
+def _sweep_publish_retire(
+    roots: Iterable[Path], *, deadline: float, clock: Callable[[], float]
+) -> None:
+    """Retire merged remote `publish/<sha>` branches, each repo at most once per
+    `PUBLISH_RETIRE_INTERVAL_SECS`, never past the sweep `deadline`. Never raises."""
+    if machine_profile() != "author":
+        return
+    with _cadence_lock:
+        order = sorted(roots, key=lambda r: _publish_retired_at.get(r, float("-inf")))
+    for root in order:
+        try:
+            now = clock()
+            with _cadence_lock:
+                last = _publish_retired_at.get(root)
+            if last is not None and now - last < PUBLISH_RETIRE_INTERVAL_SECS:
+                continue
+            budget = min(PUBLISH_RETIRE_BUDGET_SECS, deadline - now)
+            if budget < PUBLISH_RETIRE_MIN_BUDGET_SECS:
+                return
+            remote = resolve_push_remote(root, head_branch(root) or "")
+            if remote is None:
+                continue
+            if not _acquire_sweep_lock(root):
+                continue
+            try:
+                _retire_publish_branches_one(root, remote, budget_secs=budget)
+            finally:
+                _release_sweep_lock(root)
+            with _cadence_lock:
+                _publish_retired_at[root] = now
+        except Exception:  # noqa: BLE001 -- sweep_repos promises never to raise
+            continue
 
 
 def sweep_repos(
@@ -924,6 +1005,7 @@ def sweep_repos(
         {"pushed": pushed, "failed": failed}.get(result, skipped).append(root)
     _sweep_foreign(deadline=deadline, clock=clock)
     _sweep_memo_push_pending(ordered, deadline=deadline, clock=clock)
+    _sweep_publish_retire(ordered, deadline=deadline, clock=clock)
     with _cadence_lock:
         streaks = {root: _backoff[root][0] for root in backed_off if root in _backoff}
     telemetry.record_sweep(

@@ -95,7 +95,8 @@ def test_halt_lookup_is_the_bounded_newest_add_query(foreign_repo, monkeypatch: 
     real_run = git_ancestry.run_git
     monkeypatch.setattr(git_ancestry, "run_git", spy)
     op._halt_commit(repo, marker.parent)
-    assert seen and seen[0][:2] == ["log", "-1"], seen
+    assert seen and seen[0][:2] == ["log", "-n"] and "--" not in seen[0], seen
+    assert [a[0] for a in seen] in (["log"], ["log", "diff-tree"]), seen
 
 
 @pytest.mark.parametrize("timed_out,returncode", [(True, -1), (False, 128)])

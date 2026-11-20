@@ -71,13 +71,16 @@ def compose_daily_summary_gap(
     machine: str,
     resolve_tip: Callable[[str, "list[str]"], Optional[str]],
     today: Optional[str] = None,
+    allow_diverged: bool = False,
 ) -> "tuple[Path, str]":
     """Return ``(path, text)`` for the missing summary of ``date``.
 
     ``resolve_tip(root, shas)`` returns the one sha descending every other, or
     None when the day's branches diverge. Raises GapRefusal when ``date`` is
     malformed, a summary for the day already exists, the day has no commits on
-    any ref, or the tips diverge.
+    any ref, or the tips diverge. With ``allow_diverged`` a diverged day is
+    composed instead: ``covered_tip_sha`` is the newest leaf and a
+    ``## Leaf Tips`` section lists every leaf.
     """
     worktree = Path(worktree)
     if not _ISO_DATE_RE.match(date or ""):
@@ -101,8 +104,11 @@ def compose_daily_summary_gap(
     parents_in_day = {p for _, parents, _ in commits for p in parents if p in in_day}
     leaves = [sha for sha, _, _ in commits if sha not in parents_in_day]
     tip = resolve_tip(str(worktree), leaves)
-    if not tip:
-        raise GapRefusal(f"no single descendant tip for {date} (diverged branches)")
+    diverged = not tip
+    if diverged:
+        if not allow_diverged:
+            raise GapRefusal(f"no single descendant tip for {date} (diverged branches)")
+        tip = leaves[0]
 
     today = today or datetime.date.today().strftime("%Y-%m-%d")
     path = worktree / "archive" / "daily-summaries" / f"{date}-{machine}.md"
@@ -128,4 +134,8 @@ def compose_daily_summary_gap(
         "## Work Completed\n"
         f"{bullets}\n"
     )
+    if diverged:
+        subjects = {sha: subject for sha, _, subject in commits}
+        leaf_lines = "\n".join(f"- {sha} {subjects[sha]}" for sha in leaves)
+        text += f"\n## Leaf Tips\n{leaf_lines}\n"
     return path, text

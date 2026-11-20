@@ -84,6 +84,9 @@ CLOSE_LEGS = (
     "scratch-reap",
 )
 _CLOSE_JOB_WINDOW_MINUTES = 5
+#: Commits from HEAD searched for the commit that added a run's ``halted.json``.
+_HALT_WALK_COMMITS = 2000
+_HALT_RECORD_SUBJECT = re.compile(r"^warp: record halted (.+?) run artifacts(?: \(process files\))?$")
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
@@ -674,7 +677,7 @@ def _named_paths(owed: list, named: frozenset) -> list:
 
 
 def _predecessor_record(path: str, run_id: str) -> bool:
-    """True for a file directly in a run record dir (``state/warp/<id>/<file>``) of a run other than *run_id*.
+    """True for a file at any depth in a run record dir (``state/warp/<id>/**``) of a run other than *run_id*.
 
     Pure string test, casefolded, ``<repo>:`` qualifier stripped; the run's own record dir and every
     product path are False.
@@ -684,7 +687,33 @@ def _predecessor_record(path: str, run_id: str) -> bool:
     parts = _tree_path(path).replace("\\", "/").casefold().split("/")
     root_parts = RECORD_DIR_ROOT.casefold().split("/")
     n = len(root_parts)
-    return len(parts) == n + 2 and parts[:n] == root_parts and parts[n] != run_id.casefold()
+    return len(parts) >= n + 2 and parts[:n] == root_parts and parts[n] != run_id.casefold()
+
+
+def _only_predecessor_records(load_dir, before: Optional[str], after: Optional[str], run_id: str, prefix: str = "") -> bool:
+    """True when two trees differ and every differing non-tree path is a predecessor record of a run other than *run_id*.
+
+    Equal subtrees are skipped unread; the walk stops at the first other path. An unreadable tree reads as no difference.
+    """
+    new = (load_dir(after) if after else None) or {}
+    old = (load_dir(before) if before else None) or {}
+    differs = False
+    for name in new.keys() | old.keys():
+        a, b = new.get(name), old.get(name)
+        if a is not None and b is not None and a[1] == b[1]:
+            continue
+        full = f"{prefix}{name}"
+        a_tree, b_tree = bool(a and a[0] == 0o40000), bool(b and b[0] == 0o40000)
+        if a_tree or b_tree:
+            if not _only_predecessor_records(
+                load_dir, b[1] if b and b_tree else None, a[1] if a and a_tree else None, run_id, full + "/",
+            ):
+                return False
+        if (a and not a_tree) or (b and not b_tree):
+            if not _predecessor_record(full, run_id):
+                return False
+        differs = True
+    return differs
 
 
 def _declaring_runs(root: Path, run_id: str, named: list) -> dict:
@@ -761,7 +790,8 @@ def _carries_withheld(
 
     Each sha is compared with its first parent; the union of changed withheld paths must cover the
     withheld list less the paths a revision voided (``voided``, ``_voided_paths``), and every sha must
-    change at least one owed path. ``covers`` maps each sha to the owed paths it changed (empty for a
+    change at least one owed path (a sha that changed only other runs' record-dir files, a predecessor
+    halt commit, is exempt). ``covers`` maps each sha to the owed paths it changed (empty for a
     run withholding nothing or with no marker, which passes). An unreadable commit or tree refuses.
     *dropped* and *foreign* (casefolded tree paths) void owed paths last, kept-fingerprinted or not, and
     only paths no sha changed: *dropped* are left out on purpose; *foreign* need another live or landed run
@@ -817,7 +847,9 @@ def _carries_withheld(
                 return f"{sha} tree is unreadable; retry", {}, []
             if after != before:
                 changed.add(p)
-        if len(shas) > 1 and not changed:
+        if len(shas) > 1 and not changed and not _only_predecessor_records(
+            _dir, parent_meta["tree"] if parent_meta else None, meta["tree"], run_id,
+        ):
             return f"{sha} changed none of the run's withheld paths; drop it from shas", {}, []
         covered |= changed
         covers[sha] = [p for p in withheld if p in changed]
@@ -973,30 +1005,64 @@ def _withheld_import_problem(root: Path, run_id: str, shas: list, covers: dict) 
 
 
 def _halt_commit(root: Path, record_dir: Path) -> tuple[Optional[str], Optional[str]]:
-    """``(halt_commit, None)`` for the newest commit that added the run's ``halted.json``; ``(None, None)`` when git answered and none added it; ``(None, reason)`` when the git read failed.
+    """``(halt_commit, None)`` for the newest of the last ``_HALT_WALK_COMMITS`` commits from HEAD that records the run's halt; ``(None, None)`` when git answered and none does; ``(None, reason)`` when a git read failed.
 
-    One git spawn. Trap: ``-1`` is load-bearing; without it the path-limited log walks all history,
-    which outruns the local git budget on a large repo and reads as a failure.
+    A commit records the halt when its ``warp: record halted <run id>[, <run id>...] run artifacts``
+    subject names the run, else when it added the run's ``halted.json`` (a record dir git tracks).
+    At most two git spawns: a count-bounded ``log`` of shas and subjects, then one ``diff-tree --stdin``
+    over exactly those shas. Trap: ``state/warp/`` is gitignored here, so ``halted.json`` is usually
+    never in a commit; and a path-limited ``git log -- <path>`` is not bounded by ``-n`` (that bounds
+    matches, not commits walked), so it walks all history. A halt older than the window reads as not found.
     """
     from coordinator_core import git_ancestry
     from coordinator_core.ops.dispatch_emit import halted_run
 
     rel = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
-    result = git_ancestry.run_git(["log", "-1", "--diff-filter=A", "--format=%H", "--", rel], cwd=str(root))
+    run_id = record_dir.name
+    listed = git_ancestry.run_git(["log", "-n", str(_HALT_WALK_COMMITS), "--format=%H %s"], cwd=str(root))
+    if listed.returncode != 0:
+        why = "timed out" if listed.timed_out else f"exit {listed.returncode}"
+        return None, f"git log of HEAD failed ({why})"
+    shas: list = []
+    for line in listed.stdout.splitlines():
+        sha, _, subject = line.partition(" ")
+        if not _FULL_SHA.fullmatch(sha):
+            continue
+        shas.append(sha)
+        match = _HALT_RECORD_SUBJECT.match(subject.strip())
+        if match and run_id in [r.strip() for r in match.group(1).split(",")]:
+            return sha, None
+    if not shas:
+        return None, None
+    result = git_ancestry.run_git(
+        ["diff-tree", "--stdin", "--root", "-r", "--diff-filter=A", "--name-only", "--", rel],
+        cwd=str(root), input="\n".join(shas).encode("ascii") + b"\n",
+    )
     if result.returncode != 0:
         why = "timed out" if result.timed_out else f"exit {result.returncode}"
-        return None, f"git log of {rel} failed ({why})"
-    lines = result.stdout.split()
-    return (lines[0], None) if lines and _FULL_SHA.fullmatch(lines[0]) else (None, None)
+        return None, f"git diff-tree of {rel} failed ({why})"
+    current = None
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if _FULL_SHA.fullmatch(line):
+            current = line
+        elif current is not None and line == rel:
+            return current, None
+    return None, None
 
 
 def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -> Optional[str]:
-    """Refusal naming the first ``met_by`` row whose sha is not a blocking row's commit at or after the halt, else None.
+    """Refusal naming the first ``met_by`` row whose sha is not a blocking row's commit after the halt, else None.
 
-    *met_by* holds full shas already proven ancestors of HEAD (*reached*). At-or-after the halt is
-    equal to the halt commit or not an ancestor of it: one batched ``rev-list`` for all rows.
+    *met_by* holds full shas already proven ancestors of HEAD (*reached*). The bound is the marker's
+    ``run_base_sha`` when it names a commit (a halt record that never committed, or committed late,
+    still places the credit): a sha equal to or an ancestor of it refuses. A marker without one falls
+    back to the halt record's commit (``_halt_commit``): equal to it or not an ancestor of it.
+    One batched ``rev-list`` for all rows either way.
     """
     from coordinator_core import git_ancestry
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
     try:
@@ -1012,6 +1078,15 @@ def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -
             return f"met_by row {row} is not a blocking row of {run_id}"
         if sha not in reached:
             return f"met_by row {row}: {sha} is not an ancestor of HEAD; pass the commit that met the row"
+    base = marker.get(halted_run.HALT_RUN_BASE_FIELD)
+    if isinstance(base, str) and _FULL_SHA.fullmatch(base) and commit_meta(resolve_git_common_dir(root), base):
+        read_ok, before = git_ancestry.ancestors_of(list(met_by.values()), base, cwd=str(root))
+        if not read_ok:
+            return "ancestry of the met_by shas could not be read; retry"
+        for row, sha in met_by.items():
+            if sha in before:
+                return f"met_by row {row}: {sha} is not after the run base {base}; pass a commit made after the halt"
+        return None
     halt, read_failure = _halt_commit(root, record_dir)
     if read_failure:
         return f"{run_id} halt commit could not be read: {read_failure}; retry"
@@ -1431,6 +1506,17 @@ def _close_checkpointed(root: Path, run_id: str, shas: list, session_id: Optiona
     }
 
 
+def _land_committed(record_dir: Path) -> bool:
+    """True when the run's ``land-legs.json`` records ``outcome: landed``: ``land_run`` wrote it only after a commit, so a partial land (``rows_unlanded``) ran."""
+    from coordinator_core.ops.dispatch_emit import land_leg_record
+
+    try:
+        doc = json.loads((record_dir / land_leg_record.FILE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(doc, dict) and doc.get("outcome") == land_leg_record.OUTCOME_LANDED
+
+
 def _record_solo(
     root: Path, run_id: str, shas: list, session_id: Optional[str] = None, in_run: bool = False,
     met_by: Optional[dict] = None, landed_under: Optional[str] = None, foreign: frozenset = frozenset(),
@@ -1441,6 +1527,8 @@ def _record_solo(
     ``in_run`` admits a marker-less run: it verifies the sha and the clean write set, writes nothing and
     replies ``_close_landed``'s not-applicable close. ``landed_under`` admits a marker-less run whose
     work the named run already landed: no git read, the named run's landed sha is the credit.
+    A marker-less run whose record dir holds a committed land record (``_land_committed``) is closed
+    the same way against the verified sha; with no commit and no record the "never ran" refusal stands.
     """
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
@@ -1467,6 +1555,11 @@ def _record_solo(
             }
     if marker is None:
         closed = _close_checkpointed(root, run_id, shas, session_id)
+        if closed is None and _land_committed(record_dir):
+            sha, problem, echo = _verify(root, run_id, shas, met_by, foreign, dropped)
+            if problem:
+                return _refuse(problem)
+            return {"ok": True, "run_id": run_id, "sha": sha, "written": False, **echo, **_close_landed(root, run_id, sha, session_id)}
         return closed if closed is not None else _refuse(f"{run_id} has no sibling status or halt record; it never ran")
     status = marker.get("status")
     if status == halted_run.STATUS_LANDED:

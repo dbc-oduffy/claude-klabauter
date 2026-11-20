@@ -12,7 +12,7 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, em_size?, stop_after?, chatty?}` (`em_size` is the EM's own size, XS|S|M|L|XL|XXL, forwarded to the emit op as params["em_size"]; the gate halts only when it is M or below against an engine XL/XXL; a value outside the set, or one beside a multi-item `asks`, is refused) (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, repo?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an entry's `repo` (else the top-level `repo`) is the checkout its run starts in and writes to: entries are partitioned by resolved repo, each repo is cross-repo-checked and fanned out once, and the runs start under one launcher per repo; an `after` edge or a `join` across repos is refused; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, em_size?, family?, stop_after?, chatty?}` (`family` is one of stage_family.FAMILIES, forwarded to the emit op as params["family"] and stamped on the minted sizing so composed write rows bind it; an unknown name is refused naming it, and one beside `{sizing}` is refused, the sizing's own `family` key governs; the same key rides each `asks` entry, and a top-level value beside `asks` applies to every entry naming none) (`em_size` is the EM's own size, XS|S|M|L|XL|XXL, forwarded to the emit op as params["em_size"]; the gate halts only when it is M or below against an engine XL/XXL; a value outside the set, or one beside a multi-item `asks`, is refused) (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, repo?, family?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an entry's `repo` (else the top-level `repo`) is the checkout its run starts in and writes to: entries are partitioned by resolved repo, each repo is cross-repo-checked and fanned out once, and the runs start under one launcher per repo; an `after` edge or a `join` across repos is refused; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one
 launcher (`fan_launcher.write_launcher`, given each run's pre-emitted reply) that starts each, with one ready run it fires
@@ -89,7 +89,7 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "em_size", "fresh", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing",
+    "em_rationale", "em_size", "family", "fresh", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing",
     "source", "stop_after", "supersedes", "writes",
 )
 _INPUT_KEYS: tuple[str, ...] = ("run_id", "repo")
@@ -110,6 +110,31 @@ def _em_size_param(tool_input: Mapping[str, Any], multi_ask: bool) -> tuple[Opti
     if multi_ask:
         return None, "em_size rides one run, not a set of sibling runs. Submit each ask on its own."
     return size, None
+
+
+def _family_refusal(where: str, value: Any) -> Optional[str]:
+    """Refusal text for a `family` outside stage_family.FAMILIES; None when absent or accepted."""
+    if value is None:
+        return None
+    from coordinator_core.ops.dispatch_emit import stage_family
+
+    if isinstance(value, str) and value in stage_family.FAMILIES:
+        return None
+    return f"{where}.family {value!r} is not a family the engine runs. Accepted: {'|'.join(stage_family.FAMILIES)}."
+
+
+def _call_family(tool_input: Mapping[str, Any], sizing_submitted: bool) -> tuple[Optional[str], Optional[str]]:
+    """(top-level family or None, refusal) for the optional call-level `family` arg."""
+    args = tool_input.get("args")
+    value = args.get("family") if isinstance(args, dict) else None
+    if value is None:
+        return None, None
+    why = _family_refusal("args", value)
+    if why:
+        return None, why
+    if sizing_submitted:
+        return None, f"family {value!r} rides an ask; a sizing's own `family` key governs."
+    return value, None
 
 
 _ARGS_SHAPE = ARGS_SHAPE.replace(
@@ -783,9 +808,26 @@ _MINTED_OP = "dispatch.minted_run"
 _ENVELOPE_GRACE_S = 0.35
 
 
+#: The wait the answer gives the fail-open log line: a healthy append lands in milliseconds, a stalled
+#: one is left on its daemon thread rather than holding the answer.
+_FAIL_OPEN_LOG_JOIN_S = 0.05
+#: Fraction of the caller budget by which the refusal-log write must have answered.
+_TAIL_SHARE = 0.95
+
+
 def _log_fail_open(cause: str, call: Optional[dict] = None) -> None:
     """Appends one line to `<settings>/state/door-fail-open.log`, the same shape the door twins write
-    (`door_log_fail_open`). Never raises and never changes the verdict."""
+    (`door_log_fail_open`), on a daemon thread joined `_FAIL_OPEN_LOG_JOIN_S`. Never raises, never
+    blocks past that join and never changes the verdict."""
+    try:
+        thread = threading.Thread(target=_in_scope(lambda: _append_fail_open_line(cause, call)), daemon=True)
+        thread.start()
+        thread.join(_FAIL_OPEN_LOG_JOIN_S)
+    except Exception:
+        return
+
+
+def _append_fail_open_line(cause: str, call: Optional[dict]) -> None:
     import time
     from datetime import datetime, timezone
 
@@ -838,8 +880,26 @@ def _answer_overran(call: dict) -> dict:
             f"The refire of run {resuming} outran the hook budget; the engine is reachable and "
             "nothing was spooled. Re-submit once: it resumes the same run."
         )
-    spooled = _spool_envelope(call.get("payload"), roots[0] if roots else None, "reach-budget-no-run")
-    if spooled is not None:
+    premint = call.get("premint")
+    if premint is not None:  # nothing published under the chosen id: the deferred emit mints it
+        state, deferred = _write_leg("deferred script", lambda: _premint_deferred_envelope(*premint), join_s=_ENVELOPE_GRACE_S)
+        if state == "done":
+            return deferred
+        return _refuse(
+            "The submission outran the hook budget and the deferred script write "
+            f"{'raised' if state == 'raised' else 'stalled'}, so the run may not start. "
+            f"Check the run state before re-submitting: a second submit may start a second run. {_minted_remedy([premint[2]])}"
+        )
+    state, spooled = _write_leg(
+        "ask spool", lambda: _spool_envelope(call.get("payload"), roots[0] if roots else None, "reach-budget-no-run"),
+        join_s=_ENVELOPE_GRACE_S,
+    )
+    if state == "detached":
+        return _refuse(
+            "The submission outran the hook budget and the spool write stalled, so whether the ask was spooled is "
+            "unknown. Check the pending ask spool before re-submitting: a second submit may start a second run."
+        )
+    if state == "done" and spooled is not None:
         return spooled
     return _refuse("The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once.")
 
@@ -1725,6 +1785,9 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         stop_why = _stop_after_refusal(f"asks[{i}]", item.get("stop_after"))
         if stop_why:
             return None, stop_why
+        family_why = _family_refusal(f"asks[{i}]", item.get("family"))
+        if family_why:
+            return None, family_why
     confirm = args.get("confirm_split")
     if confirm is not None and not isinstance(confirm, bool):
         return None, "confirm_split must be true or false."
@@ -1987,8 +2050,9 @@ def _fan_tail(root: Path, reply: Mapping[str, Any], started: Sequence[str], laun
         )
     if launcher:
         parts.append(
-            "The launcher's completion is your one wake; it carries each run's result, and an emit "
-            "refused at a child's start is named there with its reason."
+            "The launcher's completion is your one wake; it carries each run's result, an emit "
+            "refused at a child's start is named there with its reason, and a run that never started "
+            "is named `not_started` with the leg it stopped at."
         )
     else:
         parts.append("Each run's completion is its own wake.")
@@ -3354,46 +3418,55 @@ _DENY_CAP = 280
 _REFUSAL_LOG_CAP_BYTES = 1 << 20  # past this the log keeps its newest half, whole lines only
 
 
-def _durable_refusal(payload: Mapping[str, Any], envelope: dict) -> dict:
+def _append_refusal_log(payload: Mapping[str, Any], full: str) -> bool:
+    """Appends `full` to the repo's refusal log; True when it landed, False when no root resolves."""
+    import json
+    from datetime import datetime, timezone
+
+    root = _repo_root(None, dict(payload))
+    if root is None:
+        cwd = payload.get("cwd")
+        root = Path(cwd) if isinstance(cwd, str) and cwd else None
+    if root is None:
+        return False
+    log = root / REFUSAL_LOG_REL
+    log.parent.mkdir(parents=True, exist_ok=True)
+    if log.is_file() and log.stat().st_size > _REFUSAL_LOG_CAP_BYTES:
+        from coordinator_core.atomic_replace import atomic_write_bytes
+
+        # Atomic so a crash never empties the log; an append racing the trim can lose its one line.
+        tail = log.read_bytes()[-(_REFUSAL_LOG_CAP_BYTES // 2):]
+        atomic_write_bytes(log, tail[tail.find(b"\n") + 1:])
+    line = json.dumps(
+        {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "session_id": payload.get("session_id"),
+            "refusal": full,
+        },
+        ensure_ascii=False,
+    )
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    return True
+
+
+def _durable_refusal(payload: Mapping[str, Any], envelope: dict, deadline: Optional[float] = None) -> dict:
     """Append the whole refusal to the repo's refusal log and lead the deny with its cause and that path.
 
     A downstream surface caps the deny near 280 characters; the lead keeps cause and path inside it, the
-    full text follows. A log failure leaves the deny as it was."""
+    full text follows. The log write runs on a daemon thread joined to the monotonic `deadline` (default
+    `_ENVELOPE_GRACE_S` out); a failed or stalled write leaves the deny as it was."""
+    import time
+
     hso = envelope.get("hookSpecificOutput") if isinstance(envelope, dict) else None
     if not isinstance(hso, dict) or hso.get("permissionDecision") != "deny":
         return envelope
     full = str(hso.get("permissionDecisionReason") or "")
     if not full:
         return envelope
-    try:
-        import json
-        from datetime import datetime, timezone
-
-        root = _repo_root(None, dict(payload))
-        if root is None:
-            cwd = payload.get("cwd")
-            root = Path(cwd) if isinstance(cwd, str) and cwd else None
-        if root is None:
-            return envelope
-        log = root / REFUSAL_LOG_REL
-        log.parent.mkdir(parents=True, exist_ok=True)
-        if log.is_file() and log.stat().st_size > _REFUSAL_LOG_CAP_BYTES:
-            from coordinator_core.atomic_replace import atomic_write_bytes
-
-            # Atomic so a crash never empties the log; an append racing the trim can lose its one line.
-            tail = log.read_bytes()[-(_REFUSAL_LOG_CAP_BYTES // 2):]
-            atomic_write_bytes(log, tail[tail.find(b"\n") + 1:])
-        line = json.dumps(
-            {
-                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "session_id": payload.get("session_id"),
-                "refusal": full,
-            },
-            ensure_ascii=False,
-        )
-        with log.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except Exception:
+    if deadline is None:
+        deadline = time.monotonic() + _ENVELOPE_GRACE_S
+    if not _quick(lambda: _append_refusal_log(payload, full), deadline):
         return envelope
     if len(full) <= _DENY_CAP:
         return envelope
@@ -3417,6 +3490,7 @@ def evaluate(
     import time
 
     budget_token = _BUDGET_VAR.set([_READ_DEADLINE_MS])
+    tail_deadline: Optional[float] = None
     try:
         if is_submission(payload):
             from coordinator_core.ops.dispatch_emit.run_token import WriteGate
@@ -3427,6 +3501,7 @@ def evaluate(
                 "t0": time.monotonic() - _engine_wait_s(), "wall0": time.time(), "roots": [], "minted": [], "gate": WriteGate(), "gates": [],
                 "session": session if isinstance(session, str) and session else None, "payload": payload,
             }
+            tail_deadline = call["t0"] + _caller_budget_s() * _TAIL_SHARE
             box: dict = {}
 
             def body() -> None:
@@ -3451,7 +3526,7 @@ def evaluate(
     finally:
         _BUDGET_VAR.reset(budget_token)
     if is_submission(payload):
-        return _durable_refusal(payload, envelope)
+        return _durable_refusal(payload, envelope, tail_deadline)
     return envelope
 
 
@@ -3500,6 +3575,9 @@ def _evaluate(
     em_size, em_size_refusal = _em_size_param(payload["tool_input"], asks is not None and len(asks) > 1)
     if em_size_refusal:
         return _refuse(em_size_refusal)
+    call_family, family_refusal = _call_family(payload["tool_input"], sizing_submitted)
+    if family_refusal:
+        return _refuse(family_refusal)
     if source is not None:
         if source not in ASK_SOURCES:
             return _refuse(f"source {source!r} is not one of: {', '.join(ASK_SOURCES)}.")
@@ -3514,6 +3592,8 @@ def _evaluate(
         ]
         if call_stop is not None:
             asks = [{**item, "stop_after": item.get("stop_after", call_stop)} for item in asks]
+        if call_family is not None:
+            asks = [{**item, "family": item.get("family", call_family)} for item in asks]
         if len(asks) == 1 and join is None and not (
             asks[0].get("sender") or asks[0].get("relayed_text") or payload["tool_input"]["args"].get("sender")
         ):
@@ -3522,6 +3602,7 @@ def _evaluate(
                 repo_arg = asks[0]["repo"].strip()
             route_pref, em_rationale = asks[0].get("route_preference"), asks[0].get("em_rationale")
             call_stop = asks[0].get("stop_after")
+            call_family = asks[0].get("family")
             if asks[0].get(_CHATTY_KEY) is not None:
                 call_chatty = asks[0][_CHATTY_KEY]
             item_em_context = asks[0].get("em_context")
@@ -3829,6 +3910,8 @@ def _evaluate(
             params[_CHATTY_KEY] = True
         if em_size is not None:
             params["em_size"] = em_size
+        if call_family is not None and call_family != "claude":
+            params["family"] = call_family
     if approved:
         params["cross_repo_approved"] = True
 
@@ -3845,6 +3928,9 @@ def _evaluate(
         from coordinator_core.ops.dispatch_emit import run_token as _rt
 
         chosen = _rt.new_ask_run_id()
+        premint_call = _CALL.get()
+        if premint_call is not None:  # a slow preamble can reach the answer deadline first: it defers this id
+            premint_call["premint"] = (root, params, chosen)
         try:
             minted = _emit_within_budget(lambda p, r: _premint_marker(p, r, chosen), params, root, scan=False)
         except _EmitOverran as over:
@@ -3855,7 +3941,8 @@ def _evaluate(
             # Unminted overrun: the deferred emit adopts the chosen id and mints it in the background.
             return _premint_deferred_envelope(root, params, chosen)
         except (OSError, ValueError):  # no git dir to hold the marker: the inline emit hands the commit back to the EM
-            pass
+            if premint_call is not None:  # the chosen id was never published: the inline emit mints its own
+                premint_call.pop("premint", None)
         if minted is not None:
             _note_minted(minted["run_id"])
             return _premint_deferred_envelope(root, params, minted["run_id"])
@@ -4071,15 +4158,21 @@ def _handler(params: dict, repo_root=None) -> dict:
     if submission and _denies(envelope):
         return _named_deny(envelope)  # a deny skips apply_guard_level: warn/off lowers it to a rewrite-less allow
     resolved = apply_guard_level(GUARD_NAME, envelope)
-    if not resolved and submission:
+    if not submission:
+        return resolved or no_advisory()
+    if not resolved:
         return deny("PreToolUse", "The submit hook resolved to an empty reply. Check for an existing run record before re-submitting.")
-    if submission and resolved and resolved.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
-        if not resolved.get("hookSpecificOutput", {}).get("updatedInput"):
-            return deny(
-                "PreToolUse",
-                "The engine answered the submission with no run and no refusal. Check for an existing run record before re-submitting.",
-            )
-    return resolved or no_advisory()
+    hso = resolved.get("hookSpecificOutput") if isinstance(resolved, dict) else None
+    if not isinstance(hso, dict):
+        return deny("PreToolUse", "The submit hook answered with no decision. Check for an existing run record before re-submitting.")
+    if hso.get("permissionDecision") == "deny":
+        return _named_deny(resolved)
+    if not hso.get("updatedInput"):
+        return deny(
+            "PreToolUse",
+            "The engine answered the submission with no run and no refusal. Check for an existing run record before re-submitting.",
+        )
+    return resolved
 
 
 __all__ = [

@@ -26,9 +26,6 @@ import os
 from pathlib import Path
 from typing import NamedTuple, Optional
 
-from coordinator_core.git import git_objects, git_state
-from coordinator_core.lifecycle import git_common_dir
-
 BUDGET_FILES = 2
 BUDGET_LINES = 30
 GOLF_DENY_LIMIT = 2
@@ -312,7 +309,14 @@ def project_shell_write(file_path: str, body: str, append: bool) -> Optional[str
 
 
 def _base_texts(repo_root, base_sha: str, rels: list) -> dict:
-    """{rel: base text or None when absent at base}. Raises when the base is unreadable."""
+    """{rel: base text or None when absent at base}. Raises when the base is unreadable.
+
+    Trap: the git imports are function-local; the host-guard nag path imports this module for
+    `read_lane`/`lane_path` only and must not pay for the object reader.
+    """
+    from coordinator_core.git import git_objects, git_state
+    from coordinator_core.lifecycle import git_common_dir
+
     commit = git_state.read_commit(repo_root, base_sha)
     if commit is None:
         raise RuntimeError(f"base commit unreadable: {base_sha!r}")

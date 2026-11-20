@@ -81,6 +81,15 @@ def test_several_absent_ids_are_all_dropped(repo, monkeypatch):
     assert _tail(text)["passed_at_base"] == [GREEN]
 
 
+def test_missing_parametrized_function_drops_both_cases_and_measures_other_ids(repo, monkeypatch):
+    root, base, _head = repo
+    missing = "tests/test_a.py::test_added_at_head"
+    ids = [f"{missing}[False]", f"{missing}[True]", RED_AT_BASE]
+    _code, text = _measure(root, ["--sha", base, "--out", "m.txt", "--", *ids], monkeypatch)
+    assert _read_base_export(root, "m.txt") == {RED_AT_BASE}
+    assert _tail(text)["runner_exit"] == 1
+
+
 def test_green_at_base_red_at_head_joins_the_set(repo, monkeypatch):
     root, base, head = repo
     _code, text = _measure(
@@ -236,6 +245,27 @@ def test_write_export_is_byte_identical_to_main(repo, monkeypatch, tmp_path):
     target = tmp_path / "nested" / "w.txt"
     rbm.write_export(result, target)
     assert target.read_bytes() == (root / "m.txt").read_bytes() and text == target.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("sep", ["\\", "/"])
+def test_a_backslash_printed_red_id_is_red_not_passed_at_base(monkeypatch, sep):
+    printed = RED_AT_BASE.replace("/", sep)
+
+    def fake_run(sha, ids, cwd):
+        return "ok", 1, [f"FAILED {printed} - assert"], []
+
+    monkeypatch.setattr(rbm, "_run", fake_run)
+    result = rbm.measure("base", None, [RED_AT_BASE, GREEN], ".")
+    assert result["red"] == [RED_AT_BASE]
+    assert result["passed_at_base"] == [GREEN]
+
+
+def test_a_backslash_red_id_is_written_forward_slash(monkeypatch, tmp_path):
+    printed = RED_AT_BASE.replace("/", "\\")
+    monkeypatch.setattr(rbm, "_run", lambda sha, ids, cwd: ("ok", 1, [f"FAILED {printed} - assert"], []))
+    target = tmp_path / "m.txt"
+    rbm.write_export(rbm.measure("base", None, [RED_AT_BASE], "."), target)
+    assert target.read_text(encoding="utf-8").splitlines()[0] == f"FAILED {RED_AT_BASE}"
 
 
 def test_head_run_exit_one_keeps_the_export_ok(monkeypatch):

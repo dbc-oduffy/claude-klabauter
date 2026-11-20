@@ -63,6 +63,17 @@ def test_statusline_passes_on_the_healthy_substitution_form(tmp_path):
     assert not setup_check.check_statusline(tmp_path).ok
 
 
+def test_statusline_accepts_the_launcher_form_only_with_the_launcher_present(tmp_path, monkeypatch):
+    command = "python ~/.claude/statusline-launch.py || python3 ~/.claude/statusline-launch.py"
+    _write_settings(tmp_path, {"statusLine": {"type": "command", "command": command}})
+    monkeypatch.setattr(setup_check.shutil, "which", lambda name: "x" if name == "python3" else None)
+    assert not setup_check.check_statusline(tmp_path).ok
+    (tmp_path / "statusline-launch.py").write_text("")
+    assert setup_check.check_statusline(tmp_path).ok
+    monkeypatch.setattr(setup_check.shutil, "which", lambda name: None)
+    assert not setup_check.check_statusline(tmp_path).ok
+
+
 def test_statusline_fails_on_a_pinned_plugin_cache_copy(tmp_path):
     stale = ('S="$(ls -d "$HOME"/.claude/plugins/cache/coordinator-claude/coordinator/*/bin/'
              'statusline.py | sort -V | tail -1)"; python3 "$S"')
@@ -97,6 +108,74 @@ def test_heavy_admission_flags_an_unseeded_key():
 
 def test_door_fails_when_not_installed(tmp_path):
     assert not setup_check.check_door(tmp_path).ok
+
+
+def _blocked_runner(exc=None, rc=0, output=""):
+    def run(argv, timeout):
+        if exc is not None:
+            raise exc
+        return rc, output
+    return run
+
+
+def _bin_with(tmp_path, *names):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in names:
+        (bin_dir / name).write_text("x", encoding="utf-8")
+    return bin_dir
+
+
+@pytest.mark.parametrize(
+    "runner",
+    [
+        _blocked_runner(exc=OSError(0, "blocked", None, 4551)),
+        _blocked_runner(rc=126, output="bash: coordinator-invoke: Permission denied"),
+    ],
+)
+def test_forwarder_launch_fails_naming_sac_on_a_blocked_launch(tmp_path, runner):
+    from coordinator_core.install.door_launch_probe import probe_launch
+
+    _bin_with(tmp_path, "coordinator-invoke.cmd")
+    item = setup_check.check_forwarder_launch(tmp_path, probe=lambda image: probe_launch(image, runner=runner))
+    assert not item.ok and "Smart App Control" in item.detail
+
+
+def test_forwarder_launch_passes_when_the_forwarder_launches(tmp_path):
+    from coordinator_core.install.door_launch_probe import probe_launch
+
+    _bin_with(tmp_path, "coordinator-invoke.cmd")
+    item = setup_check.check_forwarder_launch(tmp_path, probe=lambda image: probe_launch(image, runner=_blocked_runner(rc=0)))
+    assert item.ok and not item.warn
+
+
+def test_forwarder_launch_probes_exe_before_cmd_before_bare(tmp_path):
+    _bin_with(tmp_path, "coordinator-invoke", "coordinator-invoke.cmd", "coordinator-invoke.exe")
+    seen = []
+    setup_check.check_forwarder_launch(tmp_path, probe=lambda image: (seen.append(image.name), (True, "ok"))[1])
+    assert seen == ["coordinator-invoke.exe"]
+
+
+def test_forwarder_launch_warns_when_no_forwarder_exists(tmp_path):
+    item = setup_check.check_forwarder_launch(tmp_path, probe=lambda image: pytest.fail("probed"))
+    assert item.ok and item.warn
+
+
+def test_run_checks_carries_the_launch_item(tmp_path, monkeypatch):
+    ok = CheckItem("x", True, "")
+    monkeypatch.setattr(setup_check, "check_forwarders", lambda *a: ok)
+    monkeypatch.setattr(setup_check, "check_door", lambda *a: ok)
+    monkeypatch.setattr(setup_check, "check_guards", lambda *a: ok)
+    monkeypatch.setattr(setup_check, "check_heavy_admission", lambda *a: ok)
+    monkeypatch.setattr(setup_check, "check_statusline", lambda *a: ok)
+    monkeypatch.setattr(setup_check, "check_execution_policy", lambda: [])
+    monkeypatch.setattr(setup_check, "check_python3", lambda: ok)
+    _bin_with(tmp_path, "coordinator-invoke.exe")
+    blocked = lambda image: (False, "Smart App Control blocked it")
+    items = setup_check.run_checks(tmp_path, tmp_path, tmp_path, [], lambda k: None, launch_probe=blocked)
+    launch = [i for i in items if i.name == "forwarder-launch"]
+    assert len(launch) == 1 and not launch[0].ok and "Smart App Control" in launch[0].detail
+    assert setup_check.exit_code(items) == 1
 
 
 @pytest.mark.spawns_process

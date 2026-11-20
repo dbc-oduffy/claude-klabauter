@@ -162,16 +162,27 @@ def _carried_returns(root: Path, record_dir: Path, returns: dict) -> dict:
 
 
 def _record_withheld_prints(root: Path, record_dir_rel: str, withheld: dict, paths: list) -> None:
-    """Write ``WITHHELD_PRINTS_FILE`` beside the marker: blob id of each withheld path still in the
-    tree, so a refire credits a path as the predecessor's only while its bytes are unchanged. The
-    file joins ``paths`` (in place) so it lands with the record."""
+    """Write ``WITHHELD_PRINTS_FILE`` beside the marker: blob id of each withheld path, so a refire
+    credits a path as the predecessor's only while its bytes are unchanged. A path the record parked
+    (``evicted.json`` entry whose blob is in ``withheld-blobs/``) is printed as that parked blob, since
+    the tree then holds HEAD's bytes; any other path as the tree's bytes. The file joins ``paths``
+    (in place) so it lands with the record."""
     import json
 
     from coordinator_core.atomic_replace import atomic_write_bytes
+    from coordinator_core.ops.dispatch_emit import halt_tree_evict
     from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
     from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE
 
-    prints = {p: f for p in sorted(withheld) if isinstance(p, str) and (f := fingerprint(root, p)) is not None}
+    record_dir = root / record_dir_rel
+    parked = {
+        p: e["blob"] for p, e in halt_tree_evict._load(record_dir).items()
+        if (record_dir / halt_tree_evict.BLOBS_DIR / e["blob"]).is_file()
+    }
+    prints = {
+        p: f for p in sorted(withheld)
+        if isinstance(p, str) and (f := parked.get(p) or fingerprint(root, p)) is not None
+    }
     if not prints:
         return
     rel = f"{record_dir_rel}/{WITHHELD_PRINTS_FILE}"
@@ -251,6 +262,8 @@ def _record_kept(
         returns=persisted,
         finished=[r for r in persisted if r not in owning and r not in (halted.get("stopped_rows") or ())],
     )
+    # A row whose own return is not DONE never finished: its bytes ride post_checkpoint, not a kept chunk.
+    chunks = {c: e for c, e in chunks.items() if c not in returns or row_returns.is_done(returns[c])}
     gate = kept_work.plan_gate(halted, root)
     # A path owned by a chunk that was not kept (a peer co-declares it) is still recorded under
     # post_checkpoint, so the terminal landing has this run's own blob for it.

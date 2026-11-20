@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 from coordinator_core.ops._path_guard import safe_id
-from coordinator_core.ops.dispatch_emit import run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, record_dir
+from coordinator_core.ops.dispatch_emit import run_dir_stat_cache, run_token
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.run_dir_stat_cache import record_dir
 from coordinator_core.ops.dispatch_emit.commit_request import MalformedCommitRequestError, parse_marker
 from coordinator_core.session import record_homes
 
@@ -206,12 +207,13 @@ def _no_marker(root: Path, run_id: str) -> bool:
     return not os.path.exists(os.path.join(rdir, HALTED_FILE)) and os.path.isdir(rdir)
 
 
-def _halted(root: Path, run_id: str) -> bool:
+def _halted(root: Path, run_id: str, *, include_superseded: bool = False) -> bool:
     """A run whose record carries a `halted` marker writes nothing more; its token stays fresh for
     the TTL and its declaration contests no live write. Its declared writes stay held against
     another run's carry, while they carry hunks attributable to it, until it resumes, ages out, or
     `halted_hold_release.release_reason` frees it (`halted_run_write_claims`). A `resumed` marker is
-    live again."""
+    live again. Live-write checks also exclude superseded records, while the
+    halted-hunk reader considers only actual halts."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
     if _no_marker(root, run_id):
@@ -224,7 +226,10 @@ def _halted(root: Path, run_id: str) -> bool:
         return True
     except ValueError:  # not a run id (a claim's reason string): no record, not halted
         return False
-    return marker is not None and marker.get("status") == halted_run.STATUS_HALTED
+    status = marker.get("status") if marker is not None else None
+    return status == halted_run.STATUS_HALTED or (
+        include_superseded and status == halted_run.STATUS_SUPERSEDED
+    )
 
 
 def resumed_run_released(root: Path, run_id: str, exclude_run: Optional[str]) -> bool:
@@ -277,43 +282,80 @@ def _manifest_declared(run_id: str, root: Path) -> tuple:
     return memo[key]
 
 
-def _manifest_declared_uncached(run_id: str, root: Path) -> tuple:
-    paths: list = []
-    prefixes: list = []
-    unreadable = False
+MANIFEST_PARSE_CACHE_NAMESPACE = "manifest-declared-manifest"
+REQUEST_PARSE_CACHE_NAMESPACE = "manifest-declared-request"
+
+
+def _normalized(items: list, rstrip: bool = False) -> tuple:
+    out = (_norm(x) for x in items)
+    return tuple(p.rstrip("/") for p in out if p.rstrip("/")) if rstrip else tuple(p for p in out if p)
+
+
+def _parse_manifest_file(path) -> tuple:
+    """`(paths, unreadable)` of one `manifest.json`; raises OSError (never cached) when it cannot be read."""
     from coordinator_core.git import call_io_scope
 
+    raw = call_io_scope.read_bytes(path)
+    if raw is None:
+        raise FileNotFoundError(path)
+    paths: list = []
     try:
-        raw_manifest = call_io_scope.read_bytes(record_dir(root, run_id) / "manifest.json")
-        text = raw_manifest.decode("utf-8") if raw_manifest is not None else None
-    except (OSError, ValueError):
-        text = None
-    if text is not None:
-        try:
-            data = json.loads(text)
-            rows = data["rows"]
-            for row in rows:
-                paths.extend(w for w in row["writes"] if isinstance(w, str))
-            paths.extend(w for w in (data.get("doc_writes") or ()) if isinstance(w, str))
-        except (ValueError, KeyError, TypeError):
-            unreadable = True
+        data = json.loads(raw.decode("utf-8"))
+        for row in data["rows"]:
+            paths.extend(w for w in row["writes"] if isinstance(w, str))
+        paths.extend(w for w in (data.get("doc_writes") or ()) if isinstance(w, str))
+    except UnicodeDecodeError:
+        return ((), False)
+    except (ValueError, KeyError, TypeError):
+        return (_normalized(paths), True)
+    return (_normalized(paths), False)
+
+
+def _parse_request_file(path) -> tuple:
+    """`(paths, prefixes, unreadable)` of one `commit-request.txt`; raises OSError (never cached) when
+    it cannot be read."""
+    from coordinator_core.git import call_io_scope
+
+    raw = call_io_scope.read_bytes(path)
+    if raw is None:
+        raise FileNotFoundError(path)
     try:
-        raw_request = call_io_scope.read_bytes(root / RUN_DIR_ROOT / run_id / COMMIT_REQUEST_FILE)
-        request = parse_marker(raw_request.decode("utf-8")) if raw_request is not None else None
-    except OSError:
-        request = None
+        request = parse_marker(raw.decode("utf-8"))
     except MalformedCommitRequestError:
-        request = None
-        unreadable = True
-    if request is not None:
-        for chunk in request.chunks:
-            paths.extend(chunk.paths)
-            prefixes.extend(chunk.prefixes)
-    return (
-        tuple(p for p in (_norm(x) for x in paths) if p),
-        tuple(p.rstrip("/") for p in (_norm(x) for x in prefixes) if p.rstrip("/")),
-        unreadable,
+        return ((), (), True)
+    paths: list = []
+    prefixes: list = []
+    for chunk in request.chunks if request is not None else ():
+        paths.extend(chunk.paths)
+        prefixes.extend(chunk.prefixes)
+    return (_normalized(paths), _normalized(prefixes, rstrip=True), False)
+
+
+def _stat_cached_parse(namespace: str, path, compute, absent: tuple) -> tuple:
+    """`compute(path)` reused while `path`'s (mtime_ns, size) is unchanged; `absent` when the file is
+    missing (a failed stat, no read) or unreadable (nothing stored)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        run_dir_stat_cache.drop(namespace, path)
+        return absent
+    try:
+        return run_dir_stat_cache.cached(namespace, path, compute, st=st)
+    except OSError:
+        return absent
+
+
+def _manifest_declared_uncached(run_id: str, root: Path) -> tuple:
+    manifest_paths, manifest_unreadable = _stat_cached_parse(
+        MANIFEST_PARSE_CACHE_NAMESPACE, record_dir(root, run_id) / "manifest.json", _parse_manifest_file, ((), False)
     )
+    request_paths, request_prefixes, request_unreadable = _stat_cached_parse(
+        REQUEST_PARSE_CACHE_NAMESPACE,
+        root / RUN_DIR_ROOT / run_id / COMMIT_REQUEST_FILE,
+        _parse_request_file,
+        ((), (), False),
+    )
+    return (manifest_paths + request_paths, request_prefixes, manifest_unreadable or request_unreadable)
 
 
 def _withheld_paths(root: Path, run_id: str) -> set:
@@ -527,7 +569,28 @@ def _stale_at(root: Path, run_id: str, stage_name: str, bound: float, now: Optio
         return False
     current = time.time() if now is None else now
     seen = run_activity_epoch(root, run_id, current, bound)
-    return seen is None or current - seen > bound
+    if seen is not None and current - seen <= bound:
+        return False
+    return not _planning_agent_in_flight(stage, current, bound)
+
+
+def _planning_agent_in_flight(stage: dict, now: float, bound: float) -> bool:
+    """True when a run whose Workflow started (`plan_started_at`) has an agent journal or transcript in
+    its session's workflow dirs written within `bound`. A plan-author or enrichment agent runs for tens
+    of minutes without an op call, so the run dir stays quiet while the run is live; a never-started
+    mint has no Workflow and is never spared by another workflow's journal. Runs only once the run-dir
+    signals are stale; never raises."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import PLAN_STARTED_FIELD
+
+    sid = stage.get("session_id")
+    if not stage.get(PLAN_STARTED_FIELD) or not isinstance(sid, str) or not sid:
+        return False
+    try:
+        from coordinator_core.ops.dispatch_emit import staged_stall
+
+        return staged_stall.agent_in_flight(sid, now - bound)
+    except Exception:  # noqa: BLE001 -- a missing signal means the run-dir verdict stands
+        return False
 
 
 def _past_wall_timeout(root: Path, run_id: str, now: Optional[float] = None) -> Optional[float]:
@@ -622,7 +685,7 @@ def _live_peer_run(
 def _live_peer_tail(root: Path, run_id: str, sid: str, cwd: Optional[str]) -> bool:
     from coordinator_core.session import touch_record
 
-    if _halted(root, run_id) or _landed(root, run_id) or not touch_record.session_live(sid, cwd):
+    if _halted(root, run_id, include_superseded=True) or _landed(root, run_id) or not touch_record.session_live(sid, cwd):
         return False
     if _stale_at_minted(root, run_id):
         _halt_abandoned(root, run_id)

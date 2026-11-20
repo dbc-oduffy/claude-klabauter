@@ -155,7 +155,101 @@ def test_blocked_phase_returns_by_deadline_and_chain_stops_after(monkeypatch):
     assert after == ["stopped"]
 
 
+DENY = {"hookSpecificOutput": {"permissionDecision": "deny"}}
+
+
+def test_deadline_stop_after_a_held_verdict_returns_it(monkeypatch):
+    def chain(_params):
+        pp.hold_verdict(DENY)
+        time.sleep(0.2)
+        pp.check_deadline("render")
+        return no_advisory()
+
+    out, fields = _run(chain, door_s=dispatch_abandon.REPLY_MARGIN_SECS + 0.1, monkeypatch=monkeypatch)
+    assert out == DENY
+    assert fields["deadline_stop"] == "render"
+
+
+@pytest.mark.deliberate_wall_clock(reason="bounds the door deadline a blocked phase must not outwait; blocked time burns no CPU")
+def test_in_flight_abandonment_after_a_held_verdict_returns_it(monkeypatch):
+    release = threading.Event()
+
+    def chain(_params):
+        pp.hold_verdict(DENY)
+        release.wait(3.0)
+        return no_advisory()
+
+    out, fields = _run(chain, door_s=0.4, monkeypatch=monkeypatch)
+    release.set()
+    assert out == DENY
+    assert fields["deadline_stop"] == "in_flight"
+
+
+def test_the_first_held_verdict_wins_and_a_non_dict_is_not_held(monkeypatch):
+    other = {"hookSpecificOutput": {"permissionDecision": "allow"}}
+
+    def chain(_params):
+        pp.hold_verdict(None)
+        pp.hold_verdict(DENY)
+        pp.hold_verdict(other)
+        time.sleep(0.2)
+        pp.check_deadline("render")
+        return other
+
+    out, _ = _run(chain, door_s=dispatch_abandon.REPLY_MARGIN_SECS + 0.1, monkeypatch=monkeypatch)
+    assert out == DENY
+
+
+def test_nothing_held_still_fails_open_on_deadline_stop(monkeypatch):
+    def chain(_params):
+        pp.hold_verdict(None)
+        time.sleep(0.2)
+        pp.check_deadline("render")
+        return DENY
+
+    out, _ = _run(chain, door_s=dispatch_abandon.REPLY_MARGIN_SECS + 0.1, monkeypatch=monkeypatch)
+    assert out == no_advisory()
+
+
+def test_a_held_verdict_does_not_leak_into_the_next_run(monkeypatch):
+    _run(lambda _p: pp.hold_verdict(DENY), door_s=5.0, monkeypatch=monkeypatch)
+
+    def chain(_params):
+        time.sleep(0.2)
+        pp.check_deadline("render")
+
+    out, _ = _run(chain, door_s=dispatch_abandon.REPLY_MARGIN_SECS + 0.1, monkeypatch=monkeypatch)
+    assert out == no_advisory()
+
+
+def test_hold_verdict_outside_run_phased_is_a_no_op():
+    pp.hold_verdict(DENY)
+
+
 def test_chain_finishing_inside_deadline_is_returned_whole(monkeypatch):
     out, fields = _run(lambda _p: {"ok": 1}, door_s=0.4, monkeypatch=monkeypatch)
+    assert out == {"ok": 1}
+    assert "deadline_stop" not in fields
+
+
+@pytest.mark.deliberate_wall_clock(reason="bounds the pool budget a blocked phase must not outwait; blocked time burns no CPU")
+def test_a_bound_pool_budget_answers_a_verdict_before_the_server_cut(monkeypatch):
+    release = threading.Event()
+    pp.bind_pool_budget(time.monotonic() + 0.4)
+    try:
+        started = time.monotonic()
+        out, fields = _run(lambda p: release.wait(10), door_s=8.0, monkeypatch=monkeypatch)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        pp.bind_pool_budget(None)
+    assert out == no_advisory()
+    assert fields["deadline_stop"] == "in_flight"
+    assert elapsed < 1.0, elapsed
+
+
+def test_an_unbound_pool_budget_leaves_the_door_deadline_in_force(monkeypatch):
+    pp.bind_pool_budget(None)
+    out, fields = _run(lambda p: {"ok": 1}, door_s=8.0, monkeypatch=monkeypatch)
     assert out == {"ok": 1}
     assert "deadline_stop" not in fields

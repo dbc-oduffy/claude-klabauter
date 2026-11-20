@@ -323,6 +323,21 @@ def test_codex_holder_live_dead_pid_is_false(monkeypatch: pytest.MonkeyPatch) ->
     assert lv.codex_holder_live({"codexPid": 4242, "codexProcStart": "x"}) is False
 
 
+def test_codex_holder_live_checks_current_writer_after_original_holder_exits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(lv, "pid_alive", lambda _pid: False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    lock_dir = tmp_path / "thread-writer-locks"
+    monkeypatch.setattr(
+        lv, "agy_presence_held",
+        lambda target, *, presence_dir: target == "resumed-thread" and presence_dir == lock_dir,
+    )
+    row = {"vendor": "codex", "codexPid": 4242, "codexProcStart": "x"}
+    assert lv.codex_holder_live({**row, "target": "resumed-thread"}) is True
+    assert lv.codex_holder_live({**row, "target": "closed-thread"}) is False
+
+
 def test_codex_holder_live_differing_start_is_false() -> None:
     row = {"codexPid": os.getpid(), "codexProcStart": "Mon Jan  1 00:00:00 2001"}
     assert lv.codex_holder_live(row) is False

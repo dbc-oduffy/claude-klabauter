@@ -79,10 +79,11 @@ def test_2_an_xs_run_over_budget_resizes_and_lands(root) -> None:  # noqa: F811
     assert _git(root, "rev-parse", "HEAD") != head
 
 
-def test_2b_an_unmeasurable_xs_diff_still_refuses(root) -> None:  # noqa: F811
+def test_2b_an_unmeasurable_xs_diff_lands_with_a_provenance_row(root) -> None:  # noqa: F811
     reply, _ = _call(root, _new_files(root, 1, 1), base="0" * 40)
 
-    assert reply["refused"] == "xs-over-budget" and "unmeasurable" in reply["error"]
+    assert "refused" not in reply and reply.get("committed") is True, reply
+    assert any(e.get("reason") == "xs-over-budget" for e in reply["provenance"])
 
 
 def test_3_a_review_leg_adjacent_test_edit_is_backed_by_the_recorded_widen(tmp_path: Path, root) -> None:  # noqa: F811

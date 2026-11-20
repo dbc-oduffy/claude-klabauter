@@ -84,7 +84,7 @@ def test_class_write_deny_holds_the_floor_at_every_level(monkeypatch):
         result = doctrine.check(payload, ["CLAUDE.md"])
         assert isinstance(result, AlternativeRecord), level
         assert result.verdict_kind == "deny", level
-        assert sentinel.DENY_REASON == result.em_text, level
+        assert sentinel.deny_reason(payload["cwd"]) == result.em_text, level
 
 
 def test_doctrine_still_allows_an_unrelated_command(monkeypatch):

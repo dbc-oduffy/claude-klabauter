@@ -34,8 +34,11 @@ TRIPWIRES_NOT_RUN_KEY = "tripwires_not_run"
 IMPORTER_OVERRUN_KEY = "importer_overrun"
 ZERO_RUN_BUDGET = "budget-exhausted"
 ZERO_RUN_COLLECTION = "collection-failure"
+ZERO_RUN_PROCESS_ERROR = "pytest-process-error"
 ZERO_RUN_EMPTY = "empty-selection"
+ZERO_RUN_IMPORT_ERROR = "import-error"
 ZERO_RUN_KILLED = "killed"
+ZERO_RUN_FOREIGN_DEPENDENCY = "uncommitted-foreign-dependency"
 #: Engine-side: every handed target was absent from disk (evicted or parked by the run itself), so no pytest ran.
 ZERO_RUN_MISSING_TARGET = "missing-target"
 _ZERO_RUN_CAUSES = {
@@ -43,7 +46,10 @@ _ZERO_RUN_CAUSES = {
     ZERO_RUN_KILLED: "the test process was killed before any test completed",
     ZERO_RUN_BUDGET: "the verify budget was spent before any test ran",
     ZERO_RUN_COLLECTION: "pytest collection failed, so no test ran",
+    ZERO_RUN_PROCESS_ERROR: "pytest exited unsuccessfully without a collection error",
     ZERO_RUN_EMPTY: "the selection collected no tests",
+    ZERO_RUN_FOREIGN_DEPENDENCY: "a committed hunk imports a name defined only in a peer's uncommitted change, so no test ran",
+    ZERO_RUN_IMPORT_ERROR: "an engine module failed to import, so no test ran (a dirty tree path, not a test failure)",
 }
 
 RETEST_LAUNCHER = "emit-dispatch-workflow --retest-targeted"
@@ -139,6 +145,9 @@ def zero_run_cause_note(record: Optional[Mapping], remedy: str) -> str:
     if not isinstance(cause, str) or cause not in _ZERO_RUN_CAUSES:
         return ""
     reason = record.get("reason") or record.get("note")
+    err = record.get("import_error")
+    if cause == ZERO_RUN_FOREIGN_DEPENDENCY and isinstance(err, Mapping) and err.get("symbol"):
+        reason = f"'{err['symbol']}' defined only in uncommitted {err.get('source_path')}"
     return (f"verify ran 0 tests ({cause}: {_ZERO_RUN_CAUSES[cause]}"
             + (f"; {reason}" if reason else "") + f"); not a test failure; re-run: {remedy}")
 

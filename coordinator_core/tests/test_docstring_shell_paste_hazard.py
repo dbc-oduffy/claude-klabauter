@@ -216,8 +216,6 @@ _BASELINE: set[tuple[str, str]] = {
      '``node "$COORDINATOR_ROOT/bin/query-records.js" --type health-status --root <scan_root>'),
     ('coordinator_core/ops/emit/sections/routine_signals.py',
      'In-process replacement for ``_run_staleness`` (was: ``bash "$script" 2>/dev/null ||'),
-    ('coordinator_core/ops/learn_lessons_roots.py',
-     'mirrors the bash oracle\'s `"$MACHINE_LOCAL" ... 2>/dev/null || true` skip-absent'),
     ('coordinator_core/ops/name_personas.py',
      "- Does NOT require `perl` or `bash >= 4.0` -- the bash oracle's preflight"),
     ('coordinator_core/ops/percolate_ci_smoke_check.py',

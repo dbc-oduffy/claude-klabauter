@@ -131,8 +131,13 @@ def test_stamp_landed_replaces_existing_status_reason(tmp_path):
     ]
     + [
         ("stamp-deferred", s)
-        for s in ["draft", "reviewed", "approved", "blocked", "implemented",
+        for s in ["approved", "blocked", "implemented",
                   "superseded", "abandoned", "deferred"]
+    ]
+    + [
+        ("stamp-unstaled", s)
+        for s in ["draft", "reviewed", "approved", "executing", "landed", "implemented",
+                  "abandoned"]
     ],
 )
 def test_standdown_refuses_other_sources_untouched(tmp_path, capsys, verb, status):
@@ -166,12 +171,64 @@ def test_standdown_rejects_foreign_flags(tmp_path, capsys, verb, flag):
     assert p.read_text(encoding="utf-8") == original
 
 
+_STALE = "stale: no progress 30+ days, unverified; re-opens on pickup"
+
+
+@pytest.mark.parametrize("status", ["draft", "reviewed"])
+def test_stale_deferral_roundtrips_to_prior_status(tmp_path, status):
+    p = _write(tmp_path, "p.md", f"---\ntitle: T\nstatus: {status}\nowner: x\n---\n\nBody.\n")
+    assert main(["stamp-deferred", "--plan", str(p), "--reason", _STALE]) == 0
+    fm = _fm(p)
+    assert read_fm_field_unquoted(fm, "status") == "deferred"
+    assert read_fm_field_unquoted(fm, "status_reason") == f"{_STALE} [from: {status}]"
+    assert main(["stamp-unstaled", "--plan", str(p)]) == 0
+    assert p.read_text(encoding="utf-8") == (
+        f"---\ntitle: T\nstatus: {status}\nowner: x\n---\n\nBody.\n"
+    )
+
+
+def test_deferral_from_executing_records_no_marker_and_is_not_reopenable(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", "---\ntitle: T\nstatus: executing\n---\n\nBody.\n")
+    assert main(["stamp-deferred", "--plan", str(p), "--reason", _STALE]) == 0
+    assert read_fm_field_unquoted(_fm(p), "status_reason") == _STALE
+    before = p.read_text(encoding="utf-8")
+    assert main(["stamp-unstaled", "--plan", str(p)]) == 1
+    assert "not as a stale deferral" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_non_stale_draft_deferral_is_not_reopenable(tmp_path, capsys):
+    p = _write(tmp_path, "p.md", "---\ntitle: T\nstatus: draft\n---\n\nBody.\n")
+    assert main(["stamp-deferred", "--plan", str(p), "--reason", "paused for X"]) == 0
+    before = p.read_text(encoding="utf-8")
+    assert main(["stamp-unstaled", "--plan", str(p)]) == 1
+    assert "not as a stale deferral" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize("status", ["draft", "reviewed"])
+def test_stale_deferral_accepts_no_commit(tmp_path, status):
+    p = _write(tmp_path, "p.md", f"---\ntitle: T\nstatus: {status}\n---\n\nBody.\n")
+    assert main(["stamp-deferred", "--plan", str(p), "--reason", _STALE, "--no-commit"]) == 0
+    assert read_fm_field_unquoted(_fm(p), "status") == "deferred"
+    assert main(["stamp-unstaled", "--plan", str(p), "--no-commit"]) == 0
+    assert read_fm_field_unquoted(_fm(p), "status") == status
+
+
+def test_stamp_deferred_from_draft_still_requires_reason(tmp_path, capsys):
+    original = "---\ntitle: T\nstatus: draft\n---\n\nBody.\n"
+    p = _write(tmp_path, "p.md", original)
+    assert main(["stamp-deferred", "--plan", str(p), "--reason", " "]) == 1
+    assert "requires --reason" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original
+
+
 def test_standdown_commits_the_flip(tmp_path):
     p = _write(tmp_path, "p.md", "---\ntitle: T\nstatus: executing\n---\n\nBody.\n")
     assert main(["stamp-landed", "--plan", str(p), "--reason", "r"]) == 0
     env = {**os.environ, **_GIT_ENV_KEYS}
     log = subprocess.run(
-        ["git", "log", "-1", "--format=%B"], cwd=str(tmp_path), capture_output=True,
+        ["git", "log", "-2", "--format=%B"], cwd=str(tmp_path), capture_output=True,
         text=True, env=env, timeout=15, **no_console_creationflags(),
     ).stdout
     assert '"executing" -> landed' in log

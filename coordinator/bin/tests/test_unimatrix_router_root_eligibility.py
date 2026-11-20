@@ -111,6 +111,7 @@ def fallback_roster(router,tmp_path: Path,monkeypatch: pytest.MonkeyPatch):
   session_identity=lambda e:{'vendor':e.get('vendor','unknown')},
   pid_alive=lambda pid:pid in (700,701),listed_row=lambda d,rows=():d.get('pid') in (700,701),proc_start=lambda pid:'birth-'+str(pid),pid_domain=lambda:'test-domain'))
  monkeypatch.setattr(R,'_contract',lambda:SimpleNamespace(
+  mirror_addresses=lambda e:[e.get('name'),e.get('unimatrixFarName')],
   projected_addresses=lambda e:e.get('aliases',[]),
   build_frame=lambda *a,**k:{'msg_id':'fixture-msg'},stamp=lambda f,*a,**k:f,
   local_box=lambda:'fixture-box',box_id=lambda b:'fixture-box' if b==R.socket.gethostname() else b,agent_row=lambda e,box:{'name':e.get('name'),'box':box}))

@@ -121,3 +121,59 @@ def test_token_listing_is_read_once_per_scope(root, monkeypatch: pytest.MonkeyPa
         hr.stale_release(root, HALTED)
         hr.stale_release(root, "ask-20261030T102304-977c48")
     assert len(calls) == 1
+
+
+def _git(root, *args: str) -> str:
+    out = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=root, check=True, capture_output=True,
+        text=True, **no_console_creationflags(),
+    )
+    return out.stdout.strip()
+
+
+def _moved_halt(root, *, move_head: bool, reason: str = "halt-record-only", sizing: str = SIZING):
+    """A young halted run whose recorded base holds `a.py`; HEAD rewrites `a.py` after it when `move_head`;
+    `a.py` is dirty in the worktree either way. Returns (run id, halted.json bytes)."""
+    (root / "a.py").write_text("base\n", encoding="utf-8")
+    _git(root, "add", "a.py")
+    _git(root, "commit", "-q", "-m", "base")
+    base = _git(root, "rev-parse", "HEAD")
+    if move_head:
+        (root / "a.py").write_text("moved\n", encoding="utf-8")
+        _git(root, "commit", "-q", "-am", "moved")
+    (root / "a.py").write_text("peer dirt\n", encoding="utf-8")
+    run_id = _mint(60)
+    path = _halt(root, age=60, run_id=run_id, sizing=sizing)
+    marker = json.loads(path.read_text(encoding="utf-8"))
+    marker["run_base_sha"] = base
+    marker["run_artifacts"] = {"withheld": {"a.py": reason}}
+    path.write_text(json.dumps(marker), encoding="utf-8")
+    return run_id, path.read_bytes()
+
+
+def test_hold_on_a_path_head_moved_past_its_base_is_released_and_the_record_is_untouched(root) -> None:
+    run_id, before = _moved_halt(root, move_head=True)
+    assert hr.held_paths(root, run_id, "ask-20261030T223203-aaaaaa") == frozenset()
+    assert (root / "state/warp" / run_id / "halted.json").read_bytes() == before
+
+
+def test_hold_on_a_path_head_has_not_moved_past_still_holds(root) -> None:
+    run_id, _ = _moved_halt(root, move_head=False)
+    assert hr.held_paths(root, run_id, "ask-20261030T223203-aaaaaa") == frozenset({"a.py"})
+
+
+def test_moved_head_does_not_release_a_run_with_a_live_token(root) -> None:
+    run_id, _ = _moved_halt(root, move_head=True)
+    run_token.mint(root, run_id, "wf/x.mjs", sizing_rel=SIZING)
+    assert hr.held_paths(root, run_id, "ask-20261030T223203-aaaaaa") == frozenset({"a.py"})
+
+
+def test_moved_head_does_not_release_a_pending_refire_of_the_same_sizing(root) -> None:
+    run_id, _ = _moved_halt(root, move_head=True)
+    run_token.mint(root, "ask-20261030T223203-bbbbbb", "wf/y.mjs", sizing_rel=SIZING)
+    assert hr.held_paths(root, run_id, "ask-20261030T223203-aaaaaa") == frozenset({"a.py"})
+
+
+def test_moved_head_releases_only_a_halt_record_only_withhold(root) -> None:
+    run_id, _ = _moved_halt(root, move_head=True, reason="run-dirt-uncommitted")
+    assert hr.held_paths(root, run_id, "ask-20261030T223203-aaaaaa") == frozenset({"a.py"})

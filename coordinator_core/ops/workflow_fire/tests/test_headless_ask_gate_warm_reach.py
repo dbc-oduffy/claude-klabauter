@@ -87,7 +87,7 @@ def cold_fallthrough(tmp_path, monkeypatch, reason, **patches) -> None:
     monkeypatch.setattr(headless.subprocess, 'run', cold)
     result = headless._invoke_source('dispatch.ask_gate', ASK, str(tmp_path), tmp_path / 'op', 15)
     assert result == {'via': 'cold'} and len(ran) == 1
-    assert 'cold_operation' in ran[0][2]
+    assert ran[0][1:4] == ['-P', '-m', 'coordinator_core.ops.workflow_fire.cold_operation']
     note = route(tmp_path / 'op')
     assert note['route'] == 'cold' and note['reason'].startswith(reason)
 

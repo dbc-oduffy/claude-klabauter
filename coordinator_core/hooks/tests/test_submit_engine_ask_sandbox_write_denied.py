@@ -121,6 +121,7 @@ def test_codex_refusal_text_when_the_vendor_is_codex(monkeypatch):
     assert CODEX_ROUTE in mod._refuse("x")["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+@pytest.mark.deliberate_wall_clock(reason="minting inside the write budget deadline is the behaviour under test")
 def test_a_sandboxed_write_that_lands_within_budget_mints_the_run(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_THREAD_ID", "0c8eeac3-0000-0000-0000-000000000000")
     root = _repo(tmp_path)

@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN_ID = "run-zl"
 INCIDENT = {"targeted_tests": {"status": "error", "tests_run": 0, "tests_failed": 0, "summary": "timeout: 120s"}}
-CAUSES = ["budget-exhausted", "collection-failure", "empty-selection", "killed", "missing-target"]
+CAUSES = ["budget-exhausted", "collection-failure", "empty-selection", "import-error", "killed", "missing-target"]
 
 
 def _git(root: Path, *args: str) -> None:

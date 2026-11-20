@@ -160,7 +160,8 @@ def test_grind_six_entries_batch_and_meta_and_queue_reply_carry_the_cost(repo):
     assert meta["basis"] == "expected"
     assert len(meta["groups"]) < 6
     assert sum(len(g) for g in meta["groups"]) == 6
-    assert meta["expectedAgents"] > len(meta["groups"])
+    # Record-only rows: close, commit, sweep and review are scripted, so the triage is the only agent.
+    assert meta["expectedAgents"] == len(meta["groups"])
     assert reply["fanout"] == meta
 
 

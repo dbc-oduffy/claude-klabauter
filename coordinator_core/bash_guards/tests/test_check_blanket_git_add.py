@@ -58,6 +58,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
+from coordinator_core.git import repo_root
 from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES, measure_envelope
 from coordinator_core.guard_messages.testing import envelope_of
 from pathlib import Path
@@ -81,12 +82,7 @@ def _set_fake_home(monkeypatch, home_path) -> None:
 
 
 def _wire_git_root(monkeypatch, root) -> None:
-
-    def _fake_run_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
-        assert args == ["rev-parse", "--show-toplevel"]
-        return 0, root + "\n"
-
-    monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
+    monkeypatch.setattr(repo_root, "show_toplevel", lambda cwd=None: root)
 
 
 def _wire_hazard(monkeypatch, *, is_hazard) -> None:
@@ -206,11 +202,11 @@ def test_dash_c_global_option_scoped_add_allows_in_hazard_repo(monkeypatch: pyte
 def test_dash_c_value_used_to_resolve_git_root_cwd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen_cwd = {}
 
-    def _fake_run_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
+    def _fake_show_toplevel(cwd=None):
         seen_cwd["cwd"] = cwd
-        return 0, str(tmp_path / "repo") + "\n"
+        return str(tmp_path / "repo")
 
-    monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
+    monkeypatch.setattr(repo_root, "show_toplevel", _fake_show_toplevel)
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: True)
 
     explicit_target = str(tmp_path / "explicit" / "target")
@@ -379,12 +375,49 @@ def test_safe_commit_internal_blanket_marker_allows_in_hazard_repo(monkeypatch: 
 
 
 def test_unresolvable_git_root_allows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    def _fake_run_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
-        return 128, ""
-
-    monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
+    monkeypatch.setattr(repo_root, "show_toplevel", lambda cwd=None: None)
     result = _enveloped(guard.check_blanket_git_add)("git add -A", "sess1")
     assert result is None
+
+
+def _no_git_spawn(monkeypatch) -> None:
+    def _boom(*args, **kwargs):
+        raise AssertionError("root resolution spawned git")
+
+    monkeypatch.setattr(_dc_git_probe, "_run_git", _boom)
+
+
+def test_candidate_root_resolution_spawns_no_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Roots come from the in-process walk: two `git add` candidate cwds, zero git spawns."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    for repo in (first, second):
+        (repo / ".git").mkdir(parents=True)
+    _no_git_spawn(monkeypatch)
+    _wire_hazard(monkeypatch, is_hazard=True)
+    result = _enveloped(guard.check_blanket_git_add)(f"git -C {first} add -A && git -C {second} add -A", "sess1")
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_a_later_hazard_candidate_outranks_an_earlier_non_hazard_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    plain, hazard = tmp_path / "plain", tmp_path / "hazard"
+    for repo in (plain, hazard):
+        (repo / ".git").mkdir(parents=True)
+    _no_git_spawn(monkeypatch)
+    monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: root == hazard.as_posix())
+    result = _enveloped(guard.check_blanket_git_add)(f"git -C {plain} add -A && git -C {hazard} add -A", "sess1")
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_non_hazard_candidates_allow_without_a_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    (plain / ".git").mkdir(parents=True)
+    _no_git_spawn(monkeypatch)
+    _wire_hazard(monkeypatch, is_hazard=False)
+    assert _enveloped(guard.check_blanket_git_add)(f"git -C {plain} add -A", "sess1") is None
 
 
 def test_is_hazard_repo_true_for_meta_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

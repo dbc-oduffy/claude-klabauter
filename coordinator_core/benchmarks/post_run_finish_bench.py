@@ -270,18 +270,21 @@ def spawn_budget() -> int:
 
 def run_bench(pages: int = DEFAULT_PAGES) -> dict:
     """Run both pipelines (after a discarded warm-up) and return the full report."""
-    from coordinator_core import ipc
+    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 
-    handler = ipc.get_op_handler(OP)
+    def handler(params, repo_root):
+        return reentrant_dispatch(OP, params, repo_root=repo_root)
+
     report: dict = {"op": OP, "base": {"sha": BASE_SHA, "verdict": base_verdict()}}
-    if handler is None:
-        report["verdict"] = "op-not-registered"
-        return report
     budget = spawn_budget()
     rows, failed = [], []
     with managed_temp_dir(prefix="post-run-finish-bench-") as tmp:
         base = Path(tmp)
-        run_pipeline(handler, "lessons", base / "warmup", pages)
+        try:
+            run_pipeline(handler, "lessons", base / "warmup", pages)
+        except OpUnavailableError:
+            report["verdict"] = "op-not-registered"
+            return report
         for pipeline in PIPELINES:
             row = run_pipeline(handler, pipeline, base / pipeline, pages)
             row["failed"] = verdict(row, budget)

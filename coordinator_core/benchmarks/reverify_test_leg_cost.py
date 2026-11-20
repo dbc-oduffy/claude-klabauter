@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -29,6 +30,7 @@ if __package__ in (None, ""):
 
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter
+from coordinator_core.testing import spawn_depth
 from coordinator_core.win_portability import no_console_creationflags
 
 DEFAULT_BASE = "f0dbd760e2"
@@ -68,11 +70,16 @@ class _Bracket:
 
 
 def _pytest(args: list, root: Path, timeout_s: float) -> tuple:
-    """(exit code or None on timeout, stdout lines)."""
+    """(exit code or None on timeout, stdout lines); RuntimeError naming the refusal when the spawn depth forbids the child."""
+    refusal = spawn_depth.refusal_for_spawn(os.environ) or spawn_depth.selection_includes_spawner(
+        args, os.environ, str(root)
+    )
+    if refusal:
+        raise RuntimeError(refusal)
     try:
         proc = subprocess.run([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *args], cwd=str(root),
                               capture_output=True, text=True, errors="replace", timeout=timeout_s,
-                              **no_console_creationflags())
+                              env=spawn_depth.child_env(os.environ), **no_console_creationflags())
     except subprocess.TimeoutExpired:
         return None, []
     return proc.returncode, proc.stdout.splitlines()

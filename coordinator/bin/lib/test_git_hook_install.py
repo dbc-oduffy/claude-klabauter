@@ -25,7 +25,14 @@ def _make_tool_bindir(tmp_path: Path, tools: dict) -> str:
     for name, real_path in tools.items():
         link = bindir / name
         if not link.exists():
-            link.symlink_to(real_path)
+            try:
+                link.symlink_to(real_path)
+            except OSError:
+                # Windows without Developer Mode or admin refuses symlinks (WinError 1314). The
+                # hook bodies under test resolve tools through `sh`'s PATH lookup, so a POSIX
+                # forwarder script serves; a copied binary would lose its sibling DLLs.
+                link.write_text(f'#!/bin/sh\nexec "{Path(real_path).as_posix()}" "$@"\n', encoding="utf-8", newline="\n")
+                link.chmod(0o755)
     return str(bindir)
 
 
@@ -798,6 +805,9 @@ def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path: Path
     env = dict(os.environ)
     env["PATH"] = _no_python_path(tmp_path)
     env["COORDINATOR_SETTINGS_HOME"] = (tmp_path / "no-such-settings-home").as_posix()
+    # The block's last fallback is the Claude plugin cache under $HOME; a box with Claude
+    # installed would resolve a script there and never reach "not found".
+    env["HOME"] = env["USERPROFILE"] = (tmp_path / "no-such-home").as_posix()
     result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
 
     assert result.returncode == 0

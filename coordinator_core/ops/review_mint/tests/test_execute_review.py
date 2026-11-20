@@ -1353,6 +1353,13 @@ def _in_wave(review=None, **kw):
     )
 
 
+def test_wave_review_prep_call_is_committed_only_exactly_when_a_terminal_sha_binds_the_head():
+    sha = "b" * 40
+    bound = "\n".join(b for _, b in _in_wave(review_terminal_sha=sha))
+    assert f'"head":"{sha}","committed_only":true' in bound or f'\\"head\\":\\"{sha}\\",\\"committed_only\\":true' in bound
+    assert "committed_only" not in "\n".join(b for _, b in _in_wave())
+
+
 def test_prep_in_wave_off_is_byte_identical_to_the_default():
     review = _ratio_review()
     kw = dict(

@@ -129,6 +129,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -495,11 +496,34 @@ def _maybe_sweep_stale_session_dirs(gitdir: Path, current_session_id: str) -> in
     return removed
 
 
+def _in_warm_engine() -> bool:
+    """True inside a warm-served request. Reads `sys.modules` so a cold hook pays no import."""
+    core = sys.modules.get("coordinator_core.session.core")
+    return core is not None and core.in_warm_served_request()
+
+
 def _rotate_known_logs(gitdir: Path) -> None:
+    """Rotate the known sinks without a sink stat on the calling thread.
+
+    Warm engine: the detached cadence rotator. A cold hook process exits within the call, so a
+    detached daemon thread would never finish there; it keeps one inline sweep bounded by
+    `_FS_DEADLINE_SECS` instead.
+    """
     try:
+        logs_dir = hub_for_common(gitdir) / "logs"
+        if _in_warm_engine():
+            from coordinator_core.telemetry.log_rotation import rotate_on_cadence_detached
+
+            rotate_on_cadence_detached(logs_dir)
+            return
         from coordinator_core.telemetry.log_rotation import rotate_all_known_sinks
 
-        rotate_all_known_sinks(hub_for_common(gitdir) / "logs")
+        run_bounded(
+            "advisory-dedupe-rotate:%s" % logs_dir,
+            lambda: rotate_all_known_sinks(logs_dir),
+            deadline=_FS_DEADLINE_SECS,
+            default=0,
+        )
     except Exception:
         pass
 

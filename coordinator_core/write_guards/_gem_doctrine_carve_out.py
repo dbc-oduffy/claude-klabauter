@@ -1,6 +1,11 @@
 """coordinator_core.write_guards._gem_doctrine_carve_out -- the doctrine-surface
 path test and the live Group EM admission shared by the write guards.
 
+Surfaces are subtree roots (_DOE_SUBTREES) and exact files (_DOE_FILES: DoE
+CLAUDE.md, coordinator.local.md, coordinator/snippets/em-operating-doctrine.md).
+That set must stay coupled to the protected set of guard_doctrine_surface_edits:
+a surface the guard protects but this module omits is denied to the live Group EM.
+
 Pure and spawn-free: path tests are string work over realpaths (no walk), and
 the standing read is the in-process nomination read SessionStart uses. Never
 raises; every failure answers "not a doctrine surface" / "not admitted".

@@ -19,6 +19,7 @@ def _fresh_dirs():
     stall_writer._made_dirs.clear()
 
 
+@pytest.mark.deliberate_wall_clock(reason="submit not waiting on a blocked writer is the behaviour under test; the bound is a wait, not CPU cost")
 def test_submit_returns_fast_while_writer_is_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     release = threading.Event()
     entered = threading.Event()

@@ -194,6 +194,56 @@ def test_prune_verb_calls_prune(tmp_path, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["fix_paths"] is True
 
 
+_PROVENANCE_SEAM = '''\
+import sys
+
+
+def resolve_claude_klabauter_root():
+    raise AssertionError("the plain resolver must not answer when provenance is published")
+
+
+def resolve_claude_klabauter_root_with_provenance():
+    return ("PROV_ROOT", "published", "published-target")
+
+
+def place_engine_root_on_path(root):
+    sys.path.insert(1, root)
+    return root
+'''
+
+
+@pytest.mark.parametrize("seam,expected", [(_PROVENANCE_SEAM, "PROV_ROOT")])
+def test_seam_with_provenance_supplies_the_root(tmp_path, monkeypatch, seam, expected):
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    shutil.copy(_BIN / "group-em-home.py", bin_dir / "group-em-home.py")
+    seam_dir = tmp_path / "coordinator" / "hooks" / "scripts"
+    seam_dir.mkdir(parents=True)
+    (seam_dir / "_engine_root.py").write_text(seam, encoding="utf-8")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    spec = importlib.util.spec_from_file_location("geh_prov", bin_dir / "group-em-home.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod._place_engine_on_path() == expected
+
+
+def test_seam_whose_provenance_root_is_empty_raises(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    shutil.copy(_BIN / "group-em-home.py", bin_dir / "group-em-home.py")
+    seam_dir = tmp_path / "coordinator" / "hooks" / "scripts"
+    seam_dir.mkdir(parents=True)
+    (seam_dir / "_engine_root.py").write_text(
+        _PROVENANCE_SEAM.replace('("PROV_ROOT", "published", "published-target")', '(None, "unresolved", "none")'),
+        encoding="utf-8",
+    )
+    spec = importlib.util.spec_from_file_location("geh_prov_empty", bin_dir / "group-em-home.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    with pytest.raises(RuntimeError, match="engine root unresolved"):
+        mod._place_engine_on_path()
+
+
 def test_script_has_no_legacy_imports():
     text = (_BIN / "group-em-home.py").read_text(encoding="utf-8")
     assert "import _gem_home" not in text

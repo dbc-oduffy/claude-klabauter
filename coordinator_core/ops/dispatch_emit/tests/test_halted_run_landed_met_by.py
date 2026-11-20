@@ -223,3 +223,50 @@ def test_a_completion_gate_halt_lands_once_the_judge_authored_met_is_recorded(tm
     out = _call(root, sha=after)
     assert out["ok"], out
     assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"
+
+
+RUNBASE = "warp-2026-11-18-runbase-20261118T000000-abcdef"
+
+
+@pytest.fixture
+def uncommitted(tmp_path):
+    """A repo whose run's halted.json is untracked; commits: pre-base, base, then one after."""
+    _git(tmp_path, "init", "-q")
+    pre = _commit(tmp_path, "pre")
+    base = _commit(tmp_path, "base")
+    marker = tmp_path / "state" / "warp" / RUNBASE / "halted.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps({"status": "halted", "halted": "ledger-check", "sizing_rel": None, "blocking": ["R1"], "run_base_sha": base}),
+        encoding="utf-8",
+    )
+    after = _commit(tmp_path, "after")
+    return tmp_path, marker, pre, base, after
+
+
+def _call_base(root, **params):
+    return op._handler({"run_id": RUNBASE, **params}, root)
+
+
+def test_met_by_after_the_run_base_closes_a_run_whose_halt_never_committed(uncommitted):
+    root, marker, _, _, after = uncommitted
+    out = _call_base(root, sha=after, met_by={"R1": after})
+    assert out["ok"], out
+    assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"
+
+
+@pytest.mark.parametrize("which", ["pre", "base"])
+def test_met_by_at_or_before_the_run_base_still_refuses(uncommitted, which):
+    root, marker, pre, base, after = uncommitted
+    out = _call_base(root, sha=after, met_by={"R1": {"pre": pre, "base": base}[which]})
+    assert not out["ok"] and "R1" in out["error"] and "run base" in out["error"]
+    assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "halted"
+
+
+def test_met_by_made_before_a_late_halt_record_commit_is_accepted(uncommitted):
+    root, marker, _, _, after = uncommitted
+    _git(root, "add", "-f", "--", "state")
+    _git(root, "commit", "-q", "-m", f"warp: record halted {RUNBASE} run artifacts")
+    later = _commit(root, "later")
+    out = _call_base(root, sha=later, met_by={"R1": after})
+    assert out["ok"], out

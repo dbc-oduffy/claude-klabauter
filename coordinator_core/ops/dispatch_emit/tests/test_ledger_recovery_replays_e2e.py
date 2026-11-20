@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,12 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 if shutil.which("node") is None:
     pytest.skip("node not on PATH", allow_module_level=True)
+
+
+@pytest.fixture(autouse=True)
+def _land_temp_under_tmp_path(monkeypatch, tmp_path_factory):
+    """A land's clean-overlay mirror resolves under `tempfile.gettempdir()`; keep it out of the session Temp."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path_factory.mktemp("land-temp")))
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _RUN_432570 = "warp-2026-10-23-xl-xxl-fan-out-sizing-seam-pass-432570-20261023T155009-3d4d54"

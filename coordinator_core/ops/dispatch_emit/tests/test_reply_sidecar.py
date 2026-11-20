@@ -417,3 +417,23 @@ def test_stage_reply_schema_names_every_key_the_family_report_emits() -> None:
     report = ask_stage._family_routing_report("agy", {"C1": "claude"})
     report.update(ask_stage._family_routing_report("agy", {"C1": "agy"}))
     assert set(report) <= set(rs.STAGE_REPLY_SCHEMA["properties"]), set(report) - set(rs.STAGE_REPLY_SCHEMA["properties"])
+
+
+@pytest.mark.parametrize("stamp", [
+    {"plan": "docs/plans/status.md", "outcome": "stamped"},
+    {"plan": "docs/plans/status.md", "outcome": "refused", "error": "locked"},
+])
+def test_stage_reply_relays_plan_executing_stamp(stamp):
+    import jsonschema
+
+    from coordinator_core.ops.dispatch_emit import ask_stage_plan
+
+    reply = {ask_stage_plan.PLAN_EXECUTING_STAMP_KEY: stamp}
+    jsonschema.validate(reply, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**reply, "unknown_field": True}, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {ask_stage_plan.PLAN_EXECUTING_STAMP_KEY: {**stamp, "outcome": "bad"}},
+            rs.STAGE_REPLY_SCHEMA,
+        )

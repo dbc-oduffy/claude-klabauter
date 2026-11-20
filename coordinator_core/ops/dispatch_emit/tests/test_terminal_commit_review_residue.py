@@ -1,5 +1,5 @@
 """dispatch.terminal_commit lands a review-stage edit outside the declared writes as review residue,
-or refuses ``review-edit-unlanded`` naming the files; an executor's undeclared write stays reported."""
+or records ``review-edit-unlanded`` provenance naming the files; an executor's undeclared write stays reported."""
 
 from __future__ import annotations
 
@@ -97,32 +97,35 @@ def test_review_edit_outside_declared_dir_lands_as_review_residue(repo, monkeypa
     assert STRAY not in out["undeclared_dirty"]
 
 
-def test_unlandable_review_edit_refuses_naming_the_files(repo, monkeypatch):
+def _unlanded(out: dict) -> dict:
+    return {r["path"]: r for r in out.get("provenance", ()) if r["reason"] == "review-edit-unlanded"}
+
+
+def test_unlandable_review_edit_lands_with_provenance_naming_the_files(repo, monkeypatch):
     session_core.init(PEER, cwd=str(repo))
     session_scope.touch(PEER, STRAY, cwd=str(repo))
     _review_wrote(monkeypatch, {STRAY: "agent-1"})
-    head = _git(["rev-parse", "HEAD"], repo)
     token = run_token.mint(repo, RUN, "run.mjs", session_id=SELF)
     out = _run(repo, run_id=RUN, run_token=token)
-    assert out["committed"] is False
-    assert out["refused"] == "review-edit-unlanded"
-    assert out["review_edits_unlanded"] == {STRAY: review_edits.HALT_PEER_CONTESTED}
-    assert STRAY in out["error"]
-    assert _git(["rev-parse", "HEAD"], repo) == head
-    _review_wrote(monkeypatch, {})
-    retry = _run(repo, run_id=RUN, run_token=token, inline_review=_UNLISTED)
-    assert retry["committed"] is True, retry
+    assert out["committed"] is True, out
+    assert "refused" not in out
+    assert set(_unlanded(out)) == {STRAY}
+    assert review_edits.HALT_PEER_CONTESTED in _unlanded(out)[STRAY]["detail"]
+    assert STRAY not in _committed(repo)
+    assert _dirty(repo, STRAY) != ""
 
 
-def test_a_deleted_review_write_refuses(repo, monkeypatch):
+def test_a_deleted_review_write_lands_with_provenance(repo, monkeypatch):
     (repo / "elsewhere" / "tests" / "gone.py").write_text("x\n", encoding="utf-8", newline="")
     _git(["add", "elsewhere"], repo)
     _git(["commit", "-q", "-m", "track"], repo)
     (repo / "elsewhere" / "tests" / "gone.py").unlink()
     _review_wrote(monkeypatch, {"elsewhere/tests/gone.py": "agent-1"})
     out = _run(repo)
-    assert out["refused"] == "review-edit-unlanded"
-    assert out["review_edits_unlanded"] == {"elsewhere/tests/gone.py": review_edits.HALT_DELETED}
+    assert out["committed"] is True, out
+    assert "refused" not in out
+    assert set(_unlanded(out)) == {"elsewhere/tests/gone.py"}
+    assert review_edits.HALT_DELETED in _unlanded(out)["elsewhere/tests/gone.py"]["detail"]
 
 
 def test_an_unanswerable_source_sets_ok_false_with_the_commit_landed(repo, monkeypatch):

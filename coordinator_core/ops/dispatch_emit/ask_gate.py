@@ -27,6 +27,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import design_route
+from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
 from coordinator_core.ops.dispatch_emit.ask_exclusions import excluded_paths
 
 RESUME_EXCLUDE_FIELD = "exclude"
@@ -134,6 +135,7 @@ _PARAMS = (
     Field("route_override_reason", "str"),
     Field("require_live_token", "bool"),
     Field("em_size", "nonempty_str"),
+    Field("family", "nonempty_str"),
     Field("stage_act", "bool"),
     Field("gated", "list"),
     Field("chain_emit", "bool"),
@@ -402,6 +404,68 @@ def _design_scope(sizing: dict, writes: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(scope))
 
 
+_FAMILY_LINE = re.compile(r"^family:[ \t]*(.*?)[ \t]*$")
+_STATUS_LINE = re.compile(r"^status:")
+
+
+def _stamp_family(root: Path, sizing_rel: str, family: str) -> Optional[str]:
+    """Write `family` as the sizing's top-level key; the refusal reason, else None.
+
+    `claude` is the absent default and stamps nothing, but still conflicts with a recorded non-claude
+    family. A sizing not on disk is left to the arm verdict's own refusal.
+    """
+    try:
+        wanted = _stage_family.resolve(family)
+    except ValueError as exc:
+        return str(exc)
+    from coordinator_core.locked_write import MutateAbort, locked_rmw
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused, _sizing_path
+
+    try:
+        target = _sizing_path(root, sizing_rel)
+    except (LedgerRefused, SizingFireRefused):
+        return None
+    if not target.is_file():
+        return None
+    crlf = b"\r\n" in target.read_bytes()
+    conflict: list = []
+
+    def mutate(text: str) -> str:
+        lines = text.split("\n")
+        status_at = None
+        for i, line in enumerate(lines):
+            if _STATUS_LINE.match(line) and status_at is None:
+                status_at = i
+            m = _FAMILY_LINE.match(line)
+            if m:
+                recorded = m.group(1).strip("'\"")
+                if recorded != wanted and (recorded or wanted != _stage_family.FALLBACK):
+                    conflict.append(recorded)
+                raise MutateAbort()
+        if wanted == _stage_family.FALLBACK:
+            raise MutateAbort()
+        new_line = f"family: {wanted}"
+        if status_at is not None:
+            lines.insert(status_at + 1, new_line)
+        elif lines and lines[-1] == "":
+            lines.insert(len(lines) - 1, new_line)
+        else:
+            lines.append(new_line)
+        out = "\n".join(lines)
+        return out.replace("\n", "\r\n") if crlf else out
+
+    try:
+        locked_rmw(target, mutate, repo_root=root)
+    except MutateAbort:
+        pass
+    if conflict:
+        return (
+            f"the ask names family {wanted} but the sizing's top-level family is {conflict[0] or 'empty'}; "
+            "the sizing's own key governs: drop the family arg or edit the sizing's family and refire"
+        )
+    return None
+
+
 def gate(
     repo_root: Path,
     sizing_rel: str,
@@ -416,8 +480,12 @@ def gate(
     held_sink: Optional[list] = None,
     reasons_sink: Optional[list] = None,
     em_size: Optional[str] = None,
+    family: Optional[str] = None,
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
+
+    `family` (the ask's executing family) is stamped as the sizing's top-level `family` before the arm is
+    judged; an unknown value, or one differing from a family the sizing already records, refuses naming it.
 
     `kept_sink`, when given, receives `(kept row ids, kept_run)` for a row resume that keeps rows.
     `held_sink`, when given, receives the resume's `ResumePlan.held` on the row and the ledger resume alike.
@@ -437,6 +505,10 @@ def gate(
     from coordinator_core.ops.dispatch_emit import design_conformance as dc
 
     root = Path(repo_root)
+    if family:
+        family_refusal = _stamp_family(root, sizing_rel, family)
+        if family_refusal:
+            return _refuse(family_refusal)
     route_payload = None
     sizing = None
     try:
@@ -683,6 +755,77 @@ def _xs_baton_is_own(repo_root: Path, sizing_rel: str, baton: str) -> bool:
         return False
 
 
+HALT_NOTHING_EXECUTABLE = "nothing-executable"
+
+
+def _nothing_executable_halt(repo_root: Path, plan_rel: str, incomplete: Sequence[str]) -> Optional[GateVerdict]:
+    """A `nothing-executable` halt when none of the bound plan's `incomplete` rows is dispatchable, else None.
+
+    One in-process `read_spine`, the reader `ask_stage` uses, so the gate and the stage-time
+    zero-dispatchable refusal agree. An unreadable plan, or a spine whose every exclusion is a memo
+    close, defers to the stage."""
+    from coordinator_core.ops._path_guard import contained_path
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import own_gate_owners, provisioned_sibling_roots
+    from coordinator_core.ops.dispatch_emit.memo_rows import memo_close_only
+    from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo, read_spine
+
+    root = Path(repo_root)
+    plan = contained_path(root / plan_rel, [root])
+    if plan is None or not plan.is_file() or not incomplete:
+        return None
+    try:
+        text = plan.read_text(encoding="utf-8")
+        raw_by_id = {r["id"]: r for r in load_rows_memo(text).rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
+        exclusions: list = []
+        rows = read_spine(
+            plan, exclusions=exclusions, plan_text=text,
+            cleared_gate_owners=own_gate_owners(raw_by_id.values(), root) | frozenset(provisioned_sibling_roots(raw_by_id.values(), root)),
+        )
+        incomplete_ids = frozenset(incomplete)
+        if any(r.id in incomplete_ids for r in rows) or memo_close_only(exclusions, raw_by_id):
+            return None
+    except Exception:  # noqa: BLE001 -- an unreadable spine is the stage's refusal to name
+        return None
+    dropped = [e for e in exclusions if e.get("id") in incomplete_ids]
+    named = "; ".join(f"{e['id']} ({e.get('reason')}: {e.get('detail') or ''})" for e in dropped)
+    return _halt(
+        HALT_NOTHING_EXECUTABLE,
+        f"the spine of {plan_rel} derives zero dispatchable rows" + (f": {named}" if named else ""),
+        plan=plan_rel,
+        rows=[{"id": e["id"], "reason": e.get("reason"), "detail": e.get("detail") or ""} for e in dropped],
+    )
+
+
+_FAMILY_DIRECTIVE = re.compile(
+    r"\bexecuting\s+(?:agent\s+)?family\s*[:=]\s*[`'\"]?(" + "|".join(
+        f for f in _stage_family.FAMILIES if f != _stage_family.FALLBACK
+    ) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _family_named_refusal(sizing: Mapping) -> Optional[str]:
+    """The refusal reason when the sizing's text names a non-claude executing family its top-level `family:` lacks.
+
+    Reads `em_context`, `em_analysis.{em_brief,relayed_text,em_context}` and `intent`; the directive is the
+    `Executing agent family: <family>` phrase. None when no family is named or the top-level family matches.
+    """
+    analysis = sizing.get("em_analysis")
+    texts = [sizing.get("em_context"), sizing.get("intent")]
+    if isinstance(analysis, Mapping):
+        texts += [analysis.get(k) for k in ("em_brief", "relayed_text", "em_context")]
+    declared = sizing.get("family")
+    for text in texts:
+        match = _FAMILY_DIRECTIVE.search(text) if isinstance(text, str) else None
+        if match and str(declared or "").lower() != match.group(1).lower():
+            named = match.group(1).lower()
+            return (
+                f"the ask names executing family {named} but the sizing's top-level family is "
+                f"{declared or 'absent'}; set family: {named} on the sizing and refire"
+            )
+    return None
+
+
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None, run_id: Optional[str] = None, kept_sink: Optional[list] = None,
@@ -700,6 +843,10 @@ def _arm_verdict(
         arm = resolve_arm(sizing)
     except SizingFireRefused as exc:
         return _refuse("; ".join(exc.fields))
+
+    family_reason = _family_named_refusal(sizing)
+    if family_reason:
+        return _refuse(family_reason)
 
     engine_tshirt = sizing["estimate"]["tshirt"]
     if size_misaligned(em_size, engine_tshirt):
@@ -835,6 +982,10 @@ def _arm_verdict(
                 refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
         return _refuse("; ".join(refusals))
+    if resume is not None and resume.ledger is None:
+        idle = _nothing_executable_halt(repo_root, resume.plan_rel, resume.incomplete)
+        if idle is not None:
+            return idle
     try:
         resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id, sizing_rel=sizing_rel) if resume else None
     except SizingFireRefused as exc:
@@ -844,11 +995,14 @@ def _arm_verdict(
     if landed_sink is not None and resume_rows:
         landed_sink.extend(resume.landed_open)
     if kept_sink is not None and resume_rows and resume.kept:
-        kept_sink.append((list(resume.kept), resume.kept_run))
+        row_kept = _drop_absent_named_rows(repo_root, list(resume.kept), resume.kept_run)
+        if row_kept:
+            kept_sink.append((row_kept, resume.kept_run))
     elif kept_sink is not None and resume_ledger is not None:
         ledger_kept = _ledger_kept_rows(repo_root, resume_ledger)
-        if ledger_kept[0]:
-            kept_sink.append(ledger_kept)
+        ledger_rows = _drop_absent_named_rows(repo_root, ledger_kept[0], ledger_kept[1])
+        if ledger_rows:
+            kept_sink.append((ledger_rows, ledger_kept[1]))
     if held_sink is not None and resume:
         held_sink.extend(resume.held)
     if reasons_sink is not None and resume:
@@ -1081,6 +1235,41 @@ def _discharged_em_items(blocking: Sequence[str], discharged: Mapping, plan_path
         ):
             out.add(item)
     return out
+
+
+_ABSENT_WORD = re.compile(r"\b(absent|missing|not (?:present|found|landed))\b", re.IGNORECASE)
+
+
+def _drop_absent_named_rows(repo_root: Path, kept: Sequence[str], kept_run: Optional[str]) -> list[str]:
+    """`kept` less each row the `criterion_not_met` halt of `kept_run` names as absent while the row's recorded
+    writes are empty or not all on disk: that row runs again. Any other halt kind, a halt text not naming the
+    row beside an absence word, or a row whose recorded writes all hold keeps it. One marker and one
+    kept.json read; no git spawn."""
+    rows = list(kept)
+    if not rows or not kept_run:
+        return rows
+    from coordinator_core.ops.dispatch_emit import halted_run, kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        record = record_dir(Path(repo_root), kept_run)
+        marker = halted_run._read(record)
+        if not isinstance(marker, dict) or marker.get("halted") != "criterion_not_met":
+            return rows
+        reason = str(marker.get(halted_run.HALT_REASON_FIELD) or "")
+        if not _ABSENT_WORD.search(reason):
+            return rows
+        chunks = kept_work.read(record)["chunks"]
+    except (ValueError, OSError):
+        return rows
+
+    def absent(row_id: str) -> bool:
+        if not re.search(r"(?<![A-Za-z0-9_])" + re.escape(row_id) + r"(?![A-Za-z0-9_])", reason):
+            return False
+        paths = (chunks.get(row_id) or {}).get("paths") or {}
+        return not paths or any(not (Path(repo_root) / p).exists() for p in paths)
+
+    return [r for r in rows if not absent(r)]
 
 
 def _ledger_kept_rows(repo_root: Path, resume_ledger: Mapping) -> tuple[list[str], Optional[str]]:
@@ -1583,6 +1772,7 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
         root, sizing_rel, writes=writes, baton=params.get("baton"),
         mint_design_rows=bool(params.get("run_id")), landed_sink=landed, run_id=params.get("run_id"),
         kept_sink=kept, phase_sink=phases, held_sink=held, reasons_sink=reasons, em_size=params.get("em_size"),
+        family=params.get("family"),
     )
     if landed and verdict.halt is None and verdict.resume_plan and verdict.resume_rows:
         _stamp_landed_rows(root, verdict.resume_plan, landed)
@@ -1638,6 +1828,8 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
                     out["restage_rows"] = stale
             return out
         try:
+            if ledger_resume:
+                only_rows = _spine_resume_rows(root, plan_rel, only_rows, out["resume_ledger"])
             if ledger_resume and verdict.arm in (ARM_XS, ARM_S):
                 derived = _derive_resume_rows(root, plan_rel, out["resume_ledger"])
                 out["resume_ledger"][RESUME_LEDGER_DERIVED_FIELD] = derived
@@ -1820,6 +2012,47 @@ def _staged_rows_writes(root: Path, plan_rel: str, row_ids: Sequence[str]) -> li
             if isinstance(w, str) and w not in out:
                 out.append(w)
     return out
+
+
+def _spine_resume_rows(root: Path, plan_rel: str, entries: Sequence[str], resume_out: dict) -> list[str]:
+    """`entries` with every ledger item named by one replaced by the open spine rows serving it.
+
+    An entry is a ledger item when it, or its text before the first `:`, is one of the resume's
+    blocking, rulable or ledger item ids. A spine id passes through, and so does an entry no
+    ledger item names, so `ask_stage` still refuses a genuinely unknown id. Of the open rows serving
+    an item, those the ledger lists unlanded win, so a landed row is not re-staged; it stays in
+    `blocking` for `_derive_resume_rows` and the replan leg. An item no open spine row serves is dropped, so
+    entries that all drop yield an empty list.
+    """
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit import ledger_remaining_paths as lrp
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    items = {
+        *(resume_out.get("blocking") or ()),
+        *(resume_out.get("rulable_ids") or ()),
+        *(resume_out.get("ledger_item_ids") or ()),
+    }
+    unlanded = set(resume_out.get(RESUME_LEDGER_UNLANDED_FIELD) or ())
+    plan = root / plan_rel
+    try:
+        loaded = load_rows(plan.read_text(encoding="utf-8"))
+        if loaded.status is not LocateStatus.LOCATED:
+            raise lrp.PlanRowsUnreadable(f"plan {plan_rel} spine is {loaded.status.name}")
+        spine = {str(r.get("id")) for r in loaded.rows if isinstance(r, dict)}
+        out: list[str] = []
+        for entry in entries:
+            item = next((c for c in (entry, entry.split(":", 1)[0].strip()) if c in items), None)
+            if entry in spine or item is None:
+                out.append(entry)
+                continue
+            owing = [
+                str(r.get("id")) for r in lrp.serving_rows(plan, [item]) if r.get("disposition", "open") == "open"
+            ]
+            out.extend([r for r in owing if r in unlanded] or owing)
+    except (OSError, ValueError, lrp.PlanRowsUnreadable) as exc:
+        raise AskStageError(str(exc)) from exc
+    return list(dict.fromkeys(out))
 
 
 def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str]:

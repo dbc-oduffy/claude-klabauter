@@ -51,8 +51,8 @@ def fake_cli(tmp_path, monkeypatch, *, result: str = '{"ok":true}', exit_code: i
         "import sys,json,os,time\n"
         f"time.sleep({delay!r})\n"
         "args=sys.argv[1:]\n"
-        "prompt=sys.stdin.read()\n"
-        f"open({str(tmp_path / 'capture.json')!r},'w',encoding='utf-8').write(json.dumps({{'argv':args,'prompt':prompt,'env':dict(os.environ),'cwd':os.getcwd()}}))\n"
+        "prompt=sys.stdin.buffer.read().decode('utf-8')\n"
+        f"open({str(tmp_path / 'capture.json')!r},'w',encoding='utf-8').write(json.dumps({{'argv':args,'prompt':prompt,'env':{{k:v for k,v in os.environ.items() if k=='PATH' or k.startswith(('COORDINATOR_','CODEX_','OPENAI_'))}},'cwd':os.getcwd()}}))\n"
         f"open(args[args.index('-o')+1],'w',encoding='utf-8').write({result!r})\n"
         f"events={events!r}\n"
         "for event in (events if events is not None else [{'type':'turn.completed'}]): print(json.dumps(event))\n"
@@ -93,6 +93,14 @@ def test_codex_schema_prompt_label_and_environment(tmp_path: Path, monkeypatch: 
     assert "COORDINATOR_SESSION_ID" not in wire["env"]
     assert pids and (tmp_path / "agent/stdout.jsonl").is_file()
     assert json.loads((tmp_path / "agent/process.json").read_text())["label"] == "size"
+
+
+def test_worker_door_is_bound_to_the_host_engine_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The native door ranks COORDINATOR_DOOR_ENGINE_ROOT above its installed sidecar and ignores
+    COORDINATOR_ENGINE_ROOT; unpinned, a worker's ops reach whichever engine the sidecar names."""
+    monkeypatch.setenv("COORDINATOR_DOOR_ENGINE_ROOT", "stranger")
+    env = headless_agents._environment()
+    assert env["COORDINATOR_DOOR_ENGINE_ROOT"] == env["COORDINATOR_ENGINE_ROOT"]
 
 
 def test_invalid_worker_schema_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -677,3 +685,106 @@ def test_text_output_beyond_refusal_and_other_commands_are_ok(tmp_path, monkeypa
     assert headless_agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "a1") == "sized S; submit refused, continued"
     _headless_cli(tmp_path, monkeypatch, result=REFUSAL_OUTPUT, events=[_submit_event(command="coordinator-invoke other.op")])
     assert headless_agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "a2") == REFUSAL_OUTPUT
+
+
+_ARM_SCHEMA = {"type": "object", "properties": {"arm": {"type": ["string", "null"]}, "n": {"type": "integer"}},
+               "required": ["arm", "n"], "additionalProperties": False}
+
+
+def test_omitted_required_nullable_property_validates_as_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_cli(tmp_path, monkeypatch, result='{"n":1}')
+    assert agents.run_agent("x", {"schema": _ARM_SCHEMA}, repo_root=tmp_path,
+                            artifact_dir=tmp_path / "agent") == {"arm": None, "n": 1}
+
+
+def test_omitted_required_non_nullable_property_still_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_cli(tmp_path, monkeypatch, result='{"arm":"a"}')
+    with pytest.raises(agents.AgentFailed, match="'n' is a required property"):
+        agents.run_agent("x", {"schema": _ARM_SCHEMA}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
+
+
+def test_headless_runner_fills_omitted_nullable_and_keeps_others_strict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_cli(tmp_path, monkeypatch, result='{"n":2}')
+    monkeypatch.setattr(headless_agents, "resolve_codex", agents.resolve_codex)
+    monkeypatch.setattr(headless_agents, "preflight_auth", lambda **_kw: None)
+    assert headless_agents.run_agent("x", {"schema": _ARM_SCHEMA}, repo_root=tmp_path,
+                                     artifact_dir=tmp_path / "agent2") == {"arm": None, "n": 2}
+    assert headless_agents.fill_omitted_nullable({"arm": "a"}, _ARM_SCHEMA) == {"arm": "a"}
+    assert headless_agents.fill_omitted_nullable({"n": 1, "extra": 1}, _ARM_SCHEMA) == {"arm": None, "n": 1, "extra": 1}
+
+
+_FIXTURES = Path(__file__).parent / "fixtures" / "codex_arm_omitted"
+
+
+@pytest.mark.parametrize("fire", ["fdb5e0ca", "7a532721"])
+def test_live_fire_jsonrpc_wrapped_reply_replays_to_its_inner_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fire: str) -> None:
+    """Witness fires: Codex wrapped the reply in a JSON-RPC envelope, so root `arm` looked omitted."""
+    schema = json.loads((_FIXTURES / f"{fire}-schema.json").read_text(encoding="utf-8"))
+    last = (_FIXTURES / f"{fire}-last.json").read_text(encoding="utf-8")
+    inner = json.loads(last)["result"]
+    fake_cli(tmp_path, monkeypatch, result=last)
+    monkeypatch.setattr(headless_agents, "resolve_codex", agents.resolve_codex)
+    monkeypatch.setattr(headless_agents, "preflight_auth", lambda **_kw: None)
+    got = headless_agents.run_agent("x", {"schema": schema}, repo_root=tmp_path, artifact_dir=tmp_path / "a")
+    assert got == inner and got["arm"] == "m_plus"
+
+
+def test_wrong_shape_object_is_not_padded_with_null_members() -> None:
+    assert headless_agents.fill_omitted_nullable({"unrelated": 1}, _ARM_SCHEMA) == {"unrelated": 1}
+
+
+def _counting_cli(tmp_path, monkeypatch, replies):
+    """A CLI that answers each spawn with the next reply and counts spawns."""
+    script = tmp_path / "seq.py"
+    count = tmp_path / "count.txt"
+    script.write_text(
+        "import sys,json,pathlib\n"
+        f"c=pathlib.Path({str(count)!r}); n=int(c.read_text()) if c.exists() else 0; c.write_text(str(n+1))\n"
+        f"replies={replies!r}\nsys.stdin.read()\n"
+        "a=sys.argv[1:]; open(a[a.index('-o')+1],'w',encoding='utf-8').write(replies[min(n,len(replies)-1)])\n"
+        "print(json.dumps({'type':'turn.completed'}))\n", encoding="utf-8")
+    monkeypatch.setattr(agents, "resolve_codex", lambda **_kw: [sys.executable, str(script)])
+    monkeypatch.setattr(agents, "preflight_auth", lambda **_kw: None)
+    monkeypatch.setattr(headless_agents, "resolve_codex", lambda **_kw: [sys.executable, str(script)])
+    monkeypatch.setattr(headless_agents, "preflight_auth", lambda **_kw: None)
+    return count
+
+
+def test_headless_parse_failure_gets_exactly_one_reask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    count = _counting_cli(tmp_path, monkeypatch, ['{"arm": "a", "n": 1}"}', '{"arm": "a", "n": 1}'])
+    got = headless_agents.run_agent("x", {"schema": _ARM_SCHEMA}, repo_root=tmp_path, artifact_dir=tmp_path / "a")
+    assert got == {"arm": "a", "n": 1} and count.read_text() == "2"
+
+
+def test_headless_parse_failure_twice_raises_after_one_reask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    count = _counting_cli(tmp_path, monkeypatch, ['{"arm": "a", "n": 1}"}'])
+    with pytest.raises(headless_agents.AgentFailed, match="schema-valid"):
+        headless_agents.run_agent("x", {"schema": _ARM_SCHEMA}, repo_root=tmp_path, artifact_dir=tmp_path / "a")
+    assert count.read_text() == "2"
+
+
+def test_live_fire_53662a32_malformed_reply_is_reasked_once_then_halts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    schema = json.loads((_FIXTURES / "53662a32-schema.json").read_text(encoding="utf-8"))
+    bad = (_FIXTURES / "53662a32-last.json").read_text(encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(bad)
+    count = _counting_cli(tmp_path, monkeypatch, [bad])
+    with pytest.raises(headless_agents.AgentFailed, match="Expecting ','"):
+        headless_agents.run_agent("x", {"schema": schema}, repo_root=tmp_path, artifact_dir=tmp_path / "a")
+    assert count.read_text() == "2"
+
+
+def test_codex_runner_route_reasks_a_malformed_commit_leg_reply_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """headless.execute drives every leg, commit and halt-commit included, through codex_runner.workflow.run_agent."""
+    count = _counting_cli(tmp_path, monkeypatch, ['{"arm": "a", "n": 1}"}', '{"arm": "a", "n": 1}'])
+    got = agents.run_agent("commit", {"schema": _ARM_SCHEMA, "label": "halt-commit"}, repo_root=tmp_path,
+                           artifact_dir=tmp_path / "a")
+    assert got == {"arm": "a", "n": 1} and count.read_text() == "2"
+
+
+def test_codex_runner_route_names_the_parse_failure_after_one_reask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    count = _counting_cli(tmp_path, monkeypatch, ['{"arm": "a", "n": 1}"}'])
+    with pytest.raises(agents.AgentFailed, match="Extra data"):
+        agents.run_agent("commit", {"schema": _ARM_SCHEMA, "label": "halt-commit"}, repo_root=tmp_path,
+                         artifact_dir=tmp_path / "a")
+    assert count.read_text() == "2"

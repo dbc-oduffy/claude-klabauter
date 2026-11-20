@@ -1,6 +1,7 @@
 """Behavior pins for the Codex SessionStart hook's worker doctrine pointer."""
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -144,6 +145,82 @@ def test_run_records_parent_as_holder_on_the_peer_row(tmp_path, monkeypatch):
     assert "bound to Codex thread" in out["systemMessage"]
     row = first_row(peers)
     assert (row["codexPid"], row["codexProcStart"]) == (9, "s")
+
+
+@pytest.fixture
+def engine_allocator(tmp_path, monkeypatch):
+    """A stamped engine root whose registration writes the thread's binding into tmp_path/bindings."""
+    import types
+    import coordinator_core.session as session_pkg
+    root = tmp_path / "engine"
+    (root / "coordinator_core").mkdir(parents=True)
+    (root / "coordinator_core" / "_engine_stamp").write_text("stamped", encoding="utf-8")
+    registry = tmp_path / "bindings"
+    registry.mkdir()
+    calls = []
+    fake = types.ModuleType("coordinator_core.session.external_registry")
+
+    def register_current(payload):
+        calls.append(payload)
+        (registry / f"{payload['session_id']}.json").write_text(json.dumps(ADDRESS))
+
+    fake.register_current = register_current
+    monkeypatch.setitem(sys.modules, "coordinator_core.session.external_registry", fake)
+    monkeypatch.setattr(session_pkg, "external_registry", fake, raising=False)
+    monkeypatch.setattr(hook.socket, "gethostname", lambda: "um01")
+    monkeypatch.setattr(hook, "codex_holder", lambda: {"codexPid": 9})
+    monkeypatch.delenv(wm.WORKER_ENV, raising=False)
+    return root, registry, calls
+
+
+def test_engine_root_allocates_before_publishing_so_thread_is_never_unbound(tmp_path, engine_allocator):
+    root, registry, calls = engine_allocator
+    peers = tmp_path / "peers.json"
+    payload = {"session_id": THREAD, "cwd": str(tmp_path)}
+    out = hook.run(payload, peers, registry, engine_root=str(root))
+    assert "unbound" not in out["systemMessage"] and "bound to Codex thread" in out["systemMessage"]
+    assert calls[0]["hook_event_name"] == "SessionStart"
+    assert first_row(peers)["name"] == ADDRESS["name"]
+
+
+def test_without_engine_root_thread_stays_unbound(tmp_path, engine_allocator):
+    _, registry, calls = engine_allocator
+    out = hook.run({"session_id": THREAD, "cwd": str(tmp_path)}, tmp_path / "peers.json", registry)
+    assert "unbound" in out["systemMessage"] and calls == []
+
+
+def test_repeated_startup_registration_leaves_one_row(tmp_path, engine_allocator):
+    root, registry, calls = engine_allocator
+    peers = tmp_path / "peers.json"
+    payload = {"session_id": THREAD, "cwd": str(tmp_path)}
+    hook.run(payload, peers, registry, engine_root=str(root))
+    hook.run(payload, peers, registry, engine_root=str(root))
+    rows = json.loads(peers.read_text())
+    assert len(calls) == 2 and len(rows) == 1 and rows[0]["target"] == THREAD
+
+
+def test_subagent_start_and_unstamped_engine_never_allocate(tmp_path, engine_allocator):
+    root, registry, calls = engine_allocator
+    hook.run({"session_id": THREAD, "cwd": str(tmp_path), "agent_id": "child"}, tmp_path / "p.json", registry,
+             engine_root=str(root))
+    (root / "coordinator_core" / "_engine_stamp").write_text("", encoding="utf-8")
+    out = hook.run({"session_id": THREAD, "cwd": str(tmp_path)}, tmp_path / "p.json", registry, engine_root=str(root))
+    assert calls == [] and "unbound" in out["systemMessage"]
+
+
+def test_a_raising_engine_registration_leaves_the_thread_unbound_without_raising(tmp_path, engine_allocator):
+    root, registry, calls = engine_allocator
+    sys.modules["coordinator_core.session.external_registry"].register_current = lambda payload: 1 / 0
+    out = hook.run({"session_id": THREAD, "cwd": str(tmp_path)}, tmp_path / "p.json", registry, engine_root=str(root))
+    assert "unbound" in out["systemMessage"]
+
+
+def test_main_passes_the_engine_root_argument_to_run(tmp_path, monkeypatch, capsys):
+    seen = {}
+    monkeypatch.setattr(hook, "run", lambda payload, engine_root=None: seen.setdefault("root", engine_root))
+    monkeypatch.setattr(sys, "argv", ["hook", "--engine-root", str(tmp_path)])
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps({"session_id": THREAD})))
+    assert hook.main() == 0 and seen["root"] == str(tmp_path)
 
 
 def test_pointer_names_doctrine_path_only():

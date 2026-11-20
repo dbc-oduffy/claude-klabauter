@@ -19,7 +19,8 @@ Usage (argv, mirrors the node CLI verbatim):
     plan-status-transition stamp-unblocked --plan <path>
     plan-status-transition stamp-abandoned --plan <path> --reason "<why>"
     plan-status-transition stamp-landed --plan <path> --reason "<why>"
-    plan-status-transition stamp-deferred --plan <path> --reason "<why>"
+    plan-status-transition stamp-deferred --plan <path> --reason "<why>" [--no-commit]
+    plan-status-transition stamp-unstaled --plan <path> [--no-commit]
 
 ``--override-reason`` (2026-08-10, cross-repo memo example-retrieval-repo-em-close-out-
 stamps-implemented-without-reading-the-ac-table.md): an explicit,
@@ -3284,10 +3285,29 @@ def _stamp_abandoned(opts: _Opts) -> int:
 # down must be able to leave it without asserting delivery (`stamp-implemented`
 # is gated on a passing exit criterion). verb -> (target status, legal sources).
 # `abandoned` is deliberately absent: `_stamp_abandoned` refuses work in flight.
+#
+# `stamp-unstaled` is the one exit from a stale deferral (a draft|reviewed plan
+# parked by `stamp-deferred` with a `stale...` reason): it returns the plan to
+# the status recorded in the `[from: <status>]` suffix `stamp-deferred` appends
+# to `status_reason`, and clears the reason. Its target is read from the plan,
+# so the table carries "" for it. Any other deferral is refused untouched.
 _STANDDOWN_VERBS = {
     "stamp-landed": ("landed", frozenset({"executing"})),
-    "stamp-deferred": ("deferred", frozenset({"executing", "landed"})),
+    "stamp-deferred": ("deferred", frozenset({"executing", "landed", "draft", "reviewed"})),
+    "stamp-unstaled": ("", frozenset({"deferred"})),
 }
+_STALE_REOPEN_STATUSES = frozenset({"draft", "reviewed"})
+_STALE_REASON_RE = re.compile(r"^\s*stale\b", re.IGNORECASE)
+_DEFERRED_FROM_RE = re.compile(r"\s*\[from: (draft|reviewed)\]\s*$")
+
+
+def stale_reopen_target(status_reason: Optional[str]) -> Optional[str]:
+    """Prior status a stale deferral returns to, or None when `status_reason`
+    does not mark a recoverable stale deferral (no `stale` lead, no marker)."""
+    if not status_reason or not _STALE_REASON_RE.match(status_reason):
+        return None
+    m = _DEFERRED_FROM_RE.search(status_reason)
+    return m.group(1) if m else None
 
 
 def _stamp_standdown(opts: _Opts) -> int:
@@ -3295,21 +3315,27 @@ def _stamp_standdown(opts: _Opts) -> int:
 
     `stamp-landed`: executing -> landed. Every chunk's code is on the branch but
     a spine row is undisposed; `landed` is non-terminal and re-enters
-    `stamp-implemented` later. `stamp-deferred`: executing|landed -> deferred.
-    Remaining work is paused pending another workstream (frozen, resumable by
-    a human judgment call only).
+    `stamp-implemented` later. `stamp-deferred`: executing|landed|draft|reviewed
+    -> deferred. Remaining work is paused pending another workstream (frozen,
+    resumable by a human judgment call only). From draft|reviewed the prior
+    status is appended to `status_reason` as `[from: <status>]`.
+    `stamp-unstaled`: deferred -> that recorded status, only when the reason
+    leads with `stale` and carries the marker; clears `status_reason`; its
+    `--reason` is optional.
 
-    Both require a non-blank `--reason`, written as `status_reason` (the durable
-    record of the stand-down). Neither asserts completeness, so neither fires
-    `_run_cascade`. Same shared machinery as `_stamp_abandoned`; typed by a
+    `stamp-landed`/`stamp-deferred` require a non-blank `--reason`, written as
+    `status_reason` (the durable record of the stand-down). None asserts
+    completeness, so none fires `_run_cascade`. Same shared machinery as
+    `_stamp_abandoned`; `--no-commit` leaves the commit to the caller. Typed by a
     human/EM only, never reachable from a sweep, cascade or ceremony tail.
     """
     verb = opts.verb or ""
     target, sources = _STANDDOWN_VERBS[verb]
+    unstale = verb == "stamp-unstaled"
     if not opts.plan:
         print(f"{_PROG}: {verb} requires --plan <path>", file=sys.stderr)
         return 1
-    if not opts.reason or not opts.reason.strip():
+    if not unstale and (not opts.reason or not opts.reason.strip()):
         print(
             f"{_PROG}: {verb} requires --reason \"<why>\" "
             f"(state WHY this plan is standing down at {target} -- no bare/blank reason)",
@@ -3333,7 +3359,7 @@ def _stamp_standdown(opts: _Opts) -> int:
         return 1
 
     reason_value = opts.reason
-    _state: dict = {"prior_status": None, "deliverable_id": None}
+    _state: dict = {"prior_status": None, "deliverable_id": None, "target": target}
 
     def mutate(old_text: str) -> str:
         text = old_text.replace("\r\n", "\n")
@@ -3353,11 +3379,29 @@ def _stamp_standdown(opts: _Opts) -> int:
                 f"refuses this source (expected one of: {expected})"
             )
 
+        if unstale:
+            reopen_to = stale_reopen_target(
+                read_fm_field_unquoted(split.fm_text, "status_reason")
+            )
+            if reopen_to is None:
+                raise MutateAbort(
+                    f"{_PROG}: {opts.plan} is deferred but not as a stale deferral "
+                    "(status_reason must lead with \"stale\" and end \"[from: draft|reviewed]\") "
+                    "-- stamp-unstaled refuses it"
+                )
+            _state["target"] = reopen_to
+            fm_text = replace_fm_field(split.fm_text, "status", reopen_to)
+            return rebuild(split, remove_fm_field(fm_text, "status_reason"))
+
         fm_text = replace_fm_field(split.fm_text, "status", target)
-        if read_fm_field(fm_text, "status_reason") is not None:
-            fm_text = replace_fm_field(fm_text, "status_reason", reason_value)
+        if status in _STALE_REOPEN_STATUSES:
+            _state["reason"] = f"{reason_value.strip()} [from: {status}]"
         else:
-            fm_text = insert_fm_field(fm_text, "status_reason", reason_value, after_key="status")
+            _state["reason"] = reason_value
+        if read_fm_field(fm_text, "status_reason") is not None:
+            fm_text = replace_fm_field(fm_text, "status_reason", _state["reason"])
+        else:
+            fm_text = insert_fm_field(fm_text, "status_reason", _state["reason"], after_key="status")
         return rebuild(split, fm_text)
 
     written_text: Optional[str] = None
@@ -3384,7 +3428,15 @@ def _stamp_standdown(opts: _Opts) -> int:
         _write_plan_atomic(plan_path, new_text)
         written_text = new_text
 
-    if worktree_root is not None:
+    shown_reason = _state.get("reason") or (
+        (opts.reason or "").strip() or "stale deferral re-opened on pickup"
+    )
+    if worktree_root is not None and opts.no_commit:
+        print(
+            f"{_PROG}: {opts.plan} --no-commit: plan written to disk, commit left to the caller",
+            file=sys.stderr,
+        )
+    elif worktree_root is not None:
         relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
         if relpath_err is not None:
             print(
@@ -3408,8 +3460,8 @@ def _stamp_standdown(opts: _Opts) -> int:
             )
         else:
             message = (
-                f"{_PROG}: stamp status \"{_state['prior_status']}\" -> {target} "
-                f"(reason: {reason_value}) on {relpath}\n"
+                f"{_PROG}: stamp status \"{_state['prior_status']}\" -> {_state['target']} "
+                f"(reason: {shown_reason}) on {relpath}\n"
             )
             commit_result = _commit_plan_flip(
                 worktree_root, relpath, message, written_text, _state["deliverable_id"],
@@ -3423,8 +3475,8 @@ def _stamp_standdown(opts: _Opts) -> int:
                 return 1
 
     print(
-        f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → {target} "
-        f"(reason: {reason_value})"
+        f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → {_state['target']} "
+        f"(reason: {shown_reason})"
     )
     return 0
 
@@ -3990,10 +4042,13 @@ def main(argv: List[str]) -> int:
         )
         return 1
 
-    if opts.no_commit and opts.verb not in ("stamp-implemented", "stamp-superseded"):
+    if opts.no_commit and opts.verb not in (
+        "stamp-implemented", "stamp-superseded", "stamp-deferred", "stamp-unstaled",
+    ):
         print(
             f"{_PROG}: {opts.verb} does not accept --no-commit "
-            "(only stamp-implemented and stamp-superseded can leave their write to a caller's commit)",
+            "(only stamp-implemented, stamp-superseded, stamp-deferred and stamp-unstaled "
+            "can leave their write to a caller's commit)",
             file=sys.stderr,
         )
         return 1
@@ -4242,7 +4297,7 @@ def main(argv: List[str]) -> int:
         f"{_PROG}: unknown verb: {opts.verb or '(none)'} — supported: stamp-implemented, "
         "stamp-superseded, stamp-reopened, stamp-reviewed, stamp-approved, stamp-executing, "
         "stamp-review-verified, stamp-blocked, stamp-unblocked, stamp-abandoned, "
-        "stamp-landed, stamp-deferred",
+        "stamp-landed, stamp-deferred, stamp-unstaled",
         file=sys.stderr,
     )
     return 1

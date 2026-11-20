@@ -245,6 +245,23 @@ def test_run_unresolved_when_plan_differs_or_ambiguous(tmp_path: Path, monkeypat
     assert ch.checkpoint_run_id(tmp_path, "no plan line", "s1") is None
 
 
+def test_run_trailer_selects_only_live_run_with_matching_owner_and_plan(tmp_path, monkeypatch):
+    records = [
+        {"run_id": "ask-launcher", "session_id": "owner", "sizing_rel": "sizing"},
+        {"run_id": "warp-stage", "session_id": "owner", "sizing_rel": "sizing"},
+        {"run_id": "warp-other", "session_id": "peer", "sizing_rel": "sizing"},
+        {"run_id": "warp-wrong-plan", "session_id": "owner", "sizing_rel": "other"},
+    ]
+    _runs(monkeypatch, tmp_path, records, {"sizing": PLAN, "other": "docs/plans/other.md"})
+    assert ch.checkpoint_run_id(tmp_path, MSG, "owner") is None
+    for run_id, expected in [
+        ("warp-stage", "warp-stage"), ("warp-other", None), ("warp-wrong-plan", None),
+        ("absent", None), ("", None),
+    ]:
+        assert ch.checkpoint_run_id(tmp_path, f"{MSG}\nCheckpoint-Run-Id: {run_id}", "owner") == expected
+    assert ch.checkpoint_run_id(tmp_path, MSG + "\nCheckpoint-Run-Id: warp-stage\nCheckpoint-Run-Id: ask-launcher", "owner") is None
+
+
 def _live_run(root: Path, run_id: str, sizing_rel: str, plan: str, *, session: str = "s1", in_token: bool) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 

@@ -618,3 +618,22 @@ def test_detect_never_writes_anything(tmp_path):
     assert "windows-env-var-syntax-on-posix-host" in banner
     assert settings.read_text(encoding="utf-8") == before_content
     assert settings.stat().st_mtime == before_mtime
+
+
+_LAUNCHER_STATUS_LINE = "python ~/.claude/statusline-launch.py || python3 ~/.claude/statusline-launch.py"
+_OLD_STATUS_LINE = (
+    'S="$(cat "$HOME/.claude/.coordinator-plugin-root" 2>/dev/null)/bin/statusline.py"; '
+    'python3 "$S" || python "$S"'
+)
+
+
+@pytest.mark.parametrize("host_is_windows", [True, False])
+def test_launcher_status_line_is_unflagged_on_either_host(host_is_windows):
+    data = {"statusLine": {"type": "command", "command": _LAUNCHER_STATUS_LINE}}
+    assert detect_foreign_platform_paths(data, host_is_windows=host_is_windows) == []
+
+
+def test_old_posix_status_line_is_still_flagged_on_a_windows_host():
+    data = {"statusLine": {"type": "command", "command": _OLD_STATUS_LINE}}
+    shapes = {f.shape for f in detect_foreign_platform_paths(data, host_is_windows=True)}
+    assert "posix-env-var-syntax-on-windows-host" in shapes

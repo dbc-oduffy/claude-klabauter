@@ -267,15 +267,14 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     delivery_sha_a = result_a["acted"][0]["delivery_commit_sha"]
     delivered_bytes_a = _delivered_bytes(receiver, delivery_sha_a, fname_a)
 
-    # A delivery is object-only: pinned and anchored, on no receiver branch and
-    # in no worktree. The first heal materializes it into the inbox.
-    assert not (receiver / "cross-repo" / "inbox" / fname_a).exists()
+    # A delivery lands on the receiver's branch and its inbox, pinned and
+    # anchored; the first heal has nothing to restore.
+    assert (receiver / "cross-repo" / "inbox" / fname_a).exists()
     heal_0 = _heal(receiver)
     assert heal_0["exit_code"] == 0, heal_0
-    for fname in (fname_a, fname_b, fname_d):
-        assert {"id": fname, "action": "restored"} in heal_0["acted"]
+    assert heal_0["acted"] == []
     restore_sha_a = _anchor_commit(_common_dir(receiver), fname_a)
-    assert restore_sha_a != delivery_sha_a
+    assert restore_sha_a == delivery_sha_a
 
     _archive_and_commit(receiver, fname_b)
     _delete_and_commit(
@@ -288,7 +287,6 @@ def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     assert {"id": fname_d, "action": "retired"} in heal_1["acted"]
 
     gesture(receiver, root_sha)
-    assert not _object_present(receiver, restore_sha_a)
     assert _object_present(receiver, delivery_sha_a)
     assert read_pin(_common_dir(receiver), delivery_sha_a) == delivery_sha_a
 
@@ -363,7 +361,7 @@ def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
     )
 
     heal_0 = _heal(receiver)
-    assert {"id": fname_b, "action": "restored"} in heal_0["acted"]
+    assert heal_0["acted"] == []
     _archive_and_commit(receiver, fname_b)
 
     _gesture_reset_hard_only(receiver, root_sha)
@@ -389,7 +387,7 @@ def test_reachable_only_from_a_kept_second_branch_is_left_alone(
     fname_e = _delivered_filename(result_e["acted"][0])
 
     heal_0 = _heal(receiver)
-    assert {"id": fname_e, "action": "restored"} in heal_0["acted"]
+    assert heal_0["acted"] == []
     _git(receiver, "branch", "side")
 
     _gesture_reset_hard_only(receiver, root_sha)

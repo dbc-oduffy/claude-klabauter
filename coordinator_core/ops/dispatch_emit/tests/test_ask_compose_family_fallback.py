@@ -1,4 +1,4 @@
-"""The emitted family leg: one family attempt, one claude fallback, both results kept.
+"""The emitted family leg: one family attempt, one claude fallback on a read-only role (never on a write row), both results kept.
 
 Most assertions read the emitted JS text; the fallback-reply tests execute the emitted `_familyRun` in node."""
 from __future__ import annotations
@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose, stage_family, stage_family_binding
+from coordinator_core.ops.dispatch_emit import ask_compose, family_invoke_record, stage_family, stage_family_binding
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 _RUN = "run-1"
@@ -117,10 +117,17 @@ def test_sizing_with_neither_opt_in_omits_the_leg(monkeypatch):
 
 def test_row_without_a_fallback_brief_keeps_the_family_attempt_and_never_reruns_on_an_empty_brief(monkeypatch):
     fn = _family_fn(_script(monkeypatch, {"family": "codex"}))
-    guard = fn.index("if (!r.fallback_brief_path) {")
+    guard = fn.index("if (r.stage_role === 'write' || !r.fallback_brief_path) {")
     assert guard < fn.index("brief_path: r.fallback_brief_path")
     assert "return 'BLOCKED: ' + r.id + ' via ' + _fam.family" in fn[guard : fn.index("brief_path: r.fallback_brief_path")]
     assert fn.count("await agent(") == 2
+
+
+def test_row_without_a_prompt_brief_never_spawns_the_cli_or_dispatches_an_agent(monkeypatch):
+    fn = _family_fn(_script(monkeypatch, {"family": "codex"}))
+    first = fn.index("if (!r.fallback_brief_path) return 'BLOCKED: '")
+    assert first < fn.index("await agent(") and first < fn.index("_famStart(r)")
+    assert "family_authored:false" in fn[first : fn.index("let _fam = null;")]
 
 
 _NODE = shutil.which("node")
@@ -128,15 +135,16 @@ _FAILED_FAMILY = {"family": "codex", "stage": "impl", "exit_code": 1, "output_pa
 _ROW = {"id": "C1", "family": "codex", "stage_role": "impl", "fallback_brief_path": "b.md", "agent_type": "a", "fallback_agent_type": "b", "model": "m"}
 
 
-def _run_family(monkeypatch, tmp_path, fallback_reply: dict) -> tuple[str, dict]:
-    """Execute the emitted `_familyRun` in node: the family attempt FAILED, the fallback answers `fallback_reply`."""
+def _run_family(monkeypatch, tmp_path, fallback_reply: dict, *, row: dict = _ROW, family_reply: dict = _FAILED_FAMILY) -> tuple[str, dict]:
+    """Execute the emitted `_familyRun` in node: the family attempt answers `family_reply`, the fallback `fallback_reply`.
+    The returned record also carries `calls`, the number of `agent()` dispatches the leg made."""
     script = _script(monkeypatch, _OPTED)
     body = script[script.index("  const _FAMILY_RESULT_SCHEMA = ") : script.index("\n  }\n", script.index("  async function _familyRun(r) {")) + 4]
     prog = (
         "const _rowPrompt = () => 'P'; const log = () => {}; const _famOk = {};\n"
-        f"const _replies = [{json.dumps({'v': _FAILED_FAMILY})}, {json.dumps(fallback_reply)}]; let _n = 0;\n"
+        f"const _replies = [{json.dumps({'v': family_reply})}, {json.dumps(fallback_reply)}]; let _n = 0;\n"
         "async function agent() { const x = _replies[_n++]; if (x.throw) throw new Error(x.throw); return x.v; }\n"
-        f"{body}\n_familyRun({json.dumps(_ROW)}).then((r) => console.log(r));\n"
+        f"{body}\n_familyRun({json.dumps(row)}).then((r) => console.log(r + ' ' + JSON.stringify({{ calls: _n }})));\n"
     )
     path = tmp_path / "family.js"
     path.write_text(prog, encoding="utf-8")
@@ -144,8 +152,9 @@ def _run_family(monkeypatch, tmp_path, fallback_reply: dict) -> tuple[str, dict]
         [_NODE, str(path)], capture_output=True, text=True, timeout=30, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
-    head, _, rec = out.partition(" {")
-    return head, json.loads("{" + rec)
+    head, _, rest = out.partition(" {")
+    rec, _, calls = ("{" + rest).rpartition(" {")
+    return head, {**json.loads(rec), **json.loads("{" + calls)}
 
 
 @pytest.mark.skipif(_NODE is None, reason="node not installed")
@@ -199,3 +208,71 @@ def test_checkpoint_message_names_the_family_ok_rows_from_the_commit_scope(monke
     assert "  const _landed = {};\n  const _famOk = {};" in script
     assert "if (typeof _famOk === 'object') _famOk[r.id] = _fam.verdict === 'OK';" in _family_fn(script)
     assert "'\\nCheckpoint-Family-Ok: ' + done.filter((i) => _famOk[i]).join(', ')" in script
+
+
+_AUTHORED_OK = {"family": "codex", "stage": "write", "exit_code": 0, "output_path": "", "verdict": "OK", "family_authored": True, "vendor_model": "gpt-x"}
+_WRITE_ROW = {**_ROW, "stage_role": "write", "writes": ["pkg/a.py"]}
+
+
+def test_result_schema_requires_family_authored_boolean(monkeypatch):
+    schema = json.loads(re.search(r"_FAMILY_RESULT_SCHEMA = (\{.*\});", _script(monkeypatch, _OPTED)).group(1))
+    assert schema["required"] == [*stage_family._RESULT_KEYS, stage_family.FAMILY_AUTHORED_KEY]
+    assert schema["properties"][stage_family.FAMILY_AUTHORED_KEY] == {"type": "boolean"}
+
+
+def test_runner_brief_names_the_engine_invoker_as_the_only_vendor_route(monkeypatch):
+    script = _script(monkeypatch, _OPTED)
+    start = script[script.index("  const _famStart = (r) => ") : script.index("  async function _familyRun(r) {")]
+    assert f"-m {family_invoke_record.INVOKE_MODULE} --root REPO --run-id {_RUN} --row ' + r.id + ' --family ' + r.family" in start
+    assert "' --stage ' + r.stage_role" in start and "' --prompt ' + r.fallback_brief_path" in start and "r.writes.map((w) => JSON.stringify(String(w))).join(' ')" in start
+    assert "only vendor call" in start and "Never edit or write a file yourself" in start
+    assert start.index(ask_compose.FAMILY_CREDIT_MODULE) < start.index(family_invoke_record.INVOKE_MODULE)
+
+
+def test_engine_invoker_module_exists_and_exposes_the_row_cli():
+    import importlib.util
+    import subprocess
+    import sys
+
+    assert importlib.util.find_spec(family_invoke_record.INVOKE_MODULE) is not None
+    out = subprocess.run(
+        [sys.executable, "-m", family_invoke_record.INVOKE_MODULE, "--help"],
+        capture_output=True, text=True, timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0
+    for flag in ("--root", "--run-id", "--row", "--family", "--stage", "--prompt", "--writes"):
+        assert flag in out.stdout
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+@pytest.mark.parametrize("authored", [{},{"family_authored": False}, {"family_authored": "true"}])
+def test_write_row_without_family_authored_true_halts_blocked_and_never_calls_the_fallback(monkeypatch, tmp_path, authored):
+    reply = {k: v for k, v in _AUTHORED_OK.items() if k != "family_authored"} | authored
+    head, rec = _run_family(monkeypatch, tmp_path, {"v": "DONE: C1\nStatus: DONE"}, row=_WRITE_ROW, family_reply=reply)
+    assert head.startswith("BLOCKED: C1 via codex BLOCKED (family_authored:false: ")
+    assert "no claude fallback" in head
+    assert rec["calls"] == 1 and rec["reported_family"] == "codex" and len(rec["attempts"]) == 1
+    assert rec["attempts"][0]["family_authored"] is False
+    assert rec["attempts"][0]["blocked_reason"].startswith("family_authored:false: ")
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+def test_write_row_family_failure_never_calls_the_fallback_whatever_the_verdict(monkeypatch, tmp_path):
+    head, rec = _run_family(monkeypatch, tmp_path, {"v": "DONE: C1\nStatus: DONE"}, row=_WRITE_ROW)
+    assert head.startswith("BLOCKED: C1 via codex FAILED (family_authored:false: no stage work)")
+    assert rec["calls"] == 1 and rec["reported_family"] == "codex"
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+def test_write_row_authored_ok_is_done_with_its_model(monkeypatch, tmp_path):
+    head, rec = _run_family(monkeypatch, tmp_path, {"v": "unused"}, row=_WRITE_ROW, family_reply=_AUTHORED_OK)
+    assert head.startswith("DONE: C1 via codex")
+    assert rec["calls"] == 1 and rec["attempts"][0]["family_authored"] is True and rec["attempts"][0]["vendor_model"] == "gpt-x"
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+def test_read_only_role_still_falls_back_on_an_unauthored_ok_result(monkeypatch, tmp_path):
+    reply = {**_AUTHORED_OK, "stage": "research", "family_authored": False}
+    head, rec = _run_family(monkeypatch, tmp_path, {"v": "DONE: C1\nStatus: DONE"}, row={**_ROW, "stage_role": "research"}, family_reply=reply)
+    assert head.startswith("DONE: C1 via claude fallback after codex BLOCKED")
+    assert rec["calls"] == 2 and rec["attempts"][0]["blocked_reason"].startswith("family_authored:false")

@@ -142,6 +142,23 @@ return {next_action: {op: 'dispatch.land_run'}, answer: await agent(args.value)}
     assert any(event.get('event') == 'log' and event['message'] == 'running nested' for event in events)
 
 
+@pytest.mark.parametrize(("options_args", "expected"), [
+    ({}, True),
+    ({"args": {"batch_count": 1}}, True),
+    ({"args": {"batch_count": 2}}, False),
+])
+def test_nested_workflow_positional_launch_args(tmp_path, options_args, expected):
+    nested = tmp_path / "nested.mjs"
+    nested.write_text("export const meta = {}; return args;", encoding="utf-8")
+    options = json.dumps({"scriptPath": str(nested), **options_args})
+    source = f'export const meta = {{}}; const ARGS = {{"batch_count":1}}; return await workflow({options}, ARGS);'
+    code, events, _ = run_script(tmp_path, source)
+    if expected:
+        assert code == 0 and events[-1]["result"] == {"batch_count": 1}
+    else:
+        assert code != 0 and "positional args disagree" in str(events[-1])
+
+
 def test_recursive_workflow_fails_at_depth_bound(tmp_path):
     # run_script writes workflow.mjs; point recursion there to use exactly one
     # script and prove the guard rather than a missing-file failure.
@@ -207,3 +224,14 @@ def test_engine_op_bad_request_is_refused_before_broker(tmp_path, call):
     code, events, _ = run_script(tmp_path, 'export const meta={}; return await ' + call + ';')
     assert code == 1
     assert not any(event['type'] == 'invoke' for event in events)
+
+
+def test_engine_op_direct_run_capability_excludes_nested_workflows(tmp_path):
+    nested = tmp_path / "nested-verify.mjs"
+    nested.write_text("export const meta = {}; return engineOp.directRun;", encoding="utf-8")
+    options = json.dumps({"scriptPath": str(nested)})
+    code, events, stderr = run_script(
+        tmp_path, "export const meta = {}; return [engineOp.directRun, await workflow(" + options + ")];",
+    )
+    assert code == 0, stderr
+    assert events[-1]["result"] == [True, False]

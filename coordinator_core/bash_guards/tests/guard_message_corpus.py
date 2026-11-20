@@ -771,7 +771,7 @@ def _rehomed_doctrine_surface_setup(
 
 def _rehomed_repo_setup_claude_home_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """This guard denies only when the scaffold mechanism's resolved target
     root EQUALS Claude Home, so both sides must name the same scratch path:
     `CLAUDE_CONFIG_DIR` declares it and the overridden command targets it. A
@@ -1481,6 +1481,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "deny-kill-by-port-or-tree",
+        "deny-kill-by-port-or-tree-control",
+        "git status",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "guard-post-executor-verification",
         "guard-post-executor-verification-control",
         "python -m pytest tests/test_x.py",
@@ -1754,6 +1762,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         "block-editor-kill-by-name",
         "block-editor-kill-by-name-fire",
         "taskkill /IM UnrealEditor-Cmd.exe",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "deny-kill-by-port-or-tree",
+        "deny-kill-by-port-or-tree-fire",
+        "taskkill /F /T /PID 1",
         True,
         _DENY,
         False,

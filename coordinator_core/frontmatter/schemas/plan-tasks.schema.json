@@ -367,6 +367,15 @@
       "type": "boolean",
       "description": "Optional. True when the plan expects this row to finish PARTIAL (e.g. a byte target the row is known to miss): a PARTIAL (never BLOCKED) reply releases its dependents with no accept_partial record. Absence means a PARTIAL reply holds its dependents."
     },
+    "test_criterion": {
+      "type": "object",
+      "properties": {
+        "kind": {"type": "string", "enum": ["ue-automation"]},
+        "tests": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["kind"],
+      "description": "Optional. Declares the plan's test criterion EM-performed UE automation on an em-performed row: a run whose written paths hold no .py file records the criterion owed to the EM instead of halting tests_not_run. `tests` names the UE automation tests an EM-supplied report must show passed."
+    },
     "disjoint_parallel": {
       "type": "boolean",
       "description": "Optional. True keeps this below-floor row its own chunk beside same-wave rows with disjoint writes; absence lets the chunk shaper merge them."

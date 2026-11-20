@@ -131,7 +131,7 @@ def test_closing_line_names_runnable_chain_walk_command_and_no_doc_pointer(setup
 
 def test_main_prints_the_closing_line_constant(setup_mod):
     src = Path(setup_mod.__file__).read_text(encoding="utf-8")
-    assert "print(CLOSING_CHAIN_WALK_LINE)" in src
+    assert "_absolute_closing_line(CLOSING_CHAIN_WALK_LINE" in src
 
 
 def test_parse_args_unknown_flag_raises(setup_mod):
@@ -171,6 +171,24 @@ def test_derive_deps_reads_specs_and_import_names(setup_mod, tmp_path):
     # PyYAML is the explicit IMPORT_NAME_OVERRIDES exception; the rest fall
     # back to a normalized (lowercased, hyphen->underscore) form.
     assert import_names == ["pydantic", "yaml", "some_thing"]
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("darwin", ["psutil"]), ("linux", ["psutil"]), ("win32", ["psutil", "win32api"])],
+)
+def test_derive_deps_probes_only_deps_whose_marker_holds(setup_mod, tmp_path, monkeypatch, platform, expected):
+    # Regression: an unconditional probe of a win32-only dep failed every non-Windows install.
+    monkeypatch.setattr(setup_mod.sys, "platform", platform)
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\n'
+        'name = "fixture"\n'
+        'dependencies = ["psutil>=5.9", "pywin32>=306; sys_platform == \'win32\'"]\n'
+    )
+    specs, import_names = setup_mod.derive_deps(pyproject)
+    assert specs == ["psutil>=5.9", "pywin32>=306; sys_platform == 'win32'"]
+    assert import_names == expected
 
 
 def test_derive_deps_malformed_entry_exits(setup_mod, tmp_path):
@@ -1334,7 +1352,7 @@ def test_entry_guard_precedes_coordinator_core_imports_and_any_write():
     guard function is the single version check (resolve_python delegates to it)."""
     src = _SETUP_PY_PATH.read_text(encoding="utf-8")
     guard_call = src.index("\n_require_python_311()")
-    assert guard_call < src.index("from coordinator_core.")
+    assert guard_call < src.index("\nfrom coordinator_core.")
     assert src.count("def _require_python_311") == 1
 
 
@@ -1936,6 +1954,34 @@ def test_ensure_percolate_identity_second_call_is_noop(setup_mod, tmp_path):
     assert path.read_text() == first_content
 
 
+def _run_install_percolate_identity(setup_mod, tmp_path, monkeypatch, profile):
+    import coordinator_core.machine_profile as mp
+
+    settings_home = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mp, "machine_profile", lambda: profile)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    claude_klabauter_root = Path(setup_mod.__file__).resolve().parent.parent
+    setup_mod.install_percolate_identity(repo_root, claude_klabauter_root)
+    return settings_home / ".percolate-identity"
+
+
+def test_install_percolate_identity_skips_on_consumer_profile(setup_mod, tmp_path, monkeypatch, capsys):
+    target = _run_install_percolate_identity(setup_mod, tmp_path, monkeypatch, "consumer")
+
+    out = capsys.readouterr().out
+    assert "PASS [percolate-identity]" not in out
+    assert "SKIP [percolate-identity]" in out
+    assert not target.exists()
+
+
+def test_install_percolate_identity_still_generates_on_author_profile(setup_mod, tmp_path, monkeypatch, capsys):
+    target = _run_install_percolate_identity(setup_mod, tmp_path, monkeypatch, "author")
+
+    assert "PASS [percolate-identity] created" in capsys.readouterr().out
+    assert target.is_file()
+
+
 def test_derive_identity_hints_falls_back_to_placeholders_without_git(setup_mod, tmp_path, monkeypatch):
     # A repo_root with no .git directory and no reachable git binary must
     # still yield placeholder-shaped defaults, never an empty string.
@@ -2451,6 +2497,10 @@ def test_register_claude_klabauter_root_claude_klabauter_identity_writes_both_ke
     out = capsys.readouterr().out
     assert "repos.claude_klabauter" in out
     assert "engine.working_repos.claude_klabauter" in out
+    # The publisher CLIs resolve the authoring checkout through this key; the engine root
+    # (claude_klabauter_root, the klabauter clone on a real box) holds none of them.
+    assert f"set repos.claude_klabauter {repo_root.resolve()}" in out
+    assert f"set repos.claude_klabauter {claude_klabauter_root}" not in out
 
 
 def test_register_claude_klabauter_root_klabauter_identity_writes_only_klabauter_key(setup_mod, tmp_path, monkeypatch, capsys):
@@ -4660,3 +4710,29 @@ def test_install_repo_discovery_does_not_seed_claude_klabauter_source_path_from_
     monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda _r: setup_mod.IDENTITY_MIRROR)
     setup_mod.install_repo_discovery(engine_tree, engine_tree, setup_mod.Args(), write=writes.__setitem__)
     assert "plugin.mirrors.project-makima.source_path" not in writes
+
+
+def test_process_local_engine_root_cannot_repoint_installed_door(setup_mod, monkeypatch, tmp_path, capsys):
+    stable = tmp_path / "published"
+    scratch = tmp_path / "scratch"
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(scratch))
+    monkeypatch.setattr(setup_mod._engine_root_module(), "published_engine_mirror_path", lambda: stable)
+    args = setup_mod.Args()
+
+    assert not setup_mod._check_durable_install_root(scratch, args)
+    assert "process-local" in capsys.readouterr().err
+    assert setup_mod._check_durable_install_root(stable, args)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(stable))
+    assert setup_mod._check_durable_install_root(stable, args)
+
+
+def test_deps_only_does_not_install_an_invocation_local_engine(setup_mod, monkeypatch, tmp_path, capsys):
+    calls = _stub_deps_only(setup_mod, monkeypatch, tmp_path, sys.executable)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        setup_mod._engine_root_module(), "published_engine_mirror_path", lambda: tmp_path / "registered"
+    )
+
+    assert setup_mod.main(["--deps-only", "--i-am-agent"]) == 1
+    assert calls == []
+    assert "shared editable package" in capsys.readouterr().err

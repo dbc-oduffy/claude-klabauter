@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import _test_verdict_empty_halt_js
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -43,14 +44,42 @@ def test_budget_exhausted_zero_run_halts_naming_the_cause():
         halted = _run(
             "{ status: 'error', tests_run: 0, zero_run_cause: 'budget-exhausted', sidecar_path: 'a.md' }", reverify
         )
-        assert halted and halted["halted"] == "test_verdict_empty"
+        assert halted and halted["halted"] == "test_infra_failure"
         assert "budget-exhausted" in halted["detail"] and "zero tests" in halted["detail"]
         assert "Refire" in halted["next_action"]
 
 
 def test_zero_run_without_a_stated_cause_halts():
     halted = _run("{ status: 'pass', tests_run: 0, sidecar_path: 'a.md' }")
-    assert halted and halted["halted"] == "test_verdict_empty" and "ran zero tests" in halted["detail"]
+    assert halted and halted["halted"] == "test_infra_failure" and "ran zero tests" in halted["detail"]
+
+
+def test_collection_failure_with_a_node_id_is_infrastructure_even_after_green_reverify():
+    halted = _run(
+        "{ status: 'error', tests_run: 0, zero_run_cause: 'collection-failure', "
+        "failing_ids: ['tests/test_bad.py'], sidecar_path: 'a.md' }",
+        "{ status_after: 'pass' }",
+    )
+    assert halted["halted"] == "test_infra_failure"
+    assert "ran zero tests (collection-failure)" in halted["detail"]
+
+
+@pytest.mark.parametrize("status,kind", [("indeterminate", "test_infra_failure"), ("not_run", None)])
+def test_review_reverify_distinguishes_attempted_zero_run_from_unowed(status, kind):
+    receipt = json.dumps({
+        "status_before": status, "tests_run": 0, "zero_run_cause": "collection-failure",
+        "not_run": ["tests/test_a.py"],
+    })
+    body = ask_compose._review_test_infra_halt_js(_SIZING)
+    script = (
+        f"let _halted = null, _runId = 'r', _reviewReverify = {receipt};\n{body}\n"
+        "console.log(JSON.stringify(_halted?.halted ?? null));"
+    )
+    out = subprocess.run(
+        [shutil.which("node"), "-"], input=script, capture_output=True, text=True,
+        check=True, **no_console_creationflags(),
+    )
+    assert json.loads(out.stdout) == kind
 
 
 def test_errored_with_tests_run_and_no_failing_id_halts():

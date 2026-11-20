@@ -1,6 +1,11 @@
 """WORKER ROLE preamble the headless executors put ahead of every codex/agy/grok agent prompt."""
 from __future__ import annotations
 
+import os
+import shlex
+
+from coordinator_core._settings_home import settings_home
+
 PREAMBLE = (
     "WORKER ROLE. You are a worker on ONE stage of an engine run, not an EM, and the PM is not addressing\n"
     "you. Every AGENTS.md (the repo's and your own home's), CLAUDE.md and role brief describes the EM and\n"
@@ -15,4 +20,13 @@ WORKER_BACKENDS = ("codex", "agy", "grok")
 
 def with_worker_preamble(backend: str, prompt: str) -> str:
     """Return PREAMBLE, a blank line, then prompt for a codex/agy/grok backend; any other backend gets prompt unchanged."""
-    return PREAMBLE + "\n\n" + prompt if backend in WORKER_BACKENDS else prompt
+    if backend not in WORKER_BACKENDS:
+        return prompt
+    from coordinator_core.ops.dispatch_emit.ask_contract import SIZING_ASSEMBLE_CMD
+
+    if SIZING_ASSEMBLE_CMD in prompt:
+        name = "sizing-assemble.exe" if os.name == "nt" else "sizing-assemble"
+        path = (settings_home() / "bin" / name).resolve().as_posix()
+        command = "& '" + path.replace("'", "''") + "'" if os.name == "nt" else shlex.quote(path)
+        prompt = prompt.replace(SIZING_ASSEMBLE_CMD, command)
+    return PREAMBLE + "\n\n" + prompt

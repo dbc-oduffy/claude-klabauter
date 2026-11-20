@@ -83,12 +83,29 @@ def test_a_held_row_of_the_same_run_sharing_a_path_does_not_refuse(repo):
     assert "b.py" in _git(["status", "--porcelain"], repo)
 
 
-def test_a_held_row_of_a_run_without_a_manifest_still_refuses_the_shared_path(repo):
+def _shared_request_with_held_report(repo: Path) -> CommitRequest:
+    (repo / "c2-report.md").write_text("C2 produced b.py and shared.py\n", encoding="utf-8")
+    base = _shared_request(repo)
+    c1, c2 = base.chunks
+    return CommitRequest(chunks=(
+        c1, ChunkCommit(id=c2.id, title=c2.title, paths=c2.paths, report="c2-report.md"),
+    ))
+
+
+def test_a_producing_held_row_of_a_run_without_a_manifest_still_refuses_the_shared_path(repo):
     head = _git(["rev-parse", "HEAD"], repo)
-    out = _fire_inline(repo, _shared_request(repo), held=[{"chunk": "C2", "reason": "dead"}])
+    out = _fire_inline(
+        repo, _shared_request_with_held_report(repo), held=[{"chunk": "C2", "reason": "dead"}],
+    )
     assert out["committed"] is False
     assert out["refused"] == "held-landed-overlap"
     assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def test_a_never_started_held_row_without_a_manifest_lands_the_shared_path(repo):
+    out = _fire_inline(repo, _shared_request(repo), held=[{"chunk": "C2", "reason": "dead"}])
+    assert out["committed"] is True, out
+    assert "shared.py" in _committed(repo)
 
 
 def test_a_held_spine_row_outside_the_marker_still_refuses_the_shared_path(repo):

@@ -15,6 +15,7 @@ from coordinator_core.session import external_registry
 from .__main__ import snapshot
 from .collect import load, save, bind_subagent_stop
 from .model import warn
+from .render import render
 from coordinator_core.group_em.atomic_record import holder_lock
 from coordinator_core._settings_home import settings_home
 
@@ -25,10 +26,7 @@ def status_title(value: dict) -> str:
     alias = value.get("alias")
     if not alias:
         raise ValueError("no exact registered route alias")
-    cost = f"~${value['usd']:.2f}" if value.get("priced_events") else "unknown"
-    partial = (not value.get("backlog_complete") or value.get("unpriced_events") or
-               value.get("warnings") or not all(value.get("coverage", {}).values()))
-    return f"{alias} · {cost}" + ("+" if partial else "")
+    return render(value)
 
 
 def apply_title(value: dict, cwd: str) -> dict:

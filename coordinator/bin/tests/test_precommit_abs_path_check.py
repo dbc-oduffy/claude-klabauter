@@ -114,6 +114,46 @@ def test_posix_home_shape_is_refused_too(tmp_path):
     assert f"{PLAN}:1" in proc.stderr
 
 
+def _merge_in_progress(tmp_path: Path, side_text: str, main_text: str = "# main\n") -> Path:
+    """Repo mid-merge: side branch adds PLAN with `side_text`; main added OTHER."""
+    repo = _repo(tmp_path)
+    _write(repo, "seed.md", "seed\n")
+    _git(repo, "add", "seed.md")
+    _git(repo, "commit", "-q", "-m", "seed")
+    _git(repo, "checkout", "-q", "-b", "side")
+    _write(repo, PLAN, side_text)
+    _git(repo, "add", PLAN)
+    _git(repo, "commit", "-q", "-m", "side")
+    _git(repo, "checkout", "-q", "-")
+    _write(repo, "other.md", main_text)
+    _git(repo, "add", "other.md")
+    _git(repo, "commit", "-q", "-m", "main")
+    _git(repo, "merge", "--no-commit", "--no-ff", "side")
+    assert (repo / ".git" / "MERGE_HEAD").exists()
+    return repo
+
+
+def test_merge_commit_passes_citations_already_on_the_merged_in_parent(tmp_path):
+    repo = _merge_in_progress(tmp_path, f"see {BAD}\n")
+    assert _run(repo).returncode == 0
+
+
+def test_merge_commit_still_refuses_a_citation_absent_from_both_parents(tmp_path):
+    repo = _merge_in_progress(tmp_path, f"see {BAD}\n")
+    _write(repo, PLAN, f"see {BAD}\nfresh {BAD}/new\n")
+    _git(repo, "add", PLAN)
+    proc = _run(repo)
+    assert proc.returncode == 1
+    assert f"{PLAN}:2" in proc.stderr
+
+
+def test_non_merge_commit_of_the_same_content_is_still_refused(tmp_path):
+    repo = _repo(tmp_path)
+    _write(repo, PLAN, f"see {BAD}\n")
+    _git(repo, "add", PLAN)
+    assert _run(repo).returncode == 1
+
+
 def test_runs_in_any_repo_not_only_the_meta_repo(tmp_path):
     repo = _repo(tmp_path)
     _write(repo, PLAN, f"see {BAD}\n")

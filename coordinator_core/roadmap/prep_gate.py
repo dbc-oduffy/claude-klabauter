@@ -41,6 +41,10 @@ dependency falls on. The four report classes are a routing aid, not four bars.
                  commit; the fix is to split at an EM-owned commit boundary (the
                  executor row writes, a ``performer: em`` row depending on it
                  commits, then deploys). Body code spans only, never prose.
+  EXECUTOR_MERGE No schedulable executor-performed row's ``body`` code span runs
+                 ``git merge`` other than ``--ff-only``; the subagent guard always
+                 denies it. The fix is an EM-owned ``branch.merge_into_workstream``
+                 row the executor row depends on.
   EXECUTOR_HEAVY No schedulable row routed to ``coordinator:executor`` has a
                  ``body`` code span or a ``verification`` string that
                  ``bash_guards._heavy_command_class.classify`` reports heavy
@@ -182,7 +186,7 @@ ENGINE_ERROR = "ENGINE-ERROR"
 #: not.
 CLASS_ORDER = (
     "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT",
-    "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "GITIGNORED_WRITES", "CAPABILITIES",
+    "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "EXECUTOR_MERGE", "GITIGNORED_WRITES", "CAPABILITIES",
     "SCHEMA", "REGISTER", "DONE_CLAUSE",
 )
 
@@ -571,6 +575,21 @@ def _spine(
             "unknown-row-key",
             "plan-row key(s) the spine reader does not consume: " + "; ".join(unknown[:8])
             + " (rename to a known key or drop it)",
+        )
+    conflicting_routes = [
+        str(row.get("id", "?"))
+        for row in load_rows_memo(text).rows
+        if isinstance(row, dict)
+        and row.get("disposition", "open") == "open"
+        and row.get("agent_type") == "coordinator:executor"
+        and row.get("em_run") is True
+    ]
+    if conflicting_routes:
+        return _defect(
+            "conflicting-executor-route",
+            "Rows " + ", ".join(conflicting_routes)
+            + " declare both coordinator:executor and em_run: true. Choose one performer "
+            "and keep any needs_slot admission requirement.",
         )
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, memo_row_slug
 
@@ -1456,6 +1475,46 @@ def _executor_commit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "executor-commit-row",
         f"rows an executor is told to commit or deploy in: {', '.join(hits)[:260]} — "
         f"{EXECUTOR_COMMIT_FIX}",
+        withheld=sorted(set(ids)),
+    )
+
+
+EXECUTOR_MERGE_FIX = (
+    "a subagent's git merge (not --ff-only) is always denied, so the row changes nothing. Fix: "
+    "split at an EM-owned merge boundary: a performer: em branch.merge_into_workstream row the "
+    "executor row depends on."
+)
+
+
+def _executor_merge(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Refuse a plan whose executor-performed rows tell the executor to run ``git merge``.
+
+    Reads each schedulable row's ``body`` code spans through
+    ``em_only_act.executor_merge_act`` (prose and ``--ff-only`` never flag); operator and
+    memo-send rows are skipped as in ``_executor_commit``.
+    """
+    from coordinator_core.ops.dispatch_emit.em_only_act import executor_merge_act
+    from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
+
+    hits: List[str] = []
+    ids: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict) or _row_is_unschedulable(row):
+            continue
+        if _is_operator_row(row) or _is_memo_send_row(row):
+            continue
+        span = executor_merge_act(row)
+        if span is None:
+            continue
+        row_id = str(row.get("id") or "<row with no id>")
+        ids.append(row_id)
+        hits.append(f"{row_id} (`{span[:60]}`)")
+    if not hits:
+        return _pass("no executor row runs git merge")
+    return _defect(
+        "executor-merge-row",
+        f"rows an executor is told to git merge in: {', '.join(hits)[:260]} — "
+        f"{EXECUTOR_MERGE_FIX}",
         withheld=sorted(set(ids)),
     )
 
@@ -3032,6 +3091,7 @@ def evaluate_plan(
             "TEST_RUNNER_OUT_OF_ROLE": _test_runner_out_of_role(
                 raw_spine_rows(text), Path(edge_root)
             ),
+            "EXECUTOR_MERGE": _executor_merge(raw_spine_rows(text)),
             "GITIGNORED_WRITES": _gitignored_writes(raw_spine_rows(text), gitignored_roots),
             "CAPABILITIES": _capabilities(fm),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
@@ -3177,6 +3237,8 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
         )
     if "EXECUTOR_COMMIT" in failing_classes:
         lines.append(f"  fix: {EXECUTOR_COMMIT_FIX}")
+    if "EXECUTOR_MERGE" in failing_classes:
+        lines.append(f"  fix: {EXECUTOR_MERGE_FIX}")
     if "EXECUTOR_HEAVY" in failing_classes:
         lines.append(f"  fix: {_EXECUTOR_HEAVY_CATALOGUE_FIX} Build or measure command: {build_measure_remedy()}")
     if "TEST_RUNNER_OUT_OF_ROLE" in failing_classes:
@@ -3308,7 +3370,8 @@ def refusal_message(
             k == "REGISTER" or v["status"] == "PASS" for k, v in classes.items()
         )) and not all(
             k in (
-                "EXECUTOR_COMMIT", "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "GITIGNORED_WRITES",
+                "EXECUTOR_COMMIT", "EXECUTOR_MERGE", "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE",
+                "GITIGNORED_WRITES",
             )
             or v["status"] == "PASS"
             for k, v in classes.items()

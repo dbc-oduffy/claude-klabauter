@@ -22,9 +22,11 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional, Sequence
 
-from coordinator_core.ops.dispatch_emit import row_returns
+from coordinator_core.ops.dispatch_emit import row_returns, run_dir_stat_cache
 from coordinator_core.session.declared_writes import declare_write
 
+FINGERPRINT_CACHE_NAMESPACE = "kept-fingerprint"
+KEPT_PARSE_CACHE_NAMESPACE = "kept-parse"
 KEPT_FILE = "kept.json"
 HALT_RECORD_ONLY = "halt-record-only"
 POST_CHECKPOINT_KEY = "post_checkpoint"
@@ -36,9 +38,14 @@ def blob_sha(data: bytes) -> str:
 
 
 def fingerprint(root: Path, rel: str) -> Optional[str]:
-    """``blob_sha`` of ``root/rel`` read in binary mode, or None when absent or unreadable."""
+    """``blob_sha`` of ``root/rel`` read in binary mode, or None when absent or unreadable.
+
+    Reused while the file's (mtime_ns, size) is unchanged (``run_dir_stat_cache``); only the raw-bytes
+    hash is cached, so ``matches_committed`` still reads bytes when it needs them."""
     try:
-        return blob_sha((Path(root) / rel).read_bytes())
+        return run_dir_stat_cache.cached(
+            FINGERPRINT_CACHE_NAMESPACE, Path(root) / rel, lambda p: blob_sha(Path(p).read_bytes())
+        )
     except OSError:
         return None
 
@@ -114,7 +121,7 @@ def held_paths(root: Path, rels: Iterable[str]) -> dict[str, str]:
             ):
                 continue
             try:
-                prints = kept_fingerprints(ask_contract.record_dir(root, run_id))
+                prints = kept_fingerprints(run_dir_stat_cache.record_dir(root, run_id))
             except (OSError, ValueError):
                 continue
             for rel in wanted.intersection(prints):
@@ -293,7 +300,18 @@ def kept_post_checkpoint(root: Path, record_dir: Path) -> tuple[dict, list]:
 
 
 def kept_fingerprints(record_dir: Path) -> dict[str, frozenset]:
-    """Per normalised path, the union of every ``chunks[*].paths`` blob and every ``post_checkpoint`` blob."""
+    """Per normalised path, the union of every ``chunks[*].paths`` blob and every ``post_checkpoint`` blob.
+
+    Reused while ``kept.json``'s (mtime_ns, size) is unchanged (``run_dir_stat_cache``); an absent file
+    is the empty answer, uncached."""
+    return dict(
+        run_dir_stat_cache.cached(
+            KEPT_PARSE_CACHE_NAMESPACE, Path(record_dir) / KEPT_FILE, lambda p: _kept_fingerprints_uncached(Path(p).parent)
+        )
+    )
+
+
+def _kept_fingerprints_uncached(record_dir: Path) -> dict[str, frozenset]:
     data = read(record_dir)
     out: dict[str, set] = {}
     for entry in data["chunks"].values():
@@ -423,11 +441,15 @@ def still_kept(
 ) -> bool:
     """True while every recorded path still fingerprints the same and no note names the row or a path.
     A writes-empty entry (``return`` sha, no paths) holds only with ``record_dir`` whose returns.json
-    carries that sha for the row and reads DONE. With ``record_dir`` whose halt marker names a plan,
-    a row whose declared writes are not all among the recorded paths is not kept: it never finished
-    them, so it runs again."""
+    carries that sha for the row and reads DONE. With ``record_dir`` whose returns.json carries a
+    non-DONE return for the row (PARTIAL, BLOCKED), no entry holds, whatever paths it recorded.
+    With ``record_dir`` whose halt marker names a plan, a row whose declared writes are not all among
+    the recorded paths is not kept: it never finished them, so it runs again."""
     paths = entry.get("paths") if isinstance(entry, Mapping) else None
     if not isinstance(paths, Mapping):
+        return False
+    got = row_returns.read(record_dir).get(row_id) if record_dir is not None else None
+    if got is not None and not row_returns.is_done(got["text"]):
         return False
     if paths and record_dir is not None:
         declared = declared_writes(record_dir, root, row_id)
@@ -437,8 +459,7 @@ def still_kept(
         want_sha = entry.get("return")
         if record_dir is None or not isinstance(want_sha, str):
             return False
-        got = row_returns.read(record_dir).get(row_id)
-        if got is None or got["sha256"] != want_sha or not row_returns.is_done(got["text"]):
+        if got is None or got["sha256"] != want_sha:
             return False
     for rel, want in paths.items():
         if not isinstance(want, str) or fingerprint(root, rel) != want:

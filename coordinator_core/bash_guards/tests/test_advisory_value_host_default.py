@@ -408,6 +408,11 @@ def test_suppressed_advisory_then_later_deny_still_fires(monkeypatch: pytest.Mon
             AdvisoryValue.NOT_COST_ARGUED,
         ),
     ]
+    from coordinator_core import machine_profile
+
+    monkeypatch.setattr(
+        machine_profile, "FLOOR_GUARDS", machine_profile.FLOOR_GUARDS | {"fake-later-deny-not-cost-argued"}
+    )
     monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(fake_chain))
     payload = _payload("echo h6-overlap-probe", session_id="h6-overlap-chain")
     out = dispatch.evaluate_payload_json(json.dumps(payload), host_is_windows=False)

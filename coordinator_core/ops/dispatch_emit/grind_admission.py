@@ -12,10 +12,19 @@ Tokens are TOTAL (input + output + cache): `budget.spent()` counts output only, 
 total is output * TOTAL_PER_OUTPUT_CENTI / 100 and a row is priced in that one unit.
 TOTAL_PER_OUTPUT_CENTI = 1782 is the worst measured total-per-output: DoE /learn-lessons grind,
 783,824 total tokens against 44,000 output (17.814, rounded up; the 44,000 is as relayed in the
-memo, not re-read from a DoE receipt here). ROW_TOTAL_TOKENS = ceil(max per-row output x ratio / 100)
-= ceil(66,725 / 2 x 17.82) = 594,520, where 66,725 / 2 is the worst per-row output over the cited
-receipts (claude-klabauter 20261116T191317Z: 66,725 output, 251,424 subagent total over 2 rows). DoE's own
-per-row total, 783,824 / 3 = 261,275, is below it, so one constant clears both receipts.
+memo, not re-read from a DoE receipt here).
+
+ROW_TOTAL_TOKENS is calibrated on post-a722ba receipts, where the grind close is scripted and a
+row costs only its agent stages: example-market-data-repo one-row lessons grind, run 20261118T182350Z
+(klabauter ef6265b994), 107,967 total tokens over 2 agent calls (triage, verify), n=1, relayed by
+Coordinator-content-repo-0e. The pre-a722ba figure for the same row shape was 293,894. The one-row total carries
+the whole run's fixed startup, so it is the worst per-row figure a larger batch can show.
+ROW_TOTAL_TOKENS = ceil(107,967 x 3 / 2) = 161,951: the measured row with a 50% margin for a heavier
+row, and it still covers 107,967. A 1,000,000-token budget admits 1,000,000 // 161,951 = 6 rows.
+The measured row is record-only (no fix leg); a row that edits product files adds a fix leg and costs
+more than this charge, which no post-a722ba receipt yet bounds.
+The older receipts (claude-klabauter 20261116T191317Z: 251,424 over 2 rows; DoE 783,824 over 3) predate
+a722ba and no longer bound the row cost.
 """
 
 from __future__ import annotations
@@ -29,7 +38,7 @@ BATCH_AGENT_CALLS = 7
 RUN_FIXED_AGENT_CALLS = 2
 DEFAULT_BATCH_SIZE = 4
 TOTAL_PER_OUTPUT_CENTI = 1782
-ROW_TOTAL_TOKENS = 594520
+ROW_TOTAL_TOKENS = 161951
 NOT_ADMITTED_EXTRA_KEY = "not_admitted"
 
 

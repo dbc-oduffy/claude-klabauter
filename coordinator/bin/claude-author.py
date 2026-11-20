@@ -852,7 +852,7 @@ def _runtime_base() -> str:
     return base
 
 
-def _run_supervisor(full_argv: list[str], plugin_dir: str, control_base: str) -> int:
+def _run_supervisor(full_argv: list[str], plugin_dir: str, control_base: str, raw_argv: list[str] | None = None) -> int:
     """Load the control-socket supervisor by path and run it. Never falls back to `_launch`."""
     pkg_dir = os.path.join(plugin_dir, "bin", "lib", "claude_author_control")
     init = os.path.join(pkg_dir, "__init__.py")
@@ -874,6 +874,8 @@ def _run_supervisor(full_argv: list[str], plugin_dir: str, control_base: str) ->
         mod = importlib.util.module_from_spec(spec)
         sys.modules[f"{pkg_name}.supervisor"] = mod
         spec.loader.exec_module(mod)
+        if raw_argv is not None:
+            _advise_nested(raw_argv)
         return int(mod.run(full_argv, plugin_dir=plugin_dir, control_base=control_base))
     except Exception as exc:  # noqa: BLE001 -- fail loud, one line, no fallback
         sys.stderr.write(f"claude-author: --control-socket supervisor failed: {type(exc).__name__}: {exc}\n")
@@ -1040,8 +1042,6 @@ def main(argv: list[str]) -> int:
     if os.environ.get("CLAUDE_AUTHOR_NO_EXEC", os.environ.get(_LEGACY_ENV_PREFIX + "NO_EXEC", "0")) == "1":
         return 0
 
-    _advise_nested(argv)
-
     claude_bin = _resolve_claude_bin()
     if not claude_bin:
         sys.stderr.write("claude-author: claude: command not found\n")
@@ -1200,8 +1200,9 @@ def main(argv: list[str]) -> int:
         pass
 
     if control_socket:
-        return _run_supervisor(full_argv, doe_coordinator, control_base)
+        return _run_supervisor(full_argv, doe_coordinator, control_base, argv)
 
+    _advise_nested(argv)
     return _launch(exec_prefix, full_argv)
 
 

@@ -421,16 +421,18 @@ def _mtime(path: str):
         return None
 
 
+def _registry_layer_mtimes(reg: str) -> tuple:
+    """(name, mtime_ns) of every ``*.toml`` layer in the registry dir; stats only, reads no content."""
+    try:
+        with os.scandir(reg) as it:
+            return tuple(sorted((e.name, e.stat().st_mtime_ns) for e in it if e.name.endswith(".toml")))
+    except OSError:
+        return ()
+
+
 def _cache_key(impl: str, args: tuple) -> tuple:
     reg = _registry_dir()
-    return (
-        impl,
-        args,
-        reg,
-        _mtime(os.path.join(reg, "registry.toml")),
-        _mtime(os.path.join(reg, "registry.local.toml")),
-        _mtime(impl),
-    )
+    return (impl, args, reg, _registry_layer_mtimes(reg), _mtime(impl))
 
 
 def _cache_get(key: tuple):

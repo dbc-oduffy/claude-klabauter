@@ -1810,6 +1810,21 @@ def test_default_launch_names_a_child_whose_deferred_script_cannot_be_written(tm
     assert len(list((tmp_path / "scratch" / "warp").glob("*.workflow.mjs"))) == 2  # one deferred emit plus the launcher
 
 
+def test_default_launch_script_starts_every_ready_child_and_names_an_unstarted_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
+
+    children = [
+        LaunchChild(run_id=f"ask-r{i}", sizing_rel=f"state/sizings/ask-r{i}.yaml",
+                    emit_params={"ask": True, "sizing_path": f"state/sizings/ask-r{i}.yaml"})
+        for i in (1, 2, 3)
+    ]
+    text = mod._default_launch(tmp_path, "ask-parent", children, None).read_text(encoding="utf-8")
+    for child in children:
+        assert child.run_id in text  # every ready child is in the launcher's start set
+    assert "status: 'not_started'" in text  # a child whose start never returned is named, not dropped
+    assert "leg + ' leg '" in text  # and the reply names the leg it stopped at
+
+
 def _deferred_params(root: Path, em_context: str, monkeypatch) -> dict:
     import threading
 
@@ -2050,3 +2065,21 @@ def test_direct_start_of_a_launcher_child_script_goes_through_the_wrapper(tmp_pa
     out = mod._direct_start(tmp_path, "r1", time.monotonic() + 5)
     updated = out["hookSpecificOutput"]["updatedInput"]
     assert "args" not in updated and updated["scriptPath"] != str(tmp_path / rel)
+
+
+def test_a_launcher_tail_tells_the_agent_an_unstarted_child_is_named_not_started(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(mod, "_read_parent", lambda root, parent_id: None)
+    launcher = mod._fan_tail(tmp_path, {"parent_id": "ask-parent-1"}, ["ask-1"], launcher=True)
+    assert "`not_started`" in launcher and "refused at a child's start" in launcher
+    assert "not_started" not in mod._fan_tail(tmp_path, {"parent_id": "ask-parent-1"}, ["ask-1"], launcher=False)
+
+
+def test_a_two_ready_asks_submission_writes_a_launcher_that_starts_both_and_names_not_started(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+    out = mod.evaluate(_payload(root, _asks("a", "b")), emit=_Emit(), fanout=fan)
+    hso = _hso(out)
+    assert hso["permissionDecision"] == "allow"
+    script = Path(hso["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    assert "r1" in script and "r2" in script and "status: 'not_started'" in script
+    assert "`not_started`" in json.dumps(out) and "r1, r2" in json.dumps(out)

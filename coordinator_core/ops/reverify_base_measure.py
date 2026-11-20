@@ -34,7 +34,7 @@ _RETRY_RUNNER = (
     "import pytest\n"
     "ids = [i for i in open(sys.argv[1], encoding='utf-8').read().split('\\n') if i]\n"
     "dropped, broken = [], []\n"
-    "nf = re.compile(r'(not found|found no collectors for):?\\s+(\\S+)')\n"
+    "nf = re.compile(r'(not found|found no collectors for):?\\s+(.+?)\\s*$')\n"
     "while True:\n"
     "    out, err = io.StringIO(), io.StringIO()\n"
     "    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):\n"
@@ -42,7 +42,16 @@ _RETRY_RUNNER = (
     "    hits = [m.groups() for m in map(nf.search, (err.getvalue() + out.getvalue()).splitlines()) if m]\n"
     "    def named(kind):\n"
     "        paths = [n.replace('\\\\', '/') for k, n in hits if k.startswith(kind)]\n"
-    "        return [i for i in ids if any(n == i or n.endswith('/' + i) for n in paths)]\n"
+    "        selected = []\n"
+    "        for i in ids:\n"
+    "            normalized = i.replace('\\\\', '/')\n"
+    "            # Pytest can omit the parameter when the entire function is missing.\n"
+    "            path, sep, node = normalized.partition('::')\n"
+    "            unparametrized = path + sep + node.split('[', 1)[0]\n"
+    "            if any(n == candidate or n.endswith('/' + candidate)\n"
+    "                   for n in paths for candidate in (normalized, unparametrized)):\n"
+    "                selected.append(i)\n"
+    "        return selected\n"
     "    gone, bad = named('not found'), named('found no')\n"
     "    if rc != 4 or not (gone or bad):\n"
     "        break\n"
@@ -119,11 +128,19 @@ def _run(sha: str, ids: list[str], cwd: str,
     return str(result.get("export")), result.get("runner_exit"), lines, stderr_lines
 
 
+def _slashed(node: str) -> str:
+    """`node` with the path half (before the first `::`) forward-slashed. pytest prints the OS
+    separator, so on Windows a printed id never equals the forward-slash id it was asked for."""
+    path, sep, rest = node.partition("::")
+    return path.replace("\\", "/") + sep + rest
+
+
 def _red(lines: list[str]) -> set[str]:
-    return {hit.group(1) for hit in (_RED_LINE.match(ln.strip()) for ln in lines) if hit}
+    return {_slashed(hit.group(1)) for hit in (_RED_LINE.match(ln.strip()) for ln in lines) if hit}
 
 
 def _is_red(node: str, red: set[str]) -> bool:
+    node = _slashed(node)
     return any(r == node or r.startswith(node + "::") or r.startswith(node.rstrip("/") + "/") for r in red)
 
 

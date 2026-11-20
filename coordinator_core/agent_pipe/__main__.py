@@ -144,7 +144,7 @@ def _relay(run_dir: Path, req: dict, adapter: Adapter) -> dict:
         child_env = independent_child_env(child_env, provider={"antigravity": "agy"}.get(agent, agent),
                                            role="worker", parent=req.get("caller_session_id"))
     if agent == "codex":
-        from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+        from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
         from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
         try:
             child_env = shape_codex_child(child_env, writable_root=os.getcwd())
@@ -183,6 +183,8 @@ def _relay(run_dir: Path, req: dict, adapter: Adapter) -> dict:
             if child.poll() is None:
                 child.kill()
                 child.wait()
+            if agent == "codex":
+                writeback_codex_auth(child_env)
     return {
         "run_id": run_dir.name,
         "status": STATUS_COMPLETED if exit_code == 0 else STATUS_FAILED,

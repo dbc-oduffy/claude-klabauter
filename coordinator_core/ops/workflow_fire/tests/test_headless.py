@@ -43,6 +43,18 @@ def test_real_runtime_parallel_journal_and_terminal_handoff(tmp_path: Path) -> N
     assert events[-1]['type'] == 'completed'
 
 
+def test_exited_driver_records_started_child_workflow(tmp_path: Path) -> None:
+    child = tmp_path / 'staged-run.workflow.mjs'
+    child.write_text("export const meta={}; throw new Error('child halted');", encoding='utf-8')
+    path = record(tmp_path, 'return await workflow(' + json.dumps({'scriptPath': str(child)}) + ');')
+
+    result = headless.execute(path)
+
+    assert result['state'] == 'exited'
+    assert result['exit_code'] == 1
+    assert json.loads(path.read_text(encoding='utf-8'))['child_workflows'] == [str(child)]
+
+
 def test_agent_error_fails_workflow_without_landing(tmp_path: Path) -> None:
     path = record(tmp_path, "await agent('fail',{}); return {ok:true};")
     def worker(*args, **kwargs):
@@ -110,6 +122,8 @@ def test_params_file_must_stay_inside_target_repo(tmp_path: Path) -> None:
     {'stage_pending': {'handle': 'unresolved'}},
     {'schema': 'wake-digest', 'outcome': 'incomplete', 'completed': False},
     {'parent_id': 'fan', 'runs': [{'run_id': 'child', 'status': 'ok', 'result': {'halted': 'ledger'}}]},
+    {'parent_id': 'fan', 'runs': [{'run_id': 'c1', 'status': 'ok', 'result': {}},
+                                  {'run_id': 'c2', 'status': 'not_started', 'reason': 'emit leg threw'}]},
 ])
 def test_returned_engine_failure_is_not_clean_exit(tmp_path: Path, value) -> None:
     path = record(tmp_path, 'return ' + json.dumps(value) + ';')
@@ -144,6 +158,18 @@ def test_noncomplete_landing_cannot_report_success(tmp_path: Path, landing) -> N
     result = headless.execute(path, terminal_runner=lambda *a: landing)
     assert result['exit_code'] == 1
     assert result['landing'] == landing
+
+
+def test_not_started_fan_child_is_a_failure_naming_its_leg_reason() -> None:
+    reason = 'start leg: no run dir'
+    failed = headless._result_failure(
+        {'parent_id': 'p', 'runs': [{'run_id': 'c', 'status': 'not_started', 'reason': reason}]})
+    assert failed and reason in failed
+    mixed = {'parent_id': 'p', 'runs': [{'run_id': 'a', 'status': 'ok', 'result': {}},
+                                        {'run_id': 'c', 'status': 'not_started', 'reason': reason}]}
+    assert reason in (headless._result_failure(mixed) or '')
+    ok_only = {'parent_id': 'p', 'runs': [{'run_id': 'c', 'status': 'ok', 'result': {}}]}
+    assert headless._result_failure(ok_only) is None
 
 
 def test_fan_child_unrelayed_terminal_action_is_not_clean(tmp_path: Path) -> None:

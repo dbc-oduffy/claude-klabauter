@@ -45,6 +45,7 @@ PRICES: dict[str, dict[str, float]] = {
 # prices, not a claim about a subscription invoice. Cache writes use 30m retention.
 RATE_PROVENANCE: dict[str, dict[str, str | None]] = {}
 for _model, _input, _output, _cache_mult in (
+    ("gpt-6.2-sol", 2.0, 10.0, 0.05),
     ("gpt-6.1-sol", 2.0, 10.0, 0.05),
     ("gpt-6.1-terra", 1.0, 5.0, 0.05),
     ("gpt-6-astra", 10.0, 50.0, 0.1),
@@ -55,13 +56,19 @@ for _model, _input, _output, _cache_mult in (
         "tier_prompt_tokens": 272_000, "tier_input": _input * 2, "tier_output": _output * 1.5,
         "fast_multiplier": 2.0, "flex_multiplier": 0.5, "batch_multiplier": 0.5,
     }
-    if _model in {"gpt-6.1-sol", "gpt-6-astra"}:
-        PRICES[_model]["ultrafast_multiplier"] = 6.0
+    if _model in {"gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra"}:
+        PRICES[_model]["ultrafast_multiplier"] = 6.0  # List rate; 6.2 promo is 3x through 2027-02-28.
     RATE_PROVENANCE[_model] = {
         "source": f"https://developers.openai.com/api/docs/models/{_model}",
         "verified_at": "2026-11-07", "basis": "API list prices; 30m cache writes",
         "effective_from": None,  # The source states current rates, not their start date.
     }
+
+# GPT-6.2 Sol read from the OpenAI pricing page 2026-11-19: Standard $2 in / $0.10 cached / $2.50
+# cache write / $10 out per 1M; Fast 2x, Batch 0.5x, Ultrafast list 6x; >272K prompt 2x in / 1.5x out.
+RATE_PROVENANCE["gpt-6.2-sol"].update(
+    source="https://developers.openai.com/api/docs/pricing", verified_at="2026-11-19",
+)
 
 # Gemini 3.8 Flash standard paid tier through 2026-12-31; Google schedules $1.50/$7.50 (cache read
 # $0.15) from 2027-01-01. Re-check the pricing page then. Cache writes carry no surcharge.

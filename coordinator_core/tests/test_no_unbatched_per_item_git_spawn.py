@@ -758,6 +758,12 @@ _CLASS_TAG = re.compile(r"#\s*class:\s*([a-zA-Z0-9-]+)")
     # One merge order, measured: exactly this key, zero collateral.
 _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
     {
+        # 2026-11-19 -- # class: measurement-is-the-loop. `submit_ask_hook_to_reply_legs.measure_starved`
+        # submits once per starvation leg with that leg's own processes suspended and classifies
+        # the outcome (minted | refused | spooled | silent). Each submission IS the sample: one
+        # batched call cannot be starved per leg. Benchmark-only, never on an engine path; it is
+        # the acceptance oracle of `docs/plans/2026-11-15-hnd-engine-ask-submission-silently-b2be6d.md`.
+        ('coordinator_core/benchmarks/submit_ask_hook_to_reply_legs.py', 'measure_starved', '_door_call', 0),
         # 2026-10-12 -- # class: structural-floor. `ceremony_common.run.driver._run_segments`
         # walks a ceremony spec's front door then its residue segments: a fixed, spec-declared
         # handful of ordered stages, not data items. Each segment's owed steps come from the run
@@ -850,7 +856,6 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # command), so mapping each member alias to its HostName is one spawn per alias. Each
         # alias is one distinct member box; the resolved name is cached across calls and an
         # alias whose own name matches returns before any spawn.
-        ("coordinator/bin/unimatrix-pair.py", "make_host_alias_fn.host_alias", "_ssh_hostname", 0),
         ("coordinator/bin/unimatrix-autolink.py", "member_alias", "ssh_hostname", 0),
         # 2026-11-09 -- # class: structural-floor. N PEERS, N DETACHED SUPERVISORS.
         # `unimatrix-autolink.py::run.link_all` calls `link_peer` once per roster alias; each

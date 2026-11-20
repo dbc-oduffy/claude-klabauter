@@ -1706,7 +1706,7 @@ class Router:
                     e = json.load(fh)
             except (OSError, ValueError):
                 continue
-            if (not isinstance(e, dict) or name not in [e.get("name"), e.get("unimatrixFarName"), *_contract().projected_addresses(e)]
+            if (not isinstance(e, dict) or name not in [*_contract().mirror_addresses(e), *_contract().projected_addresses(e)]
                     or name in self.peers or name in self.transport_sources):
                 continue
             ep, pid = e.get("messagingSocketPath"), e.get("pid")

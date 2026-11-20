@@ -466,3 +466,20 @@ def test_bare_sid_still_takes_the_same_box_path(boxes) -> None:
     result = suite_grant.issue_suite_grant(PEER, "ruled", directory=boxes["a"], now=NOW)
     assert result.ok and "grantee_box_id" not in result.record
     assert (boxes["a"] / "suite-grants" / HOLDER / f"{PEER}.json").is_file()
+
+
+def test_codex_thread_wins_over_same_repo_router_alias(env):
+    from coordinator_core.session import external_registry
+
+    name = "example-retrieval-repo-codex-machine-a-85"
+    alias = f"peer-{name}-35332"
+    router = _row(alias, name, env["repo"])
+    thread = _row(PEER, name, env["repo"])
+    env["mp"].setattr(session_registry, "read_rows", lambda: [router, thread])
+    env["mp"].setattr(external_registry, "lookup", lambda sid: {} if sid == PEER else None)
+    for address in (name, alias, PEER):
+        assert _issue(env, address).record["grantee_session_id"] == PEER
+
+    unrelated = _row(OTHER, name, env["repo"])
+    env["mp"].setattr(session_registry, "read_rows", lambda: [router, thread, unrelated])
+    assert _issue(env, name).reason.startswith(suite_grant.GRANTEE_UNRESOLVED)

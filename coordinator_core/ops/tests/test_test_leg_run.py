@@ -83,6 +83,53 @@ def test_all_green_scope_spawns_exactly_one_pytest(repo, tmp_path, monkeypatch):
     assert len(seen) == 1
 
 
+def test_usage_error_with_named_nodes_records_raw_phase_diagnostics(repo, tmp_path, monkeypatch):
+    calls = []
+
+    def usage_error(targets, *_):
+        calls.append(targets)
+        return 4, [f"ERROR {PASS_ID}"], "x" * 5000 + "bad option", ""
+
+    monkeypatch.setattr(tlr, "_pytest", usage_error)
+    _code, data = _main(["--", PASS_ID], tmp_path / "o.json")
+    assert data["failing"] == [PASS_ID]
+    assert data["status_after"] == "fail"
+    assert data["pytest_phases"] == [{"exit_code": 4, "stderr": "x" * 4086 + "bad option",
+                                       "stdout": "", "encoding": "utf-8"}]
+    assert calls == [[PASS_ID]]
+
+
+def test_delivery_markdown_is_excluded_from_pytest_targets(repo, tmp_path, monkeypatch):
+    delivery = "delivery.md"
+    (repo / delivery).write_text("# Delivery\n", encoding="utf-8")
+    seen = _spawns(monkeypatch)
+    _code, data = _main(["--", delivery, PASS_ID], tmp_path / "o.json")
+    assert (data["status"], data["tests_run"]) == ("pass", 1)
+    assert data["not_a_test"] == [delivery]
+    assert seen[0][-1] == PASS_ID and delivery not in seen[0]
+
+
+def test_only_fixture_setup_errors_do_not_rerun_or_measure_named_tests(repo, tmp_path, monkeypatch):
+    (repo / "tests" / "conftest.py").write_text(
+        "import pytest\n@pytest.fixture(autouse=True)\ndef broken():\n    raise RuntimeError('setup broke')\n",
+        encoding="utf-8",
+    )
+    seen = _spawns(monkeypatch)
+    _code, data = _main(["--", PASS_ID], tmp_path / "o.json")
+    assert (data["status"], data["tests_run"], len(seen)) == ("error", 0, 1)
+
+
+def test_pytest_inherits_explicit_coordinator_settings_home(repo, tmp_path, monkeypatch):
+    settings = str(tmp_path / "explicit-settings")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", settings)
+    (repo / "tests" / "test_a.py").write_text(
+        f"import os\ndef test_passes():\n    assert os.environ['COORDINATOR_SETTINGS_HOME'] == {settings!r}\n",
+        encoding="utf-8",
+    )
+    _code, data = _main(["--", PASS_ID], tmp_path / "o.json")
+    assert (data["status"], data["tests_run"]) == ("pass", 1)
+
+
 def test_red_scope_spawns_two_pytests_and_one_measure(repo, tmp_path, monkeypatch):
     seen = _spawns(monkeypatch)
     measured = []
@@ -183,7 +230,7 @@ def test_one_deadline_spans_the_steps(repo, tmp_path, monkeypatch):
     def fake_pytest(targets, cwd, remaining):
         timeouts.append(remaining)
         clock[0] += 40.0
-        return 1, [f"FAILED {FAIL_ID} - assert"]
+        return 1, [f"FAILED {FAIL_ID} - assert"], "", ""
 
     monkeypatch.setattr(tlr, "_pytest", fake_pytest)
     data = tlr.run(["tests"], base_sha=None, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
@@ -336,6 +383,105 @@ def test_collection_error_reports_collection_failure(repo, tmp_path):
     assert data["zero_run_cause"] == ltt.ZERO_RUN_COLLECTION == "collection-failure"
 
 
+def test_usage_failure_keeps_bounded_stderr_and_process_exit(repo, monkeypatch):
+    monkeypatch.setattr(tlr, "_pytest", lambda *_: (4, [], "x" * 5000 + "bad option", ""))
+    data = tlr.run([PASS_ID], base_sha=None, head_sha=None, base_export_out=None,
+                   budget_s=20, cwd=str(repo))
+    assert data["tests_run"] == 0
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_PROCESS_ERROR
+    assert data["pytest_exit_code"] == 4
+    assert len(data["pytest_stderr"]) == 4096 and data["pytest_stderr"].endswith("bad option")
+
+
+def _engine_import_error(repo: Path) -> None:
+    (repo / "coordinator_core").mkdir()
+    (repo / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "coordinator_core" / "dirty.py").write_text("from coordinator_core.clean import _GONE\n", encoding="utf-8")
+    (repo / "coordinator_core" / "clean.py").write_text("X = 1\n", encoding="utf-8")
+    (repo / "tests" / "test_dirty.py").write_text(
+        "from coordinator_core import dirty\n\ndef test_a():\n    assert True\n", encoding="utf-8")
+
+
+def test_engine_module_import_error_reports_import_error_with_the_dirty_path(repo, tmp_path):
+    _engine_import_error(repo)
+    _code, data = _main(["--", "tests/test_dirty.py"], tmp_path / "o.json")
+    assert data["tests_run"] == 0 and data["status"] == "error"
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_IMPORT_ERROR == "import-error"
+    assert data["import_error"] == {"path": "coordinator_core/dirty.py", "run_id": None}
+    assert "import-error" in ltt.zero_run_cause_note({"zero_run_cause": "import-error"}, "x")
+
+
+def test_import_error_run_id_is_the_newest_record_holding_the_worktree_blob(repo, tmp_path):
+    from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
+
+    _engine_import_error(repo)
+    blob = kept_work.fingerprint(repo, "coordinator_core/dirty.py")
+    for name, run in (("run-old", blob), ("run-other", "0" * 40)):
+        stranded_sibling.write(repo / "state" / "warp" / name, {"coordinator_core/dirty.py": {"base": None, "run": run}})
+    _code, data = _main(["--", "tests/test_dirty.py"], tmp_path / "o.json")
+    assert data["import_error"] == {"path": "coordinator_core/dirty.py", "run_id": "run-old"}
+
+
+def _committed_engine_with_dirty_worktree(root: Path) -> str:
+    """A base commit whose `coordinator_core/dirty.py` imports fine, then the worktree copy broken; returns the base sha."""
+    (root / "coordinator_core").mkdir()
+    (root / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "coordinator_core" / "dirty.py").write_text("from coordinator_core.clean import X\n", encoding="utf-8")
+    (root / "coordinator_core" / "clean.py").write_text("X = 1\n", encoding="utf-8")
+    (root / "tests" / "test_dirty.py").write_text(
+        "from coordinator_core import dirty\n\ndef test_a():\n    assert True\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "engine")
+    (root / "coordinator_core" / "dirty.py").write_text("from coordinator_core.clean import _GONE\n", encoding="utf-8")
+    return _git(root, "rev-parse", "HEAD")
+
+
+def test_a_foreign_import_error_reruns_the_targets_on_the_base_export_and_reports_tests_run(landing, tmp_path):
+    root, _base = landing
+    base = _committed_engine_with_dirty_worktree(root)
+
+    _code, data = _main(["--base-sha", base, "--", "tests/test_dirty.py"], tmp_path / "o.json")
+
+    assert data["tests_run"] > 0 and data["status"] == "pass"
+    assert data["overlay_rerun"]["from"] == "coordinator_core/dirty.py"
+    assert data.get("zero_run_cause") != ltt.ZERO_RUN_IMPORT_ERROR
+
+
+def test_an_owned_import_error_keeps_the_zero_run_import_error_verdict(landing, tmp_path):
+    from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
+
+    root, _base = landing
+    base = _committed_engine_with_dirty_worktree(root)
+    blob = kept_work.fingerprint(root, "coordinator_core/dirty.py")
+    stranded_sibling.write(root / "state" / "warp" / "run-mine", {"coordinator_core/dirty.py": {"base": None, "run": blob}})
+
+    _code, data = _main(["--base-sha", base, "--", "tests/test_dirty.py"], tmp_path / "o.json")
+
+    assert data["tests_run"] == 0 and data["status"] == "error"
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_IMPORT_ERROR
+    assert data["import_error"] == {"path": "coordinator_core/dirty.py", "run_id": "run-mine"}
+    assert "overlay_rerun" not in data
+
+
+def test_import_error_outside_the_engine_stays_collection_failure(repo, tmp_path):
+    (repo / "tests" / "test_broken.py").write_text("import not_a_real_module_xyz\n", encoding="utf-8")
+    _code, data = _main(["--", "tests/test_broken.py"], tmp_path / "o.json")
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_COLLECTION
+    assert "import_error" not in data
+
+
+@pytest.mark.parametrize("lines, path", [
+    (["coordinator_core\\ops\\a.py:3: in <module>", "E   ImportError: cannot import name 'x'"], "coordinator_core/ops/a.py"),
+    (['  File "C:\\r\\coordinator_core\\b.py", line 2, in <module>', "ModuleNotFoundError: No module named 'q'"],
+     "coordinator_core/b.py"),
+    (["coordinator_core/a.py:1: in <module>", "tests/t.py:2: in <module>", "E   ImportError: x"], "coordinator_core/a.py"),
+    (["tests/t.py:2: in <module>", "E   ImportError: x"], None),
+    (["E   ImportError: no frame"], None),
+])
+def test_import_error_path_parse_matches_both_separators_and_picks_the_engine_frame(lines, path):
+    assert tlr._import_error_path(lines) == path
+
+
 def test_empty_selection_reports_empty_selection(repo, tmp_path):
     (repo / "tests" / "empty_dir").mkdir()
     _code, data = _main(["--", "tests/empty_dir"], tmp_path / "o.json")
@@ -343,8 +489,16 @@ def test_empty_selection_reports_empty_selection(repo, tmp_path):
     assert data["zero_run_cause"] == ltt.ZERO_RUN_EMPTY == "empty-selection"
 
 
+@pytest.mark.parametrize("prefix", ["", "    E   "])
+def test_bare_settings_exception_is_reported_as_environment_detail(prefix):
+    node = "tests/test_round_trip_translation_loop_lift.py::test_round_trip"
+    exc = "SettingsKeyUnresolved: repos.project_rag_ue_addon is not set"
+    output = f"_____ test_round_trip _____\n{prefix}{exc}\n===== short test summary info =====\nFAILED {node}"
+    assert tlr._detail(output, [node])[node] == f"environment: machine-local settings key unreadable ({exc})"
+
+
 def test_killed_child_reports_killed(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (-9, []))
+    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (-9, [], "", ""))
     _code, data = _main(["--", PASS_ID], tmp_path / "o.json")
     assert data["tests_run"] == 0 and data["status"] == "error"
     assert data["zero_run_cause"] == ltt.ZERO_RUN_KILLED == "killed"
@@ -623,7 +777,7 @@ def test_phase_one_gets_the_deadline_less_the_tripwire_reserve(repo, monkeypatch
     def fake_pytest(targets, cwd, remaining):
         timeouts.append(remaining)
         clock[0] += 10.0
-        return 0, ["1 passed in 1s"]
+        return 0, ["1 passed in 1s"], "", ""
 
     monkeypatch.setattr(tlr, "_pytest", fake_pytest)
     tlr.run([PASS_ID, TRIPWIRE], base_sha=BASE, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
@@ -635,7 +789,7 @@ def test_a_budget_not_above_the_reserve_gives_phase_one_the_whole_deadline(repo,
     _write_tripwire(repo, "def test_t():\n    assert True\n")
     monkeypatch.setattr(tlr, "TRIPWIRE_BUDGET_S", 150.0)
     timeouts = []
-    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (timeouts.append(remaining), (0, ["1 passed in 1s"]))[1])
+    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (timeouts.append(remaining), (0, ["1 passed in 1s"], "", ""))[1])
     tlr.run([PASS_ID, TRIPWIRE], base_sha=BASE, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
     assert timeouts[0] > 99.0
 
@@ -651,7 +805,7 @@ def test_no_base_or_an_unreadable_diff_stays_one_phase(repo, monkeypatch, base_s
 
     monkeypatch.setattr(tlr.reverify_scope, "select_tests", select)
     calls = []
-    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (calls.append(list(targets)), (0, ["2 passed in 1s"]))[1])
+    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (calls.append(list(targets)), (0, ["2 passed in 1s"], "", ""))[1])
     tlr.run([PASS_ID, TRIPWIRE], base_sha=base_sha, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
     assert calls == [[PASS_ID, TRIPWIRE]]
 
@@ -661,7 +815,7 @@ def test_a_selection_lacking_the_tripwires_key_runs_one_phase_over_every_target(
     monkeypatch.setattr(tlr.reverify_scope, "select_tests",
                         lambda root, base, head="HEAD": {"tests": [], "changed": [], "fully_mapped": True, "notice": ""})
     calls = []
-    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (calls.append(list(targets)), (0, ["2 passed in 1s"]))[1])
+    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (calls.append(list(targets)), (0, ["2 passed in 1s"], "", ""))[1])
     data = tlr.run([PASS_ID, TRIPWIRE], base_sha=BASE, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
     assert calls == [[PASS_ID, TRIPWIRE]] and data["status_after"] == "pass"
 
@@ -687,7 +841,7 @@ def _fake_pytest_then(monkeypatch, replies):
         reply = queue.pop(0)
         if isinstance(reply, BaseException):
             raise reply
-        return reply
+        return *reply, "", ""
 
     monkeypatch.setattr(tlr, "_pytest", fake)
     return calls
@@ -740,3 +894,42 @@ def test_an_over_cap_importer_stays_in_phase_two_through_tripwires_not_selected(
                         lambda root, base, head="HEAD": {"tests": [], "tripwires": pool[:cap]})
     first, second = tlr._split_phases([PASS_ID, *pool], BASE, None, str(repo))
     assert first == [PASS_ID, *pool[cap:]] and second == pool[:cap]
+
+
+def _foreign_dependency_landing(root: Path) -> str:
+    """HEAD: `pkg/b.py` imports `new_name` from `pkg/a.py`, which defines it only in an uncommitted worktree change."""
+    (root / "pkg" / "a.py").write_text("OLD = 1\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "a")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "tests" / "test_b.py").write_text(
+        "from pkg import b\n\ndef test_b():\n    assert b.VALUE == 1\n", encoding="utf-8")
+    post = _land(root, "pkg/b.py", "from pkg.a import new_name\n\nVALUE = new_name()\n")
+    (root / "pkg" / "a.py").write_text("OLD = 1\n\n\ndef new_name():\n    return 1\n", encoding="utf-8")
+    return base, post
+
+
+def test_a_hunk_importing_a_name_only_in_a_peers_uncommitted_change_halts_naming_the_symbol_and_source(landing, tmp_path):
+    root, _base0 = landing
+    base, post = _foreign_dependency_landing(root)
+
+    _code, data = _main(["--base-sha", base, "--head-sha", post, "--touched", "pkg/b.py", "--", "tests/test_b.py"],
+                        tmp_path / "o.json")
+
+    assert data["tests_run"] == 0 and data["status"] == "error"
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_FOREIGN_DEPENDENCY == "uncommitted-foreign-dependency"
+    assert data["import_error"]["symbol"] == "new_name"
+    assert data["import_error"]["source_path"] == "pkg/a.py"
+    note = ltt.zero_run_cause_note(data, "x")
+    assert "new_name" in note and "pkg/a.py" in note
+
+
+def test_a_missing_name_defined_nowhere_uncommitted_stays_collection_failure(landing, tmp_path):
+    root, _base0 = landing
+    base, post = _foreign_dependency_landing(root)
+    (root / "pkg" / "a.py").write_text("OLD = 1\n", encoding="utf-8")
+
+    _code, data = _main(["--base-sha", base, "--head-sha", post, "--touched", "pkg/b.py", "--", "tests/test_b.py"],
+                        tmp_path / "o.json")
+
+    assert data["zero_run_cause"] != ltt.ZERO_RUN_FOREIGN_DEPENDENCY and "import_error" not in data

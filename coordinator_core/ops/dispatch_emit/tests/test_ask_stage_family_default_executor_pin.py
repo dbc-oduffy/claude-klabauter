@@ -122,7 +122,7 @@ def test_receipt_names_the_family_the_stage_used(repo) -> None:
     assert body["family_routes"] == {"C1": "codex", "C2": "codex"}
 
 
-def test_every_row_pinned_elsewhere_stages_with_the_warning_not_a_refusal(repo) -> None:
+def test_every_row_pinned_elsewhere_refuses_naming_the_family(repo) -> None:
     (repo / PLAN_REL).write_text(
         _PLAN.format(other=REVIEWER_AGENT_TYPE).replace("agent_type: coordinator:executor", "agent_type: " + REVIEWER_AGENT_TYPE)
         .replace("  title: unpinned", "  title: unpinned\n  agent_type: " + REVIEWER_AGENT_TYPE),
@@ -131,7 +131,5 @@ def test_every_row_pinned_elsewhere_stages_with_the_warning_not_a_refusal(repo) 
     )
     sizing = {"intent": "Fix", "exit_criterion": {"statement": "ok"}, "deliverable_id": "dlv-xs-abc123", "family": "grok"}
     (repo / SIZING_REL).write_text(yaml.safe_dump(sizing), encoding="utf-8", newline="\n")
-    report: dict = {}
-    m = stage(repo, run_id="r1", plan_rel=PLAN_REL, commit_sizing_rel=SIZING_REL, family_report=report)
-    assert {r.agent_type for r in m.rows} == {REVIEWER_AGENT_TYPE}
-    assert "'grok'" in report["warnings"][0]
+    with pytest.raises(ask_stage.AskStageError, match="'grok'.*reached no row"):
+        stage(repo, run_id="r1", plan_rel=PLAN_REL, commit_sizing_rel=SIZING_REL, family_report={})

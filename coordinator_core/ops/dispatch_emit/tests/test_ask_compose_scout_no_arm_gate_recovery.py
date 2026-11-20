@@ -57,6 +57,8 @@ def _run(
         pytest.skip("node not installed")
     block = _recovery_block(script)
     stubs = "".join(f"const {n} = '';\n" for n in sorted(set(re.findall(r"\b_PF\w+", block))))
+    if "_briefPrecedenceTail" in block:
+        stubs += "const _briefPrecedenceTail = '';\n"
     if "_refireCmd" in _gate_line(script):
         stubs += "const _refireCmd = () => 'refire';\n"
     if "_chainParamsQ" in block:

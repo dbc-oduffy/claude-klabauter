@@ -509,6 +509,21 @@ def _withheld_keys(record: Path) -> set:
     ))
 
 
+def _seed_withheld_union(root: Path, state: dict) -> frozenset:
+    """The union of every indexed run's declared withheld paths, memoised as the scope's union when no
+    `prefetch_kept_blobs` ran, so the one `dirty_withheld` walk covers all runs. Empty when the index is
+    unreadable: each run is then tested alone."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_halted_view
+
+    union: frozenset = frozenset()
+    with contextlib.suppress(Exception):
+        union = frozenset(halted_withheld_index.withheld_by_path(root))
+    state["memo"][("withheld-union", str(root))] = union
+    if union:
+        landing_halted_view.hint_index(root, union)
+    return union
+
+
 def _dirty_withheld(root: Path, state: dict) -> Optional[frozenset]:
     """Dirty paths among every prefetched halted run's withheld paths, from ONE index walk shared by all
     runs of the scope (`own_left_behind` over the union; its dirtiness and sibling-claim filter are per
@@ -516,6 +531,8 @@ def _dirty_withheld(root: Path, state: dict) -> Optional[frozenset]:
     key = ("dirty-withheld", str(root))
     if key not in state["memo"]:
         union = state["memo"].get(("withheld-union", str(root)))
+        if union is None:
+            union = _seed_withheld_union(root, state)
         dirty = None
         if union:
             from coordinator_core.ops.dispatch_emit import landing_halted_view
@@ -577,7 +594,6 @@ def stale_release(root: Path, run_id: str, now: Optional[float] = None) -> Optio
     its mtime; only an id that does not parse falls back to one `os.stat` of that mtime. Plus the scope-shared
     token listing, no spawn; never raises (the hold stands)."""
     try:
-        from coordinator_core.ops import warp_run_deliverable as wrd
         from coordinator_core.ops.dispatch_emit import halted_run
 
         root = Path(root)
@@ -591,16 +607,49 @@ def stale_release(root: Path, run_id: str, now: Optional[float] = None) -> Optio
         age = (time.time() if now is None else now) - clock
         if age <= STALE_HOLD_BOUND_SECONDS:
             return None
-        sizing = _halted_sizing(root, run_id, marker)
-        for held in _held_run_records(root):
-            if held.get("run_id") == run_id:
-                return None
-            other = held.get("sizing_rel")
-            if sizing and isinstance(other, str) and wrd._norm(other) == sizing:
-                return None
+        if not _no_token_or_refire(root, run_id, _halted_sizing(root, run_id, marker)):
+            return None
         return RELEASE_STALE_NOT_LIVE
     except Exception:  # noqa: BLE001 -- unknown: the hold stands
         return None
+
+
+def _no_token_or_refire(root: Path, run_id: str, sizing: str) -> bool:
+    """True when no held run-token record is `run_id`'s own or a run of its `sizing` (not live, no refire pending)."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    for held in _held_run_records(root):
+        if held.get("run_id") == run_id:
+            return False
+        other = held.get("sizing_rel")
+        if sizing and isinstance(other, str) and wrd._norm(other) == sizing:
+            return False
+    return True
+
+
+def moved_past_base_paths(root: Path, run_id: str, marker: dict, held) -> frozenset:
+    """The `held` paths a halt holds by its record alone (`kept_work.HALT_RECORD_ONLY`, no kept blob) whose HEAD blob is no
+    longer the blob at the halt's `run_base_sha`: HEAD moved on, so the dirt left on the path is a later
+    session's, and a not-live run with no refire pending protects nothing there. The halt record is untouched.
+    One batched blob read; no base, an unfetchable blob, or a live token or pending refire keeps the hold."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.kept_work import HALT_RECORD_ONLY
+
+    base = _base_sha(marker)
+    if not held or not base or marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
+        return frozenset()
+    record = _record(root, run_id)
+    by_record_only = {wrd._norm(k) for k, r in _withheld_strict(record).items() if r == HALT_RECORD_ONLY}
+    plan = _kept_plan(record)  # a path with a kept blob is resumable work the kept-at-head rules weigh
+    kept = {wrd._norm(p) for p in plan[1]} if plan else set()
+    wanted = sorted(p for p in held if p in by_record_only and p not in kept)
+    if not wanted or not _no_token_or_refire(root, run_id, _halted_sizing(root, run_id, marker)):
+        return frozenset()
+    blobs = _blob_batch(root, [f"HEAD:{p}" for p in wanted] + [f"{base}:{p}" for p in wanted])
+    if not blobs:
+        return frozenset()
+    return frozenset(p for p in wanted if blobs.get(f"HEAD:{p}") != blobs.get(f"{base}:{p}"))
 
 
 def release_reason(
@@ -838,6 +887,8 @@ def _held_tail(root: Path, halted_run_id: str) -> frozenset:
     if held and marker:
         with contextlib.suppress(Exception):  # unknown: the hold stands
             held -= {wrd._norm(p) for p in kept_at_head_paths(root, record, marker)}
+        with contextlib.suppress(Exception):  # unknown: the hold stands
+            held -= moved_past_base_paths(root, halted_run_id, marker, held)
     if held:
         with contextlib.suppress(Exception):  # unknown: the hold stands
             held -= _prints_at_head(root, halted_run_id, held)
@@ -1008,10 +1059,17 @@ def halted_only_withholders(root: Path, run_id: str) -> Optional[list]:
         return None
 
 
+_OWNER_RAW: dict = {}  # abs index file -> (st_mtime_ns, st_size, bytes); process-wide, like the index's parse cache
+_OWNER_RAW_MAX = 65536  # per-file byte cap
+_OWNER_RAW_ENTRIES_MAX = 512  # total cap: worst case ~32MB held by a warm engine
+
+
 def _withheld_owners(root: Path, wanted: set) -> dict:
     """`{path: run id}` for the `wanted` paths only, as `withheld_by_path` would map them (lexically last run
-    wins). Each run file is read as bytes and parsed only when it names one of `wanted`, so the cost is one
-    read per run file and a parse per run withholding a wanted path, not a parse of the whole history."""
+    wins). A run file is parsed only when its bytes name one of `wanted`; the bytes of a file whose
+    (mtime_ns, size) is unchanged come from `_OWNER_RAW`, so a warm engine's repeat call reads only the files
+    that changed, never the whole index. The scan stops at the index's read deadline (a stalled disk): the
+    runs not reached read as withholding nothing. Never touches the disk beyond one listing in steady state."""
     import json
     import os
 
@@ -1022,23 +1080,37 @@ def _withheld_owners(root: Path, wanted: set) -> dict:
         idx.rebuild(Path(root))
     needles = [json.dumps(p)[1:-1].encode("utf-8") for p in wanted]
     out: dict = {}
+    base = os.fspath(index)
     try:
-        names = sorted(n for n in os.listdir(index) if n.endswith(".json"))
+        listing = sorted((d for d in os.scandir(base) if d.name.endswith(".json")), key=lambda d: d.name)
     except OSError:
         return out
-    for name in names:
+    live = {d.path for d in listing}
+    for stale in [k for k in _OWNER_RAW if os.path.dirname(k) == base and k not in live]:
+        _OWNER_RAW.pop(stale, None)
+    deadline = idx._clock() + idx.READ_DEADLINE_SECS
+    for de in listing:
+        if idx._clock() >= deadline:
+            break
         try:
-            raw = (index / name).read_bytes()
+            st = de.stat()
+            hit = _OWNER_RAW.get(de.path)
+            if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+                raw = hit[2]
+            else:
+                raw = Path(de.path).read_bytes()
+                if len(raw) <= _OWNER_RAW_MAX and (de.path in _OWNER_RAW or len(_OWNER_RAW) < _OWNER_RAW_ENTRIES_MAX):
+                    _OWNER_RAW[de.path] = (st.st_mtime_ns, st.st_size, raw)
         except OSError:
             continue
         if not any(n in raw for n in needles):
             continue
-        entry = idx._parse(index / name)
+        entry = idx._parse(de.path, st)
         if entry is None:
             continue
         for path in entry.paths:
             if path in wanted:
-                out[path] = name[: -len(".json")]
+                out[path] = de.name[: -len(".json")]
     return out
 
 

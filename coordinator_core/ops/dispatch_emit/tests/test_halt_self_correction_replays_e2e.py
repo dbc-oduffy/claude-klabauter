@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 
 import pytest
 
@@ -44,6 +45,12 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 if shutil.which("node") is None:
     pytest.skip("node not on PATH", allow_module_level=True)
+
+@pytest.fixture(autouse=True)
+def _land_temp_under_tmp_path(monkeypatch, tmp_path_factory):
+    """A land's clean-overlay mirror resolves under `tempfile.gettempdir()`; keep it out of the session Temp."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path_factory.mktemp("land-temp")))
+
 
 _SIZING = "state/sizings/x.yaml"
 _PLAN = "docs/plans/2026-10-26-replays.md"

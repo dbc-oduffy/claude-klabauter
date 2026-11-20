@@ -231,7 +231,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("grind", "size", "scouts a row and judges its size; absorbed the sizing-assemble op that ran after it"),
     _earns("grind", "triage", "classifies a row's fix verdict"),
     _earns("grind", "fix", "fixes the row"),
-    _earns("grind", "close", "closes the row's record"),
+    _earns("grind", "close", "closes the row's record; folds to dispatch.grind_bookkeep when the close and its archive path are record paths"),
     _earns("grind", "split", "writes a triaged row's items to a file in sub-cap pieces, then splits the row over it"),
     _earns("grind", "verify-agent", "runs the row's tests and reports"),
     _earns("grind", "adjudicate", "the APM adjudicates a held row"),
@@ -241,9 +241,10 @@ REGISTER: tuple[LegDecl, ...] = (
         "arm: the run close, in a `finally` after every stage; rows run in parallel batches so no single row agent "
         "is last, the last agent on a run with post stages is a commit leg the commit guard confines to its own "
         "type, and a throwing or agentless run still needs the sweep; absorbs the run-record op; stays on "
-        "general-purpose because its prompt runs an ordered multi-command chain, not the one command op-relay relays",
+        "general-purpose because its prompt runs an ordered multi-command chain, not the one command op-relay relays; "
+        "skipped when the run did not throw and every committed row was deferred to dispatch.grind_bookkeep",
     ),
-    _floor("grind", "commit", _COMMIT_FLOOR),
+    _floor("grind", "commit", _COMMIT_FLOOR + "; skipped when every queued row was deferred to dispatch.grind_bookkeep"),
     _floor("grind", "review-fix-commit", _COMMIT_FLOOR),
     *_review_legs("grind", prep=_earns("grind", "review:coordinator:review-prep", "multi-step review prep")),
     _earns("reverify", "review:general-purpose", "re-verifies a prior delivery FAIL's unbacked claims at HEAD"),

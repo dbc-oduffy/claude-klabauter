@@ -425,7 +425,7 @@ _RUNNER = "agent_type: coordinator:test-runner\n  "
     [
         (_CENSUS_FM, _ROW_T.format(ck="code-edit", w="[src/a.py]", x="", b="do"),
          "CENSUS/census-unscreenable"),
-        (_FM, _MEMO_T.format(s="docs/x.md"), "SPINE/MemoRowNoReceiptError"),
+        (_FM, _MEMO_T.format(s="docs/x.md"), "SPINE/memo-send-slugless"),
         (_FM, _MEMO_T.format(s=".coordinator-local/memo-outbox/t.md"), "SPINE/MemoRowNoReceiverError"),
         (_FM, _ROW_T.format(ck="bogus-kind", w="[src/a.py]", x="", b="do"), "SPINE/InvalidChangeKindError"),
         (_FM, _ROW_T.format(ck="verification", w="[]", x=_RUNNER, b="Run `python -m pytest tests/`."),

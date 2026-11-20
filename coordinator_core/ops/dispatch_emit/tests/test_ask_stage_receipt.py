@@ -195,6 +195,31 @@ def test_stalled_create_raises_within_deadline_and_late_winner_leaves_no_claim(t
     assert r.claim(tmp_path, "d1") is True
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled stale-claim unlink that must read not-acquired at its deadline")
+def test_stalled_stale_claim_unlink_reads_not_acquired_then_recovers(tmp_path, monkeypatch):
+    import pathlib
+    import threading
+
+    _write_claim(tmp_path, age=r.CLAIM_STALE_SECS + 5)
+    gate = threading.Event()
+    real_unlink = pathlib.Path.unlink
+
+    def slow_unlink(self, *a, **k):
+        if self.name == r.CLAIM_NAME:
+            gate.wait(10)
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", slow_unlink)
+    monkeypatch.setattr(r, "CLAIM_UNLINK_DEADLINE_SECS", 0.2)
+    assert r.claim(tmp_path, "d1") is False
+    gate.set()
+    monkeypatch.undo()
+    deadline = time.monotonic() + 3
+    while (tmp_path / r.CLAIM_NAME).exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert r.claim(tmp_path, "d1") is True
+
+
 def test_handler_answers_a_stalled_claim_with_error(tmp_path, monkeypatch):
     from coordinator_core.ops.dispatch_emit import ask_stage
 

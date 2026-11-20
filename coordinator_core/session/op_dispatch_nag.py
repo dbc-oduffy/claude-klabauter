@@ -17,7 +17,7 @@ THROTTLE_SECONDS = 30
 CHECK_SECONDS = 5  # bounds the git spawns a PreToolUse burst can cost; the nag window is separate
 _STAMP_FILENAME = "op-dispatch-nag.stamp"
 _CHECK_STAMP_FILENAME = "op-dispatch-nag.checked"
-_SUBAGENT_ROLES = ("worker", "reviewer")
+_SUBAGENT_ROLES = ("worker", "reviewer", "workflow-agent")
 _FAMILIES = ("codex", "grok", "agy")
 
 

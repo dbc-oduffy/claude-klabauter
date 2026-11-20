@@ -90,7 +90,7 @@ _TAINT_SPLIT = re.compile(r"\r?\n|;|&&|\|\|")
 _ASSIGN = re.compile(
     r"(?:(?:^|[\s{(])(?:export\s+|local\s+|readonly\s+)?([A-Za-z_]\w*)=(?!=)"
     r"|\$([A-Za-z_]\w*)\s*[+-]?=(?!=))(.*)", re.I)
-# PowerShell foreach ($x in <expr>) and bash `for x in <expr>`.
+# A PowerShell foreach-in loop header and a bash for-in loop header: group 1/3 the loop var, 2/4 its source.
 _LOOP = re.compile(r"\bforeach\s*\(\s*\$(\w+)\s+in\s+(.*)|\bfor\s+(\w+)\s+in\s+(.*)", re.I)
 _VAR_REF = re.compile(r"\$\{?([A-Za-z_]\w*)")
 

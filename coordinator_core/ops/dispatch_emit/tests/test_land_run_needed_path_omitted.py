@@ -72,6 +72,8 @@ def test_duplicate_run_holding_the_callee_refuses_and_leaves_head(product_repo, 
     entry = out["needed_by"][0]
     assert entry["path"] == CALLEE and entry["needed_by"] == [{"importer": CALLER, "name": "f"}], out
     assert entry["holder"], out
+    assert entry["holders"] == [{"kind": "session", "session_id": "dup-run-session"}], out
+    assert "session dup-run-session" in out["error"], out
     assert prod._git(["log", "-1", "--format=%s"], product_repo).strip() == "seed pk"
 
 
@@ -132,6 +134,36 @@ def test_gate_carries_a_halted_runs_withheld_path_and_names_it(product_repo, mon
         root, [CALLER], [], {CALLEE}, reasons={CALLEE: "withheld"}, barred={CALLEE}, advisories=advisories, **kw,
     )
     assert carry == [] and refusal[0]["holder"] == "withheld", (carry, refusal)
+
+
+def test_refusal_names_each_halted_holder_with_its_release_call(product_repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index
+
+    root = product_repo
+    _seed(root)
+    prod._write(root, CALLER, U_NEW)
+    prod._write(root, CALLEE, M_SIGNATURE)
+    entry = halted_withheld_index.RunEntry((CALLEE,), None, {}, (), 0)
+    monkeypatch.setattr(halted_withheld_index, "entries", lambda r, unreadable=None: {"halted-a": entry, "halted-b": entry})
+    monkeypatch.setattr(
+        halted_hold_release, "still_held_by_index", lambda r, held, *a, **k: {} if "halted-b" in held.values() else dict(held),
+    )
+    kw = dict(
+        session_id=prod.SELF, rid=prod.RUN, script_path=prod.SCRIPT, plan_rel=None, run_base=None,
+        minted_before=None, own_run_ids=(prod.RUN, None),
+    )
+
+    carry, refusal = land_run._needed_path_gate(
+        root, [CALLER], [], {CALLEE}, reasons={CALLEE: "peer-held"}, barred={CALLEE}, **kw,
+    )
+
+    assert carry == [] and refusal[0]["holder"] == "peer-held", (carry, refusal)
+    named = [h for h in refusal[0]["holders"] if h["kind"] == "halted-run"]
+    assert [h["run_id"] for h in named] == ["halted-a"], refusal
+    assert named[0]["release"]["op"] == "dispatch.release_halted_path"
+    assert named[0]["release"]["params"]["run_id"] == "halted-a" and named[0]["release"]["params"]["path"] == CALLEE
+    text = land_run._holders_text(refusal[0])
+    assert "halted-a" in text and "dispatch.release_halted_path" in text and "halted-b" not in text, text
 
 
 def test_landing_carries_a_callee_a_halted_run_withholds_with_an_advisory(product_repo, monkeypatch):

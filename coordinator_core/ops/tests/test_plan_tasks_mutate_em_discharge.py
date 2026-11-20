@@ -408,3 +408,76 @@ def test_discharged_row_no_longer_counts_as_open_for_stamp_and_gate(tmp_path):
     assert _open_spine_row_ids(plan) == ["X1"]
     gate = compute_open_spine_row_gate(plan.stem, plan)
     assert [r.id for r in gate.rows] == ["X1"]
+
+
+def _ue_index(tmp_path: Path, states: dict) -> Path:
+    import json
+
+    index = tmp_path / "ue" / "index.json"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text(
+        json.dumps({"tests": [{"fullTestPath": n, "testDisplayName": n, "state": s} for n, s in states.items()]}),
+        encoding="utf-8",
+    )
+    return index
+
+
+def test_ue_report_all_passed_records_discharge_with_report_evidence(tmp_path):
+    repo, plan = _plan(tmp_path)
+    index = _ue_index(tmp_path / "outside", {"Proj.A": "Success", "Proj.B": "Success"})
+    result = _call(repo, plan, ue_report={"index_json": str(index), "tests": ["Proj.A", "Proj.B"]})
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    entry = read_em_discharges(plan)["E1"]
+    assert index.name in entry["evidence"] and "Proj.A" in entry["evidence"] and "Proj.B" in entry["evidence"]
+
+
+def test_ue_report_relative_path_resolves_against_the_worktree(tmp_path):
+    repo, plan = _plan(tmp_path)
+    index = _ue_index(repo, {"Proj.A": "Success"})
+    result = _call(repo, plan, ue_report={"index_json": index.relative_to(repo).as_posix(), "tests": ["Proj.A"]})
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+
+
+@pytest.mark.parametrize("states, tests, named", [
+    ({"Proj.A": "Success"}, ["Proj.A", "Proj.Gone"], "Proj.Gone"),
+    ({"Proj.A": "Fail"}, ["Proj.A"], "Proj.A"),
+])
+def test_ue_report_missing_or_failed_test_is_refused_and_records_nothing(tmp_path, states, tests, named):
+    repo, plan = _plan(tmp_path)
+    index = _ue_index(tmp_path, states)
+    result = _call(repo, plan, ue_report={"index_json": str(index), "tests": tests})
+    assert result["exit_code"] != 0 and named in str(result)
+    assert read_em_discharges(plan) == {}
+
+
+@pytest.mark.parametrize("bad", [
+    "not-a-dict",
+    {"index_json": "", "tests": ["A"]},
+    {"index_json": "x.json", "tests": []},
+    {"index_json": "no/such/index.json", "tests": ["A"]},
+])
+def test_ue_report_malformed_or_unreadable_is_refused(tmp_path, bad):
+    repo, plan = _plan(tmp_path)
+    result = _call(repo, plan, ue_report=bad)
+    assert result["exit_code"] != 0
+    assert read_em_discharges(plan) == {}
+
+
+def test_ue_report_omitting_a_declared_criterion_test_is_refused_and_records_nothing(tmp_path):
+    repo, plan = _plan(tmp_path)
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            "  performer: em\n  disposition: open\n",
+            "  performer: em\n  disposition: open\n"
+            "  test_criterion:\n    kind: ue-automation\n    tests: [Proj.A, Proj.B]\n",
+            1,
+        ),
+        encoding="utf-8",
+        newline="",
+    )
+    index = _ue_index(tmp_path / "outside", {"Proj.A": "Success", "Proj.B": "Success"})
+    refused = _call(repo, plan, ue_report={"index_json": str(index), "tests": ["Proj.A"]})
+    assert refused["exit_code"] != 0 and "Proj.B" in str(refused)
+    assert read_em_discharges(plan) == {}
+    accepted = _call(repo, plan, ue_report={"index_json": str(index), "tests": ["Proj.A", "Proj.B"]})
+    assert accepted["exit_code"] == 0 and accepted["applied"] is True, accepted

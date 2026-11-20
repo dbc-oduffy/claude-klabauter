@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import io
 import os
-import importlib.util
 import subprocess
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -119,7 +120,14 @@ def _unimatrix_tests_never_write_a_real_pair_key(request: pytest.FixtureRequest,
 def _publish_shadow_store_is_per_test(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory):
     """A test never adopts a shadow into the real Temp store: one override in `shadow_store`,
     honoured by a publish module loaded at any time. Teardown drops the process-local store ownership."""
-    from coordinator_core.percolate import shadow_store
+    try:
+        from coordinator_core.percolate import shadow_store
+    except ImportError:
+        # A source checkout still needs the isolation fixture if it ships the publisher.
+        if (Path(__file__).resolve().parents[1] / "publish.py").is_file():
+            raise
+        yield
+        return
 
     monkeypatch.setattr(shadow_store, "ROOT_OVERRIDE", tmp_path_factory.mktemp("publish-shadow-store"))
     yield
@@ -412,13 +420,16 @@ def _plan(
 
 
 def _run(plan: Path, *extra: str) -> CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(_SCRIPT), *extra, str(plan)],
-        capture_output=True,
-        text=True,
-        cwd=plan.parents[2],
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    spec =importlib.util.spec_from_file_location("_plan_spine_check_inproc", _SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.chdir(plan.parents[2]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = module.main([*extra, str(plan)])
+        except SystemExit as exc:
+            code = exc.code if isinstance(exc.code, int) else 1
+    return subprocess.CompletedProcess([str(_SCRIPT), *extra, str(plan)], code, out.getvalue(), err.getvalue())
 
 
 @pytest.fixture

@@ -243,3 +243,14 @@ def test_reader_invocation_composes_settings_home_impl_path(monkeypatch):
     assert invocation[1] == str(
         Path("/tmp/probe-settings-home") / "bin" / "_machine_local.py"
     )
+
+
+def test_help_survives_a_cp1252_default_stdout():
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+    result = subprocess.run(
+        [sys.executable, "-X", "utf8=0", os.path.join(_TEMPLATES_BIN_DIR, "_machine_local.py"), "--help"],
+        capture_output=True, env=env, timeout=30, **no_console_creationflags(),
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert b"UnicodeEncodeError" not in result.stderr
+    assert "usage: machine-local" in result.stdout.decode("utf-8")

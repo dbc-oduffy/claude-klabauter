@@ -1,5 +1,6 @@
-"""A terminal commit that would leave a path the run touched dirty refuses before committing,
-naming the path; a path a live peer holds is never counted as the run's leftover."""
+"""A terminal commit that leaves a path the run touched dirty still lands and records a
+``run-touched-left`` provenance row naming it; a path a live peer holds is never counted as the
+run's leftover."""
 
 from __future__ import annotations
 
@@ -80,7 +81,7 @@ def _unstaged(monkeypatch, path: str, contested: dict | None = None) -> None:
     monkeypatch.setattr(terminal_commit, "_run_owned_dirt", wrapped)
 
 
-def test_a_run_touched_path_left_dirty_refuses_and_names_it(repo, monkeypatch):
+def test_a_run_touched_path_left_dirty_lands_and_records_provenance(repo, monkeypatch):
     (repo / "out" / "a.txt").write_text("a\n", encoding="utf-8")
     (repo / "other").mkdir()
     (repo / "other" / "b.txt").write_text("b\n", encoding="utf-8")
@@ -89,10 +90,11 @@ def test_a_run_touched_path_left_dirty_refuses_and_names_it(repo, monkeypatch):
 
     out = _run(repo, ["out/a.txt", "other/b.txt"])
 
-    assert out["committed"] is False, out
-    assert out["refused"] == "run-touched-left"
-    assert out["run_touched_left"] == ["other/b.txt"]
-    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert out.get("refused") != "run-touched-left", out
+    assert out["committed"] is True, out
+    assert _git(["rev-parse", "HEAD"], repo) != head
+    rows = [r for r in out.get("provenance", ()) if r["reason"] == "run-touched-left"]
+    assert [r["path"] for r in rows] == ["other/b.txt"], out
 
 
 def test_a_peer_contested_touched_path_is_not_a_leftover(repo, monkeypatch):

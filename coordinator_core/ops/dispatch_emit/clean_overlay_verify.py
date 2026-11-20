@@ -6,8 +6,8 @@ The mirror is a `clone --shared` under `temp_layout.coordinator_temp_root(root)`
 `diff-tree` plus `update-index --index-info` and `checkout-index` (`read-tree` re-reads every tree object: seconds) so a verify writes only the paths that differ, and serialised on a per-mirror
 lock. Runs in the workflow verify stage (`python -m coordinator_core.ops.dispatch_emit.clean_overlay_verify
 --run-id <run>`), never inside an engine op: it writes `overlay-verdict.json` beside the run's `measured-rev.json`,
-keyed to the landing set's blob shas and the base sha. `dispatch.land_run` only calls `check_verdict`, a single
-file read. `--export-run -- <argv>` runs a test command in the mirror at HEAD plus the run's declared paths."""
+keyed to the landing set's blob shas and the base sha. `dispatch.land_run` only calls `check_verdict`: a file read, plus one
+`git diff --name-only` when the base advanced. `--export-run -- <argv>` runs a test command in the mirror at HEAD plus the run's declared paths."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
 from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, resolve_targeted_test_python
 from coordinator_core.session.record_homes import home_rel
-from coordinator_core.testing import scoped_pytest
+from coordinator_core.testing import scoped_pytest, spawn_depth
 from coordinator_core.win_portability import no_console_creationflags
 
 VERDICT_FILE = "overlay-verdict.json"
@@ -383,6 +383,26 @@ def failing_ids(output: str) -> tuple:
     FAILED/ERROR line whose remainder is not node-id-shaped (a summary or count line) yields none."""
     found = (m.strip() for m in _FAILED_ID_RE.findall(output))
     return tuple(dict.fromkeys(i for i in found if _node_id_shaped(i)))
+
+
+_SETUP_ERROR_RE = re.compile(r"^_+ ERROR (?:at setup of|collecting) (.+?) _+$", re.MULTILINE)
+_SECTION_END_RE = re.compile(r"^(?:_+ .* _+|={3,} .* ={3,})$", re.MULTILINE)
+_SETUP_HEAD_LINES = 6
+_SETUP_CAUSE_LINES = 6
+
+
+def first_setup_error(output: str) -> str:
+    """The head of the first `ERROR at setup of` or `ERROR collecting` traceback in `output`: its header, its
+    first lines and its `E` cause lines, so a verdict detail cut to the output tail still names the failure
+    that errored every test behind it; `""` when the output holds none."""
+    output = output.replace("\r\n", "\n")
+    start = _SETUP_ERROR_RE.search(output)
+    if start is None:
+        return ""
+    end = _SECTION_END_RE.search(output, start.end())
+    section = output[start.start():end.start() if end else len(output)].strip().splitlines()
+    cause = [ln for ln in section[_SETUP_HEAD_LINES:] if ln.startswith("E ")][:_SETUP_CAUSE_LINES]
+    return "first setup ERROR: " + " | ".join(ln.strip() for ln in (*section[:_SETUP_HEAD_LINES], *cause))[:_OUTPUT_TAIL]
 
 
 LegHook = Callable[[str], ContextManager]
@@ -739,6 +759,17 @@ def _mirror_env(env: dict, dest: Path) -> dict:
     return {**env, "PYTHONPATH": str(dest), "PYTHONDONTWRITEBYTECODE": "1"}
 
 
+def _pytest_env(tmp: Path, dest: Path, selection: Sequence[str]) -> dict:
+    """The mirror env of a pytest child: depth-stamped and per-run tmp. `OSError` naming the refusal when the
+    nesting depth or a selection that collects the calling test forbids the spawn."""
+    refusal = spawn_depth.refusal_for_spawn(os.environ) or spawn_depth.selection_includes_spawner(
+        selection, os.environ, str(dest)
+    )
+    if refusal:
+        raise OSError(refusal)
+    return _mirror_env(spawn_depth.child_env(scoped_pytest.tmp_env(os.environ, tmp)), dest)
+
+
 def run_in_export(root: Path, run_id: str, paths: Sequence[str], argv: Sequence[str]) -> subprocess.CompletedProcess:
     """Run `argv` in the clean export of `paths` (cwd and PYTHONPATH the mirror) under the mirror lock; the lock
     is held across the command. `ExportError` when the export fails; `TimeoutExpired` at `TEST_TIMEOUT_S`."""
@@ -796,7 +827,7 @@ def _base_failing_body(
         run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"{run_id}-base")
         ran = _run(
             _pytest_argv(root, dest, basetemp, ids), dest, None, stall_s=PYTEST_STALL_S,
-            env=_mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest),
+            env=_pytest_env(tmp, dest, ids),
         )
     except (OSError, subprocess.SubprocessError):
         return frozenset()
@@ -996,7 +1027,7 @@ def verify(
             run_seeds = narrow_touched_tests(root, dest, base_sha, sha, seeds, touched)
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, run_id)
             run_dirs.append(run_holder)
-            env = _mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest)
+            env = _pytest_env(tmp, dest, [*run_seeds, *extras])
             shard_note = ""
             shard: Optional[subprocess.CompletedProcess] = None
             with leg("pytest"):
@@ -1088,7 +1119,9 @@ def verify(
                 "pre_existing", f"every failing test also fails at base {str(base_sha)[:12]}: {', '.join(ids)}: {tail}", seeds,
                 failing=ids,
             )
-        return OverlayVerdict("red", f"test collection failed: {tail}" if collected else tail, seeds, failing=ids)
+        setup = first_setup_error(full)
+        body = f"test collection failed: {tail}" if collected else tail
+        return OverlayVerdict("red", f"{setup}; {body}" if setup else body, seeds, failing=ids)
     return OverlayVerdict("inconclusive", f"pytest exit {bad[0].returncode}: {tail}", seeds)
 
 
@@ -1122,14 +1155,24 @@ def name_peer_owners(outcome: OverlayVerdict, measured: dict) -> OverlayVerdict:
     return OverlayVerdict(verdict, f"{'; '.join(notes)}: {outcome.detail}", outcome.seeds, outcome.timed_out, outcome.failing)
 
 
+def keyed_components(measured: dict) -> dict:
+    """What the overlay verdict is bound to, from a `measured_rev` record: `base_sha`, the landing set's
+    path names, and the run's own content per path (`own_blobs` for a peer-split path, else the whole-file
+    blob). A path in `peer_hunks` whose hunks could not be split carries the peer's bytes in its whole-file
+    blob, so it is keyed by name only. Not keyed: peer edits to such a path, and the candidate `sha` (a
+    function of these components)."""
+    blobs, own, peers = (v if isinstance(v, dict) else {} for v in (measured.get("blobs"), measured.get("own_blobs"), measured.get("peer_hunks")))
+    return {
+        "base_sha": measured.get("base_sha"),
+        "paths": sorted(blobs),
+        "own_blobs": {p: own.get(p) or b for p, b in blobs.items() if p in own or p not in peers},
+    }
+
+
 def landing_key(measured: dict) -> str:
-    """Digest of what the overlay verified: the landing set's blob shas plus the base (HEAD) sha and the
-    candidate sha, as recorded by `measured_rev`. A change to any of them changes the key."""
-    blobs = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
-    keyed = {"blobs": blobs, "base_sha": measured.get("base_sha"), "sha": measured.get("sha")}
-    if isinstance(measured.get("own_blobs"), dict) and measured["own_blobs"]:
-        keyed["own_blobs"] = measured["own_blobs"]
-    payload = json.dumps(keyed, sort_keys=True)
+    """Digest of `keyed_components(measured)`: a change to the base sha, the landing set's paths, or the
+    run's own content changes the key; peer churn confined to unsplittable shared paths does not."""
+    payload = json.dumps(keyed_components(measured), sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -1145,6 +1188,7 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
             {
                 "verdict": outcome.verdict, "detail": outcome.detail, "seeds": list(outcome.seeds),
                 "timed_out": outcome.timed_out, "failing_ids": list(outcome.failing), "key": landing_key(measured), "base_sha": measured.get("base_sha"), "sha": measured.get("sha"),
+                "keyed": keyed_components(measured),
             },
             indent=2, sort_keys=True,
         ),
@@ -1175,8 +1219,117 @@ def _touched_left(root: Path, run_id: str, measured: dict) -> list:
     return run_touched_left(touched, frozenset(touched), [*blobs, *removed], {})
 
 
-def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
-    """Read the run's overlay verdict for the `measured` record. One file read, no spawn: "green" or "red"
+def _base_advance_clear(git_root: Path, stored_base: object, current_base: object, watched: set) -> bool:
+    """True when HEAD moved from the verified base to the current one without touching a path the verdict
+    rests on (the landing set or a seed test file). One `git diff --name-only`; any failure is False."""
+    if not (isinstance(stored_base, str) and isinstance(current_base, str) and stored_base and current_base):
+        return False
+    if stored_base == current_base:
+        return True
+    changed = _diff_names(git_root, stored_base, current_base)
+    return changed is not None and not (changed & watched)
+
+
+def _diff_names(git_root: Path, a: object, b: object) -> Optional[set]:
+    """Paths differing between commits `a` and `b` (one `git diff --name-only`); None when unreadable."""
+    if not (isinstance(a, str) and isinstance(b, str) and a and b):
+        return None
+    try:
+        out = run_git(["diff", "--name-only", "-z", a, b], cwd=str(git_root))
+    except OSError:
+        return None
+    return None if out.returncode else set(filter(None, out.stdout.split("\0")))
+
+
+def legacy_landing_key(measured: dict) -> str:
+    """The digest verdicts carried before they recorded `keyed` components: whole-file blobs, base sha and
+    candidate sha (plus `own_blobs` when present). Used only to prove a stored `measured-rev.json` is the
+    record a legacy verdict was keyed to."""
+    blobs = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
+    keyed = {"blobs": blobs, "base_sha": measured.get("base_sha"), "sha": measured.get("sha")}
+    if isinstance(measured.get("own_blobs"), dict) and measured["own_blobs"]:
+        keyed["own_blobs"] = measured["own_blobs"]
+    return hashlib.sha256(json.dumps(keyed, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _run_landed_blobs(record_dir: Path) -> dict:
+    """`{path: raw blob sha}` of the run's own latest bytes per path: `kept.json` chunk blobs then
+    post-checkpoint blobs (later wins), then the halt's `evicted.json` blobs for paths neither recorded."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    kept = kept_work.read(record_dir)
+    found: dict = {}
+    for recorded in [*(e.get("paths") for e in kept["chunks"].values() if isinstance(e, dict)), kept[kept_work.POST_CHECKPOINT_KEY]]:
+        for rel, blob in (recorded.items() if isinstance(recorded, dict) else ()):
+            if isinstance(blob, str) and blob:
+                found[rel] = blob
+    try:
+        evicted = json.loads((record_dir / "evicted.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        evicted = {}
+    for rel, entry in (evicted.items() if isinstance(evicted, dict) else ()):
+        if rel not in found and isinstance(entry, dict) and isinstance(entry.get("blob"), str):
+            found[rel] = entry["blob"]
+    return found
+
+
+def _same_blob_content(git_root: Path, a: object, b: object) -> bool:
+    """True when blobs `a` and `b` are one sha, or hold the same bytes up to CRLF/LF (a kept blob is the
+    raw write, a verified blob the checked-in form). Reads the object store in process; any unreadable
+    blob is False."""
+    if not (isinstance(a, str) and isinstance(b, str) and a and b):
+        return False
+    if a == b:
+        return True
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+
+    try:
+        gitdir = resolve_git_common_dir(git_root)
+        objs = [read_object(gitdir, sha) for sha in (a, b)]
+    except (OSError, ValueError):
+        return False
+    if any(o is None or o[0] != "blob" for o in objs):
+        return False
+    return objs[0][1].replace(b"\r\n", b"\n") == objs[1][1].replace(b"\r\n", b"\n")
+
+
+def _legacy_clear(root: Path, git_root: Path, run_id: str, data: dict, measured: dict) -> bool:
+    """True when a legacy verdict (no recorded components, so unkeyed) still holds for the run's declared
+    paths. The verified blobs are the stored `measured-rev.json`'s, trusted only while it hashes to the
+    verdict's `key`. Each declared path passes when its current blob is the verified one, or when the run's
+    own landed bytes (`_run_landed_blobs`, compared in checkin form) are the verified content, whatever
+    peer hunks the current worktree file carries; a path with no verified blob or no recorded landed
+    bytes does not (unknown is not own). Paths the run never declared are never read. Zero spawns."""
+    record = measured_rev_record_path(root, run_id)
+    try:
+        stored = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    declared = stored.get("paths") if isinstance(stored, dict) else None
+    if not isinstance(declared, list) or legacy_landing_key(stored) != data.get("key"):
+        return False
+    verified = stored.get("blobs") if isinstance(stored.get("blobs"), dict) else {}
+    now, own = (v if isinstance(v, dict) else {} for v in (measured.get("blobs"), measured.get("own_blobs")))
+    landed = None
+    for rel in declared:
+        want = verified.get(rel)
+        if not isinstance(want, str) or not want:
+            return False
+        if (own.get(rel) or now.get(rel)) == want:
+            continue
+        if landed is None:
+            landed = _run_landed_blobs(record.parent)
+        if not _same_blob_content(git_root, landed.get(rel), want):
+            return False
+    return True
+
+
+def check_verdict(root: Path, run_id: str, measured: dict, git_root: Optional[Path] = None) -> OverlayVerdict:
+    """Read the run's overlay verdict for the `measured` record. File reads, plus one `git diff --name-only`
+    (in `git_root`, default `root`) only when the base sha advanced: a base advance that touches neither the
+    landing set nor a seed test file keeps the verdict. A legacy verdict (no recorded components, unkeyed)
+    is checked by `_legacy_clear` against the run's declared paths only, with no spawn. "green" or "red"
     (or "inconclusive", which land_run refuses unless `timed_out` is True, / "pre_existing", which it lands with an advisory) when a verdict
     keyed to exactly this landing set and base sha exists; otherwise "missing" (no file or an unreadable one,
     which land_run lands with an advisory) or
@@ -1196,8 +1349,23 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     if not isinstance(data, dict):
         return OverlayVerdict("missing", "overlay verdict unreadable: not an object")
     seeds = tuple(data.get("seeds") or ())
-    if data.get("key") != landing_key(measured):
-        moved = "base sha" if data.get("base_sha") != measured.get("base_sha") else "landing set blobs"
+    current = keyed_components(measured)
+    stored = data.get("keyed")
+    moved = None
+    if not isinstance(stored, dict):
+        if not _legacy_clear(root, git_root or root, run_id, data, measured):
+            moved = "keying (no recorded components)"
+    elif stored.get("paths") != current["paths"]:
+        moved = "landing set paths"
+    elif stored.get("own_blobs") != current["own_blobs"]:
+        moved = "landing set blobs"
+    elif stored.get("base_sha") != current["base_sha"]:
+        watched = set(current["paths"]) | {str(s).split("::", 1)[0] for s in seeds}
+        if not _base_advance_clear(git_root or root, stored.get("base_sha"), current["base_sha"], watched):
+            moved = "base sha"
+    elif data.get("key") != landing_key(measured):
+        moved = "landing set blobs"
+    if moved:
         return OverlayVerdict("mismatch", f"the overlay verdict was keyed to a different {moved}", seeds)
     verdict = data.get("verdict")
     if verdict == "inconclusive":
@@ -1225,18 +1393,54 @@ def _inflight_path(root: Path, run_id: str) -> Path:
     return verdict_path(root, run_id).with_name(INFLIGHT_FILE)
 
 
+#: Seconds a marker may carry no child pid before it is read as an unstarted child's: the child
+#: records its pid as its first act, so a pidless marker past this window never had a child.
+INFLIGHT_START_GRACE_S = 20.0
+
+
+def _record_child_pid(root: Path, run_id: str) -> None:
+    """The detached child writes its own pid into the claimed marker; a marker it no longer finds
+    (released or replaced) is not recreated."""
+    path = _inflight_path(root, run_id)
+    try:
+        if path.is_file():
+            path.write_text(str(os.getpid()), encoding="ascii")
+    except OSError:
+        pass
+
+
+def _inflight_held(path: Path) -> bool:
+    """True when the marker proves a child that is running or still inside its start grace: a recorded
+    pid that is alive, or no pid yet and younger than `INFLIGHT_START_GRACE_S`. A dead pid, a pidless
+    marker past the grace, and any marker older than `INFLIGHT_TTL_S` (pid reuse bound) are not held."""
+    age = time.time() - path.stat().st_mtime
+    if age >= INFLIGHT_TTL_S:
+        return False
+    try:
+        pid = int(path.read_text(encoding="ascii").strip() or 0)
+    except FileNotFoundError:
+        raise
+    except (OSError, ValueError):
+        pid = 0
+    if pid <= 0:
+        return age < INFLIGHT_START_GRACE_S
+    from coordinator_core.group_em.session_registry import pid_alive
+
+    return pid_alive(pid)
+
+
 def _claim_inflight(root: Path, run_id: str) -> bool:
-    """Create the run's in-flight marker exclusively: False when a detached overlay younger than
-    `INFLIGHT_TTL_S` already holds it (a marker older than that is a dead child's and is replaced)."""
+    """Create the run's in-flight marker exclusively: False when a detached overlay that is provably
+    alive (`_inflight_held`) already holds it; a dead or never-started child's marker is replaced."""
     path = _inflight_path(root, run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     for _ in range(2):
         try:
-            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
             return True
         except FileExistsError:
             try:
-                if time.time() - path.stat().st_mtime < INFLIGHT_TTL_S:
+                if _inflight_held(path):
                     return False
                 path.unlink()
             except FileNotFoundError:
@@ -1256,7 +1460,7 @@ def _release_inflight(root: Path, run_id: str) -> None:
 
 
 def reverify_on_mismatch(
-    root: Path, run_id: str, measured: dict, stale: OverlayVerdict, *, spawn=None,
+    root: Path, run_id: str, measured: dict, stale: OverlayVerdict, *, spawn=None, git_root: Optional[Path] = None,
 ) -> OverlayVerdict:
     """Re-run the overlay for a "mismatch" `stale` verdict over the current `measured` candidate. Reads
     the verdict file once: a green, red or pre_existing verdict keyed to this landing is returned. With none,
@@ -1264,8 +1468,9 @@ def reverify_on_mismatch(
     engine op) and the landing parks by raising `land_deadline.LandDeadlineExceeded(REVERIFY_STEP,
     step=True)`; the op never waits on the child. Any other `stale`, no recorded seeds, no candidate, an
     inconclusive fresh verdict or a failed launch returns `stale` unchanged. An `overlay-inflight` marker
-    (claimed before the launch, released by the child) keeps a re-sent landing from launching a second
-    overlay while one runs: it parks without spawning."""
+    (claimed before the launch, pid-stamped and released by the child) keeps a re-sent landing from
+    launching a second overlay while a live one runs: it parks without spawning. A marker whose pid is
+    dead, or that carries none past `INFLIGHT_START_GRACE_S`, is an unstarted child's and is replaced."""
     if stale.verdict != "mismatch" or not stale.seeds or overlay_candidate(measured) is None:
         return stale
     if spawn is None:
@@ -1275,7 +1480,7 @@ def reverify_on_mismatch(
     engine = Path(__file__).resolve().parents[3]
     argv = ["--run-id", run_id, "--repo-root", str(root)]
     with land_deadline.step(REVERIFY_STEP, REVERIFY_STEP_SECS):
-        fresh = check_verdict(root, run_id, measured)
+        fresh = check_verdict(root, run_id, measured, git_root)
         if fresh.verdict in ("green", "red", "pre_existing", ENV_DEFECT):
             return fresh
         if fresh.verdict == "inconclusive":
@@ -1292,6 +1497,18 @@ def reverify_on_mismatch(
 def remedy_call(run_id: Optional[str], root: Optional[Path] = None) -> str:
     py = engine_python_command(root) if root is not None else Path(sys.executable).as_posix()
     return f"{py} -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id {run_id or '<run_id>'} --repo-root <repo_root>"
+
+
+def _manifest_declared_paths(manifest: Path) -> Optional[list]:
+    """The run manifest's `review_declared_paths` list, or None when the manifest is unreadable or carries no list."""
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    declared = data.get("review_declared_paths") if isinstance(data, dict) else None
+    if not isinstance(declared, list) or not all(isinstance(p, str) for p in declared):
+        return None
+    return declared
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -1322,11 +1539,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if command and not args.export_run:
         parser.error("a command after `--` needs --export-run")
     root = Path(args.repo_root).resolve()
+    record = measured_rev_record_path(root, args.run_id)
     try:
-        measured = json.loads(measured_rev_record_path(root, args.run_id).read_text(encoding="utf-8"))
+        measured = json.loads(record.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        print(f"no readable measured-rev record for {args.run_id}: {exc}", file=sys.stderr)
-        return 2
+        declared = _manifest_declared_paths(record.with_name("manifest.json")) if args.export_run else None
+        if declared is None:
+            print(
+                f"no readable measured-rev record ({record}) and no manifest review_declared_paths "
+                f"({record.with_name('manifest.json')}) for {args.run_id}: {exc}", file=sys.stderr,
+            )
+            return 2
+        measured = {"paths": declared}
     paths = measured.get("paths") or []
     if args.export_run:
         try:
@@ -1347,6 +1571,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if sha is None:
         print("measured-rev record carries no candidate sha", file=sys.stderr)
         return 2
+    _record_child_pid(root, args.run_id)
     try:
         outcome = name_peer_owners(
             verify(

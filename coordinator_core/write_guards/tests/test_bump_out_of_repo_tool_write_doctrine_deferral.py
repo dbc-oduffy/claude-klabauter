@@ -5,6 +5,8 @@ path still denies exactly as before.
 
 from __future__ import annotations
 
+import tempfile
+
 import pytest
 
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
@@ -54,30 +56,43 @@ def test_doctrine_path_gets_none_for_every_caller(world, monkeypatch: pytest.Mon
     assert guard.check(_payload(world, target, agent_id=agent_id)) is None
 
 
+def test_seeding_leaves_nothing_in_the_session_temp(world) -> None:
+    """The seed root must not sit under the session Temp, or session finish prints [forced-exit]."""
+    from coordinator_core.tests import git_seed
+
+    session_temp = Path(tempfile.gettempdir()).resolve()
+    assert session_temp not in git_seed._seed_root().resolve().parents
+    assert not (session_temp / "coordinator" / "_fleet").exists()
+
+
+def _assert_advisory_allow(out) -> None:
+    """The bump is not a deny_registry irreversible class, so the level policy
+    resolves its deny to an advisory allow."""
+    assert out is not None
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: ")
+
+
 def test_deferral_is_what_clears_the_doctrine_path(world, monkeypatch: pytest.MonkeyPatch) -> None:
     target = _doctrine_paths(world["doe"])[0]
     monkeypatch.setattr(guard, "out_of_repo_write_blocked", lambda: True)
     assert guard.check(_payload(world, target)) is None
     monkeypatch.setattr(guard, "doctrine_root_of", lambda _p: None)
-    refused = guard.check(_payload(world, target))
-    assert refused is not None
-    assert refused["hookSpecificOutput"]["permissionDecision"] == "deny"
+    _assert_advisory_allow(guard.check(_payload(world, target)))
 
 
 @pytest.mark.parametrize("repo", ["doe", "peer"])
-def test_non_doctrine_paths_deny_exactly_as_before(world, monkeypatch: pytest.MonkeyPatch, repo) -> None:
+def test_non_doctrine_paths_advise_exactly_as_before(world, monkeypatch: pytest.MonkeyPatch, repo) -> None:
     monkeypatch.setattr(guard, "out_of_repo_write_blocked", lambda: True)
     target = world[repo] / "state" / "x.md"
     now = guard.check(_payload(world, target))
-    assert now is not None
-    assert now["hookSpecificOutput"]["permissionDecision"] == "deny"
+    _assert_advisory_allow(now)
     monkeypatch.setattr(guard, "doctrine_root_of", lambda _p: None)
     assert guard.check(_payload(world, target)) == now
 
 
-def test_engine_plane_path_still_denies(world, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_engine_plane_path_still_advises(world, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "out_of_repo_write_blocked", lambda: True)
     target = world["peer"] / "coordinator" / "skills" / "group-em" / "SKILL.md"
-    refused = guard.check(_payload(world, target))
-    assert refused is not None
-    assert refused["hookSpecificOutput"]["permissionDecision"] == "deny"
+    _assert_advisory_allow(guard.check(_payload(world, target)))

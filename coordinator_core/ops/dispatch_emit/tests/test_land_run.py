@@ -575,3 +575,17 @@ def test_prior_pass_sessions_walks_the_resumed_chain_only_when_the_run_has_a_led
     (ledger / "run.json").write_text("{}", encoding="utf-8")
     land_run._prior_pass_sessions(tmp_path, "run-ledger")
     assert walked == ["run-ledger"]
+
+
+def test_a_post_commit_gap_downgrades_the_reply_but_never_rewrites_the_committed_note(monkeypatch, tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_ledger as _tcl
+    from coordinator_core.ops.dispatch_emit.tests import test_land_run_subject_rows_declared_writes_land as _fx
+
+    rewrites: list = []
+    monkeypatch.setattr(_tcl, "rewrite_note_verdicts", lambda *a, **k: rewrites.append(a))
+    root = _fx.repo.__wrapped__(tmp_path, monkeypatch)
+    _fx._left_dirty(monkeypatch, _fx.CODE_THREE)
+    out = _fx._land(root, checkpoint=False, held="", monkeypatch=monkeypatch, manifest_extra=_fx.CODE_THREE)
+
+    assert out["ledger_partial"] == {"R1": [_fx.CODE_THREE]}, out
+    assert rewrites == [], rewrites

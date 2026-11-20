@@ -94,7 +94,6 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -301,6 +300,8 @@ def resolve_machine_local_cli() -> Optional[str]:
     only `detect_hardware` and `repo_bootstrap` carried the full ladder. Any
     new caller gets the whole ladder by construction.
     """
+    import shutil
+
     found = shutil.which("machine-local")
     if found:
         return found

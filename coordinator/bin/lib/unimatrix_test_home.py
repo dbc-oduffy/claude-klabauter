@@ -93,6 +93,15 @@ def refuse_real(kind: str, value, env=None) -> None:
     raise ValueError(f"unknown test-home kind {kind!r}; expected one of {KINDS}")
 
 
+def _read_bytes_shared(path: Path) -> bytes:
+    """Registry bytes without blocking a concurrent replace; plain read only where no engine is importable (a mirror)."""
+    try:
+        from coordinator_core.shared_read import read_bytes_shared
+    except ImportError:
+        return path.read_bytes()
+    return read_bytes_shared(path)
+
+
 def isolated_settings_home(tmp_path_factory):
     """Generator for an autouse pytest fixture: a private settings home that reaches nothing real.
 
@@ -113,7 +122,7 @@ def isolated_settings_home(tmp_path_factory):
         src = live / "machine-local" / name
         if src.is_file():
             (iso / "machine-local").mkdir(exist_ok=True)
-            data = src.read_bytes()
+            data = _read_bytes_shared(src)
             if name == "registry.local.toml":
                 data = strip_unimatrix_keys(data.decode("utf-8")).encode("utf-8")
             (iso / "machine-local" / name).write_bytes(data)

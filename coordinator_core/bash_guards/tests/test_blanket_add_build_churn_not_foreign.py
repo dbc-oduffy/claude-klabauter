@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
+from coordinator_core.git import repo_root
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.guard_messages.testing import envelope_of
 from pathlib import Path
@@ -32,6 +33,7 @@ def _wire(monkeypatch, root, paths) -> None:
         raise AssertionError("unexpected git invocation: %r" % (args,))
 
     monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
+    monkeypatch.setattr(repo_root, "show_toplevel", lambda cwd=None: root)
     from coordinator_core.bash_guards import _dc_blanket_add
 
     monkeypatch.setattr(_dc_blanket_add, "_bt_no_peer_can_share_the_index", lambda *a: False)

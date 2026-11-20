@@ -108,6 +108,11 @@ def test_advisory_band_deny_reaches_the_caller(monkeypatch) -> None:
     monkeypatch.setattr(
         _dc_commit, "_bt_compound_add_bare_commit", lambda *a, **k: True
     )
+    # The real checkout's branch must not decide this: on `main` the main-commit advisory
+    # would be the envelope delivered instead of the verdict under test.
+    from coordinator_core.git import main_commit_policy
+
+    monkeypatch.setattr(main_commit_policy, "main_commit_refusal", lambda *a, **k: None)
     # A rewritable compound commit is now scoped to its own `git add` and allowed; the deny branch
     # is the unrewritable one, and its delivery is what this pins.
     from coordinator_core.bash_guards import commit_scope_rewrite
@@ -173,7 +178,9 @@ def test_unarmed_budget_never_declines_a_probe(monkeypatch) -> None:
 
 
 def test_dispatch_finishes_and_delivers_when_git_is_slow(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_GIT_PROBE_BUDGET_SECONDS", 0.2)
+    # Below one slow spawn, so the first probe exhausts the budget and the next is declined:
+    # the chain's probe count is not what this pins (blanket-add root resolution spawns none).
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_GIT_PROBE_BUDGET_SECONDS", 0.1)
     spawned = _install_slow_git(monkeypatch, per_spawn_seconds=0.15)
 
     out = dispatch.evaluate_payload_json(_payload(_SWEEP_SHAPE_CMD))

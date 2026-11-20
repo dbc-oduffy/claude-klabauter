@@ -9,16 +9,20 @@ owns several members' assignments and ends with one `<ID>: <STATUS> <one line>` 
 Constants:
 - `UNITS_PER_AGENT` 2: three scouts over six questions, so a group's wall clock is two small units.
 - `RUNTIME_GROUP_MAX_ITEMS` 8: items one agent may own in a run-time list before its prompt context
-  outweighs one ~31k startup; a longer list is chunked (`RUNTIME_GROUP_JS`).
+  outweighs one `STARTUP_TOKENS_PER_AGENT` startup; a longer list is chunked (`RUNTIME_GROUP_JS`).
 - `GROUP_MIN_UNITS` 3: under three units there is nothing to batch.
 - `LARGE_UNIT_BYTES` 16000 (about 4k tokens of prompt): a unit past this does enough work on its
   own to amortise its startup and stays solo.
 - `GROUP_CONTEXT_CAP_BYTES` 30000 (about 7.5k tokens; a row brief's fixed prompt is ~12k bytes, so a
   pair must clear 2x that): a pair of mid-size units past this stays split
   so one agent's prompt context stays well under its own startup load.
-- `STARTUP_TOKENS_PER_AGENT` 31000: median of the first assistant usage record (input +
-  cache_creation + cache_read) over 23 local workflow-subagent transcripts measured 2026-10-19
-  (n=23, min 14.8k, p10 24.0k, p90 50.1k, max 50.8k). A calibrated literal, never read at emit time.
+- `STARTUP_TOKENS_PER_AGENT` 54000: tokens per agent call of the post-a722ba grind receipt, run
+  20261118T182350Z (example-market-data-repo one-row lessons grind, triage + verify with a scripted
+  close): 107,967 tokens over 2 agent calls = 53,984 per call (n=1 run, 2 calls; no other
+  post-a722ba run record exists in this repo's `state/queue-grind/*/runs`). It supersedes the
+  2026-10-19 first-usage median of 31,000 (n=23 transcripts, p10 24.0k, p90 50.1k, max 50.8k),
+  whose startup-only reading undercounted a call's work. A calibrated literal, never read at
+  emit time; recalibrate when a second post-a722ba record lands.
 
 Imports stay stdlib plus `_js_string_literal`; no composer, subprocess or path read.
 """
@@ -38,7 +42,7 @@ RUNTIME_GROUP_MAX_ITEMS = 8
 GROUP_MIN_UNITS = 3
 LARGE_UNIT_BYTES = 16_000
 GROUP_CONTEXT_CAP_BYTES = 30_000
-STARTUP_TOKENS_PER_AGENT = 31_000
+STARTUP_TOKENS_PER_AGENT = 54_000
 
 BASES = ("exact", "lower-bound", "expected")
 

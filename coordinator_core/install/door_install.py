@@ -141,7 +141,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Iterable, NamedTuple, Optional
+from typing import Callable, Iterable, NamedTuple, Optional
 
 from coordinator_core._settings_home import FORBID_REAL_SETTINGS_HOME_ENV
 from coordinator_core.warm.door import build as door_build
@@ -959,7 +959,102 @@ def _install_windowless_image(bin_dst: Path, image: Path, provenance: Path) -> N
         shutil.copy2(provenance, bin_dst / (WINDOWLESS_IMAGE_NAME + ".provenance.json"))
 
 
-def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) -> Path:
+LaunchProbe = Callable[[Path], "tuple[bool, str]"]
+
+
+def _resolve_launch_probe() -> Optional[LaunchProbe]:
+    """The install-time launch probe, or None while none is installed in this
+    tree. Contract: `probe(image) -> (ok, detail)`; never raises on a blocked
+    launch (WinError 4551)."""
+    import importlib
+
+    try:
+        module = importlib.import_module("coordinator_core.install.door_launch_probe")
+    except ImportError:
+        return None
+    return getattr(module, "probe_launch", None)
+
+
+#: Machine-local key naming the Windows forwarder route the installer chose.
+FORWARDER_ROUTE_KEY = "coordinator.forwarder_route"
+ROUTE_PY = "py"
+ROUTE_EXE = "exe"
+
+
+class DoorRouteDeclined(DoorInstallError):
+    """`install_door` placed no native door: the route is `py`, or the launch
+    probe saw a Smart App Control block. The Python shim pair stays the bare
+    name; callers degrade the name onto it without treating this as a failure."""
+
+
+def read_forwarder_route() -> Optional[str]:
+    """The machine-local `coordinator.forwarder_route` value, or None when unset
+    or unreadable. In-process read first; never raises."""
+    try:
+        from coordinator_core import machine_local_spawn
+
+        value, ok = machine_local_spawn.get(machine_local_spawn.kernel_path(), FORWARDER_ROUTE_KEY)
+    except Exception:  # noqa: BLE001 -- an unreadable key reads as unset
+        return None
+    if not ok or not isinstance(value, str):
+        return None
+    return value.strip().lower() or None
+
+
+def retire_native_images(bin_dst: Path, names: "Iterable[str]") -> "list[Path]":
+    """Takes each `<name>.exe` at `bin_dst` out of PATHEXT's way. An image a
+    running process maps cannot be unlinked, so it is renamed to a `.stale-`
+    sibling `_sweep_displaced_images` reaps. Non-raising; returns what moved."""
+    gone: "list[Path]" = []
+    for name in names:
+        image = Path(bin_dst) / f"{name}.exe"
+        if not image.exists():
+            continue
+        try:
+            image.unlink()
+        except OSError:
+            try:
+                os.replace(image, image.with_name(f"{image.name}.stale-{os.getpid()}-{int(time.time())}"))
+            except OSError:
+                print(f"[door-install] could not retire native image {image}", file=sys.stderr)
+                continue
+        gone.append(image)
+    return gone
+
+
+def _decline_native_door(bin_dst: Path, why: str, *, degrade: bool) -> "DoorRouteDeclined":
+    """Leaves the Python shim as the bare name: retires any door image, its
+    provenance and engine-root sidecar, re-emits a missing shim, and returns
+    the exception for the caller to raise. `degrade` records the Smart App
+    Control case in the install degrade sink; a chosen `py` route is not one."""
+    bin_dst = Path(bin_dst)
+    retire_native_images(bin_dst, [BARE_FORWARDER_NAME, Path(WINDOWLESS_IMAGE_NAME).stem])
+    for leftover in (
+        installed_provenance_path(bin_dst),
+        bin_dst / (WINDOWLESS_IMAGE_NAME + ".provenance.json"),
+        bin_dst / door_build.SIDECAR_FILENAME,
+    ):
+        leftover.unlink(missing_ok=True)
+    try:
+        from coordinator_core.install.door_uninstall import _reemit_fallback_forwarder
+
+        _reemit_fallback_forwarder(bin_dst)
+    except Exception as exc:  # noqa: BLE001 -- the shim is best-effort here, the decline stands
+        print(f"[door-install] could not re-emit the Python shim at {bin_dst}: {exc!r}", file=sys.stderr)
+    exc = DoorRouteDeclined(f"door_install: native door not placed -- {why}")
+    if degrade:
+        record_install_door_degrade(BARE_FORWARDER_NAME, exc)
+    return exc
+
+
+def install_door(
+    bin_dst: Path,
+    engine_root: Path,
+    *,
+    check_only: bool = False,
+    launch_probe: Optional[LaunchProbe] = None,
+    forwarder_route: Optional[str] = None,
+) -> Path:
     """Installs the door at `bin_dst / DOOR_INSTALLED_NAME` plus its
     engine-root sidecar. Prefers the committed prebuilt binary (see
     module docstring); falls back to compiling from source only when no
@@ -990,6 +1085,12 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     `install_named_forwarder` leave behind when a displaced image was still
     mapped at the moment they tried to clean up after themselves. Never run
     on the `check_only` path: that flag's contract is to mutate nothing.
+
+    On Windows, `forwarder_route` (default: machine-local
+    `coordinator.forwarder_route`) `py` places no native image at all; any
+    other value probes the chosen image once before placing it. Either a `py`
+    route or a Smart App Control block raises `DoorRouteDeclined` with the
+    Python shim left as the bare name.
 
     Returns the path to the installed (or verified) executable.
     """
@@ -1035,6 +1136,38 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     # one, so the two install-time door writers can never disagree on which
     # builder POSIX gets.
     if sys.platform == "win32":
+        route = (forwarder_route if forwarder_route is not None else read_forwarder_route()) or ""
+        if route.strip().lower() == ROUTE_PY:
+            raise _decline_native_door(
+                bin_dst, f"{FORWARDER_ROUTE_KEY}={ROUTE_PY}; the Python shim stays the bare name", degrade=False
+            )
+
+        probe_verdict: "list[tuple[bool, str]]" = []
+
+        def _gate_on_launch(image: Path) -> None:
+            """Probes the first image offered for the bare name, once per install;
+            a Smart App Control block declines the native door."""
+            if not probe_verdict:
+                probe = launch_probe or _resolve_launch_probe()
+                if probe is None:
+                    probe_verdict.append((True, "no launch probe"))
+                else:
+                    try:
+                        probe_verdict.append(tuple(probe(image)))
+                    except Exception as exc:  # noqa: BLE001 -- a probe fault never aborts install
+                        probe_verdict.append((True, f"probe raised {exc!r}"))
+            ok, detail = probe_verdict[0]
+            if ok:
+                return
+            from coordinator_core.install.door_launch_probe import SAC_DIAGNOSIS
+
+            if not detail.startswith(SAC_DIAGNOSIS):
+                return
+            print(f"[door-install] {SAC_DIAGNOSIS}", file=sys.stderr)
+            raise _decline_native_door(
+                bin_dst, f"launch probe saw a Smart App Control block ({detail})", degrade=True
+            )
+
         # SELF-HEAL ON DRIFT (incident: the committed door.exe sat 11 days
         # behind its sources -- door.c etc changed on POSIX/cloud boxes that
         # cannot compile it, and every Windows box installed the stale prebuilt
@@ -1068,6 +1201,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
                     "and its provenance sidecar.",
                     file=sys.stderr,
                 )
+                _gate_on_launch(_PREBUILT_DOOR_EXE)
                 _replace_possibly_running_image(_PREBUILT_DOOR_EXE, dest_exe)
                 print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
                 shutil.copy2(_PREBUILT_PROVENANCE, dest_provenance)
@@ -1078,6 +1212,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
                 with managed_temp_dir("door-build-") as tmp:
                     fresh = tmp / "door.exe"
                     door_build.build(engine_root, output=fresh)
+                    _gate_on_launch(fresh)
                     _replace_possibly_running_image(fresh, dest_exe)
                     shutil.copy2(fresh.parent / (fresh.name + ".provenance.json"), dest_provenance)
                     _install_windowless_image(
@@ -1090,6 +1225,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
                     f"({', '.join(drifted)}) -- compiled fresh at {dest_exe} instead"
                 )
         elif _PREBUILT_DOOR_EXE.exists():
+            _gate_on_launch(_PREBUILT_DOOR_EXE)
             _replace_possibly_running_image(_PREBUILT_DOOR_EXE, dest_exe)
             print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
             _install_windowless_image(bin_dst, _PREBUILT_WINDOWLESS_EXE, _WINDOWLESS_PREBUILT_PROVENANCE)
@@ -1115,6 +1251,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
                     pass
         else:
             door_build.build(engine_root, output=dest_exe)
+            _gate_on_launch(dest_exe)
             print(f"[door-install] no prebuilt found -- compiled fresh at {dest_exe}")
     elif verify_installed_provenance(bin_dst).status == "ok":
         # A CURRENT POSIX DOOR IS NOT REBUILT, BECAUSE THE POSIX BUILD IS NOT
@@ -2032,6 +2169,9 @@ def main(argv: Optional[list] = None) -> int:
 
     try:
         dest = install_door(args.bin_dst, args.engine_root, check_only=args.check_only)
+    except DoorRouteDeclined as exc:
+        print(f"[door-install] {exc}")
+        return 0
     except DoorInstallError as exc:
         print(f"[door-install] {exc}", file=sys.stderr)
         return 1

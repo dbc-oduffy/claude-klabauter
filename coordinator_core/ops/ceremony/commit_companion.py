@@ -13,7 +13,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Callable, Collection, Iterable, Iterator, List, Mapping, Optional, Sequence
 
-from coordinator_core.git import git_index
+from coordinator_core.git import call_io_scope, git_index
 from coordinator_core.session.claim_index import _normalize_key
 
 #: Resolver ``candidates -> claimed subset`` (``None`` = contest unknown). Set by a caller that
@@ -45,7 +45,9 @@ def _differs_from_index(path: Path, entry: git_index.IndexIdentity) -> bool:
         and st.st_mtime_ns % 1_000_000_000 == entry.mtime_nsec
     ):
         return False
-    data = path.read_bytes()
+    data = call_io_scope.read_bytes(path)  # one read per file per scope; absent -> the path was stat'd a moment ago
+    if data is None:
+        raise FileNotFoundError(str(path))
     if _blob_sha(data) == entry.sha:
         return False
     # core.autocrlf=true (Windows default) indexes the LF form of a CRLF working file; an

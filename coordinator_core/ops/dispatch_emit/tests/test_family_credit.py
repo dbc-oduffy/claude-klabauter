@@ -1,9 +1,8 @@
 """A family-stage row's declared writes are credited at checkpoint from its all-OK return, only where the
-path changed since the row started.
+path changed since the row started and the vendor CLI's own invocation record shows it authored the change.
 
-A family stage (agy, codex, grok) writes through its vendor CLI inside the runner's Bash call, so the
-Write/Edit print hook never prints those writes and `checkpoint_own_blobs` withheld every one
-(run ask-20261114T133823-7a3cdc: evidence.md withheld, nothing landed).
+A family stage (agy, codex, grok) writes through its vendor CLI, so the Write/Edit print hook never
+prints those writes and `checkpoint_own_blobs` withheld every one.
 """
 
 from __future__ import annotations
@@ -15,7 +14,9 @@ import pytest
 
 from coordinator_core.git import checkpoint_hunks
 from coordinator_core.ops.dispatch_emit import family_credit, row_returns
+from coordinator_core.ops.dispatch_emit import family_invoke_record as invocation_record
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from coordinator_core.ops.dispatch_emit.write_baseline import fingerprint
 
 pytestmark = pytest.mark.complete
 
@@ -43,11 +44,77 @@ def _write(root: Path, rel: str, text: str) -> None:
     (root / rel).write_text(text, encoding="utf-8")
 
 
+def _invoke(root: Path, paths: list[str], text: str, *, exit_code: int = 0, stage: str = "write",
+            ended: str = "2026-11-18T10:00:00Z", write: bool = True) -> None:
+    """Run a fake vendor CLI: fingerprint, write ``text`` into each path, fingerprint, store the record."""
+    pre = {p: fingerprint(root, p) for p in paths}
+    if write:
+        for p in paths:
+            _write(root, p, text)
+    post = {p: fingerprint(root, p) for p in paths}
+    rp = invocation_record.record_path(root, RUN, "LR1", stage)
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text(json.dumps({"family": "agy", "stage": stage, "exit_code": exit_code, "ended_at": ended,
+                              "pre": pre, "post": post, "error": None}), encoding="utf-8")
+
+
 def test_a_path_the_stage_wrote_is_credited(tmp_path: Path) -> None:
     rec = _run(tmp_path, [EVIDENCE, OTHER])
     _write(tmp_path, OTHER, "v1\n")
     family_credit.capture(tmp_path, RUN, "LR1")
-    _write(tmp_path, EVIDENCE, "agy wrote this\n")
+    _invoke(tmp_path, [EVIDENCE], "agy wrote this\n")
+    row_returns.write(rec, {"LR1": _ok_return("LR1")})
+    credited, _ = family_credit.credit(tmp_path, RUN, [EVIDENCE], "")
+    assert credited == {EVIDENCE}
+
+
+def test_a_runner_direct_edit_with_an_all_ok_reply_and_no_invocation_record_is_withheld(tmp_path: Path) -> None:
+    rec = _run(tmp_path, [EVIDENCE])
+    family_credit.capture(tmp_path, RUN, "LR1")
+    _write(tmp_path, EVIDENCE, "the runner edited this itself\n")
+    row_returns.write(rec, {"LR1": _ok_return("LR1")})
+    credited, why = family_credit.credit(tmp_path, RUN, [EVIDENCE], "")
+    assert credited == frozenset()
+    assert why[EVIDENCE].startswith("family_authored:false") and "no CLI invocation record" in why[EVIDENCE]
+
+
+def test_a_non_zero_cli_exit_is_withheld_and_names_the_exit(tmp_path: Path) -> None:
+    rec = _run(tmp_path, [EVIDENCE])
+    family_credit.capture(tmp_path, RUN, "LR1")
+    _invoke(tmp_path, [EVIDENCE], "partial\n", exit_code=3)
+    row_returns.write(rec, {"LR1": _ok_return("LR1")})
+    credited, why = family_credit.credit(tmp_path, RUN, [EVIDENCE], "")
+    assert credited == frozenset()
+    assert why[EVIDENCE].startswith("family_authored:false") and "CLI exit 3" in why[EVIDENCE]
+
+
+def test_a_path_unchanged_across_the_cli_process_is_withheld(tmp_path: Path) -> None:
+    rec = _run(tmp_path, [EVIDENCE])
+    family_credit.capture(tmp_path, RUN, "LR1")
+    _write(tmp_path, EVIDENCE, "the runner edited this before the CLI ran\n")
+    _invoke(tmp_path, [EVIDENCE], "", write=False)
+    row_returns.write(rec, {"LR1": _ok_return("LR1")})
+    credited, why = family_credit.credit(tmp_path, RUN, [EVIDENCE], "")
+    assert credited == frozenset()
+    assert why[EVIDENCE].startswith("family_authored:false") and "unchanged across the CLI process" in why[EVIDENCE]
+
+
+def test_a_path_changed_after_the_cli_exited_is_withheld(tmp_path: Path) -> None:
+    rec = _run(tmp_path, [EVIDENCE])
+    family_credit.capture(tmp_path, RUN, "LR1")
+    _invoke(tmp_path, [EVIDENCE], "agy wrote this\n")
+    _write(tmp_path, EVIDENCE, "the runner then rewrote it\n")
+    row_returns.write(rec, {"LR1": _ok_return("LR1")})
+    credited, why = family_credit.credit(tmp_path, RUN, [EVIDENCE], "")
+    assert credited == frozenset()
+    assert why[EVIDENCE].startswith("family_authored:false") and "changed after the CLI exited" in why[EVIDENCE]
+
+
+def test_the_latest_authoring_record_governs_across_stages(tmp_path: Path) -> None:
+    rec = _run(tmp_path, [EVIDENCE])
+    family_credit.capture(tmp_path, RUN, "LR1")
+    _invoke(tmp_path, [EVIDENCE], "first stage\n", stage="a", ended="2026-11-18T10:00:00Z")
+    _invoke(tmp_path, [EVIDENCE], "second stage\n", stage="b", ended="2026-11-18T10:05:00Z")
     row_returns.write(rec, {"LR1": _ok_return("LR1")})
     credited, _ = family_credit.credit(tmp_path, RUN, [EVIDENCE], "")
     assert credited == {EVIDENCE}
@@ -57,7 +124,7 @@ def test_a_foreign_edit_to_a_declared_path_the_stage_did_not_touch_is_withheld_a
     rec = _run(tmp_path, [EVIDENCE, OTHER])
     _write(tmp_path, OTHER, "a peer's edit, before the row started\n")
     family_credit.capture(tmp_path, RUN, "LR1")
-    _write(tmp_path, EVIDENCE, "agy wrote this\n")
+    _invoke(tmp_path, [EVIDENCE], "agy wrote this\n")
     row_returns.write(rec, {"LR1": _ok_return("LR1")})
     credited, why = family_credit.credit(tmp_path, RUN, [EVIDENCE, OTHER], "")
     assert credited == {EVIDENCE}
@@ -67,7 +134,7 @@ def test_a_foreign_edit_to_a_declared_path_the_stage_did_not_touch_is_withheld_a
 def test_a_fresh_fire_credits_from_the_checkpoint_family_ok_trailer(tmp_path: Path) -> None:
     _run(tmp_path, [EVIDENCE])
     family_credit.capture(tmp_path, RUN, "LR1")
-    _write(tmp_path, EVIDENCE, "agy wrote this\n")
+    _invoke(tmp_path, [EVIDENCE], "agy wrote this\n")
     message = f"checkpoint(wave 1): 1 rows — LR1\n\nCheckpoint-Plan: p.md\n{family_credit.FAMILY_OK_TRAILER}: LR1"
     credited, _ = family_credit.credit(tmp_path, RUN, [EVIDENCE], message)
     assert credited == {EVIDENCE}
@@ -120,4 +187,14 @@ def test_checkpoint_own_blobs_names_the_unchanged_declared_path(tmp_path: Path, 
     monkeypatch.setattr(family_credit, "credit", lambda root, run_id, paths, message: (frozenset(), {OTHER: "named by family credit"}))
     why: dict = {}
     _, withheld = checkpoint_hunks.checkpoint_own_blobs(tmp_path, RUN, [OTHER], "", why)
-    assert withheld == [OTHER] and why[OTHER] == "named by family credit"
+    assert withheld == [OTHER] and why[OTHER] == "family-stage failure: named by family credit"
+
+    reason = family_credit.AUTHORED_FALSE + ": unchanged across the CLI process"
+    monkeypatch.setattr(family_credit, "credit", lambda root, run_id, paths, message: (frozenset(), {OTHER: reason}))
+    why = {}
+    checkpoint_hunks.checkpoint_own_blobs(tmp_path, RUN, [OTHER], "", why)
+    assert why[OTHER] == reason
+    monkeypatch.setattr(family_credit, "credit", lambda root, run_id, paths, message: (frozenset(), {}))
+    why = {}
+    checkpoint_hunks.checkpoint_own_blobs(tmp_path, RUN, [OTHER], "", why)
+    assert why[OTHER] == checkpoint_hunks.NO_PRINT_REASON

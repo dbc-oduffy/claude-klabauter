@@ -346,9 +346,12 @@ def _derive_register_cli(
 
 
 def _read_path_or_stdin(path: str) -> str:
-    """The text of `path`, or of stdin when `path` is `-`. Stdin is decoded from raw bytes by BOM
+    """The text of `path`, of stdin when `path` is `-`, or `path` itself when its stripped text
+    starts with `{` (inline JSON, never opened as a path). Stdin is decoded from raw bytes by BOM
     sniff (UTF-16 BOM -> utf-16, else utf-8-sig) so a PowerShell pipe survives; a stdin without
     `.buffer` falls back to its text read."""
+    if path.lstrip().startswith("{"):
+        return path
     if path == "-":
         import sys
 
@@ -1602,6 +1605,55 @@ def _drop_block_list_items(text: str, key: str) -> str:
     return "\n".join(lines)
 
 
+def _yaml_dq(value: str) -> str:
+    """Double-quote a YAML scalar; escape set matches doc-new's `_yaml_quote` (pinned by the
+    byte-identity test)."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def scaffold_sizing_text(
+    title: str,
+    deliverable_id: Optional[str] = None,
+    premise: Optional[str] = None,
+    premise_evidence: Optional[str] = None,
+) -> str:
+    """Default-argument sizing-object skeleton, byte-identical to coordinator-doc-new's
+    `_scaffold_sizing` for these arguments (pinned by test); pure, no I/O."""
+    if premise_evidence:
+        evidence = f"  evidence: {_yaml_dq(premise_evidence)}"
+    else:
+        evidence = (
+            "  evidence: PLACEHOLDER — cite the file:line, test, or command output you actually "
+            "looked at; answered in place, never spun into its own record"
+        )
+    intent_default = "PLACEHOLDER — replace with the PM's ask, verbatim"
+    lines = [
+        "schema: sizing-object",
+        "# name: PLACEHOLDER  # OPTIONAL, <=60 chars — a display LABEL only, nothing joins on it; do NOT slice from intent",
+        f"intent: {_yaml_dq(title if title else intent_default)}",
+        "estimate:",
+        "  tshirt: XS  # XS | S | M | L | XL | XXL — reuses loe.tshirt; coarse ROUTING estimate only",
+        "  provisional: true  # always true — never the committed plan-body LoE",
+        "route: dispatch  # dispatch | spec-dispatch | shape | plan | roadmap | pm-decision | goal-setting",
+        "detents: []  # boundary detents crossed while sizing (e.g. appetite_exceeded); [] if none",
+        "fork: null  # cut_to_fit | raise_appetite | null — set ONLY on genuine appetite/estimate divergence; never auto-resolved",
+        "xl_exit: null  # split | shape | roadmap | accept_multi_session | fan_out | null — the PM's pick at a pm-decision route; null means NOT YET CHOSEN, never 'accepted'",
+        "status: draft  # draft | sized | routed | shipped | declined | superseded",
+        "premise:",
+        f"  provenance: {premise or 'unrecorded'}  # executed | read | not-applicable | unrecorded — how the premise was verified; ADVISORY, never blocks a route",
+        evidence,
+        f"deliverable_id: {_yaml_dq(deliverable_id) if deliverable_id else 'null'}  # durable spine join key — a --deliverable-id join works on a new record or one whose deliverable_id is empty or equal, never a re-key; never hand-edit it",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _scaffold_missing(
     root: Path,
     target: Path,
@@ -1610,24 +1662,14 @@ def _scaffold_missing(
     premise_evidence: Optional[str],
     deliverable_id: Optional[str] = None,
 ) -> None:
-    """Create the sizing-object `--write` points at, via doc-new's own scaffold."""
-    import importlib.util
-
+    """Create the sizing-object `--write` points at, in-engine (no doc-new exec-load)."""
     intent = (decision.get("intent") or "").strip()
     if not intent:
         raise SizingAssembleError(
             f"sizing-object not found on disk: {target.name}; pass --intent to scaffold it"
         )
-    doc_new = root / "coordinator" / "bin" / "coordinator-doc-new.py"
-    if not doc_new.is_file():
-        doc_new = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-doc-new.py"
-    spec = importlib.util.spec_from_file_location("coordinator_doc_new_for_sizing_write", doc_new)
-    mod = importlib.util.module_from_spec(spec)
-    from coordinator_core.bin_lib_binding import exec_module_bin_bound
-
-    exec_module_bin_bound(spec.loader, mod, str(doc_new.parent))
     recorded = premise_provenance not in (None, "unrecorded")
-    text = mod._scaffold_sizing(
+    text = scaffold_sizing_text(
         title=intent,
         deliverable_id=deliverable_id,
         premise=premise_provenance if recorded else None,
@@ -2905,14 +2947,14 @@ def _usage(prog: str, stream=None) -> int:
         "    [--decided-on YYYY-MM-DD] [--supersede] --write <state/sizings/x.yaml>\n"
         "    [--warp-run <run id> (write only; the sizing takes no session XS lane)]\n"
         "    [--no-plan-hand-off (write only; decision carries pm_exit_question, no obligation or acceptance fires)]\n"
-        "    [--scout-register <scout report json|yaml, or - for stdin> (seeds the derived register)]\n"
+        "    [--scout-register <scout report json|yaml path, inline JSON object, or - for stdin> (seeds the derived register)]\n"
         "or: --register <yaml, or - for stdin> [--supersede] --write <state/sizings/x.yaml>\n"
         "    (an overlay on the recorded register: rows merged by id, drop: [ids], unrelated_turns\n"
         "    by turn; --supersede replaces it whole)\n"
         "    register yaml: sources: [{doc, ref}] (at least one)\n"
         "                   rows: [{id, source_text, surface: ui|api|cli|internal|visual, status?}]\n"
         "    status defaults to open, claimed_by to []\n"
-        "or: --derive-register [--scout-register <path|->] [--supersede] --write <state/sizings/x.yaml>\n"
+        "or: --derive-register [--scout-register <path|inline JSON|->] [--supersede] --write <state/sizings/x.yaml>\n"
         "    (records the register derived from the sizing's embedded PM turns)",
         file=stream,
     )

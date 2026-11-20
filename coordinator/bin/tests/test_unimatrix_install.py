@@ -5,6 +5,7 @@ import json
 import os
 import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,11 @@ from pathlib import Path
 import pytest
 
 pytestmark = pytest.mark.complete
+
+needs_cryptography = pytest.mark.skipif(
+    importlib.util.find_spec("cryptography") is None or importlib.util.find_spec("bcrypt") is None,
+    reason="optional cryptography/bcrypt packages absent; encrypted key minting needs both",
+)
 
 _SRC = Path(__file__).resolve().parents[1] / "unimatrix-install.py"
 _spec = importlib.util.spec_from_file_location("unimatrix_install", _SRC)
@@ -96,7 +102,7 @@ def _no_real_launchctl_ps_or_pin(monkeypatch):
     monkeypatch.setattr(ui, "run_launchctl", lambda *a: None)
     monkeypatch.setattr(ui._lib("unimatrix_relay_sessions"), "ps_snapshot", lambda *a, **k: "")
     monkeypatch.setattr(ui, "_pin_value", lambda: None)
-    monkeypatch.setattr(ui, "_pin_raw", lambda: "/stub/pin")  # abs-path-ok: set pin; record_python_pin writes nothing
+    monkeypatch.setattr(ui, "_pin_raw", lambda: __file__)  # a live pin file: record_python_pin writes nothing
     monkeypatch.setattr(ui, "_write_pin", lambda interp: pytest.fail("machine-local write outside a pin test"))
 
 
@@ -106,6 +112,28 @@ _REAL_LINK_GROK = ui.link_grok_local_bin
 @pytest.fixture(autouse=True)
 def _no_real_grok_link(monkeypatch):
     monkeypatch.setattr(ui, "link_grok_local_bin", lambda *a, **k: "skipped")
+
+
+_REAL_MAIN = ui.main
+
+
+@pytest.fixture(autouse=True)
+def _full_install_unless_plain(monkeypatch, request):
+    """Legacy tests exercise the full host and autolink install: a bare `--install` gets every host and --autolink
+    spelled out. A test named `test_plain_install_*` drives the real defaults."""
+    if request.node.name.startswith("test_plain_install_"):
+        return
+
+    def full(argv=None, *a, **k):
+        argv = list(argv or [])
+        if "--install" in argv:
+            if "--hosts" not in argv:
+                argv += ["--hosts", "codex,agy,grok"]
+            if "--autolink" not in argv:
+                argv.append("--autolink")
+        return _REAL_MAIN(argv, *a, **k)
+
+    monkeypatch.setattr(ui, "main", full)
 
 
 def _run(argv, text, dest=None, hooks=None):
@@ -159,6 +187,7 @@ def test_range_constant_and_scripts():
         "unimatrix-file-relay.py",
         "unimatrix-passphrase.py",
         "unimatrix-control.py",
+        "unimatrix-tui-status-launch.py",
         "headless-em-launch.py",
     )
     assert "session_detach.py" in ui.VENDORED_LIB
@@ -850,8 +879,7 @@ def test_default_install_registers_guards_doctrine_and_skills(monkeypatch, tmp_p
     for rules in (home / ".codex" / "AGENTS.md", home / ".gemini" / "GEMINI.md"):
         text = rules.read_text(encoding="utf-8")
         assert ui.DOCTRINE_BEGIN in text and "<!-- BEGIN coordinator-doctrine" in text
-    skills = _hooks_file(home / ".gemini" / "config" / "skills.json")
-    assert skills["entries"] == [{"path": str(ui.SKILLS_ROOT)}]
+    assert not (home / ".gemini" / "config" / "skills.json").exists()
     assert any((home / ".agents" / "skills").glob("*.coordinator-managed"))
     assert "governance scope: Codex local-tool PreToolUse" in out
 
@@ -905,7 +933,7 @@ def test_reinstall_with_changed_engine_root_updates_guard(monkeypatch, tmp_path)
     assert "codex hook updated" in buf.getvalue()
 
 
-def test_no_claude_on_path_hosts_skip_gate_but_bare_install_refuses(monkeypatch, tmp_path):
+def test_plain_install_no_claude_on_path_hosts_skip_gate_but_bare_install_refuses(monkeypatch, tmp_path):
     _stub_src(monkeypatch, tmp_path)
     home = _home(monkeypatch, tmp_path)
     monkeypatch.setattr(ui.shutil, "which", lambda name: None)
@@ -975,6 +1003,17 @@ def test_tui_status_command_has_no_backslash_for_bash_to_strip(monkeypatch):
         cmd = ui._tui_status_command("grok", root)
         assert "\\" not in cmd
         assert ui._status_command_ours({"command": cmd}, "grok")
+
+
+def test_tui_status_command_has_no_space_or_quote_in_any_argument(monkeypatch):
+    spaced = "C:\\Program Files\\py\\python.exe"
+    monkeypatch.setattr(ui, "_console_python", lambda: spaced)
+    monkeypatch.setattr(ui, "_short_path", lambda p: p.replace("Program Files", "PROGRA~1"))
+    cmd = ui._tui_status_command("agy", "C:\\Program Files\\eng", "C:\\Program Files\\u")
+    assert " " not in cmd.replace(" ", "", 3) and '"' not in cmd and "'" not in cmd
+    assert "-c" not in cmd.split()
+    monkeypatch.setattr(ui, "_short_path", lambda p: p)
+    assert '"' in ui._tui_status_command("agy", "C:\\Program Files\\eng", "C:\\Program Files\\u")
 
 
 def test_hook_command_is_forward_slash_quoted_and_old_forms_are_still_claimed(monkeypatch, tmp_path):
@@ -1055,6 +1094,52 @@ def test_uninstall_removes_only_the_grok_hook_entry(tmp_path):
     rc = ui.main(["--uninstall", "--hosts", "grok"], out=buf, hooks_path=tmp_path / "h.json")
     assert rc == 0 and "grok hook removed" in buf.getvalue()
     assert json.loads(ghp.read_text(encoding="utf-8")) == foreign
+
+
+def _stale_grok_file(path, foreign):
+    old = ui.grok_hook_entry(path.parent, "/engine")
+    old["matcher"] = old["matcher"].replace("|search_replace", "").replace("search_replace|", "")
+    old["hooks"][0]["command"] = old["hooks"][0]["command"].replace('"', "").replace("/", "\\")
+    assert old["matcher"] != ui.GROK_TOOL_MATCHER
+    path.write_text(json.dumps({"hooks": {"PreToolUse": [foreign, old]}}, indent=2) + "\n", encoding="utf-8")
+
+
+def test_refresh_grok_hook_rerenders_a_stale_group_keeps_foreign_and_leaves_a_current_file_alone(tmp_path):
+    ghp = tmp_path / "hooks" / "coordinator.json"
+    ghp.parent.mkdir()
+    foreign = {"matcher": "Bash", "hooks": [{"type": "command", "command": "theirs"}]}
+    _stale_grok_file(ghp, foreign)
+    assert ui.refresh_grok_hook(ghp, tmp_path, "/engine") == "updated"
+    assert json.loads(ghp.read_text(encoding="utf-8"))["hooks"]["PreToolUse"] == [
+        foreign, ui.grok_hook_entry(tmp_path, "/engine")]
+    mtime = ghp.stat().st_mtime_ns
+    raw = ghp.read_bytes()
+    assert ui.refresh_grok_hook(ghp, tmp_path, "/engine") == "present"
+    assert ghp.read_bytes() == raw and ghp.stat().st_mtime_ns == mtime
+
+
+def test_refresh_grok_hook_creates_nothing_and_skips_an_unresolved_engine(tmp_path):
+    ghp = tmp_path / "hooks.json"
+    assert ui.refresh_grok_hook(ghp, tmp_path, "/engine") == "absent" and not ghp.exists()
+    theirs = json.dumps({"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "theirs"}]}]}}) + "\n"
+    ghp.write_text(theirs, encoding="utf-8")
+    assert ui.refresh_grok_hook(ghp, tmp_path, "/engine") == "absent" and ghp.read_text(encoding="utf-8") == theirs
+    _stale_grok_file(ghp, {"hooks": []})
+    raw = ghp.read_bytes()
+    assert ui.refresh_grok_hook(ghp, tmp_path, None) == "absent" and ghp.read_bytes() == raw
+
+
+def test_main_refresh_hooks_rerenders_a_stale_grok_file_without_install(tmp_path):
+    hooks = tmp_path / "h.json"
+    ghp = hooks.with_name("grok-hooks.json")
+    _stale_grok_file(ghp, {"hooks": []})
+    buf = io.StringIO()
+    dest = tmp_path / "unimatrix"
+    rc = ui.main(["--refresh-hooks"], out=buf, hooks_path=hooks, dest_dir=dest)
+    assert rc == 0 and "grok hook updated" in buf.getvalue()
+    engine = ui.resolve_engine_root()[0]
+    assert json.loads(ghp.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][-1] == ui.grok_hook_entry(dest, engine)
+    assert not dest.exists()
 
 
 def test_seed_grok_hook_heals_a_stale_engine_root_and_uninstall_empties_it(tmp_path):
@@ -1420,9 +1505,18 @@ def test_first_install_without_a_login_agent_pins_the_installing_python(monkeypa
     assert ui.record_python_pin(tmp_path / "LaunchAgents") == sys.executable and written == [sys.executable]
 
 
-def test_an_existing_pin_is_never_overwritten_even_when_stale(monkeypatch, tmp_path):
-    monkeypatch.setattr(ui, "_pin_raw", lambda: str(tmp_path / "gone-python3"))
+def test_a_live_pin_is_never_overwritten(monkeypatch, tmp_path):
+    live = tmp_path / "live-python3"
+    live.write_text("")
+    monkeypatch.setattr(ui, "_pin_raw", lambda: str(live))
     assert ui.record_python_pin(tmp_path) is None  # autouse _write_pin fails the test on any write
+
+
+def test_a_pin_whose_file_is_absent_is_repinned_to_the_installing_python(monkeypatch, tmp_path):
+    written = []
+    monkeypatch.setattr(ui, "_pin_raw", lambda: str(tmp_path / "gone-python3"))
+    monkeypatch.setattr(ui, "_write_pin", lambda interp: written.append(interp) or True)
+    assert ui.record_python_pin(tmp_path) == sys.executable and written == [sys.executable]
 
 
 def test_linux_login_unit_carries_no_interval_or_restart(monkeypatch, tmp_path):
@@ -1897,6 +1991,7 @@ def _passphrase():
     return ui._sibling("unimatrix-passphrase.py")
 
 
+@needs_cryptography
 def test_pair_default_mints_a_passphrase_encrypted_key_from_the_1password_item(monkeypatch, tmp_path):
     home = _pair_home(monkeypatch, tmp_path)
     box = _PairBox()
@@ -1943,6 +2038,7 @@ def test_pair_default_with_locked_1password_refuses_typed(monkeypatch, tmp_path)
     assert "REFUSE: 1password_locked" in buf.getvalue()
 
 
+@needs_cryptography
 def test_pair_remint_removes_old_pair_and_item_then_mints_encrypted(monkeypatch, tmp_path):
     home = _pair_home(monkeypatch, tmp_path)
     box = _PairBox(items={"unimatrix-far-1": "old-secret"})
@@ -1963,6 +2059,7 @@ def test_pair_remint_removes_old_pair_and_item_then_mints_encrypted(monkeypatch,
                    ("edit", "--title=unimatrix-far-1")]
 
 
+@needs_cryptography
 def test_pair_remint_writes_new_key_and_item_before_deleting_the_superseded_ones(monkeypatch, tmp_path):
     home = _pair_home(monkeypatch, tmp_path)
     box = _PairBox(items={"unimatrix-far-1": "old-secret"})
@@ -2035,6 +2132,7 @@ def _remint_box(home, monkeypatch):
     return box, key
 
 
+@needs_cryptography
 def test_pair_remint_failing_to_delete_the_superseded_item_names_the_new_item_and_remint(monkeypatch, tmp_path):
     box, key = _remint_box(_pair_home(monkeypatch, tmp_path), monkeypatch)
     mod = _passphrase()
@@ -2048,6 +2146,7 @@ def test_pair_remint_failing_to_delete_the_superseded_item_names_the_new_item_an
     assert mod.is_encrypted(key)
 
 
+@needs_cryptography
 def test_pair_remint_replaces_the_public_half_before_the_private_half(monkeypatch, tmp_path):
     box, key = _remint_box(_pair_home(monkeypatch, tmp_path), monkeypatch)
     order = []
@@ -2071,6 +2170,7 @@ def test_pair_default_without_cryptography_refuses_typed_and_leaves_no_key(monke
     assert not (home / ".secrets" / "ssh" / "unimatrix-far-1").exists()
 
 
+@needs_cryptography
 def test_file_key_default_is_encrypted_and_remint_with_no_op_refuses(monkeypatch, tmp_path):
     home = _pair_home(monkeypatch, tmp_path)
     buf = io.StringIO()
@@ -2227,6 +2327,7 @@ def test_recorded_pair_keys_refuses_a_registry_read_exiting_other_than_0_or_1(mo
     assert ui.recorded_pair_keys(run=lambda argv, **kw: done(1)) == {}
 
 
+@needs_cryptography
 def test_pair_sanitizes_alias_and_refuses_empty(monkeypatch, tmp_path):
     home = _pair_home(monkeypatch, tmp_path)
     priv, _ = ui.pair_key("a b/c", run=_PairBox())
@@ -2253,6 +2354,7 @@ def test_pair_main_prints_line_and_block_and_exits_zero(monkeypatch, tmp_path):
                and 'unimatrix-relay.py"' in l for l in text.splitlines())
 
 
+@needs_cryptography
 def test_pair_with_signer_pin_emits_request_flow_and_no_hand_edit(monkeypatch, tmp_path):
     home = _pair_home(monkeypatch, tmp_path)
     pin = home / "unimatrix" / "membership" / "signer.pub"
@@ -2353,6 +2455,7 @@ def test_pair_install_tries_python_when_python3_is_absent(monkeypatch, tmp_path)
     assert all("BatchMode=yes" in c for c in box.calls if c[0] == "ssh")
 
 
+@needs_cryptography
 def test_pair_dead_link_sends_nothing_and_prints_paste_instruction(monkeypatch, tmp_path):
     _pair_home(monkeypatch, tmp_path)
     for reply in ("", "relay says hello\n", "linux\t/usr/bin/python3\n"):
@@ -2365,6 +2468,7 @@ def test_pair_dead_link_sends_nothing_and_prints_paste_instruction(monkeypatch, 
     assert "no authorized link to x: paste the line above on the far box" in buf.getvalue()
 
 
+@needs_cryptography
 def test_pair_main_reports_added_then_present(monkeypatch, tmp_path):
     _pair_home(monkeypatch, tmp_path)
     box = _FarBox(tmp_path / "far")
@@ -2375,6 +2479,7 @@ def test_pair_main_reports_added_then_present(monkeypatch, tmp_path):
     assert len((tmp_path / "far" / ".ssh" / "authorized_keys").read_text(encoding="utf-8").splitlines()) == 1
 
 
+@needs_cryptography
 def test_pair_windows_admin_far_box_is_not_written(monkeypatch, tmp_path):
     _pair_home(monkeypatch, tmp_path)
     box = _PairBox()
@@ -2418,7 +2523,7 @@ def test_plugin_root_seeds_doctrine_and_skills_from_outside_the_engine_tree(monk
     assert rc == 0 and "WARN" not in out
     for rules in (home / ".codex" / "AGENTS.md", home / ".gemini" / "GEMINI.md"):
         assert "<!-- BEGIN coordinator-doctrine" in rules.read_text(encoding="utf-8")
-    assert _hooks_file(home / ".gemini" / "config" / "skills.json")["entries"] == [{"path": str(plugin / "skills")}]
+    assert not (home / ".gemini" / "config" / "skills.json").exists()
     assert any((home / ".agents" / "skills").glob("*.coordinator-managed"))
 
 
@@ -2443,7 +2548,7 @@ def test_without_plugin_root_the_engine_tree_warns_and_skips(monkeypatch, tmp_pa
 def test_plugin_root_uninstall_removes_what_install_seeded(monkeypatch, tmp_path):
     plugin = _engine_tree_and_plugin(monkeypatch, tmp_path)
     home, rc, _ = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex,agy", "--plugin-root", str(plugin)))
-    assert rc == 0 and (home / ".gemini" / "config" / "skills.json").exists()
+    assert rc == 0 and (home / ".gemini" / "config" / "plugins.json").exists()
     buf = io.StringIO()
     assert ui.main(["--uninstall", "--hosts", "codex,agy", "--plugin-root", str(plugin)], out=buf) == 0
     assert not (home / ".gemini" / "config" / "skills.json").exists()
@@ -2516,17 +2621,20 @@ def test_agy_config_seeded_empty_0600_only_when_absent(monkeypatch, tmp_path):
 def test_seed_agy_plugin_is_idempotent_and_preserves_other_entries(tmp_path):
     pj = tmp_path / "home" / ".gemini" / "config" / "plugins.json"
     tree = tmp_path / "dest" / "agy-plugin"
+    tree.mkdir(parents=True)
     assert ui.seed_agy_plugin(pj, tree) == "created"
     assert ui.seed_agy_plugin(pj, tree) == "present"
     data = json.loads(pj.read_text(encoding="utf-8"))
     assert data["entries"] == [{"path": str(tree.parent), "include_only": ["agy-plugin"]}]
-    data["entries"].insert(0, {"path": "/mine"})
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    data["entries"].insert(0, {"path": str(mine)})
     data["inherits"] = [{"path": "/shared.json"}]
     pj.write_text(json.dumps(data), encoding="utf-8")
     assert ui.seed_agy_plugin(pj, tree) == "present"
     assert ui.seed_agy_plugin(pj, tmp_path / "other" / "agy-plugin") == "added"
     after = json.loads(pj.read_text(encoding="utf-8"))
-    assert after["entries"][0] == {"path": "/mine"} and after["inherits"] == [{"path": "/shared.json"}]
+    assert after["entries"][0] == {"path": str(mine)} and after["inherits"] == [{"path": "/shared.json"}]
     assert len(after["entries"]) == 3
     assert ui.unseed_agy_plugin(pj, tree) == "removed"
     assert ui.unseed_agy_plugin(pj, tree) == "absent"
@@ -2579,6 +2687,9 @@ def test_codex_lifecycle_hooks_have_short_timeout_and_keep_transport(tmp_path):
     assert ui.CODEX_SESSIONSTART_SCRIPT in start[0]["command"]
     assert ui.EXTERNAL_SESSION_SCRIPT in start[1]["command"]
     assert "--event SessionStart" in _shown(start[1]["command"])
+    assert "--engine-root" in _shown(start[0]["command"])
+    assert _fwd(tmp_path / "published engine") in _shown(start[0]["command"])
+    assert "--engine-root" not in _shown(ui.codex_hook_events(tmp_path)["SessionStart"]["hooks"][0]["command"])
     end = events["SessionEnd"]["hooks"][0]
     assert "--event SessionEnd" in _shown(end["command"])
     assert end["timeout"] <= 3 and start[1]["timeout"] <= 3
@@ -2732,7 +2843,7 @@ def test_codex_footer_default_is_idempotent_and_uninstall_owned(tmp_path,before)
     original=tomllib.loads(before)
     assert ui.seed_codex_status_line(cfg)=='updated'
     parsed=tomllib.loads(cfg.read_text())
-    assert parsed['tui']['status_line']==['thread-name','model-with-reasoning','context-remaining']
+    assert parsed['tui']['status_line']==['thread-name']
     assert parsed.get('model')==original.get('model')
     assert parsed['tui'].get('theme')==original.get('tui',{}).get('theme')
     once=cfg.read_bytes()
@@ -2749,7 +2860,7 @@ def test_codex_footer_preserves_custom_widgets_and_foreign_toml(tmp_path):
     cfg.write_text(before)
     assert ui.seed_codex_status_line(cfg)=='updated'
     text=cfg.read_text(); parsed=tomllib.loads(text)
-    assert parsed['tui']['status_line']==['git-branch','thread-name','five-hour-limit','model','reasoning','context-remaining']
+    assert parsed['tui']['status_line']==['git-branch','thread-name','five-hour-limit','model','reasoning']
     assert '# keep me\nmodel="m"' in text and 'theme="custom" # keep exact' in text
     assert '[mcp_servers.foreign]\nurl="http://example"' in text
     cfg.write_text(text.replace('"git-branch"','"weekly-limit"'))
@@ -2764,7 +2875,24 @@ def test_codex_footer_does_not_read_fake_tui_header_inside_string(tmp_path):
     assert ui.seed_codex_status_line(cfg)=='updated'
     parsed=tomllib.loads(cfg.read_text())
     assert '["current-dir"]' in parsed['notice']
-    assert parsed['tui']['status_line']==['thread-name','weekly-limit','model-with-reasoning','context-remaining']
+    assert parsed['tui']['status_line']==['thread-name','weekly-limit']
+
+
+@pytest.mark.parametrize('original,expected',[
+    (None,['thread-name']),
+    (['git-branch','model','context-remaining'],['thread-name','git-branch','model','context-remaining']),
+])
+def test_codex_footer_upgrade_drops_natives_we_seeded(tmp_path,original,expected):
+    cfg=tmp_path/'config.toml'
+    old=['thread-name','model-with-reasoning','context-remaining'] if original is None else ['thread-name']+original+['model-with-reasoning']
+    old=list(dict.fromkeys(old))
+    cfg.write_text('[tui]\nstatus_line='+json.dumps(old)+'\n')
+    cfg.with_name('.coordinator-status-line.json').write_text(json.dumps(
+        {'version':1,'present':original is not None,'original':original,'managed':old}))
+    assert ui.seed_codex_status_line(cfg)=='updated'
+    assert tomllib.loads(cfg.read_text())['tui']['status_line']==expected
+    assert ui.seed_codex_status_line(cfg)=='present'
+    assert ui.seed_codex_status_line(cfg,uninstall=True)=='restored'
 
 
 def test_codex_footer_invalid_toml_never_overwritten(tmp_path):
@@ -2782,7 +2910,7 @@ def test_codex_footer_is_automatic_in_install_and_owned_uninstall(monkeypatch,tm
     output=io.StringIO()
     assert ui.main(['--install','--hosts','codex'], version_text='2.1.316',dest_dir=tmp_path/'dest',out=output)==0
     assert 'codex status footer updated' in output.getvalue()
-    assert tomllib.loads(cfg.read_text())['tui']['status_line']==['thread-name','git-branch','model-with-reasoning','context-remaining']
+    assert tomllib.loads(cfg.read_text())['tui']['status_line']==['thread-name','git-branch']
     output=io.StringIO()
     assert ui.main(['--uninstall','--hosts','codex'],dest_dir=tmp_path/'dest',out=output)==0
     assert 'codex status footer restored' in output.getvalue()
@@ -2867,7 +2995,7 @@ def test_tui_status_lines_install_twice_noop_and_uninstall_restores_bytes(monkey
     parsed = tomllib.loads(grok.read_text(encoding="utf-8"))
     assert parsed["model"] == "x" and parsed["mcp"]["foreign"] == {"url": "u"}
     assert parsed["ui"]["status_line"]["type"] == "command"
-    assert parsed["ui"]["status_line"]["command"].endswith(" grok")
+    assert parsed["ui"]["status_line"]["command"].endswith(ui.GROK_STATUS_SCRIPT if os.name == "nt" else " grok")
     once = (agy.read_bytes(), grok.read_bytes())
     rc, out = _tui_main(tmp_path, "--install")
     assert "agy status line present" in out and "grok status line present" in out
@@ -2946,7 +3074,10 @@ def _fake_engine(tmp_path):
 
 def test_tui_status_command_runs_from_a_cwd_without_the_engine(tmp_path):
     root = _fake_engine(tmp_path)
-    cmd = ui._tui_status_command("agy", root)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    shutil.copy(ui._BIN_DIR / ui.TUI_STATUS_LAUNCHER, dest / ui.TUI_STATUS_LAUNCHER)
+    cmd = ui._tui_status_command("agy", root, dest)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
@@ -2955,6 +3086,26 @@ def test_tui_status_command_runs_from_a_cwd_without_the_engine(tmp_path):
     assert proc.stdout.strip() == "host=agy"
     assert ui._status_command_ours({"command": cmd}, "agy")
     assert not ui._status_command_ours({"command": cmd}, "grok")
+
+
+def test_tui_status_command_is_launcher_with_no_space_or_quote_in_any_argument(monkeypatch):
+    monkeypatch.setattr(ui, "_console_python", lambda: "\\py\\python.exe")
+    cmd = ui._tui_status_command("agy", "\\eng\\root", "\\dest\\unimatrix")
+    argv = shlex.split(cmd, posix=False)
+    assert argv == ["/py/python.exe", "/dest/unimatrix/" + ui.TUI_STATUS_LAUNCHER, "/eng/root", "agy"]
+    assert not any(c in a for a in argv for c in " \"'") and "-c" not in argv
+    assert ui._status_command_ours({"command": cmd}, "agy")
+    assert not ui._status_command_ours({"command": cmd}, "grok")
+
+
+def test_tui_status_legacy_dash_c_form_is_ours_and_replaced(tmp_path):
+    legacy = f'/py/python.exe -c "{ui._TUI_STATUS_BOOT}" /eng agy'
+    assert ui._status_command_ours({"command": legacy}, "agy")
+    cfg = tmp_path / "settings.json"
+    cfg.write_text(json.dumps({"statusLine": {"command": legacy}}))
+    assert ui.seed_host_status_line(cfg, "agy", engine_root="/eng", dest_dir=tmp_path / "u") == "updated"
+    new = json.loads(cfg.read_text())["statusLine"]["command"]
+    assert ui.TUI_STATUS_LAUNCHER in new and "-c" not in new.split()
 
 
 def test_tui_status_install_upgrades_our_bare_module_form(monkeypatch, tmp_path):
@@ -2968,11 +3119,66 @@ def test_tui_status_install_upgrades_our_bare_module_form(monkeypatch, tmp_path)
     rc, out = _tui_main(tmp_path, "--install")
     assert "agy status line updated" in out and "grok status line updated" in out
     data = json.loads(agy.read_text())
-    assert data["theme"] == "dark" and data["statusLine"]["command"] == ui._tui_status_command("agy", str(root))
+    assert data["theme"] == "dark" and data["statusLine"]["command"] == ui._tui_status_command("agy", str(root), tmp_path / "dest")
     parsed = tomllib.loads(grok.read_text())
-    assert parsed["x"] == 1 and parsed["ui"]["status_line"]["command"] == ui._tui_status_command("grok", str(root))
+    assert parsed["x"] == 1 and parsed["ui"]["status_line"]["command"] == ui._tui_status_command("grok", str(root), tmp_path / "dest", grok.parent)
     rc, out = _tui_main(tmp_path, "--install")
     assert "agy status line present" in out and "grok status line present" in out
+
+
+def test_tui_status_grok_windows_command_is_one_ps1_path_and_script_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "_grok_ps1_form", lambda host: host == "grok")
+    monkeypatch.setattr(ui, "_console_python", lambda: sys.executable)
+    root = _fake_engine(tmp_path)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    shutil.copy(ui._BIN_DIR / ui.TUI_STATUS_LAUNCHER, dest / ui.TUI_STATUS_LAUNCHER)
+    cfg = tmp_path / "grokhome" / "config.toml"
+    cfg.parent.mkdir()
+    legacy = f'/py/python.exe -c "{ui._TUI_STATUS_BOOT}" /eng grok'
+    cfg.write_text('[ui.status_line]\ntype = "command"\ncommand = ' + json.dumps(legacy) + "\n")
+    assert ui.seed_host_status_line(cfg, "grok", engine_root=str(root), dest_dir=dest) == "updated"
+    cmd = tomllib.loads(cfg.read_text())["ui"]["status_line"]["command"]
+    assert cmd == (cfg.parent / ui.GROK_STATUS_SCRIPT).as_posix() and not any(c in cmd for c in " \"'\\")
+    assert (cfg.parent / ui.GROK_STATUS_SCRIPT).is_file()
+    assert ui._status_command_ours({"command": cmd}, "grok") and not ui._status_command_ours({"command": cmd}, "agy")
+    assert ui._status_command_ours({"command": legacy}, "grok")
+    assert ui.seed_host_status_line(cfg, "grok", engine_root=str(root), dest_dir=dest) == "present"
+    assert ui.seed_host_status_line(cfg, "grok", uninstall=True) == "restored"
+    assert not (cfg.parent / ui.GROK_STATUS_SCRIPT).exists()
+    cfg.write_text('[ui.status_line]\ntype = "command"\ncommand = "my-line"\n')
+    assert ui.seed_host_status_line(cfg, "grok", engine_root=str(root), dest_dir=dest) == "retained-customized"
+
+
+def test_tui_status_grok_legacy_command_in_toml_literal_string_is_replaced(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "_grok_ps1_form", lambda host: False)
+    legacy = f'C:\\py\\python.exe -c "{ui._TUI_STATUS_BOOT}" D:\\eng grok'
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f"x = 1\n[ui.status_line]\ntype = \"command\"\ncommand = '''{legacy}'''\n")
+    assert ui.seed_host_status_line(cfg, "grok", engine_root="/eng", dest_dir=tmp_path / "u") == "updated"
+    parsed = tomllib.loads(cfg.read_text())
+    assert parsed["x"] == 1 and ui.TUI_STATUS_LAUNCHER in parsed["ui"]["status_line"]["command"]
+    cfg.write_text('[ui.status_line]\ntype = "command"\ncommand = \'\'\'my-line\'\'\'\n')
+    assert ui.seed_host_status_line(cfg, "grok", engine_root="/eng") == "retained-customized"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="runs the Windows PowerShell script")
+def test_tui_status_grok_ps1_renders_from_a_foreign_cwd(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "_console_python", lambda: sys.executable)
+    root = _fake_engine(tmp_path)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    shutil.copy(ui._BIN_DIR / ui.TUI_STATUS_LAUNCHER, dest / ui.TUI_STATUS_LAUNCHER)
+    cfg = tmp_path / "grokhome" / "config.toml"
+    assert ui.seed_host_status_line(cfg, "grok", engine_root=str(root), dest_dir=dest) == "created"
+    cmd = tomllib.loads(cfg.read_text())["ui"]["status_line"]["command"]
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    proc = subprocess.run(["powershell.exe", "-NoProfile", "-File", cmd], input="{}", cwd=elsewhere, env=env,
+                          capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "host=grok"
 
 
 def test_tui_status_agy_empty_type_key_is_ours(tmp_path):
@@ -3254,16 +3460,66 @@ def test_install_leaves_a_non_bypass_tool_permission_untouched(monkeypatch, tmp_
     assert rc == 0 and json.loads(agy.read_text(encoding="utf-8")) == {"toolPermission": "request-review"}
 
 
-def test_install_agy_skills_drops_scratch_roots_and_refuses_a_scratch_skills_root(monkeypatch, tmp_path):
-    monkeypatch.setattr(ui._seed(), "is_scratch_root", _REAL_IS_SCRATCH_ROOT)
+def test_install_agy_skills_drops_scratch_roots_and_adds_no_coordinator_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui._seed(), "is_scratch_root", lambda p: str(p).startswith("/private/tmp"))
     seed = ui._seed()
     sj = tmp_path / "skills.json"
+    ok = tmp_path / "ok" / "skills"
+    ok.mkdir(parents=True)
     # Source: observed ~/.gemini/config/skills.json listing another session's /private/tmp scratchpad (R1 item 5).
-    sj.write_text(json.dumps({"entries": [{"path": "/private/tmp/claude/scratchpad/skills"}, {"path": "/ok/skills"}]}))
-    assert seed.seed_agy_skills(sj, "/p/plugin/skills") == "added"
-    assert [e["path"] for e in json.loads(sj.read_text())["entries"]] == ["/ok/skills", "/p/plugin/skills"]
-    assert seed.seed_agy_skills(sj, "/tmp/x/skills") == "refused"
-    assert [e["path"] for e in json.loads(sj.read_text())["entries"]] == ["/ok/skills", "/p/plugin/skills"]
+    sj.write_text(json.dumps({"entries": [{"path": "/private/tmp/claude/scratchpad/skills"}, {"path": str(ok)}]}))
+    assert seed.seed_agy_skills(sj, "/p/plugin/skills") == "pruned"
+    assert [e["path"] for e in json.loads(sj.read_text())["entries"]] == [str(ok)]
+    assert seed.seed_agy_skills(sj, "/p/plugin/skills") == "present"
+
+
+def test_install_heals_a_stale_profile_in_one_run_and_a_second_run_is_idempotent(monkeypatch, tmp_path):
+    plugin = _engine_tree_and_plugin(monkeypatch, tmp_path)
+    users = tmp_path / "Users"
+    home = users / "me"
+    stale = users / "me_old"
+    for d in (home, stale / "skills"):
+        d.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    gem = home / ".gemini"
+    (gem / "config").mkdir(parents=True)
+    cache = tmp_path / "cache" / "coordinator" / "4.6.21" / "skills"
+    klab = tmp_path / "klabauter" / "coordinator" / "skills"
+    for d in (cache, klab):
+        d.mkdir(parents=True)
+    foreign = tmp_path / "foreign-skills"
+    foreign.mkdir()
+    (gem / "config" / "plugins.json").write_text(json.dumps({"entries": [
+        {"path": str(stale), "include_only": ["agy-plugin"]}, {"path": str(tmp_path / "gone")}]}), encoding="utf-8")
+    (gem / "config" / "skills.json").write_text(json.dumps({"entries": [
+        {"path": str(cache)}, {"path": str(klab)}, {"path": str(stale / "skills")}, {"path": str(foreign)}]}), encoding="utf-8")
+    old_python = stale / "python.exe"
+    (gem / "GEMINI.md").write_text(
+        f"mine\n{ui.DOCTRINE_BEGIN}\n{old_python} {stale}/unimatrix-send.py\n{ui.DOCTRINE_END}\n", encoding="utf-8")
+    pins = [str(old_python)]
+    monkeypatch.setattr(ui, "_pin_raw", lambda: pins[-1])
+    monkeypatch.setattr(ui, "_write_pin", lambda interp: pins.append(interp) or True)
+    argv = ("--install", "--hosts", "agy", "--plugin-root", str(plugin))
+
+    def run():
+        buf = io.StringIO()
+        rc = ui.main(list(argv), version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf)
+        return rc, buf.getvalue()
+
+    rc, out = run()
+    assert rc == 0, out
+    assert pins[-1] == sys.executable and len(pins) == 2
+    tree = tmp_path / "dest" / "agy-plugin"
+    assert json.loads((gem / "config" / "plugins.json").read_text(encoding="utf-8"))["entries"] == [
+        {"path": str(tree.parent), "include_only": ["agy-plugin"]}]
+    assert json.loads((gem / "config" / "skills.json").read_text(encoding="utf-8"))["entries"] == [{"path": str(foreign)}]
+    text = (gem / "GEMINI.md").read_text(encoding="utf-8")
+    assert "mine" in text and _fwd(stale) not in text and _fwd(tmp_path / "dest") in text
+    snap = {p: p.read_bytes() for p in (gem / "config" / "plugins.json", gem / "config" / "skills.json", gem / "GEMINI.md")}
+    pins.append(__file__)
+    rc, out = run()
+    assert rc == 0 and len(pins) == 3
+    assert {p: p.read_bytes() for p in snap} == snap
 
 
 def test_agy_allow_rule_refuses_a_non_list_allow_without_writing(monkeypatch, tmp_path):
@@ -4161,3 +4417,120 @@ def test_real_tool_names_are_selected_by_the_written_matcher(host, tmp_path):
 def test_real_tool_grok_matcher_is_not_a_wildcard(tmp_path):
     matcher = _written_matcher("grok", tmp_path)
     assert not re.fullmatch(matcher, "web_search") and not re.fullmatch(matcher, "grep")
+
+
+def _plain_main(tmp_path, argv, **kw):
+    hooks = tmp_path / "g" / "hooks.json"
+    buf = io.StringIO()
+    rc = _REAL_MAIN(argv, version_text="2.1.316", dest_dir=tmp_path / "d", out=buf, hooks_path=hooks, **kw)
+    return rc, buf.getvalue(), hooks.parent
+
+
+def _host_files(gdir):
+    return sorted(p.name for p in gdir.iterdir()) if gdir.exists() else []
+
+
+def test_plain_install_seeds_only_the_relay(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    rc, out, gdir = _plain_main(tmp_path, ["--install"], sac_blocked=lambda: False)
+    assert rc == 0 and f"installed {len(ui.VENDORED_SCRIPTS)} scripts" in out
+    assert _host_files(gdir) == []
+    assert not (tmp_path / "home" / ".codex").exists() and not (tmp_path / "home" / ".gemini").exists()
+    assert "login agent" not in out.replace("legacy login agent", "") and "allow rule" not in out
+    assert "hook" not in out.lower()
+
+
+def test_plain_install_registers_no_login_agent_and_autolink_flag_does(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    rc, out, gdir = _plain_main(tmp_path, ["--install"])
+    assert rc == 0 and not (gdir / "login-agent").exists()
+    rc, out, gdir = _plain_main(tmp_path, ["--install", "--autolink"])
+    assert rc == 0 and "login agent created" in out and len(list((gdir / "login-agent").iterdir())) == 1
+
+
+def test_plain_install_hosts_opt_in_seeds_named_hosts_and_never_grok_unnamed(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    rc, out, gdir = _plain_main(tmp_path, ["--install", "--hosts", "codex,agy"], sac_blocked=lambda: False)
+    assert "codex hook" in out and "agy hook" in out and "agy allow rule" in out
+    assert "grok" not in out and not (gdir / "grok-hooks.json").exists() and not (gdir / "grok-config.toml").exists()
+    assert (gdir / "codex-hooks.json").exists() and (gdir / "agy-settings.json").exists()
+    assert "login agent" not in out
+    rc, out, gdir = _plain_main(tmp_path, ["--install", "--hosts", "grok"])
+    assert "grok hook" in out and (gdir / "grok-hooks.json").exists()
+
+
+def test_plain_install_agy_allow_rule_skipped_when_forwarder_is_sac_blocked(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    rc, out, gdir = _plain_main(tmp_path, ["--install", "--hosts", "agy"], sac_blocked=lambda: True)
+    assert "agy allow rule skipped: Smart App Control" in out and "agy allow rule granted" not in out
+    settings = gdir / "agy-settings.json"
+    assert not settings.exists() or "coordinator-invoke" not in settings.read_text(encoding="utf-8")
+    assert not (gdir / ".coordinator-allow-rule-agy.json").exists()
+    rc, out, gdir = _plain_main(tmp_path, ["--install", "--hosts", "agy"], sac_blocked=lambda: False)
+    assert "agy allow rule granted" in out
+
+
+def test_plain_install_uninstall_without_hosts_still_removes_an_earlier_default_install(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    _plain_main(tmp_path, ["--install", "--hosts", "codex,agy,grok"], sac_blocked=lambda: False)
+    gdir = tmp_path / "g"
+    assert "PreToolUse" in (gdir / "grok-hooks.json").read_text(encoding="utf-8")
+    buf = io.StringIO()
+    assert _REAL_MAIN(["--uninstall"], out=buf, hooks_path=gdir / "hooks.json", dest_dir=tmp_path / "d") == 0
+    out = buf.getvalue()
+    for label in ("grok hook", "agy allow rule", "codex hook", "login agent"):
+        assert label in out
+    assert "PreToolUse" not in (gdir / "grok-hooks.json").read_text(encoding="utf-8")
+
+
+def test_plain_install_help_states_the_new_default(capsys):
+    with pytest.raises(SystemExit):
+        _REAL_MAIN(["--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "--install seeds only the relay and no host unless named" in text and "--autolink" in text
+
+
+class _FakeSacKey:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _fake_winreg(value=None, error=None):
+    mod = type(sys)("winreg")
+    mod.HKEY_LOCAL_MACHINE = object()
+
+    def open_key(*_a):
+        if error is not None:
+            raise error
+        return _FakeSacKey()
+
+    mod.OpenKey = open_key
+    mod.QueryValueEx = lambda _k, _n: (value, 4)
+    return mod
+
+
+@pytest.mark.parametrize("value,error,expected", [
+    (1, None, True),
+    (2, None, False),
+    (0, None, False),
+    (None, FileNotFoundError(), False),
+])
+def test_launcher_sac_blocked_reads_the_registry_policy_state(monkeypatch, value, error, expected):
+    monkeypatch.setattr(ui.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winreg", _fake_winreg(value, error))
+    assert ui.launcher_sac_blocked() is expected
+
+
+def test_launcher_sac_blocked_is_false_off_windows(monkeypatch):
+    monkeypatch.setattr(ui.sys, "platform", "linux")
+    monkeypatch.setitem(sys.modules, "winreg", _fake_winreg(1))
+    assert ui.launcher_sac_blocked() is False

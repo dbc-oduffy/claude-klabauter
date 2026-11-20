@@ -770,7 +770,12 @@ def _land(
     entries = _entries_at(root, None, probe)
     if entries is None:
         return _error(f"HEAD tree under {record_dir_rel} is unreadable", **base)
-    differ, gone = _differs(root, entries, probe)
+    from coordinator_core.ops.dispatch_emit.clean_overlay_verify import INFLIGHT_FILE
+
+    # Trap: the overlay child releases its marker at any moment; a listed marker the commit cannot read refuses the halt commit.
+    differ, gone = (
+        {p for p in found if p.rpartition("/")[2] != INFLIGHT_FILE} for found in _differs(root, entries, probe)
+    )
     changed = differ | gone
 
     paths = sorted(p for p in differ if p.startswith(record_dir_rel + "/") and "/" not in p[len(record_dir_rel) + 1:])

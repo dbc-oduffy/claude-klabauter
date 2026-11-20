@@ -72,6 +72,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "canvas.harvest":                        "show_top",
     "design.registry.lookup":                "show_top",
     "ping":                                  "none",
+    # Acts on OS processes named by a pid argument, never on the caller's worktree.
+    "spawn_orphans.reap":                    "none",
     "remote_engine.handle":                  "none",
     "invoke.from_argv":                      "none",
     "hooks.suggest_sonnet_research":         "none",
@@ -851,6 +853,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.land_blobs — MUTATING: index-only declared-blob landing;
     # the caller's own worktree, never a params override.
     "dispatch.land_blobs":                      "common_dir",
+    # dispatch.grind_bookkeep — MUTATING: closes, lands and ledger-sweeps a no-product-edit grind run
+    # in process; the caller's own worktree, never a params override.
+    "dispatch.grind_bookkeep":                  "common_dir",
     # dispatch.land_credited — MUTATING: commits a run's credited paths via git.commit.commit_paths (CAS ref move);
     # the caller's own worktree, never a params override.
     "dispatch.land_credited":                   "common_dir",
@@ -907,6 +912,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # job.start / job.cancel — read and write only the settings-home job record plus the caller-recorded
     # lock and staging paths; no repo state, so no worktree key ("none", as install.write_identity_file).
     "job.start":                                "none",
+    # external_workspace.rehydrate — reads the machine-local registry and clones into a registered external path; no repo key.
+    "external_workspace.rehydrate":             "none",
     "job.cancel":                               "none",
     # workflow.late_rows — reads the caller's worktree run ledger (verify_read stamps its marker); scope lets --repo supply repo_root.
     "workflow.late_rows":                       "common_dir",

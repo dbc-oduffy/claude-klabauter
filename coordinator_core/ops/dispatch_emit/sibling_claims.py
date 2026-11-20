@@ -61,20 +61,118 @@ def _read_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _in_window_run_ids(root: Path, own_run_id: Optional[str]) -> list:
-    """Run ids other than `own_run_id` in the record dir whose stamp is inside the token TTL (an unstamped
-    dir is excluded, as `_unlanded_run_ids` never lists a halted run without one) and whose `state/warp` dir
-    holds a `halted.json`, from one scan: the set `halted_hold_release.prefetch_kept_at_head` batches blobs
-    for, from `halted_hold_release.record_stamps`. A token-only run has no marker and nothing to prefetch (one
-    existence check, no record-dir resolve or marker parse); a halted run kept only under `scratch/warp` falls
-    back to its own blob batch. Never raises."""
+LIVE_INDEX_DEADLINE_MS = 150.0
+LIVE_INDEX_UNAVAILABLE = "live-run-index-unavailable"
+
+
+class LiveIndexUnavailable(RuntimeError):
+    """The live-run index could not be read (`STALLED`, or `MISSING` while token records exist): the sibling
+    set is unknown, so a caller holds rather than treats it as empty."""
+
+
+def live_unlanded_candidates(root: Path) -> list:
+    """Sorted run ids that may still claim a path: the live-run index's keys plus the halted-withheld index's
+    runs, plus the runs named by an unreadable `halted_withheld_index` file, minus those whose stamp is past
+    the token TTL (an unstamped id is kept). Index reads, shared per release scope. Once the withheld index
+    is built, the landing's shared record-dir view also names a halted run in neither index (read only when
+    the scope already holds it, never listed here). Raises
+    `LiveIndexUnavailable` when the live index is `STALLED`, or `MISSING` while token records exist."""
+    found = _candidates(root)
+    if found is None:
+        raise LiveIndexUnavailable(LIVE_INDEX_UNAVAILABLE)
+    return found
+
+
+def _candidates(root: Path) -> Optional[list]:
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+    return landing_halted_view.shared("live_unlanded", str(root), lambda: _candidates_read(Path(root)))
+
+
+def _candidates_read(root: Path) -> Optional[list]:
+    """`live_unlanded_candidates`' value, None when the sibling set is unknown. Never raises."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_halted_view, live_run_index, run_token
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import MISSING, STALLED
+
+    try:
+        live = live_run_index.read(root, LIVE_INDEX_DEADLINE_MS)
+        if live is STALLED:
+            return None
+        if live is MISSING:
+            if run_token.held_records(root):
+                return None
+            live = {}
+        now = time.time()
+        built = (halted_withheld_index._dir(root) / halted_withheld_index.SENTINEL).exists()
+        unreadable: set = set()
+        indexed = halted_withheld_index.entries(root, unreadable)
+        ids = set(live) | set(indexed) | unreadable
+        if built:
+            ids |= _unindexed_halted_ids(root, now, ids)
+        out = []
+        for run_id in sorted(ids):
+            stamp = landing_halted_view.stamp(run_id)
+            if stamp is None or now - stamp <= run_token.TTL_SECONDS:
+                out.append(run_id)
+        return out
+    except Exception:  # noqa: BLE001 -- unreadable index: the sibling set is unknown
+        return None
+
+
+def _unindexed_halted_ids(root: Path, now: float, known: set) -> set:
+    """In-window run ids outside `known` holding a `halted.json`, named by the landing's shared record-dir
+    view (`halted_hold_release.record_stamps`). Only a view the scope already holds is read, never a new
+    `state/warp` listing. Trap: a halted run in neither index is then named only when the landing's own pass
+    has already paid for the view."""
     from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    state = halted_hold_release._SCOPE.get()
+    stamps = (state or {}).get("stamps", {}).get(str(root)) or []
+    base = os.path.join(root, RECORD_DIR_ROOT)
+    return {
+        name for name, stamp in stamps
+        if name not in known and stamp is not None and now - stamp <= run_token.TTL_SECONDS
+        and os.path.exists(os.path.join(base, name, halted_run.HALTED_FILE))
+    }
+
+
+def _stamped_candidates(root: Path) -> list:
+    """`[(run id, minted epoch or None)]` over `live_unlanded_candidates`; empty when the set is unknown
+    (the claim entry points hold on that, see `sibling_run_claims`)."""
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+    found = _candidates(root)
+    return [] if found is None else [(run_id, landing_halted_view.stamp(run_id)) for run_id in found]
+
+
+def _warp_run_names(root: Path) -> list:
+    """Sorted names in `state/warp`, one name-only listing per release scope; empty when unreadable."""
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    def listing() -> list:
+        try:
+            return sorted(os.listdir(Path(root) / RECORD_DIR_ROOT))
+        except OSError:
+            return []
+
+    return landing_halted_view.shared("warp_run_names", str(root), listing)
+
+
+def _in_window_run_ids(root: Path, own_run_id: Optional[str]) -> list:
+    """Run ids other than `own_run_id` among `live_unlanded_candidates` whose stamp is inside the token TTL (an
+    unstamped id is excluded, as `_unlanded_run_ids` never lists a halted run without one) and whose `state/warp`
+    dir holds a `halted.json`: the set `halted_hold_release.prefetch_kept_at_head` batches blobs for. A token-only
+    run has no marker and nothing to prefetch (one existence check, no record-dir resolve or marker parse); a
+    halted run kept only under `scratch/warp` falls back to its own blob batch. Never raises."""
+    from coordinator_core.ops.dispatch_emit import halted_run, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     now = time.time()
     base = os.path.join(root, RECORD_DIR_ROOT)
     out = []
-    for run_id, stamp in halted_hold_release.record_stamps(root):
+    for run_id, stamp in _stamped_candidates(root):
         if run_id != own_run_id and stamp is not None and now - stamp <= run_token.TTL_SECONDS and os.path.exists(
             os.path.join(base, run_id, halted_run.HALTED_FILE)
         ):
@@ -112,20 +210,13 @@ def _index_clear_read(root: Path, wanted: tuple) -> frozenset:
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 
     try:
-        index = idx._dir(root)
-        if not (index / idx.SENTINEL).exists():
-            idx.rebuild(root)
         now = time.time()
         clear = set()
-        for name in os.listdir(index):
-            if not name.endswith(".json"):
-                continue
-            run_id = name[: -len(".json")]
+        for run_id, entry in idx.entries(root).items():
             stamp = landing_halted_view.stamp(run_id)
             if stamp is None or now - stamp > run_token.TTL_SECONDS:
                 continue
-            entry = idx._parse(index / name)
-            if entry is not None and entry.paths and not run_ownership.covers_any(entry.paths, wanted):
+            if entry.paths and not run_ownership.covers_any(entry.paths, wanted):
                 clear.add(run_id)
         return frozenset(clear)
     except Exception:  # noqa: BLE001 -- index unreadable: every marker is read
@@ -172,13 +263,14 @@ def _own_prefire_key(root: Path, own_run_id: Optional[str]) -> tuple:
 
 def _ask_successor_landed(root: Path, ask_id: str, sizing: str) -> bool:
     """Whether a run of `sizing` minted at or after the ask `ask_id` has landed (its spent token receipt
-    carries `landed`). Reads the shared record-dir listing and one spent receipt per matching run; no spawn."""
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, run_token
+    carries `landed`). A landed run is in neither run index, so this reads the shared name-only `state/warp`
+    listing, filtered by the sizing prefix before any receipt read (one per matching run); no stamp parse, no spawn."""
+    from coordinator_core.ops.dispatch_emit import run_token
 
     prefix = f"warp-{Path(sizing).stem}-"
     since = ask_id[4:19]
     home = run_token._record_home(root)
-    for name, _stamp in halted_hold_release.record_stamps(root):
+    for name in _warp_run_names(root):
         tail = name[len(prefix):]
         if not name.startswith(prefix) or not _RUN_STAMP.fullmatch(tail) or tail[:15] < since:
             continue
@@ -188,18 +280,21 @@ def _ask_successor_landed(root: Path, ask_id: str, sizing: str) -> bool:
     return False
 
 
-def released_ask_holder(root: Path, run_id: str, own_run_id: Optional[str]) -> Optional[str]:
+def released_ask_holder(
+    root: Path, run_id: str, own_run_id: Optional[str], home: Optional[Path] = None,
+) -> Optional[str]:
     """Why the pre-fire ask run `run_id` holds nothing against the landing run `own_run_id`, else None.
 
     `RELEASED_OWN_PREFIRE`: the ask token binds the landing run's sizing and its session, so the ask id and
     the run id are one owner. `RELEASED_LANDED_ASK`: a run of the ask's sizing minted since has landed.
     Only `ask-` ids with a token record are weighed; a foreign ask of another session or sizing never
-    releases. Token and receipt reads only."""
+    releases. Token and receipt reads only. A scan over many runs passes `home` (`run_token._record_home`)
+    to resolve it once."""
     from coordinator_core.ops.dispatch_emit import run_token
 
     if run_id == own_run_id or not run_token.is_ask_run_id(run_id):
         return None
-    home = run_token._record_home(root)
+    home = home if home is not None else run_token._record_home(root)
     record = next((
         r for claimed in (False, True)
         if (r := run_token.read_cached(run_token._record_path(root, run_id, claimed=claimed, home=home))) is not None
@@ -233,8 +328,9 @@ def _unlanded_run_ids(
 ) -> list:
     """Run ids other than `own_run_id` that are halted and unresumed, or hold a fresh token
     (unclaimed or claimed) and are a live peer's (`warp_run_deliverable._live_peer_run`), sorted.
-    One record-dir scan; the token is a point read per run, never a
-    token-store listing. A stamped run id older than the token TTL is never opened. A halted run
+    Candidates are `live_unlanded_candidates` (empty when the set is unknown; `sibling_run_claims` holds
+    on that); the token is a point read per run, never a token-store listing. A stamped run id older than
+    the token TTL is never opened. A halted run
     `halted_hold_release.release_reason` frees (against `own_run_id`/`own_plan`), and a resumed run
     whose successor landed or whose sizing is superseded, is not listed. A listed halted run may
     still claim nothing: `_held_extras` narrows it to what it withheld or left dirty. With `covering`, a
@@ -249,12 +345,12 @@ def _unlanded_run_ids(
     clear = index_clear_runs(root, covering)
     home = run_token._record_home(root)
     submitter = submitting_session(root, own_run_id)
-    for run_id, stamp in halted_hold_release.record_stamps(root):
+    for run_id, stamp in _stamped_candidates(root):
         if run_id == own_run_id or run_id in clear:
             continue
         if stamp is not None and now - stamp > run_token.TTL_SECONDS:
             continue
-        if released_ask_holder(root, run_id, own_run_id):
+        if released_ask_holder(root, run_id, own_run_id, home):
             continue
         try:
             if warp_run_deliverable._no_marker(root, run_id):
@@ -291,14 +387,14 @@ def halted_records(root: Path, own_run_id: Optional[str], covering: Optional[Seq
     """`[(record dir, halt marker)]` for each halted run other than `own_run_id` within the token TTL:
     the runs `_unlanded_run_ids` may weigh through `release_reason`, for `prefetch_kept_blobs`. One
     record-dir scan, file reads only; never raises. With `covering`, only runs withholding one of those paths."""
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token
+    from coordinator_core.ops.dispatch_emit import halted_run, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     out: list = []
     try:
         now = time.time()
         clear = index_clear_runs(root, covering)
-        for name, stamp in halted_hold_release.record_stamps(root):
+        for name, stamp in _stamped_candidates(root):
             if name == own_run_id or name in clear or stamp is None or now - stamp > run_token.TTL_SECONDS:
                 continue
             record = root / RECORD_DIR_ROOT / name
@@ -331,7 +427,8 @@ def _extra_declared_read(root: Path, run_id: str) -> set:
         rdir = record_dir(root, run_id)
     except ValueError:
         return out
-    out.add(warp_run_deliverable.record_sizing_rel(root, run_id))
+    sizing = _read_json(rdir / "run.json").get("sizing_rel")
+    out.add(warp_run_deliverable._norm(sizing) if isinstance(sizing, str) else "")
     prep = (_read_json(rdir / RUN_OUTCOME_FILE).get("inline_review") or {})
     prep = prep.get("prep") if isinstance(prep, dict) else None
     files = prep.get("slice_files") if isinstance(prep, dict) else None
@@ -497,13 +594,13 @@ def live_unreleased(
 
 
 def _released_ask_ids(root: Path, own_run_id: Optional[str]) -> frozenset:
-    """The in-TTL `ask-` run ids `released_ask_holder` frees against `own_run_id`, from the shared record-dir
-    listing and one token read per in-TTL ask id."""
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, run_token
+    """The in-TTL `ask-` run ids among `live_unlanded_candidates` that `released_ask_holder` frees against
+    `own_run_id`, with one token read per such id; empty when the candidate set is unknown."""
+    from coordinator_core.ops.dispatch_emit import run_token
 
     now = time.time()
     return frozenset(
-        name for name, stamp in halted_hold_release.record_stamps(root)
+        name for name, stamp in _stamped_candidates(root)
         if run_token.is_ask_run_id(name) and (stamp is None or now - stamp <= run_token.TTL_SECONDS)
         and released_ask_holder(root, name, own_run_id)
     )
@@ -542,13 +639,16 @@ def sibling_run_claims(
     hunks in it, claims nothing. A halted run
     whose only declaration of a path is its plan spine's `writes` does not claim it dirty when
     `own_declared` holds it: the landing run's own write is not that run's dirt. `unlanded` is a
-    caller's `_unlanded_run_ids` for the same arguments, passed so the scan is not repeated."""
+    caller's `_unlanded_run_ids` for the same arguments, passed so the scan is not repeated. An unreadable
+    live-run index claims every candidate under `LIVE_INDEX_UNAVAILABLE`: the sibling set is unknown."""
     root = Path(worktree_root)
     wanted = {_norm(p) for p in candidates if p}
     wanted.discard("")
     claims: dict = {}
     if not wanted:
         return claims
+    if _candidates(root) is None:
+        return {p: LIVE_INDEX_UNAVAILABLE for p in sorted(wanted)}
     dirty = _dirty_reader(root, wanted)
     own = {_norm(p) for p in own_declared or () if p}
     try:
@@ -558,10 +658,13 @@ def sibling_run_claims(
 
         attr = halted_hunk_attribution.reader(root, own_run_id, landing_plan=own_plan)
         with git_state.index_read_cache_scope(), halted_hold_release.blob_scope(root):
-            halted_hold_release.prefetch_kept_at_head(root, _in_window_run_ids(root, own_run_id))
             halted = warp_run_deliverable.halted_run_write_claims(
                 root, wanted, exclude_run=own_run_id, own_plan=own_plan,
             ) or {}
+            for path, run_ids in sorted(halted.items()):
+                claims.setdefault(path, run_ids[0])
+            if wanted <= claims.keys():  # first claimant wins: nothing later can change a claimed path
+                return claims
             submitter = submitting_session(root, own_run_id)
             live = live_unreleased(
                 root,
@@ -571,8 +674,7 @@ def sibling_run_claims(
                 ),
                 own_run_id, minted_before, submitter,
             ) or {}
-            for path, run_ids in sorted(halted.items()):
-                claims.setdefault(path, run_ids[0])
+            halted_hold_release.prefetch_kept_at_head(root, _in_window_run_ids(root, own_run_id))
             if unlanded is None:
                 unlanded = _unlanded_run_ids(root, own_run_id, own_plan, minted_before)
             halted_ids = {run_id for run_id in unlanded if warp_run_deliverable._halted(root, run_id)}
@@ -640,6 +742,8 @@ def shared_dir_holds(
         root = Path(worktree_root)
         held_dirs: set = set()
         with halted_hold_release.release_scope():
+            if _candidates(root) is None:
+                return wanted
             unlanded = _unlanded_run_ids(root, own_run_id, own_plan)
             for run_id in unlanded:
                 if warp_run_deliverable._halted(root, run_id):

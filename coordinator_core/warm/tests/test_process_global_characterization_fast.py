@@ -85,6 +85,6 @@ test_capture_session_does_not_cross_contaminate_under_interleave = (
 
 test_file_lock_eviction_is_held_aware = _slow.test_file_lock_eviction_is_held_aware
 
-test_engine_root_gate_memo_keys_per_interleaved_session_root = (
-    _slow.test_engine_root_gate_memo_keys_per_interleaved_session_root
+test_engine_root_gate_memo_is_session_independent = (
+    _slow.test_engine_root_gate_memo_is_session_independent
 )

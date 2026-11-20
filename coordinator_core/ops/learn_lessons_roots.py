@@ -59,7 +59,6 @@ OSS requirement: works for any coordinator-claude installer with zero registered
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from typing import Dict, List, Optional
 
@@ -67,61 +66,41 @@ from coordinator_core import machine_local_spawn
 from coordinator_core._settings_home import settings_home
 from coordinator_core.ops.learn_lessons_cutoff import _claude_home
 from coordinator_core.state_root import coordinator_state_root_central
-from coordinator_core.win_portability import is_executable, no_console_creationflags
+from coordinator_core.win_portability import is_executable
 
 _coordinator_state_root_central = coordinator_state_root_central
 
-_SUBPROCESS_TIMEOUT_SECS = 2.0
 _DENYLIST_KEYS = ("coordinator_claude", "deep_research_claude")
 _BEGIN_SENTINEL = "BEGIN learn-lessons-roots"
 _END_SENTINEL = "END learn-lessons-roots"
 
 
-def _machine_local_run(machine_local: str, *args: str) -> str:
-    """Run `machine-local <args>` and return raw stdout, "" on any failure --
-    mirrors the bash oracle's `"$MACHINE_LOCAL" ... 2>/dev/null || true` skip-absent
-    contract (stderr discarded, non-zero exit folds to empty rather than raising)."""
-    try:
-        proc = subprocess.run(
-            [machine_local, *args],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT_SECS,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _machine_local_run: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return ""
-    return proc.stdout or ""
+def _ml_target(machine_local: str) -> str:
+    kernel = machine_local_spawn.kernel_path()
+    return kernel if os.path.isfile(kernel) else machine_local
 
 
 def _publish_target_dests(machine_local: str) -> List[str]:
-    out = _machine_local_run(machine_local, "get", "publish.targets")
+    value, _ok = machine_local_spawn.get(_ml_target(machine_local), "publish.targets")
     dests: List[str] = []
-    for line in out.splitlines():
+    for line in (value or "").splitlines():
         fields = line.split("|")
         if len(fields) >= 4:
             dests.append(fields[3])
     return dests
 
 
-def _is_publish_target(
-    candidate: str, pub_dests: List[str], machine_local: str, ml_ok: bool
-) -> bool:
-    if candidate in pub_dests:
-        return True
-    if ml_ok:
-        for key in _DENYLIST_KEYS:
-            deny_path = _machine_local_run(machine_local, "get", f"repos.{key}").strip()
-            if deny_path and deny_path == candidate:
-                return True
-    return False
+def _denylist_paths(repos: Dict[str, str]) -> List[str]:
+    """Denylisted repo paths, read from the already-fetched repos dump (zero spawns)."""
+    return [repos[f"repos.{key}"].strip() for key in _DENYLIST_KEYS if repos.get(f"repos.{key}", "").strip()]
+
+
+def _is_publish_target(candidate: str, pub_dests: List[str], deny_paths: List[str]) -> bool:
+    return candidate in pub_dests or candidate in deny_paths
 
 
 def _machine_local_dump_repos(machine_local: str) -> Dict[str, str]:
-    kernel = machine_local_spawn.kernel_path()
-    target = kernel if os.path.isfile(kernel) else machine_local
-    data = machine_local_spawn.dump(target, ("--prefix", "repos", "--format", "json"))
+    data = machine_local_spawn.dump(_ml_target(machine_local), ("--prefix", "repos", "--format", "json"))
     if not data:
         return {}
     return {k: v for k, v in data.items() if isinstance(v, str) and v}
@@ -130,13 +109,15 @@ def _machine_local_dump_repos(machine_local: str) -> Dict[str, str]:
 def _registry_roots(machine_local: str) -> List[str]:
     roots: List[str] = []
     pub_dests = _publish_target_dests(machine_local)
-    for resolved in _machine_local_dump_repos(machine_local).values():
+    repos = _machine_local_dump_repos(machine_local)
+    deny_paths = _denylist_paths(repos)
+    for resolved in repos.values():
         resolved = resolved.strip()
         if not resolved:
             continue
         if not os.path.isdir(resolved):
             continue
-        if _is_publish_target(resolved, pub_dests, machine_local, ml_ok=True):
+        if _is_publish_target(resolved, pub_dests, deny_paths):
             continue
         roots.append(resolved)
     return roots

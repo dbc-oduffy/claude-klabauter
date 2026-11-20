@@ -65,6 +65,7 @@ def other_landing(landing):  # noqa: F811
         thread.join(10)
 
 
+@pytest.mark.deliberate_wall_clock(reason="parking inside the step deadline while the gate is held is the behaviour under test")
 def test_a_gate_held_by_another_landing_parks_the_landing_at_the_gate_step(landing, other_landing, monkeypatch):  # noqa: F811
     root, base = landing
     monkeypatch.setattr(land_byte_gate, "GATE_STEP_SECS", 0.6)
@@ -103,6 +104,7 @@ def _force_foreign_mismatch(monkeypatch, step_secs: float) -> None:
     monkeypatch.setattr(cov, "REVERIFY_STEP_SECS", step_secs)
 
 
+@pytest.mark.deliberate_wall_clock(reason="parking inside the step deadline while a reverify never answers is the behaviour under test")
 def test_a_reverify_that_never_answers_parks_at_the_reverify_step(halted, monkeypatch):  # noqa: F811
     _force_foreign_mismatch(monkeypatch, 0.5)
     t0 = time.monotonic()
@@ -119,12 +121,12 @@ def test_a_verdict_read_that_blocks_past_the_step_parks_at_the_reverify_step(hal
     real = cov.check_verdict
     calls = []
 
-    def slow(root, run_id, measured):
+    def slow(root, run_id, measured, git_root=None):
         calls.append(1)
         if len(calls) > 1:
             time.sleep(0.6)
             return cov.OverlayVerdict("missing", "still unwritten")
-        return real(root, run_id, measured)
+        return real(root, run_id, measured, git_root)
 
     monkeypatch.setattr(cov, "check_verdict", slow)
 
@@ -175,6 +177,7 @@ def _block_the_definition_grep(monkeypatch, secs: float) -> None:
     monkeypatch.setattr(git_run, "run_git", run_git)
 
 
+@pytest.mark.deliberate_wall_clock(reason="owing the step inside the deadline while a git blocks is the behaviour under test")
 def test_a_definition_grep_that_blocks_lands_with_the_reach_claims_step_owed(product_repo, monkeypatch):
     repo = product_repo  # noqa: F811
     monkeypatch.setattr(land_run, "_ledger_gate", lambda *a, **k: (None, None, []))

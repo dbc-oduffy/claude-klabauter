@@ -84,6 +84,11 @@ def box(request, monkeypatch, tmp_path, setup_mod):
         "run",
         lambda cmd, **kw: SimpleNamespace(returncode=0, stdout=served + "\n", stderr=""),
     )
+    monkeypatch.setattr(
+        setup_mod.machine_local_spawn,
+        "run_bounded",
+        lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
     monkeypatch.setattr(setup_mod, "_resolve_coordinator_claude_root", lambda r, a: (tmp_path, None))
     monkeypatch.setattr(setup_mod, "_resolve_plugin_root_for_machine_local", lambda c: None)
     monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda p: ["machine-local"])

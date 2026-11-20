@@ -492,13 +492,14 @@ def test_a_row_the_halt_kept_from_starting_is_handed_to_terminal_commit_as_incom
     assert "_notStarted" in line and "_incompleteChunks" in line
 
 
-def test_every_executor_prompt_tells_the_row_to_delete_its_own_scratch() -> None:
+def test_executor_reports_scratch_when_cleanup_is_denied() -> None:
     """Per-row clones and venvs left behind filled a cloud disk mid-run."""
     waves = [[_row("C1", ["a.py"])]]
     script = compose_script(
         waves, name="wf", description="scratch", plan_path="docs/plans/example.md", **REVIEW_KW
     )
-    assert "delete that directory before you write your report" in script
+    assert "remove only that row-owned directory" in script
+    assert "If cleanup is denied, report its path and continue with the row verdict" in script
 
 
 def test_one_stage_inline_review_names_the_engine_record_and_carries_stage_returns() -> None:

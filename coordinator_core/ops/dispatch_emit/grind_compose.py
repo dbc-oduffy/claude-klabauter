@@ -115,7 +115,7 @@ from coordinator_core.contract import grind_vocab as vocab
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
 from coordinator_core.distill.prompt_tier import estimate_tokens, over_tier, split_to_tier
-from coordinator_core.ops.dispatch_emit import pm_adjudication
+from coordinator_core.ops.dispatch_emit import pm_adjudication, record_paths
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.landing_integrity import REVERIFY_INDETERMINATE
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import (
@@ -2093,8 +2093,9 @@ _TERMINAL_COMMIT_JS = (
     "}\n"
     "async function _terminalCommit() {\n"
     "  if (_pendingCommit.length === 0) return;\n"
-    "  const queued = _pendingCommit.splice(0, _pendingCommit.length).sort((x, y) => (x.row_id < y.row_id ? -1 : x.row_id > y.row_id ? 1 : 0));\n"
+    "  const queued = _pendingCommit.splice(0, _pendingCommit.length).filter((q) => !_bookkeepIds.has(q.row_id)).sort((x, y) => (x.row_id < y.row_id ? -1 : x.row_id > y.row_id ? 1 : 0));\n"
     "  _runDirty.clear();\n"
+    "  if (queued.length === 0) return;\n"
     "  const _failAll = (reason) => {\n"
     "    for (const q of queued) { _unsettle(q.row_id); _handBack(q.row_id, 'commit-failed', reason); }\n"
     "  };\n"
@@ -2137,6 +2138,59 @@ _TERMINAL_COMMIT_JS = (
     "    if (s) { s.sha = sha; }\n"
     "  }\n"
     "}"
+)
+
+
+#: Run-time subset of `grind_bookkeep`'s product-path refusal: a path under a record prefix, and under `docs/`
+#: only a `.md` file (any other `docs/` file is review-owed, which `record_paths.is_record_path` refuses). A row
+#: whose proposed close, archive path and touched files pass it and whose confirmed edge routes to a commit is
+#: closed and landed by `dispatch.grind_bookkeep` after the run, not by the close and commit agents;
+#: `_bookkeepIds` holds it.
+_BOOKKEEP_JS = (
+    "const _bookkeepIds = new Set();\n"
+    "const _bookkeepRecordRe = new RegExp(" + _js_string_literal(record_paths.record_prefix_js_regex()) + ");\n"
+    "function _isRecordPath(p) {\n"
+    "  const q = String(p).replace(/\\\\/g, '/').replace(/^\\.\\//, '');\n"
+    "  return _bookkeepRecordRe.test(q) && (!q.startsWith('docs/') || q.endsWith('.md'));\n"
+    "}\n"
+    "function _bookkeepRows() {\n"
+    "  return Array.from(_bookkeepIds).filter((id) => _settled.some((s) => s.row === id && s.outcome === 'committed')).sort().map((id) => {\n"
+    "    const r = _rows[id];\n"
+    "    const touched = Array.from(new Set(r.touchedFiles.concat(r.closeResult ? [r.closeResult.new] : [])));\n"
+    "    return { row_id: id, path: r.path, digest: r.digest, verdict: r.origin, evidence: r.evidence, outcome: 'deferred', closed: false, touchedFiles: touched };\n"
+    "  });\n"
+    "}\n"
+    "function _bookkeepDefersRun() {\n"
+    "  return !_grindErr && _bookkeepIds.size > 0 && _settled.every((s) => s.outcome !== 'committed' || _bookkeepIds.has(s.row));\n"
+    "}\n"
+    "function _bookkeepNextAction() {\n"
+    "  const rows = _bookkeepRows();\n"
+    "  if (rows.length === 0) return null;\n"
+    "  return { op: 'dispatch.grind_bookkeep', params: { repo_root: REPO_ROOT, run_id: RUN_ID, rows, run_close_deferred: _bookkeepDefersRun(), "
+    "record: _bookkeepDefersRun() ? _runCostRecord() : null, declared: _bookkeepDefersRun() ? _declaredWrites() : null } };\n"
+    "}\n"
+)
+
+_CLOSE_DEFER_JS = (
+    "function _closeDefers(p) {\n"
+    "  const row = _rows[p.row_id];\n"
+    "  if (!row || !row.node || !ROUTING[row.node]) return false;\n"
+    "  const target = ROUTING[row.node].edges.confirmed;\n"
+    "  if (target === undefined || (ROUTING[target] && ROUTING[target].kind !== 'commit')) return false;\n"
+    "  return _isRecordPath(p.path) && _isRecordPath(_archiveDestination(p.path))\n"
+    "    && (row.touchedFiles || []).every(_isRecordPath);\n"
+    "}\n"
+    "async function _closeCall(proposals) {\n"
+    "  const _deferred = proposals.filter((p) => _closeDefers(p));\n"
+    "  const _rest = proposals.filter((p) => !_closeDefers(p));\n"
+    "  const _agentOut = _rest.length > 0 ? ((await _closeAgentCall(_rest)) || {}) : {};\n"
+    "  for (const p of _deferred) { _bookkeepIds.add(p.row_id); }\n"
+    "  return {\n"
+    "    confirmed: _deferred.map((p) => ({ row: p.row_id, new_path: _archiveDestination(p.path) })).concat(_agentOut.confirmed || []),\n"
+    "    refuted: _agentOut.refuted || [],\n"
+    "    stale: _agentOut.stale || [],\n"
+    "  };\n"
+    "}\n"
 )
 
 
@@ -2334,6 +2388,9 @@ def _run_close_block(
     return (
         "async function _drainCall() {\n" + _indent_block(_capture(drain_raw, "ledger-sweep"), "  ") + "\n}\n"
         "async function _runClose() {\n"
+        "  const _bk = _bookkeepNextAction();\n"
+        "  if (_bk) { log('grind bookkeep ' + JSON.stringify(_bk)); }\n"
+        "  if (_bookkeepDefersRun()) { return; }\n"
         "  let _drained;\n"
         "  let _threw;\n"
         "  try { _drained = await _drainCall(); } catch (err) {\n"
@@ -2355,6 +2412,27 @@ def _run_close_block(
         "  }\n"
         "}"
     )
+
+
+def _archive_dir_is_record(archive_path: Any) -> bool:
+    """True when files under the archive directory are record paths (a directory has no file name,
+    so a placeholder child is probed)."""
+    return record_paths.is_record_path(str(archive_path).rstrip("/\\") + "/x")
+
+
+def _record_only_close_run(
+    profile: Profile, manifest: Any, has_close_node: bool, close_node_id: Optional[str]
+) -> bool:
+    """True when the expected case is a record-only run: every row and the archive are record
+    paths and the close's confirmed edge lands on a commit, so `_closeDefers` scripts close,
+    commit, sweep and review. Emit-time twin of `_BOOKKEEP_JS`; a row a fix routes to product
+    files runs off this path and is not counted (like size scouts and retries)."""
+    if not has_close_node or close_node_id is None or not manifest.entries:
+        return False
+    confirmed = profile.graph[close_node_id].edges.get("confirmed")
+    if confirmed is not None and (confirmed not in profile.graph or profile.graph[confirmed].kind != "commit"):
+        return False
+    return _archive_dir_is_record(profile.archive_path) and all(record_paths.is_record_path(e.path) for e in manifest.entries)
 
 
 def _verify_mode_for_key(profile: Profile, node_id: str, batch_key: str) -> tuple[str, Optional[str]]:
@@ -2764,7 +2842,10 @@ def compose_grind_script(
             preamble_expr=preamble_expr,
         )
         lines.append(
-            "async function _closeCall(proposals) {\n" + _indent_block(_capture(close_raw, "refute-close"), "  ") + "\n}"
+            _CLOSE_DEFER_JS
+            + "async function _closeAgentCall(proposals) {\n"
+            + _indent_block(_capture(close_raw, "refute-close"), "  ")
+            + "\n}"
         )
 
     fix_raw = stages.compose_fix_call(
@@ -3003,6 +3084,7 @@ def compose_grind_script(
     )
 
     lines.append(_TERMINAL_COMMIT_JS)
+    lines.append(_BOOKKEEP_JS)
 
     lines.append(
         "function _pendingRow(batch) {\n"
@@ -3424,8 +3506,12 @@ def compose_grind_script(
     lines.append(
         "const _reviewPaths = Array.from(new Set(_settled.filter((s) => s.outcome === 'committed')"
         ".flatMap((s) => (_rows[s.row] || {}).touchedFiles || []))).sort();\n"
+        "const _reviewRecordRe = new RegExp(" + _js_string_literal(record_paths.record_prefix_js_regex()) + ");\n"
+        "const _reviewProductPaths = _reviewPaths.filter((p) => !_reviewRecordRe.test(String(p).replace(/\\\\/g, '/').replace(/^\\.\\//, '')));\n"
         "if (_reviewPaths.length === 0) {\n"
         "  log('execute_review skipped: no row committed, nothing landed to review');\n"
+        "} else if (_reviewProductPaths.length === 0) {\n"
+        "  log('execute_review skipped: no product file changed, nothing to review');\n"
         "} else {\n"
         + "\n".join(block for _, block in review_blocks)
         # Trap: a wave that ran but returned no verdict-bearing entry leaves review_state 'not-run'.
@@ -3475,6 +3561,7 @@ def compose_grind_script(
         "  settled: _settled,\n"
         "  counts: _counts(),\n"
         "  spend: _spend(),\n"
+        "  next_action: _bookkeepNextAction(),\n"
         "};"
     )
     lines.append("return HANDBACK;")
@@ -3484,13 +3571,30 @@ def compose_grind_script(
     # and retries fire only off the happy path and are not counted. The adjudicate leg is one
     # post-loop call, counted once via once_per_run_legs.
     fix_legs_per_row = 1 if any(kind == "fix" for kind in node_kind.values()) else 0
-    per_batch_legs = 1 + (1 if has_close_node else 0)
-    per_row_agent_legs = sum(
-        fix_legs_per_row
-        + sum(1 for node_id in verify_node_ids if verify_spec_by_node[node_id][entry.batch_key]["mode"] == "agent")
-        for _, entries in grouped
-        for entry in entries
-    )
+    record_only = _record_only_close_run(profile, manifest, has_close_node, prevet_close_node)
+
+    if record_only:
+        # Record-only close run: the close, commit, sweep and review are scripted
+        # (`dispatch.grind_bookkeep`), and a row ends at the scripted close after its routing verify.
+        # The adjudicate leg calls an agent only over pending PM-bound hand-backs, so the expected
+        # case counts none.
+        per_batch_legs = 1
+        per_row_agent_legs = sum(
+            min(1, sum(1 for n in verify_node_ids
+                       if n in pre_fix_nodes and verify_spec_by_node[n][entry.batch_key]["mode"] == "agent"))
+            for _, entries in grouped
+            for entry in entries
+        )
+        once_run_agents = 0
+    else:
+        per_batch_legs = 1 + (1 if has_close_node else 0)
+        per_row_agent_legs = sum(
+            fix_legs_per_row
+            + sum(1 for node_id in verify_node_ids if verify_spec_by_node[node_id][entry.batch_key]["mode"] == "agent")
+            for _, entries in grouped
+            for entry in entries
+        )
+        once_run_agents = sum(len(AGENT_CALL_RE.findall(scrub(leg))) for leg in once_per_run_legs)
     prevet_legs = (
         -(-len(manifest.entries) // profile.prevet.batch_size) * 2 if profile.prevet is not None else 0
     )
@@ -3501,7 +3605,7 @@ def compose_grind_script(
             agents=prevet_legs
             + len(grouped) * per_batch_legs
             + per_row_agent_legs
-            + sum(len(AGENT_CALL_RE.findall(scrub(leg))) for leg in once_per_run_legs),
+            + once_run_agents,
             basis="expected",
             groups=tuple(tuple(e.row_id for e in entries) for _, entries in grouped),
             row_total_tokens=ROW_TOTAL_TOKENS * len(manifest.entries),

@@ -74,10 +74,10 @@ def test_a_land_only_ask_is_never_held_by_its_own_halted_run(repo):
 BASE = "b" * 40
 
 
-def test_review_red_baseline_is_head_at_review_start_and_credits_an_owned_red():
+def test_review_red_baseline_is_measured_by_the_test_leg_and_credits_an_owned_red():
     from coordinator_core.ops.review_mint.execute_review import _base_measure_clause
 
     clause = _base_measure_clause(BASE, "state/warp/run1/owned_red.jsonl")
-    assert "--sha HEAD" in clause and f"--sha {BASE}" in clause
+    assert "`pre_existing`" in clause and "failing_at_base" in clause
     assert "state/warp/run1/owned_red.jsonl" in clause and "owner_run_id" in clause
     assert "owned_red" not in _base_measure_clause(BASE)

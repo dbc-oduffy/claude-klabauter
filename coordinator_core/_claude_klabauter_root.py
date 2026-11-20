@@ -97,12 +97,56 @@ def seed_machine_local(*keys: str) -> None:
         current = {}
     if not isinstance(current, dict):
         current = {}
-    for key in keys:
-        value = _machine_local_get(key)
+    for key, value in _machine_local_get_many(keys).items():
         if value:
             current[key] = value
     if current:
         os.environ[MACHINE_LOCAL_SEED_ENV] = json.dumps(current)
+
+
+def _machine_local_get_many(keys: Tuple[str, ...]) -> Dict[str, Optional[str]]:
+    """Resolve every key with at most one spawn: seeded and memoized keys answer
+    from memory, the rest from a single ``_machine_local.py dump`` (the kernel
+    ``get`` uses, so values match). One unresolved key uses ``get``. A key
+    absent from the dump, a failed spawn or unparseable output is None and
+    memoized, as in ``_machine_local_get``."""
+    out: Dict[str, Optional[str]] = {}
+    pending = []
+    impl = _machine_local_impl()
+    for key in dict.fromkeys(keys):
+        seeded = _seeded_value(key)
+        if seeded is not None:
+            out[key] = seeded
+        elif (key, impl) in _machine_local_cache:
+            out[key] = _machine_local_cache[(key, impl)]
+        else:
+            pending.append(key)
+    if len(pending) == 1:
+        out[pending[0]] = _machine_local_get(pending[0])
+        return out
+    if not pending:
+        return out
+    dumped: Dict[str, Optional[str]] = {}
+    if os.path.exists(impl):
+        try:
+            result = subprocess.run(
+                [console_python(sys.executable), impl, "dump"],
+                capture_output=True,
+                text=True,
+                timeout=_MACHINE_LOCAL_TIMEOUT,
+                **no_console_creationflags(),
+            )
+            parsed = json.loads(result.stdout) if result.stdout.strip() else {}
+            if isinstance(parsed, dict):
+                dumped = parsed
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            dumped = {}
+    for key in pending:
+        raw = dumped.get(key)
+        value = raw.strip() if isinstance(raw, str) else ""
+        _machine_local_cache[(key, impl)] = value or None
+        out[key] = value or None
+    return out
 
 
 def _machine_local_get(key: str) -> Optional[str]:

@@ -31,6 +31,7 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     "parked": (MECHANICAL, "halt-record-carries-refire-next-action"),
     # ask_compose terminal halts.
     "usage_limit": (DECISION, None),
+    "family_cli_failure": (DECISION, None),
     "review_blocked": (DECISION, None),
     "criterion_not_met": (DECISION, None),
     "delivery_fail": (DECISION, None),
@@ -89,6 +90,8 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     # commit_stage_halt.halt_run_on_unrecorded_end: the run ended with no halt record; a refire resumes the kept work.
     "run-ended-unrecorded": (MECHANICAL, "refire-resumes-kept-work"),
     "citation_unbacked": (DECISION, None),
+    # ask_gate: the bound plan's spine derives zero dispatchable rows; a refire re-derives the same spine, so the plan needs an edit.
+    "nothing-executable": (DECISION, None),
     # staged_stall.halt_stalled: a staged run silent past the stall bound; a refire resumes the kept work.
     "staged_stall": (MECHANICAL, "refire-resumes-kept-work"),
     # run_cancel: workflow.cancel stopped the run on purpose; the halted record carries the refire next_action.
@@ -113,6 +116,7 @@ IRREVERSIBLE_KINDS: dict[str, str] = {
     "objective_escalated": "objective escalated to the PM",
     # External or terminal-verdict: the halt is the run's true end state.
     "usage_limit": "third-party quota exhausted: no engine remedy exists",
+    "family_cli_failure": "family CLI auth or launch failed: a login renewal is a human act",
     "review_blocked": "review blocked the code: landing it is shipping rejected work",
     "review_floor": "review floor unmet: landing it is shipping unreviewed work",
     "criterion_not_met": "exit criterion unmet: continuing claims a false completion",

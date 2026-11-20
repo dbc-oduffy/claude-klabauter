@@ -81,6 +81,27 @@ def _reply_of(envelope: Any) -> dict:
     return reply
 
 
+def _denied_lock_dir(exc: BaseException) -> Optional[str]:
+    """The machine lock directory when `exc` (or its cause chain) is a PermissionError on a path under it, else None."""
+    import os
+
+    from coordinator_core.locked_write import _machine_lock_dir
+
+    lock_dir = _machine_lock_dir()
+    root = os.path.normcase(os.path.abspath(lock_dir))
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        name = getattr(cur, "filename", None)
+        if isinstance(cur, PermissionError) and name:
+            path = os.path.normcase(os.path.abspath(os.fsdecode(name)))
+            if path == root or path.startswith(root + os.sep):
+                return str(lock_dir)
+        cur = cur.__cause__ or cur.__context__
+    return None
+
+
 def submit_ask(
     *,
     ask: Optional[str] = None,
@@ -144,6 +165,9 @@ def submit_ask(
     try:
         envelope = evaluate(payload)
     except Exception as exc:
+        lock_dir = _denied_lock_dir(exc)
+        if lock_dir:
+            return _refused("gate-refused", f"The sandbox denies writes to the engine lock directory {lock_dir}. Grant it as a writable root: --add-dir {lock_dir}.")
         return _refused("gate-refused", f"The submission gates failed: {type(exc).__name__}: {exc}. Check for an existing run record before re-submitting.")
     return _reply_of(envelope)
 

@@ -106,11 +106,17 @@ def _blocks(root: Path, common: Path, path: str, head_keys: list, shas) -> set:
 
 
 def _recorded(record_dir: Path, path: str) -> set:
-    """Blob shas a run's record names for `path`: `kept.json` blobs and the `touched-blobs.json` run blob."""
+    """Blob shas a run's record names for `path`: `kept.json` blobs and the `touched-blobs.json` run blob.
+    The two record files are read once per run dir per `call_io_scope`, not once per path."""
+    from coordinator_core.git import call_io_scope
     from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
 
-    shas = set(kept_work.kept_fingerprints(record_dir).get(path, ()))
-    run_blob = stranded_sibling.read(record_dir).get(path, {}).get("run")
+    kept, touched = call_io_scope.memo(
+        "own-hunk-recorded", str(record_dir),
+        lambda: (kept_work.kept_fingerprints(record_dir), stranded_sibling.read(record_dir)),
+    )
+    shas = set(kept.get(path, ()))
+    run_blob = touched.get(path, {}).get("run")
     if run_blob:
         shas.add(run_blob)
     return shas

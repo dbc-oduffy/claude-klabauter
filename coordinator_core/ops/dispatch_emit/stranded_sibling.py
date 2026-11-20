@@ -42,8 +42,13 @@ def write(record_dir: Path, touched: Mapping[str, Mapping[str, Optional[str]]]) 
 
 def read(record_dir: Path) -> dict:
     """The record as `{path: {"base", "run"}}`; `{}` on any error or malformed entry."""
+    from coordinator_core.git import call_io_scope
+
     try:
-        data = json.loads((Path(record_dir) / TOUCHED_FILE).read_text(encoding="utf-8"))
+        raw = call_io_scope.read_bytes(Path(record_dir) / TOUCHED_FILE)  # scoped: absence is cached too
+        if raw is None:
+            return {}
+        data = json.loads(raw.decode("utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):

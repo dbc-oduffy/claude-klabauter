@@ -17,6 +17,8 @@ from coordinator_core.group_em import box_registry
 BOX_UNKNOWN = "BOX_UNKNOWN"
 _BIN = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 _MODULES: dict = {}
+# The Group EM identity predates the Mini's signed Unimatrix membership name.
+_MEMBER_ID_ALIASES = {"box-65fdb5b0": "mac-mini"}
 
 
 def _load(name: str, filename: str):
@@ -40,9 +42,30 @@ def _roster():
     return _load("unimatrix_roster", "unimatrix-roster.py")
 
 
-def _matches(member: dict, user: Optional[str], name: str) -> bool:
+def _registry_name_sets(home_path: Path) -> list[set]:
+    """Folded names of each registered box row: its stable ``box_id``, ``capability.name`` and prior ``names``."""
+    fold = box_registry.fold_box_id
+    sets = []
+    for row in box_registry.read_boxes(box_registry._group_em_dir(home_path)):
+        cap = row.get("capability")
+        raw = [row.get("box_id"), cap.get("name") if isinstance(cap, dict) else None]
+        prior = row.get("names")
+        raw += prior if isinstance(prior, list) else []
+        sets.append({fold(n) for n in raw if isinstance(n, str) and n})
+    return sets
+
+
+def _matches(member: dict, user: Optional[str], name: str, registry: tuple = ()) -> bool:
+    """True when ``name`` names ``member``: by its roster box/host, or by any name set of a registry
+    row that shares one of those names (a box renamed since the roster was signed)."""
     fold = box_registry.fold_box_id
     names = {fold(member["box"]), fold(member["host"]), fold(member["host"].split(".")[0])}
+    canonical = _MEMBER_ID_ALIASES.get(fold(name))
+    if canonical is not None:
+        return canonical == fold(member["box"]) and (user is None or user == member["user"])
+    for row in registry:
+        if names & row:
+            names |= row
     return fold(name) in names and (user is None or user == member["user"])
 
 
@@ -62,13 +85,13 @@ def member_box_id(token: str, home=None, run=None) -> Optional[str]:
     parts = _split_token(token)
     if parts is None:
         return None
+    home_path = Path(home) if home is not None else box_registry.settings_home()
     try:
-        members = _membership().verified_members(
-            Path(home) if home is not None else box_registry.settings_home(), run=run or subprocess.run
-        )
+        members = _membership().verified_members(home_path, run=run or subprocess.run)
     except Exception:  # noqa: BLE001 - an unverifiable membership leaves the token as typed
         return None
-    member = next((m for m in members or () if _matches(m, *parts)), None)
+    registry = tuple(_registry_name_sets(home_path))
+    member = next((m for m in members or () if _matches(m, *parts, registry)), None)
     return member["box"] if member else None
 
 
@@ -88,7 +111,7 @@ def _registered_alias(al, roster, member: dict, run) -> Optional[str]:
 
 
 def resolve_member_box(token: str, home=None, run=None) -> dict:
-    """Resolve ``token`` (box id, ``user@box`` or member host) to a registered ssh box row.
+    """Resolve ``token`` (box id, ``user@box``, member host, or a registered row's stable id, current or prior name) to a registered ssh box row.
 
     Returns ``{"ok": True, "box": <box.json row>}`` or ``{"ok": False, "reason": BOX_UNKNOWN |
     "membership_unverified:<why>"}``. An unverifiable, absent or unpinned snapshot is
@@ -114,7 +137,8 @@ def resolve_member_box(token: str, home=None, run=None) -> dict:
         return {"ok": False, "reason": f"membership_unverified:{str(exc)[:120]}"}
     if not members:
         return {"ok": False, "reason": "membership_unverified:no_snapshot"}
-    member = next((m for m in members if _matches(m, user, name)), None)
+    registry = tuple(_registry_name_sets(home_path))
+    member = next((m for m in members if _matches(m, user, name, registry)), None)
     if member is None:
         return {"ok": False, "reason": BOX_UNKNOWN}
     al, roster = _autolink(), _roster()

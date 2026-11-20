@@ -127,16 +127,22 @@ def admit(
     target = common / _LOCK_NAME
     own_run = False
     with ExitStack() as stack:
-        wait_step = land_deadline.step(GATE_STEP, GATE_STEP_SECS) if follow_holder else nullcontext()
         try:
-            with wait_step:
-                try:
-                    stack.enter_context(
-                        held_lock(target, anchor_root=anchor_root, timeout=0, holder_label=holder_label)
-                    )
-                except LockTimeout as busy:
-                    latest = busy
-                    own_run = _held_by_own_run(busy, holder_label)
+            try:
+                # Try-once runs outside the step: a free gate is admitted whatever the op budget has
+                # left, and only a landing that must queue is bound by `GATE_STEP`.
+                stack.enter_context(
+                    held_lock(target, anchor_root=anchor_root, timeout=0, holder_label=holder_label)
+                )
+            except LockTimeout as busy:
+                latest = busy
+                own_run = _held_by_own_run(busy, holder_label)
+                wait_step = (
+                    land_deadline.step(GATE_STEP, GATE_STEP_SECS)
+                    if follow_holder and not own_run
+                    else nullcontext()
+                )
+                with wait_step:
                     while not own_run:
                         if follow_holder:
                             now = time.monotonic()

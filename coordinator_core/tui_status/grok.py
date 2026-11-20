@@ -22,7 +22,11 @@ def line(payload: dict) -> str:
     window = payload.get("context_window")
     window = window if isinstance(window, dict) else {}
     cost = payload.get("cost")
+    # Grok nests the threshold under context_window; the top-level key is the older payload shape.
+    threshold = window.get("auto_compact_threshold_percent")
+    if threshold is None:
+        threshold = payload.get("auto_compact_threshold_percent")
     return format_line(
         resolve_name("grok", [payload.get("session_id")]),
-        before_compact(window.get("remaining_percentage"), payload.get("auto_compact_threshold_percent")),
+        before_compact(window.get("remaining_percentage"), threshold),
         usd_or_none(cost.get("total_cost_usd") if isinstance(cost, dict) else None))

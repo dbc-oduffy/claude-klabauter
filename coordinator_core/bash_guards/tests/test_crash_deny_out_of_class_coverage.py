@@ -34,6 +34,7 @@ from coordinator_core.bash_guards import (
     block_empty_source_push,
     guard_uncapped_pytest_plugin,
     block_editor_kill_by_name,
+    block_kill_by_port_or_tree,
     block_whole_filesystem_scan,
     block_worktree_creation,
     block_worktree_sentinel_creation,
@@ -296,6 +297,11 @@ _DENIED: List[Tuple[str, str, Runner]] = [
         "block-editor-kill-by-name",
         "taskkill /F /IM UnrealEditor.exe",
         _check_module(block_editor_kill_by_name, _bash),
+    ),
+    (
+        "deny-kill-by-port-or-tree",
+        "taskkill /F /T /PID 1",
+        _check_module(block_kill_by_port_or_tree, _bash),
     ),
     (
         "block-whole-filesystem-scan",

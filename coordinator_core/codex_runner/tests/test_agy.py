@@ -4,13 +4,13 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from coordinator_core.codex_runner import agy
 from coordinator_core.codex_runner.contract import FALLBACK_REVIEWER, RunRequest
 from coordinator_core.codex_runner.resolve import CodexUnavailable
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from subprocess import Popen

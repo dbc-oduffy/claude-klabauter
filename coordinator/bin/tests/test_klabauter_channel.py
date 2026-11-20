@@ -264,3 +264,20 @@ def test_set_reports_git_op_failure_distinctly(monkeypatch, capsys):
     _install_stubs(monkeypatch, git_spy=_GitSpy(fetch_returncode=1))
     rc = _mod.main(["--set", "main"])
     assert rc == _mod._EXIT_GIT_OP_FAILED
+
+
+def test_does_not_import_publish_which_klabauter_does_not_ship():
+    # publish.py is not published to klabauter; importing it broke the published CLI
+    # (ModuleNotFoundError: No module named 'publish' from the settings-home shim).
+    src = Path(_mod.__file__).read_text(encoding="utf-8")
+    assert "from publish import" not in src and "import publish" not in src
+
+
+@pytest.mark.parametrize("track_ref", ["origin/candidate", "candidate", "origin/main", "v1.2"])
+def test_local_branch_matches_publish(track_ref):
+    sys.path.insert(0, str(Path(_mod.__file__).parent))
+    try:
+        import publish
+    finally:
+        sys.path.pop(0)
+    assert _mod._expected_local_branch(track_ref) == publish._expected_local_branch(track_ref)

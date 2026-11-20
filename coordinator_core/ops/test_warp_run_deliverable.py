@@ -269,11 +269,11 @@ def test_halted_run_never_reaches_liveness_or_transcript_checks(repo, monkeypatc
 
     _manifest(repo, "p1", writes=["a.py"])
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
-    monkeypatch.setattr(wrd, "_halted", lambda root, rid: True)
+    monkeypatch.setattr(wrd, "_halted", lambda root, rid, **kwargs: True)
     monkeypatch.setattr(touch_record, "session_live", boom)
     monkeypatch.setattr(warp_live, "runner_unproven", boom)
     assert _claims(repo, ["a.py"]) == {}
-    monkeypatch.setattr(wrd, "_halted", lambda root, rid: False)
+    monkeypatch.setattr(wrd, "_halted", lambda root, rid, **kwargs: False)
     monkeypatch.setattr(wrd, "_landed", lambda root, rid: True)
     assert _claims(repo, ["a.py"]) == {}
 
@@ -413,6 +413,26 @@ def test_a_resumed_run_declares_again(repo, live) -> None:
     halted_run.write_halt_marker(record_dir(repo, "p1"), halted="criterion_not_met", sizing_rel=None)
     halted_run.mark_resumed(record_dir(repo, "p1"))
     assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
+
+
+def test_superseded_run_cannot_claim_commit_request_prefix(repo, live) -> None:
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    run_dir = repo / "scratch/warp/p1"
+    run_dir.mkdir(parents=True)
+    marker = render_marker(
+        CommitRequest(chunks=(ChunkCommit(id="C1", title="bench", prefixes=("pkg/",)),), version=1)
+    )
+    (run_dir / "commit-request.txt").write_text((marker or "") + "\n", encoding="utf-8")
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["pkg/checker.py"]) == {"pkg/checker.py": [PEER]}
+    record = record_dir(repo, "p1")
+    halted_run.write_halt_marker(record, halted="criterion_not_met", sizing_rel=None)
+    assert halted_run.mark_superseded_by_refire(
+        record, prior_engine="old", engine="new", at="2026-11-20T05:00:00Z"
+    )
+    assert _claims(repo, ["pkg/checker.py"]) == {}
 
 
 def test_a_landed_run_declares_nothing(repo, live) -> None:

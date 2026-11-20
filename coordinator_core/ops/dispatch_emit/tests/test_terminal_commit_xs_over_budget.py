@@ -129,11 +129,13 @@ def test_a_binary_untracked_file_counts_one_file_zero_lines(root) -> None:
     assert marker["measured"] == {"files": 3, "lines": 10}
 
 
-def test_an_unresolvable_base_fails_closed(root) -> None:
+def test_an_unresolvable_base_lands_with_an_xs_over_budget_provenance_row(root) -> None:
     names = _new_files(root, 1, 1)
     reply, _ = _call(root, names, base="0" * 40)
-    assert reply["refused"] == "xs-over-budget"
-    assert "unmeasurable" in reply["error"]
+    assert "refused" not in reply, reply
+    assert reply.get("committed") is True, reply
+    rows = [e for e in reply["provenance"] if e.get("reason") == "xs-over-budget"]
+    assert rows and "unmeasurable" in rows[0]["detail"], reply
 
 
 def test_an_xs_run_with_a_review_shape_still_yields_the_marker(root) -> None:

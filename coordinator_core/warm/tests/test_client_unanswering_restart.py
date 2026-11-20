@@ -174,6 +174,20 @@ def test_a_counter_write_failure_is_no_decision_not_an_error(engine, monkeypatch
     assert decided == [] and killed == []
 
 
+@pytest.mark.parametrize("busy_errno", ["winerror-231", "einval"])
+def test_a_pipe_busy_outcome_never_counts_toward_a_restart(engine, monkeypatch: pytest.MonkeyPatch, busy_errno: str) -> None:
+    _svc, killed, decided = engine
+    monkeypatch.setattr(client, "PIPE_BUSY_WAIT_SECS", 0.0)
+    exc = OSError(22, "busy")
+    if busy_errno == "winerror-231":
+        exc.winerror = client.ERROR_PIPE_BUSY  # type: ignore[attr-defined]
+    monkeypatch.setattr(client, "_open_pipe", lambda name: (_ for _ in ()).throw(exc))
+    _preseed(client.UNANSWERED_RESTART_K - 1)
+    client.try_warm_dispatch(_msg("hooks.preuse_bash_dispatch"), hook_path=True)
+    assert decided == [] and killed == []
+
+
+@pytest.mark.deliberate_wall_clock(reason="a counter write abandoned at its deadline is the behaviour under test")
 def test_a_counter_write_that_overruns_its_deadline_is_no_decision(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     _svc, killed, decided = engine
     monkeypatch.setattr(client, "_UNANSWERED_DEADLINE_SECS", 0.05)

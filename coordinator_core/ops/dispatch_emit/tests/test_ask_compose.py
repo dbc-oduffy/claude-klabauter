@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
-from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit import ask_compose, stage_family
 from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused, compose_ask_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import WAKE_DIGEST_COMMIT_OP
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -515,6 +516,46 @@ def test_the_presized_gate_agent_stages_inside_the_one_gate_op(monkeypatch):
     gate = _gate_prompt(_presized(monkeypatch))
     assert OP_ASK_GATE in gate and OP_ASK_STAGE not in gate
     assert "stage_act: true, gated: _gated" in gate
+
+
+@pytest.mark.spawns_process
+def test_presized_headless_gate_passes_host_evidence_to_review(monkeypatch):
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    script = _presized(monkeypatch)
+    gate, receipt, review = [
+        next(line for line in script.splitlines() if marker in line)
+        for marker in ("let _gate = ", "const _gateEvidence = ", "JSON.stringify(_gateEvidence)")
+    ]
+    program = """
+      const calls = [];
+      const engineOp = async (op, args) => {
+        calls.push([op, args]);
+        return op === 'gate.host_run' ? {arm: 's', halt: null} : {stage: 'gate', run_id: 'own'};
+      };
+      engineOp.directRun = true;
+      const _RUN_TOKEN = 'token', _sizingRel = 'sizing.yaml', _runId = 'own', _writes = [];
+      const _gated = [], _crossRepoApproved = false, _SESSION_ID = 'sid', REPO_ROOT = 'repo';
+      let _hostGateUsed = false;
+      const _halted = null;
+      const _reviewOuterAgent = (prompt) => prompt;
+    """
+    program += gate + "\n" + receipt + "\n" + review + "\n"
+    program += "console.log(JSON.stringify([calls, _gate.arm, agent('review', {})])); }"
+    completed = subprocess.run(
+        [node, "--input-type=module", "-e", program], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    calls, arm, prompt = json.loads(completed.stdout)
+    assert [call[0] for call in calls] == ["gate.host_run", "gate.host_receipt"]
+    assert calls[0][1]["run_id"] == "own" and calls[0][1]["stage_act"] is True
+    assert calls[0][1]["require_live_token"] is True
+    assert arm == "s" and 'Host gate receipt: {"stage":"gate","run_id":"own"}' in prompt
 
 
 def test_the_gate_reply_schemas_carry_the_stage_reply(monkeypatch):
@@ -1097,3 +1138,45 @@ def test_share_brief_precedence_shares_tail_for_repeated_clause():
 def test_share_brief_precedence_leaves_single_use_untouched():
     script = _precedence_script(1)
     assert ask_compose._share_brief_precedence(script) == script
+
+
+def _family_js() -> str:
+    return ask_compose._family_run_js("'w:'", "'Execute'", "start-cmd ")
+
+
+def test_family_result_schema_names_vendor_model_nullable_and_optional():
+    js = _family_js()
+    schema = json.loads(re.search(r"_FAMILY_RESULT_SCHEMA = (\{.*\});", js).group(1))
+    assert schema["properties"][stage_family.VENDOR_MODEL_KEY] == {"type": ["string", "null"]}
+    assert stage_family.VENDOR_MODEL_KEY not in schema["required"]
+    assert schema["required"] == [*stage_family._RESULT_KEYS, stage_family.FAMILY_AUTHORED_KEY]
+
+
+def test_family_attempt_normalizes_vendor_model_to_string_or_null_and_fallback_keeps_r_model():
+    js = _family_js()
+    norm = js.index("const _vm = typeof _fam.vendor_model === 'string'")
+    assert js.index("if (!_fam) _fam = {") < norm < js.index("_fam.verdict === 'BLOCKED'")
+    assert "vendor_model: _vm || null" in js
+    fb = re.search(r"const _fb = \{[^}]*\}", js).group(0)
+    assert "model: r.model" in fb and "vendor_model" not in fb
+    assert "_fam.model" not in js
+
+
+def test_composed_ask_reverify_uses_the_dispatch_snapshot_session():
+    session_id = "d7b9dc1a-1455-43e8-922f-87e734b5634e"
+    script = _compose(session_id=session_id).replace(chr(92), "")
+    commands = re.findall(r"review\.reverify '({.*?})'([^\x60]*?)\x60", script)
+    assert len(commands) == 4
+    for payload, flags in commands:
+        assert f'"session_id":"{session_id}"' in payload
+        assert f'"base":"{_FAKE_BASE_SHA}"' in payload
+        assert f'"slice_prefix":"manifest-{_RUN_ID}-{_FAKE_BASE_SHA[:12]}-prep"' in payload
+        assert " --repo " in flags
+
+
+def test_verify_tests_routes_manifest_scope_to_native_host():
+    script = _compose()
+    assert "engineOp.directRun && !_lateIds.length && !_verifyLateIds.length" in script
+    assert "engineOp('verify.host_test_leg'" in script
+    assert "targets: _manifest.test_targets ?? []" in script
+    assert "coordinator_core.ops.test_leg_run" in script

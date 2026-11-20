@@ -6,7 +6,7 @@ import pytest
 def test_windows_relay_uses_native_executable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path / 'settings with spaces'))
     command = _invoke_command('nt')
-    assert command == '"' + (tmp_path / 'settings with spaces/bin/coordinator-invoke.exe').as_posix() + '"'
+    assert command == "& '" + (tmp_path / 'settings with spaces/bin/coordinator-invoke.exe').as_posix() + "'"
     assert '${' not in command
 
 

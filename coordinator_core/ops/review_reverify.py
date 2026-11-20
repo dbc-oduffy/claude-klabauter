@@ -1294,7 +1294,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``cause_files`` (``{node id: [paths]}``; the caller must supply it for a node to class
     ``sibling_owned``), optional ``failing_output`` (``{node id: failure text}``; absent
     ``cause_files``, the dirty repo paths named by the node id and its text are derived as cause files).
+    ``slice_prefixes`` (list[str]) replaces ``slice_prefix`` to read several snapshots in one call:
+    the reply is ``{"inventories": [<one reply per prefix, in order>], "error": None}``.
     Keying scope: show_top."""
+    prefixes = params.get("slice_prefixes")
+    if prefixes is not None:
+        if not isinstance(prefixes, list) or not all(isinstance(p, str) for p in prefixes):
+            return _fail("review.reverify slice_prefixes must be a list of names", False)
+        rest = {k: v for k, v in params.items() if k != "slice_prefixes"}
+        return {"inventories": [_handler({**rest, "slice_prefix": p}, repo_root) for p in prefixes], "error": None}
     probe = params.get("probe")
     shape = probe if probe in ("open", "close") else None
     revert = params.get("failing") is not None and shape is None

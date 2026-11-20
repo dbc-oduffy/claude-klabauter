@@ -319,7 +319,11 @@ def test_from_share_binds_the_run_bookkeeping_delivery_when_the_delivery_file_ha
     assert res["used"]["delivery"] == [f".coordinator-local/subagent-share/sess-1/{PLAN}.review-wave-bookkeeping.md"]
 
 
-def test_from_share_ignores_another_plans_bookkeeping_delivery(repo) -> None:
+def test_from_share_ignores_another_plans_bookkeeping_delivery(repo, monkeypatch) -> None:
+    from coordinator_core.ops.review_mint import share_stages
+
+    # The refusal is roster-gated; pin the roster so the test does not read the box's live one.
+    monkeypatch.setattr(share_stages, "_delivery_verifier_rostered", lambda _root: True)
     root, s = repo
     share = _full_share(root)
     (share / "coordinator-delivery-verifier.d1.md").unlink()

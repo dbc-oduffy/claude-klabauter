@@ -58,6 +58,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
     IMPORTER_OVERRUN_KEY,
     REVERIFY_INDETERMINATE,
     TRIPWIRES_NOT_RUN_KEY,
+    ZERO_RUN_FOREIGN_DEPENDENCY,
 )
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops._anchor_check import GRAMMAR as _ANCHOR_GRAMMAR
@@ -184,6 +185,7 @@ from coordinator_core.ops.dispatch_emit.self_correction import (
 REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
+from coordinator_core.ops.dispatch_emit.family_invoke_record import INVOKE_MODULE as _FAMILY_INVOKE_MODULE
 from coordinator_core.ops.dispatch_emit import stage_family_binding as _stage_family_binding
 from coordinator_core.ops.dispatch_emit.pipeline_compose import FALLBACK_CAUSE_JS as _FALLBACK_CAUSE_JS
 from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_source
@@ -292,12 +294,15 @@ _WAVE_DIFF_RECONCILE_JS = (
 HALT_TESTS_NOT_RUN = "tests_not_run"
 # A code-editing run whose manifest names no test target and records no reason for it (`no_test_target`),
 # with no passing, failing or indeterminate re-verify (an indeterminate one is the landing's targeted
-# retest, `halt_remedy_class`), ran no tests: it is flagged `tests_not_run` and halts as owed,
-# never committed as green. A degraded `no_test_target` run keeps its own narrated status.
+# retest, `halt_remedy_class`) and no green `status_before` (a green re-verify of any runner leaves
+# `status_after` null; `pass` means a test ran and none failed), ran no tests: it is flagged
+# `tests_not_run` and halts as owed, never committed as green. A degraded `no_test_target` run keeps its own narrated status.
 _TESTS_NOT_RUN_JS = (
     "  if (!_halted && !_reviewReused && _codeReviewOwed && _reviewReverify && typeof _reviewReverify === 'object' "
     "&& !['pass', 'fail', 'indeterminate'].includes(_reviewReverify.status_after) "
-    "&& _manifest && !(_manifest.test_targets ?? []).length && !_manifest.no_test_target) { "
+    "&& !(_reviewReverify.status_after == null && _reviewReverify.status_before === 'pass') "
+    "&& _manifest && !(_manifest.test_targets ?? []).length && !_manifest.no_test_target "
+    "&& !_manifest.em_owed_test_criterion) { "
     "_reviewReverify.tests_not_run = true; _halted = { halted: " + json.dumps(HALT_TESTS_NOT_RUN) + ", "
     "reason: 'no test was selected or run for a code-editing run; owed, not green', run_id: _runId, "
     "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }"
@@ -542,6 +547,7 @@ def _agent(
     agent_type_host: Optional[str] = None,
     sidecar_label: Optional[str] = None,
     sidecar_label_js: Optional[str] = None,
+    gate_manifest_run: Optional[str] = None,
 ) -> str:
     """One `agent(...)` call expression; the prompt ends with the sidecar clause keyed by ``run_id`` and ``label``.
 
@@ -586,10 +592,11 @@ def _agent(
     judge = (schema.get("properties") or {}).get("judge")
     if isinstance(judge, _JudgeSchemaRef):
         schema_js = schema_js.replace(json.dumps(judge, sort_keys=True), _JUDGE_SCHEMA_VAR, 1)
+    gate_opt = f"gateManifestRunId: {_lit(gate_manifest_run)}, " if gate_manifest_run else ""
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
         f"agentType: {_lit(_emit._degrade_agent_type(agent_type, agent_type_host))}, {model_opt}{effort_opt}"
-        f"schema: {schema_js} }})"
+        f"{gate_opt}schema: {schema_js} }})"
     )
 
 
@@ -1069,6 +1076,9 @@ def _test_result_schema() -> dict:
         **schema["properties"],
         IMPORTER_OVERRUN_KEY: {"type": "boolean"},
         TRIPWIRES_NOT_RUN_KEY: {"type": "array", "items": _STR},
+        "zero_run_cause": _STR,
+        "pytest_exit_code": {"type": "integer"},
+        "pytest_stderr": {"type": "string", "maxLength": 4096},
     }
     return schema
 _LEDGER_CHECK_SCHEMA = _obj(
@@ -1143,6 +1153,30 @@ _LEDGER_SIZE_RULE = (
     "staged blob bytes of the file with the base blob at run_base_sha (git show of each, or the staged "
     "blob size); never the on-disk working-copy bytes, which core.autocrlf inflates with CRLF. "
 )
+#: A not_met row whose every `remaining` entry names one of the manifest's owed (EM/operator) rows, or a
+#: post-commit act, is owed to them. The verifier is told to set `owed_by` and often leaves it off, which
+#: halted code-complete runs and parked their blobs behind a leg only the EM can run. Runs before
+#: `_postCommitActs` is declared, so it carries its own copy of the acts.
+OWED_BY_DERIVE_JS = (
+    "for (const i of (_ledger?.items ?? [])) {\n"
+    "      if (!i || i.status !== 'not_met' || i.withheld_by || (Array.isArray(i.owed_by) && i.owed_by.length)) continue;\n"
+    "      const rem = Array.isArray(i.remaining) ? i.remaining.map(String) : [];\n"
+    "      const owedIds = (_manifest?.owed ?? []).map((o) => String(o.id));\n"
+    "      if (!rem.length || !owedIds.length) continue;\n"
+    f"      const acts = {json.dumps(list(POST_COMMIT_ACTS))};\n"
+    "      const named = new Set(); let ok = true;\n"
+    "      for (const a of rem) {\n"
+    "        if (acts.includes(a)) continue;\n"
+    "        const hit = owedIds.filter((id) => ((a.trimStart().startsWith(id + ':') || "
+    "a.split(/[^A-Za-z0-9_]+/).includes(id)) && /\\b(EM|em-performed|em-run|em-discharge|operator|owed)\\b/i.test(a)));\n"
+    "        if (!hit.length) { ok = false; break; }\n"
+    "        hit.forEach((id) => named.add(id));\n"
+    "      }\n"
+    "      if (ok && named.size) i.owed_by = [...named];\n"
+    "    }"
+)
+
+
 _LEDGER_GATED_RULE = (
     ". An item whose only undelivered part is a gated chunk is 'not_met' with withheld_by set to "
     "that chunk id exactly; set withheld_by on no other item. An item whose only undelivered parts are "
@@ -1265,6 +1299,7 @@ _MANIFEST_SCHEMA = _obj(
         "test_targets": {"type": "array", "items": _STR},
         "wave_test_targets": {"type": "object", "additionalProperties": {"type": "array", "items": _STR}},
         "no_test_target": {"type": ["object", "null"]},
+        "em_owed_test_criterion": {"type": ["object", "null"]},
         "doc_writes": {"type": "array", "items": _STR},
         "marker_path": _STR,
         "rulable_ids": {"type": "array", "items": _STR},
@@ -1496,6 +1531,18 @@ def _stage_reply_js(launcher_child: bool = False) -> str:
     return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + _ADOPT_STAGE_REPLY_JS
 
 
+#: JS predicate: a gate reply's `resume_plan` is a repo-relative `.md` path. The script has no disk access, so the
+#: shape is the check; a prose verdict string fails it.
+_RESUME_PLAN_SHAPE_JS = r"((p) => typeof p === 'string' && /^(?!\/|[A-Za-z]:)(?!.*\.\.)\S+\.md$/.test(p))"
+#: JS: the halt a malformed `resume_plan` adopts, over the gate variable `g`.
+def _resume_plan_halt_js(g: str) -> str:
+    """JS statement: halt with a named reason when `g.resume_plan` is set but not a repo-relative plan path."""
+    return (
+        f"_halted = {{ halted: {HALT_REFUSAL!r}, reason: 'gate resume_plan is not a repo-relative plan path: ' "
+        f"+ JSON.stringify(String({g}.resume_plan).slice(0, 120)), sizing: _sizingRel, run_id: _runId }};"
+    )
+
+
 #: JS: the `dispatch.ask_stage` params for a recovery stage. Trap: `_gate` may be undeclared or still unassigned
 #: where a fold site runs, so it is read inside try.
 _STAGE_RECOVER_PARAMS_JS = (
@@ -1504,7 +1551,7 @@ _STAGE_RECOVER_PARAMS_JS = (
     "materialise_wave: String(_stageRecoverParams.wave) };\n"
     "    let _g = null;\n"
     "    try { _g = _gate; } catch (e) { _g = null; }\n"
-    "    const _plan = _planRel || (_g && typeof _g.resume_plan === 'string' && _g.resume_plan ? _g.resume_plan : null);\n"
+    "    const _plan = _planRel || (_g && " + _RESUME_PLAN_SHAPE_JS + "(_g.resume_plan) ? _g.resume_plan : null);\n"
     "    if (_plan) {\n"
     "      const _only = (_g && Array.isArray(_g.resume_rows) && _g.resume_rows.length) ? { only_rows: _g.resume_rows } : {};\n"
     "      return { run_id: _runId, plan_path: _plan, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
@@ -1729,6 +1776,7 @@ _USAGE_LIMIT_RE = (
 #: Captures the stated reset ("Nov 17, 3am") and its parenthesised zone ("Europe/London"); never converted.
 _USAGE_LIMIT_RESET_RE = r"/resets\s+((?:[a-z]{3,9}\.?\s+\d{1,2},?\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?:\s*\(([^)]+)\))?/i"
 HALT_USAGE_LIMIT = "usage_limit"
+HALT_FAMILY_CLI_FAILURE = "family_cli_failure"
 HALT_REVIEW_BLOCKED = "review_blocked"
 HALT_CRITERION_NOT_MET = "criterion_not_met"
 HALT_DELIVERY_FAIL = "delivery_fail"
@@ -1793,6 +1841,17 @@ _JOIN_REVERIFY_JS = (
     "const _m = String((e && e.message) ?? e); if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } "
     "else { log('review re-verify leg threw: ' + _m); } return null; }))"
 )
+
+
+def _review_test_infra_halt_js(sizing_rel: Optional[str]) -> str:
+    return (
+        "  if (!_halted && _reviewReverify?.tests_run === 0 "
+        "&& _reviewReverify?.status_before === 'indeterminate' "
+        "&& typeof _reviewReverify.zero_run_cause === 'string' && _reviewReverify.zero_run_cause) "
+        "{ _halted = { halted: 'test_infra_failure', run_id: _runId, "
+        "detail: 'review reverify ran zero tests (' + _reviewReverify.zero_run_cause + ')', "
+        "next_action: 'Refire to re-run review verification: ' + " + _refire_js(sizing_rel) + " }; }"
+    )
 
 
 #: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
@@ -2095,9 +2154,11 @@ def _criterion_blocker_halt_js(sizing_rel: Optional[str]) -> str:
 _TEST_UNPROVEN_CAUSE_JS = (
     "(() => { const _r = _testResult; "
     "const _ids = (Array.isArray(_r.failing_ids) ? _r.failing_ids : []).filter((x) => typeof x === 'string' && x.trim()); "
-    "if (_ids.length) return ''; "
     "if (typeof _r.tests_run === 'number' && _r.tests_run === 0) "
-    "return 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : ''); "
+    "return 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : '') "
+    "+ ((_r.import_error && typeof _r.import_error === 'object' && typeof _r.import_error.path === 'string') "
+    "? ': ' + (typeof _r.import_error.symbol === 'string' ? \"'\" + _r.import_error.symbol + \"' defined only in uncommitted \" : '') + _r.import_error.path + ' (run ' + (_r.import_error.run_id || 'unowned') + ')' : ''); "
+    "if (_ids.length) return ''; "
     "if (['error', 'errored'].includes(_r.status)) return 'errored without a failing id'; "
     "return ''; })()"
 )
@@ -2114,11 +2175,11 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "&& _testResult.status && _testResult.status !== 'not_run' "
         "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim() "
         "&& !" + _TEST_UNPROVEN_CAUSE_JS + ") "
-        "&& !(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object' "
+        "&& (_testResult?.tests_run === 0 || !(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object' "
         "&& _reviewReverify.status_after === 'pass' "
         "&& (() => { const _l = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
         "const _x = new Set([..._l(_reviewReverify.pre_existing), ..._l(_reviewReverify.kept)]); "
-        "return !_l(_reviewReverify.failing).some((n) => !_x.has(n)); })())) "
+        "return !_l(_reviewReverify.failing).some((n) => !_x.has(n)); })()))) "
         "{ const _rvh = (typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
         "? _reviewReverify : {}; "
         "const _rvl = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
@@ -2126,6 +2187,7 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "const _rvFail = [...new Set(_rvl(_rvh.failing))].filter((n) => !_rvx.has(n)); "
         "const _rvPre = _rvl(_rvh.pre_existing); "
         "_halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
+        "...(_testResult?.tests_run === 0 ? { halted: 'test_infra_failure' } : {}), "
         "failing: _rvFail, pre_existing: _rvPre, "
         "detail: ((_testResult && typeof _testResult.status === 'string' && _testResult.status && _testResult.status !== 'not_run' "
         "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim()) "
@@ -2133,7 +2195,11 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         ": 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests') + "
         "(_rvFail.length ? '; re-verify reds not red at the run base: ' + _rvFail.join(', ') : "
         "(_rvPre.length ? '; re-verify reds all pre-existing, none this run\\'s: ' + _rvPre.join(', ') : '')), "
-        "next_action: 'Refire to re-run the test leg: ' + " + _refire_js(sizing_rel) + " }; }"
+        # A foreign-dependency zero-run fails identically on every refire until the peer's source lands.
+        "next_action: ((_testResult?.zero_run_cause === " + json.dumps(ZERO_RUN_FOREIGN_DEPENDENCY) + " "
+        "&& typeof _testResult?.import_error?.source_path === 'string') "
+        "? 'Land the uncommitted ' + _testResult.import_error.source_path + ' first, then refire: ' "
+        ": 'Refire to re-run the test leg: ') + " + _refire_js(sizing_rel) + " }; }"
     )
 
 
@@ -2148,6 +2214,7 @@ def _test_verdict_limit_route_js() -> str:
 
 
 _WAVE_TESTS_GATE_FN = "_waveTestsGreen"
+_WAVE_TEST_FILE_RE_JS = r"/(?:^|\/)test_[^\/]*\.py$|_test\.py$/"
 WAVE_REDS_VAR = "_waveReds"
 _WAVE_FAILING_IDS_CLAUSE = (
     " When the status is fail, return `failing_ids`: the node id of each failing test, one string each."
@@ -2163,18 +2230,16 @@ def _wave_tests_green_js(
     With `objective`, the gate opens with `_objectiveWaveCheck(n)`: the wave's falsifier check rides the
     checkpoint leg and never gates the commit.
 
-    An empty scope passes, and so does every scope while `_terminalTestsWanted` holds: the terminal
-    verify-tests leg then runs the whole run's scope, so no agent runs here. Accepted trade-off: a
-    checkpoint commit then lists no wave reds through `dispatch.checkpoint_reds` (`_waveReds[n]` stays
-    unset), and a run that halts before the terminal verify block leaves its landed waves with no test
-    evidence; acceptable only because this gate never gated (it always returns true). The flag is a
-    strict subset of the terminal `test_guard` (`_testWanted`), so the skip never fires on a run whose
-    terminal leg would not.
+    An empty scope passes, and so does a scope while `_terminalTestsWanted` holds unless the wave (with
+    its carried rows) adds or touches a Python test file: the terminal verify-tests leg runs the whole
+    run's scope, so no agent runs here for a wave with no test file. A checkpoint commit skipped this
+    way lists no wave reds through `dispatch.checkpoint_reds`.
     Otherwise one test-runner leg runs the scope, and only the returned
     `status` gates (`pass` / `pass-with-skips` land); a throw, a missing sidecar or any other
     status records the wave's reds in `_checkpointWithheld` and `_waveReds[n]` and the checkpoint
     still commits: the gate returns true, and the commit leg lists each red through
-    `dispatch.checkpoint_reds`. Only a usage-limit throw halts. Base-red evidence does not exist at
+    `dispatch.checkpoint_reds`. Under `_terminalTestsWanted` a `fail` naming one of the wave's own
+    test files withholds the checkpoint (false; rows carry to the next wave). Only a usage-limit throw halts. Base-red evidence does not exist at
     wave time, so the commit leg passes an empty `base_red` and every red classifies introduced; a
     verdict with no `failing_ids` becomes one `<unnamed wave n>` red.
     With `em_brief` the runner prompt opens with `_EM_BRIEF`, like the row verify leg.
@@ -2190,7 +2255,10 @@ def _wave_tests_green_js(
         + ("    await _objectiveWaveCheck(n);\n" if objective else "")
         + "    const scope = ((_manifest && _manifest.wave_test_targets) ?? {})[String(n)] ?? [];\n"
         "    if (!scope.length) return true;\n"
-        "    if (_terminalTestsWanted) return true;\n"
+        f"    const _testRe = {_WAVE_TEST_FILE_RE_JS};\n"
+        "    const _addedTests = [...new Set([..._carried, ...ids].filter((i) => _landed[i]).flatMap((i) => _landed[i].paths))]"
+        ".filter((p) => _testRe.test(p));\n"
+        "    if (_terminalTestsWanted && !_addedTests.length) return true;\n"
         "    let r = null;\n"
         "    try {\n"
         "      r = await agent(\n"
@@ -2211,6 +2279,10 @@ def _wave_tests_green_js(
         "    const _failing = (r && Array.isArray(r.failing_ids) ? r.failing_ids : []).filter((x) => typeof x === 'string' && x);\n"
         f"    {WAVE_REDS_VAR}[n] = {{ ids: _failing.length ? _failing : ['<unnamed wave ' + n + '>'], status }};\n"
         "    _checkpointWithheld.push({ wave: n, ids, status });\n"
+        "    if (_terminalTestsWanted && status === 'fail' && _failing.some((x) => _addedTests.some((p) => x === p || x.startsWith(p + '::')))) {\n"
+        "      log('checkpoint of wave ' + n + ' withheld: its own added test is red');\n"
+        "      return false;\n"
+        "    }\n"
         "    log('checkpoint of wave ' + n + ' commits with reds: scoped tests ' + (status || 'returned no verdict') + ((r && r.summary) ? ': ' + r.summary : ''));\n"
         "    return true;\n"
         "  }"
@@ -2414,6 +2486,10 @@ VERIFY_TESTS_LABEL = "verify-tests"
 _VERIFY_TEST_RESULT_VAR = "_verifyTest"
 
 
+def _powershell_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
 def _verify_tests_call(
     *, head: str, anchor: str, test_js: str, run_id: str, repo_root: str = "", out_path: str = "",
     base_sha: Optional[str] = None, stager: Optional[Stager] = None, agent_type_host: Optional[str] = None,
@@ -2421,23 +2497,40 @@ def _verify_tests_call(
     """The verify stage's scoped-test leg: one haiku test-runner `agent(...)` call EXPRESSION, awaited before
     the verify agent, which receives its result inline.
 
-    The leg runs `test_leg_run` as one background Bash call and waits on its completion notification; the
-    prompt carries no deadline and no Bash timeout, and no JS race wraps the call, so nothing cuts the run
+    The leg runs `test_leg_run` in the worker's native shell and waits for completion. No JS race wraps
+    the call, so nothing cuts the run
     before the runner's own budget."""
     base_flag = f"--base-sha {base_sha} " if base_sha else ""
     leg_command = engine_module_command(
-        "coordinator_core.ops.test_leg_run", repo_root, f"{base_flag}--out {out_path} -- "
+        "coordinator_core.ops.test_leg_run", repo_root, f"{base_flag}--out {shlex.quote(out_path)} -- ",
+        shell="bash",
     )
+    windows_command = engine_module_command(
+        "coordinator_core.ops.test_leg_run", repo_root,
+        f"{base_flag}--out {_powershell_quote(out_path)} -- ", shell="powershell",
+    )
+    # Build apostrophe escapes at runtime so emitter quoting cannot split their JS string literals.
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nYou run this run's scoped tests and report; you edit, "
         "stage and commit nothing. ",
         f"js:({test_js})",
         " The test run is this one command, replacing any direct pytest invocation above; its scope follows "
-        f"the `--`:\n\n{leg_command}",
-        "js:(_manifest.test_targets ?? []).join(' ')",
-        "\n\nRun it as ONE Bash call with run_in_background: true and no timeout parameter. Wait for its "
-        "completion notification; do not sleep, poll or re-run it. Then Read "
-        f"{out_path} and return its JSON verbatim as the test_result.",
+        f"the `--`. Use only the command matching your worker shell.\n\nBash:\n{leg_command}",
+        "js:(_manifest.test_targets ?? []).map(t => String.fromCharCode(39) + "
+        "t.replaceAll(String.fromCharCode(39), String.fromCharCode(39, 34, 39, 34, 39)) + "
+        "String.fromCharCode(39)).join(' ')",
+        f"\n\nPowerShell:\n{windows_command}",
+        "js:(_manifest.test_targets ?? []).map(t => String.fromCharCode(39) + "
+        "t.replaceAll(String.fromCharCode(39), String.fromCharCode(39, 39)) + "
+        "String.fromCharCode(39)).join(' ')",
+        "\n\nRun once using the native shell. In Bash use run_in_background: true and no timeout parameter; "
+        "wait for its completion notification. In PowerShell wait for the process to exit. "
+        "Do not sleep, poll or re-run it. Then Read "
+        f"{out_path}. Keep that JSON file as the full test receipt. For the final test_result, "
+        "copy status, tests_run, and tests_failed from the receipt and use the receipt path as "
+        "sidecar_path. Copy schema-valid baseline, baseline_method, build_clean, skipped, summary, "
+        "importer_overrun, tripwires_not_run, and zero_run_cause when present. Keep diagnostic details in the receipt. "
+        "Return only fields declared in the final-response schema; do not return the entire receipt.",
     )
     return _agent(
         prompt, label=VERIFY_TESTS_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
@@ -2603,7 +2696,8 @@ _OVERLAY_SCHEMA = _obj(["exit_code"], {"exit_code": {"type": "integer"}, "detail
 FAMILY_CREDIT_MODULE = "coordinator_core.ops.dispatch_emit.family_credit"
 
 
-def engine_module_command(module: str, repo_root: str, args: str = "", *, portable: bool = False) -> str:
+def engine_module_command(module: str, repo_root: str, args: str = "", *, portable: bool = False,
+                          shell: Optional[str] = None) -> str:
     """`<engine interpreter> -m <module> <args>` for a command an agent runs to reach `coordinator_core`.
     The interpreter is the repo's resolvable pin, else this process's own absolute `sys.executable`; never a
     bare `python`, which on a host whose PATH python lacks `coordinator_core` fails before the module runs.
@@ -2612,9 +2706,36 @@ def engine_module_command(module: str, repo_root: str, args: str = "", *, portab
     no host path (`test_emitted_script_carries_no_host_path`), leaving a bare `python` that needs `coordinator_core` importable."""
     from coordinator_core.ops.dispatch_emit.clean_overlay_verify import engine_python_command
 
-    if portable:
+    if portable and shell is None:
         return f"python -m {module}" + (f" {args}" if args else "")
     engine_root = Path(__file__).resolve().parents[3].as_posix()
+    if shell is not None:
+        if portable:
+            bootstrap = (
+                "import os,runpy,sys;root=os.environ.get('COORDINATOR_ENGINE_ROOT');module=sys.argv.pop(1);"
+                "path=os.path.join(root,*module.split('.'))+'.py' if root else None;"
+                "root and (os.path.isabs(root) and os.path.isfile(path) or "
+                "sys.exit('Invalid COORDINATOR_ENGINE_ROOT for '+module+': '+root));"
+                "root and (os.environ.update(PYTHONPATH=root),sys.path.insert(0,root));"
+                "runpy.run_module(module,run_name='__main__',alter_sys=True)"
+            )
+        else:
+            bootstrap = (
+                "import os,runpy,sys;root=sys.argv.pop(1);"
+                "os.environ['PYTHONPATH']=root;sys.path.insert(0,root);"
+                "runpy.run_module(sys.argv.pop(1),run_name='__main__',alter_sys=True)"
+            )
+        python = "python" if portable else engine_python_command(Path(repo_root))
+        if shell == "powershell":
+            command = shlex.split(python)
+            executable = "& " + " ".join(_powershell_quote(part) for part in command)
+            quote = _powershell_quote
+        else:
+            executable = python
+            quote = shlex.quote
+        root_arg = "" if portable else f"{quote(engine_root)} "
+        call = f"{executable} -c {quote(bootstrap)} {root_arg}{quote(module)}"
+        return call + (f" {args}" if args else "")
     return (
         f'PYTHONPATH="{engine_root}" {engine_python_command(Path(repo_root))} -m {module}'
         + (f" {args}" if args else "")
@@ -3941,18 +4062,23 @@ def _family_enabled(repo_root: str, sizing_rel: Optional[str]) -> bool:
         return True
 
 
-def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
-    """JS for `_familyRun(r)`: one family attempt, then one claude fallback when that attempt is
-    BLOCKED, FAILED or unresolved. The returned row result is a status line plus the stage record
-    (`stage_family.stage_record`'s shape), the family attempt first and the fallback tagged
-    `fallback_for`; the fallback is never reported as the family's result.
+def _family_run_js(work_label: str, exec_phase: str, start_cmd: str, invoke_cmd: Optional[str] = None) -> str:
+    """JS for `_familyRun(r)`: one family attempt. A read-only role (anything but a `write` stage) gets one
+    claude fallback when that attempt is BLOCKED, FAILED, unresolved or not `family_authored`; a `write` row
+    halts BLOCKED with the reason and never dispatches a claude fallback. The returned row result is a status
+    line plus the stage record (`stage_family.stage_record`'s shape), the family attempt first and the
+    fallback tagged `fallback_for`; the fallback is never reported as the family's result.
     The family attempt runs `start_cmd` + the row id first: the row-start snapshot `family_credit`
-    compares against, since the vendor CLI's writes get no write-print. `_famOk[id]` (declared beside
+    compares against. The runner's only vendor call is `invoke_cmd` (the engine invoker, default
+    `INVOKE_MODULE` bare) + the row's args, whose printed JSON is the family result; a result whose
+    `family_authored` is not true is a family-stage failure. `_famOk[id]` (declared beside
     `_commitWave`, which reads it) marks an attempt returned OK, for the `Checkpoint-Family-Ok:` line."""
+    if invoke_cmd is None:
+        invoke_cmd = engine_module_command(_FAMILY_INVOKE_MODULE, "", "--row ", portable=True)
     schema = json.dumps(
         {
             "type": "object",
-            "required": list(_stage_family._RESULT_KEYS),
+            "required": [*_stage_family._RESULT_KEYS, _stage_family.FAMILY_AUTHORED_KEY],
             "properties": {
                 "family": {"type": "string", "enum": list(_stage_family.FAMILIES)},
                 "stage": {"type": "string"},
@@ -3960,6 +4086,16 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
                 "output_path": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["OK", "WARN", *_stage_family.FALLBACK_VERDICTS]},
                 "blocked_reason": {"type": "string"},
+                _stage_family.VENDOR_MODEL_KEY: {"type": ["string", "null"]},
+                _stage_family.FAMILY_AUTHORED_KEY: {"type": "boolean"},
+                "cli_failure": {
+                    "type": "object",
+                    "required": ["kind", "stderr_line"],
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["auth", "launch", "exit"]},
+                        "stderr_line": {"type": "string"},
+                    },
+                },
             },
         },
         sort_keys=True,
@@ -3980,15 +4116,35 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
             f"no edit to it, and do not retry it:\n\n{start_cmd}"
         )
         + " + r.id + "
-        + _js_string_literal("\n\nThen carry out the assignment below.\n\n")
+        + _js_string_literal(
+            "\n\nThen run exactly this one command as its own Bash call, no wrapper, no edit to it, and do not "
+            "retry it. It is the stage's only vendor call: the engine spawns the vendor CLI and records what it "
+            "wrote. Never edit or write a file yourself and never invoke the vendor CLI directly. Return the JSON "
+            f"it prints as your result, unchanged:\n\n{invoke_cmd}"
+        )
+        + " + r.id + ' --family ' + r.family + ' --stage ' + r.stage_role + ' --prompt ' + r.fallback_brief_path"
+        " + (typeof _SESSION_ID === 'string' && _SESSION_ID ? ' " + _stage_family.SESSION_ID_FLAG + " ' + JSON.stringify(_SESSION_ID) : '')"
+        " + ((r.writes ?? []).length ? ' --writes ' + r.writes.map((w) => JSON.stringify(String(w))).join(' ') : '') + "
+        + _js_string_literal("\n\nThe assignment the CLI carries out follows, for your reference only.\n\n")
         + ";\n"
         "  async function _familyRun(r) {\n"
+        "    if (!r.fallback_brief_path) return 'BLOCKED: ' + r.id + ' via ' + r.family + ' FAILED (family row carries no prompt brief for the CLI) '"
+        " + JSON.stringify({ stage_role: r.stage_role, attempts: [{ family: r.family, stage: r.stage_role, exit_code: -1, output_path: '', verdict: 'FAILED', "
+        "blocked_reason: 'family_authored:false: family row carries no prompt brief for the CLI', vendor_model: null, family_authored: false }], reported_family: r.family });\n"
         "    let _fam = null;\n"
         f"    try {{ const _fr = await agent(_famStart(r) + _rowPrompt(r), {fam_opts});\n"
         "      if (_fr && typeof _fr === 'object' && typeof _fr.verdict === 'string' && typeof _fr.family === 'string') _fam = _fr;\n"
         "    } catch (e) { _fam = null; }\n"
         "    if (!_fam) _fam = { family: r.family, stage: r.stage_role, exit_code: -1, output_path: '', "
         "verdict: 'FAILED', blocked_reason: 'family-stage-runner reply missing or unparseable' };\n"
+        f"    {{ const _vm = typeof _fam.{_stage_family.VENDOR_MODEL_KEY} === 'string' ? _fam.{_stage_family.VENDOR_MODEL_KEY}.trim() : '';"
+        f" _fam = {{ ..._fam, {_stage_family.VENDOR_MODEL_KEY}: _vm || null }}; }}\n"
+        f"    if (_fam.{_stage_family.FAMILY_AUTHORED_KEY} !== true) {{\n"
+        "      const _br = _fam.blocked_reason || 'no invocation record shows the vendor CLI authored the diff';\n"
+        f"      _fam = {{ ..._fam, {_stage_family.FAMILY_AUTHORED_KEY}: false, "
+        f"verdict: ({failed}) ? _fam.verdict : 'BLOCKED', "
+        "blocked_reason: _br.startsWith('family_authored:false') ? _br : 'family_authored:false: ' + _br };\n"
+        "    }\n"
         f"    if (!({failed})) {{\n"
         "      const _rec = { stage_role: r.stage_role, attempts: [_fam], reported_family: _fam.family };\n"
         "      if (typeof _famOk === 'object') _famOk[r.id] = _fam.verdict === 'OK';\n"
@@ -3996,9 +4152,14 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
         "      return 'DONE: ' + r.id + ' via ' + _fam.family + ' ' + JSON.stringify(_rec);\n"
         "    }\n"
         "    if (!_fam.blocked_reason) _fam = { ..._fam, blocked_reason: 'family-stage-runner reported ' + _fam.verdict + ' without a reason' };\n"
-        "    if (!r.fallback_brief_path) {\n"
+        "    if (r.stage_role === 'write' || !r.fallback_brief_path) {\n"
         "      const _rec0 = { stage_role: r.stage_role, attempts: [_fam], reported_family: _fam.family };\n"
-        "      return 'BLOCKED: ' + r.id + ' via ' + _fam.family + ' ' + _fam.verdict + ' (row carries no fallback brief) ' + JSON.stringify(_rec0);\n"
+        "      if (r.stage_role === 'write' && _fam.cli_failure && !_halted) _halted = { halted: "
+        + json.dumps(HALT_FAMILY_CLI_FAILURE)
+        + ", run_id: _runId, reason: _fam.family + ' CLI ' + _fam.cli_failure.kind + ' failure: ' + _fam.cli_failure.stderr_line, "
+        "plan: (typeof _planRel !== 'undefined' ? _planRel : null) };\n"
+        "      return 'BLOCKED: ' + r.id + ' via ' + _fam.family + ' ' + _fam.verdict + ' (' + _fam.blocked_reason + ') '"
+        " + (r.stage_role === 'write' ? '(write row: no claude fallback) ' : '(row carries no fallback brief) ') + JSON.stringify(_rec0);\n"
         "    }\n"
         "    log(r.id + ': ' + _fam.family + ' attempt ' + _fam.verdict + ' (' + _fam.blocked_reason + '); rerunning on '"
         f" + {_lit(_stage_family.FALLBACK)});\n"
@@ -4008,7 +4169,7 @@ def _family_run_js(work_label: str, exec_phase: str, start_cmd: str) -> str:
         "catch (e) { _fbText = null; _fbCause = 'dispatch threw: ' + String((e && e.message) || e).slice(0, 300); }\n"
         "    if (!_fbCause) _fbCause = _fallbackCause(_fbText, false);\n"
         "    const _fbOk = _fbCause === '';\n"
-        f"    const _fb = {{ family: {_lit(_stage_family.FALLBACK)}, stage: r.stage_role, exit_code: _fbOk ? 0 : 1, output_path: '', "
+        f"    const _fb = {{ family: {_lit(_stage_family.FALLBACK)}, stage: r.stage_role, exit_code: _fbOk ? 0 : 1, output_path: '', model: r.model, "
         "verdict: _fbOk ? 'OK' : 'FAILED' };\n"
         f"    if (!_fbOk) _fb.blocked_reason = {_lit(_stage_family.FALLBACK + ' fallback ')} + _fbCause;\n"
         "    const _rec = { stage_role: r.stage_role, attempts: [_fam, { ..._fb, fallback_for: _fam.family }], "
@@ -4467,6 +4628,7 @@ def compose_ask_script(
     preamble: Optional[str] = None,
     em_brief: Optional[EmBrief] = None,
     em_size: Optional[str] = None,
+    family: Optional[str] = None,
     stop_after: Optional[str] = None,
     in_run_commit: bool = False,
     ask_source: str = "pm",
@@ -4517,7 +4679,9 @@ def compose_ask_script(
     every agent prompt the script composes, plan-blitz's included (through `wrap_stage`'s
     `agent_prefix_var`, which shadows `agent` over the script-level `_askAgent`) and the roadmap
     stage's. `em_size` (the EM's stated size) rides each gate command; the gate halts only when it is M or
-    below against an engine XL/XXL. A roadmap pick with no plan-blitz embedded chains into the `{sizing}`
+    below against an engine XL/XXL. `family` (the ask's executing family) rides each gate command and is
+    stamped on the sizing's top-level `family` there; a roadmap pick carrying it composes in this body, not the standalone roadmap script.
+    A roadmap pick with no plan-blitz embedded chains into the `{sizing}`
     script, as an M+ pick does. A gate verdict's `resume_plan` is staged at S and revises at M+ instead of
     authoring. A raw ask sizes through the scout agent, whose closing acts run
     `sizing-assemble --write` and `dispatch.ask_gate`; a gate halt carries the assemble decision's `pm_exit_question`.
@@ -4598,8 +4762,8 @@ def compose_ask_script(
     xl_possible = sized_in_run or xl_open
     rb_fn: str = ""
     rb_phases: list[str] = []
-    # A roadmap sizing with a brief or an em_size composes in this body, whose gate legs carry both; the standalone roadmap script has neither slot.
-    roadmap_in_body = known_arm == ARM_ROADMAP and bool(em_brief or em_size)
+    # A roadmap sizing with a brief, an em_size or a family composes in this body, whose gate legs carry all three; the standalone roadmap script has none of those slots.
+    roadmap_in_body = known_arm == ARM_ROADMAP and bool(em_brief or em_size or family)
     if xl_possible or roadmap_in_body:
         from coordinator_core.ops.dispatch_emit import ask_roadmap
         from coordinator_core.ops.dispatch_emit.ask_plan_blitz import _TOP_AGENT_DECL, AskPlanBlitzRefused
@@ -4726,6 +4890,7 @@ def compose_ask_script(
         tshirt_js="_gate?.tshirt",
         reverify=True,
         reverify_deferred=True,
+        snapshot_session_id=session_id or "",
         delivery_notes_js="_deliveryNotes",
         slice_filter_js=_RESUME_SLICE_IDS_CALL_JS,
     )
@@ -4852,15 +5017,17 @@ def compose_ask_script(
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
         b.append(f"  const _judgeRules = {_emit._JUDGE_VERDICT_RULES_JS};")
 
-    def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "") -> str:
+    def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "", *, host: bool = False) -> str:
         return (
-            "js:JSON.stringify({ sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
+            ("{" if host else "js:JSON.stringify({") + " sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
             + (", baton: " + json.dumps(baton["path"]) if baton else "")
             + (", em_size: " + json.dumps(em_size) if em_size else "")
+            + (", family: " + json.dumps(family) if family else "")
             + (f", record: {record_js}" if record_js else "")
             + extra_js
-            + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) })"
-            + (".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")" if extra_js else "")
+            + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) }"
+            + ("" if host else ")")
+            + (".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")" if extra_js and not host else "")
         )
 
     fold_stage = not stop_after
@@ -4912,11 +5079,19 @@ def compose_ask_script(
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
             "and halt both null.",
         )
-        return _agent(
+        relay = _agent(
             gate_prompt, label=label, phase=phase_title, agent_type=_GATE_AGENT_TYPE,
             agent_model=_MECHANICAL_MODEL,
             schema=_GATE_STAGED_SCHEMA if stage_act and fold_stage else _GATE_SCHEMA,
             effort=_MECHANICAL_EFFORT, run_id=run_id,
+            gate_manifest_run=run_id,
+        )
+        if not stage_act:
+            return relay
+        params = _gate_payload(extra_js=extra_js, host=True)
+        return (
+            "(typeof engineOp === 'function' && engineOp.directRun && _RUN_TOKEN "
+            f"? (_hostGateUsed = true, engineOp('gate.host_run', {params})) : {relay})"
         )
 
     def _chain_emit_act(params: str) -> tuple[str, ...]:
@@ -4940,6 +5115,7 @@ def compose_ask_script(
 
     # A launcher child whose twin carries a resume block runs from the inline manifest: every pre-stage leg sits
     # behind `_NO_RESUME`, and `_gate` is seeded from the block instead of a leg's reply.
+    b.append("  let _hostGateUsed = false;")
     _NO_RESUME = "!_STAGED_RESUME" if launcher_child else "true"
     _gate_seed_js = (
         "{ arm: _STAGED_RESUME.arm, halt: null, baton: null, "
@@ -5004,6 +5180,7 @@ def compose_ask_script(
             f'{{"sizing_path":"{sizing_write_rel}","run_id":"{run_id}","writes":[<your writes>]'
             + (f',"baton":{json.dumps(baton["path"])}' if baton else "")
             + (f',"em_size":{json.dumps(em_size)}' if em_size else "")
+            + (f',"family":{json.dumps(family)}' if family else "")
             + (f',"route_override_reason":"{_OVERRIDE_SLOT}"' if has_route_pref else "")
             + (f',"declared_writes":{_declared_json}' if _declared else "")
             + "}'" + _repo_flag(repo_root)
@@ -5632,7 +5809,7 @@ def compose_ask_script(
         # act switches to plan_path); the XS mint refuses a sizing with an edge.
         b.append(
             f"  if (!_halted && {_NO_RESUME} && !_resumeLedger && _gate.arm === {_lit(ARM_XS)} && _gate.resume_plan) "
-            "{ _planRel = _gate.resume_plan; }"
+            f"{{ if ({_RESUME_PLAN_SHAPE_JS}(_gate.resume_plan)) {{ _planRel = _gate.resume_plan; }} else {{ {_resume_plan_halt_js('_gate')} }} }}"
         )
     late_replan_call: Optional[str] = None
     if fold_stage:
@@ -5816,7 +5993,7 @@ def compose_ask_script(
         " (<plan_rel> is the plan's repo-relative path.)",
     )
     b.append(f"  if (!_halted && {_NO_RESUME} && _gate.arm === {_lit(ARM_S)}) {{")
-    b.append("    if (_resumeLedger) { /* planRel already the ledger plan */ } else if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {")
+    b.append("    if (_resumeLedger) { /* planRel already the ledger plan */ } else if (_gate.resume_plan) { if (" + _RESUME_PLAN_SHAPE_JS + "(_gate.resume_plan)) { _planRel = _gate.resume_plan; } else { " + _resume_plan_halt_js("_gate") + " } } else {")
     b.append("    phase('plan');")
     plan_call = _agent(
         plan_author, label="plan", phase="plan", agent_type=stage_types["plan"],
@@ -5989,7 +6166,8 @@ def compose_ask_script(
             "review finding to clear one. Return the plan's repo-relative path as plan_rel and the "
             "ruling ids you applied as applied (an empty list, with no edit, when the ledger carries "
             "no ruling). Apply rulings: ",
-            "js:_gate.pending_rulings ? _gate.pending_rulings.join(', ') : '(unlisted: read the ledger)'",
+            "js:(Array.isArray(_gate.pending_rulings) ? (_gate.pending_rulings.length ? _gate.pending_rulings.join(', ') : '(unlisted: read the ledger)') "
+            ": (typeof _gate.pending_rulings === 'string' && _gate.pending_rulings ? _gate.pending_rulings : '(unlisted: read the ledger)'))",
             "." + ledger_clause,
         )
         ruled_call = _agent(
@@ -6515,7 +6693,10 @@ def compose_ask_script(
         start_cmd = engine_module_command(
             FAMILY_CREDIT_MODULE, repo_root, f"start --root {Path(repo_root).as_posix()} --run-id {run_id} --row "
         )
-        b.append(_family_run_js(work_label, exec_phase, start_cmd))
+        invoke_cmd = engine_module_command(
+            _FAMILY_INVOKE_MODULE, repo_root, f"--root {Path(repo_root).as_posix()} --run-id {run_id} --row "
+        )
+        b.append(_family_run_js(work_label, exec_phase, start_cmd, invoke_cmd))
     if routed:
         b.append(_route_js.routed_run_js())
         b.append(_ROUTE_ADAPTER_JS)
@@ -6653,6 +6834,7 @@ def compose_ask_script(
     # The review wave shadows `agent` inside its own block (design brief prefix only) rather than
     # renaming its call sites: the leg register, phase-title and brief checks find legs by the
     # literal `agent(` token, so a renamed call site is invisible to every one of them.
+    b.append("  const _gateEvidence = !_halted && _hostGateUsed ? await engineOp('gate.host_receipt', {}) : null;")
     b.append("  const _reviewOuterAgent = agent;")
     b.append(_RESUME_SLICE_IDS_DECL_JS)
     b.append("  let _reverifyJoined = false;")
@@ -6706,7 +6888,14 @@ def compose_ask_script(
         )
         b.append("    }")
         b.append("  }")
-    b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
+    b.append(
+        "  { const agent = (p, o) => _reviewOuterAgent((_gateEvidence ? "
+        "'Host gate receipt: ' + JSON.stringify(_gateEvidence) + "
+        "'\\nThe paired host artifacts record the current fire. Any C0 statement that the worker did not "
+        "invoke the gate describes the worker only. Compare the request, response, consumed and routing "
+        "evidence for this fire. Treat loggedIn as the gate-time Claude status and process_exit_code "
+        f"as the coordinator child exit.\\n\\n' : '') + {_DESIGN_PREFIX_JS} + p, o);"
+    )
     b.append(
         f"  if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _codeReviewOwed)) {{\n"
         + review_text + "\n  _footprintReviewed = true;\n  }"
@@ -6732,6 +6921,7 @@ def compose_ask_script(
     )
     # Self-correction reads the re-verify result, so the deferred re-verify joins before it.
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
+    b.append(_review_test_infra_halt_js(sizing_rel))
     b.append(_WAVE_DIFF_RECONCILE_JS)
     b.append(_TESTS_NOT_RUN_JS)
     b.append(
@@ -6796,6 +6986,14 @@ def compose_ask_script(
     no_target = (
         f"  if (!_halted && _manifest && _manifest.no_test_target) {{ {_emit._TEST_RESULT_VAR} = "
         "{ status: 'degraded', summary: 'No terminal test run: ' + _manifest.no_test_target.reason }; }"
+    )
+    em_owed = (
+        f"  if (!_halted && _manifest && _manifest.em_owed_test_criterion) {{ {_emit._TEST_RESULT_VAR} = "
+        "{ status: 'degraded', owed_to: 'em', row: _manifest.em_owed_test_criterion.row ?? null, "
+        "summary: 'UE automation criterion owed to the EM; record it with coordinator-invoke plan.tasks.mutate "
+        "{\"verb\":\"em-discharge\",\"plan_path\":' + JSON.stringify((typeof _planRel !== 'undefined' ? _planRel : null) ?? '') "
+        "+ ',\"id\":' + JSON.stringify(String(_manifest.em_owed_test_criterion.row ?? '')) "
+        "+ ',\"ue_report\":{\"index_json\":\"<report/index.json>\",\"tests\":[...]}}' }; }"
     )
     review_vars = _emit.review_stage_vars(
         review,
@@ -6871,6 +7069,12 @@ def compose_ask_script(
                 _OVERLAY_VERIFY_MODULE, repo_root, f"--export-run --run-id {run_id} --repo-root {Path(repo_root).as_posix()} --"
             ),
         ),
+    )
+    verify_host_params = json.dumps({"base": run_base_sha or "", "out_path": f"{record_dir}/test-leg.json"})
+    verify_tests_call = (
+        "(typeof engineOp === 'function' && engineOp.directRun && !_lateIds.length && !_verifyLateIds.length"
+        " ? engineOp('verify.host_test_leg', "
+        f"{{ ...{verify_host_params}, targets: _manifest.test_targets ?? [] }}) : {verify_tests_call})"
     )
     unjudged = (
         "{ status: 'indeterminate', differs_from_baseline: null, observation: 'unjudged: verify leg returned "
@@ -6990,8 +7194,10 @@ def compose_ask_script(
         )
     b.extend(verify_lines)
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
+    b.append(_review_test_infra_halt_js(sizing_rel))
     b.append(_review_blocked_halt_js(sizing_rel, after_join=True, call_only=True))
     b.append(no_target)
+    b.append(em_owed)
     b.append("  if (!_halted && _manifest && !_manifest.error) {")
     b.append(
         "    const _reconciled = [];\n"
@@ -7048,6 +7254,7 @@ def compose_ask_script(
         "      if (rest.length) i.remaining = rest; else if (_pmVerbatimIds.includes(i.id)) continue; "
         "else { _reconciled.push(i.id); i.status = 'met'; delete i.remaining; }\n"
         "    }\n"
+        f"    {OWED_BY_DERIVE_JS}\n"
         "    };\n"
         "    _normaliseLedger();"
     )
@@ -7072,6 +7279,8 @@ def compose_ask_script(
         f"    const _emContextIds = {json.dumps(_em_context_row_ids(repo_root, sizing_rel))};\n"
         "    const _ledgerBlocking = (l) => (l?.items ?? []).filter((i) => {\n"
         "      if (!i || _emContextIds.includes(i.id) || i.foreign_only === true) return false;\n"
+        "      if (i.status === 'not_met' && Array.isArray(i.owed_by) && i.owed_by.length "
+        "&& i.owed_by.every((id) => (_manifest?.owed ?? []).some((o) => o.id === id))) return false;\n"
         "      const rem = Array.isArray(i.remaining) ? i.remaining : [];\n"
         "      const status = i.status === 'not_met' && rem.length && rem.every((a) => _postCommitActs.includes(a)) "
         "? 'post_commit' : i.status;\n"
@@ -8382,11 +8591,16 @@ NO_RUN_TOKEN_COMMIT_REASON = "commit stage skipped: no run token"
 
 # Tail of an `else if (!_halted && ...)` arm: a terminal-commit `_nextAction` with no `_RUN_TOKEN`
 # cannot fire the commit stage, so the reply names the halt instead of carrying halted_by null.
+# Exception: `_metBySkipped` (empty prep, every blocking row met by a landed commit) means nothing is
+# left to commit, so the run ends already_delivered naming that sha.
 _NO_RUN_TOKEN_COMMIT_SKIPPED_JS = (
     "_nextAction && _nextAction.kind === 'terminal_commit' && !_RUN_TOKEN) { "
-    "_halted = { halted: 'commit', refused: null, error: null, blob_drift: null, "
+    "if (typeof _metBySkipped !== 'undefined' && _metBySkipped && Array.isArray(_metBySkipped.shas) && _metBySkipped.shas.length) { "
+    "_alreadyDelivered = { sha: _metBySkipped.shas[0], close: null, shas: _metBySkipped.shas }; "
+    "_nextAction = { kind: 'none', op: null, params: { already_delivered: _alreadyDelivered } }; } "
+    "else { _halted = { halted: 'commit', refused: null, error: null, blob_drift: null, "
     f"reason: {json.dumps(NO_RUN_TOKEN_COMMIT_REASON)}, "
-    "plan: (typeof _planRel === 'undefined' ? null : _planRel) ?? null, sizing: _sizingRel ?? null, run_id: _runId }; }"
+    "plan: (typeof _planRel === 'undefined' ? null : _planRel) ?? null, sizing: _sizingRel ?? null, run_id: _runId }; } }"
 )
 
 

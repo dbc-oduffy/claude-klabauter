@@ -2122,6 +2122,22 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/agent_pipe.py",
         ("_agent_pipe_route_set",),
     ),
+    "hooks.session_start_resume_plugin_check": (
+        "coordinator_core/hooks/session_start_resume_plugin_check.py",
+        ("_handler",),
+    ),
+    "job.cancel": (
+        "coordinator_core/ops/job_cancel.py",
+        ("_cancel",),
+    ),
+    "job.start": (
+        "coordinator_core/ops/job_cancel.py",
+        ("_start",),
+    ),
+    "spawn_orphans.reap": (
+        "coordinator_core/ops/spawn_orphan_reap.py",
+        ("reap",),
+    ),
 }
 
 #: Live ops whose function-granular reachable-spawn measurement is a known RESOLVER GAP, not
@@ -2264,6 +2280,14 @@ _RESUME_LAUNCH_SEAM = _Legitimation(
 )
 
 _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
+    # The publish guards' changed-set widening: `_unpublished` issues ONE `git status --porcelain`
+    # per round, returning None (guards check every file) when it cannot determine the set.
+    ("percolate.run", "coordinator_core/percolate/engine.py", "_unpublished", "git", 0): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py",
+        executed="Measured under `test_percolate_unpublished_issues_exactly_one_git_status`: "
+        "`subprocess.run` substituted around `engine._unpublished`, exactly one call, argv `git ... status`.",
+    ),
     # distill.scope's coverage watermark: run_watermark.changed_since issues ONE `git diff
     # --name-only <base>` per run when the example-retrieval-repo doc_files view is absent (d145e6, 2026-11-13).
     ("distill.scope", "coordinator_core/git/run.py", "run_git", "git", 0): _Legitimation(
@@ -7947,7 +7971,12 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # leg) plus the decide-only push chain `auto_push._run_git`, `auto_push._invoke_cockpit_publish`,
     # `git_native.push_streamed` and `p4/runner.py::run` (measured 2026-10-29: `nudge_push` runs
     # 0 spawns / 0ms; `decide_only=True` publishes nothing and skips the p4 leg).
-    "dispatch.land_run": 9,
+    # 9 -> 12, 2026-11-18: three sites reach-only on a landing, all in the clean-overlay re-verify leg
+    # (`clean_overlay_verify._run` -> `contained_run.spawn_in_capped_job`, its three Popen sites:
+    # the POSIX start, the Windows suspended start and the Windows breakaway retry) taken only on a
+    # verdict mismatch. The landed-sha judge's `terminal_commit_ledger._changed_paths` read is
+    # `run_git`, already within the count.
+    "dispatch.land_run": 12,
     # 1 -> 2, 2026-10-29: `detached_spawn.spawn_detached` via `halted_run._schedule_resume_build`,
     # a best-effort detached launch on a halt marker that carries a sizing; parent-side Popen
     # measured 0ms CPU / 2-5ms wall (2026-10-29), skipped under pytest, never waited on.
@@ -7955,6 +7984,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "dispatch.commit_halted_rows": 1,
     # Enrolled 2026-11-15: the temporary blob-landing op reaches one `git.run.run_git` site.
     "dispatch.land_blobs": 1,
+    # Both reached only through `_land -> land_run_grind.commit_grind_rows`: one `git.run.run_git` and
+    # one `detached_spawn.spawn_detached`; bookkeep's own body spawns nothing.
+    "dispatch.grind_bookkeep": 2,
     "docindex.emit": 1,
     # cat-file/grep join reaches only git.run.run_git.
     "ceremony.wiki_candidates": 1,
@@ -7981,8 +8013,16 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Raised 2->4 2026-11-13 (f1d3c8): the post_run.finish tail adds ceremony.commit_v2's run_git
     # and detached halt-resume spawn, one scoped commit per lessons run in place of the hand
     # commits of evidence files every lessons run needed.
-    "learn_lessons_pipeline.apply": 4,
-    "learn_lessons_pipeline.brief": 2,
+    # 4 -> 3 / 2 -> 1, 2026-11-18: the reachable set is now `run_git`, `machine_local_spawn._popen` and
+    # `spawn_detached` (apply) and `_popen` alone (brief).
+    "learn_lessons_pipeline.apply": 3,
+    "learn_lessons_pipeline.brief": 1,
+    # Enrolled 2026-11-18: each reaches only the sites named, reach-only for the op's own work.
+    # ceremony.hand_land and external_workspace.rehydrate: the one `git.run.run_git` site.
+    "ceremony.hand_land": 1,
+    "external_workspace.rehydrate": 1,
+    # memo.sweep_ref_only: `run_git`, `git_native._git._invoke` and `write_signed_commit_object`.
+    "memo.sweep_ref_only": 3,
     "memo.correct_note": 4,
     "memo.heal_inbox": 3,
     # Reachable-site ceiling, not a per-call count: the delivery path is zero-hook; the sites are the
@@ -8232,6 +8272,29 @@ def test_commit_merge_spawns_one_commit_tree_through_git_invoke(tmp_path, monkey
         commit_tree = [s for s in spawns if "commit-tree" in s.argv]
         assert len(commit_tree) == 1, [s.argv for s in spawns]
         assert commit_tree[0].origin == "_git._invoke", commit_tree[0]
+
+
+def test_percolate_unpublished_issues_exactly_one_git_status(tmp_path, monkeypatch):
+    """Companion for the `percolate.run` legitimization: `_unpublished` makes one `git status`
+    spawn per call and no other, and a nondeterminable status returns None (guards check all)."""
+    import subprocess
+
+    from coordinator_core.percolate import engine
+
+    (tmp_path / ".git").mkdir()
+    calls: list = []
+
+    def _run(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+    assert engine._unpublished(tmp_path, frozenset({"a.txt"})) is not None
+    assert len(calls) == 1, calls
+    assert "status" in calls[0], calls[0]
+    calls.clear()
+    assert engine._unpublished(tmp_path, None) is None
+    assert calls == []
 
 
 @pytest.mark.parametrize(

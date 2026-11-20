@@ -57,6 +57,7 @@ def _reason(env: dict) -> str:
     return _hso(env)["permissionDecisionReason"]
 
 
+@pytest.mark.deliberate_wall_clock(reason="refusing inside the hook deadline while a read hangs is the behaviour under test")
 def test_a_hung_sizing_read_refuses_within_the_budget_naming_reason_and_next_step(hung_read):
     root, emit, calls, _ = hung_read
     started = time.perf_counter()
@@ -66,6 +67,7 @@ def test_a_hung_sizing_read_refuses_within_the_budget_naming_reason_and_next_ste
     assert "Re-submit once" not in text and "marker is unknown" not in text
 
 
+@pytest.mark.deliberate_wall_clock(reason="refusing inside the hook deadline while a read hangs is the behaviour under test")
 def test_a_second_submit_while_the_read_is_young_names_the_age_and_the_wait(hung_read):
     root, emit, calls, _ = hung_read
     mod.evaluate(_payload(root), emit=emit)

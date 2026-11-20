@@ -3954,3 +3954,40 @@ def test_spooled_text_run_replaces_undecodable_bytes(tmp_path):
     code = r"import sys; sys.stdout.buffer.write(b'x\x97y')"
     done = _mod._spooled_run([sys.executable, "-c", code], timeout=30, text=True)
     assert done.stdout == "x\ufffdy"
+
+
+class TestResolveCloneShaOneSpawn:
+    def _count(self, monkeypatch):
+        calls = []
+        real = _mod._spooled_run
+
+        def spy(cmd, **kw):
+            calls.append(cmd)
+            return real(cmd, **kw)
+
+        monkeypatch.setattr(_mod, "_spooled_run", spy)
+        return calls
+
+    def test_source_ref_resolves_in_one_git_call(self, tmp_path, monkeypatch):
+        src, shipped, _head = _detached_git_repo(tmp_path)
+        calls = self._count(monkeypatch)
+        assert _mod._resolve_clone_sha(src, "ship") == shipped
+        assert len(calls) == 1
+
+    def test_unresolvable_ref_falls_back_to_head_in_one_git_call(self, tmp_path, monkeypatch):
+        src, _shipped, head = _detached_git_repo(tmp_path)
+        calls = self._count(monkeypatch)
+        assert _mod._resolve_clone_sha(src, "no-such-ref") == head
+        assert len(calls) == 1
+
+    def test_no_ref_resolves_head(self, tmp_path):
+        src, _shipped, head = _detached_git_repo(tmp_path)
+        assert _mod._resolve_clone_sha(src, None) == head
+
+    def test_unborn_head_raises(self, tmp_path):
+        repo = tmp_path / "empty"
+        repo.mkdir()
+        subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        with pytest.raises(RuntimeError, match="HEAD does not resolve"):
+            _mod._resolve_clone_sha(repo, "no-such-ref")

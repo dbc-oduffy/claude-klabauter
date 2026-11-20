@@ -204,3 +204,18 @@ def test_command_line_reads_this_process():
         return
     line = command_line(os.getpid())
     assert line and ("python" in line.lower() or "pytest" in line.lower())
+
+
+def test_codex_anchors_tool_shell_and_owns_its_heavy_processes():
+    rows = [R(1, 0, 10, "codex.exe"), R(2, 1, 20, "pwsh.exe"),
+            R(3, 2, 30, "python.exe"), R(4, 2, 31, "codex.exe"),
+            R(5, 4, 40, "pwsh.exe"), R(6, 5, 50, "python.exe")]
+    p = _Prims(rows)
+    assert resolve_anchor({"pid": 3}, p) == rows[0]
+    assert resolve_anchor({"pid": 6}, p) == rows[3]
+    assert [row.pid for row in session_census(rows[0], p).heavy] == [3]
+
+
+def test_codex_helper_image_is_not_a_session_anchor():
+    rows = [R(1, 0, 10, "codex-windows-sandbox-service.exe"), R(2, 1, 20, "pwsh.exe")]
+    assert resolve_anchor({"pid": 2}, _Prims(rows)) is None

@@ -24,8 +24,13 @@ INVARIANT: `executor_commit_act` reuses the Commit Gate's own matchers
 imported lazily after a substring prefilter, so the plan bar and the guard agree on what a commit is.
 The deploy list `_DEPLOY_ACT` is closed: each entry ships a committed tree.
 
-TRAP: `executor_commit_act` flags a backticked commit or deploy quoted in negation ("never run
-`git commit`"); drop the backticks to make it a mention.
+INVARIANT: `executor_merge_act` reuses the subagent guard's `_real_git_subcommand` (lazy, after a
+"merge" prefilter) and its `--ff-only` token exemption, so plan and guard agree on a denied merge.
+The plan bar is stricter than the guard in one place: it ignores the guard's scratch-context merge
+allowance (`_SCRATCH_CTX`), so it over-flags a scratch merge and never under-flags a denied one.
+
+TRAP: `executor_commit_act` and `executor_merge_act` flag a backticked commit, deploy or merge quoted
+in negation ("never run `git commit`"); drop the backticks to make it a mention.
 """
 
 from __future__ import annotations
@@ -127,6 +132,79 @@ def executor_commit_act(raw: Dict[str, Any]) -> Optional[str]:
     for span in _code_spans(body):
         span = span.strip()
         if span and _span_commits_or_deploys(span):
+            return span
+    return None
+
+
+_SEGMENT_BREAKS = frozenset({";", "&", "&&", "|", "||", "(", ")"})
+_GIT_ARGV0 = re.compile(r"(?:^|[\\/])git(?:\.exe)?$", re.IGNORECASE)
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_PLAIN_WRAPPERS = frozenset({"command", "exec", "nohup", "time", "sudo"})
+
+
+def _strip_command_prefix(segment: list) -> list:
+    """`segment` without leading `VAR=x` assignments and `env`/`command`-style wrappers, as the guard sees git."""
+    from coordinator_core.bash_guards.block_subagent_destructive_action import _strip_env_prefix
+
+    while segment:
+        if _ASSIGNMENT.match(segment[0]):
+            segment = segment[1:]
+        elif segment[0] == "env":
+            segment = _strip_env_prefix(segment)
+        elif segment[0] in _PLAIN_WRAPPERS:
+            segment = segment[1:]
+        else:
+            break
+    return segment
+
+
+def _span_merges(span: str) -> bool:
+    """True when a segment of `span` runs `git merge` without `--ff-only` (the guard's deny kind)."""
+    if "merge" not in span.lower():
+        return False
+    import shlex
+
+    from coordinator_core.bash_guards.block_subagent_destructive_action import _real_git_subcommand
+
+    lexer = shlex.shlex(span.replace("\\", "/"), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    segments: list = [[]]
+    for token in tokens:
+        if token in _SEGMENT_BREAKS:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    for segment in segments:
+        segment = _strip_command_prefix(segment)
+        if segment and _GIT_ARGV0.search(segment[0]):
+            sub, ambiguous, remaining = _real_git_subcommand(segment[1:])
+            if ambiguous:
+                # The guard resolves an unparseable global option conservatively; so does the plan bar.
+                if "merge" in segment[1:] and "--ff-only" not in segment:
+                    return True
+            elif sub == "merge" and "--ff-only" not in remaining:
+                return True
+    return False
+
+
+def executor_merge_act(raw: Dict[str, Any]) -> Optional[str]:
+    """The first body code span an executor would run as `git merge` (not --ff-only), or None.
+
+    None when row_is_em_performed(raw). The subagent guard always denies the span, so the row
+    changes nothing; the plan must put the merge on an EM-owned row.
+    """
+    if row_is_em_performed(raw):
+        return None
+    body = raw.get("body")
+    if not isinstance(body, str):
+        return None
+    for span in _code_spans(body):
+        span = span.strip()
+        if span and _span_merges(span):
             return span
     return None
 

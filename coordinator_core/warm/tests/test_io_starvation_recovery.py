@@ -245,8 +245,9 @@ def ctx(tmp_path: Path, repo, monkeypatch: pytest.MonkeyPatch):
 
 
 def _starve_commit_leg(monkeypatch, freeze: _FsFreeze) -> None:
-    """While frozen, the commit leg's first fs call blocks and burns the whole land budget, so the
-    real `land_deadline.check` ends the landing there; thawed, the leg runs normally."""
+    """While frozen, the commit leg's first fs call blocks past the wall hang ceiling (a reserved
+    leg is charged by process time, so only a true hang refuses it), so the real
+    `land_deadline.check` ends the landing there; thawed, the leg runs normally."""
     skew = [0.0]
     real_now, real_check = land_deadline._now, land_deadline.check
     monkeypatch.setattr(land_deadline, "_now", lambda: real_now() + skew[0])
@@ -254,7 +255,7 @@ def _starve_commit_leg(monkeypatch, freeze: _FsFreeze) -> None:
     def check(name) -> None:
         if name == "land_run.commit" and freeze.frozen:
             freeze.entered.set()
-            skew[0] += land_deadline.LAND_BUDGET_SECS + land_deadline.RESERVE_SECS + 1.0
+            skew[0] += land_deadline.WALL_HANG_CEILING_SECS + 1.0
         real_check(name)
 
     monkeypatch.setattr(land_deadline, "check", check)

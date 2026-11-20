@@ -2857,9 +2857,11 @@ def _test_runner_clause(repo_root: Optional[str | Path] = None, scoped_changes: 
 # outlive it: dozens per run filled a cloud container's disk mid-run.
 _SCRATCH_HYGIENE_CLAUSE = (
     "Scratch: anything you build outside the repo (a clone, venv, wheel, "
-    "export, tarball) goes under one directory named for this row, and you "
-    "delete that directory before you write your report. Reuse an existing "
-    "venv or clone rather than making another."
+    "export, tarball) goes under one directory named for this row. Before you "
+    "write your report, remove only that row-owned directory if policy permits. "
+    "If cleanup is denied, report its path and continue with the row verdict "
+    "based on the work and its evidence. Reuse an existing venv or clone "
+    "rather than making another."
 )
 
 
@@ -5143,18 +5145,25 @@ def _held_halt_record_js() -> str:
 
 def _family_status_js() -> str:
     """JS helpers mapping a family-stage-result onto a contract status line for the row loop.
-    `_famFailed` reads `stage_family.FALLBACK_VERDICTS`, the same set `ask_compose._family_run_js` tests."""
+    `_famFailed` reads `stage_family.FALLBACK_VERDICTS`, the same set `ask_compose._family_run_js` tests, and
+    also fires when `family_authored` is not true: the vendor CLI's invocation record never proved it wrote."""
     from coordinator_core.ops.dispatch_emit import stage_family as _sf
 
     failed = " || ".join(f"f.verdict === {_js_string_literal(v)}" for v in _sf.FALLBACK_VERDICTS)
+    authored = f"f.{_sf.FAMILY_AUTHORED_KEY} !== true"
     return (
-        f"  function _famFailed(f) {{ return {failed}; }}\n"
+        f"  function _famFailed(f) {{ return {failed} || {authored}; }}\n"
         "  function _isFamilyResult(x) {\n"
         "    return !!x && typeof x === 'object' && typeof x.verdict === 'string' && typeof x.family === 'string';\n"
         "  }\n"
         "  function _familyStatusLine(id, f) {\n"
-        "    return (_famFailed(f) ? 'BLOCKED: ' : 'DONE: ') + id + ' via ' + f.family + ' ' + f.verdict"
-        " + (f.blocked_reason ? ' (' + f.blocked_reason + ')' : '') + ' ' + JSON.stringify(f);\n"
+        f"    const _un = {authored};\n"
+        "    const _br = f.blocked_reason ? String(f.blocked_reason) : '';\n"
+        "    const _why = _un ? (_br.startsWith('family_authored:false') ? _br : 'family_authored:false: ' + "
+        "(_br || 'no invocation record shows the vendor CLI authored the diff')) : _br;\n"
+        f"    const _v = _un && !({failed}) ? 'BLOCKED' : f.verdict;\n"
+        "    return (_famFailed(f) ? 'BLOCKED: ' : 'DONE: ') + id + ' via ' + f.family + ' ' + _v"
+        " + (_why ? ' (' + _why + ')' : '') + ' ' + JSON.stringify(f);\n"
         "  }\n"
     )
 
@@ -5586,7 +5595,8 @@ def _checkpoint_trailer_js(
             + f" + {runtime_plan_js} + "
             + _js_string_literal("\nCheckpoint-Base: ")
             + f" + {_RUN_BASE_VAR} + "
-            + _js_string_literal(_NOT_LANDED_TRAILER)
+            + _js_string_literal(_NOT_LANDED_TRAILER + "\nCheckpoint-Run-Id: ")
+            + " + _runId"
         )
     if not plan_path:
         return "''"
@@ -8678,6 +8688,21 @@ def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
     return resume_landed_state(repo_root, plan).rows
 
 
+def _gate_owed_of_commit(common_dir: Path, sha: str) -> set:
+    """Row ids on the ``Checkpoint-Gate-Owed:`` lines of commit ``sha`` (in-process object read; empty
+    when the commit is unreadable): a gate-owed row's bytes are committed but it is not landed."""
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import CHECKPOINT_GATE_OWED_LINE
+
+    meta = commit_meta(common_dir, sha) if sha else None
+    if meta is None:
+        return set()
+    owed: set = set()
+    for m in CHECKPOINT_GATE_OWED_LINE.finditer(meta.get("message") or ""):
+        owed.update(i for i in re.split(r"[,\s]+", m.group("v")) if i)
+    return owed
+
+
 def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     """Row ids of ``plan`` already landed: checkpoint commits (as ``checkpoint_landed_state``) plus
     the ``Lands-Chunks:`` ids of commits whose ``Halt-Plan:`` names ``plan`` and whose
@@ -8691,6 +8716,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     from coordinator_core.ops.dispatch_emit import landed_trailer_record
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id
 
+    common_dir = resolve_git_common_dir(repo_root)
     entries = landed_trailer_record.trailer_entries(repo_root)
     if entries is None:
         head_before = head_sha(repo_root)
@@ -8736,6 +8762,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
         stop_ids = {i for i in re.split(r"[,\s\x1d]+", stop_rule) if i}
         if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
             checkpoint_ids = set(plan_commit_row_ids(without_process_half(subject))) - stop_ids
+            checkpoint_ids -= _gate_owed_of_commit(common_dir, sha)
             _land(checkpoint_ids, sha, subject)
             if sha:
                 checkpoint_shas.append(sha)

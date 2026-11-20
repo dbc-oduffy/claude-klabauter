@@ -45,6 +45,7 @@ def test_stall_once_then_clear_proceeds(repo, monkeypatch: pytest.MonkeyPatch) -
     assert calls["n"] == 2
 
 
+@pytest.mark.deliberate_wall_clock(reason="refusing inside the retry budget deadline on a persistent stall is the behaviour under test")
 def test_persistent_stall_refuses_within_budget(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rl, "SIDECAR_RETRY_BUDGET_SECS", 0.3)
     calls = _fake_rmw(monkeypatch, fail_times=None)
