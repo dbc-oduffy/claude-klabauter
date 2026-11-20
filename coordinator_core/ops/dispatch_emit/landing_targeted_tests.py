@@ -34,6 +34,7 @@ TRIPWIRES_NOT_RUN_KEY = "tripwires_not_run"
 IMPORTER_OVERRUN_KEY = "importer_overrun"
 ZERO_RUN_BUDGET = "budget-exhausted"
 ZERO_RUN_COLLECTION = "collection-failure"
+ZERO_RUN_PROCESS_ERROR = "pytest-process-error"
 ZERO_RUN_EMPTY = "empty-selection"
 ZERO_RUN_IMPORT_ERROR = "import-error"
 ZERO_RUN_KILLED = "killed"
@@ -44,6 +45,7 @@ _ZERO_RUN_CAUSES = {
     ZERO_RUN_KILLED: "the test process was killed before any test completed",
     ZERO_RUN_BUDGET: "the verify budget was spent before any test ran",
     ZERO_RUN_COLLECTION: "pytest collection failed, so no test ran",
+    ZERO_RUN_PROCESS_ERROR: "pytest exited unsuccessfully without a collection error",
     ZERO_RUN_EMPTY: "the selection collected no tests",
     ZERO_RUN_IMPORT_ERROR: "an engine module failed to import, so no test ran (a dirty tree path, not a test failure)",
 }

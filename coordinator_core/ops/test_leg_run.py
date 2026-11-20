@@ -68,9 +68,8 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str]]:
-    """One pytest subprocess over `targets`: (exit code, stdout lines then the stderr session-Temp residue
-    lines, which pytest's seam prints to stderr). Raises subprocess.TimeoutExpired once `remaining` seconds
+def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str], str]:
+    """Return pytest's exit code, output lines and stderr. Raises subprocess.TimeoutExpired once `remaining` seconds
     are gone; the child is killed by then."""
     if remaining <= 0:
         raise subprocess.TimeoutExpired("pytest", 0)
@@ -79,7 +78,7 @@ def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[s
         proc = subprocess.run([sys.executable, "-c", _IDS_RUNNER, str(id_file), *_PYTEST], cwd=cwd,
                               capture_output=True, text=True, errors="replace", timeout=remaining,
                               **no_console_creationflags())
-    return proc.returncode, [*proc.stdout.splitlines(), *cov.temp_residue_lines(proc.stderr)]
+    return proc.returncode, [*proc.stdout.splitlines(), *proc.stderr.splitlines()], proc.stderr
 
 
 def _conftest_constants(*names: str) -> dict[str, str]:
@@ -262,11 +261,15 @@ def _stamp_all_missing(result: dict, absent: Sequence[str]) -> None:
     _tally(result, 5, (), missing_only=True)
 
 
-def _tally(result: dict, rc: Optional[int], lines: Sequence[str], *, missing_only: bool = False) -> None:
+def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Optional[str] = None,
+           *, missing_only: bool = False) -> None:
     """Stamp `tests_run`, `tests_failed`, `status` and, when no test completed, `zero_run_cause` onto `result`.
-    `rc` None is a deadline expiry; a negative `rc` is a POSIX signal kill (a Windows-killed child exits with a
-    positive code and reads as collection-failure); the counts come from pytest's terminal summary line
+    `rc` None is a deadline expiry; a negative `rc` is a POSIX signal kill.
+    The counts come from pytest's terminal summary line
     (errors are not completed tests). `missing_only`: no pytest ran because every target was absent."""
+    if stderr is not None:
+        result["pytest_exit_code"] = rc
+        result["pytest_stderr"] = stderr[-4096:]
     counts = {"passed": 0, "failed": 0}
     for raw in reversed(list(lines)):
         if _SUMMARY_TAIL.search(raw):
@@ -297,8 +300,10 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], *, missing_onl
         if dirty:
             cause = ltt.ZERO_RUN_IMPORT_ERROR
             result[IMPORT_ERROR_KEY] = {"path": dirty, "run_id": None}
-        else:
+        elif cov.collection_error(rc, "\n".join(lines)):
             cause = ltt.ZERO_RUN_COLLECTION
+        else:
+            cause = ltt.ZERO_RUN_PROCESS_ERROR
     result[ltt.ZERO_RUN_CAUSE_KEY] = cause
     result["status"] = "error"
 
@@ -411,7 +416,7 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
         out["status_after"] = "fail"
     else:
         out["status_after"] = "fail" if new_red else "pass"
-    _tally(out, ran.returncode, text.splitlines())
+    _tally(out, ran.returncode, text.splitlines(), ran.stderr)
     return out
 
 
@@ -437,15 +442,15 @@ def _split_phases(present: list[str], base_sha: Optional[str], head_sha: Optiona
 
 
 def _cwd_phase(targets: list[str], cwd: str, left, all_reds: dict, shown: dict,
-               red_non: list[str]) -> tuple[int, list[str], list[str]]:
+               red_non: list[str]) -> tuple[int, list[str], list[str], str]:
     """One pytest phase in `cwd`: (rc, lines, charged red ids); folds the phase's reds into the shared maps."""
-    rc, lines = _pytest(targets, cwd, left())
+    rc, lines, stderr = _pytest(targets, cwd, left())
     found = _reds(lines)
     kept, non = _split_not_a_test(list(found))
     red_non.extend(non)
     all_reds.update({n: found[n] for n in kept})
     shown.update(_detail("\n".join(lines), kept))
-    return rc, lines, kept
+    return rc, lines, kept, stderr
 
 
 def _merge_phases(rc1: int, lines1: list[str], rc2: int, lines2: list[str]) -> tuple[int, list[str]]:
@@ -465,7 +470,7 @@ def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], he
     measures so the base export file always holds every phase settled so far. Raises TimeoutExpired."""
     if not reds:
         return
-    rc, lines = _pytest(list(reds), cwd, left())
+    rc, lines, _stderr = _pytest(list(reds), cwd, left())
     again = _reds(lines)
     if rc in (0, 1):
         result["passed_alone"].extend(n for n in reds if n not in again)
@@ -559,7 +564,7 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
     else:
         result["status_after"] = "pass"
     result["overlay_rerun"] = {"from": err["path"], "overlaid": overlay}
-    _tally(result, ran.returncode, text.splitlines())
+    _tally(result, ran.returncode, text.splitlines(), ran.stderr)
 
 
 def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
@@ -575,7 +580,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
     result: dict = {"status_after": "fail", "failing": [], "failing_detail": [], "pre_existing": [],
                     "reverted": [], "passed_alone": [], "passed_at_base": [], "diff_named": [],
                     "not_a_test": []}
-    phase_one: Optional[tuple[int, list[str]]] = None
+    phase_one: Optional[tuple[int, list[str], str]] = None
     unreached: list[str] = []
     try:
         if touched:
@@ -618,18 +623,19 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         shown: dict[str, str] = {}
         red_non: list[str] = []
         exported: dict = {}
-        rc, lines, reds = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non)
-        phase_one = (rc, lines)
+        rc, lines, reds, stderr = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non)
+        phase_one = (rc, lines, stderr)
         unreached = _files(second)
         _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported)
         if second:
             try:
-                rc2, lines2, reds2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non)
+                rc2, lines2, reds2, stderr2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non)
             except subprocess.TimeoutExpired:
                 result[ltt.IMPORTER_OVERRUN_KEY] = True
                 result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(second)
             else:
                 rc, lines = _merge_phases(rc, lines, rc2, lines2)
+                stderr = "\n".join(filter(None, (stderr, stderr2)))
                 reds = [*reds, *reds2]
                 try:
                     _settle(result, reds2, cwd, base_sha, head_sha, base_export_out, left, exported)
@@ -648,7 +654,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             else:
                 result["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {rc} with no failing id"}]
         result["over_budget"] = False
-        _tally(result, rc, lines)
+        _tally(result, rc, lines, stderr)
         if result.get(IMPORT_ERROR_KEY):
             _own_import_error(result, Path(cwd))
             _overlay_fallback(result, present, base_sha, Path(cwd), left)

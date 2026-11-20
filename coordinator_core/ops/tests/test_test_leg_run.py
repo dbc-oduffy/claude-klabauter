@@ -183,7 +183,7 @@ def test_one_deadline_spans_the_steps(repo, tmp_path, monkeypatch):
     def fake_pytest(targets, cwd, remaining):
         timeouts.append(remaining)
         clock[0] += 40.0
-        return 1, [f"FAILED {FAIL_ID} - assert"]
+        return 1, [f"FAILED {FAIL_ID} - assert"], ""
 
     monkeypatch.setattr(tlr, "_pytest", fake_pytest)
     data = tlr.run(["tests"], base_sha=None, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
@@ -336,6 +336,16 @@ def test_collection_error_reports_collection_failure(repo, tmp_path):
     assert data["zero_run_cause"] == ltt.ZERO_RUN_COLLECTION == "collection-failure"
 
 
+def test_usage_failure_keeps_bounded_stderr_and_process_exit(repo, monkeypatch):
+    monkeypatch.setattr(tlr, "_pytest", lambda *_: (4, [], "x" * 5000 + "bad option"))
+    data = tlr.run([PASS_ID], base_sha=None, head_sha=None, base_export_out=None,
+                   budget_s=20, cwd=str(repo))
+    assert data["tests_run"] == 0
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_PROCESS_ERROR
+    assert data["pytest_exit_code"] == 4
+    assert len(data["pytest_stderr"]) == 4096 and data["pytest_stderr"].endswith("bad option")
+
+
 def _engine_import_error(repo: Path) -> None:
     (repo / "coordinator_core").mkdir()
     (repo / "coordinator_core" / "__init__.py").write_text("", encoding="utf-8")
@@ -433,7 +443,7 @@ def test_empty_selection_reports_empty_selection(repo, tmp_path):
 
 
 def test_killed_child_reports_killed(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (-9, []))
+    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (-9, [], ""))
     _code, data = _main(["--", PASS_ID], tmp_path / "o.json")
     assert data["tests_run"] == 0 and data["status"] == "error"
     assert data["zero_run_cause"] == ltt.ZERO_RUN_KILLED == "killed"
@@ -712,7 +722,7 @@ def test_phase_one_gets_the_deadline_less_the_tripwire_reserve(repo, monkeypatch
     def fake_pytest(targets, cwd, remaining):
         timeouts.append(remaining)
         clock[0] += 10.0
-        return 0, ["1 passed in 1s"]
+        return 0, ["1 passed in 1s"], ""
 
     monkeypatch.setattr(tlr, "_pytest", fake_pytest)
     tlr.run([PASS_ID, TRIPWIRE], base_sha=BASE, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
@@ -724,7 +734,7 @@ def test_a_budget_not_above_the_reserve_gives_phase_one_the_whole_deadline(repo,
     _write_tripwire(repo, "def test_t():\n    assert True\n")
     monkeypatch.setattr(tlr, "TRIPWIRE_BUDGET_S", 150.0)
     timeouts = []
-    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (timeouts.append(remaining), (0, ["1 passed in 1s"]))[1])
+    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (timeouts.append(remaining), (0, ["1 passed in 1s"], ""))[1])
     tlr.run([PASS_ID, TRIPWIRE], base_sha=BASE, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
     assert timeouts[0] > 99.0
 
@@ -740,7 +750,7 @@ def test_no_base_or_an_unreadable_diff_stays_one_phase(repo, monkeypatch, base_s
 
     monkeypatch.setattr(tlr.reverify_scope, "select_tests", select)
     calls = []
-    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (calls.append(list(targets)), (0, ["2 passed in 1s"]))[1])
+    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (calls.append(list(targets)), (0, ["2 passed in 1s"], ""))[1])
     tlr.run([PASS_ID, TRIPWIRE], base_sha=base_sha, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
     assert calls == [[PASS_ID, TRIPWIRE]]
 
@@ -750,7 +760,7 @@ def test_a_selection_lacking_the_tripwires_key_runs_one_phase_over_every_target(
     monkeypatch.setattr(tlr.reverify_scope, "select_tests",
                         lambda root, base, head="HEAD": {"tests": [], "changed": [], "fully_mapped": True, "notice": ""})
     calls = []
-    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (calls.append(list(targets)), (0, ["2 passed in 1s"]))[1])
+    monkeypatch.setattr(tlr, "_pytest", lambda targets, cwd, remaining: (calls.append(list(targets)), (0, ["2 passed in 1s"], ""))[1])
     data = tlr.run([PASS_ID, TRIPWIRE], base_sha=BASE, head_sha=None, base_export_out=None, budget_s=100.0, cwd=str(repo))
     assert calls == [[PASS_ID, TRIPWIRE]] and data["status_after"] == "pass"
 
@@ -776,7 +786,7 @@ def _fake_pytest_then(monkeypatch, replies):
         reply = queue.pop(0)
         if isinstance(reply, BaseException):
             raise reply
-        return reply
+        return *reply, ""
 
     monkeypatch.setattr(tlr, "_pytest", fake)
     return calls

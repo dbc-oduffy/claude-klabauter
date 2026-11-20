@@ -1073,6 +1073,8 @@ def _test_result_schema() -> dict:
         **schema["properties"],
         IMPORTER_OVERRUN_KEY: {"type": "boolean"},
         TRIPWIRES_NOT_RUN_KEY: {"type": "array", "items": _STR},
+        "pytest_exit_code": {"type": "integer"},
+        "pytest_stderr": {"type": "string", "maxLength": 4096},
     }
     return schema
 _LEDGER_CHECK_SCHEMA = _obj(
@@ -2440,6 +2442,10 @@ VERIFY_TESTS_LABEL = "verify-tests"
 _VERIFY_TEST_RESULT_VAR = "_verifyTest"
 
 
+def _powershell_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
 def _verify_tests_call(
     *, head: str, anchor: str, test_js: str, run_id: str, repo_root: str = "", out_path: str = "",
     base_sha: Optional[str] = None, stager: Optional[Stager] = None, agent_type_host: Optional[str] = None,
@@ -2447,22 +2453,30 @@ def _verify_tests_call(
     """The verify stage's scoped-test leg: one haiku test-runner `agent(...)` call EXPRESSION, awaited before
     the verify agent, which receives its result inline.
 
-    The leg runs `test_leg_run` as one background Bash call and waits on its completion notification; the
-    prompt carries no deadline and no Bash timeout, and no JS race wraps the call, so nothing cuts the run
+    The leg runs `test_leg_run` in the worker's native shell and waits for completion. No JS race wraps
+    the call, so nothing cuts the run
     before the runner's own budget."""
     base_flag = f"--base-sha {base_sha} " if base_sha else ""
     leg_command = engine_module_command(
-        "coordinator_core.ops.test_leg_run", repo_root, f"{base_flag}--out {out_path} -- "
+        "coordinator_core.ops.test_leg_run", repo_root, f"{base_flag}--out {shlex.quote(out_path)} -- ",
+        shell="bash",
+    )
+    windows_command = engine_module_command(
+        "coordinator_core.ops.test_leg_run", repo_root,
+        f"{base_flag}--out {_powershell_quote(out_path)} -- ", shell="powershell",
     )
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nYou run this run's scoped tests and report; you edit, "
         "stage and commit nothing. ",
         f"js:({test_js})",
         " The test run is this one command, replacing any direct pytest invocation above; its scope follows "
-        f"the `--`:\n\n{leg_command}",
-        "js:(_manifest.test_targets ?? []).join(' ')",
-        "\n\nRun it as ONE Bash call with run_in_background: true and no timeout parameter. Wait for its "
-        "completion notification; do not sleep, poll or re-run it. Then Read "
+        f"the `--`. Use only the command matching your worker shell.\n\nBash:\n{leg_command}",
+        """js:(_manifest.test_targets ?? []).map(t => "'" + t.replace(/'/g, "'\"'\"'") + "'").join(' ')""",
+        f"\n\nPowerShell:\n{windows_command}",
+        """js:(_manifest.test_targets ?? []).map(t => "'" + t.replace(/'/g, "''") + "'").join(' ')""",
+        "\n\nRun once using the native shell. In Bash use run_in_background: true and no timeout parameter; "
+        "wait for its completion notification. In PowerShell wait for the process to exit. "
+        "Do not sleep, poll or re-run it. Then Read "
         f"{out_path} and return its JSON verbatim as the test_result.",
     )
     return _agent(
@@ -2629,7 +2643,8 @@ _OVERLAY_SCHEMA = _obj(["exit_code"], {"exit_code": {"type": "integer"}, "detail
 FAMILY_CREDIT_MODULE = "coordinator_core.ops.dispatch_emit.family_credit"
 
 
-def engine_module_command(module: str, repo_root: str, args: str = "", *, portable: bool = False) -> str:
+def engine_module_command(module: str, repo_root: str, args: str = "", *, portable: bool = False,
+                          shell: Optional[str] = None) -> str:
     """`<engine interpreter> -m <module> <args>` for a command an agent runs to reach `coordinator_core`.
     The interpreter is the repo's resolvable pin, else this process's own absolute `sys.executable`; never a
     bare `python`, which on a host whose PATH python lacks `coordinator_core` fails before the module runs.
@@ -2641,6 +2656,22 @@ def engine_module_command(module: str, repo_root: str, args: str = "", *, portab
     if portable:
         return f"python -m {module}" + (f" {args}" if args else "")
     engine_root = Path(__file__).resolve().parents[3].as_posix()
+    if shell is not None:
+        bootstrap = (
+            "import os,runpy,sys;root=sys.argv.pop(1);"
+            "os.environ['PYTHONPATH']=root;sys.path.insert(0,root);"
+            "runpy.run_module(sys.argv.pop(1),run_name='__main__',alter_sys=True)"
+        )
+        python = engine_python_command(Path(repo_root))
+        if shell == "powershell":
+            command = shlex.split(python)
+            executable = "& " + " ".join(_powershell_quote(part) for part in command)
+            quote = _powershell_quote
+        else:
+            executable = python
+            quote = shlex.quote
+        call = f"{executable} -c {quote(bootstrap)} {quote(engine_root)} {quote(module)}"
+        return call + (f" {args}" if args else "")
     return (
         f'PYTHONPATH="{engine_root}" {engine_python_command(Path(repo_root))} -m {module}'
         + (f" {args}" if args else "")
