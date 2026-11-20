@@ -2072,7 +2072,7 @@
     "coordinator/bin/tests/test_unimatrix_install.py": "08e17fb8e31a7f14920cdccba196cf256a015957",
     "coordinator/bin/tests/test_unimatrix_install_survives_key_rename.py": "3a43cbe38ff931a789009e29c1319dd2a4578697",
     "coordinator/bin/tests/test_unimatrix_installed_lib_imports.py": "13a13afcc274818d78cc2bda4042188051928bd4",
-    "coordinator/bin/tests/test_unimatrix_keyless_inbox_mirror_does_not_shadow_row.py": "ff7d572c9a132c2af7df87249a03be582468b58d",
+    "coordinator/bin/tests/test_unimatrix_keyless_inbox_mirror_does_not_shadow_row.py": "ae773ef1c75d8d33a0dd5956d3839d82e554e1f9",
     "coordinator/bin/tests/test_unimatrix_launch_client.py": "9378202e229ad6de8f3d46d0d4fe77e58c386a8a",
     "coordinator/bin/tests/test_unimatrix_listagents_row_names_box.py": "eb4c52ec59310ff5de43c8f8a851f894f2252d1d",
     "coordinator/bin/tests/test_unimatrix_liveness.py": "2fb6fc27320af082c0c4705aa07d3574e934fbf9",
@@ -2230,7 +2230,7 @@
     "coordinator/bin/unimatrix-peer-router.py": "1551ae64cf5b590b585747c0a73f5411e563b864",
     "coordinator/bin/unimatrix-plugin-gen.py": "20a7440cc590fd42f5ad58cb4e447cfbfb230f56",
     "coordinator/bin/unimatrix-rekey.py": "d238b0696a3972c38f3a4a6516635b826343f979",
-    "coordinator/bin/unimatrix-relay.py": "64c79dcdb6f876d8c9796fa7e0a53f58e96ca952",
+    "coordinator/bin/unimatrix-relay.py": "4df2edd17964af7bbc595285fe9492acd629e606",
     "coordinator/bin/unimatrix-reshape.py": "4d7d16fce4a79ea205dfe1e62b06c53578f01eb0",
     "coordinator/bin/unimatrix-roster-timing.py": "e9dff594361af577241fae485948a68554bef867",
     "coordinator/bin/unimatrix-roster.py": "9e6f87c4954fc6c16dcb2de432ac746004349357",
@@ -2576,8 +2576,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "0b6244f5d60e74fcfa5c9c8ae59e176d8bd3f059",
-    "coordinator_core/_engine_stamp": "685f65da26632022ba1c81343f1a0d50ffd5c00e",
+    "coordinator_core/_engine_published_at": "6c58b4c4e63ca394c6eccf52ab50220942ddccaf",
+    "coordinator_core/_engine_stamp": "c5842f18dc379e1302c75978aea5e825c4bd60be",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -13144,5 +13144,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "d39e1f1b24e252147f17ee631cbb31efa5b9fb00"
+  "source_head": "14b77af6faf0093d2e5b1bab49f86cbabb90c77c"
 }
