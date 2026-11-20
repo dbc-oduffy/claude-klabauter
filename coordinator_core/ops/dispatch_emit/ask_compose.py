@@ -58,6 +58,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
     IMPORTER_OVERRUN_KEY,
     REVERIFY_INDETERMINATE,
     TRIPWIRES_NOT_RUN_KEY,
+    ZERO_RUN_FOREIGN_DEPENDENCY,
 )
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops._anchor_check import GRAMMAR as _ANCHOR_GRAMMAR
@@ -1075,6 +1076,7 @@ def _test_result_schema() -> dict:
         **schema["properties"],
         IMPORTER_OVERRUN_KEY: {"type": "boolean"},
         TRIPWIRES_NOT_RUN_KEY: {"type": "array", "items": _STR},
+        "zero_run_cause": _STR,
         "pytest_exit_code": {"type": "integer"},
         "pytest_stderr": {"type": "string", "maxLength": 4096},
     }
@@ -1151,6 +1153,30 @@ _LEDGER_SIZE_RULE = (
     "staged blob bytes of the file with the base blob at run_base_sha (git show of each, or the staged "
     "blob size); never the on-disk working-copy bytes, which core.autocrlf inflates with CRLF. "
 )
+#: A not_met row whose every `remaining` entry names one of the manifest's owed (EM/operator) rows, or a
+#: post-commit act, is owed to them. The verifier is told to set `owed_by` and often leaves it off, which
+#: halted code-complete runs and parked their blobs behind a leg only the EM can run. Runs before
+#: `_postCommitActs` is declared, so it carries its own copy of the acts.
+OWED_BY_DERIVE_JS = (
+    "for (const i of (_ledger?.items ?? [])) {\n"
+    "      if (!i || i.status !== 'not_met' || i.withheld_by || (Array.isArray(i.owed_by) && i.owed_by.length)) continue;\n"
+    "      const rem = Array.isArray(i.remaining) ? i.remaining.map(String) : [];\n"
+    "      const owedIds = (_manifest?.owed ?? []).map((o) => String(o.id));\n"
+    "      if (!rem.length || !owedIds.length) continue;\n"
+    f"      const acts = {json.dumps(list(POST_COMMIT_ACTS))};\n"
+    "      const named = new Set(); let ok = true;\n"
+    "      for (const a of rem) {\n"
+    "        if (acts.includes(a)) continue;\n"
+    "        const hit = owedIds.filter((id) => ((a.trimStart().startsWith(id + ':') || "
+    "a.split(/[^A-Za-z0-9_]+/).includes(id)) && /\\b(EM|em-performed|em-run|em-discharge|operator|owed)\\b/i.test(a)));\n"
+    "        if (!hit.length) { ok = false; break; }\n"
+    "        hit.forEach((id) => named.add(id));\n"
+    "      }\n"
+    "      if (ok && named.size) i.owed_by = [...named];\n"
+    "    }"
+)
+
+
 _LEDGER_GATED_RULE = (
     ". An item whose only undelivered part is a gated chunk is 'not_met' with withheld_by set to "
     "that chunk id exactly; set withheld_by on no other item. An item whose only undelivered parts are "
@@ -1817,6 +1843,17 @@ _JOIN_REVERIFY_JS = (
 )
 
 
+def _review_test_infra_halt_js(sizing_rel: Optional[str]) -> str:
+    return (
+        "  if (!_halted && _reviewReverify?.tests_run === 0 "
+        "&& _reviewReverify?.status_before === 'indeterminate' "
+        "&& typeof _reviewReverify.zero_run_cause === 'string' && _reviewReverify.zero_run_cause) "
+        "{ _halted = { halted: 'test_infra_failure', run_id: _runId, "
+        "detail: 'review reverify ran zero tests (' + _reviewReverify.zero_run_cause + ')', "
+        "next_action: 'Refire to re-run review verification: ' + " + _refire_js(sizing_rel) + " }; }"
+    )
+
+
 #: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
 #: null (degraded / verify-only) wave entries never match.
 def _review_blocked_halt_js(
@@ -2117,11 +2154,11 @@ def _criterion_blocker_halt_js(sizing_rel: Optional[str]) -> str:
 _TEST_UNPROVEN_CAUSE_JS = (
     "(() => { const _r = _testResult; "
     "const _ids = (Array.isArray(_r.failing_ids) ? _r.failing_ids : []).filter((x) => typeof x === 'string' && x.trim()); "
-    "if (_ids.length) return ''; "
     "if (typeof _r.tests_run === 'number' && _r.tests_run === 0) "
     "return 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : '') "
     "+ ((_r.import_error && typeof _r.import_error === 'object' && typeof _r.import_error.path === 'string') "
-    "? ': ' + _r.import_error.path + ' (run ' + (_r.import_error.run_id || 'unowned') + ')' : ''); "
+    "? ': ' + (typeof _r.import_error.symbol === 'string' ? \"'\" + _r.import_error.symbol + \"' defined only in uncommitted \" : '') + _r.import_error.path + ' (run ' + (_r.import_error.run_id || 'unowned') + ')' : ''); "
+    "if (_ids.length) return ''; "
     "if (['error', 'errored'].includes(_r.status)) return 'errored without a failing id'; "
     "return ''; })()"
 )
@@ -2138,11 +2175,11 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "&& _testResult.status && _testResult.status !== 'not_run' "
         "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim() "
         "&& !" + _TEST_UNPROVEN_CAUSE_JS + ") "
-        "&& !(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object' "
+        "&& (_testResult?.tests_run === 0 || !(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object' "
         "&& _reviewReverify.status_after === 'pass' "
         "&& (() => { const _l = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
         "const _x = new Set([..._l(_reviewReverify.pre_existing), ..._l(_reviewReverify.kept)]); "
-        "return !_l(_reviewReverify.failing).some((n) => !_x.has(n)); })())) "
+        "return !_l(_reviewReverify.failing).some((n) => !_x.has(n)); })()))) "
         "{ const _rvh = (typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
         "? _reviewReverify : {}; "
         "const _rvl = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
@@ -2150,6 +2187,7 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "const _rvFail = [...new Set(_rvl(_rvh.failing))].filter((n) => !_rvx.has(n)); "
         "const _rvPre = _rvl(_rvh.pre_existing); "
         "_halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
+        "...(_testResult?.tests_run === 0 ? { halted: 'test_infra_failure' } : {}), "
         "failing: _rvFail, pre_existing: _rvPre, "
         "detail: ((_testResult && typeof _testResult.status === 'string' && _testResult.status && _testResult.status !== 'not_run' "
         "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim()) "
@@ -2157,7 +2195,11 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         ": 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests') + "
         "(_rvFail.length ? '; re-verify reds not red at the run base: ' + _rvFail.join(', ') : "
         "(_rvPre.length ? '; re-verify reds all pre-existing, none this run\\'s: ' + _rvPre.join(', ') : '')), "
-        "next_action: 'Refire to re-run the test leg: ' + " + _refire_js(sizing_rel) + " }; }"
+        # A foreign-dependency zero-run fails identically on every refire until the peer's source lands.
+        "next_action: ((_testResult?.zero_run_cause === " + json.dumps(ZERO_RUN_FOREIGN_DEPENDENCY) + " "
+        "&& typeof _testResult?.import_error?.source_path === 'string') "
+        "? 'Land the uncommitted ' + _testResult.import_error.source_path + ' first, then refire: ' "
+        ": 'Refire to re-run the test leg: ') + " + _refire_js(sizing_rel) + " }; }"
     )
 
 
@@ -2487,7 +2529,7 @@ def _verify_tests_call(
         f"{out_path}. Keep that JSON file as the full test receipt. For the final test_result, "
         "copy status, tests_run, and tests_failed from the receipt and use the receipt path as "
         "sidecar_path. Copy schema-valid baseline, baseline_method, build_clean, skipped, summary, "
-        "importer_overrun, and tripwires_not_run when present. Keep diagnostic details in the receipt. "
+        "importer_overrun, tripwires_not_run, and zero_run_cause when present. Keep diagnostic details in the receipt. "
         "Return only fields declared in the final-response schema; do not return the entire receipt.",
     )
     return _agent(
@@ -6846,7 +6888,14 @@ def compose_ask_script(
         )
         b.append("    }")
         b.append("  }")
-    b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent((_gateEvidence ? 'Host gate receipt: ' + JSON.stringify(_gateEvidence) + '\\n\\n' : '') + {_DESIGN_PREFIX_JS} + p, o);")
+    b.append(
+        "  { const agent = (p, o) => _reviewOuterAgent((_gateEvidence ? "
+        "'Host gate receipt: ' + JSON.stringify(_gateEvidence) + "
+        "'\\nThe paired host artifacts record the current fire. Any C0 statement that the worker did not "
+        "invoke the gate describes the worker only. Compare the request, response, consumed and routing "
+        "evidence for this fire. Treat loggedIn as the gate-time Claude status and process_exit_code "
+        f"as the coordinator child exit.\\n\\n' : '') + {_DESIGN_PREFIX_JS} + p, o);"
+    )
     b.append(
         f"  if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _codeReviewOwed)) {{\n"
         + review_text + "\n  _footprintReviewed = true;\n  }"
@@ -6872,6 +6921,7 @@ def compose_ask_script(
     )
     # Self-correction reads the re-verify result, so the deferred re-verify joins before it.
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
+    b.append(_review_test_infra_halt_js(sizing_rel))
     b.append(_WAVE_DIFF_RECONCILE_JS)
     b.append(_TESTS_NOT_RUN_JS)
     b.append(
@@ -7144,6 +7194,7 @@ def compose_ask_script(
         )
     b.extend(verify_lines)
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
+    b.append(_review_test_infra_halt_js(sizing_rel))
     b.append(_review_blocked_halt_js(sizing_rel, after_join=True, call_only=True))
     b.append(no_target)
     b.append(em_owed)
@@ -7203,6 +7254,7 @@ def compose_ask_script(
         "      if (rest.length) i.remaining = rest; else if (_pmVerbatimIds.includes(i.id)) continue; "
         "else { _reconciled.push(i.id); i.status = 'met'; delete i.remaining; }\n"
         "    }\n"
+        f"    {OWED_BY_DERIVE_JS}\n"
         "    };\n"
         "    _normaliseLedger();"
     )
@@ -7227,6 +7279,8 @@ def compose_ask_script(
         f"    const _emContextIds = {json.dumps(_em_context_row_ids(repo_root, sizing_rel))};\n"
         "    const _ledgerBlocking = (l) => (l?.items ?? []).filter((i) => {\n"
         "      if (!i || _emContextIds.includes(i.id) || i.foreign_only === true) return false;\n"
+        "      if (i.status === 'not_met' && Array.isArray(i.owed_by) && i.owed_by.length "
+        "&& i.owed_by.every((id) => (_manifest?.owed ?? []).some((o) => o.id === id))) return false;\n"
         "      const rem = Array.isArray(i.remaining) ? i.remaining : [];\n"
         "      const status = i.status === 'not_met' && rem.length && rem.every((a) => _postCommitActs.includes(a)) "
         "? 'post_commit' : i.status;\n"

@@ -1006,6 +1006,7 @@ _REVERIFY_SCHEMA = {
 }
 #: Owned-first leg result: `tests_run` counts what ran, `not_run` names the capped remainder.
 _REVERIFY_SCHEMA["properties"]["tests_run"] = {"type": "integer"}
+_REVERIFY_SCHEMA["properties"]["zero_run_cause"] = {"type": "string"}
 _REVERIFY_SCHEMA["properties"]["not_run"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["passed_alone"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["passed_at_base"] = {"type": "array", "items": {"type": "string"}}
@@ -1132,7 +1133,9 @@ def _test_leg_clause(
         f"{(TEST_LEG_MINUTES_BUDGET + 1) * 60_000} (create `scratch/` first if absent): "
         f"`{command} <the pytest targets>`. Run it once: never repeat it, split it per id, "
         "detach it or wait on it. Its JSON gives `failing`, `failing_detail` and `passed_alone`; the "
-        "node test files above are the only tests run outside it. "
+        "node test files above are the only tests run outside it. If the runner receipt has tests_run 0 and "
+        "status error with zero_run_cause, return tests_run 0, status_before indeterminate, and that "
+        "zero_run_cause. Return empty failing, failing_detail and reverted lists and stop before probe or revert. "
     )
 
 
@@ -1907,7 +1910,9 @@ def compose_execute_review(
     whole_diff_agents = [a for a in all_whole_diff_agents if _runs_at_compile_tier(a)]
 
     item_lines: List[str] = []
-    wave_mode_args = f"\"head\":\"{review_terminal_sha}\"" if review_terminal_sha else "\"worktree\":true"
+    wave_mode_args = (
+        f"\"head\":\"{review_terminal_sha}\",\"committed_only\":true" if review_terminal_sha else "\"worktree\":true"
+    )
     # review.prep takes exactly one of paths or run_id: paths mode carries no run_id.
     if safe_run_id and prep_run_id is not None:
         wave_mode_args += f",\"run_id\":{json.dumps(safe_run_id)}"

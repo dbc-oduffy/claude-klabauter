@@ -84,12 +84,39 @@ def test_all_green_scope_spawns_exactly_one_pytest(repo, tmp_path, monkeypatch):
 
 
 def test_usage_error_with_named_nodes_records_raw_phase_diagnostics(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(tlr, "_pytest", lambda *_: (4, [f"ERROR {PASS_ID}"], "x" * 5000 + "bad option", ""))
+    calls = []
+
+    def usage_error(targets, *_):
+        calls.append(targets)
+        return 4, [f"ERROR {PASS_ID}"], "x" * 5000 + "bad option", ""
+
+    monkeypatch.setattr(tlr, "_pytest", usage_error)
     _code, data = _main(["--", PASS_ID], tmp_path / "o.json")
     assert data["failing"] == [PASS_ID]
     assert data["status_after"] == "fail"
     assert data["pytest_phases"] == [{"exit_code": 4, "stderr": "x" * 4086 + "bad option",
                                        "stdout": "", "encoding": "utf-8"}]
+    assert calls == [[PASS_ID]]
+
+
+def test_delivery_markdown_is_excluded_from_pytest_targets(repo, tmp_path, monkeypatch):
+    delivery = "delivery.md"
+    (repo / delivery).write_text("# Delivery\n", encoding="utf-8")
+    seen = _spawns(monkeypatch)
+    _code, data = _main(["--", delivery, PASS_ID], tmp_path / "o.json")
+    assert (data["status"], data["tests_run"]) == ("pass", 1)
+    assert data["not_a_test"] == [delivery]
+    assert seen[0][-1] == PASS_ID and delivery not in seen[0]
+
+
+def test_only_fixture_setup_errors_do_not_rerun_or_measure_named_tests(repo, tmp_path, monkeypatch):
+    (repo / "tests" / "conftest.py").write_text(
+        "import pytest\n@pytest.fixture(autouse=True)\ndef broken():\n    raise RuntimeError('setup broke')\n",
+        encoding="utf-8",
+    )
+    seen = _spawns(monkeypatch)
+    _code, data = _main(["--", PASS_ID], tmp_path / "o.json")
+    assert (data["status"], data["tests_run"], len(seen)) == ("error", 0, 1)
 
 
 def test_pytest_inherits_explicit_coordinator_settings_home(repo, tmp_path, monkeypatch):
@@ -867,3 +894,42 @@ def test_an_over_cap_importer_stays_in_phase_two_through_tripwires_not_selected(
                         lambda root, base, head="HEAD": {"tests": [], "tripwires": pool[:cap]})
     first, second = tlr._split_phases([PASS_ID, *pool], BASE, None, str(repo))
     assert first == [PASS_ID, *pool[cap:]] and second == pool[:cap]
+
+
+def _foreign_dependency_landing(root: Path) -> str:
+    """HEAD: `pkg/b.py` imports `new_name` from `pkg/a.py`, which defines it only in an uncommitted worktree change."""
+    (root / "pkg" / "a.py").write_text("OLD = 1\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "a")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "tests" / "test_b.py").write_text(
+        "from pkg import b\n\ndef test_b():\n    assert b.VALUE == 1\n", encoding="utf-8")
+    post = _land(root, "pkg/b.py", "from pkg.a import new_name\n\nVALUE = new_name()\n")
+    (root / "pkg" / "a.py").write_text("OLD = 1\n\n\ndef new_name():\n    return 1\n", encoding="utf-8")
+    return base, post
+
+
+def test_a_hunk_importing_a_name_only_in_a_peers_uncommitted_change_halts_naming_the_symbol_and_source(landing, tmp_path):
+    root, _base0 = landing
+    base, post = _foreign_dependency_landing(root)
+
+    _code, data = _main(["--base-sha", base, "--head-sha", post, "--touched", "pkg/b.py", "--", "tests/test_b.py"],
+                        tmp_path / "o.json")
+
+    assert data["tests_run"] == 0 and data["status"] == "error"
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_FOREIGN_DEPENDENCY == "uncommitted-foreign-dependency"
+    assert data["import_error"]["symbol"] == "new_name"
+    assert data["import_error"]["source_path"] == "pkg/a.py"
+    note = ltt.zero_run_cause_note(data, "x")
+    assert "new_name" in note and "pkg/a.py" in note
+
+
+def test_a_missing_name_defined_nowhere_uncommitted_stays_collection_failure(landing, tmp_path):
+    root, _base0 = landing
+    base, post = _foreign_dependency_landing(root)
+    (root / "pkg" / "a.py").write_text("OLD = 1\n", encoding="utf-8")
+
+    _code, data = _main(["--base-sha", base, "--head-sha", post, "--touched", "pkg/b.py", "--", "tests/test_b.py"],
+                        tmp_path / "o.json")
+
+    assert data["zero_run_cause"] != ltt.ZERO_RUN_FOREIGN_DEPENDENCY and "import_error" not in data

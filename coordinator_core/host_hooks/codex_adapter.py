@@ -63,6 +63,9 @@ class CodexAdapter:
     def adapt_event(self, payload: Mapping[str, Any], event: Optional[str] = None) -> HostEvent:
         tool_input = payload.get("tool_input")
         tool_name = str(payload.get("tool_name") or "")
+        if isinstance(tool_input, Mapping) and not tool_input.get("command") and isinstance(tool_input.get("cmd"), str):
+            # Trap: Codex's exec_command schema names its argument `cmd`; every shared guard reads `command`.
+            tool_input = {**tool_input, "command": tool_input["cmd"]}
         return HostEvent(
             host=HOST_CODEX,
             event=str(event or payload.get("hook_event_name") or ""),

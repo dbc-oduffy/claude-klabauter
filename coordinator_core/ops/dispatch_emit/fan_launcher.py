@@ -68,7 +68,11 @@ def _invoke_command(platform: str | None = None) -> str:
     if (platform or os.name) == "nt":
         from coordinator_core._settings_home import settings_home
 
-        return '"' + (settings_home() / "bin" / "coordinator-invoke.exe").as_posix() + '"'
+        # A leading quoted path is a ParserError in PowerShell without `&`, and `&` backgrounds in bash:
+        # an unquoted path is the one form both parse. Any path with a character outside the safe set gets the
+        # pwsh call form, single-quoted so `$` and backtick stay literal.
+        exe = (settings_home() / "bin" / "coordinator-invoke.exe").as_posix()
+        return exe if re.fullmatch(r"[A-Za-z0-9_./:+@%=~-]+", exe) else "& '" + exe.replace("'", "''") + "'"
     return '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
 
 

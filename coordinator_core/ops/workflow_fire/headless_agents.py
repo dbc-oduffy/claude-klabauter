@@ -71,6 +71,55 @@ def _codex_schema(schema: Any) -> Any:
     return schema if isinstance(schema, dict) and schema.get("type") == "object" and supported(schema) else None
 
 
+def _admits_null(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+    declared = node.get("type")
+    if declared == "null" or (isinstance(declared, list) and "null" in declared):
+        return True
+    return any(_admits_null(alt) for alt in node.get("anyOf", ()) if isinstance(node.get("anyOf"), list))
+
+
+def unwrap_rpc_envelope(value: Any, schema: Any) -> Any:
+    """Return the ``result`` of a JSON-RPC envelope Codex wrapped around its reply.
+
+    Applies only when the schema itself has no ``jsonrpc`` member and the
+    envelope carries nothing beyond jsonrpc/id/result (and a string note).
+    """
+    if not (isinstance(value, dict) and value.get("jsonrpc") == "2.0" and isinstance(schema, dict)):
+        return value
+    if "jsonrpc" in (schema.get("properties") or {}):
+        return value
+    keys = set(value)
+    if keys - {"jsonrpc", "id", "result", "note"} or "result" not in keys or "id" not in keys:
+        return value
+    if "note" in value and not isinstance(value["note"], str):
+        return value
+    return value["result"]
+
+
+def fill_omitted_nullable(value: Any, schema: Any) -> Any:
+    """Return value with omitted required null-admitting properties set to null.
+
+    Codex may omit a nullable member that strict mode forced into ``required``.
+    Only that case is normalised; every other violation still fails validation.
+    An object carrying none of the schema's members is the wrong shape, not a
+    reply with every member omitted, so it is left to fail.
+    """
+    if isinstance(value, dict) and isinstance(schema, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and (not properties or set(value) & set(properties)):
+            value = dict(value)
+            for name, sub in properties.items():
+                if name in value:
+                    value[name] = fill_omitted_nullable(value[name], sub)
+                elif name in schema.get("required", ()) and _admits_null(sub):
+                    value[name] = None
+    elif isinstance(value, list) and isinstance(schema, dict) and isinstance(schema.get("items"), dict):
+        value = [fill_omitted_nullable(item, schema["items"]) for item in value]
+    return value
+
+
 def _environment() -> dict[str, str]:
     # Do not inherit API-key opt-ins, parent session identity or Claude nesting.
     source = dict(os.environ)
@@ -88,6 +137,9 @@ def _environment() -> dict[str, str]:
     # Native operation doors validate this stamped build using their normal
     # bootstrap ladder; never silently dispatch back into another live clone.
     env['COORDINATOR_ENGINE_ROOT'] = str(Path(__file__).resolve().parents[3])
+    # The native door ignores COORDINATOR_ENGINE_ROOT and ranks its own override above the installed
+    # sidecar: unpinned, a worker's ops reach whichever engine the sidecar names, not the host's.
+    env['COORDINATOR_DOOR_ENGINE_ROOT'] = env['COORDINATOR_ENGINE_ROOT']
     # Native tools/hooks need these Windows and coordinator runtime locations.
     for key in ("TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "COMSPEC",
                 "COORDINATOR_SETTINGS_HOME", "MACHINE_LOCAL_REGISTRY_DIR"):
@@ -246,6 +298,32 @@ def _persona(agent_type: str | None) -> str:
     raise AgentFailed(f"agent definition missing: {agent_type}")
 
 
+_REASK_REPLY_LIMIT = 20000
+
+
+def _reask_unparsable(exc, last, prompt, options, schema, repo_root, artifact_dir, backend, timeout_s,
+                      on_spawn, parent_session_id) -> Any:
+    """One bounded repair re-ask for a reply that is not JSON; a second failure raises, never loops."""
+    try:
+        text = last.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    failure = AgentFailed(f"{backend} returned no schema-valid result: {exc}")
+    if not text or len(text) > _REASK_REPLY_LIMIT:
+        raise failure from exc
+    repair = (
+        "Repair JSON syntax in the following data. Do not run any tools or repeat the operation. "
+        "Return the complete original reply with only JSON punctuation or whitespace repaired.\n"
+        + json.dumps({"diagnostic": str(exc)[:400], "reply": text}, ensure_ascii=False)
+    )
+    try:
+        return run_agent(repair, {k: v for k, v in options.items() if k != "agentType"}, repo_root=repo_root,
+                         artifact_dir=Path(artifact_dir) / "reply-reask", backend=backend, timeout_s=timeout_s,
+                         on_spawn=on_spawn, parent_session_id=parent_session_id, _reask=True)
+    except AgentFailed as second:
+        raise AgentFailed(f"{failure} (one repair re-ask also failed: {second})") from exc
+
+
 def run_agent(
     prompt: str,
     options: dict[str, Any] | None,
@@ -256,6 +334,7 @@ def run_agent(
     timeout_s: float = 3600,
     on_spawn: Callable[[int], None] | None = None,
     parent_session_id: str | None = None,
+    _reask: bool = False,
 ) -> Any:
     """Return the schema-validated agent value; persist stdout/stderr and result.
 
@@ -362,8 +441,12 @@ def run_agent(
             text = last.read_text(encoding="utf-8")
             value = json.loads(text) if schema is not None else text
         if schema is not None:
+            value = fill_omitted_nullable(unwrap_rpc_envelope(value, schema), schema)
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
+        if isinstance(exc, json.JSONDecodeError) and backend == "codex" and schema is not None and not _reask:
+            return _reask_unparsable(exc, last, prompt, options, schema, repo_root, artifact_dir, backend, timeout_s,
+                                     on_spawn, parent_session_id)
         raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
     if backend != "claude":
         refused = _refused_submit_outputs(artifact_dir / "stdout.jsonl")

@@ -2285,6 +2285,14 @@ def owed_rows(owed: Iterable) -> dict[str, str]:
     return out
 
 
+def _owed_by_open(row: Mapping, operator: Mapping[str, str]) -> bool:
+    """True when `row` is owed only to EM/operator rows the manifest names (`owed_by` all in `operator`)."""
+    owed = row.get("owed_by")
+    return (
+        isinstance(owed, list) and bool(owed) and all(isinstance(o, str) and o in operator for o in owed)
+    )
+
+
 def judge(
     ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None,
     gated: Optional[Iterable[str]] = None, operator: Optional[Mapping[str, str]] = None,
@@ -2460,6 +2468,12 @@ def judge(
                         "id": item.id,
                         "reason": f"withheld_by {withheld} names no gated chunk of the run's manifest",
                     })
+            elif _owed_by_open(row, operator):
+                owed = row["owed_by"]
+                label = "owed-after-publish" if isinstance(operator[owed[0]], AfterPublishCommand) else "awaiting_operator"
+                open_rows.append({
+                    "id": item.id, "reason": f"{label} {', '.join(owed)}", "row": owed[0], "command": operator[owed[0]],
+                })
             elif design or ledger.all_of_pm_ask or row.get("essential", True) is not False:
                 failures.append({
                     "id": item.id,

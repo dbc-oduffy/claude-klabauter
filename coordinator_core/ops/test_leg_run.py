@@ -171,12 +171,16 @@ def _is_non_test(node: str) -> bool:
 
 
 def _split_not_a_test(nodes: Sequence[str], root: Optional[Path] = None) -> tuple[list[str], list[str]]:
-    """(tests, not_a_test): `not_a_test` is deduped in first-seen order. With `root`, a non-test file that is
-    absent under it stays a target (reported as missing, not as a non-test)."""
+    """Separate non-test files, retaining directories and missing paths for target resolution."""
     tests: list[str] = []
     non: list[str] = []
     for n in nodes:
-        if _is_non_test(n) and (root is None or (root / _file_part(n)).exists()):
+        path = _file_part(n)
+        if root is None:
+            non_test = _is_non_test(n)
+        else:
+            non_test = (root / path).is_file() and (not path.endswith(".py") or _is_non_test(n))
+        if non_test:
             if n not in non:
                 non.append(n)
         else:
@@ -230,6 +234,9 @@ _FRAME = re.compile(r"""^\s*(?:File ")?(\S+?\.py)(?:",\s*line |:)(\d+)\b""")
 _IMPORT_FAIL = re.compile(r"^(?:E\s+)?(?:ImportError|ModuleNotFoundError)\b")
 _ENGINE_PATH = re.compile(r"(?:^|/)(coordinator_core/.+\.py)$")
 IMPORT_ERROR_KEY = "import_error"
+_MISSING_IMPORT = re.compile(r"ImportError: cannot import name '([^']+)' from '([^']+)'")
+#: Scratch key `_tally` leaves for `_name_foreign_dependency`; never reaches the verdict.
+_MISSING_KEY = "_missing_import"
 
 
 def _import_error_path(lines: Sequence[str]) -> Optional[str]:
@@ -305,6 +312,9 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
     elif rc == 0 or rc == 5:
         cause = ltt.ZERO_RUN_EMPTY
     else:
+        missing = next((m.groups() for m in map(_MISSING_IMPORT.search, lines) if m), None)
+        if missing:
+            result[_MISSING_KEY] = missing
         dirty = _import_error_path(lines)
         if dirty:
             cause = ltt.ZERO_RUN_IMPORT_ERROR
@@ -366,6 +376,13 @@ def _summary_line(stdout: str) -> str:
         if _SUMMARY_TAIL.search(raw):
             return raw
     return ""
+
+
+def _can_reconcile_reds(rc: int, lines: Sequence[str]) -> bool:
+    if rc not in (0, 1):
+        return False
+    summary = _summary_line("\n".join(lines))
+    return not (re.search(r"\b\d+ errors?\b", summary) and not _COUNT.search(summary))
 
 
 def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], post_rev: str, root: Path,
@@ -505,6 +522,36 @@ def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], he
         reverify_base_measure.write_export(exported, Path(base_export_out))
 
 
+def _name_foreign_dependency(result: dict, root: Path) -> None:
+    """A zero-run whose ImportError names a symbol defined only in a dirty (uncommitted) worktree file is a
+    peer's uncommitted code under this run's committed hunk, not a test failure: restamps the
+    `uncommitted-foreign-dependency` cause with `import_error.{symbol,module,source_path}`. Any other
+    zero-run keeps its cause. Advisory: a git or read failure leaves the verdict as tallied."""
+    missing = result.pop(_MISSING_KEY, None)
+    if not missing or result.get("tests_run"):
+        return
+    symbol, module = missing
+    defn = re.compile(rf"^\s*(?:async\s+def|def|class)\s+{re.escape(symbol)}(?!\w)|^{re.escape(symbol)}\s*[:=]", re.M)
+    try:
+        out = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "HEAD", "--", "*.py"],
+                             capture_output=True, text=True, timeout=10,
+                             **no_console_creationflags()).stdout
+        mod = module.replace(".", "/")
+        dirty = sorted((p for p in out.splitlines() if p.endswith(".py")),
+                       key=lambda p: not (p == mod + ".py" or p == mod + "/__init__.py"))
+        source = next((p for p in dirty[:50] if defn.search((root / p).read_text(encoding="utf-8", errors="replace"))), None)
+    except (subprocess.SubprocessError, OSError):
+        return
+    if source is None:
+        return
+    result[ltt.ZERO_RUN_CAUSE_KEY] = ltt.ZERO_RUN_FOREIGN_DEPENDENCY
+    result[IMPORT_ERROR_KEY] = {"path": source, "run_id": None, "symbol": symbol, "module": module,
+                                "source_path": source}
+    result["failing_detail"] = [{"node_id": "test_leg_run", "message":
+                                 f"ran zero tests (uncommitted-foreign-dependency): '{symbol}' is imported from "
+                                 f"'{module}' but defined only in uncommitted {source}"}]
+
+
 def _own_import_error(result: dict, root: Path) -> None:
     """Fill `import_error.run_id` with the newest run record under `state/warp` whose touched-blobs entry
     for the dirty path holds the worktree's current blob; None (unowned) when no record claims it."""
@@ -609,6 +656,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
                 result["new_red"] = []
                 _tally(result, 2, ())
             result["over_budget"] = False
+            _name_foreign_dependency(result, Path(cwd))
             _own_import_error(result, Path(cwd))
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
@@ -645,7 +693,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
                                     "stdout": stdout[-_PYTEST_STDOUT_LIMIT:], "encoding": _PYTEST_ENCODING}]
         phase_one = (rc, lines, stderr)
         unreached = _files(second)
-        _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported)
+        if reds and _can_reconcile_reds(rc, lines):
+            _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported)
         if second:
             try:
                 rc2, lines2, reds2, stderr2, stdout2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non)
@@ -659,7 +708,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
                 stderr = "\n".join(filter(None, (stderr, stderr2)))
                 reds = [*reds, *reds2]
                 try:
-                    _settle(result, reds2, cwd, base_sha, head_sha, base_export_out, left, exported)
+                    if reds2 and _can_reconcile_reds(rc2, lines2):
+                        _settle(result, reds2, cwd, base_sha, head_sha, base_export_out, left, exported)
                 except subprocess.TimeoutExpired:
                     result[ltt.IMPORTER_OVERRUN_KEY] = True
                     result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(reds2)
@@ -699,6 +749,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         if touched:
             result.setdefault("new_red", [])
         _tally(result, 2, ())
+    _name_foreign_dependency(result, Path(cwd))
     _own_import_error(result, Path(cwd))
     result["elapsed_s"] = round(time.monotonic() - started, 3)
     result["budget_s"] = budget_s

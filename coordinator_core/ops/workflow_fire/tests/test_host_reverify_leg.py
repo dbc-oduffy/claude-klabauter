@@ -29,11 +29,11 @@ def test_run_diff_uses_host_test_receipt_after_worker_timeout(tmp_path, monkeypa
     )
     (repo / "delivery.md").touch()
     monkeypatch.setattr(headless, "_executor_root", lambda: engine)
-    monkeypatch.setattr(headless, "_invoke_source", lambda *_args: {
+    monkeypatch.setattr(headless, "_invoke_source", lambda *_args: {"inventories": [{
         "edited": ["module.py", "test_reviewed.py"], "created": [],
         "owned": ["test_reviewed.py", "delivery.md"], "tripwires": [],
         "tripwires_not_selected": [], "error": None, "derived_from": "run_diff",
-    })
+    }], "error": None})
     start = time.monotonic()
     result = headless._reverify_test_leg(
         {"base": "a" * 40, "slice_prefixes": ["prep"], "run_key": "run"},
@@ -87,3 +87,16 @@ def test_host_verify_rejects_other_run_and_pytest_argument_injection(tmp_path):
             {"targets": [], "out_path": "state/warp/foreign/test-leg.json"},
             str(tmp_path), tmp_path / "host-artifacts", 60, run_id="active",
         )
+
+
+def test_review_reverify_batches_prefixes_into_one_reply(tmp_path):
+    from coordinator_core.ops import review_reverify
+
+    reply = review_reverify._handler(
+        {"base": "a" * 40, "slice_prefixes": ["p0", "p1"], "session_id": "s"}, tmp_path,
+    )
+    assert reply["error"] is None
+    assert [r["error"] for r in reply["inventories"]] == [
+        "no pre-review snapshot for p0", "no pre-review snapshot for p1",
+    ]
+    assert review_reverify._handler({"slice_prefixes": "p0"}, tmp_path)["error"]

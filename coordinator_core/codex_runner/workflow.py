@@ -42,6 +42,7 @@ from coordinator_core.group_em import admission_post, slot_grant, slot_wait
 from coordinator_core.agent_pipe.agy import family_stage_argv
 from coordinator_core.agent_pipe.model_tiers import model_for_tier
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV
+from coordinator_core.ops.workflow_fire.headless_agents import fill_omitted_nullable, unwrap_rpc_envelope
 from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
 from coordinator_core._settings_home import settings_home
 from coordinator_core.locked_write import held_lock
@@ -1192,6 +1193,8 @@ def run_agent(
                     _gate_envelope_result(value), repo_root, options.get("gateManifestRunId"),
                 )
         if schema is not None:
+            if not codex_gate:
+                value = fill_omitted_nullable(unwrap_rpc_envelope(value, schema), schema)
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
         if not codex_structured_reply or _gate_reask:
@@ -1261,7 +1264,7 @@ def run_agent(
             except (AgentFailed, OSError):
                 pass
         if value is None:
-            raise AgentFailed(f"{backend} structured reply could not be repaired: {diagnostic}") from exc
+            raise AgentFailed(f"{backend} returned no schema-valid result; structured reply could not be repaired: {diagnostic}") from exc
         jsonschema.validate(value, schema)
     (artifact_dir / "result.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
     return value

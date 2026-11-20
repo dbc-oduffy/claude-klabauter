@@ -446,3 +446,92 @@ def test_a_file_the_reverify_did_not_edit_still_refuses_under_a_clean_reverify(p
     review = _reverified(prep_repo, {**_PASS, "edited": ["a.py"], "edited_sha256": {"a.py": _sha_of("b = 2\n")}}, "b = 2\n")
 
     assert verdict_pin_mismatches(prep_repo, review) == ["b.py"]
+
+
+_SESSION = "11111111-2222-4333-8444-555555555555"
+_FIXER = "a00000000000000fix"
+
+
+_REVERIFY_FINISHED = 1_000_000_000.0
+
+
+def _reverify_done(repo, reverify: dict) -> dict:
+    """``reverify`` with a ``sidecar_path`` whose mtime is the re-verify's finish (``_REVERIFY_FINISHED``)."""
+    import os
+
+    sidecar = repo / "reverify-sidecar.md"
+    sidecar.write_text("reverify\n", encoding="utf-8", newline="\n")
+    os.utime(sidecar, (_REVERIFY_FINISHED, _REVERIFY_FINISHED))
+    return {**reverify, "sidecar_path": "reverify-sidecar.md"}
+
+
+def _fix_leg_wrote(
+    repo, rel: str, text: str, *, owner: str = _SESSION, at: float = _REVERIFY_FINISHED - 10.0,
+) -> None:
+    """A revise-leg executor the session dispatched writes ``rel``; only its own touch sink records the hash."""
+    from coordinator_core.session import touch_record
+    from coordinator_core.session_hub_path import hub_for_common, session_dir_for
+
+    (repo / rel).write_text(text, encoding="utf-8", newline="\n")
+    hub = hub_for_common(repo / ".git")
+    session_dir_for(repo / ".git", _SESSION).mkdir(parents=True, exist_ok=True)
+    adir = hub / ".agents" / _FIXER
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "em-session-id.txt").write_text(owner + "\n", encoding="utf-8")
+    with (hub / _SESSION / "dispatched-agents.txt").open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write(f"{_FIXER}\thost\tcoordinator:executor\t1\n")
+    touch_record.append_event(
+        touch_record.sink_path(adir), session_id=owner, agent_id=_FIXER, verb="T", path=rel,
+        content_hash=_sha_of(text), kind="w", timestamp=at,
+    )
+
+
+def _agent_events(repo, review, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_review as tcr
+
+    monkeypatch.setattr(tcr, "_review_since", lambda root, run_id, inline: 0.0)
+    return tcr.run_agent_pin_events(repo, _SESSION, "run-1", review)
+
+
+def test_a_fix_leg_executor_edit_that_passes_reverify_keeps_the_pin(prep_repo, monkeypatch) -> None:  # noqa: F811
+    review = _reverified(prep_repo, _reverify_done(prep_repo, _PASS), "b = 1\n")
+    _fix_leg_wrote(prep_repo, "b.py", "b = 2\n")
+    events = _agent_events(prep_repo, review, monkeypatch)
+
+    assert verdict_pin_mismatches(prep_repo, review) == ["b.py"]
+    assert verdict_pin_mismatches(prep_repo, review, None, events) == []
+    assert review_owed_refusal(prep_repo, review, None, events) is None
+
+
+def test_an_agent_write_after_the_reverify_does_not_keep_the_pin(prep_repo, monkeypatch) -> None:  # noqa: F811
+    review = _reverified(prep_repo, _reverify_done(prep_repo, _PASS), "b = 1\n")
+    _fix_leg_wrote(prep_repo, "b.py", "b = 2\n", at=_REVERIFY_FINISHED + 10.0)
+    events = _agent_events(prep_repo, review, monkeypatch)
+
+    assert verdict_pin_mismatches(prep_repo, review, None, events) == ["b.py"]
+
+
+def test_a_peer_write_after_the_fix_leg_still_refuses(prep_repo, monkeypatch) -> None:  # noqa: F811
+    review = _reverified(prep_repo, _reverify_done(prep_repo, _PASS), "b = 1\n")
+    _fix_leg_wrote(prep_repo, "b.py", "b = 2\n")
+    (prep_repo / "b.py").write_text("b = 3\n", encoding="utf-8", newline="\n")
+    events = _agent_events(prep_repo, review, monkeypatch)
+
+    assert verdict_pin_mismatches(prep_repo, review, None, events) == ["b.py"]
+
+
+def test_another_sessions_agent_edit_does_not_keep_the_pin(prep_repo, monkeypatch) -> None:  # noqa: F811
+    review = _reverified(prep_repo, _reverify_done(prep_repo, _PASS), "b = 1\n")
+    _fix_leg_wrote(prep_repo, "b.py", "b = 2\n", owner="peer-session")
+    events = _agent_events(prep_repo, review, monkeypatch)
+
+    assert verdict_pin_mismatches(prep_repo, review, None, events) == ["b.py"]
+
+
+def test_a_fix_leg_edit_whose_reverify_failed_still_refuses(prep_repo, monkeypatch) -> None:  # noqa: F811
+    bad = {"status_after": "fail", "failing": ["t.py::x"], "pre_existing": [], "foreign": []}
+    review = _reverified(prep_repo, bad, "b = 1\n")
+    _fix_leg_wrote(prep_repo, "b.py", "b = 2\n")
+    events = _agent_events(prep_repo, review, monkeypatch)
+
+    assert verdict_pin_mismatches(prep_repo, review, None, events) == ["b.py"]

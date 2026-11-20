@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.ask_contract import RESUMED_RUN_ID_KEY
 from coordinator_core.ops.dispatch_emit.commit_request import CommitRequest
@@ -723,15 +723,59 @@ def _less_reverify_edits(worktree_root: Path, inline_review: object, stale: list
     return [p for p in stale if p not in judged]
 
 
-def verdict_pin_mismatches(worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None) -> list:
+def run_agent_pin_events(
+    worktree_root: Path, session_id: Optional[str], run_id: Optional[str], inline_review: object,
+) -> Callable[[Sequence[str]], dict]:
+    """A ``paths -> {path: (sha256, epoch)}`` reader of the run's own dispatched agents' newest hashed
+    writes (``_run_agent_write_events``: a revise-leg executor included, which the review-writer map
+    never sees). Lazy: the sinks are opened only when a pin already mismatches."""
+
+    def read(paths: Sequence[str]) -> dict:
+        read_run, read_session = _resumed_review_source(worktree_root, inline_review, run_id, session_id)
+        return _run_agent_write_events(
+            worktree_root, read_session, _review_since(worktree_root, read_run, inline_review), list(paths)
+        )
+
+    return read
+
+
+def _less_run_agent_edits(
+    worktree_root: Path, inline_review: object, stale: list, run_agent_events: Optional[Callable[[Sequence[str]], dict]],
+) -> list:
+    """``stale`` less each path whose current bytes equal the newest hashed write of an agent this run
+    dispatched, when the re-verify is clean and that write is no later than the re-verify step's
+    finish (``_reverify_finished_at``; unknown finish keeps it stale): a fix-leg edit the re-verify
+    judged is the reviewed product, as the commit's blob-drift gate already treats it. A later or
+    peer write, or an agent write after the re-verify, stays stale."""
+    if not stale or run_agent_events is None or not _reverify_clean(inline_review):
+        return stale
+    from coordinator_core.session import touch_record
+
+    finished = _reverify_finished_at(worktree_root, inline_review)
+    if finished is None:
+        return stale
+    events = run_agent_events(stale)
+    return [
+        p for p in stale
+        if p not in events or events[p][1] > finished
+        or touch_record.compute_content_hash(worktree_root / p) != events[p][0]
+    ]
+
+
+def verdict_pin_mismatches(
+    worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None,
+    run_agent_events: Optional[Callable[[Sequence[str]], dict]] = None,
+) -> list:
     """Sorted paths (of ``within``, else every pinned path) whose bytes match no sha the verdict
-    pinned, less a path the reviewer itself last wrote or the clean re-verify recorded as its own
-    edit: the files that owe re-review. Empty when the verdict pins nothing."""
+    pinned, less a path the reviewer itself last wrote, the clean re-verify recorded as its own
+    edit, or (given ``run_agent_events``) a run-dispatched agent last wrote: the files that owe
+    re-review. Empty when the verdict pins nothing."""
     from coordinator_core.ops.review_prep import judged_mismatches
 
     judged = verdict_judged_shas(worktree_root, inline_review)
     stale = judged_mismatches(worktree_root, judged, list(judged) if within is None else [q for q in (str(p).replace("\\", "/") for p in within) if q in judged])
-    return _less_reverify_edits(worktree_root, inline_review, _less_reviewer_edits(worktree_root, inline_review, stale))
+    stale = _less_reverify_edits(worktree_root, inline_review, _less_reviewer_edits(worktree_root, inline_review, stale))
+    return _less_run_agent_edits(worktree_root, inline_review, stale, run_agent_events)
 
 
 def verdict_pin_refusal(mismatched: Sequence[str]) -> str:
@@ -740,10 +784,13 @@ def verdict_pin_refusal(mismatched: Sequence[str]) -> str:
     return f"review verdict judged other bytes than the tree carries for {len(mismatched)} file(s); re-review only: {names}"
 
 
-def _real_pin_mismatches(worktree_root: Path, inline_review: object, within: Optional[Sequence[str]]) -> list:
+def _real_pin_mismatches(
+    worktree_root: Path, inline_review: object, within: Optional[Sequence[str]],
+    run_agent_events: Optional[Callable[[Sequence[str]], dict]] = None,
+) -> list:
     """``verdict_pin_mismatches`` less the comment-only edits the land arm tolerates: a path whose
     pre-review snapshot proves the drift comment-only is no different reviewed product."""
-    stale = verdict_pin_mismatches(worktree_root, inline_review, within)
+    stale = verdict_pin_mismatches(worktree_root, inline_review, within, run_agent_events)
     if not stale or not isinstance(inline_review, dict):
         return stale
     from coordinator_core.ops.dispatch_emit.comment_only_drift import tolerated_drift
@@ -768,6 +815,7 @@ def _real_pin_mismatches(worktree_root: Path, inline_review: object, within: Opt
 
 def review_owed_refusal(
     worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None,
+    run_agent_events: Optional[Callable[[Sequence[str]], dict]] = None,
 ) -> Optional[str]:
     """The refusal reason when a ``REQUIRES_CHANGES`` verdict is unresolved, else ``None``: a
     reviewer's findings not all in the landed tree, or a standing verdict no ledger can resolve
@@ -778,7 +826,7 @@ def review_owed_refusal(
     owed = list(derived[1]) if derived is not None else []
     owed.extend(_unverifiable_standing(worktree_root, inline_review))
     if not owed:
-        stale = _real_pin_mismatches(worktree_root, inline_review, within)
+        stale = _real_pin_mismatches(worktree_root, inline_review, within, run_agent_events)
         return verdict_pin_refusal(stale) if stale else None
     applied = derived[0] if derived is not None else 0
     return (

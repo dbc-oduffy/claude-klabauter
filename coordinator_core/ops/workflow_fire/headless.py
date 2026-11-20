@@ -332,7 +332,7 @@ def _warm_reply(op: str, params: dict, repo: str, artifacts: Path, timeout: floa
     return settle('cold', 'no_server' if missed else 'no_warm_reply: skew, contention or closed pipe')
 
 
-def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: float):
+def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: float, *, observation: dict | None = None):
     """Run the same source revision as this executor: the warm engine at its own stamp, else a bounded cold process."""
     if not isinstance(op, str) or not isinstance(params, dict):
         raise ValueError('engineOp requires an operation name and object params')
@@ -344,18 +344,36 @@ def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: f
             raise ValueError('engineOp paramsFile must contain an object')
     artifacts.mkdir(parents=True, exist_ok=True)
     request, response = artifacts / 'request.json', artifacts / 'response.json'
-    request.write_text(json.dumps({'op': op, 'params': params, 'repo_root': repo}), encoding='utf-8')
-    reply = _warm_reply(op, params, repo, artifacts, timeout)
+    request_bytes = json.dumps({'op': op, 'params': params, 'repo_root': repo}).encode("utf-8")
+    request.write_bytes(request_bytes)
+    if observation is None:
+        reply = _warm_reply(op, params, repo, artifacts, timeout)
+    else:
+        # A landing-path attestation needs a child exit and must not replay a warm mutation.
+        reply = None
+        route_bytes = json.dumps({
+            "op": op, "engine_root": str(_executor_root()), "route": "cold", "reason": "gate_evidence",
+        }).encode("utf-8")
+        (artifacts / "warm_route.json").write_bytes(route_bytes)
     if reply is not None:
         response.write_text(json.dumps(reply), encoding='utf-8')
     else:
         env = dict(os.environ, COORDINATOR_WARM='0')
         env['PYTHONPATH'] = str(_executor_root())
         with (artifacts / 'stdout.log').open('wb') as out, (artifacts / 'stderr.log').open('wb') as err:
-            subprocess.run([sys.executable, '-P', '-m', 'coordinator_core.ops.workflow_fire.cold_operation', str(request), str(response)],
+            child = subprocess.run([sys.executable, '-P', '-m', 'coordinator_core.ops.workflow_fire.cold_operation', str(request), str(response)],
                 cwd=repo, env=env, stdout=out, stderr=err, check=True, timeout=timeout,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        reply = json.loads(response.read_text(encoding='utf-8'))
+        response_bytes = response.read_bytes()
+        if observation is not None:
+            observation.update(
+                process_exit_code=child.returncode,
+                artifact_sha256={
+                    name: hashlib.sha256(data).hexdigest()
+                    for name, data in zip(_GATE_ARTIFACTS, (request_bytes, response_bytes, route_bytes))
+                },
+            )
+        reply = json.loads(response_bytes)
     if 'error' in reply:
         raise RuntimeError(json.dumps(reply['error']))
     return reply['result']
@@ -366,14 +384,42 @@ def _host_gate_binding(record: dict) -> dict:
             "stage": "gate", "operation": "dispatch.ask_gate"}
 
 
+_GATE_ARTIFACTS = ("request", "response", "warm_route")
+
+
+def _gate_login_status(repo: str, timeout: float) -> bool:
+    executable = shutil.which("claude")
+    if not executable:
+        return False
+    auth = subprocess.run(
+        [executable, "auth", "status", "--json"], cwd=repo,
+        capture_output=True, timeout=timeout,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if auth.returncode:
+        return False
+    status = json.loads(auth.stdout)
+    return isinstance(status, dict) and status.get("loggedIn") is True
+
+
 def _host_gate(params: dict, record: dict, artifacts: Path, timeout: float) -> tuple[dict, str]:
     if (not record.get("run_id") or params.get("run_id") != record["run_id"]
             or params.get("require_live_token") is not True):
         raise ValueError("host gate run binding requires the current live run")
-    result = _invoke_source("dispatch.ask_gate", params, record["repo_root"], artifacts, timeout)
+    started = time.monotonic()
+    # This is provider-status evidence; dispatch.ask_gate itself uses the live run token.
+    logged_in = _gate_login_status(record["repo_root"], min(timeout, 10))
+    observation: dict = {}
+    result = _invoke_source(
+        "dispatch.ask_gate", params, record["repo_root"], artifacts,
+        max(0.001, timeout - (time.monotonic() - started)), observation=observation,
+    )
     if not isinstance(result, dict) or "arm" not in result or "halt" not in result:
         raise ValueError("host gate returned no typed result")
+    if observation.get("process_exit_code") != 0:
+        raise ValueError("host gate completed without a successful observed exit")
     receipt = {**_host_gate_binding(record), "arm": result["arm"],
+               "loggedIn": logged_in, **observation,
                "result_sha256": hashlib.sha256(
                    json.dumps(result, sort_keys=True).encode("utf-8")
                ).hexdigest()}
@@ -394,7 +440,16 @@ def _read_host_gate_receipt(path: Path, record: dict, digest: str | None) -> dic
         raise ValueError("host gate receipt binding mismatch")
     if hashlib.sha256(raw.encode("utf-8")).hexdigest() != digest:
         raise ValueError("host gate receipt content mismatch")
-    return receipt
+    artifacts = {"consumed": receipt}
+    for name in _GATE_ARTIFACTS:
+        data = path.with_name(f"{name}.json").read_bytes()
+        if hashlib.sha256(data).hexdigest() != receipt["artifact_sha256"][name]:
+            raise ValueError(f"host gate {name} artifact content mismatch")
+        artifacts[name] = json.loads(data)
+    result = artifacts["response"].get("result")
+    if hashlib.sha256(json.dumps(result, sort_keys=True).encode("utf-8")).hexdigest() != receipt["result_sha256"]:
+        raise ValueError("host gate response does not match the consumed result")
+    return {**receipt, "artifacts": artifacts}
 
 
 def _run_pinned_test_leg(
@@ -467,13 +522,13 @@ def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float)
     deadline = time.monotonic() + timeout
     prefixes = params["slice_prefixes"]
     run_key = params["run_key"]
-    inventories = [
-        _invoke_source("review.reverify", {
-            "base": params["base"], "slice_prefix": prefix,
-            "session_id": params.get("session_id", ""), "run_key": run_key,
-        }, repo, artifacts / f"inventory-{index}", max(.1, deadline - time.monotonic()))
-        for index, prefix in enumerate(prefixes)
-    ]
+    reply = _invoke_source("review.reverify", {
+        "base": params["base"], "slice_prefixes": prefixes,
+        "session_id": params.get("session_id", ""), "run_key": run_key,
+    }, repo, artifacts / "inventories", max(.1, deadline - time.monotonic()))
+    inventories = reply.get("inventories")
+    if not isinstance(inventories, list):
+        inventories = [reply if reply.get("error") else {"error": "review.reverify returned no inventories"}]
     errors = [inventory["error"] for inventory in inventories if inventory.get("error")]
     edited = list(dict.fromkeys(
         path for inventory in inventories for key in ("edited", "created") for path in inventory.get(key, [])
@@ -596,6 +651,19 @@ def _result_failure(value, *, landing: bool = False) -> str | None:
             # parent's script here would corrupt the authored terminal action.
             return 'fan child terminal action has not been relayed for ' + str(value['run_id'])
     return None
+
+
+def _halt_failed_fire(record: dict, result, error: str) -> None:
+    """Leave a halt record for every run this failed fire drove, so the failure is counted and a resumed record is not stranded."""
+    from coordinator_core.ops.dispatch_emit import failed_fire_halt
+
+    try:
+        ids = failed_fire_halt.failed_run_ids(result, record.get('script_path'))
+        commits: dict = {}
+        record['halted_runs'] = failed_fire_halt.halt_failed_fire(Path(record['repo_root']), ids, error, commits)
+        record['halt_commits'] = {k: {f: v.get(f) for f in ('committed', 'sha', 'error') if f in v} for k, v in commits.items()}
+    except Exception as exc:
+        record['halt_error'] = f'{type(exc).__name__}: {exc}'
 
 
 def _preflight_failed(record_path: Path, record: dict, exc: Exception) -> dict:
@@ -808,6 +876,7 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
     except Exception as exc:
         record.update(exit_code=1, outcome='failed', error=f'{type(exc).__name__}: {exc}', outcome_basis='headless executor error')
         journal({'type': 'failed', 'error': record['error']})
+        _halt_failed_fire(record, result, record['error'])
     finally:
         if timer:
             timer.cancel()

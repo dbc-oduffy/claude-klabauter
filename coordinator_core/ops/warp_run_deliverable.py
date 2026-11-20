@@ -569,7 +569,28 @@ def _stale_at(root: Path, run_id: str, stage_name: str, bound: float, now: Optio
         return False
     current = time.time() if now is None else now
     seen = run_activity_epoch(root, run_id, current, bound)
-    return seen is None or current - seen > bound
+    if seen is not None and current - seen <= bound:
+        return False
+    return not _planning_agent_in_flight(stage, current, bound)
+
+
+def _planning_agent_in_flight(stage: dict, now: float, bound: float) -> bool:
+    """True when a run whose Workflow started (`plan_started_at`) has an agent journal or transcript in
+    its session's workflow dirs written within `bound`. A plan-author or enrichment agent runs for tens
+    of minutes without an op call, so the run dir stays quiet while the run is live; a never-started
+    mint has no Workflow and is never spared by another workflow's journal. Runs only once the run-dir
+    signals are stale; never raises."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import PLAN_STARTED_FIELD
+
+    sid = stage.get("session_id")
+    if not stage.get(PLAN_STARTED_FIELD) or not isinstance(sid, str) or not sid:
+        return False
+    try:
+        from coordinator_core.ops.dispatch_emit import staged_stall
+
+        return staged_stall.agent_in_flight(sid, now - bound)
+    except Exception:  # noqa: BLE001 -- a missing signal means the run-dir verdict stands
+        return False
 
 
 def _past_wall_timeout(root: Path, run_id: str, now: Optional[float] = None) -> Optional[float]:

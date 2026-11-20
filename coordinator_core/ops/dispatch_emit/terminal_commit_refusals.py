@@ -495,12 +495,19 @@ def _tests_not_run_refusal(
     None. Runs declaring no test file are not gated. The ledger-text arm is skipped when
     ``inline_review.tests.owed_to`` is ``em`` and no declared path is ``.py`` (a UE automation
     criterion owed to the EM)."""
-    from coordinator_core.ops.dispatch_emit.terminal_commit_review import review_owed_refusal
+    from coordinator_core.ops.dispatch_emit.terminal_commit_review import review_owed_refusal, run_agent_pin_events
 
     chunks = getattr(request, "chunks", None)
     unfinished = set(params.get("incomplete_chunks") or ()) - set(params.get("landed_chunks") or ())
     within = [p for c in chunks if c.id not in unfinished for p in c.paths] if chunks is not None else None
-    owed = review_owed_refusal(worktree_root, inline_review, within)
+    session = params.get("session_id")
+    owed = review_owed_refusal(
+        worktree_root, inline_review, within,
+        run_agent_pin_events(
+            worktree_root, session if isinstance(session, str) else None,
+            params.get("run_id") if isinstance(params.get("run_id"), str) else None, inline_review,
+        ),
+    )
     if owed is not None:
         return _error(
             f"{owed}; apply them or dispose each (rejected/suspended) in the reviewer's ledger, then re-fire",

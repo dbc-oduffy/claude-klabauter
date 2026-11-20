@@ -201,7 +201,7 @@ def test_arm_d_a_failed_ue_test_is_refused_and_records_nothing(tmp_path):
     assert "E1" not in read_em_discharges(plan)
 
 
-def test_arm_b_python_run_whose_selected_tests_ran_zero_still_halts_test_verdict_empty(tmp_path, script):
+def test_arm_b_python_run_whose_selected_tests_ran_zero_still_halts_test_infra_failure(tmp_path, script):
     (tmp_path / "pkg" / "tests").mkdir(parents=True)
     (tmp_path / "pkg" / "tests" / "test_a.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
     manifest = _staged(tmp_path, _plan(["pkg/a.py"], _UE_ROW))
@@ -209,4 +209,4 @@ def test_arm_b_python_run_whose_selected_tests_ran_zero_still_halts_test_verdict
     zero = "{ status: 'pass', tests_run: 0, sidecar_path: 'a.md' }"
 
     halted = _run(_line(script, 'halted: "test_verdict_empty"'), manifest.to_json(), _testResult=zero)["halted"]
-    assert halted and halted["halted"] == "test_verdict_empty" and "ran zero tests" in halted["detail"]
+    assert halted and halted["halted"] == "test_infra_failure" and "ran zero tests" in halted["detail"]

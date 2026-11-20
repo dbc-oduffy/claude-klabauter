@@ -31,6 +31,8 @@ def main(argv) -> int:
             json.dump(argv, f)
     jsonl = os.environ.get("FAKE_CODEX_JSONL")
     if jsonl:
+        # The real CLI emits UTF-8; a piped stdout on Windows would otherwise encode as cp1252.
+        sys.stdout.reconfigure(encoding="utf-8")
         with open(jsonl, encoding="utf-8") as f:
             for line in f:
                 sys.stdout.write(line if line.endswith("\n") else line + "\n")

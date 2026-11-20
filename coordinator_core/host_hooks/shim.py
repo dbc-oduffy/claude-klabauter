@@ -207,6 +207,12 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
     engine_event = adapter.engine_event(event)
     if engine_event is None:
         return adapter.render(event, {})
+    if host == HOST_CODEX:
+        from coordinator_core.host_hooks import branch_creation
+
+        refused = branch_creation.match(event)
+        if refused is not None:
+            return adapter.render(event, refused)
     previous = os.environ.get(_SESSION_ENV)
     if event.session_id:
         os.environ[_SESSION_ENV] = event.session_id

@@ -2808,6 +2808,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_review import (  # noqa:
     _fixes_integrated_at,
     _reviewer_applied_fixes,
     _wave_slice_files,
+    run_agent_pin_events,
     verdict_pin_mismatches,
     verdict_pin_refusal,
 )
@@ -5383,7 +5384,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 refused=COMMIT_SET_NOT_RECORDED_HUNKS, paths=sorted({u.partition(":")[0] for u in unrecorded}),
             )
 
-    stale_verdict = verdict_pin_mismatches(root, inline_review, [p for p in commit_set if p not in settled_blobs])
+    stale_verdict = verdict_pin_mismatches(
+        root, inline_review, [p for p in commit_set if p not in settled_blobs],
+        run_agent_pin_events(root, session_id, sibling_run_id or art_run_id, inline_review),
+    )
     if stale_verdict:
         from coordinator_core.ops.dispatch_emit.comment_only_drift import tolerated_drift
         from coordinator_core.session import touch_record

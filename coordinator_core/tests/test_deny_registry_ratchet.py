@@ -52,6 +52,7 @@ def _deny(event: str = "PreToolUse") -> dict[str, dict[str, str]]:
 def _kebab_names_in_tree() -> set[str]:
     names = {p.stem.replace("_", "-") for p in (ROOT / "write_guards").glob("*.py")}
     names |= {p.stem.replace("_", "-") for p in (ROOT / "hooks").rglob("*.py")}
+    names |= {"branch-creation"}  # host_hooks/branch_creation.py: the Codex-host shim deny
     from coordinator_core.bash_guards.roster import guard_roster
 
     names |= {e.id for e in guard_roster()}

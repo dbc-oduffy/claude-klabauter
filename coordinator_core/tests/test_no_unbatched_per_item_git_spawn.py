@@ -856,7 +856,6 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # command), so mapping each member alias to its HostName is one spawn per alias. Each
         # alias is one distinct member box; the resolved name is cached across calls and an
         # alias whose own name matches returns before any spawn.
-        ("coordinator/bin/unimatrix-pair.py", "make_host_alias_fn.host_alias", "_ssh_hostname", 0),
         ("coordinator/bin/unimatrix-autolink.py", "member_alias", "ssh_hostname", 0),
         # 2026-11-09 -- # class: structural-floor. N PEERS, N DETACHED SUPERVISORS.
         # `unimatrix-autolink.py::run.link_all` calls `link_peer` once per roster alias; each

@@ -1189,3 +1189,31 @@ def test_a_chain_emit_for_a_halted_entry_run_mints_a_fresh_run_the_launcher_acce
     assert Path(chained["path"]).name == chained["run_id"] + ".workflow.mjs"
     rebound = _chain_emit(tmp_path, REL)
     assert rebound["run_id"] == chained["run_id"]
+
+
+def test_windows_invoke_word_parses_in_powershell_and_bash(monkeypatch, tmp_path) -> None:
+    """A leading quoted exe path is a ParserError in pwsh without `&`; the word must need neither quotes nor `&` when the path allows."""
+    import coordinator_core._settings_home as sh
+    from coordinator_core.ops.dispatch_emit import fan_launcher
+
+    monkeypatch.setattr(sh, "settings_home", lambda: tmp_path / "settings")
+    word = fan_launcher._invoke_command("nt")
+    assert not word.startswith('"')
+    assert word.endswith("coordinator-invoke.exe") and " " not in word
+
+
+def test_windows_invoke_word_with_space_uses_call_operator(monkeypatch, tmp_path) -> None:
+    import coordinator_core._settings_home as sh
+    from coordinator_core.ops.dispatch_emit import fan_launcher
+
+    monkeypatch.setattr(sh, "settings_home", lambda: tmp_path / "a b")
+    assert fan_launcher._invoke_command("nt").startswith("& '")
+
+
+def test_windows_invoke_word_keeps_dollar_and_quote_literal(monkeypatch, tmp_path) -> None:
+    import coordinator_core._settings_home as sh
+    from coordinator_core.ops.dispatch_emit import fan_launcher
+
+    monkeypatch.setattr(sh, "settings_home", lambda: tmp_path / "a$b'c")
+    word = fan_launcher._invoke_command("nt")
+    assert word.startswith("& '") and "a$b''c" in word

@@ -40,6 +40,8 @@ GUARD_DENY_CLASS: Dict[str, str] = {
     "block-held-push": IRREVERSIBLE_EXTERNAL,
     "block-perforce-submit": IRREVERSIBLE_EXTERNAL,
     "p4-verb-fence": IRREVERSIBLE_EXTERNAL,
+    # Codex host only (host_hooks/branch_creation.py); PM turn 2026-11-20, session 217c73d7 (pm_turns.jsonl).
+    "branch-creation": DISRUPTIVE,
     "destructive-git-orphan": BOX_DEGRADING,
     "destructive-rm": BOX_DEGRADING,
     "destructive-git-clean": BOX_DEGRADING,
