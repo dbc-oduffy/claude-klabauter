@@ -182,16 +182,41 @@ def _absolute_here(path: str) -> bool:
     return _path_flavour()(path).is_absolute()
 
 
+def _same_registry_root(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    try:
+        return os.path.samefile(left, right)
+    except (OSError, ValueError):
+        return False
+
+
 def _resolve_grantee(grantee: str) -> tuple[Optional[str], Optional[session_registry.RegistryRow]]:
     """A session id, or a registry name matching exactly one session; ``(None, None)`` otherwise."""
+    from coordinator_core.session import external_registry
+
     rows = session_registry.read_rows()
-    for row in rows:
-        if row.session_id == grantee:
-            return row.session_id, row
-    named = [row for row in rows if row.name and row.name == grantee]
-    if len(named) == 1:
+    exact = next((row for row in rows if row.session_id == grantee), None)
+    if exact is not None and not exact.session_id.startswith("peer-"):
+        return exact.session_id, exact
+    name = exact.name if exact is not None else grantee
+    named = [row for row in rows if row.name and row.name == name]
+    if len(named) == 1 and exact is None:
         return named[0].session_id, named[0]
-    return None, None
+    # Codex may have a synthetic router row and a native thread row for the
+    # same name. Prefer the birth-verified thread only over its same-repo aliases.
+    native = [row for row in named if external_registry.lookup(row.session_id) is not None]
+    if len(native) == 1:
+        thread = native[0]
+        if all(
+            row == thread or (
+                row.session_id.startswith(f"peer-{name}-")
+                and _same_registry_root(row.cwd, thread.cwd)
+            )
+            for row in named
+        ):
+            return thread.session_id, thread
+    return (exact.session_id, exact) if exact is not None else (None, None)
 
 
 def _member_host_key(grantee: str, home: Optional[Path]) -> str:

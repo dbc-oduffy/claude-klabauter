@@ -123,6 +123,8 @@ def _environment() -> dict[str, str]:
     # bootstrap ladder; never silently dispatch back into another live clone.
     from coordinator_core.warm.engine_root import current_engine_clone
     env['COORDINATOR_ENGINE_ROOT'] = str(current_engine_clone())
+    # The native door uses its own override ahead of the installed sidecar.
+    env['COORDINATOR_DOOR_ENGINE_ROOT'] = env['COORDINATOR_ENGINE_ROOT']
     # Native tools/hooks need these Windows and coordinator runtime locations.
     for key in ("TEMP", "TMP", "COMSPEC", "PATHEXT", "SYSTEMROOT", "MACHINE_LOCAL_REGISTRY_DIR",
                 *USER_PROFILE_ENV, *CREDENTIAL_CONTEXT_ENV, *CREDENTIAL_CONTEXT_ENV_WINDOWS):
@@ -961,6 +963,13 @@ def run_agent(
             'variable assignment, pipeline or semicolon; the working directory is already set, so run no cd or '
             'Set-Location even where the task text asks for one. '
             'Use Python or native PowerShell for file operations. Preserve all operation arguments and JSON payloads.\n\n'
+        ) + full_prompt
+    if backend == "codex":
+        full_prompt = (
+            "Codex edit tool: if the assigned stage calls for a Write or Edit on a declared "
+            "path, use apply_patch for that edit. The Claude tool names in the brief describe "
+            "the action, not a requirement to discover those tools. Keep the same file scope "
+            "and all write evidence requirements. Do not edit when the stage is read-only.\n\n"
         ) + full_prompt
     full_prompt = with_worker_preamble(backend, full_prompt)
     native_schema = _codex_schema(schema) if schema is not None else None

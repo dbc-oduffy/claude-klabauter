@@ -67,6 +67,10 @@ def test_workflow_executor_prompt_begins_with_preamble(tmp_path, spawned, backen
     assert text.startswith(PREAMBLE + "\n\n")
     # On Windows the executor adds its platform note after the preamble; WORKER ROLE must still lead.
     body = text[len(PREAMBLE) + 2:]
+    if backend == "codex":
+        edit_note, body = body.split("\n\n", 1)
+        assert "use apply_patch for that edit" in edit_note
+        assert "Do not edit when the stage is read-only." in edit_note
     if body.startswith("Native execution platform: Windows."):
         body = body.split("\n\n", 1)[1]
     assert body.startswith("Agent definition (coordinator:sizing-scout)")

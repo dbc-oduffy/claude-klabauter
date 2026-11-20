@@ -2453,6 +2453,23 @@ def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, st
     return Path(engine), f"engine ladder ({resolution})"
 
 
+def _check_durable_install_root(root: Path, args: Args) -> bool:
+    """A dispatch override cannot select a new durable install target."""
+    override = os.environ.get("COORDINATOR_ENGINE_ROOT")
+    if args.claude_klabauter_root or not override or Path(override).resolve() != root.resolve():
+        return True
+    published = _engine_root_module().published_engine_mirror_path()
+    if published and Path(published).resolve() == root.resolve():
+        return True
+    print(
+        "ERROR: COORDINATOR_ENGINE_ROOT is process-local and cannot register a new engine "
+        "or change the installed door or shared editable package. Unset it and re-run from the registered engine, "
+        "or pass --claude-klabauter-live-root explicitly to select a durable engine.",
+        file=sys.stderr,
+    )
+    return False
+
+
 def _engine_root_module():
     """`coordinator_core.engine_root`, looked up at call time."""
     import coordinator_core.engine_root as engine_root_mod
@@ -5633,6 +5650,8 @@ def run_deps_only(args: Args) -> int:
     in a different interpreter (a fallback venv those scripts will not use)."""
     repo_root = Path(__file__).resolve().parent.parent
     claude_klabauter_root, _ = resolve_claude_klabauter_root(repo_root, args)
+    if not _check_durable_install_root(claude_klabauter_root, args):
+        return 1
     py = resolve_python()
     engine_py, _ = provision_deps(
         claude_klabauter_root,
@@ -5693,6 +5712,9 @@ def main(argv: list[str]) -> int:
         check_rc = run_check(claude_klabauter_root_resolved)
         install_foreign_hosts(claude_klabauter_root_resolved, args, check=True)
         return check_rc
+
+    if not (args.hosts and args.repair != "forwarders") and not _check_durable_install_root(claude_klabauter_root_resolved, args):
+        return 1
 
     if args.repair == "forwarders":
         return run_repair_forwarders(repo_root, claude_klabauter_root_resolved, args)

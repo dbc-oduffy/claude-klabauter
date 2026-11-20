@@ -4710,3 +4710,29 @@ def test_install_repo_discovery_does_not_seed_claude_klabauter_source_path_from_
     monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda _r: setup_mod.IDENTITY_MIRROR)
     setup_mod.install_repo_discovery(engine_tree, engine_tree, setup_mod.Args(), write=writes.__setitem__)
     assert "plugin.mirrors.project-makima.source_path" not in writes
+
+
+def test_process_local_engine_root_cannot_repoint_installed_door(setup_mod, monkeypatch, tmp_path, capsys):
+    stable = tmp_path / "published"
+    scratch = tmp_path / "scratch"
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(scratch))
+    monkeypatch.setattr(setup_mod._engine_root_module(), "published_engine_mirror_path", lambda: stable)
+    args = setup_mod.Args()
+
+    assert not setup_mod._check_durable_install_root(scratch, args)
+    assert "process-local" in capsys.readouterr().err
+    assert setup_mod._check_durable_install_root(stable, args)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(stable))
+    assert setup_mod._check_durable_install_root(stable, args)
+
+
+def test_deps_only_does_not_install_an_invocation_local_engine(setup_mod, monkeypatch, tmp_path, capsys):
+    calls = _stub_deps_only(setup_mod, monkeypatch, tmp_path, sys.executable)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        setup_mod._engine_root_module(), "published_engine_mirror_path", lambda: tmp_path / "registered"
+    )
+
+    assert setup_mod.main(["--deps-only", "--i-am-agent"]) == 1
+    assert calls == []
+    assert "shared editable package" in capsys.readouterr().err

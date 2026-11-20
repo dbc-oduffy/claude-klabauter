@@ -136,3 +136,4 @@ def test_child_env_keeps_warmth_on_and_pins_both_autostarts_off(monkeypatch, inh
     assert env["COORDINATOR_WARM_LISTENER_AUTOSTART"] == "0"
     assert env["COORDINATOR_WARM_SERVER_AUTOSTART"] == "0"
     assert env["COORDINATOR_ENGINE_ROOT"] == str(current_engine_clone())
+    assert env["COORDINATOR_DOOR_ENGINE_ROOT"] == str(current_engine_clone())

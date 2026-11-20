@@ -284,12 +284,19 @@ def agy_peer_rows_orphaned(home=None):
 def codex_holder_live(row):
     """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart`.
 
-    True: holder alive and still that process. False: holder dead or its pid reused.
+    True: the registered holder is alive, or a resumed holder owns the same thread's writer lock.
+    False: the registered holder is dead or reused and no current writer is proven.
     None: the row records no holder, so liveness is unknown. An unreadable start is not staleness."""
     pid = row.get("codexPid") if isinstance(row, dict) else None
     if not isinstance(pid, int) or isinstance(pid, bool):
         return None
-    return entry_live({"pid": pid, "procStart": row.get("codexProcStart")})
+    if entry_live({"pid": pid, "procStart": row.get("codexProcStart")}):
+        return True
+    target = row.get("target")
+    if row.get("vendor") != "codex" or not isinstance(target, str):
+        return False
+    code_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    return agy_presence_held(target, presence_dir=code_home / "thread-writer-locks")
 
 
 CODEX_FACE_GRACE_SECONDS = 600
