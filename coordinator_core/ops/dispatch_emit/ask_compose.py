@@ -8747,6 +8747,7 @@ def roadmap_commit_lines(
     ]
 
 
+_RETEST_MODULE = "coordinator_core.ops.dispatch_emit.retest_targeted"
 _RETEST_FILES_JS = (
     "[...new Set((_rs.nodes ?? []).map((n) => String(n).split('::')[0]))].map((f) => ' --tests ' + f).join('')"
 )
@@ -8762,20 +8763,22 @@ def _invariant_retest_call(*, head: str, anchor: str, repo_root: str, run_id: st
     params_file = params_path(repo_root, run_id)
     if params_file is None:
         raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
-    start = (
-        json.dumps(
-            engine_module_command(
-                "coordinator_core.ops.dispatch_emit.retest_targeted", repo_root,
-                f"--isolated-export --params-file {params_file.as_posix()}",
-            )
-        )
+    retest_args = f"--isolated-export --params-file {params_file.as_posix()}"
+    posix = (
+        json.dumps(engine_module_command(_RETEST_MODULE, repo_root, retest_args)) + f" + {_RETEST_FILES_JS}"
+    )
+    powershell = (
+        json.dumps(engine_module_command(_RETEST_MODULE, repo_root, retest_args, shell="powershell"))
         + f" + {_RETEST_FILES_JS}"
     )
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: commit\n\nThe landing refused on a repo-wide invariant with no fresh passing "
-        "retest. Run exactly this command as its own Bash call, no wrapper:\n\n",
-        "js:" + start,
-        "\n\nThen run the same command with ` --poll --wait` appended, as its own Bash call. ",
+        "retest. Run exactly the one command matching your worker shell, as its own call, no wrapper. It is a "
+        "python module command, not a coordinator-invoke op.\n\nBash:\n",
+        "js:" + posix,
+        "\n\nPowerShell:\n",
+        "js:" + powershell,
+        "\n\nThen run the same command with ` --poll --wait` appended, as its own call. ",
         _WAIT_CALL_CLAUSE,
         " Exit 0 is pass, 1 fail, 2 abandoned or error. Return status 'pass', 'fail' or 'error' and the last "
         "output line as detail. Run nothing else.",
@@ -8799,13 +8802,13 @@ def _retest_await_call(*, head: str, anchor: str, repo_root: str, run_id: str) -
     params_file = params_path(repo_root, run_id)
     if params_file is None:
         raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
-    wait = engine_module_command(
-        "coordinator_core.ops.dispatch_emit.retest_targeted", repo_root,
-        f"--poll --wait --params-file {params_file.as_posix()}",
-    )
+    wait_args = f"--poll --wait --params-file {params_file.as_posix()}"
+    wait = engine_module_command(_RETEST_MODULE, repo_root, wait_args)
+    wait_ps = engine_module_command(_RETEST_MODULE, repo_root, wait_args, shell="powershell")
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: commit\n\nThe landing is awaiting the run's retest verdict. Run exactly "
-        f"this command, no wrapper, no edit to it:\n\n{wait}\n\n",
+        "the one command matching your worker shell, no wrapper, no edit to it. It is a python module command, "
+        f"not a coordinator-invoke op.\n\nBash:\n{wait}\n\nPowerShell:\n{wait_ps}\n\n",
         _WAIT_CALL_CLAUSE,
         " Exit 0 is pass, 1 fail, 2 abandoned or error. Return status 'pass', 'fail' or 'error' and the last "
         "output line as detail. Run nothing else.",

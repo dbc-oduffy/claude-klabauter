@@ -83,3 +83,16 @@ def test_a_path_outside_the_record_dir_landing_stamps_landed(repo):
     out = _run(repo, "src/a.py", note)
     assert out["committed"] is True, out
     assert (ask_contract.read_run_stage(repo, RUN) or {}).get("stage") == "landed"
+
+
+def test_workflow_suffixed_run_id_stamps_the_bare_record_dir_landed(repo):
+    """The emitted script's `<run>.workflow` id names no record dir; the bare run's dir is stamped."""
+    note = _record_file(repo)
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=("src/a.py", note)),))
+    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
+    out = terminal_commit._handler(
+        {"script_path": "run.mjs", "run_id": RUN + ".workflow", "incomplete_chunks": [], "inline_review": _REVIEWED},
+        repo_root=repo / ".git",
+    )
+    assert out["committed"] is True, out
+    assert (ask_contract.read_run_stage(repo, RUN) or {}).get("stage") == "landed"

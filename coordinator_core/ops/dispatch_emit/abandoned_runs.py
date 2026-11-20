@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -31,7 +32,7 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.dispatch_emit import process_artifact_policy, run_artifacts, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, halted_record_message
 from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_changes
-from coordinator_core.ops.dispatch_emit.halted_run import _STAMP, HALTED_FILE, STATUS_RESUMED
+from coordinator_core.ops.dispatch_emit.halted_run import _STAMP, HALTED_FILE, STATUS_CLOSED, STATUS_RESUMED
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.live_runs import run_owner_holds, run_stage_live
@@ -267,6 +268,63 @@ def _later_binding_runs(root: Path, sizing_of: Mapping[str, str]) -> dict[str, s
     return out
 
 
+TERMINAL_STATES = ("landed", "shipped")
+_SIZING_STATUS = re.compile(r"^status:\s*([A-Za-z_-]+)", re.MULTILINE)
+_SIZING_RUN_ID = re.compile(r"^\s+run_id:\s*[\"']?([^\"'\s#]+)", re.MULTILINE)
+_WORKFLOW_SUFFIX = ".workflow"
+
+
+def _bare(run_id: str) -> str:
+    return run_id[: -len(_WORKFLOW_SUFFIX)] if run_id.endswith(_WORKFLOW_SUFFIX) else run_id
+
+
+def _sizing_ships_run(root: Path, run_id: str) -> bool:
+    """True when the sizing the run's ``run.json`` (else ``manifest.json``) names reads ``status: shipped``
+    and carries this run's id, with or without the emitted script's ``.workflow`` suffix. Trap: a run
+    that landed through a workflow-suffixed id can leave ``run-stage.json`` at ``staged`` with no
+    outcome file, so the sizing is the only record of the landing. One or two small reads; no spawn."""
+    rec = root / RECORD_DIR_ROOT / run_id
+    sizing = _run_sizing(rec)
+    if sizing is None:
+        try:
+            data = json.loads((rec / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        rel = data.get("sizing_rel") if isinstance(data, dict) else None
+        sizing = rel.replace("\\", "/") if isinstance(rel, str) and rel else None
+    if sizing is None:
+        return False
+    try:
+        text = (root / sizing).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+    status = _SIZING_STATUS.search(text)
+    if status is None or status.group(1) != "shipped":
+        return False
+    return any(_bare(m) == _bare(run_id) for m in _SIZING_RUN_ID.findall(text))
+
+
+def _terminal_state(root: Path, run_id: str) -> Optional[str]:
+    """``landed`` or ``shipped`` when the run's own records say it ended that way, else ``None``:
+    the outcome file (the archive's source), the ``halted.json`` status (``closed`` reads shipped),
+    ``run-stage.json``, then the run's sizing. In-process reads only. A landed run is never ``abandoned``."""
+    state = run_artifacts.read_tracked_outcome(root, run_id).get("state")
+    if state in TERMINAL_STATES:
+        return state
+    rec = root / RECORD_DIR_ROOT / run_id
+    for name, key in (("halted.json", "status"), (RUN_STAGE_FILE, "stage")):
+        try:
+            data = json.loads((rec / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        value = data.get(key) if isinstance(data, dict) else None
+        if value in TERMINAL_STATES:
+            return value
+        if name == "halted.json" and value == STATUS_CLOSED:
+            return "shipped"
+    return "shipped" if _sizing_ships_run(root, run_id) else None
+
+
 def _halt_marked(root: Path, run_id: str) -> bool:
     try:
         data = json.loads((root / RECORD_DIR_ROOT / run_id / HALTED_FILE).read_text(encoding="utf-8"))
@@ -390,6 +448,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not reaped:
         return base
 
+    terminal = {r: t for r in reaped if (t := _terminal_state(root, r))}
     paths: list[str] = []
     sizings: list[str] = []
     artifact_gone: list[str] = []
@@ -399,7 +458,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         paths += kept
         ignored_state += state_files
         if params.get("dry_run") is not True and process_artifact_policy.hosts_coordinator_state(root):  # a dry run writes nothing
-            outcome = run_artifacts.write_tracked_outcome(root, run_id, "abandoned", halt_kind=HALTED_KIND)
+            if run_id in terminal:
+                outcome = run_artifacts.write_tracked_outcome(root, run_id, terminal[run_id])
+            else:
+                outcome = run_artifacts.write_tracked_outcome(root, run_id, "abandoned", halt_kind=HALTED_KIND)
             if outcome and outcome not in paths:
                 paths.append(outcome)
         sizing = sizing_of.get(run_id)
@@ -459,14 +521,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     for run_id in reaped:
         if run_id in idle_tokens:
             run_token.discard(root, run_id)
-        if run_id not in halted:
+        if run_id not in halted and run_id not in terminal:
             run_close.close_builds_held_after(root, run_id, "research-run-reaped")
 
     from coordinator_core.ops.dispatch_emit import landing_integrity
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines
 
-    message = reap_message(reaped)
-    bases = [b for run_id in reaped for b in landing_integrity.closing_bases(root, run_id, {})]
+    abandoned = [r for r in reaped if r not in terminal]
+    message = reap_message(abandoned) if abandoned else f"warp: record landed run artifacts for {', '.join(reaped)}"
+    bases = [b for run_id in abandoned for b in landing_integrity.closing_bases(root, run_id, {})]
     for line in run_halted_trailer_lines(bases):
         message += "\n" + line
     commit_params: dict = {

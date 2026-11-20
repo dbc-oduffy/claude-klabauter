@@ -304,7 +304,8 @@ def _dispatch_admitted(mode: str, root: Path, repo_root: Path, params: dict, bud
                 reply = _dispatch_mode(mode, root, repo_root, params)
                 if mode == "product" and isinstance(reply, dict) and reply.get("committed") is True:
                     land_leg_record.write(
-                        root, params.get("run_id"), outcome=land_leg_record.OUTCOME_LANDED,
+                        root, params.get("run_id"),
+                        outcome=reply.get("land_outcome") or land_leg_record.OUTCOME_LANDED,
                         leg=None, bound_by=None, legs=land_deadline.leg_costs(),
                     )
                     _chain_landed_tranche(root, params, reply)
@@ -473,7 +474,11 @@ def _dispatch_mode(mode: str, root: Path, repo_root: Path, params: dict) -> dict
     if mode != "product":
         import importlib
 
-        reply = importlib.import_module(contract.MODE_MODULES[mode]).land(root, repo_root, params)
+        from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+        # One scope per land: the halted path's sibling-claim reads (record dirs, index parse) are shared, not per call.
+        with halted_hold_release.release_scope():
+            reply = importlib.import_module(contract.MODE_MODULES[mode]).land(root, repo_root, params)
         if mode == "halted":
             _stamp_withheld_prints(root, reply)
         return reply
@@ -5797,6 +5802,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         | (set(landable_artifacts.paths()) if landable_artifacts is not None else set()),
     ))
 
+    coverage = _land_coverage(
+        measured_carries, landed_now_set, reply.get("withheld") or {}, request.plan_path, sibling_run_id,
+    )
+    if coverage:
+        reply.update(coverage)
+
     # ---- the close job
     if applies:
         presets = kind_presets(kind, plan_governs=plan_governs)
@@ -5880,6 +5891,42 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 close_siblings["blocked_rows"] = blocked_rows
                 reply["close"]["siblings"] = close_siblings
     return reply
+
+
+#: Run bookkeeping: a commit of these alone carries none of the run's product.
+_BOOKKEEPING_PREFIXES = ("state/sizings/", "state/warp/", "scratch/warp/", "docs/delivery/", "docs/plans/")
+
+
+def _land_coverage(
+    measured: Iterable[str], landed: set, withheld: Mapping, plan_path: Optional[str], run_id: Optional[str],
+) -> Optional[dict]:
+    """Reply fields typing a commit that carries less than the run's measured code, else None.
+
+    `landed_no_code`: the commit holds none of the measured non-bookkeeping paths. `partial`: it holds
+    some. Reads data the land already loaded; spawns nothing."""
+    plan = (plan_path or "").replace("\\", "/")
+    code = sorted(
+        p for p in set(measured)
+        if p != plan and not p.startswith(_BOOKKEEPING_PREFIXES)
+    )
+    left = [p for p in code if p not in landed]
+    if not left:
+        return None
+    named = {p: str(withheld.get(p) or "left dirty: neither landed nor withheld") for p in left}
+    none_landed = len(left) == len(code)
+    outcome = land_leg_record.OUTCOME_LANDED_NO_CODE if none_landed else land_leg_record.OUTCOME_PARTIAL
+    out = {
+        "land_outcome": outcome, "withheld_code": named,
+        "error": f"{outcome}: commit carries {len(code) - len(left)} of {len(code)} measured code path(s); "
+                 f"withheld: {', '.join(f'{p} ({r})' for p, r in named.items())}"[:_UNDONE_CAP],
+        "next_action": {
+            "op": "dispatch.record_halted_run_landed", "params": {"run_id": run_id},
+            "after": "hand-land the withheld paths, or refire the run",
+        },
+    }
+    if none_landed:
+        out["ok"] = False
+    return out
 
 
 def _close_parts_of(sizing_text: Optional[str], ledger_met: Optional[str] = None):

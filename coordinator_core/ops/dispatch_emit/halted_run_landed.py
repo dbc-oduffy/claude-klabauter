@@ -1514,7 +1514,7 @@ def _land_committed(record_dir: Path) -> bool:
         doc = json.loads((record_dir / land_leg_record.FILE_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    return isinstance(doc, dict) and doc.get("outcome") == land_leg_record.OUTCOME_LANDED
+    return isinstance(doc, dict) and doc.get("outcome") in land_leg_record.COMMITTED_OUTCOMES
 
 
 def _record_solo(

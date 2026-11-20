@@ -12,7 +12,7 @@ keep every foreign hunk, or a refusal; same attribution, same zero-spawn rule.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 UNATTRIBUTED = "unattributed"
 
@@ -69,25 +69,32 @@ def _as_hunks(rel: str, ops):
     ]
 
 
-def check_live_write(root, run_id: Optional[str], path: str, new_bytes: bytes) -> Optional[str]:
+def check_live_write(
+    root, run_id: Optional[str], path: str, new_bytes: bytes, claims: Optional[Mapping[str, str]] = None,
+) -> Optional[str]:
     """Refusal text naming the holder when writing `new_bytes` to live `path` would drop a hunk a
     peer's unlanded run holds (or an unattributed hunk: unknown is not own); None otherwise.
 
     A hunk is a difference of the live bytes from HEAD that `own_hunks` does not attribute to
     `run_id`. It is dropped when its added lines no longer occur in `new_bytes`, or, for a pure
     deletion, the deleted HEAD lines occur again. Never raises: an unreadable input yields None
-    only when no peer claim is proven."""
+    only when no peer claim is proven. `claims` is a caller's `sibling_run_claims` over a set holding
+    `path`, passed so a loop over many paths computes the claim set once."""
     try:
-        return _check(Path(root), run_id, path, new_bytes)
+        return _check(Path(root), run_id, path, new_bytes, claims)
     except Exception:  # noqa: BLE001 -- unknown claim: the commit-side gates still apply
         return None
 
 
-def _check(root: Path, run_id: Optional[str], path: str, new_bytes: bytes) -> Optional[str]:
+def _check(
+    root: Path, run_id: Optional[str], path: str, new_bytes: bytes, claims: Optional[Mapping[str, str]] = None,
+) -> Optional[str]:
     from coordinator_core.ops.dispatch_emit import run_hunk_claims, sibling_claims
 
     rel = sibling_claims._norm(path)
-    holder = sibling_claims.sibling_run_claims(root, run_id, [rel]).get(rel)
+    if claims is None:
+        claims = sibling_claims.sibling_run_claims(root, run_id, [rel])
+    holder = claims.get(rel)
     if not holder:
         return None
     try:

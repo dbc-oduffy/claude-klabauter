@@ -609,6 +609,11 @@ def _normalise_node_id(raw: str, rootdir: Path, root: Path) -> Optional[str]:
     return rel.as_posix() + sep + rest
 
 
+#: ``zero_run_cause`` of an export pass that failed with no parsable node id: infra, not a test verdict.
+NODELESS_FAIL_CAUSE = "no-failing-node-id"
+_NODE_FILE_HEAD = re.compile(r"^[^\s:]+\.py::")
+
+
 def _failed_node_ids(log: Path, root: Path) -> list[str]:
     """``root``-relative node ids from pytest ``FAILED``/``ERROR`` summary lines in ``log`` (the short
     summary prints them relative to the invocation dir, which is ``root``); a parametrised id keeps its
@@ -620,7 +625,10 @@ def _failed_node_ids(log: Path, root: Path) -> list[str]:
     except OSError:
         return []
     found = re.findall(r"^(?:FAILED|ERROR) (\S+::.+?)(?: - .*)?$", text, flags=re.MULTILINE)
-    ids = [f.rstrip() for f in found]
+    # -v progress lines (``path.py::test FAILED  [ 50%]``) name the id when the short summary is off.
+    found += re.findall(r"^(\S+\.py::.+?) (?:FAILED|ERROR)\s*(?:\[\s*\d+%\])?\s*$", text, flags=re.MULTILINE)
+    # Trap: a captured-log line also starts ``ERROR ``; only a ``<file>.py::`` head is a node id.
+    ids = [f.rstrip() for f in found if _NODE_FILE_HEAD.match(f)]
     return list(dict.fromkeys(_normalise_node_id(n, root, root) or n for n in ids))
 
 
@@ -1425,6 +1433,11 @@ def _write_dual(
         "live": {"status": live_status, "failed_tests": live_failed},
     }
     record.update(baseline or {})
+    if status == "fail" and export_log_used and not export_failed:
+        # A failing verdict names its node ids; with none parsable it is infra, never a test failure.
+        status = record["status"] = record["export"]["status"] = "error"
+        reason = (reason + "; " if reason else "") + "pytest failed but the log names no failing node id"
+        record[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = NODELESS_FAIL_CAUSE
     measured_baseline = record.get("baseline")
     if isinstance(measured_baseline, dict) and measured_baseline.get("caused") and export_log_used:
         peer = _peer_held_reds(
