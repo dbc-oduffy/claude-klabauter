@@ -170,6 +170,22 @@ def agent_in_flight(session_id: Optional[str], cutoff: float) -> bool:
     return False
 
 
+def _candidate_sessions(repo_root: Path, run_id: str, stage_session: Optional[str]) -> list[Optional[str]]:
+    """Sessions whose workflow dirs may hold the run's progress: the stage record's, then the submission's
+    and the run token's. Invariant: `run-stage.json` can name a session that no longer executes the run (a
+    refire under a new session leaves it stale), so it is never the sole liveness source. File reads only."""
+    sessions: list[Optional[str]] = [stage_session]
+    try:
+        record, submission = live_run_index._run_records(Path(repo_root), run_id, None)
+    except Exception:  # noqa: BLE001 -- no extra session means the stage session's verdict stands
+        return sessions
+    for rec in (submission, record):
+        sid = rec.get("session_id") if isinstance(rec, dict) else None
+        if isinstance(sid, str) and sid and sid not in sessions:
+            sessions.append(sid)
+    return sessions
+
+
 def scan(
     repo_root: Path,
     now: float,
@@ -199,7 +215,8 @@ def scan(
         fire_seen = fire_progress_epoch(repo_root, run_id)
         if fire_seen is not None and fire_seen >= cutoff:
             continue
-        if (in_flight or agent_in_flight)(session_id, cutoff):
+        probe = in_flight or agent_in_flight
+        if any(probe(s, cutoff) for s in _candidate_sessions(repo_root, run_id, session_id)):
             continue
         found.append(StalledStaged(run_id, now - newest, session_id))
     return found

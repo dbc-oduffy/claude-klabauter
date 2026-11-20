@@ -830,9 +830,20 @@ def inbound_names():
     """Names a far box already reaches us by: live local entries its own relay holds (`unimatrixMirror`).
 
     The far box's inbox relay already gives such a session a local socket, so mirroring it again
-    from here would list the one far session twice under one name."""
+    from here would list the one far session twice under one name. An inbox mirror with no peer key
+    is not listable by the harness, so it never stands in for the far roster row."""
     rows = session_entries()
-    return {bare_name(d.get("name")) for d in rows if d.get("unimatrixMirror") and listed_row(d, rows)}
+    sess = sessions_dir()
+    return {bare_name(d.get("name")) for d in rows
+            if d.get("unimatrixMirror") and listed_row(d, rows) and _has_peer_key(sess, d)}
+
+
+def _has_peer_key(sess, d) -> bool:
+    """False only when entry `d` names a socket and has no `.key` file beside it in `sess`."""
+    pid, path = d.get("pid"), d.get("messagingSocketPath")
+    if not isinstance(pid, int) or not isinstance(path, str):
+        return True
+    return os.path.exists(os.path.join(sess, key_name(pid, path)))
 
 
 def pushed_from(d, remote):

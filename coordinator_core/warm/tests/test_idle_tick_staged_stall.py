@@ -219,3 +219,24 @@ def test_other_halt_kinds_are_never_cleared(repo) -> None:
     halted_run.write_halt_marker(rdir, halted="some_other_halt", sizing_rel=None)
     assert halted_run.mark_stall_cleared(rdir, {}) is False
     assert _marker(rdir)["status"] == halted_run.STATUS_HALTED
+
+
+def _refired_under_new_session(repo, seams, monkeypatch, *, new_session_progress: bool):
+    rdir = _run(repo, seams, "run-refired", idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300, session="sess-old")
+    monkeypatch.setattr(
+        staged_stall.live_run_index, "_run_records", lambda root, rid, shared: ({}, {"session_id": "sess-new"})
+    )
+    monkeypatch.setattr(staged_stall, "agent_in_flight", lambda session, cutoff: new_session_progress and session == "sess-new")
+    return rdir
+
+
+def test_stale_stage_session_with_progress_in_refire_session_is_not_halted(ctx, repo, seams, monkeypatch) -> None:
+    rdir = _refired_under_new_session(repo, seams, monkeypatch, new_session_progress=True)
+    ctx._idle_tick()
+    assert not (rdir / halted_run.HALTED_FILE).exists()
+
+
+def test_stale_stage_session_without_progress_anywhere_is_still_halted(ctx, repo, seams, monkeypatch) -> None:
+    rdir = _refired_under_new_session(repo, seams, monkeypatch, new_session_progress=False)
+    ctx._idle_tick()
+    assert _marker(rdir)["halted"] == staged_stall.HALT_STAGED_STALL

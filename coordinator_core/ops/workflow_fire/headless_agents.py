@@ -311,8 +311,16 @@ def _is_refusal_only(value: Any, refused: list[str]) -> bool:
 def _persona(agent_type: str | None) -> str:
     if not agent_type or agent_type == "general-purpose":
         return ""
-    if not isinstance(agent_type, str) or not re.fullmatch(r"coordinator:[a-z0-9][a-z0-9-]*", agent_type):
+    if not isinstance(agent_type, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9-]*", agent_type):
         raise AgentFailed(f"unsupported agentType: {agent_type!r}")
+    if not agent_type.startswith("coordinator:"):
+        # A domain persona (e.g. game-dev:staff-game-dev) is an installed plugin agent, not a content-root one.
+        from coordinator_core.hooks.block_unenumerated_agent_type import plugin_agent_model
+
+        _, found = plugin_agent_model(agent_type)
+        if found is not None and found.is_file():
+            return found.read_text(encoding="utf-8")
+        raise AgentFailed(f"agent definition missing: {agent_type}")
     from coordinator_core.content_root import read_content_root
 
     root_value = read_content_root()
