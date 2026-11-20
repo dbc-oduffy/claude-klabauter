@@ -506,6 +506,19 @@ def _check4_tree_enumeration(
     return trees, live_path
 
 
+def _doe_with_fallback(trees: _TreeSet, claude_base: str, live_path: str) -> bool:
+    """A marked live DoE tree may coexist with its own marketplace cache."""
+    if not live_path or trees.count != 2:
+        return False
+    live = Path(_to_plugin_root(live_path)).resolve()
+    if not (live / ".coordinator-dev-repo").is_file() or not (live / ".git").exists():
+        return False
+    cache = (Path(claude_base) / "plugins" / "cache" / "coordinator-claude" / "coordinator").resolve()
+    paths = {Path(path).resolve() for path in trees.paths}
+    others = paths - {live}
+    return len(others) == 1 and next(iter(others)).parent == cache and live in paths
+
+
 def _check5_settings_tri_file(claude_base: str, live_path: str) -> Optional[Tuple[str, str, dict]]:
     """CHECK 5 — Settings tri-file cross-check.
 
@@ -610,6 +623,8 @@ def run() -> Tuple[int, str, str]:
     )
     if exempt_tree_check:
         out_lines.append(_emit_info(exempt_reason))
+    elif _doe_with_fallback(trees, claude_base, live_path):
+        out_lines.append(_emit_info("DoE authoring checkout with marketplace fallback cache."))
     elif trees.count > 1:
         if _has_parent_child_pair(trees.paths):
             remedy = (

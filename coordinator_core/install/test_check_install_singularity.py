@@ -367,3 +367,26 @@ def test_windows_backslash_claude_plugin_root_dedupes_with_forward_slash_live_pa
     rc, text = _run()
 
     assert rc == 0, text
+
+
+def test_doe_authoring_tree_with_marketplace_fallback(home, tmp_path, monkeypatch):
+    from shutil import move
+
+    cache = home["flat_path"].parent / "cache" / "coordinator-claude" / "coordinator" / "4.6.24"
+    cache.parent.mkdir(parents=True)
+    move(home["flat_path"], cache)
+    doe = _make_tree(tmp_path / "doe")
+    (doe / ".git").mkdir()
+    (doe / ".coordinator-dev-repo").touch()
+    home["reg_file"].write_text(
+        f'[plugin.mirrors.coordinator-claude]\nlive_path = "{doe.as_posix()}"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(cache))
+    rc, text = _run()
+    assert rc == 0, text
+    assert "marketplace fallback" in text
+
+    (doe / ".coordinator-dev-repo").unlink()
+    rc, text = _run()
+    assert rc == 1, text
+    assert "accidental split" in text

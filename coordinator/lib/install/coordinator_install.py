@@ -849,7 +849,7 @@ def step_substrate(ctx: Ctx) -> StepResult:
     ok, engine = _engine_root()
     if not ok:
         return _fail("artifact", "engine root does not resolve; substrate not deposited")
-    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(plugin_root()))
+    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(plugin_root()), COORDINATOR_ENGINE_ROOT=engine)
     notes = []
     for name in ("install-substrate.py", "register-coordinator-mirror.py", "check-install-singularity.py"):
         script = Path(engine) / "coordinator" / "lib" / name
@@ -1421,6 +1421,16 @@ def step_currency(ctx: Ctx) -> StepResult:
 
 
 def _engine_root() -> tuple[bool, str]:
+    # A bundled installer and its engine are released together. Plugin-only
+    # installs still need the registered engine.
+    own_root = next(
+        (parent for parent in Path(__file__).resolve().parents
+         if (parent / "coordinator_core" / "__init__.py").is_file()
+         and (parent / "scripts" / "setup.py").is_file()),
+        None,
+    )
+    if own_root is not None:
+        return True, str(own_root)
     rc, out = run(_py(str(plugin_root() / "hooks" / "scripts" / "_engine_root.py")), timeout=60)
     root = out.splitlines()[-1].strip() if out.strip() else ""
     return (rc == 0 and bool(root) and Path(root).is_dir()), root

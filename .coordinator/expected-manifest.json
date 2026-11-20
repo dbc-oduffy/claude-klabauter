@@ -2432,7 +2432,7 @@
     "coordinator/lib/home_resolution_lint.py": "e460e1416840217cc0981c93e065e8535610d4c5",
     "coordinator/lib/install-substrate.cmd": "b8e10652c5b00bf8aa7711c3707f8de6bf941965",
     "coordinator/lib/install-substrate.py": "f12a39ccb2f845c7e5cccf0c66c090bb0d32765f",
-    "coordinator/lib/install/coordinator_install.py": "5ce01467c4ac2c8e9d51e604b8302dcb23c71244",
+    "coordinator/lib/install/coordinator_install.py": "f866b0027b7142a4313b111db1ff30e201c99d7d",
     "coordinator/lib/markdown_style.py": "3ae304d1229dc5bf1bfd362c826419829100d254",
     "coordinator/lib/oss-repo-constants.py": "ec7d046ce93e6eada5dd073751d9f2b58e04b065",
     "coordinator/lib/output_tree_layout.py": "9b42aec5ca42032764f1a08c99a1b3c461ca4c48",
@@ -2572,8 +2572,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "fdb157ef195f755acdca5c2cfc4b887821df706f",
-    "coordinator_core/_engine_stamp": "054aef7af6d5433bac9f562c6633e48dac71aca3",
+    "coordinator_core/_engine_published_at": "ada76cae9270aa5fd9a8de554c35fa08458582f2",
+    "coordinator_core/_engine_stamp": "e623878c030ca857e37957d1f52ad5d8e206de11",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5417,7 +5417,7 @@
     "coordinator_core/install/_shared.py": "2618da2e4dc685482c8d574f68365a0130189af9",
     "coordinator_core/install/authoring_checkout_freshness.py": "bb5dd7f9bc957206150bb57e3217e71ccf845425",
     "coordinator_core/install/authoring_checkout_freshness_apply.py": "4cee30467d3ae99c0b8b93d6ffafaf9ad4851f5d",
-    "coordinator_core/install/check_install_singularity.py": "e37e751db7b3754f9cb0aa1a11eb93b0a78dc258",
+    "coordinator_core/install/check_install_singularity.py": "b67e49acb4e695ae58230802073422c8d16b8ff8",
     "coordinator_core/install/clone_sibling_repo.py": "372095e092a50b6fa893428b7057ce75eb0beb39",
     "coordinator_core/install/conftest.py": "3a894f84b33d2e3fce6fd322ce9342bdd1eed24a",
     "coordinator_core/install/coordinator_install_entry.py": "4f2640be4f5a5397c9357010974b4c4e8cd685a5",
@@ -5478,7 +5478,7 @@
     "coordinator_core/install/substrate_migrate.py": "25ec3cf14515bf7e8b4439bc98976f7cfc0af198",
     "coordinator_core/install/test_bin_family_freshness.py": "ae0b962b2e650db79b6de230d659e36d2e7d476f",
     "coordinator_core/install/test_bin_inventory_install_parity.py": "85c07d067fa9990f5be2ed638cd3bd72377b8b4b",
-    "coordinator_core/install/test_check_install_singularity.py": "eed54b74fe6ae1da2b2f3e10ff48282202317d6e",
+    "coordinator_core/install/test_check_install_singularity.py": "8c70ce1c425de508cd59cc07ef9e0d5750eac20e",
     "coordinator_core/install/test_clone_sibling_repo.py": "d85ec0747e6667d283b05675a61b9513a255da34",
     "coordinator_core/install/test_coordinator_install_entry.py": "ace9f6fc7032665139a1dde9f42f57131be941f5",
     "coordinator_core/install/test_dep_check.py": "00ad2e37483a9c37d049e2bd876287a1ee85ab8b",
@@ -12948,7 +12948,7 @@
     "lib/home_resolution_lint.py": "e460e1416840217cc0981c93e065e8535610d4c5",
     "lib/install-substrate.cmd": "b8e10652c5b00bf8aa7711c3707f8de6bf941965",
     "lib/install-substrate.py": "f12a39ccb2f845c7e5cccf0c66c090bb0d32765f",
-    "lib/install/coordinator_install.py": "5ce01467c4ac2c8e9d51e604b8302dcb23c71244",
+    "lib/install/coordinator_install.py": "f866b0027b7142a4313b111db1ff30e201c99d7d",
     "lib/markdown_style.py": "3ae304d1229dc5bf1bfd362c826419829100d254",
     "lib/oss-repo-constants.py": "ec7d046ce93e6eada5dd073751d9f2b58e04b065",
     "lib/percolate/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
@@ -13075,5 +13075,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "f6c4ba9c7842d6cbdf70782684938426d1ca32e1"
+  "source_head": "8dfd37ef385b493b46a3f910c3d6ff44e98ea958"
 }
