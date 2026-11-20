@@ -164,3 +164,26 @@ def test_message_cites_no_decision_record(
 
     assert message is not None
     assert "DR-" not in message
+
+
+def test_registry_set_with_pointer_missing_is_a_finding(
+    tmp_path: Path, machine_local: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / "klabauter"
+    real.mkdir()
+    _stub_registry(monkeypatch, {"repos.claude_klabauter": str(real)})
+
+    report = rcr.reconcile("claude_klabauter", machine_local)
+
+    assert not report.ok
+    assert report.missing_pointers == ("pointer .claude-klabauter-root",)
+    message = rcr.disagreement_message([report])
+    assert message is not None and str(machine_local / ".claude-klabauter-root") in message
+
+
+def test_pointer_missing_with_registry_unset_is_not_a_finding(
+    machine_local: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_registry(monkeypatch, {})
+
+    assert rcr.reconcile("claude_klabauter", machine_local).ok

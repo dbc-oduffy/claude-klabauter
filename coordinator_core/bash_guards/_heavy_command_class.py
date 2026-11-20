@@ -823,7 +823,13 @@ def _admit_local(
                 with_cpu = getattr(host, "_with_cpu_axis", None)
                 reserved_cores = getattr(host, "reserved_cores", None)
                 if with_cpu is not None and reserved_cores is not None:
-                    verdict = with_cpu(verdict, cores, reserved_cores(adm_path), None)
+                    # TRAP: a stage registers the pid its driver already reserved under; leaving the driver's row in
+                    # makes the run refuse itself. A host predating `exclude_pid` counts it (the old behaviour).
+                    try:
+                        held_cores = reserved_cores(adm_path, exclude_pid=register_pid)
+                    except TypeError:
+                        held_cores = reserved_cores(adm_path)
+                    verdict = with_cpu(verdict, cores, held_cores, None)
                 if verdict.admit and register_pid is not None:
                     if not _register_for_admit(key, peak_gib, register_pid, host, cores):
                         return None, status

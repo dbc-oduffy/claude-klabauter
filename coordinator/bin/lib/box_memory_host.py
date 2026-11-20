@@ -666,28 +666,40 @@ def default_cpu_budget() -> int:
 
 def reserved_cores(
     path, alive_fn=pid_alive, create_time_fn=pid_create_time, image_fn=pid_image, now_fn=None,
-    *, exclude_key=None,
+    *, exclude_key=None, exclude_pid=None,
 ) -> int:
     """Sum of declared cores (absent = 1) over START rows with no END that still hold a pid.
 
     A row counts on the same terms as ``reserved_bytes`` (positive ``declared_peak_mb``, a holding
-    pid); one row counts once however many pids it names. ``exclude_key`` is a (session_id, run) to
-    leave out, for a caller re-checking its own row. Slot grants name no cores and count 0.
+    pid); one row counts once however many pids it names. One workflow leg is one reservation, so
+    two rows never charge it twice: a driver shadow row (``box-memory-snapshot`` / ``<run>:<pid>``)
+    is dropped once the leg's own row (``<run>``) is live, and rows held by the same pid set count
+    once at their widest. ``exclude_key`` is a (session_id, run) to leave out, for a caller
+    re-checking its own row; ``exclude_pid`` leaves out every row held by that pid, for a stage
+    admitting under its driver's reservation. Slot grants name no cores and count 0.
     """
     import time
 
     now_fn = now_fn or time.time
     starts, _ = _ledger_starts(path)
-    total = 0
+    live: dict = {}
     for key, line in starts.items():
         if key == exclude_key:
             continue
         peak = line.get("declared_peak_mb")
         if isinstance(peak, bool) or not isinstance(peak, (int, float)) or peak <= 0:
             continue
-        if any(_safe_holds(line, pid, alive_fn, create_time_fn, image_fn, now_fn) for pid in line.get("pids") or []):
-            total += _line_cores(line)
-    return total
+        held = frozenset(pid for pid in line.get("pids") or [] if _safe_holds(line, pid, alive_fn, create_time_fn, image_fn, now_fn))
+        if held and not (exclude_pid is not None and exclude_pid in held):
+            live[key] = (held, _line_cores(line))
+    runs = {run for _, run in live}
+    by_pids: dict = {}
+    for (session, run), (held, cores) in live.items():
+        base, sep, _tail = str(run).rpartition(":")
+        if session == "box-memory-snapshot" and sep and base in runs:
+            continue
+        by_pids[held] = max(by_pids.get(held, 0), cores)
+    return sum(by_pids.values())
 
 
 def top_holders(
@@ -959,7 +971,7 @@ def admit_and_register(
             commit_used=status.commit_used + reserved,
         )
         verdict = admit(int(peak_gib * GIB), adjusted, cushion_pct=cushion_pct, commit_limit=commit_limit)
-        verdict = _with_cpu_axis(verdict, cores, reserved_cores(admission_path, **liveness), cpu_budget)
+        verdict = _with_cpu_axis(verdict, cores, reserved_cores(admission_path, exclude_pid=pid, **liveness), cpu_budget)
         if verdict.admit:
             register_command(admission_path, key, pid, peak_gib, cores=cores,
                              **{k: v for k, v in liveness.items() if k == "create_time_fn"})
