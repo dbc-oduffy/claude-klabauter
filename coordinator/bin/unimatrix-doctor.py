@@ -21,7 +21,7 @@ machine-local unimatrix.python pin is set; every authorized_keys line
 that forces unimatrix-relay.py must carry a key that belongs to a verified member and an absolute interpreter
 equal to autolink's pinned one; on macOS both autolink launchd labels at once, and on POSIX each orphaned
 or replaced-code relay session, are problems too. The Windows
-administrators_authorized_keys file is reported, never read. Network probes are injectable (run=, resolve=,
+administrators_authorized_keys file is the one read when sshd serves this account from it (Match Group administrators). Network probes are injectable (run=, resolve=,
 connect=); remote round trips are outside the 500ms bar, the local verify path is not.
 """
 import base64
@@ -127,6 +127,34 @@ def key_owner(ctx, path, line_no, body):
         return None
     tail = line.partition(body)[2].split()
     return tail[0] if tail else None
+
+
+def member_key_findings(ctx, members, mem, names, probs, notes):
+    """Each member's relay key, present or missing in `ctx["authorized_keys"]`, the file sshd reads for this account.
+
+    A missing key of another member is a problem in the administrators file (sshd refuses it silently)
+    and a note elsewhere; an unreadable administrators file is a problem."""
+    path, via_admin = ctx["authorized_keys"], ctx["via_admin"]
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError as ex:
+        if via_admin:
+            probs.append(f"{path}: the file sshd reads for administrators is unreadable ({type(ex).__name__}); remedy: run "
+                         f"elevated: {ctx['relay'].admin_keys_remediation()}")
+        return
+    held = set()
+    for line in text.splitlines():
+        if not line.lstrip().startswith("#") and RELAY_SCRIPT in line:
+            held.update(KEY_RE.findall(line))
+    lowered = {n.lower() for n in names or ()}
+    for m in members:
+        bodies = mem.member_key_bodies(m)
+        have = all(b in held for b in bodies)
+        notes.append(f"{m['box']}: relay key {'present' if have else 'missing'} in {path}")
+        if not have and via_admin and m["box"].lower() not in lowered:
+            probs.append(f"{m['box']}: relay key is missing from {path}, the file sshd reads for administrators "
+                         f"(Match Group administrators), so it is refused with Permission denied (publickey); remedy: run "
+                         f"elevated: {ctx['relay'].admin_keys_remediation()}")
 
 
 def asymmetric(frm, to):
@@ -647,15 +675,13 @@ def diagnose(ctx):
         signed = key_bodies(verified, mem)
         ctx["self_label"] = self_label(verified, names)
         probs.extend(inbound_asymmetric_problems(ctx, verified, ctx["self_label"], ctx["platform"] != "win32"))
+        member_key_findings(ctx, verified, mem, names, probs, notes)
     ak = ctx["authorized_keys"]
     for n, body in unsigned_authorized_lines(ak, signed):
         owner = key_owner(ctx, ak, n, body)
         probs.append(f"{ak} line {n}: forced unimatrix-relay.py key {_short(body) if body else '(unparsable)'} "
                      f"is in no signed membership record{f' (owner: {owner})' if owner else ''}; remedy: "
                      f"run unimatrix-pair.py approve for the owning box, or unimatrix-pair.py revoke <box> to drop the key")
-    admin = ctx["admin_file"]
-    if admin is not None and admin.exists():
-        notes.append(f"{admin} exists and is not inspected here")
     if ctx["platform"] == "darwin":
         probs.extend(autolink_label_problems(ctx["launchctl_list"]()))
     if ctx["platform"] != "win32":
@@ -793,7 +819,8 @@ def confirm(name, ctx, out, sessions_dir=None, deliveries=None, channel=None):
 def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=socket.create_connection,
          authorized_keys=None, self_names=None, platform=None, out=None, roster=None,
          autolink=None, far_sshd_log=None, launchctl_list=None, relay_ps=None, environ=None, read_key=None,
-         known_hosts=None, sessions_dir=None, deliveries=None, channel=None):
+         known_hosts=None, sessions_dir=None, deliveries=None, channel=None, sshd_config=None, programdata=None,
+         is_admin=None):
     out = out or sys.stdout
     al = autolink or _load("unimatrix_autolink", "unimatrix-autolink.py")
     roster = roster or al._roster()
@@ -805,11 +832,13 @@ def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=sock
                        sessions_dir=sessions_dir, deliveries=deliveries, channel=channel)
     mem = al._membership()
     plat = platform or sys.platform
-    admin = Path(os.environ.get("ProgramData") or Path(os.environ.get("SystemDrive", "C:") + os.sep) / "ProgramData") / "ssh" / "administrators_authorized_keys" \
-        if plat == "win32" else None
+    relay = _load("unimatrix_relay_doctor", "unimatrix-relay.py")
+    user_file = Path(authorized_keys) if authorized_keys else Path.home() / ".ssh" / "authorized_keys"
+    effective, via_admin = relay.effective_authorized_keys(
+        user_file, is_admin or (relay.windows_admin_member if plat == "win32" else (lambda: False)), sshd_config, programdata)
     ctx = {"autolink": al, "roster": roster, "membership": mem, "run": run, "resolve": resolve, "connect": connect,
-           "authorized_keys": Path(authorized_keys) if authorized_keys else Path.home() / ".ssh" / "authorized_keys",
-           "self_names": self_names, "admin_file": admin, "far_sshd_log": far_sshd_log, "platform": plat,
+           "authorized_keys": effective, "via_admin": via_admin, "relay": relay,
+           "self_names": self_names, "far_sshd_log": far_sshd_log, "platform": plat,
            "launchctl_list": launchctl_list or run_launchctl_list, "relay_ps": relay_ps,
            "environ": os.environ if environ is None else environ, "read_key": read_key, "known_hosts": known_hosts}
     probs, notes = diagnose(ctx)

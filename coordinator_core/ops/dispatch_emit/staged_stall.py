@@ -6,6 +6,11 @@ session hook, so a staged run with no agent in flight is invisible to it. The wa
 `staged`, unhalted, idle past `STAGED_STALL_BOUND_SECS` and without a fresh agent it writes the `halted`
 marker (the idempotency key: a halted run is skipped next tick) and sends one notification to the run's
 session. Stat reads and bounded journal tails only; no git, no spawn.
+
+A headless fire's liveness is the mtime of its own `journal.jsonl` and `agents/` dirs (`fire_progress_epoch`):
+neither the run dir nor a session workflow dir moves while a long wave leg runs, so a fire that is alive and
+progressing is never halted, and a `staged_stall` halt written before progress resumed is cleared
+(`clear_recovered`) rather than left to invite a resume or re-fire of a run that is still running.
 """
 
 from __future__ import annotations
@@ -62,6 +67,76 @@ def _newest_mtime(rdir: Path) -> Optional[float]:
     except OSError:
         return None
     return newest
+
+
+MAX_FIRE_RECORDS = 64
+MAX_FIRE_AGENT_DIRS = 64
+
+
+def _mtime(path: Path) -> Optional[float]:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def fire_records_for_run(repo_root: Path, run_id: str) -> list:
+    """`(record_path, record)` for each of the newest `MAX_FIRE_RECORDS` fire records naming `run_id`,
+    newest first. One listing plus small record reads; `[]` on any failure."""
+    import json
+
+    from coordinator_core.session_hub_path import hub_for_common
+
+    found: list = []
+    try:
+        registry = hub_for_common(Path(repo_root) / ".git") / "workflow-fires"
+        records = []
+        with os.scandir(registry) as it:
+            for entry in it:
+                if entry.name.endswith(".json") and entry.is_file():
+                    records.append((entry.stat().st_mtime, entry.path))
+        records.sort(reverse=True)
+        for _, rec_path in records[:MAX_FIRE_RECORDS]:
+            try:
+                record = json.loads(Path(rec_path).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(record, dict) and record.get("run_id") == run_id:
+                found.append((Path(rec_path), record))
+    except OSError:
+        return []
+    return found
+
+
+def fire_progress_epoch(repo_root: Path, run_id: str) -> Optional[float]:
+    """Newest mtime of the headless fire that executes `run_id`: its `journal.jsonl`, its `agents/` dir and
+    each `agents/N` dir. None when no fire record names the run. One listing plus at most
+    `MAX_FIRE_RECORDS` small record reads and `MAX_FIRE_AGENT_DIRS` stats; never raises."""
+    try:
+        from coordinator_core.session_hub_path import hub_for_common
+
+        registry = hub_for_common(Path(repo_root) / ".git") / "workflow-fires"
+        for _, record in fire_records_for_run(repo_root, run_id):
+            home = Path(str(record.get("artifact_dir") or registry / "headless" / str(record.get("fire_id"))))
+            agents = home / "agents"
+            stamps = [_mtime(Path(str(record.get("journal_path") or home / "journal.jsonl"))), _mtime(agents)]
+            try:
+                with os.scandir(agents) as it:
+                    for n, entry in enumerate(it):
+                        if n >= MAX_FIRE_AGENT_DIRS:
+                            break
+                        try:
+                            stamps.append(entry.stat().st_mtime)
+                        except OSError:
+                            continue
+            except OSError:
+                pass
+            live = [m for m in stamps if m is not None]
+            if live:
+                return max(live)
+        return None
+    except Exception:  # noqa: BLE001 -- a missing signal means the run-dir verdict stands
+        return None
 
 
 def agent_in_flight(session_id: Optional[str], cutoff: float) -> bool:
@@ -121,6 +196,9 @@ def scan(
         if newest is None or newest >= cutoff or now - newest > STAGED_STALL_HORIZON_SECS:
             continue
         session_id = stage.get("session_id") if isinstance(stage.get("session_id"), str) else None
+        fire_seen = fire_progress_epoch(repo_root, run_id)
+        if fire_seen is not None and fire_seen >= cutoff:
+            continue
         if (in_flight or agent_in_flight)(session_id, cutoff):
             continue
         found.append(StalledStaged(run_id, now - newest, session_id))
@@ -154,7 +232,7 @@ def halt_stalled(
     for stalled in scan(repo_root, now, in_flight=in_flight):
         reason = (
             f"staged run idle {int(stalled.idle_seconds)}s (bound {STAGED_STALL_BOUND_SECS}s): "
-            "no run-dir write and no agent progress since; resume or re-fire"
+            "no run-dir write, fire journal or agent progress since; confirm the fire is not live before resuming or re-firing"
         )
         try:
             halted_run.write_halt_marker(
@@ -172,12 +250,53 @@ def halt_stalled(
     return halted
 
 
+def clear_recovered(
+    repo_root: Path,
+    now: float,
+    *,
+    notify: Optional[Callable[[str, str], str]] = None,
+) -> list[str]:
+    """Clear every `staged_stall` halt of `repo_root` whose fire has progressed since the marker was
+    written; the run ids cleared. The marker becomes `resumed` (live again, neither resumable nor terminal)
+    and the stage returns to `staged`, so no refire or resume duplicates a run that is still running. One
+    notice to the run's session withdraws the stall notice."""
+    index = live_run_index.read(repo_root, INDEX_DEADLINE_MS)
+    if index is MISSING or index is STALLED:
+        return []
+    cleared: list[str] = []
+    for run_id in list(index)[:MAX_RUNS_PER_TICK]:
+        try:
+            rdir = record_dir(repo_root, run_id)
+        except ValueError:
+            continue
+        marker_at = _mtime(rdir / halted_run.HALTED_FILE)
+        if marker_at is None:
+            continue
+        seen = fire_progress_epoch(repo_root, run_id)
+        if seen is None or seen <= marker_at:
+            continue
+        evidence = {"fire_progress_at": seen, "halted_at": marker_at, "cleared_at": now}
+        if not halted_run.mark_stall_cleared(rdir, evidence):
+            continue
+        cleared.append(run_id)
+        session_id = (read_run_stage(repo_root, run_id) or {}).get("session_id")
+        if isinstance(session_id, str) and session_id:
+            (notify or _notify)(
+                session_id,
+                f"run {run_id} staged_stall cleared: its fire is progressing. Do not resume or re-fire it.",
+            )
+    return cleared
+
+
 def on_idle_tick(repos: Iterable[object], now: Optional[float] = None) -> bool:
-    """Run `halt_stalled` over each served repo; True when any run was halted. Never raises."""
+    """Run `clear_recovered` then `halt_stalled` over each served repo; True when any run was halted or
+    cleared. Never raises."""
     moment = time.time() if now is None else now
     any_halted = False
     for repo in repos:
         try:
+            if clear_recovered(Path(str(repo)), moment):
+                any_halted = True
             if halt_stalled(Path(str(repo)), moment):
                 any_halted = True
         except Exception:  # noqa: BLE001 -- no staged-stall failure may escape the idle tick

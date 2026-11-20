@@ -268,7 +268,7 @@ def test_a_recover_reply_that_names_no_twin_leaves_the_replayed_handle() -> None
     assert got["pending"] == {"handle": _H_OLD} and got["calls"] == 1
 
 
-def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_is_refused() -> None:
+def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_falls_back() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     path = "/r/scratch/warp/warp-plan-20261031T120809-5a6216.workflow.mjs"
@@ -277,11 +277,21 @@ def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp
     assert got["why"] is None and got["calls"] == ["/r/" + own]
     other = staged_twin_rel("warp-other-20261030T010101-aaaaaa", "2d" * 32)
     got = _run_chain_loop({"handle": {"sha256": "2d" * 32}, "twin_path": other}, path)
-    assert "twin_path is not a staged twin of this run" in got["why"] and got["calls"] == []
+    fallback = "/r/" + staged_twin_rel("warp-plan-20261031T120809-5a6216", "2d" * 32)
+    assert got["why"] is None and got["calls"] == [fallback]
 
 
-def test_a_named_twin_of_another_run_is_refused_and_nothing_starts() -> None:
+def test_a_truncated_sha_named_twin_falls_back_to_the_handle_sha_twin() -> None:
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    sha = "8dff616215ddb27aa76848e0e3323440d424bac62d716c0156a55327f6f95346"
+    bad = "scratch/warp/ask-r1.staged-" + sha[:56] + ".workflow.mjs"
+    got = _run_chain_loop({"handle": {"sha256": sha}, "twin_path": bad})
+    assert got["why"] is None and len(got["calls"]) == 1 and got["calls"][0].endswith("/" + staged_twin_rel("ask-r1", sha))
+
+
+def test_a_named_twin_of_another_run_falls_back_to_the_handle_sha_twin() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     got = _run_chain_loop({"handle": {"sha256": "2d" * 32}, "twin_path": staged_twin_rel("ask-other", "2d" * 32)})
-    assert "twin_path is not a staged twin of this run" in got["why"] and got["calls"] == []
+    assert got["why"] is None and len(got["calls"]) == 1

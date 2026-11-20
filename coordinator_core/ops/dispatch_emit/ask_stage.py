@@ -2263,7 +2263,7 @@ def stage(
     if dropped_rows:
         _record_staging_drops(record, run_id, dropped_rows)
     with leg("manifest"):
-        payload = manifest_payload(root, manifest)
+        payload = manifest_payload(root, manifest, run_id)
         reply_sidecar.write_reply(root, record / "manifest.json", payload)
     from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot
 
@@ -2877,12 +2877,18 @@ def _checkout_convert(root: Path, rel: str, data: bytes) -> Optional[bytes]:
     return None
 
 
-def manifest_payload(root: Path, manifest: StageManifest) -> dict:
+def manifest_payload(root: Path, manifest: StageManifest, run_id: Optional[str] = None) -> dict:
     """`manifest.to_json()` plus `head_sha`: the execute-start HEAD (stage commits nothing), None when unresolvable.
 
     Adds `outside_credited` (`[{id, sha}]`) when a dropped row was credited as landed outside the executor,
     so the stage reply names each credited row and sha beside the one notes line."""
     payload = {**manifest.to_json(), "head_sha": read_head_sha(root)}
+    if run_id:
+        from coordinator_core.ops.dispatch_emit import ask_fanout_contract
+
+        pinned = ask_fanout_contract.pinned_run_base(root, run_id, payload)
+        if pinned and pinned != payload["head_sha"]:
+            payload["run_base_sha"] = pinned
     credited = [
         {"id": d["id"], "sha": m.group(1)}
         for d in manifest.dropped_rows

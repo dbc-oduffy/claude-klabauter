@@ -429,11 +429,20 @@ def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("bad", ["scratch/warp/ask-other.staged-" + "2d" * 32 + ".workflow.mjs", "scratch/warp/../x", 7])
-def test_a_named_twin_of_another_run_or_shape_is_refused_by_name(tmp_path: Path, bad) -> None:
+def test_a_malformed_or_foreign_named_twin_falls_back_to_the_handle_sha_twin(tmp_path: Path, bad) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     result, calls, _ = _run_child_stage(script, "2d" * 32, twin_path=bad)
-    assert result["status"] == "failed" and "twin_path is not a staged twin of this run" in result["error"]
-    assert len(calls) == 1
+    assert result["status"] == "ok"
+    assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('ask-r1', '2d' * 32)}"}
+
+
+@pytest.mark.spawns_process
+def test_a_truncated_sha_named_twin_falls_back_to_the_handle_sha_twin(tmp_path: Path) -> None:
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    sha = "8dff616215ddb27aa76848e0e3323440d424bac62d716c0156a55327f6f95346"
+    result, calls, _ = _run_child_stage(script, sha, twin_path="scratch/warp/ask-r1.staged-" + sha[:56] + ".workflow.mjs")
+    assert result["status"] == "ok"
+    assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('ask-r1', sha)}"}
 
 
 @pytest.mark.spawns_process
@@ -446,12 +455,12 @@ def test_a_refire_resumes_the_twin_the_halted_run_staged_under_an_earlier_stamp(
 
 
 @pytest.mark.spawns_process
-def test_a_twin_of_another_warp_run_is_refused_on_a_refire(tmp_path: Path) -> None:
+def test_a_twin_of_another_warp_run_falls_back_on_a_refire(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     other = staged_twin_rel("warp-other-20261030T010101-aaaaaa", "2d" * 32)
     result, calls, _ = _run_child_stage(script, "ab" * 32, emit_stem="warp-plan-20261031T120809-5a6216", twin_path=other)
-    assert result["status"] == "failed" and "twin_path is not a staged twin of this run" in result["error"]
-    assert len(calls) == 1
+    assert result["status"] == "ok"
+    assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('warp-plan-20261031T120809-5a6216', 'ab' * 32)}"}
 
 
 @pytest.mark.spawns_process

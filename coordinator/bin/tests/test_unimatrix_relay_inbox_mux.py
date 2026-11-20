@@ -204,7 +204,7 @@ def test_mux_entries_are_visible_to_entries_with_their_own_key(host, monkeypatch
 
 def test_a_failure_after_bind_releases_the_names_socket_and_entry(host, monkeypatch: pytest.MonkeyPatch) -> None:
     sess, socks = host
-    monkeypatch.setattr(relay.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("ps gone")))
+    monkeypatch.setattr(relay, "pid_domain", lambda: (_ for _ in ()).throw(OSError("domain unreadable")))
     with pytest.raises(OSError):
         relay.register_name("face-0", {}, "K", mux=True)
     assert list(Path(socks).glob("*.sock")) == [] and list(sess.glob("*.json")) == []

@@ -76,3 +76,10 @@ def test_deny_names_delete_only_route():
 def test_interface():
     assert guard.CLASS == "hard-deny"
     assert guard.OVERRIDE_ENV == "COORDINATOR_OVERRIDE_PUSH_DELETE"
+
+
+def test_explicit_delete_names_irreversible_not_empty_source():
+    text = str(envelope_of(guard.check(_payload("git push --delete origin refs/arms/x"))))
+    assert "deletes a remote ref, which is irreversible" in text
+    assert "G-EM" in text
+    assert "explicit 40-char sha" not in text

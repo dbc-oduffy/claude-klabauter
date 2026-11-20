@@ -64,17 +64,30 @@ def test_a_reply_that_names_no_twin_still_resumes_from_the_handle_sha() -> None:
     assert out["ok"] is True and calls[1] == "/r/" + staged_twin_rel("ask-r1", sha)
 
 
-def test_a_named_twin_of_another_run_or_shape_is_refused_by_name() -> None:
+def test_a_malformed_or_foreign_named_twin_falls_back_to_the_handle_sha_twin() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     sha = "2d" * 32
     for bad in (staged_twin_rel("ask-other", sha), "scratch/warp/../x.staged-" + sha + ".workflow.mjs", 7):
         out, calls = _run_stage_loop({"handle": {"sha256": sha}, "twin_path": bad})
-        assert out["ok"] is False and "twin_path is not a staged twin of this run" in out["error"]
-        assert len(calls) == 1
+        assert out["ok"] is True and calls[1] == "/r/" + staged_twin_rel("ask-r1", sha)
 
 
-def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_is_refused() -> None:
+def test_a_truncated_sha_named_twin_falls_back_to_the_handle_sha_twin() -> None:
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    sha = "8dff616215ddb27aa76848e0e3323440d424bac62d716c0156a55327f6f95346"
+    bad = "scratch/warp/ask-r1.staged-" + sha[:56] + ".workflow.mjs"
+    out, calls = _run_stage_loop({"handle": {"sha256": sha}, "twin_path": bad})
+    assert out["ok"] is True and calls[1] == "/r/" + staged_twin_rel("ask-r1", sha)
+
+
+def test_a_malformed_named_twin_with_no_valid_handle_sha_fails() -> None:
+    out, calls = _run_stage_loop({"handle": {"sha256": "ab"}, "twin_path": "scratch/warp/x"})
+    assert out["ok"] is False and "not 64 lowercase hex" in out["error"] and len(calls) == 1
+
+
+def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_falls_back() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     sha = "2d" * 32
@@ -84,7 +97,7 @@ def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp
     assert out["ok"] is True and calls[1] == "/r/" + own
     other = staged_twin_rel("warp-other-20261030T010101-aaaaaa", sha)
     out, calls = _run_stage_loop({"handle": {"sha256": sha}, "twin_path": other}, first=first)
-    assert out["ok"] is False and "twin_path is not a staged twin of this run" in out["error"] and len(calls) == 1
+    assert out["ok"] is True and calls[1] == "/r/" + staged_twin_rel("warp-plan-20261031T120809-5a6216", sha)
 
 
 def _verify(reply: dict, receipts: dict) -> dict:

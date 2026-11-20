@@ -28,6 +28,8 @@ a function that moved calls its siblings through its new module, so patch it the
 
 from __future__ import annotations
 
+import json
+
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Optional
@@ -190,7 +192,21 @@ def _commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) ->
     from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import _error
 
-    halted = halted_naming_existing_plan(worktree_root, params[HALTED_RECORD_PARAM])
+    halted_raw = params[HALTED_RECORD_PARAM]
+    if isinstance(halted_raw, str):
+        try:
+            halted_raw = json.loads(halted_raw)
+        except ValueError as exc:
+            return _error(
+                f"params.{HALTED_RECORD_PARAM} is malformed JSON: {exc}. Instead: pass the halted.json object as written.",
+                refused="halted-by-malformed-json",
+            )
+    if not isinstance(halted_raw, dict):
+        return _error(
+            f"params.{HALTED_RECORD_PARAM} must be the halted.json object, got {type(halted_raw).__name__}",
+            refused="halted-by-malformed-json",
+        )
+    halted = halted_naming_existing_plan(worktree_root, halted_raw)
     run_id = params.get("run_id")
     if not isinstance(run_id, str) or not safe_id(run_id):
         return _error(f"params.run_id {run_id!r} is not a single safe path segment", refused="run-id-unsafe")

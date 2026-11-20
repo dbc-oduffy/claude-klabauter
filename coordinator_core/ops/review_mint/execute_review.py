@@ -281,6 +281,30 @@ def _degrading(call: str, on_error: str = "") -> str:
     return f"() => {wrapped}" if call.startswith("() => ") else wrapped
 
 
+def _direct_or_relayed_op(op: str, plan_path: str, run_base_sha: str, relay_call: str) -> str:
+    """``() => ...`` running a deterministic engine op for the review wave.
+
+    A direct run (`engineOp.directRun`) calls the op in-process: no LLM reads its reply. Any other
+    runner relays it through an agent, whose null or off-schema reply gets one re-relay, and every
+    unusable reply is logged (it is otherwise indistinguishable from "returned no review")."""
+    params = (
+        f"{{ plan_path: {_js_string_literal(plan_path)}, "
+        f"run_base_sha: {prompt_literal(run_base_sha)} }}"
+    )
+    relay = relay_call[len("() => "):] if relay_call.startswith("() => ") else relay_call
+    label = _js_string_literal(f"{op} relay reply unusable: ")
+    return (
+        "() => (typeof engineOp === 'function' && engineOp.directRun "
+        f"? engineOp({_js_string_literal(op)}, {params}) "
+        ": (async () => { const _relay = () => " + relay + "; let _r = null; "
+        "try { _r = await _relay(); } catch (e) { _r = { error: String(e && e.message || e) }; } "
+        "if (!_r || typeof _r.verdict !== 'string') { "
+        f"log({label} + JSON.stringify(_r) + '; re-relaying once'); _r = await _relay(); "
+        "if (!_r || typeof _r.verdict !== 'string') { "
+        f"log({label} + JSON.stringify(_r)); }} }} return _r; }})())"
+    )
+
+
 #: Emitted once per wave block that fans a ratio-bearing slice agent: splits `slices` into
 #: `min(slices, ceil(rows / maxRows))` (at least one) contiguous groups, sizes differing by at most one.
 _GROUP_SLICES_JS = (
@@ -2173,7 +2197,10 @@ def compose_execute_review(
             else _not_run_expr(f"{_js_string_literal(_WAVE_REJECTED)} + String(e && e.message || e)") + ";"
         )
         if agent.op is not None:
-            op_params = json.dumps({"plan_path": plan_path, "run_base_sha": run_base_sha}).replace("'", "'\\''")
+            op_params = json.dumps({"plan_path": plan_path, "run_base_sha": run_base_sha})
+            # json.dumps escapes the compose-time marker delimiter to a literal `\u0001`, which
+            # `prompt_literal` cannot splice: the relay would send the marker text as the sha.
+            op_params = op_params.replace(json.dumps(run_base_sha)[1:-1], run_base_sha).replace("'", "'\\''")
             op_prompt = (
                 "Run this one engine command exactly and return its bare JSON reply. Run nothing else.\n"
                 f"coordinator-invoke {agent.op} '{op_params}' --bare"
@@ -2188,7 +2215,7 @@ def compose_execute_review(
                 agent_opts={relay_type: {"model": _OP_RELAY_MODEL, "effort": "low"}},
                 schema_literal=_schema_literal(agent.schema, stage_schemas),
             )
-            op_line = _degrading(op_call, degrade_on_error)
+            op_line = _degrading(_direct_or_relayed_op(agent.op, plan_path, run_base_sha, op_call), degrade_on_error)
             if not prep_in_wave:
                 op_line = (
                     f"() => _verifyOnly ? ({_not_run_expr(_js_string_literal(_WAVE_SKIPPED + 'verify-only'))}, null)"

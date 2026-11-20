@@ -164,7 +164,15 @@ export async function main(argv = process.argv.slice(2)) {
       const request = pending.get(reply.id);
       if (!request) throw new Error(`Unknown agent response id ${JSON.stringify(reply.id)}`);
       pending.delete(reply.id);
-      if (Object.hasOwn(reply, 'error')) request.reject(new Error(String(reply.error)));
+      if (Object.hasOwn(reply, 'error')) {
+        const failure = new Error(String(reply.error));
+        if (reply.denial && typeof reply.denial === 'object') {
+          failure.name = 'AgentPolicyDenied';
+          failure.denial = reply.denial;
+          failure.message = failure.message.replace(/^AgentPolicyDenied: /, '');
+        }
+        request.reject(failure);
+      }
       else if (Object.hasOwn(reply, 'result')) request.resolve(reply.result);
       else request.reject(new Error('Agent response requires result or error'));
     } catch (error) { protocolError = error; rejectAll(error); }
@@ -191,7 +199,8 @@ export async function main(argv = process.argv.slice(2)) {
     write({ type: 'result', result: result === undefined ? null : result });
     return 0;
   } catch (error) {
-    write({ type: 'error', error: `${error.name}: ${error.message}`, stack: error.stack });
+    write({ type: 'error', error: `${error.name}: ${error.message}`, stack: error.stack,
+      ...(error.denial ? { kind: 'policy_denial', denial: error.denial } : {}) });
     return 1;
   } finally { lines.close(); }
 }

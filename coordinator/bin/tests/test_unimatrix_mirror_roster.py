@@ -113,7 +113,8 @@ def test_proc_start_of_a_live_pid_spawns_nothing(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(roster.subprocess, "run", no_spawn)
     monkeypatch.setattr(roster.subprocess, "Popen", no_spawn)
     stamp = roster.proc_start(os.getpid())
-    assert re.fullmatch(r"[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}", stamp)  # abs-path-ok: timestamp regex, not a path
+    shape = r"\d+" if sys.platform == "linux" else r"[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}"  # abs-path-ok: stamp regex, not a path
+    assert re.fullmatch(shape, stamp)
 
 
 def test_roster_has_no_private_filetime_reader() -> None:
@@ -133,7 +134,7 @@ def test_proc_start_windows_is_the_raw_filetime_string() -> None:
 def test_pid_domain_per_platform() -> None:
     roster = load("roster")
     assert roster.pid_domain("darwin") == "darwin"
-    assert roster.pid_domain("linux") == "linux"
+    assert re.fullmatch(r"linux(:[^:]+:.+)?", roster.pid_domain("linux"))
     assert re.fullmatch(r"win32:.+", roster.pid_domain("win32"))
 
 

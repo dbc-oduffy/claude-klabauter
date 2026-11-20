@@ -79,15 +79,25 @@ def _deny_record(offender: str) -> Any:
         Override,
     )
 
-    summary = f"BLOCKED: `git push` with {offender} can delete a remote branch. {ANCHOR}."
+    # Trap: an explicit `--delete` is a deliberate remote ref deletion, not an accidental empty
+    # source; naming it "empty source" sends the reader hunting for a variable that isn't there.
+    if offender == "--delete":
+        summary = f"BLOCKED: `git push --delete` deletes a remote ref, which is irreversible. {ANCHOR}."
+        alternative = (
+            "Alternative: leave the remote ref and ask the G-EM; "
+            "a merged remote branch goes through its consolidate-assemble delete-only directive."
+        )
+    else:
+        summary = f"BLOCKED: `git push` with {offender} can delete a remote branch. {ANCHOR}."
+        alternative = (
+            "Alternative: push an explicit 40-char sha or branch name; "
+            "to delete a merged remote branch, run its consolidate-assemble delete-only directive."
+        )
     return AlternativeRecord(
         verdict_kind="deny",
         guard_name="block-empty-source-push",
         summary=summary,
-        em_text=(
-            f"{summary} Alternative: push an explicit 40-char sha or branch name; "
-            "to delete a merged remote branch, run its consolidate-assemble delete-only directive."
-        ),
+        em_text=f"{summary} {alternative}",
         members=(
             EscalationRoute(
                 report_what="the branch the push was meant to update",

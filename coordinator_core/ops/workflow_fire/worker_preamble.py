@@ -15,6 +15,12 @@ PREAMBLE = (
     "below, and answer with its result."
 )
 
+SIZING_USAGE = (
+    "SIZING-ASSEMBLE USAGE (final; never run it with --help or probe it): required flags --tshirt --intent "
+    "--name --premise-provenance --premise-evidence --exit-criterion --write <path> --json; "
+    "fill the command above exactly as written and run it once."
+)
+
 WORKER_BACKENDS = ("codex", "agy", "grok")
 
 
@@ -28,5 +34,5 @@ def with_worker_preamble(backend: str, prompt: str) -> str:
         name = "sizing-assemble.exe" if os.name == "nt" else "sizing-assemble"
         path = (settings_home() / "bin" / name).resolve().as_posix()
         command = "& '" + path.replace("'", "''") + "'" if os.name == "nt" else shlex.quote(path)
-        prompt = prompt.replace(SIZING_ASSEMBLE_CMD, command)
+        prompt = prompt.replace(SIZING_ASSEMBLE_CMD, command) + "\n\n" + SIZING_USAGE
     return PREAMBLE + "\n\n" + prompt

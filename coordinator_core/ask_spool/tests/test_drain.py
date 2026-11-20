@@ -798,3 +798,66 @@ def test_replay_leaves_payload_alone_on_agreement_an_own_repo_or_no_anchor(tmp_p
     assert drain._naming_submitting_repo(legacy) is legacy
     text = drain._naming_submitting_repo({"tool_input": {"args": "bare ask"}, "session_id": "s"})
     assert text["tool_input"]["args"] == {"ask": "bare ask", "repo": str(tmp_path / "a")}
+
+
+def _script(root, run_id):
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+    path = root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("// script", encoding="utf-8")
+
+
+class _ScriptingEngine(Engine):
+    def __call__(self, payload):
+        envelope = super().__call__(payload)
+        _script(self.root, f"ask-20261104T14{self.calls:04d}-{self.calls:06x}")
+        return envelope
+
+
+def test_drain_fires_a_run_it_minted_once_and_never_again(tmp_path):
+    sid = _spool(tmp_path)
+    fired = []
+
+    def fire(root, run_id):
+        fired.append(run_id)
+        return {"fire_id": "f1", "state": "running"}
+
+    drain.run(str(tmp_path), evaluate=_ScriptingEngine(tmp_path), fire=fire)
+    drain.run(str(tmp_path), evaluate=_ScriptingEngine(tmp_path), fire=fire)
+    assert len(fired) == 1
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert header["fired"] == "f1"
+
+
+def test_a_fire_that_exits_before_execution_is_typed_and_retried_by_the_next_drain(tmp_path):
+    sid = _spool(tmp_path)
+    answers = [{"fire_id": "f1", "state": "exited", "execution_started": False}, {"fire_id": "f2", "state": "running"}]
+
+    def fire(root, run_id):
+        return answers.pop(0)
+
+    engine = _ScriptingEngine(tmp_path)
+    drain.run(str(tmp_path), evaluate=engine, fire=fire)
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert "exited before execution" in header["fire_failed"] and header["fire_attempts"] == 1 and "fired" not in header
+    drain.run(str(tmp_path), evaluate=engine, fire=fire)
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert header["fired"] == "f2" and "fire_failed" not in header
+
+
+def test_exhausted_fire_attempts_halt_with_the_typed_cause_not_a_bare_abandon(tmp_path):
+    sid = _spool(tmp_path)
+
+    def fire(root, run_id):
+        raise RuntimeError("no child")
+
+    engine = _ScriptingEngine(tmp_path)
+    for _ in range(drain.FIRE_ATTEMPT_CAP):
+        drain.run(str(tmp_path), evaluate=engine, fire=fire)
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert header["fire_attempts"] == drain.FIRE_ATTEMPT_CAP and header["fire_failed"].startswith("fire_preflight_failed")
+    later = time.time() + drain.MINTED_DISPATCH_DEADLINE_SECONDS + 5
+    called = []
+    drain._fire_minted(str(tmp_path), lambda r, i: called.append(i), later)
+    assert not called

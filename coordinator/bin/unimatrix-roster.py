@@ -342,7 +342,7 @@ def pid_domain(platform=None):
     plat = platform or sys.platform
     if plat == "win32":
         return f"win32:{socket.gethostname().lower()}"
-    return "darwin" if plat == "darwin" else "linux"
+    return "darwin" if plat == "darwin" else _liveness().linux_pid_domain()
 
 
 def local_endpoint(far_socket, platform=None):

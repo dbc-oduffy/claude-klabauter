@@ -2,8 +2,9 @@
 
 Writes the run's `halted.json` with `halted="cancelled"` (a halted record a refire resumes) and drops
 the run from the live-run index, releasing its claim markers. `dispatch.ask_stage` refuses the next
-stage start of a run whose marker reads cancelled (`cancelled_refusal`). Record writes only: no git,
-no signal to the Workflow task.
+stage start of a run whose marker reads cancelled (`cancelled_refusal`), and the headless driver checks it
+before each agent. The run's live headless fire is stopped in-engine (`fire_stop`): identity-verified, tree
+leaf-first, driver last. No git.
 """
 
 from __future__ import annotations
@@ -49,7 +50,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Marks the live run cancelled in `state/warp/<run_id>/halted.json` (`halted: "cancelled"`, with a
     refire `next_action`), then drops it from the live-run index and releases its claims. Replies
-    `{ok, run_id, halted, sizing, already_cancelled, released}`. A run with no record dir, one whose
+    `{ok, run_id, halted, sizing, already_cancelled, stopped, released}`, plus `fire_still_running`
+    (pids) with `released=false` when a verified fire process survives the stop. A run with no record dir, one whose
     marker is landed, closed or superseded, or one bound to no sizing replies `{"error": str}`;
     cancelling an already-cancelled run is an ok that changes nothing but the index.
     """
@@ -74,11 +76,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"error": f"workflow.cancel: run {run_id} is already {status}; nothing to cancel"}
     sizing_rel = halted_run.bound_sizing_rel(root, run_id)
     if status == halted_run.STATUS_HALTED and (marker or {}).get("halted") == CANCELLED:
-        live_run_index.remove(root, run_id)
-        return {
-            "ok": True, "run_id": run_id, "halted": CANCELLED, "sizing": sizing_rel,
-            "already_cancelled": True, "released": live_run_index.run_holds_no_claim(root, run_id),
-        }
+        return _release(root, run_id, sizing_rel, already_cancelled=True)
     if sizing_rel is None:
         return {"error": f"workflow.cancel: run {run_id} is bound to no sizing, so a refire could not resume it"}
     detail = (params.get("reason") or "").strip() or _DEFAULT_DETAIL
@@ -93,8 +91,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         reason=detail,
         next_action=refire_next_action_for(CANCELLED, run_id=run_id, sizing_rel=sizing_rel, detail=detail),
     )
-    live_run_index.remove(root, run_id)
-    return {
+    return _release(root, run_id, sizing_rel, already_cancelled=False)
+
+
+def _release(root: Path, run_id: str, sizing_rel: Optional[str], *, already_cancelled: bool) -> dict:
+    """Stop the run's live fire(s), then drop the run from the index. The marker is already written, so a
+    fire that outlives the stop halts itself at its next agent (`headless.execute`). A surviving verified
+    fire PID keeps the run indexed and replies `released=false` with `fire_still_running`."""
+    from coordinator_core.ops.dispatch_emit import fire_stop
+
+    fires = fire_stop.stop_run_fires(root, run_id)
+    reply = {
         "ok": True, "run_id": run_id, "halted": CANCELLED, "sizing": sizing_rel,
-        "already_cancelled": False, "released": live_run_index.run_holds_no_claim(root, run_id),
+        "already_cancelled": already_cancelled, "stopped": fires["stopped"],
     }
+    if fires["survivors"]:
+        reply.update(released=False, fire_still_running=fires["survivors"])
+        return reply
+    live_run_index.remove(root, run_id)
+    reply["released"] = live_run_index.run_holds_no_claim(root, run_id)
+    return reply

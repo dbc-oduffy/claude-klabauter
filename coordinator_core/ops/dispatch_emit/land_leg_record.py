@@ -51,7 +51,8 @@ def _recorded_outcome(target: Path) -> Optional[str]:
 
 
 def write(
-    root: Path, run_id: object, *, outcome: str, leg: Optional[str], bound_by: Optional[str], legs: list
+    root: Path, run_id: object, *, outcome: str, leg: Optional[str], bound_by: Optional[str], legs: list,
+    withheld_reasons: Optional[dict] = None,
 ) -> Optional[str]:
     """Write `<record_dir>/land-legs.json` atomically and return its repo-relative posix path.
 
@@ -65,6 +66,7 @@ def write(
 
         target = record_dir(root, run_id) / FILE_NAME
         body = {"outcome": outcome, "leg": leg, "bound_by": bound_by, "legs": list(legs)}
+        body["withheld_reasons"] = dict(withheld_reasons or {})
 
         def put() -> Optional[str]:
             try:

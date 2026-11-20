@@ -160,7 +160,10 @@ def reader(
             return frozenset()
         from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
 
-        base = _manifest(root, landing_run_id).get("head_sha") if landing_run_id else None
+        from coordinator_core.ops.dispatch_emit import ask_fanout_contract
+
+        base = (ask_fanout_contract.pinned_run_base(root, landing_run_id, _manifest(root, landing_run_id))
+                if landing_run_id else None)
         return own_checkpoint_paths.checkpoint_landed_paths(
             root, landing_plan, base if isinstance(base, str) else None, sorted(wanted),
         )

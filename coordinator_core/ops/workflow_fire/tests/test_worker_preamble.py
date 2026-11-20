@@ -142,3 +142,13 @@ def test_doe_family_stage_prompt_preamble_matches_live():
     values = [ast.literal_eval(n.value) for n in ast.walk(tree)
               if isinstance(n, ast.Assign) and any(getattr(t, "id", None) == "PREAMBLE" for t in n.targets)]
     assert values == [PREAMBLE], f"{path} PREAMBLE differs from claude-klabauter's worker_preamble.PREAMBLE: port it, or memo claude-klabauter"
+
+
+def test_sizing_brief_states_usage_so_worker_never_probes_help():
+    from coordinator_core.ops.dispatch_emit.ask_contract import SIZING_ASSEMBLE_CMD
+    from coordinator_core.ops.workflow_fire.worker_preamble import SIZING_USAGE
+
+    for backend in WORKER_BACKENDS:
+        text = with_worker_preamble(backend, f"Run {SIZING_ASSEMBLE_CMD} --tshirt X")
+        assert text.endswith(SIZING_USAGE) and "--exit-criterion" in SIZING_USAGE and "never run it with --help" in SIZING_USAGE
+        assert SIZING_USAGE not in with_worker_preamble(backend, "no sizing here")

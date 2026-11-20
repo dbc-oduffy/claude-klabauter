@@ -311,9 +311,6 @@ async function _startLoopRun(child, firstPath, state) {
     }
     const stem = _writerRunId(handle, base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length));
     const named = _replyTwinRel(pending, stem);
-    if (named === false) {
-      return { run_id: child.run_id, status: 'failed', error: 'stage_pending twin_path is not a staged twin of this run: ' + String(pending.twin_path) };
-    }
     let twinRel = named;
     if (named === null) {
       const sha = handle && typeof handle === 'object' ? handle.sha256 : undefined;

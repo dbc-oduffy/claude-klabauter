@@ -45,6 +45,8 @@ _FAILURE_NOTICE_EVERY = 10
 MINTED_DISPATCH_DEADLINE_SECONDS = 600
 MINTED_SWEEP_LOOKBACK_SECONDS = 24 * 3600
 MINTED_WITHOUT_DISPATCH = "minted_without_dispatch"
+#: Fires the drain makes for one minted run; the fire registry dedupes by script digest, so this bounds retries, not duplicates.
+FIRE_ATTEMPT_CAP = 3
 
 Evaluate = Callable[[dict], dict]
 
@@ -495,6 +497,78 @@ def _chained_child_active(root: Path, run_id: str, now: float, bound: float) -> 
     return False
 
 
+def _fire_cause(exc: BaseException) -> str:
+    """Typed cause for a fire that raised before any child ran. Named, never a bare class string."""
+    name = type(exc).__name__
+    return {
+        "ConcurrencyCapExceededError": "fire_cap_exceeded",
+        "ChildSpawnFailedError": "fire_spawn_failed",
+        "ScriptNotFoundError": "fire_script_absent",
+        "FiredDriftError": "fire_script_drifted",
+        "PluginDirResolutionError": "fire_plugin_unresolved",
+    }.get(name, "fire_preflight_failed") + f": {name}: {str(exc)[:200]}"
+
+
+def _default_fire(root: Path, run_id: str) -> dict:
+    """Fire the minted run's workflow script through the engine's own fire registry; returns the fire record."""
+    import hashlib
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+    from coordinator_core.ops.workflow_fire import fire
+
+    script = root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
+    return fire.fire_workflow(
+        str(script), cwd=str(root), run_id=run_id, expected=hashlib.sha256(script.read_bytes()).hexdigest()
+    )
+
+
+def _fire_minted(repo_root: str, fire: Optional[Callable[[Path, str], dict]], now: float) -> None:
+    """Fire each run this drain minted that no launcher holds: at most once per run, bounded retries on a typed failure.
+
+    Candidates are `.minted` entries stamped `minted_here` with no `fired` and fewer than `FIRE_ATTEMPT_CAP` attempts, whose
+    run is still at stage `minted` and whose script exists. `fired` is the fire id (an `already_fired` handle counts: the
+    registry dedupes by digest); a failure stamps `fire_failed` (typed cause) and `fire_attempts`, which the sweep quotes in
+    the halt. A fire record that exited with `execution_started` false is a failure, not a fire. Never raises."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+    root = Path(repo_root)
+    try:
+        with os.scandir(record.spool_dir(repo_root)) as it:
+            names = [
+                e.name for e in it
+                if e.name.endswith(record.MINTED_SUFFIX) and now - e.stat().st_mtime <= MINTED_DISPATCH_DEADLINE_SECONDS
+            ]
+    except OSError:
+        return
+    do_fire = fire or _default_fire
+    for name in names:
+        try:
+            sid = name[: -len(record.MINTED_SUFFIX)]
+            path = record.entry_path(repo_root, sid, record.MINTED_SUFFIX)
+            header, payload = record.read_entry(path)
+            run_id = header.get("run_id")
+            if not (header.get("minted_here") and isinstance(run_id, str) and _SAFE_NAME.match(run_id)):
+                continue
+            if header.get("fired") or int(header.get("fire_attempts") or 0) >= FIRE_ATTEMPT_CAP:
+                continue
+            if not (root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs").is_file():
+                continue
+            if notice.run_disposition(repo_root, run_id, sid) not in (None, "minted"):
+                continue
+            attempts = int(header.get("fire_attempts") or 0) + 1
+            try:
+                handle = do_fire(root, run_id)
+                if isinstance(handle, dict) and handle.get("state") == "exited" and handle.get("execution_started") is False:
+                    raise RuntimeError(f"fire {handle.get('fire_id')} exited before execution: {handle.get('startup_log_tail') or ''}"[:300])
+                header = {**header, "fired": (handle or {}).get("fire_id") or True, "fire_attempts": attempts}
+                header.pop("fire_failed", None)
+            except Exception as exc:  # noqa: BLE001 - typed onto the entry; the next drain retries, the sweep quotes it
+                header = {**header, "fire_attempts": attempts, "fire_failed": _fire_cause(exc)}
+            _rewrite(path, header, payload)
+        except Exception:  # noqa: BLE001 - one unreadable entry never blocks the rest
+            continue
+
+
 def _halt_minted_without_dispatch(
     root: Path, run_id: str, session: object, age: float, *, cause: Optional[str] = None
 ) -> bool:
@@ -564,7 +638,12 @@ def _sweep_minted_without_dispatch(repo_root: str, now: float) -> None:
                 continue
             if _chained_child_active(root, run_id, now, MINTED_DISPATCH_DEADLINE_SECONDS):
                 continue
-            _halt_minted_without_dispatch(root, run_id, header.get("session_id"), age)
+            failed = header.get("fire_failed")
+            cause = (
+                f"the engine fired the run {int(header.get('fire_attempts') or 0)} time(s) and it never started: {failed}. "
+                "Instead: re-fire the ask, or start the run's workflow script."
+            ) if failed else None
+            _halt_minted_without_dispatch(root, run_id, header.get("session_id"), age, cause=cause)
         except Exception:  # noqa: BLE001 - one unreadable entry never blocks the rest
             continue
 
@@ -635,6 +714,7 @@ def run(
     evaluate: Optional[Evaluate] = None,
     stale_after_s: float = STALE_CLAIM_S,
     now: Optional[float] = None,
+    fire: Optional[Callable[[Path, str], dict]] = None,
 ) -> dict:
     """Drain every pending entry once, re-listing pending after each batch (at most `_MAX_PASSES` listings) and, after the
     remote failover tail, for a duplicate of a run this drain holds, so a refire spooled mid-drain or during the tail coalesces in that drain; counts `{minted, skipped, failed, notified, coalesced, withdrawn}`.
@@ -710,6 +790,8 @@ def run(
         if key and key not in by_key:
             by_key[key] = run_id
         stamped = {**header, "run_id": run_id, "minted_at": time.time()}
+        if minted_now and not coalesced:
+            stamped["minted_here"] = True  # no session holds a launcher: the engine fires it (`_fire_minted`)
         if coalesced:
             stamped["coalesced_into"] = run_id
         else:
@@ -727,6 +809,7 @@ def run(
         record.mark_minted(repo_root, sid)
         counts["coalesced" if coalesced else "minted" if minted_now else "skipped"] += 1
     sweep_now = time.time() if now is None else now
+    _fire_minted(repo_root, fire, sweep_now)
     _sweep_minted_without_dispatch(repo_root, sweep_now)
     _sweep_stalled_launcher_children(repo_root, sweep_now)
     return counts
