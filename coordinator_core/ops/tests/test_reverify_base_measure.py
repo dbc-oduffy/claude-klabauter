@@ -81,6 +81,15 @@ def test_several_absent_ids_are_all_dropped(repo, monkeypatch):
     assert _tail(text)["passed_at_base"] == [GREEN]
 
 
+def test_missing_parametrized_function_drops_both_cases_and_measures_other_ids(repo, monkeypatch):
+    root, base, _head = repo
+    missing = "tests/test_a.py::test_added_at_head"
+    ids = [f"{missing}[False]", f"{missing}[True]", RED_AT_BASE]
+    _code, text = _measure(root, ["--sha", base, "--out", "m.txt", "--", *ids], monkeypatch)
+    assert _read_base_export(root, "m.txt") == {RED_AT_BASE}
+    assert _tail(text)["runner_exit"] == 1
+
+
 def test_green_at_base_red_at_head_joins_the_set(repo, monkeypatch):
     root, base, head = repo
     _code, text = _measure(

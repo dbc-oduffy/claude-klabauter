@@ -2573,8 +2573,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "d098602101747fe6b0df6dec4931bd646fcb6817",
-    "coordinator_core/_engine_stamp": "600c50469a7510274a397d1547b613bdc43c4a16",
+    "coordinator_core/_engine_published_at": "c5b2095b52ec443513c816d140a0973c903010d2",
+    "coordinator_core/_engine_stamp": "fc6255b4458e2d4f0f005c08537c8f1cd4837fa3",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -9374,7 +9374,7 @@
     "coordinator_core/ops/resolve_mcp_server_cli_path.py": "c05ff47d57e3e36f42381bfc1d90b049b7111fc8",
     "coordinator_core/ops/resolve_swept_baton.py": "6ce9a4c06c0958a8bb22ef73d582b73c437d57bc",
     "coordinator_core/ops/retention_run.py": "630f238f4b3e64d39a700a720bcc95caef342b17",
-    "coordinator_core/ops/reverify_base_measure.py": "566b983a5251c356fdc3c9495776a1968ca7ff95",
+    "coordinator_core/ops/reverify_base_measure.py": "afba5f1d7327e05ac5c9556019d48afe65a0052d",
     "coordinator_core/ops/reverify_callers.py": "f83ed3ee2e3bf41772ead3fa875b02d34752c2e1",
     "coordinator_core/ops/reverify_scope.py": "9cbec00f8e930e6ce248d3e5ea5603661b90bafc",
     "coordinator_core/ops/review_brightline_gate.py": "f38e7129c50ea05331a7c13ff997e526dbf160be",
@@ -10293,7 +10293,7 @@
     "coordinator_core/ops/tests/test_research_sizing.py": "fd58d5f84aa8326598278b406774721667a8d67d",
     "coordinator_core/ops/tests/test_research_targets_op.py": "b315166509e42f2d67496b3433fb541d82eb4e98",
     "coordinator_core/ops/tests/test_research_trail.py": "b105be0accdc26b230b7aade2e5d475b4bab2a92",
-    "coordinator_core/ops/tests/test_reverify_base_measure.py": "b72bc68bde77145f26704e4fad2d172203e64d92",
+    "coordinator_core/ops/tests/test_reverify_base_measure.py": "68d3188e6b76e00194073ef6dfa81ebfb0f5bb11",
     "coordinator_core/ops/tests/test_reverify_base_plus_declared_e2e.py": "67abab24cf878a6bcd83ec63814ef69bedb3b8f1",
     "coordinator_core/ops/tests/test_reverify_callers.py": "0cccdca31c396c7f3b448b6dfce12bb6550bc89d",
     "coordinator_core/ops/tests/test_reverify_delivery.py": "c6cf2ef80d2d0b50a3801b205434728b84656258",
@@ -13077,5 +13077,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "f960750d227fb4f0adc2127ed1f07f9267f88a00"
+  "source_head": "9549b09ee380c8fb3bf1a331b7b0819b88747ebf"
 }
