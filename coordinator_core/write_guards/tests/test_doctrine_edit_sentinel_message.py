@@ -79,3 +79,20 @@ def test_deny_reason_follows_a_gitdir_file(tmp_path: Path) -> None:
     (wt / ".git").write_text(f"gitdir: {real.as_posix()}\n", encoding="utf-8")
     reason = sentinel.deny_reason(str(wt))
     assert f'! touch "{(real / sentinel.SENTINEL_BASENAME).as_posix()}"' in reason
+
+
+def test_marker_is_looked_up_from_the_target_repo_not_the_session_cwd(tmp_path: Path) -> None:
+    """Friction #42: a session outside any repo is admitted by the marker in the target file's repo."""
+    target_repo = tmp_path / "dot-claude"
+    (target_repo / ".git").mkdir(parents=True)
+    outside = tmp_path / "desktop"
+    outside.mkdir()
+    target = str(target_repo / "CLAUDE.md")
+    if sentinel.git_dir_for(str(outside)) is not None:
+        pytest.skip("tmp_path sits inside a git checkout")
+    assert not sentinel.sentinel_present(str(outside), (target,))
+    marker = target_repo / ".git" / sentinel.SENTINEL_BASENAME
+    assert f'! touch "{marker.as_posix()}"' in sentinel.deny_reason(str(outside), (target,))
+    marker.write_text("", encoding="utf-8")
+    assert sentinel.sentinel_present(str(outside), (target,))
+    assert not sentinel.sentinel_present(str(outside))

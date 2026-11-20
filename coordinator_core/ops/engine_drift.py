@@ -247,6 +247,20 @@ def _read_origin_candidate(engine_dir: Path) -> Optional[str]:
     return None
 
 
+def _merge_parent_is(head, candidate: str, engine_dir: Path) -> bool:
+    """True when HEAD is an unstamped merge whose same-tree stamped parent is `candidate`.
+
+    Installed main is a merge of candidate, so comparing the merge HEAD itself to
+    origin/candidate never matches. In-process object read: no spawn.
+    """
+    if head.basis != "merge-parent" or head.engine_head is None:
+        return False
+    from coordinator_core.git.git_state import read_commit
+
+    info = read_commit(engine_dir, head.engine_head)
+    return info is not None and any(_same_commit(p, candidate) for p in info.parents)
+
+
 def _mirror_only_verdict(head, floor: str, engine_dir: Path) -> dict:
     """Verdict for a mirror with no registered source tree, from the clone's own refs.
 
@@ -269,7 +283,7 @@ def _mirror_only_verdict(head, floor: str, engine_dir: Path) -> dict:
                 "is unreadable in the engine clone. Fetch origin in the engine checkout."
             ),
         }
-    if _same_commit(head.engine_head, candidate):
+    if _same_commit(head.engine_head, candidate) or _merge_parent_is(head, candidate, engine_dir):
         return {
             "state": "current",
             "running_sha": head.sha,
@@ -301,7 +315,7 @@ def probe_engine_drift(engine_dir: Optional[Path] = None) -> dict:
     """
     from coordinator_core.engine_root import engine_source_root
 
-    engine_dir = engine_dir if engine_dir is not None else Path(__file__).resolve().parent.parent
+    engine_dir = engine_dir if engine_dir is not None else Path(__file__).resolve().parents[2]
     head = resolve_engine_source_head(engine_dir)
     floor = MIN_KNOWN_GOOD_SHA
     mirror = head.basis in ("mirror-stamp", "merge-parent", "stamp-file")

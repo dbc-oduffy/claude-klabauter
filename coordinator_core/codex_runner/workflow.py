@@ -59,6 +59,66 @@ class AgentFailed(RuntimeError):
     """The worker failed, timed out, or returned data outside its schema."""
 
 
+class StageIdleTimeout(AgentFailed):
+    """The stage's stdout produced nothing for the idle bound; its process tree was killed by PID."""
+
+    cause = "stage_idle_timeout"
+
+
+def _stage_idle_timeout_s() -> float:
+    """Half the staged-stall detector's bound, so the watchdog kills and retries before that detector halts
+    the run as `staged_stall` (the de0255 run sat silent 604s against its 600s bound)."""
+    from coordinator_core.ops.dispatch_emit.staged_stall import STAGED_STALL_BOUND_SECS
+
+    return STAGED_STALL_BOUND_SECS / 2
+
+
+class _IdleWatchdog:
+    """Kills the child tree when its stdout file stops growing for `idle_s`.
+
+    A thread on an Event wait that reads the handle's size with fstat: no process spawn, no name or port
+    lookup. The kill targets the recorded child PID and its descendants through psutil.
+    """
+
+    def __init__(self, stream, pid: int, idle_s: float):
+        self.stream, self.pid, self.idle_s = stream, pid, idle_s
+        self.fired = False
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._watch, daemon=True, name="stage-idle-watchdog")
+
+    def _size(self) -> int:
+        return os.fstat(self.stream.fileno()).st_size
+
+    def _watch(self) -> None:
+        interval = max(0.05, min(5.0, self.idle_s / 4))
+        try:
+            seen, since = self._size(), time.monotonic()
+            while not self.stop.wait(interval):
+                size = self._size()
+                if size != seen:
+                    seen, since = size, time.monotonic()
+                elif time.monotonic() - since >= self.idle_s:
+                    self.fired = True
+                    self._kill_tree()
+                    return
+        except (OSError, ValueError):
+            return
+
+    def _kill_tree(self) -> None:
+        import psutil
+
+        try:
+            root = psutil.Process(self.pid)
+            victims = root.children(recursive=True) + [root]
+        except psutil.Error:
+            return
+        for victim in victims:
+            try:
+                victim.kill()
+            except psutil.Error:
+                pass
+
+
 
 
 def _codex_schema(schema: Any) -> Any:
@@ -386,9 +446,35 @@ class _NativeThreadObserver:
             raise AgentFailed(f'native identity observation failed: {self.error}') from self.error
 
 
-def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
-                  options, parent_session_id, timeout_s, on_spawn, stdout, stderr,
-                  request_id=None, fire_id=None, on_native_thread=None):
+def _run_admitted(argv, prompt, **kw):
+    """`_run_admitted_once`, retried once when the stage goes idle; a second idle raises `StageIdleTimeout`."""
+    started = time.monotonic()
+    idle_s = _stage_idle_timeout_s()
+    try:
+        return _run_admitted_once(argv, prompt, **kw)
+    except StageIdleTimeout:
+        pass
+    # The killed child's partial capture must not prefix the retry's.
+    for stream in (kw["stdout"], kw["stderr"]):
+        stream.seek(0)
+        stream.truncate()
+    kw = {**kw, "timeout_s": kw["timeout_s"] - (time.monotonic() - started)}
+    if kw["timeout_s"] <= 0:
+        raise AgentFailed(f"{kw['backend']} agent timed out after the first stage_idle_timeout consumed its budget")
+    try:
+        return _run_admitted_once(argv, prompt, **kw)
+    except StageIdleTimeout as exc:
+        (kw["artifact_dir"] / "stage-idle-timeout.json").write_text(json.dumps({
+            "cause": StageIdleTimeout.cause, "idle_seconds": idle_s, "attempts": 2, "detail": str(exc),
+        }), encoding="utf-8")
+        raise StageIdleTimeout(
+            f"{StageIdleTimeout.cause}: no stdout event for {idle_s:g}s on two consecutive attempts"
+        ) from exc
+
+
+def _run_admitted_once(argv, prompt, *, env, repo_root, artifact_dir, backend,
+                       options, parent_session_id, timeout_s, on_spawn, stdout, stderr,
+                       request_id=None, fire_id=None, on_native_thread=None):
     """Reserve checked memory for this worker until its actual child exits."""
     deadline = time.monotonic() + timeout_s
 
@@ -428,6 +514,7 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
         raise AgentFailed(f"Workflow memory admission refused: {admitted.reason}")
     proc = None
     observer = None
+    watchdog = None
     try:
         remaining()
         actual_peak_mb = admitted.peak_gib * 1024
@@ -463,7 +550,16 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
             facts = _native_child_facts(proc, repo_root, sid, fire_id, request_id, argv)
             observer = _NativeThreadObserver(artifact_dir / 'stdout.jsonl', facts, on_native_thread, proc.kill)
             observer.start()
-        proc.communicate(prompt.encode("utf-8"), timeout=remaining())
+        idle_s = _stage_idle_timeout_s()
+        watchdog = _IdleWatchdog(stdout, proc.pid, idle_s)
+        watchdog.thread.start()
+        try:
+            proc.communicate(prompt.encode("utf-8"), timeout=remaining())
+        except OSError:
+            if not watchdog.fired:
+                raise
+        if watchdog.fired:
+            raise StageIdleTimeout(f"{StageIdleTimeout.cause}: no stdout event for {idle_s:g}s; killed pid {proc.pid}")
         if observer is not None:
             observer.finish()
         return proc
@@ -473,6 +569,8 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
             _cleanup(proc.communicate)
         raise
     finally:
+        if watchdog is not None:
+            watchdog.stop.set()
         if observer is not None:
             observer.stop.set()
             if not observer.join_attempted:

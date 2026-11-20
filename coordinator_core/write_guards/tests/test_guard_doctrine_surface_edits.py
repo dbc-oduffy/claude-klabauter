@@ -23,7 +23,7 @@ pytestmark = [pytest.mark.cadence]
 
 @pytest.fixture(autouse=True)
 def _sentinel_admitted(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(guard, "sentinel_present", lambda cwd: True)
+    monkeypatch.setattr(guard, "sentinel_present", lambda cwd, targets=(): True)
 
 
 def _context(result) -> str:
@@ -370,7 +370,7 @@ def test_without_a_sentinel_the_claude_md_edit_is_denied(
 ) -> None:
     _doe, repo = two_roots
     (repo / "CLAUDE.md").write_text("x", encoding="utf-8")
-    monkeypatch.setattr(guard, "sentinel_present", lambda cwd: False)
+    monkeypatch.setattr(guard, "sentinel_present", lambda cwd, targets=(): False)
     result = guard.check(_admit_payload(repo / "CLAUDE.md", repo))
     assert result["hookSpecificOutput"].get("permissionDecision") == "deny"
 

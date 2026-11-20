@@ -504,6 +504,17 @@ def _venv_is_the_resolved_interpreter(settings_home_path: Path) -> bool:
     return False
 
 
+def _publish_config_applies() -> bool:
+    """False on a consumer box: ``install_percolate_identity`` SKIPs there, so demanding the
+    file would fail a check re-running setup can never satisfy."""
+    try:
+        from coordinator_core import machine_profile as _mp
+
+        return _mp.machine_profile() != "consumer"
+    except Exception:
+        return True
+
+
 def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -> SettingsHomeReport:
     """Stat the settings home and report what is actually there.
 
@@ -537,6 +548,8 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
         present = p.is_dir() if kind == "dir" else p.is_file()
         if rel == _VENV_REL and not required:
             required = _venv_is_the_resolved_interpreter(settings_home_path)
+        if rel == ".percolate-identity" and required:
+            required = _publish_config_applies()
         report.members.append(
             SettingsHomeMember(
                 label=label,

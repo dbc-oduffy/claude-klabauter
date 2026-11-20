@@ -608,3 +608,15 @@ def test_percolate_identity_row_names_the_rung_the_engine_reads(tmp_path: Path, 
     lines = [ln for ln in format_report_lines(check_settings_home(sh, claude_klabauter_root)) if ".percolate-identity" in ln]
 
     assert len(lines) == 1 and "rung 2" in lines[0] and "resolve_percolate_identity_path" in lines[0]
+
+
+def test_percolate_identity_is_not_required_on_a_consumer_box(
+    tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Friction #28/#29: setup SKIPs the file for a consumer, so its absence must not fail the check."""
+    sh = _populate_full_settings_home(tmp_path)
+    (sh / ".percolate-identity").unlink()
+    monkeypatch.setattr("coordinator_core.machine_profile.machine_profile", lambda *a, **k: "consumer")
+    assert ".percolate-identity" not in " ".join(str(m.label) for m in check_settings_home(sh, claude_klabauter_root).members if m.required and not m.present)
+    monkeypatch.setattr("coordinator_core.machine_profile.machine_profile", lambda *a, **k: "author")
+    assert any(".percolate-identity" in m.label for m in check_settings_home(sh, claude_klabauter_root).members if m.required and not m.present)

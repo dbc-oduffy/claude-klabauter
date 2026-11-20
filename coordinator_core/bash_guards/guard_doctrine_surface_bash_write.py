@@ -2376,6 +2376,36 @@ def _neutralize_mention_only_python_substitutions(
     return _PY_C_DIRECT_RE.sub(_swap_direct, segment)
 
 
+_FETCH_COMMANDS = frozenset({"gh", "curl", "wget"})
+_OUTPUT_FLAG_RE = re.compile(r"(?<!\S)(?:-o|-O|--output|--output-document|--output-dir)(?![\w-])")
+
+
+def _is_fetch_to_ungoverned_file_shape(
+    segment: str, cmd: str, identifiers_lower: Tuple[str, ...]
+) -> bool:
+    """``gh``/``curl``/``wget`` naming a governed file only as a URL operand, whose sole write is a
+    redirect to a literal, ungoverned path (``$VAR`` resolved from ``cmd``'s own assignments)."""
+    words = segment.split()
+    while words and _ASSIGN_RE.match(words[0]):
+        words.pop(0)
+    if not words or words[0] not in _FETCH_COMMANDS:
+        return False
+    target = _redirect_target_token(segment)
+    if not target:
+        return False
+    values = _local_assignment_values(_split_top_level_segments(cmd))
+    resolved = _VAR_DEREF_RE.sub(lambda m: values.get(m.group(1), m.group(0)), target)
+    if "$" in resolved or "`" in resolved or "~" in resolved:
+        return False
+    if _mentions_governed_identifier(resolved, identifiers_lower):
+        return False
+    head = segment.rsplit(target, 1)[0].rstrip()
+    head = re.sub(r"\d*>{1,2}\s*[\"']?$", "", head).rstrip()
+    if _OUTPUT_FLAG_RE.search(head) or "<" in head or "$(" in head or "`" in head:
+        return False
+    return not _has_write_marker_for_point3(head, identifiers_lower) and not _has_indirection_marker(head)
+
+
 def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     """The whole predicate, isolated from payload plumbing so it is directly
     unit-testable. ``identifiers_lower`` is the per-call resolved governed-
@@ -2450,6 +2480,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             or _is_claude_md_grant_read_shape(segment)
             or _is_interpreter_read_shape(segment, identifiers_lower)
             or _is_assignment_captured_substitution_read_shape(segment, identifiers_lower)
+            or _is_fetch_to_ungoverned_file_shape(segment, cmd, identifiers_lower)
         ):
             continue
         if _has_write_marker_for_point3(segment, identifiers_lower):
@@ -2669,13 +2700,27 @@ def _admitted_edit_target(
 _ADVISORY_EXTRA_IDENTIFIERS = (".claude/rules/", "global-doctrine/rules/")
 
 
-def _sentinel_admit_advisory(cwd: str) -> Dict[str, Any]:
+def _sentinel_admit_advisory(cwd: str, targets: Tuple[str, ...] = ()) -> Dict[str, Any]:
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": admit_advisory(cwd),
+            "additionalContext": admit_advisory(cwd, targets),
         }
     }
+
+
+def _expanded_governed_targets(cmd: str, identifiers: Tuple[str, ...], cwd: str) -> Tuple[str, ...]:
+    """Absolute paths of the governed files ``cmd`` writes, so the approval marker is looked up in
+    the repo each file lives in; literal tokens only."""
+    out = []
+    for raw in sorted(set(_governed_write_targets(cmd, identifiers))):
+        if "$" in raw or "`" in raw:
+            continue
+        path = os.path.expanduser(raw)
+        if cwd and not os.path.isabs(path):
+            path = os.path.join(cwd, path)
+        out.append(path)
+    return tuple(out)
 
 
 def _class_write_denied(cmd: str, payload: Dict[str, Any], cwd: str) -> Any:
@@ -2698,10 +2743,11 @@ def _class_write_denied(cmd: str, payload: Dict[str, Any], cwd: str) -> Any:
     if _is_onboarding_write(cmd, identifiers, cwd):
         return ""
     dispatched = bool(payload.get("agent_id"))
-    if not dispatched and sentinel_present(cwd):
-        return _sentinel_admit_advisory(cwd)
+    targets = _expanded_governed_targets(cmd, identifiers, cwd)
+    if not dispatched and sentinel_present(cwd, targets):
+        return _sentinel_admit_advisory(cwd, targets)
     return _levelled_deny(
-        _SUBAGENT_CLASS_DENY if dispatched else deny_reason(cwd),
+        _SUBAGENT_CLASS_DENY if dispatched else deny_reason(cwd, targets),
         doctrine_surface_risk("this command writes a CLAUDE.md-class or rules file."),
         offer_edit=False,
         floor=True,

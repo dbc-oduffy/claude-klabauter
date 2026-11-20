@@ -744,6 +744,25 @@ def test_provision_deps_nonpep668_failure_no_flag_exits_1(setup_mod, monkeypatch
     assert "venv" not in stderr
 
 
+def test_provision_deps_missing_pip_names_the_distro_package(setup_mod, monkeypatch, tmp_path, capsys):
+    """Friction L07: stock Ubuntu python3 has no pip module."""
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: False)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
+    monkeypatch.setattr(
+        setup_mod, "_run_pip",
+        lambda argv: setup_mod.subprocess.CompletedProcess(argv, 1, stdout="/usr/bin/python3: No module named pip"),
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        setup_mod.provision_deps(pyproject_dir, sys.executable)
+    assert exc_info.value.code == 1
+    assert "apt install python3-pip" in capsys.readouterr().err
+
+
 def test_provision_deps_mid_install_pep668_refusal_exits_96(setup_mod, monkeypatch, tmp_path):
     """The marker-file probe can miss a guard (probe error -> fails open);
     pip's own refusal string is still the ultimate authority and still

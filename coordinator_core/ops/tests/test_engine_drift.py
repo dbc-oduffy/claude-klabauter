@@ -399,6 +399,27 @@ class TestProbeMirrorUnstampedFallbacks:
         assert result["basis"] == "stamp-file"
         assert result["running_sha"] == "3" * 40
 
+    def test_merge_head_of_last_fetched_candidate_is_current(self, tmp_path, monkeypatch):
+        # Installed main is a merge of candidate: compare candidate to the stamped parent,
+        # not the merge HEAD itself.
+        mirror, stamped = self._merge_mirror(tmp_path)
+        monkeypatch.setattr("coordinator_core.engine_root.engine_source_root", lambda: None)
+        ref = mirror / ".git" / "refs" / "remotes" / "origin" / "candidate"
+        ref.parent.mkdir(parents=True)
+        ref.write_text(stamped + "\n")
+        result = probe_engine_drift(mirror)
+        assert result["basis"] == "merge-parent"
+        assert result["state"] == "current"
+
+    def test_default_engine_dir_is_the_repo_root(self):
+        import coordinator_core.ops.engine_drift as ed
+
+        with patch.object(ed, "resolve_engine_source_head") as r:
+            r.side_effect = RuntimeError("stop")
+            with pytest.raises(RuntimeError):
+                ed.probe_engine_drift()
+        assert (r.call_args.args[0] / "coordinator_core").is_dir()
+
     def test_merge_parent_fallback_spawns_no_git(self, tmp_path):
         mirror, _ = self._merge_mirror(tmp_path)
         with patch("coordinator_core.git.run.run_git") as m:

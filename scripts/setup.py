@@ -784,6 +784,17 @@ def deps_importable(interpreter: str, import_names: list[str]) -> bool:
         return False
 
 
+def _pip_missing_hint(pip_output: str, python: str) -> str | None:
+    """The remediation line when pip's output says the interpreter has no pip module, else None.
+    Stock Debian/Ubuntu python3 ships without pip and without ensurepip."""
+    if "no module named pip" not in pip_output.lower():
+        return None
+    return (
+        f"pip is not installed for {python}. Debian/Ubuntu: sudo apt install python3-pip python3-venv; "
+        "Fedora: sudo dnf install python3-pip. Then re-run."
+    )
+
+
 def _run_pip(argv: list[str]) -> subprocess.CompletedProcess:
     """Run a pip subprocess bounded by `PACKAGE_INSTALL_SECS`, the `install`
     timeout family's member for one `pip install` (Review: code-reviewer
@@ -1521,6 +1532,10 @@ def provision_deps(
             print(pip_proc.stdout, end="")
 
             pip_output = pip_proc.stdout.lower()
+            no_pip = _pip_missing_hint(pip_output, candidate.path)
+            if no_pip:
+                print(f"FAIL [deps] {no_pip}", file=sys.stderr)
+                _exit_flushed(1)
             if not container_optin_honoured and "externally-managed-environment" in pip_output:
                 # The marker-file probe above said unguarded, but pip itself
                 # refused mid-install — still a designed refusal, never an
@@ -1688,6 +1703,10 @@ def _install_test_deps(engine_py: str, specs: list[str]) -> None:
         _exit_flushed(1)
     print(proc.stdout, end="")
 
+    no_pip = _pip_missing_hint(proc.stdout, engine_py)
+    if no_pip:
+        print(f"FAIL [test-deps] {no_pip}", file=sys.stderr)
+        _exit_flushed(1)
     if proc.returncode != 0:
         is_pep668 = "externally-managed-environment" in proc.stdout.lower()
         print("FAIL [test-deps] test-extra install failed — see output above.", file=sys.stderr)
@@ -4899,10 +4918,12 @@ def install_machine_identity(repo_root: Path, claude_klabauter_root_resolved: Pa
         ("coordinator.contributor_slug", machine_resolver.compute_contributor_live()),
     ):
         if not value or value == "unknown":
-            print(
-                f"[ADVISORY] {key} — could not be resolved live yet (no git identity/"
-                "hostname available) — leaving unset; runtime live-fallback will handle it."
+            missing = (
+                "no hostname resolved"
+                if key.endswith("machine_slug")
+                else "git user.email is unset (git config --global user.email <you>)"
             )
+            print(f"[ADVISORY] {key} — left unset: {missing}; runtime live-fallback applies.")
             continue
         proc = machine_local_spawn.run_bounded(machine_local_argv + ["set", key, value])
         if proc is None:

@@ -249,7 +249,7 @@ def _import_units(root: Path, own_py: list) -> list:
 
 def plan_tree_eviction(
     root: Path, record_dir_rel: str, run_written: list, changed: set, write_set: list,
-    withheld: dict, paths: list, run_id: Optional[str] = None,
+    withheld: dict, paths: list, run_id: Optional[str] = None, credited: Optional[set] = None,
 ) -> Optional[TreeEviction]:
     """Park every run-owned, changed, unlanded path (any extension) in the halted record. A ``.py``
     that ``halt_tree_check.broken_paths`` judges unimportable (with its write-set importers) is named
@@ -258,7 +258,9 @@ def plan_tree_eviction(
     ``evicted.json`` plus its blobs are appended to ``paths`` (in place). A ``.py`` that a dirty ``.py``
     in ``changed`` outside the parked set (landed, peer-owned) names stays in the tree with its whole
     import unit: parking it would leave that importer importing nothing. Call after
-    ``_withhold_run_dirt`` and before the nothing-to-commit return. None when nothing is parked."""
+    ``_withhold_run_dirt`` and before the nothing-to-commit return. None when nothing is parked.
+    ``credited`` (when given) bounds eviction to the run's declared or touch-recorded paths: a path
+    found only by the tree mtime sweep is a peer's live dirt until declared, and is never reset."""
     from coordinator_core.authoring_leaks import HeadView
     from coordinator_core.ops.dispatch_emit import halt_tree_check, halt_tree_evict, kept_work
 
@@ -268,7 +270,7 @@ def plan_tree_eviction(
     own = [
         p for p in run_written
         if p in changed and p not in landed and withheld.get(p) not in _NOT_RUN_OWNED
-        and not p.startswith(record_dir_rel + "/")
+        and not p.startswith(record_dir_rel + "/") and (credited is None or p in credited)
     ]
     if not own:
         return None
