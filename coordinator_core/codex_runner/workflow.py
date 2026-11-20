@@ -980,6 +980,8 @@ def run_agent(
     schema = options.get("schema")
     codex_gate = (backend == "codex" and schema is not None
                   and options.get("label") == "gate" and options.get("phase") == "gate")
+    codex_halt_commit = (backend == "codex" and schema is not None
+                         and options.get("label") == "halt-commit" and options.get("phase") == "commit")
     if schema is not None:
         try:
             jsonschema.validators.validator_for(schema).check_schema(schema)
@@ -988,6 +990,11 @@ def run_agent(
     if options.get("agentType") == _COMMIT_AGENT_TYPE:
         _write_commit_params(repo_root, prompt)
     persona = _persona(options.get("agentType"))
+    if os.name == "nt" and codex_gate and not _gate_reask:
+        from coordinator_core.ops.dispatch_emit.ask_compose import _INVOKE
+        from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_GATE
+
+        prompt = prompt.replace(f"{_INVOKE} {OP_ASK_GATE} ", f"coordinator-invoke {OP_ASK_GATE} ")
     full_prompt = (f"Agent definition ({options['agentType']}):\n{persona}\n\n" if persona else "") + prompt
     if os.name == 'nt':
         full_prompt = (
@@ -1150,22 +1157,25 @@ def run_agent(
         if schema is not None:
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
-        if not codex_gate or _gate_reask:
+        if not (codex_gate or codex_halt_commit) or _gate_reask:
             raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
         diagnostic = (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:400]
-        value = {"arm": None, "halt": {"kind": "gate-reply-invalid", "reason": diagnostic}}
+        value = {"arm": None, "halt": {"kind": "gate-reply-invalid", "reason": diagnostic}} if codex_gate else None
         remaining = min(_GATE_REASK_SECONDS, timeout_s - (time.monotonic() - started))
         if text and len(text) <= _GATE_REPLY_LIMIT and remaining > 0 and private_cli is None:
             from coordinator_core.ops.dispatch_emit.run_truth_contract import ARMS
 
-            retry_dir = artifact_dir / "gate-reask"
-            wrapper_payload = _gate_redundant_halt_payload(text)
+            retry_dir = artifact_dir / ("gate-reask" if codex_gate else "halt-commit-reask")
+            wrapper_payload = _gate_redundant_halt_payload(text) if codex_gate else None
+            context = {"diagnostic": diagnostic, "reply": text}
+            if codex_gate:
+                context["allowed_arm_values"] = [*ARMS, None]
             retry_data = json.dumps(
-                {"diagnostic": diagnostic, "allowed_arm_values": [*ARMS, None], "reply": text},
+                context,
                 ensure_ascii=False,
             )
             retry_prompt = (
-                "Repair JSON syntax in the following data. Do not run any tools or repeat the gate operation. "
+                "Repair JSON syntax in the following data. Do not run any tools or repeat the operation. "
                 "Preserve every key, value and its order, including trailing fields. "
                 "Return the complete original reply with only JSON punctuation or whitespace repaired. "
                 "If that is impossible, return null.\n"
@@ -1180,7 +1190,8 @@ def run_agent(
                 )
             try:
                 repaired = run_agent(
-                    retry_prompt, options, repo_root=repo_root, artifact_dir=retry_dir,
+                    retry_prompt, {k: v for k, v in options.items() if k != "agentType"},
+                    repo_root=repo_root, artifact_dir=retry_dir,
                     backend=backend, timeout_s=remaining, parent_session_id=parent_session_id,
                     request_id=f"{request_id}:gate-reask" if request_id is not None else None,
                     fire_id=fire_id, _gate_reask=True,
@@ -1190,10 +1201,14 @@ def run_agent(
                 if wrapper_payload is not None:
                     if json.dumps(wrapper_payload) == json.dumps(repaired):
                         value = repaired
-                elif _gate_reask_preserves_scalars(text, repaired_text):
+                elif codex_gate and _gate_reask_preserves_scalars(text, repaired_text):
+                    value = repaired
+                elif codex_halt_commit and _GATE_SCALARS.findall(text) == _GATE_SCALARS.findall(repaired_text):
                     value = repaired
             except (AgentFailed, OSError):
                 pass
+        if value is None:
+            raise AgentFailed(f"{backend} halt-commit reply could not be repaired: {diagnostic}") from exc
         jsonschema.validate(value, schema)
     (artifact_dir / "result.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
     return value

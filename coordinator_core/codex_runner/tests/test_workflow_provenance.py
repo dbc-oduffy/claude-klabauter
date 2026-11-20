@@ -439,6 +439,23 @@ def test_codex_gate_validates_json_rpc_result(tmp_path, monkeypatch, annotated):
     assert len(calls) == 1
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows worker prompt")
+def test_windows_codex_gate_uses_native_command_with_original_payload(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_compose import _INVOKE
+
+    calls = _stub_codex(monkeypatch, tmp_path, response='{"arm":"s","halt":null}')
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    args = """dispatch.ask_gate '{"run_id":"ask-revised"}' --repo C:/dev/claude-klabauter"""
+    assert workflow.run_agent(
+        f"Run `{_INVOKE} {args}`",
+        {"label": "gate", "phase": "gate", "schema": {"type": "object"}},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    ) == {"arm": "s", "halt": None}
+    assert f"Run `coordinator-invoke {args}`" in calls[0][1]
+    assert _INVOKE not in calls[0][1]
+
+
 @pytest.mark.parametrize(("initial", "repair", "arm", "error"), [
     pytest.param('{"arm":"m_plus" "halt":null}', '{"arm":"m_plus","halt":null}',
                  "m_plus", "Expecting ',' delimiter", id="1cade98f-missing-comma"),
@@ -499,6 +516,26 @@ def test_codex_gate_reasks_once_then_returns_a_typed_halt(tmp_path, monkeypatch,
         assert value["halt"]["kind"] == "gate-reply-invalid"
     else:
         assert value["halt"] is None
+
+
+def test_codex_halt_commit_repairs_reply_without_repeating_operation(tmp_path, monkeypatch):
+    repaired = '{"committed":true,"run_artifacts":{"withheld":{"halted.json":"halt-record-only"}}}'
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[repaired[:-1], repaired])
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    schema = {
+        "type": "object", "required": ["committed", "run_artifacts"],
+        "properties": {"committed": {"type": "boolean"}, "run_artifacts": {"type": "object"}},
+    }
+    assert workflow.run_agent(
+        "Record halt once", {"label": "halt-commit", "phase": "commit", "schema": schema},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    ) == json.loads(repaired)
+    assert len(calls) == 2
+    argv, prompt = calls[1]
+    assert "Expecting ',' delimiter" in prompt
+    assert "Record halt once" not in prompt
+    assert argv[argv.index("--sandbox") + 1] == "read-only"
 
 
 def _unelevated_home(tmp_path, monkeypatch):
