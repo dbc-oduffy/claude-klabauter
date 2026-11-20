@@ -850,6 +850,7 @@ def _land(
         p for p in review_written if not review_edits.out_of_worktree(review_edits.norm(p))
     ]
     run_written = _run_written(worktree_root, session_id, run_id)
+    touch_written = set(run_written)
     measured_only = [
         p for p in stage_dirt_snapshot.run_edits(worktree_root, worktree_root / record_dir_rel, [])
         if p not in run_written and not p.startswith(record_dir_rel + "/") and not halt_product_gates.is_scratch(p)
@@ -1163,6 +1164,7 @@ def _land(
     eviction = plan_tree_eviction(
         worktree_root, record_dir_rel, run_written, snapshot.changed,
         [*run_written, *owner, *declared], withheld, paths, run_id,
+        credited={*touch_written, *owner, *declared, *request_owned, *review_literals},
     )
     # Kept off ``paths`` until a commit is due: the record file alone must not turn a no-op halt into a commit.
     touched_paths: list = []

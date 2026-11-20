@@ -97,7 +97,7 @@ def test_unpatched_policy_point_keeps_the_class_floor_and_demotes_the_rest(box, 
     monkeypatch.undo()
     monkeypatch.setattr(doctrine, "feature_enabled", lambda name: True)
     monkeypatch.setattr(doctrine, "_is_onboarding_write", lambda *a, **k: False)
-    monkeypatch.setattr(doctrine, "sentinel_present", lambda cwd: False)
+    monkeypatch.setattr(doctrine, "sentinel_present", lambda cwd, targets=(): False)
     cls = box.payload("global-doctrine/CLAUDE.md", tool="Bash")
     cls["tool_input"] = {"command": f"cat > {(box.doe / 'global-doctrine' / 'CLAUDE.md').as_posix()}"}
     assert doctrine.check(cls, ["CLAUDE.md"]).verdict_kind == "deny"

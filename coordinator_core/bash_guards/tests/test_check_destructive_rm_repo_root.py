@@ -467,3 +467,25 @@ class TestIsSameDir:
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX device-node path")
     def test_unstattable_operand_returns_false(self) -> None:
         assert not _is_same_dir("\x00invalid", "/")
+
+
+class TestSymlinkToRepoRoot:
+    """Friction #37: `rm` unlinks a symlink; it is judged as the link, not as the repo it points at."""
+
+    @pytest.fixture()
+    def link(self, repo_outside_any_repo: str, tmp_path: Path) -> str:
+        path = tmp_path / "shortcut"
+        try:
+            os.symlink(repo_outside_any_repo, path, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable")
+        return str(path)
+
+    def test_rm_of_the_link_is_allowed(self, link: str) -> None:
+        assert not _denied(f"rm {link}")
+
+    def test_rm_of_the_repo_behind_it_still_denied(self, repo_outside_any_repo: str, link: str) -> None:
+        assert _denied(f"rm -rf {repo_outside_any_repo}")
+
+    def test_trailing_slash_still_follows_the_link(self, link: str) -> None:
+        assert _denied(f"rm -rf {link}/")

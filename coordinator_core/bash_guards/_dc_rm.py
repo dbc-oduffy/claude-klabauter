@@ -395,6 +395,10 @@ def check_destructive_rm(
             tgt_resolved = os.path.join(_rm_cwd, os.path.expanduser(tgt) if tgt.startswith("~") else tgt_expanded)
             if not tgt or not os.path.exists(tgt_resolved):
                 continue
+            # `rm` unlinks a symlink and never follows it (no trailing slash): judging it by what it
+            # points at denied removing a shortcut to a repo.
+            if os.path.islink(tgt_resolved) and not tgt_resolved.endswith(("/", os.sep)):
+                continue
             tgt_abs = _abs_path(tgt_resolved)
             # Flushed only at the final `return None`; see the list's comment above.
             _pending_rm_touch_paths.append(tgt_abs)

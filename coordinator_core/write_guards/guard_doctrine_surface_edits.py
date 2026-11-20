@@ -824,17 +824,17 @@ def _match_protected(
     return False, None
 
 
-def _admit_advisory(payload: Dict[str, Any]) -> str:
-    return admit_advisory(payload.get("cwd") or "")
+def _admit_advisory(payload: Dict[str, Any], target: str = "") -> str:
+    return admit_advisory(payload.get("cwd") or "", (target,) if target else ())
 
 
-def _doctrine_deny(payload: Dict[str, Any]) -> "Optional[Dict[str, Any]]":
+def _doctrine_deny(payload: Dict[str, Any], target: str = "") -> "Optional[Dict[str, Any]]":
     from coordinator_core._hook_envelope import deny
     from coordinator_core.machine_profile import apply_guard_level
 
     return apply_guard_level(
         "guard-doctrine-surface-edits",
-        deny("PreToolUse", deny_reason(payload.get("cwd") or "")),
+        deny("PreToolUse", deny_reason(payload.get("cwd") or "", (target,) if target else ())),
         session_id=payload.get("session_id") or "",
         cwd=payload.get("cwd"),
     )
@@ -901,11 +901,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     basename = os.path.basename(target)
     if rules:
-        if sentinel_present(payload.get("cwd") or ""):
+        if sentinel_present(payload.get("cwd") or "", (target,)):
             return _advisory_envelope(
-                _admit_advisory(payload), _surface_advisory(target_raw, False), _rot_text(rot), growth
+                _admit_advisory(payload, target), _surface_advisory(target_raw, False), _rot_text(rot), growth
             )
-        return _doctrine_deny(payload)
+        return _doctrine_deny(payload, target)
     is_local_config = basename == "coordinator.local.md"
     if _is_first_time_create(tool_name, tool_input, target):
         return None
@@ -915,8 +915,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if basename == "CLAUDE.md" and _caller_is_subagent(payload):
         return _subagent_deny(payload)
 
-    if basename == "CLAUDE.md" and not sentinel_present(payload.get("cwd") or ""):
-        return _doctrine_deny(payload)
+    if basename == "CLAUDE.md" and not sentinel_present(payload.get("cwd") or "", (target,)):
+        return _doctrine_deny(payload, target)
 
     strong = None
     if not is_local_config:
@@ -927,7 +927,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             strong = _STRONGEST_CLAUDE_MD_WARNING
 
     return _advisory_envelope(
-        _admit_advisory(payload) if basename == "CLAUDE.md" else None,
+        _admit_advisory(payload, target) if basename == "CLAUDE.md" else None,
         strong,
         _surface_advisory(target_raw, is_local_config),
         _rot_text(rot),

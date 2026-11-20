@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, List, Optional
 
 from coordinator_core.content_root import read_content_root
 
@@ -23,13 +23,14 @@ DENY_REASON = (
 )
 
 
-def deny_reason(cwd: str) -> str:
+def deny_reason(cwd: str, targets: Iterable[str] = ()) -> str:
     """``DENY_REASON`` plus the human ``!`` touch of the approval marker at the absolute git dir
-    governing ``cwd`` (forward slashes, so it runs in any shell); bare ``DENY_REASON`` when no git dir resolves."""
-    marker = _sentinel_path(cwd)
-    if marker is None:
+    governing the first of ``targets`` (the file being written), else ``cwd``; forward slashes, so it
+    runs in any shell. Bare ``DENY_REASON`` when no git dir resolves."""
+    paths = _sentinel_paths(cwd, targets)
+    if not paths:
         return DENY_REASON
-    return f'{DENY_REASON} Human: `! touch "{Path(os.path.abspath(marker)).as_posix()}"`.'
+    return f'{DENY_REASON} Human: `! touch "{Path(os.path.abspath(paths[0])).as_posix()}"`.'
 
 
 def git_dir_for(cwd: str) -> Optional[Path]:
@@ -52,36 +53,51 @@ def git_dir_for(cwd: str) -> Optional[Path]:
     return None
 
 
-def _sentinel_path(cwd: str) -> Optional[Path]:
-    git_dir = git_dir_for(cwd)
-    return None if git_dir is None else git_dir / SENTINEL_BASENAME
+def _sentinel_paths(cwd: str, targets: Iterable[str] = ()) -> List[Path]:
+    """Marker paths in priority order: the git dir of each written target (the repo the file lives in,
+    which is not the session's when the session sits outside it), then the git dir of ``cwd``."""
+    paths: List[Path] = []
+    for target in (*targets, None):
+        if target is None:
+            start = cwd
+        else:
+            start = os.path.dirname(os.path.abspath(os.path.expanduser(target))) or cwd
+        git_dir = git_dir_for(start)
+        if git_dir is not None and git_dir / SENTINEL_BASENAME not in paths:
+            paths.append(git_dir / SENTINEL_BASENAME)
+    return paths
 
 
-def sentinel_present(cwd: str) -> bool:
-    """True when ``<git dir>/.coordinator-doctrine-edit-approved`` exists and is under
-    ``FRESH_SECONDS`` old. A stale one is unlinked best-effort; an unlink failure still
-    reads as not admitting. Any filesystem error reads as absent."""
-    try:
-        path = _sentinel_path(cwd)
-        if path is None:
-            return False
-        age = time.time() - path.stat().st_mtime
+def _fresh_sentinel(cwd: str, targets: Iterable[str]) -> Optional[Path]:
+    for path in _sentinel_paths(cwd, targets):
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            continue
         if age <= FRESH_SECONDS:
-            return True
+            return path
         try:
             path.unlink()
         except OSError:
             pass
-        return False
+    return None
+
+
+def sentinel_present(cwd: str, targets: Iterable[str] = ()) -> bool:
+    """True when ``<git dir>/.coordinator-doctrine-edit-approved`` exists and is under
+    ``FRESH_SECONDS`` old, for the git dir of any of ``targets`` or of ``cwd``. A stale one is
+    unlinked best-effort; an unlink failure still reads as not admitting. Any filesystem error reads as absent."""
+    try:
+        return _fresh_sentinel(cwd, targets) is not None
     except OSError:
         return False
 
 
-def admit_until(cwd: str) -> Optional[str]:
+def admit_until(cwd: str, targets: Iterable[str] = ()) -> Optional[str]:
     """Local ``HH:MM`` at which the present sentinel stops admitting (mtime + ``FRESH_SECONDS``);
     None when absent or unreadable."""
     try:
-        path = _sentinel_path(cwd)
+        path = _fresh_sentinel(cwd, targets)
         if path is None:
             return None
         expiry = path.stat().st_mtime + FRESH_SECONDS
@@ -90,9 +106,9 @@ def admit_until(cwd: str) -> Optional[str]:
     return time.strftime("%H:%M", time.localtime(expiry))
 
 
-def admit_advisory(cwd: str) -> str:
+def admit_advisory(cwd: str, targets: Iterable[str] = ()) -> str:
     """The advisory text a sentinel admit carries, shared by the Edit/Write and Bash guards."""
-    until = admit_until(cwd)
+    until = admit_until(cwd, targets)
     when = f"until {until}" if until else "for 30 minutes"
     return (
         f"[doctrine-surface guard] doctrine-edit approval admits this write {when}, "
