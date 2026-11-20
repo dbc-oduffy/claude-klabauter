@@ -68,7 +68,16 @@ class HeadlessEngineRootUnavailable(RuntimeError):
 def _worker_engine_root() -> Path:
     """The published stamped engine root the worker imports from; never the caller checkout."""
     from coordinator_core.install.engine_root_for_install import resolve_engine_root_for_install
+    from coordinator_core.warm.engine_root import current_engine_clone, is_engine_root
 
+    pin = os.environ.get('COORDINATOR_DOOR_ENGINE_ROOT', '').strip()
+    if pin:
+        pinned_root = Path(pin).resolve()
+        if not Path(pin).is_absolute() or pinned_root != current_engine_clone().resolve() or not is_engine_root(pinned_root):
+            raise HeadlessEngineRootUnavailable(
+                'headless Workflow engine pin must match the running stamped door engine'
+            )
+        return pinned_root
     resolved = resolve_engine_root_for_install()
     if resolved.kind == 'none' or resolved.root is None:
         raise HeadlessEngineRootUnavailable(
@@ -546,12 +555,17 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                         process.stdin.write(json.dumps(reply) + '\n')
                         process.stdin.flush()
             journal({'type': 'started', 'pid': process.pid, 'script_path': str(script)})
+            child_workflows = record.setdefault('child_workflows', [])
             with ThreadPoolExecutor(max_workers=8) as workers:
                 pending_agents = []
                 try:
                     for line in process.stdout:
                         event = json.loads(line)
                         journal(event)
+                        if event.get('event') == 'workflow-start':
+                            child_path = event.get('script_path')
+                            if isinstance(child_path, str) and child_path not in child_workflows:
+                                child_workflows.append(child_path)
                         if event['type'] in ('agent', 'invoke'):
                             pending_agents.append(workers.submit(respond, event))
                         elif event['type'] == 'result':

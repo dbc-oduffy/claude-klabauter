@@ -22,6 +22,25 @@ RUN = "ask-20261013T000000-abc123"
 REL = "state/sizings/2026-10-13-ledger.yaml"
 
 
+@pytest.mark.parametrize("successor_state", [None, "running", "exited"])
+def test_fire_exit_reconciles_staged_child_and_checks_live_intake_successor(
+    tmp_path, monkeypatch, successor_state
+):
+    from coordinator_core.ops.workflow_fire import fire
+
+    staged = "warp-2026-11-19-w4-startup-single-enumeration-191581-20261119T223513-fbcfab"
+    intake = "ask-20261119T223115-191581"
+    script = tmp_path / "scratch" / "warp" / f"{staged}.workflow.mjs"
+    records = [{"run_id": intake, "state": "exited", "child_workflows": [str(script)]}]
+    if successor_state:
+        records.append({"run_id": intake, "state": successor_state})
+    monkeypatch.setattr(fire, "_registry_dir", lambda cwd: tmp_path)
+    monkeypatch.setattr(fire, "_list_records", lambda directory: records)
+
+    assert rl._fire_worker_exited(tmp_path, staged) is (successor_state != "running")
+    assert not rl._fire_worker_exited(tmp_path, staged + "-other")
+
+
 def _sizing(**extra):
     doc = {
         "schema": "sizing-object", "intent": "build the op", "estimate": {"tshirt": "S", "provisional": True},

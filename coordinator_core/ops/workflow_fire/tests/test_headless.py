@@ -43,6 +43,18 @@ def test_real_runtime_parallel_journal_and_terminal_handoff(tmp_path: Path) -> N
     assert events[-1]['type'] == 'completed'
 
 
+def test_exited_driver_records_started_child_workflow(tmp_path: Path) -> None:
+    child = tmp_path / 'staged-run.workflow.mjs'
+    child.write_text("export const meta={}; throw new Error('child halted');", encoding='utf-8')
+    path = record(tmp_path, 'return await workflow(' + json.dumps({'scriptPath': str(child)}) + ');')
+
+    result = headless.execute(path)
+
+    assert result['state'] == 'exited'
+    assert result['exit_code'] == 1
+    assert json.loads(path.read_text(encoding='utf-8'))['child_workflows'] == [str(child)]
+
+
 def test_agent_error_fails_workflow_without_landing(tmp_path: Path) -> None:
     path = record(tmp_path, "await agent('fail',{}); return {ok:true};")
     def worker(*args, **kwargs):

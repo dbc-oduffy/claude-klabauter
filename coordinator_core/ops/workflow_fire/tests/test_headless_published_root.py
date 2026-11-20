@@ -12,6 +12,7 @@ from coordinator_core.ops.workflow_fire import headless
 
 
 def _isolate(tmp_path, monkeypatch, resolved):
+    monkeypatch.delenv('COORDINATOR_DOOR_ENGINE_ROOT', raising=False)
     source = tmp_path / 'workflow.mjs'
     source.write_text('export const meta={}; return {};')
     registry = tmp_path / 'registry'
@@ -29,9 +30,36 @@ def _isolate(tmp_path, monkeypatch, resolved):
     return source, registry
 
 
-def test_worker_spawns_from_the_published_root(tmp_path, monkeypatch):
+def test_explicit_worker_pin_uses_running_stamped_root(tmp_path, monkeypatch):
+    from coordinator_core.warm import engine_root
+
+    pin = tmp_path / "pinned"
+    monkeypatch.setenv("COORDINATOR_DOOR_ENGINE_ROOT", str(pin))
+    monkeypatch.setattr(engine_root, "current_engine_clone", lambda: pin)
+    stamp = pin / "coordinator_core" / "_engine_stamp"
+    stamp.parent.mkdir(parents=True)
+    with pytest.raises(headless.HeadlessEngineRootUnavailable, match="running stamped"):
+        headless._worker_engine_root()
+    stamp.write_text("published", encoding="utf-8")
+    assert headless._worker_engine_root() == pin.resolve()
+    monkeypatch.setattr(engine_root, "current_engine_clone", lambda: tmp_path / "registered")
+    with pytest.raises(headless.HeadlessEngineRootUnavailable, match="running stamped"):
+        headless._worker_engine_root()
+
+
+@pytest.mark.parametrize("explicit_pin", [False, True])
+def test_worker_spawns_from_the_published_root(tmp_path, monkeypatch, explicit_pin):
     root = tmp_path / 'published'
     source, registry = _isolate(tmp_path, monkeypatch, InstallEngineRoot('published', root, None))
+    if explicit_pin:
+        from coordinator_core.warm import engine_root
+
+        root = tmp_path / "pinned"
+        stamp = root / "coordinator_core" / "_engine_stamp"
+        stamp.parent.mkdir(parents=True)
+        stamp.write_text("published", encoding="utf-8")
+        monkeypatch.setenv("COORDINATOR_DOOR_ENGINE_ROOT", str(root))
+        monkeypatch.setattr(engine_root, "current_engine_clone", lambda: root)
     spawned = {}
 
     def popen(command, **kwargs):

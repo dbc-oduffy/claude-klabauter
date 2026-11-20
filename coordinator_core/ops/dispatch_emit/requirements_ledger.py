@@ -3205,14 +3205,36 @@ def _token_not_a_runner(root: Path, run_id: str) -> bool:
 
 def _fire_worker_exited(root: Path, run_id: str) -> bool:
     """True when the fire registry holds a record for `run_id` and every one is `exited`: the worker
-    is gone, so the run is dead. Registry reads only; a read failure answers False."""
+    is gone, so the run is dead. Include staged children and guard against a live successor
+    of their intake fire. Registry reads only; a read failure answers False."""
     try:
         from coordinator_core.ops.workflow_fire import fire
 
-        records = [r for r in fire._list_records(fire._registry_dir(str(root))) if r.get("run_id") == run_id]
+        records = fire._list_records(fire._registry_dir(str(root)))
     except Exception:  # noqa: BLE001 -- unknown never reports a run dead
         return False
-    return bool(records) and all(r.get("state") == "exited" for r in records)
+    child_name = f"{run_id}.workflow.mjs"
+    staged_name = re.compile(rf"{re.escape(run_id)}\.staged-[0-9a-f]{{64}}\.workflow\.mjs")
+    child_dir = root / "scratch" / "warp"
+    matched = [
+        record for record in records
+        if record.get("run_id") == run_id or any(
+            child.parent == child_dir
+            and (child.name == child_name or staged_name.fullmatch(child.name))
+            for path in (record.get("child_workflows") or ())
+            if isinstance(path, str)
+            for child in (Path(path),)
+        )
+    ]
+    intake_ids = {record["run_id"] for record in matched if record.get("run_id")}
+    return (
+        bool(matched)
+        and all(record.get("state") == "exited" for record in matched)
+        and not any(
+            record.get("run_id") in intake_ids and record.get("state") != "exited"
+            for record in records
+        )
+    )
 
 
 def _rows_owe_work(root: Path, sizing_rel: Optional[str], ids: Sequence[str]) -> bool:

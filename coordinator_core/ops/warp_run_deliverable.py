@@ -207,12 +207,13 @@ def _no_marker(root: Path, run_id: str) -> bool:
     return not os.path.exists(os.path.join(rdir, HALTED_FILE)) and os.path.isdir(rdir)
 
 
-def _halted(root: Path, run_id: str) -> bool:
+def _halted(root: Path, run_id: str, *, include_superseded: bool = False) -> bool:
     """A run whose record carries a `halted` marker writes nothing more; its token stays fresh for
     the TTL and its declaration contests no live write. Its declared writes stay held against
     another run's carry, while they carry hunks attributable to it, until it resumes, ages out, or
     `halted_hold_release.release_reason` frees it (`halted_run_write_claims`). A `resumed` marker is
-    live again."""
+    live again. Live-write checks also exclude superseded records, while the
+    halted-hunk reader considers only actual halts."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
     if _no_marker(root, run_id):
@@ -225,7 +226,10 @@ def _halted(root: Path, run_id: str) -> bool:
         return True
     except ValueError:  # not a run id (a claim's reason string): no record, not halted
         return False
-    return marker is not None and marker.get("status") == halted_run.STATUS_HALTED
+    status = marker.get("status") if marker is not None else None
+    return status == halted_run.STATUS_HALTED or (
+        include_superseded and status == halted_run.STATUS_SUPERSEDED
+    )
 
 
 def resumed_run_released(root: Path, run_id: str, exclude_run: Optional[str]) -> bool:
@@ -660,7 +664,7 @@ def _live_peer_run(
 def _live_peer_tail(root: Path, run_id: str, sid: str, cwd: Optional[str]) -> bool:
     from coordinator_core.session import touch_record
 
-    if _halted(root, run_id) or _landed(root, run_id) or not touch_record.session_live(sid, cwd):
+    if _halted(root, run_id, include_superseded=True) or _landed(root, run_id) or not touch_record.session_live(sid, cwd):
         return False
     if _stale_at_minted(root, run_id):
         _halt_abandoned(root, run_id)
