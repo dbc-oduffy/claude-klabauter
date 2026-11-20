@@ -1701,7 +1701,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``review_slice_id.run_prep_slice_prefix(run_id, base)``: a typed ``slice_prefix`` is ignored
     and may be omitted; with ``paths`` it is required. Optional ``group_index`` / ``group_count`` (ints,
     together) return only that slice group. Keying scope: show_top."""
-    return review_prep_legs.run(lambda: _handle(params, repo_root))
+    from coordinator_core.git.call_io_scope import call_io_scope
+
+    def _scoped() -> dict:
+        # One scope for the whole call: peer records and worktree files are each read once across the declared-path,
+        # hold-scan, own-hunk, parse-gate, freeze and content-hash legs.
+        with call_io_scope():
+            return _handle(params, repo_root)
+
+    return review_prep_legs.run(_scoped)
 
 
 def _handle(params: dict, repo_root: Optional[Path]) -> dict:
@@ -1717,21 +1725,17 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
             return _fail("review.prep run_id must be a non-empty string")
         if leg is not None and not isinstance(leg, bool):
             return _fail("review.prep leg must be a boolean")
-        from coordinator_core.git.call_io_scope import call_io_scope
-
-        # One scope over both legs: `record_dir` and the manifest reads are answered once, not per declared path.
-        with call_io_scope():
-            try:
-                with review_prep_legs.leg("handler.declared_paths"):
-                    paths, held_by_peer = declared_paths_and_held(
-                        repo_root, run_id, leg=bool(leg), own_session=str(params.get("session_id") or "")
-                    )
-            except RunRecordReadStalled as exc:
-                return _fail(f"{REVIEW_PREP_BUSY_PREFIX} {exc}; re-run the same call")
-            except ValueError as exc:
-                return _fail(str(exc))
-            with review_prep_legs.leg("handler.undeclared_edits"):
-                undeclared = undeclared_edits_for_run(repo_root, run_id, paths, str(params.get("session_id") or ""))
+        try:
+            with review_prep_legs.leg("handler.declared_paths"):
+                paths, held_by_peer = declared_paths_and_held(
+                    repo_root, run_id, leg=bool(leg), own_session=str(params.get("session_id") or "")
+                )
+        except RunRecordReadStalled as exc:
+            return _fail(f"{REVIEW_PREP_BUSY_PREFIX} {exc}; re-run the same call")
+        except ValueError as exc:
+            return _fail(str(exc))
+        with review_prep_legs.leg("handler.undeclared_edits"):
+            undeclared = undeclared_edits_for_run(repo_root, run_id, paths, str(params.get("session_id") or ""))
         paths = [*paths, *undeclared]
     else:
         undeclared = []
@@ -1762,22 +1766,19 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
     halted_foreign: List[str] = []
     own_hunk_bytes: Dict[str, Optional[bytes]] = {}
     if live_runs is None and run_id:
-        from coordinator_core.git.call_io_scope import call_io_scope
         from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
 
-        # One scope for the hold scan and the own-hunk views: both re-read the same peer records and worktree files.
-        with call_io_scope():
-            with review_prep_legs.leg("handler.halted_withheld"):
-                held = foreign_halted_withheld(repo_root, run_id, str(params.get("plan_path") or "") or None, [str(p) for p in paths])
-            if not head:
-                halted_foreign = [str(p) for p in paths if str(p) in held]
-                if halted_foreign:
-                    own_hunk_bytes = _own_hunk_views(repo_root, run_id, halted_foreign)
-                    gone = {p for p in halted_foreign if p not in own_hunk_bytes}
-                    paths = [p for p in paths if str(p) not in gone]
-                    held_by_peer = {p: v for p, v in held_by_peer.items() if p not in gone}
-                    undeclared = [p for p in undeclared if p not in gone]
-                    held = {p: r for p, r in held.items() if p not in gone}
+        with review_prep_legs.leg("handler.halted_withheld"):
+            held = foreign_halted_withheld(repo_root, run_id, str(params.get("plan_path") or "") or None, [str(p) for p in paths])
+        if not head:
+            halted_foreign = [str(p) for p in paths if str(p) in held]
+            if halted_foreign:
+                own_hunk_bytes = _own_hunk_views(repo_root, run_id, halted_foreign)
+                gone = {p for p in halted_foreign if p not in own_hunk_bytes}
+                paths = [p for p in paths if str(p) not in gone]
+                held_by_peer = {p: v for p, v in held_by_peer.items() if p not in gone}
+                undeclared = [p for p in undeclared if p not in gone]
+                held = {p: r for p, r in held.items() if p not in gone}
         live_runs = holders_from_held(held) or None
     from coordinator_core.ops.review_freeze_diff import diff_targets_batch
 

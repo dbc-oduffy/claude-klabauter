@@ -22,6 +22,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional, Sequence
 
+from coordinator_core.git import call_io_scope
 from coordinator_core.ops.dispatch_emit import row_returns, run_dir_stat_cache
 from coordinator_core.session.declared_writes import declare_write
 
@@ -312,7 +313,11 @@ def kept_fingerprints(record_dir: Path) -> dict[str, frozenset]:
 
 
 def _kept_fingerprints_uncached(record_dir: Path) -> dict[str, frozenset]:
-    data = read(record_dir)
+    return fingerprints_of(read(record_dir))
+
+
+def fingerprints_of(data: Mapping) -> dict[str, frozenset]:
+    """`kept_fingerprints` over an already-read `read()` result: a caller holding the parsed record skips a second read of it."""
     out: dict[str, set] = {}
     for entry in data["chunks"].values():
         paths = entry.get("paths") if isinstance(entry, Mapping) else None
@@ -350,7 +355,13 @@ def write(
     except OSError:
         return None
     declare_write(path)
+    invalidate_read(path)
     return path
+
+
+def invalidate_read(path: Path) -> None:
+    """Drop the open call scope's cached read of `path`; every `kept.json` writer calls it."""
+    call_io_scope.invalidate(path=path)
 
 
 def read(record_dir: Path) -> dict:
@@ -358,8 +369,11 @@ def read(record_dir: Path) -> dict:
     when absent or malformed, non-str post_checkpoint entries dropped. Never raises."""
     empty: dict = {"chunks": {}, "plan_gate": None, POST_CHECKPOINT_KEY: {}}
     try:
-        data = json.loads((Path(record_dir) / KEPT_FILE).read_text(encoding="utf-8"))
+        raw = call_io_scope.read_bytes(Path(record_dir) / KEPT_FILE)  # one read per record per call scope
+        data = json.loads(raw.decode("utf-8")) if raw is not None else None
     except (OSError, ValueError):
+        return empty
+    if data is None:
         return empty
     if not isinstance(data, dict):
         return empty

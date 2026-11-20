@@ -70,7 +70,10 @@ def _worker_engine_root() -> Path:
     from coordinator_core.install.engine_root_for_install import resolve_engine_root_for_install
     from coordinator_core.warm.engine_root import current_engine_clone, is_engine_root
 
-    pin = os.environ.get('COORDINATOR_DOOR_ENGINE_ROOT', '').strip()
+    from coordinator_core.session.caller_env import effective_caller_env
+
+    # Inside the warm server os.environ is the server's, not the caller's; the pin rides the request.
+    pin = effective_caller_env().get('COORDINATOR_DOOR_ENGINE_ROOT', '').strip()
     if pin:
         pinned_root = Path(pin).resolve()
         if not Path(pin).is_absolute() or pinned_root != current_engine_clone().resolve() or not is_engine_root(pinned_root):

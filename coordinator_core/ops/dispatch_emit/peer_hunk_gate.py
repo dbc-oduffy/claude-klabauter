@@ -340,10 +340,11 @@ def _holds_baselined_path(root: Path, run_id: str, holds: list, withheld: set) -
     no spawn; a run with no baseline is never excluded."""
     from coordinator_core.ops.dispatch_emit import halted_hunk_attribution
 
-    baseline = halted_hunk_attribution._baseline(root, run_id)
-    if not baseline:
+    extra = [_norm(p) for p, s in holds if s == run_id and _norm(p) not in withheld]
+    if not extra:  # every hold is a withheld path: the baseline file cannot change the answer, so it is not read
         return False
-    return any(_norm(p) not in withheld and _norm(p) in baseline for p, s in holds if s == run_id)
+    baseline = halted_hunk_attribution._baseline(root, run_id)
+    return bool(baseline) and any(p in baseline for p in extra)
 
 
 def _mutual_halted_holds(

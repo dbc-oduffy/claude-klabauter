@@ -19,6 +19,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional, Sequence
 
+from coordinator_core.git import call_io_scope
 from coordinator_core.ops.dispatch_emit import land_deadline
 
 from coordinator_core.ops.dispatch_emit.landing_dropped_targets import (  # noqa: F401
@@ -147,9 +148,11 @@ def unparseable_py(worktree_root: Path, paths: Sequence[str]) -> list[Finding]:
             continue
         land_deadline.check("landing_integrity.unparseable_py")
         try:
-            items.append((rel, (Path(worktree_root) / rel).read_bytes()))
+            data = call_io_scope.read_bytes(Path(worktree_root) / rel)  # one read per file per scope
         except OSError:
             continue
+        if data is not None:
+            items.append((rel, data))
     return [f for f in _cached_parse_findings(worktree_root, items) if f]
 
 

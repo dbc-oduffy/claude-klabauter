@@ -135,7 +135,7 @@ def _worktree_text(root: Path, path: str) -> str:
 
 def _record_released(record: Path, released: list, now: str) -> None:
     """Move `released` entries out of `kept.json` chunks into a `released_holds` record; keeps other keys."""
-    from coordinator_core.ops.dispatch_emit.kept_work import KEPT_FILE
+    from coordinator_core.ops.dispatch_emit.kept_work import KEPT_FILE, invalidate_read
     from coordinator_core.session.claimed_write import replace_text
 
     target = record / KEPT_FILE
@@ -163,6 +163,7 @@ def _record_released(record: Path, released: list, now: str) -> None:
     })
     doc[RELEASED_HOLDS_KEY] = log
     replace_text(target, json.dumps(doc, sort_keys=True, indent=2) + "\n")
+    invalidate_read(target)
 
 
 def _release_path(root: Path, run_id: str, path: str, reason: str) -> bool:

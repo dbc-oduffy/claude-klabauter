@@ -1,4 +1,5 @@
 """Engine-owned Codex thread bindings, independent of the caller's repository.
+Claude EMs get a parallel row under host-sessions/claude (`--provider claude` command hook).
 
 PID plus birth time confirms the observed host process, not an individual thread.
 SessionEnd retains an ended tombstone; a crashed host fails the birth-time check.
@@ -238,12 +239,11 @@ def is_ended(session_id: str, directory: Path | None = None) -> bool:
         return False
 
 
-def lookup(session_id: str, directory: Path | None = None) -> dict | None:
-    """Return one birth-verified binding; malformed/dead/reused PIDs are absent."""
+def _verified_row(session_id, directory: Path, provider: str) -> dict | None:
     try:
         sid = _sid(session_id)
-        row = json.loads((registry_dir(directory) / f"{sid}.json").read_text(encoding="utf-8"))
-        if not isinstance(row, dict) or row.get("schema_version") != 1 or row.get("provider") != "codex" or row.get("session_id") != sid:
+        row = json.loads((directory / f"{sid}.json").read_text(encoding="utf-8"))
+        if not isinstance(row, dict) or row.get("schema_version") != 1 or row.get("provider") != provider or row.get("session_id") != sid:
             return None
         if "ended_at" in row:
             return None
@@ -260,6 +260,88 @@ def lookup(session_id: str, directory: Path | None = None) -> dict | None:
         return row
     except Exception:
         return None
+
+
+def lookup(session_id: str, directory: Path | None = None) -> dict | None:
+    """Return one birth-verified binding; malformed/dead/reused PIDs are absent."""
+    return _verified_row(session_id, registry_dir(directory), "codex")
+
+
+def claude_registry_dir(directory: Path | None = None) -> Path:
+    return Path(directory) if directory is not None else settings_home() / "host-sessions" / "claude"
+
+
+_CLAUDE_NODE_ENTRY = frozenset({"cli.js", "claude.js", "claude"})
+
+
+def _is_claude_host(process) -> bool:
+    """The Claude Code host: native `claude(.exe)`, or `node .../cli.js` under a `claude` path.
+    Never a name-prefix match, never arbitrary node."""
+    try:
+        stem = process.name().lower().removesuffix(".exe")
+        if stem == "claude":
+            return True
+        if stem != "node":
+            return False
+        argv = process.cmdline()
+    except Exception:
+        return False
+    if len(argv) < 2:
+        return False
+    entry = str(argv[1]).replace("\\", "/").lower()
+    return Path(entry).name in _CLAUDE_NODE_ENTRY and "claude" in entry
+
+
+def _claude_host():
+    import psutil
+    for process in psutil.Process(os.getpid()).parents():
+        if _is_claude_host(process):
+            return process
+    return None
+
+
+def register_claude_current(payload: dict, directory: Path | None = None) -> dict:
+    """Claude twin of `register_current`: a row only for an observed Claude ancestor, role from the
+    SessionStart payload plus env. Subagent lifecycle payloads never write a parent binding."""
+    _require_thread_lifecycle(payload)
+    sid = _sid(payload.get("session_id"))
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        raise ValueError("cwd must be absolute")
+    host = _claude_host()
+    if host is None:
+        raise ValueError("no observed Claude ancestor")
+    from coordinator_core.session.agent_role import classify
+    record = {"schema_version": 1, "session_id": sid, "provider": "claude", "pid": host.pid,
+              "start_epoch": int(host.create_time()), "cwd": str(Path(cwd).resolve()),
+              "role": classify({**payload, "hook_event_name": "SessionStart"}, os.environ, native_main=True),
+              "observed_at": time.time()}
+    destination = claude_registry_dir(directory)
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / f"{sid}.json"
+    with held_lock(path, timeout=_RMW_TIMEOUT, holder_label="external-registry-register-claude"):
+        atomic_write_bytes(path, (json.dumps(record) + "\n").encode("utf-8"))
+    return record
+
+
+def lookup_claude(session_id: str, directory: Path | None = None) -> dict | None:
+    """One live, birth-verified Claude row; ended, malformed, dead or reused-PID rows are absent."""
+    return _verified_row(session_id, claude_registry_dir(directory), "claude")
+
+
+def unregister_claude(session_id: str, directory: Path | None = None, *, payload: dict | None = None) -> None:
+    _require_thread_lifecycle(payload)
+    sid = _sid(session_id)
+    path = claude_registry_dir(directory) / f"{sid}.json"
+    with held_lock(path, timeout=_RMW_TIMEOUT, holder_label="external-registry-end-claude"):
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(row, dict) or row.get("schema_version") != 1 or row.get("provider") != "claude" or row.get("session_id") != sid:
+            return
+        row["ended_at"] = time.time()
+        atomic_write_bytes(path, (json.dumps(row) + "\n").encode("utf-8"))
 
 
 def preserve_task_title(session_id: str, title: str, directory: Path | None = None) -> dict | None:
@@ -299,15 +381,17 @@ def snapshot(directory: Path | None = None) -> dict[str, dict]:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event", choices=("SessionStart", "SessionEnd"), required=True)
+    parser.add_argument("--provider", choices=("codex", "claude"), default="codex")
     args = parser.parse_args(argv)
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
             raise ValueError("hook payload must be an object")
+        claude = args.provider == "claude"
         if args.event == "SessionStart":
-            register_current(payload)
+            (register_claude_current if claude else register_current)(payload)
         else:
-            unregister(payload.get("session_id"), payload=payload)
+            (unregister_claude if claude else unregister)(payload.get("session_id"), payload=payload)
     except Exception as exc:
         print(f"external-session: {type(exc).__name__}: {exc}", file=sys.stderr)
     print("{}")

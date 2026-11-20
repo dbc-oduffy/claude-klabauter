@@ -1102,6 +1102,15 @@ def install_door(
         )
 
     bin_dst = Path(bin_dst)
+    if not check_only:
+        # Before any image is copied or relinked: the 2026-11-20 incident rewrote the box
+        # images as well as the sidecar.
+        from coordinator_core.warm.door.sidecar_guard import DoorSidecarRefused, check_box_sidecar_write
+
+        try:
+            check_box_sidecar_write(bin_dst, engine_root)
+        except DoorSidecarRefused as exc:
+            raise DoorInstallError(str(exc)) from exc
     dest_exe = bin_dst / DOOR_INSTALLED_NAME
     dest_sidecar = bin_dst / door_build.SIDECAR_FILENAME
 
