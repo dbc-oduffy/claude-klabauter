@@ -2384,8 +2384,8 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
         print("  (an OSS source clone not registered under publish.mirrors.*.path, or a DoE-style", file=sys.stderr)
         print("  dev clone with the coordinator/ dev-clone markers -- see _looks_like_coordinator_claude_source).", file=sys.stderr)
         print(file=sys.stderr)
-        print("  If this box is no longer a publisher, retire its publisher config in one step:", file=sys.stderr)
-        print("    machine-local retire-publisher", file=sys.stderr)
+        print("  If this box is no longer a publisher: machine-local unset <key> for each publish.* key", file=sys.stderr)
+        print("    (machine-local list shows them); machine-local retire-publisher where the installed one has it.", file=sys.stderr)
         print(file=sys.stderr)
         # Item 11 (2026-09-01 dogfood ledger): under `> log 2>&1` this
         # stderr block did not appear at all, only truncated stdout — the
@@ -4957,6 +4957,19 @@ def _register_with_elevation_hint(register, repo_root: Path, label: str) -> bool
     return ok
 
 
+def _announce_background_jobs() -> None:
+    """Name the two background jobs before they are registered, with the per-OS mechanism and the removal command."""
+    if sys.platform == "win32":
+        how = "Task Scheduler tasks"
+    elif sys.platform == "darwin":
+        how = "launchd LaunchAgents"
+    else:
+        how = "systemd user timers"
+    print()
+    print(f"NOTICE: registering two background jobs ({how}): host-sampler (every 20m), pruner (every 15m).")
+    print("  Remove the pruner: python3 scripts/setup.py --uninstall-pruner")
+
+
 def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
     """Install-chain step: register the Windows Task Scheduler entry that
     fires ``coordinator_core.telemetry.host_sampler`` on a fixed cadence.
@@ -5859,6 +5872,7 @@ def main(argv: list[str]) -> int:
         install_general_work_ensure(repo_root, claude_klabauter_root_resolved, args)
         install_box_identity(claude_klabauter_root_resolved)
         install_box_capability(claude_klabauter_root_resolved)
+        _announce_background_jobs()
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_pruner_task(repo_root, claude_klabauter_root_resolved)
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
@@ -5895,7 +5909,7 @@ def main(argv: list[str]) -> int:
 
 
 CLOSING_CHAIN_WALK_LINE = (
-    "  For the full chain-walk: python3 coordinator/scripts/chain-walk.py"
+    "  For the full chain-walk: python3 coordinator_core/ops/setup_chain_walker.py"
 )
 
 
@@ -5911,7 +5925,7 @@ def _absolute_closing_line(line: str, claude_klabauter_root_resolved: Path) -> s
     script from elsewhere, and the scripts live under the engine root.
     """
     return re.sub(
-        r"(?<=\s)(coordinator/\S+)",
+        r"(?<=\s)(coordinator(?:_core)?/\S+)",
         lambda m: str(Path(claude_klabauter_root_resolved) / m.group(1)),
         line,
     )

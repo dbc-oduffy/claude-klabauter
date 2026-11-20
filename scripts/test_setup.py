@@ -123,7 +123,7 @@ def test_parse_args_break_system_packages_is_an_unknown_flag(setup_mod):
 
 def test_closing_line_names_runnable_chain_walk_command_and_no_doc_pointer(setup_mod):
     line = setup_mod.CLOSING_CHAIN_WALK_LINE
-    assert "python3 coordinator/scripts/chain-walk.py" in line
+    assert "python3 coordinator_core/ops/setup_chain_walker.py" in line
     assert "coordinator:" not in line
     assert "docs/" not in line
     assert "see " not in line
@@ -1845,7 +1845,7 @@ def test_dead_content_root_alone_names_the_mirror_and_retire_publisher(setup_mod
         setup_mod.check_coordinator_claude_dep(repo, setup_mod.Args())
     err = capsys.readouterr().err
     assert "PUBLISH MIRROR" in err
-    assert "machine-local retire-publisher" in err
+    assert "machine-local unset <key>" in err
     assert "--coordinator-root/COORDINATOR_CLAUDE_ROOT" not in err
 
 

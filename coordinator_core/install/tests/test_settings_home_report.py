@@ -602,12 +602,13 @@ def test_retired_whoami_absent_is_the_pass(tmp_path: Path, claude_klabauter_root
     assert len(lines) == 1 and lines[0].lstrip().startswith("PASS") and "absent" in lines[0]
 
 
-def test_percolate_identity_row_names_the_rung_the_engine_reads(tmp_path: Path, claude_klabauter_root: Path) -> None:
+def test_percolate_identity_row_is_plain_words_with_no_internal_names(tmp_path: Path, claude_klabauter_root: Path) -> None:
     sh = _populate_full_settings_home(tmp_path)
 
     lines = [ln for ln in format_report_lines(check_settings_home(sh, claude_klabauter_root)) if ".percolate-identity" in ln]
 
-    assert len(lines) == 1 and "rung 2" in lines[0] and "resolve_percolate_identity_path" in lines[0]
+    assert len(lines) == 1 and "publish" in lines[0]
+    assert "rung" not in lines[0] and "resolve_percolate" not in lines[0]
 
 
 def test_percolate_identity_is_not_required_on_a_consumer_box(
