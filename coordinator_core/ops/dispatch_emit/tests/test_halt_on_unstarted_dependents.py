@@ -155,3 +155,12 @@ def test_all_gated_unscoped_plan_still_composes_a_runtime_guarded_test_phase():
 def test_ungated_plan_carries_no_owed_gate_clause():
     script = _compose([[_row("A", "a.py")]])
     assert "Owed build gates" not in script
+
+
+def test_path_only_blocked_reply_names_its_report_in_the_halt():
+    report = ".coordinator-local/subagent-share/dispatch-reports/p/A.md"
+    out = _go(
+        f"_rows.A = _runRow('A', [], null, run('A', 'BLOCKED: {report}'));"
+        "_rows.B = _runRow('B', [_rows.A], null, run('B'));"
+    )
+    assert out["reason"] == f"dependents unstarted: B (held by A); A: blocker report {report}"

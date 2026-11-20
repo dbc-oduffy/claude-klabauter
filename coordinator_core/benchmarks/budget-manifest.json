@@ -116,7 +116,9 @@
         "value": 0.2
       },
       "spawn_count_budget": {
-        "census_python_target_tracking": 1
+        "census_python_target_tracking": 1,
+        "plan_head_probe": 1,
+        "untracked_plan_commit": 1
       },
       "_rationale": "Copies the MUTATING tier default verbatim; the override exists to carry the spawn budget. The stamp runs the same gate as plan.prep_gate, so a plan's python census targets cost the same ONE batched `git ls-files` (census.py::tracked_targets via git/run.py::run_git). Counted by coordinator_core/ops/tests/test_plan_prep_spawn_count.py with exact equality."
     },

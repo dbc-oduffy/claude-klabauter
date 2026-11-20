@@ -166,6 +166,9 @@ def write_sidecar(output_exe: Path, engine_root: Path) -> Path:
     changed one lands whole via `os.replace`, retried briefly because a
     door's read holds the handle for microseconds, not across the retry.
     """
+    from coordinator_core.warm.door.sidecar_guard import check_box_sidecar_write
+
+    check_box_sidecar_write(output_exe.parent, engine_root)
     return _write_sidecar_atomic(
         output_exe.parent / SIDECAR_FILENAME,
         (_sidecar_root_string(engine_root) + "\n").encode("utf-8"),

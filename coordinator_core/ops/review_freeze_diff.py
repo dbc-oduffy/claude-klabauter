@@ -765,10 +765,14 @@ def diff_targets_batch(repo_root: Path):
 def _read_worktree_path_bytes(repo_root: Path, path: str) -> Optional[bytes]:
     """Bytes of `<repo_root>/<path>` if it is a regular file, else None
     (absent, a directory, or otherwise unreadable as a plain file)."""
+    from coordinator_core.git import call_io_scope
+
     p = repo_root / path
-    if not p.is_file():
+    try:
+        # One read per file per call scope: review.prep's content hash re-reads these paths. A directory raises, as not-a-file.
+        return call_io_scope.read_bytes(p)
+    except (IsADirectoryError, PermissionError):
         return None
-    return p.read_bytes()
 
 
 def _range_shape(range_: str) -> Optional[int]:

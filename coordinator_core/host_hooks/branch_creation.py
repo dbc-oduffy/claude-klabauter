@@ -174,7 +174,7 @@ def _pushed_new_refs(args: List[str], cwd: str, dirs: tuple) -> List[str]:
 def match(host_event: HostEvent) -> Optional[Dict[str, str]]:
     """The deny verdict for a Codex command that mints a non-canonical branch (local or remote), else None."""
     try:
-        if host_event.tool_name != "Bash":
+        if host_event.tool_name not in ("Bash", "PowerShell"):
             return None
         command = _command(host_event)
         lowered = command.lower()

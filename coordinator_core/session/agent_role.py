@@ -143,7 +143,7 @@ def role_for_caller(caller_env, session_id):
     if explicit and explicit != "em":
         return explicit if isinstance(explicit, str) and explicit in ROLES else "unknown"
     from coordinator_core.session import external_registry
-    row = external_registry.lookup(session_id)
+    row = external_registry.lookup(session_id) or external_registry.lookup_claude(session_id)
     if not isinstance(row, dict) or row.get("session_id") != session_id:
         return "unknown"
     role = row.get("role", "unknown")

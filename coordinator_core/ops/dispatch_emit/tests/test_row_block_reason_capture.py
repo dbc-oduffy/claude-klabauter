@@ -85,7 +85,7 @@ def test_reason_is_one_collapsed_line_and_bounded() -> None:
 
 
 def test_no_contract_status_line_is_recorded() -> None:
-    assert _solo("just chatting") == "no contract status line in the executor reply"
+    assert _solo("just chatting") == 'no contract status line in the executor reply: "just chatting"'
 
 
 def test_abstain_line_names_the_abstention_not_a_missing_status() -> None:
@@ -104,7 +104,7 @@ def test_abstain_in_object_reply_and_dependents_held() -> None:
 
 
 def test_abstain_word_in_prose_keeps_the_missing_status_reason() -> None:
-    assert _solo("I will not ABSTAIN from this") == "no contract status line in the executor reply"
+    assert _solo("I will not ABSTAIN from this") == 'no contract status line in the executor reply: "I will not ABSTAIN from this"'
 
 
 def test_done_reply_records_nothing() -> None:

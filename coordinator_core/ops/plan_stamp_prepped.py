@@ -210,6 +210,31 @@ def _resolve_plan(raw: str, worktree_root: Path) -> Path:
     return candidate
 
 
+def _land_untracked_plan(worktree_root: Path, rel: str, plan_path: Path) -> Optional[str]:
+    """Commit a just-stamped plan that HEAD does not yet hold, scoped to that one path; never raises.
+
+    Invariant: a generated plan is in HEAD before Execute. A row whose prerequisite is "the plan is in
+    HEAD" (DoE run 87e5c9, C0) otherwise blocks and holds every dependent. A plan HEAD already tracks is
+    left to the run's checkpoint commit: one `ls-tree` probe, no commit. Returns a note only when a
+    commit was attempted and failed.
+    """
+    try:
+        from coordinator_core.ops import plan_status_transition as pst
+
+        if not pst._head_resolves(worktree_root) or pst._plan_tracked_in_head(worktree_root, rel):
+            return None
+        text = plan_path.read_text(encoding="utf-8")
+        split = split_frontmatter(text)
+        did = read_fm_field(split.fm_text, "deliverable_id") if split else None
+        commit = pst._commit_plan_flip(
+            worktree_root, rel, f"plan.stamp_prepped: land generated plan {rel}\n", text,
+            did.strip("'\"") if did else None, new_file=True, record_completion=False,
+        )
+        return None if commit.ok else f"commit failed: {(commit.stderr or '').strip()[:200]}"
+    except Exception as exc:  # noqa: BLE001 -- the attest already landed; a commit failure never refuses it
+        return f"commit failed: {type(exc).__name__}: {exc}"
+
+
 @register_op("plan.stamp_prepped")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "plan.stamp_prepped" handler. See module docstring."""
@@ -312,6 +337,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     report = state["report"]
     already = state["outcome"] == "already-certified"
+    commit_note = None if already else _land_untracked_plan(worktree_root, rel, plan_path)
     return {
         "plan": rel,
         "stamped": not already,
@@ -325,4 +351,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "classes": report["classes"],
         "stamp": read_stamp(plan_path.read_text(encoding="utf-8", errors="replace")),
         "engine_build": engine_build(),
+        **({"plan_commit": commit_note} if commit_note else {}),
     }

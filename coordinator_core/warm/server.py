@@ -6735,6 +6735,13 @@ def _self_stable_pid_start_epoch() -> Optional[int]:
         return None
 
 
+def _warn_box_sidecar_drift(repo_root) -> bool:
+    """Boot-time read-side warning: this engine is what a drifted box door sidecar named."""
+    from coordinator_core.warm.door.sidecar_guard import warn_if_resolved_via_drifted_sidecar
+
+    return warn_if_resolved_via_drifted_sidecar(repo_root, sys.stderr)
+
+
 def main() -> int:
     """`SERVER_ENTRY_SCRIPT`'s process entrypoint. Boot sequence:
 
@@ -6890,6 +6897,7 @@ def _run_guarded() -> int:
     listener_at = time.time()
 
     version_state = _BootVersionState(repo_root)
+    _warn_box_sidecar_drift(repo_root)
 
     try:
         from coordinator_core.bounded_io import run_bounded

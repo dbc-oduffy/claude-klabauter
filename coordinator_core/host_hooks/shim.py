@@ -99,6 +99,7 @@ def _degrade(kind_name: str, cause: str) -> None:
         return
 
 
+_SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 _WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"})
 
 
@@ -111,7 +112,7 @@ def _cold_verdict(event: HostEvent, engine_event: Mapping[str, Any]) -> Optional
     did not run (other tools, a raise, a non-dict answer). A payload carrying `agent_id` gets the subagent
     limits: the guards advise it nothing.
     """
-    shell = event.tool_name == "Bash"
+    shell = event.tool_name in _SHELL_TOOLS
     if not shell and event.tool_name not in _WRITE_TOOLS:
         return None
     try:

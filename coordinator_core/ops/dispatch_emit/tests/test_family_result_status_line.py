@@ -80,4 +80,4 @@ def test_failed_or_blocked_family_result_object_is_blocked_with_its_reason(verdi
 def test_object_without_family_still_has_no_status_line() -> None:
     out = _go({"verdict": "OK"})
     assert out["unanswered"] == ["X"]
-    assert out["reason"]["X"] == "no contract status line in the executor reply"
+    assert out["reason"]["X"].startswith("no contract status line in the executor reply")

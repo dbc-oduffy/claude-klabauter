@@ -434,6 +434,18 @@ _SPAWN_COUNT_HIGH_WATER = {
                 "First recorded 2026-10-08 at the value it entered with: the census python-target tracking check is one batched ls-files for the whole census."
             ),
         },
+        "plan_head_probe": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-11-20 at the value it entered with: one ls-tree HEAD probe decides whether a freshly stamped plan is already in HEAD; measured 1 spawn, 70ms."
+            ),
+        },
+        "untracked_plan_commit": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-11-20 at the value it entered with: committing an untracked plan through commit_authored_content costs one update-index spawn; measured 2 spawns total with the probe, 137ms warm."
+            ),
+        },
     },
     "workflow.fire": {
         "plugin_dir_resolved": {

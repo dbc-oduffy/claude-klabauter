@@ -110,3 +110,42 @@ def test_private_engine_worker_keeps_the_source_tree_root(tmp_path, monkeypatch)
     record = headless.start(str(source), private_engine={'x': 1})
     assert record['engine_root'] == str(tree)
     assert spawned['env']['PYTHONPATH'].split(headless.os.pathsep)[0] == str(tree)
+
+
+def _warm_context(tmp_path, monkeypatch, *, caller_pin, executing, registry_root):
+    """Warm server: os.environ carries no pin; the pin rides the request's caller env."""
+    from coordinator_core.session.caller_env import bind_caller_env
+    from coordinator_core.warm import engine_root
+
+    monkeypatch.delenv('COORDINATOR_DOOR_ENGINE_ROOT', raising=False)
+    monkeypatch.setattr(engine_root, 'current_engine_clone', lambda: executing)
+    monkeypatch.setattr('coordinator_core.install.engine_root_for_install.resolve_engine_root_for_install',
+                        lambda: InstallEngineRoot('published', registry_root, None))
+    env = {'COORDINATOR_DOOR_ENGINE_ROOT': str(caller_pin)} if caller_pin else {}
+    return bind_caller_env(env)
+
+
+def _stamped(path):
+    stamp = path / 'coordinator_core' / '_engine_stamp'
+    stamp.parent.mkdir(parents=True)
+    stamp.write_text('sha:x\n', encoding='utf-8')
+    return path
+
+
+def test_warm_caller_pin_equal_to_executing_engine_is_used(tmp_path, monkeypatch):
+    pinned, registry = _stamped(tmp_path / 'pinned'), tmp_path / 'registry'
+    with _warm_context(tmp_path, monkeypatch, caller_pin=pinned, executing=pinned, registry_root=registry):
+        assert headless._worker_engine_root() == pinned.resolve()
+
+
+def test_warm_caller_pin_not_executing_engine_fails_loud(tmp_path, monkeypatch):
+    pinned, other = _stamped(tmp_path / 'pinned'), _stamped(tmp_path / 'installed')
+    with _warm_context(tmp_path, monkeypatch, caller_pin=pinned, executing=other, registry_root=other):
+        with pytest.raises(headless.HeadlessEngineRootUnavailable, match='running stamped'):
+            headless._worker_engine_root()
+
+
+def test_warm_no_pin_anywhere_uses_registry(tmp_path, monkeypatch):
+    registry = tmp_path / 'registry'
+    with _warm_context(tmp_path, monkeypatch, caller_pin=None, executing=tmp_path / 'x', registry_root=registry):
+        assert headless._worker_engine_root() == registry
