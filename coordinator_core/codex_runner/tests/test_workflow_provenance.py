@@ -398,19 +398,23 @@ def test_builtin_workspace_policy_has_no_custom_permission_selector() -> None:
     assert '_workspace_permissions' not in source
 
 
-def _stub_codex(monkeypatch, tmp_path, *, response='{"a": 1}'):
+def _stub_codex(monkeypatch, tmp_path, *, response='{"a": 1}', responses=None):
     calls = _stub_family(monkeypatch, tmp_path, stdout_text='')
     inner = workflow._run_admitted
+    replies = iter(responses) if responses is not None else None
 
     def fake(argv, prompt, **kw):
-        Path(argv[argv.index('-o') + 1]).write_text(response, encoding='utf-8')
+        Path(argv[argv.index('-o') + 1]).write_text(
+            next(replies) if replies is not None else response, encoding='utf-8',
+        )
         return inner(argv, prompt, **kw)
 
     monkeypatch.setattr(workflow, '_run_admitted', fake)
     return calls
 
 
-def test_codex_gate_validates_json_rpc_result(tmp_path, monkeypatch):
+@pytest.mark.parametrize("annotated", [False, True])
+def test_codex_gate_validates_json_rpc_result(tmp_path, monkeypatch, annotated):
     # Captured from the 7f8eb5 gate; fixture paths stand in for the original sizing and baton.
     result = {
         "arm": "m_plus", "halt": None, "baton": "state/handoffs/gate.md",
@@ -418,7 +422,9 @@ def test_codex_gate_validates_json_rpc_result(tmp_path, monkeypatch):
         "tshirt": "L", "route": "plan",
     }
     envelope = {"jsonrpc": "2.0", "id": 1, "result": result}
-    _stub_codex(monkeypatch, tmp_path, response=json.dumps(envelope))
+    if annotated:
+        envelope["note"] = "Gate reply was relayed."
+    calls = _stub_codex(monkeypatch, tmp_path, response=json.dumps(envelope))
     monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
     monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
     schema = {
@@ -430,6 +436,46 @@ def test_codex_gate_validates_json_rpc_result(tmp_path, monkeypatch):
         'Gate fixture', {'label': 'gate', 'phase': 'gate', 'schema': schema},
         repo_root=tmp_path, artifact_dir=tmp_path / 'art', parent_session_id='sid',
     ) == result
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(("initial", "repair", "arm", "error"), [
+    pytest.param('{"arm":"m_plus" "halt":null}', '{"arm":"m_plus","halt":null}',
+                 "m_plus", "Expecting ',' delimiter", id="1cade98f-missing-comma"),
+    pytest.param('{"arm":"m_plus","halt":null},"acceptance":["keep this"]}',
+                 '{"arm":"m_plus","halt":null}', None, "Extra data", id="56fbcaba-no-prefix"),
+    pytest.param('{"arm":"s","halt":null}}', '{"arm":"s","halt":null}',
+                 "s", "Extra data", id="a6e58670-extra-delimiter"),
+    pytest.param('{"arm":"s" "halt":null}', '{"arm":"s" "halt":null}',
+                 None, "Expecting ',' delimiter", id="retry-exhausted"),
+])
+def test_codex_gate_reasks_once_then_returns_a_typed_halt(tmp_path, monkeypatch, initial, repair, arm, error):
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[initial, repair])
+    monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
+    monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
+    schema = {
+        "type": "object",
+        "properties": {"arm": {"type": ["string", "null"]}, "halt": {"type": ["object", "null"]}},
+        "required": ["arm", "halt"],
+    }
+    folder = tmp_path / 'art'
+    value = workflow.run_agent(
+        'Run the gate once', {'label': 'gate', 'phase': 'gate', 'schema': schema},
+        repo_root=tmp_path, artifact_dir=folder, parent_session_id='sid',
+    )
+    assert len(calls) == 2
+    retry_argv, retry_prompt = calls[1]
+    assert error in retry_prompt and 'Do not run any tools' in retry_prompt
+    assert 'Run the gate once' not in retry_prompt
+    assert '--dangerously-bypass-approvals-and-sandbox' not in retry_argv
+    assert (folder / "last.txt").read_text(encoding="utf-8") == initial
+    assert (folder / "gate-reask" / "last.txt").read_text(encoding="utf-8") == repair
+    assert json.loads((folder / "result.json").read_text(encoding="utf-8")) == value
+    assert value["arm"] == arm
+    if arm is None:
+        assert value["halt"]["kind"] == "gate-reply-invalid"
+    else:
+        assert value["halt"] is None
 
 
 def _unelevated_home(tmp_path, monkeypatch):

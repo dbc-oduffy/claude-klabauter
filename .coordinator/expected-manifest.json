@@ -2572,8 +2572,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "bae97ab162becad7f0e92b81c42ec519ec6e37ab",
-    "coordinator_core/_engine_stamp": "5d5262d6884e156ccc1299b4ff7e55f7eaf28dfb",
+    "coordinator_core/_engine_published_at": "ec69f34fbd5d0d9da09466e14ffd542bdab54937",
+    "coordinator_core/_engine_stamp": "ac42f532111ad6a99df4694df55df828976d8b48",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3976,9 +3976,9 @@
     "coordinator_core/codex_runner/tests/test_workflow_codex_shaped_env.py": "da7112d2721d6a1c07dc78f7f6112bf594725cac",
     "coordinator_core/codex_runner/tests/test_workflow_commit_params_written.py": "d1c8da4ac9417b37867576f31304b76a5ff7e2dc",
     "coordinator_core/codex_runner/tests/test_workflow_grok_relay.py": "2f4f69d1269e168b5be0c38ae3d2d5465ec5d199",
-    "coordinator_core/codex_runner/tests/test_workflow_provenance.py": "20887ff202c2fd56d82f1bce2415c6376689e80a",
+    "coordinator_core/codex_runner/tests/test_workflow_provenance.py": "f4e7701d39e443a761b9ef3254db87f88c6edab6",
     "coordinator_core/codex_runner/worker.py": "ee4f32c327095313ee05701872e4cd2c126cc2cf",
-    "coordinator_core/codex_runner/workflow.py": "dcf2fd2026ce7394697133b6ea9babb66ffeac94",
+    "coordinator_core/codex_runner/workflow.py": "2d7940741274d9ed568ad37b8581a8aadc1b2af4",
     "coordinator_core/codex_status/__init__.py": "02f08788af4f695024f78d8b4aad1c0bfe2c17c1",
     "coordinator_core/codex_status/__main__.py": "4795b68e4d9b03dee09172994489c02585dddf9b",
     "coordinator_core/codex_status/collect.py": "1926b53d2bb23855ca5ee0248ee5b8975736c5a8",
@@ -13075,5 +13075,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "bcfa86a27dd44448f56cc1e066858ab64cdf71f7"
+  "source_head": "ec04726b9e5367c3da3eb35679020b8e4f8fde6e"
 }

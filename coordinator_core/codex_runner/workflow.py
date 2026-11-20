@@ -891,6 +891,22 @@ def _write_commit_params(repo_root: Path, prompt: str) -> None:
         return
 
 
+_GATE_REASK_SECONDS = 60
+_GATE_REPLY_LIMIT = 128 * 1024
+_GATE_SCALARS = re.compile(r'"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b')
+
+
+def _gate_envelope_result(value: Any) -> Any:
+    if not isinstance(value, dict) or value.get("jsonrpc") != "2.0":
+        return value
+    keys = set(value)
+    if keys == {"jsonrpc", "id", "result"} or (
+        keys == {"jsonrpc", "id", "result", "note"} and isinstance(value["note"], str)
+    ):
+        return value["result"]
+    return value
+
+
 def run_agent(
     prompt: str,
     options: dict[str, Any] | None,
@@ -905,6 +921,7 @@ def run_agent(
     fire_id: str | None = None,
     on_native_thread: Callable[[dict], None] | None = None,
     private_cli: dict | None = None,
+    _gate_reask: bool = False,
 ) -> Any:
     """Return the schema-validated agent value; persist stdout/stderr and result.
 
@@ -913,6 +930,7 @@ def run_agent(
     a success-shaped value that a Workflow could mistake for completed work.
     """
     options = {} if options is None else options
+    started = time.monotonic()
     if not isinstance(prompt, str) or not isinstance(options, dict):
         raise AgentFailed("agent requires a string prompt and object options")
     if timeout_s <= 0 or timeout_s > 86400:
@@ -922,6 +940,8 @@ def run_agent(
     if not repo_root.is_dir():
         raise AgentFailed(f"agent cwd does not exist: {repo_root}")
     schema = options.get("schema")
+    codex_gate = (backend == "codex" and schema is not None
+                  and options.get("label") == "gate" and options.get("phase") == "gate")
     if schema is not None:
         try:
             jsonschema.validators.validator_for(schema).check_schema(schema)
@@ -1000,7 +1020,14 @@ def run_agent(
             shape_codex_child(env, writable_root=repo_root)
         except SandboxSetupRefused as exc:
             raise AgentFailed(str(exc)) from exc
-        argv = codex_family_stage_argv(native_cli, "--ephemeral", "-o", str(last))
+        if _gate_reask:
+            argv = [
+                *native_cli, "exec", "--json", "--ephemeral", "--ignore-user-config",
+                "--sandbox", "read-only", "--disable", "shell_tool", "--disable", "unified_exec",
+                "--disable", "plugins", "--disable", "apps", "-c", "mcp_servers={}", "-o", str(last),
+            ]
+        else:
+            argv = codex_family_stage_argv(native_cli, "--ephemeral", "-o", str(last))
         if schema is not None:
             schema_path = artifact_dir / "schema.json"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
@@ -1051,6 +1078,7 @@ def run_agent(
                   broker_fire_id=fire_id)
     if proc.returncode != 0:
         raise AgentFailed(f"{backend} agent exited {proc.returncode}; see {artifact_dir / 'stderr.txt'}")
+    text = None
     try:
         if backend == "claude":
             envelope = json.loads((artifact_dir / "stdout.jsonl").read_text(encoding="utf-8"))
@@ -1072,13 +1100,38 @@ def run_agent(
         else:
             text = last.read_text(encoding="utf-8")
             value = json.loads(text) if schema is not None else text
-            if (backend == "codex" and options.get("label") == "gate" and options.get("phase") == "gate"
-                    and isinstance(value, dict) and set(value) == {"jsonrpc", "id", "result"}
-                    and value["jsonrpc"] == "2.0"):
-                value = value["result"]
+            if codex_gate:
+                value = _gate_envelope_result(value)
         if schema is not None:
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
-        raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
+        if not codex_gate or _gate_reask:
+            raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
+        diagnostic = (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:400]
+        value = {"arm": None, "halt": {"kind": "gate-reply-invalid", "reason": diagnostic}}
+        remaining = min(_GATE_REASK_SECONDS, timeout_s - (time.monotonic() - started))
+        if text and len(text) <= _GATE_REPLY_LIMIT and remaining > 0 and private_cli is None:
+            retry_dir = artifact_dir / "gate-reask"
+            retry_prompt = (
+                "Repair JSON syntax in the following data. Do not run any tools or repeat the gate operation. "
+                "Preserve every key, value and its order, including trailing fields. "
+                "Return the complete original reply with only JSON punctuation or whitespace repaired. "
+                "If that is impossible, return null.\n"
+                + json.dumps({"diagnostic": diagnostic, "reply": text}, ensure_ascii=False)
+            )
+            try:
+                repaired = run_agent(
+                    retry_prompt, options, repo_root=repo_root, artifact_dir=retry_dir,
+                    backend=backend, timeout_s=remaining, parent_session_id=parent_session_id,
+                    request_id=f"{request_id}:gate-reask" if request_id is not None else None,
+                    fire_id=fire_id, _gate_reask=True,
+                )
+                repaired_text = (retry_dir / "last.txt").read_text(encoding="utf-8")
+                # A schema-valid prefix can still omit acceptance or manifest fields.
+                if _GATE_SCALARS.findall(text) == _GATE_SCALARS.findall(repaired_text):
+                    value = repaired
+            except (AgentFailed, OSError):
+                pass
+        jsonschema.validate(value, schema)
     (artifact_dir / "result.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
     return value
