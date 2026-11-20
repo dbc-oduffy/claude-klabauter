@@ -738,25 +738,21 @@ def _write_json(path: Path, obj: dict) -> None:
 
 
 def _machine_local_set(key: str, value: str) -> StepResult:
+    """Set `key` through the machine-local forwarder: the installer's interpreter cannot import coordinator_core.
+
+    The forwarder resolves the engine itself, so neither the read-back nor the write needs the engine on sys.path.
+    A registry value already equal to `value` is INHERITED with no write.
+    """
     fwd = forwarder("machine-local")
     if not fwd:
         return _fail("artifact", "machine-local forwarder absent (run the substrate step first)")
-    try:
-        from coordinator_core.machine_resolver import registry_get
-        current = registry_get(key)
-    except Exception:  # an engine not yet importable reads as unset; the set below decides
-        current = None
-    if current == value:
+    rc, current = run([fwd, "get", key], timeout=60)
+    if rc == 0 and current.strip() == value:
         return StepResult(INHERITED, f"{key} already {value}")
-    try:
-        from coordinator_core import machine_local_spawn
-    except ImportError as exc:
-        return _fail("load", f"coordinator_core not importable, cannot set {key}: {exc}", retryable=True)
-    cp = machine_local_spawn.run_bounded([fwd, "set", key, value])
-    if cp is None:
-        return _fail_run("load", SpawnFailure(127), f"machine-local set {key} could not launch or outlived its ceiling")
-    out = (cp.stdout + cp.stderr).strip()
-    return StepResult(RAN, f"{key}={value}") if cp.returncode == 0 else _fail_run("load", _launch_class(cp.returncode, out), out)
+    rc, out = run([fwd, "set", key, value], timeout=60)
+    if isinstance(rc, SpawnFailure):
+        return _fail_run("load", rc, f"machine-local set {key} could not launch or outlived its ceiling: {out}")
+    return StepResult(RAN, f"{key}={value}") if rc == 0 else _fail_run("load", rc, out)
 
 
 def step_forwarder_route(ctx: Ctx) -> StepResult:

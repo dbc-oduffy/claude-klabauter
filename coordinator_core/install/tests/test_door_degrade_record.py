@@ -71,3 +71,19 @@ def test_per_name_exceptions_are_oserror_only() -> None:
     src = substrate.__file__
     text = open(src, encoding="utf-8").read()
     assert "_PER_NAME_DEGRADE_EXCEPTIONS = (OSError,)" in text
+
+
+def test_latest_build_failure_returns_the_compiler_report(engine_root) -> None:
+    assert door_install.latest_door_build_failure() is None
+    door_install.record_install_door_degrade(
+        "coordinator-invoke",
+        SystemExit("door build: compile failed (exit 1)\ncommand: cc x.c\nstdout:\n\nstderr:\nstorage size of 'cred' isn't known"),
+    )
+    got = door_install.latest_door_build_failure()
+    assert got.startswith("door build: compile failed")
+    assert "storage size of 'cred'" in got
+
+
+def test_latest_build_failure_ignores_a_missing_toolchain_row(engine_root) -> None:
+    door_install.record_install_door_degrade("n", door_install.DoorInstallError("no C compiler"))
+    assert door_install.latest_door_build_failure() is None

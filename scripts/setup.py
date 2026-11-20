@@ -4350,6 +4350,9 @@ def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, arg
     # precondition (coordinator-claude root/plugin resolution) before its
     # subprocess ever reached the door-eligible loop.
     if not door_install.is_door_installed(bin_dst):
+        build_failure = door_install.latest_door_build_failure()
+        if build_failure:
+            print(f"[FAILED] {build_failure}", file=sys.stderr)
         print(
             f"[ADVISORY] door not installed at {bin_dst} -- install_bin_forwarders (this chunk's "
             "sole build site) did not land it, so no verification was attempted.",

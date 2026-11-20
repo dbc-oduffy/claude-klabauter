@@ -639,6 +639,41 @@ def test_replacing_the_door_relinks_hook_run_to_the_windowless_image_not_the_doo
     assert os.path.samefile(hook, windowless)
 
 
+def test_relink_never_touches_sidecars_even_when_one_shares_the_replaced_identity(tmp_path: Path) -> None:
+    # A freed inode number is recycled by the next file written, so a sidecar
+    # can carry the replaced image's identity; it must stay a plain data file.
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    door = bin_dst / door_install.DOOR_INSTALLED_NAME
+    door.write_bytes(b"new-door")
+    protected = [
+        bin_dst / door_build.SIDECAR_FILENAME,
+        bin_dst / door_build.PYTHON_SIDECAR_FILENAME,
+        bin_dst / (door_install.DOOR_INSTALLED_NAME + ".provenance.json"),
+    ]
+    protected[0].write_text("data\n", encoding="utf-8")
+    for p in protected[1:]:
+        os.link(protected[0], p)
+    prior = door_install._file_identity(protected[0])
+
+    door_install._relink_names_stranded_on(bin_dst, door, prior)
+
+    for p in protected:
+        assert not os.path.samefile(p, door)
+    assert protected[0].read_text(encoding="utf-8") == "data\n"
+
+
+def test_file_identity_is_the_entry_itself_not_its_symlink_target(tmp_path: Path) -> None:
+    target = tmp_path / "t"
+    target.write_bytes(b"x")
+    link = tmp_path / "l"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    assert door_install._file_identity(link) != door_install._file_identity(target)
+
+
 @_WIN
 def test_drift_covers_the_windowless_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sources = {p.name: door_build.source_sha256(p) for p in door_build.SOURCES}

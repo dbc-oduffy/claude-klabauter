@@ -123,6 +123,13 @@
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
 #endif
+/* `hook_engine_alive()` takes the SO_PEERCRED branch on Linux (the macro comes
+ * from <asm/socket.h> regardless of feature macros), but glibc declares
+ * `struct ucred` only under `_GNU_SOURCE`; without it the door does not
+ * compile on Linux at all. */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
 
 #include "door_core.h"
 #include "door_env_set.h"

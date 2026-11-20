@@ -1347,9 +1347,11 @@ def install_door(
 
 
 def _file_identity(path: Path) -> "Optional[tuple[int, int]]":
-    """`(st_dev, st_ino)` of `path`, or None when it does not exist."""
+    """`(st_dev, st_ino)` of `path` itself (not its symlink target), or None
+    when it does not exist. `_relink_names_stranded_on` compares this against
+    `os.lstat` of directory entries, so both sides must be the same flavour."""
     try:
-        st = os.stat(path)
+        st = os.lstat(path)
     except FileNotFoundError:
         return None
     return (st.st_dev, st.st_ino)
@@ -1381,6 +1383,9 @@ def _link_over(source: Path, dest: Path) -> None:
             pass
 
 
+_NEVER_RELINKED = frozenset({door_build.SIDECAR_FILENAME, door_build.PYTHON_SIDECAR_FILENAME})
+
+
 def _relink_names_stranded_on(
     bin_dst: Path, dest_exe: Path, prior_identity: "Optional[tuple[int, int]]"
 ) -> int:
@@ -1408,6 +1413,12 @@ def _relink_names_stranded_on(
         found = []
         for entry in bin_dst.iterdir():
             if ".stale-" in entry.name or entry.name.startswith("."):
+                continue
+            # The sidecars are data files the door reads, never door names. A
+            # freed inode number is recycled by the next file written (the
+            # sidecar), so inode identity alone can match one -- and a relink
+            # would turn it into a hard link to the ELF image.
+            if entry.name in _NEVER_RELINKED or entry.name.endswith(".provenance.json"):
                 continue
             try:
                 st = os.lstat(entry)
@@ -2121,6 +2132,23 @@ def install_door_degrade_rows(engine_root: Optional[Path] = None) -> list:
         if row.get("kind") == KIND_COLD_FAILED
         and str(row.get("cause", "")).startswith(INSTALL_DOOR_DEGRADE_CAUSE_PREFIX)
     ]
+
+
+def latest_door_build_failure(engine_root: Optional[Path] = None) -> Optional[str]:
+    """The compiler's own report from the most recent recorded door build
+    failure (`door build: compile failed (exit N)` + command + stderr), or None.
+
+    `substrate` builds the door in a child process and prints its failure to
+    that child's stderr only; the durable copy is the degrade row, so this is
+    how `setup.py` can show the error instead of a bare "door not installed".
+    """
+    marker = "door build: compile"
+    for row in reversed(install_door_degrade_rows(engine_root)):
+        cause = str(row.get("cause", ""))
+        at = cause.find(marker)
+        if at >= 0:
+            return cause[at:]
+    return None
 
 
 def main(argv: Optional[list] = None) -> int:

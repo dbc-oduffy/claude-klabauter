@@ -719,6 +719,32 @@ def test_lone_leg_wider_than_budget_still_admits(tmp_path: Path) -> None:
     assert verdict.admit and verdict.cpu_ok
 
 
+def test_workflow_leg_shadow_row_and_child_row_reserve_one_core(tmp_path: Path) -> None:
+    """The driver's `box-memory-snapshot` row and the leg's own row are one reservation."""
+    adm = tmp_path / "admission.jsonl"
+    host.register_command(adm, "codex-workflow-x", 50, 1.0)
+    assert host.reserved_cores(adm, **{k: v for k, v in _CPU_KW.items() if k != "rss_fn"}) == 1
+    host.register_command(adm, "codex-workflow-x", 60, 1.0,
+                          reservation_session_id="sess", reservation_run="codex-workflow-x")
+    assert host.reserved_cores(adm, **{k: v for k, v in _CPU_KW.items() if k != "rss_fn"}) == 1
+
+
+def test_stage_of_an_admitted_driver_admits_under_the_drivers_reservation_when_budget_is_full(tmp_path: Path) -> None:
+    adm = _cpu_ledger(tmp_path, 1, 1, 1)  # three peer legs on pids 10-12
+    host.register_command(adm, "headless-workflow-worker", 50, 1.0)  # the driver, admitted, budget now full
+    stage, _ = host.admit_and_register(adm, "codex-workflow-stage", 50, 1.0, _ROOMY, cpu_budget=4, **_CPU_KW)
+    assert stage.admit and stage.cpu_ok
+    stranger, _ = host.admit_and_register(adm, "other", 77, 1.0, _ROOMY, cpu_budget=4, **_CPU_KW)
+    assert not stranger.admit and "cpu:" in stranger.hold_reason
+
+
+def test_parallel_stages_of_one_driver_pid_count_one_core(tmp_path: Path) -> None:
+    adm = tmp_path / "admission.jsonl"
+    host.register_command(adm, "stage-a", 50, 1.0)
+    host.register_command(adm, "stage-b", 50, 1.0)
+    assert host.reserved_cores(adm, **{k: v for k, v in _CPU_KW.items() if k != "rss_fn"}) == 1
+
+
 def test_memory_hold_and_cpu_hold_both_named(tmp_path: Path) -> None:
     adm = _cpu_ledger(tmp_path, 3)
     tight = host.MemoryStatus(1 * GIB, 128 * GIB, 0, 200 * GIB)

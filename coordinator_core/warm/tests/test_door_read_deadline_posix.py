@@ -85,10 +85,12 @@ _FALLBACK_EXIT = 42
 
 def _require_binary() -> None:
     """The POSIX door is not committed as a binary the way `door.exe` is, so
-    a missing one is 'you have not built it yet', not a failure."""
+    a missing one is 'you have not built it yet', not a failure -- but the
+    skip is all that stands between a run that never built the door and a
+    meaningless green, so the reason says the suite did not run."""
     if not _DOOR_BIN.exists():
         pytest.skip(
-            f"no door binary at {_DOOR_BIN} -- build it first: "
+            f"POSIX DOOR TESTS NOT RUN (a skip is not a pass): no door binary at {_DOOR_BIN}. Build it first: "
             "python3 -m coordinator_core.warm.door.build_posix <published-engine-root>"
         )
 
@@ -167,12 +169,12 @@ def _make_stub_engine_root(tmp_path: Path) -> Path:
     )
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
-    (bin_dir / "coordinator-invoke.py").write_text(
-        "import sys\n"
-        f"print({_FALLBACK_MARKER!r})\n"
-        f"raise SystemExit({_FALLBACK_EXIT})\n",
-        encoding="utf-8",
-    )
+    stub = f"import sys\nprint({_FALLBACK_MARKER!r})\nraise SystemExit({_FALLBACK_EXIT})\n"
+    # The door resolves its fall-through CLI by its OWN image name and refuses
+    # when `coordinator/bin/<name>.py` is absent (no silent mis-dispatch). The
+    # test binary is built as `door`, so the stub must exist under that name too.
+    for cli in ("coordinator-invoke.py", f"{_DOOR_BIN.name}.py"):
+        (bin_dir / cli).write_text(stub, encoding="utf-8")
     return root.resolve()
 
 
