@@ -1836,6 +1836,11 @@ class StageManifest:
     #: Declared write path -> `kept_work.fingerprint` taken at stage, before any executor
     #: (None = absent). Serialised only when non-empty; an absent key reads as ``{}``.
     write_baseline: dict[str, Optional[str]] = field(default_factory=dict)
+    #: Declared write path -> baseline blob sha, for each path already dirty against HEAD when the FIRST
+    #: stage of the run chain captured `write_baseline` (a refire inherits it, never re-derives it): dirt
+    #: another run left, which no kept blob of this run may credit as its own. Serialised only when
+    #: non-empty; an absent key reads as ``{}``.
+    foreign_at_baseline: dict[str, str] = field(default_factory=dict)
     #: Plan chunk ids a ledger resume holds unrun; serialised only when non-empty, an absent
     #: key (a pre-change manifest) reads as ``()``.
     held_ids: tuple[str, ...] = ()
@@ -1852,6 +1857,8 @@ class StageManifest:
             out["held_ids"] = list(self.held_ids)
         if self.write_baseline:
             out["write_baseline"] = dict(self.write_baseline)
+        if self.foreign_at_baseline:
+            out["foreign_at_baseline"] = dict(self.foreign_at_baseline)
         if self.wave_test_targets:
             out["wave_test_targets"] = {k: list(v) for k, v in self.wave_test_targets.items()}
         if self.memo_close:
@@ -1916,5 +1923,8 @@ class StageManifest:
             write_baseline={
                 str(k): (None if v is None else str(v))
                 for k, v in (data.get("write_baseline") or {}).items()
+            },
+            foreign_at_baseline={
+                str(k): str(v) for k, v in (data.get("foreign_at_baseline") or {}).items() if isinstance(v, str)
             },
         )

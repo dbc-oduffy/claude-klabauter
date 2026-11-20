@@ -783,6 +783,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/group_em_slot_grant.py",
         ("_groupem_slot_check",),
     ),
+    "runs.withheld_overlap": (
+        "coordinator_core/ops/runs_withheld_overlap.py",
+        ("_runs_withheld_overlap",),
+    ),
     "groupem.box_register": (
         "coordinator_core/ops/group_em_box_federation.py",
         ("_groupem_box_register",),
@@ -2296,6 +2300,13 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         executed="Attributed by stack to run.py::run_git under "
         "`test_git_fallback_issues_exactly_one_spawn_for_many_changed_files` (`assert len(spawns) == 1` "
         "over three changed files, origin asserted run_git); first run asserted spawn-free.",
+    ),
+    # runs.withheld_overlap's dirty probe: ONE pathspec-limited `git status --porcelain=v1 -z`, none for an empty path set.
+    ("runs.withheld_overlap", "coordinator_core/git/run.py", "run_git", "git", 0): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/tests/test_runs_withheld_overlap_op.py",
+        executed="Attributed by stack to run.py::run_git under `test_clean_one_spawn_attributed` "
+        "(`assert len(spawns) == 1`, origin run_git); the empty-path call asserted spawn-free.",
     ),
     # The orientation hook's scratch-hygiene launch: the one detached Popen, taken at most once per
     # SCRATCH_TRIGGER_INTERVAL_SECS, behind the `_launch_scratch_hygiene` seam.

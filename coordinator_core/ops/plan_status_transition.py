@@ -4015,6 +4015,16 @@ def main(argv: List[str]) -> int:
     through this explicit dispatch, invoked by a human/EM-typed CLI call
     (see `_stamp_superseded`'s negative-spec).
     """
+    # The success lines carry a non-ASCII arrow; on a cp1252 console a strict stdout
+    # raises AFTER the plan write and commits landed and flips the exit code to 1.
+    # "replace" makes the print incapable of failing the already-committed mutation.
+    for _stream in (sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if _reconfigure is not None:
+            try:
+                _reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
     try:
         opts = _parse_args(argv)
     except _CliError as exc:

@@ -12,7 +12,13 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional
 
-from coordinator_core.ops.dispatch_emit.kept_work import blob_sha, checkin_form, fingerprint, kept_fingerprints
+from coordinator_core.ops.dispatch_emit.kept_work import (
+    blob_sha,
+    checkin_form,
+    fingerprint,
+    kept_fingerprints,
+    matches_committed,
+)
 
 NO_CHANGE_REFUSAL = "no-change"
 
@@ -62,6 +68,23 @@ def capture(root: Path, paths: Iterable[str]) -> dict[str, Optional[str]]:
         out[p] = blob_sha(data)
         persist_raw(common, data)
     return out
+
+
+def foreign_at_baseline(root: Path, baseline: Mapping[str, Optional[str]]) -> dict[str, str]:
+    """`{path: baseline blob sha}` for each baselined path already dirty against HEAD when the baseline
+    was captured: its checkin form differs from the HEAD blob, or HEAD lacks it. Another run's dirt, by
+    construction: the run has not executed yet. Absent paths (None) are never foreign. In-process
+    (``head_blobs``), no spawn. A refire must inherit the first stage's answer, not call this."""
+    held = {p: sha for p, sha in baseline.items() if isinstance(sha, str)}
+    if not held:
+        return {}
+    from coordinator_core.git.git_state import head_blobs
+
+    head = head_blobs(root, list(held))
+    return {
+        p: sha for p, sha in held.items()
+        if p not in head or not matches_committed(root, p, sha, head[p][1])
+    }
 
 
 def unwritten(root: Path, baseline: Mapping[str, Optional[str]], paths: Iterable[str]) -> list[str]:

@@ -76,6 +76,19 @@ class RunInvariants:
 
         return self._once("baseline", build)
 
+    def foreign_at_baseline(self) -> dict:
+        """`{path: blob sha}` the first stage found dirty against HEAD (manifest `foreign_at_baseline`)."""
+        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+
+        def build() -> dict:
+            raw = self.manifest().get("foreign_at_baseline")
+            return {
+                hha._norm(p): s for p, s in (raw.items() if isinstance(raw, dict) else ())
+                if isinstance(p, str) and isinstance(s, str)
+            }
+
+        return self._once("foreign", build)
+
     def declared(self) -> frozenset:
         """Normalised manifest `rows[].writes` paths."""
         from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
@@ -629,9 +642,11 @@ def _unproduced(root: Path, run_id: str, path: str) -> tuple:
 
     committed_sha = kept_work.blob_sha(form)
     inv = _inv(root, run_id)
-    for kept in inv.own_kept().get(path, ()):
-        if kept_work.matches_committed(root, path, kept, committed_sha):
-            return "", [], head_bytes
+    foreign_sha = inv.foreign_at_baseline().get(path)
+    if foreign_sha is None:  # a blob holding dirt that predates the run's first baseline proves nothing
+        for kept in inv.own_kept().get(path, ()):
+            if kept_work.matches_committed(root, path, kept, committed_sha):
+                return "", [], head_bytes
 
     base = inv.baseline()
     if base is None or path not in base:
@@ -655,6 +670,8 @@ def _unproduced(root: Path, run_id: str, path: str) -> tuple:
         if not any(a <= _span(h)[1] and _span(h)[0] <= b for a, b in delta)
     ]
     mine = _own_hunk_evidence(root, common, run_id, path, head) if outside else set()
+    if mine and foreign_sha is not None:
+        mine -= _kept_blocks(root, common, path, head, [foreign_sha])
 
     ranges: list = []
     own: list = []

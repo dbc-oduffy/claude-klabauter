@@ -520,6 +520,7 @@ def private_cli_fixture(tmp_path):
 
 
 def test_private_cli_fake_wire_resolves_native_before_private_path(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path/'extra').mkdir();monkeypatch.setenv('PATH',os.environ.get('PATH','')+os.pathsep+str(tmp_path/'extra')+os.sep+os.pathsep)  # trailing-separator entry
     contract,kwargs,_,_=private_cli_fixture(tmp_path)
     capture=fake_cli(tmp_path,monkeypatch,events=[{'type':'thread.started','thread_id':'01a1b826-0012-72a0-a4d0-eae0ae828f4c'}])
     original=agents.resolve_codex;resolve_env=[]
@@ -534,9 +535,11 @@ def test_private_cli_fake_wire_resolves_native_before_private_path(tmp_path: Pat
         if key=='PATH':
             # The final-env shaper may put PowerShell 7 first and drop WindowsApps pwsh alias dirs; private-bin stays first.
             from coordinator_core.codex_runner.sandbox_preflight import is_windowsapps_path
-            assert wire['env'][key].split(os.pathsep)[0]==contract['private_bin']
+            norm=lambda e:os.path.normcase(os.path.normpath(e.strip('"')))
+            wire_path=[norm(e) for e in wire['env'][key].split(os.pathsep) if e.strip()]
+            assert wire_path[0]==norm(contract['private_bin'])
             kept={e for e in value.split(os.pathsep) if not(is_windowsapps_path(e) and os.path.isfile(os.path.join(e.strip('"'),'pwsh.exe')))}
-            assert kept<=set(wire['env'][key].split(os.pathsep))
+            assert {norm(e) for e in kept if e.strip()}<=set(wire_path)
         else:assert wire['env'][key]==value
     assert 'COORDINATOR_SESSION_ID' not in wire['env'] and 'CODEX_THREAD_ID' not in wire['env']
     assert wire['env']['COORDINATOR_PARENT_SESSION_ID']==kwargs['parent_session_id']

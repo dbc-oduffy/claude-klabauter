@@ -536,6 +536,21 @@ def test_untracked_plan_flips_on_disk_and_skips_commit(tmp_path: Path, capsys: p
 # stamp-superseded (C2, docs/plans/2026-08-06-<this-plan>.md)
 # ---------------------------------------------------------------------------
 
+def test_stamp_superseded_survives_cp1252_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import sys
+
+    p = _write(tmp_path, "p.md", "---\ntitle: T\nstatus: draft\n---\n\nBody.\n")
+    successor = _write(tmp_path, "successor.md", "---\ntitle: S\nstatus: draft\n---\n\nBody.\n")
+    raw = io.BytesIO()
+    wrapper = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
+    monkeypatch.setattr(sys, "stdout", wrapper)
+    rc = main(["stamp-superseded", "--plan", str(p), "--by", str(successor)])
+    assert rc == 0
+    assert "status: superseded" in p.read_text(encoding="utf-8")
+    assert "superseded" in raw.getvalue().decode("utf-8", errors="replace")
+
+
 def test_stamp_superseded_happy_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\ntitle: T\nstatus: draft\n---\n\nBody.\n")
     successor = _write(tmp_path, "successor.md", "---\ntitle: S\nstatus: draft\n---\n\nBody.\n")

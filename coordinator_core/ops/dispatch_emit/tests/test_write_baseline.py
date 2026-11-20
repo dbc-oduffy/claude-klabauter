@@ -103,3 +103,17 @@ def test_zero_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "a").write_text("1")
     base = wb.capture(tmp_path, ["a", "b"])
     assert wb.unwritten(tmp_path, base, ["a", "b"]) == ["a", "b"]
+
+
+def test_foreign_at_baseline_marks_only_paths_dirty_against_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git import git_state
+
+    (tmp_path / "clean.py").write_text("same\n")
+    (tmp_path / "dirty.py").write_text("peer edit\n")
+    clean_sha = wb.blob_sha(b"same\n")
+    monkeypatch.setattr(
+        git_state, "head_blobs",
+        lambda root, paths: {"clean.py": (0o100644, clean_sha), "dirty.py": (0o100644, "0" * 40)},
+    )
+    base = wb.capture(tmp_path, ["clean.py", "dirty.py", "gone.py"])
+    assert wb.foreign_at_baseline(tmp_path, base) == {"dirty.py": base["dirty.py"]}
