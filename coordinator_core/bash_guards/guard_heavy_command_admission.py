@@ -627,8 +627,8 @@ def _cap_leg(
             _deny_text(
                 LEG_SESSION_CAP,
                 "no session anchor found above pid %d" % caller,
-                _retry("launch from inside a Claude session", "the launching session"),
-                legacy="Launch from inside a Claude session",
+                _retry("launch from inside a Claude or Codex session", "the launching session"),
+                legacy="Launch from inside a Claude or Codex session",
             ),
             None,
             None,
