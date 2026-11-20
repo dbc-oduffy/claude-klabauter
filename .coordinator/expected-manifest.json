@@ -2573,8 +2573,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "99c65a408b60c4225e026307b4f990967858146e",
-    "coordinator_core/_engine_stamp": "c5751c36cf24809e3346a9d1eb7c4439845ff584",
+    "coordinator_core/_engine_published_at": "a5e1b450e95180eb02c33abeb79ef958b95e9ab2",
+    "coordinator_core/_engine_stamp": "d289c074edc03417370164a17e73133f534423f1",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6194,7 +6194,7 @@
     "coordinator_core/ops/dispatch_emit/cross_repo_write_refusal.py": "c794e77a397a9f808f1caf5a3b2c5d4993cb1354",
     "coordinator_core/ops/dispatch_emit/declared_hold_release.py": "675cd7d7d27459e297016caee4b4561f524644f4",
     "coordinator_core/ops/dispatch_emit/declared_writes_reconcile.py": "3487a2bcd123cfa87b4e4d253842a6b7f133598d",
-    "coordinator_core/ops/dispatch_emit/deferred_emit_script.py": "abae5aea5304b7aa6f3d0de113f3f246409b5b35",
+    "coordinator_core/ops/dispatch_emit/deferred_emit_script.py": "e7dc4b53d8084a85f20c7ecd5cf69a3b07f84b21",
     "coordinator_core/ops/dispatch_emit/delivery_credit.py": "392973bcc7c4d39fa15642b6f5d174d1af2db698",
     "coordinator_core/ops/dispatch_emit/design_approval.py": "9e120fc66cb37154040737b2b8d68d5921cb58bc",
     "coordinator_core/ops/dispatch_emit/design_conformance.py": "46586c0c43130f22cfc9453d767fce7a4f78b95d",
@@ -7008,7 +7008,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_deferred_emit_minted_not_started.py": "4ac81dd8b3672a80e480c2cb2a048163778996fc",
     "coordinator_core/ops/dispatch_emit/tests/test_deferred_emit_relay_no_literal.py": "8b960d377af1396f86d9c3e2d550d3bf1e716f01",
     "coordinator_core/ops/dispatch_emit/tests/test_deferred_emit_script_meta_description.py": "4da7b6e85a75b7e681672cb8fcb73efe8ced0293",
-    "coordinator_core/ops/dispatch_emit/tests/test_deferred_emit_script_receipt.py": "52d5dd21883c6445288329d2276234a17763b537",
+    "coordinator_core/ops/dispatch_emit/tests/test_deferred_emit_script_receipt.py": "c1aa0f59d28f7f641c4ee9559d9d1a96c81dedba",
     "coordinator_core/ops/dispatch_emit/tests/test_degraded_host_refuses_surviving_coordinator_types.py": "8186f09b1b637b02297ea1a744effc3deef1c990",
     "coordinator_core/ops/dispatch_emit/tests/test_delivered_at_head_not_held_by_foreign_dirt.py": "4fe07b3eb268fae09ed7e16c118308957a28bf8f",
     "coordinator_core/ops/dispatch_emit/tests/test_delivery_credit_landed_earlier.py": "45d3687c2a90095b5f8990d4646c23eb6f6495c1",
@@ -12120,10 +12120,10 @@
     "coordinator_core/warm/door/build.py": "6da12239f770d60754f2cb9e6b9cd7cc07b58c9b",
     "coordinator_core/warm/door/build_posix.py": "bc3f0b622e82d4c7f5bd28265303747fc15c9188",
     "coordinator_core/warm/door/door-w.exe": "76f6f96815b1c14658582b15cd4fe5c88631de06",
-    "coordinator_core/warm/door/door-w.exe.provenance.json": "59896bc424d08bd9024a77578029181b41809628",
+    "coordinator_core/warm/door/door-w.exe.provenance.json": "7a1548417c1b1b23fc0e16d7e050026f23c92fe7",
     "coordinator_core/warm/door/door.c": "96919bd7c8d8fd23cd8e363955ad8c1173a39d65",
     "coordinator_core/warm/door/door.exe": "1453202b71c9c77119e135502c80a53b4b7ea036",
-    "coordinator_core/warm/door/door.exe.provenance.json": "10e037cc85ec2cf381a5ce414f4764f6dad0c6ba",
+    "coordinator_core/warm/door/door.exe.provenance.json": "4a7c76fe172f7105b8463e4d184beefaef0325f9",
     "coordinator_core/warm/door/door_core.c": "57f532a982ad01ce676e749662db7d04834e2c81",
     "coordinator_core/warm/door/door_core.h": "1e22d66318ff94f3e43f3442dea168d4612e51d3",
     "coordinator_core/warm/door/door_core_selftest.c": "ac5946b839e26216f0e50aaeb1099f77a1e6a009",
@@ -13076,5 +13076,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "7ed004228acc57f54cada042bb648c7ca77a3f04"
+  "source_head": "7e5f6d30d54ba1687aa3a89aaae1588ecea58805"
 }
