@@ -343,7 +343,7 @@ def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: f
         env = dict(os.environ, COORDINATOR_WARM='0')
         env['PYTHONPATH'] = str(_executor_root())
         with (artifacts / 'stdout.log').open('wb') as out, (artifacts / 'stderr.log').open('wb') as err:
-            subprocess.run([sys.executable, '-m', 'coordinator_core.ops.workflow_fire.cold_operation', str(request), str(response)],
+            subprocess.run([sys.executable, '-P', '-m', 'coordinator_core.ops.workflow_fire.cold_operation', str(request), str(response)],
                 cwd=repo, env=env, stdout=out, stderr=err, check=True, timeout=timeout,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         reply = json.loads(response.read_text(encoding='utf-8'))
