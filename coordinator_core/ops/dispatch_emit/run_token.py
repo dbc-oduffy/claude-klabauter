@@ -1038,9 +1038,9 @@ def live_records(repo_root: Path) -> Iterator[dict]:
 
 
 def _predates_halt(repo_root: Path, record: dict) -> bool:
-    """True when `record` is the token its run minted before the run's `halted` marker was written:
-    the run stopped, so the token holds nothing. A refire's re-mint is newer than the marker and
-    holds. Only the listing hides it: `halt_admits`, `escrowed` and `readmit_reviewed` read the
+    """True when `record` is the token its run minted before the run's ended marker (`halted`,
+    `superseded`, `landed` or `closed`) was written: the run stopped, so the token holds nothing and no
+    driver is left behind it. A refire's re-mint is newer than the marker and holds. Only the listing hides it: `halt_admits`, `escrowed` and `readmit_reviewed` read the
     record directly, so the refire still reclaims. Unknown (no marker, unreadable) is not halted."""
     try:
         from coordinator_core.ops.dispatch_emit import halted_run
@@ -1048,7 +1048,9 @@ def _predates_halt(repo_root: Path, record: dict) -> bool:
 
         directory = record_dir(Path(repo_root), record["run_id"])
         marker = halted_run.read_strict(directory)
-        if not marker or marker.get("status") != halted_run.STATUS_HALTED:
+        if not marker or marker.get("status") not in (
+            halted_run.STATUS_HALTED, halted_run.STATUS_SUPERSEDED, halted_run.STATUS_LANDED, halted_run.STATUS_CLOSED,
+        ):
             return False
         minted = record.get("minted_at")
         return isinstance(minted, (int, float)) and (directory / halted_run.HALTED_FILE).stat().st_mtime >= minted

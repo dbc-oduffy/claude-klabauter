@@ -861,6 +861,14 @@ _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 # grok's; a rejected pattern surfaces as the named cancel error. Literals match ask_compose's.
 _INVOKE_ONLY_AGENT_TYPES = frozenset({_OP_RELAY_AGENT_TYPE, _COMMIT_AGENT_TYPE})
 _RELAY_ALLOW = "Bash(coordinator-invoke:*)"
+# Trap: grok's headless allow gate never matches a command led by the `&` call operator (measured: every
+# `--allow Bash...` rule still answers "permission required"), so grok is told the bare form; settings-home
+# bin is on its PATH (_grok_child_path), which resolves sizing-assemble and coordinator-invoke by name.
+_WINDOWS_CALL_FORM = {
+    False: 'For a quoted executable use the PowerShell call operator &, followed by the quoted path. ',
+    True: 'Run every command as a plain command: never lead with the & call operator or quote the executable; '
+          'coordinator tools such as sizing-assemble and coordinator-invoke are on PATH, so run them by bare name. ',
+}
 
 
 def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None) -> list[str]:
@@ -1129,7 +1137,7 @@ def run_agent(
     if os.name == 'nt':
         full_prompt = (
             'Native execution platform: Windows. Run supplied commands with PowerShell. '
-            'For a quoted executable use the PowerShell call operator &, followed by the quoted path. '
+            + _WINDOWS_CALL_FORM[backend == 'grok'] +
             'Do not wrap a command in cmd.exe /c, use POSIX parameter expansion, or add literal backslash-escaped quotes. '
             'Run each coordinator-invoke as one plain command, coordinator-invoke <op> \'<json>\', by that bare name '
             '(it is on PATH): never its full path or the & operator, no Set-Location, '

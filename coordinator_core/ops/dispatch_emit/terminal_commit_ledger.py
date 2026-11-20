@@ -496,7 +496,7 @@ def _ledger_gate(
     plan_text: Optional[str] = None, inline_review: Optional[dict] = None,
     resume_ledger: object = None, plan_rel: Optional[str] = None,
     recovery_withheld: Optional[Sequence[str]] = None, code_paths: Sequence[str] = (),
-    sidecar_root: Optional[Path] = None,
+    sidecar_root: Optional[Path] = None, mended: Sequence[str] = (),
 ) -> tuple[Optional[dict], object, list]:
     """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
     does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
@@ -548,7 +548,7 @@ def _ledger_gate(
         noted_paths=requirements_ledger.noted_paths(worktree_root, run_dir),
         code_paths=code_paths,
         review_verdicts=review_floor.verdict_count(inline_review, sidecar_root or worktree_root),
-        note_ids=requirements_ledger.note_ids(run_dir),
+        note_ids=requirements_ledger.note_ids(run_dir), mended=mended,
     )
     since_halt: dict = {}
     if resume_ledger is not None:

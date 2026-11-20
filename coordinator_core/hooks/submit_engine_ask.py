@@ -89,7 +89,8 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "em_size", "family", "fresh", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing",
+    "em_rationale", "em_size", "family", "fresh", "join", "repo", "resume_in_place", "resume_run_id", "route_preference", "sender",
+    "sizing",
     "source", "stop_after", "supersedes", "writes",
 )
 _INPUT_KEYS: tuple[str, ...] = ("run_id", "repo")
@@ -183,6 +184,13 @@ def _fresh_flag(tool_input: Mapping[str, Any]) -> bool:
     """True when `args.fresh` is the bool true: the refire closes the prior run and mints a new one."""
     args = tool_input.get("args")
     return isinstance(args, dict) and args.get("fresh") is True
+
+
+def _resume_in_place_flag(tool_input: Mapping[str, Any]) -> bool:
+    """True when `args.resume_in_place` is the bool true: the refire keeps the named halted run across an engine
+    swap instead of closing it superseded-by-refire. `fresh` outranks it."""
+    args = tool_input.get("args")
+    return isinstance(args, dict) and args.get("resume_in_place") is True
 
 
 def _is_peer_delivery(content: Any) -> bool:
@@ -3291,8 +3299,13 @@ def _resume_route(
     params.pop("fresh", None)
     prior_engine = ran_under_engine(rd)
     current_engine = hrr.engine_sha()
-    differs = bool(prior_engine and current_engine and prior_engine != current_engine)
-    if _fresh_flag(payload.get("tool_input") or {}) or differs:
+    tool_input = payload.get("tool_input") or {}
+    # A stamp mismatch closes the run for a fresh mint by default; `resume_in_place` is the EM's opt-out for a
+    # halt the engine itself caused, which the engine fix cures without redoing the run.
+    differs = bool(
+        prior_engine and current_engine and prior_engine != current_engine and not _resume_in_place_flag(tool_input)
+    )
+    if _fresh_flag(tool_input) or differs:
         # An unmarked or already-terminal run closes False and resumes: a fresh mint beside it would
         # leave its kept chunks creditable through own_records_run.
         if mark_superseded_by_refire(

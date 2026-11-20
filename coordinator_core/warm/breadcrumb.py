@@ -212,6 +212,18 @@ TRANSPORT_PIPE = "pipe"
 TRANSPORT_UNIX = "unix"
 
 
+def endpoint_token(endpoint: str) -> str:
+    """The engine-token segment of a breadcrumb's `pipe` endpoint.
+
+    Windows records `<prefix>.<token>`; POSIX records a socket path
+    `<svc dir>/<token>.sock`. Splitting on the last dot alone returns the
+    literal `sock` for the latter, which never equals a computed token.
+    """
+    if endpoint.endswith(".sock"):
+        return endpoint[: -len(".sock")].replace("\\", "/").rsplit("/", 1)[-1]
+    return endpoint.rsplit(".", 1)[-1]
+
+
 def _default_engine_clone() -> Path:
     """This module's own resolved clone root -- collapsed onto the single
     shared definition, `engine_root.current_engine_clone()` (plan

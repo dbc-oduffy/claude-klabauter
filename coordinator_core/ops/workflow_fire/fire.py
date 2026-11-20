@@ -1108,6 +1108,12 @@ _HEADLESS_WARNING = (
 )
 
 
+REFIRE_HINT = (
+    "this digest's fire already ended; to start a new fire of the same script after an engine fix, "
+    "repeat workflow.fire with refire: true"
+)
+
+
 def reserve_fire(
     script: Path,
     resolved_cwd: str,
@@ -1116,12 +1122,17 @@ def reserve_fire(
     expected: Optional[str] = None,
     concurrency_cap: int = DEFAULT_CONCURRENCY_CAP,
     notify_to: Optional[str] = None,
+    refire: bool = False,
 ) -> tuple[Path, str, Path, dict]:
     """Arbitrate both executor kinds through one digest reservation registry.
 
     Return registry, fire id, record path and the saved reservation. An existing
     matching digest carries ``already_fired``; only a terminal record explicitly
     known not to have executed is retryable. No transport runs under the cap lock.
+
+    ``refire`` is the supported re-fire of a digest whose fire already ended (the engine, not the script,
+    was at fault): a matching record that reads ``exited`` after refresh no longer dedupes, a live or
+    pending one still does. A terminal match returned without ``refire`` carries ``refire_hint``.
     """
     registry_dir = _registry_dir(resolved_cwd)
     fire_id = uuid.uuid4().hex
@@ -1136,7 +1147,11 @@ def reserve_fire(
 
                     previous_path = _record_path(registry_dir, previous["fire_id"])
                     refreshed = refresh_record(previous_path, previous, notify=False)
-                    return registry_dir, previous["fire_id"], previous_path, {**refreshed, "already_fired": True}
+                    terminal = refreshed.get("state") == "exited"
+                    if refire and terminal:
+                        continue
+                    hint = {"refire_hint": REFIRE_HINT} if terminal else {}
+                    return registry_dir, previous["fire_id"], previous_path, {**refreshed, "already_fired": True, **hint}
         live = count_live_fires(resolved_cwd, notify=False)
         if live >= concurrency_cap:
             raise ConcurrencyCapExceededError(
@@ -1170,6 +1185,7 @@ def fire_workflow(
     run_id: Optional[str] = None,
     expected: Optional[str] = None,
     notify_to: Optional[str] = None,
+    refire: bool = False,
 ) -> dict:
     """Fire one detached ``claude -p`` child for ``script_path``.
 
@@ -1263,7 +1279,7 @@ def fire_workflow(
 
     registry_dir, fire_id, record_path, reservation = reserve_fire(
         script, resolved_cwd, script_sha256, expected=expected,
-        concurrency_cap=concurrency_cap, notify_to=notify_to,
+        concurrency_cap=concurrency_cap, notify_to=notify_to, refire=refire,
     )
     if reservation.get("already_fired"):
         return reservation

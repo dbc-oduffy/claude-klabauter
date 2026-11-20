@@ -740,6 +740,10 @@ def _central_fan_in_matches(
             else convention_repo_key(cid)
         )
         if candidate_key in all_repos:
+            # A publish mirror registered as `repos.content_root` is not the central working tree
+            # (it has no inbox); counting it makes every central id bounce off the mirror refusal.
+            if _is_never_inbox_mirror_path(Path(all_repos[candidate_key])):
+                continue
             # Two spellings of one repo (an authoring repo key and the
             # published `repos.content_root`) registered at the same path are
             # one receiver, not a disagreement.
@@ -1203,24 +1207,44 @@ def never_inbox_mirror_refusal(
     """
     if receiver_repo_path is None:
         return None
+    if not _is_never_inbox_mirror_path(receiver_repo_path):
+        return None
+    engine_clause = f"engine/klabauter topics to {_repo_key_to_self_em_id('repos.claude_klabauter')}"
+    doctrine_em_id = _reachable_doctrine_em_id()
+    if doctrine_em_id is None:
+        # Naming an id that resolves to the mirror again is a bounce; say what is missing instead.
+        lead = f"no doctrine receiver resolves to a working tree on this box (register repos.doe_claude); send {engine_clause}"
+    else:
+        lead = f"Send coordinator/doctrine topics to {doctrine_em_id}; {engine_clause}"
+    return (
+        f"memo: {receiver_em_id!r} resolves to a publish mirror, which has no inbox.\n"
+        f"  {lead}.\n"
+        f"  {PR_COMMENT_FALLBACK}"
+    )
+
+
+def _is_never_inbox_mirror_path(path: Path) -> bool:
+    """True when `path` is a publish mirror clone: it carries the PUBLISH_MIRROR marker or a mirror basename."""
     try:
-        basename = os.path.basename(str(receiver_repo_path).rstrip("/\\")).lower()
+        basename = os.path.basename(str(path).rstrip("/\\")).lower()
     except Exception:
         basename = ""
     try:
-        marked = (Path(receiver_repo_path) / PUBLISH_MIRROR_MARKER).is_file()
+        marked = (Path(path) / PUBLISH_MIRROR_MARKER).is_file()
     except OSError:
         marked = False
-    if not marked and basename not in _NEVER_INBOX_MIRROR_PATH_BASENAMES:
+    return marked or basename in _NEVER_INBOX_MIRROR_PATH_BASENAMES
+
+
+def _reachable_doctrine_em_id() -> Optional[str]:
+    """The canonical central receiver id when a central repo resolves to a non-mirror tree, else None."""
+    try:
+        central_ids = read_central_receiver_ids()
+        if not _central_fan_in_matches(central_ids, read_registry_repos()):
+            return None
+        return canonical_receiver_id(sorted(central_ids)[0])
+    except Exception:
         return None
-    central_ids = sorted(read_central_receiver_ids())
-    doctrine_em_id = central_ids[0] if central_ids else _repo_key_to_receiver_em_id("repos.content_root")
-    return (
-        f"memo: {receiver_em_id!r} resolves to a publish mirror, which has no inbox.\n"
-        f"  Send coordinator/doctrine topics to {doctrine_em_id}; "
-        f"engine/klabauter topics to {_repo_key_to_self_em_id('repos.claude_klabauter')}.\n"
-        f"  {PR_COMMENT_FALLBACK}"
-    )
 
 
 _CHECKOUT_DEFECT_NO_CHECKOUT = "no-checkout"

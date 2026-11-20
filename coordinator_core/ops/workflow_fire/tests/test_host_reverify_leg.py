@@ -122,11 +122,26 @@ def test_host_verify_drops_evicted_targets_and_all_evicted_is_not_a_failure(tmp_
     monkeypatch.setattr(headless, "_run_pinned_test_leg", fake)
     params = _evicted_run(tmp_path, ["tests/test_a.py", "tests/test_b.py"], ["tests/test_a.py"])
     result = headless._verify_test_leg(params, str(tmp_path), tmp_path / "art", 60, run_id="r1")
-    assert seen == [["tests/test_b.py"]] and result["status"] == "pass"
+    assert seen == [["tests/test_b.py"]] and result["status"] == "pass-with-skips"
+    assert result["evicted_targets"] == ["tests/test_a.py"]
+    assert [s["test"] for s in result["skipped"]] == ["tests/test_a.py"]
 
     seen.clear()
     params = _evicted_run(tmp_path / "all", ["tests/test_a.py"], ["tests/test_a.py"])
     result = headless._verify_test_leg(params, str(tmp_path / "all"), tmp_path / "art", 60, run_id="r1")
     assert seen == []
-    assert result["status"] == "pass" and result["tests_run"] == 0
+    assert result["status"] == "pass-with-skips" and result["tests_run"] == 0
     assert result["evicted_targets"] == ["tests/test_a.py"]
+
+
+def test_host_verify_reports_a_missing_declared_target_as_a_skip_not_a_pass(tmp_path, monkeypatch):
+    """0db00a: 19 tests passed while the run's declared regression test was absent from the tree."""
+    def fake(repo, output, artifacts, targets, base, timeout, baseline_output=None):
+        return 0, {"status": "pass", "tests_run": 19, "tests_failed": 0,
+                   "missing_targets": ["tests/test_memory.py"]}
+
+    monkeypatch.setattr(headless, "_run_pinned_test_leg", fake)
+    params = _evicted_run(tmp_path, ["tests/test_a.py", "tests/test_memory.py"], [])
+    result = headless._verify_test_leg(params, str(tmp_path), tmp_path / "art", 60, run_id="r1")
+    assert result["status"] == "pass-with-skips" and result["tests_run"] == 19
+    assert [s["test"] for s in result["skipped"]] == ["tests/test_memory.py"]

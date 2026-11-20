@@ -220,3 +220,27 @@ def test_windows_preamble_demands_one_plain_command(tmp_path: Path, stub, monkey
     _run(tmp_path, "coordinator:op-relay")
     prompt = (tmp_path / "art" / "prompt.txt").read_text(encoding="utf-8")
     assert ("no Set-Location" in prompt) is plain
+
+
+@pytest.mark.parametrize("backend,leads_with_amp", [("grok", False), ("codex", True)])
+def test_windows_grok_is_told_the_bare_form_its_allow_gate_matches(
+        tmp_path: Path, stub, monkeypatch: pytest.MonkeyPatch, backend, leads_with_amp) -> None:
+    """grok's headless gate denies `& '<exe>'` even under --allow Bash, so only grok drops the call operator."""
+    _, box = stub
+    box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
+    real_os = workflow.os
+
+    class _OsView:
+        name = "nt"
+
+        def __getattr__(self, attr):
+            return getattr(real_os, attr)
+
+    monkeypatch.setattr(workflow, "os", _OsView())
+    monkeypatch.setattr(workflow, "_run_admitted", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("stop")))
+    with pytest.raises(RuntimeError, match="stop"):
+        workflow.run_agent("go", {"agentType": "coordinator:executor"}, repo_root=tmp_path,
+                           artifact_dir=tmp_path / "art", backend=backend, parent_session_id="sid")
+    prompt = (tmp_path / "art" / "prompt.txt").read_text(encoding="utf-8")
+    assert ("use the PowerShell call operator &" in prompt) is leads_with_amp
+    assert ("by bare name" in prompt) is (not leads_with_amp)

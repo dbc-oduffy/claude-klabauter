@@ -217,7 +217,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
             timeout_s=params.get("timeout_s", 7200),
             args=params.get("args"), run_id=params.get("run_id"),
             caller_session_id=fire_record_caller_session_id(principal),
-            expected=expected,
+            expected=expected, refire=params.get("refire") is True,
             **private_args,
         )
     elif executor == "claude":
@@ -231,6 +231,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
             expected=expected,
             notify_to=notify_to.strip() if notify_to else None,
             run_id=params.get("run_id"),
+            refire=params.get("refire") is True,
         )
     else:
         raise ValueError("executor must be headless or claude")

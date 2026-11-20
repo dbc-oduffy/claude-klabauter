@@ -351,6 +351,17 @@ def test_withheld_by_naming_no_gated_chunk_fails(run, gated):
     ]
 
 
+def test_withheld_by_a_mended_chunk_fails_as_not_withheld_never_as_a_phantom_gate(run):
+    """0db00a: a remnant pass repaired C1's recovery block, so C1 left the gate set while the verdict still
+    named it; the refusal must say the row is not withheld, not that C1 is no gated chunk."""
+    verdict = _verdict(("R1", "met"), ("R2", "not_met", {"withheld_by": "C1"}), ("R3", "met"))
+    out = rl.judge(_ledger(run), verdict, gated=[], mended={"C1"})
+    assert not out["pass"] and out["open"] == []
+    (failure,) = out["failures"]
+    assert failure["id"] == "R2" and "names no gated chunk" not in failure["reason"]
+    assert "repaired by a later remnant pass" in failure["reason"]
+
+
 def test_an_essential_not_met_row_still_fails_beside_a_withheld_one(run):
     verdict = _verdict(("R1", "not_met"), ("R2", "not_met", {"withheld_by": "C9"}), ("R3", "met"))
     out = rl.judge(_ledger(run), verdict, gated={"C9"})

@@ -2299,7 +2299,7 @@ def judge(
     repo_root: Optional[Path] = None, plan_text: Optional[str] = None,
     wave_reviews: Sequence[Mapping] = (), noted_paths: Sequence[str] = (),
     code_paths: Sequence[str] = (), review_verdicts: Optional[int] = None,
-    note_ids: Collection[str] = (),
+    note_ids: Collection[str] = (), mended: Collection[str] = (),
 ) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
     `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
@@ -2311,6 +2311,9 @@ def judge(
     passes, is listed open as `awaiting_operator <id>` with `row` and `command` keys.
     A verdict id naming an operator plan row is ignored, like a gated one. An `AfterPublishCommand`
     value (an owed em-performed row, see `owed_rows`) lists the row `owed-after-publish <id>` instead.
+
+    `mended` is the chunk ids whose recovery block a later remnant pass repaired: they gate nothing, so a
+    `not_met` row naming one in `withheld_by` fails as not withheld (its verdict predates the repair).
 
     `gated` is the stage manifest's gated chunk ids (`manifest.gated[].id`); None or empty withholds
     nothing. A verdict id naming a gated chunk is a plan row, not a requirement: it is ignored,
@@ -2462,6 +2465,14 @@ def judge(
                     open_rows.append({
                         "id": item.id, "reason": f"{label} {withheld}",
                         "row": withheld, "command": operator[withheld],
+                    })
+                elif withheld in mended:
+                    failures.append({
+                        "id": item.id,
+                        "reason": (
+                            f"not met: withheld_by {withheld} was repaired by a later remnant pass and "
+                            "withholds nothing; re-check the row against the repaired tree"
+                        ),
                     })
                 else:
                     failures.append({
@@ -3203,7 +3214,7 @@ def _run_driven(root: Path, run_id: str, sizing_rel: Optional[str], halted: bool
 
 def _token_not_a_runner(root: Path, run_id: str) -> bool:
     """True when an unredeemed token proves no runner: the run holds an abandoned-at-minted halt
-    marker, or `warp_live.runner_unproven`. A read failure answers False (unknown is not dead)."""
+    marker, an ended marker newer than its token, a fully exited fire registry, or `warp_live.runner_unproven`. A read failure answers False (unknown is not dead)."""
     try:
         from coordinator_core import warp_live
         from coordinator_core.ops.dispatch_emit import halted_run
@@ -3212,6 +3223,11 @@ def _token_not_a_runner(root: Path, run_id: str) -> bool:
         marker = halted_run._read(record_dir(root, run_id))
         if marker and ABANDONED_AT_MINTED in (marker.get("halted"), marker.get(halted_run.HALT_REASON_FIELD)):
             return True
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        record = run_token._read_rec(root, run_id)
+        if record is not None and run_token._predates_halt(root, record):
+            return True  # minted before the run ended (halted, superseded, landed, closed): its driver is gone
         return _fire_worker_exited(root, run_id) or bool(warp_live.runner_unproven(root, run_id))
     except Exception:  # noqa: BLE001 -- unknown never reports a run dead
         return False

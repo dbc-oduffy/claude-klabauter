@@ -2368,6 +2368,7 @@ def _terminal_commit_inner(
     open_rows: list = []
     if ask_run_dir is not None:
         recovery_withheld = _recovery_withheld_param(params)
+        mended: set = set()
         if recovery_withheld:
             from coordinator_core.ops.dispatch_emit.land_run import _recovery_chunks, _remnant_record
 
@@ -2384,7 +2385,7 @@ def _terminal_commit_inner(
             inline_review,
             params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
             recovery_withheld=recovery_withheld,
-            code_paths=floor_code, sidecar_root=worktree_root,
+            code_paths=floor_code, sidecar_root=worktree_root, mended=sorted(mended),
         )
         if unmet is not None:
             if not (unmet.get("already_landed") and unmet.get("committed")):
