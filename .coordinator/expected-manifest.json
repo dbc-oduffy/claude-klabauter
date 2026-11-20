@@ -2573,8 +2573,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "8deaeabda8369f0ee0b39aad6bf75e6d495283d2",
-    "coordinator_core/_engine_stamp": "05a744f3efa666d16e28d6b43a82fb6590ae0ee4",
+    "coordinator_core/_engine_published_at": "aebe8f1fa7db1f0cd8cdd932dfa5ff022d2ba6c8",
+    "coordinator_core/_engine_stamp": "68ea980c765c9de7cb9ac1e0864b46d6d84b49aa",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -10986,7 +10986,7 @@
     "coordinator_core/roadmap/tests/test_plan_terminality.py": "44c72a8b3318a5b2a3f1c97f1611b09d11b8f682",
     "coordinator_core/roadmap/tests/test_pm_gate_signal.py": "5d4aec058d885932ce64e4cfb26b323d4bb45bee",
     "coordinator_core/roadmap/tests/test_post_stamp_clause.py": "322b9346c1711b54ce56a1c8ad165c262dcc882f",
-    "coordinator_core/roadmap/tests/test_prep_gate.py": "69c3d6e11158f64cdacb48e4908831eb9eed2c0e",
+    "coordinator_core/roadmap/tests/test_prep_gate.py": "27c327a186865c04ac02968535cc89a60544d395",
     "coordinator_core/roadmap/tests/test_prep_gate_agent_type_roster.py": "fcd078b00dd64417545291fa2eeb112ed50d8d76",
     "coordinator_core/roadmap/tests/test_prep_gate_capabilities.py": "4d310cadf2ecab587712172b237e4d8d14777fc5",
     "coordinator_core/roadmap/tests/test_prep_gate_census_typed.py": "b80a3819b6bdfc9e598e3fff3ca37263c8b4ac8a",
@@ -13076,5 +13076,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "6c19d8e1e5a7c34fd83df28c1093bae93c46573b"
+  "source_head": "abb9c4688098d11fe25b56d282eb7801c24b5dc3"
 }

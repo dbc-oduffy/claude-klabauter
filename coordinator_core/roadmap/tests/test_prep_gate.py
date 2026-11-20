@@ -1407,18 +1407,18 @@ def test_a_row_editing_an_existing_dr_is_not_refused(tmp_path):
 @pytest.mark.parametrize(
     "value, expected",
     [
-        ("../example-retrieval-repo/x.py", "project-rag"),
-        ("..\\example-retrieval-repo\\x.py", "project-rag"),
-        ("./../example-retrieval-repo", "project-rag"),
-        ("example-retrieval-repo-ue-addon/x.py", "example-retrieval-repo-ue-addon"),
-        ("../example-retrieval-repo-ue-addon/x.py", "example-retrieval-repo-ue-addon"),
-        ("example-retrieval-repo@x.py", "project-rag"),
-        ("example-retrieval-repo-other/x.py", None),
-        ("example_retrieval_repo_two/x.py", None),
+        ("../fixture-app/x.py", "fixture-app"),
+        ("..\\fixture-app\\x.py", "fixture-app"),
+        ("./../fixture-app", "fixture-app"),
+        ("fixture-app-addon/x.py", "fixture-app-addon"),
+        ("../fixture-app-addon/x.py", "fixture-app-addon"),
+        ("fixture-app@x.py", "fixture-app"),
+        ("fixture-app-other/x.py", None),
+        ("fixture-app_two/x.py", None),
     ],
 )
 def test_matched_sibling_normalises_paths_and_matches_names_exactly(value, expected):
-    assert pg._matched_sibling(value, ("project-rag", "example-retrieval-repo-ue-addon")) == expected
+    assert pg._matched_sibling(value, ("fixture-app", "fixture-app-addon")) == expected
 
 
 def test_a_dotdot_sibling_read_is_cleared_by_its_ungated_entry(tmp_path):
