@@ -2465,15 +2465,20 @@ def _verify_tests_call(
         "coordinator_core.ops.test_leg_run", repo_root,
         f"{base_flag}--out {_powershell_quote(out_path)} -- ", shell="powershell",
     )
+    # Build apostrophe escapes at runtime so emitter quoting cannot split their JS string literals.
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nYou run this run's scoped tests and report; you edit, "
         "stage and commit nothing. ",
         f"js:({test_js})",
         " The test run is this one command, replacing any direct pytest invocation above; its scope follows "
         f"the `--`. Use only the command matching your worker shell.\n\nBash:\n{leg_command}",
-        """js:(_manifest.test_targets ?? []).map(t => "'" + t.replace(/'/g, "'\"'\"'") + "'").join(' ')""",
+        "js:(_manifest.test_targets ?? []).map(t => String.fromCharCode(39) + "
+        "t.replaceAll(String.fromCharCode(39), String.fromCharCode(39, 34, 39, 34, 39)) + "
+        "String.fromCharCode(39)).join(' ')",
         f"\n\nPowerShell:\n{windows_command}",
-        """js:(_manifest.test_targets ?? []).map(t => "'" + t.replace(/'/g, "''") + "'").join(' ')""",
+        "js:(_manifest.test_targets ?? []).map(t => String.fromCharCode(39) + "
+        "t.replaceAll(String.fromCharCode(39), String.fromCharCode(39, 39)) + "
+        "String.fromCharCode(39)).join(' ')",
         "\n\nRun once using the native shell. In Bash use run_in_background: true and no timeout parameter; "
         "wait for its completion notification. In PowerShell wait for the process to exit. "
         "Do not sleep, poll or re-run it. Then Read "

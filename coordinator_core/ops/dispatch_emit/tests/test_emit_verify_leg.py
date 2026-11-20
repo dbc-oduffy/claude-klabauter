@@ -6,6 +6,8 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
@@ -248,6 +250,26 @@ def _ask_verify_script() -> str:
     from .test_ask_compose import _compose as ask_compose_script
 
     return ask_compose_script()
+
+
+def test_emitted_ask_with_native_verifier_compiles_in_headless_runtime(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required to compile a headless Workflow")
+    emitted = tmp_path / "emit.workflow.mjs"
+    script = _ask_verify_script()
+    assert "PowerShell:" in script and "test_targets ?? []).map(" in script
+    emitted.write_text(script, encoding="utf-8")
+    runtime = Path(__file__).resolve().parents[2] / "workflow_fire" / "runtime.mjs"
+    probe = """
+import { readFileSync } from 'node:fs';
+const { workflowBody } = await import(process.argv[1]);
+const body = workflowBody(readFileSync(process.argv[2], 'utf8'));
+new Function('return async function() {\\n' + body + '\\n};');
+"""
+    proc = subprocess.run([node, "--input-type=module", "-e", probe, runtime.as_uri(), str(emitted)],
+                          capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, proc.stderr
 
 
 def _call_at(script: str, label: str) -> str:
