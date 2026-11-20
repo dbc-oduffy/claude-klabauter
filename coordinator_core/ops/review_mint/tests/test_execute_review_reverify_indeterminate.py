@@ -195,3 +195,45 @@ def test_doe_reverify_inventory_command_runs_verbatim_in_powershell(monkeypatch)
         "run_key": run_key,
         "session_id": session,
     }
+
+
+def test_reverify_test_leg_runs_pinned_module_from_product_cwd(monkeypatch, tmp_path):
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import pytest
+
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell is unavailable")
+    engine = tmp_path / "pinned engine"
+    product = tmp_path / "product"
+    product.mkdir()
+    module = engine / "coordinator_core" / "ops" / "test_leg_run.py"
+    module.parent.mkdir(parents=True)
+    for package in (module.parent, module.parent.parent):
+        (package / "__init__.py").touch()
+    module.write_text(
+        "import json, os, sys\nprint(json.dumps([__file__, os.getcwd(), sys.argv[1:]]))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(engine))
+    clause = er._test_leg_clause(
+        "abc123", "scratch/base.txt", "scratch/result.json", repo_root=str(product), shell="powershell",
+    )
+    command = next(part for part in clause.split(chr(96)) if "coordinator_core.ops.test_leg_run" in part)
+    run = subprocess.run(
+        [pwsh, "-NoProfile", "-NonInteractive", "-Command", command.replace("<the pytest targets>", "tests/test_sample.py")],
+        cwd=product, capture_output=True, text=True, timeout=5,
+    )
+    assert run.returncode == 0, run.stderr
+    origin, cwd, argv = json.loads(run.stdout)
+    assert str(engine) not in clause
+    assert Path(origin) == module
+    assert Path(cwd) == product
+    assert argv == [
+        "--base-sha", "abc123", "--head-sha", "HEAD", "--base-export-out", "scratch/base.txt",
+        "--out", "scratch/result.json", "--", "tests/test_sample.py",
+    ]

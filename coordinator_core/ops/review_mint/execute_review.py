@@ -1110,9 +1110,12 @@ def _test_leg_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
     return f"scratch/reverify-test-leg-{token}.json"
 
 
-def _test_leg_clause(base_ref: str, export_path: str, json_path: str) -> str:
+def _test_leg_clause(
+    base_ref: str, export_path: str, json_path: str, *, repo_root: str, shell: str,
+) -> str:
     """Step 2's single engine command running the pytest targets, base measure included; the base
     arguments are omitted when the base is the unset placeholder."""
+    from coordinator_core.ops.dispatch_emit.ask_compose import engine_module_command
     from coordinator_core.ops.test_leg_run import TEST_LEG_MINUTES_BUDGET
 
     base = (
@@ -1120,10 +1123,14 @@ def _test_leg_clause(base_ref: str, export_path: str, json_path: str) -> str:
         if base_ref == "run_base_sha"
         else f"--base-sha {base_ref} --head-sha HEAD --base-export-out {export_path} "
     )
+    command = engine_module_command(
+        "coordinator_core.ops.test_leg_run", repo_root, f"{base}--out {json_path} --",
+        portable=True, shell=shell,
+    )
     return (
-        f" Run all the pytest targets in ONE command, in the foreground through Bash with timeout {(TEST_LEG_MINUTES_BUDGET + 1) * 60_000} "
-        f"(create `scratch/` first if absent): `python -m coordinator_core.ops.test_leg_run {base}"
-        f"--out {json_path} -- <the pytest targets>`. Run it once: never repeat it, split it per id, "
+        f" Run all the pytest targets in ONE foreground command using the native shell, with timeout "
+        f"{(TEST_LEG_MINUTES_BUDGET + 1) * 60_000} (create `scratch/` first if absent): "
+        f"`{command} <the pytest targets>`. Run it once: never repeat it, split it per id, "
         "detach it or wait on it. Its JSON gives `failing`, `failing_detail` and `passed_alone`; the "
         "node test files above are the only tests run outside it. "
     )
@@ -1236,7 +1243,10 @@ def _reverify_phase(
     sidecars_js = _REVERIFY_SIDECARS_JS
     export_path = _base_export_file(run_key, run_id, prep_slice_id)
     base_path_arg = "" if base_ref == "run_base_sha" else f',"base_export_path":"{export_path}"'
-    test_leg = _test_leg_clause(base_ref, export_path, _test_leg_file(run_key, run_id, prep_slice_id))
+    test_leg = _test_leg_clause(
+        base_ref, export_path, _test_leg_file(run_key, run_id, prep_slice_id),
+        repo_root=repo_root or ".", shell="powershell" if os.name == "nt" else "bash",
+    )
     from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND
 
     owned_first = _REVERIFY_OWNED_FIRST_CLAUSE.format(
