@@ -1,6 +1,8 @@
 """Both headless executors write prompt.txt for a codex/agy/grok agent beginning with the WORKER ROLE preamble."""
 from __future__ import annotations
 
+import os
+import shlex
 import sys
 
 import pytest
@@ -17,6 +19,20 @@ _DOE_PREAMBLE = (
     "names that exact command. Touch only the paths this brief declares, do only the stage\n"
     "below, and answer with its result."
 )
+
+
+def test_grok_sizing_prompt_contains_installed_command(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_contract import SIZING_ASSEMBLE_CMD
+    from coordinator_core.ops.workflow_fire import worker_preamble
+
+    home = tmp_path / "settings home"
+    monkeypatch.setattr(worker_preamble, "settings_home", lambda: home)
+    name = "sizing-assemble.exe" if os.name == "nt" else "sizing-assemble"
+    path = (home / "bin" / name).as_posix()
+    command = f"& '{path}'" if os.name == "nt" else shlex.quote(path)
+    brief = f"Run `{SIZING_ASSEMBLE_CMD} --json`."
+    assert f"Run `{command} --json`." in with_worker_preamble("grok", brief)
+    assert with_worker_preamble("claude", brief) == brief
 
 
 class _Spawned(Exception):

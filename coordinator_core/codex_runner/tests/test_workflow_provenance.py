@@ -518,6 +518,23 @@ def test_codex_gate_reasks_once_then_returns_a_typed_halt(tmp_path, monkeypatch,
         assert value["halt"] is None
 
 
+def test_codex_gate_closes_only_missing_outer_brace(tmp_path, monkeypatch):
+    result = {
+        "arm": "s", "halt": None, "acceptance": {"route": "plan"},
+        "manifest_handle": {"path": "manifest.json"}, "resume_phases": {"reuse": ["plan"]},
+    }
+    wrapped = json.dumps({"jsonrpc": "2.0", "id": 1, "result": result})
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[wrapped[:-1]])
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    schema = {"type": "object", "required": ["arm", "halt"]}
+    assert workflow.run_agent(
+        "Run gate", {"label": "gate", "phase": "gate", "schema": schema},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    ) == result
+    assert len(calls) == 1
+
+
 def test_codex_halt_commit_repairs_reply_without_repeating_operation(tmp_path, monkeypatch):
     repaired = '{"committed":true,"run_artifacts":{"withheld":{"halted.json":"halt-record-only"}}}'
     calls = _stub_codex(monkeypatch, tmp_path, responses=[repaired[:-1], repaired])

@@ -1161,6 +1161,16 @@ def run_agent(
             raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
         diagnostic = (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:400]
         value = {"arm": None, "halt": {"kind": "gate-reply-invalid", "reason": diagnostic}} if codex_gate else None
+        if (codex_gate and isinstance(exc, json.JSONDecodeError)
+                and exc.pos == len(text) and _GATE_WRAPPER_PREFIX.match(text)):
+            try:
+                closed = _gate_envelope_result(json.loads(text + "}"))
+                jsonschema.validate(closed, schema)
+            except (ValueError, jsonschema.ValidationError):
+                pass
+            else:
+                (artifact_dir / "result.json").write_text(json.dumps(closed, ensure_ascii=False), encoding="utf-8")
+                return closed
         remaining = min(_GATE_REASK_SECONDS, timeout_s - (time.monotonic() - started))
         if text and len(text) <= _GATE_REPLY_LIMIT and remaining > 0 and private_cli is None:
             from coordinator_core.ops.dispatch_emit.run_truth_contract import ARMS
