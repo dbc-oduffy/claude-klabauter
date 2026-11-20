@@ -980,8 +980,7 @@ def run_agent(
     schema = options.get("schema")
     codex_gate = (backend == "codex" and schema is not None
                   and options.get("label") == "gate" and options.get("phase") == "gate")
-    codex_halt_commit = (backend == "codex" and schema is not None
-                         and options.get("label") == "halt-commit" and options.get("phase") == "commit")
+    codex_structured_reply = backend == "codex" and schema is not None
     if schema is not None:
         try:
             jsonschema.validators.validator_for(schema).check_schema(schema)
@@ -1157,7 +1156,7 @@ def run_agent(
         if schema is not None:
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
-        if not (codex_gate or codex_halt_commit) or _gate_reask:
+        if not codex_structured_reply or _gate_reask:
             raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
         diagnostic = (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:400]
         value = {"arm": None, "halt": {"kind": "gate-reply-invalid", "reason": diagnostic}} if codex_gate else None
@@ -1175,7 +1174,7 @@ def run_agent(
         if text and len(text) <= _GATE_REPLY_LIMIT and remaining > 0 and private_cli is None:
             from coordinator_core.ops.dispatch_emit.run_truth_contract import ARMS
 
-            retry_dir = artifact_dir / ("gate-reask" if codex_gate else "halt-commit-reask")
+            retry_dir = artifact_dir / ("gate-reask" if codex_gate else "reply-reask")
             wrapper_payload = _gate_redundant_halt_payload(text) if codex_gate else None
             context = {"diagnostic": diagnostic, "reply": text}
             if codex_gate:
@@ -1213,12 +1212,12 @@ def run_agent(
                         value = repaired
                 elif codex_gate and _gate_reask_preserves_scalars(text, repaired_text):
                     value = repaired
-                elif codex_halt_commit and _GATE_SCALARS.findall(text) == _GATE_SCALARS.findall(repaired_text):
+                elif not codex_gate and _GATE_SCALARS.findall(text) == _GATE_SCALARS.findall(repaired_text):
                     value = repaired
             except (AgentFailed, OSError):
                 pass
         if value is None:
-            raise AgentFailed(f"{backend} halt-commit reply could not be repaired: {diagnostic}") from exc
+            raise AgentFailed(f"{backend} structured reply could not be repaired: {diagnostic}") from exc
         jsonschema.validate(value, schema)
     (artifact_dir / "result.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
     return value

@@ -535,9 +535,15 @@ def test_codex_gate_closes_only_missing_outer_brace(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_codex_halt_commit_repairs_reply_without_repeating_operation(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("label", "phase", "broken", "diagnostic"), [
+    ("halt-commit", "commit", lambda reply: reply[:-1], "Expecting ',' delimiter"),
+    ("plan-prep-gate", "plan", lambda reply: reply + "}", "Extra data"),
+])
+def test_codex_structured_stage_repairs_reply_without_repeating_operation(
+    tmp_path, monkeypatch, label, phase, broken, diagnostic,
+):
     repaired = '{"committed":true,"run_artifacts":{"withheld":{"halted.json":"halt-record-only"}}}'
-    calls = _stub_codex(monkeypatch, tmp_path, responses=[repaired[:-1], repaired])
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[broken(repaired), repaired])
     monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
     monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
     schema = {
@@ -545,13 +551,13 @@ def test_codex_halt_commit_repairs_reply_without_repeating_operation(tmp_path, m
         "properties": {"committed": {"type": "boolean"}, "run_artifacts": {"type": "object"}},
     }
     assert workflow.run_agent(
-        "Record halt once", {"label": "halt-commit", "phase": "commit", "schema": schema},
+        "Run operation once", {"label": label, "phase": phase, "schema": schema},
         repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
     ) == json.loads(repaired)
     assert len(calls) == 2
     argv, prompt = calls[1]
-    assert "Expecting ',' delimiter" in prompt
-    assert "Record halt once" not in prompt
+    assert diagnostic in prompt
+    assert "Run operation once" not in prompt
     assert argv[argv.index("--sandbox") + 1] == "read-only"
 
 
