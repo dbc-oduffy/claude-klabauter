@@ -23,6 +23,10 @@ FILE_NAME = "land-legs.json"
 
 OUTCOME_HALT = "land-deadline"
 OUTCOME_LANDED = "landed"
+#: A commit ran but carries none / only some of the run's measured code paths.
+OUTCOME_LANDED_NO_CODE = "landed_no_code"
+OUTCOME_PARTIAL = "partial"
+COMMITTED_OUTCOMES = frozenset({OUTCOME_LANDED, OUTCOME_LANDED_NO_CODE, OUTCOME_PARTIAL})
 
 #: Longest a caller waits on the record write; a drop returns None like any other failure.
 WRITE_DEADLINE_SECS = 0.15
@@ -68,7 +72,7 @@ def write(
                 tmp = target.with_name(f"{FILE_NAME}.{os.getpid()}.{threading.get_ident()}.tmp")
                 tmp.write_text(json.dumps(body, indent=2), encoding="utf-8", newline="\n")
                 with _replace_guard(target):
-                    if outcome == OUTCOME_LANDED or _recorded_outcome(target) != OUTCOME_LANDED:
+                    if outcome in COMMITTED_OUTCOMES or _recorded_outcome(target) not in COMMITTED_OUTCOMES:
                         os.replace(tmp, target)
                     else:
                         tmp.unlink(missing_ok=True)

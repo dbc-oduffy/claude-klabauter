@@ -2599,7 +2599,12 @@ def _terminal_commit_inner(
     )
     from coordinator_core.ops.dispatch_emit import run_artifacts
 
+    from coordinator_core.ops.dispatch_emit.run_close import bare_run_id
+
+    # A `.workflow` run id (the emitted script's stem) names no record dir; the bare run's does.
     art_run_id = ask_run_dir.name if ask_run_dir is not None else params.get("run_id")
+    if isinstance(art_run_id, str):
+        art_run_id = bare_run_id(art_run_id)
     artifacts: Optional[run_artifacts.RunArtifacts] = None
     if not anchor_only and isinstance(art_run_id, str) and art_run_id:
         from coordinator_core.ops.dispatch_emit.halted_record_request import within_handoffs_home

@@ -111,6 +111,7 @@ def evict(
     blobs = record_dir / BLOBS_DIR
     planned: dict[str, tuple[bytes, str, bytes | None, bytes | None]] = {}
     refusals: dict[str, str] = {}
+    claims: dict | None = None
     for rel in paths:
         data = _read(root, rel)
         if data is None:
@@ -125,9 +126,11 @@ def evict(
             refusals[rel] = f"evict refused, tree kept: {refusal}"
             continue
         if run_id is not None:
-            from coordinator_core.ops.dispatch_emit import live_write_guard
+            from coordinator_core.ops.dispatch_emit import live_write_guard, sibling_claims
 
-            refusal = live_write_guard.check_live_write(root, run_id, rel, reset or b"")
+            if claims is None:  # one claim lookup for the whole eviction, not one per path
+                claims = sibling_claims.sibling_run_claims(root, run_id, [sibling_claims._norm(p) for p in paths])
+            refusal = live_write_guard.check_live_write(root, run_id, rel, reset or b"", claims)
             if refusal:
                 refusals[rel] = refusal
                 continue

@@ -812,3 +812,109 @@ def test_non_host_repo_writes_nothing_before_the_host_check_and_second_call_is_a
     assert second["reaped"] == [] and second["committed_sha"] is None
     assert _tree_state(bare) == before
     assert _git(["rev-parse", "HEAD"], bare) == head
+
+
+LANDED = "ask-20261001T000030-aaaa30"
+SHIPPED = "ask-20261001T000031-bbbb31"
+DIRTY_TERMINAL = ("landed", "stage"), ("shipped", "stage"), ("landed", "halted"), ("landed", "outcome")
+
+
+def _terminal_run(root: Path, run_id: str, state: str, source: str) -> None:
+    """An aged, tokenless run whose terminal outcome is ``state``, recorded in ``source``."""
+    rec = root / "state" / "warp" / run_id
+    rec.mkdir(parents=True, exist_ok=True)
+    if source == "stage":
+        (rec / "run-stage.json").write_text(json.dumps({"stage": state, "session_id": None}), encoding="utf-8")
+    elif source == "halted":
+        (rec / "halted.json").write_text(json.dumps({"status": state}), encoding="utf-8")
+    else:
+        out = root / "state" / "run-evidence" / run_id / "outcome.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"run_id": run_id, "state": state}), encoding="utf-8")
+    _record(root, run_id, age=run_token.TTL_SECONDS + 3600)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize("state,source", DIRTY_TERMINAL)
+def test_landed_or_shipped_run_is_never_marked_abandoned(bare, state, source):
+    """A run whose record says landed/shipped may be cleaned up, but never reads abandoned."""
+    _terminal_run(bare, LANDED, state, source)
+
+    out = _reap(bare)
+
+    assert out["ok"] is True
+    outcome = json.loads((bare / "state" / "run-evidence" / LANDED / "outcome.json").read_text(encoding="utf-8"))
+    assert outcome["state"] == state
+    assert "halt_kind" not in outcome
+    body = _git(["log", "-1", "--format=%B"], bare)
+    assert "abandoned" not in body
+    assert ar._already_reaped(bare, LANDED, None, set()) is False
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_terminal_runs_do_not_taint_the_abandoned_ones_in_one_reap(bare):
+    _terminal_run(bare, LANDED, "landed", "stage")
+    _record(bare, STALE, age=run_token.TTL_SECONDS + 3600)
+
+    out = _reap(bare)
+
+    assert set(out["reaped"]) == {LANDED, STALE}
+    read = lambda r: json.loads((bare / "state" / "run-evidence" / r / "outcome.json").read_text(encoding="utf-8"))
+    assert read(LANDED)["state"] == "landed" and read(STALE)["state"] == "abandoned"
+    body = _git(["log", "-1", "--format=%B"], bare)
+    assert STALE in body.splitlines()[0] and LANDED not in body.splitlines()[0]
+
+
+REAL = "ask-20261120T085435-6fe5b0"
+REAL_SIZING = "state/sizings/2026-11/2026-11-20-readout-members-ran-g2-g3-6fe5b0.yaml"
+
+
+def _real_shape(root: Path, *, status: str, sizing_run_id: str) -> None:
+    """The 6fe5b0 record: stage staged/executing, no halted.json or outcome, a manifest and run.json
+    naming a sizing that reads shipped under the ``.workflow`` run id."""
+    rec = root / "state" / "warp" / REAL
+    rec.mkdir(parents=True, exist_ok=True)
+    (rec / "run-stage.json").write_text(
+        json.dumps({"stage": "staged", "phase": "executing", "session_id": None}), encoding="utf-8",
+    )
+    (rec / "manifest.json").write_text(json.dumps({"run_dir": f"scratch/warp/{REAL}"}), encoding="utf-8")
+    _write(root, REAL_SIZING, f"status: {status}  # draft | shipped\nrun_state:\n  run_id: \"{sizing_run_id}\"\n")
+    _record(root, REAL, age=run_token.TTL_SECONDS + 3600, sizing=REAL_SIZING)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize("suffix", [".workflow", ""])
+def test_staged_run_whose_sizing_shipped_is_not_abandoned(bare, suffix):
+    _real_shape(bare, status="shipped", sizing_run_id=REAL + suffix)
+
+    out = _reap(bare)
+
+    assert out["ok"] is True
+    outcome = json.loads((bare / "state" / "run-evidence" / REAL / "outcome.json").read_text(encoding="utf-8"))
+    assert outcome["state"] == "shipped" and "halt_kind" not in outcome
+    assert "abandoned" not in _git(["log", "-1", "--format=%B"], bare)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_staged_run_whose_sizing_is_unshipped_stays_abandoned(bare):
+    _real_shape(bare, status="routed", sizing_run_id=REAL + ".workflow")
+
+    _reap(bare)
+
+    outcome = json.loads((bare / "state" / "run-evidence" / REAL / "outcome.json").read_text(encoding="utf-8"))
+    assert outcome["state"] == "abandoned"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_closed_halt_marker_reads_shipped_not_abandoned(bare):
+    _terminal_run(bare, LANDED, "closed", "halted")
+
+    _reap(bare)
+
+    outcome = json.loads((bare / "state" / "run-evidence" / LANDED / "outcome.json").read_text(encoding="utf-8"))
+    assert outcome["state"] == "shipped"

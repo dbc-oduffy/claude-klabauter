@@ -41,7 +41,7 @@ def test_refusal_leaves_tree_and_record_untouched_and_names_holder(tmp_path: Pat
     root, rec = _world(tmp_path)
     seen = []
 
-    def refuse(r, run_id, path, new_bytes) -> str:
+    def refuse(r, run_id, path, new_bytes, claims=None) -> str:
         seen.append((run_id, path, new_bytes))
         return "write to a.py drops 1 unlanded hunk(s) held by peer-run."
 
@@ -68,7 +68,7 @@ def test_no_refusal_still_evicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_untracked_path_is_checked_as_removal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, rec = _world(tmp_path, baseline=None)
     seen = []
-    monkeypatch.setattr(live_write_guard, "check_live_write", lambda r, i, p, b: seen.append(b))
+    monkeypatch.setattr(live_write_guard, "check_live_write", lambda r, i, p, b, c=None: seen.append(b))
     hte.evict(root, rec, ["a.py"], {"a.py": None}, run_id="me")
     assert seen == [b""]
     assert not (root / "a.py").exists()
