@@ -1814,10 +1814,10 @@ def step_engine_check(ctx: Ctx) -> StepResult:
 
 
 # Who runs each track step. A human step names the exact command the agent hands over; the agent
-# never runs it itself (plugin_update reaches the harness's plugin store).
+# never runs that step itself.
 TRACK_STEP_RUNNERS = {
     "plugin_install": {"runner": "human", "handover": "/plugin marketplace add dbc-oduffy/coordinator-claude, then /plugin install coordinator@coordinator-claude"},
-    "plugin_update": {"runner": "human", "handover": "/coordinator:install"},
+    "plugin_update": {"runner": "agent", "handover": None},
     "grok_plugin_install": {"runner": "human", "handover": "grok plugin install <coordinator-claude clone> --trust"},
     "engine_setup": {"runner": "agent", "handover": None},
     "engine_check": {"runner": "agent", "handover": None},
