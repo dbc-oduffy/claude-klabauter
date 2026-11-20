@@ -120,7 +120,14 @@ def _unimatrix_tests_never_write_a_real_pair_key(request: pytest.FixtureRequest,
 def _publish_shadow_store_is_per_test(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory):
     """A test never adopts a shadow into the real Temp store: one override in `shadow_store`,
     honoured by a publish module loaded at any time. Teardown drops the process-local store ownership."""
-    from coordinator_core.percolate import shadow_store
+    try:
+        from coordinator_core.percolate import shadow_store
+    except ImportError:
+        # A source checkout still needs the isolation fixture if it ships the publisher.
+        if (Path(__file__).resolve().parents[1] / "publish.py").is_file():
+            raise
+        yield
+        return
 
     monkeypatch.setattr(shadow_store, "ROOT_OVERRIDE", tmp_path_factory.mktemp("publish-shadow-store"))
     yield

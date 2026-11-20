@@ -1305,7 +1305,7 @@
     "coordinator/bin/tests/_roster_fixture.py": "40fffa3a2ae275a8473a417bac2286693b16211c",
     "coordinator/bin/tests/bin_git_free_seam.py": "de512d265c8cfdc5e0df8297995043b01ab0974e",
     "coordinator/bin/tests/command-substitution-docstring-baseline.txt": "b75ca2eb1f1be7eee8d01669ad68f0fa508af470",
-    "coordinator/bin/tests/conftest.py": "c8ac5ff516b616030dbc071f69ea89a7064bdd38",
+    "coordinator/bin/tests/conftest.py": "c81a5e0c9f3fa5036eec44dd5c4cd63e6dcd7df7",
     "coordinator/bin/tests/engine_stamp_probe.py": "6670ec57998bd2b762822a28cc9fc2f0dbb225b6",
     "coordinator/bin/tests/fixtures/.gitattributes": "400b90efaccc8db41e6395674a0e5c22b69ebcb2",
     "coordinator/bin/tests/fixtures/brightline-gate-baseline-output.txt": "cb3e5219c6c9405eabcc0c023ad90fecd613b487",
@@ -2573,8 +2573,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "f6c62193883ba6c0768b16c6ec667f29fd1a661d",
-    "coordinator_core/_engine_stamp": "5a3ae4538c31af6fcf1adb75f3002428378d97fa",
+    "coordinator_core/_engine_published_at": "016b329ce904adc517630afd80d6041e27925d1a",
+    "coordinator_core/_engine_stamp": "6fe80c6c9cce38e165dd51b36797bdd596df191e",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -13076,5 +13076,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "c732f4c1730f8449f880bb61aae43c1b7699d3f5"
+  "source_head": "c2d6beee5d2e4cf2ba149c155837e37c71cca591"
 }
