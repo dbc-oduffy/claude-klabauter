@@ -1843,8 +1843,15 @@ _JOIN_REVERIFY_JS = (
 )
 
 
+HALT_REVIEW_SCOPE_EMPTY = "review_scope_empty"
+
+
 def _review_test_infra_halt_js(sizing_rel: Optional[str]) -> str:
     return (
+        "  if (!_halted && _reviewReverify?.review_scope_empty === true) "
+        "{ _halted = { halted: " + json.dumps(HALT_REVIEW_SCOPE_EMPTY) + ", run_id: _runId, "
+        "detail: String(_reviewReverify.reverify_error ?? 'review scope empty'), "
+        "next_action: 'Refire so a reviewer sees the declared slice: ' + " + _refire_js(sizing_rel) + " }; }\n"
         "  if (!_halted && _reviewReverify?.tests_run === 0 "
         "&& _reviewReverify?.status_before === 'indeterminate' "
         "&& typeof _reviewReverify.zero_run_cause === 'string' && _reviewReverify.zero_run_cause) "

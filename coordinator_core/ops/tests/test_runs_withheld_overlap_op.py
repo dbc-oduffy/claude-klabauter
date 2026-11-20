@@ -112,3 +112,16 @@ def test_halted_run_whose_halt_commit_failed_keeps_its_declared_paths(repo: Path
         {"path": "a.py", "holder": "run-halted", "state": "declared"},
         {"path": "c.py", "holder": "run-halted", "state": "declared"},
     ]
+
+
+def test_closed_run_holds_nothing(repo: Path) -> None:
+    # A closed run is terminal and no op can release its index entry: e6ed7b's declared paths blocked a28592 on the Mini.
+    halted_withheld_index.add_run(repo, "run-closed", ["a.py"])
+    halted_withheld_index.record_declared(repo, "run-closed", ["a.py", "b.py"])
+    _kept(repo, "run-closed", "a.py")
+    (repo / "state" / "warp" / "run-closed" / "halted.json").write_text(
+        json.dumps({"status": "closed", "closed": {"reason": "t", "at": "t"}})
+    )
+    halted_withheld_index.add_run(repo, "run-halted", ["b.py"])
+    out = op._runs_withheld_overlap({"repo": str(repo), "paths": ["a.py", "b.py"]})
+    assert out["overlaps"] == [{"path": "b.py", "holder": "run-halted", "state": "withheld"}]

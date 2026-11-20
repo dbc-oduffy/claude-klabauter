@@ -513,6 +513,23 @@ def _check_run_base(root: Path, run_dir: Path, run_id: str, manifest: dict, base
         raise RunBaseMismatch(base, [pinned])
 
 
+def _record_measured_rev(manifest: dict, root: Path, run_id: str, artifacts: Path, timeout: float) -> str | None:
+    """Write the run's `measured-rev.json` over the manifest's `review_declared_paths`, the record the clean
+    overlay verify reads after this host leg replaced the worker that used to measure first. None on success
+    or when no path is declared; else the refusal text (the overlay then reads as inconclusive, never green)."""
+    declared = manifest.get("review_declared_paths")
+    if not isinstance(declared, list) or not declared:
+        return None
+    try:
+        reply = _invoke_source("dispatch.measured_rev", {"run_id": run_id, "paths": [str(p) for p in declared]},
+                               str(root), artifacts / "measured-rev", max(.1, timeout))
+    except Exception as exc:  # noqa: BLE001 -- a failed measurement is recorded on the result, never raised past the leg
+        return f"{type(exc).__name__}: {exc}"
+    if isinstance(reply, dict) and reply.get("error"):
+        return str(reply["error"])
+    return None
+
+
 _EVICTED_SKIP = "evicted by this run's halt (parked out of the tree); not run"
 
 
@@ -536,6 +553,7 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
             raise ValueError(f"host Verify tests target is outside the repository: {path!r}")
     base = params.get("base", "")
     _check_run_base(root, run_dir, run_id, manifest, base)
+    measured_rev_error = _record_measured_rev(manifest, root, run_id, artifacts, timeout)
     # Invariant: an evicted path is parked out of the tree, so naming it makes pytest exit 4 with no tests.
     from coordinator_core.ops.dispatch_emit import halt_tree_evict
 
@@ -547,12 +565,15 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
                     "summary": "every target was evicted by this run's halt; nothing to run",
                     "skipped": [{"test": t, "reason": _EVICTED_SKIP} for t in dropped]}
         _save(output, measured)
-        return {**measured, "evicted_targets": dropped, "sidecar_path": output.relative_to(root).as_posix()}
+        return {**measured, "evicted_targets": dropped, "sidecar_path": output.relative_to(root).as_posix(),
+                **({"measured_rev_error": measured_rev_error} if measured_rev_error else {})}
     exit_code, measured = _run_pinned_test_leg(root, output, artifacts, targets, base, timeout)
     fields = ("status", "tests_run", "tests_failed", "baseline", "baseline_method", "build_clean",
               "skipped", "summary", "importer_overrun", "tripwires_not_run", "zero_run_cause")
     result = {key: measured[key] for key in fields if key in measured}
     result["sidecar_path"] = output.relative_to(root).as_posix()
+    if measured_rev_error:
+        result["measured_rev_error"] = measured_rev_error
     # Invariant: a declared target that did not run is a skip, never a silent pass: 19 green tests must not
     # read as covering a regression test that was parked or absent.
     unrun = [*dropped, *(t for t in measured.get("missing_targets", []) if t not in dropped)]
@@ -601,6 +622,16 @@ def _test_infra_failure(root: Path, artifacts: Path, targets: list[str], measure
             "summary": f"test_infra_failure: pytest exit {bad_code} ({meaning}) for target(s): {', '.join(bad)}"}
 
 
+def _declared_code_paths(repo: str, run_key: str) -> list[str]:
+    """The run manifest's `review_code_paths`, [] when the manifest is absent, unreadable or declares none."""
+    try:
+        data = json.loads((Path(repo) / "state" / "warp" / run_key / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return []
+    paths = data.get("review_code_paths") if isinstance(data, dict) else None
+    return [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
+
+
 def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float) -> dict | None:
     """Measure the inventory before the review worker can interpret it."""
     deadline = time.monotonic() + timeout
@@ -619,6 +650,11 @@ def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float)
     ))
     owned = list(dict.fromkeys(path for inventory in inventories for path in inventory.get("owned", [])))
     tripwires = list(dict.fromkeys(path for inventory in inventories for path in inventory.get("tripwires", [])))
+    declared_code = _declared_code_paths(repo, run_key)
+    if declared_code and not errors and not edited:
+        return {"edited": [], "failing": [], "failing_detail": [], "reverted": [], "status_before": "indeterminate",
+                "reverify_error": f"review_scope_empty: no reviewed edit in the slice; declared code paths: {', '.join(declared_code)}",
+                "review_scope_empty": True, "declared_code_paths": declared_code, "tests_run": 0, "not_run": []}
     scope = params.get("verify_scope_targets", {})
     scoped = [test for path in edited for test in scope.get(path, [])]
     from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND, _is_js_test_file

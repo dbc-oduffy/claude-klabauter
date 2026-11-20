@@ -1036,6 +1036,10 @@ def _landing_test_gate_body(
             # record measured nothing); a failing re-verify names its nodes above and still refuses.
             if not nodes and reverify_passed_clean(params):
                 return [], "pass-on-retest"
+            # A carried fail count naming no node, against a current test-leg record that ran tests green,
+            # is no evidence of a red (an inconclusive overlay folds into a count of 1): never invent one.
+            if not nodes and _test_leg_green(worktree_root, run_id):
+                return [], "pass-on-retest"
             return [Finding(findings[0].path, findings[0].reason,
                             f"{findings[0].detail}; or pass params.{FAILED_TESTS_PARAM} (failing node ids)"
                             f"{_stale_retest_note(worktree_root, run_id)}")], check
@@ -1201,6 +1205,15 @@ def test_leg_record(worktree_root: Path, run_id: Optional[str]) -> Optional[dict
     except (OSError, ValueError):
         return None
     return record if isinstance(record, dict) else None
+
+
+def _test_leg_green(worktree_root: Path, run_id: Optional[str]) -> bool:
+    """True when the run's current ``test-leg.json`` ran tests, reads pass (or pass-with-skips) and names no failing node."""
+    record = test_leg_record(worktree_root, run_id)
+    if record is None or record.get("status_after", record.get("status")) not in ("pass", "pass-with-skips"):
+        return False
+    ran = record.get("tests_run")
+    return isinstance(ran, int) and not isinstance(ran, bool) and ran > 0 and not record.get("failing")
 
 
 def _zero_test_leg_record(worktree_root: Path, run_id: Optional[str]) -> Optional[dict]:

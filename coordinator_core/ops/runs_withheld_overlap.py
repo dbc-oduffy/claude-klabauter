@@ -62,6 +62,17 @@ def _declared_of_run(root: Path, run_id: str) -> list:
     return out
 
 
+def _closed(root: Path, run_id: str) -> bool:
+    """True when the run's halt marker reads `status: closed`. One small file read; unreadable means not closed."""
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    try:
+        marker = halted_run._read(ask_contract.record_dir(root, run_id))
+    except (OSError, ValueError):
+        return False
+    return isinstance(marker, dict) and marker.get("status") == halted_run.STATUS_CLOSED
+
+
 def _holders(root: Path, wanted: set, own: Optional[str]) -> list:
     """`[(path, run_id, state)]` from the halted index and the live run-token records. No spawn."""
     from coordinator_core.ops.dispatch_emit import (
@@ -100,6 +111,8 @@ def _holders(root: Path, wanted: set, own: Optional[str]) -> list:
                     continue
             except Exception:  # noqa: BLE001 -- release unknown: the run still holds
                 pass
+            if _closed(root, run_id):  # a closed run is terminal: its claims ended with it, and no op can release them
+                continue
             for path in sorted(wanted.intersection(withheld)):
                 out.append((path, run_id, STATE_WITHHELD))
             # A halted run keeps its declared paths even when its halt-commit failed and withheld none of them:

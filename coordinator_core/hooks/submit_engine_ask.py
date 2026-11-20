@@ -3296,6 +3296,16 @@ def _resume_route(
     if not isinstance(halted_id, str):
         return None, None
     rd = record_dir(root, halted_id)
+    if session_id:
+        # Invariant: run-stage.json names the session executing the run; a refire resumes it here, so
+        # the stage record must follow, else idle-liveness probes the dead session's dirs.
+        try:
+            from coordinator_core.ops.dispatch_emit.ask_contract import adopt_run_stage_at, read_run_stage
+
+            if (read_run_stage(root, halted_id) or {}).get("session_id") != session_id:
+                adopt_run_stage_at(rd, session_id)
+        except (OSError, ValueError):
+            pass
     params.pop("fresh", None)
     prior_engine = ran_under_engine(rd)
     current_engine = hrr.engine_sha()
