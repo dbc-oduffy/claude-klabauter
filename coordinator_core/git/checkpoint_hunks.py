@@ -8,8 +8,12 @@ listed path with the same attribution `land_run` uses (`run_hunk_claims.own_hunk
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional, Sequence
+
+
+_RUN_ID_TRAILER = re.compile(r"^Checkpoint-Run-Id:([^\r\n]*)", re.M)
 
 
 def _norm(path: str) -> str:
@@ -47,6 +51,9 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
         plan = _message_plan(message)
         if not plan:
             return None
+        requested = [value.strip() for value in _RUN_ID_TRAILER.findall(message)]
+        if len(requested) > 1 or requested == [""]:
+            return None
         from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import run_token
@@ -56,6 +63,7 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
             record["run_id"]
             for record in run_token.live_records(root)
             if record.get("session_id") == session_id
+            and (not requested or record["run_id"] == requested[0])
             and (own := _sizing_plan(
                 root, record.get("sizing_rel") or warp_run_deliverable.record_sizing_rel(root, record["run_id"])
             ))

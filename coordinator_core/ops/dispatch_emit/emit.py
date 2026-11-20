@@ -5593,7 +5593,8 @@ def _checkpoint_trailer_js(
             + f" + {runtime_plan_js} + "
             + _js_string_literal("\nCheckpoint-Base: ")
             + f" + {_RUN_BASE_VAR} + "
-            + _js_string_literal(_NOT_LANDED_TRAILER)
+            + _js_string_literal(_NOT_LANDED_TRAILER + "\nCheckpoint-Run-Id: ")
+            + " + _runId"
         )
     if not plan_path:
         return "''"

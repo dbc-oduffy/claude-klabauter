@@ -2573,8 +2573,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "9d54a20e066886761045b14901d8c81fa49a9cc9",
-    "coordinator_core/_engine_stamp": "e29bb739e1203750ea4f8d9c1b4dd183de0e51d6",
+    "coordinator_core/_engine_published_at": "b5a4046f44e4734043af38643b4659eeca49488a",
+    "coordinator_core/_engine_stamp": "e654384eacffd569e211c841e803aedb1f02e51c",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4530,7 +4530,7 @@
     "coordinator_core/git/call_io_scope.py": "bec99c37dfb16a596776536b31dd569843b11ec0",
     "coordinator_core/git/checkin_attrs.py": "f506ca24b3c136570e3437a090d77049cf1d7d3d",
     "coordinator_core/git/checkpoint_guard.py": "df8a40268a4b76b2ddb5f9e09ee38a692d5999df",
-    "coordinator_core/git/checkpoint_hunks.py": "34912e8ea1e4b5e177b332979c541f0d1d9729a5",
+    "coordinator_core/git/checkpoint_hunks.py": "b20bb3248dd7ab67a4c94ffb99e8c2130f1adc14",
     "coordinator_core/git/checkpoint_symbols.py": "3a0ccd2d59b9af4d5b6e1f2b9e1d01bdfa6f433b",
     "coordinator_core/git/commit.py": "3c8180f61e948a481cd5e91ccdf2a56b0e8547c0",
     "coordinator_core/git/commit_context.py": "5e73ab05a5673c1d77f23dd82004ab294e9c2a73",
@@ -4608,7 +4608,7 @@
     "coordinator_core/git/tests/test_checkin_surface_fixtures.py": "e5a6c8584baa99c5796797872f44d3430142b152",
     "coordinator_core/git/tests/test_checkpoint_declared_siblings.py": "a0fbe750a50d95e5f81e4ef27e8d9408cb74563d",
     "coordinator_core/git/tests/test_checkpoint_guard.py": "aaf24307f42eac71b14d0d5b2c898d14dffe6294",
-    "coordinator_core/git/tests/test_checkpoint_hunks.py": "b0bf4b45c44d89006b630dbd0c95425e2e229e01",
+    "coordinator_core/git/tests/test_checkpoint_hunks.py": "4053bdad88da39ce40b329b0e164b044109989ec",
     "coordinator_core/git/tests/test_checkpoint_hunks_nonrun_peer.py": "d27dd76d22582d685e85e9c3671930d3c0463fc5",
     "coordinator_core/git/tests/test_checkpoint_symbols.py": "0986a77bd774cac3c9f35bf8c92656490eb71847",
     "coordinator_core/git/tests/test_commit_context.py": "e6f5b4d5d926c1c8ca44d5a7e0b2c3b6e7d18f3c",
@@ -6209,7 +6209,7 @@
     "coordinator_core/ops/dispatch_emit/em_only_act.py": "d3ac3460a856312a56198aa97917a907b3cf1726",
     "coordinator_core/ops/dispatch_emit/em_test_criterion.py": "2257169c1a80b18e475394bdfcb2efe70ffa2883",
     "coordinator_core/ops/dispatch_emit/emission_receipt.py": "4722d577f731dbea16742c67a1a957803d1054b8",
-    "coordinator_core/ops/dispatch_emit/emit.py": "6530c1f2364c26e76a9cef63be21f747b70962ec",
+    "coordinator_core/ops/dispatch_emit/emit.py": "50cea261c662db8abbc88437c2d738b9ded2f2cf",
     "coordinator_core/ops/dispatch_emit/engine_owned_rows.py": "f709fb1860bcc219dff372ee9b4e3752005bbadd",
     "coordinator_core/ops/dispatch_emit/engine_record_home.py": "831fd6ecacd4ffdc514463934746d6965bfe1d6b",
     "coordinator_core/ops/dispatch_emit/eviction_callers.py": "187783c28fa5c846833cc38c785fa09334dc1937",
@@ -13076,5 +13076,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "4eedb13c58169950c04d3e0969d284c9cc2e08e2"
+  "source_head": "e51ab651b44ac4b240d9d756c7afa8a1e1fcf0a8"
 }
