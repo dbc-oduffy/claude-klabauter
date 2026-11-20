@@ -1525,6 +1525,18 @@ def _doc_gate_plan(tmp_path, *, statement, acceptance):
     return _write_plan(tmp_path, frontmatter=fm, spine=spine)
 
 
+def test_spine_rejects_contradictory_executor_and_em_routes(tmp_path):
+    plan = _write_plan(
+        tmp_path, frontmatter=_CLEAN_FM,
+        spine=_workflow_spine("docs/report.md", extra=(
+            "  agent_type: coordinator:executor\n  em_run: true\n  needs_slot: true\n"
+        )),
+    )
+    defect = _gate(tmp_path, plan)["classes"]["SPINE"]
+    assert defect["kind"] == "conflicting-executor-route"
+    assert "C1" in defect["detail"] and "needs_slot" in defect["detail"]
+
+
 def test_a_spine_row_acceptance_requiring_pm_approval_of_a_doc_is_refused(tmp_path):
     report = _gate(
         tmp_path,

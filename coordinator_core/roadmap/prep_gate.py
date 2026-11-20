@@ -576,6 +576,21 @@ def _spine(
             "plan-row key(s) the spine reader does not consume: " + "; ".join(unknown[:8])
             + " (rename to a known key or drop it)",
         )
+    conflicting_routes = [
+        str(row.get("id", "?"))
+        for row in load_rows_memo(text).rows
+        if isinstance(row, dict)
+        and row.get("disposition", "open") == "open"
+        and row.get("agent_type") == "coordinator:executor"
+        and row.get("em_run") is True
+    ]
+    if conflicting_routes:
+        return _defect(
+            "conflicting-executor-route",
+            "Rows " + ", ".join(conflicting_routes)
+            + " declare both coordinator:executor and em_run: true. Choose one performer "
+            "and keep any needs_slot admission requirement.",
+        )
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, memo_row_slug
 
     slugless = [

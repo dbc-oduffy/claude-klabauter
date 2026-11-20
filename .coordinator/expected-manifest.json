@@ -2573,8 +2573,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "ece36c5c7a0595d1cfb73081b35c463bc6be11c9",
-    "coordinator_core/_engine_stamp": "e63afa64ece858d065157a1d9c3c507dea157a84",
+    "coordinator_core/_engine_published_at": "9d54a20e066886761045b14901d8c81fa49a9cc9",
+    "coordinator_core/_engine_stamp": "e29bb739e1203750ea4f8d9c1b4dd183de0e51d6",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -10597,7 +10597,7 @@
     "coordinator_core/ops/workflow_fire/tests/test_private_engine.py": "b8907485b8d75ad4ced3e828a9d46f8a60fe9669",
     "coordinator_core/ops/workflow_fire/tests/test_private_plumbing.py": "a7eb86d6c8cf6d3e1da182dae0067baeffc6657f",
     "coordinator_core/ops/workflow_fire/tests/test_session_runs.py": "4e48f7a967564ee6d5f74169af54188c427713f1",
-    "coordinator_core/ops/workflow_fire/tests/test_worker_preamble.py": "ea89ccb9bc5da4eb1e5ea2f61cde6db30881fb31",
+    "coordinator_core/ops/workflow_fire/tests/test_worker_preamble.py": "16a43821ef9af642eef97c15c47912f641bdda2e",
     "coordinator_core/ops/workflow_fire/tests/test_workflow_authority.py": "14d7364945632c3e23b7a74de30228a1200f9300",
     "coordinator_core/ops/workflow_fire/wait.py": "da1d542fb1c79fa904f0c533ffbd3f7deb5c9dfe",
     "coordinator_core/ops/workflow_fire/worker_preamble.py": "fc40760f0f28aab53bba0316dff57ef67dae65cb",
@@ -10928,7 +10928,7 @@
     "coordinator_core/roadmap/plan_terminality.py": "5a27331ef16f87073bd69045c38419fdfc5a71de",
     "coordinator_core/roadmap/pm_gate_signal.py": "fd310cf7077f03be7f3d69ed4fcdb711bba9487f",
     "coordinator_core/roadmap/post_stamp_clause.py": "30ea32cc67a0600ab0d8fc4534f5e18eb9d6f588",
-    "coordinator_core/roadmap/prep_gate.py": "cafa000893b4380915fcfc592bd460cffd222769",
+    "coordinator_core/roadmap/prep_gate.py": "62fb97ba1f8269a4abdfc5d8005fc018554298c0",
     "coordinator_core/roadmap/prep_gate_cli.py": "b154f7aa6bd4f8496e762eb5815cb1d45bff9a8b",
     "coordinator_core/roadmap/probe_store.py": "8441b3502469f86e278fae9d21da209b5c85d136",
     "coordinator_core/roadmap/sizing_match.py": "ebf134f23d8d9cdf390bdd86437bbece372b970d",
@@ -10986,7 +10986,7 @@
     "coordinator_core/roadmap/tests/test_plan_terminality.py": "44c72a8b3318a5b2a3f1c97f1611b09d11b8f682",
     "coordinator_core/roadmap/tests/test_pm_gate_signal.py": "5d4aec058d885932ce64e4cfb26b323d4bb45bee",
     "coordinator_core/roadmap/tests/test_post_stamp_clause.py": "322b9346c1711b54ce56a1c8ad165c262dcc882f",
-    "coordinator_core/roadmap/tests/test_prep_gate.py": "84da04a0eefdd6848a07146fb3dcbd6ff1f826af",
+    "coordinator_core/roadmap/tests/test_prep_gate.py": "69c3d6e11158f64cdacb48e4908831eb9eed2c0e",
     "coordinator_core/roadmap/tests/test_prep_gate_agent_type_roster.py": "fcd078b00dd64417545291fa2eeb112ed50d8d76",
     "coordinator_core/roadmap/tests/test_prep_gate_capabilities.py": "4d310cadf2ecab587712172b237e4d8d14777fc5",
     "coordinator_core/roadmap/tests/test_prep_gate_census_typed.py": "b80a3819b6bdfc9e598e3fff3ca37263c8b4ac8a",
@@ -13076,5 +13076,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "51aea78921f0b24043aef4e41bcd141bf289c95c"
+  "source_head": "4eedb13c58169950c04d3e0969d284c9cc2e08e2"
 }

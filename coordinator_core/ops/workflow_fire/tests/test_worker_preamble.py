@@ -30,8 +30,13 @@ def test_grok_sizing_prompt_contains_installed_command(tmp_path, monkeypatch):
     name = "sizing-assemble.exe" if os.name == "nt" else "sizing-assemble"
     path = (home / "bin" / name).as_posix()
     command = f"& '{path}'" if os.name == "nt" else shlex.quote(path)
-    brief = f"Run `{SIZING_ASSEMBLE_CMD} --json`."
-    assert f"Run `{command} --json`." in with_worker_preamble("grok", brief)
+    door = """coordinator-invoke plan.tasks.mutate '{"verb":"evidence-append","id":"C0"}'"""
+    brief = f"Run `{SIZING_ASSEMBLE_CMD} --json`. Then run `{door}`."
+    for backend in WORKER_BACKENDS:
+        rendered = with_worker_preamble(backend, brief)
+        assert f"Run `{command} --json`." in rendered
+        assert SIZING_ASSEMBLE_CMD not in rendered
+        assert f"Then run `{door}`." in rendered
     assert with_worker_preamble("claude", brief) == brief
 
 
