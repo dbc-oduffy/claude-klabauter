@@ -171,6 +171,13 @@ def test_renamed_box_tokens_stay_unknown_without_a_linking_registry_row(tmp_path
         assert member_box.resolve_member_box(token, home=tmp_path)["reason"] == member_box.BOX_UNKNOWN
 
 
+def test_mini_legacy_id_requires_signed_member_and_matching_user(tmp_path: Path, wired) -> None:
+    mini = {"box": "Mac-mini", "host": "Mac-mini.local", "user": "example-operator"}
+    wired(members=(mini,))
+    assert member_box.member_box_id("box-65fdb5b0", home=tmp_path) == "Mac-mini"
+    assert member_box.member_box_id("mallory@box-65fdb5b0", home=tmp_path) is None
+
+
 def test_registry_alias_does_not_bypass_the_user_check(tmp_path: Path, wired) -> None:
     wired(members=(RENAMED,))
     _registry_row(tmp_path, "box-df624266", "Gypsy", ["machine-a"])

@@ -279,6 +279,13 @@ def test_a_plain_local_row_is_not_a_mirror(monkeypatch: pytest.MonkeyPatch) -> N
     assert us._mirror_name("grp") == "" and not us._is_mirror("grp")
 
 
+def test_short_machine_a_alias_uses_canonical_delivery_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(us, "_session_entries", lambda: [
+        {"name": "grp.machine-a.local", "unimatrixFarName": "grp", "unimatrixBox": "machine-a", "pid": 7}
+    ])
+    assert us._mirror_name("grp.machine-a") == "grp.machine-a.local"
+
+
 def test_send_to_a_non_mirror_never_waits_for_a_relay_outcome(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(us, "_is_mirror", lambda n: False)
     monkeypatch.setattr(us, "relay_outcome", lambda n, since: (_ for _ in ()).throw(AssertionError("waited")))

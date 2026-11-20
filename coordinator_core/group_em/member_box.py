@@ -17,6 +17,8 @@ from coordinator_core.group_em import box_registry
 BOX_UNKNOWN = "BOX_UNKNOWN"
 _BIN = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 _MODULES: dict = {}
+# The Group EM identity predates the Mini's signed Unimatrix membership name.
+_MEMBER_ID_ALIASES = {"box-65fdb5b0": "mac-mini"}
 
 
 def _load(name: str, filename: str):
@@ -58,6 +60,9 @@ def _matches(member: dict, user: Optional[str], name: str, registry: tuple = ())
     row that shares one of those names (a box renamed since the roster was signed)."""
     fold = box_registry.fold_box_id
     names = {fold(member["box"]), fold(member["host"]), fold(member["host"].split(".")[0])}
+    canonical = _MEMBER_ID_ALIASES.get(fold(name))
+    if canonical is not None:
+        return canonical == fold(member["box"]) and (user is None or user == member["user"])
     for row in registry:
         if names & row:
             names |= row

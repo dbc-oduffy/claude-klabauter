@@ -77,8 +77,9 @@ def _mirror_name(name):
     """The live mirror entry's own name when `name` is that name or its far name, else ''.
 
     The bridge keys its deliveries.jsonl row on the mirror's own name, never the bare far name."""
+    contract = _sibling("unimatrix-peer-contract.py", "unimatrix_peer_contract_send")
     return next((e["name"] for e in _session_entries()
-                 if any(e.get(f) for f in _MIRROR_FIELDS) and name in (e.get("name"), e.get("unimatrixFarName"))), "")
+                 if any(e.get(f) for f in _MIRROR_FIELDS) and name in contract.mirror_addresses(e)), "")
 
 
 def _is_mirror(name) -> bool:
