@@ -2482,7 +2482,11 @@ def _verify_tests_call(
         "\n\nRun once using the native shell. In Bash use run_in_background: true and no timeout parameter; "
         "wait for its completion notification. In PowerShell wait for the process to exit. "
         "Do not sleep, poll or re-run it. Then Read "
-        f"{out_path} and return its JSON verbatim as the test_result.",
+        f"{out_path}. Keep that JSON file as the full test receipt. For the final test_result, "
+        "copy status, tests_run, and tests_failed from the receipt and use the receipt path as "
+        "sidecar_path. Copy schema-valid baseline, baseline_method, build_clean, skipped, summary, "
+        "importer_overrun, and tripwires_not_run when present. Keep diagnostic details in the receipt. "
+        "Return only fields declared in the final-response schema; do not return the entire receipt.",
     )
     return _agent(
         prompt, label=VERIFY_TESTS_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,

@@ -145,3 +145,53 @@ def test_wake_digest_projection_carries_reverify_error():
         test_absent_status="not_run",
     )[2]
     assert "reverify_error: _reviewReverify.reverify_error ?? null" in params
+
+
+def test_doe_reverify_inventory_command_runs_verbatim_in_powershell(monkeypatch):
+    """DoE 03510a97 agent 14 hit a parser error before review.reverify ran."""
+    import json
+    import shutil
+    import subprocess
+    from types import SimpleNamespace
+
+    import pytest
+
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell is unavailable")
+
+    monkeypatch.setattr(er, "os", SimpleNamespace(name="nt"))
+    repo = "C:/dev/coordinator-content-repo"
+    session = "01a1f578-6766-7e63-a9e1-0bbe1d4cd6a7"
+    base = "d5cca1050624125ddd93f1bb121fe4ca9400d9b0"
+    run_key = "ask-20261120T070448-96d73a"
+    prefix = f"manifest-{run_key}-{base[:12]}-prep"
+    block = _phase(
+        repo_root=repo,
+        snapshot_session_id=session,
+        base_ref=base,
+        run_key=run_key,
+        prep_slice_id=prefix,
+    )
+    command = next(
+        part.replace(r"\'", "'")
+        for part in block.split(chr(96))
+        if f'{{"base":"{base}","slice_prefix":"{prefix}"' in part
+    )
+    # Capture the operation argv without invoking a live engine or mutating DoE.
+    capture = "function coordinator-invoke { ConvertTo-Json -Compress -InputObject @($args) }"
+    result = subprocess.run(
+        [pwsh, "-NoProfile", "-NonInteractive", "-Command", f"{capture}\n{command}"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    op, payload, flag, root = json.loads(result.stdout)
+    assert (op, flag, root) == ("review.reverify", "--repo", repo)
+    assert json.loads(payload) == {
+        "base": base,
+        "slice_prefix": prefix,
+        "run_key": run_key,
+        "session_id": session,
+    }
