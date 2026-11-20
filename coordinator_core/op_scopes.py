@@ -924,6 +924,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # workflow.pending_revisions / plan.claim_register_rows — read and claim register rows of the
     # caller's own worktree's sizing and plan.
     "workflow.pending_revisions":               "common_dir",
+    "run.engine_identity":                      "common_dir",
     "plan.claim_register_rows":                 "common_dir",
     # review_stamp.mint / review_stamp.check — MUTATING (mint only): both read
     # and mint writes only the caller's own worktree, keyed identically to

@@ -210,7 +210,7 @@ def test_main_prints_the_result_and_exits_non_zero_unless_authored(tmp_path, cap
 
 
 def _sid_probe(seen):
-    def run(prompt, *, backend, repo_root, artifact_dir, parent_session_id=None):
+    def run(prompt, *, backend, repo_root, artifact_dir, parent_session_id=None, on_spawn=None):
         seen.append(parent_session_id)
         return {"argv": [], "exit_code": 0}
     return run

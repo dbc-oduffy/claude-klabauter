@@ -190,6 +190,12 @@ def test_the_rerun_set_is_widened_and_the_verify_scope_is_unchanged():
     assert all(target in leg for target in emit.collapse_test_scope(scope, _ROOT))
 
 
+def test_a_serial_review_carries_the_verify_scope_into_the_host_test_leg_params():
+    text = _compose(chatty=True)
+    mapped = terminal_test_scope([[_row("C1", [_SHARED])]], repo_root=_ROOT)
+    assert mapped and f'"verify_scope_targets": {{"{_SHARED}": {json.dumps(mapped)}' in text
+
+
 def test_a_run_with_writes_under_or_chatty_keeps_the_serial_review():
     chatty = _compose(chatty=True)
     assert "phase('Review groups')" not in chatty and "Review groups" not in chatty.split("phases: [", 1)[1].split("]", 1)[0]

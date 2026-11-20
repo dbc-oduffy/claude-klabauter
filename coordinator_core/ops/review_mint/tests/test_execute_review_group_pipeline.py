@@ -129,7 +129,9 @@ def test_the_rerun_set_is_widened_by_the_verify_scope_map_in_group_mode_only():
     assert "tests/test_one.py" in step2 and "tests/test_three.py" in step2 and "tests/test_x.py" in step2
     assert "owned first" in step2 and "`tripwires` files" in step2
     assert _by_title(_compose(review_groups=_GROUPS))["Review re-verify"] != grouped
-    assert _compose(verify_scope_targets=targets) == _compose()
+    flat = _by_title(_compose(verify_scope_targets=targets))["Review re-verify"]
+    assert json.dumps(targets) in flat and "verify-scope targets named below" not in flat
+    assert flat.replace(json.dumps(targets), "{}") == _by_title(_compose())["Review re-verify"]
 
 
 def test_no_groups_reverify_is_unchanged():

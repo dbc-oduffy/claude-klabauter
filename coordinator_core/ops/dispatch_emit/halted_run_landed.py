@@ -1071,7 +1071,9 @@ def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -
         return str(exc)
     marker = halted_run._read(record_dir)
     if marker is None:
-        return f"met_by needs {run_id}'s halt record; none is readable"
+        if not _land_committed(record_dir):
+            return f"met_by needs {run_id}'s halt record; none is readable"
+        return _committed_land_met_by_problem(root, run_id, met_by, reached)
     blocking = _met_by_rows(marker)
     for row, sha in met_by.items():
         if row not in blocking:
@@ -1098,6 +1100,38 @@ def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -
     for row, sha in met_by.items():
         if sha != halt and sha in before:
             return f"met_by row {row}: {sha} is before the halt commit {halt}; pass a commit at or after the halt"
+    return None
+
+
+def _register_row_ids(root: Path, run_id: str) -> Optional[set]:
+    """Ids of the register rows of the sizing the run's ``run.json`` names; None when it names none or the register is unreadable."""
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops.dispatch_emit import ask_contract
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import _sizing_path
+
+    try:
+        run = json.loads((ask_contract.record_dir(root, run_id) / "run.json").read_text(encoding="utf-8"))
+        rel = run.get("sizing_rel") if isinstance(run, dict) else None
+        if not isinstance(rel, str) or not rel:
+            return None
+        register = rr.read_register(_sizing_path(Path(root), rel).read_text(encoding="utf-8"))
+        return None if register is None else {str(r.get(rr.ROW_ID)) for r in register.rows if isinstance(r, dict)}
+    except (OSError, ValueError):
+        return None
+
+
+def _committed_land_met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -> Optional[str]:
+    """Refusal for a ``met_by`` credit on a halt-record-less run whose ``land-legs.json`` records a commit, else None.
+
+    The land record is the run's terminal record (a ``landed`` that carried no code never wrote a halt).
+    Each sha must be an ancestor of HEAD and each row a row of the run's sizing register when that reads.
+    """
+    known = _register_row_ids(root, run_id)
+    for row, sha in met_by.items():
+        if known is not None and row not in known:
+            return f"met_by row {row} is not a register row of {run_id}'s sizing"
+        if sha not in reached:
+            return f"met_by row {row}: {sha} is not an ancestor of HEAD; pass the commit that met the row"
     return None
 
 
@@ -1559,7 +1593,14 @@ def _record_solo(
             sha, problem, echo = _verify(root, run_id, shas, met_by, foreign, dropped)
             if problem:
                 return _refuse(problem)
-            return {"ok": True, "run_id": run_id, "sha": sha, "written": False, **echo, **_close_landed(root, run_id, sha, session_id)}
+            credited = echo.get(MET_BY_FIELD)
+            if credited:
+                # The credit's carrier is the landed marker (`ask_gate._landed_met_by`); a run that never halted has none.
+                halted_run._write(record_dir, {
+                    "run_id": run_id, "status": halted_run.STATUS_LANDED, "sha": sha, MET_BY_FIELD: credited,
+                    "credited_from": "land-legs.json",
+                })
+            return {"ok": True, "run_id": run_id, "sha": sha, "written": bool(credited), **echo, **_close_landed(root, run_id, sha, session_id)}
         return closed if closed is not None else _refuse(f"{run_id} has no sibling status or halt record; it never ran")
     status = marker.get("status")
     if status == halted_run.STATUS_LANDED:

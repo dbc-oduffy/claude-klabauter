@@ -205,6 +205,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.checkpoint_reds", 'registers "dispatch.checkpoint_reds"'),
     ("coordinator_core.ops.dispatch_emit.requirements_ledger", 'registers "workflow.revise"'),
     ("coordinator_core.ops.dispatch_emit.run_cancel", 'registers "workflow.cancel"'),
+    ("coordinator_core.ops.dispatch_emit.engine_identity", 'registers "run.engine_identity"'),
     ("coordinator_core.ops.job_cancel", 'registers "job.start", "job.cancel"'),
     ("coordinator_core.ops.dispatch_emit.revise_absorb", 'registers "workflow.pending_revisions"'),
     ("coordinator_core.ops.dispatch_emit.objective_calibrate", 'registers "dispatch.objective_calibrate"'),

@@ -587,6 +587,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "scratch.record_run_path":                "coordinator_core.ops.scratch_record",
     "scratch.keep":                           "coordinator_core.ops.scratch_record",
     "run.paths_trash":                        "coordinator_core.ops.run_paths_trash",
+    "run.engine_identity":                    "coordinator_core.ops.dispatch_emit.engine_identity",
     "scratch.remove":                         "coordinator_core.ops.worker_cleanup",
     "proc.stop_own_child":                    "coordinator_core.ops.worker_cleanup",
     "distill.curation_status":                "coordinator_core.ops.distill_curation_status",
