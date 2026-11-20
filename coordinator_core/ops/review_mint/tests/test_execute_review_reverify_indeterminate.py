@@ -237,3 +237,42 @@ def test_reverify_test_leg_runs_pinned_module_from_product_cwd(monkeypatch, tmp_
         "--base-sha", "abc123", "--head-sha", "HEAD", "--base-export-out", "scratch/base.txt",
         "--out", "scratch/result.json", "--", "tests/test_sample.py",
     ]
+
+
+def test_emitted_reverify_consumes_host_verdict_and_preserves_legacy_route():
+    import json
+    import shutil
+    import subprocess
+
+    import pytest
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    block = _phase()
+    script = (
+        "async function run(engineOp) { let workerCalls = 0;"
+        " const phase = () => {}; const _verifyOnly = false;"
+        " const _reviewWave = []; const _reviewPrep = null;"
+        " const agent = () => (++workerCalls, Promise.resolve({"
+        " edited: [], tests_run: 0, status_before: 'not_run', reverted: [] }));"
+        + block
+        + " return [_reviewReverify, workerCalls]; }"
+        " const host = { edited: ['a.py','b.py'], tests_run: 1, status_before: 'pass', reverted: [] };"
+        " const pass = await run(async (op, params) => {"
+        " if (op !== 'review.reverify.host_test_leg' || params.slice_prefixes[0] !== 'prep') throw Error(op);"
+        " return host; });"
+        " const red = await run(async () => ({...host, status_before: 'fail'}));"
+        " const closed = await run(async () => { throw Error('host timeout'); });"
+        " console.log(JSON.stringify([pass, red, closed, await run(undefined)]));"
+    )
+    proc = subprocess.run(
+        [node, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=10,
+    )
+    assert proc.returncode == 0, proc.stderr
+    passed, red, closed, legacy = json.loads(proc.stdout)
+    assert (passed[0]["status_before"], passed[0]["tests_run"], passed[1]) == ("pass", 1, 0)
+    assert (red[0]["status_before"], red[0]["tests_run"], red[1]) == ("fail", 1, 1)
+    assert (closed[0]["status_before"], closed[1]) == ("indeterminate", 0)
+    assert "host timeout" in closed[0]["reverify_error"]
+    assert (legacy[0]["status_before"], legacy[1]) == ("not_run", 1)

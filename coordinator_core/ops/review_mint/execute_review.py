@@ -1414,11 +1414,45 @@ def _reverify_phase(
     prefix = f"agent({_prompt_literal(prompt)}, "
     if not call.startswith(prefix):
         raise ValueError("re-verify agent call does not open with its prompt literal")
-    call = f"agent({_prompt_literal(prompt)} + '\\n' + {sidecars_js}, " + call[len(prefix):]
+    host_intro = (
+        "The workflow host already ran the initial test leg. Use the host receipt as the "
+        "initial verdict and evidence. Do not rerun that leg. Follow only failure reconciliation. "
+        "Host test receipt: "
+    )
+    before_leg, separator, after_leg = prompt.partition(test_leg)
+    if not separator:
+        raise ValueError("re-verify prompt omitted its test leg")
+    prompt_js = (
+        f"{_prompt_literal(before_leg)} + "
+        f"(_hostReverify ? ' Use the completed host test receipt. ' : {_prompt_literal(test_leg)}) + "
+        f"{_prompt_literal(after_leg)}"
+    )
+    host_prompt_js = (
+        f"(_hostReverify ? {_prompt_literal(host_intro)} + JSON.stringify(_hostReverify) + '\\n\\n' : '')"
+    )
+    call = f"agent({host_prompt_js} + _reviewPrompt + '\\n' + {sidecars_js}, " + call[len(prefix):]
     call = sc(call, "reverify", agent_type)
+    host_params = json.dumps({
+        "base": base_ref, "slice_prefixes": [*group_prefixes, prep_slice_id],
+        "session_id": snapshot_session_id, "run_key": run_key or run_id or prep_slice_id,
+        "verify_scope_targets": dict(verify_scope_targets or {}),
+    })
     run_js = (
-        f"((r) => r ? {{ ...r, unapplied: {_REVERIFY_UNAPPLIED_JS} }} : null)"
-        f"(await {_degrading(call)})"
+        "(await (async () => {"
+        " const _hostReverify = typeof engineOp === 'function'"
+        f" ? await engineOp('review.reverify.host_test_leg', {host_params}).catch(error => ({{"
+        " edited: [], failing: [], failing_detail: [], reverted: [], tests_run: 0,"
+        " status_before: 'indeterminate', reverify_error: String(error) })) : null;"
+        f" const _reviewPrompt = {prompt_js};"
+        " const worker = _hostReverify && _hostReverify.status_before !== 'fail' ? null :"
+        f" await {_degrading(call)};"
+        " const r = _hostReverify ? { ...worker, ..._hostReverify,"
+        " reverted: worker?.reverted ?? _hostReverify.reverted,"
+        " status_after: worker?.status_after ?? null,"
+        " ...Object.fromEntries(['not_run','pre_existing','passed_alone','passed_at_base'].map("
+        " k => [k, [...new Set([...(_hostReverify[k] ?? []), ...(worker?.[k] ?? [])])]])) } : worker;"
+        f" return r ? {{ ...r, unapplied: {_REVERIFY_UNAPPLIED_JS} }} : null;"
+        " })())"
     )
     if deferred:
         block = (

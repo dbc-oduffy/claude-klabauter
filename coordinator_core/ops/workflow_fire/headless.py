@@ -361,6 +361,101 @@ def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: f
     return reply['result']
 
 
+def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float) -> dict | None:
+    """Measure the inventory before the review worker can interpret it."""
+    deadline = time.monotonic() + timeout
+    prefixes = params["slice_prefixes"]
+    run_key = params["run_key"]
+    inventories = [
+        _invoke_source("review.reverify", {
+            "base": params["base"], "slice_prefix": prefix,
+            "session_id": params.get("session_id", ""), "run_key": run_key,
+        }, repo, artifacts / f"inventory-{index}", max(.1, deadline - time.monotonic()))
+        for index, prefix in enumerate(prefixes)
+    ]
+    errors = [inventory["error"] for inventory in inventories if inventory.get("error")]
+    edited = list(dict.fromkeys(
+        path for inventory in inventories for key in ("edited", "created") for path in inventory.get(key, [])
+    ))
+    owned = list(dict.fromkeys(path for inventory in inventories for path in inventory.get("owned", [])))
+    tripwires = list(dict.fromkeys(path for inventory in inventories for path in inventory.get("tripwires", [])))
+    scope = params.get("verify_scope_targets", {})
+    scoped = [test for path in edited for test in scope.get(path, [])]
+    from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND, _is_js_test_file
+
+    owned = list(dict.fromkeys(owned + scoped))
+    tripwires = [target for target in tripwires if target not in owned]
+    targets = owned + tripwires[:TRIPWIRE_BOUND]
+
+    if not errors and (
+        any(_is_js_test_file(target) for target in targets)
+        or any(Path(path).suffix == ".js" for path in edited)
+    ):
+        return None  # Mixed-language reverify retains its existing Node test route.
+    root = Path(repo).resolve()
+    selected = []
+    for target in targets:
+        path = (root / target).resolve()
+        if (not Path(target).is_absolute() and not target.startswith("-") and path.is_relative_to(root)
+                and path.is_file() and path.name.startswith("test_") and path.suffix == ".py"):
+            selected.append(target)
+    receipt = {"edited": edited, "failing": [], "failing_detail": [], "reverted": [],
+               "status_before": "indeterminate" if errors or edited else "not_run",
+               "reverify_error": "; ".join(errors) if errors else None, "tests_run": 0,
+               "not_run": list(dict.fromkeys(
+                   [target for target in targets if target not in selected] + tripwires[TRIPWIRE_BOUND:]
+                   + [target for inventory in inventories for target in inventory.get("tripwires_not_selected", []) if target not in selected]
+               ))}
+    if errors or not edited or not selected:
+        if edited and not errors:
+            receipt["reverify_error"] = "reverify inventory has edits but no runnable Python test target"
+        return receipt
+
+    from coordinator_core.ops.review_mint.execute_review import _base_export_file, _test_leg_file
+
+    output_path = _test_leg_file(run_key, "", prefixes[-1])
+    export_path = root / _base_export_file(run_key, "", prefixes[-1])
+    temporary_output = artifacts / "test-leg-result.json"
+    temporary_export = artifacts / "test-leg-baseline.json"
+    output = root / output_path
+    output.parent.mkdir(parents=True, exist_ok=True)
+    engine = str(_executor_root())
+    bootstrap = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+                 "runpy.run_module('coordinator_core.ops.test_leg_run',run_name='__main__',alter_sys=True)")
+    argv = [sys.executable, "-c", bootstrap, engine, "--base-sha", params["base"], "--head-sha", "HEAD",
+            "--base-export-out", str(temporary_export), "--out", str(temporary_output), "--", *selected]
+    env = dict(os.environ, PYTHONPATH=engine)
+    artifacts.mkdir(parents=True, exist_ok=True)
+    _save(artifacts / "test-leg-start.json", {"argv": argv, "cwd": str(root), "engine_root": engine})
+    with (artifacts / "test-leg.stdout").open("wb") as out, (artifacts / "test-leg.stderr").open("wb") as err:
+        try:
+            proc = subprocess.run(argv, cwd=root, env=env, stdout=out, stderr=err, timeout=max(.1, deadline - time.monotonic()),
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired:
+            return {**receipt, "reverify_error": "host reverify test leg timed out"}
+    if not temporary_output.is_file():
+        return {**receipt, "reverify_error": f"host reverify test leg exited {proc.returncode} without a usable receipt"}
+    measured = json.loads(temporary_output.read_text(encoding="utf-8"))
+    _save(output, measured)
+    if temporary_export.is_file():
+        pending = export_path.with_name(f"{export_path.name}.{uuid.uuid4().hex}.tmp")
+        shutil.copyfile(temporary_export, pending)
+        os.replace(pending, export_path)
+    for key in ("failing", "failing_detail", "passed_alone", "passed_at_base", "pre_existing", "tests_run"):
+        if key in measured:
+            receipt[key] = measured[key]
+    receipt["not_run"] = list(dict.fromkeys(
+        receipt["not_run"] + measured.get("missing_targets", []) + measured.get("tripwires_not_run", [])
+        + measured.get("not_a_test", [])
+    ))
+    if not proc.returncode and receipt["tests_run"] and measured.get("status") != "error":
+        receipt["status_before"] = "pass" if measured.get("status_after") == "pass" else "fail"
+    elif receipt["status_before"] == "indeterminate":
+        receipt["reverify_error"] = f"host test leg returned no verified verdict (exit {proc.returncode})"
+    receipt["sidecar_path"] = output_path
+    return receipt
+
+
 def _result_failure(value, *, landing: bool = False) -> str | None:
     """Recognize engine failure envelopes, rather than grep arbitrary task data.
 
@@ -513,8 +608,12 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                     if process.poll() is not None:
                         raise RuntimeError('workflow runtime exited before queued agent dispatch')
                     if event['type'] == 'invoke':
-                        reply['result'] = _invoke_source(event['op'], event['params'], record['repo_root'],
-                            artifacts / 'operations' / str(event['id']), remaining)
+                        operation_dir = artifacts / 'operations' / str(event['id'])
+                        if event['op'] == 'review.reverify.host_test_leg':
+                            reply['result'] = _reverify_test_leg(event['params'], record['repo_root'], operation_dir, remaining)
+                        else:
+                            reply['result'] = _invoke_source(event['op'], event['params'], record['repo_root'],
+                                                            operation_dir, remaining)
                     else:
                         request_id = str(event['id'])
                         extra = {}
