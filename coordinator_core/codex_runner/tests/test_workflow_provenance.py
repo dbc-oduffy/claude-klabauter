@@ -690,3 +690,44 @@ def test_family_argv_agy_delegates_to_family_stage_argv_unrestricted(tmp_path: P
     assert argv[argv.index('--input-format') + 1] == 'stream-json'
     assert argv[argv.index('--output-format') + 1] == 'stream-json'
 
+
+
+@pytest.mark.parametrize("outer_matches", [True, False])
+def test_codex_gate_restores_malformed_duplicate_digest_from_engine_receipt(
+    tmp_path, monkeypatch, outer_matches,
+):
+    from coordinator_core.ops.dispatch_emit import ask_stage_receipt, reply_sidecar
+
+    run_id = "warp-2026-11-20-headless-gate-host-result-de0255-20261120T094343-34b2f2"
+    manifest = tmp_path / "state" / "warp" / run_id / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"rows":[]}', encoding="ascii")
+    import hashlib
+
+    raw = manifest.read_bytes()
+    authoritative = {"path": manifest.relative_to(tmp_path).as_posix(),
+                     "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+    ask_stage_receipt.write_gate(manifest.parent, authoritative)
+    malformed = "84596cb9654fa419b0c338f474391ce7755f0e54b1819a36608"
+    result = {
+        "arm": "s", "halt": None,
+        "manifest_handle": {**authoritative, "sha256": authoritative["sha256"] if outer_matches else "0" * 64},
+        "stage_reply": {"manifest_handle": {**authoritative, "sha256": malformed}},
+    }
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[json.dumps(result), "null"])
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    schema = {"type": "object", "required": ["arm", "halt"], "properties": {
+        "manifest_handle": reply_sidecar.HANDLE_SCHEMA,
+        "stage_reply": reply_sidecar.STAGE_REPLY_SCHEMA,
+    }}
+    outcome = workflow.run_agent(
+        "Run gate", {"label": "gate", "phase": "gate", "schema": schema, "gateManifestRunId": run_id},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    )
+    if not outer_matches:
+        assert outcome["halt"]["kind"] == "gate-reply-invalid"
+        return
+    assert outcome["stage_reply"]["manifest_handle"] == authoritative
+    assert outcome["manifest_handle"] == authoritative
+    assert len(calls) == 1

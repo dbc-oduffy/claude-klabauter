@@ -546,6 +546,7 @@ def _agent(
     agent_type_host: Optional[str] = None,
     sidecar_label: Optional[str] = None,
     sidecar_label_js: Optional[str] = None,
+    gate_manifest_run: Optional[str] = None,
 ) -> str:
     """One `agent(...)` call expression; the prompt ends with the sidecar clause keyed by ``run_id`` and ``label``.
 
@@ -590,10 +591,11 @@ def _agent(
     judge = (schema.get("properties") or {}).get("judge")
     if isinstance(judge, _JudgeSchemaRef):
         schema_js = schema_js.replace(json.dumps(judge, sort_keys=True), _JUDGE_SCHEMA_VAR, 1)
+    gate_opt = f"gateManifestRunId: {_lit(gate_manifest_run)}, " if gate_manifest_run else ""
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
         f"agentType: {_lit(_emit._degrade_agent_type(agent_type, agent_type_host))}, {model_opt}{effort_opt}"
-        f"schema: {schema_js} }})"
+        f"{gate_opt}schema: {schema_js} }})"
     )
 
 
@@ -5039,6 +5041,7 @@ def compose_ask_script(
             agent_model=_MECHANICAL_MODEL,
             schema=_GATE_STAGED_SCHEMA if stage_act and fold_stage else _GATE_SCHEMA,
             effort=_MECHANICAL_EFFORT, run_id=run_id,
+            gate_manifest_run=run_id,
         )
 
     def _chain_emit_act(params: str) -> tuple[str, ...]:

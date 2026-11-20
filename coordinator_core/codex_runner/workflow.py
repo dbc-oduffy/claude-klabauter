@@ -909,6 +909,42 @@ def _gate_envelope_result(value: Any) -> Any:
     return value
 
 
+def _bind_gate_manifest_digest(value: Any, repo_root: Path, run_id: Any) -> Any:
+    """Repair a malformed duplicate digest after verifying the outer handle."""
+    if not isinstance(value, dict) or not isinstance(run_id, str):
+        return value
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_id):
+        return value
+    stage = value.get("stage_reply")
+    outer = value.get("manifest_handle")
+    inner = stage.get("manifest_handle") if isinstance(stage, dict) else None
+    from coordinator_core.ops.dispatch_emit import ask_stage_receipt, reply_sidecar
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    if not all(isinstance(handle, dict) and set(handle) == set(reply_sidecar.HANDLE_KEYS)
+               for handle in (outer, inner)):
+        return value
+    root = repo_root.resolve()
+    directory = record_dir(root, run_id)
+    path = directory / ask_stage_receipt.MANIFEST_NAME
+    if (not path.is_relative_to(root) or path.resolve() != path
+            or (directory / ask_stage_receipt.RECEIPT_NAME).is_symlink()):
+        return value
+    expected = path.relative_to(root).as_posix()
+    if any(handle["path"] != expected for handle in (outer, inner)):
+        return value
+    sealed = ask_stage_receipt.landed(directory, ask_stage_receipt.GATE_DIGEST)
+    if sealed is None or sealed["path"] != expected or outer["sha256"] != sealed["sha256"]:
+        return value
+    if any(type(handle["bytes"]) is not int or handle["bytes"] != sealed["bytes"]
+           for handle in (outer, inner)):
+        return value
+    digest = inner["sha256"]
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+        return value
+    return {**value, "stage_reply": {**stage, "manifest_handle": {**inner, "sha256": sealed["sha256"]}}}
+
+
 _GATE_WRAPPER_PREFIX = re.compile(
     r'^\s*\{\s*"jsonrpc"\s*:\s*"2\.0"\s*,\s*"id"\s*:\s*'
     r'(?:-?\d+|"(?:[^"\\]|\\.)*"|null)\s*,\s*"result"\s*:\s*(?=\{)'
@@ -1152,7 +1188,9 @@ def run_agent(
             text = last.read_text(encoding="utf-8")
             value = json.loads(text) if schema is not None else text
             if codex_gate:
-                value = _gate_envelope_result(value)
+                value = _bind_gate_manifest_digest(
+                    _gate_envelope_result(value), repo_root, options.get("gateManifestRunId"),
+                )
         if schema is not None:
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
@@ -1163,7 +1201,10 @@ def run_agent(
         if (codex_gate and isinstance(exc, json.JSONDecodeError)
                 and exc.pos == len(text) and _GATE_WRAPPER_PREFIX.match(text)):
             try:
-                closed = _gate_envelope_result(json.loads(text + "}"))
+                closed = _bind_gate_manifest_digest(
+                    _gate_envelope_result(json.loads(text + "}")),
+                    repo_root, options.get("gateManifestRunId"),
+                )
                 jsonschema.validate(closed, schema)
             except (ValueError, jsonschema.ValidationError):
                 pass
@@ -1208,7 +1249,10 @@ def run_agent(
                 repaired_text = (retry_dir / "last.txt").read_text(encoding="utf-8")
                 # A schema-valid prefix can still omit acceptance or manifest fields.
                 if wrapper_payload is not None:
-                    if json.dumps(wrapper_payload) == json.dumps(repaired):
+                    bound_payload = _bind_gate_manifest_digest(
+                        wrapper_payload, repo_root, options.get("gateManifestRunId"),
+                    )
+                    if json.dumps(bound_payload) == json.dumps(repaired):
                         value = repaired
                 elif codex_gate and _gate_reask_preserves_scalars(text, repaired_text):
                     value = repaired
