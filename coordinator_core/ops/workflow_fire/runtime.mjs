@@ -103,6 +103,7 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
     work.then(() => active.delete(work), () => active.delete(work));
     return work;
   } : undefined;
+  if (engineOp) Object.defineProperty(engineOp, 'directRun', { value: depth === 0 });
   const workflow = async (options, positionalArgs) => {
     if (!options || typeof options.scriptPath !== 'string' || !options.scriptPath.trim()) {
       throw new TypeError('workflow requires a scriptPath');

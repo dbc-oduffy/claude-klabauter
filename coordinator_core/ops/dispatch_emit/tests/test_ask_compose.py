@@ -1132,3 +1132,11 @@ def test_composed_ask_reverify_uses_the_dispatch_snapshot_session():
         assert f'"base":"{_FAKE_BASE_SHA}"' in payload
         assert f'"slice_prefix":"manifest-{_RUN_ID}-{_FAKE_BASE_SHA[:12]}-prep"' in payload
         assert " --repo " in flags
+
+
+def test_verify_tests_routes_manifest_scope_to_native_host():
+    script = _compose()
+    assert "engineOp.directRun && !_lateIds.length && !_verifyLateIds.length" in script
+    assert "engineOp('verify.host_test_leg'" in script
+    assert "targets: _manifest.test_targets ?? []" in script
+    assert "coordinator_core.ops.test_leg_run" in script

@@ -224,3 +224,14 @@ def test_engine_op_bad_request_is_refused_before_broker(tmp_path, call):
     code, events, _ = run_script(tmp_path, 'export const meta={}; return await ' + call + ';')
     assert code == 1
     assert not any(event['type'] == 'invoke' for event in events)
+
+
+def test_engine_op_direct_run_capability_excludes_nested_workflows(tmp_path):
+    nested = tmp_path / "nested-verify.mjs"
+    nested.write_text("export const meta = {}; return engineOp.directRun;", encoding="utf-8")
+    options = json.dumps({"scriptPath": str(nested)})
+    code, events, stderr = run_script(
+        tmp_path, "export const meta = {}; return [engineOp.directRun, await workflow(" + options + ")];",
+    )
+    assert code == 0, stderr
+    assert events[-1]["result"] == [True, False]

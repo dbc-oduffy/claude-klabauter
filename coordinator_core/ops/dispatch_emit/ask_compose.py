@@ -7007,6 +7007,12 @@ def compose_ask_script(
             ),
         ),
     )
+    verify_host_params = json.dumps({"base": run_base_sha or "", "out_path": f"{record_dir}/test-leg.json"})
+    verify_tests_call = (
+        "(typeof engineOp === 'function' && engineOp.directRun && !_lateIds.length && !_verifyLateIds.length"
+        " ? engineOp('verify.host_test_leg', "
+        f"{{ ...{verify_host_params}, targets: _manifest.test_targets ?? [] }}) : {verify_tests_call})"
+    )
     unjudged = (
         "{ status: 'indeterminate', differs_from_baseline: null, observation: 'unjudged: verify leg returned "
         "no verdict', reason: 'verify leg returned no judge verdict', sidecar_path: null }"

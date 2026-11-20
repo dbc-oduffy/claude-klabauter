@@ -361,6 +361,71 @@ def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: f
     return reply['result']
 
 
+def _run_pinned_test_leg(
+    repo: Path, output: Path, artifacts: Path, targets: list[str],
+    base: str, timeout: float, baseline_output: Path | None = None,
+) -> tuple[int, dict]:
+    artifacts.mkdir(parents=True, exist_ok=True)
+    temporary_output = artifacts / "test-leg-result.json"
+    temporary_export = artifacts / "test-leg-baseline.json"
+    engine = str(_executor_root())
+    bootstrap = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+                 "runpy.run_module('coordinator_core.ops.test_leg_run',run_name='__main__',alter_sys=True)")
+    argv = [sys.executable, "-c", bootstrap, engine]
+    if base:
+        argv += ["--base-sha", base]
+    if baseline_output is not None:
+        argv += ["--head-sha", "HEAD", "--base-export-out", str(temporary_export)]
+    argv += ["--out", str(temporary_output), "--", *targets]
+    _save(artifacts / "test-leg-start.json", {"argv": argv, "cwd": str(repo), "engine_root": engine})
+    with (artifacts / "test-leg.stdout").open("wb") as out, (artifacts / "test-leg.stderr").open("wb") as err:
+        proc = subprocess.run(argv, cwd=repo, env=dict(os.environ, PYTHONPATH=engine),
+                              stdout=out, stderr=err, timeout=timeout,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if not temporary_output.is_file():
+        raise ValueError(f"test leg exited {proc.returncode} without a receipt")
+    measured = json.loads(temporary_output.read_text(encoding="utf-8"))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    _save(output, measured)
+    if baseline_output is not None and temporary_export.is_file():
+        pending = baseline_output.with_name(f"{baseline_output.name}.{uuid.uuid4().hex}.tmp")
+        shutil.copyfile(temporary_export, pending)
+        os.replace(pending, baseline_output)
+    return proc.returncode, measured
+
+
+def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *, run_id: str) -> dict:
+    root = Path(repo).resolve()
+    if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_id):
+        raise ValueError("host Verify tests requires a valid active run ID")
+    run_dir = root / "state" / "warp" / run_id
+    output = run_dir / "test-leg.json"
+    if (root / params["out_path"]).resolve() != output or output.resolve() != output:
+        raise ValueError("host Verify tests output does not belong to the active run")
+    targets = params["targets"]
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    if not isinstance(targets, list) or targets != manifest.get("test_targets"):
+        raise ValueError("host Verify tests targets differ from the active run manifest")
+    for target in targets:
+        if not isinstance(target, str) or not target or target.startswith(("-", "@")) or any(c in target for c in "\r\n"):
+            raise ValueError("host Verify tests requires repository-relative pytest selectors")
+        path = target.split("::", 1)[0]
+        if Path(path).is_absolute() or not (root / path).resolve().is_relative_to(root):
+            raise ValueError(f"host Verify tests target is outside the repository: {path!r}")
+    base = params.get("base", "")
+    manifest_base = manifest.get("head_sha")
+    if manifest_base and base != manifest_base:
+        raise ValueError("host Verify tests baseline differs from the active run manifest")
+    exit_code, measured = _run_pinned_test_leg(root, output, artifacts, targets, base, timeout)
+    fields = ("status", "tests_run", "tests_failed", "baseline", "baseline_method", "build_clean",
+              "skipped", "summary", "importer_overrun", "tripwires_not_run", "zero_run_cause")
+    result = {key: measured[key] for key in fields if key in measured}
+    result["sidecar_path"] = output.relative_to(root).as_posix()
+    if exit_code:
+        result["status"] = "error"
+    return result
+
+
 def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float) -> dict | None:
     """Measure the inventory before the review worker can interpret it."""
     deadline = time.monotonic() + timeout
@@ -415,32 +480,13 @@ def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float)
 
     output_path = _test_leg_file(run_key, "", prefixes[-1])
     export_path = root / _base_export_file(run_key, "", prefixes[-1])
-    temporary_output = artifacts / "test-leg-result.json"
-    temporary_export = artifacts / "test-leg-baseline.json"
-    output = root / output_path
-    output.parent.mkdir(parents=True, exist_ok=True)
-    engine = str(_executor_root())
-    bootstrap = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
-                 "runpy.run_module('coordinator_core.ops.test_leg_run',run_name='__main__',alter_sys=True)")
-    argv = [sys.executable, "-c", bootstrap, engine, "--base-sha", params["base"], "--head-sha", "HEAD",
-            "--base-export-out", str(temporary_export), "--out", str(temporary_output), "--", *selected]
-    env = dict(os.environ, PYTHONPATH=engine)
-    artifacts.mkdir(parents=True, exist_ok=True)
-    _save(artifacts / "test-leg-start.json", {"argv": argv, "cwd": str(root), "engine_root": engine})
-    with (artifacts / "test-leg.stdout").open("wb") as out, (artifacts / "test-leg.stderr").open("wb") as err:
-        try:
-            proc = subprocess.run(argv, cwd=root, env=env, stdout=out, stderr=err, timeout=max(.1, deadline - time.monotonic()),
-                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except subprocess.TimeoutExpired:
-            return {**receipt, "reverify_error": "host reverify test leg timed out"}
-    if not temporary_output.is_file():
-        return {**receipt, "reverify_error": f"host reverify test leg exited {proc.returncode} without a usable receipt"}
-    measured = json.loads(temporary_output.read_text(encoding="utf-8"))
-    _save(output, measured)
-    if temporary_export.is_file():
-        pending = export_path.with_name(f"{export_path.name}.{uuid.uuid4().hex}.tmp")
-        shutil.copyfile(temporary_export, pending)
-        os.replace(pending, export_path)
+    try:
+        exit_code, measured = _run_pinned_test_leg(
+            root, root / output_path, artifacts, selected, params["base"],
+            max(.1, deadline - time.monotonic()), export_path,
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        return {**receipt, "reverify_error": f"host reverify test leg failed: {exc}"}
     for key in ("failing", "failing_detail", "passed_alone", "passed_at_base", "pre_existing", "tests_run"):
         if key in measured:
             receipt[key] = measured[key]
@@ -448,10 +494,10 @@ def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float)
         receipt["not_run"] + measured.get("missing_targets", []) + measured.get("tripwires_not_run", [])
         + measured.get("not_a_test", [])
     ))
-    if not proc.returncode and receipt["tests_run"] and measured.get("status") != "error":
+    if not exit_code and receipt["tests_run"] and measured.get("status") != "error":
         receipt["status_before"] = "pass" if measured.get("status_after") == "pass" else "fail"
     elif receipt["status_before"] == "indeterminate":
-        receipt["reverify_error"] = f"host test leg returned no verified verdict (exit {proc.returncode})"
+        receipt["reverify_error"] = f"host test leg returned no verified verdict (exit {exit_code})"
     receipt["sidecar_path"] = output_path
     return receipt
 
@@ -611,6 +657,9 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                         operation_dir = artifacts / 'operations' / str(event['id'])
                         if event['op'] == 'review.reverify.host_test_leg':
                             reply['result'] = _reverify_test_leg(event['params'], record['repo_root'], operation_dir, remaining)
+                        elif event['op'] == 'verify.host_test_leg':
+                            reply['result'] = _verify_test_leg(event['params'], record['repo_root'],
+                                                               operation_dir, remaining, run_id=record.get('run_id'))
                         else:
                             reply['result'] = _invoke_source(event['op'], event['params'], record['repo_root'],
                                                             operation_dir, remaining)

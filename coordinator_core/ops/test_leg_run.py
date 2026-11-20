@@ -45,6 +45,8 @@ EXIT_TIMEOUT = 3
 USAGE = ("usage: test_leg_run [--base-sha <sha>] [--head-sha <sha>] [--base-export-out <path>] "
          "[--budget-s N] [--touched <path>]... --out <path> -- <ids and test files...>")
 _PYTEST = ["-rfE", "-p", "no:cacheprovider"]
+_PYTEST_ENCODING = "utf-8"
+_PYTEST_STDOUT_LIMIT = 16384
 #: Runs pytest over the ids listed one per line in `sys.argv[1]`, with `sys.argv[2:]` as its flags: argv carries
 #: no id list, so a list of any size spawns.
 _IDS_RUNNER = ("import sys, pytest\n"
@@ -68,17 +70,18 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str], str]:
-    """Return pytest's exit code, output lines and stderr. Raises subprocess.TimeoutExpired once `remaining` seconds
+def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str], str, str]:
+    """Return pytest's exit code, parser lines, stderr and raw stdout. Raises subprocess.TimeoutExpired once `remaining` seconds
     are gone; the child is killed by then."""
     if remaining <= 0:
         raise subprocess.TimeoutExpired("pytest", 0)
     with tempfile.TemporaryDirectory(prefix="test-leg-ids-") as holder:
         id_file = _write_ids(Path(holder), targets)
         proc = subprocess.run([sys.executable, "-c", _IDS_RUNNER, str(id_file), *_PYTEST], cwd=cwd,
-                              capture_output=True, text=True, errors="replace", timeout=remaining,
+                              capture_output=True, encoding=_PYTEST_ENCODING, errors="replace", timeout=remaining,
+                              env=dict(os.environ, PYTHONIOENCODING=_PYTEST_ENCODING),
                               **no_console_creationflags())
-    return proc.returncode, [*proc.stdout.splitlines(), *proc.stderr.splitlines()], proc.stderr
+    return proc.returncode, [*proc.stdout.splitlines(), *proc.stderr.splitlines()], proc.stderr, proc.stdout
 
 
 def _conftest_constants(*names: str) -> dict[str, str]:
@@ -456,15 +459,15 @@ def _split_phases(present: list[str], base_sha: Optional[str], head_sha: Optiona
 
 
 def _cwd_phase(targets: list[str], cwd: str, left, all_reds: dict, shown: dict,
-               red_non: list[str]) -> tuple[int, list[str], list[str], str]:
+               red_non: list[str]) -> tuple[int, list[str], list[str], str, str]:
     """One pytest phase in `cwd`: (rc, lines, charged red ids); folds the phase's reds into the shared maps."""
-    rc, lines, stderr = _pytest(targets, cwd, left())
+    rc, lines, stderr, stdout = _pytest(targets, cwd, left())
     found = _reds(lines)
     kept, non = _split_not_a_test(list(found))
     red_non.extend(non)
     all_reds.update({n: found[n] for n in kept})
     shown.update(_detail("\n".join(lines), kept))
-    return rc, lines, kept, stderr
+    return rc, lines, kept, stderr, stdout
 
 
 def _merge_phases(rc1: int, lines1: list[str], rc2: int, lines2: list[str]) -> tuple[int, list[str]]:
@@ -484,7 +487,7 @@ def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], he
     measures so the base export file always holds every phase settled so far. Raises TimeoutExpired."""
     if not reds:
         return
-    rc, lines, _stderr = _pytest(list(reds), cwd, left())
+    rc, lines, _stderr, _stdout = _pytest(list(reds), cwd, left())
     again = _reds(lines)
     if rc in (0, 1):
         result["passed_alone"].extend(n for n in reds if n not in again)
@@ -637,19 +640,21 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         shown: dict[str, str] = {}
         red_non: list[str] = []
         exported: dict = {}
-        rc, lines, reds, stderr = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non)
-        result["pytest_phases"] = [{"exit_code": rc, "stderr": stderr[-4096:]}]
+        rc, lines, reds, stderr, stdout = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non)
+        result["pytest_phases"] = [{"exit_code": rc, "stderr": stderr[-4096:],
+                                    "stdout": stdout[-_PYTEST_STDOUT_LIMIT:], "encoding": _PYTEST_ENCODING}]
         phase_one = (rc, lines, stderr)
         unreached = _files(second)
         _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported)
         if second:
             try:
-                rc2, lines2, reds2, stderr2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non)
+                rc2, lines2, reds2, stderr2, stdout2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non)
             except subprocess.TimeoutExpired:
                 result[ltt.IMPORTER_OVERRUN_KEY] = True
                 result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(second)
             else:
-                result["pytest_phases"].append({"exit_code": rc2, "stderr": stderr2[-4096:]})
+                result["pytest_phases"].append({"exit_code": rc2, "stderr": stderr2[-4096:],
+                                                "stdout": stdout2[-_PYTEST_STDOUT_LIMIT:], "encoding": _PYTEST_ENCODING})
                 rc, lines = _merge_phases(rc, lines, rc2, lines2)
                 stderr = "\n".join(filter(None, (stderr, stderr2)))
                 reds = [*reds, *reds2]
@@ -732,6 +737,12 @@ def main(argv: list[str]) -> int:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(body + "\n", encoding="utf-8")
+    if "pytest_phases" in result:
+        relay = {**result, "pytest_phases": [
+            {key: value for key, value in phase.items() if key not in ("stdout", "encoding")}
+            for phase in result["pytest_phases"]
+        ]}
+        body = json.dumps(relay)
     print(body)
     return EXIT_TIMEOUT if result["over_budget"] else EXIT_OK
 
