@@ -371,6 +371,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "groupem.admission_post":                 "coordinator_core.ops.group_em_admission_post",
     "groupem.slot_grant":                     "coordinator_core.ops.group_em_slot_grant",
     "groupem.slot_check":                     "coordinator_core.ops.group_em_slot_grant",
+    "runs.withheld_overlap":                  "coordinator_core.ops.runs_withheld_overlap",
     "groupem.box_register":                   "coordinator_core.ops.group_em_box_federation",
     "groupem.box_place":                      "coordinator_core.ops.group_em_box_federation",
     "groupem.box_send":                       "coordinator_core.ops.group_em_box_federation",

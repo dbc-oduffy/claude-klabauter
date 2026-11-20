@@ -2231,6 +2231,7 @@ def stage(
             em_owed = None
     with leg("baseline"):
         write_baseline = _stage_write_baseline(root, manifest_rows, record, run_sizing_rel)
+        foreign_at_baseline = _stage_foreign_at_baseline(root, record, write_baseline)
     manifest = StageManifest(
         run_dir=_rel(root, run_dir),
         rows=tuple(manifest_rows),
@@ -2253,6 +2254,7 @@ def stage(
         retired_resume_rows=retired_resume,
         dropped_writes=tuple({"path": p, "sentence": s} for p, s in excluded.items()),
         write_baseline=write_baseline,
+        foreign_at_baseline=foreign_at_baseline,
         slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
         memo_close=memo_close if not manifest_rows else (),
         held_ids=held_ids,
@@ -2641,6 +2643,20 @@ def _stage_write_baseline(
             root, _write_baseline.capture(root, missing), sizing_rel, record.name if record is not None else ""
         )
     return {p: prior[p] if p in prior else fresh[p] for p in wanted if p in prior or p in fresh}
+
+
+def _stage_foreign_at_baseline(root: Path, record: Optional[Path], write_baseline: Mapping) -> dict:
+    """The dirty-at-baseline marker (`write_baseline.foreign_at_baseline`) for this stage. A first stage
+    derives it from the baseline it just captured; a refire (`_baseline_source` finds the chain's first
+    halted record) inherits the first stage's marker, so one run's own earlier dirt is never re-labelled
+    foreign and a peer's dirt present at the first baseline never becomes the chain's own."""
+    source = _baseline_source(root, record)
+    if source is not None and halted_run_base(source):
+        inherited = (_recorded_manifest(source) or {}).get("foreign_at_baseline")
+        if isinstance(inherited, Mapping):
+            return {p: s for p, s in inherited.items() if p in write_baseline and isinstance(s, str)}
+        return {}
+    return _write_baseline.foreign_at_baseline(root, write_baseline)
 
 
 def _baseline_source(root: Path, record: Optional[Path]) -> Optional[Path]:

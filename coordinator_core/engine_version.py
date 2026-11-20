@@ -46,6 +46,7 @@ Spec backlink: pln-claude-klabauter-engine-version-surface--c130a8
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import NamedTuple
 
@@ -63,11 +64,24 @@ class SourceHead(NamedTuple):
     engine_head: str | None
 
 
+def _read_stamp_file(root: Path) -> str | None:
+    """The sha in `coordinator_core/_engine_stamp` (`sha:<hex>` or bare hex), else None."""
+    try:
+        text = (root / "coordinator_core" / "_engine_stamp").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    token = text.split()[0] if text else ""
+    if token.startswith("sha:"):
+        token = token[4:]
+    return token if re.fullmatch(r"[0-9a-fA-F]{7,40}", token) else None
+
+
 def resolve_engine_source_head(engine_dir: Path | None = None) -> SourceHead:
     """The claude-klabauter commit the engine at `engine_dir` is built from.
 
-    `basis` is "source-tree" (`sha` == HEAD) or "mirror-stamp" (`sha` from the
-    HEAD commit's publish stamp). `engine_head` is the checkout's own HEAD.
+    `basis` is "source-tree" (`sha` == HEAD), "mirror-stamp" (`sha` from the
+    HEAD commit's publish stamp), or, when HEAD is unstamped, "merge-parent"
+    (a same-tree stamped parent) / "stamp-file" (`coordinator_core/_engine_stamp`). `engine_head` is the checkout's own HEAD.
     `sha` is None when unresolvable, with `basis` already decided; a path that
     is not in a repo reports basis "source-tree" and all-None shas.
     """
@@ -93,11 +107,27 @@ def resolve_engine_source_head(engine_dir: Path | None = None) -> SourceHead:
         info = read_commit(root, head)
         if info is None:
             return SourceHead(None, "mirror-stamp", head)
-        stamped = parse_publish_trailers(info.message).source_head
-        if not stamped:
-            subject = info.message.strip().split("\n", 1)[0]
-            stamped = parse_source_sha_suffix(subject)
-        return SourceHead(stamped or None, "mirror-stamp", head)
+        def _stamp_of(message: str) -> str | None:
+            found_stamp = parse_publish_trailers(message).source_head
+            if not found_stamp:
+                found_stamp = parse_source_sha_suffix(message.strip().split("\n", 1)[0])
+            return found_stamp or None
+
+        stamped = _stamp_of(info.message)
+        if stamped:
+            return SourceHead(stamped, "mirror-stamp", head)
+        # An unstamped merge HEAD whose tree equals a stamped parent's built the same
+        # bytes as that parent. In-process object reads: no spawn.
+        for parent in info.parents:
+            pinfo = read_commit(root, parent)
+            if pinfo is not None and pinfo.tree == info.tree:
+                stamped = _stamp_of(pinfo.message)
+                if stamped:
+                    return SourceHead(stamped, "merge-parent", head)
+        file_stamp = _read_stamp_file(root)
+        if file_stamp:
+            return SourceHead(file_stamp, "stamp-file", head)
+        return SourceHead(None, "mirror-stamp", head)
     except OSError:
         return SourceHead(None, "source-tree", None)
 

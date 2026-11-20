@@ -3102,6 +3102,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "groupem.slot_grant": OpClass.MUTATING,
     # groupem.slot_check -- COMPUTE_ONLY: reads one grant record; writes nothing.
     "groupem.slot_check": OpClass.COMPUTE_ONLY,
+    # runs.withheld_overlap -- COMPUTE_ONLY: reads run records and one pathspec-limited git status.
+    "runs.withheld_overlap": OpClass.COMPUTE_ONLY,
     # groupem.box_register / box_place / box_send -- MUTATING: write a registry row, a placement
     # record, or an inbox line under a settings-home. box_roster -- COMPUTE_ONLY: reads only.
     "groupem.box_register": OpClass.MUTATING,

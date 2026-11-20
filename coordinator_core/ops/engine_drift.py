@@ -304,7 +304,7 @@ def probe_engine_drift(engine_dir: Optional[Path] = None) -> dict:
     engine_dir = engine_dir if engine_dir is not None else Path(__file__).resolve().parent.parent
     head = resolve_engine_source_head(engine_dir)
     floor = MIN_KNOWN_GOOD_SHA
-    mirror = head.basis == "mirror-stamp"
+    mirror = head.basis in ("mirror-stamp", "merge-parent", "stamp-file")
 
     repo: Optional[Path]
     if mirror:

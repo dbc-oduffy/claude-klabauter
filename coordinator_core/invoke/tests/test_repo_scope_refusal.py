@@ -61,37 +61,34 @@ def _invoke(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_repo_flag_refused_on_none_scoped_op():
-    result = _invoke("ping", "{}", "--repo", _PROJECT_ROOT)
-
-    assert result.returncode != 0, (
-        f"--repo on a 'none'-scoped op must exit non-zero (fail loud), not "
-        f"silently no-op; got {result.returncode}.\n"
-        f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
-    )
-    assert result.stdout.strip() == "", (
-        f"stdout must be empty on the _fatal_stderr refusal path; got {result.stdout!r}"
-    )
-    assert result.stderr.strip(), "stderr must carry the refusal message"
-    parsed_err = json.loads(result.stderr.strip())
-    assert "error" in parsed_err, f"Expected a JSON-RPC error envelope; got {parsed_err}"
-    message = parsed_err["error"]["message"].lower()
-    assert "ping" in message, f"Message must name the op; got {message!r}"
-    assert "none" in message, f"Message must name the op's scope ('none'); got {message!r}"
-    assert "--repo" in message, f"Message must name the offending flag; got {message!r}"
+def test_repo_flag_accepted_and_ignored_on_none_scoped_op():
+    """One recipe serves preflight (engine.drift) and fire: --repo is a no-op, not a refusal."""
+    for op in ("ping",):
+        result = _invoke(op, "{}", "--repo", _PROJECT_ROOT)
+        assert "meaningless" not in result.stderr, result.stderr
+        assert result.returncode == 0, (
+            f"--repo on none-scoped {op} must be accepted; got {result.returncode}."
+            f"stdout: {result.stdout!r} "
+            f"stderr: {result.stderr!r}"
+        )
 
 
-def test_repo_flag_refused_on_another_none_scoped_op():
-    result = _invoke("cartography.tree", "{}", "--repo", _PROJECT_ROOT)
+def test_repo_falls_back_to_params_when_cwd_not_a_repo(tmp_path):
+    from coordinator_core.invoke.__main__ import _resolve_repo_root
 
-    assert result.returncode != 0, (
-        f"--repo on cartography.tree (scope='none') must exit non-zero; got "
-        f"{result.returncode}.\nstdout: {result.stdout!r}\nstderr: {result.stderr!r}"
-    )
-    parsed_err = json.loads(result.stderr.strip())
-    message = parsed_err["error"]["message"].lower()
-    assert "cartography.tree" in message
-    assert "none" in message
+    assert _resolve_repo_root(None, str(tmp_path), {"repo": _PROJECT_ROOT}) == Path(_PROJECT_ROOT).resolve()
+    assert _resolve_repo_root(None, str(tmp_path), {"cwd": _PROJECT_ROOT}) == Path(_PROJECT_ROOT).resolve()
+    # `repo` wins over `cwd`; an explicit --repo wins over both.
+    other = tmp_path / "other"
+    assert _resolve_repo_root(None, str(tmp_path), {"repo": _PROJECT_ROOT, "cwd": str(other)}) == Path(_PROJECT_ROOT).resolve()
+    assert _resolve_repo_root(str(other), str(tmp_path), {"repo": _PROJECT_ROOT}) == other.resolve()
+
+
+def test_repo_unresolvable_without_params_still_fails(tmp_path):
+    from coordinator_core.invoke.__main__ import _resolve_repo_root
+
+    with pytest.raises(SystemExit):
+        _resolve_repo_root(None, str(tmp_path), {})
 
 
 def test_repo_flag_not_refused_on_worktree_scoped_op():
@@ -122,7 +119,7 @@ def test_repo_flag_not_refused_on_worktree_scoped_op():
     assert parsed.get("jsonrpc") == "2.0"
 
 
-def test_help_describes_repo_as_optional_and_refused_on_none_scoped_op():
+def test_help_describes_repo_as_optional():
     result = subprocess.run(
         [sys.executable, "-m", "coordinator_core.invoke", "--help"],
         capture_output=True,
@@ -138,9 +135,6 @@ def test_help_describes_repo_as_optional_and_refused_on_none_scoped_op():
     assert "Optional" in flat
     assert "agent_pipe.send" in flat
 
-    refused = _invoke("agent_pipe.send", "{}", "--repo", _PROJECT_ROOT)
-    assert refused.returncode != 0
-    assert "--repo" in refused.stderr
 
 
 def test_no_repo_flag_still_works_on_none_scoped_op():

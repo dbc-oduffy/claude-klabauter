@@ -367,6 +367,47 @@ class TestProbeMirrorStamp:
         assert result["basis"] == "mirror-stamp"
 
 
+class TestProbeMirrorUnstampedFallbacks:
+    """An unstamped mirror HEAD falls back to a same-tree stamped parent, then to the stamp file."""
+
+    def _merge_mirror(self, tmp_path, stamp_b=False):
+        mirror = tmp_path / "mirror"
+        _mirror(mirror, "publish [source-head " + "1" * 12 + "]")
+        trunk = _git(mirror, "rev-parse", "--abbrev-ref", "HEAD")
+        stamped = _git(mirror, "rev-parse", "HEAD")
+        _git(mirror, "checkout", "-q", "-b", "side", "HEAD~1")
+        (mirror / "g.txt").write_text("side")
+        _git(mirror, "add", "g.txt")
+        _git(mirror, "commit", "-q", "-m", "side publish [source-head " + "2" * 12 + "]" if stamp_b else "side")
+        _git(mirror, "checkout", "-q", trunk)
+        _git(mirror, "merge", "-q", "-s", "ours", "--no-ff", "-m", "Merge side", "side")
+        return mirror, stamped
+
+    def test_merge_head_uses_same_tree_stamped_parent(self, tmp_path):
+        mirror, stamped = self._merge_mirror(tmp_path)
+        result = probe_engine_drift(mirror)
+        assert result["basis"] == "merge-parent"
+        assert result["running_sha"] == "1" * 12
+        assert result.get("cause") != CAUSE_MIRROR_UNSTAMPED
+
+    def test_unstamped_head_uses_stamp_file(self, tmp_path):
+        mirror = tmp_path / "mirror"
+        _mirror(mirror, "publish with no stamp")
+        (mirror / "coordinator_core").mkdir()
+        (mirror / "coordinator_core" / "_engine_stamp").write_text("sha:" + "3" * 40 + "\n")
+        result = probe_engine_drift(mirror)
+        assert result["basis"] == "stamp-file"
+        assert result["running_sha"] == "3" * 40
+
+    def test_merge_parent_fallback_spawns_no_git(self, tmp_path):
+        mirror, _ = self._merge_mirror(tmp_path)
+        with patch("coordinator_core.git.run.run_git") as m:
+            from coordinator_core.engine_version import resolve_engine_source_head
+
+            assert resolve_engine_source_head(mirror).basis == "merge-parent"
+        m.assert_not_called()
+
+
 class TestProbeSourceTree:
     def test_ancestry_runs_in_engine_repo(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"

@@ -616,7 +616,7 @@ def _dump_op_timeouts() -> dict:
 # Repo-root resolution
 # ---------------------------------------------------------------------------
 
-def _resolve_repo_root(repo_arg: Optional[str], cwd: str) -> Path:
+def _resolve_repo_root(repo_arg: Optional[str], cwd: str, params: Optional[dict] = None) -> Path:
     """Resolve repo_root from --repo arg or git rev-parse --show-toplevel.
 
     `cwd` is the CALLER's cwd (see `_dispatch_argv`'s docstring) — a relative
@@ -625,6 +625,9 @@ def _resolve_repo_root(repo_arg: Optional[str], cwd: str) -> Path:
     `find_repo_root(cwd)` resolves `git rev-parse --show-toplevel` against it
     explicitly, never against this process's own `os.getcwd()` — served warm,
     those two cwds are different processes' cwds entirely.
+
+    With no --repo and a cwd outside any git tree, falls back to the params'
+    `repo` field, then `cwd`, so a recipe run from anywhere still resolves.
 
     Negative-spec: implicit os.getcwd() fallback is PROHIBITED (AC-5 migration).
     If repo_root cannot be resolved, emits a JSON error envelope to stderr and
@@ -641,6 +644,10 @@ def _resolve_repo_root(repo_arg: Optional[str], cwd: str) -> Path:
     try:
         return find_repo_root(cwd)
     except RuntimeError as exc:
+        for field in ("repo", "cwd"):
+            value = (params or {}).get(field)
+            if isinstance(value, str) and value:
+                return Path(cwd, value).resolve()
         _fatal_stderr(
             f"repo_root unresolvable: not inside a git working tree and --repo was not "
             f"provided. Run from a git repo or pass --repo <path>. Detail: {exc}"
@@ -1230,56 +1237,13 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #    _resolve_repo_root (which calls git rev-parse) must NOT be called for them.
     from coordinator_core.ipc import WORKTREE_SCOPED_OPS
 
-    # 3a. --repo on a "none"-scoped op fails loud instead of silently no-opping.
-    #     Before this check, --repo was accepted and then simply never read — the
-    #     branch below only resolves repo_root (and only reads args.repo) for ops
-    #     IN WORKTREE_SCOPED_OPS, so a "none"-scoped op ignored the flag entirely
-    #     while exiting 0, indistinguishable from --repo actually steering
-    #     something. Example-market-data-repo-em ran the survey end-to-end and
-    #     reported in good faith that "both --repo forms work — we tested" —
-    #     true, and carrying zero information, because neither form does
-    #     anything on a "none"-scoped op. DoE nearly planned against that line.
-    #     See docs/decisions/DR-279-repo-on-a-none-scoped-op-fails-loud.md.
-    #     Scoped to DISPATCHABLE ops only. `OP_KEY_SCOPE.get(op, "none")` is the
-    #     right default for a registered-but-unclassified op (see
-    #     `ipc.py`'s own absent-means-none rule), but it also answered for ops
-    #     that do not exist: an UNDISPATCHABLE name got a refusal naming a
-    #     scope nobody had assigned it, and "Omit --repo for this op" routed
-    #     the caller from that specific-sounding error to a bare -32601 Method
-    #     not found. The two errors contradicted each other and neither said
-    #     the true thing, which is that the op is not there. Observed
-    #     2026-08-26 on `push.outstanding`, registered in claude-klabauter and absent
-    #     from the published engine the forwarder actually dispatches to
-    #     (coordinator-content-repo-94, state/bug-backlog/2026-08-26-quick-wrap-step-1-has-
-    #     no-working-commit-863135e32339.yaml). An unknown op now falls
-    #     through to dispatch, which answers Method-not-found honestly.
-    if args.repo is not None and args.op not in WORKTREE_SCOPED_OPS:
-        from coordinator_core.op_scopes import OP_KEY_SCOPE
-        from coordinator_core.ops._registry_map import resolves as _op_resolves
-
-        # Fall through ONLY for an op unknown to BOTH tables. `resolves()` alone
-        # was too narrow: its second leg reads `ipc._REGISTRY`, which is empty in
-        # this cold CLI process because registration is lazy, so it reduces to
-        # "is it in OP_MODULE_MAP" here -- and that module's own docstring admits
-        # a dispatchable op legitimately absent from the map. Gating on
-        # `resolves()` alone therefore skipped the DR-279 refusal for such an op
-        # exactly as for a nonexistent one, restoring the silent --repo no-op
-        # DR-279 was built to kill under a new trigger (review: code-reviewer,
-        # P1). Requiring BOTH tables to disclaim the op keeps the refusal
-        # wherever anything knows about it.
-        if _op_resolves(args.op) or args.op in OP_KEY_SCOPE:
-            op_scope = OP_KEY_SCOPE.get(args.op, "none")
-            _fatal_stderr(
-                f"--repo is meaningless for op {args.op!r} (scope={op_scope!r}): this op "
-                f"accesses no repo-specific state and never reads repo_root, so --repo "
-                f"would silently no-op. Omit --repo for this op. See "
-                f"docs/decisions/DR-279-repo-on-a-none-scoped-op-fails-loud.md."
-            )
+    # 3a. --repo on a "none"-scoped op is accepted and ignored, so one recipe serves
+    #     both preflight (engine.drift) and fire. Supersedes the DR-279 refusal.
 
     # 4. Resolve repo_root — ONLY for worktree-scoped ops; fail-loud if unresolvable (AC-5).
     #    For all other scopes (none, central) repo_root stays None — git is never invoked.
     if args.op in WORKTREE_SCOPED_OPS:
-        repo_root: Optional[Path] = _resolve_repo_root(args.repo, cwd)
+        repo_root: Optional[Path] = _resolve_repo_root(args.repo, cwd, params)
     else:
         repo_root = None
 

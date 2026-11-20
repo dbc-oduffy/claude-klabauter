@@ -643,6 +643,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.admission_post":                 "none",
     "groupem.slot_grant":                     "none",
     "groupem.slot_check":                     "none",
+    "runs.withheld_overlap":                  "show_top",
     "groupem.box_register":                   "none",
     "groupem.box_place":                      "none",
     "groupem.box_send":                       "none",
