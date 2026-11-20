@@ -2989,6 +2989,8 @@ def register_claude_klabauter_root(
             _exit_flushed(1)
         print(f"PASS [registration] {key} = {value}")
         _note_change("registry", f"machine-local set {key} = {value}")
+    if "repos.claude_klabauter" in key_values:
+        write_klabauter_root_pointer(key_values["repos.claude_klabauter"])
     for advisory in pending_advisories:
         advisory()
 
@@ -3010,6 +3012,36 @@ def register_claude_klabauter_root(
         provision_stamped_engine(claude_klabauter_root_resolved)
 
     return claude_klabauter_root_resolved
+
+
+def write_klabauter_root_pointer(root: str, machine_local: Path | None = None) -> Path | None:
+    """Write `<settings-home>/machine-local/.claude-klabauter-root` naming the engine just registered.
+
+    DoE resolvers read this pointer before any registry rung; without it they fall to the claude-klabauter
+    clone and import the engine from there. Written in the pass that sets `repos.claude_klabauter`
+    so the two channels cannot start out apart; a stale pointer is replaced. ADVISORY: a failure
+    prints WARN and returns None.
+    """
+    try:
+        if machine_local is None:
+            from coordinator_core._settings_home import machine_local_dir
+
+            machine_local = machine_local_dir()
+        pointer = Path(machine_local) / ".claude-klabauter-root"
+        line = f"{root}\n"
+        try:
+            if pointer.read_text(encoding="utf-8") == line:
+                return pointer
+        except OSError:
+            pass
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text(line, encoding="utf-8", newline="\n")
+    except Exception as exc:  # advisory: the registry key is already written
+        print(f"WARN [registration] .claude-klabauter-root pointer not written ({type(exc).__name__}: {exc})")
+        return None
+    print(f"PASS [registration] .claude-klabauter-root = {root}")
+    _note_change("registry", f".claude-klabauter-root pointer = {root}")
+    return pointer
 
 
 def seed_heavy_admission_defaults() -> None:
@@ -3873,6 +3905,28 @@ def refresh_group_em_home(repo_root: Path, args: Args) -> None:
     print(GROUP_EM_ARMING_NOTE)
 
 
+def _ensure_home_links_canonical(links_mod: "types.ModuleType") -> list:
+    """Run DoE's `ensure_home_links` with its `dot-claude` link written as `claude-home`.
+
+    DoE hardcodes `dot-claude`, while the install's `repo_home` step (`ensure_repo_home_shortcuts`)
+    owns `claude-home`; two names for one target is clutter. Redirecting the name at the
+    `ensure_link` seam keeps DoE's never-overwrite logic, and an entry a user made under any name
+    is never touched or removed.
+    """
+    original = getattr(links_mod, "ensure_link", None)
+    if original is None:
+        return links_mod.ensure_home_links()
+
+    def ensure_link(target, folder, name) -> dict:
+        return original(target, folder, "claude-home" if name == "dot-claude" else name)
+
+    links_mod.ensure_link = ensure_link
+    try:
+        return links_mod.ensure_home_links()
+    finally:
+        links_mod.ensure_link = original
+
+
 def adopt_and_link_homes(repo_root: Path, args: Args) -> None:
     """Adopt existing group-em / ~/.claude GitHub repos, then link both homes into the repos folder.
 
@@ -3910,7 +3964,8 @@ def adopt_and_link_homes(repo_root: Path, args: Args) -> None:
             print(f"OK   [homes] {line}")
             if action in ("cloned", "adopted", "attached"):
                 _note_change("homes", line)
-        for report in _load("_setup_home_links", links_py).ensure_home_links():
+        links_mod = _load("_setup_home_links", links_py)
+        for report in _ensure_home_links_canonical(links_mod):
             status = report.get("status", "")
             line = f"link {status}: {report.get('path', '')}"
             if report.get("detail"):

@@ -1019,6 +1019,24 @@ def test_local_admit_holds_on_cores_and_names_the_cpu_axis():
     assert _hcc.admit_before_spawn("k", 1.0, host=host).admitted
 
 
+def test_stage_admits_under_its_admitted_drivers_row_when_the_cpu_budget_is_full(tmp_path, monkeypatch):
+    """The codex_runner path (`admit_before_spawn(register_pid=<driver pid>)`) reads the real ledger."""
+    import os
+
+    host = _hcc._load_box_memory_host()
+    ledger = tmp_path / "admission.jsonl"
+    monkeypatch.setattr(host, "admission_file", lambda: ledger)
+    monkeypatch.setattr(host, "default_cpu_budget", lambda: 2)
+    monkeypatch.setattr(host, "read_memory_status", lambda: host.MemoryStatus(
+        100 * host.GIB, 128 * host.GIB, 0, 200 * host.GIB))
+    host.register_command(ledger, "peer", os.getppid(), 0.01)
+    host.register_command(ledger, "headless-workflow-worker", os.getpid(), 0.01)  # the admitted driver
+    stage = _hcc.admit_before_spawn("codex-workflow-stage", 0.01, host=host, register_pid=os.getpid())
+    assert stage.admitted, stage.reason
+    stranger = _hcc.admit_before_spawn("other", 0.01, host=host)
+    assert not stranger.admitted and "cpu:" in stranger.reason
+
+
 def test_register_spawn_carries_declared_cores_only_when_declared():
     seen = []
     host = types.SimpleNamespace(

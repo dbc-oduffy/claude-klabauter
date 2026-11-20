@@ -174,10 +174,15 @@ class RootReconciliation:
     #: Channel names whose value names a path that is not a directory on
     #: this box. A pointer carried over from another machine lands here.
     absent_targets: Tuple[str, ...]
+    #: Pointer channels that are silent while the row's registry key (its
+    #: first channel) is set. A pointer is read before any registry rung, so
+    #: its absence sends resolvers down a lower rung; "only the registry
+    #: spoke" is a gap, not agreement.
+    missing_pointers: Tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
-        return not self.disagreeing and not self.absent_targets
+        return not self.disagreeing and not self.absent_targets and not self.missing_pointers
 
 
 def _normalise(raw: str) -> str:
@@ -271,12 +276,21 @@ def reconcile(root_name: str, machine_local: Optional[Path] = None) -> RootRecon
 
     absent = tuple(c.name for c in speaking if not c.exists)
 
+    missing: Tuple[str, ...] = ()
+    if channels and channels[0].value:
+        missing = tuple(
+            c.name
+            for c, cs in zip(channels, spec.channels)
+            if cs.kind == "pointer" and c.value is None and not c.unreadable
+        )
+
     return RootReconciliation(
         root=spec.name,
         purpose=spec.purpose,
         channels=channels,
         disagreeing=disagreeing,
         absent_targets=absent,
+        missing_pointers=missing,
     )
 
 
@@ -300,6 +314,11 @@ def disagreement_message(reports: Sequence[RootReconciliation]) -> Optional[str]
         if report.ok:
             continue
         for channel in report.channels:
+            if channel.name in report.missing_pointers:
+                lines.append(
+                    f"  {report.root}: {channel.origin} is missing while "
+                    f"{report.channels[0].origin} = {report.channels[0].value!r}"
+                )
             if channel.name in report.disagreeing or channel.name in report.absent_targets:
                 state = "path does not exist" if not channel.exists else "disagrees"
                 lines.append(
