@@ -518,6 +518,46 @@ def test_the_presized_gate_agent_stages_inside_the_one_gate_op(monkeypatch):
     assert "stage_act: true, gated: _gated" in gate
 
 
+@pytest.mark.spawns_process
+def test_presized_headless_gate_passes_host_evidence_to_review(monkeypatch):
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    script = _presized(monkeypatch)
+    gate, receipt, review = [
+        next(line for line in script.splitlines() if marker in line)
+        for marker in ("let _gate = ", "const _gateEvidence = ", "JSON.stringify(_gateEvidence)")
+    ]
+    program = """
+      const calls = [];
+      const engineOp = async (op, args) => {
+        calls.push([op, args]);
+        return op === 'gate.host_run' ? {arm: 's', halt: null} : {stage: 'gate', run_id: 'own'};
+      };
+      engineOp.directRun = true;
+      const _RUN_TOKEN = 'token', _sizingRel = 'sizing.yaml', _runId = 'own', _writes = [];
+      const _gated = [], _crossRepoApproved = false, _SESSION_ID = 'sid', REPO_ROOT = 'repo';
+      let _hostGateUsed = false;
+      const _halted = null;
+      const _reviewOuterAgent = (prompt) => prompt;
+    """
+    program += gate + "\n" + receipt + "\n" + review + "\n"
+    program += "console.log(JSON.stringify([calls, _gate.arm, agent('review', {})])); }"
+    completed = subprocess.run(
+        [node, "--input-type=module", "-e", program], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    calls, arm, prompt = json.loads(completed.stdout)
+    assert [call[0] for call in calls] == ["gate.host_run", "gate.host_receipt"]
+    assert calls[0][1]["run_id"] == "own" and calls[0][1]["stage_act"] is True
+    assert calls[0][1]["require_live_token"] is True
+    assert arm == "s" and 'Host gate receipt: {"stage":"gate","run_id":"own"}' in prompt
+
+
 def test_the_gate_reply_schemas_carry_the_stage_reply(monkeypatch):
     assert "stage_reply" in ask_compose._GATE_STAGED_SCHEMA["properties"]
     assert "stage_reply" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]

@@ -361,6 +361,42 @@ def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: f
     return reply['result']
 
 
+def _host_gate_binding(record: dict) -> dict:
+    return {"run_id": record["run_id"], "fire_id": record["fire_id"],
+            "stage": "gate", "operation": "dispatch.ask_gate"}
+
+
+def _host_gate(params: dict, record: dict, artifacts: Path, timeout: float) -> tuple[dict, str]:
+    if (not record.get("run_id") or params.get("run_id") != record["run_id"]
+            or params.get("require_live_token") is not True):
+        raise ValueError("host gate run binding requires the current live run")
+    result = _invoke_source("dispatch.ask_gate", params, record["repo_root"], artifacts, timeout)
+    if not isinstance(result, dict) or "arm" not in result or "halt" not in result:
+        raise ValueError("host gate returned no typed result")
+    receipt = {**_host_gate_binding(record), "arm": result["arm"],
+               "result_sha256": hashlib.sha256(
+                   json.dumps(result, sort_keys=True).encode("utf-8")
+               ).hexdigest()}
+    artifacts.mkdir(parents=True, exist_ok=True)
+    path = artifacts / "consumed.json"
+    digest = hashlib.sha256(json.dumps(receipt, indent=2).encode("utf-8")).hexdigest()
+    _save(path, receipt)
+    return result, digest
+
+
+def _read_host_gate_receipt(path: Path, record: dict, digest: str | None) -> dict:
+    if digest is None or not path.is_file():
+        raise ValueError("host gate receipt missing")
+    raw = path.read_text(encoding="utf-8")
+    receipt = json.loads(raw)
+    if (not isinstance(receipt, dict)
+            or any(receipt.get(key) != value for key, value in _host_gate_binding(record).items())):
+        raise ValueError("host gate receipt binding mismatch")
+    if hashlib.sha256(raw.encode("utf-8")).hexdigest() != digest:
+        raise ValueError("host gate receipt content mismatch")
+    return receipt
+
+
 def _run_pinned_test_leg(
     repo: Path, output: Path, artifacts: Path, targets: list[str],
     base: str, timeout: float, baseline_output: Path | None = None,
@@ -645,7 +681,12 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
             timer = threading.Timer(max(.1, deadline-time.monotonic()), process.kill)
             timer.daemon = True
             timer.start()
+            gate_lock = threading.Lock()
+            gate_started = False
+            gate_receipt: tuple[Path, str] | None = None
+
             def respond(event) -> None:
+                nonlocal gate_started, gate_receipt
                 reply = {'id': event['id']}
                 try:
                     remaining = deadline - time.monotonic()
@@ -655,7 +696,22 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                         raise RuntimeError('workflow runtime exited before queued agent dispatch')
                     if event['type'] == 'invoke':
                         operation_dir = artifacts / 'operations' / str(event['id'])
-                        if event['op'] == 'review.reverify.host_test_leg':
+                        if event['op'] == 'gate.host_run':
+                            with gate_lock:
+                                if gate_started:
+                                    raise ValueError('host gate already started for this fire')
+                                gate_started = True
+                            result, digest = _host_gate(event['params'], record, operation_dir, remaining)
+                            with gate_lock:
+                                gate_receipt = operation_dir / "consumed.json", digest
+                            reply['result'] = result
+                        elif event['op'] == 'gate.host_receipt':
+                            with gate_lock:
+                                if gate_receipt is None:
+                                    raise ValueError('host gate receipt missing')
+                                path, digest = gate_receipt
+                            reply['result'] = _read_host_gate_receipt(path, record, digest)
+                        elif event['op'] == 'review.reverify.host_test_leg':
                             reply['result'] = _reverify_test_leg(event['params'], record['repo_root'], operation_dir, remaining)
                         elif event['op'] == 'verify.host_test_leg':
                             reply['result'] = _verify_test_leg(event['params'], record['repo_root'],

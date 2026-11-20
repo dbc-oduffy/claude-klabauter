@@ -2573,8 +2573,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "0c45d84603ad944ba144b69110bc139cad0ade04",
-    "coordinator_core/_engine_stamp": "5280345f1bb568383cd1a9031f90e9dbc2084f76",
+    "coordinator_core/_engine_published_at": "6ebd8df58c0c6a32e21d684394b09483a5e9d533",
+    "coordinator_core/_engine_stamp": "74cf2b8e92a84643a66deb708d1c86b6103195ae",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6149,7 +6149,7 @@
     "coordinator_core/ops/dispatch_emit/agent_sidecar.py": "0716c951f5c45355aeb1a3339c0b1b8a9b9b6f5f",
     "coordinator_core/ops/dispatch_emit/always_run_guards.py": "74c7b24e6aafc69d4f619313db4e27b936978e22",
     "coordinator_core/ops/dispatch_emit/ask_brief.py": "7617f7e6a1ceee495e43f8542df67663f356c49e",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "557c91c57b59313bf91653c657a57e70ab7c4e6e",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "58ef93517949ecc5bc11562de82854a95122b3ae",
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "df73a3f2467e45366df2e67f7360cb36d59286fc",
     "coordinator_core/ops/dispatch_emit/ask_exclusions.py": "e21a6d24a6ad1e46d85f8c16e3fb635f20530d2a",
     "coordinator_core/ops/dispatch_emit/ask_fanout.py": "7a0b1fc392c06cf6bf5cc98cbbb6fa1e0df651e1",
@@ -6587,7 +6587,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ask_checkpoint_waits_for_wave_tests.py": "d526ef7e2d2daee764b73d4472de937250bf5a30",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_commit_halt_refire_e2e.py": "8661818def872671d2ffac8e842470992d6e1eda",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_commit_stage_reconcile_clause.py": "7f24a1b4d91eccc80e0d8b4d387fae0e76829caa",
-    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose.py": "27366b4959f24ba15b1f37d929cfe7d544d5bb1f",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose.py": "7acf0fa16585e0e98027ddc54fafb5e16ef30d49",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_acceptance_rows.py": "e06810a23c3d384ec8554c9f9d7125dd9fbe6689",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_agent_body_dedupe.py": "505c7b05a28ac9abda8b3f689bee21db76a82b1a",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_all_landed_ledger.py": "78ea397bee8995402daad3fd71a056c3117df6cd",
@@ -10558,7 +10558,7 @@
     "coordinator_core/ops/workflow_fire/completion.py": "03fed0625d6e33ba26f25ff99f4f9f8aca91eb10",
     "coordinator_core/ops/workflow_fire/finalizer.py": "3ddc9fdf38cf672e20b9efe13ad82d916b4b6524",
     "coordinator_core/ops/workflow_fire/fire.py": "ca8a9be9a80c48f72e5fe9c76d7de28c0d5156be",
-    "coordinator_core/ops/workflow_fire/headless.py": "ed7dbc4771edc6b997c981f56d1edd3d4e2d1bae",
+    "coordinator_core/ops/workflow_fire/headless.py": "31983aa57f3b8cd19c1bda18457d67e76666a462",
     "coordinator_core/ops/workflow_fire/headless_agents.py": "b491d42827c7bdf65308a4c4d545a3961ae7495b",
     "coordinator_core/ops/workflow_fire/headless_em_grant.py": "904f48fe4931384a01feae27b77898e572c538a3",
     "coordinator_core/ops/workflow_fire/notify.py": "e39154ea9e15d4b949071ebd9456a7b7aaac1b4a",
@@ -10595,6 +10595,7 @@
     "coordinator_core/ops/workflow_fire/tests/test_headless_published_root.py": "84f734352e152caa51c8cea6d8f5e440edbc8a72",
     "coordinator_core/ops/workflow_fire/tests/test_headless_runtime.py": "095d64bd3ede058b790f945b26c58046e70a7d84",
     "coordinator_core/ops/workflow_fire/tests/test_headless_sandboxed_forward.py": "3392f9e4245b8ebc97c50b4e3c5c5b5b7d9cbd0a",
+    "coordinator_core/ops/workflow_fire/tests/test_host_gate_receipt.py": "275dc9293a2e97192cc67ad216512b581d6cc4fb",
     "coordinator_core/ops/workflow_fire/tests/test_host_reverify_leg.py": "f0d73bdbdd5c8f6571d052a31ed5956250f29106",
     "coordinator_core/ops/workflow_fire/tests/test_private_engine.py": "b8907485b8d75ad4ced3e828a9d46f8a60fe9669",
     "coordinator_core/ops/workflow_fire/tests/test_private_plumbing.py": "a7eb86d6c8cf6d3e1da182dae0067baeffc6657f",
@@ -13078,5 +13079,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "b5908b88a10a66b55163e0da3090f360b75c9d28"
+  "source_head": "e0696461f823a28affd3488371aae2b2775166f5"
 }

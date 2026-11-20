@@ -4975,16 +4975,17 @@ def compose_ask_script(
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
         b.append(f"  const _judgeRules = {_emit._JUDGE_VERDICT_RULES_JS};")
 
-    def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "") -> str:
+    def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "", *, host: bool = False) -> str:
         return (
-            "js:JSON.stringify({ sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
+            ("{" if host else "js:JSON.stringify({") + " sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
             + (", baton: " + json.dumps(baton["path"]) if baton else "")
             + (", em_size: " + json.dumps(em_size) if em_size else "")
             + (", family: " + json.dumps(family) if family else "")
             + (f", record: {record_js}" if record_js else "")
             + extra_js
-            + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) })"
-            + (".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")" if extra_js else "")
+            + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) }"
+            + ("" if host else ")")
+            + (".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")" if extra_js and not host else "")
         )
 
     fold_stage = not stop_after
@@ -5036,12 +5037,19 @@ def compose_ask_script(
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
             "and halt both null.",
         )
-        return _agent(
+        relay = _agent(
             gate_prompt, label=label, phase=phase_title, agent_type=_GATE_AGENT_TYPE,
             agent_model=_MECHANICAL_MODEL,
             schema=_GATE_STAGED_SCHEMA if stage_act and fold_stage else _GATE_SCHEMA,
             effort=_MECHANICAL_EFFORT, run_id=run_id,
             gate_manifest_run=run_id,
+        )
+        if not stage_act:
+            return relay
+        params = _gate_payload(extra_js=extra_js, host=True)
+        return (
+            "(typeof engineOp === 'function' && engineOp.directRun && _RUN_TOKEN "
+            f"? (_hostGateUsed = true, engineOp('gate.host_run', {params})) : {relay})"
         )
 
     def _chain_emit_act(params: str) -> tuple[str, ...]:
@@ -5065,6 +5073,7 @@ def compose_ask_script(
 
     # A launcher child whose twin carries a resume block runs from the inline manifest: every pre-stage leg sits
     # behind `_NO_RESUME`, and `_gate` is seeded from the block instead of a leg's reply.
+    b.append("  let _hostGateUsed = false;")
     _NO_RESUME = "!_STAGED_RESUME" if launcher_child else "true"
     _gate_seed_js = (
         "{ arm: _STAGED_RESUME.arm, halt: null, baton: null, "
@@ -6783,6 +6792,7 @@ def compose_ask_script(
     # The review wave shadows `agent` inside its own block (design brief prefix only) rather than
     # renaming its call sites: the leg register, phase-title and brief checks find legs by the
     # literal `agent(` token, so a renamed call site is invisible to every one of them.
+    b.append("  const _gateEvidence = !_halted && _hostGateUsed ? await engineOp('gate.host_receipt', {}) : null;")
     b.append("  const _reviewOuterAgent = agent;")
     b.append(_RESUME_SLICE_IDS_DECL_JS)
     b.append("  let _reverifyJoined = false;")
@@ -6836,7 +6846,7 @@ def compose_ask_script(
         )
         b.append("    }")
         b.append("  }")
-    b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
+    b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent((_gateEvidence ? 'Host gate receipt: ' + JSON.stringify(_gateEvidence) + '\\n\\n' : '') + {_DESIGN_PREFIX_JS} + p, o);")
     b.append(
         f"  if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _codeReviewOwed)) {{\n"
         + review_text + "\n  _footprintReviewed = true;\n  }"
