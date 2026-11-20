@@ -744,6 +744,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "scratch.keep":                           "show_top",
     # run.paths_trash — "show_top", MUTATING: same run-record lookup as scratch.delete.
     "run.paths_trash":                        "show_top",
+    # scratch.remove — "show_top": roots are the calling repo's scratch/. proc.stop_own_child — "none": judged on the process table.
+    "scratch.remove":                         "show_top",
+    "proc.stop_own_child":                    "none",
     "cartography.count_references":           "none",
     "doctrine.assert_cross_reference_counts": "common_dir",
     "percolate.check_inverse_drift":          "none",

@@ -1280,6 +1280,9 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     # not this caller's — corrupting the very denominator the warmth sweeps
     # measure. See `_CALLER_CWD_FIELD` in coordinator_core.ipc for the reader.
     msg["_caller_cwd"] = cwd
+    if args.op == "proc.stop_own_child":
+        # Trap: the engine may be warm in another process; only the client knows the worker chain.
+        params["caller_pid"] = os.getpid()
 
     # 6a. Warm preamble (C15) — try the warm engine's pipe before paying a
     #     cold spawn-per-call. NO CLIENT EVER WAITS FOR A SERVER TO BOOT:

@@ -864,6 +864,13 @@ _RELAY_ALLOW = "Bash(coordinator-invoke:*)"
 # Trap: grok's headless allow gate never matches a command led by the `&` call operator (measured: every
 # `--allow Bash...` rule still answers "permission required"), so grok is told the bare form; settings-home
 # bin is on its PATH (_grok_child_path), which resolves sizing-assemble and coordinator-invoke by name.
+# Codex's own exec policy rejects `Remove-Item -Recurse -Force` ("blocked by policy", no rule named) and the
+# kill guard rejects a kill chosen by lookup; these two ops carry neither shape.
+CODEX_CLEANUP_CLAUSE = (
+    'To delete your own scratch directory under scratch/codex-tmp or scratch/tmp, run '
+    "coordinator-invoke scratch.remove '{\"paths\":[\"<path>\"]}'; to stop a process you spawned, run "
+    "coordinator-invoke proc.stop_own_child '{\"pid\":<pid>}'. Never Remove-Item -Recurse or a name or port lookup. "
+)
 _WINDOWS_CALL_FORM = {
     False: 'For a quoted executable use the PowerShell call operator &, followed by the quoted path. ',
     True: 'Run every command as a plain command: never lead with the & call operator or quote the executable; '
@@ -1128,11 +1135,10 @@ def run_agent(
     if options.get("agentType") == _COMMIT_AGENT_TYPE:
         _write_commit_params(repo_root, prompt)
     persona = _persona(options.get("agentType"))
-    if os.name == "nt" and codex_gate and not _gate_reask:
-        from coordinator_core.ops.dispatch_emit.ask_compose import _INVOKE
-        from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_GATE
+    if os.name == "nt":
+        from coordinator_core.ops.dispatch_emit.invoke_form import POWERSHELL, render_invoke_for_shell
 
-        prompt = prompt.replace(f"{_INVOKE} {OP_ASK_GATE} ", f"coordinator-invoke {OP_ASK_GATE} ")
+        prompt = render_invoke_for_shell(prompt, POWERSHELL)
     full_prompt = (f"Agent definition ({options['agentType']}):\n{persona}\n\n" if persona else "") + prompt
     if os.name == 'nt':
         full_prompt = (

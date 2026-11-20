@@ -2934,10 +2934,11 @@ def _dispatch_emit_body(
                 halted_id, preferred_ask = (preferred, None) if preferred.startswith("warp-") else (None, preferred)
             if chain_parent is not None and halted_id == chain_parent:
                 halted_id = None  # a successor never rebinds onto the run it chains from
+            closed_halt = None  # the halt this refire closed as superseded-by-refire: still its predecessor
             if halted_id and _closed_for_fresh_refire(ask_root, halted_id):
-                halted_id = None
+                closed_halt, halted_id = halted_id, None
             if preferred_ask and _closed_for_fresh_refire(ask_root, preferred_ask):
-                preferred_ask = None
+                closed_halt, preferred_ask = preferred_ask, None
             if halted_id:
                 inherited_base = _recorded_run_base(ask_root, halted_id) or halted_run_base(
                     record_dir(ask_root, halted_id)
@@ -2947,14 +2948,15 @@ def _dispatch_emit_body(
                 if chain_parent is not None and resumes_ask == chain_parent:
                     resumes_ask = None
                 if resumes_ask and _closed_for_fresh_refire(ask_root, resumes_ask):
-                    resumes_ask = None
+                    closed_halt, resumes_ask = closed_halt or resumes_ask, None
                 if resumes_ask:
                     inherited_base = _recorded_run_base(ask_root, resumes_ask) or halted_run_base(
                         record_dir(ask_root, resumes_ask)
                     )
                 else:
                     resumed_from = (
-                        halted_ask_run_for(ask_root, sizing_rel, ignore_superseded=True)
+                        closed_halt
+                        or halted_ask_run_for(ask_root, sizing_rel, ignore_superseded=True)
                         or notes_predecessor(ask_root, sizing_rel, exclude=run_id)
                     )
                     if chain_parent is not None and resumed_from == chain_parent:

@@ -518,8 +518,57 @@ def _agy_prepare(capsys, extra=(), cwd=None) -> list[str]:
 # gap-report) names accept-edits as a per-invocation non-bypass mode.
 def test_agy_prepare_grants_cwd_and_coordinator_home_with_accept_edits(capsys) -> None:
     argv = _agy_prepare(capsys, ["-p", "hi", "--output-format", "json"], cwd="work/tree")
-    assert argv == ["agy", "--add-dir", "work/tree", "--add-dir", str(Path.home() / ".coordinator"),
-                    "--mode", "accept-edits", "-p", "hi", "--output-format", "json"]
+    assert argv == ["agy", *_agy_head("work/tree"), "-p", "hi", "--output-format", "json"]
+
+
+def _skills(tmp_path):
+    skills = tmp_path / "sh" / "unimatrix" / "agy-plugin" / "skills"
+    (skills / "sizing").mkdir(parents=True)
+    (skills / "sizing" / "SKILL.md").write_text("v1", encoding="utf-8")
+    return skills
+
+
+def test_agy_grants_only_the_plugin_skills_never_the_settings_home_or_engine_root(tmp_path, capsys) -> None:
+    """The measured read set is <settings home>/unimatrix/agy-plugin/skills; the roots themselves stay out."""
+    skills = _skills(tmp_path)
+    env = {"PATH": "x", g.SETTINGS_HOME_KEY: str(tmp_path / "sh"), "COORDINATOR_ENGINE_ROOT": str(tmp_path / "eng")}
+    hel.launch("agy", ["-p", "hi"], which=lambda n: None, environ=env, platform="linux",
+               prepare_only=True, native_executable="agy", session_id="s1", cwd="w")
+    argv = json.loads(capsys.readouterr().out)["argv"]
+    granted = [argv[i + 1] for i, a in enumerate(argv) if a == "--add-dir"]
+    assert str(skills) in granted
+    assert str(tmp_path / "sh") not in granted and str(tmp_path / "eng") not in granted
+    assert str(tmp_path / "sh" / "bin") not in granted
+
+
+def _guarded_launch(tmp_path, stage):
+    _skills(tmp_path)
+    env = {"PATH": "x", g.SETTINGS_HOME_KEY: str(tmp_path / "sh")}
+    return hel.launch("agy", ["-p", "hi"], which=lambda n: None, environ=env, platform="linux",
+                      native_executable="agy", session_id="s1", cwd=str(tmp_path),
+                      spawn_captured=stage, open_runs=lambda *a: [])
+
+
+def test_a_write_into_a_granted_dir_refuses_with_agy_grant_tamper_and_discards_output(tmp_path, capsys) -> None:
+    skills = tmp_path / "sh" / "unimatrix" / "agy-plugin" / "skills" / "sizing" / "SKILL.md"
+
+    def stage(cmd, env):
+        skills.write_text("tampered", encoding="utf-8")
+        return 0, b"STAGE-RESULT", b""
+
+    rc = _guarded_launch(tmp_path, stage)
+    out = capsys.readouterr()
+    assert rc == hel.REFUSED
+    assert "STAGE-RESULT" not in out.out and "STAGE-RESULT" not in out.err
+    refusal = json.loads(out.err.strip().splitlines()[-1])
+    assert refusal["refused"] == "agy_grant_tamper" and refusal["paths"] == [str(skills)]
+    from coordinator_core import agy_grant_guard
+    assert agy_grant_guard.read_marker()["paths"] == [str(skills)]
+
+
+def test_an_untouched_grant_releases_the_stage_output(tmp_path, capsysbinary) -> None:
+    rc = _guarded_launch(tmp_path, lambda cmd, env: (0, b"STAGE-RESULT", b""))
+    assert rc == 0 and b"STAGE-RESULT" in capsysbinary.readouterr().out
 
 
 def test_agy_prepare_without_cwd_grants_the_launchers_cwd(capsys) -> None:

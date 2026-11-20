@@ -671,6 +671,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/run_paths_trash.py",
         ("_handler",),
     ),
+    "scratch.remove": (
+        "coordinator_core/ops/worker_cleanup.py",
+        ("_scratch_handler",),
+    ),
+    "proc.stop_own_child": (
+        "coordinator_core/ops/worker_cleanup.py",
+        ("_stop_handler",),
+    ),
     "review_stamp.rejudge": (
         "coordinator_core/ops/review_stamp.py",
         ("_rejudge_handler",),

@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 from typing import Mapping, Optional
 
+RELEASE_OWN_LINEAGE = "own-lineage"
 RELEASE_SUPERSEDED = "sizing-superseded"
 RELEASE_MARKER_SUPERSEDED = "marker-superseded"
 RELEASE_SUCCESSOR = "successor-run"
@@ -682,6 +683,9 @@ def _release_reason(
         from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_FIELD
 
         root = Path(root)
+        # A run on the committer's `resumed_from` chain is its own dead predecessor, whatever its marker says.
+        if committing_run_id and halted_run_id in _lineage(root, committing_run_id):
+            return RELEASE_OWN_LINEAGE
         head = landing_halted_view.shared(
             "release_head", (str(root), halted_run_id), lambda: _release_head(root, halted_run_id),
         )
@@ -785,6 +789,13 @@ def _release_head(root: Path, halted_run_id: str) -> tuple:
         return (RELEASE_TWIN_LANDED, marker, sizing, status, False)
     landed = status == halted_run.STATUS_RESUMED and _successor_landed(root, halted_run_id, sizing)
     return (None, marker, sizing, status, landed)
+
+
+def _lineage(root: Path, run_id: str) -> frozenset:
+    """`run_id`'s `resumed_from` predecessors, transitively; cycle-safe and hop-capped (`landing_integrity._resumed_chain`)."""
+    from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+    return frozenset(_resumed_chain(root, run_id))
 
 
 def _release_tail(root: Path, halted_run_id: str, marker: dict) -> Optional[str]:

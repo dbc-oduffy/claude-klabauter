@@ -545,9 +545,39 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
             result["evicted_targets"] = dropped
         if result["status"] == "pass":
             result["status"] = "pass-with-skips"
+    infra = _test_infra_failure(root, artifacts, targets, measured)
+    if infra:
+        result["test_infra_failure"] = infra
+        result["status"] = "error"
+        result["summary"] = infra["summary"]
     if exit_code:
         result["status"] = "error"
     return result
+
+
+_PYTEST_USAGE, _PYTEST_NO_TESTS = 4, 5
+
+
+def _test_infra_failure(root: Path, artifacts: Path, targets: list[str], measured: dict) -> dict | None:
+    """A typed `test_infra_failure` when pytest exited 4 (usage error, e.g. a named target is missing) or
+    5 (nothing collected) on the explicitly named `targets`; None otherwise. Invariant: an explicit target
+    that ran nothing is never a pass or a vacuous verdict; the failure names the argv and the bad targets."""
+    phases = measured.get("pytest_phases") or []
+    codes = [p.get("exit_code") for p in phases if isinstance(p, dict)] or [measured.get("pytest_exit_code")]
+    bad_code = next((c for c in codes if c in (_PYTEST_USAGE, _PYTEST_NO_TESTS)), None)
+    if bad_code is None and measured.get("missing_targets") and not measured.get("tests_run"):
+        bad_code = _PYTEST_NO_TESTS  # every target absent: the leg stamps it without spawning pytest
+    if bad_code is None or measured.get("tests_run"):
+        return None
+    absent = [t for t in targets if not (root / t.split("::", 1)[0]).exists()]
+    bad = list(dict.fromkeys([*measured.get("missing_targets", []), *absent])) or list(targets)
+    try:
+        argv = json.loads((artifacts / "test-leg-start.json").read_text(encoding="utf-8")).get("argv")
+    except (OSError, ValueError):
+        argv = None
+    meaning = "usage error" if bad_code == _PYTEST_USAGE else "no tests collected"
+    return {"kind": "test_infra_failure", "pytest_exit_code": bad_code, "argv": argv, "bad_targets": bad,
+            "summary": f"test_infra_failure: pytest exit {bad_code} ({meaning}) for target(s): {', '.join(bad)}"}
 
 
 def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float) -> dict | None:
@@ -693,7 +723,10 @@ def _halt_failed_fire(record: dict, result, error: str) -> None:
     try:
         ids = failed_fire_halt.failed_run_ids(result, record.get('script_path'))
         commits: dict = {}
-        record['halted_runs'] = failed_fire_halt.halt_failed_fire(Path(record['repo_root']), ids, error, commits)
+        cause = failed_fire_halt.stage_pending_cause(result)
+        named = {'halted': failed_fire_halt.HALT_STAGE_PENDING_UNRESOLVED} if cause else {}
+        record['halted_runs'] = failed_fire_halt.halt_failed_fire(
+            Path(record['repo_root']), ids, f'{error}: {cause}' if cause else error, commits, **named)
         record['halt_commits'] = {k: {f: v.get(f) for f in ('committed', 'sha', 'error') if f in v} for k, v in commits.items()}
     except Exception as exc:
         record['halt_error'] = f'{type(exc).__name__}: {exc}'
@@ -846,6 +879,11 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                             backend=record['backend'], timeout_s=remaining,
                             parent_session_id=record.get('caller_session_id'),
                             request_id=request_id, fire_id=record['fire_id'], **extra)
+                            if record.get('backend') == 'codex' and record.get('run_id'):
+                                from coordinator_core.ops.dispatch_emit import run_write_prints
+                                run_write_prints.record_codex_writes(
+                                    Path(record['repo_root']), record['run_id'],
+                                    artifacts / 'agents' / str(event['id']) / 'stdout.jsonl')
                             if commit_prompt is not None:
                                 # The model reply is not proof: replace it with the host's sealed result.
                                 reply['result'] = _private_commit_receipt(private, request_id, record)
