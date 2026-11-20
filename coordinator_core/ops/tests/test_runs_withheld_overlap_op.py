@@ -101,3 +101,14 @@ def test_clean_one_spawn_attributed(repo: Path, monkeypatch: pytest.MonkeyPatch)
     with _count_spawns_attributed(monkeypatch) as none:
         op._runs_withheld_overlap({"repo": str(repo), "paths": []})
     assert none == []
+
+
+def test_halted_run_whose_halt_commit_failed_keeps_its_declared_paths(repo: Path) -> None:
+    # Declared footprint recorded, nothing withheld: the halt-commit never landed its withheld paths.
+    halted_withheld_index.record_declared(repo, "run-halted", ["a.py", "c.py"])
+    (repo / "c.py").write_text("dirty\n")
+    out = op._runs_withheld_overlap({"repo": str(repo), "paths": ["a.py", "c.py"]})
+    assert out["overlaps"] == [
+        {"path": "a.py", "holder": "run-halted", "state": "declared"},
+        {"path": "c.py", "holder": "run-halted", "state": "declared"},
+    ]

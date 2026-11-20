@@ -182,9 +182,33 @@ def _fail(message: str, revert: bool, probe: Optional[str] = None) -> dict:
     if revert:
         return {
             "reverted": [], "unattributed": [], "pre_existing": [], "owned_red": [], "peer_dirt": [],
-            "kept": [], "record": None, "error": message,
+            "kept": [], "flaky": [], "record": None, "error": message,
         }
     return {"edited": [], "created": [], "snapshot": None, "error": message}
+
+
+#: Wall-clock cap on the one isolated rerun of the implicated reds; past it nothing is vouched flaky.
+_FLAKY_RERUN_BUDGET_S = 120.0
+
+
+def _rerun_alone(repo_root: Path, ids: List[str]) -> List[str]:
+    """The ``ids`` that pass when re-run once, together and alone, on the current tree (a red that does
+    not reproduce is transient, never a revert's cause). Only ids whose test file exists in the tree
+    are run; any runner fault, timeout or unparsable result vouches for nothing, so a revert proceeds
+    as before."""
+    runnable = [n for n in ids if (repo_root / _node_file(n)).is_file()]
+    if not runnable:
+        return []
+    from coordinator_core.ops import test_leg_run
+
+    try:
+        rc, lines, _stderr, _stdout = test_leg_run._pytest(runnable, str(repo_root), _FLAKY_RERUN_BUDGET_S)
+    except Exception:  # noqa: BLE001 -- unmeasured is not flaky
+        return []
+    if rc not in (0, 1):
+        return []
+    again = set(test_leg_run._reds(lines))
+    return sorted(n for n in runnable if n not in again)
 
 
 def _norm(path: str) -> str:
@@ -587,7 +611,7 @@ def _load_record(record: Path) -> dict:
         data = None
     if not isinstance(data, dict):
         data = {}
-    for key in ("reverted", "unattributed", "pre_existing", "owned_red", "peer_dirt", "kept"):
+    for key in ("reverted", "unattributed", "pre_existing", "owned_red", "peer_dirt", "kept", "flaky"):
         data.setdefault(key, [])
     return data
 
@@ -1085,9 +1109,13 @@ def review_reverify(
                 skip |= set(peer_dirt)
         base_measured = (failing_at_base is not None or bool(base_export_path)) and not base_unmeasured
         base_green = {n for n in ids if base_measured and n not in skip}
+        flaky = _rerun_alone(repo_root, [n for n in ids if n not in skip])
+        skip |= set(flaky)
+        base_green -= set(flaky)
     else:
         pre_existing, owned_red, not_base_red, renamed_node, skip, base_green = [], [], [], [], set(), set()
         peer_dirt = []
+        flaky = []
         ruled = {}
     foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
     foreign_node = {n for n in ids if n not in skip and n not in base_green and _node_file(n) in foreign_set}
@@ -1257,6 +1285,7 @@ def review_reverify(
         "pre_existing": sorted(set(prior["pre_existing"]) | set(pre_existing)),
         "owned_red": sorted(set(prior["owned_red"]) | set(owned_red)),
         "peer_dirt": sorted(set(prior["peer_dirt"]) | set(peer_dirt)),
+        "flaky": sorted(set(prior["flaky"]) | set(flaky)),
         "kept": [*prior["kept"], *kept],
     }
     atomic_write_bytes(record_path, (json.dumps(merged, indent=2, sort_keys=True) + "\n").encode("utf-8"))
@@ -1267,6 +1296,7 @@ def review_reverify(
         "pre_existing": pre_existing,
         "owned_red": owned_red,
         "peer_dirt": peer_dirt,
+        "flaky": flaky,
         "renamed_node": renamed_node,
         "recollect": sorted({_node_file(n) for n in renamed_node}),
         "ruled_pre_existing": {n: ruled[n] for n in pre_existing if n in ruled},

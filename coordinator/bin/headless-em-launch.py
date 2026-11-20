@@ -94,6 +94,8 @@ def _run_bg(argv, *, cwd, env, runner, name):
 GROK_ENGINE_OPS = ("engine_ask.submit", "workflow.fire", "workflow.fire_status", "workflow.fire_wait",
                    "workflow.revise")
 
+GROK_WORKER_EXES = ("sizing-assemble", "coordinator-doc-new")
+
 
 def _settings_bin_dir(environ) -> str:
     home = environ.get("COORDINATOR_SETTINGS_HOME") or str(Path.home() / ".coordinator-claude-settings")
@@ -101,7 +103,8 @@ def _settings_bin_dir(environ) -> str:
 
 
 def _grok_launch_args(extra, environ, platform) -> list[str]:
-    """`extra` led by `--permission-mode auto` and one `--allow Bash(<abs coordinator-invoke> <op>:*)` per engine op.
+    """`extra` led by `--permission-mode auto` and one `--allow Bash(<abs coordinator-invoke> <op>:*)` per engine op, plus one `Bash(<abs exe>:*)` per
+    worker executable in `GROK_WORKER_EXES` (the settings-home bin only, never a blanket Execute).
 
     grok does not expand `$HOME` when matching, so each rule names the resolved absolute path. A caller's
     own `--permission-mode` and any allow rule it already passed are kept, never doubled.
@@ -110,8 +113,10 @@ def _grok_launch_args(extra, environ, platform) -> list[str]:
                                                   else "coordinator-invoke"))
     head = [] if any(a == "--permission-mode" or a.startswith("--permission-mode=") for a in extra) \
         else ["--permission-mode", "auto"]
-    for op in GROK_ENGINE_OPS:
-        rule = f"Bash({exe} {op}:*)"
+    suffix = ".exe" if platform == "win32" else ""
+    rules = [f"Bash({exe} {op}:*)" for op in GROK_ENGINE_OPS]
+    rules += [f"Bash({Path(_settings_bin_dir(environ)) / (name + suffix)}:*)" for name in GROK_WORKER_EXES]
+    for rule in rules:
         if rule not in extra:
             head += ["--allow", rule]
     return [*head, *extra]

@@ -2182,6 +2182,7 @@ LOGIN_AGENT_LABEL = "com.unimatrix.autolink"
 LOGIN_AGENT_INTERVAL_S = 60
 LOGIN_TASK_NAME = "UnimatrixAutolink"
 LOGIN_UNIT = "unimatrix-autolink.service"
+LOGIN_TIMER = "unimatrix-autolink.timer"
 
 
 def run_schtasks(*args):
@@ -2306,17 +2307,32 @@ def _delete_login_task(schtasks=None, strict=False):
 def _login_agent_text(dest_dir):
     """Bytes of the login-agent file for this OS: a RunAtLoad plist that launchd re-runs every
     LOGIN_AGENT_INTERVAL_S (autolink's healthy path reads records and spawns nothing; a dead supervisor is
-    relinked), or a oneshot systemd unit. AbandonProcessGroup keeps launchd's job-exit cleanup from reaping
-    the supervisors autolink spawned."""
+    relinked), or a oneshot systemd unit that a sibling timer (``_login_timer_text``) re-runs on the same
+    interval. AbandonProcessGroup keeps launchd's job-exit cleanup from reaping the supervisors autolink
+    spawned; KillMode=process is systemd's analogue -- the default control-group mode reaps every process
+    left in the oneshot's cgroup when ExecStart exits, killing the link at every login."""
     argv = _autolink_argv(dest_dir)
     if sys.platform == "darwin":
         import plistlib
         return plistlib.dumps({"Label": LOGIN_AGENT_LABEL, "ProgramArguments": argv, "RunAtLoad": True,
                                "StartInterval": LOGIN_AGENT_INTERVAL_S, "AbandonProcessGroup": True,
                                "ProcessType": "Standard", "Nice": 0})
-    return ("[Unit]\nDescription=Unimatrix autolink at login\n\n[Service]\nType=oneshot\n"
+    return ("[Unit]\nDescription=Unimatrix autolink at login\nWants=network-online.target\n"
+            "After=network-online.target\n\n[Service]\nType=oneshot\nKillMode=process\n"
             f"ExecStart={' '.join(shlex.quote(a) for a in argv)}\n\n[Install]\nWantedBy=default.target\n"
             ).encode("utf-8")
+
+
+def _login_timer_text() -> bytes:
+    """The Linux relink timer: launchd's StartInterval for the oneshot unit, so a dead supervisor is
+    relinked within LOGIN_AGENT_INTERVAL_S of dying, not at the next login."""
+    return ("[Unit]\nDescription=Unimatrix autolink relink\n\n[Timer]\nOnBootSec=30\n"
+            f"OnUnitInactiveSec={LOGIN_AGENT_INTERVAL_S}\nUnit={LOGIN_UNIT}\n\n"
+            "[Install]\nWantedBy=timers.target\n").encode("utf-8")
+
+
+def _login_timer_paths(agent_dir) -> tuple:
+    return Path(agent_dir) / LOGIN_TIMER, Path(agent_dir) / "timers.target.wants" / LOGIN_TIMER
 
 
 def _login_agent_paths(agent_dir):
@@ -2401,9 +2417,19 @@ def register_login_agent(dest_dir, agent_dir=None, schtasks=None, launchctl=None
     if state != "present":
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-    if sys.platform != "darwin" and not link.is_symlink():
-        link.parent.mkdir(parents=True, exist_ok=True)
-        link.symlink_to(f"../{LOGIN_UNIT}")
+    if sys.platform != "darwin":
+        if not link.is_symlink():
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(f"../{LOGIN_UNIT}")
+        timer, timer_link = _login_timer_paths(root)
+        timer_data = _login_timer_text()
+        if not timer.exists() or timer.read_bytes() != timer_data:
+            timer.write_bytes(timer_data)
+            if state == "present":
+                state = "updated"
+        if not timer_link.is_symlink():
+            timer_link.parent.mkdir(parents=True, exist_ok=True)
+            timer_link.symlink_to(f"../{LOGIN_TIMER}")
     # A caller-chosen agent_dir with the real launchctl would boot out this box's live agent: reload only
     # the OS agent dir, or under an injected launchctl.
     if sys.platform == "darwin" and state == "updated" and (launchctl or not agent_dir):
@@ -2557,7 +2583,8 @@ def unregister_login_agent(agent_dir=None, schtasks=None):
     if root is None:
         return "absent"
     removed = False
-    for path in _login_agent_paths(root):
+    paths = (*_login_agent_paths(root), *(() if sys.platform == "darwin" else _login_timer_paths(root)))
+    for path in paths:
         if path.is_symlink() or path.exists():
             path.unlink()
             removed = True

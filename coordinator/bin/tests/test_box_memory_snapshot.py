@@ -345,8 +345,8 @@ def test_admit_refusal_names_the_reader_failure(capsys):
     assert "coordinator_core.telemetry.host_sampler" in err
 
 
-def test_unsupported_host(capsys):
-    rc = mod.main([], platform="linux")
+def test_unsupported_host(capsys):  # linux is supported; any other OS is not
+    rc = mod.main([], platform="freebsd")
     err = capsys.readouterr().err
     assert rc == 6 and "unsupported host" in err and len(err.strip().splitlines()) == 1
 
@@ -451,3 +451,59 @@ def test_counts_come_from_the_process_table_when_it_reads(capsys):
 def test_counts_unavailable_when_table_and_psutil_both_fail(capsys):
     _run(["--json"], proc_table_fn=_boom, names_fn=_boom)
     assert json.loads(capsys.readouterr().out)["process_counts"] == "unavailable"
+
+
+# Real Ubuntu readings (24 CPUs, kernel 7.0.0-44).
+MEMINFO = """MemTotal:       95954360 kB
+MemFree:        60000000 kB
+MemAvailable:   91225216 kB
+Buffers:          500000 kB
+Cached:          9000000 kB
+SwapCached:            0 kB
+SwapTotal:       8388604 kB
+SwapFree:        8388604 kB
+"""
+PSI = """some avg10=0.00 avg60=0.00 avg300=0.00 total=36
+full avg10=0.00 avg60=0.00 avg300=0.00 total=34
+"""
+
+
+def test_memory_status_linux_from_meminfo_fixture():
+    st = host.memory_status_linux(MEMINFO)
+    assert st.total_phys == 95954360 * 1024 and st.avail_phys == 91225216 * 1024
+    assert st.commit_limit == (95954360 + 8388604) * 1024
+    assert st.commit_used == (95954360 - 91225216) * 1024  # swap untouched
+
+
+def test_memory_status_linux_counts_swap_in_use():
+    st = host.memory_status_linux(MEMINFO.replace("SwapFree:        8388604", "SwapFree:        8388604".replace("8388604", "388604")))
+    assert st.commit_used == (95954360 - 91225216 + 8000000) * 1024
+
+
+def test_memory_status_linux_without_memavailable_raises():
+    with pytest.raises(OSError):
+        host.memory_status_linux("MemTotal: 1024 kB\n")
+
+
+def test_linux_cached_and_psi_parse():
+    assert host.linux_cached_bytes(MEMINFO) == 9000000 * 1024
+    assert host.read_psi_memory(PSI) == {"some_avg10": 0.0, "full_avg10": 0.0}
+
+
+def _run_linux(argv, **kw):
+    kw.setdefault("status_fn", lambda: host.memory_status_linux(MEMINFO))
+    kw.setdefault("cache_host_fn", lambda: SimpleNamespace(read_memory=lambda: SimpleNamespace(
+        cache_bytes=host.linux_cached_bytes(MEMINFO), standby_bytes=None)))
+    return mod.main(argv, platform="linux", governor=GOV, **kw)
+
+
+def test_linux_snapshot_and_admit(capsys):
+    assert _run_linux(["--admit-peak", "20"]) == 0
+    out = capsys.readouterr().out
+    assert "ADMIT" in out and "Available:        87.0 GiB" in out and "Standby:          unavailable" in out
+    assert "System cache WS:  8.58 GiB" in out
+
+
+def test_linux_hold_when_peak_plus_cushion_exceeds_available(capsys):
+    assert _run_linux(["--admit-peak", "80"]) == 4  # 80 + 8 GiB cushion > 87.0 GiB available
+    assert "HOLD" in capsys.readouterr().out

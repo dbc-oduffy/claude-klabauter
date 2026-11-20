@@ -244,12 +244,84 @@ def test_put_refuses_malformed_input(env, snap_line, sig_line):
     assert not env["ak"].exists()
 
 
-def test_admin_account_writes_nothing_and_reports_admin(env):
-    pin(env)
+SSHD_CONFIG = """# default
+Port 22
+Match Group administrators
+       AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
+"""
+
+
+def admin_rig(env, tmp_path, config=SSHD_CONFIG):
+    prog = tmp_path / "ProgramData"
+    (prog / "ssh").mkdir(parents=True)
+    (prog / "ssh" / "sshd_config").write_text(config)
+    return prog, prog / "ssh" / "administrators_authorized_keys"
+
+
+def put_admin(env, **kw):
     snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
-    reply = R.membership_put(env["home"], M.canonical_bytes(snap).decode(), base64.b64encode(sig).decode(), M,
-                             env["ak"], notifier=env["notifier"], is_admin=lambda: True)
-    assert reply["authorized_keys"] == "admin" and not env["ak"].exists()
+    return R.membership_put(env["home"], M.canonical_bytes(snap).decode(), base64.b64encode(sig).decode(), M,
+                            env["ak"], notifier=env["notifier"], is_admin=lambda: True, **kw)
+
+
+def test_admin_account_writes_the_administrators_file_and_not_the_user_file(env, tmp_path):
+    pin(env)
+    prog, admin = admin_rig(env, tmp_path)
+    locked = []
+    reply = put_admin(env, programdata=prog, acl_lock=locked.append)
+    assert reply["authorized_keys"] == "updated" and reply["keys_file"] == str(admin)
+    assert body(env, "a") in admin.read_text() and not env["ak"].exists()
+    assert locked == [admin]  # a newly created file is locked to SYSTEM+Administrators before use
+
+
+def test_admin_file_is_rewritten_in_place_and_keeps_foreign_lines(env, tmp_path):
+    pin(env)
+    prog, admin = admin_rig(env, tmp_path)
+    admin.write_text("ssh-ed25519 AAAAforeign me\n")
+    locked = []
+    assert put_admin(env, programdata=prog, acl_lock=locked.append)["authorized_keys"] == "updated"
+    text = admin.read_text()
+    assert text.startswith("ssh-ed25519 AAAAforeign me\n") and body(env, "a") in text
+    assert locked == []  # an existing file keeps its ACL
+    members = M.verified_members(env["home"])
+    assert R.reconcile_authorized_keys(members, env["ak"], M, lambda: True, programdata=prog) == "unchanged"
+
+
+def test_admin_without_match_block_uses_the_user_file(env, tmp_path):
+    pin(env)
+    prog, _ = admin_rig(env, tmp_path, config="Port 22\n")
+    assert put_admin(env, programdata=prog)["authorized_keys"] == "updated"
+    assert body(env, "a") in env["ak"].read_text()
+
+
+def test_unwritable_admin_file_is_logged_with_the_remediation(env, tmp_path):
+    pin(env)
+    prog, admin = admin_rig(env, tmp_path)
+    admin.mkdir()  # opening a directory for write raises OSError, standing in for a non-elevated denial
+    reply = put_admin(env, programdata=prog)
+    assert reply["ok"] is True and reply["authorized_keys"] == "admin_keys_unwritable"
+    assert reply["admin_keys_unwritable"]["path"] == str(admin)
+    assert "reconcile-keys" in reply["admin_keys_unwritable"]["remediation"]
+    assert [e["kind"] for e in env["events"]][-1] == "admin_keys_unwritable"
+    assert not env["ak"].exists()
+
+
+def test_sshd_admin_keys_file_parsing(tmp_path):
+    prog = tmp_path / "pd"
+    cfg = tmp_path / "sshd_config"
+    cfg.write_text('''#Match Group administrators
+Match User bob
+ AuthorizedKeysFile /x/bob
+Match Group administrators
+ AuthorizedKeysFile "__PROGRAMDATA__/ssh/ak file"
+''')
+    assert R.sshd_admin_keys_file(cfg, prog) == Path(f"{prog}/ssh/ak file")
+    cfg.write_text('''AuthorizedKeysFile .ssh/authorized_keys
+Match Group administrators
+  PasswordAuthentication no
+''')
+    assert R.sshd_admin_keys_file(cfg, prog) is None
+    assert R.sshd_admin_keys_file(tmp_path / "absent", prog) is None
 
 
 def test_get_prints_the_held_snapshot_and_none_when_empty(env):

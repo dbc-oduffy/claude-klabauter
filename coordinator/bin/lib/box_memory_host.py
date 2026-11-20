@@ -240,10 +240,75 @@ def memory_status_darwin(avail_mb_fn=None, vm_fn=None, swap_fn=None) -> MemorySt
     )
 
 
+def parse_meminfo(text: str) -> dict[str, int]:
+    """/proc/meminfo as {field: bytes}; every field is kB there, a line without a numeric value is skipped."""
+    out: dict[str, int] = {}
+    for line in text.splitlines():
+        key, _, rest = line.partition(":")
+        parts = rest.split()
+        if parts and parts[0].isdigit():
+            out[key.strip()] = int(parts[0]) * 1024
+    return out
+
+
+def _read_text(path: str) -> str:
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def memory_status_linux(meminfo_text: str | None = None) -> MemoryStatus:
+    """Linux memory status from /proc/meminfo; raises OSError when MemTotal or MemAvailable is unreadable.
+
+    Same shape as `memory_status_darwin`: available is the kernel's MemAvailable (capped at MemTotal),
+    commit_limit is physical + swap capacity, commit_used is (physical - available) + swap in use.
+    """
+    info = parse_meminfo(_read_text("/proc/meminfo") if meminfo_text is None else meminfo_text)
+    if "MemTotal" not in info or "MemAvailable" not in info:
+        raise OSError("MemTotal or MemAvailable missing from /proc/meminfo")
+    total = info["MemTotal"]
+    avail = min(info["MemAvailable"], total)
+    swap_total = info.get("SwapTotal", 0)
+    swap_used = max(0, swap_total - info.get("SwapFree", 0))
+    return MemoryStatus(
+        avail_phys=avail,
+        total_phys=total,
+        commit_used=(total - avail) + swap_used,
+        commit_limit=total + swap_total,
+    )
+
+
+def linux_cached_bytes(meminfo_text: str | None = None) -> int | None:
+    """`Cached` of /proc/meminfo in bytes; None when absent."""
+    return parse_meminfo(_read_text("/proc/meminfo") if meminfo_text is None else meminfo_text).get("Cached")
+
+
+def read_psi_memory(psi_text: str | None = None) -> dict[str, float] | None:
+    """Memory pressure from /proc/pressure/memory: {"some_avg10": .., "full_avg10": ..}; None when unreadable.
+
+    Linux has no macOS `memory_pressure`; PSI is its pressure signal."""
+    try:
+        text = _read_text("/proc/pressure/memory") if psi_text is None else psi_text
+    except OSError:
+        return None
+    out: dict[str, float] = {}
+    for line in text.splitlines():
+        kind, _, rest = line.partition(" ")
+        for field in rest.split():
+            name, _, value = field.partition("=")
+            if kind in ("some", "full") and name == "avg10":
+                try:
+                    out[f"{kind}_avg10"] = float(value)
+                except ValueError:
+                    pass
+    return out or None
+
+
 def read_memory_status() -> MemoryStatus:
-    """Read GlobalMemoryStatusEx (Windows) or the macOS equivalent; raises OSError on failure."""
+    """Read GlobalMemoryStatusEx (Windows), /proc/meminfo (Linux) or the macOS equivalent; raises OSError on failure."""
     if sys.platform == "darwin":
         return memory_status_darwin()
+    if sys.platform.startswith("linux"):
+        return memory_status_linux()
     import ctypes
 
     class _MEMORYSTATUSEX(ctypes.Structure):

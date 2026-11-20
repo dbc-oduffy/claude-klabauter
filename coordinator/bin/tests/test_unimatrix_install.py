@@ -1602,9 +1602,24 @@ def test_linux_login_agent_is_a_oneshot_user_unit_enabled_by_symlink(monkeypatch
     assert "Restart" not in unit and "Timer" not in unit
     link = units / "default.target.wants" / ui.LOGIN_UNIT
     assert link.is_symlink() and link.resolve() == (units / ui.LOGIN_UNIT).resolve()
+    timer_link = units / "timers.target.wants" / ui.LOGIN_TIMER
+    assert timer_link.is_symlink() and timer_link.resolve() == (units / ui.LOGIN_TIMER).resolve()
     assert ui.register_login_agent(tmp_path / "u", units)[0] == "present"
     assert ui.unregister_login_agent(units) == "removed"
     assert not (units / ui.LOGIN_UNIT).exists() and not link.is_symlink()
+    assert not (units / ui.LOGIN_TIMER).exists() and not timer_link.is_symlink()
+
+
+def test_linux_login_unit_keeps_spawned_supervisors_alive_and_relinks(monkeypatch, tmp_path):
+    # Symlink-free, so it runs on a Windows host too. KillMode=process: the default control-group mode
+    # reaps the supervisors autolink spawned when the oneshot exits (Gipsy, live).
+    monkeypatch.setattr(sys, "platform", "linux")
+    unit = ui._login_agent_text(tmp_path / "u").decode("utf-8")
+    assert "Type=oneshot" in unit and "KillMode=process" in unit
+    assert "Wants=network-online.target" in unit and "After=network-online.target" in unit
+    timer = ui._login_timer_text().decode("utf-8")
+    assert f"OnUnitInactiveSec={ui.LOGIN_AGENT_INTERVAL_S}" in timer and f"Unit={ui.LOGIN_UNIT}" in timer
+    assert "OnBootSec=30" in timer and "WantedBy=timers.target" in timer
 
 
 class _FakeKey:

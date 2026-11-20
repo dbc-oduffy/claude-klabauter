@@ -490,6 +490,29 @@ def _run_pinned_test_leg(
     return proc.returncode, measured
 
 
+class RunBaseMismatch(ValueError):
+    """Typed refusal: the reverify base is none of the run's pinned bases."""
+
+    kind = "run_base_mismatch"
+
+    def __init__(self, base: str, pinned: list[str]):
+        self.base, self.pinned = base, pinned
+        super().__init__(f"{self.kind}: host Verify tests base {base!r} is not the run's pinned base {pinned!r}")
+
+
+def _check_run_base(root: Path, run_dir: Path, run_id: str, manifest: dict, base: str) -> None:
+    """Refuse only a base that is none of the run's own pinned bases.
+
+    Invariant: manifest `head_sha` is HEAD at the (re)stage write, so a resumed run, or a sibling's halt
+    commit landing before the restage, moves it off the run's base. The pinned bases are the write-once
+    `run-base` file and the halted record's `run_base_sha`; a sibling commit must never refuse the leg."""
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract
+
+    pinned = ask_fanout_contract.pinned_run_base(root, run_id, manifest)
+    if pinned and base != pinned:
+        raise RunBaseMismatch(base, [pinned])
+
+
 _EVICTED_SKIP = "evicted by this run's halt (parked out of the tree); not run"
 
 
@@ -512,9 +535,7 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
         if Path(path).is_absolute() or not (root / path).resolve().is_relative_to(root):
             raise ValueError(f"host Verify tests target is outside the repository: {path!r}")
     base = params.get("base", "")
-    manifest_base = manifest.get("head_sha")
-    if manifest_base and base != manifest_base:
-        raise ValueError("host Verify tests baseline differs from the active run manifest")
+    _check_run_base(root, run_dir, run_id, manifest, base)
     # Invariant: an evicted path is parked out of the tree, so naming it makes pytest exit 4 with no tests.
     from coordinator_core.ops.dispatch_emit import halt_tree_evict
 
@@ -735,6 +756,22 @@ def _halt_failed_fire(record: dict, result, error: str) -> None:
         record['halt_error'] = f'{type(exc).__name__}: {exc}'
 
 
+def _cancelled_run_refusal(record: dict) -> str | None:
+    """The `workflow.cancel` refusal text when this fire's run carries a live cancelled marker, else None.
+    One marker read before each agent dispatch: the backstop for a fire `workflow.cancel` could not reach."""
+    run_id = record.get('run_id')
+    if not run_id:
+        return None
+    try:
+        from coordinator_core.lifecycle import main_worktree_root
+        from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+        from coordinator_core.ops.dispatch_emit.run_cancel import cancelled_refusal
+
+        return cancelled_refusal(main_worktree_root(Path(record['repo_root'])) / RECORD_DIR_ROOT / run_id)
+    except Exception:  # noqa: BLE001 -- an unreadable marker never stops a run on its own
+        return None
+
+
 def _preflight_failed(record_path: Path, record: dict, exc: Exception) -> dict:
     """Release a failed reservation and retain the error before a driver starts."""
     record.update(state='exited', exit_code=1, outcome='failed',
@@ -779,6 +816,7 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
             stream.write(json.dumps({'at': time.time(), **event}) + '\n')
     process = None
     timer = None
+    cancelled: list = []
     result = None
     terminal = False
     error = None
@@ -857,6 +895,11 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                             reply['result'] = _invoke_source(event['op'], event['params'], record['repo_root'],
                                                             operation_dir, remaining)
                     else:
+                        refusal = _cancelled_run_refusal(record)
+                        if refusal:
+                            cancelled.append(refusal)
+                            process.kill()
+                            raise RuntimeError(refusal)
                         request_id = str(event['id'])
                         extra = {}
                         spawned = False
@@ -896,6 +939,8 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                                 private.end_worker(request_id)
                 except Exception as exc:
                     reply['error'] = f'{type(exc).__name__}: {exc}'
+                    if isinstance(getattr(exc, 'denial', None), dict):
+                        reply['denial'] = exc.denial
                 journal({'type': 'agent-response', **reply})
                 with input_lock:
                     if process.poll() is None:
@@ -951,7 +996,11 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
     except Exception as exc:
         record.update(exit_code=1, outcome='failed', error=f'{type(exc).__name__}: {exc}', outcome_basis='headless executor error')
         journal({'type': 'failed', 'error': record['error']})
-        _halt_failed_fire(record, result, record['error'])
+        if cancelled:
+            # The cancelled marker is the run's halt; a failed-fire halt would overwrite it.
+            record['error'] = cancelled[0]
+        else:
+            _halt_failed_fire(record, result, record['error'])
     finally:
         if timer:
             timer.cancel()

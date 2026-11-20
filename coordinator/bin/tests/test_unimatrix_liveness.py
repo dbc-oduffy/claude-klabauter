@@ -36,23 +36,75 @@ def test_module_does_not_import_subprocess() -> None:
     assert "subprocess" not in lv.__dict__
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="ps lstart is POSIX")
-def test_proc_start_matches_ps_lstart_for_own_pid() -> None:
-    want = subprocess.run(["ps", "-o", "lstart=", "-p", str(os.getpid())],
+def _harness_start(pid: int) -> str:
+    """The procStart the harness records: raw /proc starttime ticks on Linux, `ps -o lstart=` text on macOS."""
+    if sys.platform == "linux":
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        return str(int(stat[stat.rindex(")") + 2:].split()[19]))
+    return subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
                           capture_output=True, text=True, check=True).stdout.strip()
-    assert lv.proc_start(os.getpid()) == want
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="ps lstart is POSIX")
-def test_proc_start_matches_ps_lstart_for_child_pid() -> None:
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX proc_start")
+def test_proc_start_matches_the_harness_format_for_own_pid() -> None:
+    assert lv.proc_start(os.getpid()) == _harness_start(os.getpid())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX proc_start")
+def test_proc_start_matches_the_harness_format_for_child_pid() -> None:
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
-        want = subprocess.run(["ps", "-o", "lstart=", "-p", str(child.pid)],
-                              capture_output=True, text=True, check=True).stdout.strip()
-        assert lv.proc_start(child.pid) == want
+        assert lv.proc_start(child.pid) == _harness_start(child.pid)
     finally:
         child.kill()
         child.wait()
+
+
+def _fake_files(monkeypatch: pytest.MonkeyPatch, files: dict) -> None:
+    import builtins
+    real = builtins.open
+
+    def fake(path, *a, **kw):
+        key = str(path).replace("\\", "/")
+        if key in files:
+            import io
+            return io.StringIO(files[key])
+        if key.startswith(("/proc/", "/etc/", "/var/lib/")):
+            raise FileNotFoundError(key)
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", fake)
+
+
+def test_linux_start_is_the_raw_starttime_ticks_even_for_a_spaced_comm(monkeypatch: pytest.MonkeyPatch) -> None:
+    tail = " ".join(["S", "1"] + ["0"] * 17 + ["987654", "0"])  # fields 3.. ; starttime is the 20th after the comm
+    _fake_files(monkeypatch, {"/proc/42/stat": f"42 (a) b) {tail}\n"})
+    assert lv._linux_start(42) == "987654"
+
+
+def test_linux_pid_domain_joins_machine_id_and_pid_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_files(monkeypatch, {"/etc/machine-id": "abc123\n"})
+    monkeypatch.setattr(os, "readlink", lambda p: "pid:[4026531836]")
+    assert lv.linux_pid_domain() == "linux:abc123:pid:[4026531836]"
+
+
+def test_linux_pid_domain_falls_back_to_the_dbus_machine_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_files(monkeypatch, {"/var/lib/dbus/machine-id": "dbus99\n"})
+    monkeypatch.setattr(os, "readlink", lambda p: "pid:[1]")
+    assert lv.linux_pid_domain() == "linux:dbus99:pid:[1]"
+
+
+@pytest.mark.parametrize("have_id, have_ns", [(False, True), (True, False)])
+def test_linux_pid_domain_is_bare_linux_when_a_part_is_missing(monkeypatch: pytest.MonkeyPatch, have_id, have_ns) -> None:
+    _fake_files(monkeypatch, {"/etc/machine-id": "abc\n"} if have_id else {})
+
+    def readlink(p):
+        if not have_ns:
+            raise OSError("no ns")
+        return "pid:[1]"
+
+    monkeypatch.setattr(os, "readlink", readlink)
+    assert lv.linux_pid_domain() == "linux"
 
 
 def test_lstart_pads_one_digit_day() -> None:

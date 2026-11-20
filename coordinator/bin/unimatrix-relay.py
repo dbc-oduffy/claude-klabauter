@@ -577,6 +577,21 @@ def _router_resolve(name):
     return answer
 
 
+def session_sock_dirs():
+    """Realpaths of the directories a live session's messaging socket may sit in.
+
+    Claude Code binds under $XDG_RUNTIME_DIR/cc-socks on Linux; a relay spawned by sshd may carry no
+    XDG_RUNTIME_DIR, so /run/user/<uid>/cc-socks is accepted too. The inbox listener binds under SOCKS and
+    the mirror entry advertises that path, so the listener needs no change."""
+    dirs = {os.path.realpath(SOCKS)}
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        dirs.add(os.path.realpath(os.path.join(xdg, "cc-socks")))
+    if hasattr(os, "getuid"):
+        dirs.add(os.path.realpath(f"/run/user/{os.getuid()}/cc-socks"))
+    return dirs
+
+
 def _session_path(pid, expected_digest=None, expected_name_digest=None, expected_session_id=None):
     """The live session's messaging endpoint for `pid`; exits when it is absent or not a session endpoint.
 
@@ -636,7 +651,7 @@ def _session_path(pid, expected_digest=None, expected_name_digest=None, expected
     if endpoint_kind() == "pipe":
         if not path.lower().startswith(PIPE_PREFIX.lower()):
             refuse(f"refusing non-session pipe {path}")
-    elif os.path.dirname(path) != SOCKS or not stat.S_ISSOCK(os.stat(path).st_mode):
+    elif os.path.realpath(os.path.dirname(path)) not in session_sock_dirs() or not stat.S_ISSOCK(os.stat(path).st_mode):
         refuse(f"refusing non-session socket {path}")
     name = _exported_name(target)
     _REACHED.update(pid=pid, name=name if isinstance(name, str) else None, session=target.get("sessionId"))
@@ -912,7 +927,7 @@ def receipts(session_id, since):
 
 
 def pid_domain():
-    return "darwin" if sys.platform == "darwin" else "linux"
+    return "darwin" if sys.platform == "darwin" else _liveness().linux_pid_domain()
 
 
 def proc_start(pid):
@@ -1163,9 +1178,11 @@ def register_name(name, raw, key_body, export_reply=False, mux=False):
     try:
         our_ino = os.stat(path).st_ino
         srv.listen(8)
-        # Raw ps output: the harness compares it byte for byte, padded one-digit day included.
-        ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
-                            capture_output=True, text=True, check=True).stdout.strip()
+        # The harness compares procStart byte for byte: /proc ticks on Linux, padded-day lstart on macOS.
+        ps = proc_start(pid)
+        if ps is None:
+            ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
+                                capture_output=True, text=True, check=True).stdout.strip()
         entry.update(pid=pid, procStart=ps, pidDomain=pid_domain(),
                      messagingSocketPath=path, unimatrixMirror=True, unimatrixClient=client,
                      unimatrixSocketIno=our_ino)
@@ -1680,26 +1697,144 @@ def load_file_relay_line():
     return mod.file_line
 
 
-def windows_admin():
+def windows_admin() -> bool:
+    """True when this process is elevated: the only state that can write the administrators file."""
     if sys.platform != "win32":
         return False
     import ctypes
     return bool(ctypes.windll.shell32.IsUserAnAdmin())
 
 
-def reconcile_authorized_keys(members, path, membership, is_admin=windows_admin, listed=frozenset(),
-                              unenrolled=None):
-    """Make the relay-managed lines of `path` equal the generated lines for `members`.
+def windows_admin_member() -> bool:
+    """True when the account is in Administrators, elevated or not.
 
+    sshd's `Match Group administrators` keys off membership; IsUserAnAdmin is False for the filtered token
+    of a non-elevated administrator, so the TokenElevationType (3 = limited) is read as well."""
+    if windows_admin():
+        return True
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+    k32, adv = ctypes.windll.kernel32, ctypes.windll.advapi32
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    adv.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                        ctypes.POINTER(wintypes.DWORD)]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    token = wintypes.HANDLE()
+    if not adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
+        return False
+    kind, size = wintypes.DWORD(), wintypes.DWORD()
+    ok = adv.GetTokenInformation(token, 18, ctypes.byref(kind), ctypes.sizeof(kind), ctypes.byref(size))  # TokenElevationType
+    k32.CloseHandle(token)
+    return bool(ok) and kind.value == 3
+
+
+def default_programdata() -> Path:
+    return Path(os.environ.get("ProgramData") or Path(os.environ.get("SystemDrive", "C:") + os.sep) / "ProgramData")
+
+
+def sshd_admin_keys_file(sshd_config=None, programdata=None) -> Path | None:
+    """The AuthorizedKeysFile of an active `Match Group administrators` block of sshd_config; None when absent.
+
+    sshd takes the first value of a keyword, so the first AuthorizedKeysFile inside the block wins;
+    `__PROGRAMDATA__` expands to `programdata`. A relative path is ignored (sshd resolves it against the home)."""
+    programdata = Path(programdata) if programdata else default_programdata()
+    sshd_config = Path(sshd_config) if sshd_config else programdata / "ssh" / "sshd_config"
+    try:
+        lines = sshd_config.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    in_block = False
+    for raw in lines:
+        text = raw.strip()
+        if not text or text.startswith("#"):
+            continue
+        key, _, rest = text.replace("=", " ", 1).partition(" ") if "=" in text.split()[0] else text.partition(" ")
+        key, rest = key.lower(), rest.strip()
+        if key == "match":
+            crit = rest.split(None, 2)
+            in_block = len(crit) == 2 and crit[0].lower() == "group" and "administrators" in crit[1].lower().split(",")
+        elif in_block and key == "authorizedkeysfile" and rest:
+            value = rest.split('"')[1] if rest.startswith('"') and rest.count('"') >= 2 else rest.split()[0]
+            value = value.replace("__PROGRAMDATA__", str(programdata))
+            return Path(value) if Path(value).is_absolute() or value[:1] in "/\\" or value[1:2] == ":" else None
+    return None
+
+
+def effective_authorized_keys(user_file, is_admin=windows_admin_member, sshd_config=None, programdata=None) -> tuple[Path, bool]:
+    """(path, is_admin_file): the file sshd reads for this account.
+
+    An administrator whose sshd_config carries an active `Match Group administrators` AuthorizedKeysFile
+    is served that file and never `user_file`; everyone else is served `user_file`."""
+    if is_admin():
+        admin = sshd_admin_keys_file(sshd_config, programdata)
+        if admin is not None:
+            return admin, True
+    return Path(user_file), False
+
+
+def lock_admin_keys_acl(path) -> None:
+    """Protected DACL of SYSTEM and Administrators only, via advapi32; sshd ignores the file otherwise. Windows only."""
+    import ctypes
+    from ctypes import wintypes
+    adv, k32 = ctypes.windll.advapi32, ctypes.windll.kernel32
+    adv.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    adv.GetSecurityDescriptorDacl.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL),
+                                              ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.BOOL)]
+    adv.SetNamedSecurityInfoW.argtypes = [wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p,
+                                          ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    adv.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    k32.LocalFree.argtypes = [ctypes.c_void_p]
+    sd = ctypes.c_void_p()
+    if not adv.ConvertStringSecurityDescriptorToSecurityDescriptorW("D:P(A;;FA;;;SY)(A;;FA;;;BA)", 1, ctypes.byref(sd), None):
+        raise ctypes.WinError()
+    try:
+        present, defaulted, dacl = wintypes.BOOL(), wintypes.BOOL(), ctypes.c_void_p()
+        if not adv.GetSecurityDescriptorDacl(sd, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)):
+            raise ctypes.WinError()
+        # SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
+        err = adv.SetNamedSecurityInfoW(str(path), 1, 0x00000004 | 0x80000000, None, None, dacl, None)
+        if err:
+            raise ctypes.WinError(err)
+    finally:
+        k32.LocalFree(sd)
+
+
+def admin_keys_remediation() -> str:
+    """The command that finishes the admin-file reconcile once run from an elevated shell."""
+    return f'"{sys.executable}" "{Path(__file__).resolve()}" reconcile-keys'
+
+
+def reconcile_authorized_keys(members, path, membership, is_admin=windows_admin_member, listed=frozenset(),
+                              unenrolled=None, sshd_config=None, programdata=None, acl_lock=None, report=None) -> str:
+    """Make the relay-managed lines of the file sshd reads equal the generated lines for `members`.
+
+    That file is `path`, or for an administrator under `Match Group administrators` the AuthorizedKeysFile
+    of sshd_config (`effective_authorized_keys`); `report["keys_file"]` names it when it is the administrators file.
     Only lines whose forced command names unimatrix-relay.py are touched; every other line keeps its
     exact bytes. A managed line already equal to its generated line stays in place; a stale pin of a
     member key is regenerated; a line for a key in `listed` (key bodies a prior snapshot listed) that
     `members` omits is dropped (a revocation). A managed line for any other key was never enrolled: it
     is kept byte-for-byte and its key body is appended to `unenrolled` when given.
-    Returns admin | unchanged | updated.
+    The administrators file is rewritten in place, never replaced, so its ACL survives; a file created
+    here gets `acl_lock` (SYSTEM and Administrators only) before any key lands in it.
+    Returns unchanged | updated | admin_keys_unwritable (not elevated: nothing written).
     """
-    if is_admin():
-        return "admin"
+    path, via_admin = effective_authorized_keys(path, is_admin, sshd_config, programdata)
+    if report is not None and via_admin:
+        report["keys_file"] = str(path)
+    try:
+        return _reconcile_file(members, path, membership, listed, unenrolled, via_admin, acl_lock)
+    except OSError:
+        if via_admin:
+            return "admin_keys_unwritable"
+        raise
+
+
+def _reconcile_file(members, path, membership, listed, unenrolled, via_admin, acl_lock) -> str:
     want = {}
     for body, line in membership.member_lines(members, relay_line, load_file_relay_line()):
         want[body] = line
@@ -1723,6 +1858,18 @@ def reconcile_authorized_keys(members, path, membership, is_admin=windows_admin,
     new = "".join(out)
     if new == old:
         return "unchanged"
+    if via_admin:
+        # os.replace would swap the protected SYSTEM+Administrators DACL for the temp file's inherited one.
+        if not path.exists():
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
+            try:
+                (acl_lock or lock_admin_keys_acl)(path)
+            except OSError:
+                path.unlink(missing_ok=True)
+                raise
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(new)
+        return "updated"
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
@@ -1762,7 +1909,8 @@ def _pin_pinless_receiver(home, snap, sig, pin_line, membership, notifier, run):
 
 
 def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, notifier=None,
-                   is_admin=windows_admin, run=subprocess.run, pin_line=""):
+                   is_admin=windows_admin_member, run=subprocess.run, pin_line="", sshd_config=None,
+                   programdata=None, acl_lock=None):
     """Verify and adopt a pushed snapshot, then reconcile authorized_keys; return the reply dict.
 
     The pin and the epoch gate inside `membership.adopt` are the only defence: a refusal (bad
@@ -1791,10 +1939,36 @@ def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, n
     except membership.MembershipError as ex:
         return {"ok": False, "reason": f"refused: {ex}"[:200]}
     unenrolled = []
-    result = reconcile_authorized_keys(members, authorized_keys, membership, is_admin, listed, unenrolled)
+    report = {}
+    result = reconcile_authorized_keys(members, authorized_keys, membership, is_admin, listed, unenrolled,
+                                       sshd_config, programdata, acl_lock, report)
     for body in unenrolled:
         notifier(home, {"kind": "unenrolled", "epoch": snap["epoch"], "detail": f"relay line kept, key {body[:24]} not in any snapshot"})
-    return {"ok": True, "epoch": snap["epoch"], "authorized_keys": result}
+    return _reconcile_reply(home, notifier, snap["epoch"], result, report)
+
+
+def _reconcile_reply(home, notifier, epoch, result, report):
+    """The put reply; an unwritable administrators file is logged and named with its remediation, never silent."""
+    reply = {"ok": True, "epoch": epoch, "authorized_keys": result}
+    if "keys_file" in report:
+        reply["keys_file"] = report["keys_file"]
+    if result == "admin_keys_unwritable":
+        reply["admin_keys_unwritable"] = {"path": report.get("keys_file"), "remediation": admin_keys_remediation()}
+        notifier(home, {"kind": "admin_keys_unwritable", "epoch": epoch,
+                        "detail": f"{report.get('keys_file')} not writable; elevated shell: {admin_keys_remediation()}"[:200]})
+    return reply
+
+
+def reconcile_keys_cli(home, membership, authorized_keys, notifier=None, **kw):
+    """`reconcile-keys`: reconcile the effective keys file from the held snapshot; run elevated to write the administrators file."""
+    notifier = notifier or membership.notify
+    snap, _ = membership.load_snapshot(home)
+    if snap is None:
+        return {"ok": False, "reason": "no membership snapshot held"}
+    report = {}
+    result = reconcile_authorized_keys(membership.verified_members(home), authorized_keys, membership,
+                                       report=report, **kw)
+    return _reconcile_reply(home, notifier, snap["epoch"], result, report)
 
 
 GIB = 1024 ** 3
@@ -1900,6 +2074,13 @@ def main():
         ensure_engine_on_path(__file__)
     except ImportError:  # a receiving-box copy carries no lib/; the engine resolves lazily
         pass
+    if sys.argv[1:] == ["reconcile-keys"] and not os.environ.get("SSH_ORIGINAL_COMMAND"):
+        membership = load_membership()
+        if membership is None:
+            sys.exit("membership library not vendored beside the relay")
+        reply = reconcile_keys_cli(settings_home(), membership, Path.home() / ".ssh" / "authorized_keys")
+        print(json.dumps(reply))
+        sys.exit(0 if reply.get("ok") is True and reply.get("authorized_keys") != "admin_keys_unwritable" else 1)
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
         sys.exit("usage: roster | capabilities | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "

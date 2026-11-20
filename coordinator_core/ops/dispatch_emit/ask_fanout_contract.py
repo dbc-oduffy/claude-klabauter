@@ -207,6 +207,35 @@ def recorded_run_base(root: Any, run_id: str) -> Optional[str]:
         return None
 
 
+def pinned_run_base(root: Any, run_id: str, manifest: Optional[Mapping] = None) -> Optional[str]:
+    """The run's own test/landing baseline: the write-once `run-base` file, then the record's halted
+    `run_base_sha`, then the manifest `head_sha` as a fallback only.
+
+    Invariant: manifest `head_sha` is HEAD at the (re)stage write, so a resume, or a sibling's halt commit
+    landing before the restage, moves it off the run's base. Read the base through here, never off `head_sha`.
+    `manifest` is the already-read manifest dict (read from the record dir when None)."""
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    root = Path(root)
+    base = recorded_run_base(root, run_id)
+    if base:
+        return base
+    try:
+        record = ask_contract.record_dir(root, run_id)
+    except ValueError:
+        return None
+    base = halted_run.halted_run_base(record)
+    if base:
+        return base
+    if manifest is None:
+        try:
+            manifest = json.loads((record / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+    head = manifest.get("head_sha") if isinstance(manifest, Mapping) else None
+    return head if isinstance(head, str) and head else None
+
+
 def status_rel(run_id: str) -> str:
     """Runtime-only status file; only the run itself rewrites it."""
     return f"scratch/warp/{run_id}/sibling-status.json"

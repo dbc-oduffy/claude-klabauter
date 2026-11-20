@@ -84,3 +84,30 @@ def test_single_quote_in_plan_path_cannot_break_the_relay_command():
     script = _compose_js(_with_op(_ratio_review(), per="run"), plan_path="docs/plans/it's.md")
     command = script[script.index("coordinator-invoke dispatch.test_leg") :].split("--bare", 1)[0]
     assert "it\\'\\\\\\'\\'s.md" in command
+
+
+def test_op_entry_runs_the_op_directly_and_relays_only_as_fallback():
+    script = "\n".join(js for _, js in _compose(_with_op(_ratio_review(), per="run")))
+    direct = "engineOp.directRun ? engineOp('dispatch.test_leg', { plan_path: 'docs/plans/example.md', run_base_sha: '" + "a" * 40 + "' })"
+    assert direct in script
+    assert script.index(direct) < script.index("agentType: 'coordinator:op-relay'")
+
+
+def test_op_relay_gets_one_rerelay_and_logs_an_unusable_reply():
+    script = "\n".join(js for _, js in _compose(_with_op(_ratio_review(), per="run")))
+    assert "typeof _r.verdict !== 'string'" in script
+    assert "dispatch.test_leg relay reply unusable: " in script
+    assert script.count("await _relay()") == 2
+
+
+def test_op_entry_splices_a_runtime_run_base_instead_of_its_escaped_marker():
+    review = _with_op(_ratio_review(), per="run")
+    script = "\n".join(
+        js for _, js in compose_execute_review(
+            review, stage_schemas=_STAGE_SCHEMAS, plan_path="docs/plans/example.md",
+            run_base_sha="\x01_runBase\x01", declared_paths=["x.py"], executor_rows=9,
+        )
+    )
+    assert "\u0001" not in script
+    assert "run_base_sha: _runBase }" in script
+    assert "_runBase" in script

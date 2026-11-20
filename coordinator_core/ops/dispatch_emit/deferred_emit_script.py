@@ -18,16 +18,16 @@ function _runFamily(id) {
   const m = /^(warp-.+)-[0-9]{8}T[0-9]{6}-[0-9a-f]{6}$/.exec(id);
   return m ? m[1] : id;
 }
-// A stage reply that names its staged twin wins over a path derived from the handle sha, which a restage leaves stale. null: none named; false: named but not this run's twin.
+// A stage reply that names its staged twin wins over a path derived from the handle sha, which a restage leaves stale. null: none named, or one named that is malformed or not this run's twin (the relayed path is a convenience; the caller derives the twin from the handle sha).
 function _replyTwinRel(pending, stem) {
   const t = pending.twin_path;
   if (t === undefined || t === null) return null;
-  if (typeof t !== 'string' || !t.startsWith(TWIN_PREFIX) || !t.endsWith(TWIN_SUFFIX)) return false;
+  if (typeof t !== 'string' || !t.startsWith(TWIN_PREFIX) || !t.endsWith(TWIN_SUFFIX)) return null;
   const shaAt = t.length - TWIN_SUFFIX.length - 64;
   const midAt = shaAt - TWIN_MIDDLE.length;
-  if (midAt <= TWIN_PREFIX.length || t.slice(midAt, shaAt) !== TWIN_MIDDLE || !/^[0-9a-f]{64}$/.test(t.slice(shaAt, shaAt + 64))) return false;
+  if (midAt <= TWIN_PREFIX.length || t.slice(midAt, shaAt) !== TWIN_MIDDLE || !/^[0-9a-f]{64}$/.test(t.slice(shaAt, shaAt + 64))) return null;
   const own = t.slice(TWIN_PREFIX.length, midAt);
-  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(own) && _runFamily(own) === _runFamily(stem) ? t : false;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(own) && _runFamily(own) === _runFamily(stem) ? t : null;
 }
 """
 
@@ -176,7 +176,6 @@ function _normPath(p) {
     }
     const stem = base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length);
     const named = _replyTwinRel(pending, stem);
-    if (named === false) return { ok: false, error: 'stage_pending twin_path is not a staged twin of this run: ' + String(pending.twin_path) };
     let twinRel = named;
     if (named === null) {
       const sha = pending.handle && typeof pending.handle === 'object' ? pending.handle.sha256 : undefined;

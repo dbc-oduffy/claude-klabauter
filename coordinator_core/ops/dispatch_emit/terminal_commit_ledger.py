@@ -6,7 +6,7 @@ import ast
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Sequence, Optional
+from typing import Mapping, Optional, Sequence
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit import (
     bug_close,
@@ -462,6 +462,44 @@ def downgrade_unlanded_items(verdict: object, unlanded: Sequence, register_rows:
     return {**verdict, "items": out} if changed else verdict
 
 
+def withheld_evidence_unmet(
+    verdict: object, withheld: Mapping, row_writes: Mapping, register_rows: Mapping,
+) -> tuple:
+    """``(verdict, {item id: reason})``: every ``met`` or ``post_commit`` item whose evidence path the commit
+    left out read ``not_met``, ``wired`` false, with the path and its withheld reason in ``remaining``.
+
+    An item's evidence paths are the declared writes of the rows serving it (``register_rows`` maps a row id
+    to the ledger ids it serves; ``row_writes`` maps it to its writes) plus any withheld path its
+    ``evidence``/``met_by``/``remaining`` text names. The same object back when nothing changes."""
+    items = verdict.get("items") if isinstance(verdict, dict) else None
+    if not isinstance(items, list) or not withheld:
+        return verdict, {}
+    out: list = []
+    reasons: dict = {}
+    for item in items:
+        if not isinstance(item, dict) or item.get("status") not in ("met", "post_commit"):
+            out.append(item)
+            continue
+        iid = str(item.get("id"))
+        owned: set = set()
+        for row, regs in register_rows.items():
+            if iid in {str(r) for r in regs or ()}:
+                owned |= {str(w) for w in row_writes.get(row, ())}
+        met_by = item.get("met_by")
+        text = " ".join(str(v) for v in (
+            item.get("evidence"), *(met_by if isinstance(met_by, list) else [met_by]), *(item.get("remaining") or ()),
+        ) if v)
+        hit = sorted(p for p in withheld if p in owned or p in text)
+        if not hit:
+            out.append(item)
+            continue
+        remaining = [str(r) for r in item.get("remaining") or []] if isinstance(item.get("remaining"), list) else []
+        notes = [f"evidence path withheld: {p} ({withheld[p]})" for p in hit]
+        out.append({**item, "status": "not_met", "wired": False, "remaining": remaining + [n for n in notes if n not in remaining]})
+        reasons[iid] = "; ".join(notes)
+    return ({**verdict, "items": out} if reasons else verdict), reasons
+
+
 def rewrite_note_verdicts(
     note_abs: Path, ledger_verdict: object, inline_review: object, sidecar_root: Path,
 ) -> None:
@@ -568,7 +606,9 @@ def _ledger_gate(
         )
         if dirt is not None:
             return dirt, ledger, []
-        drift = _measured_rev_drift_refusal(run_dir, worktree_root, verdict, ledger, inline_review)
+        drift = _measured_rev_drift_refusal(
+            run_dir, worktree_root, verdict, ledger, inline_review, resume_ledger
+        )
         if drift is not None:
             return drift, ledger, []
         return None, ledger, [

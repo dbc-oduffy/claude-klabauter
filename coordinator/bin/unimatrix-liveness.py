@@ -2,7 +2,8 @@
 """Spawn-free liveness for the unimatrix autolink supervisors: stdlib only, no subprocess.
 
 Loaded by path (importlib spec_from_file_location). `proc_start` reproduces `ps -o lstart=` byte
-for byte on POSIX (one-digit day space-padded) because recorded procStart strings are compared as text.
+for byte on darwin (one-digit day space-padded) and the raw /proc starttime ticks on Linux, because
+recorded procStart strings are compared as text.
 Boxes cache `autolink-boxes.json`: a json object with an "aliases" list; its mtime is the cache age.
 """
 import json
@@ -52,12 +53,28 @@ def _darwin_start(pid) -> str:
 
 
 def _linux_start(pid) -> str:
+    """Raw /proc/<pid>/stat starttime ticks: the procStart Claude Code records on Linux."""
     with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
         stat = fh.read()
-    ticks = int(stat[stat.rindex(")") + 2:].split()[19])
-    with open("/proc/stat", encoding="utf-8") as fh:
-        btime = next(int(ln.split()[1]) for ln in fh if ln.startswith("btime "))
-    return _lstart(btime + ticks // os.sysconf("SC_CLK_TCK"))
+    return str(int(stat[stat.rindex(")") + 2:].split()[19]))
+
+
+def linux_pid_domain() -> str:
+    """`linux:<machine-id>:<pid namespace>`; bare `linux` when either part cannot be read."""
+    machine_id = ""
+    for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                machine_id = fh.read().strip()
+        except OSError:
+            continue
+        if machine_id:
+            break
+    try:
+        ns = os.readlink("/proc/self/ns/pid")
+    except OSError:
+        ns = ""
+    return f"linux:{machine_id}:{ns}" if machine_id and ns else "linux"
 
 
 def _win_filetime(pid) -> str:

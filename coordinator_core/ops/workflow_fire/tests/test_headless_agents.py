@@ -791,3 +791,19 @@ def test_codex_runner_route_names_the_parse_failure_after_one_reask(tmp_path: Pa
         agents.run_agent("commit", {"schema": _ARM_SCHEMA, "label": "halt-commit"}, repo_root=tmp_path,
                          artifact_dir=tmp_path / "a")
     assert count.read_text() == "2"
+
+
+def test_native_policy_denial_is_typed_with_tool_command_decision(tmp_path):
+    (tmp_path / "stderr.txt").write_text(
+        "permission required: Execute `Get-Item r.md | Select-Object Length, Full… was not run, "
+        "as a headless run cannot ask for approval\n", encoding="utf-8")
+    denial = headless_agents.policy_denial(tmp_path)
+    assert denial["tool"] == "Execute" and denial["command"].startswith("Get-Item r.md")
+    assert "headless run cannot ask" in denial["decision"]
+    err = headless_agents.AgentPolicyDenied(denial)
+    assert isinstance(err, headless_agents.AgentFailed) and err.denial == denial
+
+
+def test_ordinary_stderr_is_no_policy_denial(tmp_path):
+    (tmp_path / "stderr.txt").write_text("boom\n", encoding="utf-8")
+    assert headless_agents.policy_denial(tmp_path) is None

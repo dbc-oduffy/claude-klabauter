@@ -134,6 +134,7 @@ def box(tmp_path, monkeypatch):
         kw.setdefault("launchctl_list", lambda: "")
         kw.setdefault("relay_ps", lambda: "")
         kw.setdefault("environ", {"PATH": ""})
+        kw.setdefault("is_admin", lambda: False)  # never read the real machine's administrator state or sshd_config
         rc = dr.main([], run=b.net.run, resolve=b.net.resolve, connect=b.net.connect, authorized_keys=b.ak,
                      self_names=kw.pop("self_names", {"me"}), out=out, roster=roster, autolink=al, **kw)
         return rc, out.getvalue()
@@ -504,19 +505,6 @@ def test_far_boxes_alias_is_not_checked_when_a_snapshot_is_stored_and_still_is_w
     assert rc == 0 and "ghost" not in out  # a snapshot makes far_boxes inert, never a flagged member
 
 
-def test_windows_admin_authorized_keys_is_reported_never_read(box, tmp_path, monkeypatch):
-    prog = tmp_path / "ProgramData"
-    (prog / "ssh").mkdir(parents=True)
-    admin = prog / "ssh" / "administrators_authorized_keys"
-    admin.write_text(box.relay_line(box.relay[1]) + "\n")
-    monkeypatch.setenv("ProgramData", str(prog))
-    box.adopt("me")
-    box.ak.write_text("")
-    rc, out = box.main(platform="win32")
-    assert rc == 0 and f"info: {admin} exists and is not inspected here" in out
-    assert "line 1" not in out
-
-
 def test_cli_entrypoint_exits_non_zero_on_a_box_with_no_snapshot(tmp_path):
     home = tmp_path / "s"
     home.mkdir()
@@ -526,7 +514,8 @@ def test_cli_entrypoint_exits_non_zero_on_a_box_with_no_snapshot(tmp_path):
     import os
     r = subprocess.run([sys.executable, str(BIN / "unimatrix-doctor.py")], capture_output=True, text=True,
                        env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(home), "HOME": str(tmp_path / "h"),
-                            "USERPROFILE": str(tmp_path / "h")})
+                            "USERPROFILE": str(tmp_path / "h"),
+                            "ProgramData": str(tmp_path / "pd")})  # no sshd_config there: the user file is the effective one
     assert r.returncode == 1
     assert "problem: no signed membership snapshot is stored" in r.stdout and "is in no signed membership record" in r.stdout
 
@@ -957,3 +946,38 @@ def test_every_keyed_doctor_dial_forces_ipv4(box):
     _, cmds = _drift_problems(box, {"entry": {}, "relay_sha": box.dr.local_relay_sha()})
     dials = [c for c in cmds if c[:1] == ["ssh"] and "-G" not in c]
     assert dials and all("AddressFamily=inet" in c for c in dials)
+
+
+ADMIN_SSHD_CONFIG = """Port 22
+Match Group administrators
+       AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
+"""
+
+
+def _admin_rig(box, tmp_path):
+    prog = tmp_path / "ProgramData"
+    (prog / "ssh").mkdir(parents=True)
+    (prog / "ssh" / "sshd_config").write_text(ADMIN_SSHD_CONFIG)
+    return prog, prog / "ssh" / "administrators_authorized_keys"
+
+
+def test_admin_account_reads_the_file_sshd_reads_and_reports_each_member_key(box, tmp_path):
+    prog, admin = _admin_rig(box, tmp_path)
+    box.adopt("me", "machine-a")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")  # the user file holds the key; sshd never reads it
+    admin.write_text("")
+    rc, out = box.main(platform="win32", sshd_config=prog / "ssh" / "sshd_config", programdata=prog, is_admin=lambda: True)
+    assert "machine-a: relay key missing in " + str(admin) in out
+    assert f"machine-a: relay key is missing from {admin}" in out and "reconcile-keys" in out
+    assert rc == 1
+    admin.write_text(box.relay_line(box.relay[1]) + "\n")
+    rc, out = box.main(platform="win32", sshd_config=prog / "ssh" / "sshd_config", programdata=prog, is_admin=lambda: True)
+    assert f"machine-a: relay key present in {admin}" in out and "is missing from" not in out
+
+
+def test_non_admin_account_reports_member_keys_in_the_user_file(box, tmp_path):
+    prog, _ = _admin_rig(box, tmp_path)
+    box.adopt("me", "machine-a")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
+    rc, out = box.main(platform="win32", sshd_config=prog / "ssh" / "sshd_config", programdata=prog, is_admin=lambda: False)
+    assert f"machine-a: relay key present in {box.ak}" in out

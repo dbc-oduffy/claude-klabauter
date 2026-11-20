@@ -31,6 +31,8 @@ from coordinator_core.ipc import register_op
 STATE_WITHHELD = "withheld"
 STATE_KEPT = "kept"
 STATE_DIRTY = "dirty"
+#: A halted run's declared footprint that its halt record never withheld (the halt-commit failed or was malformed).
+STATE_DECLARED = "declared"
 UNATTRIBUTED = "unattributed"
 
 
@@ -71,11 +73,13 @@ def _holders(root: Path, wanted: set, own: Optional[str]) -> list:
     )
 
     held: dict = {}
+    declared: dict = {}
     try:
         for run_id, entry in halted_withheld_index.entries(root).items():
             # kept paths are a subset of the declared footprint: a run naming no wanted path holds none
             if not wanted.isdisjoint(entry.paths) or not wanted.isdisjoint(entry.declared):  # index paths are normalised
                 held[run_id] = set(entry.paths)
+                declared[run_id] = set(entry.declared)
     except OSError:
         pass
     try:
@@ -98,6 +102,10 @@ def _holders(root: Path, wanted: set, own: Optional[str]) -> list:
                 pass
             for path in sorted(wanted.intersection(withheld)):
                 out.append((path, run_id, STATE_WITHHELD))
+            # A halted run keeps its declared paths even when its halt-commit failed and withheld none of them:
+            # without the row the owner is hidden and the dirty path reads unattributed.
+            for path in sorted((wanted & declared.get(run_id, set())) - withheld):
+                out.append((path, run_id, STATE_DECLARED))
             try:
                 kept = kept_work.kept_fingerprints(ask_contract.record_dir(root, run_id))
             except (OSError, ValueError):
@@ -148,8 +156,8 @@ def _runs_withheld_overlap(params: dict, repo_root: Optional[Path] = None) -> di
 
     Returns:
         {"overlaps": [{"path", "holder", "state"}], "clean": bool}; `holder` is a run id or
-        "unattributed" (dirty, no other run holds the path); `state` is "withheld", "kept" or
-        "dirty". Or {"error": str} on an invalid param.
+        "unattributed" (dirty, no other run holds the path); `state` is "withheld", "declared" (a halted
+        run's declared path its halt never withheld), "kept" or "dirty". Or {"error": str} on an invalid param.
     """
     p = params if isinstance(params, dict) else {}
     repo = p.get("repo") or (str(repo_root) if repo_root is not None else None)

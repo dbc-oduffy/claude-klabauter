@@ -59,6 +59,12 @@ class AgentFailed(RuntimeError):
     """The worker failed, timed out, or returned data outside its schema."""
 
 
+class StructuredReplyInvalid(AgentFailed):
+    """A schema-bound reply stayed unparseable after local repair and one re-ask; the raw reply is on disk."""
+
+    cause = "structured_reply_invalid"
+
+
 class StageIdleTimeout(AgentFailed):
     """The stage's stdout produced nothing for the idle bound; its process tree was killed by PID."""
 
@@ -831,6 +837,25 @@ _AGY_OK = frozenset({"success", "ok", "completed", "done"})
 _FENCE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
 
 
+def _repair_json_text(text: str):
+    """Parse a reply with literal control characters in strings and unescaped inner quotes.
+
+    Trap: an inner quote is escaped only where the parser stops with a missing delimiter, one
+    quote at a time and bounded, so structure outside strings is never rewritten.
+    """
+    for _ in range(text.count('"') + 1):
+        try:
+            return json.loads(text, strict=False)
+        except json.JSONDecodeError as exc:
+            if not exc.msg.startswith(("Expecting ',' delimiter", "Expecting ':' delimiter")):
+                raise
+            quote = text.rfind('"', 0, exc.pos)
+            if quote < 0:
+                raise
+            text = text[:quote] + "\\" + text[quote:]
+    raise ValueError("inner-quote repair exhausted")
+
+
 def _trailing_json(text: str):
     """Parse a reply that is JSON, a fenced JSON block, or narration ending in a JSON object.
 
@@ -1302,7 +1327,7 @@ def run_agent(
                 value = text
         else:
             text = last.read_text(encoding="utf-8")
-            value = json.loads(text) if schema is not None else text
+            value = json.loads(text, strict=False) if schema is not None else text
             if codex_gate:
                 value = _bind_gate_manifest_digest(
                     _gate_envelope_result(value), repo_root, options.get("gateManifestRunId"),
@@ -1315,6 +1340,20 @@ def run_agent(
         if not codex_structured_reply or _gate_reask:
             raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
         diagnostic = (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:400]
+        raw_path = None
+        if text:
+            # last.txt is unlinked on a reused directory; the journal needs a path that outlives it.
+            raw_path = artifact_dir / "raw-reply.txt"
+            raw_path.write_text(text, encoding="utf-8")
+        if text and not codex_gate and isinstance(exc, json.JSONDecodeError):
+            try:
+                mended = fill_omitted_nullable(unwrap_rpc_envelope(_repair_json_text(text), schema), schema)
+                jsonschema.validate(mended, schema)
+            except (ValueError, jsonschema.ValidationError):
+                pass
+            else:
+                (artifact_dir / "result.json").write_text(json.dumps(mended, ensure_ascii=False), encoding="utf-8")
+                return mended
         value = {"arm": None, "halt": {"kind": "gate-reply-invalid", "reason": diagnostic}} if codex_gate else None
         if (codex_gate and isinstance(exc, json.JSONDecodeError)
                 and exc.pos == len(text) and _GATE_WRAPPER_PREFIX.match(text)):
@@ -1365,7 +1404,11 @@ def run_agent(
             except (AgentFailed, OSError):
                 pass
         if value is None:
-            raise AgentFailed(f"{backend} returned no schema-valid result; structured reply could not be repaired: {diagnostic}") from exc
+            next_action = f"; next_action: inspect the raw reply at {raw_path}" if raw_path else ""
+            raise StructuredReplyInvalid(
+                f"{StructuredReplyInvalid.cause}: {backend} returned no schema-valid result; "
+                f"structured reply could not be repaired: {diagnostic}{next_action}"
+            ) from exc
         jsonschema.validate(value, schema)
     (artifact_dir / "result.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
     return value

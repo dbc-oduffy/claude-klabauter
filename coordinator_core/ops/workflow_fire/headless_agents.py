@@ -35,6 +35,34 @@ class AgentFailed(RuntimeError):
     """The worker failed, timed out, or returned data outside its schema."""
 
 
+class AgentPolicyDenied(AgentFailed):
+    """The backend's native harness refused a tool call; `denial` is {tool, command, decision}, verbatim."""
+
+    def __init__(self, denial: dict[str, str]):
+        self.denial = denial
+        super().__init__(f"policy denial: tool={denial['tool']} command={denial['command']} "
+                         f"decision={denial['decision']}")
+
+
+_DENIAL = re.compile(r"permission required: (?P<tool>\w+) `(?P<command>.*?)`? (?P<decision>was not run, as a headless "
+                     r"run cannot ask for approval)", re.DOTALL)
+
+
+def policy_denial(artifact_dir: Path) -> dict[str, str] | None:
+    """The last native permission denial in the agent's stderr.txt or stdout.jsonl, else None."""
+    found = None
+    for name in ("stderr.txt", "stdout.jsonl"):
+        try:
+            text = (artifact_dir / name).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in _DENIAL.finditer(text):
+            found = {"tool": m["tool"], "command": m["command"], "decision": m["decision"]}
+        if found:
+            return found
+    return None
+
+
 def _codex_schema(schema: Any) -> Any:
     """Return the unchanged schema only when it already fits native strict output.
 
@@ -427,6 +455,9 @@ def run_agent(
             writeback_codex_auth(env)
     (artifact_dir / "process.json").write_text(json.dumps({"pid": proc.pid, "exit_code": proc.returncode,
         "backend": backend, "label": options.get("label")}), encoding="utf-8")
+    denial = policy_denial(artifact_dir) if backend != "claude" else None
+    if denial and proc.returncode != 0:
+        raise AgentPolicyDenied(denial)
     if proc.returncode != 0:
         raise AgentFailed(f"{backend} agent exited {proc.returncode}; see {artifact_dir / 'stderr.txt'}")
     try:
@@ -447,6 +478,8 @@ def run_agent(
         if isinstance(exc, json.JSONDecodeError) and backend == "codex" and schema is not None and not _reask:
             return _reask_unparsable(exc, last, prompt, options, schema, repo_root, artifact_dir, backend, timeout_s,
                                      on_spawn, parent_session_id)
+        if denial:
+            raise AgentPolicyDenied(denial) from exc
         raise AgentFailed(f"{backend} returned no schema-valid result: {exc}") from exc
     if backend != "claude":
         refused = _refused_submit_outputs(artifact_dir / "stdout.jsonl")

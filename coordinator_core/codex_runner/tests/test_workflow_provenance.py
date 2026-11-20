@@ -756,3 +756,72 @@ def test_codex_gate_restores_malformed_duplicate_digest_from_engine_receipt(
     assert outcome["stage_reply"]["manifest_handle"] == authoritative
     assert outcome["manifest_handle"] == authoritative
     assert len(calls) == 1
+
+
+_PLAIN_SCHEMA = {
+    "type": "object",
+    "properties": {"summary": {"type": "string"}, "tail": {"type": "string"}},
+    "required": ["summary", "tail"],
+}
+
+
+def _run_plain(tmp_path, monkeypatch, responses):
+    calls = _stub_codex(monkeypatch, tmp_path, responses=responses)
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    folder = tmp_path / "art"
+    run = lambda: workflow.run_agent(  # noqa: E731
+        "Do the stage", {"label": "halt-commit", "schema": _PLAIN_SCHEMA},
+        repo_root=tmp_path, artifact_dir=folder, parent_session_id="sid",
+    )
+    return calls, folder, run
+
+
+def _long_reply(body_char):
+    # Shaped like the 8.7-8.9k witnesses: a long string field, then a trailing field.
+    return '{"summary": "' + body_char + '", "tail": "done"}'
+
+
+def test_unparseable_reply_persists_raw_then_fails_typed(tmp_path, monkeypatch):
+    broken = '{"summary": "' + "x" * 8800 + '" "tail": "done"}'
+    calls, folder, run = _run_plain(tmp_path, monkeypatch, [broken, broken])
+    with pytest.raises(workflow.StructuredReplyInvalid) as info:
+        run()
+    assert len(calls) == 2  # one bounded re-ask, no more
+    raw = folder / "raw-reply.txt"
+    assert raw.read_text(encoding="utf-8") == broken
+    message = str(info.value)
+    assert message.startswith("structured_reply_invalid:")
+    assert f"next_action: inspect the raw reply at {raw}" in message
+    assert "could not be repaired" in message
+
+
+@pytest.mark.parametrize("literal", ["line one\nline two\ttabbed " * 350, 'said "hello" and "bye" ' * 400])
+def test_long_reply_with_literal_newlines_or_quotes_is_repaired_without_reask(tmp_path, monkeypatch, literal):
+    reply = _long_reply(literal)
+    assert 8000 < len(reply) < 12000
+    calls, folder, run = _run_plain(tmp_path, monkeypatch, [reply])
+    value = run()
+    assert len(calls) == 1
+    assert value == {"summary": literal, "tail": "done"}
+    assert json.loads((folder / "result.json").read_text(encoding="utf-8")) == value
+
+
+def test_reply_is_read_from_last_message_file_not_a_truncated_stream(tmp_path, monkeypatch):
+    full = json.dumps({"summary": "s" * 9000, "tail": "done"})
+    calls = _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps(
+        {"type": "item.completed", "item": {"type": "agent_message", "text": full[:4000]}}) + "\n")
+    inner = workflow._run_admitted
+
+    def fake(argv, prompt, **kw):
+        Path(argv[argv.index("-o") + 1]).write_text(full, encoding="utf-8")
+        return inner(argv, prompt, **kw)
+
+    monkeypatch.setattr(workflow, "_run_admitted", fake)
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    value = workflow.run_agent(
+        "Do the stage", {"label": "halt-commit", "schema": _PLAIN_SCHEMA},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    )
+    assert value["summary"] == "s" * 9000 and len(calls) == 1

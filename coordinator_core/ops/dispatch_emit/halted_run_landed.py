@@ -1363,13 +1363,13 @@ def _in_run_unclean(root: Path, run_id: str) -> Optional[str]:
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_objects import read_object
     from coordinator_core.git.git_state import _parse_tree_entries
-    from coordinator_core.ops.dispatch_emit import ask_contract
+    from coordinator_core.ops.dispatch_emit import ask_contract, ask_fanout_contract
 
     try:
         doc = _json.loads((ask_contract.record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return f"{run_id} has no readable run manifest; in_run cannot prove the write set is clean"
-    base = doc.get("head_sha") if isinstance(doc, dict) else None
+    base = ask_fanout_contract.pinned_run_base(root, run_id, doc if isinstance(doc, dict) else {})
     paths = _manifest_write_set(doc)
     if not isinstance(base, str) or not _FULL_SHA.fullmatch(base) or not paths:
         return f"{run_id} manifest names no head_sha or no review_declared_paths; in_run cannot prove the write set is clean"
@@ -1396,16 +1396,13 @@ def _derive_landing_sha(root: Path, run_id: str) -> tuple[Optional[str], Optiona
     A clean write set is unchanged between the run base and HEAD, so the base is the only sha this run
     can name; an older commit that touched the paths is not this run's (G-EM ruling, 2026-11-17).
     """
-    import json as _json
-
-    from coordinator_core.ops.dispatch_emit import ask_contract
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract
 
     problem = _in_run_unclean(root, run_id)
     if problem:
         return None, problem
-    try:
-        base = _json.loads((ask_contract.record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8"))["head_sha"]
-    except (OSError, ValueError, KeyError, TypeError):
+    base = ask_fanout_contract.pinned_run_base(root, run_id)
+    if not base:
         return None, f"{run_id} manifest is unreadable or lacks head_sha; no landing commit to name"
     return base, None
 

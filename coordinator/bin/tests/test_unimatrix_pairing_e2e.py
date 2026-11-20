@@ -111,6 +111,7 @@ def sshd(w):
             mp.setenv("SSH_ORIGINAL_COMMAND", " ".join(cmd[-2:]))
             mp.setenv("HOME", str(w.ak_b.parent.parent))
             mp.setenv("USERPROFILE", str(w.ak_b.parent.parent))
+            mp.setenv("ProgramData", str(w.tmp / "pd"))  # no sshd_config: the user file is the one sshd reads
             mp.setattr(Path, "home", classmethod(lambda cls: w.ak_b.parent.parent))
             mp.setattr(sys, "stdin", stdin)
             rc = 0
@@ -160,7 +161,7 @@ def test_doctor_names_the_unsigned_line_and_the_dead_alias(world, monkeypatch):
 
     out = io.StringIO()
     rc = DOCTOR.main([], run=run, resolve=dead, authorized_keys=w.ak_a, self_names={"boxa"}, out=out,
-                     autolink=AUTOLINK)
+                     autolink=AUTOLINK, is_admin=lambda: False)
     text = out.getvalue()
     assert rc == 1
     assert f"line 2: forced unimatrix-relay.py key ...{body(w.keys['stranger'][1])[-12:]} is in no signed membership record" in text

@@ -468,6 +468,10 @@ def _never_rewritten(root: Path, run_id: str, path: str) -> bool:
         base_form = kept_work.checkin_form(root, path, obj[1])
         if base_form is None or kept_work.blob_sha(base_form) != sha:
             return False
+        # Trap: a kept blob equal to the baseline's foreign dirt is the baseline snapshot, not a rewrite
+        # (`_unproduced` discounts it the same way); counting it read the run's own declared bytes as a peer's.
+        if _inv(root, run_id).foreign_at_baseline().get(path) == sha:
+            return True
         return not any(
             kept_work.matches_committed(root, path, kept, sha) for kept in _inv(root, run_id).own_kept().get(path, ())
         )

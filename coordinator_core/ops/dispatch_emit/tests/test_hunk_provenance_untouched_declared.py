@@ -91,6 +91,19 @@ def test_a_kept_blob_matching_the_worktree_means_the_run_wrote_it(world, monkeyp
     assert hp.untouched_declared(world, RUN, [PATH]) == []
 
 
+def test_a_kept_blob_equal_to_the_baseline_dirt_is_the_snapshot_not_a_rewrite(world, monkeypatch):
+    """The witness: baseline, kept blob and worktree are one blob; the run's own declared bytes are not a peer's."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    (world / PATH).write_bytes(PRE_RUN)
+    blob = _git(world, "hash-object", PATH)
+    monkeypatch.setattr(hp.RunInvariants, "foreign_at_baseline", lambda self: {PATH: blob})
+    monkeypatch.setattr(hp.RunInvariants, "own_kept", lambda self: {PATH: frozenset({blob})})
+    monkeypatch.setattr(kept_work, "matches_committed", lambda *a, **k: True)
+    assert hp.untouched_declared(world, RUN, [PATH]) == [PATH]
+    assert hp.peer_split(world, RUN, [PATH]) == ({}, {})
+
+
 def test_measured_rev_records_the_untouched_path_and_the_overlay_keeps_its_bytes(world):
     (world / PATH).write_bytes(PRE_RUN)
     out = mr.measured_rev(RUN, [PATH], repo_root=world)

@@ -48,8 +48,22 @@ _GROK_OPS = ("engine_ask.submit", "workflow.fire", "workflow.fire_status", "work
 def _grok_head(platform="linux", settings_home=None) -> list[str]:
     exe = Path(settings_home or Path.home() / ".coordinator-claude-settings") / "bin" / (
         "coordinator-invoke.exe" if platform == "win32" else "coordinator-invoke")
+    bin_dir = exe.parent
+    suffix = ".exe" if platform == "win32" else ""
+    workers = [a for n in ("sizing-assemble", "coordinator-doc-new")
+               for a in ("--allow", f"Bash({bin_dir / (n + suffix)}:*)")]
     return ["--permission-mode", "auto",
-            *[a for op in _GROK_OPS for a in ("--allow", f"Bash({exe} {op}:*)")]]
+            *[a for op in _GROK_OPS for a in ("--allow", f"Bash({exe} {op}:*)")], *workers]
+
+
+def test_grok_workers_may_run_only_named_engine_executables() -> None:
+    args = hel._grok_launch_args([], {}, "linux")
+    allows = [args[i + 1] for i, a in enumerate(args[:-1]) if a == "--allow"]
+    bin_dir = Path.home() / ".coordinator-claude-settings" / "bin"
+    assert f"Bash({bin_dir / 'sizing-assemble'}:*)" in allows
+    assert f"Bash({bin_dir / 'coordinator-doc-new'}:*)" in allows
+    assert not any(r in ("Bash(*)", "Bash") or r.startswith("Bash(*") for r in allows)
+    assert all(str(bin_dir) in r for r in allows)
 
 
 def _agy_head(cwd=None) -> list[str]:
@@ -598,7 +612,7 @@ def test_grok_launch_defaults_auto_with_absolute_path_allow_per_engine_op(platfo
     assert rc == 0 and argv == ["grok.exe", *_grok_head(platform, env[g.SETTINGS_HOME_KEY]), "-p", "hi"]
     assert argv[1:3] == ["--permission-mode", "auto"]
     rules = [argv[i + 1] for i, a in enumerate(argv) if a == "--allow"]
-    assert len(rules) == len(_GROK_OPS)
+    assert len(rules) == len(_GROK_OPS) + 2
     for op in _GROK_OPS:
         (rule,) = [r for r in rules if r.endswith(f" {op}:*)")]
         prefix = rule[len("Bash("):].rsplit(f" {op}:*)", 1)[0]
@@ -612,7 +626,7 @@ def test_grok_callers_permission_mode_and_allow_are_kept_not_doubled() -> None:
     rc, calls, _ = _run("grok", extra=["--permission-mode", "plan", "--allow", mine])
     argv = calls[0][1]
     assert rc == 0 and argv.count("--permission-mode") == 1 and "auto" not in argv
-    assert argv.count(mine) == 1 and argv.count("--allow") == len(_GROK_OPS)
+    assert argv.count(mine) == 1 and argv.count("--allow") == len(_GROK_OPS) + 2
 
 
 @pytest.mark.parametrize("family", ["codex", "agy"])

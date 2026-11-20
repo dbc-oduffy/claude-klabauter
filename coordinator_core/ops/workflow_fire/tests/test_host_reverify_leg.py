@@ -226,3 +226,36 @@ def test_a_partly_scoped_edit_set_keeps_the_owned_inventory(tmp_path, monkeypatc
         tmp_path, monkeypatch, {"module.py": ["test_scoped.py"]}, ["test_owned.py"], edited=("module.py", "other.py"),
     )
     assert seen == ["test_owned.py", "test_scoped.py", "test_wire.py"]
+
+
+def _base_run(tmp_path, *, pinned, manifest_head):
+    run_dir = tmp_path / "state/warp/active"
+    run_dir.mkdir(parents=True)
+    (tmp_path / "test_product.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"test_targets": ["test_product.py"], "head_sha": manifest_head}), encoding="utf-8")
+    if pinned:
+        (tmp_path / "scratch/warp/active").mkdir(parents=True)
+        (tmp_path / "scratch/warp/active/run-base").write_text(pinned + "\n", encoding="utf-8")
+
+
+def _verify_with_base(tmp_path, base):
+    return headless._verify_test_leg(
+        {"targets": ["test_product.py"], "out_path": "state/warp/active/test-leg.json", "base": base},
+        str(tmp_path), tmp_path / "host-artifacts", 60, run_id="active",
+    )
+
+
+def test_sibling_halt_commit_moving_manifest_head_does_not_refuse_the_pinned_base(tmp_path):
+    run_base, sibling_halt = "8" * 40, "6" * 40
+    _base_run(tmp_path, pinned=run_base, manifest_head=sibling_halt)
+    assert _verify_with_base(tmp_path, run_base)["tests_run"] == 1
+
+
+def test_a_base_that_is_not_the_pinned_base_refuses_with_a_typed_cause(tmp_path):
+    import pytest
+
+    _base_run(tmp_path, pinned="8" * 40, manifest_head="6" * 40)
+    with pytest.raises(headless.RunBaseMismatch, match="run_base_mismatch") as info:
+        _verify_with_base(tmp_path, "1" * 40)
+    assert info.value.pinned == ["8" * 40]

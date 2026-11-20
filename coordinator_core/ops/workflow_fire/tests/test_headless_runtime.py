@@ -235,3 +235,38 @@ def test_engine_op_direct_run_capability_excludes_nested_workflows(tmp_path):
     )
     assert code == 0, stderr
     assert events[-1]["result"] == [True, False]
+
+
+def test_policy_denial_reaches_error_event_verbatim_and_typed(tmp_path):
+    script = tmp_path / "deny.mjs"
+    script.write_text("export const meta = {}; return await agent('x');", encoding="utf-8")
+    denial = {"tool": "Execute", "command": "sizing-assemble.exe --help", "decision": "was not run"}
+    code, events, _ = run_script_reply(tmp_path, script, {"error": "AgentPolicyDenied: policy denial", "denial": denial})
+    assert code == 1
+    assert events[-1]["kind"] == "policy_denial" and events[-1]["denial"] == denial
+    assert events[-1]["error"].startswith("AgentPolicyDenied:")
+
+
+def test_plain_agent_failure_is_not_typed_as_policy_denial(tmp_path):
+    script = tmp_path / "fail2.mjs"
+    script.write_text("export const meta = {}; return await agent('x');", encoding="utf-8")
+    code, events, _ = run_script_reply(tmp_path, script, {"error": "AgentFailed: crashed"})
+    assert code == 1 and "kind" not in events[-1] and "denial" not in events[-1]
+
+
+def run_script_reply(tmp_path, script, reply):
+    child = subprocess.Popen([NODE, str(RUNTIME), str(script)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    events = []
+    try:
+        for line in child.stdout:
+            event = json.loads(line)
+            events.append(event)
+            if event["type"] == "agent":
+                child.stdin.write(json.dumps({"id": event["id"], **reply}) + "\n")
+                child.stdin.flush()
+        return child.wait(timeout=10), events, child.stderr.read()
+    finally:
+        if child.poll() is None:
+            child.kill()

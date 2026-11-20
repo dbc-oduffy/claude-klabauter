@@ -205,6 +205,29 @@ def test_deadline_never_dispatches_queued_agents_after_runtime_dies(tmp_path: Pa
     assert time.monotonic() - before < 2
 
 
+def test_cancelled_run_marker_stops_the_driver_before_the_next_agent(tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    (tmp_path / '.git').mkdir()
+    run = 'warp-2026-11-15-aaaaaa-1-foo-20261115T000000-bbbbbb'
+    run_dir = tmp_path / RECORD_DIR_ROOT / run
+    path = record(tmp_path, "const a = await agent('first'); const b = await agent('second'); return {a, b};")
+    settings = json.loads(path.read_text())
+    settings['run_id'] = run
+    path.write_text(json.dumps(settings))
+    calls = []
+    def worker(prompt, options, **kwargs):
+        calls.append(prompt)
+        halted_run.write_halt_marker(run_dir, halted='cancelled', sizing_rel='state/sizings/x.yaml')
+        return {'done': prompt}
+    result = headless.execute(path, agent_runner=worker)
+    assert calls == ['first']
+    assert result['exit_code'] == 1 and 'cancelled by workflow.cancel' in result['error']
+    assert 'halted_runs' not in result
+    assert halted_run.read_strict(run_dir)['halted'] == 'cancelled'
+
+
 def test_unreleased_start_gate_persists_failed_record_and_notifies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = record(tmp_path, 'return {};')
     value = json.loads(path.read_text())

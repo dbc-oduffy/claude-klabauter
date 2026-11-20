@@ -315,3 +315,11 @@ def test_peer_hunk_pass_skips_a_coarse_refused_candidate(repo, monkeypatch):
     refused, _named = halted_record_commit._peer_hunks_excluded(repo, RUN, ["pkg/x.py"], {})
 
     assert refused == []
+
+
+@pytest.mark.parametrize("bad", ["{not json", "[1, 2]", 7])
+def test_malformed_halted_by_is_a_typed_refusal_not_a_raise(tmp_path, bad):
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
+
+    reply = commit_halted_record(tmp_path, tmp_path, {"halted_by": bad, "run_id": "warp-x"})
+    assert reply["refused"] == "halted-by-malformed-json"

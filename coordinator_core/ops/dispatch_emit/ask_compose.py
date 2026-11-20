@@ -6634,9 +6634,14 @@ def compose_ask_script(
         "  };"
     )
     b.append("  if (!_halted && (!_resumeLedger || _ledgerExec)) {")
-    # The base is the staged manifest's head_sha (execute-start HEAD, written by the stage op without a
-    # spawn); no agent reads HEAD.
+    # The base is the staged manifest's run_base_sha (the pinned run base, present when it differs from the
+    # stage-time HEAD), else its head_sha (execute-start HEAD, written by the stage op without a spawn);
+    # no agent reads HEAD.
     b.append(f"  {_emit._RUN_BASE_VAR} = /^[0-9a-f]{{40}}$/.test(String(_manifest?.head_sha ?? '')) ? _manifest.head_sha : '';")
+    b.append(
+        "  if (/^[0-9a-f]{40}$/.test(String(_manifest?.run_base_sha ?? ''))) "
+        f"{{ {_emit._RUN_BASE_VAR} = _manifest.run_base_sha; }}"
+    )
     b.append(
         f"  if (!_runBase || !{_RUNTIME_PLAN_PATH_JS}) {{ _halted = {{ halted: "
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, "
@@ -7709,10 +7714,9 @@ def _chain_stage_loop_js() -> str:
         f"          const _pfx = {_lit(prefix)}; const _sa = _tw.length - _suf.length - 64; const _ma = _sa - {_lit(middle)}.length;",
         f"          const _own = (typeof _tw === 'string' && _tw.startsWith(_pfx) && _tw.endsWith(_suf) && _ma > _pfx.length && _tw.slice(_ma, _sa) === {_lit(middle)} "
         "&& /^[0-9a-f]{64}$/.test(_tw.slice(_sa, _sa + 64))) ? _tw.slice(_pfx.length, _ma) : null;",
-        "          if (_own === null || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_own) || _fam(_own) !== _fam(_wid)) "
-        "{ _why = 'stage_pending twin_path is not a staged twin of this run'; break; }",
-        "          _rel = _tw;",
-        "        } else {",
+        "          if (_own !== null && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_own) && _fam(_own) === _fam(_wid)) _rel = _tw;",
+        "        }",
+        "        if (_rel === undefined) {",
         "          if (typeof _sh !== 'string' || !/^[0-9a-f]{64}$/.test(_sh)) { _why = 'stage_pending was not resumable'; break; }",
         "          _rel = _pre + _sh + _suf;",
         "        }",

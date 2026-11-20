@@ -55,6 +55,8 @@ def _classify_marker(run_id: str, marker: dict) -> dict:
             return _reply(run_id, False, True, "halt released; still resumable")
         return _reply(run_id, False, True, "live halt")
     if status == halted_run.STATUS_RESUMED:
+        if marker.get(halted_run.STALL_CLEARED_FIELD):
+            return _reply(run_id, False, False, "staged stall cleared; the run is live")
         return _reply(run_id, False, False, "resumed by a successor run")
     return _reply(run_id, False, False, "unrecognised halt marker status")
 

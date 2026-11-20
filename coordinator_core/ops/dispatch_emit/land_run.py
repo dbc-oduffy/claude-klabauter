@@ -189,6 +189,33 @@ def drift_reason_for_leg(reason: str, inline_review: object) -> str:
     return reason
 
 
+#: ``cause`` a refusal carries when the test leg itself failed (no review returned): an infrastructure
+#: fault with a retry path, never a verdict on a requirement.
+TEST_LEG_INFRA_CAUSE = "test_leg_infra"
+TEST_LEG_INFRA_RETRY = (
+    "the test leg returned no review, so the measurement is stale and no requirement is judged unmet. "
+    "Re-run the review stage's test leg (re-fire the run's review-only emit) and land again"
+)
+
+
+def leg_stale_met_failures(
+    items: object, reason: str, inline_review: object, resume: object = None
+) -> list:
+    """``[{id, reason}]`` (plus ``cause`` when the test leg left no review) of the ``met`` ``items`` a
+    drifted measurement stales. When the test leg left no review, a ``met`` item an EM-performed row
+    discharged (``_em_discharged_rows``) stands on that discharge, not on the lost measurement, so it
+    is not staled. No I/O."""
+    rows = [i for i in (items if isinstance(items, list) else []) if isinstance(i, dict)]
+    leg = test_leg_failure(inline_review) is not None
+    exempt = _em_discharged_rows(resume, rows) if leg else frozenset()
+    cause = {"cause": TEST_LEG_INFRA_CAUSE} if leg else {}
+    return [
+        {"id": i.get("id"), "reason": reason, **cause}
+        for i in rows
+        if i.get("status") == "met" and str(i.get("id")) not in exempt
+    ]
+
+
 def held_revision_refusal(root: Path, ledger: object, run_dir: Path) -> Optional[dict]:
     """Refusal (``refused="held-revision-unconsumed"``) when a ``workflow.revise`` held for the
     ledger's sizing was never folded into the run; else None. One indexed read, shared by both commit gates."""
@@ -307,6 +334,7 @@ def _dispatch_admitted(mode: str, root: Path, repo_root: Path, params: dict, bud
                         root, params.get("run_id"),
                         outcome=reply.get("land_outcome") or land_leg_record.OUTCOME_LANDED,
                         leg=None, bound_by=None, legs=land_deadline.leg_costs(),
+                        withheld_reasons=reply.get("withheld_reasons") or {},
                     )
                     _chain_landed_tranche(root, params, reply)
                 return reply
@@ -2006,12 +2034,7 @@ def _ledger_gate(
         drifted, drift_reason = ["<record>"], "measured-rev-record-unreadable"
     drift_reason = drift_reason_for_leg(drift_reason, inline_review)
     if drifted:
-        items = verdict.get("items")
-        stale_met = [
-            {"id": i.get("id"), "reason": drift_reason}
-            for i in (items if isinstance(items, list) else [])
-            if isinstance(i, dict) and i.get("status") == "met"
-        ]
+        stale_met = leg_stale_met_failures(verdict.get("items"), drift_reason, inline_review, resume_ledger)
         if stale_met:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale_met]}
     baseline = manifest_data.get("write_baseline") if isinstance(manifest_data, dict) else None
@@ -2134,9 +2157,13 @@ def _ledger_gate(
             "paths": since_halt["landed_paths"], "since_halt": since_halt,
             "error": None, "refused": None, "close": None,
         }, ledger, []
+    infra = {"cause": TEST_LEG_INFRA_CAUSE, "retry": TEST_LEG_INFRA_RETRY} if any(
+        isinstance(f, dict) and f.get("cause") == TEST_LEG_INFRA_CAUSE for f in result["failures"]
+    ) else {}
     return _error(
         message,
         refused="ledger-unmet",
+        **infra,
         ledger_failures=result["failures"],
         ledger_items=len(ledger.items),
         all_of_pm_ask=ledger.all_of_pm_ask,
@@ -5802,11 +5829,35 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         | (set(landable_artifacts.paths()) if landable_artifacts is not None else set()),
     ))
 
+    outside_now = sorted(p for p in measured_carries if p not in landed_now_set)
+    dirty_now: Optional[set] = None
+    if outside_now:
+        try:
+            changed_now, ignored_now, _h = _dirty_among(root, outside_now)
+            dirty_now = changed_now - ignored_now
+        except Exception:  # noqa: BLE001 -- an unreadable store keeps every outside path reported
+            dirty_now = None
     coverage = _land_coverage(
         measured_carries, landed_now_set, reply.get("withheld") or {}, request.plan_path, sibling_run_id,
+        dirty=dirty_now,
     )
     if coverage:
         reply.update(coverage)
+        if manifest is not None and isinstance(params.get("ledger_verdict"), dict):
+            from coordinator_core.ops.dispatch_emit import terminal_commit_ledger as _tcl
+
+            unmet_verdict, unmet = _tcl.withheld_evidence_unmet(
+                params["ledger_verdict"], coverage["withheld_reasons"],
+                {r.id: tuple(r.writes) for r in manifest.rows}, {r.id: tuple(r.register_rows) for r in manifest.rows},
+            )
+            if unmet:
+                reply["ledger_unmet"] = unmet
+                reply["exit_criterion_not_stamped"] = (
+                    f"ledger rows not reported met: evidence path withheld ({', '.join(sorted(unmet))})"
+                )[:_UNDONE_CAP]
+                if ledger_met:
+                    met_ids = _ledger_met_ids(unmet_verdict)
+                    ledger_met = ("ledger-met: " + ", ".join(met_ids))[:_UNDONE_CAP] if met_ids else None
 
     # ---- the close job
     if applies:
@@ -5897,26 +5948,35 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 _BOOKKEEPING_PREFIXES = ("state/sizings/", "state/warp/", "scratch/warp/", "docs/delivery/", "docs/plans/")
 
 
+#: Reason for a measured, still-dirty path no landing leg named: the gap is reported, never blank.
+UNATTRIBUTED_LEFT_REASON = "left out of the commit; no landing leg recorded a reason"
+
+
 def _land_coverage(
     measured: Iterable[str], landed: set, withheld: Mapping, plan_path: Optional[str], run_id: Optional[str],
+    dirty: Optional[set] = None,
 ) -> Optional[dict]:
     """Reply fields typing a commit that carries less than the run's measured code, else None.
 
     `landed_no_code`: the commit holds none of the measured non-bookkeeping paths. `partial`: it holds
-    some. Reads data the land already loaded; spawns nothing."""
+    some. A measured path outside the commit that is not in `dirty` (when given) is clean and already at
+    HEAD: it counts as landed-at-base, listed in `landed_at_base`, never as left out. Every path left out
+    carries its cause in `withheld_reasons`. Reads data the land already loaded; spawns nothing."""
     plan = (plan_path or "").replace("\\", "/")
     code = sorted(
         p for p in set(measured)
         if p != plan and not p.startswith(_BOOKKEEPING_PREFIXES)
     )
-    left = [p for p in code if p not in landed]
+    outside = [p for p in code if p not in landed]
+    at_base = [p for p in outside if dirty is not None and p not in dirty]
+    left = [p for p in outside if p not in at_base]
     if not left:
         return None
-    named = {p: str(withheld.get(p) or "left dirty: neither landed nor withheld") for p in left}
+    named = {p: str(withheld.get(p) or UNATTRIBUTED_LEFT_REASON) for p in left}
     none_landed = len(left) == len(code)
     outcome = land_leg_record.OUTCOME_LANDED_NO_CODE if none_landed else land_leg_record.OUTCOME_PARTIAL
     out = {
-        "land_outcome": outcome, "withheld_code": named,
+        "land_outcome": outcome, "withheld_code": named, "withheld_reasons": dict(named),
         "error": f"{outcome}: commit carries {len(code) - len(left)} of {len(code)} measured code path(s); "
                  f"withheld: {', '.join(f'{p} ({r})' for p, r in named.items())}"[:_UNDONE_CAP],
         "next_action": {
@@ -5924,6 +5984,8 @@ def _land_coverage(
             "after": "hand-land the withheld paths, or refire the run",
         },
     }
+    if at_base:
+        out["landed_at_base"] = at_base
     if none_landed:
         out["ok"] = False
     return out

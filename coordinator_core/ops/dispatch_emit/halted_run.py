@@ -898,6 +898,22 @@ def mark_resumed(record_dir: Path) -> bool:
     return True
 
 
+STALL_CLEARED_FIELD = "stall_cleared"
+
+
+def mark_stall_cleared(record_dir: Path, evidence: dict) -> bool:
+    """Rewrite a `halted` / `staged_stall` marker as `resumed` carrying `evidence` under `STALL_CLEARED_FIELD`
+    and return the stage to `staged`; False and no write for any other marker. The run never stopped, so
+    unlike `mark_resumed` its live-run row is kept."""
+    marker = _read(Path(record_dir))
+    if marker is None or marker.get("status") != STATUS_HALTED or marker.get("halted") != "staged_stall":
+        return False
+    _write(Path(record_dir), {**marker, "status": STATUS_RESUMED, STALL_CLEARED_FIELD: evidence})
+    _index_call("remove_run", record_dir)
+    stamp_run_stage_at(Path(record_dir), "staged")
+    return True
+
+
 def mark_superseded(record_dir: Path, expected: dict, evidence: dict, dispositions: Optional[dict] = None) -> bool:
     """Rewrite the marker as `superseded` with `evidence` only if it still equals `expected` (the marker the
     caller verified against); False and no write when it is absent, changed, or no longer `halted`.

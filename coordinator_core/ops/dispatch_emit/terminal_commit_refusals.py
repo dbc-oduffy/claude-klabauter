@@ -945,7 +945,8 @@ def _missing_run_outcome(params: object) -> Optional[dict]:
 
 
 def _measured_rev_drift_refusal(
-    run_dir: Path, worktree_root: Path, verdict: dict, ledger: object, inline_review: object = None
+    run_dir: Path, worktree_root: Path, verdict: dict, ledger: object, inline_review: object = None,
+    resume_ledger: object = None,
 ) -> Optional[dict]:
     """A ``ledger-unmet`` refusal (reason ``measured-rev-drift``) when a ``met`` item stands on a
     measurement whose recorded blobs no longer match the worktree; None when nothing drifted, no
@@ -953,12 +954,18 @@ def _measured_rev_drift_refusal(
     left no review (``land_run.test_leg_failure``), the reason is ``test-leg-error`` instead: the
     stale measurement is the leg's failure, not the requirement's."""
     from coordinator_core.ops.dispatch_emit import measured_rev
-    from coordinator_core.ops.dispatch_emit.land_run import drift_reason_for_leg
+    from coordinator_core.ops.dispatch_emit.land_run import (
+        TEST_LEG_INFRA_CAUSE,
+        TEST_LEG_INFRA_RETRY,
+        drift_reason_for_leg,
+        leg_stale_met_failures,
+    )
 
-    met = [
-        str(i["id"]) for i in verdict.get("items") or []
-        if isinstance(i, dict) and i.get("status") == "met" and i.get("id") is not None
+    stale = [
+        f for f in leg_stale_met_failures(verdict.get("items"), "", inline_review, resume_ledger)
+        if f["id"] is not None
     ]
+    met = [str(f["id"]) for f in stale]
     if not met:
         return None
     try:
@@ -972,10 +979,12 @@ def _measured_rev_drift_refusal(
     reason = drift_reason_for_leg(reason, inline_review)
     if reason.startswith("test-leg-error"):
         detail = reason
+    infra = {"cause": TEST_LEG_INFRA_CAUSE, "retry": TEST_LEG_INFRA_RETRY} if reason.startswith("test-leg-error") else {}
     return _error(
         f"the requirements are not met: {', '.join(met)}: {detail}. Re-measure and re-run the ledger check",
         refused="ledger-unmet",
-        ledger_failures=[{"id": i, "reason": reason} for i in met],
+        **infra,
+        ledger_failures=[{"id": f["id"], "reason": reason, **({"cause": f["cause"]} if "cause" in f else {})} for f in stale],
         ledger_items=len(ledger.items),
         all_of_pm_ask=ledger.all_of_pm_ask,
         awaiting_operator=[],
