@@ -175,8 +175,12 @@ def test_bare_mode_keeps_stdout_the_result_and_advises_on_stderr(tmp_path, monke
 
 @pytest.mark.parametrize(
     "env",
-    [{}, {"COORDINATOR_AGENT_PROVIDER": "codex", "COORDINATOR_AGENT_ROLE": "worker"}],
-    ids=["claude-or-unmarked", "subagent"],
+    [
+        {},
+        {"COORDINATOR_AGENT_PROVIDER": "codex", "COORDINATOR_AGENT_ROLE": "worker"},
+        {"COORDINATOR_AGENT_PROVIDER": "codex", "COORDINATOR_AGENT_ROLE": "workflow-agent"},
+    ],
+    ids=["claude-or-unmarked", "subagent", "workflow-agent"],
 )
 def test_claude_and_subagent_callers_get_no_advisory(tmp_path, monkeypatch, env):
     over = _repo(tmp_path, files=3, lines_each=13)
