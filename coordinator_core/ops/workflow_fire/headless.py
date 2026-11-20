@@ -93,7 +93,7 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
           backend: str = 'codex', concurrency_cap: int = fire.DEFAULT_CONCURRENCY_CAP,
           timeout_s: int = 7200, args: dict | None = None, run_id: str | None = None,
           caller_session_id: str | None = None, expected: str | None = None,
-          private_engine: dict | None = None) -> dict:
+          private_engine: dict | None = None, refire: bool = False) -> dict:
     check_backend(backend)
     if type(concurrency_cap) is not int or concurrency_cap < 1:
         raise ValueError('concurrency_cap must be a positive integer')
@@ -116,13 +116,15 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
     if sandboxed_spawn.caller_is_sandboxed():
         forward = {'script_path': str(script), 'cwd': str(repo), 'backend': backend, 'executor': 'headless',
                    'expected': expected, 'run_id': run_id, 'args': args, 'caller_session_id': caller_session_id,
-                   'notify_to': notify_to, 'concurrency_cap': concurrency_cap, 'timeout_s': timeout_s}
+                   'notify_to': notify_to, 'concurrency_cap': concurrency_cap, 'timeout_s': timeout_s,
+                   'refire': refire or None}
         if private_engine is not None:
             forward['private_engine'] = private_engine
         return sandboxed_spawn.forward_spawn_to_warm('workflow.fire', {k: v for k, v in forward.items() if v is not None}, str(repo))
     worker_root = Path(__file__).resolve().parents[3] if private_spec is not None else _worker_engine_root()
     registry, identifier, record_path, record = fire.reserve_fire(
         script, repo, digest, expected=expected, concurrency_cap=concurrency_cap, notify_to=notify_to,
+        refire=refire,
     )
     if record.get('already_fired'):
         return record
@@ -488,6 +490,9 @@ def _run_pinned_test_leg(
     return proc.returncode, measured
 
 
+_EVICTED_SKIP = "evicted by this run's halt (parked out of the tree); not run"
+
+
 def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *, run_id: str) -> dict:
     root = Path(repo).resolve()
     if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_id):
@@ -517,8 +522,9 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
     dropped = [t for t in targets if t.split("::", 1)[0] in evicted]
     targets = [t for t in targets if t not in dropped]
     if dropped and not targets:
-        measured = {"status": "pass", "tests_run": 0, "tests_failed": 0,
-                    "summary": "every target was evicted by this run's halt; nothing to run"}
+        measured = {"status": "pass-with-skips", "tests_run": 0, "tests_failed": 0,
+                    "summary": "every target was evicted by this run's halt; nothing to run",
+                    "skipped": [{"test": t, "reason": _EVICTED_SKIP} for t in dropped]}
         _save(output, measured)
         return {**measured, "evicted_targets": dropped, "sidecar_path": output.relative_to(root).as_posix()}
     exit_code, measured = _run_pinned_test_leg(root, output, artifacts, targets, base, timeout)
@@ -526,6 +532,19 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
               "skipped", "summary", "importer_overrun", "tripwires_not_run", "zero_run_cause")
     result = {key: measured[key] for key in fields if key in measured}
     result["sidecar_path"] = output.relative_to(root).as_posix()
+    # Invariant: a declared target that did not run is a skip, never a silent pass: 19 green tests must not
+    # read as covering a regression test that was parked or absent.
+    unrun = [*dropped, *(t for t in measured.get("missing_targets", []) if t not in dropped)]
+    if unrun:
+        result["skipped"] = [
+            *result.get("skipped", []),
+            *({"test": t, "reason": _EVICTED_SKIP if t in dropped else "target missing from the tree; not run"}
+              for t in unrun),
+        ]
+        if dropped:
+            result["evicted_targets"] = dropped
+        if result["status"] == "pass":
+            result["status"] = "pass-with-skips"
     if exit_code:
         result["status"] = "error"
     return result

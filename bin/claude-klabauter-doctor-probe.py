@@ -4966,7 +4966,7 @@ def _run_probe_warm_generation(claude_klabauter_root: Path | None) -> _ProbeResu
                 })
                 continue
 
-            breadcrumb_pipe_token = pipe.rsplit(".", 1)[-1]
+            breadcrumb_pipe_token = breadcrumb.endpoint_token(pipe)
             stale = _warm_generation_current_token_stale(engine_root, breadcrumb_pipe_token)
 
             if stale is None:

@@ -35,7 +35,7 @@ _SCAFFOLD = {"ask": "", "ask_source": "pm"}
 
 _EXTRA_KEYS = (
     "em_context", "context", "brief", "brief_file", "route_preference", "em_rationale", "em_size",
-    "stop_after", "chatty", "cross_repo_approved", "supersedes", "writes",
+    "stop_after", "chatty", "cross_repo_approved", "supersedes", "writes", "resume_run_id", "resume_in_place",
 )
 _KNOWN_KEYS = frozenset(
     ("ask", "sizing", "ask_source", "session_id", "caller", "cwd", "repo", "agent_id", "fire", "notify_to", "executor", "backend", "private_engine", *_EXTRA_KEYS)

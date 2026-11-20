@@ -146,7 +146,8 @@ _WITHHELD_ROW = {"items": [{"id": "R1", "status": "not_met", "essential": True, 
 def test_a_blocked_chunk_a_fixed_remnant_covers_no_longer_excuses_its_not_met_row(replay):
     out = _terminal(replay, ledger_verdict=_WITHHELD_ROW)
     assert out["refused"] == "ledger-unmet", out
-    assert "withheld_by C1 names no gated chunk" in out["error"], out
+    assert "names no gated chunk" not in out["error"], out
+    assert "withheld_by C1 was repaired by a later remnant pass" in out["error"], out
 
 
 def test_a_blocked_chunk_no_fixed_remnant_covers_still_excuses_its_not_met_row(replay):

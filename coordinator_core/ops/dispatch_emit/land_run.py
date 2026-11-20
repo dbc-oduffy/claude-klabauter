@@ -1949,7 +1949,7 @@ def _ledger_gate(
     root: Path, run_dir: Path, verdict: object, manifest_abs: Optional[Path], gated: Sequence[str],
     operator: dict, plan_text: Optional[str], inline_review: dict, resume_ledger: object,
     plan_rel: Optional[str], fence: Optional[dict] = None, recovery_reasons: Optional[dict] = None,
-    code_paths: Sequence[str] = (), advisories: Optional[list] = None,
+    code_paths: Sequence[str] = (), advisories: Optional[list] = None, mended: Sequence[str] = (),
 ) -> tuple[Optional[dict], object, list]:
     """``(refusal or None, ledger, open rows)`` for a ledger-bearing ask run: the refusal when the
     verdict does not pass ``requirements_ledger.judge`` against the live register rows (a not_met row a
@@ -1990,7 +1990,7 @@ def _ledger_gate(
         wave_reviews=[w for w in inline_review.get("wave_reviews") or [] if isinstance(w, dict)],
         noted_paths=requirements_ledger.noted_paths(root, run_dir),
         code_paths=code_paths, review_verdicts=review_floor.verdict_count(inline_review, root),
-        note_ids=requirements_ledger.note_ids(run_dir),
+        note_ids=requirements_ledger.note_ids(run_dir), mended=mended,
     )
     from coordinator_core.ops.dispatch_emit import measured_rev
 
@@ -3995,6 +3995,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     recovery_ids = list(dict.fromkeys(params.get(RECOVERY_WITHHELD_PARAM) or ()))
     recovery_chunks: dict = {}
     recovery_reasons: dict = {}
+    mended: set = set()
     if recovery_ids:
         recovery_chunks = _recovery_chunks(root, ask_run_dir)
         from coordinator_core.ops.dispatch_emit import credit_gate as _cg
@@ -4083,7 +4084,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated], requirements_ledger.owed_rows(manifest.owed),
             plan_text, inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path, fence,
-            recovery_reasons, code_paths=floor_code, advisories=ledger_advisory,
+            recovery_reasons, code_paths=floor_code, advisories=ledger_advisory, mended=sorted(mended),
         )
         if unmet is not None:
             if not (unmet.get(ALREADY_LANDED_KEY) and unmet.get("committed")):

@@ -6700,15 +6700,9 @@ def compose_ask_script(
     if routed:
         b.append(_route_js.routed_run_js())
         b.append(_ROUTE_ADAPTER_JS)
-    # Trap: the stage defers row brief files above LAZY_BRIEFS_ABOVE_ROWS rows; each wave's files must exist before its agents launch.
-    b.append("  for (const w of _waves) {")
-    b.append(
-        f"    if (_manifest.rows.length > {_emit.LAZY_BRIEFS_ABOVE_ROWS} && typeof _stageRecover === 'function') "
-        "{ _stageRecoverParams.wave = w; const _mat = await _stageRecover(); delete _stageRecoverParams.wave; "
-        "if (!_mat) log('brief materialisation returned no reply for wave ' + w); "
-        "else if (_mat.stage_reply?.error) throw new Error('brief materialisation failed for wave ' + w + ': ' + String(_mat.stage_reply.error)); }"
-    )
-    b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) {")
+    # Invariant: `_launchRow` is the one dispatch of a manifest row. The wave loop and `_lateLeg` both call it, so a
+    # row a revise or re-plan added meets the same reviewer, kept, route, family and group arms as an original row.
+    b.append("  const _launchRow = (r) => {")
     b.extend(_reviewer_row_js(anchor, work_label, run_id))
     routed_arm = f"r.route ? {_routed_row_js(work_label, exec_phase)} : " if routed else ""
     b.append(
@@ -6717,7 +6711,16 @@ def compose_ask_script(
         f"agentType: r.agent_type, model: r.model, effort: {_js_string_literal(_ROW_EFFORT)}, stallMs: {_emit._EXECUTOR_STALL_MS} }}), "
         "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });"
     )
-    b.append("    }")
+    b.append("  };")
+    # Trap: the stage defers row brief files above LAZY_BRIEFS_ABOVE_ROWS rows; each wave's files must exist before its agents launch.
+    b.append("  for (const w of _waves) {")
+    b.append(
+        f"    if (_manifest.rows.length > {_emit.LAZY_BRIEFS_ABOVE_ROWS} && typeof _stageRecover === 'function') "
+        "{ _stageRecoverParams.wave = w; const _mat = await _stageRecover(); delete _stageRecoverParams.wave; "
+        "if (!_mat) log('brief materialisation returned no reply for wave ' + w); "
+        "else if (_mat.stage_reply?.error) throw new Error('brief materialisation failed for wave ' + w + ': ' + String(_mat.stage_reply.error)); }"
+    )
+    b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) _launchRow(r);")
     # Wave barrier: wave w+1 launches only once wave w's commit:wave-w leg has settled.
     b.append("    const _waveIds = _manifest.rows.filter((x) => x.wave === w).map((x) => x.id);")
     b.append("    await Promise.allSettled(_waveIds.map((i) => _rows[i]));")
@@ -6761,13 +6764,13 @@ def compose_ask_script(
             f"{_REVIEW_CODE_KEY}: _u(_manifest.{_REVIEW_CODE_KEY}, _lateM.{_REVIEW_CODE_KEY}), "
             "test_targets: _u(_manifest.test_targets, _lateM.test_targets), "
             "gated: _u(_manifest.gated, _lateM.gated), owed: _u(_manifest.owed, _lateM.owed) };\n"
-            "      for (const r of _lateRows) {\n"
-            f"        _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => {family_arm}r.group ? _groupRun(r) : agent(_rowPrompt(r), "
-            f"{{ label: {work_label} + r.id, phase: {exec_phase}, "
-            f"agentType: r.agent_type, model: r.model, effort: {_js_string_literal(_ROW_EFFORT)}, stallMs: {_emit._EXECUTOR_STALL_MS} }}), "
-            "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });\n"
+            "      for (const w of [...new Set(_lateRows.map((r) => r.wave))].sort((a, b) => a - b)) {\n"
+            f"        if ((_lateM.rows ?? []).length > {_emit.LAZY_BRIEFS_ABOVE_ROWS} && typeof _stageRecover === 'function') "
+            "{ _stageRecoverParams.wave = w; const _mat = await _stageRecover(); delete _stageRecoverParams.wave; "
+            "if (!_mat || _mat.stage_reply?.error) log('late brief materialisation failed for wave ' + w); }\n"
+            "        for (const r of _lateRows.filter((x) => x.wave === w)) _launchRow(r);\n"
+            "        await Promise.allSettled(_lateRows.filter((x) => x.wave === w).map((x) => _rows[x.id]));\n"
             "      }\n"
-            "      await Promise.allSettled(_lateRows.map((r) => _rows[r.id]));\n"
             "      const _lateServed = new Set(_lateRows.flatMap((r) => Array.isArray(r.register_rows) ? r.register_rows.map(String) : []));\n"
             "      const _lateRest = _ids.filter((i) => !_lateServed.has(String(i)));\n"
             "      if (_lateRest.length) { _lateUnplanned = [...new Set([..._lateUnplanned, ..._lateRest])]; "

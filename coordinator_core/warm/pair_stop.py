@@ -168,6 +168,42 @@ def find_pair_processes(engine_root: Path, *, psutil_module=None) -> list[PairPr
     return found
 
 
+def find_servers_under_other_roots(engine_root: Path, *, psutil_module=None) -> list[tuple[int, str]]:
+    """`(pid, root)` of warm servers running from a root other than `engine_root`.
+
+    Lets a stop that found nothing for its own root say where the engine it was
+    probably meant to stop is running (a moved or re-cloned tree). Read-only:
+    one process scan, no filesystem work beyond normalising the root.
+    """
+    psutil = psutil_module
+    if psutil is None:
+        import psutil
+
+    mine = _norm(engine_root)
+    tail = _ROLE_SCRIPTS[ROLE_SERVER]
+    found: list[tuple[int, str]] = []
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            if not (proc.info.get("name") or "").lower().startswith("python"):
+                continue
+            argv = proc.cmdline()
+            pid = proc.info["pid"]
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        for a in argv:
+            if not a.lower().endswith(".py"):
+                continue
+            segs = os.path.normpath(a).replace("\\", "/").split("/")
+            if tuple(segs[-3:]) == tail:
+                root = os.path.normpath(a)
+                for _ in tail:
+                    root = os.path.dirname(root)
+                if _norm(root) != mine:
+                    found.append((pid, root))
+                break
+    return found
+
+
 def _read_line_with_deadline(fh, deadline_secs: float) -> "bytes | None":
     import threading
 
