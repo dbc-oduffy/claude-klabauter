@@ -359,6 +359,15 @@ def record_setup_concluded(receipt: SetupReceipt, env: Optional[dict] = None) ->
     """
     state_file = _state_file(env)
     if _key_recorded("setup_concluded_at", state_file):
+        # The stamp stays; only a withheld block from a later run that has since cleared is dropped.
+        try:
+            with open(state_file, encoding="utf-8") as fh:
+                content = fh.read()
+            if _WITHHELD_BLOCK_RE.search(content):
+                _atomic_write(state_file, _WITHHELD_BLOCK_RE.sub("", content))
+        except OSError as exc:
+            sys.stderr.write(f"coordinator-setup-state: mktemp failed (clear withheld): {exc}\n")
+            return 1
         print("setup_concluded_at already recorded; leaving unchanged.")
         return 0
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

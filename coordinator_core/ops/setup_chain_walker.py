@@ -76,6 +76,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+if __package__ in (None, ""):
+    # Run as a file (`python3 <root>/coordinator_core/ops/setup_chain_walker.py`): root the import
+    # at the engine checkout this file lives in. The script's own directory leaves sys.path so
+    # sibling module names cannot shadow the stdlib.
+    _here = Path(__file__).resolve()
+    sys.path[:] = [p for p in sys.path if os.path.normcase(os.path.abspath(p or ".")) != os.path.normcase(str(_here.parent))]
+    if str(_here.parents[2]) not in sys.path:
+        sys.path.insert(0, str(_here.parents[2]))
+
 from coordinator_core.content_root import ENGINE_CONTENT_ROOT_KEY
 from coordinator_core.coordinator_root import _resolve_plugin_root_for_machine_local
 from coordinator_core.install import prereq_probe

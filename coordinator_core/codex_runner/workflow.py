@@ -998,14 +998,25 @@ _GATE_SCALARS = re.compile(r'"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|
 
 
 def _gate_envelope_result(value: Any) -> Any:
+    """Unwrap the JSON-RPC reply a gate relay echoes verbatim.
+
+    Relays append sibling keys beside ``result``: ``note`` (prose), ``_execution`` (the CLI's
+    exit-code/params-file trailer) and an outer ``halt: null``. Each is lossless to drop; the outer
+    ``halt`` only when it is null and the result's own ``halt`` is null too, so a real halt is never
+    masked. Any other key stays wrapped and fails validation.
+    """
     if not isinstance(value, dict) or value.get("jsonrpc") != "2.0":
         return value
-    keys = set(value)
-    if keys == {"jsonrpc", "id", "result"} or (
-        keys == {"jsonrpc", "id", "result", "note"} and isinstance(value["note"], str)
-    ):
-        return value["result"]
-    return value
+    extra = set(value) - {"jsonrpc", "id", "result"}
+    result = value.get("result")
+    if "result" not in value or not extra <= {"note", "_execution", "halt"}:
+        return value
+    if (("note" in extra and not isinstance(value["note"], str))
+            or ("_execution" in extra and not isinstance(value["_execution"], dict))
+            or ("halt" in extra and not (
+                value["halt"] is None and isinstance(result, dict) and result.get("halt") is None))):
+        return value
+    return result
 
 
 def _bind_gate_manifest_digest(value: Any, repo_root: Path, run_id: Any) -> Any:
@@ -1063,21 +1074,6 @@ def _gate_reask_preserves_scalars(initial: str, retry: str) -> bool:
         if wrapper is not None:
             return _GATE_SCALARS.findall(initial[wrapper.end():]) == _GATE_SCALARS.findall(retry)
     return False
-
-
-def _gate_redundant_halt_payload(text: str) -> dict | None:
-    """Recover the payload for retry comparison, without accepting the invalid wrapper."""
-    try:
-        outer = json.loads(text)
-    except ValueError:
-        return None
-    if not isinstance(outer, dict) or set(outer) != {"jsonrpc", "id", "result", "halt"}:
-        return None
-    payload = outer["result"]
-    if (outer["jsonrpc"] == "2.0" and outer["halt"] is None
-            and isinstance(payload, dict) and "halt" in payload and payload["halt"] is None):
-        return payload
-    return None
 
 
 def run_agent(
@@ -1317,7 +1313,6 @@ def run_agent(
             from coordinator_core.ops.dispatch_emit.run_truth_contract import ARMS
 
             retry_dir = artifact_dir / ("gate-reask" if codex_gate else "reply-reask")
-            wrapper_payload = _gate_redundant_halt_payload(text) if codex_gate else None
             context = {"diagnostic": diagnostic, "reply": text}
             if codex_gate:
                 context["allowed_arm_values"] = [*ARMS, None]
@@ -1332,13 +1327,6 @@ def run_agent(
                 "If that is impossible, return null.\n"
                 + retry_data
             )
-            if wrapper_payload is not None:
-                retry_prompt = (
-                    "Return only the JSON-RPC result object from the following data, byte values "
-                    "and key order unchanged. The outer halt:null duplicates the inner halt:null. "
-                    "Do not run any tools or repeat the gate operation.\n"
-                    + retry_data
-                )
             try:
                 repaired = run_agent(
                     retry_prompt, {k: v for k, v in options.items() if k != "agentType"},
@@ -1349,13 +1337,7 @@ def run_agent(
                 )
                 repaired_text = (retry_dir / "last.txt").read_text(encoding="utf-8")
                 # A schema-valid prefix can still omit acceptance or manifest fields.
-                if wrapper_payload is not None:
-                    bound_payload = _bind_gate_manifest_digest(
-                        wrapper_payload, repo_root, options.get("gateManifestRunId"),
-                    )
-                    if json.dumps(bound_payload) == json.dumps(repaired):
-                        value = repaired
-                elif codex_gate and _gate_reask_preserves_scalars(text, repaired_text):
+                if codex_gate and _gate_reask_preserves_scalars(text, repaired_text):
                     value = repaired
                 elif not codex_gate and _GATE_SCALARS.findall(text) == _GATE_SCALARS.findall(repaired_text):
                     value = repaired

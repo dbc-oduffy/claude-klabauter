@@ -100,3 +100,33 @@ def test_review_reverify_batches_prefixes_into_one_reply(tmp_path):
         "no pre-review snapshot for p0", "no pre-review snapshot for p1",
     ]
     assert review_reverify._handler({"slice_prefixes": "p0"}, tmp_path)["error"]
+
+
+def _evicted_run(tmp_path, targets, evicted):
+    run_dir = tmp_path / "state/warp/r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(json.dumps({"test_targets": targets}), encoding="utf-8")
+    (run_dir / "evicted.json").write_text(
+        json.dumps({p: {"blob": "0" * 40, "head": None} for p in evicted}), encoding="utf-8",
+    )
+    return {"targets": targets, "out_path": "state/warp/r1/test-leg.json"}
+
+
+def test_host_verify_drops_evicted_targets_and_all_evicted_is_not_a_failure(tmp_path, monkeypatch):
+    seen = []
+
+    def fake(repo, output, artifacts, targets, base, timeout, baseline_output=None):
+        seen.append(list(targets))
+        return 0, {"status": "pass", "tests_run": 1, "tests_failed": 0}
+
+    monkeypatch.setattr(headless, "_run_pinned_test_leg", fake)
+    params = _evicted_run(tmp_path, ["tests/test_a.py", "tests/test_b.py"], ["tests/test_a.py"])
+    result = headless._verify_test_leg(params, str(tmp_path), tmp_path / "art", 60, run_id="r1")
+    assert seen == [["tests/test_b.py"]] and result["status"] == "pass"
+
+    seen.clear()
+    params = _evicted_run(tmp_path / "all", ["tests/test_a.py"], ["tests/test_a.py"])
+    result = headless._verify_test_leg(params, str(tmp_path / "all"), tmp_path / "art", 60, run_id="r1")
+    assert seen == []
+    assert result["status"] == "pass" and result["tests_run"] == 0
+    assert result["evicted_targets"] == ["tests/test_a.py"]

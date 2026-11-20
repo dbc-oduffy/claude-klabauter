@@ -2014,6 +2014,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+if not (Path(__file__).resolve().parent / "{resolver_module}.py").is_file():
+    sys.stderr.write("coordinator engine not installed: run /coordinator:install\\n")
+    sys.exit(127)
 from {resolver_module} import exec_cli  # noqa: E402
 
 exec_cli("{target}")

@@ -510,6 +510,17 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
     manifest_base = manifest.get("head_sha")
     if manifest_base and base != manifest_base:
         raise ValueError("host Verify tests baseline differs from the active run manifest")
+    # Invariant: an evicted path is parked out of the tree, so naming it makes pytest exit 4 with no tests.
+    from coordinator_core.ops.dispatch_emit import halt_tree_evict
+
+    evicted = set(halt_tree_evict._load(run_dir))
+    dropped = [t for t in targets if t.split("::", 1)[0] in evicted]
+    targets = [t for t in targets if t not in dropped]
+    if dropped and not targets:
+        measured = {"status": "pass", "tests_run": 0, "tests_failed": 0,
+                    "summary": "every target was evicted by this run's halt; nothing to run"}
+        _save(output, measured)
+        return {**measured, "evicted_targets": dropped, "sidecar_path": output.relative_to(root).as_posix()}
     exit_code, measured = _run_pinned_test_leg(root, output, artifacts, targets, base, timeout)
     fields = ("status", "tests_run", "tests_failed", "baseline", "baseline_method", "build_clean",
               "skipped", "summary", "importer_overrun", "tripwires_not_run", "zero_run_cause")

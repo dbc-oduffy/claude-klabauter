@@ -464,16 +464,6 @@ def test_windows_codex_gate_uses_native_command_with_original_payload(tmp_path, 
     pytest.param('{"arm":"s","halt":null}}', '{"arm":"s","halt":null}',
                  "s", "Extra data", id="a6e58670-extra-delimiter"),
     pytest.param(
-        '{"jsonrpc":"2.0","id":1,"result":{"arm":"m_plus","halt":null,"resume_rows":["C0","C4"]},"halt":null}',
-        '{"arm":"m_plus","halt":null,"resume_rows":["C0","C4"]}',
-        "m_plus", "'arm' is a required property", id="bf67037d-redundant-outer-halt",
-    ),
-    pytest.param(
-        '{"jsonrpc":"2.0","id":1,"result":{"arm":"m_plus","halt":null,"resume_rows":["C0","C4"]},"halt":null}',
-        '{"arm":"m_plus","halt":null,"resume_rows":["C0"]}',
-        None, "'arm' is a required property", id="bf67037d-do-not-drop-resume-row",
-    ),
-    pytest.param(
         '{"jsonrpc":"2.0","id":1,"result":{"arm":"s" "halt":null,"acceptance":["keep"]}}',
         '{"arm":"s","halt":null,"acceptance":["keep"]}',
         "s", "Expecting ',' delimiter", id="d10d487a-malformed-wrapped-result",
@@ -516,6 +506,41 @@ def test_codex_gate_reasks_once_then_returns_a_typed_halt(tmp_path, monkeypatch,
         assert value["halt"]["kind"] == "gate-reply-invalid"
     else:
         assert value["halt"] is None
+
+
+_RELAY_RESULT = {
+    "arm": "m_plus", "halt": None, "resume_rows": ["C0", "C4"],
+    "resume_phases": {"reuse": [], "rerun": ["gate"], "verdicts": {}},
+}
+
+
+@pytest.mark.parametrize("trailer", [
+    # 07a60db0 (ue-addon W4): dispatch.ask_gate's CLI trailer rode beside result.
+    {"_execution": {"exit_code": 0, "params_file": "ask-gate.json"}},
+    # d5c143c1 (rag c4821f): the relay appended an outer halt duplicating result.halt.
+    {"halt": None},
+    {"_execution": {"exit_code": 0}, "halt": None, "note": "relayed"},
+])
+def test_codex_gate_unwraps_relay_trailers_without_a_reask(tmp_path, monkeypatch, trailer):
+    envelope = {"jsonrpc": "2.0", "id": 1, "result": _RELAY_RESULT, **trailer}
+    calls = _stub_codex(monkeypatch, tmp_path, responses=[json.dumps(envelope)])
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["/bin/codex-x"])
+    schema = {"type": "object", "required": ["arm", "halt"]}
+    assert workflow.run_agent(
+        "Run gate", {"label": "gate", "phase": "gate", "schema": schema},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
+    ) == _RELAY_RESULT
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("envelope", [
+    {"jsonrpc": "2.0", "id": 1, "result": {"arm": None, "halt": {"kind": "x"}}, "halt": None},
+    {"jsonrpc": "2.0", "id": 1, "result": _RELAY_RESULT, "halt": {"kind": "x"}},
+    {"jsonrpc": "2.0", "id": 1, "result": _RELAY_RESULT, "acceptance": ["dropped"]},
+])
+def test_gate_envelope_keeps_anything_it_cannot_drop_losslessly(envelope):
+    assert workflow._gate_envelope_result(envelope) is envelope
 
 
 def test_codex_gate_closes_only_missing_outer_brace(tmp_path, monkeypatch):

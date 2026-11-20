@@ -172,8 +172,7 @@ _FIXED_MEMBERS: tuple[tuple[str, str, str, str, bool], ...] = (
         True,
     ),
     (
-        ".percolate-identity (machine-local rung 2 of publish.resolve_percolate_identity_path; "
-        "a per-repo setup/.percolate-identity wins)",
+        ".percolate-identity (publish-audit settings; only needed to publish, a consumer box skips it)",
         ".percolate-identity",
         "file",
         "claude-klabauter scripts/setup.py :: install_percolate_identity (additive, not a DoE member)",
