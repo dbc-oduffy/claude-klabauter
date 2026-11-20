@@ -909,6 +909,27 @@ def _gate_envelope_result(value: Any) -> Any:
     return value
 
 
+_GATE_WRAPPER_PREFIX = re.compile(
+    r'^\s*\{\s*"jsonrpc"\s*:\s*"2\.0"\s*,\s*"id"\s*:\s*'
+    r'(?:-?\d+|"(?:[^"\\]|\\.)*"|null)\s*,\s*"result"\s*:\s*(?=\{)'
+)
+
+
+def _gate_reask_preserves_scalars(initial: str, retry: str) -> bool:
+    expected = _GATE_SCALARS.findall(initial)
+    if expected == _GATE_SCALARS.findall(retry):
+        return True
+    # A schema-bound repair may return the bare payload. Only disregard the
+    # proven leading wrapper fields on a syntactically invalid JSON reply.
+    try:
+        json.loads(initial)
+    except ValueError:
+        wrapper = _GATE_WRAPPER_PREFIX.match(initial)
+        if wrapper is not None:
+            return _GATE_SCALARS.findall(initial[wrapper.end():]) == _GATE_SCALARS.findall(retry)
+    return False
+
+
 def _gate_redundant_halt_payload(text: str) -> dict | None:
     """Recover the payload for retry comparison, without accepting the invalid wrapper."""
     try:
@@ -1163,7 +1184,7 @@ def run_agent(
                 if wrapper_payload is not None:
                     if json.dumps(wrapper_payload) == json.dumps(repaired):
                         value = repaired
-                elif _GATE_SCALARS.findall(text) == _GATE_SCALARS.findall(repaired_text):
+                elif _gate_reask_preserves_scalars(text, repaired_text):
                     value = repaired
             except (AgentFailed, OSError):
                 pass
