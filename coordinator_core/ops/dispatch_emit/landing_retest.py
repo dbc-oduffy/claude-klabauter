@@ -36,19 +36,17 @@ def _submission_base(worktree_root: Path, run_id: str) -> Optional[str]:
 
 
 def run_base_for(worktree_root: Path, run_id: Optional[str], params: Mapping) -> Optional[str]:
-    """The run's base sha: ``params['run_base_sha']``, else the submission record's, else the
-    reserved run's recorded base file; None when none exists."""
+    """The run's base sha: ``params['run_base_sha']``, else the write-once recorded base file, else the
+    submission record's; None when none exists. The file precedes the submission because a refire rewrites
+    the submission with the then-HEAD, the run's own earlier halt-record commit."""
     value = params.get("run_base_sha")
     if isinstance(value, str) and _SHA_RE.match(value):
         return value
     if not run_id:
         return None
-    found = _submission_base(worktree_root, run_id)
-    if found:
-        return found
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract
 
-    return ask_fanout_contract.recorded_run_base(Path(worktree_root), run_id)
+    return ask_fanout_contract.recorded_run_base(Path(worktree_root), run_id) or _submission_base(worktree_root, run_id)
 
 
 def fresh_verdict_path(worktree_root: Path, run_id: str) -> Path:

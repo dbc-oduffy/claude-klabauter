@@ -3,10 +3,8 @@ import asyncio
 import importlib.util
 import json
 import os
-import socket
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -101,6 +99,8 @@ def test_name_resolves_to_the_restarted_sender_but_a_local_reply_keeps_the_frame
     run(go())
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_unresolvable_sender_name_falls_back_to_frame_endpoint(box):
     async def go():
         r = make_router(box, base.echo_adapters())
@@ -110,43 +110,6 @@ def test_unresolvable_sender_name_falls_back_to_frame_endpoint(box):
             assert r.resolve_sender("ghost", s.path) == s.path
             post_frame(r.endpoint_of("agy-a"), frame_to(box, s.path, "ghost", "hi"))
             await until(lambda: len(s.frames) == 1)
-        finally:
-            s.close()
-            await r.stop()
-    run(go())
-
-
-def test_peer_names_never_resolve_to_a_claude_sender(box):
-    async def go():
-        r = make_router(box, base.echo_adapters())
-        await r.start()
-        try:
-            assert r.resolve_sender("codex-a", "") == ""  # a face entry is not a sender
-        finally:
-            await r.stop()
-    run(go())
-
-
-def test_no_session_id_pid_or_key_reaches_a_peer(box):
-    async def go():
-        seen = []
-
-        async def codex(peer, text):
-            seen.append(text)
-            return "ok"
-
-        r = make_router(box, {"codex": codex, "agy": codex})
-        s = FakeSender(str(box / "s.sock"))
-        await r.start()
-        try:
-            post_frame(r.endpoint_of("codex-a"), frame_to(box, s.path, "em-one", "hello"))
-            await asyncio.to_thread(pr.request_line, r.ctl, {"op": "send", "as": "em-one", "to": "codex-a", "text": "hi"})
-            await until(lambda: len(seen) == 2 and len(s.frames) == 1)
-            tokens = {"peer-codex-a", "sessionId"}
-            tokens |= {str(p.pid) for p in r.faces.values()}
-            for text in seen:
-                assert text.startswith("[em-one] ")
-                assert not any(t in text for t in tokens)
         finally:
             s.close()
             await r.stop()

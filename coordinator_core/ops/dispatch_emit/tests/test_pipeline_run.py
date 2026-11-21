@@ -37,6 +37,13 @@ def test_revisions_rel_and_marker() -> None:
     assert pr.revisions_rel(RID) == f"scratch/warp/{RID}/revisions.md"
     assert pr.reads_revisions(f"x\n{pr.REVISIONS_MARKER}\ny")
     assert not pr.reads_revisions("no marker here")
+    assert pr.reads_revisions(pr.REVISIONS_MARKER.replace("'", "\\'"))
+
+
+def test_append_revision_takes_an_explicit_rel(tmp_path: Path) -> None:
+    rel = "state/scratch/bug-blitz/r1/revisions.md"
+    path = pr.append_revision(tmp_path, "r1", "a ruling", "em", "verbatim", rel=rel)
+    assert path == tmp_path / rel and "a ruling" in path.read_text(encoding="utf-8")
 
 
 def test_state_unknown_live_finished(tmp_path: Path) -> None:

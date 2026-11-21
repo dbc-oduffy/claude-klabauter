@@ -5,7 +5,6 @@ import asyncio
 import datetime
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -91,21 +90,3 @@ def test_default_args_on_this_repo_are_under_the_brightline_with_zero_spawns(mon
     assert out["degraded"]["mode"] == "view-absent"
     assert cpu < PROCESS_BUDGET_SECS
     assert spawns == []
-
-
-def test_no_agent_or_model_module_is_imported_by_the_op() -> None:
-    probe = (
-        "import sys\n"
-        "import coordinator_core.ops.daily_log as m\n"
-        "banned = ('anthropic', 'openai', 'claude_agent_sdk', 'coordinator_core.dispatch')\n"
-        "hit = sorted(n for n in sys.modules if n.split('.')[0] in banned[:3] or n.startswith(banned[3]))\n"
-        "print(hit)\n"
-    )
-    root = str(Path(__file__).resolve().parents[3])
-    cp = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True,
-        cwd=root, env={**os.environ, "PYTHONPATH": root},
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert cp.returncode == 0, cp.stderr
-    assert cp.stdout.strip() == "[]"

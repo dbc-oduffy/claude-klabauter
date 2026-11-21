@@ -106,7 +106,7 @@ def _assert_spooled(proc, repo: Path, payload: bytes) -> str:
     assert entry.name == header["spool_id"] + ".json"
     body = json.loads(proc.stdout.decode("utf-8"))
     for text in (body["systemMessage"], body["hookSpecificOutput"]["additionalContext"]):
-        assert f"spooled as {header['spool_id']}" in text
+        assert f"SPOOLED as {header['spool_id']}" in text
         assert "ask_spool.withdraw" in text
         assert (
             f"""ask_spool.withdraw '{{"spool_id":"{header["spool_id"]}","reason":"..."}}'."""
@@ -147,7 +147,7 @@ def test_the_same_ask_twice_is_one_entry(door, tmp_path, runtime_base):
     second = _run(door, root, runtime_base, repo, payload)
     assert second.returncode == 0
     assert [p.name for p in _spool_files(repo)] == [spool_id + ".json"]
-    assert f"spooled as {spool_id}" in json.loads(second.stdout)["systemMessage"]
+    assert f"SPOOLED as {spool_id}" in json.loads(second.stdout)["systemMessage"]
 
 
 def test_two_asks_without_a_tool_use_id_get_distinct_entries(door, tmp_path, runtime_base):
@@ -208,3 +208,28 @@ def test_the_spool_id_matches_the_python_contract(door, tmp_path, runtime_base):
     payload = _payload(repo)
     spool_id = _assert_spooled(_run(door, root, runtime_base, repo, payload), repo, payload)
     assert spool_id == spool_id_for("sess-1", "toolu_1", payload)
+
+
+def _ask_payload(repo: Path, tool_use_id: str, args) -> bytes:
+    body = {
+        "hook_event_name": "PreToolUse",
+        "session_id": "sess-1",
+        "tool_use_id": tool_use_id,
+        "cwd": str(repo / "sub"),
+        "tool_name": "Workflow",
+        "tool_input": {"name": "ask", "args": args},
+    }
+    return json.dumps(body).encode("utf-8")
+
+
+def test_the_same_ask_under_a_new_tool_use_id_names_the_pending_entry(door, tmp_path, runtime_base):
+    root = _make_stub_engine_root(tmp_path)
+    repo = _repo(tmp_path)
+    first = _run(door, root, runtime_base, repo, _ask_payload(repo, "toolu_a", "Fix the bug"))
+    assert first.returncode == 0
+    (entry,) = _spool_files(repo)
+    again = _run(door, root, runtime_base, repo, _ask_payload(repo, "toolu_b", {"ask": "  fix  THE bug"}))
+    assert [p.name for p in _spool_files(repo)] == [entry.name]
+    assert f"SPOOLED as {entry.stem}" in json.loads(again.stdout)["systemMessage"]
+    _run(door, root, runtime_base, repo, _ask_payload(repo, "toolu_c", "fix another bug"))
+    assert len(_spool_files(repo)) == 2

@@ -6013,18 +6013,21 @@ def validate_decisions_shape(decisions: Any) -> Optional[str]:
     are present and disagree, that is genuinely ambiguous and fails loud
     naming both values.
 
-    Negative-spec: does NOT coerce a bare string into
-    `{"disposition": <string>}`. Coercion would silently make two distinct
-    payloads mean the same thing and paper over an operator's mistake — the
-    ruling here is fail-loud, not be-liberal. A dict carrying NEITHER
-    `disposition` nor `value` still fails loud, same as before.
+    A bare non-empty string is shorthand for `{"disposition": <string>}` and is
+    normalized to that shape in place. A dict carrying NEITHER `disposition` nor
+    `value` still fails loud.
     """
     if not isinstance(decisions, dict):
         return (
             f"--decisions must be a JSON object mapping judgment-point id to "
             f'{{"disposition": <value>}}, got {type(decisions).__name__}'
         )
-    for jp_id, value in decisions.items():
+    for jp_id, value in list(decisions.items()):
+        # Bare-string shorthand: {"jp": "mine"} == {"jp": {"disposition": "mine"}}
+        # (apply_base.normalize_decisions already treats it so; the shape
+        # gate must not refuse what the engine accepts).
+        if isinstance(value, str) and value.strip():
+            value = decisions[jp_id] = {"disposition": value}
         if not isinstance(value, dict):
             return (
                 f"--decisions[{jp_id!r}] must be shaped "

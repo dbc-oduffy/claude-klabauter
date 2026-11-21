@@ -60,6 +60,19 @@ def _titles(script):
     return re.findall(r"'([^']*)'", block)
 
 
+@pytest.mark.parametrize("home", ["docs/plans", "docs/plans/2026-11"])
+def test_prior_work_block_names_the_prior_art_sidecar_beside_the_located_plan(tmp_path, home):
+    from types import SimpleNamespace
+
+    sizing = "state/sizings/2026-11-20-x.yaml"
+    (tmp_path / home).mkdir(parents=True)
+    (tmp_path / home / "2026-11-20-x.md").write_text("plan", encoding="utf-8")
+    (tmp_path / home / "2026-11-20-x.prior-art-check.md").write_text("pa", encoding="utf-8")
+    lookup = SimpleNamespace(exact=(), related=())
+    block = ask_compose._prior_work_block(str(tmp_path), lookup, sizing)
+    assert f"prior-art sidecar: {home}/2026-11-20-x.prior-art-check.md" in block
+
+
 def test_phases_follow_the_contract_order_for_a_raw_ask():
     titles = _titles(_compose())
     present = [p for p in ASK_PHASES if p in titles]
@@ -285,9 +298,10 @@ def test_a_roster_judge_runs_inside_the_one_verify_agent_and_feeds_the_criterion
 def test_the_verify_agent_runs_on_the_xs_arm_where_the_scoped_test_does_not():
     script = _compose(**_JUDGE_KW)
     assert (
-        "const _testWanted = !!(((_gate.arm !== 'xs' && !_xsTail) || _reviewApplied > 0 || "
+        "const _testOwed = () => (((_gate.arm !== 'xs' && !_xsTail) || _reviewApplied > 0 || "
         f"{ask_compose.XS_TEST_TARGET_JS}) && (_manifest.test_targets ?? []).length);"
     ) in script
+    assert "const _testWanted = !!_testOwed();" in script
     assert "if (_testWanted && _verify && _verify.test) { _testResult = _verify.test; }" in script
     assert "_falsifierResult = (_verify && _verify.judge)" in script
 

@@ -90,6 +90,42 @@ def test_writes_reverted_outside_the_run_are_refused(repo) -> None:
         gcommit.commit_paths(repo, ["src/a.py"], _message(base))
 
 
+def _halt_record(base, trailer_base=None) -> str:
+    return (
+        "warp: record halted run-1 run artifacts\n\nHalted-By: test_infra_failure\n"
+        f"Checkpoint-Run-Halted: {trailer_base or base}"
+    )
+
+
+def test_the_runs_own_halt_record_commits_are_not_outside_the_run(repo) -> None:
+    base = gcommit.head_sha(repo)
+    for i in range(3):
+        _write(repo, "src/a.py", f"halt{i}\n")
+        gcommit.commit_paths(repo, ["src/a.py"], _halt_record(base))
+    _write(repo, "src/a.py", "v1\n")
+    assert gcommit.commit_paths(repo, ["src/a.py"], _message(base))
+
+
+def test_a_halt_subject_naming_another_runs_base_is_refused(repo) -> None:
+    base = gcommit.head_sha(repo)
+    _write(repo, "src/a.py", "other\n")
+    gcommit.commit_paths(repo, ["src/a.py"], _halt_record(base, trailer_base="0" * 40))
+    _write(repo, "src/a.py", "v1\n")
+    with pytest.raises(CommitRefused, match="changed outside this run: src/a.py"):
+        gcommit.commit_paths(repo, ["src/a.py"], _message(base))
+
+
+def test_a_revert_after_the_runs_halt_record_is_still_refused(repo) -> None:
+    base = gcommit.head_sha(repo)
+    _write(repo, "src/a.py", "halt\n")
+    gcommit.commit_paths(repo, ["src/a.py"], _halt_record(base))
+    _write(repo, "src/a.py", "v0\n")
+    gcommit.commit_paths(repo, ["src/a.py"], "revert A1")
+    _write(repo, "src/a.py", "v1\n")
+    with pytest.raises(CommitRefused, match=r"by \w+ \(revert A1\)"):
+        gcommit.commit_paths(repo, ["src/a.py"], _message(base))
+
+
 _STAMP = "plan: gated_exit_criteria met (x) — docs/p.md"
 
 

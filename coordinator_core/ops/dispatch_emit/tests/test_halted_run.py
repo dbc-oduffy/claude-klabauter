@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -626,8 +627,10 @@ def test_no_real_process_is_spawned_under_pytest(tmp_path: Path, monkeypatch: py
 def _no_scan(monkeypatch, root) -> None:
     real = hr.os.scandir
 
+    # hr.os is the process-wide os module: refuse only halted_run's own scans, or tmp_path
+    # teardown fixtures that list the tree trip it.
     def refuse(path: str = ".", *a, **k) -> "_ScandirIterator[str]":
-        if str(path).startswith(str(root)):
+        if str(path).startswith(str(root)) and sys._getframe(1).f_globals.get("__name__") == hr.__name__:
             raise AssertionError("scanned a run dir listing")
         return real(path, *a, **k)
 

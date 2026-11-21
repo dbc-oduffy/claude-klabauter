@@ -67,6 +67,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.artifact_id_slug import id_slug
 from coordinator_core.frontmatter.schema_validate import HANDOFF_PHASE_KINDS
 from coordinator_core.session.claimed_write import create_exclusive
+from coordinator_core.session.output_tree_layout import locate
 from coordinator_core.shipped_in_tokens import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field_raw,
@@ -2037,10 +2038,12 @@ def _rel(path: Optional[str], worktree_root: Path) -> str:
     candidate = Path(path)
     if candidate.is_absolute():
         try:
-            return candidate.relative_to(worktree_root).as_posix()
+            rel = candidate.relative_to(worktree_root).as_posix()
         except ValueError:
             raise LandingRefused(f"planPath is outside the worktree: {path}")
-    return candidate.as_posix()
+    else:
+        rel = candidate.as_posix()
+    return locate(str(worktree_root), rel)
 
 
 def _baton_path_for(entry: Dict[str, Any], report: Dict[str, Any]) -> str:

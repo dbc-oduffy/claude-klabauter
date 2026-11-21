@@ -115,13 +115,12 @@ class _Redirect:
 
 
 def _redirect_temp(rootpath: Path) -> _Redirect:
-    root = (
-        _coordinator_temp()
-        / rootpath.name
-        / _RUN_TEMP_DIRNAME
-        / f"{os.getpid()}-{os.urandom(3).hex()}"
-    )
+    # Same disk-vs-tmpfs choice as the basetemp, so a test's tempfile writes leave RAM too.
+    run_temp = _pytest_root(rootpath).parent / _RUN_TEMP_DIRNAME
+    root = run_temp / f"{os.getpid()}-{os.urandom(3).hex()}"
     root.mkdir(parents=True, exist_ok=True)
+    # A killed run skips its teardown; its dir is reaped here once its pid is dead.
+    _sweep_dead_runs(run_temp)
     saved = {k: os.environ.get(k) for k in _TEMP_ENV}
     redirect = _Redirect(root, saved, tempfile.tempdir)
     for key in _TEMP_ENV:
@@ -186,9 +185,19 @@ def _refuse_in_repo_basetemp(config: pytest.Config) -> None:
         )
 
 
+def _pytest_root(rootpath: Path) -> Path:
+    """``temp_layout.pytest_basetemp_root`` (off tmpfs on Linux); the inlined layout when it cannot load."""
+    try:
+        from coordinator_core import temp_layout
+
+        return temp_layout.pytest_basetemp_root(rootpath)
+    except Exception:  # noqa: BLE001 -- this file loads by path; the layout module may be absent
+        return _coordinator_temp() / rootpath.name / "pytest"
+
+
 def _per_run_basetemp(rootpath: Path) -> Path:
     suffix = os.urandom(3).hex()
-    return _coordinator_temp() / rootpath.name / "pytest" / f"{os.getpid()}-{suffix}"
+    return _pytest_root(rootpath) / f"{os.getpid()}-{suffix}"
 
 
 # tryfirst: pytest's tmpdir plugin reads option.basetemp in its own configure.
@@ -323,6 +332,9 @@ def pytest_configure(config: pytest.Config) -> None:
         redirect_root = None
     managed = redirect_root / "coordinator" if redirect_root else _coordinator_temp()
     _SANCTIONED[:] = [repo, _resolve(managed)]
+    if _MINTED is not None and not _contains(_SANCTIONED[1], _resolve(_MINTED)):
+        # A disk-backed fallback root (e.g. ~/.cache) sits under a watched home: sanction it.
+        _SANCTIONED.append(_resolve(_MINTED.parent))
     roots: "list[Path]" = []
     candidates = [Path.home(), config.rootpath.parent]
     for candidate in candidates:

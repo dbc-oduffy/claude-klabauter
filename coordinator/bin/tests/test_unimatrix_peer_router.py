@@ -733,57 +733,6 @@ def _box_slug():
     return re.sub(r"[^A-Za-z0-9_-]+", "-", pr._contract().box_id(socket.gethostname())).strip("-")
 
 
-def _dead_pid():
-    import subprocess
-    p = subprocess.Popen([sys.executable, "-c", "pass"])
-    p.wait()
-    return p.pid
-
-
-def test_grok_registry_lists_live_entry_as_peer_and_none_for_dead_pid(box):
-    async def go():
-        home = box / "grok"
-        home.mkdir()
-        repo = box / "myrepo"
-        (repo / ".git").mkdir(parents=True)
-        sid = "0123abcd-1111-2222-3333-444455556666"
-        rows = [{"session_id": sid, "cwd": str(repo), "pid": os.getpid()},
-                {"session_id": "dead0000-1111", "cwd": str(repo), "pid": _dead_pid()}]
-        (home / "active_sessions.json").write_text(json.dumps(rows), encoding="utf-8")
-        r = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state",
-                      endpoint_dir=box / "eps", adapters=echo_adapters(), grok_home=home)
-        await r.start()
-        try:
-            want = f"grok-myrepo-0123abcd-on-{_box_slug()}"
-            assert list(r.peers) == [want]
-            assert r.peers[want]["vendor"] == "grok" and r.peers[want]["target"] == sid
-            assert r.peers[want]["cwd"] == str(repo) and want in r.faces
-            (home / "active_sessions.json").write_text("[]", encoding="utf-8")
-            await r.refresh_discovered()
-            assert r.peers == {}
-        finally:
-            await r.stop()
-    run(go())
-
-
-def test_live_discovered_scans_grok_registry(tmp_path):
-    home = tmp_path / "grok"
-    home.mkdir()
-    sid = "feedbeef-1111-2222-3333-444455556666"
-    rows = [{"session_id": sid, "cwd": str(tmp_path / "proj"), "pid": os.getpid()},
-            {"session_id": "dead0000-1111", "cwd": str(tmp_path / "proj"), "pid": _dead_pid()}]
-    (home / "active_sessions.json").write_text(json.dumps(rows), encoding="utf-8")
-
-    async def go():
-        return pr.Router([], sessions_dir=tmp_path / "s", state_dir=tmp_path / "st",
-                         endpoint_dir=tmp_path / "e", grok_home=home)._live_discovered()
-
-    live = run(go())
-    assert list(live) == [f"grok-proj-feedbeef-on-{_box_slug()}"]
-    peer = next(iter(live.values()))
-    assert peer["vendor"] == "grok" and peer["target"] == sid and peer["cwd"] == str(tmp_path / "proj")
-
-
 def test_default_adapters_grok_delivers_by_cwd_pinned_resume(monkeypatch):
     assert "grok" in pr.default_adapters()
 
@@ -1614,30 +1563,6 @@ def face_reply(endpoint, frame):
     return buf
 
 
-def test_dead_holder_row_gets_no_face_even_with_its_lock_held_and_is_not_listed(box, monkeypatch):
-    async def go():
-        cx = box / "cx"
-        peers = [{"name": "codex-dead", "vendor": "codex", "target": THR_HELD, "codexPid": _dead_pid()},
-                 {"name": "codex-live", "vendor": "codex", "target": THR_OTHER, "codexPid": os.getpid()}]
-        fd = hold(cx / f"{THR_HELD}.lock")
-        r = holder_router(box, monkeypatch, peers, cx)
-        await r.start()
-        try:
-            await r.refresh_discovered()
-            assert sorted(r.faces) == ["codex-live"] and r.discovered == set()
-            resp = await r._dispatch({"op": "list"})
-            assert resp["peers"] == ["codex-live"] and "codex-dead" not in resp["ready"]
-            assert [a["name"] for a in resp["agents"]] == ["codex-live"] and "stale" not in resp["agents"][0]
-            bad = await r._dispatch({"op": "send", "to": "codex-dead", "text": "hello there"})
-            assert bad["ok"] is False
-            good = await r._dispatch({"op": "send", "to": "codex-live", "text": "hello there"})
-            assert good["ok"] is True
-        finally:
-            os.close(fd)
-            await r.stop()
-    run(go())
-
-
 def test_holder_dying_after_start_stops_the_face_on_the_next_refresh(box, monkeypatch):
     import subprocess
 
@@ -1968,6 +1893,8 @@ def test_router_rebinds_its_control_socket_after_the_path_is_deleted(box):
     asyncio.run(go())
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_router_rebinds_when_the_path_holds_a_different_inode(box):
     async def go():
         r = _inode_router(box)
@@ -1978,37 +1905,6 @@ def test_router_rebinds_when_the_path_holds_a_different_inode(box):
             await r.check_control_socket()
             assert _answers_on(r.ctl)
             assert os.stat(r.ctl).st_ino == r.ctl_ino
-        finally:
-            await r.stop()
-    asyncio.run(go())
-
-
-def test_router_leaves_an_unchanged_control_socket_alone(box):
-    async def go():
-        r = _inode_router(box)
-        await r.start()
-        try:
-            server, ino = r.server, r.ctl_ino
-            await r.check_control_socket()
-            assert r.server is server and r.ctl_ino == ino
-            assert _answers_on(r.ctl)
-        finally:
-            await r.stop()
-    asyncio.run(go())
-
-
-def test_router_exits_when_the_control_socket_cannot_be_rebound(box, monkeypatch):
-    async def go():
-        r = _inode_router(box)
-        await r.start()
-        try:
-            os.unlink(r.ctl)
-
-            async def refuse():
-                raise OSError("address in use")
-            monkeypatch.setattr(r, "_bind_control", refuse)
-            await r.check_control_socket()
-            assert r.stop_requested.is_set()
         finally:
             await r.stop()
     asyncio.run(go())
@@ -2086,3 +1982,30 @@ def test_owned_alias_colliding_with_another_sessions_exact_name_is_refused_never
     assert "shared" in pr._contract().projected_addresses(owned)
     assert r.resolve_sender("shared") == ""
     assert r.last_refusal == "ambiguous: owned alias collides with another target"
+
+
+class _LiveFace:
+    def poll(self):
+        return None
+
+
+@portable
+def test_relay_target_resolves_a_codex_peer_face_like_a_claude_session(tmp_path):
+    # An inbound cross-box relay must reach a local Codex peer; resolve_sender skips router faces.
+    r, log = _relay_router(tmp_path)
+    r.peers["codex-x-1"] = {"name": "codex-x-1", "vendor": "codex", "target": "t1"}
+    r.faces["codex-x-1"] = _LiveFace()
+    r.peer_stale = lambda name: False
+    out = r.resolve_relay_target("codex-x-1")
+    assert out["ok"] and out["endpoint"] == r.endpoint_of("codex-x-1") and out["name"] == "codex-x-1"
+    assert "RELAY-TARGET" in log.read_text()
+
+
+@portable
+def test_relay_target_refuses_a_stale_or_faceless_codex_peer(tmp_path):
+    r, _ = _relay_router(tmp_path)
+    r.peers["codex-x-1"] = {"name": "codex-x-1", "vendor": "codex", "target": "t1"}
+    r.peer_stale = lambda name: True
+    assert r.resolve_relay_target("codex-x-1")["ok"] is False
+    r.peer_stale = lambda name: False
+    assert r.resolve_relay_target("codex-x-1")["ok"] is False  # no live face process

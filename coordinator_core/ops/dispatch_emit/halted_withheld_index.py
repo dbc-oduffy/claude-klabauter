@@ -172,19 +172,21 @@ def _publish_bare(file: str, data: bytes) -> Optional[os.stat_result]:
     run's marker is read in its place (`sibling_claims._candidates_read`)."""
     try:
         fd = os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
-        try:
-            os.write(fd, data)
-            return os.fstat(fd)
-        finally:
-            os.close(fd)
-    except FileExistsError:
+    except OSError:  # exists, or the directory is absent: nothing of ours to remove
         return None
+    try:
+        view = memoryview(data)
+        while view:  # `os.write` may write short
+            view = view[os.write(fd, view):]
+        return os.fstat(fd)
     except OSError:
         try:
-            os.remove(file)
+            os.remove(file)  # our own partial file, never a peer's
         except OSError:
             pass
         return None
+    finally:
+        os.close(fd)
 
 
 def _clean_sizing(sizing_rel: Optional[str]) -> Optional[str]:

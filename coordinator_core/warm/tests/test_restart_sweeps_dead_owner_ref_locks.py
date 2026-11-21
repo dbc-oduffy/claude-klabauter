@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -13,7 +11,6 @@ import pytest
 
 from coordinator_core.git import git_objects, ref_lock
 from coordinator_core.warm import server
-from coordinator_core.win_portability import no_console_creationflags
 
 REF = "refs/heads/work/b"
 
@@ -40,12 +37,6 @@ def _commit(gitdir: Path, parent: str | None, msg: str) -> str:
     return git_objects.write_object(gitdir, b"commit", "\n".join(lines).encode())
 
 
-def _dead_pid() -> int:
-    proc = subprocess.Popen([sys.executable, "-c", "pass"], **no_console_creationflags())
-    proc.wait()
-    return proc.pid
-
-
 @pytest.fixture
 def repo(tmp_path: Path):
     root = tmp_path / "repo"
@@ -70,24 +61,6 @@ def _plant(gd: Path, content: str, pid: int) -> Path:
     owner.parent.mkdir(parents=True, exist_ok=True)
     owner.write_text(json.dumps({"pid": pid, "token": "t-1", "started": 1}), encoding="utf-8")
     return lock
-
-
-def test_first_record_completes_a_matching_dead_owner_lock(repo) -> None:
-    root, gd, base, child = repo
-    lock = _plant(gd, child + "\n", _dead_pid())
-    _ctx().record_served_repo(root)
-    assert (gd / REF).read_bytes() == child.encode() + b"\n"
-    assert not lock.exists()
-
-
-def test_first_record_moves_aside_a_non_matching_dead_owner_lock(repo) -> None:
-    root, gd, base, _ = repo
-    stranger = _commit(gd, None, "stranger")
-    lock = _plant(gd, stranger + "\n", _dead_pid())
-    _ctx().record_served_repo(root)
-    assert (gd / REF).read_bytes() == base.encode() + b"\n"
-    assert not lock.exists()
-    assert (gd / ref_lock.RECOVERY_DIR / ref_lock.RECOVERY_LOG).exists()
 
 
 def test_live_pid_lock_is_untouched(repo) -> None:

@@ -7327,11 +7327,9 @@ def validate_decisions_shape(decisions: Any) -> Optional[str]:
     map). Returns a one-line, actionable error string naming the first
     offending id, the shape it received, and the expected shape otherwise.
 
-    Negative-spec: does NOT coerce a bare string into
-    `{"disposition": <string>}`. Coercion would silently make two distinct
-    payloads mean the same thing and paper over an operator's mistake — the
-    ruling here is fail-loud, not be-liberal. A dict carrying NEITHER
-    `disposition` nor `value` still fails loud, same as before.
+    A bare non-empty string is shorthand for `{"disposition": <string>}` and is
+    normalized to that shape in place. A dict carrying NEITHER `disposition` nor
+    `value` still fails loud.
     """
     if not isinstance(decisions, dict):
         return (
@@ -7344,7 +7342,12 @@ def validate_decisions_shape(decisions: Any) -> Optional[str]:
         + "".join(f', "{key}": "<value>"' for key in DISPOSITION_CONTENT_KEYS)
         + " (all but disposition optional)}"
     )
-    for jp_id, value in decisions.items():
+    for jp_id, value in list(decisions.items()):
+        # Bare-string shorthand: {"jp": "mine"} == {"jp": {"disposition": "mine"}}
+        # (apply_base.normalize_decisions already treats it so; the shape
+        # gate must not refuse what the engine accepts).
+        if isinstance(value, str) and value.strip():
+            value = decisions[jp_id] = {"disposition": value}
         if not isinstance(value, dict):
             return (
                 f"--decisions[{jp_id!r}] must be shaped "

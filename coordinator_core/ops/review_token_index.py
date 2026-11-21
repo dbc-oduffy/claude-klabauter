@@ -29,22 +29,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import marshal
 import os
 import re
 import struct
 import threading
+import time
 import zlib
 from pathlib import Path
 from typing import Callable, Collection, Dict, Iterable, List, Optional, Sequence, Tuple
 
-BLOOM_BITS = 8192
+BLOOM_BITS = 2048
 _BLOOM_BYTES = BLOOM_BITS // 8
-_MAGIC = b"TTIX5\n"
-_WORD = re.compile(rb"[A-Za-z0-9_]+")
-# `name.ext` pairs from every word start, overlapping: `x.ipc.py` yields `x.ipc` and `ipc.py`. A
-# basename's lead pair is a stricter test than its words, which `py` alone makes near-universal.
-_PAIR = re.compile(rb"(?<![A-Za-z0-9_])(?=([A-Za-z0-9_]+\.[A-Za-z0-9_]+))")
-_LEAD_PAIR = re.compile(rb"[A-Za-z0-9_]+\.[A-Za-z0-9_]+")
+_MAGIC = b"TTIX6\n"
+# A match the callers care about is a path component of a quoted literal: a basename (always dotted) ends on a
+# quote, a walked directory name sits between separators. An element is a whitespace-free run that a quote or
+# separator closes. A module's bloom holds its dotted elements, plus every element when it holds a walk
+# primitive (only such a module can walk a directory). The earlier full word set cost 4.4s to build for 8.5k
+# modules. The lookbehind and possessive run keep the scan linear: without them a long unclosed run backtracks.
+_RUN = rb"""[^\s"'\x5c/]"""
+_CLOSER = rb"""(?=["'\x5c/])"""
+_DOTTED_ELEMENT = re.compile(rb"(?<!" + _RUN + rb")(?=" + _RUN + rb"*\.)" + _RUN + rb"++" + _CLOSER)
+_ELEMENT = re.compile(rb"(?<!" + _RUN + rb")" + _RUN + rb"++" + _CLOSER)
+_ELEMENT_WHOLE = re.compile(_RUN + rb"+")
+WALK_PRIMITIVES = (b"rglob(", b"os.walk(", b".glob(", b"iterdir(", b"ls-files")
 RELATIVE_IMPORT = re.compile(rb"\bfrom[ \t]+\.")
 
 # rel -> (key, bloom, import targets); key = (mtime_ns, size, ctime_ns, ino)
@@ -52,7 +60,9 @@ _Key = Tuple[int, int, int, int]
 _Entries = Dict[str, Tuple[_Key, int, frozenset]]
 _MEM: Dict[str, _Entries] = {}
 _TRACKED: Dict[str, Tuple[Tuple[int, int], frozenset]] = {}
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
+_BIG_BUILD = 200  # stale modules past which a refresh is a build worth one-at-a-time
+_LOCK_STALE_SECS = 60.0
 
 
 def _bits(word: bytes) -> Tuple[int, int]:
@@ -60,20 +70,22 @@ def _bits(word: bytes) -> Tuple[int, int]:
 
 
 def bloom_of(data: bytes) -> int:
+    walker = any(w in data for w in WALK_PRIMITIVES)
     bits = bytearray(_BLOOM_BYTES)
-    for word in set(_WORD.findall(data)) | set(_PAIR.findall(data)):
+    for word in set((_ELEMENT if walker else _DOTTED_ELEMENT).findall(data)):
         for b in _bits(word):
             bits[b >> 3] |= 1 << (b & 7)
     return int.from_bytes(bits, "little")
 
 
-def token_mask(token: bytes) -> int:
-    """Bloom mask of every word in `token`; 0 (admits everything) when it holds no word."""
+def token_mask(token: bytes, walk: bool = False) -> int:
+    """Bloom mask of `token` as one element; 0 (admits everything) when it cannot be one. A token with no
+    dot is only indexed for walkers, so it is a mask only for a caller that wants walkers (`walk`)."""
+    if _ELEMENT_WHOLE.fullmatch(token) is None or (b"." not in token and not walk):
+        return 0
     mask = 0
-    lead = _LEAD_PAIR.match(token)
-    for word in [*_WORD.findall(token), *([lead.group()] if lead else [])]:
-        for b in _bits(word):
-            mask |= 1 << b
+    for b in _bits(token):
+        mask |= 1 << b
     return mask
 
 
@@ -106,6 +118,7 @@ def _load(root: str) -> _Entries:
         if head.get("bits") != BLOOM_BITS or head.get("root") != root:
             return {}
         rows = head["rows"]
+        names = head["names"]
         if len(raw) - at != len(rows) * _BLOOM_BYTES:
             return {}
         out: _Entries = {}
@@ -113,7 +126,7 @@ def _load(root: str) -> _Entries:
             out[rel] = (
                 tuple(int(k) for k in rest[:4]),
                 int.from_bytes(raw[at : at + _BLOOM_BYTES], "little"),
-                frozenset(rest[4]),
+                frozenset([names[i] for i in rest[4]]),
             )
             at += _BLOOM_BYTES
         return out
@@ -127,9 +140,12 @@ def _save(root: str, entries: _Entries) -> None:
         return
     try:
         rels = sorted(entries)
+        names: Dict[str, int] = {}
+        rows = [
+            [r, *entries[r][0], [names.setdefault(t, len(names)) for t in sorted(entries[r][2])]] for r in rels
+        ]
         head = json.dumps(
-            {"bits": BLOOM_BITS, "root": root, "rows": [[r, *entries[r][0], sorted(entries[r][2])] for r in rels]},
-            separators=(",", ":"),
+            {"bits": BLOOM_BITS, "root": root, "names": list(names), "rows": rows}, separators=(",", ":")
         ).encode("utf-8")
         body = b"".join(entries[r][1].to_bytes(_BLOOM_BYTES, "little") for r in rels)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,43 +196,133 @@ def refresh(
 
     `rels` is the full candidate set: entries outside it are dropped, a module missing from disk or
     unreadable is absent from the result."""
+    return _refresh(root, rels, read, root, lambda rel, data: (bloom_of(data), _targets(rel, data)))
+
+
+def refresh_import_targets(
+    root: str, rels: Sequence[str], read: Callable[[str], Optional[bytes]],
+) -> Dict[str, frozenset]:
+    """Use the same persisted index for eviction's independent set of dirty Python files."""
+    entries = _refresh(
+        root, rels, read, root + "\0halt-imports-v1",
+        lambda rel, data: (0, _targets(rel, data)),
+    )
+    return {rel: targets for rel, (_, targets) in entries.items()}
+
+
+def _refresh(root, rels, read, cache_key, build):
     with _LOCK:
-        entries = _MEM.get(root)
+        entries = _MEM.get(cache_key)
         if entries is None:
-            entries = _MEM[root] = _load(root)
+            entries = _MEM[cache_key] = _load(cache_key)
         keys = _listing_keys(root, rels)
-        dirty = False
-        result: Dict[str, Tuple[int, frozenset]] = {}
-        for rel in rels:
-            key = keys.get(rel)
-            if key is None:
-                if entries.pop(rel, None) is not None:
-                    dirty = True
-                continue
-            hit = entries.get(rel)
-            if hit is not None and hit[0] == key:
-                result[rel] = (hit[1], hit[2])
-                continue
-            data = read(f"{root}/{rel}")
-            if data is None:
-                if entries.pop(rel, None) is not None:
-                    dirty = True
-                continue
-            bloom, targets = bloom_of(data), _targets(rel, data)
-            entries[rel] = (key, bloom, targets)
-            result[rel] = (bloom, targets)
-            dirty = True
-        gone = set(entries) - set(rels)
-        for rel in gone:
-            del entries[rel]
-            dirty = True
-        if dirty:
-            _save(root, entries)
-        return result
+        builder = None
+        if sum(1 for rel in rels if rel in keys and (entries.get(rel) or (None,))[0] != keys[rel]) > _BIG_BUILD:
+            builder = _BuildLock(cache_key)
+            if not builder.acquire():
+                # Another process is building this index: wait for its file, then diff against it.
+                entries = _MEM[cache_key] = _load(cache_key)
+                keys = _listing_keys(root, rels)
+                builder = _BuildLock(cache_key) if builder.acquire() else None
+        try:
+            return _fold(root, rels, read, cache_key, build, entries, keys)
+        finally:
+            if builder is not None:
+                builder.release()
 
 
-def tracked_paths(repo_root: Path, read_index_paths: Callable[[Path], frozenset], index_file: Path) -> frozenset:
-    """The tracked path set, re-parsed only when the git index file's (mtime_ns, size) moved."""
+class _BuildLock:
+    """One build of a persisted index at a time across processes: an `O_EXCL` lock file naming its
+    owner. A lock whose owner died, or that is older than `_LOCK_STALE_SECS`, is taken over."""
+
+    def __init__(self, cache_key: str) -> None:
+        base = _cache_path(cache_key)
+        self.path = None if base is None else base.with_name(base.stem + ".building")
+        self.held = False
+
+    def _try(self) -> bool:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return False
+        except OSError:
+            return True  # no usable lock dir: build unlocked rather than wait on nothing
+        os.close(fd)
+        self.held = True
+        return True
+
+    def acquire(self) -> bool:
+        """True when this caller may build; False after waiting out another builder's lock."""
+        if self.path is None or self._try():
+            return True
+        deadline = time.monotonic() + _LOCK_STALE_SECS
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+            if not self.path.exists():
+                return False
+        try:
+            os.unlink(self.path)  # stale: the owner is gone
+        except OSError:
+            pass
+        return self._try() or True
+
+    def release(self) -> None:
+        if self.held:
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+            self.held = False
+
+
+def _fold(root, rels, read, cache_key, build, entries, keys):
+    dirty = False
+    result: Dict[str, Tuple[int, frozenset]] = {}
+    for rel in rels:
+        key = keys.get(rel)
+        if key is None:
+            if entries.pop(rel, None) is not None:
+                dirty = True
+            continue
+        hit = entries.get(rel)
+        if hit is not None and hit[0] == key:
+            result[rel] = (hit[1], hit[2])
+            continue
+        data = read(f"{root}/{rel}")
+        if data is None:
+            if entries.pop(rel, None) is not None:
+                dirty = True
+            continue
+        bloom, targets = build(rel, data)
+        entries[rel] = (key, bloom, targets)
+        result[rel] = (bloom, targets)
+        dirty = True
+    gone = set(entries) - set(rels)
+    for rel in gone:
+        del entries[rel]
+        dirty = True
+    if dirty:
+        _save(cache_key, entries)
+    return result
+
+
+def _tracked_sidecar(root: str) -> Optional[Path]:
+    path = _cache_path(root)
+    return None if path is None else path.with_name(path.stem + ".tracked")
+
+
+def tracked_paths(
+    repo_root: Path,
+    read_index_paths: Callable[[Path], frozenset],
+    index_file: Path,
+    keep: Optional[Callable[[str], bool]] = None,
+) -> frozenset:
+    """The tracked path set, re-parsed only when the git index file's (mtime_ns, size) moved.
+
+    With `keep`, the set is the paths it admits and is also persisted beside the index, so a cold
+    process skips the ~120k-entry git index parse while the index file is unchanged. `keep` must be a
+    pure function of the path: the persisted set is reused whatever `keep` a later caller passes."""
     try:
         st = os.stat(index_file)
         ident: Optional[Tuple[int, int]] = (st.st_mtime_ns, st.st_size)
@@ -227,11 +333,71 @@ def tracked_paths(repo_root: Path, read_index_paths: Callable[[Path], frozenset]
         hit = _TRACKED.get(root)
         if ident is not None and hit is not None and hit[0] == ident:
             return hit[1]
+    side = _tracked_sidecar(root) if keep is not None and ident is not None else None
+    if side is not None:
+        try:
+            saved = marshal.loads(side.read_bytes())
+            if saved[0] == _MAGIC and saved[1] == root and saved[2] == ident:
+                paths = frozenset(saved[3])
+                with _LOCK:
+                    _TRACKED[root] = (ident, paths)
+                return paths
+        except Exception:  # noqa: BLE001 -- absent or foreign: re-parse
+            pass
     paths = read_index_paths(repo_root)
+    if keep is not None:
+        paths = frozenset(r for r in paths if keep(r))
     if ident is not None:
         with _LOCK:
             _TRACKED[root] = (ident, paths)
+        if side is not None:
+            try:
+                side.parent.mkdir(parents=True, exist_ok=True)
+                tmp = side.with_name(f"{side.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                tmp.write_bytes(marshal.dumps((_MAGIC, root, ident, sorted(paths))))
+                os.replace(tmp, side)
+            except Exception:  # noqa: BLE001 -- persistence is best-effort
+                pass
     return paths
+
+
+RECENT_ROOTS = 4
+
+
+def _recent_file() -> Optional[Path]:
+    base = _cache_path("")
+    return None if base is None else base.parent / "recent-roots.json"
+
+
+def recent_roots(limit: int = RECENT_ROOTS) -> List[str]:
+    """Repo roots whose reverify scan ran most recently, newest first."""
+    path = _recent_file()
+    if path is None:
+        return []
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        return [r for r in rows if isinstance(r, str)][:limit]
+    except Exception:  # noqa: BLE001 -- absent or corrupt: no history
+        return []
+
+
+def record_root(root: str) -> None:
+    """Make `root` the most recent scanned repo. Writes only when the order changes, so a steady
+    stream of scans of one repo costs one read of a tiny file."""
+    path = _recent_file()
+    if path is None:
+        return
+    rows = recent_roots(RECENT_ROOTS * 4)
+    if rows[:1] == [root]:
+        return
+    rows = [root] + [r for r in rows if r != root]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(rows[: RECENT_ROOTS * 4]), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001 -- history is best-effort
+        pass
 
 
 def reset_memory() -> None:

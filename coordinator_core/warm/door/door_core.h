@@ -326,9 +326,13 @@ int door_json_top_string(const char *json, size_t len, const char *want, buf_t *
  * Appends a NUL-terminated path to `out`; 0 when the payload has no cwd. */
 int door_hook_spool_root(const char *payload, size_t len, buf_t *out);
 
+/* The key two spool payloads share when they ask the same thing (see door_core.c); NUL-terminated
+ * in `out`, 0 when the payload carries no sizing, run id or ask text. */
+int door_ask_dedupe_key(const char *payload, size_t len, buf_t *out);
+
 /* Writes `payload` as `<root>/.coordinator-local/ask-spool/<out_id>.json` (0600, O_EXCL),
  * layout pinned by docs/reference/ask-spool.md. `out_id` is set on every call that gets past
- * argument checks. Returns 1 created, 2 already spooled, 0 failed (no partial entry is left).
+ * argument checks. Returns 1 created, 2 already spooled (the same id, or a pending entry with the same ask, whose id lands in `out_id`), 0 failed (no partial entry is left).
  * POSIX only: the Windows build returns 0 until door.c wires its own writer. This is the one
  * function in the shared core that touches the filesystem. */
 int door_spool_hook_payload(const char *root, const char *payload, size_t len,

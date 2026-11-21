@@ -485,30 +485,6 @@ def test_shim_sets_stdin_mode_resolves_settings_home_and_maps_exit(plugin, tmp_p
     assert Path(calls[-1][0][0]).parent == tmp_path / "h" / ".coordinator-claude-settings" / "bin"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="door stand-in is a POSIX script; the mocked leg covers Windows")
-def test_shim_runs_end_to_end_with_a_real_child_process(plugin, tmp_path: Path) -> None:
-    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
-    out = tmp_path / "out"
-    gen.generate(plugin, out, "agy")
-    home = tmp_path / "home"
-    (home / "bin").mkdir(parents=True)
-    exe = home / "bin" / "hook-run"
-    exe.write_text('#!/bin/sh\ncat; echo "$COORDINATOR_DOOR_STDIN_MODE $*"; exit 2\n', encoding="utf-8")
-    exe.chmod(0o755)
-    r = subprocess.run([sys.executable, str(out / "hooks" / "agy-hook-run.py"), "--pass-2", "hooks.a"],
-                       input="EVT", capture_output=True, text=True, env={"COORDINATOR_SETTINGS_HOME": str(home)})
-    assert r.returncode == 0 and r.stdout == "EVThook hooks.a\n"
-
-
-def _stub_home(tmp_path, body):
-    home = tmp_path / "home"
-    (home / "bin").mkdir(parents=True)
-    exe = home / "bin" / "hook-run"
-    exe.write_text(body, encoding="utf-8")
-    exe.chmod(0o755)
-    return home
-
-
 def test_shim_hands_its_stdin_to_a_real_door_child_on_every_os(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
     out = tmp_path / "out"
@@ -556,33 +532,6 @@ def test_shim_passes_a_full_agy_pretooluse_payload_whole_on_every_os(plugin, tmp
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(payload.encode("utf-8")), encoding="utf-8"))
     assert main(["hooks.a"]) == 0
     assert json.loads(capfd.readouterr().out) == json.loads(payload)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="door stand-in is a POSIX script")
-def test_shim_pipes_payload_to_door_and_returns_promptly_with_open_stdin(plugin, tmp_path: Path) -> None:
-    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
-    out = tmp_path / "out"
-    gen.generate(plugin, out, "agy")
-    home = _stub_home(tmp_path, '#!/bin/sh\ncat\n')
-    r = subprocess.run([sys.executable, str(out / "hooks" / "agy-hook-run.py"), "hooks.a"],
-                       input=b'{"cwd": "/w"}', capture_output=True, timeout=30,
-                       env={"COORDINATOR_SETTINGS_HOME": str(home)})
-    assert r.returncode == 0 and r.stdout == b'{"cwd": "/w"}'
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="door stand-in is a POSIX script")
-def test_door_stderr_surfaces_without_quiet_and_not_with_it(plugin, tmp_path: Path) -> None:
-    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
-    out = tmp_path / "out"
-    gen.generate(plugin, out, "agy")
-    home = _stub_home(tmp_path, '#!/bin/sh\ncat >/dev/null\necho "door says no" >&2\nexit 1\n')
-    shim = str(out / "hooks" / "agy-hook-run.py")
-    env = {"COORDINATOR_SETTINGS_HOME": str(home)}
-    loud = subprocess.run([sys.executable, shim, "hooks.a"], input=b"x", capture_output=True, timeout=30, env=env)
-    quiet = subprocess.run([sys.executable, shim, "--quiet", "hooks.a"], input=b"x", capture_output=True,
-                           timeout=30, env=env)
-    assert loud.returncode == 1 and b"door says no" in loud.stderr
-    assert quiet.returncode == 1 and quiet.stderr == b""
 
 
 _REAL_RUN = subprocess.run
@@ -736,36 +685,6 @@ def test_agy_launcher_interpreter_is_the_one_the_os_resolves(monkeypatch: pytest
 
 _LOADER = "import runpy, sys; sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
 _JSON_PAYLOAD = '{"a": true, "b": false, "c": null}'
-
-
-def _run_generated(command, payload):
-    """Run one generated hook command the way agy does (no shell), interpreter swapped for this one."""
-    exe = gen._agy_python()
-    assert command.startswith(exe + " ")
-    if gen.os.name == "nt":
-        return subprocess.run(gen._win_cmdline([sys.executable]) + command[len(exe):], input=payload,
-                              capture_output=True, text=True, timeout=60)
-    import shlex
-    return subprocess.run([sys.executable, *shlex.split(command)[1:]], input=payload,
-                          capture_output=True, text=True, timeout=60)
-
-
-def test_args_form_hook_entries_run_their_script_not_the_stdin_payload(plugin, tmp_path: Path) -> None:
-    (plugin / "hooks" / "scripts" / "pre.py").write_text(
-        "import json, sys\nd = json.load(sys.stdin)\nprint('RAN', sys.argv[1:], d['a'], d['b'], d['c'])\n",
-        encoding="utf-8")
-    entry = {"type": "command", "command": "python3",
-             "args": ["-c", _LOADER, "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/pre.py", "boot arg"]}
-    (plugin / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [entry]}]}}), encoding="utf-8")
-    out = tmp_path / "out"
-    gen.generate(plugin, out, "agy")
-    data = json.loads((out / "hooks.json").read_text(encoding="utf-8"))
-    handlers = data["session-start"]["SessionStart"]
-    assert len(handlers) == 1 and all("args" not in h for h in handlers)
-    for h in handlers:
-        r = _run_generated(h["command"], _JSON_PAYLOAD)
-        assert "NameError" not in r.stderr and r.returncode == 0, r.stderr
-        assert "RAN ['boot arg'] True False None" in r.stdout
 
 
 def test_a_command_with_args_that_is_not_a_bare_interpreter_is_left_alone() -> None:

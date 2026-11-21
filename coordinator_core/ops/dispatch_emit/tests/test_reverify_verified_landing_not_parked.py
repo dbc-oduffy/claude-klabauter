@@ -163,17 +163,3 @@ def test_a_legacy_verdict_with_no_stored_record_mismatches(tmp_path):
     measured_rev_record_path(tmp_path, RUN).unlink()
 
     assert cov.check_verdict(tmp_path, RUN, current).verdict == "mismatch"
-
-
-def test_same_blob_content_reads_the_object_store_up_to_line_endings(tmp_path):
-    import subprocess
-
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    shas = []
-    for body in (b"a\nb\n", b"a\r\nb\r\n", b"a\nc\n"):
-        out = subprocess.run(["git", "-C", str(tmp_path), "hash-object", "-w", "--stdin"], input=body, capture_output=True, check=True)
-        shas.append(out.stdout.decode().strip())
-
-    assert cov._same_blob_content(tmp_path, shas[0], shas[1])
-    assert not cov._same_blob_content(tmp_path, shas[0], shas[2])
-    assert not cov._same_blob_content(tmp_path, shas[0], "0" * 40)

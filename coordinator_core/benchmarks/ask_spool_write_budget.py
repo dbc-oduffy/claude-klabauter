@@ -50,7 +50,7 @@ def _door_binary(scratch: Path) -> Path:
     """The built door when it carries the spool writer, else one compiled from source into `scratch`."""
     built = _DOOR_DIR / "door"
     try:
-        if built.is_file() and b"spooled as" in built.read_bytes():
+        if built.is_file() and b"SPOOLED as" in built.read_bytes():
             return built
     except OSError:
         pass
@@ -234,7 +234,7 @@ def _measure_case(name: str, call: Callable[[str], tuple[float, str]], repo: Pat
         "max_ms": round(max(samples), 1),
         "spool_entries": len(files),
         "mode": _mode(files[0]) if files else None,
-        "names_spool_id": bool(files) and f"spooled as {files[0].stem}" in text,
+        "names_spool_id": bool(files) and f"SPOOLED as {files[0].stem}" in text,
         "envelope_reason": text[:200],
     }
 

@@ -133,3 +133,18 @@ def test_shard_path_parity_with_doe() -> None:
                 got = ValueError
             assert got == want, (tree, name)
     assert otl.trees() == doe.trees()
+
+
+def test_plan_sidecar_rel_follows_the_located_plan(tmp_path: Path) -> None:
+    flat = tmp_path / "docs" / "plans" / "2026-11-03-foo.md"
+    flat.parent.mkdir(parents=True)
+    flat.write_text("x\n", encoding="utf-8")
+    root = str(tmp_path)
+    # flat plan on disk: sidecar stays beside it, whichever shape the cite names
+    assert otl.plan_sidecar_rel(root, "docs/plans/2026-11-03-foo.md", ".evidence.yaml") == "docs/plans/2026-11-03-foo.evidence.yaml"
+    assert otl.plan_sidecar_rel(root, "docs/plans/2026-11/2026-11-03-foo.md", ".evidence.yaml") == "docs/plans/2026-11-03-foo.evidence.yaml"
+    # nothing on disk: the shard rule places it
+    assert otl.plan_sidecar_rel(root, "docs/plans/2026-11-09-new.md", ".review.md") == "docs/plans/2026-11/2026-11-09-new.review.md"
+    # non-.md cite and non-tree cite
+    assert otl.plan_sidecar_rel(root, "docs/plans/2026-11-09-new", ".x") == "docs/plans/2026-11/2026-11-09-new.x"
+    assert otl.plan_sidecar_rel(root, "scratch/p.md", ".evidence.yaml") == "scratch/p.evidence.yaml"

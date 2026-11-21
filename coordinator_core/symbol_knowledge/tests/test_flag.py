@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.symbol_knowledge import contract, flag, sidecar
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 PARENT_SRC = (
     "def alpha():\n    return 1\n\n\n"

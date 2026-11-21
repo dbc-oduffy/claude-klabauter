@@ -78,22 +78,6 @@ _PROBE = (
 )
 
 
-def test_the_idle_sweep_import_closure_stays_off_the_boot_path():
-    """`push_cadence` pulls git, ceremony and push ops (~60 modules): a cold-bytecode successor
-    compiles all of them before its first answer. Loading `server` must not import it; the
-    attribute stays reachable and imports on first use."""
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    root = Path(server.__file__).resolve().parents[2]
-    out = subprocess.run(
-        [sys.executable, "-c", _PROBE], cwd=root, capture_output=True, text=True, timeout=60
-    )
-    assert out.returncode == 0, out.stderr
-    assert out.stdout.split() == ["False", "True", "coordinator_core.warm.push_cadence"]
-
-
 def test_a_pool_worker_runs_no_registry_or_emit_chain_import_inline() -> None:
     """A worker's boot CPU is its first task's alone: a full registry import costs ~1s warm and
     seconds cold in every worker, so init runs neither inline; the emit chain may only start on a
@@ -176,22 +160,6 @@ def test_a_dispatch_on_a_module_mid_import_still_opens_the_import_phase(monkeypa
     mod.__spec__ = types.SimpleNamespace(_initializing=False)
     assert server._import_op_module({}, str(tmp_path), "k2") is True
     assert began == ["k1"], "a fully loaded module must not write a marker"
-
-
-def test_a_worker_resolves_a_first_op_through_the_targeted_lookup_not_a_full_registry() -> None:
-    import subprocess
-    import sys
-
-    probe = (
-        "import sys;from coordinator_core import ipc;"
-        "ipc.get_op_handler('ceremony.commit_v2');"
-        "print(len(ipc._REGISTRY), len([m for m in sys.modules if m.startswith('coordinator_core.ops.')]))"
-    )
-    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=120)
-    assert out.returncode == 0, out.stderr
-    registered, ops_modules = (int(x) for x in out.stdout.split())
-    assert registered >= 1
-    assert ops_modules < 150, "a first-op lookup must not import the whole op tree"
 
 
 def _stub_version_inputs(monkeypatch, tmp_path, stamps, digests):
@@ -319,27 +287,6 @@ def test_boot_defers_the_http_listener_behind_the_first_answer_and_hashes_no_sou
     assert boot.count("_after_first_pool_answer(") == 1
     assert "settle_boot_hash" not in boot
     assert "threading.Thread(target=_ensure_http_listener" not in boot
-
-
-@pytest.mark.spawns_process
-def test_a_cold_guard_op_resolves_within_the_process_time_budget_and_imports_no_whole_op_tree() -> None:
-    """A fresh process answers its first guard op without the whole-package import that stalled a
-    fresh engine for 27s; budget is process time, never wall clock (500ms)."""
-    import subprocess
-    import sys
-
-    probe = (
-        "import sys,time;from coordinator_core import ipc;"
-        "h=ipc.get_op_handler('hooks.guard_host_subagent_bash_ban');"
-        "print(h is not None, time.process_time(),"
-        " 'coordinator_core.ops.post_run_finish' in sys.modules)"
-    )
-    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=120)
-    assert out.returncode == 0, out.stderr
-    resolved, process_s, whole_tree = out.stdout.split()
-    assert resolved == "True"
-    assert whole_tree == "False", "a guard op lookup must not import the whole op tree"
-    assert float(process_s) < 0.5
 
 
 def test_warm_server_boot_never_calls_the_whole_op_tree_preload() -> None:

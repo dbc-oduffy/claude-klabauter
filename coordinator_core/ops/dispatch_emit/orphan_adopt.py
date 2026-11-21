@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.session.output_tree_layout import locate
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     RECORD_DIR_ROOT, RUN_DIR_ROOT, RUN_STAGE_FILE, _read_json_object,
@@ -130,7 +131,7 @@ def _plan_rel(repo_root: Path, run_dir: Path) -> Optional[str]:
     except OSError:
         return None
     for name in names:
-        rel = f"docs/plans/{name[:-len('.spine.md')]}.md"
+        rel = locate(str(repo_root), f"docs/plans/{name[:-len('.spine.md')]}.md")
         if (Path(repo_root) / rel).is_file():
             return rel
     return None

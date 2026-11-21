@@ -91,6 +91,20 @@ def _wait_dead(pid: int, timeout: float = 5.0) -> bool:
     return not _alive(pid)
 
 
+def test_cache_key_moves_with_any_registry_layer_not_only_the_two_named(tmp_path, monkeypatch):
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    (reg / "registry.toml").write_text("a = 1\n", encoding="utf-8")
+    before = mls._cache_key(sys.executable, ("get", "k"))
+    extra = reg / "registry.extra.toml"
+    extra.write_text("b = 2\n", encoding="utf-8")
+    added = mls._cache_key(sys.executable, ("get", "k"))
+    assert added != before
+    os.utime(extra, ns=(1_000_000_000, 1_000_000_000))
+    assert mls._cache_key(sys.executable, ("get", "k")) != added
+
+
 @pytest.mark.deliberate_wall_clock(reason="the spawn timeout bound is the behaviour under test")
 def test_run_bounded_timeout_returns_none_and_reaps_child(env, monkeypatch):
     monkeypatch.setenv("STUB_SLEEP", "30")
@@ -378,27 +392,6 @@ def test_waiter_behind_slow_dump_gives_up_inside_wait_ceiling(env, monkeypatch):
     assert results.count(None) == 2 and len(results) == 3
 
 
-def test_concurrent_processes_start_exactly_one_child(env, monkeypatch):
-    monkeypatch.setenv("STUB_SLEEP", "1.0")
-    code = (
-        "import sys; sys.path.insert(0, sys.argv[1]);"
-        "from coordinator_core import machine_local_spawn as m;"
-        "print(m.dump(sys.argv[2], in_process=False))"
-    )
-    procs = [
-        subprocess.Popen(
-            [sys.executable, "-c", code, str(REPO_ROOT), env["stub"]],
-            stdout=subprocess.PIPE,
-            text=True,
-            env=dict(os.environ),
-        )
-        for _ in range(3)
-    ]
-    outs = [p.communicate(timeout=60)[0].strip() for p in procs]
-    assert len(_spawned(env["pidfile"])) == 1
-    assert outs == ["{'repos.a': '/x/a', 'repos.b': None}"] * 3
-
-
 def test_shared_cache_serves_a_fresh_process_without_spawning(env):
     assert mls.dump(env["stub"], in_process=False) is not None
     mls._CACHE.clear()
@@ -525,43 +518,6 @@ def test_threads_never_exceed_the_box_wide_cap(env, monkeypatch):
     assert len(results) == 8
     assert sum(r is None for r in results) >= 1
     assert sum(r is not None for r in results) >= 1
-
-
-def test_processes_never_exceed_the_box_wide_cap_and_leave_no_survivors(env, monkeypatch):
-    monkeypatch.setenv("MACHINE_LOCAL_MAX_INFLIGHT", "2")
-    monkeypatch.setenv("STUB_SLEEP", str(CONTENDED_STUB_SLEEP_S))
-    procs = [
-        subprocess.Popen(
-            [sys.executable, "-c", CALLER, str(REPO_ROOT), env["stub"]],
-            stdout=subprocess.PIPE,
-            text=True,
-            env=dict(os.environ),
-        )
-        for _ in range(4)
-    ]
-    peak = _sample_live_max(env["pidfile"], lambda: any(p.poll() is None for p in procs))
-    outs = [p.communicate(timeout=60)[0].strip() for p in procs]
-    assert peak <= 2
-    assert "none" in outs
-    assert all(_wait_dead(pid) for pid in _spawned(env["pidfile"]))
-
-
-@pytest.mark.skipif(
-    sys.platform == "darwin", reason="macOS has no parent-death signal or job object"
-)
-def test_a_killed_caller_leaves_no_surviving_stub_child(env, monkeypatch):
-    monkeypatch.setenv("STUB_SLEEP", "30")
-    caller = subprocess.Popen(
-        [sys.executable, "-c", CALLER, str(REPO_ROOT), env["stub"]],
-        stdout=subprocess.PIPE,
-        text=True,
-        env=dict(os.environ),
-    )
-    pids = _wait_for(env["pidfile"])
-    assert pids
-    caller.kill()
-    caller.wait(10)
-    assert all(_wait_dead(pid, timeout=5.0) for pid in pids)
 
 
 @pytest.mark.deliberate_wall_clock(reason="the slot wait timeout bound is the behaviour under test")

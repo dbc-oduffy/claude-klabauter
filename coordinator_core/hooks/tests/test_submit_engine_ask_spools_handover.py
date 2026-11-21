@@ -35,7 +35,7 @@ def _assert_spooled_allow(env: dict, root: Path) -> str:
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow", env
     (spool_id,) = _spooled(root)
-    assert f"spooled as {spool_id}" in hso["additionalContext"], env
+    assert f"SPOOLED as {spool_id}" in hso["additionalContext"], env
     assert hso["updatedInput"]["scriptPath"].endswith(f"spooled-{spool_id}.workflow.mjs")
     return spool_id
 
@@ -169,7 +169,7 @@ def test_refire_of_a_halted_run_that_outruns_the_budget_is_refused_not_spooled(t
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny", env
     assert halted_id in hso["permissionDecisionReason"]
-    assert "spooled as" not in hso["permissionDecisionReason"]
+    assert "SPOOLED as" not in hso["permissionDecisionReason"]
     assert _spooled(root) == []
 
 
@@ -201,7 +201,7 @@ def test_unwritable_placeholder_script_denies_but_names_the_spooled_entry(repo, 
     (spool_id,) = _spooled(repo)
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny", env
-    assert f"spooled as {spool_id}" in hso["permissionDecisionReason"]
+    assert f"SPOOLED as {spool_id}" in hso["permissionDecisionReason"]
     assert f"coordinator-invoke ask_spool.withdraw '{{\"spool_id\":\"{spool_id}\"" in hso["permissionDecisionReason"]
 
 
@@ -213,3 +213,38 @@ def test_allow_envelope_names_the_withdraw_verb_with_the_spool_id(repo):
     spool_id = _assert_spooled_allow(env, repo)
     context = env["hookSpecificOutput"]["additionalContext"]
     assert f"coordinator-invoke ask_spool.withdraw '{{\"spool_id\":\"{spool_id}\",\"reason\":\"...\"}}'." in context
+
+
+def _handover(_p, _r):
+    raise HandoverPending(5)
+
+
+def test_spooled_reply_leads_with_the_state_and_forbids_a_resubmit(repo):
+    env = mod.evaluate(_ask(repo), emit=_handover)
+    spool_id = _assert_spooled_allow(env, repo)
+    context = env["hookSpecificOutput"]["additionalContext"]
+    assert context.removeprefix("[coordinator] ").startswith(
+        f"SPOOLED as {spool_id}: it fires automatically once the engine is warm. Do not resubmit."
+    )
+    assert "unavailable" not in context.lower()
+
+
+def test_an_identical_resubmit_spools_no_second_entry_and_names_the_first(repo):
+    first = mod.evaluate(_ask(repo), emit=_handover)
+    spool_id = _assert_spooled_allow(first, repo)
+    again = _ask(repo, "  Build   the THING ")
+    again["tool_use_id"] = "toolu_spool_2"
+    second = mod.evaluate(again, emit=_handover)
+    assert _spooled(repo) == [spool_id]
+    assert second["hookSpecificOutput"]["additionalContext"].removeprefix("[coordinator] ").startswith(f"SPOOLED as {spool_id}: ")
+
+
+def test_a_distinct_ask_spools_its_own_entry(repo):
+    mod.evaluate(_ask(repo), emit=_handover)
+    other = _ask(repo, "build another thing")
+    other["tool_use_id"] = "toolu_spool_3"
+    env = mod.evaluate(other, emit=_handover)
+    ids = _spooled(repo)
+    assert len(ids) == 2
+    named = [i for i in ids if f"SPOOLED as {i}" in env["hookSpecificOutput"]["additionalContext"]]
+    assert len(named) == 1

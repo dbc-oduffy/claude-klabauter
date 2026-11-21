@@ -62,4 +62,6 @@ def test_footprint_prompt_is_quoted_and_carries_the_shared_head(arm):
     call = call[: call.index("label: 'footprint'")]
     # The footprint prose is a JS string literal, never raw text spliced into the script.
     assert "'Read the XS sizing at " in call or '"Read the XS sizing at ' in call, call[:200]
-    assert "_agentDefsClause()" in call, call[:200]
+    assert "_agentDefsClause()" in call or "_agentHead" in call, call[:200]
+    if "_agentHead" in call:
+        assert "const _agentHead" in script and "_agentDefsClause()" in script.split("const _agentHead", 1)[1].split("\n", 1)[0]

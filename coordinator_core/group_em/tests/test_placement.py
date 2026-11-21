@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from coordinator_core.group_em import box_registry, placement
+from coordinator_core.group_em import box_registry, capacity_admit, capacity_record, job_peaks, placement
 from pathlib import Path
 
 
@@ -69,3 +69,84 @@ def test_distinct_runs_sharing_a_safe_filename_refuse_and_keep_the_first(tmp_pat
     assert again["ok"]
     box_root = small if first["placement"]["box_id"] == a["box_id"] else big
     assert [p["brief"] for p in placement.read_intake(box_root)] == ["third"]
+
+
+def test_os_requirement_matches_by_list_membership_case_insensitively() -> None:
+    cap = {"os": "Windows"}
+    assert placement.satisfies(cap, {"os": ["linux", "windows"]})
+    assert placement.satisfies(cap, {"os": "windows"})
+    assert not placement.satisfies(cap, {"os": ["linux", "darwin"]})
+    assert not placement.satisfies({}, {"os": ["linux"]})
+
+
+def test_min_free_floor_reads_measured_free_headroom_off_the_sample() -> None:
+    sample = _sample("Windows", vram_used=6144)
+    cap = placement.sample_capability(sample)
+    assert cap["free_vram_mib"] == 32768 - 6144
+    assert placement.satisfies(cap, {"min_free_vram_mib": 20000})
+    assert not placement.satisfies(cap, {"min_free_vram_mib": 30000})
+    assert not placement.satisfies(placement.sample_capability({}), {"min_free_ram_mb": 1})
+
+
+def _sample(os_name, vram_used=6144, ram_avail=50_000, load=10.0):
+    return {
+        "os": os_name,
+        "cores_logical": 16,
+        "load_pct": load,
+        "ram_avail_mb": ram_avail,
+        "gpus": [{"index": 0, "vram_total_mib": 32768, "vram_used_mib": vram_used}],
+        "jobs": [],
+    }
+
+
+def _fleet(tmp_path, now=1000.0):
+    primary = tmp_path / "primary" / "state" / "group-em"
+    boxes = {}
+    for name, os_name, used, ram in (
+        ("win", "Windows", 6144, 50_000),
+        ("lin", "Linux", 1000, 90_000),
+        ("mac", "Darwin", 30000, 8_000),
+    ):
+        root = tmp_path / name
+        rec = box_registry.register(root, {}, box_id=name, directory=primary)
+        assert capacity_record.stamp({**_sample(os_name, used, ram), "box_id": name}, root, now=now)
+        boxes[name] = rec
+    job_peaks.record("render", {"vram_mib": 20000, "ram_mb": 8000, "cores": 2}, tmp_path / "primary", now=now)
+    return primary, tmp_path / "primary"
+
+
+def test_candidates_lists_capable_boxes_sorted_by_headroom_and_filters_by_platform(tmp_path: Path) -> None:
+    primary, home = _fleet(tmp_path)
+    rows = placement.candidates("render", directory=primary, home=home, now=1010.0)
+    assert [r["box_id"] for r in rows] == ["lin", "win"]
+    assert rows[0]["headroom"]["vram_mib"] == 32768 - 1000 and rows[0]["peak_basis"] == "measured"
+    only_win = placement.candidates("render", os=["windows"], directory=primary, home=home, now=1010.0)
+    assert [r["box_id"] for r in only_win] == ["win"]
+    assert placement.candidates("render", os="darwin", directory=primary, home=home, now=1010.0) == []
+
+
+def test_candidates_subtracts_granted_but_not_started_jobs(tmp_path: Path) -> None:
+    primary, home = _fleet(tmp_path)
+    admitted = capacity_admit.admit(
+        "r1", "render", capacity_record.read({"box_id": "lin", "root": tmp_path / "lin"}, 1010.0),
+        job_peaks.peak("render", home), home=tmp_path / "lin", now=1010.0,
+    )
+    assert admitted["grant"]
+    assert placement.candidates("render", os="linux", directory=primary, home=home, now=1011.0) == []
+    job_peaks.record("small", {"vram_mib": 5000}, home, now=1011.0)
+    small = placement.candidates("small", os="linux", directory=primary, home=home, now=1011.0)
+    assert [r["headroom"]["vram_mib"] for r in small] == [32768 - 1000 - 20000]
+    floor = placement.candidates("small", requirement={"min_free_vram_mib": 20000}, directory=primary, home=home, now=1011.0)
+    assert [r["box_id"] for r in floor] == ["win"]
+
+
+def test_candidates_skips_stale_boxes_and_unmeasured_job_types(tmp_path: Path) -> None:
+    primary, home = _fleet(tmp_path)
+    assert placement.candidates("render", directory=primary, home=home, now=1000.0 + capacity_record.TTL_S + 1) == []
+    assert placement.candidates("never-measured", directory=primary, home=home, now=1010.0) == []
+    declared = placement.candidates("never-measured", declared={"ram_mb": 100}, directory=primary, home=home, now=1010.0)
+    assert {r["peak_basis"] for r in declared} == {"declared"} and len(declared) == 3
+
+
+def test_candidates_never_raises_on_an_empty_registry(tmp_path: Path) -> None:
+    assert placement.candidates("render", directory=tmp_path / "nowhere", home=tmp_path / "nohome") == []

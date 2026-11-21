@@ -13,6 +13,8 @@ from coordinator_core.codex_runner import workflow
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 if TYPE_CHECKING:
     from subprocess import Popen
 
@@ -51,6 +53,40 @@ def _run(tmp_path, agent_type):
 
 def _allow(argv):
     return argv[argv.index("--allow") + 1]
+
+
+def test_grok_sizing_uses_native_progress_and_reads_terminal_result(tmp_path, stub):
+    seen, box = stub
+    box["STUB_ENVELOPE"] = "\n".join(json.dumps(event) for event in (
+        {"type": "available_commands", "commands": []},
+        {"type": "text", "data": '{"a":'},
+        {"type": "text", "data": " 1}"},
+        {"type": "end", "stopReason": "end_turn", "modelUsage": {"grok-build": {"modelCalls": 1}}},
+    ))
+
+    assert _run(tmp_path, "coordinator:sizing-scout") == {"a": 1}
+    argv, = seen
+    assert argv[argv.index("--output-format") + 1] == "streaming-json"
+    receipt = json.loads((tmp_path / "art/process.json").read_text(encoding="utf-8"))
+    assert receipt["model"] == "grok-build"
+
+
+def test_grok_sizing_never_accepts_a_partial_stream_as_a_result(tmp_path, stub):
+    _, box = stub
+    box["STUB_ENVELOPE"] = json.dumps({"type": "text", "data": '{"a":1}'}) + "\n"
+    with pytest.raises(workflow.AgentFailed, match="grok emitted no terminal end event"):
+        _run(tmp_path, "coordinator:sizing-scout")
+
+
+def test_grok_sizing_names_native_stream_cancellation(tmp_path, stub):
+    _, box = stub
+    box["STUB_ENVELOPE"] = "\n".join(json.dumps(event) for event in (
+        {"type": "text", "data": '{"a":1}'},
+        {"type": "end", "stopReason": "cancelled"},
+    ))
+    box["STUB_STDERR"] = "permission required"
+    with pytest.raises(workflow.AgentFailed, match="stopReason cancelled.*permission required"):
+        _run(tmp_path, "coordinator:sizing-scout")
 
 
 def test_relay_child_gets_only_the_coordinator_invoke_allow_rule(tmp_path: Path, stub) -> None:

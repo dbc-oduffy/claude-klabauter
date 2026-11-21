@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Union
 
 from coordinator_core.git.git_state import head_branch
-from coordinator_core.hooks.auto_push import branch_gate
 
 
 def _result(status: str, reason: str) -> dict:
@@ -58,6 +57,8 @@ def nudge_push(
         branch = branch or head_branch(worktree_root)
         if not branch:
             return _result("not_pushed", "detached or unresolvable HEAD")
+        from coordinator_core.hooks.auto_push import branch_gate
+
         ok, _ = branch_gate(branch)
         if not ok:
             return _result("not_pushed", f"branch {branch} is outside the work/* push policy")

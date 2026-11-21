@@ -820,7 +820,7 @@ def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=sock
          authorized_keys=None, self_names=None, platform=None, out=None, roster=None,
          autolink=None, far_sshd_log=None, launchctl_list=None, relay_ps=None, environ=None, read_key=None,
          known_hosts=None, sessions_dir=None, deliveries=None, channel=None, sshd_config=None, programdata=None,
-         is_admin=None):
+         is_admin=None) -> int:
     out = out or sys.stdout
     al = autolink or _load("unimatrix_autolink", "unimatrix-autolink.py")
     roster = roster or al._roster()
@@ -830,6 +830,12 @@ def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=sock
             return 2
         return confirm(argv[1], {"autolink": al, "roster": roster, "run": run}, out,
                        sessions_dir=sessions_dir, deliveries=deliveries, channel=channel)
+    try:
+        roster.settings_home()
+    except RuntimeError as exc:
+        # Every check below roots at the settings home; unset, it is the one finding.
+        print(f"problem: {exc}", file=out)
+        return 1
     mem = al._membership()
     plat = platform or sys.platform
     relay = _load("unimatrix_relay_doctor", "unimatrix-relay.py")

@@ -122,6 +122,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import PLAN_ORPHAN_TERMINAL_STATUS
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session.output_tree_layout import iter_entries
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -862,10 +863,8 @@ def list_stale_executing(
     # path (forward-slash, matching `_batch_git_commit_epochs`'/`list_orphaned`'s
     # convention) — no git call here at all.
     candidate_paths: List[str] = []
-    for name in sorted(os.listdir(plans_dir)):
-        if not name.endswith(".md"):
-            continue
-        file_path = plans_dir / name
+    for plan_rel in sorted(iter_entries(str(repo_root), "docs/plans", ".md")):
+        file_path = repo_root / plan_rel
         if _is_sidecar_file(str(file_path)) or not file_path.is_file():
             continue
 
@@ -879,7 +878,7 @@ def list_stale_executing(
         if status != EXECUTING_STATUS:
             continue
 
-        candidate_paths.append(os.path.join("docs", "plans", name).replace(os.sep, "/"))
+        candidate_paths.append(plan_rel)
 
     # Second pass: ONE git-log walk resolves every candidate's most-recent-
     # commit epoch (C14 — was one `_git_commit_epoch` spawn per candidate).
@@ -1245,13 +1244,11 @@ def list_orphaned(
             ),
         }
 
-    for name in sorted(os.listdir(plans_dir)):
-        if not name.endswith(".md"):
-            continue
-        file_path = plans_dir / name
+    for rel_path in sorted(iter_entries(str(repo_root), "docs/plans", ".md")):
+        file_path = repo_root / rel_path
         if (
             _is_sidecar_file(str(file_path))
-            or _is_census_local_sidecar(file_path, plans_dir)
+            or _is_census_local_sidecar(file_path, file_path.parent)
             or not file_path.is_file()
         ):
             continue
@@ -1273,7 +1270,6 @@ def list_orphaned(
             non_plan_excluded_count += 1
             continue
 
-        rel_path = os.path.join("docs", "plans", name).replace(os.sep, "/")
         plan_deliverable_id = extract_frontmatter_scalar(text, "deliverable_id")
         if plan_deliverable_id:
             plan_deliverable_ids.setdefault(plan_deliverable_id, []).append(rel_path)

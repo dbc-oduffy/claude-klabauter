@@ -98,17 +98,13 @@ Negative-spec:
 from __future__ import annotations
 
 import json
+from importlib import import_module
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from coordinator_core.backlog_grind_assemble import directives as _directives
-from coordinator_core.backlog_grind_assemble import readers_blitz as readers_bug_blitz
-from coordinator_core.backlog_grind_assemble import readers_debt as readers_debt_triage
-from coordinator_core.backlog_grind_assemble import readers_dogfood
-from coordinator_core.backlog_grind_assemble import readers_mise as readers_mise_en_place
-from coordinator_core.backlog_grind_assemble import readers_sweep as readers_bug_sweep
 from coordinator_core.contract.decision_object.envelope import (
     build_envelope,
     _emit as _envelope_emit,
@@ -118,7 +114,7 @@ from coordinator_core.resolution.facade import resolve_operator_config
 #: The five mirror-surface cadences `backlog-grind-assemble brief` accepts.
 #: Cadence names WHICH surface is asking, not a severity/depth knob (D-2) —
 #: see the module docstring for the `orient-assemble brief --cadence` naming
-#: reuse. Order matches `_READER_MODULES` below 1:1.
+#: reuse. Order matches `_READERS` below 1:1.
 CADENCES: tuple[str, ...] = (
     "bug-blitz",
     "mise-en-place",
@@ -127,13 +123,26 @@ CADENCES: tuple[str, ...] = (
     "dogfood",
 )
 
-_READER_MODULES = (
-    readers_bug_blitz,
-    readers_mise_en_place,
-    readers_bug_sweep,
-    readers_debt_triage,
-    readers_dogfood,
-)
+_READERS = {
+    "readers_bug_blitz": "readers_blitz",
+    "readers_mise_en_place": "readers_mise",
+    "readers_bug_sweep": "readers_sweep",
+    "readers_debt_triage": "readers_debt",
+    "readers_dogfood": "readers_dogfood",
+}
+
+
+def __getattr__(name: str):
+    if name not in _READERS:
+        raise AttributeError(name)
+    module = import_module(f".{_READERS[name]}", __name__)
+    globals()[name] = module
+    return module
+
+
+def _reader_modules():
+    return (getattr(sys.modules[__name__], name) for name in _READERS)
+
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -267,7 +276,7 @@ def brief(
 
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
-    for reader in _READER_MODULES:
+    for reader in _reader_modules():
         result = reader.collect(cadence, run_id=run_id)
         directives.extend(result.directives)
         judgment_points.extend(result.judgment_points)
@@ -361,7 +370,7 @@ def _main_mint_run_id(rest: list[str]) -> int:
         )
         return EXIT_USAGE
 
-    for reader in _READER_MODULES:
+    for reader in _reader_modules():
         minter = getattr(reader, "mint_run_id", None)
         if minter is None:
             continue

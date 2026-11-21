@@ -15,6 +15,8 @@ from coordinator_core.ops.dispatch_emit import review_edit_source, review_edits
 from coordinator_core.ops.tests.test_review_tripwires import stage
 from coordinator_core.session.machinery_paths import share_dir
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REAL_POPEN = subprocess.Popen
 _NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 SESSION = "sess-own"

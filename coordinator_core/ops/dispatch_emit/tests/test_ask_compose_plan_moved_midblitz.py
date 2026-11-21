@@ -10,9 +10,9 @@ from coordinator_core.ops.dispatch_emit.ask_compose import (
     ARM_M_PLUS,
     ARM_S,
     OP_PREP_GATE,
-    compose_ask_script,
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.conftest import compose_ask_script
 
 pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
 

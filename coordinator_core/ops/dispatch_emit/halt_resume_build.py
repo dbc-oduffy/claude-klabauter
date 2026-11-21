@@ -21,6 +21,7 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import PackReadDeadline, retry_past_stall
 from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_PM, HALT_PLAN_FIELD, RUN_DIR_ROOT, record_dir
+from coordinator_core.ops.dispatch_emit.ask_staged_prompts import bind_script_literals
 
 COMPOSED_SCRIPT_FILE = "resume-script.workflow.mjs"
 REFUSAL_BACKOFF_S = 300
@@ -138,7 +139,7 @@ def build(root, run_id: str) -> Optional[dict]:
             and (rd / EVICTED_FILE).is_file() and (rd / WITHHELD_OWN_DELTA_FILE).is_file(),
         )
         target = rd / COMPOSED_SCRIPT_FILE
-        atomic_write_bytes(target, script.encode("utf-8"))
+        atomic_write_bytes(target, bind_script_literals(script).encode("utf-8"))
         from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt
 
         _write_emission_receipt(target, resume_plan_rel or plan_rel, {}, {"session_id": session_id})

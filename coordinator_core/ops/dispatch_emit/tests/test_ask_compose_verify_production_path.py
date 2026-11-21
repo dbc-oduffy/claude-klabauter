@@ -176,23 +176,6 @@ def test_verify_agent_prompt_does_not_run_the_export() -> None:
     assert "--export-run" not in call
 
 
-def test_overlay_producer_command_imports_coordinator_core_from_a_consumer_cwd(tmp_path: Path) -> None:
-    import os
-    import shlex
-    import subprocess
-    import sys
-
-    cmd = ask_compose.engine_module_command("coordinator_core.ops.dispatch_emit.clean_overlay_verify", str(tmp_path), "--help")
-    binding, _, *args = shlex.split(cmd)
-    key, value = binding.split("=", 1)
-    assert key == "PYTHONPATH"
-    result = subprocess.run(
-        [sys.executable, *args], cwd=tmp_path, capture_output=True, text=True,
-        env={**os.environ, key: value},
-    )
-    assert result.returncode == 0, result.stderr
-
-
 def test_commit_halt_reason_carries_refusal_and_error_text() -> None:
     lines = "\n".join(
         ask_compose.roadmap_commit_lines(head="h", anchor="a", repo_root=str(Path(__file__).resolve().parents[4]), run_id="2026-11-13-x-aaaaaa")

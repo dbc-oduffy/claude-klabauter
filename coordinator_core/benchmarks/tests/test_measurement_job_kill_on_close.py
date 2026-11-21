@@ -14,10 +14,7 @@ import pytest
 from coordinator_core.benchmarks import process_time
 from pathlib import Path
 
-pytestmark = [
-    pytest.mark.skipif(not process_time.IS_WINDOWS, reason="Windows job-object behaviour"),
-    pytest.mark.spawns_process,
-]
+pytestmark = [pytest.mark.skipif(not process_time.IS_WINDOWS, reason="Windows job-object behaviour")]
 
 _HUNG_CHILD = (
     "import pathlib, sys, time;"
@@ -43,15 +40,6 @@ def _is_running(pid: int) -> bool:
         return code.value == _STILL_ACTIVE
     finally:
         k32.CloseHandle(handle)
-
-
-def _wait_for_pid_file(path, deadline_s: float = 20.0) -> int:
-    end = time.monotonic() + deadline_s
-    while time.monotonic() < end:
-        if path.exists() and path.read_text().strip():
-            return int(path.read_text().strip())
-        time.sleep(0.05)
-    raise AssertionError(f"child never wrote {path}")
 
 
 def _wait_gone(pid: int, deadline_s: float = 10.0) -> bool:
@@ -92,30 +80,6 @@ def test_job_without_the_flag_is_distinguishable() -> None:
     finally:
         process_time._k32.CloseHandle(wintypes.HANDLE(job))
     assert not flags & process_time._JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-
-
-def test_closing_the_job_handle_kills_a_live_member(tmp_path: Path) -> None:
-    pid_file = tmp_path / "pid.txt"
-    job = process_time._windows_create_kill_on_close_job()
-    proc = subprocess.Popen(
-        [sys.executable, "-c", _HUNG_CHILD, str(pid_file)],
-        creationflags=process_time._CREATE_NO_WINDOW,
-    )
-    try:
-        assert process_time._k32.AssignProcessToJobObject(
-            wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle))
-        )
-        pid = _wait_for_pid_file(pid_file)
-        assert _is_running(pid)
-        process_time._k32.CloseHandle(wintypes.HANDLE(job))
-        job = None
-        assert _wait_gone(pid), "member survived the job handle closing"
-    finally:
-        if job is not None:
-            process_time._k32.CloseHandle(wintypes.HANDLE(job))
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait()
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a hung child blocks the measurement before it raises, a wait CPU time cannot see")

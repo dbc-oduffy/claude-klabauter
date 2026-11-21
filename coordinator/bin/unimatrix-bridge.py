@@ -77,6 +77,30 @@ def pick_remote(lan, tunnel):
     return _roster().pick_remote(lan, tunnel)
 
 
+#: `unimatrix_far_addresses.Route.verification` values that may carry a frame: a host-key-verified LAN
+#: address, or the recorded fallback that ssh verifies strictly when it dials. Trap: keep in step with
+#: VERIFIED / SSH_STRICT_AT_DIAL there; any other value (unavailable, not-this-box, ...) is refused.
+DIALABLE = ("verified", "ssh-strict-at-dial")
+
+
+class RouteRefused(Exception):
+    """The roster named no authenticated route; nothing was dialled."""
+
+
+def route_target(picked) -> "tuple[str, str | None]":
+    """(ssh remote, transport label or None) for what the roster's `pick_remote` returned.
+
+    A string is the legacy alias answer (label None: the caller derives ssh/tunnel). A Route-shaped
+    result (`endpoint`, `transport`, `verification`) is dialled only when `verification` is in DIALABLE;
+    anything else raises RouteRefused with its reason, so a TCP-only or wrong-peer route never carries a frame."""
+    if isinstance(picked, str) or not hasattr(picked, "verification"):
+        return picked, None
+    if picked.verification not in DIALABLE or not picked.endpoint:
+        why = getattr(picked, "fallback_reason", None) or picked.verification
+        raise RouteRefused(f"no authenticated route to {getattr(picked, 'peer', None) or getattr(picked, 'alias', '?')}: {why}")
+    return picked.endpoint, picked.transport
+
+
 def parse_args(argv):
     p = argparse.ArgumentParser(prog="unimatrix-bridge.py")
     p.add_argument("endpoint")
@@ -255,12 +279,15 @@ def record_delivery(entry):
         log.write(f"delivery record failed: {e}\n")
 
 
-def notify_sender(line, target, error):
+def notify_sender(line, target, error) -> None:
     """Tell the sender of `line` its cross-box message did not land, through the return leg's write_local.
 
     The notice is stamped from this bridge's own endpoint: the inbox accepts it because
     this process is the one the mirror entry vouches for.
     """
+    if "unconfirmed" in error:
+        _tell_sender(line, f"Delivery unconfirmed: your message to {target} may have reached the far box ({error}). Do not resend blindly.")
+        return
     _tell_sender(line, f"Delivery failed: your message to {target} did not reach the far box ({error}). It was not delivered.")
 
 
@@ -334,9 +361,15 @@ def _roster_wrote_name(addressed, far_name, remote, entry_box=None):
 
 #: The prefix unimatrix-relay.py puts on every wrong-target refusal; a match unmirrors the mirror.
 TARGET_MISMATCH = "target mismatch"
+#: Marks a send whose far write may have happened with no receipt readable: the bridge never resends it.
+UNCONFIRMED_NOTE = "far write unconfirmed; check the far inbox before resending"
+#: ssh failures that occur before any byte reaches the far relay: the write cannot have happened, so no UNCONFIRMED_NOTE.
+PRE_WRITE_FAILURE = re.compile(
+    r"Connection (refused|timed out)|Permission denied|Too many authentication|No route to host|"
+    r"Could not resolve|Host key verification failed|Network is unreachable|TimeoutExpired", re.I)
 
 
-def relay_send(conn):
+def relay_send(conn) -> None:
     # The relay forwards one message line and authenticates for its local recipient;
     # the near recipient's auth header must not cross the box boundary.
     buf = b""
@@ -426,8 +459,10 @@ def relay_send(conn):
             elif r.returncode:
                 log.write(f"relay send failed {r.returncode}: {r.stderr!r}\n")
                 error = f"ssh exit {r.returncode}: " + stderr[-300:]
+                if transport != "none" and not PRE_WRITE_FAILURE.search(stderr):
+                    error += f"; {UNCONFIRMED_NOTE}"
             else:
-                error = "relay: no delivery reply for this message"
+                error = f"relay: no delivery reply for this message; {UNCONFIRMED_NOTE}"
         if error and TARGET_MISMATCH in error and not marked:
             _mark_misroute()
             marked = True
@@ -499,14 +534,18 @@ def _box_mux():
     return mod
 
 
-def _ssh_relay(command, data):
+def _ssh_relay(command, data) -> "subprocess.CompletedProcess":
     """The far relay running `command` with `data` on stdin, through the far box's one channel; any fault is a 255 result."""
     label = "ssh"
     try:
-        remote = pick_remote(cfg.remote, getattr(cfg, "tunnel_remote", None))
-        label = "ssh" if remote == cfg.remote else "tunnel"
+        remote, route_label = route_target(pick_remote(cfg.remote, getattr(cfg, "tunnel_remote", None)))
+        label = route_label or ("ssh" if remote == cfg.remote else "tunnel")
         r = _box_mux().for_remote(remote, key=cfg.key, extra=["-o", "ConnectTimeout=10"]).run(command, data, timeout=30)
         r.transport = label
+        return r
+    except RouteRefused as e:
+        r = subprocess.CompletedProcess([], 255, b"", str(e).encode())
+        r.transport = "none"
         return r
     except Exception as e:  # any send-leg fault is a failed delivery, never a silent one
         r = subprocess.CompletedProcess([], 255, b"", f"{type(e).__name__}: {e}".encode())
@@ -528,7 +567,7 @@ def _batch_replies(stdout):
 
 
 def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none", ref=None,
-                    reached=None, reached_box=None, acked=False, misdelivered=False):
+                    reached=None, reached_box=None, acked=False, misdelivered=False) -> None:
     """Record one line's outcome; `digest` is the sha256 the far relay's receipt row carries for the same line.
 
     `box` is the mirror row's BOX_FIELD; `transport` is the leg label: `ssh`, `tunnel`, or `none` when refused before any ssh.
@@ -543,6 +582,8 @@ def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none"
         row["reached"] = reached
     if error:
         row["error"] = error
+        if "unconfirmed" in error:
+            row["unconfirmed"] = True
     record_delivery(row)
     shown = f"{ref} ({target})" if ref else target
     shown = shown if box in (None, "", "unknown") else f"{shown} on box {box}"

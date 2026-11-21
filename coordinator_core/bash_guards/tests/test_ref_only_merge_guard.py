@@ -12,6 +12,8 @@ from coordinator_core.bash_guards import block_subagent_destructive_action as gu
 from coordinator_core.guard_messages.testing import envelope_of
 from pathlib import Path
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _ENV = {
     **os.environ,
     "GIT_AUTHOR_NAME": "t",

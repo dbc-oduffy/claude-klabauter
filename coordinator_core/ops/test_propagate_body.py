@@ -106,6 +106,10 @@ def _make_git_repo(tmp_path: Path) -> Path:
     _git(repo, "config", "user.email", "propagate-test@claude-klabauter.test")
     _git(repo, "config", "user.name", "Propagate Test")
     _git(repo, "config", "commit.gpgsign", "false")
+    # Every real checkout ignores the machine-local tree (`.gitignore`: `.coordinator-local/*`);
+    # the op's lock file lands there, so a clean-status assertion needs the same ignore.
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "exclude").write_text(".coordinator-local/\n", encoding="utf-8")
 
     (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
     (repo / "state" / "handoffs" / ".gitkeep").write_text("", encoding="utf-8")

@@ -11,6 +11,9 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.ceremony.commit_source import post_commit_reader
 
+import pytest
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 N_PATHS = 30
 
 

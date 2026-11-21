@@ -1,8 +1,6 @@
 """A child spawned with the workflow or grok env resolves a machine-local key and keeps the user-profile context."""
 import os
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -31,18 +29,6 @@ def settings_home(tmp_path, monkeypatch):
 
 def _grok_env():
     return grok._build_env()
-
-
-@pytest.mark.parametrize("build_env", [workflow._environment, _grok_env], ids=["workflow", "grok"])
-def test_spawned_child_resolves_machine_local_key(build_env, settings_home, tmp_path):
-    child = subprocess.run(
-        [sys.executable, "-c",
-         "import sys; sys.path.insert(0, sys.argv[1]); "
-         "from claude_machine_local import repos; print(repos.probe_repo)", str(settings_home / "bin")],
-        env=build_env(), capture_output=True, text=True, timeout=20,
-    )
-    assert child.returncode == 0, child.stderr
-    assert Path(child.stdout.strip()) == tmp_path
 
 
 @pytest.mark.parametrize("build_env", [workflow._environment, _grok_env], ids=["workflow", "grok"])

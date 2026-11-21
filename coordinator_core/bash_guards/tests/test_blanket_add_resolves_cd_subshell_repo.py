@@ -16,7 +16,7 @@ from coordinator_core.bash_guards import _dc_git_shared, dispatch_checks
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _init(path: Path) -> Path:

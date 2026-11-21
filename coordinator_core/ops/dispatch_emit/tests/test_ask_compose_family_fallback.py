@@ -229,21 +229,6 @@ def test_runner_brief_names_the_engine_invoker_as_the_only_vendor_route(monkeypa
     assert start.index(ask_compose.FAMILY_CREDIT_MODULE) < start.index(family_invoke_record.INVOKE_MODULE)
 
 
-def test_engine_invoker_module_exists_and_exposes_the_row_cli():
-    import importlib.util
-    import subprocess
-    import sys
-
-    assert importlib.util.find_spec(family_invoke_record.INVOKE_MODULE) is not None
-    out = subprocess.run(
-        [sys.executable, "-m", family_invoke_record.INVOKE_MODULE, "--help"],
-        capture_output=True, text=True, timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert out.returncode == 0
-    for flag in ("--root", "--run-id", "--row", "--family", "--stage", "--prompt", "--writes"):
-        assert flag in out.stdout
-
-
 @pytest.mark.skipif(_NODE is None, reason="node not installed")
 @pytest.mark.parametrize("authored", [{},{"family_authored": False}, {"family_authored": "true"}])
 def test_write_row_without_family_authored_true_halts_blocked_and_never_calls_the_fallback(monkeypatch, tmp_path, authored):

@@ -17,7 +17,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
-from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, shared_decls
 
 _SHA = "ab" * 32
 _WARP_ID = "warp-2026-10-31-some-sizing-aaaaaa-20261031T120809-5a6216"
@@ -48,7 +48,7 @@ def _in_run_m_plus_block() -> str:
             depth += ch == "{"
             depth -= ch == "}"
             if depth == 0:
-                return "let _viaRoadmap = false;\n" + loop + script[start : j + 1]
+                return shared_decls(script) + "\nlet _viaRoadmap = false;\n" + loop + script[start : j + 1]
         j += 1
     raise AssertionError("unbalanced chain block")
 
@@ -65,7 +65,7 @@ def _drive(tmp_path: Path, reply: dict, *, twin_run_id: str) -> dict:
         f"const REPO_ROOT = {json.dumps(tmp_path.as_posix())}; const _SESSION_ID = 's'; const _crossRepoApproved = false;\n"
         "const _runId = 'run-1'; const _sizingRel = 'state/sizings/s.yaml'; let _halted = null; const _gate = { arm: 'm_plus', chain_emit: "
         + json.dumps(reply) + " };\n"
-        "const _agentDefsClause = () => ''; const _PFC7 = ''; const _PFC5 = ''; const phase = () => {};\n"
+        "const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => ''; const _PFC7 = ''; const _PFC5 = ''; const phase = () => {};\n"
         f"const agent = async () => ({json.dumps(reply)});\n"
         "const fs = require('fs'); const started = [];\n"
         "const workflow = async (o) => { started.push(o.scriptPath);\n"

@@ -5,6 +5,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 ROOT = Path(__file__).resolve().parents[3]
 
 

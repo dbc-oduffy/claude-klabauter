@@ -22,7 +22,7 @@ from coordinator_core import dispatch_abandon
 from coordinator_core.git import commit, index_write
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 
 def _git(args, cwd: Path) -> str:

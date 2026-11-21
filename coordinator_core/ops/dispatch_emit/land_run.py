@@ -180,13 +180,31 @@ def test_leg_failure(inline_review: object) -> Optional[str]:
     return None
 
 
-def drift_reason_for_leg(reason: str, inline_review: object) -> str:
-    """``reason`` relabelled ``test-leg-error`` when it is a ``measured-rev-drift`` reason and the test
-    leg left no review; an unreadable-record reason and a leg that ran pass through unchanged."""
+def test_leg_superseded_by_reverify(reason: str, inline_review: object) -> bool:
+    """True when ``reason`` is a ``measured-rev-drift`` reason, the test leg left no review, and the run's
+    re-verify record reads pass with nothing red: the re-verify is then the measurement and the drift
+    needs no refusal. Without a green re-verify the leg failure stays the ``test-infra`` refusal."""
+    return (
+        isinstance(inline_review, dict)
+        and test_leg_failure(inline_review) is not None
+        and reason.startswith("measured-rev-drift")
+        and _reverify_passed(inline_review.get("reverify"))
+    )
+
+
+def test_infra_refusal(reason: str, inline_review: object) -> Optional[dict]:
+    """A ``refused="test-infra"`` refusal (no ledger failures) when ``reason`` is a ``measured-rev-drift``
+    reason and the test leg left no review: the stale measurement is the leg's failure, and the remedy is
+    re-arming ``dispatch.test_leg``. None for an unreadable-record reason or a leg that ran."""
     leg_failure = test_leg_failure(inline_review)
-    if leg_failure and reason.startswith("measured-rev-drift"):
-        return f"test-leg-error: {leg_failure}; the measurement is stale, not the requirement"
-    return reason
+    if not leg_failure or not reason.startswith("measured-rev-drift"):
+        return None
+    return _error(
+        f"test-leg-error: {leg_failure}; {reason}; the measurement is stale, not the requirement. "
+        f"Re-arm {TEST_LEG_AGENT_TYPE} and re-run the ledger check",
+        refused="test-infra",
+        test_infra={"leg": leg_failure, "reason": reason, "rearm": TEST_LEG_AGENT_TYPE},
+    )
 
 
 #: ``cause`` a refusal carries when the test leg itself failed (no review returned): an infrastructure
@@ -2032,8 +2050,10 @@ def _ledger_gate(
         drift_reason = f"measured-rev-drift: {', '.join(drifted)}"
     except (OSError, ValueError):
         drifted, drift_reason = ["<record>"], "measured-rev-record-unreadable"
-    drift_reason = drift_reason_for_leg(drift_reason, inline_review)
-    if drifted:
+    if drifted and not test_leg_superseded_by_reverify(drift_reason, inline_review):
+        infra = test_infra_refusal(drift_reason, inline_review)
+        if infra is not None:
+            return infra, ledger, []
         stale_met = leg_stale_met_failures(verdict.get("items"), drift_reason, inline_review, resume_ledger)
         if stale_met:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale_met]}
@@ -2999,12 +3019,7 @@ def _reconcile_prep(
     )
     if reply is None:
         return none
-    inline_review["prep"] = {
-        "run_base_sha": reply["run_base_sha"],
-        "product_files": reply["product_files"],
-        "foreign_claims": reply["foreign_claims"],
-        "slice_files": [f for s in reply["slices"] or [] if isinstance(s, dict) for f in s.get("files") or []],
-    }
+    inline_review["prep"] = review_prep.prep_block(reply)
     inline_review["prep_sidecar"] = reply["sidecar_path"]
     reviewed = reply.get("reviewed_sha256")
     return (reviewed if isinstance(reviewed, dict) else {}), _epoch_of(reply.get("recorded_at")), True

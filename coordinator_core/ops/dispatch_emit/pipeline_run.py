@@ -25,6 +25,8 @@ __all__ = [
 #: The preamble sentence an emitted pipeline script carries when its stages read the revisions file.
 REVISIONS_MARKER = "Read the run's revisions file before acting; its newest entries override earlier scope."
 
+_ESCAPED_MARKER = REVISIONS_MARKER.replace("'", "\\'")
+
 _SCRIPT_SUFFIX = ".workflow.mjs"
 _EMITTED_SUFFIX = _SCRIPT_SUFFIX + ".emitted.json"
 
@@ -74,8 +76,11 @@ def pipeline_run_state(root: Path, run_id: str) -> str:
 
 
 def reads_revisions(script: str) -> bool:
-    """True when the emitted script text carries ``REVISIONS_MARKER``."""
-    return REVISIONS_MARKER in script
+    """True when the emitted script text carries ``REVISIONS_MARKER``, verbatim or JS-single-quote escaped.
+
+    Trap: a grind PREAMBLE is emitted through ``_js_string_literal``, which writes the marker's apostrophe as ``\\'``.
+    """
+    return REVISIONS_MARKER in script or _ESCAPED_MARKER in script
 
 
 #: Scripts `executing_run` reads, newest first; a research run older than this many fires is not the live one.
@@ -123,9 +128,14 @@ def executing_run(root: Path, sizing_rel: str) -> Optional[str]:
     return None
 
 
-def append_revision(root: Path, run_id: str, text: str, sender: str, kind: str) -> Path:
-    """Append one stamped block to the run's revisions file in a single write; returns the file path."""
-    path = Path(root) / revisions_rel(run_id)
+def append_revision(
+    root: Path, run_id: str, text: str, sender: str, kind: str, *, rel: Optional[str] = None
+) -> Path:
+    """Append one stamped block to the run's revisions file in a single write; returns the file path.
+
+    ``rel`` overrides the repo-relative file (a blitz run's); default is ``revisions_rel(run_id)``.
+    """
+    path = Path(root) / (rel if rel is not None else revisions_rel(run_id))
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     body = re.sub(r"(?m)^## ", r"\\## ", str(text).strip("\n"))

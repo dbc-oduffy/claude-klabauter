@@ -11,7 +11,7 @@ from coordinator_core.benchmarks import land_run_leg_budget_profile as prof
 from coordinator_core.ops.dispatch_emit import halted_withheld_index, peer_hunk_gate, run_token
 from pathlib import Path
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 SIBLINGS = 6
 

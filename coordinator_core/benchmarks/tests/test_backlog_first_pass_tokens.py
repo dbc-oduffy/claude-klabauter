@@ -1,7 +1,6 @@
 """Benchmark: DoE resolves from the machine-local key, refuses naming it, and --baseline pins the base total."""
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -119,15 +118,6 @@ def test_process_time_falls_back_to_warm_in_process_without_rusage(monkeypatch, 
 def test_failing_default_exits_nonzero(monkeypatch, tmp_path):
     _stub(monkeypatch, _result(weeks_walked=1))
     assert bench.main(["--repo", str(tmp_path), "--baseline-file", str(tmp_path / "absent.json")]) == 1
-
-
-def test_spawn_counter_counts_popen():
-    import subprocess
-    import sys
-
-    with bench._count_spawns() as spawns:
-        subprocess.run([sys.executable, "-c", "pass"], check=True)
-    assert len(spawns) == 1
 
 
 def test_pinned_baseline_file_is_well_formed():

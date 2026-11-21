@@ -15,7 +15,7 @@ import pytest
 from coordinator_core.git import git_state
 from coordinator_core.ops.dispatch_emit import measured_rev as mr
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(cwd: Path, *args: str) -> None:

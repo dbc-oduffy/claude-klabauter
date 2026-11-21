@@ -9,6 +9,8 @@ from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
 from pathlib import Path
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 BAD = b"from x import undefined_name\r\n"
 HEAD = b"ok = 1\r\n"
 

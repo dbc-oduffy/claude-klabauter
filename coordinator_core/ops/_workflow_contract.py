@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, List, Optional, Set
+from typing import Callable, Iterator, List, Optional, Set
 
 
 class Severity(str, Enum):
@@ -96,8 +96,11 @@ _SCRUB_STOP = re.compile(r"[/`'\"]")
 _QUOTED_BODY = {q: re.compile(r"(?:\\[\s\S]|[^\\" + q + r"])*") for q in ("'", '"')}
 
 
+_MASK_CHAR = re.compile(r"[^\n]")
+
+
 def _mask(segment: str) -> str:
-    return "\n".join("#" * len(line) for line in segment.split("\n"))
+    return _MASK_CHAR.sub("#", segment) if "\n" in segment else "#" * len(segment)
 
 
 def _template_end(script: str, i: int) -> int:
@@ -420,6 +423,27 @@ def check_meta_required_fields(block: str) -> List[Finding]:
     return findings
 
 
+def _finditer_word(pattern: "re.Pattern[str]", word: str, text: str) -> Iterator["re.Match[str]"]:
+    """`pattern.finditer(text)` for a pattern that opens with a word boundary and the literal `word`.
+
+    A scan of a ~350KB script for a word walks every character in the regex engine; a literal `find` does
+    not, and the hits are a few dozen. Same matches in the same order: a hit inside the previous match is
+    skipped, as `finditer` never overlaps."""
+    pos = 0
+    consumed = 0
+    while True:
+        i = text.find(word, pos)
+        if i < 0:
+            return
+        pos = i + 1
+        if i < consumed or (i and (text[i - 1].isalnum() or text[i - 1] == "_")):
+            continue
+        m = pattern.match(text, i)
+        if m:
+            consumed = m.end()
+            yield m
+
+
 _PHASE_CALL = re.compile(r"\bphase\s*\(\s*['\"]([^'\"]*)['\"]")
 # Escape-aware, and aware that `phases:` has TWO shipped shapes. A bare quote-pair
 # scan ("any quote to the next quote") pairs an ESCAPED quote inside a `detail:`
@@ -558,7 +582,7 @@ def _scan_meta_phases_body(body: str) -> Set[str]:
 
 
 def phase_titles(source: str) -> Set[str]:
-    return {m.group(1) for m in _PHASE_CALL.finditer(source)}
+    return {m.group(1) for m in _finditer_word(_PHASE_CALL, "phase", source)}
 
 
 def agent_options_phase_titles(source: str) -> Set[str]:
@@ -569,7 +593,7 @@ def agent_options_phase_titles(source: str) -> Set[str]:
     `meta.phases`, independent of any `phase()` call elsewhere in the script.
     Runs against RAW (un-scrubbed) text for the same reason as
     `phase_titles`."""
-    return {m.group(1) for m in _AGENT_OPTIONS_PHASE.finditer(source)}
+    return {m.group(1) for m in _finditer_word(_AGENT_OPTIONS_PHASE, "phase", source)}
 
 
 def meta_phase_titles(block: str) -> Set[str]:
@@ -614,7 +638,7 @@ _AGENT_CALL = re.compile(r"\bagent\s*\(")
 
 
 def check_barrier_vs_pipeline(scrubbed: str) -> List[Finding]:
-    matches = list(_PARALLEL_CALL.finditer(scrubbed))
+    matches = list(_finditer_word(_PARALLEL_CALL, "await", scrubbed))
     if len(matches) < 2:
         return []
     for first, second in zip(matches, matches[1:]):
@@ -639,19 +663,33 @@ def check_barrier_vs_pipeline(scrubbed: str) -> List[Finding]:
 _AGENT_CALL_SITE = re.compile(r"\bagent\s*\(")
 
 
+_PAREN = re.compile(r"[()]")
+
+
 def _find_matching_paren(scrubbed: str, open_paren_idx: int) -> int:
     depth = 0
-    i = open_paren_idx
-    n = len(scrubbed)
-    while i < n:
-        if scrubbed[i] == "(":
+    for m in _PAREN.finditer(scrubbed, open_paren_idx):
+        if m.group() == "(":
             depth += 1
-        elif scrubbed[i] == ")":
+        else:
             depth -= 1
             if depth == 0:
-                return i + 1
-        i += 1
-    return n
+                return m.end()
+    return len(scrubbed)
+
+
+#: Per key: the structural characters, a spread, or the key itself: the only positions
+#: `_has_top_level_option_key` acts on.
+_OPTION_KEY_TOKENS: dict = {}
+
+
+def _option_key_tokens(key: str) -> "re.Pattern[str]":
+    tokens = _OPTION_KEY_TOKENS.get(key)
+    if tokens is None:
+        tokens = _OPTION_KEY_TOKENS[key] = re.compile(
+            r"[,()\[\]{}]|\.\.\.|(?<![\w$])\b" + re.escape(key) + r"\s*:"
+        )
+    return tokens
 
 
 def _has_top_level_option_key(args: str, key: str) -> bool:
@@ -662,12 +700,13 @@ def _has_top_level_option_key(args: str, key: str) -> bool:
     in the prompt position never counts. A key in a nested object (`schema: {...}`)
     or a function body sits at brace depth >= 2 and never counts.
     `args` must be scrubbed text."""
-    pattern = re.compile(r"\b" + re.escape(key) + r"\s*:")
     paren = brace = bracket = 0
     past_prompt = False
-    for i, ch in enumerate(args):
-        if ch == "," and paren == 1 and brace == 0 and bracket == 0:
-            past_prompt = True
+    for m in _option_key_tokens(key).finditer(args):
+        ch = m.group()
+        if ch == ",":
+            if paren == 1 and brace == 0 and bracket == 0:
+                past_prompt = True
         elif ch == "(":
             paren += 1
         elif ch == ")":
@@ -690,12 +729,7 @@ def _has_top_level_option_key(args: str, key: str) -> bool:
             # treated as supplying it. Trade-off: a spread that omits the
             # key goes unflagged (false negative) rather than a spread that
             # carries it being flagged (false positive).
-            if args.startswith("...", i):
-                return True
-            if pattern.match(args, i) and (
-                i == 0 or not (args[i - 1].isalnum() or args[i - 1] in "_$")
-            ):
-                return True
+            return True
     return False
 
 
@@ -716,7 +750,7 @@ def _pinned_agent_type(raw_args: str) -> bool:
 
 def check_model_default(scrubbed: str, raw: Optional[str] = None) -> List[Finding]:
     findings: List[Finding] = []
-    for m in _AGENT_CALL_SITE.finditer(scrubbed):
+    for m in _finditer_word(_AGENT_CALL_SITE, "agent", scrubbed):
         open_paren = m.end() - 1
         close_paren = _find_matching_paren(scrubbed, open_paren)
         args = scrubbed[open_paren:close_paren]

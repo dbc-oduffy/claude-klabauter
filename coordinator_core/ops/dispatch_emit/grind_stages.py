@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from typing import Mapping, Optional, Sequence
 
 from coordinator_core.bug_blitz.contract import (
@@ -97,7 +98,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     _degrade_agent_type,
     resolve_agent_model,
 )
-from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
+from coordinator_core.ops.dispatch_emit.record_paths import evidence_rel
 from coordinator_core.grind_triage.contract import CHECKPOINT_PERCENTS
 from coordinator_core.ops.dispatch_emit.grind_admission import TOTAL_PER_OUTPUT_CENTI
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
@@ -877,9 +878,8 @@ def _declared_delete_clause_parts(
     cannot drift; sentinels stand in for the run and row ids so each can be a runtime JS expression.
     """
     from coordinator_core.bash_guards import _declared_delete_license as lic
-    from coordinator_core.bash_guards import block_subagent_destructive_action as guard
-
-    if not guard._DECLARED_DELETE_CHANNEL_LIVE:
+    guard = sys.modules.get("coordinator_core.bash_guards.block_subagent_destructive_action")
+    if not getattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", lic.DECLARED_DELETE_CHANNEL_LIVE):
         return []
     run_s, row_s = "@@RUN@@", "@@ROW@@"
     parts: list[tuple[str, str]] = [("lit", " ")]

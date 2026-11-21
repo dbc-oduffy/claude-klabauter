@@ -166,7 +166,7 @@ def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger() -> N
     for gone in ("label: 'docs'", "label: 'ledger-check'", "coordinator:criterion-judge", "label: 'test:terminal'"):
         assert gone not in script, gone
     assert "phase('ledger-check')" not in script and "phase('docs')" not in script
-    assert re.findall(r"label: '([^']+)'", after) == ["ledger-fix:", "ledger-reverify", "ledger-recovery-record", "remnant-complete", "remnant-reverify", "remnant-record", "commit", "retest-await", "commit", "retest-invariant", "commit"]
+    assert re.findall(r"label: '([^']+)'", after) == ["ledger-fix:", "ledger-reverify", "ledger-recovery-record", "remnant-complete", "remnant-reverify", "remnant-record", "commit", "retest-await", "retest-invariant"]
     assert "_ledgerBlocking" in after and "halted: 'ledger-check'" in after
 
 
@@ -202,7 +202,8 @@ def test_the_tail_without_a_judge_or_commit_carries_neither_judge_nor_docs_instr
 
 def test_the_verify_prompt_binds_its_write_set_to_the_declared_docs_and_the_note() -> None:
     script = _compose(in_run_commit=True, **_JUDGE_KW)
-    call = (_tail(script)[0] + _verdict_def(script)).replace("\\'", "'")
+    docs_prompt = next(ln for ln in script.splitlines() if ln.lstrip().startswith("const _docsPrompt = "))
+    call = (_tail(script)[0] + _verdict_def(script) + docs_prompt).replace("\\'", "'")
     assert "JSON.stringify(_manifest.doc_writes ?? [])" in call
     assert "Your write set is exactly step 2's declared doc writes and its delivery note" in call
     assert "name that path exactly as its own entry in remaining" in call
@@ -391,12 +392,13 @@ def test_every_prompt_reads_an_agent_definition_the_run_edited_from_disk(tmp_pat
     # Every agent prompt after the helper opens through it: review, verify, rows.
     for label in ("verify", "commit"):
         call = script[: script.index(f"label: '{label}'")]
-        assert "_agentDefsClause()" in call[call.rindex("agent(") :], label
+        opening = call[call.rindex("agent(") :]
+        assert "_agentDefsClause()" in opening or "_agentHead" in opening, label
     gated = _existing_sizing_compose(tmp_path, in_run_commit=True)
     call = gated[: gated.index("label: 'gate'")]
-    assert "_agentDefsClause()" in call[call.rindex("agent(") :]
+    assert any(h in call[call.rindex("agent(") :] for h in ("_agentDefsClause()", "_agentHead"))
     rows = script[script.index("phase('Execute');", script.index(_NO_FOLD)) :]
-    assert "_agentDefsClause()" in rows[: rows.index("stallMs")]
+    assert any(h in rows[: rows.index("stallMs")] for h in ("_agentDefsClause()", "_agentHead", "_agentRead"))
 
 
 def test_the_gate_binds_the_run_to_its_sizing() -> None:

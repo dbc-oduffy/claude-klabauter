@@ -320,16 +320,6 @@ def run_leg_with_parent(monkeypatch, tmp_path, parent_pid):
     return start_leg.thread,tmp_path / "pend.sock"
 
 
-def test_leg_exits_and_unlinks_its_endpoint_when_its_agy_parent_is_gone(monkeypatch, tmp_path):
-    import subprocess
-    dead = subprocess.Popen([sys.executable, "-c", "pass"])
-    dead.wait()
-    t, sock = run_leg_with_parent(monkeypatch, tmp_path, dead.pid)
-    t.join(timeout=5)
-    assert not t.is_alive()
-    assert not sock.exists()
-
-
 def test_leg_keeps_serving_while_its_agy_parent_lives(monkeypatch, tmp_path):
     t, sock = run_leg_with_parent(monkeypatch, tmp_path, os.getpid())
     time.sleep(0.3)

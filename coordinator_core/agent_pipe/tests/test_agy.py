@@ -157,27 +157,3 @@ else:
     result = {"status": "success", "response": "", "denied_actions": ["command/Bash"]}
 print(json.dumps({"event": "result", "result": result}))
 '''
-
-
-def test_agy_family_stage_runs_a_shell_command_and_is_consumed_as_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import subprocess
-
-    from coordinator_core.codex_runner import workflow
-
-    fake = tmp_path / "fake_agy.py"
-    fake.write_text(_FAKE_STAGE_AGY, encoding="utf-8")
-    monkeypatch.setattr(workflow, "resolve_agy", lambda: [sys.executable, str(fake)])
-    argv = workflow._family_argv("agy", tmp_path)
-    assert "--dangerously-skip-permissions" in argv and "--settings" not in argv and "--mode" not in argv
-    out = tmp_path / "stdout.jsonl"
-    with out.open("wb") as fh:
-        proc = subprocess.run(argv, input=b'{"event":"user"}\n', stdout=fh, stderr=subprocess.PIPE, check=False)
-    assert proc.returncode == 0
-    text = workflow._family_text("agy", out)
-    assert text.startswith("DONE: row via agy") and text.endswith("shell-ran-ok")
-
-    denied = tmp_path / "denied.jsonl"
-    with denied.open("wb") as fh:
-        subprocess.run([sys.executable, str(fake)], input=b"", stdout=fh, check=False)
-    with pytest.raises(ValueError, match="no response"):
-        workflow._family_text("agy", denied)

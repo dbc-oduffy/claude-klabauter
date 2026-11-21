@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "plan-spine-check.py"
 
 _SIZING_YAML = """\

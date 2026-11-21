@@ -143,7 +143,7 @@ def per_run_root(repo_root: Any) -> Path:
     try:
         return temp_layout.pytest_basetemp_root(repo_root)
     except ValueError:
-        return temp_layout.fleet_temp_root() / "pytest"
+        return temp_layout.pytest_fleet_basetemp_root()
 
 
 def new_run_slug() -> str:
@@ -183,6 +183,29 @@ def with_per_run_basetemp(pytest_args: Sequence[str]) -> list:
     return [*args, "--basetemp", str(root / new_run_slug())]
 
 
+def minted_basetemp(args: Sequence[str]) -> Optional[Path]:
+    """The `--basetemp` value `with_per_run_basetemp` appended, else None (a caller's own is theirs)."""
+    a = list(args)
+    return Path(a[-1]) if len(a) >= 2 and a[-2] == "--basetemp" else None
+
+
+def remove_finished_basetemp(basetemp: Optional[Path], code: int) -> None:
+    """Delete a minted per-run basetemp after a completed run (exit 0 or 5, no kept marker).
+
+    A failing run's dir is evidence and stays for the dead-owner sweep; a dir carrying
+    `PYTEST_KEPT_MARKER` is the engine's deliberate keep and is never removed here. Never raises:
+    a held handle leaves the dir to the sweep.
+    """
+    if basetemp is None or code not in (0, 5) or not basetemp.is_dir() or basetemp.is_symlink():
+        return
+    if (basetemp / temp_layout.PYTEST_KEPT_MARKER).exists():
+        return
+    try:
+        temp_layout._rmtree_strict(basetemp)
+    except OSError:
+        pass
+
+
 def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:
     """Parse, allow-list, admit, spawn contained, then watch; see the module docstring for exit codes."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -216,7 +239,9 @@ def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:
         return EXIT_ADMISSION_REFUSED
 
     chain = ancestor_chain()
-    proc, kill = _spawn([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *with_per_run_basetemp(pytest_args)])
+    run_args = with_per_run_basetemp(pytest_args)
+    minted = None if has_basetemp(pytest_args) else minted_basetemp(run_args)
+    proc, kill = _spawn([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *run_args])
 
     gone = threading.Event()
 
@@ -229,6 +254,8 @@ def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:
         watch_parent.watch_parent(pid, created, on_gone, WATCH_INTERVAL_S)
     try:
         code = proc.wait()
+        if not gone.is_set():
+            remove_finished_basetemp(minted, code)
         return EXIT_PARENT_DIED if gone.is_set() else code
     finally:
         if proc.poll() is None:

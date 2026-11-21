@@ -428,13 +428,18 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
         # "consume-handoff" accepted read-side so an in-flight pre-computed
         # decision object (emitted before this rename) does not break — this
         # module itself only ever EMITS the canonical "claim-handoff" below.
-        if len(args) != 2:
-            raise UnrecognizedDirective(f"archive-stamp-cli {verb}: expected 1 argument")
+        reopen_reason: Optional[str] = None
+        if len(args) == 4 and args[2] == "--reopen":
+            reopen_reason = args[3]
+        elif len(args) != 2:
+            raise UnrecognizedDirective(
+                f"archive-stamp-cli {verb}: expected <handoff_path> [--reopen <note>]"
+            )
         handoff_path = _assert_in_repo_root(Path(args[1]), repo_root)
         # return_result=True (C2/2026-08-13) — surface the op's real error
         # (e.g. a `_HANDOFF_CROSS_FIELD_RULES` validation rejection) rather
         # than a generic "failed", same reasoning as claim-memo-stamp below.
-        result = cs_claim_handoff(str(handoff_path), return_result=True)
+        result = cs_claim_handoff(str(handoff_path), return_result=True, reopen_reason=reopen_reason)
         ok = _normalize_primitive_result(result["exit_code"])
         if not ok:
             raise RuntimeError(

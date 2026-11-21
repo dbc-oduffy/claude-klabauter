@@ -163,12 +163,10 @@ def _setup_blanket_git_add(tmp_path, monkeypatch):
     fake_meta_root = tmp_path / "home" / ".claude"
     fake_meta_root.mkdir(parents=True)
 
-    def fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
-        if args[:2] == ["rev-parse", "--show-toplevel"]:
-            return 0, str(fake_meta_root) + "\n"
-        return 1, ""
-
-    monkeypatch.setattr(dc._dc_git_probe, "_run_git", fake_run_git)
+    # check_blanket_git_add resolves its root by walk (repo_root.show_toplevel), never a spawn.
+    monkeypatch.setattr(
+        "coordinator_core.git.repo_root.show_toplevel", lambda cwd=None: str(fake_meta_root)
+    )
     monkeypatch.setattr(
         dc.os.path, "expanduser", lambda p: str(tmp_path / "home") if p == "~" else p
     )

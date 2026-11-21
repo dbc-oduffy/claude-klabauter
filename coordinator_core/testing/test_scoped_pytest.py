@@ -114,25 +114,6 @@ def test_admitted_run_registers_and_returns_pytest_exit_code(tmp_path: Path, mon
     assert sp.main(["--allow", "test_bad.py", "--", "-q", "test_bad.py"], host=host) == 1
 
 
-@pytest.mark.spawns_process
-@pytest.mark.parametrize("body,rc", [("assert False, 'MARKER_FAIL'", 1), ("assert True", 0)])
-def test_child_pytest_output_reaches_redirected_files(tmp_path: Path, body, rc) -> None:
-    (tmp_path / "test_x.py").write_text("def test_x():\n    %s\n" % body)
-    out, err = tmp_path / "out.txt", tmp_path / "err.txt"
-    with open(out, "wb") as fo, open(err, "wb") as fe:
-        proc = subprocess.run(
-            [sys.executable, "-m", "coordinator_core.testing.scoped_pytest",
-             "--allow", "test_x.py", "--", "test_x.py", "-q"],
-            cwd=tmp_path, stdout=fo, stderr=fe, timeout=120,
-            env={**os.environ, "PYTHONPATH": str(_REPO)},
-            **no_console_creationflags(),
-        )
-    text = out.read_text(errors="replace") + err.read_text(errors="replace")
-    assert "1 " in text and ("passed" in text or "failed" in text), text
-    assert ("MARKER_FAIL" in text) == (rc == 1)
-    assert proc.returncode == rc
-
-
 def test_ancestor_chain_records_watch_parent_clock() -> None:
     chain = sp.ancestor_chain()
     assert chain and chain[0][0] == os.getppid()
@@ -382,3 +363,78 @@ def test_per_run_dirs_are_disjoint_per_slug_and_tmp_env_points_under_them(monkey
     env = sp.tmp_env({"PATH": "p"}, tmp_a)
     assert env["TEMP"] == env["TMP"] == env["TMPDIR"] == str(tmp_a) and env["PATH"] == "p"
     assert Path(env["TEMP"]).is_relative_to(holder_a)
+
+
+def test_per_run_dirs_land_outside_a_repo_when_temp_is_redirected_into_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import tempfile
+
+    from coordinator_core import temp_layout
+
+    repo = tmp_path / "fake-repo"
+    (repo / ".git").mkdir(parents=True)
+    redirect = repo / "scratch" / "codex-tmp"
+    redirect.mkdir(parents=True)
+    real = tmp_path / "real-temp"
+    real.mkdir()
+    monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: None)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(redirect))
+    monkeypatch.setattr(temp_layout, "_system_temp_dir", lambda: real)
+    a = sp.per_run_dirs(repo, sp.new_run_slug())
+    b = sp.per_run_dirs(repo, "other-slug")
+    for holder, bt, tmp in (a, b):
+        for p in (holder, bt, tmp):
+            assert not p.is_relative_to(repo)
+            assert p.is_relative_to(real / "coordinator" / "fake-repo" / "pytest")
+    assert a[1] != b[1]
+    args = sp.with_per_run_basetemp(["x.py"])
+    assert not Path(args[-1]).is_relative_to(repo)
+
+
+def test_registry_run_root_wins_over_the_tmpfs_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core import temp_layout
+
+    monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: str(tmp_path / "pinned"))
+    monkeypatch.setattr(temp_layout, "_pytest_temp_parent", lambda: tmp_path / "disk")
+    assert sp.per_run_root("/w/r") == tmp_path / "pinned"
+
+
+def test_per_run_root_follows_the_disk_backed_parent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core import temp_layout
+
+    monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: None)
+    monkeypatch.setattr(temp_layout, "_pytest_temp_parent", lambda: tmp_path / "disk")
+    assert sp.per_run_root("/w/r") == tmp_path / "disk" / "coordinator" / "r" / "pytest"
+
+
+def _minted(tmp_path: Path) -> Path:
+    bt = tmp_path / "123-abcdef"
+    (bt / "sub").mkdir(parents=True)
+    (bt / "sub" / "f.txt").write_text("x")
+    return bt
+
+
+@pytest.mark.parametrize("code", [0, 5])
+def test_a_completed_run_removes_its_minted_basetemp(tmp_path: Path, code: int) -> None:
+    bt = _minted(tmp_path)
+    sp.remove_finished_basetemp(bt, code)
+    assert not bt.exists()
+
+
+def test_a_failed_run_keeps_its_basetemp_as_evidence(tmp_path: Path) -> None:
+    bt = _minted(tmp_path)
+    sp.remove_finished_basetemp(bt, 1)
+    assert bt.exists()
+
+
+def test_the_kept_failing_marker_blocks_removal(tmp_path: Path) -> None:
+    from coordinator_core import temp_layout
+
+    bt = _minted(tmp_path)
+    (bt / temp_layout.PYTEST_KEPT_MARKER).touch()
+    sp.remove_finished_basetemp(bt, 0)
+    assert bt.exists()
+
+
+def test_only_a_minted_basetemp_is_identified_for_removal() -> None:
+    assert sp.minted_basetemp(["x.py", "--basetemp", "/r/1-abc"]) == Path("/r/1-abc")
+    assert sp.minted_basetemp(["x.py"]) is None

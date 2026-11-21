@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 REPO = Path(__file__).resolve().parents[3]
 _FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

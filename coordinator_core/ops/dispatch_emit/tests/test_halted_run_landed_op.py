@@ -203,12 +203,32 @@ def test_never_started_successor_does_not_block_landing(repo, monkeypatch):
     root, first, _ = repo
     _solo(root, "resumed")
     monkeypatch.setattr(run_token, "is_live", lambda r, rid: True)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([{"run_id": SUCCESSOR}]))
     for stage in (None, "minted"):
         _successor(root, stage=stage)
         assert op._live_successor(root, SOLO) is None
     _successor(root, stage="running")
     assert op._live_successor(root, SOLO) == SUCCESSOR
     assert not _call(root, run_id=SOLO, sha=first)["ok"]
+
+
+def test_successor_scan_reads_only_live_runs_ledgers(repo, monkeypatch):
+    """A close must not read one ledger per run dir: thousands of dead dirs hung it past budget."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl, run_token
+
+    root, _first, _ = repo
+    _solo(root, "resumed")
+    _successor(root, stage="running")
+    for i in range(40):
+        dead = root / "state" / "warp" / f"warp-dead-{i:02d}"
+        dead.mkdir(parents=True)
+        (dead / "run.json").write_text(json.dumps({"resumed_from": SOLO}), encoding="utf-8")
+    reads = []
+    real = rl.read_run
+    monkeypatch.setattr(rl, "read_run", lambda d: reads.append(d.name) or real(d))
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([{"run_id": SUCCESSOR}]))
+    assert op._live_successor(root, SOLO) == SUCCESSOR
+    assert reads == [SUCCESSOR]
 
 
 def test_abandoned_successor_does_not_block_landing(repo, monkeypatch):
@@ -218,6 +238,7 @@ def test_abandoned_successor_does_not_block_landing(repo, monkeypatch):
     marker = _solo(root, "resumed")
     _successor(root, stage="running")
     monkeypatch.setattr(run_token, "is_live", lambda r, rid: True)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([{"run_id": SUCCESSOR}]))
     assert not _call(root, run_id=SOLO, sha=first)["ok"]
     halted_run._write(root / "state" / "warp" / SUCCESSOR, {"status": halted_run.STATUS_CLOSED})
     out = _call(root, run_id=SOLO, sha=first)
@@ -231,6 +252,7 @@ def test_solo_resumed_without_live_successor_records_landed(repo, monkeypatch):
     marker = _solo(root, "resumed")
     _successor(root)
     monkeypatch.setattr(run_token, "is_live", lambda r, rid: False)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([]))
     out = _call(root, run_id=SOLO, sha=first[:8])
     assert out["ok"] and out["written"] is True and out["sha"] == first
     assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"
@@ -243,6 +265,7 @@ def test_solo_resumed_with_live_successor_refuses_then_terminal_successor_does_n
     marker = _solo(root, "resumed")
     _successor(root)
     monkeypatch.setattr(run_token, "is_live", lambda r, rid: True)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([{"run_id": SUCCESSOR}]))
     before = marker.read_bytes()
     out = _call(root, run_id=SOLO, sha=first)
     assert not out["ok"] and SUCCESSOR in out["error"] and "still live" in out["error"]
@@ -258,6 +281,7 @@ def test_resumed_solo_with_withheld_still_refuses_unrelated_sha(repo, monkeypatc
     marker = _solo(root, "resumed")
     _withhold(marker, "e.txt")
     monkeypatch.setattr(run_token, "is_live", lambda r, rid: False)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([]))
     unrelated = _commit(root, "unrelated")
     before = marker.read_bytes()
     out = _call(root, run_id=SOLO, shas=[unrelated[:8]])

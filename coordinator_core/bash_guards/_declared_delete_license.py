@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
+DECLARED_DELETE_CHANNEL_LIVE = False
+
 MARKER_VAR = "COORDINATOR_DISPATCH_ROW"
 
 _ROW_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")

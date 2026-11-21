@@ -7,7 +7,7 @@ import pytest
 from coordinator_core import memo_corpus
 from pathlib import Path
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _INBOX = "state/cross-repo/inbox"
 

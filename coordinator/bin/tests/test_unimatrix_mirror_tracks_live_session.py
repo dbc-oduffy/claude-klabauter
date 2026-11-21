@@ -96,6 +96,8 @@ def test_a_stale_pushed_row_no_longer_shadows_the_live_far_session(near):
     stale.write_text(json.dumps({
         "pid": me, "name": f"{NAME}.farbox", "unimatrixMirrorName": NAME, "unimatrixMirror": True,
         "unimatrixBox": "farbox", "sessionId": OLD_SID, "messagingSocketPath": str(near.sess / "pushed.sock")}))
+    # A keyed pushed row is listable, so it can shadow; a keyless one never does (inbound_names).
+    (near.sess / near.key_name(me, str(near.sess / "pushed.sock"))).write_text("K")
     far = [far_row("/far/new.sock", 22, NEW_SID)]
     assert near.mirrorable(far, set(), near.inbound_names()) == {}  # the symptom: the live row is never mirrored
 
@@ -155,3 +157,53 @@ def test_a_send_to_the_name_after_the_restart_carries_the_live_session_id(near, 
     bridge.relay_send(Conn())
     assert commands and commands[0].startswith("send-session 22 ") and commands[0].endswith(f" {NEW_SID}")
     bridge.log.close()
+
+
+@pytest.mark.parametrize("far_pid", [11, 3124427], ids=["same-pid", "new-pid"])
+def test_a_reaped_mirror_of_a_live_far_session_is_remirrored_on_the_next_poll(near, far_pid):
+    sock = "/far/gem.sock"
+    poll(near, [far_row(sock, 11, OLD_SID)])
+    dead = near.bridges[sock]
+    # The reap on a transport reset: bridge stopped, registry files dropped, the supervisor still holds the Popen.
+    near.drop_session_files(dead.pid)
+    dead.poll = lambda: -15
+
+    poll(near, [far_row(sock, far_pid, OLD_SID)])
+
+    assert near.bridges[sock].pid != dead.pid
+    (live,) = listed(near)
+    assert live["farPid"] == far_pid and live["pid"] == near.bridges[sock].pid
+
+
+def test_a_bridge_that_outlives_its_reap_does_not_hold_the_far_session(near):
+    sock = "/far/gem.sock"
+    poll(near, [far_row(sock, 11, OLD_SID)])
+    survivor = near.bridges[sock]
+    # The reap dropped the registry entry and socket but the bridge process kept running (poll() is None).
+    near.drop_session_files(survivor.pid)
+
+    poll(near, [far_row(sock, 3124427, OLD_SID)])
+
+    assert survivor.pid in near.killed, "the survivor must be stopped, not left running"
+    assert near.bridges[sock].pid != survivor.pid
+    (live,) = listed(near)
+    assert live["farPid"] == 3124427 and live["pid"] == near.bridges[sock].pid
+
+
+def test_reap_sigkills_a_bridge_that_survives_the_group_signal_and_waits_on_it(near, monkeypatch):
+    if near._is_win():
+        pytest.skip("POSIX signal escalation")
+    sock = "/far/gem.sock"
+    poll(near, [far_row(sock, 11, OLD_SID)])
+    b = near.bridges[sock]
+    path = near.sess / f"{b.pid}.json"
+    d = json.loads(path.read_text("utf-8"))
+    d["unimatrixRosterPid"] = 0  # roster supervisor gone: orphaned
+    path.write_text(json.dumps(d), encoding="utf-8")
+    monkeypatch.setattr(near, "mirror_orphaned", lambda e: True)
+    monkeypatch.setattr(near, "pid_alive", lambda p: True)
+    sent, waited = [], []
+    monkeypatch.setattr(near, "_signal_pid", lambda p, sig: sent.append((p, sig)))
+    b.poll = lambda: waited.append(1)
+    near.reap_orphaned_mirrors(REMOTE, lambda m: None, bridges=near.bridges)
+    assert sent == [(b.pid, near.signal.SIGKILL)] and waited

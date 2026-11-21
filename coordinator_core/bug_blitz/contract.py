@@ -133,6 +133,27 @@ class MintRows(Protocol):
     ) -> list[str]: ...
 
 
+SCRATCH_ROOT = "state/scratch/bug-blitz"
+
+
+def _safe_run_id(run_id: str) -> str:
+    from coordinator_core.ops._path_guard import safe_id
+
+    if not safe_id(run_id):
+        raise ValueError(f"unsafe bug-blitz run id: {run_id!r}")
+    return run_id
+
+
+def blitz_script_rel(run_id: str) -> str:
+    """Repo-relative POSIX path of the run's emitted workflow script."""
+    return f"{SCRATCH_ROOT}/{_safe_run_id(run_id)}/blitz.workflow.mjs"
+
+
+def blitz_revisions_rel(run_id: str) -> str:
+    """Repo-relative POSIX path of the run's revision notes."""
+    return f"{SCRATCH_ROOT}/{_safe_run_id(run_id)}/revisions.md"
+
+
 def run_tag(run_id: str) -> str:
     """The backlog tag every row minted or reused by the run carries."""
     return f"{RUN_TAG_PREFIX}{run_id}"

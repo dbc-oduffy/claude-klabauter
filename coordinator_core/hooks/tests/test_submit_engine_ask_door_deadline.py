@@ -139,7 +139,7 @@ def test_a_hook_started_late_answers_by_the_door_clock_not_its_own_start(repo, m
     finally:
         release.set()
     assert took < 1.2, took  # its own start would have waited the full 1.7s
-    assert "spooled as" in env["hookSpecificOutput"]["additionalContext"]
+    assert "SPOOLED as" in env["hookSpecificOutput"]["additionalContext"]
 
 
 def test_a_hook_with_no_engine_wait_keeps_the_full_answer_share(repo, monkeypatch):
@@ -170,7 +170,7 @@ def test_multi_ask_fanout_slower_than_the_budget_denies_naming_the_hook_budget(r
         release.set()
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
-    assert "spooled as" in hso["additionalContext"]
+    assert "SPOOLED as" in hso["additionalContext"]
 
 
 def test_the_server_names_the_hook_reads_for_engine_wait_exist():

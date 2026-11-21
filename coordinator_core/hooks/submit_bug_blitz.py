@@ -26,26 +26,32 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from coordinator_core.bug_blitz.contract import (
+    SCRATCH_ROOT,
     STUB_NAME,
     MintRows,
     ParseResult,
     ParseTargets,
     TargetSpec,
+    blitz_revisions_rel,
+    blitz_script_rel,
     run_tag,
 )
 from coordinator_core.bug_blitz.evidence import BACKLOG_DIR
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, rewrite_input
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import BASELINE_DIRTY_KEY, run_write_roots, under_roots
+from coordinator_core.ops.dispatch_emit.pipeline_run import REVISIONS_MARKER
 
 GUARD_NAME = "submit-bug-blitz"
 SUBMIT_NAME = f"coordinator:{STUB_NAME}"
 PROFILE = "bug"
 QUEUE_DIR = BACKLOG_DIR
-SCRATCH_ROOT = "state/scratch/bug-blitz"
 DECISIONS_FILE = "decisions.json"
-_ALLOWED_ARGS = frozenset({"targets", "appetite", "limit", "budget_tokens"})
-_ARGS_SHAPE = 'args: {targets: "<path>"}, optional appetite, limit, budget_tokens'
+_ALLOWED_ARGS = frozenset({"targets", "appetite", "limit", "budget_tokens", "rulings"})
+_ARGS_SHAPE = (
+    'args: {targets: "<path>"}, optional appetite, limit, budget_tokens, '
+    'rulings ("<text>" | [{match, ruling}])'
+)
 
 EmitFn = Callable[[dict, Path], dict]
 ResolveFn = Callable[[str, Path], TargetSpec]
@@ -85,7 +91,17 @@ def _check_args(args: Any) -> tuple[Optional[dict], Optional[str]]:
         value = args.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
             return None, f"{key} must be a positive integer."
-    return {**args, "targets": targets.strip()}, None
+    out = {**args, "targets": targets.strip()}
+    out.pop("rulings", None)
+    if args.get("rulings") is not None:
+        from coordinator_core.bug_blitz.rulings import parse_rulings
+
+        rulings, bad = parse_rulings(args["rulings"])
+        if bad:
+            return None, bad
+        if rulings:
+            out["rulings"] = rulings
+    return out, None
 
 
 def _branch_refusal(root: Path) -> Optional[str]:
@@ -126,6 +142,21 @@ def _run_dir(root: Path, run_id: str) -> Path:
     return root / SCRATCH_ROOT / run_id
 
 
+def _apply_rulings(root: Path, run_id: str, rows: list[str], rulings: tuple) -> tuple[list[str], list[str]]:
+    from coordinator_core.bug_blitz.rulings import apply_rulings
+
+    return apply_rulings(root, run_id, rows, rulings, _run_dir(root, run_id))
+
+
+def _rulings_line(applied: list[str], unmatched: list[str], given: bool) -> str:
+    if not given:
+        return ""
+    line = f"Rulings applied to {len(applied)} row(s)."
+    if unmatched:
+        line += " Matched no row: " + "; ".join(f"'{m}'" for m in unmatched) + "."
+    return line
+
+
 def _settle_minted(root: Path, run_id: str) -> None:
     """Land the rows this submission minted or reused in one commit; raises when the commit was refused
     (the rows it created are reaped, so the emit would find none). An empty manifest commits nothing."""
@@ -136,12 +167,12 @@ def _settle_minted(root: Path, run_id: str) -> None:
         raise ValueError(f"the mint commit was refused, minted rows removed: {outcome['refused']}")
 
 
-def _default_emit(params: dict, repo_root: Path) -> dict:
+def _default_emit(params: dict, repo_root: Path, *, tagged_row_ids: frozenset[str] | None = None) -> dict:
     from coordinator_core.ops.dispatch_emit.grind_compose import isolation_triage_skipped
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 
     with isolation_triage_skipped():
-        return _dispatch_emit(params, repo_root)
+        return _dispatch_emit(params, repo_root, _tagged_row_ids=tagged_row_ids)
 
 
 def _profile_dir() -> str:
@@ -300,22 +331,45 @@ def _evaluate(
         spec = (resolve or _default_resolve)(target_raw, root)
     except Exception as exc:  # the resolve refusal text is the whole message
         return _refuse(f"{exc} [targets: {target_raw}]")
+    rulings = args.get("rulings") or ()
+    applied: list[str] = []
+    unmatched: list[str] = []
+    skipped_bare = ""
     if spec.kind != "backlog":
         try:
             parsed = (parse or _default_parse)(spec)
             if not parsed.tests:
                 raise ValueError("no failing test parsed")
             minted = (mint or _default_mint)(root, stamp, parsed.tests, target_ref=target_raw)
+            if rulings:
+                applied, unmatched = _apply_rulings(root, stamp, [f"{QUEUE_DIR}/{m}.yaml" for m in minted], rulings)
             _settle_minted(root, stamp)
         except Exception as exc:  # the parse and mint refusal text is the whole message
             return _refuse(f"{exc} [targets: {target_raw}]")
         overrides["where"] = [[["status", "==", "open"], ["tags", "contains", run_tag(stamp)]]]
+    elif rulings:
+        bare = [r for r in rulings if r.match is None]
+        if bare:
+            rulings = tuple(r for r in rulings if r.match is not None)
+            skipped_bare = (
+                "A bare-string ruling names no row on a backlog target and was applied to none; "
+                "give rulings as a list of {match, ruling}."
+            )
+    if rulings and spec.kind == "backlog":
+        try:
+            from coordinator_core.bug_blitz.rulings import open_row_paths
+
+            applied, unmatched = _apply_rulings(root, stamp, open_row_paths(root, rulings), rulings)
+            if applied:
+                _settle_minted(root, stamp)
+        except Exception as exc:  # the rulings refusal text is the whole message
+            return _refuse(f"{exc} [targets: {target_raw}]")
     for key in ("limit", "budget_tokens"):
         if args.get(key) is not None:
             overrides[key] = args[key]
     appetite = args.get("appetite") or ("sweep" if minted else "standard")
 
-    out_path = str(root / SCRATCH_ROOT / stamp / "blitz.workflow.mjs")
+    out_path = str(root / blitz_script_rel(stamp))
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else ""
     params: dict = {
         "queue": [QUEUE_DIR],
@@ -324,11 +378,15 @@ def _evaluate(
         "appetite": appetite,
         "output_path": out_path,
         "session_id": session_id,
+        "preamble": f"{REVISIONS_MARKER} Revisions file: {blitz_revisions_rel(stamp)}",
     }
     if overrides:
         params["overrides"] = overrides
     try:
-        result = (emit or _default_emit)(params, root)
+        if emit is not None:
+            result = emit(params, root)
+        else:
+            result = _default_emit(params, root, tagged_row_ids=frozenset(minted) if parsed is not None else None)
     except Exception as exc:  # the engine's refusal text is the whole message
         return _refuse(f"The engine refused the submission: {exc}")
 
@@ -337,6 +395,12 @@ def _evaluate(
         detail = result.get("findings") if isinstance(result, dict) else result
         return _refuse(f"The engine emitted no run: {detail}")
 
+    try:
+        from coordinator_core.ops.dispatch_emit.ask_fanout_contract import mint_run_parent
+
+        mint_run_parent(root, stamp, label="bug-blitz")
+    except (OSError, ValueError):
+        pass  # best-effort: a missing parent record only leaves workflow.revise refusing this run id
     try:
         accounts = _account(Path(script), parsed, minted)
         _write_decisions(Path(script).parent, parsed, minted, target_raw, _baseline_dirty(root, session_id), accounts)
@@ -366,7 +430,14 @@ def _evaluate(
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"
     hso["permissionDecisionReason"] = " ".join(
-        part for part in (f"Bug blitz submission: emitted {Path(script).name} this call.", _not_run_line(accounts)) if part
+        part
+        for part in (
+            f"Bug blitz submission: emitted {Path(script).name} this call.",
+            _not_run_line(accounts),
+            _rulings_line(applied, unmatched, bool(rulings)),
+            skipped_bare,
+        )
+        if part
     )
     return envelope
 

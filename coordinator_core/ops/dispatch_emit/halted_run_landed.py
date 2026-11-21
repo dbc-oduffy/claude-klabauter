@@ -361,21 +361,22 @@ def _existing_close(root: Path, run_id: str, stem: str, marker: dict) -> dict:
 
 
 def _live_successor(root: Path, run_id: str) -> Optional[str]:
-    """The id of a live run whose ledger resumes *run_id*, else None; scans both run record roots once, reading one ledger per run dir (cost grows with the run-dir count)."""
+    """The id of a live run whose ledger resumes *run_id*, else None.
+
+    Trap: a successor must hold a live token, so candidates come from the live-token set, never a
+    listing of the run roots — those hold thousands of dirs, and one ledger read per dir hung the
+    close past its 30s budget (4909 dirs, 2026-11-21)."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
 
+    live = sorted({r["run_id"] for r in run_token.live_records(root)} - {run_id})
     for base in (RECORD_DIR_ROOT, RUN_DIR_ROOT):
-        try:
-            candidates = sorted(p for p in (root / base).iterdir() if p.is_dir() and p.name != run_id)
-        except OSError:
-            continue
-        for cand in candidates:
+        for name in live:
+            cand = root / base / name
+            if not cand.is_dir():
+                continue
             ledger = rl.read_run(cand)
-            if (
-                ledger and ledger.get(rl.RESUMED_FROM_FIELD) == run_id
-                and run_token.is_live(root, cand.name) and not _terminal(cand)
-            ):
+            if ledger and ledger.get(rl.RESUMED_FROM_FIELD) == run_id and not _terminal(cand):
                 return cand.name
     return None
 

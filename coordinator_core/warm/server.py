@@ -2843,8 +2843,23 @@ _HEAL_PREWARM_WAIT_SECS = 30.0
 _HEAL_RETRY_WAIT_SECS = 4.0
 
 
-#: Modules the submit op imports inside function bodies, so importing its package does not load them.
+_PREWARM_BUG_BLITZ_MODULES = (
+    "coordinator_core.hooks.submit_bug_blitz",
+    "coordinator_core.bug_blitz.evidence",
+    "coordinator_core.bug_blitz.mint",
+    # Function-local dependencies of grind composition and mint settlement.
+    "coordinator_core.backlog_grind_assemble",
+    "coordinator_core.ops.test_leg_run",
+    "coordinator_core.ops.review_reverify_probe",
+    "coordinator_core.ops.ceremony.commit_v2",
+    "coordinator_core.ops.session.safe_commit_offer",
+    "coordinator_core.resolution.facade",
+    "coordinator_core.warm.workflow_peer",
+)
+
+#: Modules the submit ops import inside function bodies.
 _PREWARM_SUBMIT_MODULES = (
+    *_PREWARM_BUG_BLITZ_MODULES,
     "coordinator_core.sizing_assemble",
     "coordinator_core.roadmap.plan_gate",
     "coordinator_core.roadmap.gate_v2",
@@ -5272,15 +5287,29 @@ class _ServerContext:
         connection thread. Returns at once; the accept loop never waits on it."""
         thread = threading.Thread(target=self._boot_prewarm_run, name="warm-pool-boot-prewarm", daemon=True)
         thread.start()
+        threading.Thread(target=self._boot_warm_test_index, name="warm-test-index", daemon=True).start()
         return thread
 
-    def _boot_prewarm_run(self) -> None:
+    def _boot_warm_test_index(self) -> None:
+        """Build or refresh the persisted reverify test index off the op path, so a review.reverify
+        list call finds it hot; one that arrives mid-build waits on this build instead of starting its own."""
         try:
-            # Guard workers first: hook-lane worker init must not compete with the dispatch pool's.
-            concurrent.futures.wait(self._prewarm_pool(True, _BOOT_PREWARM_GUARD_WORKERS), timeout=_HEAL_PREWARM_WAIT_SECS)
-            concurrent.futures.wait(self._prewarm_pool(False), timeout=_HEAL_PREWARM_WAIT_SECS)
-        except Exception:  # noqa: BLE001 -- the first request builds the pools lazily
+            from coordinator_core.ops.review_tripwires import warm_recent_indexes
+
+            warm_recent_indexes(self.engine_root)
+        except Exception:  # noqa: BLE001 -- the op builds the index itself when this fails
             pass
+
+    def _boot_prewarm_run(self) -> None:
+        pending = []
+        # Mutating submission hooks use the dispatch pool. Start its first worker before
+        # waiting on guard preload, so the first submit can reuse a compositor.
+        for guard in (False, True):
+            try:
+                pending.extend(self._prewarm_pool(guard, _BOOT_PREWARM_GUARD_WORKERS))
+            except Exception:  # noqa: BLE001 -- a failed pool rebuilds on its next request
+                continue
+        concurrent.futures.wait(pending, timeout=_HEAL_PREWARM_WAIT_SECS)
 
     def _admission_gate(self) -> "_AdmissionGate":
         """Per-context heavy slot gate, resized to `_dispatch_pool_size()` on every call."""
@@ -5413,11 +5442,26 @@ class _ServerContext:
         with self._dispatch_pool_lock:
             if self._dispatch_pool is not stuck_pool:
                 return
-            self._dispatch_pool = None
-            self.__dict__["_saturated_checks"] = 0
             tasks = self.__dict__.setdefault("_pool_tasks", {})
             guard_futs = self.__dict__.get("_guard_futs", ())
-            heavy = [(fut, row) for fut, row in list(tasks.items()) if fut not in guard_futs]
+            heavy = [(fut, row) for fut, row in list(tasks.items()) if fut not in guard_futs and not fut.done()]
+            size = _dispatch_pool_size()
+            if len(holders) >= size:
+                # Retiring any worker breaks the executor. Spare the whole pool if its
+                # saturation sample went stale or any tracked neighbour is still healthy.
+                now = time.monotonic()
+                cache = self.__dict__.get("_holder_probe_cache")
+                if len(heavy) < size or any(
+                    now - started <= STALL_DUMP_SECS
+                    or (cache is not None and root is not None and now - started < _IO_WAIT_MAX_SECS
+                        and _is_io_wait(cache.probe_ms(root), now - started))
+                    for _, (_, started, _, root) in heavy
+                ):
+                    self.__dict__["_saturated_checks"] = 0
+                    return
+                holders = [row[0] for _, row in heavy]
+            self._dispatch_pool = None
+            self.__dict__["_saturated_checks"] = 0
             keys = [row[2] for _fut, row in heavy if row[2] is not None]
             for fut, _row in heavy:
                 tasks.pop(fut, None)
@@ -7174,8 +7218,18 @@ def _prewarm_emit_chain() -> None:
             if mod.name != "tests":
                 importlib.import_module(f"{emit_pkg.__name__}.{mod.name}")
         importlib.import_module("coordinator_core.hooks.submit_engine_ask")
+        for name in _PREWARM_BUG_BLITZ_MODULES:
+            importlib.import_module(name)
     except Exception as exc:  # noqa: BLE001 -- a cold first emit beats a dead worker
         print(f"[warm-server] emit-chain prewarm failed: {exc!r}", file=sys.stderr)
+    try:
+        # Load the persisted reverify test indexes of the most recently scanned repos into this worker's memory,
+        # so the worker's first review.reverify list call is a repeat call.
+        from coordinator_core.ops.review_tripwires import warm_recent_indexes
+
+        warm_recent_indexes(_engine_clone_root())
+    except Exception as exc:  # noqa: BLE001 -- the op loads the index itself when this fails
+        print(f"[warm-server] test-index prewarm failed: {exc!r}", file=sys.stderr)
 
 
 def _process_entry() -> int:

@@ -5,20 +5,12 @@ from __future__ import annotations
 import datetime
 import json
 import sqlite3
-import subprocess
 from pathlib import Path
 
 from coordinator_core.ops import weekly_picker
 import pytest
 
 MONDAY = datetime.date(2026, 11, 9)
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        check=True, capture_output=True,
-    )
 
 
 def _daily(repo: Path, day: str, lines: list) -> None:
@@ -93,26 +85,6 @@ def test_days_outside_the_week_are_not_read(tmp_path: Path) -> None:
     _daily(repo, "2026-11-16", ["- [XL] `docs/plans/nextweek.md` out of window"])
     packet = weekly_picker.build_packet(repo, MONDAY, index_path=db)
     assert "docs/plans/nextweek.md" not in [c["plan"] for c in packet["candidates"]]
-
-
-def test_git_fallback_builds_packet_with_deleted_plan(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    (repo / "docs" / "plans").mkdir(parents=True)
-    _git(repo.parent, "init", str(repo))  # git -C <parent> init <repo>
-    plan = repo / "docs" / "plans" / "gone.md"
-    plan.write_text("# Gone\n" + "y" * 20000, encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-m", "add plan")
-    plan.unlink()
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-m", "complete gone")
-    today = datetime.date.today()
-    week = today - datetime.timedelta(days=today.weekday())
-    _daily(repo, week.isoformat(), ["- `docs/plans/gone.md` finished"])
-    packet = weekly_picker.build_packet(repo, week, index_path=tmp_path / "absent.sqlite")
-    assert [c["plan"] for c in packet["candidates"]] == ["docs/plans/gone.md"]
-    cand = packet["candidates"][0]
-    assert cand["sizing"] is None and len(cand["preview"]) <= 10000
 
 
 def test_default_week_is_last_monday() -> None:

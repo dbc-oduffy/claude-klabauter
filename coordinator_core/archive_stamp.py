@@ -2398,10 +2398,16 @@ def _record_session_goal_best_effort(handoff_path: str, worktree: Path, sid: str
         return False
 
 
-def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int | dict":
+def cs_claim_handoff(
+    handoff_path: str, *, return_result: bool = False, reopen_reason: "str | None" = None
+) -> "int | dict":
     """Pickup-time claim transition: status:open->claimed, deployment_state->
     in_flight, +claimed_at/claimed_by. Fails loud on unresolvable session id (an
     empty claimed_by would corrupt the claim gate).
+
+    ``reopen_reason`` (pickup `jshipped: reopen-and-proceed`): a non-empty value
+    makes the claim REOPEN a `shipped` handoff (see `handoff_transition._claim`)
+    instead of refusing it; ignored for every non-shipped record.
 
     Terminality is NOT re-checked here: `handoff.transition`'s `_claim` refuses a
     handoff whose deployment_state is already terminal
@@ -2462,9 +2468,10 @@ def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int 
         return result if return_result else result["exit_code"]
 
     ts = _now_iso()
-    result = _call_handoff_transition(
-        handoff_path, {"verb": "claim", "session_id": sid, "at": ts}
-    )
+    claim_params: dict = {"verb": "claim", "session_id": sid, "at": ts}
+    if reopen_reason and reopen_reason.strip():
+        claim_params["reopen_reason"] = reopen_reason
+    result = _call_handoff_transition(handoff_path, claim_params)
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(f"cs_claim_handoff: {result.get('error', 'unknown error')}", file=sys.stderr)

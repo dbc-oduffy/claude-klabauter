@@ -11,7 +11,7 @@ import pytest
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 LIVE_CELL = "naked-vs-coordinator/live_cell.py"
 LANDING_RUN = "ask-20261015T000000-aaaaaa"

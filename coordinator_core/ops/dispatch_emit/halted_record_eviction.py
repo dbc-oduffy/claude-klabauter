@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from coordinator_core.ops.dispatch_emit import review_edits
 
@@ -35,10 +35,26 @@ def _review_written(worktree_root: Path, session_id: Optional[str], run_id: str)
 RUN_DIRT_UNCOMMITTED = "run-dirt-uncommitted"
 
 
-def _run_written(worktree_root: Path, session_id: Optional[str], run_id: str) -> list:
+def _own_attributed(worktree_root: Path, run_id: str) -> set:
+    """Paths the run's own manifest ``write_baseline`` declares; empty when unreadable."""
+    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+
+    try:
+        return set(hha._baseline(worktree_root, run_id) or ())
+    except Exception:  # noqa: BLE001 -- unknown attributes nothing
+        return set()
+
+
+def _run_written(
+    worktree_root: Path, session_id: Optional[str], run_id: str, live_run_ids: Optional[list] = None,
+) -> list:
     """Worktree-relative paths the session or any agent it dispatched wrote since the run started,
     from the engine's touch records (executors included, unlike the review-stage source). Empty
-    when the source cannot answer: unknown never names a path, so a peer's dirt is never claimed."""
+    when the source cannot answer: unknown never names a path, so a peer's dirt is never claimed.
+
+    Trap: a touch record is keyed by session, not run, so while another run is live a touched path
+    may be that run's. Then only a path in this run's own ``write_baseline`` is named; the rest stay
+    in the tree (``live_run_ids`` carries the live runs; None or only this run means no contention)."""
     import os
 
     from coordinator_core.ops.dispatch_emit.terminal_commit import _run_started_at
@@ -79,6 +95,8 @@ def _run_written(worktree_root: Path, session_id: Optional[str], run_id: str) ->
                         rel = review_edits.norm(event.path)
                         if not review_edits.out_of_worktree(rel) and not rel.startswith("scratch/"):
                             found.add(rel)
+        if any(r != run_id for r in live_run_ids or ()):
+            found &= _own_attributed(worktree_root, run_id)
         return sorted(found)
     except Exception:  # noqa: BLE001 -- an unreadable source names no path
         return []
@@ -95,6 +113,10 @@ def _withhold_run_dirt(withheld: dict, written: list, changed: set, landed: set)
 #: ``withheld`` reason for a run-owned ``.py`` whose bytes were moved into the halted record because
 #: the tree would not import with them.
 EVICTED_NOT_IMPORTABLE = "evicted-not-importable"
+IMPORT_RISK_UNSCANNED = "import_risk_unscanned"
+
+#: Halt kind of a verify that ran zero tests (`clean_overlay_verify.ZERO_RUN_TEST_INFRA`); never evicts.
+TEST_INFRA_HALT = "test_infra_failure"
 
 #: ``withheld`` reason for any other run-owned unlanded path whose bytes were moved into the halted record.
 EVICTED_PARKED = "evicted-parked"
@@ -202,28 +224,64 @@ def _stem_index(paths: list) -> dict:
     return stems
 
 
-def _kept_by_outside_importers(root: Path, parked_py: list, outside: list) -> set:
-    """Parked ``.py`` paths a dirty importer that is not parked names (`_import_units`' stem rule),
-    widened to the whole import unit of each, so a unit parks whole or not at all."""
-    stems = _stem_index(parked_py)
-    names = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(stems, key=len, reverse=True))) + r")\b")
+def _outside_link_gate(parked_py: list, parked_packages: dict) -> Callable[[str, bytes], bool]:
+    """``(rel, data) -> bool``: False only for an outside file that provably links to no parked path.
+
+    Every import target is built from dotted tokens in the text plus, for a relative import, the
+    importer's own directory chain, so a parked module's stem (a package's directory name) must be a
+    substring of the text or a directory of the importer. A file failing both skips the import regex and
+    never enters the index, and the keep decision is unchanged. A root package or a non-word stem
+    disables the gate."""
+    stems = set(_stem_index(parked_py))
+    if "" in parked_packages.values() or not stems or not all(
+        s.isascii() and re.fullmatch(r"\w+", s) for s in stems
+    ):
+        return lambda rel, data: True
+    needles = [s.encode() for s in sorted(stems)]  # substring, not word: a regex scan costs ~10x
+    return lambda rel, data: not stems.isdisjoint(rel.split("/")[:-1]) or any(n in data for n in needles)
+
+
+def _kept_by_outside_imports(root: Path, parked_py: list, outside: list, head) -> set:
+    """Keep whole import units linked to dirty Python paths outside the eviction."""
+    from coordinator_core.ops.dispatch_emit import test_reach
+    from coordinator_core.ops.dispatch_emit.halt_tree_evict import _read
+    from coordinator_core.ops.review_token_index import refresh_import_targets
+
+    parked = set(parked_py)
+    parked_packages = {
+        p: p[:-len("__init__.py")] for p in parked if p == "__init__.py" or p.endswith("/__init__.py")
+    }
     hit: set = set()
-    for q in outside:
-        try:
-            text = (root / q).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for stem in set(names.findall(text)):
-            hit.update(stems[stem])
-    for unit in _import_units(root, parked_py):
+    base = len(str(root)) + 1
+    admits = _outside_link_gate(parked_py, parked_packages)
+
+    def read_linked(path: str) -> Optional[bytes]:
+        data = _read(root, path[base:])
+        return data if data is not None and admits(path[base:], data) else None
+
+    indexed = refresh_import_targets(str(root), sorted(outside), read_linked)
+    for q, imported in indexed.items():
+        hit.update(imported & parked)
+        hit.update(p for p, prefix in parked_packages.items()
+                   if q.startswith(prefix) or any(dep.startswith(prefix) for dep in imported))
+
+    outside_paths = set(outside)
+    outside_modules = test_reach._module_map(outside_paths)
+    for p in parked_py:
+        # The reset may bring back an import that the current file removed.
+        head_text = head.head_text(p)
+        if (test_reach._imported_modules(root, p, outside_modules)
+                or test_reach._package_inits(p, outside_paths)
+                or (head_text and test_reach._imported_modules(root, p, outside_modules, text=head_text))):
+            hit.add(p)
+    for unit in _import_units(root, parked_py, head):
         if hit.intersection(unit):
             hit.update(unit)
     return hit
 
 
-def _import_units(root: Path, own_py: list) -> list:
-    """Groups of ``own_py`` paths linked by `halt_tree_check._importers`' stem rule (one file's text
-    names another's module stem, either direction), transitively; groups of one are omitted."""
+def _import_units(root: Path, own_py: list, head) -> list:
+    """Transitive module-stem groups across live and reset bytes; omit singletons."""
     stems = _stem_index(own_py)
     parent = {p: p for p in own_py}
 
@@ -237,8 +295,9 @@ def _import_units(root: Path, own_py: list) -> list:
         try:
             text = (root / q).read_text(encoding="utf-8", errors="replace")
         except OSError:
-            continue
-        for stem in set(re.findall(r"\w+", text)) & stems.keys():
+            text = ""
+        reset = head.head_text(q) or ""
+        for stem in set(re.findall(r"\w+", text + "\n" + reset)) & stems.keys():
             for p in stems[stem]:
                 parent[find(p)] = find(q)
     groups: dict = {}
@@ -247,9 +306,31 @@ def _import_units(root: Path, own_py: list) -> list:
     return [sorted(g) for g in groups.values() if len(g) > 1]
 
 
+def _reset_changes_import_surface(current: bytes, base: Optional[bytes]) -> bool:
+    """A reset can remove a binding or bring back an import absent from the live file."""
+    import symtable
+
+    from coordinator_core.ops.dispatch_emit.test_reach import _scan_imports
+
+    if base is None:
+        return True
+    try:
+        live = current.decode("utf-8")
+        reset = base.decode("utf-8")
+        names = [
+            {symbol.get_name() for symbol in symtable.symtable(text, "<eviction>", "exec").get_symbols()
+             if symbol.is_assigned() or symbol.is_imported()}
+            for text in (live, reset)
+        ]
+        return bool(names[0] - names[1] or set(_scan_imports(reset)) - set(_scan_imports(live)))
+    except (UnicodeError, SyntaxError, ValueError):
+        return True
+
+
 def plan_tree_eviction(
     root: Path, record_dir_rel: str, run_written: list, changed: set, write_set: list,
     withheld: dict, paths: list, run_id: Optional[str] = None, credited: Optional[set] = None,
+    *, python_dirt: Optional[set[str]] = None, halt_kind: Optional[str] = None,
 ) -> Optional[TreeEviction]:
     """Park every run-owned, changed, unlanded path (any extension) in the halted record. A ``.py``
     that ``halt_tree_check.broken_paths`` judges unimportable (with its write-set importers) is named
@@ -257,14 +338,16 @@ def plan_tree_eviction(
     under the record dir and peer-owned paths (``_NOT_RUN_OWNED``) are never parked. The record's
     ``evicted.json`` plus its blobs are appended to ``paths`` (in place). A ``.py`` that a dirty ``.py``
     in ``changed`` outside the parked set (landed, peer-owned) names stays in the tree with its whole
-    import unit: parking it would leave that importer importing nothing. Call after
-    ``_withhold_run_dirt`` and before the nothing-to-commit return. None when nothing is parked.
+    import unit, including when the run's scoped snapshot omitted the outside path: parking it would
+    leave that importer importing nothing. Call after
+    ``_withhold_run_dirt`` and before the nothing-to-commit return. None when nothing is parked, and always None
+    for a ``test_infra_failure`` halt: the tests never judged the bytes (zero ran), so they stay in the tree.
     ``credited`` (when given) bounds eviction to the run's declared or touch-recorded paths: a path
     found only by the tree mtime sweep is a peer's live dirt until declared, and is never reset."""
     from coordinator_core.authoring_leaks import HeadView
     from coordinator_core.ops.dispatch_emit import halt_tree_check, halt_tree_evict, kept_work
 
-    if not (root / record_dir_rel).is_dir():
+    if halt_kind == TEST_INFRA_HALT or not (root / record_dir_rel).is_dir():
         return None
     landed = set(paths)
     own = [
@@ -275,26 +358,35 @@ def plan_tree_eviction(
     if not own:
         return None
     own_py = [p for p in own if p.endswith(".py")]
-    broken = halt_tree_check.broken_paths(root, own_py, write_set) if own_py else {}
     targets = own
     unowned: dict = {}
     prints: dict = {}
+    python_bytes: dict[str, bytes] = {}
     for p in targets:
         try:
-            prints[p] = kept_work.blob_sha((root / p).read_bytes())
+            data = (root / p).read_bytes()
+            prints[p] = kept_work.blob_sha(data)
+            if p.endswith(".py"):
+                python_bytes[p] = data
         except OSError:
             continue
     parked_py = [p for p in own_py if p in prints]
-    outside = [
-        p for p in changed
-        if p.endswith(".py") and p not in prints and not p.startswith(record_dir_rel + "/")
-    ]
-    if parked_py and outside:
-        for p in _kept_by_outside_importers(root, parked_py, outside):
+    head = HeadView(root, prints)
+    if any(_reset_changes_import_surface(python_bytes[p], head.head_bytes(p)) for p in parked_py):
+        outside = [p for p in (python_dirt or set()) | changed
+                   if p.endswith(".py") and p not in prints and not p.startswith(record_dir_rel + "/")]
+        blocked = parked_py if python_dirt is None else (
+            _kept_by_outside_imports(root, parked_py, outside, head) if outside else ()
+        )
+        for p in blocked:
+            if python_dirt is None:
+                withheld[p] = IMPORT_RISK_UNSCANNED
             del prints[p]
     if not prints:
         return None
-    head = HeadView(root, prints)
+    # Importability labels only describe paths that can actually be parked.
+    checked_py = [p for p in parked_py if p in prints]
+    broken = halt_tree_check.broken_paths(root, checked_py, write_set) if checked_py else {}
     head_blobs = {p: head.head_bytes(p) for p in prints}
     origin = {p: withheld[p] for p in prints if p in withheld}
     for p in prints:
@@ -306,6 +398,6 @@ def plan_tree_eviction(
             paths.append(rel)
             appended.append(rel)
     eviction = TreeEviction(root, record_dir_rel, head_blobs, origin, unowned, run_id, withheld, prints)
-    eviction.units = _import_units(root, [p for p in own_py if p in prints])
+    eviction.units = _import_units(root, [p for p in own_py if p in prints], head)
     eviction.record_paths, eviction.paths = appended, paths
     return eviction

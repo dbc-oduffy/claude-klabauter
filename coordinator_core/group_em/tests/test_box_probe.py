@@ -23,7 +23,7 @@ def no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_probe_shape_and_zero_spawn(no_spawn) -> None:
     cap = box_probe.probe()
     assert set(cap) == {"os", "arch", "cpu_count", "ram_mb", "python", "gpu", "has_p4", "has_ue"}
-    assert cap["gpu"] is None
+    assert set(cap["gpu"]) in ({"devices"}, {"unavailable"})
     assert cap["os"] and cap["python"]
     assert isinstance(cap["cpu_count"], int) and cap["cpu_count"] > 0
     assert isinstance(cap["ram_mb"], int) and cap["ram_mb"] > 0
@@ -68,7 +68,18 @@ def test_write_capability_mints_identity_and_records(tmp_path: Path, no_spawn) -
     on_disk = json.loads((tmp_path / "state" / "group-em" / "box.json").read_text(encoding="utf-8"))
     assert on_disk["box_id"] == box_id
     assert on_disk["capability"] == rec["capability"]
-    assert on_disk["capability"]["gpu"] is None
+    assert set(on_disk["capability"]["gpu"]) in ({"devices"}, {"unavailable"})
+
+
+def test_probe_gpu_is_static_rows_from_the_sampler(monkeypatch: pytest.MonkeyPatch, no_spawn) -> None:
+    reading = {
+        "gpus": [{"index": 0, "name": "G", "vram_total_mib": 32768, "vram_used_mib": 6144, "util_pct": 1}],
+        "vram_by_pid": {},
+    }
+    monkeypatch.setattr(box_probe.gpu_sample, "sample", lambda: reading)
+    assert box_probe.probe()["gpu"] == {"devices": [{"name": "G", "vram_total_mib": 32768, "unified": False}]}
+    monkeypatch.setattr(box_probe.gpu_sample, "sample", lambda: {"gpu_unavailable": "nvml-absent"})
+    assert box_probe.probe()["gpu"] == {"unavailable": "nvml-absent"}
 
 
 def test_write_capability_keeps_existing_id_and_refreshes(tmp_path: Path) -> None:

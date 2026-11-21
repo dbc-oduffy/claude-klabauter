@@ -15,7 +15,7 @@ import re
 from typing import Callable
 
 from coordinator_core.ops.dispatch_emit.prompt_fragments import _scan_literals
-from coordinator_core.ops.workflow_fire.worker_preamble import bind_engine_commands
+from coordinator_core.ops.workflow_fire.worker_preamble import bind_engine_commands, needs_binding
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 #: Directory under the record dir that holds staged prompt bodies.
@@ -74,12 +74,8 @@ def _code_span_edges(js: str, run: list[tuple[int, int]], text: str) -> tuple[in
     return lead, max(lead, tail)
 
 
-def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
-    """``js`` with each large run of adjacent single-quoted literals replaced by its pointer literal.
-
-    A run is literals joined by ` + `; double-quoted literals (JSON schemas) are never staged. The
-    first run is staged as ``name``, later ones as ``name-2``, ``name-3`` in script order.
-    """
+def _literal_runs(js: str) -> list[list[tuple[int, int]]]:
+    """Runs of single-quoted literals joined by ` + `, as span lists."""
     spans = [(s, e) for s, e in _scan_literals(js) if js[s] == "'"]
     runs: list[list[tuple[int, int]]] = []
     for span in spans:
@@ -87,6 +83,39 @@ def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
             runs[-1].append(span)
         else:
             runs.append([span])
+    return runs
+
+
+def bind_script_literals(js: str) -> str:
+    """``js`` with each literal run that names a portable engine command rewritten bound (`bind_engine_commands`).
+
+    For a script delivered whole to an agent with no staging (plan route, re-verify, resume). The run is
+    re-encoded as one literal, since the bound form carries quotes on Windows. Trap: a run with an escape
+    `_decode` does not know stays as written, bare; so does a command inside a template literal.
+    """
+    out: list[str] = []
+    last = 0
+    for run in _literal_runs(js):
+        texts = [_decode(js[s + 1 : e - 1]) for s, e in run]
+        if any(t is None for t in texts):
+            continue
+        text = "".join(texts)  # type: ignore[arg-type]
+        if not needs_binding(text):
+            continue
+        out.append(js[last : run[0][0]])
+        out.append(_js_string_literal(bind_engine_commands(text)))
+        last = run[-1][1]
+    out.append(js[last:])
+    return "".join(out)
+
+
+def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
+    """``js`` with each large run of adjacent single-quoted literals replaced by its pointer literal.
+
+    A run is literals joined by ` + `; double-quoted literals (JSON schemas) are never staged. The
+    first run is staged as ``name``, later ones as ``name-2``, ``name-3`` in script order.
+    """
+    runs = _literal_runs(js)
     out: list[str] = []
     last = 0
     staged = 0
@@ -97,7 +126,7 @@ def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
         text = "".join(texts)  # type: ignore[arg-type]
         lead, tail = _code_span_edges(js, run, text)
         body = text[lead:tail]
-        if len(body.encode("utf-8")) < MIN_STAGE_BYTES:
+        if len(body.encode("utf-8")) < MIN_STAGE_BYTES and not needs_binding(body):
             continue
         staged += 1
         out.append(js[last : run[0][0]])

@@ -8,7 +8,7 @@ import pytest
 
 from coordinator_core.ops.ceremony.commit_v2 import _checkpoint_import_refusal
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SWEEP_HEAD = "def other():\n    pass\n"
 _SWEEP_LIVE = _SWEEP_HEAD + "def _landed_parked_plans():\n    return []\n"

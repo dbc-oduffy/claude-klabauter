@@ -1442,7 +1442,7 @@ class Router:
                     raise
         return name
 
-    def resolve_relay_target(self, name):
+    def resolve_relay_target(self, name) -> dict:
         """Strict relay target for the live local session called `name`; the answer an inbound relay delivers by.
 
         {"ok": True, "endpoint", "name", "box"} for exactly one live session. Otherwise a refusal
@@ -1450,6 +1450,15 @@ class Router:
         never mapped to another session or a default inbox.
         """
         endpoint = self.resolve_sender(name) if isinstance(name, str) and name else ""
+        if not endpoint and isinstance(name, str) and name in self.peers:
+            # resolve_sender skips the router's own faces (they are never a Claude reply target), but a
+            # Codex/agy peer's inbox IS its face: an inbound relay delivers there, as a local send does.
+            if self.peer_stale(name):
+                self.last_refusal = STALE_CODEX_ERROR
+            elif (self.faces.get(name) is not None and self.faces[name].poll() is None
+                    and name not in self.dead_holders):
+                endpoint = self.endpoint_of(name)
+                self.last_resolved_row = (name, _contract().local_box())
         if not endpoint:
             reason = self.last_refusal or "no live session"
             self.log("RELAY-REFUSED", name, reason)

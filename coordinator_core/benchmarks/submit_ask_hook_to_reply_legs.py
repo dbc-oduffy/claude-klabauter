@@ -77,6 +77,7 @@ from coordinator_core.benchmarks.submit_engine_ask_process_budget import (
     SPOOL_MARKER,
     _git,
     _payload,
+    _prewarm_like_the_engine,
     _reset,
     build_fixture,
     measure_concurrent,
@@ -489,6 +490,9 @@ def measure(concurrent_runs: int = DEFAULT_CONCURRENT_RUNS, runs: int = DEFAULT_
         _git(repo, "config", "core.longpaths", "true")
         stamps = scratch / "stamps.jsonl"
         with fixture_settings_home(scratch):
+            # The hook runs in a warm pool worker whose emit chain the engine imports at boot; a fresh
+            # benchmark process would charge the hook ~300ms of imports it never pays.
+            _prewarm_like_the_engine()
             evaluate = measure_concurrent(repo, concurrent_runs, runs=1)["max_process_ms"]
             with instrumented_engine(source_root, stamps) as env:
                 time.sleep(settle_secs)
@@ -572,9 +576,9 @@ STARVE_HOLD_S = {"door_bound": _DOOR_BOUND_HOLD_S, "hook_start": _HOOK_START_HOL
 #: After a starved submit the resumed engine finishes the work it was holding; the next leg starts after it drains.
 _STARVE_DRAIN_S = 4.0
 _RUN_MINTED = re.compile(r"Submitted to the engine as runs? \S|Engine submission: (?:minted )?run ")
-_SPOOLED = re.compile(r"spooled as \S|the ask was spooled;")
+_SPOOLED = re.compile(r"SPOOLED as \S|the ask was spooled;")
 _SPOOL_FAILED = re.compile(r"could not be spooled")
-_REMEDY = re.compile(r"instead:|re-?submit|start or abandon|to withdraw|check state/warp", re.IGNORECASE)
+_REMEDY = re.compile(r"instead:|re-?submit|start or abandon|withdraw|check state/warp", re.IGNORECASE)
 
 
 def _text_of(node: object) -> str:
@@ -590,7 +594,7 @@ def _text_of(node: object) -> str:
 def classify_outcome(stdout: str) -> str:
     """The door's stdout for one submit as `minted`, `refused`, `spooled` or `silent`.
 
-    `spooled`: the reply names the spooled ask (`spooled as <id>`), whether it rides an allow or a deny.
+    `spooled`: the reply names the spooled ask (`SPOOLED as <id>`), whether it rides an allow or a deny.
     `refused`: a deny that names a remedy (a deny without one is a drop), or an allow saying the ask could not be
     spooled and naming the remedy. `minted`: an allow naming the run it started. Empty stdout, an unparseable
     non-text reply, and an allow naming no run and no spool-failure remedy (a bare pass-loudly advisory) are

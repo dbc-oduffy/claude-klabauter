@@ -69,7 +69,11 @@ ASK_VERIFY_DOCS_KEYS = ("doc_paths", "note_path", "stale_docs")
 ASK_VERIFY_RETURN_KEYS = ("test", "judge", *ASK_VERIFY_LEDGER_KEYS, *ASK_VERIFY_DOCS_KEYS)
 OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
+#: plan-blitz returned no usable reviewer verdict; a refire can clear it.
+HALT_REVIEWER_UNREADY = "reviewer_unready"
 HALT_DEPENDENTS_UNSTARTED = "dependents_unstarted"
+#: A resume owes unexecuted code rows and no executor leg was emitted for any of them.
+HALT_NO_DISPATCHABLE_EXECUTOR = "no_dispatchable_executor"
 #: Sizing-time halt: an EM-stated size of M or below met an engine size of XL or XXL.
 HALT_MISALIGNED = "misaligned"
 VALID_SIZES = ("XS", "S", "M", "L", "XL", "XXL")
@@ -763,6 +767,9 @@ RESUME_LEDGER_DERIVED_FIELD = "derived_rows"
 #: `ledger_remaining_paths.plan_rows_serving` applies) landed after the halt commit; such items are
 #: removed from `blocking` and `remaining`.
 RESUME_LEDGER_CREDITED_FIELD = "credited_landed"
+#: `resume_ledger` verdict key listing blocking ids whose every serving plan row the EM discharged with
+#: closing evidence; they stay in `blocking` (the ledger re-judge rules them) but owe no work.
+RESUME_LEDGER_EM_DONE_FIELD = "em_discharged_items"
 #: `resume_ledger` verdict key echoing the halted run's arm.
 RESUME_LEDGER_ARM_FIELD = "arm"
 #: Id prefix of a row derived for an open ledger item (`L<item>`).

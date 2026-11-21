@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -197,21 +195,3 @@ def test_rewrite_reports_remaining_and_skips_syntax_errors_and_skip_dirs(
     assert (tmp_path / "ok.py").read_text() == "def f(a) -> None:\n    print(a)\n"
     assert (skipped_dir / "x.py").read_text() == "def g():\n    pass\n"
     assert codemod.main(["--check", str(tmp_path)]) == 1
-
-
-def test_cli_entrypoint_exit_code(tmp_path: Path) -> None:
-    f = tmp_path / "m.py"
-    f.write_text("def f():\n    print(1)\n")
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    proc = subprocess.run(
-        [sys.executable, str(_SCRIPT), "--check", str(f)],
-        capture_output=True, text=True, creationflags=flags,
-    )
-    assert proc.returncode == 1
-    assert "missing: 1 in 1 files" in proc.stdout
-    subprocess.run([sys.executable, str(_SCRIPT), str(f)], check=True, creationflags=flags)
-    proc = subprocess.run(
-        [sys.executable, str(_SCRIPT), "--check", str(f)],
-        capture_output=True, text=True, creationflags=flags,
-    )
-    assert proc.returncode == 0

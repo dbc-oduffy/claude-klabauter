@@ -13,7 +13,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.ops.dispatch_emit import landing_retest, landing_targeted_tests as ltt, retest_targeted
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN_ID = "run-base-check"
 RED_AT_BASE = "tests/test_red_at_base.py"

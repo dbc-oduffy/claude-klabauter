@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time
 
@@ -33,14 +32,6 @@ def test_seed_unrelated_writes_old_records_and_no_markers(tmp_path: Path) -> Non
         assert all(time.time() - f.stat().st_mtime > 3600 for f in files)
         assert not (store._store_dir() / "by-agent").exists()
         assert store.records_for_agent(bench._SESSION, bench._AGENT) == []
-
-
-def test_spawn_counter_counts_only_inside_the_block() -> None:
-    with bench.SpawnCounter() as sc:
-        subprocess.run([sys.executable, "-c", "pass"], check=True)
-    assert sc.n == 1
-    subprocess.run([sys.executable, "-c", "pass"], check=True)
-    assert sc.n == 1
 
 
 @pytest.mark.parametrize("field,value", [

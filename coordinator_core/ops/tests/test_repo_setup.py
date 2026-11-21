@@ -15,6 +15,8 @@ import pytest
 
 from coordinator_core.ops import repo_setup as mod
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 ENGINE_BIN = Path(__file__).resolve().parents[3] / "coordinator" / "bin"
 VERDICT_KEYS = {"created", "already_existed", "open", "needs_attention"}
 

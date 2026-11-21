@@ -85,10 +85,10 @@ from __future__ import annotations
 import os
 import re
 import sys
-from typing import Dict, Mapping, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, NamedTuple, Optional, Tuple
 
 __all__ = ["Locality", "os_family", "locality", "cross_check",
-           "Accel", "accelerator",
+           "Accel", "accelerator", "BoxHardware", "box_hardware",
            "IS_WINDOWS", "IS_DARWIN", "IS_LINUX"]
 
 IS_WINDOWS = os.name == "nt"
@@ -382,4 +382,151 @@ def accelerator(env: Optional[Mapping[str, str]] = None,
         return _ACCEL_CACHE["v"]
     value = _accelerator_uncached(os.environ if env is None else env)
     _ACCEL_CACHE["v"] = value
+    return value
+
+
+class BoxHardware(NamedTuple):
+    """The running box's own hardware. Any field is ``None`` when unreadable."""
+    cpu_brand: Optional[str]
+    physical_cores: Optional[int]
+    logical_cores: Optional[int]
+    ram_bytes: Optional[int]
+
+
+def _parse_meminfo_bytes(text: str) -> Optional[int]:
+    for line in text.split("\n"):
+        if line.startswith("MemTotal:"):
+            parts = line.partition(":")[2].split()
+            if parts and parts[0].isdigit():
+                return int(parts[0]) * 1024
+    return None
+
+
+def _physical_cores_from_cpuinfo(text: str) -> Optional[int]:
+    """Distinct (physical id, core id) pairs. Hosts whose cpuinfo carries no
+    ``core id`` (arm64 Linux) yield ``None`` rather than a guess."""
+    cores = set()
+    phys = core = None
+    for line in text.split("\n") + [""]:
+        if not line.strip():
+            if core is not None:
+                cores.add((phys, core))
+            phys = core = None
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip()
+        if key == "physical id":
+            phys = val.strip()
+        elif key == "core id":
+            core = val.strip()
+    return len(cores) or None
+
+
+def _count_core_records(buf: bytes) -> Optional[int]:
+    """Count ``RelationProcessorCore`` (0) records in a
+    ``GetLogicalProcessorInformationEx`` buffer: each record opens with a
+    DWORD relationship then a DWORD size."""
+    off = n = 0
+    while off + 8 <= len(buf):
+        rel = int.from_bytes(buf[off:off + 4], "little")
+        size = int.from_bytes(buf[off + 4:off + 8], "little")
+        if size <= 0:
+            break
+        if rel == 0:
+            n += 1
+        off += size
+    return n or None
+
+
+def _windows_ram_bytes() -> Optional[int]:
+    import ctypes
+
+    class _MemStatus(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+    st = _MemStatus()
+    st.dwLength = ctypes.sizeof(_MemStatus)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+        return None
+    return int(st.ullTotalPhys) or None
+
+
+def _windows_physical_cores() -> Optional[int]:
+    import ctypes
+    fn = ctypes.windll.kernel32.GetLogicalProcessorInformationEx
+    need = ctypes.c_ulong(0)
+    fn(0, None, ctypes.byref(need))
+    if need.value == 0:
+        return None
+    buf = ctypes.create_string_buffer(need.value)
+    if not fn(0, buf, ctypes.byref(need)):
+        return None
+    return _count_core_records(buf.raw[:need.value])
+
+
+def _darwin_sysctl(name: str, as_str: bool = False) -> Optional[Any]:
+    import ctypes
+    libc = ctypes.CDLL(None)
+    size = ctypes.c_size_t(0)
+    if libc.sysctlbyname(name.encode(), None, ctypes.byref(size), None, 0) != 0:
+        return None
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctlbyname(name.encode(), buf, ctypes.byref(size), None, 0) != 0:
+        return None
+    raw = buf.raw[:size.value]
+    if as_str:
+        return raw.split(b"\0", 1)[0].decode("utf-8", "replace").strip() or None
+    return int.from_bytes(raw, sys.byteorder) or None
+
+
+def _read_text(path: str) -> str:
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def _safe(fn: Callable[[], Any]) -> Optional[Any]:
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
+def _box_hardware_uncached(env: Mapping[str, str]) -> BoxHardware:
+    logical = _safe(os.cpu_count)
+    if IS_WINDOWS:
+        brand = _safe(lambda: _cpu_brand_windows(env)) or None
+        return BoxHardware(brand, _safe(_windows_physical_cores), logical,
+                           _safe(_windows_ram_bytes))
+    if IS_DARWIN:
+        return BoxHardware(
+            _safe(lambda: _darwin_sysctl("machdep.cpu.brand_string", True)),
+            _safe(lambda: _darwin_sysctl("hw.physicalcpu")), logical,
+            _safe(lambda: _darwin_sysctl("hw.memsize")))
+    if IS_LINUX:
+        return BoxHardware(
+            _safe(lambda: _cpu_brand_linux()[0]) or None,
+            _safe(lambda: _physical_cores_from_cpuinfo(_read_text("/proc/cpuinfo"))),
+            logical,
+            _safe(lambda: _parse_meminfo_bytes(_read_text("/proc/meminfo"))))
+    return BoxHardware(None, None, logical, None)
+
+
+_HARDWARE_CACHE: Dict[str, BoxHardware] = {}
+
+
+def box_hardware(env: Optional[Mapping[str, str]] = None,
+                 force: bool = False) -> BoxHardware:
+    """CPU brand, physical/logical cores and RAM of this box; spawn-free,
+    never raises, memoized per process (machine-constant)."""
+    if not force and "v" in _HARDWARE_CACHE:
+        return _HARDWARE_CACHE["v"]
+    value = _box_hardware_uncached(os.environ if env is None else env)
+    _HARDWARE_CACHE["v"] = value
     return value

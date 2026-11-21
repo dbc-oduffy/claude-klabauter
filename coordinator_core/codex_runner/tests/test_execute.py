@@ -181,6 +181,37 @@ def test_nonzero_exit_without_events_is_failed(env) -> None:
     assert "2" in res.error
 
 
+@pytest.mark.parametrize("line", [
+    "Guard: deny-kill-by-port-or-tree.\n",
+    "hook denied.\n\nGuard: `deny-kill-by-port-or-tree`.\n",
+])
+def test_stderr_guard_denial_is_policy_denial_naming_guard(env, line) -> None:
+    root, plan, _, tmp_path, mp = env
+    _jsonl(tmp_path, mp, [str(root / "src" / "a.py")])
+    mp.setenv("FAKE_CODEX_STDERR", line)
+    res, _ = _run(root, plan, "C1", tmp_path)
+    assert res.status == "policy_denial"
+    assert "deny-kill-by-port-or-tree" in res.error
+    assert res.codex_pid is not None
+
+
+def test_stderr_guard_denial_wins_over_nonzero_exit_status(env) -> None:
+    root, plan, _, tmp_path, mp = env
+    _jsonl(tmp_path, mp, [])
+    mp.setenv("FAKE_CODEX_EXIT", "1")
+    mp.setenv("FAKE_CODEX_STDERR", "Guard: deny-kill-by-port-or-tree.\n")
+    res, _ = _run(root, plan, "C1", tmp_path)
+    assert res.status == "policy_denial"
+
+
+def test_clean_stderr_keeps_prior_status(env) -> None:
+    root, plan, _, tmp_path, mp = env
+    _jsonl(tmp_path, mp, [str(root / "src" / "a.py")])
+    mp.setenv("FAKE_CODEX_STDERR", "warning: something unrelated\n")
+    res, _ = _run(root, plan, "C1", tmp_path)
+    assert res.status == "ok", res.error
+
+
 def test_codex_unavailable_is_failed(env) -> None:
     root, plan, _, tmp_path, mp = env
 

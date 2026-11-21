@@ -132,6 +132,7 @@ from typing import Any, Optional
 import yaml
 from datetime import datetime, timezone
 
+from coordinator_core.ops.dispatch_emit.record_paths import evidence_rel
 from coordinator_core.backlog_grind_assemble.grind_undo import cmd_undo
 from coordinator_core.backlog_grind_assemble.legacy_row_normalize import (
     normalize_legacy_row,
@@ -360,17 +361,6 @@ def _ledger_path(repo_root: Path, profile: str, row_id: str) -> Path:
     root, and reads/writes two different files for the SAME row."""
     _check_row_id(row_id)
     return Path(repo_root) / "state" / "queue-grind" / profile / f"{row_id}.jsonl"
-
-
-def evidence_rel(profile: str, run_id: str, item_id: str, kind: str) -> str:
-    """POSIX repo-relative `state/queue-grind/<profile>/evidence/<run_id>/<item_id>.<kind>.md`.
-
-    `kind` is `done`, `verify`, `judgment` or `size`. Segments are joined unchecked: callers pass
-    literals or dispatch-time placeholders; an agent-supplied path is checked
-    in `cmd_append`. Pure string work."""
-    if kind not in ("done", "verify", "judgment", "size"):
-        raise ValueError(f"grind-row: evidence kind must be 'done', 'verify', 'judgment' or 'size': {kind!r}")
-    return f"state/queue-grind/{profile}/evidence/{run_id}/{item_id}.{kind}.md"
 
 
 def _evidence_file_refusal(evidence_file: str, repo_root: Path) -> str | None:

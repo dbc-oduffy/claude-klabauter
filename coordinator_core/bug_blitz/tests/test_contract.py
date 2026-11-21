@@ -107,3 +107,13 @@ def test_schema_rejects_extra_field() -> None:
     doc["extra"] = 1
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(doc, _schema())
+
+
+def test_blitz_run_paths_and_unsafe_id_refused() -> None:
+    assert c.blitz_script_rel("r1") == "state/scratch/bug-blitz/r1/blitz.workflow.mjs"
+    assert c.blitz_revisions_rel("r1") == "state/scratch/bug-blitz/r1/revisions.md"
+    for bad in ("../x", "a/b", ""):
+        with pytest.raises(ValueError):
+            c.blitz_script_rel(bad)
+        with pytest.raises(ValueError):
+            c.blitz_revisions_rel(bad)

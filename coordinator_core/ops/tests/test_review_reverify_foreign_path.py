@@ -110,17 +110,6 @@ def test_a_failed_restore_leaves_the_probe_open_naming_the_stuck_path(world, mon
     assert probe.is_open(snap)
 
 
-def test_review_prep_names_a_withheld_path_peer_held_and_keeps_it_in_review(repo) -> None:
-    _write(repo, ["a/theirs.py"], 3)
-    live = {"other": LiveRun(withheld=frozenset({"a/theirs.py"}))}
-    reply = rp.review_prep(
-        repo, base=_base(repo), paths=["a/theirs.py"], slice_prefix="p",
-        plan_path="docs/plans/p.md", session_id="s", run_id="me", live_runs=live,
-    )
-    assert reply["error"] is None and reply["peer_held"] == ["a/theirs.py"]
-    assert [f for s in reply["slices"] for f in s["files"]] == ["a/theirs.py"]
-
-
 def test_review_prep_answers_an_unresolvable_base_rather_than_slicing(repo) -> None:
     _write(repo, ["a/theirs.py"], 3)
     reply = rp.review_prep(

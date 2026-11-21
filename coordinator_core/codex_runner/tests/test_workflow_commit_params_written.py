@@ -12,6 +12,8 @@ from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 if TYPE_CHECKING:
     from subprocess import Popen
 

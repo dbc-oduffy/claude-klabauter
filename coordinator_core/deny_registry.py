@@ -321,7 +321,7 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
 #: landing, each with its class.
 LANDING_REFUSAL_CLASS: Dict[str, str] = {
     **{reason: HEAD_INTEGRITY for reason in (
-        "blob-drift", "branch-mismatch", "branch-unreadable", "destructive-git", "detached-head",
+        "blob-drift", "branch-mismatch", "branch-unreadable", "commit-set-not-recorded-hunks", "destructive-git", "detached-head",
         "halt-on-run-owned-merge", "head-moved", "import-closure", "kept-blob-stale",
         "landing-tree-differs-from-measured", "lost-definition", "new-red", "own-hunk-head-moved",
         "post-commit-path-unlanded", "run-token", "run-token-adopted", "run-token-in-flight",

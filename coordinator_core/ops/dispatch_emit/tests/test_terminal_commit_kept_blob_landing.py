@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.session_hub_path import session_dir_for
-from coordinator_core.ops.dispatch_emit import kept_work, peer_hunk_gate, run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit import halted_run, kept_work, peer_hunk_gate, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.session import core as session_core, touch_record
 from coordinator_core.win_portability import no_console_creationflags
@@ -20,7 +21,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SELF = "5e1f0000-0000-4000-8000-0000000000c3"
 PATH = "pkg/execute_review.py"
-SIBLING = "run-sibling"
+SIBLING = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-5b11d0"
 RUN = "ask-20261027T120000-c3c3c3"
 OWN_TEXT = "x = 2\n"
 PEER_TEXT = "x = 2\npeer = 1\n"
@@ -53,12 +54,18 @@ def repo(tmp_path, monkeypatch):
 
 
 def _declare_sibling(repo: Path) -> None:
+    """A halted peer run whose halt record withholds PATH. Trap: a live token minted under SELF (the run's
+    submitting session) is the run's own sibling, never a peer, so only a halt record claims the path
+    for a peer that is not the submitter's."""
     rdir = repo / "state" / "warp" / SIBLING
     rdir.mkdir(parents=True)
     (rdir / "manifest.json").write_text(
         json.dumps({"rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": []}), encoding="utf-8"
     )
-    run_token.mint(repo, SIBLING, "sibling.mjs", session_id=SELF)
+    halted_run.write_halt_marker(rdir, halted="test-halt", sizing_rel=None)
+    marker = json.loads((rdir / halted_run.HALTED_FILE).read_text(encoding="utf-8"))
+    marker[halted_run.HALT_RUN_ARTIFACTS_FIELD] = {"withheld": {PATH: ""}}
+    (rdir / halted_run.HALTED_FILE).write_text(json.dumps(marker), encoding="utf-8")
 
 
 def _record_kept(repo: Path, blob: str) -> None:

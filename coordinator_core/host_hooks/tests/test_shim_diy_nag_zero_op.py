@@ -11,6 +11,8 @@ from coordinator_core.host_hooks import shim
 from coordinator_core.session import op_dispatch_nag as nag
 from coordinator_core.warm import telemetry
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 NAG = "NAG-TEXT"
 

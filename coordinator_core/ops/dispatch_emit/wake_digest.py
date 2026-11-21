@@ -76,6 +76,36 @@ CAP_HELPER_JS = (
     "}"
 )
 
+#: `_recordedCommit(e)`: the commit a schema-invalid reply's raw text already records (`committed`
+#: true plus a hex `sha`), or null. `_recoverStructuredReply(e, redo)`: that commit, else one re-ask
+#: through `redo` (a non-function `redo` re-asks nothing) when `e` is a reply-parse failure (a
+#: usage-limit text is not), else `e` rethrown; a second failure keeps its own recorded commit or
+#: rethrows. A recovered commit carries `recovered: true`.
+RECOVERED_COMMIT_HELPER_JS = (
+    "  function _replyRawText(e) {\n"
+    "    const p = [];\n"
+    "    for (const v of [e?.message, e?.raw, e?.rawReply, e?.reply, e?.text, e?.output, e]) {\n"
+    "      if (v == null) continue;\n"
+    "      try { p.push(typeof v === 'string' ? v : JSON.stringify(v)); } catch (x) {}\n"
+    "    }\n"
+    "    return p.join('\\n');\n"
+    "  }\n"
+    "  function _recordedCommit(e) {\n"
+    "    const t = _replyRawText(e);\n"
+    "    if (!/\\b[\"']?committed[\"']?\\s*[:=]\\s*true\\b/.test(t)) return null;\n"
+    "    const m = /[\"']?sha[\"']?\\s*[:=]\\s*[\"']?([0-9a-f]{7,40})\\b/i.exec(t);\n"
+    "    return m ? { committed: true, sha: m[1], recovered: true, already_landed: null, error: null, refused: null } : null;\n"
+    "  }\n"
+    "  async function _recoverStructuredReply(e, redo) {\n"
+    "    const rc = _recordedCommit(e);\n"
+    "    if (rc) return rc;\n"
+    "    const msg = String(e?.name ? e.name + ': ' : '') + String(e?.message ?? e ?? '');\n"
+    "    if (_USAGE_LIMIT_RE.test(msg) || !/StructuredReplyInvalid|structured reply|schema|JSON|Expecting|Unexpected token|column \\d+/i.test(msg)) throw e;\n"
+    "    if (typeof redo !== 'function') throw e;\n"
+    "    try { return await redo(); } catch (e2) { const rc2 = _recordedCommit(e2); if (rc2) return rc2; throw e2; }\n"
+    "  }"
+)
+
 
 #: One pasteable line: `--from-task-output '<path>'` hands the CLI the run's own task-output file,
 #: whose `next_action.params` it reads. No `<`, `>` or `&` appears (a heredoc's `<<` and JSON free

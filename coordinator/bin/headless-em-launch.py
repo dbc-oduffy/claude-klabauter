@@ -249,6 +249,16 @@ def _codex_writable_dirs(extra: list[str], cwd: str | None = None) -> list[str]:
     return [*flag, *extra]
 
 
+def _codex_workdir(extra: list[str], cwd: str | None) -> str:
+    """The directory the codex child works in: the caller's `-C`/`--cd`, else `cwd`, else this process's."""
+    for i, arg in enumerate(extra):
+        if arg in ("-C", "--cd") and i + 1 < len(extra):
+            return extra[i + 1]
+        if arg.startswith("--cd="):
+            return arg[len("--cd="):]
+    return cwd or os.getcwd()
+
+
 def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, environ=None,
            prepare_only=False, platform=None, native_executable=None, mint=uuid.uuid4,
            name=None, resume=None, cwd=None, runner=subprocess.run, open_runs=None,
@@ -295,6 +305,13 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
         print("headless-em-launch: Windows requires the native CLI .exe, not a .cmd/.bat shim; "
               "pass --native-executable with its installed path", file=sys.stderr)
         return REFUSED
+    if family == "codex":
+        from coordinator_core.codex_runner.sandbox_scratch import ScratchGrantRefused, ensure_sandbox_scratch
+        try:
+            ensure_sandbox_scratch(Path(_codex_workdir(extra, cwd)))
+        except ScratchGrantRefused as exc:
+            print(f"headless-em-launch: refused: {exc}", file=sys.stderr)
+            return REFUSED
     sid = (session_id or environ.get(SESSION_ENV) or "").strip() or str(mint())
     try:
         token = write_headless_em_grant(sid, family)

@@ -28,7 +28,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_renders_op_catalog i
 from coordinator_core.ops.dispatch_emit.tests.test_landing_parity import _git
 from pathlib import Path
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture

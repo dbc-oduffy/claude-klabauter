@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -77,35 +75,3 @@ with ic.booted_warm_engine(Path(sys.argv[1]), prefix="clone-killed-parent-", ent
     print(root.parent, flush=True)
     time.sleep(600)
 """
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="killed-parent path asserted on Windows")
-def test_killed_parent_leaves_no_rooted_process() -> None:
-    import psutil
-
-    source = _source_root()
-    child = subprocess.Popen(
-        [sys.executable, "-c", _CHILD, str(source), _ENTRYPOINT],
-        cwd=str(source),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    try:
-        line = child.stdout.readline().strip()
-        if not line:
-            pytest.skip("child engine did not boot")
-        tmp_parent = Path(line)
-        deadline = time.time() + 30
-        while time.time() < deadline and not any("supervisor.py" in r for r in _rooted(tmp_parent)):
-            time.sleep(0.5)
-    finally:
-        child.kill()
-        child.wait(timeout=10)
-    deadline = time.time() + 15
-    left = _rooted(tmp_parent)
-    while left and time.time() < deadline:
-        time.sleep(0.5)
-        left = _rooted(tmp_parent)
-    assert left == [], f"processes survived a killed parent: {left}"

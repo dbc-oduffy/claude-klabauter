@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PROBE_BUDGET_S = 0.5
 _HELD = (

@@ -11,6 +11,8 @@ from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.session import claim_index, liveness
 from pathlib import Path
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 RUN = "warp-2026-10-26-sample-aaaaaa-20261026T000000-bbbbbb"
 PLAN = """# p
 

@@ -96,7 +96,8 @@ def test_stale_fingerprint_spawns_recompose_and_starts_via_launcher(tmp_path: Pa
         (root / PLAN_REL).write_text("# edited\n", encoding="utf-8")
     else:
         rd = root / RECORD_DIR_ROOT / HALTED_ID
-        write_halt_marker(rd, halted="ledger-check", sizing_rel=SIZING_REL, plan_rel=PLAN_REL, run_base_sha="b" * 40)
+        marker = rd / "halted.json"  # a re-halt keeps the first base, so move it in the record itself
+        marker.write_text(marker.read_text(encoding="utf-8").replace(HEAD, "b" * 40), encoding="utf-8")
     env = mod.evaluate(_payload(root), emit=emit)
     assert _hso(env)["permissionDecision"] == "allow"
     launcher = Path(_hso(env)["updatedInput"]["scriptPath"])

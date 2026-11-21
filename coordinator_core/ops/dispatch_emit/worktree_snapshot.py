@@ -180,6 +180,12 @@ def worktree_snapshot(
     return Snapshot(parsed[0], parsed[1], set(literals), roots)
 
 
+def changed_python_paths(root: Path) -> Optional[set[str]]:
+    """Read Python dirt across run boundaries, including untracked modules."""
+    snapshot = worktree_snapshot(root, [], [], ["*.py"])
+    return snapshot.changed if snapshot is not None else None
+
+
 def record_dir_changes(worktree_root: Path, record_dir_rel: str, changed: set) -> tuple[list, list]:
     """The record dir's changed top-level files from one status read: ``(present, deleted)``.
     ``present`` are files on disk; ``deleted`` are changed entries gone from disk."""

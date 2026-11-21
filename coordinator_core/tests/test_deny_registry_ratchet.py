@@ -314,24 +314,6 @@ def test_dispatch_drops_a_crashed_unregistered_guard_and_keeps_a_registered_one_
     assert dispatch._apply_guard_level("destructive-rm", crash) is crash
 
 
-@pytest.mark.parametrize("cmd", ["python -m pytest $FILES", "pytest $F -q", "python -m pytest $(cat list.txt)"])
-def test_unscheduled_suite_run_with_variable_held_paths_denies_at_every_level(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cmd) -> None:
-    import subprocess
-
-    from coordinator_core.bash_guards import check_test_suite_invocation as guard
-    from coordinator_core.win_portability import no_console_creationflags
-
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
-    assert dr.GUARD_DENY_CLASS["check-test-suite-invocation"] == dr.BOX_DEGRADING
-    payload = {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": "s", "cwd": str(tmp_path)}
-    env = guard.check(payload)
-    assert env is not None
-    for level in ("strict", "warn", "off"):
-        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
-        mp.reset_cache()
-        assert mp.apply_guard_level("check-test-suite-invocation", env) is env, level
-
-
 def test_uncapped_pytest_plugin_guard_is_box_degrading_and_keeps_its_deny_at_every_level(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import guard_uncapped_pytest_plugin as guard
 

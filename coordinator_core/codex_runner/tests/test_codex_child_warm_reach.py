@@ -16,6 +16,8 @@ from coordinator_core.codex_runner import workflow as agents
 from coordinator_core.temp_layout import mkdtemp_in
 from coordinator_core.warm import breadcrumb, client, election, engine_root, skew, supervisor
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 ASK = {"jsonrpc": "2.0", "id": 1, "method": "dispatch.ask_gate", "params": {"ask": "unused"}}
 _CHILD_KEYS = (
     "COORDINATOR_WARM",

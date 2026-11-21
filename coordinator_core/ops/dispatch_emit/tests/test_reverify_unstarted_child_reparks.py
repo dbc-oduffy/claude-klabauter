@@ -5,8 +5,6 @@ live child's marker (alive pid, or pidless inside the grace) still parks without
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -14,7 +12,6 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.ops.dispatch_emit import land_deadline
-from coordinator_core.win_portability import no_console_creationflags
 
 _MEASURED = {"sha": "a" * 40, "base_sha": "b" * 40, "blobs": {"x": "1" * 40}}
 _STALE = cov.OverlayVerdict("mismatch", "keyed to a different landing set blobs", ("t/x.py",))
@@ -36,14 +33,6 @@ def _resend(root: Path) -> list:
     return spawned
 
 
-def _dead_pid() -> int:
-    proc = subprocess.Popen(
-        [sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL, **no_console_creationflags()
-    )
-    proc.wait()
-    return proc.pid
-
-
 def test_a_pidless_marker_past_the_start_grace_is_an_unstarted_child_and_launches(tmp_path):
     _marker(tmp_path, "", cov.INFLIGHT_START_GRACE_S + 5)
 
@@ -54,12 +43,6 @@ def test_a_pidless_marker_inside_the_start_grace_still_parks_without_spawning(tm
     _marker(tmp_path, "", 1.0)
 
     assert _resend(tmp_path) == []
-
-
-def test_a_marker_whose_pid_is_dead_is_replaced_and_launches(tmp_path):
-    _marker(tmp_path, str(_dead_pid()), 1.0)
-
-    assert len(_resend(tmp_path)) == 1
 
 
 def test_a_marker_whose_pid_is_alive_parks_without_spawning_even_past_the_start_grace(tmp_path):

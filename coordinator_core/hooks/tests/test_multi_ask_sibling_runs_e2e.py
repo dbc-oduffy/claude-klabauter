@@ -448,7 +448,8 @@ def _run_m_plus_block(tmp_path: Path, reply: dict) -> dict:
     if node is None:
         pytest.skip("node not available")
     block = _in_run_m_plus_block()
-    fragments = "".join(f"const {n} = ''; " for n in sorted(set(re.findall(r"_PFC?\d+", block))))
+    declared = set(re.findall(r"const (_PFC?\d+) =", block))
+    fragments = "".join(f"const {n} = ''; " for n in sorted(set(re.findall(r"_PFC?\d+", block)) - declared))
     code = (
         f"const REPO_ROOT = {json.dumps(tmp_path.as_posix())}; const _SESSION_ID = 's'; const _crossRepoApproved = false;\n"
         "const _runId = 'run-1'; const _sizingRel = 'state/sizings/s.yaml'; let _halted = null; const _gate = { arm: 'm_plus', chain_emit: " + json.dumps(reply) + " };\n"
@@ -458,7 +459,7 @@ def _run_m_plus_block(tmp_path: Path, reply: dict) -> dict:
         "(async () => { const _out = await (async () => {\n" + block + "\nreturn { halted: _halted }; })();\n"
         "console.log(JSON.stringify({ out: _out, started })); })();\n"
     )
-    done = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+    done = subprocess.run([node, "-"], input=code, capture_output=True, text=True, timeout=30,
                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout)

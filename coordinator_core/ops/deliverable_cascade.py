@@ -439,6 +439,84 @@ def _kind_descriptor(name: str) -> _KindDescriptor:
         ) from None
 
 
+def _stem(value: Any) -> str:
+    """Basename without suffix of a path-ish frontmatter value ('' when not a string)."""
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    return Path(value.strip().replace("\\", "/")).name.removesuffix(".md")
+
+
+def _is_handoff_source(source_kind: str, source_path: str) -> bool:
+    """True when the terminal source is a handoff. The redrive reports a handoff source
+    as kind `plan` once it carries a recorded `shipped_in`, so the path decides too."""
+    if source_kind == "handoff":
+        return True
+    norm = (source_path or "").replace("\\", "/")
+    return "/handoffs/" in norm or norm.startswith("handoffs/")
+
+
+def _drop_source_successors(
+    candidates: List[dict], source_paths: List[str], worktree_root: Path
+) -> List[dict]:
+    """Drop every candidate that is the SUCCESSOR (direct or transitive, among
+    the candidates) of a terminal source handoff.
+
+    A continuation minted for a deliverable whose predecessor just shipped or
+    was superseded is the live head of its chain: it carries the same
+    `deliverable_id` and is unfinished by construction, so the cascade that the
+    predecessor's terminal state fires must never close it (it was advanced to
+    `shipped`, pickup_ready false, with the predecessor's archive commit as
+    shipped_in). A successor is recognised by `predecessor` naming a source's
+    file stem, `predecessor_id` equal to a source's `handoff_id`, or a source's
+    own `continued_into` naming it. A source may already sit in the archive, so
+    identity falls back to the stem alone."""
+    descendant_stems: set = set()
+    descendant_ids: set = set()
+    continued: set = set()
+    for source_path in source_paths:
+        stem = _stem(source_path)
+        if not stem:
+            continue
+        descendant_stems.add(stem)
+        src = Path(source_path)
+        if not src.is_absolute():
+            src = worktree_root / src
+        for probe in (src, worktree_root / "archive" / "handoffs" / src.name):
+            try:
+                if probe.is_file():
+                    sfm = _read_meta(str(probe)) or {}
+                    if sfm.get("handoff_id"):
+                        descendant_ids.add(str(sfm["handoff_id"]).strip())
+                    continued.add(_stem(sfm.get("continued_into")))
+                    break
+            except Exception:  # noqa: BLE001 -- identity falls back to the stem
+                continue
+    continued.discard("")
+    if not descendant_stems:
+        return candidates
+    dropped: set = set()
+    changed = True
+    while changed:
+        changed = False
+        for c in candidates:
+            key = str(c["path"])
+            if key in dropped:
+                continue
+            fm = c["fm"]
+            own_stem = _stem(c["path"].name)
+            if (
+                _stem(fm.get("predecessor")) in descendant_stems
+                or (fm.get("predecessor_id") and str(fm["predecessor_id"]).strip() in descendant_ids)
+                or own_stem in continued
+            ):
+                dropped.add(key)
+                descendant_stems.add(own_stem)
+                if fm.get("handoff_id"):
+                    descendant_ids.add(str(fm["handoff_id"]).strip())
+                changed = True
+    return [c for c in candidates if str(c["path"]) not in dropped]
+
+
 def _iso_now() -> str:
     """UTC ISO-8601 timestamp with a literal 'Z' suffix (no external tz dependency)."""
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1447,6 +1525,11 @@ def cascade_terminal_sync(params: dict, repo_root: Optional[Path] = None) -> dic
             resolved_source = None
         if resolved_source is not None:
             candidates = [c for c in candidates if c["path"].resolve() != resolved_source]
+    extra_sources = [p for p in (params.get("source_paths") or []) if isinstance(p, str)]
+    if target_kind is _HANDOFF_KIND and (_is_handoff_source(source_kind, source_path) or extra_sources):
+        candidates = _drop_source_successors(
+            candidates, [p for p in [source_path, *extra_sources] if p], worktree_root
+        )
 
     advanced: List[dict] = []
     refused: List[dict] = []

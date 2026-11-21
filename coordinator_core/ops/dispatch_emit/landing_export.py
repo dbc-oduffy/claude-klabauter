@@ -10,8 +10,13 @@ the base export is an input and its absence is a refusal, never a fallback to a 
 The tree diff base_sha..HEAD is read from the object store in process; blobs are written
 verbatim (no smudge).
 
+No `base_export`: `build_base_paths_export` writes the landing paths' bytes at
+`base_sha` (default HEAD) -- the peer-free bytes an arm builds against -- read from the object store in
+process (zero spawns). It is the path-scoped export a brief can always name; it has no sibling
+files and no worktree overlay.
+
 Negative-spec:
-    - `build_landing_export` does NOT build a base export. No `base_export` holding `base_sha`
+    - `build_landing_export` does NOT build a base export. A `base_export` without `base_sha`
       -> LandingExportError. `build_head_export` is the one function that does (a
       `clone` + `checkout`, ~23 s); it belongs in the detached child only, never an inline op.
     - Does NOT leave `base_export` intact: it is moved to `out_dir` and mutated in place
@@ -139,6 +144,22 @@ def _tracked_at(common_dir: Path, tree: str, rel: str) -> bool:
     return False
 
 
+def _blob_at(common_dir: Path, tree: str, rel: str) -> Optional[bytes]:
+    cur = tree
+    parts = rel.split("/")
+    for i, part in enumerate(parts):
+        entry = _entries(common_dir, cur).get(part)
+        if entry is None:
+            return None
+        last = i == len(parts) - 1
+        if last:
+            return None if entry[0] in (_MODE_TREE, _MODE_SUBMODULE) else _read(common_dir, entry[1], "blob")
+        if entry[0] != _MODE_TREE:
+            return None
+        cur = entry[1]
+    return None
+
+
 def _norm_landing(root: Path, raw: str) -> str:
     if not raw or "\0" in raw:
         raise LandingExportError("empty landing path")
@@ -180,8 +201,13 @@ def build_landing_export(
     if out == scratch or scratch not in out.parents:
         raise LandingExportError(f"out_dir must be under {scratch.name}/ of the repo")
     paths = [_norm_landing(root, p) for p in landing_paths]
-    if base_export is None or not base_sha:
-        raise LandingExportError("no run_base export given (base_export and base_sha)")
+    if base_export is None:
+        sha = base_sha or target_sha or head_sha(root, fresh=True)
+        if not sha:
+            raise LandingExportError("HEAD unresolved")
+        return build_base_paths_export(root, out, paths, sha)
+    if not base_sha:
+        raise LandingExportError("a base_export needs its base_sha")
     base = Path(base_export).resolve()
     if not base.is_dir():
         raise LandingExportError(f"base export is not a directory: {base_export}")
@@ -221,6 +247,33 @@ def build_landing_export(
     except (OSError, ValueError) as exc:
         raise LandingExportError(f"export failed: {exc}") from None
     return LandingExport(out.as_posix(), head, tuple(overlaid), tuple(removed))
+
+
+def build_base_paths_export(root: Path, out: Path, paths: Sequence[str], base_sha: str) -> LandingExport:
+    """`paths` at `base_sha` under `out`: the clean bytes of files a peer holds uncommitted hunks in.
+
+    `paths` are already normalised; a path absent at `base_sha` is recorded in `removed`.
+    """
+    if out.exists():
+        raise LandingExportError("out_dir already exists")
+    common = resolve_git_common_dir(root)
+    try:
+        tree = _commit_tree(common, base_sha)
+        blobs = {rel: _blob_at(common, tree, rel) for rel in paths}
+        for rel, data in blobs.items():
+            if data is not None:
+                dst = out / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(data)
+        out.mkdir(parents=True, exist_ok=True)
+    except (OSError, ValueError) as exc:
+        raise LandingExportError(f"export failed: {exc}") from None
+    return LandingExport(
+        out.as_posix(),
+        base_sha,
+        tuple(r for r, d in blobs.items() if d is not None),
+        tuple(r for r, d in blobs.items() if d is None),
+    )
 
 
 def run_export_root(worktree_root: Path, run_id: str) -> Path:

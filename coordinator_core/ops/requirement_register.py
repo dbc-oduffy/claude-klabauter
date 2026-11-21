@@ -26,6 +26,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point,
 )
 from coordinator_core.session import record_homes
+from coordinator_core.session.output_tree_layout import iter_entries
 
 REGISTER_KEY = "requirement_register"
 SOURCES_KEY = "sources"
@@ -1143,17 +1144,12 @@ def stall_report(repo_root: Path, today: date) -> StallReport:
     plan_claimed: dict[str, set[str]] = {}
     plan_created: dict[str, Optional[str]] = {}
     stuck: list[str] = []
-    plans_dir = root / "docs" / "plans"
-    try:
-        plan_names = sorted(n for n in os.listdir(plans_dir) if n.endswith(".md"))
-    except OSError:
-        plan_names = []
-    for name in plan_names:
-        path = os.path.join(plans_dir, name)
+    for plan_rel in sorted(iter_entries(str(root), "docs/plans", ".md")):
+        path = os.path.join(root, plan_rel)
         fm = _plan_frontmatter(path)
         if fm is None:
             continue
-        plan_created[f"docs/plans/{name}"] = _fm_scalar(fm, "created")
+        plan_created[plan_rel] = _fm_scalar(fm, "created")
         if "register_claims" in fm:
             claim_sizing, claim_ids = plan_claims(fm)
             if claim_sizing in bearing:
@@ -1166,7 +1162,7 @@ def stall_report(repo_root: Path, today: date) -> StallReport:
             except OSError:
                 continue
             if age >= STALL_DAYS:
-                stuck.append(f"docs/plans/{name} ({status}, untouched {age}d, sizing {sizing})")
+                stuck.append(f"{plan_rel} ({status}, untouched {age}d, sizing {sizing})")
 
     stale: list[str] = []
     unclaimed: list[str] = []

@@ -51,6 +51,27 @@ def _production_inputs(monkeypatch):
     )
 
 
+#: Every spelling of the repo root is counted at this length, so a byte count never depends on where the
+#: checkout lives (pytest's tmp root, the stamp clone and the installed copy all differ). The longest
+#: real root measured is a 66-char scratch candidate clone under the repo.
+_REF_ROOT_LEN = 66
+
+
+def _root_spellings(root: Path) -> list[str]:
+    """The root as the composed script and the written launcher embed it: native, posix, and one and two levels of JSON escape (a JSON string inside a JSON string)."""
+    native = str(root)
+    once = json.dumps(native)[1:-1]
+    spellings = {native, root.as_posix(), once, json.dumps(once)[1:-1]}
+    return sorted(spellings, key=len, reverse=True)
+
+
+def _measured(text: str, root: Path) -> int:
+    """UTF-8 bytes of `text` with each spelling of `root` replaced by a `_REF_ROOT_LEN`-char placeholder."""
+    for spelling in _root_spellings(root):
+        text = text.replace(spelling, "R" * _REF_ROOT_LEN)
+    return _bytes(text)
+
+
 def _write_sizing(root: Path) -> None:
     path = root / _SIZING_REL
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,9 +124,9 @@ def _compose(root: Path, shape: str, **stubs) -> str:
 def _breakdown(root: Path, shape: str, assets: dict, monkeypatch) -> str:
     """Bytes with the cap lifted, and each embedded stage's share as the difference against a stubbed twin."""
     monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9)
-    full = _bytes(_compose(root, shape, **assets))
-    no_blitz = _bytes(_compose(root, shape, **_STUB_BLITZ, roadmap_blitz_text=assets["roadmap_blitz_text"]))
-    base = _bytes(_compose(root, shape, **_STUB_BLITZ, **_STUB_ROADMAP))
+    full = _measured(_compose(root, shape, **assets), root)
+    no_blitz = _measured(_compose(root, shape, **_STUB_BLITZ, roadmap_blitz_text=assets["roadmap_blitz_text"]), root)
+    base = _measured(_compose(root, shape, **_STUB_BLITZ, **_STUB_ROADMAP), root)
     parts = {
         "base_script": "x" * base,
         "plan_blitz_stage": "x" * (full - no_blitz),
@@ -120,7 +141,7 @@ def _breakdown(root: Path, shape: str, assets: dict, monkeypatch) -> str:
 def _base_bytes(root: Path, shape: str, monkeypatch) -> int:
     """Bytes of the production staged script (`staged_out` sink, as dispatch.emit always passes) with both embedded stage prompts stubbed."""
     monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9)
-    return _bytes(_compose(root, shape, staged_out={}, **_STUB_BLITZ, **_STUB_ROADMAP))
+    return _measured(_compose(root, shape, staged_out={}, **_STUB_BLITZ, **_STUB_ROADMAP), root)
 
 
 @pytest.mark.parametrize("shape", ["bare_relayed", "raw", "refire", "launcher_child"])
@@ -128,7 +149,7 @@ def test_composed_script_fits_the_byte_ceiling(shape, tmp_path, monkeypatch, _pr
     _write_sizing(tmp_path)
     assets = _assets()
     try:
-        size = _bytes(_compose(tmp_path, shape, **assets))
+        size = _measured(_compose(tmp_path, shape, **assets), tmp_path)
     except ask_compose.AskComposeRefused:
         raise AssertionError(_breakdown(tmp_path, shape, assets, monkeypatch)) from None
     assert size <= _BUDGET, _breakdown(tmp_path, shape, assets, monkeypatch)
@@ -195,5 +216,5 @@ def test_a_term_run_ending_in_a_method_call_is_not_merged(monkeypatch):
 
 
 def test_launcher_script_fits_the_byte_ceiling(tmp_path):
-    size = _bytes(_write_launcher(tmp_path))
+    size = _measured(_write_launcher(tmp_path), tmp_path)
     assert size <= _BUDGET, f"launcher script is {size} bytes (budget {_BUDGET})"

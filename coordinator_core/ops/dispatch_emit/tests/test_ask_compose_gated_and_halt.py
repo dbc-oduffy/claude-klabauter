@@ -9,7 +9,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose, emit
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import WAKE_DIGEST_COMMIT_OP
-from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, shared_decls
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CHUNK_REASON_VAR,
     PLAN_HELD_VAR,
@@ -163,9 +163,7 @@ def _gate_timeout_halt(script: str, halted: dict) -> dict:
     if not node:
         pytest.skip("node not on PATH")
     line = next(ln for ln in script.splitlines() if "The gate timed out (-32004)" in ln)
-    prelude = "".join(
-        f"{m.group(0)}\n" for m in re.finditer(r"const _PF\d+ = [^\n]*?;(?=\n)", script) if m.group(0).split()[1] in line
-    )
+    prelude = shared_decls(script) + "\n"
     prog = f"{prelude}let _halted = {json.dumps(halted)};\n{line}\nprocess.stdout.write(JSON.stringify(_halted));"
     done = subprocess.run(
         [node, "-"], input=prog, capture_output=True, text=True, check=True, timeout=30, **no_console_creationflags(),

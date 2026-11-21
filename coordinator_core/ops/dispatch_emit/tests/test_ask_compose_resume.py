@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import ask_compose
-from coordinator_core.ops.dispatch_emit.ask_compose import ARM_M_PLUS, compose_ask_script
+from coordinator_core.ops.dispatch_emit.ask_compose import ARM_M_PLUS
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 import pytest
+from coordinator_core.ops.dispatch_emit.tests.conftest import compose_ask_script
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 

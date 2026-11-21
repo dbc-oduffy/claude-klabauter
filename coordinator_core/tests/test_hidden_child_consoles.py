@@ -8,7 +8,7 @@ import pytest
 
 import coordinator_core  # noqa: F401 -- installs the default
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows spawn flags")
+pytestmark = [pytest.mark.skipif(sys.platform != "win32", reason="Windows spawn flags"), pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _spawn_kwargs(monkeypatch, **kwargs) -> dict:

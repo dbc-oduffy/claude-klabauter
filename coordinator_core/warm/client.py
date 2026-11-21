@@ -1017,7 +1017,8 @@ def _open_pipe(endpoint: str):
     return io
 
 
-#: Bounded pre-delivery wait for a free pipe instance on Windows, inside the liveness read deadline.
+#: Bounded pre-delivery wait for a free pipe instance on Windows. TRAP: it runs BEFORE, and adds to,
+#: the liveness read deadline (`READ_DEADLINE_SECS`), so a busy-then-slow call waits up to the sum.
 PIPE_BUSY_WAIT_SECS = 1.5
 _PIPE_BUSY_POLL_SECS = 0.02
 _PIPE_BUSY_WAIT_SLICE_SECS = 0.25
@@ -1594,7 +1595,8 @@ def _count_unanswered(token: str, now: float, started: Optional[float] = None) -
     """One more unanswered call for `token`; the run restarts at 1 for another token or a stale file.
 
     A call that began before the last counted one gave up (`started` < its stamp) was in flight
-    beside it, so it is the same delay seen twice: it adds nothing and the count is returned as is.
+    beside it, so it is the same delay seen twice: it adds nothing and returns 0, so it never
+    re-triggers the restart request the counted call already made at K.
     """
     path = _unanswered_path()
     count = 1
@@ -1604,7 +1606,7 @@ def _count_unanswered(token: str, now: float, started: Optional[float] = None) -
         record = json.loads(path.read_text(encoding="utf-8"))
         if record.get("token") == token and 0.0 <= now - float(record["last"]) < _UNANSWERED_CHAIN_SECS:
             if started is not None and started < float(record["last"]):
-                return int(record["count"])
+                return 0
             count = int(record["count"]) + 1
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass

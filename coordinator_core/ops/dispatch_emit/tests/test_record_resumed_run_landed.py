@@ -67,6 +67,7 @@ def test_resumed_with_live_successor_refuses_naming_it(repo, monkeypatch, base):
     before = p.read_bytes()
     _successor(root, base)
     monkeypatch.setattr(run_token, "is_live", lambda r, run: run == SUCC)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([{"run_id": SUCC}]))
     out = op._handler({"run_id": RID, "sha": sha}, root)
     assert not out["ok"] and SUCC in out["error"]
     assert p.read_bytes() == before
@@ -77,6 +78,7 @@ def test_resumed_with_dead_or_unrelated_successor_lands(repo, monkeypatch):
     _marker(root)
     _successor(root, "scratch/warp", resumed_from="warp-other")
     monkeypatch.setattr(run_token, "is_live", lambda r, run: True)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([{"run_id": SUCC}]))
     assert op._handler({"run_id": RID, "sha": sha}, root)["ok"]
 
 
@@ -85,6 +87,7 @@ def test_resumed_with_non_live_successor_lands(repo, monkeypatch):
     _marker(root)
     _successor(root, "state/warp")
     monkeypatch.setattr(run_token, "is_live", lambda r, run: False)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([]))
     assert op._handler({"run_id": RID, "sha": sha}, root)["ok"]
 
 
@@ -99,6 +102,7 @@ def test_resumed_with_terminal_but_token_live_successor_lands(repo, monkeypatch,
     _successor(root, "state/warp")
     (root / "state" / "warp" / SUCC / fname).write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(run_token, "is_live", lambda r, run: run == SUCC)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([{"run_id": SUCC}]))
     assert op._handler({"run_id": RID, "sha": sha}, root)["ok"]
 
 
@@ -108,6 +112,7 @@ def test_resumed_with_running_stage_successor_still_refuses(repo, monkeypatch):
     _successor(root, "state/warp")
     (root / "state" / "warp" / SUCC / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
     monkeypatch.setattr(run_token, "is_live", lambda r, run: run == SUCC)
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([{"run_id": SUCC}]))
     out = op._handler({"run_id": RID, "sha": sha}, root)
     assert not out["ok"] and SUCC in out["error"]
 

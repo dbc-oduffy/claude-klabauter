@@ -13,7 +13,7 @@ from coordinator_core.ops import clean_clone_proof
 from coordinator_core.ops.clean_clone_proof_contract import verdict_path
 from coordinator_core.ops.dispatch_emit import run_close
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN_ID = "run-ccp-fixture"
 TEST_SRC = "import mod\n\n\ndef test_value():\n    assert mod.VALUE == 2\n"

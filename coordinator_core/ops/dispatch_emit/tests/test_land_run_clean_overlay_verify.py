@@ -29,7 +29,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_foreign_dirt_in_reac
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence import _terminal_with
 from coordinator_core.ops.dispatch_emit.tests.test_reverify_measures_landing_tree_e2e import _stage
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 
 @pytest.fixture(autouse=True)
@@ -304,8 +304,10 @@ def test_the_mirror_fill_runs_under_the_overlay_bound_not_the_2s_plumbing_budget
 
     monkeypatch.setattr(cov, "_run", spy)
     assert cov.verify(root, "run1", head, [READER]).verdict == "green"
-    assert (["read-tree"], cov.TEST_TIMEOUT_S) in seen
-    assert not [s for s in seen if s[0] == ["checkout"]]
+    for verb in ("ls-tree", "update-index", "checkout-index"):
+        assert ([verb], cov.TEST_TIMEOUT_S) in seen, (verb, seen)
+    assert not [s for s in seen if s[0] in (["checkout"], ["read-tree"]) and s[1] != cov.TEST_TIMEOUT_S]
+    assert not [s for s in seen if s[0] in (["ls-tree"], ["update-index"], ["checkout-index"]) and s[1] != cov.TEST_TIMEOUT_S]
 
 
 def _pytest_calls(monkeypatch, tmp_path, run_ids):
@@ -1142,7 +1144,7 @@ def test_a_mirror_that_stays_unusable_after_one_rebuild_fails_naming_the_cause(t
     real = cov._run
 
     def broken(argv, cwd, timeout, **kw):
-        if argv[1] in ("diff-tree", "read-tree"):
+        if argv[1] in ("diff-tree", "read-tree", "ls-tree", "update-index", "checkout-index"):
             return subprocess.CompletedProcess(argv, 128, "", "fatal: index is corrupt")
         return real(argv, cwd, timeout, **kw)
 
@@ -1963,3 +1965,41 @@ def test_verify_runs_two_or_more_targets_under_xdist_and_still_reports_the_red(t
 
     assert out.verdict == "red" and out.failing == (f"{READER}::test_reads_data",), out
     assert seen[0][seen[0].index("-n") + 1] == "2"
+
+
+_WINERR5 = (
+    "==== ERRORS ====\n____ ERROR at setup of test_x ____\n\n    def tmp(tmp_path):\n"
+    "E       PermissionError: [WinError 5] Access is denied: 'pytest-of-u'\n\nt/test_reader.py:3: PermissionError\n"
+    "==== short test summary info ====\nERROR t/test_reader.py::test_x - PermissionError: [WinError 5] Access is denied\n"
+    "==== 248 errors in 7.78s ====\n"
+)
+
+
+def test_an_all_setup_error_zero_test_run_is_red_typed_test_infra_failure_with_the_first_error_and_argv(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    _fake_pytest(monkeypatch, 1, _WINERR5)
+    out = cov.verify(root, "run1", head, [READER])
+    assert out.verdict == "red" and out.cause == cov.ZERO_RUN_TEST_INFRA == "test_infra_failure"
+    assert "WinError 5" in out.detail
+    assert out.argv and "--basetemp" in out.argv[0]
+    measured = {"blobs": {}, "base_sha": "a" * 40, "sha": "b" * 40}
+    cov.write_verdict(root, "run1", measured, out)
+    back = cov.check_verdict(root, "run1", measured)
+    assert back.cause == "test_infra_failure" and back.argv == out.argv
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ERROR t/test_x.py::test_a - boom\n1 passed, 1 error in 0.1s\n",
+        "____ ERROR collecting t/test_x.py ____\nE   ImportError: x\nERROR t/test_x.py\n1 error in 0.1s\n",
+        "F  [100%]\nFAILED t/test_x.py::test_a\n1 failed in 0.1s\n",
+    ],
+)
+def test_infra_setup_error_refuses_runs_that_completed_a_test_or_failed_collection(text):
+    assert cov.infra_setup_error(text) == ""
+
+
+def test_infra_setup_error_falls_back_to_the_short_summary_line_when_no_traceback_printed():
+    text = "ERROR t/test_x.py::test_a - OSError: no space\n248 errors in 7.78s\n"
+    assert "OSError: no space" in cov.infra_setup_error(text)

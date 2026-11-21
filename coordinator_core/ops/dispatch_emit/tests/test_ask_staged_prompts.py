@@ -11,7 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose, ask_staged_prompts, cli, prompt_fragments
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_staged_prompts import MIN_STAGE_BYTES, stage, stage_literal_runs
-from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, unshare_agent_head
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 _RUN = "run-1"
@@ -109,6 +109,7 @@ def test_without_staged_out_every_body_stays_inline() -> None:
 def _unshare_precedence(script: str) -> str:
     """Inline the hoisted precedence-tail const back into each use; staging runs before the share, so only the inline script carries it."""
     fn = ask_compose._PRECEDENCE_TAIL_FN
+    script = unshare_agent_head(script)
     m = re.search(rf"const {fn} = `([^`]*)`;\n", script)
     if not m:
         return script

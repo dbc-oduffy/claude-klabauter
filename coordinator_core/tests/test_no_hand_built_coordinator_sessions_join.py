@@ -17,14 +17,12 @@ Allowlist entries are repo-relative paths, named, never a rationale-fit match.
 from __future__ import annotations
 
 import ast
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.complete, pytest.mark.spawns_process]
+pytestmark = [pytest.mark.complete]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCAN_ROOTS = ("coordinator_core/", "coordinator/", "scripts/")
@@ -48,19 +46,6 @@ _JOIN_CALLS = {
     "join", "joinpath", "Path", "PurePath", "PurePosixPath", "PureWindowsPath",
     "glob", "rglob", "with_name", "relative_to",
 }
-
-
-def _tracked_py() -> list[str]:
-    out = subprocess.run(
-        ["git", "-C", str(_REPO_ROOT), "ls-files", "-z", "--", *[r + "*.py" for r in _SCAN_ROOTS]],
-        check=True, capture_output=True, **no_console_creationflags(),
-    ).stdout.decode("utf-8", "replace")
-    return [p for p in out.split("\0") if p]
-
-
-def _is_test_path(rel: str) -> bool:
-    name = rel.rsplit("/", 1)[-1]
-    return "/tests/" in rel or name.startswith("test_") or name == "conftest.py"
 
 
 def _call_name(node: ast.Call) -> str:
@@ -131,26 +116,6 @@ def violations(source: str) -> list[int]:
             ):
                 hits.append(node.lineno)
     return sorted(set(hits))
-
-
-def test_no_hand_built_coordinator_sessions_join_outside_session_hub_path():
-    found: dict[str, list[int]] = {}
-    for rel in _tracked_py():
-        if rel in _ALLOW or _is_test_path(rel):
-            continue
-        try:
-            text = (_REPO_ROOT / rel).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        if _NAME not in text:
-            continue
-        lines = violations(text)
-        if lines:
-            found[rel] = lines
-    assert not found, (
-        "hand-built 'coordinator-sessions' join(s); resolve through "
-        f"coordinator_core.session_hub_path: {found}"
-    )
 
 
 @pytest.mark.parametrize(

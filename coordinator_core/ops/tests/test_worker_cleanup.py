@@ -13,6 +13,10 @@ import psutil
 from coordinator_core.bash_guards import block_kill_by_port_or_tree as kill_guard
 from coordinator_core.codex_runner import workflow
 from coordinator_core.ops import worker_cleanup as wc
+import pytest
+
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def test_scratch_remove_admits_only_codex_tmp_and_tmp(tmp_path):

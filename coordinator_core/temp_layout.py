@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import functools
 import os
 import re
 import secrets
@@ -26,8 +27,17 @@ _PYTEST_RUN_DIR_RE = re.compile(r"^(\d+)-[0-9a-f]{6}$")
 _ROOT_DIRNAME = "coordinator"
 
 
-def _coordinator_root() -> Path:
+def _legacy_coordinator_root() -> Path:
+    """``<gettempdir()>/coordinator``: where every pre-disk-parent coordinator tree lives."""
     return Path(tempfile.gettempdir()) / _ROOT_DIRNAME
+
+
+def _coordinator_root() -> Path:
+    """``<disk-backed parent of gettempdir()>/coordinator``: the one root every layout path derives from.
+
+    Identical to ``_legacy_coordinator_root`` except on a Linux tmpfs temp dir (see ``_disk_backed_parent``).
+    """
+    return _disk_backed_parent(Path(tempfile.gettempdir())) / _ROOT_DIRNAME
 
 
 def coordinator_temp_root(repo_root: Path | str) -> Path:
@@ -49,9 +59,147 @@ def fleet_temp_root() -> Path:
     return _managed_run_dir_fleet_root() or _coordinator_root() / FLEET_DIRNAME
 
 
+def _inside_worktree(path: Path) -> bool:
+    """True when ``path`` or an ancestor holds a ``.git`` entry: a few stats, no spawn."""
+    return any((p / ".git").exists() for p in (path, *path.parents))
+
+
+def _system_temp_dir() -> Path:
+    """The OS temp dir, never one inside a git worktree.
+
+    A Codex child gets TEMP/TMP=``<repo>/scratch/codex-tmp``, so ``gettempdir()`` there is inside the
+    repo and pytest refuses (exit 4, zero tests) a basetemp under it. Candidates are the platform
+    default, not ``TMPDIR``/``TEMP``, which are the redirect. TRAP: when every candidate is inside a
+    worktree or missing, ``gettempdir()`` is returned as-is rather than inventing a location.
+    """
+    current = Path(tempfile.gettempdir())
+    if not _inside_worktree(current):
+        return current
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        candidates = [Path(local) / "Temp"]
+    else:
+        candidates = [Path("/tmp"), Path("/var/tmp")]
+    for cand in candidates:
+        if cand.is_dir() and not _inside_worktree(cand):
+            return cand
+    return current
+
+
+_MOUNTINFO = "/proc/self/mountinfo"
+
+
+def _unescape_mount(field: str) -> str:
+    """mountinfo writes a space in a mountpoint as the octal escape 040; decode those."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+@functools.lru_cache(maxsize=1)
+def _mount_table() -> tuple[tuple[str, str], ...]:
+    """``(mountpoint, fstype)`` pairs from one read of ``/proc/self/mountinfo``; empty when unreadable.
+
+    Cached for the process: a mount appearing mid-run is not seen, which the per-run basetemp
+    choice tolerates. Tests clear it with ``_mount_table.cache_clear()``.
+    """
+    try:
+        with open(_MOUNTINFO, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return ()
+    table = []
+    for line in lines:
+        head, sep, tail = line.partition(" - ")
+        fields = head.split()
+        if sep and len(fields) >= 5 and tail.split():
+            table.append((_unescape_mount(fields[4]), tail.split()[0]))
+    return tuple(table)
+
+
+def _real(path: Path) -> str:
+    return os.path.realpath(path)
+
+
+def _is_tmpfs(path: Path) -> bool:
+    """True when the longest-prefix mount holding ``path`` is tmpfs (RAM-backed). No spawn."""
+    target = _real(path)
+    best_len, best_type = -1, ""
+    for mount, fstype in _mount_table():
+        prefix = mount.rstrip("/")
+        if (target == mount or target.startswith(prefix + "/")) and len(prefix) > best_len:
+            best_len, best_type = len(prefix), fstype
+    return best_type == "tmpfs"
+
+
+def _disk_backed_dir(cand: Path) -> bool:
+    """Writable (or creatable under a writable parent), outside every worktree, and not tmpfs."""
+    if cand.exists():
+        if not cand.is_dir() or not os.access(cand, os.W_OK):
+            return False
+    elif not os.access(cand.parent, os.W_OK):
+        return False
+    return not _inside_worktree(cand) and not _is_tmpfs(cand)
+
+
+def _linux_disk_fallbacks() -> list[Path]:
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    return [Path("/var/tmp"), Path(xdg) if xdg else Path.home() / ".cache"]
+
+
+def _disk_backed_parent(base: Path) -> Path:
+    """``base``, except on Linux a tmpfs one yields to disk-backed ``/var/tmp`` then
+    ``$XDG_CACHE_HOME`` (default ``~/.cache``).
+
+    Purpose: scratch under a RAM-backed /tmp (basetemp, clean mirrors, run-temp) fills it (ENOSPC)
+    and spends the RAM the admission gate protects. TRAP: with no qualifying fallback the tmpfs dir
+    is kept, never invented; off Linux the answer is ``base`` with no filesystem touch.
+    """
+    if not sys.platform.startswith("linux") or not _is_tmpfs(base):
+        return base
+    for cand in _linux_disk_fallbacks():
+        if _disk_backed_dir(cand):
+            return cand
+    return base
+
+
+def _pytest_temp_parent() -> Path:
+    """``_disk_backed_parent`` of the worktree-safe system temp dir (see ``_system_temp_dir``)."""
+    return _disk_backed_parent(_system_temp_dir())
+
+
 def pytest_basetemp_root(repo_root: Path | str) -> Path:
-    """``coordinator_temp_root(repo_root)/pytest/``: parent of per-run pytest basetemps."""
-    return coordinator_temp_root(repo_root) / "pytest"
+    """``<pytest temp parent>/coordinator/<repo>/pytest/``: parent of per-run pytest basetemps.
+
+    Outside every worktree even when ``gettempdir()`` is redirected into one (see ``_system_temp_dir``),
+    and off tmpfs on Linux when a disk-backed fallback exists (see ``_pytest_temp_parent``).
+    """
+    return _pytest_temp_parent() / _ROOT_DIRNAME / coordinator_temp_root(repo_root).name / "pytest"
+
+
+def pytest_fleet_basetemp_root() -> Path:
+    """``<pytest temp parent>/coordinator/_fleet/pytest/``: basetemp parent when no repo name is usable."""
+    return _pytest_temp_parent() / _ROOT_DIRNAME / FLEET_DIRNAME / "pytest"
+
+
+def pytest_sweep_roots() -> list[Path]:
+    """Every ``<base>/coordinator`` a per-run pytest dir may live under, deduplicated.
+
+    The dead-owner sweep walks all of them: the basetemp root moves between the system temp and a
+    Linux disk fallback as tmpfs state and env change, so a dir from an earlier choice must still reap.
+    """
+    bases = [
+        Path(tempfile.gettempdir()),
+        _system_temp_dir(),
+        _pytest_temp_parent(),
+        _coordinator_root().parent,
+    ]
+    if sys.platform.startswith("linux"):
+        bases += _linux_disk_fallbacks()
+    roots: list[Path] = []
+    for base in bases:
+        root = base / _ROOT_DIRNAME
+        if root not in roots:
+            roots.append(root)
+    return roots
 
 
 RUN_TEMP_DIRNAME = "run-temp"
@@ -164,6 +312,56 @@ def _reap_dead_owner_dirs(run_temp: Path) -> None:
             pass
 
 
+# Rebuildable caches under the old tmpfs root, never copied: (path under ``coordinator/``, max age s).
+# bug-blitz keeps prune_claude_temp's 7-day retention; the mirrors and commit clones rebuild cheaply.
+_LEGACY_CACHE_PATHS = (
+    (("clean-mirror",), 86400),
+    ((FLEET_DIRNAME, "claude-klabauter-commit-clone"), 86400),
+    ((FLEET_DIRNAME, "coordinator-bug-blitz"), 7 * 86400),
+)
+_legacy_root_reaped = False
+
+
+def _reap_legacy_root_once() -> None:
+    """Once per process, drain the old ``<gettempdir()>/coordinator`` when the root moved off it.
+
+    Cost when idle: one stat (root unchanged, or the old root absent). Removes dead-owner run-temp
+    entries (a live owner's dir is left for a later pass) and stale rebuildable caches; never copies. Old pytest dirs reap via
+    ``pytest_sweep_roots``, which still walks this root.
+    TRAP: only the named cache dirs age out, so sentinels and stores a pre-move process still reads stay.
+    """
+    global _legacy_root_reaped
+    if _legacy_root_reaped:
+        return
+    _legacy_root_reaped = True
+    old = _legacy_coordinator_root()
+    if old == _coordinator_root():
+        return
+    try:
+        children = [c for c in os.scandir(old) if c.is_dir(follow_symlinks=False)]
+    except OSError:
+        return
+    now = time.time()
+    for child in children:
+        base = Path(child.path)
+        _reap_dead_owner_dirs(base / RUN_TEMP_DIRNAME)
+        for parts, max_age in _LEGACY_CACHE_PATHS:
+            if parts[0] == FLEET_DIRNAME and child.name != FLEET_DIRNAME:
+                continue
+            cache = base.joinpath(*(parts[1:] if parts[0] == FLEET_DIRNAME else parts))
+            try:
+                entries = list(os.scandir(cache))
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    if now - entry.stat(follow_symlinks=False).st_mtime < max_age:
+                        continue
+                    _rmtree_strict(Path(entry.path))
+                except OSError:
+                    pass
+
+
 def _managed_run_dir_fleet_root() -> Path | None:
     """The ``coordinator/_fleet`` enclosing ``gettempdir()`` when it is under ``run-temp/``, else None."""
     parts = Path(tempfile.gettempdir()).parts
@@ -185,11 +383,12 @@ def _create(
     if _temp_is_managed_run_dir():
         # A session dir redirected Temp into the managed layout: nesting the skeleton again
         # only eats MAX_PATH headroom, and the session dir's own teardown owns the contents.
-        run_temp = _coordinator_root().parent
+        run_temp = Path(tempfile.gettempdir())
     else:
         run_temp = managed_tempdir(repo_root) / RUN_TEMP_DIRNAME
         run_temp.mkdir(parents=True, exist_ok=True)
         _reap_dead_owner_dirs(run_temp)
+        _reap_legacy_root_once()
     path = run_temp / f"{owner_tag}-{secrets.token_hex(3)}-{prefix}"
     path.mkdir()
 

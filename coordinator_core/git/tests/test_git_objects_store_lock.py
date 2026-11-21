@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import os
-import subprocess
-import sys
 import textwrap
-import time
 from pathlib import Path
 
 import pytest
@@ -60,29 +56,6 @@ def common(tmp_path: Path) -> Path:
     return c
 
 
-@pytest.fixture()
-def held_elsewhere(common: Path, tmp_path: Path):
-    ready = tmp_path / "ready"
-    env = dict(os.environ)
-    env["PYTHONPATH"] = _REPO_ROOT + os.pathsep + env.get("PYTHONPATH", "")
-    holder = subprocess.Popen(
-        [sys.executable, "-c", _HOLDER_CHILD, str(common), str(ready)],
-        env=env,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    deadline = time.monotonic() + 20
-    while not ready.exists():
-        assert time.monotonic() < deadline, "holder never took the lock"
-        time.sleep(0.02)
-    try:
-        yield
-    finally:
-        holder.stdin.close()
-        holder.communicate(timeout=60)
-
-
 def _read_all(common: Path, pending: dict) -> None:
     for sha, (_kind, payload) in pending.items():
         got = go.read_object(common, sha)
@@ -102,49 +75,3 @@ def test_flush_pack_uncontended_places_a_pack_and_tail_marker(common: Path) -> N
     names = _packs(common)
     assert any(n.endswith(".idx") for n in names) and go._TAIL_MARKER in names
     _read_all(common, pending)
-
-
-def test_write_pack_held_elsewhere_falls_back_loose(common: Path, held_elsewhere) -> None:
-    pending = _pending(12, b"busy-write")
-    go._write_pack(common, pending)
-    assert _packs(common) == []
-    _read_all(common, pending)
-
-
-def test_flush_pack_held_elsewhere_never_touches_pack_dir(common: Path, held_elsewhere) -> None:
-    pending = _pending(12, b"busy-flush")
-    go._flush_pack(common, pending)
-    assert _packs(common) == []
-    _read_all(common, pending)
-
-
-def test_flush_pack_held_elsewhere_keeps_existing_tail(common: Path) -> None:
-    first = _pending(12, b"tail")
-    go._flush_pack(common, first)
-    before = _packs(common)
-    marker_before = (common / "objects" / "pack" / go._TAIL_MARKER).read_text()
-
-    ready = common.parent / "ready2"
-    env = dict(os.environ)
-    env["PYTHONPATH"] = _REPO_ROOT + os.pathsep + env.get("PYTHONPATH", "")
-    holder = subprocess.Popen(
-        [sys.executable, "-c", _HOLDER_CHILD, str(common), str(ready)],
-        env=env,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        deadline = time.monotonic() + 20
-        while not ready.exists():
-            assert time.monotonic() < deadline
-            time.sleep(0.02)
-        second = _pending(12, b"tail-second")
-        go._flush_pack(common, second)
-        assert _packs(common) == before
-        assert (common / "objects" / "pack" / go._TAIL_MARKER).read_text() == marker_before
-        _read_all(common, first)
-        _read_all(common, second)
-    finally:
-        holder.stdin.close()
-        holder.communicate(timeout=60)

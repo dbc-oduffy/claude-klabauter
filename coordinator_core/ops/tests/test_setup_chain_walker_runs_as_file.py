@@ -8,7 +8,7 @@ import pytest
 
 import coordinator_core.ops.setup_chain_walker as walker
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def test_runs_as_a_file_without_pythonpath_and_imports_its_own_root(tmp_path: Path) -> None:

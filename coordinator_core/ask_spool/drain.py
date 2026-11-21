@@ -733,6 +733,7 @@ def run(
     _reclaim_stale(repo_root, stale_after_s, time.time() if now is None else now)
     taken: set = set()
     by_key: dict = {}
+    by_ask: dict = {}  # normalized bare-ask hash -> the run this drain holds, so an identical entry joins it
     seen: set = set()
     for sid in itertools.chain(_pending_passes(repo_root, seen), _late_duplicates(repo_root, seen, by_key)):
         path = record.claim(repo_root, sid)
@@ -756,7 +757,12 @@ def run(
                 if not record.withdraw(repo_root, sid, "stale: " + why, by="drain")["withdrawn"]:
                     raise RuntimeError("the stale entry could not be withdrawn")
             else:
-                run_id = by_key.get(key) if key else None
+                ask_hash = None
+                if not key and _raw_ask_text(parsed):
+                    from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
+
+                    ask_hash = normalized_ask_hash(_raw_ask_text(parsed))
+                run_id = by_key.get(key) if key else by_ask.get(ask_hash)
                 coalesced = run_id is not None
                 if run_id is None:
                     run_id, coalesced = _find_run(
@@ -789,6 +795,8 @@ def run(
             continue
         if key and key not in by_key:
             by_key[key] = run_id
+        elif ask_hash and ask_hash not in by_ask:
+            by_ask[ask_hash] = run_id
         stamped = {**header, "run_id": run_id, "minted_at": time.time()}
         if minted_now and not coalesced:
             stamped["minted_here"] = True  # no session holds a launcher: the engine fires it (`_fire_minted`)

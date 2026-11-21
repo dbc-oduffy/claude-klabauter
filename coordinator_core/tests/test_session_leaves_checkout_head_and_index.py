@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 ROOT_CONFTEST = Path(__file__).resolve().parents[2] / "conftest.py"
 

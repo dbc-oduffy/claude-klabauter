@@ -13,7 +13,7 @@ import yaml
 
 from coordinator_core.ops import plan_seam_check as op
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 API = "lib/api.py"
 API_SRC = "def save_photo_arrays():\n    return 1\n"

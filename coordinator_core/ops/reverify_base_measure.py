@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops.review_reverify import _RED_LINE
+from coordinator_core.testing import scoped_pytest
 from coordinator_core.win_portability import no_console_creationflags
 
 USAGE = "usage: reverify_base_measure --sha <base> [--head-sha <sha>] --out <path> -- <ids...>"
@@ -29,6 +31,7 @@ _DROPPED = "reverify-base-measure-dropped:\t"
 #: Runs inside the exported tree: pytest names one missing id per run (on stderr), so the retries
 #: that drop each next one stay in this one process; only the final attempt's output is emitted.
 #: `sys.argv[1]` is a file of ids, one per line: argv carries no id list, so its size is unbounded.
+#: `sys.argv[2]` is the per-run `--basetemp`, so concurrent measures never share pytest's `pytest-of-<user>` dir.
 _RETRY_RUNNER = (
     "import contextlib, io, re, sys\n"
     "import pytest\n"
@@ -38,7 +41,7 @@ _RETRY_RUNNER = (
     "while True:\n"
     "    out, err = io.StringIO(), io.StringIO()\n"
     "    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):\n"
-    "        rc = pytest.main(['-rfE', '--continue-on-collection-errors', *ids])\n"
+    "        rc = pytest.main(['-rfE', '--continue-on-collection-errors', '--basetemp', sys.argv[2], *ids])\n"
     "    hits = [m.groups() for m in map(nf.search, (err.getvalue() + out.getvalue()).splitlines()) if m]\n"
     "    def named(kind):\n"
     "        paths = [n.replace('\\\\', '/') for k, n in hits if k.startswith(kind)]\n"
@@ -106,16 +109,20 @@ def _run(sha: str, ids: list[str], cwd: str,
     """One baseline_export run: (export state, runner exit, stdout lines, stderr lines). A `timeout_s`
     expiry reports export "timeout" with no lines."""
     sha = _resolve(sha, cwd)
+    run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(cwd, scoped_pytest.new_run_slug())
     try:
         with tempfile.TemporaryDirectory(prefix="reverify-ids-") as holder:
             id_file = Path(holder) / "ids.txt"
             id_file.write_text("\n".join(ids) + "\n", encoding="utf-8", newline="\n")
             argv = [sys.executable, "-c", _LAUNCH, str(_ENGINE_ROOT), "--sha", sha, "--",
-                    sys.executable, "-c", _RETRY_RUNNER, str(id_file)]
+                    sys.executable, "-c", _RETRY_RUNNER, str(id_file), str(basetemp)]
             proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace",
-                                  timeout=timeout_s, **no_console_creationflags())
+                                  timeout=timeout_s, env=scoped_pytest.tmp_env(os.environ, tmp),
+                                  **no_console_creationflags())
     except subprocess.TimeoutExpired:
         return "timeout", None, [], []
+    finally:
+        shutil.rmtree(run_holder, ignore_errors=True)
     lines = proc.stdout.splitlines()
     stderr_lines = proc.stderr.splitlines()
     tail = next((ln.strip() for ln in reversed(lines) if ln.strip()), "")

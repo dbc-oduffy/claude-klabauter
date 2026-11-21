@@ -11,6 +11,7 @@ _NEEDLE = "rea-ledger"
 _ALLOWED = {
     "coordinator_core/ops/rea_ledger_write.py",
     "coordinator_core/ops/tests/test_rea_ledger_write.py",
+    "coordinator_core/ops/tests/test_rea_ledger_write_spawns.py",
     "coordinator_core/tests/test_rea_ledger_sole_writer.py",
     "coordinator_core/ipc.py",
     "coordinator_core/tests/test_raw_writes_have_a_disposition.py",

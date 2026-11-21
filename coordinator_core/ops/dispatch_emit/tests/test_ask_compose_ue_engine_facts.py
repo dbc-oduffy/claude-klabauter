@@ -37,6 +37,15 @@ def test_served_repo_briefs_carry_the_clause_in_each_role(monkeypatch: pytest.Mo
     assert "project_engine_list_modules" in script
 
 
+def test_served_compose_degrades_a_warming_search_and_never_aborts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run aa8623: the search bootstrap in a review brief must degrade, not abort, on `warming`."""
+    monkeypatch.setattr(ask_compose, "ue_engine_facts_clause", lambda root: CLAUSE)
+    script = _compose()
+    assert script.count("search_degraded: <reason>") >= 3
+    assert script.count("never stop or abort the review") == script.count(_MARK)
+    assert "ABORT: example-retrieval-repo" not in script
+
+
 def test_unserved_repo_briefs_carry_no_clause(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "ue_engine_facts_clause", lambda root: "")
     script = _compose()

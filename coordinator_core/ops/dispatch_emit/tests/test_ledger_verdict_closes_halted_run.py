@@ -7,7 +7,7 @@ import subprocess
 import pytest
 from pathlib import Path
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 import yaml
 
 from coordinator_core.benchmarks.budget import load_manifest

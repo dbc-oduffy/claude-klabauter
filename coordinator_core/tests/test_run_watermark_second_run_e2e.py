@@ -23,6 +23,8 @@ from coordinator_core.distill import manifest_schema as schema
 from coordinator_core.learn_lessons_pipeline import apply as llp_apply
 from coordinator_core.learn_lessons_pipeline import brief
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # Above one run's byte budget (it binds before the file budget), below two runs' worth.
 TOTAL = 400
 FIRST_DAY = _dt.date(2024, 1, 1)

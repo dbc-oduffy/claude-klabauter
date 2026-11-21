@@ -88,6 +88,9 @@ _INCIDENT_LINE = (
 )
 
 
+_HARDWARE_LINE = "assert-em-role: this box: {hw} -- 'the box is slow' is never a conclusion.\n"
+
+
 def _incident_claims_line(repo_root) -> str:
     """One advisory line naming live incident-claim keys; "" when none."""
     if repo_root is None:
@@ -104,6 +107,25 @@ def _incident_claims_line(repo_root) -> str:
     if len(keys) > _INCIDENT_KEY_CAP:
         shown += f", +{len(keys) - _INCIDENT_KEY_CAP} more"
     return _INCIDENT_LINE.format(keys=shown)
+
+
+def _hardware_line() -> str:
+    """One advisory line naming this box's CPU, cores and RAM; unknown fields omitted, "" when all unknown."""
+    from coordinator_core import env_locality
+
+    hw = env_locality.box_hardware()
+    bits = []
+    if hw.cpu_brand:
+        bits.append(hw.cpu_brand)
+    if hw.physical_cores or hw.logical_cores:
+        phys = hw.physical_cores if hw.physical_cores else "?"
+        logi = hw.logical_cores if hw.logical_cores else "?"
+        bits.append(f"{phys} physical / {logi} logical cores")
+    if hw.ram_bytes:
+        bits.append(f"{round(hw.ram_bytes / 2**30)}GB RAM")
+    if not bits:
+        return ""
+    return _HARDWARE_LINE.format(hw=", ".join(bits))
 
 
 def _plugin_root() -> "Optional[Path]":
@@ -340,5 +362,12 @@ def _handler(params: dict, repo_root=None) -> dict:
             parts.append(incident_line)
     except Exception:
         pass  # advisory text only; a lookup failure must not block SessionStart
+
+    try:
+        hardware_line = _hardware_line()
+        if hardware_line:
+            parts.append(hardware_line)
+    except Exception:
+        pass  # advisory text only; a hardware read failure must not block SessionStart
 
     return context_only("SessionStart", "".join(parts))

@@ -126,6 +126,9 @@ _CLASSES: dict = {
                         "reviewed slice is also a provenance kind"),
     "ledger-unmet": _bug("refusal", _e("terminal_commit_refusals", "_measured_rev_drift_refusal"),
                          _q("ledger-unmet"), note="also _pre_existing_dirt_refusal and _ledger_gate; a met row refused on stale or foreign state"),
+    "test-infra": RefusalClass("refusal", None, False, None, _e("land_run", "test_infra_refusal"), False,
+                               "advisory and retryable: the test leg left no review, so the measurement "
+                               "is stale; re-arm dispatch.test_leg"),
     "no-change": _bug("refusal", _e("terminal_commit_refusals", "_no_change_refusal"), _q("no-change")),
     "own-post-checkpoint-hunks-unverifiable": _bug(
         "refusal", _e("terminal_commit_refusals", "_snapshot_unavailable_refusal"),

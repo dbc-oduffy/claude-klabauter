@@ -19,7 +19,7 @@ import pytest
 from coordinator_core import deny_registry
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 
-pytestmark = [pytest.mark.complete, pytest.mark.spawns_process]
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 _ENGINE_ROOT = Path(__file__).resolve().parents[3]
 _BIN = _ENGINE_ROOT / "coordinator" / "bin"

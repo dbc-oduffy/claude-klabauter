@@ -185,6 +185,24 @@ def parent_record_rel(parent_id: str) -> str:
     return f"scratch/warp/{parent_id}/parent.json"
 
 
+def mint_run_parent(root: Any, run_id: str, *, label: str) -> Path:
+    """Write-once single-run parent record naming `run_id`, so `workflow.revise` accepts it.
+
+    An identical existing record is a no-op; a different one raises ValueError. No git spawn.
+    """
+    record = ParentRecord(f"run-parent-{run_id}", (SiblingRun(run_id=run_id, label=label),))
+    path = Path(root) / parent_record_rel(record.parent_id)
+    payload = json.dumps(record.to_json(), indent=2, sort_keys=True) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "x", encoding="utf-8", newline="\n") as fh:
+            fh.write(payload)
+    except FileExistsError:
+        if json.loads(path.read_text(encoding="utf-8")) != record.to_json():
+            raise ValueError(f"run-parent record {path} exists with different content") from None
+    return path
+
+
 def run_parent_copy_rel(run_id: str) -> str:
     """Tracked per-run copy of the parent record, landed by that run's own commit."""
     return f"{PurePosixPath(home_dir('', 'warp').replace(os.sep, '/'))}/{run_id}/parent.json"

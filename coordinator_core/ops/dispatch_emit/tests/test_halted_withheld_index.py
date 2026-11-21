@@ -286,3 +286,23 @@ def test_rebuild_names_every_halted_run_and_a_file_a_peer_created_mid_scan_keeps
     got = idx.entries(tmp_path)
     assert sorted(got) == ["run-a", "run-b"]
     assert set(got["run-a"].paths) == {"a.py", "peer.py"}
+
+
+def test_publish_bare_never_removes_a_file_it_did_not_create(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    peer = tmp_path / "run-a.json"
+    peer.write_bytes(b'{"paths":["peer.py"]}\n')
+
+    def refuse(*_a, **_k):
+        raise PermissionError("open refused")
+
+    monkeypatch.setattr(os, "open", refuse)
+    assert idx._publish_bare(os.fspath(peer), b"{}") is None
+    monkeypatch.undo()
+    assert peer.read_bytes() == b'{"paths":["peer.py"]}\n'
+
+
+def test_publish_bare_writes_the_whole_body_and_reports_its_stat(tmp_path: Path) -> None:
+    target = tmp_path / "run-a.json"
+    data = b"x" * 200_000
+    st = idx._publish_bare(os.fspath(target), data)
+    assert st is not None and st.st_size == len(data) == target.stat().st_size

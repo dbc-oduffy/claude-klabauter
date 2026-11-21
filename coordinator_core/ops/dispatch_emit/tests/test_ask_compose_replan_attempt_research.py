@@ -8,9 +8,10 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit.ask_compose import REPLAN_ATTEMPT_CAP, compose_ask_script
+from coordinator_core.ops.dispatch_emit.ask_compose import REPLAN_ATTEMPT_CAP
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_RESEARCH
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.conftest import compose_ask_script
 
 
 def _stub_wrap(text):

@@ -8,6 +8,8 @@ from coordinator_core.ops.dispatch_emit.tests._git_fixture import _git, seed_rep
 from pathlib import Path
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _repo(tmp_path) -> Path:
     root = seed_repo(tmp_path / "repo")

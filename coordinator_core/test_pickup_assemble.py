@@ -1183,12 +1183,9 @@ class TestExitCodeContract:
         rc = pb.main(["brief", "state/handoffs/h1.md", "--decisions", "{not json"])
         assert rc == pa.EXIT_USAGE
 
-    def test_bare_string_decision_value_is_usage_error(self, capsys):
+    def test_bare_string_decision_value_is_accepted_shorthand(self):
         rc = pb.main(["brief", "state/handoffs/h1.md", "--decisions", '{"j1": "proceed"}'])
-        assert rc == pa.EXIT_USAGE
-        err = capsys.readouterr().err
-        assert "j1" in err
-        assert '{"j1": {"disposition": "<value>"' in err
+        assert rc != pa.EXIT_USAGE
 
     def test_list_decision_value_is_usage_error(self, capsys):
         rc = pb.main(["brief", "state/handoffs/h1.md", "--decisions", '{"j1": ["proceed"]}'])
@@ -6571,10 +6568,13 @@ class TestDecisionsValueKeyEquivalence:
         assert error is not None
         assert "j-kind" in error
 
-    def test_bare_string_still_fails_loud_not_coerced(self):
+    def test_bare_string_is_coerced_to_disposition(self):
         decisions = {"j-kind": "decline"}
-        error = pa.validate_decisions_shape(decisions)
-        assert error is not None
+        assert pa.validate_decisions_shape(decisions) is None
+        assert decisions == {"j-kind": {"disposition": "decline"}}
+
+    def test_empty_bare_string_still_fails_loud(self):
+        assert pa.validate_decisions_shape({"j-kind": ""}) is not None
 
     def test_unrecognized_key_alongside_value_still_rejected(self):
         # "value" joins the closed content-key set as disposition's alias --

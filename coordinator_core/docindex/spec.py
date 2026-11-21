@@ -14,6 +14,12 @@ class EntryField(NamedTuple):
 
     field: str
     label: str
+    fallback_field: Optional[str] = None
+
+    def source_key(self, frontmatter: Mapping[str, object]) -> str:
+        if self.fallback_field is not None and frontmatter.get(self.field) is None:
+            return self.fallback_field
+        return self.field
 
 
 class IndexSpec(NamedTuple):
@@ -68,7 +74,10 @@ def parse_index_spec(fm_text: str) -> IndexSpec:
             raise IndexSpecError(f"entry_fields[{i}].field must be a non-empty string")
         if not isinstance(label, str) or not label:
             raise IndexSpecError(f"entry_fields[{i}].label must be a non-empty string")
-        entry_fields.append(EntryField(field=field, label=label))
+        fallback = item.get("fallback_field")
+        if "fallback_field" in item and (not isinstance(fallback, str) or not fallback.strip()):
+            raise IndexSpecError(f"entry_fields[{i}].fallback_field must be a non-empty string")
+        entry_fields.append(EntryField(field=field, label=label, fallback_field=fallback))
 
     index_exclude_when: Optional[Mapping[str, object]] = None
     if "index_exclude_when" in fm:

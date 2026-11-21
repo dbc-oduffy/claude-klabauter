@@ -32,6 +32,7 @@ from coordinator_core.ops.cascade_backstop_sweep import (
 from coordinator_core.ops.deliverable_cascade import (
     _HANDOFF_KIND,
     _collect_live_candidates_for_kind,
+    _drop_source_successors,
     _predicate_refusal_sync,
     cascade_terminal_sync,
 )
@@ -107,11 +108,9 @@ def _refresh_metas(metas: dict[str, dict], paths: list[str]) -> None:
             metas.pop(key, None)
 
 
-def _clears_predicate(
-    common_dir: Path, did: str, index: dict[str, list[dict]], metas: dict[str, dict]
-) -> bool:
-    """True when some live candidate of `did` clears the per-target predicate."""
-    for candidate in index.get(did, []):
+def _clears_predicate(common_dir: Path, candidates: list[dict], metas: dict[str, dict]) -> bool:
+    """True when some live candidate clears the per-target predicate."""
+    for candidate in candidates:
         refusal = _predicate_refusal_sync(
             candidate["path"], candidate["fm"], common_dir, kind=_HANDOFF_KIND, corpus_metas=metas
         )
@@ -169,7 +168,11 @@ def redrive_terminal_divergences(
 
     for did in sorted(sources):
         try:
-            if not _clears_predicate(common_dir, did, index, metas):
+            # A live continuation of a terminal handoff is the chain's live head, never a
+            # leftover: the cascade drops it too, so it must not count as clearing here.
+            handoff_sources = [r for r in sources[did] if r not in plan_ids.get(did, [])]
+            live = _drop_source_successors(index.get(did, []), handoff_sources, worktree_root)
+            if not _clears_predicate(common_dir, live, metas):
                 continue
             rel = sorted(sources[did])[0]
             is_plan = rel in plan_ids.get(did, [])
@@ -184,6 +187,7 @@ def redrive_terminal_divergences(
                     "source_kind": source_kind,
                     "source_path": rel,
                     "ship_sha": ship_sha,
+                    "source_paths": handoff_sources,
                 },
                 repo_root=common_dir,
             )

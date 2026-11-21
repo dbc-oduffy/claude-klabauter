@@ -1094,6 +1094,28 @@ class TestResolveSessionCommits:
         assert scope == frozenset({"docs/plans/my-plan.md", _HANDOFF_H})
         assert m._entry_scope_paths(repo, "", "") == frozenset()
 
+    def test_entry_scope_paths_keeps_flat_cite_and_adds_the_sharded_plan(self, tmp_path):
+        slug = "2026-11-20-hnd-x"
+        sharded = f"docs/plans/2026-11/{slug}.md"
+        (tmp_path / sharded).parent.mkdir(parents=True)
+        (tmp_path / sharded).write_text("---\ntitle: x\n---\n", encoding="utf-8")
+        scope = m._entry_scope_paths(str(tmp_path), slug, "")
+        assert scope == frozenset({f"docs/plans/{slug}.md", sharded})
+
+    def test_entry_scope_paths_flat_plan_is_one_path(self, tmp_path):
+        slug = "2026-11-20-hnd-y"
+        flat = f"docs/plans/{slug}.md"
+        (tmp_path / flat).parent.mkdir(parents=True)
+        (tmp_path / flat).write_text("---\ntitle: y\n---\n", encoding="utf-8")
+        assert m._entry_scope_paths(str(tmp_path), slug, "") == frozenset({flat})
+
+    def test_governing_deliverable_id_reads_a_sharded_plan(self, tmp_path):
+        slug = "2026-11-20-hnd-x"
+        sharded = tmp_path / "docs" / "plans" / "2026-11" / f"{slug}.md"
+        sharded.parent.mkdir(parents=True)
+        sharded.write_text("---\ndeliverable_id: dlv-x\n---\n", encoding="utf-8")
+        assert m._resolve_governing_deliverable_id(str(tmp_path), slug) == "dlv-x"
+
     def test_end_to_end_real_git_warns_on_peer_commit_of_plan(self, tmp_path):
         repo = _make_repo(tmp_path)
         (repo / "docs" / "plans").mkdir(parents=True)

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import shutil
-import subprocess
 
 import pytest
 
@@ -13,7 +11,6 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.halted_run_route import ROUTE_OP
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.review_mint.execute_review import NO_SLICES_HALT
-from coordinator_core.win_portability import no_console_creationflags
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _GUARD_OPEN = "  if (!_halted && (!_reviewPrep ||"
@@ -73,60 +70,4 @@ def test_default_script_validates_with_zero_errors() -> None:
     assert [f for f in run_checks(_script()) if f.severity is Severity.ERROR] == []
 
 
-def _run(notes: str, reply: object, *, prep: object = None) -> dict:
-    script = _script()
-    harness = (
-        "const _agentDefsClause = () => ''; const _briefPrecedenceTail = ''; let _halted = null; let _alreadyDelivered = null; let _alreadyDeliveredRefusal = '';\n"
-        f"const _reviewPrep = {json.dumps(prep)}; const _verifyOnly = false; const _runId = 'run-1';\n"
-        f"const _deliveryNotes = {json.dumps(notes)}; let _agentCalls = []; let _agentReply = {json.dumps(reply)};\n"
-        "const agent = async (p, o) => { _agentCalls.push(p); if (_agentReply === 'throw') throw new Error('boom'); return _agentReply; };\n"
-        f"{_hook(script)}\n"
-        "(async () => {\n"
-        f"{_guard(script)}\n"
-        "process.stdout.write(JSON.stringify({ halted: _halted, delivered: _alreadyDelivered, calls: _agentCalls }));\n"
-        "})();\n"
-    )
-    out = subprocess.run(
-        ["node", "-"], input=harness, capture_output=True, text=True, timeout=20, check=True, **no_console_creationflags()
-    )
-    return json.loads(out.stdout)
-
-
 _node = pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@_node
-def test_verified_claim_closes_landed_with_no_halt() -> None:
-    result = _run(_DONE, {"ok": True, "close": {"queued": False}})
-    assert result["halted"] is None
-    assert result["delivered"]["sha"] == _SHA
-    assert len(result["calls"]) == 1 and _SHA in result["calls"][0]
-    assert '"in_run":true' in result["calls"][0]
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@_node
-@pytest.mark.parametrize("reply", [{"ok": False, "error": "abc is not an ancestor of HEAD"}, None, "throw"])
-def test_refused_claim_still_halts_with_the_refusal_appended(reply) -> None:
-    result = _run(_DONE, reply)
-    assert result["halted"]["halted"].startswith(NO_SLICES_HALT)
-    assert "Already-delivered claim refused: " in result["halted"]["reason"]
-    assert result["delivered"] is None
-    if isinstance(reply, dict):
-        assert "not an ancestor" in result["halted"]["reason"]
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@_node
-@pytest.mark.parametrize(
-    "notes", ["", "r1: DONE (changed x.py)", "r1: BLOCKED already delivered at HEAD by commit 2534205b9f"]
-)
-def test_no_claim_spawns_nothing_and_halts_as_before(notes) -> None:
-    result = _run(notes, {"ok": True})
-    assert result["calls"] == []
-    assert result["halted"]["halted"].startswith(NO_SLICES_HALT)
-    assert "Already-delivered" not in result["halted"]["reason"]

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
@@ -21,6 +22,7 @@ from coordinator_core.codex_runner.contract import (
     STATUS_FAILED,
     STATUS_LIMIT_EXHAUSTED,
     STATUS_OK,
+    STATUS_POLICY_DENIAL,
     STATUS_SCOPE_BREACH,
     OnSpawn,
     RunRequest,
@@ -142,6 +144,19 @@ def _error_text(events: list[dict]) -> Optional[str]:
     return "; ".join(msgs) if msgs else None
 
 
+_GUARD_LINE = re.compile(r"Guard:\s*`?([A-Za-z0-9][A-Za-z0-9_-]*)", re.MULTILINE)
+
+
+def _stderr_guard_denial(path: Path) -> Optional[str]:
+    """Guard id from the first `Guard: <id>` line of the child's stderr, else None."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    m = _GUARD_LINE.search(text)
+    return m.group(1) if m else None
+
+
 def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
     """Run `req.chunk` of `req.plan` in the shared tree and return the audited result."""
     run_id = Path(run_dir).name
@@ -211,6 +226,13 @@ def _run_shaped(req: RunRequest, run_id: str, run_dir: Path, on_spawn: OnSpawn, 
     (run_dir / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     events = _parse_events(lines)
+    denied = _stderr_guard_denial(run_dir / "codex.stderr")
+    if denied:
+        return RunResult(
+            run_id=run_id, status=STATUS_POLICY_DENIAL, codex_pid=proc.pid, usage=_usage(events),
+            scope=audit_scope(events, chunk["writes"], req.repo_root),
+            error=f"policy_denial: guard {denied} denied a tool call (see codex.stderr)",
+        )
     scope = audit_scope(events, chunk["writes"], req.repo_root)
     usage = _usage(events)
     error = _error_text(events)

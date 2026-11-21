@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 import importlib.util
 import subprocess

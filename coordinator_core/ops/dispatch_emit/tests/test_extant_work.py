@@ -33,6 +33,14 @@ def test_exact_slug_plan_carries_status(tmp_path):
     assert hit.path == "docs/plans/my-slug.md"
 
 
+@pytest.mark.parametrize("home", ["docs/plans", "docs/plans/2026-10"])
+def test_stem_keyed_plan_resolves_flat_and_sharded(tmp_path, home):
+    _w(tmp_path, SIZING_REL, f"name: my-slug\nintent: '{INTENT}'\n")
+    _w(tmp_path, f"{home}/{STEM}.md", _plan("executing"))
+    res = ew.lookup_extant(str(tmp_path), "my-slug", "", "zzz", sizing_rel=SIZING_REL)
+    assert [(h.kind, h.path) for h in res.exact] == [("plan", f"{home}/{STEM}.md")]
+
+
 def test_stem_keyed_plan_is_found_with_sizing_rel(tmp_path):
     _w(tmp_path, SIZING_REL, f"name: my-slug\nintent: '{INTENT}'\n")
     _w(tmp_path, f"docs/plans/{STEM}.md", _plan("executing"))

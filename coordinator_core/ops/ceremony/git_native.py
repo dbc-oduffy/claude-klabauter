@@ -96,6 +96,7 @@ from coordinator_core.git.divergence import (
     diverging_paths,
 )
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
+from coordinator_core.git.index_sync import IndexSyncRefused, sync_shared_index
 from coordinator_core.git.path_canon import (  # noqa: F401 - re-exported for callers of this module
     _has_windows_drive,
     canonical_repo_relative_path_refusal,
@@ -3613,221 +3614,33 @@ def _commit_scoped_private_index(
         finally:
             temp_index.unlink(missing_ok=True)
 
-    # Bound 6 (sibling to `commit_authored_content`'s own -- see its
-    # comment above `new_commit_sha`'s single-path `update-index
-    # --add --cacheinfo`, and `commit_authored_new_file`'s `refresh_
-    # shared_index` docstring) -- refresh the SHARED index for every path
-    # this commit just landed, so it does not read as a staged reversion of
-    # itself: without this, a brand-new path this branch just committed is
-    # present in HEAD and on disk but absent from `.git/index`, which `git
-    # status` reports as a staged deletion (`D  path`) alongside an
-    # untracked copy (`?? path`) -- the next unrelated bare `git commit` by
-    # any peer session lands that phantom deletion for real. Additive only:
-    # `--add --cacheinfo` writes exactly the paths handed to it and cannot
-    # clobber a peer's already-staged content for a DIFFERENT path -- a peer
-    # with staged content for one of THESE paths already has an entry this
-    # call legitimately supersedes with what HEAD now holds for it.
-    # ONE spawn for the whole committed set (never per-path -- this
-    # module's own amplification gate,
-    # `test_no_unbatched_per_item_git_spawn.py`): every `(mode, sha, path)`
-    # rides its own repeated `--cacheinfo` flag on ONE `update-index`
-    # invocation (verified: git accepts `--cacheinfo` multiple times in a
-    # single call), never a `--cacheinfo` spawn per path. `--index-info`
-    # over stdin was tried first, to dodge the argv-length ceiling the
-    # `absent`-removal `git rm --pathspec-from-file` above exists for -- it
-    # does not survive `_git()`'s hardcoded `text=True` stdin pipe on this
-    # platform: a `\n`-delimited payload arrives at git with an
-    # inserted `\r` (empirically reproduced, isolated to the `text=True`
-    # stdin write, not file I/O), so every line silently reads as "Ignoring
-    # path" instead of adding the entry. `check_ignore()`'s own `--stdin -z`
-    # sidesteps exactly this by using NUL rather than newline delimiters;
-    # `--index-info`'s own record format has no NUL-delimited form to
-    # borrow that trick from -- `-z` does not make one: re-measured
-    # 2026-08-31 on git 2.55.0.windows.4, `update-index -z --index-info`
-    # fed `100644 <sha>\t<path>\0...` does NOT split on the NUL, swallows
-    # it, and reports `Ignoring path <path><next record>` at rc=0, which is
-    # the same silent mis-resolution the newline form produces.
-    #
-    # Argv is therefore the only tested-safe form here -- but ONE argv is
-    # not, and the claim that used to stand in this paragraph ("a caller
-    # landing a commit large enough to blow the ~32K-char Windows argv cap
-    # on THIS refresh alone is not a shape any known `commit_scoped` caller
-    # produces today") was false when written. This module's own
-    # `test_argv_stays_bounded_and_never_carries_the_raw_path_list` builds
-    # exactly that shape and measures 156,020 characters on this one call,
-    # 4.7x the cap; a percolate-publish batch is 2000-2700 paths and the
-    # klabauter mirror round cited below carried 4045. Over the cap the
-    # call dies as `[WinError 206] The filename or extension is too long`,
-    # which `_git()` converts to a returncode=-1 GitResult -- and since
-    # this refresh is deliberately best-effort, that return is discarded.
-    # The failure mode is therefore silent and is precisely the residue
-    # this bound exists to prevent: the LARGER the commit, the more certain
-    # the shared index is left unreconciled.
-    #
-    # Chunked, then, via the module's own `_chunk_paths` -- the same packer
-    # and budget `_diverging_paths_chunked` uses, applied to the composed
-    # `mode,sha,path` tokens rather than to bare paths. Chunking is what
-    # this module's amplification gate explicitly permits (a chunked caller
-    # legitimately puts raw paths on argv; what it forbids is a spawn per
-    # ITEM), and the resulting count is bounded by total pathspec bytes,
-    # not by path count: one spawn for every ordinary commit, a handful for
-    # a publish round. Headroom arithmetic, since `_chunk_paths` measures
-    # only the tokens it is given: the budget is 6000 chars, the shortest
-    # possible token is `100644,<40-char sha>,x` at 49 chars, so a chunk
-    # holds at most ~122 tokens and the `--cacheinfo` flags add at most
-    # ~1.5K on top -- ~7.5K worst case against a 32767 cap.
-    #
-    # Still best-effort, and still unverified, unlike bound 7's own
-    # reconciliation: confirming this half took would cost a second full
-    # `read_index` on EVERY commit (5.2MB, pure Python) rather than on the
-    # deletion commits alone, which the brightline forbids on the engine's
-    # commonest path. `absent` paths
-    # are deliberately excluded -- they were never added here, so there is
-    # nothing to refresh for them; a stale shared-index entry for a
-    # genuinely deleted path is a pre-existing, separately-tracked hazard,
-    # not this one. Best-effort like the sibling's own bound 6: the CAS
-    # above already landed the commit by the time this runs, so a refresh
-    # failure must never be reported as this function's own failure --
-    # that would discard a commit that genuinely succeeded and could send a
-    # caller into a spurious retry/duplicate commit.
-    #
-    # Unverified is not silent. A refresh that did not take (a peer holding
-    # `.git/index.lock` past `_git()`'s whole retry schedule, a Windows
-    # sharing violation on the rename) leaves exactly the committed paths
-    # carrying their PRE-commit shared-index state -- `D` for a new file,
-    # `M` holding the old blob for an edit -- which the next bare commit by
-    # a peer lands as a reversion. The rc is checked chunk by chunk (free:
-    # the result is already in hand, no re-read) and the failed paths ride
-    # the same stderr channel as the other two notices; the commit itself is
-    # never failed for it.
+    # Bounds 6 and 7 (the added/changed paths and the `worktree_deleted` paths this commit removed
+    # from HEAD) are ONE in-process splice of the shared index to the landed commit: a path left at
+    # its PRE-commit entry reads as a staged reversal, and the next bare commit by any peer lands
+    # it. `absent` paths matter only when the index still holds an entry (class (2): a deletion the
+    # caller had not staged); membership comes from `index_snapshot`, never a second `read_index`.
+    # Best-effort as to the COMMIT: the CAS already landed, so a refusal is a warning, never a
+    # failure that would invite a duplicate retry.
     refresh_warning = ""
-    if tree_input:
-        cacheinfo_values = [
-            f"{mode},{sha},{path}" for path, (mode, sha) in tree_input.items()
-        ]
-        refresh_failed: List[str] = []
-        refresh_rc_stderr = ""
-        for chunk in _chunk_paths(cacheinfo_values):
-            cacheinfo_args: List[str] = []
-            for value in chunk:
-                cacheinfo_args += ["--cacheinfo", value]
-            refresh = _git(
-                ["update-index", "--add", *cacheinfo_args],
-                cwd=root,
-            )
-            if not refresh.ok:
-                # `mode,sha,path`: the path is everything past the second comma.
-                refresh_failed.extend(v.split(",", 2)[2] for v in chunk)
-                refresh_rc_stderr = refresh_rc_stderr or refresh.stderr.strip()
-        if refresh_failed:
-            _failed_str = ", ".join(refresh_failed[:5])
-            if refresh_failed[5:]:
-                _failed_str += ", ... (%d paths in all)" % len(refresh_failed)
-            refresh_warning = (
-                "commit_scoped: the commit landed but the shared .git/index "
-                "refresh did not take for %s -- the index still holds their "
-                "PRE-commit state and the next bare commit in this worktree "
-                "reverts them (git said: %s). Clear with: git reset -q -- "
-                "<those paths>"
-                % (_failed_str, (refresh_rc_stderr or "no stderr")[:200])
-            )
-
-    # Bound 7 (state/handoffs/2026-08-30-the-commit-path-scoped-commits-the-
-    # share.md) -- the mirror of bound 6 for the OTHER half of this commit's
-    # tree input: `absent`, the paths this call just REMOVED from HEAD's
-    # tree. Bound 6's own comment excludes them on the premise that "they
-    # were never added here, so there is nothing to refresh for them". That
-    # premise holds for exactly one of the two ways a path reaches `absent`,
-    # and is false for the other:
-    #
-    #   (1) a `_SOURCE_STAGED` path with no `index_snapshot` entry -- a
-    #       deletion the caller had already staged. The shared index has
-    #       forgotten the path and HEAD now has too: consistent, nothing to
-    #       reconcile, and bound 6's premise is exactly right for it.
-    #   (2) a `worktree_deleted` path -- `_assemble_commit_tree_input`
-    #       routes it to `absent` BEFORE any index lookup, precisely so a
-    #       surviving index entry cannot speak for a file the caller has
-    #       already established is gone from disk. That entry SURVIVES this
-    #       commit untouched. The path is then absent from HEAD, absent from
-    #       the worktree, and still carrying HEAD's PRE-commit blob in
-    #       `.git/index` -- which `git status` reports as `AD` and the next
-    #       bare `git commit` by any peer session lands as a RESURRECTION of
-    #       the file this call was asked to remove, with stale content, at
-    #       rc=0. Reproduced end to end on the agree branch's archival-sweep
-    #       shape (`commit_pipeline._run_in_plane_archive_sweep`, the live
-    #       instance `_assemble_commit_tree_input`'s own `worktree_deleted`
-    #       paragraph cites): the scoped commit removes the path correctly,
-    #       leaves `AD <path>`, and one bare peer commit later the path is
-    #       back in the tree. Same residue class as bound 6's, opposite
-    #       sign -- and the one that lands wrong CONTENT rather than merely
-    #       a confusing status.
-    #
-    # Membership is decided off `index_snapshot`, the snapshot already in
-    # hand -- never a second `read_index` (AC11(a)'s one-snapshot rule, and
-    # `.git/index` is a 5.2MB pure-Python parse in this repo) -- so class (1)
-    # costs nothing at all and the spawn below is taken ONLY when class (2)
-    # is genuinely non-empty: deletion and archival commits, never an
-    # ordinary edit. Exact normalized-key membership is sufficient rather
-    # than under-inclusive: `_assemble_commit_tree_input` has already raised
-    # on any casefold-only match, so a path reaching here either matches a
-    # normalized index key exactly or has no entry at all.
-    #
-    # `update-index --force-remove -z --stdin`, not bound 6's argv
-    # `--cacheinfo` fan-in and not the ladder's `git rm --cached
-    # --pathspec-from-file`, for three reasons that all point the same way.
-    # `absent` is UNBOUNDED -- one real publish round to the klabauter mirror
-    # carried 4045 of them / 333,668 argv characters against Windows'
-    # 32767-char CreateProcess cap (see the ladder's own `git rm` comment) --
-    # so argv is out. `git rm` takes PATHSPECS, which glob: a committed path
-    # spelled `docs/a[0].md` would match, and could remove, an unrelated
-    # index entry, where `update-index --stdin` takes literal paths
-    # (verified against this machine's git 2.55.0.windows.4). And `git rm
-    # --cached` REFUSES an entry differing from both the worktree and HEAD --
-    # exactly the state every class-(2) path is in once HEAD has moved past
-    # it -- without a `-f` that would then also suppress genuine refusals.
-    # `-z` NUL delimiters, never newline: `_git()`'s `text=True` stdin pipe
-    # inserts a `\r` into a `\n`-delimited payload on this platform
-    # (measured; it is what defeated `--index-info` for bound 6), and
-    # `check_ignore()`'s own `--stdin -z` is the proven way around it.
-    #
-    # Best-effort as to the COMMIT, exactly like bound 6: the CAS above has
-    # already landed it, so a reconciliation failure must never be returned
-    # as this function's failure -- that would report a genuinely-succeeded
-    # commit as failed and invite a caller into a duplicate retry.
     reconcile_warning = ""
     index_norm_keys = {_normalize_path_key(k) for k in index_snapshot}
     index_resident_absent = sorted(
         p for p in absent if _normalize_path_key(p) in index_norm_keys
     )
-    if index_resident_absent:
-        _git(
-            ["update-index", "--force-remove", "-z", "--stdin"],
-            cwd=root,
-            input_data="\0".join(index_resident_absent) + "\0",
-        )
-
-        # Best-effort is not the same as silent. `update-index` can decline
-        # for reasons this call cannot pre-empt (a peer holding
-        # `.git/index.lock`, a read-only git-dir), and its rc alone does not
-        # establish the entries are gone. Re-read and CHECK, so the next
-        # regression on this bound arrives as a named path rather than as a
-        # phantom resurrection commit days later. `fresh=True` is load-
-        # bearing: `commit_scoped` runs under `_within_one_index_read`'s
-        # `index_read_cache_scope`, whose cached snapshot predates the write
-        # this is meant to verify and would report success unconditionally.
-        # Inside the `if`, so an ordinary commit pays neither the spawn nor
-        # the re-parse.
-        post_keys = {_normalize_path_key(k) for k in read_index(root, fresh=True)}
-        surviving = [
-            p for p in index_resident_absent if _normalize_path_key(p) in post_keys
-        ]
-        if surviving:
-            reconcile_warning = (
-                "commit_scoped: %s removed from HEAD but still staged in "
-                ".git/index -- the next bare commit in this worktree "
-                "resurrects them. Clear with: git update-index "
-                "--force-remove -- %s"
-                % (", ".join(surviving), " ".join(surviving))
+    _sync_paths = [*tree_input, *index_resident_absent]
+    if _sync_paths:
+        try:
+            sync_shared_index(root, new_sha, _sync_paths)
+        except IndexSyncRefused as exc:
+            _shown = ", ".join(_sync_paths[:5])
+            if _sync_paths[5:]:
+                _shown += ", ... (%d paths in all)" % len(_sync_paths)
+            refresh_warning = (
+                "commit_scoped: the commit landed but the shared .git/index "
+                "sync did not take for %s -- the index still holds their "
+                "PRE-commit state and the next bare commit in this worktree "
+                "reverts them (%s). Clear with: sync-shared-index --commit %s -- <those paths>"
+                % (_shown, exc, new_sha)
             )
 
     # `staged_paths` is exactly the resolved staged-blob subset of
@@ -5513,10 +5326,10 @@ def commit_authored_content(
     # could send a caller into a spurious retry/duplicate commit). Common
     # to both the fast and ladder arms -- the one spawn AC1 retains beyond
     # `hash-object`/`interpret-trailers`.
-    _git(
-        ["update-index", "--add", "--cacheinfo", f"{mode},{new_sha},{normalized}"],
-        cwd=root,
-    )
+    try:
+        sync_shared_index(root, new_commit_sha, [normalized])
+    except IndexSyncRefused:
+        pass
 
     # Bound 5 -- no per-commit push replay through this entrypoint;
     # publish is the caller's own concern.

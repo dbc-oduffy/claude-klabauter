@@ -8,6 +8,9 @@ from pathlib import Path
 
 import coordinator_core.baton_assemble as ba
 
+import pytest
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 FLAT = "state/handoffs/2026-11-03-hosted-team-debug-token-f02d67.md"
 SHARD = "state/handoffs/2026-11/2026-11-03-hosted-team-debug-token-f02d67.md"
 

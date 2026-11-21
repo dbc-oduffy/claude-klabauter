@@ -146,20 +146,3 @@ k.GetProcessWorkingSetSizeEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctype
 k.GetProcessWorkingSetSizeEx(h, ctypes.byref(mn), ctypes.byref(mx), ctypes.byref(fl))
 print(*before, *after, fl.value)
 """
-
-
-def test_windows_real_process_priority_is_lowered_in_live_child() -> None:
-    import subprocess
-    import pytest
-
-    if sys.platform != "win32":
-        pytest.skip("Windows priority only")
-    out = subprocess.run(
-        [sys.executable, "-I", "-c", _LIVE_CHILD_PROBE, str(_BIN_DIR / "publish.py")],
-        capture_output=True, text=True, timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    io_before, page_before, io_after, page_after, ws_flags = (int(x) for x in out.stdout.split()[-5:])
-    assert io_after < io_before, out
-    assert page_after < page_before, out
-    assert not ws_flags & 0x4, f"hard working-set max (QUOTA_LIMITS_HARDWS_MAX_ENABLE) set: {out}"

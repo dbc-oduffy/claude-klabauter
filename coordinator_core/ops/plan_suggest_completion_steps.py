@@ -153,6 +153,7 @@ from coordinator_core.ops.draft_plan_aging import (
 )
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.review_trail.records import _collect as _collect_review_trail_jsons
+from coordinator_core.session.output_tree_layout import iter_entries
 from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -409,10 +410,8 @@ def suggest_completion_steps(repo_root: Path) -> List[Dict[str, object]]:
     # authorization check — cheap, no git call yet.
     candidates: Dict[str, str] = {}  # rel_path -> status
     missing_auth: Set[str] = set()
-    for name in sorted(os.listdir(plans_dir)):
-        if not name.endswith(".md"):
-            continue
-        file_path = plans_dir / name
+    for rel_path in sorted(iter_entries(str(repo_root), "docs/plans", ".md")):
+        file_path = repo_root / rel_path
         if _is_sidecar_file(str(file_path)) or not file_path.is_file():
             continue
         try:
@@ -424,7 +423,6 @@ def suggest_completion_steps(repo_root: Path) -> List[Dict[str, object]]:
         if status not in _EXECUTION_IMMINENT_STATUSES:
             continue
 
-        rel_path = os.path.join("docs", "plans", name).replace(os.sep, "/")
         candidates[rel_path] = status
         if not _has_execution_authorized_at(text):
             missing_auth.add(rel_path)

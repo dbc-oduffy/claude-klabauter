@@ -112,3 +112,25 @@ def test_scrub_masks_string_template_and_comment_contents_but_keeps_newlines() -
 
     src = 'a = \'x\\\'y\' + "q\\\n" // c\n/* d\ne */ `t${1}` b /* open'
     assert scrub(src) == 'a = \'####\' + "##\n" //##\n/*##\n##*/ `#####` b /*#####'
+
+
+def test_a_memoised_hoist_stage_equals_a_cold_one_across_runs(monkeypatch):
+    """Two composes of one shape differ in run id, session and ask text; the second reads the hoist memo, and its script is the cold script."""
+    from coordinator_core.ops.dispatch_emit import ask_compose
+    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+
+    def compose(run_id: str, session: str, ask: str) -> str:
+        return ask_compose.compose_ask_script(
+            repo_root="REPO", prompt=ask, sizing_rel=None, run_id=run_id, session_id=session, **REVIEW_KW
+        )
+
+    monkeypatch.setattr(ask_compose, "_STAGE_MEMO", {})
+    compose("ask-aaaaaaaaaaaa", "sess-one", "first ask text")
+    assert len(ask_compose._STAGE_MEMO) == 1
+    warm = compose("ask-bbbbbbbbbbbb", "sess-two", "second ask text here")
+    assert len(ask_compose._STAGE_MEMO) == 1
+
+    monkeypatch.setattr(ask_compose, "_STAGE_MEMO", {})
+    cold = compose("ask-bbbbbbbbbbbb", "sess-two", "second ask text here")
+    assert warm == cold
+    assert "ask-aaaaaaaaaaaa" not in warm and "sess-one" not in warm and "ask-bbbbbbbbbbbb" in warm

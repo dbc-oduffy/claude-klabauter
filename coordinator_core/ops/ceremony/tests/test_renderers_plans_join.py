@@ -35,8 +35,30 @@ def _write_handoff(root: Path, name: str, *, created: str, deployment_state: str
 
 def _write_plan(root: Path, name: str, body: str) -> None:
     plans_dir = root / "docs" / "plans"
-    plans_dir.mkdir(parents=True, exist_ok=True)
+    (plans_dir / name).parent.mkdir(parents=True, exist_ok=True)
     (plans_dir / name).write_text(body, encoding="utf-8")
+
+
+class TestShardedPlansEnumerated:
+    def test_flat_and_sharded_plans_both_enumerated_under_real_paths(self, tmp_path: Path):
+        _write_plan(tmp_path, "2026-07-19-flat.md", "---\nstatus: draft\n---\nBody.\n")
+        _write_plan(tmp_path, "2026-11/2026-11-20-shard.md", "---\nstatus: draft\n---\nBody.\n")
+
+        records = _collect_plans_with_parse_errors(tmp_path)
+
+        assert sorted(r["path"] for r in records) == [
+            "docs/plans/2026-07-19-flat.md",
+            "docs/plans/2026-11/2026-11-20-shard.md",
+        ]
+
+    def test_sidecar_detection_is_per_directory_not_merged_across_shards(self, tmp_path: Path):
+        _write_plan(tmp_path, "2026-11/foo.md", "---\nstatus: draft\n---\nBody.\n")
+        _write_plan(tmp_path, "foo.review-x.md", "---\nstatus: draft\n---\nBody.\n")
+        _write_plan(tmp_path, "2026-11/foo.review-y.md", "---\nstatus: draft\n---\nBody.\n")
+
+        paths = sorted(r["path"] for r in _collect_plans_with_parse_errors(tmp_path))
+
+        assert paths == ["docs/plans/2026-11/foo.md", "docs/plans/foo.review-x.md"]
 
 
 class TestUnlinkedRemainder:

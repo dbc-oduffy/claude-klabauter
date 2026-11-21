@@ -16,7 +16,6 @@ pytestmark = pytest.mark.complete
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.git_native import GitResult
 from coordinator_core.ops.fleet import archive_sizings, terminal_sizing_drain
-from coordinator_core.ops.fleet._common import Move
 from coordinator_core.ops.fleet.tests.archive_git_free_seam import (
     patched_disposition_seam,
     run,
@@ -193,94 +192,6 @@ def test_unknown_mode_and_non_bool_dry_run_are_setup_errors(tmp_path: Path) -> N
 
     assert _invoke(worktree, {"mode": "bogus"})[0]["exit_code"] == 1
     assert _invoke(worktree, {"dry_run": "yes"})[0]["exit_code"] == 1
-
-
-@pytest.mark.spawns_process
-def test_in_process_dirty_arm_agrees_with_git_on_a_real_repo(tmp_path: Path) -> None:
-    import subprocess
-
-    worktree = tmp_path / "repo"
-    _seed(worktree)
-    for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"],
-                 ["config", "user.name", "t"], ["config", "commit.gpgsign", "false"],
-                 ["add", "-A"], ["commit", "-q", "-m", "seed"]):
-        subprocess.run(["git", "-C", str(worktree), *args], check=True, capture_output=True,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    rels = [f"state/sizings/2026-10-0{i + 1}-movable-{i}.yaml" for i in range(3)]
-    assert terminal_sizing_drain.dirty_among(worktree, rels) == set()
-
-    (worktree / rels[1]).write_text("status: shipped\ntitle: edited\n", encoding="utf-8")
-
-    assert terminal_sizing_drain.dirty_among(worktree, rels) == {rels[1]}
-
-
-def _git(worktree: Path, *args: str) -> str:
-    import subprocess
-
-    done = subprocess.run(["git", "-C", str(worktree), *args], check=True, capture_output=True, text=True,
-                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    return done.stdout
-
-
-@pytest.mark.spawns_process
-def test_land_moves_commits_once_and_leaves_the_index_clean_on_a_real_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    worktree = tmp_path / "repo"
-    _registry(tmp_path, monkeypatch, worktree)
-    _seed(worktree)
-    for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"],
-                 ["config", "user.name", "t"], ["config", "commit.gpgsign", "false"],
-                 ["add", "-A"], ["commit", "-q", "-m", "seed"]):
-        _git(worktree, *args)
-    _sizing(worktree, "2026-10-09-untracked.yaml", "status: shipped\n")
-
-    result = terminal_sizing_drain.drain(worktree)
-
-    movable = [f"state/sizings/2026-10-0{i + 1}-movable-{i}.yaml" for i in range(3)]
-    assert sorted(a["id"] for a in result["acted"]) == movable
-    assert (worktree / "state/sizings/2026-10-09-untracked.yaml").is_file()
-
-    # Called directly, a src HEAD never carried has no blob to repath: refused alone, not renamed.
-    src = worktree / "state/sizings/2026-10-09-untracked.yaml"
-    move = Move(src=src, dst=worktree / "archive/sizings/2026-10/2026-10-09-untracked.yaml",
-                candidate_id="state/sizings/2026-10-09-untracked.yaml")
-    acted, failed = run(terminal_sizing_drain.land_moves(worktree, [move], "x"))
-    assert acted == [] and failed[0]["reason"].startswith("untracked-at-head")
-    assert src.is_file()
-    assert _git(worktree, "rev-list", "--count", "HEAD").strip() == "2"
-    assert _git(worktree, "status", "--porcelain", "--", "state/sizings/2026-10-0[1-3]*",
-                "archive").strip() == ""
-    assert all((worktree / "archive/sizings/2026-10" / Path(m).name).is_file() for m in movable)
-    assert all(not (worktree / m).exists() for m in movable)
-
-
-@pytest.mark.spawns_process
-def test_index_splice_keeps_an_unrelated_staged_change_and_dst_collision_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    worktree = tmp_path / "repo"
-    _registry(tmp_path, monkeypatch, worktree)
-    _seed(worktree)
-    (worktree / "notes.txt").write_text("a\n", encoding="utf-8")
-    for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"],
-                 ["config", "user.name", "t"], ["config", "commit.gpgsign", "false"],
-                 ["add", "-A"], ["commit", "-q", "-m", "seed"]):
-        _git(worktree, *args)
-    (worktree / "notes.txt").write_text("b\n", encoding="utf-8")
-    _git(worktree, "add", "notes.txt")
-
-    result = terminal_sizing_drain.drain(worktree)
-
-    assert len(result["acted"]) == 3
-    assert _git(worktree, "diff", "--cached", "--name-only").split() == ["notes.txt"]
-
-    taken = worktree / "state/sizings/2026-10-01-clash.yaml"
-    taken.write_text("status: shipped\n", encoding="utf-8")
-    _git(worktree, "add", str(taken))
-    _git(worktree, "commit", "-q", "-m", "clash")
-    dst = worktree / "archive/sizings/2026-10/2026-10-01-clash.yaml"
-    dst.write_text("occupied\n", encoding="utf-8")
-    move = Move(src=taken, dst=dst, candidate_id="state/sizings/2026-10-01-clash.yaml")
-    acted, failed = run(terminal_sizing_drain.land_moves(worktree, [move], "x"))
-    assert acted == [] and failed[0]["reason"].startswith("dst-exists")
-    assert taken.is_file() and dst.read_text(encoding="utf-8") == "occupied\n"
 
 
 def test_plan_fk_and_route_past_the_head_are_still_read(tmp_path: Path) -> None:

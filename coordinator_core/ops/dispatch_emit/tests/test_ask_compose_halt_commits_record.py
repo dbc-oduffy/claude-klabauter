@@ -37,7 +37,7 @@ def _compose(monkeypatch, **over) -> str:
 def test_full_path_halt_commit_follows_the_product_commit_stage(monkeypatch):
     script = _compose(monkeypatch, in_run_commit=True)
     assert script.count(_GATE) == 1
-    assert script.index("_commit = await agent(") < script.index(_GATE)
+    assert script.index("const _commitStage = () => agent(") < script.index(_GATE)
     fn = script[script.index(_FN) :].split("\n", 1)[0]
     assert _PARAMS in fn and "script_path: 'scratch/warp/x.mjs'" in fn
     assert "_commitHaltRecord()" in script[script.index(_GATE) :]

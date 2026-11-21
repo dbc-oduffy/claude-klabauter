@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
+from coordinator_core.ops.dispatch_emit.tests.conftest import shared_decls
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -34,7 +35,7 @@ def _drive(script: str, manifest: dict) -> dict:
     lines = [ln for ln in script.split("\n") if ln.startswith((_MEMO_PREFIX, _HALT_PREFIX))]
     body = "\n".join(ln.replace("  else if (", "  if (", 1) for ln in lines)
     out = subprocess.run(
-        ["node", "-"], input=_HARNESS % (json.dumps(manifest), body),
+        ["node", "-"], input=_HARNESS % (json.dumps(manifest), shared_decls(script) + "\n" + body),
         capture_output=True, text=True, **no_console_creationflags(),
     )
     assert out.returncode == 0, out.stderr

@@ -3114,6 +3114,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "groupem.box_place": OpClass.MUTATING,
     "groupem.box_send": OpClass.MUTATING,
     "groupem.box_roster": OpClass.COMPUTE_ONLY,
+    # groupem.fleet_capacity -- MUTATING: re-stamps this box's capacity record when it is stale.
+    # groupem.capacity_admit -- MUTATING: appends grant and wait rows under the target box root.
+    # groupem.capacity_place / idle_capacity_watch -- COMPUTE_ONLY: read stamped records only.
+    "groupem.fleet_capacity": OpClass.MUTATING,
+    "groupem.capacity_admit": OpClass.MUTATING,
+    "groupem.capacity_place": OpClass.COMPUTE_ONLY,
+    "groupem.idle_capacity_watch": OpClass.COMPUTE_ONLY,
     # groupem.suite_grant_receive / box_key_pin -- MUTATING: write a relayed grant record or a
     # pinned peer key under <settings-home>/state/group-em/.
     "groupem.suite_grant_receive": OpClass.MUTATING,

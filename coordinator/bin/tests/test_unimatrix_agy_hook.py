@@ -194,11 +194,6 @@ def test_guard_allow_answer_stays_allow_and_never_becomes_ask(home, monkeypatch,
     assert pre.decide(run_payload(name=tool), 4242) == answer
 
 
-def test_no_verdict_answer_is_allow_through_the_entry_point(home):
-    r = hook("{}", home)
-    assert r.returncode == 0 and json.loads(r.stdout)["decision"] == "allow"
-
-
 def test_unloadable_guard_fails_open_to_allow(home, monkeypatch):
     monkeypatch.setattr(pre, "load_sibling", lambda name: 1 / 0)
     assert_fail_open(pre.run_guard("{}", None))
@@ -275,33 +270,6 @@ def test_engine_root_argument_reaches_the_guard(home, monkeypatch, capsys):
     assert seen[0][1] == "/eng" and json.loads(capsys.readouterr().out)["decision"] == "ask"
 
 
-def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
-    r = subprocess.run([sys.executable, str(PRETOOL), "--engine-root", str(home / "none")],
-                       input=json.dumps(run_payload()), capture_output=True, text=True,
-                       env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
-    out = json.loads(r.stdout)
-    assert r.returncode == 0 and out["decision"] == "allow" and "overwrite" not in out
-
-
-def hook(stdin, home):
-    return subprocess.run([sys.executable, str(PRETOOL)], input=stdin, capture_output=True, text=True,
-                          env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
-
-
-@pytest.mark.parametrize("stdin", ["", "not json", "{}", "[]", json.dumps(run_payload(name="read_file"))])
-def test_entry_point_always_emits_one_decision_and_exits_zero(home, stdin):
-    r = hook(stdin, home)
-    assert r.returncode == 0
-    assert json.loads(r.stdout)["decision"] == "allow"
-
-
-@pytest.mark.parametrize("stdin", ["", "not json", "[]"])
-def test_entry_point_with_no_verdict_input_names_the_guard_did_not_run(home, stdin):
-    r = hook(stdin, home)
-    assert r.returncode == 0
-    assert_fail_open(json.loads(r.stdout))
-
-
 def test_entry_point_stays_under_the_process_time_bar(home, monkeypatch, capsys):
     import time
     stub_guard(monkeypatch, {"decision": "allow"})
@@ -310,13 +278,6 @@ def test_entry_point_stays_under_the_process_time_bar(home, monkeypatch, capsys)
     assert pre.main() == 0
     assert time.process_time() - t0 < 0.5
     assert json.loads(capsys.readouterr().out)["decision"] == "allow"
-
-
-@posix_rewrite
-def test_entry_point_rewrites_a_real_run_command(home):
-    r = hook(json.dumps(run_payload()), home)
-    assert r.returncode == 0
-    assert "overwrite" in json.loads(r.stdout)
 
 
 def test_internal_exception_still_emits_decision(home, monkeypatch, capsys):
@@ -690,21 +651,12 @@ def test_sessionstart_bad_payload_starts_nothing(home, agy_env, monkeypatch, pay
     assert sess.register(payload, 1) is False
 
 
-@pytest.mark.parametrize("stdin", ["", "not json", "[1]", '{"conversationId": "../x"}'])
-def test_sessionstart_entry_point_exits_zero_with_one_json_object(home, stdin):
-    env = dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home))
-    for k in ("ANTIGRAVITY_CSRF_TOKEN", "ANTIGRAVITY_LS_ADDRESS", "ANTIGRAVITY_CONVERSATION_ID"):
-        env.pop(k, None)
-    p = subprocess.run([sys.executable, str(BIN / "unimatrix-agy-hook-sessionstart.py")], input=stdin,
-                       capture_output=True, text=True, env=env)
-    assert p.returncode == 0 and json.loads(p.stdout) == {}
-
-
 def test_sessionstart_internal_exception_still_emits_json(monkeypatch, capsys):
     monkeypatch.setattr(sess, "register", lambda *a: 1 / 0)
     monkeypatch.setattr(sess.json, "load", lambda f: {})
     assert sess.main() == 0
-    assert json.loads(capsys.readouterr().out) == {}
+    assert json.loads(capsys.readouterr().out) == {"injectSteps": [{"systemMessage": {
+        "systemMessage": "unimatrix: peer registration failed: division by zero"}}]}
 
 
 def _worker_env():

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 from coordinator_core.session.machinery_paths import share_dir
 from coordinator_core.win_portability import no_console_creationflags

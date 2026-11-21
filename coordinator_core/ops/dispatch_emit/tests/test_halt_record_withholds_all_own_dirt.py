@@ -100,7 +100,7 @@ def test_run_written_reads_the_touch_record_and_drops_scratch_reads_and_pre_run(
 
 def test_touch_record_dirt_reaches_the_halt_record(touch_record_dirt, monkeypatch: pytest.MonkeyPatch) -> None:
     real = halted_record_commit._run_written
-    monkeypatch.setattr(halted_record_commit, "_run_written", lambda root, _sid, rid: real(root, "sess-1", rid))
+    monkeypatch.setattr(halted_record_commit, "_run_written", lambda root, _sid, rid, live=None: real(root, "sess-1", rid, live))
 
     out = _call(touch_record_dirt, LEDGER, **PASSING)
 

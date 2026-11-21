@@ -12,6 +12,8 @@ from coordinator_core.ops.dispatch_emit.halt_remedy_class import PACK_READ_STALL
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halted_sizing_resumes import _git
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _ROWS = [{"id": "C1", "writes": ["a.py"]}]
 
 

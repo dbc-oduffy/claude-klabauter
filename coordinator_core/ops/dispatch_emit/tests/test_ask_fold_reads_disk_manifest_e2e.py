@@ -56,10 +56,11 @@ def _fold(reply, *, tamper=None) -> dict:
         "const agent = async (p, opts) => { _seen.push(opts.label); "
         "throw new Error('unstubbed ' + opts.label); };\n"
         "const parallel = (xs) => Promise.all(xs.map((f) => f()));\n"
-        "const _agentDefsClause = () => '';\n"
+        "const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => '';\n"
         "(async () => {\n"
         "let _manifest = null, _stagedManifest = null, _halted = null, _allLanded = false, _gate = { arm: 'm' };\n"
-        "let _incompleteChunks = [], _crossRepoRows = [], _sizingRel = null, _planRel = null, _runId = 'run-1';\n"
+        "let _incompleteChunks = [], _crossRepoRows = [], _sizingRel = null, _planRel = null, _runId = 'run-1', _resumeLedger = false;\n"
+        "const _refireCmd = () => 'refire';\n"
         + ask_compose._ADMIT_MANIFEST_JS
         + "\n"
         + ask_compose._stage_reply_js()
@@ -166,10 +167,11 @@ def _gate_fold(gate) -> dict:
         "const workflow = makeWorkflow(cfg);\n"
         "const REPO_ROOT = 'REPO';\n"
         "const agent = async (p, opts) => { throw new Error('unstubbed ' + opts.label); };\n"
-        "const _agentDefsClause = () => '';\n"
+        "const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => '';\n"
         "(async () => {\n"
         "let _manifest = null, _stagedManifest = null, _halted = null, _allLanded = false, _gate = cfg.gate;\n"
-        "let _incompleteChunks = [], _crossRepoRows = [], _sizingRel = null, _planRel = null, _runId = 'run-1';\n"
+        "let _incompleteChunks = [], _crossRepoRows = [], _sizingRel = null, _planRel = null, _runId = 'run-1', _resumeLedger = false;\n"
+        "const _refireCmd = () => 'refire';\n"
         + ask_compose._ADMIT_MANIFEST_JS
         + "\n"
         + ask_compose._stage_reply_js()

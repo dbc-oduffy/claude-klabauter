@@ -11,7 +11,7 @@ import pytest
 from coordinator_core.git import git_state
 from coordinator_core.git.commit import commit_paths
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

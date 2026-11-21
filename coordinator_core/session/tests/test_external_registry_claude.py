@@ -56,6 +56,8 @@ def test_claude_env_without_row_is_refused(home, monkeypatch):
         _fire(monkeypatch, {})
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_dead_pid_is_refused(home, monkeypatch):
     child = subprocess.Popen([sys.executable, '-c', 'pass'])
     host = psutil.Process(child.pid)

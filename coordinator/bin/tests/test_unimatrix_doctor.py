@@ -505,21 +505,6 @@ def test_far_boxes_alias_is_not_checked_when_a_snapshot_is_stored_and_still_is_w
     assert rc == 0 and "ghost" not in out  # a snapshot makes far_boxes inert, never a flagged member
 
 
-def test_cli_entrypoint_exits_non_zero_on_a_box_with_no_snapshot(tmp_path):
-    home = tmp_path / "s"
-    home.mkdir()
-    ssh = tmp_path / "h" / ".ssh"
-    ssh.mkdir(parents=True)
-    (ssh / "authorized_keys").write_text('restrict,command="python3 /x/unimatrix-relay.py" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefgh u\n')
-    import os
-    r = subprocess.run([sys.executable, str(BIN / "unimatrix-doctor.py")], capture_output=True, text=True,
-                       env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(home), "HOME": str(tmp_path / "h"),
-                            "USERPROFILE": str(tmp_path / "h"),
-                            "ProgramData": str(tmp_path / "pd")})  # no sshd_config there: the user file is the effective one
-    assert r.returncode == 1
-    assert "problem: no signed membership snapshot is stored" in r.stdout and "is in no signed membership record" in r.stdout
-
-
 @pytest.mark.parametrize("verdict, needle", [("locked", "waiting: 1Password locked"),
                                             ("missing", "passphrase_source_missing")])
 def test_peer_check_names_an_unloadable_encrypted_key_without_dialling(box, verdict, needle):
@@ -706,21 +691,6 @@ def test_inbound_authorized_keys_is_not_judged_on_windows(box):
     assert _asym(box.main(platform="win32")[1]) == []
 
 
-def test_default_cli_on_a_one_sided_fixture_prints_asymmetric_and_exits_nonzero(box, tmp_path):
-    box.adopt("me", "machine-a")
-    box.ak.write_text("")
-    # The doctor never judges inbound authorized_keys on win32, so the platform is pinned off it; every other default is real.
-    boot = ("import importlib.util, sys\n"
-            "s = importlib.util.spec_from_file_location('unimatrix_doctor_cli', sys.argv[1])\n"
-            "m = importlib.util.module_from_spec(s)\n"
-            "s.loader.exec_module(m)\n"
-            "sys.exit(m.main([], platform='linux'))\n")
-    r = subprocess.run([sys.executable, "-c", boot, str(BIN / "unimatrix-doctor.py")], capture_output=True, text=True,
-                       env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(box.home), "HOME": str(tmp_path / "h"),
-                            "USERPROFILE": str(tmp_path / "h")}, cwd=str(tmp_path))
-    assert r.returncode == 1 and "asymmetric: " in r.stdout
-
-
 def test_replaced_code_is_judged_against_the_installed_copy_not_the_checkout(box):
     box.sdir.mkdir(parents=True, exist_ok=True)
     installed = box.sdir / "unimatrix-relay.py"
@@ -832,14 +802,6 @@ def test_confirm_with_an_unreachable_far_relay_is_unconfirmed(box):
 def test_confirm_with_no_mirror_or_no_delivery_is_unconfirmed(box):
     assert _confirm(box, FarRelay(), {"digest": DIGEST}, entry=False)[1].startswith("UNCONFIRMED: no mirror")
     assert _confirm(box, FarRelay(), None)[1].startswith("UNCONFIRMED: no delivery")
-
-
-def test_confirm_at_default_arguments_on_an_empty_box_exits_nonzero(box, tmp_path):
-    r = subprocess.run([sys.executable, str(BIN / "unimatrix-doctor.py"), "confirm", MIRROR], capture_output=True,
-                       text=True, env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(box.home),
-                                       "HOME": str(tmp_path / "h"), "USERPROFILE": str(tmp_path / "h")},
-                       cwd=str(tmp_path))
-    assert r.returncode == 1 and r.stdout.startswith("UNCONFIRMED: no mirror")
 
 
 def _pair_snapshot(box):

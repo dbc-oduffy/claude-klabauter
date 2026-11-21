@@ -284,7 +284,6 @@ from typing import Callable, Mapping, NamedTuple, Optional, Sequence
 
 import yaml
 
-from coordinator_core.attribution import strip_review_annotations
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.commit_trailers import _UUID_RE
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
@@ -2174,6 +2173,8 @@ def derive_plan_context(
     unstripped frontmatter via ``_prime_exit_criterion_statement`` -- the
     strip is line-based and frontmatter keys carry no such lines.
     """
+    from coordinator_core.attribution import strip_review_annotations
+
     stripped_text = strip_review_annotations(plan_text)
 
     goal_body = _plan_section_body(stripped_text, _GOAL_HEADING)
@@ -2866,6 +2867,8 @@ _SCRATCH_HYGIENE_CLAUSE = (
 
 
 _LANDING_EXPORT_MODULE = "coordinator_core.ops.dispatch_emit.landing_export"
+# Runs a command in a full tree at a sha (shared cache entry, built once): the engine's own base-run route.
+_BASELINE_EXPORT_MODULE = "coordinator_core.testing.baseline_export"
 
 
 def _foreign_red_clause() -> str:
@@ -2875,9 +2878,9 @@ def _foreign_red_clause() -> str:
     green there was broken by a peer's uncommitted edit, not by this row.
     """
     return (
-        "A target red in the worktree but green in the landing export of your own writes "
-        f"(`python -m {_LANDING_EXPORT_MODULE} scratch/test-landing-<row> <your writes...> --base-export <run-base export> --base-sha <run_base_sha>`) "
-        "is a peer's dirt. Report it in your summary, and it is not a BLOCKED."
+        "A target red in the worktree and also red at committed HEAD "
+        f"(`python -m {_BASELINE_EXPORT_MODULE} --sha <HEAD's 40-hex sha from git rev-parse HEAD> -- <the target's test command>`) "
+        "is not yours: a peer's uncommitted edit or a pre-existing red. Report it in your summary, and it is not a BLOCKED."
     )
 
 
@@ -2885,8 +2888,8 @@ def _isolated_arm_build_clause() -> str:
     """Every arm's fix is built against HEAD in an export, then ported into the live tree as its own hunks."""
     return (
         "Build against HEAD, never on a peer's dirt: a footprint path another run has "
-        "uncommitted lines in is not rebuilt wholesale. Export HEAD plus nothing "
-        f"(`python -m {_LANDING_EXPORT_MODULE} scratch/arm-<row> <your writes...> --base-export <run-base export> --base-sha <run_base_sha>`), "
+        "uncommitted lines in is not rebuilt wholesale. Export your writes at HEAD "
+        f"(`python -m {_LANDING_EXPORT_MODULE} scratch/arm-<row> <your writes...>`), "
         "build and test the fix there, then Edit only your own hunks into the live path "
         "so a peer's lines survive. The landed blob is HEAD plus your hunks."
     )
@@ -3362,7 +3365,9 @@ def _row_prompt(
         body += (
             "\n\nRecord row evidence with `coordinator-invoke plan.tasks.mutate` "
             "(verb evidence-append, plan_path, id, text); never edit the "
-            "evidence sidecar by hand."
+            "evidence sidecar by hand. Write the params object to a file and pass "
+            "`--params-file <path>`; inline JSON is re-quoted by the shell and fails "
+            "`Invalid params_json`."
         )
     memo_send = getattr(row, "memo_send", None)
     if memo_send:
@@ -4354,11 +4359,11 @@ def _baseline_context_clause(
         "Attribute every failure per coordinator/docs/wiki/reviewer-pipeline/test-runner-baseline-attribution.md; "
         f"fill diff_files from {_edited_set_listing(run_base_sha, surface, review_terminal)}.\n"
         f"BASELINE_CONTEXT\n```json\n{block}\n```\n"
-        "For every id you labelled `caused`, run "
-        f"`python -m {_LANDING_EXPORT_MODULE} scratch/test-landing-{run_base_sha[:8]} <diff_files...> --base-export <your run-base export> --base-sha {run_base_sha}`, "
-        "re-run only those ids inside it, and list in `baseline.evidence` the ids that were red in the run-base export run. "
-        "A caused id green in the landing export stays caused, never `baseline.foreign`. "
-        "Delete the export afterwards. A failed export leaves the ids `caused`.\n"
+        "For every id you labelled `caused`, re-run only those ids at the run base with "
+        f"`python -m {_BASELINE_EXPORT_MODULE} --sha {run_base_sha} -- <your test command, only those ids>`, "
+        "and list in `baseline.evidence` the ids that were red in that run. "
+        "A caused id green at the run base stays caused, never `baseline.foreign`. "
+        "A failed export leaves the ids `caused`.\n"
     )
 
 
@@ -5840,9 +5845,8 @@ def _seam_leg_js(
         "that finding `failing_ids` (every failing pytest node id), `errors` (the distinct error "
         "names or lines the failures raised) and `red_at_base` (see below). Then export the run "
         "base with the same recipe as the baseline context (`python -m "
-        f"{_LANDING_EXPORT_MODULE} scratch/seam/base-export <the failing test files> "
-        f"--base-export <your run-base export> --base-sha {run_base_sha}`), "
-        "re-run only the `failing_ids` there the same way (the same interpreter clause), "
+        f"{_BASELINE_EXPORT_MODULE} --sha {run_base_sha} -- <your test command, only the failing ids>`), "
+        "run only the `failing_ids` there (the same interpreter clause), "
         "and put in `red_at_base` each id and each error line that is also red "
         "there. A failed export or re-run leaves `red_at_base` empty. "
         "Run no other command."

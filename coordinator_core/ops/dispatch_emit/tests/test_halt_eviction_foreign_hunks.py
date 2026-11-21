@@ -15,6 +15,8 @@ from coordinator_core.ops.dispatch_emit.halted_record_eviction import (
 from pathlib import Path
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 REC = "state/warp/run-x"
 RUN = "r1"
 PATH = "mod.py"
@@ -54,6 +56,7 @@ def _world(tmp_path, monkeypatch, baseline_edits, tree_edits):
 def _plan(root, withheld, paths):
     return plan_tree_eviction(
         root, REC, [PATH], {PATH}, [PATH], withheld, paths, run_id=RUN,
+        python_dirt={PATH},
     )
 
 

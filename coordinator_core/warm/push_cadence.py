@@ -742,8 +742,12 @@ def _retire_delivery_refs(
 def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> None:
     """Push one push-pending record as `<sha>:refs/heads/<branch>`; never raises.
 
-    The record is removed only by a landed push or an upstream tree that
-    already holds the path. Every other outcome leaves it, with `attempts` + 1.
+    The record is removed by a landed push, an upstream tree that already holds
+    the path, or a local branch tip that holds it. In the last case the branch's
+    own cadence push carries the memo. Pushing the delivery sha as well would
+    fork the remote from the local branch on the same path. Trap: while that
+    branch is held, the memo waits with the branch and is not pushed separately.
+    Every other outcome leaves the record, with `attempts` + 1.
     """
     from coordinator_core.ops.fleet import (
         _memo_push_pending,

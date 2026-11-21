@@ -12,7 +12,7 @@ from coordinator_core.bash_guards import _dc_git_shared, dispatch_checks
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(repo: Path, *args: str) -> None:

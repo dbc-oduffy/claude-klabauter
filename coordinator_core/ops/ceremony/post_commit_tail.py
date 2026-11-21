@@ -88,6 +88,7 @@ from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session.output_tree_layout import locate
 
 _LOG = logging.getLogger(__name__)
 
@@ -384,7 +385,9 @@ async def _run_origin_stub_close(
     Returns a tail_ops-shaped `{acted, skipped, failed}` dict (never
     `failed_critical` -- see `wsc_tail.py`'s own step-6 exit-code rationale).
     """
-    plan_path = f"docs/plans/{governing_plan_slug}.md" if governing_plan_slug else ""
+    plan_path = (
+        locate(str(worktree_root), f"docs/plans/{governing_plan_slug}.md") if governing_plan_slug else ""
+    )
     handoff_paths = [path for path, _fm in initial_consumed] if initial_consumed else [""]
 
     if not plan_path and not any(handoff_paths):

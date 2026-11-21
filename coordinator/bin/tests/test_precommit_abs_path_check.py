@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 SCRIPT = Path(__file__).resolve().parents[1] / "coordinator-precommit-abs-path-check"
 # Built from parts so this test file carries no literal machine path itself.
 BAD = "E" + ":/ptbase/x"

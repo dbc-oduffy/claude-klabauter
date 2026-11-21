@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 _REPO = Path(__file__).resolve().parents[3]
 _PUBLISH = _REPO / "coordinator" / "bin" / "publish.py"

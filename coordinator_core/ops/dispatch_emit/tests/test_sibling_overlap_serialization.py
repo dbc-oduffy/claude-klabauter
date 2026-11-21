@@ -1,7 +1,5 @@
 import json
 import os
-import subprocess
-import sys
 
 import pytest
 
@@ -145,19 +143,6 @@ live_run_writes.index_mint(root, rid, 1.0)
 r = idx.claim(root, rid, ["shared/file.py"])
 print("CLAIMED" if r == {} else "REFUSED" if r else "UNCLAIMED")
 """
-
-
-def test_two_processes_claiming_same_path_exactly_one_wins(tmp_path: Path) -> None:
-    root = _root(tmp_path)
-    procs = [
-        subprocess.Popen(
-            [sys.executable, "-c", _CHILD, str(root), str(tmp_path), rid],
-            stdout=subprocess.PIPE, text=True,
-        )
-        for rid in ("p1", "p2")
-    ]
-    outs = sorted(p.communicate(timeout=60)[0].strip() for p in procs)
-    assert outs == ["CLAIMED", "REFUSED"]
 
 
 _PLAN = """---

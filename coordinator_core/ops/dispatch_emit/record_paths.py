@@ -7,6 +7,8 @@ Pure string work: no git, no filesystem, no subprocess.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 #: Top-level directories whose files are records, never product. Order is the emitted regex order.
 RECORD_PREFIXES: tuple[str, ...] = (
     "state",
@@ -51,3 +53,34 @@ def record_prefix_js_regex() -> str:
     """
     alternation = "|".join(p.replace(".", "\\.") for p in RECORD_PREFIXES)
     return "^(" + alternation + ")\\/"
+
+
+def evidence_rel(profile: str, run_id: str, item_id: str, kind: str) -> str:
+    """POSIX repo-relative `state/queue-grind/<profile>/evidence/<run_id>/<item_id>.<kind>.md`.
+
+    `kind` is `done`, `verify`, `judgment` or `size`. Segments are joined unchecked: callers pass
+    literals or dispatch-time placeholders; an agent-supplied path is checked
+    in `cmd_append`. Pure string work."""
+    if kind not in ("done", "verify", "judgment", "size"):
+        raise ValueError(f"grind-row: evidence kind must be 'done', 'verify', 'judgment' or 'size': {kind!r}")
+    return f"state/queue-grind/{profile}/evidence/{run_id}/{item_id}.{kind}.md"
+
+
+def is_item_live(repo_root: Path, path: str) -> bool:
+    try:
+        return (repo_root / path).exists()
+    except OSError:
+        return False
+
+
+def bare_cited_surface(surface: str | None) -> str | None:
+    if not surface:
+        return None
+    stripped = surface.strip()
+    if not stripped or "/" not in stripped:
+        return None
+    if any(ch in stripped for ch in (",", ";", " ", "(", ")", "*", "\n")):
+        return None
+    if "::" in stripped:
+        return None
+    return stripped

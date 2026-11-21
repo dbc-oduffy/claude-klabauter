@@ -65,7 +65,7 @@ def _run(
         stubs += "const _chainParamsQ = () => '{}';\n"
     prog = (
         stubs
-        + "const _agentDefsClause = () => ''; const _RUN_TOKEN = null; const _SESSION_ID = 's'; const REPO_ROOT = 'R';\n"
+        + "const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => ''; const _RUN_TOKEN = null; const _SESSION_ID = 's'; const REPO_ROOT = 'R';\n"
         + f"const _crossRepoApproved = false; let _gated = []; let _writes = {json.dumps(writes or [])};\n"
         + f"const _sizingRel = {json.dumps(sizing_path)}; const _runId = 'run-1'; const _pmExit = null;\n"
         + "let _calls = 0; let _halted = null; let _adopted = [];\n"

@@ -24,7 +24,7 @@ _DENY = json.dumps(
 _FAIL_OPEN = json.dumps(
     {"systemMessage": "coordinator: engine failed (no response within 8000ms of delivery); guard not evaluated, command allowed."}
 )
-_SPOOLED = json.dumps({"systemMessage": "coordinator: Engine unavailable; ask spooled as abc123; it mints when the engine recovers."})
+_SPOOLED = json.dumps({"systemMessage": "coordinator: SPOOLED as abc123: it fires automatically once the engine is warm. Do not resubmit."})
 
 
 def _sub(send: float, wall: float, outcome: str = ssc.LANDED, process_ms: float = 1.0, text: str = "") -> ssc.Submit:

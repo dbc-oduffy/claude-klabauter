@@ -108,6 +108,12 @@ class IndexWriteLockBusy(IndexWriteError):
     pass
 
 
+class UnsupportedIndexShape(IndexWriteError):
+    """The on-disk index is a shape this writer cannot splice without corrupting it (v4, split
+    index). Raised with the index untouched; `splice_index` falls back to one batched
+    `git update-index --index-info`, and `prepare_splice` callers get `GitIndexInfoPublish`."""
+
+
 class IndexStaleAfterCommit(IndexWriteError):
     """THE COMMIT LANDED AND ONLY THE INDEX IS STALE -- the one outcome on
     this surface that must not be retried.
@@ -196,6 +202,18 @@ def _walk_entries(
     return starts, offset
 
 
+def _has_link_extension(raw: bytes, body_end: int) -> bool:
+    """True when the extension block after the entries holds a `link` (split-index) record."""
+    pos, end = body_end, len(raw) - 20
+    while pos + 8 <= end:
+        sig = raw[pos : pos + 4]
+        if sig == b"link":
+            return True
+        (size,) = struct.unpack_from(">I", raw, pos + 4)
+        pos += 8 + size
+    return False
+
+
 def _build_entry(name: bytes, mode: int, sha_hex: str, st: os.stat_result) -> bytes:
     sha = bytes.fromhex(sha_hex)
     if len(sha) != 20:
@@ -258,13 +276,65 @@ def splice_index(
     *,
     stat_fallback: bool = False,
     collapse_unmerged: Collection[str] = frozenset(),
+    shape_fallback: bool = True,
 ) -> None:
     """Splice `updates` into `.git/index` under `index.lock`.
     See `prepare_splice` for the arguments and the two-phase form.
+
+    An index shape the splice cannot write (v4, split) is applied by one batched
+    `git update-index --index-info` instead; `shape_fallback=False` re-raises
+    `UnsupportedIndexShape` for a caller with its own fallback.
     """
-    prepare_splice(
-        repo, updates, stat_fallback=stat_fallback, collapse_unmerged=collapse_unmerged
-    ).publish()
+    try:
+        prepare_splice(
+            repo, updates, stat_fallback=stat_fallback, collapse_unmerged=collapse_unmerged
+        ).publish()
+    except UnsupportedIndexShape:
+        if not shape_fallback:
+            raise
+        GitIndexInfoPublish(repo, updates).publish()
+
+
+class GitIndexInfoPublish:
+    """`PreparedSplice`-shaped writer for an index shape the splice refuses: `publish()` is one
+    `git update-index -z --index-info` over every update, which git applies to a v4 or split index
+    natively. Holds no lock before `publish()`; entries get a zeroed stat, which git re-hashes."""
+
+    def __init__(self, repo: Union[str, Path], updates: Mapping[str, object]) -> None:
+        refuse_dotgit(updates)
+        self._repo = repo
+        self._updates = dict(updates)
+
+    def held(self) -> bool:
+        return True
+
+    def abort(self) -> None:
+        return None
+
+    def publish(self) -> None:
+        from coordinator_core.git.run import run_git
+
+        zero = "0" * 40
+        records = []
+        for path, value in self._updates.items():
+            key = str(path).replace("\\", "/")
+            if value is ABSENT:
+                records.append(f"0 {zero}\t{key}\0")
+            elif value is DROP_IF_PHANTOM_INTENT_TO_ADD:
+                raise IndexWriteError(
+                    f"{key}: phantom intent-to-add drop is not expressible on a v4/split index"
+                )
+            else:
+                mode, sha_hex = value  # type: ignore[misc]
+                records.append(f"{int(mode):o} {sha_hex}\t{key}\0")
+        if not records:
+            return
+        result = run_git(
+            ["update-index", "-z", "--index-info"],
+            cwd=str(self._repo), input="".join(records).encode("utf-8", "surrogateescape"),
+        )
+        if not result.ok:
+            raise IndexWriteError(f"git update-index --index-info failed: {result.stderr!r}")
 
 
 def prepare_splice(
@@ -356,12 +426,18 @@ def _splice_locked(
             raise IndexWriteError(f"{index_path}: not a DIRC index")
         version, entry_count = struct.unpack_from(">II", raw, 4)
         if version not in _SUPPORTED_VERSIONS:
-            raise IndexWriteError(
+            raise UnsupportedIndexShape(
                 f"{index_path}: index v{version} -- only v2/v3 are written, "
                 "refused rather than guessed at"
             )
         in_version = version
         starts, body_end = _walk_entries(raw, entry_count, collapse)
+        if _has_link_extension(raw, body_end):
+            # TRAP: a split index lists only the entries that differ from `sharedindex.<sha>`;
+            # splicing its entry block and dropping `link` writes a full index missing the base.
+            raise UnsupportedIndexShape(
+                f"{index_path}: split index (link extension) -- refused rather than guessed at"
+            )
 
     replacements: Dict[bytes, Optional[bytes]] = {}
     for path, value in updates.items():

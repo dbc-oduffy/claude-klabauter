@@ -355,7 +355,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import (  # noq
     _tests_not_run_refusal,
     _declared_reconcile,
     _review_floor_note,
-    _staged_outside_slices_refusal,
+    _staged_outside_slices_provenance,
     _error,
     _merge_landing_plan,
     _land_merge_artifacts,
@@ -2306,7 +2306,8 @@ def _terminal_commit_inner(
         worktree_root, manifest if ask_run_dir is not None else None, request, inline_review,
         ask_run_dir,
     )
-    if no_change is not None:
+    no_op = _empty_diff_landing(worktree_root, request) if no_change is not None and inline_review else None
+    if no_change is not None and no_op is None:
         return no_change
     # Review at close is deterministic (PM ruling 2026-10-01): a run whose
     # result carries no review-stage output cannot land code, however the
@@ -2337,8 +2338,7 @@ def _terminal_commit_inner(
     floor_note = _review_floor_note(request, inline_review, prep_from_disk, worktree_root)
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
-    no_op = None
-    if floor_note is not None and ask_run_dir is not None:
+    if no_op is None and floor_note is not None and ask_run_dir is not None:
         no_op = _empty_diff_landing(worktree_root, request)
     if no_op is not None:
         unmet, no_op_ledger, _ = _ledger_gate(
@@ -2356,6 +2356,8 @@ def _terminal_commit_inner(
                     [c for c in request.chunks if c.id not in incomplete_chunks],
                 ))
             return no_op
+        if no_change is not None:
+            return unmet if unmet is not None else no_change
     stage("terminal_commit.ledger_gate")
     over_budget = _xs_over_budget_refusal(
         worktree_root, params, _run_id_of(params, ask_run_dir, script_path_raw), request
@@ -3772,14 +3774,10 @@ def _terminal_commit_inner(
                 close_ctx.clear()
             return _with_withheld(_naming_held(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})))
 
-    # Every declared product path this commit stages must sit in a reviewed slice.
+    # A declared product path this commit stages that sits in no reviewed slice lands with an
+    # `unreviewed` provenance row: a refusal would deny recoverable work.
     _own_product = chunk_declared | set(prefix_files)
-    unreviewed = _staged_outside_slices_refusal(inline_review, [p for p in all_paths if p in _own_product])
-    if unreviewed is not None:
-        _remove(worktree_root, receipt_paths)
-        if close_ctx is not None:
-            close_ctx.clear()
-        return unreviewed
+    unreviewed_rows = _staged_outside_slices_provenance(inline_review, [p for p in all_paths if p in _own_product])
 
     # The product commit never carries the session's claimed leftovers: commit_v2 would widen the
     # pathspec past the declared set. They land in the follow-on commit after this one.
@@ -3925,6 +3923,7 @@ def _terminal_commit_inner(
         _remove(worktree_root, receipt_paths)
         return _pack_read_stall_reply(stall)
     kept_supplied = {**measured_supplied, **kept_supplied}
+    land_unbased: list = []
     if kept_supplied:
         # The run's own blob lands, not the worktree bytes a peer also edited: the gate's co-declared
         # arm skips these paths. The run's own-write sha256 is checked against the blob's bytes here
@@ -3944,6 +3943,26 @@ def _terminal_commit_inner(
                 "run's latest own write); re-run the path so kept.json records the current blob",
                 refused=KEPT_BLOB_STALE, stale_paths=[p for p, _ in stale],
             )
+        from coordinator_core.git import land_merge
+
+        merged = land_merge.merge_into_head(
+            worktree_root, land_merge.run_base_sha(worktree_root, art_run_id), kept_supplied,
+        )
+        if merged.conflicts:
+            _unstamp_landed()
+            _remove(worktree_root, receipt_paths)
+            fields = land_merge.conflict_reply(merged.conflicts)
+            return _error(fields.pop("message"), **fields)
+        kept_supplied = merged.blobs
+        land_unbased = list(merged.unbased)
+        if land_unbased:
+            # A blob with no resolvable run base lands as-is and may revert HEAD's newer lines: loud in the
+            # message trailer (`git log --grep Land-Unbased`), each receipt's prose, and the reply.
+            note = land_merge.unbased_trailer(land_unbased)
+            commit_params["message"] = commit_params["message"].rstrip("\n") + "\n" + note + "\n"
+            for rel in receipt_paths:
+                with (worktree_root / rel).open("a", encoding="utf-8") as fh:
+                    fh.write("\n" + note + "\n")
         commit_params["supplied_blobs"] = kept_supplied
         if "expected_content_sha256" in commit_params:
             commit_params["expected_content_sha256"] = {
@@ -4361,6 +4380,8 @@ def _terminal_commit_inner(
         # Advance plan status so a re-fire (which selects live `open` rows)
         # cannot redo landed work. incomplete_chunks never reach here.
         scope.setdefault("landed", set()).update(all_paths)
+        if land_unbased:
+            reply["unbased"] = land_unbased
         if merge_artifacts:
             reply["merge_artifacts"] = _land_merge_artifacts(
                 commit_v2, repo_root, merge_artifacts, message, str(reply["sha"]), session_id,
@@ -4847,6 +4868,8 @@ def _terminal_commit_inner(
     for key in ("advisory", "provenance", "targeted_tests_foreign"):
         if integrity_extra.get(key):
             reply[key] = integrity_extra[key]
+    if unreviewed_rows:
+        reply["provenance"] = [*reply.get("provenance", ()), *unreviewed_rows]
     reply["receipts"] = receipt_paths
     reply["receipt_coverage"] = "written" if receipt_paths else "unidentified"
     if (

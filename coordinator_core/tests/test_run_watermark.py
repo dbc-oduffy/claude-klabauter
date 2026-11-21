@@ -4,7 +4,6 @@ spawn), select/cursor advance, and the stage/promote commit gate."""
 from __future__ import annotations
 
 import sqlite3
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -39,12 +38,6 @@ def _db(path: Path, rows, generation: int = 7) -> str:
     return str(path)
 
 
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
 def test_rag_path_reads_generation_without_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawns) -> None:
     db = _db(
         tmp_path / "rag.db",
@@ -77,25 +70,6 @@ def test_first_run_is_empty_and_spawns_nothing(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(rw, "registry_get", lambda key: None)
     changed = rw.changed_since(tmp_path, None, scope_dirs=["docs"])
     assert set(changed) == set() and spawns == []
-
-
-def test_git_fallback_one_spawn_counts_uncommitted_edit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawns) -> None:
-    monkeypatch.setattr(rw, "registry_get", lambda key: None)
-    _git(tmp_path, "init", "-q")
-    _git(tmp_path, "config", "user.email", "t@t")
-    _git(tmp_path, "config", "user.name", "t")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "a.md").write_text("1")
-    (tmp_path / "docs" / "b.md").write_text("1")
-    _git(tmp_path, "add", ".")
-    _git(tmp_path, "commit", "-qm", "base")
-    base = _git(tmp_path, "rev-parse", "HEAD")
-    (tmp_path / "docs" / "a.md").write_text("2")
-    changed = rw.changed_since(
-        tmp_path, rw.Watermark("distill", base), scope_dirs=["docs"]
-    )
-    assert set(changed) == {"docs/a.md"}
-    assert len(spawns) == 1
 
 
 def test_git_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

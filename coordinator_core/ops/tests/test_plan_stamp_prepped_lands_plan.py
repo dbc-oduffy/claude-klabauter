@@ -14,6 +14,9 @@ from coordinator_core.ops.tests.test_plan_stamp_prepped import BY, REL, _plan
 from coordinator_core.win_portability import no_console_creationflags
 
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=str(repo),

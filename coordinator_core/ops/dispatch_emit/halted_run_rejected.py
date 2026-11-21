@@ -3,7 +3,7 @@
 Params: ``run_id`` (string, required), ``rejected_paths`` (non-empty list of withheld paths the EM rejects,
 required unless the run withholds nothing: then it may be omitted and the run closes with empty
 dispositions and no git spawn), ``reason`` (non-empty string, required, never defaulted). Fail-closed: the
-marker is ``halted``, no live successor holds the run, and every withheld path classifies: a rejected path is ``rejected`` when HEAD's blob
+marker is ``halted`` or ``resumed``, no live successor holds the run, and every withheld path classifies: a rejected path is ``rejected`` when HEAD's blob
 equals its blob at the halt anchor (``landed`` when HEAD already carries the kept blob instead); a path not named
 rejected must already be ``landed``/``lost``/``scratch-abandoned`` as ``close_halted_run_superseded`` classifies
 them. Any other path refuses naming it; marker and index stay unchanged. On success the marker is rewritten
@@ -25,11 +25,13 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.dispatch_emit.halted_run_superseded import (
-    _blob_ids, _classify_paths, _end_parent_ask, _halt_anchor, _land_closure, _newest_touch, _refuse,
+    _blob_ids, _classify_paths, _end_parent_ask, _halt_anchor, _land_closure, _newest_touch, _prints_plan, _refuse,
 )
 
 OP_NAME = "dispatch.close_halted_run_rejected"
 DISPOSITION_REJECTED = "rejected"
+# A resumed run whose successor also halted is as closable as a halted one; a live successor still refuses.
+_CLOSABLE = ("halted", "resumed")
 
 
 def _params(params: object) -> tuple:
@@ -52,11 +54,11 @@ def _params(params: object) -> tuple:
 
 
 def _mark_rejected(record: Path, expected: dict, reason: str, dispositions: dict) -> bool:
-    """Rewrite the marker as ``closed`` (rejected) only if it still equals ``expected`` and is ``halted``."""
+    """Rewrite the marker as ``closed`` (rejected) only if it still equals ``expected`` and is ``halted`` or ``resumed``."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
     marker = halted_run._read(record)
-    if marker is None or marker != expected or marker.get("status") != halted_run.STATUS_HALTED:
+    if marker is None or marker != expected or marker.get("status") not in _CLOSABLE:
         return False
     at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     halted_run._write(record, {
@@ -91,8 +93,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _refuse(str(exc))
     if marker is None:
         return _refuse(f"{run_id} has no halt record; nothing to reject")
-    if marker.get("status") != halted_run.STATUS_HALTED:
-        return _refuse(f"{run_id} is {marker.get('status')}; only a halted run closes rejected")
+    if marker.get("status") not in _CLOSABLE:
+        return _refuse(f"{run_id} is {marker.get('status')}; only a halted or resumed run closes rejected")
     successor = _live_successor(root, run_id)
     if successor:
         return _refuse(f"{run_id} has a live successor {successor}; wait for it or stop it")
@@ -110,7 +112,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "ok": True, "run_id": run_id, "dispositions": {}, "reason": reason,
             "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix(),
         }
-    plan = halted_hold_release._kept_plan(record)
+    plan = halted_hold_release._kept_plan(record) or _prints_plan(record, withheld)
     kept = plan[1] if plan else {}
     paths = sorted(withheld)
     anchor, why = _halt_anchor(root, run_id)

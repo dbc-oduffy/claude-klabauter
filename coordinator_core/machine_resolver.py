@@ -115,6 +115,7 @@ import functools
 import logging
 import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -178,9 +179,29 @@ def registry_dir() -> Path:
 _registry_dir = registry_dir
 
 
+#: path -> ((mtime_ns, size), parsed). A warm engine resolves ~8 keys per emit, each re-reading and
+#: re-parsing the same registry files (~1ms apiece); the stat pair is the freshness check. Trap: callers
+#: share the returned dict and must not mutate it.
+_TOML_MEMO: dict = {}
+
+
 def _load_toml(path: Path) -> dict:
-    if not path.is_file():
+    try:
+        st = os.stat(path)
+    except OSError:
         return {}
+    if not stat.S_ISREG(st.st_mode):
+        return {}
+    stamp = (st.st_mtime_ns, st.st_size)
+    held = _TOML_MEMO.get(str(path))
+    if held is not None and held[0] == stamp:
+        return held[1]
+    parsed = _parse_toml(path)
+    _TOML_MEMO[str(path)] = (stamp, parsed)
+    return parsed
+
+
+def _parse_toml(path: Path) -> dict:
     try:
         import tomllib as _tomllib  # type: ignore[import-not-found]
     except ImportError:

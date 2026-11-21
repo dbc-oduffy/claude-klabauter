@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import live_write_guard
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PATH = "pkg/mod.py"
 HEAD = b"".join(b"line %d\n" % n for n in range(1, 11))

@@ -69,9 +69,9 @@ def write(
         body["withheld_reasons"] = dict(withheld_reasons or {})
 
         def put() -> Optional[str]:
+            tmp = target.with_name(f"{FILE_NAME}.{os.getpid()}.{threading.get_ident()}.tmp")
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                tmp = target.with_name(f"{FILE_NAME}.{os.getpid()}.{threading.get_ident()}.tmp")
                 tmp.write_text(json.dumps(body, indent=2), encoding="utf-8", newline="\n")
                 with _replace_guard(target):
                     if outcome in COMMITTED_OUTCOMES or _recorded_outcome(target) not in COMMITTED_OUTCOMES:
@@ -84,6 +84,10 @@ def write(
                 process_artifact_policy.exclude_locally(root, [rel])
                 return rel
             except Exception:
+                try:
+                    tmp.unlink(missing_ok=True)  # a failed write leaves no temp behind in the record dir
+                except OSError:
+                    pass
                 return None
 
         return run_bounded(f"{target}\0{outcome}", put, deadline=WRITE_DEADLINE_SECS, default=None)

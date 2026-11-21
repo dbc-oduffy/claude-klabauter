@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from os import stat_result
     from subprocess import Popen
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd: Path) -> str:

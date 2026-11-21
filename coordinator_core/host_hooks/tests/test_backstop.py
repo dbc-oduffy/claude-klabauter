@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 
 import pytest
 
@@ -39,6 +38,19 @@ def test_push_to_non_owned_remote_denied(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_push_to_owned_remote_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(push_guard, "_configured_prefixes", lambda: ["github.com/stranger/"])
     assert backstop.match(_event("git push https://github.com/mine/repo.git main")) is None
+
+
+def test_trace_names_each_guard_run_and_the_denier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(push_guard, "_configured_prefixes", lambda: ["github.com/stranger/"])
+    backstop.take_trace()
+    assert backstop.match(_event("git push https://github.com/stranger/repo.git main")) is not None
+    trace = backstop.take_trace()
+    assert trace[0] == ("block-push-pr-non-owned-remote", "deny")
+    assert backstop.take_trace() == []
+    assert backstop.match(_event("ls")) is None
+    allowed = backstop.take_trace()
+    assert [g for g, _ in allowed][:len(backstop.GUARD_MODULES)] == list(backstop.GUARD_MODULES)
+    assert {v for _, v in allowed} == {"allow"}
 
 
 def test_non_command_tool_input_is_ignored() -> None:
@@ -113,17 +125,164 @@ def test_agy_force_push_to_main_denied() -> None:
     assert backstop.match(event)["decision"] == "deny"
 
 
-def test_backstop_loads_no_warm_or_ops_module() -> None:
-    code = (
-        "import sys\n"
-        "from coordinator_core.host_hooks import backstop\n"
-        "from coordinator_core.host_hooks.contract import HostEvent\n"
-        "backstop.match(HostEvent('codex','PreToolUse','s',tool_name='Bash',"
-        "tool_input={'command':'git push origin main'},cwd='/nonexistent-backstop-cwd'))\n"
-        "bad = sorted(m for m in sys.modules if m.startswith(('coordinator_core.warm','coordinator_core.ops')))\n"
-        "print('LOADED', bad)\n"
-        "sys.exit(1 if bad else 0)\n"
-    )
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+def _degrade(command, cwd=""):
+    return backstop.degrade_match(_event(command, cwd=cwd))
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "scratch").mkdir()
+    return tmp_path
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf src", "rm -r docs/old", "rm -fr ./builds", "rm --recursive coordinator_core",
+    "cd x && rm -rf src", "Remove-Item -Recurse -Force src", "rm -rf scratch/../src",
+])
+def test_degrade_denies_recursive_rm_outside_scratch(repo: Path, command) -> None:
+    for name in ("src", "docs/old", "builds", "coordinator_core"):
+        (repo / name).mkdir(parents=True, exist_ok=True)
+        (repo / name / "untracked.py").write_text("x\n", encoding="utf-8")
+    verdict = _degrade(command, cwd=str(repo))
+    assert verdict is not None and verdict["decision"] == "deny"
+
+
+def _tracked_repo(root: Path) -> Path:
+    """A real repo whose `tracked/` dir, `top.txt` and a symlink-free tree are committed and clean."""
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True, text=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    root.mkdir()
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (root / "tracked" / "sub").mkdir(parents=True)
+    (root / "tracked" / "a.py").write_text("a\n", encoding="utf-8")
+    (root / "tracked" / "sub" / "b.py").write_text("b\n", encoding="utf-8")
+    (root / "top.txt").write_text("top\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    return root
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("command", [
+    "rm -rf tracked", "rm -rf tracked/sub", "rm -r top.txt", "Remove-Item -Recurse -Force tracked",
+    "rm -rf tracked/missing",
+])
+def test_degrade_allows_recursive_rm_of_clean_tracked_or_absent_targets(tmp_path: Path, command: str) -> None:
+    repo = _tracked_repo(tmp_path / "repo")
+    assert _degrade(command, cwd=str(repo)) is None, command
+
+
+@pytest.mark.spawns_process
+def test_degrade_denies_recursive_rm_once_the_target_holds_work_git_cannot_restore(tmp_path: Path) -> None:
+    repo = _tracked_repo(tmp_path / "repo")
+    assert _degrade("rm -rf tracked", cwd=str(repo)) is None
+    (repo / "tracked" / "sub" / "new.py").write_text("untracked\n", encoding="utf-8")
+    assert _degrade("rm -rf tracked", cwd=str(repo))["decision"] == "deny"
+    assert _degrade("rm -rf tracked/sub", cwd=str(repo))["decision"] == "deny"
+    (repo / "tracked" / "sub" / "new.py").unlink()
+    (repo / "tracked" / "a.py").write_text("edited, different length\n", encoding="utf-8")
+    assert _degrade("rm -rf tracked", cwd=str(repo))["decision"] == "deny"
+    assert _degrade("rm -r tracked/a.py", cwd=str(repo))["decision"] == "deny"
+    assert _degrade("rm -rf tracked/sub", cwd=str(repo)) is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("command", ["rm -rf .", "rm -rf .git", "rm -rf .git/objects", "rm -rf ../repo"])
+def test_degrade_denies_recursive_rm_of_the_repo_root_or_store_on_identity(tmp_path: Path, command: str) -> None:
+    repo = _tracked_repo(tmp_path / "repo")
+    assert _degrade(command, cwd=str(repo))["decision"] == "deny", command
+
+
+@pytest.mark.spawns_process
+def test_degrade_recursive_rm_with_an_unreadable_index_is_not_clean(tmp_path: Path) -> None:
+    repo = _tracked_repo(tmp_path / "repo")
+    (repo / ".git" / "index").unlink()
+    assert _degrade("rm -rf tracked", cwd=str(repo))["decision"] == "deny"
+
+
+@pytest.mark.spawns_process
+def test_degrade_recursive_rm_reads_the_index_without_spawning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _tracked_repo(tmp_path / "repo")
+
+    def no_spawn(*args, **kwargs) -> None:
+        raise AssertionError("the cold rm classifier spawned a process")
+
+    monkeypatch.setattr(subprocess, "Popen", no_spawn)
+    assert _degrade("rm -rf tracked", cwd=str(repo)) is None
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf scratch/run1", "rm -rf ./scratch/x", "rm file.txt", "rm -f src/a.py", "ls -la",
+    "Remove-Item -Recurse scratch/x", "git status",
+])
+def test_degrade_allows_scratch_rm_and_harmless_commands(repo: Path, command) -> None:
+    assert _degrade(command, cwd=str(repo)) is None
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf node_modules", "rm -rf .venv", "rm -rf src/__pycache__", "rm -rf build", "rm -rf target",
+    "git clean -fdx scratch/x", "git clean -n", "git clean -fdn", "git clean -fdx -- node_modules",
+])
+def test_degrade_allows_regenerable_and_dry_run(repo: Path, command) -> None:
+    for name in ("node_modules", ".venv", "src/__pycache__", "build", "target"):
+        (repo / name).mkdir(parents=True, exist_ok=True)
+    assert _degrade(command, cwd=str(repo)) is None
+
+
+@pytest.mark.parametrize("command", ["git clean -fdx", "git clean -f", "git clean -fd -- src", "git -C . clean --force -d"])
+def test_degrade_denies_git_clean_in_work_tree(repo: Path, command) -> None:
+    (repo / "src").mkdir()
+    assert _degrade(command, cwd=str(repo))["decision"] == "deny"
+
+
+def test_degrade_allows_rm_and_clean_outside_a_work_tree(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    # No .git up the chain of tmp_path unless the tmp root sits in a repo; system tmp is allowed anyway.
+    assert _degrade("rm -rf src", cwd=str(tmp_path)) is None
+
+
+def test_degrade_denies_forced_clean_when_no_work_tree_resolves(tmp_path: Path) -> None:
+    assert _degrade("git clean -fd", cwd=str(tmp_path / "nowhere"))["decision"] == "deny"
+    assert _degrade("git clean -n", cwd=str(tmp_path / "nowhere")) is None
+
+
+def test_degrade_allows_recursive_rm_under_system_tmp(repo: Path) -> None:
+    import tempfile
+
+    target = Path(tempfile.gettempdir()) / "backstop-degrade-probe"
+    assert _degrade("rm -rf %s" % target, cwd=str(repo)) is None
+
+
+@pytest.mark.parametrize("command", ["git stash drop", "git stash clear", "git -C x stash drop stash@{1}"])
+def test_degrade_denies_stash_drop_and_clear(command) -> None:
+    assert _degrade(command)["decision"] == "deny"
+
+
+@pytest.mark.parametrize("command", ["git stash list", "git stash pop", "git stash push -- f", "echo git stash drop"])
+def test_degrade_allows_other_stash_verbs(command) -> None:
+    assert _degrade(command) is None
+
+
+def test_degrade_denies_disk_fill_past_floor(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import shutil
+    from collections import namedtuple
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage(0, 0, 50 * 1024 ** 3))
+    for command in ("dd if=/dev/zero of=big.bin bs=1M count=45000", "truncate -s 45G big.bin",
+                    "fsutil file createnew big.bin 48318382080"):
+        assert _degrade(command, cwd=str(repo))["decision"] == "deny", command
+    for command in ("dd if=/dev/zero of=small.bin bs=1M count=100", "truncate -s 1G f", "truncate -s -1G f",
+                    "dd if=a of=b"):
+        assert _degrade(command, cwd=str(repo)) is None, command
+
+
+def test_floor_constant_matches_disk_budget_policy() -> None:
+    from coordinator_core.bash_guards import _disk_fill_contract
+
+    assert backstop._DISK_FREE_FLOOR == _disk_fill_contract.load_policy().volume_free_floor

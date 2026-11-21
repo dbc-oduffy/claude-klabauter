@@ -22,6 +22,7 @@ def temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     base = tmp_path / "Temp"
     base.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(base))
+    monkeypatch.setattr(sweep, "pytest_sweep_roots", lambda: [base / "coordinator"])
     return base / "coordinator"
 
 
@@ -87,3 +88,11 @@ def test_g8_dry_run_deletes_nothing_and_prints_would_delete(temp, dead_pid, caps
     assert run.exists()
     recs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [r["action"] for r in recs] == ["would-delete"]
+
+
+def test_sweep_reaps_a_dead_run_under_a_disk_fallback_root(temp, registry, dead_pid, monkeypatch) -> None:
+    disk = temp.parent / "vartmp" / "coordinator"
+    monkeypatch.setattr(sweep, "pytest_sweep_roots", lambda: [temp.parent / "gone", disk])
+    run = _mk(disk / "repo" / "pytest" / f"{dead_pid}-a1b2c3")
+    sweep.sweep_dead_runs(registry_dir=registry)
+    assert not run.exists()

@@ -76,14 +76,14 @@ def bind_peer(conv, record):
         return None
 
 
-def reply(registered, worker_pointer=None):
+def reply(registered, worker_pointer=None, failure=None) -> dict:
     # Trap: agy (observed 2026-11-04) panics "cannot convert string to message" on a SessionStart
     # systemMessage carrying metadata.user_markdown, despite its own docs; notes go as plain text.
-    notes = ([NOTE] if registered else []) + ([worker_pointer] if worker_pointer else [])
+    notes = ([NOTE] if registered else []) + [n for n in (worker_pointer, failure) if n]
     return {"injectSteps": [{"systemMessage": {"systemMessage": n}} for n in notes]} if notes else {}
 
 
-def main():
+def main() -> int:
     out = {}
     try:
         payload = json.load(sys.stdin)
@@ -91,11 +91,12 @@ def main():
             pointer = load_sibling("unimatrix-codex-hook-sessionstart").worker_pointer()
         except Exception:
             pointer = None
+        failure = None
         try:
             registered = register(payload, load_sibling("unimatrix-agy-hook-pretool").agy_ancestor_pid())
-        except Exception:
-            registered = False
-        out = reply(registered, pointer)
+        except Exception as exc:  # the session still starts; the cause rides as a note, as the Codex hook does
+            registered, failure = False, f"unimatrix: peer registration failed: {exc}"
+        out = reply(registered, pointer, failure)
     except Exception:
         out = {}
     print(json.dumps(out))

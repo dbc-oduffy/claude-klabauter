@@ -6,6 +6,9 @@ from coordinator_core.git.checkpoint_symbols import removed_symbol_refusal
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
+import pytest
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _git(root, *args) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, **no_console_creationflags())

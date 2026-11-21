@@ -181,14 +181,18 @@ class MemoryStatus:
 
 
 def _host_sampler(repo_root: Path | None = None) -> types.ModuleType:
-    """Import `coordinator_core.telemetry.host_sampler`, falling back to this checkout's root.
+    """Import `coordinator_core.telemetry.host_sampler` (see `_engine_module`)."""
+    return _engine_module("coordinator_core.telemetry.host_sampler", repo_root)
+
+
+def _engine_module(name: str, repo_root: Path | None = None) -> types.ModuleType:
+    """Import the engine module ``name``, falling back to this checkout's root.
 
     A bare system interpreter has no installed coordinator_core; the checkout root (resolved from
-    this file) is tried before giving up. An ambient coordinator_core lacking `telemetry` stays
+    this file) is tried before giving up. An ambient coordinator_core lacking the module stays
     cached in `sys.modules` after the first miss and shadows the checkout, so the miss evicts it
     before the retry (restored if the retry fails too). Raises OSError naming the missing module.
     """
-    name = "coordinator_core.telemetry.host_sampler"
     try:
         return importlib.import_module(name)
     except ModuleNotFoundError:
@@ -922,8 +926,85 @@ def register_command(
     _append_admission(admission_path, line)
 
 
-def release_command(admission_path, key: str, pid: int, *, reservation_session_id=None, reservation_run=None) -> None:
-    """Append the END line that frees a registered command's reservation (under ``admission_lock``, so a concurrent compaction cannot drop it)."""
+def _proc_peak_mb(proc, platform: str) -> float | None:
+    """One process's peak resident MiB: ``peak_wset`` on Windows, ``VmHWM`` on Linux, rss elsewhere."""
+    try:
+        if platform == "win32":
+            info = proc.memory_info()
+            return (getattr(info, "peak_wset", None) or info.rss) / (1024 * 1024)
+        if platform.startswith("linux"):
+            with open(f"/proc/{proc.pid}/status", encoding="ascii", errors="replace") as fh:
+                for line in fh:
+                    if line.startswith("VmHWM:"):
+                        return int(line.split()[1]) / 1024
+        return proc.memory_info().rss / (1024 * 1024)
+    except Exception:
+        return None
+
+
+def tree_peak_mb(pid: int, platform: str | None = None) -> float | None:
+    """Peak RAM in MiB summed over ``pid`` and its live descendants; None when ``pid`` is unreadable."""
+    try:
+        import psutil
+
+        root = psutil.Process(pid)
+        procs = [root, *root.children(recursive=True)]
+    except Exception:
+        return None
+    plat = sys.platform if platform is None else platform
+    peaks = [p for p in (_proc_peak_mb(proc, plat) for proc in procs) if p is not None]
+    return sum(peaks) if peaks else None
+
+
+def _stamped_run_peaks(run: str, home) -> tuple[float | None, float | None]:
+    """(peak_ram_mb, peak_vram_mib) the local capacity stamp holds for ``run``; None per axis when absent."""
+    record = _engine_module("coordinator_core.group_em.capacity_record").read({"root": home})
+    if record.get("stale"):
+        return None, None
+    for job in record.get("jobs") or []:
+        if isinstance(job, dict) and job.get("run") == run:
+            return job.get("peak_ram_mb"), job.get("peak_vram_mib")
+    return None, None
+
+
+def record_measured_peak(job_type: str, pid: int, run: str, home=None) -> bool:
+    """Fold the run's measured peaks into ``job-peaks.json[job_type]``; False when nothing was measured or recorded.
+
+    RAM is the highest the watch ticks stamped for the run, folded with the live process tree's peak
+    when ``pid`` is still readable (release usually follows exit, so the stamp is the common source;
+    the only one on Darwin, where the releaser holds no peak counter). VRAM is the
+    per-process figure the capacity stamp assigned to the run. Never raises.
+    """
+    try:
+        if home is None:
+            home = _engine_module("coordinator_core._settings_home").settings_home()
+        ram = tree_peak_mb(pid)
+        stamped_ram, stamped_vram = _stamped_run_peaks(run, home)
+        ram_parts = [v for v in (ram, stamped_ram) if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        measured = {}
+        if ram_parts:
+            measured["ram_mb"] = max(ram_parts)
+        if isinstance(stamped_vram, (int, float)) and not isinstance(stamped_vram, bool):
+            measured["vram_mib"] = stamped_vram
+        if not measured:
+            return False
+        return bool(_engine_module("coordinator_core.group_em.job_peaks").record(job_type, measured, home))
+    except Exception:
+        return False
+
+
+def release_command(
+    admission_path, key: str, pid: int, *, reservation_session_id=None, reservation_run=None,
+    job_type=None, peaks_home=None,
+) -> None:
+    """Append the END line that frees a registered command's reservation (under ``admission_lock``, so a concurrent compaction cannot drop it).
+
+    Before the END line, the run's measured peaks go to ``job_peaks`` under ``job_type`` (default
+    ``key``); ``peaks_home`` overrides the settings home. The declared peak stays only the
+    reservation. A failed peak record never fails the release.
+    """
+    run = reservation_run if reservation_run is not None else f"{key}:{pid}"
+    record_measured_peak(job_type or key, pid, run, peaks_home)
     with admission_lock(admission_path):
         _append_admission(admission_path, {
             "phase": "END", "session_id": reservation_session_id if reservation_session_id is not None else "box-memory-snapshot",

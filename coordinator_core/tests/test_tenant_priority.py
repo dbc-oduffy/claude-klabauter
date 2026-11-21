@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 
 import pytest
@@ -37,42 +36,6 @@ def _profile(monkeypatch, value):
 
     monkeypatch.setattr(machine_local_spawn, "cached_get", fake_cached_get)
     return calls
-
-
-def _child(code, argv=None):
-    kwargs = tenant_priority.popen_kwargs(argv)
-    out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), **kwargs,
-    )
-    assert out.returncode == 0, out.stderr
-    return int(out.stdout.strip())
-
-
-@pytest.mark.skipif(not POSIX, reason="nice is POSIX")
-def test_prime_profile_child_reads_nice_15(monkeypatch):
-    _profile(monkeypatch, "true")
-    assert "preexec_fn" in tenant_priority.popen_kwargs([sys.executable])
-    assert _child(_NICE_PROBE) == tenant_priority.PRIME_TENANT_NICE == 15
-
-
-@pytest.mark.skipif(not POSIX, reason="nice is POSIX")
-@pytest.mark.parametrize("value", [None, "", "0", "false"])
-def test_non_prime_profile_child_nice_equals_parent(monkeypatch, value):
-    import os
-
-    _profile(monkeypatch, value)
-    assert tenant_priority.popen_kwargs([sys.executable]) == {}
-    assert _child(_NICE_PROBE) == os.getpriority(os.PRIO_PROCESS, 0)
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="background QoS is darwin")
-def test_darwin_child_inherits_bg(monkeypatch):
-    _profile(monkeypatch, "true")
-    assert _child(_BG_PROBE) == _DARWIN_BG
-    tenant_priority._reset_for_tests()
-    _profile(monkeypatch, None)
-    assert _child(_BG_PROBE) == 0
 
 
 @pytest.mark.parametrize("marker", tenant_priority.SERVE_LINEAGE_MARKERS)

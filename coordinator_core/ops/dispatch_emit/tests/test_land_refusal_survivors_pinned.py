@@ -7,19 +7,15 @@ from __future__ import annotations
 import ast
 import importlib.util
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from coordinator_core import deny_registry as dr
-from coordinator_core import dispatch_abandon
-from coordinator_core.git import git_state
 from coordinator_core.git.ref_lock import RefLockHeld
-from coordinator_core.ops.dispatch_emit import halted_record_commit, own_hunk_stage, run_landing
+from coordinator_core.ops.dispatch_emit import halted_record_commit, run_landing
 from coordinator_core.ops.dispatch_emit import land_refusal_registry as reg
-from coordinator_core.win_portability import no_console_creationflags
 
 _REPO = Path(__file__).resolve().parents[4]
 _PKG_DIR = _REPO / "coordinator_core" / "ops" / "dispatch_emit"
@@ -59,6 +55,7 @@ _PINS = {
     "empty-subject": _TESTS + "test_terminal_commit_partial_rows.py",
     "blob-drift": _TESTS + "test_land_run_product.py",
     "own-hunk-head-moved": _THIS,
+    "commit-set-not-recorded-hunks": _TESTS + "test_land_run_recorded_hunks_exact.py",
     "no-close-job": _TESTS + "test_land_run_reclose.py",
     "close-job-plan-mismatch": _TESTS + "test_land_run_reclose.py",
     "run-id-unsafe": _TESTS + "test_terminal_commit_halted_record.py",
@@ -209,8 +206,13 @@ def test_survivor_is_pinned_by_an_existing_test_that_names_it(reason):
 
 
 def test_a_reason_pinned_to_this_file_has_its_own_test_function():
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    tests = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    # Spawning tests live in the ``_spawns`` sibling; the pin still names this file.
+    here = Path(__file__)
+    tests: set = set()
+    for src in (here, here.with_name(here.stem + "_spawns.py")):
+        if src.is_file():
+            tree = ast.parse(src.read_text(encoding="utf-8"))
+            tests |= {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
     own = [reason for reason, pin in _PINS.items() if pin == _THIS]
     assert own
     lacking = [r for r in own if not any(t.startswith("test_" + r.replace("-", "_")) for t in tests)]
@@ -244,86 +246,12 @@ def test_record_dir_escapes_refuses_with_its_registered_reason(tmp_path, monkeyp
     assert reg.LAND_REFUSAL_REGISTRY["record-dir-escapes"].harm in dr.IRREVERSIBLE_CLASSES
 
 
-def _git(root: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=str(root), capture_output=True, text=True, check=True, **no_console_creationflags(),
-    ).stdout.strip()
-
-
-@pytest.fixture
-def repo(tmp_path, monkeypatch):
-    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
-    root = tmp_path / "repo"
-    root.mkdir()
-    _git(root, "init", "-q")
-    _git(root, "config", "user.email", "t@example.com")
-    _git(root, "config", "user.name", "t")
-    _git(root, "config", "core.autocrlf", "false")
-    (root / "seed.txt").write_text("seed\n", encoding="utf-8")
-    _git(root, "add", ".")
-    _git(root, "commit", "-q", "-m", "seed")
-    (root / "a.py").write_text("a = 1\n", encoding="utf-8")
-    return root
-
-
 def test_ref_lock_held_refuses_without_breaking_the_lock(tmp_path):
     lock = tmp_path / "main.lock"
     lock.write_text("peer", encoding="utf-8")
     reply = run_landing._ref_lock_error(RefLockHeld("refs/heads/main", lock, 5, "peer", False))
     assert reply["refused"] == "ref-lock-held" and reply["committed"] is False
     assert lock.read_text(encoding="utf-8") == "peer"
-
-
-def test_head_unreadable_refuses_and_a_readable_head_commits(repo, monkeypatch):
-    head = _git(repo, "rev-parse", "HEAD")
-    with monkeypatch.context() as m:
-        m.setattr(git_state, "read_tree_spine", lambda *a, **k: None)
-        reply = run_landing._stamp_commit(repo, ["a.py"], "m", "run-x", {})
-    assert reply["refused"] == "head-unreadable" and _git(repo, "rev-parse", "HEAD") == head
-    assert run_landing._stamp_commit(repo, ["a.py"], "m", "run-x", {}).get("committed") is True
-
-
-def test_dispatch_abandoned_moves_no_ref_and_a_live_dispatch_commits(repo, monkeypatch):
-    head = _git(repo, "rev-parse", "HEAD")
-    with monkeypatch.context() as m:
-        m.setattr(dispatch_abandon, "is_abandoned", lambda: True)
-        reply = run_landing._stamp_commit(repo, ["a.py"], "m", "run-x", {})
-    assert reply["refused"] == "dispatch-abandoned" and _git(repo, "rev-parse", "HEAD") == head
-    assert run_landing._stamp_commit(repo, ["a.py"], "m", "run-x", {}).get("committed") is True
-
-
-def test_index_lock_busy_refuses_and_leaves_the_peer_lock(repo):
-    head = _git(repo, "rev-parse", "HEAD")
-    lock = repo / ".git" / "index.lock"
-    lock.write_text("", encoding="utf-8")
-    reply = run_landing._stamp_commit(repo, ["a.py"], "m", "run-x", {})
-    assert reply["refused"] == "index-lock-busy" and _git(repo, "rev-parse", "HEAD") == head
-    assert lock.exists()
-    lock.unlink()
-    assert run_landing._stamp_commit(repo, ["a.py"], "m", "run-x", {}).get("committed") is True
-
-
-def test_own_hunk_head_moved_is_the_refusal_for_a_moved_head_blob(repo):
-    body = "".join(f"line{i}\n" for i in range(10)).encode()
-    (repo / "b.txt").write_bytes(body)
-    _git(repo, "add", "b.txt")
-    _git(repo, "commit", "-q", "-m", "b")
-    (repo / "b.txt").write_bytes(body.replace(b"line2\n", b"A\n"))
-    diffs = own_hunk_stage.read_diff(repo, ["b.txt"])
-    assert own_hunk_stage.check_head_unchanged(repo, diffs) is None
-    mine = (repo / "b.txt").read_bytes()
-    (repo / "b.txt").write_bytes(b"peer\n")
-    _git(repo, "commit", "-q", "-am", "peer edit")
-    (repo / "b.txt").write_bytes(mine)
-    assert own_hunk_stage.check_head_unchanged(repo, diffs) == "b.txt"
-    tree = ast.parse((_PKG_DIR / "land_run.py").read_text(encoding="utf-8"))
-    guarded = [
-        kw for node in ast.walk(tree) if isinstance(node, ast.If) and ast.unparse(node.test) == "moved is not None"
-        for call in ast.walk(node) if isinstance(call, ast.Call)
-        for kw in call.keywords if kw.arg == "refused" and isinstance(kw.value, ast.Constant)
-        and kw.value.value == "own-hunk-head-moved"
-    ]
-    assert len(guarded) == 2
 
 
 def _count_script():

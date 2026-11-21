@@ -11,6 +11,8 @@ import pytest
 
 from coordinator_core.host_hooks import agy_adapter, shim
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _CONVERSATION = "d8f5a804-4fe2-40a9-a267-0c7e7c9929f3"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _GUARD_DID_NOT_RUN = "guard did not run"

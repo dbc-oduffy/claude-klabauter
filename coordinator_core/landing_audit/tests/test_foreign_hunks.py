@@ -8,7 +8,7 @@ from coordinator_core.landing_audit.foreign_hunks import audit, landings, run_ma
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 RUN_A = "ask-20261029T010101-aaaaaa"
 RUN_B = "ask-20261029T020202-bbbbbb"

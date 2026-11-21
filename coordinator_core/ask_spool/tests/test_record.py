@@ -527,3 +527,18 @@ def test_coalesce_key_run_and_bare_ask() -> None:
     assert record.coalesce_key(_payload({})) is None
     assert record.coalesce_key({"tool_input": "x"}) is None
     assert record.coalesce_key({}) is None
+
+
+def test_pending_duplicate_finds_a_pending_entry_of_the_same_ask_only(tmp_path) -> None:
+    import json
+
+    def payload(tuid: str, text: str) -> dict:
+        return {"session_id": "s1", "tool_use_id": tuid, "tool_input": {"args": text}}
+
+    first = payload("tu1", "Fix the bug")
+    sid, _ = record.spool_ask(str(tmp_path), json.dumps(first).encode(), session_id="s1", tool_use_id="tu1", reason="r")
+    assert record.pending_duplicate(str(tmp_path), payload("tu2", "fix  the BUG")) == sid
+    assert record.pending_duplicate(str(tmp_path), payload("tu2", "fix the bug now")) is None
+    assert record.pending_duplicate(str(tmp_path), {"tool_input": {}}) is None
+    assert record.claim(str(tmp_path), sid)
+    assert record.pending_duplicate(str(tmp_path), payload("tu2", "Fix the bug")) is None

@@ -13,6 +13,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER
 from coordinator_core.ops.dispatch_emit.checkpoint_stamp import STOP_RULE_TRAILER
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 PLAN = "docs/plans/p.md"
 _FORMAT = (
     "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"

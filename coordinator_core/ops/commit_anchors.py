@@ -97,6 +97,7 @@ from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _parse_frontmatter, _read_meta
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session.output_tree_layout import locate
 
 logger = logging.getLogger(__name__)
 
@@ -380,8 +381,8 @@ def _resolve_plan_from_governing_slug(
     if not slug:
         return None
 
-    plan_rel_path = f"docs/plans/{slug}.md"
-    plan_file = worktree_root / "docs" / "plans" / f"{slug}.md"
+    plan_rel_path = locate(str(worktree_root), f"docs/plans/{slug}.md")
+    plan_file = worktree_root / plan_rel_path
     try:
         text = plan_file.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -434,7 +435,7 @@ def _completion_entry_deliverable_id(worktree_root: Path, entry_rel_path: str) -
         return None
     chain_slug = chain_slug.strip()
 
-    plan_file = worktree_root / "docs" / "plans" / f"{chain_slug}.md"
+    plan_file = worktree_root / locate(str(worktree_root), f"docs/plans/{chain_slug}.md")
     try:
         text = plan_file.read_text(encoding="utf-8", errors="replace")
     except OSError:

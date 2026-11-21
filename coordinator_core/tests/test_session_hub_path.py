@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
 
 from coordinator_core import session_hub_path as shp
@@ -71,11 +69,3 @@ def test_linked_worktree_other_guard_sites_resolve_main_hub(tmp_path):
     hub = str(main / ".coordinator-local" / "coordinator-sessions")
     assert scope_orphan_census._hub_dir(str(wt)) == hub
     assert scope_orphan_census._hub_dir(str(main)) == hub
-
-
-def test_module_is_a_leaf():
-    code = (
-        "import sys; import coordinator_core.session_hub_path;"
-        "sys.exit(1 if 'coordinator_core.session.core' in sys.modules else 0)"
-    )
-    assert subprocess.run([sys.executable, "-c", code], cwd=str(Path(__file__).parents[2])).returncode == 0

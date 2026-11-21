@@ -194,16 +194,15 @@ def test_stray_apostrophe_does_not_hide_literal_tripwire(tmp_path: Path) -> None
     assert list(literal_namers(repo, [EDITED])) == ["tests/test_t.py"]
 
 
-def test_scan_writes_only_the_facts_store_and_reads_no_index_tripwire(tmp_path: Path) -> None:
+def test_a_literal_scan_writes_nothing_and_reads_no_index_tripwire(tmp_path: Path) -> None:
     from coordinator_core.ops import review_tripwires as rt
 
     for attr in ("git_index", "machinery_paths", "json", "hashlib"):
         assert not hasattr(rt, attr)
-    repo = _repo(tmp_path, {"tests/test_t.py": 'X = "run_pass.py"\n'})
+    repo = _repo(tmp_path, {"tests/test_t.py": 'X = "run_pass.py"'})
     before = sorted(str(p) for p in repo.rglob("*"))
     assert list(literal_namers(repo, [EDITED])) == ["tests/test_t.py"]
-    written = sorted(set(str(p) for p in repo.rglob("*")) - set(before))
-    assert written == [str(repo / ".git" / rt._FACTS_FILE)]
+    assert sorted(set(str(p) for p in repo.rglob("*")) - set(before)) == []
 
 
 def _opened_tests(monkeypatch: pytest.MonkeyPatch) -> list:
@@ -227,12 +226,19 @@ def _many(n: int = 30) -> dict:
     return files
 
 
-def test_warm_namers_call_reads_only_the_naming_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_warm_indexed_scan_reads_only_the_naming_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.ops import review_token_index as idx
+
+    monkeypatch.setattr(idx, "_cache_path", lambda _root: tmp_path / "ttix.bin")
+    idx.reset_memory()
     repo = _repo(tmp_path, _many())
-    assert list(literal_namers(repo, [EDITED])) == ["tests/test_named.py"]
+    tokens = rt.scan_tokens([EDITED], leaves=False)
+    list(rt._tracked_test_bytes(repo, (), tokens))
     opened = _opened_tests(monkeypatch)
-    assert list(literal_namers(repo, [EDITED])) == ["tests/test_named.py"]
+    got = [rel for rel, data in rt._tracked_test_bytes(repo, (), tokens) if data]
+    assert got == ["tests/test_named.py"]
     assert opened == ["test_named.py"]
+    idx.reset_memory()
 
 
 def test_a_module_edited_after_staging_is_scanned_not_trusted_to_the_store(tmp_path: Path) -> None:
@@ -241,13 +247,6 @@ def test_a_module_edited_after_staging_is_scanned_not_trusted_to_the_store(tmp_p
     (repo / "tests" / "test_other_01.py").write_text('X = "run_pass.py"\n' * 3, encoding="utf-8")
     (repo / "tests" / "test_named.py").write_text("X = 1\n", encoding="utf-8")
     assert list(literal_namers(repo, [EDITED])) == ["tests/test_other_01.py"]
-
-
-def test_an_unreadable_store_is_a_cold_scan_not_an_error(tmp_path: Path) -> None:
-    repo = _repo(tmp_path, _many(3))
-    assert list(literal_namers(repo, [EDITED])) == ["tests/test_named.py"]
-    (repo / ".git" / rt._FACTS_FILE).write_bytes(b"not marshal")
-    assert list(literal_namers(repo, [EDITED])) == ["tests/test_named.py"]
 
 
 def test_a_basename_the_tail_prefilter_cannot_cover_is_still_found(tmp_path: Path) -> None:

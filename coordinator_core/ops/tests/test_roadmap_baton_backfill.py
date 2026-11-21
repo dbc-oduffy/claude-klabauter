@@ -11,7 +11,7 @@ from coordinator_core import git_ancestry
 from coordinator_core.ops import roadmap_baton_backfill as op
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _ROW = "- id: {id}\n  title: t\n  change_kind: code-edit\n  surface: a.py\n  disposition: {disp}\n  deferred: false\n"
 PLAN = "docs/plans/p.md"

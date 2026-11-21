@@ -316,4 +316,4 @@ def test_remedy_spawn_is_admitted_and_held_admission_never_spawns(monkeypatch, t
 def test_detach_kwargs_branches():
     assert rf.detach_kwargs("posix") == {"start_new_session": True}
     flags = rf.detach_kwargs("nt")["creationflags"]
-    assert flags & 0x00000008 and flags & 0x00000200 and "start_new_session" not in rf.detach_kwargs("nt")
+    assert flags & 0x08000000 and flags & 0x00000200 and not flags & 0x00000008 and "start_new_session" not in rf.detach_kwargs("nt")

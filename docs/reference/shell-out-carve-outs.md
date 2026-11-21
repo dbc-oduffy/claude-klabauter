@@ -624,6 +624,11 @@ Plain-spawn sites (non-shell argv0, not gated by the regrowth detector):
   git probe; `--global` sets on repair), `gh auth setup-git`, `python -m pip install` (test extras,
   pywin32, pyright), `winget install` (toolchain repair naming only; elevated runs belong to the EM).
 - `scripts/fresh_box/probes_unimatrix.py`: `unimatrix-doctor.py` via `sys.executable`.
+- `scripts/fresh_box/probes_linux.py`: `systemctl` (is-enabled reads; `mask`, `daemon-reload`,
+  `enable --now` repairs), `sudo -n` (probe and repair elevation, never a password prompt),
+  `loginctl` (`show-user`, `enable-linger`), `ethtool` (read; `-s wol g` repair), `nmcli`
+  (active-connection read; `wake-on-lan magic` repair), `tee` (writes the wsdd unit under `sudo -n`).
+  Every probe is `platforms=("linux",)`, so none spawns off Linux.
 
 Shell-binary sites (gated; enumerated in the register block only once the call site exists):
 - `scripts/fresh_box/probes_pwsh.py`: `pwsh`/`powershell.exe` self-probes (version, coordinator

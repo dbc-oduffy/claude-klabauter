@@ -196,6 +196,8 @@ def test_receipt_failure_never_fails_the_emit(tmp_path: Path, monkeypatch: pytes
     assert not script.with_name(script.name + ".emitted.json").exists()
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_the_receipt_check_command_reads_the_top_level_sha_not_em_brief(tmp_path: Path) -> None:
     """The relay copies what the command prints, so the key path must live in the command: a receipt whose
     em_brief.sha256 precedes the top-level sha256 once made a haiku relay report the brief's digest."""

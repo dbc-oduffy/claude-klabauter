@@ -863,7 +863,8 @@ def _drive_root_new_dir_bash_write_setup(
     home.mkdir(parents=True, exist_ok=True)
     mp.setenv("HOME", str(home))
     mp.setenv("USERPROFILE", str(home))
-    return {_CMD_OVERRIDE_KEY: "echo x > ~/stray-dir/x.txt"}
+    # The guard denies only a subagent payload (non-empty agent_id).
+    return {_CMD_OVERRIDE_KEY: "echo x > ~/stray-dir/x.txt", "agent_id": _EXECUTOR_IDENTITY["agent_id"]}
 
 
 def _noncanonical_branch_creation_hazard_setup(
@@ -874,6 +875,8 @@ def _noncanonical_branch_creation_hazard_setup(
     root = str(scratch_dir)
     mp.setattr(guard, "resolve_git_root", lambda cwd=None: root)
     mp.setattr(guard, "_is_hazard_repo", lambda git_root: True)
+    # The remedy text names this box's live owner and machine; the corpus must read the same on every box.
+    mp.setattr(guard, "_canonical_example", lambda today: "<owner>/<machine>/%s" % today)
     return {_CWD_OVERRIDE_KEY: root}
 
 
@@ -2867,6 +2870,10 @@ def _wg_derived_global_doctrine_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) 
     mp.setenv("HOME", str(scratch_dir))
     mp.setenv("USERPROFILE", str(scratch_dir))
     mp.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(scratch_dir / "authoring"))
+    # The guard speaks only on a dev install (a registered repo carrying the sentinel).
+    from coordinator_core.write_guards import block_derived_global_doctrine_write as guard_mod
+
+    mp.setattr(guard_mod, "_is_dev_install", lambda: True)
     return {
         "tool_name": "Write",
         "tool_input": {"file_path": str(scratch_dir / ".claude" / "CLAUDE.md"), "content": "x"},
@@ -2999,6 +3006,7 @@ def _wg_drive_root_new_dir_write_fire(scratch_dir: Path, mp: pytest.MonkeyPatch)
     return {
         "tool_name": "Write",
         "cwd": str(scratch_dir),
+        "agent_id": _EXECUTOR_IDENTITY["agent_id"],
         "tool_input": {"file_path": str(home / "stray-dir" / "x.txt"), "content": "x"},
     }
 
@@ -3188,6 +3196,8 @@ def _wg_em_code_dispatch_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     from coordinator_core.hooks import nudge_em_code_dispatch as hook_mod
 
     mp.setattr(hook_mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    # The nag stays silent for a session with no recorded PM ask; the fresh session id has none.
+    mp.setattr(hook_mod, "_ask_behind_session", lambda session_id, cwd: True)
     # The hook's per-(session, path) "already nudged" marker lives under the temp dir;
     # a marker left by an earlier run silences a small edit, so the fire row isolates it.
     mp.setattr(tempfile, "gettempdir", lambda: str(scratch_dir))
@@ -4583,10 +4593,6 @@ def _fire_nudge_em_code_dispatch_xs_closed() -> Optional[Dict[str, Any]]:
     return _fire_nudge_em_code_dispatch_spent("xs", denies=2)
 
 
-def _fire_nudge_em_code_dispatch_residue_over() -> Optional[Dict[str, Any]]:
-    return _fire_nudge_em_code_dispatch_spent("residue")
-
-
 def _fire_nudge_em_code_dispatch_control() -> Optional[Dict[str, Any]]:
     payload = {
         "tool_input": {"file_path": "docs/notes.md", "content": "some notes\n"},
@@ -4830,6 +4836,26 @@ def _fire_em_prefire_survey_within_budget() -> Optional[Dict[str, Any]]:
                 }
             )
         return envelope or None
+
+
+def _fire_resume_plugin_check(em_role: bool) -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import session_start_resume_plugin_check as mod
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(mod, "coordinator_agents_loaded", lambda: False)
+        mp.setattr(mod, "_em_role_session", lambda payload, session_id: em_role)
+        text = mod.build_report({"session_id": "sess-resume-plugin-check"})
+    if not text:
+        return None
+    return {"hookSpecificOutput": {"additionalContext": text}}
+
+
+def _fire_resume_plugin_check_em() -> Optional[Dict[str, Any]]:
+    return _fire_resume_plugin_check(True)
+
+
+def _fire_resume_plugin_check_non_em() -> Optional[Dict[str, Any]]:
+    return _fire_resume_plugin_check(False)
 
 
 def _fire_nudge_em_turn_budget_quiet() -> Optional[Dict[str, Any]]:
@@ -5116,10 +5142,20 @@ def _fire_example_retrieval_repo_detect() -> Optional[Dict[str, Any]]:
         scratch_dir = Path(scratch)
         os.makedirs(scratch_dir / ".project-rag")
         (scratch_dir / ".project-rag" / "state.json").write_text("{}", encoding="utf-8")
+        # A real refresh worker would be spawned with the scratch dir as its cwd, which pins the
+        # dir on Windows and fails the cleanup; both spawn seams are no-ops and markers stay in scratch.
+        from coordinator_core.ops import rag_freshness
+
         with unittest.mock.patch.object(
             _hook_example_retrieval_repo_detect, "_find_marker_upward", _stub_find_marker_upward
+        ), unittest.mock.patch.object(
+            rag_freshness, "default_spawn_fn", lambda argv, cwd: None
+        ), unittest.mock.patch.object(
+            rag_freshness, "default_verdict_spawn_fn", lambda argv, cwd: None
         ):
-            banner = _hook_example_retrieval_repo_detect.detect_banner(str(scratch_dir))
+            banner = _hook_example_retrieval_repo_detect.detect_banner(
+                str(scratch_dir), marker_root=scratch_dir / "markers"
+            )
         if not banner:
             return None
         return {"hookSpecificOutput": {"additionalContext": banner}}
@@ -6482,6 +6518,8 @@ def _fire_sessionstart_dispatch() -> Optional[Dict[str, Any]]:
         )
         mp.setattr(_hook_sessionstart_dispatch, "_guard_settings_integrity_handler", lambda payload: {})
         mp.setattr(_hook_sessionstart_dispatch, "_guard_hooks_kill_switch_detail_handler", lambda payload: {})
+        # The peer-identity leg renders this box's live roster; the corpus reads the same on every box.
+        mp.setattr("coordinator_core.hooks.peer_identity.identity_text", lambda payload: None)
         with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ssd-", dir=_neutral_scratch_parent()) as scratch:
             # `compact`, not `startup`: a source is required for any leg to
             # run, and `compact` skips the two startup-only legs that read
@@ -6935,12 +6973,6 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("nudge_em_code_dispatch", "fire-xs-budget-spent", True, _fire_nudge_em_code_dispatch_xs_over),
     HookRow("nudge_em_code_dispatch", "fire-xs-hand-edits-closed", True, _fire_nudge_em_code_dispatch_xs_closed),
     HookRow(
-        "nudge_em_code_dispatch",
-        "fire-residue-budget-spent",
-        True,
-        _fire_nudge_em_code_dispatch_residue_over,
-    ),
-    HookRow(
         "nudge_em_code_dispatch", "fire-route-unfired", True, _fire_nudge_em_code_dispatch_route_unfired
     ),
     HookRow(
@@ -7001,6 +7033,8 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("nudge_em_turn_budget", "fire-pre-fire", True, _fire_nudge_em_turn_budget_pre_fire),
     HookRow("nudge_em_turn_budget", "fire-post-landing", True, _fire_nudge_em_turn_budget_post_landing),
     HookRow("nudge_em_turn_budget", "quiet-subagent", False, _fire_nudge_em_turn_budget_quiet),
+    HookRow("session_start_resume_plugin_check", "fire-em-without-agents", True, _fire_resume_plugin_check_em),
+    HookRow("session_start_resume_plugin_check", "quiet-non-em", False, _fire_resume_plugin_check_non_em),
     HookRow("guard_em_prefire_survey", "advisory-pre-fire", True, _fire_em_prefire_survey_pre_fire),
     HookRow("guard_em_prefire_survey", "deny-post-landing", True, _fire_em_prefire_survey_post_landing),
     HookRow("guard_em_prefire_survey", "allow-within-budget", False, _fire_em_prefire_survey_within_budget),

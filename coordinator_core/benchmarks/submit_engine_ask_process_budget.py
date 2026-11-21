@@ -168,8 +168,8 @@ ENVELOPE_OVERRUN = "started after an emit overrun"
 ENVELOPE_PREMINT_DEFERRED = "premint-deferred"
 ENVELOPE_DEFERRED = "deferred"
 ENVELOPE_SYNCHRONOUS = "synchronous"
-#: The text of the hook's spool envelope ("Engine unavailable; ask spooled").
-SPOOL_MARKER = "ask spooled"
+#: The text of the hook's spool envelope ("SPOOLED as <id>: ...").
+SPOOL_MARKER = "SPOOLED as"
 
 
 def envelope_branch(reason: str | None) -> str:
@@ -717,7 +717,7 @@ def _launch_round(repo: Path, starts: int, first: bool) -> dict:
             "wall_ms": round(res.get("wall_ms", 0.0), 1),
             "spawns": len(ledger.spawns[i]),
             "spawn_argv": ledger.spawns[i],
-            "spooled": SPOOL_MARKER in (reason or "") or "spooled as" in (reason or ""),
+            "spooled": SPOOL_MARKER in (reason or ""),
             "decision": hso.get("permissionDecision"),
             "reason": reason,
             "legs_ms": {k: round(v, 1) for k, v in sorted(ledger.legs[i].items(), key=lambda kv: -kv[1])},

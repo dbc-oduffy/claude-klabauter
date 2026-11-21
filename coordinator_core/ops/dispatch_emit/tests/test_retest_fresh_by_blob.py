@@ -9,7 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_retest
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 RUN_ID = "run-blob"
 COVERED = ["pkg/test_a.py", "pkg/helper.py", "pkg/landing.py"]

@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_landing_integrity import _w
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
-pytestmark = pytest.mark.spawns_process  # repo setup only; the calls under test are spawn-guarded
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]  # repo setup only; the calls under test are spawn-guarded
 
 
 def _git(root, *args) -> None:

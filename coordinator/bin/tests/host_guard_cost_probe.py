@@ -20,12 +20,22 @@ a fresh process on a search_replace payload and reports whole-process `wall_secs
 interpreter under `-X importtime` (its inflated timing is not a cost figure): the ten largest cumulative-us
 modules. The grok run targets a scratch repo whose lane record holds an over-bound edit (provider env set), so the
 nag path is measured; the codex and agy rows have no nag. The settings home and warm runtime base are fresh scratch dirs, so no warm socket exists; both are
-removed on exit. Not a test_ file; never collected.
+removed on exit. The `codex_cold_deny` rows (one per case: rm -rf, git clean, stash clear, disk-fill, apply_patch, ls,
+git status) each run the Codex hook command in its own fresh process on an unreachable engine, from a fixture repo under
+`$COORDINATOR_SETTINGS_HOME/host-guard-probe` (unset key: a typed refusal naming it; never scratch/ or the system temp
+dir, both exempt from the rm and git clean denies), and report answer, route (the launcher's stderr state), state,
+denied, launcher_wall_secs, whole_process_secs, in_join_secs, spawned_children, plus `phases` (process secs inside the
+shim: shim_import, adapter, dial, backstop_match, nag_text, cold_verdict, cold_chain_evaluate; inclusive of the imports
+each triggers) and `imports` (outermost first-time coordinator_core imports); wall is reported here, gated by
+test_host_guard_cold_process_budget. The `codex_cold_phases` rows run the ls and rm_rf cases PHASE_RUNS times each,
+forced cold, against this repo and the deployed engine root (`clone` in <settings home>/machine-local/engine-converge.json;
+a missing key is SettingsHomeKeyMissing). Not a test_ file; never collected.
 """
 import importlib.util
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -306,6 +316,270 @@ def grok_live_row(work, lane=True):
     return row
 
 
+# argv: hook script, engine root, payload json. Runs the hook's main() as `--host codex --engine-root <engine>` on a
+# stdin payload in a fresh interpreter, counting Popen, and prints one JSON line: process time around main() (the join
+# span plus emit), whole-process time, the verdict line and the last stderr line (the state).
+CODEX_COLD_CODE = (
+    "import builtins, importlib.util, io, json, subprocess, sys, time\n"
+    "script, engine, payload = sys.argv[1], sys.argv[2], sys.argv[3]\n"
+    "sys.path.insert(0, engine)\n"
+    "spec = importlib.util.spec_from_file_location('unimatrix_host_guard', script)\n"
+    "gm = importlib.util.module_from_spec(spec)\n"
+    "spec.loader.exec_module(gm)\n"
+    "count = [0]\n"
+    "orig = subprocess.Popen\n"
+    "class Counting(orig):\n"
+    "    def __init__(self, *a, **kw):\n"
+    "        count[0] += 1\n"
+    "        super().__init__(*a, **kw)\n"
+    "subprocess.Popen = Counting\n"
+    # Per-phase process time. `phases` are inclusive wrappers (a function's own imports sit inside it); `imports`
+    # are the outermost first-time coordinator_core imports, so the two never double-count within one dict.
+    "phases, imports, depth = {}, {}, [0]\n"
+    "def timed(name, fn):\n"
+    "    def wrapper(*a, **kw):\n"
+    "        t = time.process_time()\n"
+    "        try:\n"
+    "            return fn(*a, **kw)\n"
+    "        finally:\n"
+    "            phases[name] = round(phases.get(name, 0.0) + time.process_time() - t, 4)\n"
+    "    wrapper._timed = True\n"
+    "    return wrapper\n"
+    "def wrap_attr(mod, attr, label):\n"
+    "    fn = getattr(mod, attr, None)\n"
+    "    if fn is not None and not hasattr(fn, '_timed'):\n"
+    "        setattr(mod, attr, timed(label, fn))\n"
+    "LATE = {'coordinator_core.host_hooks.backstop': ('match', 'backstop_match'),\n"
+    "        'coordinator_core.host_hooks.cold_chain': ('evaluate', 'cold_chain_evaluate')}\n"
+    "real_import = builtins.__import__\n"
+    "def hooked(name, globals=None, locals=None, fromlist=(), level=0):\n"
+    "    if depth[0] or level or not name.startswith('coordinator_core'):\n"
+    "        return real_import(name, globals, locals, fromlist, level)\n"
+    "    key = name + (':' + ','.join(fromlist) if fromlist else '')\n"
+    "    t, depth[0] = time.process_time(), 1\n"
+    "    try:\n"
+    "        return real_import(name, globals, locals, fromlist, level)\n"
+    "    finally:\n"
+    "        depth[0] = 0\n"
+    "        imports[key] = round(imports.get(key, 0.0) + time.process_time() - t, 4)\n"
+    "        for modname, (attr, label) in LATE.items():\n"
+    "            if modname in sys.modules:\n"
+    "                wrap_attr(sys.modules[modname], attr, label)\n"
+    "builtins.__import__ = hooked\n"
+    "real_load = gm._load_shim\n"
+    "def load_shim(root):\n"
+    "    shim = timed('shim_import', real_load)(root)\n"
+    "    for attr, label in (('_adapter', 'adapter'), ('_budgeted', 'dial'), ('_nag_text', 'nag_text'),\n"
+    "                        ('_cold_verdict', 'cold_verdict')):\n"
+    "        wrap_attr(shim, attr, label)\n"
+    "    return shim\n"
+    "gm._load_shim = load_shim\n"
+    "real_out, real_err = sys.stdout, sys.stderr\n"
+    "sys.stdin, sys.stdout, sys.stderr = io.StringIO(payload), io.StringIO(), io.StringIO()\n"
+    "p0, w0 = time.process_time(), time.perf_counter()\n"
+    "try:\n"
+    "    gm.main(['--host', 'codex', '--engine-root', engine])\n"
+    "except SystemExit:\n"
+    "    pass\n"
+    "in_join, wall = time.process_time() - p0, time.perf_counter() - w0\n"
+    "out, err = sys.stdout.getvalue(), sys.stderr.getvalue()\n"
+    "sys.stdout, sys.stderr = real_out, real_err\n"
+    "print(json.dumps({'whole_process_secs': round(time.process_time(), 4), 'in_join_secs': round(in_join, 4),\n"
+    "    'in_join_wall_secs': round(wall, 4), 'spawned_children': count[0],\n"
+    "    'phases': phases, 'imports': {k: v for k, v in imports.items() if v},\n"
+    "    'stdout': out.strip().splitlines()[-1] if out.strip() else '',\n"
+    "    'state': (err.strip().splitlines() or [''])[-1]}))\n"
+)
+
+CODEX_COLD_CASES = (
+    ("rm_rf", "Bash", {"command": "rm -rf {repo}/tracked"}),
+    ("git_clean", "Bash", {"command": "git clean -fdx"}),
+    ("git_stash_clear", "Bash", {"command": "git stash clear"}),
+    ("disk_fill", "Bash", {"command": "truncate -s 900000000G {repo}/fill.bin"}),
+    ("apply_patch", "apply_patch", {"command": "*** Begin Patch\n*** Add File: {anchor}zz-cold-probe-new-dir/f.txt\n+x\n*** End Patch\n"}),
+    ("ls", "Bash", {"command": "ls"}),
+    ("git_status", "Bash", {"command": "git status"}),
+)
+
+
+def prepare_codex_cold_repo(root):
+    """A scratch repo with a tracked directory `tracked/` for the rm -rf case."""
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "tracked").mkdir()
+    (root / "tracked" / "a.txt").write_text("a\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "base")
+    # Uncommitted work: a clean tracked dir and an empty untracked set are legitimately allowed, so the
+    # deny cases need this state to be reachable.
+    (root / "tracked" / "dirty.txt").write_text("uncommitted\n")
+    (root / "untracked.txt").write_text("untracked\n")
+    # `git clean` denies only load-bearing untracked paths (state/, docs/plans/ ...).
+    (root / "state").mkdir()
+    (root / "state" / "untracked-note.md").write_text("untracked\n")
+
+
+CODEX_COLD_DENIED = frozenset(("rm_rf", "git_clean", "git_stash_clear", "disk_fill", "apply_patch"))
+SETTINGS_HOME_KEY = "COORDINATOR_SETTINGS_HOME"
+
+
+class SettingsHomeKeyMissing(RuntimeError):
+    """The settings-home key that locates the probe's fixture directory is unset."""
+
+
+def codex_fixture_base():
+    """`<COORDINATOR_SETTINGS_HOME>/host-guard-probe`, the non-scratch, non-temp home of the probe's fixture repos.
+    Unset key: SettingsHomeKeyMissing naming it."""
+    home = os.environ.get(SETTINGS_HOME_KEY)
+    if not home:
+        raise SettingsHomeKeyMissing(f"{SETTINGS_HOME_KEY} is unset: the codex_cold_deny fixture repo lives under it")
+    return Path(home) / "host-guard-probe"
+
+
+def cold_child_env(base_env, child_tmp):
+    """`base_env` with the temp-dir variables pointed at `child_tmp`, so the child's system temp dir is not an ancestor
+    of the fixture repo (destructive-rm and git clean exempt the system temp dir), and no provider override."""
+    child_tmp.mkdir(parents=True, exist_ok=True)
+    env = {**base_env, "TEMP": str(child_tmp), "TMP": str(child_tmp), "TMPDIR": str(child_tmp)}
+    env.pop("COORDINATOR_AGENT_PROVIDER", None)
+    return env
+
+
+def codex_live_cli(engine_root):
+    """The Codex hook command line, argv form: `python unimatrix-host-guard.py --host codex --engine-root <engine>`."""
+    return [str(BIN / "unimatrix-host-guard.py"), "--host", "codex", "--engine-root", str(engine_root)]
+
+
+def codex_cold_payload(case, repo):
+    """The PreToolUse payload for one CODEX_COLD_CASES entry against `repo`, on a fresh session id."""
+    _name, tool, tool_input = case
+    tin = {k: v.replace("{repo}", repo.as_posix()).replace("{anchor}", repo.anchor.replace("\\", "/"))
+           for k, v in tool_input.items()}
+    payload = {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tin,
+               "session_id": str(uuid.uuid4()), "cwd": str(repo)}
+    if tool == "apply_patch":
+        payload["agent_id"] = "cold-probe-sub"  # the drive-root write guard denies subagents only
+    return payload
+
+
+def _last_json(text):
+    try:
+        return json.loads(text.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return None
+
+
+def codex_counted_run(engine, stdin, env):
+    """The CODEX_COLD_CODE process: main() under `--host codex --engine-root <engine>`, one fresh interpreter. Its row
+    holds in_join_secs, spawned_children and the per-phase `phases`/`imports` process-time maps."""
+    counted = subprocess.run([sys.executable, "-c", CODEX_COLD_CODE, str(BIN / "unimatrix-host-guard.py"), str(engine),
+                              stdin], capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW, env=env)
+    row = _last_json(counted.stdout)
+    if row is None:
+        row = {"error": "child_failed", "returncode": counted.returncode, "stderr_tail": counted.stderr[-400:]}
+    row.pop("stdout", None)
+    return row
+
+
+def codex_cold_run(case, repo, engine, env):
+    """One case, two fresh processes. The first is the exact hook command (`unimatrix-host-guard.py --host codex`,
+    payload on stdin): `launcher_wall_secs` is the perf_counter span around that process (interpreter start included,
+    the span the launcher's wall join sits inside), `answer` its stdout verdict and `route` its stderr state ("engine"
+    a verified deny, "neutral-unknown" an allow, "degraded" a miss). The second runs main() under CODEX_COLD_CODE for
+    process time and `spawned_children`. `denied` is the verdict's permissionDecision == deny."""
+    stdin = json.dumps(codex_cold_payload(case, repo))
+    cli = codex_live_cli(engine)
+    t0 = time.perf_counter()
+    launched = subprocess.run([sys.executable, *cli], input=stdin, capture_output=True, text=True, timeout=120,
+                              creationflags=NO_WINDOW, env=env)
+    launcher_wall = round(time.perf_counter() - t0, 4)
+    answer = _last_json(launched.stdout)
+    route = (launched.stderr.strip().splitlines() or [""])[-1]
+    row = codex_counted_run(engine, stdin, env)
+    decision = answer.get("hookSpecificOutput", {}).get("permissionDecision") if isinstance(answer, dict) else None
+    row.update(host="codex_cold_deny", case=case[0], answer=answer, route=route, denied=decision == "deny",
+               launcher_wall_secs=launcher_wall)
+    return row
+
+
+def _rmtree_force(path):
+    """rmtree that clears the read-only bit git sets on object files (Windows refuses to delete them)."""
+    def clear(func, target, _exc):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=clear)
+    else:
+        shutil.rmtree(path, onerror=clear)
+
+
+def codex_cold_deny_rows(work, fixture_base):
+    """`codex_cold_deny` rows: every case run from a fresh launcher process on an unreachable engine (empty settings
+    home and warm base). The one fixture repo lives under `fixture_base` (codex_fixture_base()), never under
+    `<repo>/scratch` or the system temp dir: destructive-rm and git clean exempt both, so a fixture there answers {}.
+    Wall time is reported, never gated."""
+    engine = live_engine_root()
+    env = cold_child_env(grok_fresh_env(work), work / "child-tmp")
+    case_root = fixture_base / f"codex-cold-{uuid.uuid4().hex[:8]}"
+    case_root.parent.mkdir(parents=True, exist_ok=True)
+    repo = case_root / "repo"
+    case_root.mkdir()
+    try:
+        prepare_codex_cold_repo(repo)
+        return [codex_cold_run(case, repo, engine, env) for case in CODEX_COLD_CASES]
+    finally:
+        _rmtree_force(case_root)
+
+
+ENGINE_CONVERGE_REL = ("machine-local", "engine-converge.json")
+PHASE_CASES = ("ls", "rm_rf")
+PHASE_RUNS = 5
+
+
+def deployed_engine_root():
+    """The deployed engine checkout: the `clone` key of `<COORDINATOR_SETTINGS_HOME>/machine-local/engine-converge.json`.
+    Unset home, or no readable `clone`: SettingsHomeKeyMissing naming the key or file."""
+    home = os.environ.get(SETTINGS_HOME_KEY)
+    if not home:
+        raise SettingsHomeKeyMissing(f"{SETTINGS_HOME_KEY} is unset: the deployed engine root resolves under it")
+    path = Path(home).joinpath(*ENGINE_CONVERGE_REL)
+    try:
+        clone = json.loads(path.read_text(encoding="utf-8")).get("clone")
+    except (OSError, ValueError, AttributeError):
+        clone = None
+    if not isinstance(clone, str) or not clone or not Path(clone).is_dir():
+        raise SettingsHomeKeyMissing(f"{path} holds no usable 'clone' key: the deployed engine root")
+    return clone
+
+
+def codex_phase_rows(work, fixture_base, engines):
+    """`codex_cold_phases` rows: for each `(label, engine_root)` in `engines` and each PHASE_CASES case, PHASE_RUNS fresh
+    CODEX_COLD_CODE processes forced cold (COORDINATOR_WARM=0, server autostart off, empty settings home and warm base).
+    Each run carries in_join_secs (process time), spawned_children and per-phase `phases`/`imports`; the row adds the
+    max of both gated figures. Process time on Windows ticks at ~15.6ms, so read a phase under that as noise."""
+    env = cold_child_env({**grok_fresh_env(work), "COORDINATOR_WARM": "0", "COORDINATOR_WARM_SERVER_AUTOSTART": "0"},
+                         work / "child-tmp")
+    case_root = fixture_base / f"codex-phase-{uuid.uuid4().hex[:8]}"
+    case_root.parent.mkdir(parents=True, exist_ok=True)
+    repo = case_root / "repo"
+    case_root.mkdir()
+    cases = [c for c in CODEX_COLD_CASES if c[0] in PHASE_CASES]
+    try:
+        prepare_codex_cold_repo(repo)
+        rows = []
+        for label, engine in engines:
+            for case in cases:
+                runs = [codex_counted_run(engine, json.dumps(codex_cold_payload(case, repo)), env)
+                        for _ in range(PHASE_RUNS)]
+                rows.append({"host": "codex_cold_phases", "engine": label, "engine_root": str(engine), "case": case[0],
+                             "in_join_secs_max": max(r.get("in_join_secs", -1) for r in runs),
+                             "spawned_children_max": max(r.get("spawned_children", -1) for r in runs), "runs": runs})
+        return rows
+    finally:
+        _rmtree_force(case_root)
+
+
 def run_child(argv, extra_flags=(), env=None):
     return subprocess.run([sys.executable, *extra_flags, "-c", GUARD_CHILD_CODE, *argv], capture_output=True,
                           text=True, timeout=120, creationflags=NO_WINDOW, env=env)
@@ -379,6 +653,12 @@ def guard_row(host, nag_parent=None):
 
 
 def main():
+    try:
+        fixture_base = codex_fixture_base()
+        deployed = deployed_engine_root()
+    except SettingsHomeKeyMissing as exc:
+        print(json.dumps({"error": "settings_home_key_missing", "key": SETTINGS_HOME_KEY, "detail": str(exc)}))
+        return 2
     scratch_parent = REPO / "scratch"
     scratch_parent.mkdir(exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="host-guard-cost-probe-", dir=scratch_parent))
@@ -403,6 +683,10 @@ def main():
         print(json.dumps(grok_fresh_row(work)))
         print(json.dumps(grok_live_row(work)))
         print(json.dumps(grok_live_row(work, lane=False)))
+        for row in codex_cold_deny_rows(work, fixture_base):
+            print(json.dumps(row))
+        for row in codex_phase_rows(work, fixture_base, (("repo", str(REPO)), ("deployed", deployed))):
+            print(json.dumps(row))
 
         guard_mod = load_sibling("unimatrix-host-guard")
         agy_mod = load_sibling("unimatrix-agy-hook-pretool")

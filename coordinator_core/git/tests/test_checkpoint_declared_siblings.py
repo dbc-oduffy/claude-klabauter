@@ -15,6 +15,8 @@ from coordinator_core.ops.dispatch_emit.run_hunk_claims import HunkSplit
 from coordinator_core.session import core as session_core
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 PLAN = "docs/plans/p.md"
 SELF = "cko-siblings"
 SPINE = """# plan

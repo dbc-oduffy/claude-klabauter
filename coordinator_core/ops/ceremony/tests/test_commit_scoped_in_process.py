@@ -76,17 +76,8 @@ def test_fast_path_diverged_batch_issues_no_cacheinfo_fanout(tmp_path, monkeypat
     # committed path on repeated `--cacheinfo` flags -- 25 paths, one spawn.
     # Asserting `== []` failed on that batch while a genuine 25-spawn
     # regression and a correct 1-spawn refresh were indistinguishable to it.
-    cacheinfo_calls = [a for a in argvs if len(a) > 1 and a[0] == "update-index" and "--cacheinfo" in a]
-    assert len(cacheinfo_calls) <= 1, (
-        "fast (spine-rewrite) path must never fan `update-index --cacheinfo` "
-        f"out per path -- got {len(cacheinfo_calls)} calls: {cacheinfo_calls}"
-    )
-    for call in cacheinfo_calls:
-        assert call.count("--cacheinfo") == 25, (
-            "the one permitted `--cacheinfo` call is bound 6's batched "
-            "shared-index refresh, which must carry every committed path -- "
-            f"got {call.count('--cacheinfo')} of 25"
-        )
+    # The shared-index refresh is an in-process splice (index_sync): no update-index spawn at all.
+    assert not any(a[:1] == ["update-index"] for a in argvs), argvs
     assert not any(a[:1] == ["read-tree"] for a in argvs)
     assert not any(a[:1] == ["write-tree"] for a in argvs)
     assert not any(a[:1] == ["commit-tree"] for a in argvs)
@@ -297,37 +288,24 @@ def test_ordinary_commit_pays_no_reconcile_spawn(tmp_path, monkeypatch):
 def test_a_reconcile_that_does_not_take_is_reported_not_swallowed(tmp_path, monkeypatch):
     repo = _archival_deletion_repo(tmp_path)
     msg_file = _write_msg(tmp_path, "remove gone.txt\n")
-
-    real_git_fn = git_native._git
-
-    def _decline_force_remove(args, **kwargs):
-        if "--force-remove" in args:
-            return git_native.GitResult(returncode=0, stdout="", stderr="")
-        return real_git_fn(args, **kwargs)
-
-    monkeypatch.setattr(git_native, "_git", _decline_force_remove)
+    _fail_shared_index_refresh(monkeypatch)
 
     result = git_native.commit_scoped(["gone.txt"], msg_file, repo)
 
     assert result.ok, "a reconciliation that did not take must not fail the landed commit"
     assert "gone.txt" in result.stderr
-    assert "still staged in .git/index" in result.stderr
-    assert "git update-index --force-remove -- gone.txt" in result.stderr
+    assert "sync-shared-index" in result.stderr
 
 
 def _fail_shared_index_refresh(monkeypatch) -> None:
-    """Make bound 6's batched `update-index --add --cacheinfo` exit non-zero,
-    as a peer holding `.git/index.lock` past the retry schedule would."""
-    real_git_fn = git_native._git
+    """Make the shared-index sync refuse, as a peer holding `.git/index.lock` past the retry
+    schedule would."""
+    from coordinator_core.git.index_sync import IndexSyncRefused
 
-    def _failing(args, **kwargs):
-        if args[:2] == ["update-index", "--add"] and "--cacheinfo" in args:
-            return git_native.GitResult(
-                returncode=128, stdout="", stderr="fatal: Unable to create '.git/index.lock'"
-            )
-        return real_git_fn(args, **kwargs)
+    def _refuse(*_a, **_k):
+        raise IndexSyncRefused("lock-busy", "index.lock exists")
 
-    monkeypatch.setattr(git_native, "_git", _failing)
+    monkeypatch.setattr(git_native, "sync_shared_index", _refuse)
 
 
 def test_failed_shared_index_refresh_warns_naming_paths_and_keeps_the_commit(
@@ -344,7 +322,7 @@ def test_failed_shared_index_refresh_warns_naming_paths_and_keeps_the_commit(
     assert result.ok, result.stderr
     assert _committed_content_at_head(repo, "a.txt") == "STAGED A\n"
     assert _committed_content_at_head(repo, "b.txt") == "STAGED B\n"
-    assert "shared .git/index refresh did not take" in result.stderr
+    assert "shared .git/index sync did not take" in result.stderr
     assert "a.txt" in result.stderr and "b.txt" in result.stderr
     assert "index.lock" in result.stderr
 

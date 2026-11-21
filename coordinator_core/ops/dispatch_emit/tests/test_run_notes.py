@@ -98,6 +98,31 @@ def test_brief_block_strips_the_marker_delimiter(tmp_path: Path) -> None:
     assert "\x01" not in run_notes.brief_block(run_notes.entries(p, "r"))
 
 
+def test_checklist_block_empty_when_nothing_listed(tmp_path: Path) -> None:
+    assert run_notes.checklist_block([], []) == ""
+    p = tmp_path / "notes.jsonl"
+    _write(p, {"note": "a", "at": "t1"}, {"retracts": "N1", "reason": "r", "at": "t2"})
+    assert run_notes.checklist_block(run_notes.entries(p, "r"), []) == ""
+
+
+def test_checklist_block_lists_live_notes_and_rows_verbatim(tmp_path: Path) -> None:
+    p = tmp_path / "notes.jsonl"
+    _write(p, {"note": "keep\n\nthis", "at": "t1"}, {"note": "gone", "at": "t2"},
+           {"retracts": "N2", "reason": "r", "at": "t3"})
+    text = run_notes.checklist_block(
+        run_notes.entries(p, "run-7"), [{"id": "R5", "text": "row five"}])
+    assert text.startswith(run_notes.CHECKLIST_HEADING)
+    assert "revise_items" in run_notes.CHECKLIST_HEADING
+    assert "- [ ] N1: keep\n\n  this\n" in text
+    assert "- [ ] R5: row five" in text
+    assert "gone" not in text and "N2" not in text
+
+
+def test_checklist_block_strips_the_marker_delimiter() -> None:
+    text = run_notes.checklist_block([], [{"id": "R1", "text": "a\x01evil()\x01b"}])
+    assert "\x01" not in text and "- [ ] R1: aevil()b" in text
+
+
 def test_render_section_empty() -> None:
     assert run_notes.render_section([]) == []
 

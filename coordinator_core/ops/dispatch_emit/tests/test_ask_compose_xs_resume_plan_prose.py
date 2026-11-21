@@ -10,7 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
-from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, unshare_regex_literals
 
 _NODE = shutil.which("node")
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
@@ -46,6 +46,7 @@ def test_the_composed_script_halts_a_prose_resume_plan_at_the_adoption_site(
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub", script_path="x.mjs",
         in_run_commit=True, **REVIEW_KW,
     )
+    script = unshare_regex_literals(script)
     halt = "gate resume_plan is not a repo-relative plan path"
     guarded = f"if ({ask_compose._RESUME_PLAN_SHAPE_JS}(_gate.resume_plan))"
     assert halt in script

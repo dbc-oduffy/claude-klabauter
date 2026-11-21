@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import subprocess
 
 import pytest
 import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ops import requirement_register as rr
-from coordinator_core.ops.dispatch_emit import ask_compose, ask_stage, requirements_ledger as rl, run_token
+from coordinator_core.ops.dispatch_emit import ask_compose, ask_stage, requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import REGISTER_ROWS_UNCLAIMED_REFUSAL
 from coordinator_core.ops.dispatch_emit.ask_stage_blocks import AskStageError
@@ -19,10 +18,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import SIZING_REL, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_refire_replans_register_and_token import _ROWS, _stage_repo
-from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
-pytestmark = [pytest.mark.spawns_process]
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -34,27 +31,6 @@ def _compose(monkeypatch, arm) -> str:
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",
         script_path="x.mjs", in_run_commit=True, **REVIEW_KW,
     )
-
-
-@pytest.mark.parametrize("tshirt", ["S", "M"])
-def test_live_revise_adding_a_row_is_neither_refused_nor_told_to_resize(repo, monkeypatch: pytest.MonkeyPatch, tshirt) -> None:  # noqa: F811
-    doc = {
-        "schema": "sizing-object", "name": "fixture", "intent": "Fix the thing",
-        "estimate": {"tshirt": tshirt, "provisional": True}, "route": "spec-dispatch",
-        "detents": [], "fork": None, "xl_exit": None, "status": "sized",
-        "premise": {"provenance": "not-applicable", "evidence": "fixture"},
-        "pm_verbatims": [{"turn": 0, "text": "fix the thing"}],
-        "exit_criterion": {"statement": "it works", "accepted": None},
-        "deliverable_id": "dlv-xs-abc123",
-    }
-    (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
-    rl.start(repo, "ra1")
-    rl.bind(repo, "ra1", SIZING_REL)
-    monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
-    out = rl._handler({"run_id": "ra1", "verbatim": "also refuse undeclared writes"}, repo_root=repo)
-    assert out["ok"] is True and out["refused"] == []
-    assert "resize" not in out and "no re-plan leg" not in out.get("warning", "")
 
 
 @pytest.mark.parametrize("arm", ["s", "xs", "m_plus"])

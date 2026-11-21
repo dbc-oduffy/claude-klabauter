@@ -76,7 +76,7 @@ def test_slow_pre_emit_worker_reaching_the_emit_after_the_answer_mints_nothing(r
     finally:
         hold.set()
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
-    assert "spooled as" in _reason(env)
+    assert "SPOOLED as" in _reason(env)
     assert drained.wait(10)
     assert _phantoms(repo) == []
 
@@ -106,7 +106,7 @@ def test_slow_emit_answered_nothing_taken_publishes_no_record_when_it_resumes(re
     finally:
         release.set()
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
-    assert "spooled as" in _reason(env)
+    assert "SPOOLED as" in _reason(env)
     assert done.wait(10)
     assert [type(e) for e in seen] == [run_token.RecordWriteCancelled]
     assert _phantoms(repo) == []

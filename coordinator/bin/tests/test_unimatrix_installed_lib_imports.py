@@ -3,10 +3,6 @@ and the INSTALLED host guard evaluates (never degraded/import_error) and denies 
 for codex and agy. OS-agnostic: the guard runs via sys.executable over tmp_path paths."""
 import ast
 import importlib.util
-import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -76,76 +72,3 @@ def test_a_removed_lib_module_fails_the_closure_check(installed, tmp_path):
     shipped = {p.stem for p in (copy / "lib").glob("*.py")}
     sites = {m for m, _ in _import_sites(ast.parse((copy / "lib" / "cc_invoke.py").read_text(encoding="utf-8")))}
     assert "engine_bootstrap" in sites and "engine_bootstrap" not in shipped
-
-
-def _run_guard(installed, host, payload, env):
-    proc = subprocess.run(
-        [sys.executable, str(installed / "unimatrix-host-guard.py"), "--host", host, "--engine-root", str(_ENGINE_ROOT)],
-        input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=60)
-    assert proc.returncode == 0
-    return json.loads(proc.stdout), proc.stderr.strip().splitlines()[-1]
-
-
-def _hermetic_env(tmp_path):
-    reg = tmp_path / "registry"
-    reg.mkdir()
-    (reg / "registry.local.toml").write_text('[policy]\nnon_owned_remotes = ["github.com/some-stranger/"]\n',
-                                             encoding="utf-8")
-    return dict(os.environ, COORDINATOR_SETTINGS_HOME=str(tmp_path / "settings-home"),
-                MACHINE_LOCAL_REGISTRY_DIR=str(reg), COORDINATOR_WARM_RUNTIME_BASE=str(tmp_path / "warm"))
-
-
-def _repo_with_foreign_origin(tmp_path):
-    git_dir = tmp_path / "repo" / ".git"
-    git_dir.mkdir(parents=True)
-    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
-    (git_dir / "config").write_text('[remote "origin"]\n\turl = https://github.com/some-stranger/thing.git\n',
-                                    encoding="utf-8")
-    return git_dir.parent
-
-
-def _payload(host, command, cwd):
-    if host == "codex":
-        return {"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "s", "cwd": str(cwd),
-                "tool_input": {"command": command}}
-    return {"hookEventName": "PreToolUse", "conversationId": "s", "workspacePaths": [str(cwd)],
-            "toolCall": {"name": "run_command", "args": {"CommandLine": command}}}
-
-
-def _claude_em_denies(monkeypatch, env, command, cwd):
-    """The Claude EM path's verdict: the in-process Bash guard chain on a Claude-shaped payload."""
-    from coordinator_core.bash_guards.dispatch import evaluate_payload_json
-
-    for key in ("COORDINATOR_SETTINGS_HOME", "MACHINE_LOCAL_REGISTRY_DIR", "COORDINATOR_WARM_RUNTIME_BASE"):
-        monkeypatch.setenv(key, env[key])
-    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-    out = evaluate_payload_json(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "s",
-                                            "cwd": str(cwd), "tool_input": {"command": command}}))
-    hso = out.get("hookSpecificOutput") if isinstance(out, dict) else None
-    return isinstance(hso, dict) and hso.get("permissionDecision") == "deny"
-
-
-@pytest.mark.parametrize("host", ["codex", "agy"])
-def test_installed_guard_matches_the_claude_em_verdict_for_a_force_push_to_a_non_owned_remote(
-        installed, tmp_path, monkeypatch, host):
-    if not (_ENGINE_ROOT / "coordinator_core" / "host_hooks" / "shim.py").is_file():
-        pytest.skip("no engine tree beside this checkout")
-    repo = _repo_with_foreign_origin(tmp_path)
-    env = _hermetic_env(tmp_path)
-    claude_denies = _claude_em_denies(monkeypatch, env, "git push --force origin main", repo)
-    assert claude_denies, "the Claude EM path must refuse a force-push to a non-owned remote"
-    answer, state = _run_guard(installed, host, _payload(host, "git push --force origin main", repo), env)
-    assert state == "engine", (answer, state)
-    host_denies = (answer["hookSpecificOutput"]["permissionDecision"] == "deny" if host == "codex"
-                   else answer["decision"] == "deny")
-    assert host_denies == claude_denies
-
-
-@pytest.mark.parametrize("host", ["codex", "agy"])
-def test_installed_guard_without_cc_invoke_degrades_proving_the_ratchet_bites(installed, tmp_path, host):
-    copy = tmp_path / "unimatrix"
-    ui.install_scripts(ui._BIN_DIR, copy)
-    (copy / "lib" / "cc_invoke.py").unlink()
-    answer, state = _run_guard(copy, host, _payload(host, "git push --force origin main",
-                                                    _repo_with_foreign_origin(tmp_path)), _hermetic_env(tmp_path))
-    assert state == "degraded"

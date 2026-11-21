@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 #: The spool envelope's own reason text; the benchmark's `spooled` flag keys on a different phrase.
-SPOOLED_TEXT = "spooled as"
+SPOOLED_TEXT = "SPOOLED as"
 
 
 def _spooled_reasons(res: dict) -> list:

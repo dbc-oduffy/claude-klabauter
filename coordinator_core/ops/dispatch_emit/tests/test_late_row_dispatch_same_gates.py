@@ -50,6 +50,8 @@ def test_late_rows_materialise_deferred_briefs_per_wave(monkeypatch) -> None:
     assert "sort((a, b) => a - b)" in late
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_a_revise_added_row_is_read_as_late_for_dispatch(repo, monkeypatch) -> None:  # noqa: F811
     doc = {
         "schema": "sizing-object", "name": "fixture", "intent": "Fix the thing",

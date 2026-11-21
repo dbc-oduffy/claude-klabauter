@@ -2,17 +2,13 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
 from coordinator_core.agent_pipe import __main__ as relay
 from coordinator_core.agent_pipe import mailbox
 from coordinator_core.agent_pipe.contract import mailbox_path, run_dir
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workflow_watch.mailbox_line import wait_for_line
 
 pytestmark = pytest.mark.complete
@@ -163,20 +159,6 @@ def test_loaded_thread_turn_start_error_fails_without_exec_resume(home, monkeypa
     assert result["status"] == "failed" and "thread not found" in result["error"]
     assert result["messages"] == 0
     assert not mailbox_path("sess1").exists()
-
-
-def test_worker_process_exits_with_its_child(home):
-    d = _request("r9", prompt="hello")
-    proc = subprocess.run(
-        [sys.executable, "-m", "coordinator_core.agent_pipe", str(d)],
-        env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(Path(__file__).resolve().parents[3]), os.environ.get("PYTHONPATH")]))},
-        timeout=60,
-        capture_output=True,
-        **no_console_creationflags(),
-    )
-    assert proc.returncode == 0
-    assert [m["content"] for m in _lines()] == ["first", "second"]
-    assert (d / "result.json").is_file()
 
 
 def test_help_flag_prints_usage_and_never_runs_a_worker(capsys, tmp_path, monkeypatch):

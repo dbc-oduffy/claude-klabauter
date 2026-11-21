@@ -53,6 +53,8 @@ def test_host_shell_follows_os():
     assert host_shell("posix") == POSIX
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("pwsh") is None, reason="pwsh not on PATH")
 def test_rendered_command_parses_in_powershell_and_posix_form_does_not():
     script = (

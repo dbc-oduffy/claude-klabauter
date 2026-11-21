@@ -86,21 +86,30 @@ def test_engine_down_or_error_is_neutral_fallback_with_degrade_row(monkeypatch: 
 
 
 def test_cold_chain_ran_without_deny_renders_agy_allow_and_a_raising_chain_falls_back_to_allow(monkeypatch: pytest.MonkeyPatch, rows) -> None:
-    from coordinator_core.host_hooks import tool_policy
+    from coordinator_core.host_hooks import cold_chain
 
     _engine(monkeypatch, None)
-    monkeypatch.setattr(tool_policy, "evaluate", lambda event: {"permissionDecision": "allow"})
+    monkeypatch.setattr(cold_chain, "evaluate", lambda event: {})
     assert shim.run("agy", json.dumps(AGY_LS)) == {"decision": "allow"}
 
     def boom(event):
         raise RuntimeError("chain exploded")
 
-    monkeypatch.setattr(tool_policy, "evaluate", boom)
+    monkeypatch.setattr(cold_chain, "evaluate", boom)
     answer = shim.run("agy", json.dumps(AGY_LS))
     assert answer["decision"] == "allow" and "ask" not in str(answer.values())
 
-    monkeypatch.setattr(tool_policy, "evaluate", lambda event: {"permissionDecision": "deny", "permissionDecisionReason": "no"})
+    monkeypatch.setattr(cold_chain, "evaluate", lambda event: {"permissionDecision": "deny", "permissionDecisionReason": "no"})
     assert shim.run("agy", json.dumps(AGY_LS))["decision"] == "deny"
+
+
+def test_cold_codex_apply_patch_reaches_the_write_guard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _engine(monkeypatch, None)
+    target = Path(tmp_path.anchor) / "zz-shim-new-dir" / "f.txt"
+    patch = "*** Begin Patch\n*** Add File: %s\n+x\n*** End Patch" % target
+    payload = {**CODEX_LS, "cwd": str(tmp_path), "tool_name": "apply_patch", "tool_input": {"command": patch}}
+    assert shim.run("codex", json.dumps({**payload, "agent_id": "sub-1"}))["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert shim.run("codex", json.dumps(payload)) == {}
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the shim dial budget against a sleeping engine; sleep burns no CPU")
@@ -302,11 +311,167 @@ def test_cold_subagent_write_gets_no_nag(monkeypatch: pytest.MonkeyPatch, nag_gu
 
 
 def test_cold_shell_advisory_still_not_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
-    import coordinator_core.host_hooks.tool_policy as tool_policy
+    import coordinator_core.host_hooks.cold_chain as cold_chain
 
     _engine(monkeypatch, None)
-    monkeypatch.setattr(tool_policy, "evaluate", lambda payload: {"additionalContext": NAG})
+    monkeypatch.setattr(cold_chain, "evaluate", lambda payload: {"additionalContext": NAG})
     assert shim.decide("codex", CODEX_LS) == {}
+
+
+def test_evaluation_warm_route_names_the_set_with_engine_verdicts(monkeypatch: pytest.MonkeyPatch) -> None:
+    _engine(monkeypatch, {"result": {}})
+    shim.take_evaluation()
+    shim.decide("codex", CODEX_LS)
+    assert shim.take_evaluation() == {
+        "route": "warm", "guards_evaluated": ["backstop"],
+        "verdicts": [{"guard": "backstop", "verdict": "engine"}], "chain": "backstop-only", "backstop_class": False}
+    assert shim.take_evaluation() is None
+
+
+@pytest.mark.parametrize("command", ["ls", "git stash list", "git stash list; cp a b", "git clean -fd"])
+def test_warm_and_cold_rows_for_one_command_list_identical_guard_names(
+        monkeypatch: pytest.MonkeyPatch, tmp_path, command) -> None:
+    payload = {**CODEX_LS, "cwd": str(tmp_path), "tool_input": {"command": command}}
+    _engine(monkeypatch, None)
+    shim.take_evaluation()
+    shim.decide("codex", payload)
+    cold = shim.take_evaluation()
+    _engine(monkeypatch, {"result": {}})
+    shim.decide("codex", payload)
+    warm = shim.take_evaluation()
+    assert (cold["route"], warm["route"]) == ("cold", "warm")
+    assert cold["guards_evaluated"] == warm["guards_evaluated"]
+    assert [v["guard"] for v in warm["verdicts"]] == warm["guards_evaluated"]
+
+
+def test_evaluation_cold_ls_names_backstop_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    _engine(monkeypatch, None)
+    shim.take_evaluation()
+    assert shim.decide("codex", CODEX_LS) == {}
+    assert shim.take_evaluation() == {
+        "route": "cold", "guards_evaluated": ["backstop"],
+        "verdicts": [{"guard": "backstop", "verdict": "allow"}], "chain": "backstop-only", "backstop_class": False}
+
+
+def test_evaluation_cold_chain_candidates_are_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.host_hooks import cold_chain
+
+    _engine(monkeypatch, None)
+    monkeypatch.setattr(cold_chain, "evaluate", lambda payload: {})
+    shim.take_evaluation()
+    shim.decide("codex", {**CODEX_LS, "tool_input": {"command": "git stash list"}})
+    assert shim.take_evaluation() == {
+        "route": "cold", "guards_evaluated": ["backstop", "block-stash-destruction"],
+        "verdicts": [{"guard": "backstop", "verdict": "allow"}, {"guard": "block-stash-destruction", "verdict": "unrecorded"}],
+        "chain": "full", "backstop_class": False}
+
+
+def test_evaluation_cold_chain_records_ordered_per_guard_verdicts(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    _engine(monkeypatch, None)
+    shim.take_evaluation()
+    command = "git stash list; cp a b"
+    shim.decide("codex", {**CODEX_LS, "cwd": str(tmp_path), "tool_input": {"command": command}})
+    evaluation = shim.take_evaluation()
+    assert evaluation["chain"] == "full"
+    assert [v["guard"] for v in evaluation["verdicts"]] == evaluation["guards_evaluated"]
+    assert evaluation["guards_evaluated"] == ["backstop", "block-stash-destruction", "guard-disk-fill"]
+    assert {v["verdict"] for v in evaluation["verdicts"]} <= {"allow", "deny", "raised"}
+
+
+def test_evaluation_backstop_deny_is_marked_backstop_only(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from coordinator_core.host_hooks import backstop
+
+    _engine(monkeypatch, None)
+    monkeypatch.setattr(backstop, "match", lambda event: {"permissionDecision": "deny", "permissionDecisionReason": "x"})
+    shim.take_evaluation()
+    shim.decide("codex", {**CODEX_LS, "cwd": str(tmp_path)})
+    assert shim.take_evaluation() == {
+        "route": "cold", "guards_evaluated": ["backstop"],
+        "verdicts": [{"guard": "backstop", "verdict": "deny"}], "chain": "backstop-only", "backstop_class": True}
+
+
+def test_evaluation_cold_non_backstop_class_deny_stays_full_chain(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from coordinator_core.host_hooks import cold_chain
+
+    _engine(monkeypatch, None)
+    monkeypatch.setattr(cold_chain, "evaluate", lambda payload: (
+        cold_chain._trace.append(("guard-disk-fill", "deny")) or {"permissionDecision": "deny", "permissionDecisionReason": "x"}))
+    shim.take_evaluation()
+    shim.decide("codex", {**CODEX_LS, "cwd": str(tmp_path), "tool_input": {"command": "cp a b"}})
+    evaluation = shim.take_evaluation()
+    assert evaluation["chain"] == "full" and evaluation["backstop_class"] is False
+
+
+def test_evaluation_real_backstop_deny_names_the_denying_guard(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(push_guard, "_configured_prefixes", lambda: ["github.com/stranger/"])
+    _engine(monkeypatch, None)
+    shim.take_evaluation()
+    shim.decide("codex", {**CODEX_LS, "cwd": str(tmp_path),
+                          "tool_input": {"command": "git push https://github.com/stranger/repo.git main"}})
+    evaluation = shim.take_evaluation()
+    assert evaluation["chain"] == "backstop-only" and evaluation["route"] == "cold" and evaluation["backstop_class"] is True
+    assert evaluation["verdicts"] == [{"guard": "backstop", "verdict": "deny"},
+                                      {"guard": "backstop:block-push-pr-non-owned-remote", "verdict": "deny"}]
+
+
+def test_warm_and_cold_routes_name_the_same_deny_class_guards(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from coordinator_core.host_hooks import cold_chain
+
+    payload = {**CODEX_LS, "cwd": str(tmp_path), "tool_input": {"command": "git stash list"}}
+    _engine(monkeypatch, None)
+    shim.take_evaluation()
+    shim.decide("codex", payload)
+    cold = shim.take_evaluation()
+    expected = cold_chain.shell_candidates("git stash list")
+    assert [g for g in cold["guards_evaluated"] if g != "backstop"] == expected
+    _engine(monkeypatch, {"result": {}})
+    shim.decide("codex", payload)
+    warm = shim.take_evaluation()
+    assert warm["route"] == "warm" and warm["chain"] == "full"
+    assert [g for g in warm["guards_evaluated"] if g != "backstop"] == expected
+
+
+def test_evaluation_is_overwritten_per_decide_not_accumulated(monkeypatch: pytest.MonkeyPatch) -> None:
+    _engine(monkeypatch, None)
+    shim.decide("codex", CODEX_LS)
+    _engine(monkeypatch, {"result": {}})
+    shim.decide("codex", CODEX_LS)
+    assert shim.take_evaluation() == {
+        "route": "warm", "guards_evaluated": ["backstop"],
+        "verdicts": [{"guard": "backstop", "verdict": "engine"}], "chain": "backstop-only", "backstop_class": False}
+
+
+@pytest.mark.parametrize("command", ["ls", "git clean -fdx"])
+def test_matched_warm_and_cold_traces_for_identical_payloads(
+        monkeypatch: pytest.MonkeyPatch, tmp_path, command) -> None:
+    payload = {**CODEX_LS, "cwd": str(tmp_path), "tool_input": {"command": command}}
+    _engine(monkeypatch, None)
+    shim.take_evaluation()
+    shim.decide("codex", payload)
+    cold = shim.take_evaluation()
+    _engine(monkeypatch, {"result": {}})
+    shim.decide("codex", payload)
+    warm = shim.take_evaluation()
+    assert cold["guards_evaluated"] == warm["guards_evaluated"] and cold["chain"] == warm["chain"]
+    if command == "ls":
+        assert cold["chain"] == "backstop-only" and cold["verdicts"] == [{"guard": "backstop", "verdict": "allow"}]
+    else:
+        assert cold["chain"] == "full" and cold["guards_evaluated"][0] == "backstop"
+        assert "destructive-git-clean" in cold["guards_evaluated"]
+
+
+def test_warm_deny_from_a_class_guard_reach_is_backstop_class_and_allow_is_not(
+        monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    payload = {**CODEX_LS, "cwd": str(tmp_path), "tool_input": {"command": "git clean -fdx"}}
+    deny = {"result": {"permissionDecision": "deny", "permissionDecisionReason": "x"}}
+    _engine(monkeypatch, deny)
+    shim.take_evaluation()
+    shim.decide("codex", payload)
+    warm_deny = shim.take_evaluation()
+    assert warm_deny["route"] == "warm" and warm_deny["chain"] == "full" and warm_deny["backstop_class"] is True
+    _engine(monkeypatch, {"result": {}})
+    shim.decide("codex", payload)
+    assert shim.take_evaluation()["backstop_class"] is False
 
 
 def test_main_without_host_exits_zero_with_empty_answer(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

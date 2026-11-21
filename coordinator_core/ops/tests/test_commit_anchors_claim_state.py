@@ -132,3 +132,18 @@ def test_no_claim_no_match_omits_anchor(tmp_path):
     anchor = _resolve_anchor(repo, _LIVE_CLAIMANT_SESSION_ID)
 
     assert anchor is None
+
+
+@pytest.mark.parametrize("shard", [False, True])
+def test_governing_slug_plan_resolves_flat_or_sharded(tmp_path, shard):
+    from coordinator_core.ops.commit_anchors import _resolve_plan_from_governing_slug
+
+    slug = "2026-11-20-hnd-x"
+    rel = f"docs/plans/2026-11/{slug}.md" if shard else f"docs/plans/{slug}.md"
+    plan = tmp_path / rel
+    plan.parent.mkdir(parents=True)
+    plan.write_text("---\nplan_id: pln-x\ndeliverable_id: dlv-x\n---\n", encoding="utf-8")
+
+    got = _resolve_plan_from_governing_slug(tmp_path, f" {slug} ")
+
+    assert got == {"path": rel, "plan_id": "pln-x", "deliverable_id": "dlv-x"}

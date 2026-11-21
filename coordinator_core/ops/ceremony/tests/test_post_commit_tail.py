@@ -739,3 +739,25 @@ def test_run_omits_delivery_proof_key_when_none(monkeypatch, tmp_path):
 
 
 
+
+
+@pytest.mark.parametrize("shard", [False, True])
+def test_run_origin_close_names_the_located_plan_path(tmp_path, shard):
+    slug = "2026-11-20-hnd-x"
+    rel = f"docs/plans/2026-11/{slug}.md" if shard else f"docs/plans/{slug}.md"
+    (tmp_path / rel).parent.mkdir(parents=True)
+    (tmp_path / rel).write_text("---\ntitle: x\n---\n", encoding="utf-8")
+    seen: list[dict] = []
+
+    async def _fake(params: dict, repo_root: Path) -> dict:
+        seen.append(dict(params))
+        return {"exit_code": 0, "closed": [], "skipped": [], "pairs_resolved": 0}
+
+    _run(
+        m.run(
+            tmp_path, tmp_path, "sid-1", "deadbeef",
+            governing_plan_slug=slug, initial_consumed=[], close_origin_stub_handler=_fake,
+        )
+    )
+
+    assert [p["plan_path"] for p in seen] == [rel]

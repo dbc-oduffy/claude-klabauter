@@ -2347,6 +2347,8 @@ def _prepare_index_splice(
                     f"{exc}; nothing committed, the index is untouched. Safe to retry."
                 ) from exc
             time.sleep(pause)
+        except index_write.UnsupportedIndexShape:
+            return index_write.GitIndexInfoPublish(repo, index_updates)
         except index_write.IndexWriteError as exc:
             raise CommitRefused(
                 f"the index splice could not be built: {exc}; nothing committed."

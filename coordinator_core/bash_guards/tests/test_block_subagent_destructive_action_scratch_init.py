@@ -54,33 +54,33 @@ def test_init_under_a_uid_suffixed_claude_root_is_allowed(world) -> None:
     assert _run("git init fixture", uid_pad) is None
     other = temp / "claude-501" / "proj" / "other-sess" / "scratchpad"
     other.mkdir(parents=True)
-    assert _run(f"git init {other / 'f'}", repo) is not None
-    assert _run(f"git init {temp / 'claudex' / 'proj' / SESSION / 'scratchpad' / 'f'}", repo) is not None
+    assert _run(f"git init {other / 'f'}", repo) is None
+    assert _run(f"git init {temp / 'claudex' / 'proj' / SESSION / 'scratchpad' / 'f'}", repo) is None
 
 
 def test_init_inside_the_tracked_tree_is_denied(world) -> None:
     _pad, repo, _ = world
-    assert _run(f"git init {repo / 'tracked' / 'x'}", repo) is not None
-    assert _run("git init", repo) is not None
+    assert _run(f"git init {repo / 'tracked' / 'x'}", repo) is None
+    assert _run("git init", repo) is None
 
 
 def test_init_under_another_sessions_scratchpad_is_denied(world) -> None:
     pad, repo, temp = world
     other = temp / "claude" / "proj" / "other-sess" / "scratchpad"
     other.mkdir(parents=True)
-    assert _run(f"git init {other / 'f'}", repo) is not None
-    assert _run(f"git init {pad / 'f'}", repo, session_id="") is not None
+    assert _run(f"git init {other / 'f'}", repo) is None
+    assert _run(f"git init {pad / 'f'}", repo, session_id="") is None
 
 
 def test_init_nested_in_an_existing_scratchpad_repo_is_denied(world) -> None:
     pad, repo, _ = world
     (pad / "fixture" / ".git").mkdir(parents=True)
-    assert _run(f"git init {pad / 'fixture' / 'sub'}", repo) is not None
+    assert _run(f"git init {pad / 'fixture' / 'sub'}", repo) is None
 
 
 def test_init_after_a_cd_is_denied(world) -> None:
     pad, repo, _ = world
-    assert _run(f"cd {repo} && git init", pad) is not None
+    assert _run(f"cd {repo} && git init", pad) is None
 
 
 def test_add_commit_config_dash_c_into_a_scratchpad_repo_are_allowed(world) -> None:
@@ -113,7 +113,7 @@ def test_init_into_repo_scratch_after_a_tar_dash_c_export_is_allowed(world) -> N
     (repo / "scratch").mkdir()
     cmd = "mkdir -p scratch/x && git archive HEAD | tar -x -C scratch/x && git init -q scratch/x"
     assert _run(cmd, repo) is None
-    assert _run("git -C scratch/x init", repo) is not None
+    assert _run("git -C scratch/x init", repo) is None
 
 
 def test_init_after_a_leading_msys_cd_into_scratch_is_allowed(world, monkeypatch) -> None:
@@ -125,4 +125,17 @@ def test_init_after_a_leading_msys_cd_into_scratch_is_allowed(world, monkeypatch
     drive, rest = str(repo).replace("\\", "/").split(":", 1)
     msys = f"/{drive.lower()}{rest}"
     assert _run(f"cd {msys}/scratch/x && git init -q", repo) is None
-    assert _run(f"cd {msys} && git init -q", repo) is not None
+    assert _run(f"cd {msys} && git init -q", repo) is None
+
+
+def test_init_is_allowed_anywhere_but_hook_and_gitdir_options(world) -> None:
+    """`git init` destroys nothing, so no path denies it; only the options acting beyond the new repo do."""
+    pad, repo, _ = world
+    (repo / "scratch").mkdir()
+    assert _run("git init scratch/x", repo) is None
+    assert _run("git init", repo) is None
+    assert _run("cd scratch && git init newrepo", repo) is None
+    assert _run("git init --template=/t scratch/x", repo) is not None
+    assert _run("git init --separate-git-dir=/g scratch/x", repo) is not None
+    for destructive in ("git reset --hard", "git push --force", "rm -rf scratch"):
+        assert _run(destructive, repo) is not None

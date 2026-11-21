@@ -19,6 +19,8 @@ from coordinator_core.host_hooks import shim
 from coordinator_core.invoke.__main__ import _dispatch_argv
 from coordinator_core.session import xs_lane_budget
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _SUBAGENT_ID = "01a1ec94-2eed-7c02-8753-e7f1d8e8ed56"
 _EM_THREAD = "01a1ec93-b27c-7ad2-a41b-a9f8482c599a"
 _NAG = "[em-code-dispatch nudge]"

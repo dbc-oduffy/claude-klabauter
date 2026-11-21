@@ -20,8 +20,10 @@ STATUS_LIMIT_EXHAUSTED = "limit_exhausted"
 STATUS_LOGIN_REQUIRED = "login_required"
 STATUS_CONFINEMENT_BREACH = "confinement_breach"
 STATUS_SCOPE_BREACH = "scope_breach"
+STATUS_POLICY_DENIAL = "policy_denial"
 STATUS_FAILED = "failed"
 STATUS = frozenset({
+    STATUS_POLICY_DENIAL,
     STATUS_OK,
     STATUS_LIMIT_EXHAUSTED,
     STATUS_LOGIN_REQUIRED,

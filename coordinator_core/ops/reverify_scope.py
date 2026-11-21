@@ -134,7 +134,7 @@ def _stem_index(rels: Iterable[str], in_scope) -> Dict[str, List[str]]:
         rel = ln.strip()
         if not rel:
             continue
-        name = PurePosixPath(rel).name
+        name = rel.rpartition("/")[2]
         js = _JS_TEST_STEM_RE.match(name)
         if js:
             index.setdefault(_JS_KEY + js.group(1), set()).add(rel)

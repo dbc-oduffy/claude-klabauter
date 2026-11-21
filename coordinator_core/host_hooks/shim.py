@@ -2,9 +2,10 @@
 
 Reads one hook payload on stdin, adapts it, asks the warm engine under a hard budget, and prints
 the host-shaped answer. No engine verdict (down, slow, error) falls to the engine-free backstop,
-then the in-process Claude guard chain for shell commands (deny only) and mapped file writes (deny or
-advisory); a verdict from either is the answer, otherwise the host's neutral fallback plus one degrade
-row. Any exception prints the neutral fallback and exits 0. Cold-start imports: stdlib and host_hooks only;
+then the in-process guards: the deny-class `cold_chain` for shell commands and `apply_patch` (deny only),
+the Claude write chain for other mapped file writes (deny or advisory); a verdict from either is the
+answer, otherwise the host's neutral fallback plus one degrade row. Any exception prints the neutral
+fallback and exits 0. Cold-start imports: stdlib and host_hooks only;
 warm.client and warm.telemetry load lazily.
 """
 from __future__ import annotations
@@ -104,17 +105,29 @@ _WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_p
 
 
 def _cold_verdict(event: HostEvent, engine_event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-    """The in-process Claude guard chain's answer for a shell command or a mapped file write, or None.
+    """The in-process guard answer for a shell command or a mapped file write, or None.
 
-    Runs only when the engine gave no verdict. A shell command forwards a deny only; a mapped write also
-    forwards the advisory (`additionalContext`, the DIY nag), so a cold engine treats a codex or agy EM
-    like the Claude path. A chain that ran and did not deny answers `{}`, an allow; None means the chain
-    did not run (other tools, a raise, a non-dict answer). A payload carrying `agent_id` gets the subagent
-    limits: the guards advise it nothing.
+    Runs only when the engine gave no verdict. A shell command and an `apply_patch` go through
+    `cold_chain`, the deny-class-only chain that fits the host guard's wall; they forward a deny only.
+    Any other mapped write runs the full Claude write chain and also forwards the advisory
+    (`additionalContext`, the DIY nag), so a cold engine treats a codex or agy EM like the Claude path.
+    A chain that ran and did not deny answers `{}`, an allow; None means the chain did not run (other
+    tools, a raise, a non-dict answer). A payload carrying `agent_id` gets the subagent limits: the
+    guards advise it nothing.
     """
     shell = event.tool_name in _SHELL_TOOLS
     if not shell and event.tool_name not in _WRITE_TOOLS:
         return None
+    if shell or event.tool_name == "apply_patch":
+        try:
+            from coordinator_core.host_hooks import cold_chain
+
+            answer = cold_chain.evaluate(dict(engine_event))
+        except Exception:  # noqa: BLE001 -- a raising chain is a miss, never a hook failure
+            return None
+        if not isinstance(answer, dict):
+            return None
+        return answer if answer.get("permissionDecision") == "deny" else {}
     try:
         from coordinator_core.host_hooks.tool_policy import evaluate
 
@@ -125,7 +138,7 @@ def _cold_verdict(event: HostEvent, engine_event: Mapping[str, Any]) -> Optional
         return None
     if verdict.get("permissionDecision") == "deny":
         return verdict
-    return {} if shell or not verdict.get("additionalContext") else verdict
+    return verdict if verdict.get("additionalContext") else {}
 
 
 def _nag_text(host: str, event: HostEvent, engine_event: Mapping[str, Any]) -> str:
@@ -159,6 +172,81 @@ def take_pending_nag() -> Optional[tuple]:
     taken = _pending[0] if _pending else None
     del _pending[:]
     return taken
+
+
+#: The last `decide`'s evaluation, one dict: route, guards_evaluated, verdicts (ordered [{"guard", "verdict"}]),
+#: chain, backstop_class. Read only through `take_evaluation`, which a caller clears before `run`: a bare read
+#: would see a previous or timed-out call's.
+_evaluation: list = []
+
+CHAIN_FULL = "full"
+CHAIN_BACKSTOP_ONLY = "backstop-only"
+#: Cold-chain guards whose deny the backstop's own classifiers also reach (`backstop.degrade_match`): a deny by
+#: one, or by the backstop itself, carries backstop_class true.
+_BACKSTOP_CLASS_GUARDS = frozenset({"destructive-rm", "destructive-git-clean", "block-stash-destruction"})
+
+
+def take_evaluation() -> Optional[Dict[str, Any]]:
+    """The last `decide`'s {route, guards_evaluated, verdicts, chain, backstop_class}, cleared; None if no `decide` reached an evaluation.
+
+    route is "warm" iff the dial returned the engine's verdict, else "cold". guards_evaluated names the
+    backstop and every cold_chain guard that ran; a warm answer names the same set with verdict "engine"
+    (the warm engine decided; per-guard outcomes are not reported), so warm and cold lists diff by name.
+    verdicts carries each outcome in run order. chain is reach only, on both routes: "full" iff evaluation
+    reached a guard beyond the backstop (a first-deny short circuit still qualifies), "backstop-only" iff only
+    the backstop was evaluated. backstop_class is true iff a deny came from the backstop or from a guard the
+    backstop classifiers also reach (`_BACKSTOP_CLASS_GUARDS`); it never changes chain. On the warm route
+    the denier is not reported, so it is true iff the engine denied and a class guard was in reach.
+    """
+    taken = _evaluation[0] if _evaluation else None
+    del _evaluation[:]
+    return taken
+
+
+def _note(route: str, verdicts: Optional[list] = None, backstop_class: bool = False) -> None:
+    rows = [{"guard": str(g), "verdict": str(v)} for g, v in (verdicts or [])]
+    reached = any(not r["guard"].startswith("backstop") for r in rows)
+    _evaluation[:] = [{"route": route, "guards_evaluated": [r["guard"] for r in rows], "verdicts": rows,
+                       "chain": CHAIN_FULL if reached else CHAIN_BACKSTOP_ONLY, "backstop_class": backstop_class}]
+
+
+def _chain_trace(event: HostEvent, engine_event: Mapping[str, Any], answer: Any) -> list:
+    """Ordered (guard, verdict) pairs for the in-process guards `_cold_verdict` just ran for this event."""
+    if event.tool_name == "Bash" or event.tool_name == "apply_patch":
+        try:
+            from coordinator_core.host_hooks import cold_chain
+
+            traced = cold_chain.take_trace()
+            if traced:
+                return traced
+        except Exception:  # noqa: BLE001 -- telemetry never breaks the hook
+            pass
+        names = _chain_guards(event, engine_event)
+        return [(n, "unrecorded") for n in names]
+    if event.tool_name in _WRITE_TOOLS:
+        deny = isinstance(answer, Mapping) and answer.get("permissionDecision") == "deny"
+        return [("tool_policy", "deny" if deny else "allow")]
+    return []
+
+
+def _chain_guards(event: HostEvent, engine_event: Mapping[str, Any]) -> list:
+    """Names of the in-process guards `_cold_verdict` runs for this event."""
+    if event.tool_name != "Bash" and event.tool_name not in _WRITE_TOOLS:
+        return []
+    try:
+        from coordinator_core.host_hooks import cold_chain
+
+        tool_input = engine_event.get("tool_input")
+        command = tool_input.get("command") if isinstance(tool_input, Mapping) else None
+        if event.tool_name == "Bash":
+            return cold_chain.shell_candidates(command, subagent=bool(engine_event.get("agent_id"))) \
+                if isinstance(command, str) else []
+        if event.tool_name == "apply_patch":
+            ran = isinstance(command, str) and any(m in command for m in cold_chain._PATCH_MARKERS)
+            return list(cold_chain.PATCH_DENY_GUARDS) if ran else []
+    except Exception:  # noqa: BLE001 -- telemetry never breaks the hook
+        return []
+    return ["tool_policy"]
 
 
 def _carries(obj: Any, text: str) -> bool:
@@ -206,6 +294,7 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
     adapter = _adapter(host)
     event: HostEvent = adapter.adapt_event(payload)
     engine_event = adapter.engine_event(event)
+    _note("cold")
     if engine_event is None:
         return adapter.render(event, {})
     if host == HOST_CODEX:
@@ -226,10 +315,20 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
             os.environ[_SESSION_ENV] = previous
     verdict = _verdict(response)
     if verdict is not None:
+        warm_guards = _chain_guards(event, engine_event)
+        nested = verdict.get("hookSpecificOutput")
+        warm_deny = "deny" in (verdict.get("permissionDecision"), verdict.get("decision"),
+                               nested.get("permissionDecision") if isinstance(nested, Mapping) else None)
+        _note("warm", [(g, "engine") for g in ["backstop"] + warm_guards],
+              warm_deny and any(g in _BACKSTOP_CLASS_GUARDS for g in warm_guards))
         return adapter.render(event, _with_nag(host, event, engine_event, verdict))
     from coordinator_core.host_hooks import backstop
 
     denied = backstop.match(event)
+    rows = [("backstop", "allow" if denied is None else "deny")]
+    if denied is not None:
+        rows += [("backstop:%s" % g, v) for g, v in backstop.take_trace() if v == "deny"]
+    _note("cold", rows, denied is not None)
     if denied is not None:
         return adapter.render(event, denied)
     # Trap: the nag must answer before the cold guard chain. That chain costs ~800ms of process time, so
@@ -239,6 +338,10 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
     if nag:
         return adapter.render(event, {"additionalContext": nag})
     cold = _cold_verdict(event, engine_event)
+    if cold is not None:
+        trace = _chain_trace(event, engine_event, cold)
+        denier = next((g for g, v in trace if v == "deny"), None)
+        _note("cold", [("backstop", "allow")] + trace, denier in _BACKSTOP_CLASS_GUARDS)
     if cold:
         return adapter.render(event, _with_nag(host, event, engine_event, cold))
     if timed_out:

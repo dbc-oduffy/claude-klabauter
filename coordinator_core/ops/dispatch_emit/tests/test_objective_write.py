@@ -14,7 +14,7 @@ from coordinator_core.ops.dispatch_emit import objective_write as ow
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 AXES = [{"id": "a", "claim": "c", "baseline": 5, "threshold": 2}]
 GOOD = (

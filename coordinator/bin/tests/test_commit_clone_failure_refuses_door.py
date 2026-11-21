@@ -15,7 +15,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from ._git_template import copy_repo, template_repo
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 _BIN = Path(__file__).resolve().parents[1]
 _SHA = "a" * 40

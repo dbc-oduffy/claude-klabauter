@@ -16,7 +16,7 @@ import pytest
 from coordinator_core import warp_fire
 from coordinator_core.hooks import submit_engine_ask as mod
 
-pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is required to run the rendered script")
+pytestmark = [pytest.mark.skipif(shutil.which("node") is None, reason="node is required to run the rendered script"), pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _render(tmp_path: Path, monkeypatch) -> str:

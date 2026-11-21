@@ -684,13 +684,36 @@ def _family_event_model(event: dict) -> str | None:
 _AGY_LOG_MODEL = re.compile(r'selected model override to backend: label="([^"]+)"')
 
 
-def _grok_envelope_model(raw: str) -> str | None:
-    """Model a grok --output-format json envelope ran: the modelUsage key with the most calls."""
+def _grok_envelope(raw: str) -> dict:
+    """Normalize Grok's one-shot envelope or its native text chunks and terminal end event."""
     try:
         envelope = json.loads(raw)
     except ValueError:
+        envelope = None
+    if isinstance(envelope, dict) and "type" not in envelope:
+        return envelope
+    chunks = []
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind == "text" and isinstance(event.get("data"), str):
+            chunks.append(event["data"])
+        elif kind == "end":
+            return {**event, "text": "".join(chunks) if chunks else None}
+    raise ValueError("grok emitted no terminal end event")
+
+
+def _grok_envelope_model(raw: str) -> str | None:
+    """The modelUsage key with the most calls in Grok's final receipt."""
+    try:
+        usage = _grok_envelope(raw).get("modelUsage")
+    except ValueError:
         return None
-    usage = envelope.get("modelUsage") if isinstance(envelope, dict) else None
     if not isinstance(usage, dict):
         return None
     named = [(name.strip(), row) for name, row in usage.items() if isinstance(name, str) and name.strip()]
@@ -922,8 +945,9 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
     try:
         if backend == "grok":
             allow = _RELAY_ALLOW if agent_type in _INVOKE_ONLY_AGENT_TYPES else "Bash"
+            output_format = "streaming-json" if agent_type == "coordinator:sizing-scout" else "json"
             return [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
-                    "--output-format", "json", "--permission-mode", "acceptEdits",
+                    "--output-format", output_format, "--permission-mode", "acceptEdits",
                     "--allow", allow, "--no-subagents", "--no-auto-update"]
         return family_stage_argv(resolve_agy(), log_file=str(artifact_dir / _AGY_LOG_NAME))
     except (GrokUnavailable, AgyUnavailable) as exc:
@@ -949,11 +973,10 @@ def _grok_child_path(env: dict[str, str]) -> str:
 
 
 def _family_text(backend: str, stdout: Path) -> str:
-    """Final response text of a grok (one json envelope) or agy (stream-json) run."""
+    """Final response text from a Grok or Agy receipt."""
     raw = stdout.read_text(encoding="utf-8", errors="replace")
     if backend == "grok":
-        envelope = json.loads(raw)
-        text = envelope.get("text") if isinstance(envelope, dict) else None
+        text = _grok_envelope(raw).get("text")
         if not isinstance(text, str):
             raise ValueError("grok envelope has no text")
         return text
@@ -979,7 +1002,7 @@ def _family_text(backend: str, stdout: Path) -> str:
 def _grok_cancellation(stdout: Path, stderr: Path) -> str | None:
     """A named error when the grok envelope reports stopReason cancelled, else None."""
     try:
-        envelope = json.loads(stdout.read_text(encoding="utf-8", errors="replace"))
+        envelope = _grok_envelope(stdout.read_text(encoding="utf-8", errors="replace"))
     except (OSError, ValueError):
         return None
     if not isinstance(envelope, dict) or str(envelope.get("stopReason", "")).lower() not in ("cancelled", "canceled"):

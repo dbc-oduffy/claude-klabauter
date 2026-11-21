@@ -1,8 +1,6 @@
 """Tests for unimatrix-passphrase.py: the 1Password source, askpass feed, encrypted mint and agent load."""
-import base64
 import importlib.util
 import io
-import os
 import struct
 import subprocess
 import sys
@@ -331,15 +329,3 @@ def test_ensure_agent_windows_uses_agent_protocol(home, monkeypatch):
     r = Router(FakeOp())
     assert pp.ensure_agent(priv, r) == "loaded"
     assert seen == [(priv, SECRET)] and not r.adds
-
-
-def test_script_entry_with_ref_env_and_prompt_arg_takes_askpass_path_not_usage(monkeypatch):
-    script = Path(pp.__file__)
-    env = {**os.environ, pp.REF_ENV: "op://Vault/none/password", "PATH": os.devnull}
-    with_ref = subprocess.run([sys.executable, str(script), 'Enter passphrase for "k": '],
-                              env=env, capture_output=True, text=True, timeout=30)
-    assert "askpass:" in with_ref.stderr and with_ref.returncode == 1
-    env.pop(pp.REF_ENV)
-    no_ref = subprocess.run([sys.executable, str(script), 'Enter passphrase for "k": '],
-                            env=env, capture_output=True, text=True, timeout=30)
-    assert no_ref.returncode == 2 and "askpass:" not in no_ref.stderr

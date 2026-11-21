@@ -2066,7 +2066,7 @@ def _second_parent_flags(pending: List[Tuple[Optional[str], str]]) -> Dict[Tuple
 #: or published, or move a ref off-box.
 _IRREVERSIBLE_UNRECOGNIZED_VERBS = frozenset(
     {
-        "gc", "prune", "prune-packed", "repack", "replace", "symbolic-ref", "clone", "init",
+        "gc", "prune", "prune-packed", "repack", "replace", "symbolic-ref", "clone",
         "mv", "rm", "archive", "merge-file", "apply", "send-pack", "receive-pack", "fast-import",
         "am", "revert", "checkout-index", "bisect", "submodule", "sparse-checkout", "maintenance",
         "update-index", "send-email", "imap-send", "http-push", "svn", "p4",
@@ -2627,9 +2627,9 @@ _REMOTE_MUTATING_SUBCOMMANDS = frozenset(
 #: a clone under `<repo>/scratch/` is a subagent's only place to merge a branch. While a
 #: `check()` call runs, this holds `(cwd, main_root, in_scratch_clone)` for the payload's cwd
 #: (None when the command re-points git with `cd`/`-C`/`--git-dir`/`--work-tree`, or names
-#: neither verb). `git clone` and `git init` are allowed only into `<main_root>/scratch/`, and a
+#: neither verb). `git clone` is allowed only into `<main_root>/scratch/`, and a
 #: non-ff `git merge` only when the cwd's own repo IS such a clone. The main checkout never
-#: gains any of them. `git init` of a throwaway tree is how a probe builds a fixture repo.
+#: gains any of them.
 _SCRATCH_CTX: "contextvars.ContextVar[Optional[tuple]]" = contextvars.ContextVar(
     "_subagent_scratch_clone_ctx", default=None
 )
@@ -2683,6 +2683,59 @@ def _same_repo_repoint(cmd: str, here: Path, root: Path) -> Optional[Path]:
     return dest if _repo_root_of(dest) == root else None
 
 
+_MERGE_VERB_RE = re.compile(r"\bgit\b.*\bmerge\b")
+_GIT_C_RE = re.compile(r"\bgit\s+(?:[^\s;&|]+\s+)*?-C\s")
+
+
+def _isolated_clone_repoint(cmd: str, cwd: str) -> Optional[tuple]:
+    """`(landing, session_root, True)` when every `git ... merge` in `cmd` is pointed by `-C` at one
+    directory whose enclosing repo (first `.git` dir or file walking up, no spawn) is not the
+    session's own repo: that merge moves only a separate clone's refs. None for any other shape."""
+    if _REPOINT_OTHER_RE.search(cmd) or re.search(r"(?:^|[\s;&|(])cd\s", cmd):
+        return None
+    for seg in _RAW_SEGMENT_SPLIT_RE.split(cmd):
+        if _MERGE_VERB_RE.search(seg) and not _GIT_C_RE.search(seg):
+            return None
+    here = Path(cwd).resolve()
+    session_root = _repo_root_of(here)
+    landed = set()
+    for m in _REPOINT_TARGET_RE.finditer(cmd):
+        target = m.group(1).strip("\"'").replace("\\", "/")
+        if not target or target.startswith("-") or any(c in target for c in "$`~*?"):
+            return None
+        path = Path(_msys_to_drive(target, os.name == "nt"))
+        try:
+            landed.add((path if path.is_absolute() else here / path).resolve())
+        except OSError:
+            return None
+    if len(landed) != 1:
+        return None
+    (dest,) = landed
+    root = _repo_root_of(dest)
+    if root is None or root == session_root or (session_root is not None and root in session_root.parents):
+        return None
+    return (dest, session_root or root, True)
+
+
+#: A local merge into any other branch is a recoverable write; only the trunk and release lines gate.
+#: The `release/` prefix is the repo's long-lived-branch convention (`auto_push._RECOGNIZED_LONG_LIVED`).
+_GATED_MERGE_BRANCHES = frozenset({"main", "master"})
+_GATED_MERGE_PREFIX = "release/"
+
+
+def _merge_target_gated() -> bool:
+    """True unless the merge lands on a readable, non-trunk, non-release branch. Fails closed: a
+    re-pointed or unresolvable cwd, a detached HEAD or an unreadable `.git/HEAD` stays gated. No spawn."""
+    ctx = _SCRATCH_CTX.get()
+    if ctx is None:
+        return True
+    ref = _checked_out_branch_ref(str(ctx[0]))
+    if ref is None:
+        return True
+    branch = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+    return branch in _GATED_MERGE_BRANCHES or branch.startswith(_GATED_MERGE_PREFIX)
+
+
 def _scratch_ctx_for(cmd: str, cwd: Optional[str]) -> Optional[tuple]:
     """`(cwd, main_root, in_scratch_clone)`, read off the filesystem (no spawn)."""
     if not cwd or not _SCRATCH_VERB_RE.search(cmd):
@@ -2692,7 +2745,7 @@ def _scratch_ctx_for(cmd: str, cwd: Optional[str]) -> Optional[tuple]:
         rest = cmd[lead.end():] if lead else ""
         target = _msys_to_drive(lead.group(1), os.name == "nt") if lead else ""
         if not lead or _REPOINTS_GIT_RE.search(rest) or not os.path.isabs(target):
-            return None
+            return _isolated_clone_repoint(cmd, cwd) if "merge" in cmd else None
         cwd = target
     here = Path(cwd).resolve()
     root = _repo_root_of(here)
@@ -2763,15 +2816,6 @@ def _with_backslashes_restored(remaining: List[str]) -> List[str]:
     return remaining
 
 
-def _clone_dest_in_session_scratchpad(dest_name: str) -> bool:
-    """`dest_name` lies under this session's scratchpad (absolute, or cwd-relative when the command
-    does not `cd`)."""
-    sp = _SP_CTX.get()
-    if sp is None or (sp[2] and not os.path.isabs(dest_name)):
-        return False
-    return _scratchpad_target(dest_name) is not None
-
-
 _REDIRECT_TOKEN_RE = re.compile(r"^(?:\d*|&)>>?(.*)$")
 _MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(?:/(.*))?$")
 
@@ -2824,46 +2868,6 @@ def _clone_operands(remaining: List[str]) -> Optional[Tuple[str, bool]]:
     return None
 
 
-def _clone_into_scratch(remaining: List[str]) -> bool:
-    operands = _clone_operands(remaining)
-    if operands is None or operands[1]:
-        return False
-    dest_name = operands[0]
-    return (
-        _dest_in_scratch(dest_name)
-        or _clone_dest_in_session_scratchpad(dest_name)
-        or _clone_dest_empty_or_absent(dest_name)
-    )
-
-
-def _clone_denial_text(remaining: List[str]) -> str:
-    """Names the stage that refused: the option, an unreadable operand list, a relative
-    destination whose cwd the command re-pointed away, or the destination itself."""
-    operands = _clone_operands(remaining)
-    if operands is None:
-        return (
-            "git clone (could not read exactly one url and one destination from the command; "
-            "pass `git clone [opts] <url> <dir>` with no other operands, and keep redirections off it)"
-        )
-    dest_name, refused = operands
-    if refused:
-        return "git clone (--template/--separate-git-dir/-u/--upload-pack/-c are refused)"
-    if (
-        _SCRATCH_CTX.get() is None
-        and not os.path.isabs(dest_name)
-        and not _DRIVE_ABS_RE.match(dest_name)
-    ):
-        return (
-            "git clone (relative destination, but the working directory is unknown because the "
-            "command re-points it with cd/-C/--git-dir/--work-tree or the payload carries no cwd; "
-            "use an absolute destination, or a single leading `cd <abs dir> &&`)"
-        )
-    return (
-        "git clone (destination must be an empty or absent directory, without "
-        "--template/--separate-git-dir/-u/--upload-pack/-c; clone into a fresh path)"
-    )
-
-
 _DRIVE_ABS_RE = re.compile(r"^[A-Za-z]:[/\\]")
 
 
@@ -2879,59 +2883,6 @@ def _checkout_index_into_scratch(remaining: List[str]) -> bool:
     if not prefix or any(c in prefix for c in "$`~"):
         return False
     return _dest_in_scratch(prefix)
-
-
-def _clone_dest_empty_or_absent(dest_name: str) -> bool:
-    """`dest_name` names no path yet or an empty directory: git writes nothing existing. A drive-
-    letter spelling (`F:/dev/x`) is absolute on every host; a relative one needs the payload cwd.
-    One stat/scandir probe, no spawn."""
-    dest_name = dest_name.replace("\\", "/")
-    if _DRIVE_ABS_RE.match(dest_name) or os.path.isabs(dest_name):
-        dest = Path(dest_name)
-    else:
-        ctx = _SCRATCH_CTX.get()
-        if ctx is None:
-            return False
-        dest = ctx[0] / dest_name
-    try:
-        if not os.path.lexists(dest):
-            return True
-        if not dest.is_dir() or dest.is_symlink():
-            return False
-        with os.scandir(dest) as it:
-            return next(it, None) is None
-    except OSError:
-        return False
-
-
-#: `git init` options that take a separate argument. `--template` copies hooks from a caller-
-#: chosen directory and `--separate-git-dir` plants the repo elsewhere; both are refused.
-_INIT_OPTS_WITH_ARG = frozenset({"-b", "--initial-branch", "--object-format", "--ref-format"})
-_INIT_REFUSED_OPTS = ("--template", "--separate-git-dir")
-
-
-def _init_into_scratch(remaining: List[str]) -> bool:
-    """`git init [opts] [<dir>]` where the new repo lands strictly under `<repo>/scratch/`;
-    a bare `git init` initialises the cwd, so it passes only from inside scratch."""
-    if _SCRATCH_CTX.get() is None:
-        return False
-    positionals: List[str] = []
-    skip = False
-    for tok in remaining:
-        if skip:
-            skip = False
-            continue
-        if tok.startswith(_INIT_REFUSED_OPTS):
-            return False
-        if tok in _INIT_OPTS_WITH_ARG:
-            skip = True
-            continue
-        if tok.startswith("-"):
-            continue
-        positionals.append(tok)
-    if len(positionals) > 1:
-        return False
-    return _dest_in_scratch(positionals[0] if positionals else ".")
 
 
 #: SESSION-SCRATCHPAD FIXTURE REPOS. `(cwd, session_id, repointed)` for the running `check()`;
@@ -2995,40 +2946,6 @@ def _scratchpad_target(raw: str) -> Optional[tuple]:
     if memo is not None:
         memo[raw] = target
     return target
-
-
-def _scratchpad_fixture_init(remaining: List[str]) -> bool:
-    """`git init [opts] [<dir>]` landing strictly under this session's scratchpad, with no
-    existing repo between the scratchpad and the new directory."""
-    ctx = _SP_CTX.get()
-    if ctx is None or ctx[2]:
-        return False
-    positionals: List[str] = []
-    skip = False
-    for tok in remaining:
-        if skip:
-            skip = False
-            continue
-        if tok.startswith(_INIT_REFUSED_OPTS):
-            return False
-        if tok in _INIT_OPTS_WITH_ARG:
-            skip = True
-            continue
-        if tok.startswith("-"):
-            continue
-        positionals.append(tok)
-    if len(positionals) > 1:
-        return False
-    target = _scratchpad_target(positionals[0] if positionals else ".")
-    if target is None:
-        return False
-    dest, sp = target
-    parent = os.path.dirname(dest)
-    while os.path.normcase(parent) != os.path.normcase(sp) and len(parent) > len(sp):
-        if os.path.exists(os.path.join(parent, ".git")):
-            return False
-        parent = os.path.dirname(parent)
-    return not os.path.exists(os.path.join(sp, ".git"))
 
 
 def _dash_c_value(seg: str) -> Optional[str]:
@@ -3105,7 +3022,7 @@ _NO_VERDICT = "\0no-verdict"
 
 # Master switch for the declared-delete marker channel (git rm / tracked rm admission and the
 # executor-brief marker line). Dormant by default.
-_DECLARED_DELETE_CHANNEL_LIVE = False
+from coordinator_core.bash_guards._declared_delete_license import DECLARED_DELETE_CHANNEL_LIVE as _DECLARED_DELETE_CHANNEL_LIVE
 
 #: DECLARED-DELETE ADMISSION. While a Bash-dialect `check()` runs on a command carrying the
 #: dispatch marker, holds `{"cmd", "cwd", "session_id", "license"}`; `license` memoises the
@@ -3562,15 +3479,23 @@ def _evaluate_git_segment_anchored(
         ctx = _SCRATCH_CTX.get()
         if ctx is not None and ctx[2]:
             return None
+        if not _merge_target_gated():
+            return None
         return "git merge (not --ff-only)"
     if subcmd == "clone":
-        if _clone_into_scratch(list(remaining or ())):
-            return None
-        return _clone_denial_text(list(remaining or ()))
+        # git itself refuses a non-empty destination, so the destination decides nothing here;
+        # only options that plant hooks, relocate `.git` or run a program are refused.
+        operands = _clone_operands(list(remaining or ()))
+        if operands is not None and operands[1]:
+            return "git clone (--template/--separate-git-dir/-u/--upload-pack/-c are refused)"
+        return None
     if subcmd == "init":
-        if _init_into_scratch(list(remaining or ())) or _scratchpad_fixture_init(list(remaining or ())):
-            return None
-        return "git init (only into <repo>/scratch/ or the session scratchpad)"
+        # Creates or re-initialises a repo and never rewrites history or objects: recoverable, so
+        # the path never decides. Only the two options that act on a repo beyond the new one stay
+        # refused: `--template` plants hooks, `--separate-git-dir` relocates an existing `.git`.
+        if any(t.startswith(("--template", "--separate-git-dir")) for t in remaining or ()):
+            return "git init (--template/--separate-git-dir are refused)"
+        return None
     if subcmd == "push":
         return None
     if subcmd in ("checkout", "switch"):
@@ -4158,7 +4083,7 @@ def _evaluate_git_segment_legacy(
             return None
         return "git pull (not --ff-only)"
     if _MERGE_WORD_RE.search(seg):
-        if _FF_ONLY_RE.search(seg):
+        if _FF_ONLY_RE.search(seg) or not _merge_target_gated():
             return None
         return "git merge (not --ff-only)"
     if _PUSH_WORD_RE.search(seg):

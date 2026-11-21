@@ -154,38 +154,6 @@ def test_rotate_on_cadence_checks_once_per_window_then_again(tmp_path: Path, mon
     assert len(calls) == 2
 
 
-def test_peer_holding_sink_open_never_holds_the_caller_past_the_bound(tmp_path: Path) -> None:
-    import subprocess
-    import sys
-    import time
-
-    sink = tmp_path / "x.jsonl"
-    _write(sink, b"a" * 1000)
-    code = (
-        "import sys,time\n"
-        "f = open(sys.argv[1], 'ab')\n"
-        "print('ready', flush=True)\n"
-        "time.sleep(30)\n"
-    )
-    child = subprocess.Popen(
-        [sys.executable, "-c", code, str(sink)],
-        stdout=subprocess.PIPE,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    try:
-        assert child.stdout.readline().strip() == b"ready"
-        t0 = time.monotonic()
-        result = rotate_if_needed(sink, threshold_bytes=1)
-        elapsed = time.monotonic() - t0
-        assert elapsed < 1.0
-        if os.name == "nt":
-            assert result is False
-            assert sink.exists()
-    finally:
-        child.kill()
-        child.wait()
-
-
 def test_stalled_chain_is_single_flight_and_later_call_returns_at_once(tmp_path: Path, monkeypatch) -> None:
     import threading
     import time

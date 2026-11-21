@@ -659,6 +659,33 @@ def _resolve_repo_root(repo_arg: Optional[str], cwd: str, params: Optional[dict]
 # Params parsing
 # ---------------------------------------------------------------------------
 
+
+def _invalid_params_message(text: str, exc: json.JSONDecodeError) -> str:
+    """Name the offending char and its neighbourhood; a bare JSONDecodeError gives only a column.
+
+    A shell that re-quotes inline JSON (PowerShell, cmd) corrupts the payload before this
+    parse, and the column alone cannot tell the caller whether the quote, a backslash or a
+    truncation broke it. `repr` keeps an invisible char (BOM, NUL) visible.
+    """
+    pos = exc.pos
+    found = repr(text[pos]) if pos < len(text) else "end of input"
+    near = repr(text[max(0, pos - 40) : pos + 40])
+    # _loads_params repairs lone backslashes, then re-raises the ORIGINAL error when the retry
+    # still fails; a value ending in one backslash is the repair-proof cause, because `\"` is
+    # a valid escape that swallows the closing quote.
+    swallowed = re.search(r'\\"\s*[,}\]:]', text)
+    hint = (
+        f" The `\\\"` at char {swallowed.start()} escapes the closing quote; double a path's final backslash."
+        if swallowed
+        else ""
+    )
+    return (
+        f"Invalid params_json: {exc.msg} at char {pos} (line {exc.lineno} column {exc.colno}), "
+        f"found {found}, near {near}.{hint} A shell re-quotes inline JSON; write the object to a "
+        "file and pass --params-file <path>."
+    )
+
+
 # A backslash plus the escape JSON defines for it, else a lone backslash.
 _BACKSLASH_RE = re.compile(r'\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|\\')
 
@@ -1190,7 +1217,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         else:
             params = _loads_params(params_json_str)
     except json.JSONDecodeError as exc:
-        _fatal_stderr(f"Invalid params_json: {exc}")
+        _fatal_stderr(_invalid_params_message(params_json_str, exc))
 
     if not isinstance(params, dict):
         _fatal_stderr(

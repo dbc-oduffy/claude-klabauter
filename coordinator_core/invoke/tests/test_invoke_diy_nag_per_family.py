@@ -15,6 +15,8 @@ import pytest
 
 from coordinator_core.invoke.__main__ import _dispatch_argv
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _OP = "baton.close_report"
 

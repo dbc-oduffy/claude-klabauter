@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -143,6 +144,55 @@ def _stage_finds_its_run_script(request: pytest.FixtureRequest):
         yield
     finally:
         twin.ensure_twin = real
+
+
+_SHARED_DECL = re.compile(
+    r"^ *const (?:_PF\w+|_RX\d+|_agentHead\d*|_agentRead|_testOwed|_testUnproven|_locatePlan|_owedHandback|_targetedTests|_docPaths|_testRan) = .*;$",
+    re.M,
+)
+
+
+def shared_decls(script: str) -> str:
+    """The composer's shared top-level helpers (regex literals, prompt openings, repeated expressions) as the script declares them.
+
+    A harness that runs a carved fragment of the script prepends this, as it prepends its own stubs of the
+    run-time bindings the fragment reads.
+    """
+    return "\n".join(m.group(0).strip() for m in _SHARED_DECL.finditer(script))
+
+
+def unshare_regex_literals(script: str) -> str:
+    """Inline each shared `_RXn` regex constant back into its use sites, so a test reads the literal the composer wrote."""
+    for m in re.finditer(r"^const (_RX\d+) = (/.*/[a-z]*);\n", script, re.M):
+        script = script.replace(m.group(0), "").replace(m.group(1), m.group(2))
+    return script
+
+
+def unshare_agent_head(script: str) -> str:
+    """Inline each shared `_agentHead*` arrow back into its call sites, so a test reads the prompt text a leg carries."""
+    for m in re.finditer(r"^const (_agentHead\d*) = \(\) => (.*);\n", script, re.M):
+        script = script.replace(m.group(0), "").replace(f"{m.group(1)}()", m.group(2))
+    return script
+
+
+_BLITZ_DECL = re.compile(r"^const _blitzCall = \(_pp\) => (planBlitz\(\{.*?planPath: )_pp(, executionOpen: true \}\] \}\));\n", re.M)
+
+
+def unshare_blitz_call(script: str) -> str:
+    """Inline the shared `_blitzCall(planPath)` arrow back into each call site, so a test reads the `planBlitz({...})` text a leg carries."""
+    m = _BLITZ_DECL.search(script)
+    if not m:
+        return script
+    head, tail = m.group(1), m.group(2)
+    body = script[: m.start()] + script[m.end() :]
+    return re.sub(r"_blitzCall\((.+?)\);", lambda c: head + c.group(1) + tail + ";", body)
+
+
+def compose_ask_script(*args, **kwargs) -> str:
+    """`compose_ask_script` with the shared plan-blitz call inlined; for tests that assert on that call's text."""
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    return unshare_blitz_call(ask_compose.compose_ask_script(*args, **kwargs))
 
 
 def execute_section(script: str) -> str:

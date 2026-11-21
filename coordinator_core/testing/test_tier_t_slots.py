@@ -124,67 +124,6 @@ def test_read_path_never_raises_on_a_broken_state_dir(monkeypatch):
     assert tier_t_slots.occupancy()[0] == 0
 
 
-@pytest.fixture
-def foreign_suite_holder():
-    import subprocess
-    import sys
-
-    from coordinator_core.testing import suite_mutex
-    from coordinator_core.win_portability import no_console_creationflags
-
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], **no_console_creationflags())
-    assert suite_mutex.acquire("other-session", "pytest -n 4", 0.0, pid=child.pid)
-    try:
-        yield child
-    finally:
-        suite_mutex.release("other-session")
-        child.kill()
-        child.wait()
-
-
-def test_acquire_takes_no_slot_while_a_foreign_session_holds_the_suite_mutex(foreign_suite_holder):
-    assert tier_t_slots.acquire_slot("late", "pytest a.py", 0.3) is None
-    assert tier_t_slots.free_slots() == tier_t_slots.slot_cap()
-
-
-def test_blocker_names_the_live_foreign_suite_holder(foreign_suite_holder):
-    blocker = tier_t_slots.suite_mutex_blocker()
-    assert blocker is not None
-    assert blocker["owner"] == "other-session"
-    assert blocker["pid"] == foreign_suite_holder.pid
-
-
-def test_blocker_is_none_for_a_dead_suite_holder():
-    import subprocess
-    import sys
-
-    from coordinator_core.testing import suite_mutex
-    from coordinator_core.win_portability import no_console_creationflags
-
-    child = subprocess.Popen([sys.executable, "-c", "pass"], **no_console_creationflags())
-    child.wait()
-    assert suite_mutex.acquire("ghost", "pytest", 0.0, pid=child.pid)
-    try:
-        assert tier_t_slots.suite_mutex_blocker() is None
-        assert tier_t_slots.acquire_slot("late", "pytest a.py", 0.0) is not None
-    finally:
-        suite_mutex.release("ghost")
-
-
-def test_acquire_waits_then_succeeds_when_the_suite_mutex_is_released(foreign_suite_holder):
-    import threading
-
-    from coordinator_core.testing import suite_mutex
-
-    timer = threading.Timer(0.4, lambda: suite_mutex.release("other-session"))
-    timer.start()
-    try:
-        slot = tier_t_slots.acquire_slot("late", "pytest a.py", 10.0)
-    finally:
-        timer.join()
-    assert slot is not None
-
-
 def test_suite_mutex_holder_own_run_is_exempt():
     from coordinator_core.testing import suite_mutex
 

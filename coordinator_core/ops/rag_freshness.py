@@ -127,9 +127,9 @@ def verdict_from_reply(reply: object, slugs: Sequence[str]) -> FreshnessVerdict:
 def detach_kwargs(os_name: Optional[str] = None) -> dict:
     """Popen keyword arguments that detach the child, per platform."""
     if (os_name or os.name) == "nt":
+        # Trap: DETACHED_PROCESS must not be ORed in; Win32 then ignores CREATE_NO_WINDOW.
         flags = (
-            getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
             | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         )
         return {"creationflags": flags}

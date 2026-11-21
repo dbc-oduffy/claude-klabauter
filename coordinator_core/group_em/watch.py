@@ -1631,6 +1631,87 @@ def _memory_tick(
         return None
 
 
+def _job_ram_mb(pids: list) -> Optional[float]:
+    """Measured peak working set (MiB) summed over the live ``pids``; None when none can be read."""
+    try:
+        import psutil
+    except ImportError:
+        return None
+    total, seen = 0, False
+    for pid in pids:
+        try:
+            info = psutil.Process(int(pid)).memory_info()
+        except (psutil.Error, OSError, ValueError, TypeError):
+            continue
+        total += getattr(info, "peak_wset", None) or info.rss
+        seen = True
+    return round(total / (1024 * 1024), 1) if seen else None
+
+
+def _capacity_jobs(vram_by_pid: dict) -> list:
+    """One job row per open admission run: measured RAM and VRAM of its pids, never a made-up zero."""
+    from coordinator_core.group_em import admission_post
+
+    records = _open_run_records(str(admission_post.admission_path())) or []
+    jobs = []
+    for rec in records:
+        pids = rec.get("pids") if isinstance(rec.get("pids"), list) else []
+        vram = [vram_by_pid[p] for p in pids if p in vram_by_pid]
+        cores = rec.get("cores")
+        jobs.append(
+            {
+                "run": rec.get("run"),
+                "job_type": rec.get("job_type") or rec.get("run"),
+                "session_id": rec.get("session_id"),
+                "peak_ram_mb": _job_ram_mb(pids),
+                "peak_vram_mib": sum(vram) if vram else None,
+                "cores": cores if isinstance(cores, int) and cores >= 1 else None,
+            }
+        )
+    return jobs
+
+
+def _capacity_sample() -> dict:
+    """This box's measured resources: RAM, cores, load, GPU and the open runs' peaks. No spawn."""
+    from coordinator_core.group_em import gpu_sample
+    from coordinator_core.telemetry import host_sampler
+
+    try:
+        from coordinator_core.bash_guards import _heavy_command_class as hcc
+
+        physical = hcc._load_box_memory_host().physical_cores()
+    except Exception:
+        physical = os.cpu_count() or 1
+    avail, total = host_sampler.avail_mb()
+    cpu_load = host_sampler.read_load().get("cpu_load")
+    reading = gpu_sample.sample()
+    sample = {
+        "os": gpu_sample.host_system(),
+        "arch": gpu_sample.host_arch(),
+        "cores_physical": physical,
+        "cores_logical": os.cpu_count(),
+        "load_pct": None if cpu_load is None else round(cpu_load * 100.0, 1),
+        "ram_total_mb": total,
+        "ram_avail_mb": avail,
+        "jobs": _capacity_jobs(reading.get("vram_by_pid") or {}),
+    }
+    if "gpus" in reading:
+        sample["gpus"] = reading["gpus"]
+    else:
+        sample["gpu_unavailable"] = reading.get("gpu_unavailable")
+    return sample
+
+
+def capacity_tick() -> bool:
+    """Stamp this box's capacity record; False when the read or write failed. Never raises."""
+    from coordinator_core.group_em import capacity_record
+
+    try:
+        return capacity_record.stamp(_capacity_sample())
+    except Exception:
+        return False
+
+
 def tick_once(
     repo_root: str,
     caller_session_id: Optional[str] = None,
@@ -1722,6 +1803,7 @@ def tick_once(
     # pins that emission does not depend on persistence succeeding).
     load_state = _load_alarm_tick(repo_root, emit)
     memory_state = _memory_tick(repo_root, emit)
+    capacity_tick()
     prior_links = _load_prev_record(repo_root).get("links")
     link_state = link_tick(prior_links if isinstance(prior_links, dict) else None, emit)
     save_prev_parked(
@@ -2011,6 +2093,12 @@ REMOTE_ADMISSION_TAIL_BYTES = 65536
 
 def _open_runs(admission_file: str) -> Optional[list]:
     """START lines with no later END for the same (session_id, run), from a bounded tail; None if unreadable."""
+    records = _open_run_records(admission_file)
+    return None if records is None else [(r.get("session_id"), r.get("run")) for r in records]
+
+
+def _open_run_records(admission_file: str) -> Optional[list]:
+    """The open START records themselves (same bounded tail as `_open_runs`); None if unreadable."""
     try:
         with open(admission_file, "rb") as fh:
             size = fh.seek(0, os.SEEK_END)
@@ -2035,7 +2123,7 @@ def _open_runs(admission_file: str) -> Optional[list]:
             open_runs[key] = rec
         elif rec.get("phase") == "END":
             open_runs.pop(key, None)
-    return list(open_runs)
+    return list(open_runs.values())
 
 
 def remote_box_rows(directory=None) -> list:

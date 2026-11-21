@@ -9,7 +9,7 @@ import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
-from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused, compose_ask_script
+from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     NO_PLAN_HAND_OFF_FLAG,
@@ -25,6 +25,7 @@ from coordinator_core.roadmap.post_stamp_clause import (
     SUITE_TIER_SPELLINGS,
     suite_tier_refusal,
 )
+from coordinator_core.ops.dispatch_emit.tests.conftest import compose_ask_script
 
 
 def _stub_wrap(text):

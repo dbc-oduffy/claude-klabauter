@@ -19,6 +19,9 @@ from coordinator_core.warm import server
 from coordinator_core.warm.tests.test_server_loop import _FakeVersionState, _frame
 from coordinator_core.win_portability import no_console_creationflags
 
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 psutil = pytest.importorskip("psutil")
 
 _OP = "proc.stop_own_child"
