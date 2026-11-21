@@ -139,7 +139,7 @@ def test_a_symbol_only_in_a_peers_uncommitted_dirt_is_a_typed_co_tenant_dependen
     assert not peer.exists() or peer.read_bytes().replace(b"\r\n", b"\n") == head_peer
 
 
-@pytest.mark.parametrize("change", ["add-registration", "remove-definition", "direct-import", "new-name"])
+@pytest.mark.parametrize("change", ["add-registration", "remove-definition", "direct-import", "new-name", "clean-submodule"])
 def test_export_holds_a_dirty_parent_package_at_head_and_refuses_only_a_missing_name(tmp_path, change):
     root = _repo(tmp_path)
     parent = "coordinator_core/ops/__init__.py"
@@ -155,7 +155,7 @@ def test_export_holds_a_dirty_parent_package_at_head_and_refuses_only_a_missing_
     dirty = 'REGISTRATIONS = ("existing", "rulings.*", "group_em_fleet_capacity")\nNEW_ONLY = 1\n'
     _write(root, parent, "# registration removed\n" if change == "remove-definition" else dirty)
     guard = "from coordinator_core.ops._path_guard import safe_id\n"
-    names = {"direct-import": "REGISTRATIONS", "new-name": "NEW_ONLY"}
+    names = {"direct-import": "REGISTRATIONS", "new-name": "NEW_ONLY", "clean-submodule": "_path_guard"}
     _write(root, importer, (f"from coordinator_core.ops import {names[change]}\n" if change in names else "") + guard)
     _manifest(root, [importer])
 

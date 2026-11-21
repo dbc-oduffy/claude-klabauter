@@ -1172,8 +1172,20 @@ def _check_overlay_imports(root: Path, overlay: Sequence[str]) -> None:
             raise CoTenantDependency(rel, target, names[0] if names else module, "not in HEAD")
         have = defined.setdefault(target, _defined_names(data))
         for name in names:
-            if name not in have and modules.get(f"{module}.{name}") is None:
+            if name not in have and modules.get(f"{module}.{name}") is None and not _clean_submodule(root, module, name, changed):
                 raise CoTenantDependency(rel, target, name, "absent at HEAD")
+
+
+def _clean_submodule(root: Path, package: str, name: str, changed: Collection[str]) -> bool:
+    """`from package import name` where `name` is a submodule on disk with no dirt: the export holds it at its
+    HEAD bytes, so the dirty package `__init__` never had to define it.
+
+    Trap: without this, any dirt in a package `__init__` refused every importer of a sibling submodule
+    (bf2f0d f4e08e: `from coordinator_core.ops import method_step` read as a name ops/__init__.py lacks)."""
+    stem = package.replace(".", "/") + "/" + name
+    return any(
+        rel not in changed and (root / rel).is_file() for rel in (f"{stem}.py", f"{stem}/__init__.py")
+    )
 
 
 def _mirror_env(env: dict, dest: Path) -> dict:

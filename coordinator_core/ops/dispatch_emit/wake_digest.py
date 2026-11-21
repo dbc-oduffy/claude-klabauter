@@ -672,12 +672,6 @@ def completion_return_js(
         if test_var is not None
         else f"{owed_ids_js}.length"
     )
-    outcome_expr = (
-        f"({RUNTIME_VARS[4]} ? 'halted' : "
-        f"(({RUNTIME_VARS[0]}.length || {RUNTIME_VARS[1]}.length || {RUNTIME_VARS[3]}.length{routed_out_or} || {owed_unverified_js}) ? 'incomplete' : 'completed'))"
-    )
-    completed_expr = f"({outcome_expr} === 'completed')"
-
     seam_drift_expr = (
         f"(Object.keys({COMMIT_REFUSED_VAR}).length ? 'wave commit failed, dependents held (the terminal commit lands the wave): ' "
         f"+ Object.values({COMMIT_REFUSED_VAR}).join('; ') "
@@ -724,6 +718,12 @@ def completion_return_js(
         + "))))))))"
         + ("))" if seam else "")
     )
+
+    outcome_expr = (
+        f"({RUNTIME_VARS[4]} ? 'halted' : "
+        f"(({RUNTIME_VARS[0]}.length || {RUNTIME_VARS[1]}.length || {RUNTIME_VARS[3]}.length{routed_out_or} || {owed_unverified_js} || {decision_required_expr}) ? 'incomplete' : 'completed'))"
+    )
+    completed_expr = f"({outcome_expr} === 'completed')"
 
     # A row an executor reported PARTIAL/BLOCKED (or answered without a status)
     # has WRITTEN files; only a row the halt kept from starting never did. Each
