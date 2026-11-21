@@ -111,3 +111,25 @@ def test_ac4_shared_tree_blanket_add_still_denied(repos, tmpl: str) -> None:
 def test_ac5_unresolvable_cd_target_falls_back_to_session_cwd(repos, tmpl: str) -> None:
     _, scratch = repos
     assert _denied(tmpl.format(s=scratch))
+
+
+def test_blanket_add_exempts_scratch_clone_even_when_registered(tmp_path, monkeypatch):
+    live = _init(tmp_path / "live")
+    clone = live / "scratch" / "fixture clone"
+    clone.parent.mkdir()
+    subprocess.run(
+        ["git", "clone", "--local", "-q", str(live), str(clone)],
+        cwd=live, check=True, capture_output=True, **no_console_creationflags(),
+    )
+    monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: True)
+    monkeypatch.chdir(live)
+
+    assert _denied("git add -A")
+    assert _denied("cd scratch && git add -A")
+    assert not _denied(f'git -C "{clone}" add -A')
+    assert not _denied(f'cd "{clone}" && git add -A')
+    assert not _denied('git -C scratch -C "fixture clone" add -A')
+    assert _denied(f'git -C "{clone}" --git-dir "{live / ".git"}" add -A')
+    assert _denied(f'git -C "{clone}" add -A; git add -A')
+    monkeypatch.chdir(clone)
+    assert _denied(f'git -C "{live}" add -A')

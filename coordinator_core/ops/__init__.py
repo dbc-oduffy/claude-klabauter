@@ -193,6 +193,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.abandoned_runs", 'registers "dispatch.reap_abandoned_runs"'),
     ("coordinator_core.ops.dispatch_emit.orphan_adopt", 'registers "dispatch.adopt_orphaned_run"'),
     ("coordinator_core.ops.dispatch_emit.halted_rows_commit", 'registers "dispatch.commit_halted_rows"'),
+    ("coordinator_core.ops.dispatch_emit.restore_evicted_op", 'registers "dispatch.restore_evicted"'),
     ("coordinator_core.ops.dispatch_emit.merge_commit", 'registers "dispatch.commit_merge"'),
     ("coordinator_core.ops.dispatch_emit.slice_supersede", 'registers "dispatch.supersede_slice"'),
     ("coordinator_core.ops.dispatch_emit.halted_run_landed", 'registers "dispatch.record_halted_run_landed"'),

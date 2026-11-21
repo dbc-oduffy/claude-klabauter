@@ -200,6 +200,7 @@ def _emit_time_script(*, in_run_commit: bool = False, sizing_rel: str | None = N
 
 
 def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], m_plus_known_arm) -> None:
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "test-parked-after-plan")
     scout, decision, verdict, rel = e2e._fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
     stub = {**e2e._stub(scout, decision, verdict), "gate": verdict}
     out = e2e._run_script(_emit_time_script(sizing_rel=rel), stub)

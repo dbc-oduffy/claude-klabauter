@@ -57,6 +57,23 @@ def test_the_stored_script_is_a_top_level_run_that_keeps_its_stage_reader(repo, 
     assert "workflow({ scriptPath: reader })" in script
 
 
+def test_row_resume_leaves_restore_to_stage_after_row_selection(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+    from coordinator_core.ops.dispatch_emit.ask_contract import ResumePlan
+    from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
+
+    _halt(repo, monkeypatch)
+    record = record_dir(repo, RUN)
+    (record / "evicted.json").write_text("{}", encoding="utf-8")
+    (record / WITHHELD_OWN_DELTA_FILE).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sizing_fire, "resumable_plan", lambda *a, **kw: ResumePlan("docs/plans/resume.md", ("C1",)))
+
+    result = hrb.build(repo, RUN)
+
+    script = (repo / result["composed_script_rel"]).read_text(encoding="utf-8")
+    assert "await engineOp('dispatch.restore_evicted'" not in script
+
+
 def test_a_halt_without_a_sizing_schedules_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(halted_run, "_RESUME_SPAWNER", lambda root, run_id: calls.append(run_id))

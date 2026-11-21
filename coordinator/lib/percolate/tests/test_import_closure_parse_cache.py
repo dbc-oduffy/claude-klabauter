@@ -189,3 +189,43 @@ def test_facts_version_tracks_the_fact_builders_not_the_whole_module(monkeypatch
     assert ic.facts_version() == before
     monkeypatch.setattr(ic, "_FACT_BUILDERS", ic._FACT_BUILDERS + (ic._is_test_path,))
     assert ic.facts_version() != before
+
+
+def test_second_call_over_a_fresh_copy_opens_no_file(tmp_path, parse_calls, monkeypatch):
+    _build(tmp_path / "t1", tmp_path / "src")
+    # copytree is copy2: the staging copy keeps the source's size and mtime, as in publish.
+    shutil.copytree(tmp_path / "t1", tmp_path / "t2")
+    cache = _cache(tmp_path)
+    cold = ic.find_import_closure_violations(tmp_path / "t1", tmp_path / "src", cache=cache)
+    cache.flush()
+    parse_calls.clear()
+
+    opened: list[Path] = []
+    real = Path.read_bytes
+
+    def counting(self):
+        if "t2" in self.parts:
+            opened.append(self)
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting)
+    warm = ic.find_import_closure_violations(tmp_path / "t2", tmp_path / "src", cache=_cache(tmp_path))
+
+    assert opened == [] and parse_calls == []
+    assert warm == cold
+
+
+def test_a_rewritten_file_is_opened_even_when_its_size_is_unchanged(tmp_path, parse_calls):
+    _build(tmp_path / "t", tmp_path / "src")
+    cache = _cache(tmp_path)
+    ic.find_import_closure_violations(tmp_path / "t", cache=cache)
+    cache.flush()
+    parse_calls.clear()
+
+    target = tmp_path / "t" / "a.py"
+    size = target.stat().st_size
+    target.write_bytes(b"from coordinator_core import " + b"z" * (size - 30) + b"\n")
+    assert target.stat().st_size == size
+    _, violations = ic.find_import_closure_violations(tmp_path / "t", cache=_cache(tmp_path))
+
+    assert parse_calls == ["a.py"] and violations[0][0] == "a.py"

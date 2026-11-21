@@ -86,3 +86,34 @@ def test_run_agent_records_receipt_and_briefs_prompt(tmp_path, monkeypatch):
     assert f"run.engine_identity '{{\"run_id\":\"{RUN}\"}}'" in seen["prompt"]
     got = ei.read_latest(tmp_path, RUN)
     assert got["count"] == 1 and got["receipt"]["stage_id"] == "execute" and got["receipt"]["worker_pid"] == 99
+
+
+def test_ask_stage_with_no_worker_spawn_writes_one_receipt_run_engine_identity_reads(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+    from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
+
+    plan_rel = "docs/plans/2026-10-16-ck.md"
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / plan_rel).write_text(
+        "---\ntitle: fixture\n---\n# Fixture\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: A1\n  title: row\n  change_kind: code-edit\n  surface: pkg/a.py\n  writes:\n    - pkg/a.py\n```\n",
+        encoding="utf-8", newline="\n",
+    )
+    write_run_scripts(tmp_path, "r1")
+    monkeypatch.setattr(ei, "process_identity", lambda: _identity("h", "s"))
+    reply = _handler({"run_id": "r1", "plan_path": plan_rel}, repo_root=tmp_path)
+    assert "error" not in reply
+    lines = ei._receipt_path(tmp_path, "r1").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["worker_pid"] is None and row["launcher"] == "workflow" and row["engine_pid"] == os.getpid()
+    got = ei._engine_identity({"run_id": "r1"}, repo_root=tmp_path)
+    assert got["count"] == 1 and got["consistent"] is True
+
+
+def test_stage_start_receipt_does_not_double_write_after_a_spawn_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(ei, "process_identity", lambda: _identity("h", "s"))
+    ei.append_receipt(tmp_path, RUN, "execute", 9)
+    assert ei.append_stage_start_receipt(tmp_path, RUN, "ask_stage") is None
+    assert ei.read_latest(tmp_path, RUN)["count"] == 1

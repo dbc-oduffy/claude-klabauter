@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Collection, Dict, List, Sequence, Tuple
 
 from coordinator_core.git import git_state
+from coordinator_core.ops import review_token_index
 
 
 class TripwireScanUnavailable(Exception):
@@ -191,14 +192,31 @@ def _read(path: str, flags: int) -> bytes | None:
         os.close(fd)
 
 
-def _tracked_test_bytes(repo_root: Path, exclude: Collection[str]):
-    """Yield (rel, bytes) for each readable candidate test module, sorted by path."""
+_CANDIDATES: Dict[str, tuple] = {}
+
+
+def _tracked_test_bytes(
+    repo_root: Path, exclude: Collection[str], tokens: Collection[bytes] | None = None, imports: dict | None = None
+):
+    """Yield (rel, bytes) for each readable candidate test module, sorted by path.
+
+    `tokens`: the byte strings the caller's checks can match (a path basename, a module leaf, a
+    walked directory name). A module whose word bloom (`review_token_index`) rules every token out
+    is yielded as (rel, b"") unread: the caller keeps the path, spends no open on it, and finds
+    nothing in it, exactly as a full read would. None reads every module. `imports`, when given, is
+    filled before the first yield with rel -> import targets for every scanned module, from the index."""
     root = str(repo_root).replace("\\", "/").rstrip("/")
     testpaths, norecurse = _pytest_config(Path(repo_root))
     skip = {_norm(e) for e in exclude}
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
     try:
-        tracked = git_state.read_index_paths(repo_root)
+        tracked = (
+            review_token_index.tracked_paths(
+                Path(repo_root), git_state.read_index_paths, git_state.resolve_git_dir(repo_root) / "index"
+            )
+            if tokens is not None
+            else git_state.read_index_paths(repo_root)
+        )
     except (git_state.IndexParseError, OSError, ValueError) as exc:
         raise TripwireScanUnavailable(str(exc)) from exc
     roots = _walk_roots(testpaths)
@@ -215,6 +233,11 @@ def _tracked_test_bytes(repo_root: Path, exclude: Collection[str]):
             )
         return ok
 
+    if tokens is not None:
+        yield from _indexed_test_bytes(
+            root, tracked, (testpaths, norecurse), skip, dir_admitted, flags, tokens, imports
+        )
+        return
     for rel in sorted(tracked):
         parent, _, name = rel.rpartition("/")
         if not _is_test_name(name) or rel in skip or not dir_admitted(parent):
@@ -222,6 +245,53 @@ def _tracked_test_bytes(repo_root: Path, exclude: Collection[str]):
         data = _read(f"{root}/{rel}", flags)
         if data is not None:
             yield rel, data
+
+
+def _indexed_test_bytes(root, tracked, config, skip, dir_admitted, flags, tokens, imports):
+    cached = _CANDIDATES.get(root)
+    if cached is not None and cached[0] is tracked and cached[1] == config:
+        cands = cached[2]
+    else:
+        cands = sorted(
+            rel
+            for rel in tracked
+            if _is_test_name(rel.rpartition("/")[2]) and dir_admitted(rel.rpartition("/")[0])
+        )
+        _CANDIDATES[root] = (tracked, config, cands)
+    masks = [m for m in (review_token_index.token_mask(t) for t in tokens if t)]
+    blooms = review_token_index.refresh(root, cands, lambda path: _read(path, flags))
+    if imports is not None:
+        imports.update({rel: blooms[rel][1] for rel in cands if rel in blooms and rel not in skip and blooms[rel][1]})
+    for rel in cands:
+        entry = blooms.get(rel)
+        if entry is None or rel in skip:
+            continue
+        bloom = entry[0]
+        if not review_token_index.admits(bloom, masks):
+            yield rel, b""
+            continue
+        data = _read(f"{root}/{rel}", flags)
+        if data is not None:
+            yield rel, data
+
+
+def scan_tokens(paths: Collection[str], leaves: bool = True) -> set:
+    """Bytes a test module must hold to be selected for `paths` by name or import: each path's
+    basename (a quoted literal ends in it) and, with `leaves`, each `.py` path's module leaf (an import
+    names it); a caller that takes `imports` from the index needs no leaves."""
+    out = set()
+    for p in paths:
+        if not p:
+            continue
+        q = _norm(p)
+        out.add(q.rsplit("/", 1)[-1].encode("utf-8"))
+        if leaves and q.endswith(".py"):
+            leaf = q.rsplit("/", 1)[-1][:-3]
+            if leaf == "__init__":
+                leaf = q.rsplit("/", 2)[-2] if "/" in q else ""
+            if leaf:
+                out.add(leaf.encode("utf-8"))
+    return out
 
 
 def literal_namers(
@@ -286,7 +356,12 @@ def tree_scanners(
     paths = [c for c in created if c]
     if not paths:
         return []
-    return sorted(rel for rel, data in _tracked_test_bytes(repo_root, exclude) if walked_created(data, paths))
+    # A walked directory's literal ends in its last component, so a module without that word cannot match.
+    dirs = {_norm(c).rpartition("/")[0] for c in paths} - {"", "."}
+    tokens = {d.rsplit("/", 1)[-1].encode("utf-8") for d in dirs}
+    return sorted(
+        rel for rel, data in _tracked_test_bytes(repo_root, exclude, tokens) if walked_created(data, paths)
+    )
 
 
 def scan_tracked(

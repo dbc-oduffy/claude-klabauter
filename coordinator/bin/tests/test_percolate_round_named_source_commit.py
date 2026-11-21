@@ -88,6 +88,37 @@ def test_named_ref_ships_that_commit_and_the_stamp_names_it(publish_mod, round_m
     assert round_mod._source_sha_suffix(sha) == f" [source-head {first[:12]}]"
 
 
+def test_round_pins_remote_tip_before_delegating(round_mod, repo, tmp_path, monkeypatch):
+    origin, old = repo
+    _git(origin, "branch", "release/stamp", old)
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", str(origin), str(clone))
+    # Make the advertised commit absent from the clone as well as absent from its tracking ref.
+    (origin / "next.txt").write_text("next", encoding="utf-8")
+    _git(origin, "add", "next.txt")
+    _git(origin, "commit", "-qm", "advance source")
+    current = _git(origin, "rev-parse", "HEAD")
+    _git(origin, "branch", "-f", "release/stamp", current)
+    assert _git(clone, "rev-parse", "origin/release/stamp") == old
+    monkeypatch.setattr(round_mod, "_resolve_percolate_root", lambda _: str(tmp_path))
+    monkeypatch.setattr(round_mod, "_branch0_gate", lambda *_: str(clone))
+    monkeypatch.setattr(round_mod, "_commit_clone_module", lambda: SimpleNamespace(is_commit_clone=lambda _: False))
+    delegated = []
+    monkeypatch.setattr(round_mod, "_delegate_to_commit_clone", lambda argv, sha: delegated.append((argv, sha)) or 0)
+
+    assert round_mod.main(["mirror", "--source-ref", "origin/release/stamp"]) == 0
+
+    [(argv, sha)] = delegated
+    assert sha == round_mod._build_parser().parse_args(argv).source_ref == current
+    assert _git(clone, "rev-parse", f"{current}^{{commit}}") == current
+    assert _git(clone, "rev-parse", "origin/release/stamp") == current
+
+    _git(origin, "branch", "-D", "release/stamp")
+    delegated.clear()
+    assert round_mod.main(["mirror", "--source-ref=refs/remotes/origin/release/stamp"]) != 0
+    assert not delegated
+
+
 @pytest.fixture
 def two_repos(tmp_path):
     """An engine stand-in repo and a non-engine target source repo; the target's first sha is no object in the engine."""

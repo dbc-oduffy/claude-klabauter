@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose, cli, prompt_fragments
+from coordinator_core.ops.dispatch_emit import ask_compose, ask_staged_prompts, cli, prompt_fragments
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_staged_prompts import MIN_STAGE_BYTES, stage, stage_literal_runs
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
@@ -120,6 +120,8 @@ def _unshare_precedence(script: str) -> str:
 
 def test_pointer_replaced_text_equals_the_inline_script(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
+    # Binding rewrites staged text by design; this test pins only that staging moves text verbatim.
+    monkeypatch.setattr(ask_staged_prompts, "bind_engine_commands", lambda text: text)
     sink: dict[str, str] = {}
     staged = _compose(staged_out=sink)
     inline = _compose()

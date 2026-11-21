@@ -577,6 +577,14 @@ def _gate_repomap(repo_root: Path, settings_home: Path, overrides: dict) -> Gate
         )
 
     proc, failure = _run_reporting(generate_repomap_cli, [])
+    if proc is None and failure and failure.startswith("timed out"):
+        return GateResult(
+            "repomap-gate",
+            GateVerdict.FINDING,
+            f"repomap regeneration slow: {failure}; run generate-repomap.py directly",
+            severity=Severity.INFORMATIONAL,
+            detail={"slow_regeneration": True},
+        )
     if proc is None:
         summary = (
             f"generate-repomap.py produced no result: {failure}"

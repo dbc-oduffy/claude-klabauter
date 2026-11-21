@@ -59,7 +59,10 @@ def _reset_plan(
     head_lines = [] if head is None else head.splitlines(keepends=True)
     tree_lines = data.splitlines(keepends=True)
     hunks = own_hunk_stage._hunks_of(rel, head_lines, tree_lines)
-    split = run_hunk_claims.own_hunks(root, run_id, rel, hunks, {})
+    split = run_hunk_claims.own_hunks(
+        root, run_id, rel, hunks, run_hunk_claims.lineage_holders(root, run_id),
+        head_blob=None if head is None else blob_sha(head),
+    )
     if not split.own:
         return None, "no hunk attributable to this run"
     own = set(split.own)
@@ -248,3 +251,78 @@ def restore_for_run(root: Path, record_dir: Path, run_id: str) -> dict:
 
     owned = run_write_set.run_write_set(Path(root), run_id, "")
     return restore(root, record_dir, owned_paths=owned, run_id=run_id)
+
+
+def restore_own_delta(root: Path, record_dir: Path, run_id: str) -> dict:
+    """Restore only the halt's HEAD-plus-own-delta image, never its raw parked image."""
+    from coordinator_core.atomic_replace import atomic_write_bytes
+    from coordinator_core.git import git_state
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.ops.dispatch_emit import live_write_guard, run_write_set
+    from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
+
+    index = _load(record_dir)
+    result: dict[str, dict] = {}
+    if not index:
+        return result
+    try:
+        sidecar = json.loads((record_dir / WITHHELD_OWN_DELTA_FILE).read_text(encoding="utf-8"))
+        deltas = sidecar.get("paths", {}) if isinstance(sidecar, dict) else {}
+    except (OSError, ValueError):
+        deltas = {}
+    owned = run_write_set.run_write_set(root, run_id, "")
+    try:
+        heads = {p: sha for p, (_mode, sha) in git_state.head_blobs(root, list(index)).items()}
+    except (OSError, ValueError):
+        return {p: {"status": "skipped", "reason": "unreadable-head"} for p in index}
+    common = resolve_git_common_dir(root)
+    for rel, entry in sorted(index.items()):
+        reason = tree_write_fence.check_tree_write(
+            rel, owned_paths=owned, base_blob=entry.get("base", entry["head"]), head_blob=heads.get(rel),
+        )
+        target = root / rel
+        if not reason and (target.resolve() != target.absolute() or not target.resolve().is_relative_to(root.resolve())):
+            reason = "outside-own-paths"
+        delta = deltas.get(rel) if isinstance(deltas, dict) else None
+        oid = delta.get("blob") if isinstance(delta, dict) else None
+        if not reason and (not isinstance(oid, str) or len(oid) != 40 or any(c not in "0123456789abcdef" for c in oid)):
+            reason = "missing-own-delta"
+        if not reason:
+            try:
+                current = target.read_bytes()
+            except FileNotFoundError:
+                current = None
+            except OSError:
+                result[rel] = {"status": "skipped", "reason": "unreadable-worktree"}
+                continue
+            current_sha = None if current is None else blob_sha(current)
+            if current_sha == oid:
+                result[rel] = {"status": "already-restored"}
+                continue
+            if current_sha != heads.get(rel):
+                reason = "restore-drift"
+        if not reason:
+            obj = read_object(common, oid)
+            if obj is None or obj[0] != "blob" or blob_sha(obj[1]) != oid:
+                reason = "missing-own-delta"
+            else:
+                reason = live_write_guard.check_live_write(root, run_id, rel, obj[1])
+                if not reason:
+                    # Trap: no lock spans check and replace; a foreign write in that gap must survive.
+                    try:
+                        latest = target.read_bytes()
+                    except FileNotFoundError:
+                        latest = None
+                    except OSError:
+                        latest = Ellipsis
+                    if latest != current:
+                        result[rel] = {"status": "skipped", "reason": "restore-drift"}
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write_bytes(target, obj[1])
+                    declare_write(target)
+                    result[rel] = {"status": "restored"}
+                    continue
+        result[rel] = {"status": "skipped", "reason": reason}
+    return result

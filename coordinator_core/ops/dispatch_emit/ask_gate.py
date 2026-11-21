@@ -823,15 +823,15 @@ def _nothing_executable_halt(repo_root: Path, plan_rel: str, incomplete: Sequenc
     plan = contained_path(root / plan_rel, [root])
     if plan is None or not plan.is_file() or not incomplete:
         return None
+    incomplete_ids = frozenset(incomplete)
     try:
         text = plan.read_text(encoding="utf-8")
         raw_by_id = {r["id"]: r for r in load_rows_memo(text).rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
         exclusions: list = []
         rows = read_spine(
-            plan, exclusions=exclusions, plan_text=text,
+            plan, exclusions=exclusions, plan_text=text, keep_coded=incomplete_ids,
             cleared_gate_owners=own_gate_owners(raw_by_id.values(), root) | frozenset(provisioned_sibling_roots(raw_by_id.values(), root)),
         )
-        incomplete_ids = frozenset(incomplete)
         if any(r.id in incomplete_ids for r in rows) or memo_close_only(exclusions, raw_by_id):
             return None
     except Exception:  # noqa: BLE001 -- an unreadable spine is the stage's refusal to name
@@ -1704,7 +1704,12 @@ def _close_gate_leg(params: dict, out: dict, repo_root: Optional[Path]) -> dict:
     required, `stop_after` optional) and a null halt on an M+ or roadmap arm it runs the chained run's
     `dispatch.emit` and replies its `path` and `run_id` as `chain_emit` (`{error}` on failure).
     """
-    if repo_root is None or "arm" not in out:
+    if "arm" not in out:
+        return out
+    # Legacy producers can return a gate dictionary without going through GateVerdict.
+    out.setdefault("resume_plan", None)
+    out.setdefault("resume_rows", None)
+    if repo_root is None:
         return out
     sizing_rel = params["sizing_path"]
     try:

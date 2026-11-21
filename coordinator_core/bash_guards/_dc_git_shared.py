@@ -250,7 +250,8 @@ def _orphan_c_cwd(c_dir: str, base_cwd: Optional[str] = None) -> Optional[str]:
         return c_dir
 
 
-_BT_LEADING_CD_RE = re.compile(r"^\s*cd\s+(\S+)\s*(?:&&|;)")
+_BT_CD_OPERAND = r'''("[^"]*"|'[^']*'|[^\s"']+)'''
+_BT_LEADING_CD_RE = re.compile(r"^\s*cd\s+" + _BT_CD_OPERAND + r"\s*(?:&&|;)")
 _BT_LEADING_ASSIGN_RE = re.compile(
     r"""^\s*(?:export\s+)?([A-Za-z_]\w*)=("[^"$`]*"|'[^']*'|[^\s;&|"'$`]*)\s*(?:&&|;)"""
 )
@@ -292,7 +293,7 @@ def _bt_leading_cd_prefix_cwd(cmd: str, base_cwd: Optional[str]) -> Optional[str
         return None
 
 
-_BT_PURE_CD_SEGMENT_RE = re.compile(r"^\s*cd\s+(\S+)\s*$")
+_BT_PURE_CD_SEGMENT_RE = re.compile(r"^\s*cd\s+" + _BT_CD_OPERAND + r"\s*$")
 
 
 def _bt_cd_chain_cwds_by_segment(
@@ -337,7 +338,7 @@ def _bt_cd_chain_cwds_by_segment(
         if not m:
             continue
         raw = m.group(1).strip("'\"")
-        if not raw or "*" in raw or "?" in raw or raw.startswith("$"):
+        if not raw or any(char in raw for char in "*?$`"):
             poisoned = True
             continue
         if os.path.isabs(raw):

@@ -1603,7 +1603,13 @@ class GateVerdict:
     resume_ready: bool = False
 
     def to_json(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"arm": self.arm, "halt": self.halt, "baton": self.baton}
+        out: dict[str, Any] = {
+            "arm": self.arm,
+            "halt": self.halt,
+            "baton": self.baton,
+            "resume_plan": self.resume_plan,
+            "resume_rows": list(self.resume_rows) if self.resume_rows is not None else None,
+        }
         if self.resume_ready:
             out["resume_ready"] = True
         if self.design_brief:
@@ -1616,10 +1622,6 @@ class GateVerdict:
             out["recorded"] = self.recorded
         if self.acceptance is not None:
             out["acceptance"] = self.acceptance
-        if self.resume_plan is not None:
-            out["resume_plan"] = self.resume_plan
-        if self.resume_rows is not None:
-            out["resume_rows"] = list(self.resume_rows)
         if self.pending_rulings is not None:
             out["pending_rulings"] = list(self.pending_rulings)
         if self.spine_plan is not None:

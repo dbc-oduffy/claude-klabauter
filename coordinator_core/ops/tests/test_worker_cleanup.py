@@ -44,7 +44,7 @@ def test_stop_own_child_stops_a_descendant():
         child.kill()
 
 
-def test_stop_own_child_refuses_non_descendant_and_ancestor():
+def test_stop_own_child_refuses_non_descendant_and_ancestor(monkeypatch):
     parent = psutil.Process().parent().pid
     child, sibling = _child(), _child()
     try:
@@ -54,6 +54,8 @@ def test_stop_own_child_refuses_non_descendant_and_ancestor():
         # root_pid must be an ancestor of the caller; the child is not.
         assert "not an ancestor" in wc.stop_own_child(parent, os.getpid(), root_pid=child.pid)["refused"]
         assert "ancestors" in wc.stop_own_child(os.getpid(), os.getpid(), root_pid=os.getpid())["refused"]
+        # Host-independent: under a real Codex session the caller has a `codex` ancestor, and the call would stop `child`.
+        monkeypatch.setattr(wc, "_ROOT_NAMES", frozenset({"no-such-worker-root"}))
         assert "codex ancestor" in wc.stop_own_child(child.pid, os.getpid())["refused"]
         assert child.poll() is None
     finally:

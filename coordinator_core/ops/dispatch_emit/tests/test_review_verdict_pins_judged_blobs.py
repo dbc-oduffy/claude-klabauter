@@ -535,3 +535,55 @@ def test_a_fix_leg_edit_whose_reverify_failed_still_refuses(prep_repo, monkeypat
     events = _agent_events(prep_repo, review, monkeypatch)
 
     assert verdict_pin_mismatches(prep_repo, review, None, events) == ["b.py"]
+
+
+def _applied_after_pin(root, *, row_file: str = "src/a.py") -> dict:
+    """A verdict whose reviewer sidecar pinned ``src/a.py`` and ``src/b.py`` at their pre-review bytes
+    (``a = 1``, ``b = 1``) and then applied a verified finding (``a = 1`` -> ``a = 2``) to ``src/a.py``:
+    the tree under ``root`` carries the post-application bytes the caller authored."""
+    import json
+
+    pins = {"src/a.py": _sha_of("a = 1\n"), "src/b.py": _sha_of("b = 1\n")}
+    row = {"id": "f1", "file": row_file, "before": "a = 1", "after": "a = 2", "status": "applied", "verified": True}
+    lines = "".join(f"  {p}: '{sha}'\n" for p, sha in pins.items())
+    (root / _SIDECAR).write_text(
+        f"---\nverdict: WARN\njudged_sha256:\n{lines}---\n## Findings Ledger\n\n```json\n{json.dumps([row])}\n```\n",
+        encoding="utf-8", newline="\n",
+    )
+    return {**prod.REVIEWED, "wave_sidecar_paths": [_SIDECAR]}
+
+
+def _land_applied(repo, *, a: str = "a = 2\n", b: str = "b = 1\n", **kw):
+    prod._author(repo, "src/a.py", a)
+    prod._author(repo, "src/b.py", b)
+    prod._declare(repo, "src/a.py", "src/b.py")
+    prod._record_dir(repo)
+    return prod._land(repo, inline_review=_applied_after_pin(repo, **kw))
+
+
+def test_land_commits_the_bytes_the_runs_own_applied_finding_wrote_after_the_pin(repo) -> None:  # noqa: F811
+    out = _land_applied(repo)
+
+    assert out["committed"] is True, out
+
+
+def test_land_commits_an_applied_finding_whose_row_names_an_absolute_path(repo) -> None:  # noqa: F811
+    out = _land_applied(repo, row_file=str(repo / "src/a.py").replace("\\", "/"))
+
+    assert out["committed"] is True, out
+
+
+def test_land_still_refuses_a_foreign_rewrite_lacking_the_applied_fix(repo) -> None:  # noqa: F811
+    out = _land_applied(repo, a="a = 9\n")
+
+    assert out["committed"] is False and out["refused"] == land_run.VERDICT_PIN_STALE, out
+    assert out["paths"] == ["src/a.py"]
+
+
+def test_land_still_refuses_a_foreign_edit_to_an_unapplied_file_after_the_pin(repo) -> None:  # noqa: F811
+    out = _land_applied(repo, b="b = 7\n")
+
+    assert out["committed"] is False and out["refused"] == land_run.VERDICT_PIN_STALE, out
+    assert out["paths"] == ["src/b.py"]
+
+

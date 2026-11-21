@@ -444,6 +444,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "dispatch.minted_run":                     "coordinator_core.ops.dispatch_emit.minted_run",
     "dispatch.reemit":                         "coordinator_core.ops.dispatch_emit.reemit",
     "dispatch.commit_halted_rows":             "coordinator_core.ops.dispatch_emit.halted_rows_commit",
+    "dispatch.restore_evicted":                "coordinator_core.ops.dispatch_emit.restore_evicted_op",
     "dispatch.commit_merge":                   "coordinator_core.ops.dispatch_emit.merge_commit",
     "dispatch.supersede_slice":                "coordinator_core.ops.dispatch_emit.slice_supersede",
     "dispatch.run_terminality":                "coordinator_core.ops.dispatch_emit.run_terminality",

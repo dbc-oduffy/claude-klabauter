@@ -181,6 +181,12 @@ _SCAN_ROOTS = (
 #: Every reason names either "target carries no `import lib`" or "target is
 #: not a coordinator/bin script", plus the target it is talking about.
 _EXEMPT: dict[tuple[str, str], str] = {
+    ("scripts/setup.py", "apply_cross_session_inbound_default"): (
+        "target carries no `import lib` (coordinator/bin/seed-cross-session-inbound.py)"
+    ),
+    ("bin/claude-klabauter-doctor-probe.py", "_load_inbound_seeder"): (
+        "target carries no `import lib` (coordinator/bin/seed-cross-session-inbound.py)"
+    ),
     ("coordinator_core/hooks/project_orientation.py", "_load_tier_last_run_module"): (
         "target carries no `import lib` (coordinator/bin/tier-last-run.py)"
     ),

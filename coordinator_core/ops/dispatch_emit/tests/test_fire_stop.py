@@ -29,8 +29,9 @@ class FakePs:
     NoSuchProcess = _Gone
     AccessDenied = _Denied
 
-    def __init__(self, table, immortal=()):
+    def __init__(self, table, immortal=(), vanish_on_ppid=()):
         self.table, self.immortal, self.ended = dict(table), set(immortal), []
+        self.vanish_on_ppid = set(vanish_on_ppid)
         ps = self
 
         class Process:
@@ -46,6 +47,9 @@ class FakePs:
                 return ps.table[self.pid]["created"]
 
             def ppid(self):
+                if self.pid in ps.vanish_on_ppid:
+                    ps.table.pop(self.pid, None)
+                    raise _Gone(self.pid)
                 return ps.table[self.pid]["ppid"]
 
             def children(self, recursive=False):
@@ -64,6 +68,9 @@ class FakePs:
             kill = terminate
 
         self.Process = Process
+
+    def pid_exists(self, pid):
+        return pid in self.table
 
     def wait_procs(self, procs, timeout=None):
         return [p for p in procs if p.pid not in self.table], [p for p in procs if p.pid in self.table]
@@ -105,6 +112,37 @@ def test_tree_is_stopped_leaf_first_and_driver_last(tmp_path):
     assert ps.ended == [401, 301, 201, DRIVER]
     assert out["survivors"] == [] and out["stopped"] == [DRIVER, 201, 301, 401]
     assert 900 in ps.table
+
+
+def test_vanished_child_mid_walk_does_not_abort_the_driver_stop(tmp_path):
+    path, record = _fire(tmp_path)
+    ps = FakePs(_table(path), vanish_on_ppid={201})
+    out = fire_stop.stop_fire(path, record, ps)
+    assert DRIVER in ps.ended and 401 in ps.ended and 301 in ps.ended
+    assert out["survivors"] == [] and DRIVER in out["stopped"]
+    assert 900 in ps.table
+
+
+def test_driver_surviving_terminate_and_kill_is_a_survivor_not_stopped(tmp_path):
+    path, record = _fire(tmp_path)
+    ps = FakePs(_table(path), immortal={DRIVER})
+    out = fire_stop.stop_fire(path, record, ps)
+    assert out["survivors"] == [DRIVER] and DRIVER not in out["stopped"]
+
+
+def test_cancel_keeps_run_indexed_when_driver_survives(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    run_dir = tmp_path / RECORD_DIR_ROOT / RUN
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({"sizing_rel": SIZING}), encoding="utf-8")
+    assert idx.claim(tmp_path, RUN, ["a.py"]) == {}
+    path, _ = _fire(tmp_path)
+    ps = FakePs(_table(path), immortal={DRIVER}, vanish_on_ppid={201})
+    real = fire_stop.stop_run_fires
+    monkeypatch.setattr(fire_stop, "stop_run_fires", lambda r, run: real(r, run, ps))
+    reply = run_cancel._handler({"run_id": RUN}, repo_root=tmp_path)
+    assert reply["released"] is False and reply["fire_still_running"] == [DRIVER]
+    assert DRIVER not in reply["stopped"] and RUN in idx.read(tmp_path, 1000)
 
 
 def test_argv_mismatch_is_refused_and_nothing_is_touched(tmp_path):

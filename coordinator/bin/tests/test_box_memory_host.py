@@ -689,6 +689,31 @@ def test_reserved_cores_skips_ended_dead_and_unreserving_rows(tmp_path: Path) ->
     assert host.reserved_cores(adm, **kw) == 2
 
 
+def _agent_rows(hexid: str, pid: int, cores: int = 1):
+    run = f"codex-workflow-{hexid}"
+    sup = dict(_start(f"{run}:{pid}", pid, declared_cores=cores, ts=999.0), session_id="box-memory-snapshot")
+    child = dict(_start(run, pid + 1, ts=999.0), session_id="parent-sess")
+    return sup, child
+
+
+def test_workflow_agent_supervisor_and_child_rows_count_cores_once(tmp_path: Path) -> None:
+    adm = _ledger(tmp_path, *_agent_rows("a" * 16, 5, cores=2))
+    assert host.reserved_cores(adm, **_LEGACY_KW) == 2
+
+
+def test_distinct_workflow_agents_and_plain_rows_count_separately(tmp_path: Path) -> None:
+    adm = _ledger(tmp_path, *_agent_rows("a" * 16, 5), *_agent_rows("b" * 16, 7),
+                  _start("leg:9", 9, declared_cores=3, ts=999.0), _start("leg", 10, declared_cores=2, ts=999.0))
+    assert host.reserved_cores(adm, **_LEGACY_KW) == 1 + 1 + 3 + 2
+
+
+def test_dead_workflow_agent_pids_contribute_zero_cores(tmp_path: Path) -> None:
+    adm = _ledger(tmp_path, *_agent_rows("a" * 16, 5), *_agent_rows("b" * 16, 7))
+    kw = dict(_LEGACY_KW, alive_fn=lambda p: p not in (5, 6))
+    assert host.reserved_cores(adm, **kw) == 1
+    assert host.reserved_cores(adm, **dict(_LEGACY_KW, alive_fn=lambda p: False)) == 0
+
+
 def test_cpu_axis_holds_when_declared_plus_reserved_exceeds_budget(tmp_path: Path) -> None:
     adm = _cpu_ledger(tmp_path, 3)  # budget 4, reserved 3
     verdict, _ = host.admit_and_register(adm, "k", 99, 1.0, _ROOMY, cores=2, cpu_budget=4, **_CPU_KW)

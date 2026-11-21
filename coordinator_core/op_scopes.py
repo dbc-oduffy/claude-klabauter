@@ -896,6 +896,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.reemit — writes one deferred script under the caller's own worktree's scratch/warp/.
     "dispatch.reemit":                          "common_dir",
     "dispatch.commit_halted_rows":              "common_dir",
+    "dispatch.restore_evicted":                "show_top",
     "dispatch.commit_merge":                    "common_dir",
     "dispatch.supersede_slice":                 "common_dir",
     "dispatch.record_halted_run_landed":        "common_dir",

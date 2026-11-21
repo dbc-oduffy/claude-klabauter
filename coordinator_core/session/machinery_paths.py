@@ -276,6 +276,21 @@ def cache_dir(repo_root: str) -> str:
 COMMIT_CLONE_MARKERS = ("commit-clone-v2.json", "commit-clone.json")
 
 
+def _enclosing_repo_of_scratch(source: str) -> str:
+    """`<repo>` for a round source that is itself a throwaway checkout at
+    `<repo>/scratch/<name>`; any other path unchanged.
+
+    Trap: a round pinned to a scratch snapshot names that snapshot as the clone's
+    `source_root`, and a memo anchored there is new every round (0 memo hits across
+    a release). Memos are content-keyed, so sharing the enclosing repo's is safe."""
+    parts = os.path.normpath(source).split(os.sep)
+    if "scratch" in parts[1:]:
+        cut = len(parts) - 1 - parts[::-1].index("scratch")
+        if cut > 0:
+            return os.sep.join(parts[:cut]) or source
+    return source
+
+
 def durable_cache_dir(repo_root: str) -> str:
     """`cache_dir` of the live repo a commit clone was built from, else of `repo_root`.
 
@@ -288,7 +303,7 @@ def durable_cache_dir(repo_root: str) -> str:
         except (OSError, ValueError, AttributeError):
             continue
         if isinstance(source, str) and source:
-            return cache_dir(source)
+            return cache_dir(_enclosing_repo_of_scratch(source))
     return cache_dir(repo_root)
 
 

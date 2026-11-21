@@ -5945,7 +5945,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
 
 #: Run bookkeeping: a commit of these alone carries none of the run's product.
-_BOOKKEEPING_PREFIXES = ("state/sizings/", "state/warp/", "scratch/warp/", "docs/delivery/", "docs/plans/")
+def _bookkeeping_prefixes() -> tuple:
+    from coordinator_core.session.record_homes import home_rel
+
+    return (home_rel("sizings") + "/", home_rel("warp") + "/", "scratch/warp/", "docs/delivery/", "docs/plans/")
 
 
 #: Reason for a measured, still-dirty path no landing leg named: the gap is reported, never blank.
@@ -5965,7 +5968,7 @@ def _land_coverage(
     plan = (plan_path or "").replace("\\", "/")
     code = sorted(
         p for p in set(measured)
-        if p != plan and not p.startswith(_BOOKKEEPING_PREFIXES)
+        if p != plan and not p.startswith(_bookkeeping_prefixes())
     )
     outside = [p for p in code if p not in landed]
     at_base = [p for p in outside if dirty is not None and p not in dirty]

@@ -59,7 +59,7 @@ def _drive(first: dict, replies: list[dict], tmp_path) -> dict:
     prog = (
         "let _halted = null, _writes = [], _gated = [], _sizingRel = null;\n"
         "const _runId = 'run-1', REPO_ROOT = '/r', _SESSION_ID = null, _crossRepoApproved = false;\n"
-        "const _agentDefsClause = () => '';\n"
+        "const _agentDefsClause = () => ''; const _briefPrecedenceTail = '';\n"
         "const phase = () => {};\n"
         f"const _replies = {json.dumps([first, *replies])};\n"
         "const _calls = [];\n"

@@ -116,7 +116,13 @@ def test_ordinary_receivers_unchanged(env):
     _registry(env, {"other": repo})
     inbox, root, _ = resolve_receiver_inbox("other-em")
     assert root == repo
-    assert resolve_receiver_inbox("coordinator-content-repo-em")[:2] == (None, None)
+    doe = env / "doe"
+    doe.mkdir()
+    _central(env, doe)
+    home = _home(env)
+    inbox, root, _ = resolve_receiver_inbox("coordinator-content-repo-em")
+    assert (inbox, root) == (home / "state" / "cross-repo" / "inbox", home)
+    assert resolve_receiver_inbox("typo-nonsense-em")[:2] == (None, None)
 
 
 def test_check_addressee_matches_from_the_home_only(env):

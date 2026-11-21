@@ -1282,7 +1282,14 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     msg["_caller_cwd"] = cwd
     if args.op == "proc.stop_own_child":
         # Trap: the engine may be warm in another process; only the client knows the worker chain.
-        params["caller_pid"] = os.getpid()
+        if allow_warm:
+            params["caller_pid"] = os.getpid()
+        else:
+            # Served inside the engine: the trusted caller pid is the transport's, not ours.
+            _served_pid = os.environ.get("CLAUDE_PID", "")
+            params.pop("caller_pid", None)
+            if _served_pid.isdigit():
+                params["caller_pid"] = int(_served_pid)
 
     # 6a. Warm preamble (C15) — try the warm engine's pipe before paying a
     #     cold spawn-per-call. NO CLIENT EVER WAITS FOR A SERVER TO BOOT:

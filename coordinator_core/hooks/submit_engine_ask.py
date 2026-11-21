@@ -89,7 +89,7 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "em_size", "family", "fresh", "join", "repo", "resume_in_place", "resume_run_id", "route_preference", "sender",
+    "em_rationale", "em_size", "family", "fresh", "join", "repo", "resume_in_place", "resume_run_id", "route_preference", "sender", "takeover",
     "sizing",
     "source", "stop_after", "supersedes", "writes",
 )
@@ -3296,6 +3296,15 @@ def _resume_route(
     if not isinstance(halted_id, str):
         return None, None
     rd = record_dir(root, halted_id)
+    from coordinator_core.ops.dispatch_emit import resume_gate
+
+    try:
+        resume_gate.gate_resume(
+            root, halted_id, session_id or None, (payload.get("tool_input") or {}).get("args"), sizing_rel
+        )
+    except resume_gate.ResumeRefused as exc:
+        return _refuse(str(exc)), None
+    params.pop("takeover", None)
     if session_id:
         # Invariant: run-stage.json names the session executing the run; a refire resumes it here, so
         # the stage record must follow, else idle-liveness probes the dead session's dirs.

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from json.encoder import encode_basestring_ascii as _json_ascii
 import os
 import re
@@ -32,6 +33,7 @@ from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import (
     ask_stage_receipt,
     design_route,
+    engine_identity,
     reply_sidecar,
     stage_family,
     stage_family_binding,
@@ -567,7 +569,8 @@ def _kept_row_holds(root: Path, snap: Optional[resume_snapshot.Snapshot], row_id
     try:
         run_dir = record_dir(root, snap.kept_run)
         # evicted bytes back first: kept.json fingerprints read them
-        if halt_tree_evict.restore_for_run(root, run_dir, snap.kept_run)["refused"]:
+        restored = halt_tree_evict.restore_own_delta(root, run_dir, snap.kept_run)
+        if any(item["status"] == "skipped" for item in restored.values()):
             return False  # a fenced path stays evicted: the row stages as a fresh execute
         entry = kept_work.read(run_dir)["chunks"].get(row_id)
         if not kept_work.still_kept(root, entry, requirements_ledger.read_notes(run_dir), row_id, record_dir=run_dir):
@@ -1647,6 +1650,15 @@ def stage(
     except ValueError as exc:
         raise AskStageError(str(exc)) from exc
 
+    from coordinator_core.ops.dispatch_emit.halt_tree_evict import EVICTED_FILE, restore_own_delta
+
+    prior = _refire_prior(record, None)
+    restore_run = run_id if (record / EVICTED_FILE).is_file() else prior
+    if restore_run:
+        restored = restore_own_delta(root, record_dir(root, restore_run), restore_run)
+        if restored:
+            logging.getLogger(__name__).info("refire restore for %s: %s", restore_run, restored)
+
     excluded: dict[str, str] = {}
     if sizing_rel:
         sizing = load_sizing(root, sizing_rel)
@@ -1688,7 +1700,9 @@ def stage(
             raise AskStageError(f"PLAN-SCAFFOLD-UNFILLED: {plan_posix} still carries {named}")
     try:
         with leg("parse"):
-            parse = shared if shared is not None else _parse_plan(root, plan_path, plan_text)
+            parse = shared if shared is not None and not restore_run else _parse_plan(
+                root, plan_path, plan_text, restore_run=restore_run,
+            )
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
     except SpineReadError as exc:
@@ -2991,7 +3005,7 @@ class _PlanParse:
     exclusions: tuple
 
 
-def _parse_plan(root: Path, plan_path: Path, plan_text: str) -> _PlanParse:
+def _parse_plan(root: Path, plan_path: Path, plan_text: str, *, restore_run: str | None = None) -> _PlanParse:
     """Parse `plan_text` once; `InvalidChangeKindError` from the spine read propagates."""
     raw_by_id = {
         raw["id"]: raw
@@ -3000,9 +3014,12 @@ def _parse_plan(root: Path, plan_path: Path, plan_text: str) -> _PlanParse:
     }
     sibling_roots = provisioned_sibling_roots(raw_by_id.values(), root)
     exclusions: list = []
+    from coordinator_core.ops.dispatch_emit.sizing_fire import evicted_coded_rows
+
     rows = read_spine(
         plan_path,
         exclusions=exclusions,
+        keep_coded=evicted_coded_rows(root, tuple(raw_by_id.values()), restore_run),
         cleared_gate_owners=own_gate_owners(raw_by_id.values(), root) | frozenset(sibling_roots),
         plan_text=plan_text,
     )
@@ -3190,6 +3207,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
         with leg("receipt"):
             handle, twin_rel = reply_sidecar.handle_and_twin(root, record_dir(root, run_id) / "manifest.json")
             ask_stage_receipt.write(record_dir(root, run_id), digest, handle, spine_sha)
+        engine_identity.append_stage_start_receipt(root, run_id, "ask_stage")
     except StageWaiting as exc:
         wait = exc.wait
         return {

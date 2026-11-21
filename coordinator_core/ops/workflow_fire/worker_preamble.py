@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
+import sys
+from pathlib import Path
 
 from coordinator_core._settings_home import settings_home
 
@@ -22,10 +25,32 @@ SIZING_USAGE = (
 )
 
 WORKER_BACKENDS = ("codex", "agy", "grok")
+_PORTABLE_MODULE = re.compile(r"(?<![\w./\\-])python(?:3(?:\.\d+)?)?[ \t]+-m[ \t]+(coordinator_core(?:\.[A-Za-z_]\w*)+)")
+_BOOTSTRAP = (
+    "import os,runpy,sys;"
+    "root=sys.argv.pop(1);"
+    "sys.path.insert(0,root);"
+    "os.environ['PYTHONPATH']=root;"
+    "runpy.run_module(sys.argv.pop(1),run_name='__main__',alter_sys=True)"
+)
+
+
+def bind_engine_commands(prompt: str) -> str:
+    """Bind portable module commands at delivery, keeping committed scripts host-neutral."""
+    if not _PORTABLE_MODULE.search(prompt):
+        return prompt
+    root = str(Path(__file__).resolve().parents[3])
+    argv = (sys.executable, "-P", "-c", _BOOTSTRAP, root)
+    if os.name == "nt":
+        prefix = "& " + " ".join("'" + value.replace("'", "''") + "'" for value in argv)
+    else:
+        prefix = shlex.join(argv)
+    return _PORTABLE_MODULE.sub(lambda match: f"{prefix} {match[1]}", prompt)
 
 
 def with_worker_preamble(backend: str, prompt: str) -> str:
-    """Return PREAMBLE, a blank line, then prompt for a codex/agy/grok backend; any other backend gets prompt unchanged."""
+    """Bind engine commands; then PREAMBLE, a blank line and prompt for a codex/agy/grok backend, else prompt."""
+    prompt = bind_engine_commands(prompt)
     if backend not in WORKER_BACKENDS:
         return prompt
     from coordinator_core.ops.dispatch_emit.ask_contract import SIZING_ASSEMBLE_CMD

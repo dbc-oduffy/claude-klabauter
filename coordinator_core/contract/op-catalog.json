@@ -2322,6 +2322,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "Restore a halted run's evicted work from its recorded own delta.",
+      "module": "coordinator_core.ops.dispatch_emit.restore_evicted_op",
+      "name": "dispatch.restore_evicted",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "Restore a halted run's evicted work from its recorded own delta.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC \"dispatch.run_terminality\": classify one warp run dir as terminal, resumable or neither.\n\n``dispatch.run_terminality``: read-only answer to \"is this ``state/warp`` run dir done, or still owed work?\".\n\nParams: ``run_dir`` (string, required: repo-relative, either slash; its parent must be the warp record root\n``ask_contract.RECORD_DIR_ROOT`` and it must be an existing directory).\nReply: ``{ok, run_id, terminal, resumable, reason}`` or ``{ok: false, error}``. Writes nothing, spawns nothing; at\nmost two file reads (``halted.json``, then ``run-outcome.json`` when no marker exists).\nClassification: a ``halted.json`` status of ``landed`` / ``superseded`` / ``closed`` is terminal; ``halted`` is\nresumable (released or not); ``resumed`` and an unreadable marker are neither. With no marker, a recorded\n``objective_loop.outcome`` in ``land_run._RECORDED_EXIT_OUTCOMES`` is terminal. Anything else, unknown statuses\nincluded, is neither terminal nor resumable: the caller keeps the dir.",
       "module": "coordinator_core.ops.dispatch_emit.run_terminality",
       "name": "dispatch.run_terminality",
@@ -6565,6 +6576,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "JSON-RPC \"run.engine_identity\": params `run_id` (required), `repo` (optional, else the caller's repo).\n\nReplies `read_latest`; refuses `{\"error\": str}` for a missing or unsafe run_id or no repo root.",
+      "module": "coordinator_core.ops.dispatch_emit.engine_identity",
+      "name": "run.engine_identity",
+      "op_class": "compute_only",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"run.engine_identity\": params `run_id` (required), `repo` (optional, else the caller's repo).",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC \"run.paths_trash\": params `run_id`, `chunk_id`, `paths` (list of str).\n\ncoordinator_core.ops.run_paths_trash -- op \"run.paths_trash\": delete a chunk's declared paths\nanywhere in the repo by trash-then-prune, without a shell remove.\n\nReuses scratch.delete's manifest lookup, index check, link check and tombstone dir\n(``scratch/.deleted/``); only the path-scope rule differs. Each admitted path is moved with one\n``os.rename``; the detached prune pass reclaims the bytes. No process is spawned and no tree is\nwalked.",
       "module": "coordinator_core.ops.run_paths_trash",
       "name": "run.paths_trash",
@@ -6576,7 +6598,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"runs.withheld_overlap\" handler.\n\nParams:\n    repo (str) -- absolute repo root; defaults to the dispatch repo_root.\n    paths (list[str]) -- repo-relative paths to check; or\n    run_id (str) -- a run whose declared writes (manifest rows) are the paths; that run is\n        never reported as its own holder.\n\nReturns:\n    {\"overlaps\": [{\"path\", \"holder\", \"state\"}], \"clean\": bool}; `holder` is a run id or\n    \"unattributed\" (dirty, no other run holds the path); `state` is \"withheld\", \"kept\" or\n    \"dirty\". Or {\"error\": str} on an invalid param.",
+      "description": "JSON-RPC \"runs.withheld_overlap\" handler.\n\nParams:\n    repo (str) -- absolute repo root; defaults to the dispatch repo_root.\n    paths (list[str]) -- repo-relative paths to check; or\n    run_id (str) -- a run whose declared writes (manifest rows) are the paths; that run is\n        never reported as its own holder.\n\nReturns:\n    {\"overlaps\": [{\"path\", \"holder\", \"state\"}], \"clean\": bool}; `holder` is a run id or\n    \"unattributed\" (dirty, no other run holds the path); `state` is \"withheld\", \"declared\" (a halted\n    run's declared path its halt never withheld), \"kept\" or \"dirty\". Or {\"error\": str} on an invalid param.",
       "module": "coordinator_core.ops.runs_withheld_overlap",
       "name": "runs.withheld_overlap",
       "op_class": "compute_only",
@@ -7385,7 +7407,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"workflow.cancel\": params `run_id` (str, required), `reason` (str, optional).\n\nMarks the live run cancelled in `state/warp/<run_id>/halted.json` (`halted: \"cancelled\"`, with a\nrefire `next_action`), then drops it from the live-run index and releases its claims. Replies\n`{ok, run_id, halted, sizing, already_cancelled, released}`. A run with no record dir, one whose\nmarker is landed, closed or superseded, or one bound to no sizing replies `{\"error\": str}`;\ncancelling an already-cancelled run is an ok that changes nothing but the index.",
+      "description": "JSON-RPC \"workflow.cancel\": params `run_id` (str, required), `reason` (str, optional).\n\nMarks the live run cancelled in `state/warp/<run_id>/halted.json` (`halted: \"cancelled\"`, with a\n`next_action`), then drops it from the live-run index and releases its claims. Replies\n`{ok, run_id, halted, sizing, already_cancelled, stopped, released}`, plus `fire_still_running`\n(pids) with `released=false` when a verified fire process survives the stop. A run with no record dir, one whose\nmarker is landed, closed or superseded, or one bound to no sizing replies `{\"error\": str}`;\ncancelling an already-cancelled run is an ok that changes nothing but the index.",
       "module": "coordinator_core.ops.dispatch_emit.run_cancel",
       "name": "workflow.cancel",
       "op_class": "mutating",

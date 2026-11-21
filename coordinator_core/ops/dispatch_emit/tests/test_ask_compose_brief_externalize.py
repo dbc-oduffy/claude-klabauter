@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose, prompt_fragments
+from coordinator_core.ops.dispatch_emit import ask_compose, ask_staged_prompts, prompt_fragments
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_staged_prompts import _unshare_precedence
@@ -32,6 +32,8 @@ def test_legs_beyond_the_original_set_stage_their_bodies():
 
 def test_staging_every_leg_shrinks_the_script_and_the_text_round_trips(monkeypatch):
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
+    # Binding rewrites staged text by design; this test pins only that staging moves text verbatim.
+    monkeypatch.setattr(ask_staged_prompts, "bind_engine_commands", lambda text: text)
     sink: dict[str, str] = {}
     staged = _compose(staged_out=sink)
     inline = _compose()

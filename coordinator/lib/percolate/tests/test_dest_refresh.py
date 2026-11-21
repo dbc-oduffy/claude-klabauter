@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from coordinator_core.git.run import GitResult  # noqa: E402
+from coordinator_core.git.run import GitResult, LOCAL_PLUMBING_BUDGET_SECS  # noqa: E402
 from percolate import dest_refresh  # noqa: E402
 from percolate.dest_refresh import (  # noqa: E402
     default_remote_branch,
@@ -77,6 +77,41 @@ def test_level_clone_passes_and_reports_level(origin_and_clone) -> None:
     assert result.behind == 0
     assert result.fast_forwarded is False
     assert "already level" in out.getvalue()
+
+
+@pytest.mark.parametrize("timeouts", [0, 1, 2], ids=["missing-ref", "transient", "persistent"])
+def test_landing_tip_retries_a_timeout_once(origin_and_clone, monkeypatch, timeouts) -> None:
+    _, clone = origin_and_clone
+    head = _git(clone, "rev-parse", "HEAD")
+    real_git = dest_refresh._git
+    attempts = 0
+
+    def timeout_revision(repo_root, args, *, remote=False):
+        nonlocal attempts
+        if args == ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]:
+            attempts += 1
+            if timeouts == 0:
+                return GitResult(1, "", "", False)
+            if attempts <= timeouts:
+                return GitResult(-1, "", "", True)
+        return real_git(repo_root, args, remote=remote)
+
+    monkeypatch.setattr(dest_refresh, "_git", timeout_revision)
+    out, err = _capture()
+    result = refresh_dest_from_origin(clone, out=out, err=err)
+
+    assert attempts == (2 if timeouts else 1)
+    if timeouts == 0:
+        assert not result.ok
+        assert "could not resolve" in result.reason
+        assert "timed out" not in result.reason
+    elif timeouts == 1:
+        assert result.ok, result.reason
+        assert result.landing_tip == result.refresh_head == head
+    else:
+        assert not result.ok
+        assert "landing tip HEAD timed out" in result.reason
+        assert f"{LOCAL_PLUMBING_BUDGET_SECS:g}s" in result.reason
 
 
 def test_behind_clone_is_fast_forwarded_to_the_landing_branch(origin_and_clone) -> None:

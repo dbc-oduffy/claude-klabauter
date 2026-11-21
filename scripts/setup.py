@@ -4120,6 +4120,43 @@ def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, arg
         print(f"WARN [retention] skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
 
 
+def apply_cross_session_inbound_default(claude_klabauter_root_resolved: Path, args: "Args | None") -> None:
+    """Seed `crossSessionInbound: accept` in the Claude user `settings.json` only when the key is absent.
+
+    ADVISORY, non-fatal. Reuses `coordinator/bin/seed-cross-session-inbound.py` in-process; an
+    explicit value (any, `null` included) is never rewritten. Refused under
+    `COORDINATOR_DISABLE_MACHINE_MUTATION`."""
+    print()
+    print("--- Cross-session inbound default ---")
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [cross-session-inbound] COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return
+    try:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        from coordinator_core._settings_home import claude_config_dir
+
+        script = Path(claude_klabauter_root_resolved) / "coordinator" / "bin" / "seed-cross-session-inbound.py"
+        spec = importlib.util.spec_from_file_location("_setup_seed_cross_session_inbound", script)
+        seeder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(seeder)
+
+        settings_path = claude_config_dir() / "settings.json"
+        try:
+            state = seeder.check_file(settings_path)
+            if state != "absent":
+                print(f"SKIP [cross-session-inbound] {seeder.KEY} already set ({state}) in {settings_path}")
+                return
+            seeder.apply_default_to_file(settings_path)
+        except ValueError as exc:
+            print(f"WARN [cross-session-inbound] {settings_path} is not a valid settings object ({exc}) — left untouched")
+            return
+        _note_change("cross-session-inbound", f"{seeder.KEY} -> {seeder.DEFAULT} in {settings_path}")
+        print(f"PASS [cross-session-inbound] {seeder.KEY}={seeder.DEFAULT} set in {settings_path}")
+    except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
+        print(f"WARN [cross-session-inbound] skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
+
+
 def user_path_with_entry(raw: str, entry: str) -> str | None:
     """`raw` (an unexpanded user PATH value) with `entry` appended, or None when already present.
 
@@ -5921,6 +5958,7 @@ def main(argv: list[str]) -> int:
             _print_change_summary()
             return 1
         apply_transcript_retention_default(claude_klabauter_root_resolved, args)
+        apply_cross_session_inbound_default(claude_klabauter_root_resolved, args)
         install_global_git_config(args)
         ensure_settings_home_bin_on_user_path(args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)

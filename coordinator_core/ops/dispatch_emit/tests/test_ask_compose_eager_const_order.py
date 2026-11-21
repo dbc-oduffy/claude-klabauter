@@ -7,9 +7,9 @@ above the marker while the fragment hoist declared its literal below it).
 
 import re
 
-from coordinator_core.ops.dispatch_emit import ask_compose
-from coordinator_core.ops.dispatch_emit.tests.test_ask_stage_byte_budget import _compose
-from coordinator_core.ops.dispatch_emit.tests.test_ask_script_byte_headroom import _PLUGIN_ROOT, _padded_plan_blitz_text
+from coordinator_core.ops.dispatch_emit import ask_compose, prompt_fragments
+from coordinator_core.ops.dispatch_emit.tests.test_ask_script_byte_headroom import _PLUGIN_ROOT
+from coordinator_core.ops.dispatch_emit.tests.test_m_plus_production_shapes_under_cap import staged_m_plus
 
 _DECL = re.compile(r"^const (_PF\w*) = (.*);$")
 _REF = re.compile(r"\b_PF\w*\b")
@@ -28,13 +28,19 @@ def _forward_reads(script: str) -> list[str]:
     return bad
 
 
-def test_bare_arm_consts_read_only_earlier_consts(monkeypatch):
-    assert _forward_reads(_compose(monkeypatch, arm=None)) == []
+def test_bare_arm_consts_read_only_earlier_consts(monkeypatch, tmp_path):
+    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
+    script = ask_compose.compose_ask_script(
+        repo_root=str(tmp_path), prompt="probe ask", sizing_rel=None, run_id="run-1",
+        session_id=None, script_path="scratch/warp/x.mjs", staged_out={},
+    )
+    assert _forward_reads(script) == []
 
 
-def test_m_plus_arm_consts_read_only_earlier_consts(monkeypatch):
-    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _PLUGIN_ROOT)  # the padded blitz reads plan-blitz.mjs from it
-    script =_compose(monkeypatch, arm="m_plus", plan_blitz_text=_padded_plan_blitz_text())
+def test_m_plus_arm_consts_read_only_earlier_consts(monkeypatch, tmp_path):
+    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _PLUGIN_ROOT)
+    script, _ = staged_m_plus(tmp_path)
     assert _forward_reads(script) == []
 
 

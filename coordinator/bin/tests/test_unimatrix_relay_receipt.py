@@ -38,7 +38,7 @@ def rows(relay):
 def test_an_ok_line_appends_a_receipt_with_the_digest_and_no_text(relay, monkeypatch, capsys):
     line = b'{"from":"uds:/a","message":"secret words"}\n'
     replies = run_batch(relay, monkeypatch, capsys, [line], lambda p, l: None)
-    assert replies == [{"ok": True, "digest": hashlib.sha256(line.rstrip(b"\n")).hexdigest()}]
+    assert replies == [{"ok": True, "written": True, "digest": hashlib.sha256(line.rstrip(b"\n")).hexdigest()}]
     (row,) = rows(relay)
     assert row["session"] == SID
     assert row["digest"] == hashlib.sha256(line.rstrip(b"\n")).hexdigest()
@@ -67,7 +67,7 @@ def test_a_failed_or_blank_line_leaves_no_receipt(relay, monkeypatch, capsys):
 
 def test_no_session_id_records_nothing(relay, monkeypatch, capsys):
     replies = run_batch(relay, monkeypatch, capsys, [b'{"m":"x"}\n'], lambda p, l: None, session=None)
-    assert replies == [{"ok": True}]
+    assert replies == [{"ok": True, "written": True}]
     assert not relay.receipts_path().exists()
 
 

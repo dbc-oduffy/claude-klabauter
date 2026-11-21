@@ -6,12 +6,17 @@ Run: python -m pytest coordinator_core/ops/fleet/tests/test_memo_wire.py -p no:c
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ops.fleet import memo_wire
 from coordinator_core.ops.fleet._memo_compose import _memo_filename
+from coordinator_core.ops.fleet._memo_resolver import (
+    PR_COMMENT_FALLBACK,
+    never_inbox_mirror_refusal,
+)
 from coordinator_core.ops.fleet.memo_wire import (
     DeliveryTarget,
     ReceiverTarget,
@@ -250,3 +255,122 @@ def test_delivered_filename_pattern() -> None:
     )
     with pytest.raises(ValueError):
         delivered_filename_pattern("!!!", "a-topic")
+
+
+# mirror-only box -------------------------------------------------------
+
+_KLABAUTER_EM = "claude-klabauter-em"
+_CONTENT_ROOT_EM = "content-root-em"
+_MIRROR_OWNER_EM = "claude-klabauter-em"
+
+
+def _mirror_only_box(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    home_root: Path | None = None,
+    extra_repos: dict[str, Path] | None = None,
+    marked: bool = True,
+    declared: bool = True,
+) -> dict[str, Path]:
+    """A box whose only registered repo is the klabauter publish mirror; the manifest
+    (never the box's installed one) names content-root-em central, and the G-EM home
+    sits under tmp_path."""
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.delenv("MACHINE_LOCAL_IMPL", raising=False)
+    mirror = _make_repo(tmp_path, "claude-klabauter")
+    if marked:
+        (mirror / "PUBLISH_MIRROR").write_text("m\n", encoding="utf-8")
+    gem = home_root if home_root is not None else _make_repo(tmp_path, "gem-box")
+    repos = {"claude_klabauter": mirror, **(extra_repos or {})}
+    claude_home = _make_claude_home(tmp_path, repos)
+    machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
+    local = machine_local / "registry.local.toml"
+    local.write_text(
+        local.read_text(encoding="utf-8")
+        + f'"coordinator.group_em_home" = {json.dumps(str(gem))}\n',
+        encoding="utf-8",
+    )
+    if declared:
+        (machine_local / "registry.toml").write_text(
+            "schema = 1\n\n[publish.mirrors.claude_klabauter]\n"
+            f'owner = "{_MIRROR_OWNER_EM}"\npath = {json.dumps(str(mirror))}\n',
+            encoding="utf-8",
+        )
+    doctrine = tmp_path / "doctrine-root"
+    schemas = doctrine / "coordinator" / "schemas"
+    schemas.mkdir(parents=True)
+    (schemas / "coordinator-registry.manifest.json").write_text(
+        json.dumps({"identity": {
+            "repoAliases": [], "redirectAliases": [],
+            "centralReceiverIds": [_CONTENT_ROOT_EM],
+        }}),
+        encoding="utf-8",
+    )
+    (machine_local / ".coordinator-content-root").write_text(str(doctrine), encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    return {"mirror": mirror, "gem": gem}
+
+
+def _resolve(to: str, tmp_path: Path):
+    return resolve_delivery_target(
+        to=to, sender_worktree=tmp_path / "sender", from_id="sender-em",
+        topic="a-topic", today="2026-11-20",
+    )
+
+
+@pytest.mark.parametrize("receiver", [_KLABAUTER_EM, _CONTENT_ROOT_EM])
+def test_mirror_only_box_known_receivers_resolve_to_the_gem_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receiver: str,
+) -> None:
+    box = _mirror_only_box(tmp_path, monkeypatch)
+    target = _resolve(receiver, tmp_path)
+    assert isinstance(target, DeliveryTarget), target
+    assert target.name == receiver
+    assert target.receiver_repo_path == box["gem"]
+    assert target.inbox_dir == box["gem"] / "state" / "cross-repo" / "inbox"
+    assert never_inbox_mirror_refusal(receiver, target.receiver_repo_path) is None
+
+
+def test_mirror_only_box_registered_owner_is_not_diverted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = _make_repo(tmp_path, "claude-klabauter")
+    box = _mirror_only_box(tmp_path, monkeypatch, extra_repos={"claude_klabauter": owner})
+    for receiver in (_KLABAUTER_EM, _MIRROR_OWNER_EM):
+        target = _resolve(receiver, tmp_path)
+        assert isinstance(target, DeliveryTarget), receiver
+        assert target.receiver_repo_path == owner, receiver
+        assert target.receiver_repo_path != box["gem"], receiver
+
+
+def test_mirror_only_box_unknown_receiver_still_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mirror_only_box(tmp_path, monkeypatch)
+    refusal = _resolve("zzzzzzzz-qqqq-em", tmp_path)
+    assert isinstance(refusal, WireRefusal)
+    assert "UNKNOWN RECEIVER" in refusal.message
+    assert PR_COMMENT_FALLBACK in refusal.message
+
+
+@pytest.mark.parametrize("receiver", [_KLABAUTER_EM, _CONTENT_ROOT_EM])
+def test_mirror_only_box_refused_home_keeps_the_unknown_receiver_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receiver: str,
+) -> None:
+    checkout = _make_repo(tmp_path, "checkout")
+    _mirror_only_box(tmp_path, monkeypatch, home_root=checkout / "home")
+    refusal = _resolve(receiver, tmp_path)
+    assert isinstance(refusal, WireRefusal)
+    assert "UNKNOWN RECEIVER" in refusal.message
+    assert PR_COMMENT_FALLBACK in refusal.message
+
+
+def test_mirror_only_box_undeclared_mirror_still_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    box = _mirror_only_box(tmp_path, monkeypatch, marked=False, declared=False)
+    refusal = resolve_receiver(_KLABAUTER_EM)
+    assert isinstance(refusal, WireRefusal)
+    assert "resolves to a publish mirror, which has no inbox." in refusal.message
+    assert str(box["gem"]) not in refusal.message

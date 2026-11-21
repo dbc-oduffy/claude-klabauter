@@ -142,7 +142,8 @@ def test_marker_distinct_from_commit_request() -> None:
 
 def test_gate_verdict_to_json() -> None:
     v = c.GateVerdict(None, {"kind": c.HALT_ROOM, "reason": "x"})
-    assert v.to_json() == {"arm": None, "halt": {"kind": "room", "reason": "x"}, "baton": None}
+    assert v.to_json() == {"arm": None, "halt": {"kind": "room", "reason": "x"}, "baton": None,
+                           "resume_plan": None, "resume_rows": None}
 
 
 def test_gate_verdict_to_json_omits_acceptance_when_unset() -> None:
@@ -156,8 +157,8 @@ def test_design_brief_absent_from_json_when_empty_and_present_when_set() -> None
     assert c.GateVerdict("s", None, design_brief="b").to_json()["design_brief"] == "b"
 
 
-def test_resume_rows_absent_from_json_when_unset_and_ordered_when_set() -> None:
-    assert "resume_rows" not in c.GateVerdict("s", None, resume_plan="p.md").to_json()
+def test_resume_rows_null_when_unset_and_ordered_when_set() -> None:
+    assert c.GateVerdict("s", None, resume_plan="p.md").to_json()["resume_rows"] is None
     out = c.GateVerdict("s", None, resume_plan="p.md", resume_rows=["M1", "A1"]).to_json()
     assert out["resume_rows"] == ["M1", "A1"]
 

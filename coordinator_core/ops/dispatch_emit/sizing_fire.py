@@ -49,7 +49,8 @@ from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
 ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
 
 OUTSIDE_CREDIT_REASON = "landed outside the executor at {sha}"
-OUTSIDE_CREDIT_BUDGET_SECS = 0.3
+# Leave headroom for the rest of the gate under its 500 ms process budget.
+OUTSIDE_CREDIT_BUDGET_SECS = 0.45
 ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan", ARM_ROADMAP: "roadmap"}
 _PM_DECISION = "pm-decision"
 _ROADMAP_EXIT = "roadmap"
@@ -385,8 +386,46 @@ PLAN_PATH_JS = (
 )
 
 
+def evicted_coded_rows(root: Path, rows: Sequence, run_id: str | None) -> frozenset[str]:
+    """Coded rows whose evicted outputs are missing or restored but unlanded."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
+    from coordinator_core.ops.dispatch_emit.halt_tree_evict import _load
+    from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
+
+    coded = [row for row in rows if isinstance(row, dict) and row.get("disposition") == "coded"]
+    if not coded or not run_id:
+        return frozenset()
+    record = record_dir(root, run_id)
+    writes = {path for row in coded for path in row.get("writes") or ()}
+    evicted = {path: entry for path, entry in _load(record).items()
+               if path in writes and "head" in entry and contained_path(root / path, [root])}
+    if not evicted:
+        return frozenset()
+    current = {path: fingerprint(root, path) for path in evicted}
+    candidates = {path for path, entry in evicted.items()
+                  if current[path] == entry["head"] != entry["blob"]
+                  and (entry["head"] is not None or not (root / path).exists())}
+    try:
+        raw = json.loads((record / WITHHELD_OWN_DELTA_FILE).read_text(encoding="utf-8"))
+        deltas = raw.get("paths") if isinstance(raw, dict) else None
+    except (OSError, ValueError):
+        deltas = None
+    if isinstance(deltas, dict):
+        # A stage can restore bytes and then fail before its receipt. That is still unlanded work.
+        matching = [path for path in evicted.keys() - candidates if current[path] is not None
+                    and isinstance(deltas.get(path), dict) and deltas[path].get("blob") == current[path]]
+        if matching:
+            from coordinator_core.git.git_state import head_blobs
+
+            heads = head_blobs(root, matching)
+            candidates.update(path for path in matching if heads.get(path, (None, None))[1] != current[path])
+    return frozenset(row["id"] for row in coded if candidates.intersection(row.get("writes") or ()))
+
+
 def resumable_plan(
-    sizing: Mapping, sizing_rel: str, repo_root: Path, arm: str | None = None
+    sizing: Mapping, sizing_rel: str, repo_root: Path, arm: str | None = None, *,
+    eviction_run_id: str | None = None,
 ) -> ResumePlan | None:
     """The existing plan for this sizing and its rows still to run, else None.
 
@@ -442,11 +481,17 @@ def resumable_plan(
         return None
     if _stopped_unreviewed_plan(root, sizing_rel, plan_rel, plan_text, rows):
         return None
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+
+    evicted = (
+        evicted_coded_rows(root, rows, eviction_run_id or halted_run_to_resume(root, sizing_rel))
+        if _coded_rows(rows) else frozenset()
+    )
     reasons: dict[str, str] = {}
     open_ids = []
     for r in rows:
         if isinstance(r, dict) and isinstance(r.get("id"), str):
-            if r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS:
+            if r["id"] in evicted or r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS:
                 open_ids.append(r["id"])
             else:
                 reasons[r["id"]] = f"disposition {r.get('disposition')}"
@@ -470,17 +515,19 @@ def resumable_plan(
 
         state = resume_landed_state(root, plan_rel)
         record, named = _blocking_named_rows(root, plan_rel, sizing_rel, plan_text, rows, open_pre, state)
-        landed_open = tuple((i, state.row_shas[i]) for i in open_ids if i in state.rows and state.row_shas.get(i))
+        landed = state.rows
+        landed_open = tuple((i, state.row_shas[i]) for i in open_ids if i in landed and state.row_shas.get(i))
         reasons.update(
-            {i: f"landed at {state.row_shas.get(i) or 'checkpoint'}" for i in open_ids if i in state.rows}
+            {i: f"landed at {state.row_shas.get(i) or 'checkpoint'}" for i in open_ids if i in landed}
         )
-        open_ids = [i for i in open_ids if i not in state.rows]
+        open_ids = [i for i in open_ids if i not in landed]
         pending = list(open_ids)
         if open_ids:
             from coordinator_core.ops.dispatch_emit.plan_row_coding import rows_landed_outside_executor
 
             outside = rows_landed_outside_executor(
-                root, plan_rel, [r for r in rows if r.get("id") in open_ids and r.get("id") not in named],
+                root, plan_rel, [r for r in rows if r.get("id") in open_ids and r.get("id") not in named
+                                 and r.get("id") not in evicted],
                 budget_secs=OUTSIDE_CREDIT_BUDGET_SECS,
             )
             landed_open += tuple((i, outside[i]) for i in open_ids if i in outside)
@@ -488,7 +535,9 @@ def resumable_plan(
             open_ids = [i for i in open_ids if i not in outside]
     ledger_reasons = tuple(sorted((i, r) for i, r in reasons.items() if i not in pending))
     pointer = _own_pointer(root, plan_rel, sizing_rel)
-    halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state, record, pointer=pointer)
+    halt = None if evicted.intersection(open_ids) else _ledger_halt_for(
+        root, plan_rel, sizing_rel, rows, open_ids, state, record, pointer=pointer,
+    )
     if halt is not None:
         held = _held_rows(named, pending, credited, state)
         return ResumePlan(
@@ -511,7 +560,7 @@ def resumable_plan(
             plan_rel, (), ledger=unclaimed_halt, held=_held_rows(named, pending, credited, state),
             not_run_reasons=ledger_reasons,
         )
-    kept, kept_run = _kept_rows(root, sizing_rel, open_ids)
+    kept, kept_run = _kept_rows(root, sizing_rel, [i for i in open_ids if i not in evicted])
     return ResumePlan(
         plan_rel, tuple(open_ids), landed_open=landed_open, kept=kept, kept_run=kept_run,
         held=_held_rows(named, open_ids, credited, state),

@@ -2573,6 +2573,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The landed commits.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.commit_halted_rows": OpClass.MUTATING,
+    "dispatch.restore_evicted": OpClass.MUTATING,
     # dispatch.commit_merge — MUTATING: commits an already-resolved two-parent merge through a private index,
     # syncs the shared index/worktree, then moves the ref by compare-and-swap (ops/dispatch_emit/merge_commit.py).
     # DR-208 five-question affirmation (citing dispatch.commit_merge handler):

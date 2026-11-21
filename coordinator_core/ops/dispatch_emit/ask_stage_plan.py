@@ -77,7 +77,8 @@ def _kept_row_holds(
     try:
         run_dir = record_dir(root, snap.kept_run)
         # evicted bytes back first: kept.json fingerprints read them
-        if halt_tree_evict.restore_for_run(root, run_dir, snap.kept_run)["refused"]:
+        restored = halt_tree_evict.restore_own_delta(root, run_dir, snap.kept_run)
+        if any(item["status"] == "skipped" for item in restored.values()):
             return False  # a fenced path stays evicted: the row stages as a fresh execute
         if stranded_out is not None:
             stranded_out.extend(stranded_after_restore(root, run_dir))
