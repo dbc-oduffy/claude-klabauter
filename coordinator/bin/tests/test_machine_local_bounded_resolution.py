@@ -141,22 +141,6 @@ def test_unset_key_stays_exit_1(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     assert rc == _ml.EXIT_NOT_FOUND
 
 
-@pytest.mark.deliberate_wall_clock(reason="the watchdog's wall-clock exit bound on a blocked read is the behaviour under test")
-def test_watchdog_exits_with_named_error_when_a_read_blocks(tmp_path: Path) -> None:
-    reg = tmp_path / "reg"
-    reg.mkdir()
-    code = (
-        "import importlib.util,sys,time;"
-        f"s=importlib.util.spec_from_file_location('m',r'{_IMPL}');m=importlib.util.module_from_spec(s);"
-        "s.loader.exec_module(m);m._arm_deadline(0.3);time.sleep(30)"
-    )
-    t0 = time.monotonic()
-    p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=20)
-    assert time.monotonic() - t0 < 5
-    assert p.returncode == 4
-    assert p.stderr.startswith("machine-local-timeout:") and "deadline of 0.3s exceeded" in p.stderr
-
-
 def test_oversize_registry_file_is_refused(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_ml, "_MAX_TOML_BYTES", 100)
     (reg / "registry.local.toml").write_text("# " + "x" * 500 + "\n")

@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 BIN_DIR = Path(__file__).resolve().parents[1]
 ENGINE_ROOT = BIN_DIR.parents[1]
 _SCRIPT = BIN_DIR / "coordinator-invoke.py"

@@ -266,6 +266,7 @@ _SHARED_DIR = "pkg/with/a/long/shared/path/prefix/for/the/slug/tests"
 def _seed_archived_rows(root: Path, *, count: int) -> None:
     """Closed `tf` rows in the archive whose capped title slug all share one prefix, as a long-lived box's do."""
     from coordinator_core.bug_blitz.mint import _slug_from_title
+    from coordinator_core.bug_blitz.archive_index import backfill
 
     month = root / "archive" / "bug-backlog" / "2026-09"
     month.mkdir(parents=True)
@@ -277,6 +278,7 @@ def _seed_archived_rows(root: Path, *, count: int) -> None:
             "severity: P1\nfrom_repo: box\ntags:\n  - tf\n  - bug-blitz-20260901T000000Z\n",
             encoding="utf-8",
         )
+    assert backfill(root) == count
 
 
 def test_default_submission_over_five_targets_stays_inside_the_brightline(real_repo, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -344,6 +346,17 @@ def test_default_submission_over_a_full_backlog_reads_only_the_rows_its_targets_
         return real_mint(*a, **k)
 
     monkeypatch.setattr(mod, "_default_mint", watched_mint)
+    real_read = Path.read_bytes
+
+    def watched_read(path):
+        assert not (
+            path.parent == real_repo / "state" / "bug-backlog"
+            and path.name.startswith("2026-0")
+            and "-tf-pkg-mod-" in path.name
+        ), f"opened an unrelated backlog row: {path.name}"
+        return real_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", watched_read)
     with _count_spawns_attributed(monkeypatch) as spawns:
         started = time.process_time()
         env = _call(real_repo, {"targets": "red.txt"}, mint=None, parse=None, resolve=None)
@@ -726,3 +739,141 @@ def test_a_target_refusal_leads_with_its_cause_not_the_target_path(repo) -> None
 
     env = _call(repo, {"targets": "scratch/" + "r" * 60 + ".txt"}, parse=parse)
     assert _reason(env).split("] ", 1)[1].startswith("2 target(s) could not be parsed"), _reason(env)
+
+
+_BACKLOG_ROW = (
+    "created: 2026-11-12\ntitle: {title}\nbody: b\nstatus: open\nsurface: live.py\nseverity: P1\ntags:\n  - tf\n"
+)
+
+
+def _pm_ruling(root: Path, row_id: str):
+    import yaml
+
+    text = (root / "state" / "bug-backlog" / f"{row_id}.yaml").read_text(encoding="utf-8")
+    return yaml.safe_load(text).get("pm_ruling")
+
+
+def _rows_by_title(root: Path) -> dict:
+    import yaml
+
+    out = {}
+    for p in (root / "state" / "bug-backlog").glob("*.yaml"):
+        row = yaml.safe_load(p.read_text(encoding="utf-8"))
+        out[row["title"]] = row
+    return out
+
+
+def test_default_submission_with_rulings_lands_pm_ruling_on_matching_rows_only(real_repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    before = int(_git(real_repo, "rev-list", "--count", "HEAD").strip())
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        env = _call(
+            real_repo,
+            {"targets": "red-set", "rulings": [{"match": "b/test_y.py", "ruling": "measure, do not bump"},
+                                               {"match": "no-such-row", "context": "x"}]},
+            mint=None,
+            parse=lambda spec: ParseResult(tests=_SIX),
+        )
+    assert not [s.argv for s in spawns]
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    rows = _rows_by_title(real_repo)
+    ruled = {t for t, r in rows.items() if r.get("pm_ruling") == "measure, do not bump"}
+    assert ruled == {"TF: b/test_y.py::TestY::test_one", "TF: b/test_y.py::TestY::test_two"}
+    assert [t for t, r in rows.items() if "pm_ruling" in r and t not in ruled] == []
+    assert _porcelain_state(real_repo) == []
+    assert int(_git(real_repo, "rev-list", "--count", "HEAD").strip()) == before + 1
+    committed = _git(real_repo, "show", "HEAD:state/bug-backlog/" + next(
+        p.name for p in (real_repo / "state" / "bug-backlog").glob("*.yaml") if "pm_ruling" in p.read_text(encoding="utf-8")
+    ))
+    assert "measure, do not bump" in committed
+    assert "Rulings applied to 2 row(s)." in _reason(env)
+    assert "Matched no row: 'no-such-row'." in _reason(env)
+
+
+def test_a_string_ruling_applies_to_every_minted_row(real_repo) -> None:
+    env = _call(real_repo, {"targets": "red-set", "rulings": "delete dead tests"}, mint=None)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    rows = _rows_by_title(real_repo)
+    assert len(rows) == 2 and all(r.get("pm_ruling") == "delete dead tests" for r in rows.values())
+    assert _porcelain_state(real_repo) == []
+
+
+def test_a_submission_without_rulings_leaves_rows_without_pm_ruling(real_repo) -> None:
+    _call(real_repo, {"targets": "red-set"}, mint=None)
+    assert all("pm_ruling" not in r for r in _rows_by_title(real_repo).values())
+
+
+@pytest.mark.parametrize(
+    "rulings", [5, [{"ruling": "x"}], [{"match": "a"}], [{"match": "a", "ruling": "x", "k": 1}], ["x"], {"match": "a"}]
+)
+def test_a_malformed_rulings_shape_is_denied_and_mints_nothing(repo, rulings) -> None:
+    def boom(*a, **k):
+        raise AssertionError("a refused arg shape must not mint")
+
+    env = _call(repo, {"targets": "red-set", "rulings": rulings}, mint=boom)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "rulings" in _reason(env)
+
+
+def test_backlog_target_with_list_rulings_writes_and_commits_matching_open_rows(real_repo) -> None:
+    (real_repo / "live.py").write_text("X = 1\n", encoding="utf-8")
+    for stem, title in (("row-a", "alpha defect"), ("row-b", "beta defect")):
+        (real_repo / "state" / "bug-backlog" / f"{stem}.yaml").write_text(_BACKLOG_ROW.format(title=title), encoding="utf-8")
+    _git(real_repo, "add", "-A")
+    _git(real_repo, "commit", "-q", "-m", "rows")
+    env = _call(real_repo, {"targets": "backlog", "rulings": [{"match": "alpha", "ruling": "fix it"}]})
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert _pm_ruling(real_repo, "row-a") == "fix it"
+    assert _pm_ruling(real_repo, "row-b") is None
+    assert _porcelain_state(real_repo) == []
+    assert "fix it" in _git(real_repo, "show", "HEAD:state/bug-backlog/row-a.yaml")
+
+
+def test_backlog_target_with_a_bare_string_ruling_proceeds_applying_none_and_names_the_list_form(real_repo) -> None:
+    (real_repo / "state" / "bug-backlog").mkdir(parents=True, exist_ok=True)
+    (real_repo / "state" / "bug-backlog" / "row-a.yaml").write_text(_BACKLOG_ROW.format(title="alpha defect"), encoding="utf-8")
+    _git(real_repo, "add", "-A")
+    _git(real_repo, "commit", "-q", "-m", "rows")
+    env = _call(real_repo, {"targets": "backlog", "rulings": "everything"})
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert "list of {match, ruling}" in _reason(env)
+    assert _pm_ruling(real_repo, "row-a") is None
+
+
+def test_emit_params_carry_the_revisions_preamble_and_the_run_is_revisable(repo) -> None:
+    from coordinator_core.bug_blitz.contract import blitz_revisions_rel
+    from coordinator_core.ops.dispatch_emit import pipeline_run, requirements_ledger
+
+    seen: dict = {}
+
+    def emit(params: dict, root: Path) -> dict:
+        seen.update(params)
+        script = Path(params["output_path"])
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text("// stub\n", encoding="utf-8")
+        return {"ok": True, "path": str(script)}
+
+    env = _call(repo, {"targets": "red-set"}, emit=emit)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert seen["preamble"] == f"{pipeline_run.REVISIONS_MARKER} Revisions file: {blitz_revisions_rel(RUN_ID)}"
+    assert requirements_ledger._parent_lists_run(repo, RUN_ID)
+
+
+def test_the_real_emit_writes_a_script_that_reads_revisions_and_names_the_file(repo) -> None:
+    from coordinator_core.bug_blitz.contract import blitz_revisions_rel, blitz_script_rel
+    from coordinator_core.ops.dispatch_emit import pipeline_run
+
+    env = _call(repo, {"targets": "red-set"})
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    script = (repo / blitz_script_rel(RUN_ID)).read_text(encoding="utf-8")
+    assert pipeline_run.reads_revisions(script)
+    assert blitz_revisions_rel(RUN_ID) in script
+
+
+def test_a_run_parent_failure_does_not_refuse_the_submission(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract
+
+    def refuse(*a, **k):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(ask_fanout_contract, "mint_run_parent", refuse)
+    assert _call(repo, {"targets": "red-set"})["hookSpecificOutput"]["permissionDecision"] == "allow"

@@ -1537,11 +1537,12 @@ class TestGitInitIntoScratch:
         assert self._at("git init", sub) is None
         assert self._at("git init -q", sub) is None
 
-    def test_init_of_the_repo_or_outside_scratch_denies(self, tree) -> None:
-        assert self._at("git init", tree) is not None
-        assert self._at("git init elsewhere", tree) is not None
-        assert self._at("git init ../escape", tree / "scratch") is not None
-        assert self._at("git init scratch", tree) is not None
+    def test_init_anywhere_allows(self, tree) -> None:
+        assert self._at("git init", tree) is None
+        assert self._at("git init elsewhere", tree) is None
+        assert self._at("git init ../escape", tree / "scratch") is None
+        assert self._at("git init scratch", tree) is None
+        assert self._at("cd scratch && git init newrepo", tree) is None
 
     def test_init_with_hook_vector_denies(self, tree) -> None:
         assert self._at("git init --template=/t scratch/x", tree) is not None

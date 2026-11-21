@@ -7,6 +7,8 @@ from pathlib import Path
 from coordinator_core.architecture_survey import census_shape, tree_census
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _repo(tmp_path: Path, paths: list[str]) -> Path:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)

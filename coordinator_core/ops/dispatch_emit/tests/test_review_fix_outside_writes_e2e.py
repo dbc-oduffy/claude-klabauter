@@ -25,6 +25,8 @@ from coordinator_core.ops.reverify_scope import select_tests
 from coordinator_core.session.machinery_paths import share_dir
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 SESSION = "sess-own"
 PREFIX = "prep-e2e"
 DECLARED = "src/defaults.ts"

@@ -503,68 +503,6 @@ def test_elsewhere(tmp_path):
     result.assert_outcomes(passed=1)
 
 
-def _dead_pid():
-    import subprocess
-    import sys
-
-    proc = subprocess.Popen(
-        [sys.executable, "-c", "pass"],
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    proc.wait()
-    return proc.pid
-
-
-def _seed_root(monkeypatch, tmp_path):
-    import tempfile
-
-    from coordinator_core import temp_layout
-
-    temp = tmp_path / "Temp"
-    temp.mkdir()
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temp))
-    repo = tmp_path / "myrepo"
-    repo.mkdir()
-    root = temp_layout.pytest_basetemp_root(repo)
-    root.mkdir(parents=True)
-    return root
-
-
-def test_configure_reaps_only_unmarked_dead_pid_run_dirs(tmp_path, monkeypatch):
-    root = _seed_root(monkeypatch, tmp_path)
-    dead = root / f"{_dead_pid()}-abcdef"
-    import subprocess
-    import sys
-
-    sleeper = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(60)"],
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    try:
-        live = root / f"{sleeper.pid}-abcdef"
-        kept = root / f"{_dead_pid()}-fedcba"
-        foreign = root / "not-a-run-dir"
-        for d in (dead, live, kept, foreign):
-            d.mkdir()
-            (d / "f.txt").write_text("x")
-        (kept / fc._KEPT_MARKER).touch()
-        cfg, _ = _configure(monkeypatch, tmp_path)
-        assert not dead.exists()
-        assert live.is_dir() and kept.is_dir() and foreign.is_dir()
-        assert Path(cfg.option.basetemp).parent == root
-    finally:
-        sleeper.kill()
-        sleeper.wait()
-
-
-def test_worker_configure_reaps_nothing(tmp_path, monkeypatch):
-    root = _seed_root(monkeypatch, tmp_path)
-    dead = root / f"{_dead_pid()}-abcdef"
-    dead.mkdir()
-    _configure(monkeypatch, tmp_path, worker=True)
-    assert dead.is_dir()
-
-
 def _conftest_only_run(pytester, basetemp):
     pytester.makeconftest(
         """
@@ -597,3 +535,35 @@ def test_conftest_install_refuses_in_repo_basetemp_without_the_plugin(pytester, 
 def test_conftest_install_accepts_basetemp_outside_a_git_tree(pytester, tmp_path):
     result = _conftest_only_run(pytester, tmp_path / "bt")
     result.assert_outcomes(passed=1)
+
+
+def test_redirect_lands_on_the_disk_parent_when_gettempdir_is_tmpfs(tmp_path, monkeypatch):
+    import tempfile
+
+    from coordinator_core import temp_layout
+
+    disk = tmp_path / "disk"
+    disk.mkdir()
+    monkeypatch.setattr(temp_layout, "_pytest_temp_parent", lambda: disk)
+    cfg, temp = _configure(monkeypatch, tmp_path)
+    root = fc._REDIRECT.root
+    assert root.parent == disk / "coordinator" / "myrepo" / "run-temp"
+    assert tempfile.tempdir == str(root)
+    assert Path(cfg.option.basetemp).is_relative_to(disk)
+    assert not (temp / "coordinator").exists()
+    fc._end_redirect(_Sess(cfg), 0)
+    assert not root.exists()
+
+
+def test_redirect_reaps_a_dead_pid_sibling_under_the_disk_parent(tmp_path, monkeypatch):
+    from coordinator_core import temp_layout
+    from coordinator_core.group_em import session_registry
+
+    disk = tmp_path / "disk"
+    run_temp = disk / "coordinator" / "myrepo" / "run-temp"
+    dead = run_temp / "4000000-abcdef"
+    dead.mkdir(parents=True)
+    monkeypatch.setattr(temp_layout, "_pytest_temp_parent", lambda: disk)
+    monkeypatch.setattr(session_registry, "pid_alive", lambda pid: False)
+    _configure(monkeypatch, tmp_path)
+    assert not dead.exists()

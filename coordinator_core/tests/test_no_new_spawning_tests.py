@@ -1236,8 +1236,12 @@ def _analyze_file(path: Path, relpath: str) -> FileSpawnReport:
 
     module_level_linenos = sorted(node.lineno for node in scanner.module_level_spawns)
     # Rule 1 also covers an import-time CALL to a spawn wrapper -- e.g. a
-    # module-level `_ensure_repo_synced()` that itself shells out.
+    # module-level `_ensure_repo_synced()` that itself shells out. A call inside an
+    # `if __name__ == "__main__":` body (`sys.exit(main(...))`) never runs on import.
+    main_guard_calls = _main_guard_body_linenos(tree_for_marker)
     for lineno, target in scanner.module_level_calls:
+        if lineno in main_guard_calls:
+            continue
         if _target_reaches_spawn(info, target, frozenset()):
             module_level_linenos.append(lineno)
 
@@ -1319,6 +1323,17 @@ def _rel(path: Path) -> str:
     return path.resolve().relative_to(REPO_ROOT).as_posix()
 
 
+def _is_test_module(path: Path) -> bool:
+    """A `test_*.py` name is not proof of a test module: production modules (e.g. the
+    test-leg runner op) carry the prefix and must never be marked. Collectible means it
+    defines a `test_*` function or `Test*` class."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return re.search(r"^\s*(?:async\s+)?def test_|^class Test", text, re.MULTILINE) is not None
+
+
 def _iter_test_files() -> list[Path]:
     """AST-target set: every `test_*.py` / `conftest.py` under the
     configured testpaths. Pure filesystem walk -- no subprocess involved."""
@@ -1336,6 +1351,8 @@ def _iter_test_files() -> list[Path]:
                 ]
                 for name in filenames:
                     if name == "conftest.py" or (name.startswith("test_") and name.endswith(".py")):
+                        if name != "conftest.py" and not _is_test_module(Path(dirpath) / name):
+                            continue
                         candidates.append(Path(dirpath) / name)
         else:
             continue
@@ -2114,6 +2131,31 @@ def test_module_scope_unknown_promotion_reports_the_negative_direction(
         "site must be reported by Rule 1 -- if this is empty, module-scope "
         "UNKNOWN promotion (C6d) has stopped firing"
     )
+
+
+def test_rule1_ignores_a_main_guarded_call_to_a_spawning_main_but_not_a_bare_one(
+    tmp_path: Path,
+) -> None:
+    """`if __name__ == "__main__": sys.exit(main())` never runs on import, so a `main` that
+    spawns must not trip Rule 1; the same call unguarded at module scope still must."""
+    from coordinator_core.spawn_policy.wrapper_resolution import WrapperResolver
+
+    head = "\n".join(["import subprocess, sys", "def main():", "    subprocess.run(['git', 'status'])", ""])
+    guarded = tmp_path / "guarded.py"
+    guarded.write_text(
+        head + "\n".join(["if __name__ == '__main__':", "    sys.exit(main())", ""]), encoding="utf-8"
+    )
+    bare = tmp_path / "bare.py"
+    bare.write_text(head + "main()\n", encoding="utf-8")
+    prior_resolver = globals()["_WRAPPER_RESOLVER"]
+    try:
+        globals()["_WRAPPER_RESOLVER"] = WrapperResolver(tmp_path, _build_scanner)
+        guarded_report = _analyze_file(guarded, "guarded.py")
+        bare_report = _analyze_file(bare, "bare.py")
+    finally:
+        globals()["_WRAPPER_RESOLVER"] = prior_resolver
+    assert guarded_report.module_level_linenos == []
+    assert bare_report.module_level_linenos
 
 
 def test_function_scope_unknown_spawn_is_contained_regardless_of_query_order(

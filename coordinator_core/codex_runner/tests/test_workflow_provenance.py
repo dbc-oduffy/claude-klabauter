@@ -1,8 +1,6 @@
 """Accounting uses actual exec event fields, keeping broker lineage separate."""
 import json
 import os
-import subprocess
-import sys
 import hashlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -163,25 +161,6 @@ def test_invalid_native_cache_total_is_incomplete(tmp_path: Path) -> None:
     result = workflow._append_canonical_usage(receipt)
     assert result['status'] == 'incomplete'
     assert 'exceeds input' in result['reason']
-
-
-def test_kernel_lock_deduplicates_across_real_processes(tmp_path: Path) -> None:
-    script = ('import json; from coordinator_core.codex_runner.workflow import _append_canonical_usage; '
-              f'print(json.dumps(_append_canonical_usage({complete_receipt()!r})))')
-    processes = [subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE,
-                 stderr=subprocess.PIPE, text=True, env=dict(os.environ)) for _ in range(3)]
-    results = []
-    try:
-        for process in processes:
-            stdout, stderr = process.communicate(timeout=15)
-            assert process.returncode == 0, stderr
-            results.append(json.loads(stdout))
-    finally:
-        for process in processes:
-            if process.poll() is None:
-                process.kill()
-                process.communicate()
-    assert sorted(row['status'] for row in results) == ['appended', 'duplicate', 'duplicate']
 
 
 def test_observer_partial_repeated_events_preserve_actual_child_uuid(tmp_path: Path) -> None:

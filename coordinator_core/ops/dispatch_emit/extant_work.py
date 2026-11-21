@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass
 from typing import Iterator, Optional
 
+from coordinator_core.session.output_tree_layout import locate
+
 #: Plan statuses that count as an accepted plan. plan.schema.json has no ``accepted`` status.
 ACCEPTED_PLAN_STATUSES = frozenset({"approved", "executing", "landed", "implemented"})
 
@@ -206,7 +208,9 @@ def _candidates(
 
     # Plans: the slug- and stem-keyed files, then the sizing's own `plan:` edge.
     edge_plan = _safe_rel(sizing_keys.get("plan", ""))
-    plan_rels = [f"docs/plans/{n}.md" for n in (stem, slug) if n and _SAFE_NAME_RE.match(n)]
+    plan_rels = [
+        locate(repo_root, f"docs/plans/{n}.md") for n in (stem, slug) if n and _SAFE_NAME_RE.match(n)
+    ]
     for rel in plan_rels + ([edge_plan] if edge_plan else []):
         if not once(rel):
             continue

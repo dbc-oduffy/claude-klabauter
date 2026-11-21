@@ -205,7 +205,7 @@ const calls = [];
 const log = () => {};
 const REPO_ROOT = 'REPO';
 const _manifest = %(manifest)s;
-const _agentDefsClause = () => '';
+const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => '';
 const _rowSidecar = () => '';
 const _briefPrecedenceTail = '';
 const _runBase = 'a'.repeat(40);

@@ -3218,3 +3218,91 @@ def test_home_refused_is_no_news(monkeypatch: pytest.MonkeyPatch, board_home) ->
     monkeypatch.setattr(gem_home, "resolve_home", refuse)
     lines, notes = _drift_tick(None)
     assert lines == [] and "goal-board" not in notes
+
+
+# --- the capacity stamp on the watch tick ----------------------------------
+
+_FAKE_GPU = {
+    "gpus": [{"index": 0, "name": "G", "vram_total_mib": 32768, "vram_used_mib": 6144, "util_pct": 1}],
+    "vram_by_pid": {},
+}
+
+
+@pytest.fixture
+def capacity_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A tmp settings home with the real capacity tick live (the file's autouse fixtures leave it so)."""
+    home = tmp_path / "settings-home"
+    home.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setattr(_gpu_sample(), "sample", lambda: _FAKE_GPU)
+    return home
+
+
+def _gpu_sample():
+    from coordinator_core.group_em import gpu_sample
+
+    return gpu_sample
+
+
+def _capacity_json(home: Path) -> dict:
+    return json.loads((home / "state" / "group-em" / "box" / "capacity.json").read_text(encoding="utf-8"))
+
+
+def _admission(home: Path, *lines: dict) -> None:
+    path = home / "state" / "group-em" / "box" / "admission.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(l) + "\n" for l in lines), encoding="utf-8")
+
+
+def test_tick_once_stamps_the_local_capacity_record(tmp_path: Path, capacity_home: Path) -> None:
+    with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
+        assert watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=io.StringIO()) == 0
+    rec = _capacity_json(capacity_home)
+    assert rec["gpus"] == _FAKE_GPU["gpus"]
+    assert rec["ram_total_mb"] and rec["cores_physical"] and rec["os"]
+    assert rec["jobs"] == [] and rec["box_id"]
+
+
+def test_capacity_jobs_carry_measured_peaks_of_open_runs_only(capacity_home: Path) -> None:
+    me = os.getpid()
+    _admission(
+        capacity_home,
+        {"phase": "START", "session_id": "s1", "run": "render", "pids": [me], "cores": 4},
+        {"phase": "START", "session_id": "s2", "run": "done", "pids": [me]},
+        {"phase": "END", "session_id": "s2", "run": "done"},
+        {"phase": "START", "session_id": "s3", "run": "gone", "pids": [2**22 + 123]},
+    )
+    with mock.patch.object(_gpu_sample(), "sample", return_value={**_FAKE_GPU, "vram_by_pid": {me: 3000}}):
+        jobs = {j["run"]: j for j in watch._capacity_sample()["jobs"]}
+    assert set(jobs) == {"render", "gone"}
+    assert jobs["render"]["peak_vram_mib"] == 3000 and jobs["render"]["cores"] == 4
+    assert jobs["render"]["peak_ram_mb"] and jobs["render"]["session_id"] == "s1"
+    assert jobs["gone"]["peak_ram_mb"] is None and jobs["gone"]["peak_vram_mib"] is None
+
+
+def test_capacity_sample_carries_gpu_unavailable_reason(capacity_home: Path) -> None:
+    with mock.patch.object(_gpu_sample(), "sample", return_value={"gpu_unavailable": "nvml-absent"}):
+        sample = watch._capacity_sample()
+        assert watch.capacity_tick() is True
+    assert "gpus" not in sample and sample["gpu_unavailable"] == "nvml-absent"
+    rec = _capacity_json(capacity_home)
+    assert rec["gpu_unavailable"] == "nvml-absent" and "gpus" not in rec
+
+
+def test_capacity_stamp_failure_never_fails_the_wake(tmp_path: Path, capacity_home: Path) -> None:
+    with mock.patch.object(watch, "_capacity_sample", side_effect=RuntimeError("x")), mock.patch.object(
+        watch, "poll_once", return_value=({}, [], {}, 0)
+    ):
+        assert watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=io.StringIO()) == 0
+        assert watch.capacity_tick() is False
+
+
+def test_capacity_sample_spawns_no_child(capacity_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    def boom(*a, **k):
+        raise AssertionError("capacity sample must not spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert watch._capacity_sample()["gpus"] == _FAKE_GPU["gpus"]

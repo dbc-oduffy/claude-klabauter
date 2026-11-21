@@ -62,6 +62,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "box-launch-windowless.py",
     "seed-cross-session-inbound.py",
     "trim-file-cache.py",
+    "setup-chain-walker.py",
     "coordinator-subsession.py",
     "test-verdict.py",
     "plan-status-transition.py",

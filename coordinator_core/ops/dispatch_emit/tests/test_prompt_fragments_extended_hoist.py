@@ -110,3 +110,29 @@ def test_hoist_cost_grows_linearly_with_script_size(monkeypatch):
 
     small, large = best(300), best(1200)
     assert large < max(small, 0.02) * 10, f"4x the script cost {large / max(small, 1e-6):.1f}x ({small:.3f}s -> {large:.3f}s)"
+
+
+def test_remap_scan_equals_a_fresh_scan_after_edits_and_a_defs_insert():
+    schema = '{"type": "object", "properties": {"a": {"type": "string"}}}'
+    script = (
+        "// head\nconst x = 'keep';\n"
+        f"const a = {schema}; const s = 'str {{\"q\": 1}}'; const t = `tpl ${{'in'}}`; /* c */ const b = {schema};\n"
+    )
+    edits = []
+    at_start = 0
+    while (i := script.find(schema, at_start)) >= 0:
+        edits.append((i, i + len(schema), "_PF1"))
+        at_start = i + len(schema)
+    out, last = [], 0
+    for s, e, name in edits:
+        out += [script[last:s], name]
+        last = e
+    out.append(script[last:])
+    edited = "".join(out)
+    at = edited.index("\n") + 1
+    defs = f"const _PF1 = {schema};\n"
+    final = edited[:at] + defs + edited[at:]
+
+    lits, dead = pf._remap_scan(pf._scan(script), edits, at, defs)
+    want_lits, want_dead = pf._scan(final)
+    assert sorted(lits) == sorted(want_lits) and sorted(dead) == sorted(want_dead)

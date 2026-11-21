@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
+from coordinator_core.ops.dispatch_emit.tests.conftest import shared_decls
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -22,6 +23,7 @@ let _halted = null, _reviseAndRefire = 'unset', _planRel = 'p.md', _sizingRel = 
 let _incompleteChunks = %s, _commit = %s, _resumeLedger = %s, _gate = %s;
 let _nextAction = %s;
 const _mkRevise = () => ({ reason: 'x' });
+%s
 if (false) {}
 %s
 console.log(JSON.stringify({ halted: _halted, revise: _reviseAndRefire, na: _nextAction }));
@@ -35,7 +37,7 @@ def _script() -> str:
 
 
 def _line(prefix: str) -> str:
-    lines = [ln for ln in _script().split("\n") if ln.startswith(prefix)]
+    lines = [ln for ln in _script().split("\n") if ln.lstrip().startswith(prefix.lstrip())]
     assert len(lines) == 1
     return lines[0]
 
@@ -44,7 +46,7 @@ def _drive(js_line: str, *, incomplete=(), commit=None, resume=False, gate=None,
     na = na if na is not None else {"kind": "terminal_commit", "op": OP_NAME,"params": {"inline_review": _IR}}
     program = _HARNESS % (
         json.dumps(list(incomplete)), json.dumps(commit or {"refused": "since-base-overlap"}),
-        json.dumps(resume), json.dumps(gate or {}), json.dumps(na), js_line,
+        json.dumps(resume), json.dumps(gate or {}), json.dumps(na), shared_decls(_script()), js_line,
     )
     out = subprocess.run(
         ["node", "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()

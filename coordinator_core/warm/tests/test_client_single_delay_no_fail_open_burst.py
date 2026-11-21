@@ -25,6 +25,8 @@ import pytest
 from coordinator_core.benchmarks import pool_leg_io_stall_canary as canary
 from coordinator_core.warm import server
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _HOOK_METHOD = "hooks.preuse_bash_dispatch"
 _LANES = 4
 _FOLLOWING_CALLS = 6

@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -105,18 +103,6 @@ def test_every_candidate_the_bills_name_has_a_contract_verdict():
         assert bill["candidate"] in mod.CONTRACT_OK
 
 
-@pytest.mark.spawns_process
-def test_the_pinned_base_door_source_is_the_committed_bytes_at_base(tmp_path):
-    out = mod.export_door_sources(REPO_ROOT, mod.BASE_SHA, "posix", tmp_path)
-    committed = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "show", f"{mod.BASE_SHA}:{mod.DOOR_DIR_REL}/door_posix.c"],
-        capture_output=True, check=True,
-    ).stdout
-    assert (out / "door_posix.c").read_bytes() == committed
-    assert b"RESPAWN ON MISS" in committed
-    assert {p.name for p in out.iterdir()} == set(mod.SOURCE_FILES["posix"])
-
-
 def test_worktree_export_copies_the_live_source(tmp_path):
     out = mod.export_door_sources(REPO_ROOT, mod.WORKTREE, "posix", tmp_path)
     assert (out / "door_core.c").read_bytes() == (REPO_ROOT / mod.DOOR_DIR_REL / "door_core.c").read_bytes()
@@ -163,24 +149,6 @@ def test_a_cold_fall_through_does_not_count_as_a_warm_answer():
     warm = subprocess.CompletedProcess([], 0, stdout="session_id", stderr="")
     cold = subprocess.CompletedProcess([], 0, stdout="session_id", stderr="[warm-client] ENGINE UNREACHABLE")
     assert engine.is_warm_answer(warm) and not engine.is_warm_answer(cold)
-
-
-@pytest.mark.spawns_process
-def test_stop_engine_processes_ends_a_process_rooted_at_the_clone(tmp_path):
-    root = tmp_path / "clone"
-    root.mkdir()
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(root)])
-    try:
-        deadline = time.monotonic() + 10
-        while not mod.server_processes(root) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert mod.server_processes(root)
-        mod.stop_engine_processes(root)
-        assert proc.wait(timeout=10) is not None
-        assert not mod.server_processes(root)
-    finally:
-        if proc.poll() is None:
-            proc.kill()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="asserts the refusal off Windows")

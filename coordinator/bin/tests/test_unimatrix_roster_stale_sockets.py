@@ -129,3 +129,12 @@ def test_a_live_unbacked_mirror_of_another_roster_keeps_its_socket(roster) -> No
           macSocketPath="/far.sock", unimatrixFarSeen=1)
     roster.reap_orphaned_mirrors(REMOTE, lambda m: None)
     assert held.exists()
+
+
+def test_a_live_entry_a_past_sweep_flagged_stale_is_listed_again(roster) -> None:
+    # Router-written Codex faces are never rewritten, so a one-time flag must not hide a live face for good.
+    pipe = "\\\\.\\pipe\\LOCAL\\cc-msg-" + HEX_LIVE
+    me = os.getpid()
+    row = {"pid": me, "name": "codex-face", "messagingSocketPath": pipe,
+           "procStart": roster.proc_start(me), "unimatrixStale": True}
+    assert roster.entry_listed(row)

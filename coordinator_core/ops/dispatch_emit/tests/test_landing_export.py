@@ -117,10 +117,11 @@ def test_dotdot_and_outside_repo_paths_refused(repo, tmp_path):
     assert base.is_dir()
 
 
-def test_missing_base_export_refused(repo):
-    root, base_sha, _ = repo
+def test_base_export_without_its_sha_refused(repo):
+    root, _, base = repo
     with pytest.raises(le.LandingExportError):
-        le.build_landing_export(root, root / "scratch" / "o", ["pkg/own.py"])
+        le.build_landing_export(root, root / "scratch" / "o", ["pkg/own.py"], base_export=base)
+    assert base.is_dir()
 
 
 def test_export_spawns_nothing(repo, monkeypatch):
@@ -311,3 +312,30 @@ def test_head_export_over_cap_refused_before_staging(repo, monkeypatch):
         _head_export(root, ["pkg/own.py"])
     monkeypatch.setenv("COORDINATOR_EXPORT_CAP_BYTES", str(1 << 40))
     assert (Path(_head_export(root, ["pkg/own.py"]).path) / "pkg" / "own.py").is_file()
+
+
+def test_base_sha_only_exports_declared_paths_at_base_bytes_despite_foreign_dirt(repo, monkeypatch):
+    root, base_sha, _ = repo
+    (root / "pkg" / "own.py").write_bytes(b"PEER HUNKS\r\n")
+    calls = []
+    real = subprocess.Popen.__init__
+    monkeypatch.setattr(subprocess.Popen, "__init__", lambda self, *a, **k: (calls.append(a), real(self, *a, **k))[1])
+    res = le.build_landing_export(root, root / "scratch" / "arm", ["pkg/own.py", "new.txt"], base_sha=base_sha)
+    out = Path(res.path)
+    assert (out / "pkg" / "own.py").read_bytes() == b"own v1\r\n"
+    assert res.overlaid == ("pkg/own.py",) and res.removed == ("new.txt",)
+    assert not (out / "new.txt").exists()
+    assert calls == []
+
+
+def test_arm_brief_command_succeeds_with_no_export_supplied(repo, monkeypatch, capsys):
+    from coordinator_core.ops.dispatch_emit import emit
+
+    root, base_sha, _ = repo
+    clause = emit._isolated_arm_build_clause()
+    assert "--base-export" not in clause and "--base-sha" not in clause
+    (root / "pkg" / "own.py").write_bytes(b"PEER HUNKS\r\n")
+    monkeypatch.chdir(root)
+    assert le.main(["scratch/arm-C1", "pkg/own.py"]) == 0
+    assert (root / "scratch" / "arm-C1" / "pkg" / "own.py").read_bytes() == b"own v1\r\n"
+    assert json.loads(capsys.readouterr().out)["overlaid"] == ["pkg/own.py"]

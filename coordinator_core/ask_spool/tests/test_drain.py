@@ -12,6 +12,8 @@ import pytest
 
 from coordinator_core.ask_spool import drain, record
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 @pytest.fixture(autouse=True)
 def _isolated_settings_home(tmp_path, monkeypatch):
@@ -861,3 +863,13 @@ def test_exhausted_fire_attempts_halt_with_the_typed_cause_not_a_bare_abandon(tm
     called = []
     drain._fire_minted(str(tmp_path), lambda r, i: called.append(i), later)
     assert not called
+def test_two_identical_bare_entries_fire_once_and_the_second_is_marked_a_duplicate(tmp_path):
+    a = _spool_ask(tmp_path, "tuA", "Fix the drain bug", sid="sessA")
+    b = _spool_ask(tmp_path, "tuB", "fix  the DRAIN bug", sid="sessB")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 1 and counts["minted"] == 1 and counts["coalesced"] == 1
+    heads = [record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))[0] for sid in (a, b)]
+    (dup,) = [h for h in heads if "coalesced_into" in h]
+    (first,) = [h for h in heads if "coalesced_into" not in h]
+    assert dup["coalesced_into"] == first["run_id"] == dup["run_id"]

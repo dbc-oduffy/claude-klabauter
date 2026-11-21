@@ -18,6 +18,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,7 @@ import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Callable, ContextManager, Iterator, Optional, Sequence
+from typing import Callable, Collection, ContextManager, Iterator, Optional, Sequence
 
 from coordinator_core import temp_layout
 from coordinator_core.git.run import _git_exe, run_git
@@ -72,13 +73,17 @@ class OverlayVerdict:
     built by `check_verdict`: land_run lands it with an advisory. `detail` is the tail of the runner output or
     the reason. `timed_out` is True only on an "inconclusive" whose seeds pytest stalled (no output for
     `PYTEST_STALL_S`); every other inconclusive keeps it False. `failing` is the FAILED/ERROR node ids that made
-    a "red" or "pre_existing" verdict (empty on every other verdict)."""
+    a "red" or "pre_existing" verdict (empty on every other verdict). `argv` is the pytest argv (with its
+    `--basetemp`) of each run behind the verdict, one shell-joined string per run; `cause` is
+    `ZERO_RUN_TEST_INFRA` when every outcome was a setup error, else `""`."""
 
     verdict: str
     detail: str = ""
     seeds: tuple = field(default_factory=tuple)
     timed_out: bool = False
     failing: tuple = field(default_factory=tuple)
+    argv: tuple = field(default_factory=tuple)
+    cause: str = ""
 
     @property
     def red(self) -> bool:
@@ -178,6 +183,14 @@ def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedPro
     return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
+_PLAIN_GIT = frozenset({"ls-tree", "update-index", "diff-tree", "write-tree", "add"})
+
+
+def _plain_git_args(args: Sequence[str]) -> bool:
+    """`args` (after `git`) run a `_PLAIN_GIT` subcommand, past any leading global option."""
+    return next((a for a in args if not a.startswith("-")), "") in _PLAIN_GIT
+
+
 def _run(
     argv: list, cwd: Path, timeout: Optional[int], env: Optional[dict] = None, stdin_text: Optional[str] = None,
     *, stall_s: Optional[float] = None,
@@ -187,7 +200,15 @@ def _run(
     stdin. With `stall_s` the run has no total wall: it ends when it exits, or raises `PytestStalled` after
     `stall_s` seconds of silence (stdin is closed and the child runs unbuffered, because a piped pytest holds its
     dots until exit and would read as silent; `timeout` is ignored). Otherwise raises
-    `subprocess.TimeoutExpired` at `timeout`."""
+    `subprocess.TimeoutExpired` at `timeout`. A short git plumbing call (`_PLAIN_GIT`) goes through `run_git`
+    instead: the capped job costs ~230ms of process time per spawn, and git plumbing holds no grandchild."""
+    if stall_s is None and env is None and len(argv) > 1 and argv[0] == _git_exe() and _plain_git_args(argv[1:]):
+        done = run_git(
+            argv[1:], cwd=str(cwd), input=None if stdin_text is None else stdin_text.encode("utf-8", "surrogateescape"),
+        )
+        if done.timed_out:
+            raise subprocess.TimeoutExpired(argv, TEST_TIMEOUT_S if timeout is None else timeout)
+        return subprocess.CompletedProcess(argv, done.returncode, done.stdout, done.stderr)
     from coordinator_core.diagnostics.contained_run import spawn_in_capped_job
 
     if stall_s is not None:
@@ -405,6 +426,33 @@ def first_setup_error(output: str) -> str:
     return "first setup ERROR: " + " | ".join(ln.strip() for ln in (*section[:_SETUP_HEAD_LINES], *cause))[:_OUTPUT_TAIL]
 
 
+#: Zero-run cause for a pytest run whose every outcome is a setup error (no test completed): the harness, not a test, failed.
+ZERO_RUN_TEST_INFRA = "test_infra_failure"
+_SUMMARY_COUNTS_RE = re.compile(r"^\W*((?:\d+ [a-z]+(?:, )?)+) in \d+(?:\.\d+)?s", re.MULTILINE)
+_SETUP_ERROR_LINE_RE = re.compile(r"^ERROR (\S+::.+)$", re.MULTILINE)
+_COMPLETED_KINDS = ("passed", "failed", "xfailed", "xpassed")
+
+
+def infra_setup_error(output: str) -> str:
+    """The first setup error's text when `output` is a pytest run that completed no test and reported only
+    setup errors (`248 errors in 7.78s`, an `ERROR at setup of` section or an `ERROR <id>::<test>` line, no
+    `ERROR collecting`); `""` otherwise. Never empty for a run it types."""
+    text = output.replace("\r\n", "\n")
+    kinds: dict = {}
+    for body in _SUMMARY_COUNTS_RE.findall(text):
+        for n, kind in re.findall(r"(\d+) ([a-z]+)", body):
+            kinds[kind] = kinds.get(kind, 0) + int(n)
+    if not (kinds.get("error", 0) + kinds.get("errors", 0)) or any(kinds.get(k) for k in _COMPLETED_KINDS):
+        return ""
+    if re.search(r"^_+ ERROR collecting ", text, re.MULTILINE):
+        return ""
+    found = first_setup_error(text)
+    if found:
+        return found
+    line = _SETUP_ERROR_LINE_RE.search(text)
+    return f"first setup ERROR: {line.group(1).strip()}"[:_OUTPUT_TAIL] if line else ""
+
+
 LegHook = Callable[[str], ContextManager]
 
 
@@ -420,6 +468,15 @@ def _note(extra, **fields) -> None:
 
 class ExportError(Exception):
     """The clean mirror could not be prepared; `str(exc)` is the reason, a timeout naming its budget."""
+
+
+class CoTenantDependency(ExportError):
+    """A run file needs `symbol` from `peer`, which exists only in another session's uncommitted edit. Advisory and
+    typed: the peer's dirt is never exported, so the run waits for the peer's commit."""
+
+    def __init__(self, importer: str, peer: str, symbol: str, why: str):
+        self.importer, self.peer, self.symbol = importer, peer, symbol
+        super().__init__(f"co_tenant_dependency: {importer} needs {symbol} from {peer} ({why}; uncommitted in a peer session)")
 
 
 class _MirrorStale(Exception):
@@ -465,11 +522,53 @@ def _state_read(mroot: Path) -> Optional[str]:
     return at if isinstance(at, str) and at else None
 
 
-def _state_write(mroot: Path, at: Optional[str]) -> None:
+_KEEP = object()
+_CLOSURE_FILE = "closure.json"
+
+
+def _closure_digest(paths: Collection[str]) -> str:
+    return hashlib.sha256("\0".join(sorted(paths)).encode("utf-8")).hexdigest()[:16]
+
+
+def _state_digest(mroot: Path) -> Optional[str]:
+    try:
+        data = json.loads((mroot / _STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    digest = data.get("closure_digest") if isinstance(data, dict) else None
+    return digest if isinstance(digest, str) and digest else None
+
+
+def _state_write(mroot: Path, at: Optional[str], closure=_KEEP) -> None:
     """Record what the mirror reflects; `None` marks it mid-mutation, so a crash leaves it to be rebuilt.
+    `closure` is the tracked paths a scoped mirror holds (recorded as a digest in state.json beside `at`, the
+    list in closure.json); `None` records a full mirror and the default keeps what state.json already says.
     Every verify ends with a write, which keeps the idle-age Temp pruners off a mirror in use."""
     mroot.mkdir(parents=True, exist_ok=True)
-    (mroot / _STATE_FILE).write_text(json.dumps({"at": at}), encoding="utf-8", newline="\n")
+    if closure is _KEEP:
+        digest = _state_digest(mroot)
+    elif closure is None:
+        digest = None
+    else:
+        digest = _closure_digest(closure)
+        (mroot / _CLOSURE_FILE).write_text(json.dumps(sorted(closure)), encoding="utf-8", newline="\n")
+    state = {"at": at, **({"closure_digest": digest} if digest else {})}
+    (mroot / _STATE_FILE).write_text(json.dumps(state), encoding="utf-8", newline="\n")
+
+
+def _mirror_closure(mroot: Path) -> Optional[frozenset]:
+    """The paths a scoped mirror holds, `None` for a full mirror. `_MirrorStale` when the recorded digest
+    does not match the closure file: the mirror cannot say what it holds."""
+    digest = _state_digest(mroot)
+    if digest is None:
+        return None
+    try:
+        items = json.loads((mroot / _CLOSURE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise _MirrorStale(f"scoped mirror closure unreadable: {exc}") from exc
+    if not isinstance(items, list) or _closure_digest(items) != digest:
+        raise _MirrorStale("scoped mirror closure does not match its recorded digest")
+    return frozenset(items)
 
 
 def _drop(mroot: Path) -> None:
@@ -527,10 +626,42 @@ def reset_mirror(root: Path) -> None:
             raise ExportError(f"clean mirror busy: slot {slot} was not free within {TEST_TIMEOUT_S}s: {exc}") from exc
 
 
+def _read_head(root: Path) -> str:
+    """`HEAD`'s commit sha from `root/.git/HEAD` plus the branch's loose ref or `packed-refs`; `""` when `.git`
+    is not a plain directory or the ref is anywhere else (reftable, symbolic ref chain)."""
+    gdir = root / ".git"
+    try:
+        text = (gdir / "HEAD").read_text(encoding="utf-8").strip() if gdir.is_dir() else ""
+        if _FULL_SHA.fullmatch(text):
+            return text
+        if not text.startswith("ref: refs/"):
+            return ""
+        ref = text[5:]
+        try:
+            loose = (gdir / ref).read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            loose = ""
+        if _FULL_SHA.fullmatch(loose):
+            return loose
+        for line in (gdir / "packed-refs").read_text(encoding="utf-8").splitlines():
+            sha, _, name = line.partition(" ")
+            if name == ref and _FULL_SHA.fullmatch(sha):
+                return sha
+    except (OSError, ValueError):
+        pass
+    return ""
+
+
 def _commit_sha(root: Path, rev: str) -> str:
-    """`rev` as a full commit sha: a full sha passes through, anything else (HEAD) is resolved in `root`."""
+    """`rev` as a full commit sha: a full sha passes through, `HEAD` is read from a plain `.git` directory
+    without a spawn when it names a loose or packed branch, anything else is resolved by `git rev-parse` in
+    `root`."""
     if _FULL_SHA.fullmatch(rev):
         return rev
+    if rev == "HEAD":
+        head = _read_head(root)
+        if head:
+            return head
     out = run_git(["rev-parse", "--verify", "-q", f"{rev}^{{commit}}"], cwd=str(root))
     sha = out.stdout.strip()
     if out.returncode or not _FULL_SHA.fullmatch(sha):
@@ -543,8 +674,9 @@ def _written(names: Sequence[str]) -> int:
     return sum(1 for n in names if n and not n.startswith(_SPARSE_EXCLUDE))
 
 
-def _build(root: Path, mroot: Path, leg: LegHook) -> Path:
-    """A fresh `clone --shared --no-checkout` of `root` as the mirror worktree `<mroot>/<repo name>`."""
+def _build(root: Path, mroot: Path, leg: LegHook, scoped: bool = False) -> Path:
+    """A fresh `clone --shared --no-checkout` of `root` as the mirror worktree `<mroot>/<repo name>`; a full
+    mirror (`scoped` False) keeps the run-artifact trees out of its worktree."""
     dest = mroot / root.resolve().name
     _drop(mroot)
     mroot.mkdir(parents=True, exist_ok=True)
@@ -553,30 +685,106 @@ def _build(root: Path, mroot: Path, leg: LegHook) -> Path:
     if clone.returncode:
         why = "timed out" if clone.timed_out else clone.stderr.strip()[-_OUTPUT_TAIL:]
         raise ExportError(f"overlay clone failed: {why}")
-    _write_sparse(dest)
+    if not scoped:
+        _write_sparse(dest)
     return dest
 
 
-def _fill(dest: Path, mroot: Path, sha: str) -> int:
-    """First checkout of a fresh mirror: `read-tree -m -u <sha>` into its empty index. Returns the file count.
+_LS_TREE_ARGV_CHARS = 16000
+
+
+def _ls_tree(dest: Path, sha: str, paths: Sequence[str]) -> list:
+    """`(path, mode, oid)` of each of `paths` that is a blob under `sha`'s tree; gitlinks are left out. One
+    `ls-tree -r -z` per `_LS_TREE_ARGV_CHARS` of pathspec: git descends only the trees the paths name, where a
+    whole-tree listing walks and prints every tracked path. `_MirrorStale` when git fails."""
+    batches: list = [[]]
+    size = 0
+    for p in paths:
+        if size + len(p) + 1 > _LS_TREE_ARGV_CHARS and batches[-1]:
+            batches.append([])
+            size = 0
+        batches[-1].append(p)
+        size += len(p) + 1
+    found: list = []
+    for batch in batches:
+        if not batch:
+            continue
+        out = _run([_git_exe(), "ls-tree", "-r", "-z", sha, "--", *batch], dest, TEST_TIMEOUT_S)
+        if out.returncode:
+            raise _MirrorStale(f"ls-tree {sha[:12]} failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}")
+        for rec in out.stdout.split("\0"):
+            head, tab, path = rec.partition("\t")
+            fields = head.split()
+            if tab and len(fields) == 3 and fields[1] == "blob":
+                found.append((path, fields[0], fields[2]))
+    return found
+
+
+def _stage_and_write(dest: Path, put: Sequence[tuple]) -> None:
+    """Index `put` (`(path, mode, oid)`) by `update-index --index-info` and write them by `checkout-index`:
+    two spawns, whatever the count. A directory or file in a path's way is removed first."""
+    if not put:
+        return
+    recs = "".join(f"{mode} {oid}\t{p}\0" for p, mode, oid in put)
+    _must(_run([_git_exe(), "update-index", "-z", "--add", "--index-info"], dest, TEST_TIMEOUT_S, stdin_text=recs))
+    names = [p for p, _, _ in put]
+    for p in names:
+        target = dest / p
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        for anc in target.parents:
+            if anc == dest:
+                break
+            if anc.is_file():
+                anc.unlink()
+    _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, TEST_TIMEOUT_S, stdin_text="".join(f"{p}\0" for p in names)))
+
+
+def _fill(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str]] = None) -> int:
+    """First checkout of a fresh mirror. A `closure` fills index-free: one `ls-tree -r -z` of `sha`, the entries
+    the closure names, then `_stage_and_write` (no tree-walk write of the repo). `None` is the full fill:
+    `read-tree -m -u <sha>` into the empty index. Returns the file count.
     Bulk transfer, not local plumbing: it runs under the overlay's pytest bound, not run_git's 2s budget."""
     _state_write(mroot, None)
+    if closure is not None:
+        put = _ls_tree(dest, sha, sorted(closure))
+        _stage_and_write(dest, put)
+        _state_write(mroot, sha, frozenset(closure))
+        return len(put)
     out = _run([_git_exe(), "read-tree", "-m", "-u", sha], dest, TEST_TIMEOUT_S)
     if out.returncode:
         raise ExportError(f"overlay checkout failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}")
     listing = _run([_git_exe(), "ls-tree", "-r", "--name-only", "-z", sha], dest, TEST_TIMEOUT_S)
-    _state_write(mroot, sha)
+    _state_write(mroot, sha, None)
     return _written(listing.stdout.split("\0")) if not listing.returncode else 0
+
+
+def _extend(dest: Path, mroot: Path, sha: str, have: Optional[frozenset], want: Optional[Collection[str]]) -> int:
+    """Materialise the paths of `want` a scoped mirror (`have`) does not hold, from `sha`'s tree, and record the
+    wider closure. A full mirror (`have` None) already holds everything. Returns the files written."""
+    if have is None or want is None:
+        return 0
+    missing = sorted(set(want) - have)
+    if not missing:
+        return 0
+    listing = _ls_tree(dest, sha, missing)
+    at = _state_read(mroot)
+    _state_write(mroot, None)
+    _stage_and_write(dest, listing)
+    _state_write(mroot, at, have | frozenset(want))
+    return len(listing)
 
 
 _PLAIN_MODES = ("100644", "100755")
 
 
-def _apply_diff(dest: Path, raw: str) -> Optional[list]:
+def _apply_diff(dest: Path, raw: str, closure: Optional[Collection[str]] = None) -> Optional[list]:
     """Apply `diff-tree -r --raw -z --no-renames` output to the mirror's index and worktree without walking the
-    tree (`read-tree -m` re-reads every tree object of the repo: seconds, however few paths differ). Returns the
-    changed names, or `None` when an entry is not a plain file (symlink, submodule, type change), which the
-    caller moves by `read-tree` instead."""
+    tree (`read-tree -m` re-reads every tree object of the repo: seconds, however few paths differ). With a
+    `closure` (a scoped mirror) only its members are applied: the diff of a recorded overlay tree lists every
+    out-of-closure path as added, and none of them is ever written. Returns the changed names, or `None` when
+    an entry is not a plain file (symlink, submodule, type change), which the caller moves by `read-tree`
+    instead."""
     toks = raw.split("\0")
     gone: list = []
     put: list = []
@@ -585,6 +793,8 @@ def _apply_diff(dest: Path, raw: str) -> Optional[list]:
         meta = toks[i][1:].split()
         status, path = meta[4][0], toks[i + 1]
         i += 2
+        if closure is not None and path not in closure:
+            continue
         new_mode, new_oid = meta[1], meta[3]
         if status == "D":
             if meta[0] not in _PLAIN_MODES:
@@ -604,8 +814,8 @@ def _apply_diff(dest: Path, raw: str) -> Optional[list]:
     if put:
         recs = "".join(f"{mode} {oid}\t{p}\0" for p, mode, oid in put)
         _must(_run([_git_exe(), "update-index", "-z", "--add", "--index-info"], dest, TEST_TIMEOUT_S, stdin_text=recs))
-        hidden = [p for p, _, _ in put if p.startswith(_SPARSE_EXCLUDE)]
-        shown = [p for p, _, _ in put if not p.startswith(_SPARSE_EXCLUDE)]
+        hidden = [] if closure is not None else [p for p, _, _ in put if p.startswith(_SPARSE_EXCLUDE)]
+        shown = [p for p, _, _ in put if p not in hidden]
         if hidden:
             _must(_run([_git_exe(), "update-index", "-z", "--skip-worktree", "--stdin"], dest, TEST_TIMEOUT_S, stdin_text="".join(f"{p}\0" for p in hidden)))
         for p in shown:
@@ -627,11 +837,12 @@ def _must(out: subprocess.CompletedProcess) -> None:
         raise _MirrorStale(f"{' '.join(out.args[1:3])} failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}")
 
 
-def _advance(dest: Path, mroot: Path, sha: str) -> int:
+def _advance(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str]] = None) -> int:
     """Move the mirror from its recorded state to `sha`'s tree: one `diff-tree` names the paths that differ
-    (none: no write at all), and `_apply_diff` rewrites only those; a non-plain-file change falls back to
-    `read-tree -u -m <old> <sha>`. Returns the path count. Raises `_MirrorStale` when the mirror cannot be
-    advanced (it is left marked for rebuild)."""
+    (none: no write at all), and `_apply_diff` rewrites only those (a scoped mirror's `closure` members only);
+    a non-plain-file change falls back to `read-tree -u -m <old> <sha>` on a full mirror and is `_MirrorStale`
+    on a scoped one (a whole-tree read would write outside the closure). Returns the path count. Raises
+    `_MirrorStale` when the mirror cannot be advanced (it is left marked for rebuild)."""
     old = _state_read(mroot)
     if old is None:
         raise _MirrorStale("mirror state unknown")
@@ -641,14 +852,16 @@ def _advance(dest: Path, mroot: Path, sha: str) -> int:
     if not diff.stdout.strip("\0"):
         return 0
     _state_write(mroot, None)
-    names = _apply_diff(dest, diff.stdout)
+    names = _apply_diff(dest, diff.stdout, closure)
     if names is None:
+        if closure is not None:
+            raise _MirrorStale(f"non-plain-file change {old[:12]}..{sha[:12]} in a scoped mirror")
         moved = _run([_git_exe(), "read-tree", "-m", "-u", old, sha], dest, TEST_TIMEOUT_S)
         if moved.returncode:
             raise _MirrorStale(f"read-tree {old[:12]}..{sha[:12]} failed: {moved.stderr.strip()[-_OUTPUT_TAIL:]}")
         names = [t for t in diff.stdout.split("\0") if t and not t.startswith(":")]
     _state_write(mroot, sha)
-    return _written(names)
+    return len(names) if closure is not None else _written(names)
 
 
 def _declared(paths: Sequence[str]) -> tuple:
@@ -666,14 +879,18 @@ def _declared(paths: Sequence[str]) -> tuple:
     return tuple(out)
 
 
-def _overlay(root: Path, dest: Path, mroot: Path, sha: str, rels: Sequence[str]) -> tuple:
+def _overlay(
+    root: Path, dest: Path, mroot: Path, sha: str, rels: Sequence[str],
+    closure: Optional[Collection[str]] = None,
+) -> tuple:
     """Put the worktree bytes of each declared path of `root` into the mirror, staging only the paths whose bytes
-    differ (a path absent from the worktree is a deletion); nothing else of the worktree is read. Paths under the
-    mirror's sparse-excluded trees are skipped. Returns `(paths written, the mirror's new tree sha)`; no write
-    leaves the state at `sha`. Raises `_MirrorStale` when git cannot record the overlay."""
+    differ (a path absent from the worktree is a deletion); nothing else of the worktree is read. On a full
+    mirror, paths under its sparse-excluded trees are skipped. Returns `(paths written, the mirror's new tree
+    sha)`; no write leaves the state at `sha`. A scoped mirror's recorded tree holds only its closure, which
+    `_advance` filters by. Raises `_MirrorStale` when git cannot record the overlay."""
     todo: list = []
     for rel in rels:
-        if rel.startswith(_SPARSE_EXCLUDE):
+        if closure is None and rel.startswith(_SPARSE_EXCLUDE):
             continue
         src, out = root / rel, dest / rel
         if src.is_file():
@@ -684,6 +901,7 @@ def _overlay(root: Path, dest: Path, mroot: Path, sha: str, rels: Sequence[str])
             todo.append((rel, None))
     if not todo:
         return 0, sha
+    _reject_removed_imports(root, dest, sha, dict(todo), closure)
     _state_write(mroot, None)
     for rel, data in todo:
         out = dest / rel
@@ -707,20 +925,115 @@ def _overlay(root: Path, dest: Path, mroot: Path, sha: str, rels: Sequence[str])
     return len(names), at
 
 
-def _prepare(root: Path, mroot: Path, sha: str, leg: LegHook, overlay: Sequence[str] = ()) -> Path:
+def _defined_names(data: bytes) -> set[str]:
+    import ast
+
+    try:
+        tree = ast.parse(data)
+    except SyntaxError:
+        return set()
+    names = {
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    for node in tree.body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names.update(target.id for target in targets if isinstance(target, ast.Name))
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+    return names
+
+
+def _reject_removed_imports(
+    root: Path, dest: Path, sha: str, writes: dict[str, bytes | None],
+    closure: Optional[Collection[str]] = None,
+) -> None:
+    """Check surviving importers when an overlay removes a declared Python definition."""
+    from coordinator_core.ops.dispatch_emit import test_reach
+
+    removed = {}
+    for rel, data in writes.items():
+        before = dest / rel
+        if not rel.endswith(".py") or not before.is_file():
+            continue
+        missing = _defined_names(before.read_bytes()) - (_defined_names(data) if data is not None else set())
+        if missing:
+            removed[rel] = missing
+    if not removed:
+        return
+
+    names = sorted(set().union(*removed.values()))
+    candidates = set(writes)
+    if closure is None:
+        patterns = [arg for name in names for arg in ("-e", name)]
+        probe = run_git(
+            ["grep", "--threads=1", "-l", "-z", "-F", *patterns, sha, "--", "*.py"],
+            cwd=str(root), binary=True,
+        )
+        if probe.returncode not in (0, 1):
+            raise ExportError("could not verify importers of Python definitions removed by clean export")
+        candidates.update(
+            raw.decode("utf-8", "surrogateescape").partition(":")[2]
+            for raw in probe.stdout_bytes.split(b"\0") if raw
+        )
+    else:
+        candidates.update(closure)
+    encoded = tuple(name.encode("utf-8") for name in names)
+    modules = test_reach._module_map(removed.keys())
+    for importer in sorted(candidates):
+        if not importer.endswith(".py"):
+            continue
+        path = dest / importer
+        if importer in writes:
+            data = writes[importer]
+        else:
+            data = path.read_bytes() if path.is_file() else None
+        if data is None or not any(name in data for name in encoded):
+            continue
+        current = test_reach.module_name_for_file(importer)
+        for record in test_reach._scan_imports(data.decode("utf-8", errors="replace")):
+            module = record.module
+            if record.level:
+                module = test_reach.resolve_relative_module(
+                    module, record.level, current, path.name == "__init__.py",
+                )
+            if module in modules:
+                target = modules[module]
+                missing = sorted(removed[target].intersection(record.names))
+                if missing:
+                    raise ExportError(f"clean export would split dirty imports: {importer} needs {target}: {', '.join(missing)}")
+
+
+def _prepare(
+    root: Path, mroot: Path, sha: str, leg: LegHook, overlay: Sequence[str] = (), closure: Optional[Collection[str]] = None,
+) -> Path:
     """The mirror worktree at commit `sha` plus the `overlay` paths' worktree bytes, under the held lock. A first
     use clones (leg "clone") and fills; later uses advance by `_advance` (leg "checkout", which also covers the
-    overlay and reports `files_written`). A mirror that cannot advance is rebuilt once; a failure on the fresh
-    build is an `ExportError`."""
+    overlay and reports `files_written`). A `closure` scopes the mirror to those tracked paths: a cold fill and a
+    warm advance write only them, a warm mirror missing some of them gains them (`_extend`), and a full mirror
+    already holds them. `closure` None wants a full mirror, so a scoped one is rebuilt. A mirror that cannot
+    advance is rebuilt once; a failure on the fresh build is an `ExportError`."""
     for rebuilt in (False, True):
         cold = rebuilt or _state_read(mroot) is None or not (mroot / root.resolve().name / ".git").exists()
-        dest = _build(root, mroot, leg) if cold else mroot / root.resolve().name
+        have: Optional[frozenset] = None
+        if not cold:
+            try:
+                have = _mirror_closure(mroot)
+            except _MirrorStale:
+                cold = True
+            else:
+                cold = closure is None and have is not None
+        dest = _build(root, mroot, leg, scoped=closure is not None) if cold else mroot / root.resolve().name
         try:
             with leg("checkout") as extra:
-                written = _fill(dest, mroot, sha) if cold else _advance(dest, mroot, sha)
+                if cold:
+                    written = _fill(dest, mroot, sha, closure)
+                else:
+                    written = _advance(dest, mroot, sha, have) + _extend(dest, mroot, sha, have, closure)
                 at = sha
                 if overlay:
-                    wrote, at = _overlay(root, dest, mroot, sha, overlay)
+                    wrote, at = _overlay(root, dest, mroot, sha, overlay, closure)
                     written += wrote
                 _note(extra, files_written=written)
         except _MirrorStale as exc:
@@ -733,24 +1046,134 @@ def _prepare(root: Path, mroot: Path, sha: str, leg: LegHook, overlay: Sequence[
     raise AssertionError("unreachable: the second pass is cold and either returns or raises")
 
 
-def _prepare_guarded(root: Path, mroot: Path, sha: str, leg: LegHook, overlay: Sequence[str] = ()) -> Path:
+def _prepare_guarded(
+    root: Path, mroot: Path, sha: str, leg: LegHook, overlay: Sequence[str] = (), closure: Optional[Collection[str]] = None,
+) -> Path:
     """`_prepare` with a timeout or OS failure named as an `ExportError`."""
     try:
-        return _prepare(root, mroot, sha, leg, overlay)
+        _check_overlay_imports(root, overlay)
+        return _prepare(root, mroot, sha, leg, overlay, closure)
     except subprocess.TimeoutExpired as exc:
         raise ExportError(f"clean export timed out after {TEST_TIMEOUT_S}s: {exc}") from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise ExportError(f"clean export did not complete: {type(exc).__name__}: {exc}") from exc
 
 
+def _names_a_path(root: Path, token: str) -> bool:
+    """`token` can name a test file or directory: a separator, a `.py` suffix, a node id, or an existing path.
+    A flag or a bare word (`python`, `pytest`) cannot, and `test_closure` scans the whole index for each token
+    it cannot place."""
+    return not token.startswith("-") and (
+        "/" in token or "\\" in token or token.endswith(".py") or "::" in token or os.path.lexists(root / token)
+    )
+
+
+def _closure_for(root: Path, declared: Sequence[str], argv: Sequence[str]) -> Optional[frozenset]:
+    """The tracked paths the test command `argv` needs (`export_closure.test_closure`), or `None` for a full
+    fill: no `argv`, no test seed in it or the declared paths, or a closure that cannot be computed. A full fill
+    says why on stderr; a closure failure never refuses the export."""
+    if not argv:
+        return None
+    from coordinator_core.ops.dispatch_emit.export_closure import test_closure
+
+    try:
+        found = test_closure(root, declared, [t for t in argv if _names_a_path(root, t)])
+    except Exception as exc:  # the closure only narrows the fill; any failure to compute it is a full fill
+        print(f"[clean-export] closure not computed ({type(exc).__name__}: {exc}); full fill", file=sys.stderr)
+        return None
+    if found.paths is None:
+        print(f"[clean-export] {found.note}", file=sys.stderr)
+        return None
+    return found.paths | _seed_data(root, found.seeds)
+
+
+def _seed_data(root: Path, seeds: Sequence[str]) -> frozenset:
+    """The tracked non-Python files under each seed's directory: a test reads its data files by path, which no
+    import closure names. A seed at the repo root brings only the root's own files."""
+    from coordinator_core.ops.dispatch_emit import test_reach
+
+    dirs = {PurePosixPath(s).parent.as_posix() for s in seeds}
+    prefixes = tuple(f"{d}/" for d in dirs if d != ".")
+    at_root = "." in dirs
+    tracked = test_reach._tracked(root)
+    under = [p for p in tracked if p.startswith(prefixes)] if prefixes else []
+    if at_root:
+        under.extend(p for p in tracked if "/" not in p)
+    return frozenset(p for p in under if not p.endswith(".py"))
+
+
 @contextmanager
-def clean_export(root: Path, run_id: str, paths: Sequence[str], leg: LegHook = _no_leg) -> Iterator[Path]:
+def clean_export(
+    root: Path, run_id: str, paths: Sequence[str], leg: LegHook = _no_leg, argv: Sequence[str] = (),
+) -> Iterator[Path]:
     """Yield the mirror worktree at HEAD plus the worktree bytes of the declared `paths` only, never any other
-    worktree dirt, so a run that imports an uncommitted peer module goes red there. The mirror lock is held
-    until the `with` exits; the mirror persists. Raises `ExportError` (a timeout names its budget)."""
+    worktree dirt: a peer's dirty file exports at its HEAD bytes. A dirty Python overlay needing a name absent from that HEAD copy raises `CoTenantDependency`. With the test command
+    `argv` the worktree holds only that command's test closure (see `_closure_for`); without it, every tracked
+    path. The mirror lock is held until the `with` exits; the mirror persists. Raises `ExportError` (a timeout
+    names its budget)."""
     rels = _declared(paths)
+    closure = _closure_for(root, rels, argv)
     with _mirror_lock(root, f"clean-export {run_id}") as mroot:
-        yield _prepare_guarded(root, mroot, _commit_sha(root, "HEAD"), leg, rels)
+        yield _prepare_guarded(root, mroot, _commit_sha(root, "HEAD"), leg, rels, closure)
+
+
+def _head_sources(root: Path, rels: Collection[str]) -> dict[str, Optional[bytes]]:
+    """HEAD blob bytes per path, `None` for a path HEAD does not hold as a regular file. Reads loose and packed
+    objects in-process (`head_blobs` + `read_object`), so it adds no git spawn per file."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_state import head_blobs
+
+    heads = head_blobs(root, sorted(rels))
+    common = resolve_git_common_dir(root)
+    out: dict[str, Optional[bytes]] = {}
+    for rel in rels:
+        entry = heads.get(rel)
+        obj = read_object(common, entry[1]) if entry and entry[0] in (0o100644, 0o100755) else None
+        out[rel] = obj[1] if obj is not None and obj[0] == "blob" else None
+    return out
+
+
+def _check_overlay_imports(root: Path, overlay: Sequence[str]) -> None:
+    """The export holds a peer's dirty module at its HEAD bytes, so a declared dirty Python file is refused only
+    when it needs a name (or a whole module) that HEAD's copy of that peer module lacks: the run would test
+    against code the landing commit never contains. Peer dirt the run does not reach never refuses.
+    Raises `CoTenantDependency`."""
+    if not any(rel.endswith(".py") for rel in overlay):
+        return
+    from coordinator_core.ops.dispatch_emit import test_reach
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import changed_python_paths
+
+    changed = changed_python_paths(root)
+    if changed is None:
+        raise ExportError("could not verify dirty Python import dependencies for clean export")
+    declared = set(overlay)
+    outside = changed - declared
+    if not outside:
+        return
+    modules = test_reach._module_map(outside)
+    needs: list[tuple[str, str, str, tuple]] = []
+    for rel in sorted(changed & declared):
+        for base, names in test_reach._resolved_imports(rel, test_reach._records_for(root, rel)):
+            if "*" in names:
+                continue
+            if (target := modules.get(base)) is not None:
+                needs.append((rel, target, base, tuple(names)))
+            for name in names:
+                if (sub := modules.get(f"{base}.{name}")) is not None:
+                    needs.append((rel, sub, f"{base}.{name}", ()))
+    if not needs:
+        return
+    heads = _head_sources(root, {target for _, target, _, _ in needs})
+    defined: dict[str, set[str]] = {}
+    for rel, target, module, names in needs:
+        data = heads[target]
+        if data is None:
+            raise CoTenantDependency(rel, target, names[0] if names else module, "not in HEAD")
+        have = defined.setdefault(target, _defined_names(data))
+        for name in names:
+            if name not in have and modules.get(f"{module}.{name}") is None:
+                raise CoTenantDependency(rel, target, name, "absent at HEAD")
 
 
 def _mirror_env(env: dict, dest: Path) -> dict:
@@ -770,11 +1193,29 @@ def _pytest_env(tmp: Path, dest: Path, selection: Sequence[str]) -> dict:
     return _mirror_env(spawn_depth.child_env(scoped_pytest.tmp_env(os.environ, tmp)), dest)
 
 
+EXPORT_RUN_STALL_ENV = "COORDINATOR_EXPORT_RUN_STALL_S"
+
+
+def export_run_stall_s() -> float:
+    """The export run's no-output window: `COORDINATOR_EXPORT_RUN_STALL_S` when set to a positive number, else
+    `PYTEST_STALL_S`. An unparsable or non-positive value falls back to the default."""
+    raw = os.environ.get(EXPORT_RUN_STALL_ENV, "").strip()
+    try:
+        value = float(raw) if raw else 0.0
+    except ValueError:
+        value = 0.0
+    return value if value > 0 else float(PYTEST_STALL_S)
+
+
 def run_in_export(root: Path, run_id: str, paths: Sequence[str], argv: Sequence[str]) -> subprocess.CompletedProcess:
     """Run `argv` in the clean export of `paths` (cwd and PYTHONPATH the mirror) under the mirror lock; the lock
-    is held across the command. `ExportError` when the export fails; `TimeoutExpired` at `TEST_TIMEOUT_S`."""
-    with clean_export(root, run_id, paths) as dest:
-        return _run(list(argv), dest, TEST_TIMEOUT_S, env=_mirror_env(dict(os.environ), dest))
+    is held across the command. `ExportError` when the export fails; `PytestStalled` (a `TimeoutExpired`) after
+    `export_run_stall_s()` of silence.
+
+    Trap: no total wall. A flat cap halted every run whose test leg is legitimately longer (example-game-repo 2da5dc needs
+    ~660s); the stall watchdog fails only a command that stops making progress."""
+    with clean_export(root, run_id, paths, argv=argv) as dest:
+        return _run(list(argv), dest, None, env=_mirror_env(dict(os.environ), dest), stall_s=export_run_stall_s())
 
 
 def _is_test_path(rel: str) -> bool:
@@ -782,9 +1223,10 @@ def _is_test_path(rel: str) -> bool:
     return name.startswith("test_") or name.endswith("_test.py")
 
 
-def _with_importers(dest: Path, seeds: tuple, touched: Sequence[str]) -> tuple:
+def _with_importers(dest: Path, seeds: tuple, touched: Sequence[str], sha: Optional[str] = None) -> tuple:
     """`seeds` plus the tracked test files that mention a touched module's name (one `git grep -l` in the
-    mirror), capped at `IMPORTER_CAP`; returns `(set, note)`. A failed scan runs the seeds alone."""
+    mirror: over `sha`'s tree when given, so a scoped mirror's worktree never limits the scan, else over the
+    worktree), capped at `IMPORTER_CAP`; returns `(set, note)`. A failed scan runs the seeds alone."""
     stems = sorted(
         {
             PurePosixPath(p.replace("\\", "/")).stem for p in touched
@@ -795,15 +1237,33 @@ def _with_importers(dest: Path, seeds: tuple, touched: Sequence[str]) -> tuple:
         return seeds, ""
     argv = [
         _git_exe(), "grep", "-l", "-z", "-w", "-F", *(a for s in stems for a in ("-e", s)),
-        "--", ":(glob)**/test_*.py", ":(glob)**/*_test.py",
+        *([sha] if sha else []), "--", ":(glob)**/test_*.py", ":(glob)**/*_test.py",
     ]
     found = _run(argv, dest, TEST_TIMEOUT_S)
     if found.returncode not in (0, 1):
         return seeds, "importer scan failed: ran the touched tests only"
-    extra = sorted(n for n in found.stdout.split("\0") if n and n not in seeds)
+    prefix = f"{sha}:" if sha else ""
+    hits = (n[len(prefix):] if prefix and n.startswith(prefix) else n for n in found.stdout.split("\0") if n)
+    extra = sorted(n for n in hits if n not in seeds)
     kept = extra[:IMPORTER_CAP]
     note = f"importer cap {IMPORTER_CAP}: {len(extra) - len(kept)} importing test file(s) not run" if len(extra) > len(kept) else ""
     return (*seeds, *kept), note
+
+
+def _widen(root: Path, dest: Path, mroot: Path, sha: str, picks: Sequence[str]) -> None:
+    """Add each picked importer test's own closure to a scoped mirror (`_extend`, at `sha`); a full mirror
+    already holds it. `ExportError` when the mirror cannot be widened."""
+    try:
+        have = _mirror_closure(mroot)
+        if have is None:
+            return
+        wanted: set = set()
+        for pick in picks:
+            found = _closure_for(root, (), [pick])
+            wanted |= found if found is not None else {pick}
+        _extend(dest, mroot, sha, have, wanted)
+    except _MirrorStale as exc:
+        raise ExportError(f"clean mirror could not take the importer tests: {exc}") from exc
 
 
 def _base_failing(
@@ -821,7 +1281,7 @@ def _base_failing_body(
     run_holder = None
     try:
         try:
-            _note(extra, files_written=_advance(dest, mroot, base_sha))
+            _note(extra, files_written=_advance(dest, mroot, base_sha, _mirror_closure(mroot)))
         except _MirrorStale:
             return frozenset()
         run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"{run_id}-base")
@@ -1017,13 +1477,16 @@ def verify(
             ENV_DEFECT, f"interpreter defect: the repo pins `{SOURCE_KEY}: {pin.command}` (from {pin.source}) but {pin.defect}", seeds,
         )
     run_dirs: list = []
+    launched: list = []
     in_seeds = False
     try:
         with _mirror_lock(root, f"clean-overlay {run_id}") as mroot:
             sha = _commit_sha(root, candidate_sha)
-            dest = _prepare_guarded(root, mroot, sha, leg)
-            picked, scan_note = _with_importers(dest, seeds, touched)
+            dest = _prepare_guarded(root, mroot, sha, leg, (), _closure_for(root, touched, seeds))
+            picked, scan_note = _with_importers(dest, seeds, touched, sha)
             extras = picked[len(seeds):]
+            if extras:
+                _widen(root, dest, mroot, sha, extras)
             run_seeds = narrow_touched_tests(root, dest, base_sha, sha, seeds, touched)
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, run_id)
             run_dirs.append(run_holder)
@@ -1032,14 +1495,18 @@ def verify(
             shard: Optional[subprocess.CompletedProcess] = None
             with leg("pytest"):
                 in_seeds = True
-                ran = _run_pytest_retrying(_pytest_argv(root, dest, basetemp, run_seeds), dest, env)
+                seeds_argv = _pytest_argv(root, dest, basetemp, run_seeds)
+                launched.append(shlex.join(seeds_argv))
+                ran = _run_pytest_retrying(seeds_argv, dest, env)
                 ran = _settle_empty_collection(root, dest, basetemp, run_seeds, seeds, env, ran)
                 in_seeds = False
                 ran = _tier_empty_as_green(ran)
                 if extras:
                     shard_note = f"importer shard timed out: {len(extras)} file(s) unverified"
                     try:
-                        shard = _tier_empty_as_green(_run_pytest_retrying(_pytest_argv(root, dest, basetemp, extras), dest, env))
+                        shard_argv = _pytest_argv(root, dest, basetemp, extras)
+                        launched.append(shlex.join(shard_argv))
+                        shard = _tier_empty_as_green(_run_pytest_retrying(shard_argv, dest, env))
                         shard_note = ""
                     except PytestStalled as exc:
                         shard_note = f"importer shard stalled: {len(extras)} file(s) unverified ({exc})"
@@ -1073,7 +1540,7 @@ def verify(
                     ENV_DEFECT,
                     f"engine fault: pytest exit 5 over {len(seeds)} non-empty seed(s) ({', '.join(seeds)}); "
                     f"{_EMPTY_CAUSE.strip()}: {tail}",
-                    seeds,
+                    seeds, argv=tuple(launched),
                 )
             if bad:
                 absent = _missing_dependencies("".join(r.stdout + r.stderr for r in bad), root)
@@ -1082,27 +1549,29 @@ def verify(
                         ENV_DEFECT,
                         f"interpreter defect: {pin.command or 'the undeclared gate interpreter'} lacks module(s) {', '.join(absent)}"
                         f"{' (the repo declares no resolvable pin)' if not pin.command else ''}: {tail}",
-                        seeds,
+                        seeds, argv=tuple(launched),
                     )
                 if pin.source != SOURCE_KEY and any(guard_exit(r.returncode, r.stdout + r.stderr) for r in bad):
                     return OverlayVerdict(
                         ENV_DEFECT,
                         f"verify could not run: a repo guard ended pytest (exit {bad[0].returncode}) before any test ran under "
                         f"{pin.command or 'the undeclared gate interpreter'}; {REMEDY}: {tail}",
-                        seeds,
+                        seeds, argv=tuple(launched),
                     )
-            if failed and ids and isinstance(base_sha, str) and base_sha and base_sha != sha:
+            infra = infra_setup_error(full) if failed else ""
+            if failed and ids and not infra and isinstance(base_sha, str) and base_sha and base_sha != sha:
                 at_base = _base_failing(dest, mroot, root, run_id, base_sha, ids, leg)
     except ExportError as exc:
-        return OverlayVerdict("inconclusive", str(exc), seeds)
+        return OverlayVerdict("inconclusive", str(exc), seeds, argv=tuple(launched))
     except subprocess.TimeoutExpired as exc:
         why = str(exc) if isinstance(exc, PytestStalled) else f"overlay verify timed out after {TEST_TIMEOUT_S}s: {type(exc).__name__}: {exc}"
-        return OverlayVerdict("inconclusive", why, seeds, timed_out=in_seeds)
+        return OverlayVerdict("inconclusive", why, seeds, timed_out=in_seeds, argv=tuple(launched))
     except (OSError, subprocess.SubprocessError) as exc:
-        return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds)
+        return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds, argv=tuple(launched))
     finally:
         for run_dir in run_dirs:
             shutil.rmtree(run_dir, ignore_errors=True)
+    argv = tuple(launched)
     if not bad:
         if any(r.returncode for r in runs):
             codes = ", ".join(str(r.returncode) for r in runs if r.returncode)
@@ -1110,19 +1579,23 @@ def verify(
             if residue:
                 return OverlayVerdict(
                     "green", f"managed-temp residue after every test passed (exit {codes}): {'; '.join(residue)}: {tail}", seeds,
+                    argv=argv,
                 )
-            return OverlayVerdict("green", f"pytest teardown error after every test passed (exit {codes}): {tail}", seeds)
-        return OverlayVerdict("green", tail, seeds)
+            return OverlayVerdict("green", f"pytest teardown error after every test passed (exit {codes}): {tail}", seeds, argv=argv)
+        return OverlayVerdict("green", tail, seeds, argv=argv)
     if failed:
         if ids and at_base == frozenset(ids):
             return OverlayVerdict(
                 "pre_existing", f"every failing test also fails at base {str(base_sha)[:12]}: {', '.join(ids)}: {tail}", seeds,
-                failing=ids,
+                failing=ids, argv=argv,
             )
-        setup = first_setup_error(full)
+        setup = infra or first_setup_error(full)
         body = f"test collection failed: {tail}" if collected else tail
-        return OverlayVerdict("red", f"{setup}; {body}" if setup else body, seeds, failing=ids)
-    return OverlayVerdict("inconclusive", f"pytest exit {bad[0].returncode}: {tail}", seeds)
+        return OverlayVerdict(
+            "red", f"{setup}; {body}" if setup else body, seeds, failing=ids, argv=argv,
+            cause=ZERO_RUN_TEST_INFRA if infra else "",
+        )
+    return OverlayVerdict("inconclusive", f"pytest exit {bad[0].returncode}: {tail}", seeds, argv=argv)
 
 
 def overlay_candidate(measured: dict) -> Optional[str]:
@@ -1152,7 +1625,10 @@ def name_peer_owners(outcome: OverlayVerdict, measured: dict) -> OverlayVerdict:
         if outcome.red:
             verdict = "inconclusive"
             notes.append("the red may belong to that run's hunks, not this run: re-run once the owner lands or releases them")
-    return OverlayVerdict(verdict, f"{'; '.join(notes)}: {outcome.detail}", outcome.seeds, outcome.timed_out, outcome.failing)
+    return OverlayVerdict(
+        verdict, f"{'; '.join(notes)}: {outcome.detail}", outcome.seeds, outcome.timed_out, outcome.failing,
+        outcome.argv, outcome.cause,
+    )
 
 
 def keyed_components(measured: dict) -> dict:
@@ -1188,7 +1664,8 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
             {
                 "verdict": outcome.verdict, "detail": outcome.detail, "seeds": list(outcome.seeds),
                 "timed_out": outcome.timed_out, "failing_ids": list(outcome.failing), "key": landing_key(measured), "base_sha": measured.get("base_sha"), "sha": measured.get("sha"),
-                "keyed": keyed_components(measured),
+                "keyed": keyed_components(measured), "argv": list(outcome.argv),
+                **({"zero_run_cause": outcome.cause} if outcome.cause else {}),
             },
             indent=2, sort_keys=True,
         ),
@@ -1369,10 +1846,16 @@ def check_verdict(root: Path, run_id: str, measured: dict, git_root: Optional[Pa
         return OverlayVerdict("mismatch", f"the overlay verdict was keyed to a different {moved}", seeds)
     verdict = data.get("verdict")
     if verdict == "inconclusive":
-        return OverlayVerdict("inconclusive", str(data.get("detail", "")), seeds, data.get("timed_out") is True)
+        return OverlayVerdict(
+            "inconclusive", str(data.get("detail", "")), seeds, data.get("timed_out") is True,
+            argv=tuple(data.get("argv") or ()),
+        )
     if verdict not in ("green", "red", "pre_existing", ENV_DEFECT):
         return OverlayVerdict("missing", f"overlay verdict was {verdict!r}: {data.get('detail', '')}", seeds)
-    return OverlayVerdict(verdict, str(data.get("detail", "")), seeds, failing=tuple(data.get("failing_ids") or ()))
+    return OverlayVerdict(
+        verdict, str(data.get("detail", "")), seeds, failing=tuple(data.get("failing_ids") or ()),
+        argv=tuple(data.get("argv") or ()), cause=str(data.get("zero_run_cause") or ""),
+    )
 
 
 #: Step name and cap of the one verdict read plus detached spawn; `reverify_on_mismatch` ends in
@@ -1558,8 +2041,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except ExportError as exc:
             print(f"clean export failed: {exc}", file=sys.stderr)
             return 2
-        except subprocess.TimeoutExpired:
-            print(f"clean export test command timed out after {TEST_TIMEOUT_S}s", file=sys.stderr)
+        except subprocess.TimeoutExpired as exc:
+            print(f"clean export test command stalled: {exc} (window: {EXPORT_RUN_STALL_ENV})", file=sys.stderr)
             return 2
         except OSError as exc:
             print(f"clean export test command did not start: {type(exc).__name__}: {exc}", file=sys.stderr)

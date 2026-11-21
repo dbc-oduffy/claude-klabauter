@@ -278,7 +278,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
-from coordinator_core.ops.dispatch_emit.ask_staged_prompts import PROMPTS_DIR
+from coordinator_core.ops.dispatch_emit.ask_staged_prompts import PROMPTS_DIR, bind_script_literals
 from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
 from coordinator_core.ops.dispatch_emit.run_id_occupancy import spent_run_reason
 from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
@@ -1058,6 +1058,8 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
         raise ledger.HandoverPending(held_secs)
     root = Path(ask_ctx["root"])
     if ask_ctx.get("reserved_parent"):
+        # Before the bind, which records HEAD write-once: a resumed halted run keeps its halted base.
+        _seed_run_base(root, ask_ctx["run_id"], ask_ctx.get("inherited_base"))
         _bind_reserved_run(root, ask_ctx["run_id"], ask_ctx["reserved_parent"], ask_ctx.get("sizing_rel"))
     if ask_ctx.get("rebound"):
         from coordinator_core.ops.dispatch_emit.halted_run import mark_resumed
@@ -2203,6 +2205,25 @@ def _run_checks_memoized(script: str) -> list:
     return list(hit)
 
 
+def _write_staged_prompt(path: Path, data: bytes) -> None:
+    """Write one staged prompt: a plain exclusive create when the file is new (a fresh run's record dir: no
+    reader exists to see a partial file, and the temp-and-rename costs ~1ms per file x ~40 files), else
+    untouched when it already holds `data`, else atomic. Trap: a re-emit of a live run id overwrites files an
+    agent may be reading, which is why that case keeps the atomic replace."""
+    try:
+        with open(path, "xb") as fh:
+            fh.write(data)
+        return
+    except FileExistsError:
+        pass
+    try:
+        if path.read_bytes() == data:
+            return
+    except OSError:
+        pass
+    atomic_write_bytes(path, data)
+
+
 def _emit_script_file(
     path: Path,
     script: str,
@@ -2238,6 +2259,7 @@ def _emit_script_file(
         }
         for f in findings
     ]
+    script = bind_script_literals(script)  # the delivered text: composers keep the portable command form
     script_bytes = script.encode("utf-8")
     # Script and receipt are one unit: a second emit of this path waits here, so the receipt's
     # digest is always of the bytes the script holds. Both writes are atomic, so a reader never
@@ -2500,6 +2522,7 @@ def _dispatch_emit(
     *,
     only_review_plans: Optional[frozenset] = None,
     _research_ready: Optional[tuple] = None,
+    _tagged_row_ids: Optional[frozenset[str]] = None,
 ) -> dict:
     unknown = _unknown_param_refusal(params)
     if unknown is not None:
@@ -2518,6 +2541,7 @@ def _dispatch_emit(
             repo_root,
             only_review_plans=only_review_plans,
             _research_ready=_research_ready,
+            _tagged_row_ids=_tagged_row_ids,
             _writes=writes,
         )
     except ScriptOverCapError:
@@ -2535,6 +2559,7 @@ def _dispatch_emit_body(
     only_review_plans: Optional[frozenset] = None,
     _research_ready: Optional[tuple] = None,
     _writes: _EmitWrites,
+    _tagged_row_ids: Optional[frozenset[str]] = None,
 ) -> dict:
     """JSON-RPC "dispatch.emit" handler.
 
@@ -3355,6 +3380,7 @@ def _dispatch_emit_body(
             review_roster_fragment=review_roster_fragment,
             review_stage_schemas=review_stage_schemas,
             stage_models=stage_models,
+            tagged_row_ids=_tagged_row_ids,
         )
         script = emission.script
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
@@ -3479,6 +3505,7 @@ def _dispatch_emit_body(
                 run_id=ask_ctx["run_id"],
                 session_id=emitting_session_id,
                 carried_notes=ask_ctx["carried_notes"],
+                prior_run_ids=tuple(filter(None, [ask_ctx.get("resumes_ask") or ask_ctx.get("resumed_from")])),
                 script_path=ask_script_path,
                 plan_blitz_args=ask_ctx.get("plan_blitz_args"),
                 writes=ask_ctx.get("writes", ()),
@@ -3510,10 +3537,11 @@ def _dispatch_emit_body(
                 ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
                 _ensure_record_dir_bounded(ask_file.parent)
                 _write_record_file_bounded(ask_file, ask_body)
-            for staged_name, staged_text in staged_prompts.items():
-                staged_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / PROMPTS_DIR / f"{staged_name}.md"
-                staged_file.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_bytes(staged_file, staged_text.encode("utf-8"))
+            if staged_prompts:
+                staged_dir = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / PROMPTS_DIR
+                staged_dir.mkdir(parents=True, exist_ok=True)
+                for staged_name, staged_text in staged_prompts.items():
+                    _write_staged_prompt(staged_dir / f"{staged_name}.md", staged_text.encode("utf-8"))
             if not ask_ctx["route_preference"].is_empty():
                 pref_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / _route_pref.ROUTE_PREFERENCE_FILE
                 pref_file.parent.mkdir(parents=True, exist_ok=True)

@@ -25,8 +25,12 @@ def _closed_trailers(root: Path, run_id: str, record_dir: Path, covered=None) ->
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_closed_trailer_lines
     from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
 
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import recorded_run_base
+
     marker = halted_run._read(record_dir) or {}
-    params = {"run_base_sha": marker.get("run_base_sha")}
+    # Trap: a marker written before the earliest-base fix can carry a later halt record's sha; the
+    # write-once run-base file names the base the run's checkpoints actually stamped.
+    params = {"run_base_sha": recorded_run_base(root, run_id) or marker.get("run_base_sha")}
     plan = marker.get("plan")
     if marker and not (isinstance(plan, str) and plan):
         from coordinator_core.ops.dispatch_emit.halted_run_landed import _sizing_plan

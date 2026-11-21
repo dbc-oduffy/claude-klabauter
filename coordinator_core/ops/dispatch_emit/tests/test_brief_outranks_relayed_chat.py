@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from .conftest import REVIEW_KW
+from .conftest import REVIEW_KW, unshare_agent_head
 
 import json
 import re
@@ -144,7 +144,7 @@ def _agent_prompts(script: str) -> list[str]:
 
 
 def _clauseless_unnamed(script: str, head: str) -> list[str]:
-    resolved = resolve_fragment_refs(script)
+    resolved = resolve_fragment_refs(unshare_agent_head(script))
     helpers_ok = all(
         head in resolved[resolved.index(decl):][:6000]
         for decl in ("const _rowPrompt", "function _groupPrompt")
@@ -179,8 +179,8 @@ def test_every_default_ask_script_agent_prompt_carries_the_clause_head():
 
     head = _BRIEF_PRECEDENCE_CLAUSE[:60]
     script = _compose(in_run_commit=True)
-    assert _agent_prompts(resolve_fragment_refs(script))
-    assert resolve_fragment_refs(script).count(head) >= 10
+    assert _agent_prompts(resolve_fragment_refs(unshare_agent_head(script)))
+    assert resolve_fragment_refs(unshare_agent_head(script)).count(head) >= 10
     assert not _clauseless_unnamed(script, head)
 
 

@@ -17,7 +17,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 NEW = "scripts/tests/new_floor.Tests.ps1"

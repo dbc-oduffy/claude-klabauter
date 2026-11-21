@@ -10,7 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN = "run1"
 

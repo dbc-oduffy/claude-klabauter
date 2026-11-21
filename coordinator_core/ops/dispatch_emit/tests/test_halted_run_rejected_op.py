@@ -207,3 +207,23 @@ def test_zero_withheld_non_halted_run_refuses(unstarted) -> None:
     assert op._handler({"run_id": RUN, "reason": REASON}, root)["ok"] is True
     reply = op._handler({"run_id": RUN, "reason": REASON}, root)
     assert reply["ok"] is False and "closed" in reply["error"]
+
+
+def test_resumed_run_with_no_live_successor_closes_rejected_with_superseded_rest(halted, monkeypatch) -> None:
+    """A resumed run whose successor also halted closes rejected; its overwritten paths classify superseded."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, record = halted
+    halted_run._write(record, {**halted_run._read(record), "status": halted_run.STATUS_RESUMED})
+    kept_work.write(record, {"c": {"paths": {}}}, None)
+    prints = {"a.txt": _blob(root, "a-kept"), "b.txt": _blob(root, "b-kept")}
+    (record / "withheld-prints.json").write_text(json.dumps(prints), encoding="utf-8")
+    _commit(root, {"b.txt": "b-later"})
+    monkeypatch.setattr(run_token, "live_records", lambda r: iter([]))
+    reply = _call(root, ["a.txt"])
+    assert reply["ok"] is True, reply
+    assert reply["dispositions"]["a.txt"]["disposition"] == "rejected"
+    assert reply["dispositions"]["b.txt"]["disposition"] == halted_run.DISPOSITION_SUPERSEDED
+    assert halted_run._read(record)["status"] == halted_run.STATUS_CLOSED

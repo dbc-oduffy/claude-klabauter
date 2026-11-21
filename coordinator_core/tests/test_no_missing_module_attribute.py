@@ -18,6 +18,8 @@ from percolate.import_closure import find_commit_module_attr_violations  # noqa:
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_every_module_attribute_read_resolves_in_the_committed_tree():
     head = subprocess.run(
         ["git", "-C", str(_REPO), "rev-parse", "HEAD"], capture_output=True, text=True, check=True

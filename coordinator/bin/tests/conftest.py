@@ -420,7 +420,7 @@ def _plan(
 
 
 def _run(plan: Path, *extra: str) -> CompletedProcess[str]:
-    spec =importlib.util.spec_from_file_location("_plan_spine_check_inproc", _SCRIPT)
+    spec = importlib.util.spec_from_file_location("_plan_spine_check_inproc", _SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     out, err = io.StringIO(), io.StringIO()

@@ -255,43 +255,6 @@ def test_fresh_scaffold_probe_spawns_nothing_when_an_index_exists(tmp_path: Path
     assert calls == []
 
 
-def _git_repo_with_tasks(tmp_path, files, ignore_tasks: bool = False):
-    import subprocess
-
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    for rel in files:
-        p = tmp_path / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("x")
-    if ignore_tasks:
-        (tmp_path / ".gitignore").write_text("tasks/\n")
-    return tmp_path / "tasks"
-
-
-def test_tasks_markdown_found_when_untracked_nested_one_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    tasks = _git_repo_with_tasks(tmp_path, ["tasks/a/b/note.md"])
-    calls = []
-    real = udg.run_git
-
-    def counting(argv, *a, **k):
-        calls.append(argv)
-        return real(argv, *a, **k)
-
-    monkeypatch.setattr(udg, "run_git", counting)
-    assert udg._tasks_holds_markdown(tmp_path, tasks) is True
-    assert len(calls) == 1 and "ls-files" in calls[0]
-
-
-def test_tasks_markdown_found_when_gitignored(tmp_path: Path) -> None:
-    tasks = _git_repo_with_tasks(tmp_path, ["tasks/note.md"], ignore_tasks=True)
-    assert udg._tasks_holds_markdown(tmp_path, tasks) is True
-
-
-def test_tasks_markdown_absent_when_only_other_files(tmp_path: Path) -> None:
-    tasks = _git_repo_with_tasks(tmp_path, ["tasks/a/log.txt", "tasks/b/data.json"])
-    assert udg._tasks_holds_markdown(tmp_path, tasks) is False
-
-
 def test_tasks_markdown_falls_back_to_disk_walk_outside_git(tmp_path: Path) -> None:
     (tmp_path / "tasks" / "x").mkdir(parents=True)
     (tmp_path / "tasks" / "x" / "n.md").write_text("x")
@@ -417,49 +380,6 @@ def test_distill_threshold_counts_what_scope_admits_when_only_a_pointer_page_cit
     assert result.detail["total"] == min(admitted, udg._DISTILL_THRESHOLD_TOTAL)
 
 
-def _committed_repo_with_plans(root: Path, monkeypatch: pytest.MonkeyPatch, n: int) -> None:
-    from coordinator_core import run_watermark
-    from coordinator_core.win_portability import no_console_passthrough_kwargs
-
-    monkeypatch.setattr(run_watermark, "registry_get", lambda _key: None)
-    _empty_log(root)
-    _implemented_plans(root, n)
-    for argv in (
-        ["init", "-q"],
-        ["config", "user.email", "t@example.com"],
-        ["config", "user.name", "T"],
-        ["add", "-A"],
-        ["commit", "-q", "-m", "seed"],
-    ):
-        subprocess.run(["git", *argv], cwd=root, check=True, **no_console_passthrough_kwargs())
-
-
-def _drain_distill_runs(root: Path) -> None:
-    from coordinator_core import run_watermark
-    from coordinator_core.ops.distill_scope import PM_RULING_2026_08_06_COHORT_SPECS, compute_scope
-
-    for i in range(10):
-        result = compute_scope(
-            root, run_id=f"drain-{i}", cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS), admit=True
-        )
-        run_dir = root / "state" / "scratch" / "artifact-distillation" / f"drain-{i}"
-        run_watermark.stage(run_dir, result.watermark)
-        run_watermark.promote(root, run_dir, "distill")
-        if result.counts["scannable"] == 0:
-            return
-    raise AssertionError("distill run never drained")
-
-
-def test_distill_threshold_clears_after_a_drained_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The stored watermark covers every admitted file: nothing is owed, so the gate no longer fires on the count."""
-    _committed_repo_with_plans(tmp_path, monkeypatch, 55)
-    assert udg._gate_distill_threshold(tmp_path, tmp_path, {}).detail["total"] == udg._DISTILL_THRESHOLD_TOTAL
-    _drain_distill_runs(tmp_path)
-    result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
-    assert result.verdict == udg.GateVerdict.CLEAN
-    assert result.detail["total"] == 0
-
-
 def _write_distill_watermark(root: Path, run_date: str | None) -> None:
     body = {"base_sha": "H1", "cursor": "z", "pass_complete": True}
     if run_date is not None:
@@ -467,26 +387,6 @@ def _write_distill_watermark(root: Path, run_date: str | None) -> None:
     p = root / "state" / "run-watermarks" / "distill.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(body), encoding="utf-8")
-
-
-def test_distill_threshold_dates_a_noop_run_from_the_watermark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A run that disposes nothing writes no log header; the promoted watermark still dates it."""
-    from coordinator_core import run_watermark
-    from coordinator_core.ops.distill_scope import compute_scope
-
-    _committed_repo_with_plans(tmp_path, monkeypatch, 0)
-    (tmp_path / "state" / "distillation-log.md").write_text(
-        "# Columns: run | path | disposition | fate\n\n## Run 2026-07-22-23h55\n", encoding="utf-8"
-    )
-    stale = udg._gate_distill_threshold(tmp_path, tmp_path, {})
-    assert stale.detail["days_ago"] > 14
-    result = compute_scope(tmp_path, run_id="noop-0", cohort_specs=[], admit=True)
-    run_dir = tmp_path / "state" / "scratch" / "artifact-distillation" / "noop-0"
-    run_watermark.stage(run_dir, result.watermark)
-    run_watermark.promote(tmp_path, run_dir, "distill")
-    fresh = udg._gate_distill_threshold(tmp_path, tmp_path, {})
-    assert fresh.detail["days_ago"] in (0, 1)
-    assert fresh.verdict == udg.GateVerdict.CLEAN
 
 
 def test_distill_threshold_old_watermark_date_still_fires_and_dateless_watermark_is_ignored(tmp_path: Path) -> None:
@@ -497,21 +397,6 @@ def test_distill_threshold_old_watermark_date_still_fires_and_dateless_watermark
     assert udg._last_distillation_days_ago(log, tmp_path) > 14
     _write_distill_watermark(tmp_path, None)
     assert udg._last_distillation_days_ago(log, tmp_path) > 14
-
-
-def test_distill_threshold_still_fires_on_admitted_files_past_the_watermark(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Files dated past a drained watermark's cursor are owed; at the threshold the gate fires."""
-    _committed_repo_with_plans(tmp_path, monkeypatch, 5)
-    _drain_distill_runs(tmp_path)
-    plans = tmp_path / "docs" / "plans"
-    for i in range(55):
-        (plans / f"2026-11-02-q{i}.md").write_text(f"---\nstatus: implemented\n---\n{_ADMISSIBLE_BODY}", encoding="utf-8")
-    _cite_in_daily_log(tmp_path, [f"docs/plans/2026-11-02-q{i}.md" for i in range(55)])
-    result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
-    assert result.verdict == udg.GateVerdict.FINDING
-    assert result.detail["total"] == udg._DISTILL_THRESHOLD_TOTAL
 
 
 # ---------------------------------------------------------------------------

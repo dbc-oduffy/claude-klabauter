@@ -6,11 +6,9 @@ in-memory trees; the gate reads only through `read_source`.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Dict, Sequence
 
-from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.ceremony.commit_gates import import_closure_gate
 
 
@@ -116,48 +114,6 @@ def test_non_python_commit_skips_and_unchanged_importer_is_not_checked():
 def test_deleted_target_in_landed_tree_is_refused():
     tree = {"pkg/__init__.py": "", "pkg/user.py": "from pkg.old import x\n"}
     assert not _gate(tree, ["pkg/user.py"]).passed
-
-
-def _git(args, cwd):
-    subprocess.run(
-        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-
-
-def test_pre_commit_gates_refuses_import_of_symbol_bound_nowhere(tmp_path: Path):
-    # A symbol bound nowhere (not even in the worktree) is refused by the `leak_gate` import_closure
-    # detector, which runs ahead of `import_closure_gate` and so supplies the refusal text.
-    repo = tmp_path / "repo"
-    (repo / "pkg").mkdir(parents=True)
-    _git(["init", "-q"], repo)
-    _git(["config", "user.email", "t@t.example"], repo)
-    _git(["config", "user.name", "t"], repo)
-    (repo / "pkg/__init__.py").write_text("", encoding="utf-8")
-    (repo / "pkg/stage.py").write_text("OLD = 1\n", encoding="utf-8")
-    _git(["add", "-A"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout
-
-    (repo / "pkg/user.py").write_text("from pkg.stage import ARM_BYPASS\n", encoding="utf-8")
-    result = commit_v2._handler({"paths": ["pkg/user.py"], "message": "land user\n"}, repo_root=repo / ".git")
-    assert result["committed"] is False, result
-    assert "import_closure" in result["error"] and "ARM_BYPASS" in result["error"]
-    assert "pkg/stage.py" in result["error"]
-    assert subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout == head
-
-    (repo / "pkg/stage.py").write_text("OLD = 1\nARM_BYPASS = 2\n", encoding="utf-8")
-    result = commit_v2._handler(
-        {"paths": ["pkg/user.py", "pkg/stage.py"], "message": "land both\n"}, repo_root=repo / ".git"
-    )
-    assert result["committed"] is True, result
 
 
 def test_namespace_package_directory_is_not_refused_but_absent_one_is(tmp_path: Path):

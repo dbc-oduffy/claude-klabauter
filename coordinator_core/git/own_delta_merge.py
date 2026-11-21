@@ -71,3 +71,26 @@ def apply_own_delta(pre: bytes, post: bytes, head: bytes) -> Optional[bytes]:
         pos = i2
     out.extend(base[pos:])
     return b"".join(out)
+
+
+def conflict_hunks(pre: bytes, post: bytes, head: bytes) -> List[dict]:
+    """The hunks `apply_own_delta` refuses: each run edit that collides with a head edit, as
+    `{"base_lines": "i1+1-i2", "run": [...], "head": [...]}` (1-based, base line numbers; text decoded
+    with replacement, at most 5 lines each). Empty when the merge applies or a side is over the cap."""
+    if any(len(x.splitlines()) > MAX_MERGE_LINES for x in (pre, post, head)):
+        return []
+    base = pre.splitlines(keepends=True)
+    theirs = _edits(base, head.splitlines(keepends=True))
+    out: List[dict] = []
+    for o in _edits(base, post.splitlines(keepends=True)):
+        if o in theirs:
+            continue
+        for t in theirs:
+            if _collide(o, t):
+                out.append({
+                    "base_lines": f"{o[0] + 1}-{max(o[1], o[0] + 1)}",
+                    "run": [ln.decode("utf-8", "replace").rstrip("\r\n") for ln in o[2][:5]],
+                    "head": [ln.decode("utf-8", "replace").rstrip("\r\n") for ln in t[2][:5]],
+                })
+                break
+    return out

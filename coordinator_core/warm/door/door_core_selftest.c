@@ -423,6 +423,29 @@ int main(int argc, char **argv) {
         free(out.data);
     }
 
+    {
+        struct { const char *name, *payload, *want; } cases[] = {
+            {"dedupe_key/ask_folds_case_and_space",
+             "{\"session_id\":\"s\",\"tool_input\":{\"args\":\"  Fix  the BUG \"}}", "ask:fix the bug"},
+            {"dedupe_key/ask_member_of_args_object",
+             "{\"tool_input\":{\"args\":{\"ask\":\"Fix the Bug\",\"source\":\"pm\"}}}", "ask:fix the bug"},
+            {"dedupe_key/sizing_wins_and_normalizes",
+             "{\"tool_input\":{\"args\":{\"sizing\":\" ./a\\\\b.yaml \",\"ask\":\"x\"}}}", "sizing:a/b.yaml"},
+            {"dedupe_key/resume_run_id",
+             "{\"tool_input\":{\"args\":{\"resume_run_id\":\"ask-1\"}}}", "run:ask-1"},
+            {"dedupe_key/blank_ask_has_no_key", "{\"tool_input\":{\"args\":\"   \"}}", NULL},
+            {"dedupe_key/no_args_has_no_key", "{\"tool_input\":{}}", NULL},
+        };
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            buf_t k;
+            if (!buf_init(&k, 64)) { printf("FAIL buf_init\n"); return 1; }
+            int got = door_ask_dedupe_key(cases[i].payload, strlen(cases[i].payload), &k);
+            check_int(cases[i].name, got, cases[i].want != NULL);
+            if (cases[i].want) check_str(cases[i].name, k.data, cases[i].want);
+            free(k.data);
+        }
+    }
+
 #ifndef _WIN32
     {
         char tmpl[] = "/tmp/door-spool-selftest-XXXXXX";
@@ -455,6 +478,17 @@ int main(int argc, char **argv) {
             char want[17];
             sha1_hex16((const unsigned char *)"s1{\"session_id\":\"s1\",\"cwd\":\"/x\"}", 2 + strlen(bare), want);
             check_str("spool/no_tool_use_id_hashes_payload", id3, want);
+            const char *ask_a = "{\"session_id\":\"s1\",\"tool_use_id\":\"ta\",\"cwd\":\"/x\",\"tool_input\":{\"args\":\"Fix the bug\"}}";
+            const char *ask_b = "{\"session_id\":\"s2\",\"tool_use_id\":\"tb\",\"cwd\":\"/x\",\"tool_input\":{\"args\":\" fix  THE bug\"}}";
+            const char *ask_c = "{\"session_id\":\"s1\",\"tool_use_id\":\"tc\",\"cwd\":\"/x\",\"tool_input\":{\"args\":\"fix another bug\"}}";
+            char ida[17], idb[17], idc[17];
+            check_int("spool/ask_created",
+                      door_spool_hook_payload(root, ask_a, strlen(ask_a), "hooks.submit_engine_ask", "why", ida), 1);
+            check_int("spool/same_ask_new_tool_use_id_is_a_duplicate",
+                      door_spool_hook_payload(root, ask_b, strlen(ask_b), "hooks.submit_engine_ask", "why", idb), 2);
+            check_str("spool/duplicate_names_the_first_id", idb, ida);
+            check_int("spool/distinct_ask_spools",
+                      door_spool_hook_payload(root, ask_c, strlen(ask_c), "hooks.submit_engine_ask", "why", idc), 1);
             char cmd[320];
             snprintf(cmd, sizeof cmd, "rm -rf %s", root);
             if (system(cmd) != 0) printf("note: could not remove %s\n", root);

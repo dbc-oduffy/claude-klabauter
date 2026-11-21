@@ -13,11 +13,11 @@ from coordinator_core.ops.dispatch_emit.ask_compose import (
     _REVISE_STAGED_SCHEMA,
     _SPINE_REVIEW_SCHEMA,
     _SPINE_REVIEW_STAGED_SCHEMA,
-    compose_ask_script,
 )
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from pathlib import Path
+from coordinator_core.ops.dispatch_emit.tests.conftest import compose_ask_script
 
 pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
 

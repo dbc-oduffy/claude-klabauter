@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -121,6 +122,8 @@ def test_non_tree_out_and_undated_name_are_untouched(cli, tmp_path):
 def _main(cli, monkeypatch, cwd: Path, *args: str) -> int:
     monkeypatch.setattr(sys, "argv", ["coordinator-doc-new", *args])
     monkeypatch.chdir(cwd)
+    # Keep the CLI's temp files under the test's tmp_path rather than the system temp dir.
+    monkeypatch.setattr(tempfile, "tempdir", str(cwd))
     try:
         return int(cli.main() or 0)
     except SystemExit as exc:
@@ -146,6 +149,24 @@ def test_main_handoff_with_an_existing_flat_file_overwrites_it_in_place(cli, mon
     assert code == 0
     assert flat.read_text(encoding="utf-8") != "old\n"
     assert not (tmp_path / "state" / "handoffs" / "2026-11").exists()
+
+
+def test_main_plan_flat_out_lands_in_the_shard_and_prints_it(cli, monkeypatch, tmp_path, capsys):
+    flat = tmp_path / "docs" / "plans" / f"{_TODAY}-a-shard-plan.md"
+    code = _main(cli, monkeypatch, tmp_path, "--type", "plan", "--no-sizing-object", "--title", "A shard plan", "--out", str(flat))
+    assert code == 0
+    shard = tmp_path / "docs" / "plans" / "2026-11" / f"{_TODAY}-a-shard-plan.md"
+    assert shard.is_file()
+    assert not flat.exists()
+    assert _rel(str(shard)) in _rel(capsys.readouterr().out)
+
+
+def test_main_plan_with_an_existing_flat_file_overwrites_it_in_place(cli, monkeypatch, tmp_path):
+    flat = _touch(tmp_path / "docs" / "plans" / f"{_TODAY}-a-shard-plan.md", "old\n")
+    code = _main(cli, monkeypatch, tmp_path, "--type", "plan", "--no-sizing-object", "--title", "A shard plan", "--force", "--out", str(flat))
+    assert code == 0
+    assert flat.read_text(encoding="utf-8") != "old\n"
+    assert not (tmp_path / "docs" / "plans" / "2026-11").exists()
 
 
 # --- readers in this file see both shapes ------------------------------------------------------

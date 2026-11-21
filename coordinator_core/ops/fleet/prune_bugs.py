@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import yaml
+from coordinator_core.bug_blitz import archive_index
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import (
     Move,
@@ -237,6 +238,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     skipped: List[dict] = []
     failed: List[dict] = []
     moves: List[Move] = []
+    indexed: dict[str, dict] = {}
 
     bug_dir_safe = (worktree / "state" / "bug-backlog").resolve()
 
@@ -284,6 +286,12 @@ async def _handler(params: dict, repo_root=None) -> dict:
                 continue
             force = True
 
+        try:
+            row = archive_index.index_row(src, meta)
+        except OSError as exc:
+            failed.append({"id": cid, "reason": f"archive-index: {exc}"})
+            continue
+        indexed.setdefault(ym, {})[dst.name] = row
         moves.append(Move(src=src, dst=dst, candidate_id=cid, force=force))
 
     if moves:
@@ -291,6 +299,13 @@ async def _handler(params: dict, repo_root=None) -> dict:
             f"fleet: prune {len(moves)} closed bug "
             f"{'entry' if len(moves) == 1 else 'entries'} [fleet.prune_closed_bugs]"
         )
+        try:
+            # A reader can see a renamed row without a second publication step.
+            for month, rows in indexed.items():
+                archive_index.publish_month(worktree, month, rows)
+        except (OSError, TimeoutError) as exc:
+            failed.extend({"id": move.candidate_id, "reason": f"archive-index: {exc}"} for move in moves)
+            return build_act_result(mode, acted, skipped, failed)
         new_acted, new_failed = await archive_and_commit(worktree, moves, commit_subject)
         acted.extend(new_acted)
         failed.extend(new_failed)

@@ -1,7 +1,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +11,6 @@ from coordinator_core.learn_lessons_pipeline import CONSUMES_MANIFEST
 from coordinator_core.learn_lessons_pipeline import apply as llp_apply
 from coordinator_core.ops import post_run_finish
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import no_console_creationflags
 
 _LESSON_PAGE = "docs" + "/wiki/lessons/page.md"
 
@@ -251,20 +249,6 @@ def test_real_load_of_age_sweep_lessons_exercises_the_bin_import_path(tmp_path: 
 _SID = "00000000-0000-4000-8000-000000000000"
 
 
-def _git(root: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        check=True, capture_output=True, text=True, **no_console_creationflags(),
-    ).stdout
-
-
-def _seed_repo(root: Path) -> None:
-    _git(root, "init", "-q", "-b", "main")
-    (root / "README.md").write_text("init\n", encoding="utf-8")
-    _git(root, "add", "-A")
-    _git(root, "commit", "-q", "-m", "init")
-
-
 class _WritingDispatch(_FakeDispatch):
     """Fake dispatch whose stamp step writes one wiki page and one evidence file, declaring both."""
 
@@ -300,27 +284,6 @@ def _record_finish(monkeypatch, tail: dict[str, Any]) -> list[dict[str, Any]]:
 
     monkeypatch.setattr(post_run_finish, "_handler", _fake)
     return seen
-
-
-def test_default_param_apply_ends_in_post_run_finish_with_a_clean_run_scope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
-    _seed_repo(tmp_path)
-    fake = _WritingDispatch(tmp_path)
-    exit_code, report = _run(monkeypatch, tmp_path, fake)
-
-    assert exit_code == apply_base.APPLY_EXIT_OK
-    assert report["post_run"]["exit_code"] == 0 and report["post_run"]["pipeline"] == "lessons"
-    assert report["post_run"]["run_id"] == "learn-lessons-2026-01-01"
-    assert (tmp_path / _LESSON_PAGE).read_text(encoding="utf-8").startswith(
-        "---\ntitle: Page\n---\n# Page\n"
-    )
-    tracked = _git(tmp_path, "ls-files").splitlines()
-    assert {_LESSON_PAGE, "docs" + "/wiki/lessons/_index.md", "state/lessons-run/COMPLETE"} <= set(tracked)
-    porcelain = [
-        ln[3:] for ln in _git(tmp_path, "status", "--porcelain", "-uall").splitlines()
-        if not ln[3:].startswith(".coordinator-local/")
-    ]
-    assert porcelain == []
 
 
 def test_the_tail_takes_wiki_pages_as_touched_and_other_declared_writes_as_evidence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

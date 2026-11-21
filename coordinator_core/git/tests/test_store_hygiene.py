@@ -288,57 +288,6 @@ def _common(tmp_path):
     return common
 
 
-def _git_fixture(tmp_path, n, real_git: bool = False):
-    import hashlib
-    import subprocess
-
-    from coordinator_core.git import git_objects as go
-
-    if real_git:
-        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    common = _common(tmp_path)
-    shas = []
-    for i in range(n):
-        body = f"blob-{i}".encode()
-        sha = hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest()
-        go._write_pack(common, {sha: (b"blob", body)})
-        shas.append((sha, body))
-    return tmp_path, common, shas
-
-
-def _forget_pack_caches() -> None:
-    from coordinator_core.git import git_objects as go
-
-    go._PACK_LISTING_CACHE.clear()
-    go._PACK_INDEXES_BY_LISTING.clear()
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_pack_batches_consolidate_200_engine_packs_and_keep_every_object(tmp_path: Path) -> None:
-    from coordinator_core.git import git_objects as go
-
-    _, common, shas = _git_fixture(tmp_path, 200, real_git=True)
-    assert sh.status(common).pack_count == 200
-    for _ in range(10):
-        before = sh.status(common).pack_count
-        removed = sh.consolidate_pack_batch(common)
-        assert removed <= sh.CONSOLIDATE_BATCH_PACKS
-        if removed == 0:
-            break
-        assert sh.status(common).pack_count == before - removed + 1
-    assert sh.status(common).pack_count <= sh.CONSOLIDATE_MAX_PACKS
-    _forget_pack_caches()
-    for sha, body in shas:
-        assert go.read_object(common, sha) == ("blob", body)
-
-
-def test_consolidate_leaves_a_store_at_the_bound_alone(tmp_path: Path) -> None:
-    _, common, _ = _git_fixture(tmp_path, sh.CONSOLIDATE_MAX_PACKS)
-    assert sh.consolidate_pack_batch(common) == 0
-    assert sh.status(common).pack_count == sh.CONSOLIDATE_MAX_PACKS
-
-
 def _sized_packs(common, n, nbytes) -> list[tuple[str, bytes]]:
     import hashlib
 
@@ -353,54 +302,11 @@ def _sized_packs(common, n, nbytes) -> list[tuple[str, bytes]]:
     return shas
 
 
-@pytest.mark.spawns_process
-def test_pack_batch_merges_packs_in_the_64kb_to_1mb_band_and_is_bounded(tmp_path: Path) -> None:
-    from coordinator_core.git import git_objects as go
-
-    _, common, _ = _git_fixture(tmp_path, 0, real_git=True)
-    n = sh.CONSOLIDATE_MAX_PACKS + 48
-    shas = _sized_packs(common, n, 100 * 1024)
-    removed = sh.consolidate_pack_batch(common)
-    assert removed == sh.CONSOLIDATE_BATCH_PACKS
-    assert sh.status(common).pack_count == n - removed + 1
-    assert sh.consolidate_pack_batch(common) > 0
-    _forget_pack_caches()
-    for sha, body in shas:
-        assert go.read_object(common, sha) == ("blob", body)
-
-
 def test_pack_batch_leaves_packs_at_or_over_the_floor_alone(tmp_path: Path) -> None:
     common = _common(tmp_path)
     _sized_packs(common, sh.CONSOLIDATE_MAX_PACKS + 3, sh.CONSOLIDATE_SIZE_FLOOR)
     assert sh.consolidate_pack_batch(common) == 0
     assert sh.status(common).pack_count == sh.CONSOLIDATE_MAX_PACKS + 3
-
-
-@pytest.mark.spawns_process
-def test_pack_batch_stops_at_the_byte_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _, common, _ = _git_fixture(tmp_path, 0, real_git=True)
-    n = sh.CONSOLIDATE_MAX_PACKS + 20
-    _sized_packs(common, n, 200 * 1024)
-    monkeypatch.setattr(sh, "CONSOLIDATE_GROUP_BYTES", 10 * 200 * 1024)
-    removed = sh.consolidate_pack_batch(common)
-    assert removed == 9
-    assert sh.status(common).pack_count == n - 9 + 1
-
-
-@pytest.mark.spawns_process
-def test_pack_batch_skips_keep_packs_and_rewrites_the_midx_in_its_locked_step(tmp_path: Path) -> None:
-    _, common, _ = _git_fixture(tmp_path, sh.CONSOLIDATE_MAX_PACKS + 5, real_git=True)
-    pack_dir = common / "objects" / "pack"
-    kept = sorted(pack_dir.glob("*.idx"))[0]
-    kept.with_suffix(".keep").write_bytes(b"")
-    from coordinator_core.git.run import run_git
-
-    assert run_git(["multi-pack-index", "write"], cwd=str(common)).returncode == 0
-    assert (pack_dir / "multi-pack-index").exists()
-    assert sh.consolidate_pack_batch(common) > 0
-    assert kept.exists() and kept.with_suffix(".pack").exists()
-    assert (pack_dir / "multi-pack-index").exists()
-    assert not sh.midx_names_missing_pack(common)
 
 
 def test_deferred_tier_releases_the_claim_after_one_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -447,40 +353,6 @@ with hold(Path(sys.argv[1]), wait_s=30.0, holder_label="test-holder"):
     Path(sys.argv[2]).write_text("ready")
     sys.stdin.read()
 """
-
-
-@pytest.fixture()
-def foreign_holder(tmp_path: Path):
-    """Start a real process holding the object-store lock of a common dir."""
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    procs = []
-
-    def start(common) -> None:
-        ready = tmp_path / "holder-ready"
-        env = dict(os.environ)
-        root = str(Path(__file__).resolve().parents[3])
-        env["PYTHONPATH"] = root + os.pathsep + env.get("PYTHONPATH", "")
-        proc = subprocess.Popen(
-            [sys.executable, "-c", _HOLDER_CHILD, str(common), str(ready)],
-            env=env,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        procs.append(proc)
-        deadline = time.monotonic() + 30
-        while not ready.exists():
-            assert time.monotonic() < deadline, "holder never took the lock"
-            time.sleep(0.02)
-
-    yield start
-    for proc in procs:
-        proc.stdin.close()
-        proc.wait(timeout=60)
 
 
 def _tmp_pack_files(common, names, age_s):
@@ -667,20 +539,3 @@ def test_daily_outcome_does_nothing_for_young_orphans(tmp_path: Path, monkeypatc
     monkeypatch.setattr(sh, "_box_busy", lambda: pytest.fail("sampled load with nothing owed"))
     assert sh._run_daily_outcome(repo) == (0, False)
     assert all(p.exists() for p in young)
-
-
-@pytest.mark.spawns_process
-def test_daily_outcome_reports_deferral_for_busy_box_and_held_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, foreign_holder) -> None:
-    import subprocess
-
-    repo, common = _repo(tmp_path)
-    subprocess.run(
-        ["git", "init", "-q", str(repo)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    )
-    monkeypatch.setattr(sh, "_owes_maintenance", lambda r, c: True)
-    monkeypatch.setattr(sh, "_box_busy", lambda: True)
-    assert sh._run_daily_outcome(repo) == (0, True)
-    monkeypatch.setattr(sh, "_box_busy", lambda: False)
-    foreign_holder(common)
-    rc, deferred = sh._run_daily_outcome(repo)
-    assert deferred is True

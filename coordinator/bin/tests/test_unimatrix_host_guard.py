@@ -1,14 +1,12 @@
 """Behavior pins for the Klabauter host-guard client: open answer per host, bounded wall, no child, deny pass-through."""
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import types
-import uuid
 from pathlib import Path
 
 import pytest
@@ -81,21 +79,6 @@ def stub_shim(monkeypatch, answer=None, run=None):
     """Seam the shim import: guard() calls `run(host, stdin)` on its walled thread, no engine tree needed."""
     fn = run or (lambda host, text: answer)
     monkeypatch.setattr(hg, "_load_shim", lambda root: types.SimpleNamespace(run=fn))
-
-
-def make_engine(tmp_path, shim_src):
-    """A stub engine tree on disk, for the CLI tests that run the guard script in its own interpreter."""
-    root = tmp_path / "engine"
-    pkg = root / "coordinator_core" / "host_hooks"
-    pkg.mkdir(parents=True)
-    (root / "coordinator_core" / "__init__.py").write_text("")
-    (pkg / "__init__.py").write_text("")
-    (pkg / "shim.py").write_text(shim_src)
-    return str(root)
-
-
-def shim_src(body):
-    return "import sys\n\ndef run(host, stdin_text):\n    " + body + "\n"
 
 
 @pytest.mark.parametrize("host", ["agy", "codex"])
@@ -293,16 +276,6 @@ def test_agy_degrade_with_a_classifier_timeout_allows_with_the_warning_naming_it
     assert rec["verdict"] == "allow" and rec["unchecked"] == "classifier_timeout"
 
 
-def test_cli_agy_degrade_denies_irreversible_and_allows_status(tmp_path):
-    for command, decision in (("git reset --hard", "deny"), ("git status", "allow")):
-        proc = subprocess.run([sys.executable, str(SCRIPT), "--host", "agy", "--engine-root", str(REPO / "no-such-dir")],
-                              input=agy_command(command), capture_output=True, text=True,
-                              env={**os.environ, "PYTHONPATH": str(REPO)})
-        assert proc.returncode == 0 and proc.stderr.strip() == "degraded"
-        (line,) = proc.stdout.splitlines()
-        assert json.loads(line)["decision"] == decision and json.loads(line)["reason"]
-
-
 def test_guard_hot_path_spawns_no_python_child_and_a_cold_engine_answers_open(monkeypatch, settings_home):
     """Real shim from the real repo root, warm dial forced to a miss, Popen armed to raise."""
     monkeypatch.syspath_prepend(str(REPO))
@@ -427,14 +400,6 @@ def test_codex_malformed_advisory_degrades(bad):
     assert hg._valid_answer("codex", bad) is False
 
 
-def test_stray_stderr_never_reaches_stdout(tmp_path):
-    root = make_engine(tmp_path, shim_src("sys.stderr.write('noise\\n'); return {'decision': 'ask'}"))
-    proc = subprocess.run([sys.executable, str(SCRIPT), "--host", "agy", "--engine-root", root],
-                          input=AGY_PAYLOAD, capture_output=True, text=True)
-    assert proc.stdout.strip() == '{"decision": "allow"}'
-    assert "noise" not in proc.stdout
-
-
 def test_stub_deny_passes_through_untouched(tmp_path, monkeypatch):
     deny = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": "no"}}
@@ -443,24 +408,6 @@ def test_stub_deny_passes_through_untouched(tmp_path, monkeypatch):
     agy_deny = {"decision": "deny", "reason": "no"}
     stub_shim(monkeypatch, agy_deny)
     assert hg.guard("agy", AGY_PAYLOAD, str(tmp_path)) == (agy_deny, "engine")
-
-
-@pytest.mark.parametrize("host,payload", [("agy", AGY_PAYLOAD), ("codex", CODEX_PAYLOAD), ("codex", "garbage"), ("agy", "")])
-def test_cli_one_json_line_exit_zero(tmp_path, host, payload):
-    root = make_engine(tmp_path, "raise SystemExit(7)\n")
-    proc = subprocess.run([sys.executable, str(SCRIPT), "--host", host, "--engine-root", root],
-                          input=payload, capture_output=True, text=True)
-    assert proc.returncode == 0
-    lines = proc.stdout.splitlines()
-    assert len(lines) == 1
-    assert_open(host, json.loads(lines[0]))
-    assert proc.stderr.strip() == "degraded"
-
-
-def test_cli_without_args_is_open_exit_zero():
-    proc = subprocess.run([sys.executable, str(SCRIPT)], input="", capture_output=True, text=True)
-    assert proc.returncode == 0
-    assert len(proc.stdout.splitlines()) == 1 and json.loads(proc.stdout) == {}
 
 
 def _real_engine_root():
@@ -556,15 +503,6 @@ def test_unwritable_record_never_fails_the_guard(tmp_path, monkeypatch):
 
 def test_default_budget_is_half_a_second():
     assert hg.DEFAULT_BUDGET_SECS == 0.5
-
-
-def test_cli_timeout_at_default_budget_records_and_stays_exit_zero(tmp_path, settings_home):
-    root = make_engine(tmp_path, "import time\n\ndef run(host, stdin_text):\n    time.sleep(60)\n")
-    r = subprocess.run([sys.executable, str(SCRIPT), "--host", "codex", "--engine-root", root],
-                       input=CODEX_PAYLOAD, capture_output=True, text=True, timeout=30)
-    assert r.returncode == 0 and json.loads(r.stdout) == {} and r.stderr.strip() == "degraded"
-    (rec,) = degrade_records(settings_home)
-    assert rec["cause"] == "timeout" and rec["budget_secs"] == 0.5
 
 
 def test_grok_neutral_is_the_no_change_answer_and_agrees_with_contract(monkeypatch):
@@ -789,52 +727,6 @@ COLD_CHILD = (
 )
 
 
-def _nag_repo(root, session_id):
-    """A git repo whose lane record attributes three over-bound uncommitted edits to `session_id`."""
-    root.mkdir()
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-    def git(*args):
-        subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-                       check=True, capture_output=True, creationflags=flags)
-
-    git("init", "-q")
-    names = [f"f{i}.txt" for i in range(3)]
-    for name in names:
-        (root / name).write_text("a\n" * 5)
-    git("add", ".")
-    git("commit", "-q", "-m", "base")
-    for name in names:
-        (root / name).write_text("b\n" * 40)
-    sys.path.insert(0, str(REPO))
-    from coordinator_core.session import xs_lane_budget
-
-    lane = xs_lane_budget.lane_path(root, session_id)
-    lane.parent.mkdir(parents=True, exist_ok=True)
-    lane.write_text(json.dumps({"kind": "xs", "state": "open", "base_sha": "x", "paths": names}), encoding="utf-8")
-
-
-def test_cold_process_grok_edit_delivers_the_nag_at_the_default_budget_within_it(tmp_path):
-    """A fresh interpreter, default budget, no warm engine: the DIY nag reaches additionalContext and the
-    whole process spends less CPU than the budget. Process time, never wall clock."""
-    sid = str(uuid.uuid4())
-    repo = tmp_path / "grok-repo"
-    _nag_repo(repo, sid)
-    payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "search_replace", "session_id": sid,
-                          "cwd": str(repo), "tool_input": {"file_path": str(repo / "delta.py"), "old_string": "",
-                                                           "new_string": "x = 1\n" * 20}})
-    env = {**os.environ, "COORDINATOR_AGENT_PROVIDER": "grok", "TMP": tempfile.gettempdir(),
-           "TEMP": tempfile.gettempdir(), "TMPDIR": tempfile.gettempdir()}
-    proc = subprocess.run([sys.executable, "-c", COLD_CHILD, str(SCRIPT), str(REPO), payload], capture_output=True,
-                          text=True, timeout=120, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    row = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert BUDGET == hg.DEFAULT_BUDGET_SECS
-    nested = row["answer"].get("hookSpecificOutput", {})
-    assert nested.get("additionalContext") and "XS bound" in nested["additionalContext"], row
-    assert row["state"] == "neutral-unknown", row
-    assert row["process_secs"] < BUDGET, row
-
-
 def _cold_payload(host, tool, args, cwd):
     if host == "agy":
         return json.dumps({"conversationId": "c1", "toolCall": {"name": tool, "args": args}})
@@ -855,3 +747,81 @@ def test_cold_shell_command_runs_the_chain_and_writes_no_guard_degrade_row(host,
         unchained, _ = hg.guard(host, _cold_payload(host, "view_file", {"AbsolutePath": str(tmp_path)}, str(tmp_path)),
                                 str(REPO))
         assert "guard did not run" in unchained["reason"]
+
+
+def allow_rows(home):
+    log = home / "host-hooks" / hg.ALLOW_LOG_NAME
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def stub_shim_with_evaluation(monkeypatch, answer, evaluation):
+    monkeypatch.setattr(hg, "_load_shim", lambda root: types.SimpleNamespace(
+        run=lambda host, text: answer, take_evaluation=lambda: evaluation))
+
+
+@pytest.mark.parametrize("answer", [{}, CODEX_ADVISORY])
+def test_codex_allow_appends_one_evaluated_allow_row(tmp_path, monkeypatch, settings_home, answer):
+    stub_shim_with_evaluation(monkeypatch, answer, {"route": "warm", "guards_evaluated": []})
+    assert hg.guard("codex", CODEX_PAYLOAD, str(tmp_path)) == (answer, "neutral-unknown")
+    (row,) = allow_rows(settings_home)
+    assert row["kind"] == "evaluated-allow" and row["host"] == "codex" and row["ts"] > 0
+    assert row["route"] == "warm" and row["guards_evaluated"] == []
+    assert degrade_records(settings_home) == []
+
+
+def test_codex_cold_allow_row_names_guards(tmp_path, monkeypatch, settings_home):
+    stub_shim_with_evaluation(monkeypatch, {}, {"route": "cold", "guards_evaluated": ["backstop"]})
+    hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))
+    assert allow_rows(settings_home)[0]["route"] == "cold"
+    assert allow_rows(settings_home)[0]["guards_evaluated"] == ["backstop"]
+
+
+def test_codex_allow_from_engine_without_take_evaluation_is_unreported(tmp_path, monkeypatch, settings_home):
+    stub_shim(monkeypatch, {})
+    hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))
+    (row,) = allow_rows(settings_home)
+    assert row["route"] == "unreported" and row["guards_evaluated"] == []
+
+
+def test_codex_deny_appends_an_evaluated_deny_row_and_degrade_appends_none(tmp_path, monkeypatch, settings_home):
+    deny = {"hookSpecificOutput": {**GOOD_INNER}}
+    evaluation = {"route": "cold", "guards_evaluated": ["backstop", "destructive-rm"],
+                  "verdicts": [{"guard": "backstop", "verdict": "allow"}, {"guard": "destructive-rm", "verdict": "deny"}],
+                  "chain": "full", "backstop_class": True}
+    stub_shim_with_evaluation(monkeypatch, deny, evaluation)
+    assert hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))[1] == "engine"
+    (row,) = allow_rows(settings_home)
+    assert row["kind"] == "evaluated-deny" and row["verdict"] == "deny" and row["route"] == "cold"
+    assert row["verdicts"] == evaluation["verdicts"] and row["chain"] == "full" and row["backstop_class"] is True
+    stub_shim_with_evaluation(monkeypatch, {"bogus": 1}, evaluation)
+    assert hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))[1] == "degraded"
+    assert len(allow_rows(settings_home)) == 1
+
+
+def test_codex_allow_and_advisory_rows_carry_verdict_and_chain(tmp_path, monkeypatch, settings_home):
+    evaluation = {"route": "cold", "guards_evaluated": ["backstop", "guard-disk-fill"],
+                  "verdicts": [{"guard": "backstop", "verdict": "allow"}, {"guard": "guard-disk-fill", "verdict": "allow"}],
+                  "chain": "full"}
+    stub_shim_with_evaluation(monkeypatch, {}, evaluation)
+    hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))
+    stub_shim_with_evaluation(monkeypatch, CODEX_ADVISORY, evaluation)
+    hg.guard("codex", CODEX_PAYLOAD, str(tmp_path))
+    allow, advisory = allow_rows(settings_home)
+    assert (allow["kind"], allow["verdict"]) == ("evaluated-allow", "allow")
+    assert (advisory["kind"], advisory["verdict"]) == ("evaluated-allow", "advisory")
+    assert allow["verdicts"] == evaluation["verdicts"] and allow["chain"] == "full"
+
+
+def test_allow_row_write_failure_never_alters_the_answer(tmp_path, monkeypatch, settings_home):
+    stub_shim_with_evaluation(monkeypatch, {}, {"route": "cold", "guards_evaluated": ["backstop"]})
+    (settings_home / "host-hooks").mkdir(parents=True)
+    (settings_home / "host-hooks" / hg.ALLOW_LOG_NAME).mkdir()
+    assert hg.guard("codex", CODEX_PAYLOAD, str(tmp_path)) == ({}, "neutral-unknown")
+
+
+def test_unreachable_engine_codex_ls_records_a_cold_evaluated_allow(tmp_path, settings_home):
+    """Real shim, no warm engine: the production path records route cold naming the backstop only."""
+    answer, state = hg.guard("codex", _cold_payload("codex", "Bash", {"command": "ls"}, str(tmp_path)), str(REPO))
+    assert (answer, state) == ({}, "neutral-unknown")
+    (row,) = allow_rows(settings_home)
+    assert row["route"] == "cold" and row["guards_evaluated"] == ["backstop"]

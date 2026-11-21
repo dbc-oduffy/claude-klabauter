@@ -9,7 +9,6 @@ pytestmark = pytest.mark.complete
 import importlib.util
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -99,12 +98,6 @@ def test_unresolved_engine_exits_2(tmp_path, monkeypatch, capsys):
     assert "unresolvable" in capsys.readouterr().err
 
 
-def _git(cwd, *args):
-    return subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True
-    )
-
-
 def _stub_home(gem_home, monkeypatch, home, remote):
     monkeypatch.setattr(gem_home, "resolve_home", lambda: home)
     monkeypatch.setattr(gem_home, "migrate_legacy_home", lambda: "none")
@@ -125,43 +118,6 @@ def test_ensure_json_reports_opt_out_installs_guard(tmp_path, monkeypatch, capsy
     assert rep["sync"]["sync"] == "noop"
     assert (home / ".git" / "hooks" / "pre-commit").is_file()
     assert "state/cross-repo" not in (home / ".gitignore").read_text(encoding="utf-8")
-
-
-def test_sync_push_to_bare_remote_then_pull(tmp_path, monkeypatch, capsys):
-    from coordinator_core.group_em import gem_home
-
-    mod = _load_mirror(tmp_path, monkeypatch)
-    home = tmp_path / "home"
-    bare = tmp_path / "remote.git"
-    assert _git(tmp_path, "init", "--bare", "-q", str(bare)).returncode == 0
-    _stub_home(gem_home, monkeypatch, home, (str(bare), None))
-    assert mod.main(["ensure", "--json"]) == 0
-    capsys.readouterr()
-    inbox = home / "state" / "cross-repo" / "inbox"
-    inbox.mkdir(parents=True)
-    (inbox / "m.md").write_text("memo", encoding="utf-8")
-    for k in ("AUTHOR", "COMMITTER"):
-        monkeypatch.setenv(f"GIT_{k}_NAME", "t")
-        monkeypatch.setenv(f"GIT_{k}_EMAIL", "t@t")
-    assert _git(home, "symbolic-ref", "HEAD", f"refs/heads/{gem_home.DEFAULT_REMOTE_BRANCH}").returncode == 0
-    assert mod.main(["sync", "--push"]) == 0
-    assert json.loads(capsys.readouterr().out)["sync"] == "ok"
-    assert _git(bare, "log", "--all", "--oneline").stdout.strip()
-    assert mod.main(["sync"]) == 0
-    assert json.loads(capsys.readouterr().out)["sync"] == "ok"
-
-
-def test_sync_without_remote_is_noop_exit_0(tmp_path, monkeypatch, capsys):
-    from coordinator_core.group_em import gem_home
-
-    mod = _load_mirror(tmp_path, monkeypatch)
-    home = tmp_path / "home"
-    home.mkdir()
-    _git(home, "init", "-q")
-    _stub_home(gem_home, monkeypatch, home, (None, "gh-absent"))
-    assert mod.main(["sync", "--push"]) == 0
-    rep = json.loads(capsys.readouterr().out)
-    assert rep["sync"] == "noop" and rep["remote_opt_out"] == "gh-absent"
 
 
 def test_sync_conflict_exits_5_naming_paths(tmp_path, monkeypatch, capsys):

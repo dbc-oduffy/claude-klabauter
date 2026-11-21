@@ -10,7 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import landing_retest, retest_targeted
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 RUN_ID = "run-cov"
 OUTSIDE = "outside_dirty.py"

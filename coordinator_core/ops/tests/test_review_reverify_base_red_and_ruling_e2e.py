@@ -17,6 +17,8 @@ from coordinator_core.ops.dispatch_emit import review_edits, run_notes
 from coordinator_core.ops.pre_existing_ruling import PRE_EXISTING_FILE
 from coordinator_core.session.machinery_paths import share_dir
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 SESSION = "sess-e2e"
 PREFIX = "prep-e2e"
 RUN = "ask-20261112T000000-aaaaaa"

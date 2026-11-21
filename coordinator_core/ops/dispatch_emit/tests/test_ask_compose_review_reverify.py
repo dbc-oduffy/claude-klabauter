@@ -85,8 +85,10 @@ def test_staged_review_reverify_body_leaves_the_script_and_lands_in_the_sink() -
 
 def test_every_commit_params_block_carries_targeted_tests_verbatim() -> None:
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
-    # commit stage, its post-await and post-invariant-retest re-commits, and the halt record
-    assert script.count(_TARGETED_TESTS) == 4
+    # the one `_commitStage` call site (the commit and both re-commits), and the halt record: both read the one
+    # shared `_targetedTests` arrow, which spells the expression once
+    assert script.count("targeted_tests: _targetedTests()") == 2
+    assert script.count(f"const _targetedTests = () => {_TARGETED_TESTS.removeprefix('targeted_tests: ').removesuffix(',')};") == 1
 
 
 def test_halt_block_carries_targeted_tests_outside_the_terminal_commit_conditional() -> None:

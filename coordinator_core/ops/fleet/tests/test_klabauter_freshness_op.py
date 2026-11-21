@@ -12,7 +12,7 @@ from coordinator_core.install import klabauter_freshness as kf
 from coordinator_core.install import klabauter_freshness_apply as apply
 from coordinator_core.ops.fleet import klabauter_freshness as op
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 _ENV = {
     "GIT_AUTHOR_NAME": "t",

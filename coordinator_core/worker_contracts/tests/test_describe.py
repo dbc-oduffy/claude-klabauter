@@ -9,6 +9,8 @@ import sys
 import jsonschema
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 @pytest.fixture(scope="module")
 def descriptions():

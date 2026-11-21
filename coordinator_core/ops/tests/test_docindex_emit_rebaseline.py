@@ -56,3 +56,23 @@ def test_discovery_finds_a_declared_index_and_skips_a_body_only_mention(tmp_path
     emitted = _docindex_emit({"target_root": str(root)}, repo_root=None)
     emitted = asyncio.run(emitted) if asyncio.iscoroutine(emitted) else emitted
     assert [r["index_path"] for r in emitted["results"]] == ["index.md"]
+
+def test_systems_index_accepts_both_dependency_field_spellings(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    index = root / "index.md"
+    index.write_text(_INDEX.replace(
+        "  - {field: system, label: System}\n",
+        "  - {field: system, label: System}\n"
+        "  - {field: depends_on, label: Dependencies, fallback_field: dependencies}\n",
+    ), encoding="utf-8")
+    (root / "entries" / "alpha.md").write_text(
+        "---\nsystem: alpha\ndependencies: [engine, hooks]\n---\n", encoding="utf-8",
+    )
+    (root / "entries" / "beta.md").write_text(
+        "---\nsystem: beta\ndepends_on: []\ndependencies: [ignored]\n---\n", encoding="utf-8",
+    )
+    (result,) = _emit(root, rebaseline=True)["results"]
+    assert result["written"]
+    text = index.read_text(encoding="utf-8")
+    assert "| alpha | engine, hooks |" in text
+    assert "| beta | — |" in text

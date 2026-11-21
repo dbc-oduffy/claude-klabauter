@@ -14,6 +14,8 @@ from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.warp_run_deliverable import ABANDONED_AT_MINTED, MINTED_STALE_SECONDS
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 NOW = time.time() + 2 * MINTED_STALE_SECONDS
 RUN = "ask-20261101T000000-aaaaaa"
 

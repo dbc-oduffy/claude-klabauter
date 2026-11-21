@@ -17,7 +17,7 @@ from coordinator_core.ops.dispatch_emit import own_hunk_candidate as ohc, strand
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 X = "pkg/shared.py"
 OWN_RUN = "ask-20261114T100000-aaaaaa"

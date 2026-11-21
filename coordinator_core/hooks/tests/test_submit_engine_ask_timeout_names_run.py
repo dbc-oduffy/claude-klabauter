@@ -208,7 +208,7 @@ def test_stall_before_any_mint_answers_inside_the_budget_and_says_nothing_was_ta
     finally:
         release.set()
     text = _deny_reason(env)
-    assert "reach-budget-no-run" in text and "the ask is spooled" in text and "Do not re-submit" in text
+    assert text.removeprefix("[coordinator] ").startswith("SPOOLED as ") and "Do not resubmit" in text
 
 
 def test_fanout_blocked_inside_a_write_leaves_no_sizing_at_the_deny(repo, monkeypatch):

@@ -210,6 +210,22 @@ def _tree(tmp_path, rows, plan_status="executing", plan_age_days=10):
     return tmp_path
 
 
+def test_stall_report_names_flat_and_sharded_stuck_plans_under_real_paths(tmp_path):
+    root = _tree(tmp_path, [_row("stale", "partial", claimed_by=[P1], last_progress_at="2026-09-20T00:00:00Z")])
+    shard_dir = root / "docs" / "plans" / "2026-09"
+    shard_dir.mkdir()
+    sharded = shard_dir / "q.md"
+    sharded.write_text(
+        '---\nplan_id: "q1"\ncreated: 2026-09-01\nstatus: executing\n'
+        'sizing_object: "state/sizings/s.yaml"\n---\nbody\n', encoding="utf-8")
+    old = (datetime(2026, 10, 9) - timedelta(days=10)).timestamp()
+    os.utime(sharded, (old, old))
+
+    stuck = rr.stall_report(root, date(2026, 10, 9)).stuck_plans
+
+    assert sorted(line.split(" ")[0] for line in stuck) == ["docs/plans/2026-09/q.md", "docs/plans/p.md"]
+
+
 def test_stall_report_names_stale_stuck_and_unclaimed(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("spawned a process")

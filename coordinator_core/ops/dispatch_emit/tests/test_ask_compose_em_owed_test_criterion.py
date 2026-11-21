@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, StageManifest
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
-from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
+from coordinator_core.ops.dispatch_emit.tests.conftest import shared_decls, write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -55,9 +55,9 @@ def _staged(tmp_path, plan_text: str) -> StageManifest:
 
 
 def _line(script: str, anchor: str) -> str:
-    """The composed script's one line holding `anchor`."""
+    """The composed script's one line holding `anchor`, after the script's shared helper declarations."""
     start = script.index(anchor)
-    return script[script.rfind("\n", 0, start) + 1 : script.find("\n", start)]
+    return shared_decls(script) + "\n" + script[script.rfind("\n", 0, start) + 1 : script.find("\n", start)]
 
 
 def _run(segment: str, manifest: dict, **state: str) -> dict:

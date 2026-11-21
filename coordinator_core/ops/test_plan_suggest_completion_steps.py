@@ -222,6 +222,21 @@ def test_handler_fails_loud_when_repo_root_is_none():
         _plan_suggest_completion_steps({}, repo_root=None)
 
 
+def test_flat_and_sharded_plans_both_reported_under_real_paths(tmp_path):
+    _init_repo(tmp_path)
+    flat = _write_plan(tmp_path, "a.md", "executing")
+    shard_dir = tmp_path / "docs" / "plans" / "2026-11"
+    shard_dir.mkdir(parents=True)
+    shard = shard_dir / "b.md"
+    shard.write_text('---\ntitle: "fixture"\nstatus: executing\n---\n\nbody\n', encoding="utf-8")
+    _commit_plan(tmp_path, flat, "add a")
+    _commit_plan(tmp_path, shard, "add b")
+
+    result = suggest_completion_steps(tmp_path)
+
+    assert [e["path"] for e in result] == ["docs/plans/2026-11/b.md", "docs/plans/a.md"]
+
+
 def test_handler_derives_worktree_root_from_common_dir(tmp_path):
     _init_repo(tmp_path)
     path = _write_plan(tmp_path, "a.md", "executing")

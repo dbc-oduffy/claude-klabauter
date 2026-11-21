@@ -222,7 +222,7 @@ def _augassign_both_flags(body: list[ast.stmt]) -> list[int]:
 def _find_both_flags_violations(
     root: pathlib.Path, scope_roots: tuple[str, ...] | None = None
 ) -> list[tuple[str, int]]:
-    discovered, _excluded = discover_source_files(root, exclude=DEFAULT_EXCLUDE)
+    discovered, _excluded = discover_source_files(root, exclude=DEFAULT_EXCLUDE, count_excluded=False)
     violations: list[tuple[str, int]] = []
 
     for relpath, file_path in discovered:
@@ -391,7 +391,7 @@ class _LeafSpawnUseVisitor(ast.NodeVisitor):
 
 
 def _find_leaf_spawn_uses(root: pathlib.Path) -> list[tuple[str, int, bool]]:
-    discovered, _excluded = discover_source_files(root, exclude=DEFAULT_EXCLUDE)
+    discovered, _excluded = discover_source_files(root, exclude=DEFAULT_EXCLUDE, count_excluded=False)
     uses: list[tuple[str, int, bool]] = []
 
     for relpath, file_path in discovered:

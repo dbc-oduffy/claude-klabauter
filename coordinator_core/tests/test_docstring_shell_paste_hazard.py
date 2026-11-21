@@ -190,6 +190,8 @@ _BASELINE: set[tuple[str, str]] = {
      '# ``"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/<cli>"``'),
     ('coordinator_core/bash_guards/tests/test_block_subagent_destructive_action.py',
      '# `"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/<cli>"`'),
+    ('coordinator_core/bash_guards/tests/test_block_subagent_destructive_action_spawns.py',
+     '# `"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/<cli>"`'),
     ('coordinator_core/conftest.py',
      "#     version; the repo declares a `>=9.1` floor in pyproject.toml's"),
     ('coordinator_core/contract/cockpit_schema/emit_schema.py',

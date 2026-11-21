@@ -8,7 +8,7 @@ from coordinator_core.ops.dispatch_emit import measured_rev as mr
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from pathlib import Path
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN = "ask-nested-1"
 

@@ -13,7 +13,7 @@ from coordinator_core.ops.dispatch_emit import own_hunk_candidate as ohc, strand
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 DRIVER = "Plugins/Example-Game-Repo/Source/driver.py"
 RUN_A = "b9c1a5-1"

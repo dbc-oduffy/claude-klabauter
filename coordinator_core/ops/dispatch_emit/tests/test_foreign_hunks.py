@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit import foreign_hunks as fh
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 PATH = "src/x.py"
 HOLDER = "ask-20261026T000000-aaaaaa"

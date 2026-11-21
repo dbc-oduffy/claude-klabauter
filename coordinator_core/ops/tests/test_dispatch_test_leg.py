@@ -13,6 +13,8 @@ from coordinator_core.ops import dispatch_test_leg as leg
 from coordinator_core.ops.dispatch_emit.verdict_supersession import record_tests_supersession
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 PLAN_ID = "pln-test-leg-fixture-000001"
 RESULT_KEYS = {"sidecar_path", "agent_type", "verdict", "findings", "rebuild_recommended", "em_may_think_differently"}
 

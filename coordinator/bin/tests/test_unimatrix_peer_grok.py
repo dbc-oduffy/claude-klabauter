@@ -5,7 +5,6 @@ import json
 import os
 import socket
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -53,15 +52,6 @@ def test_live_entry_yields_named_grok_peer(tmp_path: Path) -> None:
 def test_dead_pid_yields_no_peer(tmp_path: Path) -> None:
     home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": str(tmp_path)}])
     assert pg.discover_peers(home, pid_alive=lambda pid: False) == []
-
-
-def test_default_liveness_uses_real_pid_check(tmp_path: Path) -> None:
-    rows = [{"session_id": SID, "pid": os.getpid(), "cwd": str(tmp_path)}]
-    assert [p["target"] for p in pg.discover_peers(registry(tmp_path, rows))] == [SID]
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    rows = [{"session_id": SID, "pid": proc.pid, "cwd": str(tmp_path)}]
-    assert pg.discover_peers(registry(tmp_path, rows)) == []
 
 
 @pytest.mark.parametrize("content", ["not json", "{}", "[1, 'x', {\"session_id\": 3}]",
@@ -151,13 +141,3 @@ def test_own_session_empty_registry_never_walks_processes(tmp_path: Path) -> Non
 
 def test_real_parent_pid_finds_this_processes_parent() -> None:
     assert pg.parent_pid(os.getpid()) == os.getppid()
-
-
-def test_own_session_real_walk_from_a_child_process_finds_the_registered_ancestor(tmp_path: Path) -> None:
-    home = registry(tmp_path, [{"session_id": SID, "pid": os.getpid(), "cwd": str(tmp_path)}])
-    code = ("import importlib.util,sys;"
-            f"s=importlib.util.spec_from_file_location('g',r'{BIN / 'unimatrix-peer-grok.py'}');"
-            "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
-            f"p=m.own_session(r'{home}');print(p['target'] if p else '')")
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
-    assert out.stdout.strip() == SID

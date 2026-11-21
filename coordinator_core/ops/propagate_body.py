@@ -170,6 +170,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.git.commit_signing import sign_flag_args
+from coordinator_core.git.index_sync import IndexSyncRefused, sync_shared_index
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 from coordinator_core.win_portability import no_console_creationflags
@@ -491,12 +492,12 @@ def _commit_delivery(
             f"since {old_head} was captured: {update_ref_result.stderr.strip()}"
         )
 
-    sync_result = _run_git(["reset", "-q", "HEAD", "--", rel_path], worktree)
-    if sync_result.returncode != 0:
+    try:
+        sync_shared_index(worktree, new_sha, [rel_path])
+    except IndexSyncRefused as exc:
         return new_sha, (
             f"delivery committed as {new_sha} but the shared index still "
-            f"shows {rel_path} as modified (git reset failed): "
-            f"{sync_result.stderr.strip()}"
+            f"shows {rel_path} as modified: {exc}"
         )
     return new_sha, None
 

@@ -11,7 +11,7 @@ import pytest
 from coordinator_core.group_em import gem_home, gem_home_sync
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(cwd: Path, *args: str) -> str:

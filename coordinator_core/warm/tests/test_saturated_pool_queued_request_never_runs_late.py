@@ -258,11 +258,11 @@ def test_boot_prewarm_returns_before_the_pools_finish_warming(tmp_path, monkeypa
     returned_in = time.monotonic() - t0
 
     assert _wait_for(lambda: len(pools["guard"].submitted) == server._BOOT_PREWARM_GUARD_WORKERS)
+    assert _wait_for(lambda: len(pools["dispatch"].submitted) == 1)
     assert thread.is_alive()
     assert returned_in < 0.5
     for fut in pools["guard"].submitted:
         fut.set_result(None)
-    assert _wait_for(lambda: len(pools["dispatch"].submitted) == 1)
     assert thread.is_alive()
     for fut in pools["dispatch"].submitted:
         fut.set_result(None)

@@ -12,6 +12,10 @@ import subprocess
 from pathlib import Path
 
 from coordinator_core.tests.test_doctrine_prose_op_names_resolve import _CALL, _live_op_names
+import pytest
+
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _ROOT = Path(__file__).resolve().parents[2]
 

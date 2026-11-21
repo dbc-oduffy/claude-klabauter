@@ -7,8 +7,9 @@ import re
 import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose
-from coordinator_core.ops.dispatch_emit.ask_compose import _GATE_SCHEMA, compose_ask_script
+from coordinator_core.ops.dispatch_emit.ask_compose import _GATE_SCHEMA
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.conftest import compose_ask_script
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _BLITZ_AT_RESUME = "planPath: _gate.resume_plan ?? _spineFallback ?? null"

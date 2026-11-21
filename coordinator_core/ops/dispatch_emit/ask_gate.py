@@ -47,6 +47,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_ARM_FIELD,
     RESUME_LEDGER_CARRIED_MET_FIELD,
     RESUME_LEDGER_CREDITED_FIELD,
+    RESUME_LEDGER_EM_DONE_FIELD,
     RESUME_LEDGER_DERIVED_FIELD,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
@@ -1550,6 +1551,8 @@ def _resume_ledger(
         verdict[RESUME_LEDGER_LANDED_MET_BY_FIELD] = landed_met_by
     if credited:
         verdict[RESUME_LEDGER_CREDITED_FIELD] = credited
+    if em_done:
+        verdict[RESUME_LEDGER_EM_DONE_FIELD] = [b for b in blocking if b in em_done]
     revised = [b for b in blocking if b in revision_ids]
     if revised:
         verdict[RESUME_LEDGER_REVISED_FIELD] = revised

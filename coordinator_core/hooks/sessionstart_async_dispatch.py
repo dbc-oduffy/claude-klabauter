@@ -64,7 +64,7 @@ from coordinator_core.hooks.sessionstart_ensure_http_forwarder import (
     _handler as _sessionstart_ensure_http_forwarder_handler,
 )
 from coordinator_core.ipc import register_op
-from coordinator_core.ops import prune_claude_temp, retention_run
+from coordinator_core.ops import prune_claude_temp, repo_byproduct_prune, retention_run
 from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 
 
@@ -96,6 +96,8 @@ _LEGS: "tuple[tuple[str, frozenset, Callable[[dict], object]], ...]" = (
      lambda p: _prune_claude_temp_leg(p)),
     ("retention_run", _STARTUP_ONLY,
      lambda p: _retention_run_leg(p)),
+    ("repo_byproduct_prune", _STARTUP_ONLY,
+     lambda p: _repo_byproduct_prune_leg(p)),
     ("klabauter_freshness", _STARTUP_ONLY,
      lambda p: _klabauter_freshness_leg(p)),
     ("authoring_checkout_freshness", _STARTUP_ONLY,
@@ -128,6 +130,19 @@ def _retention_run_leg(payload_params: dict) -> None:
     """Stamp check only; spawns the detached retention run when due. Never raises."""
     try:
         retention_run.spawn_if_due(str(_REPO_ROOT))
+    except Exception:
+        pass
+    return None
+
+
+def _repo_byproduct_prune_leg(payload_params: dict) -> None:
+    """Stamp check only; spawns the detached per-repo byproduct prune when due.
+    Never raises."""
+    try:
+        payload = payload_params.get("payload") or {}
+        repo_root = prune_claude_temp.find_repo_root(str(payload.get("cwd") or ""))
+        if repo_root:
+            repo_byproduct_prune.spawn_if_due(repo_root)
     except Exception:
         pass
     return None

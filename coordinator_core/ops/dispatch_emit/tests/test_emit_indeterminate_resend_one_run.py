@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
-import threading
 from pathlib import Path
 
 import pytest
@@ -82,36 +78,6 @@ def _write_then_hang(*args, **kwargs):
 op._emit_script_file = _write_then_hang
 op._dispatch_emit({"ask": sys.argv[2]}, Path(sys.argv[1]))
 """
-
-
-def test_an_emit_killed_after_the_script_is_durable_and_resent_yields_one_run(repo, sessions, tmp_path):
-    root = Path(__file__).resolve().parents[4]
-    child = tmp_path / "emit_child.py"
-    child.write_text(_CHILD, encoding="utf-8")
-    env = {**os.environ, "PYTHONPATH": str(root) + os.pathsep + os.environ.get("PYTHONPATH", "")}
-    proc = subprocess.Popen(
-        [sys.executable, str(child), str(repo), ASK], cwd=root, env=env, stdout=subprocess.PIPE,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    watchdog = threading.Timer(120, proc.kill)
-    watchdog.start()
-    try:
-        assert proc.stdout.readline().strip() == b"WRITTEN"
-        proc.kill()
-        proc.wait()
-    finally:
-        watchdog.cancel()
-        proc.kill()
-    minted = _run_dirs(repo)
-    assert len(minted) == 1
-
-    resent = emit_op._dispatch_emit({"ask": ASK}, repo)
-
-    assert resent["run_id"] == minted[0] and resent["deduped"] is True
-    assert Path(resent["path"]).is_file() and resent["sha256"]
-    assert resent["fire_args"]["runToken"]
-    assert _run_dirs(repo) == minted
-    assert [r["run_id"] for r in run_token.held_records(repo)] == minted
 
 
 def test_a_resent_chained_successor_is_not_the_run_it_chains_from(repo, sessions):

@@ -35,7 +35,7 @@ def _run_reads(script: str, calls: str) -> list[dict]:
     program = (
         "const _files = {};\n"
         "const _seen = [];\n"
-        "const _agentDefsClause = () => '';\n"
+        "const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => '';\n"
         "const _briefPrecedenceTail = '';\n"
         "const agent = async (p, opts) => {\n"
         "  const dir = p.match(/sidecar_dir: (\\S+)/)[1];\n"

@@ -43,7 +43,8 @@ def _before(src: str, i: int) -> str:
 
 
 #: Shortest JSON object/array literal worth a const.
-MIN_JSON = 40
+MIN_JSON = 16
+_REF_AS_NULL = re.compile(r"\b_PF\d+\b")
 _JSON_OPEN = re.compile(r'[\[{]"')
 
 
@@ -387,7 +388,7 @@ def _hoist_repeated_fragments(script: str, *, anchor: str) -> str:
     if defs:
         eol = body.index("\n", body.index(anchor)) + 1
         script = body[:eol] + defs + body[eol:]
-    return _hoist_json_values(script, anchor=anchor, first=count)
+    return _renumber_high_refs(_hoist_substrings(_hoist_json_values(script, anchor=anchor, first=count), anchor=anchor))
 
 
 #: A double-quoted string, a lone `"` (unterminated), a char that ends a JSON literal, or a bracket.
@@ -413,11 +414,16 @@ def _json_end(src: str, i: int) -> int | None:
     return None
 
 
-def _json_candidates(script: str, *, repeated_only: bool = False) -> dict[str, list[int]]:
+def _json_candidates(
+    script: str, *, repeated_only: bool = False, allow_refs: bool = False, scan: list | None = None
+) -> dict[str, list[int]]:
     """Source text -> start offsets of each JSON object/array literal of at least MIN_JSON bytes in code position.
 
     ``repeated_only`` drops texts that occur once as raw text before the literal scan and the JSON parse:
     a text that never repeats cannot be hoisted, and most literals never do.
+
+    ``scan`` is a one-slot cache of ``_scan(script)``: filled here when empty, so a caller that keeps it current across
+    edits (``_remap_scan``) pays the scan once.
     """
     found: list[tuple[int, str]] = []
     count: Counter = Counter()
@@ -433,7 +439,11 @@ def _json_candidates(script: str, *, repeated_only: bool = False) -> dict[str, l
         found = [(i, t) for i, t in found if count[t] > 1]
     if not found:
         return {}
-    lits, dead = _scan(script)
+    if scan is None:
+        scan = [None]
+    if scan[0] is None:
+        scan[0] = _scan(script)
+    lits, dead = scan[0]
     skip = sorted(lits + dead)
     starts = [s for s, _ in skip]
     valid: dict[str, bool] = {}
@@ -445,7 +455,7 @@ def _json_candidates(script: str, *, repeated_only: bool = False) -> dict[str, l
         ok = valid.get(text)
         if ok is None:
             try:
-                json.loads(text)
+                json.loads(_REF_AS_NULL.sub("null", text) if allow_refs else text)
                 ok = True
             except ValueError:
                 ok = False
@@ -455,14 +465,59 @@ def _json_candidates(script: str, *, repeated_only: bool = False) -> dict[str, l
     return out
 
 
+#: Rounds of the JSON-literal hoist; a later round hoists values nested in an earlier round's defs.
+_JSON_ROUNDS = 8
+
+
+def _remap_scan(
+    scan: tuple[list[tuple[int, int]], list[tuple[int, int]]],
+    edits: list[tuple[int, int, str]],
+    at: int,
+    defs_text: str,
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """``_scan`` of a script after ``edits`` (sorted, non-overlapping literal replacements) and the insert of ``defs_text`` at ``at``, without rescanning it.
+
+    Spans inside a replaced literal vanish with it; spans after an edit shift by its length change; the inserted
+    defs are the only text scanned fresh. ``at`` is in post-edit coordinates and is a line start outside any span.
+    """
+    starts = [s for s, _, _ in edits]
+    cum = [0]
+    for s, e, name in edits:
+        cum.append(cum[-1] + len(name) - (e - s))
+    shift = len(defs_text)
+    new_lits, new_dead = _scan(defs_text)
+
+    def move(spans: list[tuple[int, int]], fresh: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        out: list[tuple[int, int]] = []
+        for a, b in spans:
+            k = bisect_right(starts, a) - 1
+            if k >= 0 and a < edits[k][1]:
+                continue
+            d = cum[k + 1]
+            a, b = a + d, b + d
+            out.append((a + shift, b + shift) if a >= at else (a, b))
+        out.extend((a + at, b + at) for a, b in fresh)
+        return out
+
+    return move(scan[0], new_lits), move(scan[1], new_dead)
+
+
 def _hoist_json_values(script: str, *, anchor: str, first: int) -> str:
     """Replace each repeated JSON literal (schemas) with a `_PFn` const reference, largest first, until none pays.
 
     Trap: a reference shares one object across its uses; nothing the script composes mutates a schema.
     """
     n = first
-    while True:
-        cands = _json_candidates(script, repeated_only=True)
+    script = _resolve_aliases(script)
+    # A schema may now name string consts the chunk hoist declared, so its defs land below that block.
+    block = 0
+    at0 = script.index("\n", script.index(anchor)) + 1
+    while script.startswith("const _PF", at0):
+        at0 = script.index("\n", at0) + 1
+        block += 1
+    scan: list = [None]
+    for _round in range(_JSON_ROUNDS):
+        cands = _json_candidates(script, repeated_only=True, allow_refs=True, scan=scan)
         edits: list[tuple[int, int, str]] = []
         taken: list[tuple[int, int]] = []
         defs: list[str] = []
@@ -480,18 +535,25 @@ def _hoist_json_values(script: str, *, anchor: str, first: int) -> str:
             for p in pos:
                 insort(taken, (p, p + len(text)))
         if not defs:
-            return script
+            return _resolve_aliases(script)
         n += len(defs)
         pieces: list[str] = []
         last = 0
-        for s, e, name in sorted(edits):
+        edits.sort()
+        for s, e, name in edits:
             pieces.append(script[last:s])
             pieces.append(name)
             last = e
         pieces.append(script[last:])
         script = "".join(pieces)
-        eol = script.index("\n", script.index(anchor)) + 1
-        script = script[:eol] + "".join(defs) + script[eol:]
+        # A later round hoists values nested in an earlier round's defs, so its defs go above them.
+        at = script.index("\n", script.index(anchor)) + 1
+        for _ in range(block):
+            at = script.index("\n", at) + 1
+        defs_text = "".join(defs)
+        script = script[:at] + defs_text + script[at:]
+        scan[0] = _remap_scan(scan[0], edits, at, defs_text) if scan[0] is not None else None
+    return _resolve_aliases(script)
 
 
 _TOKEN_RE = re.compile(r"\b_PF\d+\b")
@@ -618,3 +680,159 @@ def fold_literals(script: str) -> str:
 
 
 _WRAPPED = re.compile(r"\(('(?:\\.|[^\\'])*')\)(?=[.\[(]|\?\.)")
+
+
+#: Shortest repeated stretch of literal text worth a const; a use costs a `' + _PFn + '` splice.
+MIN_SUBSTRING = 20
+_SUBSTRING_ROUNDS = 1
+#: Net bytes a stretch must save before it becomes a const.
+_SUBSTRING_MIN_SAVING = 10
+#: An escape whose interior a splice must never fall in.
+_ESCAPE_SPAN = re.compile(r"\\(?:u\{[^}]*\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)", re.S)
+_MARK_OPEN, _MARK_CLOSE, _LIT_SEP = "\x01", "\x02", "\x00"
+_MARKERS = re.compile("[\x00-\x02]")
+_WORD_START = re.compile(r"(?<![A-Za-z0-9_])(?=[A-Za-z0-9_])|(?<=[\x00-\x02])")
+_MARKED = re.compile("\x01(\\d+)\x02")
+
+
+def _hoist_substrings(script: str, *, anchor: str) -> str:
+    """Hoist stretches of single-quoted literal text that two or more literals share, whatever the sentence boundaries.
+
+    The sentence-chunk hoist misses a repeat whose neighbours differ (a shell command embedded in prose, a
+    schema description); this pass finds the longest repeated stretches from word boundaries and cuts each to a
+    `_PFn` string const. Concatenation only, so every run-time string is unchanged.
+
+    Trap: a splice never lands inside an escape sequence, and a literal followed by `:` (an object key or a
+    `case`) is left whole because `'a' + b` is not a key.
+    """
+    # Literals above the anchor line run before the consts this pass declares below it, so they stay whole.
+    first = script.index("\n", script.index(anchor)) + 1
+    spans = [
+        (a, b)
+        for a, b in _scan_literals(script)
+        if a >= first and script[a] == "'" and script[b : b + 4].lstrip()[:1] != ":"
+    ]
+    text = _LIT_SEP.join(_single_quoted_content(script, a, b) for a, b in spans)
+    used = {int(n) for n in re.findall(r"\b_PF(\d+)\b", script)}
+    names: dict[int, str] = {}
+    nxt = 0
+    for _ in range(_SUBSTRING_ROUNDS):
+        banned = bytearray(len(text) + 1)
+        for m in _ESCAPE_SPAN.finditer(text):
+            for k in range(m.start() + 1, m.end()):
+                banned[k] = 1
+        # A window is usable when it starts on an escape boundary and holds no marker or literal separator.
+        usable = bytearray(len(text) + 1)
+        usable[: len(text)] = b"" * len(text)
+        for m in _MARKERS.finditer(text):
+            lo = max(0, m.start() - MIN_SUBSTRING + 1)
+            usable[lo : m.start() + 1] = bytes(m.start() + 1 - lo)
+        index: dict[str, list[int]] = {}
+        # Windows start at a word boundary: a repeat is found from its first word, and the other starts only re-find it.
+        for m in _WORD_START.finditer(text, 0, len(text) - MIN_SUBSTRING):
+            i = m.start()
+            if usable[i] and not banned[i]:
+                index.setdefault(text[i : i + MIN_SUBSTRING], []).append(i)
+        stretches: dict[str, int] = {}
+        for w, at in index.items():
+            # A periodic window (a run of one character, a rule of dashes) is filler, not shared text.
+            if len(at) < 2 or (w + w).find(w, 1) <= MIN_SUBSTRING // 2:
+                continue
+            i, j, n = at[0], at[1], MIN_SUBSTRING
+            while j + n < len(text) and i + n < j and text[i + n] == text[j + n] and text[i + n] not in _MARK_OPEN + _MARK_CLOSE + _LIT_SEP:
+                n += 1
+            while banned[i + n] and n > MIN_SUBSTRING:
+                n -= 1
+            if not banned[i + n]:
+                stretches[text[i : i + n]] = len(at)
+        picked = False
+        for sub in sorted(stretches, key=lambda t: -(stretches[t] - 1) * len(t)):
+            if (stretches[sub] - 1) * len(sub) < 2 * _SUBSTRING_MIN_SAVING:
+                break
+            count = text.count(sub)
+            while nxt in used:
+                nxt += 1
+            ref = _REF_NAME.format(nxt)
+            if count >= 2 and (count - 1) * len(sub) - count * (len(ref) + 6) - len(ref) - 16 > _SUBSTRING_MIN_SAVING:
+                text = text.replace(sub, f"{_MARK_OPEN}{nxt}{_MARK_CLOSE}")
+                names[nxt] = sub
+                used.add(nxt)
+                picked = True
+        if not picked:
+            break
+    if not names:
+        return script
+    pieces_of = text.split(_LIT_SEP)
+    def _expr(content: str) -> str:
+        parts: list[str] = []
+        pos = 0
+        for m in _MARKED.finditer(content):
+            if m.start() > pos:
+                parts.append("'" + content[pos : m.start()] + "'")
+            parts.append(_REF_NAME.format(int(m.group(1))))
+            pos = m.end()
+        if pos < len(content):
+            parts.append("'" + content[pos:] + "'")
+        return " + ".join(parts)
+
+    out: list[str] = []
+    last = 0
+    for (s, e), content in zip(spans, pieces_of):
+        if _MARK_OPEN not in content:
+            continue
+        expr = _expr(content)
+        after = script[e : e + 3].lstrip()
+        if after[:1] in (".", "[", "(") or after[:2] == "?.":
+            expr = "(" + expr + ")"
+        out.append(script[last:s])
+        out.append(expr)
+        last = e
+    out.append(script[last:])
+    body = "".join(out)
+    # A stretch may hold a reference to a later-picked one, so declare in reverse pick order.
+    eol = body.index("\n", body.index(anchor)) + 1
+    defs = "".join(f"const {_REF_NAME.format(n)} = '{sub}';\n" for n, sub in names.items())
+    return body[:eol] + defs + body[eol:]
+
+
+def _renumber_high_refs(script: str) -> str:
+    """Rename each `_PFn` whose number has four or more digits (the composer's pre-hoist operands) to the smallest free number, most-used first.
+
+    A shorter name is paid at every use; the rename is a pure token swap, so no run-time value changes.
+    """
+    nums = re.findall(r"\b_PF(\d+)\b", script)
+    counts = Counter(n for n in nums if len(n) >= 4)
+    if not counts:
+        return script
+    used = {int(n) for n in set(nums)}
+    plan: dict[str, str] = {}
+    free = 0
+    for old, _ in counts.most_common():
+        while free in used:
+            free += 1
+        plan[old] = str(free)
+        used.add(free)
+    high = re.compile(r"\b_PF(" + "|".join(sorted(plan, key=len, reverse=True)) + r")\b")
+    return high.sub(lambda m: "_PF" + plan[m.group(1)], script)
+
+
+_ALIAS_DEF = re.compile(r"^const (_PF\w+) = (_PF\w+);\n", re.M)
+
+
+def _resolve_aliases(script: str) -> str:
+    """Drop each `const _PFa = _PFb;` line and read `_PFb` at its uses.
+
+    An alias is a second name for a const declared above it, so every use after it sees the same value; the rename
+    also lets two values that differed only by alias name compare equal to the hoists that run after.
+    """
+    target = {m.group(1): m.group(2) for m in _ALIAS_DEF.finditer(script)}
+    if not target:
+        return script
+
+    def final(name: str) -> str:
+        while name in target:
+            name = target[name]
+        return name
+
+    names = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, target), key=len, reverse=True)) + r")\b")
+    return names.sub(lambda m: final(m.group(0)), _ALIAS_DEF.sub("", script))

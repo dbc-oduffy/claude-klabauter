@@ -16,6 +16,8 @@ from coordinator_core.ops import review_reverify as rr
 from coordinator_core.ops.dispatch_emit import review_edits
 from coordinator_core.session.machinery_paths import share_dir
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 SESSION = "sess-data"
 PREFIX = "prep-data"
 DATA = "setup/publish-targets.portable"

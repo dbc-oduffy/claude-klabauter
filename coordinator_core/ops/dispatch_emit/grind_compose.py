@@ -110,7 +110,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
-from coordinator_core.backlog_grind_assemble.grind_split import MAX_SPLIT_ITEMS
+from coordinator_core.contract.grind_vocab import MAX_SPLIT_ITEMS
 from coordinator_core.contract import grind_vocab as vocab
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 from coordinator_core.ops.dispatch_emit import grind_stages as stages

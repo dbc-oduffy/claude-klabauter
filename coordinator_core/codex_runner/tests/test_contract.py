@@ -79,7 +79,9 @@ def test_allow_api_key_defaults_off_and_roundtrips() -> None:
 def test_status_set_is_closed() -> None:
     assert contract.STATUS == {
         "ok", "limit_exhausted", "login_required", "confinement_breach", "scope_breach", "failed",
+        "policy_denial",
     }
+    assert contract.RunResult(run_id="r", status="policy_denial").status == "policy_denial"
     assert contract.RunResult(run_id="r", status="login_required").status == "login_required"
     with pytest.raises(ValueError):
         contract.RunResult(run_id="r", status="done")

@@ -17,6 +17,8 @@ from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 def read_stage_reply(root, reply: dict) -> dict:
     """A refusal reply as-is; a success reply's manifest read through its verified `manifest_handle`."""
     if "error" in reply:

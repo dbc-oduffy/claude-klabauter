@@ -974,9 +974,11 @@ def test_list_orphaned_frontmatterless_file_excluded_and_counted(tmp_path):
     _init_repo(tmp_path)
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
-    (plans_dir / "INDEX.md").write_text(
-        "# Plan Index\n\nSee below for the current plan roster.\n", encoding="utf-8"
+    (plans_dir / "notes.md").write_text(
+        "# Plan notes\n\nSee below for the current plan roster.\n", encoding="utf-8"
     )
+    # Root-exempt index names never enter the walk (iter_entries skips them).
+    (plans_dir / "INDEX.md").write_text("# Plan Index\n", encoding="utf-8")
 
     result = list_orphaned(tmp_path, threshold_days=14, today=today)
 
@@ -1041,8 +1043,8 @@ def test_list_orphaned_accounting_invariant_across_mixed_fixture(tmp_path):
     _write_census_plan(tmp_path, "done.md", status="implemented", created="2026-01-01")
     # non-plan files
     plans_dir = tmp_path / "docs" / "plans"
-    (plans_dir / "INDEX.md").write_text("# Plan Index\n", encoding="utf-8")
-    (plans_dir / "README.md").write_text("# README\n", encoding="utf-8")
+    (plans_dir / "notes.md").write_text("# Plan notes\n", encoding="utf-8")
+    (plans_dir / "overview.md").write_text("# Overview\n", encoding="utf-8")
 
     result = list_orphaned(tmp_path, threshold_days=14, today=today)
 
@@ -1470,3 +1472,68 @@ def test_list_orphaned_landed_plan_is_population_not_terminal_not_unrecognized(t
     assert result["unrecognized_status"] == []
     assert result["population_count"] == 1
     assert result["terminal_count"] == 0
+
+
+def _write_sharded_plan(repo: Path, month: str, name: str, status: str) -> None:
+    shard = repo / "docs" / "plans" / month
+    shard.mkdir(parents=True, exist_ok=True)
+    (shard / name).write_text(
+        f'---\ntitle: "fixture"\nstatus: {status}\ncreated: {_POST_CARRY_DATE}\n---\n\nbody\n',
+        encoding="utf-8",
+    )
+
+
+def test_list_stale_executing_reports_flat_and_sharded_plans_under_real_paths(tmp_path):
+    today = date(2026, 7, 22)
+    _init_repo(tmp_path)
+    _write_and_commit_plan(tmp_path, "flat.md", "executing", commit_days_ago=10, today=today)
+    _write_sharded_plan(tmp_path, "2026-07", "shard.md", "executing")
+    _run_git(tmp_path, "add", "docs/plans/2026-07/shard.md")
+    _commit_at = (today - timedelta(days=10)).isoformat() + "T12:00:00"
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add shard"], cwd=tmp_path, check=True,
+        capture_output=True, text=True,
+        env={**_base_env(), "GIT_AUTHOR_DATE": _commit_at, "GIT_COMMITTER_DATE": _commit_at},
+        **no_console_creationflags(),
+    )
+
+    result = list_stale_executing(tmp_path, threshold_days=3, today=today)
+
+    assert sorted(e["path"] for e in result) == [
+        "docs/plans/2026-07/shard.md",
+        "docs/plans/flat.md",
+    ]
+
+
+def test_list_orphaned_reports_flat_and_sharded_plans_under_real_paths(tmp_path):
+    today = date(2026, 8, 1)
+    _init_repo(tmp_path)
+    _write_census_plan(tmp_path, "flat.md", execution_authorized_by="PM")
+    _write_sharded_plan(tmp_path, "2026-08", "shard.md", "draft")
+    shard_file = tmp_path / "docs" / "plans" / "2026-08" / "shard.md"
+    shard_file.write_text(
+        shard_file.read_text(encoding="utf-8").replace("status: draft", "status: draft\nexecution_authorized_by: PM"),
+        encoding="utf-8",
+    )
+
+    result = list_orphaned(tmp_path, threshold_days=14, today=today)
+
+    assert sorted(e["path"] for e in result["authorized_orphan"]) == [
+        "docs/plans/2026-08/shard.md",
+        "docs/plans/flat.md",
+    ]
+    assert result["population_count"] == 2
+
+
+def test_list_orphaned_sidecar_exclusion_is_per_directory(tmp_path):
+    today = date(2026, 8, 1)
+    _init_repo(tmp_path)
+    _write_sharded_plan(tmp_path, "2026-08", "foo.md", "draft")
+    (tmp_path / "docs" / "plans" / "2026-08" / "foo.review-zoli.md").write_text(
+        f"---\nstatus: draft\ncreated: {_POST_CARRY_DATE}\n---\n\nbody\n", encoding="utf-8"
+    )
+    _write_census_plan(tmp_path, "foo.review-zoli.md")
+
+    result = list_orphaned(tmp_path, threshold_days=14, today=today)
+
+    assert result["population_count"] == 2

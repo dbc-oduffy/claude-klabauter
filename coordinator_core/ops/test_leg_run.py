@@ -10,7 +10,11 @@ and the direct importers of each touched module in the shared-clone mirror at `-
 re-runs the reds at `--base-sha`, and reports `new_red`: red post-land, not red at base.
 
 Usage: python -m coordinator_core.ops.test_leg_run [--base-sha <sha>] [--head-sha <sha>]
-       [--base-export-out <path>] [--budget-s N] [--touched <path>]... --out <path> -- <ids and test files...>
+       [--base-export-out <path>] [--budget-s N] [--touched <path>]... [--repo-root <path>] --out <path> -- <ids and test files...>
+
+`--repo-root` names the run's repo; the leg partitions targets and runs pytest there, not in the cwd's checkout.
+Leg prompts pass it because the bound engine command can start in the engine clone. A root that is not a git
+checkout is refused (`zero_run_cause` repo-root-unresolved), never replaced by the cwd.
 """
 from __future__ import annotations
 
@@ -31,7 +35,8 @@ from coordinator_core.ops import reverify_base_measure, reverify_scope
 from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
 from coordinator_core.ops.review_reverify import _RED_LINE
-from coordinator_core.testing import scoped_pytest
+from coordinator_core import temp_layout
+from coordinator_core.testing import leg_batch, scoped_pytest
 from coordinator_core.win_portability import no_console_creationflags
 
 #: Minutes one test leg may occupy the box; the whole command must finish inside the 10-minute
@@ -42,16 +47,20 @@ TRIPWIRE_BUDGET_S = 120.0
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_TIMEOUT = 3
+ZERO_RUN_NO_REPO = "repo-root-unresolved"
 USAGE = ("usage: test_leg_run [--base-sha <sha>] [--head-sha <sha>] [--base-export-out <path>] "
-         "[--budget-s N] [--touched <path>]... --out <path> -- <ids and test files...>")
+         "[--budget-s N] [--touched <path>]... [--repo-root <path>] --out <path> -- <ids and test files...>")
 _PYTEST = ["-rfE", "-p", "no:cacheprovider"]
 _PYTEST_ENCODING = "utf-8"
 _PYTEST_STDOUT_LIMIT = 16384
 #: Runs pytest over the ids listed one per line in `sys.argv[1]`, with `sys.argv[2:]` as its flags: argv carries
 #: no id list, so a list of any size spawns.
-_IDS_RUNNER = ("import sys, pytest\n"
+_IDS_RUNNER = ("import sys, pytest, importlib.util\n"
+               f"spec = importlib.util.spec_from_file_location('leg_reporter', {leg_batch.PLUGIN_FILE!r})\n"
+               "rep = importlib.util.module_from_spec(spec)\n"
+               "spec.loader.exec_module(rep)\n"
                "ids = [i for i in open(sys.argv[1], encoding='utf-8').read().split('\\n') if i]\n"
-               "sys.exit(pytest.main([*sys.argv[2:], *ids]))\n")
+               "sys.exit(pytest.main([*sys.argv[2:], *ids], plugins=[rep]))\n")
 
 
 class _Parser(argparse.ArgumentParser):
@@ -66,13 +75,22 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--base-export-out")
     p.add_argument("--budget-s", type=float)
     p.add_argument("--touched", action="append", default=[])
+    p.add_argument("--repo-root")
     p.add_argument("--out", required=True)
     return p
 
 
-def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str], str, str]:
-    """Return pytest's exit code, parser lines, stderr and raw stdout. Raises subprocess.TimeoutExpired once `remaining` seconds
-    are gone; the child is killed by then."""
+# (stderr, stdout) of each `_pytest` child since the last `_cwd_phase` start; the CLI runs one phase at a time.
+_RAW: list[tuple[str, str]] = []
+
+
+def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str]]:
+    """Return pytest's exit code and output lines, including bounded stderr on abnormal exits.
+
+    On ordinary exits retain only the session-Temp residue diagnostics from stderr. A timeout
+    kills the child before raising subprocess.TimeoutExpired. The child's raw stderr and stdout go to
+    `_RAW` for the receipt's `pytest_phases`.
+    """
     if remaining <= 0:
         raise subprocess.TimeoutExpired("pytest", 0)
     with tempfile.TemporaryDirectory(prefix="test-leg-ids-") as holder:
@@ -81,7 +99,13 @@ def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[s
                               capture_output=True, encoding=_PYTEST_ENCODING, errors="replace", timeout=remaining,
                               env=dict(os.environ, PYTHONIOENCODING=_PYTEST_ENCODING),
                               **no_console_creationflags())
-    return proc.returncode, [*proc.stdout.splitlines(), *proc.stderr.splitlines()], proc.stderr, proc.stdout
+    _RAW.append((proc.stderr, proc.stdout))
+    stderr_lines = (
+        proc.stderr[-2000:].splitlines()
+        if proc.returncode not in (0, 1)
+        else cov.temp_residue_lines(proc.stderr)
+    )
+    return proc.returncode, [*proc.stdout.splitlines(), *stderr_lines]
 
 
 def _conftest_constants(*names: str) -> dict[str, str]:
@@ -228,7 +252,8 @@ def _detail(text: str, ids: Sequence[str]) -> dict[str, str]:
     return out
 
 
-_COUNT = re.compile(r"(\d+) (passed|failed)\b")
+# An xfailed/xpassed test ran to its expected outcome; a leg whose only test is xfail-marked is not empty.
+_COUNT = re.compile(r"(\d+) (passed|failed|xfailed|xpassed)\b")
 _SUMMARY_TAIL = re.compile(r"\bin \d+(?:\.\d+)?s\b")
 _FRAME = re.compile(r"""^\s*(?:File ")?(\S+?\.py)(?:",\s*line |:)(\d+)\b""")
 _IMPORT_FAIL = re.compile(r"^(?:E\s+)?(?:ImportError|ModuleNotFoundError)\b")
@@ -286,13 +311,13 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
     if stderr is not None:
         result["pytest_exit_code"] = rc
         result["pytest_stderr"] = stderr[-4096:]
-    counts = {"passed": 0, "failed": 0}
+    counts = {"passed": 0, "failed": 0, "xfailed": 0, "xpassed": 0}
     for raw in reversed(list(lines)):
         if _SUMMARY_TAIL.search(raw):
             for n, word in _COUNT.findall(raw):
                 counts[word] = int(n)
             break
-    run_n = counts["passed"] + counts["failed"]
+    run_n = counts["passed"] + counts["failed"] + counts["xfailed"] + counts["xpassed"]
     result["tests_run"] = run_n
     result["tests_failed"] = counts["failed"]
     if result.get("status_after") == "pass" and run_n:
@@ -325,7 +350,7 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
             cause = ltt.ZERO_RUN_PROCESS_ERROR
     result[ltt.ZERO_RUN_CAUSE_KEY] = cause
     result["status"] = "error"
-    # Mirror verification deliberately excludes tests collected in slow tiers.
+    # A mirror leg can collect tests and then deliberately exclude their entire tier.
     if rc == 0 and any(line.startswith("every collected test is in an excluded tier (") for line in lines):
         return
     result["status_after"] = "fail"
@@ -363,11 +388,11 @@ def _run_phased(root: Path, dest: Path, basetemp: Path, picked: Sequence[str], i
         return one, True
     rcs = [one.returncode, two.returncode]
     rc = next((r for r in rcs if r not in (0, 5)), 0 if 0 in rcs else 5)
-    counts = {w: 0 for w in ("passed", "failed")}
+    counts = {w: 0 for w in ("passed", "failed", "xfailed", "xpassed")}
     for p in (one, two):
         for n, w in _COUNT.findall(_summary_line(p.stdout)):
             counts[w] += int(n)
-    merged = f"{counts['passed']} passed, {counts['failed']} failed in 0s"
+    merged = ", ".join(f"{n} {w}" for w, n in counts.items() if n) + " in 0s"
     return subprocess.CompletedProcess(one.args, rc, one.stdout + two.stdout + "\n" + merged + "\n", one.stderr + two.stderr), False
 
 
@@ -476,9 +501,16 @@ def _split_phases(present: list[str], base_sha: Optional[str], head_sha: Optiona
 
 
 def _cwd_phase(targets: list[str], cwd: str, left, all_reds: dict, shown: dict,
-               red_non: list[str]) -> tuple[int, list[str], list[str], str, str]:
-    """One pytest phase in `cwd`: (rc, lines, charged red ids); folds the phase's reds into the shared maps."""
-    rc, lines, stderr, stdout = _pytest(targets, cwd, left())
+               red_non: list[str], batch: Optional[dict] = None) -> tuple[int, list[str], list[str], str, str]:
+    """One phase in `cwd`: (rc, lines, charged red ids, raw stderr, raw stdout); folds the phase's reds into the
+    shared maps. The targets run as sequential legs sized to the cap (`leg_batch`); over-cap files land in
+    `batch["slow"]`."""
+    _RAW.clear()
+    rc, lines, info = leg_batch.run_legs(targets, cwd, _pytest, left, TEST_LEG_MINUTES_BUDGET * 60.0,
+                                         temp_layout.fleet_temp_root() / "test-leg" / scoped_pytest.new_run_slug())
+    stderr, stdout = "\n".join(e for e, _ in _RAW if e), "".join(o for _, o in _RAW)
+    if batch is not None:
+        batch.setdefault("slow", []).extend(info["slow"])
     found = _reds(lines)
     kept, non = _split_not_a_test(list(found))
     red_non.extend(non)
@@ -491,11 +523,11 @@ def _merge_phases(rc1: int, lines1: list[str], rc2: int, lines2: list[str]) -> t
     """The two phases as one run: first non-green exit, and a summary line carrying the summed counts."""
     rcs = [rc1, rc2]
     rc = next((r for r in rcs if r not in (0, 5)), 0 if 0 in rcs else 5)
-    counts = {"passed": 0, "failed": 0}
+    counts = {"passed": 0, "failed": 0, "xfailed": 0, "xpassed": 0}
     for lines in (lines1, lines2):
         for n, word in _COUNT.findall(_summary_line("\n".join(lines))):
             counts[word] += int(n)
-    return rc, [*lines1, *lines2, f"{counts['passed']} passed, {counts['failed']} failed in 0s"]
+    return rc, [*lines1, *lines2, ", ".join(f"{n} {w}" for w, n in counts.items() if n or w in ("passed", "failed")) + " in 0s"]
 
 
 def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], head_sha: Optional[str],
@@ -504,7 +536,7 @@ def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], he
     measures so the base export file always holds every phase settled so far. Raises TimeoutExpired."""
     if not reds:
         return
-    rc, lines, _stderr, _stdout = _pytest(list(reds), cwd, left())
+    rc, lines = _pytest(list(reds), cwd, left())
     again = _reds(lines)
     if rc in (0, 1):
         result["passed_alone"].extend(n for n in reds if n not in again)
@@ -631,6 +663,20 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
     _tally(result, ran.returncode, text.splitlines(), ran.stderr)
 
 
+def _stamp_slow(result: dict, slow: list[dict]) -> None:
+    """Name the over-cap files the plan excluded: typed test_infra, never a pass; the test owner splits them."""
+    result["slow_targets"] = slow
+    result["unrun_targets"] = [s["file"] for s in slow]
+    result["leg_type"] = "test_infra"
+    result["status_after"] = "fail"
+    if result.get("status") == "pass":
+        result["status"] = "error"
+    result["failing_detail"] = [
+        *result["failing_detail"],
+        *({"node_id": s["file"], "message": f"slow target: {s['seconds']:g}s alone exceeds the "
+           f"{TEST_LEG_MINUTES_BUDGET * 60}s leg cap; split it (test_infra)"} for s in slow)]
+
+
 def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         base_export_out: Optional[str], budget_s: float, cwd: str, touched: Sequence[str] = ()) -> dict:
     """The `test`-shaped verdict for `targets`; `over_budget` true when the deadline expired. With `touched`
@@ -663,7 +709,6 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             return result
         targets, result["not_a_test"] = _split_not_a_test(targets, Path(cwd))
         if not targets:
-            result["status_after"] = "pass"
             _tally(result, 5, ())
             result["over_budget"] = False
             result["elapsed_s"] = round(time.monotonic() - started, 3)
@@ -688,7 +733,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         shown: dict[str, str] = {}
         red_non: list[str] = []
         exported: dict = {}
-        rc, lines, reds, stderr, stdout = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non)
+        batch: dict = {}
+        rc, lines, reds, stderr, stdout = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non, batch)
         result["pytest_phases"] = [{"exit_code": rc, "stderr": stderr[-4096:],
                                     "stdout": stdout[-_PYTEST_STDOUT_LIMIT:], "encoding": _PYTEST_ENCODING}]
         phase_one = (rc, lines, stderr)
@@ -697,7 +743,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported)
         if second:
             try:
-                rc2, lines2, reds2, stderr2, stdout2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non)
+                rc2, lines2, reds2, stderr2, stdout2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non, batch)
             except subprocess.TimeoutExpired:
                 result[ltt.IMPORTER_OVERRUN_KEY] = True
                 result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(second)
@@ -723,16 +769,31 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             if leaks:
                 _stamp_leaks(result, leaks)
             else:
-                result["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {rc} with no failing id"}]
+                message = f"pytest exit {rc} with no failing id"
+                if rc not in (0, 1) and lines:
+                    message += "\n" + "\n".join(lines)[-2000:]
+                result["failing_detail"] = [{"node_id": "pytest", "message": message}]
         result["over_budget"] = False
         _tally(result, rc, lines, stderr)
+        if batch.get("slow"):
+            _stamp_slow(result, batch["slow"])
         if result.get(IMPORT_ERROR_KEY):
             _own_import_error(result, Path(cwd))
             _overlay_fallback(result, present, base_sha, Path(cwd), left)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         result["status_after"] = "fail"
-        if phase_one is None:
+        credit = getattr(exc, "credit", None)
+        if credit and credit["done"] and phase_one is None:
             _tally(result, None, ())
+            result.update(leg_batch.credit_fields(credit))
+            result["status"] = "fail" if result["failing"] else "error"
+            result.pop(ltt.ZERO_RUN_CAUSE_KEY, None)
+            result["leg_type"] = "test_infra"
+        elif phase_one is None:
+            _tally(result, None, ())
+            if credit:
+                # Trap: a deadline with no finished test still names every file it never reached.
+                result.update(unrun_targets=list(dict.fromkeys(credit["unrun"])), slow_targets=credit["slow"])
         else:
             _tally(result, *phase_one)
             if unreached:
@@ -766,6 +827,28 @@ def _repo_root(start: Path) -> Path:
     return start
 
 
+def _leg_root(explicit: Optional[str]) -> tuple[Optional[Path], str]:
+    """(root, error). An explicit `--repo-root` is the run's repo and is used as given: the bound engine command
+    starts in whatever cwd the agent holds (the engine clone for a consumer-repo run), and the cwd walk would
+    then partition the targets against the engine. An explicit root that is not a git checkout is refused, never
+    replaced by the cwd walk. Without one the cwd walk applies."""
+    if explicit is None:
+        return _repo_root(Path(os.path.realpath(os.getcwd()))), ""
+    root = Path(os.path.realpath(explicit))
+    if not (root / ".git").exists():
+        return None, f"--repo-root {explicit} is not a git checkout"
+    return root, ""
+
+
+def _derive_targets(base_sha: str, head_sha: Optional[str], cwd: str) -> list[str]:
+    """The diff's touched tests then their owners (never tripwires), for a call that named no target; empty
+    when the diff is unreadable or touches no test."""
+    try:
+        return list(reverify_scope.select_tests(Path(cwd), base_sha, head_sha or "HEAD")["tests"])
+    except ValueError:
+        return []
+
+
 def main(argv: list[str]) -> int:
     argv = list(argv)
     if "--" not in argv:
@@ -777,13 +860,37 @@ def main(argv: list[str]) -> int:
         args = _parser().parse_args(argv[:cut])
     except ValueError:
         args = None
-    if args is None or not targets:
+    if args is None or (not targets and not args.base_sha):
         print(f"test_leg_run: bad arguments\n{USAGE}", file=sys.stderr)
         return EXIT_USAGE
     budget_s = args.budget_s if args.budget_s is not None else TEST_LEG_MINUTES_BUDGET * 60.0
-    cwd = str(_repo_root(Path(os.path.realpath(os.getcwd()))))
+    root, root_error = _leg_root(args.repo_root)
+    if root is None:
+        refused = {"status": "error", "status_after": "error", "tests_run": 0, "zero_run_cause": ZERO_RUN_NO_REPO,
+                   "error": root_error, "over_budget": False}
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(refused) + "\n", encoding="utf-8")
+        print(json.dumps(refused))
+        return EXIT_USAGE
+    cwd = str(root)
+    derived = not targets
+    if derived:
+        targets = _derive_targets(args.base_sha, args.head_sha, cwd)
+    if not targets:
+        refused = {"status": "error", "status_after": "fail", "tests_run": 0, "zero_run_cause": ltt.ZERO_RUN_EMPTY,
+                   "failing_detail": [{"node_id": "test_leg_run", "message": "no test target given and none derivable "
+                                       f"from the diff {args.base_sha}..{args.head_sha or 'HEAD'}"}],
+                   "over_budget": False}
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(refused) + "\n", encoding="utf-8")
+        print(json.dumps(refused))
+        return EXIT_USAGE
     result = run(targets, base_sha=args.base_sha, head_sha=args.head_sha,
                  base_export_out=args.base_export_out, budget_s=budget_s, cwd=cwd, touched=args.touched)
+    if derived:
+        result["derived_targets"] = targets
     body = json.dumps(result)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

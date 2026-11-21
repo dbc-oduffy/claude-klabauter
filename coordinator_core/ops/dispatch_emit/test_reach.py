@@ -176,27 +176,33 @@ def _records_for(root: Path, rel: str) -> List[ImportRecord]:
     if hit is not None and hit[0] == stamp:
         return hit[1]
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        data = path.read_bytes()
     except OSError:
         return []
-    records = _scan_imports(text) if "import" in text else []
+    records = _scan_imports(data.decode("utf-8", errors="replace")) if b"import" in data else []
     _RECORD_CACHE[key] = (stamp, records)
     return records
 
 
-def _imported_modules(root: Path, rel: str, modules: Dict[str, str]) -> Set[str]:
-    """Repo paths of the tracked modules `rel` imports (a from-import also tries each name as a submodule)."""
-    records = _records_for(root, rel)
+def _resolved_imports(rel: str, records: Iterable[ImportRecord]):
     current = module_name_for_file(rel)
     is_pkg = rel.endswith("/__init__.py") or rel == "__init__.py"
-    found: Set[str] = set()
     for rec in records:
         base = rec.module
         if rec.level:
             base = resolve_relative_module(rec.module, rec.level, current, is_pkg) or ""
-        if not base:
-            continue
-        candidates = [base, *(f"{base}.{n}" for n in rec.names)]
+        if base:
+            yield base, rec.names
+
+
+def _imported_modules(
+    root: Path, rel: str, modules: Dict[str, str], *, text: Optional[str] = None,
+) -> Set[str]:
+    """Repo paths of the tracked modules `rel` imports (a from-import also tries each name as a submodule)."""
+    records = _records_for(root, rel) if text is None else _scan_imports(text)
+    found: Set[str] = set()
+    for base, names in _resolved_imports(rel, records):
+        candidates = [base, *(f"{base}.{name}" for name in names)]
         for name in candidates:
             hit = modules.get(name)
             if hit is not None:

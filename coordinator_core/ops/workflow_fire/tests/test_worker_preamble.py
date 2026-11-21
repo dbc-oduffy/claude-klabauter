@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
+import subprocess
 import sys
 
 import pytest
@@ -117,6 +119,57 @@ def test_claude_backend_prompt_is_unchanged():
     assert all(with_worker_preamble(b, "body") == PREAMBLE + "\n\nbody" for b in WORKER_BACKENDS)
 
 
+@pytest.mark.parametrize("door_pin", [False, True])
+def test_review_runner_reaches_installed_engine_without_python_on_path(tmp_path, monkeypatch, door_pin):
+    from coordinator_core.ops.workflow_fire import worker_preamble
+    from coordinator_core.warm import engine_root
+
+    shell = shutil.which("pwsh" if os.name == "nt" else "sh")
+    if shell is None:
+        pytest.skip("native shell unavailable")
+    settings = tmp_path / "installed settings"
+    bin_dir = settings / "bin"
+    bin_dir.mkdir(parents=True)
+    (settings / "engine-site").mkdir()
+    (settings / "engine-site/.engine-site-stamp").write_text(f"{sys.version_info.major}.{sys.version_info.minor}\n")
+    (settings / "engine-site/reverify_dep.py").write_text("ORIGIN = 'installed reverify runner'\n")
+    installed = tmp_path / "installed engine"
+    package = installed / "coordinator_core"
+    (package / "ops").mkdir(parents=True)
+    (package / "_engine_stamp").write_text("sha:" + "a" * 40)
+    source_package = engine_root.current_engine_clone() / "coordinator_core"
+    monkeypatch.setattr(engine_root, "current_engine_clone", lambda: tmp_path / "unstamped emitter")
+    (package / "__init__.py").write_text(f"__path__.append({str(source_package)!r})\n")
+    (package / "ops/__init__.py").touch()
+    (package / "ops/test_leg_run.py").write_text("from reverify_dep import ORIGIN\nprint(ORIGIN)\n")
+    (bin_dir / "door.engine-root.txt").write_text(str(installed) + "\n")
+    (bin_dir / "door.python.txt").write_text(sys.executable + "\n")
+    consumer = tmp_path / "consumer"
+    (consumer / "coordinator_core").mkdir(parents=True)
+    (consumer / "coordinator_core/__init__.py").write_text("raise RuntimeError('consumer package used')\n")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings))
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_DOOR_ENGINE_ROOT", raising=False)
+    expected = "installed reverify runner"
+    if door_pin:
+        pinned = tmp_path / "pinned engine"
+        shutil.copytree(installed, pinned)
+        expected = "pinned reverify runner"
+        (pinned / "coordinator_core/ops/test_leg_run.py").write_text(
+            "from reverify_dep import ORIGIN\nprint(ORIGIN.replace('installed', 'pinned'))\n"
+        )
+        monkeypatch.setenv("COORDINATOR_DOOR_ENGINE_ROOT", str(pinned))
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.setenv("PATH", str(consumer))
+
+    command = worker_preamble.bind_engine_commands("python -m coordinator_core.ops.test_leg_run --help")
+    shell_args = ["-NoProfile", "-Command"] if os.name == "nt" else ["-c"]
+    result = subprocess.run([shell, *shell_args, command], cwd=consumer, capture_output=True, text=True, timeout=10)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+
+
 @pytest.mark.parametrize("backend", ("claude", *WORKER_BACKENDS))
 def test_review_commands_bind_the_loaded_engine_at_delivery(backend, monkeypatch):
     from pathlib import Path
@@ -133,7 +186,7 @@ def test_review_commands_bind_the_loaded_engine_at_delivery(backend, monkeypatch
     assert command not in prompt and export not in prompt
     assert "coordinator_core.ops.test_leg_run --out scratch/res.json -- tests/test_x.py" in prompt
     assert "coordinator_core.ops.dispatch_emit.clean_overlay_verify --export-run" in prompt
-    assert "Then run python -m pytest." in prompt
+    assert "Then run python -m pytest." not in prompt and " -m pytest." in prompt
 
 
 @pytest.mark.parametrize("executor", [agents, headless_agents], ids=["workflow", "headless"])
@@ -170,7 +223,7 @@ def test_rendered_review_legs_never_deliver_a_bare_engine_module(executor, tmp_p
     assert not re.search(r"(?<![\w./\\])python(?:3(?:\.\d+)?)?\s+-m\s+coordinator_core\.", delivered)
     assert "coordinator_core.ops.test_leg_run --base-sha" in delivered
     assert "coordinator_core.ops.dispatch_emit.clean_overlay_verify --export-run" in delivered
-    assert "coordinator_core.ops.dispatch_emit.landing_export scratch/test-landing-" in delivered
+    assert "coordinator_core.testing.baseline_export --sha " in delivered
     assert "halt-reverify-tests.json" in delivered
     assert sys.executable in delivered
 

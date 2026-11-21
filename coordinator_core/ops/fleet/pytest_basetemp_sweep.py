@@ -1,4 +1,4 @@
-"""Cross-repo sweep of dead-pid pytest run dirs under ``<gettempdir()>/coordinator/*/pytest/``.
+"""Cross-repo sweep of dead-pid pytest run dirs under every ``<temp base>/coordinator/*/pytest/`` (``temp_layout.pytest_sweep_roots``).
 
 Negative spec: never deletes a run dir owned by a live pid or this process, one carrying
 ``PYTEST_KEPT_MARKER``, one whose name does not parse, anything under ``_fleet``, or a link.
@@ -11,7 +11,6 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -19,7 +18,12 @@ from typing import Any, Optional, Sequence
 from coordinator_core.group_em import session_registry
 from coordinator_core.ops.fleet.scratch_hygiene_apply import remove_tree_no_follow
 from coordinator_core.ops.fleet.scratch_hygiene_plan import _Context, _is_link, classify_entry
-from coordinator_core.temp_layout import FLEET_DIRNAME, PYTEST_KEPT_MARKER, parse_pytest_run_dir
+from coordinator_core.temp_layout import (
+    FLEET_DIRNAME,
+    PYTEST_KEPT_MARKER,
+    parse_pytest_run_dir,
+    pytest_sweep_roots,
+)
 
 _PYTEST_DIRNAME = "pytest"
 
@@ -33,8 +37,13 @@ def _children(path: Path) -> list[str]:
 
 def _candidates() -> list[tuple[Path, Path, int]]:
     """``(repo temp dir, run dir, owning pid)`` for every unmarked, parseable, non-link run dir."""
-    root = Path(tempfile.gettempdir()) / "coordinator"
     found: list[tuple[Path, Path, int]] = []
+    for root in pytest_sweep_roots():
+        _scan_root(root, found)
+    return found
+
+
+def _scan_root(root: Path, found: list[tuple[Path, Path, int]]) -> None:
     for repo_name in _children(root):
         repo_dir = root / repo_name
         if repo_name == FLEET_DIRNAME or _is_link(repo_dir):
@@ -50,7 +59,6 @@ def _candidates() -> list[tuple[Path, Path, int]]:
             if (run_dir / PYTEST_KEPT_MARKER).exists():
                 continue
             found.append((repo_dir, run_dir, pid))
-    return found
 
 
 def sweep_dead_runs(

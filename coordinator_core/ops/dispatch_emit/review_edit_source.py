@@ -110,6 +110,23 @@ def sole_run_attested_writes(
     return frozenset(p for paths in by_agent.values() for p in paths)
 
 
+def _written_since(agent_dir: str, since: float) -> bool:
+    """Whether any file of the agent's sink family was modified at or after ``since``.
+
+    Events are appended, so a family untouched since ``since`` holds no event at or after it, and the
+    owner pointer of such an agent (one open per dispatched agent, ~1.7k per session) need not be read.
+    An unreadable member counts as written: the owner read then decides, as before."""
+    try:
+        for member in touch_record.discover_family(touch_record.sink_path(agent_dir)):
+            if os.stat(member).st_mtime >= since:
+                return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return False
+
+
 def _collect(
     worktree_root: Path, session_id: Optional[str], since: Optional[float]
 ) -> Optional[tuple[dict[str, str], dict[str, set[str]]]]:
@@ -126,6 +143,8 @@ def _collect(
     stamped: dict[str, float] = {}
     for agent_id in ids:
         agent_dir = os.path.join(hub, _AGENTS_SUBDIR, agent_id)
+        if not _written_since(agent_dir, since):
+            continue
         owner, conclusive = touch_record.agent_owner_sid(agent_dir)
         if not conclusive:
             return None

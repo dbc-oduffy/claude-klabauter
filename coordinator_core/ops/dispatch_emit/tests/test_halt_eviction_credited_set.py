@@ -14,6 +14,9 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.dispatch_emit import halt_tree_check
 from coordinator_core.ops.dispatch_emit.halted_record_eviction import plan_tree_eviction
 
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 HEAD = {"own.py": "X = 1\n", "peer.py": "Y = 1\n"}
 DIRTY = {"own.py": "X = 1\nA = 2\n", "peer.py": "Y = 1\nB = 3\n"}
 

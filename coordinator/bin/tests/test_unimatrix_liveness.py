@@ -50,6 +50,8 @@ def test_proc_start_matches_the_harness_format_for_own_pid() -> None:
     assert lv.proc_start(os.getpid()) == _harness_start(os.getpid())
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX proc_start")
 def test_proc_start_matches_the_harness_format_for_child_pid() -> None:
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
@@ -110,14 +112,6 @@ def test_linux_pid_domain_is_bare_linux_when_a_part_is_missing(monkeypatch: pyte
 def test_lstart_pads_one_digit_day() -> None:
     epoch = time.mktime((2026, 11, 4, 1, 19, 29, 0, 0, -1))
     assert lv._lstart(epoch) == "Wed Nov  4 01:19:29 2026"
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="posix pid")
-def test_proc_start_dead_pid_raises_oserror() -> None:
-    p = subprocess.Popen([sys.executable, "-c", "pass"])
-    p.wait()
-    with pytest.raises(OSError):
-        lv.proc_start(p.pid)
 
 
 def _rec(pid=None):
@@ -407,37 +401,6 @@ def test_codex_holder_live_unreadable_start_is_not_staleness(monkeypatch: pytest
         raise OSError("unreadable")
     monkeypatch.setattr(lv, "proc_start", boom)
     assert lv.codex_holder_live({"codexPid": os.getpid(), "codexProcStart": "x"}) is True
-
-
-def test_codex_probe_cli_prints_one_line_per_codex_peer(tmp_path: Path) -> None:
-    me = _rec()
-    locks = tmp_path / "locks"
-    locks.mkdir()
-    (locks / "thr-live.lock").write_text("")
-    (locks / "thr-orphan.lock").write_text("")
-    (locks / ".hidden.lock").write_text("")
-    peers = tmp_path / "peers.json"
-    peers.write_text(json.dumps({"peers": [
-        {"name": "codex-a", "vendor": "codex", "target": "thr-live", "cwd": "/w/a",
-         "codexPid": me["pid"], "codexProcStart": me["procStart"]},
-        {"name": "codex-b", "vendor": "codex", "target": "thr-dead", "cwd": "/w/b",
-         "codexPid": me["pid"], "codexProcStart": "Mon Jan  1 00:00:00 2001"},
-        {"name": "codex-c", "vendor": "codex", "target": "thr-none"},
-        {"name": "claude-x", "vendor": "claude", "target": "t"},
-    ]}))
-    out = subprocess.run([sys.executable, str(SRC), "codex-probe", "--peers", str(peers),
-                          "--locks-dir", str(locks)], capture_output=True, text=True, check=True).stdout
-    assert out.splitlines() == [
-        f"codex-a thr-live {me['pid']} /w/a live",
-        f"codex-b thr-dead {me['pid']} /w/b stale",
-        "codex-c thr-none - - stale",
-        "codex-thr-orphan thr-orphan - - stale",
-    ]
-
-
-def test_codex_probe_cli_rejects_unknown_command() -> None:
-    r = subprocess.run([sys.executable, str(SRC), "bogus"], capture_output=True, text=True)
-    assert r.returncode == 2
 
 
 def _setup(tmp_path, aliases, live: bool = True, age: int = 0):

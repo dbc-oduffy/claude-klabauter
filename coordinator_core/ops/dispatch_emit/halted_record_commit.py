@@ -868,7 +868,7 @@ def _land(
     review_literals = [] if review_written is None else [
         p for p in review_written if not review_edits.out_of_worktree(review_edits.norm(p))
     ]
-    run_written = _run_written(worktree_root, session_id, run_id)
+    run_written = _run_written(worktree_root, session_id, run_id, _live_run_ids(repo_root))
     touch_written = set(run_written)
     measured_only = [
         p for p in stage_dirt_snapshot.run_edits(worktree_root, worktree_root / record_dir_rel, [])
@@ -889,12 +889,18 @@ def _land(
         review_literals, run_written,
     )
     listed = declared + list(artifacts.paths()) + review_literals + run_written
+    needs_import_check = any(p.endswith(".py") for p in run_written)
     snapshot = _worktree_snapshot(
         worktree_root, listed + [p for p in [*post_candidates, *uncoded_dirt] if p not in listed],
-        [record_dir_rel, RECORD_DIR_ROOT], [],
+        [record_dir_rel, RECORD_DIR_ROOT], ["*.py"] if needs_import_check else [],
     )
     if snapshot is None:
         return _error(f"git status over {record_dir_rel} failed", **base)
+    python_dirt = None
+    if needs_import_check:
+        python_dirt = {p for p in snapshot.changed if p.endswith(".py")}
+        # Only eviction consumes the extra peer paths from the combined status.
+        snapshot.changed = {p for p in snapshot.changed if snapshot.covers(p)}
     artifacts = artifacts.with_superseded(
         run_artifacts.superseded_runs(
             worktree_root, run_id, sizing_rel, snapshot.changed, live_run_ids=_live_run_ids(repo_root)
@@ -1182,7 +1188,8 @@ def _land(
     _withhold_run_dirt(withheld, [*run_written, *post_candidates, *uncoded_dirt], snapshot.changed, landed_now)
     eviction = plan_tree_eviction(
         worktree_root, record_dir_rel, run_written, snapshot.changed,
-        [*run_written, *owner, *declared], withheld, paths, run_id,
+        [*run_written, *owner, *declared], withheld, paths, run_id, python_dirt=python_dirt,
+        halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
         credited={*touch_written, *owner, *declared, *request_owned, *review_literals},
     )
     # Kept off ``paths`` until a commit is due: the record file alone must not turn a no-op halt into a commit.

@@ -14,7 +14,7 @@ if str(_COORDINATOR_LIB) not in sys.path:
 
 from percolate.import_closure import find_commit_module_attr_violations  # noqa: E402
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 _CALLER = "from coordinator_core import ledger\n\ndef gate():\n    return ledger.advisory_text()\n"
 

@@ -881,7 +881,9 @@ def _answer_overran(call: dict) -> dict:
         return _refuse(f"The submission outran the hook budget as its run was minted. Do not re-submit. {_minted_remedy([])}")
     if gate_state == "writing":
         denied = call.get("write_denied")
-        return _refuse(_DENIED_RECORD_WRITE.format(cause=denied) if denied else _STALLED_RECORD_WRITE)
+        return _refuse(
+            _denied_record_write_text(denied, call.get("write_denied_path")) if denied else _STALLED_RECORD_WRITE
+        )
     resuming = call.get("resume")
     if resuming:
         return _refuse(
@@ -920,9 +922,36 @@ _STALLED_RECORD_WRITE = (
 #: The emit's record write raised (the sandbox or the filesystem refused it): the gate stays "writing" after a
 #: raise, so the call's recorded `write_denied` cause is what tells a denial from a slow write.
 _DENIED_RECORD_WRITE = (
-    "The submission was refused: the run record write raised ({cause}); it was not slow. "
-    "Nothing was minted; remove the cause (a sandbox needs writes allowed under the repo's .git), then re-submit."
+    "The submission was refused: the run record write raised ({cause}) at {path}; {principal} lacks write there. "
+    "Nothing was minted; create that directory before the sandboxed child starts, then re-submit."
 )
+
+
+def _sandbox_principal_names() -> str:
+    """The sandbox principals a denied record write is attributed to (the warm election's configured
+    accounts, Windows only), else "the calling process"."""
+    if os.name == "nt":
+        try:
+            from coordinator_core.warm import election
+
+            names = election._configured_sandbox_principals()
+        except Exception:  # naming the principal never masks the refusal
+            names = ()
+        if names:
+            return ", ".join(names)
+    return "the calling process"
+
+
+def _denied_record_write_text(cause: str, path: Optional[str]) -> str:
+    """The typed refusal for a record write the OS denied: the cause, the denied path (`<unknown>` when the
+    error carried none) and the principal that lacks write there."""
+    return _DENIED_RECORD_WRITE.format(cause=cause, path=path or "<unknown>", principal=_sandbox_principal_names())
+
+
+def _denied_path(exc: BaseException) -> Optional[str]:
+    """The path an OSError was raised for, as text, or None."""
+    name = getattr(exc, "filename", None)
+    return str(name) if name else None
 
 
 def _cancel_call_gates(call: dict) -> str:
@@ -1251,6 +1280,7 @@ def _emit_within_budget(
             box["error"] = exc
             if isinstance(exc, OSError) and call is not None:
                 call["write_denied"] = _cause(exc)
+                call["write_denied_path"] = _denied_path(exc)
 
     def gated() -> None:
         run_token.WRITE_GATE.set(gate)
@@ -1330,14 +1360,24 @@ def _unavailable(exc: BaseException) -> Optional[str]:
 
 
 _WITHDRAW_HINT = (
-    "To withdraw it: coordinator-invoke ask_spool.withdraw "
+    "Withdraw: coordinator-invoke ask_spool.withdraw "
     "'{{\"spool_id\":\"{spool_id}\",\"reason\":\"...\"}}'."
 )
 
 
+def _spooled_text(spool_id: str) -> str:
+    """The reply for a spooled ask. It leads with the state a resubmit would contradict (the engine's spool drain
+    fires the entry itself), so a reader never takes "unavailable" for a failure; the C door mirrors this text."""
+    return (
+        f"SPOOLED as {spool_id}: it fires automatically once the engine is warm. Do not resubmit. "
+        + _WITHDRAW_HINT.format(spool_id=spool_id)
+    )
+
+
 def _spool_envelope(payload: Any, root: Optional[Path], reason: str) -> Optional[dict]:
-    """Allow envelope for an ask written to the ask spool ("spooled as <id>"), or None when it cannot be
-    spooled (no payload or root, or an unwritable disk), so the caller keeps its own answer. No engine call."""
+    """Allow envelope for an ask written to the ask spool ("SPOOLED as <id>"), or None when it cannot be
+    spooled (no payload or root, or an unwritable disk), so the caller keeps its own answer. No engine call.
+    An ask a pending entry already holds is not spooled again; the reply names that entry."""
     import json
 
     from coordinator_core.ask_spool import record
@@ -1351,30 +1391,28 @@ def _spool_envelope(payload: Any, root: Optional[Path], reason: str) -> Optional
     session = payload.get("session_id")
     tool_use_id = payload.get("tool_use_id")
     try:
-        raw = json.dumps(payload, default=str, ensure_ascii=False).encode("utf-8")
-        spool_id, _created = record.spool_ask(
-            str(root),
-            raw,
-            session_id=session if isinstance(session, str) else "",
-            tool_use_id=tool_use_id if isinstance(tool_use_id, str) and tool_use_id else None,
-            reason=reason,
-        )
+        spool_id = record.pending_duplicate(str(root), dict(payload))
+        if spool_id is None:
+            raw = json.dumps(payload, default=str, ensure_ascii=False).encode("utf-8")
+            spool_id, _created = record.spool_ask(
+                str(root),
+                raw,
+                session_id=session if isinstance(session, str) else "",
+                tool_use_id=tool_use_id if isinstance(tool_use_id, str) and tool_use_id else None,
+                reason=reason,
+            )
     except (OSError, ValueError):
         return None
     script = root / "scratch" / "warp" / f"spooled-{spool_id}.workflow.mjs"
+    text = _spooled_text(spool_id)
     try:
         _write_receipted_script(script, _SPOOLED_JS.replace("__SPOOL_ID__", json.dumps(spool_id)))
     except OSError:
-        return _refuse(
-            f"The engine is unavailable ({reason}); the ask is spooled as {spool_id} and mints once the "
-            "engine is healthy. Do not re-submit. " + _WITHDRAW_HINT.format(spool_id=spool_id)
-        )
+        return _refuse(text)
     return _allow_rewrite(
         {"scriptPath": str(script)},
-        f"The engine is unavailable ({reason}); the ask is spooled as {spool_id}. It mints exactly one run "
-        "once the engine is healthy and this session is notified. Do not re-submit. Do not poll or verify this run meanwhile; unrelated work proceeds. "
-        + _WITHDRAW_HINT.format(spool_id=spool_id),
-        f"Engine submission: spooled as {spool_id}.",
+        text,
+        f"Engine submission: SPOOLED as {spool_id}.",
     )
 
 
@@ -3185,6 +3223,17 @@ def _record_refire(rd: Path, script, kind: str, composed_by: Optional[str]) -> N
         pass
 
 
+def _mint_resume_parent(root: Path, run_id: str) -> None:
+    """Best-effort run-parent record for a launcher-resumed run so `workflow.revise` accepts its id; an
+    OSError or a conflicting record never blocks the resume."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import mint_run_parent
+
+    try:
+        mint_run_parent(root, run_id, label="launcher-resume")
+    except (OSError, ValueError):
+        pass
+
+
 def _script_names_missing_prompt(script: Path, rd: Path, run_id: str) -> bool:
     """True when the stored script reads a `<run_id>/prompts/<name>.md` the run's prompts dir lacks.
 
@@ -3384,6 +3433,7 @@ def _resume_route(
             if refusal is not None:
                 return _refuse(refusal), None
             _record_refire(rd, script, "stored", (stored.get("fingerprint") or {}).get("engine_sha"))
+            _mint_resume_parent(root, halted_id)
             return None, {"path": str(script), "run_id": halted_id, **_resume_fire_args(root, halted_id, sizing_rel, session_id)}
         script_missing = refusal is None and on_disk is False
 
@@ -3414,6 +3464,7 @@ def _resume_route(
             retired.append(halted_id)
         return None, None
     _record_refire(rd, script, "launcher", None)
+    _mint_resume_parent(root, halted_id)
     from coordinator_core import warp_live
 
     call_id = payload.get("tool_use_id")
@@ -3995,7 +4046,7 @@ def _evaluate(
             if spooled is not None:
                 return spooled
             if isinstance(exc, PermissionError):
-                return _refuse(_DENIED_RECORD_WRITE.format(cause=_cause(exc)))
+                return _refuse(_denied_record_write_text(_cause(exc), _denied_path(exc)))
             return _refuse(_name_root_tried(f"The engine refused the submission: {_cause(exc)}", root, sizing_rel))
 
     if isinstance(result, dict) and result.get("status") == "handover_pending" and not result.get("run_id"):

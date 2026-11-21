@@ -205,6 +205,18 @@ def _parent_lists_run(root: Path, run_id: str) -> bool:
     return False
 
 
+def _blitz_run_paths(root: Path, run_id: str) -> tuple[Optional[Path], Optional[str]]:
+    """``(script path, revisions rel)`` of an emitted bug-blitz run, or ``(None, None)`` (unsafe id or no script)."""
+    from coordinator_core.bug_blitz.contract import blitz_revisions_rel, blitz_script_rel
+
+    try:
+        script = Path(root) / blitz_script_rel(run_id)
+        revisions = blitz_revisions_rel(run_id)
+    except ValueError:
+        return None, None
+    return (script, revisions) if script.is_file() else (None, None)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1945,6 +1957,42 @@ def revise(
             if outcome is not None:
                 outcome["mailed_stages"], outcome["unreached_stages"] = mailed, unreached
                 outcome["pipeline_revisions"] = pipeline_run.revisions_rel(run_id)
+            return Ledger((), False), dir_, None
+        blitz_script, blitz_revisions = _blitz_run_paths(root, run_id)
+        if blitz_script is not None and blitz_revisions is not None:
+            if (
+                named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
+                or stop_after or retraction is not None or claim or accept_entries or base_ref
+            ):
+                raise LedgerRefused(
+                    f"{run_id!r} is a bug-blitz run: it takes only a verbatim or note revision, "
+                    "not out_of_scope, all_of_pm_ask, withhold_paths, credit_chunks, build_only, stop_after, base_ref, "
+                    "retract_note or claim"
+                )
+            try:
+                blitz_text = blitz_script.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise LedgerRefused(f"cannot read the emitted script of bug-blitz run {run_id!r}: {exc}") from exc
+            if not pipeline_run.reads_revisions(blitz_text):
+                raise LedgerRefused(
+                    f"bug-blitz run {run_id!r} was emitted by a script that predates revision delivery: "
+                    "its stages read no revisions file; re-fire it to take a revision"
+                )
+            if has_note and len(str(note).encode("utf-8")) > VERBATIM_BYTE_CAP:
+                raise LedgerRefused(f"note exceeds {VERBATIM_BYTE_CAP} bytes")
+            if any(pipeline_run.asks_peer_relay(t) for t in (text, str(note) if has_note else "")):
+                raise LedgerRefused(
+                    f"stages cannot message peers: bug-blitz run {run_id!r} has no SendMessage, so a "
+                    "revision asking a stage to relay to a peer would be dropped; not delivered. "
+                    "Relay from your own session when the run closes."
+                )
+            who = _clean_sender(sender) or "em"
+            for body, kind in ((text, "verbatim"), (str(note) if has_note else "", "note")):
+                if body:
+                    pipeline_run.append_revision(root, run_id, body, who, kind, rel=blitz_revisions)
+            if outcome is not None:
+                outcome["mailed_stages"], outcome["unreached_stages"] = [], []
+                outcome["pipeline_revisions"] = blitz_revisions
             return Ledger((), False), dir_, None
         if (
             named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only

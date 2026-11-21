@@ -57,7 +57,7 @@ def _fold(gate: dict, *, recovered: dict | None) -> dict:
         "const workflow = makeWorkflow(cfg);\n"
         "const REPO_ROOT = 'REPO';\n"
         "const _seen = [];\n"
-        "const _agentDefsClause = () => '';\n"
+        "const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => '';\n"
         "const agent = async (p, opts) => { _seen.push({ label: opts.label, prompt: p }); "
         "if (opts.label !== 'blitz-stage-read') throw new Error('unstubbed ' + opts.label); return cfg.recovered; };\n"
         "(async () => {\n"

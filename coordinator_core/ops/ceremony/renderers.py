@@ -75,6 +75,7 @@ from coordinator_core.ops.ceremony.records_query import _collect_files, query_re
 from coordinator_core.ops.fleet._common import rel_id
 from coordinator_core.ops.records_query import _apply_consumed_marker
 from coordinator_core.ops._relative_link import relative_markdown_target
+from coordinator_core.session.output_tree_layout import iter_entries
 
 # roadmap_id is attacker-influenceable frontmatter on a shared work/* branch and is
 # interpolated into a subprocess arg -- mirrors the DoE pickup skill's allowlist guard.
@@ -732,11 +733,11 @@ def _is_plan_sidecar(filename: str, existing_names: frozenset[str] = frozenset()
 
 
 def _collect_plans_with_parse_errors(root: Path) -> list[dict]:
-    """Enumerate base ``docs/plans/*.md`` files (review sidecars excluded),
+    """Enumerate base ``docs/plans/*.md`` and ``docs/plans/YYYY-MM/*.md`` files (review sidecars excluded),
     returning parse-error stubs (``frontmatter: None``) inline with parsed
     records — same shape as ``_collect_handoffs_with_parse_errors``.
 
-    Sorted alphabetically (``os.listdir`` + ``sorted``) for deterministic,
+    Sorted alphabetically (``iter_entries`` + ``sorted``) for deterministic,
     cross-platform output; unlike the handoff scan this has no node-parity
     requirement of its own, but a stable order still avoids readdir-order
     flakiness across OSes.
@@ -745,21 +746,18 @@ def _collect_plans_with_parse_errors(root: Path) -> list[dict]:
     if not plans_dir.is_dir():
         return []
 
-    all_names = sorted(os.listdir(plans_dir))
-    existing_names = frozenset(n for n in all_names if (plans_dir / n).is_file())
+    entries = sorted(iter_entries(str(root), "docs/plans", ".md"))
+    names_by_dir: dict[str, set[str]] = {}
+    for rel in entries:
+        parent, _, base = rel.rpartition("/")
+        names_by_dir.setdefault(parent, set()).add(base)
 
     results: list[dict] = []
-    for name in all_names:
-        # ``name not in existing_names`` skips directories named ``*.md`` —
-        # without it such an entry reaches ``read_text`` below and degrades
-        # into a spurious parse-error stub instead of being ignored.
-        if (
-            not name.endswith(".md")
-            or name not in existing_names
-            or _is_plan_sidecar(name, existing_names)
-        ):
+    for entry in entries:
+        parent, _, name = entry.rpartition("/")
+        if _is_plan_sidecar(name, frozenset(names_by_dir[parent])):
             continue
-        fpath = plans_dir / name
+        fpath = root / entry
         rel_path = rel_id(fpath, root)
         try:
             text = fpath.read_text(encoding="utf-8")

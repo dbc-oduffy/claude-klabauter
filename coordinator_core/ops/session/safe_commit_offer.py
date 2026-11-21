@@ -292,7 +292,6 @@ from __future__ import annotations
 
 GENERATES = []
 
-import asyncio
 import posixpath
 import subprocess
 from collections import OrderedDict
@@ -326,7 +325,7 @@ from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.git.main_commit_policy import main_commit_refusal
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
+from coordinator_core.ops.ceremony.push_status import PUSH_STATUS_NOT_ATTEMPTED
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.session import claim_index
@@ -2349,6 +2348,8 @@ def commit_session_offer(
     """Sync wrapper — a single ``asyncio.run()`` drives the whole call
     (matches the single-event-loop convention other in-process op composers
     use, e.g. ``coordinator_core.ops.promote_shipped_in_flight_stubs``)."""
+    import asyncio
+
     return asyncio.run(commit_session_offer_async(session_id, cwd, groups))
 
 

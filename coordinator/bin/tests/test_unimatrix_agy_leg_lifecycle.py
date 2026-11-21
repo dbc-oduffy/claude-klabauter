@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 BIN = Path(__file__).resolve().parents[1]
 CONV = "0cf351a3-6538-4a9b-814c-52b1b75a596c"

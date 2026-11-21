@@ -10,7 +10,7 @@ from coordinator_core.ops.dispatch_emit import needed_path as np_
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 CALLEE = "pkg/callee.py"
 CALLER = "pkg/caller.py"

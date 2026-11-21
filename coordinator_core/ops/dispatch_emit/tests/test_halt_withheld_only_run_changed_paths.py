@@ -11,6 +11,7 @@ from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_halt_record import (  # noqa: F401
     RUN, _call, _chunks, _git, _record, repo,
 )
+import pytest
 
 
 def _baseline(root, mapping: dict) -> None:
@@ -18,6 +19,8 @@ def _baseline(root, mapping: dict) -> None:
     manifest.write_text(json.dumps({"write_baseline": mapping}), encoding="utf-8")
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_declared_path_the_run_left_untouched_is_not_withheld(repo):
     _record(repo)
     _chunks(repo, {"C1": ["ran.py", "peer.py"]})

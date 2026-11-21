@@ -12,6 +12,8 @@ import pytest
 
 from coordinator_core.frontmatter import schema_validate
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # percolate is not in klabauter's restricted publish tree; a static import here
 # fails the publish import-closure gate, so the scrub is reached at run time.
 mirror_text = pytest.importorskip('coordinator_core.percolate.mirror_text').mirror_text

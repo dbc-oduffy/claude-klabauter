@@ -135,7 +135,14 @@ def capture_all_guards(
     *,
     policy_file: Optional[str] = None,
     host_is_windows: Optional[bool] = None,
+    only: Optional[str] = None,
 ) -> List[GuardCapture]:
+    """Capture every guard in the chain, or only the entry named ``only``.
+
+    Trap: each entry's ``fn`` is independent, and some probe host state (the
+    revert guard walks every live session dir for peer claims, ~1s apiece); a
+    caller that wants one guard must not pay for the rest.
+    """
     effective_host_is_windows = _resolve_host_is_windows_public(host_is_windows)
     chain = dispatch._build_guard_chain(
         cmd=cmd,
@@ -149,6 +156,8 @@ def capture_all_guards(
     agent_id = str(payload.get("agent_id") or "")
     captures: List[GuardCapture] = []
     for entry in chain:
+        if only is not None and entry.name != only:
+            continue
         envelope = entry.fn()
         if envelope is not None and not isinstance(envelope, (dict, list)):
             envelope = dispatch._render_record(envelope, payload)
@@ -176,6 +185,7 @@ def capture_one_guard(
         payload,
         policy_file=policy_file,
         host_is_windows=host_is_windows,
+        only=guard_name,
     )
     by_name = {c.name: c for c in captures}
     return by_name[guard_name]

@@ -369,7 +369,7 @@ from coordinator_core.spawn_policy.detect import (
 )
 from pathlib import Path
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _THIS_FILE = pathlib.Path(__file__).resolve()

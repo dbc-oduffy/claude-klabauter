@@ -13,7 +13,7 @@ from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _git, _write, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_clean_overlay_verify import _repo
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 _TIERED = "import pytest\n\npytestmark = pytest.mark.{tier}\n\n\ndef test_real_{n}():\n    assert True\n"
 

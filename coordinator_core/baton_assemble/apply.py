@@ -104,6 +104,7 @@ from coordinator_core.baton_assemble import (
     _resolve_current_session_id,
     validate_decisions_shape,
 )
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
@@ -2761,6 +2762,41 @@ def _cleanup_orphan_on_commit_pipeline_error(root: Path, artifact_rel_path: str)
         pass
 
 
+def _pickup_readiness_conflict(root: Path, artifact_rel_path: str) -> Optional[dict[str, Any]]:
+    """Re-read a just-minted handoff AFTER the commit (and any cascade that
+    followed it) and return a conflict dict when it is no longer pickup-ready:
+    a terminal `deployment_state` (e.g. a continuation the deliverable cascade
+    stamped `shipped`) or `pickup_ready: false`. None when the record reads
+    live and ready, or is unreadable (nothing to assert)."""
+    if not artifact_rel_path:
+        return None
+    path = Path(artifact_rel_path)
+    if not path.is_absolute():
+        path = root / path
+    try:
+        split = split_frontmatter(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if split is None:
+        return None
+    state = read_fm_field_unquoted(split.fm_text, "deployment_state")
+    ready = read_fm_field_unquoted(split.fm_text, "pickup_ready")
+    problems: list[str] = []
+    if state in HANDOFF_TERMINAL_DEPLOYMENT:
+        problems.append(f"deployment_state is terminal ({state})")
+    if ready is not None and ready.strip().lower() == "false" and state != "awaiting_gate":
+        problems.append("pickup_ready is false")
+    if not problems:
+        return None
+    return {
+        "path": str(artifact_rel_path),
+        "deployment_state": state,
+        "pickup_ready": ready,
+        "shipped_in": read_fm_field_unquoted(split.fm_text, "shipped_in"),
+        "problems": problems,
+    }
+
+
 def _record_mint_into_baton(root: Path, artifact_rel_path: str) -> None:
     """Record a just-minted baton's own path into THIS session's
     `baton.json` (`session_baton.store.merge_baton`, `minted_artifacts` --
@@ -3072,6 +3108,16 @@ def apply(
             _record_mint_into_baton(root, committed_artifact_path)
             if kind == "handoff":
                 _record_commits_into_baton(root)
+                if committed_path_is_run_authored:
+                    conflict = _pickup_readiness_conflict(root, committed_artifact_path)
+                    report["pickup_readiness"] = (
+                        {"verdict": "conflict", **conflict} if conflict else {"verdict": "ready"}
+                    )
+                    if conflict:
+                        report["error"] = (
+                            f"the minted handoff {committed_artifact_path} is not pickup-ready after "
+                            f"the commit: {'; '.join(conflict['problems'])}"
+                        )
 
         return _finalize_report(exit_code, report)
 

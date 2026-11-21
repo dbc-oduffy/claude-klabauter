@@ -12,7 +12,7 @@ import pytest
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 HALTED = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-46eaa5"
 PEER = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-aaaaaa"

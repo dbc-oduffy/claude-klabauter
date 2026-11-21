@@ -27,9 +27,16 @@ EXIT_KIND = "exit"
 ROUTE_REVIEW_ONLY = "review-only"
 ROUTE_REVISE = "revise"
 ROUTE_ADOPT = "adopt"
-EXIT_ROUTES = (ROUTE_REVIEW_ONLY, ROUTE_REVISE, ROUTE_ADOPT)
+ROUTE_LANDED = "landed"
+EXIT_ROUTES = (ROUTE_REVIEW_ONLY, ROUTE_REVISE, ROUTE_ADOPT, ROUTE_LANDED)
+# Twin of review_mint.execute_review.NO_SLICES_HALT (this leaf cannot import it); a test pins equality.
+NO_SLICES_HALT_PREFIX = "review prep returned no slices"
 # plan-blitz's `agentIncidents[].kind` for a roster it could not read: a refire re-enters the same read.
 ROSTER_UNREADABLE_KIND = "roster-unreadable"
+# plan-blitz `trackAgent` labels and incident kinds of a reviewer reply with no usable verdict; a refire can clear it,
+# so it never joins the unchanged-cause set (`_causeUnchangedByRefire` stays roster-only).
+REVIEWER_UNREADY_ROLES = ("reviewer", "readiness-host")
+REVIEWER_UNREADY_KINDS = ("missing-tldr", "null-return", "errored")
 REVIEW_ONLY_CALL = (
     "emit-dispatch-workflow --inventory <inv> --review-only --rows <DONE ids> --run-base <sha>"
 )
@@ -276,6 +283,23 @@ def is_exit_next_action(obj: object) -> bool:
     )
 
 
+def reviewer_unready_js(blitz_js: str, retry_re_js: str) -> str:
+    """JS boolean expression: true when `[blitz, blitz.regate]` shows a reviewer that returned no usable verdict.
+
+    That is an `agentIncidents` entry whose role (text before any ':') is in REVIEWER_UNREADY_ROLES and kind in
+    REVIEWER_UNREADY_KINDS, or a `pulled` entry whose `String(reason) + String(prepGateReport)` matches
+    `retry_re_js` (a JS regex literal). `blitz_js` is a JS expression; pure, no I/O.
+    """
+    j = json.dumps
+    return (
+        f"([{blitz_js}, ({blitz_js}) && ({blitz_js}).regate].some((_b) => _b && ("
+        f"(Array.isArray(_b.agentIncidents) && _b.agentIncidents.some((_i) => _i && "
+        f"{j(list(REVIEWER_UNREADY_ROLES))}.includes(String(_i.role).split(':')[0]) && "
+        f"{j(list(REVIEWER_UNREADY_KINDS))}.includes(_i.kind))) || "
+        f"(Array.isArray(_b.pulled) && _b.pulled.some((_p) => _p && {retry_re_js}.test(String(_p.reason) + String(_p.prepGateReport)))))))"
+    )
+
+
 def _exit_route_js(run_id_js: str) -> str:
     """JS `_exitRoute(refused)` returning the exit object for a NON_REFIRE refusal."""
     j = json.dumps
@@ -299,6 +323,10 @@ def _exit_route_js(run_id_js: str) -> str:
             "  };",
             "  const _causeUnchangedByRefire = () => [_halted.blitz, _halted.blitz && _halted.blitz.regate].some((_b) =>",
             f"    _b && Array.isArray(_b.agentIncidents) && _b.agentIncidents.some((_i) => _i && _i.kind === {j(ROSTER_UNREADABLE_KIND)}));",
+            "  const _emptyPrepLandedExit = () => ({",
+            f"    kind: {j(EXIT_KIND)}, route: {j(ROUTE_LANDED)},",
+            f"    call: 'dispatch.record_halted_run_landed {{run_id: ' + {run_id_js} + ', sha: <landing sha>}}',",
+            "    reason: 'Review prep froze an empty diff with no error: the product is already at HEAD. A refire reproduces the halt; record the run landed.' });",
             "  const _rosterExit = () => ({",
             f"    kind: {j(EXIT_KIND)}, route: {j(ROUTE_REVISE)},",
             f"    call: 'workflow.revise {{run_id: ' + {run_id_js} + ', note: <name the plan_review roster fix>}}',",
@@ -369,6 +397,12 @@ def refire_next_action_js(
             "  }",
             "  if (_causeUnchangedByRefire()) {",
             f"    if (!(_halted.next_action && _halted.next_action.kind === {j(EXIT_KIND)})) _halted['next_action'] = _rosterExit();",
+            "    return;",
+            "  }",
+            f"  if (String(_halted.halted ?? '').startsWith({j(NO_SLICES_HALT_PREFIX)}) && _halted.prep && !_halted.prep.error && "
+            "(_halted.prep.product_files ?? 0) === 0 && "
+            "!(Array.isArray(_halted.prep.slices) ? _halted.prep.slices : []).some((_s) => (_s?.files ?? []).length)) {",
+            f"    if (!(_halted.next_action && _halted.next_action.kind === {j(EXIT_KIND)})) _halted['next_action'] = _emptyPrepLandedExit();",
             "    return;",
             "  }",
             f"  const _hk = {kind_js};",

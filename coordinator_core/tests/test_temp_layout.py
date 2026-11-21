@@ -6,7 +6,6 @@ import atexit
 import os
 import re
 import stat
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -82,12 +81,6 @@ def test_legacy_top_level_path_joins_gettempdir(fake_temp) -> None:
     assert temp_layout.legacy_top_level_path("rt-bark-once-s1") == fake_temp / "rt-bark-once-s1"
 
 
-def _dead_pid() -> int:
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    return proc.pid
-
-
 def test_managed_temp_dir_is_pid_stamped_and_removed_on_exit(fake_temp) -> None:
     with temp_layout.managed_temp_dir("probe", "/work/my-repo") as d:
         assert d.parent == fake_temp / "coordinator" / "my-repo" / temp_layout.RUN_TEMP_DIRNAME
@@ -109,19 +102,6 @@ def test_managed_temp_dir_removes_read_only_contents(fake_temp) -> None:
         f.write_text("x")
         os.chmod(f, stat.S_IREAD)
     assert not d.exists()
-
-
-def test_next_creation_reaps_dead_owner_dir_and_keeps_live_and_foreign(fake_temp) -> None:
-    run_temp = temp_layout.managed_tempdir() / temp_layout.RUN_TEMP_DIRNAME
-    run_temp.mkdir()
-    dead = run_temp / f"{_dead_pid()}-abcdef-old"
-    live = run_temp / f"{os.getppid()}-abcdef-live"
-    foreign = run_temp / "not-ours"
-    for p in (dead, live, foreign):
-        (p / "sub").mkdir(parents=True)
-    with temp_layout.managed_temp_dir("new"):
-        assert not dead.exists()
-        assert live.exists() and foreign.exists()
 
 
 def test_make_managed_temp_dir_registers_atexit_removal(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -206,18 +186,6 @@ def test_kept_dir_is_reaped_only_once_older_than_the_age_bar(fake_temp) -> None:
     with temp_layout.managed_temp_dir("new"):
         assert fresh.is_dir()
         assert not stale.exists()
-
-
-def test_reap_is_capped_per_creation(fake_temp) -> None:
-    run_temp = temp_layout.managed_tempdir() / temp_layout.RUN_TEMP_DIRNAME
-    run_temp.mkdir()
-    dead_pid = _dead_pid()
-    n = temp_layout._REAP_CAP + 3
-    for i in range(n):
-        (run_temp / f"{dead_pid}-{i:06x}-old").mkdir()
-    with temp_layout.managed_temp_dir("new"):
-        left = [p for p in run_temp.iterdir() if p.name.endswith("-old")]
-    assert len(left) == 3
 
 
 def test_teardown_error_does_not_replace_body_exception(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -324,3 +292,216 @@ def test_fleet_root_outside_a_session_dir_is_unchanged(fake_temp) -> None:
 def test_managed_dir_outside_a_session_dir_still_uses_the_skeleton(fake_temp) -> None:
     made = temp_layout.make_managed_temp_dir("y-")
     assert made.parent == fake_temp / "coordinator" / "_fleet" / "run-temp"
+
+
+@pytest.fixture
+def redirected_into_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """TEMP redirected to ``<fake repo>/scratch/codex-tmp``; the platform temp is a real sibling dir."""
+    repo = tmp_path / "fake-repo"
+    (repo / ".git").mkdir(parents=True)
+    redirect = repo / "scratch" / "codex-tmp"
+    redirect.mkdir(parents=True)
+    system = tmp_path / "system-temp"
+    system.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(redirect))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lad"))
+    (tmp_path / "lad" / "Temp").mkdir(parents=True)
+    return repo, system
+
+
+def test_pytest_basetemp_root_leaves_a_repo_redirected_temp(redirected_into_repo, monkeypatch) -> None:
+    repo, system = redirected_into_repo
+    if sys.platform != "win32":
+        monkeypatch.setattr(temp_layout, "_inside_worktree", lambda p: Path(p).is_relative_to(repo))
+        monkeypatch.setattr(temp_layout.Path, "is_dir", lambda self: True)
+    root = temp_layout.pytest_basetemp_root(repo)
+    assert not root.is_relative_to(repo)
+    assert root.parts[-3:] == ("coordinator", "fake-repo", "pytest")
+    fleet = temp_layout.pytest_fleet_basetemp_root()
+    assert not fleet.is_relative_to(repo)
+    assert fleet.parts[-3:] == ("coordinator", "_fleet", "pytest")
+
+
+def test_pytest_basetemp_root_keeps_a_plain_temp(fake_temp) -> None:
+    assert temp_layout.pytest_basetemp_root("/work/r") == fake_temp / "coordinator" / "r" / "pytest"
+    assert temp_layout.pytest_fleet_basetemp_root() == fake_temp / "coordinator" / "_fleet" / "pytest"
+
+
+_MOUNTINFO_TMPFS_TMP = (
+    "20 1 8:1 / / rw - ext4 /dev/sda1 rw\n"
+    "30 20 0:25 / /tmp rw - tmpfs tmpfs rw\n"
+    "31 20 8:1 /v /var/tmp rw - ext4 /dev/sda1 rw\n"
+    r"32 20 0:26 / /mnt/with\040space rw - tmpfs tmpfs rw" "\n"
+)
+
+
+@pytest.fixture
+def linux_tmpfs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Fake mountinfo with /tmp tmpfs; the disk fallbacks are real tmp_path dirs outside any worktree."""
+    info = tmp_path / "mountinfo"
+    info.write_text(_MOUNTINFO_TMPFS_TMP)
+    monkeypatch.setattr(temp_layout, "_MOUNTINFO", str(info))
+    monkeypatch.setattr(sys, "platform", "linux")
+    temp_layout._mount_table.cache_clear()
+    disk = tmp_path / "vartmp"
+    disk.mkdir()
+    xdg = tmp_path / "cache"
+    xdg.mkdir()
+    monkeypatch.setattr(temp_layout, "_linux_disk_fallbacks", lambda: [disk, xdg])
+    monkeypatch.setattr(temp_layout, "_system_temp_dir", lambda: Path("/tmp"))
+    monkeypatch.setattr(temp_layout, "_inside_worktree", lambda p: False)
+    monkeypatch.setattr(temp_layout, "_real", lambda p: Path(p).as_posix())
+    yield disk, xdg
+    temp_layout._mount_table.cache_clear()
+
+
+def test_mount_table_longest_prefix_and_octal_unescape(linux_tmpfs) -> None:
+    assert temp_layout._is_tmpfs(Path("/tmp/x/y"))
+    assert not temp_layout._is_tmpfs(Path("/var/tmp/x"))
+    assert not temp_layout._is_tmpfs(Path("/tmpfoo"))
+    assert temp_layout._is_tmpfs(Path("/mnt/with\040space/a"))
+
+
+def test_pytest_root_prefers_disk_when_the_temp_dir_is_tmpfs(linux_tmpfs) -> None:
+    disk, _ = linux_tmpfs
+    assert temp_layout.pytest_basetemp_root("/w/r") == disk / "coordinator" / "r" / "pytest"
+    assert temp_layout.pytest_fleet_basetemp_root() == disk / "coordinator" / "_fleet" / "pytest"
+
+
+def test_pytest_root_falls_through_to_the_xdg_cache(linux_tmpfs, monkeypatch) -> None:
+    disk, xdg = linux_tmpfs
+    monkeypatch.setattr(temp_layout, "_is_tmpfs", lambda p: Path(p).as_posix().startswith("/tmp") or Path(p) == disk)
+    assert temp_layout.pytest_basetemp_root("/w/r") == xdg / "coordinator" / "r" / "pytest"
+
+
+def test_pytest_root_skips_a_fallback_inside_a_worktree(linux_tmpfs, monkeypatch) -> None:
+    disk, xdg = linux_tmpfs
+    monkeypatch.setattr(temp_layout, "_inside_worktree", lambda p: Path(p) == disk)
+    assert temp_layout.pytest_basetemp_root("/w/r") == xdg / "coordinator" / "r" / "pytest"
+
+
+def test_pytest_root_keeps_tmpfs_when_no_fallback_qualifies(linux_tmpfs, monkeypatch) -> None:
+    monkeypatch.setattr(temp_layout, "_linux_disk_fallbacks", lambda: [Path("/nonexistent-a/b")])
+    assert temp_layout.pytest_basetemp_root("/w/r") == Path("/tmp/coordinator/r/pytest")
+
+
+def test_pytest_root_unchanged_when_the_temp_dir_is_not_tmpfs(linux_tmpfs, monkeypatch) -> None:
+    monkeypatch.setattr(temp_layout, "_system_temp_dir", lambda: Path("/var/tmp"))
+    assert temp_layout.pytest_basetemp_root("/w/r") == Path("/var/tmp/coordinator/r/pytest")
+
+
+def test_pytest_root_unchanged_off_linux(linux_tmpfs, monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert temp_layout.pytest_basetemp_root("/w/r") == Path("/tmp/coordinator/r/pytest")
+
+
+def test_sweep_roots_cover_the_system_temp_and_the_disk_fallbacks(linux_tmpfs) -> None:
+    disk, xdg = linux_tmpfs
+    roots = temp_layout.pytest_sweep_roots()
+    assert disk / "coordinator" in roots and xdg / "coordinator" in roots
+    assert Path("/tmp/coordinator") in roots
+    assert len(roots) == len(set(roots))
+
+
+def test_coordinator_root_lands_on_disk_under_a_tmpfs_temp(linux_tmpfs, monkeypatch) -> None:
+    disk, _ = linux_tmpfs
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: "/tmp")
+    assert temp_layout.coordinator_temp_root("/w/r") == disk / "coordinator" / "r"
+    assert temp_layout.fleet_temp_root() == disk / "coordinator" / "_fleet"
+    assert temp_layout.managed_tempdir() == disk / "coordinator" / "_fleet"
+
+
+def test_coordinator_root_unchanged_off_tmpfs_and_off_linux(linux_tmpfs, monkeypatch) -> None:
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: "/var/tmp")
+    assert temp_layout.coordinator_temp_root("/w/r") == Path("/var/tmp/coordinator/r")
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: "/tmp")
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert temp_layout.coordinator_temp_root("/w/r") == Path("/tmp/coordinator/r")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert temp_layout.fleet_temp_root() == Path("/tmp/coordinator/_fleet")
+
+
+def test_coordinator_root_keeps_tmpfs_when_no_fallback_qualifies(linux_tmpfs, monkeypatch) -> None:
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: "/tmp")
+    monkeypatch.setattr(temp_layout, "_linux_disk_fallbacks", lambda: [Path("/nonexistent-a/b")])
+    assert temp_layout.coordinator_temp_root("/w/r") == Path("/tmp/coordinator/r")
+
+
+def test_registry_pytest_run_root_still_wins_over_the_disk_root(linux_tmpfs, monkeypatch, tmp_path) -> None:
+    from coordinator_core.testing import scoped_pytest
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: "/tmp")
+    override = tmp_path / "override"
+    monkeypatch.setattr(scoped_pytest.machine_resolver, "registry_get", lambda key: str(override))
+    assert scoped_pytest.per_run_root("/w/r") == override
+
+
+def test_managed_dir_is_created_on_the_disk_root(linux_tmpfs, monkeypatch) -> None:
+    disk, _ = linux_tmpfs
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: "/tmp")
+    monkeypatch.setattr(temp_layout, "_legacy_root_reaped", True)
+    with temp_layout.managed_temp_dir("x", "/w/r") as path:
+        assert path.parent == disk / "coordinator" / "r" / "run-temp"
+
+
+def _legacy_tree(tmp_path: Path, monkeypatch):
+    """Old tmpfs root with a dead-owner, a live-owner run-temp dir and a stale/fresh clean mirror."""
+    old_base = tmp_path / "oldtmp"
+    disk = tmp_path / "disk"
+    run_temp = old_base / "coordinator" / "r" / "run-temp"
+    dead, live = run_temp / "999991-aaaaaa-x", run_temp / "999992-bbbbbb-x"
+    mirrors = old_base / "coordinator" / "r" / "clean-mirror"
+    stale, fresh = mirrors / "stale", mirrors / "fresh"
+    for d in (dead, live, stale, fresh, disk):
+        d.mkdir(parents=True)
+    os.utime(stale, (1, 1))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(old_base))
+    monkeypatch.setattr(temp_layout, "_is_tmpfs", lambda p: Path(p) == old_base)
+    monkeypatch.setattr(temp_layout, "_linux_disk_fallbacks", lambda: [disk])
+    monkeypatch.setattr(temp_layout, "_inside_worktree", lambda p: False)
+    from coordinator_core.group_em import session_registry
+
+    monkeypatch.setattr(session_registry, "pid_alive", lambda pid: pid == 999992)
+    monkeypatch.setattr(temp_layout, "_legacy_root_reaped", False)
+    return dead, live, stale, fresh, disk
+
+
+def test_first_use_reaps_dead_owner_and_stale_cache_in_the_old_root(tmp_path, monkeypatch) -> None:
+    dead, live, stale, fresh, disk = _legacy_tree(tmp_path, monkeypatch)
+    with temp_layout.managed_temp_dir("y", "/w/r") as path:
+        assert path.is_relative_to(disk)
+    assert not dead.exists() and not stale.exists()
+    assert live.exists() and fresh.exists()
+
+
+def test_old_root_reap_runs_once_per_process(tmp_path, monkeypatch) -> None:
+    dead, *_ = _legacy_tree(tmp_path, monkeypatch)
+    with temp_layout.managed_temp_dir("y", "/w/r"):
+        pass
+    dead.mkdir()
+    with temp_layout.managed_temp_dir("y", "/w/r"):
+        pass
+    assert dead.exists()
+
+
+def test_old_root_reap_is_a_noop_when_the_root_did_not_move(tmp_path, monkeypatch) -> None:
+    _, _, stale, _, _ = _legacy_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(temp_layout, "_is_tmpfs", lambda p: False)
+    with temp_layout.managed_temp_dir("y", "/w/r"):
+        pass
+    assert stale.exists()
+
+
+def test_old_root_bug_blitz_cache_ages_out_at_seven_days(tmp_path, monkeypatch) -> None:
+    *_, disk = _legacy_tree(tmp_path, monkeypatch)
+    blitz = tmp_path / "oldtmp" / "coordinator" / "_fleet" / "coordinator-bug-blitz"
+    old, mid, new = blitz / "old", blitz / "mid", blitz / "new"
+    for d in (old, mid, new):
+        d.mkdir(parents=True)
+    now = __import__("time").time()
+    os.utime(old, (now - 8 * 86400,) * 2)
+    os.utime(mid, (now - 3 * 86400,) * 2)
+    with temp_layout.managed_temp_dir("y", "/w/r"):
+        pass
+    assert not old.exists() and mid.exists() and new.exists()

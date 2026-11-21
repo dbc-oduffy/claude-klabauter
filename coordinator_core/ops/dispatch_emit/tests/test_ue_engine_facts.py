@@ -48,7 +48,19 @@ def test_clause_text_pins_owner_line_and_enumeration_routing():
     assert "not semantic search" in enum
     assert "project_semantic_search" not in enum
     assert "example_retrieval_repo_instructions" in enum
-    assert uef.CLAUSE == uef.CLAUSE_STALE_LINE + "\n" + enum
+    assert uef.CLAUSE == uef.CLAUSE_STALE_LINE + "\n" + enum + "\n" + uef.CLAUSE_DEGRADE_LINE
+
+
+def test_clause_degrades_on_warming_and_never_aborts():
+    """Run aa8623: a warming semantic bootstrap aborted a review leg. The clause carries the
+    degrade path (retry once, structural/grep, continue, record search_degraded), no abort order."""
+    text = uef.CLAUSE
+    for token in ("warming", "partial_coverage", "retry once", "scoped grep", "search_degraded: <reason>"):
+        assert token in text
+    assert "never stop or abort the review" in text
+    lowered = text.lower()
+    assert "abort:" not in lowered and "must abort" not in lowered and "then stop" not in lowered
+    assert text.index("project_engine_session_primer") < text.index("search_degraded")
 
 
 def test_served_with_root_uproject(tmp_path, addon):

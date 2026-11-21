@@ -9,7 +9,7 @@ import pytest
 from coordinator_core import push_hold
 from pathlib import Path
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 T = "a" * 40
 

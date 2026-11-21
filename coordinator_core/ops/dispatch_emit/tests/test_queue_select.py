@@ -911,3 +911,29 @@ def test_rows_with_the_submissions_mint_tag_skip_the_reap_gate(reap_env):
 def test_other_profiles_ignore_the_reap_record(reap_env):
     reap_env.row("t1", ["tf"])
     assert [e.row_id for e in reap_env.select(profile="fixture").entries] == ["t1"]
+
+
+@pytest.mark.parametrize("tagged_row_ids", [None, frozenset({"a"})])
+def test_run_tag_where_selects_tagged_rows_and_leaves_untagged_rows_unselected_and_unparsed(
+    tmp_path, monkeypatch, tagged_row_ids,
+):
+    queue_dir = tmp_path / "state" / "bug-backlog"
+    queue_dir.mkdir(parents=True)
+    _write_row(queue_dir / "a.yaml", **_base_row(tags=["tf", "bug-blitz-20261121T000000Z"]))
+    _write_row(queue_dir / "b.yaml", **_base_row(tags=["tf", "bug-blitz-20260101T000000Z"]))
+    # A row without the run tag is never parsed, so a scalar `tags` cannot raise the contains-on-non-list refusal.
+    _write_row(queue_dir / "c.yaml", **_base_row(tags="tf"))
+    join = type(queue_dir).__truediv__
+
+    def require_selected_path(path, leaf):
+        if tagged_row_ids is not None and path == queue_dir and leaf in ("b.yaml", "c.yaml"):
+            pytest.fail(f"built a Path for an unselected row: {leaf}")
+        return join(path, leaf)
+
+    monkeypatch.setattr(type(queue_dir), "__truediv__", require_selected_path)
+    manifest = _select(
+        queue=[queue_dir], repo_root=tmp_path, where=[[["tags", "contains", "bug-blitz-20261121T000000Z"]]],
+        tagged_row_ids=tagged_row_ids,
+    )
+    assert [e.row_id for e in manifest.entries] == ["a"]
+    assert manifest.unselected == ("b", "c")

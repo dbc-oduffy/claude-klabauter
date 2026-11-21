@@ -13,6 +13,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import peer_hunk_gate, run_token
 from coordinator_core.session import core as session_core
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 SELF = "5e1f0000-0000-4000-8000-0000000000c1"
 OWN = "ask-own"
 PATH = "pkg/execute_review.py"

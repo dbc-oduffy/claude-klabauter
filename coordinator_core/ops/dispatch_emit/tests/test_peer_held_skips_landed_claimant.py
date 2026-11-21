@@ -8,6 +8,8 @@ from coordinator_core.ops.dispatch_emit import halted_hold_release, land_run, te
 from coordinator_core.session import claim_index, liveness, touch_record
 from pathlib import Path
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 BODY = b"landed\r\nbytes\n"
 PATH = "t/test_x.py"
 

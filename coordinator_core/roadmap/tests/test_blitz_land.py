@@ -120,6 +120,45 @@ def test_an_unlinked_plan_is_linked_and_then_stamped(tmp_path):
     assert pg._read_baton_fields(root / baton)["governing_plan"] == plan
 
 
+def test_a_flat_planPath_whose_file_is_sharded_lands_and_links_the_sharded_path(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "b-1", deliverable_id="dlv-b-1")
+    sharded = _plan(root, "2026-11/2026-11-20-hnd-x", "draft")
+    flat = "docs/plans/2026-11-20-hnd-x.md"
+    assert not (root / flat).exists()
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": flat}]})
+
+    assert out["approved"][0]["stamped"] is True
+    assert _status(root, sharded) == "approved"
+    assert pg._read_baton_fields(root / baton)["governing_plan"] == sharded
+
+
+def test_a_flat_sizingObject_whose_file_is_sharded_joins_the_sharded_path(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "b-1")
+    sized = root / "state" / "sizings" / "2026-11" / "2026-11-20-x.yaml"
+    sized.parent.mkdir(parents=True)
+    sized.write_text("deliverable_id: dlv-x\n", encoding="utf-8")
+
+    out = bl.join_xs_sizing_to_baton(
+        root, baton, {"sizingObject": "state/sizings/2026-11-20-x.yaml"}
+    )
+
+    assert out["sizing"] == "state/sizings/2026-11/2026-11-20-x.yaml"
+
+
+def test_a_flat_planPath_whose_file_is_flat_still_lands(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "b-1", deliverable_id="dlv-b-1")
+    flat = _plan(root, "2026-11-20-hnd-y", "draft")
+
+    bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": flat}]})
+
+    assert _status(root, flat) == "approved"
+    assert pg._read_baton_fields(root / baton)["governing_plan"] == flat
+
+
 def test_an_already_linked_plan_is_not_repaired(tmp_path):
     root = _repo(tmp_path)
     plan = _plan(root, "the-plan", "draft", deliverable_id="dlv-b-1")

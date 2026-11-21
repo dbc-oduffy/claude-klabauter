@@ -662,7 +662,21 @@ def _apply_derived_readiness(fm: str, worktree: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_root: Path) -> dict:
+#: Terminal deployment_states a claim may deliberately REOPEN. `shipped` only: it
+#: is the stamp that can be premature or regress. `continued` has a successor
+#: (the live head is elsewhere) and `closed`/`abandoned` are deliberate human
+#: terminals; reopening those is not this verb's call.
+_CLAIM_REOPENABLE = frozenset({"shipped"})
+
+
+def _claim(
+    handoff_path: str,
+    session_id: str,
+    at: str,
+    worktree: Path,
+    repo_root: Path,
+    reopen_reason: Optional[str] = None,
+) -> dict:
     """Apply claim transition (status→claimed, deployment_state→in_flight, +timestamps).
 
     DR-084: writes status:claimed / claimed_at: / claimed_by: only — never the
@@ -691,6 +705,16 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
     Domain-abort paths (no frontmatter, validation failure) raise MutateAbort from
     inside the mutate closure so the lock is released and no write occurs.
     LockTimeout and MutateAbort are both mapped to exit_code=1 in the caller.
+
+    `reopen_reason` (the pickup `jshipped: reopen-and-proceed` disposition):
+    a non-empty value lets this claim take a `shipped` record instead of
+    refusing it. The reopen is one write with the claim: the terminal stamp
+    (`shipped_in`, `shipped_in_kind`, cascade's `advanced_by`/`advanced_at`)
+    is retired, the prior `shipped_in` is kept as `reopened_from_shipped_in`,
+    the reason as `reopened_reason`, the instant as `reopened_at`, and
+    `pickup_ready` becomes true (the baton is being worked, so it is again
+    authorized for pickup). Only `_CLAIM_REOPENABLE` states reopen; any other
+    terminal still refuses.
     """
     # Fail-loud on empty session_id — no write, exit_code=1.
     if not session_id or not session_id.strip():
@@ -720,7 +744,11 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
         # claimed_by re-stamp further down — read once, before any mutation.
         current_holder = _read_fm_field_new_or_old(split.fm_text, "claimed_by", "consumed_by")
 
-        if (deployment or "").strip().lower() in HANDOFF_TERMINAL_DEPLOYMENT:
+        reopening = False
+        deployment_norm = (deployment or "").strip().lower()
+        if deployment_norm in _CLAIM_REOPENABLE and (reopen_reason or "").strip():
+            reopening = True
+        elif deployment_norm in HANDOFF_TERMINAL_DEPLOYMENT:
             # Only "continued" has a
             # successor (continued_into); "shipped"/"closed"/"abandoned"
             # don't, so the advice no longer assumes one exists.
@@ -749,6 +777,21 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
             return old_text  # byte-identical → locked_rmw skips the write
 
         fm = split.fm_text
+        if reopening:
+            prior_shipped_in = read_fm_field(fm, "shipped_in")
+            for stale in ("shipped_in", "shipped_in_kind", "advanced_by", "advanced_at"):
+                if read_fm_field(fm, stale) is not None:
+                    fm = remove_fm_field(fm, stale)
+            if prior_shipped_in:
+                fm = insert_fm_field(
+                    fm, "reopened_from_shipped_in", prior_shipped_in, "deployment_state", numeric_quoting=True
+                )
+            fm = insert_fm_field(fm, "reopened_reason", " ".join(reopen_reason.split()), "deployment_state")
+            fm = insert_fm_field(fm, "reopened_at", at, "deployment_state")
+            if read_fm_field(fm, "pickup_ready") is not None:
+                fm = replace_fm_field(fm, "pickup_ready", "true")
+            else:
+                fm = insert_fm_field(fm, "pickup_ready", "true", "deployment_state")
         holder_changed = current_holder is not None and current_holder != session_id
 
         # status → claimed (replace existing; insert after 'title' if missing).
@@ -4155,7 +4198,11 @@ def transition_sync(params: dict, repo_root: Optional[Path] = None) -> dict:
         # Wrap blocking file read+write in asyncio.to_thread
         # to satisfy DR-212 D3 async-loop mandate; prevents event-loop stall.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
-        return _claim(handoff_path, session_id, at, worktree, repo_root)
+        reopen_reason = params.get("reopen_reason")
+        return _claim(
+            handoff_path, session_id, at, worktree, repo_root,
+            reopen_reason=reopen_reason if isinstance(reopen_reason, str) else None,
+        )
 
     if verb == "supersede":
         continued_into = (params.get("continued_into") or "").strip()

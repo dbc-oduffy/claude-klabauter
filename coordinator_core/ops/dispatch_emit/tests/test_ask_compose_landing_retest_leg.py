@@ -122,7 +122,7 @@ def test_an_awaiting_reply_waits_detached_then_reinvokes_land_run_without_spendi
     assert "--poll --wait --params-file " + params_path("/r", RUN).as_posix() in loop
     assert "Run it as ONE Bash call with run_in_background: true and no timeout parameter." in loop
     assert "timeout:" not in loop and "sleep 2" not in loop
-    assert loop.count("label: 'commit'") == 1 and "await _agent" not in loop
+    assert loop.count("_commitStage()") == 1 and "await _agent" not in loop
     assert "_retestAttempts = Number" not in loop and "_retestAttempts++" not in loop
     assert "_awaits++" in loop and "let _awaits = 0;" in stage
 

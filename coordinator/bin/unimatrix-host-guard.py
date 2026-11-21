@@ -18,6 +18,11 @@ process CPU the guard spent. An import_error or run_error record also carries ex
 exc_module. A write failure never alters the answer. The log is append-only and unrotated; the
 A7 reader owns truncation.
 
+Every Codex verdict appends one {ts, host, kind: "evaluated-allow"|"evaluated-deny", verdict: allow|advisory|deny,
+route: warm|cold|unreported, guards_evaluated, verdicts: [{guard, verdict}] in run order, chain: full|backstop-only (reach only), backstop_class: bool}
+row to host-guard-allows.jsonl beside it, from the shim's take_evaluation(); an engine without that accessor is
+"unreported". A degrade appends none there.
+
 CLI: unimatrix-host-guard.py --host codex|agy|grok [--engine-root PATH]
   stdin: one hook payload. stdout: exactly one JSON line. stderr: `state`. Exit 0 always.
 """
@@ -34,6 +39,7 @@ NEUTRAL = {"agy": {"decision": "allow"}, "codex": {}, "grok": {}}
 NEUTRAL_UNKNOWN = "neutral-unknown"
 DEFAULT_BUDGET_SECS = 0.5
 DEGRADE_LOG_NAME = "host-guard-degrades.jsonl"
+ALLOW_LOG_NAME = "host-guard-allows.jsonl"
 CLASSIFY_WALL_SECS = 0.25
 
 
@@ -167,6 +173,36 @@ def _record_degrade(host, cause, budget_secs, cpu_secs, verdict=None, unchecked=
         pass
 
 
+def _record_allow(host, evaluation, answer=None) -> None:
+    """Append one evaluation row beside the degrade log; never raises.
+    `evaluation` is the shim's take_evaluation() result; absent or malformed (an engine without the accessor) is
+    route "unreported" with no guards. `answer` classifies the row: a Codex deny is kind "evaluated-deny", an
+    advisory verdict "advisory", else "allow". Read by tests/test_host_guard_cold_process_budget.py. One row per
+    Codex verdict, never rotated: deleting the file resets it."""
+    try:
+        route, guards, verdicts, chain, backstop_class = "unreported", [], [], None, None
+        if (isinstance(evaluation, dict) and evaluation.get("route") in ("warm", "cold")
+                and isinstance(evaluation.get("guards_evaluated"), list)):
+            route, guards = evaluation["route"], [str(g) for g in evaluation["guards_evaluated"]]
+            raw = evaluation.get("verdicts")
+            if isinstance(raw, list):
+                verdicts = [{"guard": str(v.get("guard")), "verdict": str(v.get("verdict"))}
+                            for v in raw if isinstance(v, dict)]
+            chain = evaluation.get("chain") if evaluation.get("chain") in ("full", "backstop-only") else None
+            backstop_class = evaluation.get("backstop_class") if isinstance(evaluation.get("backstop_class"), bool) else None
+        verdict = "deny" if _is_codex_deny(answer) else "advisory" if _is_codex_advisory(answer) else "allow"
+        path = degrade_log_path().parent / ALLOW_LOG_NAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": round(time.time(), 3), "host": host,
+               "kind": "evaluated-deny" if verdict == "deny" else "evaluated-allow", "verdict": verdict,
+               "route": route, "guards_evaluated": guards, "verdicts": verdicts, "chain": chain,
+               "backstop_class": backstop_class}
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
 def _classify_irreversible(stdin_text, engine_root):
     """(deny reason, None) for an irreversible-class command; (None, None) for any other; (None, why) when it
     could not be classified. In-process and spawn-free, bounded by CLASSIFY_WALL_SECS."""
@@ -219,12 +255,16 @@ def _run_shim(host, stdin_text, engine_root, box):
         return
     try:
         take = getattr(shim, "take_pending_nag", None)
+        take_eval = getattr(shim, "take_evaluation", None)
         if take:
             take()
+        if take_eval:
+            take_eval()
         box["answer"] = shim.run(host, stdin_text)
         if take:
             box["nag"] = take()
             box["shim"] = shim
+        box["evaluation"] = take_eval() if take_eval else None
     except Exception as exc:
         box["cause"] = "run_error"
         box["detail"] = _exc_detail(exc)
@@ -263,6 +303,8 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pendin
             return degrade("invalid_answer", cpu_secs)
         if pending is not None and box.get("nag"):
             pending[:] = [(box["shim"], box["nag"])]
+        if host == "codex":
+            _record_allow(host, box.get("evaluation"), answer)
         if host == "codex" and (answer == {} or _is_codex_advisory(answer)):
             return answer, NEUTRAL_UNKNOWN
         if host == "grok" and answer.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":

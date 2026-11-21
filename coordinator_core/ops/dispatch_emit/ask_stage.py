@@ -2620,6 +2620,19 @@ def _recorded_manifest(record: Path) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
+def _recorded_misses_resume_rows(record: Path, only_rows) -> bool:
+    """True when a resume names a row the recorded manifest neither stages nor owes, so an
+    `already_staged` reply would leave it without an executor; the caller restages instead.
+    A gated manifest withholds the resume rows wholesale and never restages."""
+    if not only_rows:
+        return False
+    manifest = _recorded_manifest(record)
+    if manifest is None or manifest.get("gated"):
+        return False
+    covered = {str(r.get("id")) for key in ("rows", "owed") for r in manifest.get(key) or () if isinstance(r, Mapping)}
+    return any(str(i) not in covered for i in only_rows)
+
+
 def _stage_write_baseline(
     root: Path, rows: Sequence[ManifestRow], record: Optional[Path] = None, sizing_rel: Optional[str] = None
 ) -> dict:
@@ -3140,7 +3153,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
     if prior_dir is not None:
         with leg("preflight"):
             recorded = ask_stage_receipt.landed(prior_dir, digest, spine_sha)
-            if recorded is not None:
+            if recorded is not None and not _recorded_misses_resume_rows(prior_dir, params.get("only_rows")):
                 again = {"manifest_handle": recorded, ask_stage_receipt.ALREADY_STAGED_KEY: True}
                 _, again_twin = reply_sidecar.handle_and_twin(root, prior_dir / "manifest.json")
                 if again_twin is not None:

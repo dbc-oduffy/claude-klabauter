@@ -30,8 +30,10 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(user_home))
     monkeypatch.setenv("USERPROFILE", str(user_home))
     monkeypatch.delenv("npm_config_prefix", raising=False)
+    monkeypatch.chdir(tmp_path)
     for fam in ("CODEX", "AGY", "GROK"):
         monkeypatch.delenv(f"COORDINATOR_{fam}_CLI", raising=False)
+    (tmp_path / "settings" / "unimatrix" / "agy-plugin" / "skills").mkdir(parents=True)  # agy_grant_guard grants an existing dir only
     return tmp_path / "settings"
 
 
@@ -66,9 +68,14 @@ def test_grok_workers_may_run_only_named_engine_executables() -> None:
     assert all(str(bin_dir) in r for r in allows)
 
 
-def _agy_head(cwd=None) -> list[str]:
+def _agy_skills(settings_home=None) -> str:
+    return str(Path(settings_home or os.environ[g.SETTINGS_HOME_KEY])
+               / "unimatrix" / "agy-plugin" / "skills")
+
+
+def _agy_head(cwd=None, settings_home=None) -> list[str]:
     return ["--add-dir", cwd or os.getcwd(), "--add-dir", str(Path.home() / ".coordinator"),
-            "--mode", "accept-edits"]
+            "--add-dir", _agy_skills(settings_home), "--mode", "accept-edits"]
 
 
 def _run(family="codex", env=None, **kw):
@@ -599,8 +606,29 @@ def test_agy_strips_the_bypass_flag_and_keeps_a_callers_mode(capsys) -> None:
 
 def test_agy_dirs_already_passed_are_not_doubled(capsys) -> None:
     mine = str(Path.home() / ".coordinator")
-    argv = _agy_prepare(capsys, ["--add-dir", mine, "--add-dir", "w"], cwd="w")
-    assert argv.count("--add-dir") == 2 and argv.count(mine) == 1 and argv.count("w") == 1
+    skills = _agy_skills()
+    argv = _agy_prepare(capsys, ["--add-dir", mine, "--add-dir", "w", "--add-dir", skills], cwd="w")
+    assert argv.count("--add-dir") == 3 and argv.count(mine) == 1 and argv.count("w") == 1
+    assert argv.count(skills) == 1
+
+
+def test_agy_grants_the_generated_plugin_skills_dir_and_nothing_wider(home, capsys) -> None:
+    env = {"PATH": "x", g.SETTINGS_HOME_KEY: str(home)}
+    rc = hel.launch("agy", [], which=lambda n: None, environ=env, platform="linux", prepare_only=True,
+                    native_executable="agy", session_id="s1", cwd="w")
+    assert rc == 0
+    argv = json.loads(capsys.readouterr().out)["argv"]
+    granted = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--add-dir"]
+    skills = home / "unimatrix" / "agy-plugin" / "skills"
+    assert granted.count(str(skills)) == 1
+    for wider in (home, home / "unimatrix", home / "unimatrix" / "agy-plugin"):
+        assert str(wider) not in granted
+
+    def covered(path: Path) -> bool:
+        return any(path == Path(d) or Path(d) in path.parents for d in granted)
+
+    assert covered(skills / "sizing" / "SKILL.md")
+    assert not covered(home / "unimatrix" / "agy-plugin" / "other.txt")
 
 
 @pytest.mark.parametrize("platform", ["linux", "win32"])
@@ -649,3 +677,42 @@ def test_codex_cwd_becomes_the_working_dir_flag() -> None:
 def test_codex_caller_working_dir_flag_wins_over_cwd() -> None:
     rc, calls, _ = _run("codex", env={"PATH": "x"}, extra=["exec", "-C", "mine"], cwd="repo/sub")
     assert rc == 0 and calls[0][1] == ["/bin/codex", "exec", *_add_dir(), "-C", "mine"]
+
+
+def test_codex_launch_precreates_scratch_in_the_cwd_before_the_child_starts(tmp_path: Path) -> None:
+    work = tmp_path / "fixture"
+    work.mkdir()
+    seen = []
+    rc = hel.launch("codex", ["exec", "x"], which=lambda n: f"/bin/{n}", environ={"PATH": "x"}, platform="linux",
+                    cwd=str(work), open_runs=lambda root, sid: [],
+                    spawn=lambda cmd, env: seen.append((work / "scratch" / "warp").is_dir()) or 0)
+    assert rc == 0 and seen == [True]
+
+
+def test_codex_prepare_only_creates_scratch_for_the_caller_working_dir_flag(tmp_path: Path, capsys) -> None:
+    work = tmp_path / "mine"
+    work.mkdir()
+    rc = hel.launch("codex", ["exec", "-C", str(work)], which=lambda n: f"/bin/{n}", environ={"PATH": "x"},
+                    platform="linux", prepare_only=True)
+    capsys.readouterr()
+    assert rc == 0 and (work / "scratch" / "warp").is_dir()
+
+
+def test_codex_launch_refuses_naming_path_and_principal_when_scratch_cannot_be_made(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    work = tmp_path / "fixture"
+    work.mkdir()
+    real_mkdir = Path.mkdir
+
+    def deny(self, *a, **kw):
+        if self.name in ("warp", "scratch"):
+            raise PermissionError(5, "Access is denied")
+        return real_mkdir(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "mkdir", deny)
+    calls = []
+    rc = hel.launch("codex", [], which=lambda n: f"/bin/{n}", environ={"PATH": "x"}, platform="linux",
+                    cwd=str(work), spawn=lambda *a: calls.append(a))
+    err = capsys.readouterr().err
+    assert rc == hel.REFUSED and not calls
+    assert "refused" in err and str(work / "scratch") in err and "CodexSandboxUsers" in err

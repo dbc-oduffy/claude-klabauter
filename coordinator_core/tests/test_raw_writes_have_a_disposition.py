@@ -186,7 +186,7 @@ from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import pytest
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -455,6 +455,8 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/ask_fanout.py': ('claims-explicitly', 'ask records staged exclusive-create under .coordinator-local/fanout-staging, published by os.replace with ledger.claim and declare_write: _stage_text, the publish loop'),
     'coordinator_core/ops/dispatch_emit/tranche_chain.py': ('in-repo-non-state', 'zero-byte O_EXCL tranche-chain.claim marker in the run record dir (ask_contract.record_dir) so a re-fired terminal commit spawns the next part once: _claim_chain'),
     'coordinator_core/warm/dispatch_ack.py': ('outside-repo', 'per-key <key>.outcome.json (tmp + os.replace, first writer wins) under the ack-journal dir beside the engine service files (journal_dir_under), never the repo: record_outcome'),
+    'coordinator_core/ops/dispatch_emit/halted_withheld_index.py': ('ignored-target', 'per-run halted-withheld index files and the sentinel via atomic_write_bytes / unlink under the gitignored engine index dir, never a tracked state/ record: _write_run, remove_run'),
+    'coordinator_core/ops/repo_byproduct_prune.py': ('ignored-target', 'deletes only paths repo_byproduct_policy.CATEGORIES declares as gitignored byproducts (scratch, subagent-share, aged record dirs), lock unlink included; writes nothing: prune'),
     'coordinator_core/ops/dispatch_emit/live_run_index.py': ('outside-repo', 'O_EXCL claim markers (os.open, os.write) under the settings-home engine record dir coordinator-warp-live-claims, never the repo; the index json goes through halt_resume_record.bounded_write: _claim_markers'),
     'coordinator_core/ops/dispatch_emit/land_run_grind.py': ('in-repo-non-state', 'undo of grind_rows close for an unlanded row: restores the source row byte-identical to its HEAD blob (write_bytes) and unlinks the untracked archive copy, so the tree returns to HEAD for that row rather than recording new state: _reopen_held_rows'),
     'coordinator_core/ops/dispatch_emit/land_leg_record.py': ('in-repo-non-state', 'land-legs.json via tmp + os.replace under the tracked record dir state/warp/<run_id>/: write'),

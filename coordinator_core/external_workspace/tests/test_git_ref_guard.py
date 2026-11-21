@@ -14,7 +14,7 @@ from coordinator_core import machine_resolver as mr
 from coordinator_core.external_workspace import git_ref_guard as g
 from coordinator_core.external_workspace import vcs_guard_contract as c
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _IDENT = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]

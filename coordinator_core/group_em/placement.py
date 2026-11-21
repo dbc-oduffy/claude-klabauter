@@ -2,8 +2,10 @@
 
 A placement is ``<box root>/state/group-em/box/placements/<safe run>.json``. Launching is not here:
 ``read_intake`` is the seam the target box's launcher polls. Requirement keys: ``min_<k>`` is a
-numeric floor on capability ``<k>`` (``min_ram_mb``); any other key is equality on capability
-``<k>`` (``os``). Leaf over ``box_registry``; no spawns, no raise.
+numeric floor on capability ``<k>`` (``min_ram_mb``, or ``min_free_<axis>`` on measured free
+headroom from ``sample_capability``); ``os`` matches a name or a list by case-insensitive
+membership; any other key is equality. ``candidates`` lists boxes that can run a job type now
+from their capacity samples. Leaf over ``box_registry`` and the capacity modules; no spawns, no raise.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
-from coordinator_core.group_em import box_registry
+from coordinator_core.group_em import box_registry, capacity_admit, capacity_record, job_peaks
 
 SCHEMA_VERSION = 1
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
@@ -36,16 +38,96 @@ def _num(value: object) -> Optional[float]:
     return float(value)
 
 
+def _os_match(have: object, want: object) -> bool:
+    wanted = want if isinstance(want, (list, tuple, set, frozenset)) else [want]
+    return isinstance(have, str) and have.casefold() in {w.casefold() for w in wanted if isinstance(w, str)}
+
+
 def satisfies(capability: dict, requirement: dict) -> bool:
     """True when ``capability`` meets every key of ``requirement`` (see module doc for key forms)."""
     for key, want in (requirement or {}).items():
-        if key.startswith("min_"):
+        if key == "os":
+            if not _os_match(capability.get("os"), want):
+                return False
+        elif key.startswith("min_"):
             have, floor = _num(capability.get(key[4:])), _num(want)
             if have is None or floor is None or have < floor:
                 return False
         elif capability.get(key) != want:
             return False
     return True
+
+
+def sample_capability(sample: dict, held: Optional[list] = None, now: Optional[float] = None) -> dict:
+    """A capability dict read off a capacity sample: ``os``, ``arch`` and measured free headroom
+    ``free_vram_mib``, ``free_ram_mb``, ``free_cores`` (held grants subtracted; None when unmeasured),
+    so ``min_free_<axis>`` floors apply to it through ``satisfies``."""
+    free = capacity_admit.headroom(sample, capacity_admit.live_held(list(held or []), sample, time.time() if now is None else now), now)
+    return {
+        "os": sample.get("os"),
+        "arch": sample.get("arch"),
+        "free_vram_mib": free["vram_mib"],
+        "free_ram_mb": free["ram_mb"],
+        "free_cores": free["cores"],
+    }
+
+
+def candidates(
+    job_type: str,
+    os: object = None,
+    directory: Optional[Path] = None,
+    home: Optional[Path] = None,
+    declared: Optional[dict] = None,
+    requirement: Optional[dict] = None,
+    now: Optional[float] = None,
+) -> list[dict]:
+    """Every registered box (plus the ``home`` box) that can run ``job_type`` now, most headroom first.
+
+    A box is capable when its capacity sample is fresh, its platform matches ``os`` (a name or a
+    list), ``requirement`` (``min_free_<axis>`` and any other key, via ``satisfies``) holds, and
+    ``capacity_admit.decide`` grants the job's measured peak (``declared`` only when none is
+    measured) over its measured headroom less grants not yet running. Rows are
+    ``{box_id, os, headroom, gpu_index, peak_basis}``; ordered by free vram, ram, then cores,
+    descending, ties by box id. A box with no fresh sample is never listed. Never raises.
+    """
+    try:
+        now = time.time() if now is None else now
+        peak = job_peaks.peak(job_type, home)
+        boxes = [dict(b) for b in box_registry.read_boxes(directory)]
+        if home is not None and not any(b["box_id"] == box_registry.local_box_id(home) for b in boxes):
+            boxes.append({"box_id": box_registry.local_box_id(home), "root": str(home)})
+        want = dict(requirement or {})
+        if os is not None:
+            want["os"] = os
+        out: list[dict] = []
+        for box in boxes:
+            sample = capacity_record.read(box, now)
+            if sample.get("stale") is not False:
+                continue
+            held = capacity_admit.read_held(sample, Path(box["root"]), now)
+            if not satisfies(sample_capability(sample, held, now), want):
+                continue
+            verdict = capacity_admit.decide(sample, peak, held, declared, now)
+            if verdict["grant"]:
+                out.append(
+                    {
+                        "box_id": box["box_id"],
+                        "os": sample.get("os"),
+                        "headroom": verdict["headroom"],
+                        "gpu_index": verdict["gpu_index"],
+                        "peak_basis": verdict["peak_basis"],
+                    }
+                )
+
+        def _key(row: dict) -> tuple:
+            h = row["headroom"]
+            return tuple(-(h[a] if h[a] is not None else float("-inf")) for a in ("vram_mib", "ram_mb", "cores")) + (
+                row["box_id"],
+            )
+
+        return sorted(out, key=_key)
+    except Exception:  # contract: refuse, never raise
+        return []
 
 
 def _held_by_other_run(path: Path, run: str) -> bool:

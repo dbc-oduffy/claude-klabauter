@@ -294,7 +294,8 @@ def write_halt_marker(
         ), True
     if accepted:
         payload[HALT_NEXT_ACTION_FIELD] = next_action
-    if run_base_sha and _SHA40.fullmatch(run_base_sha):
+    run_base_sha = _earliest_run_base(Path(record_dir), run_base_sha)
+    if run_base_sha:
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
     from coordinator_core.ops.dispatch_emit import halt_resume_record
 
@@ -313,6 +314,26 @@ def write_halt_marker(
     if sizing_rel:
         _schedule_resume_build(Path(record_dir))
     return target
+
+
+def _earliest_run_base(record_dir: Path, given: Optional[str]) -> Optional[str]:
+    """The run's first base, never a later one: the write-once run-base file, else the base this run's
+    earlier halt marker recorded, else `given` (40-hex only). A re-halt's `given` is the then-HEAD, which is
+    the run's own earlier halt-record commit. A base resolved without the file is written back to it when the run's scratch dir exists (never created here)."""
+    root = _target_root(record_dir)
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import recorded_run_base, run_base_rel
+
+    recorded = recorded_run_base(root, record_dir.name) if root is not None else None
+    if recorded and _SHA40.fullmatch(recorded):
+        return recorded
+    base = halted_run_base(record_dir) or (given if given and _SHA40.fullmatch(given) else None)
+    if base and root is not None:
+        try:
+            with open(root / run_base_rel(record_dir.name), "x", encoding="utf-8", newline="\n") as fh:
+                fh.write(base + "\n")
+        except OSError:
+            pass
+    return base
 
 
 def _prior_live_breakage(record_dir: Path):
@@ -524,6 +545,10 @@ def halted_run_named(repo_root: Path, run_id: object, sizing_rel: str) -> Option
         return None
     rd = Path(repo_root) / RECORD_DIR_ROOT / run_id
     marker = _read(rd)
+    if marker is not None and marker.get("status") == STATUS_RESUMED:
+        # An explicit name is the caller's claim the run is theirs to resume; a resumer that is gone holds nothing.
+        if rehalt_if_resumer_dead(repo_root, run_id, "resumer fire ended with no terminal marker"):
+            marker = _read(rd)
     if marker is None or marker.get("status") != STATUS_HALTED:
         return None
     norm = _norm(sizing_rel)
@@ -911,6 +936,66 @@ def mark_stall_cleared(record_dir: Path, evidence: dict) -> bool:
     _write(Path(record_dir), {**marker, "status": STATUS_RESUMED, STALL_CLEARED_FIELD: evidence})
     _index_call("remove_run", record_dir)
     stamp_run_stage_at(Path(record_dir), "staged")
+    return True
+
+
+HALT_FIRE_ENDED = "fire_ended"
+_MAX_FIRE_RECORDS = 64
+
+
+def fire_live(repo_root: Path, run_id: str) -> bool:
+    """True when a headless fire record naming `run_id` is pending or running with a live driver pid.
+
+    One registry listing, at most `_MAX_FIRE_RECORDS` small reads; a registry that cannot be read counts as
+    live (unknown is never a verdict that strands a run). Never spawns."""
+    from coordinator_core.session_hub_path import hub_for_common
+
+    try:
+        registry = hub_for_common(Path(repo_root) / ".git") / "workflow-fires"
+        with os.scandir(registry) as it:
+            entries = sorted(
+                ((e.stat().st_mtime, e.path) for e in it if e.name.endswith(".json") and e.is_file()), reverse=True
+            )
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    for _, path in entries[:_MAX_FIRE_RECORDS]:
+        try:
+            record = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict) or record.get("run_id") != run_id:
+            continue
+        if record.get("state") not in ("pending", "running"):
+            continue
+        from coordinator_core.ops.workflow_fire.fire import _pid_alive
+
+        if record.get("state") == "pending" or _pid_alive(record.get("pid")):
+            return True
+    return False
+
+
+def rehalt_if_resumer_dead(repo_root: Path, run_id: str, reason: str) -> bool:
+    """Rewrite a `resumed` marker as `halted` (`fire_ended`) when no live fire executes the run; False and no
+    write otherwise.
+
+    `resumed` means a resumer owns the run. When that fire ended without writing a terminal marker (a
+    timeout kill, a crashed runtime) nothing else flips it, and every halted-only lookup then misses the run
+    and mints a fresh one over its kept work. Called by the headless executor when its fire fails, and by
+    `halted_run_named` for a run whose fire died before this writer existed."""
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        return False
+    rd = Path(repo_root) / RECORD_DIR_ROOT / run_id
+    marker = _read(rd)
+    if marker is None or marker.get("status") != STATUS_RESUMED or fire_live(repo_root, run_id):
+        return False
+    sizing_rel = marker.get("sizing_rel") if isinstance(marker.get("sizing_rel"), str) else None
+    _write(rd, {**marker, "status": STATUS_HALTED, "halted": HALT_FIRE_ENDED, HALT_REASON_FIELD: reason[:500]})
+    _index_call("add_run", rd, halted_withheld(rd), sizing_rel=sizing_rel)
+    stamp_run_stage_at(rd, "halted")
+    if sizing_rel:
+        _schedule_resume_build(rd)
     return True
 
 

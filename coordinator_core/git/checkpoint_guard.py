@@ -215,6 +215,17 @@ def _reachable(common_dir: Path, start: str, stop: Optional[str] = None) -> List
     return seen
 
 
+def _is_own_halt_record(message: str, base: str) -> bool:
+    """True for the engine's `warp: record halted ...` commit whose `Checkpoint-Run-Halted:`
+    trailers name this run's base. That trailer is engine-written bookkeeping for the run, so
+    the commit is the run's own; a halt subject without the base trailer stays foreign."""
+    if not message.startswith("warp: record halted "):
+        return False
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_bases
+
+    return any(_is_base(h, base) for h in run_halted_bases(message))
+
+
 def _moved_outside_run(
     common_dir: Path, head: Optional[str], base: str, paths: Sequence[str], plan: str
 ) -> List[str]:
@@ -236,8 +247,9 @@ def _moved_outside_run(
         if meta is None:
             continue
         parents = meta.get("parents") or []
-        msg_subject = (meta.get("message") or "").split("\n", 1)[0]
-        if not parents or msg_subject.startswith("checkpoint("):
+        message = meta.get("message") or ""
+        msg_subject = message.split("\n", 1)[0]
+        if not parents or msg_subject.startswith("checkpoint(") or _is_own_halt_record(message, base):
             continue
         for p in paths:
             blob = _blob_at_commit(common_dir, sha, p)

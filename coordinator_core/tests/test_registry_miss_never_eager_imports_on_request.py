@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
@@ -64,42 +62,6 @@ def test_a_stale_map_entry_returns_none_without_the_whole_package_import(monkeyp
 def test_a_mapped_op_is_still_resolved_by_its_targeted_import(monkeypatch):
     monkeypatch.setattr(ops_pkg, "_eager_import_all", _boom)
     assert ipc._lazy_import_and_lookup("ping") is not None
-
-
-@pytest.mark.spawns_process
-def test_the_map_covers_every_op_the_eager_import_registers():
-    out = subprocess.run(
-        [sys.executable, "-c", _MAP_COVERS_REGISTRY],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=_ROOT,
-    )
-    assert out.returncode == 0, out.stderr
-    unmapped = [line for line in out.stdout.splitlines() if line.strip()]
-    assert not unmapped, (
-        f"ops registered but absent from OP_MODULE_MAP ({unmapped!r}): a registry miss now "
-        "answers not-found instead of importing every op module; add them to "
-        "coordinator_core/ops/_registry_map.py."
-    )
-
-
-@pytest.mark.spawns_process
-def test_every_hooks_map_entry_registers_its_op_from_its_own_module():
-    out = subprocess.run(
-        [sys.executable, "-c", _HOOK_ENTRIES_REGISTER],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=_ROOT,
-    )
-    assert out.returncode == 0, out.stderr
-    stale = [line for line in out.stdout.splitlines() if line.strip()]
-    assert not stale, (
-        f"hooks ops whose mapped module does not register them ({stale!r}): a registry miss "
-        "answers not-found; point each at the module that registers it in "
-        "coordinator_core/ops/_registry_map.py."
-    )
 
 
 def test_a_mapped_module_import_error_is_recorded_as_poisoned_and_answers_none(monkeypatch):

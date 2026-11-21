@@ -72,7 +72,9 @@ def test_emit_chain_prewarm_loads_the_lazy_emit_imports():
         "import sys, coordinator_core.warm.server as server;"
         "server._prewarm_emit_chain();"
         "print(all(m in sys.modules for m in ('coordinator_core.ops.dispatch_emit.plan_blitz_args',"
-        " 'coordinator_core.ops.dispatch_emit.sizing_fire', 'coordinator_core.hooks.submit_engine_ask')))"
+        " 'coordinator_core.ops.dispatch_emit.sizing_fire', 'coordinator_core.hooks.submit_engine_ask',"
+        " 'coordinator_core.backlog_grind_assemble', 'coordinator_core.ops.test_leg_run',"
+        " 'coordinator_core.ops.review_reverify_probe', 'coordinator_core.ops.ceremony.commit_v2')))"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],

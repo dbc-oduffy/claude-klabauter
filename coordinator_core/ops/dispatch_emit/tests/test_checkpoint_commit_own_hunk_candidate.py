@@ -14,7 +14,7 @@ from coordinator_core.ops.dispatch_emit import stranded_sibling, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 X = "pkg/shared.py"
 RUN_A = "ask-20261114T100000-aaaaaa"

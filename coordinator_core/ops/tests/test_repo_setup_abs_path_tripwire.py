@@ -17,6 +17,8 @@ from coordinator_core.ops import repo_setup as mod
 from coordinator_core.ops.session.guard_concrete_path_citations import scan_repo
 from coordinator_core.ops.tests.test_repo_setup import _git_init, sandbox  # noqa: F401  (fixture)
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 TRIPWIRE = "test_no_absolute_path_literals.py"
 CODE_REL = "src/app.py"
 DOC_REL = "docs/notes.md"

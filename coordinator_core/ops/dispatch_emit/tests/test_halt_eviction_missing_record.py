@@ -10,6 +10,8 @@ from coordinator_core.ops.dispatch_emit.halted_record_eviction import plan_tree_
 from pathlib import Path
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 REC = "state/warp/run-x"
 BAD = b"broken\n"
 
@@ -23,7 +25,7 @@ def _plan(tmp_path, monkeypatch):
     _stage_run(root, "r1", {"mod.py": None})
     paths: list = ["other.txt"]
     ev = plan_tree_eviction(
-        root, REC, ["mod.py"], {"mod.py"}, ["mod.py"], {}, paths, run_id="r1",
+        root, REC, ["mod.py"], {"mod.py"}, ["mod.py"], {}, paths, run_id="r1", python_dirt=set(),
     )
     return root, ev, paths
 
@@ -61,3 +63,18 @@ def test_written_record_paths_stay(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert (root / REC / halt_tree_evict.EVICTED_FILE).exists()
     assert f"{REC}/{halt_tree_evict.EVICTED_FILE}" in paths
     assert any(p.startswith(f"{REC}/{halt_tree_evict.BLOBS_DIR}/") for p in paths)
+
+
+def test_test_infra_failure_halt_parks_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "root"
+    (root / REC).mkdir(parents=True)
+    (root / "mod.py").write_bytes(BAD)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    _stage_run(root, "r1", {"mod.py": None})
+    paths: list = []
+    withheld: dict = {}
+    ev = plan_tree_eviction(
+        root, REC, ["mod.py"], {"mod.py"}, ["mod.py"], withheld, paths, run_id="r1", halt_kind="test_infra_failure",
+    )
+    assert ev is None and paths == [] and withheld == {}
+    assert (root / "mod.py").read_bytes() == BAD

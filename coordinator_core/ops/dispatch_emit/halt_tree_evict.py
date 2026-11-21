@@ -97,8 +97,8 @@ def evict(
     """Copy each path's tree bytes into `record_dir`, write `evicted.json`, and reset only the run's
     own hunks of the tree path to HEAD.
 
-    `units` groups paths that import each other: a refusal of one path refuses every path sharing its
-    unit (`import-linked to <path> (<reason>)`), so the tree never holds half of a cross-file edit.
+    `units` groups paths that import each other. A member that cannot be reset fully to HEAD keeps
+    its unit, including when a splice would retain a foreign import that needs another member's edits.
     Every reset is computed before any byte moves; a refused unit never touches disk.
 
     `head_blobs` maps path to its HEAD bytes, or None when HEAD does not track it (the tree path is
@@ -139,13 +139,13 @@ def evict(
                 continue
         planned[rel] = (data, sha, head, reset)
     for unit in units:
-        culprit = next((p for p in unit if p in refusals and not refusals[p].startswith(_LINKED)), None)
+        culprit = next((p for p in unit if p not in planned or planned[p][3] != planned[p][2]), None)
         if culprit is None:
             continue
+        reason = refusals.setdefault(culprit, "evict refused, tree kept: import unit requires a full reset")
         for p in unit:
-            if p != culprit and p in planned:
-                del planned[p]
-                refusals[p] = f"{_LINKED}{culprit} ({refusals[culprit]})"
+            if planned.pop(p, None) is not None and p != culprit:
+                refusals[p] = f"{_LINKED}{culprit} ({reason})"
     if refused is not None:
         refused.update(refusals)
     for rel, (data, sha, head, reset) in planned.items():

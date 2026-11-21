@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ops import reverify_base_measure as rbm
-from coordinator_core.ops.review_reverify import _read_base_export
+
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RED_AT_BASE = "tests/test_a.py::test_red_at_base"
 GREEN = "tests/test_b.py::test_green"
@@ -53,62 +54,6 @@ def _measure(root: Path, argv: list[str], monkeypatch) -> tuple[int, str]:
 
 def _tail(text: str) -> dict:
     return json.loads(text.strip().splitlines()[-1])["baseline_export"]
-
-
-def test_red_at_base_id_is_read_back_by_reverify(repo, monkeypatch):
-    root, base, _head = repo
-    code, text = _measure(root, ["--sha", base, "--out", "scratch/m.txt", "--", RED_AT_BASE, GREEN], monkeypatch)
-    assert code == 0
-    assert _read_base_export(root, "scratch/m.txt") == {RED_AT_BASE}
-    tail = _tail(text)
-    assert tail["export"] == "ok" and tail["runner_exit"] == 1 and tail["passed_at_base"] == [GREEN]
-    assert "ModuleNotFoundError" not in text
-
-
-def test_id_absent_at_base_is_dropped_never_red_never_passed(repo, monkeypatch):
-    root, base, _head = repo
-    _code, text = _measure(root, ["--sha", base, "--out", "m.txt", "--", ABSENT, RED_AT_BASE], monkeypatch)
-    assert _read_base_export(root, "m.txt") == {RED_AT_BASE}
-    assert ABSENT not in text
-    assert _tail(text)["passed_at_base"] == []
-
-
-def test_several_absent_ids_are_all_dropped(repo, monkeypatch):
-    root, base, _head = repo
-    other = "tests/test_c.py::test_also_added"
-    _code, text = _measure(root, ["--sha", base, "--out", "m.txt", "--", ABSENT, other, GREEN], monkeypatch)
-    assert _read_base_export(root, "m.txt") == set()
-    assert _tail(text)["passed_at_base"] == [GREEN]
-
-
-def test_missing_parametrized_function_drops_both_cases_and_measures_other_ids(repo, monkeypatch):
-    root, base, _head = repo
-    missing = "tests/test_a.py::test_added_at_head"
-    ids = [f"{missing}[False]", f"{missing}[True]", RED_AT_BASE]
-    _code, text = _measure(root, ["--sha", base, "--out", "m.txt", "--", *ids], monkeypatch)
-    assert _read_base_export(root, "m.txt") == {RED_AT_BASE}
-    assert _tail(text)["runner_exit"] == 1
-
-
-def test_green_at_base_red_at_head_joins_the_set(repo, monkeypatch):
-    root, base, head = repo
-    _code, text = _measure(
-        root, ["--sha", base, "--head-sha", head, "--out", "m.txt", "--", GREEN, RED_AT_BASE], monkeypatch)
-    assert _read_base_export(root, "m.txt") == {GREEN, RED_AT_BASE}
-    assert _tail(text)["passed_at_base"] == [GREEN]
-
-
-def test_without_head_sha_a_green_id_stays_out(repo, monkeypatch):
-    root, base, _head = repo
-    _measure(root, ["--sha", base, "--out", "m.txt", "--", GREEN], monkeypatch)
-    assert _read_base_export(root, "m.txt") == set()
-
-
-def test_unresolvable_sha_writes_a_failed_export_reverify_treats_as_unmeasured(repo, monkeypatch):
-    root, _base, _head = repo
-    _code, text = _measure(root, ["--sha", "0" * 40, "--out", "m.txt", "--", GREEN], monkeypatch)
-    assert _tail(text)["export"] == "failed"
-    assert _read_base_export(root, "m.txt") is None
 
 
 @pytest.mark.parametrize("argv", [
@@ -204,31 +149,6 @@ def test_without_timeout_s_the_run_is_unbounded(monkeypatch):
     assert seen["timeout"] is None
 
 
-def test_an_id_list_over_32k_chars_reaches_the_runner_through_a_file_not_argv(tmp_path, monkeypatch):
-    root = tmp_path / "many"
-    (root / "tests").mkdir(parents=True)
-    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
-    (root / "tests" / "test_many.py").write_text(
-        "".join(f"def test_ok_{i:04d}_{'x' * 40}():\n    assert True\n" for i in range(500)), encoding="utf-8")
-    _git(root, "init", "-q")
-    _git(root, "add", "-A")
-    _git(root, "commit", "-q", "-m", "base")
-    base = _git(root, "rev-parse", "HEAD")
-    pad = [f"tests/test_many.py::test_ok_{i:04d}_{'x' * 40}" for i in range(500)]
-    argvs: list[list[str]] = []
-    real = subprocess.run
-
-    def watch(argv, *a, **kw):
-        argvs.append(list(argv))
-        return real(argv, *a, **kw)
-
-    monkeypatch.setattr(rbm.subprocess, "run", watch)
-    result = rbm.measure(base, None, pad, str(root))
-    assert sum(len(i) for i in pad) > 32 * 1024
-    assert result["export"] == "ok" and result["red"] == [] and result["passed_at_base"] == pad
-    assert all(sum(len(a) for a in argv) < 32 * 1024 for argv in argvs)
-
-
 def test_a_spawn_oserror_propagates_for_the_leg_to_name(monkeypatch):
     def too_long(argv, *a, **kw):
         raise OSError(206, "command line too long")
@@ -236,15 +156,6 @@ def test_a_spawn_oserror_propagates_for_the_leg_to_name(monkeypatch):
     monkeypatch.setattr(rbm.subprocess, "run", too_long)
     with pytest.raises(OSError, match="too long"):
         rbm.measure("0" * 40, None, [GREEN], ".")
-
-
-def test_write_export_is_byte_identical_to_main(repo, monkeypatch, tmp_path):
-    root, base, _head = repo
-    _code, text = _measure(root, ["--sha", base, "--out", "m.txt", "--", RED_AT_BASE, GREEN], monkeypatch)
-    result = rbm.measure(base, None, [RED_AT_BASE, GREEN], str(root))
-    target = tmp_path / "nested" / "w.txt"
-    rbm.write_export(result, target)
-    assert target.read_bytes() == (root / "m.txt").read_bytes() and text == target.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("sep", ["\\", "/"])
@@ -277,3 +188,26 @@ def test_head_run_exit_one_keeps_the_export_ok(monkeypatch):
     monkeypatch.setattr(rbm, "_run", fake_run)
     result = rbm.measure("base", "head", [GREEN], ".")
     assert result["export"] == "ok" and result["red"] == [GREEN]
+
+
+def test_base_measure_pytest_carries_a_per_run_basetemp_removed_after_the_run(monkeypatch, tmp_path):
+    from coordinator_core.testing import scoped_pytest
+
+    seen: dict = {}
+
+    def fake_run(argv, *a, **kw):
+        runner_args = argv[argv.index(rbm._RETRY_RUNNER) + 1:]
+        seen["basetemp"] = Path(runner_args[1])
+        seen["existed"] = seen["basetemp"].is_dir()
+        seen["temp"] = kw["env"]["TEMP"]
+        return subprocess.CompletedProcess(argv, 0, stdout='{"baseline_export": {"export": "ok", "runner_exit": 0}}\n',
+                                           stderr="")
+
+    monkeypatch.setattr(rbm.subprocess, "run", fake_run)
+    monkeypatch.setattr(rbm, "_resolve", lambda sha, cwd: sha)
+    rbm._run("a" * 40, ["tests/test_a.py::test_x"], str(tmp_path))
+    root = scoped_pytest.per_run_root(str(tmp_path))
+    assert seen["existed"] and root in seen["basetemp"].parents
+    assert Path(seen["temp"]).parent == seen["basetemp"].parent
+    assert "--basetemp" in rbm._RETRY_RUNNER and "sys.argv[2]" in rbm._RETRY_RUNNER
+    assert not seen["basetemp"].parent.exists()

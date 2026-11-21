@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
@@ -39,6 +40,18 @@ def test_resolver_and_claims_see_sidecar_only_delivery(tmp_path):
     assert path == run and block["verdict"] == "FAIL"
     _, claims = rd.prior_unbacked_claims(run, repo)
     assert claims == [{"claim": "c", "anchor": "a"}]
+
+
+@pytest.mark.parametrize("home", ["docs/plans", "docs/plans/2026-11"])
+def test_row_evidence_path_resolves_a_flat_cite_to_flat_or_sharded_leaf(tmp_path, home):
+    cite = "docs/plans/2026-11-20-x.md"
+    assert rd._row_evidence_path(cite, tmp_path) is None
+    (tmp_path / home).mkdir(parents=True)
+    (tmp_path / home / "2026-11-20-x.md").write_text("plan", encoding="utf-8")
+    (tmp_path / home / "2026-11-20-x.evidence.yaml").write_text(
+        "rows:\n  C1:\n    - {recorded_at: t, text: e}\n", encoding="utf-8"
+    )
+    assert rd._row_evidence_path(cite, tmp_path) == f"{home}/2026-11-20-x.evidence.yaml"
 
 
 def test_load_delivery_reads_delivery_verdict_alias(tmp_path):

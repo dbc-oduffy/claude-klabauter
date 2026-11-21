@@ -13,6 +13,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_peer_hunk_gate import (  # no
 )
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 BASE = "".join(f"line {i}\n" for i in range(1, 21))
 OWN_EDIT = BASE.replace("line 3\n", "line 3 own\n")
 PEER_EDIT = OWN_EDIT.replace("line 18\n", "line 18 peer\n")

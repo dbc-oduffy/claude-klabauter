@@ -11,7 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.ops.dispatch_emit.landing_retest import fresh_verdict_path
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN_ID = "ask-20261113T000000-abc123"
 GUARD_FILE = "tests/test_guard.py"

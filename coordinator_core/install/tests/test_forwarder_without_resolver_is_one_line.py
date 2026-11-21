@@ -7,7 +7,7 @@ import pytest
 
 from coordinator_core.install import substrate
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def test_missing_resolver_is_a_one_line_exit_127(tmp_path: Path) -> None:

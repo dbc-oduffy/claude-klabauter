@@ -155,8 +155,9 @@ def _read_wiki_entry(
     identity_field = entry_fields[0].field if entry_fields else None
     result: "dict[str, str]" = {}
     for i, ef in enumerate(entry_fields):
-        if ef.field in fm and fm[ef.field] is not None:
-            result[ef.field] = coerce_to_string(fm[ef.field])
+        value = fm.get(ef.source_key(fm))
+        if value is not None:
+            result[ef.field] = coerce_to_string(value)
             continue
         if i == 0 and ef.field == identity_field:
             heading = _first_heading(body)
@@ -183,8 +184,9 @@ def _read_plugin_manifest(
 
     result: "dict[str, str]" = {}
     for ef in entry_fields:
-        if ef.field in fm and fm[ef.field] is not None:
-            result[ef.field] = coerce_to_string(fm[ef.field])
+        value = fm.get(ef.source_key(fm))
+        if value is not None:
+            result[ef.field] = coerce_to_string(value)
             continue
         raise MissingEntryFieldError(
             f"{file_path}: missing declared field {ef.field!r} "

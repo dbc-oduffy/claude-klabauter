@@ -150,7 +150,7 @@ from coordinator_core.cartography._skip_dirs import SKIP_DIR_NAMES
 from coordinator_core.docindex.compare import compare
 from coordinator_core.docindex.entry_kinds import read_entry
 from coordinator_core.docindex.render import render
-from coordinator_core.docindex.spec import IndexSpec, IndexSpecError, parse_index_spec
+from coordinator_core.docindex.spec import EntryField, IndexSpec, IndexSpecError, parse_index_spec
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ipc import register_op
 
@@ -306,12 +306,13 @@ def _parse_index(repo_root: Path, rel_path: str) -> IndexSpec:
     return parse_index_spec(split.fm_text)
 
 
-def _raw_entry_values(entry_path: Path, fields: set) -> dict:
+def _raw_entry_values(entry_path: Path, fields: tuple[EntryField, ...]) -> dict:
     """Raw, pre-coercion frontmatter values for the given field names — the
     render.py "ENTRY TYPE CONTRACT" reconciliation this module owns (see
     module docstring)."""
     fm = _read_leading_frontmatter(entry_path) or {}
-    return {k: v for k, v in fm.items() if k in fields}
+    return {field.field: fm[key] for field in fields
+            if (key := field.source_key(fm)) in fm and fm[key] is not None}
 
 
 def _resolve_one(repo_root: Path, rel_path: str) -> tuple[IndexSpec, dict]:
@@ -329,7 +330,7 @@ def _resolve_one(repo_root: Path, rel_path: str) -> tuple[IndexSpec, dict]:
         )
         if coerced is None:
             continue
-        raw = _raw_entry_values(entry_path, set(coerced.keys()))
+        raw = _raw_entry_values(entry_path, spec.entry_fields)
         merged = {k: raw.get(k, coerced[k]) for k in coerced}
         entries.append(merged)
 

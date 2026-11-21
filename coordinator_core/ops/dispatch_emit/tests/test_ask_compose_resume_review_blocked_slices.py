@@ -95,7 +95,7 @@ const _calls = [];
 const log = () => {};
 const phase = () => {};
 const parallel = (thunks) => Promise.all(thunks.map((t) => t()));
-const _agentDefsClause = () => '';
+const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => '';
 let _halted = null, _xsTail = false, _noReviewPaths = false, _waveNotRun = [], _reviewPrep = null, _reviewWave = null;
 let _deliveryVerdict = null, _deliveryNotRun = null, _reviewIntegration = null, _integrationNotRun = false, _reviewReverify = null;
 let _footprintReviewed = false, _alreadyDelivered = false, _metBySkipped = false;

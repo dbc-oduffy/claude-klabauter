@@ -9612,8 +9612,7 @@ def main(argv: "list[str] | None" = None) -> int:
                     out_path = os.path.join(_repo_root, out_path)
                     _anchored_repo_root = _repo_root
 
-    if not (args.out and doc_type == "plan"):  # an explicit plan --out is verbatim: sizing `plan:` edges name it
-        out_path = _place_in_output_tree(out_path, explicit=bool(args.out))
+    out_path = _place_in_output_tree(out_path, explicit=bool(args.out))
 
     # Security: containment check — resolve symlinks + '..' and verify the output
     # path falls within an allowed write root before creating any directories or files.

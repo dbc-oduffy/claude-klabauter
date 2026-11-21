@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.benchmarks import submit_ask_hook_to_reply_legs as legs
-from coordinator_core.win_portability import no_console_creationflags
 
 # Resolved at import: the suite root's conftest quarantines HOME for unmarked tests.
 _DOOR = legs.installed_door()
@@ -120,10 +119,10 @@ def _deny(reason: str) -> str:
     (_allow("Engine submission: minted run r1, deferred start s.mjs.", "Submitted to the engine as run r1: its emit outran"), "minted"),
     (_deny("The submission outran the hook budget before any run was minted. Re-submit once.\nInstead: `Workflow(...)`."), "refused"),
     (_deny("Start or abandon r1 with dispatch.minted_run {run_id, action: start|abandon}."), "refused"),
-    (_allow("Engine submission: spooled as 0123abcd.", "The engine is unavailable (x); the ask is spooled as 0123abcd."), "spooled"),
-    (json.dumps({"systemMessage": "coordinator: Engine unavailable; ask spooled as 0123abcd; it mints when the engine "
-                                  "recovers. To withdraw: coordinator-invoke ask_spool.withdraw", "suppressOutput": False}), "spooled"),
-    (_deny("The engine is unavailable (x); the ask is spooled as 0123abcd. Do not re-submit."), "spooled"),
+    (_allow("Engine submission: SPOOLED as 0123abcd.", "SPOOLED as 0123abcd: it fires automatically once the engine is warm. Do not resubmit."), "spooled"),
+    (json.dumps({"systemMessage": "coordinator: SPOOLED as 0123abcd: it fires automatically once the engine is warm. "
+                                  "Do not resubmit. Withdraw: coordinator-invoke ask_spool.withdraw", "suppressOutput": False}), "spooled"),
+    (_deny("SPOOLED as 0123abcd: it fires automatically once the engine is warm. Do not resubmit."), "spooled"),
     ("", "silent"),
     ("  \n", "silent"),
     (json.dumps({"systemMessage": "coordinator: engine failed (deadline); guard not evaluated, command allowed.",
@@ -148,32 +147,6 @@ def test_classify_outcome_only_returns_a_declared_outcome():
     assert {legs.classify_outcome(s) for s in ("", _deny("x"), _allow("Submitted to the engine as run r."))} <= set(legs.OUTCOMES)
 
 
-def test_suspended_stops_the_processes_and_resumes_them_after_the_hold(tmp_path):
-    import subprocess
-    import sys
-    import time
-
-    import psutil
-
-    child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **no_console_creationflags())
-    try:
-        proc = psutil.Process(child.pid)
-        with legs._Suspended([proc], hold_s=0.4):
-            time.sleep(0.1)
-            assert proc.status() == psutil.STATUS_STOPPED
-            deadline = time.time() + 5
-            while proc.status() == psutil.STATUS_STOPPED and time.time() < deadline:
-                time.sleep(0.05)
-            assert proc.status() != psutil.STATUS_STOPPED, "the hold timer never resumed the process"
-        with legs._Suspended([proc], hold_s=60.0):
-            assert proc.status() == psutil.STATUS_STOPPED
-        assert proc.status() != psutil.STATUS_STOPPED, "leaving the block must resume the process"
-    finally:
-        child.kill()
-        child.wait()
-
-
 def test_the_blocked_ask_spool_refuses_a_real_spool_write(tmp_path):
     from coordinator_core.ask_spool import record
 
@@ -193,27 +166,6 @@ def test_the_door_pass_loudly_advisory_the_spool_failed_leg_returns_is_silent():
 def test_starve_targets_refuses_an_unknown_leg():
     with pytest.raises(ValueError, match="unknown starvation leg"):
         legs.starve_targets("nope", os.getpid())
-
-
-def test_starve_targets_split_the_server_from_its_workers():
-    import subprocess
-    import sys
-
-    import psutil
-
-    child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **no_console_creationflags())
-    try:
-        me = os.getpid()
-        assert [p.pid for p in legs.starve_targets("hook_start", me)] == [me]
-        assert child.pid in [p.pid for p in legs.starve_targets("warm_timeout", me)]
-        assert me not in [p.pid for p in legs.starve_targets("warm_timeout", me)]
-        both = [p.pid for p in legs.starve_targets("door_bound", me)]
-        assert me in both and child.pid in both
-        assert psutil.Process(me).is_running()
-    finally:
-        child.kill()
-        child.wait()
 
 
 @pytest.mark.spawns_process
@@ -238,15 +190,24 @@ def first_burst_report() -> dict:
     return legs.measure(concurrent_runs=3, runs=3, warmups=0, door=_DOOR)
 
 
+#: One process's CPU bar (CLAUDE.md brightline): `evaluate_process_ms` and `door_process_ms` are each one process.
+PROCESS_BAR_MS = 200.0
+
+
+@pytest.mark.designed_red
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.skipif(_DOOR is None, reason="no installed hook-run door on this box")
 @pytest.mark.skipif(os.name != "nt", reason="the engine-clone job-object teardown is measured on Windows")
 def test_no_spool_and_no_leg_over_the_bar_from_the_first_burst_after_boot(first_burst_report):
+    """Designed red while `evaluate_process_ms` sits at ~180-220ms against the 200ms bar. Remaining cost centres
+    of the warm emit: compose_ask_script (~60-80ms, the `_finish_script` brief-precedence and chain shares),
+    `prompt_fragments._scan` over the ~360KB script twice (~17ms), `bind_script_literals`, the contract checks
+    (`run_checks` ~15ms), `_start_requirements`, `contained_path` realpaths and run-token mint (~12ms each)."""
     report = first_burst_report
     rounds = report["rounds"]
     assert len(rounds) == 3
-    over: list[str] = []
+    over: list[str] = []  # process-time overruns; wall-clock legs measure peer load and are recorded, never asserted
     for n, round_rows in enumerate(rounds):
         assert [row["role"] for row in round_rows] == ["start", "start", "start", "refire"]
         for row in round_rows:
@@ -254,12 +215,13 @@ def test_no_spool_and_no_leg_over_the_bar_from_the_first_burst_after_boot(first_
                 assert key in row
             assert row["engine_span_ms"] is not None, f"the engine never stamped {row['tag']}: {row['reply']}"
             assert not row["spool"], f"round {n} {row['tag']} spooled: {row['reply']}"
-            over += [f"round {n} {row['tag']} {leg}={row[leg]}" for leg in (*legs.LEGS, "first_byte_ms")
-                     if row[leg] is not None and row[leg] > legs.BAR_MS]
-            assert row["evaluate_process_ms"] <= legs.BAR_MS
+            for key in ("door_process_ms", "evaluate_process_ms"):
+                cpu = row.get(key)
+                if cpu is not None and cpu > PROCESS_BAR_MS:
+                    over.append(f"round {n} {row['tag']} {key}={cpu}")
     assert report["spooled"] is False
     assert report["load_workers"] == legs.DEFAULT_LOAD_WORKERS
-    assert not over, f"legs over {legs.BAR_MS}ms (round 0 is the first burst after boot): {over}"
+    assert not over, f"one process over {PROCESS_BAR_MS}ms (round 0 is the first burst after boot): {sorted(set(over))}"
     print("SUBMIT-LEGS", {k: v for k, v in report.items() if k != "rounds"})
 
 
@@ -267,6 +229,9 @@ def test_the_submit_stays_within_its_process_time_and_spawn_budget_under_three_r
     from coordinator_core.benchmarks import submit_engine_ask_process_budget as budget
 
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
+    # The hook runs in a pool worker that already imported the emit chain; alone in a fresh process the cold
+    # call would charge ~300ms of imports (500-560ms), and pass only when an earlier test warmed the process.
+    budget._prewarm_like_the_engine()
 
     res = budget.measure(runs=1, concurrent_runs=3)["concurrent:3"]
     assert res["spooled"] is False

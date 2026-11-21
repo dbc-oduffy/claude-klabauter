@@ -19,7 +19,7 @@ from coordinator_core.ops.dispatch_emit.write_baseline import (
     unwritten,
 )
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SIZING = "state/sizings/2026-11/a.yaml"
 PATH = "pkg/mod.py"

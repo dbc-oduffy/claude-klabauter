@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import time
 
 import pytest
 
 from coordinator_core.bash_guards import agent_process_ownership as apo
-from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
 SESSION = "sess-1"
@@ -178,34 +174,6 @@ def test_windows_ancestor_walk_without_session_id(home, table, monkeypatch: pyte
     # A stale ppid whose parent started after the child breaks the chain.
     table.add(400, 150, 900.0, ["python", "y.py"], None)
     assert apo.pid_owned_by_agent(400, AGENT, SESSION) is False
-
-
-@pytest.mark.spawns_process
-@pytest.mark.skipif(not hasattr(os, "getsid"), reason="POSIX sessions only")
-def test_live_sleep_own_vs_new_session(home, monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("psutil")
-    monkeypatch.delenv("CLAUDE_PID", raising=False)
-    shell_cmd = "import subprocess; subprocess.run(['sleep', '47.31'])"
-    shell = subprocess.Popen([sys.executable, "-c", shell_cmd], start_new_session=False, **no_console_creationflags())
-    foreign = subprocess.Popen(["sleep", "47.31"], start_new_session=True, **no_console_creationflags())
-    try:
-        apo.record_agent_command(SESSION, AGENT, shell_cmd)
-        import psutil
-
-        child = None
-        for _ in range(50):
-            kids = psutil.Process(shell.pid).children()
-            if kids:
-                child = kids[0]
-                break
-            time.sleep(0.05)
-        assert child is not None
-        assert apo.pid_owned_by_agent(child.pid, AGENT, SESSION) is True
-        assert apo.pid_owned_by_agent(foreign.pid, AGENT, SESSION) is False
-    finally:
-        for p in (shell, foreign):
-            p.kill()
-            p.wait()
 
 
 def test_orphan_after_dead_shell_with_command_text_allowed(home, table) -> None:

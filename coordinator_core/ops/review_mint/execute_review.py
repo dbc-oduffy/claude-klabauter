@@ -1136,11 +1136,15 @@ def _test_leg_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
 
 
 def _test_leg_clause(
-    base_ref: str, export_path: str, json_path: str, *, repo_root: str, shell: str,
+    base_ref: str, export_path: str, json_path: str, repo_root: Optional[str] = None, *, shell: Optional[str] = None,
 ) -> str:
     """Step 2's single engine command running the pytest targets, base measure included; the base
-    arguments are omitted when the base is the unset placeholder."""
-    from coordinator_core.ops.dispatch_emit.ask_compose import engine_module_command
+    arguments are omitted when the base is the unset placeholder. ``repo_root`` pins the leg to the run's
+    repo: the bound engine command starts in the agent's cwd, which for a consumer-repo run can be the
+    engine clone, whose tree lacks the targets. ``shell`` defaults to the host's native shell."""
+    from coordinator_core.ops.dispatch_emit.engine_command import engine_module_command
+
+    shell = shell or ("powershell" if os.name == "nt" else "bash")
     from coordinator_core.ops.test_leg_run import TEST_LEG_MINUTES_BUDGET
 
     base = (
@@ -1148,8 +1152,10 @@ def _test_leg_clause(
         if base_ref == "run_base_sha"
         else f"--base-sha {base_ref} --head-sha HEAD --base-export-out {export_path} "
     )
+    if repo_root:
+        base += f'--repo-root "{Path(repo_root).as_posix()}" '
     command = engine_module_command(
-        "coordinator_core.ops.test_leg_run", repo_root, f"{base}--out {json_path} --",
+        "coordinator_core.ops.test_leg_run", repo_root or ".", f"{base}--out {json_path} --",
         portable=True, shell=shell,
     )
     return (
@@ -1180,11 +1186,11 @@ def _export_rerun_clause(run_id: str, repo_root: Optional[str], export_failing_p
     saving the output to ``export_failing_path``. Empty without a run id, so the prompt stays unchanged."""
     if not run_id or not export_failing_path:
         return ""
-    from coordinator_core.ops.dispatch_emit.ask_compose import _OVERLAY_VERIFY_MODULE, engine_module_command
+    from coordinator_core.ops.dispatch_emit.engine_command import OVERLAY_VERIFY_MODULE, engine_module_command
 
     root = repo_root or "."
     command = engine_module_command(
-        _OVERLAY_VERIFY_MODULE, root, f"--export-run --run-id {run_id} --repo-root {Path(root).as_posix()} --",
+        OVERLAY_VERIFY_MODULE, root, f"--export-run --run-id {run_id} --repo-root {Path(root).as_posix()} --",
         portable=True,
     )
     return (
@@ -1271,8 +1277,8 @@ def _reverify_phase(
     export_path = _base_export_file(run_key, run_id, prep_slice_id)
     base_path_arg = "" if base_ref == "run_base_sha" else f',"base_export_path":"{export_path}"'
     test_leg = _test_leg_clause(
-        base_ref, export_path, _test_leg_file(run_key, run_id, prep_slice_id),
-        repo_root=repo_root or ".", shell="powershell" if os.name == "nt" else "bash",
+        base_ref, export_path, _test_leg_file(run_key, run_id, prep_slice_id), repo_root,
+        shell="powershell" if os.name == "nt" else "bash",
     )
     from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND
 

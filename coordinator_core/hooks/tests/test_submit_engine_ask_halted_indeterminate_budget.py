@@ -369,7 +369,7 @@ def test_overrun_ask_is_spooled_inside_the_budget(tmp_path, monkeypatch, stalls)
     envelope, elapsed = _drive(root, {"ask": "do x"})
     assert elapsed < mod._caller_budget_s()
     hso = envelope["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow" and "spooled as" in hso["additionalContext"]
+    assert hso["permissionDecision"] == "allow" and "SPOOLED as" in hso["additionalContext"]
 
 
 def test_stalled_spool_write_after_the_join_answers_inside_the_budget(tmp_path, monkeypatch, stalls):

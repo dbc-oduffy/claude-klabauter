@@ -27,6 +27,7 @@ from coordinator_core.completion_receipts.test_verdict import (
 )
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git.run import run_git
+from coordinator_core.ops.dispatch_emit.ask_staged_prompts import bind_script_literals
 from coordinator_core.ops.dispatch_emit.delivery_credit import ancestor_refs, coded_row_landings
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.review_mint.compose import _agent_call_literal, with_sidecar_clause
@@ -430,12 +431,16 @@ def _row_evidence_path(plan_path: str, repo_root: Optional[Path]) -> Optional[st
     A claim backed by recorded evidence lives there, outside the plan body and outside any
     diff, so a verifier not pointed at it reports the claim unbacked."""
     from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, has_recorded_evidence
+    from coordinator_core.session.output_tree_layout import plan_sidecar_rel
 
     plan_file = Path(plan_path)
-    if not plan_file.is_absolute() and repo_root is not None:
-        plan_file = Path(repo_root) / plan_file
+    located = repo_root is not None and not plan_file.is_absolute()
+    if located:
+        plan_file = Path(repo_root) / plan_sidecar_rel(str(repo_root), plan_path, ".md")
     if not has_recorded_evidence(plan_file):
         return None
+    if located:
+        return plan_sidecar_rel(str(repo_root), plan_path, ".evidence.yaml")
     return str(Path(plan_path).with_name(evidence_sidecar_path(plan_file).name)).replace("\\", "/")
 
 
@@ -1157,7 +1162,7 @@ def emit_reverify(
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
         diff_sha=diff_sha,
     )
-    Path(out_path).write_text(script, encoding="utf-8", newline="\n")
+    Path(out_path).write_text(bind_script_literals(script), encoding="utf-8", newline="\n")
     from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt
 
     receipt = _write_emission_receipt(
@@ -1397,7 +1402,7 @@ def emit_rejudge(
         repo_root=repo_root,
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
     )
-    Path(out_path).write_text(script, encoding="utf-8", newline="\n")
+    Path(out_path).write_text(bind_script_literals(script), encoding="utf-8", newline="\n")
     receipt = _write_emission_receipt(Path(out_path), plan_path, {}, extras={"route": "rejudge-criterion"})
     return {"path": out_path, "receipt": receipt}
 

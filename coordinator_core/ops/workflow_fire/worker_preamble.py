@@ -1,9 +1,11 @@
 """WORKER ROLE preamble the headless executors put ahead of every codex/agy/grok agent prompt."""
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shlex
+import shutil
 import sys
 from pathlib import Path
 
@@ -26,26 +28,82 @@ SIZING_USAGE = (
 
 WORKER_BACKENDS = ("codex", "agy", "grok")
 _PORTABLE_MODULE = re.compile(r"(?<![\w./\\-])python(?:3(?:\.\d+)?)?[ \t]+-m[ \t]+(coordinator_core(?:\.[A-Za-z_]\w*)+)")
+# A bare interpreter argv0 running `-m <other module>`, `-c`, or a script path: the shapes the module regex
+# leaves behind (`python -m pytest`, `python coordinator/bin/x.py`). Prose naming the word stays unmatched.
+_BARE_ARGV0 = re.compile(
+    r"(?<![\w./\\-])(?<!bare `)(python3?)(?=[ \t]+(?:-m[ \t]+(?!coordinator_core\b)\w|-c[ \t]|[^\s`'\"<>|;&-]*[/\\][^\s`]*|[^\s`/\\]+\.py\b))"
+)
 _BOOTSTRAP = (
     "import os,runpy,sys;"
+    "from pathlib import Path;"
     "root=sys.argv.pop(1);"
+    "home=Path(sys.argv.pop(1));"
     "sys.path.insert(0,root);"
-    "os.environ['PYTHONPATH']=root;"
+    "from coordinator_core.install.engine_interpreter import engine_site_dir,stamp;"
+    "site=str(engine_site_dir(home));"
+    "paths=[root,site] if stamp(home)==tuple(sys.version_info[:2]) else [root];"
+    "sys.path[:1]=paths;"
+    "os.environ['PYTHONPATH']=os.pathsep.join(paths);"
     "runpy.run_module(sys.argv.pop(1),run_name='__main__',alter_sys=True)"
 )
 
 
+def _engine_command_runtime() -> tuple[str, Path]:
+    from coordinator_core.warm.door.build import PYTHON_SIDECAR_FILENAME, SIDECAR_FILENAME
+    from coordinator_core.warm.engine_root import current_engine_clone, is_engine_root
+
+    loaded = current_engine_clone()
+    if is_engine_root(loaded):
+        return sys.executable, loaded
+    # A source-side emitter or thin install can bind the same engine/interpreter pair as the door.
+    bin_dir = settings_home() / "bin"
+    def read_sidecar(name: str) -> str:
+        try:
+            return (bin_dir / name).read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            return ""
+
+    python = Path(read_sidecar(PYTHON_SIDECAR_FILENAME))
+    executable = str(python) if python.is_absolute() and python.is_file() else sys.executable
+    for value in (os.environ.get("COORDINATOR_DOOR_ENGINE_ROOT", ""), read_sidecar(SIDECAR_FILENAME)):
+        root = Path(value)
+        if root.is_absolute() and is_engine_root(root):
+            return executable, root
+    return sys.executable, loaded
+
+
+@functools.lru_cache(maxsize=8)
+def _on_path(name: str, path_env: str) -> bool:
+    return shutil.which(name, path=path_env) is not None
+
+
+def _absent_argv0(match: re.Match) -> bool:
+    return not _on_path(match[1], os.environ.get("PATH", ""))
+
+
+def needs_binding(text: str) -> bool:
+    """True when `text` carries a portable engine command, or a bare `python`/`python3` argv0 this host lacks
+    (Linux with only `python3`: the bare word is `command not found`). In-process: no spawn."""
+    return bool(_PORTABLE_MODULE.search(text)) or any(_absent_argv0(m) for m in _BARE_ARGV0.finditer(text))
+
+
+def _quoted(value: str) -> str:
+    return "& '" + value.replace("'", "''") + "'" if os.name == "nt" else shlex.quote(value)
+
+
 def bind_engine_commands(prompt: str) -> str:
-    """Bind portable module commands at delivery, keeping committed scripts host-neutral."""
-    if not _PORTABLE_MODULE.search(prompt):
+    """Bind portable module commands at delivery, keeping committed scripts host-neutral. A bare interpreter
+    argv0 absent from this host's PATH is bound to the same stamped interpreter."""
+    if not needs_binding(prompt):
         return prompt
-    root = str(Path(__file__).resolve().parents[3])
-    argv = (sys.executable, "-P", "-c", _BOOTSTRAP, root)
+    python, root = _engine_command_runtime()
+    argv = (python, "-P", "-c", _BOOTSTRAP, str(root), str(settings_home()))
     if os.name == "nt":
         prefix = "& " + " ".join("'" + value.replace("'", "''") + "'" for value in argv)
     else:
         prefix = shlex.join(argv)
-    return _PORTABLE_MODULE.sub(lambda match: f"{prefix} {match[1]}", prompt)
+    prompt = _PORTABLE_MODULE.sub(lambda match: f"{prefix} {match[1]}", prompt)
+    return _BARE_ARGV0.sub(lambda m: m[0] if not _absent_argv0(m) else _quoted(python), prompt)
 
 
 def with_worker_preamble(backend: str, prompt: str) -> str:
@@ -57,7 +115,6 @@ def with_worker_preamble(backend: str, prompt: str) -> str:
 
     if SIZING_ASSEMBLE_CMD in prompt:
         name = "sizing-assemble.exe" if os.name == "nt" else "sizing-assemble"
-        path = (settings_home() / "bin" / name).resolve().as_posix()
-        command = "& '" + path.replace("'", "''") + "'" if os.name == "nt" else shlex.quote(path)
-        prompt = prompt.replace(SIZING_ASSEMBLE_CMD, command) + "\n\n" + SIZING_USAGE
+        prompt = prompt.replace(SIZING_ASSEMBLE_CMD, _quoted((settings_home() / "bin" / name).resolve().as_posix()))
+        prompt += "\n\n" + SIZING_USAGE
     return PREAMBLE + "\n\n" + prompt

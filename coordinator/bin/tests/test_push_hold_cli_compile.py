@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 T = "b" * 40
 _SRC = Path(__file__).resolve().parents[1] / "push-hold.py"

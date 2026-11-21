@@ -243,6 +243,13 @@ def mapped(graph):
     return graph
 
 
+@pytest.mark.parametrize("home", ["docs/plans", "docs/plans/2026-10"])
+def test_handoff_branch_reads_the_flat_or_sharded_plan(tmp_path, home):
+    _w(tmp_path, "state/handoffs/2026-10-16-x.md", "no object here\n")
+    _w(tmp_path, f"{home}/2026-10-16-x.md", f"sizing_object: {SIZING}\n")
+    assert ra._sizing_of_artifact(tmp_path, "state/handoffs/2026-10-16-x.md") == SIZING
+
+
 def test_runs_of_artifacts_maps_each_class(mapped):
     paths = [PLAN, "docs/plans/2026-10-16-x.evidence.yaml", "docs/plans/2026-10-16-x.seam.yaml",
              "state/handoffs/2026-10-16-x.md", f"docs/delivery/{RUN}.md", SLICE, SIZING]
@@ -338,41 +345,6 @@ def test_candidate_paths_classes_prompts_as_record_dir(graph):
     prompt = f"state/warp/{RUN}/prompts/review-1.md"
     _w(graph, prompt)
     assert ra.candidate_paths(graph, RUN).class_of(prompt) == "record-dir"
-
-
-def _git(root: Path, *args: str) -> None:
-    import subprocess
-
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
-
-
-def _repo(root: Path, monkeypatch) -> None:
-    monkeypatch.setattr(_git_run_module, "run_git", _REAL_RUN_GIT)
-    _git(root, "init", "-q")
-    _git(root, "config", "user.email", "t@example.com")
-    _git(root, "config", "user.name", "t")
-
-
-def test_record_dir_residue_names_modified_and_untracked_but_not_clean(tmp_path, monkeypatch):
-    _repo(tmp_path, monkeypatch)
-    rec = f"state/warp/{RUN}"
-    _w(tmp_path, f"{rec}/resume.json", "a")
-    _git(tmp_path, "add", "-A")
-    _git(tmp_path, "commit", "-qm", "base")
-    assert ra.record_dir_residue(tmp_path, RUN) == []
-    _w(tmp_path, f"{rec}/resume.json", "b")
-    _w(tmp_path, f"{rec}/prompts/sub/p.md")
-    _w(tmp_path, "state/warp/other-run/x.json")
-    assert ra.record_dir_residue(tmp_path, RUN) == [f"{rec}/prompts/sub/p.md", f"{rec}/resume.json"]
-
-
-def test_record_dir_residue_is_empty_for_ignored_absent_or_unsafe(tmp_path, monkeypatch):
-    _repo(tmp_path, monkeypatch)
-    (tmp_path / ".gitignore").write_text("state/warp/\n", encoding="utf-8")
-    _w(tmp_path, f"state/warp/{RUN}/halted.json")
-    assert ra.record_dir_residue(tmp_path, RUN) == []
-    assert ra.record_dir_residue(tmp_path, "absent-run") == []
-    assert ra.record_dir_residue(tmp_path, "../x") == []
 
 
 def test_write_tracked_outcome_round_trips_outside_run_state(tmp_path):

@@ -132,3 +132,90 @@ def test_drop_session_files_tolerates_a_file_the_bridge_already_removed(monkeypa
     monkeypatch.setattr(mod.os, "remove", remove)
     mod.drop_session_files(77)
     assert not (sess / "77.json").exists()
+
+
+def test_lan_alias_that_answers_tcp_but_fails_identity_is_never_picked(monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = load()
+    checked = []
+
+    def wrong_box(alias):
+        checked.append(alias)
+        return "not-this-box", "host key mismatch"
+
+    assert mod.pick_remote("box-lan", "box-wg", reachable=lambda a: True, verify=wrong_box) == "box-wg"
+    assert checked == ["box-lan"]
+    assert mod.pick_remote("box-lan", "box-wg", reachable=lambda a: True, verify=lambda a: ("ok", "")) == "box-lan"
+    assert mod.pick_remote("box-lan", "box-wg", reachable=lambda a: False, verify=lambda a: pytest.fail("verified a dead LAN")) == "box-wg"
+
+
+def test_stable_remote_skips_a_lan_alias_whose_identity_fails_and_keeps_the_verified_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = load()
+    far = mod._box_mux()._far_addresses()
+    reads = {"unimatrix.addresses.box": "192.0.2.7"}
+    seen = []
+
+    def verify(target):
+        seen.append(target)
+        return (far.OK, "") if target == "kim@192.0.2.7" else (far.NOT_THIS_BOX, "mismatch")
+
+    got = mod.stable_remote("kim@box", reachable=lambda a: True, fields=lambda a: {"port": "22"},
+                            read_key=lambda k: reads.get(k, ""), verify=verify, tcp=lambda a: True, key="k")
+    assert got == "kim@192.0.2.7"
+    assert seen == ["kim@box-lan", "kim@192.0.2.7"]
+
+
+def test_a_verified_lan_alias_is_remembered_for_the_ttl_and_a_failed_pinned_one_is_reprobed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    mod = load()
+    far = mod._box_mux()._far_addresses()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    mod._LAN_VERIFIED.clear()
+    probes = []
+    answers = iter([(far.OK, ""), (far.NOT_THIS_BOX, "mismatch"), (far.OK, "")])
+    monkeypatch.setattr(far, "make_verify", lambda box, key=None, **k: lambda t: probes.append((box, key, t)) or next(answers))
+    pinned = lambda k: "SHA256:abc" if k.startswith("unimatrix.hostkey.") else ""
+    assert mod.lan_verified("box-lan", read_key=pinned, key="k")
+    assert mod.lan_verified("box-lan", read_key=pinned, key="k")
+    assert probes == [("box", "k", "box-lan")]
+    assert not mod.lan_verified("other-lan", read_key=pinned, key="k")
+    assert not mod._LAN_VERIFIED.get("other-lan")
+    assert mod.lan_verified("other-lan", read_key=pinned, key="k") and len(probes) == 3
+
+
+def test_a_peer_with_no_pinned_identity_stays_on_the_tcp_prefilter(monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = load()
+    far = mod._box_mux()._far_addresses()
+    monkeypatch.setattr(far, "make_verify", lambda *a, **k: pytest.fail("spawned a probe with nothing pinned"))
+    assert mod.lan_verified("box-lan", read_key=lambda k: "", key="k")
+
+
+def test_roster_once_verifies_the_lan_alias_with_the_explicit_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = load()
+    seen = {}
+
+    def pick(lan, tunnel=None, reachable=None, verify=None, key=None):
+        seen["key"] = key
+        raise OSError("stop")
+
+    monkeypatch.setattr(mod, "pick_remote", pick)
+    monkeypatch.setattr(mod, "ensure_key_loaded", lambda k: None)
+    with pytest.raises(OSError):
+        mod._roster_once("box-lan", "explicit-key", "box-wg")
+    assert seen["key"] == "explicit-key"
+
+
+def test_a_reset_that_reaps_a_mirror_redials_on_the_next_tick_not_after_the_backoff(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    mod = load()
+    P = mod.POLL_SECONDS
+    calls = []
+
+    def reap(remote, say, unbacked: bool = False, keep=(), bridges=None):
+        if not unbacked:
+            return []
+        calls.append(1)
+        return [(4242, "group-em-de")] if len(calls) == 3 else []  # the poll-2 failure (0 ok, P fail, 2P fail)
+
+    mod._DIALS["example-fleet-pro"] = (0.0, None, "roster rc=255: Connection reset")
+    _, _, _, fetched = drive(mod, monkeypatch, tmp_path, [True, False, False, False, False, True], reap=reap)
+    # Plain backoff after the 2P failure idles to 4P; the reaped mirror must be re-dialled at 3P.
+    assert fetched[:4] == [0, P, 2 * P, 3 * P]
+    assert "example-fleet-pro" not in mod._DIALS, "the Windows replay cap must not replay the reset failure"

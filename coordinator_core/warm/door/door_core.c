@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #ifndef _WIN32
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -852,6 +853,101 @@ int door_json_top_string(const char *json, size_t len, const char *want, buf_t *
     }
 }
 
+/* Cursor on the value of top-level member `want` of the JSON object at `c.p`; 0 when absent. */
+static int find_member(cursor_t c, const char *want, cursor_t *value) {
+    size_t want_len = strlen(want);
+    skip_ws(&c);
+    if (c.p >= c.end || *c.p != '{') return 0;
+    c.p++;
+    for (;;) {
+        skip_ws(&c);
+        if (c.p >= c.end || *c.p == '}') return 0;
+        if (*c.p == ',') { c.p++; continue; }
+        buf_t key;
+        if (!buf_init(&key, 32)) return 0;
+        if (!parse_json_string(&c, &key)) { free(key.data); return 0; }
+        int match = key.len == want_len && memcmp(key.data, want, want_len) == 0;
+        free(key.data);
+        skip_ws(&c);
+        if (c.p >= c.end || *c.p != ':') return 0;
+        c.p++;
+        skip_ws(&c);
+        if (match) { *value = c; return 1; }
+        if (!skip_json_value(&c)) return 0;
+    }
+}
+
+static int member_string(cursor_t obj, const char *want, buf_t *out) {
+    cursor_t v;
+    return find_member(obj, want, &v) && v.p < v.end && *v.p == '"' && parse_json_string(&v, out);
+}
+
+static int is_ws(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
+}
+
+/* Appends the key for member `want` of `args` when it is a non-blank string: `prefix` + trimmed value. */
+static int keyed_member(cursor_t args, const char *want, const char *prefix, int fold_slashes, buf_t *tmp, buf_t *out,
+                        int *hit) {
+    tmp->len = 0;
+    *hit = 0;
+    if (!member_string(args, want, tmp)) return 1;
+    size_t a = 0, n = tmp->len;
+    while (a < n && is_ws(tmp->data[a])) a++;
+    while (n > a && is_ws(tmp->data[n - 1])) n--;
+    if (fold_slashes) {
+        for (size_t i = a; i < n; i++) if (tmp->data[i] == '\\') tmp->data[i] = '/';
+        while (n - a >= 2 && tmp->data[a] == '.' && tmp->data[a + 1] == '/') a += 2;
+    }
+    if (n <= a) return 1;
+    *hit = 1;
+    return buf_append_cstr(out, prefix) && buf_append(out, tmp->data + a, n - a) && buf_append(out, "", 1);
+}
+
+/* Mirrors `ask_spool.record.same_ask`'s key: "sizing:<rel>" or "run:<id>" when args name one, else
+ * "ask:<text>" with whitespace runs folded to one space and ASCII case folded. Trap: Python casefolds
+ * Unicode, this folds ASCII only, so a non-ASCII case-only difference reads as distinct here and the
+ * drain collapses it later. Appends a NUL-terminated key; 0 when the payload asks for nothing. */
+int door_ask_dedupe_key(const char *payload, size_t len, buf_t *out) {
+    cursor_t top = { payload, payload + len }, tool_input, args;
+    if (!find_member(top, "tool_input", &tool_input) || !find_member(tool_input, "args", &args)) return 0;
+    buf_t text, tmp, norm;
+    int b_text = buf_init(&text, 128), b_tmp = buf_init(&tmp, 128), b_norm = buf_init(&norm, 128);
+    int ok = 0;
+    if (!(b_text && b_tmp && b_norm)) goto done;
+    if (args.p < args.end && *args.p == '"') {
+        if (!parse_json_string(&args, &text)) goto done;
+    } else if (args.p < args.end && *args.p == '{') {
+        int hit;
+        if (!keyed_member(args, "sizing", "sizing:", 1, &tmp, out, &hit)) goto done;
+        if (hit) { ok = 1; goto done; }
+        if (!keyed_member(args, "resume_run_id", "run:", 0, &tmp, out, &hit)) goto done;
+        if (hit) { ok = 1; goto done; }
+        if (!member_string(args, "ask", &text)) goto done;
+    } else {
+        goto done;
+    }
+    {
+        size_t words = 0;
+        for (size_t i = 0; i < text.len;) {
+            while (i < text.len && is_ws(text.data[i])) i++;
+            if (i >= text.len) break;
+            if (words++ && !buf_append(&norm, " ", 1)) goto done;
+            while (i < text.len && !is_ws(text.data[i])) {
+                char ch = text.data[i++];
+                if (ch >= 'A' && ch <= 'Z') ch = (char)(ch + 32);
+                if (!buf_append(&norm, &ch, 1)) goto done;
+            }
+        }
+        ok = words && buf_append_cstr(out, "ask:") && buf_append(out, norm.data, norm.len) && buf_append(out, "", 1);
+    }
+done:
+    if (b_text) free(text.data);
+    if (b_tmp) free(tmp.data);
+    if (b_norm) free(norm.data);
+    return ok;
+}
+
 int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *event_name) {
     int ok = 1;
     ok &= buf_append_cstr(out, "{\"systemMessage\":\"coordinator: guard did not run (");
@@ -930,6 +1026,44 @@ static int spool_mkdir(const char *path, mode_t mode) {
     return mkdir(path, mode) == 0 || errno == EEXIST;
 }
 
+/* The id of a pending `<id>.json` in `dir` whose payload asks what `key` names; 1 found. */
+static int spool_pending_duplicate(const char *dir, const char *key, char out_id[17]) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    int found = 0;
+    struct dirent *e;
+    while (!found && (e = readdir(d)) != NULL) {
+        if (strlen(e->d_name) != 16 + 5 || memcmp(e->d_name + 16, ".json", 6) != 0) continue;
+        char path[4096 + 96];
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        FILE *fh = fopen(path, "rb");
+        if (!fh) continue;
+        buf_t data;
+        if (buf_init(&data, 4096)) {
+            char chunk[4096];
+            size_t got;
+            while ((got = fread(chunk, 1, sizeof chunk, fh)) > 0 && data.len < ((size_t)1 << 20)) {
+                if (!buf_append(&data, chunk, got)) break;
+            }
+            const char *nl = data.len ? memchr(data.data, '\n', data.len) : NULL;
+            buf_t other;
+            if (nl && buf_init(&other, 128)) {
+                if (door_ask_dedupe_key(nl + 1, (size_t)(data.data + data.len - (nl + 1)), &other) &&
+                    strcmp(other.data, key) == 0) {
+                    memcpy(out_id, e->d_name, 16);
+                    out_id[16] = '\0';
+                    found = 1;
+                }
+                free(other.data);
+            }
+            free(data.data);
+        }
+        fclose(fh);
+    }
+    closedir(d);
+    return found;
+}
+
 int door_spool_hook_payload(const char *root, const char *payload, size_t len,
                             const char *op, const char *reason, char out_id[17]) {
     out_id[0] = '\0';
@@ -969,6 +1103,19 @@ int door_spool_hook_payload(const char *root, const char *payload, size_t len,
     if (!spool_mkdir(dir, 0755)) goto done;
     snprintf(dir, sizeof dir, "%s/.coordinator-local/ask-spool", root);
     if (!spool_mkdir(dir, 0700)) goto done;
+    {
+        buf_t key;
+        if (buf_init(&key, 128)) {
+            char other[17];
+            int is_dup = door_ask_dedupe_key(payload, len, &key) && spool_pending_duplicate(dir, key.data, other);
+            free(key.data);
+            if (is_dup) {
+                memcpy(out_id, other, 17);
+                result = 2;
+                goto done;
+            }
+        }
+    }
     snprintf(path, sizeof path, "%s/%s.json", dir, out_id);
     int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
     if (fd < 0) {
@@ -1001,8 +1148,8 @@ int build_hook_spooled_envelope(buf_t *out, const char *spool_id, const char *ev
     /* The withdraw hint trails the text; an overlong spool_id truncates it silently. */
     char text[384];
     snprintf(text, sizeof text,
-             "Engine unavailable; ask spooled as %s; it mints when the engine recovers. "
-             "To withdraw: coordinator-invoke ask_spool.withdraw '{\"spool_id\":\"%s\",\"reason\":\"...\"}'.",
+             "SPOOLED as %s: it fires automatically once the engine is warm. Do not resubmit. "
+             "Withdraw: coordinator-invoke ask_spool.withdraw '{\"spool_id\":\"%s\",\"reason\":\"...\"}'.",
              spool_id, spool_id);
     int ok = 1;
     ok &= buf_append_cstr(out, "{\"systemMessage\":\"coordinator: ");

@@ -120,6 +120,18 @@ def _stage(root, run=ORPHAN, *, plan=True, receipt=False):
     return d
 
 
+@pytest.mark.parametrize("home", ["docs/plans", "docs/plans/2026-11"])
+def test_plan_rel_resolves_flat_and_sharded(tmp_path, home):
+    d = tmp_path / "run"
+    d.mkdir()
+    (d / "2026-11-20-p.spine.md").write_text("spine", encoding="utf-8")
+    (tmp_path / home).mkdir(parents=True)
+    (tmp_path / home / "2026-11-20-p.md").write_text("plan", encoding="utf-8")
+    assert oa._plan_rel(tmp_path, d) == f"{home}/2026-11-20-p.md"
+    (tmp_path / home / "2026-11-20-p.md").unlink()
+    assert oa._plan_rel(tmp_path, d) is None
+
+
 def test_handler_adopts_staged_run_and_writes_refire_halt(tmp_path, live):
     d = _mk(tmp_path, ORPHAN)
     _stage(tmp_path, receipt=True)

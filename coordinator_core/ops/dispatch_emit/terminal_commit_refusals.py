@@ -571,26 +571,6 @@ def _review_floor_note(
 
 
 REFUSED_UNREVIEWED = "unreviewed"
-_UNREVIEWED_SHOWN = 8
-
-
-def _staged_outside_slices_refusal(inline_review: object, staged: Sequence[str]) -> Optional[dict]:
-    """The ``unreviewed`` refusal naming review-owed ``staged`` paths that no ``inline_review.prep``
-    ``slice_files`` entry covers (``review_floor.slice_gap_paths``), else None. An absent or empty
-    slice list is not a comparison: the zero-product-file floor stays a trailer note. No git."""
-    prep = inline_review.get("prep") if isinstance(inline_review, dict) else None
-    reviewed = prep.get("slice_files") if isinstance(prep, dict) else None
-    if not (isinstance(reviewed, list) and reviewed):
-        return None
-    gap = review_floor.slice_gap_paths(staged, reviewed)
-    if not gap:
-        return None
-    shown = ", ".join(gap[:_UNREVIEWED_SHOWN]) + (f" (+{len(gap) - _UNREVIEWED_SHOWN} more)" if len(gap) > _UNREVIEWED_SHOWN else "")
-    return _error(
-        f"{len(gap)} staged path(s) sit in no reviewed slice: {shown}. Re-run review prep and "
-        "review them, then re-fire",
-        refused=REFUSED_UNREVIEWED, unreviewed_paths=gap,
-    )
 
 
 def _staged_outside_slices_provenance(inline_review: object, staged: Sequence[str]) -> list:
@@ -951,14 +931,17 @@ def _measured_rev_drift_refusal(
     """A ``ledger-unmet`` refusal (reason ``measured-rev-drift``) when a ``met`` item stands on a
     measurement whose recorded blobs no longer match the worktree; None when nothing drifted, no
     item is ``met``, or the run recorded no measurement. When ``inline_review`` shows the test leg
-    left no review (``land_run.test_leg_failure``), the reason is ``test-leg-error`` instead: the
-    stale measurement is the leg's failure, not the requirement's."""
+    left no review (``land_run.test_leg_failure``) the refusal is ``test-infra`` instead
+    (``land_run.test_infra_refusal``, no ledger failures): the stale measurement is the leg's
+    failure, not the requirement's."""
     from coordinator_core.ops.dispatch_emit import measured_rev
     from coordinator_core.ops.dispatch_emit.land_run import (
         TEST_LEG_INFRA_CAUSE,
         TEST_LEG_INFRA_RETRY,
-        drift_reason_for_leg,
         leg_stale_met_failures,
+        test_infra_refusal,
+        test_leg_failure,
+        test_leg_superseded_by_reverify,
     )
 
     stale = [
@@ -976,10 +959,13 @@ def _measured_rev_drift_refusal(
         if not drifted:
             return None
         reason = detail = "measured-rev-drift: " + ", ".join(drifted)
-    reason = drift_reason_for_leg(reason, inline_review)
-    if reason.startswith("test-leg-error"):
-        detail = reason
-    infra = {"cause": TEST_LEG_INFRA_CAUSE, "retry": TEST_LEG_INFRA_RETRY} if reason.startswith("test-leg-error") else {}
+    if test_leg_superseded_by_reverify(reason, inline_review):
+        return None
+    infra = test_infra_refusal(reason, inline_review)
+    if infra is not None:
+        return infra
+    # An unreadable record with a failed test leg is not a drift reason `test_infra_refusal` takes: it stays a ledger refusal, marked as the leg's fault.
+    infra = {"cause": TEST_LEG_INFRA_CAUSE, "retry": TEST_LEG_INFRA_RETRY} if test_leg_failure(inline_review) is not None else {}
     return _error(
         f"the requirements are not met: {', '.join(met)}: {detail}. Re-measure and re-run the ledger check",
         refused="ledger-unmet",

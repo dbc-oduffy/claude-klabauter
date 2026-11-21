@@ -158,3 +158,24 @@ def test_unanswerable_touch_record_attests_nothing(tmp_path: Path, monkeypatch: 
         fh.write(b"not json\n")
     _held(monkeypatch, [{"session_id": SID, "run_id": RUN}])
     assert review_edit_source.sole_run_attested_writes(tmp_path, SID, RUN, SINCE) == frozenset()
+
+
+def test_an_agent_whose_sink_family_is_older_than_since_is_skipped_without_an_owner_read(tmp_path):
+    import os
+
+    from coordinator_core.ops.dispatch_emit import review_edit_source as src
+    from coordinator_core.session import touch_record
+
+    quiet = tmp_path / "quiet"
+    fresh = tmp_path / "fresh"
+    bare = tmp_path / "bare"
+    for d in (quiet, fresh, bare):
+        d.mkdir()
+    for d, stamp in ((quiet, 1000.0), (fresh, 3000.0)):
+        sink = touch_record.sink_path(d)
+        sink.write_bytes(b"")
+        os.utime(sink, (stamp, stamp))
+    assert not src._written_since(str(quiet), 2000.0)
+    assert src._written_since(str(fresh), 2000.0)
+    assert not src._written_since(str(bare), 2000.0)
+    assert not src._written_since(str(tmp_path / "missing"), 2000.0)

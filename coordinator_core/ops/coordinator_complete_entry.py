@@ -148,6 +148,7 @@ from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.session_ledger import aggregate_chain_loe as _agg_loe_mod
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import record_homes as _record_homes
+from coordinator_core.session.output_tree_layout import locate
 from coordinator_core.loe_thresholds import compute_tshirt_nullable as _compute_tshirt_nullable
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -1081,7 +1082,7 @@ def _resolve_governing_deliverable_id(repo_root: str, governing_plan_slug: str) 
     """
     if not governing_plan_slug:
         return ""
-    plan_file = os.path.join(repo_root, "docs", "plans", f"{governing_plan_slug}.md")
+    plan_file = os.path.join(repo_root, _plan_rel(repo_root, governing_plan_slug))
     return _plan_frontmatter_field(plan_file, "deliverable_id")
 
 
@@ -1121,7 +1122,7 @@ def _resolve_entry_title(repo_root: str, governing_plan_slug: str, consumed_hand
     """
     source = ""
     if governing_plan_slug:
-        plan_file = os.path.join(repo_root, "docs", "plans", f"{governing_plan_slug}.md")
+        plan_file = os.path.join(repo_root, _plan_rel(repo_root, governing_plan_slug))
         source = _plan_frontmatter_field(plan_file, "title")
     if not source and consumed_handoff:
         source = _plan_frontmatter_field(consumed_handoff, "title")
@@ -1280,13 +1281,20 @@ def _git_log_runner_for_commits(argv: List[str], cwd: Optional[str]) -> tuple[in
     return result.returncode, result.stdout, result.stderr
 
 
+def _plan_rel(repo_root: str, governing_plan_slug: str) -> str:
+    """Repo-relative POSIX path of the governing plan, flat or sharded, whichever exists."""
+    return locate(repo_root, f"docs/plans/{governing_plan_slug}.md")
+
+
 def _entry_scope_paths(repo_root: str, governing_plan_slug: str, consumed_handoff: str) -> frozenset:
     """Repo-relative forward-slash paths that identify this chain's own work:
     the governing plan and the consumed handoff. A non-own commit touching one
     of them is a peer that committed this session's work under its own id."""
     paths = set()
     if governing_plan_slug:
-        paths.add(f"docs/plans/{governing_plan_slug}.md")
+        flat = f"docs/plans/{governing_plan_slug}.md"
+        paths.add(flat)
+        paths.add(_plan_rel(repo_root, governing_plan_slug))
     if consumed_handoff:
         handoff = consumed_handoff
         if os.path.isabs(handoff):
@@ -1373,7 +1381,7 @@ def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
     """AC4 — fail-open at every stage; never raises, never aborts the write."""
     if not governing_plan_slug:
         return ""
-    plan_file = os.path.join(repo_root, "docs", "plans", f"{governing_plan_slug}.md")
+    plan_file = os.path.join(repo_root, _plan_rel(repo_root, governing_plan_slug))
     if not os.path.isfile(plan_file):
         return ""
 

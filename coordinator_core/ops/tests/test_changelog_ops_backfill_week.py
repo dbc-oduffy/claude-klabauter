@@ -11,7 +11,7 @@ import pytest
 from coordinator_core.ops import changelog_ops
 from pathlib import Path
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 WEEK = "2026-03-02"  # a Monday
 

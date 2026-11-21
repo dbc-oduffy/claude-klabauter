@@ -9,7 +9,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
 
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(root, *args):

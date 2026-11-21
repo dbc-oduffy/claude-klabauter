@@ -127,6 +127,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from coordinator_core.ops.dispatch_emit.record_paths import bare_cited_surface, is_item_live
 from coordinator_core.backlog_grind_assemble.directives import (
     build_commit_readiness_gate,
     build_executor_dispatch_prompt_template_emission,
@@ -217,26 +218,6 @@ scope:
 
 def _repo_root() -> Optional[str]:
     return show_toplevel()
-
-
-def is_item_live(repo_root: Path, path: str) -> bool:
-    try:
-        return (repo_root / path).exists()
-    except OSError:
-        return False
-
-
-def bare_cited_surface(surface: Optional[str]) -> Optional[str]:
-    if not surface:
-        return None
-    stripped = surface.strip()
-    if not stripped or "/" not in stripped:
-        return None
-    if any(ch in stripped for ch in (",", ";", " ", "(", ")", "*", "\n")):
-        return None
-    if "::" in stripped:
-        return None
-    return stripped
 
 
 #: Profiles whose non-test rows cite a path in this repo, so a path gone at HEAD means the row no longer reproduces.

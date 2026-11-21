@@ -144,6 +144,32 @@ def brief_block(items: list[dict]) -> str:
     return "\n".join(lines)
 
 
+CHECKLIST_HEADING = (
+    "## Revise checklist (each item is reported in your reply's `revise_items` "
+    "with status and evidence)"
+)
+
+
+def checklist_block(notes: list[dict], rows: list[dict]) -> str:
+    """One ``- [ ] <id>: <verbatim text>`` item per live note and per revise row ``{id, text}``.
+
+    Retracted notes drop; multi-line text stays verbatim, indented under its item; ``""`` when
+    nothing is listed.
+    """
+    items = [(str(e["id"]), e["note"]) for e in live(notes)]
+    items += [(str(r["id"]), r["text"]) for r in rows if isinstance(r.get("text"), str)]
+    if not items:
+        return ""
+    lines = [CHECKLIST_HEADING, ""]
+    for item_id, text in items:
+        # \x01 is the compose-time marker delimiter: left in, it splices text into the script as JS.
+        first, *rest = text.replace("\x01", "").split("\n")
+        lines.append(f"- [ ] {item_id}: {first}")
+        lines += [f"  {part}" if part else "" for part in rest]
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_section(items: list[dict]) -> list[str]:
     """Lines of the requirements.md notes section, under ``VIEW_HEADING``; ``[]`` when ``items`` is empty."""
     if not items:

@@ -412,6 +412,22 @@ def same_ask(a: dict, b: dict) -> bool:
     return normalized_ask_hash(text_a) == normalized_ask_hash(text_b)
 
 
+def pending_duplicate(repo_root: str, payload: dict) -> Optional[str]:
+    """The id of a pending entry that asks what `payload` asks (`same_ask`), else None. One listing plus a read
+    per pending entry; no spawn. An unreadable entry is skipped."""
+    if not (coalesce_key(payload) or raw_ask_text(payload)):
+        return None
+    for spool_id in list_pending(repo_root):
+        try:
+            _, raw = read_entry(entry_path(repo_root, spool_id))
+            other = json.loads(raw)
+        except (OSError, ValueError):
+            continue
+        if isinstance(other, dict) and same_ask(payload, other):
+            return spool_id
+    return None
+
+
 def supersede_pending(repo_root: str, payload: dict, run_id: str) -> list:
     """Retire every pending entry of `repo_root`'s spool that asks what `payload` asked, as superseded
     by `run_id` (named in the header). A claimed entry is left to the drain. Returns the retired ids.

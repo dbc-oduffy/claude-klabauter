@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
-pytestmark = pytest.mark.complete
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 
@@ -170,9 +170,11 @@ def test_run_base_resolver_order(tmp_path):
     _w(tmp_path, "scratch/warp/r1/run-base", C + "\n")
     assert li.run_base_for(tmp_path, "r1", {}) == C
     _w(tmp_path, "scratch/warp/r1/submission.json", json.dumps({"run_base_sha": B}))
-    assert li.run_base_for(tmp_path, "r1", {}) == B
+    assert li.run_base_for(tmp_path, "r1", {}) == C  # the write-once file outranks a refire's submission
     assert li.run_base_for(tmp_path, "r1", {"run_base_sha": A}) == A
-    assert li.run_base_for(tmp_path, "r1", {"run_base_sha": "zz"}) == B
+    assert li.run_base_for(tmp_path, "r1", {"run_base_sha": "zz"}) == C
+    (tmp_path / "scratch/warp/r1/run-base").unlink()
+    assert li.run_base_for(tmp_path, "r1", {}) == B
     assert li.run_base_for(tmp_path, None, {}) is None
 
 

@@ -13,6 +13,8 @@ from coordinator_core.ops.workflow_fire import headless
 from coordinator_core.temp_layout import mkdtemp_in
 from coordinator_core.warm import breadcrumb, client, election, engine_root, skew
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 ASK = {'ask': 'unused'}
 
 

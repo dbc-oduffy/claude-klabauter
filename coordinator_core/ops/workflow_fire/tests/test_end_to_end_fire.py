@@ -112,7 +112,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.ops.workflow_fire import fire
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _LIVE_FIRE_OPT_IN_ENV = "COORDINATOR_E2E_LIVE_FIRE"
 _live_fire_opt_in = pytest.mark.skipif(

@@ -30,6 +30,7 @@ def _node(program: str) -> object:
 def _halt(test_result: str) -> object:
     body = _test_verdict_empty_halt_js(_SIZING).replace("TEST_GUARD", "_TEST_GUARD")
     program = (
+        f"const {ask_compose._TEST_RAN_FN} = () => {ask_compose._TEST_RAN_JS};\n"
         "const _TEST_GUARD = true;\n"
         f"let _halted = null, _runId = 'r', _testResult = {test_result};\n"
         f"{body}\nconsole.log(JSON.stringify(_halted));\n"

@@ -285,3 +285,6 @@ def emit_vocab(out_dir: str | os.PathLike[str] | None = None) -> dict[str, Path]
     )
 
     return {"grind-vocab": vocab_path, "queue-grind-handback-schema": handback_path}
+
+
+MAX_SPLIT_ITEMS = 8

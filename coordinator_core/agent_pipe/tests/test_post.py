@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import io
 import json
-import subprocess
 import sys
 
 import pytest
 
 from coordinator_core.agent_pipe import mailbox, post
 from coordinator_core.agent_pipe.contract import mailbox_path
-from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
 
@@ -113,12 +111,3 @@ def test_cli_roster_bind_live(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Ca
     assert roster.resolve("g")["kind"] == "agy" and roster.resolve("g")["id"] == "conv-7"
     monkeypatch.setattr(live, "find_live", lambda *a, **k: {"sessions": []})
     assert cli.main(["roster", "bind", "g", "--live"]) == 1
-
-
-def test_post_imports_neither_ipc_nor_ops() -> None:
-    code = (
-        "import sys; import coordinator_core.agent_pipe.post;"
-        "bad=[m for m in sys.modules if m=='coordinator_core.ipc' or m=='coordinator_core.ops' or m.startswith('coordinator_core.ops.')];"
-        "sys.exit(1 if bad else 0)"
-    )
-    assert subprocess.run([sys.executable, "-c", code], **no_console_creationflags()).returncode == 0

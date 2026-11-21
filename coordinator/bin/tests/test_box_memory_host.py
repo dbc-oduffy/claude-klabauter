@@ -155,6 +155,13 @@ def _without_coordinator_core(monkeypatch) -> None:
     monkeypatch.setattr(
         sys, "path", [p for p in sys.path if not (Path(p) / "coordinator_core" / "__init__.py").exists()]
     )
+    # An editable install of coordinator_core resolves through a meta_path finder, not sys.path, so
+    # scrubbing the path alone leaves the real package importable and every fake tree is ignored.
+    monkeypatch.setattr(
+        sys,
+        "meta_path",
+        [f for f in sys.meta_path if "coordinator_core" not in getattr(f, "__module__", "")],
+    )
     sys.path_importer_cache.clear()
 
 
@@ -800,3 +807,29 @@ def test_default_cpu_budget_is_physical_minus_reserve_floor_one(monkeypatch: pyt
 
 def test_physical_cores_is_positive() -> None:
     assert host.physical_cores() >= 1
+
+
+def _peaks(home: Path) -> dict:
+    import json
+
+    return json.loads((home / "state" / "group-em" / "box" / "job-peaks.json").read_text(encoding="utf-8"))
+
+
+def test_release_folds_the_watch_stamped_run_peaks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    capacity_record = host._engine_module("coordinator_core.group_em.capacity_record")
+    adm, home = tmp_path / "admission.jsonl", tmp_path / "home"
+    job = {"run": "k:77", "job_type": "T", "peak_ram_mb": 900.0, "peak_vram_mib": 12000}
+    assert capacity_record.stamp({"jobs": [job, {"run": "other", "peak_ram_mb": 1, "peak_vram_mib": 99999}]}, home)
+    monkeypatch.setattr(host, "tree_peak_mb", lambda pid, platform=None: 300.0)
+    host.release_command(adm, "k", 77, job_type="T", peaks_home=home)
+    entry = _peaks(home)["T"]
+    assert (entry["ram_mb"], entry["vram_mib"]) == (900.0, 12000)
+    monkeypatch.setattr(host, "tree_peak_mb", lambda pid, platform=None: 1500.0)
+    host.release_command(adm, "k", 77, job_type="T", peaks_home=home)
+    assert _peaks(home)["T"]["ram_mb"] == 1500.0
+
+
+def test_release_with_nothing_measured_records_no_peak(tmp_path: Path) -> None:
+    adm, home = tmp_path / "admission.jsonl", tmp_path / "home"
+    host.release_command(adm, "k", 2**22 + 12345, job_type="T", peaks_home=home)
+    assert not (home / "state" / "group-em" / "box" / "job-peaks.json").exists()

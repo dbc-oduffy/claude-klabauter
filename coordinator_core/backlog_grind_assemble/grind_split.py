@@ -16,12 +16,12 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from coordinator_core.contract.grind_vocab import MAX_SPLIT_ITEMS
 from coordinator_core.frontmatter import primitives as fm_primitives
 from coordinator_core.frontmatter import schema_validate
 from coordinator_core.ops.queue_append import append_queue_entry
 from coordinator_core.session.declared_writes import declare_write
 
-MAX_SPLIT_ITEMS = 8
 MIN_SPLIT_ITEMS = 2
 
 CLOSED_BY = "grind-split"

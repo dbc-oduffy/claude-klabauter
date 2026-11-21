@@ -55,9 +55,34 @@ def _select(repo: Path, tokens=None, paths=EDITED) -> dict:
     return select_for_paths(repo, paths, scan, imports=imports)
 
 
+def test_eviction_import_index_reloads_and_only_reads_changed_files(tmp_path):
+    first = tmp_path / "first.py"
+    second = tmp_path / "second.py"
+    first.write_text("from pkg import mod_x\n", encoding="utf-8")
+    second.write_text("import peer\n", encoding="utf-8")
+    reads = []
+
+    def read(path):
+        reads.append(Path(path).name)
+        return Path(path).read_bytes()
+
+    rels = ["first.py", "second.py"]
+    expected = idx.refresh_import_targets(str(tmp_path), rels, read)
+    assert "pkg/mod_x.py" in expected["first.py"]
+    assert "peer.py" in expected["second.py"]
+    idx.reset_memory()
+    reads.clear()
+    assert idx.refresh_import_targets(str(tmp_path), rels, read) == expected
+    assert reads == []
+
+    second.write_text("import replacement\n", encoding="utf-8")
+    assert "replacement.py" in idx.refresh_import_targets(str(tmp_path), rels, read)["second.py"]
+    assert reads == ["second.py"]
+
+
 def test_second_call_with_one_changed_file_performs_exactly_one_read(tmp_path: Path, reads: list) -> None:
     repo = _repo(tmp_path, FILES)
-    nothing = {b"never_present_word"}
+    nothing = {b"never_present.py"}
     list(rt._tracked_test_bytes(repo, (), nothing))
     assert len(reads) == 5  # the five test modules, each read once to build
     reads.clear()
@@ -92,10 +117,10 @@ def test_untracked_module_is_never_scanned(tmp_path: Path) -> None:
 
 def test_persisted_index_serves_a_cold_process_without_reads(tmp_path: Path, reads: list) -> None:
     repo = _repo(tmp_path, FILES)
-    list(rt._tracked_test_bytes(repo, (), {b"never_present_word"}))
+    list(rt._tracked_test_bytes(repo, (), {b"never_present.py"}))
     idx.reset_memory()
     reads.clear()
-    list(rt._tracked_test_bytes(repo, (), {b"never_present_word"}))
+    list(rt._tracked_test_bytes(repo, (), {b"never_present.py"}))
     assert reads == []
 
 
@@ -116,12 +141,30 @@ def test_corrupt_or_foreign_persisted_index_rebuilds(tmp_path: Path, isolated_ca
     assert len(reads) >= 5
 
 
-def test_bloom_admits_every_word_of_a_token_and_rules_out_absent_ones() -> None:
-    bloom = idx.bloom_of(b'x = ["run_pass.py"]  # coverage-oracles')
+def test_bloom_admits_a_quoted_component_and_rules_out_absent_ones() -> None:
+    bloom = idx.bloom_of(b'x = ["run_pass.py", "a/coverage-oracles.md"]  # nothing.else')
     assert idx.admits(bloom, [idx.token_mask(b"run_pass.py")])
-    assert idx.admits(bloom, [idx.token_mask(b"coverage-oracles")])
-    assert not idx.admits(bloom, [idx.token_mask(b"absent_word_zzz")])
-    assert idx.admits(bloom, [idx.token_mask(b"...")])  # no word: admits everything
+    assert idx.admits(bloom, [idx.token_mask(b"coverage-oracles.md")])
+    assert not idx.admits(bloom, [idx.token_mask(b"absent_word.zzz")])
+    assert not idx.admits(bloom, [idx.token_mask(b"nothing.else")])  # a comment word is no literal component
+    assert idx.admits(bloom, [idx.token_mask(b"a b.py")])  # not a component: admits everything
+    assert idx.token_mask(b"Makefile") == 0  # no dot: indexed for walkers only
+
+
+def test_only_a_walker_indexes_dotless_components() -> None:
+    plain = idx.bloom_of(b'P = "pkg/sub_dir"')
+    walker = idx.bloom_of(b'for x in Path("pkg/sub_dir").rglob("*"): pass')
+    mask = idx.token_mask(b"sub_dir", walk=True)
+    assert not idx.admits(plain, [mask])
+    assert idx.admits(walker, [mask])
+
+
+def test_a_long_unclosed_run_scans_in_linear_time() -> None:
+    import time
+
+    start = time.perf_counter()
+    idx.bloom_of(b"a" * 400_000 + b" " + b"b." * 100_000)
+    assert time.perf_counter() - start < 2.0
 
 
 def test_tracked_set_is_reparsed_only_when_the_git_index_moves(tmp_path: Path) -> None:
@@ -175,3 +218,71 @@ def test_index_key_carries_ctime_and_inode(tmp_path: Path) -> None:
     list(rt._tracked_test_bytes(repo, (), {b"x"}))
     key, *_rest = next(iter(idx._MEM[str(repo).replace("\\", "/").rstrip("/")].values()))
     assert len(key) == 4
+
+
+def test_filtered_tracked_set_is_persisted_so_a_cold_process_skips_the_index_parse(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, FILES)
+    calls: list = []
+
+    def parse(root):
+        calls.append(root)
+        return frozenset(FILES)
+
+    index_file = repo / ".git" / "index"
+    keep = lambda rel: rel.startswith("tests/")  # noqa: E731
+    first = idx.tracked_paths(repo, parse, index_file, keep)
+    idx.reset_memory()
+    assert idx.tracked_paths(repo, parse, index_file, keep) == first
+    assert len(calls) == 1
+    assert all(r.startswith("tests/") for r in first)
+
+
+def test_a_second_builder_waits_for_the_first_and_then_reloads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    held = idx._BuildLock("k")
+    assert held.acquire() and held.held
+    other = idx._BuildLock("k")
+    threading.Timer(0.2, held.release).start()
+    start = time.monotonic()
+    assert other.acquire() is False  # waited out the first build; it must diff against that build's file
+    assert time.monotonic() - start >= 0.15
+    assert other.acquire() is True
+    other.release()
+
+
+def test_warm_index_builds_so_the_op_scan_reads_only_admitted_modules(tmp_path: Path, reads: list) -> None:
+    repo = _repo(tmp_path, FILES)
+    rt.warm_index(repo)
+    idx.reset_memory()
+    reads.clear()
+    _select(repo, rt.scan_tokens(EDITED, leaves=False))
+    assert set(reads) <= {"test_names.py"}
+
+
+def test_a_reverify_scan_of_repo_x_makes_x_the_repo_prewarmed_next_boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    other = _repo(tmp_path / "other", FILES)
+    repo_x = _repo(tmp_path / "x", FILES)
+    fallback = _repo(tmp_path / "engine", FILES)
+    assert idx.recent_roots() == []
+    _select(other, rt.scan_tokens(EDITED, leaves=False))
+    _select(repo_x, rt.scan_tokens(EDITED, leaves=False))
+    assert idx.recent_roots()[0] == str(repo_x).replace("\\", "/").rstrip("/")
+    warmed: list = []
+    monkeypatch.setattr(rt, "warm_index", lambda root: warmed.append(Path(root)))
+    rt.warm_recent_indexes(fallback)
+    assert warmed[-1] == repo_x and other in warmed and fallback not in warmed  # newest warmed last
+
+
+def test_recent_roots_keep_four_and_fall_back_to_the_engine_clone_when_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for i in range(6):
+        idx.record_root(str(tmp_path / f"r{i}"))
+    assert idx.recent_roots() == [str(tmp_path / f"r{i}") for i in (5, 4, 3, 2)]
+    idx.record_root(str(tmp_path / "r4"))
+    assert idx.recent_roots()[:2] == [str(tmp_path / "r4"), str(tmp_path / "r5")]
+    warmed: list = []
+    monkeypatch.setattr(rt, "warm_index", lambda root: warmed.append(Path(root)))
+    monkeypatch.setattr(idx, "recent_roots", lambda limit=4: [])
+    rt.warm_recent_indexes(tmp_path)
+    assert warmed == [tmp_path]

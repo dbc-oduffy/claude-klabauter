@@ -464,7 +464,9 @@ def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:
         own = _norm_rel(_scalar(_read_text(root, rel), "sizing_object"))
         if own:
             return own
-        return _norm_rel(_scalar(_read_text(root, f"docs/plans/{pure.stem}.md"), "sizing_object"))
+        return _norm_rel(
+            _scalar(_read_text(root, locate(str(root), f"docs/plans/{pure.stem}.md")), "sizing_object")
+        )
     return None
 
 

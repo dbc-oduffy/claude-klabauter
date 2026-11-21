@@ -19,6 +19,7 @@ PINNED_LEGS = [
     ("session_start_write_plugin_root_breadcrumb", ALL_FIVE),
     ("prune_claude_temp", {"startup"}),
     ("retention_run", {"startup"}),
+    ("repo_byproduct_prune", {"startup"}),
     ("klabauter_freshness", {"startup"}),
     ("authoring_checkout_freshness", {"startup"}),
 ]
@@ -30,6 +31,7 @@ _LEG_ATTRS = {
     "session_start_write_plugin_root_breadcrumb": "_session_start_write_plugin_root_breadcrumb_handler",
     "prune_claude_temp": "_prune_claude_temp_leg",
     "retention_run": "_retention_run_leg",
+    "repo_byproduct_prune": "_repo_byproduct_prune_leg",
     "klabauter_freshness": "_klabauter_freshness_leg",
     "authoring_checkout_freshness": "_authoring_checkout_freshness_leg",
 }
@@ -80,6 +82,27 @@ def test_retention_run_leg_swallows_spawn_failure(monkeypatch: pytest.MonkeyPatc
     assert mod._retention_run_leg({}) is None
 
 
+def test_repo_byproduct_prune_leg_spawns_for_resolved_root_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(mod.repo_byproduct_prune, "spawn_if_due", lambda root: seen.append(root))
+    monkeypatch.setattr(mod.prune_claude_temp, "find_repo_root", lambda cwd: cwd and str(tmp_path))
+    assert mod._repo_byproduct_prune_leg({"payload": {"cwd": "x"}}) is None
+    assert seen == [str(tmp_path)]
+    assert mod._repo_byproduct_prune_leg({"payload": {}}) is None
+    assert seen == [str(tmp_path)]
+
+
+def test_repo_byproduct_prune_leg_swallows_spawn_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(_root):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(mod.repo_byproduct_prune, "spawn_if_due", boom)
+    monkeypatch.setattr(mod.prune_claude_temp, "find_repo_root", lambda cwd: "r")
+    assert mod._repo_byproduct_prune_leg({"payload": {"cwd": "x"}}) is None
+
+
 def test_missing_source_runs_nothing(calls, tmp_path: Path) -> None:
     assert _run({"cwd": str(tmp_path)}) == {}
     assert calls == []
@@ -100,7 +123,7 @@ def test_raising_leg_does_not_drop_others(calls, monkeypatch: pytest.MonkeyPatch
     _run({"source": "startup", "cwd": str(tmp_path)})
     assert "session_start_register_published_engine" not in calls
     assert calls[-1] == "authoring_checkout_freshness"
-    assert len(calls) == 7
+    assert len(calls) == 8
 
 
 def _fresh_mod():

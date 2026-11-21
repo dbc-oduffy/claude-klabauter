@@ -13,6 +13,8 @@ from coordinator_core.git import git_dir, git_objects
 from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
 from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 PATH = "src/target.py"
 ME = "ask-20261025T000000-aaaaaa"
 SENIOR = "ask-20261024T000000-bbbbbb"

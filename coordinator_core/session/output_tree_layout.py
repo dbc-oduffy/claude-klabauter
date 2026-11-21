@@ -159,6 +159,12 @@ def locate(repo_root: str, rel: str) -> str:
     return p
 
 
+def plan_sidecar_rel(repo_root: str, plan_rel: str, suffix: str) -> str:
+    """The sidecar path beside wherever the cited plan lives now (`.md` swapped for `suffix`)."""
+    p = locate(repo_root, plan_rel)
+    return p[: -len(".md")] + suffix if p.endswith(".md") else p + suffix
+
+
 def _tree_is_flat(repo_root: str, tree: str) -> bool:
     """True when the tree holds entries at its root and no `YYYY-MM` shard dir."""
     flat = False

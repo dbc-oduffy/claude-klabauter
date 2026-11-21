@@ -102,6 +102,21 @@ def test_ok_close_lands_closure_commit_with_run_closed_trailer(halted):
     assert _git(root, "status", "--porcelain", "--", record.relative_to(root).as_posix()) == ""
 
 
+def test_kept_file_without_path_blobs_closes_from_withheld_prints(halted) -> None:
+    """A halt whose chunks recorded no paths still prints each withheld blob; the close reads those."""
+    import json
+
+    root, record, base = halted
+    kept_work.write(record, {"c": {"paths": {}}}, None)
+    prints = {"a.txt": _blob(root, "a-kept"), "b.txt": _blob(root, "b-kept")}
+    (record / "withheld-prints.json").write_text(json.dumps(prints), encoding="utf-8")
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    reply = _call(root)
+    assert reply["ok"] is True, reply
+    assert {d["disposition"] for d in reply["dispositions"].values()} == {halted_run.DISPOSITION_SUPERSEDED}
+    _assert_closure_commit(root, record, base)
+
+
 def test_refused_close_leaves_head_unchanged(halted):
     root, record, _ = halted
     _commit(root, {"a.txt": "a-later"})

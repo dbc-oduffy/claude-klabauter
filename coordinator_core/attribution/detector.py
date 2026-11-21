@@ -8,8 +8,6 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Optional, Union
 
-from .patterns import PATTERNS
-
 #: Whole-line forms this repo's own plan/handoff prose uses to attribute a
 #: fix to a reviewer -- an HTML comment (`<!-- Review: ... -->`) or a
 #: YAML/shell-comment line (`# Review: ...`). Matched per-line, anchored
@@ -147,6 +145,8 @@ def _in_spans(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
 def scan_text(text: str, path: str) -> list[Match]:
     if is_exempt_path(path):
         return []
+    from .patterns import PATTERNS
+
     matches: list[Match] = []
     for name, pattern in PATTERNS.items():
         for m in pattern.finditer(text):
@@ -197,6 +197,8 @@ def scan_added_lines(
     if not added_counts:
         return []
     remaining = dict(added_counts)
+    from .patterns import PATTERNS
+
     matches: list[Match] = []
     for idx, line in enumerate(new_lines, start=1):
         left = remaining.get(line)

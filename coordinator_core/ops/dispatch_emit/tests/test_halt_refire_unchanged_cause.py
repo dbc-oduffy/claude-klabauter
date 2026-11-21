@@ -50,6 +50,8 @@ def test_roster_unreadable_halt_never_names_the_same_refire(blitz):
         {},
         {"agentIncidents": []},
         {"agentIncidents": [{"role": "x", "kind": "wave-unavailable"}]},
+        {"agentIncidents": [{"role": "reviewer", "kind": "missing-tldr"}]},
+        {"regate": {"agentIncidents": [{"role": "readiness-host", "kind": "null-return"}]}},
         None,
     ],
 )

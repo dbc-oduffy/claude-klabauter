@@ -138,91 +138,111 @@ def _review_signals_path() -> Optional[Path]:
     return _resolve_doctrine_asset("contract", "review-signals.json")
 
 
+_QUOTED_TOKENS = (
+    r"'(?:[^'\\]++|\\[\s\S])*+(?:'|\\(?=\Z))?"
+    r'|"(?:[^"\\]++|\\[\s\S])*+(?:"|\\(?=\Z))?'
+)
+_CODE_STOP = re.compile(_QUOTED_TOKENS + r"|[/`]")
+_INTERP_STOP = re.compile(_QUOTED_TOKENS + r"|[/`{}]")
+_TEMPLATE_RUN = re.compile(r"(?:[^`$\\]++|\\[\s\S]|\$(?!\{))*+")
+_COMMENT_RUN = re.compile(rb"\x01+")
+_REGEX_LITERAL = re.compile(
+    r"/(?:\\[\s\S]|\[(?:\\[\s\S]|[^\]\\\n])*+\]|[^/\[\\\n])*+/[a-zA-Z0-9_$]*"
+)
+_REGEX_PRECEDING_KEYWORDS = frozenset({
+    "return", "typeof", "case", "in", "of", "delete", "void", "throw",
+    "new", "else", "do", "instanceof", "yield", "await",
+})
+_MAX_REGEX_KEYWORD = max(map(len, _REGEX_PRECEDING_KEYWORDS))
+
+
+def _regex_after_gap(script: str, start: int, end: int, previous: bool) -> bool:
+    """Read only the significant suffix before a slash. Comments do not reset it."""
+    while end > start and script[end - 1].isspace():
+        end -= 1
+    if end == start:
+        return previous
+    last = script[end - 1]
+    if last not in _IDENTIFIER_CHARS:
+        return last not in (")", "]", "'")
+    first = end - 1
+    while first > start and script[first - 1] in _IDENTIFIER_CHARS:
+        first -= 1
+        if end - first > _MAX_REGEX_KEYWORD:
+            return False
+    return script[first:end] in _REGEX_PRECEDING_KEYWORDS
+
+
 def _scan_masks(script: str) -> "tuple[bytearray, bytearray]":
     n = len(script)
     string_mask = bytearray(n)
     comment_mask = bytearray(n)
-    stack = [("code", 0)]
+    stack: list[int | None] = [0]
+    regex_allowed = True
     i = 0
     while i < n:
-        kind, depth = stack[-1]
+        depth = stack[-1]
+        if depth is None:
+            end = _TEMPLATE_RUN.match(script, i).end()
+            if script.startswith("${", end):
+                string_mask[i:end + 1] = b"\x01" * (end + 1 - i)
+                stack.append(1)
+                i = end + 2
+            else:
+                # The only other stops are the closing backtick, EOF, or a lone final escape.
+                end = min(n, end + 1)
+                string_mask[i:end] = b"\x01" * (end - i)
+                stack.pop()
+                regex_allowed = False
+                i = end
+            continue
 
-        if kind in ("code", "interp"):
-            two = script[i:i + 2]
-            if two == "//":
-                comment_mask[i] = 1
-                i += 1
-                while i < n and script[i] != "\n":
-                    comment_mask[i] = 1
-                    i += 1
-                continue
-            if two == "/*":
-                comment_mask[i] = 1
-                comment_mask[i + 1] = 1
-                end_idx = script.find("*/", i + 2)
-                end = end_idx + 2 if end_idx != -1 else n
-                for k in range(i + 2, end):
-                    comment_mask[k] = 1
+        match = (_INTERP_STOP if depth else _CODE_STOP).search(script, i)
+        if match is None:
+            break
+        start, i = i, match.start()
+        token = script[i]
+        if token in "'\"":
+            end = match.end()
+            string_mask[i:end] = b"\x01" * (end - i)
+            i = end
+            regex_allowed = False
+            continue
+        if token == "`":
+            string_mask[i] = 1
+            stack.append(None)
+            regex_allowed = _regex_after_gap(script, start, i, regex_allowed)
+        elif token == "/":
+            regex_allowed = _regex_after_gap(script, start, i, regex_allowed)
+            if script.startswith("//", i):
+                end = script.find("\n", i + 2)
+                end = n if end == -1 else end
+                comment_mask[i:end] = b"\x01" * (end - i)
                 i = end
                 continue
-
-            ch = script[i]
-            if ch == "'":
-                string_mask[i] = 1
-                stack.append(("squote", 0))
-                i += 1
+            if script.startswith("/*", i):
+                end = script.find("*/", i + 2)
+                end = n if end == -1 else end + 2
+                comment_mask[i:end] = b"\x01" * (end - i)
+                i = end
                 continue
-            if ch == '"':
-                string_mask[i] = 1
-                stack.append(("dquote", 0))
-                i += 1
+            if regex_allowed and (literal := _REGEX_LITERAL.match(script, i)):
+                end = literal.end()
+                string_mask[i:end] = b"\x01" * (end - i)
+                i = end
+                regex_allowed = False
                 continue
-            if ch == "`":
-                string_mask[i] = 1
-                stack.append(("template", 0))
-                i += 1
-                continue
-            if kind == "interp":
-                if ch == "{":
-                    stack[-1] = ("interp", depth + 1)
-                elif ch == "}":
-                    if depth == 0:
-                        stack.pop()
-                    else:
-                        stack[-1] = ("interp", depth - 1)
-            i += 1
-            continue
-
-        if kind in ("squote", "dquote"):
-            quote_char = "'" if kind == "squote" else '"'
-            ch = script[i]
-            string_mask[i] = 1
-            if ch == "\\" and i + 1 < n:
-                string_mask[i + 1] = 1
-                i += 2
-                continue
-            if ch == quote_char:
+            regex_allowed = True
+        elif depth and token == "{":
+            stack[-1] = depth + 1
+            regex_allowed = True
+        elif depth and token == "}":
+            if depth == 1:
                 stack.pop()
-            i += 1
-            continue
-
-        ch = script[i]
-        if ch == "\\" and i + 1 < n:
-            string_mask[i] = 1
-            string_mask[i + 1] = 1
-            i += 2
-            continue
-        if ch == "`":
-            string_mask[i] = 1
-            stack.pop()
-            i += 1
-            continue
-        if ch == "$" and i + 1 < n and script[i + 1] == "{":
-            string_mask[i] = 1
-            stack.append(("interp", 0))
-            i += 2
-            continue
-        string_mask[i] = 1
+                regex_allowed = False
+            else:
+                stack[-1] = depth - 1
+                regex_allowed = True
         i += 1
 
     return string_mask, comment_mask
@@ -234,15 +254,14 @@ def _string_mask(script: str) -> bytearray:
 
 def _strip_comments(script: str) -> str:
     _, comment_mask = _scan_masks(script)
-    n = len(script)
-    out = []
-    for i in range(n):
-        if comment_mask[i]:
-            if script[i] == "\n":
-                out.append("\n")
-            continue
-        out.append(script[i])
-    return "".join(out)
+    pieces = []
+    previous = 0
+    for span in _COMMENT_RUN.finditer(comment_mask):
+        start, end = span.span()
+        pieces.extend((script[previous:start], "\n" * script.count("\n", start, end)))
+        previous = end
+    pieces.append(script[previous:])
+    return "".join(pieces)
 
 
 _UNDEFINED_NULL_RE = re.compile(r"\b(?:undefined|null)\b")
@@ -313,8 +332,9 @@ def _walk_agent_calls(buf: str, mask: "bytearray") -> "list[tuple[bool, Optional
         agent_type: Optional[str] = None
         while j < n:
             if mask[j]:
-                j += 1
-                continue
+                j = mask.find(b"\x00", j + 1)
+                if j == -1:
+                    break
             ch = buf[j]
             if ch == "(":
                 depth += 1
@@ -541,6 +561,7 @@ def _scan_agent_call_options(buf: str, mask: "bytearray") -> "list[dict]":
     """One record per `agent(` call: close paren, depth-1 options-object `{` (or None),
     whether a second argument exists, and the direct model/agentType/label values."""
     n = len(buf)
+    keys = {"m": "model:", "a": "agentType:", "l": "label:"}
     records: "list[dict]" = []
     i = 0
     while i < n:
@@ -560,8 +581,9 @@ def _scan_agent_call_options(buf: str, mask: "bytearray") -> "list[dict]":
         j = pos + 5
         while j < n:
             if mask[j]:
-                j += 1
-                continue
+                j = mask.find(b"\x00", j + 1)
+                if j == -1:
+                    break
             ch = buf[j]
             if ch == "(":
                 depth += 1
@@ -585,16 +607,15 @@ def _scan_agent_call_options(buf: str, mask: "bytearray") -> "list[dict]":
             elif past_prompt and depth == 1 and brace == 0 and rec["options_open"] is None:
                 rec["other_second_arg"] = True
             elif depth == 1 and brace == 1 and rec["options_open"] is not None:
-                for key in ("model:", "agentType:", "label:"):
-                    if _key_here(buf, mask, j, key):
-                        start, end, lit, text = _literal_after_key(buf, mask, j, len(key), n)
-                        if key == "model:":
-                            rec["model"] = (start, end, lit, text)
-                        elif key == "agentType:":
-                            rec["agent_type"] = lit
-                        else:
-                            rec["label"] = lit
-                        break
+                key = keys.get(ch)
+                if key and _key_here(buf, mask, j, key):
+                    start, end, lit, text = _literal_after_key(buf, mask, j, len(key), n)
+                    if key == "model:":
+                        rec["model"] = (start, end, lit, text)
+                    elif key == "agentType:":
+                        rec["agent_type"] = lit
+                    else:
+                        rec["label"] = lit
             j += 1
         if rec["close"] == -1:
             break
@@ -610,7 +631,7 @@ def rewrite_agent_models(script: str) -> "tuple[str, list[str]]":
     frontmatter model, else sonnet. Opus survives only for an allowlisted agentType. Non-literal
     model expressions are left alone. Returns the new script and one reroute string per change."""
     string_mask, comment_mask = _scan_masks(script)
-    mask = bytearray(a | b for a, b in zip(string_mask, comment_mask))
+    mask = bytearray((int.from_bytes(string_mask) | int.from_bytes(comment_mask)).to_bytes(len(script)))
     allow = _opus_allowlist()
     edits: "list[tuple[int, int, str]]" = []
     reroutes: "list[str]" = []

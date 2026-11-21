@@ -11,6 +11,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, re
 from coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halted_sizing_resumes import _git
 from coordinator_core.warp_fire import fire_command
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 RUN = "warp-2026-10-01-gate-20261027T142436-989a2d"
 
 

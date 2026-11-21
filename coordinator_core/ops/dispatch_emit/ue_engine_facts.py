@@ -23,10 +23,18 @@ CLAUSE_STALE_LINE = (
     "validate with validate_ue_api."
 )
 CLAUSE_ENUMERATION_LINE = (
-    'For "what exists" questions use project_engine_list_modules / the listing tools, not '
-    "semantic search; example_retrieval_repo_instructions() has the full tool map."
+    'For "what exists" use project_engine_list_modules or the listing tools, not semantic search; '
+    "example_retrieval_repo_instructions() maps the rest."
 )
-CLAUSE = CLAUSE_STALE_LINE + "\n" + CLAUSE_ENUMERATION_LINE
+# A failed search bootstrap is a degraded leg, never a halted one: the stale line above makes the
+# search a first call, and an agent reading it as mandatory aborts the review when the index is
+# warming (run aa8623, 47 bands wall_cut). Names the reply key so the degrade is recorded.
+CLAUSE_DEGRADE_LINE = (
+    "If project_semantic_search or another index call returns warming, partial_coverage, a timeout "
+    "or is unavailable, never stop or abort the review: retry once, else use structural tools or "
+    "scoped grep, continue, and record `search_degraded: <reason>` in your reply."
+)
+CLAUSE = CLAUSE_STALE_LINE + "\n" + CLAUSE_ENUMERATION_LINE + "\n" + CLAUSE_DEGRADE_LINE
 
 
 def ue_engine_facts_clause(repo_root: str) -> str:

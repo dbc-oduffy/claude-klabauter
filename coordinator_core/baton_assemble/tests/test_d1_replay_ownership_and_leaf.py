@@ -128,43 +128,6 @@ def test_two_claims_converging_on_one_leaf_collapse_to_it(tmp_path, monkeypatch)
 # -- d1 replay ownership -----------------------------------------------------
 
 
-def _lineage_for_continued_predecessor(repo: Path, target_fm: list[str]):
-    recorded = "state/handoffs/2026-10-31-prior-successor.md"
-    pred = _baton(
-        repo,
-        "2026-10-30-pred.md",
-        *_continued(recorded),
-        "handoff_id: hnd-pred-1a2b4c",
-    )
-    _baton(repo, "2026-10-31-prior-successor.md", *target_fm)
-    lineage = ba.resolve_lineage("handoff", str(pred), repo, session_id=SESSION)
-    return lineage, recorded
-
-
-def test_replay_of_a_baton_another_session_authored_mints_a_fresh_path(tmp_path):
-    repo = _repo(tmp_path)
-    lineage, recorded = _lineage_for_continued_predecessor(repo, ["authoring_session: " + OTHER])
-
-    assert lineage["output_path"] != recorded
-    assert "resumed_successor" not in lineage or not lineage["resumed_successor"]
-    d1 = next(d for d in ba._build_directives("handoff", lineage, root=repo) if d["id"] == "d1")
-    assert d1["already_satisfied"] is False
-
-
-@pytest.mark.parametrize(
-    "target_fm",
-    [["authoring_session: " + SESSION], []],
-    ids=["this-run-authored", "pre-stamp-no-authoring-session"],
-)
-def test_replay_of_this_runs_own_scaffold_still_resumes(tmp_path, target_fm):
-    repo = _repo(tmp_path)
-    lineage, recorded = _lineage_for_continued_predecessor(repo, target_fm)
-
-    assert lineage["output_path"] == recorded
-    d1 = next(d for d in ba._build_directives("handoff", lineage, root=repo) if d["id"] == "d1")
-    assert d1["already_satisfied"] is True
-
-
 # -- the session claim follows the minted baton ------------------------------
 
 

@@ -255,6 +255,9 @@ def _archive_first_row(root: Path, row_id: str) -> Path:
     dest.parent.mkdir(parents=True)
     dest.write_text(src.read_text(encoding="utf-8").replace("status: open", "status: closed-fixed"), encoding="utf-8")
     src.unlink()
+    from coordinator_core.bug_blitz.archive_index import backfill
+
+    backfill(root)
     return dest
 
 
@@ -294,10 +297,11 @@ def test_archive_lookup_parses_only_rows_on_the_targets_surface(tmp_path: Path, 
     for i in range(30):
         archived(FailingTest(file=f"{prefix}/test_other{i}.py", name="test_one"), f"{i:012x}")
     archived(wanted, "f" * 12)
+    mint_mod.archive_index.backfill(tmp_path)
 
     parsed: list[int] = []
-    real_load = mint_mod.yaml.safe_load
-    monkeypatch.setattr(mint_mod.yaml, "safe_load", lambda text: parsed.append(1) or real_load(text))
+    real_load = mint_mod._load_tf_candidate
+    monkeypatch.setattr(mint_mod, "_load_tf_candidate", lambda text: parsed.append(1) or real_load(text))
 
     ids = mint_tf_rows(tmp_path, "r1", (wanted,), target_ref="t")
     assert len(ids) == 1 and ids[0].endswith("f" * 12)
@@ -307,6 +311,26 @@ def test_archive_lookup_parses_only_rows_on_the_targets_surface(tmp_path: Path, 
     fresh = FailingTest(file=f"{prefix}/test_fresh.py", name="test_one", message="boom")
     assert mint_tf_rows(tmp_path, "r2", (fresh,), target_ref="t")[0] not in ids
     assert len(_rows(tmp_path)) == 1
+
+
+def test_submit_reports_missing_archive_index_without_reading_yaml(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from coordinator_core.bug_blitz import mint as mint_mod
+
+    title = "TF: pkg/test_a.py::test_one"
+    month = tmp_path / "archive/bug-backlog/2026-10"
+    month.mkdir(parents=True)
+    row = month / f"2026-10-01-{mint_mod._slug_from_title(title)}-a.yaml"
+    row.write_text(f'title: "{title}"\nsurface: pkg/test_a.py\ntags: [tf]\n', encoding="utf-8")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("submit opened an unindexed archive row")
+
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    with caplog.at_level(logging.INFO, logger=mint_mod.__name__):
+        assert mint_mod._archived_tf_row_ids(tmp_path, {title: "pkg/test_a.py"}) == {}
+    assert "Skipped 1 unindexed bug archive rows" in caplog.text
 
 
 def test_empty_tests_mints_nothing(tmp_path: Path) -> None:

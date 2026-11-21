@@ -95,6 +95,19 @@ def test_an_edited_path_lands(repo):  # noqa: F811
     assert "foreign-hunk-unproduced" not in json.dumps(out)
 
 
+def test_declared_bytes_already_on_head_are_a_noop_landing(repo):  # noqa: F811
+    _stage(repo)
+    _git(repo, "add", *PATHS)
+    _git(repo, "commit", "-q", "-m", "Land the declared bytes before the terminal leg")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+
+    out = _call(repo, ZERO_SLICE)
+
+    assert out.get("already_landed") is True, out
+    assert out["sha"] == head
+    assert _git(repo, "rev-parse", "HEAD").strip() == head
+
+
 def test_a_met_item_on_unwritten_paths_refuses_pre_existing_dirt(repo):  # noqa: F811
     _stage(repo)
     review = {**ZERO_SLICE, "tests": {"edited": ["a.py"]}}

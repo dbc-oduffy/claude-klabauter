@@ -10,7 +10,7 @@ import pytest
 
 from coordinator_core.testing import spawn_depth
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 REPO = Path(__file__).resolve().parents[2]
 CC_TARGET = REPO / "coordinator_core" / "testing" / "test_spawn_depth.py"

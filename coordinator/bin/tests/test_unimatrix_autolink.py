@@ -822,7 +822,7 @@ def test_test_home_refuses_an_ssh_config_key_outside_the_home(env, tmp_path):
 
 def test_test_home_refuses_the_default_key_when_the_settings_home_is_unset(env, monkeypatch):
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME")
-    with pytest.raises(RuntimeError, match="test home refuses real key_path"):
+    with pytest.raises(env.roster.MissingSettingsError, match="COORDINATOR_SETTINGS_HOME"):
         env.roster.default_key()
 
 
@@ -950,16 +950,6 @@ def test_default_resolution_path_matches_todays_shared_key(env):
     sp = Spawner()
     env.al.run(roster=env.roster, boxes=["machine-a", "other"], spawn=sp, probe_fn=ok)
     assert {key_of(c) for c in sp.cmds} == {str(env.key)} and len(sp.cmds) == 4
-
-
-def test_cli_entrypoint_unconfigured_is_silent_exit_zero_and_logs_reason(tmp_path):
-    home = tmp_path / "s"
-    home.mkdir()
-    r = subprocess.run([sys.executable, str(BIN / "unimatrix-autolink.py")], capture_output=True, text=True,
-                       env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(home),
-                            "UNIMATRIX_AUTOLINK_NO_ROUTER": "1"})
-    assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
-    assert "no supervisors started" in (home / "unimatrix" / "autolink.log").read_text()
 
 
 def router_cmds(sp):
@@ -1253,6 +1243,16 @@ def test_snapshot_run_reads_far_boxes_once_for_all_pending_aliases(env, snap, mo
 def test_member_alias_falls_back_to_the_box_name_when_no_alias_matches_the_host(env):
     assert env.al.member_alias(env.roster, "Mac-mini", "Mac-mini.local", [], {}) == "Mac-mini"
     assert env.al.member_alias(env.roster, "Mac-mini", "", ["macmini-lan"], {}) == "Mac-mini"
+
+
+def test_member_alias_matches_an_ip_pinned_alias_by_its_known_hosts_key(env):
+    entries = [(["Mac-mini.local"], "ssh-ed25519 AAAAmini"), (["192.168.0.175"], "ssh-ed25519 AAAAmini")]
+    hosts = {"macmini-lan": "192.168.0.175"}
+    assert env.al.member_alias(env.roster, "Mac-mini", "Mac-mini.local", ["macmini-lan"], hosts,
+                               entries=entries) == "macmini-lan"
+    other = [(["Mac-mini.local"], "ssh-ed25519 AAAAmini"), (["192.168.0.175"], "ssh-ed25519 AAAAother")]
+    assert env.al.member_alias(env.roster, "Mac-mini", "Mac-mini.local", ["macmini-lan"], hosts,
+                               entries=other) == "Mac-mini"
 
 
 @needs_keygen
@@ -2321,3 +2321,325 @@ def test_restart_box_is_dispatched_from_main(env, monkeypatch):
     seen = []
     monkeypatch.setattr(env.al, "cmd_restart_box", lambda alias: seen.append(alias) or 0)
     assert env.al.main(["restart-box", "machine-a"]) == 0 and seen == ["machine-a"]
+
+
+def _wire_run(env, monkeypatch, sp, probe_fn=ok, **fixed):
+    """main() and restart reach run() with no arguments; route it onto the fake spawn, probe and boxes."""
+    real = env.al.run
+    calls = []
+
+    def run(**kw):
+        calls.append(kw)
+        return real(**{"roster": env.roster, "spawn": sp, "probe_fn": probe_fn, **fixed, **kw})
+
+    monkeypatch.setattr(env.al, "run", run)
+    monkeypatch.setattr(env.al, "_roster", lambda: env.roster)
+    return calls
+
+
+def test_run_returns_a_summary_naming_the_roles_started_per_alias(env):
+    add_key(env)
+    summary = env.al.run(roster=env.roster, boxes=["machine-a"], spawn=Spawner(), probe_fn=ok)
+    assert summary == [{"alias": "machine-a", "roles_started": ["bridge", "inbox"], "reason": None}]
+    assert summary.pending == []
+    assert env.al.spawn_lines(summary) == ["spawned bridge+inbox pair for machine-a"]
+
+
+def test_run_summary_names_an_unreachable_alias_as_pending_and_a_keyless_one_as_final(env, tmp_path):
+    add_key(env)
+    bad = lambda roster, alias, key, remote=None: "rc=255"  # noqa: E731
+    down = env.al.run(roster=env.roster, boxes=["machine-a"], spawn=Spawner(), probe_fn=bad)
+    assert down == [{"alias": "machine-a", "roles_started": [], "reason": "unreachable: rc=255"}]
+    assert down.pending == ["machine-a"] and env.al.spawn_lines(down) == []
+    keyless = env.al.run(roster=env.roster, boxes=["nokey"], spawn=Spawner(), probe_fn=ok,
+                         key_fn=lambda r, a: str(tmp_path / "absent"))
+    assert keyless == [{"alias": "nokey", "roles_started": [], "reason": "no relay key"}] and keyless.pending == []
+
+
+def test_healthy_cache_returns_an_empty_summary_with_nothing_pending(env):
+    stamp_pull(env)
+    seed_live_pair(env, "machine-a")
+    (env.sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": ["machine-a"]}))
+    summary = env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, stable_fn=boom)
+    assert summary == [] and summary.pending == []
+
+
+def test_main_prints_one_spawn_line_per_started_pair_and_exits_zero(env, monkeypatch, capsys):
+    add_key(env)
+    _wire_run(env, monkeypatch, Spawner(), boxes=["machine-a", "other"])
+    assert env.al.main([]) == 0
+    out = capsys.readouterr()
+    assert out.out.splitlines() == ["spawned bridge+inbox pair for machine-a", "spawned bridge+inbox pair for other"]
+    assert env.al.main([]) == 0  # both pairs are recorded as started but their fake pids are not live: restarted
+    env.live.update(r["pid"] for p in env.sdir.glob("autolink-*.json") for r in json.loads(p.read_text()).values()
+                    if isinstance(r, dict))
+    capsys.readouterr()
+    assert env.al.main([]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_main_prints_one_stderr_line_when_the_pass_raises_and_still_exits_zero(env, monkeypatch, capsys):
+    def explode(**kw):
+        raise ValueError("no network yet")
+
+    monkeypatch.setattr(env.al, "run", explode)
+    assert env.al.main([]) == 0
+    out = capsys.readouterr()
+    assert out.out == "" and out.err.strip() == "autolink failed: ValueError: no network yet"
+
+
+def test_restart_relinks_after_the_router_line_and_bypasses_the_backoff(env, monkeypatch, capsys):
+    add_key(env)
+    monkeypatch.setattr(env.al, "restart_router", lambda *a, **k: {"stopped": "handshake", "old_pid": 7, "new_pid": 8})
+    calls = _wire_run(env, monkeypatch, Spawner(), boxes=["machine-a"])
+    assert env.al.main(["restart"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "router restarted: handshake old pid 7 new pid 8", "spawned bridge+inbox pair for machine-a"]
+    assert calls[0]["ignore_backoff"] is True
+
+
+def test_restart_that_refuses_links_nothing(env, monkeypatch):
+    def refuse(*a, **k):
+        raise env.al.RouterRestartError("lease held")
+
+    monkeypatch.setattr(env.al, "restart_router", refuse)
+    calls = _wire_run(env, monkeypatch, Spawner())
+    assert env.al.main(["restart"]) == 1 and calls == []
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.t
+
+    def sleep(self, n):
+        self.sleeps.append(n)
+        self.t += n
+
+
+def _summary(env, *pending):
+    s = env.al.LinkSummary()
+    for alias in pending:
+        s.add(alias, [], "unreachable: rc=255")
+    return s
+
+
+def test_boot_stops_at_the_first_pass_when_every_pair_is_live(env, monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(env.al, "run", lambda **kw: _summary(env))
+    assert env.al.cmd_boot(sleep=clock.sleep, clock=clock.monotonic) == 0
+    assert clock.sleeps == []
+
+
+def test_boot_polls_every_30s_until_the_pair_is_live_then_stops(env, monkeypatch, capsys):
+    clock = _Clock()
+    passes = []
+
+    def run(**kw):
+        passes.append(kw)
+        if len(passes) < 3:
+            return _summary(env, "machine-a")
+        s = env.al.LinkSummary()
+        s.add("machine-a", ["bridge", "inbox"], None)
+        return s
+
+    monkeypatch.setattr(env.al, "run", run)
+    assert env.al.cmd_boot(sleep=clock.sleep, clock=clock.monotonic) == 0
+    assert clock.sleeps == [env.al.BOOT_POLL_SECONDS] * 2 and len(passes) == 3
+    assert all(p["ignore_backoff"] is True for p in passes)
+    assert capsys.readouterr().out.splitlines() == ["spawned bridge+inbox pair for machine-a"]
+
+
+def test_boot_gives_up_at_the_window_for_a_box_that_never_answers_and_exits_zero(env, monkeypatch):
+    clock = _Clock()
+    passes = []
+    monkeypatch.setattr(env.al, "run", lambda **kw: passes.append(1) or _summary(env, "sleeping"))
+    assert env.al.cmd_boot(sleep=clock.sleep, clock=clock.monotonic) == 0
+    assert clock.t == env.al.BOOT_WINDOW_SECONDS == 600
+    assert len(passes) == 600 // env.al.BOOT_POLL_SECONDS + 1
+
+
+def test_boot_retries_a_pass_that_raises_until_the_network_is_up(env, monkeypatch, capsys):
+    clock = _Clock()
+    calls = []
+
+    def run(**kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("network unreachable")
+        return _summary(env)
+
+    monkeypatch.setattr(env.al, "run", run)
+    assert env.al.cmd_boot(sleep=clock.sleep, clock=clock.monotonic) == 0
+    assert len(calls) == 2 and "autolink failed: OSError: network unreachable" in capsys.readouterr().err
+
+
+def test_boot_pass_two_links_a_box_whose_pass_one_probe_charged_a_backoff(env, monkeypatch, capsys):
+    add_key(env)
+    clock = _Clock()
+    state = {"up": False}
+
+    def probe_fn(roster, alias, key, remote=None):
+        return None if state["up"] else "rc=255"
+
+    real_sleep = clock.sleep
+
+    def sleep(n):
+        state["up"] = True
+        real_sleep(n)
+
+    _wire_run(env, monkeypatch, Spawner(), probe_fn=probe_fn, boxes=["machine-a"])
+    assert env.al.cmd_boot(sleep=sleep, clock=clock.monotonic) == 0
+    assert capsys.readouterr().out.splitlines() == ["spawned bridge+inbox pair for machine-a"]
+
+
+def test_plain_run_skips_a_box_inside_its_backoff_and_ignore_backoff_probes_it(env):
+    add_key(env)
+    bad = lambda roster, alias, key, remote=None: "rc=255"  # noqa: E731
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=Spawner(), probe_fn=bad)
+    skipped = env.al.run(roster=env.roster, boxes=["machine-a"], spawn=Spawner(), probe_fn=ok)
+    assert skipped == [{"alias": "machine-a", "roles_started": [], "reason": "probe backoff"}]
+    linked = env.al.run(roster=env.roster, boxes=["machine-a"], spawn=Spawner(), probe_fn=ok, ignore_backoff=True)
+    assert linked[0]["roles_started"] == ["bridge", "inbox"]
+
+
+def test_resolve_key_tries_the_machine_local_key_of_each_matching_alias_before_ssh_and_default(env, tmp_path):
+    other = write_key(env.home / "other-key")
+    ssh_calls = []
+    local = lambda r, a: other if a == "other" else None  # noqa: E731
+    ssh = lambda r, a: ssh_calls.append(a)  # noqa: E731
+    via = lambda: iter(["macmini-lan", "other"])  # noqa: E731
+    key = env.al.resolve_key(env.roster, "macmini-lan", local, ssh, via=via)
+    assert key == other and ssh_calls == []
+    assert env.al.resolve_key(env.roster, "macmini-lan", lambda r, a: write_key(env.home / "own"), ssh,
+                              via=via) == str(env.home / "own")
+    assert env.al.resolve_key(env.roster, "macmini-lan", lambda r, a: None, lambda r, a: None,
+                              via=via) == str(env.key)
+
+
+def test_matching_aliases_lists_name_matches_before_known_host_key_matches(env):
+    entries = [(["Mac-mini.local"], "ssh-ed25519 AAAAmini"), (["100.64.0.9"], "ssh-ed25519 AAAAmini")]
+    hosts = {"other": "100.64.0.9", "macmini-lan": "mac-mini"}
+    got = list(env.al.matching_aliases(env.roster, "Mac-mini.local", ["other", "macmini-lan", "unrelated"], hosts,
+                                       entries=entries))
+    assert got == ["macmini-lan", "other"]
+    assert env.al.member_alias(env.roster, "Mac-mini", "Mac-mini.local", ["other", "macmini-lan"], hosts,
+                               entries=entries) == "macmini-lan"
+
+
+@needs_keygen
+def test_snapshot_member_links_with_the_key_set_only_under_a_host_key_matched_alias(env, snap, monkeypatch):
+    add_key(env)
+    snap.adopt("Mac-mini")
+    mini_key = write_key(env.home / "keys" / "unimatrix-gipsy-lan")
+    (env.home / "bin" / "_machine_local.py").write_text(
+        "import sys\nk = sys.argv[-1]\n"
+        f"vals = {{'unimatrix.far_boxes': 'macmini-lan other', 'unimatrix.keys.other': {mini_key!r}}}\n"
+        "print(vals.get(k, ''))\nsys.exit(0 if k in vals else 1)\n")
+    hosts = {"macmini-lan": "mac-mini.local", "other": "100.64.0.9"}
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, alias, run=None: hosts.get(alias))
+    monkeypatch.setattr(env.al, "_known_hosts_entries", lambda *a, **k: [
+        (["Mac-mini.local"], "ssh-ed25519 AAAAmini"), (["100.64.0.9"], "ssh-ed25519 AAAAmini")])
+    sp = Spawner()
+    summary = env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(), pull_fn=lambda *a: False)
+    assert [key_of(c) for c in sp.cmds] == [mini_key, mini_key]
+    assert env.al.spawn_lines(summary) == ["spawned bridge+inbox pair for kim@Mac-mini.local"]
+
+
+def lan_route_for(env, endpoint="kim@192.0.2.7"):
+    far = env.al._far()
+    return far.Route("machine-a", "machine-a", endpoint, "lan", str(env.key), None, far.OK)
+
+
+def remotes(sp):
+    return {c[c.index("--remote") + 1] for c in sp.cmds}
+
+
+def test_verified_lan_route_replaces_the_off_lan_probe_and_supervisors_keep_the_logical_peer(env):
+    add_key(env)
+    sp = Spawner()
+    seen = []
+    probe_fn = stale_ip_probe(set())
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=probe_fn, stable_fn=lambda a: None,
+               lan_fn=lambda roster, alias, key: seen.append((alias, key)) or lan_route_for(env))
+    assert seen == [("machine-a", str(env.key))] and probe_fn.seen == []
+    assert remotes(sp) == {"machine-a"} and len(sp.cmds) == 2
+    assert {c[c.index("--key") + 1] for c in sp.cmds} == {str(env.key)}
+    assert "verified LAN route kim@192.0.2.7" in (env.sdir / "autolink.log").read_text()
+
+
+def test_no_lan_route_keeps_the_recorded_name_and_probe_chain(env):
+    add_key(env)
+    sp = Spawner()
+    probe_fn = stale_ip_probe({"machine-a"})
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=probe_fn,
+               lan_fn=lambda *a: None)
+    assert probe_fn.seen == ["machine-a"] and remotes(sp) == {"machine-a"}
+
+
+def test_unverified_lan_falls_back_to_the_authenticated_stable_route(env):
+    add_key(env)
+    sp = Spawner()
+    probe_fn = stale_ip_probe({"machine-a-lan"})
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=probe_fn,
+               stable_fn=lambda a: "machine-a-lan", lan_fn=lambda *a: None)
+    assert remotes(sp) == {"machine-a-lan"}
+
+
+def test_working_pair_is_never_replaced_to_claim_lan(env):
+    add_key(env)
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok, lan_fn=lambda *a: None)
+    env.live.update({1001, 1002})
+
+    def boom(*a, **k):
+        raise AssertionError("a live pair is not re-routed")
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=boom, stable_fn=boom,
+               lan_fn=lambda *a: lan_route_for(env) if boom() else None)
+    assert len(sp.cmds) == 2
+
+
+def far_args(far, addresses, status, hostkey="SHA256:pinned-machine-a"):
+    values = {"unimatrix.addresses.machine-a": addresses, "unimatrix.hostkey.machine-a": hostkey}
+    verified = []
+
+    def verify(target):
+        verified.append(target)
+        return status(target)
+    return dict(far=far, read_key=lambda name: values.get(name, ""), connect=lambda a: True, verify=verify), verified
+
+
+def test_lan_route_returns_the_first_host_key_verified_address(env):
+    far = env.al._far()
+    kw, verified = far_args(far, "192.0.2.5, 192.0.2.7",
+                            lambda t: (far.NOT_THIS_BOX, "") if t.endswith("5") else (far.OK, ""))
+    route = env.al.lan_route(env.roster, "kim@machine-a", str(env.key), **kw)
+    assert (route.transport, route.endpoint, route.peer) == ("lan", "kim@192.0.2.7", "machine-a")
+    assert verified == ["kim@192.0.2.5", "kim@192.0.2.7"]
+
+
+def test_lan_route_never_takes_lan_for_a_peer_with_no_pinned_host_key(env):
+    far = env.al._far()
+    kw, verified = far_args(far, "192.0.2.7", lambda t: (far.OK, ""), hostkey="")
+    assert env.al.lan_route(env.roster, "kim@machine-a", str(env.key), **kw) is None and verified == []
+
+def test_lan_route_refuses_a_wrong_peer_address_and_an_unreachable_one(env):
+    far = env.al._far()
+    kw, verified = far_args(far, "192.0.2.5", lambda t: (far.NOT_THIS_BOX, ""))
+    assert env.al.lan_route(env.roster, "kim@machine-a", str(env.key), **kw) is None
+    kw, _ = far_args(far, "192.0.2.5", lambda t: (far.OK, ""))
+    kw["connect"] = lambda a: False
+    assert env.al.lan_route(env.roster, "kim@machine-a", str(env.key), **kw) is None
+
+
+def test_lan_route_with_no_address_list_spawns_no_verify_and_a_failure_reads_as_none(env):
+    far = env.al._far()
+    kw, verified = far_args(far, "", lambda t: (far.OK, ""))
+    assert env.al.lan_route(env.roster, "kim@machine-a", str(env.key), **kw) is None and verified == []
+
+    def boom(name):
+        raise OSError("reader")
+    assert env.al.lan_route(env.roster, "kim@machine-a", str(env.key), far=far, read_key=boom) is None

@@ -787,6 +787,22 @@ def live_row_ids(
     return ids
 
 
+def _sole_run_tag(where: Optional[Sequence[Sequence[Sequence[Any]]]]) -> Optional[bytes]:
+    """The run tag every row must carry when `where` is one conjunction with a `tags contains <bug-blitz run tag>` term.
+
+    Purpose: a blitz submission selects only its own minted rows, so a row whose raw bytes lack the tag
+    cannot match and is never parsed. Trap: the tag is a list item, so it appears verbatim in the row text.
+    """
+    from coordinator_core.bug_blitz.contract import RUN_TAG_PREFIX
+
+    if not where or len(where) != 1:
+        return None
+    for term in where[0]:
+        if len(term) == 3 and term[0] == "tags" and term[1] == "contains" and str(term[2]).startswith(RUN_TAG_PREFIX):
+            return str(term[2]).encode("utf-8")
+    return None
+
+
 def select_rows(
     queue: Sequence[Path],
     *,
@@ -804,6 +820,7 @@ def select_rows(
     claimant_sid: Optional[str] = None,
     row_schema_gate: Optional[RowSchemaGate] = None,
     write_handback_marks: bool = False,
+    tagged_row_ids: Optional[frozenset[str]] = None,
 ) -> Manifest:
     """Turn one or more queue directories into a frozen `Manifest`.
 
@@ -816,6 +833,8 @@ def select_rows(
     (`grind_vocab.WHERE_OPERATORS`); a malformed or unsupported term is
     refused naming the term (`WhereTermError`). `absent_sentinels` values are
     normalised out of each row once, before `where` and batch-key coalescing.
+    `tagged_row_ids` comes from the submit that just minted or reused rows for its
+    run tag. Other filenames still enter the inventory for a tagged selection.
     `order` is `(field, ordered_values)`: rows sort by their field value's
     index in `ordered_values` (unlisted values sort last, stably); `None`
     keeps read order. `batch_key` is an ordered coalesce list; a row missing
@@ -842,18 +861,19 @@ def select_rows(
     absent_sentinels = absent_sentinels or {}
     repo_root = Path(repo_root)
 
-    seen_stems: dict[str, Path] = {}
+    seen_stems: dict[str, tuple[Path, str]] = {}
     # (row_id, path, digest, normalised, pm_ruling, parsed)
     rows: list[tuple[str, Path, str, dict[str, Any], str, dict[str, Any]]] = []
 
     source_result: Optional[SourceOpResult] = None
-    row_files: list[Path] = []
+    row_files: list[tuple[Path, str]] = []
     if source is not None:
         if source_row_dir is None:
             raise ValueError("queue_select: source requires source_row_dir")
-        source_result, row_files = _materialise_source_rows(
+        source_result, source_files = _materialise_source_rows(
             source, row_id_key=row_id_key, repo_root=repo_root, row_dir=Path(source_row_dir)
         )
+        row_files.extend((path.parent, path.name) for path in source_files)
     else:
         for queue_dir in queue:
             queue_dir = Path(queue_dir)
@@ -866,10 +886,30 @@ def select_rows(
                     and (entry.name.endswith(".yaml") or entry.name.endswith(".yml"))
                     and entry.is_file()
                 )
-            row_files.extend(queue_dir / name for name in names)
+            row_files.extend((queue_dir, name) for name in names)
 
-    for row_path in row_files:
-        raw_bytes = row_path.read_bytes()
+    run_tag_needle = _sole_run_tag(where) if row_id_key == "@stem" else None
+    unparsed_ids: list[str] = []
+    for location in row_files:
+        directory, name = location
+        stem = name.rpartition(".")[0]
+        outside_minted = (
+            run_tag_needle is not None and tagged_row_ids is not None
+            and source is None and stem not in tagged_row_ids
+        )
+        row_path = None if outside_minted else directory / name
+        raw_bytes = b"" if row_path is None else row_path.read_bytes()
+        if run_tag_needle is not None and run_tag_needle not in raw_bytes:
+            if stem in seen_stems and seen_stems[stem] != location:
+                other_dir, other_name = seen_stems[stem]
+                raise DuplicateStemError(
+                    f"queue_select: stem {stem!r} is yielded by both "
+                    f"{other_dir / other_name!s} and {directory / name!s}"
+                )
+            seen_stems[stem] = location
+            unparsed_ids.append(stem)
+            continue
+        assert row_path is not None
         digest = hashlib.sha256(raw_bytes).hexdigest()
         try:
             parsed = schema_validate.parse_yaml(raw_bytes.decode("utf-8"))
@@ -885,14 +925,15 @@ def select_rows(
             )
 
         row_id = _file_row_id(row_path, parsed, row_id_key)
-        if row_id in seen_stems and seen_stems[row_id] != row_path:
+        if row_id in seen_stems and seen_stems[row_id] != location:
+            other_dir, other_name = seen_stems[row_id]
             error = DuplicateStemError if row_id_key == "@stem" else DuplicateRowIdError
             label = "stem" if row_id_key == "@stem" else "row_id"
             raise error(
                 f"queue_select: {label} {row_id!r} is yielded by both "
-                f"{seen_stems[row_id]!s} and {row_path!s}"
+                f"{other_dir / other_name!s} and {row_path!s}"
             )
-        seen_stems[row_id] = row_path
+        seen_stems[row_id] = location
 
         normalised = _normalise_sentinels(parsed, absent_sentinels)
         raw_ruling = parsed.get("pm_ruling")
@@ -953,7 +994,7 @@ def select_rows(
     selected_ids = {r[0] for r in filtered}
     claimed_ids = {c.row_id for c in claimed}
     unselected = tuple(
-        sorted(r[0] for r in rows if r[0] not in selected_ids and r[0] not in claimed_ids)
+        sorted([r[0] for r in rows if r[0] not in selected_ids and r[0] not in claimed_ids] + unparsed_ids)
     )
 
     ledger_by_row = _read_ledger_lines(profile, repo_root)
@@ -980,8 +1021,7 @@ def select_rows(
             )
             continue
         if profile in _LIVENESS_GATED_PROFILES:
-            # Trap: no cold-start saving while grind_stages (-> backlog_grind_assemble/__init__) still imports readers_blitz at module level.
-            from coordinator_core.backlog_grind_assemble.readers_blitz import (
+            from coordinator_core.ops.dispatch_emit.record_paths import (
                 bare_cited_surface,
                 is_item_live,
             )
@@ -1049,7 +1089,7 @@ def select_rows(
     declined_sorted = tuple(sorted(declined, key=lambda d: d.row_id))
 
     _assert_every_row_accounted(
-        (r[0] for r in rows), entries, declined_sorted, unselected, claimed
+        [*(r[0] for r in rows), *unparsed_ids], entries, declined_sorted, unselected, claimed
     )
 
     return Manifest(

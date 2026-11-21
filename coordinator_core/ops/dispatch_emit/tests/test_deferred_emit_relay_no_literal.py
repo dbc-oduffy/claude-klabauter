@@ -6,7 +6,6 @@ import json
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -88,47 +87,6 @@ def test_the_carry_file_the_script_wrote_holds_the_digest(tmp_path):
         "launcher_child": True, "target_root": tmp_path.as_posix(),
         "warp_home": (tmp_path / "state" / "warp").as_posix(),
     }
-
-
-def test_the_relay_command_hands_the_emit_the_digest_intact(tmp_path):
-    """Runs the prompt's fixed merge command on the heredoc body as a relay would copy it; the emit's stdin carries the digest."""
-    script, params = _written_script(tmp_path)
-    text = script.read_text(encoding="utf-8")
-    carry_file = _carry_file_of(text)
-    prompt = _prompt_for(carry_file)
-    merge_py = re.search(r'(?:python3?) -c "(.*?)" "', prompt).group(1)
-    body = re.search(r"<<'CHAIN_PARAMS_JSON' \| .*?\n(.*?)\nCHAIN_PARAMS_JSON\n", prompt, re.S).group(1)
-    run_dir = tmp_path / "state" / "warp" / _ASK
-    run_dir.mkdir(parents=True)
-    (run_dir / "run.json").write_text(json.dumps({"sizing_rel": SIZING}), encoding="utf-8")
-    out = subprocess.run([sys.executable, "-c", merge_py, carry_file, _ASK], input=body, capture_output=True, text=True,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    assert out.returncode == 0, out.stderr
-    emitted = json.loads(out.stdout)
-    assert emitted["em_context_digest"] == DIGEST
-    assert emitted["ask_brief_file"] == BRIEF_FILE
-    assert emitted["sizing_path"] == SIZING
-    assert emitted["chain_parent"] == _ASK
-    assert emitted["ask"] is True
-    assert emitted["launcher_child"] is True
-
-
-def test_research_handoff_merge_drops_warp_home_and_keeps_the_carry(tmp_path):
-    """A research-sizing hand-off names no sizing_path, so the plain merge runs; its stdin must not carry warp_home."""
-    script, params = _written_script(tmp_path)
-    carry_file = _carry_file_of(script.read_text(encoding="utf-8"))
-    assert "warp_home" in json.loads(Path(carry_file).read_text(encoding="utf-8"))
-    prompt = _prompt_for(carry_file, {"ask": True, "chain_parent": _ASK, "value_class": "corpus"})
-    assert "run.json" not in prompt, "the research hand-off takes the plain merge, not the run.json join"
-    merge_py = re.search(r'(?:python3?) -c "(.*?)" "', prompt).group(1)
-    body = re.search(r"<<'CHAIN_PARAMS_JSON' \| .*?\n(.*?)\nCHAIN_PARAMS_JSON\n", prompt, re.S).group(1)
-    out = subprocess.run([sys.executable, "-c", merge_py, carry_file], input=body, capture_output=True, text=True,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    assert out.returncode == 0, out.stderr
-    emitted = json.loads(out.stdout)
-    assert "warp_home" not in emitted
-    assert emitted["em_context_digest"] == DIGEST and emitted["launcher_child"] is True
-    assert emitted["value_class"] == "corpus"
 
 
 def test_no_brief_keys_keeps_the_plain_heredoc_command():

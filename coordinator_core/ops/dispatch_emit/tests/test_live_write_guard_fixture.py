@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import halt_tree_evict
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PATH = "pkg/mod.py"
 HEAD = b"a = 1\nb = 2\nc = 3\nd = 4\n"

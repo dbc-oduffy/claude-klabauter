@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextvars
 import functools
+import hashlib
 import json
 import posixpath
 import re
@@ -22,8 +23,11 @@ from typing import Any, Callable, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.git.residue_classes import REPLY_KEY as _RESIDUE_REPLY_KEY, RESIDUE_DIRECTIVE as _RESIDUE_DIRECTIVE
+from coordinator_core.session.output_tree_layout import plan_sidecar_rel
 from coordinator_core.warp_fire import _ASK_PLACEHOLDER, SUBMIT_WORKFLOW_NAME, fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
+from coordinator_core.ops.dispatch_emit.engine_command import OVERLAY_VERIFY_MODULE as _OVERLAY_VERIFY_MODULE
+from coordinator_core.ops.dispatch_emit.engine_command import engine_module_command, powershell_quote as _powershell_quote
 from coordinator_core.ops.dispatch_emit import agent_body_dedupe as _agent_body_dedupe
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit import run_notes as _run_notes
@@ -68,6 +72,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     GAPS_CLOSED_FIELD,
     HALT_GAP_RULE,
     HALT_DEPENDENTS_UNSTARTED,
+    HALT_NO_DISPATCHABLE_EXECUTOR,
     LEG_REFUSAL_HEAD,
     LATE_ROWS_FIELD,
     LEG_REFUSE,
@@ -91,6 +96,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     PARKED_REPLY_KEY,
     PM_INTENT_FILE,
     RESUME_LEDGER_CREDITED_FIELD,
+    RESUME_LEDGER_EM_DONE_FIELD,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_KEY,
@@ -114,6 +120,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_REFUSAL,
     REGISTER_ROWS_UNCLAIMED_REFUSAL,
     HALT_RESEARCH,
+    HALT_REVIEWER_UNREADY,
     HALT_ROOM,
     HALT_SPLIT,
     HALT_TOUCHPOINT,
@@ -239,6 +246,7 @@ from coordinator_core.ops.dispatch_emit.stage_task_hijack import HIJACK_HALT_REA
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     _BASELINE_CLEARS_JS,
     CAP_HELPER_JS,
+    RECOVERED_COMMIT_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
     TERMINAL_COMMIT_CLI_PROPERTY_JS,
     INTEGRATION_NOT_RUN_VAR,
@@ -493,6 +501,9 @@ _LOW_EFFORT_LABELS = frozenset({"halt-reverify", "ledger-reverify", "remnant-rev
 #: The stager of the compose in progress; `_agent` stages a call's large static runs through it when the
 #: caller passed none, so every leg's brief leaves the script without a per-site `stager=`.
 _ACTIVE_STAGER: contextvars.ContextVar[Optional[Stager]] = contextvars.ContextVar("ask_active_stager", default=None)
+#: The compose's per-run string arguments, by name: what `_hoist_stage` swaps for placeholders so one shape's hoist is computed once.
+_RUN_VALUE_KEYS = ("run_id", "session_id", "prompt", "sizing_rel", "script_path", "repo_root")
+_RUN_VALUES: contextvars.ContextVar[tuple] = contextvars.ContextVar("ask_run_values", default=())
 _STAGE_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -515,9 +526,11 @@ def _staging_scope(fn: Callable[..., str]) -> Callable[..., str]:
     @functools.wraps(fn)
     def inner(*args: Any, **kwargs: Any) -> str:
         token = _ACTIVE_STAGER.set(None)
+        values = _RUN_VALUES.set(tuple(kwargs.get(k) for k in _RUN_VALUE_KEYS))
         try:
             return fn(*args, **kwargs)
         finally:
+            _RUN_VALUES.reset(values)
             _ACTIVE_STAGER.reset(token)
 
     return inner
@@ -886,10 +899,10 @@ _EDIT_IN_PLACE_NO_REREAD = (
 def _carried_outputs_part(plan_js: str) -> str:
     """A `js:` part naming the run's prior-art and premise-check sidecars beside the plan at `plan_js`:
     paths to read, not to re-run."""
-    stem = f"String({plan_js}).split('/').pop().replace(/\\.md$/, '')"
+    base = f"String({plan_js}).replace(/\\\\/g, '/').replace(/\\.md$/, '')"
     return (
         "js:' Existing check outputs, read them if present and never re-run the checks: "
-        f"docs/plans/' + {stem} + '.prior-art-check.md and docs/plans/' + {stem} + '.premise-check.md.'"
+        f"' + {base} + '.prior-art-check.md and ' + {base} + '.premise-check.md.'"
     )
 
 
@@ -1822,10 +1835,9 @@ def _test_blockers_js(
         f"[...new Set((Array.isArray({p}Src?.failing) ? {p}Src.failing : (typeof {p}Src?.failing === 'string' ? [{p}Src.failing] : [])).map(String))]"
         f".filter((n) => !{p}Resolved && !{p}Excluded.has(n))"
     )
-    out_of_ask = (
-        f"    const {p}OutOfAsk = {live}.filter((n) => !{in_own}).sort();\n"
-        if own_paths_expr and declare_out_of_ask else ""
-    )
+    # Both lists filter the one live set; each `.filter` copies, so the `.sort()` of one never reorders the other.
+    shared_live = bool(own_paths_expr and declare_out_of_ask)
+    out_of_ask = f"    const {p}OutOfAsk = {p}Live.filter((n) => !{in_own}).sort();\n" if shared_live else ""
     return (
         f"    const {p}Src = {src_expr};\n"
         + own
@@ -1834,7 +1846,8 @@ def _test_blockers_js(
         f"    const {p}Detail = new Map();\n"
         f"    const {p}Raw = {p}Src?.{FAILING_DETAIL_FIELD};\n"
         f"    if (Array.isArray({p}Raw)) {{ for (const d of {p}Raw) {{ if (d && d.node_id) {p}Detail.set(String(d.node_id), d.message == null ? '' : String(d.message)); }} }}\n"
-        f"    const {p}Failing = {live}{own_filter}.sort().map((n) => ({{ node_id: n, message: {p}Detail.get(n) ?? '' }}));\n"
+        + (f"    const {p}Live = {live};\n" if shared_live else "")
+        + f"    const {p}Failing = {p + 'Live' if shared_live else live}{own_filter}.sort().map((n) => ({{ node_id: n, message: {p}Detail.get(n) ?? '' }}));\n"
         + out_of_ask
         + f"    const {p}Gaps = {p}Failing.map((t) => t.node_id + ': ' + (t.message.trim().split('\\n')[0] ?? '').trim().slice(0, 300));\n"
     )
@@ -2141,6 +2154,8 @@ def _review_recover_js(
     _leg_timeout_ms = (TEST_LEG_MINUTES_BUDGET + 1) * 60_000
     run_abs_out = f"{run_dir or record_dir}/halt-reverify-tests.json"
     base_flag = f" --base-sha {run_base_sha}" if run_base_sha else ""
+    if repo_root:
+        base_flag += f' --repo-root "{Path(repo_root).as_posix()}"'
     reverify_prompt = _cat(
         f"{head}\n\n{anchor}\n\nHalt re-verify leg (review). A fix leg just ran. Run "
         f"`python -m coordinator_core.ops.test_leg_run{base_flag} --out {run_abs_out} -- ` followed by these failing test ids and the scoped tests of these files: ",
@@ -2222,8 +2237,8 @@ def _criterion_blocker_halt_js(sizing_rel: Optional[str]) -> str:
 #: Why a returned test verdict proved nothing, or '' when it proved something: zero tests run (named by
 #: `zero_run_cause` when the leg reports one), or an error status that names no failing id. A fail
 #: naming ids, and a pass or skip-pass that ran tests, return ''.
-_TEST_UNPROVEN_CAUSE_JS = (
-    "(() => { const _r = _testResult; "
+_TEST_UNPROVEN_CAUSE_FN = (
+    "    const _testUnproven = () => { const _r = _testResult; "
     "const _ids = (Array.isArray(_r.failing_ids) ? _r.failing_ids : []).filter((x) => typeof x === 'string' && x.trim()); "
     "if (typeof _r.tests_run === 'number' && _r.tests_run === 0) "
     "return 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : '') "
@@ -2231,7 +2246,14 @@ _TEST_UNPROVEN_CAUSE_JS = (
     "? ': ' + (typeof _r.import_error.symbol === 'string' ? \"'\" + _r.import_error.symbol + \"' defined only in uncommitted \" : '') + _r.import_error.path + ' (run ' + (_r.import_error.run_id || 'unowned') + ')' : ''); "
     "if (_ids.length) return ''; "
     "if (['error', 'errored'].includes(_r.status)) return 'errored without a failing id'; "
-    "return ''; })()"
+    "return ''; };\n"
+)
+_TEST_UNPROVEN_CAUSE_JS = "_testUnproven()"
+_TEST_RAN_FN = "_testRan"
+#: A test leg that recorded a verdict: a status that is not `not_run` and a sidecar path.
+_TEST_RAN_JS = (
+    "(_testResult && typeof _testResult.status === 'string' && _testResult.status && _testResult.status !== 'not_run' "
+    "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim())"
 )
 
 
@@ -2242,9 +2264,8 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
     verify leg, where journal replay would hand back the cached empty verdict. A verdict that ran
     zero tests or errored without a failing id halts the same way with the cause in `detail`."""
     return (
-        "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
-        "&& _testResult.status && _testResult.status !== 'not_run' "
-        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim() "
+        _TEST_UNPROVEN_CAUSE_FN
+        + "    if (!_halted && (TEST_GUARD) && !(_testRan() "
         "&& !" + _TEST_UNPROVEN_CAUSE_JS + ") "
         "&& (_testResult?.tests_run === 0 || !(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object' "
         "&& _reviewReverify.status_after === 'pass' "
@@ -2260,8 +2281,7 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "_halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
         "...(_testResult?.tests_run === 0 ? { halted: 'test_infra_failure' } : {}), "
         "failing: _rvFail, pre_existing: _rvPre, "
-        "detail: ((_testResult && typeof _testResult.status === 'string' && _testResult.status && _testResult.status !== 'not_run' "
-        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim()) "
+        "detail: (_testRan() "
         "? 'the test leg proved nothing: ' + " + _TEST_UNPROVEN_CAUSE_JS + " + '; the run did not pass its tests' "
         ": 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests') + "
         "(_rvFail.length ? '; re-verify reds not red at the run base: ' + _rvFail.join(', ') : "
@@ -2277,9 +2297,7 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
 def _test_verdict_limit_route_js() -> str:
     """Ahead of the empty-verdict halt: an owed test leg with no verdict whose returned text is a usage limit halts `usage_limit`."""
     return (
-        "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
-        "&& _testResult.status && _testResult.status !== 'not_run' "
-        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim())) "
+        "    if (!_halted && (TEST_GUARD) && !_testRan()) "
         "{ const _tvLimit = _limitTextIn(_testResult); if (_tvLimit) { _haltOnUsageLimit(_tvLimit); } }"
     )
 
@@ -2389,7 +2407,8 @@ def _usage_limit_helper_js() -> str:
         "    if (!_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) return false;\n"
         "    _haltOnUsageLimit(e);\n"
         "    return true;\n"
-        "  }"
+        "  }\n"
+        + RECOVERED_COMMIT_HELPER_JS
     )
 
 
@@ -2429,7 +2448,7 @@ def _halt_next_action_text_helper_js(sizing_rel: Optional[str]) -> str:
         "      const _re = typeof _na.call === 'string' ? _na.call : (_na.input && typeof _na.input.refire === 'string' ? _na.input.refire : null);\n"
         "      return 'kind: ' + String(_na.kind ?? _halted.halted) + '; ' + (_rev ? _rev + '; ' : '') + (_re ? 'refire: ' + _re : '');\n"
         "    }\n"
-        f"    if (_halted.halted === {_lit(HALT_REFUSAL)}) return 'Refire: ' + {_refire_js(sizing_rel)};\n"
+        f"    if (_halted.halted === {_lit(HALT_REFUSAL)} || _halted.halted === {_lit(HALT_NO_DISPATCHABLE_EXECUTOR)}) return 'Refire: ' + {_refire_js(sizing_rel)};\n"
         "    return '';\n"
         "  }"
     )
@@ -2440,14 +2459,18 @@ _PLAN_SLOT = "PLAN_PATH_SLOT_X"
 _FLAT_PLAN_EDGE_JS = r"((p) => String(p).replace(/^(docs\/plans\/)\d{4}-\d{2}\//, '$1'))"
 
 
-def _located_plan_js(planner_js: str) -> str:
-    """JS expression: the planner's `planPath` string, swapped for the sizing's sharded stage-1 path
-    (`_planPathFor(_sizingRel)`) when the two differ only by the month shard. The script has no
-    disk access, so an engine-resumed plan (`_gate.resume_plan`) is kept as the engine located it."""
-    return (
-        f"((_pp) => (typeof _pp === 'string' && _sizingRel && !(typeof _gate !== 'undefined' && _gate && _gate.resume_plan === _pp) "
-        f"&& {_FLAT_PLAN_EDGE_JS}(_planPathFor(_sizingRel)) === {_FLAT_PLAN_EDGE_JS}(_pp)) ? _planPathFor(_sizingRel) : _pp)({planner_js})"
-    )
+#: JS lambda: a planner's `planPath` string, swapped for the sizing's sharded stage-1 path
+#: (`_planPathFor(_sizingRel)`) when the two differ only by the month shard. The script has no
+#: disk access, so an engine-resumed plan (`_gate.resume_plan`) is kept as the engine located it.
+_LOCATE_LAMBDA_JS = (
+    "(_pp) => (typeof _pp === 'string' && _sizingRel && !(typeof _gate !== 'undefined' && _gate && _gate.resume_plan === _pp) "
+    f"&& {_FLAT_PLAN_EDGE_JS}(_planPathFor(_sizingRel)) === {_FLAT_PLAN_EDGE_JS}(_pp)) ? _planPathFor(_sizingRel) : _pp"
+)
+
+
+def _located_plan_of_js(reply_js: str) -> str:
+    """JS expression: `_LOCATE_LAMBDA_JS` applied to `reply_js.planPath` when the reply is an object, else to the reply itself."""
+    return f"((_lp) => ({reply_js} && typeof {reply_js} === 'object') ? _lp({reply_js}.planPath) : _lp({reply_js}))({_LOCATE_LAMBDA_JS})"
 
 
 _RUNTIME_PLAN_PATH_JS = "(_planRel ?? _sizingRel)"
@@ -2557,10 +2580,6 @@ VERIFY_TESTS_LABEL = "verify-tests"
 _VERIFY_TEST_RESULT_VAR = "_verifyTest"
 
 
-def _powershell_quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
 def _verify_tests_call(
     *, head: str, anchor: str, test_js: str, run_id: str, repo_root: str = "", out_path: str = "",
     base_sha: Optional[str] = None, stager: Optional[Stager] = None, agent_type_host: Optional[str] = None,
@@ -2572,6 +2591,8 @@ def _verify_tests_call(
     the call, so nothing cuts the run
     before the runner's own budget."""
     base_flag = f"--base-sha {base_sha} " if base_sha else ""
+    if repo_root:
+        base_flag += f'--repo-root "{Path(repo_root).as_posix()}" '
     leg_command = engine_module_command(
         "coordinator_core.ops.test_leg_run", repo_root, f"{base_flag}--out {shlex.quote(out_path)} -- ",
         shell="bash",
@@ -2752,6 +2773,7 @@ def _verify_call(
         + ("`judge` (the criterion verdict fields the judge brief above names, its status included), " if judged else "")
         + "`items`, `all_of_pm_ask` and `conflicts` (the ledger verdict), and `doc_paths`, `note_path` and "
         "`stale_docs` (step 2).",
+        "js:_vNudge",
     )
     return _agent(
         prompt, label=ASK_VERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
@@ -2759,58 +2781,26 @@ def _verify_call(
     )
 
 
+#: Appended to the verify prompt for the one re-ask after a reply with no schema-valid verdict (the agent
+#: worked, then ended empty). The headless agent is ephemeral, so this is a fresh agent that rereads its own sidecars.
+_VERIFY_REASK = (
+    "\n\nRE-ASK: the previous attempt at this task ended with no verdict JSON. Do no new work and run no tests: "
+    "read what it already wrote under __DIR__ (judge.md and the other sidecars) and reply with the verdict object only."
+)
+#: Spliced into `_runVerify`'s catch: the re-ask (`_vRe`) failed too, so the halt is typed and names the artifacts.
+_VERIFY_REPLY_MISSING_JS = (
+    "if (_vRe) { _halted = { halted: 'verify_reply_missing', run_id: _runId, agent: 'verify (coordinator:executor)', "
+    "artifacts: ['__DIR__', ..._verdictReports.map((r) => r.path)], "
+    "detail: 'the verify agent ended with no verdict JSON twice (re-asked once): ' + _m, "
+    "next_action: 'Read the verify sidecars under __DIR__, then refire: ' + __REFIRE__ }; }"
+)
+
+
 OVERLAY_VERIFY_LABEL = "overlay-verify"
-_OVERLAY_VERIFY_MODULE = "coordinator_core.ops.dispatch_emit.clean_overlay_verify"
 _OVERLAY_SCHEMA = _obj(["exit_code"], {"exit_code": {"type": "integer"}, "detail": {"type": ["string", "null"]}})
 
 
 FAMILY_CREDIT_MODULE = "coordinator_core.ops.dispatch_emit.family_credit"
-
-
-def engine_module_command(module: str, repo_root: str, args: str = "", *, portable: bool = False,
-                          shell: Optional[str] = None) -> str:
-    """`<engine interpreter> -m <module> <args>` for a command an agent runs to reach `coordinator_core`.
-    The interpreter is the repo's resolvable pin, else this process's own absolute `sys.executable`; never a
-    bare `python`, which on a host whose PATH python lacks `coordinator_core` fails before the module runs.
-    `PYTHONPATH` names the engine checkout so the module imports from a consumer repo cwd.
-    Trap: both carry host paths; `portable` drops them for text inside a committed emitted script, which carries
-    no host path (`test_emitted_script_carries_no_host_path`), leaving a bare `python` that needs `coordinator_core` importable."""
-    from coordinator_core.ops.dispatch_emit.clean_overlay_verify import engine_python_command
-
-    if portable and shell is None:
-        return f"python -m {module}" + (f" {args}" if args else "")
-    engine_root = Path(__file__).resolve().parents[3].as_posix()
-    if shell is not None:
-        if portable:
-            bootstrap = (
-                "import os,runpy,sys;root=os.environ.get('COORDINATOR_ENGINE_ROOT');module=sys.argv.pop(1);"
-                "path=os.path.join(root,*module.split('.'))+'.py' if root else None;"
-                "root and (os.path.isabs(root) and os.path.isfile(path) or "
-                "sys.exit('Invalid COORDINATOR_ENGINE_ROOT for '+module+': '+root));"
-                "root and (os.environ.update(PYTHONPATH=root),sys.path.insert(0,root));"
-                "runpy.run_module(module,run_name='__main__',alter_sys=True)"
-            )
-        else:
-            bootstrap = (
-                "import os,runpy,sys;root=sys.argv.pop(1);"
-                "os.environ['PYTHONPATH']=root;sys.path.insert(0,root);"
-                "runpy.run_module(sys.argv.pop(1),run_name='__main__',alter_sys=True)"
-            )
-        python = "python" if portable else engine_python_command(Path(repo_root))
-        if shell == "powershell":
-            command = shlex.split(python)
-            executable = "& " + " ".join(_powershell_quote(part) for part in command)
-            quote = _powershell_quote
-        else:
-            executable = python
-            quote = shlex.quote
-        root_arg = "" if portable else f"{quote(engine_root)} "
-        call = f"{executable} -c {quote(bootstrap)} {root_arg}{quote(module)}"
-        return call + (f" {args}" if args else "")
-    return (
-        f'PYTHONPATH="{engine_root}" {engine_python_command(Path(repo_root))} -m {module}'
-        + (f" {args}" if args else "")
-    )
 
 
 def _overlay_verify_call(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
@@ -2839,16 +2829,17 @@ _OVERLAY_FOLD_JS = (
     "      let _ov = null; let _ovThrew = '';\n"
     "      try { _ov = await __OVERLAY__; } catch (e) { const _m = String((e && e.message) ?? e); "
     "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { _ovThrew = _m; log('overlay-verify leg threw: ' + _m); } }\n"
-    "      if (_ov && _ov.exit_code === 1) {\n"
-    f"        const _t = _verify.test ?? {_VERIFY_TEST_RESULT_VAR} ?? {{}};\n"
-    "        _verify.test = { ..._t, status: 'fail', tests_failed: Math.max(1, Number(_t.tests_failed) || 0), "
-    "summary: String('clean-overlay verdict red: ' + (_ov.detail ?? '') + ' | ' + (_t.summary ?? '')).slice(0, 300) };\n"
-    "      } else if (!_halted && (!_ov || _ov.exit_code !== 0)) {\n"
+    "      let _ovHead = null;\n"
+    "      if (_ov && _ov.exit_code === 1) { _ovHead = 'clean-overlay verdict red: ' + (_ov.detail ?? ''); }\n"
+    "      else if (!_halted && (!_ov || _ov.exit_code !== 0)) {\n"
     "        const _why = _ov ? String(_ov.detail ?? '') : (_ovThrew || 'overlay-verify leg returned no result');\n"
     "        log('overlay verdict inconclusive (exit ' + (_ov ? _ov.exit_code : 'none') + '): ' + _why);\n"
+    "        _ovHead = 'clean-overlay verdict inconclusive (exit ' + (_ov ? _ov.exit_code : 'none') + '): ' + _why;\n"
+    "      }\n"
+    "      if (_ovHead !== null) {\n"
     f"        const _t = _verify.test ?? {_VERIFY_TEST_RESULT_VAR} ?? {{}};\n"
     "        _verify.test = { ..._t, status: 'fail', tests_failed: Math.max(1, Number(_t.tests_failed) || 0), "
-    "summary: String('clean-overlay verdict inconclusive (exit ' + (_ov ? _ov.exit_code : 'none') + '): ' + _why + ' | ' + (_t.summary ?? '')).slice(0, 300) };\n"
+    "summary: String(_ovHead + ' | ' + (_t.summary ?? '')).slice(0, 300) };\n"
     "      }\n"
     "    }"
 )
@@ -3747,7 +3738,7 @@ def _prior_work_block(repo_root: str, lookup, sizing_rel: Optional[str]) -> str:
     ]
     sidecar = ""
     if sizing_rel:
-        rel = f"docs/plans/{Path(sizing_rel).stem}.prior-art-check.md"
+        rel = plan_sidecar_rel(repo_root, f"docs/plans/{Path(sizing_rel).stem}.md", ".prior-art-check.md")
         if (Path(repo_root) / rel).is_file():
             sidecar = rel
     blitz, memos = _blitz_prior_art(repo_root, sizing_rel)
@@ -4042,22 +4033,26 @@ def _already_delivered_fn(*, head: str, anchor: str, repo_root: str, run_id: str
 def _met_by_skip_fn() -> str:
     """`function _metBySinceHaltSkip()`: the no-slices guard's second hook, true when the review has nothing to do.
 
-    True only for a clean empty prep (no error, no product file, no file-bearing slice) on a resume whose every
-    blocking row has a `landed_met_by` sha. It spawns nothing and leaves `_alreadyDelivered` unset, so the
-    ledger re-judge runs; `_metBySkipped` carries the shas and gates only the review blocks."""
+    True only for a clean empty prep (no error, no product file, no file-bearing slice) on a resume where every
+    blocking row is owed nothing: it has a `landed_met_by` sha or is em-discharged. Nothing blocking passes only
+    when a row was credited as landed since the halt (the product is then already at HEAD, so the diff is empty by
+    construction). It spawns nothing and leaves `_alreadyDelivered` unset, so the ledger re-judge runs;
+    `_metBySkipped` carries the shas and gates only the review blocks."""
     rl = f"_gate?.{RESUME_LEDGER_KEY}"
     return (
         "  function _metBySinceHaltSkip() {\n"
         f"    const _blk = {rl}?.blocking ?? [];\n"
         f"    const _mb = {rl}?.{RESUME_LEDGER_LANDED_MET_BY_FIELD} ?? {{}};\n"
-        "    if (!_blk.length || !_reviewPrep || _reviewPrep.error) return false;\n"
+        f"    const _em = {rl}?.{RESUME_LEDGER_EM_DONE_FIELD} ?? [];\n"
+        f"    const _cr = {rl}?.{RESUME_LEDGER_CREDITED_FIELD} ?? [];\n"
+        "    if (!_reviewPrep || _reviewPrep.error) return false;\n"
         "    if ((_reviewPrep.product_files ?? 0) !== 0 || "
         "(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some((s) => (s?.files ?? []).length)) return false;\n"
-        "    const _shas = _blk.map((id) => _mb[id]);\n"
-        "    if (!_shas.every((s) => typeof s === 'string' && s)) return false;\n"
-        "    _metBySkipped = { shas: [...new Set(_shas)] };\n"
-        "    if (typeof log === 'function') log('review skipped: every blocking row is met by a commit at or after the halt ('"
-        " + _metBySkipped.shas.join(', ') + '); the ledger re-judge runs');\n"
+        "    if (!_blk.length && !_cr.length) return false;\n"
+        "    if (!_blk.every((id) => (typeof _mb[id] === 'string' && _mb[id]) || _em.includes(id))) return false;\n"
+        "    _metBySkipped = { shas: [...new Set(_blk.map((id) => _mb[id]).filter((s) => typeof s === 'string' && s))] };\n"
+        "    if (typeof log === 'function') log('review skipped: no blocking row owes work (met by a commit at or after the halt: '"
+        " + _metBySkipped.shas.join(', ') + '; em-discharged or credited rows need none); the ledger re-judge runs');\n"
         "    return true;\n"
         "  }"
     )
@@ -4684,6 +4679,106 @@ def _s_prep_gate_loop_js(
     return lines
 
 
+def _revise_register_rows(repo_root: str, run_id: str, prior_run_ids: Sequence[str] = ()) -> list[dict]:
+    """The revise-added register rows of ``run_id`` and its halted predecessors as ``{id, text}``, arrival order.
+
+    A refire's inbox carry runs after compose, so the predecessors' ledgers are read directly; a row
+    the run's own ledger also holds keeps the run's id. ``[]`` with no readable ledger.
+    """
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as _rl
+
+    root = Path(repo_root)
+    by_text: dict[str, dict] = {}
+    for source in (*prior_run_ids, run_id):
+        try:
+            ledger = _rl.read_ledger(root, _rl.run_dir(root, source))
+        except (_rl.LedgerRefused, OSError, ValueError):
+            continue
+        for i in ledger.items if ledger else ():
+            if i.origin == _rl.ORIGIN_REVISION:
+                by_text[i.text.strip()] = {"id": i.id, "text": i.text}
+    return list(by_text.values())
+
+
+REVISE_REPLY_FORMAT = (
+    'End your reply with one line `revise_items: [{"id": "<item id>", "status": "met"|"unmet", "evidence": "<what you did>"}]` '
+    "naming every item above."
+)
+
+# `_reviseReceipt()` -> the checklist items no executor reply reports met, as `{id, item, row, why}`; run after the
+# execute waves. A grouped member is read from its group's raw reply (`_memberResult` keeps only the DONE line).
+_REVISE_RECEIPT_JS = r"""  const _reviseItemsOf = (t) => {
+    if (t && typeof t === 'object') return Array.isArray(t.revise_items) ? t.revise_items : [];
+    const s = String(t ?? '');
+    const k = s.lastIndexOf('revise_items');
+    const a = k < 0 ? -1 : s.indexOf('[', k);
+    if (a < 0) return [];
+    let d = 0; let q = false; let e = false;
+    for (let i = a; i < s.length; i++) {
+      const c = s[i];
+      if (q) { if (e) e = false; else if (c === '\\') e = true; else if (c === '"') q = false; continue; }
+      if (c === '"') q = true;
+      else if (c === '[') d++;
+      else if (c === ']' && --d === 0) { try { const v = JSON.parse(s.slice(a, i + 1)); return Array.isArray(v) ? v : []; } catch (x) { return []; } }
+    }
+    return [];
+  };
+  const _reviseReceipt = async () => {
+    const met = new Set(); const gaps = new Map();
+    for (const r of (_manifest.rows ?? [])) {
+      if (r.agent_type === __REVIEWER__ || r.kept_from) continue;
+      const want = _reviseWanted(r);
+      if (!want.length) continue;
+      let t = null;
+      try { t = await (r.group ? _groups[r.group] : _rows[r.id]); } catch (e) { continue; }
+      if (t == null || /^INCOMPLETE\b/.test(String(t))) continue;
+      const got = new Map(_reviseItemsOf(t).filter((x) => x && typeof x === 'object').map((x) => [String(x.id), x]));
+      for (const w of want) {
+        const x = got.get(w.id);
+        if (x && String(x.status).toLowerCase() === 'met') met.add(w.id);
+        else if (!gaps.has(w.id)) gaps.set(w.id, { id: w.id, item: w.item.replace(/^- \[ \] /, ''), row: String(r.id), why: x ? 'unmet' : 'unreported' });
+      }
+    }
+    const out = [...gaps.values()].filter((g) => !met.has(g.id));
+    for (const g of out) log('revise-receipt: ' + g.id + ' ' + g.why + ' in ' + g.row + '; routed to the ledger fix');
+    return out;
+  };
+"""
+
+
+def _revise_checklist_js(notes: Sequence[dict], rows: Sequence[dict]) -> str:
+    """JS defining ``_reviseChecklist(r)``: the live notes plus each revise row ``r`` serves, or no manifest row claims.
+
+    Each item is rendered by ``run_notes.checklist_block``; the JS only selects and joins. ``""`` when nothing is listed.
+    """
+    head = _run_notes.CHECKLIST_HEADING + "\n\n"
+
+    def item_of(note: Sequence[dict], row: Sequence[dict]) -> str:
+        return _run_notes.checklist_block(list(note), list(row))[len(head):].rstrip("\n")
+
+    note_items = [(str(e["id"]), s) for e in _run_notes.live(list(notes)) if (s := item_of([e], []))]
+    row_items = [(str(r["id"]), s) for r in rows if (s := item_of([], [r]))]
+    if not note_items and not row_items:
+        return ""
+    def lit_of(pairs: Sequence[tuple[str, str]]) -> str:
+        return ", ".join(f"{{ id: {_lit(i)}, item: {_lit(s)} }}" for i, s in pairs)
+
+    return (
+        f"  const _reviseNoteItems = [{lit_of(note_items)}];\n"
+        f"  const _reviseRowItems = [{lit_of(row_items)}];\n"
+        "  const _reviseWanted = (r) => {\n"
+        "    const _claimed = new Set((_manifest.rows ?? []).flatMap((x) => Array.isArray(x.register_rows) ? x.register_rows.map(String) : []));\n"
+        "    const _mine = new Set(Array.isArray(r.register_rows) ? r.register_rows.map(String) : []);\n"
+        "    return [..._reviseNoteItems, ..._reviseRowItems.filter((x) => _mine.has(x.id) || !_claimed.has(x.id))];\n"
+        "  };\n"
+        "  const _reviseChecklist = (r) => {\n"
+        "    const _items = _reviseWanted(r).map((x) => x.item);\n"
+        f"    return _items.length ? {_lit(head)} + _items.join('\\n') + '\\n' + {_lit(REVISE_REPLY_FORMAT)} + '\\n\\n' : '';\n"
+        "  };\n"
+        + _REVISE_RECEIPT_JS.replace("__REVIEWER__", _lit(REVIEWER_AGENT_TYPE))
+    )
+
+
 @_staging_scope
 def compose_ask_script(
     *,
@@ -4720,8 +4815,12 @@ def compose_ask_script(
     staged_out: Optional[dict] = None,
     carried_notes: Sequence[dict] = (),
     restore_evicted_run: bool = False,
+    prior_run_ids: Sequence[str] = (),
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
+
+    `prior_run_ids` names the halted predecessors a refire answers; their revise-added register rows
+    join the executor row checklist with `carried_notes`, since the inbox carry runs after compose.
 
     A non-empty `route_preference` adds the EM's steer to the size-stage scout prompt, ahead of the
     ask text, and a `route_override_reason` slot to each gate command the scout runs after its own
@@ -5998,6 +6097,7 @@ def compose_ask_script(
                 f"Run `{_INVOKE} {OP_ASK_STAGE} '",
                 "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, "
                 "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+                "...(Array.isArray(_gate.resume_rows) && _gate.resume_rows.length ? { only_rows: _gate.resume_rows } : {}), "
                 "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
                 f"'{_repo_flag(repo_root)}` once and return its JSON reply verbatim as stage_reply (a manifest_handle, or the "
                 "{\"error\": ...} refusal). Commit nothing.",
@@ -6282,7 +6382,7 @@ def compose_ask_script(
             b.append(
                 "    if (_ready && typeof _ready === 'object' && !_stagedManifest) { await _adoptStageReply(_ready.readyOpReply, true); _adoptReadyError(_ready); }"
             )
-        b.append("    _planRel = (_ready && typeof _ready === 'object') ? " + _located_plan_js("_ready.planPath") + " : " + _located_plan_js("_ready") + ";")
+        b.append("    _planRel = " + _located_plan_of_js("_ready") + ";")
         if fold_stage:
             b.append(blitz_stage_read("_ready", "    "))
         b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
@@ -6428,7 +6528,7 @@ def compose_ask_script(
             b.append(
                 "      if (_reready && typeof _reready === 'object' && !_stagedManifest) { await _adoptStageReply(_reready.readyOpReply, true); _adoptReadyError(_reready); }"
             )
-        b.append("      _planRel = (_reready && typeof _reready === 'object') ? " + _located_plan_js("_reready.planPath") + " : " + _located_plan_js("_reready") + ";")
+        b.append("      _planRel = " + _located_plan_of_js("_reready") + ";")
         if fold_stage:
             b.append(blitz_stage_read("_reready", "      "))
         b.append("      if (!_planRel) { _blitz.regate = _reblitz; }")
@@ -6506,6 +6606,15 @@ def compose_ask_script(
             "    else if (_pullPlan && !_halted.next_action) { _halted = { ..._halted, "
             "plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
             f"next_action: _halted.halted === {_lit(HALT_RESEARCH)} ? undefined : {pull_na} }}; }}"
+        )
+        b.append(
+            f"    if (_halted.halted === {_lit(HALT_REFUSAL)} && !_halted.next_action && "
+            f"{_halt_refire.reviewer_unready_js('_blitz', GATE_INDETERMINATE_RE)}) {{ _halted = {{ ..._halted, halted: {_lit(HALT_REVIEWER_UNREADY)}, "
+            f"retryable: true, reason: _halted.reason + [_blitz, _blitz?.regate].flatMap((b) => b?.agentIncidents ?? [])"
+            f".filter((i) => {json.dumps(list(_halt_refire.REVIEWER_UNREADY_ROLES))}.includes(String(i?.role).split(':')[0]) && "
+            f"{json.dumps(list(_halt_refire.REVIEWER_UNREADY_KINDS))}.includes(i.kind)).map((i) => ' (agent ' + i.role + ' ' + i.kind + ')').join(''), "
+            f"next_action: 'Refire: ' + {_refire_js(sizing_rel)} "
+            "+ '; on a repeat of this halt: workflow.revise {run_id: ' + _runId + ', note: <name the reviewer fix>}' }; }"
         )
         b.append("    }")
         b.append("    }")
@@ -6656,10 +6765,21 @@ def compose_ask_script(
     )
     # Is anything left to dispatch, or only to judge and commit: a resume whose rows all landed
     # stages no rows, only owed/gated ones, and joins the verify-and-commit tail.
+    # A resume row the stage neither staged nor owed is an unexecuted code row: it keeps the executor wave.
+    # A gated stage withholds the resume rows wholesale (gated ids are wrapper ids), so none is unexecuted.
+    _unexecuted_js = (
+        "((_manifest.gated ?? []).length ? [] : (_gate.resume_rows ?? []).filter((id) => "
+        "!(_manifest.owed ?? []).some((x) => x.id === id)))"
+    )
     b.append(
         "  if (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows) "
+        f"&& !{_unexecuted_js}.length "
         "&& (!_gate.resume_rows.length || (_manifest.owed ?? []).length || (_manifest.gated ?? []).length)) "
         "{ _allLanded = true; _xsTail = true; }"
+    )
+    b.append(
+        "  const _unexecutedResume = (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows)) "
+        f"? {_unexecuted_js} : [];"
     )
     # `_allLanded` is set too: it is the flag the pinned refusal-halt condition already honors.
     b.append(
@@ -6672,6 +6792,12 @@ def compose_ask_script(
         f"halted: {_lit(HALT_DESIGN_REVIEW)}, kind: {_lit(HALT_DESIGN_REVIEW)}, reason: String(_manifest.error), "
         f"board_url: _gate?.{DESIGN_ROUTE_KEY}?.board?.url ?? null, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, "
         f"sizing: _sizingRel, plan: _planRel, run_id: _runId, next_action: {_design_next_action_js(sizing_rel)} }}; }}"
+    )
+    b.append(
+        f"  else if (!_parked && !_resumeLedger && _unexecutedResume.length) {{ for (const id of _unexecutedResume) {{ if (!_incompleteChunks.includes(id)) _incompleteChunks.push(id); }} "
+        f"_halted = {{ halted: {_lit(HALT_NO_DISPATCHABLE_EXECUTOR)}, kind: {_lit(HALT_NO_DISPATCHABLE_EXECUTOR)}, "
+        "reason: 'no executor dispatchable for unexecuted row(s) ' + _unexecutedResume.join(', ') + ': the stage reply staged none of them', "
+        "stopped_rows: _unexecutedResume, sizing: _sizingRel, plan: _planRel, run_id: _runId }; }"
     )
     b.append(
         "  else if (!_parked && (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger))) { _halted = { halted: "
@@ -6696,6 +6822,12 @@ def compose_ask_script(
         schema=_obj([LATE_ROWS_FIELD], {LATE_ROWS_FIELD: {"type": "array", "items": _STR}}),
         effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
+    _prior_runs = tuple(dict.fromkeys(
+        [*prior_run_ids, *(str(e["run"]) for e in carried_notes if e.get("run") and e["run"] != run_id)]
+    ))
+    _checklist_js = _revise_checklist_js(carried_notes, _revise_register_rows(repo_root, run_id, _prior_runs))
+    if _checklist_js:
+        b.append("  let _reviseGaps = [];")
     b.append("  let _lateIds = [];")
     b.append("  let _verifyLateIds = [];")
     b.append("  let _lateUnplanned = [];")
@@ -6751,8 +6883,11 @@ def compose_ask_script(
         + "[...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);"
     )
     b.append("  if (_manifest.fanout) log('Fanout: ' + JSON.stringify(_manifest.fanout));")
+    if _checklist_js:
+        b.append(_checklist_js)
     row_prompt = _cat(
         f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(_emit._with_example_retrieval_repo_line(preamble, repo_root))}{ue_block}\n\n{anchor}\n\n",
+        *(["js:_reviseChecklist(r)"] if _checklist_js else []),
         "Your brief is the file ",
         "js:r.brief_path",
         f" -- read it completely, then execute it as written.\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE}{ledger_clause_base}{notes_block}{session_tail}",
@@ -6886,6 +7021,8 @@ def compose_ask_script(
             "  if (!_halted && _lateIds.length) { await _lateLeg(_lateIds); }\n"
             "  await Promise.all(Object.values(_rows));"
         )
+    if _checklist_js:
+        b.append("  if (!_halted) _reviseGaps = await _reviseReceipt();")
     # The settled executor replies (their DONE notes), already in hand: no spawn, no file read.
     b.append(
         "  _deliveryNotes = (await Promise.all(_manifest.rows"
@@ -6942,6 +7079,7 @@ def compose_ask_script(
     b.append(_RESUME_SLICE_IDS_DECL_JS)
     b.append("  let _reverifyJoined = false;")
     b.append(f"  const _joinReverify = () => {_JOIN_REVERIFY_JS};")
+    b.append("  const _reviewInfraHalts = () => {\n" + _review_test_infra_halt_js(sizing_rel) + "\n  };")
     b.append("  let _footprintReviewed = false;")
     b.append(
         "  const _reviewReused = _reusePhase('review') && !!_phaseVerdict('review');\n"
@@ -7024,7 +7162,7 @@ def compose_ask_script(
     )
     # Self-correction reads the re-verify result, so the deferred re-verify joins before it.
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
-    b.append(_review_test_infra_halt_js(sizing_rel))
+    b.append("  _reviewInfraHalts();")
     b.append(_WAVE_DIFF_RECONCILE_JS)
     b.append(_TESTS_NOT_RUN_JS)
     b.append(_out_of_footprint_demand_js(repo_root))
@@ -7152,11 +7290,20 @@ def compose_ask_script(
         b.append(f"  const {_JUDGE_SCHEMA_VAR} = {_compact_json(judge_brief[1])};")
     b.append("  const _verdictText = () => (" + _stage_expr(_cat(*verdict_parts), "verdict") + ");")
     verdict_parts = ("js:_verdictText()",)
+    docs_parts: tuple[str, ...] = ()
+    if in_run_commit:
+        # The verify leg and the remnant re-verify leg carry the same docs step; one arrow serves both.
+        b.append(
+            "  const _docsPrompt = () => ("
+            + _cat(*_docs_prompt_parts(run_id=run_id, manifest_rel=f"{record_abs}/manifest.json", root=repo_root_abs))
+            + ");"
+        )
+        docs_parts = ("js:_docsPrompt()",)
     verify_call = _verify_call(
         head=head,
         anchor=anchor,
         test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
-        docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=f"{record_abs}/manifest.json", root=repo_root_abs) if in_run_commit else (),
+        docs_parts=docs_parts,
         verdict_parts=verdict_parts,
         judged=judged,
         schema=_verify_schema(judge_brief[1] if judged else None),
@@ -7199,21 +7346,27 @@ def compose_ask_script(
             if late_replan_call
             else []
         ),
-        f"    const _testWanted = !!({test_guard});",
+        f"    const _testOwed = () => ({test_guard});",
+        "    const _testWanted = !!_testOwed();",
+        f"    const {_TEST_RAN_FN} = () => {_TEST_RAN_JS};",
         *([f"    const _docsWanted = !!({_DOCS_PRE_TAIL_GUARD});"] if in_run_commit else []),
         "    let _verify = null;",
         f"    let {_VERIFY_TEST_RESULT_VAR} = null;",
         # The tests leg runs first and its result rides the verify prompt; a throw there that is not a usage
         # limit leaves the result null, so the empty-verdict halt below owns it.
-        f"    const _runVerify = async () => {{ try {{ {_VERIFY_TEST_RESULT_VAR} = null; "
+        f"    const _vAsk = () => {verify_call}; let _vNudge = ''; let _vRe = false;",
+        f"    const _runVerify = async () => {{ try {{ _vNudge = ''; _vRe = false; {_VERIFY_TEST_RESULT_VAR} = null; "
         f"if (_testWanted) {{ try {{ {_VERIFY_TEST_RESULT_VAR} = await {verify_tests_call}; }} catch (e) {{ "
         f"if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) throw e; log('verify-tests leg threw: ' + String((e && e.message) ?? e)); "
         f"{_VERIFY_TEST_RESULT_VAR} = null; }} }} "
         + ("await _runAcceptance(); " if accept_rows else "")
-        + f"_verify = await {verify_call}; "
+        + "try { _verify = await _vAsk(); } catch (e) { _verify = await _recoverStructuredReply(e, () => { _vRe = true; _vNudge = "
+        + _lit(_VERIFY_REASK.replace("__DIR__", _sidecar.sidecar_dir("ask", run_id, ASK_VERIFY_LABEL))) + "; return _vAsk(); }); } "
         f"if (_verify && {_VERIFY_TEST_RESULT_VAR} && typeof {_VERIFY_TEST_RESULT_VAR}.status === 'string') _verify.test = {_VERIFY_TEST_RESULT_VAR}; "
         "} catch (e) { const _m = String((e && e.message) ?? e); "
-        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } _verify = null; } return _verify; };",
+        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); "
+        + _VERIFY_REPLY_MISSING_JS.replace("__REFIRE__", _refire_js(sizing_rel)).replace("__DIR__", _sidecar.sidecar_dir("ask", run_id, ASK_VERIFY_LABEL))
+        + " } _verify = null; } return _verify; };",
         # A self-correction leg may have replaced the joined result; never rejoin the stale promise.
         "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), _reverifyJoined ? Promise.resolve(_reviewReverify) : _joinReverify()]);",
         "    _reverifyJoined = true;",
@@ -7246,8 +7399,8 @@ def compose_ask_script(
         "  }",
     ]
     verify_lines[-1:-1] = [
-        _test_verdict_limit_route_js().replace("TEST_GUARD", test_guard),
-        _test_verdict_empty_halt_js(sizing_rel).replace("TEST_GUARD", test_guard),
+        _test_verdict_limit_route_js().replace("TEST_GUARD", "_testOwed()"),
+        _test_verdict_empty_halt_js(sizing_rel).replace("TEST_GUARD", "_testOwed()"),
     ]
     _rl = f"_gate.{RESUME_LEDGER_KEY}"
     # The leg's footprint is the only path set named; dispatch.land_run withholds a changed path outside it.
@@ -7298,7 +7451,7 @@ def compose_ask_script(
         )
     b.extend(verify_lines)
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
-    b.append(_review_test_infra_halt_js(sizing_rel))
+    b.append("  _reviewInfraHalts();")
     b.append(_review_blocked_halt_js(sizing_rel, after_join=True, call_only=True))
     b.append(no_target)
     b.append(em_owed)
@@ -7362,6 +7515,15 @@ def compose_ask_script(
         "    };\n"
         "    _normaliseLedger();"
     )
+    if _checklist_js:
+        # Unreported or unmet checklist items join the ledger as not_met rows, so the ledger-fix and remnant legs carry their verbatim text.
+        b.append(
+            "    for (const g of _reviseGaps) {\n"
+            "      if (_ledger && Array.isArray(_ledger.items) && !_ledger.items.some((i) => i && String(i.id) === g.id)) "
+            "_ledger.items.push({ id: g.id, status: 'not_met', essential: true, remaining: [g.item], "
+            "evidence: 'revise-receipt: ' + g.why + ' in ' + g.row });\n"
+            "    }"
+        )
     if judged:
         v = _emit._FALSIFIER_RESULT_VAR
         b.append(
@@ -7413,7 +7575,7 @@ def compose_ask_script(
             _remnant_complete_js(
                 head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, run_id=run_id,
                 judged=judged, test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
-                docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=f"{record_abs}/manifest.json", root=repo_root_abs) if in_run_commit else (),
+                docs_parts=docs_parts,
                 verdict_parts=verdict_parts,
                 schema=_verify_schema(judge_brief[1] if judged else None), repo_root=repo_root,
             )
@@ -7918,6 +8080,14 @@ def _attach_chain_helpers(script: str, helpers: list[str]) -> str:
     return script[:eol] + "".join(f"const {h};\n" for h in helpers) + script[eol:]
 
 
+def _drop_unused_recovery_helper(script: str) -> str:
+    """`RECOVERED_COMMIT_HELPER_JS` is spliced into every script by `_usage_limit_helper_js`; a script whose
+    composed body never calls `_recoverStructuredReply` (no commit or halt-record leg) carries it for nothing."""
+    if script.count("_recoverStructuredReply(") != 1:
+        return script
+    return script.replace(RECOVERED_COMMIT_HELPER_JS, "")
+
+
 def _chain_start_lines(abandon_agent_call: str) -> list[str]:
     """Start the chained run, abandon its minted child when the first start threw, then resume its staged twin."""
     return [
@@ -8389,6 +8559,69 @@ def _share_sidecar_dir(script: str) -> str:
     return body[:at] + decls + body[at:]
 
 
+_REGEX_FN = "_RX"
+_REGEX_MIN_LEN = 20
+_REGEX_FLAGS = re.compile(r"[a-z]*")
+
+
+def _share_regex_literals(script: str) -> str:
+    """Cut each regex literal of ``_REGEX_MIN_LEN`` or more characters that two or more places spell identically to one `_RXn` const, declared ahead of the manifest marker line.
+
+    Trap: a `g` or `y` flag makes `lastIndex` shared state, so those literals keep their own copy.
+    """
+    spans = []
+    for s, e in _prompt_fragments._scan(script)[1]:
+        if script[s] == "/" and script[s + 1 : s + 2] not in ("/", "*"):
+            e += _REGEX_FLAGS.match(script, e).end() - e
+            if e - s >= _REGEX_MIN_LEN and not set(script[s:e].rsplit("/", 1)[1]) & set("gy"):
+                spans.append((s, e))
+    counts = Counter(script[s:e] for s, e in spans)
+    shared = {}
+    for lit, n in counts.most_common():
+        name = f"{_REGEX_FN}{len(shared)}"
+        if n > 1 and (n - 1) * len(lit) - n * len(name) - len(name) - 14 > 0:
+            shared[lit] = name
+    if not shared:
+        return script
+    out: list[str] = []
+    last = 0
+    for s, e in spans:
+        if script[s:e] in shared:
+            out.append(script[last:s])
+            out.append(shared[script[s:e]])
+            last = e
+    out.append(script[last:])
+    body = "".join(out)
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + "".join(f"const {name} = {lit};\n" for lit, name in shared.items()) + body[at:]
+
+
+_SHARED_EXPRS = (
+    ("_targetedTests", _TARGETED_TESTS_JS.removeprefix("targeted_tests: ").removesuffix(","), "_targetedTests()"),
+    ("_docPaths", _DOC_PATHS_JS, "_docPaths()"),
+    # `_share_refire` runs first, so the refire inside the expression may already read `_refireCmd()`.
+    ("_owedHandback", _owed_handback_js(None).replace(_refire_js(None), "_refireCmd()"), "_owedHandback()"),
+    ("_owedHandback", _owed_handback_js(None), "_owedHandback()"),
+)
+
+
+def _share_pure_exprs(script: str) -> str:
+    """Replace each expression of `_SHARED_EXPRS` that two or more places spell identically with one call of a top-level arrow.
+
+    Each arrow reads only top-level bindings, at call time, so a use keeps the value the inline copy had at the
+    same point; the declaration goes ahead of the manifest marker line.
+    """
+    decls = []
+    for name, expr, call in _SHARED_EXPRS:
+        if script.count(expr) >= 2 and not any(d.startswith(f"const {name} ") for d in decls):
+            script = script.replace(expr, call)
+            decls.append(f"const {name} = () => {expr};\n")
+    if not decls:
+        return script
+    at = script.rfind("\n", 0, script.index(ASK_MANIFEST_MARKER)) + 1
+    return script[:at] + "".join(decls) + script[at:]
+
+
 _REFIRE_FN = "_refireCmd"
 
 
@@ -8470,6 +8703,159 @@ def _share_brief_precedence(script: str) -> str:
     return body[:at] + f"const {_PRECEDENCE_TAIL_FN} = `{tail}`;\n" + body[at:]
 
 
+_SLOT_MARK = "\u2063"
+_SLOT_REF = re.compile(_SLOT_MARK + r"(\d+)" + _SLOT_MARK)
+_STAGE_MEMO: dict[tuple, str] = {}
+_STAGE_MEMO_MAX = 6
+
+
+def _hoist_stage_passes(script: str) -> str:
+    """The passes that run on the script once its text is final: the fragment and payload hoists and the shares that read their consts."""
+    script = _prompt_fragments.hoist_repeated_fragments(script, anchor=ASK_MANIFEST_MARKER)
+    script = _agent_body_dedupe.dedupe_agent_payloads(script, anchor=ASK_MANIFEST_MARKER)
+    script = _share_agent_read(script)
+    return _share_blitz_call(script)
+
+
+def _run_value_slots(values: tuple) -> dict[str, int]:
+    """Each spelling of a per-run value (raw, JSON-escaped, JS-escaped, forward-slash) and of the run id's hex tail -> its placeholder number."""
+    slots: dict[str, int] = {}
+    for n, value in enumerate(values):
+        if not isinstance(value, str) or len(value) < 4:
+            continue
+        posix = value.replace(chr(92), "/")
+        for kind, form in enumerate((value, json.dumps(value)[1:-1], _lit(value)[1:-1], posix)):
+            slots.setdefault(form, n * 4 + kind)
+    run_id = values[0] if values and isinstance(values[0], str) else ""
+    tail = run_id.rsplit("-", 1)[-1]
+    if len(tail) >= 8:
+        slots.setdefault(tail, len(values) * 4)
+    return slots
+
+
+def _hoist_stage(script: str) -> str:
+    """`_hoist_stage_passes` over ``script``, computed once per script shape.
+
+    The passes are a pure function of the script text, and two composes of one shape differ only in a few
+    per-run values (run id, session, ask text, paths). Those are swapped for placeholders before the passes
+    and restored after, so the result is memoised on the placeholder text; a miss costs the passes as before,
+    and a hit costs one substitution. Placeholders are the same on a hit and a miss, so the output never
+    depends on what was cached.
+    """
+    slots = _run_value_slots(_RUN_VALUES.get())
+    if not slots or _SLOT_MARK in script:
+        return _hoist_stage_passes(script)
+    pattern = re.compile("|".join(re.escape(f) for f in sorted(slots, key=len, reverse=True)))
+    normalised = pattern.sub(lambda m: f"{_SLOT_MARK}{slots[m.group(0)]}{_SLOT_MARK}", script)
+    spelling = {n: form for form, n in slots.items()}
+    knobs = (
+        _prompt_fragments.HOIST_ENABLED, _prompt_fragments.MIN_CHUNK, _prompt_fragments.MIN_JSON,
+        _prompt_fragments.MIN_SUBSTRING, _prompt_fragments._SUBSTRING_ROUNDS, _prompt_fragments._JSON_ROUNDS,
+    )
+    key = (hashlib.sha256(normalised.encode("utf-8", "surrogatepass")).digest(), knobs)
+    hit = _STAGE_MEMO.get(key)
+    if hit is None:
+        hit = _hoist_stage_passes(normalised)
+        while len(_STAGE_MEMO) >= _STAGE_MEMO_MAX:
+            _STAGE_MEMO.pop(next(iter(_STAGE_MEMO)))
+        _STAGE_MEMO[key] = hit
+    try:
+        return _SLOT_REF.sub(lambda m: spelling[int(m.group(1))], hit)
+    except KeyError:
+        return _hoist_stage_passes(script)
+
+
+_AGENT_READ_FN = "_agentRead"
+_AGENT_READ = re.compile(r"_agentDefsClause\(\) \+ (_PF\d+ \+ _PF\d+)(?= \+ ')")
+_AGENT_READ_MIN_USES = 4
+
+
+def _share_agent_read(script: str) -> str:
+    """After the fragment hoist, replace each prompt-file opening `_agentDefsClause() + _PFa + _PFb` (four or more uses of one pair) with a call of one top-level arrow.
+
+    The arrow concatenates the same operands at call time, so a prompt reads what the inline copy read; the
+    declaration goes ahead of the manifest marker line.
+    """
+    counts = Counter(m.group(1) for m in _AGENT_READ.finditer(script))
+    if not counts or counts.most_common(1)[0][1] < _AGENT_READ_MIN_USES:
+        return script
+    pair = counts.most_common(1)[0][0]
+    body = script.replace(f"_agentDefsClause() + {pair} + '", f"{_AGENT_READ_FN}() + '")
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + f"const {_AGENT_READ_FN} = () => _agentDefsClause() + {pair};\n" + body[at:]
+
+
+_BLITZ_CALL_FN = "_blitzCall"
+_BLITZ_CALL = re.compile(r"planBlitz\(\{ mode: 'single', (.*?), planPath: (.+?), executionOpen: true \}\] \}\)")
+
+
+def _share_blitz_call(script: str) -> str:
+    """After the fragment hoist, replace the repeated single-baton `planBlitz({...})` calls that differ only in `planPath` with calls of one top-level arrow.
+
+    Applies only when two or more calls share one body and the rewrite is a net saving: a script whose calls carry
+    different inline schemas keeps them as they are. The arrow is lazy, so the declaration ahead of the manifest
+    marker line reads every binding at call time.
+    """
+    groups: dict[str, list[re.Match]] = {}
+    for m in _BLITZ_CALL.finditer(script):
+        groups.setdefault(m.group(1), []).append(m)
+    if not groups:
+        return script
+    prefix, hits = max(groups.items(), key=lambda kv: len(kv[1]))
+    if len(hits) < 2:
+        return script
+    decl = f"const {_BLITZ_CALL_FN} = (_pp) => planBlitz({{ mode: 'single', {prefix}, planPath: _pp, executionOpen: true }}] }});\n"
+    saved = sum(len(m.group(0)) - len(f"{_BLITZ_CALL_FN}({m.group(2)})") for m in hits) - len(decl)
+    if saved <= 0:
+        return script
+    body = _BLITZ_CALL.sub(
+        lambda m: f"{_BLITZ_CALL_FN}({m.group(2)})" if m.group(1) == prefix else m.group(0), script
+    )
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + decl + body[at:]
+
+
+_LOCATE_PLAN_FN = "_locatePlan"
+
+
+def _share_locate_plan(script: str) -> str:
+    """Replace each `_LOCATE_LAMBDA_JS` argument, spelled two or more times, with one top-level arrow of that name.
+
+    The lambda reads only top-level bindings (`_sizingRel`, `_gate`, `_planPathFor`) at call time; the declaration
+    goes ahead of the manifest marker line.
+    """
+    use = f"({_LOCATE_LAMBDA_JS})"
+    if script.count(use) < 2:
+        return script
+    body = script.replace(use, f"({_LOCATE_PLAN_FN})")
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + f"const {_LOCATE_PLAN_FN} = {_LOCATE_LAMBDA_JS};\n" + body[at:]
+
+
+_AGENT_HEAD_FN = "_agentHead"
+_AGENT_HEAD = re.compile(
+    r"_agentDefsClause\(\) \+ ('(?:[^'\\\n]|\\.)*') \+ " + re.escape(_PRECEDENCE_TAIL_FN)
+)
+
+
+def _share_agent_head(script: str) -> str:
+    """Replace each prompt opening of `_agentDefsClause()`, one literal and the brief-precedence tail, spelled three or more times, with one call of a top-level arrow.
+
+    The arrow concatenates the same three operands at call time, so a prompt reads what the inline copy read; the
+    declaration goes ahead of the manifest marker line.
+    """
+    counts = Counter(m.group(1) for m in _AGENT_HEAD.finditer(script))
+    names = {lit: _AGENT_HEAD_FN + (str(k) if k else "") for k, (lit, n) in enumerate(counts.most_common()) if n >= 3}
+    if not names:
+        return script
+    body = _AGENT_HEAD.sub(lambda m: f"{names[m.group(1)]}()" if m.group(1) in names else m.group(0), script)
+    decls = "".join(
+        f"const {name} = () => _agentDefsClause() + {lit} + {_PRECEDENCE_TAIL_FN};\n" for lit, name in names.items()
+    )
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + decls + body[at:]
+
+
 _ROOT_FN = "_PF9002"
 _ROOT_MIN_USES = 4
 
@@ -8535,6 +8921,7 @@ def _finish_script(
         + "\n".join(b)
         + "\n"
     )
+    script = _drop_unused_recovery_helper(script)
     script = _hoist_baseline_clears(script)
     script = _declare_chain_stage_fn(script)
     script, verdict_fn = _share_chain_check(script)
@@ -8549,9 +8936,12 @@ def _finish_script(
     script = _share_review_wave_list(script)
     script = _share_repo_root(script, repo_roots)
     script = _share_brief_precedence(script)
+    script = _share_agent_head(script)
+    script = _share_locate_plan(script)
+    script = _share_regex_literals(script)
+    script = _share_pure_exprs(script)
     script = _hoist_invoke(script)
-    script = _prompt_fragments.hoist_repeated_fragments(script, anchor=ASK_MANIFEST_MARKER)
-    script = _agent_body_dedupe.dedupe_agent_payloads(script, anchor=ASK_MANIFEST_MARKER)
+    script = _hoist_stage(script)
     total = len(script.encode("utf-8"))
     if total > _emit._WORKFLOW_SCRIPT_BYTE_CAP:
         raise AskComposeRefused(
@@ -8739,11 +9129,15 @@ def _append_docs_and_commit(
     )
     b.append("    let _retestAttempts = 0;")
     b.append("    let _awaits = 0;")
-    b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    recover_commit = (
+        "catch (e) { try { _commit = await _recoverStructuredReply(e, null); } catch (e2) { _haltOnUsageLimit(e2); } }"
+    )
+    b.append(f"    const _commitStage = () => {commit_call};")
+    b.append(f"    try {{ _commit = await _commitStage(); }} {recover_commit}")
     b.append("    while (!_halted && _commit && _commit.awaiting && _awaits < 2) {")
     b.append("      _awaits++;")
     b.append(f"      try {{ await {_retest_await_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
-    b.append(f"      try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append(f"      try {{ _commit = await _commitStage(); }} {recover_commit}")
     b.append("    }")
     b.append(
         "    while (!_halted && _commit && _commit.refused && _commit.remedy_step "
@@ -8751,7 +9145,7 @@ def _append_docs_and_commit(
     )
     b.append("      const _rs = _commit.remedy_step; _retestAttempts = Number(_rs.attempt);")
     b.append(f"      try {{ await {_invariant_retest_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
-    b.append(f"      try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append("      try { _commit = await _commitStage(); } catch (e) { _haltOnUsageLimit(e); }")
     b.append("    }")
     b.append(
         "    if (_ownCloseKey && _commit && _commit.committed === true && _commit.close "
@@ -9055,7 +9449,10 @@ def _append_halt_record_commit(b: list[str]) -> None:
     key; its reader is whoever consumes the script return's `halt_commit` field (the EM), no code."""
     b.append("  if (_halted && _RUN_TOKEN && !(_commit && _commit.committed === true)) {")
     b.append("    phase('commit');")
-    b.append("    try { _haltCommit = await _commitHaltRecord(); } catch (e) { _haltOnUsageLimit(e); }")
+    b.append(
+        "    try { _haltCommit = await _commitHaltRecord(); } catch (e) { "
+        "try { _haltCommit = await _recoverStructuredReply(e, _commitHaltRecord); } catch (e2) { _haltOnUsageLimit(e2); } }"
+    )
     b.append(
         "    if (_haltCommit && typeof _haltCommit === 'object') { "
         + _hijack_text_js("_haltCommit")

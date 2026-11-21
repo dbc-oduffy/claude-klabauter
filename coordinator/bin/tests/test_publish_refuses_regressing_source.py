@@ -15,7 +15,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WRAPPER = _REPO_ROOT / "coordinator" / "bin" / "coordinator-publish.py"

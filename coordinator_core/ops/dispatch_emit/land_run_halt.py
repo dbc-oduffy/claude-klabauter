@@ -867,7 +867,7 @@ def _land(
 
     from coordinator_core.ops.dispatch_emit.halted_record_commit import _run_written, _withhold_run_dirt
 
-    run_written = [p for p in _run_written(root, session_id, run_id) if p not in peer_only]
+    run_written = [p for p in _run_written(root, session_id, run_id, _live_run_ids(repo_root)) if p not in peer_only]
     run_written += [p for p in _measured_own_paths(root, run_id, record_dir_rel) if p not in run_written and p not in peer_only]
     run_written += [
         p for p in _baseline_declared_product(root, run_id, product, withheld, unexecuted) if p not in run_written
@@ -879,13 +879,16 @@ def _land(
         own_differ, own_gone = _differs(root, written_entries, run_written)
         own_changed = own_differ | own_gone
     _withhold_run_dirt(withheld, run_written, own_changed, set(paths) | set(deleted))
-    from coordinator_core.ops.dispatch_emit.halted_record_commit import plan_tree_eviction
+    from coordinator_core.ops.dispatch_emit.halted_record_eviction import IMPORT_RISK_UNSCANNED, plan_tree_eviction
 
     eviction = plan_tree_eviction(
         root, record_dir_rel, run_written, own_changed, [*run_written, *owner, *declared], withheld, paths, run_id,
+        halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
     )
 
     if not paths and not deleted:
+        if IMPORT_RISK_UNSCANNED in withheld.values():
+            record_withheld(root / record_dir_rel, withheld)
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,

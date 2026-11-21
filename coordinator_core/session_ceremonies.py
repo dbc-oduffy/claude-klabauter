@@ -114,7 +114,8 @@ def _completed(request: dict, result: dict) -> bool:
                         row["id"] for row in result.get("directive_outcomes", []) if row.get("exit_code") == 0
                     }))
     if name in ("pickup", "handoff"):
-        return phase == "apply"
+        readiness = (result.get("decision_object") or {}).get("pickup_readiness") or {}
+        return phase == "apply" and readiness.get("verdict") != "conflict"
     if name in ("workday_start", "workday_complete") and phase == "finish":
         from coordinator_core.ceremony_common.run import ledger, spec
         native = ledger.run_dir(Path(request["repo_root"]), spec.load_spec(name).run_dir_name, request["run_id"])

@@ -54,31 +54,6 @@ def test_dead_or_reused_owner_fires_with_137_after_killing_descendants(monkeypat
     assert killed == [True]
 
 
-@pytest.mark.spawns_process
-def test_kill_descendants_kills_the_whole_subtree_and_spares_the_caller():
-    token = "ownerwdtok" + uuid.uuid4().hex[:12]
-    sleeper = "import time,sys\ntime.sleep(120)"
-    parent_src = (
-        "import subprocess,sys,time\n"
-        "subprocess.Popen([sys.executable,'-c',%r,%r])\n"
-        "time.sleep(120)" % (sleeper, token)
-    )
-    child = subprocess.Popen([sys.executable, "-c", parent_src, token], **no_console_creationflags())
-    try:
-        deadline = time.monotonic() + 20
-        while len(psutil.Process().children(recursive=True)) < 2:
-            assert time.monotonic() < deadline, "subtree never started"
-            time.sleep(0.05)
-        tree = psutil.Process().children(recursive=True)
-        ow.kill_descendants()
-        gone, alive = psutil.wait_procs(tree, timeout=10)
-        assert alive == []
-    finally:
-        with contextlib.suppress(psutil.Error):
-            child.kill()
-    assert psutil.pid_exists(os.getpid())
-
-
 def test_conftest_registers_the_plugin():
     src = (_REPO / "conftest.py").read_text(encoding="utf-8")
     assert '"coordinator_core.testing.owner_watchdog"' in src

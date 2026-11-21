@@ -1185,14 +1185,19 @@ class TestDropExplicitSessionIdUnderTwoLiveSessions:
 # ---------------------------------------------------------------------------
 
 class TestMainApplyDecisionsShapeValidation:
-    def test_bare_string_decision_value_is_usage_error(self, capsys):
+    def test_bare_string_decision_value_reaches_apply_as_disposition(self, monkeypatch):
+        captured = {}
+
+        def _fake_apply(artifact_path, *, session_id=None, repo_root=None, decisions=None):
+            captured["decisions"] = decisions
+            return pa_apply.APPLY_EXIT_OK, {"landed": []}
+
+        monkeypatch.setattr(pa_apply, "apply", _fake_apply)
         rc = pa_apply.main_apply(
             ["state/handoffs/h1.md", "--decisions", '{"j1": "proceed"}']
         )
-        assert rc == pa_apply.APPLY_EXIT_TRANSPORT_FAIL
-        err = capsys.readouterr().err
-        assert "j1" in err
-        assert '{"j1": {"disposition": "<value>"' in err
+        assert rc == pa_apply.APPLY_EXIT_OK
+        assert captured["decisions"] == {"j1": {"disposition": "proceed"}}
 
     def test_list_decision_value_is_usage_error(self, capsys):
         rc = pa_apply.main_apply(

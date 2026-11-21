@@ -14,6 +14,8 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.dispatch_emit import halt_tree_check
 from coordinator_core.ops.dispatch_emit.halted_record_eviction import plan_tree_eviction
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 REC = "state/warp/run-x"
 RUN = "r1"
 HEAD = {"a.py": "import b\n", "b.py": "X = 1\n", "c.py": "Y = 1\n"}
@@ -51,7 +53,7 @@ def _world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, foreign: set[str]):
 
 
 def _evict(root: Path, paths: list[str]):
-    ev = plan_tree_eviction(root, REC, paths, set(paths), paths, {}, [], run_id=RUN)
+    ev = _plan(root, paths, set(paths))
     assert ev is not None
     ev.apply()
     return ev
@@ -87,8 +89,39 @@ def test_linked_pair_without_refusal_is_reset_together(tmp_path, monkeypatch) ->
     assert ev.refused == {}
 
 
+def test_spliced_importer_cannot_strand_a_retained_import(tmp_path, monkeypatch):
+    padding = "# separate the peer import and run edit\n" * 12
+    monkeypatch.setitem(HEAD, "a.py", padding)
+    foreign_import = "from b import Z\n" + padding
+    monkeypatch.setitem(RUN_BYTES, "a.py", foreign_import)
+    root = _world(tmp_path, monkeypatch, foreign={"a.py"})
+    importer = foreign_import + "VALUE = Z\n"
+    (root / "a.py").write_bytes(importer.encode())
+
+    eviction = _evict(root, ["a.py", "b.py", "c.py"])
+
+    assert _bytes(root, "a.py") == importer
+    assert _bytes(root, "b.py") == RUN_BYTES["b.py"]
+    assert _bytes(root, "c.py") == HEAD["c.py"]
+    assert set(_evicted_index(root)) == {"c.py"}
+
+
+def test_import_reintroduced_by_head_keeps_linked_unit(tmp_path, monkeypatch):
+    monkeypatch.setitem(HEAD, "a.py", "from b import X\n")
+    monkeypatch.setitem(RUN_BYTES, "a.py", "VALUE = 2\n")
+    monkeypatch.setitem(RUN_BYTES, "b.py", "NEW = 2\n")
+    root = _world(tmp_path, monkeypatch, foreign={"b.py"})
+
+    eviction = _evict(root, ["a.py", "b.py"])
+
+    assert eviction.evicted == []
+    assert _bytes(root, "a.py") == RUN_BYTES["a.py"]
+    assert _bytes(root, "b.py") == RUN_BYTES["b.py"]
+
+
 def test_unlinked_pair_is_judged_independently(tmp_path, monkeypatch) -> None:
     root = _world(tmp_path, monkeypatch, foreign={"b.py"})
+    (root / "a.py").write_bytes(HEAD["a.py"].encode())
     ev = _evict(root, ["b.py", "c.py"])
     assert _bytes(root, "b.py") == RUN_BYTES["b.py"]
     assert _bytes(root, "c.py") == HEAD["c.py"]
@@ -97,7 +130,12 @@ def test_unlinked_pair_is_judged_independently(tmp_path, monkeypatch) -> None:
 
 
 def _plan(root: Path, parked: list[str], changed: set[str]):
-    return plan_tree_eviction(root, REC, parked, changed, parked, {}, [], run_id=RUN)
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import changed_python_paths
+
+    return plan_tree_eviction(
+        root, REC, parked, changed, parked, {}, [], run_id=RUN,
+        python_dirt=changed_python_paths(root),
+    )
 
 
 def _evicted_index(root: Path) -> dict:
@@ -117,8 +155,15 @@ def test_module_with_a_dirty_importer_outside_the_parked_set_is_kept(tmp_path, m
 
 
 def test_outside_importer_keeps_the_whole_import_unit(tmp_path, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import halt_tree_check
+
     root = _world(tmp_path, monkeypatch, foreign=set())
     (root / "x.py").write_bytes(b"import a\n")
+
+    def reject_unused_diagnostic(*_args):
+        pytest.fail("importability diagnosis cannot affect a kept unit")
+
+    monkeypatch.setattr(halt_tree_check, "broken_paths", reject_unused_diagnostic)
     ev = _plan(root, ["a.py", "b.py"], {"x.py", "a.py", "b.py"})
     assert ev is None
     assert _bytes(root, "a.py") == RUN_BYTES["a.py"] and _bytes(root, "b.py") == RUN_BYTES["b.py"]
@@ -127,6 +172,7 @@ def test_outside_importer_keeps_the_whole_import_unit(tmp_path, monkeypatch) -> 
 
 def test_unrelated_dirty_outside_file_keeps_nothing(tmp_path, monkeypatch) -> None:
     root = _world(tmp_path, monkeypatch, foreign=set())
+    (root / "a.py").write_bytes(HEAD["a.py"].encode())
     (root / "x.py").write_bytes(b"import unrelated\n")
     ev = _plan(root, ["b.py"], {"x.py", "b.py"})
     assert ev is not None
@@ -135,12 +181,87 @@ def test_unrelated_dirty_outside_file_keeps_nothing(tmp_path, monkeypatch) -> No
 
 
 def test_clean_importer_outside_the_changed_set_keeps_nothing(tmp_path, monkeypatch) -> None:
-    # a.py names b but is not dirty (not in `changed`): HEAD's b still satisfies it, so b parks.
+    # HEAD's b still satisfies the clean importer, so b parks.
     root = _world(tmp_path, monkeypatch, foreign=set())
+    (root / "a.py").write_bytes(HEAD["a.py"].encode())
     ev = _plan(root, ["b.py"], {"b.py"})
     assert ev is not None
     ev.apply()
     assert _bytes(root, "b.py") == HEAD["b.py"]
+
+
+def test_run_scoped_snapshot_cannot_hide_a_peers_dirty_importer(tmp_path, monkeypatch):
+    root = _world(tmp_path, monkeypatch, foreign=set())
+    (root / "a.py").write_bytes(b"from b import Z\n")
+    assert _plan(root, ["b.py"], {"b.py"}) is None
+    assert _bytes(root, "b.py") == RUN_BYTES["b.py"]
+
+
+def test_eviction_reuses_complete_python_status(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import worktree_snapshot
+
+    root = _world(tmp_path, monkeypatch, foreign=set())
+    (root / "a.py").write_bytes(b"from b import Z\n")
+
+    def unexpected_status(_root):
+        pytest.fail("eviction should reuse the halt status")
+
+    monkeypatch.setattr(worktree_snapshot, "changed_python_paths", unexpected_status)
+    assert plan_tree_eviction(
+        root, REC, ["b.py"], {"b.py"}, ["b.py"], {}, [], run_id=RUN,
+        python_dirt={"a.py", "b.py"},
+    ) is None
+
+
+def test_body_only_reset_skips_the_peer_import_scan(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import worktree_snapshot
+
+    root = _world(tmp_path, monkeypatch, foreign=set())
+    (root / "b.py").write_bytes(b"X = 2\n")
+    monkeypatch.setattr(
+        worktree_snapshot, "changed_python_paths",
+        lambda _root: pytest.fail("reset preserves the import surface"),
+    )
+    eviction = plan_tree_eviction(root, REC, ["b.py"], {"b.py"}, ["b.py"], {}, [], run_id=RUN)
+    assert eviction is not None
+    eviction.apply()
+    assert _bytes(root, "b.py") == HEAD["b.py"]
+
+
+def test_no_status_caller_keeps_import_risk_without_spawning(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run, worktree_snapshot
+
+    root = _world(tmp_path, monkeypatch, foreign=set())
+    monkeypatch.setattr(
+        worktree_snapshot, "changed_python_paths",
+        lambda _root: pytest.fail("halt route does not have a complete status snapshot"),
+    )
+    withheld = {}
+    assert plan_tree_eviction(root, REC, ["b.py"], {"b.py"}, ["b.py"], withheld, [], run_id=RUN) is None
+    assert _bytes(root, "b.py") == RUN_BYTES["b.py"]
+    assert withheld == {"b.py": "import_risk_unscanned"}
+    halted_run.write_halt_marker(root / REC, halted="refusal", sizing_rel=None)
+    halted_run.record_withheld(root / REC, withheld)
+    marker = json.loads((root / REC / "halted.json").read_text(encoding="utf-8"))
+    assert marker["run_artifacts"]["withheld"] == withheld
+
+    (root / "a.py").write_bytes(HEAD["a.py"].encode())
+    eviction = plan_tree_eviction(
+        root, REC, ["b.py"], {"b.py"}, ["b.py"], withheld, [], run_id=RUN,
+        python_dirt={"b.py", "c.py"},
+    )
+    assert eviction is not None
+    eviction.apply()
+    assert _bytes(root, "b.py") == HEAD["b.py"]
+
+
+def test_reset_must_not_reintroduce_an_import_of_a_renamed_peer_definition(tmp_path, monkeypatch):
+    monkeypatch.setitem(HEAD, "a.py", "from b import X\n")
+    root = _world(tmp_path, monkeypatch, foreign=set())
+    (root / "a.py").write_bytes(b"A = 2\n")
+    (root / "b.py").write_bytes(b"NEW = 2\n")
+    assert _plan(root, ["a.py"], {"a.py"}) is None
+    assert _bytes(root, "a.py") == "A = 2\n"
 
 
 def test_no_units_leaves_siblings_reset_as_before(tmp_path, monkeypatch) -> None:

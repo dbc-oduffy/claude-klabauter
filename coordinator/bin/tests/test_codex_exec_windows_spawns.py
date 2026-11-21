@@ -1,0 +1,158 @@
+"""Drives coordinator/bin/codex-exec-windows.py against a fake codex on PATH."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+SCRIPT = Path(__file__).resolve().parent.parent / "codex-exec-windows.py"
+
+_FAKE_PY = """\
+import json, os, sys
+data = sys.stdin.buffer.read()
+open(os.environ["FAKE_CODEX_STDIN"], "wb").write(data)
+home = os.environ.get("CODEX_HOME", "")
+sys.stdout.write(json.dumps({
+    "argv": sys.argv[1:],
+    "marker": os.environ.get("FAKE_MARKER", ""),
+    "codex_home": home,
+    "agents_md": os.path.isfile(os.path.join(home, "AGENTS.md")) if home else False,
+    "auth": os.path.isfile(os.path.join(home, "auth.json")) if home else False,
+}) + "\\n")
+sys.stdout.flush()
+sys.stdout.buffer.write("caf\\u00e9\\n".encode("utf-8"))
+sys.exit(int(os.environ.get("FAKE_CODEX_RC", "0")))
+"""
+
+
+def _install_fake_codex(directory: Path, marker: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    impl = directory / "fake_codex_impl.py"
+    impl.write_text(_FAKE_PY.replace('os.environ.get("FAKE_MARKER", "")', repr(marker)), encoding="utf-8")
+    if os.name == "nt":
+        (directory / "codex.cmd").write_text(f'@"{sys.executable}" "{impl}" %*\r\n', encoding="utf-8")
+    else:
+        shim = directory / "codex"
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "$@"\n', encoding="utf-8")
+        shim.chmod(0o755)
+
+
+def _run(tmp_path: Path, path_dirs: list[Path], rc: int = 0, extra: list[str] | None = None):
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_bytes("héllo prompt\n".encode("utf-8"))
+    events = tmp_path / "events.jsonl"
+    env = dict(os.environ)
+    env["PATH"] = os.pathsep.join(str(d) for d in path_dirs)
+    env["FAKE_CODEX_STDIN"] = str(tmp_path / "stdin.bin")
+    env["FAKE_CODEX_RC"] = str(rc)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--prompt", str(prompt), "--events", str(events), *(extra or [])],
+        env=env,
+        capture_output=True,
+        timeout=60,
+    )
+    return proc, events
+
+
+def test_help_exits_zero():
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--help"], capture_output=True, timeout=30)
+    assert proc.returncode == 0
+    assert b"--prompt" in proc.stdout
+
+
+def test_stdin_events_args_and_zero_exit(tmp_path):
+    good = tmp_path / "good"
+    _install_fake_codex(good, "good")
+    proc, events = _run(tmp_path, [good], extra=["--json", "-m", "gpt"])
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "stdin.bin").read_bytes() == "héllo prompt\n".encode("utf-8")
+    lines = events.read_bytes().decode("utf-8").splitlines()
+    assert json.loads(lines[0])["argv"] == ["exec", "--json", "-m", "gpt"]
+    assert lines[1] == "café"
+
+
+@pytest.mark.parametrize("rc", [3, 42])
+def test_exit_code_passthrough(tmp_path, rc):
+    good = tmp_path / "good"
+    _install_fake_codex(good, "good")
+    proc, _ = _run(tmp_path, [good], rc=rc)
+    assert proc.returncode == rc
+
+
+def test_store_alias_entry_is_skipped(tmp_path):
+    stub = tmp_path / "Microsoft" / "WindowsApps"
+    good = tmp_path / "good"
+    _install_fake_codex(stub, "stub")
+    _install_fake_codex(good, "good")
+    proc, events = _run(tmp_path, [stub, good])
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(events.read_text(encoding="utf-8").splitlines()[0])["marker"] == "good"
+
+
+def test_only_store_alias_codex_refuses(tmp_path):
+    stub = tmp_path / "WindowsApps"
+    _install_fake_codex(stub, "stub")
+    proc, _ = _run(tmp_path, [stub])
+    assert proc.returncode == 127
+    assert b"codex not found" in proc.stderr
+
+
+def test_child_gets_isolated_worker_home_without_agents_md(tmp_path):
+    real = tmp_path / "real-codex-home"
+    real.mkdir()
+    (real / "AGENTS.md").write_text("EM doctrine: submit via engine_ask.submit", encoding="utf-8")
+    (real / "auth.json").write_text("{}", encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir()
+    good = tmp_path / "good"
+    _install_fake_codex(good, "good")
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_bytes(b"row\n")
+    events = tmp_path / "events.jsonl"
+    env = dict(os.environ)
+    env["PATH"] = str(good)
+    env["CODEX_HOME"] = str(real)
+    env["FAKE_CODEX_STDIN"] = str(tmp_path / "stdin.bin")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--prompt", str(prompt), "--events", str(events), "--json"],
+        env=env,
+        cwd=work,
+        capture_output=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    seen = json.loads(events.read_text(encoding="utf-8").splitlines()[0])
+    assert Path(seen["codex_home"]) == work / "scratch" / "codex-home"
+    assert seen["agents_md"] is False
+    assert seen["auth"] is True
+    assert (real / "AGENTS.md").is_file()
+
+
+def test_unshapeable_worker_env_refuses_without_spawning_codex(tmp_path):
+    not_a_dir = tmp_path / "root-is-a-file"
+    not_a_dir.write_text("x", encoding="utf-8")
+    good = tmp_path / "good"
+    _install_fake_codex(good, "good")
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_bytes(b"row\n")
+    events = tmp_path / "events.jsonl"
+    stdin_capture = tmp_path / "stdin.bin"
+    env = dict(os.environ)
+    env["PATH"] = str(good)
+    env["FAKE_CODEX_STDIN"] = str(stdin_capture)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--prompt", str(prompt), "--events", str(events), "-C", str(not_a_dir)],
+        env=env,
+        capture_output=True,
+        timeout=60,
+    )
+    assert proc.returncode == 126
+    assert b"worker env refused" in proc.stderr
+    assert not stdin_capture.exists()

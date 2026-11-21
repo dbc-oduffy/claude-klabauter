@@ -182,7 +182,7 @@ def test_dest_disposition_byte_identical_twin_converges(tmp_path: Path) -> None:
 def test_dest_disposition_absent_destination_moves_normally(tmp_path: Path) -> None:
     worktree = tmp_path / "repo"
     cid = "state/bug-backlog/2026-03-03-fresh.yaml"
-    _make_bug(worktree, "2026-03-03-fresh.yaml", "status: closed\ntitle: fresh close\n")
+    _make_bug(worktree, "2026-03-03-fresh.yaml", "status: closed\ntitle: fresh close\nsurface: pkg/test_a.py\ntags: [tf]\n")
 
     with patched_disposition_seam(m, worktree=worktree) as mover:
         result = _run(
@@ -198,6 +198,8 @@ def test_dest_disposition_absent_destination_moves_normally(tmp_path: Path) -> N
     assert len(mover.captured) == 1
     assert mover.captured[0].force is False
     assert mover.captured[0].dst == worktree / "archive" / "bug-backlog" / "2026-03" / "2026-03-03-fresh.yaml"
+    row = m.archive_index.read_month(worktree, "2026-03")["2026-03-03-fresh.yaml"]
+    assert row[2] == ["fresh close", "pkg/test_a.py"]
 
 
 def test_dry_run_true_returns_candidates_envelope_and_mutates_nothing(tmp_path: Path) -> None:

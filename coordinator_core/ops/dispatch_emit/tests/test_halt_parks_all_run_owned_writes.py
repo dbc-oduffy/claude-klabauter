@@ -14,6 +14,9 @@ from coordinator_core.ops.dispatch_emit.halted_record_eviction import (
     EVICTED_NOT_IMPORTABLE, EVICTED_PARKED, plan_tree_eviction,
 )
 
+import pytest
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 REC = "state/warp/run-x"
 RUN = "r1"
 GOOD_PY = "pkg_ok.py"
@@ -52,7 +55,10 @@ def _world(tmp_path: Path) -> Path:
 
 
 def _plan(root: Path, withheld: dict, paths: list, written: list):
-    return plan_tree_eviction(root, REC, written, set(written) | {PEER}, list(written), withheld, paths, run_id=RUN)
+    dirty = set(written) | {PEER}
+    return plan_tree_eviction(
+        root, REC, written, dirty, list(written), withheld, paths, run_id=RUN, python_dirt=dirty,
+    )
 
 
 def test_importable_py_and_md_are_both_parked_and_peer_file_untouched(tmp_path: Path) -> None:
@@ -93,6 +99,7 @@ def test_landed_unchanged_and_record_dir_paths_are_not_parked(tmp_path: Path) ->
     written = [GOOD_PY, NOTE, f"{REC}/halted.json"]
     ev = plan_tree_eviction(
         root, REC, written, {GOOD_PY, f"{REC}/halted.json"}, written, withheld, [NOTE], run_id=RUN,
+        python_dirt={GOOD_PY},
     )
     assert ev is not None
     assert set(withheld) == {GOOD_PY}

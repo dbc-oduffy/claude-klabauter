@@ -57,6 +57,10 @@ def _is_test_name(name: str) -> bool:
     return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
 
 
+def _is_test_path(rel: str) -> bool:
+    return rel.endswith(".py") and _is_test_name(rel.rpartition("/")[2])
+
+
 def _literal_around(data: bytes, hit: int, width: int) -> str | None:
     """The same-line quoted literal holding the bytes at `hit`, or None."""
     line_start = data.rfind(b"\n", 0, hit) + 1
@@ -196,7 +200,9 @@ _CANDIDATES: Dict[str, tuple] = {}
 
 
 def _tracked_test_bytes(
-    repo_root: Path, exclude: Collection[str], tokens: Collection[bytes] | None = None, imports: dict | None = None
+    repo_root: Path, exclude: Collection[str], tokens: Collection[bytes] | None = None, imports: dict | None = None,
+    walk: bool = False,
+    record: bool = True,
 ):
     """Yield (rel, bytes) for each readable candidate test module, sorted by path.
 
@@ -212,7 +218,8 @@ def _tracked_test_bytes(
     try:
         tracked = (
             review_token_index.tracked_paths(
-                Path(repo_root), git_state.read_index_paths, git_state.resolve_git_dir(repo_root) / "index"
+                Path(repo_root), git_state.read_index_paths, git_state.resolve_git_dir(repo_root) / "index",
+                keep=_is_test_path,
             )
             if tokens is not None
             else git_state.read_index_paths(repo_root)
@@ -234,8 +241,10 @@ def _tracked_test_bytes(
         return ok
 
     if tokens is not None:
+        if record:
+            review_token_index.record_root(root)
         yield from _indexed_test_bytes(
-            root, tracked, (testpaths, norecurse), skip, dir_admitted, flags, tokens, imports
+            root, tracked, (testpaths, norecurse), skip, dir_admitted, flags, tokens, imports, walk
         )
         return
     for rel in sorted(tracked):
@@ -247,7 +256,7 @@ def _tracked_test_bytes(
             yield rel, data
 
 
-def _indexed_test_bytes(root, tracked, config, skip, dir_admitted, flags, tokens, imports):
+def _indexed_test_bytes(root, tracked, config, skip, dir_admitted, flags, tokens, imports, walk=False):
     cached = _CANDIDATES.get(root)
     if cached is not None and cached[0] is tracked and cached[1] == config:
         cands = cached[2]
@@ -255,10 +264,10 @@ def _indexed_test_bytes(root, tracked, config, skip, dir_admitted, flags, tokens
         cands = sorted(
             rel
             for rel in tracked
-            if _is_test_name(rel.rpartition("/")[2]) and dir_admitted(rel.rpartition("/")[0])
+            if rel.endswith(".py") and _is_test_name(rel.rpartition("/")[2]) and dir_admitted(rel.rpartition("/")[0])
         )
         _CANDIDATES[root] = (tracked, config, cands)
-    masks = [m for m in (review_token_index.token_mask(t) for t in tokens if t)]
+    masks = [m for m in (review_token_index.token_mask(t, walk) for t in tokens if t)]
     blooms = review_token_index.refresh(root, cands, lambda path: _read(path, flags))
     if imports is not None:
         imports.update({rel: blooms[rel][1] for rel in cands if rel in blooms and rel not in skip and blooms[rel][1]})
@@ -273,6 +282,26 @@ def _indexed_test_bytes(root, tracked, config, skip, dir_admitted, flags, tokens
         data = _read(f"{root}/{rel}", flags)
         if data is not None:
             yield rel, data
+
+
+def warm_index(repo_root: Path) -> None:
+    """Build or refresh the persisted test index for `repo_root`, rehashing only modules whose stat moved.
+
+    Run it off the op path (warm-server boot): an op that arrives meanwhile waits on this one build.
+    Does not touch the recent-roots list, which only real scans order."""
+    for _ in _tracked_test_bytes(repo_root, (), {b"warm.index"}, record=False):
+        pass
+
+
+def warm_recent_indexes(fallback: Path) -> None:
+    """`warm_index` for the repos reverify scanned most recently (oldest first, so a failure never
+    starves the newest); `fallback` when none is recorded or none still exists."""
+    roots = [Path(r) for r in review_token_index.recent_roots() if os.path.isdir(r)]
+    for root in reversed(roots or [Path(fallback)]):
+        try:
+            warm_index(root)
+        except Exception:  # noqa: BLE001 -- one repo's failure must not skip the rest
+            continue
 
 
 def scan_tokens(paths: Collection[str], leaves: bool = True) -> set:
@@ -314,7 +343,7 @@ def literal_namers(
     return out
 
 
-_WALK_PRIMITIVES = (b"rglob(", b"os.walk(", b".glob(", b"iterdir(", b"ls-files")
+_WALK_PRIMITIVES = review_token_index.WALK_PRIMITIVES
 _LITERAL_RE = re.compile(rb"""(["'])([^"'\n]{1,%d})\1""" % _MAX_LITERAL)
 
 
@@ -360,7 +389,7 @@ def tree_scanners(
     dirs = {_norm(c).rpartition("/")[0] for c in paths} - {"", "."}
     tokens = {d.rsplit("/", 1)[-1].encode("utf-8") for d in dirs}
     return sorted(
-        rel for rel, data in _tracked_test_bytes(repo_root, exclude, tokens) if walked_created(data, paths)
+        rel for rel, data in _tracked_test_bytes(repo_root, exclude, tokens, walk=True) if walked_created(data, paths)
     )
 
 

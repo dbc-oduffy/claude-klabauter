@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="console windows are a Windows concern")
+pytestmark = [pytest.mark.skipif(sys.platform != "win32", reason="console windows are a Windows concern"), pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 class _Recorded(Exception):

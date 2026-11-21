@@ -17,6 +17,8 @@ from coordinator_core.ops.review_mint.execute_review import NO_SLICES_HALT
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _GUARD_OPEN = "  if (!_halted && (!_reviewPrep ||"
 _SHA_A = "2534205b9f"
@@ -60,7 +62,7 @@ def test_composed_script_wires_the_skip_without_touching_the_delivered_exit() ->
 def _run(*, blocking, met_by, prep, delivery_reply=None) -> dict:
     script = _script()
     harness = (
-        "const _agentDefsClause = () => ''; let _halted = null; let _alreadyDelivered = null; "
+        "const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => ''; let _halted = null; let _alreadyDelivered = null; "
         "let _alreadyDeliveredRefusal = ''; let _metBySkipped = null; const _logs = [];\n"
         "const log = (m) => { _logs.push(m); };\n"
         f"const _reviewPrep = {json.dumps(prep)}; const _verifyOnly = false; const _runId = 'run-1';\n"

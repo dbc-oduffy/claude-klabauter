@@ -49,7 +49,11 @@ def test_composed_script_halts_on_an_empty_test_verdict(monkeypatch):
     assert "TEST_GUARD" not in script
 
 
+# The composed script declares `_testRan` once, ahead of the halt, beside the owed-condition.
+_TEST_RAN_DECL = f"const {ask_compose._TEST_RAN_FN} = () => {ask_compose._TEST_RAN_JS};"
+
 _HARNESS = """
+%s
 const _TEST_GUARD = %s;
 let _halted = null, _runId = 'r', _testResult = %s;
 if (!_halted && (_TEST_GUARD) && %s
@@ -60,8 +64,9 @@ console.log(JSON.stringify(_halted));
 def _run(testResult: str, owed: bool) -> object:
     node = shutil.which("node")
     snippet = _test_verdict_empty_halt_js(_SIZING).replace("TEST_GUARD", "_TEST_GUARD")
-    body = snippet.split("&& (_TEST_GUARD) && ", 1)[1]
-    program = _HARNESS % ("true" if owed else "false", testResult, body)
+    helpers, rest = snippet.split("    if (!_halted", 1)
+    body = rest.split("&& (_TEST_GUARD) && ", 1)[1]
+    program = _HARNESS % (_TEST_RAN_DECL + "\n" + helpers, "true" if owed else "false", testResult, body)
     out = subprocess.run(
         [node, "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout.strip()
@@ -131,6 +136,7 @@ def test_collection_failure_halt_detail_names_no_path():
 
 
 _REVERIFY_PROGRAM = """
+%s
 const _TEST_GUARD = true;
 let _halted = null, _runId = 'r', _testResult = null;
 %s
@@ -145,7 +151,7 @@ def _run_with_reverify(reverify: str | None) -> object:
     decl = "" if reverify is None else f"let _reviewReverify = {reverify};"
     body = _test_verdict_empty_halt_js(_SIZING).replace("TEST_GUARD", "_TEST_GUARD")
     out = subprocess.run(
-        [shutil.which("node"), "-"], input=_REVERIFY_PROGRAM % (decl, body), capture_output=True, text=True,
+        [shutil.which("node"), "-"], input=_REVERIFY_PROGRAM % (_TEST_RAN_DECL, decl, body), capture_output=True, text=True,
         check=True, **no_console_creationflags(),
     ).stdout.strip()
     return json.loads(out)

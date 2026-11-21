@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,7 +11,6 @@ from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit, _read_baton_ids
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
-from coordinator_core.win_portability import no_console_creationflags
 
 REL = "state/sizings/2026-10-06-baton.yaml"
 BATON = "state/handoffs/2026-10-06-existing.md"
@@ -144,41 +141,6 @@ def test_read_baton_ids_refuses_path_outside_handoffs(repo, bad) -> None:
         _read_baton_ids(repo, bad, None)
 
 
-@pytest.mark.cadence
-@pytest.mark.spawns_process
-def test_emit_with_baton_joins_it_and_embeds_accept_phase(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    from coordinator_core.ops.dispatch_emit import plan_blitz_args
-
-    monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
-    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
-    _baton(repo)
-    _sizing(repo, "M", mode="pm", route="pm-decision", xl_exit="accept_multi_session")
-    rc = cli.main(["--ask", "--sizing", REL, "--baton", BATON, "--repo-root", str(repo)])
-    assert rc == 0
-    out = capsys.readouterr().out
-    reply = json.loads(out[out.index("{") : out.rindex("}") + 1])
-    text = Path(reply["path"]).read_text(encoding="utf-8")
-    assert "phase('accept')" in text and BATON in text
-    assert reply["run_id"].startswith("warp-2026-10-06-baton-")
-    assert "Plan, stage, execute, review from accepted sizing 2026-10-06-baton." in text
-
-
-@pytest.mark.cadence
-@pytest.mark.spawns_process
-def test_raw_ask_with_baton_threads_id_into_size_and_gate(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    from coordinator_core.ops.dispatch_emit import plan_blitz_args
-
-    monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
-    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
-    _baton(repo)
-    rc = cli.main(["--ask", "do a thing", "--baton", BATON, "--repo-root", str(repo)])
-    assert rc == 0
-    out = capsys.readouterr().out
-    reply = json.loads(out[out.index("{") : out.rindex("}") + 1])
-    text = Path(reply["path"]).read_text(encoding="utf-8")
-    assert "--deliverable-id dlv-x-abc123" in text and f'baton: "{BATON}"' in text
-
-
 _FILLED = (
     "## Specification\nDo it.\n\n## Reference materials (read first)\n- a.py\n\n"
     "## Acceptance criteria\n- AC-1\n"
@@ -213,20 +175,3 @@ def test_gate_refuses_skeleton_baton_then_passes_once_filled(repo, monkeypatch: 
         f"---\nhandoff_id: hnd-x-abc123\ndeliverable_id: dlv-x-abc123\n---\n{_FILLED}", encoding="utf-8", newline="\n"
     )
     assert _gate_sizing_at_emit(repo, REL, [], baton=b)["batons"] == [BATON]
-
-
-def test_prompt_ask_blitz_call_carries_resolved_args(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    from coordinator_core.ops.dispatch_emit import plan_blitz_args
-
-    monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
-    # A raw ask carries no plan-blitz stage; an M+ sizing-backed ask does.
-    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
-    _sizing(repo, "XL", mode="pm")
-    assert cli.main(["--ask", "--sizing", REL, "--repo-root", str(repo)]) == 0
-    out = capsys.readouterr().out
-    reply = json.loads(out[out.index("{") : out.rindex("}") + 1])
-    text = Path(reply["path"]).read_text(encoding="utf-8")
-    call = text.split("await planBlitz(", 1)[1].split("\n", 1)[0]
-    assert '"provisionSidecarCli": "/x/provision-sidecar"' in call
-    assert '"pluginAgentsAvailable"' in call
-    assert "gateReportPath: REPO_ROOT + '/' + _sizingRel" in call

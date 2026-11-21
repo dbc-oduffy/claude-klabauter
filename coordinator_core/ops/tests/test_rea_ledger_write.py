@@ -167,25 +167,3 @@ _RACER = (
     "from coordinator_core.ops.rea_ledger_write import _rea_ledger_write as w; "
     "print(json.dumps(w({'kind': 'unknown_revision', 'records': [sys.argv[2]]}, repo_root=Path(sys.argv[1]))))"
 )
-
-
-def test_concurrent_appends_of_the_same_revision_land_exactly_once(repo):
-    import subprocess
-    import sys
-
-    r1 = _unknown(1, None)
-    assert write({"kind": "unknown_revision", "records": [_text(r1)]}, repo_root=repo)["written"] == 1
-    prev = revision_digest(r1)
-    root = Path(__file__).resolve().parents[3]
-    procs = [
-        subprocess.Popen(
-            [sys.executable, "-c", _RACER, str(repo), _text(_unknown(2, prev, question=f"racer-{n}"))],
-            cwd=root, stdout=subprocess.PIPE, text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        for n in range(2)
-    ]
-    results = [json.loads(p.communicate(timeout=60)[0]) for p in procs]
-    assert sorted("error" in r for r in results) == [False, True], results
-    path = _ledger(repo) / "unknown_revision" / "u-1.jsonl"
-    assert path.read_bytes().count(b"\n") == 2

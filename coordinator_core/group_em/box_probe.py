@@ -1,7 +1,8 @@
 """Box capability probe: what this machine can run, recorded in box.json beside its identity.
 
-Zero subprocess calls -- stdlib and ``host_sampler.avail_mb`` (the one memory reader) only. ``gpu`` is null because GPU
-detection (``nvidia-smi``) is a spawn; it waits on the hardware. Leaf module like ``box_registry``.
+Zero subprocess calls -- stdlib, ``host_sampler.avail_mb`` (the one memory reader) and ``gpu_sample`` (NVML
+in-process). ``gpu`` holds the static device rows only: live utilisation lives in the capacity record.
+Leaf module like ``box_registry``.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.group_em import box_registry
+from coordinator_core.group_em import box_registry, gpu_sample
 from coordinator_core.telemetry import host_sampler
 
 
@@ -35,8 +36,9 @@ def _has_ue() -> bool:
 def probe() -> dict:
     """This machine's capability record.
 
-    Fields: os, arch, cpu_count, ram_mb, python, gpu (always None), has_p4 and has_ue (flat
-    booleans so ``placement.satisfies`` can require ``{"has_ue": True}``).
+    Fields: os, arch, cpu_count, ram_mb, python, gpu, has_p4 and has_ue (flat
+    booleans so ``placement.satisfies`` can require ``{"has_ue": True}``). ``gpu`` is
+    ``{"devices": [{name, vram_total_mib, unified}]}`` or ``{"unavailable": <reason>}``.
     """
     return {
         "os": platform.system(),
@@ -44,7 +46,7 @@ def probe() -> dict:
         "cpu_count": os.cpu_count(),
         "ram_mb": _ram_mb(),
         "python": platform.python_version(),
-        "gpu": None,
+        "gpu": gpu_sample.static_rows(gpu_sample.sample()),
         "has_p4": shutil.which("p4") is not None,
         "has_ue": _has_ue(),
     }

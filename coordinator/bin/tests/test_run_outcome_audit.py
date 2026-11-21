@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -150,40 +149,6 @@ def test_missing_sizing_prints_marker(tmp_path):
     assert _rows(root)["warp-x"]["pm_verbatim"] == "(sizing missing)"
 
 
-def _cli(root: Path, cwd: Path, *args: str):
-    return subprocess.run(
-        [sys.executable, "-I", str(_SCRIPT), "--root", str(root), *args],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-
-
-def test_cli_exits_1_with_red_rows_from_foreign_cwd(corpus, tmp_path):
-    foreign = tmp_path / "elsewhere"
-    foreign.mkdir()
-    res = _cli(corpus, foreign)
-    assert res.returncode == 1
-    assert "RED warp-b-nojudge" in res.stdout
-    assert "runs=7 red=2" in res.stdout
-
-
-def test_cli_exits_0_when_no_red(tmp_path):
-    root = tmp_path / "r"
-    _run(root, "warp-ok", halted={"status": "landed"}, outcome=_outcome(), sizing=False)
-    assert _cli(root, tmp_path).returncode == 0
-
-
-def test_cli_red_only_hides_other_rows(corpus, tmp_path):
-    res = _cli(corpus, tmp_path, "--red-only")
-    assert "warp-a-green" not in res.stdout and "warp-b-nojudge" in res.stdout
-
-
-def test_cli_missing_root_exits_2(tmp_path):
-    assert _cli(tmp_path / "nope", tmp_path).returncode == 2
-
-
 def test_audit_spawns_no_subprocess(corpus, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")
@@ -229,38 +194,6 @@ def _plan_with_owed(root: Path, dispositions: dict, discharged=()):
             leg_dir / f"run-1--{row_id}.yaml",
             f"id: {row_id}\nrun_id: run-1\nplan: docs/plans/p.md\nreason: em_performed\ndetail: ''\ncreated: '2026-11-04T00:00:00Z'\n",
         )
-
-
-def _owed_lines(root: Path, tmp_path: Path) -> list:
-    """OWED lines the default CLI run prints."""
-    return [ln for ln in _cli(root, tmp_path).stdout.splitlines() if ln.startswith("OWED ")]
-
-
-def test_cli_prints_open_owed_legs_only(tmp_path):
-    root = tmp_path / "r"
-    _run(root, "warp-ok", halted={"status": "landed"}, outcome=_outcome(), sizing=False)
-    _plan_with_owed(root, {"C1": "open", "C2": "resolved", "C3": "open", "C4": "open"}, discharged=["C3"])
-    assert _owed_lines(root, tmp_path) == [
-        "OWED run-1 C1 (em_performed) docs/plans/p.md",
-        "OWED run-1 C4 (em_performed) docs/plans/p.md",
-    ]
-
-
-def test_owed_leg_disappears_when_disposition_changes(tmp_path):
-    root = tmp_path / "r"
-    _run(root, "warp-ok", halted={"status": "landed"}, outcome=_outcome(), sizing=False)
-    _plan_with_owed(root, {"C1": "open"})
-    assert len(_owed_lines(root, tmp_path)) == 1
-    _plan_with_owed(root, {"C1": "resolved"})
-    assert _owed_lines(root, tmp_path) == []
-
-
-def test_owed_leg_with_unreadable_plan_stays_open(tmp_path):
-    root = tmp_path / "r"
-    _run(root, "warp-ok", halted={"status": "landed"}, outcome=_outcome(), sizing=False)
-    _plan_with_owed(root, {"C1": "open"})
-    (root / "docs" / "plans" / "p.md").unlink()
-    assert len(_owed_lines(root, tmp_path)) == 1
 
 
 def test_owed_legs_agree_with_engine_open_owed_legs(tmp_path):

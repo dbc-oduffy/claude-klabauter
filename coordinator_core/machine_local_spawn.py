@@ -423,11 +423,19 @@ def _mtime(path: str):
 
 def _registry_layer_mtimes(reg: str) -> tuple:
     """(name, mtime_ns) of every ``*.toml`` layer in the registry dir; stats only, reads no content."""
+    layers = []
     try:
         with os.scandir(reg) as it:
-            return tuple(sorted((e.name, e.stat().st_mtime_ns) for e in it if e.name.endswith(".toml")))
+            for e in it:
+                if not e.name.endswith(".toml"):
+                    continue
+                try:
+                    layers.append((e.name, e.stat().st_mtime_ns))
+                except OSError:
+                    layers.append((e.name, None))
     except OSError:
         return ()
+    return tuple(sorted(layers, key=lambda row: row[0]))
 
 
 def _cache_key(impl: str, args: tuple) -> tuple:

@@ -4028,6 +4028,20 @@ def _handoff_stamp_evidence(root: Path, abs_artifact_path: Path) -> bool:
     return False
 
 
+def _shipped_reopen_note(fm: dict[str, Any], decisions: dict[str, Any]) -> Optional[str]:
+    """The reopen reason when this shipped handoff's `jshipped` decision is
+    `reopen-and-proceed`, else None. Without this d2 would claim a record the
+    claim verb refuses as terminal -- the disposition offered an unreachable
+    choice."""
+    if fm.get("deployment_state") != "shipped" or not isinstance(decisions, dict):
+        return None
+    entry = decisions.get("jshipped")
+    if not isinstance(entry, dict) or entry.get("disposition") != "reopen-and-proceed":
+        return None
+    note = " ".join(str(entry.get("decision_note") or "").split())
+    return note or "reopened via pickup jshipped reopen-and-proceed"
+
+
 def _build_directives(
     classification: str,
     display_path: str,
@@ -4048,7 +4062,13 @@ def _build_directives(
         if root is not None and abs_artifact_path is not None:
             stamp_evidence = _handoff_stamp_evidence(root, abs_artifact_path)
         self_claimed_in_frontmatter = bool(claim_grant.get("held_by_self")) and stamp_evidence
-        return build_handoff_directives(display_path, claim.get("holder"), basename, self_claimed_in_frontmatter)
+        directives = build_handoff_directives(display_path, claim.get("holder"), basename, self_claimed_in_frontmatter)
+        reopen_note = _shipped_reopen_note(fm, decisions)
+        if reopen_note is not None:
+            for d in directives:
+                if d["id"] == "d2":
+                    d["args"] = ["claim-handoff", display_path, "--reopen", reopen_note]
+        return directives
     if classification == "memo":
         return build_memo_directives(display_path, kind_resolved or "ask", decisions)
     return []
@@ -5113,7 +5133,12 @@ def validate_decisions_shape(decisions: Any) -> Optional[str]:
         + "".join(f', "{key}": "<value>"' for key in DISPOSITION_CONTENT_KEYS)
         + " (all but disposition optional)}"
     )
-    for jp_id, value in decisions.items():
+    for jp_id, value in list(decisions.items()):
+        # Bare-string shorthand: {"jp": "mine"} == {"jp": {"disposition": "mine"}}
+        # (apply_base.normalize_decisions already treats it so; the shape
+        # gate must not refuse what the engine accepts).
+        if isinstance(value, str) and value.strip():
+            value = decisions[jp_id] = {"disposition": value}
         if not isinstance(value, dict):
             return (
                 f"--decisions[{jp_id!r}] must be shaped "

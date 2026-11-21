@@ -69,6 +69,8 @@ def test_missing_cited_plan_halts_typed_on_a_refire_only(cited, monkeypatch) -> 
     assert v.halt["plan_status"] is None
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
 def test_gate_relay_envelope_is_unwrapped_to_top_level_keys() -> None:
     envelope = {

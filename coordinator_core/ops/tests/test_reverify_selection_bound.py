@@ -13,7 +13,7 @@ from coordinator_core.git.index_write import _build_entry
 from coordinator_core.ops import review_reverify as rr
 from coordinator_core.ops.reverify_scope import _SUITE_BOUND, TRIPWIRE_BOUND, select_for_paths, select_tests
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 PKG = "ops/dispatch_emit"
 EDITED = [f"{PKG}/requirements_ledger.py", f"{PKG}/terminal_commit_ledger.py"]

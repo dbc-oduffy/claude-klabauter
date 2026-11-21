@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.authz.classification import OpClass, classify
 
 
@@ -36,6 +38,30 @@ class TestRepoSetup:
 
     def test_classifies_mutating(self) -> None:
         assert classify("repo.setup") is OpClass.MUTATING
+
+
+class TestFleetCapacityOps:
+
+    @pytest.mark.parametrize(
+        "op,expected",
+        [
+            ("groupem.fleet_capacity", OpClass.MUTATING),
+            ("groupem.capacity_admit", OpClass.MUTATING),
+            ("groupem.capacity_place", OpClass.COMPUTE_ONLY),
+            ("groupem.idle_capacity_watch", OpClass.COMPUTE_ONLY),
+        ],
+    )
+    def test_classification(self, op: str, expected: OpClass) -> None:
+        assert classify(op) is expected
+
+    @pytest.mark.parametrize(
+        "op",
+        ["groupem.fleet_capacity", "groupem.capacity_admit", "groupem.capacity_place", "groupem.idle_capacity_watch"],
+    )
+    def test_scope_is_registered(self, op: str) -> None:
+        from coordinator_core import op_scopes
+
+        assert op_scopes._OP_KEY_SCOPE[op] == "none"
 
 
 class TestPlanSetCodeDone:

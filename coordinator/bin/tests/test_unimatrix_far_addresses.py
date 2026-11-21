@@ -95,3 +95,57 @@ def test_make_verify_runs_one_ssh_and_classifies():
         raise subprocess.TimeoutExpired(argv, 8)
 
     assert fa.make_verify("boxx", run=boom)(f"u@{A}")[0] == fa.UNREACHABLE
+
+
+def _cfg(**extra):
+    base = {"unimatrix.addresses.b": f"{A},{B},{C}", "unimatrix.hostkey.b": "SHA256:pin"}
+    base.update(extra)
+    return _reader(base)
+
+
+def _ok_on(*good):
+    return lambda target: (fa.OK, "") if target.split("@")[-1] in good else (fa.UNREACHABLE, "timeout")
+
+
+def test_route_verified_lan_carries_the_verified_endpoint():
+    r = fa.select_route("b", "u", "u@b", _cfg(), connect=lambda a: True, verify=_ok_on(B), fallback="u@b-tunnel", relay_key="k")
+    assert (r.transport, r.endpoint, r.verification, r.fallback_reason) == (fa.LAN, B, fa.VERIFIED, None)
+    assert (r.peer, r.alias, r.relay_key, r.hostkey) == ("b", "u@b", "k", "SHA256:pin")
+
+
+def test_route_unpinned_peer_never_takes_lan_even_when_tcp_and_verify_answer():
+    probes = []
+    r = fa.select_route("b", "u", "u@b", _cfg(**{"unimatrix.hostkey.b": ""}), connect=lambda a: probes.append(a) or True,
+                        verify=lambda t: probes.append(t) or (fa.OK, ""), fallback="u@b-tunnel")
+    assert (r.transport, r.endpoint, r.fallback_reason) == (fa.FALLBACK, "u@b-tunnel", fa.NO_PINNED_HOSTKEY) and probes == []
+    bare = fa.select_route("b", "u", "u@b", _cfg(**{"unimatrix.hostkey.b": ""}), connect=lambda a: True, verify=_ok_on(A))
+    assert (bare.transport, bare.endpoint, bare.verification) == (None, None, fa.UNAVAILABLE)
+
+
+def test_route_wrong_host_key_and_stale_address_fall_back():
+    def verify(t):
+        return (fa.NOT_THIS_BOX, "x") if t.endswith(A) else (fa.UNREACHABLE, "t")
+
+    r = fa.select_route("b", "u", "u@b", _cfg(), connect=lambda a: True, verify=verify, fallback="u@b-tunnel")
+    assert (r.transport, r.fallback_reason) == (fa.FALLBACK, fa.NOT_THIS_BOX)
+    stale = fa.select_route("b", "u", "u@b", _cfg(), connect=lambda a: False, verify=_ok_on(A), fallback="u@b-tunnel")
+    assert (stale.transport, stale.fallback_reason) == (fa.FALLBACK, fa.UNREACHABLE)
+
+
+def test_route_unavailable_and_no_address_are_typed_not_raised():
+    r = fa.select_route("b", "u", "u@b", _cfg(**{"unimatrix.addresses.b": ""}), connect=lambda a: True, verify=_ok_on(A))
+    assert (r.transport, r.verification, r.fallback_reason) == (None, fa.UNAVAILABLE, fa.NO_LAN_ADDRESS)
+
+
+def test_route_verifies_at_most_max_tried_addresses():
+    seen = []
+    fa.select_route("b", "u", "u@b", _cfg(), connect=lambda a: True, verify=lambda t: seen.append(t) or (fa.UNREACHABLE, "t"))
+    assert seen == [f"u@{A}", f"u@{B}"]
+
+
+def test_route_restored_lan_wins_over_fallback_on_next_selection():
+    up = {"lan": False}
+    sel = lambda: fa.select_route("b", "u", "u@b", _cfg(), connect=lambda a: up["lan"], verify=_ok_on(A), fallback="u@b-tunnel")
+    assert sel().transport == fa.FALLBACK
+    up["lan"] = True
+    assert sel().transport == fa.LAN

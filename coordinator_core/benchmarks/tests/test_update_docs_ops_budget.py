@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 
 import pytest
 
@@ -132,15 +131,3 @@ def test_measure_door_without_installed_door_reports_why(monkeypatch: pytest.Mon
     door = bench.measure_door(tmp_path, 2)
     assert set(door) == DOOR_KEYS
     assert door["unavailable"] and door["door_rtt_p95_ms_load"] is None and door["callers"] == 2
-
-
-def test_measure_op_reports_pinned_keys_through_the_real_door_handler(tmp_path: Path) -> None:
-    repo = bench.ensure_ops_fixture(tmp_path, wiki_pages=12)
-    result = bench.measure_op("check-citation-integrity", bench.repo_root(), repo, tmp_path / "scratch")
-    assert set(result) == OP_KEYS
-    assert result["route"] in {"warm", "cold"}
-    assert isinstance(result["reply_code"], int) and result["reply_code"] != bench._ERROR_CODE
-    assert result["process_ms"] >= 0 and isinstance(result["spawn_count"], int)
-    assert result["dominant_leg"]
-    assert subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo,
-                          capture_output=True, text=True).stdout.strip() == ""

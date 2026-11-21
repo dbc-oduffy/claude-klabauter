@@ -12,7 +12,7 @@ import pytest
 from coordinator_core.git import checkin_attrs
 from coordinator_core.git.commit import FilterUnsupported, _checkin_bytes
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete, pytest.mark.cadence]
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

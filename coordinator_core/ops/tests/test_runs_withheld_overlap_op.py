@@ -21,6 +21,9 @@ from coordinator_core.ops import runs_withheld_overlap as op
 from coordinator_core.ops.dispatch_emit import halted_withheld_index
 
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 def _git(root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
 

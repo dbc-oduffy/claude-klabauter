@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 from typing import TYPE_CHECKING
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 if TYPE_CHECKING:
     from types import ModuleType
 

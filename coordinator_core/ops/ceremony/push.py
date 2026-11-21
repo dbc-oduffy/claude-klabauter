@@ -78,6 +78,7 @@ from coordinator_core.ipc import CEREMONY_BUDGET_SECS, DISPATCH_TIMEOUT_SECS
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.git.git_state import head_sha as head_sha_local
 from coordinator_core import push_hold
+from coordinator_core.ops.ceremony.push_status import PUSH_STATUS_NOT_ATTEMPTED
 from coordinator_core.git.machine_local_paths import (
     machine_local_refusal,
     tree_machine_local_additions,
@@ -581,7 +582,6 @@ PUSH_STATUS_PUSHED = "pushed"
 PUSH_STATUS_FAILED = "push-failed"
 PUSH_STATUS_DECLINED = "declined"
 PUSH_STATUS_NO_REMOTE = "no-remote"
-PUSH_STATUS_NOT_ATTEMPTED = "not-attempted"
 #: FIX-I (2026-08-19): the push subprocess timed out -- its true outcome was
 #: never observed, distinct from `PUSH_STATUS_FAILED` (git itself reported a
 #: reject). See `PushOutcome.unconfirmed`'s docstring for why this must not

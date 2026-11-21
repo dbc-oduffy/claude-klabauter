@@ -293,6 +293,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator/bin/setup-chain-walker.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/setup-chain-walker.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator/bin/setup-verify.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator/bin/setup-verify.py",
     "mutates": [],

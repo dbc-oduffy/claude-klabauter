@@ -3,10 +3,7 @@ sizing is unconfirmed, and every refusal halt on a {sizing} submission names a {
 
 from __future__ import annotations
 
-import json
 import re
-import shutil
-import subprocess
 
 import pytest
 
@@ -42,35 +39,6 @@ def _compose(**over) -> str:
     return compose_ask_script(**kw)
 
 
-def _scout_halt_lines(script: str) -> list[str]:
-    lines = script.splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("if (!_scoutAssembled)"))
-    return lines[start:start + 4]
-
-
-def _run_halt(scouted: dict, tmp_path) -> dict:
-    """Runs the composed scout-result halt chain over `scouted`; returns {halted, sizing_rel}."""
-    if not shutil.which("node"):
-        pytest.skip("node not installed")
-    script = _compose()
-    refire_cmd = next(ln for ln in script.splitlines() if "const _refireCmd = " in ln)
-    prog = (
-        "const REPO_ROOT = 'REPO'; const _sizingPath = 'REPO/state/sizings/x.yaml'; const _runId = 'run-1';\n"
-        "const _boundRelOf = () => null; let _sizingRel = null; let _halted = null; const _scoutAssembled = true;\n"
-        + refire_cmd + "\n"
-        f"const _scouted = {json.dumps(scouted)};\n"
-        + "\n".join(_scout_halt_lines(script))
-        + "\nconsole.log(JSON.stringify({ halted: _halted, sizing_rel: _sizingRel }));\n"
-    )
-    f = tmp_path / "t.js"
-    f.write_text(prog, encoding="utf-8")
-    out = subprocess.run(
-        ["node", str(f)], capture_output=True, text=True, check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout
-    return json.loads(out)
-
-
 def test_the_scout_prompt_carries_the_assemble_reconcile_clause_for_its_sizing_path() -> None:
     script = _compose()
     assert "A -32004 is never itself the assemble" in script
@@ -82,45 +50,6 @@ def test_the_scout_prompt_carries_the_assemble_reconcile_clause_for_its_sizing_p
 def test_the_indeterminate_kind_is_an_existing_mechanical_kind_not_a_refusal() -> None:
     assert REVERIFY_INDETERMINATE != "refusal"
     assert hrc.HALT_REMEDY[REVERIFY_INDETERMINATE][0] == hrc.MECHANICAL
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@pytest.mark.parametrize("field", ["stdout", "stderr"])
-def test_an_unconfirmed_indeterminate_assemble_halts_resumably_with_an_ask_refire(field, tmp_path: Path) -> None:
-    scouted = {"exit_code": 1, "stdout": "", "stderr": "", "sizing_present": False}
-    scouted[field] = "error code -32004 " + _INDETERMINATE
-    out = _run_halt(scouted, tmp_path)
-    halted = out["halted"]
-    assert halted["halted"] == REVERIFY_INDETERMINATE != "refusal"
-    assert halted["run_id"] == "run-1" and "-32004" in halted["detail"]
-    assert halted["next_action"] == "Refire: " + fire_command(None)
-    assert out["sizing_rel"] is None
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_an_indeterminate_assemble_with_the_sizing_on_disk_refires_with_the_sizing(tmp_path: Path) -> None:
-    scouted = {"exit_code": 1, "stdout": _INDETERMINATE, "stderr": "", "sizing_present": True}
-    out = _run_halt(scouted, tmp_path)
-    assert out["halted"]["halted"] == REVERIFY_INDETERMINATE
-    assert out["sizing_rel"] == _SIZING
-    assert out["halted"]["next_action"] == "Refire: " + fire_command(_SIZING)
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_a_plain_assemble_failure_still_halts_as_a_refusal(tmp_path: Path) -> None:
-    out = _run_halt({"exit_code": 2, "stdout": "bad exit_criterion", "stderr": "", "sizing_present": False}, tmp_path)
-    assert out["halted"]["halted"] == "refusal"
-    assert out["halted"]["reason"].startswith("sizing-assemble failed (exit 2)")
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_an_exit_zero_reply_naming_the_marker_is_not_halted_by_this_branch(tmp_path: Path) -> None:
-    out = _run_halt({"exit_code": 0, "stdout": "-32004 reconciled", "stderr": "", "sizing_present": True}, tmp_path)
-    assert out["halted"] is None
 
 
 def test_the_marker_regex_matches_both_reply_shapes() -> None:

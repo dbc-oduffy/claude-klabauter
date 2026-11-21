@@ -278,6 +278,7 @@ def emit_queue_script(
     review_roster_fragment: Optional[dict] = None,
     review_stage_schemas: Optional[dict] = None,
     stage_models: Optional[Mapping[str, str]] = None,
+    tagged_row_ids: Optional[frozenset[str]] = None,
 ) -> QueueEmission:
     """Both review kwargs thread to compose_grind_script; either being None
     raises NoReviewStageError."""
@@ -329,6 +330,7 @@ def emit_queue_script(
         claimant_sid=core.resolve_session_id(str(repo_root)) or None,
         row_schema_gate=load_row_schema_gate(loaded_profile, repo_root),
         write_handback_marks=True,
+        tagged_row_ids=tagged_row_ids,
     )
 
     mechanically_closed: list = []

@@ -17,6 +17,8 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     render_marker,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 JOB = "tools/runpod-jobs/job.py"
 PROTO_PREFIX = "tools/likeness-prototype"
 

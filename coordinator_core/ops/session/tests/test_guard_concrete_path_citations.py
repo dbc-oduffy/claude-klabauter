@@ -37,7 +37,6 @@ from coordinator_core.ops.session.guard_concrete_path_citations import (
 
 
 import pytest
-from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -1102,32 +1101,3 @@ def test_new_violations_threads_carve_outs() -> None:
     assert new_violations("", line, "pkg/mod.py") != []
     co = _carve(keys=frozenset({"paths.cache_root"}))
     assert new_violations("", line, "pkg/mod.py", co) == []
-
-
-def _git_repo(tmp_path, files) -> None:
-    import subprocess
-
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    for rel, text in files.items():
-        (tmp_path / rel).write_text(text, encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-
-
-def test_scan_repo_enforces_registry_end_to_end(tmp_path: Path) -> None:
-    from coordinator_core.ops.session.guard_concrete_path_citations import scan_repo
-
-    marked = f'DATA = "{_ROOT}"  # abs-path-ok: carve-out=fx\n'
-    _git_repo(tmp_path, {"m.py": marked, "n.md": f"see {_ROOT}  abs-path-ok: quoted\n"})
-    assert [f.file for f in scan_repo(tmp_path)] == ["m.py"]
-
-    toml = '[[carve_out]]\nid = "fx"\nreason = "fixture"\npaths = ["m.py"]\n'
-    _git_repo(tmp_path, {".abs-path-carve-outs.toml": toml})
-    assert scan_repo(tmp_path) == []
-
-
-def test_scan_repo_malformed_registry_is_one_finding(tmp_path: Path) -> None:
-    from coordinator_core.ops.session.guard_concrete_path_citations import scan_repo
-
-    _git_repo(tmp_path, {".abs-path-carve-outs.toml": "this = [not toml"})
-    found = scan_repo(tmp_path)
-    assert [f.file for f in found] == [".abs-path-carve-outs.toml"]

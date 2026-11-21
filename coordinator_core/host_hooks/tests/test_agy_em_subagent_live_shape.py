@@ -11,6 +11,8 @@ import pytest
 
 from coordinator_core.host_hooks import agy_adapter, shim
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _SUBAGENT_ID = "7c1f0e52-3a4b-4d6e-9f10-2b8a5c3d4e60"
 _CONVERSATION = "1efd6565-4b6a-434a-989d-f7814c28bdd8"
 _SUBAGENT_GUARD = "block-subagent-destructive-action"

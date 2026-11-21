@@ -2580,13 +2580,10 @@ class TestCliSmoke:
 
 
 class TestDecisionsShapeValidation:
-    def test_bare_string_decision_value_is_usage_error_on_brief(self, tmp_path, capsys):
+    def test_bare_string_decision_value_is_accepted_shorthand_on_brief(self, tmp_path):
         artifact = _write_artifact(tmp_path / "state" / "handoffs" / "h1.md", ["deliverable_id: DEL-1"])
         exit_code = ba.main(["brief", "handoff", str(artifact), "--decisions", '{"j1": "proceed"}'])
-        assert exit_code == ba.EXIT_USAGE
-        err = capsys.readouterr().err
-        assert "j1" in err
-        assert '{"j1": {"disposition": "<value>"}}' in err
+        assert exit_code != ba.EXIT_USAGE
 
     def test_list_decision_value_is_usage_error_on_brief(self, tmp_path, capsys):
         artifact = _write_artifact(tmp_path / "state" / "handoffs" / "h1.md", ["deliverable_id: DEL-1"])
@@ -2637,14 +2634,19 @@ class TestDecisionsShapeValidation:
             os.chdir(old_cwd)
         assert exit_code == ba.EXIT_OK
 
-    def test_bare_string_decision_value_is_transport_fail_on_apply(self, capsys):
+    def test_bare_string_decision_value_reaches_apply_as_disposition(self, monkeypatch):
+        captured = {}
+
+        def _fake_apply(kind, artifact_path, **kwargs):
+            captured["decisions"] = kwargs.get("decisions")
+            return ba_apply.APPLY_EXIT_OK, {"landed": []}
+
+        monkeypatch.setattr(ba_apply, "apply", _fake_apply)
         exit_code = ba_apply.main_apply(
-            ["handoff", "state/handoffs/h1.md", "--decisions", '{"j1": "proceed"}']
+            ["handoff", "state/handoffs/h1.md", "--title", "T", "--decisions", '{"j-dirty-tree-case-c": "mine"}']
         )
-        assert exit_code == ba_apply.APPLY_EXIT_TRANSPORT_FAIL
-        err = capsys.readouterr().err
-        assert "j1" in err
-        assert '{"j1": {"disposition": "<value>"}}' in err
+        assert exit_code == ba_apply.APPLY_EXIT_OK
+        assert captured["decisions"] == {"j-dirty-tree-case-c": {"disposition": "mine"}}
 
     def test_list_decision_value_is_transport_fail_on_apply(self, capsys):
         exit_code = ba_apply.main_apply(
@@ -2804,12 +2806,13 @@ class TestDecisionsValueKeyEquivalence:
         assert error is not None
         assert "j1" in error
 
-    def test_bare_string_still_fails_loud_not_coerced(self):
-        # Negative-spec preserved: a bare string is never silently coerced
-        # into {"disposition": <string>}, even though "value" is now accepted.
+    def test_bare_string_is_coerced_to_disposition(self):
         decisions = {"j1": "proceed"}
-        error = ba.validate_decisions_shape(decisions)
-        assert error is not None
+        assert ba.validate_decisions_shape(decisions) is None
+        assert decisions == {"j1": {"disposition": "proceed"}}
+
+    def test_empty_bare_string_still_fails_loud(self):
+        assert ba.validate_decisions_shape({"j1": ""}) is not None
 
 
 # ---------------------------------------------------------------------------

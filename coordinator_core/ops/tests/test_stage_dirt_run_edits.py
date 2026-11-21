@@ -12,7 +12,7 @@ from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot as snap
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(repo, *args) -> None:

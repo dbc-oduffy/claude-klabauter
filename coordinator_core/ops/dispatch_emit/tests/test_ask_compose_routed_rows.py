@@ -68,7 +68,7 @@ const logs = [];
 const log = (m) => logs.push(m);
 const REPO_ROOT = 'REPO';
 const _manifest = %(manifest)s;
-const _agentDefsClause = () => '';
+const _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => '';
 const _briefPrecedenceTail = '';
 const _rowSidecar = () => '';
 const _runBase = 'a'.repeat(40);

@@ -87,10 +87,7 @@ def _run(tmp_path: Path, script: str) -> dict:
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-pytestmark = [
-    pytest.mark.spawns_process,
-    pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed"),
-]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed"), pytest.mark.cadence]
 
 
 def test_default_ask_script_hoisted_functions_reference_only_visible_bindings(tmp_path):

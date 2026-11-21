@@ -12,7 +12,7 @@ import pytest
 from coordinator_core.host_hooks import shim
 from coordinator_core.session import op_dispatch_nag
 
-pytestmark = [pytest.mark.complete, pytest.mark.spawns_process]
+pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
 _AGENT_ID = "a7889dad168f41aa5"
 _NAG = "[em-code-dispatch nudge]"

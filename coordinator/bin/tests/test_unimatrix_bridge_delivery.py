@@ -121,6 +121,7 @@ def test_failed_relay_notifies_the_sender_and_status_reports_failed(bridge, monk
     assert notice["from"] == "uds:" + MIRROR
     assert "far-session" in notice["message"] and "255" in notice["message"]
     assert "Too many authentication failures" in notice["message"]
+    assert "It was not delivered" in notice["message"] and "unconfirmed" not in notice["message"]
     status = bridge.delivery_status()
     assert len(status) == 1 and status[0].startswith("FAILED") and "255" in status[0]
 
@@ -408,3 +409,106 @@ def test_ssh_timeout_is_a_failed_delivery_with_a_notice(bridge, monkeypatch):
     send(bridge)
     assert len(bridge.written) == 1 and "TimeoutExpired" in json.loads(bridge.written[0][1])["message"]
     assert bridge.delivery_status()[0].startswith("FAILED")
+
+
+def route(transport, endpoint, verification=None, reason=None):
+    """A Route as `unimatrix_far_addresses.select_route` emits it: LAN is `verified`, fallback is strict-at-dial."""
+    if verification is None:
+        verification = "verified" if transport == "lan" else "ssh-strict-at-dial"
+    return types.SimpleNamespace(peer="farbox", alias="farbox", endpoint=endpoint, transport=transport,
+                                 relay_key="k", hostkey=None, verification=verification, fallback_reason=reason)
+
+
+def routed(bridge, monkeypatch, picks, responder):
+    """Route `bridge` through `picks` (one Route or string per selection, the last repeating) and a fake channel."""
+    dialled, calls, queue = [], [], list(picks)
+
+    class Chan:
+        def run(self, command, data, timeout=None):
+            calls.append(command.split()[0])
+            return responder(command, data)
+
+    def pick(lan, tunnel):
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    def for_remote(remote, **kw):
+        dialled.append(remote)
+        return Chan()
+
+    monkeypatch.setattr(bridge, "pick_remote", pick)
+    monkeypatch.setattr(bridge._box_mux(), "for_remote", for_remote)
+    return dialled, calls
+
+
+def last_row(bridge):
+    return json.loads(bridge.deliveries_path().read_text().splitlines()[-1])
+
+
+@pytest.mark.parametrize("transport,endpoint", [("lan", "u@192.0.2.7"), ("fallback", "u@farbox-wg")])
+def test_a_verified_route_is_dialled_and_its_transport_is_recorded(bridge, monkeypatch, transport, endpoint):
+    dialled, calls = routed(bridge, monkeypatch, [route(transport, endpoint)],
+                            lambda cmd, data: subprocess.CompletedProcess([], 0, ack_replies(data), b""))
+    send(bridge)
+    assert dialled == [endpoint] and calls == ["send-session"]
+    assert last_row(bridge)["transport"] == transport and last_row(bridge)["ok"] is True
+
+
+@pytest.mark.parametrize("verification", ["not-this-box", "unreachable"])
+def test_a_route_that_failed_identity_carries_nothing_and_fails_visibly(bridge, monkeypatch, verification):
+    dialled, calls = routed(bridge, monkeypatch, [route(None, None, verification, "192.0.2.9: not-this-box")],
+                            lambda cmd, data: pytest.fail("a frame crossed an unauthenticated route"))
+    send(bridge)
+    assert dialled == [] and calls == []
+    row = last_row(bridge)
+    assert row["ok"] is False and row["transport"] == "none" and "no authenticated route" in row["error"]
+    assert "not-this-box" in row["error"] and not row.get("unconfirmed")
+    (endpoint, frame), = bridge.written
+    assert endpoint == SENDER and "It was not delivered" in json.loads(frame)["message"]
+
+
+def test_a_string_route_keeps_the_ssh_and_tunnel_labels(bridge, monkeypatch):
+    bridge.cfg.tunnel_remote = "farbox-wg"
+    routed(bridge, monkeypatch, ["farbox-wg"], lambda cmd, data: subprocess.CompletedProcess([], 0, ack_replies(data), b""))
+    send(bridge)
+    assert last_row(bridge)["transport"] == "tunnel"
+
+
+def far_with_lost_reply(sent, receipts_rc):
+    """A far relay that writes the line on send-session but whose reply is lost (ssh 255); `receipts` answers `receipts_rc`."""
+    def far(cmd, data):
+        if cmd.startswith("send-session"):
+            sent.append(data)
+            return subprocess.CompletedProcess([], 255, b"", b"client_loop: send disconnect: Broken pipe")
+        rows = [{"digest": hashlib.sha256(l).hexdigest()} for l in sent[0].splitlines()]
+        return subprocess.CompletedProcess([], receipts_rc, json.dumps({"ok": True, "rows": rows}).encode() + b"\n" if receipts_rc == 0 else b"", b"")
+    return far
+
+
+def test_a_lost_ack_after_the_far_write_is_reconciled_over_the_switched_route_never_resent(bridge, monkeypatch):
+    sent = []
+    dialled, calls = routed(bridge, monkeypatch, [route("lan", "u@192.0.2.7"), route("fallback", "u@farbox-wg")],
+                            far_with_lost_reply(sent, 0))
+    send(bridge)
+    assert calls == ["send-session", "receipts"] and len(sent) == 1
+    assert dialled == ["u@192.0.2.7", "u@farbox-wg"]
+    assert last_row(bridge)["ok"] is True and failure_notices(bridge) == []
+
+
+def test_a_lost_ack_with_no_readable_receipt_is_unconfirmed_not_failed_and_never_resent(bridge, monkeypatch):
+    sent = []
+    dialled, calls = routed(bridge, monkeypatch, [route("lan", "u@192.0.2.7"), route("fallback", "u@farbox-wg")],
+                            far_with_lost_reply(sent, 255))
+    send(bridge)
+    assert calls.count("send-session") == 1 and len(sent) == 1
+    row = last_row(bridge)
+    assert row["ok"] is False and row["unconfirmed"] is True and "check the far inbox before resending" in row["error"]
+    (endpoint, frame), = bridge.written
+    message = json.loads(frame)["message"]
+    assert "Delivery unconfirmed" in message and "It was not delivered" not in message
+
+
+def test_a_route_marked_unavailable_by_select_route_is_refused_before_any_dial(bridge, monkeypatch):
+    dialled, calls = routed(bridge, monkeypatch, [route(None, None, "unavailable", "no-pinned-hostkey")],
+                            lambda *a: subprocess.CompletedProcess([], 0, b"", b""))
+    send(bridge)
+    assert dialled == []

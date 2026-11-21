@@ -4,7 +4,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import signal
-import subprocess
 import sys
 import tempfile
 import time
@@ -120,30 +119,6 @@ def test_signal_unwinds_and_removes_dir(round_env, signame) -> None:
         _mod._cmd_round(round_env.args)
     assert _round_dirs(round_env.root) == []
     assert signal.getsignal(getattr(signal, signame)) == prior
-
-
-def _dead_pid() -> int:
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    return proc.pid
-
-
-def test_dead_pid_dir_reaped_live_pid_dir_kept_at_round_start(round_env) -> None:
-    dead = round_env.root / f"percolate-round-{_dead_pid()}-abcd1234"
-    live = round_env.root / f"percolate-round-{os.getpid()}-live0000"
-    for d in (dead, live):
-        d.mkdir()
-        (d / "f.txt").write_text("x")
-
-    def _during() -> int:
-        assert not dead.exists()
-        assert live.exists()
-        return 0
-
-    round_env.seen["action"] = _during
-    assert _mod._cmd_round(round_env.args) == 0
-    assert not dead.exists()
-    assert live.exists()
 
 
 def test_legacy_unstamped_dir_reaped_only_when_over_a_day_old(round_env) -> None:

@@ -114,7 +114,7 @@ def _adopt(manifest, soft: bool) -> str | None:
         pytest.skip("node not on PATH")
     js = (
         "const agent = async () => { throw new Error('a refusal reaches no page leg'); };\n"
-        "const parallel = (xs) => Promise.all(xs.map((f) => f()));\nconst _agentDefsClause = () => '';\n"
+        "const parallel = (xs) => Promise.all(xs.map((f) => f()));\nconst _agentDefsClause = () => ''; const _agentHead = () => ''; const _agentRead = () => '';\n"
         "(async () => {\nlet _stagedManifest = null;\n"
         + ask_compose._ADMIT_MANIFEST_JS
         + "\n"

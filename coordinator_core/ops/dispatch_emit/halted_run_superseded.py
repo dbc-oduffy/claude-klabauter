@@ -50,6 +50,25 @@ OP_NAME = "dispatch.close_halted_run_superseded"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 
 
+def _prints_plan(record: Path, withheld) -> Optional[tuple]:
+    """``(paths, kept)`` from ``withheld-prints.json`` when ``kept.json`` records no blob for any withheld path.
+
+    Trap: a halt whose chunks returned no paths still prints each withheld path's halt-time blob, so
+    without this the close refuses a run whose content is fully recorded (d0fe80 bf64ab, 2026-11-21)."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE
+
+    try:
+        prints = json.loads((record / WITHHELD_PRINTS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(prints, dict):
+        return None
+    kept = {p: b for p, b in prints.items() if p in withheld and isinstance(b, str) and b}
+    return (sorted(kept), kept) if kept else None
+
+
 def _refuse(error: str) -> dict:
     return {"ok": False, "error": error}
 
@@ -484,7 +503,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _refuse(f"{run_id} has a live successor {successor}; wait for it or stop it")
     if not withheld:
         return _close_withholding_nothing(root, record, marker, run_id, params)
-    plan = halted_hold_release._kept_plan(record)
+    plan = halted_hold_release._kept_plan(record) or _prints_plan(record, withheld)
     if plan is None:
         if not any((record / f).exists() for f in (kept_work.KEPT_FILE, WITHHELD_PRINTS_FILE)):
             return _legacy_close(root, record, marker, run_id, sorted(withheld), params)

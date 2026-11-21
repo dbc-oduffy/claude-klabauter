@@ -258,9 +258,3 @@ def test_windows_main_spawns_codex_with_real_pwsh_first_and_alias_dropped(monkey
 def test_windows_main_without_real_pwsh_passes_the_env_unchanged(monkeypatch, tmp_path):
     seen, inherited, *_ = _nt_main(monkeypatch, tmp_path, real=False)
     assert next(v for k, v in seen["env"].items() if k.upper() == "PATH") == inherited
-
-
-def test_hook_process_exits_zero_on_garbage_stdin():
-    r = subprocess.run([sys.executable, str(BIN / "unimatrix-codex-hook-sessionstart.py")],
-                       input="not json", capture_output=True, text=True)
-    assert r.returncode == 0

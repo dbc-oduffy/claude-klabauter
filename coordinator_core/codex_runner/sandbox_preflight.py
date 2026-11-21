@@ -17,9 +17,9 @@ from pathlib import Path
 PROVEN_ROOTS_RELPATH = Path(".coordinator-local") / "codex-sandbox-proven-roots.json"
 WARMUP_RELPATH = Path(".coordinator-local") / "codex-sandbox-warmup.json"
 PROBE_CAP_S = 1.5
+# Trap: DETACHED_PROCESS must not be ORed in; Win32 then ignores CREATE_NO_WINDOW.
 _DETACHED = (
-    getattr(subprocess, "DETACHED_PROCESS", 0)
-    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     | getattr(subprocess, "CREATE_NO_WINDOW", 0)
 )
 

@@ -13,6 +13,8 @@ from coordinator_core.ops.dispatch_emit import land_blobs_halt as halt
 from coordinator_core.ops.dispatch_emit import stranded_sibling
 from coordinator_core.ops.dispatch_emit.tests._git_fixture import _git, seed_repo
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 RUN = "ask-20261114T000000-abcdef"
 
 

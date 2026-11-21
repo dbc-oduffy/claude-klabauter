@@ -1117,6 +1117,15 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
     record['notify_owner_released'] = True
     _save(record_path, record)
     journal({'type': 'completed', 'exit_code': record['exit_code']})
+    if record.get('outcome') == 'failed' and record.get('run_id'):
+        # A killed or crashed runtime never reaches the script's halt finaliser, so a `resumed` marker would
+        # outlive its fire and hide the run from every halted-only lookup (a refire then mints a fresh run).
+        try:
+            from coordinator_core.ops.dispatch_emit.halted_run import rehalt_if_resumer_dead
+
+            rehalt_if_resumer_dead(Path(record['repo_root']), record['run_id'], record.get('error') or 'fire failed')
+        except Exception as exc:  # noqa: BLE001 -- the fire record is the truth; the hook-side re-halt covers a miss
+            journal({'type': 'rehalt-failed', 'error': f'{type(exc).__name__}: {exc}'})
     if record.get('notify_to'):
         try:
             record.update(_notify(record_path, record))

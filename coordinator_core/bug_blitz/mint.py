@@ -11,6 +11,7 @@ rows whose slug names a target, never the whole queue or archive.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import Callable, Iterable, Iterator, Optional
 import yaml
 
 from coordinator_core.bug_blitz.accounting import _nodeid, distinct_targets
+from coordinator_core.bug_blitz import archive_index
 from coordinator_core.bug_blitz.contract import FailingTest, run_tag
 from coordinator_core.locked_write import contended_lock_wait_secs, held_lock
 from coordinator_core.ops.queue_append import _slug_from_title, append_queue_entry
@@ -26,7 +28,7 @@ from coordinator_core.repo_relative_text import to_repo_relative
 from coordinator_core.session.declared_writes import declare_write
 
 SCHEMA = "bug-backlog"
-ARCHIVE_DIR = "archive/bug-backlog"
+ARCHIVE_DIR = archive_index.ARCHIVE_DIR
 QUEUE_DIR = f"state/{SCHEMA}"
 TF_TAG = "tf"
 
@@ -71,6 +73,13 @@ def _body(test: FailingTest) -> str:
 
 _DATE_PREFIX_LEN = len("YYYY-MM-DD-")
 _PLAIN_SURFACE = re.compile(r"[\w./-]+")
+_TF_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+def _load_tf_candidate(text: str) -> object:
+    # A long capped slug can collide across many open rows. Keep safe YAML
+    # semantics without paying Python tokenizer overhead for every candidate.
+    return yaml.load(text, Loader=_TF_LOADER)
 
 
 def _sorted_names(directory: Path, *, dirs: bool) -> list[str]:
@@ -130,7 +139,7 @@ def _find_tf_rows(
                 continue
             if fm is None:
                 try:
-                    fm = yaml.safe_load(text)
+                    fm = _load_tf_candidate(text)
                 except yaml.YAMLError:
                     break
             if (
@@ -156,8 +165,44 @@ def _open_tf_rows_by_title(repo_root: Path, titles: Iterable[str]) -> dict[str, 
 
 
 def _archived_tf_row_ids(repo_root: Path, wants: dict[str, str]) -> dict[str, str]:
-    """Ids of the archived `tf` rows for `wants` (`title` -> `surface`); a target with none is absent."""
-    found = _find_tf_rows(repo_root, _listing(repo_root, ARCHIVE_DIR, nested=True), dict(wants), lambda fm: True)
+    """Read index-selected candidates only, and confirm their contents before reuse."""
+    if not wants:
+        return {}
+    missing = 0
+    candidates = []
+    for month in _sorted_names(repo_root / ARCHIVE_DIR, dirs=True):
+        rel = f"{ARCHIVE_DIR}/{month}"
+        try:
+            with os.scandir(repo_root / rel) as scan:
+                entries = sorted((item for item in scan if item.name.endswith(".yaml")), key=lambda item: item.name)
+        except OSError:
+            continue
+        # The archiver publishes before rename. List destinations before opening the index.
+        indexed = archive_index.read_month(repo_root, month)
+        for item in entries:
+            entry = indexed.get(item.name)
+            if not isinstance(entry, list) or len(entry) != 3:
+                missing += 1
+                continue
+            try:
+                stat = item.stat()
+            except OSError:
+                missing += 1
+                continue
+            if entry[:2] != [stat.st_mtime_ns, stat.st_size]:
+                missing += 1
+                continue
+            identity = entry[2]
+            if isinstance(identity, list) and len(identity) == 2 and isinstance(identity[0], str):
+                if wants.get(identity[0]) == identity[1]:
+                    candidates.append((rel, item.name))
+    if missing:
+        logging.getLogger(__name__).info(
+            "Skipped %s unindexed bug archive rows. Backfill with python -m "
+            "coordinator_core.bug_blitz.archive_index --repo %s",
+            missing, repo_root,
+        )
+    found = _find_tf_rows(repo_root, candidates, wants, lambda fm: True)
     return {title: rel.rpartition("/")[2][: -len(".yaml")] for title, (rel, _) in found.items()}
 
 

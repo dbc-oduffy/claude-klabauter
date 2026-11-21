@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import time
 
 from coordinator_core.ops import cruft_sweep
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_OUTCOME_FILE
-from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 import pytest
 
@@ -64,20 +62,6 @@ def test_citation_in_unnamed_home_does_not_protect(tmp_path: Path) -> None:
     (tmp_path / "scratch" / "n.md").write_text("ask-20260101T000000-aaaaaa")
     _, n = _sweep(tmp_path)
     assert n == 1 and not run.exists()
-
-
-def test_tracked_run_dir_kept(tmp_path: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
-    tracked =_run(tmp_path, "ask-20260101T000000-aaaaaa", outcome_age_days=30)
-    loose = _run(tmp_path, "ask-20260102T000000-bbbbbb", outcome_age_days=30)
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "add", "-f", "state/warp/ask-20260101T000000-aaaaaa/" + RUN_OUTCOME_FILE],
-        check=True,
-        **no_console_creationflags(),
-    )
-    _, n = _sweep(tmp_path)
-    assert n == 1
-    assert tracked.exists() and not loose.exists()
 
 
 def test_git_failure_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

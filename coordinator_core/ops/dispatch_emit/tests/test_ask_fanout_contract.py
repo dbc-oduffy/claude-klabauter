@@ -522,3 +522,17 @@ def test_join_constants_and_waiters_path() -> None:
     assert (c.JOIN_PARAM, c.JOIN_LABEL) == ("join", "join")
     assert "inputs" in c.JOIN_ITEM_KEYS and "after" not in c.JOIN_ITEM_KEYS
     assert c.join_waiters_rel("R") == "scratch/warp/R/join-waiters.json"
+
+
+def test_mint_run_parent_is_listed_idempotent_and_refuses_a_different_record(tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import _parent_lists_run
+
+    assert not _parent_lists_run(tmp_path, "run-x")
+    path = c.mint_run_parent(tmp_path, "run-x", label="bug-blitz")
+    assert path == tmp_path / c.parent_record_rel("run-parent-run-x")
+    assert _parent_lists_run(tmp_path, "run-x")
+    before = path.read_bytes()
+    assert c.mint_run_parent(tmp_path, "run-x", label="bug-blitz") == path
+    assert path.read_bytes() == before
+    with pytest.raises(ValueError):
+        c.mint_run_parent(tmp_path, "run-x", label="other")

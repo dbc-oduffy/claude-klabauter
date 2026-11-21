@@ -32,9 +32,10 @@ def _compose(monkeypatch, **over) -> str:
 def test_commit_stage_and_halt_commit_carry_doc_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _compose(monkeypatch, in_run_commit=True)
     stage = script[script.index("_terminalCommitParamsBlock({ ..._nextAction.params") :].split("\n", 1)[0]
-    assert f"doc_paths: {_GUARD}" in stage
+    assert "doc_paths: _docPaths()" in stage
     halt = script[script.index(_FN) :].split("\n", 1)[0]
-    assert f"doc_paths: {_GUARD}" in halt
+    assert "doc_paths: _docPaths()" in halt
+    assert f"const _docPaths = () => {_GUARD};" in script
     assert "run_artifacts" in stage and "run_artifact_residue" in halt
 
 
@@ -44,7 +45,7 @@ def test_script_without_an_in_run_commit_binds_no_doc_paths(monkeypatch: pytest.
     assert "_terminalCommitParamsBlock({" not in script
     for line in script.splitlines():
         if "doc_paths: " in line and "_terminalCommitParamsBlock" in line:
-            assert _GUARD in line
+            assert _GUARD in line or "doc_paths: _docPaths()" in line
 
 
 def test_commit_schema_names_the_run_artifact_keys() -> None:
