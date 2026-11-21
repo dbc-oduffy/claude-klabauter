@@ -2,7 +2,7 @@
 
 Underscore-prefixed so `engine._discover_guards` skips it. Stdlib plus the path seam in
 `bash_guards._write_bump_sink_shapes`; spawns nothing, never walks a directory, costs one
-`os.path.lexists`. A shell-parsed target set cannot see writes made inside a script, an
+`os.path.lexists`; the session-exemption read (registry, holder liveness) runs only once a target would flag. A shell-parsed target set cannot see writes made inside a script, an
 interpreter body or `xargs` (DR-258), so this is a speedbump and the Stop-time leg stays the backstop.
 """
 
@@ -113,8 +113,6 @@ def _new_top_level_entry(
     try:
         if not target or not target.strip():
             return None
-        if _cwd_is_exempt_session(cwd):
-            return None
         target = target.strip()
         nt = _sinks._native_path()
         windows = _sinks._host_is_windows()
@@ -144,7 +142,9 @@ def _new_top_level_entry(
             root, name = hit
             if nn[len(root):] == nt.normcase(name):
                 return None
-            return None if os.path.lexists(nt.join(root, name)) else name
+            if os.path.lexists(nt.join(root, name)) or _cwd_is_exempt_session(cwd):
+                return None
+            return name
 
         configured = configured_drive_roots(env)
         if configured:
@@ -163,7 +163,7 @@ def _new_top_level_entry(
                 return None
         root, name = hit
         cand = nt.join(root, name)
-        if os.path.lexists(cand) or _is_pinned_general_work(nt, cand):
+        if os.path.lexists(cand) or _is_pinned_general_work(nt, cand) or _cwd_is_exempt_session(cwd):
             return None
         return name
     except Exception:

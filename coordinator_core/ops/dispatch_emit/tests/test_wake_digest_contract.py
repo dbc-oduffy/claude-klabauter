@@ -678,3 +678,34 @@ def test_a_row_with_no_recorded_reason_renders_an_empty_reason(tmp_path):
     digest = _run_digest(tmp_path, falsifier_js="null", incomplete=["B"], blocked=["B"])
     assert _dev(digest, "B")["reason"] == ""
     assert wd.validate_digest(digest) == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize("unmet, decision_raised", [(0, False), (2, True)])
+def test_a_digest_that_requires_a_decision_never_reports_completed(tmp_path, unmet, decision_raised):
+    js = wd.completion_return_js(**_kwargs())
+    node = _find_node()
+    if node is None:
+        pytest.skip("node unavailable to execute the generated script")
+    harness = tmp_path / "unmet.js"
+    harness.write_text(
+        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
+        "_chunkReason = {}, _blockedChunks = [], _gateOwed = {};\n"
+        "let _testResult = {status:'pass', tests_run:5, tests_failed:0, build_clean:true, summary:'ok', sidecar_path:'s.md'};\n"
+        "let _verifications = [{chunk:'C1', status:'pass'}];\n"
+        "let _falsifier = {status:'met', observation:'ok', sidecar_path:'f.md'};\n"
+        "let _reviewPrep = {slices:[1,2]};\nlet _reviewWave = {};\n"
+        "let _deliveryVerdict = {verdict:'PASS', product_files:1, claims_unbacked:[]};\n"
+        "let _reviewIntegration = {fixes_applied:2, em_may_think_differently:[], unresolved:[], overflow:0, "
+        f"brief_conformance:{{items:2,met:{2 - unmet},unmet:{unmet}}}, "
+        "rebuild_decision:null, sidecar_path:'i.md'};\n"
+        "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30, **no_console_creationflags())
+    assert result.returncode == 0, result.stderr
+    digest = json.loads(result.stdout)
+    assert (digest["decision_required"] is not None) is decision_raised
+    assert digest["completed"] is (not decision_raised)
+    assert (digest["outcome"] == "completed") is (not decision_raised)

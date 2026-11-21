@@ -127,6 +127,44 @@ def test_conftest_pytest_plugins_and_their_imports_are_in_the_closure(repo: Path
     assert "pkg/unrelated.py" not in c.paths
 
 
+def test_conftest_quoted_module_and_its_whole_import_chain_are_in_the_closure(repo: Path) -> None:
+    # Witness 6b3402: coordinator_core/conftest.py imports "coordinator_core.sizing_assemble" by
+    # importlib, and the depth-capped walk dropped its imports, so the mirror collected 0 tests.
+    _write(repo, "conftest.py", 'import importlib\nfor _n in ("pkg.engine",):\n    importlib.import_module(_n)\n')
+    _write(repo, "pkg/engine/__init__.py", "from pkg import hop1\n")
+    for i in range(1, 6):
+        _write(repo, f"pkg/hop{i}.py", f"from pkg import hop{i + 1}\n" if i < 5 else "X = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "deep")
+    c = ec.test_closure(repo, [], [SEED])
+    assert c.paths is not None
+    assert {"pkg/engine/__init__.py", *(f"pkg/hop{i}.py" for i in range(1, 6))} <= c.paths
+    assert "pkg/unrelated.py" not in c.paths
+
+
+def test_bare_dotted_submodule_and_every_package_init_are_in_the_closure(repo: Path) -> None:
+    # Witness example-game-repo 036bcf: a conftest under a hyphenated sys.path root imports
+    # `from likeness.pipeline import native_postcreate_stage`; the mirror got neither the submodule nor
+    # pipeline/__init__.py, so the package resolved as a namespace and 0 tests collected.
+    lib = "tools/like-proto"
+    _write(repo, f"{lib}/tests/conftest.py", "from likeness.pipeline import native_stage as ns\n")
+    _write(repo, f"{lib}/tests/test_x.py", "")
+    _write(repo, f"{lib}/likeness/__init__.py", "")
+    _write(repo, f"{lib}/likeness/pipeline/__init__.py", "")
+    _write(repo, f"{lib}/likeness/pipeline/native_stage.py", "")
+    _write(repo, f"{lib}/likeness/pipeline/driver.py", "")
+    _write(repo, f"{lib}/likeness/pipeline/unrelated.py", "")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "lib")
+    c = ec.test_closure(repo, [f"{lib}/likeness/pipeline/driver.py"], ["pytest", f"{lib}/tests/test_x.py"])
+    assert c.paths is not None
+    assert {
+        f"{lib}/likeness/__init__.py", f"{lib}/likeness/pipeline/__init__.py",
+        f"{lib}/likeness/pipeline/native_stage.py", f"{lib}/likeness/pipeline/driver.py",
+    } <= c.paths
+    assert f"{lib}/likeness/pipeline/unrelated.py" not in c.paths
+
+
 def test_pytest_plugins_reads_a_bare_string_and_ignores_other_names() -> None:
     assert ec._pytest_plugins('pytest_plugins = "a.b"\nother = ["c.d"]\n') == ["a.b"]
     assert ec._pytest_plugins("x = 1\n") == []

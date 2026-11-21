@@ -567,6 +567,28 @@ def _drop_box_wide(
     ]
 
 
+_CARVE_OUTS_CACHE: Dict[str, Any] = {}
+
+
+def _carve_outs_cached(repo_root: Path) -> Any:
+    """`load_carve_outs`, memoized per repo on the file's (mtime_ns, size); the TOML parse
+    is the guard's dominant per-call cost."""
+    from coordinator_core.ops.session.abs_path_carve_outs import CARVE_OUTS_FILENAME
+
+    path = Path(repo_root) / CARVE_OUTS_FILENAME
+    try:
+        st = path.stat()
+        stamp: Any = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return load_carve_outs(repo_root)
+    hit = _CARVE_OUTS_CACHE.get(str(path))
+    if hit and hit[0] == stamp:
+        return hit[1]
+    loaded = load_carve_outs(repo_root)
+    _CARVE_OUTS_CACHE[str(path)] = (stamp, loaded)
+    return loaded
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         tool_name = payload.get("tool_name", "")
@@ -599,7 +621,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if rel_path is not None and rel_path.startswith(_TRANSCRIPT_WRITE_PREFIXES):
             return None
 
-        carve_outs = load_carve_outs(repo_root) if repo_root is not None else None
+        carve_outs = _carve_outs_cached(repo_root) if repo_root is not None else None
         new = new_violations(before, after, rel_path or "", carve_outs)
         if not new:
             return None

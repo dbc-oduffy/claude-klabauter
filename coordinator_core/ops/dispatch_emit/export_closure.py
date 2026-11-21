@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -92,6 +93,28 @@ def _pytest_plugins(text: str) -> List[str]:
     return out
 
 
+_QUOTED_DOTTED_RE = re.compile(r"""["']([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)["']""")
+
+
+def _bare_dotted(module: str, names: Sequence[str], by_last: dict) -> Set[str]:
+    """Tracked files a bare `import a.b` / `from a.b import c` reaches: every dotted prefix of the
+    module and each imported name as a submodule, matched by path suffix (`a/b.py`, `a/b/__init__.py`).
+
+    Trap: a sys.path-inserted root (example-game-repo tools/likeness-prototype, hyphenated) never appears in
+    the repo-rooted module names, so only a suffix match finds `likeness.pipeline.native_postcreate_stage`;
+    matching the top name alone left the package and the submodule out (036bcf collected 0 tests)."""
+    parts = module.split(".")
+    dotted = [".".join(parts[: i + 1]) for i in range(len(parts))] + [f"{module}.{n}" for n in names if n != "*"]
+    out: Set[str] = set()
+    for name in dotted:
+        tail = name.replace(".", "/")
+        wants = (f"{tail}.py", f"{tail}/__init__.py")
+        for path in by_last.get(name.rpartition(".")[2], ()):
+            if any(path == w or path.endswith("/" + w) for w in wants):
+                out.add(path)
+    return out
+
+
 def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -> Set[str]:
     """What the conftest chain imports at collection: its repo-rooted import closure, plus bare-name
     imports resolved against any tracked module of that name.
@@ -111,6 +134,7 @@ def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -
         except OSError:
             continue
         helpers |= {modules[name] for name in _pytest_plugins(text) if name in modules}
+        helpers |= {modules[name] for name in _QUOTED_DOTTED_RE.findall(text) if name in modules}
         here = conftest.rpartition("/")[0]
         for p in modules.values():
             if p.rpartition("/")[0] == here and "/" in p:
@@ -119,7 +143,9 @@ def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -
                     helpers.add(p)
     reach: Set[str] = set(conftests) | helpers
     frontier = sorted(reach)
-    for _ in range(test_reach.DEFAULT_DEPTH):
+    # Trap: no depth cap. pytest runs every conftest import at collection, so a truncated walk leaves a
+    # module out of the mirror and the leg collects 0 tests (6b3402: sizing_assemble's own imports).
+    while frontier:
         nxt: Set[str] = set()
         for rel in frontier:
             nxt |= test_reach._imported_modules(root, rel, modules)
@@ -130,12 +156,10 @@ def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -
                 if not by_last:
                     for name, path in modules.items():
                         by_last.setdefault(name.rpartition(".")[2], set()).add(path)
-                nxt |= by_last.get(top, set())
+                nxt |= _bare_dotted(rec.module, rec.names, by_last)
         nxt -= reach
         reach |= nxt
         frontier = sorted(nxt)
-        if not frontier:
-            break
     for rel in list(reach):
         reach |= test_reach._package_inits(rel, tracked)
     return reach
@@ -161,4 +185,8 @@ def test_closure(root: Path | str, declared: Sequence[str], argv: Sequence[str])
         paths |= _conftest_chain(seed, tracked)
     paths |= {name for name in ROOT_TEST_CONFIG if name in tracked}
     paths |= _conftest_reach(root, {p for p in paths if p.rpartition("/")[2] == "conftest.py"}, tracked)
+    # Trap: declared writes join without their package chain; a package dir missing its __init__.py
+    # imports as a namespace package and `from pkg import sub` fails at collection (036bcf).
+    for rel in list(paths):
+        paths |= test_reach._package_inits(rel, tracked)
     return Closure(frozenset(paths), tuple(seeds), "")

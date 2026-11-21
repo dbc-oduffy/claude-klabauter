@@ -91,6 +91,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -616,6 +617,32 @@ def _write_repo_identity_advisory_log(
             file=sys.stderr,
         )
 
+_IDENTITY_LOG_INTERVAL_S = 60.0
+_identity_logged_at: "Dict[tuple, float]" = {}
+
+
+def _record_repo_identity(repo_root: "str | None", session_id: str) -> None:
+    """Log the repo-identity verdict at most once per interval per (repo, session), and only
+    when the session directory exists. The gate scans the whole harness registry (hundreds of
+    ms), so it runs only when a line would actually be written."""
+    if not repo_root or not session_id:
+        return
+    try:
+        log_dir = session_dir_for(resolve_git_common_dir(repo_root), session_id)
+        if not log_dir.is_dir():
+            return
+        key = (repo_root, session_id)
+        now = time.monotonic()
+        last = _identity_logged_at.get(key)
+        if last is not None and now - last < _IDENTITY_LOG_INTERVAL_S:
+            return
+        _identity_logged_at[key] = now
+    except Exception:
+        return
+    gate = compute_repo_identity_gate(Path(repo_root), session_id)
+    _write_repo_identity_advisory_log(repo_root, session_id, gate)
+
+
 _PRIVILEGED_KEY_RE = re.compile(
     r"^[ \t]*[\w-]*(?:_cmd|_reason|_post_command|_shape)[ \t]*:", re.MULTILINE
 )
@@ -878,9 +905,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # Advisory `gates.repo_identity` fact; the verdict never reaches the decision (DR-277).
     session_id = payload.get("session_id") or ""
-    if repo_root:
-        repo_identity_gate = compute_repo_identity_gate(Path(repo_root), session_id or None)
-        _write_repo_identity_advisory_log(repo_root, session_id, repo_identity_gate)
+    _record_repo_identity(repo_root, session_id)
 
     weakened = _weakening_write(tool_name, tool_input, target)
     if weakened:
