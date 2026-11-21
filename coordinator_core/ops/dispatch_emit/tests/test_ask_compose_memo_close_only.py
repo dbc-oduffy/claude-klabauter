@@ -22,6 +22,7 @@ _CLAUSE = "MEMO-CLOSE: no executor ran"
 _HARNESS = """
 let _halted = null, _allLanded = false, _memoCloseOnly = false, _xsTail = false, _resumeLedger = false, _parked = null, _planRel = 'p.md', _sizingRel = 's.yaml', _runId = 'r';
 let _gate = {arm: 's'}, _manifest = %s;
+const _refireCmd = () => 'refire';
 %s
 console.log(JSON.stringify({ halted: _halted, memoCloseOnly: _memoCloseOnly, xsTail: _xsTail }));
 """
@@ -34,9 +35,10 @@ def _drive(script: str, manifest: dict) -> dict:
     body = "\n".join(ln.replace("  else if (", "  if (", 1) for ln in lines)
     out = subprocess.run(
         ["node", "-"], input=_HARNESS % (json.dumps(manifest), body),
-        capture_output=True, text=True, check=True, **no_console_creationflags(),
-    ).stdout
-    return json.loads(out)
+        capture_output=True, text=True, **no_console_creationflags(),
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
 
 
 def test_the_memo_close_branch_precedes_the_refusal_halt_and_the_script_checks_clean():

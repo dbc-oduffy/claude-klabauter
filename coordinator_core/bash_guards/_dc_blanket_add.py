@@ -205,15 +205,12 @@ def _blanket_add_candidate_cwds(cmd: str) -> List[str]:
                 closed = any(s.rstrip().endswith(")") for s in outer[:idx])
                 if cd_count == 1 and not closed:
                     base = leading
-        dash_c: Optional[str] = None
-        for opts_blob in _GIT_ADD_INVOCATION_OPTS_RE.findall(seg):
-            found = _GIT_ADD_DASH_C_VALUE_RE.findall(opts_blob)
-            if found:
-                dash_c = found[-1]
         cwd = base or os.getcwd()
-        if dash_c:
-            dash_c = dash_c.strip("'\"")
-            cwd = dash_c if os.path.isabs(dash_c) else os.path.normpath(os.path.join(cwd, dash_c))
+        for opts_blob in _GIT_ADD_INVOCATION_OPTS_RE.findall(seg):
+            for option in re.finditer(_GIT_ADD_GLOBAL_OPT_RE, opts_blob):
+                dash_c = _GIT_ADD_DASH_C_VALUE_RE.fullmatch(option[0])
+                if dash_c:
+                    cwd = os.path.normpath(os.path.join(cwd, dash_c[1].strip("'\"")))
         if cwd not in cwds:
             cwds.append(cwd)
     return cwds
@@ -351,6 +348,19 @@ def _add_pathspec_file_paths(
     return paths, False
 
 
+def _is_scratch_checkout(git_root: str) -> bool:
+    try:
+        root = Path(git_root).resolve()
+        git_dir = root / ".git"
+        return git_dir.is_dir() and not git_dir.is_symlink() and any(
+            parent.name == "scratch"
+            and repo_root.show_toplevel(str(parent.parent)) == str(parent.parent)
+            for parent in root.parents
+        )
+    except (OSError, RuntimeError):
+        return False
+
+
 def check_blanket_git_add(
     cmd: str,
     session_id: str = "",
@@ -384,12 +394,20 @@ def check_blanket_git_add(
         return None
 
     _ga_candidates = _blanket_add_candidate_cwds(cmd) or [_bt_blanket_add_dash_c_cwd(cmd)]
+    # The cwd walk cannot establish the index or checkout for explicit Git overrides.
+    allow_scratch = not _GIT_COMMIT_GATE_RE.search(cmd) and not re.search(
+        r"--(?:git-dir|work-tree|bare)\b|\bGIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR)\b|\bcore\.worktree\b",
+        cmd,
+        re.IGNORECASE,
+    )
     _ga_dash_c_cwd = _ga_candidates[0]
     git_root = ""
     for _cand in _ga_candidates:
         _top = repo_root.show_toplevel(_cand)
         _root = Path(_top).as_posix() if _top else ""
         if not _root:
+            continue
+        if allow_scratch and _is_scratch_checkout(_root):
             continue
         if not git_root:
             git_root, _ga_dash_c_cwd = _root, _cand

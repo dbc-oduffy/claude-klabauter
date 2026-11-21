@@ -533,12 +533,12 @@ def test_run_query_records_native_renders_matching_record(tmp_path):
 def test_archived_baton_renders_terminal_state_with_live_archive_link(tmp_path):
     _write_archived_handoff(
         tmp_path, "2026-07", "shipped-baton.md",
-        roadmap_id="rm-shipped", deployment_state="shipped", sprint=1,
+        roadmap_id="rm-shipped", deployment_state="in_flight", sprint=1,
     )
     expansion = _run_query_records_native(
         _base_query_opts(where="roadmap_id=rm-shipped", sort="sprint"), str(tmp_path), str(tmp_path)
     )
-    assert expansion == "- [Test Handoff](archive/handoffs/2026-07/shipped-baton.md) — shipped"
+    assert expansion == "- [Test Handoff](archive/handoffs/2026-07/shipped-baton.md) — in_flight"
     assert "state/handoffs" not in expansion  # no dead live-tree link
 
 
@@ -546,16 +546,53 @@ def test_live_and_archived_batons_for_same_roadmap_both_render_correctly(tmp_pat
     _write_handoff(tmp_path, "live-baton.md", roadmap_id="rm-mixed", deployment_state="in_flight", sprint=2)
     _write_archived_handoff(
         tmp_path, "2026-07", "shipped-baton.md",
-        roadmap_id="rm-mixed", deployment_state="shipped", sprint=1,
+        roadmap_id="rm-mixed", deployment_state="in_flight", sprint=1,
     )
     expansion = _run_query_records_native(
         _base_query_opts(where="roadmap_id=rm-mixed", sort="sprint"), str(tmp_path), str(tmp_path)
     )
     lines = expansion.split("\n")
     assert lines == [
-        "- [Test Handoff](archive/handoffs/2026-07/shipped-baton.md) — shipped",
+        "- [Test Handoff](archive/handoffs/2026-07/shipped-baton.md) — in_flight",
         "- [Test Handoff](state/handoffs/live-baton.md) — in_flight",
     ]
+
+
+def test_terminal_archived_row_is_not_rendered_but_live_and_unfinished_archived_are(tmp_path):
+    _write_handoff(tmp_path, "live-baton.md", roadmap_id="rm-t", deployment_state="in_flight", sprint=3)
+    _write_archived_handoff(
+        tmp_path, "2026-07", "shipped-baton.md", roadmap_id="rm-t", deployment_state="shipped", sprint=1,
+    )
+    _write_archived_handoff(
+        tmp_path, "2026-07", "open-baton.md", roadmap_id="rm-t", deployment_state="in_flight", sprint=2,
+    )
+    expansion = _run_query_records_native(
+        _base_query_opts(where="roadmap_id=rm-t", sort="sprint"), str(tmp_path), str(tmp_path)
+    )
+    assert expansion.split("\n") == [
+        "- [Test Handoff](archive/handoffs/2026-07/open-baton.md) — in_flight",
+        "- [Test Handoff](state/handoffs/live-baton.md) — in_flight",
+    ]
+
+
+def test_main_leaves_a_callout_a_newer_commit_trimmed_of_a_terminal_archived_row_byte_identical(
+    tmp_path, capsys
+):
+    _write_handoff(tmp_path, "live-baton.md", roadmap_id="rm-main", deployment_state="in_flight", sprint=2)
+    _write_archived_handoff(
+        tmp_path, "2026-07", "shipped-baton.md", roadmap_id="rm-main", deployment_state="shipped", sprint=1,
+    )
+    index = _write(
+        tmp_path / "STUB-INDEX.md",
+        "<!-- BEGIN query: handoff where=roadmap_id=rm-main sort=sprint -->\n"
+        "- [Test Handoff](state/handoffs/live-baton.md) — in_flight\n"
+        "<!-- END query -->\n",
+    )
+    before = index.read_bytes()
+    assert _rq_mod.main(["--root", str(tmp_path), "--check"]) == 0
+    assert "All query callouts are up to date." in capsys.readouterr().out
+    _rq_mod.main(["--root", str(tmp_path)])
+    assert index.read_bytes() == before
 
 
 def test_dangling_stub_id_in_neither_live_nor_archive_degrades_to_omission(tmp_path):

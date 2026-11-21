@@ -35,9 +35,36 @@ def _is_fire_driver(argv: list, record_path: Path) -> bool:
     return at < len(argv) and _same_path(str(argv[at]), str(record_path))
 
 
-def _depths(procs: list, root_pid: int) -> dict:
+def _birth(ps: Any, proc: Any) -> Optional[float]:
+    try:
+        return proc.create_time()
+    except (ps.NoSuchProcess, ps.AccessDenied):
+        return None
+
+
+def _alive(ps: Any, pid: int, born: Optional[float]) -> bool:
+    """True unless `pid` is verifiably gone or now another process (create_time differs from `born`)."""
+    if not ps.pid_exists(pid):
+        return False
+    try:
+        now = ps.Process(pid).create_time()
+    except ps.NoSuchProcess:
+        return False
+    except ps.AccessDenied:
+        return True
+    return born is None or abs(now - born) <= BIRTH_TOLERANCE_S
+
+
+def _ppid(ps: Any, proc: Any) -> Optional[int]:
+    try:
+        return proc.ppid()
+    except (ps.NoSuchProcess, ps.AccessDenied):
+        return None
+
+
+def _depths(procs: list, root_pid: int, ps: Any) -> dict:
     """pid -> distance from the driver, over `procs` (a recursive child listing)."""
-    ppid = {p.pid: p.ppid() for p in procs}
+    ppid = {p.pid: _ppid(ps, p) for p in procs}
     out = {}
     for p in procs:
         depth, cur = 1, p.pid
@@ -95,21 +122,23 @@ def stop_fire(record_path: Path, record: dict, ps: Any = None) -> dict:
         out["skipped"] = "pid is not this fire's driver (creation time mismatch)"
         return out
     seen: set = set()
-    try:
-        for _ in range(MAX_PASSES):
+    births: dict = {pid: created}
+    for _ in range(MAX_PASSES):
+        try:
             kids = [c for c in driver.children(recursive=True) if c.pid not in seen]
-            if not kids:
-                break
-            depth = _depths(kids, pid)
-            for level in sorted(set(depth.values()), reverse=True):
-                group = [c for c in kids if depth[c.pid] == level]
-                out["survivors"].extend(p.pid for p in _end(ps, group))
-                seen.update(c.pid for c in group)
-        out["survivors"].extend(p.pid for p in _end(ps, [driver]))
-    except ps.NoSuchProcess:
-        pass
-    out["survivors"] = sorted(set(out["survivors"]))
-    out["stopped"] = sorted(p for p in seen | {pid} if p not in out["survivors"])
+        except (ps.NoSuchProcess, ps.AccessDenied):
+            break
+        if not kids:
+            break
+        for c in kids:
+            births.setdefault(c.pid, _birth(ps, c))
+        depth = _depths(kids, pid, ps)
+        for level in sorted(set(depth.values()), reverse=True):
+            _end(ps, [c for c in kids if depth[c.pid] == level])
+            seen.update(c.pid for c in kids if depth[c.pid] == level)
+    _end(ps, [driver])
+    out["survivors"] = sorted(p for p, b in births.items() if _alive(ps, p, b))
+    out["stopped"] = sorted(p for p in births if p not in out["survivors"])
     return out
 
 

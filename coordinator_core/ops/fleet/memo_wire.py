@@ -67,7 +67,9 @@ class DeliveryTarget(NamedTuple):
 def resolve_receiver(name: str) -> "ReceiverTarget | WireRefusal":
     """Resolve `name` to a deliverable receiver, or the refusal `memo.send`
     gives for it: unreadable registry, ambiguous central receiver, publish
-    mirror, undeliverable checkout, then unknown receiver, in that order."""
+    mirror, undeliverable checkout, then unknown receiver, in that order. A
+    known receiver with no deliverable non-mirror checkout resolves to the
+    G-EM home inbox before any of those, and never to a mirror inbox."""
     try:
         inbox_dir, receiver_repo_path, all_repos = resolve_receiver_inbox(name)
     except RegistryReadError as exc:

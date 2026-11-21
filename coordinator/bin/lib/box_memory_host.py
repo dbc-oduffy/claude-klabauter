@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import importlib.util
+import re
 import struct
 import sys
 import types
@@ -701,6 +702,13 @@ def _line_cores(line: dict) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else 1
 
 
+def _agent_identity(key) -> str | None:
+    """The ``<backend>-workflow-<16 hex>`` run of a workflow agent's supervisor or child row, else None."""
+    run = key[1] if isinstance(key, tuple) and len(key) == 2 else None
+    match = re.fullmatch(r"([a-z]+-workflow-[0-9a-f]{16})(?::\d+)?", run) if isinstance(run, str) else None
+    return match.group(1) if match else None
+
+
 def physical_cores() -> int:
     """Physical core count (psutil), falling back to the logical count, then 1."""
     try:
@@ -742,27 +750,36 @@ def reserved_cores(
     once at their widest. ``exclude_key`` is a (session_id, run) to leave out, for a caller
     re-checking its own row; ``exclude_pid`` leaves out every row held by that pid, for a stage
     admitting under its driver's reservation. Slot grants name no cores and count 0.
+
+    A workflow agent holds two rows, the supervisor's ``<run>:<pid>`` and the child's ``<run>``
+    (``_agent_identity``); together they count the larger of their declared cores once.
     """
     import time
 
     now_fn = now_fn or time.time
     starts, _ = _ledger_starts(path)
+    skip = _agent_identity(exclude_key) if exclude_key else None
     live: dict = {}
     for key, line in starts.items():
-        if key == exclude_key:
+        unit = _agent_identity(key) or key
+        if key == exclude_key or (skip is not None and unit == skip):
             continue
         peak = line.get("declared_peak_mb")
         if isinstance(peak, bool) or not isinstance(peak, (int, float)) or peak <= 0:
             continue
         held = frozenset(pid for pid in line.get("pids") or [] if _safe_holds(line, pid, alive_fn, create_time_fn, image_fn, now_fn))
         if held and not (exclude_pid is not None and exclude_pid in held):
-            live[key] = (held, _line_cores(line))
+            live[key] = (held, _line_cores(line), unit)
     runs = {run for _, run in live}
-    by_pids: dict = {}
-    for (session, run), (held, cores) in live.items():
+    by_unit: dict = {}
+    for (session, run), (held, cores, unit) in live.items():
         base, sep, _tail = str(run).rpartition(":")
-        if session == "box-memory-snapshot" and sep and base in runs:
+        if session == "box-memory-snapshot" and sep and base in runs and unit == (session, run):  # a workflow agent folds by unit instead
             continue
+        prev = by_unit.get(unit)
+        by_unit[unit] = (held | prev[0] if prev else held, max(prev[1] if prev else 0, cores))
+    by_pids: dict = {}
+    for held, cores in by_unit.values():
         by_pids[held] = max(by_pids.get(held, 0), cores)
     return sum(by_pids.values())
 

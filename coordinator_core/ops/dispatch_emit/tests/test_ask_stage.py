@@ -403,14 +403,19 @@ def test_kept_row_whose_evicted_path_is_outside_the_kept_runs_write_set_stages_f
     snap = resume_snapshot.Snapshot(frozenset(), frozenset(), kept=frozenset({"R1"}), kept_run="kept-run")
     assert ask_stage._kept_row_holds(repo, snap, "R1", "report.md") is False
     assert (repo / "t.py").read_bytes() == b"a = 1\n"
-    refusals = json.loads((repo / "state" / "warp" / "kept-run" / "tree-write-refusals.json").read_text())
-    assert [(e["path"], e["reason"]) for e in refusals] == [("t.py", "outside-own-paths")]
 
 
 def test_kept_row_restores_an_owned_evicted_path_before_reading_the_kept_record(repo):
     from coordinator_core.ops.dispatch_emit import ask_stage, resume_snapshot
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import write_object
+    from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
 
     held = _kept_world(repo, "kept-run", ["t.py"])
+    oid = write_object(resolve_git_common_dir(repo), b"blob", held)
+    (repo / "state/warp/kept-run" / WITHHELD_OWN_DELTA_FILE).write_text(
+        json.dumps({"paths": {"t.py": {"blob": oid}}}), encoding="utf-8",
+    )
     snap = resume_snapshot.Snapshot(frozenset(), frozenset(), kept=frozenset({"R1"}), kept_run="kept-run")
     ask_stage._kept_row_holds(repo, snap, "R1", "report.md")  # no kept.json: False, but the restore ran
     assert (repo / "t.py").read_bytes() == held

@@ -26,6 +26,7 @@ _HARNESS = """
 let _halted = null, _commit = null, _runId = 'r', _sizingRel = 's.yaml';
 let _manifest = {}, _planRel = null, _reviewWave = [], _falsifierResult = %s, _deliveryVerdict = %s;
 let _roadmapFan = false, _nextAction = null, _incompleteChunks = [], _blockedChunks = [];
+const _refireCmd = () => 'refire';
 %s
 %s
 console.log(JSON.stringify(_halted));
@@ -63,9 +64,10 @@ def _pf_consts(script: str) -> str:
 def _drive(script: str, falsifier: dict | None, delivery: dict | None) -> object:
     program = _HARNESS % (json.dumps(falsifier), json.dumps(delivery), _pf_consts(script), _tail(script))
     out = subprocess.run(
-        ["node", "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()
-    ).stdout
-    return json.loads(out)
+        ["node", "-"], input=program, capture_output=True, text=True, **no_console_creationflags()
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
 
 
 @pytest.mark.parametrize("over", _ARMS)

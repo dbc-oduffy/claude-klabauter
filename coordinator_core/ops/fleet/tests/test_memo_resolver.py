@@ -15,6 +15,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     RegistryReadError,
     canonical_receiver_id,
     convention_repo_key,
+    never_inbox_mirror_refusal,
     read_doe_identity,
     read_publish_mirrors,
     read_registry_repos,
@@ -749,11 +750,23 @@ class TestPublishMirrorReroute:
         mirror = tmp_path / "claude-klabauter"
         claude_home = _make_claude_home(tmp_path, {"claude_klabauter": mirror})
         _add_mirrors(claude_home, {"claude_klabauter": {"path": str(mirror)}})
+        gem = tmp_path / "gem-box"
+        (gem / ".git").mkdir(parents=True)
+        local = (
+            claude_home / ".coordinator-claude-settings" / "machine-local" / "registry.local.toml"
+        )
+        local.write_text(
+            local.read_text(encoding="utf-8")
+            + f'"coordinator.group_em_home" = {json.dumps(str(gem))}\n',
+            encoding="utf-8",
+        )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         assert reroute_owner("claude-klabauter-em") is None
         inbox, repo, _all = resolve_receiver_inbox("claude-klabauter-em")
-        assert inbox is None and repo is None
+        assert inbox == gem / "state" / "cross-repo" / "inbox"
+        assert same_repo_path(repo, gem)
+        assert not same_repo_path(repo, mirror)
 
     def test_owned_klabauter_mirror_and_its_owner_both_resolve_to_claude_klabauter(self, tmp_path, monkeypatch):
         mirror = tmp_path / "claude-klabauter"
@@ -770,6 +783,31 @@ class TestPublishMirrorReroute:
             inbox, repo, _all = resolve_receiver_inbox(receiver)
             assert inbox is not None, receiver
             assert same_repo_path(repo, engine_tree), receiver
+
+    def test_mirror_only_box_declared_mirror_resolves_to_the_gem_home(self, tmp_path, monkeypatch):
+        mirror = tmp_path / "claude-klabauter"
+        (mirror / ".git").mkdir(parents=True)
+        (mirror / "PUBLISH_MIRROR").write_text("m\n", encoding="utf-8")
+        gem = tmp_path / "gem-box"
+        (gem / ".git").mkdir(parents=True)
+        claude_home = _make_claude_home(tmp_path, {"claude_klabauter": mirror})
+        _add_mirrors(claude_home, {
+            "claude_klabauter": {"owner": "gadget-owner-em", "path": str(mirror)},
+        })
+        local = (
+            claude_home / ".coordinator-claude-settings" / "machine-local" / "registry.local.toml"
+        )
+        local.write_text(
+            local.read_text(encoding="utf-8")
+            + f'"coordinator.group_em_home" = {json.dumps(str(gem))}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        inbox, repo, _all = resolve_receiver_inbox("claude-klabauter-em")
+        assert inbox == gem / "state" / "cross-repo" / "inbox"
+        assert same_repo_path(repo, gem)
+        assert never_inbox_mirror_refusal("claude-klabauter-em", repo) is None
 
     def test_redirect_alias_routes_to_the_central_receiver(self, tmp_path, monkeypatch):
         doe = tmp_path / _DOE_REPO
@@ -879,7 +917,10 @@ class TestTwoKeysOneCloneAreOneReceiver:
         doe = tmp_path / _DOE_REPO
         doe.mkdir()
         link = tmp_path / "doe-link"
-        link.symlink_to(doe)
+        try:
+            link.symlink_to(doe)
+        except OSError as exc:
+            pytest.skip(f"symlink privilege not held: {exc}")
         claude_home = _make_claude_home(tmp_path, {_DOE_KEY: doe, "content_root": link})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _install_doe_manifest(

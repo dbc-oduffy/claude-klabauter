@@ -328,7 +328,11 @@ def predecessor_wrote(root: Path, run_dir: Path, baseline: Mapping[str, Optional
     from the predecessor's own. Covers a predecessor that halted at commit with no withheld record
     and an empty review slice. A path the predecessor never baselined, or left as it found it, is
     not credited. Trap: a foreign edit between the predecessor's stage and this run's stage on a
-    path the predecessor baselined is indistinguishable from the predecessor's write."""
+    path the predecessor baselined is indistinguishable from the predecessor's write.
+    Adoption: a baselined path whose current blob equals a blob the predecessor's own ``kept.json``
+    fingerprints is credited too, since a ledger-fix recovery reproduces those exact bytes and stages
+    its baseline over them. A blob the record does not list, or a predecessor without a ``kept.json``,
+    credits nothing."""
     from coordinator_core.ops._path_guard import safe_id
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
     from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
@@ -338,7 +342,14 @@ def predecessor_wrote(root: Path, run_dir: Path, baseline: Mapping[str, Optional
     out: set[str] = set()
     for prev in _resumed_chain(root, run_dir.name):
         try:
-            data = json.loads((record_dir(root, prev) / "manifest.json").read_text(encoding="utf-8"))
+            home = record_dir(root, prev)
+        except ValueError:
+            continue
+        for rel, blobs in kept_fingerprints(home).items():
+            if rel in baseline and fingerprint(root, rel) in blobs:
+                out.add(rel)
+        try:
+            data = json.loads((home / "manifest.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         before = data.get("write_baseline") if isinstance(data, dict) else None

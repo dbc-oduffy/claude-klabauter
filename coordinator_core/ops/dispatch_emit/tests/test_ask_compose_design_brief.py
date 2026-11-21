@@ -40,14 +40,14 @@ def _call_text(script: str, label: str) -> str:
     return script[script.rindex("agent(", 0, end) : end]
 
 
-def test_plan_author_and_spine_review_prompts_start_with_the_prefix():
+def test_plan_author_and_spine_review_prompts_start_with_the_prefix(m_plus_known_arm):
     script = _compose()
     for label in ("plan", "plan-review"):
         call = _call_text(script, label)
         assert call.startswith(f"agent(({_PREFIX} + "), label
 
 
-def test_plan_blitz_agents_are_wrapped_with_the_prefix_ahead_of_the_ledger():
+def test_plan_blitz_agents_are_wrapped_with_the_prefix_ahead_of_the_ledger(m_plus_known_arm):
     script = _compose()
     assert f"_outerAgent({_PREFIX} + _LEDGER_PREFIX +" in script
 

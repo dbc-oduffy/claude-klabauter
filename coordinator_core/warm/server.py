@@ -4055,6 +4055,21 @@ def _strip_ambient_pid(
     return replace(caller, pid=None)
 
 
+def _bind_trusted_caller_pid(msg: dict, method: object, caller: CallerContext) -> None:
+    """For `proc.stop_own_child`, set `params.caller_pid` from the transport's `_caller.pid`
+    (overriding any client value); drop it when that pid is absent or non-decimal."""
+    if method != "proc.stop_own_child" or not isinstance(msg, dict):
+        return
+    params = msg.get("params")
+    if not isinstance(params, dict):
+        params = msg["params"] = {}
+    pid = caller.pid
+    if isinstance(pid, str) and pid.isdecimal():
+        params["caller_pid"] = int(pid)
+    else:
+        params.pop("caller_pid", None)
+
+
 def _untrusted_caller_response(request_id) -> dict:
     """JSON-RPC 2.0 error envelope for a request that carried no
     `_engine_token` field at all.
@@ -4472,6 +4487,7 @@ def _serve_line(
     # recorded nowhere (contract § 1).
     dispatch_key = msg.pop("_dispatch_key", None)
     method = msg.get("method") if isinstance(msg, dict) else None
+    _bind_trusted_caller_pid(msg, method, caller)
 
     # POLL INTERCEPT (D5, contract § 9). Answered directly from `AckStore`
     # in THIS accept process, before `admit` and before `dispatch` --

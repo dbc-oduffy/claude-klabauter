@@ -62,3 +62,29 @@ def test_without_a_budget_a_persisting_stall_still_raises(tmp_path: Path, monkey
 def test_the_budget_is_well_under_the_500ms_bar() -> None:
     assert 0 < sizing_fire.OUTSIDE_CREDIT_BUDGET_SECS < 0.5
 
+
+
+def test_a_degraded_walk_writes_nothing_a_relaying_worker_reads_as_a_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def outside(*_a, **_k):
+        raise PackReadDeadline("pack read past deadline at offset 9793803")
+
+    monkeypatch.setattr(plan_row_coding, "outside_landings", outside)
+    _no_retry(monkeypatch)
+    with caplog.at_level("DEBUG"):
+        assert plan_row_coding.rows_landed_outside_executor(tmp_path, "plan.md", _ROWS, budget_secs=0.3) == {}
+    assert not [r for r in caplog.records if r.levelno >= 30]
+
+def test_credit_walk_can_finish_after_the_previous_deadline(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(git_objects, "_pack_clock", lambda: 10.0)
+
+    def outside(*_args, **_kwargs):
+        if git_objects._READ_BUDGET.get() <= 10.4:
+            raise PackReadDeadline("pack credit walk still in progress at 400 ms")
+        return {"C1": ["b" * 40]}
+
+    monkeypatch.setattr(plan_row_coding, "outside_landings", outside)
+    assert plan_row_coding.rows_landed_outside_executor(
+        tmp_path, "plan.md", _ROWS, budget_secs=sizing_fire.OUTSIDE_CREDIT_BUDGET_SECS,
+    ) == {"C1": "b" * 40}

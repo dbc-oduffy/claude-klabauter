@@ -16,8 +16,8 @@ HEAD = b"ok = 1\r\n"
 RUN = "ask-20261113T000000-aaaaaa"
 
 
-def _manifest(root, baseline) -> None:
-    """Stage `RUN` against `baseline` ({path: bytes | None}); returns nothing, objects land in the store."""
+def _manifest(root, baseline, run=RUN) -> None:
+    """Stage `run` against `baseline` ({path: bytes | None}); returns nothing, objects land in the store."""
     from coordinator_core.git import git_objects
     from coordinator_core.git.git_dir import resolve_git_common_dir
 
@@ -25,7 +25,7 @@ def _manifest(root, baseline) -> None:
         p: None if b is None else git_objects.write_object(resolve_git_common_dir(root), b"blob", b)
         for p, b in baseline.items()
     }
-    rdir = root / "state" / "warp" / RUN
+    rdir = root / "state" / "warp" / run
     rdir.mkdir(parents=True, exist_ok=True)
     (rdir / "manifest.json").write_text(
         json.dumps({"rows": [], "doc_writes": [], "write_baseline": shas}), encoding="utf-8"
@@ -333,6 +333,34 @@ def test_restore_for_run_with_an_unreadable_record_writes_nothing(tmp_path: Path
     assert (repo / "u.py").read_bytes() == b"u = 1\n"
 
 
+@pytest.mark.parametrize("foreign_write", [False, True])
+def test_refire_uses_only_the_recorded_own_delta(tmp_path, foreign_write):
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import write_object
+    from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
+
+    repo, rec, raw_parked = _evicted_world(tmp_path)
+    _declare(repo, RUN, ["t.py"])
+    own = b"a = 2\n"
+    assert raw_parked != own
+    oid = write_object(resolve_git_common_dir(repo), b"blob", own)
+    (rec / WITHHELD_OWN_DELTA_FILE).write_text(
+        json.dumps({"paths": {"t.py": {"blob": oid}}}), encoding="utf-8",
+    )
+    if foreign_write:
+        (repo / "t.py").write_bytes(b"a = 3\n")
+
+    result = hte.restore_own_delta(repo, rec, RUN)
+
+    assert result["u.py"] == {"status": "skipped", "reason": "outside-own-paths"}
+    if foreign_write:
+        assert result["t.py"] == {"status": "skipped", "reason": "restore-drift"}
+        assert (repo / "t.py").read_bytes() == b"a = 3\n"
+    else:
+        assert result["t.py"] == {"status": "restored"}
+        assert (repo / "t.py").read_bytes() == own
+
+
 def _spliced_world(tmp_path, withheld_edits):
     """Git repo whose HEAD holds `_lines()`, a live file carrying a foreign line-7 hunk, and a record
     whose withheld bytes are `_lines(withheld_edits)` with `head` = the live bytes, `base` = HEAD."""
@@ -374,3 +402,99 @@ def test_repeated_restore_records_each_refusal_once(tmp_path: Path) -> None:
     hte.restore(repo, rec, owned_paths=["t.py"], run_id=RUN)
     hte.restore(repo, rec, owned_paths=["t.py"], run_id=RUN)
     assert len(json.loads((rec / "tree-write-refusals.json").read_text())) == 1
+
+
+GEN_LINES = 300  # past run_hunk_claims.MAX_MATCHED_MIDDLE: one generator pass is a single coarse hunk
+PRIOR = "ask-20261112T000000-bbbbbb"
+
+
+def _doc(edits=None) -> bytes:
+    edits = edits or {}
+    return b"".join(edits.get(i, b"doc%d\n" % i) for i in range(1, GEN_LINES + 1))
+
+
+GENERATED = {1: b"generated head\n", GEN_LINES: b"generated tail\n"}
+
+
+def _generated_world(tmp_path, baseline: bytes, tree: bytes):
+    """A file a script regenerated end to end (no Edit call): `RUN` staged against `baseline`, HEAD is `_doc()`."""
+    root = tmp_path / "root"
+    root.mkdir()
+    _manifest(root, {"install.md": baseline})
+    (root / "install.md").write_bytes(tree)
+    return root, tmp_path / "rec"
+
+
+def _evict_generated(root, rec) -> dict:
+    refused: dict = {}
+    hte.evict(root, rec, ["install.md"], {"install.md": _doc()}, run_id=RUN, refused=refused)
+    return refused
+
+
+def test_generator_rewrite_of_a_path_clean_at_stage_is_evicted(tmp_path: Path) -> None:
+    root, rec = _generated_world(tmp_path, _doc(), _doc(GENERATED))
+    assert _evict_generated(root, rec) == {}
+    assert (root / "install.md").read_bytes() == _doc()
+    assert (rec / "withheld-blobs" / blob_sha(_doc(GENERATED))).read_bytes() == _doc(GENERATED)
+
+
+def test_generator_rewrite_with_crlf_output_is_evicted(tmp_path: Path) -> None:
+    crlf = _doc(GENERATED).replace(b"\n", b"\r\n")
+    root, rec = _generated_world(tmp_path, _doc(), crlf)
+    assert _evict_generated(root, rec) == {}
+    assert (root / "install.md").read_bytes() == _doc()
+
+
+def test_coarse_dirt_that_predates_the_run_stays_kept(tmp_path: Path) -> None:
+    peer_dirt = _doc({150: b"peer\n"})
+    root, rec = _generated_world(tmp_path, peer_dirt, _doc({**GENERATED, 150: b"peer\n"}))
+    before = (root / "install.md").read_bytes()
+    refused = _evict_generated(root, rec)
+    assert "no hunk attributable to this run" in refused["install.md"]
+    assert (root / "install.md").read_bytes() == before
+    assert not (rec / hte.EVICTED_FILE).exists()
+
+
+def test_dirt_the_run_did_not_write_stays_kept_byte_identical(tmp_path: Path) -> None:
+    root, rec = _generated_world(tmp_path, _doc(GENERATED), _doc(GENERATED))  # staged dirty, never rewritten
+    before = (root / "install.md").read_bytes()
+    assert "no hunk attributable to this run" in _evict_generated(root, rec)["install.md"]
+    assert (root / "install.md").read_bytes() == before
+    assert not (rec / hte.EVICTED_FILE).exists()
+
+
+def test_generated_path_a_peer_rewrote_after_the_run_print_is_not_evicted_wholesale(tmp_path: Path) -> None:
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    root, rec = _generated_world(tmp_path, _doc(), _doc({**GENERATED, 150: b"peer\n"}))
+    sha = git_objects.write_object(resolve_git_common_dir(root), b"blob", _doc(GENERATED))
+    (root / "state" / "warp" / RUN / "write_prints.json").write_text(json.dumps({"install.md": sha}))
+    before = (root / "install.md").read_bytes()
+    assert "install.md" in _evict_generated(root, rec)
+    assert (root / "install.md").read_bytes() == before
+    assert not (rec / hte.EVICTED_FILE).exists()
+
+
+def test_generated_bytes_already_in_the_refire_baseline_are_evicted_through_the_resumed_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    root, rec = _generated_world(tmp_path, _doc(GENERATED), _doc(GENERATED))  # the refire staged over the prior pass
+    _manifest(root, {"install.md": _doc()}, run=PRIOR)
+    monkeypatch.setattr(landing_integrity, "_resumed_chain", lambda r, rid: [PRIOR] if rid == RUN else [])
+    assert _evict_generated(root, rec) == {}
+    assert (root / "install.md").read_bytes() == _doc()
+
+
+def test_generated_bytes_in_the_baseline_of_an_unrelated_run_stay_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    root, rec = _generated_world(tmp_path, _doc(GENERATED), _doc(GENERATED))
+    _manifest(root, {"install.md": _doc()}, run=PRIOR)
+    monkeypatch.setattr(landing_integrity, "_resumed_chain", lambda r, rid: [])
+    assert "install.md" in _evict_generated(root, rec)
+    assert (root / "install.md").read_bytes() == _doc(GENERATED)

@@ -86,8 +86,8 @@ def test_receipt_fields(tmp_path: Path) -> None:
     assert r["source"] == "inline" and r["context"] == ["c.md"] and len(r["sha256"]) == 64
 
 
-def test_resume_plan_emitted_only_when_set() -> None:
-    assert "resume_plan" not in GateVerdict(arm="s", halt=None).to_json()
+def test_resume_plan_emitted_as_null_when_unset() -> None:
+    assert GateVerdict(arm="s", halt=None).to_json()["resume_plan"] is None
     assert GateVerdict(arm="s", halt=None, resume_plan="docs/plans/p.md").to_json()["resume_plan"] == "docs/plans/p.md"
 
 

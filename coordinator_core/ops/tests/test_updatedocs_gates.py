@@ -1105,12 +1105,13 @@ def _repomap_gate(tmp_path, script):
     return udg._gate_repomap(tmp_path, tmp_path, {"rag_state": "absent", "generate_repomap_cli": str(cli)})
 
 
-def test_repomap_gate_timeout_names_timeout_and_ceiling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_repomap_gate_slow_regeneration_is_informational_not_no_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(udg, "_DEFAULT_CLI_TIMEOUT_SECONDS", 0.25)
     result = _repomap_gate(tmp_path, "import time\ntime.sleep(5)\n")
-    assert result.verdict == udg.GateVerdict.UNAVAILABLE
+    assert result.verdict == udg.GateVerdict.FINDING
+    assert result.severity == udg.Severity.INFORMATIONAL
     assert "timed out after 0.25s" in result.summary
-    assert "could not be spawned" not in result.summary
+    assert "produced no result" not in result.summary
 
 
 def test_repomap_gate_spawn_oserror_names_spawn_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

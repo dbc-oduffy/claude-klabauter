@@ -24,7 +24,10 @@ from coordinator_core.ops.dispatch_emit.op import (
     emission_receipt_path,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_op import _write_fixture_plan
-from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+from coordinator_core.session.core import (
+    SESSION_ENV_PRECEDENCE,
+    canonical_session_env_value,
+)
 
 pytestmark = pytest.mark.complete
 
@@ -143,13 +146,20 @@ def test_session_id_resolves_through_every_canonical_tier(tmp_path, monkeypatch,
     `CLAUDE_CODE_SESSION_ID` is the tier actually populated on a Claude Code
     host, and a `CLAUDE_SESSION_ID`-only read skipped it -- writing an empty
     session_id that the fire gate then refused.
+
+    Native-vendor tiers (CODEX_THREAD_ID, ...) carry an opaque id the engine
+    namespaces to a deterministic UUID (`canonical_session_env_value`); the
+    receipt records that engine identity, not the raw slot value.
     """
     _clear_session_env(monkeypatch)
-    monkeypatch.setenv(var, f"sess-via-{var}")
+    raw = f"sess-via-{var}"
+    monkeypatch.setenv(var, raw)
 
     _result, output_path, _plan_path = _emit(tmp_path)
 
-    assert _receipt_of(output_path)["session_id"] == f"sess-via-{var}"
+    assert _receipt_of(output_path)["session_id"] == canonical_session_env_value(
+        var, raw
+    )
 
 
 def test_the_canonical_tiers_are_ordered_as_the_resolver_orders_them(

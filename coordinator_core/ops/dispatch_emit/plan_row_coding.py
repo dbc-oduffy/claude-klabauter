@@ -516,9 +516,17 @@ def outside_landings(
             metas[csha] = _commit_meta(cdir, csha)
         return metas[csha]
 
-    def _names_other_chunks(meta_, chunk_id) -> bool:
-        named = _lands_chunks((meta_ or {}).get("message") or "")
-        return named is not None and chunk_id not in named
+    trailer_facts: dict = {}  # Parse candidate evidence once even when rows share a write.
+
+    def _eligible(csha, chunk_id, paths):
+        if csha not in trailer_facts:
+            message = (commit_meta(common_dir, csha) or {}).get("message") or ""
+            trailer_facts[csha] = (
+                _lands_chunks(message) if require_evidence else None,
+                _withheld_paths(message),
+            )
+        named, withheld = trailer_facts[csha]
+        return (named is None or chunk_id in named) and withheld.isdisjoint(paths)
 
     def _step(cdir, tree, name):
         key = (tree, name)
@@ -582,15 +590,16 @@ def outside_landings(
         if parent is None:
             break
         sha = parent
+    positions = {sha: index for index, (sha, _) in enumerate(walked)}
     out: dict = {}
     for chunk in wanted:
+        chunk_paths = frozenset(chunk.paths)
         shas: list = []
         for path in chunk.paths:
             hit = next(
                 (
                     csha for csha, parent in walked
-                    if not (require_evidence and _names_other_chunks(commit_meta(common_dir, csha), chunk.id))
-                    and not _withheld_paths((commit_meta(common_dir, csha) or {}).get("message") or "").intersection(chunk.paths)
+                    if _eligible(csha, chunk.id, chunk_paths)
                     and _blob_at_commit(common_dir, csha, path)
                     != (_blob_at_commit(common_dir, parent, path) if parent else ABSENT)
                 ),
@@ -600,7 +609,7 @@ def outside_landings(
                 break
             shas.append(hit)
         else:
-            out[chunk.id] = sorted(set(shas), key=lambda s: [w[0] for w in walked].index(s))
+            out[chunk.id] = sorted(set(shas), key=positions.__getitem__)
     return out
 
 
@@ -655,7 +664,10 @@ def rows_landed_outside_executor(
             with read_budget(budget_secs):
                 landings = _walk()
         except PackReadDeadline as exc:
-            logging.getLogger(__name__).warning(
+            # Trap: debug, never warning. Uncredited rows still dispatch, so this is no failure, but a
+            # warning reaches the gate CLI's stderr and the relaying worker reads it as a refusal halt
+            # (example-game-repo d00e39 fire f0924e29).
+            logging.getLogger(__name__).debug(
                 "outside-landing walk exceeded %.3fs; open rows dispatch uncredited: %s", budget_secs, exc
             )
             return {}

@@ -57,6 +57,7 @@ def test_gate_replies_a_pack_read_stall_halt_with_a_refire(repo, monkeypatch):  
     out = ask_gate._handler({"sizing_path": REL}, repo)
     assert "error" not in out
     assert out["halt"]["kind"] == PACK_READ_STALL_HALT_KIND
+    assert out["resume_plan"] is None and out["resume_rows"] is None
     assert "refire" in out["halt"]["next_action"] and REL in out["halt"]["next_action"]
 
 

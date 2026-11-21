@@ -103,3 +103,21 @@ def test_commit_naming_this_plan_by_halt_plan_is_credited(tmp_path):
     repo = _repo(tmp_path)
     landed = _commit(repo, {"c1.py": "1"}, f"halt record\n\nHalt-Plan: {_REL}")
     assert rows_landed_outside_executor(repo, _REL, _ROW) == {"C1": landed}
+
+
+def test_outside_walk_parses_each_candidate_withhold_once(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import plan_row_coding
+
+    repo = _repo(tmp_path)
+    landed = _commit(repo, {"c1.py": "1", "c2.py": "2"}, f"own work\n\nDeliverable-Id: {_OWN}")
+    original = plan_row_coding._withheld_paths
+    messages = []
+
+    def counted(message):
+        messages.append(message)
+        return original(message)
+
+    monkeypatch.setattr(plan_row_coding, "_withheld_paths", counted)
+    rows = [{"id": name, "writes": ["c1.py", "c2.py"]} for name in ("C1", "C2")]
+    assert rows_landed_outside_executor(repo, _REL, rows) == {"C1": landed, "C2": landed}
+    assert len(messages) == 1

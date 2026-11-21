@@ -321,3 +321,38 @@ def test_failed_gate_release_reaps_only_its_own_spawned_driver(tmp_path: Path, m
     value = json.loads(next(registry.glob('*.json')).read_text())
     assert value['state'] == 'exited' and value['exit_code'] == 1
     assert 'gate denied' in value['error']
+
+@pytest.mark.parametrize("worker_failed", [False, True])
+def test_headless_gate_journals_tool_output_and_separates_diagnostics(
+    tmp_path: Path, worker_failed: bool,
+) -> None:
+    path = record(tmp_path, "return await agent('relay gate',{label:'gate',phase:'gate'});")
+    output = '{"jsonrpc":"2.0","id":1,"result":{"arm":"m_plus","halt":null}}\n'
+    output += "outside-landing walk exceeded 0.300s; open rows dispatch uncredited\n"
+    seen = []
+
+    def worker(prompt, options, *, artifact_dir, **kwargs):
+        seen.append(prompt)
+        artifact_dir.mkdir(parents=True)
+        (artifact_dir / "stdout.jsonl").write_text(json.dumps({
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution", "id": "item_0", "exit_code": 0,
+                "command": "coordinator-invoke dispatch.ask_gate '{}'",
+                "aggregated_output": output,
+            },
+        }) + "\n", encoding="utf-8")
+        if worker_failed:
+            raise RuntimeError("gate worker reply invalid")
+        return {"arm": "m_plus", "halt": None}
+
+    result = headless.execute(path, agent_runner=worker)
+    events = [json.loads(line) for line in Path(result["journal_path"]).read_text().splitlines()]
+    gate = next(event for event in events if event["type"] == "gate-command-output")
+    assert gate["id"] and gate["tool_item_id"] == "item_0"
+    assert gate["exit_code"] == 0 and gate["combined_output"] == output
+    assert gate["verified"] is False
+    assert "stderr diagnostics do not turn" in seen[0]
+    assert result["exit_code"] == int(worker_failed)
+    if worker_failed:
+        assert "gate worker reply invalid" in result["error"]

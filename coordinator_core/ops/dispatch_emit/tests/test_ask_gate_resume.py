@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import textwrap
 
@@ -94,6 +95,46 @@ def test_refire_of_a_halted_plan_resumes_its_incomplete_rows(repo):  # noqa: F81
     assert v.to_json()["resume_rows"] == ["A2", "A4"]
 
 
+@pytest.mark.parametrize("own_delta", [False, True])
+def test_evicted_coded_row_returns_to_resume_work(repo, own_delta):
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import write_object
+    from coordinator_core.ops.dispatch_emit import ask_stage, kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
+    from coordinator_core.ops.dispatch_emit.tests.test_halt_tree_evict import _declare
+
+    _put(repo, tshirt="S", route="spec-dispatch")
+    _plan(repo, rows=[("A1", "coded"), ("A3", "coded")])
+    run_id = "warp-2026-10-01-gate-20261001T010101-a824ec"
+    record = record_dir(repo, run_id)
+    record.mkdir(parents=True)
+    (record / "halted.json").write_text(json.dumps({"status": "halted", "halted": "commit", "sizing_rel": REL}))
+    output = b"print('coded but evicted')\n"
+    blob = kept_work.blob_sha(output)
+    (record / "withheld-blobs").mkdir()
+    (record / "withheld-blobs" / blob).write_bytes(output)
+    (record / "evicted.json").write_text(json.dumps({"some/A1.py": {"blob": blob, "head": None}}))
+    if own_delta:
+        _declare(repo, run_id, ["some/A1.py"])
+        own = write_object(resolve_git_common_dir(repo), b"blob", output)
+        (record / WITHHELD_OWN_DELTA_FILE).write_text(json.dumps({"paths": {"some/A1.py": {"blob": own}}}))
+
+    v = gate(repo, REL)
+
+    assert v.halt is None and v.resume_rows == ["A1"]
+    staged = ask_stage.stage(repo, run_id=run_id, plan_rel=PLAN_REL, only_rows=v.resume_rows)
+    assert [row.id for row in staged.rows] == ["A1"]
+
+    target = repo / "some/A1.py"
+    assert target.exists() == own_delta
+    if own_delta:
+        assert gate(repo, REL).resume_rows == ["A1"]
+    target.parent.mkdir(exist_ok=True)
+    target.write_text("print('newer work')\n")
+    assert gate(repo, REL).resume_ledger is not None
+
+
 def test_refire_with_stale_row_reports_still_resumes(repo):  # noqa: F811
     from coordinator_core.ops.dispatch_emit import emit
 
@@ -123,10 +164,10 @@ def test_checkpoint_landed_rows_are_not_resumed(repo):  # noqa: F811
     assert plan.plan_rel == PLAN_REL and plan.incomplete == ("A2", "A3")
 
 
-def test_s_without_plan_has_no_resume_plan_key(repo):  # noqa: F811
+def test_s_without_plan_has_null_resume_plan(repo):  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     v = gate(repo, REL)
-    assert v.halt is None and "resume_plan" not in v.to_json()
+    assert v.halt is None and v.to_json()["resume_plan"] is None
 
 
 def test_resumable_plan_none_without_a_plan(repo):  # noqa: F811

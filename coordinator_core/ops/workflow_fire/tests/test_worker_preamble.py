@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import sys
 
@@ -114,6 +115,64 @@ def test_headless_executor_prompt_begins_with_preamble(tmp_path, spawned):
 def test_claude_backend_prompt_is_unchanged():
     assert with_worker_preamble("claude", "body") == "body"
     assert all(with_worker_preamble(b, "body") == PREAMBLE + "\n\nbody" for b in WORKER_BACKENDS)
+
+
+@pytest.mark.parametrize("backend", ("claude", *WORKER_BACKENDS))
+def test_review_commands_bind_the_loaded_engine_at_delivery(backend, monkeypatch):
+    from pathlib import Path
+
+    from coordinator_core.ops.workflow_fire import worker_preamble
+
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setenv("PATH", "")
+    command = "python -m coordinator_core.ops.test_leg_run --out scratch/res.json -- tests/test_x.py"
+    export = "python3 -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --export-run"
+    prompt = with_worker_preamble(backend, f"Run `{command}` or `{export}`. Then run python -m pytest.")
+    assert sys.executable in prompt
+    assert str(Path(worker_preamble.__file__).resolve().parents[3]) in prompt
+    assert command not in prompt and export not in prompt
+    assert "coordinator_core.ops.test_leg_run --out scratch/res.json -- tests/test_x.py" in prompt
+    assert "coordinator_core.ops.dispatch_emit.clean_overlay_verify --export-run" in prompt
+    assert "Then run python -m pytest." in prompt
+
+
+@pytest.mark.parametrize("executor", [agents, headless_agents], ids=["workflow", "headless"])
+def test_rendered_review_legs_never_deliver_a_bare_engine_module(executor, tmp_path, spawned, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_compose, emit
+    from coordinator_core.ops.review_mint.execute_review import _export_rerun_clause, _test_leg_clause
+
+    brief = _test_leg_clause(
+        "a" * 40, "scratch/base.json", "scratch/tests.json", repo_root=str(tmp_path),
+        shell="powershell" if sys.platform == "win32" else "bash",
+    )
+    brief += _export_rerun_clause("run-1", str(tmp_path), "scratch/export.txt")
+    brief += emit._baseline_context_clause("a" * 40)
+    recovery_prompts = {}
+
+    def capture(prompt, *, label, **_kwargs):
+        recovery_prompts[label] = prompt
+        return "null"
+
+    monkeypatch.setattr(ask_compose, "_agent", capture)
+    ask_compose._review_recover_js(
+        head="", anchor="", session_tail="", record_dir="scratch/warp/run-1",
+        run_id="run-1", repo_root=str(tmp_path), run_base_sha="a" * 40,
+    )
+    brief += recovery_prompts[ask_compose.HALT_REVERIFY_LABEL]
+
+    with pytest.raises(executor.AgentFailed, match="spawn failed"):
+        executor.run_agent(
+            brief, {"agentType": "coordinator:test-verify"}, repo_root=tmp_path,
+            artifact_dir=tmp_path / "art", backend="codex",
+        )
+
+    delivered, = spawned
+    assert not re.search(r"(?<![\w./\\])python(?:3(?:\.\d+)?)?\s+-m\s+coordinator_core\.", delivered)
+    assert "coordinator_core.ops.test_leg_run --base-sha" in delivered
+    assert "coordinator_core.ops.dispatch_emit.clean_overlay_verify --export-run" in delivered
+    assert "coordinator_core.ops.dispatch_emit.landing_export scratch/test-landing-" in delivered
+    assert "halt-reverify-tests.json" in delivered
+    assert sys.executable in delivered
 
 
 

@@ -15,6 +15,7 @@ import re
 from typing import Callable
 
 from coordinator_core.ops.dispatch_emit.prompt_fragments import _scan_literals
+from coordinator_core.ops.workflow_fire.worker_preamble import bind_engine_commands
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 #: Directory under the record dir that holds staged prompt bodies.
@@ -35,7 +36,12 @@ def stage(name: str, text: str, sink: dict[str, str], *, record_dir: str) -> str
     ``record_dir`` is the pointer's path prefix and must be absolute, so a leg whose cwd is not the
     repo holding the record dir (a cross-repo ask) still resolves it. A name already recorded with
     other text is refused.
+
+    The body is bound to the engine interpreter here, the one point every staged leg prompt passes: a
+    committed composer keeps the portable `python -m coordinator_core...` form, but the agent reading
+    the file may not have that `python` or an importable `coordinator_core`.
     """
+    text = bind_engine_commands(text)
     if sink.get(name, text) != text:
         raise ValueError(f"staged prompt {name!r} already recorded with different text")
     sink[name] = text

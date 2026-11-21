@@ -100,12 +100,17 @@ def parse_diff(text: str) -> dict[str, list[Hunk]]:
     return out
 
 
+_HEAD_UNKNOWN = object()
+
+
 def own_hunks(
     root: Path,
     run_id: str,
     path: str,
     hunks: list[Hunk],
     holders: Mapping[str, bool],
+    *,
+    head_blob: object = _HEAD_UNKNOWN,
 ) -> HunkSplit:
     """Split `hunks` (HEAD coordinates, all of `path`) into what `run_id` may land and what holds.
 
@@ -119,9 +124,13 @@ def own_hunks(
     Attribution: a claimant's delta is the worktree line ranges that differ from its baseline blob
     (difflib, in process). A hunk belongs to a claimant when its worktree-side span intersects that
     delta; a hunk claimed by exactly one of {run_id, holders} is attributed, any other is
-    `unattributed`."""
+    `unattributed`.
+
+    `head_blob` is the HEAD blob sha of `path` (None when HEAD lacks it). When the run's baseline blob
+    equals it, the path was clean at stage, so every hunk of HEAD against the tree is the run's delta
+    even where the diff is past the match bound (a generator rewriting a file end to end)."""
     try:
-        return _split(Path(root), run_id, path, list(hunks), holders)
+        return _split(Path(root), run_id, path, list(hunks), holders, head_blob)
     except Exception:  # noqa: BLE001 -- unknown holds
         return HunkSplit(own=[], overlapping={}, unattributed=list(hunks))
 
@@ -284,12 +293,13 @@ def _delta_spans(baseline: list[bytes], tree: list[bytes]) -> list[tuple[int, in
 
 def _claimant_delta(
     root: Path, common_dir: Path, claimant: str, path: str, tree: list[bytes], *, coarse_ok: bool = False,
-    absent_claims_all: bool = False,
+    absent_claims_all: bool = False, head_blob: object = _HEAD_UNKNOWN,
 ) -> Optional[list[tuple[int, int]]]:
     """Delta spans of `claimant`, or None when its baseline cannot explain anything.
 
     Past the match bound a holder (`coarse_ok`) claims its whole trimmed middle as one span, so a hunk
-    the lander also edited there has two owners and holds; the lander gets None (unknown holds)."""
+    the lander also edited there has two owners and holds; the lander gets None (unknown holds) unless
+    its baseline blob is `head_blob`: nothing predates the run, so it claims the whole file."""
     from coordinator_core.git import git_objects
     from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
 
@@ -309,6 +319,8 @@ def _claimant_delta(
             return None
         old = obj[1].splitlines(keepends=True)
     if exceeds_match_bound(old, tree) and not coarse_ok:
+        if head_blob is not _HEAD_UNKNOWN and sha == head_blob:
+            return [(0, 1 << 62)]
         return None  # the coarse span would claim pre-baseline hunks too: unknown holds
     return _delta_spans(old, tree)
 
@@ -378,7 +390,21 @@ def _foreign_spans(root: Path, common_dir: Path, run_id: str, path: str, tree: l
     return _delta_spans(obj[1].splitlines(keepends=True), tree)
 
 
-def _split(root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mapping[str, bool]) -> HunkSplit:
+def lineage_holders(root: Path, run_id: str) -> dict[str, bool]:
+    """`{earlier attempt: False}` for the `resumed_from` chain of `run_id`, shaped as `own_hunks` holders so
+    their baseline deltas count as the run's own (`own_lineage`). Unreadable ledger: empty."""
+    from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+    try:
+        return {h: False for h in _resumed_chain(Path(root), run_id) if h != run_id}
+    except Exception:  # noqa: BLE001 -- no lineage: prior attempts' bytes stay unattributed
+        return {}
+
+
+def _split(
+    root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mapping[str, bool],
+    head_blob: object = _HEAD_UNKNOWN,
+) -> HunkSplit:
     from coordinator_core.git.git_dir import resolve_git_common_dir
 
     common_dir = resolve_git_common_dir(root)
@@ -390,7 +416,10 @@ def _split(root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mappi
     lineage = own_lineage(root, run_id, holders)
     claimants = [run_id, *[h for h in holders if h != run_id and h not in released and h not in lineage]]
     deltas = {
-        c: _claimant_delta(root, common_dir, c, path, tree, coarse_ok=c != run_id, absent_claims_all=c == run_id)
+        c: _claimant_delta(
+            root, common_dir, c, path, tree, coarse_ok=c != run_id, absent_claims_all=c == run_id,
+            head_blob=head_blob if c == run_id else _HEAD_UNKNOWN,
+        )
         for c in claimants
     }
     if deltas[run_id] is not None:

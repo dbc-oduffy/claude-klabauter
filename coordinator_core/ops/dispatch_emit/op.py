@@ -1035,6 +1035,14 @@ def _inherited_note_id(note: dict, run_id: str) -> str:
     return note["id"] if note["run"] == run_id else f"{note['run']}:{note['id']}"
 
 
+def _gate_resume(root: Path, run_id: str, params: dict, sizing_rel: Optional[str]) -> None:
+    """Refuse (`ResumeRefused`, a ValueError) a resume of `run_id` under its existing id that is cancelled, superseded,
+    closed or foreign-driven; the caller session is the receipt session, none behaves as legacy."""
+    from coordinator_core.ops.dispatch_emit import resume_gate
+
+    resume_gate.gate_resume(root, run_id, _receipt_session_id(params) or None, params, sizing_rel)
+
+
 def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[object]:
     """Make the run ledger-bearing and, for a `--sizing` run, seed that sizing's
     requirement_register with its PM words and the ask now; a raw ask's sizing is minted in-run and
@@ -1413,7 +1421,7 @@ _UNTYPED_PARAM_KEYS = frozenset({
     "scout_mode", "scout_questions", "lanes", "lane_count", "hot_files", "resume_missing",
     "cloud_spawn", "cross_repo_approved", "reserved_run_id", "chatty", "max_rows", "skip_landed",
     "landed_rows", "auto_split", "sibling", "local_only", "out_path", "session_id", "repo_root",
-    "_caller_cwd", "preminted_run_id", "chain_parent", "whole_set_probe",
+    "_caller_cwd", "preminted_run_id", "chain_parent", "whole_set_probe", "takeover",
 })
 
 
@@ -2950,6 +2958,7 @@ def _dispatch_emit_body(
                 if resumes_ask and _closed_for_fresh_refire(ask_root, resumes_ask):
                     closed_halt, resumes_ask = closed_halt or resumes_ask, None
                 if resumes_ask:
+                    _gate_resume(ask_root, resumes_ask, params, sizing_rel)
                     inherited_base = _recorded_run_base(ask_root, resumes_ask) or halted_run_base(
                         record_dir(ask_root, resumes_ask)
                     )
@@ -2970,6 +2979,7 @@ def _dispatch_emit_body(
                 if not aliased_param(params, "output_path", "out_path"):
                     blocker = rebind_blocker(ask_root, halted_id, _receipt_session_id(params))
                 if blocker is None:
+                    _gate_resume(ask_root, halted_id, params, sizing_rel)
                     run_id, rebound = halted_id, True
                 else:
                     resumed_from = halted_id

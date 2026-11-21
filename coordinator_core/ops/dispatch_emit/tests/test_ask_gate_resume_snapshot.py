@@ -62,7 +62,7 @@ def test_no_resume_removes_an_earlier_snapshot(repo) -> None:  # noqa: F811
     )
     (repo / PLAN_REL).unlink()
     reply = _call(repo)
-    assert "resume_rows" not in reply
+    assert reply["resume_rows"] is None
     assert _snap(repo) is None
 
 
@@ -99,7 +99,7 @@ def test_ledger_resume_writes_held_and_its_unlanded_rows_as_the_resume_set(repo,
         ledger={"plan": PLAN_REL, "unlanded": ["A2"]},
     )
     reply = _call(repo)
-    assert "resume_rows" not in reply
+    assert reply["resume_rows"] is None
     snap = _snap(repo)
     assert snap.held == HELD
     assert snap.resume_rows == frozenset({"A2"})

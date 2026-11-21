@@ -312,6 +312,31 @@ def test_under_bound_single_claimant_owns_its_edits_but_not_the_pre_baseline_hun
     assert split.unattributed == [_h(mid)]
 
 
+def test_over_bound_baseline_equal_to_head_claims_every_hunk(world, monkeypatch):
+    n = rhc.MAX_MATCHED_MIDDLE + 50
+    hunks, _mid = _pre_baseline_world(world, monkeypatch, n)
+    split = rhc.own_hunks(world.root, ME, PATH, hunks, {}, head_blob="b" * 40)  # `ME`'s baseline blob is "b" * 40
+    assert split.own == hunks
+    assert split.unattributed == []
+
+
+def test_over_bound_baseline_that_is_not_head_keeps_the_hunks_held(world, monkeypatch):
+    n = rhc.MAX_MATCHED_MIDDLE + 50
+    hunks, _mid = _pre_baseline_world(world, monkeypatch, n)
+    split = rhc.own_hunks(world.root, ME, PATH, hunks, {}, head_blob="c" * 40)
+    assert split.own == []
+    assert split.unattributed == hunks
+
+
+def test_lineage_holders_names_the_resumed_chain_without_the_run(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    monkeypatch.setattr(landing_integrity, "_resumed_chain", lambda root, rid: [ME, SENIOR])
+    assert rhc.lineage_holders(".", ME) == {SENIOR: False}
+    monkeypatch.setattr(landing_integrity, "_resumed_chain", lambda root, rid: 1 / 0)
+    assert rhc.lineage_holders(".", ME) == {}
+
+
 PRIOR = "ask-20261024T010000-dddddd"
 
 

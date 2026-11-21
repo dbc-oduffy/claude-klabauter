@@ -148,6 +148,7 @@ from coordinator_core.ops.review_tripwires import (
     TripwireScanUnavailable,
     _tracked_test_bytes as tracked_test_bytes,
     names_in,
+    scan_tokens,
     tree_scanners,
     walked_created,
 )
@@ -1035,9 +1036,14 @@ def review_reverify(
             derived = "run_diff" if edited or created else None
         try:
             skip_paths = set(edited) | set(created)
+            imports: dict = {}
             walkers = tree_scanners(repo_root, created, exclude=skip_paths) if created else []
             picked = select_for_paths(
-                repo_root, edited + created, tracked_test_bytes(repo_root, skip_paths), namers=walkers
+                repo_root,
+                edited + created,
+                tracked_test_bytes(repo_root, skip_paths, scan_tokens(edited + created, leaves=False), imports),
+                namers=walkers,
+                imports=imports,
             )
         except TripwireScanUnavailable as exc:
             picked = {"owned": [], "tripwires": [], "tripwires_not_selected": [], "notice": ""}

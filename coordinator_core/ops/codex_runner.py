@@ -171,15 +171,21 @@ def _codex_runner_start(params: dict, repo_root: Optional[Path] = None) -> dict:
     run_dir.mkdir(parents=True, exist_ok=False)
     (run_dir / _REQUEST).write_text(json.dumps(req.to_dict()), encoding="utf-8")
 
+    env = settings_home_child_env(os.environ)
+    # The parent may have loaded the install via sys.path, which does not cross exec.
+    engine_root = str(Path(__file__).resolve().parents[2])
+    inherited = filter(None, env.get("PYTHONPATH", "").split(os.pathsep))
+    env["PYTHONPATH"] = os.pathsep.join((engine_root, *inherited))
+
     try:
         with open(run_dir / LOG_FILENAME, "wb") as log:
             proc = subprocess.Popen(
-                [sys.executable, "-m", "coordinator_core.codex_runner", str(run_dir)],
+                [sys.executable, "-P", "-m", "coordinator_core.codex_runner", str(run_dir)],
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
                 cwd=req.repo_root,
-                env=settings_home_child_env(os.environ),
+                env=env,
                 **_no_console_detach_kwargs(),
             )
     except OSError as exc:

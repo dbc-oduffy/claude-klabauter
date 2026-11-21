@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path, PurePosixPath
-from typing import Dict, Iterable, List, Set, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from coordinator_core.git.run import run_git
+from coordinator_core.ops.review_token_index import RELATIVE_IMPORT
 from coordinator_core.diff_scoped_tests import _TEST_FILE_RE, _read_testpaths, _under_testpaths
 
 from coordinator_core.ops.review_tripwires import _by_basename, _names
@@ -81,7 +82,8 @@ def _imported(repo_root: Path, rel: str, sources: Set[str]) -> Set[str]:
     return _imported_text(rel, text, sources)
 
 
-def _imported_text(rel: str, text: str, sources: Set[str]) -> Set[str]:
+def import_targets(rel: str, text: str) -> Set[str]:
+    """Every module file `text` (the source of `rel`) imports, whatever the edited set."""
     hit: Set[str] = set()
     is_pkg = rel.rsplit("/", 1)[-1] == "__init__.py"
     here = module_name_for_file(rel)
@@ -104,8 +106,12 @@ def _imported_text(rel: str, text: str, sources: Set[str]) -> Set[str]:
                 tok = part.split("#")[0].split()
                 if tok and tok[0] != "*":
                     wanted.extend(_module_files(f"{base}.{tok[0]}"))
-        hit.update(p for p in wanted if p in sources)
+        hit.update(wanted)
     return hit
+
+
+def _imported_text(rel: str, text: str, sources: Set[str]) -> Set[str]:
+    return import_targets(rel, text) & sources
 
 
 def _tracked_test_index(repo_root: Path, testpaths: List[str]) -> Dict[str, List[str]]:
@@ -285,7 +291,8 @@ def _pick(
 
 
 def select_for_paths(
-    repo_root: Path, paths: Iterable[str], test_bytes: Iterable[Tuple[str, bytes]], namers: Iterable[str] = ()
+    repo_root: Path, paths: Iterable[str], test_bytes: Iterable[Tuple[str, bytes]],
+    namers: Iterable[str] = (), imports: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> dict:
     """The owned tests and capped tripwires for an edited path list, spawn-free (no git, no sha range).
 
@@ -321,15 +328,28 @@ def select_for_paths(
     by_base = _by_basename(named)
     for rel, data in test_bytes:
         scanned.append(rel)
+        if not data:
+            continue
         if by_base and _names(data, by_base):
             found.add(rel)
-        if needles and is_test(rel) and rel not in changed_src and any(n in data for n in needles):
+        # A relative import can name a sibling without its leaf appearing anywhere in the module.
+        if (
+            needles
+            and imports is None
+            and is_test(rel)
+            and rel not in changed_src
+            and (any(n in data for n in needles) or RELATIVE_IMPORT.search(data))
+        ):
             try:
                 hit = _imported_text(rel, data.decode("utf-8"), py_src)
             except UnicodeDecodeError:
                 continue
             if hit:
                 importers[rel] = hit
+    for rel, targets in (imports or {}).items():
+        hit = set(targets) & py_src
+        if hit and rel not in changed_src and is_test(rel):
+            importers[rel] = hit
     index = _stem_index(scanned, in_scope)
     picked = _pick(
         touched, changed_src, lambda p: _mapped(index, p), importers, set(importers), is_test, found

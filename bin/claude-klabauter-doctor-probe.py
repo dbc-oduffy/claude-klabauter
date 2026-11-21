@@ -2305,6 +2305,100 @@ def _run_probe_launch_chain() -> _ProbeResult:
     )
 
 
+_CROSS_SESSION_INBOUND_PROBE = "claude-klabauter.claude.cross_session_inbound"
+
+
+def _load_inbound_seeder() -> Any:
+    """Load coordinator/bin/seed-cross-session-inbound.py by path; None when absent."""
+    import importlib.util
+
+    here = Path(__file__).resolve().parent
+    for cand in (here.parent / "coordinator" / "bin", here):
+        path = cand / "seed-cross-session-inbound.py"
+        if not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("seed_cross_session_inbound", path)
+        if spec is None or spec.loader is None:
+            continue
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    return None
+
+
+def _run_probe_cross_session_inbound() -> _ProbeResult:
+    """Probe claude-klabauter.claude.cross_session_inbound — advisory.
+
+    Flags a box whose Claude Code user settings.json lacks `crossSessionInbound=accept`:
+    left at the default, peer messages are held for approval or expire. Reads through
+    the seeder's `check_file`; an unreadable or non-object settings file is reported,
+    never raised. Skips where no Claude host exists.
+    """
+    config_override = os.environ.get("CLAUDE_CONFIG_DIR")
+    claude_dir = Path(config_override) if config_override else _launch_chain_claude_home() / ".claude"
+    settings = claude_dir / "settings.json"
+    data: dict[str, Any] = {"settings_path": str(settings)}
+    if not _claude_host_present(claude_dir):
+        return _ProbeResult(
+            probe=_CROSS_SESSION_INBOUND_PROBE,
+            status=_INFO,
+            detail=f"no Claude host on this box (no `claude` on PATH, no {claude_dir})",
+            remediation="—",
+            required=False,
+            skipped=True,
+            data=data,
+        )
+    seeder = _load_inbound_seeder()
+    if seeder is None:
+        return _ProbeResult(
+            probe=_CROSS_SESSION_INBOUND_PROBE,
+            status=_INFO,
+            detail="seed-cross-session-inbound.py not found beside this probe",
+            remediation="—",
+            required=False,
+            skipped=True,
+            data=data,
+        )
+    fix = (
+        f"python scripts/setup.py (seeds {seeder.KEY}={seeder.DEFAULT} when unset), or set "
+        f"'Messages from your other sessions' to accept in /config; an explicit value is "
+        f"never overwritten"
+    )
+    try:
+        state = seeder.check_file(settings)
+    except (OSError, ValueError) as exc:
+        data["error"] = str(exc)
+        return _ProbeResult(
+            probe=_CROSS_SESSION_INBOUND_PROBE,
+            status=_DEGRADED,
+            detail=f"{settings} unreadable ({exc}); {seeder.KEY} cannot be verified",
+            remediation=f"Repair the JSON in {settings}, then re-run scripts/setup.py.",
+            required=False,
+            data=data,
+        )
+    data["state"] = state
+    if state == f"present={seeder.DEFAULT}":
+        return _ProbeResult(
+            probe=_CROSS_SESSION_INBOUND_PROBE,
+            status=_PASS,
+            detail=f"{seeder.KEY}={seeder.DEFAULT} in {settings.name}",
+            remediation="",
+            required=False,
+            data=data,
+        )
+    return _ProbeResult(
+        probe=_CROSS_SESSION_INBOUND_PROBE,
+        status=_DEGRADED,
+        detail=(
+            f"{seeder.KEY} is {state} in {settings}, not {seeder.DEFAULT} — peer messages "
+            "(Unimatrix, G-EM direction, receipts) are held for approval or expire"
+        ),
+        remediation=fix,
+        required=False,
+        data=data,
+    )
+
+
 _VENDOR_DRIFT_PROBE = "claude-klabauter.schema.vendor_drift"
 
 
@@ -5869,6 +5963,7 @@ def run_probes(
     _add(_INVOKE_LATENCY_PROBE, _run_probe_invoke_latency, claude_klabauter_root)
     _add(_EXECNET_GATEWAY_PROBE, _run_probe_orphaned_execnet_gateways)
     _add(_LAUNCH_CHAIN_PROBE, _run_probe_launch_chain)
+    _add(_CROSS_SESSION_INBOUND_PROBE, _run_probe_cross_session_inbound)
     _add(_WARM_RESIDENCY_PROBE, _run_probe_warm_residency, claude_klabauter_root)
     _add(_WARM_GENERATION_PROBE, _run_probe_warm_generation, claude_klabauter_root)
     _add(_WARM_ROUTE_SHARE_PROBE, _run_probe_warm_route_share, claude_klabauter_root)

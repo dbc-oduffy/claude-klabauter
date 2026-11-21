@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 
 import pytest
@@ -49,9 +50,47 @@ def test_start_writes_request_and_spawns_detached(home, popen, tmp_path: Path) -
     assert json.loads((run_dir / "child.json").read_text(encoding="utf-8")) == {"pid": 31337}
 
     argv, kw = popen[0]
-    assert argv[1:] == ["-m", "coordinator_core.codex_runner", str(run_dir)]
+    assert argv[1:] == ["-P", "-m", "coordinator_core.codex_runner", str(run_dir)]
     assert kw.get("start_new_session") is True or "creationflags" in kw
     assert kw["stdin"] is subprocess.DEVNULL
+
+
+@pytest.mark.spawns_process
+def test_worker_imports_from_install_with_no_python_on_path(home, tmp_path, monkeypatch):
+    engine = tmp_path / "installed"
+    worker = engine / "coordinator_core" / "codex_runner"
+    worker.mkdir(parents=True)
+    for package in (worker.parent, worker):
+        (package / "__init__.py").write_text("", encoding="utf-8")
+    (worker / "__main__.py").write_text("print('installed worker')\n", encoding="utf-8")
+    monkeypatch.setattr(op, "__file__", str(worker.parent / "ops" / "codex_runner.py"))
+    product = tmp_path / "consumer"
+    shadow = product / "coordinator_core"
+    shadow.mkdir(parents=True)
+    (shadow / "__init__.py").write_text("raise RuntimeError('consumer shadow')\n", encoding="utf-8")
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.setenv("PATH", "")
+    popen = subprocess.Popen
+    children = []
+
+    def launch(argv, **kwargs):
+        assert argv[0] == sys.executable
+        child = popen(argv, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(op.subprocess, "Popen", launch)
+    out = op._codex_runner_start(_review(product))
+    child, = children
+    try:
+        code = child.wait(timeout=10)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+    log = (Path(out["run_dir"]) / "worker.log").read_text(encoding="utf-8")
+    assert code == 0 and log.strip() == "installed worker", log
 
 
 @pytest.mark.parametrize(

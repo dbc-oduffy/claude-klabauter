@@ -537,7 +537,8 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
     root = Path(repo).resolve()
     if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_id):
         raise ValueError("host Verify tests requires a valid active run ID")
-    run_dir = root / "state" / "warp" / run_id
+    from coordinator_core.session.record_homes import home_dir
+    run_dir = Path(home_dir(str(root), "warp")) / run_id
     output = run_dir / "test-leg.json"
     if (root / params["out_path"]).resolve() != output or output.resolve() != output:
         raise ValueError("host Verify tests output does not belong to the active run")
@@ -624,8 +625,9 @@ def _test_infra_failure(root: Path, artifacts: Path, targets: list[str], measure
 
 def _declared_code_paths(repo: str, run_key: str) -> list[str]:
     """The run manifest's `review_code_paths`, [] when the manifest is absent, unreadable or declares none."""
+    from coordinator_core.session.record_homes import home_dir
     try:
-        data = json.loads((Path(repo) / "state" / "warp" / run_key / "manifest.json").read_text(encoding="utf-8"))
+        data = json.loads((Path(home_dir(str(repo), "warp")) / run_key / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return []
     paths = data.get("review_code_paths") if isinstance(data, dict) else None
@@ -824,6 +826,54 @@ def _preflight_failed(record_path: Path, record: dict, exc: Exception) -> dict:
     return record
 
 
+_GATE_RELAY_GUIDANCE = (
+    "\n\nFor dispatch.ask_gate, use the JSON-RPC result on stdout when the command exits 0. "
+    "Separate stderr diagnostics do not turn a successful gate result into a refusal. "
+    "The shell tool may display both streams together. Preserve any halt in the result itself. "
+    "Report a command failure for a nonzero exit, a JSON-RPC error, or a missing or invalid result."
+)
+_GATE_COMMAND = re.compile(r"(?<![\w.-])dispatch\.ask_gate(?![\w.-])")
+_GATE_OUTPUT_LIMIT = 32_768
+_GATE_TRACE_LIMIT = 256 * 1024
+_GATE_EVENTS_LIMIT = 4
+
+
+def _journal_gate_commands(agent_dir: Path, request_id: str, journal) -> None:
+    """Copy candidate gate diagnostics from Codex's combined stream, without treating them as receipts."""
+    try:
+        with (agent_dir / "stdout.jsonl").open("rb") as stream:
+            remaining, copied = _GATE_TRACE_LIMIT, 0
+            while remaining and copied < _GATE_EVENTS_LIMIT:
+                line = stream.readline(remaining)
+                remaining -= len(line)
+                if not line or not line.endswith(b"\n"):
+                    break
+                try:
+                    event = json.loads(line.decode("utf-8", errors="replace"))
+                except ValueError:
+                    continue
+                if not isinstance(event, dict) or event.get("type") != "item.completed":
+                    continue
+                item = event.get("item")
+                if not isinstance(item, dict) or item.get("type") != "command_execution":
+                    continue
+                command = item.get("command")
+                output = item.get("aggregated_output")
+                if (not isinstance(command, str) or "coordinator-invoke" not in command
+                        or not _GATE_COMMAND.search(command) or not isinstance(output, str)):
+                    continue
+                journal({
+                    "type": "gate-command-output", "id": request_id, "op": "dispatch.ask_gate",
+                    "tool_item_id": item.get("id"), "exit_code": item.get("exit_code"),
+                    "combined_output": output[:_GATE_OUTPUT_LIMIT], "truncated": len(output) > _GATE_OUTPUT_LIMIT,
+                    "verified": False,
+                })
+                copied += 1
+    except OSError:
+        # Evidence collection must preserve the original worker result or exception.
+        pass
+
+
 def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
             private_engine_factory=None) -> dict:
     from coordinator_core.codex_runner.workflow import run_agent
@@ -937,6 +987,10 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                             process.kill()
                             raise RuntimeError(refusal)
                         request_id = str(event['id'])
+                        options = event.get('options', {})
+                        agent_dir = artifacts / 'agents' / request_id
+                        gate_relay = (record['backend'] == 'codex' and options.get('phase') == 'gate'
+                                      and options.get('label') == 'gate')
                         extra = {}
                         spawned = False
                         commit_prompt = None
@@ -956,8 +1010,11 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                                     'bindings_path': str(private.bindings_path)},
                             }
                         try:
-                            reply['result'] = runner(commit_prompt or event['prompt'], event.get('options', {}),
-                            repo_root=Path(record['repo_root']), artifact_dir=artifacts / 'agents' / str(event['id']),
+                            prompt = commit_prompt or event['prompt']
+                            if gate_relay:
+                                prompt += _GATE_RELAY_GUIDANCE
+                            reply['result'] = runner(prompt, options,
+                            repo_root=Path(record['repo_root']), artifact_dir=agent_dir,
                             backend=record['backend'], timeout_s=remaining,
                             parent_session_id=record.get('caller_session_id'),
                             request_id=request_id, fire_id=record['fire_id'],
@@ -971,6 +1028,8 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                                 # The model reply is not proof: replace it with the host's sealed result.
                                 reply['result'] = _private_commit_receipt(private, request_id, record)
                         finally:
+                            if gate_relay:
+                                _journal_gate_commands(agent_dir, request_id, journal)
                             if private is not None and spawned:
                                 private.end_worker(request_id)
                 except Exception as exc:

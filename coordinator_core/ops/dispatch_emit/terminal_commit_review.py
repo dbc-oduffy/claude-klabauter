@@ -622,11 +622,14 @@ def verdict_judged_shas(worktree_root: Path, inline_review: object) -> dict:
         except Exception:  # noqa: BLE001 -- an unreadable or malformed sidecar pins nothing
             continue
         read_any = True
-        fixed.update(_worktree_relative(worktree_root, f) for f in _applied_row_paths(text))
+        applied = {_worktree_relative(worktree_root, f) for f in _applied_row_paths(text)}
+        fixed.update(applied)
+        textless = applied - {_worktree_relative(worktree_root, f) for f, _ in _applied_fix_rows(text)}
         own = fm.get(VERDICT_JUDGED_KEY) if isinstance(fm, dict) else None
         for p, sha in (own.items() if isinstance(own, dict) else ()):
-            if isinstance(p, str) and isinstance(sha, str) and sha:
-                out.setdefault(p.replace("\\", "/"), []).append(sha)
+            key = _worktree_relative(worktree_root, p) if isinstance(p, str) else None
+            if key and key not in textless and isinstance(sha, str) and sha:
+                out.setdefault(key, []).append(sha)
     if read_any:
         for p, sha in _prep_judged_shas(worktree_root, inline_review).items():
             if p not in fixed:
@@ -762,6 +765,21 @@ def _less_run_agent_edits(
     ]
 
 
+def _less_applied_fix_edits(worktree_root: Path, inline_review: object, stale: list) -> list:
+    """``stale`` less each path whose current bytes carry every change the wave's verified applied
+    ledger rows recorded for it (``_carries_applied_fix``): the run's own finding-application wrote
+    those bytes after the pin was taken. A foreign rewrite that lacks the fix stays stale."""
+    listed = inline_review.get("wave_sidecar_paths") if isinstance(inline_review, dict) else None
+    if not stale or not isinstance(listed, list):
+        return stale
+    rows: dict = {}
+    for w in listed:
+        if isinstance(w, str) and w:
+            for f, pairs in _reviewer_fix_rows(worktree_root / w).items():
+                rows.setdefault(_worktree_relative(worktree_root, f), []).extend(pairs)
+    return [p for p in stale if p not in rows or not _carries_applied_fix(worktree_root / p, rows[p])]
+
+
 def verdict_pin_mismatches(
     worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None,
     run_agent_events: Optional[Callable[[Sequence[str]], dict]] = None,
@@ -774,6 +792,7 @@ def verdict_pin_mismatches(
 
     judged = verdict_judged_shas(worktree_root, inline_review)
     stale = judged_mismatches(worktree_root, judged, list(judged) if within is None else [q for q in (str(p).replace("\\", "/") for p in within) if q in judged])
+    stale = _less_applied_fix_edits(worktree_root, inline_review, stale)
     stale = _less_reverify_edits(worktree_root, inline_review, _less_reviewer_edits(worktree_root, inline_review, stale))
     return _less_run_agent_edits(worktree_root, inline_review, stale, run_agent_events)
 

@@ -73,6 +73,8 @@ def build(root, run_id: str) -> Optional[dict]:
     from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit, _installed_plugin_root
     from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
+    from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
+    from coordinator_core.ops.dispatch_emit.halt_tree_evict import EVICTED_FILE
     from coordinator_core.ops.dispatch_emit.emit import resolve_agent_type_host
     from coordinator_core.ops.dispatch_emit.sizing_fire import (
         SizingFireRefused, SizingHandBack, load_sizing_effective, resolve_arm, resumable_plan,
@@ -103,7 +105,7 @@ def build(root, run_id: str) -> Optional[dict]:
         def _read_only():
             gated = _gate_sizing_at_emit(root, sizing_rel, [])
             effective = load_sizing_effective(root, sizing_rel)
-            return gated, resumable_plan(effective, sizing_rel, root, resolve_arm(effective))
+            return gated, resumable_plan(effective, sizing_rel, root, resolve_arm(effective), eviction_run_id=run_id)
 
         ask_sizing, resume = retry_past_stall(resolve_git_common_dir(root), _read_only)
         resume_plan_rel = resume.plan_rel if resume else None
@@ -131,6 +133,9 @@ def build(root, run_id: str) -> Optional[dict]:
             ask_source=ASK_SOURCE_PM,
             run_base_sha=run_base,
             stop_after=stop_after,
+            # A row resume must select missing outputs before stage restores any of them.
+            restore_evicted_run=(resume is None or not resume.incomplete)
+            and (rd / EVICTED_FILE).is_file() and (rd / WITHHELD_OWN_DELTA_FILE).is_file(),
         )
         target = rd / COMPOSED_SCRIPT_FILE
         atomic_write_bytes(target, script.encode("utf-8"))

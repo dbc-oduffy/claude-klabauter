@@ -71,20 +71,38 @@ def _receipt_path(root: Path, run_id: str) -> Path:
     return record_dir(_base(root), run_id) / RECEIPT_FILE
 
 
-def append_receipt(root: Path, run_id: str, stage_id: str, worker_pid: Optional[int] = None) -> Optional[dict]:
-    """Append this launch's receipt and return it; None when the run's record dir cannot take it."""
+def append_receipt(
+    root: Path, run_id: str, stage_id: str, worker_pid: Optional[int] = None, launcher: Optional[str] = None,
+) -> Optional[dict]:
+    """Append this launch's receipt and return it; None when the run's record dir cannot take it.
+    `launcher` (e.g. "workflow") is recorded only when given."""
     try:
         line = {
             "run_id": run_id, "stage_id": stage_id, "worker_pid": worker_pid, "engine_pid": os.getpid(),
             **process_identity(),
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         }
+        if launcher:
+            line["launcher"] = launcher
         path = _receipt_path(root, run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("ab") as stream:
             stream.write((json.dumps(line, separators=(",", ":")) + "\n").encode("utf-8"))
         return line
     except (OSError, ValueError):
+        return None
+
+
+def append_stage_start_receipt(root: Path, run_id: str, stage_id: str, launcher: str = "workflow") -> Optional[dict]:
+    """The engine-side receipt for a launcher with no worker spawn (an in-session Workflow): one line with
+    `worker_pid` null, skipped when the run already has a receipt so a spawn recorder's lines are not doubled.
+    Never raises."""
+    try:
+        path = _receipt_path(root, run_id)
+        if path.is_file() and path.stat().st_size > 0:
+            return None
+        return append_receipt(root, run_id, stage_id, None, launcher)
+    except Exception:  # noqa: BLE001 -- evidence, never a stage gate
         return None
 
 

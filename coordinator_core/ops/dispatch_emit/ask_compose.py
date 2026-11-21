@@ -319,6 +319,9 @@ _VERDICT_COUNT_JS = (
 # A prior-wave slice that is BLOCKED with unapplied findings (findings > applied); one with
 # findings == applied (e.g. 0/0) counts as done. Shared by the re-review filter and the _reviewSeed carry-over.
 _BLOCKED_UNAPPLIED_JS = "w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0)"
+# `_BLOCKED_UNAPPLIED_JS` minus a slice `_out_of_footprint_demand_js` tagged: the predicate the recover loop and
+# the halt read. The resume filter and seed keep the untagged form, so a tagged slice is re-reviewed on resume.
+_BLOCKING_UNAPPLIED_JS = _BLOCKED_UNAPPLIED_JS + " && !w.out_of_footprint_demand"
 # Ids of the prior review wave's blocked slices ('+'-joined group ids split into members); null on a
 # fresh run, a reused review, or an empty result. Trap: the ids match only if review.prep reissues the
 # halted wave's slice ids on the resumed run; a mismatch leaves reviewers with nothing and the blocked
@@ -914,8 +917,9 @@ _CHAIN_EMIT_RELAY = {
     "type": ["object", "null"],
     "properties": {"path": _STR, "run_id": _STR, "error": _STR},
 }
+_GATE_CONTINUATION_KEYS = ["resume_plan", "resume_rows"]
 _GATE_SCHEMA = _obj(
-    ["arm", "halt"],
+    ["arm", "halt", *_GATE_CONTINUATION_KEYS],
     {
         "chain_emit": _CHAIN_EMIT_RELAY,
         "arm": {"type": ["string", "null"]},
@@ -945,6 +949,7 @@ def _ruling_schema(ruling_schema: dict) -> dict:
     """A ruling agent's return: its ruling plus the gate reply of its own record call."""
     return {
         **ruling_schema,
+        "dependentRequired": {key: _GATE_CONTINUATION_KEYS for key in ("arm", "halt")},
         "properties": {
             **_GATE_SCHEMA["properties"],
             **ruling_schema["properties"],
@@ -1553,7 +1558,7 @@ _STAGE_RECOVER_PARAMS_JS = (
     "    try { _g = _gate; } catch (e) { _g = null; }\n"
     "    const _plan = _planRel || (_g && " + _RESUME_PLAN_SHAPE_JS + "(_g.resume_plan) ? _g.resume_plan : null);\n"
     "    if (_plan) {\n"
-    "      const _only = (_g && Array.isArray(_g.resume_rows) && _g.resume_rows.length) ? { only_rows: _g.resume_rows } : {};\n"
+    "      const _only = (_g && Array.isArray(_g.resume_rows)) ? { only_rows: _g.resume_rows } : {};\n"
     "      return { run_id: _runId, plan_path: _plan, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
     "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}), ..._only };\n"
     "    }\n"
@@ -1861,6 +1866,65 @@ def _review_test_infra_halt_js(sizing_rel: Optional[str]) -> str:
     )
 
 
+_DEMANDED_PATHS_DESCRIPTION = (
+    "Only on a BLOCKED slice whose unapplied findings each need a file changed: every such file, one entry per file, "
+    "repo-relative for a file in the repo and absolute for a deployed copy outside it (a plugin cache, settings-home bin). "
+    "Omit when any unapplied finding needs no file or the paths are unknown."
+)
+
+
+def _with_demanded_paths(stage_schemas: dict) -> dict:
+    """`stage_schemas` with the optional `demanded_paths` array added to `slice-review-result`.
+
+    The vendored schema is closed (`additionalProperties: false`) and counts-only, so the halt cannot
+    tell where an unapplied finding points without it. Returns a copy; a schema set without the
+    slice result is returned as given.
+    """
+    slice_schema = stage_schemas.get("slice-review-result")
+    if not isinstance(slice_schema, dict) or not isinstance(slice_schema.get("properties"), dict):
+        return stage_schemas
+    props = {
+        **slice_schema["properties"],
+        "demanded_paths": {
+            "type": "array", "items": {"type": "string", "maxLength": 300},
+            "description": _DEMANDED_PATHS_DESCRIPTION,
+        },
+    }
+    return {**stage_schemas, "slice-review-result": {**slice_schema, "properties": props}}
+
+
+def _out_of_footprint_demand_js(repo_root: str) -> str:
+    """JS tagging each BLOCKED slice whose `demanded_paths` all lie outside the repo and outside
+    `_manifest.review_declared_paths` with `out_of_footprint_demand` (the paths), and recording each as an
+    advisory on `_reviewIntegration.em_may_think_differently`.
+
+    Trap: a slice naming no paths, or any in-repo or in-footprint path, stays untagged and blocks; a
+    repo-relative path outside the footprint is a gap a row can cover, never external. Absolute paths
+    under `repo_root` are read as repo-relative.
+    """
+    root = Path(repo_root).as_posix().rstrip("/")
+    return (
+        "  if (Array.isArray(_reviewWave)) {\n"
+        "    const _odPosix = (p) => { let s = String(p).replace(/\\\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };\n"
+        f"    const _odRoot = {json.dumps(root)}.toLowerCase() + '/';\n"
+        "    const _odRel = (p) => { const s = _odPosix(p); return (/^([A-Za-z]:|\\/)/.test(s) && s.toLowerCase().startsWith(_odRoot)) ? s.slice(_odRoot.length) : s; };\n"
+        "    const _odFp = [...new Set((_manifest?.review_declared_paths ?? []).map(_odPosix))];\n"
+        "    const _odIn = (p) => _odFp.some((f) => p === f || p.startsWith(f.replace(/\\/+$/, '') + '/'));\n"
+        "    const _odOut = (p) => /^([A-Za-z]:|\\/|~|\\.\\.(\\/|$))/.test(p) && !_odIn(p);\n"
+        "    _reviewWave = _reviewWave.map((w) => {\n"
+        f"      if (!(w && {_BLOCKED_UNAPPLIED_JS})) return w;\n"
+        "      const dp = Array.isArray(w.demanded_paths) ? w.demanded_paths.map(_odRel) : [];\n"
+        "      if (!dp.length || !dp.every(_odOut)) return w;\n"
+        "      if (_reviewIntegration && typeof _reviewIntegration === 'object' && Array.isArray(_reviewIntegration.em_may_think_differently)) {\n"
+        "        _reviewIntegration.em_may_think_differently.push({ line: ('advisory: slice ' + (w.slice_id ?? '?') + ' demands out-of-footprint deployed file(s) the run cannot land: ' + dp.join(', ')).slice(0, 300), anchor: String(w.sidecar_path ?? '') });\n"
+        "      }\n"
+        "      log('review demand outside the run footprint is advisory, slice ' + (w.slice_id ?? '?') + ': ' + dp.join(', '));\n"
+        "      return { ...w, out_of_footprint_demand: dp };\n"
+        "    });\n"
+        "  }"
+    )
+
+
 #: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
 #: null (degraded / verify-only) wave entries never match.
 def _review_blocked_halt_js(
@@ -1893,7 +1957,7 @@ def _review_blocked_halt_js(
     return (
         "  const _reviewBlockedHalt = () => {\n"
         "    const _blockedSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
-        "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0));\n"
+        "(w) => w && " + _BLOCKING_UNAPPLIED_JS + ");\n"
         "    const _sc = (typeof _selfCorrection !== 'undefined') ? _selfCorrection : null;\n"
         "    const _scPre = _sc ? ('Self-correction ran ' + _sc.attempts + ' fix leg(s) and ended ' + _sc.status + "
         "(_sc.gaps.length ? ', leaving: ' + _sc.gaps.join('; ') : '') + '. ') : '';\n"
@@ -2104,7 +2168,7 @@ def _review_recover_js(
         .replace("__PROGRESSED__", PROGRESSED_JS)
         .replace("__FLAKES__", CLASSIFY_FLAKES_JS)
         .replace("__XS__", _lit(ARM_XS))
-        .replace("__BLOCKED__", _BLOCKED_UNAPPLIED_JS)
+        .replace("__BLOCKED__", _BLOCKING_UNAPPLIED_JS)
         .replace("__FOREIGN__", FOREIGN_FIELD)
         .replace("__CAP__", str(SELF_CORRECTION_CAP))
         .replace("__FIXCALL__", fix_call)
@@ -2139,7 +2203,7 @@ def _criterion_blocker_halt_js(sizing_rel: Optional[str]) -> str:
         )
         + "    if (_cnFailing.length) {\n"
         "      const _cnSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
-        "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0))"
+        "(w) => w && " + _BLOCKING_UNAPPLIED_JS + ")"
         ".map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));\n"
         "      const _cnClaimed = _manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids : [];\n"
         "      _halted = { ..._halted, blocker: " + json.dumps(TEST_BLOCKER) + ", failing: _cnFailing, gaps: _cnGaps, "
@@ -4655,6 +4719,7 @@ def compose_ask_script(
     objective: Optional[dict] = None,
     staged_out: Optional[dict] = None,
     carried_notes: Sequence[dict] = (),
+    restore_evicted_run: bool = False,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -4730,6 +4795,7 @@ def compose_ask_script(
         from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
 
         review_roster_fragment, review_stage_schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
+    review_stage_schemas = _with_demanded_paths(review_stage_schemas)
     reviewer_fallbacks: list[str] = []
     stage_types, stage_models, code_review_routed = _resolve_stage_agents(
         repo_root, prompt, writes, reviewer_fallbacks
@@ -4930,6 +4996,18 @@ def compose_ask_script(
     b.append("  if (typeof log === 'undefined') globalThis.log = () => {};")
     b.append(f"  const REPO_ROOT = {_lit(repo_root)};")
     b.append(f"  const _runId = {_lit(run_id)};")
+    if restore_evicted_run:
+        # Trap: engineOp is the only direct call; there is no agent relay. A refusal or error halts before any leg runs.
+        b.append(
+            "  try {\n"
+            "    if (typeof engineOp !== 'function') throw new Error('engineOp unavailable');\n"
+            "    const _restore = await engineOp('dispatch.restore_evicted', { run_id: _runId });\n"
+            "    log('restore-evicted: ' + JSON.stringify(_restore));\n"
+            "    if (_restore && _restore.refused) throw new Error(String(_restore.refused));\n"
+            "  } catch (err) {\n"
+            f"    return {{ halted: {_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: 'restore-evicted: ' + String(err?.message ?? err) }};\n"
+            "  }"
+        )
     b.append(f"  const _SESSION_ID = {_lit(session_id or '')};")
     b.append(f"  let _sizingRel = {_lit(sizing_rel) if sizing_rel else 'null'};")
     writes_literal = json.dumps(list(writes))
@@ -5090,9 +5168,9 @@ def compose_ask_script(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(extra_js=extra_js),
-            f"'{_repo_flag(repo_root)}` and return its JSON reply verbatim; "
+            f"'{_repo_flag(repo_root)}` and return its JSON reply verbatim, including resume_plan and resume_rows even when null; "
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
-            "and halt both null.",
+            "and halt both null. For a failed command, include resume_plan and resume_rows as null.",
         )
         relay = _agent(
             gate_prompt, label=label, phase=phase_title, agent_type=_GATE_AGENT_TYPE,
@@ -5597,7 +5675,8 @@ def compose_ask_script(
         return [
             " When, and only when, your verdict is 'ruled', run this one command once, with ",
             fields + " set in its `record` member, and return its JSON reply verbatim as arm, halt, baton, ",
-            "recorded and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, resume_phases, beside your verdict, pmOnly and ruling. "
+            "recorded, resume_plan and resume_rows (including null values), and (when present) resume_ledger, "
+            "pending_rulings, spine_plan, resume_ready and resume_phases, beside your verdict, pmOnly and ruling. "
             f"On 'pm-only' run nothing. `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(record_js),
             f"'{_repo_flag(repo_root)}` That command is the only way you write the sizing: never edit it by hand.",
@@ -6948,6 +7027,7 @@ def compose_ask_script(
     b.append(_review_test_infra_halt_js(sizing_rel))
     b.append(_WAVE_DIFF_RECONCILE_JS)
     b.append(_TESTS_NOT_RUN_JS)
+    b.append(_out_of_footprint_demand_js(repo_root))
     b.append(
         _review_recover_js(
             head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, run_id=run_id, stager=stager,

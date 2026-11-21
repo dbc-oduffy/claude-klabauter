@@ -1,6 +1,6 @@
 """workflow.cancel: stop one live warp run by run_id.
 
-Writes the run's `halted.json` with `halted="cancelled"` (a halted record a refire resumes) and drops
+Writes the run's `halted.json` with `halted="cancelled"` (a halted record no refire resumes) and drops
 the run from the live-run index, releasing its claim markers. `dispatch.ask_stage` refuses the next
 stage start of a run whose marker reads cancelled (`cancelled_refusal`), and the headless driver checks it
 before each agent. The run's live headless fire is stopped in-engine (`fire_stop`): identity-verified, tree
@@ -26,7 +26,7 @@ _PARAMS = (
     Field("reason", "str"),
 )
 
-_DEFAULT_DETAIL = "cancelled by workflow.cancel; a refire resumes the run"
+_DEFAULT_DETAIL = "cancelled by workflow.cancel; fire the sizing fresh"
 
 
 def cancelled_refusal(record_dir: Path) -> Optional[str]:
@@ -40,7 +40,7 @@ def cancelled_refusal(record_dir: Path) -> Optional[str]:
         return None
     return (
         f"run {Path(record_dir).name} was cancelled by workflow.cancel; no further stage starts. "
-        "Refire its sizing to resume it."
+        "Fire its sizing fresh (`args.fresh: true`)."
     )
 
 
@@ -49,7 +49,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.cancel": params `run_id` (str, required), `reason` (str, optional).
 
     Marks the live run cancelled in `state/warp/<run_id>/halted.json` (`halted: "cancelled"`, with a
-    refire `next_action`), then drops it from the live-run index and releases its claims. Replies
+    `next_action`), then drops it from the live-run index and releases its claims. Replies
     `{ok, run_id, halted, sizing, already_cancelled, stopped, released}`, plus `fire_still_running`
     (pids) with `released=false` when a verified fire process survives the stop. A run with no record dir, one whose
     marker is landed, closed or superseded, or one bound to no sizing replies `{"error": str}`;
@@ -78,7 +78,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if status == halted_run.STATUS_HALTED and (marker or {}).get("halted") == CANCELLED:
         return _release(root, run_id, sizing_rel, already_cancelled=True)
     if sizing_rel is None:
-        return {"error": f"workflow.cancel: run {run_id} is bound to no sizing, so a refire could not resume it"}
+        return {"error": f"workflow.cancel: run {run_id} is bound to no sizing, so a fresh fire could not bind it"}
     detail = (params.get("reason") or "").strip() or _DEFAULT_DETAIL
     prior = marker or {}
     halted_run.write_halt_marker(

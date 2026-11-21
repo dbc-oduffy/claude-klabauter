@@ -124,14 +124,17 @@ programmatically.md defect 2):
     type is ``handoff`` and its ``where`` clause carries ``roadmap_id=`` —
     the same live+archived union
     ``coordinator_core.roadmap.audit``'s stub-coverage checks already
-    perform explicitly for the identical reason. Deliberately NOT a
+    perform explicitly for the identical reason. Only archived batons NOT in
+    ``HANDOFF_TERMINAL_DEPLOYMENT`` are unioned (``_unfinished_archived``): a
+    terminal archived row is one a newer commit may have dropped, and
+    re-rendering it rolled that commit back. Deliberately NOT a
     ``_TYPE_TO_GLOB['handoff']`` widening: that glob is relied on elsewhere
     (``session_hierarchy_derive.py``, ``ceremony/renderers.py``,
     ``roadmap/number_stubs.py``) for strictly-live semantics with no
     ``roadmap_id`` filter in play, so this fix is scoped to the
     roadmap_id-filtered shape only. Each archived record's own
     ``deployment_state`` (present on every archived baton's frontmatter,
-    e.g. ``shipped``) renders correctly through the *same* ``handoff``
+    e.g. ``in_flight``) renders correctly through the *same* ``handoff``
     ``TYPE_DISPLAY`` entry used for live records — no display-layer change
     needed — and its link resolves against its real
     ``archive/handoffs/**`` path (``_load_record``'s own ``rel_path``),
@@ -155,6 +158,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, TypedDict
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.session import claims
 from coordinator_core.text.sentinel_blocks import replace_block
 from coordinator_core.text.query_record_display import format_records
@@ -463,6 +467,18 @@ def _query_type(record_type: str, root: str, where: Optional[str], since: Option
     return copy.deepcopy(filter_records(memo[key], where, since))
 
 
+def _unfinished_archived(archived: list) -> list:
+    """Archived batons a roadmap callout still renders: those not in a terminal deployment state.
+
+    A terminal archived row is one a newer commit may have dropped from the callout;
+    re-rendering it would roll that commit back.
+    """
+    return [
+        r for r in archived
+        if str(r["frontmatter"].get("deployment_state") or "") not in HANDOFF_TERMINAL_DEPLOYMENT
+    ]
+
+
 def _run_query_records_native(
     query_opts: QuerySpec, root: str, from_dir: Optional[str] = None
 ) -> str:
@@ -478,8 +494,7 @@ def _run_query_records_native(
         with contextlib.redirect_stderr(captured_stderr):
             records = _query_type(record_type, root, where, since)
             if record_type == "handoff" and where and _ROADMAP_ID_WHERE_RE.search(where):
-                archived = _query_type("handoff-archived", root, where, since)
-                records = records + archived
+                records = records + _unfinished_archived(_query_type("handoff-archived", root, where, since))
     except ValueError as exc:
         sys.stderr.write(captured_stderr.getvalue())
         raise QueryRecordsBusinessError(str(exc)) from exc

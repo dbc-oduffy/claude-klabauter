@@ -854,8 +854,10 @@ def resolve_receiver_inbox(
     A publish mirror or a redirect alias is never a receiver. A memo addressed
     to one routes to its owner (`reroute_owner`): `claude-klabauter-em` resolves
     to `claude-klabauter-em`'s inbox, `coordinator-claude-em` to `coordinator-content-repo-em`'s.
-    A mirror with no owner declared resolves to no receiver at all (the
-    `(None, None, all_repos)` UNKNOWN shape), never to the mirror's own inbox.
+    A known receiver (reroute target, central id, redirect alias, declared mirror) with no
+    deliverable non-mirror checkout on this box resolves to the G-EM home inbox, never to a
+    mirror's own inbox. An unknown id resolves to no receiver (the `(None, None, all_repos)`
+    UNKNOWN shape).
 
     Returns:
         (inbox_dir, receiver_repo_path, all_repos) where inbox_dir is the
@@ -898,7 +900,8 @@ def resolve_receiver_inbox(
     owner = reroute_owner(receiver_em_id)
     if owner and owner.strip().lower() != receiver_em_id.strip().lower():
         if reroute_owner(owner) is None:
-            return resolve_receiver_inbox(owner)
+            routed = resolve_receiver_inbox(owner)
+            return routed if routed[0] is not None else _group_em_target()
     all_repos = read_registry_repos()
     central_ids = read_central_receiver_ids()
     normalized_id = receiver_em_id.strip().lower()
@@ -911,11 +914,13 @@ def resolve_receiver_inbox(
         repo_key = receiver_em_to_repo_key(receiver_em_id)
     repo_path_str = all_repos.get(repo_key) if repo_key else None
     if not repo_path_str:
+        if normalized_id in central_ids or normalized_id in read_redirect_aliases():
+            return _group_em_target()
         return None, None, all_repos
     receiver_repo_path = Path(repo_path_str)
     _refuse_external_workspace(receiver_em_id, str(receiver_repo_path))
     if publish_mirror_path_match(receiver_repo_path):
-        return None, None, all_repos
+        return _group_em_target()
     corpus_root_str, _ = receiver_inbox_root(str(receiver_repo_path))
     inbox_dir = Path(corpus_root_str) / "inbox"
     return inbox_dir, receiver_repo_path, all_repos
