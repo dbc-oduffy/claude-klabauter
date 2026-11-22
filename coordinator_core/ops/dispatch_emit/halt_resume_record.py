@@ -232,19 +232,26 @@ def inherited_stop_after(root: Union[str, Path], record_dir: Union[str, Path]) -
     return lineage_stop_after(Path(root), Path(record_dir).name)
 
 
-_ENGINE_SHA: list = []
+_ENGINE_IDENTITY: list = []
+
+LAUNCH_IDENTITY_FIELD = "launch_engine_identity"
+TERMINAL_SHA_FIELD = "terminal_engine_sha"
+
+
+def _running_identity() -> dict:
+    """The running engine's `engine_identity` as a dict (`sha`, `basis`, `source_head`), resolved once per
+    process: an engine swap starts a new process, so a process never sees two answers. No spawn."""
+    if not _ENGINE_IDENTITY:
+        from coordinator_core.engine_version import engine_identity
+
+        _ENGINE_IDENTITY.append(engine_identity()._asdict())
+    return _ENGINE_IDENTITY[0]
 
 
 def engine_sha() -> Optional[str]:
-    """The running engine checkout's HEAD, read from the git dir (no spawn) once per process: an
-    engine swap starts a new process, so a process never sees two answers; None when unresolvable."""
-    if not _ENGINE_SHA:
-        from coordinator_core.git.git_state import head_sha
-        from coordinator_core.git.repo_root import _walk_for_repo
-
-        found = _walk_for_repo(Path(__file__).resolve().parent)
-        _ENGINE_SHA.append(head_sha(found[1], fresh=True) if found else None)
-    return _ENGINE_SHA[0]
+    """The running engine's identity sha (published stamp first, source head otherwise); None when unresolvable.
+    The fingerprint compares it to the reading process's own, so a record composed by another engine reads stale."""
+    return _running_identity()["sha"]
 
 
 def fingerprint_for_run(
@@ -377,14 +384,35 @@ def _run_ended(record_dir: Path) -> bool:
     return bool(marker) and marker.get("status") in (halted_run.STATUS_LANDED, halted_run.STATUS_CLOSED)
 
 
+def _stamp_launch_identity(target: Path, record: dict) -> None:
+    """Pin `launch_engine_identity` on `record`: copied verbatim from the record already on disk, else the
+    running engine's identity (the first write of the run). `terminal_engine_sha` is added only when the
+    running engine's sha differs from the pinned launch sha, and never otherwise."""
+    pinned = None
+    try:
+        prior = json.loads(target.read_bytes().decode("utf-8"))
+        candidate = prior.get(LAUNCH_IDENTITY_FIELD) if isinstance(prior, dict) else None
+        pinned = candidate if isinstance(candidate, dict) else None
+    except (OSError, ValueError):
+        pass
+    running = _running_identity()
+    record[LAUNCH_IDENTITY_FIELD] = pinned if pinned is not None else dict(running)
+    record.pop(TERMINAL_SHA_FIELD, None)
+    if record[LAUNCH_IDENTITY_FIELD].get("sha") != running["sha"]:
+        record[TERMINAL_SHA_FIELD] = running["sha"]
+
+
 def write(record_dir: Union[str, Path], record: dict) -> Path:
     """Atomically write `resume.json` into `record_dir` (created if absent); return its path. A run whose
-    marker is `landed` or `closed` has nothing to resume: the write is dropped and the path returned."""
+    marker is `landed` or `closed` has nothing to resume: the write is dropped and the path returned.
+    The record carries `launch_engine_identity` (pinned by the run's first write, never overwritten)."""
     record_dir = Path(record_dir)
     target = record_dir / RESUME_FILE
     if _run_ended(record_dir):
         return target
     record_dir.mkdir(parents=True, exist_ok=True)
+    record = dict(record)
+    _stamp_launch_identity(target, record)
     atomic_write_bytes(target, (json.dumps(record, indent=2) + "\n").encode("utf-8"))
     return target
 
@@ -409,6 +437,34 @@ def write_refire_record(
     }
     with open(record_dir / REFIRE_LOG_FILE, "a", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(line) + "\n")
+
+
+_REFIRE_TAIL_BYTES = 65536
+
+
+def latest_launcher(record_dir: Union[str, Path]) -> Optional[dict]:
+    """The newest line of `refire-launches.jsonl` as `{script_path, launched_at, kind}`, or None when the
+    log is missing, empty, unreadable or its last line is corrupt. Reads only the file's last 64 KiB; spawns nothing."""
+    try:
+        with open(Path(record_dir) / REFIRE_LOG_FILE, "rb") as fh:
+            size = fh.seek(0, 2)
+            fh.seek(max(0, size - _REFIRE_TAIL_BYTES))
+            tail = fh.read()
+    except OSError:
+        return None
+    lines = [ln for ln in tail.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    try:
+        entry = json.loads(lines[-1].decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(entry, dict):
+        return None
+    script_path, launched_at, kind = entry.get("script_path"), entry.get("launched_at"), entry.get("kind")
+    if not isinstance(script_path, str) or not isinstance(kind, str) or isinstance(launched_at, bool) or not isinstance(launched_at, (int, float)):
+        return None
+    return {"script_path": script_path, "launched_at": launched_at, "kind": kind}
 
 
 def read(record_dir: Union[str, Path], deadline_ms: float) -> Union[dict, _Sentinel]:

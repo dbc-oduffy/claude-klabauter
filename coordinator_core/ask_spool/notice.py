@@ -5,7 +5,9 @@ File: <spool>/notices/<session_id>.jsonl, one compact JSON object per line
 "error"} for a failed drain; {"spool_id", "status": "coalesced", "run_id"}; {"spool_id",
 "status": "withdrawn", "reason"}; all written by drain._notify; {"run_id", "status": "halted",
 "halted", "reason", "at"} with no spool_id, written by append_halt_notice; {"run_id", "status":
-"unstarted", "at"} with no spool_id, written by append_unstarted_notice). The reader makes one
+"unstarted", "at"} with no spool_id, written by append_unstarted_notice; {"run_id", "status":
+"never_launched", "age_s", "action", "at"} with no spool_id, written by
+append_never_launched_notice). The reader makes one
 stat, renames the file to
 <session_id>.<pid>.reading, then reads and unlinks it, so a drain appending
 meanwhile creates a fresh file rather than losing a line to truncation.
@@ -93,6 +95,27 @@ def append_unstarted_notice(repo_root: str, session_id: str, run_id: str) -> boo
     return True
 
 
+def append_never_launched_notice(repo_root: str, session_id: str, run_id: str, age_s: float, action: str) -> bool:
+    """Append one minted-never-launched notice (O_APPEND, one write); `action` is "refired" or "closed". False on an unsafe or empty session id."""
+    if not session_id or _UNSAFE.search(session_id) is not None:
+        return False
+    os.makedirs(notices_dir(repo_root), mode=record.DIR_MODE, exist_ok=True)
+    line = json.dumps(
+        {"run_id": run_id, "status": "never_launched", "age_s": age_s, "action": action, "at": time.time()},
+        separators=(",", ":"),
+    ) + "\n"
+    fd = os.open(
+        notice_path(repo_root, session_id),
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        record.FILE_MODE,
+    )
+    try:
+        os.write(fd, line.encode("utf-8"))
+    finally:
+        os.close(fd)
+    return True
+
+
 def consume_notices(repo_root: Optional[str], session_id: str) -> list[dict]:
     """Return and delete the session's pending notices; [] when there are none."""
     if not repo_root or not session_id:
@@ -117,7 +140,7 @@ def consume_notices(repo_root: Optional[str], session_id: str) -> list[dict]:
                     continue
                 if not isinstance(obj, dict):
                     continue
-                if obj.get("status") in ("halted", "unstarted"):
+                if obj.get("status") in ("halted", "unstarted", "never_launched"):
                     if obj.get("run_id"):
                         out.append(obj)
                 elif obj.get("spool_id") and (
@@ -181,6 +204,10 @@ def _line(n: dict, repo_root: Optional[str] = None) -> str:
     status = n.get("status")
     if status == "halted":
         return "Your run %s was halted (%s): %s" % (n["run_id"], n.get("halted"), n.get("reason"))
+    if status == "never_launched":
+        age = n.get("age_s")
+        mins = "%d min" % round(age / 60) if isinstance(age, (int, float)) else "over 15 min"
+        return "Your ask %s was minted %s ago and never launched; it was %s." % (n["run_id"], mins, n.get("action"))
     if status == "unstarted":
         stage = run_disposition(repo_root, n["run_id"]) if repo_root else None
         if stage and stage != "minted":

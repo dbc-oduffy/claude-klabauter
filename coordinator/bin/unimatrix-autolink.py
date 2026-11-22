@@ -101,7 +101,7 @@ def console_python():
 
 def pin_key_value(roster, run=subprocess.run):
     """The machine-local `unimatrix.python` value, or None when unset or unreadable."""
-    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    reader = _home(roster) / "bin" / "_machine_local.py"
     exe = console_python()
     if not reader.is_file() or not exe:
         return None
@@ -117,7 +117,7 @@ def pin_key_value(roster, run=subprocess.run):
 def pinned_python(roster):
     """The one interpreter every supervisor and reader spawn uses: the `unimatrix.python` key when set (a
     missing file is an InterpreterPinError naming the key), else the shared `unimatrix_python` resolution."""
-    home = str(roster.settings_home())
+    home = str(_home(roster))
     if home not in _PINNED:
         val = pin_key_value(roster)
         if val and not os.path.isfile(val):
@@ -134,6 +134,11 @@ def _roster():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _home(roster) -> Path:
+    """The settings home for a login-launched autolink pass, which carries no COORDINATOR_SETTINGS_HOME."""
+    return getattr(roster, "delivery_settings_home", roster.settings_home)()
 
 
 _PASSPHRASE = []
@@ -181,8 +186,78 @@ def _membership():
     return _MEMBERSHIP[0]
 
 
+COPIES_STAMP_NAME = "installed-copies-stamp.json"
+COPIES_CHECK_SECONDS = 300
+
+
+def _digest(path):
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def installed_copy_drift(src_bin, dest):
+    """Names (relative to `dest`) of installed scripts whose bytes differ from the same-named clone script.
+
+    Only files the box already installed are compared: a clone script it never vendored is not drift."""
+    names = [p.name for p in dest.glob("*.py")] + [f"lib/{p.name}" for p in (dest / "lib").glob("*.py")]
+    return sorted(n for n in names if (src_bin / n).is_file() and _digest(src_bin / n) != _digest(dest / n))
+
+
+def _clone_bin(home):
+    """`<clone>/coordinator/bin` of the box's klabauter clone, else None."""
+    ladder = Path(home) / "bin" / "_resolve_claude_klabauter.py"
+    if not ladder.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("_al_resolve_klabauter", ladder)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    root, _cls = mod.resolve_claude_klabauter_root_with_class()
+    src = Path(root) / "coordinator" / "bin" if root else None
+    return src if src is not None and (src / "unimatrix-install.py").is_file() else None
+
+
+def refresh_installed_copies(roster, now=time.time, clone_bin=_clone_bin):
+    """Re-copy installed unimatrix scripts that drifted from the klabauter clone; at most once per COPIES_CHECK_SECONDS.
+
+    Trap: the clone moves under a long-lived box (git pull, reconcile) while the SessionStart freshness leg
+    only fires on a fresh session, so a box could run pre-fix scripts for days. This pass is the one thing
+    that runs on every box every minute. Drift that survives the refresh is printed on stderr every pass.
+    Never raises: a refresh fault must not stop linking."""
+    home = _home(roster)
+    sdir = state_dir(roster)
+    stamp = sdir / COPIES_STAMP_NAME
+    try:
+        if now() - json.loads(stamp.read_text(encoding="utf-8")).get("at", 0) < COPIES_CHECK_SECONDS:
+            return []
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        src = clone_bin(home)
+        if src is None or not sdir.is_dir():
+            return []
+        drift = installed_copy_drift(src, sdir)
+        if drift:
+            spec = importlib.util.spec_from_file_location("_al_unimatrix_install", src / "unimatrix-install.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.install_scripts(src, sdir)
+            drift = installed_copy_drift(src, sdir)
+            with open(sdir / "autolink.log", "a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} installed copies drifted from the "
+                         f"clone; refreshed, {len(drift)} still differ\n")
+        if drift:
+            print(f"autolink: installed copies still differ from the klabauter clone: {', '.join(drift[:8])}", file=sys.stderr)
+        stamp.write_text(json.dumps({"at": now(), "drift": drift}), encoding="utf-8")
+        return drift
+    except Exception as ex:
+        print(f"autolink: installed-copy refresh failed: {type(ex).__name__}: {str(ex)[:200]}", file=sys.stderr)
+        return []
+
+
 def state_dir(roster):
-    return roster.settings_home() / "unimatrix"
+    return _home(roster) / "unimatrix"
 
 
 def own_names():
@@ -200,7 +275,7 @@ def split_members(roster, mem=None, self_names=None, run=subprocess.run):
         mem = mem or _membership()
     except OSError:  # membership library not vendored on this box yet: the transition fallback applies
         return "none", {}, [], None, None
-    home = roster.settings_home()
+    home = _home(roster)
     try:
         snap, _ = mem.load_snapshot(home)
         if snap is None:
@@ -239,7 +314,7 @@ def pull_membership(roster, remote, key, run=subprocess.run):
     if r.returncode or len(lines) < 2:
         return False
     snap = json.loads(lines[0])
-    home = roster.settings_home()
+    home = _home(roster)
     held, _ = mem.load_snapshot(home)
     if held is not None and snap.get("epoch", 0) <= held["epoch"]:
         return False
@@ -253,7 +328,7 @@ NO_ALIAS_REASON = "no unimatrix.far_boxes configured; no supervisors started"
 def far_boxes_status(roster, guard=False):
     """(aliases, reason): reason names why `aliases` is empty, and is None when it is not.
     `guard` refuses a real alias under a test home; the read-only doctor diagnosis leaves it off."""
-    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    reader = _home(roster) / "bin" / "_machine_local.py"
     if not reader.is_file():
         return [], f"{REGISTRY_KEY} unreadable (machine-local reader missing: {reader}); no supervisors started"
     try:
@@ -766,7 +841,7 @@ def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn
 
 def machine_local_key(roster, alias, run=subprocess.run):
     """The machine-local `unimatrix.keys.<alias>` path, or None when unset or unreadable."""
-    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    reader = _home(roster) / "bin" / "_machine_local.py"
     if not reader.is_file():
         return None
     try:
@@ -780,7 +855,7 @@ def machine_local_key(roster, alias, run=subprocess.run):
 
 def machine_local_value(roster, name, run=subprocess.run) -> str:
     """The raw machine-local value of `name`, '' when the reader is missing, fails or the key is unset."""
-    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    reader = _home(roster) / "bin" / "_machine_local.py"
     if not reader.is_file():
         return ""
     try:
@@ -1667,6 +1742,7 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
 def link_pass(out=print, **kw) -> LinkSummary | None:
     """One `run()` with its spawn lines printed; a raised failure is one stderr line. The summary, else None."""
     try:
+        refresh_installed_copies(kw.get("roster") or _roster())
         summary = run(**kw)
     except Exception as ex:
         print(f"autolink failed: {type(ex).__name__}: {str(ex)[:200]}", file=sys.stderr)

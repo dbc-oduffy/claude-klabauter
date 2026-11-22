@@ -290,6 +290,33 @@ def test_refire_record_names_script_sha_engine_and_time(tmp_path: Path) -> None:
     assert lines[1]["kind"] == "launcher" and lines[1]["composed_by_engine_sha"] is None
 
 
+def test_latest_launcher_returns_the_newest_line_and_none_on_missing_or_corrupt(tmp_path: Path) -> None:
+    script = tmp_path / "s.mjs"
+    script.write_bytes(b"// body")
+    rd = tmp_path / "run"
+    assert hrr.latest_launcher(rd) is None
+    hrr.write_refire_record(rd, script, "stored", None, 1.0)
+    hrr.write_refire_record(rd, script, "launcher", None, 2.5)
+    assert hrr.latest_launcher(rd) == {"script_path": script.as_posix(), "launched_at": 2.5, "kind": "launcher"}
+    log = rd / hrr.REFIRE_LOG_FILE
+    with open(log, "a", encoding="utf-8") as fh:
+        fh.write("{not json\n\n")
+    assert hrr.latest_launcher(rd) is None
+    log.write_text("", encoding="utf-8")
+    assert hrr.latest_launcher(rd) is None
+    log.write_text('{"script_path": "x"}\n', encoding="utf-8")
+    assert hrr.latest_launcher(rd) is None
+
+
+def test_latest_launcher_reads_only_the_tail_of_a_long_log(tmp_path: Path) -> None:
+    rd = tmp_path / "run"
+    rd.mkdir()
+    old = json.dumps({"script_path": "old", "launched_at": 1.0, "kind": "stored", "pad": "x" * 100})
+    new = json.dumps({"script_path": "new", "launched_at": 9.0, "kind": "launcher"})
+    (rd / hrr.REFIRE_LOG_FILE).write_text((old + "\n") * 2000 + new + "\n", encoding="utf-8")
+    assert hrr.latest_launcher(rd) == {"script_path": "new", "launched_at": 9.0, "kind": "launcher"}
+
+
 def test_bounded_reads_reuse_one_worker_thread(tmp_path: Path) -> None:
     f = tmp_path / "a.json"
     f.write_bytes(b"{}")
@@ -373,3 +400,47 @@ def test_json_state_tells_missing_malformed_and_object_apart(tmp_path):
     assert hrr.bounded_json_state(arr) is hrr.MALFORMED
     assert hrr.bounded_json_state(big, max_bytes=20) is hrr.MALFORMED
     assert hrr.bounded_json_object(bad) is None and hrr.bounded_json_object(tmp_path / "none.json") is None
+
+
+def _roll_to(monkeypatch: pytest.MonkeyPatch, sha: str) -> None:
+    monkeypatch.setattr(hrr, "_ENGINE_IDENTITY", [{"sha": sha, "basis": "published-stamp", "source_head": sha}])
+
+
+def test_engine_sha_is_the_resolver_identity_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    _roll_to(monkeypatch, "a" * 40)
+    assert hrr.engine_sha() == "a" * 40
+
+
+def test_first_write_pins_launch_identity_and_adds_no_terminal_sha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _roll_to(monkeypatch, "a" * 40)
+    rd = tmp_path / "run"
+    hrr.write(rd, _record(_setup(tmp_path)))
+    rec = hrr.read(rd, 1000)
+    assert rec["launch_engine_identity"]["sha"] == "a" * 40
+    assert "terminal_engine_sha" not in rec
+
+
+def test_a_later_write_after_a_roll_keeps_launch_identity_and_names_terminal_sha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fp = _setup(tmp_path)
+    rd = tmp_path / "run"
+    _roll_to(monkeypatch, "a" * 40)
+    hrr.write(rd, _record(fp))
+    _roll_to(monkeypatch, "b" * 40)
+    hrr.write(rd, _record(fp))
+    rec = hrr.read(rd, 1000)
+    assert rec["launch_engine_identity"]["sha"] == "a" * 40
+    assert rec["terminal_engine_sha"] == "b" * 40
+    _roll_to(monkeypatch, "a" * 40)
+    hrr.write(rd, _record(fp))
+    rec = hrr.read(rd, 1000)
+    assert rec["launch_engine_identity"]["sha"] == "a" * 40 and "terminal_engine_sha" not in rec
+
+
+def test_the_fingerprint_engine_sha_still_reads_a_foreign_record_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rd = tmp_path / "run"
+    _setup(tmp_path)
+    _roll_to(monkeypatch, "a" * 40)
+    record = _record(hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md"))
+    hrr.write(rd, record)
+    _roll_to(monkeypatch, "b" * 40)
+    assert not hrr.matches(record, hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md"))

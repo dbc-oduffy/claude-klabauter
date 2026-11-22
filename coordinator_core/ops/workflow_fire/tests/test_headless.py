@@ -245,7 +245,35 @@ def test_unreleased_start_gate_persists_failed_record_and_notifies(tmp_path: Pat
     assert len(deliveries) == 1
 
 
-def test_start_receipt_failure_releases_reserved_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def local_worker_root(tmp_path, monkeypatch):
+    from coordinator_core.warm import sandboxed_spawn
+
+    monkeypatch.setattr(headless, '_worker_engine_root', lambda: tmp_path)
+    monkeypatch.setattr(sandboxed_spawn, 'caller_is_sandboxed', lambda: False)
+
+
+@pytest.mark.parametrize('pin_kind', ['matching', 'foreign', 'relative', 'unstamped'])
+def test_worker_root_requires_matching_stamped_absolute_pin(tmp_path, monkeypatch, pin_kind):
+    from coordinator_core.session import caller_env
+    from coordinator_core.warm import engine_root
+
+    running = tmp_path / 'running'
+    running.mkdir()
+    foreign = tmp_path / 'foreign'
+    foreign.mkdir()
+    pin = str(foreign) if pin_kind == 'foreign' else ('running' if pin_kind == 'relative' else str(running))
+    monkeypatch.setattr(caller_env, 'effective_caller_env', lambda: {'COORDINATOR_DOOR_ENGINE_ROOT': pin})
+    monkeypatch.setattr(engine_root, 'current_engine_clone', lambda: running)
+    monkeypatch.setattr(engine_root, 'is_engine_root', lambda path: pin_kind != 'unstamped')
+    if pin_kind == 'matching':
+        assert headless._worker_engine_root() == running.resolve()
+    else:
+        with pytest.raises(headless.HeadlessEngineRootUnavailable, match='must match'):
+            headless._worker_engine_root()
+
+
+def test_start_receipt_failure_releases_reserved_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local_worker_root) -> None:
     source = tmp_path / 'workflow.mjs'
     source.write_text('export const meta={}; return {};')
     registry = tmp_path / 'registry'
@@ -268,7 +296,7 @@ def test_start_receipt_failure_releases_reserved_record(tmp_path: Path, monkeypa
 
 
 @pytest.mark.parametrize('backend', ['codex', 'claude', 'grok', 'agy'])
-def test_start_records_the_requested_backend_family(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend) -> None:
+def test_start_records_the_requested_backend_family(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend, local_worker_root) -> None:
     source = tmp_path / 'workflow.mjs'
     source.write_text('export const meta={}; return {};')
     registry = tmp_path / 'registry'
@@ -293,7 +321,7 @@ def test_start_refuses_an_unknown_backend_naming_the_set(tmp_path: Path) -> None
         headless.start(str(source), backend='gemini')
 
 
-def test_failed_gate_release_reaps_only_its_own_spawned_driver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_gate_release_reaps_only_its_own_spawned_driver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local_worker_root) -> None:
     from types import SimpleNamespace
     source = tmp_path / 'workflow.mjs'
     source.write_text('export const meta={}; return {};')

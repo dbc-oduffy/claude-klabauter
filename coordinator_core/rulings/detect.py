@@ -94,6 +94,15 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().split())
 
 
+_IDENT_RE = re.compile(r"[\w.]+(?:[-/][\w.]+)+")
+
+
+def _prose_negation(line: str) -> bool:
+    """A negation word in `line` outside hyphen/underscore/slash-joined identifiers: `never` inside
+    a cited ruling id or filename is a name, not a negation."""
+    return NEGATION_RE.search(_IDENT_RE.sub(lambda m: " " * len(m.group(0)), line)) is not None
+
+
 def _cites_id(line: str, rid: str) -> bool:
     return re.search(rf"(?<![A-Za-z0-9._-]){re.escape(rid)}(?![A-Za-z0-9_-])", line) is not None
 
@@ -288,7 +297,7 @@ def detect(text: str, rulings: Iterable[Ruling], root: Path) -> dict:
                 continue
             if explicit and explicit.group(1).strip().rstrip(".,;") == r.id:
                 _flag(r.id, "explicit_contradicts")
-            elif NEGATION_RE.search(line) and (
+            elif _prose_negation(line) and (
                 _cites_id(line, r.id) or (_norm(r.text) and _norm(r.text) in nline)
             ):
                 _flag(r.id, "cited_with_negation")

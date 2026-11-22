@@ -542,9 +542,12 @@ def test_presized_headless_gate_passes_host_evidence_to_review(monkeypatch):
     if node is None:
         pytest.skip("node not on PATH")
     script = _presized(monkeypatch)
-    gate, receipt, review = [
+    unwrap, evidence, gate, receipt, review = [
         next(line for line in script.splitlines() if marker in line)
-        for marker in ("let _gate = ", "const _gateEvidence = ", "JSON.stringify(_gateEvidence)")
+        for marker in (
+            "const _gateUnwrap = ", "let _gateEvidence = ", "let _gate = ",
+            "if (!_gateEvidence && !_halted && _hostGateUsed)", "JSON.stringify(_gateEvidence)",
+        )
     ]
     program = """
       const calls = [];
@@ -559,7 +562,7 @@ def test_presized_headless_gate_passes_host_evidence_to_review(monkeypatch):
       const _halted = null;
       const _reviewOuterAgent = (prompt) => prompt;
     """
-    program += gate + "\n" + receipt + "\n" + review + "\n"
+    program += unwrap + "\n" + evidence + "\n" + gate + "\n" + receipt + "\n" + review + "\n"
     program += "console.log(JSON.stringify([calls, _gate.arm, agent('review', {})])); }"
     completed = subprocess.run(
         [node, "--input-type=module", "-e", program], capture_output=True, text=True, check=True,

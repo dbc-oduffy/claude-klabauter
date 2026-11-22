@@ -733,7 +733,8 @@ def default_adapters():
 
     async def codex(peer, text):
         m = mod("unimatrix-peer-codex.py", "codex")
-        return await m.codex_turn(m.socket_path(), peer["target"], text, tui_held=bool(peer.get("tui")))
+        return await m.codex_turn(m.socket_path(), peer["target"], text, tui_held=bool(peer.get("tui")),
+                                  on_queued=peer.get("on_queued"))
 
     async def agy(peer, text):
         m = mod("unimatrix-peer-agy.py", "agy")
@@ -780,7 +781,7 @@ class Router:
         self.ctl = endpoint_path(ROUTER_ENDPOINT_SEED, self.endpoint_dir)
         self.log_path = os.path.join(self.state_dir, "unimatrix-peer-router.log")
         self.faces = {}  # peer name -> Popen
-        self.addressed = {}  # peer name -> names it sent to during its open inbound turn
+        self.addressed = {}  # peer name -> one set per open inbound turn: names it sent to during that turn
         self.server = None
         self.tasks = set()
         self.legs_dir = str(legs_dir) if legs_dir else None
@@ -1397,9 +1398,20 @@ class Router:
         during this turn, so the caller can skip the harvested reply for those.
         """
         p = self.peers[peer]
-        async with self.locks[peer]:
-            if addressed is not None:
-                self.addressed[peer] = addressed
+        lock = self.locks[peer]
+        await lock.acquire()
+        held = True
+
+        def release():
+            # The lock orders enqueues, not replies: a queued Codex message must not wait on an earlier turn's reply.
+            nonlocal held
+            if held:
+                held = False
+                lock.release()
+
+        if addressed is not None:
+            self.addressed.setdefault(peer, []).append(addressed)
+        try:
             try:
                 if self.peer_stale(peer):
                     return f"delivery failed: {STALE_CODEX_ERROR}"
@@ -1409,12 +1421,19 @@ class Router:
                         return 'delivery failed: Codex target is not an independently sendable root'
                 if p["vendor"] == "codex" and not p.get("tui") and self.thread_held(p["target"]):
                     p = {**p, "tui": True}
+                if p["vendor"] == "codex":
+                    p = {**p, "on_queued": release}
                 return await self.adapters[p["vendor"]](p, text)
             except Exception as e:
                 self.log("TURN-FAILED", peer, type(e).__name__, e)
                 return f"delivery failed: {e}"
-            finally:
-                if addressed is not None:
+        finally:
+            release()
+            if addressed is not None:
+                open_turns = [t for t in self.addressed.get(peer, []) if t is not addressed]
+                if open_turns:
+                    self.addressed[peer] = open_turns
+                else:
                     self.addressed.pop(peer, None)
 
     def thread_held(self, thread_id):
@@ -1708,8 +1727,8 @@ class Router:
         except Exception as e:
             self.log("POST-FAILED", peer, "->", to, type(e).__name__, e)
             return {"ok": False, "error": f"delivery to {to} failed: {e}"}
-        if peer in self.addressed:
-            self.addressed[peer].add(to)
+        for turn_set in self.addressed.get(peer, ()):
+            turn_set.add(to)
         self.log("SENT", peer, "->", to, frame["msg_id"])
         return {"ok": True, "msg_id": frame["msg_id"], "written": True, **_receipt(reached)}
 
