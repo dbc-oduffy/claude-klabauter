@@ -16,6 +16,7 @@ import json
 import posixpath
 import re
 import shlex
+import sys
 from collections import Counter
 from datetime import date
 from pathlib import Path
@@ -441,6 +442,12 @@ def _authoring_constraints_part() -> str:
 
 _UNKEYED_RUN = "unkeyed"
 
+#: The bound host root or a direct native run with its live token owns the gate.
+_HOST_GATE_OWNER_JS = (
+    "(typeof engineOp === 'function' && engineOp.directRun && "
+    "(engineOp.hostGateOwned || (typeof _RUN_TOKEN !== 'undefined' && !!_RUN_TOKEN)))"
+)
+
 #: Reconcile clause for prompts that run `dispatch.ask_stage`; its re-run is idempotent through the
 #: stage receipt, whose `already_staged` reply is the landed manifest; a `stage_in_flight` reply
 #: means the first call still runs, so the wait-and-re-run is bounded by `ASK_STAGE_IN_FLIGHT_ROUNDS`.
@@ -565,6 +572,7 @@ def _agent(
     sidecar_label_js: Optional[str] = None,
     op_id: Optional[str] = None,
     gate_manifest_run: Optional[str] = None,
+    host_prompt_expr: Optional[str] = None,
 ) -> str:
     """One `agent(...)` call expression; the prompt ends with the sidecar clause keyed by ``run_id`` and ``label``.
 
@@ -593,6 +601,7 @@ def _agent(
         clause = _sidecar.sidecar_clause_js("ask", run_id, sidecar_label_js)
     else:
         clause = _lit(_sidecar.sidecar_clause(_sidecar.sidecar_dir("ask", run_id, sidecar_label or label)))
+    host_clause = clause
     if "coordinator-invoke" in prompt_expr:
         if LAND_RUN_OP in prompt_expr:
             reconcile = LAND_RUN_RECONCILE_CLAUSE
@@ -609,6 +618,10 @@ def _agent(
         if _emit._INVOKE_LITERAL_CLAUSE not in prompt_expr:
             clause = _lit(_emit._INVOKE_LITERAL_CLAUSE) + " + " + clause
     prompt_expr = _stage_expr(prompt_expr, stage_as or label, stager)
+    if host_prompt_expr is not None:
+        host_prompt_expr = _stage_expr(host_prompt_expr, (stage_as or label) + '-host', stager)
+        prompt_expr = f"({_HOST_GATE_OWNER_JS} ? ({host_prompt_expr}) : ({prompt_expr}))"
+        clause = f"({_HOST_GATE_OWNER_JS} ? {host_clause} : ({clause}))"
     schema_js = json.dumps(schema, sort_keys=True)
     judge = (schema.get("properties") or {}).get("judge")
     if isinstance(judge, _JudgeSchemaRef):
@@ -1398,6 +1411,7 @@ _REWORD_SCHEMA = _obj(
         **ASSEMBLE_SCHEMA["properties"],
         _route_pref.ROUTE_VERDICT_KEY: {"type": ["object", "null"]},
         "exit_criterion": _STR,
+        "sizing_present": {"type": "boolean"},
     },
 )
 #: The scout's closing `test -f` on the sizing file and, on an M+ arm, the chained run's `dispatch.emit` reply.
@@ -1755,6 +1769,31 @@ def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
 
 
 _ROW_VERIFY_PROMPT_OPEN = "`Run and report on the scoped test target(s) for ${id}: `"
+_VERIFIER_POWERSHELL = sys.platform == "win32"
+
+
+def _verifier_arg_js(expression: str) -> str:
+    """Quote one runtime operand for the verifier's native shell."""
+    replacement = "''" if _VERIFIER_POWERSHELL else "'\"'\"'"
+    quote = _lit("'")
+    return f"({quote} + String({expression}).split({quote}).join({_lit(replacement)}) + {quote})"
+
+
+def _verifier_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'" if _VERIFIER_POWERSHELL else shlex.quote(value)
+
+
+def _measured_instruction_js(repo_root: Optional[str]) -> str:
+    from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_OP
+
+    invoke = _INVOKE
+    if _VERIFIER_POWERSHELL:
+        invoke = ("& (Join-Path $(if ($env:COORDINATOR_SETTINGS_HOME) { $env:COORDINATOR_SETTINGS_HOME } "
+                  "else { Join-Path $HOME '.coordinator-claude-settings' }) 'bin/coordinator-invoke.exe')")
+    repo = " --repo " + _verifier_quote(Path(repo_root).as_posix()) if repo_root else ""
+    params = "JSON.stringify({run_id: _runId, paths: _manifest.review_declared_paths ?? []})"
+    command = _lit(f"{invoke} {MEASURED_REV_OP} ") + " + " + _verifier_arg_js(params) + " + " + _lit(repo)
+    return _cat("First run `", "js:(" + command + ")", "`; it returns a candidate commit sha. ")
 
 
 def _test_instruction_js(
@@ -1772,15 +1811,12 @@ def _test_instruction_js(
     With `export_command` the targets run in the clean export that command prints, never the shared worktree;
     a failed export is a red result, not a fallback.
     """
-    from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV, MEASURED_REV_OP
+    from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV
 
     if export_command is not None:
         return _cat(
-            f"First run `coordinator-invoke {MEASURED_REV_OP}` with run_id ",
-            "js:_runId",
-            " and paths [",
-            "js:(_manifest.review_declared_paths ?? []).join(', ')",
-            "]; it returns a candidate commit sha. Then run every scoped test target through this export "
+            "js:" + _measured_instruction_js(repo_root),
+            "Then run every scoped test target through this export "
             "command, appending the test runner argv after the `--`; it runs that argv with a clean export "
             "(HEAD plus the run's declared paths, none of the shared worktree's other changes) as the working "
             f"directory and removes the export itself:\n\n{export_command}\n\n"
@@ -1800,11 +1836,8 @@ def _test_instruction_js(
             + "Report raw evidence; do not gate. Write your record and return its path as sidecar_path -- required.",
         )
     return _cat(
-        f"First run `coordinator-invoke {MEASURED_REV_OP}` with run_id ",
-        "js:_runId",
-        " and paths [",
-        "js:(_manifest.review_declared_paths ?? []).join(', ')",
-        f"]; it returns a candidate commit sha. Run every scoped test target in the working tree with "
+        "js:" + _measured_instruction_js(repo_root),
+        f"Run every scoped test target in the working tree with "
         f"{MEASURED_REV_ENV} set to that sha in the test process environment. "
         "If the op refuses, report the refusal as a red verify result; never fall back to the working tree. "
         "Run the scoped test targets: [",
@@ -2090,6 +2123,8 @@ _REVIEW_RECOVER_JS = r"""
     if (!g.keys.length) return;
     const footprint = [...new Set((_manifest?.review_declared_paths ?? []).map(_hfPosix))];
     const inFp = (p) => footprint.some((f) => p === f || p.startsWith(f.replace(/\/+$/, '') + '/'));
+    const noteDir = __HALT_FIX_SIDECAR__;
+    const ownNote = (p) => p.startsWith(noteDir) && p.slice(noteDir.length).split('/').every((part) => part && part !== '.' && part !== '..');
     let status = 'exhausted'; let attempts = 0; const needs = []; const widened = [];
     for (let attempt = 1; attempt <= __CAP__ && !_halted; attempt++) {
       const before = g.keys;
@@ -2104,15 +2139,16 @@ _REVIEW_RECOVER_JS = r"""
       }
       if (_halted) return;
       if (!r || typeof r !== 'object') { status = 'blocked'; break; }
-      const outsideAll = (Array.isArray(r.paths) ? r.paths : []).map(_hfPosix).filter((p) => !inFp(p));
-      const outside = outsideAll.filter((p) => !_hfWidenable(p));
+      const productPaths = (Array.isArray(r.paths) ? r.paths : []).map(_hfPosix).filter((p) => !ownNote(p));
+      const outsideAll = productPaths.filter((p) => !inFp(p));
+      const outside = outsideAll.filter((p) => p.startsWith(__SIDECAR_ROOT__) || !_hfWidenable(p));
       const blockedNeeds = r.status === 'BLOCKED' ? (Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_hfPosix).filter((p) => !inFp(p)) : [];
       if (r.status === 'SCOPE' || outside.length || blockedNeeds.length) {
         needs.push(...(Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_hfPosix), ...outside);
         status = 'scope'; break;
       }
       for (const p of outsideAll) if (!widened.includes(p)) widened.push(p);
-      const noWrite = !(Array.isArray(r.paths) && r.paths.length);
+      const noWrite = productPaths.length === 0;
       if (r.status === 'BLOCKED' && !noWrite) { status = 'blocked'; break; }
       let rv = null;
       try { rv = await __REVERIFYCALL__; }
@@ -2218,6 +2254,8 @@ def _review_recover_js(
         .replace("__BLOCKED__", _BLOCKING_UNAPPLIED_JS)
         .replace("__FOREIGN__", FOREIGN_FIELD)
         .replace("__CAP__", str(SELF_CORRECTION_CAP))
+        .replace("__SIDECAR_ROOT__", _lit(_sidecar.SIDECAR_ROOT + "/"))
+        .replace("__HALT_FIX_SIDECAR__", _lit(_sidecar.sidecar_dir("ask", run_id, HALT_FIX_LABEL)))
         .replace("__FIXCALL__", fix_call)
         .replace("__REVERIFYCALL__", reverify_call)
     )
@@ -2723,7 +2761,7 @@ def _acceptance_call(
 
     Trap: the leg is an LLM, so a skipped or unreported command carries no exit; `DEMOTE_RED_JS`
     reads that as red, which is what keeps a row met only by a command that ran green."""
-    from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV, MEASURED_REV_OP
+    from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV
 
     export_command = engine_module_command(
         _OVERLAY_VERIFY_MODULE, repo_root, f"--export-run --run-id {run_id} --repo-root {Path(repo_root).as_posix()} --"
@@ -2731,11 +2769,8 @@ def _acceptance_call(
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nYou run each plan row's acceptance command and "
         "report its exit status; you edit, stage and commit nothing. ",
-        f"First run `coordinator-invoke {MEASURED_REV_OP}` with run_id ",
-        "js:_runId",
-        " and paths [",
-        "js:(_manifest.review_declared_paths ?? []).join(', ')",
-        "]; it returns a candidate commit sha. Then run every command below through this export command, "
+        "js:" + _measured_instruction_js(repo_root),
+        "Then run every command below through this export command, "
         f"appending the command's argv after the `--`:\n\n{export_command}\n\n"
         f"Set {MEASURED_REV_ENV} to the sha in the test process environment. If the op or the export command "
         "fails, report no exit for the commands it blocked; never fall back to the working tree. "
@@ -5282,7 +5317,7 @@ def compose_ask_script(
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
         b.append(f"  const _judgeRules = {_emit._JUDGE_VERDICT_RULES_JS};")
 
-    def _gate_params(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "") -> str:
+    def _gate_params(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "", *, host: bool = False) -> str:
         """The gate's params object as a JS object-literal expression: one source for the relay command and the host call."""
         return (
             "{ sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
@@ -5291,11 +5326,11 @@ def compose_ask_script(
             + (", family: " + json.dumps(family) if family else "")
             + (f", record: {record_js}" if record_js else "")
             + extra_js
-            + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) }"
+            + (", require_live_token: true }" if host else ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) }")
         )
 
     def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "", *, host: bool = False) -> str:
-        params = _gate_params(record_js, sizing_js, extra_js)
+        params = _gate_params(record_js, sizing_js, extra_js, host=host)
         if host:
             return params
         return (
@@ -5359,14 +5394,12 @@ def compose_ask_script(
             effort=_MECHANICAL_EFFORT, run_id=run_id, op_id=OP_ASK_GATE,
             gate_manifest_run=run_id,
         )
-        # A direct stage_act run with a run token calls the gate op in-process and keeps its receipt; any other
-        # run with a run id still gates in-host, and only a run with no engine seam falls back to the relay agent.
         host_gate = f"(typeof engineOp === 'function' && _runId ? _hostGate({_gate_params(extra_js=extra_js)}) : {relay})"
         if not stage_act:
             return host_gate
         params = _gate_payload(extra_js=extra_js, host=True)
         return (
-            "(typeof engineOp === 'function' && engineOp.directRun && _RUN_TOKEN "
+            f"({_HOST_GATE_OWNER_JS} "
             f"? (_hostGateUsed = true, engineOp('gate.host_run', {params})) : {host_gate})"
         )
 
@@ -5392,6 +5425,7 @@ def compose_ask_script(
     # A launcher child whose twin carries a resume block runs from the inline manifest: every pre-stage leg sits
     # behind `_NO_RESUME`, and `_gate` is seeded from the block instead of a leg's reply.
     b.append("  let _hostGateUsed = false;")
+    b.append("  let _gateEvidence = null;")
     _NO_RESUME = "!_STAGED_RESUME" if launcher_child else "true"
     _gate_seed_js = (
         "{ arm: _STAGED_RESUME.arm, halt: null, baton: null, "
@@ -5510,6 +5544,14 @@ def compose_ask_script(
             + assemble_template
             + scout_closing_tail
         )
+        host_closing_tail = (
+            "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as stderr. "
+            "Do not edit or repair it, and retry it only as the -32004 clause below says. "
+            + sizing_assemble_reconcile_clause(sizing_write_rel)
+            + " Return the sizing_path, writes and gated arrays. Return sizing_present true only after "
+            "confirming the sizing file exists. Return assembly evidence only; the host owns all gate "
+            "and downstream operations."
+        )
         def _assemble_cmd_js(path_js: str) -> str:
             """JS expression building the sizing-assemble command over `_asmFields`, writing to `path_js`."""
             return (
@@ -5522,7 +5564,7 @@ def compose_ask_script(
                 + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_abs + '/' + RELAYED_ASK_FILE))}" if relayed else "")
             )
 
-        scout_prompt = prompt_of(
+        scout_body = (
             "Size this ask afresh, never reusing or editing an existing sizing"
             + _sizing_procedure_pointer()
             + ". Judge first; write no file except through your "
@@ -5538,10 +5580,9 @@ def compose_ask_script(
             + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
             f"(`{_INVOKE} baton.pm_turns`) for the prior ones; the EM brief, when present, may note "
             "which prior turns are pertinent."
-            ,
-            # The tail is its own parenthesised operand: a staged run is adjacent literals, and the route
-            # preference, relayed-ask header and ask text must stay in the script.
-            "js:(" + _cat(
+        )
+        # The ask remains a dynamic operand outside the staged instructions.
+        scout_ask = "js:(" + _cat(
                 ("\n\n" + _route_pref.scout_block(route_preference).rstrip("\n") if has_route_pref else "")
                 + (
                     "\n\nRelayed ask (an agent's relay, not the PM's words):\n"
@@ -5549,8 +5590,9 @@ def compose_ask_script(
                     else "\n\nAsk:\n"
                 )
                 + (prompt or str((intake or {}).get("intent") or ""))
-            ) + ")",
-        )
+            ) + ")"
+        scout_prompt = prompt_of(scout_body, scout_ask)
+        host_scout_prompt = prompt_of(scout_body.replace(scout_closing_tail, host_closing_tail), scout_ask)
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
         b.append("  const _reassembleCmdOf = (_asmFields, _path) => " + _assemble_cmd_js("_path") + ";")
         b.append(
@@ -5583,13 +5625,13 @@ def compose_ask_script(
             ".find((d) => d) ?? null; } "
             "catch (_e) { return null; } };"
         )
-        # Proof sizing-assemble ran: an integer exit_code, and at exit 0 a parsed decision or a gate
-        # reply (an arm or a halt; ask_gate reads the sizing from disk, so it answers only once the file
-        # exists). A non-zero exit is proof too: the reword and failed-exit paths own it.
+        # At exit 0, assembly proof is a parsed decision or explicit disk confirmation.
+        # Worker-owned runs may also supply a gate reply; host-owned runs cannot use it as proof.
+        # A non-zero exit selects the reword or failed-exit path.
         b.append(
             "  const _assembleProven = (r) => !!r && Number.isInteger(r.exit_code) && (r.exit_code !== 0 "
-            "|| !!_parseDecision(r.stdout) || typeof r.arm === 'string' "
-            "|| !!(r.halt && typeof r.halt === 'object'));"
+            f"|| !!_parseDecision(r.stdout) || r.sizing_present === true || (!{_HOST_GATE_OWNER_JS} && (typeof r.arm === 'string' "
+            "|| !!(r.halt && typeof r.halt === 'object'))));"
         )
         b.append(
             "  const _scoutHasValues = (r) => !!r && "
@@ -5597,7 +5639,7 @@ def compose_ask_script(
             f"&& {json.dumps(_SCOUT_ARRAY_FIELDS)}.every((k) => Array.isArray(r[k]));"
         )
         b.append(
-            f"  const _scoutedFirst = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else _ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)};"
+            f"  const _scoutedFirst = await {_agent(scout_prompt, host_prompt_expr=host_scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else _ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)};"
         )
         # One re-dispatch whenever assemble is unproven. With a full sizing in hand the retry carries
         # the engine-built command over those values; otherwise the scout is told to run it itself.
@@ -5608,9 +5650,14 @@ def compose_ask_script(
             "js:_reassembleCmdOf({ ..._scoutedFirst }, _sizingPathFor(_scoutedFirst))",
             scout_closing_tail,
         )
+        host_values_retry = _cat(
+            SCOUT_VALUES_ASSEMBLE_RETRY,
+            "js:_reassembleCmdOf({ ..._scoutedFirst }, _sizingPathFor(_scoutedFirst))",
+            host_closing_tail,
+        )
         b.append(
             "  " + ("" if launcher_child else "const ") + "_scouted = _assembleProven(_scoutedFirst) ? _scoutedFirst : { ..._scoutedFirst, ...(await "
-            f"{_agent(scout_prompt + ' + (_scoutHasValues(_scoutedFirst) ? (' + values_retry + ') : ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY) + ')', label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else _ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)}) }};"
+            f"{_agent(scout_prompt + ' + (_scoutHasValues(_scoutedFirst) ? (' + values_retry + ') : ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY) + ')', host_prompt_expr=host_scout_prompt + ' + (_scoutHasValues(_scoutedFirst) ? (' + host_values_retry + ') : ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY) + ')', label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else _ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)}) }};"
         )
         b.append("  const _scoutAssembled = Number.isInteger(_scouted.exit_code);")
         # Captured before the reword path mutates `_scouted`: a folded manifest or falsifier is
@@ -5668,6 +5715,15 @@ def compose_ask_script(
         )
         if not launcher_child:
             b.append("  let _rewordStaged = false;")
+        host_reword_prompt = prompt_of(
+            "sizing-assemble refused your exit_criterion. Reword it and run exactly this command, "
+            "replacing only '<your reworded exit_criterion>' with your POSIX single-quoted criterion. "
+            + EXIT_CRITERION_RULES_CLAUSE,
+            "\n\nRefusal:\n", "js:_asmOut.slice(0, 1500)",
+            "\n\nCommand:\n", "js:_reassembleCmd",
+            host_closing_tail,
+            " Return the reworded exit_criterion too.",
+        )
         b.append(
             "  const _asmOut = String(_scouted.stderr ?? '') + '\\n' + String(_scouted.stdout ?? '');"
         )
@@ -5678,12 +5734,13 @@ def compose_ask_script(
         b.append("    const _asmFields = { ..._scouted, exit_criterion: '<your reworded exit_criterion>' };")
         b.append("    const _reassembleCmd = _reassembleCmdOf(_asmFields, _sizingPath);")
         b.append(
-            f"    const _reworded = await {_agent(reword_prompt, label='size-reword', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_REWORD_SCHEMA, run_id=run_id, stage_as='reword', stager=stager)};"
+            f"    const _reworded = await {_agent(reword_prompt, host_prompt_expr=host_reword_prompt, label='size-reword', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_REWORD_SCHEMA, run_id=run_id, stage_as='reword', stager=stager)};"
         )
         b.append(
             "    _scouted.exit_criterion = _reworded.exit_criterion; _scouted.exit_code = _reworded.exit_code; "
             "_scouted.stdout = _reworded.stdout; _scouted.stderr = _reworded.stderr;"
         )
+        b.append("    _scouted.sizing_present = _reworded.sizing_present === true;")
         b.append("    if (_scouted.exit_code === 0) {")
         b.append(
             "      _sizingRel = _boundRelOf(_reworded.sizing_path) ?? _sizingPath.slice(REPO_ROOT.length + 1);"
@@ -5731,15 +5788,12 @@ def compose_ask_script(
         b.append(
             "  else { _sizingRel = _boundRelOf(_scouted.sizing_path) ?? _sizingPath.slice(REPO_ROOT.length + 1); }"
         )
-        # Exit 0 proves nothing when the scout never ran sizing-assemble (stdout 'not run'). Proof is
-        # a parsed assemble decision (always carries `route`) or a gate reply (an arm or a halt):
-        # ask_gate reads the sizing from disk, so it answers only once the file exists. Scouts
-        # abridge long stdout, so the gate reply alone must suffice.
-        # The sizing file at _sizingPath is proof too: a scout that paraphrases its stdout still wrote it.
+        # Host-owned assembly requires a parsed decision or explicit disk confirmation.
+        # Only worker-owned runs may substitute their gate reply for assembly evidence.
         b.append(
             "  const _assembleUnproven = !_halted && (_decision === null || typeof _decision !== 'object' "
-            "|| typeof _decision.route !== 'string') && typeof _scouted.arm !== 'string' "
-            "&& !(_scouted.halt && typeof _scouted.halt === 'object');"
+            f"|| typeof _decision.route !== 'string') && ({_HOST_GATE_OWNER_JS} || (typeof _scouted.arm !== 'string' "
+            "&& !(_scouted.halt && typeof _scouted.halt === 'object')));"
         )
         b.append(
             "  const _sizingOnDisk = _assembleUnproven ? _scouted.sizing_present === true : false;"
@@ -5764,7 +5818,7 @@ def compose_ask_script(
         f"|| _gate.resume_ready || _gate.{RESUME_LEDGER_KEY})"
     )
     if sized_in_run:
-        # The scout's closing acts ran the gate; a failed assemble leaves nothing to carry.
+        # Worker-owned runs carry their scout's gate; native roots consume the host verdict.
         b.append(
             "  let _gate = " + ("_STAGED_RESUME ? " + _gate_seed_js + " : (" if launcher_child else "")
             + "_halted ? { arm: null, halt: null } : { arm: _scouted.arm ?? null, "
@@ -5778,6 +5832,13 @@ def compose_ask_script(
             + (")" if launcher_child else "") + ";"
         )
         b.append(_GATE_ARM_FOLD_CASE_JS)
+        b.append(
+            f"  if (!_halted && {_NO_RESUME} && {_HOST_GATE_OWNER_JS}) {{\n"
+            f"    _gate = await {_gate_agent_call('gate', 'gate', stage_act=True)};\n"
+            "    _gateEvidence = await engineOp('gate.host_receipt', {});\n"
+            + (f"    if (!_gate.halt && {_arms_js}) await _adoptStageReply(_gate.stage_reply);\n" if fold_stage else "")
+            + "  }"
+        )
         # A clean assemble whose scout left the gate unanswered: a known (route, tshirt) yields its arm
         # from values in hand (XS also needs the footprint the gate would otherwise refuse on); only an
         # unmapped pair runs the gate agent, once. A derived arm skips the agent's stage fold, so the
@@ -5785,12 +5846,12 @@ def compose_ask_script(
         _derive_table = {ARM_ROUTE[a]: {"tshirt": t, "arm": a} for a, t in ((ARM_XS, "XS"), (ARM_S, "S"))}
         b.append(
             "  // no-arm-recovery:begin\n"
-            f"  if (!_halted && {_NO_RESUME} && _scouted?.exit_code === 0 && !_gate.arm && !_gate.halt) {{\n"
+            f"  if (!{_HOST_GATE_OWNER_JS} && !_halted && {_NO_RESUME} && _scouted?.exit_code === 0 && !_gate.arm && !_gate.halt) {{\n"
             f"    const _derive = {json.dumps(_derive_table, sort_keys=True)}[_gate.route];\n"
             f"    if (_derive && _derive.tshirt === _gate.tshirt && (_derive.arm !== {_lit(ARM_XS)} || _writes.length)) "
             "{ _gate = { ..._gate, arm: _derive.arm, derived: true }; }\n"
             "  }\n"
-            f"  if (!_halted && {_NO_RESUME} && _scouted?.exit_code === 0 && !_gate.arm && !_gate.halt) {{\n"
+            f"  if (!{_HOST_GATE_OWNER_JS} && !_halted && {_NO_RESUME} && _scouted?.exit_code === 0 && !_gate.arm && !_gate.halt) {{\n"
             f"    const _recoveredGate = await {_gate_agent_call('gate', 'gate', stage_act=True)};\n"
             "    const _rArm = typeof _recoveredGate?.arm === 'string' ? _recoveredGate.arm.trim().toLowerCase() : null;\n"
             "    _gate = { ..._gate, recovered: true, arm: _rArm, halt: _recoveredGate?.halt ?? null, "
@@ -5842,7 +5903,7 @@ def compose_ask_script(
         if sized_in_run:
             b.append(
                 "  _legacyStageReply(_scouted);\n"
-                f"  if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_scouted.stage_reply); }}"
+                f"  if (!{_HOST_GATE_OWNER_JS} && {clean_js} && {arms_js}) {{ await _adoptStageReply(_scouted.stage_reply); }}"
                 f"{_fold_decline_js(clean_js)}"
             )
         else:
@@ -7158,7 +7219,7 @@ def compose_ask_script(
     # The review wave shadows `agent` inside its own block (design brief prefix only) rather than
     # renaming its call sites: the leg register, phase-title and brief checks find legs by the
     # literal `agent(` token, so a renamed call site is invisible to every one of them.
-    b.append("  const _gateEvidence = !_halted && _hostGateUsed ? await engineOp('gate.host_receipt', {}) : null;")
+    b.append("  if (!_gateEvidence && !_halted && _hostGateUsed) _gateEvidence = await engineOp('gate.host_receipt', {});")
     b.append("  const _reviewOuterAgent = agent;")
     b.append(_RESUME_SLICE_IDS_DECL_JS)
     b.append("  let _reverifyJoined = false;")

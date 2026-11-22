@@ -154,6 +154,23 @@ def test_fire_hands_the_sha256_to_workflow_fire(params, script, seen, monkeypatc
     assert result["fire"] == {"fire_id": "f1"}
 
 
+def test_default_fire_preserves_native_run_binding(params, script, monkeypatch):
+    args = {"repoRoot": params["cwd"], "runToken": "a" * 32}
+    envelope = _allow(script)
+    envelope["hookSpecificOutput"]["updatedInput"]["args"] = args
+    monkeypatch.setattr(hook, "evaluate", lambda payload: envelope)
+    calls = []
+    monkeypatch.setattr("coordinator_core.ops.workflow_fire.op._workflow_fire",
+                        lambda p, repo_root=None: calls.append((p, repo_root)) or {"fire_id": "native"})
+    result = _dispatch(params)
+    fire, root = calls[0]
+    assert "fire" not in params and "executor" not in params and "backend" not in params
+    assert fire["args"] == args and fire["run_id"] == result["run_id"]
+    assert fire["expected"] == result["sha256"]
+    assert fire["executor"] == "headless" and fire["backend"] == "codex"
+    assert root == Path(params["cwd"])
+
+
 def test_codex_em_fire_runs_through_the_real_fire_authority(params, seen, monkeypatch: pytest.MonkeyPatch) -> None:
     import psutil
 
@@ -275,6 +292,15 @@ def test_bad_notification_target_never_submits(params, seen, target) -> None:
     result = _dispatch({**params, "fire": True, "notify_to": target})
     assert result["refused"] == "bad-request"
     assert seen == []
+
+
+@pytest.mark.parametrize("fire_reply", [None, {}, {"fire_id": "  "}])
+def test_requested_fire_requires_a_waitable_handle(params, seen, monkeypatch, fire_reply):
+    monkeypatch.setattr("coordinator_core.ops.workflow_fire.op._workflow_fire",
+                        lambda *a, **kw: fire_reply)
+    result = _dispatch(params)
+    assert result["run_id"] == "run-abc123"
+    assert "fire_id" in result["fire_error"]
 
 
 def test_failed_fire_keeps_the_run_handle(params, seen, monkeypatch: pytest.MonkeyPatch) -> None:

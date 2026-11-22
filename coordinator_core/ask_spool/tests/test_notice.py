@@ -217,6 +217,24 @@ def test_unstarted_notice_without_a_script_still_surfaces_and_refuses_an_unsafe_
         assert notice.append_unstarted_notice(str(tmp_path), sid, "run-1") is False
 
 
+def test_never_launched_notice_names_ask_age_and_action_and_refuses_unsafe_session(tmp_path):
+    assert notice.append_never_launched_notice(str(tmp_path), "s1", "ask-1", 1800, "refired") is True
+    notice.append_never_launched_notice(str(tmp_path), "s1", "ask-2", 3600, "closed")
+    got = notice.consume_notices(str(tmp_path), "s1")
+    assert [(n["run_id"], n["status"], n["action"]) for n in got] == [
+        ("ask-1", "never_launched", "refired"),
+        ("ask-2", "never_launched", "closed"),
+    ]
+    notice.append_never_launched_notice(str(tmp_path), "s1", "ask-1", 1800, "refired")
+    notice.append_never_launched_notice(str(tmp_path), "s1", "ask-2", 3600, "closed")
+    assert notice.advisory_text(str(tmp_path), "s1").splitlines() == [
+        "Your ask ask-1 was minted 30 min ago and never launched; it was refired.",
+        "Your ask ask-2 was minted 60 min ago and never launched; it was closed.",
+    ]
+    for sid in ("", "../evil", "a/b"):
+        assert notice.append_never_launched_notice(str(tmp_path), sid, "ask-1", 1, "closed") is False
+
+
 def test_failed_notice_is_surfaced_not_dropped(tmp_path):
     import json
 

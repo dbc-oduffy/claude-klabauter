@@ -144,6 +144,20 @@ def stub_import_claim_index_module():
     _cli._import_claim_index_module = orig
 
 
+@pytest.fixture(autouse=True)
+def stub_live_run_holders():
+    """Run-declaration reads default to 'no live run holds the path' so no test
+    reads this repo's real warp run tokens; a test overrides via the returned setter."""
+    orig = _cli._live_run_holders
+
+    def _apply(fn):
+        _cli._live_run_holders = fn
+
+    _cli._live_run_holders = lambda path, cwd: []
+    yield _apply
+    _cli._live_run_holders = orig
+
+
 @pytest.fixture()
 def stub_import_harness_registry_module():
     orig = _cli._import_harness_registry_module
@@ -1094,6 +1108,107 @@ def test_who_claims_path_with_claimants_reports_liveness_per_row(
         f"sess-live\tlive\t{_cli._NO_REGISTRY_RECORD_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\tyes\n"
         f"sess-dead\tdead\t{_cli._NO_REGISTRY_RECORD_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\tno\n"
     )
+
+
+def _no_touch_claims(stub_import_claim_index_module, stub_import_liveness_module):
+    stub_import_claim_index_module(
+        _StubClaimIndex(lookup=lambda paths, cwd=None: {p: [] for p in paths})
+    )
+    stub_import_liveness_module(_StubLiveness())
+
+
+def test_who_claims_path_lists_live_run_declaration_holder_and_withhold_remedy(
+    stub_import_claim_index_module, stub_import_liveness_module, stub_live_run_holders, capsys
+):
+    _no_touch_claims(stub_import_claim_index_module, stub_import_liveness_module)
+    seen = {}
+
+    def _holders(path, cwd):
+        seen["args"] = (path, cwd)
+        return [("2026-11-22T21:00:00Z", "e4bc04", "2bbfcd8b")]
+
+    stub_live_run_holders(_holders)
+    rc = _cli.main(["who-claims-path", "pipeline/driver.py", "/repo"])
+    assert rc == 0
+    assert seen["args"] == ("pipeline/driver.py", "/repo")
+    captured = capsys.readouterr()
+    assert captured.out == f"2bbfcd8b\tlive\trun e4bc04\t{_cli._RUN_DECLARATION_KIND}\tyes\n"
+    assert "workflow.revise run_id=e4bc04 withhold_paths=" in captured.err
+    assert "no claimant recorded" not in captured.err
+
+
+def test_who_claims_path_no_touch_and_no_run_declaration_keeps_no_claimant_note(
+    stub_import_claim_index_module, stub_import_liveness_module, capsys
+):
+    _no_touch_claims(stub_import_claim_index_module, stub_import_liveness_module)
+    assert _cli.main(["who-claims-path", "some/path.txt"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no claimant recorded" in captured.err
+    assert "withhold_paths" not in captured.err
+
+
+def test_who_claims_path_touch_row_and_run_row_both_listed(
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, stub_live_run_holders, capsys,
+):
+    stub_import_claim_index_module(
+        _StubClaimIndex(lookup=lambda paths, cwd=None: {p: ["sess-live"] for p in paths})
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=lambda sid, cwd=None: True))
+    stub_import_harness_registry_module(_StubHarnessRegistry())
+    stub_live_run_holders(lambda path, cwd: [("t", "run-1", "peer-sid")])
+    assert _cli.main(["who-claims-path", "some/path.txt"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("sess-live\tlive\t")
+    assert lines[1] == f"peer-sid\tlive\trun run-1\t{_cli._RUN_DECLARATION_KIND}\tyes"
+
+
+def test_who_claims_path_unreadable_run_declaration_is_indeterminate_not_unclaimed(
+    stub_import_claim_index_module, stub_import_liveness_module, stub_live_run_holders, capsys
+):
+    _no_touch_claims(stub_import_claim_index_module, stub_import_liveness_module)
+    stub_live_run_holders(lambda path, cwd: None)
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == _cli._TRANSPORT_FAIL
+    captured = capsys.readouterr()
+    assert captured.out == "indeterminate\n"
+    assert "no claimant recorded" not in captured.err
+
+
+def test_who_claims_path_run_declaration_reader_raise_is_indeterminate(
+    stub_import_claim_index_module, stub_import_liveness_module, stub_live_run_holders, capsys
+):
+    _no_touch_claims(stub_import_claim_index_module, stub_import_liveness_module)
+
+    def _boom(path, cwd):
+        raise OSError("token dir unreadable")
+
+    stub_live_run_holders(_boom)
+    assert _cli.main(["who-claims-path", "some/path.txt"]) == _cli._TRANSPORT_FAIL
+    assert capsys.readouterr().out == "indeterminate\n"
+
+
+def test_live_run_holders_delegates_to_the_reader_safe_commit_consumes(monkeypatch):
+    """Unstubbed `_live_run_holders` calls `_live_claim_scan` with no excluded session and
+    keys the answer on the normalised path."""
+    import types
+
+    calls = {}
+
+    def _scan(root, paths, exclude_session, cwd, minted_before, exclude_run):
+        calls["args"] = (list(paths), exclude_session, minted_before, exclude_run)
+        return {"a/b.py": [("t", "r1", "s1")]}
+
+    wrd = types.SimpleNamespace(_live_claim_scan=_scan, _norm=lambda p: p.replace("\\", "/"))
+    rr = types.SimpleNamespace(show_toplevel=lambda cwd: "/repo")
+    fresh = _load_cli_module()  # the autouse fixture stubs `_cli._live_run_holders`
+    monkeypatch.setattr(
+        fresh, "_dispatch_import",
+        lambda name: wrd if name.endswith("warp_run_deliverable") else rr,
+    )
+    assert fresh._live_run_holders("a\\b.py", None) == [("t", "r1", "s1")]
+    assert calls["args"] == (["a\\b.py"], "", None, None)
 
 
 def test_who_claims_path_blocks_column_and_footer(

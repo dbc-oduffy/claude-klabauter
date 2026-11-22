@@ -400,13 +400,14 @@ async def exec_turn(thread_id, text, timeout=TURN_TIMEOUT) -> str:
             return NO_REPLY
 
 
-async def queue_turn(thread_id, text, timeout=TURN_TIMEOUT, interval=1.0) -> str:
+async def queue_turn(thread_id, text, timeout=TURN_TIMEOUT, interval=1.0, on_queued=None) -> str:
     """Queue `text` onto a thread whose TUI holds it (`codex queue`), then read the reply from the rollout.
 
     Seeks the rollout EOF first, waits for the queued message to appear as a user row,
     and returns the first final assistant message after that row (so a turn already in flight
     when the message was queued is not mistaken for the reply), or NO_REPLY once `timeout`
-    seconds pass.
+    seconds pass. `on_queued` is called once the enqueue succeeds, before the reply wait, so a
+    caller serializing per thread can release its lock and let the next message enqueue.
     """
     try:
         tail = RolloutTail(thread_id)
@@ -417,6 +418,8 @@ async def queue_turn(thread_id, text, timeout=TURN_TIMEOUT, interval=1.0) -> str
         capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if proc.returncode != 0:
         raise QueueFailed(f"codex queue failed ({proc.returncode}): {proc.stderr.strip()}")
+    if on_queued is not None:
+        on_queued()
     if tail is None:
         return NO_REPLY  # Enqueued once, but no trustworthy pre-enqueue baseline.
     loop = asyncio.get_running_loop()
@@ -505,20 +508,20 @@ async def stdio_turn(thread_id, text, timeout=TURN_TIMEOUT) -> str:
         await ws.close()
 
 
-async def queue_or_exec(thread_id, text, timeout) -> str:
+async def queue_or_exec(thread_id, text, timeout, on_queued=None) -> str:
     """Queue onto a live app-server; when `codex queue` is refused (nothing enqueued), run a headless turn.
 
     On win32 the headless turn is stdio_turn (registers a face); elsewhere a `codex exec` one-shot.
     """
     try:
-        return await queue_turn(thread_id, text, timeout)
+        return await queue_turn(thread_id, text, timeout, on_queued=on_queued)
     except QueueFailed:
         if sys.platform == "win32":
             return await stdio_turn(thread_id, text, timeout)
         return await exec_turn(thread_id, text, timeout)
 
 
-async def codex_turn(sock, thread_id, text, timeout=TURN_TIMEOUT, tui_held=False) -> str:
+async def codex_turn(sock, thread_id, text, timeout=TURN_TIMEOUT, tui_held=False, on_queued=None) -> str:
     """One user turn into the live thread; returns the agent's text.
 
     A thread a TUI holds (`tui_held`) is always queued with `codex queue` and read from the
@@ -528,9 +531,9 @@ async def codex_turn(sock, thread_id, text, timeout=TURN_TIMEOUT, tui_held=False
     `timeout` bounds each wait for the next server message, not the whole turn.
     """
     if tui_held:
-        return await queue_turn(thread_id, text, timeout)
+        return await queue_turn(thread_id, text, timeout, on_queued=on_queued)
     if sys.platform == "win32":
-        return await queue_or_exec(thread_id, text, timeout)
+        return await queue_or_exec(thread_id, text, timeout, on_queued=on_queued)
     try:
         ws = await WsClient.connect(sock)
     except OSError:

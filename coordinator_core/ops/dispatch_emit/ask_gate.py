@@ -1856,7 +1856,10 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
             return _refuse(
                 f"run token for {params['run_id']} is spent or gone (a run that halted or ended no longer "
                 "holds one), so this refire could land nothing. This run is retired; the call mints a "
-                f"fresh run id and token carrying its revise notes: {fire_command(sizing_rel)}",
+                f"fresh run id and token carrying its revise notes: {fire_command(sizing_rel)}. "
+                "For a Codex EM, put the existing sizing path in the sizing field of "
+                "the submit params alongside the current EM identity and cwd, then use "
+                "coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json.",
             ).to_json()
     if params.get("run_id"):
         refused = _bind_run(

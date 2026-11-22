@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
 
 export const MAX_WORKFLOW_DEPTH = 32;
 
@@ -38,6 +39,8 @@ export function workflowBody(source) {
 
 export async function executeWorkflow(source, requestAgent, emit = () => {}, args = {}, context = {}) {
   const depth = context.depth ?? 0;
+  const binding = { depth, script_path: context.scriptPath,
+    script_sha256: createHash('sha256').update(source).digest('hex') };
   if (depth >= MAX_WORKFLOW_DEPTH) throw new Error(`Workflow nesting exceeds ${MAX_WORKFLOW_DEPTH}`);
   let currentPhase = null;
   const active = new Set();
@@ -95,7 +98,10 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
     }
     const encoded = JSON.parse(JSON.stringify(params));
     emit({ event: 'invoke-start', op });
-    const work = Promise.resolve().then(() => context.engineOp(op, encoded)).then(result => {
+    if (depth !== 0 && ['gate.host_run', 'gate.host_receipt', 'workflow.host_start'].includes(op)) {
+      throw new Error('Nested workflows do not own host operations');
+    }
+    const work = Promise.resolve().then(() => context.engineOp(op, encoded, binding)).then(result => {
       emit({ event: 'invoke-complete', op });
       return result;
     });
@@ -104,6 +110,17 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
     return work;
   } : undefined;
   if (engineOp) Object.defineProperty(engineOp, 'directRun', { value: depth === 0 });
+  if (engineOp) Object.defineProperty(engineOp, 'hostGateOwned', { value: depth === 0 && context.hostGateOwned === true });
+  if (engineOp && depth === 0 && context.hostWorkflow === true && !context.hostGateOwned) {
+    Object.defineProperty(engineOp, 'hostWorkflow', { value: async scriptPath => {
+      const root = await context.engineOp('workflow.host_start', { script_path: scriptPath }, binding);
+      if (createHash('sha256').update(root.source).digest('hex') !== root.script_sha256) {
+        throw new Error('Host root digest mismatch');
+      }
+      return executeWorkflow(root.source, requestAgent, emit, root.args,
+        { ...context, scriptPath: root.script_path, depth: 0, hostWorkflow: false, hostGateOwned: true });
+    } });
+  }
   const workflow = async (options, positionalArgs) => {
     if (!options || typeof options.scriptPath !== 'string' || !options.scriptPath.trim()) {
       throw new TypeError('workflow requires a scriptPath');
@@ -194,7 +211,8 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     const result = await executeWorkflow(source, requestAgent, event => write({ type: 'event', ...event }), args,
       { scriptPath: resolve(argv[0]), cwd: process.cwd(),
-        engineOp: (op, params) => request('invoke', { op, params }) });
+        hostWorkflow: true,
+        engineOp: (op, params, binding) => request('invoke', { op, params, binding }) });
     if (protocolError) throw protocolError;
     write({ type: 'result', result: result === undefined ? null : result });
     return 0;

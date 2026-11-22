@@ -80,6 +80,18 @@ def test_id_citation_without_negation_passes(tmp_path):
     assert _run("Per no-pending-pm, the stage names its question.", tmp_path)["verdict"] == "pass"
 
 
+def test_negation_word_inside_cited_id_or_filename_is_not_a_negation(tmp_path):
+    rid = "2026-11-10-never-cap-engine-runs-or-workers-heavy-commands-slot-by-same-box-peer-count"
+    ruling = Ruling(**{**R.__dict__, "id": rid})
+    for text in (
+        f"Per {rid}, heavy commands slot by peer count.",
+        f"See docs/decisions/{rid}.md for the slotting rule.",
+    ):
+        assert _run(text, tmp_path, [ruling])["verdict"] == "pass"
+    for text in (f"We override {rid} here.", f"We do not follow {rid}."):
+        assert _run(text, tmp_path, [ruling])["contradicted"] == [rid]
+
+
 def test_contradiction_by_quoted_text_and_explicit_marker(tmp_path):
     q = _run("We no longer hold that a pending PM ruling is not a state.", tmp_path)
     assert q["contradicted"] == ["no-pending-pm"]

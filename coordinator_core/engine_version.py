@@ -31,6 +31,7 @@ Public surface (pinned contract):
     def resolve_engine_sha() -> str | None: ...
     def resolve_engine_dirty() -> bool | None: ...
     def resolve_engine_source_head(engine_dir: Path | None = None) -> SourceHead: ...
+    def engine_identity(engine_dir: Path | None = None) -> EngineIdentity: ...
     MIN_KNOWN_GOOD_SHA: str   # a claude-klabauter commit, checked against the source-head
 
 `resolve_engine_source_head` names the CLAUDE-KLABAUTER commit the running engine is built
@@ -130,6 +131,45 @@ def resolve_engine_source_head(engine_dir: Path | None = None) -> SourceHead:
         return SourceHead(None, "mirror-stamp", head)
     except OSError:
         return SourceHead(None, "source-tree", None)
+
+
+class EngineIdentity(NamedTuple):
+    sha: str | None
+    basis: str
+    source_head: str | None
+
+
+def engine_identity(engine_dir: Path | None = None) -> EngineIdentity:
+    """The one identity every engine reader reports: stamp first, head second.
+
+    `sha` is the published `_engine_stamp` sha (basis "published-stamp") when the
+    tree carries a readable one, else `resolve_engine_source_head(...).sha`
+    (basis "source-tree", or "mirror-stamp" for an unstamped mirror).
+    `source_head` is always the source-head resolution, so a publish lagging the
+    source head is visible beside `sha` rather than hidden by it. Never raises;
+    zero spawns.
+
+    Negative-spec: `warm.skew` is imported inside the function — it pulls
+    subprocess/tempfile at module load and this module must stay cheap to import.
+    """
+    from coordinator_core.git.repo_root import _walk_for_repo
+
+    head = resolve_engine_source_head(engine_dir)
+    try:
+        start = Path(engine_dir) if engine_dir is not None else Path(__file__).resolve().parent
+        found = _walk_for_repo(start)
+        if found is not None:
+            root = found[1]
+        else:
+            root = start.parent if start.name == "coordinator_core" else start
+        from coordinator_core.warm import skew
+
+        stamped = skew.read_engine_stamp_sha(root)
+    except OSError:
+        stamped = None
+    if stamped:
+        return EngineIdentity(stamped, "published-stamp", head.sha)
+    return EngineIdentity(head.sha, head.basis, head.sha)
 
 
 def resolve_engine_sha() -> str | None:

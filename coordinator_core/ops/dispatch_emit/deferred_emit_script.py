@@ -161,12 +161,15 @@ function _normPath(p) {
   const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
   return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : REPO_ROOT + '/' + s.replace(/^\.\//, '');
 }
-""" + TWIN_CHECK_JS + r"""async function _startLoop(firstPath) {
+""" + TWIN_CHECK_JS + r"""let _hostRootStarted = false;
+async function _startLoop(firstPath) {
   let path = firstPath;
   let lastSha = null;
   if (typeof firstPath !== 'string' || !firstPath.endsWith('.mjs')) return { ok: false, error: 'refusing to start a non-script path: ' + String(firstPath) };
   for (let round = 0; round <= MAX_STAGE_ROUNDS; round++) {
-    const result = START_ARGS === null ? await workflow({ scriptPath: path }) : await workflow({ scriptPath: path, args: START_ARGS });
+    const result = round === 0 && !_hostRootStarted && typeof engineOp === 'function' && typeof engineOp.hostWorkflow === 'function'
+      ? (_hostRootStarted = true, await engineOp.hostWorkflow(path))
+      : START_ARGS === null ? await workflow({ scriptPath: path }) : await workflow({ scriptPath: path, args: START_ARGS });
     const pending = (result !== null && typeof result === 'object') ? result.__PENDING_KEY__ : null;
     if (!pending) return { ok: true, result: result };
     if (round >= MAX_STAGE_ROUNDS) return { ok: false, error: 'stage_pending after ' + MAX_STAGE_ROUNDS + ' stage rounds' };

@@ -103,24 +103,39 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
         raise ValueError('workflow args must be an object')
     private_spec = validate_private_engine_config(private_engine, backend=backend)
     private_sha = _private_source_sha() if private_spec is not None else None
-    script = Path(script_path).resolve(strict=True)
-    repo = fire._resolve_target_repo(script, cwd)
-    fire._assert_script_under_repo_root(script, repo)
-    digest = hashlib.sha256(script.read_bytes()).hexdigest()
-    if expected is not None and expected != digest:
-        from coordinator_core.ops.dispatch_emit.op import guard_against_fired_drift
-
-        guard_against_fired_drift(script, expected)
     from coordinator_core.warm import sandboxed_spawn
 
-    if sandboxed_spawn.caller_is_sandboxed():
-        forward = {'script_path': str(script), 'cwd': str(repo), 'backend': backend, 'executor': 'headless',
-                   'expected': expected, 'run_id': run_id, 'args': args, 'caller_session_id': caller_session_id,
+    script = Path(script_path)
+    if not script.is_absolute() and cwd is not None:
+        script = Path(cwd) / script
+    script = script.absolute()
+    forward_to_host = sandboxed_spawn.caller_is_sandboxed()
+    if not forward_to_host:
+        try:
+            resolved_script = script.resolve(strict=True)
+            repo = fire._resolve_target_repo(resolved_script, cwd)
+            fire._assert_script_under_repo_root(resolved_script, repo)
+            script = resolved_script
+        except PermissionError:
+            forward_to_host = True
+    # The caller must still read the bytes; an unreadable sibling is never delegated.
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    if expected is not None and expected != digest:
+        from coordinator_core.ops.dispatch_emit.op import FiredDriftError, guard_against_fired_drift
+
+        guard_against_fired_drift(script, expected)
+        raise FiredDriftError(f'{script} changed between emit and fire (sha256 {digest}; expected {expected})')
+    if forward_to_host:
+        # The host rechecks authority and real containment.
+        host_cwd = str(Path(cwd).absolute()) if cwd else cwd
+        repo = host_cwd or str(script.parent)
+        forward = {'script_path': str(script), 'cwd': host_cwd, 'backend': backend, 'executor': 'headless',
+                   'expected': digest, 'run_id': run_id, 'args': args, 'caller_session_id': caller_session_id,
                    'notify_to': notify_to, 'concurrency_cap': concurrency_cap, 'timeout_s': timeout_s,
                    'refire': refire or None}
         if private_engine is not None:
             forward['private_engine'] = private_engine
-        return sandboxed_spawn.forward_spawn_to_warm('workflow.fire', {k: v for k, v in forward.items() if v is not None}, str(repo))
+        return sandboxed_spawn.forward_spawn_to_warm('workflow.fire', {k: v for k, v in forward.items() if v is not None or k == 'cwd'}, str(repo))
     worker_root = Path(__file__).resolve().parents[3] if private_spec is not None else _worker_engine_root()
     registry, identifier, record_path, record = fire.reserve_fire(
         script, repo, digest, expected=expected, concurrency_cap=concurrency_cap, notify_to=notify_to,
@@ -338,7 +353,10 @@ def _warm_reply(op: str, params: dict, repo: str, artifacts: Path, timeout: floa
 
 
 def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: float, *, observation: dict | None = None):
-    """Run the same source revision as this executor: the warm engine at its own stamp, else a bounded cold process."""
+    """Invoke this executor's source; emit stays in-process to keep live tokens off disk.
+
+    Other operations use the warm engine at its own stamp or a bounded cold process.
+    """
     if not isinstance(op, str) or not isinstance(params, dict):
         raise ValueError('engineOp requires an operation name and object params')
     if set(params) == {'paramsFile'}:
@@ -348,6 +366,21 @@ def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: f
         if not isinstance(params, dict):
             raise ValueError('engineOp paramsFile must contain an object')
     artifacts.mkdir(parents=True, exist_ok=True)
+    if op == 'dispatch.emit':
+        import asyncio
+        from coordinator_core.ipc import dispatch_message
+        from coordinator_core.warm.skew import compute_client_token
+
+        # Emission can return a live token: never serialize that reply to the workspace.
+        compute_client_token(_executor_root())
+        reply = asyncio.run(dispatch_message({'jsonrpc': '2.0', 'id': 1, 'method': op,
+                                             'params': params, '_origin_worktree': repo}))
+        if 'error' in reply:
+            raise RuntimeError(json.dumps(reply['error']))
+        result = reply['result']
+        if isinstance(result, dict) and isinstance(result.get('fire_args'), dict):
+            result = {**result, 'fire_args': {k: v for k, v in result['fire_args'].items() if k != 'runToken'}}
+        return result
     request, response = artifacts / 'request.json', artifacts / 'response.json'
     request_bytes = json.dumps({'op': op, 'params': params, 'repo_root': repo}).encode("utf-8")
     request.write_bytes(request_bytes)
@@ -386,7 +419,33 @@ def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: f
 
 def _host_gate_binding(record: dict) -> dict:
     return {"run_id": record["run_id"], "fire_id": record["fire_id"],
+            **{key: record[key] for key in ("script_path", "script_sha256", "caller_session_id") if key in record},
             "stage": "gate", "operation": "dispatch.ask_gate"}
+
+
+def _emitted_host_root(result: dict, record: dict) -> dict:
+    """Bind a host-observed emit to this fire's caller, script receipt and live run."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    repo = Path(record['repo_root']).resolve()
+    script = (repo / result['path']).resolve(strict=True)
+    script.relative_to(repo)
+    run_id = result['run_id']
+    if script.name != run_id + '.workflow.mjs' or (record.get('run_id') and record['run_id'] != run_id):
+        raise ValueError('emitted root run binding mismatch')
+    source = script.read_bytes()
+    digest = hashlib.sha256(source).hexdigest()
+    receipt = json.loads(script.with_name(script.name + '.emitted.json').read_text(encoding='utf-8'))
+    caller = record.get('caller_session_id')
+    if not caller or receipt.get('session_id') != caller:
+        raise ValueError('emitted root caller binding mismatch')
+    if digest != result.get('sha256') or receipt.get('sha256') != digest:
+        raise ValueError('emitted root script digest mismatch')
+    token = run_token.escrowed(repo, run_id)
+    if not token or not run_token.admits(repo, run_id, token, str(script)):
+        raise ValueError('emitted root live run binding mismatch')
+    return {'run_id': run_id, 'script_path': str(script), 'script_sha256': digest,
+            'caller_session_id': caller}
 
 
 _GATE_ARTIFACTS = ("request", "response", "warm_route")
@@ -945,9 +1004,15 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
             gate_lock = threading.Lock()
             gate_started = False
             gate_receipt: tuple[Path, str] | None = None
+            emitted_root = None
+
+            def check_binding(event, owner):
+                expected = {key: owner[key] for key in ('script_path', 'script_sha256')}
+                if event.get('binding') != {'depth': 0, **expected}:
+                    raise ValueError('host operation requires its bound root workflow')
 
             def respond(event) -> None:
-                nonlocal gate_started, gate_receipt
+                nonlocal gate_started, gate_receipt, emitted_root
                 reply = {'id': event['id']}
                 try:
                     remaining = deadline - time.monotonic()
@@ -957,21 +1022,40 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                         raise RuntimeError('workflow runtime exited before queued agent dispatch')
                     if event['type'] == 'invoke':
                         operation_dir = artifacts / 'operations' / str(event['id'])
-                        if event['op'] == 'gate.host_run':
+                        owner = {**record, **record.get('emitted_root', {})}
+                        if event['op'] == 'workflow.host_start':
+                            check_binding(event, record)
+                            if emitted_root is None or record.get('emitted_root'):
+                                raise ValueError('no unstarted host-emitted root')
+                            path = (Path(record['repo_root']) / event['params']['script_path']).resolve(strict=True)
+                            if str(path) != emitted_root['script_path']:
+                                raise ValueError('emitted root path binding mismatch')
+                            source = path.read_bytes()
+                            if hashlib.sha256(source).hexdigest() != emitted_root['script_sha256']:
+                                raise ValueError('emitted root changed before host start')
+                            _emitted_host_root({'path': str(path), 'run_id': emitted_root['run_id'],
+                                                'sha256': emitted_root['script_sha256']}, record)
+                            record['emitted_root'] = emitted_root
+                            _save(record_path, record)
+                            reply['result'] = {**emitted_root, 'source': source.decode('utf-8'),
+                                               'args': {'repoRoot': record['repo_root']}}
+                        elif event['op'] == 'gate.host_run':
+                            check_binding(event, owner)
                             with gate_lock:
                                 if gate_started:
                                     raise ValueError('host gate already started for this fire')
                                 gate_started = True
-                            result, digest = _host_gate(event['params'], record, operation_dir, remaining)
+                            result, digest = _host_gate(event['params'], owner, operation_dir, remaining)
                             with gate_lock:
                                 gate_receipt = operation_dir / "consumed.json", digest
                             reply['result'] = result
                         elif event['op'] == 'gate.host_receipt':
+                            check_binding(event, owner)
                             with gate_lock:
                                 if gate_receipt is None:
                                     raise ValueError('host gate receipt missing')
                                 path, digest = gate_receipt
-                            reply['result'] = _read_host_gate_receipt(path, record, digest)
+                            reply['result'] = _read_host_gate_receipt(path, owner, digest)
                         elif event['op'] == 'review.reverify.host_test_leg':
                             reply['result'] = _reverify_test_leg(event['params'], record['repo_root'], operation_dir, remaining)
                         elif event['op'] == 'verify.host_test_leg':
@@ -980,6 +1064,13 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                         else:
                             reply['result'] = _invoke_source(event['op'], event['params'], record['repo_root'],
                                                             operation_dir, remaining)
+                            if event['op'] == 'dispatch.emit' and event.get('binding', {}).get('depth') == 0:
+                                check_binding(event, record)
+                                result = reply['result']
+                                if isinstance(result, dict) and result.get('path') and result.get('sha256'):
+                                    emitted_root = _emitted_host_root(result, record)
+                                    reply['result'] = {**result, 'fire_args': {
+                                        k: v for k, v in result.get('fire_args', {}).items() if k != 'runToken'}}
                     else:
                         refusal = _cancelled_run_refusal(record)
                         if refusal:

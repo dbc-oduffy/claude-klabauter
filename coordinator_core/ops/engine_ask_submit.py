@@ -176,6 +176,8 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
             fired = reply["fire"]
             if isinstance(fired, dict) and fired.get("refused"):
                 reply["fire_error"] = f"{fired['refused']}: {fired.get('reason', '')}"
+            elif not isinstance(fired, dict) or not isinstance(fired.get("fire_id"), str) or not fired["fire_id"].strip():
+                reply["fire_error"] = "Requested fire returned no fire_id; reconcile the minted run before retrying."
         except Exception as exc:  # the submit stands; the caller fires by hand with the handle
             reply["fire_error"] = f"{type(exc).__name__}: {exc}"
     return reply
