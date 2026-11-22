@@ -1289,13 +1289,17 @@ def _land(
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
         _stamp_ignored_excluded(worktree_root / record_dir_rel, ignored_excluded)
         _record_withheld_prints(worktree_root, record_dir_rel, withheld, paths)
-        _record_withheld_own_delta(worktree_root, record_dir_rel, withheld, paths, run_id)
     kept_reply = _record_kept(
         worktree_root, record_dir_rel, owner, eviction.kept_view(withheld) if eviction else withheld,
         halted, paths, params.get(CONSUMED_RETURNS_PARAM),
         post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,
         common_dir=resolve_git_common_dir(worktree_root), manifest_doc=manifest_doc,
     )
+    if (worktree_root / record_dir_rel).is_dir():
+        _record_withheld_own_delta(
+            worktree_root, record_dir_rel, withheld, paths, run_id,
+            kept=_kept_paths(worktree_root, record_dir_rel),
+        )
     paths[:], kept_state = _split_run_state(paths, record_dir_rel, record_ignored)
     ignored_excluded.extend(kept_state)
     if outcome_path and outcome_path not in paths:
@@ -1475,10 +1479,20 @@ def _own_delta_image(root: Path, common_dir: Path, head, path: str, pre_sha: Opt
     return post if pre == tip else apply_own_delta(pre, post, tip)
 
 
-def _record_withheld_own_delta(root: Path, record_dir_rel: str, withheld: dict, paths: list, run_id: str) -> None:
-    """Write ``WITHHELD_OWN_DELTA_FILE`` beside the marker: per withheld path the run baselined, the
-    persisted blob of HEAD's LF bytes plus only this run's pre->post change (``own_delta_merge``), so a
-    hand land commits the run's hunks and never the whole-image blob a peer's hunks or CRLF ride in.
+def _kept_paths(root: Path, record_dir_rel: str) -> list:
+    """Every path ``kept.json`` records, chunk paths and post-checkpoint paths; [] when it is absent."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    return sorted(kept_work.kept_fingerprints(root / record_dir_rel))
+
+
+def _record_withheld_own_delta(
+    root: Path, record_dir_rel: str, withheld: dict, paths: list, run_id: str, kept: Iterable[str] = (),
+) -> None:
+    """Write ``WITHHELD_OWN_DELTA_FILE`` beside the marker: per withheld or ``kept`` path the run
+    baselined, the persisted blob of HEAD's LF bytes plus only this run's pre->post change
+    (``own_delta_merge``), so a hand land commits the run's hunks and never the whole-image blob a
+    peer's hunks or CRLF ride in (``kept.json`` blobs are the staged worktree image, peer dirt included).
     A path with no landable delta is named under ``unlandable``. The file joins ``paths`` (in place)."""
     import json
     from pathlib import PurePosixPath
@@ -1492,7 +1506,7 @@ def _record_withheld_own_delta(root: Path, record_dir_rel: str, withheld: dict, 
     from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
 
     baseline = halted_hunk_attribution._baseline(root, run_id) or {}
-    wanted = [p for p in sorted(withheld) if isinstance(p, str) and p in baseline]
+    wanted = [p for p in sorted({*withheld, *kept}) if isinstance(p, str) and p in baseline]
     if not wanted:
         return
     common = resolve_git_common_dir(root)
