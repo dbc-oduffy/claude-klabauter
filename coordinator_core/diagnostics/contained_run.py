@@ -368,6 +368,32 @@ def _kill_child(proc) -> bool:
     return True
 
 
+_PROC_STAT_SESSION_FIELD = 3
+_PROC_STAT_UTIME_FIELD = 11
+
+
+def _session_cpu_seconds(sid: int) -> float | None:
+    """Summed utime+stime of every live process in session `sid`, read from /proc with no spawn; None where
+    /proc is absent. Exited members drop out of the sum, so a caller compares for change, not growth."""
+    try:
+        names = os.listdir("/proc")
+        ticks = os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError):
+        return None
+    total = 0
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", "rb") as fh:
+                rest = fh.read().rsplit(b")", 1)[1].split()
+            if int(rest[_PROC_STAT_SESSION_FIELD]) == sid:
+                total += int(rest[_PROC_STAT_UTIME_FIELD]) + int(rest[_PROC_STAT_UTIME_FIELD + 1])
+        except (OSError, IndexError, ValueError):
+            continue
+    return total / ticks
+
+
 def spawn_in_capped_job(
     argv,
     *,
@@ -376,7 +402,7 @@ def spawn_in_capped_job(
     job_memory_limit_bytes=None,
     process_count: int | None = None,
     background: bool = False,
-):
+) -> tuple:
     """Start `argv` inside a process-count- and memory-capped tree; returns `(proc, close)`.
 
     `background=True` makes the tree a low-priority test leg: BelowNormal priority (nice +10 on
@@ -391,6 +417,10 @@ def spawn_in_capped_job(
     `close()` is idempotent and ends the whole tree: a Job Object close on Windows, a killpg of
     the new session on POSIX. Windows spawns CREATE_SUSPENDED, assigns, then resumes, so the
     child cannot fork before it is a job member.
+
+    `close.tree_cpu_s()` returns the tree's cumulative CPU seconds (Windows: job basic accounting;
+    Linux: the session's /proc stat sum), or None when unreadable (macOS, a closed job). It spawns
+    nothing; compare successive reads for change.
 
     Trap: POSIX takes no process or memory cap here (the new session plus killpg bounds lifetime
     only). RLIMIT_NPROC is deliberately not used: it counts per user, so one runner's cap would
@@ -413,6 +443,7 @@ def spawn_in_capped_job(
             except OSError:
                 pass
 
+        close_posix.tree_cpu_s = lambda: _session_cpu_seconds(proc.pid)
         return proc, close_posix
 
     if job_memory_limit_bytes is None:
@@ -458,6 +489,18 @@ def spawn_in_capped_job(
         except OSError:
             pass
 
+    def tree_cpu_s() -> float | None:
+        if state["job"] is None:
+            return None
+        try:
+            from coordinator_core.benchmarks.process_time import _windows_query_job_accounting
+
+            info = _windows_query_job_accounting(state["job"])
+        except OSError:
+            return None
+        return (info.TotalUserTime + info.TotalKernelTime) / 1e7
+
+    close_windows.tree_cpu_s = tree_cpu_s
     return proc, close_windows
 
 

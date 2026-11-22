@@ -1407,6 +1407,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "plan.premise_record": OpClass.MUTATING,
     # plan.record_residue_rulings — MUTATING: rewrites the pm_ruling block of each caller-named docs/plans/*.md.
     "plan.record_residue_rulings": OpClass.MUTATING,
+    # rulings.index — MUTATING: `append` writes one new state/pm-rulings/<id>.yaml; `list` is a read.
+    "rulings.index": OpClass.MUTATING,
+    # rulings.search / rulings.gate / rulings.coverage — COMPUTE_ONLY: read the register, write nothing.
+    "rulings.search": OpClass.COMPUTE_ONLY,
+    "rulings.gate": OpClass.COMPUTE_ONLY,
+    "rulings.coverage": OpClass.COMPUTE_ONLY,
     # plan.backfill_warp_executing — MUTATING with apply: rewrites the `status:` line of pre-executing docs/plans/*.md
     # that a warp manifest names and commits them; a dry run writes nothing.
     "plan.backfill_warp_executing": OpClass.MUTATING,

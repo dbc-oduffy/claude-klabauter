@@ -350,6 +350,11 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
             cause = ltt.ZERO_RUN_PROCESS_ERROR
     result[ltt.ZERO_RUN_CAUSE_KEY] = cause
     result["status"] = "error"
+    # Names where pytest ran: interpreter and process cwd, no spawn.
+    result["interpreter"], result["cwd"] = sys.executable, os.getcwd()
+    no_module = next((ln.strip() for ln in lines if _IMPORT_FAIL.match(ln.strip())), None)
+    if no_module:
+        result["import_error_text"] = no_module
     # A mirror leg can collect tests and then deliberately exclude their entire tier.
     if rc == 0 and any(line.startswith("every collected test is in an excluded tier (") for line in lines):
         return

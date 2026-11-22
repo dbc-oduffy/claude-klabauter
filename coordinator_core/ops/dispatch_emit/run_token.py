@@ -1191,7 +1191,7 @@ def _resume_stage_waiter(repo_root: Path, waiter: dict) -> bool:
     run_id = waiter["run_id"]
     if escrowed(repo_root, run_id) is not None:
         return False
-    sizing_rel = (_read_rec(repo_root, run_id) or {}).get("sizing_rel")
+    sizing_rel = (_read_rec(repo_root, run_id) or {}).get("sizing_rel") or waiter.get("sizing_rel")
     discard(repo_root, run_id)
     if not (isinstance(sizing_rel, str) and sizing_rel):
         logging.getLogger(__name__).warning("stage-wait %s has no sizing to refire; its token is retired", run_id)

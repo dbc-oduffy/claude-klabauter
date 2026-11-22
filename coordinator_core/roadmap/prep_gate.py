@@ -187,7 +187,7 @@ ENGINE_ERROR = "ENGINE-ERROR"
 CLASS_ORDER = (
     "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT",
     "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "EXECUTOR_MERGE", "GITIGNORED_WRITES", "CAPABILITIES",
-    "SCHEMA", "REGISTER", "DONE_CLAUSE",
+    "SCHEMA", "RULINGS", "REGISTER", "DONE_CLAUSE",
 )
 
 #: ``classes["CAPABILITIES"]["kind"]`` for an absent ``capabilities`` key; the
@@ -2514,6 +2514,39 @@ def _is_stamp_field_error(error: Mapping[str, Any]) -> bool:
     return all(n.split(".")[0].startswith(_SCHEMA_STAMP_FIELD_PREFIX) for n in names)
 
 
+#: ``classes["RULINGS"]["kind"]`` for a plan that defers or contradicts an accepted PM ruling.
+RULINGS_KIND = "ruling-deferred-or-contradicted"
+
+
+def _rulings(text: str, repo_root: Path) -> Dict[str, Any]:
+    """Gate the already-read plan ``text`` against the accepted PM rulings register.
+
+    A prep-gate finding, not a deny guard: the detector's refuse becomes a DEFECT
+    carrying the ruling ids and its route. Register read and detection are in-process.
+    """
+    from coordinator_core.ops.rulings.gate import gate_text
+
+    reply = gate_text(text, Path(repo_root))
+    if reply.get("verdict") != "refuse":
+        return _pass("no accepted PM ruling deferred or contradicted")
+    ids = list(reply.get("deferred") or []) + [
+        i for i in (reply.get("contradicted") or []) if i not in (reply.get("deferred") or [])
+    ]
+    unnamed = len(reply.get("unnamed_deferrals") or [])
+    parts = []
+    if ids:
+        parts.append(f"defers or contradicts accepted ruling(s) {', '.join(ids)}")
+    if unnamed:
+        parts.append(f"{unnamed} unnamed defer-to-PM phrase(s)")
+    route = reply.get("route") or "coordinator:apm"
+    return _defect(
+        RULINGS_KIND,
+        f"{'; '.join(parts)}. Route: {route}. Fix: drop the deferral, or cite the newer PM turn "
+        "(`pm_turn: <ref> <YYYY-MM-DD> <ruling-id>`); an unruled question goes to the route "
+        "as a named question.",
+    )
+
+
 def _schema(
     fm: Dict[str, Any], prime_exit: Dict[str, Any], parse_error: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -3095,6 +3128,7 @@ def evaluate_plan(
             "GITIGNORED_WRITES": _gitignored_writes(raw_spine_rows(text), gitignored_roots),
             "CAPABILITIES": _capabilities(fm),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
+            "RULINGS": _rulings(text, edge_root),
             "REGISTER": _register(
                 fm, repo_root, raw_spine_rows(text), sizing_cache, text, plan_edge_cache
             ),
@@ -3371,7 +3405,7 @@ def refusal_message(
         )) and not all(
             k in (
                 "EXECUTOR_COMMIT", "EXECUTOR_MERGE", "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE",
-                "GITIGNORED_WRITES",
+                "GITIGNORED_WRITES", "RULINGS",
             )
             or v["status"] == "PASS"
             for k, v in classes.items()

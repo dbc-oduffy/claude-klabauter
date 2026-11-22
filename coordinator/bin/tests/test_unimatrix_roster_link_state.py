@@ -123,7 +123,7 @@ def drive_default_path(mod, monkeypatch, tmp_path, win, fail_first=False):
             dials.append(argv)
             if path is not None:
                 masters.add(path)
-        if fail_first and len(argvs) == 1:
+        if fail_first and len(argvs) <= mod.RESET_TRIES:
             return subprocess.CompletedProcess(argv, 255, b"", b"kex_exchange_identification: closed\n")
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
@@ -261,7 +261,7 @@ def test_a_roster_slower_than_the_old_budget_cannot_mark_the_link_down(monkeypat
     mod = load()
     monkeypatch.setattr(mod, "_is_win", lambda platform=None: False)
     monkeypatch.setattr(mod, "ensure_key_loaded", lambda *a, **k: None)
-    monkeypatch.setattr(mod, "pick_remote", lambda lan, tunnel=None, reachable=None: lan)
+    monkeypatch.setattr(mod, "pick_remote", lambda lan, tunnel=None, reachable=None, key=None: lan)
     monkeypatch.setattr(mod._box_mux(), "verified_host", lambda host, *a, **k: host)
 
     def hung(argv, **kw):

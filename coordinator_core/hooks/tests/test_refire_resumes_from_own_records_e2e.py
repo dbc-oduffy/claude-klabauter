@@ -6,6 +6,7 @@ its own paths; one pack-read stall in the recompose is retried."""
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from coordinator_core.ops import plan_readiness_verdict
 from coordinator_core.ops.dispatch_emit import ask_compose, halt_resume_build, kept_work, op, row_returns, sizing_fire
 from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from coordinator_core.ops.warp_run_deliverable import RUN_WALL_TIMEOUT_SECONDS
 
 pytestmark = pytest.mark.complete
 
@@ -127,6 +129,40 @@ def test_default_refire_resumes_the_run_at_landing_from_its_own_records_with_no_
 
     verdict = landing_resume_from_own_records(root, RUN)
     assert verdict is not None and set(verdict.paths) >= {RETURNED_ONLY, KEPT}
+
+
+def _wall_deadline(env: dict) -> datetime:
+    import re
+
+    match = re.search(r"Wall: the run is halted wall_timeout at (\S+Z) \((\d+)s from its (\w+)", json.dumps(env))
+    assert match is not None, "the resume reply names no wall deadline"
+    assert int(match.group(2)) == RUN_WALL_TIMEOUT_SECONDS
+    return datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+def test_resume_reply_states_the_wall_deadline_the_run_is_rearmed_under(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _repo(tmp_path)
+    monkeypatch.setattr(mod, "_spawn_recompose", lambda r, run_id: True)
+    old = (datetime.now(timezone.utc) - timedelta(seconds=RUN_WALL_TIMEOUT_SECONDS + 7200)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _put(root / RECORD_DIR_ROOT / RUN / "run-stage.json", {"stage": "halted", "started_at": old})
+
+    deadline = _wall_deadline(mod.evaluate(_payload(root), emit=_emit([])))
+
+    expected = datetime.now(timezone.utc) + timedelta(seconds=RUN_WALL_TIMEOUT_SECONDS)
+    assert abs((deadline - expected).total_seconds()) < 120  # a resume of an over-wall run restarts the wall, not the old deadline
+
+
+def test_resume_reply_of_a_run_not_rearmed_states_the_deadline_from_its_recorded_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _repo(tmp_path)
+    monkeypatch.setattr(mod, "_spawn_recompose", lambda r, run_id: True)
+    started = (datetime.now(timezone.utc) - timedelta(seconds=600)).replace(microsecond=0)
+    _put(root / RECORD_DIR_ROOT / RUN / "run-stage.json", {
+        "stage": "minted", "started_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+
+    deadline = _wall_deadline(mod.evaluate(_payload(root), emit=_emit([])))
+
+    assert deadline == started + timedelta(seconds=RUN_WALL_TIMEOUT_SECONDS)
 
 
 def _readiness(root: Path, citation_path: str) -> dict:

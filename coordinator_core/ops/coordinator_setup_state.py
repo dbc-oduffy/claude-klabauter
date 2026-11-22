@@ -76,6 +76,8 @@ from __future__ import annotations
 GENERATES = []
 
 import json
+
+import yaml
 import os
 import re
 import sys
@@ -351,43 +353,186 @@ def cmd_withheld(env: Optional[dict] = None) -> int:
     return 0
 
 
+def _read_outcome(state_file: str):
+    try:
+        with open(state_file, encoding="utf-8", newline="") as fh:
+            content = fh.read()
+    except FileNotFoundError:
+        content = ""
+    root = yaml.compose(content, Loader=yaml.SafeLoader)
+    data = yaml.safe_load(content)
+    if root is None or (isinstance(root, yaml.ScalarNode) and root.value == ""
+                        and root.tag == "tag:yaml.org,2002:null"):
+        return content, {}, None
+    if not isinstance(root, yaml.MappingNode) or not isinstance(data, dict):
+        raise ValueError("state must be a YAML mapping")
+    keys = [key.value for key, _ in root.value]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate state keys")
+    for key in ("setup_receipt", "setup_withheld"):
+        if key in data and not isinstance(data[key], dict):
+            raise ValueError(f"{key} must be a mapping")
+        if key in data:
+            json.dumps(data[key], default=_json_scalar, allow_nan=False)
+    blockers = data.get("setup_withheld", {}).get("blocking_steps", [])
+    if not isinstance(blockers, list) or any(not isinstance(step, str) for step in blockers):
+        raise ValueError("blocking_steps must be a list of strings")
+    return content, data, root
+
+
+def _json_scalar(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    from datetime import date
+    if isinstance(value, date):
+        return value.isoformat()
+    raise ValueError("receipt contains a non-JSON scalar")
+
+
+class _OutcomeSpanLoader(yaml.SafeLoader):
+    def compose_node(self, parent, index):
+        # Composed aliases normally reuse the anchor's marks, not their own span.
+        if self.check_event(yaml.AliasEvent):
+            event = self.get_event()
+            from copy import copy
+            node = copy(self.anchors[event.anchor])
+            node.start_mark, node.end_mark = event.start_mark, event.end_mark
+            return node
+        return super().compose_node(parent, index)
+
+
+def _merge_outcome(content: str, root, updates: dict) -> str:
+    tokens = list(yaml.scan(content, Loader=yaml.SafeLoader))
+    resolved = {}
+    def collect(node):
+        if id(node) in resolved:
+            return
+        resolved[id(node)] = node
+        if isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                collect(key)
+                collect(value)
+        elif isinstance(node, yaml.SequenceNode):
+            for value in node.value:
+                collect(value)
+    if root is not None:
+        collect(root)
+    nodes_by_start = {n.start_mark.index: n for n in resolved.values()}
+    anchors = {event.anchor: nodes_by_start[event.start_mark.index]
+               for event in yaml.parse(content)
+               if getattr(event, "anchor", None) and not isinstance(event, yaml.AliasEvent)}
+    root = yaml.compose(content, Loader=_OutcomeSpanLoader)
+    if not isinstance(root, yaml.MappingNode):
+        root = None
+    flow = root is not None and root.flow_style
+    newline = "\r\n" if "\r\n" in content else "\n"
+    pending = dict(updates)
+    edits = []
+    for key, value in root.value if root else ():
+        if key.value not in pending:
+            continue
+        replacement = pending.pop(key.value)
+        start = key.start_mark.index
+        owned = [t for t in tokens if start <= t.start_mark.index < value.end_mark.index
+                 and t.end_mark.index <= value.end_mark.index
+                 and t.end_mark.index > t.start_mark.index]
+        end = max([key.end_mark.index, value.end_mark.index
+                   if isinstance(value, yaml.ScalarNode) else start] +
+                  [t.end_mark.index for t in owned])
+        if flow and not replacement:
+            following = next((t for t in tokens if t.start_mark.index >= end
+                              and isinstance(t, (yaml.FlowEntryToken, yaml.FlowMappingEndToken))), None)
+            if isinstance(following, yaml.FlowEntryToken):
+                end = following.end_mark.index
+            else:
+                preceding = [t for t in tokens if t.end_mark.index <= start
+                             and isinstance(t, yaml.FlowEntryToken)]
+                if preceding:
+                    start = preceding[-1].start_mark.index
+            owned = [t for t in tokens if start <= t.start_mark.index < end
+                     and t.end_mark.index <= end
+                     and t.end_mark.index > t.start_mark.index]
+        # Scanner tokens cover quoted/block scalars, including literal '#' bytes.
+        comments = []
+        cursor = start
+        for token in owned:
+            gap = content[cursor:token.start_mark.index]
+            for line in gap.splitlines(keepends=True):
+                if "#" in line:
+                    comments.append(line if not line.split("#", 1)[0].strip()
+                                    else line[line.index("#"):])
+            cursor = max(cursor, token.end_mark.index)
+        preserved = "".join(comments)
+        if preserved and not preserved.endswith(("\n", "\r")):
+            preserved += newline
+        rendered = replacement.replace("\n", newline).rstrip("\r\n") if replacement else ""
+        if flow and replacement:
+            rendered = json.dumps(yaml.safe_load(replacement), default=_json_scalar)[1:-1]
+        edits.append((start, end, preserved + rendered))
+    removed = {t.value for t in tokens if isinstance(t, yaml.AnchorToken)
+               and any(start <= t.start_mark.index < end for start, end, _ in edits)}
+    for token in tokens:
+        if (isinstance(token, yaml.AliasToken) and token.value in removed
+                and not any(start <= token.start_mark.index < end for start, end, _ in edits)):
+            value = yaml.safe_load(yaml.serialize(anchors[token.value]))
+            rendered = yaml.safe_dump(value, default_flow_style=True).rstrip("\n")
+            if rendered.endswith("\n..."):
+                rendered = rendered[:-4]
+            edits.append((token.start_mark.index, token.end_mark.index,
+                          rendered.replace("\n", newline)))
+    for start, end, replacement in sorted(edits, reverse=True):
+        content = content[:start] + replacement + content[end:]
+    additions = "".join(block for block in pending.values() if block).replace("\n", newline)
+    if additions:
+        if flow:
+            mapping = yaml.safe_load(content)
+            appended = yaml.safe_load(additions)
+            index = yaml.compose(content, Loader=yaml.SafeLoader).end_mark.index - 1
+            fields = json.dumps(appended, default=_json_scalar)[1:-1]
+            content = content[:index] + (", " if mapping else "") + fields + content[index:]
+            yaml.safe_load(content)
+            return content
+        end_token = next((t for t in yaml.scan(content, Loader=yaml.SafeLoader)
+                          if isinstance(t, yaml.DocumentEndToken)), None)
+        index = end_token.start_mark.index if end_token else len(content)
+        prefix = content[:index]
+        content = prefix + (newline if prefix and not prefix.endswith("\n") else "") + additions + content[index:]
+    # Validate the candidate before replacement, including span-boundary mistakes.
+    yaml.safe_load(content)
+    return content
+
+
 def record_setup_concluded(receipt: SetupReceipt, env: Optional[dict] = None) -> int:
     """Stamp `setup_concluded_at` plus the `setup_receipt` block in ONE atomic write.
 
-    An existing stamp is left byte-identical. A stale `setup_withheld` block is dropped.
-    Returns 1 on OSError, never raises it.
+    Preserve the first stamp, refresh successful evidence and clear withheld state.
+    Invalid state and failed replacements leave prior evidence intact.
     """
     state_file = _state_file(env)
-    if _key_recorded("setup_concluded_at", state_file):
-        # The stamp stays; only a withheld block from a later run that has since cleared is dropped.
-        try:
-            with open(state_file, encoding="utf-8") as fh:
-                content = fh.read()
-            if _WITHHELD_BLOCK_RE.search(content):
-                _atomic_write(state_file, _WITHHELD_BLOCK_RE.sub("", content))
-        except OSError as exc:
-            sys.stderr.write(f"coordinator-setup-state: mktemp failed (clear withheld): {exc}\n")
-            return 1
-        print("setup_concluded_at already recorded; leaving unchanged.")
-        return 0
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
-        if os.path.isfile(state_file):
-            with open(state_file, encoding="utf-8") as fh:
-                content = fh.read()
-        else:
+        content, data, root = _read_outcome(state_file)
+        if not content:
             content = _SEED_HEADER
-        content = _WITHHELD_BLOCK_RE.sub("", content)
-        if content and not content.endswith("\n"):
-            content += "\n"
-        _atomic_write(
-            state_file,
-            content + f"setup_concluded_at: {now}\n" + _receipt_block(receipt),
-        )
-    except OSError as exc:
+        if data.get("setup_concluded_at") and not any(
+            key in data for key in ("setup_receipt", "setup_withheld")
+        ) and "codex_runtime" not in receipt.phases_ran:
+            # Historical stamp-only files retain their original base-install evidence.
+            return 0
+        wanted = yaml.safe_load(_receipt_block(receipt))["setup_receipt"]
+        if (data.get("setup_concluded_at") and data.get("setup_receipt") == wanted
+                and "setup_withheld" not in data):
+            return 0
+        updates = {"setup_receipt": _receipt_block(receipt), "setup_withheld": ""}
+        if not data.get("setup_concluded_at"):
+            updates["setup_concluded_at"] = f"setup_concluded_at: {now}\n"
+        candidate = _merge_outcome(content, root, updates)
+        if candidate != content:
+            _atomic_write(state_file, candidate)
+    except (OSError, UnicodeError, yaml.YAMLError, ValueError, TypeError, RecursionError) as exc:
         sys.stderr.write(f"coordinator-setup-state: mktemp failed (record): {exc}\n")
         return 1
-    print(f"Recorded setup_concluded_at: {now} in {state_file}")
+    print(f"Recorded successful setup receipt in {state_file}")
     return 0
 
 

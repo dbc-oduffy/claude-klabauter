@@ -85,7 +85,7 @@ def test_bind_seeds_the_register_in_order_and_is_idempotent(run):
         ("R3", "a raw ask", "ask", "open"),
     ]
     ledger = rl.read_ledger(repo, run[1])
-    assert ledger.sizing_rel == REL and ledger.all_of_pm_ask is False
+    assert ledger.sizing_rel == REL and ledger.all_of_pm_ask is True  # PM words held
     # One list of what the PM asked: no second store beside the register.
     assert not any(p.suffix == ".jsonl" for p in run[1].iterdir())
 
@@ -322,10 +322,29 @@ def test_superseded_needs_a_later_revision(run):
 
 def test_all_of_pm_ask_makes_an_inessential_item_mandatory(run):
     verdict = _verdict(("R1", "met"), ("R2", "not_met", {"essential": False}), ("R3", "met"))
-    assert rl.judge(_ledger(run), verdict)["pass"] is True
-    _revise(run[0], all_of_pm_ask=True)
     out = rl.judge(_ledger(run), verdict)
     assert not out["pass"] and "all_of_pm_ask" in out["failures"][0]["reason"]
+
+
+@pytest.fixture
+def run_without_pm_words(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / REL).write_text(yaml.safe_dump(_sizing(pm_verbatims=[]), sort_keys=False), encoding="utf-8")
+    rl.start(tmp_path, RUN, all_of_pm_ask=False)
+    rl.bind(tmp_path, RUN, REL, ask_text="a raw ask")
+    _revise(tmp_path, verbatim="second thing")
+    _revise(tmp_path, verbatim="third thing")
+    return tmp_path, tmp_path / RECORD_DIR_ROOT / RUN
+
+
+def test_a_non_essential_item_passes_and_is_listed_open_when_no_pm_words_are_held(run_without_pm_words):
+    run = run_without_pm_words
+    ledger = _ledger(run)
+    assert ledger.all_of_pm_ask is False
+    verdict = _verdict(("R1", "met"), ("R2", "not_met", {"essential": False}), ("R3", "met"))
+    out = rl.judge(ledger, verdict)
+    assert out["pass"] is True and out["open"] == [{"id": "R2", "reason": "non-essential"}]
 
 
 def test_not_met_defaults_to_essential(run):
@@ -370,14 +389,10 @@ def test_an_essential_not_met_row_still_fails_beside_a_withheld_one(run):
 
 
 def test_open_lists_withheld_and_non_essential_rows_in_ledger_order(run):
-    verdict = _verdict(
-        ("R3", "not_met", {"essential": False}), ("R2", "not_met", {"withheld_by": "C9"}), ("R1", "met")
-    )
+    verdict = _verdict(("R3", "met"), ("R2", "not_met", {"withheld_by": "C9"}), ("R1", "met"))
     out = rl.judge(_ledger(run), verdict, gated=("C9",))
     assert out["pass"] is True
-    assert out["open"] == [
-        {"id": "R2", "reason": "withheld_by C9"}, {"id": "R3", "reason": "non-essential"},
-    ]
+    assert out["open"] == [{"id": "R2", "reason": "withheld_by C9"}]
 
 
 def test_judge_refuses_unknown_and_duplicate_ids_and_a_shapeless_verdict(run):
@@ -676,3 +691,54 @@ def test_plan_row_writes_unions_every_row_through_the_shared_spine_read(repo):
 
     assert files == {"a/b.py", "c.py"}
     assert dirs == ["out"]
+
+
+def test_out_of_scope_of_a_pm_row_without_a_pm_ruling_is_refused_and_names_row_and_ruling(run):
+    repo, _d = run
+    out = _revise(repo, verbatim="R1 is not needed", out_of_scope=["R1"])
+    assert "error" in out and "R1" in out["error"] and "PM verbatim" in out["error"]
+    assert "out_of_scope" in out["error"] and _rows(repo)[0]["status"] == "open"
+
+
+def _pm_ruling_row(text):
+    return {
+        rr.ROW_ID: "R9", rr.ROW_TEXT: text, rr.ROW_ANCHOR: "pm_verbatims turn 3", rr.ROW_SURFACE: rl.ROW_SURFACE,
+        rr.ROW_STATUS: rr.STATUS_DEFERRED, rr.ROW_CLAIMED_BY: [],
+        rr.ROW_RULING: {rr.RULING_SOURCE: "pm", rr.RULING_QUOTE: text, rr.RULING_REF: "T3", rr.RULING_ON: "2026-10-13"},
+    }
+
+
+def test_out_of_scope_of_a_pm_row_is_accepted_when_a_pm_verbatim_ruling_is_on_the_run(run):
+    repo, _d = run
+    ruling = "drop the op, it is out of scope"
+    rl._mutate_register(repo, REL, lambda rows: [*rows, _pm_ruling_row(ruling)])
+    out = _revise(repo, verbatim=ruling, out_of_scope=["R1"])
+    assert out["ok"] and out["withheld"] == ["R1"]
+    assert _rows(repo)[0]["status"] == "deferred"
+
+
+def test_out_of_scope_of_a_pm_row_with_a_too_short_quote_is_refused(run):
+    repo, _d = run
+    out = _revise(repo, verbatim="500ms", out_of_scope=["R1"])
+    assert "error" in out and _rows(repo)[0]["status"] == "open"
+
+
+def test_out_of_scope_of_a_pm_row_with_a_stray_fragment_of_a_long_pm_turn_is_refused(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    long_turn = "keep every one of the likeness swaps in this run and never drop a single one of them"
+    doc = _sizing(pm_verbatims=[{"turn": 1, "text": "build the op"}, {"turn": 2, "text": long_turn}])
+    (tmp_path / REL).write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    rl.start(tmp_path, RUN, all_of_pm_ask=False)
+    rl.bind(tmp_path, RUN, REL, ask_text="a raw ask")
+    out = _revise(tmp_path, verbatim="likeness swaps in this run", out_of_scope=["R1"])
+    assert "error" in out and "R1" in out["error"] and _rows(tmp_path)[0]["status"] == "open"
+    rl._mutate_register(tmp_path, REL, lambda rows: [*rows, _pm_ruling_row(long_turn)])
+    out = _revise(tmp_path, verbatim=long_turn, out_of_scope=["R1"])
+    assert out["ok"] and out["withheld"] == ["R1"]
+
+
+def test_out_of_scope_of_a_non_pm_row_needs_no_pm_ruling(run):
+    repo, _d = run
+    out = _revise(repo, verbatim="the raw ask is out", out_of_scope=["R3"])
+    assert out["ok"] and out["withheld"] == ["R3"]

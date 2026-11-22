@@ -51,6 +51,7 @@ from __future__ import annotations
 import calendar
 import json
 import os
+import socket
 import sys
 import tempfile
 import time
@@ -58,6 +59,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core import timestamps
+from coordinator_core.group_em import box_registry
 from coordinator_core.session import core as session_core
 from coordinator_core.session import day_branch_cut_lock
 
@@ -105,6 +107,29 @@ _STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 def watch_path(repo_root: str) -> str:
     """Absolute path of the heartbeat file for `repo_root`."""
     return os.path.join(repo_root, _WATCH_RELATIVE_PATH)
+
+
+def local_host() -> str:
+    """This box's hostname (stdlib, lower-cased); "" when the OS will not say. Never raises."""
+    try:
+        return socket.gethostname().strip().lower()
+    except OSError:
+        return ""
+
+
+def qualify_address(name: Optional[str], holder_host: Optional[str], reader_host: Optional[str] = None) -> Optional[str]:
+    """The address of `name` as a reader on `reader_host` (default: this box) can resolve it.
+
+    The bare `name` when the holder's host is unknown or is the reader's own box (`same_box` fold);
+    otherwise `name.<holder host>`, a dotless host taking the RFC 6762 `.local` mDNS suffix so a
+    Windows hostname reads as the peer box lists it. Never raises."""
+    if not name or not isinstance(holder_host, str) or not holder_host.strip():
+        return name
+    reader = local_host() if reader_host is None else reader_host
+    if box_registry.same_box(holder_host, reader):
+        return name
+    host = holder_host.strip().lower()
+    return f"{name}.{host if '.' in host else host + '.local'}"
 
 
 def iso_instant(epoch: float) -> str:
@@ -534,8 +559,12 @@ def stamp(
     writer_session_id: Optional[str] = None,
     pid: Optional[int] = None,
     pid_start_epoch: Optional[int] = None,
+    host: Optional[str] = None,
 ) -> bool:
     """Rewrite the heartbeat for one tick. Whole-file replace, never a fold.
+
+    `host` is the holder's box hostname, stamped from `local_host()` when omitted; a reader on
+    another host qualifies the holder's name with it (`qualify_address`).
 
     `declinations` is THIS tick's rows only -- each `{session_id, name, gate,
     reason}` -- never an accumulating history: that is what lets a reader tell
@@ -693,6 +722,7 @@ def stamp(
         payload: dict[str, Any] = {
             "holder_session_id": holder_session_id,
             "holder_name": holder_name,
+            "host": local_host() if host is None else host,
             "last_tick_at": _iso(now_epoch),
             "tick_source": tick_source,
             "next_expected_by": next_expected_by(
@@ -909,6 +939,7 @@ def read_liveness(
             "absent_reason": ABSENT_UNREADABLE if os.path.exists(path) else ABSENT_NEVER_ARMED,
             "holder_session_id": None,
             "holder_name": None,
+            "holder_host": None,
             "last_tick_at": None,
             "tick_source": None,
             "next_expected_by": None,
@@ -941,6 +972,7 @@ def read_liveness(
     base = {
         "holder_session_id": holder_session_id,
         "holder_name": record.get("holder_name"),
+        "holder_host": record.get("host"),
         "last_tick_at": record.get("last_tick_at"),
         "tick_source": record.get("tick_source"),
         "next_expected_by": record.get("next_expected_by"),

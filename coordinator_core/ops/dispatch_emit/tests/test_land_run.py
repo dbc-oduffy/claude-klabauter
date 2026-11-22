@@ -524,3 +524,63 @@ def test_a_post_commit_gap_downgrades_the_reply_but_never_rewrites_the_committed
 
     assert out["ledger_partial"] == {"R1": [_fx.CODE_THREE]}, out
     assert rewrites == [], rewrites
+
+
+from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import halted  # noqa: E402,F401  (fixture)
+from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo as pc_repo  # noqa: E402,F401  (fixture)
+
+
+def _foreign_red_land(halted, monkeypatch, failing):
+    """Drive `_land_inner` with a red overlay whose failing nodes are `failing`, the reach dirt held by a peer run."""
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+    from coordinator_core.ops.dispatch_emit import measured_rev as mr
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import RUN2
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _write
+    from coordinator_core.ops.dispatch_emit.tests.test_land_run_foreign_dirt_in_reach_e2e import (
+        FIXTURE, LANDING, _VERDICT, _track_fixture,
+    )
+    from coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence import _terminal_with
+    from coordinator_core.ops.dispatch_emit.tests.test_reverify_measures_landing_tree_e2e import _stage
+
+    _track_fixture(halted)
+    resume, token = _stage(halted)
+    measured = mr.measured_rev(RUN2, LANDING, repo_root=halted)
+    cov.write_verdict(halted, RUN2, measured, cov.OverlayVerdict("green", "seam", ("t/x.py",)))
+    _write(halted, FIXTURE, '{"a": 9, "dirty": true}\n')
+    nodes = tuple(n.format(f=FIXTURE) for n in failing)
+    monkeypatch.setattr(cov, "check_verdict", lambda *a, **k: cov.OverlayVerdict("red", "1 failed", ("t/x.py",), failing=nodes))
+    monkeypatch.setattr(land_run, "_split_reach_dirt", lambda *a, **k: ({}, {FIXTURE: "e7c174"}))
+    return _terminal_with(halted, token, resume, _VERDICT)
+
+
+class TestForeignRedOverlay:
+    @pytest.fixture(autouse=True)
+    def _isolated_system_temp(self, tmp_path, monkeypatch):
+        import tempfile
+
+        (tmp_path / "systemp").mkdir()
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+
+    @pytest.fixture
+    def repo(self, pc_repo):  # noqa: F811  (the product-commit repo `halted` builds on)
+        return pc_repo
+
+    def test_a_red_overlay_failing_only_in_a_peer_held_file_lands_with_the_advisory(self, halted, monkeypatch) -> None:
+        result = _foreign_red_land(halted, monkeypatch, ["{f}::test_peer"])
+
+        assert result["committed"] is True, result
+        assert "another run uncommitted test" in result["clean_overlay_verify"]["advisory"]
+
+    def test_a_red_overlay_with_one_failing_node_outside_the_peer_file_still_refuses(self, halted, monkeypatch) -> None:
+        result = _foreign_red_land(halted, monkeypatch, ["{f}::test_peer", "t/test_own.py::test_own"])
+
+        assert result["committed"] is False
+        assert result["refused"] == "verify-overlay-red", result
+
+
+def test_red_is_foreign_runs_refuses_a_mixed_own_and_foreign_failing_set() -> None:
+    foreign = {"tests/test_peer.py": "peer-run", "tests/test_dirt.py": "unattributed"}
+    assert land_run._red_is_foreign_runs(["tests/test_peer.py::test_a"], foreign) is True
+    assert land_run._red_is_foreign_runs(["tests/test_peer.py::test_a", "tests/test_own.py::test_b"], foreign) is False
+    assert land_run._red_is_foreign_runs(["tests/test_dirt.py::test_c"], foreign) is False
+    assert land_run._red_is_foreign_runs([], foreign) is False

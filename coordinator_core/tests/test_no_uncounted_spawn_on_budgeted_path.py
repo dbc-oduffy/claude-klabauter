@@ -326,6 +326,39 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/box_memory_admit.py",
         ("release",),
     ),
+    # Enrolled on a measured-empty reachable spawn set (2026-11-21).
+    "groupem.capacity_admit": (
+        "coordinator_core/ops/group_em_fleet_capacity.py",
+        ("_groupem_capacity_admit",),
+    ),
+    "groupem.capacity_place": (
+        "coordinator_core/ops/group_em_fleet_capacity.py",
+        ("_groupem_capacity_place",),
+    ),
+    "groupem.fleet_capacity": (
+        "coordinator_core/ops/group_em_fleet_capacity.py",
+        ("_groupem_fleet_capacity",),
+    ),
+    "groupem.idle_capacity_watch": (
+        "coordinator_core/ops/group_em_fleet_capacity.py",
+        ("_groupem_idle_capacity_watch",),
+    ),
+    "rulings.coverage": (
+        "coordinator_core/ops/rulings/coverage.py",
+        ("_handler",),
+    ),
+    "rulings.gate": (
+        "coordinator_core/ops/rulings/gate.py",
+        ("_handler",),
+    ),
+    "rulings.index": (
+        "coordinator_core/ops/rulings/index.py",
+        ("_handler",),
+    ),
+    "rulings.search": (
+        "coordinator_core/ops/rulings/search.py",
+        ("_handler",),
+    ),
     "groupem.box_key_pin_from_peer": (
         "coordinator_core/ops/group_em_box_federation.py",
         ("_groupem_box_key_pin_from_peer",),
@@ -2338,6 +2371,8 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
             "hooks.nudge_em_turn_budget",
             "hooks.guard_em_prefire_survey",
             "hooks.submit_engine_ask",
+            # Legitimized, not removed: fires the bug-blitz grind detached, which must outlive the hook.
+            "hooks.submit_bug_blitz",
             "hooks.preuse_search_dispatch",
             "roadmap.blitz_land",
             "roadmap.blitz_stage",
@@ -7815,9 +7850,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "goal.close_day": 2,
     "goal.close_day_apply": 2,
     "handoff.close_origin_stub": 2,
-    "handoff.propagate": 3,
+    # 3 -> 4, 2026-11-21: `sync_shared_index`'s v4/split-index fallback reaches `run_git` through `_reset_index_paths`.
+    "handoff.propagate": 4,
     "install.probe_windows_terminal_presence": 2,
-    "plan.propagate": 3,
+    "plan.propagate": 4,
     "plugin_health.forwarder_drift": 1,
     # 2 -> 3, 2026-10-13: the post-cut stamp reaches `git/run.py::run_git` (tag read).
     "release.cut_tag": 3,
@@ -8028,7 +8064,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.sessionstart_ensure_http_forwarder": 1,
     "hooks.subagent_zero_tool_use_detect": 1,
     # 10 -> 7, 2026-10-12: sweep_boot reaches build_cache; the same three sites left its reach.
-    "hooks.sweep_boot": 7,
+    # 7 -> 8, 2026-11-21: the door build's runtime-sidecar engine-root read reaches `_claude_klabauter_root._machine_local_get`.
+    "hooks.sweep_boot": 8,
     # Raised 2->4 2026-11-13 (f1d3c8): the post_run.finish tail adds ceremony.commit_v2's run_git
     # and detached halt-resume spawn, one scoped commit per lessons run in place of the hand
     # commits of evidence files every lessons run needed.
@@ -8117,6 +8154,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # One reachable site, the shared `run_git` in the per-checkout apply; reach-only static
     # ceiling, not execution evidence.
     "fleet.authoring_checkout_freshness": 1,
+    # Two reachable sites via `restore_own_delta` (the shared `run_git` and the detached halt-resume
+    # launch); reach-only static ceiling, not execution evidence.
+    "dispatch.restore_evicted": 2,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 

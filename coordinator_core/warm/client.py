@@ -1545,6 +1545,113 @@ def _indeterminate_envelope(
     }
 
 
+#: Total wall budget of one reconcile poll (open + write + read), over the door the op rode; a poll
+#: that overruns it is no answer and the indeterminate envelope stands. `_reconcile_poll` joins the
+#: whole poll under `min(this, 0.5)`, so the 500ms brightline holds even when open or write blocks.
+RECONCILE_POLL_SECS = 0.5
+
+
+def _reconciled_reply(msg: dict, status: Any) -> Optional[dict]:
+    """The JSON-RPC reply a TERMINAL `warm.request_status` answer settles, else None.
+
+    Only `state: finished` is terminal: `result` (with the kept payload) or a recorded `error`.
+    `not_received`, `queued`, `executing` and every `unknowable` (worker killed or lost, engine
+    restarted, expired) settle nothing and stay indeterminate.
+    """
+    if not isinstance(status, dict) or status.get("state") != "finished":
+        return None
+    outcome = status.get("outcome")
+    if outcome == "result" and "result" in status:
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": status["result"]}
+    code = status.get("error_code")
+    if outcome == "error" and isinstance(code, int) and not isinstance(code, bool):
+        if code == WARM_DISPATCH_INDETERMINATE:
+            return None
+        text = status.get("failure_text")
+        message = text if isinstance(text, str) and text else "op failed; outcome reconciled from warm.request_status"
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": code, "message": message}}
+    return None
+
+
+def _reconcile_poll(pipe: str, token: str, dispatch_key: str, engine: Optional[dict]) -> Optional[dict]:
+    """One bounded `warm.request_status` poll for `dispatch_key` over the warm pipe: its `result`
+    object, or None on any failure or when the poll outlives `min(RECONCILE_POLL_SECS, 0.5)`. The
+    poll runs on a daemon thread, so a blocked open or write cannot hold the caller past the bound;
+    an abandoned poll closes its own handle when it unblocks. Never re-sends the op; never raises."""
+    box: list = []
+    worker = threading.Thread(
+        target=lambda: box.append(_reconcile_poll_blocking(pipe, token, dispatch_key, engine)),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(min(RECONCILE_POLL_SECS, 0.5))
+    return box[0] if box else None
+
+
+def _reconcile_poll_blocking(pipe: str, token: str, dispatch_key: str, engine: Optional[dict]) -> Optional[dict]:
+    """`_reconcile_poll`'s body: may block in open or write; its caller bounds it."""
+    fh = None
+    started = time.monotonic()
+    try:
+        params: dict = {"key": dispatch_key}
+        if engine:
+            params["expect_engine"] = engine
+        frame = {
+            "jsonrpc": "2.0",
+            "id": "reconcile",
+            "method": _RECONCILE_POLL_METHOD,
+            "params": params,
+            "_engine_token": token,
+        }
+        fh = _open_pipe(pipe)
+        fh.write(json.dumps(frame, ensure_ascii=False).encode("utf-8") + b"\n")
+        fh.flush()
+        remaining = min(RECONCILE_POLL_SECS, 0.5) - (time.monotonic() - started)
+        if remaining <= 0:
+            return None
+        line = _PendingRead(fh).wait(remaining)
+        if line is _TIMED_OUT or not line or not line.strip():
+            return None
+        reply = json.loads(line)
+        result = reply.get("result") if isinstance(reply, dict) else None
+        return result if isinstance(result, dict) else None
+    except Exception:  # noqa: BLE001 -- a failed poll leaves the indeterminate envelope
+        return None
+    finally:
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _reconcile_or_indeterminate(
+    msg: dict,
+    detail: str,
+    dispatch_key: Optional[str],
+    pipe: str,
+    token: str,
+    waited_secs: Optional[float] = None,
+) -> dict:
+    """`_indeterminate_envelope`, unless one poll of `warm.request_status` reads a terminal outcome
+    for the keyed op: then that outcome is the reply. The op is never re-run."""
+    envelope = _indeterminate_envelope(msg, detail, dispatch_key, waited_secs)
+    error = envelope.get("error")
+    data = error.get("data") if isinstance(error, dict) else None
+    if (
+        not isinstance(error, dict)
+        or not isinstance(data, dict)
+        or not dispatch_key
+        or data.get("dispatch_key") != dispatch_key
+    ):
+        return envelope
+    if error.get("code") != WARM_DISPATCH_INDETERMINATE or data.get("import_phase"):
+        return envelope
+    engine = {"pid": data["engine_pid"]} if isinstance(data.get("engine_pid"), int) else None
+    reply = _reconciled_reply(msg, _reconcile_poll(pipe, token, dispatch_key, engine))
+    return reply if reply is not None else envelope
+
+
 #: Consecutive unanswered calls (connect timeout / busy, or a read that outlived its full
 #: deadline) with no answered call in between, across every caller of one engine token, that
 #: mean the engine is hung rather than busy. A busy engine still answers one caller per accept
@@ -2168,27 +2275,33 @@ def _try_warm_dispatch_inner(
                             file=sys.stderr,
                         )
                         return None
-                    return _indeterminate_envelope(
+                    return _reconcile_or_indeterminate(
                         msg,
                         f"no response within {mutation_deadline}s" + (f"; {restart_note}" if restart_note else ""),
                         dispatch_key,
+                        pipe,
+                        token,
                         waited_secs=time.monotonic() - delivered_at,
                     )
                 if not line or not line.strip():
                     # Held past the probe, then closed silently: engaged, not
                     # unserviced -- see the zero-byte branch below. -> warm-pool P0 (e).
-                    return _indeterminate_envelope(
+                    return _reconcile_or_indeterminate(
                         msg,
                         "closed without a response after delivery",
                         dispatch_key,
+                        pipe,
+                        token,
                         waited_secs=time.monotonic() - delivered_at,
                     )
         except BrokenPipeError:
             if delivered and _op_may_mutate(_classified_op_name(msg)):
-                return _indeterminate_envelope(
+                return _reconcile_or_indeterminate(
                     msg,
                     "pipe broke after delivery",
                     dispatch_key,
+                    pipe,
+                    token,
                     waited_secs=time.monotonic() - delivered_at,
                 )
             if attempt == 0:
@@ -2210,7 +2323,7 @@ def _try_warm_dispatch_inner(
         def _cold_or_indeterminate(detail: str):
             global _last_cold_bucket
             if _op_may_mutate(_classified_op_name(msg)):
-                return _indeterminate_envelope(msg, detail, dispatch_key)
+                return _reconcile_or_indeterminate(msg, detail, dispatch_key, pipe, token)
             _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
             return None
 

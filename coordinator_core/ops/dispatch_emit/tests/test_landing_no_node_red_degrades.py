@@ -119,4 +119,5 @@ def test_the_remedy_attempt_never_reads_over_max_for_any_no_node_red(done):
     step = ltt.retest_step(findings, {ltt.RETEST_ATTEMPTS_PARAM: done})
 
     assert step["attempt"] <= step["max_attempts"] == MAX_IN_RUN_REMEDY_ATTEMPTS
-    assert step["exhausted"] is (done >= MAX_IN_RUN_REMEDY_ATTEMPTS)
+    assert step["kind"] == "no_targeted_tests" and step["exhausted"] is True
+    assert step["attempt"] == min(max(done, 1), MAX_IN_RUN_REMEDY_ATTEMPTS)

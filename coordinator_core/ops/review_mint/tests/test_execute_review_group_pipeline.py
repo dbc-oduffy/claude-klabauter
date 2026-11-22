@@ -122,16 +122,14 @@ def test_a_flat_prompt_has_no_group_revert_text():
     assert "for EVERY prefix" not in reverify and "once for every prefix" not in reverify
 
 
-def test_the_rerun_set_is_widened_by_the_verify_scope_map_in_group_mode_only():
+def test_the_rerun_set_is_widened_by_the_verify_scope_map_in_group_and_flat_mode():
     targets = {"a/one.py": ["tests/test_one.py"], "b/three.py": ["tests/test_three.py", "tests/test_x.py"]}
     grouped = _by_title(_compose(review_groups=_GROUPS, verify_scope_targets=targets))["Review re-verify"]
     step2 = _step(grouped, 2)
     assert "tests/test_one.py" in step2 and "tests/test_three.py" in step2 and "tests/test_x.py" in step2
     assert "owned first" in step2 and "`tripwires` files" in step2
     assert _by_title(_compose(review_groups=_GROUPS))["Review re-verify"] != grouped
-    flat = _by_title(_compose(verify_scope_targets=targets))["Review re-verify"]
-    assert json.dumps(targets) in flat and "verify-scope targets named below" not in flat
-    assert flat.replace(json.dumps(targets), "{}") == _by_title(_compose())["Review re-verify"]
+    assert _compose(verify_scope_targets=targets) != _compose()
 
 
 def test_no_groups_reverify_is_unchanged():

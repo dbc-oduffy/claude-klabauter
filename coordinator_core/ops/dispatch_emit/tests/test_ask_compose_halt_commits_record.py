@@ -84,6 +84,19 @@ def test_halt_commit_command_names_only_the_params_file(monkeypatch):
         assert "run-1" in m.group(1)
 
 
+def test_every_composed_land_run_invocation_passes_params_by_file(monkeypatch):
+    monkeypatch.setattr(ask_compose, "params_writer_bound", lambda *_a, **_k: True)
+    product = ask_compose._commit_stage_call(head="H", anchor="A", repo_root="REPO", run_id="run-1", script_path="s.mjs")
+    halt = ask_compose._halt_record_commit_fn(head="H", anchor="A", script_path="s.mjs", repo_root="REPO", run_id="run-1")
+    for text in (product, halt):
+        assert "coordinator-invoke dispatch.land_run --params-file " in text
+        assert not re.search(r"coordinator-invoke dispatch\.land_run\s+['\"]?\{", text)
+        assert not _INLINE_JSON_INVOKE.search(text)
+    for over in ({}, {"stop_after": STOP_AFTER_PLAN}):
+        script = _compose(monkeypatch, in_run_commit=True, **over)
+        assert not re.search(r"coordinator-invoke dispatch\.land_run\s+['\"]?\{", script)
+
+
 def test_inline_json_invoke_detector_flags_agent_quoted_params():
     assert _INLINE_JSON_INVOKE.search("coordinator-invoke dispatch.land_run '{\"run_id\": \"x\"}'")
     assert not _INLINE_JSON_INVOKE.search("coordinator-invoke dispatch.land_run --params-file a/b.json --repo r")

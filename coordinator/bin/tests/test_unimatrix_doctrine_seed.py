@@ -187,6 +187,32 @@ def test_codex_skills_one_entry_per_skill_dir(tmp_path: Path, skills_root) -> No
     assert ds.seed_codex_skills(dest, skills_root) == ["alpha", "beta"]
 
 
+def test_codex_refresh_keeps_current_links_and_repairs_drift(tmp_path, skills_root, monkeypatch):
+    dest = tmp_path / "skills"
+    names = ds.seed_codex_skills(dest, skills_root)
+    alpha, beta = (dest / name for name in names)
+    if not alpha.is_symlink() or not beta.is_symlink():
+        pytest.skip("symlink creation unavailable")
+    beta.unlink()
+    beta.symlink_to(skills_root / "alpha", target_is_directory=True)
+    ds._marker(beta).write_bytes(b"stale")
+    original_remove, original_write = ds._remove_entry, Path.write_text
+
+    def remove(path):
+        assert path != alpha
+        return original_remove(path)
+
+    def write(path, *args, **kwargs):
+        assert path != ds._marker(alpha)
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(ds, "_remove_entry", remove)
+    monkeypatch.setattr(Path, "write_text", write)
+    assert ds.seed_codex_skills(dest, skills_root) == names
+    assert beta.samefile(skills_root / "beta")
+    assert ds._marker(beta).read_text() == "managed by unimatrix-install\n"
+
+
 def test_codex_skills_copy_when_symlink_refused(tmp_path: Path, skills_root, monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(*a, **k):
         raise OSError("symlink refused")
@@ -204,9 +230,10 @@ def test_codex_unseed_removes_only_marker_carrying_entries(tmp_path: Path, skill
     (dest / "mine" / "SKILL.md").write_text("user skill")
     (dest / "alpha").mkdir()
     (dest / "alpha" / "SKILL.md").write_text("foreign alpha")
-    assert ds.seed_codex_skills(dest, skills_root) == ["beta"]
+    with pytest.raises(ValueError, match="alpha"):
+        ds.seed_codex_skills(dest, skills_root)
     assert (dest / "alpha" / "SKILL.md").read_text() == "foreign alpha"
-    assert ds.unseed_codex_skills(dest) == ["beta"]
+    assert ds.unseed_codex_skills(dest) == []
     assert not (dest / "beta").exists() and not (dest / "beta.coordinator-managed").exists()
     assert (dest / "mine" / "SKILL.md").read_text() == "user skill"
     assert (dest / "alpha" / "SKILL.md").read_text() == "foreign alpha"
@@ -219,6 +246,90 @@ def test_codex_unseed_of_symlink_leaves_source(tmp_path: Path, skills_root) -> N
     assert sorted(ds.unseed_codex_skills(dest)) == ["alpha", "beta"]
     assert (skills_root / "alpha" / "SKILL.md").is_file()
     assert list(dest.iterdir()) == []
+
+
+@pytest.mark.parametrize("invalid", ["missing", "empty", "unreadable", "broken", "missing-entry"])
+def test_invalid_skill_inventory_preserves_managed_entries(tmp_path, skills_root, monkeypatch, invalid):
+    dest = tmp_path / "dest"
+    ds.seed_codex_skills(dest, skills_root)
+    before = {p.name: p.read_bytes() for p in dest.glob("*coordinator-managed")}
+    source = tmp_path / invalid
+    if invalid == "empty":
+        source.mkdir()
+    elif invalid in ("unreadable", "broken", "missing-entry"):
+        source = skills_root
+        (source / "alpha" / "SKILL.md").unlink()
+        if invalid == "broken":
+            try:
+                (source / "alpha" / "SKILL.md").symlink_to(source / "absent")
+            except OSError:  # Windows without SeCreateSymbolicLinkPrivilege (WinError 1314)
+                pytest.skip("symlink creation unavailable")
+        elif invalid == "unreadable":
+            (source / "alpha" / "SKILL.md").write_text("# alpha")
+            original = Path.read_bytes
+
+            def read(path):
+                if path == source / "alpha" / "SKILL.md":
+                    raise PermissionError("unreadable required source")
+                return original(path)
+
+            monkeypatch.setattr(Path, "read_bytes", read)
+    with pytest.raises((OSError, ValueError)):
+        ds.seed_codex_skills(dest, source)
+    assert {p.name: p.read_bytes() for p in dest.glob("*coordinator-managed")} == before
+    assert (dest / "alpha").is_symlink() or (dest / "alpha").is_dir()
+    assert (dest / "beta" / "SKILL.md").read_text() == "# beta\n"
+
+
+def test_conflicting_skill_can_be_retried_without_deleting_foreign_content(tmp_path, skills_root):
+    dest = tmp_path / "dest"
+    (dest / "alpha").mkdir(parents=True)
+    (dest / "alpha" / "SKILL.md").write_text("foreign")
+    with pytest.raises(ValueError, match="alpha"):
+        ds.seed_codex_skills(dest, skills_root)
+    assert (dest / "alpha" / "SKILL.md").read_text() == "foreign"
+    assert not (dest / "beta").exists()
+    (dest / "alpha").rename(dest / "operator-alpha")
+    assert ds.seed_codex_skills(dest, skills_root) == ["alpha", "beta"]
+    assert ds.seed_codex_skills(dest, skills_root) == ["alpha", "beta"]
+    assert (dest / "operator-alpha" / "SKILL.md").read_text() == "foreign"
+
+
+def test_partial_skill_copy_failure_is_reported_and_retryable(tmp_path, skills_root, monkeypatch):
+    dest = tmp_path / "dest"
+    original = ds.shutil.copytree
+
+    def refuse_symlink(*args, **kwargs):
+        raise OSError("symlink unavailable")
+
+    def copy(source, target, *args, **kwargs):
+        if source.name == "beta":
+            raise OSError("destination unavailable")
+        return original(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(ds.os, "symlink", refuse_symlink)
+    monkeypatch.setattr(ds.shutil, "copytree", copy)
+    with pytest.raises(OSError, match="destination unavailable"):
+        ds.seed_codex_skills(dest, skills_root)
+    assert (dest / "alpha" / "SKILL.md").read_text() == "# alpha\n"
+    monkeypatch.setattr(ds.shutil, "copytree", original)
+    assert ds.seed_codex_skills(dest, skills_root) == ["alpha", "beta"]
+
+
+def test_foreign_skill_arriving_during_seed_is_incomplete(tmp_path, skills_root, monkeypatch):
+    dest = tmp_path / "dest"
+
+    def link(source, target, **kwargs):
+        if source.name == "alpha":
+            (dest / "beta").mkdir()
+            (dest / "beta" / "SKILL.md").write_text("concurrent foreign skill")
+        raise OSError("symlink unavailable")
+
+    monkeypatch.setattr(ds.os, "symlink", link)
+    with pytest.raises(ValueError, match="drift.*beta"):
+        ds.seed_codex_skills(dest, skills_root)
+    assert (dest / "beta" / "SKILL.md").read_text() == "concurrent foreign skill"
+    assert not (dest / "beta.coordinator-managed").exists()
 
 
 def test_codex_reseed_prunes_removed_skill_but_keeps_foreign(tmp_path: Path, skills_root) -> None:
@@ -251,6 +362,8 @@ def klabauter_mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> "tuple[
     spec = importlib.util.spec_from_file_location("unimatrix_install_mirror", bin_dir / "unimatrix-install.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    (mod.SKILLS_ROOT / "required").mkdir(parents=True)
+    (mod.SKILLS_ROOT / "required" / "SKILL.md").write_text("# required\n", encoding="utf-8")
     return mod, home
 
 

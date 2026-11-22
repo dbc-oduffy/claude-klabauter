@@ -2069,7 +2069,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"dispatch.close_halted_run_rejected\": verify HEAD still equals the halt anchor, then close the run.\n\n``dispatch.close_halted_run_rejected``: closes a halted run whose withheld edits the EM deliberately rejects.\n\nParams: ``run_id`` (string, required), ``rejected_paths`` (non-empty list of withheld paths the EM rejects,\nrequired unless the run withholds nothing: then it may be omitted and the run closes with empty\ndispositions and no git spawn), ``reason`` (non-empty string, required, never defaulted). Fail-closed: the\nmarker is ``halted``, no live successor holds the run, and every withheld path classifies: a rejected path is ``rejected`` when HEAD's blob\nequals its blob at the halt anchor (``landed`` when HEAD already carries the kept blob instead); a path not named\nrejected must already be ``landed``/``lost``/``scratch-abandoned`` as ``close_halted_run_superseded`` classifies\nthem. Any other path refuses naming it; marker and index stay unchanged. On success the marker is rewritten\n``status: closed`` with ``closed: {reason, at, disposition: rejected}`` and ``path_dispositions`` (every path), the\nrun leaves the halt-withheld index and its parent ask ends as the superseded close ends it.\nTwo git spawns: ``rev-list`` (anchor), ``cat-file --batch-check`` (HEAD, anchor and kept blobs).\nA successful close then lands one scoped closure commit of the run's record files with ``Checkpoint-Run-Closed:``\ntrailers (``halted_run_close_commit.commit_close_records``): ``add`` and ``commit`` spawns beyond the two above, none on a\nrefusal; a refused commit never fails the close.\nReply: ``{ok, run_id, dispositions, reason, recorded, records_commit?, records_commit_error?}`` or ``{ok: false, error}``.",
+      "description": "JSON-RPC \"dispatch.close_halted_run_rejected\": verify HEAD still equals the halt anchor, then close the run.\n\n``dispatch.close_halted_run_rejected``: closes a halted run whose withheld edits the EM deliberately rejects.\n\nParams: ``run_id`` (string, required), ``rejected_paths`` (non-empty list of withheld paths the EM rejects,\nrequired unless the run withholds nothing: then it may be omitted and the run closes with empty\ndispositions and no git spawn), ``reason`` (non-empty string, required, never defaulted). Fail-closed: the\nmarker is ``halted`` or ``resumed``, no live successor holds the run, and every withheld path classifies: a rejected path is ``rejected`` when HEAD's blob\nequals its blob at the halt anchor (``landed`` when HEAD already carries the kept blob instead); a path not named\nrejected must already be ``landed``/``lost``/``scratch-abandoned`` as ``close_halted_run_superseded`` classifies\nthem. Any other path refuses naming it; marker and index stay unchanged. On success the marker is rewritten\n``status: closed`` with ``closed: {reason, at, disposition: rejected}`` and ``path_dispositions`` (every path), the\nrun leaves the halt-withheld index and its parent ask ends as the superseded close ends it.\nTwo git spawns: ``rev-list`` (anchor), ``cat-file --batch-check`` (HEAD, anchor and kept blobs).\nA successful close then lands one scoped closure commit of the run's record files with ``Checkpoint-Run-Closed:``\ntrailers (``halted_run_close_commit.commit_close_records``): ``add`` and ``commit`` spawns beyond the two above, none on a\nrefusal; a refused commit never fails the close.\nReply: ``{ok, run_id, dispositions, reason, recorded, records_commit?, records_commit_error?}`` or ``{ok: false, error}``.",
       "module": "coordinator_core.ops.dispatch_emit.halted_run_rejected",
       "name": "dispatch.close_halted_run_rejected",
       "op_class": "mutating",
@@ -6617,6 +6617,118 @@
         "type": "object"
       },
       "summary": "Return ``{exit_code, ok, count, findings, unchecked}`` for the roadmap's cross-plan seams.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"rulings.coverage\" handler. See module docstring.\n\ncoordinator_core.ops.rulings.coverage — JSON-RPC \"rulings.coverage\".\n\nPurpose: report which accepted PM rulings have an enforcement artifact, which are\nprose-only, and which name an enforcement path that is not in the tree.\n\nWire params: none.\n\nReply: ``{\"covered\": [{id, enforcement}], \"prose_only\": [id], \"dangling\": [{id, enforcement}]}``.\n  - covered: accepted, enforcement path exists.\n  - prose_only: accepted, enforcement null (or blank).\n  - dangling: accepted, enforcement path absent from the worktree.\n\nNegative-spec:\n  - Does NOT list superseded rulings in any bucket.\n  - Does NOT spawn a subprocess; existence is ``Path.exists`` on the main worktree root.\n  - Does NOT write anything, and does NOT judge whether the enforcement path actually\n    enforces the ruling; it checks presence only.\n  - Does NOT raise on a malformed register file; the file is skipped.",
+      "module": "coordinator_core.ops.rulings.coverage",
+      "name": "rulings.coverage",
+      "op_class": "compute_only",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"rulings.coverage\" handler. See module docstring.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"rulings.gate\". See module docstring.\n\nJSON-RPC \"rulings.gate\": refuse a plan or DR body that defers or contradicts an accepted PM ruling.\n\nParams: exactly one of `body` (text) or `path` (repo-relative plan or DR inside the worktree).\nReply: GateReply from coordinator_core.rulings.contract; `route` is \"coordinator:apm\" on refuse.\n\nNegative-spec:\n  - No override key; a newer PM turn clears one ruling by a `pm_turn:` line (see rulings.detect).\n  - No spawn, no git, no write: one register scan and at most one file read.\n  - Not a deny guard: a refusal is this op's reply, acted on by the calling stage.",
+      "module": "coordinator_core.ops.rulings.gate",
+      "name": "rulings.gate",
+      "op_class": "compute_only",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Plan or DR text to gate.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Repo-relative plan or DR file to gate.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"rulings.gate\". See module docstring.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"rulings.index\" handler. See module docstring.\n\ncoordinator_core.ops.rulings.index — JSON-RPC \"rulings.index\".\n\nPurpose: the durable register of accepted PM rulings (``state/pm-rulings/<id>.yaml``).\n``list`` reads it; ``append`` adds one ruling. A run asks the register what the PM has\nalready ruled before it calls anything \"pending a PM ruling\".\n\nWire params:\n    verb    (str, required) — \"list\" or \"append\".\n    status  (str, optional, list only) — \"accepted\" or \"superseded\"; absent lists both.\n    ruling  (object, required for append) — ``{id, pm_turn, scope, text, status?,\n            superseded_by?, enforcement?, recorded?}``. ``pm_turn`` cites the PM's words\n            (sizing path + register row id, or run_id + anchor); ``text`` is the PM verbatim.\n\nReply:\n    list:   ``{\"rulings\": [{id, pm_turn, scope, text, status, superseded_by, enforcement,\n            recorded}], \"unreadable\": [{id, reason}]}`` sorted by id. ``unreadable`` names\n            each register file that could not be parsed.\n    append: ``{\"applied\": [id], \"refused\": [{id, reason}]}``.\n\nNegative-spec:\n  - Does NOT raise on a bad ruling: a malformed or path-unsafe id, a duplicate id, an empty\n    pm_turn or text, an unknown status and a superseded_by naming an absent id are each\n    refused by name in the reply.\n  - Does NOT overwrite or edit an existing ruling; supersede by appending a new one.\n  - Does NOT commit, and does NOT spawn; it declares the one file it wrote.\n  - Does NOT judge a ruling's truth: the register holds what the caller cites.",
+      "module": "coordinator_core.ops.rulings.index",
+      "name": "rulings.index",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "ruling": {
+            "description": "append only: {id, pm_turn, scope, text, status?, superseded_by?, enforcement?, recorded?}.",
+            "type": "object"
+          },
+          "status": {
+            "description": "list only: filter by status; absent lists both.",
+            "enum": [
+              "accepted",
+              "superseded"
+            ],
+            "type": "string"
+          },
+          "verb": {
+            "description": "list reads the register; append adds one ruling.",
+            "enum": [
+              "list",
+              "append"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "verb"
+        ],
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"rulings.index\" handler. See module docstring.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"rulings.search\" handler. See module docstring.\n\ncoordinator_core.ops.rulings.search — JSON-RPC \"rulings.search\".\n\nPurpose: answers \"has the PM already ruled on this?\". Call it before writing any\ndeferral to the PM; a match is a settled question, not a pending one.\n\nWire params:\n    scope   (list[str], optional) — scope tokens (repo, subsystem, op, path globs). A ruling\n            matches when one of its scope tokens equals a given token (case-insensitive) or\n            one glob-matches the other.\n    query   (str, optional) — keywords; every whitespace-separated word must appear\n            (case-insensitive) in the ruling text.\n    status  (str, optional) — \"accepted\" (default) or \"superseded\".\n\nReply: ``{\"matches\": [{id, text, pm_turn, scope}]}`` sorted by id. With both ``scope`` and\n``query`` a ruling must satisfy both; with neither, every ruling of the status matches.\n\nNegative-spec:\n  - Does NOT write, and does NOT spawn; one scan of the register files.\n  - Does NOT rank or embed: keyword plus scope match only, so a paraphrase that shares no\n    word with the ruling text and no scope token is a miss; widen ``scope`` before concluding\n    the PM has not ruled.\n  - Does NOT return a superseded ruling unless ``status`` asks for it.",
+      "module": "coordinator_core.ops.rulings.search",
+      "name": "rulings.search",
+      "op_class": "compute_only",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "description": "Keywords; every word must appear in the ruling text.",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Scope tokens (repo, subsystem, op, path globs)."
+          },
+          "status": {
+            "description": "accepted (default) or superseded.",
+            "enum": [
+              "accepted",
+              "superseded"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"rulings.search\" handler. See module docstring.",
       "timeout_s": 30.0
     },
     {

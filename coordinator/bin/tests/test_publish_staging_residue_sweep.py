@@ -74,16 +74,18 @@ def test_discard_retries_a_partial_removal(tmp_path, monkeypatch):
     dest = _dest(tmp_path)
     staging = publish._create_publish_staging_dir(dest)
     (staging / "f").write_text("x", encoding="utf-8")
-    real_rmtree = shutil.rmtree
+    from coordinator_core import owner_safe_rmtree
+
+    real_rmtree = owner_safe_rmtree.fast_rmtree
     calls = []
 
-    def flaky_rmtree(path, *args, **kwargs):
+    def flaky_rmtree(path):
         calls.append(path)
         if len(calls) == 1:
-            return None
-        return real_rmtree(path, *args, **kwargs)
+            return False
+        return real_rmtree(path)
 
-    monkeypatch.setattr(publish.shutil, "rmtree", flaky_rmtree)
+    monkeypatch.setattr(owner_safe_rmtree, "fast_rmtree", flaky_rmtree)
     publish._discard_publish_staging_dir(staging)
 
     assert len(calls) == 2

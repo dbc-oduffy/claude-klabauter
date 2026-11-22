@@ -26,6 +26,7 @@ import pytest
 _READER_KEYS = {
     "holder_session_id",
     "holder_name",
+    "host",
     "last_tick_at",
     "tick_source",
     "next_expected_by",
@@ -50,6 +51,46 @@ def test_stamp_writes_exactly_the_keys_the_doe_reader_reads(tmp_path: Path) -> N
         writer_session_id="w1",
     )
     assert set(_record(tmp_path)) == _READER_KEYS
+
+
+def test_stamp_records_the_holders_host_and_read_liveness_returns_it(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(watch_heartbeat, "local_host", lambda: "machine-a")
+    now = time.time()
+    assert watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="g1", declinations=[], interval_seconds=60.0,
+        writer_session_id="g1", now_epoch=now,
+    )
+    assert _record(tmp_path)["host"] == "machine-a"
+    live = watch_heartbeat.read_liveness(str(tmp_path), now)
+    assert live["verdict"] == watch_heartbeat.VERDICT_ARMED and live["holder_host"] == "machine-a"
+
+
+def test_a_record_without_a_host_reads_back_none(tmp_path: Path) -> None:
+    assert watch_heartbeat.read_liveness(str(tmp_path))["holder_host"] is None
+    path = watch_heartbeat.watch_path(str(tmp_path))
+    os.makedirs(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"holder_session_id": "g1", "holder_name": "n"}, fh)
+    assert watch_heartbeat.read_liveness(str(tmp_path))["holder_host"] is None
+
+
+def test_second_box_reader_resolves_the_holder_as_name_dot_host() -> None:
+    q = watch_heartbeat.qualify_address
+    assert q("group-em-de", "MACHINE-A", reader_host="mac-mini.local") == "group-em-de.machine-a.local"
+    assert q("group-em-de", "machine-a.example.net", reader_host="mac-mini") == "group-em-de.machine-a.example.net"
+
+
+def test_same_box_reader_keeps_the_bare_name_across_hostname_spellings() -> None:
+    q = watch_heartbeat.qualify_address
+    assert q("group-em-de", "machine-a", reader_host="MACHINE-A") == "group-em-de"
+    assert q("group-em-de", "Mac-Mini.local", reader_host="mac-mini") == "group-em-de"
+
+
+def test_unknown_holder_host_or_name_stays_bare() -> None:
+    q = watch_heartbeat.qualify_address
+    assert q("group-em-de", None, reader_host="x") == "group-em-de"
+    assert q("group-em-de", "  ", reader_host="x") == "group-em-de"
+    assert q(None, "machine-a", reader_host="x") is None
 
 
 def test_timestamps_parse_in_the_readers_own_format(tmp_path: Path) -> None:

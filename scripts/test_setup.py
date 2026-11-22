@@ -1253,6 +1253,7 @@ def _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path):
     monkeypatch.setattr(setup_mod, "check_git_version", lambda *a, **k: None)
     monkeypatch.setattr(setup_mod, "apply_git_perf_config", lambda *a, **k: None)
     monkeypatch.setattr(setup_mod, "handle_test_tooling", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "fleet_test_env_lines", lambda *a, **k: [])
     monkeypatch.setattr(setup_mod, "print_symbols_extra_hint", lambda *a, **k: None)
     monkeypatch.setattr(setup_mod, "check_coordinator_claude_dep", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -3459,6 +3460,8 @@ def test_install_warm_door_advisory_on_sun_path_budget(setup_mod, tmp_path, monk
     assert "[ADVISORY]" in err
     assert "sun_path budget" in err
     assert "140 bytes" in err
+    assert "$HOME/.cache" in err and "python3 scripts/setup.py" in err
+    assert "XDG_RUNTIME_DIR" not in err
 
 
 def test_install_warm_door_advisory_on_door_not_installed(setup_mod, tmp_path, monkeypatch, capsys):
@@ -3915,7 +3918,16 @@ def test_convert_editable_finder_writes_literal_engine_link_when_it_matches(
     _stub_purelib(setup_mod, monkeypatch, site_packages)
 
     link = tmp_path / "engine-current"
-    link.symlink_to(package_root)
+    try:
+        link.symlink_to(package_root)
+    except OSError:
+        # Trap: Windows without Developer Mode refuses symlinks (WinError 1314); a junction is
+        # the shape the Windows engine link takes and needs no privilege.
+        if sys.platform != "win32":
+            raise
+        import _winapi
+
+        _winapi.CreateJunction(str(package_root), str(link))
 
     result = setup_mod.convert_editable_finder_to_plain_path(
         "py", package_root, engine_link=str(link)
@@ -4396,12 +4408,82 @@ def test_run_check_prints_target_and_published_remediation_on_failure(
         setup_check, "run_checks", lambda *a, **k: [setup_check.CheckItem("x", False, "broken")]
     )
     monkeypatch.setattr(setup_mod, "check_installed_exec_bit_parity", lambda *a, **k: setup_check.CheckItem("y", True, "ok"))
+    monkeypatch.setattr(setup_mod, "fleet_test_env_lines", lambda *a, **k: [])
     root = Path(__file__).resolve().parent.parent
     assert setup_mod.run_check(root) == 1
     out = capsys.readouterr().out
     assert f"target: {label} {root}" in out
     failed = [line for line in out.splitlines() if line.startswith("check: FAILED")]
     assert failed and "re-run scripts/setup.py" not in failed[0]
+
+
+def _run_check_with_profile(setup_mod, monkeypatch, profile, fleet_items):
+    from coordinator_core import machine_profile as mp
+    from coordinator_core.install import fleet_test_env, setup_check
+
+    calls = []
+    monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda root: setup_mod.IDENTITY_AUTHORING)
+    monkeypatch.setattr(setup_check, "run_checks", lambda *a, **k: [setup_check.CheckItem("x", True, "ok")])
+    monkeypatch.setattr(
+        setup_mod, "check_installed_exec_bit_parity", lambda *a, **k: setup_check.CheckItem("y", True, "ok")
+    )
+    monkeypatch.setattr(mp, "machine_profile", lambda: profile)
+
+    def _fleet(bin_dir, engine_py, *, install):
+        calls.append((bin_dir, engine_py, install))
+        return fleet_items
+
+    monkeypatch.setattr(fleet_test_env, "fleet_test_env_items", _fleet)
+    root = Path(__file__).resolve().parent.parent
+    return setup_mod.run_check(root), calls, root
+
+
+def test_run_check_author_prints_fleet_fail_line_and_exits_1(setup_mod, monkeypatch, capsys):
+    from coordinator_core.install import setup_check
+
+    bad = setup_check.CheckItem("fleet-test-env:doe", False, "missing: yaml")
+    rc, calls, root = _run_check_with_profile(setup_mod, monkeypatch, "author", [bad])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL [fleet-test-env:doe] missing: yaml" in out
+    assert calls == [(root / "coordinator" / "bin", sys.executable, False)]
+
+
+def test_run_check_consumer_prints_no_fleet_line_and_skips_the_walk(setup_mod, monkeypatch, capsys):
+    from coordinator_core.install import setup_check
+
+    bad = setup_check.CheckItem("fleet-test-env:doe", False, "missing: yaml")
+    rc, calls, _root = _run_check_with_profile(setup_mod, monkeypatch, "consumer", [bad])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "fleet-test-env" not in out
+    assert calls == []
+
+
+def test_main_install_fails_on_author_fleet_fail_with_install_true(setup_mod, monkeypatch, tmp_path, capsys):
+    from coordinator_core import machine_profile as mp
+    from coordinator_core.install import fleet_test_env, setup_check
+
+    calls = []
+    monkeypatch.setattr(setup_mod, "provision_deps", lambda *a, **k: (sys.executable, ["dep"]))
+    monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda root: setup_mod.IDENTITY_AUTHORING)
+    real_lines = setup_mod.fleet_test_env_lines
+    _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(setup_mod, "fleet_test_env_lines", real_lines)
+    monkeypatch.setattr(mp, "machine_profile", lambda: "author")
+
+    def _fleet(bin_dir, engine_py, *, install):
+        calls.append((engine_py, install))
+        return [setup_check.CheckItem("fleet-test-env:doe", False, "missing: yaml")]
+
+    monkeypatch.setattr(fleet_test_env, "fleet_test_env_items", _fleet)
+    order = []
+    monkeypatch.setattr(setup_mod, "register_claude_klabauter_root", lambda root, *a, **k: order.append("register") or root)
+    monkeypatch.setattr(setup_mod, "write_environment_import", lambda *a, **k: order.append("env"))
+    assert setup_mod.main(["--i-am-agent"]) == 1
+    assert order == ["register", "env"]
+    assert calls == [(sys.executable, True)]
+    assert "FAIL [fleet-test-env:doe] missing: yaml" in capsys.readouterr().out
 
 
 def test_statusline_absence_passes_but_a_stale_or_unresolvable_command_still_fails(setup_mod, tmp_path):

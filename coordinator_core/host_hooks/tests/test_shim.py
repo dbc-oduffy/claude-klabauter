@@ -328,6 +328,33 @@ def test_evaluation_warm_route_names_the_set_with_engine_verdicts(monkeypatch: p
     assert shim.take_evaluation() is None
 
 
+def test_warm_evaluation_names_the_guards_the_engine_reported_and_never_forwards_the_key(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list = []
+    _engine(monkeypatch, {"result": {"guards_evaluated": ["block-noncanonical-branch-creation"]}}, seen)
+    shim.take_evaluation()
+    answer = shim.decide("codex", CODEX_LS)
+    evaluation = shim.take_evaluation()
+    assert evaluation["route"] == "warm"
+    assert evaluation["guards_evaluated"] == ["backstop", "block-noncanonical-branch-creation"]
+    assert "guards_evaluated" not in json.dumps(answer)
+    assert seen and seen[0]["params"]["payload"]["trace_guards"] is True
+
+
+def test_the_op_names_the_guards_its_chain_ran_only_for_a_requester() -> None:
+    import asyncio
+
+    from coordinator_core.ops import warm_guard_evaluate as op
+
+    payload = {"tool_name": "Bash", "tool_input": {"command": "git checkout -b example-operator/machine-a/2026-11-22"},
+               "cwd": str(Path.cwd()), "session_id": "trace-test", "env": {}, "permission_mode": None}
+    asked = asyncio.run(op._warm_guard_evaluate({"payload": {**payload, "trace_guards": True}}))
+    plain = asyncio.run(op._warm_guard_evaluate({"payload": dict(payload)}))
+    assert "block-noncanonical-branch-creation" in asked.get("guards_evaluated", [])
+    assert "guards_evaluated" not in plain
+    assert "claims" not in asked.get("guards_evaluated", [])
+
+
 @pytest.mark.parametrize("command", ["ls", "git stash list", "git stash list; cp a b", "git clean -fd"])
 def test_warm_and_cold_rows_for_one_command_list_identical_guard_names(
         monkeypatch: pytest.MonkeyPatch, tmp_path, command) -> None:
@@ -472,6 +499,46 @@ def test_warm_deny_from_a_class_guard_reach_is_backstop_class_and_allow_is_not(
     _engine(monkeypatch, {"result": {}})
     shim.decide("codex", payload)
     assert shim.take_evaluation()["backstop_class"] is False
+
+
+CODEX_PUSH_OWN = {**CODEX_LS, "tool_input": {"command": "git push origin HEAD"}}
+CODEX_STOP = {"hook_event_name": "Stop", "session_id": "sess-1", "cwd": "/nonexistent-shim-cwd",
+              "last_assistant_message": "done"}
+
+
+def _roll(monkeypatch, shape: str) -> None:
+    """Warm engine mid-roll as the real `_dial` sees it: `client.try_warm_dispatch` unreachable, erroring or hung."""
+    from coordinator_core.warm import client
+
+    def dispatch(request, **kwargs):
+        if shape == "raise":
+            raise ConnectionRefusedError("engine rolling")
+        if shape == "hang":
+            time.sleep(2)
+        return {"error": {"code": -32000, "message": "engine rolling"}} if shape == "error" else None
+
+    monkeypatch.setattr(client, "try_warm_dispatch", dispatch)
+
+
+@pytest.mark.deliberate_wall_clock(reason="bounds the shim dial budget against a hung engine socket; sleep burns no CPU")
+@pytest.mark.parametrize("shape", ["none", "raise", "error", "hang"])
+def test_warm_engine_roll_answers_from_backstop_through_the_hook_entry(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], rows, shape: str) -> None:
+    assert shim.DIAL_BUDGET_SECS <= 0.15
+    _roll(monkeypatch, shape)
+
+    def answer(payload) -> dict:
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+        start = time.monotonic()
+        assert shim.main(["--host", "codex"]) == 0
+        assert time.monotonic() - start < 1.0
+        return json.loads(capsys.readouterr().out)
+
+    assert answer(CODEX_PUSH_OWN) == {}
+    assert answer(CODEX_STOP) == {}
+    denied = answer(CODEX_PUSH)
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert denied["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_main_without_host_exits_zero_with_empty_answer(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

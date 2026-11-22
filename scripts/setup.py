@@ -359,6 +359,9 @@ Options:
                                       opt-in or seeding. Advisory: one [host:<id>] report each, never
                                       changes the exit status; with --check it writes nothing. An
                                       unknown id exits 1
+  --enroll-runtime                   With --host codex: carry validated configure consent and require
+                                      lifecycle, native trust and MCP readiness; nonzero on failure.
+                                      --check reports drift without changing runtime or trust.
   --preflight                        Read-only OSS Step Zero probe: python, git, uv, gh, node, pwsh,
                                       clone_auth (coordinator_core.install.prereq_probe). Prints one
                                       pass/warn/fail line per probe; mutates nothing. Exit 0 if no
@@ -477,6 +480,7 @@ class Args:
         self.uninstall_pruner = False
         self.help = False
         self.hosts: list[str] = []
+        self.enroll_runtime = False
         self.warm: str = ""  # "" | "on" | "off"
         self.repair: str = ""  # "" | "forwarders"
         self.claude_klabauter_root: str = ""
@@ -494,6 +498,8 @@ def parse_args(argv: list[str]) -> Args:
         tok = argv[i]
         if tok == "--i-am-agent":
             args.agent_mode = True
+        elif tok == "--enroll-runtime":
+            args.enroll_runtime = True
         elif tok == "--skip-dep-check":
             args.skip_dep_check = True
         elif tok == "--accept-missing-deps-risk":
@@ -4412,7 +4418,9 @@ def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, arg
             socket_path(token, engine_clone=engine_root)
         except SocketPathTooLongError as exc:
             print(f"[ADVISORY] door socket path exceeds the {SUN_PATH_MAX_BYTES}-byte sun_path budget: {exc}", file=sys.stderr)
-            print("  Remediation: export XDG_RUNTIME_DIR=<a shorter path>, then re-run: python3 scripts/setup.py", file=sys.stderr)
+            print("  Use a shorter private runtime base for both setup and the door "
+                  "(normally $HOME/.cache on POSIX). For a disposable profile, choose a shorter home "
+                  "and rerun python3 scripts/setup.py.", file=sys.stderr)
             return
         except Exception as exc:  # noqa: BLE001 — best-effort budget probe
             print(f"[ADVISORY] door sun_path budget check failed ({exc!r}) — continuing.", file=sys.stderr)
@@ -4594,6 +4602,8 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     # every DoE process launched through this forwarder.
     env["CLAUDE_KLABAUTER_ROOT"] = str(claude_klabauter_root_resolved)
     env["COORDINATOR_ENGINE_ROOT"] = str(claude_klabauter_root_resolved)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
 
     # Mirror
     # run_health_probe's try/except-around-subprocess.run shape so a
@@ -4607,7 +4617,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
             substrate_argv,
             cwd=str(claude_klabauter_root_resolved),
             env=env,
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
             **_NO_CONSOLE,
         )
     except OSError as exc:
@@ -4619,7 +4629,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
         print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
         return True
-    output = (proc.stdout + proc.stderr).strip()
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
     if not args.agent_mode and output:
         print(output)
     if proc.returncode != 0:
@@ -4631,7 +4641,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
         # Agent mode hides the child's ~500-line log, which also hid the only
         # statement of WHY it failed; the tail of stderr carries the error.
         if args.agent_mode:
-            for line in proc.stderr.strip().splitlines()[-15:]:
+            for line in (proc.stderr or "").strip().splitlines()[-15:]:
                 print(f"  | {line}", file=sys.stderr)
         print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
@@ -5361,6 +5371,19 @@ def statusline_absence_is_not_a_fail(items: list) -> list:
     ]
 
 
+def fleet_test_env_lines(claude_klabauter_root: Path, engine_py: str, *, install: bool) -> "list[CheckItem]":
+    """Author-box fleet test-env CheckItems; empty on a consumer box."""
+    from coordinator_core import machine_profile as _mp
+
+    if _mp.machine_profile() != "author":
+        return []
+    from coordinator_core.install import fleet_test_env
+
+    return fleet_test_env.fleet_test_env_items(
+        claude_klabauter_root / "coordinator" / "bin", engine_py, install=install
+    )
+
+
 def run_check(claude_klabauter_root: Path) -> int:
     """`--check`: verify the install and print one PASS/FAIL line per item; exit 1 on any FAIL."""
     if str(claude_klabauter_root) not in sys.path:
@@ -5380,6 +5403,7 @@ def run_check(claude_klabauter_root: Path) -> int:
         setup_check.run_checks(claude_klabauter_root, settings_home(), claude_config_dir(), keys, registry_get)
     )
     items.append(check_installed_exec_bit_parity(Path(__file__).resolve().parent.parent, settings_home()))
+    items.extend(fleet_test_env_lines(claude_klabauter_root, sys.executable, install=False))
     for item in items:
         print(item.line())
     code = setup_check.exit_code(items)
@@ -5723,15 +5747,26 @@ def _print_spotlight_advice(repo_root: Path, claude_klabauter_root_resolved: Pat
         print(f"[ADVISORY] {advice}")
 
 
-def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, check: bool = False) -> None:
+def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, check: bool = False) -> int:
     """Opt-in step (`--host`): install example-retrieval-repo MCP wiring onto Codex / agy.
 
-    Prints one `[host:<id>]` report line per host plus indented detail. ADVISORY: a host whose
+    With --enroll-runtime, invoke the shared strict runtime installer and propagate failure.
+    Otherwise prints one `[host:<id>]` report line per host plus indented detail. ADVISORY: a host whose
     binary is absent is reported under unreachable, any failure prints WARN, and nothing here
     changes the exit status. check=True writes nothing.
     """
     if not args.hosts:
-        return
+        return 0
+    if args.enroll_runtime:
+        if args.hosts != ["codex"]:
+            print("ERROR: --enroll-runtime requires --host codex", file=sys.stderr)
+            return 1
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_setup_codex_runtime", claude_klabauter_root_resolved / "coordinator" / "bin" / "unimatrix-install.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.enroll_codex_runtime(claude_klabauter_root_resolved, consent=True, check=check)
     print()
     print("--- Install: foreign hosts ---")
     try:
@@ -5771,6 +5806,7 @@ def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, chec
                 print(f"  unreachable: {host} binary not found on PATH")
         except Exception as exc:  # noqa: BLE001 - advisory step never fails the install
             print(f"[host:{host}] WARN could not report: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return 0
 def run_deps_only(args: Args) -> int:
     """`--deps-only`: provision the engine deps into the launching interpreter and exit.
 
@@ -5801,7 +5837,9 @@ def run_deps_only(args: Args) -> int:
 
 def main(argv: list[str]) -> int:
     if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(line_buffering=True)
+        sys.stdout.reconfigure(line_buffering=True, errors="backslashreplace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(errors="backslashreplace")
     try:
         args = parse_args(argv)
     except ArgError as exc:
@@ -5811,6 +5849,10 @@ def main(argv: list[str]) -> int:
     if args.help:
         print(HELP_TEXT, end="")
         return 0
+
+    if args.enroll_runtime and args.hosts != ["codex"]:
+        print("ERROR: --enroll-runtime requires --host codex", file=sys.stderr)
+        return 1
 
     if args.preflight:
         return run_preflight()
@@ -5839,8 +5881,8 @@ def main(argv: list[str]) -> int:
     claude_klabauter_root_resolved, claude_klabauter_root_source = resolve_claude_klabauter_root(repo_root, args)
     if args.check:
         check_rc = run_check(claude_klabauter_root_resolved)
-        install_foreign_hosts(claude_klabauter_root_resolved, args, check=True)
-        return check_rc
+        host_rc = install_foreign_hosts(claude_klabauter_root_resolved, args, check=True)
+        return check_rc or host_rc or 0
 
     if not (args.hosts and args.repair != "forwarders") and not _check_durable_install_root(claude_klabauter_root_resolved, args):
         return 1
@@ -5849,9 +5891,11 @@ def main(argv: list[str]) -> int:
         return run_repair_forwarders(repo_root, claude_klabauter_root_resolved, args)
 
     if args.hosts:
-        install_foreign_hosts(claude_klabauter_root_resolved, args)
-        _print_change_summary()
-        return 0
+        host_rc = install_foreign_hosts(claude_klabauter_root_resolved, args)
+        # Strict enrollment reports each host operation, including writes before a failure.
+        if not args.enroll_runtime:
+            _print_change_summary()
+        return host_rc or 0
 
     migrate_legacy_content_root()
 
@@ -5907,8 +5951,13 @@ def main(argv: list[str]) -> int:
             agent_mode=args.agent_mode,
         )
 
+    fleet_failed = False
     if not args.register_only:
         handle_test_tooling(claude_klabauter_root_resolved, engine_py, args)
+        _fleet_items = fleet_test_env_lines(claude_klabauter_root_resolved, engine_py, install=True)
+        for _fleet_item in _fleet_items:
+            print(_fleet_item.line())
+        fleet_failed = any(not _i.ok for _i in _fleet_items)
         print_symbols_extra_hint(claude_klabauter_root_resolved)
 
         if args.skip_dep_check:
@@ -6001,6 +6050,9 @@ def main(argv: list[str]) -> int:
         return EXIT_HEALTH_PROBE_HARD_FAILURE
     if dialect_disarmed:
         return EXIT_DIALECT_GUARD_DISARMED
+    if fleet_failed:
+        print("FAIL [fleet-test-env] a registered fleet repo's test env does not collect; see the lines above", file=sys.stderr)
+        return 1
     return 0
 
 

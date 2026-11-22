@@ -413,3 +413,15 @@ def test_the_record_file_name_matches_unimatrix_install_control_far_record_path(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"platform": "linux"}), encoding="utf-8")
     assert mux.far_platform(box) == "posix"
+
+
+def test_broker_spawn_is_windowless_never_detached(mux, monkeypatch, tmp_path):
+    # DETACHED_PROCESS overrides CREATE_NO_WINDOW: the broker loses its console and every console
+    # grandchild opens a visible window on the operator's screen.
+    seen = {}
+    monkeypatch.setattr(mux.subprocess, "DETACHED_PROCESS", 0x8, raising=False)
+    monkeypatch.setattr(mux.subprocess, "Popen", lambda argv, **kw: seen.update(kw))
+    ch = mux.BrokerChannel("box", "key", "host", tmp_path, spawn_broker=None)
+    ch._spawn_detached()
+    assert not seen["creationflags"] & 0x8
+    assert seen["creationflags"] & mux._no_window() == mux._no_window()

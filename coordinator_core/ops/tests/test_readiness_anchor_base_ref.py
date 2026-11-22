@@ -5,6 +5,7 @@ marker, reads the tree (CONTRADICTED) with neither, and costs one cat-file spawn
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,7 @@ import yaml
 from coordinator_core.git import run as git_run
 from coordinator_core.ops import plan_readiness_verdict as op
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from coordinator_core.ops.dispatch_emit.ask_contract import BASE_REF_FILE, RECORD_DIR_ROOT
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -125,6 +127,41 @@ def test_revise_marker_resolves_with_no_param_on_refire(world, monkeypatch):
     reply, _ = _call(root, monkeypatch)
     assert _verdicts(reply)["AP1"]["verdict"] == "RESOLVES"
     assert reply["anchor_base_ref"] == {"ref": sha, "source": "run"}
+
+
+def _halted_run(root: Path, name: str, **record) -> Path:
+    d = root / RECORD_DIR_ROOT / name
+    d.mkdir(parents=True)
+    (d / "halted.json").write_text(json.dumps({"sizing_rel": SIZING, **record}), encoding="utf-8")
+    return d
+
+
+def test_refire_with_no_marker_reads_the_premise_at_the_predecessors_run_base(world, monkeypatch):
+    root, sha = world
+    _halted_run(root, RUN, run_base_sha=sha)
+    reply, spawns = _call(root, monkeypatch)
+    verdicts = _verdicts(reply)
+    assert {v["verdict"] for v in verdicts.values()} == {"RESOLVES"}
+    assert reply["anchor_base_ref"] == {"ref": sha, "source": "run"}
+    assert spawns == 1
+
+
+def test_a_run_marker_outranks_the_recorded_run_base(world, monkeypatch):
+    root, sha = world
+    older = _halted_run(root, RUN, run_base_sha=sha)
+    (older / BASE_REF_FILE).write_text(json.dumps({"base_ref": "HEAD"}), encoding="utf-8")
+    _halted_run(root, "ask-20261029T000100-aaaaaa", run_base_sha=sha)
+    reply, _ = _call(root, monkeypatch)
+    assert reply["anchor_base_ref"] == {"ref": "HEAD", "source": "run"}
+    assert _verdicts(reply)["AP1"]["verdict"] == "CONTRADICTED"
+
+
+def test_a_halt_record_without_a_full_run_base_leaves_the_tree_read(world, monkeypatch):
+    root, sha = world
+    _halted_run(root, RUN, run_base_sha=sha[:7])
+    reply, spawns = _call(root, monkeypatch)
+    assert _verdicts(reply)["AP1"]["verdict"] == "CONTRADICTED"
+    assert "anchor_base_ref" not in reply and spawns == 0
 
 
 def test_param_outranks_the_run_marker(world, monkeypatch):

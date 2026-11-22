@@ -105,7 +105,9 @@ def _lone_token_run(root: Path, session: str, spooled_at: float, taken: set) -> 
 
 
 def _live_token_run(root: Path, key: Optional[str], taken: set) -> Optional[str]:
-    """The run still holding a live token for the entry's sizing or `run:` key, whatever its dir age."""
+    """The run still holding a live token for the entry's sizing or `run:` key, whatever its dir age.
+
+    A token minted before its run's `halted` marker is not held (halts never consume it): the refire mints and resumes the run."""
     if not key:
         return None
     from coordinator_core.ops.dispatch_emit import run_token
@@ -115,7 +117,7 @@ def _live_token_run(root: Path, key: Optional[str], taken: set) -> Optional[str]
     try:
         for rec in run_token.live_records(root):
             rid = rec.get("run_id")
-            if rid in taken:
+            if rid in taken or run_token._predates_halt(root, rec):
                 continue
             if kind == "run" and rid == want:
                 return rid
@@ -131,14 +133,16 @@ _raw_ask_text = record.raw_ask_text
 
 
 def _any_ask_run(root: Path, ask: str) -> Optional[str]:
-    """A live token run recording the same normalized ask hash, whatever its session or age."""
+    """A live token run recording the same normalized ask hash, whatever its session or age.
+
+    A run halted or failed after minting its token (`_predates_halt`) never supersedes: the ask refires."""
     from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
-    from coordinator_core.ops.dispatch_emit.run_token import live_records
+    from coordinator_core.ops.dispatch_emit.run_token import _predates_halt, live_records
 
     want = normalized_ask_hash(ask)
     try:
         for rec in live_records(root):
-            if rec.get("ask_sha256") == want and rec.get("run_id"):
+            if rec.get("ask_sha256") == want and rec.get("run_id") and not _predates_halt(root, rec):
                 return rec["run_id"]
     except (OSError, ValueError, TypeError):
         return None
@@ -152,14 +156,15 @@ def _same_ask_run(root: Path, session: str, ask: Optional[str], spooled_at: floa
     if not ask or not session:
         return None
     from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
-    from coordinator_core.ops.dispatch_emit.run_token import live_records
+    from coordinator_core.ops.dispatch_emit.run_token import _predates_halt, live_records
 
     want = normalized_ask_hash(ask)
     try:
         for rec in live_records(root):
             minted = float(rec.get("minted_at") or 0)
             if (
-                rec.get("ask_sha256") == want
+                not _predates_halt(root, rec)
+                and rec.get("ask_sha256") == want
                 and rec.get("session_id") == session
                 and rec.get("run_id") not in taken
                 and spooled_at - _LOOKBACK_S <= minted <= spooled_at + _LOOKAHEAD_S

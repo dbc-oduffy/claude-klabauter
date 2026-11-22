@@ -264,6 +264,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.plan_record_residue_rulings",
         'registers "plan.record_residue_rulings"',
     ),
+    ("coordinator_core.ops.rulings.index", 'registers "rulings.index"'),
+    ("coordinator_core.ops.rulings.search", 'registers "rulings.search"'),
+    ("coordinator_core.ops.rulings.gate", 'registers "rulings.gate"'),
+    ("coordinator_core.ops.rulings.coverage", 'registers "rulings.coverage"'),
     (
         "coordinator_core.ops.plan_mise_prep_probe",
         'registers "plan.mise_prep_probe", "plan.mise_upgrade_apply", '

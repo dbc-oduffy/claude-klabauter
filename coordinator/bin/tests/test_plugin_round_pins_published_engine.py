@@ -327,3 +327,41 @@ def test_second_root_outside_the_pin_is_still_refused(tmp_path, monkeypatch):
     assert not ok
     assert TRIPWIRE in err and str(world.content) in err and "no upstream" in err
     assert str(world.engine_coord) not in err
+
+
+def _as_commit_clone(monkeypatch, world: _World, tmp_path: Path, *, keys):
+    """`_REPO_ROOT` is a commit clone with no setup/ (4.6.25 round 3); the live source repo has it."""
+    clone = tmp_path / "commit-clone"
+    (clone / "coordinator").mkdir(parents=True)
+    (world.engine / "setup").mkdir(exist_ok=True)
+    seen: "list[Path]" = []
+
+    def fake_keys(setup_dir, *a, **k):
+        seen.append(Path(setup_dir))
+        return frozenset(keys) if Path(setup_dir) == world.engine / "setup" else frozenset()
+
+    monkeypatch.setattr(publish, "_REPO_ROOT", clone)
+    monkeypatch.setattr(publish, "_source_repo", lambda: world.engine)
+    monkeypatch.setattr(publish, "_engine_declaring_mirror_keys", fake_keys)
+    return seen
+
+
+def test_commit_clone_without_setup_reads_topology_from_source_and_pins(tmp_path, monkeypatch):
+    world = _World(tmp_path)
+    _patch_registry(monkeypatch, world)
+    seen = _as_commit_clone(monkeypatch, world, tmp_path, keys={MIRROR_KEY})
+    pin, _pins, printed = _seed(world, [world.plugin_row()])
+    assert seen == [world.engine / "setup"]
+    assert pin is not None and pin.source_sha == world.sha_a, printed
+    ok, _out, err = _gate(world, [world.plugin_row()], pin)
+    assert ok, err
+
+
+def test_commit_clone_with_no_declared_engine_mirror_refuses_rather_than_pin_head(tmp_path, monkeypatch):
+    world = _World(tmp_path)
+    _patch_registry(monkeypatch, world)
+    _as_commit_clone(monkeypatch, world, tmp_path, keys=set())
+    from percolate.published_engine_pin import PublishedEnginePinError
+
+    with pytest.raises(PublishedEnginePinError, match="commit clone"):
+        _seed(world, [world.plugin_row()])

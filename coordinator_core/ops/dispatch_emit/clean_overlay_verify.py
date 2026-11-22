@@ -136,9 +136,10 @@ _now = time.monotonic  # the stall clock's seam: tests swap it to cross a stall 
 
 
 def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedProcess:
-    """Drain `proc`'s stdout and stderr on reader threads until it exits; any new output resets the stall clock.
-    A silence of `stall_s` (`PYTEST_STARTUP_S` if longer, before the first byte) closes the tree and raises
-    `PytestStalled`. Output is read in whatever chunks the pipe
+    """Drain `proc`'s stdout and stderr on reader threads until it exits; any new output, or a change in the
+    tree's CPU time (`close.tree_cpu_s`, where readable), resets the stall clock.
+    A silence of `stall_s` (`PYTEST_STARTUP_S` if longer, before the first byte) with an idle tree closes the
+    tree and raises `PytestStalled`. Output is read in whatever chunks the pipe
     holds (pytest `-q` prints dots with no newline), so a slow test file that keeps reporting never stalls."""
     import threading
 
@@ -163,12 +164,23 @@ def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedPro
     for reader in readers:
         reader.start()
     tick = min(0.5, max(stall_s / 4, 0.01))
+    cpu_of = getattr(close, "tree_cpu_s", None)
+    last_cpu = None
     try:
         while True:
             try:
                 proc.wait(timeout=tick)
                 break
             except subprocess.TimeoutExpired:
+                if cpu_of is not None:
+                    try:
+                        cpu = cpu_of()
+                    except Exception:
+                        cpu = None
+                    if cpu is not None:
+                        if last_cpu is not None and cpu != last_cpu:
+                            clock[0] = _now()
+                        last_cpu = cpu
                 window = stall_s if arrived else max(stall_s, PYTEST_STARTUP_S)
                 if _now() - clock[0] >= window:
                     progress = _last_progress(b"".join(arrived))
@@ -428,6 +440,8 @@ def first_setup_error(output: str) -> str:
 
 #: Zero-run cause for a pytest run whose every outcome is a setup error (no test completed): the harness, not a test, failed.
 ZERO_RUN_TEST_INFRA = "test_infra_failure"
+#: Stderr prefix of the one typed line `--export-run` prints for a co-tenant refusal; the verify halt routes on it.
+CO_TENANT_LINE = "co_tenant_dependency"
 _SUMMARY_COUNTS_RE = re.compile(r"^\W*((?:\d+ [a-z]+(?:, )?)+) in \d+(?:\.\d+)?s", re.MULTILINE)
 _SETUP_ERROR_LINE_RE = re.compile(r"^ERROR (\S+::.+)$", re.MULTILINE)
 _COMPLETED_KINDS = ("passed", "failed", "xfailed", "xpassed")
@@ -474,9 +488,11 @@ class CoTenantDependency(ExportError):
     """A run file needs `symbol` from `peer`, which exists only in another session's uncommitted edit. Advisory and
     typed: the peer's dirt is never exported, so the run waits for the peer's commit."""
 
-    def __init__(self, importer: str, peer: str, symbol: str, why: str):
+    def __init__(self, importer: str, peer: str, symbol: str, why: str, module: str = "", missing: str = "symbol") -> None:
         self.importer, self.peer, self.symbol = importer, peer, symbol
-        super().__init__(f"co_tenant_dependency: {importer} needs {symbol} from {peer} ({why}; uncommitted in a peer session)")
+        self.module, self.missing = module, missing
+        needed = symbol if missing == "module" else f"{module}.{symbol}" if module else symbol
+        super().__init__(f"co_tenant_dependency: {importer} needs {needed} from {peer} ({why}; uncommitted in a peer session)")
 
 
 class _MirrorStale(Exception):
@@ -932,16 +948,34 @@ def _defined_names(data: bytes) -> set[str]:
         tree = ast.parse(data)
     except SyntaxError:
         return set()
-    names = {
-        node.name for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-    }
-    for node in tree.body:
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names.update(target.id for target in targets if isinstance(target, ast.Name))
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+    names: set[str] = set()
+
+    def bound(target) -> None:
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                bound(element)
+        elif isinstance(target, ast.Starred):
+            bound(target.value)
+
+    def walk(body) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                    bound(target)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, (ast.If, ast.With, ast.AsyncWith)):
+                walk(node.body)
+                walk(getattr(node, "orelse", ()))
+            elif isinstance(node, ast.Try):
+                for block in (node.body, node.orelse, node.finalbody, *(h.body for h in node.handlers)):
+                    walk(block)
+
+    walk(tree.body)
     return names
 
 
@@ -1169,11 +1203,23 @@ def _check_overlay_imports(root: Path, overlay: Sequence[str]) -> None:
     for rel, target, module, names in needs:
         data = heads[target]
         if data is None:
-            raise CoTenantDependency(rel, target, names[0] if names else module, "not in HEAD")
+            raise CoTenantDependency(rel, target, module, "not in HEAD", module=module, missing="module")
         have = defined.setdefault(target, _defined_names(data))
         for name in names:
             if name not in have and modules.get(f"{module}.{name}") is None and not _clean_submodule(root, module, name, changed):
-                raise CoTenantDependency(rel, target, name, "absent at HEAD")
+                raise CoTenantDependency(rel, target, name, "absent at HEAD", module=module, missing="symbol")
+
+
+def _clean_submodule(root: Path, package: str, name: str, changed: Collection[str]) -> bool:
+    """`from package import name` where `name` is a submodule on disk with no dirt: the export holds it at its
+    HEAD bytes, so the dirty package `__init__` never had to define it.
+
+    Trap: without this, any dirt in a package `__init__` refused every importer of a sibling submodule
+    (bf2f0d f4e08e: `from coordinator_core.ops import method_step` read as a name ops/__init__.py lacks)."""
+    stem = package.replace(".", "/") + "/" + name
+    return any(
+        rel not in changed and (root / rel).is_file() for rel in (f"{stem}.py", f"{stem}/__init__.py")
+    )
 
 
 def _clean_submodule(root: Path, package: str, name: str, changed: Collection[str]) -> bool:
@@ -1342,14 +1388,15 @@ def xdist_workers(py: str, units: int) -> int:
     return workers if workers >= 2 else 0
 
 
-def _pytest_argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str]) -> list:
+def _pytest_argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str], marker: Optional[str] = None) -> list:
     """`--rootdir` is the symlink-resolved mirror: pytest roots node ids at the realpath of each test file, so a
     rootdir behind a symlink (macOS /var -> /private/var) loses the prefix match and every id becomes a file-less
-    `../../..::name`. Every flag precedes `--rootdir`; the targets follow `--basetemp`."""
+    `../../..::name`. Every flag precedes `--rootdir`; the targets follow `--basetemp`. `marker` replaces the tier
+    `-m` expression (the empty string selects every marker)."""
     py = _gate_python(root)
     workers = xdist_workers(py, len(targets))
     return [
-        py, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", tier_marker_expr(),
+        py, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", tier_marker_expr() if marker is None else marker,
         *(["-n", str(workers)] if workers else []), "--rootdir", str(dest.resolve()),
         "--basetemp", str(basetemp), *targets,
     ]
@@ -1432,6 +1479,21 @@ def tier_deselected_only(proc: subprocess.CompletedProcess) -> bool:
     return proc.returncode == 5 and "deselected" in proc.stdout + proc.stderr
 
 
+def _rerun_tier_deselected(
+    root: Path, dest: Path, basetemp: Path, targets: Sequence[str], env: dict, proc: subprocess.CompletedProcess,
+    marker: Optional[str] = None,
+) -> tuple:
+    """`(proc, argv)`: `proc` unchanged (argv None) unless every collected test was marker-deselected, else the
+    same `targets` re-run once with `marker` (the empty string, selecting every marker, when None) in place of
+    the tier expression, the re-run's own outcome prefixed with the tier note."""
+    if not tier_deselected_only(proc):
+        return proc, None
+    argv = _pytest_argv(root, dest, basetemp, targets, "" if marker is None else marker)
+    again = _run_pytest_retrying(argv, dest, env)
+    note = f"every collected test is in an excluded tier ({', '.join(TIER_EXCLUDED)}); re-ran with -m {marker or 'none'!r}:\n"
+    return subprocess.CompletedProcess(again.args, again.returncode, note + again.stdout, again.stderr), argv
+
+
 def _tier_empty_as_green(proc: subprocess.CompletedProcess) -> subprocess.CompletedProcess:
     """`proc` as a clean exit when `tier_deselected_only`: a land touching only slow-tier tests has nothing a
     land verify may gate on, and its detail says so."""
@@ -1465,7 +1527,7 @@ def _settle_empty_collection(
 
 def verify(
     root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str], base_sha: Optional[str] = None,
-    leg: LegHook = _no_leg, touched: Sequence[str] = (),
+    leg: LegHook = _no_leg, touched: Sequence[str] = (), marker: Optional[str] = None,
 ) -> OverlayVerdict:
     """Advance `root`'s persistent mirror to `candidate_sha`, run pytest over `seeds` there with `coordinator_core`
     resolved from the mirror, then a second pytest over the test files that mention a `touched` module (the
@@ -1512,13 +1574,19 @@ def verify(
                 ran = _run_pytest_retrying(seeds_argv, dest, env)
                 ran = _settle_empty_collection(root, dest, basetemp, run_seeds, seeds, env, ran)
                 in_seeds = False
-                ran = _tier_empty_as_green(ran)
+                ran, again = _rerun_tier_deselected(root, dest, basetemp, run_seeds, env, ran, marker)
+                if again:
+                    launched.append(shlex.join(again))
                 if extras:
                     shard_note = f"importer shard timed out: {len(extras)} file(s) unverified"
                     try:
                         shard_argv = _pytest_argv(root, dest, basetemp, extras)
                         launched.append(shlex.join(shard_argv))
-                        shard = _tier_empty_as_green(_run_pytest_retrying(shard_argv, dest, env))
+                        shard, again = _rerun_tier_deselected(
+                            root, dest, basetemp, extras, env, _run_pytest_retrying(shard_argv, dest, env), marker,
+                        )
+                        if again:
+                            launched.append(shlex.join(again))
                         shard_note = ""
                     except PytestStalled as exc:
                         shard_note = f"importer shard stalled: {len(extras)} file(s) unverified ({exc})"
@@ -1573,6 +1641,13 @@ def verify(
             infra = infra_setup_error(full) if failed else ""
             if failed and ids and not infra and isinstance(base_sha, str) and base_sha and base_sha != sha:
                 at_base = _base_failing(dest, mroot, root, run_id, base_sha, ids, leg)
+    except CoTenantDependency as exc:
+        from coordinator_core.ops.dispatch_emit import co_tenant_owner
+
+        resolved = co_tenant_owner.resolve(root, run_id, exc)
+        return OverlayVerdict(
+            "inconclusive", str(exc), seeds, argv=tuple(launched), cause=resolved.get("parked") or resolved.get("cause") or "",
+        )
     except ExportError as exc:
         return OverlayVerdict("inconclusive", str(exc), seeds, argv=tuple(launched))
     except subprocess.TimeoutExpired as exc:
@@ -2050,6 +2125,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.export_run:
         try:
             ran = run_in_export(root, args.run_id, paths, command)
+        except CoTenantDependency as exc:
+            from coordinator_core.ops.dispatch_emit import co_tenant_owner
+
+            resolved = {**co_tenant_owner.resolve(root, args.run_id, exc), "peer": exc.peer}
+            print(f"{CO_TENANT_LINE}: {json.dumps(resolved, sort_keys=True)}", file=sys.stderr)
+            return 2
         except ExportError as exc:
             print(f"clean export failed: {exc}", file=sys.stderr)
             return 2

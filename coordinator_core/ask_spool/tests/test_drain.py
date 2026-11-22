@@ -545,6 +545,42 @@ def test_a_spooled_sizing_whose_run_holds_no_live_token_is_not_withdrawn_by_the_
     assert counts["withdrawn"] == 0 and counts["coalesced"] == 1
 
 
+def _write_halt(root, run_id, at=None):
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    d = record_dir(root, run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    marker = d / halted_run.HALTED_FILE
+    marker.write_text(json.dumps({"status": halted_run.STATUS_HALTED, "run_id": run_id}), encoding="utf-8")
+    if at is not None:
+        os.utime(marker, (at, at))
+
+
+def test_a_refire_of_a_sizing_whose_live_token_holder_is_halted_mints_and_is_not_withdrawn(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    run_id = "ask-20261104T150000-aaaaaa"
+    _live_refire(tmp_path, run_id)
+    _write_halt(tmp_path, run_id)
+    sid = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 1 and counts["minted"] == 1 and counts["withdrawn"] == 0 and counts["coalesced"] == 0
+    assert not os.path.exists(record.entry_path(str(tmp_path), sid, record.WITHDRAWN_SUFFIX))
+
+
+def test_a_refire_whose_holder_re_minted_after_its_halt_still_coalesces_and_is_withdrawn(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    run_id = "ask-20261104T150000-aaaaab"
+    _live_refire(tmp_path, run_id)
+    _write_halt(tmp_path, run_id, at=time.time() - 3600)
+    sid = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 0 and counts["withdrawn"] == 1 and counts["minted"] == 0
+    assert _withdrawn(tmp_path, sid)["superseded_by"] == run_id
+
+
 def test_spool_of_a_sizing_whose_old_run_holds_no_live_token_still_mints(tmp_path):
     _write_sizing(tmp_path, plan=None)
     _live_refire(tmp_path, "ask-20261104T150000-eeeeee", live=False)
@@ -618,6 +654,24 @@ def test_bare_ask_of_another_text_still_mints_and_the_same_text_of_any_session_o
     assert engine.calls == 1 and counts["minted"] == 1 and counts["coalesced"] == 0 and counts["withdrawn"] == 2
     assert _withdrawn(tmp_path, sid_a)["superseded_by"] == "ask-20261104T160001-aaaaaa"
     assert _withdrawn(tmp_path, sid_c)["superseded_by"] == "ask-20261104T160003-cccccc"
+
+
+def test_a_halted_or_failed_run_recording_the_same_ask_never_supersedes_and_the_ask_fires(tmp_path):
+    halted, failed, live = "ask-20261104T160010-aaaaaa", "ask-20261104T160011-bbbbbb", "ask-20261104T160012-cccccc"
+    _token_of_ask(tmp_path, halted, "halted ask text", session="other")
+    _token_of_ask(tmp_path, failed, "failed ask text", session="other")
+    _token_of_ask(tmp_path, live, "live ask text", session="other")
+    _write_halt(tmp_path, halted)
+    _write_halt(tmp_path, failed)
+    sid_halted = _spool_ask(tmp_path, "tuH", "halted ask text")
+    sid_failed = _spool_ask(tmp_path, "tuF", "failed ask text")
+    sid_live = _spool_ask(tmp_path, "tuL", "live ask text")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 2 and counts["minted"] == 2 and counts["withdrawn"] == 1 and counts["coalesced"] == 0, counts
+    for sid in (sid_halted, sid_failed):
+        assert not os.path.exists(record.entry_path(str(tmp_path), sid, record.WITHDRAWN_SUFFIX))
+    assert _withdrawn(tmp_path, sid_live)["superseded_by"] == live
 
 
 def _withdrawn(root, sid):

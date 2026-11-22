@@ -5495,23 +5495,37 @@ def _run_row_helper_js(
         "      result = _familyStatusLine(id, result);\n"
         "      _text = JSON.stringify(result);\n"
         "    }\n"
+        # The re-ask agent did no work of its own: it is shown the finished report and told that
+        # work counts, and a BLOCKED answer to it is dropped so the empty turn is never graded.
         "    let _noStatusHead = '';\n"
+        "    let _reaskPartial = false;\n"
         f"    if (result != null && !{_NON_DONE_STATUS_JS_RE}.test(_text) && !{_ANY_STATUS_JS_RE}.test(_text) && !_trVerdictOf(_text) && _abstainOf(_text) === null) {{\n"
         "      const _raw = typeof result === 'string' ? result : _text;\n"
         "      _noStatusHead = _raw.split(_REASON_SPLIT_RE).map((l) => l.trim()).find((l) => l) || '';\n"
         "      _noStatusHead = _noStatusHead.slice(0, 200);\n"
         "      try {\n"
-        "        const _re = await agent('Your reply for row ' + id + ' carried no contract status line. Reply with ONLY one line: "
-        "DONE: <one-line reason>, PARTIAL: <one-line reason> or BLOCKED: <one-line reason>. Your reply began: ' + _noStatusHead, "
+        "        const _re = await agent('Your earlier reply for row ' + id + ' is the row\\'s finished work and it stands; "
+        "this turn asks only for its contract status line, so no new work is owed and none is graded. "
+        "Reply with ONLY one line describing that earlier reply: DONE: <one-line reason>, PARTIAL: <one-line reason> or "
+        "BLOCKED: <one-line reason> (BLOCKED only if the earlier reply itself reports a blocker). "
+        f"Your earlier reply was:\\n' + _raw.slice(0, {STATUS_REASK_PRIOR_CAP}), "
         f"{{ label: 'status-reask:' + id, {_model_opt(_EXECUTOR_AGENT_TYPE)}, effort: 'low' }});\n"
         "        const _rt = typeof _re === 'string' ? _re : JSON.stringify(_re ?? null);\n"
-        f"        if ({_ANY_STATUS_JS_RE}.test(_rt)) {{ result = _re; _text = JSON.stringify(result); _noStatusHead = ''; }}\n"
+        f"        if ({_ANY_STATUS_JS_RE}.test(_rt) && !{_BLOCKED_STATUS_JS_RE}.test(_rt)) {{ result = _re; _text = JSON.stringify(result); _noStatusHead = ''; }}\n"
+        # A non-empty finished report whose re-ask came back empty or BLOCKED grades PARTIAL on the
+        # prior report and releases its dependents; only an empty prior reply stays incomplete.
+        f"        else if (_raw.trim() && (!_rt.trim() || {_BLOCKED_STATUS_JS_RE}.test(_rt))) {{\n"
+        "          const _why = 'status re-ask gave no status; finished report stands: ' + _raw.replace(/\\s+/g, ' ').trim().slice(0, 300);\n"
+        "          result = 'PARTIAL: ' + _why; _text = JSON.stringify(result); _noStatusHead = '';\n"
+        "          _reaskPartial = true; _acceptPartial[id] = _why;\n"
+        "        }\n"
         "      } catch (e) {}\n"
         "    }\n"
         "    let incomplete = false;\n"
         f"    if ({_NON_DONE_STATUS_JS_RE}.test(_text)) {{\n"
         "      const _owed = _gateOwedOf(_text);\n"
         f"      if (_owed) {{ {GATE_OWED_VAR}[id] = _owed; }}\n"
+        f"      else if (_reaskPartial) {{ {CHUNK_REASON_VAR}[id] = _reasonOf(result); }}\n"
         "      else {\n"
         f"        {CHUNK_REASON_VAR}[id] = _reasonOf(result);\n"
         f"        if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n"
@@ -8096,6 +8110,9 @@ def compose_script(
 #: mentioning `PREFLIGHT-BLOCKED` or "no PARTIAL chunks" is DONE.
 _LINE_START_JS = r'(?:^"?|\n|\\n)'
 _STATUS_FIELD_JS = r'[ \t>#-]*[*_`]{0,2}[Ss]tatus[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*'
+#: Characters of the prior turn's reply a status-line re-ask shows the re-ask agent.
+STATUS_REASK_PRIOR_CAP = 6000
+
 _NON_DONE_STATUS_JS_RE = (
     rf'/{_LINE_START_JS}\s*[*_`]{{0,2}}(?:PARTIAL|BLOCKED)[*_`]{{0,2}}:'
     rf'|{_LINE_START_JS}{_STATUS_FIELD_JS}(?:PARTIAL|BLOCKED)\b'

@@ -39,6 +39,91 @@ def test_prefilter_names_the_classes_a_command_could_match(command: str, expecte
     assert cold_chain.shell_candidates(command) == expected
 
 
+DAY_BRANCH = "tester/box/2026-11-22"
+BRANCH = cold_chain.BRANCH_GUARD
+
+
+@pytest.mark.parametrize("command", [
+    "git checkout -b %s" % DAY_BRANCH, "git switch -c %s" % DAY_BRANCH, "git checkout -B x/y/2026-11-22",
+    "git switch --create probe/x", "git branch probe/x", "cd r && git -C r checkout -b probe/x",
+])
+def test_branch_create_names_the_branch_guard(command: str) -> None:
+    assert cold_chain.shell_candidates(command) == [BRANCH]
+
+
+@pytest.mark.parametrize("command", ["git checkout main", "git switch main", "git branch", "git branch -d x", "git branch --list",
+    "git branch -m old new", "git log branch", "git diff branch",
+])
+def test_non_create_git_commands_are_decided_by_the_guard_not_the_prefilter(command: str, tmp_path: Path) -> None:
+    assert cold_chain.evaluate(_bash(command, tmp_path)) == {}
+    assert cold_chain.take_trace() == [(BRANCH, "allow")]
+
+
+@pytest.mark.parametrize("command", ["git status", "git commit -m x", "ls", "git config branch.main.remote origin"])
+def test_commands_without_a_branch_verb_do_not_name_the_branch_guard(command: str) -> None:
+    assert BRANCH not in cold_chain.shell_candidates(command)
+
+
+def test_branch_guard_cold_process_time_stays_under_the_bar() -> None:
+    import json
+    import subprocess
+    import sys
+
+    code = (
+        "import json,time,coordinator_core.host_hooks.cold_chain as c\n"
+        "r=c.evaluate({'tool_name':'Bash','tool_input':{'command':'git checkout -b x/y/2026-11-22'},'cwd':'.','session_id':'s'})\n"
+        "print(json.dumps([r,c.take_trace(),time.process_time()]))\n"
+    )
+    runs = []
+    for _ in range(3):
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        runs.append(json.loads(out))
+    assert all(r[0] == {} and r[1][0][0] == BRANCH for r in runs)
+    assert min(r[2] for r in runs) < 0.2, runs
+
+
+def test_day_branch_create_is_an_evaluated_allow_in_the_trace(tmp_path: Path) -> None:
+    for command in ("git checkout -b %s" % DAY_BRANCH, "git switch -c %s" % DAY_BRANCH):
+        assert cold_chain.evaluate(_bash(command, tmp_path)) == {}
+        assert cold_chain.take_trace() == [(BRANCH, "allow")]
+
+
+def test_topic_branch_create_is_traced_advisory_and_never_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
+
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd=None: str(tmp_path))
+    monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: True)
+    assert guard.check(_bash("git checkout -b probe/x", tmp_path)) is not None
+    for command in ("git checkout -b probe/x", "git switch -c probe/x", "git branch probe/x"):
+        assert cold_chain.evaluate(_bash(command, tmp_path)) == {}
+        assert cold_chain.take_trace() == [(BRANCH, "advisory")]
+    assert cold_chain.evaluate(_bash("git checkout -b %s" % DAY_BRANCH, tmp_path)) == {}
+    assert cold_chain.take_trace() == [(BRANCH, "allow")]
+
+
+@pytest.mark.parametrize("command", ["git checkout -b %s" % DAY_BRANCH, "git switch -c probe/x"])
+def test_branch_guard_evaluation_spawns_no_process_and_restores_its_root_lookup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, command: str,
+) -> None:
+    import subprocess
+
+    from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
+
+    def no_spawn(*args, **kwargs):
+        raise AssertionError("the cold branch-guard evaluation spawned a process")
+
+    before = guard.resolve_git_root
+    monkeypatch.setattr(subprocess, "Popen", no_spawn)
+    assert cold_chain.evaluate(_bash(command, tmp_path)) == {}
+    assert [g for g, _ in cold_chain.take_trace()] == [BRANCH]
+    assert guard.resolve_git_root is before
+
+
+def test_branch_guard_never_joins_the_deny_set() -> None:
+    assert BRANCH not in cold_chain.SHELL_DENY_GUARDS and BRANCH in cold_chain.ADVISORY_SHELL_GUARDS
+
+
 def test_harmless_command_imports_and_runs_no_guard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def boom(*args, **kwargs):
         raise AssertionError("a guard ran for a harmless command")

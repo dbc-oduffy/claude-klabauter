@@ -108,6 +108,68 @@ def test_local_fleet_holder_hit_is_not_treated_as_remote(monkeypatch: pytest.Mon
     assert "no live holder on record" in out and "group-em-56" not in out
 
 
+def _stamp_host(root, host) -> None:
+    import json
+
+    path = root / "state" / "group-em-watch.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["host"] = host
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_reader_on_a_second_box_sees_the_local_heartbeat_holder_host_qualified(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import time
+
+    home = tmp_path / "home"
+    _stamp_heartbeat(home, "sid-live", time.time())
+    _stamp_host(home, "machine-a")
+    _box(monkeypatch, home)
+    monkeypatch.setattr(mod.group_em_watch_heartbeat, "local_host", lambda: "mac-mini.local")
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "held by group-em-ad.machine-a.local," in out
+
+
+def test_reader_on_the_holders_box_sees_the_bare_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import time
+
+    home = tmp_path / "home"
+    _stamp_heartbeat(home, "sid-live", time.time())
+    _stamp_host(home, "machine-a")
+    _box(monkeypatch, home)
+    monkeypatch.setattr(mod.group_em_watch_heartbeat, "local_host", lambda: "MACHINE-A")
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "held by group-em-ad," in out
+
+
+def test_heartbeat_without_a_host_renders_the_bare_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import time
+
+    home = tmp_path / "home"
+    _stamp_heartbeat(home, "sid-live", time.time())
+    _box(monkeypatch, home)
+    monkeypatch.setattr(mod.group_em_watch_heartbeat, "local_host", lambda: "mac-mini.local")
+    assert "held by group-em-ad," in mod.compute_context({"cwd": str(tmp_path)})
+
+
+def test_remote_holder_is_host_qualified_from_the_box_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(mod.nomination, "box_holder", lambda *a, **k: None)
+    monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: dict(_REMOTE))
+    monkeypatch.setattr(
+        mod.box_registry, "read_boxes",
+        lambda *a, **k: [{"box_id": "box-win", "transport": {"kind": "ssh", "host": "machine-a.local"}}],
+    )
+    monkeypatch.setattr(mod.group_em_watch_heartbeat, "local_host", lambda: "mac-mini.local")
+    assert "held by group-em-56.machine-a.local," in mod.compute_context({"cwd": str(tmp_path)})
+
+
+def test_remote_holder_with_no_usable_host_stays_bare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(mod.nomination, "box_holder", lambda *a, **k: None)
+    monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: dict(_REMOTE))
+    for rows in ([], [{"box_id": "box-win", "transport": {"kind": "ssh", "host": "192.168.1.5"}}]):
+        monkeypatch.setattr(mod.box_registry, "read_boxes", lambda *a, _r=rows, **k: _r)
+        assert "held by group-em-56," in mod.compute_context({"cwd": str(tmp_path)})
+
+
 def _box(monkeypatch, root, sid: str = "sid-live", live: bool = True) -> None:
     monkeypatch.setattr(
         mod.nomination,

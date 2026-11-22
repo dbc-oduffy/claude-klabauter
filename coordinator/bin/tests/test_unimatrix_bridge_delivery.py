@@ -507,6 +507,39 @@ def test_a_lost_ack_with_no_readable_receipt_is_unconfirmed_not_failed_and_never
     assert "Delivery unconfirmed" in message and "It was not delivered" not in message
 
 
+class FakeSock:
+    def __init__(self, fail=False):
+        self.sent, self.fail = [], fail
+
+    def sendall(self, data):
+        if self.fail:
+            raise OSError("broken pipe")
+        self.sent.append(data)
+
+    def shutdown(self, how):
+        pass
+
+
+def test_a_mirror_socket_send_writes_one_delivery_row_named_for_the_mirror(bridge):
+    line = json.dumps({"from": "uds:" + SENDER, "message": "hi"}).encode()
+    sock = FakeSock()
+    bridge.pump_local_to_sock(FakeConn(b'{"type":"auth"}\n' + line + b"\n"), sock)
+    assert sock.sent
+    rows = [json.loads(r) for r in bridge.deliveries_path().read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["target"].startswith("far-session ") and rows[0]["ok"] is True and rows[0]["transport"] == "socket"
+    assert rows[0]["digest"] == hashlib.sha256(line).hexdigest()
+    assert bridge.written == []
+
+
+def test_a_failed_mirror_socket_write_records_the_failure_and_still_raises(bridge):
+    line = json.dumps({"from": "uds:" + SENDER, "message": "hi"}).encode()
+    with pytest.raises(OSError):
+        bridge.pump_local_to_sock(FakeConn(line + b"\n"), FakeSock(fail=True))
+    row = last_row(bridge)
+    assert row["ok"] is False and "socket write failed" in row["error"] and row["target"].startswith("far-session ")
+
+
 def test_a_route_marked_unavailable_by_select_route_is_refused_before_any_dial(bridge, monkeypatch):
     dialled, calls = routed(bridge, monkeypatch, [route(None, None, "unavailable", "no-pinned-hostkey")],
                             lambda *a: subprocess.CompletedProcess([], 0, b"", b""))

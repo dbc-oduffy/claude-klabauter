@@ -639,9 +639,9 @@ def _no_scan(monkeypatch, root) -> None:
 
 def test_a_sizing_with_no_indexed_run_answers_none_without_scanning_run_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hr.write_halt_marker(_ask(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel="state/sizings/2026-10-16-other.yaml")
-    assert hr.halted_run_to_resume(tmp_path, SIZING) is None  # builds the index
-    _no_scan(monkeypatch, tmp_path)
+    reads = _count_reads(monkeypatch)
     assert hr.halted_run_to_resume(tmp_path, SIZING) is None
+    assert reads == []
 
 
 def _halt_corpus(root, count) -> None:
@@ -660,25 +660,13 @@ def _count_reads(monkeypatch):
     return reads
 
 
-def test_a_sizing_with_no_halt_in_a_large_corpus_is_one_listing_once_the_index_is_built(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_sizing_with_no_halt_in_a_large_corpus_reads_no_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _halt_corpus(tmp_path, 500)
-    hr.rebuild_lookup_index(tmp_path)
     reads = _count_reads(monkeypatch)
-    _no_scan(monkeypatch, tmp_path)
     assert hr.halted_run_to_resume(tmp_path, SIZING, build=False) is None
     assert hr.halted_run_to_resume(tmp_path, SIZING) is None
     assert reads == []
-
-
-def test_the_hook_path_never_rebuilds_an_absent_index_over_a_large_corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _halt_corpus(tmp_path, 500)
-    sentinel = tmp_path / hr.LOOKUP_INDEX_DIR / hr.LOOKUP_SENTINEL
-    assert not sentinel.exists()
-    reads = _count_reads(monkeypatch)
-    assert hr.halted_run_to_resume(tmp_path, SIZING, build=False) is hr.STALLED
-    assert reads == [] and not sentinel.exists()
-    assert hr.halted_run_to_resume(tmp_path, SIZING) is None  # the default call builds it
-    assert sentinel.exists()
+    assert not (tmp_path / hr.LOOKUP_INDEX_DIR).exists()
 
 
 def test_the_hook_path_with_no_index_still_finds_a_warp_halt_by_prefix(tmp_path: Path) -> None:
@@ -694,21 +682,11 @@ def test_the_ask_lookup_reads_only_indexed_runs(tmp_path: Path, monkeypatch: pyt
         hr.write_halt_marker(_ask(tmp_path, f"20261016T0{n}0000-aaaaa{n}"), halted="x", sizing_rel="state/sizings/2026-10-16-other.yaml")
     ask = _ask(tmp_path, "20261016T090000-bbbbbb")
     hr.write_halt_marker(ask, halted="x", sizing_rel=SIZING)
-    hr.halted_run_to_resume(tmp_path, "state/sizings/2026-10-16-none.yaml")  # builds the index
     reads = []
     real = hr._read
     monkeypatch.setattr(hr, "_read", lambda d: reads.append(Path(d).name) or real(d))
     assert hr.halted_run_to_resume(tmp_path, SIZING) == ask.name
     assert reads == [ask.name]
-
-
-def test_a_marker_present_before_the_index_existed_is_found_by_the_first_lookup(tmp_path: Path) -> None:
-    ask = _ask(tmp_path, "20261016T010000-aaaaaa")
-    ask.mkdir(parents=True)
-    (ask / hr.HALTED_FILE).write_text(
-        json.dumps({"status": "halted", "halted": "x", "sizing_rel": SIZING}), encoding="utf-8"
-    )
-    assert hr.halted_run_to_resume(tmp_path, SIZING) == ask.name
 
 
 @pytest.mark.parametrize("leave", ["resumed", "landed", "closed"])
@@ -741,13 +719,6 @@ def test_a_resumed_run_whose_resumer_died_unstaged_is_halted_again_through_the_i
     _dir(tmp_path, "20261016T020000-bbbbbb").mkdir(parents=True)  # a minted-only shell
     assert hr.halted_run_to_resume(tmp_path, SIZING) == old.name
     assert json.loads((old / hr.HALTED_FILE).read_text())["status"] == "halted"
-
-
-def test_the_hook_path_builds_a_small_unbuilt_index_inline(tmp_path: Path) -> None:
-    _halt_corpus(tmp_path, 3)
-    sentinel = tmp_path / hr.LOOKUP_INDEX_DIR / hr.LOOKUP_SENTINEL
-    assert hr.halted_run_to_resume(tmp_path, SIZING, build=False) is None
-    assert sentinel.exists()
 
 
 def test_rag_corpus_down_marker_carries_the_restore_message_in_a_refire_envelope(tmp_path: Path) -> None:

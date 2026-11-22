@@ -34,7 +34,6 @@ from coordinator_core.ops.dispatch_emit.rag_use import RESTORE_MESSAGE
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 from coordinator_core.ops.dispatch_emit.halt_split_tree import alert_live_gem, find_split_trees
 from coordinator_core.ops.dispatch_emit.halt_refire import is_exit_next_action, is_refire_next_action
-from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
 
 HALTED_FILE = "halted.json"
 STATUS_RESUMED = "resumed"
@@ -57,6 +56,7 @@ REVISED_CONSUMED_FIELD = "revised_consumed_at"
 HALT_RELEASED_FIELD = "released"
 HALT_NEXT_ACTION_FIELD = "next_action"
 HALT_POST_LAND_TRIPWIRE_RED = "post_land_tripwire_red"
+HALT_REFUSED_PATHS_FIELD = "refused_paths"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
@@ -154,7 +154,6 @@ def _write(record_dir: Path, payload: dict) -> Path:
 #: atomic create or unlink, so peers never lose each other's update. The index answers "does any run hold this
 #: sizing?" and which `ask-*` runs to read; supersession by a newer run is still decided from the run dir names.
 LOOKUP_INDEX_DIR = ".coordinator-local/halted-run-lookup"
-LOOKUP_SENTINEL = ".built-v2"
 
 
 def _lookup_key(sizing_rel: str) -> str:
@@ -188,55 +187,11 @@ def _track_lookup(record_dir: Path, payload: dict) -> None:
         pass
 
 
-def rebuild_lookup_index(repo_root: Path) -> None:
-    """Index every `halted` or `resumed` marker under the record root, then write the sentinel. Add-only, so a
-    transition recorded mid-scan is never undone by a stale read."""
-    root = Path(repo_root)
-    warp = root / RECORD_DIR_ROOT
+def _indexed_runs(repo_root: Path, sizing_rel: str) -> set:
+    """Run ids the lookup index holds for the sizing: one listing of its per-sizing dir, never a scan of the record root.
+    Trap: an `ask-*` halt written before the index existed is absent here and is not back-filled."""
     try:
-        names = os.listdir(warp)
-    except OSError:
-        names = []
-    for name in names:
-        if not (name.startswith("warp-") or name.startswith("ask-")) or not safe_id(name):
-            continue
-        marker = _read(warp / name)
-        if marker and marker.get("status") in (STATUS_HALTED, STATUS_RESUMED):
-            _track_lookup(warp / name, marker)
-    sentinel = root / LOOKUP_INDEX_DIR / LOOKUP_SENTINEL
-    sentinel.parent.mkdir(parents=True, exist_ok=True)
-    sentinel.touch()
-
-
-#: A record root with at most this many run dirs is cheap enough to index on the hook path.
-INLINE_BUILD_MAX_RUNS = 64
-
-
-def _small_record_root(repo_root: Path) -> bool:
-    """True when the record root holds at most `INLINE_BUILD_MAX_RUNS` run dirs: one listing, no reads."""
-    try:
-        with os.scandir(Path(repo_root) / RECORD_DIR_ROOT) as it:
-            runs = 0
-            for entry in it:
-                if entry.name.startswith(("warp-", "ask-")):
-                    runs += 1
-                    if runs > INLINE_BUILD_MAX_RUNS:
-                        return False
-    except OSError:
-        return True
-    return True
-
-
-def _indexed_runs(repo_root: Path, sizing_rel: str, *, build: bool = True):
-    """Run ids the lookup index holds for the sizing; the first call on a checkout builds the index.
-    With `build=False` an unbuilt index over more than `INLINE_BUILD_MAX_RUNS` runs answers `STALLED` (the caller cannot prove a negative) instead of scanning."""
-    base = Path(repo_root) / LOOKUP_INDEX_DIR
-    if not (base / LOOKUP_SENTINEL).exists():
-        if not build and not _small_record_root(repo_root):
-            return STALLED
-        rebuild_lookup_index(repo_root)
-    try:
-        return set(os.listdir(base / _lookup_key(sizing_rel)))
+        return set(os.listdir(Path(repo_root) / LOOKUP_INDEX_DIR / _lookup_key(sizing_rel)))
     except OSError:
         return set()
 
@@ -254,6 +209,47 @@ def _warp_stamps(root: Path, prefix: str) -> list:
     return stamps
 
 
+def refused_path_entries(record_dir: Path, refused: Optional[list]) -> list:
+    """`[{path, measured, landing}]` for each refused path, in the order given, none dropped.
+
+    An entry is a bare path or a dict carrying `path` (and optionally `measured` / `landing`); a missing
+    `measured` is read from the run's `measured-rev.json` and a missing `landing` is the path's check-in blob in
+    the run's checkout (hash only, no spawn). An unknown blob is None. Independent of the `reason` prose, which
+    the compose side cuts at 600 chars. Never raises."""
+    rd = Path(record_dir)
+    root = _root_of(rd)
+    blobs: dict = {}
+    try:
+        record = json.loads((rd / "measured-rev.json").read_text(encoding="utf-8"))
+        raw = record.get("blobs") if isinstance(record, dict) else None
+        blobs = raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        pass
+    out, seen = [], set()
+    for item in refused or ():
+        entry = item if isinstance(item, dict) else {"path": item}
+        path = entry.get("path")
+        if not isinstance(path, str) or not path or path in seen:
+            continue
+        seen.add(path)
+        measured, landing = entry.get("measured"), entry.get("landing")
+        if measured is None:
+            measured = blobs.get(path)
+        if landing is None and root is not None:
+            try:
+                from coordinator_core.git.commit import checkin_blob_sha
+
+                landing = checkin_blob_sha(root, path)
+            except Exception:  # noqa: BLE001 -- an unreadable landing blob is recorded as None, never a failed halt
+                landing = None
+        out.append({
+            "path": path,
+            "measured": measured if isinstance(measured, str) else None,
+            "landing": landing if isinstance(landing, str) else None,
+        })
+    return out
+
+
 def write_halt_marker(
     record_dir: Path,
     *,
@@ -266,11 +262,13 @@ def write_halt_marker(
     reason: Optional[str] = None,
     next_action: Optional[dict] = None,
     held_rows: Optional[list] = None,
+    refused_paths: Optional[list] = None,
 ) -> Path:
     """Write the `halted` marker into `record_dir` (created if absent); return its path.
 
-    `plan`, the blocking key, the blocking items, the reason, the next_action and the base are written only when given (the base
+    `plan`, the blocking key, the blocking items, the reason, the next_action, the refused paths and the base are written only when given (the base
     only when 40-hex; next_action only when `halt_refire.is_refire_next_action` or `is_exit_next_action` accepts it), so other halts' markers are unchanged.
+    `refused_paths` (a landing refusal's differing paths) lands as `refused_paths: [{path, measured, landing}]`, every path kept (`refused_path_entries`).
     """
     payload = {
         "status": STATUS_HALTED,
@@ -287,6 +285,10 @@ def write_halt_marker(
         payload[HALT_HELD_ROWS_FIELD] = list(held_rows)
     if reason:
         payload[HALT_REASON_FIELD] = reason
+    if refused_paths:
+        entries = refused_path_entries(Path(record_dir), refused_paths)
+        if entries:
+            payload[HALT_REFUSED_PATHS_FIELD] = entries
     accepted = next_action is not None and (is_refire_next_action(next_action) or is_exit_next_action(next_action))
     if not accepted and halted == HALT_RAG_CORPUS_DOWN and sizing_rel:
         next_action, accepted = refire_next_action_for(
@@ -636,30 +638,76 @@ def preferred_halted_run(repo_root: Path, sizing_rel: str, *, caller_session: Op
 
 def halted_run_to_resume(
     repo_root: Path, sizing_rel: str, *, build: bool = True, run_id: object = None, caller_session: Optional[str] = None
-):
+) -> Optional[str]:
     """The halted run a refire of `sizing_rel` resumes, a `warp-<stem>-*` run or else an `ask-<stamp>`
     one. The submit hook and the emit body both resolve through here so their lookups cannot drift.
     With several halted runs the caller's own newest wins (`_prefer`); a `caller_session` that owns none
     and cannot be told from the rest refuses with `AmbiguousHaltedRuns`.
     A refire's `run_id` (`halted_run_named`) is tried first, so a sizing path change cannot lose the run.
-    A sizing the lookup index holds no run for answers None after one directory listing.
-    The hook passes `build=False`: on a checkout whose index is unbuilt it answers the `warp-<stem>-*` halt
-    (one directory listing) or else `STALLED`, never a scan of every halt record; the deferred emit, which
-    builds, resolves the rest off the hook."""
+    Reads only this sizing's own runs: the `warp-<stem>-*` listing and the incrementally written index entries,
+    never every record dir. `build` is accepted for the hook's call and ignored: no index build exists."""
     if run_id is not None:
         named = halted_run_named(repo_root, run_id, sizing_rel)
         if named is not None:
-            return named
-    runs = _indexed_runs(repo_root, _norm(sizing_rel), build=build)
-    if runs is STALLED:
-        return halted_run_for(repo_root, sizing_rel) or STALLED
-    if not runs:
-        return None
+            return _successor_or_self(repo_root, sizing_rel, named)
+    runs = _indexed_runs(repo_root, _norm(sizing_rel))
     candidates = _halted_candidates(repo_root, sizing_rel)
     if len(candidates) > 1:
-        return _prefer(repo_root, sizing_rel, candidates, caller_session)
+        return _successor_or_self(repo_root, sizing_rel, _prefer(repo_root, sizing_rel, candidates, caller_session))
     picked = candidates[0] if candidates else None
-    return _latest_revised(repo_root, sizing_rel, runs, picked) if picked else picked
+    return _successor_or_self(repo_root, sizing_rel, _latest_revised(repo_root, sizing_rel, runs, picked)) if picked else picked
+
+
+class SupersededHaltedRun(AmbiguousHaltedRuns):
+    """The halted run a refire picked has a newer successor (`resumed_from` chain) that is not itself halted."""
+
+    def __init__(self, sizing_rel: str, picked: str, successor: str) -> None:
+        self.candidates = (picked, successor)
+        self.reason = f"superseded-halted-run:{picked},{successor}"
+        ValueError.__init__(
+            self,
+            f"{picked} of {sizing_rel} was resumed by {successor}, which is not halted. "
+            f"Instead: pass `run_id` naming the run to resume, or refire after {successor} halts.",
+        )
+
+
+def _resumes(root: Path, name: str, target: str) -> bool:
+    """True when `name`'s run.json `resumed_from` chain reaches `target` (cycle-safe, `CARRIED_HOP_CAP` hops)."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    seen = {name}
+    cur = name
+    for _ in range(rl.CARRIED_HOP_CAP):
+        prev = (rl.read_run(root / cur) or {}).get(rl.RESUMED_FROM_FIELD)
+        if not (isinstance(prev, str) and safe_id(prev)) or prev in seen:
+            return False
+        if prev == target:
+            return True
+        seen.add(prev)
+        cur = prev
+    return False
+
+
+def _successor_or_self(repo_root: Path, sizing_rel: str, picked: str) -> str:
+    """`picked`, unless a newer run of the sizing resumed it (its `resumed_from` chain reaches `picked`): then
+    the newest such successor when its marker is `halted`, else `SupersededHaltedRun` naming both.
+    Successors are the `warp-<stem>-*` dirs plus the sizing's indexed `ask-*` runs. Trap: an `ask-*` successor
+    that is landed, closed or superseded left the index and is not seen.
+    A minted-only shell successor holds no work and is passed over. Reads only the sizing's own run dirs."""
+    norm = _norm(sizing_rel)
+    prefix = f"warp-{PurePosixPath(norm).stem}-"
+    root = Path(repo_root) / RECORD_DIR_ROOT
+    floor = _run_stamp(picked)
+    names = [prefix + s for s in _warp_stamps(root, prefix)]
+    names += [n for n in _indexed_runs(repo_root, norm) if n.startswith("ask-") and _STAMP.fullmatch(n[4:])]
+    for name in sorted((n for n in names if _run_stamp(n) > floor), key=_run_stamp, reverse=True):
+        if not safe_id(name) or not _resumes(root, name, picked) or _is_shell(root / name):
+            continue
+        marker = _read(root / name)
+        if marker is not None and marker.get("status") == STATUS_HALTED:
+            return name
+        raise SupersededHaltedRun(_norm(sizing_rel), picked, name)
+    return picked
 
 
 def _latest_revised(repo_root: Path, sizing_rel: str, runs: set, picked: str) -> str:

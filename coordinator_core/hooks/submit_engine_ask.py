@@ -3084,6 +3084,31 @@ def _recompose_note(spawn: str, refusal: Optional[str], prior_failure: Optional[
         parts.append(f"A recompose failure is on record in {_LOG_REL}: {prior_failure}")
     return " ".join(parts)
 
+def _wall_note(root: Path, run_id: str) -> str:
+    """The sentence naming the UTC deadline of the run wall a same-id resume runs under. A halted run
+    is re-armed when it starts, so its deadline is now plus the wall; any other run
+    keeps measuring from its `wall_started_at` (else `started_at`). Empty when the stamps cannot be read."""
+    import time
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import WALL_START_FIELD, read_run_stage, rearms_run_wall
+    from coordinator_core.ops.warp_run_deliverable import RUN_WALL_TIMEOUT_SECONDS, _stamp_epoch
+
+    try:
+        stage = read_run_stage(root, run_id) or {}
+    except OSError:
+        return ""
+    now = time.time()
+    rearmed = rearms_run_wall(stage, "minted")
+    origin = None if rearmed else (_stamp_epoch(stage.get(WALL_START_FIELD)) or _stamp_epoch(stage.get("started_at")))
+    deadline = datetime.fromtimestamp((origin if origin is not None else now) + RUN_WALL_TIMEOUT_SECONDS, timezone.utc)
+    return (
+        f"Wall: the run is halted wall_timeout at {deadline.strftime('%Y-%m-%dT%H:%M:%SZ')} "
+        f"({RUN_WALL_TIMEOUT_SECONDS}s from its "
+        f"{'resume' if origin is None else 'recorded wall start'})."
+    )
+
+
 #: Params every refire carries; any other key is the call's own (stop_after, brief, chatty, writes,
 #: cross-repo approval) and the halt-time script cannot honour it, so such a call goes through the launcher.
 _RESUME_NEUTRAL_PARAMS = frozenset({"session_id", "ask", "sizing_path", "reserved_run_id"})
@@ -3171,7 +3196,8 @@ def _resume_fire_args(root: Path, run_id: str, sizing_rel: str, session_id: Opti
     state, token = _write_leg(
         "run_token.mint",
         lambda: run_token.mint(
-            root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs", session_id=session_id, sizing_rel=sizing_rel
+            root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs", session_id=session_id, sizing_rel=sizing_rel,
+            carry_prior=True,
         ),
         gated=True,
     )
@@ -3345,6 +3371,10 @@ def _resume_route(
     if not isinstance(halted_id, str):
         return None, None
     rd = record_dir(root, halted_id)
+    from coordinator_core.warm import live_runs
+
+    if live_runs.run_is_live(root, halted_id):
+        return _refuse(f"Run {halted_id} is live; a second launcher is not started. Wait for its completion notification."), None
     from coordinator_core.ops.dispatch_emit import resume_gate
 
     try:
@@ -3434,7 +3464,10 @@ def _resume_route(
                 return _refuse(refusal), None
             _record_refire(rd, script, "stored", (stored.get("fingerprint") or {}).get("engine_sha"))
             _mint_resume_parent(root, halted_id)
-            return None, {"path": str(script), "run_id": halted_id, **_resume_fire_args(root, halted_id, sizing_rel, session_id)}
+            return None, {
+                "path": str(script), "run_id": halted_id, "wall_note": _wall_note(root, halted_id),
+                **_resume_fire_args(root, halted_id, sizing_rel, session_id),
+            }
         script_missing = refusal is None and on_disk is False
 
     spawn = "unused"
@@ -3486,6 +3519,7 @@ def _resume_route(
         {"scriptPath": str(script)},
         f"Submitted to the engine as run {halted_id} under one launcher: "
         f"{_recompose_note(spawn, refusal, _prior_recompose_failure(root))} "
+        f"{_wall_note(root, halted_id)} "
         f"It runs to its commit in the background; its completion notification is your one wake. "
         f"Do not poll or verify this run meanwhile; unrelated work proceeds. {_revise_hint(halted_id)}",
     )
@@ -4114,6 +4148,8 @@ def _evaluate(
             "It runs to its commit in the background; its completion notification is your one wake. "
             "Do not poll or verify this run meanwhile; unrelated work proceeds."
         )
+        if isinstance(result, dict) and result.get("wall_note"):
+            tail = f"{result['wall_note']} {tail}"
     from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 
     redirect = result.get(OUTPUT_PATH_REDIRECT_KEY)

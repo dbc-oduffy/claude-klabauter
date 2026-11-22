@@ -299,3 +299,27 @@ def test_doubled_claude_home_names_the_value_to_pass_instead(tmp_path: Path, mon
     err = capsys.readouterr().err
     assert "CLAUDE_HOME" in err
     assert repr(str(home)) in err
+
+
+def test_successful_enrollment_refreshes_receipt_after_withholding(tmp_path):
+    env, state = _env(tmp_path)
+    base = SetupReceipt(("substrate",), (), "1", "base")
+    current = SetupReceipt(("substrate", "codex_runtime"), (), "2", "enrolled")
+    assert record_setup_concluded(base, env) == 0
+    state.write_text(state.read_text().replace("setup_receipt:", "setup_receipt: &base")
+                     + "operator_snapshot: *base # first install\n")
+    before = yaml.safe_load(state.read_text())
+    assert css.record_setup_withheld("failed", ("codex_runtime",), env) == 0
+    assert record_setup_concluded(current, env) == 0
+    body = state.read_text()
+    after = yaml.safe_load(body)
+    assert after["setup_concluded_at"] == before["setup_concluded_at"]
+    assert after["operator_snapshot"] == before["setup_receipt"]
+    assert "# first install" in body
+    assert "setup_withheld" not in after
+    assert after["setup_receipt"]["engine_ref"] == "enrolled"
+    assert after["setup_receipt"]["phases_ran"] == list(current.phases_ran)
+    modified = state.stat().st_mtime_ns
+    assert record_setup_concluded(current, env) == 0
+    assert state.stat().st_mtime_ns == modified
+    assert state.read_text() == body

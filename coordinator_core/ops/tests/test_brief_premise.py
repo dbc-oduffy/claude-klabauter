@@ -63,3 +63,60 @@ def test_still_returns_rows_when_subprocess_spawn_fails(tmp_path: Path, monkeypa
     monkeypatch.setattr(subprocess, "Popen", boom)
     rows = bp.check_brief_claims("x/y.py @3749abc", _tree(tmp_path))
     assert {r["verdict"] for r in rows} == {"CONTRADICTED", "UNCHECKABLE"}
+
+
+def _base_world(tmp_path: Path):
+    """A repo whose commit holds a.py (with `needle`); the worktree has since lost both the file and the symbol."""
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+            check=True, capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout.strip()
+
+    git("init", "-q")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("def needle():\n    pass\n", encoding="utf-8")
+    (tmp_path / "pkg" / "b.py").write_text("def needle():\n    pass\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    sha = git("rev-parse", "HEAD")
+    (tmp_path / "pkg" / "a.py").unlink()
+    (tmp_path / "pkg" / "b.py").write_text("def other():\n    pass\n", encoding="utf-8")
+    return sha
+
+
+@pytest.mark.spawns_process
+def test_base_ref_resolves_claims_the_worktree_lost(tmp_path: Path) -> None:
+    sha = _base_world(tmp_path)
+    brief = "edit pkg/a.py and `needle` in pkg/b.py, but pkg/ghost.py and `nope` in pkg/b.py are wrong"
+    tree = bp.check_brief_claims(brief, tmp_path)
+    assert _by(tree, "pkg/a.py")["verdict"] == "CONTRADICTED"
+    assert _by(tree, "needle in pkg/b.py")["verdict"] == "CONTRADICTED"
+    rows = bp.check_brief_claims(brief, tmp_path, sha)
+    assert _by(rows, "pkg/a.py")["verdict"] == "RESOLVES"
+    assert _by(rows, "needle in pkg/b.py")["verdict"] == "RESOLVES"
+    assert _by(rows, "pkg/ghost.py")["verdict"] == "CONTRADICTED"
+    assert _by(rows, "nope in pkg/b.py")["verdict"] == "CONTRADICTED"
+    assert bp.render_contradicted(rows).count("CONTRADICTED:") == 2
+
+
+@pytest.mark.spawns_process
+def test_base_ref_costs_one_spawn_and_none_without_contradiction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git import run as git_run
+
+    sha = _base_world(tmp_path)
+    calls: list = []
+    real = git_run.run_git
+    monkeypatch.setattr(git_run, "run_git", lambda args, **kw: calls.append(args) or real(args, **kw))
+    bp.check_brief_claims("pkg/a.py and `needle` in pkg/b.py and pkg/ghost.py", tmp_path, sha)
+    assert len(calls) == 1
+    calls.clear()
+    bp.check_brief_claims("pkg/b.py", tmp_path, sha)
+    assert calls == []
+
+
+@pytest.mark.spawns_process
+def test_unresolvable_base_ref_keeps_the_tree_verdict(tmp_path: Path) -> None:
+    _base_world(tmp_path)
+    rows = bp.check_brief_claims("pkg/a.py", tmp_path, "no-such-ref")
+    assert _by(rows, "pkg/a.py")["verdict"] == "CONTRADICTED"

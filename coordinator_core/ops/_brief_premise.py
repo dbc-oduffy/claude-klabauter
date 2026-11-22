@@ -1,11 +1,12 @@
 """Read-only premise check of an EM brief's path, symbol and ref claims against the tree.
 
-``check_brief_claims`` never spawns a process and never writes; every failure to read
-degrades to a row, never an exception.
+``check_brief_claims`` never writes; every failure to read degrades to a row, never an exception.
+It spawns nothing unless given a run base ref and a claim is contradicted by the tree.
 """
 
 import re
 from pathlib import Path
+from typing import Optional
 
 from coordinator_core.ops._anchor_premise import VERDICTS  # noqa: F401  (row verdicts are drawn from it)
 
@@ -63,11 +64,38 @@ def _check_symbol(name: str, rel: str, repo_root: Path) -> dict:
     return _row(claim, "symbol", "CONTRADICTED", f"{name} not found in {rel}")
 
 
-def check_brief_claims(text: str, repo_root: Path) -> list:
+def _regrade_at_base(rows: list, base_ref: str, repo_root: Path) -> None:
+    """Flip a tree-CONTRADICTED path or symbol row to RESOLVES when the blob held at ``base_ref``
+    (what the tree held before the run wrote anything). One batched ``cat-file`` spawn for every
+    such row; none when no row is contradicted. An unresolvable ref or blob leaves the row as is."""
+    from coordinator_core.ops._anchor_check import read_at_ref
+
+    wanted = []
+    for row in rows:
+        if row["verdict"] != "CONTRADICTED" or row["kind"] not in ("path", "symbol"):
+            continue
+        rel = row["claim"].split(" in ", 1)[-1] if row["kind"] == "symbol" else row["claim"]
+        wanted.append((row, rel.replace("\\", "/").lstrip("/")))
+    blobs = read_at_ref(repo_root, [(base_ref, rel) for _, rel in wanted])
+    for row, rel in wanted:
+        body = blobs.get((base_ref, rel))
+        if body is None:
+            continue
+        if row["kind"] == "path":
+            row.update(verdict="RESOLVES", evidence=f"{rel} exists at run base {base_ref}"[:_EVIDENCE_CAP])
+        else:
+            name = row["claim"].split(" in ", 1)[0]
+            if name.encode("utf-8") in body:
+                row.update(verdict="RESOLVES", evidence=f"{name} found in {rel} at run base {base_ref}"[:_EVIDENCE_CAP])
+
+
+def check_brief_claims(text: str, repo_root: Path, base_ref: Optional[str] = None) -> list:
     """Return one row per path, symbol-in-path and hex-ref claim in ``text``.
 
     Row keys: claim, kind (path|symbol|ref), verdict (a ``_anchor_premise.VERDICTS`` string),
-    evidence. Hex refs are UNCHECKABLE (no git spawn). Pure and read-only.
+    evidence. Hex refs are UNCHECKABLE (no git spawn). Read-only. With ``base_ref`` (the run's base
+    ref), a path or symbol the tree contradicts but the base held reads RESOLVES: a refire's worktree
+    already carries the run's own edits. At most one ``cat-file`` spawn; no ``base_ref``: tree read, no spawn.
     """
     if not isinstance(text, str) or not text.strip():
         return []
@@ -99,6 +127,8 @@ def check_brief_claims(text: str, repo_root: Path) -> list:
         if key not in seen:
             seen.add(key)
             rows.append(_row(ref, "ref", "UNCHECKABLE", "hex ref is not resolved without a git spawn"))
+    if base_ref and any(r["verdict"] == "CONTRADICTED" for r in rows):
+        _regrade_at_base(rows, base_ref, Path(repo_root))
     return rows
 
 

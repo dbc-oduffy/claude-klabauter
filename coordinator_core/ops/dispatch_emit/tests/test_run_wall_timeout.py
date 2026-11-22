@@ -139,6 +139,44 @@ def test_a_run_with_no_parseable_started_at_is_not_wall_halted(repo):
     assert _tail(repo) is True
 
 
+def _resume(peer: Path, stage: str = "staged") -> None:
+    write_run_stage_at(peer, "halted")
+    write_run_stage_at(peer, stage)
+
+
+def test_a_same_id_resume_of_an_over_wall_run_is_not_halted(repo):
+    peer = _run(repo, stage="staged", age=OVER)
+    _resume(peer)
+    data = json.loads((peer / "run-stage.json").read_text(encoding="utf-8"))
+    assert data["started_at"] < data["wall_started_at"]
+    assert wrd._past_wall_timeout(repo, RUN) is None
+    assert _tail(repo) is True
+    assert not (peer / "halted.json").exists()
+
+
+def test_a_resumed_run_is_reaped_once_over_the_wall_from_its_resume(repo):
+    peer = _run(repo, stage="staged", age=OVER)
+    _resume(peer)
+    later = time.time() + wrd.RUN_WALL_TIMEOUT_SECONDS + 60
+    assert wrd._past_wall_timeout(repo, RUN, now=later) >= wrd.RUN_WALL_TIMEOUT_SECONDS
+
+
+def test_a_restage_of_a_live_staged_run_does_not_re_arm_the_wall(repo):
+    peer = _run(repo, stage="staged", age=OVER)
+    write_run_stage_at(peer, "staged")
+    data = json.loads((peer / "run-stage.json").read_text(encoding="utf-8"))
+    assert "wall_started_at" not in data
+    assert wrd._past_wall_timeout(repo, RUN) is not None
+
+
+def test_a_first_stage_stamp_does_not_re_arm_the_wall(repo):
+    peer = _run(repo, stage="minted", age=OVER)
+    write_run_stage_at(peer, "staged")
+    data = json.loads((peer / "run-stage.json").read_text(encoding="utf-8"))
+    assert "wall_started_at" not in data
+    assert wrd._past_wall_timeout(repo, RUN) is not None
+
+
 def test_an_adopted_run_keeps_its_started_at_clock_and_is_halted_again(repo):
     from coordinator_core.ops.dispatch_emit.ask_contract import adopt_run_stage_at
 

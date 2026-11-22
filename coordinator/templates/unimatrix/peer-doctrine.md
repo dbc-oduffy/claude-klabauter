@@ -60,7 +60,11 @@ session: do that one row and stop. Never submit, fire or mint a run from it. The
 prompt that hands you a row, a brief or a bounded list of files to change, with or without that
 line: you are a worker, and nothing below applies.
 
-Novel work from the PM is a run, not a hand-edit. You have no Workflow tool: write the params
+If a run for the same ask is live, follow it and send any changes through `workflow.revise`. Otherwise, handle a
+confident XS directly when the expected change fits both limits in
+`coordinator/contract/xs-stop-rule.json` (at most 2 files and 30 lines).
+For XS changes where two inputs jointly set a boundary, test the public result on both sides and vary the second input so the boundary moves. If an input describes a range, check a large valid range with a small result before allocating storage proportional to the range.
+For other novel work from the PM, write the params
 (the PM's words verbatim, `ask_source: pm`) to `.coordinator-local/em-submit.json` at the repo root,
 then run exactly `coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json`
 from the repo root. The line never varies, so a host that grants only exact command lines can
@@ -68,9 +72,11 @@ pre-grant it. The PM's ask is itself the authorization, so submit fires by defau
 `fire: false` in the params to mint without starting (the params are `{ask, ask_source}`). A run minted
 with `fire: false` is started with `workflow.fire`. Steer a run later with `workflow.revise`.
 
-After a submit, watch the run with one blocking command, with the `fire_id` the submit reply names:
-`coordinator-invoke workflow.fire_wait '{"fire_id": "<fire_id>"}'`. It returns when its
-`state` is `exited`, carrying the landed commit sha; stay on it and do not report before it returns.
+For a requested fire, check the submit reply for `fire.fire_id`. If only a run ID came back,
+reconcile it with the engine records before retrying. If the host denied the run-marker write
+and returned no ID, report the denied path to the engine maintainer. With a fire ID, wait on
+`coordinator-invoke workflow.fire_wait '{"fire_id": "<fire_id>"}'`. On timeout, keep watching that fire.
+At `state: exited`, check `exit_code` and `outcome`. For code delivery, verify the product at `commit_sha`.
 Your launcher exits 3 if you end while a run you fired is neither landed nor halted. A run that died or halted
 (`state/warp/<run_id>/halted.json`) is reported and resumed or revised, never hand-done in parallel.
 A run that exited non-zero or halted is steered with `workflow.revise` or refired by its
@@ -80,9 +86,6 @@ With no PM present (a headless EM), never end on a question: stop with a report 
 failed and the `owed_next_action`. A repeated halt is reported, never hand-landed: once a refire
 or revised run also halts, stop with a report naming both runs and the `owed_next_action`; do not
 run the test or commit by hand.
-
-Hand-do only a confident XS by `coordinator/contract/xs-stop-rule.json`, and never while a run of
-the same ask is live.
 
 Every EM commit goes through the safe-commit route, by its exact command:
 `coordinator-safe-commit "<subject>" -- <path> [<path>...]`, never a bare `git add` and `git commit`.
@@ -95,8 +98,10 @@ Full route: `coordinator/docs/wiki/non-claude-workers/non-claude-em-path.md`.
 
 ## Launching a non-Claude EM
 
-A headless Codex EM launched with `headless-em-launch.py codex --cwd <repo>` gets the engine-state grant its
-submit's run lock needs from the launcher.
+For a fresh POSIX Codex EM that will mint or submit, run
+`headless-em-launch codex --cwd <repo> -- exec -s workspace-write "<ask>"`.
+Submission needs a writable workspace and temporary directory. The launcher supplies the run-lock grant.
+Check the inner `coordinator-invoke` exit and returned run ID to confirm a mint. A requested fire also needs a fire ID.
 
 A Grok EM launches with `--permission-mode auto` plus an `--allow "Bash(<absolute coordinator-invoke path> <op> *)"`
 rule per op it runs (`engine_ask.submit`, `workflow.fire`, `workflow.fire_status`, `workflow.fire_wait`,

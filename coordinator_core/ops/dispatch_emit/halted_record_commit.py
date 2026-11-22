@@ -256,7 +256,12 @@ def _commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) ->
         if siblings is not None:
             deferred["siblings"] = siblings
         return deferred
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    land_intent.record(worktree_root, {}, kind=land_intent.KIND_HALTED_RECORD_COMMIT)
     reply = _land(worktree_root, repo_root, params, run_id, record_dir_rel, halted)
+    if reply.get("committed") and isinstance(reply.get("sha"), str):
+        land_intent.mark(land_intent.PHASE_COMMITTED, reply["sha"])
     if token is not None:
         reply = _reconcile_landing(worktree_root, run_id, token, script_path, halted, reply)
     if siblings is not None:
@@ -515,6 +520,40 @@ def _commit_v2_retrying_ref_cas(worktree_root: Path, repo_root: Path, commit_par
     if overlap and isinstance(reply, dict) and isinstance(reply.get("error"), str):
         reply["refused"] = overlap
     return reply
+
+
+def _mark_committing(worktree_root: Path, commit_params: dict) -> None:
+    """Advance the land record to "committing" with HEAD as base and the value each named path must
+    hold: the supplied blob, else the recorded fingerprint, else the checked-in form of the worktree
+    bytes read now (the commit is not made yet), None for a deletion. A no-op outside a keyed dispatch."""
+    from coordinator_core.ops.dispatch_emit import land_intent
+
+    if land_intent._held is None:
+        return
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    supplied = commit_params.get("supplied_blobs") or {}
+    digests = commit_params.get("expected_content_sha256") or {}
+    gone = set(commit_params.get("deleted_paths") or ())
+    wanted: dict = {}
+    for path in commit_params.get("paths") or ():
+        if path in gone:
+            wanted[path] = None
+        elif isinstance(supplied.get(path), str) and supplied[path]:
+            wanted[path] = {"blob": supplied[path]}
+        elif isinstance(digests.get(path), str) and digests[path]:
+            wanted[path] = {"sha256": digests[path]}
+        else:
+            try:
+                form = kept_work.checkin_form(worktree_root, path, (worktree_root / path).read_bytes())
+            except OSError:
+                form = None
+            if form is not None:
+                wanted[path] = {"blob": kept_work.blob_sha(form)}
+    land_intent.mark(
+        land_intent.PHASE_COMMITTING, base=head_sha(worktree_root, fresh=True), expected_blobs=wanted,
+    )
 
 
 def _sizing_on_disk(worktree_root: Path, sizing_rel: str) -> bool:
@@ -843,6 +882,7 @@ def _land(
             reason=halt_reason,
             next_action=halted.get("next_action") if isinstance(halted.get("next_action"), dict) else None,
             held_rows=held_rows_for(worktree_root, run_id, plan_rel),
+            refused_paths=halted.get("refused_paths") if isinstance(halted.get("refused_paths"), list) else None,
         )
         _stamp_prep_reply(worktree_root / record_dir_rel, halted)
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
@@ -1321,6 +1361,7 @@ def _land(
             "nothing committed",
             **base,
         )
+    _mark_committing(worktree_root, commit_params)
     try:
         reply = _commit_v2_retrying_ref_cas(worktree_root, repo_root, commit_params)
     except OpUnavailableError:
@@ -1360,6 +1401,7 @@ def _land(
                     commit_params["expected_content_sha256"] = kept_hashes
                 else:
                     commit_params.pop("expected_content_sha256")
+            _mark_committing(worktree_root, commit_params)
             try:
                 reply = _commit_v2_retrying_ref_cas(worktree_root, repo_root, commit_params)
             except OpUnavailableError:

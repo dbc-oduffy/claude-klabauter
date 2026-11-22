@@ -72,13 +72,16 @@ def _reason(event: dict) -> Optional[str]:
     return None
 
 
-def commit_leg_outcome(journal_text: str) -> Optional[tuple[str, str, Optional[str]]]:
-    """(label, state, reason) of the run's last commit-stage leg, else None.
+def _refused_paths(result: object) -> list:
+    """The `refused_paths` entries (dicts or path strings) of an uncommitted leg's parsed result."""
+    parsed = _parsed(result)
+    entries = parsed.get("refused_paths") if parsed is not None else None
+    return [e for e in entries if isinstance(e, (dict, str))] if isinstance(entries, list) else []
 
-    `state` is `committed`, `rows-unlanded` (committed, but the reply names subject rows whose declared writes
-    stay dirty; `reason` names them), `unsettled`, `failed` or `uncommitted` (a result with no committed reply).
-    The watcher's own stamp line is not a leg event and is ignored.
-    """
+
+def _last_commit_leg(journal_text: str) -> Optional[dict]:
+    """The run's last commit-stage leg as `{label, state, reason, refused_paths}`, else None.
+    The watcher's own stamp line is not a leg event and is ignored."""
     legs: dict[str, dict] = {}
     for raw in journal_text.split("\n"):
         raw = raw.strip()
@@ -100,7 +103,7 @@ def commit_leg_outcome(journal_text: str) -> Optional[tuple[str, str, Optional[s
             label = event.get("label")
             if label in COMMIT_STAGE_LABELS:
                 legs.pop(ident, None)
-                legs[ident] = {"label": label, "state": "unsettled", "reason": None}
+                legs[ident] = {"label": label, "state": "unsettled", "reason": None, "refused_paths": []}
         elif ident in legs:
             if kind == "result":
                 if _committed(event.get("result")):
@@ -110,13 +113,28 @@ def commit_leg_outcome(journal_text: str) -> Optional[tuple[str, str, Optional[s
                 else:
                     legs[ident]["state"] = "uncommitted"
                     legs[ident]["reason"] = _refusal(event.get("result"))
+                    legs[ident]["refused_paths"] = _refused_paths(event.get("result"))
             elif kind == "failed":
                 legs[ident]["state"] = "failed"
                 legs[ident]["reason"] = _reason(event)
-    if not legs:
-        return None
-    last = next(reversed(legs.values()))
-    return last["label"], last["state"], last["reason"]
+    return next(reversed(legs.values())) if legs else None
+
+
+def commit_leg_outcome(journal_text: str) -> Optional[tuple[str, str, Optional[str]]]:
+    """(label, state, reason) of the run's last commit-stage leg, else None.
+
+    `state` is `committed`, `rows-unlanded` (committed, but the reply names subject rows whose declared writes
+    stay dirty; `reason` names them), `unsettled`, `failed` or `uncommitted` (a result with no committed reply).
+    The watcher's own stamp line is not a leg event and is ignored.
+    """
+    last = _last_commit_leg(journal_text)
+    return None if last is None else (last["label"], last["state"], last["reason"])
+
+
+def commit_leg_refused_paths(journal_text: str) -> list:
+    """Every `refused_paths` entry the run's last commit-stage leg's refusal reply carried; [] when none."""
+    last = _last_commit_leg(journal_text)
+    return [] if last is None else list(last["refused_paths"])
 
 
 def halt_run_on_commit_stage_end(
@@ -135,7 +153,8 @@ def halt_run_on_commit_stage_end(
     landed, closed or superseded, is left alone. Never raises.
     """
     try:
-        outcome = commit_leg_outcome(stall._tail_text(journal_path, stall.JOURNAL_TAIL_BYTES))
+        tail = stall._tail_text(journal_path, stall.JOURNAL_TAIL_BYTES)
+        outcome = commit_leg_outcome(tail)
         if outcome is None:
             return None
         label, state, leg_reason = outcome
@@ -154,10 +173,12 @@ def halt_run_on_commit_stage_end(
             reason = leg_reason or reason
         elif leg_reason:
             reason = f"{reason}: {leg_reason}"
+        refused = commit_leg_refused_paths(tail) if state == "uncommitted" else []
         return remedy_or_halt(
             HALT_COMMIT_STAGE,
             lambda _n: halted_run.write_halt_marker(
                 Path(record_dir), halted=HALT_COMMIT_STAGE, sizing_rel=sizing_rel, reason=reason[:HALT_REASON_MAX_CHARS],
+                refused_paths=refused,
             ),
             lambda _failures: None,
         )

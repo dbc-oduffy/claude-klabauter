@@ -22,7 +22,7 @@ from typing import Iterable, Iterator, Optional
 
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit import run_dir_stat_cache, run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, WALL_START_FIELD
 from coordinator_core.ops.dispatch_emit.run_dir_stat_cache import record_dir
 from coordinator_core.ops.dispatch_emit.commit_request import MalformedCommitRequestError, parse_marker
 from coordinator_core.session import record_homes
@@ -594,9 +594,9 @@ def _planning_agent_in_flight(stage: dict, now: float, bound: float) -> bool:
 
 
 def _past_wall_timeout(root: Path, run_id: str, now: Optional[float] = None) -> Optional[float]:
-    """Seconds since the run's `run-stage.json` `started_at` when that exceeds `RUN_WALL_TIMEOUT_SECONDS`,
-    else None. Activity and stage are ignored, bar a terminal stage; an absent or malformed record or an
-    unparseable stamp is no bound."""
+    """Seconds since the run's `run-stage.json` `wall_started_at` (a same-id resume's re-arm), else
+    `started_at`, when that exceeds `RUN_WALL_TIMEOUT_SECONDS`, else None. Activity and stage are
+    ignored, bar a terminal stage; an absent or malformed record or an unparseable stamp is no bound."""
     import time
 
     from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
@@ -604,7 +604,9 @@ def _past_wall_timeout(root: Path, run_id: str, now: Optional[float] = None) -> 
     stage = read_run_stage(root, run_id)
     if not stage or stage.get("stage") in ("halted", "landed"):
         return None
-    started = _stamp_epoch(stage.get("started_at"))
+    started = _stamp_epoch(stage.get(WALL_START_FIELD))
+    if started is None:
+        started = _stamp_epoch(stage.get("started_at"))
     if started is None:
         return None
     elapsed = (time.time() if now is None else now) - started
@@ -626,7 +628,7 @@ def _halt_wall_timeout(root: Path, run_id: str, elapsed: float) -> None:
     _halt_run(
         root, run_id, WALL_TIMEOUT,
         f"wall timeout: run alive {int(elapsed)}s, over the {RUN_WALL_TIMEOUT_SECONDS}s run wall timeout; "
-        "Instead: refire for a new run (the clock runs from this run's `started_at`, so resuming it is halted again)",
+        "Instead: refire to resume (the wall re-arms at the resume's stage stamp)",
     )
 
 

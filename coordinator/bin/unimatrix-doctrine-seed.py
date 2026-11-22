@@ -218,8 +218,20 @@ def unseed_agy_skills(skills_json, skills_root) -> str:
 def _skill_dirs(skills_root):
     root = Path(skills_root)
     if not root.is_dir():
-        return []
-    return sorted(d for d in root.iterdir() if d.is_dir() and (d / "SKILL.md").is_file())
+        raise ValueError(f"required skills source is not a directory: {root}")
+    sources = sorted(d for d in root.iterdir() if d.is_dir() and os.path.lexists(d / "SKILL.md"))
+    if not sources:
+        raise ValueError(f"required skills inventory is empty: {root}")
+    for source in sources:
+        (source / "SKILL.md").read_bytes()
+
+        def unreadable(exc):
+            raise exc
+
+        for parent, _dirs, files in os.walk(source, onerror=unreadable):
+            for name in files:
+                (Path(parent) / name).read_bytes()
+    return sources
 
 
 def _marker(dest):
@@ -236,22 +248,37 @@ def _remove_entry(dest) -> None:
 def seed_codex_skills(agents_skills_dir, skills_root):
     """Expose each depth-2 SKILL.md dir of skills_root under agents_skills_dir; return the names seeded.
 
-    An entry without our marker is foreign and left alone. A marker-carrying entry whose
-    source skill is gone is pruned.
+    Validate all sources and foreign collisions before mutation. Invalid or incomplete
+    enrollment raises; a valid inventory prunes obsolete managed entries.
     """
     dest_root = Path(agents_skills_dir)
+    sources = _skill_dirs(skills_root)
+    live = {src.name for src in sources}
+    for marker in dest_root.glob("*" + MANAGED_SUFFIX):
+        name = marker.name[: -len(MANAGED_SUFFIX)]
+        if name not in live and os.path.lexists(Path(skills_root) / name):
+            raise ValueError(f"required skill source has no readable SKILL.md: {Path(skills_root) / name}")
+    conflicts = [src.name for src in sources
+                 if os.path.lexists(dest_root / src.name) and not _marker(dest_root / src.name).is_file()]
+    if conflicts:
+        raise ValueError(f"required Codex skills unresolved (foreign destinations): {', '.join(conflicts)}")
+    marker_text = "managed by unimatrix-install\n"
     seeded = []
-    live = {src.name for src in _skill_dirs(skills_root)}
     if dest_root.is_dir():
         for marker in sorted(dest_root.glob("*" + MANAGED_SUFFIX)):
             name = marker.name[: -len(MANAGED_SUFFIX)]
             if name not in live:
                 _remove_entry(dest_root / name)
                 marker.unlink()
-    for src in _skill_dirs(skills_root):
+    for src in sources:
         dest = dest_root / src.name
         marker = _marker(dest)
         if (dest.exists() or dest.is_symlink()) and not marker.exists():
+            raise ValueError(f"retryable drift: foreign skill destination appeared: {dest}")
+        if (dest.is_symlink() and dest.is_dir() and dest.samefile(src)
+                and marker.is_file() and marker.read_bytes() in
+                (marker_text.encode(), marker_text.replace("\n", "\r\n").encode())):
+            seeded.append(src.name)
             continue
         dest_root.mkdir(parents=True, exist_ok=True)
         if dest.exists() or dest.is_symlink():
@@ -260,7 +287,7 @@ def seed_codex_skills(agents_skills_dir, skills_root):
             os.symlink(src, dest, target_is_directory=True)
         except OSError:
             shutil.copytree(src, dest)
-        marker.write_text("managed by unimatrix-install\n", encoding="utf-8")
+        marker.write_text(marker_text, encoding="utf-8")
         seeded.append(src.name)
     return seeded
 

@@ -44,6 +44,22 @@ def test_refire_names_the_recorded_repo_root(repo) -> None:
     assert args[RESUME_RUN_ID_ARG] == "waiter"
 
 
+def test_refire_uses_the_parks_sizing_when_the_waiters_token_is_gone(repo) -> None:
+    run_token.mint(repo, "blocker", "s.py", session_id="sess")
+    stage_wait.park(repo, "waiter", ["blocker"], [], session_id="sess", sizing_rel="docs/y.yaml", reason="co-tenant-wait")
+    run_token.consume(repo, "blocker")
+    (args,) = _spooled_args(repo)
+    assert args["sizing"] == "docs/y.yaml"
+    assert args[RESUME_RUN_ID_ARG] == "waiter"
+
+
+def test_a_park_with_no_sizing_anywhere_spools_nothing(repo) -> None:
+    run_token.mint(repo, "blocker", "s.py", session_id="sess")
+    stage_wait.park(repo, "waiter", ["blocker"], [], session_id="sess")
+    run_token.consume(repo, "blocker")
+    assert _spooled_args(repo) == []
+
+
 def test_refire_is_not_spooled_for_a_landed_run(repo) -> None:
     _park_behind_blocker(repo)
     marker_dir = record_dir(repo, "waiter")

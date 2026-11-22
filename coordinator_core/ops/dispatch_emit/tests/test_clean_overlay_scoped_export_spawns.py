@@ -105,6 +105,41 @@ def test_export_refuses_only_a_name_absent_from_the_head_copy_of_a_dirty_peer_mo
         cov._check_overlay_imports(root, [importer])
 
 
+@pytest.mark.parametrize("binding", [
+    "A, B = 1, 2\n",
+    "[A, *B] = 1, 2\n",
+    "if True:\n    A = 1\nelse:\n    B = 2\n",
+    "try:\n    A = 1\nexcept ImportError:\n    A = 2\n",
+    "with open(__file__):\n    def A():\n        return 1\n",
+])
+def test_a_name_bound_by_unpacking_or_a_nested_block_in_head_is_not_refused(tmp_path, binding):
+    root = _repo(tmp_path)
+    _write(root, "pkg/peer.py", binding + "B = 3\n")
+    _write(root, "pkg/mine.py", "VALUE = 0\n")
+    _commit(root, "peer and importer")
+    _write(root, "pkg/peer.py", binding + "B = 3\nNEW = 1\n")
+    _write(root, "pkg/mine.py", "from pkg.peer import A\n")
+    cov._check_overlay_imports(root, ["pkg/mine.py"])
+    _write(root, "pkg/mine.py", "from pkg.peer import NEW\n")
+    with pytest.raises(cov.CoTenantDependency) as caught:
+        cov._check_overlay_imports(root, ["pkg/mine.py"])
+    assert (caught.value.missing, caught.value.symbol, caught.value.module) == ("symbol", "NEW", "pkg.peer")
+    assert "pkg.peer.NEW" in str(caught.value)
+
+
+def test_a_module_absent_at_head_is_named_as_the_missing_module_not_the_first_import(tmp_path):
+    root = _repo(tmp_path)
+    _write(root, "pkg/mine.py", "VALUE = 0\n")
+    _commit(root, "importer")
+    _write(root, "pkg/fresh.py", "ALPHA = 1\nBETA = 2\n")
+    _write(root, "pkg/mine.py", "from pkg.fresh import ALPHA, BETA\n")
+    with pytest.raises(cov.CoTenantDependency) as caught:
+        cov._check_overlay_imports(root, ["pkg/mine.py"])
+    exc = caught.value
+    assert (exc.missing, exc.module, exc.symbol, exc.peer) == ("module", "pkg.fresh", "pkg.fresh", "pkg/fresh.py")
+    assert "needs pkg.fresh from pkg/fresh.py" in str(exc) and "ALPHA" not in str(exc)
+
+
 def _peer_fixture(tmp_path, importer_text):
     root = _repo(tmp_path)
     _write(root, "pkg/peer.py", "def old():\n    return 1\n")

@@ -563,9 +563,13 @@ def _agent(
     agent_type_host: Optional[str] = None,
     sidecar_label: Optional[str] = None,
     sidecar_label_js: Optional[str] = None,
+    op_id: Optional[str] = None,
     gate_manifest_run: Optional[str] = None,
 ) -> str:
     """One `agent(...)` call expression; the prompt ends with the sidecar clause keyed by ``run_id`` and ``label``.
+
+    ``op_id`` declares the one engine operation the leg runs; the headless runner scopes the worker's shell
+    permission to it (`codex_runner.workflow._operation_allow`).
 
     ``sidecar_label`` keys the sidecar dir by a static name other than ``label``; ``sidecar_label_js`` by a JS
     expression evaluated at fire time. Both leave ``label`` (the leg-register key) as is.
@@ -584,6 +588,7 @@ def _agent(
     effort = effort or (None if label.startswith("objective-") else _declared_effort(label, agent_type, agent_model))
     effort_opt = f"effort: {_lit(effort)}, " if effort else ""
     model_opt = f"{_emit._model_opt(agent_type, agent_model)}, "
+    op_opt = f"op_id: {_lit(op_id)}, " if op_id else ""
     if sidecar_label_js:
         clause = _sidecar.sidecar_clause_js("ask", run_id, sidecar_label_js)
     else:
@@ -611,7 +616,7 @@ def _agent(
     gate_opt = f"gateManifestRunId: {_lit(gate_manifest_run)}, " if gate_manifest_run else ""
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
-        f"agentType: {_lit(_emit._degrade_agent_type(agent_type, agent_type_host))}, {model_opt}{effort_opt}"
+        f"agentType: {_lit(_emit._degrade_agent_type(agent_type, agent_type_host))}, {model_opt}{effort_opt}{op_opt}"
         f"{gate_opt}schema: {schema_js} }})"
     )
 
@@ -952,6 +957,28 @@ _GATE_SCHEMA = _obj(
         DESIGN_ROUTE_KEY: {"type": ["object", "null"]},
     },
 )
+#: Trap: under a host `engineOp` the gate reply is the engine's own result, never a worker's transcription of it;
+#: a missing or mismatched result halts as `gate-reply-invalid`, and a -32004 is re-run once (the gate is idempotent).
+_HOST_GATE_JS = r"""  async function _hostGate(params) {
+    const bad = (reason) => ({ arm: null, halt: { kind: 'gate-reply-invalid', reason } });
+    let r;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try { r = await engineOp(__OP__, params); break; }
+      catch (e) {
+        const reason = String((e && e.message) || e);
+        if (attempt === 1 && reason.includes('-32004')) continue;
+        return { arm: null, halt: { kind: 'refusal', reason } };
+      }
+    }
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return bad('the host gate result is not an object');
+    if (typeof r.run_id === 'string' && r.run_id !== _runId) return bad('the host gate result is bound to run ' + r.run_id + ', not ' + _runId);
+    if (!r.halt && typeof r.run_id !== 'string' && !(typeof r.sizing_path === 'string' && r.sizing_path)) return bad('the host gate result carries no run binding (run_id or sizing_path)');
+    const armOk = r.arm === undefined || r.arm === null || typeof r.arm === 'string';
+    const haltOk = r.halt === undefined || r.halt === null || (typeof r.halt === 'object' && !Array.isArray(r.halt));
+    if (!armOk || !haltOk) return bad('the host gate result carries a malformed arm or halt');
+    if (!r.arm && !r.halt) return bad("'arm' is a required property");
+    return { ...r, arm: r.arm ?? null, halt: r.halt ?? null };
+  }"""
 _ONLY_ROWS_JS = (
     "...(_gate.resume_plan && _gate.resume_rows ? { only_rows: _gate.resume_rows } : {}), "
 )
@@ -1098,6 +1125,8 @@ def _test_result_schema() -> dict:
         "pytest_exit_code": {"type": "integer"},
         "pytest_stderr": {"type": "string", "maxLength": 4096},
     }
+    schema["properties"]["zero_run_cause"] = _STR
+    schema["properties"]["co_tenant"] = {"type": "object"}
     return schema
 _LEDGER_CHECK_SCHEMA = _obj(
     ["items"],
@@ -1757,7 +1786,10 @@ def _test_instruction_js(
             f"directory and removes the export itself:\n\n{export_command}\n\n"
             f"Set {MEASURED_REV_ENV} to the sha in the test process environment. If the op or the export command "
             "exits 2 or reports a failed export or a timeout, report that as a red verify result naming the "
-            "cause; never fall back to the working tree. Run the scoped test targets: [",
+            "cause; never fall back to the working tree. "
+            "On a `co_tenant_dependency: {...}` line, return `zero_run_cause` set to its `parked` or `cause` value "
+            "and `co_tenant` set to the parsed object. "
+            + "Run the scoped test targets: [",
             "js:(_manifest.test_targets ?? []).join(', ')",
             "]. "
             + _emit._review_edits_clause(review_edits_base)
@@ -2257,6 +2289,13 @@ _TEST_RAN_JS = (
 )
 
 
+#: `zero_run_cause` values a co-tenant clean-export refusal reports (`clean_overlay_verify` prints them); the
+#: wait cause halts `co_tenant_wait`, never `test_infra_failure`. The three cause strings mirror
+#: `co_tenant_owner.PARKED`, `.CAUSE_HALTED_OWNER`; keep them equal.
+CO_TENANT_WAIT_CAUSE = "co-tenant-wait"
+CO_TENANT_WAIT_HALT = "co_tenant_wait"
+CO_TENANT_HALTED_CAUSE = "co_tenant_dependency_on_halted_run"
+
 #: A test leg owed by the manifest whose verdict is absent, has no sidecar, or reads not_run never
 #: reaches the commit as passed. `TEST_GUARD` is substituted with the leg's own owed-condition.
 def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
@@ -2275,9 +2314,16 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "{ const _rvh = (typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
         "? _reviewReverify : {}; "
         "const _rvl = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
+        "const _rvt = (_testResult && typeof _testResult === 'object') ? _testResult : {}; "
         "const _rvx = new Set([..._rvl(_rvh.pre_existing), ..._rvl(_rvh.kept)]); "
         "const _rvFail = [...new Set(_rvl(_rvh.failing))].filter((n) => !_rvx.has(n)); "
         "const _rvPre = _rvl(_rvh.pre_existing); "
+        "const _rvCause = (typeof _rvt.zero_run_cause === 'string') ? _rvt.zero_run_cause : ''; "
+        "const _rvWait = _rvCause === " + json.dumps(CO_TENANT_WAIT_CAUSE) + "; "
+        "const _rvHalted = _rvCause === " + json.dumps(CO_TENANT_HALTED_CAUSE) + "; "
+        "const _rvCo = (_rvt.co_tenant && typeof _rvt.co_tenant === 'object') ? _rvt.co_tenant : {}; "
+        "const _rvOwner = String(_rvCo.owner ?? 'an unattributed run'); "
+        "const _rvMod = String(_rvCo.module ?? _rvCo.symbol ?? 'an unlanded module'); "
         "_halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
         "...(_testResult?.tests_run === 0 ? { halted: 'test_infra_failure' } : {}), "
         "failing: _rvFail, pre_existing: _rvPre, "
@@ -2290,7 +2336,14 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "next_action: ((_testResult?.zero_run_cause === " + json.dumps(ZERO_RUN_FOREIGN_DEPENDENCY) + " "
         "&& typeof _testResult?.import_error?.source_path === 'string') "
         "? 'Land the uncommitted ' + _testResult.import_error.source_path + ' first, then refire: ' "
-        ": 'Refire to re-run the test leg: ') + " + _refire_js(sizing_rel) + " }; }"
+        ": 'Refire to re-run the test leg: ') + " + _refire_js(sizing_rel) + " }; "
+        "if (_rvWait || _rvHalted) { _halted = { ..._halted, halted: _rvWait ? " + json.dumps(CO_TENANT_WAIT_HALT)
+        + " : " + json.dumps(CO_TENANT_HALTED_CAUSE) + ", "
+        "detail: _rvWait ? 'the test leg parked behind ' + _rvOwner + ', which owns ' + _rvMod "
+        "+ ' that the clean export needs; the run did not run its tests' "
+        ": 'the clean export needs ' + _rvMod + ' from halted run ' + _rvOwner + '; the run did not run its tests', "
+        "next_action: _rvWait ? 'auto-refires when ' + _rvOwner + ' lands' "
+        ": 'Refire the owner first: ' + String(_rvCo.owner_refire ?? _rvOwner) + '; then ' + " + _refire_js(sizing_rel) + " }; } }"
     )
 
 
@@ -3836,6 +3889,24 @@ def _pm_verbatim_row_ids(repo_root: str, sizing_rel: Optional[str]) -> list[str]
     ]
 
 
+def _pm_unruled_row_ids(repo_root: str, sizing_rel: Optional[str]) -> list[str]:
+    """Ids of the sizing's PM-origin rows with no recorded PM ruling on the register ruling them out;
+    the ledger-unmet remedy never offers `out_of_scope` for one."""
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import _is_pm_row, pm_ruling_held
+
+    if not sizing_rel:
+        return []
+    try:
+        register = load_sizing_effective(Path(repo_root), sizing_rel).get("requirement_register")
+    except (SizingFireRefused, OSError, ValueError, KeyError):
+        return []
+    rows = [r for r in (register.get("rows") if isinstance(register, dict) else None) or [] if isinstance(r, dict)]
+    return [
+        str(r.get("id")) for r in rows
+        if _is_pm_row(r) and not pm_ruling_held(rows, "", exclude_ids=[str(r.get("id"))])
+    ]
+
+
 def _xl_exit_open(repo_root: str, sizing_rel: Optional[str]) -> bool:
     """An existing sizing whose XL exit the APM picks in-run: `pm-decision`, no `xl_exit`, any interaction mode."""
     if not sizing_rel:
@@ -5095,6 +5166,7 @@ def compose_ask_script(
     b.append("  if (typeof log === 'undefined') globalThis.log = () => {};")
     b.append(f"  const REPO_ROOT = {_lit(repo_root)};")
     b.append(f"  const _runId = {_lit(run_id)};")
+    b.append(_HOST_GATE_JS.replace("__OP__", _lit(OP_ASK_GATE)))
     if restore_evicted_run:
         # Trap: engineOp is the only direct call; there is no agent relay. A refusal or error halts before any leg runs.
         b.append(
@@ -5144,6 +5216,7 @@ def compose_ask_script(
         ))
     b.append("  let _ledger = null;")
     b.append(f"  const _pmVerbatimIds = {json.dumps(_pm_verbatim_row_ids(repo_root, sizing_rel))};")
+    b.append(f"  const _pmUnruledIds = {json.dumps(_pm_unruled_row_ids(repo_root, sizing_rel))};")
     b.append("  let _consumedReturns = {};")
     b.append("  let _recoveryWithheld = [];")
     b.append("  let _ledgerSc = null;")
@@ -5209,17 +5282,25 @@ def compose_ask_script(
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
         b.append(f"  const _judgeRules = {_emit._JUDGE_VERDICT_RULES_JS};")
 
-    def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "", *, host: bool = False) -> str:
+    def _gate_params(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "") -> str:
+        """The gate's params object as a JS object-literal expression: one source for the relay command and the host call."""
         return (
-            ("{" if host else "js:JSON.stringify({") + " sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
+            "{ sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
             + (", baton: " + json.dumps(baton["path"]) if baton else "")
             + (", em_size: " + json.dumps(em_size) if em_size else "")
             + (", family: " + json.dumps(family) if family else "")
             + (f", record: {record_js}" if record_js else "")
             + extra_js
             + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) }"
-            + ("" if host else ")")
-            + (".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")" if extra_js and not host else "")
+        )
+
+    def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "", *, host: bool = False) -> str:
+        params = _gate_params(record_js, sizing_js, extra_js)
+        if host:
+            return params
+        return (
+            "js:JSON.stringify(" + params + ")"
+            + (".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")" if extra_js else "")
         )
 
     fold_stage = not stop_after
@@ -5275,15 +5356,18 @@ def compose_ask_script(
             gate_prompt, label=label, phase=phase_title, agent_type=_GATE_AGENT_TYPE,
             agent_model=_MECHANICAL_MODEL,
             schema=_GATE_STAGED_SCHEMA if stage_act and fold_stage else _GATE_SCHEMA,
-            effort=_MECHANICAL_EFFORT, run_id=run_id,
+            effort=_MECHANICAL_EFFORT, run_id=run_id, op_id=OP_ASK_GATE,
             gate_manifest_run=run_id,
         )
+        # A direct stage_act run with a run token calls the gate op in-process and keeps its receipt; any other
+        # run with a run id still gates in-host, and only a run with no engine seam falls back to the relay agent.
+        host_gate = f"(typeof engineOp === 'function' && _runId ? _hostGate({_gate_params(extra_js=extra_js)}) : {relay})"
         if not stage_act:
-            return relay
+            return host_gate
         params = _gate_payload(extra_js=extra_js, host=True)
         return (
             "(typeof engineOp === 'function' && engineOp.directRun && _RUN_TOKEN "
-            f"? (_hostGateUsed = true, engineOp('gate.host_run', {params})) : {relay})"
+            f"? (_hostGateUsed = true, engineOp('gate.host_run', {params})) : {host_gate})"
         )
 
     def _chain_emit_act(params: str) -> tuple[str, ...]:
@@ -7028,7 +7112,7 @@ def compose_ask_script(
         "  _deliveryNotes = (await Promise.all(_manifest.rows"
         f".filter((r) => r.agent_type !== {_lit(REVIEWER_AGENT_TYPE)})"
         ".map(async (r) => { const t = await _rows[r.id]; "
-        "return typeof t === 'string' && t.trim() ? r.id + ': ' + t.trim().replace(/\\s+/g, ' ').slice(0, 600) : ''; })))"
+        "return typeof t === 'string' && t.trim() ? r.id + ': ' + t.trim().replace(/\\s+/g, ' ').slice(0, 600) : r.id + ' returned no result'; })))"
         ".filter((x) => x).join(' | ');"
     )
     # Trap: the engine caps; no truncation here. A reply that fails the DONE test is never persisted.
@@ -7595,6 +7679,10 @@ def compose_ask_script(
         ".map((i) => (i && typeof i === 'object') ? i.id : i).filter(Boolean);\n"
         "    const _blkRulable = _blkIds.filter((id) => _rulable.includes(id));\n"
         "    const _blkForeign = _blkIds.filter((id) => !_rulable.includes(id));\n"
+        "    const _blkPmUnruled = _blkRulable.filter((id) => _pmUnruledIds.includes(id));\n"
+        "    const _blkRulableOk = _blkRulable.filter((id) => !_pmUnruledIds.includes(id));\n"
+        "    const _pmRemedy = (_blkPmUnruled.length && !_emptyVerdict) ? ' ' + _blkPmUnruled.join(', ') + ' hold the PM\\'s own words, which are delivered, never dropped: "
+        f"re-fire the same sizing to deliver them, or record each delivered by another run: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the sha that delivered it>}}.' : '';\n"
         f"    const _uncoveredPaths = _gate.{RESUME_LEDGER_KEY}?.{RESUME_LEDGER_LEG_FIELD}?.unwritable ?? [];\n"
         "    const _addTaskRemedy = _uncoveredPaths.length ? ' The remaining work names paths no plan row writes: ' "
         "+ _uncoveredPaths.join(', ') + '. Add a row first: coordinator-invoke plan.tasks.mutate verb add-task "
@@ -7628,14 +7716,16 @@ def compose_ask_script(
         "next_action: _allOwed ? 'Everything left is EM or operator work: ' + _owedNamed.join('; ') "
         "+ '. Perform each, record it (em-performed: plan.tasks.mutate verb em-discharge; operator: verb resolve, "
         "disposition coded, disposition_ref <sha>), then refire to re-judge ' + _blkIds.join(', ') + '.' "
-        "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
-        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row.' "
+        "+ _pmRemedy "
+        "+ (_blkRulableOk.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
+        "+ ' with out_of_scope: [' + _blkRulableOk.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row.' "
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
         ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none after one re-ask (verify-leg-empty: an engine failure, the code was not judged red)' : '') + ' block the commit.' "
         ": !_ledger ? 'The verify leg returned no items list, so the ledger holds no verdict: the refire re-runs the verify leg.' "
         ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: the refire re-runs the verify leg.') "
-        "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
-        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' "
+        "+ _pmRemedy "
+        "+ (_blkRulableOk.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
+        "+ ' with out_of_scope: [' + _blkRulableOk.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' "
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
         f"+ (_lateUnplanned.length ? ' ' + {_lit(REGISTER_ROWS_UNCLAIMED_REFUSAL)} + ': register row(s) ' + _lateUnplanned.join(', ') "
         f"+ ' still have no plan row after the in-run re-plan: add one with plan.tasks.mutate verb add-task (register_rows naming the id), then re-fire.' : '') "

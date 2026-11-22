@@ -1591,7 +1591,7 @@ def test_holder_dying_after_start_stops_the_face_on_the_next_refresh(box, monkey
     run(go())
 
 
-def test_lock_only_codex_thread_is_listed_stale_and_refuses_sends_and_frames(box, monkeypatch):
+def test_lock_only_codex_thread_is_listed_live_while_its_lock_is_held_and_accepts_sends(box, monkeypatch):
     async def go():
         cx = box / "cx"
         name = bind_codex(box / "settings", monkeypatch, THR_HELD)[THR_HELD]
@@ -1603,12 +1603,9 @@ def test_lock_only_codex_thread_is_listed_stale_and_refuses_sends_and_frames(box
             assert list(r.peers) == [name] and name in r.faces
             resp = await r._dispatch({"op": "list"})
             assert resp["agents"] == [{"name": name, "box": pr._contract().local_box(), "vendor": "codex",
-                                       "this_box": True, "stale": True}]
-            bad = await r._dispatch({"op": "send", "to": name, "text": "hello there"})
-            assert bad["ok"] is False and "stale" in bad["error"]
-            raw = await asyncio.to_thread(face_reply, r.endpoint_of(name),
-                                          frame_to(box, str(box / "s.sock"), "em", "hello there"))
-            assert json.loads(raw.splitlines()[0])["ok"] is False
+                                       "this_box": True}]
+            ok = await r._dispatch({"op": "send", "to": name, "text": "hello there"})
+            assert ok["ok"] is True
         finally:
             os.close(fd)
             await r.stop()
@@ -1910,6 +1907,22 @@ def test_router_rebinds_when_the_path_holds_a_different_inode(box):
     asyncio.run(go())
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_router_leaves_an_unchanged_control_socket_alone(box):
+    async def go():
+        r = _inode_router(box)
+        await r.start()
+        try:
+            server, ino = r.server, r.ctl_ino
+            await r.check_control_socket()
+            assert r.server is server and r.ctl_ino == ino
+            assert _answers_on(r.ctl)
+        finally:
+            await r.stop()
+    asyncio.run(go())
+
+
 @portable
 def test_send_to_an_unbacked_mirror_row_is_refused_before_any_bridge_write(dirs, monkeypatch):
     (dirs / "sessions" / "em.json").write_text(json.dumps(
@@ -2009,3 +2022,138 @@ def test_relay_target_refuses_a_stale_or_faceless_codex_peer(tmp_path):
     assert r.resolve_relay_target("codex-x-1")["ok"] is False
     r.peer_stale = lambda name: False
     assert r.resolve_relay_target("codex-x-1")["ok"] is False  # no live face process
+
+
+@portable
+def test_daemon_started_thread_metadata_is_a_sendable_root_and_children_still_are_not():
+    # Observed state_5.sqlite row for a thread/start over the app-server daemon: source vscode, thread_source NULL, agent_path NULL.
+    daemon_row = {"source": "vscode", "thread_source": None, "agent_path": None}
+    assert pr.codex_is_sendable_root(daemon_row) is True
+    assert pr.codex_is_sendable_root({**daemon_row, "agent_path": "/root/child"}) is False
+    assert pr.codex_is_sendable_root({**daemon_row, "thread_source": "subagent"}) is False
+
+
+@portable
+def test_daemon_started_thread_with_a_held_lock_and_rollout_is_listed_as_a_codex_face(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    tid = "01a1fecd-d5e2-7c92-b750-72e20f6dc978"
+    locks = tmp_path / "thread-writer-locks"
+    locks.mkdir()
+    (locks / f"{tid}.lock").write_text("held by the daemon")
+    rollout = tmp_path / "sessions" / f"rollout-2026-11-21T15-51-05-{tid}.jsonl"
+    rollout.parent.mkdir()
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {"source": "vscode"}}) + "\n")
+    row = {"id": tid, "cwd": str(tmp_path), "source": "vscode", "thread_source": None, "agent_path": None}
+    monkeypatch.setattr(pr, "codex_thread_metadata", lambda home: {tid: row})
+    monkeypatch.setattr(pr, "lock_held", lambda path: True)
+    monkeypatch.setattr(pr, "_contract", lambda: SimpleNamespace(
+        read_codex_address=lambda home, ident, box: {"name": "codex-daemon-face", "box": box},
+        safe_alias=lambda a: True, local_box=lambda: "fixture-box", box_id=lambda b: b))
+    monkeypatch.setattr(pr, "_roster", lambda: SimpleNamespace(delivery_settings_home=lambda: tmp_path))
+    monkeypatch.setattr(pr, "_liveness", lambda: SimpleNamespace(codex_thread_holder=lambda home, ident: {}))
+    got = pr.load_lock_peers(locks, "codex")
+    assert [(p["name"], p["target"]) for p in got] == [("codex-daemon-face", tid)]
+
+
+def _late_router(tmp_path, monkeypatch, peers=(), with_locks=False):
+    """A router with a peers file and stubbed faces: adoption, staleness and delivery, no sockets."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "cx-home"))
+    monkeypatch.setattr(pr, "codex_thread_metadata", lambda home: {THR_HELD: ROOT_ROW, THR_OTHER: ROOT_ROW})
+    (tmp_path / "sessions").mkdir(exist_ok=True)
+    r = pr.Router(peers, sessions_dir=tmp_path / "sessions", state_dir=tmp_path / "state",
+                  endpoint_dir=tmp_path / "eps", adapters=echo_adapters(),
+                  codex_locks_dir=(tmp_path / "cx" if with_locks else None), peers_file=tmp_path / "peers.json")
+
+    async def spawn(name):
+        r.faces[name] = object()
+
+    async def stop(name):
+        r.faces.pop(name)
+    r._spawn_face, r._stop_face = spawn, stop
+    return r
+
+
+def _write_peers(tmp_path, *rows):
+    path = tmp_path / "peers.json"
+    path.write_text(json.dumps({"peers": list(rows)}), encoding="utf-8")
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))  # a rewrite inside one mtime tick still changes the stamp
+    return path
+
+
+def _dead_pid():
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+@portable
+def test_a_peers_row_written_after_start_is_adopted_and_delivered_to(tmp_path, monkeypatch):
+    async def go():
+        r = _late_router(tmp_path, monkeypatch)
+        await r.refresh_discovered()
+        assert r.peers == {}
+        _write_peers(tmp_path, {"name": "codex-face", "vendor": "codex", "target": THR_HELD, "codexPid": os.getpid()})
+        await r.refresh_discovered()
+        assert "codex-face" in r.faces and "tui" not in r.peers["codex-face"]
+        assert r.peers["codex-face"]["codexPid"] == os.getpid() and r.discovered == set()
+        assert not r.peer_stale("codex-face")
+        assert await r.turn("codex-face", "hello") == "codex saw: hello"
+    run(go())
+
+
+@portable
+def test_a_lock_discovered_codex_peer_is_not_stale_while_its_lock_is_held(tmp_path, monkeypatch):
+    async def go():
+        r = _late_router(tmp_path, monkeypatch, with_locks=True)
+        held = {"on": True}
+        monkeypatch.setattr(pr, "lock_held", lambda path: held["on"])
+        r._live_discovered = lambda: {"codex-lock": {"name": "codex-lock", "vendor": "codex", "target": THR_HELD}}
+        await r.refresh_discovered()
+        assert r.discovered == {"codex-lock"} and not r.peer_stale("codex-lock")
+        assert await r.turn("codex-lock", "hi") == "codex saw: hi"
+        held["on"] = False
+        assert r.peer_stale("codex-lock")
+        assert (await r.turn("codex-lock", "hi")).startswith("delivery failed")
+    run(go())
+
+
+@portable
+def test_a_peers_row_whose_recorded_holder_is_dead_stays_stale_until_the_row_changes(tmp_path, monkeypatch):
+    async def go():
+        r = _late_router(tmp_path, monkeypatch)
+        _write_peers(tmp_path, {"name": "codex-face", "vendor": "codex", "target": THR_HELD, "codexPid": _dead_pid()})
+        await r.refresh_discovered()
+        assert "codex-face" in r.dead_holders and "codex-face" not in r.faces and r.peer_stale("codex-face")
+        assert (await r.turn("codex-face", "hi")).startswith("delivery failed")
+        _write_peers(tmp_path, {"name": "codex-face", "vendor": "codex", "target": THR_HELD, "codexPid": os.getpid()})
+        await r.refresh_discovered()
+        assert "codex-face" not in r.dead_holders and "codex-face" in r.faces and not r.peer_stale("codex-face")
+    run(go())
+
+
+@portable
+def test_an_adopted_row_replaces_the_lock_discovered_peer_of_its_thread_and_carries_no_tui(tmp_path, monkeypatch):
+    async def go():
+        r = _late_router(tmp_path, monkeypatch, with_locks=True)
+        monkeypatch.setattr(pr, "lock_held", lambda path: True)
+        r._live_discovered = lambda: {"codex-lock": {"name": "codex-lock", "vendor": "codex", "target": THR_HELD}}
+        await r.refresh_discovered()
+        assert r.peers["codex-lock"]["tui"] is True
+        _write_peers(tmp_path, {"name": "codex-face", "vendor": "codex", "target": THR_HELD, "codexPid": os.getpid()})
+        r._live_discovered = lambda: {}
+        await r.refresh_discovered()
+        assert list(r.peers) == ["codex-face"] and r.discovered == set() and list(r.faces) == ["codex-face"]
+        assert "tui" not in r.peers["codex-face"] and not r.peer_stale("codex-face")
+    run(go())
+
+
+@portable
+def test_an_unreadable_peers_file_adopts_nothing_and_keeps_existing_peers(tmp_path, monkeypatch):
+    async def go():
+        row = {"name": "codex-a", "vendor": "codex", "target": THR_HELD, "codexPid": os.getpid()}
+        r = _late_router(tmp_path, monkeypatch, peers=[row])
+        (tmp_path / "peers.json").write_text("{not json", encoding="utf-8")
+        await r.refresh_discovered()
+        assert list(r.peers) == ["codex-a"]
+    run(go())
