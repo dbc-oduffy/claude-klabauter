@@ -1528,7 +1528,9 @@ def _indeterminate_envelope(
     }
     if dispatch_key is not None:
         engine = _delivering_engine()
-        error["message"] = f"{message} Reconcile: {_poll_command_for(dispatch_key, engine)}"
+        reconcile_command = _poll_command_for(dispatch_key, engine)
+        error["message"] = f"{message} Reconcile: {reconcile_command}"
+        data["reconcile_command"] = reconcile_command
         data["dispatch_key"] = dispatch_key
         if engine:
             data["engine_pid"] = engine["pid"]
@@ -2325,7 +2327,7 @@ def _try_warm_dispatch_inner(
         # it cold could double-execute. These collapse onto the honest refusal.
         # The zero-byte case is deliberately NOT one of them; see its own
         # branch below for the evidence that separates them.
-        def _cold_or_indeterminate(detail: str):
+        def _cold_or_indeterminate(detail: str) -> Optional[dict]:
             global _last_cold_bucket
             if _op_may_mutate(_classified_op_name(msg)):
                 return _reconcile_or_indeterminate(msg, detail, dispatch_key, pipe, token)

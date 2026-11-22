@@ -87,6 +87,8 @@ from coordinator_core.ops.dispatch_emit.credit_gate import (
     SIZING_CHUNK_ID,
 )
 from coordinator_core.ops.dispatch_emit import write_baseline as _write_baseline
+from coordinator_core.bounded_io import IoIndeterminate
+from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit.halted_run import halted_run_base
 from coordinator_core.ops.dispatch_emit.fanout_cost import FanoutCost, Unit, propose_groups
 from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
@@ -644,7 +646,7 @@ def _persisted_return_line(root: Path, kept_run: str, dep: str) -> str:
         run_dir = record_dir(root, kept_run)
     except (OSError, ValueError):
         return ""
-    if dep not in row_returns.read(run_dir):
+    if dep not in row_returns.read(run_dir, bounded=True):
         return ""
     where = row_returns.persisted_path(_rel(root, run_dir))
     return (
@@ -2945,10 +2947,7 @@ def _consume_park_marker(root: Path, run_id: str) -> Optional[dict]:
     source = stop_after_source(root, run_id)
     if source is None:
         return None
-    try:
-        halted = json.loads((dir_ / "halted.json").read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        halted = None
+    halted = halted_run._read(dir_)  # bounded: a stalled read raises IoIndeterminate to `_handler`
     if not (isinstance(halted, dict) and halted.get("halted") == HALT_PARKED):
         return source
     if stop_after_plan_live(dir_):
@@ -3083,6 +3082,18 @@ def _spine_sha(root: Path, plan_rel: Optional[str]) -> Optional[str]:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def indeterminate_reply(exc: IoIndeterminate) -> dict:
+    """The typed reply for a hot read (`halted.json`, `returns.json`) that stalled past its bound: the
+    file's state is unknown, not absent. The run keeps its token and record; nothing is ended."""
+    return {
+        "indeterminate": True,
+        "error": f"io-indeterminate: {exc}",
+        "path": exc.path,
+        "waited_ms": exc.waited_ms,
+        "reconcile": f"Nothing was staged or ended. Re-fire the same dispatch.ask_stage once {exc.path} reads again.",
+    }
+
+
 @register_op("dispatch.ask_stage")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_stage": params `run_id` (str), exactly one of `plan_path` / `sizing_path`, `writes`.
@@ -3098,7 +3109,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     token = leg_attribution.begin()
     t0 = time.thread_time()
     try:
-        return _run_ask_stage(params, repo_root)
+        try:
+            return _run_ask_stage(params, repo_root)
+        except IoIndeterminate as exc:
+            return indeterminate_reply(exc)
     finally:
         try:
             fields = {"handler_thread_ms": round((time.thread_time() - t0) * 1000.0, 1)}

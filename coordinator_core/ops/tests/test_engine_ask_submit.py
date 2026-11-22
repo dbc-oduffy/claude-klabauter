@@ -409,3 +409,19 @@ def test_incomplete_submit_result_is_not_success(params, monkeypatch: pytest.Mon
         lambda *a, **k: pytest.fail("fired an incomplete submission"),
     )
     assert op._engine_ask_submit({**params, "fire": True})["refused"] == "no-run"
+
+
+@pytest.mark.parametrize(("actual_sid", "role", "supplied"), [
+    ("thread", "em", True), ("different", "em", False),
+    ("thread", "unknown", False), ("thread", "worker", False),
+])
+def test_native_codex_submit_identity(tmp_path, monkeypatch, actual_sid, role, supplied):
+    from coordinator_core.ops.workflow_fire import authority
+    from coordinator_core.session.caller_env import bind_caller_env
+
+    env = {"CODEX_THREAD_ID": "thread"}
+    monkeypatch.setattr(authority, "caller_principal",
+                        lambda cwd: authority.Principal(actual_sid, role, env))
+    with bind_caller_env(env):
+        params = op._with_bound_identity({}, tmp_path)
+    assert params == ({"session_id": "thread", "caller": "codex-em", "cwd": str(tmp_path)} if supplied else {})

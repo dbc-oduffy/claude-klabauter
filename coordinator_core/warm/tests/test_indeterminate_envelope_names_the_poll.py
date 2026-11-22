@@ -61,6 +61,19 @@ def test_envelope_with_a_key_carries_dispatch_key_and_reconcile() -> None:
     assert envelope["error"]["data"]["reconcile"] == "warm.request_status"
 
 
+def test_keyed_envelope_carries_reconcile_command_in_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client, "_delivering_engine", lambda: {"pid": 4242})
+    envelope = client._indeterminate_envelope(_MSG, "no response within 5s", "123-456")
+    data = envelope["error"]["data"]
+    assert data["reconcile_command"] == client._poll_command_for("123-456", {"pid": 4242})
+    assert data["reconcile_command"] in envelope["error"]["message"]
+
+
+def test_keyless_envelope_carries_no_reconcile_command() -> None:
+    envelope = client._indeterminate_envelope(_MSG, "no response within 5s")
+    assert "reconcile_command" not in envelope["error"]["data"]
+
+
 def test_envelope_message_names_the_exact_poll_invocation() -> None:
     envelope = client._indeterminate_envelope(_MSG, "no response within 5s", "123-456")
     message = envelope["error"]["message"]

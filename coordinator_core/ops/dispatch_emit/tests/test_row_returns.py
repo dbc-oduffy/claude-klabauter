@@ -38,6 +38,26 @@ def test_sha_mismatch_and_malformed_dropped(tmp_path: Path) -> None:
     assert r.read(tmp_path) == {}
 
 
+def test_read_absent_is_empty_and_stall_propagates(tmp_path: Path, monkeypatch) -> None:
+    import threading
+
+    import pytest
+
+    from coordinator_core import bounded_io
+
+    assert r.read(tmp_path) == {}
+    r.write(tmp_path, {"C1": "DONE"})
+    assert list(r.read(tmp_path)) == ["C1"]
+    release = threading.Event()
+    real = bounded_io._read_registered
+    monkeypatch.setattr(bounded_io, "_read_registered", lambda p: (release.wait(10), real(p))[1])
+    try:
+        with pytest.raises(bounded_io.IoIndeterminate):
+            r.read(tmp_path, bounded=True)
+    finally:
+        release.set()
+
+
 def test_is_done_and_persisted_path() -> None:
     assert r.is_done("DONE: x") and r.is_done("  done")
     assert not r.is_done("BLOCKED: x") and not r.is_done(None)

@@ -6,6 +6,7 @@ import builtins
 import os
 import sys
 import threading
+import time
 
 import pytest
 
@@ -206,10 +207,54 @@ def test_module_imports_only_stdlib() -> None:
 
     tree = ast.parse(Path(cis.__file__).read_text(encoding="utf-8"))
     mods = set()
-    for node in ast.walk(tree):
+    for node in tree.body:  # module level only: the bounded read imports `bounded_io` lazily
         if isinstance(node, ast.Import):
             mods.update(a.name.split(".")[0] for a in node.names)
         elif isinstance(node, ast.ImportFrom):
             mods.add((node.module or "").split(".")[0])
     mods.discard("__future__")
     assert mods <= set(sys.stdlib_module_names)
+
+
+def _stall_reads(monkeypatch: pytest.MonkeyPatch, release: threading.Event) -> None:
+    from coordinator_core import bounded_io
+
+    real = bounded_io._read_registered
+    monkeypatch.setattr(bounded_io, "_read_registered", lambda p: (release.wait(10), real(p))[1])
+
+
+def test_bounded_read_stall_raises_and_is_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.bounded_io import IoIndeterminate
+
+    f = tmp_path / "halted.json"
+    f.write_bytes(b"{}")
+    release = threading.Event()
+    _stall_reads(monkeypatch, release)
+    try:
+        with cis.call_io_scope():
+            with pytest.raises(IoIndeterminate):
+                cis.read_bytes(f, bounded=True)
+            release.set()
+            time.sleep(0.2)
+            assert cis.read_bytes(f, bounded=True) == b"{}"
+    finally:
+        release.set()
+
+
+def test_bounded_read_outside_scope_and_absent(tmp_path: Path) -> None:
+    f = tmp_path / "x"
+    f.write_bytes(b"ab")
+    assert cis.read_bytes(f, bounded=True) == b"ab"
+    assert cis.read_bytes(tmp_path / "missing", bounded=True) is None
+
+
+def test_unbounded_read_never_touches_bounded_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import bounded_io
+
+    def boom(*a, **k):
+        raise AssertionError("bounded path used")
+
+    monkeypatch.setattr(bounded_io, "read_bytes_bounded", boom)
+    f = tmp_path / "x"
+    f.write_bytes(b"ab")
+    assert cis.read_bytes(f) == b"ab"

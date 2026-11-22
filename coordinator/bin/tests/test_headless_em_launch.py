@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -716,3 +717,18 @@ def test_codex_launch_refuses_naming_path_and_principal_when_scratch_cannot_be_m
     err = capsys.readouterr().err
     assert rc == hel.REFUSED and not calls
     assert "refused" in err and str(work / "scratch") in err and "CodexSandboxUsers" in err
+
+
+@pytest.mark.parametrize(("command", "expected"), [
+    ("/bin/bash -lc 'coordinator-invoke engine_ask.submit --params-file p'", 17),
+    ("coordinator-invoke workflow.fire_wait", 0),
+    ("echo coordinator-invoke engine_ask.submit", 0),
+    ("coordinator-invoke engine_ask.submit --params-file p && false", 0),
+])
+def test_native_json_child_success_propagates_only_submit_failure(command, expected, capfd):
+    event = json.dumps({"type": "item.completed", "item": {
+        "type": "command_execution", "command": command, "exit_code": 17}})
+    # Raw bytes: a text-mode print writes CRLF on Windows, and the launcher relays bytes verbatim.
+    cmd = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.argv[1].encode() + b'\\n')", event]
+    assert hel._spawn_codex_events(cmd, dict(os.environ)) == expected
+    assert capfd.readouterr().out == event + "\n"

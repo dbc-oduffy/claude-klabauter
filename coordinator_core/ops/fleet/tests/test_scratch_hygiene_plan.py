@@ -373,3 +373,105 @@ def test_scratch_cited_by_a_non_terminal_plan_in_a_month_subdirectory_is_kept(re
     (month / "p1.evidence.yaml").write_text("- path: scratch/proof-logs/c6.log\n")
     r = _classify(repo, d)
     assert r["action"] == "skipped-live" and r["reason"] == "cited-by-open-plan:p1.evidence.yaml"
+
+
+# --- shared keep manifest ----------------------------------------------------------------
+
+
+def _manifest(repo: Path, text: str) -> None:
+    (repo / "state").mkdir(exist_ok=True)
+    (repo / "state" / "scratch-keep.yaml").write_text(text, encoding="utf-8")
+
+
+def _keep_row(path: str, until: str) -> str:
+    return f"keep:\n  - path: {path}\n    keep_until: {until}\n    reason: evidence\n"
+
+
+def _apply(repo: Path) -> dict:
+    from coordinator_core.ops.fleet.scratch_hygiene import run_hygiene
+
+    return run_hygiene({"repo_root": str(repo), "cadence": "workday_complete", "apply": True})
+
+
+@pytest.mark.parametrize("path_form", ["scratch/kept-run", "scratch\\kept-run", "Scratch/Kept-Run/"])
+def test_unexpired_manifest_entry_is_kept_under_the_apply_call(repo, path_form):
+    kept = _scratch_entry(repo, "kept-run")
+    other = _scratch_entry(repo, "other-run")
+    until = (datetime.now(timezone.utc) + timedelta(days=3)).date().isoformat()
+    _manifest(repo, _keep_row(json.dumps(path_form), until))
+    r = _classify(repo, kept)
+    assert r["action"] == "skipped-live" and r["reason"].startswith("kept-by-manifest:state/scratch-keep.yaml")
+    assert _classify(repo, other)["action"] == "would-delete"
+    _apply(repo)
+    assert kept.exists() and not other.exists()
+
+
+def test_manifest_entry_is_kept_through_its_last_day(repo):
+    kept = _scratch_entry(repo, "kept-run")
+    today = datetime.now(timezone.utc).date().isoformat()
+    _manifest(repo, _keep_row("scratch/kept-run", today))
+    assert _classify(repo, kept)["action"] == "skipped-live"
+
+
+def test_expired_manifest_entry_no_longer_protects(repo):
+    d = _scratch_entry(repo, "kept-run")
+    until = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+    _manifest(repo, _keep_row("scratch/kept-run", until))
+    assert _classify(repo, d)["action"] == "would-delete"
+    _apply(repo)
+    assert not d.exists()
+
+
+def test_absent_manifest_is_an_empty_one(repo):
+    d = _scratch_entry(repo, "kept-run")
+    assert _classify(repo, d)["action"] == "would-delete"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "keep: [unclosed\n  - : :\n",
+        "keep: not-a-list\n",
+        "- just\n- a list\n",
+        "keep:\n  - path: scratch/kept-run\n    keep_until: not-a-date\n",
+        "keep:\n  - path: scratch/kept-run\n",
+        "keep:\n  - scratch/kept-run\n",
+    ],
+)
+def test_unreadable_manifest_keeps_every_entry(repo, text):
+    a = _scratch_entry(repo, "kept-run")
+    b = _scratch_entry(repo, "other-run")
+    _manifest(repo, text)
+    for d in (a, b):
+        r = _classify(repo, d)
+        assert r["action"] == "skipped-live" and r["reason"].startswith("keep-manifest-unreadable")
+    _apply(repo)
+    assert a.exists() and b.exists()
+
+
+def test_undecodable_manifest_keeps_every_entry(repo):
+    d = _scratch_entry(repo, "kept-run")
+    (repo / "state").mkdir(exist_ok=True)
+    (repo / "state" / "scratch-keep.yaml").write_bytes(b"\xff\xfe\x00bad")
+    assert _classify(repo, d)["reason"].startswith("keep-manifest-unreadable")
+
+
+def test_manifest_is_read_once_per_plan(repo, monkeypatch):
+    for n in ("a", "b", "c"):
+        _scratch_entry(repo, n)
+    reads: list[Path] = []
+    real = plan._keep_manifest
+    monkeypatch.setattr(plan, "_keep_manifest", lambda root: reads.append(root) or real(root))
+    plan.plan_purge(repo, registry_dir=repo / "no-registry")
+    assert len(reads) == 1
+
+
+def test_repo_manifest_seeds_the_gipsy_entries() -> None:
+    root = Path(plan.__file__).resolve().parents[3]
+    # The manifest is box-local and untracked: a clean checkout or a published stamp has none.
+    if not (root / plan.KEEP_MANIFEST_RELPATH).is_file():
+        pytest.skip(f"{plan.KEEP_MANIFEST_RELPATH} is box-local and absent from this tree")
+    rows = plan._keep_manifest(root)
+    assert rows is not None
+    for name in ("gipsy-w4-shard-9714b4-run", "gipsy-w5-machine-a-tail-run", "gipsy-w4-ext0078-run"):
+        assert rows[f"scratch/{name}"][0].isoformat() == "2026-12-05"

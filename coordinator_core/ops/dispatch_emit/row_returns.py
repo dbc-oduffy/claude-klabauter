@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from typing import Mapping, Optional
 
+from coordinator_core.git import call_io_scope
 from coordinator_core.session.declared_writes import declare_write
 
 RETURNS_FILE = "returns.json"
@@ -64,10 +65,15 @@ def write(
     return path
 
 
-def read(record_dir: Path) -> dict[str, dict]:
-    """``{row: {"text", "sha256"}}``; malformed or sha-mismatched entries dropped. Never raises."""
+def read(record_dir: Path, *, bounded: bool = False) -> dict[str, dict]:
+    """``{row: {"text", "sha256"}}``; absent, malformed or sha-mismatched entries dropped (``{}``).
+
+    Never raises unless ``bounded``: then ``IoIndeterminate`` propagates when the read stalls past
+    the bound (unknown state is not absence); only ``dispatch.ask_stage`` converts it to a reply.
+    """
     try:
-        data = json.loads((Path(record_dir) / RETURNS_FILE).read_text(encoding="utf-8"))
+        raw = call_io_scope.read_bytes(Path(record_dir) / RETURNS_FILE, bounded=bounded)
+        data = {} if raw is None else json.loads(raw.decode("utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):

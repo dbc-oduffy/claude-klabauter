@@ -182,6 +182,43 @@ def test_rmdir_retry_keeps_owner_rwx_on_directory(tmp_path, monkeypatch):
     assert not root.exists()
 
 
+def test_name_and_bytes_logged_before_delete_even_when_delete_fails(fx, monkeypatch):
+    from coordinator_core.ops.fleet import scratch_hygiene_apply as mod
+
+    target = next(iter(fx.would_delete()))
+    seen: list[str] = []
+
+    def failing(_path):
+        assert any(str(target) in line for line in seen)
+        raise OSError(5, "boom")
+
+    monkeypatch.setattr(mod, "remove_tree_no_follow", failing)
+    rec = purge_record(REPO_NAME, target, "would-delete", bytes=1234, files=1, age_days=10.0, repo_root=fx.repo_root)
+    out = apply_purge(fx.repo_root, [rec], recheck=_always_delete, log=seen.append)
+    assert len(seen) == 1 and "bytes=1234" in seen[0]
+    assert out[0]["action"] == "skipped-live" and out[0]["reason"].startswith("delete-failed")
+
+
+def test_default_log_goes_to_stderr(fx, capsys):
+    target = next(iter(fx.would_delete()))
+    rec = purge_record(REPO_NAME, target, "would-delete", bytes=77, repo_root=fx.repo_root)
+    apply_purge(fx.repo_root, [rec], recheck=_always_delete)
+    assert f"{target}" in capsys.readouterr().err
+
+
+def test_prune_repo_output_names_deleted_paths_and_bytes(tmp_path, monkeypatch):
+    from coordinator_core.install import pruner_runner
+
+    recs = [
+        {"kind": "purge", "action": "deleted", "path": "scratch/a", "bytes": 42},
+        {"kind": "purge", "action": "deleted", "path": "scratch/gone", "bytes": 0, "reason": "already-gone"},
+        {"kind": "purge", "action": "skipped-live", "path": "scratch/b", "bytes": 9},
+    ]
+    monkeypatch.setattr(pruner_runner, "run_hygiene", lambda _p: {"records": recs, "walk": {"deleted": 1}})
+    out = pruner_runner.prune_repo(tmp_path)
+    assert out["deleted"] == [{"path": "scratch/a", "bytes": 42}]
+
+
 def test_missing_entry_reported_deleted(fx):
     gone = fx.scratch / "never-existed"
     out = apply_purge(fx.repo_root, [purge_record(REPO_NAME, gone, "would-delete", repo_root=fx.repo_root)], recheck=_always_delete)
