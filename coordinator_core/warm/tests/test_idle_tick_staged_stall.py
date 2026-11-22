@@ -139,6 +139,48 @@ def test_run_without_a_session_is_halted_without_a_notice(ctx, repo, seams) -> N
     assert seams["sent"] == []
 
 
+def _fire_record(repo, run_id, *, state, pid=0, log_age_s=None, fire_id="f1") -> None:
+    from coordinator_core.session_hub_path import hub_for_common
+
+    registry = hub_for_common(repo / ".git") / "workflow-fires"
+    registry.mkdir(parents=True, exist_ok=True)
+    record = {"fire_id": fire_id, "run_id": run_id, "state": state, "pid": pid}
+    if log_age_s is not None:
+        log = registry / f"{fire_id}.log"
+        log.write_text("child stdout", encoding="utf-8")
+        stamp = time.time() - log_age_s
+        os.utime(log, (stamp, stamp))
+        record["log_path"] = str(log)
+    (registry / f"{fire_id}.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def _silent(repo, seams, run_id):
+    return _run(repo, seams, run_id, idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300)
+
+
+def test_run_inside_an_attached_fire_is_not_halted(ctx, repo, seams) -> None:
+    rdir = _silent(repo, seams, "run-nested")
+    _fire_record(repo, "run-nested", state="running", pid=os.getpid())
+    ctx._idle_tick()
+    assert not (rdir / halted_run.HALTED_FILE).exists()
+    assert seams["sent"] == []
+
+
+def test_run_whose_fire_stdout_is_fresh_is_not_halted(ctx, repo, seams) -> None:
+    rdir = _silent(repo, seams, "run-stdout")
+    _fire_record(repo, "run-stdout", state="exited", log_age_s=30)
+    ctx._idle_tick()
+    assert not (rdir / halted_run.HALTED_FILE).exists()
+
+
+def test_run_whose_fire_ended_and_went_silent_is_still_halted(ctx, repo, seams) -> None:
+    rdir = _silent(repo, seams, "run-dead-fire")
+    _fire_record(repo, "run-dead-fire", state="exited", log_age_s=staged_stall.STAGED_STALL_BOUND_SECS + 300)
+    _fire_record(repo, "run-other", state="running", pid=os.getpid(), fire_id="f2")
+    ctx._idle_tick()
+    assert (rdir / halted_run.HALTED_FILE).exists()
+
+
 def test_scan_failure_never_escapes_the_tick(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(root, ms, **kw):
         raise RuntimeError("index broke")

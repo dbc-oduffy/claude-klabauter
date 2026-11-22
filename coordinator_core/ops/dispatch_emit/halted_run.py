@@ -1015,8 +1015,9 @@ def _index_call(fn: str, record_dir: Path, *args, **kwargs) -> None:
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 
     rd = Path(record_dir)
+    target = {"add_run": idx.add_run, "remove_run": idx.remove_run}[fn]
     try:
-        getattr(idx, fn)(rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)], rd.name, *args, **kwargs)
+        target(rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)], rd.name, *args, **kwargs)
     except (OSError, ValueError, IndexError):
         pass
 

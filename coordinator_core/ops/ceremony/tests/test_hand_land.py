@@ -111,3 +111,26 @@ def test_nothing_to_commit_refuses_without_moving_head(repo: Path) -> None:
 
     assert reply["ok"] is False and reply["refused"] == "commit"
     assert _git(repo, "rev-parse", "HEAD") == head
+
+
+def test_call_of_a_name_only_in_the_worktree_refuses_and_a_committed_name_lands(repo: Path) -> None:
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "__init__.py").write_bytes(b"")
+    (repo / "pkg" / "idx.py").write_bytes(b"def old():\n    return 1\n")
+    _git(repo, "add", "--", "pkg")
+    _git(repo, "commit", "-q", "-m", "pkg")
+    head = _git(repo, "rev-parse", "HEAD")
+    (repo / "pkg" / "idx.py").write_bytes(b"def old():\n    return 1\n\n\ndef record_claim():\n    return 2\n")
+    (repo / "a.py").write_bytes(b"from pkg import idx\n\nidx.record_claim()\n")
+
+    refused = _call({"repo_root": str(repo), "paths": ["a.py"], "message": "m"})
+
+    assert refused["ok"] is False and refused["refused"] == "uncommitted_name"
+    assert _git(repo, "rev-parse", "HEAD") == head
+
+    (repo / "a.py").write_bytes(b"from pkg import idx\n\nidx.old()\n")
+
+    landed = _call({"repo_root": str(repo), "paths": ["a.py"], "message": "m"})
+
+    assert landed["ok"] is True
+    assert "gate_unverified" not in landed

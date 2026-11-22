@@ -1710,6 +1710,30 @@ def import_closure_gate(
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
 
+def landed_names_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+    read_source: Callable[[str], Optional[bytes]],
+) -> GateOutcome:
+    """Refuse a changed `.py` naming (`alias.attr`, literal `getattr`) something only the worktree has.
+
+    Wraps `landed_names.uncommitted_name_refusals` over the same landed reader as
+    `import_closure_gate`. A checker that cannot decide passes with one diagnostic (DR-402).
+    """
+    candidates = [p for p in gate_paths if p.endswith(".py")]
+    if not candidates:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+    from coordinator_core.ops.ceremony.landed_names import uncommitted_name_refusals
+
+    refusals = uncommitted_name_refusals(Path(worktree_root), candidates, read_source)
+    if refusals is None:
+        return GateOutcome(
+            passed=True, skipped=False,
+            diagnostics=["landed_names_gate: could not run; landing allowed unverified"],
+        )
+    return GateOutcome(passed=not refusals, skipped=False, diagnostics=list(refusals))
+
+
 _PROG_NAME = "check-workstream-complete-deletion-blocks.sh"
 
 

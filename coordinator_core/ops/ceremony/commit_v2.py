@@ -97,6 +97,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
     declared_deletion_gate,
     files_present,
     import_closure_gate,
+    landed_names_gate,
     machine_path_leak_gate,
     op_scope_coverage_gate,
     registration_quad_gate,
@@ -497,7 +498,7 @@ def _pre_commit_gates(
 
     Runs now, in order: `declared_deletion_gate`, `carry_gate`, `residue_gate`,
     `op_scope_coverage_gate`, `leak_gate`, `registration_quad_gate`,
-    `claude_md_budget_gate`, `machine_path_leak_gate`, `abs_path_citation_gate`, `import_closure_gate`, `attribution_gate`.
+    `claude_md_budget_gate`, `machine_path_leak_gate`, `abs_path_citation_gate`, `import_closure_gate`, `landed_names_gate`, `attribution_gate`.
     `read_source` is the post-commit reader (`commit_source.post_commit_reader`): the last
     five and `op_scope_coverage_gate` judge the tree this commit lands, never the
     worktree or the index.
@@ -638,6 +639,7 @@ def _pre_commit_gates(
         ("abs_path_citation_gate", partial(abs_path_citation_gate, read_source=read_source)),
         ("reparse_advisory_gate", reparse_advisory_gate),
         ("import_closure_gate", partial(import_closure_gate, read_source=read_source)),
+        ("landed_names_gate", partial(landed_names_gate, read_source=read_source)),
         ("attribution_gate", partial(
             attribution_gate, vacated=deleted_paths,
             prefer_staged=prefer_staged, deliberate_stage=deliberate_stage,
@@ -645,7 +647,10 @@ def _pre_commit_gates(
         )),
     ):
         outcome = gate(worktree_root, gate_paths)
-        if name == "reparse_advisory_gate" and advisories is not None:
+        # A failing gate's diagnostics go to its refusal, never to advisories.
+        if name in ("reparse_advisory_gate", "landed_names_gate") and advisories is not None and (
+            name == "reparse_advisory_gate" or outcome.passed
+        ):
             advisories.extend(outcome.diagnostics)
         if not outcome.passed:
             shown = (
