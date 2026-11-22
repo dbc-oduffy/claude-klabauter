@@ -88,8 +88,10 @@ def _norm(sizing_rel: str) -> str:
 
 def _marker_text(record_dir: Path) -> str:
     """`halted.json` text, read through the open `call_io_scope` (one read per path per scope);
-    FileNotFoundError when absent. `_write` drops the cached read."""
-    raw = call_io_scope.read_bytes(Path(record_dir) / HALTED_FILE)
+    FileNotFoundError when absent; `IoIndeterminate` (never an OSError) when the read stalls past the
+    bound, so `_read` and `read_strict` propagate it rather than map it to absence. `_write` drops the
+    cached read."""
+    raw = call_io_scope.read_bytes(Path(record_dir) / HALTED_FILE, bounded=True)
     if raw is None:
         raise FileNotFoundError(HALTED_FILE)
     return raw.decode("utf-8")
@@ -145,6 +147,7 @@ def _write(record_dir: Path, payload: dict) -> Path:
 
     halted_withheld_index.forget_fresh()
     _track_lookup(Path(record_dir), payload)
+    _index_call("record_claim", Path(record_dir))
     return target
 
 
@@ -161,13 +164,33 @@ def _lookup_key(sizing_rel: str) -> str:
     return hashlib.sha1(PurePosixPath(_norm(sizing_rel)).stem.encode("utf-8")).hexdigest()[:16]
 
 
+_ROOT_OF: dict = {}  # str(record dir) -> repo root; a layout answer, stable for the process
+_ROOT_OF_CAP = 8192
+
+
 def _root_of(record_dir: Path) -> Optional[Path]:
-    rd = Path(record_dir)
-    try:
-        root = rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
-    except IndexError:
-        return None
-    return root if root / RECORD_DIR_ROOT / rd.name == rd else None
+    """The repo root of a `<root>/<RECORD_DIR_ROOT>/<run>` dir, None for any other layout. A hot per-run call of
+    the claim pass: an exact-spelling string match answers without building `Path` parents."""
+    key = os.fspath(record_dir)
+    if key in _ROOT_OF:
+        return _ROOT_OF[key]
+    posix = key.replace("\\", "/").rstrip("/")
+    name = posix.rsplit("/", 1)[-1]
+    tail = "/" + RECORD_DIR_ROOT + "/" + name
+    if posix.endswith(tail) and len(posix) > len(tail):
+        root: Optional[Path] = Path(key[: len(key.rstrip("\\/")) - len(tail)])
+    else:
+        rd = Path(record_dir)
+        try:
+            root = rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
+        except IndexError:
+            root = None
+        if root is not None and root / RECORD_DIR_ROOT / rd.name != rd:
+            root = None
+    if len(_ROOT_OF) >= _ROOT_OF_CAP:
+        _ROOT_OF.clear()
+    _ROOT_OF[key] = root
+    return root
 
 
 def _track_lookup(record_dir: Path, payload: dict) -> None:
@@ -177,6 +200,7 @@ def _track_lookup(record_dir: Path, payload: dict) -> None:
     if not isinstance(sizing, str) or not sizing or root is None or not safe_id(record_dir.name):
         return
     entry = root / LOOKUP_INDEX_DIR / _lookup_key(sizing) / record_dir.name
+    _put_bound(root, record_dir.name, sizing, _halt_snapshot(payload))
     try:
         if payload.get("status") in (STATUS_HALTED, STATUS_RESUMED):
             entry.parent.mkdir(parents=True, exist_ok=True)
@@ -194,6 +218,161 @@ def _indexed_runs(repo_root: Path, sizing_rel: str) -> set:
         return set(os.listdir(Path(repo_root) / LOOKUP_INDEX_DIR / _lookup_key(sizing_rel)))
     except OSError:
         return set()
+
+
+#: Bound-run index, beside the lookup dir: `<LOOKUP_INDEX_DIR>/<sha1(full normalized sizing_rel)[:16]>.runs/` holds an
+#: empty `<run_id>` per run whose `run.json` or `halted.json` binds that sizing, plus `<run_id>.halt` (the marker's
+#: `HALT_INDEX_FIELDS`, rewritten by every `_write`). `requirements_ledger._write_run` writes `<run_id>`, `_write` both,
+#: so `bound_runs` answers from one listing. Keyed on the full path (not the stem) so the set equals the scan's.
+BOUND_DIR_SUFFIX = ".runs"
+BOUND_HALT_SUFFIX = ".halt"
+BOUND_FILLED = ".filled"
+HALT_INDEX_FIELDS = (
+    "status", "halted", HALT_REASON_FIELD, HALT_RUN_BASE_FIELD, HALT_NEXT_ACTION_FIELD, HALT_RELEASED_FIELD,
+    REVISED_AT_FIELD, REVISED_CONSUMED_FIELD, "sha",
+)
+
+
+def _bound_dir(root: Path, sizing_rel: str) -> Path:
+    key = hashlib.sha1(_norm(sizing_rel).encode("utf-8")).hexdigest()[:16]
+    return Path(root) / LOOKUP_INDEX_DIR / (key + BOUND_DIR_SUFFIX)
+
+
+def _halt_snapshot(payload: dict) -> dict:
+    return {k: payload[k] for k in HALT_INDEX_FIELDS if k in payload}
+
+
+def _put_bound(root: Path, run_id: str, sizing_rel: str, halt: Optional[dict]) -> None:
+    """Record `run_id` as bound to `sizing_rel`, and its halt fields when `halt` is not None; best-effort, the run
+    record is the truth."""
+    d = _bound_dir(root, sizing_rel)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / run_id).touch()
+        if halt is not None:
+            atomic_write_bytes(d / (run_id + BOUND_HALT_SUFFIX), json.dumps(halt, sort_keys=True).encode("utf-8"), preserve_mode=False)
+    except OSError:
+        pass
+
+
+def track_run_binding(record_dir: Path, sizing_rel: object, *, was: object = None) -> None:
+    """Mirror a `run.json` write into the bound-run index; `was` is the sizing the run was bound to before a rebind."""
+    root = _root_of(Path(record_dir))
+    name = Path(record_dir).name
+    if root is None or not safe_id(name):
+        return
+    if isinstance(sizing_rel, str) and sizing_rel:
+        _put_bound(root, name, sizing_rel, None)
+    if isinstance(was, str) and was and _norm(was) != _norm(sizing_rel if isinstance(sizing_rel, str) else ""):
+        _unbind(root, Path(record_dir), was)
+
+
+def _unbind(root: Path, record_dir: Path, old: str) -> None:
+    """After a rebind away from `old`: drop the index entries of whichever record (marker, run.json) no longer binds it."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    norm = _norm(old)
+    d = _bound_dir(root, old)
+    marker_binds = _norm(str((_read(record_dir) or {}).get("sizing_rel") or "")) == norm
+    run_binds = _norm(str((rl.read_run(record_dir) or {}).get("sizing_rel") or "")) == norm
+    try:
+        if not marker_binds:
+            (d / (record_dir.name + BOUND_HALT_SUFFIX)).unlink(missing_ok=True)
+        if not (marker_binds or run_binds):
+            (d / record_dir.name).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _bound_candidate(name: str, floor: str, prefix: str) -> bool:
+    """The scan's candidate predicate: `ask-<stamp>` on or after the sizing date, or `warp-<stem>-<stamp>`."""
+    if name.startswith("ask-"):
+        return bool(_STAMP.fullmatch(name[4:])) and name[4:12] >= floor
+    return name.startswith(prefix) and bool(_STAMP.fullmatch(name[len(prefix):]))
+
+
+def _backfill_bound(root: Path, sizing: str, floor: str, prefix: str) -> dict:
+    """One date-floored scan of the record root for runs predating the index: write their entries and the
+    `BOUND_FILLED` sentinel (only after a complete scan); returns the runs found. Runs once per sizing per machine."""
+    found: dict = {}
+    complete = True
+    try:
+        with os.scandir(Path(root) / RECORD_DIR_ROOT) as it:
+            for entry in it:
+                if not _bound_candidate(entry.name, floor, prefix):
+                    continue
+                try:
+                    if not entry.is_dir():
+                        continue
+                except OSError:
+                    continue
+                dpath = Path(entry.path)
+                run_bound, marker = False, None
+                try:
+                    run = json.loads((dpath / "run.json").read_text(encoding="utf-8"))
+                    run_bound = isinstance(run, dict) and isinstance(run.get("sizing_rel"), str) and _norm(run["sizing_rel"]) == sizing
+                except (OSError, ValueError):
+                    pass
+                try:
+                    data = json.loads((dpath / HALTED_FILE).read_text(encoding="utf-8"))
+                    if isinstance(data, dict) and isinstance(data.get("sizing_rel"), str) and _norm(data["sizing_rel"]) == sizing:
+                        marker = _halt_snapshot(data)
+                except (OSError, ValueError):
+                    pass
+                if run_bound or marker is not None:
+                    found[entry.name] = marker or {}
+                    _put_bound(root, entry.name, sizing, marker)
+    except OSError:
+        complete = False
+    if complete:
+        try:
+            d = _bound_dir(root, sizing)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / BOUND_FILLED).touch()
+        except OSError:
+            pass
+    return found
+
+
+def bound_runs(repo_root: Path, sizing_rel: str) -> dict:
+    """`{run_id: halt fields}` of every run whose `run.json` or `halted.json` binds `sizing_rel`, newest-name last, from
+    one listing of the sizing's index dir plus one small read per halted run; the halt fields are `HALT_INDEX_FIELDS`
+    (`{}` for a run with no marker). Same candidate set as the scan it replaces (`ask-*` on or after the sizing's
+    date, `warp-<stem>-*`); an undated sizing answers `{}`. The first call for a sizing whose index was never filled
+    scans the record root once to back-fill runs that predate the index; later calls never touch it.
+    Trap: the index is machine-local and written only by `_write` and `requirements_ledger._write_run`; a run dir that
+    arrives after the fill by any other route (git pull, hand-copied record) is not seen until its index dir is deleted."""
+    root = Path(repo_root)
+    sizing = _norm(str(sizing_rel))
+    stem = PurePosixPath(sizing).stem
+    dated = _DATE_PREFIX.match(stem)
+    if dated is None:
+        return {}
+    floor, prefix = "".join(dated.groups()), f"warp-{stem}-"
+    d = _bound_dir(root, sizing)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        names = []
+    if BOUND_FILLED not in names:
+        return dict(sorted(_backfill_bound(root, sizing, floor, prefix).items()))
+    out: dict = {}
+    for name in sorted(names):
+        if name == BOUND_FILLED or name.endswith(BOUND_HALT_SUFFIX) or not _bound_candidate(name, floor, prefix):
+            continue
+        halt: dict = {}
+        if (name + BOUND_HALT_SUFFIX) in names:
+            try:
+                got = json.loads((d / (name + BOUND_HALT_SUFFIX)).read_text(encoding="utf-8"))
+                halt = got if isinstance(got, dict) else {}
+            except (OSError, ValueError):
+                halt = {}
+        try:
+            if (root / RECORD_DIR_ROOT / name).is_dir():
+                out[name] = halt
+        except OSError:
+            continue
+    return out
 
 
 def _warp_stamps(root: Path, prefix: str) -> list:
@@ -563,6 +742,7 @@ def halted_run_named(repo_root: Path, run_id: object, sizing_rel: str) -> Option
                 (Path(repo_root) / LOOKUP_INDEX_DIR / _lookup_key(old) / run_id).unlink(missing_ok=True)
             except OSError:
                 pass
+            _unbind(Path(repo_root), rd, old)
     return run_id
 
 
@@ -888,20 +1068,16 @@ def _withheld_of(marker: Optional[dict]) -> dict:
     return {k: v for k, v in raw.items() if isinstance(k, str)} if isinstance(raw, dict) else {}
 
 
-def fresh_index_entry(record_dir: Path):
+def fresh_index_entry(record_dir: Path) -> "Optional[halted_withheld_index.RunEntry]":
     """The `halted_withheld_index` entry of the run owning `record_dir` (`<root>/<RECORD_DIR_ROOT>/<run>`)
     while it is fresh against the marker (`halted_withheld_index.fresh_entry`), else None: the caller
     opens `halted.json`. None for a dir outside that layout."""
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 
-    rd = Path(record_dir)
-    try:
-        root = rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
-    except IndexError:
+    root = _root_of(record_dir)
+    if root is None:
         return None
-    if root / RECORD_DIR_ROOT / rd.name != rd:
-        return None
-    return idx.fresh_entry(root, rd.name)
+    return idx.fresh_entry(root, os.path.basename(os.fspath(record_dir).rstrip("\\/")))
 
 
 def halted_withheld_strict(record_dir: Path) -> dict:

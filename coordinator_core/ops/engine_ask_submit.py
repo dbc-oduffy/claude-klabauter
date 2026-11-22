@@ -5,7 +5,7 @@ Wire params: `ask` xor `sizing`; `ask_source` ("pm" | "relayed", required with `
 `caller` (identity string) and absolute `cwd`, all required. A launcher-spawned headless EM may omit
 them: with `session_id` absent, `COORDINATOR_SESSION_ID` from the caller env is taken only when the
 headless-EM grant binds it (`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN`), `caller` defaults to `<family>-em`
-from that grant and `cwd` to the op's repo root; an unbound env session id is refused as absent. Optional
+from that grant and `cwd` to the op's repo root; a native Codex thread may supply its own registered EM identity when the launcher id is absent. Optional
 `repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,
 `em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and
 `fire` (bool, default true: hand the run to `workflow.fire` with `expected=<sha256>`; false mints without starting),
@@ -42,12 +42,8 @@ _KNOWN_KEYS = frozenset(
 )
 
 
-def _with_grant_bound_identity(params: dict, repo_root: Optional[Path]) -> dict:
-    """Fill an absent session_id, caller and cwd from the launcher env, only when the grant binds it.
-
-    An env session id the headless-EM grant does not bind (no token, wrong token, no grant) fills
-    nothing, so the gates refuse as for any absent session_id. Explicit params are never replaced.
-    """
+def _with_bound_identity(params: dict, repo_root: Optional[Path]) -> dict:
+    """Resolve an omitted identity from a bound launch grant or the registered native Codex EM."""
     sid = params.get("session_id")
     if isinstance(sid, str) and sid.strip():
         return params
@@ -56,11 +52,20 @@ def _with_grant_bound_identity(params: dict, repo_root: Optional[Path]) -> dict:
 
     env = effective_caller_env()
     env_sid = env.get("COORDINATOR_SESSION_ID")
-    if not (isinstance(env_sid, str) and env_sid.strip()):
-        return params
-    family = next((f for f in HEADLESS_EM_FAMILIES if headless_em_grant_matches(env, env_sid, f)), None)
-    if family is None:
-        return params
+    if isinstance(env_sid, str) and env_sid.strip():
+        family = next((f for f in HEADLESS_EM_FAMILIES if headless_em_grant_matches(env, env_sid, f)), None)
+        if family is None:
+            return params
+    else:
+        env_sid = env.get("CODEX_THREAD_ID")
+        if not env_sid:
+            return params
+        from coordinator_core.ops.workflow_fire.authority import caller_principal
+
+        principal = caller_principal(str(repo_root) if repo_root else None)
+        if principal.session_id != env_sid or principal.role != "em":
+            return params
+        family = "codex"
     filled = dict(params, session_id=env_sid)
     if not (isinstance(params.get("caller"), str) and params["caller"].strip()):
         filled["caller"] = f"{family}-em"
@@ -112,7 +117,7 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
             "refused": "bad-request",
             "reason": f"Unknown param(s): {', '.join(unknown)}. Accepted: {', '.join(sorted(_KNOWN_KEYS))}.",
         }
-    params = _with_grant_bound_identity(params, repo_root)
+    params = _with_bound_identity(params, repo_root)
     # Session UUIDs resolve through the owned external-host binding. Display
     # aliases may not yet be exported by the installed transport on this box.
     target = params.get("notify_to", params.get("session_id"))

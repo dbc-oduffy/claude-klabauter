@@ -42,6 +42,11 @@ def prune_repo(root: Path) -> dict[str, Any]:
             }
         )
         out["hygiene"] = res.get("error") or res.get("walk", {})
+        out["deleted"] = [
+            {"path": r["path"], "bytes": r.get("bytes", 0)}
+            for r in res.get("records", [])
+            if r.get("kind") == "purge" and r.get("action") == "deleted" and r.get("reason") != "already-gone"
+        ]
     except Exception as exc:  # noqa: BLE001 -- a repo's failure never stops the tick
         out["hygiene"] = f"{type(exc).__name__}: {exc}"
     try:

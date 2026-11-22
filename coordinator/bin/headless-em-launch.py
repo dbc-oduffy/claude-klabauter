@@ -15,7 +15,8 @@ the grant for (session id, family), and hands the child COORDINATOR_SESSION_ID p
 
 codex, agy and grok run as a supervised child (POSIX): when it exits 0 while a run its session fired is
 neither landed nor halted, one stderr line per run names its fire_wait command and the launcher exits 3;
-a non-zero child code is returned as is (a signal death as 128+signum). A check that itself fails exits 3.
+a non-zero child code is returned as is (a signal death as 128+signum). Codex exec --json also
+propagates a failed engine_ask.submit command reported by the native child. A check that itself fails exits 3.
 --exit-check runs only that check (0 clean, 3 open runs or an unchecked exit): the Windows path, whose
 --prepare-only JSON names its argv as "exit_check".
 
@@ -33,6 +34,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -164,7 +166,49 @@ def _with_settings_bin(environ) -> str:
     return os.pathsep.join(entries)
 
 
-def _spawn(cmd, env):
+def _submit_exit(line: bytes) -> int:
+    """Read the tool's completion status, ignoring model text and unrelated failed commands."""
+    try:
+        event = json.loads(line)
+        if not isinstance(event, dict) or event.get("type") != "item.completed":
+            return 0
+        item = event.get("item")
+        if not isinstance(item, dict) or item.get("type") != "command_execution":
+            return 0
+        code = item.get("exit_code")
+        if type(code) is not int or code == 0:
+            return 0
+        command = item.get("command")
+        if not isinstance(command, str):
+            return 0
+        argv = shlex.split(command)
+        if len(argv) == 3 and Path(argv[0]).name in ("sh", "bash", "zsh", "dash", "ksh") and argv[1] in ("-c", "-lc"):
+            command = argv[2]
+            argv = shlex.split(command)
+        if len(argv) < 2 or argv[1] != "engine_ask.submit" or Path(argv[0]).name != "coordinator-invoke":
+            return 0
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        if not any(token in (";", "&&", "||", "|", "&") for token in lexer):
+            return code
+    except ValueError:
+        pass
+    return 0
+
+
+def _spawn_codex_events(cmd, env):
+    """Forward the native JSON event stream immediately and retain the first failed submit."""
+    with subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE) as child:
+        failure = 0
+        for line in child.stdout:
+            sys.stdout.buffer.write(line)
+            sys.stdout.buffer.flush()
+            failure = failure or _submit_exit(line)
+        code = child.wait()
+    return code or failure
+
+
+def _spawn(cmd, env, *, codex_events=False):
     """Run the CLI with inherited stdio and return its exit code (a signal death as 128+signum).
 
     SIGINT gets a no-op handler, not SIG_IGN: an ignored signal stays ignored across exec, a handler
@@ -172,7 +216,10 @@ def _spawn(cmd, env):
     """
     prior = signal.signal(signal.SIGINT, lambda *_: None)
     try:
-        code = subprocess.run(cmd, env=env).returncode
+        if codex_events:
+            code = _spawn_codex_events(cmd, env)
+        else:
+            code = subprocess.run(cmd, env=env).returncode
     finally:
         signal.signal(signal.SIGINT, prior)
     return 128 - code if code < 0 else code
@@ -350,6 +397,8 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
         if tampered:
             print(json.dumps({"refused": "agy_grant_tamper", "paths": tampered}), file=sys.stderr)
             return REFUSED
+    elif family == "codex" and extra and extra[0] in _CODEX_SUBCOMMANDS and "--json" in extra and spawn is _spawn:
+        code = _spawn(cmd, {**environ, **child}, codex_events=True)
     else:
         code = spawn(cmd, {**environ, **child})
     gate = exit_check(sid, cwd, open_runs=open_runs)

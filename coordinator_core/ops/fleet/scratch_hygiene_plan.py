@@ -20,7 +20,7 @@ import re
 import stat
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -102,6 +102,52 @@ def _plan_scratch_citations(repo_root: Path) -> dict[str, str]:
     return cited
 
 
+KEEP_MANIFEST_RELPATH = "state/scratch-keep.yaml"
+
+
+def _keep_until_date(value: Any) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value).strip()[:10])
+
+
+def _keep_manifest(repo_root: Path) -> Optional[dict[str, tuple[date, str]]]:
+    """Rows of ``state/scratch-keep.yaml`` (``keep: [{path, keep_until, reason}]``) as repo-relative
+    lower-case posix path -> ``(keep_until, reason)``. An absent file is an empty manifest; a file that
+    exists but cannot be read or parsed (or has a malformed row) is ``None``, and the caller keeps everything."""
+    try:
+        text = (repo_root / KEEP_MANIFEST_RELPATH).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return None
+    try:
+        import yaml
+
+        doc = yaml.safe_load(text)
+        if doc is None:
+            return {}
+        rows = doc.get("keep") if isinstance(doc, dict) else None
+        if rows is None and isinstance(doc, dict) and not doc:
+            return {}
+        if not isinstance(rows, list):
+            return None
+        kept: dict[str, tuple[date, str]] = {}
+        for row in rows:
+            path = str(row["path"]).replace("\\", "/").strip("/").lower()
+            if not path:
+                return None
+            until = _keep_until_date(row["keep_until"])
+            prior = kept.get(path)
+            if prior is None or until > prior[0]:
+                kept[path] = (until, str(row.get("reason", "")))
+        return kept
+    except Exception:
+        return None
+
+
 def _norm(path: str | os.PathLike[str]) -> str:
     return os.path.normcase(os.path.abspath(path))
 
@@ -118,6 +164,12 @@ class _Context:
     _live: Optional[list[session_registry.RegistryRow]] = field(default=None, repr=False)
     _open_files: Optional[set[str]] = field(default=None, repr=False)
     _plan_cites: Optional[dict[str, str]] = field(default=None, repr=False)
+    _keep: Any = field(default=False, repr=False)
+
+    def keep_manifest(self, repo_root: Path) -> Optional[dict[str, tuple[date, str]]]:
+        if self._keep is False:
+            self._keep = _keep_manifest(repo_root)
+        return self._keep
 
     def plan_cites(self, repo_root: Path) -> dict[str, str]:
         if self._plan_cites is None:
@@ -356,6 +408,17 @@ def classify_entry(
         if cwd and (cwd == here or cwd.startswith(here + os.sep)):
             return rec("skipped-live", reason=f"live-session-cwd:{row.session_id}")
 
+    try:
+        rel = Path(here).relative_to(_norm(repo_root)).as_posix()
+    except ValueError:
+        rel = ""
+    manifest = ctx.keep_manifest(repo_root)
+    if manifest is None:
+        return rec("skipped-live", reason=f"keep-manifest-unreadable:{KEEP_MANIFEST_RELPATH}")
+    held_row = manifest.get(rel.lower()) if rel else None
+    if held_row is not None and datetime.fromtimestamp(now, timezone.utc).date() <= held_row[0]:
+        return rec("skipped-live", reason=f"kept-by-manifest:{KEEP_MANIFEST_RELPATH}:until-{held_row[0].isoformat()}:{held_row[1]}")
+
     no_record = open_run is not None and open_run[0] == "none"
     hours = max(quiescence_hours, OPEN_RUN_NO_RECORD_QUIESCENCE_HOURS) if no_record else quiescence_hours
     cutoff = now - hours * 3600.0
@@ -376,10 +439,6 @@ def classify_entry(
     if w.young:
         return rec("skipped-young", w, reason=f"written-within-{quiescence_hours:g}h")
 
-    try:
-        rel = Path(here).relative_to(_norm(repo_root)).as_posix()
-    except ValueError:
-        rel = ""
     if rel:
         citer = ctx.plan_cites(repo_root).get(rel.lower())
         if citer:

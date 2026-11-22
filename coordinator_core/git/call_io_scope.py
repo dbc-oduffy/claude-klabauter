@@ -67,7 +67,11 @@ def scope_open() -> bool:
     return _SCOPE.get() is not None
 
 
-def _read(path: str) -> Optional[bytes]:
+def _read(path: str, bounded: bool = False) -> Optional[bytes]:
+    if bounded:  # lazy: bounded_io pulls threading, which the cold-import ceiling excludes
+        from coordinator_core.bounded_io import read_bytes_bounded
+
+        return read_bytes_bounded(path)
     try:
         with open(path, "rb") as fh:
             return fh.read()
@@ -75,20 +79,22 @@ def _read(path: str) -> Optional[bytes]:
         return None
 
 
-def read_bytes(path) -> Optional[bytes]:
+def read_bytes(path, *, bounded: bool = False) -> Optional[bytes]:
     """Bytes of ``path``, or ``None`` when absent.
 
     Inside a scope the first read per path is cached (absence included); any other
     ``OSError`` propagates and is never cached. Outside a scope every call reads.
+    ``bounded=True`` reads through ``bounded_io.read_bytes_bounded`` (a worker thread per read:
+    for hot marker files only); its ``IoIndeterminate`` propagates and is never cached.
     """
     key = os.fspath(path)
     scope = _SCOPE.get()
     if scope is None:
-        return _read(key)
+        return _read(key, bounded)
     files = scope.files
     if key in files:
         return files[key]
-    data = _read(key)
+    data = _read(key, bounded)
     files[key] = data
     return data
 

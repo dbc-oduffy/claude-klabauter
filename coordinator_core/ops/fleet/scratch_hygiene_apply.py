@@ -7,6 +7,7 @@ immediately before deletion, so one that became young, live or linked since plan
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -17,6 +18,10 @@ from coordinator_core.ops.fleet.scratch_hygiene_records import purge_record
 from coordinator_core.temp_layout import FLEET_DIRNAME, coordinator_temp_root
 
 Recheck = Callable[[Path], Mapping[str, Any]]
+
+
+def _log_stderr(line: str) -> None:
+    print(line, file=sys.stderr, flush=True)
 
 
 def _unlink_link(path: Path) -> None:
@@ -105,8 +110,12 @@ def apply_purge(
     records: Iterable[Mapping[str, Any]],
     *,
     recheck: Recheck,
+    log: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Return one purge record per input purge record; ``would-delete`` entries become ``deleted``.
+
+    ``log(line)`` is called with the entry's path and bytes immediately before its deletion starts
+    (default: flushed to stderr), so a crash mid-delete still leaves the name on record.
 
     ``recheck(entry_path)`` returns the planner's current record for the entry; any action other than
     ``would-delete`` is reported as given and the entry is left in place. A refused path or a failed
@@ -146,6 +155,7 @@ def apply_purge(
             out.append(emit(action or "skipped-live", str(now.get("reason", ""))))
             continue
         try:
+            (log or _log_stderr)(f"scratch-hygiene: deleting {entry} bytes={sizes['bytes']}")
             remove_tree_no_follow(entry)
         except OSError as exc:
             out.append(emit("skipped-live", f"delete-failed:{exc.errno}"))

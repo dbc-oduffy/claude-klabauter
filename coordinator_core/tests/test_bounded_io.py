@@ -82,6 +82,56 @@ def test_stalled_key_drops_without_running_fn_then_recovers():
     assert bounded_io.run_bounded("k-rec", lambda: 5, deadline=2.0, default=-1) == 5
 
 
+@pytest.fixture()
+def _clean_open_paths():
+    bounded_io._open_paths.clear()
+    yield
+    bounded_io._open_paths.clear()
+
+
+def test_read_bytes_bounded_returns_bytes_and_none_when_absent(tmp_path, _clean_open_paths):
+    present = tmp_path / "a.json"
+    present.write_bytes(b"{}")
+    assert bounded_io.read_bytes_bounded(str(present)) == b"{}"
+    assert bounded_io.read_bytes_bounded(str(tmp_path / "missing.json")) is None
+    assert bounded_io.inflight_open_paths() == []
+
+
+def test_blocked_open_raises_indeterminate_and_names_the_path(monkeypatch, tmp_path, _clean_open_paths):
+    release = threading.Event()
+    target = str(tmp_path / "halted.json")
+
+    def blocked_open(path, mode="r"):
+        release.wait(10)
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(bounded_io, "open", blocked_open, raising=False)
+    try:
+        with pytest.raises(bounded_io.IoIndeterminate) as caught:
+            bounded_io.read_bytes_bounded(target, deadline=0.05)
+        assert not isinstance(caught.value, OSError)
+        assert caught.value.path == target
+        assert caught.value.waited_ms >= 40
+        open_now = bounded_io.inflight_open_paths()
+        assert [entry.path for entry in open_now] == [target]
+        assert open_now[0].age_ms >= 0
+        # the wedged key fast-drops a second read without another worker
+        with pytest.raises(bounded_io.IoIndeterminate):
+            bounded_io.read_bytes_bounded(target, deadline=0.05)
+        assert len([t for t in threading.enumerate() if t.name == f"bounded-io:read:{target}"]) == 1
+    finally:
+        release.set()
+        for t in [t for t in threading.enumerate() if t.name == f"bounded-io:read:{target}"]:
+            t.join(2.0)
+    assert bounded_io.inflight_open_paths() == []
+
+
+def test_inflight_open_paths_is_oldest_first(_clean_open_paths):
+    bounded_io._open_paths[1] = ("newer", 20.0)
+    bounded_io._open_paths[2] = ("older", 10.0)
+    assert [entry.path for entry in bounded_io.inflight_open_paths()] == ["older", "newer"]
+
+
 def test_other_keys_unaffected_by_a_stalled_key():
     release = threading.Event()
     bounded_io.run_bounded("k-a", lambda: release.wait(10), deadline=0.05, default=None)

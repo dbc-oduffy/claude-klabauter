@@ -708,6 +708,10 @@ def _hook_lane_budget_secs(method: Any) -> float:
     `_HOOK_LANE_BUDGET_SECS`."""
     return _SUBMIT_ASK_LANE_BUDGET_SECS if method == _SUBMIT_ASK_OP else _HOOK_LANE_BUDGET_SECS
 
+#: Extra seconds a hook-lane op on a slow-probing drive (io-wait) is held past `_HOOK_LANE_BUDGET_SECS`
+#: for its verdict; 4.0 + 3.0 stays inside the door's 8 s read deadline. Never applies to a healthy drive.
+_HOOK_LANE_IO_HOLD_SECS = 3.0
+
 #: A guard-lane reader waits this long for a request line before handing the connection to the shared queue,
 #: so a silent client cannot hold a lane thread.
 _GUARD_LANE_READ_WAIT_SECS = 0.25
@@ -1348,6 +1352,13 @@ def _enqueue_monotonic(stamp: Any) -> Optional[float]:
     return None
 
 
+def _connection_queue_wait_secs(stamp: Any) -> float:
+    """Seconds this connection sat between accept and its worker thread (0.0 with no usable stamp).
+    The caller's read deadline runs from its send, so this is spent budget. Never raises."""
+    enqueued = _enqueue_monotonic(stamp)
+    return 0.0 if enqueued is None else max(0.0, time.monotonic() - enqueued)
+
+
 def _declare_queue_wait(stamp: Any, method: Optional[str] = None) -> None:
     """Hand bind-minus-submit seconds to `land_deadline`; resets to 0 with no stamp so a prior
     task in this worker process never leaks its wait. Never raises.
@@ -1951,6 +1962,11 @@ _DRIVE_PROBE_SECS = 0.25
 #: Free bytes under which a drive is full for an op (a named ENOSPC, not a hang).
 _DRIVE_FULL_FREE_BYTES = 64 * 1024 * 1024
 
+#: Extra seconds a drive probe may run past `_DRIVE_PROBE_SECS` before an op already running on that
+#: drive is failed as stalled: that failure is indeterminate for a mutating op, so it waits for a
+#: probe that is hung, not merely slow under box load.
+_DRIVE_STARTED_STALL_AFTER_SECS = 3.0
+
 #: How long a healthy verdict is reused, so the admission check stays one probe per drive per second.
 _DRIVE_VERDICT_TTL_SECS = 1.0
 
@@ -1991,10 +2007,12 @@ def _probe_drive(root: str, box: dict) -> None:
         box["done"] = True
 
 
-def _drive_verdict(repo_root) -> Optional[dict]:
+def _drive_verdict(repo_root, stall_after: float = 0.0) -> Optional[dict]:
     """None when `repo_root`'s drive answers and has room; else `{case: drive_stall | enospc, drive,
     ...}`. Never blocks past `_DRIVE_PROBE_SECS`: the probe runs on its own thread, and a drive whose
-    probe is still unfinished is stalled at once without another thread. Never raises."""
+    probe is still unfinished is stalled at once without another thread. `stall_after` > 0 holds an
+    unfinished probe as slow (None) until it is that many seconds past `_DRIVE_PROBE_SECS` old: a
+    loaded drive answers in 0.4-1.4s, a stalled one never. Never raises."""
     try:
         if not repo_root:
             return None
@@ -2017,6 +2035,8 @@ def _drive_verdict(repo_root) -> Optional[dict]:
             thread.join(left)
         with _drive_lock:
             if not box["done"]:
+                if stall_after and time.monotonic() - started < _DRIVE_PROBE_SECS + stall_after:
+                    return None
                 return {"case": "drive_stall", "drive": key, "probe_secs": _DRIVE_PROBE_SECS}
             if _drive_probes.get(key, (None,))[0] is thread:
                 del _drive_probes[key]
@@ -2220,7 +2240,7 @@ def _await_pool_result(
             return result
         if left <= step:
             raise concurrent.futures.TimeoutError()
-        verdict = _drive_verdict(repo_root)
+        verdict = _drive_verdict(repo_root, _DRIVE_STARTED_STALL_AFTER_SECS)
         if verdict is not None:
             raise _DriveFault(verdict)
 
@@ -2403,7 +2423,7 @@ def _write_stall_record(
         final = stall_dir / f"{stamp}-{os.getpid()}-{key}.txt"
         tmp = final.with_name(final.name + ".tmp")
         tmp.write_text(
-            f"{_stall_class_line(stall_class)}{_ENGINE_STAMP_LINES}sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\nrepo-drive-probe-ms: {repo_probe}\n"
+            f"{_stall_class_line(stall_class)}{_ENGINE_STAMP_LINES}{_open_path_line()}sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\nrepo-drive-probe-ms: {repo_probe}\n"
             f"repo-drive-probe-root: {repo_root_source} {repo_root}\n{box_lines}"
             f"{_stall_timing_lines(op_ident, elapsed, cpu_delta)}--- threads ---\n{threads}",
             encoding="utf-8",
@@ -2462,6 +2482,21 @@ def _stall_class_line(stall_class: Optional[str]) -> str:
     return f"stall-class: {stall_class}\n" if stall_class else ""
 
 
+def _open_path_line() -> str:
+    """`open-path: <path> <age_ms>ms` for the oldest in-flight bounded read, `open-path: none`
+    when none. A lock-held dict copy: no I/O, no spawn. Never raises."""
+    try:
+        from coordinator_core import bounded_io
+
+        paths = bounded_io.inflight_open_paths()
+        if not paths:
+            return "open-path: none\n"
+        oldest = paths[0]
+        return f"open-path: {oldest.path} {int((time.monotonic() - oldest.t0) * 1000)}ms\n"
+    except Exception:  # noqa: BLE001
+        return "open-path: none\n"
+
+
 def _write_stall_stub(
     stall_dir,
     claim: Optional[Path],
@@ -2485,7 +2520,7 @@ def _write_stall_stub(
     tmp = final.with_name(final.name + ".tmp")
     tmp.write_text(
         f"{_stall_class_line(stall_class)}stub: full dump written by the episode's first stall\n{_ENGINE_STAMP_LINES}"
-        f"episode-full-dump: {episode or 'pending'}\nleg: {leg or ''}\n",
+        f"{_open_path_line()}episode-full-dump: {episode or 'pending'}\nleg: {leg or ''}\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -2614,6 +2649,7 @@ def _arm_accept_stall(
     phase: list,
     repo_root=None,
     engine_root=None,
+    capacity_wait: Optional[Callable[[], bool]] = None,
 ) -> Callable[[], None]:
     """Accept-process twin of `_arm_stall_dump`: a request still without a worker
     claim after `stall_secs` writes a record naming `phase[0]` (`gate`, `submit` or
@@ -2621,7 +2657,9 @@ def _arm_accept_stall(
 
     A request a worker has claimed is the worker's record, so a claimed one writes
     nothing here, but a claimed op still running `2 * stall_secs` runs the server's restart
-    decision over the worker records on disk. Never raises.
+    decision over the worker records on disk. `capacity_wait`, when given, answers whether
+    the request waits only for a free worker: while it holds, the holders' own records are
+    the evidence and this watcher re-arms instead of dumping. Never raises.
     """
     if stall_dir is None or stall_secs <= 0:
         return lambda: None
@@ -2630,9 +2668,18 @@ def _arm_accept_stall(
     t0 = time.monotonic()
     cpu0 = time.process_time()
 
+    def _capacity_only() -> bool:
+        try:
+            return capacity_wait is not None and bool(capacity_wait())
+        except Exception:  # noqa: BLE001 -- an unanswerable predicate keeps the dump
+            return False
+
     def _watch() -> None:
         if done.wait(stall_secs):
             return
+        while _capacity_only():
+            if done.wait(stall_secs):
+                return
         if phase[0] not in ("result", "gate"):
             _note_stall_in_memory(stall_dir)
         try:
@@ -2826,7 +2873,7 @@ _POOL_RESULT_DEADLINE_SECS = MUTATION_READ_DEADLINE_SECS
 _WITHDRAW_MARGIN_SECS = 2.0
 
 #: Seconds past its own result deadline that a dispatch may hold an `_AdmissionGate` slot before a
-#: waiter reclaims it, longer than any hold a timeout path takes.
+#: waiter reclaims it; above `_HOOK_LANE_IO_HOLD_SECS`, the longest hold any timeout path takes.
 _SLOT_LEASE_GRACE_SECS = 5.0
 
 
@@ -4453,6 +4500,7 @@ def _serve_line(
     record_invocation: Callable[[bool], None] = lambda warm: None,
     record_exit: Callable[..., None] = lambda reason, detail=None: None,
     record_served_repo: Callable[[Any], None] = lambda repo_root: None,
+    rearm_spool_drain: Callable[[Any], None] = lambda repo_root: None,
     engine_root: Optional[Path] = None,
     transport_stream: Any = None,
 ) -> None:
@@ -4535,6 +4583,8 @@ def _serve_line(
     `_pool_dispatch_worker` runs in a SEPARATE process and cannot write
     back into this server's own served-repo set. A request naming no
     worktree (a central/`none`-scoped op) records nothing.
+    `rearm_spool_drain` is called with the same repo once the response is written, so an ask the door
+    spooled while the request ran drains at once instead of on the repo's next request.
     """
     mark_invocation()
     released = False
@@ -4758,6 +4808,11 @@ def _serve_line(
         response = skew.build_skew_response(request_id, server_sha, client_token)
     record_invocation(True)
     _write_and_release(response)
+    if origin_repo is not None:
+        try:
+            rearm_spool_drain(origin_repo)
+        except Exception:  # noqa: BLE001 -- see above
+            pass
 
 
 def _swap_window_open(engine_root: Path) -> bool:
@@ -4784,6 +4839,7 @@ def _handle_connection(
     record_invocation: Callable[[bool], None] = lambda warm: None,
     record_exit: Callable[..., None] = lambda reason, detail=None: None,
     record_served_repo: Callable[[Any], None] = lambda repo_root: None,
+    rearm_spool_drain: Callable[[Any], None] = lambda repo_root: None,
     already_entered: bool = False,
     engine_root: Optional[Path] = None,
 ) -> None:
@@ -4880,6 +4936,7 @@ def _handle_connection(
             record_invocation=record_invocation,
             record_exit=record_exit,
             record_served_repo=record_served_repo,
+            rearm_spool_drain=rearm_spool_drain,
             engine_root=engine_root,
             transport_stream=io,
         )
@@ -5145,6 +5202,7 @@ class _DrainTrigger:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._last_start: "dict[str, float]" = {}
+        self._last_end: "dict[str, float]" = {}
         self._running: "set[str]" = set()
 
     @staticmethod
@@ -5165,12 +5223,17 @@ class _DrainTrigger:
             return 0.0
         return newest
 
-    def maybe_drain(self, repo_root: Any) -> None:
+    def maybe_drain(self, repo_root: Any, *, spooled_after_last_drain: bool = False) -> None:
+        """Start a drain when one is due. `spooled_after_last_drain` (a request's completion) compares against when the
+        last drain ended, so an entry a drain failed and rewrote never re-arms it; a request's start compares against
+        when it began, retrying such entries."""
         key = str(repo_root)
         with self._lock:
             if key in self._running:
                 return
-            last = self._last_start.get(key)
+            last = self._last_end.get(key) if spooled_after_last_drain else self._last_start.get(key)
+            if last is None and spooled_after_last_drain:
+                return
             if last is not None and self._newest_pending(repo_root) <= last:
                 return
             self._running.add(key)
@@ -5183,6 +5246,7 @@ class _DrainTrigger:
         finally:
             with self._lock:
                 self._running.discard(key)
+                self._last_end[key] = time.time()
 
 
 class _ServerContext:
@@ -5287,6 +5351,10 @@ class _ServerContext:
         if first:
             self._sweep_dead_owner_ref_locks(key)
         self._drain_trigger.maybe_drain(Path(repo_root))
+
+    def rearm_spool_drain(self, repo_root: Any) -> None:
+        """Called once a request's response is written: drains an ask spooled while that request was in flight."""
+        self._drain_trigger.maybe_drain(Path(repo_root), spooled_after_last_drain=True)
 
     @staticmethod
     def _sweep_dead_owner_ref_locks(repo_root: Path) -> None:
@@ -5547,6 +5615,47 @@ class _ServerContext:
         a saturation holder nor a recycle victim of the live pool. A future with no recorded pool is live."""
         home = self.__dict__.get("_task_pools", {}).get(future)
         return home is None or home is self.__dict__.get("_dispatch_pool")
+
+    def _waits_only_on_capacity(self, phase: str, future: Any, pool: Any, guard: bool) -> bool:
+        """True when a request without a worker claim waits only for a free slot: parked at the
+        admission gate, or submitted while every worker of its pool holds another task. In memory;
+        the holders' stall records are the evidence, so the accept watcher stays quiet."""
+        if phase == "gate":
+            return True
+        if phase != "result" or future is None:
+            return False
+        guard_futs = self.__dict__.get("_guard_futs", ())
+        others = sum(
+            1
+            for task in list(self.__dict__.get("_pool_tasks", {}))
+            if task is not future and (task in guard_futs) == guard and _ServerContext._on_live_pool(self, task)
+        )
+        workers = getattr(pool, "_max_workers", None) or (_guard_pool_workers() if guard else _dispatch_pool_size())
+        return others >= workers
+
+    def _hold_hook_for_io_wait(self, future: "concurrent.futures.Future", msg: dict, eff: Any) -> Optional[dict]:
+        """A hook-lane op that outran `_HOOK_LANE_BUDGET_SECS` while its repo drive probes slow is
+        io-wait, not wedged: wait up to `_HOOK_LANE_IO_HOLD_SECS` more for its own verdict. Returns the
+        result, or None (not hook-lane, drive healthy, or still running) so the caller cuts as before.
+        A hook op blocked with a healthy drive is never held. Never raises."""
+        try:
+            if not (isinstance(eff, str) and eff.startswith(_HOOK_LANE_PREFIXES)):
+                return None
+            root = _op_repo_root(msg)
+            if root is None:
+                return None
+            cache = self.__dict__.get("_holder_probe_cache")
+            if cache is None:
+                cache = self.__dict__.setdefault("_holder_probe_cache", _HolderProbeCache())
+            if not _is_io_wait(cache.probe_ms(root), _HOOK_LANE_BUDGET_SECS):
+                return None
+            out = future.result(timeout=_HOOK_LANE_IO_HOLD_SECS)
+            _first_pool_answer.set()
+            return out
+        except concurrent.futures.TimeoutError:
+            return None
+        except Exception:  # noqa: BLE001 -- a failed hold falls back to the cut
+            return None
 
     def _holder_waits_on_spawn_or_io(self, key: Optional[str]) -> bool:
         """True when the claim `key` names has a `.leg` in child spawn or a `_DRIVE_IO_LEGS` leg. Read
@@ -5930,6 +6039,16 @@ class _ServerContext:
             _deadline = _withdrawal_deadline_secs(_method, msg)
             if _guard_class and isinstance(_eff, str) and _eff.startswith(_HOOK_LANE_PREFIXES):
                 _deadline = min(_deadline, _hook_lane_budget_secs(_eff))
+            _queued_secs = _connection_queue_wait_secs(getattr(_REQUEST_STAMP, "value", None))
+            _deadline = max(0.0, _deadline - _queued_secs)
+            if _queued_secs > 0.0 and _deadline <= 0.0:
+                # The caller's whole budget went on the connection queue: a determinate busy
+                # reply now, never a fresh budget that ends after the caller gave up (-32004).
+                if dispatch_key is not None:
+                    _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
+                return _pool_not_started_envelope(
+                    msg, {"pool_size": _dispatch_pool_size(), "outstanding": self._pool_outstanding()}
+                )
             _arm_secs = _stall_arm_secs(_deadline)
             _disarm_accept = _arm_accept_stall(
                 getattr(self, "_stall_dir", None),
@@ -5939,6 +6058,7 @@ class _ServerContext:
                 _phase,
                 _op_repo_root(msg),
                 getattr(self, "engine_root", None),
+                capacity_wait=lambda: self._waits_only_on_capacity(_phase[0], future, pool, _guard_class),
             )
             gate = self._guard_gate() if _guard_class else self._admission_gate()
             _resolved = _eff
@@ -6041,6 +6161,11 @@ class _ServerContext:
                     _drive_fault_envelope(msg, fault.verdict, started=not withdrawn), dispatch_key
                 )
             except concurrent.futures.TimeoutError:
+                if _guard_class:
+                    _held = self._hold_hook_for_io_wait(future, msg, _eff)
+                    if _held is not None:
+                        _release_slot()
+                        return _held
                 # The caller's budget is spent: the slot frees before any filesystem step below, so
                 # a blocked claim create or kill write never holds it.
                 _release_slot()
@@ -6844,6 +6969,7 @@ class _ServerContext:
                 record_invocation=self.record_invocation,
                 record_exit=self.record_exit,
                 record_served_repo=self.record_served_repo,
+                rearm_spool_drain=self.rearm_spool_drain,
                 already_entered=True,
                 engine_root=self.engine_root,
             )

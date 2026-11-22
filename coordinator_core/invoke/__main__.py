@@ -250,6 +250,49 @@ def _settle_indeterminate_write(msg: dict, response: dict, poll_dispatch) -> Opt
     return response
 
 
+def _retry_indeterminate_read(msg: dict, response: dict, try_warm_dispatch) -> Optional[dict]:
+    """Settle a -32004 on a COMPUTE_ONLY op: one `warm.request_status` poll when keyed
+    (a finished result is the reply), else ONE re-dispatch of the same frame whose
+    reply is returned whatever it is. Never loops; any other op or code is returned unchanged."""
+    try:
+        error = response.get("error") if isinstance(response, dict) else None
+        if not isinstance(error, dict) or error.get("code") != -32004 or not _op_is_compute_only(msg):
+            return response
+        data = error.get("data")
+        key = data.get("dispatch_key") if isinstance(data, dict) else None
+        if isinstance(key, str) and key and data.get("reconcile") == "warm.request_status":
+            params: dict = {"key": key}
+            engine = {
+                name: data[field]
+                for name, field in (("pid", "engine_pid"), ("boot_ns", "engine_boot_ns"))
+                if isinstance(data.get(field), int) and not isinstance(data.get(field), bool)
+            }
+            if engine:
+                params["expect_engine"] = engine
+            try:
+                poll = try_warm_dispatch(
+                    {"jsonrpc": "2.0", "id": 2, "method": "warm.request_status", "params": params}
+                )
+            except Exception:  # noqa: BLE001 -- a failed poll falls through to the one re-dispatch
+                poll = None
+            status = poll.get("result") if isinstance(poll, dict) else None
+            if (
+                isinstance(status, dict)
+                and status.get("state") == "finished"
+                and status.get("outcome") == "result"
+                and "result" in status
+            ):
+                return {"jsonrpc": "2.0", "id": msg.get("id"), "result": status["result"]}
+        print(
+            f"[warm-client] {msg.get('method')} indeterminate (-32004); re-dispatching the read once.",
+            file=sys.stderr,
+        )
+        retried = try_warm_dispatch(msg)
+        return retried if isinstance(retried, dict) else response
+    except Exception:  # noqa: BLE001 -- a failed retry leaves the original -32004 reply
+        return response
+
+
 def _poll_status_or_response(msg: dict, response: Optional[dict]) -> Optional[dict]:
     """A `warm.request_status` poll for a well-formed key never leaves this CLI as an error envelope:
     an error reply (any transport or timeout code) becomes an `unknowable` status naming the error.
@@ -1441,6 +1484,8 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                 # once: completed -> that result is the reply; proven never-ran
                 # -> `response` is cleared so step 7 re-drives it cold exactly once.
                 response = _settle_indeterminate_write(msg, response, try_warm_dispatch)
+                if response is not None:
+                    response = _retry_indeterminate_read(msg, response, try_warm_dispatch)
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout
