@@ -9,9 +9,14 @@ The commit, the ref CAS and the 3-way sync of each landed path into the worktree
 adds no commit-tree or update-ref of its own. A keyed dispatch also gets the durable land record ``land_run``
 writes, advanced ``committing`` then ``committed``.
 
+Before any commit the op refuses, with nothing moved, ``raw_kept_blob`` (a path whose worktree bytes are a halted
+run's raw ``kept.json`` image while its ``withheld-own-delta.json`` holds a different own-delta blob) and
+``uncommitted_import`` (a landing ``.py`` importing a ``coordinator_core`` name that resolves only uncommitted).
+
 Reply: ``{ok, sha, rebased, sync_refused}``; a non-empty ``sync_refused`` adds ``sync_incomplete: true`` and
 ``worktree_sync_refused`` (the landing stands, those paths stay byte-intact); ``ownerless`` names landed paths no run
-manifest declares (advisory); ``stranded`` names ``[{path, kind, reason, run_id}]``, the recorded sibling paths of a
+manifest declares (advisory); ``gate_unverified`` names a pre-commit gate that could not run and so allowed
+(advisory); ``stranded`` names ``[{path, kind, reason, run_id}]``, the recorded sibling paths of a
 halted run (``touched-blobs.json``) the landing leaves behind (advisory: the landing stands). Refusal:
 ``{ok: false, error, refused}``.
 """
@@ -67,6 +72,128 @@ def _stranded_siblings(root: Path, paths: list) -> list:
         return []
 
 
+def _raw_kept_blobs(root: Path, paths: list) -> list:
+    """`[{path, run_id, blob}]` for each landing path whose worktree bytes are a halted run's raw ``kept.json``
+    image (peer dirt included) while the run's record holds an own-delta blob (or names the path unlandable) that
+    differs from it. One stat per recent run dir; only a dir holding ``withheld-own-delta.json`` is read. ``None``
+    when the gate could not run."""
+    try:
+        import json
+
+        from coordinator_core.git.commit import _checkin_bytes
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.git.git_objects import read_object
+        from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
+        from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
+        from coordinator_core.session import record_homes
+
+        landing = {p.replace("\\", "/").removeprefix("./") for p in paths}
+        warp = Path(record_homes.home_dir(str(root), "warp"))
+        common = resolve_git_common_dir(root)
+        found: list = []
+        for run_id, rec_dir in stranded_sibling.recent_run_dirs(warp):
+            own_file = rec_dir / WITHHELD_OWN_DELTA_FILE
+            if not own_file.is_file():
+                continue
+            raw_by_path = kept_work.kept_fingerprints(rec_dir)
+            hits = landing.intersection(raw_by_path)
+            if not hits:
+                continue
+            own = json.loads(own_file.read_text(encoding="utf-8"))
+            deltas = own.get("paths") or {}
+            unlandable = set(own.get("unlandable") or ())
+            for p in sorted(hits):
+                if kept_work.fingerprint(root, p) not in raw_by_path[p]:
+                    continue
+                blob = (deltas.get(p) or {}).get("blob")
+                if blob is None and p not in unlandable:
+                    continue
+                if blob is not None:
+                    got = read_object(common, blob)
+                    worktree = (root / p).read_bytes()
+                    if got is not None and got[1] == _checkin_bytes(root, p, worktree):
+                        continue
+                found.append({"path": p, "run_id": run_id, "blob": blob})
+        return found
+    except Exception:  # noqa: BLE001 -- an unreadable record is no claim, never a refusal; the caller says so
+        return None
+
+
+def _uncommitted_only_imports(root: Path, paths: list) -> list:
+    """`['<path>: imports <name>', ...]` for each module-level ``coordinator_core.*`` import (unguarded,
+    ``percolate.guards`` scope) in a landing ``.py`` path that resolves in the worktree but not in HEAD plus the
+    landing paths: the publish's from-import resolution check on the resulting tree, zero spawns. ``None`` when the
+    gate could not run."""
+    try:
+        import ast
+        import tempfile
+
+        from coordinator_core.authoring_leaks import HeadView
+        from coordinator_core.percolate.guards import (
+            _COORDINATOR_CORE_IMPORT_PREFIX,
+            _absent_from_import_names,
+            _import_target_present,
+            _module_level_import_targets,
+        )
+
+        landing = sorted({p.replace("\\", "/").removeprefix("./") for p in paths})
+        imports: list = []
+        for p in landing:
+            if not p.endswith(".py"):
+                continue
+            try:
+                tree = ast.parse((root / p).read_bytes().decode("utf-8"))
+            except (OSError, UnicodeDecodeError, SyntaxError):
+                continue
+            surface = "tests" in Path(p).parts or Path(p).name == "conftest.py"
+            for stmt, guarded in _module_level_import_targets(tree, test_surface=surface):
+                if guarded or (isinstance(stmt, ast.ImportFrom) and stmt.level):
+                    continue
+                mods = [stmt.module] if isinstance(stmt, ast.ImportFrom) else [a.name for a in stmt.names]
+                imports.extend((p, stmt, m) for m in mods if m and m.startswith(_COORDINATOR_CORE_IMPORT_PREFIX))
+        if not imports:
+            return []
+
+        candidates: set = set()
+        for _p, stmt, mod in imports:
+            base = mod.replace(".", "/")
+            candidates.update((f"{base}.py", f"{base}/__init__.py"))
+            if isinstance(stmt, ast.ImportFrom):
+                for alias in stmt.names:
+                    candidates.update((f"{base}/{alias.name}.py", f"{base}/{alias.name}/__init__.py"))
+        head = HeadView(root, candidates)
+        refused: list = []
+        with tempfile.TemporaryDirectory(prefix="hand-land-tree-") as tmp:
+            result = Path(tmp)
+            for rel in sorted(candidates | set(landing)):
+                if rel in landing and (root / rel).is_file():
+                    data = (root / rel).read_bytes()
+                elif head.in_head(rel):
+                    data = head.head_bytes(rel) or b""
+                else:
+                    continue
+                (result / rel).parent.mkdir(parents=True, exist_ok=True)
+                (result / rel).write_bytes(data)
+            for _p, _stmt, mod in imports:
+                parts = mod.split(".")
+                if head.dir_entries("/".join(parts)):
+                    result.joinpath(*parts).mkdir(parents=True, exist_ok=True)
+            exports_result: dict = {}
+            exports_worktree: dict = {}
+            for p, stmt, mod in imports:
+                if not _import_target_present(mod, result):
+                    if _import_target_present(mod, root):
+                        refused.append(f"{p}: imports {mod!r}, which exists only uncommitted")
+                    continue
+                if isinstance(stmt, ast.ImportFrom):
+                    missing = set(_absent_from_import_names(stmt, mod, result, exports_result))
+                    present = missing - set(_absent_from_import_names(stmt, mod, root, exports_worktree))
+                    refused.extend(f"{p}: imports {mod + '.' + n!r}, which exists only uncommitted" for n in sorted(present))
+        return sorted(set(refused))
+    except Exception:  # noqa: BLE001 -- an unreadable tree is no claim, never a refusal; the caller says so
+        return None
+
+
 def hand_land(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Land ``params['paths']`` with ``params['message']`` on HEAD; see the module docstring for the reply."""
     from coordinator_core.git import git_state
@@ -90,6 +217,29 @@ def hand_land(params: dict, repo_root: Optional[Path] = None) -> dict:
     head = git_state.head_sha(root, fresh=True)
     if expect is not None and not (head or "").startswith(expect.lower()):
         return _refuse(f"HEAD is {head}, expected {expect}: nothing moved", "stale_head")
+
+    gate_unverified: list = []
+    raw = _raw_kept_blobs(root, paths)
+    if raw is None:
+        gate_unverified.append("raw_kept_blob")
+    elif raw:
+        named = "; ".join(
+            f"{r['path']} (run {r['run_id']}: " + (f"own-delta blob {r['blob']}" if r["blob"] else "unlandable, no own-delta") + ")"
+            for r in raw
+        )
+        return _refuse(
+            f"worktree bytes are a halted run's raw kept image, peer hunks included: {named}; "
+            "write the recorded own-delta blob to the path and hand land again; nothing moved",
+            "raw_kept_blob",
+        )
+    uncommitted = _uncommitted_only_imports(root, paths)
+    if uncommitted is None:
+        gate_unverified.append("uncommitted_import")
+    elif uncommitted:
+        return _refuse(
+            "landing imports names that exist only uncommitted: " + "; ".join(uncommitted) + "; nothing moved",
+            "uncommitted_import",
+        )
 
     stranded = [
         {"path": h["path"], "kind": h["kind"], "reason": h["reason"], "run_id": h["run"]}
@@ -120,6 +270,7 @@ def hand_land(params: dict, repo_root: Optional[Path] = None) -> dict:
         "sync_refused": list(outcome.sync_refused),
         **({"stranded": stranded} if stranded else {}),
         **({"ownerless": ownerless} if ownerless else {}),
+        **({"gate_unverified": gate_unverified} if gate_unverified else {}),
         **sync_report(outcome),
     }
 

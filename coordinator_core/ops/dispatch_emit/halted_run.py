@@ -16,6 +16,7 @@ either rewrites it.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import os
@@ -86,12 +87,31 @@ def _norm(sizing_rel: str) -> str:
     return PurePosixPath(sizing_rel.replace("\\", "/")).as_posix()
 
 
+#: Bounded marker reads are opt-in, for an op that turns `IoIndeterminate` into its own reply
+#: (`dispatch.ask_stage`). Every other op reads unbounded: those ops scan many runs' markers, and one
+#: foreign marker stalled past the bound would fail the whole op (land_run and review prep failed -32603
+#: on unrelated runs' halted.json, 59a3f5 and 250289, 2026-11-22).
+_BOUNDED_MARKER_READS: "contextvars.ContextVar[bool]" = contextvars.ContextVar("halted_marker_reads_bounded", default=False)
+
+
+class bounded_marker_reads:
+    """Within this block, `halted.json` reads are bounded and raise `IoIndeterminate` on a stall."""
+
+    __slots__ = ("_token",)
+
+    def __enter__(self) -> None:
+        self._token = _BOUNDED_MARKER_READS.set(True)
+
+    def __exit__(self, *exc_info: object) -> None:
+        _BOUNDED_MARKER_READS.reset(self._token)
+
+
 def _marker_text(record_dir: Path) -> str:
     """`halted.json` text, read through the open `call_io_scope` (one read per path per scope);
-    FileNotFoundError when absent; `IoIndeterminate` (never an OSError) when the read stalls past the
-    bound, so `_read` and `read_strict` propagate it rather than map it to absence. `_write` drops the
-    cached read."""
-    raw = call_io_scope.read_bytes(Path(record_dir) / HALTED_FILE, bounded=True)
+    FileNotFoundError when absent. Inside `bounded_marker_reads`, `IoIndeterminate` (never an OSError)
+    when the read stalls past the bound, so `_read` and `read_strict` propagate it rather than map it to
+    absence. `_write` drops the cached read."""
+    raw = call_io_scope.read_bytes(Path(record_dir) / HALTED_FILE, bounded=_BOUNDED_MARKER_READS.get())
     if raw is None:
         raise FileNotFoundError(HALTED_FILE)
     return raw.decode("utf-8")

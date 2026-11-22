@@ -3110,7 +3110,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     t0 = time.thread_time()
     try:
         try:
-            return _run_ask_stage(params, repo_root)
+            with halted_run.bounded_marker_reads():
+                return _run_ask_stage(params, repo_root)
         except IoIndeterminate as exc:
             return indeterminate_reply(exc)
     finally:
