@@ -694,6 +694,20 @@ _GUARD_LANE_THREADS = 4
 #: failed every guard open box-wide (2026-11-19 05:08Z) and was rolled back.
 _HOOK_LANE_BUDGET_SECS = 4.0
 
+#: `hooks.submit_engine_ask` is the one hook-lane op whose own answer deadline sits past the wedge
+#: cut: it bounds itself to 0.85 of the door's 8 s submit read deadline (`submit_engine_ask._ANSWER_SHARE`
+#: x `_DOOR_HOOK_READ_DEADLINE_S` = 6.8 s) and answers with the run it minted. TRAP: held to the 4 s cut,
+#: every submit slower than 4 s got the not-answered error, the door spooled it, and the run it had
+#: already minted was withdrawn and never fired (3.8.7, 2026-11-22). Must stay under the door's 8 s.
+_SUBMIT_ASK_LANE_BUDGET_SECS = 7.5
+_SUBMIT_ASK_OP = "hooks.submit_engine_ask"
+
+
+def _hook_lane_budget_secs(method: Any) -> float:
+    """The hook-lane wall-clock cut for `method`: `_SUBMIT_ASK_LANE_BUDGET_SECS` for the submit op, else
+    `_HOOK_LANE_BUDGET_SECS`."""
+    return _SUBMIT_ASK_LANE_BUDGET_SECS if method == _SUBMIT_ASK_OP else _HOOK_LANE_BUDGET_SECS
+
 #: A guard-lane reader waits this long for a request line before handing the connection to the shared queue,
 #: so a silent client cannot hold a lane thread.
 _GUARD_LANE_READ_WAIT_SECS = 0.25
@@ -1588,7 +1602,7 @@ def _bind_hook_lane_budget(msg: Any, stamp: Optional[float]) -> None:
         if isinstance(method, str) and method.startswith(_HOOK_LANE_PREFIXES):
             # `stamp` is the accept process's time.monotonic(); the OS monotonic clock is shared across processes.
             start = stamp if isinstance(stamp, (int, float)) else time.monotonic()
-            _preuse_phases.bind_pool_budget(start + _HOOK_LANE_BUDGET_SECS - _HOOK_CHAIN_MARGIN_SECS)
+            _preuse_phases.bind_pool_budget(start + _hook_lane_budget_secs(method) - _HOOK_CHAIN_MARGIN_SECS)
         else:
             _preuse_phases.bind_pool_budget(None)
     except Exception:  # noqa: BLE001 -- a budget bind never fails an op
@@ -5900,7 +5914,7 @@ class _ServerContext:
             _method = msg.get("method")
             _deadline = _withdrawal_deadline_secs(_method, msg)
             if _guard_class and isinstance(_eff, str) and _eff.startswith(_HOOK_LANE_PREFIXES):
-                _deadline = min(_deadline, _HOOK_LANE_BUDGET_SECS)
+                _deadline = min(_deadline, _hook_lane_budget_secs(_eff))
             _arm_secs = _stall_arm_secs(_deadline)
             _disarm_accept = _arm_accept_stall(
                 getattr(self, "_stall_dir", None),
