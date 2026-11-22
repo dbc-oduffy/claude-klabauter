@@ -1163,6 +1163,32 @@ def _read_git_config_text(root: Path) -> str:
 
 _REMOTE_NAME_RE = re.compile(r'(?im)^[ \t]*\[remote[ \t]+"([^"\\]+)"\][ \t]*$')
 
+#: The reserved-TLD host a clone's `remote.<r>.pushurl` is parked on to mean "never publish".
+BLOCKED_PUSH_HOST = "blocked.invalid"
+_PUSHURL_KEY_RE = re.compile(r"(?im)^[ \t]*pushurl[ \t]*=[ \t]*(.*?)[ \t]*$")
+_REMOTE_SECTION_RE = re.compile(r'(?ims)^[ \t]*\[remote[ \t]+"[^"\\]+"\][ \t]*$(.*?)(?=^[ \t]*\[|\Z)')
+
+
+def _url_host(url: str) -> str:
+    """Lowercased host of a git URL (`scheme://[user@]host[:port]/p`, scp-like `[user@]host:p`, or bare `host`)."""
+    value = re.split(r"[ \t][#;]", url, maxsplit=1)[0].strip().strip('"')
+    if "://" in value:
+        value = value.split("://", 1)[1]
+    value = value.split("/", 1)[0].rsplit("@", 1)[-1]
+    if not value.startswith("["):
+        value = value.split(":", 1)[0]
+    return value.lower()
+
+
+def config_text_blocks_push(config_text: str) -> bool:
+    """True when any `[remote "<r>"]` section's `pushurl` points at `BLOCKED_PUSH_HOST`. Pure text scan."""
+    for section in _REMOTE_SECTION_RE.finditer(config_text):
+        for match in _PUSHURL_KEY_RE.finditer(section.group(1)):
+            host = _url_host(match.group(1))
+            if host == BLOCKED_PUSH_HOST or host.endswith("." + BLOCKED_PUSH_HOST):
+                return True
+    return False
+
 #: git's own refusal when a bare `git push` runs on a branch carrying no
 #: `branch.<name>.remote`/`.merge` configuration. NARROW ON PURPOSE -- this
 #: predicate authorises a publish, so it must match the ONE failure a publish
@@ -1585,6 +1611,9 @@ def push_with_retry(
 
     if _default_remote_name_local(root) is None:
         return PushOutcome(exit_code=0, skipped=["push:no-remote"])
+
+    if config_text_blocks_push(_read_git_config_text(root)):
+        return PushOutcome(exit_code=0, skipped=["push:blocked-pushurl"])
 
     branch = resolve_branch(str(root))
     if branch is None:
