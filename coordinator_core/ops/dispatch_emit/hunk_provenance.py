@@ -229,6 +229,9 @@ class RunInvariants:
 
 
 _ACTIVE: ContextVar[Optional[RunInvariants]] = ContextVar("hunk_provenance_invariants", default=None)
+# `_peer_split`'s batch: `paths` it classifies; `holds` / `halted` the one lazy `co_declared_peer_holds` /
+# `foreign_halted_withheld` answer over all of them (each rebuilds the unlanded-run list per call).
+_OWNER_BATCH: ContextVar[Optional[dict]] = ContextVar("hunk_provenance_owner_batch", default=None)
 
 
 def run_invariants(root: Path, run_id: str) -> RunInvariants:
@@ -348,7 +351,14 @@ def _halted_holder(root: Path, run_id: str, own_plan: Optional[str], path: str) 
     try:
         from coordinator_core.ops.dispatch_emit import land_run
 
-        holder = land_run.foreign_halted_withheld(root, run_id, own_plan, [path]).get(path)
+        batch = _OWNER_BATCH.get()
+        if batch is not None and path in batch["paths"]:
+            if batch["halted"] is None:
+                batch["halted"] = {}  # a failed scan stays answered: one failure, not one per path
+                batch["halted"] = land_run.foreign_halted_withheld(root, run_id, own_plan, sorted(batch["paths"]))
+            holder = batch["halted"].get(path)
+        else:
+            holder = land_run.foreign_halted_withheld(root, run_id, own_plan, [path]).get(path)
         return None if holder in (None, land_run.UNREADABLE_HALT_RECORD) else str(holder)
     except Exception:  # noqa: BLE001 -- an unreadable hold is no named holder
         return None
@@ -469,7 +479,9 @@ def peer_split(
     be split, naming the probable owner run. A path with no peer evidence appears in neither, nor does a
     declared path the run never rewrote (`untouched_declared`); a list passed as `untouched` receives those
     paths. Zero spawn; never raises."""
-    with invariants_scope(root, run_id):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    with invariants_scope(root, run_id), halted_hold_release.release_scope():  # one scope: the owner scan and the halted-holder scan share each run's records
         return _peer_split(Path(root), run_id, paths, own_plan, untouched)
 
 
@@ -527,6 +539,25 @@ def _peer_split(
 ) -> tuple:
     split: dict = {}
     unsettled: dict = {}
+    batch = sorted({p for p in (str(raw or "").replace("\\", "/") for raw in paths) if p})
+    try:
+        from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+        landing_halted_view.hint_index(root, batch)
+    except Exception:  # noqa: BLE001 -- the hint only saves index walks
+        pass
+    token = _OWNER_BATCH.set({"paths": frozenset(batch), "holds": None, "halted": None})
+    try:
+        _peer_split_paths(root, run_id, paths, own_plan, untouched, split, unsettled)
+    finally:
+        _OWNER_BATCH.reset(token)
+    return split, unsettled
+
+
+def _peer_split_paths(
+    root: Path, run_id: str, paths: Sequence[str], own_plan: Optional[str], untouched: Optional[list],
+    split: dict, unsettled: dict,
+) -> None:
     for raw in paths:
         path = str(raw or "").replace("\\", "/")
         if not path:
@@ -564,7 +595,6 @@ def _peer_split(
             split[path] = {"blob": blob, "owner": owner, "lines": lines}
         else:
             unsettled[path] = {"owner": owner, "lines": lines}
-    return split, unsettled
 
 
 def _own_chain(root: Path, run_id: str, owner: str) -> bool:
@@ -600,6 +630,17 @@ def _owners(root: Path, run_id: str, path: str, own_plan: Optional[str]) -> list
     try:
         from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 
+        batch = _OWNER_BATCH.get()
+        if batch is not None and path in batch["paths"]:
+            if batch["holds"] is None:
+                grouped: dict = {}
+                everything = sorted(batch["paths"])
+                batch["holds"] = grouped  # a failed scan stays answered: one failure, not one per path
+                for held_path, holder in peer_hunk_gate.co_declared_peer_holds(
+                    root, run_id, everything, everything, own_plan=own_plan,
+                ):
+                    grouped.setdefault(held_path, []).append(str(holder))
+            return list(batch["holds"].get(path, []))
         holds = peer_hunk_gate.co_declared_peer_holds(root, run_id, [path], [path], own_plan=own_plan)
         return [str(holder) for _p, holder in holds]
     except Exception:  # noqa: BLE001

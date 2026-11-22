@@ -111,7 +111,7 @@ def test_unknown_route_and_prices_never_render_confident_zero(tmp_path, monkeypa
     assert registered_alias(ROOT) == "actual-route"
     assert registered_alias(CHILD) is None
     text = render(summary(empty(ROOT)))
-    assert text.split(" · ")[0] == "unknown" and text.endswith("unknown") and "0.00" not in text
+    assert text.split(" · ")[:2] == ["unregistered", "model not yet observed"] and text.endswith("unknown") and "0.00" not in text
     assert "route?" not in text and "context?" not in text and "~$?" not in text
     assert render({"remaining_percent": 80, "alias": "a"}).count("unknown") >= 2 and "ctx" not in render({"remaining_percent": 80})
     assert "ctx" in render({"before_compact_percent": 40})
@@ -244,7 +244,7 @@ def test_snapshot_derives_before_compact_from_configured_auto_compact_limit(tmp_
     value = _snapshot_with_config(tmp_path, monkeypatch, "model_auto_compact_token_limit = 380000\n")
     assert value["before_compact_percent"] == pytest.approx(value["remaining_percent"] - 20)
     assert "380000" in value["context_basis"]
-    assert "80% ctx" in value["text"] and "unknown ·" in value["text"]  # alias is unregistered here, so the first slot alone is unknown
+    assert "80% ctx" in value["text"] and value["text"].startswith("unregistered ·")  # no alias is registered here, so the first slot is the label
 
 
 @pytest.mark.parametrize("config", [None, "model = 'x'\n", "model_auto_compact_token_limit = 0\n",
@@ -252,4 +252,4 @@ def test_snapshot_derives_before_compact_from_configured_auto_compact_limit(tmp_
 def test_snapshot_without_a_usable_limit_renders_context_unknown(tmp_path, monkeypatch, config):
     value = _snapshot_with_config(tmp_path, monkeypatch, config)
     assert "before_compact_percent" not in value and "configured" not in value["context_basis"]
-    assert "ctx" not in value["text"] and value["text"].count("unknown") == 2
+    assert "ctx" not in value["text"] and value["text"].count("unknown") == 1 and value["text"].startswith("unregistered ·")

@@ -7,6 +7,8 @@ are omitted when empty. Per-run files make a write or `remove_run` one atomic re
 concurrent peer sessions never lose each other's update. Not DoE's `state/withheld-paths` PM-hold
 records. `entries` is the one reader: every run's entry from a single directory listing, running
 `rebuild` once under the `.built-v2` sentinel so runs recorded before the fields existed enter it.
+`<repo>/.coordinator-local/halt-withheld-cache.json` persists every parsed entry with the `(mtime_ns, size)` it
+was parsed under, so a cold process reads one file and re-parses only the run files whose stat moved.
 Stdlib plus the atomic writer; no subprocess, no git.
 """
 
@@ -100,7 +102,74 @@ def _parse_stat_keyed(file, key: str, st) -> Optional[RunEntry]:
         return hit[2]
     entry = _parse_file(file)
     _STAT_CACHE[key] = (*sig, entry)
+    _PARSE_MISSES[0] += 1
     return entry
+
+
+_CACHE_FILE = ".coordinator-local/halt-withheld-cache.json"
+_PARSE_MISSES = [0]  # entries parsed from disk by this process; `entries` persists the cache when it moves
+_LOADED: dict = {}  # repo root -> {index file name: [[mtime_ns, size], packed entry]}
+
+
+def _cache_path(repo_root) -> str:
+    return os.path.join(os.fspath(repo_root), _CACHE_FILE)
+
+
+def _persisted(repo: str) -> dict:
+    """The persisted cache rows, read once per process; empty when absent or malformed. Every use is gated
+    by the index file's own `(mtime_ns, size)`, so a peer process's later write only costs a parse."""
+    repo = str(Path(repo))
+    held = _LOADED.get(repo)
+    if held is None:
+        held = {}
+        try:
+            with open(_cache_path(repo), "rb") as fh:
+                data = json.loads(fh.read().decode("utf-8"))
+            if isinstance(data, dict):
+                held = data
+        except (OSError, ValueError):
+            pass
+        _LOADED[repo] = held
+    return held
+
+
+def _pack(entry: RunEntry) -> list:
+    return [list(entry.paths), entry.sizing_rel, entry.prints, list(entry.declared), entry.at_ns]
+
+
+def _unpack(row) -> RunEntry:
+    paths, sizing, prints, declared, at_ns = row
+    return RunEntry(tuple(paths), sizing, dict(prints), tuple(declared), at_ns)
+
+
+def _seed_from_persisted(root: str, index: str, listing: list) -> None:
+    """Seed `_STAT_CACHE` from the persisted cache for each index file whose `(mtime_ns, size)` still
+    matches, so a cold process opens one file instead of one per run. A missing or malformed cache seeds nothing."""
+    try:
+        rows = _persisted(root)
+        for de in listing:
+            row = rows.get(de.name)
+            if row is None or not de.name.endswith(".json"):
+                continue
+            st = de.stat()
+            if [st.st_mtime_ns, st.st_size] == row[0]:
+                _STAT_CACHE.setdefault(os.path.join(index, de.name), (st.st_mtime_ns, st.st_size, _unpack(row[1])))
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return
+
+
+def _persist(root: str, index: str) -> None:
+    """Write every cached, readable index entry with the stat it was parsed under. Best effort: a failed
+    write only leaves the next cold process parsing."""
+    rows: dict = {}
+    for key, hit in list(_STAT_CACHE.items()):
+        if os.path.dirname(key) == index and key.endswith(".json") and hit[2] is not None:
+            rows[os.path.basename(key)] = [[hit[0], hit[1]], _pack(hit[2])]
+    _LOADED[str(Path(root))] = rows
+    try:
+        atomic_write_bytes(_cache_path(root), json.dumps(rows, separators=(",", ":")).encode("utf-8"))
+    except OSError:
+        pass
 
 
 def _drop_cached(repo_root: Path, run_id: str) -> None:
@@ -321,6 +390,9 @@ def rebuild(repo_root: Path) -> None:
     forget_fresh()
     _drop_snapshot(root)
     atomic_write_bytes(_dir(root) / SENTINEL, b"")
+    for _ in _scan(_dir(root)):  # parses what the bulk write left unkeyed
+        pass
+    _persist(os.fspath(root), os.fspath(_dir(root)))
 
 
 def entries(repo_root: Path, unreadable: Optional[set] = None) -> dict:
@@ -351,6 +423,7 @@ def entries(repo_root: Path, unreadable: Optional[set] = None) -> dict:
     out: dict = {}
     bad: set = set()
     state: list = []
+    misses = _PARSE_MISSES[0]
     for run_id, entry in _scan(index, state):
         if entry is not None:
             out[run_id] = entry
@@ -362,6 +435,8 @@ def entries(repo_root: Path, unreadable: Optional[set] = None) -> dict:
         _SNAPSHOT[key] = (dir_ns, dict(out), frozenset(bad))
     else:
         _SNAPSHOT.pop(key, None)
+    if _PARSE_MISSES[0] != misses:  # after the settle decision: the write must not age the listing
+        _persist(os.path.dirname(os.path.dirname(key)), key)
     return out
 
 
@@ -377,6 +452,8 @@ def _scan(index: Path, state: Optional[list] = None) -> Iterator[tuple]:
     live = {os.path.join(root, d.name) for d in listing}
     for stale in [k for k in _STAT_CACHE if os.path.dirname(k) == root and k not in live]:
         _STAT_CACHE.pop(stale, None)  # a file deleted out of band would otherwise stay cached forever
+    repo = os.path.dirname(os.path.dirname(root))
+    _seed_from_persisted(repo, root, listing)
     deadline = _clock() + READ_DEADLINE_SECS
     for de in sorted(listing, key=lambda d: d.name):
         name = de.name

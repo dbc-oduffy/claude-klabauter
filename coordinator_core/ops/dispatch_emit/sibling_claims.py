@@ -61,6 +61,20 @@ def _read_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _stat_json(path: Path) -> dict:
+    """`_read_json`, reused across calls while the file's (mtime_ns, size) is unchanged: a warm repeat costs
+    one stat per record file, not an open. An absent file is `{}` after that one stat. The result is shared:
+    callers only read it."""
+    from coordinator_core.ops.dispatch_emit import run_dir_stat_cache
+
+    key = os.fspath(path)
+    try:
+        st = os.stat(key)
+    except OSError:
+        return {}
+    return run_dir_stat_cache.cached("sibling-record-json", key, lambda _p: _read_json(Path(key)), st)
+
+
 LIVE_INDEX_DEADLINE_MS = 150.0
 LIVE_INDEX_UNAVAILABLE = "live-run-index-unavailable"
 
@@ -383,11 +397,15 @@ def _unlanded_run_ids(
     return found
 
 
-def halted_records(root: Path, own_run_id: Optional[str], covering: Optional[Sequence[str]] = None) -> list:
+def halted_records(
+    root: Path, own_run_id: Optional[str], covering: Optional[Sequence[str]] = None, *, skip_irrelevant: bool = False,
+) -> list:
     """`[(record dir, halt marker)]` for each halted run other than `own_run_id` within the token TTL:
     the runs `_unlanded_run_ids` may weigh through `release_reason`, for `prefetch_kept_blobs`. One
-    record-dir scan, file reads only; never raises. With `covering`, only runs withholding one of those paths."""
-    from coordinator_core.ops.dispatch_emit import halted_run, run_token
+    record-dir scan, file reads only; never raises. With `covering`, only runs withholding one of those paths.
+    With `skip_irrelevant`, a run with a fresh index entry that `halted_hold_release.irrelevant` clears
+    against the scope's interest is dropped without opening its marker (the prefetch skips it anyway)."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     out: list = []
@@ -398,6 +416,10 @@ def halted_records(root: Path, own_run_id: Optional[str], covering: Optional[Seq
             if name == own_run_id or name in clear or stamp is None or now - stamp > run_token.TTL_SECONDS:
                 continue
             record = root / RECORD_DIR_ROOT / name
+            if skip_irrelevant:
+                standin = _indexed_halt_marker(record)
+                if standin is not None and halted_hold_release.irrelevant(root, record, standin):
+                    continue
             marker = halted_run._read(record)
             if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
                 if covering is None or _withholds_any(marker, covering):
@@ -427,14 +449,14 @@ def _extra_declared_read(root: Path, run_id: str) -> set:
         rdir = record_dir(root, run_id)
     except ValueError:
         return out
-    sizing = _read_json(rdir / "run.json").get("sizing_rel")
+    sizing = _stat_json(rdir / "run.json").get("sizing_rel")
     out.add(warp_run_deliverable._norm(sizing) if isinstance(sizing, str) else "")
-    prep = (_read_json(rdir / RUN_OUTCOME_FILE).get("inline_review") or {})
+    prep = (_stat_json(rdir / RUN_OUTCOME_FILE).get("inline_review") or {})
     prep = prep.get("prep") if isinstance(prep, dict) else None
     files = prep.get("slice_files") if isinstance(prep, dict) else None
     if isinstance(files, list):
         out.update(_norm(f) for f in files if isinstance(f, str))
-    manifest = _read_json(root / RUN_DIR_ROOT / run_id / "manifest.json") or _read_json(rdir / "manifest.json")
+    manifest = _stat_json(root / RUN_DIR_ROOT / run_id / "manifest.json") or _stat_json(rdir / "manifest.json")
     declared = manifest.get("review_declared_paths")
     if isinstance(declared, list):
         out.update(_norm(p) for p in declared if isinstance(p, str))

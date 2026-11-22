@@ -65,10 +65,9 @@ def test_an_unrun_node_beside_a_base_red_one_is_run_then_the_landing_commits_rep
     first = _land(owed, failing_at_base=[BASE_RED])
 
     assert first["committed"] is False and first["awaiting"]["awaiting"] == "retest", first
-    assert first["remedy_step"]["nodes"] == [UNRUN], first
+    assert first["refused"] is None and first["remedy_step"] is None, first
     assert len(spawned) == 1 and UNRUN in spawned[0][2] and BASE_RED not in spawned[0][2]
-    assert first["remedy_step"]["remedy"] == "landing-runs-targeted-retest" and not first["remedy_step"]["exhausted"]
-    assert "poll" in json.dumps(first["awaiting"]) or "--poll" in first["remedy_step"]["command"], first
+    assert "poll" in first["awaiting"] and first["error"].endswith(" --poll"), first
     record = landing_retest._retest_record(owed, RUN)
     assert record["status"] == landing_retest.RETEST_RUNNING and record["tests"] == [UNRUN]
     assert _git(["rev-parse", "HEAD"], owed).strip() == head

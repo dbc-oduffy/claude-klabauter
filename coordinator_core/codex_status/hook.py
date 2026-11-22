@@ -23,9 +23,6 @@ EVENTS = ("Stop", "SubagentStop", "PostCompact")
 
 
 def status_title(value: dict) -> str:
-    alias = value.get("alias")
-    if not alias:
-        raise ValueError("no exact registered route alias")
     return render(value)
 
 
@@ -85,14 +82,15 @@ def handle(payload: dict, event: str) -> dict:
         value = snapshot({"session_id": sid, "rollouts": paths})
         if ownership is not None:
             value["subagent_stop_ownership"] = ownership
-        # No alias means no title write. A cwd or a guessed UUID suffix is not
-        # a readable SendMessage identity.
-        if not value.get("alias"):
-            return {"updated": False, "reason": "no exact registered route alias", "snapshot": value}
+        # A missing alias renders the `unregistered` label; a cwd or a guessed
+        # UUID suffix is never substituted as a SendMessage identity.
         cache = Path(value["cache_path"])
         # Cached application history cannot establish the currently displayed title.
         # apply_title reads current native metadata before deciding unchanged.
-        result = apply_title(value, cwd)
+        try:
+            result = apply_title(value, cwd)
+        except Exception as exc:
+            return {"updated": False, "reason": f"{type(exc).__name__}: {exc}", "snapshot": value}
         if result.get("updated"):
             with holder_lock(cache, timeout=0.05, poll_interval=0.005):
                 state = load(cache, sid)
@@ -110,7 +108,7 @@ def main(argv=None) -> int:
     try:
         payload = json.load(sys.stdin)
         result = handle(payload, args.event)
-        if not result.get("updated") and result.get("reason") not in {"unchanged", "no exact registered route alias"}:
+        if not result.get("updated") and result.get("reason") != "unchanged":
             print(f"codex status: {result.get('reason')}", file=sys.stderr)
     except Exception as exc:
         print(f"codex status: {type(exc).__name__}: {exc}", file=sys.stderr)

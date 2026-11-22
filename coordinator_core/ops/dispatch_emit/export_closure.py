@@ -141,7 +141,7 @@ def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -
         for p in modules.values():
             if p.rpartition("/")[0] == here:
                 stem = p.rpartition("/")[2][:-3]
-                if not stem.startswith(("test_", "conftest")) and f'"{stem}' in text:
+                if not stem.startswith(("test_", "conftest")) and (f'"{stem}' in text or f"'{stem}" in text):
                     helpers.add(p)
     reach: Set[str] = set(conftests) | helpers
     frontier = sorted(reach)
