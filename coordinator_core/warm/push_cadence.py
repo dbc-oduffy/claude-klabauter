@@ -132,7 +132,7 @@ from coordinator_core.git.git_objects import cas_ref
 from coordinator_core.git.git_objects import read_ref_loose_or_packed as _ref_sha
 from coordinator_core.hooks.auto_push import branch_gate, log_failure
 from coordinator_core.ops.ceremony.git_native import push_refspec
-from coordinator_core.ops.ceremony.push import CADENCE_PUSH_RETRY_BUDGET_SECS
+from coordinator_core.ops.ceremony.push import CADENCE_PUSH_RETRY_BUDGET_SECS, config_text_blocks_push
 from coordinator_core.ops.ceremony.push_ceiling import (
     PUSH_CEILING_MAX_SECS,
     resolve_push_ceiling,
@@ -501,6 +501,35 @@ def _declined_by_branch_hold(root: Path, branch: Optional[str]) -> bool:
     return True
 
 
+def _held_clone_reason(root: Path) -> Optional[str]:
+    """Why `root` may not publish, or None when it may.
+
+    HELD means any of: the repo config is unreadable (held-state unknown, so held -- fail closed);
+    any `remote.<r>.pushurl` is on host `blocked.invalid`; the directory is a `scratch/reconcile-*`
+    clone. One config read, no spawn; never raises. Trap: only the common-dir `config` is scanned --
+    a pushurl set via config.worktree or an include is not seen, so the reconcile-* name check stays.
+    """
+    try:
+        config_text = (resolve_git_common_dir(root) / "config").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except Exception:  # noqa: BLE001 -- unknown held-state is held
+        return "held-state-unreadable"
+    if config_text_blocks_push(config_text):
+        return "blocked-pushurl"
+    if root.name.startswith("reconcile-") and root.parent.name == "scratch":
+        return "reconcile-clone"
+    return None
+
+
+def _declined_as_held_clone(root: Path) -> bool:
+    reason = _held_clone_reason(root)
+    if reason is None:
+        return False
+    _log_hold_decline(root, f"held-clone: {root.name} push declined ({reason})")
+    return True
+
+
 # No `drain_pending_push` call in this module; see its docstring's DOES NOT
 # DRAIN section for why.
 def _sweep_one(repo_root: Union[str, Path]) -> str:
@@ -520,6 +549,8 @@ def _sweep_one(repo_root: Union[str, Path]) -> str:
     """
     root = Path(repo_root)
     if machine_profile() != "author":
+        return "skipped"
+    if _declined_as_held_clone(root):
         return "skipped"
     if _declined_by_compile_hold(root):
         return "skipped"
@@ -656,7 +687,7 @@ def _push_foreign(pair: tuple, *, ceiling_secs: float) -> None:
     if seen == local:
         _forget_foreign(pair)
         return
-    if _declined_by_branch_hold(root, branch):
+    if _declined_by_branch_hold(root, branch) or _declined_as_held_clone(root):
         return
     if not _acquire_sweep_lock(root):
         return
@@ -762,7 +793,7 @@ def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> 
     if not allowed:
         _memo_push_pending.bump_attempt(record, f"branch {branch!r} is not pushable")
         return
-    if _declined_by_branch_hold(root, branch):
+    if _declined_by_branch_hold(root, branch) or _declined_as_held_clone(root):
         return
     if not _acquire_sweep_lock(root):
         return

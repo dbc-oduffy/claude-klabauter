@@ -25,6 +25,7 @@ def _reset_state():
 def _repo(tmp_path, name: str = "repo"):
     root = tmp_path / name
     (root / ".git").mkdir(parents=True)
+    (root / ".git" / "config").write_text("[core]\n\tbare = false\n", encoding="utf-8")
     return root
 
 
@@ -475,6 +476,7 @@ def _fresh_branch_repo(tmp_path, *, head="a" * 40, remote_ref_sha="a" * 40, bran
     repo = tmp_path / "repo"
     (repo / ".git" / "refs" / "remotes" / "origin").mkdir(parents=True)
     (repo / ".git" / "refs" / "remotes" / "origin" / "main").write_text(remote_ref_sha + "\n")
+    (repo / ".git" / "config").write_text("[core]\n\tbare = false\n", encoding="utf-8")
     if branch_upstream:
         d = repo / ".git" / "refs" / "remotes" / "origin" / "work" / "x"
         d.mkdir(parents=True)
