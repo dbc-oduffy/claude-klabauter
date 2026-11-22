@@ -13,9 +13,26 @@ def plugin_root():
     from coordinator_core.content_root import read_content_root
     import os
     root = Path(os.environ.get("COORDINATOR_TEST_DOCTRINE_ROOT") or read_content_root())
-    if not (root / 'hooks/scripts/codex-session-context.py').is_file():
-        pytest.skip('installed doctrine lacks Codex context adapter')
+    # Probe through the loader itself, so the skip and the loader agree on every
+    # supported layout (a hand-rolled published-layout probe once hid the nested miss).
+    try:
+        session_context.load_adapter(root)
+    except ValueError:
+        pytest.skip('doctrine root lacks Codex context adapter')
     return root
+
+
+@pytest.mark.parametrize('layout', ['hooks/scripts', 'coordinator/hooks/scripts'])
+def test_adapter_loads_from_published_and_authoring_layouts(tmp_path, layout):
+    adapter = tmp_path / layout / 'codex-session-context.py'
+    adapter.parent.mkdir(parents=True)
+    adapter.write_text('MARK = 1', encoding='utf-8')
+    assert session_context.load_adapter(tmp_path).MARK == 1
+
+
+def test_missing_adapter_names_both_probed_paths(tmp_path):
+    with pytest.raises(ValueError, match='coordinator'):
+        session_context.load_adapter(tmp_path)
 
 
 @pytest.mark.parametrize('role', ['worker','workflow-agent','reviewer','unknown'])
