@@ -15,6 +15,7 @@ progressing is never halted, and a `staged_stall` halt written before progress r
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -186,13 +187,51 @@ def _candidate_sessions(repo_root: Path, run_id: str, stage_session: Optional[st
     return sessions
 
 
+def fire_in_flight(repo_root: Path, run_id: str, cutoff: float) -> bool:
+    """True when a headless fire record naming `run_id` is attached (pending, or running with a live driver
+    pid) or its child stdout log was written at or after `cutoff`. A nested or Codex-hosted run executes
+    inside such a fire and leaves no workflow journal under its own session. One registry listing and at
+    most `halted_run._MAX_FIRE_RECORDS` record reads; an unreadable registry counts as in flight. The registry
+    walk mirrors `halted_run.fire_live`; keep the two in step."""
+    from coordinator_core.ops.workflow_fire.fire import _pid_alive
+    from coordinator_core.session_hub_path import hub_for_common
+
+    try:
+        registry = hub_for_common(Path(repo_root) / ".git") / "workflow-fires"
+        with os.scandir(registry) as it:
+            entries = sorted(
+                ((e.stat().st_mtime, e.path) for e in it if e.name.endswith(".json") and e.is_file()), reverse=True
+            )
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    for _, path in entries[: halted_run._MAX_FIRE_RECORDS]:
+        try:
+            record = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict) or record.get("run_id") != run_id:
+            continue
+        if record.get("state") == "pending" or (record.get("state") == "running" and _pid_alive(record.get("pid"))):
+            return True
+        log_path = record.get("log_path")
+        try:
+            if isinstance(log_path, str) and log_path and os.stat(log_path).st_mtime >= cutoff:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def scan(
     repo_root: Path,
     now: float,
     *,
     in_flight: Optional[Callable[[Optional[str], float], bool]] = None,
 ) -> list[StalledStaged]:
-    """Staged, unhalted runs of `repo_root` idle between the bound and the horizon with no agent in flight."""
+    """Staged, unhalted runs of `repo_root` idle between the bound and the horizon with no agent in flight
+    and no attached or freshly written fire."""
     index = live_run_index.read(repo_root, INDEX_DEADLINE_MS)
     if index is MISSING or index is STALLED:
         return []
@@ -217,6 +256,8 @@ def scan(
             continue
         probe = in_flight or agent_in_flight
         if any(probe(s, cutoff) for s in _candidate_sessions(repo_root, run_id, session_id)):
+            continue
+        if fire_in_flight(repo_root, run_id, cutoff):
             continue
         found.append(StalledStaged(run_id, now - newest, session_id))
     return found

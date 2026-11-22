@@ -2711,10 +2711,21 @@ def _isolated_clone_repoint(cmd: str, cwd: str) -> Optional[tuple]:
     if len(landed) != 1:
         return None
     (dest,) = landed
+    separate = _separate_repo_root(dest, here)
+    if separate is None:
+        return None
+    return (dest, separate, True)
+
+
+def _separate_repo_root(dest: Path, here: Path) -> Optional[Path]:
+    """The session's repo root (else the landing repo's), when `dest` sits in a repo other than the
+    one enclosing `here` and not one of its ancestors; None for the session's own repo or an ancestor
+    (the shared tree). No spawn."""
+    session_root = _repo_root_of(here)
     root = _repo_root_of(dest)
     if root is None or root == session_root or (session_root is not None and root in session_root.parents):
         return None
-    return (dest, session_root or root, True)
+    return session_root or root
 
 
 #: A local merge into any other branch is a recoverable write; only the trunk and release lines gate.
@@ -2746,6 +2757,10 @@ def _scratch_ctx_for(cmd: str, cwd: Optional[str]) -> Optional[tuple]:
         target = _msys_to_drive(lead.group(1), os.name == "nt") if lead else ""
         if not lead or _REPOINTS_GIT_RE.search(rest) or not os.path.isabs(target):
             return _isolated_clone_repoint(cmd, cwd) if "merge" in cmd else None
+        dest = Path(target).resolve()
+        separate = _separate_repo_root(dest, Path(cwd).resolve())
+        if separate is not None:
+            return (dest, separate, True)
         cwd = target
     here = Path(cwd).resolve()
     root = _repo_root_of(here)
@@ -2963,10 +2978,11 @@ def _dash_c_value(seg: str) -> Optional[str]:
     return None
 
 
-#: True while `check()` runs for coordinator:git-commit-agent, which may `git -C <repo> commit`
-#: a supplied pathspec (append-only, recoverable).
-_COMMIT_AGENT: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
-    "_subagent_commit_agent", default=False
+#: True while `check()` runs for any agent but coordinator:executor (whose commits go through the
+#: row's terminal commit): such an agent may `git -C <repo> add|commit` an explicit pathspec
+#: (append-only, recoverable).
+_SCOPED_COMMIT_OK: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "_subagent_scoped_commit_ok", default=False
 )
 _COMMIT_ALL_FLAGS = frozenset({"-a", "--all", "-A"})
 
@@ -2977,7 +2993,23 @@ def _has_explicit_pathspec(remaining: List[str]) -> bool:
     if "--" not in toks or not toks[toks.index("--") + 1 :]:
         return False
     head = toks[: toks.index("--")]
-    return not any(t in _COMMIT_ALL_FLAGS for t in head)
+    return not any(t in _COMMIT_ALL_FLAGS or (t[:1] == "-" and t[1:2] != "-" and "a" in t[1:] and t[2:3] != "") for t in head if not t.startswith("-m") and not t.startswith("-F"))
+
+
+_ADD_SWEEP_FLAGS = frozenset(
+    {"-A", "--all", "-u", "--update", "--no-ignore-removal", "-p", "--patch", "-i", "--interactive", "-e", "--edit"}
+)
+_ADD_SWEEP_OPERANDS = frozenset({".", "./", "..", "*", ":/", ":"})
+
+
+def _add_is_scoped(remaining: List[str]) -> bool:
+    """True when `git add` names at least one explicit path and sweeps nothing (no `-A`/`-u`/`.`/magic)."""
+    toks = list(remaining or ())
+    flags = toks[: toks.index("--")] if "--" in toks else [t for t in toks if t.startswith("-")]
+    if any(t in _ADD_SWEEP_FLAGS for t in flags):
+        return False
+    operands = toks[toks.index("--") + 1 :] if "--" in toks else [t for t in toks if not t.startswith("-")]
+    return bool(operands) and not any(t in _ADD_SWEEP_OPERANDS or t.startswith(":(") or t.endswith(("/", "\\")) for t in operands)
 
 
 def _scratchpad_repo_verdict(seg: str, subcmd: str, remaining: List[str]) -> Optional[str]:
@@ -3003,8 +3035,11 @@ def _scratchpad_repo_verdict(seg: str, subcmd: str, remaining: List[str]) -> Opt
     if dash_c is not None:
         tgt_root = _repo_root_of(Path(os.path.realpath(path)))
         if tgt_root is not None and "scratch" not in tgt_root.parts:
-            if subcmd == "commit" and _COMMIT_AGENT.get() and _has_explicit_pathspec(remaining):
-                return _NO_VERDICT
+            if _SCOPED_COMMIT_OK.get():
+                if subcmd == "commit" and "--amend" not in remaining and _has_explicit_pathspec(remaining):
+                    return _NO_VERDICT
+                if subcmd == "add" and _add_is_scoped(remaining):
+                    return _NO_VERDICT
             return f"git -C {subcmd} (only into a repo under the session scratchpad)"
     return _NO_VERDICT
 
@@ -5405,8 +5440,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         else None
     )
     memo_token = _SP_MEMO.set({})
-    commit_agent_token = _COMMIT_AGENT.set(
-        (payload.get("agent_type") or payload.get("subagent_type") or "") == "coordinator:git-commit-agent"
+    commit_agent_token = _SCOPED_COMMIT_OK.set(
+        (payload.get("agent_type") or payload.get("subagent_type") or "") != "coordinator:executor"
     )
     raw_token = _RAW_CMD.set(flat)
     rm_cwd_token = _RM_CWD.set(cwd if isinstance(cwd, str) and cwd else None)
@@ -5426,7 +5461,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         _UNRECOGNIZED_VERBS.reset(unrec_token)
         _RM_CWD.reset(rm_cwd_token)
         _RAW_CMD.reset(raw_token)
-        _COMMIT_AGENT.reset(commit_agent_token)
+        _SCOPED_COMMIT_OK.reset(commit_agent_token)
         _SP_MEMO.reset(memo_token)
         _SP_CTX.reset(sp_token)
         _SCRATCH_CTX.reset(token)

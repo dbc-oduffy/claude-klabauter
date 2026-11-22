@@ -150,11 +150,12 @@ def test_a_gate_that_cannot_run_allows_the_landing_and_names_itself_in_the_reply
     (repo / "coordinator_core" / "pkg" / "newmod.py").write_bytes(b"VALUE = 1\n")
     (repo / PATH).write_bytes(b"from coordinator_core.pkg import newmod\n")
     monkeypatch.setattr("coordinator_core.percolate.guards._module_level_import_targets", _boom)
+    monkeypatch.setattr("coordinator_core.ops.ceremony.landed_names.uncommitted_name_refusals", _boom)
 
     landed = _call({"repo_root": str(repo), "paths": [PATH], "message": "gates cannot run"})
 
     assert landed["ok"] is True, landed
-    assert landed["gate_unverified"] == ["raw_kept_blob", "uncommitted_import"]
+    assert landed["gate_unverified"] == ["raw_kept_blob", "uncommitted_import", "landed_names"]
 
 
 def test_a_gate_that_runs_leaves_no_gate_unverified_in_the_reply(repo):

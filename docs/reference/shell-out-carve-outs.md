@@ -90,6 +90,7 @@ is an optional verification-only tool. See the per-site table below.
 | `ops/gate_dimension_tests.py` diff-cover invocation (named at landing) | (f) | 3rd-party Python CLI (diff-cover), PATH-resolved via `gate_tool_resolve`, degrade-to-UNAVAILABLE | No — `gate.validate_invocable` tests dimension, merge-gate cadence; not yet landed |
 | `coordinator/bin/suite-verdict.py` `build_verdict()` | (f) | pytest, resolved with `importlib.util.find_spec("pytest")`, degrade-to-UNAVAILABLE verdict + exit 0; ruled 2026-10-25 (G-EM under PM delegation) | No — EM-launched background job under a live tier-u grant, outside the 500ms bar |
 | `coordinator/bin/suite-verdict.py` `_red_at()` | (f) | pytest bisect probe of one nodeid in a `git archive` export, same resolution and degrade path; ruled 2026-10-25 (G-EM under PM delegation) | No — same background job |
+| `coordinator/bin/landed-tree-test-verify.py` `verify()` | (f) | pytest over a tree materialised from git objects, resolved with `importlib.util.find_spec("pytest")`, degrade to exit 2 (allows and says so, DR-402) | No — EM-run pre-land verifier, never an engine op; pytest cannot run inside the commit op's 500ms bar |
 | `coordinator/bin/statusline.py` `_run_inner()` (`shell=True` leg) | (h) | operator-supplied command string, shell parsing by definition | No — statusline delegation, outside the commit and session-start paths |
 | `coordinator_core/rea_ingest/ghidra_runner.py` `_spawn_headless()` (ghidra_runner) | (f) | 3rd-party analysis CLI (Ghidra `analyzeHeadless`), resolved via `GHIDRA_INSTALL_DIR` or PATH, degrade-to-UNAVAILABLE; static analysis only. **PM ruling 2026-11-02** (rea ask 2): "yes, you may use the headless analyzer, you can add it". Same ruling: permissive by design, so no forced process confinement and no forced project deletion ("we are not thinking about it for that use case") | No — rea ingest, operator- or skill-invoked; bulk analysis, outside the 500ms bar |
 
@@ -259,6 +260,7 @@ Sites:
 - `coordinator_core/ops/gate_dimension_docstrings.py` `_run_ruff()` (`ruff check --select D1`; docstrings dimension)
 - `coordinator_core/ops/gate_dimension_docstrings.py` `_run_interrogate()` (`interrogate --fail-under`; docstrings dimension)
 - `coordinator/bin/suite-verdict.py` `build_verdict()` and `_red_at()` (pytest over a `git archive` export of the verdict sha / of each bisect commit; resolved with `importlib.util.find_spec("pytest")`; writes a tier-`unavailable` verdict + exit 0 when unresolved). The file's `git` plumbing (`rev-list`, `log`, `archive`) takes no carve-out and runs through `coordinator_core.git.run`, not a private runner. **Ruled 2026-10-25:** approved as class (f) by G-EM `group-em-fe` under the PM's delegation, G-EM session fe6732ef-020a-4517-8adf-20765fa4b6a9 `pm_turns.jsonl` turn 18 (2026-10-25T16:43:30Z: "Claude please act as the G-EM and don't bother me with stuff like 'should scripts run the test suite'"). Only the two pytest subprocess sites are carved out, never the git spawns.
+- `coordinator/bin/landed-tree-test-verify.py` `verify()` (one pytest child over the landed tree's touched-file tests, materialised under `<repo>/scratch/landed-tree-verify/` from git objects with no git spawn; resolved with `importlib.util.find_spec("pytest")`; exit 2 when unresolved or unable to run). Only the pytest subprocess site is carved out.
 - `coordinator_core/ops/gate_dimension_tests.py` pytest `--cov` and diff-cover invocations (tests dimension; not yet landed). Two sites, named here by shape only: the module does not exist, so neither can be digest-pinned. The commit that lands each adds its register row below, or the site is unsanctioned under the enumeration rule.
 
 ## (g) mutating 3rd-party cache-prune CLI, PATH-resolved, degrades to UNAVAILABLE
@@ -502,6 +504,14 @@ entered below.
   argv_digest: "6339e0a5e98f"
   reason: "bisect probe of one red nodeid: pytest resolved by importlib.util.find_spec, degrades to a tier-unavailable verdict + exit 0"
   ruled_on: "2026-10-25 G-EM group-em-fe under PM delegation, /Users/example-operator/.coordinator-claude-settings/group-em/.git/coordinator-sessions/fe6732ef-020a-4517-8adf-20765fa4b6a9/pm_turns.jsonl turn 18 (2026-10-25T16:43:30Z)"
+- cls: f
+  path: coordinator/bin/landed-tree-test-verify.py
+  enclosing: verify
+  argv0: <dynamic>
+  ordinal: 0
+  argv_digest: "5a6e537c2ba2"
+  reason: "pre-land scoped-test verifier: pytest over the committed tree, resolved by importlib.util.find_spec, exit 2 (allows and says so) when it cannot run"
+  ruled_on: "2026-11-22 plan 2026-11-22-hnd-clean-archive-land-gate-40ca60 C4, class (f) by suite-verdict precedent"
 - cls: h
   path: coordinator/bin/statusline.py
   enclosing: _run_inner

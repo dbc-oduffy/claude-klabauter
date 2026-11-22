@@ -125,3 +125,63 @@ def test_namespace_package_directory_is_not_refused_but_absent_one_is(tmp_path: 
     out = _gate(tree, ["pkg/user.py"], tmp_path)
     assert not out.passed
     assert len(out.diagnostics) == 1 and "`gone`" in out.diagnostics[0]
+
+
+def _commit_op_gates(tmp_path: Path, tree: Dict[str, str], worktree: Dict[str, str], changed, advisories=None):
+    from coordinator_core.ops.ceremony import commit_v2
+
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.example", "-c", "user.name=t", *args], cwd=str(tmp_path),
+            check=True, capture_output=True, **no_console_creationflags(),
+        )
+
+    for files in (tree, worktree):
+        for rel, text in files.items():
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_text(text, encoding="utf-8")
+        if files is tree:
+            git("init", "-q")
+            git("add", "--", *tree)
+            git("commit", "-q", "-m", "seed")
+
+    def read(rel: str):
+        text = tree.get(rel)
+        return None if text is None else text.encode("utf-8")
+
+    return commit_v2._pre_commit_gates(tmp_path, list(changed), [], read, advisories=advisories)
+
+
+_PLANT_TREE = {
+    "pkg/__init__.py": "",
+    "pkg/mod.py": "x = 1\n",
+    "pkg/user.py": "from pkg import mod\n\nmod.record_claim()\n",
+}
+_PLANT_WORKTREE = {**_PLANT_TREE, "pkg/mod.py": "x = 1\n\n\ndef record_claim():\n    return 1\n"}
+
+
+def test_commit_op_refuses_an_attribute_call_to_a_name_only_the_worktree_has(tmp_path: Path):
+    refusal = _commit_op_gates(tmp_path, _PLANT_TREE, _PLANT_WORKTREE, ["pkg/user.py"])
+    assert refusal is not None and refusal.startswith("landed_names_gate:")
+    assert "pkg/user.py:3" in refusal and "pkg.mod.record_claim" in refusal
+
+
+def test_commit_op_lands_the_call_once_the_name_is_committed(tmp_path: Path):
+    tree = {**_PLANT_TREE, "pkg/mod.py": _PLANT_WORKTREE["pkg/mod.py"]}
+    assert _commit_op_gates(tmp_path, tree, _PLANT_WORKTREE, ["pkg/user.py"]) is None
+
+
+def test_landed_names_gate_with_a_checker_that_cannot_run_passes_and_says_so(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops.ceremony import landed_names
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(landed_names, "_Checker", boom)
+    advisories: list = []
+    assert _commit_op_gates(tmp_path, _PLANT_TREE, _PLANT_WORKTREE, ["pkg/user.py"], advisories) is None
+    assert any("landed_names_gate: could not run" in a for a in advisories)

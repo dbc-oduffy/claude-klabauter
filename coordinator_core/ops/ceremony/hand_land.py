@@ -72,7 +72,7 @@ def _stranded_siblings(root: Path, paths: list) -> list:
         return []
 
 
-def _raw_kept_blobs(root: Path, paths: list) -> list:
+def _raw_kept_blobs(root: Path, paths: list) -> Optional[list]:
     """`[{path, run_id, blob}]` for each landing path whose worktree bytes are a halted run's raw ``kept.json``
     image (peer dirt included) while the run's record holds an own-delta blob (or names the path unlandable) that
     differs from it. One stat per recent run dir; only a dir holding ``withheld-own-delta.json`` is read. ``None``
@@ -119,7 +119,7 @@ def _raw_kept_blobs(root: Path, paths: list) -> list:
         return None
 
 
-def _uncommitted_only_imports(root: Path, paths: list) -> list:
+def _uncommitted_only_imports(root: Path, paths: list) -> Optional[list]:
     """`['<path>: imports <name>', ...]` for each module-level ``coordinator_core.*`` import (unguarded,
     ``percolate.guards`` scope) in a landing ``.py`` path that resolves in the worktree but not in HEAD plus the
     landing paths: the publish's from-import resolution check on the resulting tree, zero spawns. ``None`` when the
@@ -194,6 +194,55 @@ def _uncommitted_only_imports(root: Path, paths: list) -> list:
         return None
 
 
+def _uncommitted_attr_names(root: Path, paths: list) -> Optional[list]:
+    """`landed_names` refusals (`alias.attr`, literal `getattr`) for the landing ``.py`` paths, judged on the tree
+    the land produces: landing paths read from the worktree, every other path from HEAD (zero spawns). Module
+    paths outside the import spine of the landing files read as absent, so the check under-refuses, never
+    false-refuses. ``None`` when the check could not run."""
+    try:
+        import ast
+
+        from coordinator_core.authoring_leaks import HeadView
+        from coordinator_core.ops.ceremony.landed_names import uncommitted_name_refusals
+
+        landing = sorted({p.replace("\\", "/").removeprefix("./") for p in paths})
+        py = [p for p in landing if p.endswith(".py")]
+        candidates: set = set()
+        for p in py:
+            try:
+                tree = ast.parse((root / p).read_bytes())
+            except (OSError, SyntaxError, ValueError):
+                continue
+            for node in ast.walk(tree):
+                mods = []
+                if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                    mods = [(node.module, [a.name for a in node.names])]
+                elif isinstance(node, ast.Import):
+                    mods = [(a.name, []) for a in node.names]
+                for mod, names in mods:
+                    parts = mod.split(".")
+                    for i in range(1, len(parts) + 1):
+                        base = "/".join(parts[:i])
+                        candidates.update((f"{base}.py", f"{base}/__init__.py"))
+                    base = "/".join(parts)
+                    for n in names:
+                        candidates.update((f"{base}/{n}.py", f"{base}/{n}/__init__.py"))
+        head = HeadView(root, candidates)
+        landing_set = set(landing)
+
+        def read(rel: str) -> Optional[bytes]:
+            if rel in landing_set:
+                try:
+                    return (root / rel).read_bytes()
+                except OSError:
+                    return None
+            return head.head_bytes(rel)
+
+        return uncommitted_name_refusals(root, py, read)
+    except Exception:  # noqa: BLE001 -- an unreadable tree is no claim, never a refusal; the caller says so
+        return None
+
+
 def hand_land(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Land ``params['paths']`` with ``params['message']`` on HEAD; see the module docstring for the reply."""
     from coordinator_core.git import git_state
@@ -239,6 +288,15 @@ def hand_land(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _refuse(
             "landing imports names that exist only uncommitted: " + "; ".join(uncommitted) + "; nothing moved",
             "uncommitted_import",
+        )
+
+    named_refusals = _uncommitted_attr_names(root, paths)
+    if named_refusals is None:
+        gate_unverified.append("landed_names")
+    elif named_refusals:
+        return _refuse(
+            "landing names things that exist only uncommitted: " + "; ".join(named_refusals) + "; nothing moved",
+            "uncommitted_name",
         )
 
     stranded = [

@@ -101,13 +101,47 @@ def _text_offence(text: str) -> Optional[str]:
     return None
 
 
+_INTERPRETERS = ("python", "python3", "py", "pwsh", "powershell", "bash", "sh", "cmd")
+#: An interpreter flag after which no script file is launched (`python -m pytest x.py`, `bash -c ...`).
+_NO_SCRIPT_FLAGS = ("-m", "-c")
+#: An interpreter flag whose next token is its value, never the script.
+_VALUE_FLAGS = ("-x", "-w", "-executionpolicy", "-ep")
+
+
+def _launched_script(tokens: List[str]) -> Optional[str]:
+    """The script file a command launches: its head, or an interpreter's first non-flag argument.
+
+    Trap: any other `.py` token is data (a pytest target, a `git diff` path); reading it as a launched
+    script denied running or diffing this guard's own tests, whose fixtures hold the kill text."""
+    if not tokens:
+        return None
+    head = tokens[0].strip("\"'")
+    if head.lower().endswith(_SCRIPT_SUFFIXES):
+        return head
+    if not any(token_matches_binary(head, name) for name in _INTERPRETERS):
+        return None
+    skip = False
+    for tok in tokens[1:]:
+        tok = tok.strip("\"'")
+        if skip:
+            skip = False
+            continue
+        if tok.lower() in _NO_SCRIPT_FLAGS:
+            return None
+        if tok.lower() in _VALUE_FLAGS:
+            skip = True
+            continue
+        if tok.startswith("-") or (len(tok) == 2 and tok[0] == "/"):
+            continue
+        return tok if tok.lower().endswith(_SCRIPT_SUFFIXES) else None
+    return None
+
+
 def _script_offence(cmd: str, cwd: Optional[str]) -> Optional[str]:
     """A name-kill inside a launched script file. Unreadable files allow."""
     for resolved in resolve_command_positions(cmd):
-        for tok in resolved.tokens:
-            tok = tok.strip("\"'")
-            if not tok.lower().endswith(_SCRIPT_SUFFIXES):
-                continue
+        tok = _launched_script(resolved.tokens)
+        if tok is not None:
             path = tok if os.path.isabs(tok) or not cwd else os.path.join(cwd, tok)
             try:
                 with open(path, "rb") as fh:
