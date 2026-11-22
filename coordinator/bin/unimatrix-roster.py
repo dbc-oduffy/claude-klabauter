@@ -1222,6 +1222,33 @@ def process_holds(d):
     return not d.get(STALE_FIELD) and entry_live(d)
 
 
+def live_agy_leg_sockets():
+    """Basenames of the adapter endpoints named by agy-legs records whose leg or agy process is alive.
+
+    An agy leg's adapter socket is recorded only in `agy-legs/<conversation>.json`, apart from any
+    session entry's `messagingSocketPath`, so a sweep keyed on session entries alone reads it as
+    ownerless. None when a leg record is unreadable: a possible owner suspends every unlink."""
+    try:
+        legs = _liveness().state_dir() / "agy-legs"
+        names = sorted(legs.glob("*.json")) if legs.is_dir() else []
+    except OSError:
+        return None
+    owned = set()
+    for leg in names:
+        try:
+            rec = json.loads(leg.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return None
+        if not isinstance(rec, dict) or not isinstance(rec.get("endpoint"), str):
+            continue
+        pids = [p for p in (rec.get("pid"), rec.get("agy_pid")) if isinstance(p, int) and not isinstance(p, bool)]
+        if any(p > 0 and pid_alive(p) for p in pids):
+            owned.add(os.path.basename(rec["endpoint"]))
+    return owned
+
+
 def mark_stale(path, d, say):
     """Record `unimatrixStale` on the entry at `path` so `entry_listed` drops it; the entry is never deleted."""
     if d.get(STALE_FIELD):
@@ -1251,9 +1278,12 @@ def reap_stale_sockets(owners, keep, readable, say):
     except OSError:
         return
     held = {d.get("messagingSocketPath") for _, _, d in owners if liveness_unknown(d) or process_holds(d)}
+    legs = live_agy_leg_sockets()
+    if legs is None:
+        return
     for f in socks:
         full = os.path.join(LOOPBACK_SOCKS, f)
-        if not LOOPBACK_SOCK_RE.fullmatch(f) or full in listed or full in held:
+        if not LOOPBACK_SOCK_RE.fullmatch(f) or full in listed or full in held or f in legs:
             continue
         try:
             if time.time() - os.stat(full).st_mtime < SOCKET_GRACE_SECONDS:

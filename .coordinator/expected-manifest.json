@@ -1002,7 +1002,7 @@
     "coordinator/bin/publish-resolve-target.py": "40f0e91956f7a039b8bc9f0cc8cfdad5aceb6d7c",
     "coordinator/bin/publish-strip-inventory.cmd": "aefb208c57a959ea667f0564d73a85633d4c3583",
     "coordinator/bin/publish-strip-inventory.py": "ec3c81f36bc3533f16a7d09dadfe8c8a817c33a8",
-    "coordinator/bin/published-name-map.json": "967ca0e2c861b3ea7fa90b1c3c3ffdc9cef85220",
+    "coordinator/bin/published-name-map.json": "0967ef424bce6791893e9a57bb952f80fd536e93",
     "coordinator/bin/push-hold.cmd": "7c295de7e219b2475216dab124bc306bacd64025",
     "coordinator/bin/push-hold.py": "bd67283afe94b1381853652adfe0f0e3164361f9",
     "coordinator/bin/query-commit-closures.cmd": "2284445c76886198e1bc9a9bf05e85d618fc2dd6",
@@ -2231,6 +2231,7 @@
     "coordinator/bin/tests/test_unimatrix_supervisor_handover.py": "59dd0860f4689d5146f6843b045caa4eda24e216",
     "coordinator/bin/tests/test_unimatrix_supervisor_handover_spawns.py": "ec7eadaedc20cf6a4ba92abeaaa6a8c935fda663",
     "coordinator/bin/tests/test_unimatrix_supervisor_settings_home_unset.py": "73b636ee009a30d023917449c1ed3f04aa9dc628",
+    "coordinator/bin/tests/test_unimatrix_sweep_spares_live_agy_leg.py": "b0b0ad099a8d9477023de79942a35e34aec4ed01",
     "coordinator/bin/tests/test_unimatrix_test_bridge_reap.py": "7b146c915517dc03f8f8dac0893bf5d4dbf8d3bc",
     "coordinator/bin/tests/test_unimatrix_test_bridge_reap_spawns.py": "e1a33bcd174c93eee609edbbef038bce1b0a874a",
     "coordinator/bin/tests/test_unimatrix_test_home.py": "933441201cdf2c82d7b75739a9c6579f8c136963",
@@ -2397,7 +2398,7 @@
     "coordinator/bin/unimatrix-roster-timing.py": "e9dff594361af577241fae485948a68554bef867",
     "coordinator/bin/unimatrix-roster.cmd": "1a7aaad55917e1184e6cd333b085d36f9234a673",
     "coordinator/bin/unimatrix-roster.ps1": "63af28db1d49292f0d1932c4b3373561eb64d7ce",
-    "coordinator/bin/unimatrix-roster.py": "ac5506aa4f9ae25c106881aa25319d35c318e33e",
+    "coordinator/bin/unimatrix-roster.py": "ad422023d90d39a67a41bbe7d30097592f036b9a",
     "coordinator/bin/unimatrix-send.cmd": "845bfae1b294a767477c83f8fc45b509a58a481c",
     "coordinator/bin/unimatrix-send.ps1": "eb9a68458dbc50cc0095247ebc8776d25389d62a",
     "coordinator/bin/unimatrix-send.py": "1d1beeafbfe084de079835006d1e21a251962dce",
@@ -2747,8 +2748,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "4e5dc39663fbd6c57fa6b5c2262ac7606fb05414",
-    "coordinator_core/_engine_stamp": "008b8a8413ffb1b1416eccce36c5d3e155de4097",
+    "coordinator_core/_engine_published_at": "bfa29af13f7838847cdc8bc0a2b6b8fe24fb42d9",
+    "coordinator_core/_engine_stamp": "08f00e3e4c9ac5029304619a683220768ab722a5",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -13684,5 +13685,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "c944770c8470347e7f9a292944412b2de36c0981"
+  "source_head": "f604e8da4309910e7195ab8a69acce855c614fbd"
 }
