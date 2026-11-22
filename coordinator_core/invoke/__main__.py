@@ -250,6 +250,33 @@ def _settle_indeterminate_write(msg: dict, response: dict, poll_dispatch) -> Opt
     return response
 
 
+def _poll_status_or_response(msg: dict, response: Optional[dict]) -> Optional[dict]:
+    """A `warm.request_status` poll for a well-formed key never leaves this CLI as an error envelope:
+    an error reply (any transport or timeout code) becomes an `unknowable` status naming the error.
+    A malformed key and every other op keep `response` unchanged."""
+    try:
+        if msg.get("method") != "warm.request_status" or not isinstance(response, dict):
+            return response
+        error = response.get("error")
+        params = msg.get("params")
+        key = (params.get("key") or params.get("dispatch_key")) if isinstance(params, dict) else None
+        if not isinstance(error, dict) or not isinstance(key, str) or not key:
+            return response
+        return {
+            "jsonrpc": "2.0",
+            "id": response.get("id", msg.get("id")),
+            "result": {
+                "state": "unknowable",
+                "reason": "poll-unanswered",
+                "detail": {"error_code": error.get("code"), "error_message": str(error.get("message"))[:300]},
+                "engine_boot_ns": None,
+                "engine_pid": None,
+            },
+        }
+    except Exception:  # noqa: BLE001 -- the backstop never fails the poll it backs
+        return response
+
+
 def _local_engine_unhealthy() -> bool:
     """True when the health probe failed for a permanent reason other than cold-by-design."""
     try:
@@ -1568,6 +1595,8 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                 sys.stderr.flush()
             except OSError:
                 pass
+
+    response = _poll_status_or_response(msg, response)
 
     # 7a. DIY-nag advisory: worktree-scoped ops only (repo_root is None otherwise, so the
     #     detector returns None before any git spawn). Rides beside `result`; never

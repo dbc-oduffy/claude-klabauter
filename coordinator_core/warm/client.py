@@ -1167,7 +1167,12 @@ def _op_may_mutate(method: Any) -> bool:
     the happy path: this module is on every invocation's cold-start preamble
     and is import-budget-guarded, and the classification table is neither
     small nor free.
+
+    The reconcile poll itself is the one exception to fail-closed: it is never a mutation, so an
+    unavailable table must not turn its unanswered read into a -32004 of its own.
     """
+    if method == _RECONCILE_POLL_METHOD:
+        return False
     try:
         from coordinator_core.authz.classification import OpClass, classify
 

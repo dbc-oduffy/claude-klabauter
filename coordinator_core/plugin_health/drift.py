@@ -323,7 +323,6 @@ def _check_copy_install(
     live_path: str,
     source_subpath: str,
     check_clean_only: bool,
-    claude_home: Path,
 ) -> DriftResult:
     lines: List[str] = []
     ci_live_path = Path(live_path.replace("\\", "/")) if live_path else None
@@ -420,10 +419,12 @@ def _check_copy_install(
         hashable.append((tracked_path, blob_sha, live_file))
 
     # Second pass: one `git hash-object --stdin-paths` call for every live file
-    # instead of one spawn per file. -C claude_home (NOT ci_live_path): applies
-    # the LIVE REPO's clean filter (incl. autocrlf) — apples-to-apples with the
-    # source blob SHA. Pinned by the AC5/crlf regression test
-    # (crlf-divergent-but-content-equal). `hash-object --stdin-paths` emits one
+    # instead of one spawn per file. -C ci_source_path: the SOURCE repo's clean
+    # filter (attributes + autocrlf) made the blob, so only it hashes the live
+    # bytes apples-to-apples. Trap: hashing under claude_home applies
+    # ~/.claude's `* text=auto`, which normalises a CRLF live file whose source
+    # blob kept its CRLF — byte-identical content reported as drift. Pinned by
+    # the AC5/crlf regression tests. `hash-object --stdin-paths` emits one
     # line per path IN ORDER and aborts (nonzero rc) on the first unreadable
     # path, printing only the lines already resolved before the failure — so a
     # short read is treated as success-for-the-resolved-prefix, failure for the
@@ -431,7 +432,7 @@ def _check_copy_install(
     if hashable:
         stdin_payload = "".join(f"{str(live_file)}\n" for _, _, live_file in hashable)
         hash_result = _run_git(
-            ["hash-object", "--stdin-paths"], cwd=claude_home, input_text=stdin_payload
+            ["hash-object", "--stdin-paths"], cwd=ci_source_path, input_text=stdin_payload
         )
         out_lines = (hash_result.stdout or "").splitlines()
         for idx, (tracked_path, blob_sha, _live_file) in enumerate(hashable):
@@ -747,16 +748,14 @@ def check_plugin(
     is_windows: bool = False,
     refresh_log: Optional[Path] = None,
     current_pyproject_hash_override: Optional[str] = None,
-    claude_home: Optional[Path] = None,
 ) -> DriftResult:
     """Dispatch to the four propagation-mode legs. Mirrors bash `_check_plugin`."""
     refresh_log = refresh_log if refresh_log is not None else Path.home() / ".claude" / "plugins" / ".refresh-log"
-    claude_home = claude_home if claude_home is not None else Path(os.environ.get("HOME") or str(Path.home())) / ".claude"
 
     if prop_mode == "source_is_live":
         return _check_source_is_live(plugin_name)
     if prop_mode == "copy_install":
-        return _check_copy_install(plugin_name, source_path, live_path, source_subpath, check_clean_only, claude_home)
+        return _check_copy_install(plugin_name, source_path, live_path, source_subpath, check_clean_only)
     if prop_mode == "editable_sibling_venv":
         return _check_editable_sibling_venv(
             plugin_name,
@@ -1013,7 +1012,6 @@ def _run(filter_plugin: str, check_clean_only: bool):
             is_windows=is_windows,
             refresh_log=refresh_log,
             current_pyproject_hash_override=current_pyproject_hash_override,
-            claude_home=claude_home,
         )
         stdout_lines.extend(result.lines)
         stderr_lines.extend(result.stderr_lines)

@@ -176,7 +176,9 @@ def co_declared_peer_holds(
         from coordinator_core.ops.dispatch_emit import halted_hold_release, sibling_claims
 
         with halted_hold_release.blob_scope(root, interest=wanted):  # interest drops halted runs claiming none of `wanted`; keep it
-            halted_hold_release.prefetch_kept_blobs(root, sibling_claims.halted_records(root, own_run_id))
+            halted_hold_release.prefetch_kept_blobs(
+                root, sibling_claims.halted_records(root, own_run_id, skip_irrelevant=True),
+            )
             unlanded = sibling_claims._unlanded_run_ids(root, own_run_id, own_plan, minted_before)
             claims = dict(sibling_claims.sibling_run_claims(
                 root, own_run_id, wanted, own_plan=own_plan, minted_before=minted_before, own_declared=own,
@@ -212,10 +214,9 @@ def co_declared_peer_holds(
             holders = {p: [r] for p, r in claims.items()}
             if holders:
                 for run_id in unlanded:
-                    for path in wanted:
-                        if path in holders and run_id not in holders[path] and _also_claims(
-                            root, run_id, path, indexed,
-                        ):
+                    open_paths = [p for p in wanted if p in holders and run_id not in holders[p]]
+                    if open_paths:
+                        for path in sorted(_also_claims_many(root, run_id, open_paths, indexed)):
                             holders[path].append(run_id)
             contested = [p for p in wanted if p in holders and p in own]
             mutual = {
@@ -256,31 +257,44 @@ def _indexed_declared(root: Path) -> dict:
 
 
 def _also_claims(root: Path, run_id: str, path: str, indexed: dict) -> bool:
-    """Whether an unlanded `run_id` claims an already-contested `path` without a status read: a halted
-    run when it withholds the path; a live run when the index's declared footprint, its extra records or
-    (no indexed footprint) its plan spine declare it. Dirt-only halted claims name only the first claimant
-    (they need the shared status read)."""
+    """`_also_claims_many` for the one `path`."""
+    return path in _also_claims_many(root, run_id, [path], indexed)
+
+
+def _also_claims_many(root: Path, run_id: str, paths: Sequence[str], indexed: dict) -> set:
+    """The subset of the already-contested `paths` an unlanded `run_id` also claims, without a status read:
+    a halted run when it withholds the path; a live run when the index's declared footprint, its extra
+    records or (no indexed footprint) its plan spine declare it. Dirt-only halted claims name only the
+    first claimant (they need the shared status read). The run's withheld set, extras, manifest and spine
+    are read once for all `paths`, not once per path. A claim that cannot be read adds no holder."""
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
+    out: set = set()
     try:
         if warp_run_deliverable._halted(root, run_id):
-            return path in {_norm(w) for w in warp_run_deliverable.halted_withheld_paths(root, run_id)}
-        if path in indexed.get(run_id, ()) or path in sibling_claims._extra_declared(root, run_id):
-            return True
-        if run_id in indexed:
-            return False
-        if sibling_claims._declares(root, run_id, path):  # unindexed run: its manifest
-            return True
-        paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
-        if paths or prefixes:
-            return False
+            withheld = {_norm(w) for w in warp_run_deliverable.halted_withheld_paths(root, run_id)}
+            return {p for p in paths if p in withheld}
+        declared = indexed.get(run_id, ())
+        extra = sibling_claims._extra_declared(root, run_id)
+        out = {p for p in paths if p in declared or p in extra}
+        rest = [p for p in paths if p not in out]
+        if not rest or run_id in indexed:
+            return out
+        out.update(p for p in rest if sibling_claims._declares(root, run_id, p))  # unindexed run: its manifest
+        rest = [p for p in rest if p not in out]
+        if not rest:
+            return out
+        declared_paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
+        if declared_paths or prefixes:
+            return out
         spine = _sibling_spines(root, [run_id])[run_id]  # re-read unless inside a release_scope
         if isinstance(spine, Exception):
             raise spine
-        return path in spine
-    except Exception:  # noqa: BLE001 -- this run's claim unknown: it adds no holder
-        return False
+        out.update(p for p in rest if p in spine)
+        return out
+    except Exception:  # noqa: BLE001 -- this run's claim unknown: it adds no further holder
+        return out
 
 
 def _release_criterion_met(

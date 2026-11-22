@@ -5,6 +5,8 @@ from coordinator_core.tui_status.fields import UNKNOWN, format_line, resolve_nam
 
 
 NATIVE_FOOTER = ["thread-name"]
+UNREGISTERED = "unregistered"
+MODEL_NOT_OBSERVED = "model not yet observed"
 
 
 def registered_alias(sid: str) -> str | None:
@@ -16,5 +18,5 @@ def render(value: dict) -> str:
     partial = bool(value.get("warnings") or value.get("unpriced_events") or
                    not all(value.get("coverage", {}).values()) or not value.get("backlog_complete", False))
     usd = value["usd"] if value.get("priced_events") else None
-    return format_line(value.get("alias"), value.get("before_compact_percent"), usd, partial,
-                       (value.get("model") or UNKNOWN, value.get("effort") or UNKNOWN))
+    return format_line(value.get("alias") or UNREGISTERED, value.get("before_compact_percent"), usd, partial,
+                       (value.get("model") or MODEL_NOT_OBSERVED, value.get("effort") or UNKNOWN))

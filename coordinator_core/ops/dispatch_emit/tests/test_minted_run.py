@@ -143,11 +143,38 @@ def test_abandon_clears_a_token_with_no_run_dir(tmp_path):
     assert _call(tmp_path, "abandon")["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND)
 
 
-def test_start_on_a_token_with_no_run_dir_still_refuses(tmp_path):
+def test_start_on_a_token_with_no_run_dir_names_never_created_and_the_refire(tmp_path):
     (tmp_path / ".git").mkdir()
     run_token.mint(tmp_path, RUN, f"scratch/warp/{RUN}.workflow.mjs")
-    assert _call(tmp_path, "start")["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND)
+    out = _call(tmp_path, "start")
+    assert out["ok"] is False and out["cause"] == minted_run.CAUSE_NEVER_CREATED
+    assert out["refusal"].startswith(minted_run.REFUSAL_NEVER_CREATED)
+    assert not out["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND)
+    assert f'"preminted_run_id": "{RUN}"' in out["refusal"] and '"action":"abandon"' in out["refusal"]
     assert run_token.is_live(tmp_path, RUN)
+
+
+def test_start_on_an_escrowed_token_with_no_run_dir_is_never_created(tmp_path):
+    (tmp_path / ".git").mkdir()
+    token = run_token.mint(tmp_path, RUN, f"scratch/warp/{RUN}.workflow.mjs")
+    assert run_token.escrow(tmp_path, RUN, token)
+    assert _call(tmp_path, "start")["cause"] == minted_run.CAUSE_NEVER_CREATED
+
+
+def test_start_on_an_id_with_no_token_and_no_dir_stays_run_not_found(tmp_path):
+    (tmp_path / ".git").mkdir()
+    out = _call(tmp_path, "start")
+    assert out["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND) and "cause" not in out
+
+
+def test_start_once_the_emit_lands_the_dir_starts_the_run(tmp_path):
+    (tmp_path / ".git").mkdir()
+    token = run_token.mint(tmp_path, RUN, f"scratch/warp/{RUN}.workflow.mjs")
+    assert run_token.escrow(tmp_path, RUN, token)
+    assert _call(tmp_path, "start")["cause"] == minted_run.CAUSE_NEVER_CREATED
+    _repo(tmp_path)
+    out = _call(tmp_path, "start")
+    assert out["ok"] is True and out["run_script"] == f"scratch/warp/{RUN}.workflow.mjs"
 
 
 def test_abandon_dry_run_keeps_a_dirless_token(tmp_path):

@@ -10,8 +10,8 @@ import uuid
 from coordinator_core.group_em.atomic_record import holder_lock, LockTimeout
 
 from coordinator_core._settings_home import settings_home
-from .collect import advance, discover, load, registered_paths, save
-from .model import ingest, summary, warn
+from .collect import advance, discover, load, registered_paths, rollout_for, save
+from .model import descendants, ingest, summary, warn
 from .render import render, registered_alias, NATIVE_FOOTER
 from coordinator_core.tui_status.grok import before_compact
 
@@ -40,6 +40,22 @@ def snapshot(params: dict) -> dict:
         return _snapshot_locked(params, sid, cache)
 
 
+def _advance_descendant_journals(state: dict, sid: str, budget: int) -> None:
+    """Read the owned journal of every thread already attributed to this root's tree.
+
+    A workflow worker that fires its own workflow journals that usage under its own id; the tree
+    reaches it only through the parent link recorded in an ancestor's journal.
+    """
+    journals = settings_home() / "state" / "codex-usage"
+    read = {sid}
+    while True:
+        pending = [t for t in descendants(state) - read if (journals / f"{t}.jsonl").is_file()]
+        read |= descendants(state)
+        if not pending:
+            return
+        advance(state, [journals / f"{t}.jsonl" for t in pending], byte_budget=budget)
+
+
 def _snapshot_locked(params, sid, cache) -> dict:
     state = load(cache, sid)
     paths = [Path(p) for p in params.get("rollouts", [])]
@@ -55,6 +71,12 @@ def _snapshot_locked(params, sid, cache) -> dict:
     # Retain previously registered sources so a resumed render includes closed
     # subagents and older dates, rather than shrinking lifetime spend.
     paths.extend(Path(p) for p in state["files"])
+    if not any(p.name.endswith(f"-{sid}.jsonl") for p in paths):
+        own = rollout_for(sid)
+        if own is not None:
+            paths.insert(0, own)
+        else:
+            warn(state, "thread rollout not found by session id in today's or yesterday's sessions; pass an explicit rollout")
     paths = list(dict.fromkeys(paths))
     if not paths:
         warn(state, "no registered transcript path; provide an explicit root rollout")
@@ -65,7 +87,9 @@ def _snapshot_locked(params, sid, cache) -> dict:
     if owned_journal.is_file():
         paths.append(owned_journal)
     # Presence is evidence of observed records, never proof of workflow coverage.
-    advance(state, list(dict.fromkeys(paths)), byte_budget=params.get("byte_budget", 4 * 1024 * 1024))
+    budget = params.get("byte_budget", 4 * 1024 * 1024)
+    advance(state, list(dict.fromkeys(paths)), byte_budget=budget)
+    _advance_descendant_journals(state, sid, budget)
     manifest = params.get("coverage_manifest")
     if manifest:
         data = json.loads(Path(manifest).read_text(encoding="utf-8"))

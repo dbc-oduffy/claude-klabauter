@@ -13,7 +13,9 @@ The reap holds a run younger than its quiet window, so a fresh abandon replies `
 ``note`` names the reap's skip reason; the halt marker still blocks any start.
 
 ``abandon`` on an id with no run dir (announced, never written) only discards its token and replies
-ok; with no token either it refuses ``run-not-found``, and ``start`` on it always refuses.
+ok; with no token either it refuses ``run-not-found``. ``start`` on it always refuses: with a minted token it
+refuses ``never-created`` (reply ``cause: never_created``) naming the ``dispatch.emit`` refire and the abandon;
+with no token, ``run-not-found``.
 
 A run is startable or abandonable only while it is minted-only (``halted_run._is_shell``: no halt
 marker, progress record absent or at ``minted``); a run past ``minted`` is refused. In-process file
@@ -43,6 +45,8 @@ ACTIONS = (ACTION_START, ACTION_ABANDON)
 REFUSAL_BAD_PARAMS = "bad-params"
 REFUSAL_NO_REPO = "no-repo-root"
 REFUSAL_NOT_FOUND = "run-not-found"
+REFUSAL_NEVER_CREATED = "never-created"
+CAUSE_NEVER_CREATED = "never_created"
 REFUSAL_PAST_MINTED = "run-past-minted"
 REFUSAL_NO_SCRIPT = "script-missing"
 REFUSAL_REAP_FAILED = "reap-failed"
@@ -178,6 +182,25 @@ def _clear_dirless_mint(repo_root: Path, run_id: str, dry_run: bool) -> Optional
     return reply(run_id, ACTION_ABANDON, note=f"no {RECORD_DIR_ROOT}/{run_id}: stray mint token discarded")
 
 
+def _minted_token_exists(repo_root: Path, run_id: str) -> bool:
+    """True when the id was minted (a token record or its escrow exists) though no run dir landed."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    return run_token._read_rec(repo_root, run_id) is not None or run_token.escrowed(repo_root, run_id) is not None
+
+
+def _never_created(run_id: str) -> dict:
+    """Typed refusal for a minted id whose emit never created its run dir: names the refire and the abandon.
+    Trap: the emit may still be in flight; a start retried once the dir lands succeeds."""
+    out = reply(run_id, ACTION_START, refusal=(
+        f"{REFUSAL_NEVER_CREATED}: {run_id} was minted but its emit never created {RECORD_DIR_ROOT}/{run_id}; "
+        f'refire the ask with dispatch.emit {{"preminted_run_id": "{run_id}", ...the original ask params}} '
+        f'(or retry start if the emit is still running), or discard it: {OP_NAME} {{"run_id":"{run_id}","action":"abandon"}}'
+    ))
+    out["cause"] = CAUSE_NEVER_CREATED
+    return out
+
+
 @register_op(OP_NAME)
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.minted_run": start or abandon one minted-only run."""
@@ -199,6 +222,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             cleared = _clear_dirless_mint(root, run_id, bool(p.get("dry_run")))
             if cleared is not None:
                 return cleared
+        if action == ACTION_START and _minted_token_exists(root, run_id):
+            return _never_created(run_id)
         return reply(run_id, action, refusal=f"{REFUSAL_NOT_FOUND}: no {RECORD_DIR_ROOT}/{run_id}")
     if not is_minted_only(run_dir) and not (action == ACTION_START and is_unstarted_mint_halt(run_dir)):
         return reply(run_id, action, refusal=f"{REFUSAL_PAST_MINTED}: {run_id} is past stage minted or halt-marked")

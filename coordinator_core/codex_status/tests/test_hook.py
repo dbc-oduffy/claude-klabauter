@@ -34,9 +34,10 @@ def test_metadata_title_write_requires_loaded_namespace_and_preserved_task(tmp_p
         return {"session_id": sid, "original_task_title": title}
     monkeypatch.setattr(hook.external_registry, "preserve_task_title", preserve, raising=False)
     result = hook.apply_title(value(), str(tmp_path))
-    assert result == {"updated": True, "title": "actual-route · unknown · unknown · unknown · ~$1.23"}
+    title = "actual-route · model not yet observed · unknown · unknown · ~$1.23"
+    assert result == {"updated": True, "title": title}
     assert [call[0] for call in calls] == ["thread/loaded/list", "thread/read", "preserve", "thread/name/set"]
-    assert calls[-1][1] == {"threadId": SID, "name": "actual-route · unknown · unknown · unknown · ~$1.23"}
+    assert calls[-1][1] == {"threadId": SID, "name": title}
 
 
 def test_other_namespace_never_renames_or_starts_a_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,14 +53,28 @@ def test_other_namespace_never_renames_or_starts_a_thread(tmp_path: Path, monkey
     assert calls == ["thread/loaded/list"]
 
 
-def test_unknown_alias_does_not_spawn_a_metadata_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(hook, "snapshot", lambda p: {**value(), "alias": None})
-    def forbidden(*a, **kw):
-        raise AssertionError("must not connect without a routing identity")
-    monkeypatch.setattr(hook, "apply_title", forbidden)
+def test_unregistered_alias_still_attempts_the_title_write_with_the_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    cache = tmp_path / "cache.json"
+    snap = {**value(), "alias": None, "cache_path": str(cache)}
+    monkeypatch.setattr(hook, "snapshot", lambda p: snap)
+    seen = []
+    def attempt(v, cwd):
+        seen.append(hook.status_title(v))
+        return {"updated": False, "reason": "thread is not in this loaded app-server namespace"}
+    monkeypatch.setattr(hook, "apply_title", attempt)
     result = hook.handle({"session_id": SID, "cwd": str(tmp_path)}, "Stop")
-    assert result["updated"] is False
-    assert result["reason"] == "no exact registered route alias"
+    assert result["reason"] != "no exact registered route alias"
+    assert len(seen) == 1 and seen[0].startswith("unregistered · model not yet observed · ")
+
+
+def test_unregistered_and_unobserved_labels_replace_bare_unknown_in_alias_and_model_slots() -> None:
+    from coordinator_core.codex_status.render import render
+    bare = {"coverage": {}, "backlog_complete": True}
+    slots = render(bare).split(" · ")
+    assert slots[0] == "unregistered" and slots[1] == "model not yet observed"
+    known = render({**bare, "alias": "actual-route", "model": "gpt-6.2-sol", "effort": "low"}).split(" · ")
+    assert known[:3] == ["actual-route", "gpt-6.2-sol", "low"]
 
 
 def test_status_event_is_fail_open_and_never_ends_a_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,8 +157,7 @@ def test_status_title_is_the_render_line_with_model_effort_and_gauge_slots() -> 
     assert title == hook.render(value)
     assert title.startswith("actual-route · gpt-6.2-sol · high · ") and "42" in title and title.endswith("~$1.50")
     assert hook.status_title({k: v for k, v in value.items() if k != "before_compact_percent"}).count("unknown") == 1
-    with pytest.raises(ValueError, match="no exact registered route alias"):
-        hook.status_title({**value, "alias": None})
+    assert hook.status_title({**value, "alias": None}).startswith("unregistered · gpt-6.2-sol · high · ")
 
 
 def test_previously_unpriced_gpt_62_sol_events_reprice_on_the_next_refresh(
@@ -164,3 +178,13 @@ def test_previously_unpriced_gpt_62_sol_events_reprice_on_the_next_refresh(
     assert after["usd"] == pytest.approx(0.00205)
     assert hook.status_title({**after, "alias": "actual-route"}) == f"actual-route · gpt-6.2-sol · low · unknown · ~$0.00{PARTIAL_MARK}"
     assert "~$" in after["text"] and not after["text"].endswith("unknown")
+
+
+def test_detached_entry_reads_the_stdin_payload_and_runs_the_refresh(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    import io
+    seen = []
+    payload = {"session_id": SID, "cwd": "C:/x"}
+    monkeypatch.setattr(hook.sys, "stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(hook, "handle", lambda p, event: seen.append((p, event)) or {"updated": True})
+    assert hook.main(["--event", "PostCompact"]) == 0
+    assert seen == [(payload, "PostCompact")] and capsys.readouterr().out.strip() == "{}"

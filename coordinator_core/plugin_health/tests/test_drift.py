@@ -307,9 +307,8 @@ def test_copy_install_content_equivalence_batches_multi_file_hash_object(tmp_pat
     (live / "changed_b.txt").write_text("live-b-DIFFERENT\n")
     (live / "version.txt").write_text("0" * 40)
 
-    claude_home = tmp_path
     result = _check_copy_install(
-        "demo", str(source), str(live), "plugin/demo", False, claude_home,
+        "demo", str(source), str(live), "plugin/demo", False,
     )
 
     joined = "\n".join(result.lines)
@@ -318,3 +317,41 @@ def test_copy_install_content_equivalence_batches_multi_file_hash_object(tmp_pat
     assert "changed_b.txt" in joined
     assert "same.txt" not in joined
     assert head[:12] in joined
+
+
+def test_copy_install_hashes_live_under_the_source_repos_filter_not_claude_homes(
+    tmp_path: Path, monkeypatch
+):
+    # holo-79 witness: a CRLF file committed verbatim (no attributes, autocrlf off)
+    # and copied byte-identical to live was reported drifted because the live hash
+    # ran under ~/.claude, whose `* text=auto` normalised the CRLF away.
+    CRLF_PROBE = b'_VERSION = "v3.0.0"' + bytes([13, 10])
+    claude_home = tmp_path / "home" / ".claude"
+    claude_home.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(claude_home)], check=True, **no_console_passthrough_kwargs())
+    (claude_home / ".gitattributes").write_text("* text=auto\n")
+    monkeypatch.chdir(claude_home)
+
+    source = tmp_path / "source"
+    _mkrepo(source)
+    subprocess.run(["git", "-C", str(source), "config", "core.autocrlf", "false"], check=True)
+    plugin_dir = source / "plugin" / "demo"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "probe.py").write_bytes(CRLF_PROBE)
+    subprocess.run(["git", "-C", str(source), "add", "--", "plugin/demo/probe.py"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "-C", str(source), "commit", "-qm", "crlf"],
+        check=True,
+        env={**_env_base(), "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+        **no_console_passthrough_kwargs(),
+    )
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "probe.py").write_bytes(CRLF_PROBE)
+    (live / "version.txt").write_text("d" * 40)
+
+    result = _check_copy_install("demo", str(source), str(live), "plugin/demo", False)
+
+    assert result.ok, result.lines
+    assert any("[ok-via-git-propagation]" in ln for ln in result.lines)

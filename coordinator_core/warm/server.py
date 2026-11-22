@@ -4314,11 +4314,26 @@ def _settings_home_refusal(request_id, claim: str, resolved: str) -> dict:
     }
 
 
+#: Seconds a poll served on a guard-lane thread may wait for its stamp: the lane has
+#: `_GUARD_LANE_THREADS` readers, so a longer hold would starve the other polls and hooks.
+_GUARD_POLL_WAIT_CAP_SECS = 1.0
+
+#: `.secs` is set only around a guard-lane poll serve; `_store_poll` reads it.
+_POLL_WAIT_CAP = threading.local()
+
+
 def _clamped_wait_secs(params: Mapping) -> float:
+    """The poll's `wait_secs`, clamped strictly inside the client read deadline (the answer must
+    reach the caller before it gives up) and to the guard-lane cap on a guard-lane thread."""
     raw = params.get("wait_secs")
     if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw != raw:
         return 0.0
-    return min(max(float(raw), 0.0), float(_POOL_RESULT_DEADLINE_SECS))
+    ceiling = float(_POOL_RESULT_DEADLINE_SECS)
+    ceiling -= min(_WITHDRAW_MARGIN_SECS, ceiling * 0.25)
+    lane_cap = getattr(_POLL_WAIT_CAP, "secs", None)
+    if lane_cap is not None:
+        ceiling = min(ceiling, float(lane_cap))
+    return min(max(float(raw), 0.0), ceiling)
 
 
 def _store_poll(params: Mapping) -> Optional[dict]:
@@ -6794,7 +6809,13 @@ class _ServerContext:
             except Exception:  # noqa: BLE001 -- non-JSON: the shared path answers it
                 method = None
             replay = _ReplayIO(io, line)
-            if method is not None and (_is_hook_lane(method) or _is_light_mutating(method)):
+            if method == _REQUEST_STATUS_METHOD:
+                _POLL_WAIT_CAP.secs = _GUARD_POLL_WAIT_CAP_SECS
+                try:
+                    self._serve_queued(replay, stamp, lane="guard")
+                finally:
+                    _POLL_WAIT_CAP.secs = None
+            elif method is not None and (_is_hook_lane(method) or _is_light_mutating(method)):
                 self._serve_queued(replay, stamp, lane="guard")
             else:
                 self._enqueue_stamps[id(replay)] = stamp

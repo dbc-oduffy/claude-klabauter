@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from coordinator_core.atomic_replace import atomic_write_bytes
@@ -181,6 +183,37 @@ def discover(directory: Path, root: str, *, max_files: int = 256, header_budget:
             break
         selected |= added
     return [path for path, sid, _ in sorted(rows, key=lambda row: row[1] != root) if sid in selected], complete
+
+
+def rollout_for(sid: str) -> Path | None:
+    """Locate a thread's own rollout under the Codex sessions root by session id.
+
+    Looks only in today's and yesterday's date directories (local and UTC; at most
+    three after dedupe); an older resumed thread needs an explicit path. The first
+    record must be a session_meta carrying `sid`. No subprocess.
+    """
+    sid = sid.lower()
+    home = os.environ.get("CODEX_HOME")
+    root = (Path(home) if home else Path.home() / ".codex") / "sessions"
+    now = datetime.now(timezone.utc)
+    days = [now.astimezone().date(), now.date()]
+    days += [day - timedelta(days=1) for day in days]
+    for day in dict.fromkeys(days):
+        directory = root / f"{day:%Y}" / f"{day:%m}" / f"{day:%d}"
+        try:
+            candidates = sorted(directory.glob(f"*-{sid}.jsonl"))
+        except OSError:
+            continue
+        for path in candidates:
+            try:
+                with path.open("rb") as handle:
+                    header = handle.readline(512 * 1024)
+                event = json.loads(header)
+                if event.get("type") == "session_meta" and str(event["payload"].get("id", "")).lower() == sid:
+                    return path
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                continue
+    return None
 
 
 def registered_paths(directory: Path, root: str, state: dict | None = None) -> tuple[list[Path], bool]:

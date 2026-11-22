@@ -1135,6 +1135,21 @@ def _append_reason(envelope: dict, tail: str) -> dict:
     return envelope
 
 
+def _reader_holding_runs(root: Path, run_ids: Sequence[str]) -> list:
+    """The minted-only runs among `run_ids` whose script is on disk and holds its own `workflow()` reader."""
+    from coordinator_core.ops.dispatch_emit import minted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    out = []
+    for rid in run_ids:
+        if not minted_run.is_minted_only(root / RECORD_DIR_ROOT / rid):
+            continue
+        reply = minted_run.start_args(root, rid)
+        if isinstance(reply, dict) and reply.get("ok") and reply.get("script_path") and minted_run.holds_workflow_reader(root, reply["script_path"]):
+            out.append(rid)
+    return out
+
+
 def _minted_start_envelope(
     root: Optional[Path], run_ids: Sequence[str], deadline: float, call: Optional[dict] = None
 ) -> dict:
@@ -1154,6 +1169,14 @@ def _minted_start_envelope(
         direct = _direct_start(root, ids[0], min(deadline, time.monotonic() + _ENVELOPE_GRACE_S / 2))
         if direct is not None:
             return _append_reason(direct, tail)
+    else:
+        holders = _quick(lambda: _reader_holding_runs(root, ids), min(deadline, time.monotonic() + _ENVELOPE_GRACE_S / 2))
+        if holders:
+            # A reader-holding run started under the launcher would nest its `workflow()` reader a second level.
+            direct = _direct_start(root, holders[0], min(deadline, time.monotonic() + _ENVELOPE_GRACE_S / 2))
+            if direct is not None:
+                rest = [i for i in ids if i != holders[0]]
+                return _append_reason(direct, f" Run {holders[0]} holds its own stage reader, so it alone starts here. {_minted_remedy(rest)}{tail}")
     script = _quick(lambda: _write_minted_start_script(root, ids), max(deadline, time.monotonic() + 0.05))
     if script is None:
         return _refuse(f"The submission outran the hook budget after minting run {', '.join(ids)}. {_minted_remedy(ids)}{tail}")

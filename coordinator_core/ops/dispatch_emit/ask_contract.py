@@ -312,6 +312,16 @@ def run_base_ref(root: Path, sizing_rel: object) -> Optional[str]:
     return recorded
 
 
+UNCOMMITTED_NOT_LANDED = "uncommitted, not landed"
+
+
+def premise_ref(root: Path, sizing_rel: object) -> str:
+    """The ref a premise check resolves against: `run_base_ref`, else "HEAD". Invariant: a premise check
+    never treats the live tree as landed; a claim only the working tree satisfies is
+    `UNCOMMITTED_NOT_LANDED`. No git spawn; the consumer's cat-file batch resolves "HEAD"."""
+    return run_base_ref(root, sizing_rel) or "HEAD"
+
+
 def _recorded_run_base(dir_: Path, run_record: dict) -> Optional[str]:
     """The full-sha `run_base_sha` of a run's `run.json` record, else of its `halted.json`; None when neither names one."""
     for record in (run_record, _read_json_object(dir_ / "halted.json") or {}):
