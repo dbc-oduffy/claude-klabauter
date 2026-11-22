@@ -33,6 +33,7 @@ _PORTABLE_MODULE = re.compile(r"(?<![\w./\\-])python(?:3(?:\.\d+)?)?[ \t]+-m[ \t
 _BARE_ARGV0 = re.compile(
     r"(?<![\w./\\-])(?<!bare `)(python3?)(?=[ \t]+(?:-m[ \t]+(?!coordinator_core\b)\w|-c[ \t]|[^\s`'\"<>|;&-]*[/\\][^\s`]*|[^\s`/\\]+\.py\b))"
 )
+# Trap: a wrapper that leaves COORDINATOR_ENGINE_ROOT unset makes a child's `import coordinator_core` fail.
 _BOOTSTRAP = (
     "import os,runpy,sys;"
     "from pathlib import Path;"
@@ -44,8 +45,14 @@ _BOOTSTRAP = (
     "paths=[root,site] if stamp(home)==tuple(sys.version_info[:2]) else [root];"
     "sys.path[:1]=paths;"
     "os.environ['PYTHONPATH']=os.pathsep.join(paths);"
+    "os.environ['COORDINATOR_ENGINE_ROOT']=root;"
     "runpy.run_module(sys.argv.pop(1),run_name='__main__',alter_sys=True)"
 )
+
+
+# A bare `pytest` command word (line start, after a backtick, `&&`, `;` or `|`, followed by a flag or a test path)
+# resolves from PATH to whatever interpreter owns it; it is always bound to `<stamped python> -m pytest`.
+_BARE_PYTEST = re.compile(r"(?:(?<=^)|(?<=`)|(?<=&& )|(?<=; )|(?<=\| ))pytest(?=[ 	]+(?:-|[^\s`'\"<>|;&]*\.py|[\w.]+/))", re.MULTILINE)
 
 
 def _engine_command_runtime() -> tuple[str, Path]:
@@ -84,7 +91,7 @@ def _absent_argv0(match: re.Match) -> bool:
 def needs_binding(text: str) -> bool:
     """True when `text` carries a portable engine command, or a bare `python`/`python3` argv0 this host lacks
     (Linux with only `python3`: the bare word is `command not found`). In-process: no spawn."""
-    return bool(_PORTABLE_MODULE.search(text)) or any(_absent_argv0(m) for m in _BARE_ARGV0.finditer(text))
+    return bool(_PORTABLE_MODULE.search(text) or _BARE_PYTEST.search(text)) or any(_absent_argv0(m) for m in _BARE_ARGV0.finditer(text))
 
 
 def _quoted(value: str) -> str:
@@ -103,7 +110,8 @@ def bind_engine_commands(prompt: str) -> str:
     else:
         prefix = shlex.join(argv)
     prompt = _PORTABLE_MODULE.sub(lambda match: f"{prefix} {match[1]}", prompt)
-    return _BARE_ARGV0.sub(lambda m: m[0] if not _absent_argv0(m) else _quoted(python), prompt)
+    prompt = _BARE_ARGV0.sub(lambda m: m[0] if not _absent_argv0(m) else _quoted(python), prompt)
+    return _BARE_PYTEST.sub(lambda _m: f"{_quoted(python)} -m pytest", prompt)
 
 
 def with_worker_preamble(backend: str, prompt: str) -> str:

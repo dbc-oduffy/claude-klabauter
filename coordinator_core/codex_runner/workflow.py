@@ -65,66 +65,28 @@ class StructuredReplyInvalid(AgentFailed):
     cause = "structured_reply_invalid"
 
 
-class StageIdleTimeout(AgentFailed):
-    """The stage's stdout produced nothing for the idle bound; its process tree was killed by PID."""
-
-    cause = "stage_idle_timeout"
+class StageStalled(AgentFailed):
+    """A Codex child's stdout and stderr stayed silent past the stall window."""
 
 
-def _stage_idle_timeout_s() -> float:
-    """Half the staged-stall detector's bound, so the watchdog kills and retries before that detector halts
-    the run as `staged_stall` (the de0255 run sat silent 604s against its 600s bound)."""
-    from coordinator_core.ops.dispatch_emit.staged_stall import STAGED_STALL_BOUND_SECS
-
-    return STAGED_STALL_BOUND_SECS / 2
+STALL_WINDOW_S = 900.0
+STALL_RETRIES = 1
+_STALL_POLL_S = 1.0
 
 
-class _IdleWatchdog:
-    """Kills the child tree when its stdout file stops growing for `idle_s`.
+def _stream_bytes(*handles) -> int:
+    return sum(os.fstat(h.fileno()).st_size for h in handles)
 
-    A thread on an Event wait that reads the handle's size with fstat: no process spawn, no name or port
-    lookup. The kill targets the recorded child PID and its descendants through psutil.
-    """
 
-    def __init__(self, stream, pid: int, idle_s: float):
-        self.stream, self.pid, self.idle_s = stream, pid, idle_s
-        self.fired = False
-        self.stop = threading.Event()
-        self.thread = threading.Thread(target=self._watch, daemon=True, name="stage-idle-watchdog")
+def _kill_descendants(pid: int) -> None:
+    """Kill every descendant of `pid`; the child itself is killed by the caller's cleanup."""
+    import psutil
 
-    def _size(self) -> int:
-        return os.fstat(self.stream.fileno()).st_size
-
-    def _watch(self) -> None:
-        interval = max(0.05, min(5.0, self.idle_s / 4))
+    for child in psutil.Process(pid).children(recursive=True):
         try:
-            seen, since = self._size(), time.monotonic()
-            while not self.stop.wait(interval):
-                size = self._size()
-                if size != seen:
-                    seen, since = size, time.monotonic()
-                elif time.monotonic() - since >= self.idle_s:
-                    self.fired = True
-                    self._kill_tree()
-                    return
-        except (OSError, ValueError):
-            return
-
-    def _kill_tree(self) -> None:
-        import psutil
-
-        try:
-            root = psutil.Process(self.pid)
-            victims = root.children(recursive=True) + [root]
+            child.kill()
         except psutil.Error:
-            return
-        for victim in victims:
-            try:
-                victim.kill()
-            except psutil.Error:
-                pass
-
-
+            pass
 
 
 def _codex_schema(schema: Any) -> Any:
@@ -452,36 +414,13 @@ class _NativeThreadObserver:
             raise AgentFailed(f'native identity observation failed: {self.error}') from self.error
 
 
-def _run_admitted(argv, prompt, **kw):
-    """`_run_admitted_once`, retried once when the stage goes idle; a second idle raises `StageIdleTimeout`."""
-    started = time.monotonic()
-    idle_s = _stage_idle_timeout_s()
-    try:
-        return _run_admitted_once(argv, prompt, **kw)
-    except StageIdleTimeout:
-        pass
-    # The killed child's partial capture must not prefix the retry's.
-    for stream in (kw["stdout"], kw["stderr"]):
-        stream.seek(0)
-        stream.truncate()
-    kw = {**kw, "timeout_s": kw["timeout_s"] - (time.monotonic() - started)}
-    if kw["timeout_s"] <= 0:
-        raise AgentFailed(f"{kw['backend']} agent timed out after the first stage_idle_timeout consumed its budget")
-    try:
-        return _run_admitted_once(argv, prompt, **kw)
-    except StageIdleTimeout as exc:
-        (kw["artifact_dir"] / "stage-idle-timeout.json").write_text(json.dumps({
-            "cause": StageIdleTimeout.cause, "idle_seconds": idle_s, "attempts": 2, "detail": str(exc),
-        }), encoding="utf-8")
-        raise StageIdleTimeout(
-            f"{StageIdleTimeout.cause}: no stdout event for {idle_s:g}s on two consecutive attempts"
-        ) from exc
+def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
+                  options, parent_session_id, timeout_s, on_spawn, stdout, stderr,
+                  request_id=None, fire_id=None, on_native_thread=None, stall_window_s=None):
+    """Reserve checked memory for this worker until its actual child exits.
 
-
-def _run_admitted_once(argv, prompt, *, env, repo_root, artifact_dir, backend,
-                       options, parent_session_id, timeout_s, on_spawn, stdout, stderr,
-                       request_id=None, fire_id=None, on_native_thread=None):
-    """Reserve checked memory for this worker until its actual child exits."""
+    A stall_window_s kills the child with StageStalled once its stdout and stderr
+    have not grown for that long."""
     deadline = time.monotonic() + timeout_s
 
     def remaining() -> float:
@@ -556,16 +495,30 @@ def _run_admitted_once(argv, prompt, *, env, repo_root, artifact_dir, backend,
             facts = _native_child_facts(proc, repo_root, sid, fire_id, request_id, argv)
             observer = _NativeThreadObserver(artifact_dir / 'stdout.jsonl', facts, on_native_thread, proc.kill)
             observer.start()
-        idle_s = _stage_idle_timeout_s()
-        watchdog = _IdleWatchdog(stdout, proc.pid, idle_s)
-        watchdog.thread.start()
+        stalled = threading.Event()
+        watchdog_done = threading.Event()
+        if stall_window_s is not None:
+            def _watch() -> None:
+                seen, last_growth = -1, time.monotonic()
+                while not watchdog_done.wait(_STALL_POLL_S):
+                    try:
+                        size = _stream_bytes(stdout, stderr)
+                    except OSError:
+                        return
+                    if size != seen:
+                        seen, last_growth = size, time.monotonic()
+                    elif time.monotonic() - last_growth >= stall_window_s:
+                        stalled.set()
+                        _cleanup(_kill_descendants, proc.pid)
+                        _cleanup(proc.kill)
+                        return
+            threading.Thread(target=_watch, name="stage-stall-watchdog", daemon=True).start()
         try:
             proc.communicate(prompt.encode("utf-8"), timeout=remaining())
-        except OSError:
-            if not watchdog.fired:
-                raise
-        if watchdog.fired:
-            raise StageIdleTimeout(f"{StageIdleTimeout.cause}: no stdout event for {idle_s:g}s; killed pid {proc.pid}")
+        finally:
+            watchdog_done.set()
+        if stalled.is_set():
+            raise StageStalled(f"{backend} stage silent for {stall_window_s}s; killed")
         if observer is not None:
             observer.finish()
         return proc
@@ -932,6 +885,26 @@ _WINDOWS_CALL_FORM = {
     True: 'Run every command as a plain command: never lead with the & call operator or quote the executable; '
           'coordinator tools such as sizing-assemble and coordinator-invoke are on PATH, so run them by bare name. ',
 }
+
+
+_SETTINGS_HOME_INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+_OP_ID = re.compile(r"[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*")
+
+
+def _operation_allow(options: dict) -> list[str]:
+    """`--allowedTools` argv for a Claude child whose agent options declare one engine `op_id`; none when undeclared.
+
+    Two rules admit `coordinator-invoke <op_id>` and nothing else: the bare command word and the quoted
+    settings-home path ask_compose's `_INVOKE` emits (a prefix rule on the bare word never matches it).
+    A malformed `op_id` fails the agent.
+    """
+    op_id = options.get("op_id")
+    if op_id is None:
+        return []
+    if not isinstance(op_id, str) or not _OP_ID.fullmatch(op_id):
+        raise AgentFailed(f"invalid op_id: {op_id!r}")
+    return [flag for word in ("coordinator-invoke", _SETTINGS_HOME_INVOKE)
+            for flag in ("--allowedTools", f"Bash({word} {op_id}:*)")]
 
 
 def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None) -> list[str]:
@@ -1308,6 +1281,7 @@ def run_agent(
             argv += ["--json-schema", json.dumps(schema)]
         if options.get("model"):
             argv += ["--model", str(options["model"])]
+        argv += _operation_allow(options)
     elif backend in _FAMILY_BACKENDS:
         argv = _family_argv(backend, artifact_dir, options.get("agentType"))
     else:
@@ -1317,14 +1291,33 @@ def run_agent(
         stdin_text = json.dumps({"event": "user", "message": {"content": full_prompt}}) + "\n"
     elif backend == "grok":
         stdin_text = ""
+    stall_window_s = None
+    if backend == "codex":
+        try:
+            stall_window_s = float(options.get("stallWindowS", STALL_WINDOW_S))
+        except (TypeError, ValueError) as exc:
+            raise AgentFailed(f"stallWindowS must be a number: {exc}") from exc
+    started = time.monotonic()
     try:
-        with (artifact_dir / "stdout.jsonl").open("wb") as out, (artifact_dir / "stderr.txt").open("wb") as err:
-            proc = _run_admitted(
-                argv, stdin_text, env=env, repo_root=repo_root, artifact_dir=artifact_dir,
-                backend=backend, options=options, parent_session_id=parent_session_id,
-                timeout_s=timeout_s, on_spawn=on_spawn, stdout=out, stderr=err,
-                request_id=request_id, fire_id=fire_id, on_native_thread=on_native_thread,
-            )
+        for attempt in range(STALL_RETRIES + 1):
+            with (artifact_dir / "stdout.jsonl").open("wb") as out, (artifact_dir / "stderr.txt").open("wb") as err:
+                try:
+                    proc = _run_admitted(
+                        argv, stdin_text, env=env, repo_root=repo_root, artifact_dir=artifact_dir,
+                        backend=backend, options=options, parent_session_id=parent_session_id,
+                        timeout_s=max(timeout_s - (time.monotonic() - started), 1e-3), on_spawn=on_spawn,
+                        stdout=out, stderr=err, request_id=request_id, fire_id=fire_id,
+                        on_native_thread=on_native_thread, stall_window_s=stall_window_s,
+                    )
+                    break
+                except StageStalled as exc:
+                    if attempt >= STALL_RETRIES:
+                        # Receipt consumers read this file by name to tell a stall from a wall timeout.
+                        (artifact_dir / "stage-idle-timeout.json").write_text(json.dumps({
+                            "cause": "stage_idle_timeout", "idle_seconds": stall_window_s,
+                            "attempts": attempt + 1, "detail": str(exc),
+                        }), encoding="utf-8")
+                        raise
     except subprocess.TimeoutExpired as exc:
         raise AgentFailed(f"{backend} agent timed out after {timeout_s}s") from exc
     except OSError as exc:

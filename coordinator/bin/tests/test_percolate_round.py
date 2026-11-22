@@ -3780,6 +3780,7 @@ class _FakePublish:
 
 def _drive_field7_round(tmp_path, monkeypatch, result):
     publish = _FakePublish(result)
+    monkeypatch.setattr(_mod, "_regenerate_field7", lambda pub, ref: "stale deny entry: x")
     monkeypatch.setattr(_mod, "_field7_preflight", _REAL_FIELD7_PREFLIGHT)
     monkeypatch.setattr(_mod, "_sibling_cli", lambda script: publish)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(tmp_path))
@@ -3797,7 +3798,7 @@ def test_red_field7_for_an_owned_row_refuses_before_any_sync(tmp_path, monkeypat
     assert rc == _mod._EXIT_FAIL
     assert reached == []
     err = capsys.readouterr().err
-    assert "stale deny entry: x" in err and "publish-allowlist-generate.py" in err
+    assert "stale deny entry: x" in err and "Remedy" not in err
 
 
 def test_unknown_owned_set_refuses_when_field7_is_red(tmp_path, monkeypatch):
@@ -3991,3 +3992,71 @@ class TestResolveCloneShaOneSpawn:
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         with pytest.raises(RuntimeError, match="HEAD does not resolve"):
             _mod._resolve_clone_sha(repo, "no-such-ref")
+
+
+# ---------------------------------------------------------------------------
+# Shadow-store reap: after the push, outside the publish leg, on every exit.
+# ---------------------------------------------------------------------------
+
+def test_shadow_reap_runs_after_push_on_default_round(tmp_path, monkeypatch):
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    reaped_at = []
+    holder = {}
+    monkeypatch.setattr(_mod, "_reap_shadow_store", lambda dest: reaped_at.append(len(holder["spy"].calls)))
+
+    orig = _mod._cmd_round_default
+
+    def capture_spy(*a, **k):
+        holder["spy"] = _mod.subprocess.run
+        return orig(*a, **k)
+
+    monkeypatch.setattr(_mod, "_cmd_round_default", capture_spy)
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
+    assert rc == _mod._EXIT_OK
+    push_idx = max(i for i, c in enumerate(spy.calls) if c and str(c[0]) == "git" and "push" in map(str, c))
+    assert len(reaped_at) == 1
+    assert reaped_at[0] > push_idx
+
+
+def test_shadow_reap_runs_after_body_returns_or_raises(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(_mod, "_reap_shadow_store", lambda dest: events.append("reap"))
+
+    def body_ok(*a, **k):
+        events.append("body")
+        return 7
+
+    monkeypatch.setattr(_mod, "_round_default_body", body_ok)
+    assert _mod._cmd_round_default(None, "t", "p", "s", "d", tmp_path) == 7
+    assert events == ["body", "reap"]
+
+    events.clear()
+
+    def body_boom(*a, **k):
+        events.append("body")
+        raise RuntimeError("leg timed out")
+
+    monkeypatch.setattr(_mod, "_round_default_body", body_boom)
+    with pytest.raises(RuntimeError):
+        _mod._cmd_round_default(None, "t", "p", "s", "d", tmp_path)
+    assert events == ["body", "reap"]
+
+
+def test_reap_shadow_store_never_raises_and_honours_budget(monkeypatch):
+    from coordinator_core.percolate.shadow_store import ShadowStore
+
+    monkeypatch.setattr(ShadowStore, "store_roots", classmethod(lambda cls: (_ for _ in ()).throw(OSError("x"))))
+    _mod._reap_shadow_store("dest")
+
+    seen = []
+    monkeypatch.setattr(ShadowStore, "store_roots", classmethod(lambda cls: [Path("a"), Path("b")]))
+    monkeypatch.setattr(ShadowStore, "reap_doomed", lambda self, budget_s=None: seen.append((self.root, budget_s)) or 0)
+    _mod._reap_shadow_store("dest")
+    assert [r for r, _ in seen] == [Path("a"), Path("b")]
+    assert all(0 < b <= _mod._SHADOW_REAP_BUDGET_SECS for _, b in seen)
+
+    seen.clear()
+    monkeypatch.setattr(_mod, "_SHADOW_REAP_BUDGET_SECS", 0.0)
+    _mod._reap_shadow_store("dest")
+    assert seen == []

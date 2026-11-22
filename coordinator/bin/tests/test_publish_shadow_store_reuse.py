@@ -105,6 +105,27 @@ def test_an_entry_without_its_marker_is_never_served(repo: Path, monkeypatch) ->
     assert not served.exists()
 
 
+def test_cleanup_renames_a_stale_store_entry_and_never_deletes_it(repo: Path) -> None:
+    import os
+    import time
+
+    publish._MATERIALIZED_REF_CACHE.clear()
+    stored = publish._git_materialize_ref(repo)
+    store, key = publish._STORE_SHADOWS[stored]
+    stale = store.root / "stale-unmarked-entry"
+    stale.mkdir()
+    (stale / "big.bin").write_text("x", encoding="utf-8")
+    old = time.time() - 48 * 3600
+    os.utime(stale, (old, old))
+
+    publish._cleanup_shadow_roots((stored,))
+
+    assert not stale.exists()
+    doomed = [p for p in store.root.iterdir() if ".deleting-" in p.name]
+    assert len(doomed) == 1 and (doomed[0] / "big.bin").is_file()
+    assert (stored / "a.txt").is_file()
+
+
 def test_cleanup_retains_a_store_shadow_and_removes_a_non_store_one(repo: Path, tmp_path: Path, monkeypatch) -> None:
     publish._MATERIALIZED_REF_CACHE.clear()
     stored = publish._git_materialize_ref(repo)

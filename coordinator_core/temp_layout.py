@@ -322,6 +322,19 @@ _LEGACY_CACHE_PATHS = (
 _legacy_root_reaped = False
 
 
+def _commit_clone_leased(clone: Path) -> bool:
+    """True when ``<clone>/.git/in-use/`` names a live pid (mirrors commit_clone._clone_in_use; no import)."""
+    from coordinator_core.group_em import session_registry
+
+    try:
+        names = os.listdir(clone / ".git" / "in-use")
+    except OSError:
+        return False
+    return any(
+        n.isdigit() and (int(n) == os.getpid() or session_registry.pid_alive(int(n))) for n in names
+    )
+
+
 def _reap_legacy_root_once() -> None:
     """Once per process, drain the old ``<gettempdir()>/coordinator`` when the root moved off it.
 
@@ -356,6 +369,8 @@ def _reap_legacy_root_once() -> None:
             for entry in entries:
                 try:
                     if now - entry.stat(follow_symlinks=False).st_mtime < max_age:
+                        continue
+                    if parts[-1] == "claude-klabauter-commit-clone" and _commit_clone_leased(Path(entry.path)):
                         continue
                     _rmtree_strict(Path(entry.path))
                 except OSError:

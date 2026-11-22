@@ -46,6 +46,7 @@ def _request(engine_event: Mapping[str, Any]) -> Dict[str, Any]:
     payload = dict(engine_event)
     payload.setdefault("env", {})
     payload.setdefault("permission_mode", None)
+    payload["trace_guards"] = True
     request: Dict[str, Any] = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -315,7 +316,9 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
             os.environ[_SESSION_ENV] = previous
     verdict = _verdict(response)
     if verdict is not None:
-        warm_guards = _chain_guards(event, engine_event)
+        verdict = dict(verdict)
+        named = verdict.pop("guards_evaluated", None)
+        warm_guards = [str(g) for g in named] if isinstance(named, list) and named else _chain_guards(event, engine_event)
         nested = verdict.get("hookSpecificOutput")
         warm_deny = "deny" in (verdict.get("permissionDecision"), verdict.get("decision"),
                                nested.get("permissionDecision") if isinstance(nested, Mapping) else None)

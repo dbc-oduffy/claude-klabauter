@@ -116,12 +116,12 @@ def __getattr__(name):
 
 def default_peers_file():
     """The peers file a default invocation reads."""
-    return _roster().settings_home() / "unimatrix" / "peers.json"
+    return _roster().delivery_settings_home() / "unimatrix" / "peers.json"
 
 
 def default_legs_dir():
     """Where the agy launch hook writes one leg record per conversation."""
-    return _roster().settings_home() / "unimatrix" / "agy-legs"
+    return _roster().delivery_settings_home() / "unimatrix" / "agy-legs"
 
 
 def leg_record_live(rec):
@@ -396,7 +396,7 @@ def load_lock_peers(lock_dir, vendor, taken_names=(), taken_targets=()):
         if vendor == 'codex':
             try:
                 address = _contract().read_codex_address(
-                    _roster().settings_home() / 'host-sessions' / 'codex', ident, socket.gethostname())
+                    _roster().delivery_settings_home() / 'host-sessions' / 'codex', ident, socket.gethostname())
             except _contract().PeerConfigError as exc:
                 print(f'unimatrix: refusing Codex address: {exc}', file=sys.stderr)
                 continue
@@ -533,7 +533,7 @@ def is_ack(text):
 
 
 def default_state_dir():
-    return _roster().settings_home() / "unimatrix" / "router"
+    return _roster().delivery_settings_home() / "unimatrix" / "router"
 
 
 def endpoint_path(seed, endpoint_dir=None):
@@ -757,8 +757,10 @@ class Router:
 
     def __init__(self, peers, sessions_dir=None, state_dir=None, endpoint_dir=None,
                  adapters=None, ready_seconds=READY_SECONDS, legs_dir=None,
-                 codex_locks_dir=None, presence_dir=None, grok_home=None):
+                 codex_locks_dir=None, presence_dir=None, grok_home=None, peers_file=None):
         peers = list(peers)
+        self.peers_file = str(peers_file) if peers_file else None
+        self._peers_stamp = None  # (mtime_ns, size) of peers_file at the last adoption read
         self.codex_home = Path(codex_locks_dir or default_codex_locks_dir()).resolve().parent
         metadata = codex_thread_metadata(self.codex_home) if any(p.get('vendor') == 'codex' for p in peers) else {}
         self.refused_codex_addresses = set()
@@ -797,12 +799,21 @@ class Router:
         self.bound_faces = set()  # face endpoints whose child registration reached ready
         self.dead_holders = set()  # Codex peers whose recorded holder is gone: no face, not listed
 
-    def peer_stale(self, name):
-        """True for a Codex peer without a live attached holder: dead (False) or unrecorded (None)."""
+    def peer_stale(self, name) -> bool:
+        """True for a Codex peer without a live attached holder: dead (False) or unrecorded (None).
+
+        A discovered peer with no recorded holder is live while its writer lock is held; a recorded
+        dead holder stays stale.
+        """
         peer = self.peers.get(name)
         if not isinstance(peer, dict) or peer.get("vendor") != "codex":
             return False
-        return name in self.dead_holders or _liveness().codex_holder_live(peer) is not True
+        if name in self.dead_holders:
+            return True
+        live = _liveness().codex_holder_live(peer)
+        if live is None and name in self.discovered:
+            return not self.thread_held(peer.get("target"))
+        return live is not True
 
     async def _drop_dead_holders(self):
         """Stop the face of every peers-file Codex row whose recorded holder is gone.
@@ -922,6 +933,7 @@ class Router:
 
     async def refresh_discovered(self):
         """Register a face for each newly live discovered peer and retire the ones whose record or lock went."""
+        await self.adopt_peers_file()
         await self._drop_dead_holders()
         live = await asyncio.to_thread(self._live_discovered)
         for name in sorted(self.discovered - set(live)):
@@ -939,6 +951,63 @@ class Router:
             except Exception as e:
                 self.log("DISCOVER-REGISTER-FAILED", name, type(e).__name__, e)
                 await self._retire(name)
+
+    async def adopt_peers_file(self) -> None:
+        """Adopt Codex rows peers.json gained or changed since the last read; one stat per tick.
+
+        A row for a target a discovered peer holds replaces that peer, so the file's holder fields
+        win and no `tui` flag is carried. A changed holder revives a row marked dead. An unreadable
+        or invalid file adopts nothing until it changes again.
+        """
+        if not self.peers_file:
+            return
+        try:
+            st = os.stat(self.peers_file)
+        except OSError:
+            return
+        stamp = (st.st_mtime_ns, st.st_size)
+        if stamp == self._peers_stamp:
+            return
+        self._peers_stamp = stamp
+        try:
+            rows = await asyncio.to_thread(_contract().load_peers, self.peers_file)
+        except (OSError, ValueError, _contract().PeerConfigError):
+            return
+        rows = [r for r in rows if r.get("vendor") == "codex"]
+        if not rows:
+            return
+        metadata = await asyncio.to_thread(codex_thread_metadata, self.codex_home)
+        for row in rows:
+            name, target = row["name"], row["target"]
+            if not codex_is_sendable_root(metadata.get(target, {})):
+                continue
+            current = self.peers.get(name)
+            if current is not None and name not in self.discovered:
+                if any(current.get(k) != row.get(k) for k in ("codexPid", "codexProcStart")):
+                    self.peers[name] = row
+                    self.dead_holders.discard(name)
+                    try:
+                        await (self.restart_face(name) if name in self.faces else self._spawn_face(name))
+                    except Exception as e:
+                        self.log("ADOPT-REFRESH-FAILED", name, type(e).__name__, e)
+                continue
+            if any(n not in self.discovered and p["target"] == target for n, p in self.peers.items()):
+                continue  # a construction-time row already owns this target
+            for n in [n for n, p in self.peers.items()
+                      if n in self.discovered and (n == name or p["target"] == target)]:
+                await self._retire(n)
+            self.peers[name] = row
+            self.locks[name] = asyncio.Lock()
+            try:
+                await self._spawn_face(name)
+            except Exception as e:
+                self.log("ADOPT-REGISTER-FAILED", name, type(e).__name__, e)
+                if name in self.faces:
+                    await self._stop_face(name)
+                self.peers.pop(name, None)
+                self.locks.pop(name, None)
+                continue
+            self.log("adopted", name)
 
     async def _retire(self, name):
         """Drop a discovered peer: stop its face, remove its registry files and endpoint."""
@@ -1929,7 +1998,7 @@ def cmd_serve(argv):
         return 2
     asyncio.run(serve(Router(peers, a.sessions_dir, a.state_dir, a.endpoint_dir,
                              legs_dir=default_legs_dir(), codex_locks_dir=default_codex_locks_dir(),
-                             presence_dir=default_presence_dir(),
+                             presence_dir=default_presence_dir(), peers_file=peers_file,
                              grok_home=_sibling("unimatrix-peer-grok.py", "unimatrix_peer_grok").grok_home())))
     return 0
 

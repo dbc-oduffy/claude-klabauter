@@ -197,7 +197,7 @@ def test_infra_refusal(reason: str, inline_review: object) -> Optional[dict]:
     reason and the test leg left no review: the stale measurement is the leg's failure, and the remedy is
     re-arming ``dispatch.test_leg``. None for an unreadable-record reason or a leg that ran."""
     leg_failure = test_leg_failure(inline_review)
-    if not leg_failure or not reason.startswith("measured-rev-drift"):
+    if not leg_failure or not reason.startswith(("measured-rev-drift", "measure_unavailable")):
         return None
     return _error(
         f"test-leg-error: {leg_failure}; {reason}; the measurement is stale, not the requirement. "
@@ -2048,6 +2048,8 @@ def _ledger_gate(
     try:
         drifted = measured_rev.foreign_drift(run_dir, root)
         drift_reason = f"measured-rev-drift: {', '.join(drifted)}"
+    except measured_rev.MeasureUnavailable as exc:
+        drifted, drift_reason = exc.paths, f"measure_unavailable: {', '.join(exc.paths)}"
     except (OSError, ValueError):
         drifted, drift_reason = ["<record>"], "measured-rev-record-unreadable"
     if drifted and not test_leg_superseded_by_reverify(drift_reason, inline_review):
@@ -3470,6 +3472,15 @@ def _split_reach_dirt(
     return {p: b for p, b in reach_dirt.items() if p not in foreign}, foreign
 
 
+def _red_is_foreign_runs(failing: Sequence[str], foreign: dict) -> bool:
+    """True when a red overlay verdict names failing nodes and every one sits in a file another run holds
+    (``foreign`` maps path to holder, ``unattributed`` excluded): the test is that run's uncommitted work,
+    not this landing's. One failing node outside such a file keeps the refusal."""
+    files = {str(n).replace("\\", "/").split("::", 1)[0] for n in failing}
+    held = {p for p, h in foreign.items() if h and h != "unattributed"}
+    return bool(files) and files <= held
+
+
 def _overlay_refusal_text(
     reach_dirt_foreign: dict, own_withheld: dict, verdict: str, detail: object, remedy: str,
 ) -> str:
@@ -3775,6 +3786,34 @@ def _worktree_blob(root: Path, rel: str) -> Optional[str]:
         return None
 
 
+def _eof_only_delta(root: Path, rel: str, measured_blob: object, settled: Mapping) -> bool:
+    """True when the landing bytes of *rel* differ from the measured blob only in trailing line
+    endings at EOF: the same content, never a refusal. False on a missing object or any content change."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    if not isinstance(measured_blob, str):
+        return False
+    try:
+        measured = git_objects.read_object(resolve_git_common_dir(root), measured_blob)
+        blob = settled.get(rel)
+        if blob:
+            obj = git_objects.read_object(resolve_git_common_dir(root), blob)
+            landed = None if obj is None else obj[1]
+        else:
+            landed = kept_work.checkin_form(root, rel, (root / rel).read_bytes())
+    except Exception:  # noqa: BLE001 -- unreadable bytes keep the refusal
+        return False
+    if measured is None or landed is None or measured[1] == landed:
+        return False
+
+    def body(data: bytes) -> bytes:
+        return data.rstrip(b"\r\n")
+
+    return body(measured[1]) == body(landed)
+
+
 def _measured_mismatch(
     root: Path, record: dict, product: Sequence[str], deleted: Sequence[str], settled: dict, own=None,
     baseline: Optional[Mapping] = None, owned_now=None, no_change=None,
@@ -3809,6 +3848,7 @@ def _measured_mismatch(
     differing |= {p for p in removed if p not in gone and p in head}
     if own is not None:
         differing = {p for p in differing if not own.covers(p)}
+    differing -= {p for p in differing & landing if _eof_only_delta(root, p, blobs.get(p), settled)}
     if owned_now is not None and differing & landing:
         differing -= set(owned_now(sorted(differing & landing)))
     if no_change is not None and differing & landing:
@@ -3857,17 +3897,25 @@ def _run_made_no_change(root: Path, run_id: Optional[str], baseline: Optional[Ma
     return never_changed
 
 
-def _own_bytes_now(root: Path, run_dir, session_id, run_id, inline_review):
+def _own_bytes_now(root: Path, run_dir, session_id, run_id, inline_review, post_measure: bool = False) -> "collections.abc.Callable[[Sequence[str]], list]":
     """A ``paths -> run-owned subset`` callable: those paths whose bytes are the run session's or a
     review agent's last recorded write (``drift_attribution.classify``), not bounded by the run
-    record's start. Hash-only; the ledgers are read when called."""
+    record's start. ``post_measure`` also credits the writes of the run's own dispatched agents and
+    the blobs its record dir holds (a revise re-execution's chunk rewrite after the measured rev);
+    a foreign rewrite changes the bytes and matches neither. Hash-only; the ledgers are read when called."""
     from coordinator_core.ops.dispatch_emit import drift_attribution
 
-    def owned(paths):
+    def owned(paths: Sequence[str]) -> list:
         hashes = {p: [sha] for p, (sha, _at) in _review_write_events(root, session_id, run_id, inline_review).items()}
+        extra: dict = {}
+        if post_measure and run_dir is not None and safe_id(Path(run_dir).name):
+            extra = {
+                "agent_ids": drift_attribution.session_agent_ids(root, session_id),
+                "own_blobs": drift_attribution.run_recorded_blobs(record_dir(root, Path(run_dir).name), paths),
+            }
         return drift_attribution.classify(
             root, run_dir if run_dir is not None else root, paths, [], session_id=session_id,
-            own_hashes=hashes, run_started_at=0.0,
+            own_hashes=hashes, run_started_at=0.0, **extra,
         )[drift_attribution.RUN_OWNED]
 
     return owned
@@ -5005,7 +5053,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         waiting = _li_claims.retest_await(findings, params)
         if waiting and all(_is_await(f) for f in findings):
             return _error(
-                f"landing awaiting the run's retest verdict; poll: {waiting['poll']} --wait",
+                f"landing awaiting the run's retest verdict; poll: {waiting['poll']}",
                 refused=None, awaiting=waiting, remedy_step=None,
                 integrity=[{"path": f.path, "reason": f.reason, "detail": f.detail} for f in findings],
             )
@@ -5318,7 +5366,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 [p for p in commit_deleted if p not in set(art_deleted)], settled_blobs,
                 own=_run_owned(root, art_run_id, sibling_run_id),
                 baseline=manifest.write_baseline if manifest is not None else None,
-                owned_now=_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review),
+                owned_now=_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review, post_measure=True),
                 no_change=_run_made_no_change(
                     root, measured_run, manifest.write_baseline if manifest is not None else None,
                     _own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review),
@@ -5347,6 +5395,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                     for d in differing
                 ),
                 refused=LANDING_TREE_DIFFERS, paths=differing,
+                refused_paths=[
+                    {"path": d, "measured": mblobs.get(d), "landing": settled_blobs.get(d) or _worktree_blob(root, d)}
+                    for d in differing
+                ],
             )
         reach_dirt = (
             {} if measured.get("unreadable") else _verify_reach_dirt(
@@ -5377,10 +5429,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 overlay.verdict == "inconclusive" and overlay.timed_out
                 and isinstance(inline_review, dict) and _reverify_passed(inline_review.get("reverify"))
             )
-            if overlay.verdict in ("pre_existing", "missing", clean_overlay_verify.ENV_DEFECT) or timed_out_reverified:
+            foreign_red = overlay.red and _red_is_foreign_runs(overlay.failing, reach_dirt_foreign)
+            if overlay.verdict in ("pre_existing", "missing", clean_overlay_verify.ENV_DEFECT) or timed_out_reverified or foreign_red:
                 reach_dirt_overlay["advisory"] = (
                     f"clean-overlay verdict {overlay.verdict}"
-                    f"{' (timed out; the run reverify passed)' if timed_out_reverified else ''}: {overlay.detail}"
+                    f"{' (timed out; the run reverify passed)' if timed_out_reverified else ''}"
+                    f"{' (every failing node is another run uncommitted test)' if foreign_red else ''}: {overlay.detail}"
                 )
                 # The landing is recoverable so it proceeds, but unverified: the trailer is what a release
                 # gate reads to list the commits the full-tree regate alone covers.
@@ -5852,9 +5906,15 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             dirty_now = changed_now - ignored_now
         except Exception:  # noqa: BLE001 -- an unreadable store keeps every outside path reported
             dirty_now = None
+    try:
+        partial_now = _partial_hunks(
+            root, measured, [p for p in _measured_strs(measured, "paths") if p in paths], sha, run_baseline,
+        )
+    except Exception:  # noqa: BLE001 -- the commit stands; no hunk split reports path-grain coverage
+        partial_now = {}
     coverage = _land_coverage(
         measured_carries, landed_now_set, reply.get("withheld") or {}, request.plan_path, sibling_run_id,
-        dirty=dirty_now,
+        dirty=dirty_now, partial=partial_now,
     )
     if coverage:
         reply.update(coverage)
@@ -5972,14 +6032,17 @@ UNATTRIBUTED_LEFT_REASON = "left out of the commit; no landing leg recorded a re
 
 def _land_coverage(
     measured: Iterable[str], landed: set, withheld: Mapping, plan_path: Optional[str], run_id: Optional[str],
-    dirty: Optional[set] = None,
+    dirty: Optional[set] = None, partial: Optional[Mapping[str, dict]] = None,
 ) -> Optional[dict]:
     """Reply fields typing a commit that carries less than the run's measured code, else None.
 
     `landed_no_code`: the commit holds none of the measured non-bookkeeping paths. `partial`: it holds
     some. A measured path outside the commit that is not in `dirty` (when given) is clean and already at
     HEAD: it counts as landed-at-base, listed in `landed_at_base`, never as left out. Every path left out
-    carries its cause in `withheld_reasons`. Reads data the land already loaded; spawns nothing."""
+    carries its cause in `withheld_reasons`. `partial` maps a path the commit carries to its
+    `split_landed_hunks` result: one with `left > 0` is left out too, reason naming the left hunks, and
+    is listed in `partial_hunks`; it still counts as carried, so it never makes the outcome
+    `landed_no_code`. Reads data the land already loaded; spawns nothing."""
     plan = (plan_path or "").replace("\\", "/")
     code = sorted(
         p for p in set(measured)
@@ -5987,25 +6050,90 @@ def _land_coverage(
     )
     outside = [p for p in code if p not in landed]
     at_base = [p for p in outside if dirty is not None and p not in dirty]
-    left = [p for p in outside if p not in at_base]
+    out_left = [p for p in outside if p not in at_base]
+    hunks = {
+        p: dict(r) for p, r in (partial or {}).items()
+        if p in code and p in landed and isinstance(r, Mapping) and (r.get("left") or 0) > 0
+    }
+    left = sorted({*out_left, *hunks})
     if not left:
         return None
-    named = {p: str(withheld.get(p) or UNATTRIBUTED_LEFT_REASON) for p in left}
-    none_landed = len(left) == len(code)
+    named = {}
+    for p in left:
+        if p in hunks:
+            h = hunks[p]
+            named[p] = (
+                f"partially landed: {h['left']} of {(h.get('landed') or 0) + h['left']} hunk(s) left out "
+                f"({', '.join(h.get('left_hunks') or [])})"
+            )
+        else:
+            named[p] = str(withheld.get(p) or UNATTRIBUTED_LEFT_REASON)
+    none_landed = len(out_left) == len(code)
     outcome = land_leg_record.OUTCOME_LANDED_NO_CODE if none_landed else land_leg_record.OUTCOME_PARTIAL
     out = {
         "land_outcome": outcome, "withheld_code": named, "withheld_reasons": dict(named),
-        "error": f"{outcome}: commit carries {len(code) - len(left)} of {len(code)} measured code path(s); "
+        "error": f"{outcome}: commit carries {len(code) - len(out_left)} of {len(code)} measured code path(s); "
                  f"withheld: {', '.join(f'{p} ({r})' for p, r in named.items())}"[:_UNDONE_CAP],
         "next_action": {
             "op": "dispatch.record_halted_run_landed", "params": {"run_id": run_id},
             "after": "hand-land the withheld paths, or refire the run",
         },
     }
+    if hunks:
+        out["partial_hunks"] = hunks
     if at_base:
         out["landed_at_base"] = at_base
     if none_landed:
         out["ok"] = False
+    return out
+
+
+def _partial_hunks(
+    root: Path, measured: Optional[Mapping], carried: Iterable[str], sha: str, baseline: Optional[Mapping],
+) -> dict:
+    """Path -> `split_landed_hunks` for each of `carried` whose committed blob at `sha` differs from the
+    measured blob. Base is the run's write baseline, else the commit's first parent. A path with a side
+    that cannot be read is skipped, never guessed. Reads objects in-process; spawns nothing."""
+    blobs = measured.get("blobs") if isinstance(measured, Mapping) and not measured.get("unreadable") else None
+    if not isinstance(blobs, Mapping) or not sha:
+        return {}
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+    from coordinator_core.ops.dispatch_emit.hunk_coverage import split_landed_hunks
+
+    common = resolve_git_common_dir(root)
+    meta = commit_meta(common, sha)
+    parents = (meta or {}).get("parents") or []
+
+    def read(blob: object) -> Optional[bytes]:
+        if not isinstance(blob, str):
+            return None
+        obj = git_objects.read_object(common, blob)
+        return None if obj is None else obj[1]
+
+    out: dict = {}
+    for p in sorted(set(carried)):
+        measured_blob = blobs.get(p)
+        try:
+            committed_blob = _blob_at_commit(common, sha, p)
+            if not isinstance(measured_blob, str) or not isinstance(committed_blob, str):
+                continue
+            if committed_blob == measured_blob:
+                continue
+            base_blob = (baseline or {}).get(p)
+            if base_blob:
+                base = read(base_blob)
+            else:
+                parent_blob = _blob_at_commit(common, parents[0], p) if parents else None
+                base = b"" if parent_blob is ABSENT else read(parent_blob)
+            measured_bytes, committed_bytes = read(measured_blob), read(committed_blob)
+            if base is None or measured_bytes is None or committed_bytes is None:
+                continue
+            out[p] = split_landed_hunks(base, measured_bytes, committed_bytes)
+        except Exception:  # noqa: BLE001 -- an unreadable side reports no split for the path
+            continue
     return out
 
 

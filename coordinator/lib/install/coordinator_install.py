@@ -27,6 +27,7 @@ import platform
 import re
 import secrets
 import shutil
+import tempfile
 import subprocess
 import sys
 import time
@@ -477,6 +478,9 @@ OPTIONAL_EXTRAS: tuple[Extra, ...] = (
     Extra("forwarder_route", "Use the fast prebuilt .exe forwarders (the .py route is slower but works with Smart App Control on)?",
           "the .py route is used instead: slower (an interpreter start per call) but Smart App Control and UAC stay on.",
           "exe", "py"),
+    Extra("codex_runtime", "Enrol Codex on this profile (coordinator hooks and doctrine seeded for the Codex CLI)?",
+          "Codex sessions on this machine get no coordinator hooks or doctrine; Claude is unaffected.",
+          "enrol", "skip", step="codex_runtime"),
     Extra("open_claude_home", "Open ~/.claude in your file manager?",
           "nothing opens; browse to ~/.claude yourself to edit CLAUDE.md.",
           "open", "skip"),
@@ -612,6 +616,11 @@ def build_decisions(permission_mode: str | None = None) -> list[Decision]:
             ("use", "skip"), "use" if shutil.which("agy") else "skip", "optional",
         ),
         Decision(
+            "codex_runtime", extra_prompt("codex_runtime"),
+            "enrol seeds the Codex hooks and doctrine through unimatrix-install and needs consent.codex_runtime=true; skip leaves Codex untouched. The default is skip: enrolment writes under ~/.codex, so the operator opts in.",
+            ("enrol", "skip"), "skip", "optional",
+        ),
+        Decision(
             "open_claude_home", extra_prompt("open_claude_home"),
             "Shows you the files that govern your sessions (CLAUDE.md and friends) so you can edit them.",
             ("open", "skip"), "open", "optional",
@@ -640,7 +649,7 @@ def resolve_answers(raw: dict, permission_mode: str | None, non_interactive: boo
         if sid not in risky:
             problems.append(f"consent: {sid!r} is not a risky step ({sorted(risky)})")
         elif not isinstance(granted, bool):
-            problems.append(f"consent.{sid} must be true or false")
+            problems.append(f"consent.{sid} must be JSON true or false, not {type(granted).__name__} {granted!r}; string booleans are not coerced")
     answers["consent"] = {k: v for k, v in consent.items() if k in risky and isinstance(v, bool)}
     if "plan_id" in raw:
         if isinstance(raw["plan_id"], str) and PLAN_ID_RE.fullmatch(raw["plan_id"]):
@@ -662,7 +671,9 @@ def resolve_answers(raw: dict, permission_mode: str | None, non_interactive: boo
                 problems.append(f"required decision has no answer and no default: {did}")
             continue
         allowed = [o.split(":")[0] for o in d.options] if did == "posture" else list(d.options)
-        if allowed != ["<free text>"] and value not in allowed:
+        if did == "codex_runtime" and value == "configure":
+            problems.append("codex_runtime: 'configure' is retired; use 'enrol' (or 'skip')")
+        elif allowed != ["<free text>"] and value not in allowed:
             problems.append(f"{did}: {value!r} not one of {allowed}")
         answers[did] = value
     for extra in OPTIONAL_EXTRAS:
@@ -709,6 +720,35 @@ class Ctx:
     next_session: list = field(default_factory=list)
     engine_deps_failed: str = ""  # detail of a failed engine_deps step; engine-backed steps refuse to spawn
     engine_root: str = ""  # set by step_engine_root; the receipt writer imports the setup-state module from it
+    substrate_failed: bool = False
+    required_engine_failures: list[str] = field(default_factory=list)
+
+
+def step_codex_runtime(ctx: Ctx) -> StepResult:
+    """Enroll only an explicitly consented runtime after successful base installation."""
+    try:
+        if not codex_runtime_requested(ctx.answers):
+            return StepResult(SKIPPED, "Codex runtime skipped")
+    except ValueError as exc:
+        return _fail("host", str(exc))
+    if ctx.required_engine_failures:
+        return _fail("load", "required prerequisite failed: " + "; ".join(ctx.required_engine_failures) +
+                     "; Codex runtime not enrolled")
+    if ctx.engine_deps_failed or ctx.substrate_failed:
+        return _fail("load", "base/substrate failed; Codex runtime not enrolled")
+    script, why = _engine_setup_script()
+    if script is None:
+        return _fail("artifact", why)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script), "--host", "codex", "--enroll-runtime"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=dict(os.environ, CLAUDE_PLUGIN_ROOT=str(plugin_root())),
+            timeout=60, creationflags=_no_console())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fail("load", str(exc), retryable=True)
+    detail = (proc.stdout + proc.stderr).strip()
+    return StepResult(RAN, detail) if proc.returncode == 0 else _fail("load", f"Codex enrollment exited {proc.returncode}: {detail}")
 
 
 def _read_json(path: Path) -> dict:
@@ -1524,6 +1564,8 @@ STEPS: tuple[Step, ...] = (
     Step("hooks_marker", step_hooks_marker, ("required_local_surfaces:hook-delivery",)),
     Step("coordinator_currency", step_currency, exempt="per-repo record, not a machine install surface"),
     Step("repo_home", step_repo_home, exempt="advisory: shortcuts and Dev Drive note for repo_home", optional=True),
+    Step("codex_runtime", step_codex_runtime, exempt="operator choice: Codex runtime enrolment through the strict setup path",
+         risky=True, optional=True),
     Step("open_claude_home", step_open_claude_home, exempt="presentation only", optional=True),
 )
 
@@ -1532,7 +1574,7 @@ STEP_DECISION = {"orientation": "orientation", "claude_md_seed": "posture", "cla
                  "forwarder_route": "forwarder_route",
                  "context7": "context7", "notebooklm": "notebooklm", "status_lines": "status_lines",
                  "hooks_marker": "hooks_marker", "coordinator_currency": "coordinator_currency",
-                 "open_claude_home": "open_claude_home"}
+                 "codex_runtime": "codex_runtime", "open_claude_home": "open_claude_home"}
 
 
 # --------------------------------------------------------------------------- drift check
@@ -1591,7 +1633,9 @@ def check_manifest_drift(manifest: dict | None = None, steps: tuple[Step, ...] =
 
 
 _PLUGIN_KEY = "coordinator@"
-_ENGINE_CHECK_TIMEOUT = 60
+# 60s base + fleet_test_env.FLEET_COLLECT_TOTAL_BUDGET_S (mirrored literally: this module does
+# not import coordinator_core); drift is pinned by test_engine_check_timeout_covers_fleet_collect_budget.
+_ENGINE_CHECK_TIMEOUT = 60 + 240
 
 
 def _ver_tuple(v: object) -> tuple[int, ...] | None:
@@ -1874,8 +1918,14 @@ def _fresh_plan_id() -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(3)
 
 
+def _codex_backup_covers() -> list[tuple[str, Path]]:
+    profile = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    return [(f"codex/{name}", profile / name) for name in
+            ("AGENTS.md", "config.toml", "hooks.json", "rules/unimatrix.rules")]
+
+
 def _backup_covers() -> list[tuple[str, Path]]:
-    """(backup-relative name, live path) for every file a step writes."""
+    """Named base configuration files covered by the planner's backup."""
     registry = Path(os.environ.get("MACHINE_LOCAL_REGISTRY_DIR") or settings_home() / "machine-local")
     return [("claude/settings.json", claude_dir() / "settings.json"),
             ("claude/CLAUDE.md", claude_dir() / "CLAUDE.md"),
@@ -1883,22 +1933,63 @@ def _backup_covers() -> list[tuple[str, Path]]:
             ("machine-local/registry.toml", registry / "registry.toml")]
 
 
-def backup_block(plan_id: str) -> dict:
+def backup_block(plan_id: str, extra=()) -> dict:
     return {"plan_id": plan_id, "path": str(settings_home() / "install-backups" / plan_id),
-            "covers": [str(p) for _, p in _backup_covers()]}
+            "covers": [str(p) for _, p in (*_backup_covers(), *extra)]}
 
 
-def take_backup(plan_id: str) -> list[str]:
+def _check_snapshot_profile(snapshot: Path, profile: str) -> None:
+    try:
+        manifest = json.loads((snapshot / "snapshot.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise OSError(f"Cannot verify Codex backup profile at {snapshot}; use a fresh plan ID") from exc
+    previous = manifest.get("profile") if isinstance(manifest, dict) else None
+    if previous != profile:
+        raise OSError(f"Codex backup at {snapshot} belongs to {previous or 'an unidentified profile'}; "
+                      f"selected {profile}. Use a fresh plan ID")
+
+
+def take_backup(plan_id: str, extra=()) -> list[str]:
     """Copy each existing covered file under the backup path; a file already saved under this
     plan_id is kept, so a re-apply never overwrites the pre-install copy. Returns the names saved."""
-    root = Path(backup_block(plan_id)["path"])
+    root = settings_home() / "install-backups" / plan_id
     saved = []
+    codex_snapshot = root / "codex"
+    if extra:
+        profile = os.path.normcase(os.path.realpath(dict(extra)["codex/AGENTS.md"].parent))
+        if codex_snapshot.exists():
+            _check_snapshot_profile(codex_snapshot, profile)
+            extra = ()
     for name, src in _backup_covers():
         dest = root / name
         if src.is_file() and not dest.exists():
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             saved.append(name)
+    if extra:
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root) as staging:
+            snapshot = Path(staging) / "codex"
+            snapshot.mkdir()
+            copied, absent = [], []
+            for name, src in extra:
+                dest = Path(staging) / name
+                if not src.is_file():
+                    absent.append(name)
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                copied.append(name)
+            (snapshot / "snapshot.json").write_text(
+                json.dumps({"profile": profile, "saved": copied, "absent": absent}, indent=2) + "\n", encoding="utf-8")
+            try:
+                snapshot.rename(codex_snapshot)
+            except OSError:
+                if not codex_snapshot.is_dir():
+                    raise
+                _check_snapshot_profile(codex_snapshot, profile)
+            else:
+                saved.extend(copied)
     return saved
 
 
@@ -1920,8 +2011,16 @@ def answers_shape() -> dict:
     risky = [s.id for s in STEPS if s.risky]
     return {
         "decision_ids": "one key per entry of `decisions`, valued as that decision's options allow",
-        "consent": {"type": "object of booleans keyed by risky step id; absent or false skips the step",
-                    "risky_step_ids": risky, "example": {sid: True for sid in risky}},
+        "consent": {
+            "type": "object of booleans keyed by risky step id",
+            "codex_runtime": {
+                "enrol": "Requires consent.codex_runtime to be literal true. Missing or false consent reports FAILED (exit 1) before setup writes.",
+                "skip": "Omits Codex runtime enrollment. No consent is required.",
+            },
+            "other_risky_steps": "Missing or false consent skips the step.",
+            "risky_step_ids": risky,
+            "example": {sid: True for sid in risky},
+        },
         "plan_id": "optional; the `backup.plan_id` of this plan, so the backup and the run share one id",
     }
 
@@ -1945,6 +2044,42 @@ def grok_plugin_registry() -> dict:
     return {"present": hit is not None, "detail": hit or "coordinator plugin not in grok plugin list"}
 
 
+def _checkout_branch(root: Path) -> str | None:
+    """Branch of the git checkout at `root` read from `.git/HEAD` (no spawn); `detached@<sha7>` when
+    detached, None when unreadable. Follows a `.git` file (worktree or submodule) to its gitdir."""
+    git = root / ".git"
+    try:
+        if git.is_file():
+            text = git.read_text(encoding="utf-8").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            git = (root / text.partition(":")[2].strip()).resolve()
+        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    ref = "ref: refs/heads/"
+    if head.startswith(ref):
+        return head[len(ref):]
+    return f"detached@{head[:7]}" if head else None
+
+
+def engine_channel() -> dict:
+    """Engine checkout branch beside registry `engine.target`, with which governs. Report only:
+    a mismatch is never resolved here and this installer never proposes `engine.target=main`."""
+    flat = _registry_flat()
+    root = str(flat.get("repos.claude_klabauter") or "").strip()
+    branch = _checkout_branch(Path(root)) if root else None
+    target = flat.get("engine.target")
+    target = target if isinstance(target, str) and target else None
+    governs = "engine.target" if target else ("checkout_branch" if branch else None)
+    return {
+        "checkout": root or None, "checkout_branch": branch, "engine_target": target,
+        "governs": governs,
+        "mismatch": bool(target and branch and branch != target),
+        "note": "engine.target governs routing when set; reported only, never changed by this plan",
+    }
+
+
 def build_plan(permission_mode: str | None, hosts: tuple[str, ...] = ("claude",)) -> dict:
     problems = check_manifest_drift() if manifest_found() else []
     root, source = plugin_root_source()
@@ -1952,18 +2087,33 @@ def build_plan(permission_mode: str | None, hosts: tuple[str, ...] = ("claude",)
         source = plugin_root_resolution()[1]
     env = {"platform": platform.system(), "plugin_root": str(root),
            "plugin_root_source": source, **detect_track()}
+    ok, engine = _engine_root()
+    env["selected_engine_root"] = engine if ok else None
+    env["engine_target"] = _registry_flat().get("engine.target")
+    env["checkout_branch"] = None
+    if ok:
+        git_dir = Path(engine) / ".git"
+        try:
+            if git_dir.is_file():
+                git_dir = (Path(engine) / git_dir.read_text(encoding="utf-8").strip().removeprefix("gitdir: ")).resolve()
+            head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+            env["checkout_branch"] = head.removeprefix("ref: refs/heads/") if head.startswith("ref: refs/heads/") else f"detached:{head}"
+        except OSError:
+            pass
     if "grok" in hosts:
         grok = grok_plugin_registry()
         env["host_plugins"] = {"grok": grok}
         if grok["present"] is not True:
             env["track_steps"] = ["grok_plugin_install", *env["track_steps"]]
     return {
-        "backup": backup_block(_fresh_plan_id()),
+        "backup": {**backup_block(_fresh_plan_id()),
+                   "on_codex_runtime_enrol": [str(path) for _, path in _codex_backup_covers()]},
         "schema": SCHEMA,
         "orientation": ORIENTATION,
         "environment": env,
         "answers_shape": answers_shape(),
         "registry_hygiene": registry_hygiene_report(),
+        "engine_channel": engine_channel(),
         "track_step_runners": track_step_runners(env["track_steps"], env["doe_box"]),
         "mode_policy": mode_policy(permission_mode),
         "decisions": [decision_json(d) for d in build_decisions(permission_mode)],
@@ -2048,43 +2198,6 @@ def record_withheld(reason: str, blocking: tuple, ctx: Ctx) -> dict:
     return {"written": False, "recorded": rc == 0, "detail": detail if rc == 0 else f"{detail}; withheld record failed (exit {rc})"}
 
 
-def _read_withheld(ctx: Ctx) -> dict | None:
-    """The persisted withheld-run record, or None (absent, or the engine root does not resolve)."""
-    root = ctx.engine_root
-    if not root:
-        ok, found = _engine_root()
-        root = found if ok else ""
-    if not root:
-        return None
-    inserted = root not in sys.path
-    if inserted:
-        sys.path.insert(0, root)
-    try:
-        import importlib
-        return importlib.import_module("coordinator_core.ops.coordinator_setup_state").read_setup_withheld()
-    except Exception:
-        return None
-    finally:
-        if inserted and root in sys.path:
-            sys.path.remove(root)
-
-
-def _receipt_after_only_run(results: list[dict], ctx: Ctx) -> dict:
-    """The receipt for a `--only` run. When it re-ran every step an earlier run withheld on and none
-    failed, setup concludes (the verifier need not repeat the whole install); a failing re-run, or one
-    that skipped a withheld step, leaves the earlier record as it was."""
-    prior = _read_withheld(ctx)
-    if prior is None:
-        return record_withheld("--only run", tuple(sorted(r["id"] for r in results)), ctx)
-    ran = {r["id"] for r in results}
-    still = [r["id"] for r in results if r["status"] in (FAILED, BLOCKED)]
-    unrun = sorted(set(prior.get("blocking_steps") or ()) - ran)
-    if still or unrun:
-        why = f"still failing: {', '.join(still)}" if still else f"withheld steps not re-run: {', '.join(unrun)}"
-        return {"written": False, "recorded": False, "detail": f"withheld record left as is; {why}"}
-    return record_concluded(results, set(), ctx)
-
-
 #: The command the closing NEXT line names; the same command scripts/setup.py closes with.
 UNIMATRIX_INSTALL_COMMAND = "python3 coordinator/bin/unimatrix-install.py --install"
 
@@ -2096,23 +2209,35 @@ def execute(answers: dict, only: set[str] | None = None, permission_mode: str | 
                    for i in detect_track()["track_steps"] if i in TRACK_STEP_FNS]
     steps += STEPS
     plan_id = answers.get("plan_id") or _fresh_plan_id()
-    backup = backup_block(plan_id)
+    consent = answers.get("consent") or {}
+    extra = ()
+    if (answers.get("codex_runtime") == "enrol" and isinstance(consent, dict)
+            and consent.get("codex_runtime") is True and (not only or "codex_runtime" in only)):
+        extra = _codex_backup_covers()
+    backup = backup_block(plan_id, extra)
+    receipt = None
     try:
-        backup["saved"] = take_backup(plan_id)
+        codex_runtime_requested(answers)
+        backup["saved"] = take_backup(plan_id, extra)
+    except EnrollmentConsentRequired as exc:
+        receipt = {"written": False, "detail": str(exc)}
+        backup["saved"] = []
+        results.append({"id": "codex_runtime", "status": FAILED, "detail": str(exc),
+                        "follow_up": "re-run with consent.codex_runtime=true", "stage": "host", "retryable": False})
+        steps = []
     except OSError as exc:
         backup["saved"] = []
         results.append({"id": "backup", "status": FAILED, "detail": f"{type(exc).__name__}: {exc}",
                         "follow_up": "no step ran; fix the backup path and re-run", "stage": "host",
                         "retryable": False})
         steps = []
-    consent = answers.get("consent") or {}
     for step in steps:
         if only and step.id not in only:
             continue
         declined = answers.get(STEP_DECISION.get(step.id, "")) == "skip"
         try:
             probe = _INHERITED_PROBES.get(step.id)
-            if step.risky and not declined and consent.get(step.id) is not True and not (probe and probe()):
+            if step.risky and not declined and consent.get(step.id) is not True and not (probe and probe()) and step.id != "codex_runtime":
                 res = StepResult(SKIPPED, "consent required", f"re-run with consent.{step.id}=true")
             else:
                 res = step.fn(ctx)
@@ -2122,9 +2247,14 @@ def execute(answers: dict, only: set[str] | None = None, permission_mode: str | 
         if res.status in (FAILED, BLOCKED):
             row.update(stage=res.stage, retryable=res.retryable)
         results.append(row)
+        if not step.optional and res.status in (FAILED, BLOCKED):
+            ctx.required_engine_failures.append(f"{step.id} {res.status} ({res.stage}): {res.detail}")
+        if step.id == "substrate" and res.status in (FAILED, BLOCKED):
+            ctx.substrate_failed = True
     counts = {k: sum(1 for r in results if r["status"] == k) for k in (RAN, SKIPPED, INHERITED, FAILED, BLOCKED)}
-    receipt = (record_concluded(results, {s.id for s in steps if s.optional}, ctx) if not only
-               else _receipt_after_only_run(results, ctx))
+    if receipt is None:
+        receipt = (record_concluded(results, {s.id for s in steps if s.optional}, ctx) if not only
+                   else record_withheld("--only run", tuple(sorted(only)), ctx))
     return {
         "schema": "coordinator-install-result/1",
         "backup": backup,
@@ -2284,6 +2414,34 @@ def _load_answers(spec: str | None) -> dict:
     return obj
 
 
+class EnrollmentConsentRequired(ValueError):
+    """A valid enrollment request that cannot run without operator consent."""
+
+    exit_code = 1
+
+
+def codex_runtime_requested(answers: dict) -> bool:
+    """Validate enrol and skip without prompting or writing."""
+    choice = answers.get("codex_runtime", "skip")
+    if choice not in ("enrol", "skip"):
+        raise ValueError(f"codex_runtime: unsupported answer {choice!r}; expected enrol or skip")
+    if choice == "skip":
+        return False
+    consent = answers.get("consent", {})
+    if isinstance(consent, dict) and consent.get("codex_runtime", False) is False:
+        raise EnrollmentConsentRequired("codex_runtime FAILED: consent.codex_runtime=true required")
+    if not isinstance(consent, dict) or consent.get("codex_runtime") is not True:
+        raise ValueError("consent.codex_runtime must be true")
+    return True
+
+
+def ask_codex_runtime(stdin, stdout) -> dict:
+    """Collect a single runtime decision for the manifest-driven public wrapper."""
+    decision = next(d for d in build_decisions() if d.id == "codex_runtime")
+    choice = _ask_decision(decision, stdin, stdout, "skip") or "skip"
+    return {"codex_runtime": choice, "consent": {"codex_runtime": choice == "enrol"}}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="coordinator-install", description=__doc__.splitlines()[0])
     ap.add_argument("--plan", action="store_true", help="print every decision as JSON; mutate nothing")
@@ -2309,15 +2467,28 @@ def main(argv: list[str] | None = None) -> int:
     if own_root := _bundled_engine_root():
         sys.path.insert(0, str(own_root))
 
+    raw = None
     if args.engine_root or args.engine_target:
         if args.plan or args.check_drift:
             ap.error("--engine-root/--engine-target write the registry; not with --plan or --check-drift")
-        try:
-            written = register_engine(args.engine_root, args.engine_target)
-        except (OSError, ValueError, ImportError) as exc:
-            print(json.dumps({"error": f"engine registration failed: {exc}"}), file=sys.stderr)
-            return 2
-        print("registered " + ", ".join(written), file=sys.stderr)
+        register = True
+        if args.answers:
+            try:
+                raw = _load_answers(args.answers)
+                codex_runtime_requested(raw)
+            except EnrollmentConsentRequired:
+                # Emit the normal FAILED step without changing the selected engine.
+                register = False
+            except (OSError, ValueError) as exc:
+                print(json.dumps({"error": f"bad answers: {exc}"}), file=sys.stderr)
+                return 2
+        if register:
+            try:
+                written = register_engine(args.engine_root, args.engine_target)
+            except (OSError, ValueError, ImportError) as exc:
+                print(json.dumps({"error": f"engine registration failed: {exc}"}), file=sys.stderr)
+                return 2
+            print("registered " + ", ".join(written), file=sys.stderr)
     default_plugin_root_env()
 
     if args.check_drift:
@@ -2351,7 +2522,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.express or args.custom:
             raw = walk_decisions(args.permission_mode, sys.stdin, sys.stdout, custom=args.custom)
             args.format = "text"
-        else:
+        elif raw is None:
             raw = _load_answers(args.answers)
     except (OSError, ValueError) as exc:
         print(json.dumps({"error": f"bad answers: {exc}"}), file=sys.stderr)
@@ -2363,6 +2534,8 @@ def main(argv: list[str] | None = None) -> int:
     only = set(args.only.split(",")) if args.only else None
     block = execute(answers, only, args.permission_mode)
     print(render_text(block) if args.format == "text" else json.dumps(block, indent=2))
+    if not only and not block["receipt"]["written"]:
+        return 1
     return 1 if block["summary"][FAILED] or block["summary"][BLOCKED] else 0
 
 

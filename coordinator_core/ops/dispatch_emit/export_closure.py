@@ -136,8 +136,10 @@ def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -
         helpers |= {modules[name] for name in _pytest_plugins(text) if name in modules}
         helpers |= {modules[name] for name in _QUOTED_DOTTED_RE.findall(text) if name in modules}
         here = conftest.rpartition("/")[0]
+        # Trap: a repo-root module has no "/" (its dir is ""); the root conftest's path-loaded sibling
+        # (drive_root_write_guard.py) must still ride, or every scoped mirror fails pytest_configure.
         for p in modules.values():
-            if p.rpartition("/")[0] == here and "/" in p:
+            if p.rpartition("/")[0] == here:
                 stem = p.rpartition("/")[2][:-3]
                 if not stem.startswith(("test_", "conftest")) and f'"{stem}' in text:
                     helpers.add(p)

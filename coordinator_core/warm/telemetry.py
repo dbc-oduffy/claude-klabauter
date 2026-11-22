@@ -586,10 +586,12 @@ def record_request(
     spans: Optional[list] = None,
     drive_fault: Optional[str] = None,
     drive: Optional[str] = None,
+    cpu_ms: Optional[float] = None,
 ) -> None:
     """Append one request row to the bounded in-memory ring. No I/O, never
     raises; the oldest row is evicted past `REQUEST_TELEMETRY_KEEP`. Keys
-    whose value is None are omitted. `worker_pid` is the pool worker that
+    whose value is None are omitted. `cpu_ms` is the dispatching thread's
+    `time.thread_time()` delta in ms (rounded to 0.1), never process CPU. `worker_pid` is the pool worker that
     ran the request, `lane` the pool lane, `dispatch_key` the pool's
     in-flight claim key, `slow_phase` the guard or phase that spent the
     most time and `spans` its per-phase timings (preuse dispatches).
@@ -612,6 +614,7 @@ def record_request(
             "spans": spans,
             "drive_fault": drive_fault,
             "drive": drive,
+            "cpu_ms": round(cpu_ms, 1) if cpu_ms is not None else None,
         }
         row = {k: v for k, v in fields.items() if v is not None}
         if enqueue_ts is not None and start_ts is not None:

@@ -1228,6 +1228,16 @@ def _base_measure_clause(
     )
 
 
+def _verify_scope_clause(verify_scope_targets: Optional[Mapping[str, Sequence[str]]]) -> str:
+    """Step-2 prose naming the verify-scope targets per edited path; empty when none are carried."""
+    if not verify_scope_targets:
+        return ""
+    return (
+        ", plus the verify-scope test targets this map names for an edited path "
+        f"(path to targets): {json.dumps({k: list(v) for k, v in sorted(verify_scope_targets.items())})}"
+    )
+
+
 def _reverify_phase(
     *,
     base_ref: str,
@@ -1255,7 +1265,7 @@ def _reverify_phase(
     agent list, probe and revert once for EVERY prefix (each holds its own pre-review snapshot, and
     revert attributes a failure only to the files of the prefix it is called with, so no call is
     conditional), with the same failing set, and union the lists; empty keeps the single-prefix
-    prompt byte-identical. ``verify_scope_targets`` (path -> test targets, group mode only) widens
+    prompt byte-identical. ``verify_scope_targets`` (path -> test targets, flat and group prompts alike) widens
     the rerun set with the verify-scope targets of every edited path.
 
     The call runs whatever the review applied: halted-run self-correction reads its owned and
@@ -1325,12 +1335,7 @@ def _reverify_phase(
             "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + 'reverted [], status_before "not_run". '
             f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
             "2. Run, and only run, the tests covering those files"
-            + (
-                ", plus the verify-scope test targets this map names for an edited path "
-                f"(path to targets): {json.dumps({k: list(v) for k, v in sorted(verify_scope_targets.items())})}"
-                if verify_scope_targets
-                else ""
-            )
+            + _verify_scope_clause(verify_scope_targets)
             + ". Name each test file or node id; never a directory, a tier (the fast tier "
             "included) or the full suite. "
             + owned_first
@@ -1392,7 +1397,9 @@ def _reverify_phase(
         "engine cut." + _REVERIFY_DERIVED_CLAUSE + " If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
         'status_before "not_run". '
         f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
-        "2. Run, and only run, the tests covering those files. Name each test file or node id; never a "
+        "2. Run, and only run, the tests covering those files"
+        + _verify_scope_clause(verify_scope_targets)
+        + ". Name each test file or node id; never a "
         "directory, a tier (the fast tier included) or the full suite. "
         + owned_first
         + _REVERIFY_NODE_TESTS_CLAUSE

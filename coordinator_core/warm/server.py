@@ -1046,6 +1046,7 @@ def _run_dispatch(
     # `process_ms`.
     _t_start = _time.time()
     _process_start = _time.process_time()
+    _thread_start = _time.thread_time()
     _spawn_start = _spawn_count_or_none()
     _caller_route = "coordinator_core.warm.server._run_dispatch"
     _corr_id = new_correlation_id()
@@ -1079,6 +1080,10 @@ def _run_dispatch(
                 _late_envelope = _late.late_envelope()
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
+        _cpu_ms = (_time.thread_time() - _thread_start) * 1000.0
+        _pending_row = getattr(_REQUEST_ROW, "value", None)
+        if isinstance(_pending_row, dict):
+            _pending_row["cpu_ms"] = _cpu_ms
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
         method = msg.get("method") if isinstance(msg, dict) else None
         record_op_process_time(
@@ -1092,6 +1097,7 @@ def _run_dispatch(
             corr_id=_corr_id,
             spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
             caller=_caller_route,
+            cpu_ms=_cpu_ms,
         )
 
     # The op's diagnostic lines ride the TRANSPORT frame, never `result` — the
@@ -1185,6 +1191,46 @@ def _is_io_wait(probe_ms: Optional[float], age_secs: float) -> bool:
     a slow probe and an age under `_IO_WAIT_MAX_SECS`. The one predicate behind the recycle
     classifier and the worker stall record."""
     return probe_ms is not None and probe_ms > _SLOW_DRIVE_PROBE_MS and age_secs < _IO_WAIT_MAX_SECS
+
+
+#: `subprocess.py` functions that sit in process creation: a holder whose stack is inside one is
+#: waiting on the OS to spawn a child, not hung.
+_SPAWN_FRAME_FUNCS = frozenset({"__init__", "_execute_child"})
+
+#: Legs of a drive-bound recorder write or read; a holder parked in one on a loaded box is waiting
+#: on the filesystem even when the repo-drive probe reads fast.
+_DRIVE_IO_LEGS = frozenset(
+    {
+        "coordinator_core/atomic_append.py::append_line",
+        "coordinator_core/session/touch_record.py::agent_owner_sid",
+    }
+)
+
+
+def _leg_is_spawn_or_io(record: Any) -> bool:
+    """True when a `<claim>.leg` record names a child-spawn frame or a `_DRIVE_IO_LEGS` leg. Keyed on
+    frames and leg name, never `kind`: `kind` comes from a process-wide CPU delta that sibling load
+    flips to compute."""
+    if not isinstance(record, dict):
+        return False
+    if record.get("leg") in _DRIVE_IO_LEGS:
+        return True
+    for label in record.get("frames") or ():
+        rel, _, rest = str(label).partition("::")
+        if rel == "subprocess.py" and rest.rsplit(":", 1)[0] in _SPAWN_FRAME_FUNCS:
+            return True
+    return False
+
+
+def _leg_wait_probe(claim) -> Optional[float]:
+    """Probe for `_HolderProbeCache` over a claim path: `inf` when its `.leg` names a spawn or drive-I/O
+    wait (the `_holder_drive_probe_ms` drive-stall convention), 0.0 for any other leg, None when no
+    readable leg exists yet. Never raises."""
+    try:
+        record = json.loads(Path(f"{os.fspath(claim)}{_LEG_SUFFIX}").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 -- no leg reads as unknown, never an error
+        return None
+    return float("inf") if _leg_is_spawn_or_io(record) else 0.0
 
 
 _CLAIMS_DIRNAME = "dispatch-claims"
@@ -1331,6 +1377,47 @@ class _AdmissionGate:
         self._recycled_at: Optional[float] = None
         self._next_heavy_at = 0.0
         self._pace = threading.Event()
+        self._leases: "dict[int, tuple[float, bool, bool]]" = {}
+        self._lease_seq = 0
+
+    def hold(self, lease_secs: float, hook: bool = False, light: bool = False) -> int:
+        """Lease the slot the caller just acquired for `lease_secs`; returns the token for
+        `drop_lease`. A lease still held past its expiry is reclaimed by the next waiter, so a
+        holder parked outside every timeout path never keeps a slot."""
+        with self._lock:
+            self._lease_seq += 1
+            self._leases[self._lease_seq] = (time.monotonic() + max(0.0, lease_secs), hook, light)
+            return self._lease_seq
+
+    def drop_lease(self, token: int) -> bool:
+        """Release the slot a lease holds; False when it was already released or reclaimed."""
+        with self._lock:
+            lease = self._leases.pop(token, None)
+            if lease is None:
+                return False
+            self._release_locked(lease[1], lease[2])
+            return True
+
+    def reap_expired(self) -> int:
+        """Reclaim every lease past its expiry; returns how many."""
+        with self._lock:
+            return self._reap_expired_locked()
+
+    def _reap_expired_locked(self) -> int:
+        now = time.monotonic()
+        stale = [token for token, (expiry, _h, _l) in self._leases.items() if expiry <= now]
+        for token in stale:
+            _expiry, hook, light = self._leases.pop(token)
+            self._release_locked(hook, light)
+        return len(stale)
+
+    def _release_locked(self, hook: bool, light: bool) -> None:
+        self._free += 1
+        if hook:
+            self._hook_held = max(0, self._hook_held - 1)
+        elif not light:
+            self._heavy_held = max(0, self._heavy_held - 1)
+        self._grant_waiters_locked()
 
     def resize(self, size: int) -> None:
         """Move the heavy cap to `size`. Growth admits waiters at once; a shrink below the slots held
@@ -1411,13 +1498,22 @@ class _AdmissionGate:
             else self._reading
         )
         with self._lock:
+            self._reap_expired_locked()
             queue.append(granted)
             self._grant_waiters_locked()
             if granted.is_set():
                 return paced
         t0 = time.monotonic()
-        if granted.wait(max(0.0, timeout)):
-            return paced + time.monotonic() - t0
+        while True:
+            left = timeout - (time.monotonic() - t0)
+            if left <= 0.0:
+                break
+            with self._lock:
+                expiries = [expiry for expiry, _h, _l in self._leases.values()]
+            step = left if not expiries else min(left, max(0.0, min(expiries) - time.monotonic()) + 0.005)
+            if granted.wait(step):
+                return paced + time.monotonic() - t0
+            self.reap_expired()
         with self._lock:
             if granted.is_set():
                 return paced + time.monotonic() - t0
@@ -1428,12 +1524,7 @@ class _AdmissionGate:
 
     def release(self, hook: bool = False, light: bool = False) -> None:
         with self._lock:
-            self._free += 1
-            if hook:
-                self._hook_held = max(0, self._hook_held - 1)
-            elif not light:
-                self._heavy_held = max(0, self._heavy_held - 1)
-            self._grant_waiters_locked()
+            self._release_locked(hook, light)
 
 
 def _pool_dispatch_worker(
@@ -1953,9 +2044,12 @@ _HOLDER_PROBE_IDLE_SECS = 30.0
 
 class _HolderProbeCache:
     """Drive-probe results for `_classify_stalled_holders`, refreshed by one background thread so
-    the dispatching thread never touches the drive. Never raises."""
+    the dispatching thread never touches the drive. Never raises. `probe` (default
+    `_holder_drive_probe_ms`, resolved at call time) maps a key to its measure; entries older than
+    `_HOLDER_PROBE_IDLE_SECS` are dropped on refresh, so per-claim keys never accumulate."""
 
-    def __init__(self) -> None:
+    def __init__(self, probe: Optional[Callable[[Any], Optional[float]]] = None) -> None:
+        self._probe = probe
         self._lock = threading.Lock()
         self._entries: dict = {}
         self._wanted: dict = {}
@@ -2007,11 +2101,14 @@ class _HolderProbeCache:
                 self._wanted.clear()
             for key, root in batch:
                 try:
-                    ms = _holder_drive_probe_ms(root)
+                    ms = (self._probe or _holder_drive_probe_ms)(root)
                 except Exception:  # noqa: BLE001
                     ms = None
                 with self._lock:
-                    self._entries[key] = (ms, time.monotonic())
+                    now = time.monotonic()
+                    self._entries[key] = (ms, now)
+                    for old in [k for k, (_, at) in self._entries.items() if now - at > _HOLDER_PROBE_IDLE_SECS]:
+                        del self._entries[old]
                     waiter = self._waiters.pop(key, None)
                 if waiter is not None:
                     waiter.set()
@@ -2627,6 +2724,7 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
     # whose accept-process threads share one interpreter and one clock.
     _t_start = _time.time()
     _process_start = _time.process_time()
+    _thread_start = _time.thread_time()
     _spawn_start = _spawn_count_or_none()
     _caller_route = "coordinator_core.warm.server._pool_dispatch_worker"
     _preuse_fields: dict = {}
@@ -2662,6 +2760,8 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
                     response = _late_envelope
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
+        _cpu_ms = (_time.thread_time() - _thread_start) * 1000.0
+        _preuse_fields["cpu_ms"] = _cpu_ms
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
         method = msg.get("method") if isinstance(msg, dict) else None
         record_op_process_time(
@@ -2675,6 +2775,7 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
             corr_id=_corr_id,
             spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
             caller=_caller_route,
+            cpu_ms=_cpu_ms,
         )
 
     _captured = _handler_stdout.getvalue()
@@ -2709,6 +2810,10 @@ _POOL_RESULT_DEADLINE_SECS = MUTATION_READ_DEADLINE_SECS
 #: withdraws this long (at most a quarter of the client's deadline) before the
 #: client gives up, so a withdrawn request reads `not started`, never `indeterminate`.
 _WITHDRAW_MARGIN_SECS = 2.0
+
+#: Seconds past its own result deadline that a dispatch may hold an `_AdmissionGate` slot before a
+#: waiter reclaims it, longer than any hold a timeout path takes.
+_SLOT_LEASE_GRACE_SECS = 5.0
 
 
 def _withdrawal_deadline_secs(method: Optional[str], msg: Any = None) -> float:
@@ -5374,13 +5479,20 @@ class _ServerContext:
         dispatch_key: Optional[str] = None,
         guard: bool = False,
         repo_root: Any = None,
+        pool: Any = None,
     ) -> None:
         """Record `future` (op, submit time, dispatch key, repo root) until it resolves; feeds
         `_stalled_holders` and `_recycle_stalled_pool`. A `guard` future runs in the guard pool and is
-        invisible to both: a stalled heavy op neither counts it as a holder nor recycles it away."""
+        invisible to both: a stalled heavy op neither counts it as a holder nor recycles it away.
+        `pool`, when given, is the executor the future runs on: once that executor is swapped out
+        the future holds no slot of the replacement (`_on_live_pool`)."""
         tasks = self.__dict__.setdefault("_pool_tasks", {})
         tasks[future] = (op, time.monotonic(), dispatch_key, repo_root)
         future.add_done_callback(lambda f: tasks.pop(f, None))
+        if pool is not None and not guard:
+            homes = self.__dict__.setdefault("_task_pools", {})
+            homes[future] = pool
+            future.add_done_callback(lambda f: homes.pop(f, None))
         if guard:
             guard_futs = self.__dict__.setdefault("_guard_futs", set())
             guard_futs.add(future)
@@ -5388,23 +5500,42 @@ class _ServerContext:
 
     def _stalled_holders(self) -> list:
         """Ops of unresolved heavy-pool tasks older than `STALL_DUMP_SECS`."""
-        return [op for op, _started, _root in self._stalled_rows()]
+        return [row[0] for row in self._stalled_rows()]
 
     def _stalled_rows(self) -> list:
-        """`(op, started, repo_root)` of unresolved heavy-pool tasks older than `STALL_DUMP_SECS`."""
+        """`(op, started, repo_root, dispatch_key)` of unresolved heavy-pool tasks older than `STALL_DUMP_SECS`."""
         now = time.monotonic()
         guard_futs = self.__dict__.get("_guard_futs", ())
         return [
-            (op, started, root)
-            for fut, (op, started, _key, root) in list(self.__dict__.get("_pool_tasks", {}).items())
-            if now - started > STALL_DUMP_SECS and fut not in guard_futs
+            (op, started, root, key)
+            for fut, (op, started, key, root) in list(self.__dict__.get("_pool_tasks", {}).items())
+            if now - started > STALL_DUMP_SECS and fut not in guard_futs and _ServerContext._on_live_pool(self, fut)
         ]
+
+    def _on_live_pool(self, future: Any) -> bool:
+        """False when `future` ran on a heavy pool that has since been swapped out (an overdue-worker
+        kill or a recycle): a task abandoned there holds no slot of the replacement, so it is neither
+        a saturation holder nor a recycle victim of the live pool. A future with no recorded pool is live."""
+        home = self.__dict__.get("_task_pools", {}).get(future)
+        return home is None or home is self.__dict__.get("_dispatch_pool")
+
+    def _holder_waits_on_spawn_or_io(self, key: Optional[str]) -> bool:
+        """True when the claim `key` names has a `.leg` in child spawn or a `_DRIVE_IO_LEGS` leg. Read
+        through a background-refreshed `_HolderProbeCache`; a claimless op or an unread leg is False."""
+        claim = _claim_path(getattr(self, "_claim_dir", None), key)
+        if claim is None:
+            return False
+        cache = self.__dict__.get("_holder_leg_cache")
+        if cache is None:
+            cache = self.__dict__.setdefault("_holder_leg_cache", _HolderProbeCache(_leg_wait_probe))
+        return _is_io_wait(cache.probe_ms(claim), 0.0)
 
     def _classify_stalled_holders(self) -> tuple:
         """`(hung_ops, io_wait_ops)` over the set `_stalled_holders` returns. A holder is io-wait when
-        its repo drive probes slower than `_SLOW_DRIVE_PROBE_MS` and it is younger than
-        `_IO_WAIT_MAX_SECS`; else hung. The probe is read from `_HolderProbeCache`, refreshed by a
-        background thread: the dispatching thread never touches the drive."""
+        it is younger than `_IO_WAIT_MAX_SECS` and either its repo drive probes slower than
+        `_SLOW_DRIVE_PROBE_MS` or its blocked leg sits in child spawn or a drive-I/O leg
+        (`_holder_waits_on_spawn_or_io`); else hung. Both reads come from `_HolderProbeCache`s refreshed
+        by background threads: the dispatching thread never touches the drive."""
         now = time.monotonic()
         cache = self.__dict__.get("_holder_probe_cache")
         if cache is None:
@@ -5412,8 +5543,14 @@ class _ServerContext:
         probes: dict = {}
         hung: list = []
         io_wait: list = []
-        for op, started, root in self._stalled_rows():
-            if root is None or now - started >= _IO_WAIT_MAX_SECS:
+        for op, started, root, dispatch_key in self._stalled_rows():
+            if now - started >= _IO_WAIT_MAX_SECS:
+                hung.append(op)
+                continue
+            if _ServerContext._holder_waits_on_spawn_or_io(self, dispatch_key):
+                io_wait.append(op)
+                continue
+            if root is None:
                 hung.append(op)
                 continue
             key = os.fspath(root)
@@ -5444,18 +5581,26 @@ class _ServerContext:
                 return
             tasks = self.__dict__.setdefault("_pool_tasks", {})
             guard_futs = self.__dict__.get("_guard_futs", ())
-            heavy = [(fut, row) for fut, row in list(tasks.items()) if fut not in guard_futs and not fut.done()]
+            heavy = [
+                (fut, row)
+                for fut, row in list(tasks.items())
+                if fut not in guard_futs and not fut.done() and _ServerContext._on_live_pool(self, fut)
+            ]
             size = _dispatch_pool_size()
             if len(holders) >= size:
-                # Retiring any worker breaks the executor. Spare the whole pool if its
-                # saturation sample went stale or any tracked neighbour is still healthy.
+                # Retiring any worker breaks the executor and kills its neighbours' in-flight
+                # (possibly mutating) ops. Spare the whole pool if its saturation sample went stale
+                # or any tracked neighbour is inside its own result deadline, on a slow drive, or
+                # waiting in spawn / drive I/O: a caller past that deadline abandons its own worker.
                 now = time.monotonic()
                 cache = self.__dict__.get("_holder_probe_cache")
                 if len(heavy) < size or any(
-                    now - started <= STALL_DUMP_SECS
+                    now - started <= max(STALL_DUMP_SECS, _POOL_RESULT_DEADLINE_SECS)
                     or (cache is not None and root is not None and now - started < _IO_WAIT_MAX_SECS
                         and _is_io_wait(cache.probe_ms(root), now - started))
-                    for _, (_, started, _, root) in heavy
+                    or (now - started < _IO_WAIT_MAX_SECS
+                        and _ServerContext._holder_waits_on_spawn_or_io(self, key))
+                    for _, (_, started, key, root) in heavy
                 ):
                     self.__dict__["_saturated_checks"] = 0
                     return
@@ -5577,6 +5722,25 @@ class _ServerContext:
             )
         )
 
+    def _abandon_stuck_pool(self, pool: Any, overdue_future: Optional["concurrent.futures.Future"]) -> bool:
+        """The overdue worker could not be found to kill: swap `pool` out so new dispatches reach a
+        fresh pool and the door never blocks behind the parked worker, and retire it only after its
+        other futures drain (`_reap_after_neighbours`). Never retires a pool with a live neighbour
+        before `_OVERDUE_REAP_GRACE_SECS`. False when a peer already swapped `pool`. Never raises."""
+        try:
+            if not self._drop_pool(pool):
+                return False
+            _reap_after_neighbours(
+                pool,
+                None,
+                _pool_neighbour_futures(pool, overdue_future),
+                self.__dict__.setdefault("_retired_procs", []),
+                on_kill=self._record_reaped_neighbours,
+            )
+            return True
+        except Exception:  # noqa: BLE001 -- the caller's typed timeout is already decided
+            return False
+
     def _retired_workers_alive(self) -> int:
         """Recycled-pool workers still alive. A worker blocked in a kernel call survives
         `terminate()`; recycling again on top of them grows the process count without bound."""
@@ -5643,6 +5807,7 @@ class _ServerContext:
                         dispatch_key=dispatch_key,
                         slow_phase=row_fields.get("slow_phase"),
                         spans=row_fields.get("spans"),
+                        **({"cpu_ms": row_fields["cpu_ms"]} if "cpu_ms" in row_fields else {}),
                         **_drive_fault_row(response),
                     )
                 else:
@@ -5658,6 +5823,7 @@ class _ServerContext:
                         dispatch_key=dispatch_key,
                         slow_phase=row_fields.get("slow_phase"),
                         spans=row_fields.get("spans"),
+                        cpu_ms=row_fields.get("cpu_ms"),
                         **_drive_fault_row(response),
                     )
             except Exception:  # noqa: BLE001 -- telemetry never fails a caller
@@ -5751,17 +5917,25 @@ class _ServerContext:
             _light = _is_light_mutating(_resolved)
             _slot_lock = threading.Lock()
             _slot_held = [True]
+            _slot_lease: list = [None]
 
             def _release_slot() -> None:
                 with _slot_lock:
                     if not _slot_held[0]:
                         return
                     _slot_held[0] = False
-                gate.release(_hook, _light)
+                if _slot_lease[0] is None:
+                    gate.release(_hook, _light)
+                else:
+                    gate.drop_lease(_slot_lease[0])
 
             if dispatch_key is not None:
                 _ack_store.mark_queued(dispatch_key)
             _gate_wait = gate.acquire(_op_may_mutate(_resolved), _deadline, _hook, _light)
+            if _gate_wait is not None:
+                # A thread parked past its own deadline (a blocked journal write) never reaches a
+                # release below; the lease lets the next waiter reclaim the slot.
+                _slot_lease[0] = gate.hold(max(0.0, _deadline - _gate_wait) + _SLOT_LEASE_GRACE_SECS, _hook, _light)
             if _gate_wait is not None and dispatch_key is not None:
                 _ack_store.mark_dispatched(dispatch_key)
             if _gate_wait is None:
@@ -5808,7 +5982,7 @@ class _ServerContext:
                 # The holder's root must match the stall record's probe root, or an op naming its
                 # repo only in the envelope classifies hung on a slow drive and recycles the pool.
                 self._track_pool_task(
-                    future, msg.get("method"), dispatch_key, repo_root=_stall_probe_root(msg)[0]
+                    future, msg.get("method"), dispatch_key, repo_root=_stall_probe_root(msg)[0], pool=pool
                 )
             self._pool_outstanding.enter()
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
@@ -5825,6 +5999,7 @@ class _ServerContext:
                 # The worker is left parked, never terminated: killing one pool process breaks the
                 # whole pool and fails every neighbour, and a process blocked on a dead drive
                 # survives terminate() anyway. New ops on this drive are refused at admission.
+                _release_slot()
                 withdrawn = _withdraw_unstarted(future, claim)
                 future.add_done_callback(lambda _f: _offload_fs(_release_claim, claim))
                 if dispatch_key is not None:
@@ -5875,6 +6050,8 @@ class _ServerContext:
                     if not self._terminate_overdue_bounded(pool, claim, dispatch_key, future):
                         if dispatch_key is not None:
                             _ack_store.mark_withdrawn(dispatch_key)
+                        if not _guard_class:
+                            self._abandon_stuck_pool(pool, future)
                     _release_slot()
                     self._take_recycled(future)
                     return _machine_local_timeout_response(msg, _ml_secs)
@@ -5918,6 +6095,8 @@ class _ServerContext:
                 if not self._terminate_overdue_bounded(pool, claim, dispatch_key, future):
                     if dispatch_key is not None:
                         _ack_store.mark_withdrawn(dispatch_key)
+                    if not _guard_class:
+                        self._abandon_stuck_pool(pool, future)
                 # The caller has its answer: the slot frees now, not when a worker blocked in the
                 # kernel (a create or read that survives terminate) finally returns.
                 _release_slot()
@@ -6665,6 +6844,7 @@ class _ServerContext:
                 dispatch_key=row.get("dispatch_key"),
                 slow_phase=row.get("slow_phase"),
                 spans=row.get("spans"),
+                cpu_ms=row.get("cpu_ms"),
             )
             if row.get("wrapper"):
                 _tag_wrapper(row["wrapper"], row.get("op"), start_ts, end_ts)

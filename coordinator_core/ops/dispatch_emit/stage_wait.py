@@ -125,13 +125,17 @@ def park(
     session_id: str = "",
     now: Optional[float] = None,
     last_activity: Optional[Mapping[str, float]] = None,
+    sizing_rel: str = "",
+    reason: str = "",
 ) -> Optional[dict]:
     """Write the run's one wait record naming `blockers`; None when no record home or run id resolves.
 
     A repeat park of a still-waiting run replaces the blocker set and keeps the first deadline, so
     re-attempts never extend the bound. `session_id` receives the start notice. `last_activity` maps a
     blocker to its last-activity epoch; the record carries it as ISO UTC under `last_activity`, so a
-    reader tells a live blocker from a dead one without the stage stamp."""
+    reader tells a live blocker from a dead one without the stage stamp. `sizing_rel` is the refire's
+    sizing when the waiter's own token record is gone (a halted run discards it); `reason` tags a park
+    that is not a stage-write overlap (`co-tenant-wait`). Both are omitted from the record when empty."""
     path = _path(root, run_id)
     names = sorted({b for b in blockers if isinstance(b, str) and b})
     if path is None:
@@ -152,6 +156,12 @@ def park(
             "started": False,
             "last_activity": {b: iso_utc(last_activity[b]) for b in names if b in (last_activity or {})},
         }
+        sizing_rel = sizing_rel or (prior or {}).get("sizing_rel") or ""
+        reason = reason or (prior or {}).get("reason") or ""
+        if sizing_rel:
+            record["sizing_rel"] = sizing_rel
+        if reason:
+            record["reason"] = reason
         _write(path, record)
     return record
 

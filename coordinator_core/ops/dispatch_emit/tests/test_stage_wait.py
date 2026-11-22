@@ -35,6 +35,14 @@ def test_park_writes_one_record_with_deadline(repo) -> None:
     assert [p.name for p in (home / "coordinator-warp-stage-waits").iterdir()] == ["waiter.json"]
 
 
+def test_park_stores_sizing_and_reason_only_when_given(repo) -> None:
+    plain = stage_wait.park(repo, "w1", ["b1"], [])
+    tagged = stage_wait.park(repo, "w2", ["b1"], [], sizing_rel="docs/x.yaml", reason="co-tenant-wait")
+    assert "sizing_rel" not in plain and "reason" not in plain
+    assert stage_wait.read(repo, "w2")["sizing_rel"] == "docs/x.yaml"
+    assert tagged["reason"] == "co-tenant-wait"
+
+
 def test_repeat_park_keeps_first_deadline(repo) -> None:
     stage_wait.park(repo, "waiter", ["b1"], [], now=1000.0)
     again = stage_wait.park(repo, "waiter", ["b1", "b2"], [], now=5000.0)

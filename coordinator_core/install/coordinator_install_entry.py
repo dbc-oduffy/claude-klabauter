@@ -77,7 +77,7 @@ from typing import Optional
 EXIT_INTERPRETER_UNSUPPORTED = 96
 
 _USAGE = """\
-usage: coordinator-install [--check-only] [--host <hosts>] [-- <args>]
+usage: coordinator-install [--plan | --check-only] [--answers <json|file>] [--host <hosts>] [-- <args>]
 
 Installs coordinator by dispatching this repo's declared installer, read from
 its agent-install manifest rather than a hardcoded path.
@@ -88,10 +88,14 @@ it is absent the underlying installer exits 90 naming it, which is the correct
 answer, not a defect in this entry.
 
   --check-only  probe install state without mutating the box
-  --host <list> comma-separated foreign hosts (e.g. codex,agy); run as a second
-                installer call (host fragment and MCP entry only) after the full
-                install returns 0; validated by the installer, forwarded as given
-  -- <args>     forwarded verbatim to the underlying installer
+  --plan        print the default planner without installing
+  --answers     shared codex_runtime enrol/skip and literal boolean consent
+  --host <list> comma-separated hosts (e.g. codex,agy) configured after base setup
+                Bare codex uses legacy host setup. With --answers, enrol
+                enrolls the Codex runtime with consent.codex_runtime=true.
+                Skip omits Codex setup. Other selected hosts use legacy setup.
+  -- <args>     forwarded verbatim to the underlying installer. A forwarded
+                --host containing codex conflicts with an explicit skip.
 
 Exit codes: 0 success. 96 designed refusal (an interpreter this installer will
 not override, e.g. PEP 668 externally-managed) — remediation names a supported
@@ -102,6 +106,54 @@ underlying installer's own code, forwarded verbatim.
 
 class InstallEntryError(RuntimeError):
     pass
+
+
+def _planner(root: Path):
+    """Load the selected engine's installer planner, never an ambient plugin copy."""
+    import importlib.util
+    name = "_coordinator_install_runtime_selection"
+    spec = importlib.util.spec_from_file_location(
+        name, root / "coordinator" / "lib" / "install" / "coordinator_install.py")
+    if not spec or not spec.origin or not Path(spec.origin).is_file():
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _runtime_selection(root: Path, answers_spec: str | None) -> bool | None:
+    """Validate supplied consent; None preserves omitted host-only selection."""
+    module = _planner(root)
+    if module is None:
+        if answers_spec:
+            raise InstallEntryError("coordinator-install: runtime planner missing from selected engine")
+        return None
+    raw = module._load_answers(answers_spec)
+    requested = module.codex_runtime_requested(raw)
+    return requested if "codex_runtime" in raw else None
+
+
+def _enrollment_roots(script: Path, base_args: list[str]) -> tuple[Path, Path]:
+    """Resolve the base setup selection once and bind both subprocesses to it."""
+    import runpy
+
+    setup = runpy.run_path(str(script))
+    try:
+        args = setup["parse_args"](base_args)
+    except setup["ArgError"] as exc:
+        raise InstallEntryError(str(exc)) from exc
+    if (args.help or args.check or args.preflight or args.uninstall_pruner
+            or args.deps_only or args.register_only or args.repair or args.hosts):
+        raise InstallEntryError(
+            "Codex runtime enrollment requires a full base install. Remove the "
+            "setup mode after --, or use coordinator-install --help or --check-only."
+        )
+    source, resolution = setup["_resolve_coordinator_claude_root"](script.parent.parent, args)
+    plugin = setup["_resolve_plugin_root_for_machine_local"](source)
+    if resolution.is_publish_mirror_rejected or plugin is None:
+        raise InstallEntryError(f"cannot enroll Codex from coordinator root {source} ({resolution.display})")
+    return source.resolve(), plugin.resolve()
 
 
 def _declared_installer(claude_klabauter_root: Path) -> "tuple[Path, dict]":
@@ -168,22 +220,37 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     check_only = "--check-only" in argv
     argv = [a for a in argv if a != "--check-only"]
+    plan_only = "--plan" in argv
+    argv = [a for a in argv if a != "--plan"]
+    if "--enroll-runtime" in passthrough:
+        print("coordinator-install: enrollment requires validated --answers or explicit enrollment consent", file=sys.stderr)
+        return 2
 
     host_args: "list[str]" = []
     rest: "list[str]" = []
+    answers_spec = None
     it = iter(argv)
     for a in it:
-        if a == "--host":
-            value = next(it, None)
-            if value is None or value.startswith("--"):
+        if a == "--answers" or a.startswith("--answers="):
+            answers_spec = next(it, None) if a == "--answers" else a.partition("=")[2]
+            if not answers_spec or not answers_spec.strip():
+                print("coordinator-install: --answers requires JSON or a file", file=sys.stderr)
+                return 2
+        elif a == "--host" or a.startswith("--host="):
+            value = next(it, None) if a == "--host" else a.partition("=")[2]
+            if not value or value.startswith("--") or not any(host.strip() for host in value.split(",")):
                 print("coordinator-install: --host requires a value, e.g. --host codex,agy", file=sys.stderr)
                 return 2
             host_args = ["--host", value]
-        elif a.startswith("--host="):
-            host_args = ["--host", a[len("--host="):]]
         else:
             rest.append(a)
-    argv = rest
+    if rest:
+        print(
+            f"coordinator-install: unsupported option(s): {' '.join(rest)}. "
+            "Nothing was run. Supported: --plan, --answers, --check-only, --host <list>, -- <args>, --help.",
+            file=sys.stderr,
+        )
+        return 2
 
     from coordinator_core.engine_root import _load_shim, coordinator_engine_root_with_class
 
@@ -201,6 +268,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         return 1
 
     cmd = [sys.executable, str(script)]
+    if plan_only:
+        planner = _planner(Path(claude_klabauter_root_str))
+        if planner is None:
+            print("coordinator-install: runtime planner missing from selected engine", file=sys.stderr)
+            return 1
+        return planner.main(["--plan"])
     if check_only:
         flag = contract.get("check_only_flag")
         if not isinstance(flag, str) or not flag:
@@ -222,14 +295,47 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+    try:
+        enroll = False if check_only else _runtime_selection(Path(claude_klabauter_root_str), answers_spec)
+        if enroll:
+            source, plugin = _enrollment_roots(script, cmd[2:])
+            if "--coordinator-root" not in passthrough:
+                cmd.extend(["--coordinator-root", str(source)])
+    except (InstallEntryError, ValueError, OSError) as exc:
+        print(f"coordinator-install: {exc}", file=sys.stderr)
+        return getattr(exc, "exit_code", 2)
+
+    if enroll is False and not check_only:
+        # Stripping the last forwarded host would turn host-only setup into a full install.
+        for option, hosts in zip(passthrough, passthrough[1:]):
+            if option == "--host" and "codex" in (host.strip() for host in hosts.split(",")):
+                print("coordinator-install: codex_runtime=skip conflicts with forwarded "
+                      "--host codex. Select other hosts before --.", file=sys.stderr)
+                return 2
+
+    if enroll is False and not check_only and host_args:
+        remaining = [h for h in host_args[1].split(",") if h.strip().lower() != "codex"]
+        host_args = ["--host", ",".join(remaining)] if remaining else []
+
     rc = subprocess.call(cmd, **no_console_passthrough_kwargs())
-    if rc != 0 or check_only or not host_args:
+    if rc != 0 or check_only or not (host_args or enroll):
         return rc
     # setup.py --host is host-only: the full install runs first, the host step is its own call.
     host_cmd = [sys.executable, str(script)]
     flag = contract.get("non_interactive_flag")
     if isinstance(flag, str) and flag:
         host_cmd.append(flag)
+    if enroll:
+        # Other requested hosts keep their legacy MCP-only leg.
+        others = [h for h in (host_args[1].split(",") if host_args else []) if h.strip() != "codex"]
+        if others:
+            rc = subprocess.call([*host_cmd, "--host", ",".join(others)], **no_console_passthrough_kwargs())
+            if rc:
+                return rc
+        host_cmd.extend(["--host", "codex", "--enroll-runtime"])
+        env = dict(os.environ)
+        env["CLAUDE_PLUGIN_ROOT"] = str(plugin)
+        return subprocess.call(host_cmd, stdin=subprocess.DEVNULL, env=env, **no_console_passthrough_kwargs())
     host_cmd.extend(host_args)
     return subprocess.call(host_cmd, **no_console_passthrough_kwargs())
 

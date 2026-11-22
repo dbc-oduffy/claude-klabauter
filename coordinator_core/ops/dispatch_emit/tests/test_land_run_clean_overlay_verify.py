@@ -59,6 +59,40 @@ def _repo(tmp_path, *, data: str = "ok\n"):
     return root, _git(root, "rev-parse", "HEAD").strip()
 
 
+_CPU_TREE_READABLE = sys.platform == "win32" or sys.platform.startswith("linux")
+_BUSY_SILENT = "import time\nt = time.time()\nwhile time.time() - t < 5:\n    pass\nprint('done')\n"
+
+
+@pytest.mark.skipif(not _CPU_TREE_READABLE, reason="tree CPU is unreadable on this platform; output-only judgement")
+def test_a_silent_cpu_burning_child_outlives_the_stall_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(cov, "PYTEST_STARTUP_S", 0.0)
+    done = cov._run([sys.executable, "-c", _BUSY_SILENT], tmp_path, None, stall_s=1.5)
+    assert done.returncode == 0 and "done" in done.stdout
+
+
+@pytest.mark.skipif(not _CPU_TREE_READABLE, reason="tree CPU is unreadable on this platform; output-only judgement")
+def test_a_silent_idle_child_still_stalls(tmp_path, monkeypatch):
+    monkeypatch.setattr(cov, "PYTEST_STARTUP_S", 0.0)
+    with pytest.raises(cov.PytestStalled):
+        cov._run([sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, None, stall_s=1.5)
+
+
+def test_an_unreadable_tree_cpu_degrades_to_output_only_judgement(tmp_path, monkeypatch):
+    monkeypatch.setattr(cov, "PYTEST_STARTUP_S", 0.0)
+    from coordinator_core.diagnostics import contained_run as cr
+
+    spawn = cr.spawn_in_capped_job
+
+    def blind(*a, **kw):
+        proc, close = spawn(*a, **kw)
+        close.tree_cpu_s = lambda: None
+        return proc, close
+
+    monkeypatch.setattr(cr, "spawn_in_capped_job", blind)
+    with pytest.raises(cov.PytestStalled):
+        cov._run([sys.executable, "-c", _BUSY_SILENT], tmp_path, None, stall_s=1.5)
+
+
 def test_peer_dirt_in_the_worktree_does_not_fail_the_overlay(tmp_path):
     root, head = _repo(tmp_path)
     _write(root, "t/data.txt", "peer dirt\n")

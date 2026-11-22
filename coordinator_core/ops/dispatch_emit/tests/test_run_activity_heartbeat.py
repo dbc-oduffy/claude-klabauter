@@ -222,3 +222,36 @@ def test_an_admit_still_succeeds_when_the_heartbeat_raises(tmp_path: Path, monke
     monkeypatch.setattr(record_homes, "home_dir", boom)
     assert run_token.admits(tmp_path, run_id, token, script) is True
     assert run_token.admits(tmp_path, run_id, "wrong", script) is False
+
+
+def _write_stage(d: Path, **fields) -> None:
+    d.mkdir(parents=True, exist_ok=True)
+    (d / RUN_STAGE_FILE).write_text(json.dumps({"session_id": "s", **fields}), encoding="utf-8")
+
+
+def test_a_phaseless_minted_run_never_gains_executing_from_a_heartbeat(tmp_path: Path) -> None:
+    _write_stage(tmp_path, stage="minted", last_activity_at=T0.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    later = T0 + timedelta(seconds=HEARTBEAT_MIN_S + 1)
+    assert touch_run_activity(tmp_path, now=later) is True
+    data = _read(tmp_path)
+    assert "phase" not in data and data["stage"] == "minted"
+    assert data["last_activity_at"] == later.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_a_phaseless_minted_run_heartbeat_is_still_throttled(tmp_path: Path) -> None:
+    _write_stage(tmp_path, stage="minted", last_activity_at=T0.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    before = (tmp_path / RUN_STAGE_FILE).read_bytes()
+    assert touch_run_activity(tmp_path, now=T0 + timedelta(seconds=HEARTBEAT_MIN_S - 1)) is False
+    assert (tmp_path / RUN_STAGE_FILE).read_bytes() == before
+
+
+def test_a_phaseless_staged_run_still_gains_executing(tmp_path: Path) -> None:
+    _write_stage(tmp_path, stage="staged", last_activity_at=T0.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    assert touch_run_activity(tmp_path, now=T0 + timedelta(seconds=1)) is True
+    assert _read(tmp_path)["phase"] == "executing"
+
+
+def test_a_labelled_minted_run_keeps_its_phase(tmp_path: Path) -> None:
+    _write_stage(tmp_path, stage="minted", phase="plan-author", last_activity_at=T0.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    assert touch_run_activity(tmp_path, now=T0 + timedelta(seconds=HEARTBEAT_MIN_S + 1)) is True
+    assert _read(tmp_path)["phase"] == "plan-author"

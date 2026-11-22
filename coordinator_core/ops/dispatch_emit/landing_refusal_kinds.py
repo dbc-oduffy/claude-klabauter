@@ -4,6 +4,10 @@ from __future__ import annotations
 
 LANDING_REFUSAL_KINDS = frozenset({"destructive-git", "secret-in-diff", "lost-definition"})
 
+#: Kind of the typed halt ``landing_targeted_tests.no_targeted_tests_halt`` carries as a ``remedy_step``; never a
+#: ``Finding`` reason, never a refusal.
+NO_TARGETED_TESTS = "no_targeted_tests"
+
 PROVENANCE_KINDS = frozenset({
     "peer-hunks-co-declared",
     "out-of-ask-hunks",

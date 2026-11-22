@@ -98,6 +98,50 @@ def test_a_halted_predecessor_known_only_by_its_halt_marker_counts(run) -> None:
     assert run_base_ref(repo, REL) == "origin/main"
 
 
+SHA_A, SHA_B = "a" * 40, "b" * 40
+
+
+def _record_base(d, sha, file: str = "halted.json") -> None:
+    path = d / file
+    path.write_text(json.dumps({**json.loads(path.read_text(encoding="utf-8")), "run_base_sha": sha}), encoding="utf-8")
+
+
+def test_no_marker_yields_the_newest_runs_recorded_run_base(run) -> None:
+    repo, _ = run
+    _record_base(_other_run(repo, "ask-20261029T000100-aaaaaa", file="halted.json"), SHA_A)
+    _record_base(_other_run(repo, "ask-20261029T000200-bbbbbb", file="halted.json"), SHA_B)
+    assert run_base_ref(repo, REL) == SHA_B
+    assert run_base_ref(repo, "./" + REL) == SHA_B
+
+
+def test_run_json_base_outranks_halted_json_of_the_same_run_and_each_alone_counts(run) -> None:
+    repo, d = run
+    _record_base(d, SHA_A, file="run.json")
+    assert run_base_ref(repo, REL) == SHA_A
+    (d / "halted.json").write_text(json.dumps({"sizing_rel": REL, "run_base_sha": SHA_B}), encoding="utf-8")
+    assert run_base_ref(repo, REL) == SHA_A
+    _record_base(d, "not-a-sha", file="run.json")
+    assert run_base_ref(repo, REL) == SHA_B
+
+
+def test_a_marker_outranks_a_newer_runs_recorded_base(run) -> None:
+    repo, _ = run
+    _other_run(repo, "ask-20261029T000100-aaaaaa", base_ref="origin/main")
+    _record_base(_other_run(repo, "ask-20261029T000200-bbbbbb", file="halted.json"), SHA_B)
+    assert run_base_ref(repo, REL) == "origin/main"
+
+
+def test_recorded_base_must_be_a_full_sha_of_this_sizing(run) -> None:
+    repo, _ = run
+    _record_base(_other_run(repo, "ask-20261029T000100-aaaaaa", file="halted.json"), "abc1234")
+    assert run_base_ref(repo, REL) is None
+    _record_base(
+        _other_run(repo, "ask-20261029T000200-bbbbbb", sizing_rel="state/sizings/2026-10-29-other.yaml", file="halted.json"),
+        SHA_B,
+    )
+    assert run_base_ref(repo, REL) is None
+
+
 def test_none_when_no_run_of_that_sizing_carries_one(run) -> None:
     repo, _ = run
     assert run_base_ref(repo, REL) is None

@@ -24,7 +24,10 @@ _MISMATCH_MARKERS = ("REMOTE HOST IDENTIFICATION HAS CHANGED", "Host key verific
 
 
 def box_addresses(box, read_key):
-    """The box's ordered address list: comma-separated IP literals, order kept, duplicates and invalid tokens dropped, at most 8."""
+    """The box's address list: comma-separated IP literals, duplicates and invalid tokens dropped, at most 8.
+
+    Order kept within a class, but IPv4 first, other IPv6 next, link-local (fe80) last: a link-local dial is
+    scope-ambiguous and adds a pre-auth connection the sshd MaxStartups drop counts."""
     raw = read_key(ADDRESSES_KEY.format(box=box)) or ""
     out = []
     for token in str(raw).split(","):
@@ -39,7 +42,12 @@ def box_addresses(box, read_key):
             out.append(tok)
         if len(out) == MAX_ADDRESSES:
             break
-    return out
+    return sorted(out, key=_address_rank)
+
+
+def _address_rank(tok):
+    ip = ipaddress.ip_address(tok.split("%", 1)[0])
+    return 0 if ip.version == 4 else (2 if ip.is_link_local else 1)
 
 
 def pinned_hostkey(box, read_key):

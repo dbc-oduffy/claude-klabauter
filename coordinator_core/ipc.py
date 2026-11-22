@@ -3250,6 +3250,7 @@ async def dispatch_message(
     # rather than by remembering to wire up each new entry point
     # (MEASUREMENT_SCOPE_PER_OP_HANDLER's comment has the population this fixed).
     process_start = _time.process_time()
+    thread_start = _time.thread_time()
     spawn_start = _spawn_count_or_none()
     _ancestors = _ANCESTOR_RECORDS.get()
     _record = _enter_dispatch(_ancestors)
@@ -3353,6 +3354,7 @@ async def dispatch_message(
             pass
         elapsed_ms = (_time.perf_counter() - perf_start) * 1000.0
         span_ms = (_time.process_time() - process_start) * 1000.0
+        _cpu_ms = (_time.thread_time() - thread_start) * 1000.0
         uncontaminated = _exit_dispatch(_record)
         _ANCESTOR_RECORDS.reset(_ancestor_token)
         try:
@@ -3398,6 +3400,7 @@ async def dispatch_message(
                 repo_root=telemetry_repo_root,
                 spawns=_spawns,
                 extra_fields=_row_fields,
+                cpu_ms=_cpu_ms,
             )
         except Exception:
             _log().debug(
@@ -3663,9 +3666,14 @@ def record_op_process_time(
     spawns: Optional[int] = None,
     caller: Optional[str] = None,
     extra_fields: Optional[dict] = None,
+    cpu_ms: Optional[float] = None,
 ) -> None:
     """Append one durable process-time sample, alongside (never replacing) the
     wall-clock `elapsed_ms` row `dispatch_message` already records.
+
+    `cpu_ms` is the dispatching thread's `time.thread_time()` delta in ms
+    (0.1 rounding), recorded beside `process_ms` and omitted when None; it
+    excludes every sibling thread's CPU, which `process_ms` can include.
 
     Reuses `coordinator_core.telemetry.op_latency._write_entry` -- the
     module's own single append discipline (kill switch, route stamping,
@@ -3724,6 +3732,8 @@ def record_op_process_time(
         }
         if spawns is not None:
             entry["spawns"] = spawns
+        if cpu_ms is not None:
+            entry["cpu_ms"] = round(cpu_ms, 1)
         if extra_fields and scope == MEASUREMENT_SCOPE_PER_OP_HANDLER:
             for key, value in extra_fields.items():
                 entry.setdefault(key, value)

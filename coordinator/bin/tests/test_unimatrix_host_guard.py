@@ -819,6 +819,68 @@ def test_allow_row_write_failure_never_alters_the_answer(tmp_path, monkeypatch, 
     assert hg.guard("codex", CODEX_PAYLOAD, str(tmp_path)) == ({}, "neutral-unknown")
 
 
+BRANCH_GUARD = "block-noncanonical-branch-creation"
+DAY_BRANCH = "tester/box/2026-11-22"
+
+
+@pytest.fixture
+def engine_route(monkeypatch):
+    """Set COORDINATOR_WARM and the shim's dial to match: "1" answers the engine's allow, "0" is no engine."""
+    from coordinator_core.host_hooks import shim
+
+    def choose(warm):
+        monkeypatch.setenv("COORDINATOR_WARM", warm)
+        monkeypatch.setattr(shim, "_dial", lambda request: {"result": {}} if warm == "1" else None)
+
+    return choose
+
+
+@pytest.mark.parametrize("warm,route", [("1", "warm"), ("0", "cold")])
+@pytest.mark.parametrize("command", ["git checkout -b %s" % DAY_BRANCH, "git switch -c %s" % DAY_BRANCH])
+def test_codex_day_branch_create_is_an_evaluated_allow_on_either_route(
+        tmp_path, settings_home, engine_route, warm, route, command):
+    engine_route(warm)
+    answer, state = hg.guard("codex", _cold_payload("codex", "Bash", {"command": command}, str(tmp_path)), str(REPO))
+    assert (answer, state) == ({}, "evaluated-allow")
+    (row,) = allow_rows(settings_home)
+    assert row["kind"] == "evaluated-allow" and row["route"] == route
+    assert BRANCH_GUARD in row["guards_evaluated"] and len(row["guards_evaluated"]) >= 2
+    assert row["chain"] == "full"
+    assert degrade_records(settings_home) == []
+
+
+@pytest.mark.parametrize("warm,route", [("1", "warm"), ("0", "cold")])
+@pytest.mark.parametrize("command", ["git checkout -b probe/x", "git switch -c probe/x", "git branch probe/x"])
+def test_codex_topic_branch_create_is_not_denied_and_names_the_guard(
+        tmp_path, settings_home, engine_route, warm, route, command):
+    engine_route(warm)
+    answer, state = hg.guard("codex", _cold_payload("codex", "Bash", {"command": command}, str(tmp_path)), str(REPO))
+    assert answer == {} and state != "engine"
+    (row,) = allow_rows(settings_home)
+    assert row["route"] == route and BRANCH_GUARD in row["guards_evaluated"]
+
+
+def test_a_non_branch_command_stays_neutral_unknown(tmp_path, settings_home, engine_route):
+    engine_route("0")
+    answer, state = hg.guard("codex", _cold_payload("codex", "Bash", {"command": "git status"}, str(tmp_path)), str(REPO))
+    assert (answer, state) == ({}, "neutral-unknown")
+    assert allow_rows(settings_home)[0]["guards_evaluated"] == ["backstop"]
+
+
+def test_evaluated_allow_guards_are_the_cold_chain_advisory_guards():
+    from coordinator_core.host_hooks import cold_chain
+
+    assert hg.EVALUATED_ALLOW_GUARDS == frozenset(cold_chain.ADVISORY_SHELL_GUARDS)
+
+
+def test_evaluated_allow_state_needs_a_valid_evaluation_naming_the_guard():
+    names = hg._names_evaluated_guard
+    assert names({"route": "cold", "guards_evaluated": ["backstop", BRANCH_GUARD]})
+    assert not names({"route": "cold", "guards_evaluated": ["backstop"]})
+    assert not names({"route": "unreported", "guards_evaluated": [BRANCH_GUARD]})
+    assert not names(None) and not names({"route": "warm"})
+
+
 def test_unreachable_engine_codex_ls_records_a_cold_evaluated_allow(tmp_path, settings_home):
     """Real shim, no warm engine: the production path records route cold naming the backstop only."""
     answer, state = hg.guard("codex", _cold_payload("codex", "Bash", {"command": "ls"}, str(tmp_path)), str(REPO))

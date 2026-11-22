@@ -26,8 +26,10 @@ ui = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ui)
 
 PLATFORMS = ["win32", "darwin", "linux"]
+_REAL_RENDER_PEER = ui.render_peer_doctrine
 _REAL_RESOLVE = ui.resolve_engine_root
 _REAL_HOST_PRESENT = ui.host_present
+_REAL_SEED_STANDING_DOCTRINE = ui._seed_standing_doctrine
 _REAL_PWSH_ALIAS_REMEDY = ui.pwsh_alias_remedy
 _REAL_POWERSHELL_HOST = ui.powershell_host
 _REAL_OPENSSH_REPORT = ui.openssh_receive_report
@@ -59,6 +61,10 @@ def _doctrine_beside_plugin(monkeypatch, tmp_path):
     (doc / "CLAUDE.md").write_text("# doctrine\n", encoding="utf-8")
     (doc / "rules" / "rules.md").write_text("- a rule\n", encoding="utf-8")
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
+    skills = tmp_path / "std-doctrine" / "skills"
+    (skills / "required").mkdir(parents=True)
+    (skills / "required" / "SKILL.md").write_text("# required\n", encoding="utf-8")
+    monkeypatch.setattr(ui, "SKILLS_ROOT", skills)
 
 
 @pytest.fixture(autouse=True)
@@ -164,6 +170,7 @@ def test_range_constant_and_scripts():
         "unimatrix-peer-contract.py",
         "unimatrix-local-transport.py",
         "unimatrix-peer-codex.py",
+        "unimatrix-codex-launch.py",
         "unimatrix-peer-agy.py",
         "unimatrix-peer-grok.py",
         "unimatrix-agy-leg.py",
@@ -573,6 +580,281 @@ def test_codex_hooks_path_honours_codex_home(monkeypatch, tmp_path):
     assert ui.codex_hooks_path() == tmp_path / ".codex" / "hooks.json"
 
 
+@pytest.fixture()
+def runtime_box(tmp_path, monkeypatch):
+    from coordinator_core.install import host_install_codex
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(ui, "external_session_capability", lambda root: (True, "ready"))
+    monkeypatch.setattr(ui, "install_scripts", lambda *a: [])
+    monkeypatch.setattr(ui, "_seed_standing_doctrine", lambda *a: [])
+    monkeypatch.setattr(ui, "render_peer_doctrine", lambda *a: f"{ui.DOCTRINE_BEGIN}\npeer doctrine\n{ui.DOCTRINE_END}\n")
+    monkeypatch.setattr(ui, "trust_codex_hook", lambda hp, **kw: (True, "verified"))
+    return tmp_path / "engine", ui.codex_hooks_path()
+
+
+@pytest.mark.parametrize("consent", [False, None, "true", 1])
+def test_runtime_enrollment_refuses_without_literal_consent(runtime_box, monkeypatch, consent):
+    root, hp = runtime_box
+    monkeypatch.setattr(ui, "host_present", lambda *a: pytest.fail("must validate before work"))
+    assert ui.enroll_codex_runtime(root, consent=consent) == 2
+    assert not hp.parent.exists()
+
+
+def test_strict_runtime_renders_selected_peer_template(runtime_box, monkeypatch):
+    root, hooks = runtime_box
+    plugin = root / "selected plugin"
+    template = plugin / "templates" / "unimatrix" / "peer-doctrine.md"
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
+    monkeypatch.setattr(ui, "render_peer_doctrine", _REAL_RENDER_PEER)
+    for check in (True, False):
+        assert ui.enroll_codex_runtime(root, consent=True, check=check) == 7
+        assert not hooks.exists()
+
+    template.parent.mkdir(parents=True)
+    template.write_text("Selected sizing instructions. Send {SEND}; invoke {INVOKE}.")
+    rules = ui.codex_rules_path()
+    rules.parent.mkdir(parents=True, exist_ok=True)
+    rules.write_text("Operator paragraph.\n")
+    assert ui.enroll_codex_runtime(root, consent=True) == 0
+    expected = _REAL_RENDER_PEER(ui.settings_home() / "unimatrix", template)
+    assert "Operator paragraph." in rules.read_text()
+    assert expected.strip() in rules.read_text()
+    assert "{SEND}" not in expected and "{INVOKE}" not in expected
+    before = rules.read_bytes()
+    assert ui.enroll_codex_runtime(root, consent=True) == 0
+    assert rules.read_bytes() == before
+
+
+def test_strict_runtime_renders_packaged_peer_template(runtime_box, monkeypatch):
+    root, hooks = runtime_box
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.setattr(ui, "render_peer_doctrine", _REAL_RENDER_PEER)
+    rules = ui.codex_rules_path()
+    rules.parent.mkdir(parents=True, exist_ok=True)
+    rules.write_text("Operator paragraph.\n")
+    assert ui.enroll_codex_runtime(root, consent=True) == 0
+    expected = _REAL_RENDER_PEER(ui.settings_home() / "unimatrix")
+    assert expected.index("at most 2 files and 30 lines") < expected.index("coordinator-invoke engine_ask.submit")
+    assert "check a large valid range with a small result" in expected
+    assert "headless-em-launch codex --cwd <repo> -- exec -s workspace-write" in expected
+    assert "reconcile it with the engine records" in expected
+    assert "returned no ID, report the denied path" in expected
+    assert "On timeout, keep watching that fire" in expected
+    assert "verify the product at `commit_sha`" in expected
+    assert "Operator paragraph." in rules.read_text()
+    assert expected.strip() in rules.read_text()
+    assert "{SEND}" not in expected and "{INVOKE}" not in expected
+    before = rules.read_bytes()
+    assert ui.enroll_codex_runtime(root, consent=True) == 0
+    assert rules.read_bytes() == before
+
+
+def test_runtime_enrollment_rerun_preserves_foreign_handlers(runtime_box):
+    root, hp = runtime_box
+    hp.parent.mkdir()
+    foreign = {"hooks": [{"type": "command", "command": "foreign"}]}
+    hp.write_text(json.dumps({"hooks": {"SessionStart": [foreign]}}), encoding="utf-8")
+    config = hp.with_name("config.toml")
+    config.write_text('model = "operator-choice"\n', encoding="utf-8")
+    assert ui.enroll_codex_runtime(root, consent=True) == 0
+    before = {p: p.read_bytes() for p in hp.parent.rglob("*") if p.is_file()}
+    assert ui.enroll_codex_runtime(root, consent=True) == 0
+    assert before == {p: p.read_bytes() for p in hp.parent.rglob("*") if p.is_file()}
+    assert foreign in json.loads(hp.read_text())["hooks"]["SessionStart"]
+    assert 'model = "operator-choice"\n' in config.read_text()
+
+
+def test_strict_host_reports_completed_operations_on_apply_repeat_and_failure(runtime_box, monkeypatch):
+    root, hooks = runtime_box
+    out = io.StringIO()
+    assert ui.enroll_codex_runtime(root, consent=True, out=out) == 0
+    assert hooks.exists()
+    assert "hooks=created" in out.getvalue()
+    assert "exec rule created" in out.getvalue()
+    assert "example-retrieval-repo MCP written" in out.getvalue()
+
+    out = io.StringIO()
+    assert ui.enroll_codex_runtime(root, consent=True, out=out) == 0
+    assert "hooks=present" in out.getvalue()
+    assert "exec rule present" in out.getvalue()
+    assert "example-retrieval-repo MCP current" in out.getvalue()
+
+    hooks.unlink()
+    monkeypatch.setattr(ui, "trust_codex_hook", lambda *a, **kw: (False, "trust failed"))
+    out = io.StringIO()
+    assert ui.enroll_codex_runtime(root, consent=True, out=out) == 5
+    assert hooks.exists()
+    assert "hooks=created; trust failed" in out.getvalue()
+    assert "Codex runtime ready" not in out.getvalue()
+
+
+def test_runtime_check_is_read_only(runtime_box, monkeypatch):
+    root, hp = runtime_box
+    monkeypatch.setattr(ui, "install_scripts", lambda *a: pytest.fail("must not copy"))
+    monkeypatch.setattr(ui, "trust_codex_hook", lambda *a: pytest.fail("must not change trust"))
+    out = io.StringIO()
+    assert ui.enroll_codex_runtime(root, check=True, out=out) == 0
+    assert "read-only" in out.getvalue()
+    assert "runtime ready" not in out.getvalue()
+    assert not hp.parent.exists()
+
+
+@pytest.mark.parametrize("failure", ["missing", "empty", "conflict"])
+def test_runtime_skill_failure_withholds_ready_and_allows_retry(runtime_box, monkeypatch, failure):
+    root, hp = runtime_box
+    monkeypatch.setattr(ui, "_seed_standing_doctrine", _REAL_SEED_STANDING_DOCTRINE)
+    source = root / "skills"
+    monkeypatch.setattr(ui, "SKILLS_ROOT", source)
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    dest = Path.home() / ".agents" / "skills"
+    if failure != "missing":
+        source.mkdir(parents=True)
+    if failure == "conflict":
+        (source / "one").mkdir()
+        (source / "one" / "SKILL.md").write_text("required")
+        (dest / "one").mkdir(parents=True)
+        (dest / "one" / "SKILL.md").write_text("foreign")
+    out = io.StringIO()
+    assert ui.enroll_codex_runtime(root, consent=True, out=out) == 7
+    assert "incomplete" in out.getvalue() and "Codex runtime ready" not in out.getvalue()
+    if failure == "conflict":
+        assert (dest / "one" / "SKILL.md").read_text() == "foreign"
+        (dest / "one").rename(dest / "operator-one")
+    else:
+        (source / "one").mkdir(parents=True)
+        (source / "one" / "SKILL.md").write_text("required")
+    out = io.StringIO()
+    assert ui.enroll_codex_runtime(root, consent=True, out=out) == 0
+    assert "Codex runtime ready" in out.getvalue()
+
+
+@pytest.mark.parametrize("command", [
+    'echo "unimatrix-codex-hook-sessionstart.py"',
+    '"/foreign tool/echo" "unimatrix-host-guard.py"',
+    'python -c "print(123)" unimatrix-codex-hook-sessionstart.py',
+    'python foreign.py unimatrix-codex-hook-sessionstart.py',
+    'echo unimatrix-host-guard.py.backup',
+])
+def test_codex_hook_merge_and_uninstall_preserve_argument_mentions(tmp_path, command):
+    hp = tmp_path / "hooks.json"
+    foreign = {"matcher": "*", "operator": "retain", "hooks": [{"type": "command", "command": command}]}
+    owned = ui.codex_hook_events(tmp_path / "new path", "old-engine")["SessionStart"]
+    mixed = {**foreign, "hooks": foreign["hooks"] + owned["hooks"]}
+    hp.write_text(json.dumps({"operator": True, "hooks": {"SessionStart": [foreign, mixed]}}))
+    ui.seed_codex_hook(hp, tmp_path / "new path")
+    assert json.loads(hp.read_text())["hooks"]["SessionStart"][:2] == [foreign, foreign]
+    assert ui.seed_codex_hook(hp, tmp_path / "new path") == "present"
+    ui.seed_codex_hook(hp, tmp_path / "new path", "new-engine")
+    assert ui.unseed_codex_hook(hp, tmp_path / "new path") == "removed"
+    assert json.loads(hp.read_text()) == {"operator": True, "hooks": {"SessionStart": [foreign, foreign]}}
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_codex_hook_full_script_identity_preserves_foreign_groups(tmp_path, windows):
+    hp = tmp_path / "hooks.json"
+    dest = tmp_path / "installed path"
+    script = ui.CODEX_SESSIONSTART_SCRIPT
+    if windows:
+        foreign_command = f'"C:\\Python Home\\python.exe" "C:\\foreign path\\{script}"'
+    else:
+        foreign_command = f'python "/foreign path/{script}"'
+    foreign = {"matcher": "*", "operator": {"keep": True}, "hooks": [
+        {"type": "command", "command": foreign_command}]}
+    # Earlier installers emitted Windows backslashes and double-quoted script paths.
+    legacy = {"type": "command", "command": f'python "{str(dest / script).replace(chr(47), chr(92))}"'}
+    mixed = {**foreign, "hooks": [*foreign["hooks"], legacy]}
+    hp.write_text(json.dumps({"hooks": {"SessionStart": [foreign, mixed]}}))
+    ui.seed_codex_hook(hp, dest)
+    assert _hooks_file(hp)["hooks"]["SessionStart"][:2] == [foreign, foreign]
+    assert ui.seed_codex_hook(hp, dest) == "present"
+    assert len(ui._codex_expected_handlers(hp, dest)) == 11
+    assert ui.unseed_codex_hook(hp, dest) == "removed"
+    assert _hooks_file(hp) == {"hooks": {"SessionStart": [foreign, foreign]}}
+
+
+def test_codex_hook_windows_target_uses_full_case_insensitive_identity():
+    dest = r'C:\Users\Operator\Settings Home\unimatrix'
+    handler = {"command": r'"C:\Python Home\python.exe" -u "c:\users\operator\settings home\unimatrix\unimatrix-codex-hook-sessionstart.py"'}
+    assert ui._codex_handler_script(handler, dest) == ui.CODEX_SESSIONSTART_SCRIPT
+    handler["command"] = handler["command"].replace('settings home', 'foreign home')
+    assert ui._codex_handler_script(handler, dest) is None
+
+
+@pytest.mark.parametrize("uninstall", [False, True])
+def test_codex_hooks_detect_intervening_foreign_edit(tmp_path, monkeypatch, uninstall):
+    hp = tmp_path / "hooks.json"
+    ui.seed_codex_hook(hp, tmp_path / "initial")
+    original = ui._codex_ours
+    foreign = {"hooks": {"SessionStart": [{"hooks": [{"command": "foreign edit"}]}]}}
+
+    def edited(group, dest_dir=None):
+        hp.write_text(json.dumps(foreign))
+        return original(group, dest_dir)
+
+    monkeypatch.setattr(ui, "_codex_ours", edited)
+    with pytest.raises(ValueError, match="drift"):
+        if uninstall:
+            ui.unseed_codex_hook(hp, tmp_path / "initial")
+        else:
+            ui.seed_codex_hook(hp, tmp_path / "new")
+    assert json.loads(hp.read_text()) == foreign
+
+
+def test_runtime_enrollment_uses_selected_homes_and_leaves_defaults(runtime_box, monkeypatch):
+    root, hp = runtime_box
+    default = Path.home() / ".codex"
+    default.mkdir()
+    sentinel = default / "config.toml"
+    sentinel.write_bytes(b'model = "default-home-sentinel"\n')
+    default_settings = Path.home() / ".coordinator-claude-settings"
+    default_settings.mkdir()
+    settings_sentinel = default_settings / "sentinel"
+    settings_sentinel.write_bytes(b"unchanged")
+    copied = []
+    monkeypatch.setattr(ui, "install_scripts", lambda src, dest, on_copy=None: copied.append(dest))
+
+    assert ui.enroll_codex_runtime(root, check=True) == 0
+    assert not hp.exists() and copied == []
+    assert ui.enroll_codex_runtime(root, consent=True) == 0
+    assert copied == [Path(os.environ["COORDINATOR_SETTINGS_HOME"]) / "unimatrix"]
+    assert hp.is_file()
+    assert "[mcp_servers.project-rag]" in hp.with_name("config.toml").read_text()
+    assert sentinel.read_bytes() == b'model = "default-home-sentinel"\n'
+    assert list(default.iterdir()) == [sentinel]
+    assert settings_sentinel.read_bytes() == b"unchanged"
+    assert list(default_settings.iterdir()) == [settings_sentinel]
+
+
+@pytest.mark.parametrize("failure", ["absent", "lifecycle", "trust", "doctrine", "malformed", "mcp-drift"])
+def test_runtime_readiness_failure_is_nonzero(runtime_box, monkeypatch, failure):
+    root, hp = runtime_box
+    if failure == "absent":
+        monkeypatch.setattr(ui, "host_present", lambda *a: False)
+    elif failure == "lifecycle":
+        monkeypatch.setattr(ui, "external_session_capability", lambda *a: (False, "missing registration"))
+    elif failure == "trust":
+        monkeypatch.setattr(ui, "trust_codex_hook", lambda *a, **kw: (False, "untrusted"))
+    elif failure == "doctrine":
+        monkeypatch.setattr(ui, "_seed_standing_doctrine", lambda *a: ["doctrine"])
+    else:
+        hp.parent.mkdir()
+        hp.with_name("config.toml").write_text("[broken" if failure == "malformed" else '[mcp_servers.project-rag]\nurl = "foreign"\n', encoding="utf-8")
+    assert ui.enroll_codex_runtime(root, consent=True) != 0
+    if failure in ("absent", "lifecycle", "malformed", "mcp-drift"):
+        assert not hp.exists()
+
+
+def test_enrolled_update_uses_shared_runtime_callable(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(ui, "enroll_codex_runtime", lambda root, **kw: seen.append((root, kw)) or 7)
+    assert ui.main(["--install", "--hosts", "codex", "--enroll-runtime"], out=io.StringIO()) == 7
+    assert len(seen) == 1 and seen[0][1]["consent"] is True
+
+
 def test_codex_seed_is_idempotent_and_keeps_foreign_hooks(tmp_path):
     hp = tmp_path / "hooks.json"
     foreign = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "theirs"}]}], "Stop": []}}
@@ -589,13 +871,13 @@ def test_codex_seed_is_idempotent_and_keeps_foreign_hooks(tmp_path):
 def test_codex_seed_creates_file_and_unseed_restores_foreign(tmp_path):
     hp = tmp_path / "codex" / "hooks.json"
     assert ui.seed_codex_hook(hp, tmp_path) == "created"
-    assert ui.unseed_codex_hook(hp) == "removed"
+    assert ui.unseed_codex_hook(hp, tmp_path) == "removed"
     assert json.loads(hp.read_text(encoding="utf-8")) == {}
-    assert ui.unseed_codex_hook(hp) == "absent"
+    assert ui.unseed_codex_hook(hp, tmp_path) == "absent"
     foreign = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "theirs"}]}]}}
     hp.write_text(json.dumps(foreign), encoding="utf-8")
     ui.seed_codex_hook(hp, tmp_path)
-    assert ui.unseed_codex_hook(hp) == "removed"
+    assert ui.unseed_codex_hook(hp, tmp_path) == "removed"
     assert json.loads(hp.read_text(encoding="utf-8")) == foreign
 
 
@@ -664,7 +946,7 @@ def test_uninstall_removes_codex_hook_only(tmp_path):
     chp.write_text(json.dumps(foreign), encoding="utf-8")
     ui.seed_codex_hook(chp, tmp_path)
     buf = io.StringIO()
-    rc = ui.main(["--uninstall"], out=buf, hooks_path=tmp_path / "h.json", codex_hooks=chp)
+    rc = ui.main(["--uninstall"], out=buf, hooks_path=tmp_path / "h.json", codex_hooks=chp, dest_dir=tmp_path)
     assert rc == 0 and "codex hook removed" in buf.getvalue()
     assert json.loads(chp.read_text(encoding="utf-8")) == foreign
 
@@ -682,7 +964,7 @@ def test_trust_codex_hook_marks_hook_trusted_in_real_codex(tmp_path, home_name):
     tmp_path.mkdir()
     hp = tmp_path / "hooks.json"
     ui.seed_codex_hook(hp, tmp_path)
-    ok, note = ui.trust_codex_hook(hp)
+    ok, note = ui.trust_codex_hook(hp, dest_dir=tmp_path)
     assert ok, note
     cfg = (tmp_path / "config.toml").read_text(encoding="utf-8")
     assert "trusted_hash" in cfg and "session_start" in cfg
@@ -702,7 +984,7 @@ def _home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("CODEX_HOME", raising=False)
-    monkeypatch.setattr(ui, "trust_codex_hook", lambda p: (True, "x"))
+    monkeypatch.setattr(ui, "trust_codex_hook", lambda p, **kw: (True, "x"))
     return home
 
 
@@ -901,7 +1183,7 @@ def test_uninstall_removes_everything_and_keeps_foreign(monkeypatch, tmp_path):
     (home / ".codex" / "AGENTS.md").write_text(
         "mine\n" + (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8")
     buf = io.StringIO()
-    assert ui.main(["--uninstall"], out=buf) == 0
+    assert ui.main(["--uninstall"], out=buf, dest_dir=tmp_path / "dest") == 0
     left = _hooks_file(chp)["hooks"]
     assert left == {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "theirs"}]}]}
     assert (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8") == "mine\n"
@@ -1004,15 +1286,15 @@ def test_tui_status_command_has_no_backslash_for_bash_to_strip(monkeypatch):
         assert ui._status_command_ours({"command": cmd}, "grok")
 
 
-def test_tui_status_command_has_no_space_or_quote_in_any_argument(monkeypatch):
+def test_tui_status_command_quotes_short_and_spaced_arguments(monkeypatch):
     spaced = "C:\\Program Files\\py\\python.exe"
     monkeypatch.setattr(ui, "_console_python", lambda: spaced)
     monkeypatch.setattr(ui, "_short_path", lambda p: p.replace("Program Files", "PROGRA~1"))
     cmd = ui._tui_status_command("agy", "C:\\Program Files\\eng", "C:\\Program Files\\u")
-    assert " " not in cmd.replace(" ", "", 3) and '"' not in cmd and "'" not in cmd
+    assert shlex.split(cmd) == ["C:/PROGRA~1/py/python.exe", "C:/PROGRA~1/u/unimatrix-tui-status-launch.py", "C:/PROGRA~1/eng", "agy"]
     assert "-c" not in cmd.split()
     monkeypatch.setattr(ui, "_short_path", lambda p: p)
-    assert '"' in ui._tui_status_command("agy", "C:\\Program Files\\eng", "C:\\Program Files\\u")
+    assert shlex.split(ui._tui_status_command("agy", "C:\\Program Files\\eng", "C:\\Program Files\\u")) == ["C:/Program Files/py/python.exe", "C:/Program Files/u/unimatrix-tui-status-launch.py", "C:/Program Files/eng", "agy"]
 
 
 def test_hook_command_is_forward_slash_quoted_and_old_forms_are_still_claimed(monkeypatch, tmp_path):
@@ -1024,7 +1306,8 @@ def test_hook_command_is_forward_slash_quoted_and_old_forms_are_still_claimed(mo
     for cmd in (command, *old):
         group = {"hooks": [{"type": "command", "command": cmd}]}
         assert ui._grok_group_ours(group)
-        assert ui._codex_ours({"hooks": [{"type": "command", "command": cmd.replace("grok", "codex")}]})
+        script_path = shlex.split(cmd, posix="\\" not in cmd)[1].strip("\"'").replace("\\", "/")
+        assert ui._codex_ours({"hooks": [{"type": "command", "command": cmd.replace("grok", "codex")}]}, Path(script_path).parent)
     assert not ui._grok_group_ours({"hooks": [{"command": command.replace("grok", "codex")}]})
 
 
@@ -1219,7 +1502,7 @@ def _trust_with(monkeypatch, tmp_path, **kw):
     fake = _FakeCodex(chp, cmds, **kw)
     monkeypatch.setattr(ui.shutil, "which", lambda n: "/bin/codex")
     monkeypatch.setattr(ui.subprocess, "Popen", lambda *a, **k: fake)
-    return ui.trust_codex_hook(chp), fake
+    return ui.trust_codex_hook(chp, dest_dir=tmp_path), fake
 
 
 def test_trust_covers_guard_and_skips_foreign(monkeypatch, tmp_path):
@@ -1228,6 +1511,26 @@ def test_trust_covers_guard_and_skips_foreign(monkeypatch, tmp_path):
     assert len([r for r in fake.rows if r.get("trustedHash")]) == 11
     assert all(r.get("trustedHash") == r["currentHash"] for r in fake.rows if r["command"] != "theirs")
     assert next(r for r in fake.rows if r["command"] == "theirs").get("trustedHash") is None
+
+
+def test_native_trust_renews_only_changed_owned_hashes(monkeypatch, tmp_path):
+    (ok, note), fake = _trust_with(monkeypatch, tmp_path)
+    assert ok, note
+    writes = []
+    original = fake.write
+
+    def write(line):
+        msg = json.loads(line)
+        if msg.get("method") == "config/value/write":
+            writes.append(msg)
+        return original(line)
+
+    fake.write = write
+    assert ui.trust_codex_hook(tmp_path / "hooks.json", dest_dir=tmp_path)[0] is True
+    assert writes == []
+    fake.rows[0]["currentHash"] = "owned-script-changed"
+    assert ui.trust_codex_hook(tmp_path / "hooks.json", dest_dir=tmp_path)[0] is True
+    assert len(writes) == 1 and writes[0]["params"]["value"] == "owned-script-changed"
 
 
 def _drop(event):
@@ -1924,6 +2227,8 @@ def test_flat_checkout_templates_doctrine_seeds_codex_and_agy(monkeypatch, tmp_p
     (flat / "templates" / "global-doctrine" / "CLAUDE.md").write_text("# flat\n", encoding="utf-8")
     (flat / "templates" / "global-doctrine" / "rules" / "rules.md").write_text("- r\n", encoding="utf-8")
     (flat / "coordinator").mkdir()
+    (flat / "coordinator" / "skills" / "required").mkdir(parents=True)
+    (flat / "coordinator" / "skills" / "required" / "SKILL.md").write_text("# required\n")
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "none" / "coordinator")
     assert ui.doctrine_root(flat / "coordinator") == flat / "templates"
     assert ui.doctrine_root(flat) == flat / "templates"
@@ -2067,9 +2372,9 @@ def test_codex_install_and_remove_preserve_foreign_handlers_inside_owned_group(t
     ui.seed_codex_hook(hp, tmp_path)
     data = _hooks_file(hp)
     assert data["hooks"]["SessionStart"][0]["hooks"] == [foreign]
-    assert len(ui._codex_expected_handlers(hp)) == 11
+    assert len(ui._codex_expected_handlers(hp, tmp_path)) == 11
     assert ui.seed_codex_hook(hp, tmp_path) == "present"
-    ui.unseed_codex_hook(hp)
+    ui.unseed_codex_hook(hp, tmp_path)
     assert _hooks_file(hp) == {"hooks":{"SessionStart":[{"hooks":[foreign]}]}}
 
 
@@ -2240,6 +2545,17 @@ def test_codex_footer_invalid_toml_never_overwritten(tmp_path):
     cfg=tmp_path/'config.toml';cfg.write_text('[tui\n')
     with pytest.raises(ValueError):ui.seed_codex_status_line(cfg)
     assert cfg.read_text()=='[tui\n'
+
+
+def test_codex_footer_upgrade_retains_custom_additions_without_seeded_duplicates(tmp_path):
+    cfg = tmp_path / 'config.toml'
+    old = ['thread-name', 'model-with-reasoning', 'context-remaining']
+    cfg.write_text('[tui]\nstatus_line=' + json.dumps(old + ['git-branch']) + '\n')
+    cfg.with_name('.coordinator-status-line.json').write_text(json.dumps(
+        {'version': 1, 'present': False, 'original': None, 'managed': old}))
+    assert ui.seed_codex_status_line(cfg) == 'updated'
+    assert tomllib.loads(cfg.read_text())['tui']['status_line'] == ['thread-name', 'git-branch']
+    assert ui.seed_codex_status_line(cfg) == 'present'
 
 
 def test_codex_footer_is_automatic_in_install_and_owned_uninstall(monkeypatch,tmp_path):

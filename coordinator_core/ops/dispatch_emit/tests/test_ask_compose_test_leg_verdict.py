@@ -191,6 +191,71 @@ def test_failed_or_absent_reverify_still_halts_on_an_empty_test_verdict(reverify
     assert halted and halted["halted"] == "test_verdict_empty"
 
 
+_AT_BASE_PROGRAM = """
+const _TEST_GUARD = true;
+let _halted = null, _runId = 'r', _testResult = %s;
+let _reviewReverify = %s;
+%s
+console.log(JSON.stringify(_halted));
+"""
+
+
+def _run_at_base(test_result: str, reverify: str) -> dict:
+    import json
+
+    body = _TEST_RAN_DECL + chr(10) + _test_verdict_empty_halt_js(_SIZING).replace("TEST_GUARD", "_TEST_GUARD")
+    out = subprocess.run(
+        [shutil.which("node"), "-"], input=_AT_BASE_PROGRAM % (test_result, reverify, body),
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout.strip()
+    return json.loads(out)
+
+
+_CO_TENANT = "co_tenant: { owner: 'run-7', module: 'coordinator_core/ops/run_order.py'%s }"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_co_tenant_wait_halts_co_tenant_wait_naming_owner_and_module():
+    halted = _run_at_base(
+        "{ status: 'error', sidecar_path: 'a.md', tests_run: 0, zero_run_cause: 'co-tenant-wait', "
+        + _CO_TENANT % "" + " }",
+        "null",
+    )
+    assert halted["halted"] == "co_tenant_wait" != "test_infra_failure"
+    assert "run-7" in halted["detail"] and "coordinator_core/ops/run_order.py" in halted["detail"]
+    assert halted["next_action"] == "auto-refires when run-7 lands"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_co_tenant_on_halted_run_halts_that_kind_naming_the_owner_refire():
+    halted = _run_at_base(
+        "{ status: 'error', sidecar_path: 'a.md', tests_run: 0, "
+        "zero_run_cause: 'co_tenant_dependency_on_halted_run', "
+        + _CO_TENANT % ", owner_refire: 'REFIRE-RUN-7'" + " }",
+        "null",
+    )
+    assert halted["halted"] == "co_tenant_dependency_on_halted_run"
+    assert "REFIRE-RUN-7" in halted["next_action"] and "run-7" in halted["detail"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_unrelated_zero_run_cause_still_halts_the_empty_verdict_kind():
+    halted = _run_at_base(
+        "{ status: 'error', sidecar_path: 'a.md', tests_run: 0, zero_run_cause: 'collection-failure' }", "null"
+    )
+    # A zero-run no co-tenant caused is a test-infra failure; only the co-tenant causes keep their own halt kinds.
+    assert halted["halted"] == "test_infra_failure"
+    assert halted["next_action"].startswith("Refire to re-run the test leg")
+
+
+def test_export_test_instruction_tells_the_leg_to_report_the_co_tenant_line():
+    text = ask_compose._test_instruction_js("a" * 40, None, "EXPORT-CMD")
+    assert "co_tenant_dependency: {...}" in text and "`co_tenant`" in text
+
+
 def test_test_verdict_empty_halt_names_the_refire_not_journal_replay():
     js = _test_verdict_empty_halt_js(_SIZING)
     assert "resumeFromRunId" not in js

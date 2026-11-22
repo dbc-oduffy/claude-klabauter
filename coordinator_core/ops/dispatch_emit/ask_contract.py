@@ -26,6 +26,7 @@ Signatures implemented in their own modules:
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -266,9 +267,12 @@ def read_base_ref(dir_: Path) -> Optional[str]:
 def run_base_ref(root: Path, sizing_rel: object) -> Optional[str]:
     """The base ref ruled for `sizing_rel`: the `read_base_ref` of the newest run of that sizing that
     carries a marker, any status (an in-flight run a revise reached, or a refire's predecessor), walking
-    past newer marker-less runs so a second refire keeps the ruling. Runs are the `ask-<stamp>` and
-    `warp-<stem>-<stamp>` dirs under `RECORD_DIR_ROOT` whose run.json (else halted.json) names the
-    sizing. One directory listing, file reads only, no git spawn; None when no run carries one."""
+    past newer marker-less runs so a second refire keeps the ruling. When no run carries a marker, the
+    full-sha `run_base_sha` the newest run of that sizing that recorded one (run.json, else halted.json): a refire
+    checks premises at the base its predecessor began from, not the tree holding the run's own fix. Runs
+    are the `ask-<stamp>` and `warp-<stem>-<stamp>` dirs under `RECORD_DIR_ROOT` whose run.json (else
+    halted.json) names the sizing. One directory listing, file reads only, no git spawn; None when no
+    run carries a marker or a recorded base."""
     if not isinstance(sizing_rel, str) or not sizing_rel.strip():
         return None
     norm = PurePosixPath(sizing_rel.strip().replace("\\", "/")).as_posix()
@@ -289,18 +293,71 @@ def run_base_ref(root: Path, sizing_rel: object) -> Optional[str]:
             stamped.append((n[4:], n))
         elif n.startswith(warp_prefix) and _BASE_REF_RUN_STAMP.fullmatch(n[len(warp_prefix):]):
             stamped.append((n[len(warp_prefix):], n))
+    recorded = None
     for _, name in sorted(stamped, reverse=True):
         if not safe_id(name):
             continue
         ref = read_base_ref(warp / name)
-        if ref is None:
+        if ref is None and recorded is not None:
             continue
         for marker in ("run.json", "halted.json"):
-            named = (_read_json_object(warp / name / marker) or {}).get("sizing_rel")
+            record = _read_json_object(warp / name / marker) or {}
+            named = record.get("sizing_rel")
             if isinstance(named, str):
                 if PurePosixPath(named.replace("\\", "/")).as_posix() == norm:
-                    return ref
+                    if ref is not None:
+                        return ref
+                    recorded = _recorded_run_base(warp / name, record)
                 break
+    return recorded
+
+
+def _recorded_run_base(dir_: Path, run_record: dict) -> Optional[str]:
+    """The full-sha `run_base_sha` of a run's `run.json` record, else of its `halted.json`; None when neither names one."""
+    for record in (run_record, _read_json_object(dir_ / "halted.json") or {}):
+        base = record.get("run_base_sha")
+        if isinstance(base, str) and _FULL_SHA_RE.fullmatch(base):
+            return base
+    return None
+
+
+def ask_warp_run(root: Path, ask_id: str) -> Optional[str]:
+    """The warp run an ask launched: its run-stage `warp_run` when stamped, else the newest
+    `warp-<stem>-<stamp>` dir of the ask's sizing whose stamp is not older than the ask's. One listing,
+    file reads only, no git spawn. The listing path is a heuristic: a later run of the same sizing from another
+    ask also matches, so only the stamped link is exact. None when the ask is unsafe, names no sizing, or launched nothing."""
+    if not isinstance(ask_id, str) or not safe_id(ask_id):
+        return None
+    warp = Path(root) / RECORD_DIR_ROOT
+    ask_dir = warp / ask_id
+    stamped = (_read_json_object(ask_dir / RUN_STAGE_FILE) or {}).get("warp_run")
+    if isinstance(stamped, str) and stamped.strip():
+        return stamped.strip()
+    ask_stamp = ask_id[4:] if ask_id.startswith("ask-") else ""
+    if not _BASE_REF_RUN_STAMP.fullmatch(ask_stamp):
+        return None
+    sizing = (_read_json_object(ask_dir / "run.json") or {}).get("sizing_rel")
+    if not isinstance(sizing, str) or not sizing.strip():
+        return None
+    norm = PurePosixPath(sizing.strip().replace("\\", "/")).as_posix()
+    warp_prefix = f"warp-{PurePosixPath(norm).stem}-"
+    try:
+        listing = os.listdir(warp)
+    except OSError:
+        return None
+    candidates = sorted(
+        (n[len(warp_prefix):], n)
+        for n in listing
+        if n.startswith(warp_prefix)
+        and _BASE_REF_RUN_STAMP.fullmatch(n[len(warp_prefix):])
+        and n[len(warp_prefix):] >= ask_stamp
+    )
+    for _, name in reversed(candidates):
+        if not safe_id(name):
+            continue
+        named = (_read_json_object(warp / name / "run.json") or {}).get("sizing_rel")
+        if isinstance(named, str) and PurePosixPath(named.replace("\\", "/")).as_posix() == norm:
+            return name
     return None
 
 
@@ -500,6 +557,7 @@ ASSEMBLE_SCHEMA = {
 ASK_ASSEMBLE_FIELDS_VAR = "_asmFields"
 
 
+@functools.lru_cache(maxsize=64)
 def scout_assemble_flags_js(scouted: str, quote: str, extra: str = "") -> str:
     """JS expression text appending the sizing-assemble flags a scout's return fills.
 
@@ -539,6 +597,7 @@ def _s_evidence_flags_js(scouted: str, quote: str) -> str:
     )
 
 
+@functools.lru_cache(maxsize=64)
 def research_assemble_flags_js(scouted: str, quote: str) -> str:
     """JS expression text appending the `--research-*` sizing-assemble flags from
     ``<scouted>.research``; the empty string when that is not a non-null object.
@@ -560,6 +619,7 @@ def research_assemble_flags_js(scouted: str, quote: str) -> str:
     )
 
 
+@functools.lru_cache(maxsize=64)
 def acceptance_rows_assemble_flags_js(scouted: str, quote: str) -> str:
     """JS expression text appending ``--acceptance-rows-json`` from ``<scouted>.acceptance_rows``;
     the empty string unless that is a non-empty array. Starts with `` + `` so it follows the
@@ -571,6 +631,7 @@ def acceptance_rows_assemble_flags_js(scouted: str, quote: str) -> str:
     )
 
 
+@functools.lru_cache(maxsize=64)
 def design_route_assemble_flags_js(scouted: str, quote: str) -> str:
     """JS expression text appending ``--design-route <v>`` from ``<scouted>.design_route``;
     the empty string unless that is one of ``design_route.ROUTES``. Starts with `` + `` so it
@@ -662,17 +723,37 @@ def halted_naming_existing_plan(repo_root: Path, halted: dict) -> dict:
     return out
 
 
+#: `Halt-Reason:` text of a halt record carrying no reason field and no blocking item.
+HALT_NO_REASON_TEXT = "halt record carries no reason field and no blocking items"
+
+
+def _blocking_items_reason(items) -> str:
+    """`id: remaining` for each blocking item, joined by `; `, whitespace collapsed; '' when none names an id."""
+    parts = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        remaining = item.get("remaining")
+        if isinstance(remaining, (list, tuple)):
+            remaining = ", ".join(str(r) for r in remaining)
+        parts.append(" ".join(f"{item['id']}: {remaining or 'unmet'}".split()))
+    return "; ".join(parts)
+
+
 def halted_record_message(run_id: str, halted: dict) -> str:
     """Commit message for a halted run's record-only commit: subject, blank line, `Halted-By:`
-    and, when the halt carries a reason, one `Halt-Reason:` line (first non-empty of
-    `HALT_REASON_FIELDS`, whitespace collapsed, cut to `HALT_REASON_MAX_CHARS`). Pure."""
+    and always one non-empty `Halt-Reason:` line: the first non-empty of `HALT_REASON_FIELDS`, else
+    the `blocking_items` as `id: remaining` pairs, else `HALT_NO_REASON_TEXT`; whitespace collapsed,
+    cut to `HALT_REASON_MAX_CHARS`. Pure."""
     lines = [f"warp: record halted {run_id} run artifacts", "", f"Halted-By: {halted.get('halted')}"]
+    text = ""
     for field in HALT_REASON_FIELDS:
         value = halted.get(field)
         text = " ".join(str(value).split()) if value else ""
         if text:
-            lines.append(f"Halt-Reason: {text[:HALT_REASON_MAX_CHARS]}")
             break
+    text = text or _blocking_items_reason(halted.get(HALT_BLOCKING_ITEMS_FIELD)) or HALT_NO_REASON_TEXT
+    lines.append(f"Halt-Reason: {text[:HALT_REASON_MAX_CHARS]}")
     plan = halted.get(HALT_PLAN_FIELD)
     if isinstance(plan, str) and _relative_inside(plan) and plan == "".join(plan.split()):
         lines.append(f"{HALT_PLAN_TRAILER}: {plan}")
@@ -1287,6 +1368,9 @@ def read_run_baton(repo_root: Path, run_id: str) -> str | None:
 #: `last_activity_at` and (once staged) `steps_planned`.
 RUN_STAGE_FILE = "run-stage.json"
 RUN_STAGES = ("minted", "staged", "halted", "landed")
+#: Moment a same-id resume re-armed the run wall; absent on a run never resumed. The reaper measures
+#: the wall from it, falling back to `started_at`, which stays provenance.
+WALL_START_FIELD = "wall_started_at"
 
 
 def _stage_after_mint_stamp(stage: str, prior: dict[str, Any] | None) -> str:
@@ -1303,6 +1387,12 @@ def _stage_after_mint_stamp(stage: str, prior: dict[str, Any] | None) -> str:
     return stage
 
 
+def rearms_run_wall(prior: dict[str, Any] | None, stage: str) -> bool:
+    """True when a `stage` stamp over `prior` re-arms the run wall: a `minted`/`staged` stamp over a
+    `halted` record (a same-id resume). A restage of a live run never does."""
+    return bool(prior) and stage in ("minted", "staged") and prior.get("stage") == "halted"
+
+
 def write_run_stage_at(
     record_path: Path, stage: str, *, steps_planned: int | None = None, now: str | None = None,
     warp_run: str | None = None, session_id: str | None = None,
@@ -1313,7 +1403,8 @@ def write_run_stage_at(
     start still projects as a `WorkflowRun`. The first stamp records `session_id` when given, else the
     request's carried caller session, else (cold only) the process environment's. A warm-served request
     with no carried session records null, never the engine spawner's. `steps_planned` is kept from the
-    prior file unless given.
+    prior file unless given. A `minted`/`staged` stamp over a halted prior (`rearms_run_wall`) re-arms
+    the run wall: it writes `WALL_START_FIELD`.
     Raises ValueError on a stage outside RUN_STAGES."""
     from datetime import datetime, timezone
 
@@ -1330,6 +1421,8 @@ def write_run_stage_at(
             None if in_warm_served_request() else resolve_session_id() or None
         )
         data["started_at"] = stamp
+    if rearms_run_wall(prior, stage):
+        data[WALL_START_FIELD] = stamp
     stage = _stage_after_mint_stamp(stage, prior)
     data["stage"] = stage
     data["last_activity_at"] = stamp
@@ -1385,7 +1478,9 @@ def touch_run_activity(record_path: Path, *, now: "datetime | None" = None) -> b
 
     True when it wrote. False for an absent, malformed, stage-less or terminal file, or a stamp younger
     than the throttle (nothing written). `stage` and every other key are untouched, except that a
-    record with no `phase` gets `phase` `executing` in the same write, which the throttle never defers.
+    record past `minted` with no `phase` gets `phase` `executing` in the same write, which the throttle
+    never defers. A `minted` run never gains `executing` here: it has not dispatched, and its phase is
+    only a subagent-start label (`stamp_run_phase_at`).
     One read, at most one atomic write; never raises on an unwritable file."""
     from datetime import datetime, timezone
 
@@ -1397,7 +1492,7 @@ def touch_run_activity(record_path: Path, *, now: "datetime | None" = None) -> b
     if not isinstance(stage, str) or not stage or stage in _HEARTBEAT_TERMINAL:
         return False
     moment = now or datetime.now(timezone.utc)
-    first_phase = PHASE_FIELD not in data
+    first_phase = PHASE_FIELD not in data and stage != "minted"
     if not first_phase:
         try:
             last = datetime.fromisoformat(str(data.get("last_activity_at")).strip().replace("Z", "+00:00"))
@@ -1857,9 +1952,22 @@ class StageManifest:
     dropped_rows: tuple[dict[str, str], ...] = ()
     #: The code subset of `review_declared_paths` (`review_floor.code_paths`); an absent key reads as ``()``.
     review_code_paths: tuple[str, ...] = ()
+    #: The recorded `order_rows` priority ids the waves honoured, and `{id, reason}` for those they
+    #: could not (landed, held out, absent); serialised only when non-empty, an absent key reads as ``()``.
+    applied_order: tuple[str, ...] = ()
+    unhonoured_order: tuple[dict[str, str], ...] = ()
+    #: `{id, reason, detail}` for each unfinished plan row the stage left out of every wave, so none is
+    #: dropped silently; serialised only when non-empty, an absent key reads as ``()``.
+    remaining_rows: tuple[dict[str, str], ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         out = self._base_json()
+        if self.remaining_rows:
+            out["remaining_rows"] = [dict(r) for r in self.remaining_rows]
+        if self.applied_order:
+            out["applied_order"] = list(self.applied_order)
+        if self.unhonoured_order:
+            out["unhonoured_order"] = [dict(r) for r in self.unhonoured_order]
         if self.dropped_rows:
             out["dropped_rows"] = [dict(r) for r in self.dropped_rows]
         if self.held_ids:
@@ -1926,6 +2034,9 @@ class StageManifest:
             memo_close=tuple(dict(r) for r in data.get("memo_close") or ()),
             held_ids=tuple(str(i) for i in data.get("held_ids") or ()),
             dropped_rows=tuple(dict(r) for r in data.get("dropped_rows") or ()),
+            applied_order=tuple(str(i) for i in data.get("applied_order") or ()),
+            unhonoured_order=tuple(dict(r) for r in data.get("unhonoured_order") or ()),
+            remaining_rows=tuple(dict(r) for r in data.get("remaining_rows") or ()),
             wave_test_targets={
                 str(k): tuple(v) for k, v in (data.get("wave_test_targets") or {}).items()
             },

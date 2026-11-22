@@ -3,7 +3,8 @@
 `evaluate(engine_event)` is a prefilter of plain token checks (no regex, no guard import) that names
 which BOX_DEGRADING guards could deny the command, then lazily imports only those guards. A command
 no deny class could match answers `{}` having imported nothing. Only a deny is forwarded; advisories
-and every other guard belong to the warm engine. A guard that raises is skipped (fails open).
+and every other guard belong to the warm engine, except the branch-create guard, which is evaluated and traced
+so the allow record names it (its verdict is never a deny). A guard that raises is skipped (fails open).
 """
 from __future__ import annotations
 
@@ -15,6 +16,11 @@ from typing import Any, Dict, List, Mapping, Optional
 _PATCH_GUARD_PACKAGE = "coordinator_core.write_guards."
 SHELL_DENY_GUARDS = ("destructive-rm", "destructive-git-clean", "block-stash-destruction", "guard-disk-fill")
 SUBAGENT_DENY_GUARD = "block-subagent-destructive-action"
+# Evaluated for the record only: the guard is advisory by ruling, so its verdict is traced and never forwarded as a deny.
+BRANCH_GUARD = "block-noncanonical-branch-creation"
+ADVISORY_SHELL_GUARDS = (BRANCH_GUARD,)
+# Coarse on purpose: which of these commands creates a branch is the guard's own parse, never restated here.
+_BRANCH_VERBS = frozenset({"branch", "checkout", "switch"})
 # Must hold every deny-class write guard id (a write_guards module named by the id); advisory write guards run warm only.
 PATCH_DENY_GUARDS = ("block-drive-root-new-dir-write",)
 
@@ -77,6 +83,8 @@ def shell_candidates(command: str, subagent: bool = False) -> List[str]:
         hits.append("block-stash-destruction")
     if words & _FILL_WORDS:
         hits.append("guard-disk-fill")
+    if "git" in words and words & _BRANCH_VERBS:
+        hits.append(BRANCH_GUARD)
     return hits
 
 
@@ -102,6 +110,18 @@ def _invoke_shell(name: str, payload: Dict[str, Any], command: str) -> Any:
         from coordinator_core.bash_guards.block_subagent_destructive_action import check as subagent_check
 
         return subagent_check(payload)
+    if name == BRANCH_GUARD:
+        from coordinator_core.bash_guards import block_noncanonical_branch_creation as branch
+        from coordinator_core.subagent_sandbox.engine import resolve_git_root_cheap
+
+        # Trap: the guard's own root lookup spawns `git rev-parse`; the cold chain is spawn-free, so the
+        # file-walk resolver stands in for the call and is restored after it.
+        spawning = branch.resolve_git_root
+        setattr(branch, "resolve_git_root", resolve_git_root_cheap)
+        try:
+            return branch.check(payload)
+        finally:
+            setattr(branch, "resolve_git_root", spawning)
     from coordinator_core.bash_guards.guard_disk_fill import check
 
     return check(payload)
@@ -140,12 +160,15 @@ def _shell(engine_event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     completed = False
     for name in candidates:
         try:
-            verdict = _flat_deny(_invoke_shell(name, payload, command), name)
+            result = _invoke_shell(name, payload, command)
+            advisory = name in ADVISORY_SHELL_GUARDS
+            verdict = None if advisory else _flat_deny(result, name)
         except Exception:  # noqa: BLE001 -- a raising guard is skipped, never a hook failure
             _trace.append((name, "raised"))
             continue
         completed = True
-        _trace.append((name, "allow" if verdict is None else "deny"))
+        # An advisory guard's non-None result (even a deny record) is traced "advisory": it is never forwarded.
+        _trace.append((name, "deny" if verdict is not None else "advisory" if advisory and result is not None else "allow"))
         if verdict is not None:
             return verdict
     return {} if completed else None

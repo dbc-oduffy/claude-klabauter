@@ -93,10 +93,8 @@ def test_second_consecutive_saturated_check_recycles_and_reconciles_tracked_keys
     assert old.shutdown_args == (False, True)
     assert all(p.terminated for p in old._processes.values())
     for key in (k1, k2):
-        assert server._ack_store.status(key) == {
-            "state": "unknowable",
-            "reason": "engine-restarted",
-        }
+        status = server._ack_store.status(key)
+        assert (status["state"], status["reason"]) == ("unknowable", "engine-restarted")
     assert server._ack_store.status(unsubmitted).get("reason") != "engine-restarted"
     assert list((tmp_path / "stall-dumps").glob("*-recycle.txt"))
 
@@ -115,7 +113,7 @@ def test_worker_lost_stamp_from_the_dying_pool_keeps_engine_restarted(rig):
     fut.set_exception(server.BrokenProcessPool("terminated"))
 
     status = server._ack_store.status(key)
-    assert status == {"state": "unknowable", "reason": "engine-restarted"}
+    assert (status["state"], status["reason"]) == ("unknowable", "engine-restarted")
 
 
 def test_unsaturated_check_resets_the_consecutive_count(rig):

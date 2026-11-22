@@ -5,7 +5,7 @@ plan `register_claims` and the terminal judge already read.
 A run is ledger-bearing once the emit writes `RECORD_DIR_ROOT/<run_id>/run.json` (`start`):
 `{sizing_rel, all_of_pm_ask}`, the run's binding and flag, never a requirement. `bind` seeds the
 bound sizing's register with the PM's words (`pm_verbatims`, else a PM-verbatim intent; none for a
-relayed run, whose session turns the sizing lists as `unrelated_turns`) and the raw ask (`ask`, or `relayed` when an EM relayed it: never the PM's words), one row each, and drains `revisions.jsonl` -- the transport for a revision sent before a
+relayed run, whose session turns the sizing assembler already seeded as open rows) and the raw ask (`ask`, or `relayed` when an EM relayed it: never the PM's words), one row each, and drains `revisions.jsonl` -- the transport for a revision sent before a
 raw ask's sizing exists -- into rows. Once bound, `workflow.revise` appends its row straight onto
 the register. A row's `anchor` carries its origin (`pm_verbatims`, `ask`, `revision@<UTC>`); row
 order is arrival order. `requirements.md` beside run.json is the view every stage prompt reads,
@@ -67,6 +67,14 @@ NOTES_FILE = "notes.jsonl"
 OWNED_RED_FILE = "owned_red.jsonl"
 #: run.json key naming the halted run a fresh fire resumed.
 RESUMED_FROM_FIELD = "resumed_from"
+#: run.json key naming the ask run a chained hop continues.
+CHAIN_PARENT_FIELD = "chain_parent"
+#: run.json key a chain parent records for the newest run that continues it, so a revise on the
+#: ask run reaches the warp run.
+CONTINUED_BY_FIELD = "continued_by"
+#: run.json key: UTC second of the last explicit set of `all_of_pm_ask` (revise or emit flag); the
+#: latest one across a run's lineage is the value every run in it reads.
+ALL_OF_AT_FIELD = "all_of_pm_ask_at"
 #: run.json keys: the bound sizing's `run_token.sizing_stamp` at bind time, and the repo-relative
 #: sizings the run was bound to or offered earlier, for the sizing agent to check for validity.
 #: No engine reader yet: the sizing agent's validity check is the intended consumer (speculative).
@@ -938,6 +946,7 @@ def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str])
             str(row.get(rr.ROW_ID)), str(row.get(rr.ROW_TEXT) or ""), origin, at,
             anchor if isinstance(anchor, str) else "", _sender(anchor),
         ))
+    all_of = all_of or any(i.origin == ORIGIN_PM_VERBATIMS for i in items)  # PM words are never optional
     return Ledger(tuple(items), all_of, sizing_rel, tuple(withheld))
 
 
@@ -1107,7 +1116,48 @@ def _norm(text: object) -> str:
     return " ".join(str(text).split())
 
 
+def _is_pm_row(row: Mapping) -> bool:
+    """True for a register row whose origin is the PM's verbatim (`pm_verbatims`, with or without a turn)."""
+    anchor = str(row.get(rr.ROW_ANCHOR) or "")
+    return anchor == ORIGIN_PM_VERBATIMS or anchor.startswith(ORIGIN_PM_VERBATIMS + " turn ")
+
+
+def pm_ruling_rows(rows: Sequence[Mapping], exclude_ids: Sequence[str] = ()) -> list[Mapping]:
+    """PM-origin register rows that are themselves a recorded PM ruling (a `ruling` of source `pm`).
+    A ruling stamped by `workflow.revise` out_of_scope is bound to the rows it deferred and is
+    never a ruling for another row."""
+    out = []
+    for r in rows:
+        ruling = r.get(rr.ROW_RULING)
+        if not _is_pm_row(r) or str(r.get(rr.ROW_ID)) in exclude_ids or not isinstance(ruling, Mapping):
+            continue
+        if ruling.get(rr.RULING_SOURCE) != "pm" or str(ruling.get(rr.RULING_REF) or "").startswith(f"{REVISE_REF}:"):
+            continue
+        out.append(r)
+    return out
+
+
+def pm_ruling_held(rows: Sequence[Mapping], quote: str, exclude_ids: Sequence[str] = ()) -> bool:
+    """True when normalized `quote` is the words of a PM ruling row on the register, other than `exclude_ids`.
+    With an empty `quote`, True when any such ruling row exists."""
+    held = pm_ruling_rows(rows, exclude_ids)
+    if not quote:
+        return bool(held)
+    return any(
+        _quotes_pm_turn(quote, _norm(words))
+        for r in held for words in (r.get(rr.ROW_TEXT) or "", (r.get(rr.ROW_RULING) or {}).get(rr.RULING_QUOTE) or "")
+    )
+
+
 _MIN_FOREIGN_MATCH = 12  # a shorter turn ("ok", "do it") sits inside too many texts to prove identity
+
+
+def _quotes_pm_turn(quote: str, held: str) -> bool:
+    """True when normalized `quote` is a PM turn's words: the whole turn, a quote enclosing it, or a
+    fragment covering at least half of it (a stray few words of a long turn prove nothing)."""
+    if len(quote) < _MIN_FOREIGN_MATCH or not held:
+        return False
+    return quote == held or held in quote or (quote in held and 2 * len(quote) >= len(held))
 
 
 def _int_turn(value: object) -> Optional[int]:
@@ -1116,16 +1166,14 @@ def _int_turn(value: object) -> Optional[int]:
 
 def foreign_turns(
     root: Path, sizing: Optional[Mapping], ask_text: Optional[str], relayed_text: Optional[str],
-    *, followups: bool = False,
 ) -> dict[int, str]:
     """`{turn: normalised text}` of the sizing's embedded PM turns that provably belong to another
     run. One-turn sizing: the lone turn, when the ask does not quote it and quotes a different
     recorded session turn (the sizing embedded the newest turn by recency). Multi-turn sizing: an
     embedded turn the ask does not quote that matches a recorded session turn preceding every
     session turn the ask quotes; a later turn (a follow-up) is never foreign. Empty for a relayed
-    run, a run without an ask, or an ask no recorded session turn quotes. `followups=True` also
-    returns the later turns the lenient rule keeps: a session turn neither quoted by the ask nor
-    relayed or revised into the run is not this run's requirement."""
+    run, a run without an ask, or an ask no recorded session turn quotes. A PM turn not proven
+    foreign is this run's requirement and seeds a row."""
     if (relayed_text and relayed_text.strip()) or not (ask_text and ask_text.strip()):
         return {}
     embedded = [
@@ -1154,14 +1202,9 @@ def foreign_turns(
         mine, theirs = _norm(text), recorded.get(n, "")
         if min(len(mine), len(theirs)) < _MIN_FOREIGN_MATCH or not (mine in theirs or theirs in mine):
             continue
-        if (followups and not _CONTINUATION_OPENER.match(mine)) or n < earliest or not _shares_content_word(ask_text, mine):
+        if n < earliest or not _shares_content_word(ask_text, mine):
             out[n] = mine
     return out
-
-
-# A later turn that opens as a continuation ("also ...", "and ...") is the PM extending the ask:
-# it stays coverable even in `followups` mode, where a bare shared word does not.
-_CONTINUATION_OPENER = re.compile(r"\s*(also|and|plus|additionally|furthermore|then)\b")
 
 
 _CONTENT_WORD = re.compile(r"[a-z0-9]{5,}")
@@ -1179,7 +1222,7 @@ FOREIGN_TURN_REASON = "another run's PM turn: the run's ask neither quotes nor a
 
 def _append_rows(
     root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turns: Optional[Mapping[int, str]] = None,
-    withhold: Optional[Mapping] = None, list_turns: Optional[Mapping[int, str]] = None,
+    withhold: Optional[Mapping] = None,
     plan_rows: Sequence[tuple[str, str]] = (), reuse: Optional[dict] = None, retract_row: Optional[str] = None,
     snapshot: Optional[tuple[Sequence[Mapping], Optional[tuple[int, int]]]] = None,
 ) -> list[dict]:
@@ -1195,7 +1238,6 @@ def _append_rows(
     unknown id or a met/waived row refuses the whole write."""
 
     drop_turns = drop_turns or {}
-    list_turns = list_turns or {}
 
     def edit(rows: list[dict]) -> list[dict]:
         named = list((withhold or {}).get("ids") or [])
@@ -1206,6 +1248,17 @@ def _append_rows(
         closed = [i for i in dict.fromkeys(named) if by_id[i].get(rr.ROW_STATUS) in (rr.STATUS_MET, rr.STATUS_WAIVED)]
         if closed:
             raise MutateAbort(f"out_of_scope names a row already {by_id[closed[0]].get(rr.ROW_STATUS)}: {', '.join(closed)}")
+        pm_named = [
+            i for i in dict.fromkeys(named)
+            if _is_pm_row(by_id[i]) and by_id[i].get(rr.ROW_STATUS) != rr.STATUS_DEFERRED
+        ]
+        if pm_named:
+            quote = _norm((withhold or {}).get("verbatim") or "")
+            if not pm_ruling_held(rows, quote, exclude_ids=pm_named):
+                raise MutateAbort(
+                    f"out_of_scope names PM-origin row(s) {', '.join(pm_named)} but no PM verbatim ruling them out is on "
+                    "the run: deliver the row, or record it delivered by another run's sha"
+                )
         if drop_turns:
             anchors = {f"{ORIGIN_PM_VERBATIMS} turn {n}" for n in drop_turns}
             texts = set(drop_turns.values())
@@ -1271,7 +1324,7 @@ def _append_rows(
                     row[rr.ROW_RULING] = dict(ruling)
         return rows
 
-    unrelated = [{"turn": n, "reason": FOREIGN_TURN_REASON} for n in sorted({*drop_turns, *list_turns})]
+    unrelated = [{"turn": n, "reason": FOREIGN_TURN_REASON} for n in sorted(drop_turns)]
     return _mutate_register(root, sizing_rel, edit, unrelated=unrelated, snapshot=snapshot)
 
 
@@ -1321,15 +1374,64 @@ def _queued_ledger(dir_: Path, all_of: bool) -> Ledger:
     )
 
 
+def _all_of_stamp() -> str:
+    """Microsecond UTC stamp: a revise right after an emit must still order after it."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _predecessors(repo_root: Path, run_id: str, own: Mapping) -> list[tuple[str, dict]]:
+    """`(run id, run.json)` of the runs linked to `own` (`CHAIN_PARENT_FIELD`, `RESUMED_FROM_FIELD`
+    and the successor a chain parent records, `CARRIED_HOP_CAP` hops, cycle-safe, run.json reads
+    only); an unrecorded run is skipped."""
+    found: list[tuple[str, dict]] = []
+    seen = {run_id}
+    frontier = [own]
+    for _ in range(CARRIED_HOP_CAP):
+        nxt = []
+        for rec in frontier:
+            for key in (RESUMED_FROM_FIELD, CHAIN_PARENT_FIELD, CONTINUED_BY_FIELD):
+                pid = rec.get(key)
+                if isinstance(pid, str) and safe_id(pid) and pid not in seen:
+                    seen.add(pid)
+                    prior = read_run(run_dir(repo_root, pid))
+                    if prior is not None:
+                        found.append((pid, prior))
+                        nxt.append(prior)
+        if not nxt:
+            break
+        frontier = nxt
+    return found
+
+
+def lineage_all_of(repo_root: Path, run_id: str, own: Mapping) -> tuple[bool, str]:
+    """`(all_of_pm_ask, at)` this run reads: one value across the run and its predecessors. The
+    latest `ALL_OF_AT_FIELD` stamp wins, the run's own record on a tie, so an explicit true or false
+    on either side is never undone by the other's stale copy. Records with no stamp (written before
+    stamping) never override a stamped one and, none stamped, true on any wins."""
+    records = [own, *(rec for _, rec in _predecessors(repo_root, run_id, own))]
+    return _latest_all_of(records)
+
+
+def _latest_all_of(records: Sequence[Mapping]) -> tuple[bool, str]:
+    """`lineage_all_of`'s decision over `records`, the run's own first."""
+    stamped = [r for r in records if isinstance(r.get(ALL_OF_AT_FIELD), str) and r[ALL_OF_AT_FIELD]]
+    if not stamped:
+        return any(bool(r.get("all_of_pm_ask")) for r in records), ""
+    latest = max(r[ALL_OF_AT_FIELD] for r in stamped)
+    winner = next(r for r in stamped if r[ALL_OF_AT_FIELD] == latest)
+    return bool(winner.get("all_of_pm_ask")), latest
+
+
 def read_ledger(repo_root: Path, dir_: Path, *, register_rows: Optional[Sequence[Mapping]] = None) -> Optional[Ledger]:
     """The run's requirements, or None when the run was emitted without a ledger. Before the
     sizing is bound, the queued revisions are the only items. LedgerRefused when the bound
     sizing is unreadable. `register_rows` are the rows a register write in this call just left
-    on disk: the ledger is built from them and the sizing is neither re-read nor re-parsed."""
+    on disk: the ledger is built from them and the sizing is neither re-read nor re-parsed.
+    `all_of_pm_ask` is `lineage_all_of` of the run, true whenever a `pm_verbatims` row is held."""
     run = read_run(dir_)
     if run is None:
         return None
-    all_of = bool(run.get("all_of_pm_ask"))
+    all_of = lineage_all_of(repo_root, Path(dir_).name, run)[0]
     sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
     if not sizing_rel:
         return _queued_ledger(dir_, all_of)
@@ -1343,6 +1445,119 @@ def read_ledger(repo_root: Path, dir_: Path, *, register_rows: Optional[Sequence
     return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel)
 
 
+RULINGS_HEADING = "## Accepted PM rulings (applicable)"
+RULINGS_CLOSER = (
+    "Already ruled: do not defer these. An unruled question goes to coordinator:apm by name."
+)
+_RULING_TOKEN = re.compile(r"[a-z0-9][a-z0-9_./*-]{2,}")
+_RULING_TOKEN_CAP = 400
+
+
+def _ruling_tokens(repo_root: Path, ledger: Ledger) -> list[str]:
+    """Scope tokens for `rulings.search`: lowercase words of the bound sizing's `intent` and of
+    every ledger item's `source_text`, de-duplicated, capped."""
+    texts = [i.text for i in ledger.items]
+    if ledger.sizing_rel:
+        try:
+            doc = _yaml_safe_load(_sizing_path(repo_root, ledger.sizing_rel).read_text(encoding="utf-8"))
+        except (OSError, LedgerRefused, ValueError):
+            doc = None
+        intent = doc.get("intent") if isinstance(doc, Mapping) else None
+        if isinstance(intent, str):
+            texts.append(intent)
+    seen: dict[str, None] = {}
+    for text in texts:
+        for tok in _RULING_TOKEN.findall(text.lower()):
+            seen.setdefault(tok.rstrip(".,"), None)
+    return list(seen)[:_RULING_TOKEN_CAP]
+
+
+RULINGS_UNREADABLE = "rulings register unreadable"
+_RULING_SPLIT = re.compile(r"[^a-z0-9]+")
+_RULING_STOP = frozenset(
+    "the and for not with without that this from are was but any all can has have its into "
+    "only one may use used new add per via when then than also out off own".split()
+)
+_RULING_SUFFIXES = ("ing", "ed", "es", "s")
+_RULING_UNREADABLE_CAP = 5
+
+
+def _ruling_norm(token: str) -> str:
+    """Lowercase, suffix-stripped form of a word, so 'licensing' and 'licence' share a stem."""
+    for suf in _RULING_SUFFIXES:
+        if len(token) > len(suf) + 3 and token.endswith(suf):
+            token = token[: -len(suf)]
+            break
+    return token[:-1] if len(token) > 4 and token.endswith("e") else token
+
+
+def _ruling_words(tokens: Sequence[str]) -> set[str]:
+    out: set[str] = set()
+    for tok in tokens:
+        for w in _RULING_SPLIT.split(tok.lower()):
+            if len(w) >= 3 and w not in _RULING_STOP and not w.isdigit():
+                out.add(_ruling_norm(w))
+    return out
+
+
+def _scope_overlaps(scope: Sequence[str], run_tokens: Sequence[str], run_words: set[str]) -> bool:
+    """True when a ruling scope token equals/globs a run token, or shares a normalised word."""
+    from coordinator_core.rulings.contract import scope_token_match
+
+    return scope_token_match(scope, run_tokens) or bool(_ruling_words(scope) & run_words)
+
+
+def _rulings_section(repo_root: Path, ledger: Ledger) -> list[str]:
+    """The `RULINGS_HEADING` lines for accepted rulings whose scope overlaps the run's words by
+    normalised token (in-process, no spawn). A load or match failure, or an unreadable register
+    file, renders a `rulings register unreadable: <reason>` line; empty only when nothing matched
+    and nothing failed."""
+    tokens = _ruling_tokens(repo_root, ledger)
+    if not tokens:
+        return []
+    from coordinator_core.lifecycle import main_worktree_root
+    from coordinator_core.rulings import store
+    from coordinator_core.rulings.contract import STATUS_ACCEPTED
+
+    problems: list[str] = []
+    matches: list = []
+    try:
+        rulings, bad = store.scan(Path(main_worktree_root(repo_root)))
+        problems = [f"{b['id']}: {b['reason']}" for b in bad]
+        words = _ruling_words(tokens)
+        matches = [
+            r for r in rulings
+            if r.status == STATUS_ACCEPTED and _scope_overlaps(r.scope, tokens, words)
+        ]
+    except Exception as exc:  # a register failure is shown, never rendered as "no rulings"
+        problems = [f"{type(exc).__name__}: {exc}"]
+    if not matches and not problems:
+        return []
+    lines = [RULINGS_HEADING, ""]
+    for m in matches:
+        text = " ".join(str(m.text).split())
+        lines.append(f"- {m.id} (pm_turn: {m.pm_turn}): \"{text}\"")
+    for reason in problems[:_RULING_UNREADABLE_CAP]:
+        lines.append(f"{RULINGS_UNREADABLE}: {reason}")
+    if len(problems) > _RULING_UNREADABLE_CAP:
+        lines.append(f"{RULINGS_UNREADABLE}: +{len(problems) - _RULING_UNREADABLE_CAP} more")
+    if matches:
+        lines += ["", RULINGS_CLOSER]
+    lines.append("")
+    return lines
+
+
+def _adopt_all_of(repo_root: Path, dir_: Path, run_id: str, value: bool) -> None:
+    """Make the run's own run.json read `value` (the ledger's flag) and the lineage's stamp, so the
+    file never disagrees with the requirements.md rendered from it."""
+    run = read_run(dir_)
+    if run is None:
+        return
+    at = lineage_all_of(repo_root, run_id, run)[1]
+    if bool(run.get("all_of_pm_ask")) != value or (at and run.get(ALL_OF_AT_FIELD) != at):
+        _write_run(dir_, {**run, "all_of_pm_ask": value, **({ALL_OF_AT_FIELD: at} if at else {})})
+
+
 def _write_view(
     repo_root: Path, dir_: Path, run_id: str, register_rows: Optional[Sequence[Mapping]] = None
 ) -> Optional[Ledger]:
@@ -1354,22 +1569,28 @@ def _write_view(
         # The view is advisory; terminal_commit._ledger_gate refuses the unreadable sizing.
         return None
     if ledger is not None:
+        _adopt_all_of(repo_root, dir_, run_id, ledger.all_of_pm_ask)
         from coordinator_core.ops.dispatch_emit import run_notes
 
         body = render(ledger, run_id)
         section = run_notes.render_section(carried_notes(repo_root, run_id))
         if section:
             body = body.rstrip("\n") + "\n\n" + "\n".join(section)
+        rulings = _rulings_section(repo_root, ledger)
+        if rulings:
+            body = body.rstrip("\n") + "\n\n" + "\n".join(rulings)
         atomic_write_bytes(dir_ / LEDGER_VIEW_FILE, body.encode("utf-8"), preserve_mode=False)
     return ledger
 
 
 def start(
     repo_root: Path, run_id: str, *, all_of_pm_ask: bool = False, resumed_from: Optional[str] = None,
-    session_id: Optional[str] = None,
+    session_id: Optional[str] = None, chain_parent: Optional[str] = None,
 ) -> Path:
     """Make the run ledger-bearing (emit time). Returns the run dir. `resumed_from` names the halted
     run this one resumes; omitted, a rebound run keeps the link its run.json already carries.
+    `chain_parent` names the ask run this one continues. `all_of_pm_ask` true is an explicit set
+    stamped now; the run otherwise reads its lineage's value (`lineage_all_of`).
     `session_id` is the submitting caller, recorded on the minted stage (`write_run_stage_at`).
 
     Raises `HandoverPending` before writing anything while a publish handover is pending."""
@@ -1380,20 +1601,36 @@ def start(
         raise HandoverPending(remaining)
     dir_ = run_dir(repo_root, run_id)
     prior = read_run(dir_) or {}
-    data = {
-        "sizing_rel": prior.get("sizing_rel"),
-        "all_of_pm_ask": bool(all_of_pm_ask) or bool(prior.get("all_of_pm_ask")),
-    }
-    for key in (SIZING_STAMP_FIELD, EARLIER_SIZINGS_FIELD):
+    data = {"sizing_rel": prior.get("sizing_rel")}
+    for key in (SIZING_STAMP_FIELD, EARLIER_SIZINGS_FIELD, ALL_OF_AT_FIELD):
         if key in prior:
             data[key] = prior[key]
+    if chain_parent is not None:
+        if not safe_id(chain_parent) or chain_parent == run_id:
+            raise LedgerRefused(f"chain_parent {chain_parent!r} is not a safe run id distinct from {run_id!r}")
+        data[CHAIN_PARENT_FIELD] = chain_parent
+    elif isinstance(prior.get(CHAIN_PARENT_FIELD), str):
+        data[CHAIN_PARENT_FIELD] = prior[CHAIN_PARENT_FIELD]
     if resumed_from is not None:
         if not safe_id(resumed_from) or resumed_from == run_id:
             raise LedgerRefused(f"resumed_from {resumed_from!r} is not a safe run id distinct from {run_id!r}")
         data[RESUMED_FROM_FIELD] = resumed_from
     elif isinstance(prior.get(RESUMED_FROM_FIELD), str):
         data[RESUMED_FROM_FIELD] = prior[RESUMED_FROM_FIELD]
+    own = {**data, "all_of_pm_ask": bool(prior.get("all_of_pm_ask"))}
+    if all_of_pm_ask:
+        own["all_of_pm_ask"], own[ALL_OF_AT_FIELD] = True, _all_of_stamp()
+    if CONTINUED_BY_FIELD in prior:
+        own[CONTINUED_BY_FIELD] = data[CONTINUED_BY_FIELD] = prior[CONTINUED_BY_FIELD]
+    data["all_of_pm_ask"], at = lineage_all_of(repo_root, run_id, own)
+    if at:
+        data[ALL_OF_AT_FIELD] = at
     _write_run(dir_, data)
+    if chain_parent is not None:
+        parent_dir = run_dir(repo_root, chain_parent)
+        parent = read_run(parent_dir)
+        if parent is not None and parent.get(CONTINUED_BY_FIELD) != run_id:
+            _write_run(parent_dir, {**parent, CONTINUED_BY_FIELD: run_id})
     _write_view(repo_root, dir_, run_id)
     stamp_run_stage(repo_root, run_id, "minted", session_id=session_id)
     return dir_
@@ -1449,18 +1686,6 @@ def _seedable_words(sizing: Mapping, foreign: Mapping[int, str]) -> list[str]:
         if not any(n in _norm(text) for n in needles):
             out.append(text.strip())
     return out
-
-
-def _unbound_followups(
-    root: Path, sizing: Mapping, ask_text: Optional[str], relayed_text: Optional[str], foreign: Mapping[int, str],
-) -> dict[int, str]:
-    """Recorded session turns after the ask that no register row covers and that bind has not
-    already proven foreign: they were neither relayed into the run nor revise it, so bind lists
-    them under `unrelated_turns` instead of seeding a row."""
-    recorded = foreign_turns(root, sizing, ask_text, relayed_text, followups=True)
-    register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
-    needles = [n for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping) and (n := _norm(r.get(rr.ROW_TEXT) or ""))]
-    return {n: t for n, t in recorded.items() if n not in foreign and not any(x in t for x in needles)}
 
 
 def validate_owned_red(raw: object) -> list[dict]:
@@ -1634,13 +1859,12 @@ def bind(
         rebinding = True
     sizing = sizing if isinstance(sizing, dict) else {}
     foreign = foreign_turns(root, sizing, ask_text, relayed_text)
-    unbound = _unbound_followups(root, sizing, ask_text, relayed_text, foreign)
     if rr.is_sibling_slice(sizing):
         entries = _slice_entries(sizing)
     elif relayed_text and relayed_text.strip():
         entries = []
     else:
-        entries = [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, {**foreign, **unbound})]
+        entries = [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, foreign)]
     entries.extend(_lettered_entries(read_em_brief(sizing)))
     register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
     rows_now = [r for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping)]
@@ -1654,10 +1878,10 @@ def bind(
     queued = _inbox(dir_)
     entries.extend((e["text"], _revision_anchor(str(e.get("at") or _now()), e.get("from"))) for e in queued)
     on_disk: Optional[list[dict]] = None
-    if entries or foreign or unbound or plan_rows:
+    if entries or foreign or plan_rows:
         parsed_rows = _parsed_register_rows(register)
         on_disk = _append_rows(
-            root, sizing_rel, entries, drop_turns=foreign, list_turns=unbound, plan_rows=plan_rows,
+            root, sizing_rel, entries, drop_turns=foreign, plan_rows=plan_rows,
             snapshot=(parsed_rows, parsed_key) if parsed_rows is not None else None,
         )
     if not bound or rebinding:
@@ -2091,9 +2315,15 @@ def revise(
             outcome["research_dropped"] = dropped
     withhold ={"ids": named, "run_id": run_id, "verbatim": text} if named else None
     if all_of_pm_ask is not None:
-        run = {**run, "all_of_pm_ask": bool(all_of_pm_ask)}
+        run = {**run, "all_of_pm_ask": bool(all_of_pm_ask), ALL_OF_AT_FIELD: _all_of_stamp()}
         _write_run(dir_, run)
         declare_write(dir_ / RUN_FILE)
+        for pid, prior in _predecessors(root, run_id, run):
+            pdir = run_dir(root, pid)
+            _write_run(pdir, {**prior, "all_of_pm_ask": run["all_of_pm_ask"], ALL_OF_AT_FIELD: run[ALL_OF_AT_FIELD]})
+            declare_write(pdir / RUN_FILE)
+            if prior.get("all_of_pm_ask") != run["all_of_pm_ask"] and _write_view(root, pdir, pid) is not None:
+                declare_write(pdir / LEDGER_VIEW_FILE)
     added: Optional[str] = None
     if stop_after:
         from coordinator_core.ops.dispatch_emit.ask_contract import write_stop_after_marker

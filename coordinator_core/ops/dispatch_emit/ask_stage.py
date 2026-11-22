@@ -44,6 +44,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     PARK_SOURCE_REPLY_KEY,
     PARKED_REPLY_KEY,
     PM_INTENT_FILE,
+    run_base_ref,
     REGISTER_ROWS_UNCLAIMED_REFUSAL,
     RELAYED_ASK_FILE,
     RELAYED_ASK_HEADING,
@@ -258,16 +259,17 @@ def revisions_block(root: Path, run_id: str, ledger: Optional[requirements_ledge
     return "\n".join(lines) + "\n"
 
 
-def em_brief_block(sizing: Optional[Mapping], root: Optional[Path] = None) -> str:
+def em_brief_block(sizing: Optional[Mapping], root: Optional[Path] = None, base_ref: Optional[str] = None) -> str:
     """The brief's EM-diagnosis section (the sizing's `em_analysis.em_brief`), marked as not the
     PM's words and placed below the PM-intent and relayed-ask blocks. Empty when none is recorded.
-    With ``root``, the brief's tree-contradicted claims follow as CONTRADICTED lines."""
+    With ``root``, the brief's tree-contradicted claims follow as CONTRADICTED lines; a claim that
+    held at ``base_ref`` (the run base, what the tree held before the run wrote) is not one."""
     brief = read_em_brief(sizing) if isinstance(sizing, Mapping) else None
     if not brief:
         return ""
     block = f"## EM diagnosis (not the PM's words)\n\n{brief}\n"
     if root is not None:
-        flagged = render_contradicted(check_brief_claims(brief, root))
+        flagged = render_contradicted(check_brief_claims(brief, root, base_ref))
         if flagged:
             block += f"\n{flagged}\n"
     return block
@@ -1875,7 +1877,7 @@ def stage(
     stage_claimed: list[str] = []
     if plan_rel and not ledger_resume and _split is not None:
         stage_claimed = _settle_unclaimed_register_rows(root, plan_path, _split.fm_text, plan_posix, run_sizing_rel, run_sizing)
-    em_block = em_brief_block(run_sizing, root)
+    em_block = em_brief_block(run_sizing, root, run_base_ref(root, run_sizing_rel))
     if em_block:
         intent = intent + ("\n" if intent else "") + em_block
     widen_probes: dict = {}

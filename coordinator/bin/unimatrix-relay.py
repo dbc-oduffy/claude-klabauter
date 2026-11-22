@@ -543,6 +543,7 @@ def load_roster():
     spec = importlib.util.spec_from_file_location("unimatrix_roster", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    mod.settings_home = settings_home  # an sshd forced command carries no env: this copy defaults, ordinary roster callers still refuse
     return mod
 
 
@@ -1444,7 +1445,8 @@ def grant(args, line, receive=None, peer=None):
 
 
 def settings_home():
-    return Path(os.environ.get("COORDINATOR_SETTINGS_HOME") or Path.home() / ".coordinator-claude-settings")
+    env = os.environ.get("COORDINATOR_SETTINGS_HOME")
+    return Path(env) if env and env.strip() else Path.home() / ".coordinator-claude-settings"
 
 
 MANIFEST = "MANIFEST.sha256"

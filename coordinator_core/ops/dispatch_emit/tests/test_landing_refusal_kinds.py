@@ -38,5 +38,11 @@ def test_named_demotions_are_provenance():
     assert {"peer-hunks-co-declared", "targeted-tests-failed"} <= k.PROVENANCE_KINDS
 
 
+def test_no_targeted_tests_is_never_a_refusal_or_finding_reason():
+    assert k.NO_TARGETED_TESTS == "no_targeted_tests"
+    assert not k.is_refusal(k.NO_TARGETED_TESTS)
+    assert k.NO_TARGETED_TESTS not in (k.LANDING_REFUSAL_KINDS | k.PROVENANCE_KINDS)
+
+
 def test_tables_are_disjoint():
     assert not (k.LANDING_REFUSAL_KINDS & k.PROVENANCE_KINDS)

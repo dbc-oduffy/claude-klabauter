@@ -186,6 +186,47 @@ class RunInvariants:
 
         return self._once("predecessor_withheld", build)
 
+    def predecessor_own_delta_blobs(self) -> dict:
+        """`{path: frozenset(blob ids)}` from each same-sizing predecessor's `withheld-own-delta.json`
+        (HEAD plus only that run's change). An unreadable record contributes nothing."""
+
+        def build() -> dict:
+            import json
+            from pathlib import PurePosixPath
+
+            from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+            from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
+
+            out: dict = {}
+            for pred in self.own_artifacts().predecessors:
+                try:
+                    doc = json.loads((record_dir(self.root, pred) / WITHHELD_OWN_DELTA_FILE).read_text(encoding="utf-8"))
+                    for rel, entry in (doc.get("paths") or {}).items():
+                        blob = entry.get("blob") if isinstance(entry, dict) else None
+                        if isinstance(rel, str) and isinstance(blob, str) and blob:
+                            out.setdefault(PurePosixPath(rel.replace("\\", "/")).as_posix(), set()).add(blob)
+                except Exception:  # noqa: BLE001 -- unreadable evidence is none
+                    continue
+            return {k: frozenset(v) for k, v in out.items()}
+
+        return self._once("predecessor_own_delta", build)
+
+    def predecessor_touched(self) -> frozenset:
+        """Paths a same-sizing predecessor's `measured-touched.json` names: it measured them as its own."""
+
+        def build() -> frozenset:
+            from coordinator_core.ops.dispatch_emit import measured_rev
+
+            out: set = set()
+            for pred in self.own_artifacts().predecessors:
+                try:
+                    out.update(str(p).replace("\\", "/") for p in measured_rev.touched_paths(self.root, pred))
+                except Exception:  # noqa: BLE001 -- unreadable evidence is none
+                    continue
+            return frozenset(out)
+
+        return self._once("predecessor_touched", build)
+
 
 _ACTIVE: ContextVar[Optional[RunInvariants]] = ContextVar("hunk_provenance_invariants", default=None)
 
@@ -235,12 +276,13 @@ def unproduced_hunks(
     those lines), yields no finding: `settled[path] = {"blob", "owner", "lines"}` carries the sha of
     HEAD plus only the run's own hunks (the foreign ones stay dirty in the worktree), the owner it
     names (`UNKNOWN_OWNER` when none) and the foreign lines. A tracked path the run
-    has no write_baseline for, never declared and did not produce settles to its HEAD blob with owner
-    `NO_BASELINE_OWNER`: excluded from the landing, left dirty.
+    has no write_baseline blob or kept fingerprint for, declared or not, settles to its HEAD blob with
+    owner `NO_BASELINE_OWNER`: excluded from the landing, left dirty.
     Never raises: a read failure is a finding, except on a path the run's own record produced
     (its write_baseline names it, or it is a run-own artifact): there the unattributable read is
     appended to `advisories` as `{"path", "detail"}` and yields no finding. DR-467: a path the run
-    neither baselined nor declared in its manifest rows stays a finding. Trap: a peer write
+    neither baselined nor declared in its manifest rows stays a finding when HEAD holds no blob for it
+    (a tracked path settles, per above). Trap: a peer write
     landing after this run's stage inside the run's own delta span is indistinguishable here.
     `invariants` (see `run_invariants`) is shared across calls of one landing; absent, the enclosing
     `invariants_scope` or a per-call instance serves."""
@@ -262,10 +304,7 @@ def _unproduced_hunks(
         try:
             bad, own, head_bytes = _unproduced(Path(root), run_id, path)
         except Exception as exc:  # noqa: BLE001 -- unknown holds
-            if (
-                isinstance(exc, NoWriteBaseline) and settled is not None and exc.head_sha
-                and not _run_produced(Path(root), run_id, path)
-            ):
+            if isinstance(exc, NoWriteBaseline) and settled is not None and exc.head_sha:
                 settled[path] = {"blob": exc.head_sha, "owner": NO_BASELINE_OWNER, "lines": ""}
                 continue
             detail = f"provenance unreadable: {type(exc).__name__}: {exc}"
@@ -372,11 +411,15 @@ def _kept_blocks(root: Path, common: Path, path: str, head: list, blobs: Sequenc
 
 
 def _own_hunk_evidence(root: Path, common: Path, run_id: str, path: str, head: list) -> set:
-    """Blocks of `run_id` for `path` from its kept blobs and its same-sizing predecessors' withheld prints.
-    Never raises: unreadable evidence is empty."""
+    """Blocks of `run_id` for `path` from its kept blobs and its same-sizing predecessors' withheld prints
+    and withheld-own-delta blobs. Never raises: unreadable evidence is empty."""
     try:
         inv = _inv(root, run_id)
-        blobs = set(inv.own_kept().get(path, ())) | set(inv.predecessor_withheld_prints().get(path, ()))
+        blobs = (
+            set(inv.own_kept().get(path, ()))
+            | set(inv.predecessor_withheld_prints().get(path, ()))
+            | set(inv.predecessor_own_delta_blobs().get(path, ()))
+        )
         return _kept_blocks(root, common, path, head, sorted(blobs)) if blobs else set()
     except Exception:  # noqa: BLE001 -- unreadable evidence is none
         return set()
@@ -504,6 +547,8 @@ def _peer_split(
         owner = _peer_owner(root, run_id, own_plan, path)
         if owner is not None and _own_chain(root, run_id, owner):
             continue
+        if owner is None and _predecessor_measured(root, run_id, path):
+            continue
         owner = owner or UNKNOWN_OWNER
         blob = None
         if head_bytes is not None:
@@ -530,6 +575,15 @@ def _own_chain(root: Path, run_id: str, owner: str) -> bool:
         from coordinator_core.ops.dispatch_emit.run_lineage import chain_kin
 
         return owner in chain_kin(root, run_id, [owner])
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _predecessor_measured(root: Path, run_id: str, path: str) -> bool:
+    """A declared `path` a same-sizing predecessor measured as touched: with no live owner its hunks are
+    this run's inherited work. False on any read failure."""
+    try:
+        return _declares(root, run_id, path) and path in _inv(root, run_id).predecessor_touched()
     except Exception:  # noqa: BLE001
         return False
 

@@ -25,12 +25,14 @@ class Conn:
     def __init__(self, events, deliveries) -> None:
         self.chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
         self.events, self.deliveries = events, deliveries
+        self.replies = []
 
     def read(self):
         return self.chunks.pop(0)
 
     def write(self, data) -> None:
         self.events.append("write")
+        self.replies.append(json.loads(data))
 
     def close(self) -> None:
         rows = self.deliveries.read_text().splitlines() if self.deliveries.exists() else []
@@ -98,14 +100,14 @@ def test_a_mirror_whose_name_disagrees_with_its_far_name_is_refused_naming_name_
 def test_every_send_records_its_outcome_and_a_failure_notifies_the_sender(env, monkeypatch: pytest.MonkeyPatch, returncode, ok) -> None:
     bridge, deliveries = env
     events, rows, _ = drive(bridge, deliveries, monkeypatch, returncode)
-    assert events == [("close", 0)]  # no reply bytes, released before any row
+    assert events == ["write", ("close", 1)]  # the client is answered after the verdict row, then released
     assert [r["ok"] for r in rows] == [ok]
     assert isinstance(rows[0]["ms"], int)
     assert ("error" in rows[0]) == (not ok)
     assert bool(bridge.notices) == (not ok)
 
 
-def test_sender_is_released_before_the_ssh_leg_runs(env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sender_is_answered_only_after_the_ssh_leg_runs(env, monkeypatch: pytest.MonkeyPatch) -> None:
     bridge, deliveries = env
     events = []
 
@@ -116,7 +118,7 @@ def test_sender_is_released_before_the_ssh_leg_runs(env, monkeypatch: pytest.Mon
     monkeypatch.setattr(subprocess, "run", run)
     bridge.serve_one(Conn(events, deliveries))
     # The second ssh is the `receipts` reconcile a reply-less exit 0 earns.
-    assert events == [("close", 0), "ssh", "ssh"]
+    assert events == ["ssh", "ssh", "write", ("close", 1)]
 
 
 def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch: pytest.MonkeyPatch) -> None:

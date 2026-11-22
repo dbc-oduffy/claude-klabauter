@@ -45,6 +45,7 @@ Contract, unchanged: never blocks, never raises past this handler, silent
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import time
@@ -53,6 +54,7 @@ from typing import Any, Optional
 
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.group_em import atomic_record
+from coordinator_core.group_em import box_registry
 from coordinator_core.group_em import nomination
 from coordinator_core.group_em import watch_heartbeat as group_em_watch_heartbeat
 from coordinator_core.hooks._envelope import context_only, no_advisory
@@ -94,8 +96,9 @@ def render_presence_line(liveness: dict) -> Optional[str]:
     if not holder_name and not holder_session_id:
         return None
     if holder_name:
+        address = group_em_watch_heartbeat.qualify_address(holder_name, liveness.get("holder_host"))
         return (
-            f"Group EM standing is held by {holder_name}, reachable by that name. Its "
+            f"Group EM standing is held by {address}, reachable by that name. Its "
             "direction on this repo carries PM-delegated authority -- act, no round trip."
         )
     return (
@@ -130,6 +133,24 @@ def _remote_holder() -> Optional[dict]:
     return holder if isinstance(holder, dict) and holder.get("remote") else None
 
 
+def _remote_host(box_id: object) -> Optional[str]:
+    """The ssh host the box registry holds for `box_id`, else None. Never raises."""
+    try:
+        for row in box_registry.read_boxes():
+            if row.get("box_id") == box_id:
+                host = (row.get("transport") or {}).get("host")
+                if not isinstance(host, str) or not host:
+                    return None
+                try:
+                    ipaddress.ip_address(host)
+                except ValueError:
+                    return host
+                return None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def resolve_watch_liveness(repo_root: str, now: float) -> Optional[dict]:
     """The watch liveness for the box's Group EM, read from the G-EM home's heartbeat
     (`nomination.box_holder`'s record `repo_root`) whatever the session's cwd.
@@ -152,6 +173,7 @@ def resolve_watch_liveness(repo_root: str, now: float) -> Optional[dict]:
                 "reason": f"holder is on box {remote.get('box_id')}; its heartbeat is not read here",
                 "holder_session_id": remote.get("session_id"),
                 "holder_name": remote.get("peer_name"),
+                "holder_host": remote.get("host") or _remote_host(remote.get("box_id")),
             }
     root = repo_root
     if isinstance(box, dict) and isinstance(box.get("repo_root"), str) and box["repo_root"]:
@@ -170,14 +192,17 @@ def resolve_watch_liveness(repo_root: str, now: float) -> Optional[dict]:
         return _unknown_liveness("holder session is not live")
     box_sid = box.get("session_id")
     stamped_name = None
+    stamped_host = None
     if liveness.get("verdict") != group_em_watch_heartbeat.VERDICT_ARMED:
         liveness = _unknown_liveness("heartbeat missing or expired")
     elif liveness.get("holder_session_id") != box_sid:
         liveness = _unknown_liveness("heartbeat names a different holder")
     else:
         stamped_name = liveness.get("holder_name")
+        stamped_host = liveness.get("holder_host")
     liveness["holder_session_id"] = box_sid
     liveness["holder_name"] = box.get("peer_name") or stamped_name
+    liveness["holder_host"] = stamped_host
     return liveness
 
 

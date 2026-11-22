@@ -108,3 +108,17 @@ def test_takeover_is_an_accepted_key_on_both_surfaces():
     from coordinator_core.ops import engine_ask_submit
 
     assert "takeover" in mod._ARGS_KEYS and "takeover" in engine_ask_submit._KNOWN_KEYS
+
+
+def test_a_run_live_under_a_foreign_session_is_refused_even_with_takeover(tmp_path, monkeypatch):
+    """A takeover names a dead driver; a live one is never taken over. The live check runs before the resume gate."""
+    from coordinator_core.warm import live_runs
+
+    root = _repo(tmp_path, stamp=None)
+    _stage(root, "other")
+    monkeypatch.setattr(live_runs, "run_is_live", lambda r, run_id, **kw: run_id == RUN)
+    envelope, result, minted = _drive(root, monkeypatch, "s1", takeover={"reason": "peer is slow"})
+    assert result is None and "is live" in _refusal(envelope) and "second launcher" in _refusal(envelope)
+    assert minted == [] and not (root / RECORD_DIR_ROOT / RUN / TAKEOVER_LOG).exists()
+    stage = json.loads((root / RECORD_DIR_ROOT / RUN / "run-stage.json").read_text(encoding="utf-8"))
+    assert stage["session_id"] == "other"

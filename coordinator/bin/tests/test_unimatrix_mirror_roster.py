@@ -1104,6 +1104,7 @@ def _two_box_side(tmp_path, monkeypatch, me, far, mux_off):
     monkeypatch.setattr(mirror_all.R, "tree_kill", lambda pid: None)
     monkeypatch.setattr(socket, "gethostname", lambda: me)
     monkeypatch.setitem(mirror_all._STATE, "mux_off", mux_off)
+    monkeypatch.setattr(mirror_all.sys, "platform", "darwin")  # owner dedup is a two-inbox-host rule
     cfg = mirror_all.parse_args([str(tmp_path / f"{me}.log"), "--remote", far, "--key", "k"])
     return mirror_all, cfg, started
 
@@ -1135,6 +1136,13 @@ def test_the_non_owner_alone_starts_no_mirror_and_says_who_owns_it(tmp_path: Pat
     side.sync(clients, LIVE, cfg, said.append)
     assert started == [] and clients == {}
     assert said == ["alpha owns the zulu/alpha mirror; this side starts none"]
+
+
+def test_a_windows_non_owner_still_mirrors_because_it_hosts_no_inboxes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    side, cfg, started = _two_box_side(tmp_path, monkeypatch, "zulu", "alpha", False)
+    monkeypatch.setattr(side.sys, "platform", "win32")
+    side.sync({}, LIVE, cfg, lambda m: None)
+    assert len(started) == 1
 
 
 def test_owner_is_decided_on_box_ids_not_alias_spelling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

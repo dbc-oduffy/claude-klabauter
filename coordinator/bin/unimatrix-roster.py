@@ -73,9 +73,26 @@ def settings_home() -> Path:
     return Path(env)
 
 
-def default_key():
-    """The Unimatrix-Zero key: the settings home's, else the group-em home's; first candidate when neither exists."""
-    home = settings_home()
+def delivery_settings_home() -> Path:
+    """The settings home for a delivery leg: $COORDINATOR_SETTINGS_HOME, else ~/.coordinator-claude-settings; never raises.
+
+    An sshd forced command and a supervisor-spawned bridge or router carry no env, so every helper
+    reachable from a relay delivery or a bridge send uses this form. Ordinary roster callers use settings_home()."""
+    env = os.environ.get(SETTINGS_HOME_KEY)
+    return Path(env) if env and env.strip() else Path.home() / ".coordinator-claude-settings"
+
+
+def export_settings_home() -> None:
+    """Pin the resolved delivery settings home into this process's environment so every child it spawns (bridge, router, relay) inherits it."""
+    os.environ[SETTINGS_HOME_KEY] = str(delivery_settings_home())
+
+
+def default_key() -> str:
+    """The Unimatrix-Zero key: the settings home's, else the group-em home's; first candidate when neither exists.
+
+    Resolves the home with delivery_settings_home(): an in-process caller (autolink, a delivery helper) carries no env.
+    parse_args still refuses a missing home before it reaches here."""
+    home = delivery_settings_home()
     cands = [home / ".secrets" / "ssh" / "unimatrix-zero", home / "group-em" / ".secrets" / "ssh" / "unimatrix-zero"]
     key = str(next((c for c in cands if c.is_file()), cands[0]))
     refuse_real("key_path", key)
@@ -695,13 +712,13 @@ def stamp_supervisor(remote, role=None) -> None:
         stamp = {"pid": pid, "procStart": proc_start(pid), "remote": remote}
         if role:
             stamp["role"] = role
-        write_json_atomic(str(settings_home() / "unimatrix" / f"supervisor-{pid}.json"), stamp)
+        write_json_atomic(str(delivery_settings_home() / "unimatrix" / f"supervisor-{pid}.json"), stamp)
     except (OSError, subprocess.SubprocessError):
         pass
 
 
 def stop_request_path(pid) -> Path:
-    return settings_home() / "unimatrix" / f"stop-{pid}.json"
+    return delivery_settings_home() / "unimatrix" / f"stop-{pid}.json"
 
 
 def request_stop(pid, proc_start_value, role, remote) -> None:
@@ -725,7 +742,7 @@ def stop_requested(own_proc_start) -> bool:
 
 def clear_stop(pid) -> None:
     """Remove `pid`'s stop request and supervisor stamp; absent files are fine."""
-    for path in (stop_request_path(pid), settings_home() / "unimatrix" / f"supervisor-{pid}.json"):
+    for path in (stop_request_path(pid), delivery_settings_home() / "unimatrix" / f"supervisor-{pid}.json"):
         try:
             os.remove(path)
         except OSError:
@@ -758,7 +775,9 @@ def parse_args(argv) -> argparse.Namespace:
     p.add_argument("--key", default=None)
     a = p.parse_args(argv)
     a.key_defaulted = not a.key
-    a.key = a.key or default_key()
+    if not a.key:
+        settings_home()  # the ordinary roster CLI refuses a missing home before any side effect; default_key() itself defaults
+        a.key = default_key()
     a.tunnel_remote = a.tunnel_remote or default_tunnel()
     return a
 
@@ -1017,7 +1036,7 @@ def _now():
     return time.monotonic()
 
 
-def control_path(remote, home=None, key=None):
+def control_path(remote, home=None, key=None) -> Path:
     """Mux socket path for far `remote` and identity `key`, under <settings home>/unimatrix/ctl; short, since
     unix socket paths cap near 104 bytes.
 
@@ -1025,7 +1044,7 @@ def control_path(remote, home=None, key=None):
     every caller through the first caller's key, and the far authorized_keys line for that key picks the
     command (a roster key answered `send-session` with a roster dump)."""
     tag = hashlib.sha1(f"{remote}\0{key or ''}".encode("utf-8")).hexdigest()[:10]
-    return (Path(home) if home else settings_home()) / "unimatrix" / "ctl" / f"r-{tag}"
+    return (Path(home) if home else delivery_settings_home()) / "unimatrix" / "ctl" / f"r-{tag}"
 
 
 def mux_options(remote, key=None):
@@ -1063,6 +1082,28 @@ def _roster_once(remote, key, tunnel_remote) -> list:
     return [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
 
 
+RESET_TRIES = 3
+RESET_BACKOFF_SECONDS = (1.0, 3.0)
+_RESET_MARKERS = ("rc=255", "connection reset", "kex_exchange_identification")
+
+
+def _is_reset(ex):
+    text = str(ex).lower()
+    return isinstance(ex, OSError) and any(m in text for m in _RESET_MARKERS) and "timed out" not in text
+
+
+def _roster_with_reset_retry(remote, key, tunnel_remote):
+    """`_roster_once`, retried on a connection reset (sshd MaxStartups drop) with jittered backoff, RESET_TRIES
+    tries in ~20s at most; any other failure raises at once."""
+    for attempt in range(RESET_TRIES):
+        try:
+            return _roster_once(remote, key, tunnel_remote)
+        except OSError as ex:
+            if not _is_reset(ex) or attempt == RESET_TRIES - 1:
+                raise
+            time.sleep(RESET_BACKOFF_SECONDS[attempt] * (1 + secrets.randbelow(100) / 100))
+
+
 def fetch_roster(remote, key, tunnel_remote=None):
     """The far roster rows. A transient LAN stall (connect timeout, hung session) is retried once
     with the endpoint re-picked, so one dropped SYN is not a LINK-DOWN; a second failure raises.
@@ -1071,8 +1112,10 @@ def fetch_roster(remote, key, tunnel_remote=None):
     if _is_win():
         return _capped_fetch(remote, key, tunnel_remote)
     try:
-        return _roster_once(remote, key, tunnel_remote)
-    except (OSError, subprocess.TimeoutExpired):
+        return _roster_with_reset_retry(remote, key, tunnel_remote)
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        if _is_reset(ex):
+            raise
         return _roster_once(remote, key, tunnel_remote)
 
 
@@ -1083,7 +1126,7 @@ def _capped_fetch(remote, key, tunnel_remote):
             raise OSError(last[2])
         return copy.deepcopy(last[1])
     try:
-        rows = _roster_once(remote, key, tunnel_remote)
+        rows = _roster_with_reset_retry(remote, key, tunnel_remote)
     except (OSError, subprocess.TimeoutExpired) as ex:
         _DIALS[remote] = (_now(), None, str(ex) or type(ex).__name__)
         raise
@@ -1221,7 +1264,7 @@ def reap_stale_sockets(owners, keep, readable, say):
         say(f"unlinked stale socket {full}")
 
 
-def reap_unbacked_agy_faces(say):
+def reap_unbacked_agy_faces(say) -> None:
     """Remove the local registry rows of agy router faces whose agy process is gone.
 
     The registry lists a file by its live face pid, so an unlisted-but-present face still shows in
@@ -1257,7 +1300,7 @@ def reap_unbacked_agy_faces(say):
         orphans = liveness.agy_peer_rows_orphaned()
         if orphans:
             hook = _codex_hook()
-            dropped = set(hook.drop_peer_rows(settings_home() / "unimatrix" / "peers.json",
+            dropped = set(hook.drop_peer_rows(delivery_settings_home() / "unimatrix" / "peers.json",
                                               {t for _, t in orphans}))
             for name, target in orphans:
                 if name in dropped:
@@ -1605,10 +1648,10 @@ def sync(bridges, rows, cfg, say):
         del _ABSENT[sock]
 
 
-def link_state_path(alias, home=None):
+def link_state_path(alias, home=None) -> Path:
     """Link-state record path for far `alias`: <settings home>/unimatrix/link-state/<alias, path-safe>.json."""
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", alias)
-    return (Path(home) if home else settings_home()) / "unimatrix" / "link-state" / f"{safe}.json"
+    return (Path(home) if home else delivery_settings_home()) / "unimatrix" / "link-state" / f"{safe}.json"
 
 
 def read_link_state(path):
@@ -1689,6 +1732,7 @@ def main(argv=None) -> None:
             say(f"stopped by signal {signum}; mirrors drop until relaunched")
             sys.exit(128 + signum)
         signal.signal(signal.SIGTERM, stopped)
+    export_settings_home()
     stamp_supervisor(cfg.remote, "bridge")
     own_start = guarded(say, "own start", proc_start, os.getpid(), default=None)
     bridges = {}

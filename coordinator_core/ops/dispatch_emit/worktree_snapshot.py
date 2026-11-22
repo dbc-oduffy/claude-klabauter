@@ -19,6 +19,8 @@ from coordinator_core.ops._path_guard import contained_path
 
 _READ_REL_MEMO: dict = {}
 _READ_REL_LIMIT = 256
+# In-progress markers are never recorded; a deletion of one stays declared so a tracked marker untracks.
+_IN_PROGRESS_SUFFIXES = (".building", ".tmp", ".lock")
 
 
 def read_rel(worktree_root: Path, rel: str) -> Optional[str]:
@@ -188,7 +190,8 @@ def changed_python_paths(root: Path) -> Optional[set[str]]:
 
 def record_dir_changes(worktree_root: Path, record_dir_rel: str, changed: set) -> tuple[list, list]:
     """The record dir's changed top-level files from one status read: ``(present, deleted)``.
-    ``present`` are files on disk; ``deleted`` are changed entries gone from disk."""
+    ``present`` are files on disk, minus in-progress markers (``*.building``, ``*.tmp``,
+    ``*.lock``); ``deleted`` are changed entries gone from disk."""
     prefix = record_dir_rel.rstrip("/") + "/"
     present: list = []
     deleted: list = []
@@ -196,5 +199,9 @@ def record_dir_changes(worktree_root: Path, record_dir_rel: str, changed: set) -
         name = rel[len(prefix):]
         if not rel.startswith(prefix) or "/" in name or name.startswith(_TEMP_PREFIX):
             continue
-        (present if (worktree_root / rel).is_file() else deleted).append(rel)
+        if (worktree_root / rel).is_file():
+            if not name.endswith(_IN_PROGRESS_SUFFIXES):
+                present.append(rel)
+        else:
+            deleted.append(rel)
     return present, deleted

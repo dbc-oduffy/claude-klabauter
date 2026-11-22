@@ -175,6 +175,35 @@ def reverify_indeterminate_finding(detail: str) -> Finding:
     )
 
 
+#: Zero-run causes that are a collected-nothing failure of the run itself; a zero-collected review reverify is a
+#: FAIL, never a pass, never indeterminate. ``empty-selection`` counts only with a recorded argv (pytest ran).
+ZERO_COLLECTED_CAUSES = (ZERO_RUN_COLLECTION, ZERO_RUN_IMPORT_ERROR, "test_infra_failure")
+
+
+def is_zero_collected(verdict: Optional[Mapping]) -> bool:
+    """True when ``verdict`` ran zero tests (``tests_run`` the integer 0) for a collection-class cause, or any
+    zero-run with a pytest argv and an import-error line recorded."""
+    if not isinstance(verdict, Mapping):
+        return False
+    ran = verdict.get("tests_run")
+    if not isinstance(ran, int) or isinstance(ran, bool) or ran != 0:
+        return False
+    return verdict.get(ZERO_RUN_CAUSE_KEY) in ZERO_COLLECTED_CAUSES or bool(verdict.get("import_error_text"))
+
+
+def zero_collected_cause(verdict: Mapping) -> str:
+    """The typed cause line: argv, interpreter, cwd and, when the output carried one, the import error
+    (``No module named X``)."""
+    argv = verdict.get("pytest_argv") or verdict.get("argv")
+    argv_text = " | ".join(" ".join(map(str, a)) if isinstance(a, (list, tuple)) else str(a) for a in argv)         if isinstance(argv, (list, tuple)) and argv else "unrecorded"
+    err = verdict.get("import_error_text")
+    return (
+        f"zero-collected: reverify collected 0 tests ({verdict.get(ZERO_RUN_CAUSE_KEY) or 'unrecorded cause'}); "
+        f"argv: {argv_text}; interpreter: {verdict.get('interpreter') or 'unrecorded'}; "
+        f"cwd: {verdict.get('cwd') or 'unrecorded'}" + (f"; import error: {err}" if err else "")
+    )
+
+
 def zero_fail_finding(detail: str) -> Finding:
     """The ``test-verdict-names-no-failure`` finding; the remedy is ``retest_step``, so this is the halt of ``remedy_or_halt``."""
     from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
@@ -335,6 +364,45 @@ def _is_await(finding: Finding) -> bool:
     return isinstance(finding, RetestAwait)
 
 
+def derived_nodes(params: Optional[Mapping]) -> tuple[list[str], list[str]]:
+    """``(nodes, searched_writes)`` for a red that names no node: the run's declared targeted set
+    (``targeted_set``), else the test files reaching its writes (``params.paths``, under
+    ``params.repo_root``; ``landing_reach.seeds_for_landing``, an index read, no spawn). Only the run's
+    own writes are searched, never the corpus."""
+    if not isinstance(params, Mapping):
+        return [], []
+    declared = targeted_set(params, targeted_test_verdict(params))
+    raw = params.get("paths")
+    writes = [str(p).replace("\\", "/") for p in raw if isinstance(p, str) and p] if isinstance(raw, (list, tuple)) else []
+    if declared:
+        return declared, writes
+    root = params.get("repo_root")
+    if writes and isinstance(root, str) and root:
+        from coordinator_core.ops.dispatch_emit.landing_reach import seeds_for_landing
+
+        return seeds_for_landing(root, writes), writes
+    return [], writes
+
+
+def no_targeted_tests_halt(params: Optional[Mapping], searched: Sequence[str], done: int) -> dict:
+    """The remedy step of a red with no node to retest and no derivable target: kind ``no_targeted_tests``,
+    ``exhausted`` from attempt one (the run halts, it does not launch a retest of nothing) and no retry
+    attempt consumed. ``searched_writes`` names the writes the derivation looked through."""
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
+    from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import NO_TARGETED_TESTS
+
+    return {
+        "kind": NO_TARGETED_TESTS, "remedy": "halt-no-targeted-tests", "nodes": [],
+        "command": retest_remedy(params, []), "searched_writes": list(searched),
+        "attempt": min(max(done, 1), MAX_IN_RUN_REMEDY_ATTEMPTS), "max_attempts": MAX_IN_RUN_REMEDY_ATTEMPTS,
+        "exhausted": True,
+        "detail": (
+            "the run names no failing test node, no declared targeted set, and no test reaching its writes ("
+            + (", ".join(searched) if searched else "no writes recorded") + "); declare the targeted tests and re-run"
+        ),
+    }
+
+
 def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optional[dict]:
     """The mechanical remedy step for a test-evidence refusal (``TEST_EVIDENCE_REASONS``: failed targeted
     tests, red or indeterminate re-verify, a verdict naming no failure), or None when no such
@@ -352,6 +420,10 @@ def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optio
 
     done = retests_done(params)
     nodes = remedy_nodes(findings, params)
+    if not nodes and first.reason == TARGETED_TESTS_FAILED:
+        nodes, searched = derived_nodes(params)
+        if not nodes:
+            return no_targeted_tests_halt(params, searched, done)
     return {
         "kind": first.reason, "remedy": "landing-runs-targeted-retest",
         "nodes": nodes, "command": retest_remedy(params, list(dict.fromkeys(_node_file(n) for n in nodes))),
@@ -464,6 +536,8 @@ def failed_targeted_tests(
     if verdict.get("status_before") == REVERIFY_INDETERMINATE:
         return [_indeterminate_finding(verdict.get("reverify_error"), remedy or retest_remedy(None))], "failed"
     tests_run = verdict.get("tests_run")
+    if is_zero_collected(verdict):
+        return [tests_failed_finding("", f"{zero_collected_cause(verdict)}{note}; re-run: {remedy or retest_remedy(None)}")], "failed"
     if isinstance(tests_run, int) and not isinstance(tests_run, bool) and tests_run == 0:
         return [], NOT_RUN_CHECK
     baseline = verdict.get("baseline")
@@ -843,6 +917,11 @@ def reverify_red_findings(
     if record is None:
         return []
     error = record.get("reverify_error")
+    if is_zero_collected(record) or (
+        reverify_verdict(record) == REVERIFY_INDETERMINATE and not (isinstance(error, str) and error.strip())
+        and record.get("tests_run") == 0
+    ):
+        return [reverify_failed_finding("", f"{zero_collected_cause(record)}; re-run: {retest_remedy(params, [])}")]
     if reverify_verdict(record) == REVERIFY_INDETERMINATE or (isinstance(error, str) and error.strip()):
         return [_indeterminate_finding(error, retest_remedy(params, []))]
     if reverify_verdict(record) != "fail":

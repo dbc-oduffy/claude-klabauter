@@ -505,3 +505,19 @@ def test_old_root_bug_blitz_cache_ages_out_at_seven_days(tmp_path, monkeypatch) 
     with temp_layout.managed_temp_dir("y", "/w/r"):
         pass
     assert not old.exists() and mid.exists() and new.exists()
+
+def test_old_root_reap_skips_a_leased_commit_clone_and_prunes_the_rest(tmp_path, monkeypatch) -> None:
+    *_, disk = _legacy_tree(tmp_path, monkeypatch)
+    clones = tmp_path / "oldtmp" / "coordinator" / "_fleet" / "claude-klabauter-commit-clone"
+    leased, dead_lease, bare = clones / "leased", clones / "deadlease", clones / "bare"
+    (leased / ".git" / "in-use").mkdir(parents=True)
+    (leased / ".git" / "in-use" / "999992").write_text("")
+    (dead_lease / ".git" / "in-use").mkdir(parents=True)
+    (dead_lease / ".git" / "in-use" / "999991").write_text("")
+    bare.mkdir(parents=True)
+    for d in (leased, dead_lease, bare):
+        os.utime(d, (1, 1))
+    with temp_layout.managed_temp_dir("y", "/w/r"):
+        pass
+    assert leased.exists()
+    assert not dead_lease.exists() and not bare.exists()

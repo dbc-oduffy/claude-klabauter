@@ -35,6 +35,17 @@ def test_every_composed_ask_leg_carries_repo() -> None:
     assert _legs_without_repo(script, "REPO") == []
 
 
+def test_the_gate_relay_declares_its_operation_and_keeps_the_pin_behind_the_host_branch() -> None:
+    script = compose_ask_script(
+        repo_root="REPO", prompt=None, sizing_rel="state/sizings/x.yaml", run_id="run-1", session_id=None,
+        wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",
+        run_base_sha="a" * 40, **REVIEW_KW,
+    )
+    gate = next(ln for ln in script.splitlines() if "typeof engineOp === 'function' && _runId ? _hostGate(" in ln)
+    assert re.search(r"""op_id: (["'])dispatch\.ask_gate\1""", gate)
+    assert _legs_without_repo(script, "REPO") == []
+
+
 def test_roadmap_gate_leg_carries_repo() -> None:
     script = compose_roadmap_script(
         repo_root="/repo", sizing_rel="state/sizings/x.yaml", run_id="run-1", interaction_mode=None,

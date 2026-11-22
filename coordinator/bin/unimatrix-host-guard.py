@@ -9,8 +9,9 @@ nested PreToolUse deny) answers the host's open answer with state "degraded". ag
 it classifies the command in-process against the irreversible-class denies (backstop.degrade_match, no spawn) and
 answers a deny naming the cause on a match, else an allow whose reason says the guard was down.
 A Codex bare {} is state "neutral-unknown": the shim cannot yet tell a real neutral verdict from a warm miss
-or caught error. Only a verified deny (or valid agy answer) is "engine"; "degraded" and "neutral-unknown"
-never satisfy an enforcement check. A cold or unreachable warm engine is answered by the shim itself and
+or caught error, except when its evaluation names a guard in EVALUATED_ALLOW_GUARDS (a branch create), which is
+state "evaluated-allow". Only a verified deny (or valid agy answer) is "engine"; "degraded", "neutral-unknown"
+and "evaluated-allow" never satisfy an enforcement check. A cold or unreachable warm engine is answered by the shim itself and
 recorded in warm/degrade.jsonl, not in this module's log.
 
 Every degrade appends one record {ts, host, cause, budget_secs, cpu_secs} to degrade_log_path(); cpu_secs is the
@@ -37,6 +38,8 @@ from pathlib import Path
 
 NEUTRAL = {"agy": {"decision": "allow"}, "codex": {}, "grok": {}}
 NEUTRAL_UNKNOWN = "neutral-unknown"
+EVALUATED_ALLOW = "evaluated-allow"
+EVALUATED_ALLOW_GUARDS = frozenset({"block-noncanonical-branch-creation"})
 DEFAULT_BUDGET_SECS = 0.5
 DEGRADE_LOG_NAME = "host-guard-degrades.jsonl"
 ALLOW_LOG_NAME = "host-guard-allows.jsonl"
@@ -203,6 +206,14 @@ def _record_allow(host, evaluation, answer=None) -> None:
         pass
 
 
+def _names_evaluated_guard(evaluation) -> bool:
+    """True when the shim's evaluation (route warm|cold) names a guard in EVALUATED_ALLOW_GUARDS: that allow is a
+    real evaluated verdict, the state the allow-log row already records."""
+    return (isinstance(evaluation, dict) and evaluation.get("route") in ("warm", "cold")
+            and isinstance(evaluation.get("guards_evaluated"), list)
+            and any(g in EVALUATED_ALLOW_GUARDS for g in evaluation["guards_evaluated"]))
+
+
 def _classify_irreversible(stdin_text, engine_root):
     """(deny reason, None) for an irreversible-class command; (None, None) for any other; (None, why) when it
     could not be classified. In-process and spawn-free, bounded by CLASSIFY_WALL_SECS."""
@@ -246,7 +257,7 @@ def _degrade(host, cause, budget_secs, cpu_secs=None, stdin_text=None, engine_ro
             "reason": "WARNING: Klabauter guard DEGRADED (%s); %s; proceeding open" % (cause, note)}, "degraded"
 
 
-def _run_shim(host, stdin_text, engine_root, box):
+def _run_shim(host, stdin_text, engine_root, box) -> None:
     try:
         shim = _load_shim(engine_root)
     except Exception as exc:
@@ -270,9 +281,10 @@ def _run_shim(host, stdin_text, engine_root, box):
         box["detail"] = _exc_detail(exc)
 
 
-def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pending=None):
-    """Return (answer, state): "engine" for a Codex nested deny or a valid agy answer; "neutral-unknown" for a
-    Codex bare {} (the shim emits it for a real neutral verdict, a warm miss and a caught internal error alike);
+def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pending=None) -> tuple:
+    """Return (answer, state): "engine" for a Codex nested deny or a valid agy answer; "evaluated-allow" for a Codex
+    {} or advisory whose evaluation names an EVALUATED_ALLOW_GUARDS guard; "neutral-unknown" for any other Codex bare {}
+    (the shim emits it for a real neutral verdict, a warm miss and a caught internal error alike);
     else "degraded" with the host's neutral answer. Only "engine" may count as governance evidence.
 
     `pending`, a list, receives (shim, nag) when the shim finished in time and merged a DIY nag; a timeout,
@@ -306,7 +318,7 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pendin
         if host == "codex":
             _record_allow(host, box.get("evaluation"), answer)
         if host == "codex" and (answer == {} or _is_codex_advisory(answer)):
-            return answer, NEUTRAL_UNKNOWN
+            return answer, EVALUATED_ALLOW if _names_evaluated_guard(box.get("evaluation")) else NEUTRAL_UNKNOWN
         if host == "grok" and answer.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
             return answer, NEUTRAL_UNKNOWN
         # Trap: a non-deny agy answer is never forwarded as an ask (agy -p auto-approves it); it becomes an

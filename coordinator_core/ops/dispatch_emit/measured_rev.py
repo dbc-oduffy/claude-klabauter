@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Sequence
 
@@ -309,11 +310,21 @@ def _handler(params: dict, repo_root: Path | None = None) -> Dict[str, Any]:
         return {"error": str(exc), "refused": "measured-rev"}
 
 
+class MeasureUnavailable(OSError):
+    """A recorded path exists but its worktree hash could not be read (a stalled or dropped
+    `checkin_blob_sha`): unknown, not drift. `paths` lists them."""
+
+    def __init__(self, paths: Sequence[str]) -> None:
+        self.paths = list(paths)
+        super().__init__("worktree hash unavailable: " + ", ".join(self.paths))
+
+
 def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
-    """Recorded paths whose worktree blob no longer matches the record (None included), plus
-    each `removed` path that exists again. `[]` when `run_dir` holds no record. Hash-only:
-    spawns nothing and reads no object. Raises OSError/ValueError on an unreadable or malformed
-    record; callers fail closed."""
+    """Recorded paths whose worktree blob no longer matches the record, plus each `removed` path
+    that exists again. `[]` when `run_dir` holds no record. Hash-only: spawns nothing and reads
+    no object. A None read of a path that still exists is re-read once; still None raises
+    `MeasureUnavailable` (an OSError, so fail-closed callers stay safe). A path gone from the
+    worktree is drift. Raises OSError/ValueError on an unreadable or malformed record; callers fail closed."""
     record = Path(run_dir) / MEASURED_REV_RECORD
     if not record.is_file():
         return []
@@ -322,7 +333,19 @@ def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
         raise ValueError(f"{record} does not hold a measured-rev record object")
     root = Path(repo_root)
     blobs = data.get("blobs") or {}
-    drifted = [p for p, sha in blobs.items() if commit.checkin_blob_sha(root, p) != sha]
+    drifted: list[str] = []
+    unavailable: list[str] = []
+    for p, sha in blobs.items():
+        got = commit.checkin_blob_sha(root, p)
+        if got is None and os.path.lexists(root / p):
+            got = commit.checkin_blob_sha(root, p)
+            if got is None and os.path.lexists(root / p):
+                unavailable.append(p)
+                continue
+        if got != sha:
+            drifted.append(p)
+    if unavailable:
+        raise MeasureUnavailable(unavailable)
     drifted.extend(p for p in data.get("removed") or [] if (root / p).exists())
     return drifted
 

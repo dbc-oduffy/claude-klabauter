@@ -1072,11 +1072,12 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
     if ask_ctx.get("sizing_rel") and not ask_ctx.get("reserved_parent"):
         _seed_run_base(root, ask_ctx["run_id"], ask_ctx.get("inherited_base"))
         _record_run_base(root, ask_ctx["run_id"])
+    # A raw ask sourced `pm` is the PM's own words: the whole of it is mandatory from the first write.
+    pm_raw_ask = ask_ctx.get("ask_source") == ASK_SOURCE_PM and not ask_ctx.get("sizing_rel")
     run_dir_ = ledger.start(
-        root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask, resumed_from=ask_ctx.get("resumes_ask") or ask_ctx.get("resumed_from"),
+        root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask or pm_raw_ask, resumed_from=ask_ctx.get("resumes_ask") or ask_ctx.get("resumed_from"),
+        chain_parent=ask_ctx.get("chain_parent") or None,
     )
-    if ask_ctx.get("chain_parent"):
-        ledger._write_run(run_dir_, {**(ledger.read_run(run_dir_) or {}), "chain_parent": ask_ctx["chain_parent"]})
     if ask_ctx.get("stop_after") and not (run_dir_ / STOP_AFTER_FILE).is_file():
         write_stop_after_marker(run_dir_, ask_ctx["stop_after"], "dispatch.emit")
     if ask_ctx.get("sizing_rel"):

@@ -114,6 +114,20 @@ def test_conftest_imports_and_sys_path_bare_imports_are_in_the_closure(repo: Pat
     assert "pkg/unrelated.py" not in c.paths
 
 
+def test_root_conftest_path_loaded_root_sibling_is_in_the_closure(repo: Path) -> None:
+    # Witness 779082-2 (ask-20261121T150307-52af06): the root conftest loads drive_root_write_guard.py
+    # by file path; a mirror without it fails pytest_configure (exit 3) and the leg runs zero tests.
+    _write(repo, "conftest.py", 'path = Path(__file__).parent / "drive_root_write_guard.py"\n')
+    _write(repo, "drive_root_write_guard.py", "")
+    _write(repo, "unrelated_root.py", "")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "root sibling")
+    c = ec.test_closure(repo, [], [SEED])
+    assert c.paths is not None
+    assert "drive_root_write_guard.py" in c.paths
+    assert "unrelated_root.py" not in c.paths
+
+
 def test_conftest_pytest_plugins_and_their_imports_are_in_the_closure(repo: Path) -> None:
     _write(repo, "conftest.py", 'pytest_plugins = [\n    "pkg.testing.watchdog",\n    "absent.plugin",\n]\n')
     _write(repo, "pkg/testing/__init__.py", "")

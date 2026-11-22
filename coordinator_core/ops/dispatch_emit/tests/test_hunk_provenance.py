@@ -159,6 +159,24 @@ def test_unknown_baseline_holds(world):
     assert "unreadable" in found[0].detail
 
 
+def test_tracked_path_without_baseline_settles_to_head_with_the_no_baseline_owner(world):
+    world.head(_text({}))
+    world.tree(_text({4: "X"}))
+    settled: dict = {}
+    found = hp.unproduced_hunks(world.root, ME, [PATH], own_plan="plan-a", settled=settled)
+    assert found == []
+    assert settled[PATH]["owner"] == hp.NO_BASELINE_OWNER
+    assert settled[PATH]["blob"] == f"{1:040x}"
+
+
+def test_untracked_path_without_baseline_stays_a_finding_even_with_settled(world):
+    world.tree(_text({4: "X"}))
+    settled: dict = {}
+    found = hp.unproduced_hunks(world.root, ME, [PATH], own_plan="plan-a", settled=settled)
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
+    assert settled == {}
+
+
 @pytest.mark.parametrize("rel", [f"docs/delivery/{ME}.md", f"state/warp/{ME}/record.json"])
 def test_run_own_artifact_without_baseline_resolves_as_own(world, rel):
     world.head(b"")
