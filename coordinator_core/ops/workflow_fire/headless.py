@@ -489,20 +489,20 @@ def _host_gate(params: dict, record: dict, artifacts: Path, timeout: float) -> t
                ).hexdigest()}
     artifacts.mkdir(parents=True, exist_ok=True)
     path = artifacts / "consumed.json"
-    digest = hashlib.sha256(json.dumps(receipt, indent=2).encode("utf-8")).hexdigest()
     _save(path, receipt)
-    return result, digest
+    # Digest the bytes on disk: text-mode writes translate newlines on Windows, so a re-encoded dump differs.
+    return result, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _read_host_gate_receipt(path: Path, record: dict, digest: str | None) -> dict:
     if digest is None or not path.is_file():
         raise ValueError("host gate receipt missing")
-    raw = path.read_text(encoding="utf-8")
-    receipt = json.loads(raw)
+    raw = path.read_bytes()
+    receipt = json.loads(raw.decode("utf-8"))
     if (not isinstance(receipt, dict)
             or any(receipt.get(key) != value for key, value in _host_gate_binding(record).items())):
         raise ValueError("host gate receipt binding mismatch")
-    if hashlib.sha256(raw.encode("utf-8")).hexdigest() != digest:
+    if hashlib.sha256(raw).hexdigest() != digest:
         raise ValueError("host gate receipt content mismatch")
     artifacts = {"consumed": receipt}
     for name in _GATE_ARTIFACTS:
