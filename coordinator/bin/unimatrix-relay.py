@@ -2068,7 +2068,10 @@ def probe_specs(platform=None):
     }
 
 
-def main():
+def main() -> None:
+    # An sshd forced command may start with no env at all (administrators_authorized_keys, cmd.exe
+    # default shell): pin the settings home before any roster helper or child reads it strictly.
+    os.environ.setdefault("COORDINATOR_SETTINGS_HOME", str(settings_home()))
     try:
         import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
         from cc_invoke import ensure_engine_on_path
