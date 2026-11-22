@@ -2747,8 +2747,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "0eb91e082c74eab86448a5502791234d4c428132",
-    "coordinator_core/_engine_stamp": "9d711557810418422439e54bb3485c50f7c14efc",
+    "coordinator_core/_engine_published_at": "782b04791ac4dc995df525cbff5e332914674e0f",
+    "coordinator_core/_engine_stamp": "bd5c385dd77d0f5cd6f52074e831227ae897239d",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -12764,7 +12764,7 @@
     "coordinator_core/warm/pytest_basetemp_sweep.py": "ffd66c76adc15eb0e4d3e6f38a0e6356b7228c65",
     "coordinator_core/warm/sandboxed_spawn.py": "48f52eb294ba38ddca295046b8b322c2534f3252",
     "coordinator_core/warm/serve_classifier.py": "81e966c1521dd141063556cc558b0d26db20997f",
-    "coordinator_core/warm/server.py": "1c74e640ab5c97396a2193e69e8fe558cfa4aaf3",
+    "coordinator_core/warm/server.py": "c01d19fdd81d620c678e242822ff23616dcbd923",
     "coordinator_core/warm/settings.py": "2dd31b738a88a3b46cb71c1d24332a7088953890",
     "coordinator_core/warm/settings_home_claim.py": "9f626ce1df8eaed6777d2eb094391cae7371249d",
     "coordinator_core/warm/skew.py": "7f6367c6d2a20b08075038329411c72d5d05c39a",
@@ -13016,6 +13016,7 @@
     "coordinator_core/warm/tests/test_stop_own_child_trusted_caller_pid.py": "6edda9a49bd1f7fba7c5048d3a617e99b0fa5a5d",
     "coordinator_core/warm/tests/test_stop_refuses_new_dispatch.py": "44085a77a81fb4f0b0bb5ef2981620049c8f5325",
     "coordinator_core/warm/tests/test_stuck_pool_request_reads_terminal.py": "8972856538e30200b416da02e48d0469066a9f20",
+    "coordinator_core/warm/tests/test_submit_ask_lane_budget.py": "ec9254a99217a7784fa6cdfd10fc0c07215a3911",
     "coordinator_core/warm/tests/test_supervisor.py": "aa15fd34503e025fccbf0e8087b395da4d81d44a",
     "coordinator_core/warm/tests/test_supervisor_declares_its_route.py": "784a43ba147ab426565b59b0d9965579a71efa3f",
     "coordinator_core/warm/tests/test_supervisor_hook_serves_real_guard.py": "3764a7b2ac73aba74688ec8244b94ca3d0a05827",
@@ -13669,5 +13670,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "3f2880812235257026970ad3d580df00c21938b2"
+  "source_head": "b70b22cc381d602c06cf656d19bc4550601314c8"
 }
