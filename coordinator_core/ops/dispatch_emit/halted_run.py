@@ -147,7 +147,6 @@ def _write(record_dir: Path, payload: dict) -> Path:
 
     halted_withheld_index.forget_fresh()
     _track_lookup(Path(record_dir), payload)
-    _index_call("record_claim", Path(record_dir))
     return target
 
 

@@ -2747,8 +2747,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "6bd39426f4e0e257eae2569fa11301e845cc5424",
-    "coordinator_core/_engine_stamp": "c6e241b92320ead154b13faa8873572c0f9fcc98",
+    "coordinator_core/_engine_published_at": "eef64ad17473e2802e74b1804641bb10f7e8d3c9",
+    "coordinator_core/_engine_stamp": "e543a39eaabdd026eb7d4bc0c127eb507e89c866",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5623,7 +5623,7 @@
     "coordinator_core/host_hooks/cold_chain.py": "5a49a33015a4dbb0249c26118bfed8e70e8773cb",
     "coordinator_core/host_hooks/contract.py": "7bbce195deaf7961569a691f04ea84928b8dfc18",
     "coordinator_core/host_hooks/grok_adapter.py": "3858c7571d4a2766d8c0431c148a5829952f28ff",
-    "coordinator_core/host_hooks/session_context.py": "53a24e2a501177264ad3ca7de831f3476f38a507",
+    "coordinator_core/host_hooks/session_context.py": "eb07ec76738866597d16266e6975ccc2d155749a",
     "coordinator_core/host_hooks/shim.py": "baeda1befaec41eb88a74879525750e0c6889f28",
     "coordinator_core/host_hooks/tests/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/host_hooks/tests/test_agy_adapter.py": "66acce101018c6b359235b9efeac2140d4267d83",
@@ -5644,7 +5644,7 @@
     "coordinator_core/host_hooks/tests/test_grok_em_subagent_split.py": "4edbab82edb15aa1207a6ac644c54fc8f3a41ddd",
     "coordinator_core/host_hooks/tests/test_headless_ask_class_guard_map.py": "a1973701940ca3c3939f2040eaea5f2b1238738b",
     "coordinator_core/host_hooks/tests/test_host_guard_parity.py": "674dd34bd6c988c13d8b8f159783ed271ed2266a",
-    "coordinator_core/host_hooks/tests/test_session_context.py": "fbbd385f43f0fe5461fc299ed320f70dd3f60e0b",
+    "coordinator_core/host_hooks/tests/test_session_context.py": "ef8d9196d6bfc71ce4d5ff2246c417346b0fe3a3",
     "coordinator_core/host_hooks/tests/test_shim.py": "0c4a5e0334d80347089d451291bd4722a7cd1cf8",
     "coordinator_core/host_hooks/tests/test_shim_diy_nag_zero_op.py": "1ab0435bf5dd9677495fda6fc249fb2c281e2c4f",
     "coordinator_core/host_hooks/tests/test_shim_end_to_end.py": "051a6f73d8d5f6179095c18e0643af50ba6fc034",
@@ -6567,7 +6567,7 @@
     "coordinator_core/ops/dispatch_emit/halted_record_ledger.py": "02e6048431db91e3f603717adb333e00fcc4fe56",
     "coordinator_core/ops/dispatch_emit/halted_record_request.py": "923634bf4af85553cba5d8efe1b76125c8a7ceca",
     "coordinator_core/ops/dispatch_emit/halted_rows_commit.py": "d23a1a13a344783ee7d0e995f54d8eac49977fd6",
-    "coordinator_core/ops/dispatch_emit/halted_run.py": "e0dbb3cef2f0bc487dfdfe47b6d40d09a913c9c8",
+    "coordinator_core/ops/dispatch_emit/halted_run.py": "a6ed39deef902b93c0b95d103aa1a71b6d9522a0",
     "coordinator_core/ops/dispatch_emit/halted_run_close_commit.py": "7669e8fbb5c72fe8094836db2f5968bbdcbfb60d",
     "coordinator_core/ops/dispatch_emit/halted_run_landed.py": "56ee64e6508c3ce73dc419e9a48d0024d37d1eb4",
     "coordinator_core/ops/dispatch_emit/halted_run_rejected.py": "c1723b63ab06058fcc2c8b078f083e18c4c67742",
@@ -13682,5 +13682,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "9eb4fb0b46e0c130663ddebf34ba5909d1172a70"
+  "source_head": "1cc0d2575ec081c8bae19e938b784cb92c479ee9"
 }
