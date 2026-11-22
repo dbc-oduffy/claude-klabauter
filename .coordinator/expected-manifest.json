@@ -1002,7 +1002,7 @@
     "coordinator/bin/publish-resolve-target.py": "40f0e91956f7a039b8bc9f0cc8cfdad5aceb6d7c",
     "coordinator/bin/publish-strip-inventory.cmd": "aefb208c57a959ea667f0564d73a85633d4c3583",
     "coordinator/bin/publish-strip-inventory.py": "ec3c81f36bc3533f16a7d09dadfe8c8a817c33a8",
-    "coordinator/bin/published-name-map.json": "967ca0e2c861b3ea7fa90b1c3c3ffdc9cef85220",
+    "coordinator/bin/published-name-map.json": "0967ef424bce6791893e9a57bb952f80fd536e93",
     "coordinator/bin/push-hold.cmd": "7c295de7e219b2475216dab124bc306bacd64025",
     "coordinator/bin/push-hold.py": "bd67283afe94b1381853652adfe0f0e3164361f9",
     "coordinator/bin/query-commit-closures.cmd": "2284445c76886198e1bc9a9bf05e85d618fc2dd6",
@@ -2205,7 +2205,7 @@
     "coordinator/bin/tests/test_unimatrix_relay_send_to.py": "4f26fbbf5bb90bacd6f2ed814c5290ed8c7f8d46",
     "coordinator/bin/tests/test_unimatrix_relay_session_socks.py": "4bd5ac59892d091ba823fdabf5993be7bf908107",
     "coordinator/bin/tests/test_unimatrix_relay_sessions.py": "b62bd6480eb4a2ef0ebfbad53c8ff16eaad027f6",
-    "coordinator/bin/tests/test_unimatrix_relay_settings_home_unset.py": "e55ed469f173b212f7e954df9c36770234331ed7",
+    "coordinator/bin/tests/test_unimatrix_relay_settings_home_unset.py": "ae340a6e884ff3841ad6060b1d07ec013e246388",
     "coordinator/bin/tests/test_unimatrix_relay_specs_mode.py": "5b53230f135415f0e8f1f415bdec03698efbc8e0",
     "coordinator/bin/tests/test_unimatrix_reply_inbox.py": "17280eebc044f2381e6e34ef799e5ee6d90f78a9",
     "coordinator/bin/tests/test_unimatrix_reply_reaches_addressed_or_reports.py": "e211823c5b7583a0f3e0a769f977041148d9f9e8",
@@ -2388,7 +2388,7 @@
     "coordinator/bin/unimatrix-rekey.py": "d238b0696a3972c38f3a4a6516635b826343f979",
     "coordinator/bin/unimatrix-relay.cmd": "81793e644a38dfe4c2e65721049c8f5854b1fd79",
     "coordinator/bin/unimatrix-relay.ps1": "56ea1302080de3160819a5610e81a47b125f1a03",
-    "coordinator/bin/unimatrix-relay.py": "c34a622fec40274a2b086eac9f53013f01800f37",
+    "coordinator/bin/unimatrix-relay.py": "cff4f500e5046415f05a74bdc29c711b0203a74f",
     "coordinator/bin/unimatrix-reshape.cmd": "18123814642126429f008aae3437e2d5e3ab2eb7",
     "coordinator/bin/unimatrix-reshape.ps1": "0389ee4abd5ba37a87d398fe2f61f1d28c2cd2bf",
     "coordinator/bin/unimatrix-reshape.py": "4d7d16fce4a79ea205dfe1e62b06c53578f01eb0",
@@ -2747,8 +2747,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "d485d6fef3dc824559e7be754b86cfb3a0c35362",
-    "coordinator_core/_engine_stamp": "2a16c1586ebd44634a6a8316b9003ec448747949",
+    "coordinator_core/_engine_published_at": "d0dbb114e9fb4180f58c83b33247d0fbe40350b9",
+    "coordinator_core/_engine_stamp": "8bdf4c132cd6151b3e1daefdf574fc867f4abceb",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -13679,5 +13679,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "44d143c3b32036c4879cf07c02931ecfdc252103"
+  "source_head": "8a88f089d99903d2a1c4f707fbce43288162917d"
 }

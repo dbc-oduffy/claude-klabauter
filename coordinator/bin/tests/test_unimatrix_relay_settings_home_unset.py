@@ -45,6 +45,17 @@ def test_relay_roster_mode_starts_without_the_variable(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
+@pytest.mark.parametrize("command", ["send-session 1 d n s", "send-named 1 d n", "send-to 1 d", "send 1"])
+def test_relay_send_verbs_start_without_the_variable(tmp_path, command):
+    # Mini/Machine-b -> Machine-a sends died here (ssh 255, MissingSettingsError) on 2026-11-22.
+    done = subprocess.run([sys.executable, str(BIN / "unimatrix-relay.py"), "--peer", "box"], input=b"",
+                          env=bare_env(tmp_path, command), capture_output=True, timeout=60)
+    assert b"MissingSettingsError" not in done.stderr
+    assert b"missing-settings" not in done.stderr + done.stdout
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_file_relay_put_lands_under_the_default_home(tmp_path):
     done = subprocess.run([sys.executable, str(BIN / "unimatrix-file-relay.py"), "--peer", "box"], input=b"",
                           env=bare_env(tmp_path, "put thing"), capture_output=True, timeout=60)
