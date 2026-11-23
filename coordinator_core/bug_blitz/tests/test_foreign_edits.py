@@ -61,6 +61,24 @@ def test_foreign_dirty_clean_tree_is_empty(repo):
     assert foreign_dirty(repo, []) == []
 
 
+def test_foreign_dirty_is_empty_in_a_worker_clone_and_still_reports_in_main(repo, monkeypatch):
+    from coordinator_core.bug_blitz import worker_clone
+
+    clone = worker_clone.provision(repo, "run-c4", is_live=lambda *_: False)
+    (clone / "pkg" / "other.py").write_text("OTHER = 'edited in clone'\n")
+    (clone / "pkg" / "new.py").write_text("NEW = 1\n")
+    (repo / "pkg" / "other.py").write_text("OTHER = 'peer dirt'\n")
+    spawns = []
+    real = foreign_edits.run_git
+    monkeypatch.setattr(foreign_edits, "run_git", lambda *a, **k: spawns.append(a) or real(*a, **k))
+
+    assert foreign_dirty(clone, []) == []
+    assert spawns == []
+    assert foreign_dirty(repo, []) == ["pkg/other.py"]
+    assert len(spawns) == 1
+    worker_clone.reap(repo, "run-c4")
+
+
 def test_foreign_dirty_rename_source_is_not_a_path(repo):
     _git(repo, "mv", "pkg/other.py", "pkg/moved.py")
     assert sorted(foreign_dirty(repo, [])) == ["pkg/moved.py"]

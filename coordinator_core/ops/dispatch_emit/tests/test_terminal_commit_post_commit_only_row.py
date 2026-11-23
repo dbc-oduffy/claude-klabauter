@@ -25,7 +25,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 RUN = "run1"
 SIZING = "state/sizings/20260101-a.yaml"
 _SID = "11111111-2222-3333-4444-555555555555"
-_VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+_VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 _C2_PARTIAL = "PARTIAL: sha reply owed after the commit\n"
 
 

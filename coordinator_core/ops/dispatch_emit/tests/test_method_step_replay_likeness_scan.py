@@ -77,7 +77,7 @@ def _plan(ids, b_fence):
 
 
 def _verdict(ledger, **per_row):
-    return {"items": [{"id": i.id, "status": "met", **per_row.get(i.id, {})} for i in ledger.items]}
+    return {"items": [{"id": i.id, "status": "met", "met_by": "a.py", **per_row.get(i.id, {})} for i in ledger.items]}
 
 
 def _reasons(out, rid):

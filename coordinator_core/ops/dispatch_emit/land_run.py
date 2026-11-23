@@ -4185,6 +4185,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if not (unmet.get(ALREADY_LANDED_KEY) and unmet.get("committed")):
                 return unmet
             token_state["since_halt_close"] = unmet
+    from coordinator_core.ops.dispatch_emit import terminal_commit_ledger as _tcl_dep
+
+    ledger_departures = _tcl_dep._ledger_departures(open_rows)
     ledger_met = None
     if ledger is not None and not open_rows:
         met_ids = _ledger_met_ids(params.get("ledger_verdict"))
@@ -5191,9 +5194,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if credited_ids:
         trailers.append("Lands-Chunks: " + ", ".join(credited_ids))
     trailers.extend(f"{contract.UNLANDED_ROW_TRAILER}: {row} {p} {reason}" for row, p, reason in unlanded)
-    trailers.extend(
-        "Requirement-Open: " + " ".join((str(r["id"]) + " " + str(r["reason"])).split()) for r in open_rows
-    )
+    trailers.extend(_tcl_dep._requirement_trailers(open_rows))
     trailers.extend(
         f"Verified-Only: {rid_} -- {' '.join(ev['command'].split())} -> {' '.join(ev['observed'].split())}"
         for rid_, ev in sorted(_verified_only(params.get(TERMINAL_RESUME_LEDGER_PARAM)).items())
@@ -5847,6 +5848,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["ledger_partial"] = ledger_partial
     if ledger_advisory:
         reply["ledger_advisory"] = ledger_advisory
+    if ledger_departures:
+        reply["ledger_departures"] = ledger_departures
     if halted_hold_advisory:
         reply["halted_hold_advisory"] = halted_hold_advisory
     if abs_path_advisory:

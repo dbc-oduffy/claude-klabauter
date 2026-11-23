@@ -948,7 +948,8 @@ DISPATCH_TIMEOUT_SECS: float = 30.0
 _COLD_AWAIT_CEILING_FACTOR: float = 5.0
 # Cold mutating ops reported hung at their own backstop, not the ceiling: the gate answers
 # a bounded question, so a handler past its backstop is stuck, and waiting 5x only delays the
-# loud failure. Retry stays unsafe until a refire-adopts-minted-run test pins idempotence.
+# loud failure. Its re-run is idempotent (pinned by test_ask_gate_late_commit_reads_back), so the
+# hung envelope reports retry_safe.
 _COLD_FAIL_AT_BACKSTOP_OPS: frozenset = frozenset({"dispatch.ask_gate"})
 
 
@@ -3001,6 +3002,7 @@ def _hung_past_ceiling_envelope(
         from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE as code  # noqa: PLC0415
     except Exception:  # pragma: no cover - defensive
         code = INTERNAL_ERROR
+    idempotent = method in _COLD_FAIL_AT_BACKSTOP_OPS
     return {
         "jsonrpc": "2.0",
         "id": id_,
@@ -3009,12 +3011,18 @@ def _hung_past_ceiling_envelope(
             "message": (
                 f"cold-run dispatch hung: op {method!r} was still running after "
                 f"{round(waited, 3)}s (ceiling {ceiling}s); it may have completed -- "
-                f"reconcile before any retry. Retry is NOT safe."
+                + (
+                    "re-run the same call once: it reads back the committed state."
+                    if idempotent
+                    else "reconcile before any retry. Retry is NOT safe."
+                )
             ),
             "data": {
-                "retry_safe": False,
+                "retry_safe": idempotent,
                 "next_action": (
-                    f"reconcile: inspect the state {method!r} writes (run record, sizing) "
+                    f"re-run {method!r} with the same params once"
+                    if idempotent
+                    else f"reconcile: inspect the state {method!r} writes (run record, sizing) "
                     f"before any refire"
                 ),
                 "diagnosis": {

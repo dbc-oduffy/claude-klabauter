@@ -114,6 +114,24 @@ def test_targets_submission_emits_the_grind_and_rewrites_the_call(repo, monkeypa
     _no_grant_records(repo)
 
 
+def test_decisions_name_the_run_clone_path_without_provisioning_it(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import tempfile
+
+    from coordinator_core.bug_blitz import worker_clone
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        env = _call(repo, {"targets": "red-set"})
+
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+    work_root = Path(decisions["work_root"])
+    assert work_root.parent.name == worker_clone.CLONES_DIRNAME and work_root.name == RUN_ID
+    assert not work_root.exists()
+    assert worker_clone.clone_root(repo, RUN_ID) is None
+    assert len(spawns) == _budget(), [s.argv for s in spawns]
+
+
 def _git(root: Path, *args: str) -> str:
     import subprocess
 

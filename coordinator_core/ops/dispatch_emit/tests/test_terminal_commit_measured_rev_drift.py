@@ -15,7 +15,7 @@ from pathlib import Path
 
 RUN = "ask-20261014T000000-abc123"
 REL = "state/sizings/2026-10-14-drift.yaml"
-VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 
 
 @pytest.fixture

@@ -10,8 +10,9 @@ What this guard is, in four points (DoE tripwire A-BOX-CAP-COUNTS-COMMANDS-NOT-A
      every-workspace runs, UE launches, reindexes.
   4. A caller's claim of need never admits. No justification, priority or "light" field is read.
 
-An agent's python or pytest run (`runs_python_only`) skips every leg below: it is logged and, for a
-broad suite, advised; it is never denied.
+An agent's plain python run (`runs_python_only`) skips every leg below: it is logged, never denied.
+A command carrying a pytest argv never takes that branch: `_test_run_admission.test_run_verdict`
+decides it (identity, scope, ceiling), a deny returns through `_deny_text`, an allow is logged.
 
 Legs, in order, each denying once (no hold, sleep or retry):
   identity     the main thread, or an agent_type exactly on heavy_command_allowlist.txt that a
@@ -420,20 +421,32 @@ def _read_box_hold():
 
 
 PYTHON_ADMITTED = "python-admitted"
-_BROAD_SUITE_ADVISORY = (
-    "Advisory: a broad or full pytest suite is the EM's run. Scope it with %s."
-)
+
+def _python_admitted(payload: Mapping[str, Any], command: str, cls, reason: str = "python run admitted") -> Any:
+    """An agent's plain python run is never denied: it is logged. Memory admission for it is the
+    START/END protocol's."""
+    _append_log(_record(payload, command, cls, PYTHON_ADMITTED, reason))
+    return None
 
 
-def _python_admitted(payload: Mapping[str, Any], command: str, cls) -> Any:
-    """An agent's python or pytest run is never denied: it is logged, and a broad suite draws an
-    advisory record. Memory admission for it is the START/END protocol's."""
-    from coordinator_core.bash_guards._heavy_command_class import SCOPED_PYTEST_REMEDY
+def _pytest_argvs(command: str) -> List[List[str]]:
+    """Every argv in `command` that runs pytest as its command; empty when none or unparseable."""
+    from coordinator_core.bash_guards._heavy_command_class import _flat_argvs, _pytest_args
 
-    _append_log(_record(payload, command, cls, PYTHON_ADMITTED, "python run admitted"))
-    if cls.heavy_class is not HeavyClass.TEST_TIER or cls.scoped:
-        return None
-    return _shell_cap_warning(_BROAD_SUITE_ADVISORY % SCOPED_PYTEST_REMEDY)
+    try:
+        return [a for a in _flat_argvs(command) if _pytest_args(a) is not None]
+    except Exception as exc:  # noqa: BLE001 -- an unparseable command admits, and says so
+        print("test-run-admission advisory: command unparseable (%s)" % type(exc).__name__, file=sys.stderr)
+        return []
+
+
+def _test_run_envelope(verdict) -> Any:
+    return _deny_text(
+        verdict.leg,
+        verdict.fact,
+        _route("the test run", verdict.remedy),
+        legacy="Alternative: %s" % verdict.remedy,
+    )
 
 
 def _is_workflow_agent(payload: Mapping[str, Any]) -> bool:
@@ -860,8 +873,18 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Any:
             _flag_runaway_workers(config, payload, command, cls, anchor, census, snapshot[0] if snapshot else ())
         return envelope
 
-    if payload.get("agent_id") and runs_python_only(command, payload.get("tool_input"), payload.get("cwd")):
-        return _python_admitted(payload, command, cls)
+    if payload.get("agent_id"):
+        pytest_argvs = _pytest_argvs(command)
+        if pytest_argvs:
+            from coordinator_core.bash_guards._test_run_admission import test_run_verdict
+
+            verdict = test_run_verdict(payload, pytest_argvs, payload.get("cwd") or os.getcwd(), is_subagent=True)
+            if not verdict.allowed:
+                return denied(verdict.leg, _test_run_envelope(verdict))
+            if runs_python_only(command, payload.get("tool_input"), payload.get("cwd")):
+                return _python_admitted(payload, command, cls, "test run admitted")
+        elif runs_python_only(command, payload.get("tool_input"), payload.get("cwd")):
+            return _python_admitted(payload, command, cls)
 
     if heavy and not _bypassed(LEG_IDENTITY, payload, command):
         envelope = _identity_leg(payload, command, heavy_name, cls)

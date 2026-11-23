@@ -286,3 +286,36 @@ def test_a_wrapped_far_frame_is_delivered_to_the_endpoint_of_its_name(tmp_path, 
     a = mod.parse_mux_args([str(tmp_path / "m.log"), "--names-file", str(names), "--remote", "farbox", "--key", "k"])
     mod._mux_run(a)
     assert [e for e, _ in delivered] == ["/tmp/a.sock"] and b'"message": "hi"' in delivered[0][1]
+
+
+SECRET_TOKEN = "f" * 32
+
+
+def _roster_rows(relay, tmp_path, monkeypatch, capsys, *, mirrors):
+    sess = tmp_path / "home-sessions"
+    sess.mkdir()
+    live = {"pid": os.getpid(), "name": "live", "messagingSocketPath": "/tmp/live.sock"}
+    mirror = {"pid": os.getpid() + 1, "name": "far", "messagingSocketPath": "/tmp/far.sock",
+              "unimatrixMirror": True}
+    found = []
+    for d, key in ((live, "live.key"), (mirror, "mirror.key")):
+        (sess / key).write_text(json.dumps({"peerToken": SECRET_TOKEN, "pidDomain": "d"}), encoding="utf-8")
+        found.append((d["pid"], d, key))
+    monkeypatch.setattr(relay, "SESS", str(sess))
+    monkeypatch.setattr(relay, "entries", lambda: found)
+    monkeypatch.setattr(relay, "engine_fields", lambda: {})
+    relay.roster(mirrors=mirrors)
+    out = capsys.readouterr().out
+    return out, [json.loads(line) for line in out.splitlines()]
+
+
+@pytest.mark.parametrize("mirrors", [False, True])
+def test_roster_never_emits_a_token_or_key_body(tmp_path, monkeypatch, capsys, mirrors):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    relay = _load("process_bound_relay_roster", "unimatrix-relay.py")
+    out, rows = _roster_rows(relay, tmp_path, monkeypatch, capsys, mirrors=mirrors)
+    assert len(rows) == (2 if mirrors else 1)
+    assert SECRET_TOKEN not in out and "peerToken" not in out
+    for row in rows:
+        assert row.get("key", "") == "", f"roster row carries a key body: {row}"
+        assert not {"token", "peerToken", "peer_token"} & set(row)

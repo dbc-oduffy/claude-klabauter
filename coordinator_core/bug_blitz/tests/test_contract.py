@@ -20,6 +20,7 @@ def _rec(outcome, **kw):
         selected=("a/test_a.py",),
         outcome=outcome,
         exit_code=0,
+        base_sha="a" * 40,
     )
     base.update(kw)
     return c.RunnerRecord(**base)
@@ -100,6 +101,17 @@ def test_schema_rejects_non_list_holders() -> None:
     doc["foreign_holders"] = {"a/x.py": "s1"}
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(doc, _schema())
+
+
+def test_base_sha_is_serialized_required_and_nonempty_on_passed() -> None:
+    assert _rec("passed").to_json()["base_sha"] == "a" * 40
+    doc = _rec("passed").to_json()
+    del doc["base_sha"]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(doc, _schema())
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(_rec("passed", base_sha="").to_json(), _schema())
+    jsonschema.validate(_rec("failed", exit_code=1, base_sha="").to_json(), _schema())
 
 
 def test_schema_rejects_extra_field() -> None:

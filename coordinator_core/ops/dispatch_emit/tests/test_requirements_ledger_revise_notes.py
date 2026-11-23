@@ -66,7 +66,7 @@ def test_row_superseded_by_a_live_note_commits(repo) -> None:
     rl.revise(repo, RUN, note="the third thing is ruled out; deleted outright.")
     assert rl.note_ids(rl.run_dir(repo, RUN)) == ["N1"]
     items = [
-        *({"id": m, "status": "met"} for m in met),
+        *({"id": m, "status": "met", "evidence": "verified"} for m in met),
         {"id": r3, "status": "superseded", "superseded_by": "N1"},
     ]
     ledger = rl.read_ledger(repo, rl.run_dir(repo, RUN))
@@ -79,9 +79,9 @@ def test_row_superseded_by_an_unrecorded_note_refuses_naming_the_id(repo) -> Non
     rl.revise(repo, RUN, note="a note exists, but N9 is not it.")
     ledger = rl.read_ledger(repo, rl.run_dir(repo, RUN))
     items = [
-        *({"id": m, "status": "met"} for m in met),
+        *({"id": m, "status": "met", "evidence": "verified"} for m in met),
         {"id": r3, "status": "superseded", "superseded_by": "N9"},
-        {"id": "N1", "status": "met"},
+        {"id": "N1", "status": "met", "evidence": "verified"},
     ]
     failures = rl.judge(ledger, {"items": items}, note_ids=rl.note_ids(rl.run_dir(repo, RUN)))["failures"]
     assert [f["id"] for f in failures] == [r3] and "N9" in failures[0]["reason"]
@@ -92,7 +92,7 @@ def test_note_absent_from_the_live_set_does_not_resolve_a_supersession(repo) -> 
     *met, r3 = _three_rows(repo)
     ledger = rl.read_ledger(repo, rl.run_dir(repo, RUN))
     items = [
-        *({"id": m, "status": "met"} for m in met),
+        *({"id": m, "status": "met", "evidence": "verified"} for m in met),
         {"id": r3, "status": "superseded", "superseded_by": "N1"},
     ]
     failures = rl.judge(ledger, {"items": items}, note_ids=[])["failures"]

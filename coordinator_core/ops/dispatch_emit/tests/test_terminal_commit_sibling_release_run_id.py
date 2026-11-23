@@ -63,7 +63,7 @@ def test_held_successor_fires_and_close_job_keeps_the_script_stem(tmp_path: Path
             "incomplete_chunks": [],
             "session_id": driver.SESSION_ID,
             "inline_review": copy.deepcopy(driver.INLINE_REVIEW),
-            "ledger_verdict": {"items": [{"id": "R1", "status": "met"}]},
+            "ledger_verdict": {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}]},
         },
         repo_root=repo / ".git",
     )

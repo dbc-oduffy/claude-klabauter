@@ -236,15 +236,47 @@ def _spawn(argv: Sequence[str], cwd: Path, timeout: int) -> tuple[int, str]:
         return _TIMEOUT_EXIT, out + f"\n[TIMEOUT] exceeded {timeout}s\n"
 
 
+def _in_clone(cwd: Path) -> bool:
+    from coordinator_core.bug_blitz.worker_clone import base_sha
+
+    return bool(base_sha(cwd))
+
+
+def _judged_sha(root: Path) -> str:
+    """Sha of the tree a run judges: a worker clone's provisioned sha (no spawn), else `root`'s HEAD; '' when unresolvable."""
+    from coordinator_core.bug_blitz.worker_clone import base_sha
+
+    sha = base_sha(root)
+    if sha:
+        return sha
+    try:
+        proc = run_git(["rev-parse", "HEAD"], cwd=str(root))
+    except Exception:
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def _clone_pytest(resolved: Sequence[str], cwd: Path) -> tuple[list[str], dict[str, str]]:
+    """(argv, env) for a pytest in a worker clone: the editable install resolves `coordinator_core` to the main
+    checkout, so the clone root leads PYTHONPATH and is the pytest rootdir; outside a clone, unchanged."""
+    env = spawn_depth.child_env(os.environ)
+    argv = list(resolved)
+    if _in_clone(cwd):
+        argv[3:3] = [f"--rootdir={cwd}"]
+        env["PYTHONPATH"] = os.pathsep.join(p for p in (str(cwd), env.get("PYTHONPATH", "")) if p)
+    return argv, env
+
+
 def _spawn_pytest_capped(resolved: Sequence[str], cwd: Path, timeout: int) -> tuple[int, str]:
     """Run a pytest argv inside a capped Job Object with the depth sentinel; `close` always runs, ending the tree."""
     from coordinator_core.diagnostics import contained_run
 
+    argv, env = _clone_pytest(resolved, cwd)
     proc, close = contained_run.spawn_in_capped_job(
-        list(resolved),
+        argv,
         popen_kwargs=dict(
             cwd=str(cwd),
-            env=spawn_depth.child_env(os.environ),
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -287,13 +319,15 @@ def run(
     """Select, admit and run one row's targeted tests; the returned record carries the outcome.
 
     `committed_head` judges committed HEAD with no uncommitted overlay (the already-fixed and
-    NOT_REPRODUCED question); the default judges HEAD plus the `touched` edits.
+    NOT_REPRODUCED question); the default judges HEAD plus the `touched` edits. A `repo_root` that is a
+    provisioned worker clone is judged at its provisioned sha.
     """
     from coordinator_core.testing import tier_t_slots
 
     start = time.monotonic()
     repo_root = Path(repo_root)
     row_id, _ = _load_row(Path(row_path))
+    judged_sha = _judged_sha(repo_root)
 
     def record(outcome, *, runner: str = "", argv=(), selected=(), exit_code=None, failing=(), foreign_holders=()) -> RunnerRecord:
         return RunnerRecord(
@@ -305,6 +339,7 @@ def run(
             exit_code=exit_code,
             failing_ids=tuple(failing),
             foreign_holders=tuple(foreign_holders),
+            base_sha=judged_sha,
             process_s=round(time.monotonic() - start, 3),
         )
 
@@ -342,6 +377,9 @@ def run(
             print("targeted-test-run: no Tier-T slot free within the wait", file=sys.stderr)
             return record(OUTCOME_NO_RUNNER, runner=runner, argv=flat_argv, selected=selected)
         outcome, worst, failing, holders = _judge(repo_root, touched, plans, timeout, committed_head)
+    if outcome == OUTCOME_PASSED and not judged_sha:
+        print("targeted-test-run: passed, but the judged sha could not be resolved; no `passed` without a base_sha", file=sys.stderr)
+        return record(OUTCOME_NO_RUNNER, runner=runner, argv=flat_argv, selected=selected)
     return record(
         outcome,
         runner=runner,
@@ -440,10 +478,37 @@ def write_record(rec: RunnerRecord, path: Path) -> None:
     path.write_text(json.dumps(rec.to_json(), indent=2) + "\n", encoding="utf-8")
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """CLI body: exit code per outcome (`contract.EXIT_CODES`), 2 for usage errors."""
+def provision_main(argv: Sequence[str]) -> int:
+    """`targeted-test-run provision --repo R --run-id ID --work-root P`: provision the run's worker clone, print
+    `{"work_root": ...}`. Exit 1, stderr naming the cause, when git fails or the clone is not at `P`."""
     import argparse
 
+    from coordinator_core.bug_blitz import worker_clone
+
+    ap = argparse.ArgumentParser(prog="targeted-test-run provision")
+    ap.add_argument("--repo", required=True)
+    ap.add_argument("--run-id", required=True)
+    ap.add_argument("--work-root", required=True)
+    args = ap.parse_args(list(argv))
+    try:
+        clone = worker_clone.provision(args.repo, args.run_id)
+    except worker_clone.WorkerCloneError as exc:
+        print(f"targeted-test-run provision: {exc}", file=sys.stderr)
+        return 1
+    if clone.resolve() != Path(args.work_root).resolve():
+        print(f"targeted-test-run provision: clone is at {clone}, not the fire args' {args.work_root}", file=sys.stderr)
+        return 1
+    print(json.dumps({"work_root": clone.as_posix()}))
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI body: exit code per outcome (`contract.EXIT_CODES`), 2 for usage errors; `provision` is its own mode."""
+    import argparse
+
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw[:1] == ["provision"]:
+        return provision_main(raw[1:])
     ap = argparse.ArgumentParser(prog="targeted-test-run", description=__doc__)
     ap.add_argument("--repo", required=True)
     ap.add_argument("--row", required=True)
@@ -451,7 +516,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--record", required=True)
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     ap.add_argument("--committed-head", action="store_true")
-    args = ap.parse_args(list(sys.argv[1:] if argv is None else argv))
+    args = ap.parse_args(raw)
 
     repo_root = Path(args.repo)
     row_path = Path(args.row)
@@ -463,7 +528,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not row_path.is_file():
         ap.error(f"row not found: {row_path}")
 
-    rec = run(repo_root, row_path, args.touched, timeout=args.timeout, committed_head=args.committed_head)
+    rec = run(
+        repo_root, row_path, args.touched, timeout=args.timeout,
+        committed_head=args.committed_head,
+    )
     write_record(rec, record_path)
     print(f"targeted-test-run: {rec.outcome} ({len(rec.selected)} file(s)) -> {record_path}")
     return EXIT_CODES[rec.outcome]

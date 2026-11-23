@@ -38,7 +38,7 @@ REPORT = "reports/X1.md"
 DECLARED = "pkg/declared.py"
 TARGET = "pkg/undeclared.py"
 SEED = "".join(f"line{i}\n" for i in range(1, 13))
-VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 OWN = SEED.replace("line10\n", "own10\n")
 BOTH = OWN.replace("line1\n", "peer1\n")
 

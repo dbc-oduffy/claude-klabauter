@@ -43,8 +43,9 @@ def _sha(data: bytes) -> str:
 def _git(repo: Path, *args: str) -> str:
     out = subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True,
     )
+    assert out.returncode == 0, f"git {args} rc={out.returncode}: {out.stderr}"
     return out.stdout.strip()
 
 
@@ -102,7 +103,7 @@ def test_a_node_reading_a_run_edited_data_file_is_own(world, committed: bool) ->
     root, base = world
     _write(root, DATA, AFTER)
     if committed:
-        _git(root, "add", "-A")
+        _git(root, "add", "--", DATA)
         _git(root, "commit", "-q", "-m", "checkpoint")
     node = f"{READER}::test_rows"
     out = _revert(root, base, node, at_base=[])

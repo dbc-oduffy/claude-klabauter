@@ -27,7 +27,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_prod
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SID = "11111111-2222-3333-4444-555555555555"
-_MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+_MET = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 EDITED, CREATED, CLEAN, REVERTED, FOREIGN = "pkg/edited.py", "pkg/created.py", "pkg/clean.py", "pkg/reverted.py", "pkg/foreign.py"
 
 

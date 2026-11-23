@@ -102,6 +102,23 @@ def test_ansi_is_stripped(tmp_path):
     assert res.tests == (FailingTest("a/test_x.py", "test_y"),)
 
 
+def test_pytest_error_summary_lines_are_targets(tmp_path):
+    p = tmp_path / "failing-tests.txt"
+    p.write_text(
+        "FAILED a/test_x.py::test_y - AssertionError: no\n"
+        "ERROR a/test_x.py::test_z - fixture 'db' not found\n"
+        "ERROR b/test_w.py - ImportError: cannot import name 'q'\n"
+        "ERROR b/test_v.py\n"
+    )
+    res = evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
+    assert [(t.file, t.name, t.message) for t in res.tests] == [
+        ("a/test_x.py", "test_y", "AssertionError: no"),
+        ("a/test_x.py", "test_z", "fixture 'db' not found"),
+        ("b/test_w.py", "", "ImportError: cannot import name 'q'"),
+        ("b/test_v.py", "", ""),
+    ]
+
+
 def test_parametrized_ids_with_spaces_parse_whole(tmp_path):
     p = tmp_path / "ids.txt"
     p.write_text(

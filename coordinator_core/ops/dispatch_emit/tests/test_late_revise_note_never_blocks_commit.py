@@ -15,7 +15,7 @@ def _ledger(*items: rl.Item) -> rl.Ledger:
 
 
 _R1 = _item("R1", "the ask", "ask", "ask")
-_MET_R1 = {"items": [{"id": "R1", "status": "met"}]}
+_MET_R1 = {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}]}
 
 
 def test_late_note_passes_and_is_listed_open_as_arrived_after_the_check() -> None:

@@ -261,6 +261,25 @@ def _run_landed_sha(root: Path, run_id: str) -> Optional[str]:
     return None
 
 
+def _landed_run_stop(root: Path, run_id: str) -> Optional[GateVerdict]:
+    """The `refusal` halt with a `landed` exit when `run_id` is already recorded landed, else None.
+
+    A refire of a landed run re-enters no leg: the halt carries `landed_sha` and spawns nothing."""
+    from coordinator_core.ops.dispatch_emit import halt_refire
+
+    sha = _run_landed_sha(root, run_id)
+    if sha is None:
+        return None
+    reason = f"run {run_id} already landed at {sha[:12]}: a refire has nothing to run"
+    return _halt(
+        HALT_REFUSAL, reason, landed_sha=sha,
+        next_action=halt_refire.exit_next_action(
+            reason=reason, route=halt_refire.ROUTE_LANDED,
+            call=f"dispatch.record_halted_run_landed {{run_id: {run_id}, sha: {sha}}}",
+        ),
+    )
+
+
 def _credit_split_predecessors(root: Path, sizing_rel: str) -> list[str]:
     """Credit the research slice run a split minted when a refire already landed its sizing's work.
 
@@ -1817,6 +1836,10 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
     sizing_rel = params["sizing_path"]
     writes = params.get("writes") or []
     root = main_worktree_root(Path(repo_root))
+    if params.get("run_id"):
+        stopped = _landed_run_stop(root, params["run_id"])
+        if stopped is not None:
+            return stopped.to_json()
     declared = [w for w in params.get("declared_writes") or [] if isinstance(w, str) and w.strip()]
     if declared:
         writes = list(dict.fromkeys([*writes, *declared]))
@@ -2328,16 +2351,32 @@ def token_retired(root: Path, run_id: str) -> bool:
 def reservation_spent(root: Path, run_id: str) -> bool:
     """True when a reserved run id (a fan-out slice's `ask_parent` pin) can no longer be emitted under:
     `token_retired`, or its token was consumed without landing (a retired receipt, no live record).
-    A reservation never fired has none of these and is kept."""
+    A staged run holding no token record of any kind (live, claimed, receipt) also counts: it began and
+    ended without leaving one. A reservation never fired has none of these and is kept."""
     from coordinator_core.ops.dispatch_emit import run_token
 
     if token_retired(root, run_id):
         return True
-    return (
-        bool(run_token._RUN_ID_RE.match(run_id or ""))
-        and not run_token.is_live(root, run_id)
-        and run_token._present(root, run_id, retired=True)
-    )
+    if not run_token._RUN_ID_RE.match(run_id or "") or run_token.is_live(root, run_id):
+        return False
+    return run_token._present(root, run_id, retired=True) or _staged_without_token(root, run_id)
+
+
+def _staged_without_token(root: Path, run_id: str) -> bool:
+    """True when `run_id`'s `run-stage.json` reads `staged` and no claim is held: the run began, and its
+    token is gone with no receipt, so nothing can still redeem it."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE, safe_id
+
+    if not safe_id(run_id) or run_token._read_rec(root, run_id, claimed=True) is not None:
+        return False
+    try:
+        stage = json.loads((Path(root) / RECORD_DIR_ROOT / run_id / RUN_STAGE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(stage, dict) and stage.get("stage") == "staged"
 
 
 def retire_token_spent_halt(root: Path, sizing_rel: str) -> Optional[str]:

@@ -32,7 +32,7 @@ REPORT = "reports/X1.md"
 DOC = "docs/" "wiki/note.md"
 CODE = "coordinator_core/mod.py"
 UNTRACKED_TEST = "coordinator_core/tests/test_mod_new.py"
-VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 MET = {"status": "met", "observation": "obs", "sidecar": "j.md"}
 
 

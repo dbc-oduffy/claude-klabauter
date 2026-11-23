@@ -249,7 +249,7 @@ def test_terminal_commit_at_defaults_codes_a_run_whose_done_rows_all_match_head(
 
     params = {
         "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": EMPTY_WAVE,
-        "session_id": _SID, "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]},
+        "session_id": _SID, "ledger_verdict": {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]},
     }
     out = terminal_commit._handler(params, repo_root=repo / ".git")
 

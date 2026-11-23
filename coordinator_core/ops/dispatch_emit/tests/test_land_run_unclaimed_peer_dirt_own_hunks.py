@@ -31,7 +31,7 @@ PLAN = "docs/plans/p.md"
 REPORT = "reports/X1.md"
 TARGET = "pkg/shared.py"
 SEED = "".join(f"line{i}\n" for i in range(1, 13))
-VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:

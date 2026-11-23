@@ -50,6 +50,22 @@ def _workstation_leg(monkeypatch):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: False)
 
 
+@pytest.fixture
+def real_verdict():
+    """Request this to run the shared test-run verdict (leg 0) unstubbed."""
+
+
+@pytest.fixture(autouse=True)
+def _isolate_leg_zero(request, monkeypatch):
+    """Isolate the later legs from leg 0 and the live box ceiling: the verdict admits and the
+    ceiling reads healthy, unless the test requests `real_verdict`."""
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    monkeypatch.setattr(adm, "over_admit_ceiling", lambda payload: None)
+    if "real_verdict" not in request.fixturenames:
+        monkeypatch.setattr(adm, "test_run_verdict", lambda *a, **k: adm.TestRunVerdict(True))
+
+
 def _reason(result):
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -254,16 +270,16 @@ def test_subagent_suite_shaped_denied(repo, free_mutex, command):
     "command",
     ["jest", "vitest run", "npx jest", "npm test", "yarn test", "pnpm test"],
 )
-def test_subagent_js_ecosystem_deny_suggests_js_runner_not_pytest(
+def test_subagent_js_ecosystem_deny_offers_test_runner_route_only(
     repo, free_mutex, command
 ):
-    """F15 (GH #71): a JS-runner-shaped or package-script-shaped subagent
-    deny must not tell a TypeScript/vitest repo to run `python3 -m
-    pytest` -- it names a JS runner instead."""
+    """A JS-runner-shaped subagent deny offers the test-runner route, never
+    pytest (F15) and never a runner command the guard refuses a subagent."""
     out = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
     assert "python3 -m pytest" not in reason
-    assert "vitest" in reason or "jest" in reason
+    assert "dispatch coordinator:test-runner" in reason
+    assert "npx vitest run src/thing.test.ts" not in reason
 
 
 def test_mutex_deny_js_ecosystem_suggests_js_runner_not_pytest(repo, held_mutex):
@@ -278,25 +294,21 @@ def test_mutex_deny_js_ecosystem_suggests_js_runner_not_pytest(repo, held_mutex)
 
 
 @pytest.mark.parametrize("command", ["pytest", "python3 -m pytest", "tox", "nox"])
-def test_subagent_python_ecosystem_deny_still_suggests_pytest(
+def test_subagent_python_ecosystem_deny_offers_test_runner_not_pytest(
     repo, free_mutex, command
 ):
-    """Regression pin: the ecosystem-aware F15 fix must not disturb the
-    pre-existing Python-repo suggestion."""
+    """A subagent is refused pytest outright; the deny offers the
+    test-runner route and no scoped pytest line."""
     out = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
-    assert "python3 -m pytest path/to/test_file.py" in reason
+    assert "dispatch coordinator:test-runner with the touched test node ids" in reason
+    assert "python3 -m pytest path/to/test_file.py" not in reason
     assert "Reshaping the command text does not bypass" in reason
 
 
 @pytest.mark.parametrize(
     "command",
     [
-        "pytest coordinator_core/frontmatter/tests/test_x.py",
-        "pytest coordinator_core/frontmatter/tests/test_x.py::test_case",
-        "pytest -k schema_validate",
-        "pytest -m 'not slow' coordinator_core/frontmatter/tests/test_x.py",
-        "python3 -m pytest coordinator_core/bash_guards/tests/test_y.py -q",
         "cargo test my_filter",
         "go test ./pkg/thing",
         "go test",
@@ -305,8 +317,91 @@ def test_subagent_python_ecosystem_deny_still_suggests_pytest(
         "bun test src/thing.test.js",
     ],
 )
-def test_subagent_scoped_allowed(repo, free_mutex, command):
+def test_subagent_non_pytest_scoped_allowed(repo, free_mutex, command):
     _assert_allowed(_enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID)))
+
+
+_PYTEST_SHAPES = [
+    "pytest coordinator_core/frontmatter/tests/test_x.py",
+    "pytest coordinator_core/frontmatter/tests/test_x.py::test_case",
+    "pytest -k schema_validate",
+    "pytest -m 'not slow' coordinator_core/frontmatter/tests/test_x.py",
+    "python3 -m pytest coordinator_core/bash_guards/tests/test_y.py -q",
+    "timeout 900 pytest coordinator_core/frontmatter/tests/test_x.py coordinator_core/frontmatter/tests/test_z.py",
+]
+_TOUCHED_TEST = "coordinator_core/frontmatter/tests/test_x.py"
+_TEST_RUNNER = "coordinator:test-runner"
+
+
+def _touch_record(monkeypatch, *paths):
+    from coordinator_core.session import touch_record
+
+    projection = touch_record.TouchProjection(claims={p: object() for p in paths}, degraded=False)
+    monkeypatch.setattr(touch_record, "project_live_claims", lambda *a, **k: projection)
+
+
+@pytest.mark.parametrize("command", _PYTEST_SHAPES)
+@pytest.mark.parametrize("extra", [{"agent_type": "coordinator:executor"}, {}])
+def test_subagent_pytest_refused_even_when_scoped(repo, free_mutex, real_verdict, command, extra):
+    """Any subagent but the test-runner is refused pytest, a Workflow agent (no agent_type) included."""
+    result = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID, extra=extra))
+    assert "only coordinator:test-runner runs pytest" in _reason(result)
+
+
+@pytest.mark.parametrize("command", [
+    "Start-Process pytest -ArgumentList 'coordinator_core/frontmatter/tests/test_x.py'",
+    "Start-Process pytest -ArgumentList '-k schema_validate'",
+])
+def test_subagent_start_process_pytest_refused(repo, free_mutex, real_verdict, command):
+    payload = _payload(command, repo, agent_id=_AGENT_ID)
+    payload["tool_name"] = "PowerShell"
+    assert "only coordinator:test-runner runs pytest" in _reason(_enveloped(guard.check)(payload))
+
+
+def test_test_runner_touched_file_admitted_through_the_slot_wrapper(repo, free_mutex, real_verdict, monkeypatch):
+    (repo / ".git").mkdir()
+    _touch_record(monkeypatch, _TOUCHED_TEST)
+    command = "pytest %s::test_case" % _TOUCHED_TEST
+    out = _enveloped(guard.check)(
+        _payload(command, repo, agent_id=_AGENT_ID, extra={"agent_type": _TEST_RUNNER}))
+    assert out is not None
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "with-tier-t-slot" in json.dumps(hso)
+
+
+@pytest.mark.parametrize("command, fragment", [
+    ("pytest coordinator_core/frontmatter/tests/test_other.py", "not in this session's touched test files"),
+    ("pytest -n 2 coordinator_core/frontmatter/tests/test_x.py", "-n workers refused"),
+    ("pytest coordinator_core/frontmatter/tests/test_x.py coordinator_core/frontmatter/tests/test_other.py",
+     "not in this session's touched test files"),
+    # suite-shaped: the identity leg denies these before the scope leg is reached
+    ("pytest coordinator_core/frontmatter/tests/", ""),
+    ("pytest", ""),
+    ("pytest -k schema_validate", ""),
+])
+def test_test_runner_outside_touched_scope_refused(repo, free_mutex, real_verdict, monkeypatch, command, fragment):
+    (repo / ".git").mkdir()
+    _touch_record(monkeypatch, _TOUCHED_TEST)
+    out = _enveloped(guard.check)(
+        _payload(command, repo, agent_id=_AGENT_ID, extra={"agent_type": _TEST_RUNNER}))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert fragment in _reason(out)
+
+
+@pytest.mark.parametrize("extra", [{}, {"agent_id": _AGENT_ID, "agent_type": _TEST_RUNNER}])
+def test_ceiling_refuses_a_scoped_run_for_every_caller(repo, free_mutex, real_verdict, monkeypatch, extra):
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    (repo / ".git").mkdir()
+    _touch_record(monkeypatch, _TOUCHED_TEST)
+    monkeypatch.setattr(adm, "over_admit_ceiling", lambda payload: "100 MB available, below the 4096 MB floor")
+    out = _enveloped(guard.check)(_payload("pytest %s" % _TOUCHED_TEST, repo, extra=extra))
+    assert "below the 4096 MB floor" in _reason(out)
+
+
+def test_em_scoped_run_allowed_below_the_ceiling(repo, free_mutex, real_verdict):
+    assert _enveloped(guard.check)(_payload("pytest %s" % _TOUCHED_TEST, repo)) is None
 
 
 @pytest.mark.parametrize(
@@ -387,11 +482,10 @@ def test_top_level_em_start_process_argumentlist_unscoped_denied_without_grant(g
         "pytest -k schema_validate",
     ],
 )
-def test_subagent_start_process_argumentlist_scoped_allowed(repo, free_mutex, command):
+def test_subagent_start_process_argumentlist_scoped_reaches_later_legs(repo, free_mutex, command):
     """A `-ArgumentList` payload that is genuinely Tier T (node id, file
-    path, `-k` filter) must be allowed, exactly like its un-wrapped form --
-    this fix widens what the classifier SEES, never what it DENIES for an
-    already-scoped invocation."""
+    path, `-k` filter) classifies like its un-wrapped form: with leg 0 admitting,
+    no later leg denies it."""
     payload = _payload(
         "Start-Process pytest -ArgumentList '%s'" % command.split(" ", 1)[1],
         repo,

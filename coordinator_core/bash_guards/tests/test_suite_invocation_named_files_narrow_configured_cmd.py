@@ -16,6 +16,14 @@ _AGENT_ID = "a0123456789abcdef"
 _RUNNER = "python3 bin/run-fast-tests.py"
 
 
+@pytest.fixture(autouse=True)
+def _healthy_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The test-run ceiling reads healthy: this file judges configured-command narrowing, not the live box."""
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    monkeypatch.setattr(adm, "over_admit_ceiling", lambda payload: None)
+
+
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "pyproject.toml").write_text(

@@ -26,9 +26,12 @@ _VITEST_RE = re.compile(
 )
 # A parametrize id may hold spaces (`test_x[This is BREADTH]`): the bracket runs to the `]` that
 # ends the token, so `FAILED <id> - <msg>` and a bare id both keep the whole id.
+# pytest's short summary prefixes a failure `FAILED` and a collection/fixture error `ERROR`; both are targets.
 _NODE_ID_RE = re.compile(
-    r"^(?:FAILED )?(?P<file>[^\s:]+\.py)::(?P<name>[^\s\[]+(?:\[.*?\](?=\s|$))?)(?: - (?P<msg>.*))?$"
+    r"^(?:(?:FAILED|ERROR) )?(?P<file>[^\s:]+\.py)::(?P<name>[^\s\[]+(?:\[.*?\](?=\s|$))?)(?: - (?P<msg>.*))?$"
 )
+# `ERROR <file>.py - <msg>`: a module that failed to collect is a file-level target.
+_ERROR_FILE_RE = re.compile(r"^ERROR (?P<file>[^\s:]+\.py)(?: - (?P<msg>.*))?$")
 _TARGET_SHAPE_RE = re.compile(r"^\S*(?:::\S*|\.py|\.(?:test|spec)\.\w+)$")
 # A lone test-file path in a list source is a file-level target (empty test name): the grind runs the whole file.
 _BARE_FILE_RE = re.compile(r"^[^\s:]+(?:\.py|\.(?:test|spec)\.\w+)$")
@@ -122,6 +125,9 @@ def _parse_line(line: str) -> FailingTest | None:
     m = _NODE_ID_RE.match(stripped)
     if m:
         return FailingTest(file=m["file"], name=m["name"], message=m["msg"] or "")
+    m = _ERROR_FILE_RE.match(stripped)
+    if m:
+        return FailingTest(file=m["file"], name="", message=m["msg"] or "")
     ids = parse_failed_ids(stripped)
     if ids:
         file, _, name = ids[0].partition("::")

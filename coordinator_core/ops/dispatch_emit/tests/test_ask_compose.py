@@ -1197,3 +1197,9 @@ def test_verify_tests_routes_manifest_scope_to_native_host():
     assert "engineOp('verify.host_test_leg'" in script
     assert "targets: _manifest.test_targets ?? []" in script
     assert "coordinator_core.ops.test_leg_run" in script
+
+
+def test_ledger_verdict_relay_carries_the_evidence_and_the_departure_reason():
+    script = _compose(in_run_commit=True)
+    assert "...(i.evidence ? { evidence: i.evidence } : {})" in script
+    assert "...(i.departure_reason ? { departure_reason: i.departure_reason } : {})" in script

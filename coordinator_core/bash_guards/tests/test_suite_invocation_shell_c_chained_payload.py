@@ -15,6 +15,21 @@ _FAST = "python3 bin/run-fast-tests.py"
 
 
 @pytest.fixture
+def real_verdict():
+    """Request this to run the shared test-run verdict (leg 0) unstubbed."""
+
+
+@pytest.fixture(autouse=True)
+def _isolate_leg_zero(request, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The verdict admits and the ceiling reads healthy, unless the test requests `real_verdict`."""
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    monkeypatch.setattr(adm, "over_admit_ceiling", lambda payload: None)
+    if "real_verdict" not in request.fixturenames:
+        monkeypatch.setattr(adm, "test_run_verdict", lambda *a, **k: adm.TestRunVerdict(True))
+
+
+@pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
     monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
@@ -64,6 +79,14 @@ def test_file_scoped_chained_payload_is_not_denied_like_its_unwrapped_chain(repo
     assert _verdict(unwrapped, repo) != "deny"
     assert _verdict(wrapped, repo) != "deny"
     assert _tiers(wrapped, repo) == _tiers(unwrapped, repo)
+
+
+def test_executor_is_refused_a_file_scoped_chained_payload_by_the_verdict(repo, real_verdict) -> None:
+    for cmd in (
+        "python -m pytest tests/test_a.py; echo exit=$?",
+        'bash -c "python -m pytest tests/test_a.py; echo exit=$?"',
+    ):
+        assert _verdict(cmd, repo) == "deny"
 
 
 def test_single_segment_payload_behaves_as_before(repo) -> None:

@@ -1,7 +1,7 @@
 """foreign_edits: which dirty paths are not a bug-blitz row's own, who holds them, and a HEAD tree to judge against.
 
 `foreign_dirty` answers "which uncommitted paths are not this row's own edits" (one `git status`
-spawn). `holders_of` answers "which live session holds each" (no spawn). `head_tree` answers "what
+spawn; none for a run's worker clone). `holders_of` answers "which live session holds each" (no spawn). `head_tree` answers "what
 is HEAD plus this row's own edits": one shared base per HEAD sha under `temp_layout.managed_tempdir()`,
 built once from a private index (cold: rev-parse + read-tree + checkout-index = 3 spawns; warm:
 rev-parse = 1 spawn), plus a per-row hardlink mirror with the row's own files overlaid from the
@@ -48,9 +48,14 @@ def foreign_dirty(repo_root: Path, own: Sequence[str]) -> list[str]:
     """Repo-relative POSIX paths git reports dirty (untracked included) that are not in *own*.
 
     One `git status --porcelain -z --untracked-files=all` spawn. A git failure returns [] so the
-    caller keeps judging the live tree as before.
+    caller keeps judging the live tree as before. A run's worker clone (`worker_clone.base_sha` set)
+    holds only HEAD plus the run's own edits, so it has no foreign dirt: [] with no spawn.
     """
     repo_root = Path(repo_root)
+    from coordinator_core.bug_blitz.worker_clone import base_sha
+
+    if base_sha(repo_root):
+        return []
     res = run_git(
         ["status", "--porcelain", "-z", "--untracked-files=all"],
         cwd=str(repo_root),

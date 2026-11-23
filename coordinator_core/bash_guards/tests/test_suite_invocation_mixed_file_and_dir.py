@@ -17,6 +17,14 @@ _DIR = "coordinator/tests/fixtures/sweeps"
 _FILE = "coordinator_core/ops/test_a.py"
 
 
+@pytest.fixture(autouse=True)
+def _healthy_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The test-run ceiling reads healthy: this file judges operand shapes, not the live box."""
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    monkeypatch.setattr(adm, "over_admit_ceiling", lambda payload: None)
+
+
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (tmp_path / "pyproject.toml").write_text(

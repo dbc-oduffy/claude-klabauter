@@ -102,13 +102,29 @@ def _deny_messages() -> List[tuple]:
     message -- an alternative is only honest if it passes for the caller it
     was printed to."""
     return [
-        ("subagent", guard._deny_reason_subagent("pytest", "pytest -q"), _AGENT_ID),
         ("grant", guard._deny_reason_grant(
             "python -m pytest", "python -m pytest -q", is_tie=False), None),
         ("grant-tie", guard._deny_reason_grant(
             "python -m pytest", "python -m pytest -q", is_tie=True), None),
-        ("public-api", guard._remediation_text("U", "pytest"), _AGENT_ID),
     ]
+
+
+def _subagent_facing_messages() -> List[tuple]:
+    """Deny texts a dispatched subagent receives. A subagent is refused
+    pytest, so these offer the test-runner route and no runner command."""
+    return [
+        ("subagent", guard._deny_reason_subagent("pytest", "pytest -q")),
+        ("public-api", guard._remediation_text("U", "pytest")),
+    ]
+
+
+@pytest.mark.parametrize("label,message", _subagent_facing_messages(),
+                         ids=lambda v: v if isinstance(v, str) and "\n" not in v else "")
+def test_subagent_deny_offers_only_the_test_runner_route(label, message) -> None:
+    assert "dispatch coordinator:test-runner with the touched test node ids" in message, label
+    assert not _RUNNER_ALTERNATIVE_RE.search(message), (
+        "%s deny text offers a runner command a subagent is refused:\n%s" % (label, message)
+    )
 
 
 @pytest.mark.parametrize("label,message,agent_id", _deny_messages(),

@@ -292,7 +292,8 @@ def _verdict(*rows):
     """Items for `rows`; a `wired: True` extra carries the consumer command and output a wired row owes."""
     def item(r):
         extra = r[2] if len(r) > 2 else {}
-        return dict(zip(("id", "status"), r[:2]), **(WIRED_EVIDENCE if extra.get("wired") is True else {}), **extra)
+        met_by = {"met_by": "coordinator_core/ops/dispatch_emit/requirements_ledger.py"} if r[1] == "met" else {}
+        return dict(zip(("id", "status"), r[:2]), **met_by, **(WIRED_EVIDENCE if extra.get("wired") is True else {}), **extra)
     return {"items": [item(r) for r in rows]}
 
 

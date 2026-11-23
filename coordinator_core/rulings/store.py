@@ -5,7 +5,9 @@ root; this module resolves nothing from git.
 """
 from __future__ import annotations
 
+import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,10 @@ _STATUS_ACCEPTED_RE = re.compile(r"^status:[ \t]*['\"]?accepted['\"]?[ \t]*$", r
 _PM_HEADING_RE = re.compile(r"^##[ \t]+PM verbatim[ \t]*$", re.MULTILINE | re.IGNORECASE)
 _SCOPE_WORD_RE = re.compile(r"[a-z0-9][a-z0-9_./-]{2,}")
 _FM_HEAD_BYTES = 6000
+_READ_BOUND_S = 0.15
+_MAX_STALLS = 2
+# (path, marker) -> ((mtime_ns, size), Ruling | None); in-process only, problems never cached.
+_FEED_CACHE: dict[tuple[str, str], tuple[tuple[int, int], Ruling | None]] = {}
 
 
 def _register_scan(worktree_root: Path | str) -> tuple[list[Ruling], list[Refusal]]:
@@ -152,6 +158,82 @@ def _apm_ruling(path: Path, fm: dict, body: str) -> Ruling | None:
     return Ruling.from_dict(raw)
 
 
+class _ReadStalled(TimeoutError):
+    pass
+
+
+def _read_bytes(path: Path, limit: int | None) -> bytes:
+    with open(path, "rb") as fh:
+        return fh.read() if limit is None else fh.read(limit)
+
+
+def _bounded_read(path: Path, limit: int | None) -> bytes:
+    """`_read_bytes` abandoned after `_READ_BOUND_S`; a stalled read leaves a daemon thread behind."""
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["data"] = _read_bytes(path, limit)
+        except BaseException as exc:  # handed to the caller thread
+            box["exc"] = exc
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(_READ_BOUND_S)
+    if t.is_alive():
+        raise _ReadStalled(f"read stalled past {_READ_BOUND_S}s")
+    if "exc" in box:
+        raise box["exc"]
+    return box["data"]
+
+
+def _read_ruling(path: Path, rel_dir: str, marker: str, build, safe_load) -> Ruling | None:
+    """The Ruling `build` extracts from one feed file, reading the head first and the full body
+    only for a record that passes the head prefilter (or needs the body for the PM heading)."""
+    raw = _bounded_read(path, _FM_HEAD_BYTES)
+    head = raw.decode("utf-8", errors="ignore" if len(raw) >= _FM_HEAD_BYTES else "strict")
+    if marker == "decision":
+        if not _STATUS_ACCEPTED_RE.search(head):
+            return None
+        head_pm = "(PM)" in head or "authority:" in head
+    elif marker not in head:
+        return None
+    else:
+        head_pm = True
+    text = head if len(raw) < _FM_HEAD_BYTES else _bounded_read(path, None).decode("utf-8")
+    if not head_pm and not _PM_HEADING_RE.search(text):
+        return None
+    parts = _split(text)
+    if parts is None:
+        return None
+    fm = safe_load(parts[0])
+    if not isinstance(fm, dict):
+        return None
+    if marker != "decision":
+        return build(path, fm, parts[1])
+    return build(path, f"{rel_dir}/{path.name}", fm, parts[1])
+
+
+def _md_entries(d: Path) -> list[tuple[Path, Any]]:
+    """Sorted (path, stat) for each `*.md` file in `d` from one directory listing.
+
+    A directory's mtime does not move on an in-place file edit (NTFS and POSIX alike), so it
+    cannot gate the cache. On Windows `DirEntry.stat()` is served from the listing itself, so the
+    per-file mtime/size signal costs no per-file syscall; on POSIX it is one stat per file.
+    """
+    out: list[tuple[Path, Any]] = []
+    with os.scandir(d) as it:
+        for e in it:
+            if e.name.endswith(".md"):
+                try:
+                    if e.is_file():
+                        out.append((Path(e.path), e.stat()))
+                except OSError:
+                    continue
+    out.sort(key=lambda t: t[0].name)
+    return out
+
+
 def _feed_scan(
     worktree_root: Path | str, rel_dir: str, marker: str, build, taken: set[str],
     rulings: list[Ruling], problems: list[Refusal],
@@ -163,26 +245,23 @@ def _feed_scan(
     d = Path(worktree_root) / rel_dir
     if not d.is_dir():
         return
-    for path in sorted(d.glob("*.md")):
+    stalls = 0
+    for path, st in _md_entries(d):
         try:
-            text = path.read_text(encoding="utf-8")
-            head = text[:_FM_HEAD_BYTES]
-            if marker == "decision":
-                if not _STATUS_ACCEPTED_RE.search(head):
-                    continue
-                if not ("(PM)" in head or "authority:" in head or _PM_HEADING_RE.search(text)):
-                    continue
-            elif marker not in head:
-                continue
-            parts = _split(text)
-            if parts is None:
-                continue
-            fm = safe_load(parts[0])
-            if not isinstance(fm, dict):
-                continue
-            ruling = build(path, fm, parts[1]) if marker != "decision" else build(
-                path, f"{rel_dir}/{path.name}", fm, parts[1]
-            )
+            key = (str(path), marker)
+            sig = (st.st_mtime_ns, st.st_size)
+            hit = _FEED_CACHE.get(key)
+            if hit is not None and hit[0] == sig:
+                ruling = hit[1]
+            else:
+                if stalls >= _MAX_STALLS:
+                    raise TimeoutError("read skipped after repeated stalled reads")
+                try:
+                    ruling = _read_ruling(path, rel_dir, marker, build, safe_load)
+                except _ReadStalled:
+                    stalls += 1
+                    raise
+                _FEED_CACHE[key] = (sig, ruling)
         except Exception as exc:  # one unreadable record never hides the rest
             problems.append({"id": path.stem, "reason": f"unreadable: {exc}"})
             continue

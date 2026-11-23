@@ -22,6 +22,7 @@ MODE_MODULES: Final = {
     "halted": "coordinator_core.ops.dispatch_emit.land_run_halt",
     "grind": "coordinator_core.ops.dispatch_emit.land_run_grind",
     "fanout": "coordinator_core.ops.dispatch_emit.land_run_fanout",
+    "joint": "coordinator_core.ops.dispatch_emit.land_run_joint",
 }
 
 #: Keys a caller reads from a landed reply. Refusal replies add their own detail keys (``ledger_failures``,
@@ -99,15 +100,23 @@ def _is_grind(params: dict) -> bool:
     return isinstance(grind, dict) and isinstance(grind.get("rows"), list)
 
 
-def mode_of(params: object) -> str:
-    """The landing mode of a call: ``fanout``, ``halted``, ``grind``, else ``product``.
+def _is_joint(params: dict) -> bool:
+    ids = params.get("joint")
+    return isinstance(ids, list) and bool(ids) and all(isinstance(i, str) and i for i in ids)
 
-    Raises ``ModeAmbiguous`` when params select more than one of ``halted_by``, ``fanout`` and ``grind``."""
+
+def mode_of(params: object) -> str:
+    """The landing mode of a call: ``joint``, ``fanout``, ``halted``, ``grind``, else ``product``.
+
+    Raises ``ModeAmbiguous`` when params select more than one of ``halted_by``, ``fanout``, ``grind`` and ``joint``."""
     if not isinstance(params, dict):
         return "product"
     halted, fanout, grind = _is_halted(params), _is_fanout(params), _is_grind(params)
-    if halted + fanout + grind > 1:
-        raise ModeAmbiguous("params carry more than one of halted_by, fanout and grind")
+    joint = _is_joint(params)
+    if halted + fanout + grind + joint > 1:
+        raise ModeAmbiguous("params carry more than one of halted_by, fanout, grind and joint")
+    if joint:
+        return "joint"
     if fanout:
         return "fanout"
     if halted:

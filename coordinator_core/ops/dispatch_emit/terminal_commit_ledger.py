@@ -528,6 +528,28 @@ def _awaiting_operator(open_rows: Sequence[dict]) -> list:
     return [{"id": r["id"], "row": r["row"], "command": r["command"]} for r in open_rows if "command" in r]
 
 
+_DEPARTED_PREFIX = "departed: "
+
+
+def _ledger_departures(open_rows: Sequence[dict]) -> list:
+    """``[{id, reason}]`` for each open ledger row judged ``departed``; the reason is the run's own,
+    without ``judge``'s ``departed: `` prefix."""
+    return [
+        {"id": r["id"], "reason": str(r["reason"])[len(_DEPARTED_PREFIX):] if str(r["reason"]).startswith(_DEPARTED_PREFIX) else str(r["reason"])}
+        for r in open_rows if r.get("departed")
+    ]
+
+
+def _requirement_trailers(open_rows: Sequence[dict]) -> list:
+    """``Requirement-Departed:`` for a departed open row, ``Requirement-Open:`` for every other."""
+    departed = {str(d["id"]): d["reason"] for d in _ledger_departures(open_rows)}
+    return [
+        ("Requirement-Departed: " if r.get("departed") else "Requirement-Open: ")
+        + " ".join((str(r["id"]) + " " + (departed[str(r["id"])] if r.get("departed") else str(r["reason"]))).split())
+        for r in open_rows
+    ]
+
+
 def _ledger_gate(
     worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
     gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,

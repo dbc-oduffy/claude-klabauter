@@ -610,9 +610,24 @@ def _forty_path_request(repo, gated: bool):
     (repo / "warm.py").write_text("0\n", encoding="utf-8")
     warm = CommitRequest(chunks=(ChunkCommit(id="C2", title="warm", paths=("warm.py",)),))
     assert _call(repo, {"script_path": _write_script(repo, warm), "incomplete_chunks": []})["committed"] is True
+    if gated:
+        (repo / ".gitmodules").write_text("", encoding="utf-8")
+    # Trap: Windows charges thread CPU in whole 15.6ms clock ticks, and under a loaded box a tick
+    # lands on whichever thread is running, so one sample over-reads (seen: 203ms, 390ms, each
+    # green 3/3 alone). The op's cost is at most its cheapest of three fresh 40-path commits; the
+    # bar stays 200ms on that, and every round must hit the pinned spawn count.
+    rounds = [_measured_forty_path_commit(repo, gated, r) for r in range(3)]
+    elapsed_ms = min(ms for ms, _ in rounds)
+    spawns = {n for _, n in rounds}
+    assert len(spawns) == 1, f"spawn count varied across rounds: {sorted(spawns)}"
+    assert elapsed_ms < 200, f"process time {elapsed_ms}ms (best of 3) exceeds the 200ms bar"
+    return spawns.pop()
+
+
+def _measured_forty_path_commit(repo, gated: bool, round_no: int):
     paths = []
     for i in range(40):
-        name = f"f{i}.py"
+        name = f"f{round_no}_{i}.py"
         (repo / name).write_text(f"{i}\n", encoding="utf-8")
         paths.append(name)
     request = CommitRequest(
@@ -623,7 +638,6 @@ def _forty_path_request(repo, gated: bool):
     from coordinator_core.git.scoped_worktree_status import gap_reason
 
     if gated:
-        (repo / ".gitmodules").write_text("", encoding="utf-8")
         assert gap_reason(repo, paths, [], [":(glob)*"]) is not None
     else:
         gap = gap_reason(repo, paths, [], [":(glob)*"])
@@ -660,8 +674,7 @@ def _forty_path_request(repo, gated: bool):
         _subprocess.Popen.__init__ = real_init
 
     assert out["committed"] is True
-    assert elapsed_ms < 200, f"process time {elapsed_ms}ms exceeds the 200ms bar"
-    return spawn_count
+    return elapsed_ms, spawn_count
 
 
 def test_process_time_and_spawns_on_a_40_path_request(repo):

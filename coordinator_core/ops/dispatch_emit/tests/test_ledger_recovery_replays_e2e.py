@@ -55,7 +55,7 @@ _DISK = {
     "run_dir": "d", "plan_id": "p", "rows": _ROWS, "review_declared_paths": [p for r in _ROWS for p in r["writes"]],
     "test_targets": [], "marker_path": "m", "head_sha": "c" * 40,
 }
-_R5_MET = {"id": "R5", "status": "met", "wired": True}
+_R5_MET = {"id": "R5", "status": "met", "met_by": "a.py", "wired": True}
 _R5_OPEN = loop._unmet(
     [f"Fix the 2 failing tests in {_TEST_FILE}", "Prove bare-name or production-entry run from a foreign cwd"],
     "the foreign-cwd recogniser test fails", rid="R5",

@@ -26,7 +26,7 @@ const parallel = (thunks) => Promise.all(thunks.map((t) => t()));
 const agent = async (_prompt, opts) => {
   _seen.labels.push(opts.label);
   if (opts.label === 'verify') {
-    if (_VERIFY_STUB && _VERIFY_STUB.__throw) throw new Error('verify refused its schema');
+    if (_VERIFY_STUB && _VERIFY_STUB.__throw) throw new Error('verify agent crashed');
     return _VERIFY_STUB;
   }
   if (opts.label === 'commit') return { committed: true, sha: 'abc', close: null };
@@ -46,7 +46,8 @@ const _refireNextAction = () => {}; const _haltNextActionText = () => '';
 const log = () => {};
 let _memoCloseOnly = false;
 const _viaRoadmap = false, _RUN_TOKEN = '%(token)s', _sizingRel = 'state/sizings/x.yaml', _planRel = null, REPO_ROOT = '/r';
-const _gate = { arm: 'xs' }, _runId = 'run-1', _resumeLedger = null, _preHaltCredit = false;
+const _gate = { arm: 'xs' }, _runId = 'run-1', _resumeLedger = null, _preHaltCredit = false, _resumeNoDelta = false;
+const _briefPrecedenceTail = '';
 let _splitExit = null;
 let _lateIds = [], _verifyLateIds = [], _lateLeg = null, _lateUnplanned = [];
 let _ragDegraded = []; const _pmVerbatimIds = []; const _checkpointFixIds = []; const _JUDGE_SCHEMA = {};

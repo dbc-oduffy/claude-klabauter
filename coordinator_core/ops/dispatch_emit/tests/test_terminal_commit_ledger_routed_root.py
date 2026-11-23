@@ -56,11 +56,11 @@ def test_engine_routed_item_judged_at_the_engine_root_passes(run, tmp_path: Path
     engine = tmp_path / "engine"
     engine.mkdir()
     manifest = _manifest(run[1], engine.as_posix())
-    assert _gate(run, {"items": [{"id": "R1", "status": "met", "wired": True, "root_read": [str(engine)]}]}, manifest) is None
+    assert _gate(run, {"items": [{"id": "R1", "status": "met", "wired": True, "met_by": REL, "root_read": [str(engine)]}]}, manifest) is None
 
 
 def test_no_manifest_or_unreadable_manifest_is_the_cwd_only_gate(run) -> None:
-    verdict = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+    verdict = {"items": [{"id": "R1", "status": "met", "wired": True, "met_by": REL}]}
     assert _gate(run, verdict) is None
     bad = run[1] / "manifest.json"
     bad.write_text("{not json", encoding="utf-8")

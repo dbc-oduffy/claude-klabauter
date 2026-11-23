@@ -100,7 +100,7 @@ def _call(repo: Path, verdict: dict) -> dict:
 
 def _verdict(r3: dict) -> dict:
     return {"items": [
-        {"id": "R1", "status": "met", "wired": True},
+        {"id": "R1", "status": "met", "met_by": "a.py", "wired": True},
         {"id": "R2", "status": "not_met", "withheld_by": "C9"},
         {"id": "R3", "status": "not_met", **r3},
     ]}

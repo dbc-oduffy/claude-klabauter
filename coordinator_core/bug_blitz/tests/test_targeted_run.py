@@ -72,6 +72,7 @@ def test_select_unions_surface_touched_tests_and_covering_tests(repo) -> None:
 @pytest.mark.spawns_process
 def test_passed_run_writes_valid_record_and_exit_zero(repo) -> None:
     row = _row(repo, "tests/test_good.py")
+    head = _commit_all(repo)
     record = repo / "out" / "row-1.tests.json"
     code = targeted_run.main(
         ["--repo", str(repo), "--row", str(row), "--touched", "pkg/widget.py", "--record", str(record)]
@@ -81,6 +82,7 @@ def test_passed_run_writes_valid_record_and_exit_zero(repo) -> None:
     assert rec["outcome"] == "passed"
     assert rec["selected"] == ["tests/test_good.py", "tests/test_widget.py"]
     assert rec["argv"][-2:] == rec["selected"]
+    assert rec["base_sha"] == head
     _validate(targeted_run.run(repo, row, ["pkg/widget.py"]))
 
 
@@ -140,7 +142,9 @@ def test_runner_holds_a_tier_t_slot_during_the_run(repo, monkeypatch: pytest.Mon
     monkeypatch.setattr(
         targeted_run, "_spawn", lambda *a, **k: seen.append(tier_t_slots.occupancy()[0]) or (0, "")
     )
-    rec = targeted_run.run(repo, _row(repo, "tests/test_good.py"))
+    row = _row(repo, "tests/test_good.py")
+    _commit_all(repo)
+    rec = targeted_run.run(repo, row)
     assert rec.outcome == "passed"
     assert seen == [1]
     assert tier_t_slots.occupancy()[0] == 0
@@ -219,3 +223,87 @@ def test_head_for_uses_the_repo_pin_admitted_by_the_classifier_and_refuses_an_un
     assert targeted_run.admit([*head, "tests/test_good.py"], repo)
     local.write_text('---\ntargeted_test_python: "/no/such/python-xyz"\n---\n', encoding="utf-8")
     assert targeted_run.head_for(repo, ["tests/test_good.py"]) is None
+
+
+def test_clone_pytest_roots_at_the_clone_and_leads_pythonpath_only_inside_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYTHONPATH", "/elsewhere")
+    base = [sys.executable, "-m", "pytest", "t.py"]
+    argv, env = targeted_run._clone_pytest(base, tmp_path)
+    assert argv == base and env.get("PYTHONPATH") == "/elsewhere"
+
+    clone = tmp_path / "clone"
+    (clone / ".git").mkdir(parents=True)
+    (clone / ".git" / "blitz-base").write_text("abc\n")
+    argv, env = targeted_run._clone_pytest(base, clone)
+    assert argv == [sys.executable, "-m", "pytest", f"--rootdir={clone}", "t.py"]
+    assert env["PYTHONPATH"].split(os.pathsep) == [str(clone), "/elsewhere"]
+
+
+@pytest.fixture
+def clone_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import tempfile
+
+    from coordinator_core.bug_blitz import worker_clone
+    from coordinator_core.win_portability import no_console_creationflags
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
+    root = tmp_path / "proj"
+    (root / "tests").mkdir(parents=True)
+    (root / "pkg").mkdir()
+    (root / "pyproject.toml").write_text('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n')
+    (root / "pkg" / "widget.py").write_text("X = 1\n")
+    (root / "tests" / "test_widget.py").write_text(
+        "from pathlib import Path\nimport pkg.widget as w\n\n\n"
+        "def test_w():\n    assert w.X == 2\n"
+        "    assert Path(w.__file__).resolve().is_relative_to(Path(__file__).resolve().parents[1])\n"
+    )
+    for args in (("init", "-q"), ("add", "-A"), ("commit", "-q", "-m", "base")):
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *args],
+            cwd=root, check=True, capture_output=True, **no_console_creationflags(),
+        )
+    clone = worker_clone.provision(root, "run-c4", is_live=lambda *_: False)
+    yield root, clone
+    worker_clone.reap(root, "run-c4")
+
+
+@pytest.mark.spawns_process
+def test_run_at_a_clone_root_tests_the_clone_edit_and_never_the_main_checkout(clone_repo) -> None:
+    root, clone = clone_repo
+    (clone / "pkg" / "widget.py").write_text("X = 2\n")
+    row = _row(root, "tests/test_widget.py")
+
+    rec = targeted_run.run(clone, row, [str(clone / "pkg" / "widget.py")])
+    assert rec.outcome == "passed", rec
+    assert rec.selected == ("tests/test_widget.py",)
+    assert (root / "pkg" / "widget.py").read_text() == "X = 1\n"
+
+    unfixed = targeted_run.run(root, row, [str(root / "pkg" / "widget.py")])
+    assert unfixed.outcome == "failed", unfixed
+
+
+def test_record_carries_the_clone_provisioned_sha_without_a_git_spawn(clone_repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.bug_blitz import worker_clone
+
+    root, clone = clone_repo
+    monkeypatch.setattr(targeted_run, "run_git", lambda *a, **k: pytest.fail("clone path must not spawn git"))
+    row = _row(root, "tests/test_widget.py")
+    rec = targeted_run.run(clone, row)
+    assert rec.base_sha == worker_clone.base_sha(clone) != ""
+    assert rec.to_json()["base_sha"] == rec.base_sha
+
+
+def _commit_all(repo: Path) -> str:
+    for cmd in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True, capture_output=True)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def test_record_carries_head_sha_outside_a_clone_even_for_nothing_to_run(repo) -> None:
+    head = _commit_all(repo)
+    (repo / "empty.yaml").write_text("id: e\nsurface: nothing.txt\n")
+    rec = targeted_run.run(repo, repo / "empty.yaml")
+    assert rec.outcome == "nothing-to-run"
+    assert rec.base_sha == head

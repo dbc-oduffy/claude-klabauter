@@ -393,7 +393,13 @@ def test_tunnel_alias_comes_from_the_flag_else_the_environment(monkeypatch: pyte
     assert cmd[-2:] == ["--tunnel-remote", "wg"]
 
 
-def test_roster_mirror_writes_entry_and_key_the_harness_accepts(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
+OLD_PEER_TOKEN = "a1" * 16
+_ABSENT = object()
+
+
+@pytest.mark.parametrize("far_key", ["SECRETKEY", json.dumps({"peerToken": OLD_PEER_TOKEN}), OLD_PEER_TOKEN, "", _ABSENT])
+def test_roster_mirror_writes_entry_and_key_the_harness_accepts(
+        sessions, monkeypatch: pytest.MonkeyPatch, far_key) -> None:
     roster = load("roster")
     ep = "\\\\.\\pipe\\LOCAL\\cc-msg-" + "a" * 32
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
@@ -404,7 +410,9 @@ def test_roster_mirror_writes_entry_and_key_the_harness_accepts(sessions, monkey
     monkeypatch.setattr(roster, "_is_win", lambda platform=None: True)
     cfg = roster.parse_args(["bridge.log", "--remote", "farbox", "--key", "k"])
     row = {"entry": {"pid": 4242, "name": "far-1", "procStart": "x", "pidDomain": "darwin",
-                     "messagingSocketPath": FAR_SOCK}, "key": "SECRETKEY"}
+                     "messagingSocketPath": FAR_SOCK}}
+    if far_key is not _ABSENT:
+        row["key"] = far_key
     lines = []
     b = roster.mirror(row, cfg, lines.append)
     assert b.pid == 31337
@@ -414,6 +422,7 @@ def test_roster_mirror_writes_entry_and_key_the_harness_accepts(sessions, monkey
     key_file = sessions / roster.key_name(31337, ep, platform="win32")
     credentials = json.loads(key_file.read_text())
     assert re.fullmatch(r"[0-9a-f]{32}", credentials["peerToken"])
+    assert credentials["peerToken"] != OLD_PEER_TOKEN, "a far peer's token was persisted"
     field = "procStartFt" if sys.platform == "win32" else "procStart"
     assert credentials[field] == entry["procStart"]
     assert credentials["pidDomain"] == entry["pidDomain"]

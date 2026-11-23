@@ -433,7 +433,7 @@ def test_agent_call_site_count_independent_of_row_count() -> None:
     small_count, _small_bytes = _agent_count(7)
     large_count, large_bytes = _agent_count(300)
     assert small_count == large_count
-    assert large_bytes < 186 * 1024  # measured 185.2 KiB at 300 rows
+    assert large_bytes < 190 * 1024  # measured 188.2 KiB at 300 rows
 
 
 def test_prep_empty_retry_loop_is_bounded_by_the_attempt_cap() -> None:
@@ -3143,7 +3143,7 @@ def test_emitted_size_call_makes_the_scout_check_the_sizing_file_exists() -> Non
     script = _compose()
     start = script.index("async function _sizeCall(row, retry)")
     call = script[start : script.index("\n}", start)]
-    check = r"_shq(REPO_ROOT.replace(/\/+$/, '') + '/' + _sizingPathFor('<name>', row.rowId))"
+    check = r"_shq(WORK_ROOT.replace(/\/+$/, '') + '/' + _sizingPathFor('<name>', row.rowId))"
     assert "test -f " in call and check in call
     assert gc.SIZE_SKIPPED_MESSAGE in call
     assert call.index(check) < call.index("label:")
@@ -3870,3 +3870,45 @@ def test_the_js_record_path_test_never_defers_a_path_the_op_would_refuse() -> No
     deferred = dict(zip(samples, json.loads(out.stdout.strip())))
     assert deferred["docs/x/y.py"] is False and deferred["docs/hooks.yaml"] is False and deferred["state/bug-backlog/a.yaml"] is True
     assert [s for s, d in deferred.items() if d and not record_paths.is_record_path(s)] == []
+
+
+def test_script_binds_work_root_from_the_fire_args_falling_back_to_the_main_checkout() -> None:
+    """AC1: the fire-time `args.work_root` is the clone root; absent, `WORK_ROOT` is `REPO_ROOT`."""
+    script = _compose()
+    assert "const WORK_ROOT = args.work_root || REPO_ROOT;" in script
+    assert script.index("const REPO_ROOT = args.repo_root;") < script.index("const WORK_ROOT")
+
+
+def test_worker_stage_prompts_anchor_on_work_root_and_the_commit_stage_on_repo_root() -> None:
+    script = _compose(targeted_runner=True)
+    for fn, nxt in (
+        ("async function _triageCall", "async function _split"),
+        ("async function _sizeCall", "async function _fixCall"),
+        ("async function _fixCall", "async function _rejectUndoCall"),
+        ("async function _verifyCall", "async function _terminalCommitCall"),
+    ):
+        body = script[script.index(fn): script.index(nxt, script.index(fn))] if nxt in script[script.index(fn):] else script[script.index(fn):]
+        assert "Your repo is `' + (WORK_ROOT) + '`" in body, fn
+        assert "Your repo is `' + (REPO_ROOT) + '`" not in body, fn
+    commit = script[script.index("async function _terminalCommitCall"):]
+    assert "Your repo is `' + (REPO_ROOT) + '`" in commit.split("\n}", 1)[0]
+
+
+def test_terminal_commit_params_carry_the_clone_root_only_when_the_run_has_one() -> None:
+    script = _compose()
+    assert "...(WORK_ROOT !== REPO_ROOT ? { work_root: WORK_ROOT } : {})" in script
+    assert "grind: { profile: PROFILE_NAME, rows: queued, halted: _halted, per_row: true, " in script
+
+
+def test_a_run_with_a_work_root_provisions_its_clone_before_the_first_stage_and_halts_when_it_cannot() -> None:
+    script = _compose()
+    ensure = script[script.index("async function _ensureWorkClone()"): script.index("async function runGrind()")]
+    assert "WORK_ROOT === REPO_ROOT" in ensure and "await _provisionWorkClone()" in ensure
+    assert "throw new Error('worker clone not provisioned at '" in ensure
+    run = script[script.index("async function runGrind()"):]
+    assert run.index("await _ensureWorkClone();") < run.index("_grindOpen = true;")
+    call = script[script.index("async function _provisionWorkClone()"): script.index("async function _terminalCommitCall")] \
+        if script.index("async function _provisionWorkClone()") < script.index("async function _terminalCommitCall") \
+        else script[script.index("async function _provisionWorkClone()"):]
+    call = call[: call.index("\n}\n")]
+    assert "targeted-test-run\" provision --repo ' + (_shq(REPO_ROOT)) + ' --run-id ' + (_shq(RUN_ID)) + ' --work-root ' + (_shq(WORK_ROOT))" in call

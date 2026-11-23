@@ -47,7 +47,7 @@ def run(tmp_path: Path) -> tuple[Path, Path, dict[str, list[dict[str, str]]]]:
     dc.mint_rows(tmp_path, REL, [HIT])
     ledger = rl.read_ledger(tmp_path, tmp_path / RECORD_DIR_ROOT / RUN)
     design = next(i for i in ledger.items if i.anchor == "design-registry:settings")
-    items = [{"id": i.id, "status": "met"} for i in ledger.items]
+    items = [{"id": i.id, "status": "met", **({} if i is design else {"met_by": "a.py"})} for i in ledger.items]
     return tmp_path, tmp_path / RECORD_DIR_ROOT / RUN, {"items": items}
 
 

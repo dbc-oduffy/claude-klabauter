@@ -17,6 +17,22 @@ _ID_B = "coordinator/bin/tests/test_x.py::TestC::test_b[p q]"
 _WRAP = "baseline-export --sha abc123 -- "
 
 
+@pytest.fixture
+def real_verdict():
+    """Request this to run the shared test-run verdict (leg 0) unstubbed."""
+
+
+@pytest.fixture(autouse=True)
+def _isolate_leg_zero(request, monkeypatch):
+    """The verdict admits and the ceiling reads healthy, unless the test requests `real_verdict`:
+    this file pins the baseline-rerun leg that runs after leg 0."""
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    monkeypatch.setattr(adm, "over_admit_ceiling", lambda payload: None)
+    if "real_verdict" not in request.fixturenames:
+        monkeypatch.setattr(adm, "test_run_verdict", lambda *a, **k: adm.TestRunVerdict(True))
+
+
 def _verdict(cmd: str, subagent: bool = True):
     payload = {"tool_name": "Bash", "session_id": "s", "cwd": _REPO, "tool_input": {"command": cmd}}
     if subagent:
@@ -36,6 +52,10 @@ def _verdict(cmd: str, subagent: bool = True):
 )
 def test_node_id_only_rerun_is_admitted(cmd):
     assert _verdict(cmd) is None
+
+
+def test_a_non_test_runner_subagent_is_refused_the_node_id_rerun(real_verdict):
+    assert _verdict(_WRAP + f"pytest -rfE {_ID_A}") == "deny"
 
 
 @pytest.mark.parametrize(

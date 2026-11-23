@@ -31,6 +31,7 @@ from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.grind_admission import TOTAL_PER_OUTPUT_CENTI
 from coordinator_core.ops.dispatch_emit import grind_stages
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import RELAY_SHA256_JS, relay_digest
+from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from pathlib import Path
 
 
@@ -541,6 +542,14 @@ def test_runner_prompts_name_foreign_uncommitted_as_live_and_require_the_holders
     assert "never already-fixed" in call
     assert "`foreign_holders`" in call
     assert OUTCOME_FOREIGN_UNCOMMITTED not in calls["triage"]
+
+
+def test_runner_prompts_require_quoting_base_sha_on_a_passed_verdict() -> None:
+    calls = _runner_calls()
+    fix = calls["fix"]
+    assert "`base_sha` in `evidence`" in fix
+    assert "NOT_REPRODUCED or already-fixed" in fix
+    assert "`base_sha`" in calls["triage"]
 
 
 def test_triage_already_fixed_invocation_and_fix_not_reproduced_check_use_committed_head() -> None:
@@ -1592,3 +1601,51 @@ def test_spent_total_js_is_one_function_pricing_output_by_the_admission_ratio() 
     assert js.count("function _spentTotal()") == 1
     assert "budget.spent() - _startSpent" in js
     assert "budget.spent()" not in grind_stages.compose_checkpoint_js()
+
+
+def _clone_anchored_calls() -> dict:
+    kw = dict(repo_root_js="WORK_ROOT")
+    return {
+        "triage": grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r", **kw),
+        "refute-close": grind_stages.compose_refute_close_call(label="r", phase_title="R", **kw),
+        "size": grind_stages.compose_size_call(
+            label="sz", phase_title="S", row_js="row", evidence_js="ev", fix_plan_js="fp", **kw
+        ),
+        "fix": grind_stages.compose_fix_call(label="f", phase_title="F", row_id="r", **kw),
+        "verify-agent": grind_stages.compose_verify_agent_call(label="v", phase_title="V", **kw),
+        "verify-routing": grind_stages.compose_verify_routing_batch_call(
+            label="vr", phase_title="V", rows_js="rows", **kw
+        ),
+        "verify-reject": grind_stages.compose_verify_op_call(
+            label="vo", phase_title="V", run_dir="r", reject_paths_js="paths", **kw
+        ),
+    }
+
+
+def test_worker_stages_anchor_on_the_run_clone_when_given_work_root() -> None:
+    """AC1: a stage composed over `WORK_ROOT` tells the agent to `cd` into the clone, never the main checkout."""
+    for kind, call in _clone_anchored_calls().items():
+        assert "Your repo is `' + (WORK_ROOT) + '`" in call, kind
+        assert "Your repo is `' + (REPO_ROOT) + '`" not in call, kind
+
+
+def test_clone_anchored_judge_clause_is_picked_at_run_time_between_clone_and_shared_wording() -> None:
+    for kind in ("triage", "refute-close", "size", "fix"):
+        call = _clone_anchored_calls()[kind]
+        assert "(WORK_ROOT !== REPO_ROOT ? " in call, kind
+        assert _js_string_literal(grind_stages._JUDGE_IN_CLONE_CLAUSE) in call, kind
+        assert _js_string_literal(grind_stages._JUDGE_AGAINST_HEAD_CLAUSE) in call, kind
+
+
+def test_default_composition_keeps_the_shared_checkout_anchor_and_clause_only() -> None:
+    call = grind_stages.compose_fix_call(label="f", phase_title="F", row_id="r")
+    assert "Your repo is `' + (REPO_ROOT) + '`" in call
+    assert "WORK_ROOT" not in call
+    assert grind_stages._JUDGE_AGAINST_HEAD_CLAUSE in call
+    assert grind_stages._JUDGE_IN_CLONE_CLAUSE not in call
+
+
+def test_terminal_commit_stays_anchored_on_the_main_checkout_over_a_clone_run() -> None:
+    call = _terminal_call()
+    assert "Your repo is `' + (REPO_ROOT) + '`" in call
+    assert "WORK_ROOT" not in call

@@ -1,4 +1,4 @@
-"""co_tenant_kept: identical-kept holder detection and the antisymmetric seniority order."""
+"""co_tenant_kept: identical-kept holder detection."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_contract, co_tenant_kept, halted_hold_release, land_run
+from coordinator_core.ops.dispatch_emit import ask_contract, co_tenant_kept, halted_hold_release
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -107,18 +107,3 @@ def test_live_holder_beside_identical_holder_still_maps_the_identical_one(repo, 
 def test_own_kept_unreadable_maps_nothing(repo, kept):
     kept("run-b", {"p.py": _blob(repo, "same\n")})
     assert co_tenant_kept.identical_holders(repo, "run-a", {"p.py": "run-b"}) == {}
-
-
-@pytest.mark.parametrize("seniority", [{}, {"run-a": (1.0, "run-a"), "run-b": (2.0, "run-b")}, {"run-a": (1.0, "run-a")}])
-def test_senior_is_antisymmetric(monkeypatch, tmp_path, seniority):
-    monkeypatch.setattr(land_run, "_own_run_seniority", lambda root, run, script: seniority.get(run))
-    a = co_tenant_kept.senior(tmp_path, "run-a", seniority.get("run-a"), "run-b")
-    b = co_tenant_kept.senior(tmp_path, "run-b", seniority.get("run-b"), "run-a")
-    assert a is True and b is False
-
-
-def test_senior_prefers_minted_order_over_lexical(monkeypatch, tmp_path):
-    table = {"run-a": (9.0, "run-a"), "run-b": (1.0, "run-b")}
-    monkeypatch.setattr(land_run, "_own_run_seniority", lambda root, run, script: table.get(run))
-    assert co_tenant_kept.senior(tmp_path, "run-b", table["run-b"], "run-a") is True
-    assert co_tenant_kept.senior(tmp_path, "run-a", table["run-a"], "run-b") is False

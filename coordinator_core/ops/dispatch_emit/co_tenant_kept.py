@@ -1,7 +1,7 @@
-"""Co-tenant kept-blob identity: which foreign holders keep byte-identical work, and which run orders first.
+"""Co-tenant kept-blob identity: which foreign holders keep byte-identical work, and which paths a halt keeps.
 
 Two runs that keep the same blob for a path hold the same work; attributing it to both is truthful, so the
-landing decides it by seniority instead of refusing both. Callers: `identical_holders` then `senior`.
+landing lands the path crediting the holder instead of refusing both. Caller: `land_run` via `identical_holders`.
 """
 
 from __future__ import annotations
@@ -22,6 +22,11 @@ def _kept(root: Path, run_id: str) -> Optional[dict]:
     except Exception:  # noqa: BLE001 -- unreadable or malformed kept work: the run's paths stay foreign
         return None
     return None if plan is None else {p: plan[1][p] for p in plan[0] if p in plan[1]}
+
+
+def kept_paths(root: Path, run_id: str) -> frozenset:
+    """The paths whose work `run_id`'s halt keeps; empty when it keeps none or its record is unreadable."""
+    return frozenset(_kept(root, run_id) or ())
 
 
 def identical_holders(root: Path, own_run: str, foreign: dict) -> dict:
@@ -62,14 +67,3 @@ def identical_holders(root: Path, own_run: str, foreign: dict) -> dict:
         if oid[mine] is not None and oid[mine] == oid[theirs]:
             matched.setdefault(path, []).append(holder)
     return {path: holders[0] for path, holders in matched.items() if len(holders) == 1}
-
-
-def senior(root: Path, own_run: str, own_seniority: Optional[tuple], holder: str) -> bool:
-    """True when `own_run` orders before `holder`. Both runs reach the same answer: the `(minted_at, run_id)`
-    tuples compare when both resolve, else lexical run-id order, so exactly one of a pair is senior."""
-    from coordinator_core.ops.dispatch_emit.land_run import _own_run_seniority
-
-    theirs = _own_run_seniority(root, holder, None)
-    if own_seniority is not None and theirs is not None:
-        return own_seniority < theirs
-    return own_run < holder

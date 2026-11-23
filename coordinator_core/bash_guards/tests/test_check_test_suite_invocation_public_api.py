@@ -15,6 +15,21 @@ def _enveloped(check):
 
 
 @pytest.fixture
+def real_verdict():
+    """Request this to run the shared test-run verdict (leg 0) unstubbed."""
+
+
+@pytest.fixture(autouse=True)
+def _isolate_leg_zero(request, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The verdict admits and the ceiling reads healthy, unless the test requests `real_verdict`."""
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    monkeypatch.setattr(adm, "over_admit_ceiling", lambda payload: None)
+    if "real_verdict" not in request.fixturenames:
+        monkeypatch.setattr(adm, "test_run_verdict", lambda *a, **k: adm.TestRunVerdict(True))
+
+
+@pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n"
@@ -725,20 +740,26 @@ def _payload(command, cwd, agent_id=None):
     return p
 
 
-def test_check_still_allows_scoped_subagent_command(repo, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Since the Tier-T CONCURRENCY leg (0.5) this is an ALLOW carrying a
-    slot-wrapper rewrite rather than a bare None. The property under test --
-    a dispatched caller's scoped run is permitted -- is unchanged; only the
-    encoding of "permitted" moved. A deny still fails here."""
+def test_check_refuses_scoped_pytest_for_a_non_test_runner_subagent(
+    repo, real_verdict, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
     out = _enveloped(guard.check)(_payload(
         "pytest coordinator_core/frontmatter/tests/test_x.py", repo, agent_id="a0123456789abcdef"
     ))
-    if out is not None:
-        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
-        assert out["hookSpecificOutput"]["updatedInput"]["command"].startswith(
-            "with-tier-t-slot -- "
-        )
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "only coordinator:test-runner runs pytest" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_check_routes_an_admitted_scoped_subagent_command_through_the_slot(
+    repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
+    out = _enveloped(guard.check)(_payload(
+        "pytest coordinator_core/frontmatter/tests/test_x.py", repo, agent_id="a0123456789abcdef"
+    ))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert out["hookSpecificOutput"]["updatedInput"]["command"].startswith("with-tier-t-slot -- ")
 
 
 def test_check_still_denies_unscoped_subagent_command(repo, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,7 +5,7 @@
   "description": "One <row-id>.tests.json record written by the targeted-test-run CLI: what verify actually ran for a row, and its outcome. exit_code is null when no test process started (nothing-to-run, refused, no-runner). Types: coordinator_core/bug_blitz/contract.py.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["row_id", "runner", "argv", "selected", "outcome", "exit_code", "failing_ids", "process_s"],
+  "required": ["row_id", "runner", "argv", "selected", "outcome", "exit_code", "failing_ids", "base_sha", "process_s"],
   "properties": {
     "row_id": { "type": "string", "minLength": 1 },
     "runner": {
@@ -34,6 +34,10 @@
       "additionalProperties": { "type": "array", "items": { "type": "string" } },
       "description": "Uncommitted foreign paths the passing run depended on, each mapped to its holder session ids (or unattributed). Non-empty only for passed-on-foreign-uncommitted."
     },
+    "base_sha": {
+      "type": "string",
+      "description": "Sha of the tree the run judged: the worker clone's provisioned sha, else the run root's HEAD. Empty only when unresolvable, which never rides a passed outcome."
+    },
     "process_s": { "type": "number", "minimum": 0 }
   },
   "allOf": [
@@ -44,6 +48,10 @@
     {
       "if": { "properties": { "outcome": { "enum": ["passed", "failed", "passed-on-foreign-uncommitted"] } } },
       "then": { "properties": { "exit_code": { "type": "integer" }, "argv": { "minItems": 1 } } }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "passed" } } },
+      "then": { "properties": { "base_sha": { "minLength": 1 } } }
     },
     {
       "if": { "properties": { "outcome": { "const": "nothing-to-run" } } },
