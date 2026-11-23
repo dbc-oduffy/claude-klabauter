@@ -629,19 +629,21 @@ def test_decisions_record_the_fire_time_claim_baseline(repo, monkeypatch: pytest
     assert seen_sid == ["sess-blitz"]
 
 
-@pytest.mark.parametrize("branch", ["work/machine-b/2026-10-29b", "work/box/feature-x"])
-def test_any_work_branch_is_admitted(repo, branch) -> None:
+@pytest.mark.parametrize(
+    "branch", ["work/machine-b/2026-10-29b", "work/box/feature-x", "example-operator/machine-a/codex-discoverability", "feature/foo"]
+)
+def test_any_non_default_branch_is_admitted(repo, branch) -> None:
     _head(repo, branch)
     env = _call(repo, {"targets": "red-set"})
     assert env["hookSpecificOutput"]["permissionDecision"] != "deny"
 
 
-@pytest.mark.parametrize("branch", ["main", "feature/foo"])
-def test_denies_off_a_work_branch(repo, branch) -> None:
+@pytest.mark.parametrize("branch", ["main", "master"])
+def test_denies_on_the_default_branch(repo, branch) -> None:
     _head(repo, branch)
     env = _call(repo, {"targets": "red-set"})
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "Check out a work/* branch" in _reason(env)[:60]
+    assert "Check out a work branch" in _reason(env)[:60]
 
 
 def test_denies_a_detached_head(repo) -> None:

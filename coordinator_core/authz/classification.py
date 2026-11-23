@@ -80,6 +80,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "box_memory.register": OpClass.MUTATING,  # Writes the admission-file reservation.
     "box_memory.release": OpClass.MUTATING,  # Removes the admission-file reservation.
     "codex_status.snapshot": OpClass.MUTATING,  # Derived status cache only; no routing/UI writes.
+    "external_session.handle": OpClass.MUTATING,  # Writes the external-session registry row on SessionStart/SessionEnd.
     "ping": OpClass.COMPUTE_ONLY,
     "spawn_orphans.reap": OpClass.MUTATING,  # Terminates OS processes; writes no coordinator substrate.
     # invoke.from_argv — MUTATING (fail-closed default, DR-208 § Classification

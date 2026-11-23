@@ -17,6 +17,7 @@ from pathlib import Path
 import sys
 import time
 import uuid
+from collections.abc import Mapping
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.atomic_replace import atomic_write_bytes
@@ -155,10 +156,17 @@ def _find_agy_host(parents):
     return daemon
 
 
-def register_current(payload: dict, directory: Path | None = None) -> dict:
-    """The sole external binding constructor; only observed Codex or Agy ancestors qualify."""
+def register_current(payload: dict, directory: Path | None = None, *,
+                     host_pid: int | None = None, env: "Mapping[str, str] | None" = None) -> dict:
+    """The sole external binding constructor; only observed Codex or Agy ancestors qualify.
+
+    `host_pid` is the process whose ancestors are searched (default: this process) and
+    `env` the environment classified against (default: `os.environ`); the warm engine
+    passes its caller's, since its own describe the server.
+    """
     _require_thread_lifecycle(payload)
     import psutil
+    environ: Mapping[str, str] = os.environ if env is None else env
 
     provider = payload.get("provider") or "codex"
     if provider not in PROVIDERS:
@@ -170,7 +178,7 @@ def register_current(payload: dict, directory: Path | None = None) -> dict:
     cwd = payload.get("cwd")
     if not isinstance(cwd, str) or not Path(cwd).is_absolute():
         raise ValueError("cwd must be absolute")
-    parents = list(psutil.Process(os.getpid()).parents())
+    parents = list(psutil.Process(os.getpid() if host_pid is None else host_pid).parents())
     if provider == "agy":
         host = _find_agy_host(parents)
         if host is None:
@@ -207,15 +215,15 @@ def register_current(payload: dict, directory: Path | None = None) -> dict:
         argv = []
     if provider == "agy":
         classify_payload = {**payload, "session_id": sid}
-        record["role"] = classify(classify_payload, os.environ, **observed_agy_launch(argv))
+        record["role"] = classify(classify_payload, environ, **observed_agy_launch(argv))
     else:
         if argv and Path(argv[0].replace("\\", "/")).stem.lower() == "node":
             argv = argv[1:]  # the launcher script stands in for the codex binary at argv[0]
-        record["role"] = classify(payload, os.environ, **observed_cli_launch(argv))
+        record["role"] = classify(payload, environ, **observed_cli_launch(argv))
     transcript = payload.get("transcript_path")
     if isinstance(transcript, str) and Path(transcript).is_absolute():
         record["transcript_path"] = str(Path(transcript))
-    parent = payload.get("parent_session_id") or os.environ.get("COORDINATOR_PARENT_SESSION_ID")
+    parent = payload.get("parent_session_id") or environ.get("COORDINATOR_PARENT_SESSION_ID")
     if parent:
         try:
             record["parent_session_id"] = _sid(parent)
