@@ -3,7 +3,7 @@ heavy-admission guard. Spawn-free: payload fields, the session touch record and 
 guard_heavy_command_admission already takes (RAM floor, box hold).
 
 Legs run in order: identity (a subagent other than the test-runner is refused every pytest shape),
-scope (the test-runner names touched test files or node ids only, no workers), ceiling (every caller,
+scope (the test-runner names test files or node ids, no workers; an untouched target is an advisory), ceiling (every caller,
 the EM included, while the box is below its RAM floor or held by another session). A reading that
 cannot be taken allows and logs an advisory (DR-402); the identity leg reads payload fields only and
 always runs.
@@ -201,7 +201,9 @@ def _scope_verdict(payload: Mapping[str, Any], args: Sequence[str], cwd: str) ->
             if degraded:
                 _advisory("touch record degraded; %s not found, scope leg allows" % target)
                 continue
-            return _deny(LEG_SCOPE, "%s is not in this session's touched test files" % target)
+            # Advisory, never a deny: a test run is recoverable, and the touch record misses legitimate
+            # targets (a file a subagent wrote and committed is in no session sink).
+            _advisory("%s is not in this session's touched test files; scope leg allows" % target)
     return _ALLOW
 
 

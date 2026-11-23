@@ -382,6 +382,16 @@ def _target_of(mine) -> tuple:
 
 _verdict = threading.local()
 
+#: Win32 pipe errors for a client that left before the verdict: broken pipe, no process on the other end, pipe closing.
+_PIPE_GONE_WINERRORS = (109, 232, 233)
+
+
+def _client_gone(e) -> bool:
+    """True when `e` is the client having hung up (a liveness probe connects and leaves), not a bridge fault."""
+    if isinstance(e, (BrokenPipeError, ConnectionResetError)):
+        return True
+    return type(e).__name__ == "error" and bool(e.args) and e.args[0] in _PIPE_GONE_WINERRORS
+
 
 def relay_send(conn) -> None:
     """Relay one client's message lines; answer the client when the bridge takes custody, not after the far leg.
@@ -407,7 +417,8 @@ def relay_send(conn) -> None:
         try:
             conn.write(json.dumps(reply).encode() + b"\n")
         except Exception as e:  # pywintypes.error is not an OSError subclass
-            log.write(f"client verdict not delivered: {e}\n")
+            if not _client_gone(e):
+                log.write(f"client verdict not delivered: {e}\n")
         conn.close()
 
     try:

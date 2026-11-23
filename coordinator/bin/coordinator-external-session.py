@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Codex lifecycle bridge: one stdlib round trip to the warm engine's external_session.handle op.
 
-Imports no coordinator_core module and spawns no server. Any miss prints `{}` and a stderr
-line and exits 0, so a Codex turn is never blocked. The endpoint derivation below mirrors
+Imports no coordinator_core module and spawns no server. Any miss prints a typed
+`{"systemMessage": "<hook>: degraded: <ExcType>: <detail>"}` advisory and a stderr line and exits 0, so a Codex turn is never blocked. The endpoint derivation below mirrors
 `coordinator_core.warm.election` / `skew` (pipe on Windows, unix socket elsewhere) and must
 change with them.
 """
@@ -20,6 +20,7 @@ from typing import BinaryIO
 EVENTS = ('SessionStart', 'SessionEnd', 'SubagentStart', 'UserPromptSubmit', 'PostToolUse',
           'Stop', 'SubagentStop', 'PreCompact', 'PostCompact')
 OP = 'external_session.handle'
+HOOK = 'coordinator-external-session'
 DEADLINE_SECS = 1.5
 _BUSY_RETRY_SECS = 0.4
 
@@ -159,9 +160,9 @@ def main(argv: 'list[str] | None' = None) -> int:
             sys.stderr.write(f'{notice}\n')
         sys.stdout.write(json.dumps(result['output']) + '\n')
         return 0
-    except (Exception, SystemExit) as exc:
+    except BaseException as exc:  # noqa: BLE001 -- a hook must never break the session
         sys.stderr.write(f'external session context unavailable: {type(exc).__name__}: {exc}\n')
-        sys.stdout.write('{}\n')
+        sys.stdout.write(json.dumps({'systemMessage': f'{HOOK}: degraded: {type(exc).__name__}: {exc}'}) + '\n')
         return 0
 
 
@@ -169,7 +170,10 @@ if __name__ == '__main__':
     if any(_a in ("-h", "--help") for _a in sys.argv[1:]):
         print("usage: coordinator-external-session [-h]\nprint the external session context (hook-driven bridge; takes no arguments)")
         raise SystemExit(0)
-    _rc = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
+    try:
+        _rc = main()
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except BaseException:  # noqa: BLE001 -- a broken pipe must not turn a degrade into exit 1
+        _rc = 0
     os._exit(_rc)

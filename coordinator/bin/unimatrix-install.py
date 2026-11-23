@@ -483,6 +483,8 @@ _PIN_CACHE = {}
 
 def _pin_value():
     """The machine-local `unimatrix.python` value autolink reads, when it names a file; else None. One read per settings home."""
+    # Trap: a non-login ssh session carries no env, and the roster's settings_home() is strict.
+    os.environ.setdefault("COORDINATOR_SETTINGS_HOME", str(settings_home()))
     roster = _sibling("unimatrix-roster.py")
     home = str(roster.settings_home())
     if home not in _PIN_CACHE:
@@ -961,6 +963,41 @@ def rewrite_forced_interpreters(path, interpreter):
                     and not _same_interpreter(old, interpreter):
                 inner = m.group(1)[:im.start(2)] + token + m.group(1)[im.end(2):]
                 line = line[:m.start(1)] + inner + line[m.end(1):]
+                changed += 1
+        lines.append(line)
+    if changed:
+        tmp = path.with_name(path.name + ".unimatrix-tmp")
+        tmp.write_text("".join(lines), encoding="utf-8", newline="")
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    return changed
+
+
+_FORCED_RELAY_PATH = re.compile(r'\\"([^"]*?)unimatrix-relay\.py\\"|(\S*?)unimatrix-relay\.py')
+
+
+def rewrite_forced_relay_paths(path, dest_dir) -> int:
+    """Point every uncommented forced command that runs unimatrix-relay.py out of a klabauter checkout
+    (`.../coordinator/bin/`) at the installed copy in `dest_dir`, which --install refreshes; the checkout is never
+    updated by an install, so the far relay otherwise drifts. Lines naming any other directory are left alone.
+    Returns the number of lines rewritten (0 when the file is absent or unreadable)."""
+    path = Path(path).resolve()
+    try:
+        text = path.read_text(encoding="utf-8", newline="")
+    except OSError:
+        return 0
+    target = str(Path(dest_dir) / _RELAY_FORCED_SCRIPT)
+    token = f'\\"{target}\\"' if " " in target else target
+    changed = 0
+    lines = []
+    for line in text.splitlines(keepends=True):
+        m = _FORCED_COMMAND.search(line)
+        if m and not line.lstrip().startswith("#"):
+            inner = m.group(1)
+            rm = _FORCED_RELAY_PATH.search(inner)
+            folder = rm and (rm.group(1) if rm.group(1) is not None else rm.group(2))
+            if folder and folder.replace("\\", "/").rstrip("/").lower().endswith("/coordinator/bin"):
+                line = line[:m.start(1)] + inner[:rm.start()] + token + inner[rm.end():] + line[m.end(1):]
                 changed += 1
         lines.append(line)
     if changed:
@@ -3040,6 +3077,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     when that is overridden, or `agent_dir`; `schtasks` (argv tail -> CompletedProcess) replaces the real
     Task Scheduler, which an overridden `hooks_path` otherwise skips."""
     out = out or sys.stdout
+    os.environ.setdefault("COORDINATOR_SETTINGS_HOME", str(settings_home()))
     if agent_dir is None and hooks_path is not None:
         agent_dir = Path(hooks_path).with_name("login-agent")
     if schtasks is None and hooks_path is not None:
@@ -3340,6 +3378,13 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             print(f"WARN: authorized_keys forced-command interpreters not rewritten: {exc}", file=out)
         if rewrote:
             print(f"authorized_keys: {rewrote} forced-command interpreter(s) rewritten to {forced_command_interpreter()}", file=out)
+        try:
+            repointed = rewrite_forced_relay_paths(authorized_keys, dest)
+        except OSError as exc:
+            repointed = 0
+            print(f"WARN: authorized_keys forced-command relay paths not rewritten: {exc}", file=out)
+        if repointed:
+            print(f"authorized_keys: {repointed} forced-command relay path(s) rewritten to the installed copy in {dest}", file=out)
     router_live = router_live or router_is_live
     if router_live(dest) and (digest_before != router_closure_digest(dest)
                               or not (dest / "router" / "router.pid.json").is_file()):

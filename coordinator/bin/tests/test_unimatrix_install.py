@@ -2426,7 +2426,8 @@ def _run_for_cpu_seconds(argv, stdin_text):
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("event", ["SessionStart", "SessionEnd", "SubagentStart", "UserPromptSubmit", "PostToolUse", "Stop", "SubagentStop", "PreCompact", "PostCompact"])
-def test_external_lifecycle_launcher_calls_published_engine_in_process(tmp_path, event):
+def test_external_lifecycle_launcher_is_bounded_and_never_imports_the_engine(tmp_path, event):
+    """The bridge only dials the warm engine: with no server it answers the typed advisory under budget and never runs engine code in-process."""
     engine = tmp_path / "published engine"
     package = engine / "coordinator_core" / "session"
     package.mkdir(parents=True)
@@ -2447,9 +2448,9 @@ def test_external_lifecycle_launcher_calls_published_engine_in_process(tmp_path,
         json.dumps({"session_id":"parent-session", **({"agent_id":"child"} if event == "SubagentStart" else {})}))
     assert proc.returncode == 0, proc.stderr
     assert cpu_s < LAUNCHER_CPU_BUDGET_S, f"{event} launcher cost {cpu_s:.3f}s process time"
-    assert json.loads(proc.stdout) == ({} if event == "SessionEnd" else {"event":event})
-    assert (package / "registered").exists() is (event == "SessionStart")
-    assert (package / "ended").exists() is (event == "SessionEnd")
+    out = json.loads(proc.stdout)
+    assert list(out) == ["systemMessage"] and out["systemMessage"].startswith("coordinator-external-session: degraded: ")
+    assert not (package / "registered").exists() and not (package / "ended").exists()
 
 
 def test_stale_published_engine_keeps_transport_but_reports_partial_lifecycle(monkeypatch, tmp_path, _engine):
@@ -3904,3 +3905,30 @@ def test_rendered_doctrine_binds_skills_root_and_leaves_no_token(tmp_path):
     assert f"`{skills}/<name>/SKILL.md`" in block
     assert not re.search(r"\{[A-Z_]+\}", block)
     assert f"`{ui.SKILLS_ROOT}`" in ui.render_peer_doctrine(tmp_path)
+
+
+_REAL_PIN_VALUE = ui._pin_value
+
+
+def test_forced_command_interpreter_survives_an_unset_settings_home(monkeypatch, tmp_path):
+    # A non-login ssh session has no COORDINATOR_SETTINGS_HOME; the roster's strict settings_home() raised.
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setattr(ui.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(ui, "_PIN_CACHE", {})
+    monkeypatch.setattr(ui, "_pin_value", _REAL_PIN_VALUE)
+    assert ui.forced_command_interpreter()
+    assert os.environ["COORDINATOR_SETTINGS_HOME"] == str(tmp_path / ".coordinator-claude-settings")
+
+
+def test_install_repoints_a_checkout_forced_relay_at_the_installed_copy(monkeypatch, tmp_path):
+    checkout = f'restrict,command="{ui.forced_command_interpreter()} /Users/x/claude-klabauter/coordinator/bin/unimatrix-relay.py" {_KEY}'
+    py = ui.forced_command_interpreter()
+    other = f'restrict,command="{py} /d/unimatrix-relay.py" {_KEY}'
+    filekey = f'restrict,command="{py} /Users/x/claude-klabauter/coordinator/bin/unimatrix-file-relay.py --peer b" {_KEY}'
+    rc, out, keys = _install_with_keys(monkeypatch, tmp_path, "\n".join([checkout, other, filekey]) + "\n")
+    installed = str(tmp_path / "home" / "unimatrix" / "unimatrix-relay.py")
+    lines = keys.read_text(encoding="utf-8").splitlines()
+    assert rc == 0 and "relay path(s) rewritten" in out
+    assert lines[0].endswith(f'{installed}" {_KEY}') and "claude-klabauter" not in lines[0]
+    assert lines[1:] == [other, filekey]
+    assert ui.rewrite_forced_relay_paths(keys, tmp_path / "home" / "unimatrix") == 0

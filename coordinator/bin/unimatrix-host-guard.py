@@ -36,6 +36,7 @@ import threading
 import time
 from pathlib import Path
 
+HOOK = "unimatrix-host-guard"
 NEUTRAL = {"agy": {"decision": "allow"}, "codex": {}, "grok": {}}
 NEUTRAL_UNKNOWN = "neutral-unknown"
 EVALUATED_ALLOW = "evaluated-allow"
@@ -341,8 +342,26 @@ def _argv_value(argv, flag):
     return None
 
 
-def main(argv=None):
-    """Print one JSON line on stdout and the state on stderr; exit 0 whatever happens."""
+def main(argv=None) -> int:
+    """Print one JSON line on stdout and the state on stderr; exit 0 whatever happens.
+
+    A handled degrade answers the host's neutral object. Only an exception escaping _answer's own
+    handlers (BaseException included) answers the typed advisory `{"systemMessage": "<hook>: degraded: ..."}`."""
+    sent = []
+    try:
+        return _answer(argv, sent)
+    except BaseException as exc:  # a hook must never break the session
+        if not sent:
+            try:
+                sys.stdout.write(json.dumps({"systemMessage": f"{HOOK}: degraded: {type(exc).__name__}: {exc}"}) + "\n")
+                sys.stdout.flush()
+                sys.stderr.write("degraded\n")
+            except BaseException:
+                pass
+        return 0
+
+
+def _answer(argv, sent) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     host = _argv_value(argv, "--host") or ""
     answer, state = _neutral(host), "degraded"
@@ -361,6 +380,7 @@ def main(argv=None):
             answer, state = _degrade(host, "run_error", DEFAULT_BUDGET_SECS, None, stdin_text, engine_root)
         except Exception:
             answer, state = _neutral(host), "degraded"
+    sent.append(True)
     sys.stdout.write(json.dumps(answer) + "\n")
     sys.stdout.flush()
     if pending:

@@ -526,6 +526,30 @@ def router_answers(ctl):
         return False
 
 
+def spawn_router_logged(err_path):
+    """Start the peer router with its stderr in `err_path`: a router that dies in start() writes only a traceback."""
+    cmd = [_roster().console_python(), str(HERE / "unimatrix-peer-router.py")]
+    err = open(err_path, "wb")
+    try:
+        if sys.platform == "win32":
+            return subprocess.Popen(cmd, stderr=err, creationflags=_roster().no_window())
+        return subprocess.Popen(cmd, stderr=err, start_new_session=True)
+    finally:
+        err.close()
+
+
+def router_spawn_verdict(proc, err_path) -> str:
+    """Why a spawned router is not answering: its exit code and last stderr line, or that it is alive but silent."""
+    rc = proc.poll()
+    if rc is None:
+        return f"spawned router pid {proc.pid} is alive but its endpoint does not answer"
+    try:
+        tail = Path(err_path).read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    except OSError:
+        tail = []
+    return f"spawned router pid {proc.pid} exited rc={rc}: {tail[-1] if tail else 'no stderr'}"
+
+
 def ensure_router(say, wait: float = 3.0) -> bool:
     """Spawn the peer router detached when its endpoint does not answer on either OS.
 
@@ -552,11 +576,18 @@ def ensure_router(say, wait: float = 3.0) -> bool:
                     return False
                 transport.unlock_file(lease)
             if not kickstart_router_agent(say):
-                p = _roster().spawn([_roster().console_python(), str(HERE / "unimatrix-peer-router.py")])
+                err_path = lock_dir / "spawn.err"
+                p = spawn_router_logged(err_path)
                 say(f"router not answering at {ctl}; spawned router pid {p.pid}")
+            else:
+                p = err_path = None
             deadline = time.time() + wait
             while time.time() < deadline and not router_answers(ctl):
+                if p is not None and p.poll() is not None:
+                    break
                 time.sleep(0.2)
+            if p is not None and not router_answers(ctl):
+                say(router_spawn_verdict(p, err_path))
             return True
         finally:
             transport.unlock_file(lock)
