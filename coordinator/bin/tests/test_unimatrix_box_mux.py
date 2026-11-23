@@ -126,6 +126,20 @@ def test_every_ssh_argv_carries_the_host_key_alias_and_a_host_name(mux):
     assert "HostKeyAlias=farbox" in seen[0] and seen[0][-2] == "farbox" and seen[0][-1] == "roster"
 
 
+def test_every_ssh_leg_pins_the_key_and_refuses_any_agent(mux, monkeypatch):
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/1password-agent.sock")
+    argv = mux.ssh_argv("farbox", "k", "farbox")
+    opts = [argv[i + 1] for i, a in enumerate(argv) if a == "-o"]
+    assert "IdentitiesOnly=yes" in opts and "IdentityAgent=none" in opts and "BatchMode=yes" in opts
+    assert argv[argv.index("-i") + 1] == "k"
+    seen = []
+    ch = mux.channel("farbox", key="k", host="farbox", direct=True, mux_options=lambda h: [])
+    import unittest.mock as m
+    with m.patch.object(mux.subprocess, "run", lambda a, **kw: seen.append(a) or subprocess.CompletedProcess(a, 0, b"", b"")):
+        ch.run("roster")
+    assert "IdentityAgent=none" in seen[0]
+
+
 def test_a_caller_keepalive_is_the_first_value_ssh_reads_so_it_overrides_the_default(mux):
     # ssh keeps the first of a repeated -o: with the defaults first, the roster's 5s x 2 keepalive was dead
     # and a half-dead link held a call to the default 90s, past the roster's 20s budget.

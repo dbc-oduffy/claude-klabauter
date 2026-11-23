@@ -160,6 +160,7 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
         }
     if params.get("fire", True) is not False and "refused" not in reply:
         from coordinator_core.ops.workflow_fire.op import _workflow_fire
+        from coordinator_core.warm.sandboxed_spawn import SpawnIndeterminate
 
         try:
             fire_params = {"script_path": reply["script_path"], "expected": reply["sha256"], "notify_to": target,
@@ -178,6 +179,9 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
                 reply["fire_error"] = f"{fired['refused']}: {fired.get('reason', '')}"
             elif not isinstance(fired, dict) or not isinstance(fired.get("fire_id"), str) or not fired["fire_id"].strip():
                 reply["fire_error"] = "Requested fire returned no fire_id; reconcile the minted run before retrying."
+        except SpawnIndeterminate as exc:
+            reply["fire_error"] = str(exc)
+            reply["fire"] = {"state": "indeterminate", "run_id": exc.run_id, "error": exc.error}
         except Exception as exc:  # the submit stands; the caller fires by hand with the handle
             reply["fire_error"] = f"{type(exc).__name__}: {exc}"
     return reply

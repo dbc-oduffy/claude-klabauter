@@ -732,3 +732,48 @@ def test_native_json_child_success_propagates_only_submit_failure(command, expec
     cmd = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.argv[1].encode() + b'\\n')", event]
     assert hel._spawn_codex_events(cmd, dict(os.environ)) == expected
     assert capfd.readouterr().out == event + "\n"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="darwin-only endpoint")
+def test_registered_diagnostic_build_serves_ordinary_exec_without_flags(home, tmp_path, monkeypatch):
+    from coordinator_core.warm import restricted_endpoint as endpoint
+
+    monkeypatch.delenv("COORDINATOR_PRIVATE_DIAGNOSTIC_DIRECTORY", raising=False)
+    root = home / "native-diagnostics"
+    root.mkdir(mode=0o700)
+    generation = root / "build-fixture"
+    generation.mkdir()
+    (root / "current").symlink_to(generation)
+    (generation / "socket-directory").write_text(str(tmp_path.resolve()))
+    native = generation / "codex"
+    native.write_text("#!/bin/sh\nexit 0\n")
+    native.chmod(0o700)
+    monkeypatch.setenv("COORDINATOR_CODEX_CLI", "/usr/bin/true")
+    calls = []
+    real = endpoint.diagnostic_spawn
+    def record(directory, cmd, env):
+        calls.append((directory, cmd[0]))
+        # Keep this dispatch test independent of the absolute tmp_path socket length.
+        Path("rx").mkdir(mode=0o700)
+        return real(Path("rx"), cmd, env)
+    monkeypatch.setattr(endpoint, "diagnostic_spawn", record)
+    rc = hel.launch("codex", ["exec", "--json"], cwd=str(tmp_path), open_runs=lambda *_: [])
+    assert rc == 0 and calls == [(tmp_path.resolve(), str(native))]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="darwin-only endpoint")
+@pytest.mark.parametrize("unsafe", ["generation", "binary", "manifest"])
+def test_diagnostic_install_rejects_peer_writable_members(home, unsafe):
+    root = home / "native-diagnostics"
+    root.mkdir(mode=0o700)
+    generation = root / "build-fixture"
+    generation.mkdir(mode=0o700)
+    (root / "current").symlink_to(generation)
+    binary = generation / "codex"
+    binary.touch(mode=0o700)
+    manifest = generation / "socket-directory"
+    manifest.write_text("/private")
+    member = {"generation": generation, "binary": binary, "manifest": manifest}[unsafe]
+    member.chmod(member.stat().st_mode | 0o020)
+    with pytest.raises(PermissionError, match="unsafe"):
+        hel._diagnostic_install(os.environ)

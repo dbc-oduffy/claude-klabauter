@@ -1,0 +1,113 @@
+diff --git a/codex-rs/sandboxing/src/manager.rs b/codex-rs/sandboxing/src/manager.rs
+index 4e4cf55..0c1b05a 100644
+--- a/codex-rs/sandboxing/src/manager.rs
++++ b/codex-rs/sandboxing/src/manager.rs
+@@ -616,6 +616,9 @@ impl SandboxManager {
+                     (context, _) => context,
+                 };
+                 let (profile, sockets) = match &self.operation {
++                    SandboxOperation::Command if option_env!("CODEX_BUILD_PRIVATE_DIAGNOSTIC_DIRECTORY").is_some() => {
++                        (MacosSeatbeltProfile::Command, [].as_slice())
++                    }
+                     SandboxOperation::Command => (MacosSeatbeltProfile::Process, [].as_slice()),
+                     SandboxOperation::InheritedTerminal { allow_unix_sockets } => (
+                         MacosSeatbeltProfile::ProcessWithInheritedTerminal,
+diff --git a/codex-rs/sandboxing/src/seatbelt.rs b/codex-rs/sandboxing/src/seatbelt.rs
+index 4b56255..e24606e 100644
+--- a/codex-rs/sandboxing/src/seatbelt.rs
++++ b/codex-rs/sandboxing/src/seatbelt.rs
+@@ -34,6 +34,7 @@ mod scratch;
+ pub(crate) enum MacosSeatbeltProfile {
+     #[default]
+     Process,
++    Command,
+     ProcessWithInheritedTerminal,
+     FileSystemHelper,
+ }
+@@ -841,7 +842,9 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
+     let include_process_defaults = resolved_filesystem_permissions.include_platform_defaults
+         && matches!(
+             profile,
+-            MacosSeatbeltProfile::Process | MacosSeatbeltProfile::ProcessWithInheritedTerminal
++            MacosSeatbeltProfile::Process
++                | MacosSeatbeltProfile::Command
++                | MacosSeatbeltProfile::ProcessWithInheritedTerminal
+         );
+     let scratch_reads = if include_process_defaults {
+         let (reads, writes) = scratch::scratch_access_roots(
+@@ -1001,6 +1004,20 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
+     if include_process_defaults {
+         policy_sections.push("(allow file-read* (subpath \"/Applications\"))".to_string());
+     }
++    // Only a host-built diagnostic binary has this fixed destination. Child
++    // environment, CLI arguments and workspace config cannot select a socket.
++    let diagnostic_directory = option_env!("CODEX_BUILD_PRIVATE_DIAGNOSTIC_DIRECTORY");
++    let diagnostic_endpoint = diagnostic_directory
++        .map(Path::new)
++        .filter(|directory| profile == MacosSeatbeltProfile::Command && directory.is_absolute())
++        .map(|directory| directory.join("diagnostic.sock"));
++    if diagnostic_endpoint.is_some() {
++        policy_sections.push("(deny system-socket (require-all (socket-domain AF_UNIX) (socket-type SOCK_DGRAM)))".to_string());
++        policy_sections.push("(allow system-socket (require-all (socket-domain AF_UNIX) (socket-type SOCK_STREAM)))".to_string());
++        policy_sections.push(
++            r#"(allow network-outbound (remote unix-socket (literal (param "PRIVATE_DIAGNOSTIC_SOCKET"))))"#.to_string(),
++        );
++    }
+     // Network grants and Unix-socket allowlists must never reopen the
+     // privileged app-server RPC transport to filesystem-restricted commands.
+     if !resolved_filesystem_permissions.has_full_disk_write_access {
+@@ -1037,7 +1054,7 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
+     }
+     let full_policy = policy_sections.join("\n");
+ 
+-    let dir_params = [
++    let mut dir_params = [
+         file_read_dir_params,
+         file_write_dir_params,
+         protected_ancestor_params,
+@@ -1045,6 +1062,9 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
+     ]
+     .concat();
+ 
++    if let Some(endpoint) = diagnostic_endpoint {
++        dir_params.push(("PRIVATE_DIAGNOSTIC_SOCKET".to_string(), endpoint));
++    }
+     let mut seatbelt_args: Vec<String> = vec!["-p".to_string(), full_policy];
+     let definition_args = dir_params
+         .into_iter()
+diff --git a/codex-rs/utils/pty/src/pipe.rs b/codex-rs/utils/pty/src/pipe.rs
+index 1088c01..dcad2ed 100644
+--- a/codex-rs/utils/pty/src/pipe.rs
++++ b/codex-rs/utils/pty/src/pipe.rs
+@@ -178,8 +178,31 @@ async fn spawn_process_with_stdin_mode(
+             Some(child) => child,
+             None => command.spawn()?,
+         };
++    #[cfg(target_os = "macos")]
++    let diagnostic_timeout = std::time::Duration::from_millis(400);
++    #[cfg(target_os = "macos")]
++    let diagnostic_host = if program == OsStr::new("/usr/bin/sandbox-exec")
++        && let Some(directory) = option_env!("CODEX_BUILD_PRIVATE_DIAGNOSTIC_DIRECTORY")
++    {
++        // Reserve before spawn so a child reaching the listener immediately is queued.
++        tokio::time::timeout(diagnostic_timeout, async {
++            let mut host = tokio::net::UnixStream::connect(Path::new(directory).join("spawn.sock")).await.ok()?;
++            host.write_u8(b'B').await.ok()?;
++            (host.read_u8().await.ok()? == b'Y').then_some(host)
++        }).await.ok().flatten()
++    } else {
++        None
++    };
+     #[cfg(not(target_os = "linux"))]
+     let mut child = command.spawn()?;
++    #[cfg(target_os = "macos")]
++    if let (Some(mut host), Some(pid)) = (diagnostic_host, child.id()) {
++        // The receiver validates the kernel peer before it releases the data queue.
++        let _ = tokio::time::timeout(diagnostic_timeout, async {
++            host.write_all(&pid.to_be_bytes()).await?;
++            host.read_u8().await
++        }).await;
++    }
+     #[cfg(windows)]
+     let windows_terminator = {
+         // Accept the small race: a descendant created between spawn and

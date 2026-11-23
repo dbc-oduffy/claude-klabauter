@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import threading
 import types
 from pathlib import Path
 
@@ -87,8 +88,10 @@ def test_a_mirror_whose_name_disagrees_with_its_far_name_is_refused_naming_name_
     row_path.write_text(json.dumps(row))
     ssh = []
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: ssh.append(argv))
-    bridge.serve_one(Conn([], deliveries))
+    conn = Conn([], deliveries)
+    bridge.serve_one(conn)
     rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
+    assert conn.replies == [{"ok": False, "error": rows[0]["error"]}]  # refused before custody: a synchronous failure
     assert ssh == [] and [r["ok"] for r in rows] == [False]
     for part in ("group-em-54.machine-a", "example-game-repo-fc", "fc000000-0000-4000-8000-000000000003"):
         assert part in rows[0]["error"]
@@ -100,14 +103,14 @@ def test_a_mirror_whose_name_disagrees_with_its_far_name_is_refused_naming_name_
 def test_every_send_records_its_outcome_and_a_failure_notifies_the_sender(env, monkeypatch: pytest.MonkeyPatch, returncode, ok) -> None:
     bridge, deliveries = env
     events, rows, _ = drive(bridge, deliveries, monkeypatch, returncode)
-    assert events == ["write", ("close", 1)]  # the client is answered after the verdict row, then released
+    assert events == ["write", ("close", 0)]  # the client is answered at custody, before any verdict row
     assert [r["ok"] for r in rows] == [ok]
     assert isinstance(rows[0]["ms"], int)
     assert ("error" in rows[0]) == (not ok)
     assert bool(bridge.notices) == (not ok)
 
 
-def test_sender_is_answered_only_after_the_ssh_leg_runs(env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sender_is_answered_before_the_ssh_leg_runs_and_the_answer_is_accepted(env, monkeypatch: pytest.MonkeyPatch) -> None:
     bridge, deliveries = env
     events = []
 
@@ -116,9 +119,41 @@ def test_sender_is_answered_only_after_the_ssh_leg_runs(env, monkeypatch: pytest
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
     monkeypatch.setattr(subprocess, "run", run)
-    bridge.serve_one(Conn(events, deliveries))
+    conn = Conn(events, deliveries)
+    bridge.serve_one(conn)
     # The second ssh is the `receipts` reconcile a reply-less exit 0 earns.
-    assert events == ["ssh", "ssh", "write", ("close", 1)]
+    assert events == ["write", ("close", 0), "ssh", "ssh"]
+    assert conn.replies == [{"ok": True, "accepted": True}]
+
+
+def test_a_far_leg_slower_than_the_client_deadline_is_answered_accepted_and_a_later_failure_still_lands(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge, deliveries = env
+    answered, release = threading.Event(), threading.Event()
+
+    class SlowConn(Conn):
+        def write(self, data) -> None:
+            super().write(data)
+            answered.set()
+
+    def run(argv, **kw):
+        assert release.wait(10)  # the far leg outlasts the client's wait window
+        return subprocess.CompletedProcess(argv, 255, b"", b"Connection timed out")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    conn = SlowConn([], deliveries)
+    worker = threading.Thread(target=bridge.serve_one, args=(conn,))
+    worker.start()
+    try:
+        assert answered.wait(5), "client verdict waited on the far ssh leg"
+        assert conn.replies == [{"ok": True, "accepted": True}]
+        assert not deliveries.exists() and bridge.notices == []
+    finally:
+        release.set()
+        worker.join(10)
+    rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
+    assert [r["ok"] for r in rows] == [False] and "Connection timed out" in rows[0]["error"]
+    assert bridge.notices == [rows[0]["error"]]
+    assert conn.replies == [{"ok": True, "accepted": True}]  # the failure is never a second answer
 
 
 def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -154,6 +189,34 @@ def test_misdelivery_notice_names_the_reached_session_and_never_says_not_deliver
     monkeypatch.setattr(bridge, "write_local", lambda endpoint, frame: frames.append(json.loads(frame)["message"]))
     bridge.notify_misdelivered(SENT, "far.lan (far)", "addon-38", "Machine-b")
     assert frames == ["Misdelivered: your message to far.lan (far) was written to addon-38 on Machine-b, not the addressed session."]
+
+
+def test_queued_reply_is_an_accepted_delivery_acked_as_queued_never_a_failure(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge, deliveries = env
+    told = []
+    monkeypatch.setattr(bridge, "_tell_sender", lambda line, text: told.append(text))
+    queued = json.dumps({"ok": True, "queued": True, "digest": hashlib.sha256(SENT).hexdigest(),
+                         "reached": "far", "reached_box": "Machine-b"}).encode() + b"\n"
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, queued, b""))
+    bridge.serve_one(Conn([], deliveries))
+    rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
+    assert [r["ok"] for r in rows] == [True] and rows[0]["queued"] is True and "error" not in rows[0]
+    assert bridge.notices == []
+    assert told == ["Queued for far on Machine-b; delivered when its reader drains."]
+
+
+def test_a_delivered_reply_is_not_marked_queued_and_a_refused_one_still_fails(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge, deliveries = env
+    told = []
+    monkeypatch.setattr(bridge, "_tell_sender", lambda line, text: told.append(text))
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, RECEIPTED, b""))
+    bridge.serve_one(Conn([], deliveries))
+    refused = b'{"ok": false, "queued": true, "error": "TimeoutError: x; queue QueueFull: full"}\n'
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, refused, b""))
+    bridge.serve_one(Conn([], deliveries))
+    rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
+    assert [r["ok"] for r in rows] == [True, False] and "queued" not in rows[0] and "queued" not in rows[1]
+    assert not any(t.startswith("Queued") for t in told) and len(bridge.notices) == 1
 
 
 @pytest.mark.parametrize("stdout", [

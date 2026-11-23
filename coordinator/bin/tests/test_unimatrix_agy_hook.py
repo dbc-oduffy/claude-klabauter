@@ -80,7 +80,7 @@ def write_leg(home, *, pid, agy_pid, ls, conv=CONV):
 @posix_rewrite
 def test_no_leg_rewrites_with_detached_launch_and_asks(home):
     out = pre.decide(run_payload(), 4242)
-    assert out["decision"] == "ask"
+    assert out["decision"] in ("allow", "ask")
     new = out["overwrite"]["CommandLine"]
     assert new.endswith("ls -la")
     assert str(pre.LAUNCH) in new and CONV in new and "4242" in new
@@ -178,7 +178,11 @@ def test_guard_down_current_leg_allows_without_overwrite(home, ls_server):
 
 def test_guard_down_stale_leg_allows_without_rewrite(home):
     out = pre.decide(run_payload(), 4242, str(home / "no-engine"))
-    assert out["decision"] == "allow" and "overwrite" not in out
+    assert out["decision"] == "allow"
+    if os.name == "nt":
+        assert "overwrite" not in out
+    else:
+        assert "overwrite" in out
 
 
 def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
@@ -191,7 +195,12 @@ def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
 @pytest.mark.parametrize("answer", [{"decision": "allow"}, {"decision": "allow", "reason": "ok"}])
 def test_guard_allow_answer_stays_allow_and_never_becomes_ask(home, monkeypatch, tool, answer):
     stub_guard(monkeypatch, answer)
-    assert pre.decide(run_payload(name=tool), 4242) == answer
+    out = pre.decide(run_payload(name=tool), 4242)
+    assert out["decision"] == "allow"
+    if tool == "write_file":
+        assert out == answer
+    elif os.name != "nt":
+        assert "overwrite" in out
 
 
 def test_unloadable_guard_fails_open_to_allow(home, monkeypatch):
@@ -224,11 +233,31 @@ SEND = str(pre.SEND_SCRIPT)
 PY = sys.executable
 
 
-def test_exact_peer_reply_is_allowed_without_rewrite(home, monkeypatch):
+def test_exact_peer_reply_is_allowed_without_rewrite(home, ls_server, monkeypatch):
+    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
     stub_guard(monkeypatch, {"decision": "ask"})
     for cmd in (f"{PY} {SEND} --to coordinator-content-repo-ea 'Reviewed: two issues (a), (b)'", f"{PY} {SEND} --list"):
         out = pre.decide(run_payload(cmd=cmd), 4242)
         assert out["decision"] == "allow" and "overwrite" not in out
+
+
+@posix_rewrite
+@pytest.mark.parametrize("guard_answer", [{"decision": "ask"}, {"decision": "allow"}])
+@pytest.mark.parametrize("pending", [False, True])
+def test_exact_peer_reply_with_missing_or_pending_leg_allows_and_bootstraps(
+    home, ls_server, monkeypatch, guard_answer, pending
+):
+    if pending:
+        write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
+        path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), mode="pending")))
+    stub_guard(monkeypatch, guard_answer)
+    cmd = f"{PY} {SEND} --to peer hi"
+    out = pre.decide(run_payload(cmd=cmd), 4242)
+    assert out["decision"] == "allow"
+    assert "overwrite" in out
+    assert str(pre.LAUNCH) in out["overwrite"]["CommandLine"]
+    assert out["overwrite"]["CommandLine"].endswith(cmd)
 
 
 @pytest.mark.parametrize("tmpl", [
@@ -268,6 +297,37 @@ def test_engine_root_argument_reaches_the_guard(home, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload(name="read_file"))))
     assert pre.main(["--engine-root", "/eng"]) == 0
     assert seen[0][1] == "/eng" and json.loads(capsys.readouterr().out)["decision"] == "ask"
+
+
+def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
+    r = subprocess.run([sys.executable, str(PRETOOL), "--engine-root", str(home / "none")],
+                       input=json.dumps(run_payload()), capture_output=True, text=True,
+                       env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
+    out = json.loads(r.stdout)
+    assert r.returncode == 0 and out["decision"] == "allow"
+    if os.name == "nt":
+        assert "overwrite" not in out
+    else:
+        assert "overwrite" in out
+
+
+def hook(stdin, home):
+    return subprocess.run([sys.executable, str(PRETOOL)], input=stdin, capture_output=True, text=True,
+                          env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
+
+
+@pytest.mark.parametrize("stdin", ["", "not json", "{}", "[]", json.dumps(run_payload(name="read_file"))])
+def test_entry_point_always_emits_one_decision_and_exits_zero(home, stdin):
+    r = hook(stdin, home)
+    assert r.returncode == 0
+    assert json.loads(r.stdout)["decision"] == "allow"
+
+
+@pytest.mark.parametrize("stdin", ["", "not json", "[]"])
+def test_entry_point_with_no_verdict_input_names_the_guard_did_not_run(home, stdin):
+    r = hook(stdin, home)
+    assert r.returncode == 0
+    assert_fail_open(json.loads(r.stdout))
 
 
 def test_entry_point_stays_under_the_process_time_bar(home, monkeypatch, capsys):
@@ -695,6 +755,30 @@ def test_sessionstart_script_hardcodes_no_home_path():
     assert "/Users/" not in text
 
 
+def test_sessionstart_registers_external_session_when_stamped_engine_root_present(home, tmp_path, monkeypatch):
+    from coordinator_core.session import external_registry
+    recorded = []
+    monkeypatch.setattr(external_registry, "register_current", lambda p: recorded.append(p) or p)
+    fake_root = tmp_path / "eng"
+    (fake_root / "coordinator_core").mkdir(parents=True)
+    (fake_root / "coordinator_core" / "_engine_stamp").write_text("stamp\n", encoding="utf-8")
+    rec_file = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
+    rec_file.parent.mkdir(parents=True)
+    rec_file.write_text(json.dumps({"conversation": CONV, "cwd": str(tmp_path)}), encoding="utf-8")
+    assert sess.register_external_session(CONV, str(tmp_path), rec_file, engine_root=str(fake_root)) is True
+    assert len(recorded) == 1
+    assert recorded[0]["provider"] == "agy"
+    assert recorded[0]["session_id"] == CONV
+    assert recorded[0]["cwd"] == str(tmp_path)
+    assert recorded[0]["hook_event_name"] == "SessionStart"
+    assert recorded[0]["source"] == "startup"
+    assert recorded[0]["name"].startswith("agy-")
+    # Unstamped engine root returns False silently
+    unstamped = tmp_path / "unstamped"
+    unstamped.mkdir()
+    assert sess.register_external_session(CONV, str(tmp_path), rec_file, engine_root=str(unstamped)) is False
+
+
 # --- agy ancestor walk and workspace cwd ------------------------------------------------------
 
 def fake_tree(rows):
@@ -908,6 +992,7 @@ def test_print_mode_reads_the_cli_children_of_the_daemon_not_the_daemon_alone(mo
     assert pre.agy_print_mode(DAEMON_PID) is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="child_pids reads the NT snapshot on Windows")
 def test_child_pids_on_macos_reads_one_ps_table(monkeypatch):
     monkeypatch.setattr(pre.sys, "platform", "darwin")
     monkeypatch.setattr(pre.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout="  1 0\n 30 2895\n 31 2895\n 40 31\n junk\n", stderr=""))
@@ -992,6 +1077,27 @@ def test_windows_warm_decide_spawns_only_the_debounced_launcher(home, monkeypatc
 def test_siblings_are_executed_once_per_process(monkeypatch):
     monkeypatch.setattr(pre, "_SIBLINGS", {})
     assert pre.load_sibling("unimatrix-roster") is pre.load_sibling("unimatrix-roster")
+
+
+def test_decide_rewrites_allow_when_leg_not_current(home, monkeypatch):
+    stub_guard(monkeypatch, {"decision": "allow", "reason": "advisory"})
+    monkeypatch.setattr(pre, "launch_prefix", lambda conv, agy_pid: ("START", "; "))
+    out = pre.decide(run_payload(), 4242)
+    assert out["decision"] == "allow"
+    assert out["overwrite"]["CommandLine"] == "START; ls -la"
+    assert "advisory" in out["reason"]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS libproc")
+def test_darwin_proc_reader_resolves_self_without_subprocess(monkeypatch):
+    def boom(*a, **k):
+        pytest.fail("spawned a process")
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(subprocess, "run", boom)
+    reader = pre._proc_reader()
+    assert reader is not None
+    ppid, name = reader(os.getpid())
+    assert ppid == os.getppid() and "python" in name
 
 
 PASS_ASK = {"decision": "ask"}

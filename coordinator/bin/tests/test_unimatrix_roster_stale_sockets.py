@@ -138,3 +138,23 @@ def test_a_live_entry_a_past_sweep_flagged_stale_is_listed_again(roster) -> None
     row = {"pid": me, "name": "codex-face", "messagingSocketPath": pipe,
            "procStart": roster.proc_start(me), "unimatrixStale": True}
     assert roster.entry_listed(row)
+
+
+def test_live_agy_leg_and_router_ctl_sockets_are_preserved(roster) -> None:
+    live_leg = sock(roster, HEX_LIVE)
+    dead_leg = sock(roster, HEX_DEAD)
+    legs = roster.settings_home() / "unimatrix" / "agy-legs"
+    legs.mkdir(parents=True)
+    (legs / "conv-live.json").write_text(json.dumps({"pid": os.getpid(), "endpoint": str(live_leg)}), encoding="utf-8")
+    (legs / "conv-dead.json").write_text(json.dumps({"pid": 999981, "endpoint": str(dead_leg)}), encoding="utf-8")
+    ctl = Path(roster.local_endpoint("unimatrix-peer-router"))
+    ctl.write_text("")
+    old = time.time() - 3600
+    os.utime(ctl, (old, old))
+    router_dir = roster.settings_home() / "unimatrix" / "router"
+    router_dir.mkdir(parents=True)
+    (router_dir / "router.pid.json").write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+    roster.reap_orphaned_mirrors(REMOTE, lambda m: None)
+    assert live_leg.exists()
+    assert ctl.exists()
+    assert not dead_leg.exists()

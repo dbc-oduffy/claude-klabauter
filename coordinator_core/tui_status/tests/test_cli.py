@@ -31,7 +31,7 @@ def test_grok_stdin_prints_name_context_and_spend(tmp_path):
 def test_agy_stdin_prints_unknown_context(tmp_path):
     done = run("agy", json.dumps({"session_id": "x", "remaining_percentage": 70, "cost": 1}), tmp_path)
     assert done.returncode == 0
-    assert done.stdout.strip() == "unknown · unknown · ~$1.00"
+    assert done.stdout.strip() == "unknown · ▰▰▰▰▱ 70% ctx · ~$1.00"
 
 
 def test_bad_json_or_unknown_host_exits_zero_with_unknown(tmp_path):
