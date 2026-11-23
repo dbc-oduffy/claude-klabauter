@@ -1967,6 +1967,10 @@ class Router:
             self.last_refusal = "ambiguous: one endpoint carries several sessions"
             return ""  # An endpoint is not an identity: rows with different sessions on it never resolve.
         matches = exact | aliases
+        if len(matches) > 1 and len(owners) == 1:
+            # One session behind several routes (the roster's bridge mirror and a relay-pushed mirror)
+            # is one address, not ambiguity: prefer the bridge mirror, then the exact name.
+            matches = {min(matches, key=lambda ep: (not rows_by_ep[ep].get("unimatrixFarName"), ep not in exact, ep))}
         if len(matches) > 1:
             self.last_refusal = f"ambiguous: {len(matches)} live sessions carry this name"
             return ""  # An exact name never beats a far alias: both are live carriers of the address.

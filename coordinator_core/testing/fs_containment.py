@@ -21,8 +21,9 @@ to a test. At session finish anything but ``coordinator`` left in it is
 reported and turns a passing exit status into 1; the root is then deleted.
 
 Attribution: a new watched-root entry is charged only when an audit hook saw this
-process touch it during the test; a test that spawned any child is charged for every
-gain, since a child's writes are invisible to the hook.
+process touch it during the test, or a child the test spawned is linked to it by its
+spawn event (the entry's name in argv, or the child's cwd being the watched root). An
+entry no spawn names is a concurrent session's and is never charged.
 
 Index guard: the repo root's staged-vs-HEAD set is baselined at configure and
 re-read after each test only when the index file's stat changed; a test that
@@ -41,6 +42,7 @@ import shutil
 import sys
 import tempfile
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -63,6 +65,8 @@ _AMBIENT = (
     ".claude.json.lock",
     ".claude.json.tmp.*",
     ".*.publish-staging-*",
+    ".*.stage-[0-9]*",
+    ".*.old-[0-9]*",
 )
 
 _WATCHED: "list[Path]" = []
@@ -511,14 +515,17 @@ _PATH_EVENTS = {
 _SPAWN_EVENTS = frozenset(
     {"subprocess.Popen", "os.system", "os.exec", "os.spawn", "os.posix_spawn", "os.startfile"}
 )
-_TRACE: "dict" = {"on": False, "installed": False, "touched": set(), "spawned": False}
+_TRACE: "dict" = {"on": False, "installed": False, "touched": set(), "spawns": []}
 
 
 def _audit(event: str, args) -> None:
     if not _TRACE["on"]:
         return
     if event in _SPAWN_EVENTS:
-        _TRACE["spawned"] = True
+        try:
+            _TRACE["spawns"].append(_spawn_record(event, args))
+        except Exception:  # noqa: BLE001 -- an audit hook never raises into the test
+            _TRACE["spawns"].append(("", ""))
         return
     positions = _PATH_EVENTS.get(event)
     if positions is None:
@@ -545,22 +552,59 @@ def _install_audit() -> None:
         sys.addaudithook(_audit)
 
 
-def _own_process_gain(root: Path, name: str) -> bool:
-    """True when this process touched `root/name` during the test, or spawned a child that may have.
+def _fold(value: str) -> str:
+    return os.path.normcase(value).replace("\\", "/")
 
-    Trap: a child process's writes are invisible to the audit hook, so any spawn in the test
-    window charges every gain; an entry a concurrent session created is excused only for a
-    test that spawned nothing.
+
+def _spawn_record(event: str, args) -> "tuple[str, str]":
+    """(cwd, blob) of a spawn event: the child's cwd and every string in its argv/command line, folded."""
+    parts: "list[str]" = []
+
+    def walk(value) -> None:
+        if isinstance(value, bytes):
+            value = os.fsdecode(value)
+        if isinstance(value, (str, os.PathLike)):
+            parts.append(_fold(os.fspath(value)))
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+
+    walk(args)  # an env mapping is a dict: not walked
+    cwd = ""
+    if event == "subprocess.Popen" and len(args) > 2 and isinstance(args[2], (str, bytes, os.PathLike)):
+        try:
+            cwd = _fold(os.path.abspath(os.fsdecode(os.fspath(args[2])))).rstrip("/")
+        except (TypeError, ValueError, OSError):
+            cwd = ""
+    return cwd, "\n".join(parts)
+
+
+def _own_process_gain(root: Path, name: str) -> bool:
+    """True when this process touched `root/name`, or a child it spawned plausibly did.
+
+    Trap: a child's writes are invisible to the audit hook, so a spawn is linked to an entry
+    only through what the spawn event shows: the entry's name in its argv/command line, or
+    its cwd being the watched root (a relative write). An entry no spawn names is a
+    concurrent session's and never fails the test; a child that writes a watched root by an
+    absolute path it computes itself is not seen.
     """
-    return _TRACE["spawned"] or (os.path.normcase(str(root)), os.path.normcase(name)) in _TRACE["touched"]
+    key = (os.path.normcase(str(root)), os.path.normcase(name))
+    if key in _TRACE["touched"]:
+        return True
+    root_key = _fold(str(root)).rstrip("/")
+    name_key = _fold(name)
+    for cwd, blob in _TRACE["spawns"]:
+        if cwd == root_key or name_key in blob:
+            return True
+    return False
 
 
 @pytest.fixture(autouse=True)
-def _fs_containment(request: pytest.FixtureRequest):
+def _fs_containment(request: pytest.FixtureRequest) -> "Iterator[None]":
     _install_audit()
     before = _snapshot()
     _TRACE["touched"] = set()
-    _TRACE["spawned"] = False
+    _TRACE["spawns"] = []
     _TRACE["on"] = True
     yield
     _TRACE["on"] = False

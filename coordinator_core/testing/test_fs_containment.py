@@ -94,9 +94,39 @@ def test_ambient_markers_match_only_their_own_shapes():
     assert ambient(".claude.json.lock")
     assert ambient(".claude.json.tmp.72694.8fded9339c65")
     assert ambient(".coordinator-claude.publish-staging-bokbz9l0")
+    assert ambient(".claude-klabauter-publish.stage-54060")
+    assert ambient(".claude-klabauter-publish.old-54060")
     assert not ambient(".foo")
+    assert not ambient(".foo.stage-")
     assert not ambient("fake")
     assert not ambient("guard-message-corpus-doctrine-surface-x")
+
+
+def _attribution(monkeypatch, root, spawns=(), touched=()):
+    monkeypatch.setitem(fc._TRACE, "spawns", [fc._spawn_record(e, a) for e, a in spawns])
+    monkeypatch.setitem(fc._TRACE, "touched", {(os.path.normcase(str(root)), os.path.normcase(n)) for n in touched})
+
+
+def test_a_spawn_that_names_nothing_does_not_charge_a_peers_entry(tmp_path, monkeypatch):
+    spawn = ("subprocess.Popen", ("python", ["python", "-c", "pass"], str(tmp_path / "elsewhere"), {}))
+    _attribution(monkeypatch, tmp_path, spawns=[spawn])
+    assert not fc._own_process_gain(tmp_path, "status_before.txt")
+
+
+def test_a_child_named_by_argv_or_run_in_the_root_is_charged(tmp_path, monkeypatch):
+    by_argv = ("subprocess.Popen", ("python", ["python", "-c", "x", str(tmp_path / "out.txt")], None, {}))
+    _attribution(monkeypatch, tmp_path, spawns=[by_argv])
+    assert fc._own_process_gain(tmp_path, "out.txt")
+    assert not fc._own_process_gain(tmp_path, "other.txt")
+    by_cwd = ("subprocess.Popen", ("sh", ["sh", "-c", "x"], str(tmp_path), {}))
+    _attribution(monkeypatch, tmp_path, spawns=[by_cwd])
+    assert fc._own_process_gain(tmp_path, "anything.txt")
+
+
+def test_this_process_touch_is_charged_without_any_spawn(tmp_path, monkeypatch):
+    _attribution(monkeypatch, tmp_path, touched=["mine.txt"])
+    assert fc._own_process_gain(tmp_path, "mine.txt")
+    assert not fc._own_process_gain(tmp_path, "theirs.txt")
 
 
 class _Opt:

@@ -113,8 +113,13 @@ def relay_outcome(name, since, wait=RELAY_SETTLE_SECONDS, sleep=time.sleep, now=
             rows = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
         except (OSError, ValueError):
             rows = []
-        mine = [r for r in rows if isinstance(r, dict) and isinstance(r.get("target"), str)
-                and r["target"].startswith(f"{name} (pid ") and (r.get("at") or 0) >= since]
+        # A relay-pushed mirror has no bridge: its socket forwards onto the far relay's push channel and
+        # records `mirror-out` under its bare registered name, never a bridge `target` row.
+        pushed = {name, name.partition(".")[0]}
+        mine = [r for r in rows if isinstance(r, dict) and (r.get("at") or 0) >= since and (
+                (isinstance(r.get("target"), str) and r["target"].startswith(f"{name} (pid "))
+                or (r.get("side") == "mirror-out" and r.get("reached") in pushed))]
+        mine = [{"transport": "push", **r} if r.get("side") == "mirror-out" else r for r in mine]
         if mine:
             return next((r for r in mine if not r.get("ok")), mine[-1])
         if now() >= deadline:

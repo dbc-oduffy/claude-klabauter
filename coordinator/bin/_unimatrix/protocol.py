@@ -85,6 +85,10 @@ def mirror_addresses(row):
     own = row.get("name")
     far = row.get("unimatrixFarName")
     addresses = [own, far]
+    if row.get("unimatrixMirror") and isinstance(row.get("unimatrixMirrorName"), str):
+        # A pushed mirror (relay register_name) carries no far name; its bare registered name is the
+        # session's address, or a bare send fails whenever the roster's own mirror row is absent.
+        addresses.append(row["unimatrixMirrorName"])
     if isinstance(own, str) and "." in own and any(row.get(key) for key in ("unimatrixRemote", "macSocketPath", "unimatrixBox")):
         # A box restart flips the label between `<name>.<box>.local` and `<name>.<box>`; both reach the session.
         addresses.append(own[:-len(".local")] if own.lower().endswith(".local") else own + ".local")
