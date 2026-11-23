@@ -33,7 +33,7 @@ from coordinator_core.git.run import _git_exe, run_git
 from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
-from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, resolve_test_runner_python
+from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, _fallback_candidates, _imports_pytest, resolve_test_runner_python
 from coordinator_core.session.record_homes import home_rel
 from coordinator_core.testing import scoped_pytest, spawn_depth
 from coordinator_core.win_portability import no_console_creationflags
@@ -263,7 +263,9 @@ def _gate_python(root: Path) -> str:
     pin = resolve_test_runner_python(root)
     if pin.command and pin.defect is None:
         return pin.command
-    return _console_sibling(sys.executable) or sys.executable
+    own = _console_sibling(sys.executable) or sys.executable
+    # An unpinned repo skips the pin's pytest probe; the engine's own interpreter may lack pytest.
+    return own if _imports_pytest(own) else next((c for c in _fallback_candidates() if _imports_pytest(c)), own)
 
 
 ENV_DEFECT = "environment_defect"

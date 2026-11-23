@@ -145,7 +145,8 @@ def test_a_flush_that_returns_or_raises_passes_through(relay):
         relay._flush_bounded(lambda: (_ for _ in ()).throw(OSError("pipe broken")))
 
 
-def test_a_never_reading_pipe_replies_ok_false_through_send_batch(relay, monkeypatch, capsys):
+def test_a_never_reading_pipe_replies_delivered_unconfirmed_through_send_batch(relay, monkeypatch, capsys):
+    # The write completed into the pipe buffer: a dead session's pipe fails the write, a stalled one reads it later.
     import sys as _sys
     import threading
     import types
@@ -159,6 +160,7 @@ def test_a_never_reading_pipe_replies_ok_false_through_send_batch(relay, monkeyp
     monkeypatch.setattr(relay, "local_reply_address", lambda line: line)
     monkeypatch.setattr(relay, "load_roster", lambda: types.SimpleNamespace(authenticated_data=lambda p, l, s: l))
     monkeypatch.setattr(relay, "PIPE_FLUSH_DEADLINE_S", 0.05)
+    monkeypatch.setattr(relay, "record_receipt", lambda sid, line: "digest")
 
     class Stdin:
         buffer = io.BytesIO(b'{"m":"x"}\n')
@@ -167,8 +169,7 @@ def test_a_never_reading_pipe_replies_ok_false_through_send_batch(relay, monkeyp
     relay.send_batch(7, "d" * 16, "e" * 16, SID)
     release.set()
     (reply,) = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
-    assert reply["ok"] is False and "TimeoutError" in reply["error"]
-    assert not relay.receipts_path().exists()
+    assert reply["ok"] is True and reply["advisory"].startswith("delivered-unconfirmed")
 
 
 def test_receipts_mode_returns_the_sessions_rows_since_the_timestamp(relay):

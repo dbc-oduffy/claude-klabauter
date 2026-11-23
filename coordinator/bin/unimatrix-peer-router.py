@@ -1749,7 +1749,7 @@ class Router:
                 return ep, ""
         return "", f"{to} is a Windows pipe endpoint and this box has no relay route to it"
 
-    async def _transport_send_to_session(self, source, to, text):
+    async def _transport_send_to_session(self, source, to, text) -> dict:
         target = self.resolve_send_target(to)
         endpoint = target.get("endpoint", "")
         if not endpoint:
@@ -1765,7 +1765,9 @@ class Router:
             box = _contract().local_box()
             frame = _contract().build_frame(self.endpoint_of(transport), transport, content, from_box=box)
             if far:
-                frame = routable_from(frame, f"{source}.{box}")
+                # A sender with no registered session has no `<source>.<box>` row anywhere; the face is the
+                # only addressable identity carrying this frame, so a reply goes to it, not to a ghost.
+                frame = routable_from(frame, f"{source}.{box}" if self.resolve_sender(source) else transport)
             frame = _contract().stamp(frame, transport, "transport", source, os.getpid(), from_box=box)
             await self._deliver_as_peer(transport, endpoint, frame)
         except Exception as exc:

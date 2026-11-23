@@ -155,3 +155,26 @@ def test_cli_send_from_a_session_stamps_its_routable_name_on_a_mirror_target(tmp
     box = router._contract().local_box()
     assert f'from="coordinator-content-repo-3b.{box}"' in content
     assert "[coordinator-content-repo-3b via Unimatrix transport]" in content
+
+
+def test_cli_send_with_no_registered_session_stamps_the_transport_face_never_cli_box(tmp_path: Path) -> None:
+    """A bare CLI has no `cli.<box>` row: the stamped `from` is the face that carries the frame."""
+    sessions = tmp_path / "sessions"
+    write_session(sessions, "mirror.json", "mac-peer", router.endpoint_path("mac-mirror", tmp_path),
+                  macSocketPath="/tmp/cc-socks/mac-peer.sock", farPid=80954)
+    r = router.Router([], sessions_dir=sessions, state_dir=tmp_path / "state", endpoint_dir=tmp_path)
+    delivered = []
+
+    async def face(source, to):
+        return "unimatrix-transport-abc-on-box"
+
+    async def deliver(peer, endpoint, frame):
+        delivered.append(frame)
+
+    r._transport_face, r._deliver_as_peer = face, deliver
+    r.endpoint_of = lambda name: "/tmp/face.sock"
+    reply = asyncio.run(r._dispatch({"op": "send", "as": "cli", "to": "mac-peer", "text": "hello"}))
+    assert reply["ok"], reply
+    content = delivered[0]["message"]["content"]
+    assert 'from="unimatrix-transport-abc-on-box"' in content
+    assert 'from="cli.' not in content

@@ -10,8 +10,9 @@ from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from pathlib import Path
 
 
-def _no_pin(monkeypatch) -> None:
+def _no_pin(monkeypatch, imports_pytest=lambda cmd: True) -> None:
     monkeypatch.setattr(cov, "resolve_test_runner_python", lambda root: SimpleNamespace(command=None, defect=None))
+    monkeypatch.setattr(cov, "_imports_pytest", imports_pytest)
 
 
 # Trap: _console_sibling joins with ntpath, so on a POSIX host the sibling is a backslash path that never exists.
@@ -37,3 +38,16 @@ def test_a_resolved_pin_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         cov, "resolve_test_runner_python", lambda root: SimpleNamespace(command="C:/pinned/python.exe", defect=None)
     )
     assert cov._gate_python(tmp_path) == "C:/pinned/python.exe"
+
+
+def test_an_unpinned_repo_skips_an_engine_interpreter_without_pytest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # example-retrieval-repo run 8e2bc1: unpinned, the engine's Python312 had no pytest and the reverify leg ran zero tests.
+    _no_pin(monkeypatch, imports_pytest=lambda cmd: cmd == "C:/other/python.exe")
+    monkeypatch.setattr(cov, "_fallback_candidates", lambda: [sys.executable, "C:/other/python.exe"])
+    assert cov._gate_python(tmp_path) == "C:/other/python.exe"
+
+
+def test_an_unpinned_repo_with_no_pytest_anywhere_keeps_the_engine_interpreter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_pin(monkeypatch, imports_pytest=lambda cmd: False)
+    monkeypatch.setattr(cov, "_fallback_candidates", lambda: ["C:/other/python.exe"])
+    assert cov._gate_python(tmp_path) == sys.executable
