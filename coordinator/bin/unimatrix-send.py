@@ -100,13 +100,13 @@ def _is_mirror(name) -> bool:
     return bool(_mirror_name(name))
 
 
-def relay_outcome(name, since, wait=RELAY_SETTLE_SECONDS, sleep=time.sleep, now=time.time):
+def relay_outcome(name, since, wait=RELAY_SETTLE_SECONDS, sleep=time.sleep, now=time.time) -> "dict | None":
     """The bridge's recorded far-relay outcome for `name` after `since`, polled up to `wait` seconds; None if none.
 
     The bridge answers the sender before its ssh leg, so a `written` receipt cannot say the far
     relay delivered; the bridge's deliveries.jsonl row can. Failed row wins over an ok one."""
     roster = _sibling("unimatrix-roster.py", "unimatrix_roster_send")
-    path = roster.settings_home() / "unimatrix" / "deliveries.jsonl"
+    path = roster.delivery_settings_home() / "unimatrix" / "deliveries.jsonl"  # ssh env carries no settings-home var
     deadline = now() + wait
     while True:
         try:

@@ -1039,10 +1039,10 @@ def test_peer_send_to_a_local_session_keeps_the_endpoint_as_the_reply_address(di
 
 
 @portable
-def test_transport_send_to_a_far_session_carries_the_source_name_as_the_reply_address(dirs, monkeypatch):
+def test_transport_send_from_an_unregistered_cli_carries_the_transport_face_as_the_reply_address(dirs, monkeypatch):
+    # `cli.<box>` names no row, so a receiver's reply could never route back.
     r, sent = _frames_sent_to(dirs, monkeypatch, FAR_ROW, "cli")
-    assert sent[0]["message"]["content"].startswith(
-        f'<cross-session-message from="cli.{pr._contract().local_box()}" ')
+    assert sent[0]["message"]["content"].startswith('<cross-session-message from="transport-x" ')
 
 
 def _transport_router(dirs, monkeypatch):
