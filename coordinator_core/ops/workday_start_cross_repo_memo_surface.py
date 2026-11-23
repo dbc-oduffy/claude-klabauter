@@ -130,7 +130,10 @@ def _qualify_memo(path: str) -> Optional[str]:
     except OSError:
         print(f"skip: _qualify_memo: with open(path, encoding=\"utf-8\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
         return None
+    return _qualify_text(content)
 
+
+def _qualify_text(content: str) -> Optional[str]:
     fm = _parse_frontmatter(content)
     if not fm:
         return None
@@ -217,6 +220,30 @@ def _list_qualifying_lines(inbox_dir: str) -> List[str]:
     return lines
 
 
+def _stranded_lines(root: Optional[str]) -> List[str]:
+    """Qualifying lines for memos that sit only on fetched `origin/work/*/*` refs (zero git spawns)."""
+    from coordinator_core import memo_corpus
+    from coordinator_core.git import git_dir, git_objects
+
+    if not root:
+        return []
+    lines: List[str] = []
+    try:
+        memos = memo_corpus.stranded_inbox_memos(root)
+        if not memos:
+            return []
+        common_dir = git_dir.resolve_git_common_dir(root)
+        for m in memos:
+            obj = git_objects.read_object(common_dir, m.blob_sha)
+            line = _qualify_text(obj[1].decode("utf-8", errors="replace")) if obj else None
+            if line:
+                band_rank, created, sender, title, kind = _split_line(line)
+                lines.append("|".join((band_rank, created, sender, f"{title} [UNREAD on {m.ref.rsplit('origin/', 1)[-1]}]", kind)))
+    except (OSError, ValueError, TypeError, ImportError):
+        print(f"skip: _stranded_lines: {sys.exc_info()[1]}", file=sys.stderr)
+    return lines
+
+
 def _split_line(line: str) -> Tuple[str, str, str, str, str]:
     band_rank, created, sender, title, kind = line.split("|", 4)
     return band_rank, created, sender, title, kind
@@ -231,10 +258,9 @@ def main(argv: List[str]) -> int:
     mock_today = os.environ.get("MOCK_TODAY", "")
     today = _resolve_today(mock_today)
 
-    if not os.path.isdir(inbox_dir):
-        return 0
-
-    memo_lines = _list_qualifying_lines(inbox_dir)
+    memo_lines = _list_qualifying_lines(inbox_dir) if os.path.isdir(inbox_dir) else []
+    if not os.environ.get("CROSS_REPO_INBOX_DIR"):
+        memo_lines += _stranded_lines(show_toplevel(os.getcwd()))
     if not memo_lines:
         return 0
 

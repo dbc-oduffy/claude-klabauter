@@ -1597,3 +1597,23 @@ def test_stable_remote_verifies_listed_addresses_with_the_alias_key_not_the_shar
         "kim@box", reachable=lambda a: False, fields=lambda a: {"port": "22", "identityfile": str(pinned)},
         connect=lambda ep, timeout: Sock(), read_key=lambda k: "192.0.2.7", tcp=lambda a: False)
     assert got == "kim@box.local"
+
+
+def test_linux_pid_domain_carries_machine_id_and_pid_namespace_like_the_harness() -> None:
+    roster = load("roster")
+    files = {"/etc/machine-id": "93151647abcd\n", "/proc/self/ns/pid": "pid:[4026531836]"}
+    assert roster.linux_pid_domain(read=files.__getitem__) == "linux:93151647abcd:pid:[4026531836]"
+
+
+def test_linux_pid_domain_falls_back_to_the_bare_label_when_unreadable() -> None:
+    roster = load("roster")
+    def gone(path):
+        raise FileNotFoundError(path)
+    assert roster.linux_pid_domain(read=gone) == "linux"
+
+
+def test_pid_domain_on_this_linux_host_is_the_harness_form(monkeypatch) -> None:
+    roster = load("roster")
+    monkeypatch.setattr(roster.sys, "platform", "linux")
+    monkeypatch.setattr(roster, "linux_pid_domain", lambda read=None: "linux:mid:pid:[1]")
+    assert roster.pid_domain() == "linux:mid:pid:[1]"

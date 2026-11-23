@@ -262,6 +262,26 @@ def progressed_within(window: float) -> bool:
     return last is not None and time.monotonic() - last < window
 
 
+# Progress excuses a stall burst only briefly. With ~30 workers, cheap guard ops keep completing
+# while the accept loop or the dispatch pool is wedged, so "something finished" alone held a
+# wedged server alive for 5 minutes (2026-11-22 22:52-22:57Z, pid 50052). Past this many seconds
+# of back-to-back threshold bursts, progress no longer suppresses and the server restarts.
+PROGRESS_GRACE_SECS = 30.0
+_progress_excused_since: dict = {}
+
+
+def _progress_excuses(key: str, mono: float, window: float, grace: float) -> bool:
+    """True while progress may still suppress this burst; caller holds `_stall_marks_lock`.
+
+    A burst more than `window` after the previous excused one starts a fresh grace period: the
+    stall episode ended in between."""
+    since, last = _progress_excused_since.get(key, (None, None))
+    if since is None or last is None or mono - last > window:
+        since = mono
+    _progress_excused_since[key] = (since, mono)
+    return mono - since < grace
+
+
 def _disk_decision(
     stall_dir: Path, pid: int, now: float, count: int, window: float, min_interval: float, progress: bool = False
 ) -> str:
@@ -303,8 +323,10 @@ def note_stall(
             if count < threshold:
                 return None
             _stall_marks.pop(str(stall_dir), None)
+            progress = progressed_within(window) and _progress_excuses(
+                str(stall_dir), mono, window, PROGRESS_GRACE_SECS
+            )
         verdict: list = []
-        progress = progressed_within(window)
 
         def _leg() -> None:
             try:
@@ -430,9 +452,11 @@ def maybe_restart(
             dumps = _recent_dumps(stall_dir, since)
             if len(dumps) < threshold:
                 return _report_io_stall(svc, pid, current, stall_dir, since, threshold, window, lines)
-            verdict = _record_decision(
-                svc, pid, current, len(dumps), window, min_interval, dumps, None, lines, progressed_within(window)
-            )
+            progress = progressed_within(window)
+            if progress:
+                with _stall_marks_lock:
+                    progress = _progress_excuses(str(stall_dir), time.monotonic(), window, PROGRESS_GRACE_SECS)
+            verdict = _record_decision(svc, pid, current, len(dumps), window, min_interval, dumps, None, lines, progress)
         if verdict == "suppressed":
             return "suppressed"
         (exit_fn or exit_server)(pid)

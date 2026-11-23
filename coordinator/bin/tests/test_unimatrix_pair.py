@@ -215,8 +215,15 @@ def test_agent_signer_argv_env_and_timeout_message(rig) -> None:
     assert seen["env"]["SSH_AUTH_SOCK"].endswith(".1password/agent.sock")
 
 
+def test_agent_socket_ignores_non_1password_inherited_agent() -> None:
+    launchd = "/private/tmp/com.apple.launchd.AbC/Listeners"
+    got = up.agent_socket({"SSH_AUTH_SOCK": launchd}, "darwin", "/h")
+    assert got != launchd and got.endswith("2BUA8C4S2C.com.1password/t/agent.sock")
+
+
 def test_agent_socket_resolution_per_os() -> None:
-    assert up.agent_socket({"SSH_AUTH_SOCK": "/already"}, "darwin") == "/already"
+    one_pw = "/h/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+    assert up.agent_socket({"SSH_AUTH_SOCK": one_pw}, "darwin") == one_pw
     assert up.agent_socket({}, "win32") == up.WINDOWS_AGENT_PIPE
     assert up.agent_socket({}, "darwin", "/h").endswith("2BUA8C4S2C.com.1password/t/agent.sock")
     assert up.agent_socket({}, "linux", "/h").replace("\\", "/") == "/h/.1password/agent.sock"

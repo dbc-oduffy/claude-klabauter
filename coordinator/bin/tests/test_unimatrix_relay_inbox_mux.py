@@ -57,6 +57,7 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(relay, "endpoint_kind", lambda platform=None: "unix")
     monkeypatch.setattr(relay, "client_address", lambda: "10.0.0.9")
     monkeypatch.setattr(relay.subprocess, "run", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(relay, "proc_start", lambda pid: None)  # the ps fallback is the injected path
 
     class Helpers:
         @staticmethod
@@ -208,3 +209,67 @@ def test_a_failure_after_bind_releases_the_names_socket_and_entry(host, monkeypa
     with pytest.raises(OSError):
         relay.register_name("face-0", {}, "K", mux=True)
     assert list(Path(socks).glob("*.sock")) == [] and list(sess.glob("*.json")) == []
+
+
+def test_a_mux_whose_near_client_stops_pinging_releases_every_name_and_socket(host) -> None:
+    """A dead TCP path never sends stdin EOF; without the lease the sockets outlive the far session for days
+    and a send into one reports success with nobody reading."""
+    sess, socks = host
+    r, w = os.pipe()
+    out = Out()
+    t = threading.Thread(target=relay.serve_mux, args=(r, out), kwargs={"lease": 0.4}, daemon=True)
+    t.start()
+    send(w, op="add", name="face-0", entry={}, key="K")
+    os.write(w, relay.PING_LINE)
+    assert wait(lambda: len(list(socks.glob("*.sock"))) == 1)
+    t.join(5)
+    assert not t.is_alive()
+    assert not list(socks.glob("*.sock")) and not list(sess.iterdir())
+    with pytest.raises(OSError):
+        c = socket.socket(socket.AF_UNIX)
+        c.connect(str(socks / "unimatrix-face-0.sock"))
+
+
+def test_a_pinging_near_client_keeps_its_names_past_the_lease(host) -> None:
+    sess, socks = host
+    r, w = os.pipe()
+    t = threading.Thread(target=relay.serve_mux, args=(r, Out()), kwargs={"lease": 0.5}, daemon=True)
+    t.start()
+    send(w, op="add", name="face-0", entry={}, key="K")
+    for _ in range(6):
+        os.write(w, relay.PING_LINE)
+        time.sleep(0.2)
+    assert t.is_alive() and len(list(socks.glob("*.sock"))) == 1
+    os.close(w)
+    t.join(5)
+
+
+def test_a_near_client_that_never_pings_is_never_leased_out(host) -> None:
+    sess, socks = host
+    r, w = os.pipe()
+    t = threading.Thread(target=relay.serve_mux, args=(r, Out()), kwargs={"lease": 0.2}, daemon=True)
+    t.start()
+    send(w, op="add", name="face-0", entry={}, key="K")
+    time.sleep(0.6)
+    assert t.is_alive() and len(list(socks.glob("*.sock"))) == 1
+    os.close(w)
+    t.join(5)
+
+
+def test_a_send_through_a_mirror_socket_writes_an_outbound_delivery_row(host, monkeypatch) -> None:
+    """Open row #101: the mirror path recorded nothing, so a lost send left no trace on the sending box."""
+    rows = []
+    monkeypatch.setattr(relay, "record_delivery", lambda row, now=None: rows.append(row))
+    sess, socks = host
+    w, t, out = start_mux()
+    send(w, op="add", name="face-0", entry={}, key="K")
+    assert wait(lambda: len(list(socks.glob("*.sock"))) == 1)
+    c = socket.socket(socket.AF_UNIX)
+    c.connect(str(socks / "unimatrix-face-0.sock"))
+    c.sendall(b'{"type":"msg","text":"secret"}\n')
+    c.close()
+    assert wait(lambda: rows)
+    assert rows[0]["side"] == "mirror-out" and rows[0]["reached"] == "face-0" and rows[0]["ok"] is True
+    assert "secret" not in json.dumps(rows)
+    os.close(w)
+    t.join(5)

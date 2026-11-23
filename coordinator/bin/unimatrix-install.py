@@ -133,6 +133,7 @@ VENDORED_SCRIPTS = (
     "unimatrix-membership.py",
     "unimatrix-doctor.py",
     "unimatrix-pair.py",
+    "unimatrix-install.py",
     "unimatrix-file.py",
     "unimatrix-file-relay.py",
     "unimatrix-passphrase.py",
