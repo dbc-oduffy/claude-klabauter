@@ -494,6 +494,25 @@ def resolve_push_remote(root: Path, branch: str) -> Optional[str]:
     return "origin" if "origin" in remotes else None
 
 
+def owned_push_remote(repo_root: Path, branch: str) -> "tuple[Optional[str], Optional[str]]":
+    """Return (remote_name, None) when the push remote is owned, else (None, why)."""
+    from coordinator_core.bash_guards import block_push_pr_non_owned_remote as guard
+
+    remote = resolve_push_remote(repo_root, branch)
+    if remote is None:
+        return None, "no push remote configured"
+    prefixes = guard._configured_prefixes()
+    if prefixes is guard._UNREADABLE:
+        return None, "remote ownership policy unreadable"
+    if prefixes:
+        urls = guard._remote_urls(guard._read_config(str(repo_root)), remote)
+        if not urls:
+            return None, f"remote {remote} has no readable url"
+        if any(guard._matches(u, prefixes) for u in urls):
+            return None, f"remote {remote} is non-owned"
+    return remote, None
+
+
 def _record_tracking_ref(root: Path, branch: str, landed_sha: Optional[str]) -> None:
     """Point `refs/remotes/<remote>/<branch>` at the landed sha; never raises.
 

@@ -1610,6 +1610,22 @@ def adopt_run_stage_at(record_path: Path, session_id: str, *, now: str | None = 
     return path
 
 
+def record_driver_session_at(record_path: Path, session_id: str) -> Path:
+    """Append `session_id` to `<record_path>/run-stage.json`'s `driver_session_ids` (once); every other field
+    stays. The stall detector reads these sessions for liveness beside `session_id`. Raises ValueError when
+    the file is absent or malformed, or `session_id` is empty."""
+    path = Path(record_path) / RUN_STAGE_FILE
+    data = _read_json_object(path)
+    if data is None or not isinstance(session_id, str) or not session_id:
+        raise ValueError(f"cannot record a driver on {path}: no run-stage record or empty session id")
+    drivers = [s for s in data.get("driver_session_ids") or [] if isinstance(s, str)]
+    if session_id not in drivers:
+        drivers.append(session_id)
+    data["driver_session_ids"] = drivers
+    atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    return path
+
+
 def write_run_stage(repo_root: Path, run_id: str, stage: str, *, steps_planned: int | None = None) -> Path:
     """`write_run_stage_at` over the run's record dir. Raises ValueError on a bad stage or an unsafe
     run id."""

@@ -73,6 +73,7 @@ import hashlib
 import os
 import re
 import shlex
+import sys
 import threading
 import time
 from contextvars import ContextVar, Token
@@ -2256,6 +2257,11 @@ def commit_paths(
         sign_warning=sign_warning,
         merge_parent=merge_view.merge_head if merge_view is not None else None,
     )
+    # Mark only, never push; the `sys.modules` gate keeps a cold commit off the cadence import graph.
+    # Before the publish branch: a landed commit with a stale index is still a landed commit.
+    cadence = sys.modules.get("coordinator_core.warm.push_cadence")
+    if cadence is not None:
+        cadence.note_commit(root)
     if publish_error is not None:
         stale = tuple(sorted(index_updates))
         if _reset_index_paths(repo, stale):

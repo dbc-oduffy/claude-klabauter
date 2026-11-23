@@ -895,6 +895,35 @@ def _declared(paths: Sequence[str]) -> tuple:
     return tuple(out)
 
 
+def _expand_dirs(root: Path, rels: Sequence[str]) -> tuple:
+    """`rels` with each directory entry replaced by the files under it: every worktree file (untracked
+    included; `.git` and `__pycache__` skipped), plus the tracked files the index holds under it that the worktree
+    lacks (so a deleted directory or a deleted file in one exports as deletions). A file entry passes through."""
+    from coordinator_core.ops.dispatch_emit import test_reach
+
+    out: dict = {}
+    tracked_all = None
+    for rel in rels:
+        src = root / rel
+        if src.is_file():
+            out[rel] = None
+            continue
+        if src.is_dir():
+            for base, dirs, files in os.walk(src):
+                dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+                for name in files:
+                    out[(Path(base) / name).relative_to(root).as_posix()] = None
+        else:
+            out[rel] = None
+        if tracked_all is None:
+            tracked_all = test_reach._tracked(root)
+        prefix = f"{rel}/"
+        for tracked in tracked_all:
+            if tracked.startswith(prefix):
+                out[tracked] = None
+    return tuple(out)
+
+
 def _overlay(
     root: Path, dest: Path, mroot: Path, sha: str, rels: Sequence[str],
     closure: Optional[Collection[str]] = None,
@@ -1145,7 +1174,7 @@ def clean_export(
     `argv` the worktree holds only that command's test closure (see `_closure_for`); without it, every tracked
     path. The mirror lock is held until the `with` exits; the mirror persists. Raises `ExportError` (a timeout
     names its budget)."""
-    rels = _declared(paths)
+    rels = _expand_dirs(root, _declared(paths))
     closure = _closure_for(root, rels, argv)
     with _mirror_lock(root, f"clean-export {run_id}") as mroot:
         yield _prepare_guarded(root, mroot, _commit_sha(root, "HEAD"), leg, rels, closure)

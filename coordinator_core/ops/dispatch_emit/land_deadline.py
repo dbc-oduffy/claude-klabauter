@@ -33,6 +33,12 @@ from coordinator_core.telemetry import spawn_counter
 #: Seconds one land_run may spend before its next leg halts; well under the 30s op budget.
 LAND_BUDGET_SECS = 10.0
 
+#: Wall seconds the superseded-run scan may spend: optional credit discovery, never a land budget.
+SUPERSEDED_SCAN_SECS = 2.0
+
+#: Legs run under `excepted()`: their time is not the land budget's, so a halt never names one as `spent_by`.
+UNCHARGED_LEGS = frozenset({"land_run.superseded_scan"})
+
 #: Seconds past `LAND_BUDGET_SECS` that only the `RESERVED_LEGS`, and every leg checked once one has
 #: started in the scope, may start in, so a reviewed landing is not refused by a deadline its optional
 #: legs spent. Outer clamps (dispatcher, server window) bound both deadlines and stay authoritative.
@@ -133,7 +139,7 @@ class LandDeadlineExceeded(BaseException):
     @property
     def spent_by(self) -> str:
         """The started leg with the largest wall cost, the one that spent the budget; empty with no legs."""
-        spenders = [e for e in self.legs if e.get("elapsed_secs") is not None]
+        spenders = [e for e in self.legs if e.get("elapsed_secs") is not None and e["leg"] not in UNCHARGED_LEGS]
         return max(spenders, key=lambda e: e["elapsed_secs"])["leg"] if spenders else ""
 
 

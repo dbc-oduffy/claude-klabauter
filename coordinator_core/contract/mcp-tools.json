@@ -1802,6 +1802,13 @@
       "name": "dispatch__restore_evicted"
     },
     {
+      "description": "JSON-RPC \"dispatch.retract_staged_stall\": params `{run_id, dry_run?}`; reply as `retract_staged_stall`.\n\nRetract a `staged_stall` halt proven false: the run's driver is live.\n\n`staged_stall.halt_stalled` halts a staged run idle past the bound with no agent progress in any session\nrecorded on it. A halt written before that detector read every driver session (or by a driver whose\njournal was briefly quiet) leaves a live run stamped halted; this op rewrites that marker `resumed` with\n`retracted_*` fields and keeps the run's live-run index row. One marker read, one run-stage read, the\nstall scan's bounded journal stats; no git, no spawn.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "dispatch__retract_staged_stall"
+    },
+    {
       "description": "JSON-RPC \"dispatch.run_terminality\": classify one warp run dir as terminal, resumable or neither.\n\n``dispatch.run_terminality``: read-only answer to \"is this ``state/warp`` run dir done, or still owed work?\".\n\nParams: ``run_dir`` (string, required: repo-relative, either slash; its parent must be the warp record root\n``ask_contract.RECORD_DIR_ROOT`` and it must be an existing directory).\nReply: ``{ok, run_id, terminal, resumable, reason}`` or ``{ok: false, error}``. Writes nothing, spawns nothing; at\nmost two file reads (``halted.json``, then ``run-outcome.json`` when no marker exists).\nClassification: a ``halted.json`` status of ``landed`` / ``superseded`` / ``closed`` is terminal; ``halted`` is\nresumable (released or not); ``resumed`` and an unreadable marker are neither. With no marker, a recorded\n``objective_loop.outcome`` in ``land_run._RECORDED_EXIT_OUTCOMES`` is terminal. Anything else, unknown statuses\nincluded, is neither terminal nor resumable: the caller keeps the dir.",
       "inputSchema": {
         "type": "object"

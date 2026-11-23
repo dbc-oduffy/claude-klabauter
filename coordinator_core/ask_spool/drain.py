@@ -18,6 +18,9 @@ Traps:
   `MINTED_DISPATCH_DEADLINE_SECONDS` after its mint, with no activity on it or any chained child, is halted
   `minted_without_dispatch` and its submitting session noticed. Halts are not part of the counts.
   Then `_sweep_stalled_launcher_children` halts a launcher child (no `.minted` entry) at `minted`/`executing` with no run dir.
+- Then `_sweep_minted_never_launched` names, notices (owner and live G-EM) and refires an ask record dir quiet over
+  `NEVER_LAUNCHED_SECONDS` with no run, warp run or live token, and closes `minted` dirs past the lookback; its counts
+  `never_launched`/`refired`/`closed` join `run`'s dict only when one is non-zero.
 """
 
 from __future__ import annotations
@@ -45,8 +48,20 @@ _FAILURE_NOTICE_EVERY = 10
 MINTED_DISPATCH_DEADLINE_SECONDS = 600
 MINTED_SWEEP_LOOKBACK_SECONDS = 24 * 3600
 MINTED_WITHOUT_DISPATCH = "minted_without_dispatch"
+RUN_DIED_MID_STAGE = "died_mid_stage"
+STAGED_WITHOUT_WORKER = "staged_without_worker"
 #: Fires the drain makes for one minted run; the fire registry dedupes by script digest, so this bounds retries, not duplicates.
 FIRE_ATTEMPT_CAP = 3
+#: An ask record dir quiet this long at stage `minted` (or halted `abandoned`/`minted_without_dispatch`) with no run, warp run or token never launched.
+NEVER_LAUNCHED_SECONDS = 900
+#: Run-stage reads per drain spent closing `minted` ask dirs older than `MINTED_SWEEP_LOOKBACK_SECONDS`.
+NEVER_LAUNCHED_BACKLOG_BATCH = 20
+#: Refires one drain makes for never-launched asks; the rest wait for the next drain.
+NEVER_LAUNCHED_FIRES_PER_DRAIN = 5
+MINTED_NEVER_LAUNCHED = "minted_never_launched"
+_NEVER_LAUNCHED_FILE = "never-launched.json"
+#: Not `.json`: the spool lists that suffix as pending entries.
+_BACKLOG_CURSOR_FILE = "never-launched-backlog.cursor"
 
 Evaluate = Callable[[dict], dict]
 
@@ -104,10 +119,23 @@ def _lone_token_run(root: Path, session: str, spooled_at: float, taken: set) -> 
     return found[0] if found else None
 
 
+def _stuck_at_minted(root: Path, run_id: str) -> bool:
+    """True when the run is at stage `minted` past `MINTED_DISPATCH_DEADLINE_SECONDS` with no chained child active.
+
+    The `_sweep_minted_without_dispatch` test: such a run is about to be halted, so it never supersedes a refire."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    now = time.time()
+    return wrd._stale_at(root, run_id, "minted", MINTED_DISPATCH_DEADLINE_SECONDS, now) and not _chained_child_active(
+        root, run_id, now, MINTED_DISPATCH_DEADLINE_SECONDS
+    )
+
+
 def _live_token_run(root: Path, key: Optional[str], taken: set) -> Optional[str]:
     """The run still holding a live token for the entry's sizing or `run:` key, whatever its dir age.
 
-    A token minted before its run's `halted` marker is not held (halts never consume it): the refire mints and resumes the run."""
+    A token minted before its run's `halted` marker is not held (halts never consume it): the refire mints and resumes the run.
+    A run stuck at `minted` (`_stuck_at_minted`) is not held either."""
     if not key:
         return None
     from coordinator_core.ops.dispatch_emit import run_token
@@ -117,7 +145,7 @@ def _live_token_run(root: Path, key: Optional[str], taken: set) -> Optional[str]
     try:
         for rec in run_token.live_records(root):
             rid = rec.get("run_id")
-            if rid in taken or run_token._predates_halt(root, rec):
+            if rid in taken or run_token._predates_halt(root, rec) or (rid and _stuck_at_minted(root, rid)):
                 continue
             if kind == "run" and rid == want:
                 return rid
@@ -135,14 +163,20 @@ _raw_ask_text = record.raw_ask_text
 def _any_ask_run(root: Path, ask: str) -> Optional[str]:
     """A live token run recording the same normalized ask hash, whatever its session or age.
 
-    A run halted or failed after minting its token (`_predates_halt`) never supersedes: the ask refires."""
+    A run halted or failed after minting its token (`_predates_halt`) or stuck at `minted` (`_stuck_at_minted`) never
+    supersedes: the ask refires."""
     from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
     from coordinator_core.ops.dispatch_emit.run_token import _predates_halt, live_records
 
     want = normalized_ask_hash(ask)
     try:
         for rec in live_records(root):
-            if rec.get("ask_sha256") == want and rec.get("run_id") and not _predates_halt(root, rec):
+            if (
+                rec.get("ask_sha256") == want
+                and rec.get("run_id")
+                and not _predates_halt(root, rec)
+                and not _stuck_at_minted(root, rec["run_id"])
+            ):
                 return rec["run_id"]
     except (OSError, ValueError, TypeError):
         return None
@@ -575,9 +609,9 @@ def _fire_minted(repo_root: str, fire: Optional[Callable[[Path, str], dict]], no
 
 
 def _halt_minted_without_dispatch(
-    root: Path, run_id: str, session: object, age: float, *, cause: Optional[str] = None
+    root: Path, run_id: str, session: object, age: float, *, cause: Optional[str] = None, halted: str = MINTED_WITHOUT_DISPATCH
 ) -> bool:
-    """Halt `run_id` as `minted_without_dispatch` and notice `session`; False when the marker could not be written.
+    """Halt `run_id` with the typed cause `halted` (default `minted_without_dispatch`) and notice `session`; False when the marker could not be written.
 
     A non-None `cause` is the whole halt reason; None words it for a spool entry that was never dispatched."""
     from coordinator_core.ops.dispatch_emit import halted_run
@@ -600,14 +634,14 @@ def _halt_minted_without_dispatch(
     try:
         halted_run.write_halt_marker(
             record_dir(root, run_id),
-            halted=MINTED_WITHOUT_DISPATCH,
+            halted=halted,
             sizing_rel=halted_run.bound_sizing_rel(root, run_id),
             reason=reason,
         )
     except Exception:  # noqa: BLE001 - a failed write leaves the entry for the next drain
         return False
     if isinstance(session, str) and session:
-        notice.append_halt_notice(str(root), session, run_id, MINTED_WITHOUT_DISPATCH, reason)
+        notice.append_halt_notice(str(root), session, run_id, halted, reason)
     return True
 
 
@@ -663,13 +697,24 @@ def _has_run_dir(path: Path) -> bool:
 
 
 def _sweep_stalled_launcher_children(repo_root: str, now: float) -> None:
-    """Halt each record dir whose run-stage reads `minted`/`executing`, with no run dir, silent past `MINTED_DISPATCH_DEADLINE_SECONDS`.
+    """Halt each record dir that is a stalled launcher child or a run that died mid-stage.
 
+    Stalled child: run-stage `minted`/`executing`, no run dir, silent past `MINTED_DISPATCH_DEADLINE_SECONDS`; halted
+    `minted_without_dispatch`. Died mid-stage: run-stage `minted` or `staged` carrying `plan_started_at` and no `phase`, silent
+    past the deadline (`wrd.STAGED_STALE_SECONDS` for `staged`), no live run token; halted `RUN_DIED_MID_STAGE`.
+    Staged without worker: `staged`, no `phase`, no `plan_started_at`, no run dir (a built run awaiting land has one), no live
+    run token, silent past the deadline; halted `STAGED_WITHOUT_WORKER`.
     Launcher children have no spool `.minted` entry, so `_sweep_minted_without_dispatch` never sees them. One scandir of
     the record root; a read only for dirs whose mtime lies between the deadline and `MINTED_SWEEP_LOOKBACK_SECONDS` ago.
     Halted, landed and chained-child-active runs are untouched. Never raises."""
     from coordinator_core.ops import warp_run_deliverable as wrd
-    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, read_run_stage
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import (
+        PLAN_STARTED_FIELD,
+        RECORD_DIR_ROOT,
+        RUN_DIR_ROOT,
+        read_run_stage,
+    )
 
     root = Path(repo_root)
     names: list = []
@@ -689,20 +734,43 @@ def _sweep_stalled_launcher_children(repo_root: str, now: float) -> None:
     for run_id, mtime in names:
         try:
             stage = read_run_stage(root, run_id)
-            if not stage or stage.get("stage") != "minted" or stage.get("phase") != "executing":
+            if not stage:
                 continue
-            if _has_run_dir(root / RUN_DIR_ROOT / run_id):
+            name = stage.get("stage")
+            died = name in ("minted", "staged") and "phase" not in stage and bool(stage.get(PLAN_STARTED_FIELD))
+            workerless = name == "staged" and "phase" not in stage and not died
+            if not died and not workerless and (name != "minted" or stage.get("phase") != "executing"):
+                continue
+            if not died and _has_run_dir(root / RUN_DIR_ROOT / run_id):
                 continue
             if wrd._halted(root, run_id) or wrd._landed(root, run_id):
                 continue
-            if not wrd._stale_at(root, run_id, "minted", MINTED_DISPATCH_DEADLINE_SECONDS, now):
+            bound = wrd.STAGED_STALE_SECONDS if died and name == "staged" else MINTED_DISPATCH_DEADLINE_SECONDS
+            if not wrd._stale_at(root, run_id, name, bound, now):
                 continue
-            if _chained_child_active(root, run_id, now, MINTED_DISPATCH_DEADLINE_SECONDS):
+            if (died or workerless) and run_token.is_live(root, run_id):
+                continue
+            if _chained_child_active(root, run_id, now, bound):
                 continue
             seen = wrd._stamp_epoch(stage.get("last_activity_at"))
             if seen is None:
                 seen = wrd._stamp_epoch(stage.get("started_at"))
             age = now - (seen if seen is not None else mtime)
+            if died:
+                cause = (
+                    f"died mid-stage: run-stage at {name} with plan started, no phase and no terminal record; "
+                    f"no activity for {int(age)}s (bound {int(bound)}s); cause unknown (no launcher record of the stop). "
+                    "Instead: re-fire the ask."
+                )
+                _halt_minted_without_dispatch(root, run_id, stage.get("session_id"), age, cause=cause, halted=RUN_DIED_MID_STAGE)
+                continue
+            if workerless:
+                cause = (
+                    f"staged with no live worker: no activity for {int(age)}s "
+                    f"(bound {int(MINTED_DISPATCH_DEADLINE_SECONDS)}s). Instead: re-fire the ask."
+                )
+                _halt_minted_without_dispatch(root, run_id, stage.get("session_id"), age, cause=cause, halted=STAGED_WITHOUT_WORKER)
+                continue
             cause = (
                 f"stalled at minted/executing with no run dir: no activity for {int(age)}s "
                 f"(bound {int(MINTED_DISPATCH_DEADLINE_SECONDS)}s); the child may never have started or may have stopped. "
@@ -711,6 +779,256 @@ def _sweep_stalled_launcher_children(repo_root: str, now: float) -> None:
             _halt_minted_without_dispatch(root, run_id, stage.get("session_id"), age, cause=cause)
         except Exception:  # noqa: BLE001 - one unreadable record never blocks the rest
             continue
+
+
+def _read_json_file(path: Path) -> dict:
+    """The JSON object at `path`; {} when absent, unreadable or not an object."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json_file(path: Path, data: dict) -> None:
+    from coordinator_core.atomic_replace import atomic_write_bytes
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(path, (json.dumps(data, sort_keys=True) + "\n").encode("utf-8"), preserve_mode=False)
+
+
+def _gem_session() -> Optional[str]:
+    """The live Group EM holder's session id, else None. Never raises."""
+    try:
+        from coordinator_core.group_em import gem_home
+
+        holder = gem_home.gem_holder()
+        session = holder.get("session_id") if holder else None
+        return session if isinstance(session, str) and session else None
+    except Exception:  # noqa: BLE001 - the owner's notice still stands
+        return None
+
+
+def _notify_never_launched(root: Path, owner: object, run_id: str, age: float, action: str) -> None:
+    """One notice to the owning session and, when it differs, one to the live G-EM; the G-EM is noticed with no owner too."""
+    sessions = []
+    if isinstance(owner, str) and owner:
+        sessions.append(owner)
+    gem = _gem_session()
+    if gem and gem not in sessions:
+        sessions.append(gem)
+    for session in sessions:
+        notice.append_never_launched_notice(str(root), session, run_id, age, action)
+
+
+def _live_token_for(root: Path, run_id: str, now: float, held: list) -> bool:
+    """True when a held run token names `run_id` and shows activity (`abandoned_runs._token_active`)."""
+    from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+    return any(
+        rec.get("run_id") == run_id and abandoned_runs._token_active(root, rec, {}, now) for rec in held
+    )
+
+
+def _close_never_launched(root: Path, run_id: str, reason: str, *, bound_sizing: bool) -> bool:
+    """Halt `run_id` as `minted_never_launched` (terminal run-stage `halted`); False when the marker could not be written.
+
+    A backlog close passes `bound_sizing` False: a marker with no sizing starts no detached resume build."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        halted_run.write_halt_marker(
+            record_dir(root, run_id),
+            halted=MINTED_NEVER_LAUNCHED,
+            sizing_rel=halted_run.bound_sizing_rel(root, run_id) if bound_sizing else None,
+            reason=reason,
+        )
+    except Exception:  # noqa: BLE001 - the next drain retries
+        return False
+    return True
+
+
+def _never_launched_candidate(root: Path, run_id: str, stage: dict) -> bool:
+    """True for a run-stage record at `minted`, or `halted` by `abandoned` / `minted_without_dispatch`, that has
+    not passed `staged` and records no warp run."""
+    from coordinator_core.ops.dispatch_emit import abandoned_runs, halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    if stage.get("warp_run") or "staged_at" in stage:
+        return False
+    if stage.get("stage") == "minted":
+        return True
+    if stage.get("stage") != "halted":
+        return False
+    marker = _read_json_file(record_dir(root, run_id) / halted_run.HALTED_FILE)
+    return marker.get("status") == halted_run.STATUS_HALTED and marker.get("halted") in (
+        abandoned_runs.HALTED_KIND,
+        MINTED_WITHOUT_DISPATCH,
+    )
+
+
+def _handle_never_launched(
+    root: Path, run_id: str, stage: dict, now: float, age: float, held: Callable[[], list],
+    do_fire: Callable[[Path, str], dict], counts: dict, fires_left: list,
+) -> None:
+    """One in-window candidate: stamp a found warp run, else notice and refire (or close when it cannot be refired)."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, ask_warp_run, record_dir, stamp_run_stage_at
+
+    if _has_run_dir(root / RUN_DIR_ROOT / run_id):
+        return
+    rd = record_dir(root, run_id)
+    warp = ask_warp_run(root, run_id)
+    if warp:
+        stamp_run_stage_at(rd, str(stage.get("stage")), warp_run=warp)
+        return
+    if _live_token_for(root, run_id, now, held()):
+        return
+    owner = stage.get("session_id")
+    state = _read_json_file(rd / _NEVER_LAUNCHED_FILE)
+    if state.get("fired"):
+        return
+    attempts = int(state.get("fire_attempts") or 0)
+    if not (root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs").is_file():
+        counts["never_launched"] += 1
+        reason = (
+            f"{MINTED_NEVER_LAUNCHED}: minted {int(age)}s ago (bound {NEVER_LAUNCHED_SECONDS}s) and never launched: no warp run, "
+            "no live token, and its workflow script is absent so nothing can re-fire it. Instead: re-submit the ask."
+        )
+        if _close_never_launched(root, run_id, reason, bound_sizing=True):
+            counts["closed"] += 1
+            _notify_never_launched(root, owner, run_id, age, "unrefirable")
+        return
+    if attempts >= FIRE_ATTEMPT_CAP:
+        counts["never_launched"] += 1
+        reason = (
+            f"{MINTED_NEVER_LAUNCHED}: minted {int(age)}s ago and never launched; the engine fired it {attempts} time(s) "
+            f"and it never started: {state.get('fire_failed')}. Instead: re-submit the ask, or start its workflow script."
+        )
+        if _close_never_launched(root, run_id, reason, bound_sizing=True):
+            counts["closed"] += 1
+            _notify_never_launched(root, owner, run_id, age, "closed")
+        return
+    if fires_left[0] <= 0:
+        return
+    fires_left[0] -= 1
+    counts["never_launched"] += 1
+    try:
+        handle = do_fire(root, run_id)
+        if isinstance(handle, dict) and handle.get("state") == "exited" and handle.get("execution_started") is False:
+            raise RuntimeError(f"fire {handle.get('fire_id')} exited before execution: {handle.get('startup_log_tail') or ''}"[:300])
+        state = {**state, "fired": (handle or {}).get("fire_id") or True, "fire_attempts": attempts + 1}
+        state.pop("fire_failed", None)
+        _write_json_file(rd / _NEVER_LAUNCHED_FILE, state)
+        counts["refired"] += 1
+        _notify_never_launched(root, owner, run_id, age, "refired")
+    except Exception as exc:  # noqa: BLE001 - typed onto the record; the next drain retries up to FIRE_ATTEMPT_CAP
+        state = {**state, "fire_attempts": attempts + 1, "fire_failed": _fire_cause(exc)}
+        _write_json_file(rd / _NEVER_LAUNCHED_FILE, state)
+
+
+def _close_backlog(root: Path, spool: str, old: list, now: float, held: Callable[[], list], counts: dict) -> None:
+    """Close `minted` ask dirs older than `MINTED_SWEEP_LOOKBACK_SECONDS` (their sessions are dead: no notice, no refire).
+
+    At most `NEVER_LAUNCHED_BACKLOG_BATCH` names per drain, from a name-sorted cursor in `_BACKLOG_CURSOR_FILE`; the
+    cursor records `done` once it passes the last name, and later drains skip the backlog entirely."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, ask_warp_run, read_run_stage, record_dir, stamp_run_stage_at
+
+    cursor_path = Path(spool) / _BACKLOG_CURSOR_FILE
+    cursor = _read_json_file(cursor_path)
+    names = sorted(n for n in old if n > str(cursor.get("cursor") or ""))
+    batch = names[:NEVER_LAUNCHED_BACKLOG_BATCH]
+    for run_id in batch:
+        try:
+            stage = read_run_stage(root, run_id)
+            if not stage or stage.get("stage") != "minted" or stage.get("warp_run") or "staged_at" in stage:
+                continue
+            if _has_run_dir(root / RUN_DIR_ROOT / run_id):
+                continue
+            warp = ask_warp_run(root, run_id)
+            if warp:
+                stamp_run_stage_at(record_dir(root, run_id), "minted", warp_run=warp)
+                continue
+            if _live_token_for(root, run_id, now, held()):
+                continue
+            reason = (
+                f"{MINTED_NEVER_LAUNCHED}: still at stage minted past {MINTED_SWEEP_LOOKBACK_SECONDS // 3600}h with no run, "
+                "warp run or live token; closed as abandoned history. Instead: re-submit the ask."
+            )
+            if _close_never_launched(root, run_id, reason, bound_sizing=False):
+                counts["closed"] += 1
+        except Exception:  # noqa: BLE001 - one unreadable record never blocks the rest
+            continue
+    done = len(names) <= NEVER_LAUNCHED_BACKLOG_BATCH
+    nxt = {"cursor": batch[-1] if batch else cursor.get("cursor", ""), "done": done}
+    if nxt != {"cursor": cursor.get("cursor", ""), "done": bool(cursor.get("done"))}:
+        try:
+            _write_json_file(cursor_path, nxt)
+        except OSError:
+            pass
+
+
+def _sweep_minted_never_launched(repo_root: str, now: float, fire: Optional[Callable[[Path, str], dict]] = None) -> dict:
+    """Name, notify and refire each ask record dir quiet over `NEVER_LAUNCHED_SECONDS` that never launched; counts `{never_launched, refired, closed}`.
+
+    One scandir of the record root; a run-stage read only for `ask-*` dirs whose mtime lies between `NEVER_LAUNCHED_SECONDS`
+    and `MINTED_SWEEP_LOOKBACK_SECONDS` ago. A candidate is at `minted`, or halted `abandoned` / `minted_without_dispatch`
+    (the drain's own halts of an ask no one launched), with no run dir, no warp run (`ask_warp_run`; a found one is stamped
+    into its run-stage, not refired) and no live run token. It is noticed (owning session, live G-EM) and refired through
+    `fire`, at most `NEVER_LAUNCHED_FIRES_PER_DRAIN` per drain; the attempts live in `_NEVER_LAUNCHED_FILE`. An ask with no
+    workflow script, or `FIRE_ATTEMPT_CAP` failed fires, is closed `halted`. `minted` dirs past the lookback are closed by
+    `_close_backlog`. Never raises."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, read_run_stage
+
+    root = Path(repo_root)
+    counts = {"never_launched": 0, "refired": 0, "closed": 0}
+    spool = record.spool_dir(repo_root)
+    cursor_done = bool(_read_json_file(Path(spool) / _BACKLOG_CURSOR_FILE).get("done"))
+    window: list = []
+    old: list = []
+    try:
+        with os.scandir(root / RECORD_DIR_ROOT) as it:
+            for e in it:
+                try:
+                    if not (e.name.startswith("ask-") and _SAFE_NAME.match(e.name)):
+                        continue
+                    age = now - e.stat().st_mtime
+                    if age < NEVER_LAUNCHED_SECONDS or not e.is_dir():
+                        continue
+                    if age <= MINTED_SWEEP_LOOKBACK_SECONDS:
+                        window.append((e.name, age))
+                    elif not cursor_done:
+                        old.append(e.name)
+                except OSError:
+                    continue
+    except OSError:
+        return counts
+    held_cache: list = []
+
+    def held() -> list:
+        if not held_cache:
+            try:
+                held_cache.append(run_token.held_records(root))
+            except Exception:  # noqa: BLE001 - an unreadable token store claims nothing
+                held_cache.append([])
+        return held_cache[0]
+
+    do_fire = fire or _default_fire
+    fires_left = [NEVER_LAUNCHED_FIRES_PER_DRAIN]
+    for run_id, age in sorted(window):
+        try:
+            stage = read_run_stage(root, run_id)
+            if stage and _never_launched_candidate(root, run_id, stage):
+                _handle_never_launched(root, run_id, stage, now, age, held, do_fire, counts, fires_left)
+        except Exception:  # noqa: BLE001 - one unreadable record never blocks the rest
+            continue
+    if not cursor_done:
+        try:
+            _close_backlog(root, spool, old, now, held, counts)
+        except Exception:  # noqa: BLE001 - the next drain resumes from the cursor
+            pass
+    return counts
 
 
 def run(
@@ -822,8 +1140,11 @@ def run(
         record.mark_minted(repo_root, sid)
         counts["coalesced" if coalesced else "minted" if minted_now else "skipped"] += 1
     sweep_now = time.time() if now is None else now
-    _fire_minted(repo_root, fire, sweep_now)
     _sweep_minted_without_dispatch(repo_root, sweep_now)
     _sweep_stalled_launcher_children(repo_root, sweep_now)
+    swept = _sweep_minted_never_launched(repo_root, sweep_now, fire)
+    if swept["never_launched"] or swept["closed"]:
+        counts.update(swept)
+    _fire_minted(repo_root, fire, sweep_now)  # last: the fire call has no timeout of its own and must not delay a sweep; a hung fire still holds the drain
     return counts
 

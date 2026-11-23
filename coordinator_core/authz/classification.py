@@ -2564,6 +2564,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The rewritten stage record and the halt marker.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.adopt_orphaned_run": OpClass.MUTATING,
+    # dispatch.retract_staged_stall — MUTATING: rewrites a false staged_stall halt.json as resumed and
+    # re-stamps run-stage.json staged (ops/dispatch_emit/staged_stall_retract.py).
+    # DR-208 five-question affirmation (citing dispatch.retract_staged_stall handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      halted.json and run-stage.json of one record dir, and the halted-withheld index row; no queue, no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Both files are replaced atomically through halted_run and ask_contract helpers.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The run's record dir, read by the ask gate, the stall scan and the cockpit.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The rewritten halt marker and stage record.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.retract_staged_stall": OpClass.MUTATING,
     # dispatch.commit_halted_rows — MUTATING: lands a halted run's delivered rows, one ceremony.commit_v2 call
     # per row, hunk-scoped through `git apply --cached` where a withheld row shares the file
     # (ops/dispatch_emit/halted_rows_commit.py).

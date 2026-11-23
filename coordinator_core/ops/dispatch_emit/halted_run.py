@@ -54,6 +54,8 @@ HALT_REASON_FIELD = "reason"
 HALT_RUN_ARTIFACTS_FIELD = "run_artifacts"
 REVISED_AT_FIELD = "revised_at"
 REVISED_CONSUMED_FIELD = "revised_consumed_at"
+RETRACTED_AT_FIELD = "retracted_at"
+RETRACTED_REASON_FIELD = "retracted_reason"
 HALT_RELEASED_FIELD = "released"
 HALT_NEXT_ACTION_FIELD = "next_action"
 HALT_POST_LAND_TRIPWIRE_RED = "post_land_tripwire_red"
@@ -1180,6 +1182,27 @@ def mark_stall_cleared(record_dir: Path, evidence: dict) -> bool:
     _write(Path(record_dir), {**marker, "status": STATUS_RESUMED, STALL_CLEARED_FIELD: evidence})
     _index_call("remove_run", record_dir)
     stamp_run_stage_at(Path(record_dir), "staged")
+    return True
+
+
+def mark_retracted(record_dir: Path, reason: str) -> bool:
+    """Rewrite a `halted` marker as `resumed` carrying `retracted_at` / `retracted_reason`, and re-stamp the
+    run `staged`; False when no halted marker is present.
+
+    Unlike `mark_resumed` the live-run index row stays: the run's driver is live, so it must keep refusing
+    overlapping asks and stay in `staged_stall.scan`'s walk. The `staged` stamp is what that scan reads (a halt
+    stamps the run `halted`)."""
+    from datetime import datetime, timezone
+
+    marker = _read(Path(record_dir))
+    if marker is None or marker.get("status") != STATUS_HALTED:
+        return False
+    _write(Path(record_dir), {
+        **marker, "status": STATUS_RESUMED, REVISED_CONSUMED_FIELD: marker.get(REVISED_AT_FIELD) or "",
+        RETRACTED_AT_FIELD: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), RETRACTED_REASON_FIELD: reason,
+    })
+    stamp_run_stage_at(Path(record_dir), "staged")
+    _index_call("remove_run", record_dir)
     return True
 
 

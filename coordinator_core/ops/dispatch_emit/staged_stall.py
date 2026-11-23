@@ -40,6 +40,7 @@ STAGED_STALL_HORIZON_SECS = 24 * 3600
 #: Index entries examined and journals read per tick (the 500ms brightline).
 MAX_RUNS_PER_TICK = 64
 MAX_JOURNALS_PER_RUN = 16
+MAX_DRIVER_SESSIONS = 8
 MAX_RUN_DIR_ENTRIES = 256
 INDEX_DEADLINE_MS = 200.0
 
@@ -224,6 +225,27 @@ def fire_in_flight(repo_root: Path, run_id: str, cutoff: float) -> bool:
     return False
 
 
+def _recorded_sessions(stage: dict) -> list[str]:
+    """Sessions that may drive the run: `session_id`, `adopted_from`, `driver_session_ids`; deduped, in that
+    order, capped at the newest `MAX_DRIVER_SESSIONS` (a later driver is the likelier live one)."""
+    out: list[str] = []
+    for value in (stage.get("session_id"), *(stage.get("adopted_from") or []), *(stage.get("driver_session_ids") or [])):
+        if isinstance(value, str) and value and value not in out:
+            out.append(value)
+    return out[-MAX_DRIVER_SESSIONS:]
+
+
+def _is_halted(rdir: Path) -> bool:
+    """True when `halted.json` exists, except a marker a retraction resumed (`status` resumed carrying
+    `retracted_at`): that run is stall-watched again."""
+    if not (rdir / halted_run.HALTED_FILE).exists():
+        return False
+    marker = halted_run._read(rdir)
+    return not (
+        isinstance(marker, dict) and marker.get("status") == halted_run.STATUS_RESUMED and marker.get("retracted_at")
+    )
+
+
 def scan(
     repo_root: Path,
     now: float,
@@ -245,7 +267,7 @@ def scan(
             rdir = record_dir(repo_root, run_id)
         except ValueError:
             continue
-        if (rdir / halted_run.HALTED_FILE).exists():
+        if _is_halted(rdir):
             continue
         newest = _newest_mtime(rdir)
         if newest is None or newest >= cutoff or now - newest > STAGED_STALL_HORIZON_SECS:
@@ -255,7 +277,8 @@ def scan(
         if fire_seen is not None and fire_seen >= cutoff:
             continue
         probe = in_flight or agent_in_flight
-        if any(probe(s, cutoff) for s in _candidate_sessions(repo_root, run_id, session_id)):
+        sessions = dict.fromkeys([*_candidate_sessions(repo_root, run_id, session_id), *_recorded_sessions(stage)])
+        if any(probe(sid, cutoff) for sid in sessions):
             continue
         if fire_in_flight(repo_root, run_id, cutoff):
             continue
