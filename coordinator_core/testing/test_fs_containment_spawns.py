@@ -112,3 +112,101 @@ def test_worker_configure_reaps_nothing(tmp_path, monkeypatch):
     dead.mkdir()
     _configure(monkeypatch, tmp_path, worker=True)
     assert dead.is_dir()
+
+
+_PEER = """
+import os, sys, time
+go, done, parent = sys.argv[1:4]
+deadline = time.time() + 60
+while not os.path.exists(go) and time.time() < deadline:
+    time.sleep(0.05)
+open(os.path.join(parent, "peer_status_before.txt"), "w").close()
+os.mkdir(os.path.join(parent, ".peer-publish.stage-54060"))
+os.mkdir(os.path.join(parent, ".peer-publish.old-54060"))
+open(done, "w").close()
+"""
+
+_SPAWN_THEN_WAIT = """
+import os, subprocess, sys, time
+
+def test_spawns_while_a_peer_writes():
+    subprocess.run([sys.executable, "-c", "pass"], check=True)
+    open(os.environ["PEER_GO"], "w").close()
+    deadline = time.time() + 60
+    while not os.path.exists(os.environ["PEER_DONE"]) and time.time() < deadline:
+        time.sleep(0.05)
+    assert os.path.exists(os.environ["PEER_DONE"])
+"""
+
+_OWN_WRITE = """
+from pathlib import Path
+
+def _let_peer_write():
+    import os, time
+    open(os.environ["PEER_GO"], "w").close()
+    deadline = time.time() + 60
+    while not os.path.exists(os.environ["PEER_DONE"]) and time.time() < deadline:
+        time.sleep(0.05)
+
+def test_writes_outside():
+    _let_peer_write()
+    (Path.cwd().parent / "own_stray.txt").write_text("x")
+"""
+
+_CHILD_WRITE = """
+import subprocess, sys
+from pathlib import Path
+
+def _let_peer_write():
+    import os, time
+    open(os.environ["PEER_GO"], "w").close()
+    deadline = time.time() + 60
+    while not os.path.exists(os.environ["PEER_DONE"]) and time.time() < deadline:
+        time.sleep(0.05)
+
+def test_child_writes_outside():
+    _let_peer_write()
+    target = Path.cwd().parent / "child_stray.txt"
+    subprocess.run([sys.executable, "-c", "import sys; open(sys.argv[1], 'w').close()", str(target)], check=True)
+"""
+
+
+def _peer_run(pytester, tmp_path, monkeypatch, body):
+    import subprocess
+    import sys
+
+    parent = pytester.path.parent
+    go, done = tmp_path / "go", tmp_path / "done"
+    monkeypatch.setenv("PEER_GO", str(go))
+    monkeypatch.setenv("PEER_DONE", str(done))
+    peer = subprocess.Popen(
+        [sys.executable, "-c", _PEER, str(go), str(done), str(parent)],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        pytester.makepyfile(test_inner=body)
+        pytester.makeini("[pytest]\n")
+        pytester._monkeypatch.setenv("PYTHONPATH", str(Path(fc.__file__).resolve().parents[2]))
+        return pytester.runpytest_subprocess(
+            "-p", "coordinator_core.testing.fs_containment", "-p", "no:cacheprovider",
+            "--basetemp", str(tmp_path / "bt"),
+        )
+    finally:
+        peer.kill()
+        peer.wait()
+
+
+def test_a_spawning_test_is_not_charged_a_concurrent_peers_writes(pytester, tmp_path, monkeypatch):
+    result = _peer_run(pytester, tmp_path, monkeypatch, _SPAWN_THEN_WAIT)
+    result.assert_outcomes(passed=1)
+    assert (pytester.path.parent / "peer_status_before.txt").exists()
+
+
+@pytest.mark.parametrize("body, stray", [(_OWN_WRITE, "own_stray.txt"), (_CHILD_WRITE, "child_stray.txt")])
+def test_a_test_or_its_child_writing_outside_still_fails(pytester, tmp_path, monkeypatch, body, stray):
+    result = _peer_run(pytester, tmp_path, monkeypatch, body)
+    out = result.stdout.str()
+    assert "left new entries outside the repo and scratch" in out
+    assert stray in out
+    assert "peer_status_before" not in out
+    result.assert_outcomes(passed=1, errors=1)

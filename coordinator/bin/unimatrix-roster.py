@@ -989,23 +989,28 @@ def prune_superseded_inbound(far_rows, remote, say):
         say(f"unlist pushed mirror {d.get('name')} session {d.get('sessionId')}: the far box lists another session under that name")
 
 
-def far_rows(fetched, remote, skip, say):
+def far_rows(fetched, remote, skip, say, keep=()):
     """The far rows worth mirroring after the superseded pushed mirrors of this box are dropped."""
     prune_superseded_inbound(fetched, remote, say)
-    return mirrorable(fetched, skip, inbound_names())
+    return mirrorable(fetched, skip, inbound_names(), keep)
 
 
-def mirrorable(rows, skip, inbound):
+def mirrorable(rows, skip, inbound, keep=()):
     """far socket -> row for the far rows worth mirroring: true far sessions only.
 
     A far relay older than its re-export filter still lists its own mirrors of our sessions
     (`unimatrixMirror`, or the far-socket field); mirroring those back loops every name into a
-    duplicate. `inbound` is `inbound_names()`, computed once per poll by the caller."""
+    duplicate. `inbound` is `inbound_names()`, computed once per poll by the caller.
+
+    Trap: `inbound` only stops a NEW mirror. A far socket in `keep` (the caller's live bridges) stays in
+    the result though a relay-pushed mirror now holds its name: `sync` unmirrors a bridge whose row is
+    missing, so dropping it here killed the bridge of a session the far roster still lists."""
     return {r["entry"]["messagingSocketPath"]: r for r in rows
             if r["entry"]["messagingSocketPath"] not in skip
             and not (r["entry"].get("unimatrixMirror") or r["entry"].get(FAR_SOCKET_FIELD))
             and not far_codex_unbacked(r["entry"])
-            and bare_name(r["entry"].get("name")) not in inbound}
+            and (bare_name(r["entry"].get("name")) not in inbound
+                 or r["entry"]["messagingSocketPath"] in keep)}
 
 
 _AGENT_OK = {}
@@ -1819,7 +1824,8 @@ def main(argv=None) -> None:
                                default=link)
             if _now() >= next_fetch:
                 try:
-                    rows = far_rows(fetch_roster(cfg.remote, cfg.key, cfg.tunnel_remote), cfg.remote, skip, say)
+                    rows = far_rows(fetch_roster(cfg.remote, cfg.key, cfg.tunnel_remote), cfg.remote, skip, say,
+                                    keep=bridges)
                 except Exception as ex:
                     failures += 1
                     if not stale:
