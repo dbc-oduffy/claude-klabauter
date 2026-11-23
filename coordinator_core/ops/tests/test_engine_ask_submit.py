@@ -96,6 +96,13 @@ def test_gate_deny_is_a_named_refusal_with_the_gate_text(params, monkeypatch: py
     assert result["refused"] == "gate-refused" and "Run r1 is already working it." in result["reason"]
 
 
+def test_fresh_reaches_the_hook_so_a_cancelled_predecessor_can_be_refired(params, seen) -> None:
+    del params["ask"], params["ask_source"]
+    params.update(sizing="state/sizings/x.yaml", fresh=True, fire=False)
+    _dispatch(params)
+    assert seen[0]["tool_input"]["args"] == {"sizing": "state/sizings/x.yaml", "fresh": True}
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
