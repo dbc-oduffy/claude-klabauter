@@ -88,6 +88,10 @@ def mirror_addresses(row):
     if isinstance(own, str) and "." in own and any(row.get(key) for key in ("unimatrixRemote", "macSocketPath", "unimatrixBox")):
         # A box restart flips the label between `<name>.<box>.local` and `<name>.<box>`; both reach the session.
         addresses.append(own[:-len(".local")] if own.lower().endswith(".local") else own + ".local")
+        # A pushed mirror named before the `.local` strip carries `<name>.<box>-local`; that still reaches the session.
+        stem, dot, label = own.partition(".")
+        if dot and label.lower().endswith("-local") and len(label) > len("-local"):
+            addresses.append(f"{stem}.{label[:-len('-local')]}")
     return addresses
 
 

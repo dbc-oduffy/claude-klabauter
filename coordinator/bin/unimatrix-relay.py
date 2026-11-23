@@ -1067,7 +1067,10 @@ def client_box(client):
         if d.get("unimatrixMirror") or not _row_is_from(d, client):
             continue
         box = d.get("unimatrixBox") or None
-        label = re.sub(r"[^A-Za-z0-9_-]+", "-", str(d.get("unimatrixRemote") or box or "").rpartition("@")[2]).strip("-")
+        host = str(d.get("unimatrixRemote") or box or "").rpartition("@")[2]
+        # Trap: strip the mDNS `.local` before sanitising (roster `stable_label`), else `machine-a.local` becomes `machine-a-local`.
+        host = host[:-len(".local")] if host.lower().endswith(".local") and len(host) > len(".local") else host
+        label = re.sub(r"[^A-Za-z0-9_-]+", "-", host).strip("-")
         if label:
             return box, label
     return None, re.sub(r"[^A-Za-z0-9_-]+", "-", client).strip("-") or None
