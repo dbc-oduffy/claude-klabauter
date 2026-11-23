@@ -21,10 +21,10 @@ def test_name_by_session_or_conversation_id_cost_from_cost(tmp_path: Path, monke
     assert out == "agy-one · unknown · ~$0.50"
 
 
-def test_window_figures_never_render_as_before_compact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_window_figures_render_context_gauge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     peers(tmp_path, monkeypatch, [])
     out = agy.line({"context_window_size": 1000, "used_percentage": 10, "remaining_percentage": 90})
-    assert out == "unknown · unknown · unknown" and "ctx" not in out
+    assert out == "unknown · ▰▰▰▰▱ 90% ctx · unknown"
 
 
 def test_missing_zero_or_bool_cost_is_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,17 +61,19 @@ PROBE = {
 }
 
 
-def test_probe_payload_prices_lifetime_tokens_partial_and_context_stays_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_probe_payload_prices_lifetime_tokens_partial_and_renders_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     peers(tmp_path, monkeypatch, [{"vendor": "agy", "target": "c1", "name": "agy-one"}])
-    assert agy.line(PROBE) == "agy-one · unknown · ~$0.01+ [coverage incomplete]"
+    assert agy.line(PROBE) == "agy-one · ▰▰▰▰▰ 98% ctx · ~$0.01+ [coverage incomplete]"
 
 
-def test_unpriced_model_or_zero_tokens_stay_unknown_never_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unpriced_model_shows_token_total_and_zero_tokens_stay_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     peers(tmp_path, monkeypatch, [])
     other = {**PROBE, "model": {"id": "Gemini 4 Mystery"}}
-    zero = {**PROBE, "context_window": {"total_input_tokens": 0, "total_output_tokens": 0}}
     no_model = {k: v for k, v in PROBE.items() if k != "model"}
-    for payload in (other, zero, no_model, {**PROBE, "context_window": None}):
+    for payload in (other, no_model):
+        assert agy.line(payload) == "unknown · ▰▰▰▰▰ 98% ctx · 19.5k tok"
+    zero = {**PROBE, "context_window": {"total_input_tokens": 0, "total_output_tokens": 0}}
+    for payload in (zero, {**PROBE, "context_window": None}):
         assert agy.line(payload).endswith("unknown · unknown") and "$" not in agy.line(payload)
 
 

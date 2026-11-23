@@ -1273,6 +1273,32 @@ def mark_stale(path, d, say):
     say(f"marked stale {d.get('name')} ({d.get('messagingSocketPath')})")
 
 
+def _non_session_held_sockets():
+    """Loopback socket paths owned by live non-session processes (agy legs and the peer router)."""
+    held = set()
+    uni = settings_home() / "unimatrix"
+    legs_dir = uni / "agy-legs"
+    try:
+        for path in legs_dir.glob("*.json"):
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if (isinstance(rec, dict) and isinstance(rec.get("pid"), int) and pid_alive(rec["pid"])
+                    and isinstance(rec.get("endpoint"), str) and rec["endpoint"]):
+                held.add(rec["endpoint"])
+                held.add(os.path.join(LOOPBACK_SOCKS, os.path.basename(rec["endpoint"])))
+    except OSError:
+        pass
+    try:
+        rrec = json.loads((uni / "router" / "router.pid.json").read_text(encoding="utf-8"))
+        if isinstance(rrec, dict) and isinstance(rrec.get("pid"), int) and pid_alive(rrec["pid"]):
+            held.add(os.path.join(LOOPBACK_SOCKS, os.path.basename(local_endpoint("unimatrix-peer-router"))))
+    except (OSError, ValueError, TypeError):
+        pass
+    return held
+
+
 def reap_stale_sockets(owners, keep, readable, say):
     """Unlink loopback cc-msg-*.sock files no listed entry owns; mark ownerless win32 pipe entries stale.
 
@@ -1297,6 +1323,9 @@ def reap_stale_sockets(owners, keep, readable, say):
     legs = live_agy_leg_sockets()
     if legs is None:
         return
+
+
+    held |= _non_session_held_sockets()
     for f in socks:
         full = os.path.join(LOOPBACK_SOCKS, f)
         if not LOOPBACK_SOCK_RE.fullmatch(f) or full in listed or full in held or f in legs:

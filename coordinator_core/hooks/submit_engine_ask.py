@@ -138,9 +138,12 @@ def _call_family(tool_input: Mapping[str, Any], sizing_submitted: bool) -> tuple
     return value, None
 
 
+# `repo?` rides every form: a refusal that suggests `repo` must show where it goes.
 _ARGS_SHAPE = ARGS_SHAPE.replace(
-    "{ask: \"<words>\"}", "{ask: \"<words>\", route_preference?, em_rationale?}"
-).replace("{ask, source?}", "{ask, source?, route_preference?, em_rationale?}")
+    "{ask: \"<words>\"}", "{ask: \"<words>\", route_preference?, em_rationale?, repo?}"
+).replace("{sizing: \"<path>\"}", "{sizing: \"<path>\", repo?}").replace(
+    "{ask, source?}", "{ask, source?, route_preference?, em_rationale?}"
+)
 
 EmitFn = Callable[[dict, Path], dict]
 FanoutFn = Callable[[dict, Path], dict]  # the contract's FANOUT_OP signature (ask_fanout_contract.FanoutFn)
@@ -478,8 +481,53 @@ def _cross_repo_refusal(run_root: Path, own: Optional[Path], research_route: boo
     return cross_repo_run_refusal(run_root, own, research_route=research_route, approved=approved)
 
 
+def _origin_identity(checkout: Path) -> Optional[str]:
+    """`host/owner/name` of the checkout's origin, case-folded, scheme, user, `.git` and `:`/`/` spelling dropped; None if no origin.
+
+    Reads `<common-dir>/config` from the walk-only gitdir, never `git remote get-url`: this hook is a budgeted
+    entrypoint and a spawn per known repo would breach its spawn pin. `url.<base>.insteadOf` rewrites are ignored;
+    a miss only keeps the refusal, never admits."""
+    import configparser
+
+    from coordinator_core.git.repo_root import git_common_dir
+
+    common = git_common_dir(str(checkout))
+    if not common:
+        return None
+    cfg = configparser.ConfigParser(strict=False, interpolation=None)
+    try:
+        cfg.read(Path(common) / "config", encoding="utf-8")
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        return None
+    url = cfg.get('remote "origin"', "url", fallback=None)
+    if not url:
+        return None
+    url = url.strip().rstrip("/")
+    if url.endswith(".git"):
+        url = url[: -len(".git")]
+    url = url.split("://", 1)[-1]
+    url = url.split("@", 1)[-1]
+    return url.replace(":", "/", 1).lower() if "/" in url else None
+
+
+def _is_clone_of_known_repo(root: Path, own: Optional[Path]) -> bool:
+    """True when `root`'s origin is the origin of the session's repo or of a registered repo.
+
+    Repo identity is the origin, not the path: a second clone of a registered repo (another branch, another dir)
+    is that repo, so refusing it as foreign is a fake blocker (PM 2026-11-22)."""
+    ident = _origin_identity(root)
+    if ident is None:
+        return False
+    from coordinator_core.bash_guards._write_bump_applicability import _all_registered_repo_roots
+
+    known = [own] if own is not None else []
+    known += [Path(r) for r in _all_registered_repo_roots() if r]
+    return any(k.is_dir() and _origin_identity(k) == ident for k in known)
+
+
 def _names_registered_sibling(repo_arg: Optional[str], root: Path, own: Optional[Path]) -> bool:
-    """True when an explicit absolute `repo` resolved to a registered checkout other than the session's own repo `own`.
+    """True when an explicit absolute `repo` resolved to a checkout, other than the session's own repo `own`,
+    that is registered or is a clone (same origin) of the session's repo or of a registered repo.
 
     The session's own checkout is no sibling: naming it grants nothing, and an unresolved `own` grants nothing."""
     if not (repo_arg and Path(repo_arg).is_absolute()):
@@ -488,7 +536,7 @@ def _names_registered_sibling(repo_arg: Optional[str], root: Path, own: Optional
         return False
     from coordinator_core.bash_guards._write_bump_applicability import target_is_registered_repo
 
-    return target_is_registered_repo(str(root))
+    return target_is_registered_repo(str(root)) or _is_clone_of_known_repo(root, own)
 
 
 def _context_home(root: Path, paths: list[str]) -> Path:

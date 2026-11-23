@@ -319,6 +319,25 @@ def test_failed_fire_keeps_the_run_handle(params, seen, monkeypatch: pytest.Monk
     assert result["run_id"] == "run-abc123" and result["fire_error"] == "ValueError: drift"
 
 
+def test_indeterminate_fire_preserves_the_warm_reconciliation_handle(params, seen, monkeypatch) -> None:
+    from coordinator_core.warm.sandboxed_spawn import SpawnIndeterminate
+
+    error = {
+        "code": -32004,
+        "message": "warm workflow.fire timed out",
+        "data": {"dispatch_key": "dispatch-1", "reconcile": "dispatch.request_status"},
+    }
+
+    def indeterminate(p, repo_root=None):
+        raise SpawnIndeterminate(p["run_id"], error)
+
+    monkeypatch.setattr("coordinator_core.ops.workflow_fire.op._workflow_fire", indeterminate)
+    result = _dispatch({**params, "fire": True})
+    assert result["run_id"] == "run-abc123"
+    assert result["fire"] == {"state": "indeterminate", "run_id": "run-abc123", "error": error}
+    assert "reconcile before retrying" in result["fire_error"]
+
+
 def test_refusal_never_fires(params, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hook, "evaluate", lambda payload: deny("PreToolUse", "no"))
     monkeypatch.setattr(

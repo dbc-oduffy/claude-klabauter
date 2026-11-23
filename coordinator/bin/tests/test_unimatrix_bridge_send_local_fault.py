@@ -89,6 +89,19 @@ def test_a_local_fault_row_names_the_fault_and_never_claims_ssh_exit_255(unset_h
     assert "relay send failed 255" not in Path(bridge.log.name).read_text(encoding="utf-8")
 
 
+def test_a_local_fault_before_custody_answers_not_ok_and_never_reaches_ssh(unset_home, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge, _ = unset_home
+    monkeypatch.setattr(bridge, "frames_to_send", lambda buf: (_ for _ in ()).throw(RuntimeError("parse exploded")))
+    ssh = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: ssh.append(argv))
+    replies = []
+    conn = Conn()
+    conn.write = lambda data: replies.append(json.loads(data))
+    bridge.serve_one(conn)
+    assert ssh == []
+    assert replies and replies[0]["ok"] is False and "local send-leg fault: RuntimeError: parse exploded" in replies[0]["error"]
+
+
 def test_a_refused_route_is_still_the_255_result(unset_home, monkeypatch: pytest.MonkeyPatch) -> None:
     bridge, _ = unset_home
 

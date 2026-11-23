@@ -7,7 +7,9 @@ Usage: headless-em-launch.py <codex|agy|grok|claude> [--session-id ID] [--prepar
        (--help prints this text)
 
 Without --native-executable the CLI is resolved from PATH (on Windows a .exe as-is, or codex's npm shim
-mapped to its native exe).
+mapped to its native exe). For Darwin codex exec --json, a profile installed by
+scripts/build_darwin_diagnostic_codex.py selects its diagnostic binary. PTY commands receive no
+diagnostic registration. An explicit --native-executable selects that executable.
 
 Resolves the child session id (--session-id, else COORDINATOR_SESSION_ID, else a fresh uuid4), writes
 the grant for (session id, family), and hands the child COORDINATOR_SESSION_ID plus the grant token
@@ -37,6 +39,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import uuid
@@ -196,9 +199,37 @@ def _submit_exit(line: bytes) -> int:
     return 0
 
 
+def _diagnostic_install(environ):
+    """Resolve one atomically installed native binary and its compiled endpoint."""
+    generation = Path(_settings_bin_dir(environ)).parent / "native-diagnostics/current"
+    if not generation.is_symlink():
+        return None
+    root = generation.parent
+    info = root.lstat()
+    generation = generation.resolve(strict=True)
+    if (root.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o077
+            or generation.parent != root.resolve() or not generation.name.startswith("build-")):
+        raise PermissionError("invalid host diagnostic installation")
+    for member, expected_type in ((generation, stat.S_ISDIR), (generation / "codex", stat.S_ISREG),
+                                  (generation / "socket-directory", stat.S_ISREG)):
+        info = member.lstat()
+        if info.st_uid != os.getuid() or info.st_mode & 0o022 or not expected_type(info.st_mode):
+            raise PermissionError("unsafe native diagnostic installation member")
+    directory = Path((generation / "socket-directory").read_text())
+    if not directory.is_absolute():
+        raise ValueError("diagnostic socket directory must be absolute")
+    return generation / "codex", directory
+
+
 def _spawn_codex_events(cmd, env):
     """Forward the native JSON event stream immediately and retain the first failed submit."""
-    with subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE) as child:
+    install = _diagnostic_install(env) if sys.platform == "darwin" else None
+    if install and Path(cmd[0]).resolve() == install[0]:
+        from coordinator_core.warm.restricted_endpoint import diagnostic_spawn
+        child_context = diagnostic_spawn(install[1], cmd, env)
+    else:
+        child_context = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE)
+    with child_context as child:
         failure = 0
         for line in child.stdout:
             sys.stdout.buffer.write(line)
@@ -336,6 +367,10 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
               "use --prepare-only and start the CLI from it", file=sys.stderr)
         return REFUSED
     cli = native_executable
+    if not cli and family == "codex" and platform == "darwin" and extra[:1] == ["exec"] and "--json" in extra:
+        install = _diagnostic_install(environ)
+        if install:
+            cli = str(install[0])
     if not cli and family == "claude":
         cli = (which("claude.exe") if platform == "win32" else None) or which("claude")
     elif not cli:

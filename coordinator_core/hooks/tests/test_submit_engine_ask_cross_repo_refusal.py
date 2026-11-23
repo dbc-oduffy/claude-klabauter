@@ -77,7 +77,8 @@ def _denied(out: dict) -> str:
 def _assert_refused_before_any_write(own, other, args, emit, fanout, **kw):
     before = _listing(own, other)
     reason = _denied(mod.evaluate(_payload(own, args, **kw), emit=emit, fanout=fanout))
-    assert str(other) in reason and "a session rooted in" in reason and "cross_repo_approved" in reason
+    assert str(other) in reason and "a session rooted in" not in reason and "cross_repo_approved" in reason
+    assert "repo?" in reason, "the usage line carries the `repo` key the refusal suggests"
     assert emit.calls == [] and fanout.calls == []
     assert _listing(own, other) == before
 
@@ -258,4 +259,54 @@ def test_a_stood_down_environment_is_refused(repos, monkeypatch):
         "coordinator_core.bash_guards._write_bump_stand_down.environment_stands_the_bump_down",
         lambda env: "stand-down",
     )
+    _assert_refused_before_any_write(own, other, {"ask": "a", "repo": str(other)}, _Recorder(), _Recorder())
+
+
+def _origin(root: Path, url: str) -> None:
+    (root / ".git" / "config").write_text(f'[remote "origin"]\n\turl = {url}\n', encoding="utf-8")
+
+
+def _registry_empty(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability._all_registered_repo_roots", lambda env=None: []
+    )
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability.target_is_registered_repo", lambda t, env=None: False
+    )
+
+
+@pytest.mark.parametrize("args_of", [
+    lambda other: {"sizing": str(other / SIZING_REL), "repo": str(other)},
+    lambda other: {"ask": "a", "repo": str(other)},
+])
+def test_a_second_clone_of_the_sessions_repo_is_admitted_on_origin_not_path(repos, monkeypatch, args_of):
+    # The 2026-11-22 fake blocker: a same-origin clone on another branch, in another dir, read as a foreign repo.
+    own, other = repos
+    _registry_empty(monkeypatch)
+    _origin(own, "https://github.com/acme/thing.git")
+    _origin(other, "git@github.com:Acme/thing")
+    emit = _Recorder()
+    out = mod.evaluate(_payload(own, args_of(other)), emit=emit)
+    assert "is neither this session's repo" not in str((out.get("hookSpecificOutput") or {}).get("permissionDecisionReason", ""))
+    assert emit.calls and emit.calls[0][1].resolve() == other.resolve()
+
+
+def test_a_clone_of_a_registered_repo_is_admitted(repos, tmp_path, monkeypatch):
+    own, other = repos
+    reg = _repo(tmp_path, "registered")
+    _origin(reg, "https://github.com/acme/reg.git")
+    _origin(other, "https://github.com/acme/reg")
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability._all_registered_repo_roots", lambda env=None: [str(reg)]
+    )
+    emit = _Recorder()
+    mod.evaluate(_payload(own, {"ask": "a", "repo": str(other)}), emit=emit)
+    assert emit.calls and emit.calls[0][1].resolve() == other.resolve()
+
+
+def test_a_different_origin_is_still_refused(repos, monkeypatch):
+    own, other = repos
+    _registry_empty(monkeypatch)
+    _origin(own, "https://github.com/acme/thing.git")
+    _origin(other, "https://github.com/acme/other.git")
     _assert_refused_before_any_write(own, other, {"ask": "a", "repo": str(other)}, _Recorder(), _Recorder())

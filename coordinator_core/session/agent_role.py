@@ -115,6 +115,36 @@ def observed_cli_launch(argv):
             "native_role":role}
 
 
+_AGY_PRINT_FLAGS = frozenset({"-p", "--print"})
+_AGY_NON_INTERACTIVE_SUBCOMMANDS = frozenset({"plugin", "login", "logout", "help", "version", "mcp"})
+
+
+def observed_agy_audience(argv):
+    """Classify observed Agy CLI/daemon argv: interactive Agy is 'em'; headless -p/--print or utility subcommands are 'unknown'."""
+    if not isinstance(argv, (list, tuple)) or not argv or not all(isinstance(arg, str) for arg in argv):
+        return "unknown"
+    for arg in argv[1:]:
+        if arg == "--":
+            break
+        key, _, _ = arg.partition("=")
+        if key in _AGY_PRINT_FLAGS or arg in ("-h", "--help", "-v", "--version"):
+            return "unknown"
+    for arg in argv[1:]:
+        if arg == "--":
+            break
+        if arg.startswith("-"):
+            continue
+        if arg in _AGY_NON_INTERACTIVE_SUBCOMMANDS:
+            return "unknown"
+        break
+    return "em"
+
+
+def observed_agy_launch(argv):
+    role = observed_agy_audience(argv)
+    return {"native_main": role == "em", "exec_worker": False, "native_role": role}
+
+
 def native_launch():
     """Observed native ancestry only; never infer a role from a PID alone."""
     try:

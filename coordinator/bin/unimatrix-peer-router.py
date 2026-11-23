@@ -722,14 +722,17 @@ async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=Fa
 
 # ------------------------------------------------------------------ router
 
-def default_adapters():
+def default_adapters() -> dict:
     """vendor -> async fn(peer, text) -> reply text, loading the adapters on first use."""
-    cache = {}
+    cache = {}  # key -> (source stamp, module)
 
     def mod(filename, key):
-        if key not in cache:
-            cache[key] = _load(filename, f"unimatrix_peer_{key}")
-        return cache[key]
+        st = (here() / filename).stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+        hit = cache.get(key)
+        if hit is None or hit[0] != stamp:  # an edited adapter source is reloaded, never served stale
+            hit = cache[key] = (stamp, _load(filename, f"unimatrix_peer_{key}"))
+        return hit[1]
 
     async def codex(peer, text):
         m = mod("unimatrix-peer-codex.py", "codex")

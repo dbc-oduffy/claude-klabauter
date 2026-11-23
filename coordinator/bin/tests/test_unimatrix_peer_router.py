@@ -750,6 +750,36 @@ def test_default_adapters_grok_delivers_by_cwd_pinned_resume(monkeypatch):
     assert argv[argv.index("--cwd") + 1] == "/w/repo" and "--add-dir" not in argv and kw["cwd"] == "/w/repo"
 
 
+@portable
+def test_default_adapters_reload_an_adapter_whose_source_changed_and_keep_an_unchanged_one(monkeypatch):
+    loads = []
+    real = pr._load("unimatrix-peer-grok.py", "unimatrix_peer_grok_probe")
+
+    class Proc:
+        returncode = 0
+        stdout = json.dumps({"text": "ok"})
+
+    monkeypatch.setattr(real.subprocess, "run", lambda argv, **kw: Proc())
+    monkeypatch.setattr(pr, "_load", lambda filename, modname: loads.append(filename) or real)
+    grok = pr.default_adapters()["grok"]
+    peer = {"target": "sid-1", "cwd": "/w/repo"}
+    run(grok(peer, "a"))
+    run(grok(peer, "b"))
+    assert loads == ["unimatrix-peer-grok.py"]  # unchanged source: loaded once
+    src = pr.here() / "unimatrix-peer-grok.py"
+    real_stat = Path.stat
+
+    def edited_stat(self, *a, **kw):
+        st = real_stat(self, *a, **kw)
+        if self == src:
+            return os.stat_result((*st[:8], st.st_atime, st.st_mtime + 5, *st[10:]))
+        return st
+
+    monkeypatch.setattr(Path, "stat", edited_stat)
+    run(grok(peer, "c"))
+    assert loads == ["unimatrix-peer-grok.py"] * 2  # edited source: reloaded on the next send
+
+
 def test_peers_json_entry_survives_its_lock_going_and_beats_a_discovered_clash(box):
     async def go():
         cx = box / "cx"

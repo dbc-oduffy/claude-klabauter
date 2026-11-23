@@ -7,6 +7,10 @@ write-bump guard's arming, so an unanchored or stood-down session is refused too
 Known over-refusal: an UNREGISTERED nested repo under the session anchor's
 subtree is refused as a peer repo. That errs toward refusing before any write.
 
+Where the session sits is never a remedy: no ask needs a session rooted in a
+particular directory (PM 2026-11-22). A second clone of a registered repo is
+admitted by the caller on repo identity (origin), not path.
+
 Pure: no spawn (callers pass already-resolved toplevels), no env read, no file write.
 """
 
@@ -17,9 +21,10 @@ from pathlib import Path
 from typing import Optional
 
 DENY_TEXT = (
-    "engine-ask: run root {run_root} is not this session's repo {session_root}. "
-    "Instead: `repo` naming a registered repo, `cross_repo_approved: true` once the PM "
-    "has assented, or a session rooted in {run_root}."
+    "engine-ask: run root {run_root} is neither this session's repo {session_root} nor a "
+    "registered repo or a clone of one (same origin). "
+    "Instead: `repo` naming a registered repo or a clone of one, or `cross_repo_approved: true` "
+    "once the PM has assented."
 )
 
 

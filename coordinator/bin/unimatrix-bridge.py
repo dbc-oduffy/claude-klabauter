@@ -307,9 +307,13 @@ def _tell_sender(line, text):
         log.write(f"sender notice not delivered: {e}\n")
 
 
-def ack_sender(line, target, reached, reached_box):
-    """Tell the sender which far session its message was written to; `reached` is None for a far relay that does not name it."""
-    if reached:
+def ack_sender(line, target, reached, reached_box, queued=False) -> None:
+    """Tell the sender which far session its message was written to; `reached` is None for a far relay that does not name it.
+
+    `queued`: the far reader was slow and the line is parked for delivery."""
+    if queued:
+        text = f"Queued for {reached or target} on {reached_box or 'the far box'}; delivered when its reader drains."
+    elif reached:
         text = f"Delivered to {reached} on {reached_box or 'the far box'}."
     else:
         text = f"Delivered to {target}; receiver unconfirmed (far relay does not name it)."
@@ -380,33 +384,42 @@ _verdict = threading.local()
 
 
 def relay_send(conn) -> None:
-    """Relay one client's message lines and answer the client only after the delivery verdict.
+    """Relay one client's message lines; answer the client when the bridge takes custody, not after the far leg.
 
-    The client's connection stays open through the far leg: closing first made a failed or unconfirmed far
-    write read as success. A confirmed write answers `{"ok": true}`; anything else answers `{"ok": false,
-    "error": ...}` and the failure notice still lands in the sender's inbox."""
+    Custody is the point just before the far ssh run: frames parsed, mirror validated, nothing refused.
+    There the client gets `{"ok": true, "accepted": true}` and its connection closes, so a far leg slower
+    than the client's wait window never reads as a failed send. A refusal or local fault before custody
+    answers `{"ok": false, "error": ...}`. A far failure after custody is never an answer: it lands as a
+    deliveries row and the sender's failure notice (`_record_outcome`), and the bridge never resends."""
     buf = b""
     while chunk := conn.read():
         buf += chunk
     _verdict.errors = []
+    _verdict.answered = False
+
+    def answer(reply) -> None:
+        _verdict.answered = True
+        try:
+            conn.write(json.dumps(reply).encode() + b"\n")
+        except Exception as e:  # pywintypes.error is not an OSError subclass
+            log.write(f"client verdict not delivered: {e}\n")
+        conn.close()
+
     try:
-        _relay_deliver(buf)
-        errors = [e for e in _verdict.errors if e]
-        reply = {"ok": not errors and bool(_verdict.errors)}
-        if not reply["ok"]:
-            reply["error"] = (errors[0] if errors else "nothing to send")[-300:]
-    except Exception as e:  # a local fault is still a failed send to the client
-        reply = {"ok": False, "error": f"{LOCAL_FAULT}: {type(e).__name__}: {e}"[-300:]}
+        _relay_deliver(buf, on_custody=lambda: answer({"ok": True, "accepted": True}))
+        if not _verdict.answered:
+            errors = [e for e in _verdict.errors if e]
+            answer({"ok": False, "error": (errors[0] if errors else "nothing to send")[-300:]})
+    except Exception as e:  # a local fault before custody is still a failed send to the client
+        if _verdict.answered:
+            log.write(f"relay: far leg fault after custody: {type(e).__name__}: {e}\n")
+        else:
+            answer({"ok": False, "error": f"{LOCAL_FAULT}: {type(e).__name__}: {e}"[-300:]})
     finally:
         _verdict.errors = None
-    try:
-        conn.write(json.dumps(reply).encode() + b"\n")
-    except Exception as e:  # pywintypes.error is not an OSError subclass
-        log.write(f"client verdict not delivered: {e}\n")
-    conn.close()
 
 
-def _relay_deliver(buf) -> None:
+def _relay_deliver(buf, on_custody=None) -> None:
     # The relay forwards one message line and authenticates for its local recipient;
     # the near recipient's auth header must not cross the box boundary.
     lines = frames_to_send(buf)
@@ -444,6 +457,8 @@ def _relay_deliver(buf) -> None:
             _record_outcome(line, target, ts, 0, error, box, transport, ref)
         _mark_misroute()
         return
+    if on_custody:
+        on_custody()
     started = time.monotonic()
     started_wall = time.time()
     far_digest = hashlib.sha256(mine[FAR_SOCKET_FIELD].encode("utf-8")).hexdigest()[:16]
@@ -481,6 +496,7 @@ def _relay_deliver(buf) -> None:
     for i, (line, (ok, unacked)) in enumerate(zip(lines, acks)):
         error = None
         reached = reached_box = None
+        queued = bool(ok and i < len(replies) and replies[i].get("queued") is True)
         if ok and i < len(replies):
             reached = replies[i].get("reached") if isinstance(replies[i].get("reached"), str) else None
             reached_box = replies[i].get("reached_box") if isinstance(replies[i].get("reached_box"), str) else None
@@ -500,7 +516,7 @@ def _relay_deliver(buf) -> None:
             _mark_misroute()
             marked = True
         _record_outcome(line, target, ts, ms, error, box, transport, ref, reached=reached, reached_box=reached_box,
-                        acked=ok, misdelivered=bool(error and reached))
+                        acked=ok, misdelivered=bool(error and reached), queued=queued)
 
 
 def _caps():
@@ -606,13 +622,14 @@ def _batch_replies(stdout):
 
 
 def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none", ref=None,
-                    reached=None, reached_box=None, acked=False, misdelivered=False) -> None:
+                    reached=None, reached_box=None, acked=False, misdelivered=False, queued=False) -> None:
     """Record one line's outcome; `digest` is the sha256 the far relay's receipt row carries for the same line.
 
     `box` is the mirror row's BOX_FIELD; `transport` is the leg label: `ssh`, `tunnel`, or `none` when refused before any ssh.
     `ref` is the `<bare>.<box>` address the far box resolves; the failure notice leads with it.
     `reached`/`reached_box` name the far session the relay wrote to. `acked` is a far-confirmed write: with no
-    error the sender gets a delivery ack; with `misdelivered` it gets the wrong-session notice, not the not-delivered one."""
+    error the sender gets a delivery ack; with `misdelivered` it gets the wrong-session notice, not the not-delivered one.
+    `queued` is a far-accepted line parked for a slow reader: an ok row marked `queued`, acked as `queued`, never a failure."""
     if getattr(_verdict, "errors", None) is not None:
         _verdict.errors.append(error)
     row = {"ts": ts, "at": time.time(), "target": target, "ok": not error, "ms": ms, "box": box, "transport": transport,
@@ -621,6 +638,8 @@ def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none"
         row["ref"] = ref
     if reached:
         row["reached"] = reached
+    if queued and not error:
+        row["queued"] = True
     if error:
         row["error"] = error
         if "unconfirmed" in error:
@@ -633,7 +652,7 @@ def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none"
     elif error:
         notify_sender(line, shown, error)
     elif acked:
-        ack_sender(line, shown, reached, reached_box)
+        ack_sender(line, shown, reached, reached_box, queued)
 
 
 def _record_socket_send(data, started, error=None) -> None:

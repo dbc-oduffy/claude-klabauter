@@ -666,7 +666,7 @@ def snapshot() -> dict[str, RegistryRecord]:
         from coordinator_core.session import external_registry
         result: dict[str, RegistryRecord] = {
             sid: ExternalRegistryRecord(pid=row["pid"], start_epoch=row["start_epoch"], cwd=row["cwd"],
-                                name=row.get("name"), provider="codex")
+                                name=row.get("name"), provider=row.get("provider", "codex"))
             for sid, row in external_registry.snapshot().items()
         }
         directory = registry_dir()

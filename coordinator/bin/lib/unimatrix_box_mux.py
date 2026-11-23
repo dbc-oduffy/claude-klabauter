@@ -126,11 +126,12 @@ def resolve_remote(remote, ip_hosts=None):
     return (f"{user}@{host}" if user else host), box_of(host)
 
 
-def ssh_argv(box, key, host, extra=()):
-    """The ssh argv up to (not including) the remote command: key, batch mode, HostKeyAlias=<box>, keepalive.
+def ssh_argv(box, key, host, extra=()) -> list:
+    """The ssh argv up to (not including) the remote command: pinned key only (IdentitiesOnly, IdentityAgent=none so
+    SSH_AUTH_SOCK/1Password is never consulted), batch mode, HostKeyAlias=<box>, keepalive.
 
     `extra` leads the options: ssh keeps the first value of a repeated -o, so a caller's keepalive overrides the default."""
-    return ["ssh", *extra, "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
+    return ["ssh", *extra, "-i", key, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes", "-o", "AddressFamily=inet",
             "-o", f"HostKeyAlias={box}", "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
             host]
 
