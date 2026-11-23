@@ -15,18 +15,31 @@ def peers(tmp_path, monkeypatch, rows) -> None:
     monkeypatch.setattr(external_registry, "lookup", lambda sid: None)
 
 
-def test_full_payload_prints_name_before_compact_and_spend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_full_payload_prints_name_budget_used_and_spend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     peers(tmp_path, monkeypatch, [{"vendor": "grok", "target": "s1", "name": "grok-one"}])
     out = grok.line({"session_id": "s1", "context_window": {"remaining_percentage": 60},
                      "auto_compact_threshold_percent": 80, "cost": {"total_cost_usd": 1.234}})
-    assert out.startswith("grok-one · ") and "40% ctx" in out and out.endswith("~$1.23")
+    assert out == "grok-one · ## 50% ctx · ~$1.23"
+    assert "unknown" not in out and "▰" not in out and "▱" not in out
 
 
-def test_threshold_nested_under_context_window_renders_before_compact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_threshold_nested_under_context_window_renders_budget_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     peers(tmp_path, monkeypatch, [{"vendor": "grok", "target": "s1", "name": "grok-one"}])
     out = grok.line({"session_id": "s1", "context_window": {"remaining_percentage": 72, "auto_compact_threshold_percent": 80},
                      "cost": {"total_cost_usd": 1.5}})
-    assert out.startswith("grok-one · ") and "52% ctx" in out and out.endswith("~$1.50")
+    assert out == "grok-one · ## 35% ctx · ~$1.50"
+    assert "unknown" not in out
+
+
+def test_budget_is_empty_at_full_window_and_full_at_compact() -> None:
+    assert grok.budget_used(100, 80) == 0.0
+    assert grok.budget_used(20, 80) == 100.0
+    assert grok.budget_used(0, 80) == 100.0
+    assert grok._ascii_context(0) == "0% ctx"
+    assert grok._ascii_context(100) == "##### 100% ctx"
+    assert grok.budget_used(None, 80) is None
+    assert grok.budget_used(50, 0) is None
+    assert grok.budget_used(True, 80) is None
 
 
 def test_absent_keys_print_unknown_in_each_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

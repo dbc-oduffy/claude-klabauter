@@ -76,3 +76,47 @@ def test_a_sizing_brief_is_wrapped_never_edited(tmp_path: Path) -> None:
     assert rel == "scratch/run-1/brief.md"
     assert sizing.read_text(encoding="utf-8") == "x: 1\n"
     assert "`state/sizings/s.yaml`" in (tmp_path / rel).read_text(encoding="utf-8")
+
+
+def test_uuid_notebook_targets_map_one_to_one_to_letters_and_bind_existing_ids(repo, capsys) -> None:
+    uuids = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333",
+    ]
+    flags = ["--research-class", "corpus", "--research-source", "notebooklm"]
+    for u in uuids:
+        flags += ["--research-target", f"notebooklm={u}"]
+    _, script, reply = _emit(repo, capsys, *flags)
+    nlm = next(s for s in reply["segments"] if s["pipeline"] == "notebooklm")
+    assert nlm["lists"] == {"notebooks": ["A", "B", "C"]}
+    brief = _brief_text(repo, script)
+    assert "3 entries: `A`, `B`, `C`" in brief
+    assert "### Existing notebook IDs" in brief
+    assert f"Notebook `A` -> existing notebook ID `{uuids[0]}`" in brief
+    assert f"Notebook `B` -> existing notebook ID `{uuids[1]}`" in brief
+    assert f"Notebook `C` -> existing notebook ID `{uuids[2]}`" in brief
+    assert "Source strategy: existing_notebook" in brief
+    assert "do NOT call `notebook_get`" in brief
+    assert "notebook_get" in brief and "notebook_query" in brief and "do NOT call `notebook_create`" in brief
+    # All notebooks are bound existing IDs: scout must not halt on empty usable_sources.
+    assert "stage scout returned no usable_sources" not in script
+
+
+def test_mixed_fresh_and_existing_notebooks_keep_scout_usable_sources_halt(repo, capsys) -> None:
+    flags = [
+        "--research-class", "corpus", "--research-source", "notebooklm",
+        "--research-target", "notebooklm=A",
+        "--research-target", "notebooklm=22222222-2222-4222-8222-222222222222",
+    ]
+    _, script, reply = _emit(repo, capsys, *flags)
+    nlm = next(s for s in reply["segments"] if s["pipeline"] == "notebooklm")
+    assert nlm["lists"] == {"notebooks": ["A", "B"]}
+    assert "stage scout returned no usable_sources" in script
+
+
+def test_notebook_slot_map_preserves_explicit_letters_and_pairs_given_list_with_uuids() -> None:
+    mixed = [{"source": "notebooklm", "ref": "A"}, {"source": "notebooklm", "ref": "uuid-2"}]
+    assert re_.notebook_slot_map(mixed) == (("A", "B"), (("B", "uuid-2"),))
+    uuids = [{"source": "notebooklm", "ref": "uuid-1"}, {"source": "notebooklm", "ref": "uuid-2"}]
+    assert re_.notebook_slot_map(uuids, given=["X", "Y"]) == (("X", "Y"), (("X", "uuid-1"), ("Y", "uuid-2")))

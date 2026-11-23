@@ -87,12 +87,13 @@ def test_no_then_build_and_empty_writes_stays_a_bare_research_halt(repo):
     assert "split" not in gate(repo, REL, writes=[]).halt
 
 
-def test_notebooklm_without_targets_or_questions_halts_naming_them(repo):
+def test_notebooklm_without_targets_or_questions_defaults_to_notebook_a(repo):
     _put(repo, {"value_class": "scouts", "appetite": "small", "sources": ["notebooklm"]})
     v = gate(repo, REL, writes=["docs/a.md"])
     assert v.arm is None and v.halt["kind"] == "research"
-    assert "notebooklm targets" in v.halt["reason"] and "split" not in v.halt
-    assert [p.name for p in (repo / "state" / "sizings").iterdir()] == ["2026-10-29-split-gate.yaml"]
+    r = v.halt["split"]["research"]
+    doc = yaml.safe_load((repo / r["sizing"]).read_text(encoding="utf-8"))
+    assert doc["research"]["targets"] == [{"source": "notebooklm", "ref": "A"}]
 
 
 def test_notebooklm_targets_derive_from_questions(repo):

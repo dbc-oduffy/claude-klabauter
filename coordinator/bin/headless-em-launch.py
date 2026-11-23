@@ -124,6 +124,13 @@ def _grok_launch_args(extra, environ, platform) -> list[str]:
     for rule in rules:
         if rule not in extra:
             head += ["--allow", rule]
+    from coordinator_core.agent_pipe.model_tiers import GROK_EM_EFFORT, model_for_role
+
+    if not any(a in ("--model", "-m") or a.startswith("--model=") for a in extra):
+        head += ["--model", model_for_role("grok", "em")]
+    if not any(a in ("--reasoning-effort", "--effort") or a.startswith("--reasoning-effort=")
+               or a.startswith("--effort=") for a in extra):
+        head += ["--reasoning-effort", GROK_EM_EFFORT]
     return [*head, *extra]
 
 

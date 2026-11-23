@@ -1615,10 +1615,19 @@ def _em_mailbox(root: Path, scratch_rel: str) -> dict:
     path = root / scratch_rel / "mail" / EM_MAILBOX
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(exist_ok=True)
+    # Self-bootstrap sys.path with the engine root so the command runs from any consumer repo cwd
+    # under door.python.txt's interpreter (and across POSIX + Windows shells without PYTHONPATH=).
+    engine_root = Path(__file__).resolve().parents[3].as_posix()
+    py = shlex.quote(sys.executable)
+    runner = (
+        f"{py} -c \"import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+        "runpy.run_module('coordinator_core.workflow_watch.mailbox_line',run_name='__main__')\" "
+        f"{shlex.quote(engine_root)}"
+    )
     return {
         "em_mailbox": path.as_posix(),
-        "em_watch": f"python -m coordinator_core.workflow_watch.mailbox_line --from-start {shlex.quote(path.as_posix())}",
-        "em_rewatch": f"python -m coordinator_core.workflow_watch.mailbox_line {shlex.quote(path.as_posix())}",
+        "em_watch": f"{runner} --from-start {shlex.quote(path.as_posix())}",
+        "em_rewatch": f"{runner} {shlex.quote(path.as_posix())}",
     }
 
 
@@ -1847,14 +1856,16 @@ def _research_route_setup(
         root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
     )
     members_brief = research_emit.bind_output_paths(root, scratch_rel, members_brief)
+    nb_all_existing = False
     if "notebooklm" in shape["pipelines"]:
+        nb_roster, nb_existing = research_emit.notebook_slot_map(
+            [t for t in research.get("targets") or () if isinstance(t, dict)],
+            [str(n) for n in lists.get("notebooks") or ()],
+            [q["text"] if isinstance(q, dict) else q for q in questions],
+        )
+        nb_all_existing = bool(nb_roster) and len(nb_existing) == len(nb_roster)
         members_brief = research_emit.bind_notebooks_roster(
-            root, scratch_rel, members_brief,
-            research_emit.notebooks_roster(
-                [t for t in research.get("targets") or () if isinstance(t, dict)],
-                [str(n) for n in lists.get("notebooks") or ()],
-                [q["text"] if isinstance(q, dict) else q for q in questions],
-            ),
+            root, scratch_rel, members_brief, nb_roster, existing_ids=nb_existing,
         )
     if shape.get("primary") == research_emit.REPO_PIPELINE:
         members_brief = _append_code_rank_line(root, scratch_rel, members_brief)
@@ -1914,7 +1925,7 @@ def _research_route_setup(
             manifest = manifests.get(pipeline) or manifests.setdefault(pipeline, load_manifest(content_root, pipeline))
         if pipeline == "notebooklm":
             try:
-                manifest = research_emit.gate_notebooklm(manifest)
+                manifest = research_emit.gate_notebooklm(manifest, all_existing=nb_all_existing)
             except PipelineEmitRefused as exc:
                 reasons.extend(f"pipeline {pipeline!r}: {r}" for r in exc.reasons)
                 continue

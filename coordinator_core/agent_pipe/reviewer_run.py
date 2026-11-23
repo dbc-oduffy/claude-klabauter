@@ -50,7 +50,7 @@ def _agy_argv(prompt: str, model: str) -> list[str]:
 def _grok_argv(prompt: str, model: str) -> list[str]:
     from coordinator_core.codex_runner.grok import build_argv, resolve_grok
 
-    return [*build_argv(resolve_grok(), prompt), "--model", model]
+    return build_argv(resolve_grok(), prompt, model=model)
 
 
 class _AgyMessages:

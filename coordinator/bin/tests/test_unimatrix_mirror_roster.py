@@ -581,6 +581,7 @@ def test_supervisor_pass_reaps_unbacked_agy_faces_and_relay_rows_but_keeps_backe
     _put(sessions, "999974.json", pid=999974, name="codex-hand", procStart="x", unimatrixRemote="farbox")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    monkeypatch.setattr(roster, "_signal_pid", lambda pid, sig: None)  # survivor SIGKILL must not reach a real pid
     monkeypatch.setattr(roster, "fetch_roster", lambda *a, **k: [])
     monkeypatch.setattr(roster, "inbound_names", lambda: set())
     monkeypatch.setattr(roster.signal, "signal", lambda *a: None)
@@ -656,6 +657,7 @@ def test_reap_removes_orphaned_mirrors_and_kills_only_a_bridge_that_is_still_its
     killed = []
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "tree_kill_many", lambda pids: killed.extend(pids))
+    monkeypatch.setattr(roster, "_signal_pid", lambda pid, sig: None)  # survivor SIGKILL must not reach a real pid
     me = os.getpid()
     base = {roster.FAR_SOCKET_FIELD: FAR_SOCK, "unimatrixRemote": "farbox"}
     _put(sessions, f"{me}.json", pid=me, procStart=roster.proc_start(me), **base)
@@ -675,6 +677,7 @@ def test_reap_unbacked_removes_the_registry_row_of_an_unseen_mirror_but_never_a_
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    monkeypatch.setattr(roster, "_signal_pid", lambda pid, sig: None)  # survivor SIGKILL must not reach a real pid
     me = os.getpid()
     sup = {"unimatrixRosterPid": me, "unimatrixRosterProcStart": roster.proc_start(me)}
     base = {roster.FAR_SOCKET_FIELD: FAR_SOCK, "unimatrixRemote": "farbox", **sup}
@@ -691,6 +694,7 @@ def test_reap_unbacked_agy_faces_drops_a_dead_agent_face_but_spares_a_backed_or_
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    monkeypatch.setattr(roster, "_signal_pid", lambda pid, sig: None)  # survivor SIGKILL must not reach a real pid
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(sessions.parent / "settings-home"))
     liveness = roster._liveness()
     monkeypatch.setattr(liveness, "agy_face_unbacked", lambda d: d.get("name") != "agy-backed")
@@ -804,9 +808,11 @@ def test_rename_live_mirror_preserves_box_and_vendor(sessions, monkeypatch: pyte
     assert after["unimatrixBox"] == "machine-b" and after["unimatrixVendor"] == "codex"
 
 
-def test_roster_loads_the_contract_lazily_not_at_import() -> None:
+def test_roster_loads_the_contract_lazily_not_at_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, "_unimatrix.protocol", raising=False)
     roster = load("roster")
-    assert roster._CONTRACT == []
+    assert "_unimatrix.protocol" not in sys.modules
+    assert roster._contract() is sys.modules["_unimatrix.protocol"]
 
 
 def test_mirror_records_the_far_pid_for_a_win32_pipe_far_socket(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1375,7 +1381,7 @@ def _router_harness(tmp_path, monkeypatch, answers):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.delenv("UNIMATRIX_ROUTER_SUPERVISION", raising=False)
     monkeypatch.setattr(mirror_all, "router_answers", lambda ctl: answers())
-    monkeypatch.setattr(mirror_all.R, "spawn", lambda cmd: started.append(cmd) or FakeProc(555))
+    monkeypatch.setattr(mirror_all.R, "spawn", lambda cmd, **kw: started.append(cmd) or FakeProc(555))
     monkeypatch.setattr(mirror_all, "kickstart_router_agent", lambda say: False)
     return mirror_all, started
 

@@ -37,7 +37,7 @@ def test_em_commits_only_through_safe_commit_and_escalates_when_it_cannot_run():
     em = _em_section()
     assert '`coordinator-safe-commit "<subject>" -- <path> [<path>...]`' in em
     assert "never a bare `git add` and `git commit`" in em
-    assert "the claude-klabauter EM" in em and "do not fall back to plain git" in em
+    assert "the EM responsible for the installed engine" in em and "do not fall back to plain git" in em
 
 
 def test_a_worker_role_prompt_is_never_a_pm_ask():

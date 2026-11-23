@@ -9,13 +9,13 @@ from __future__ import annotations
 import os
 from typing import NamedTuple, Optional
 
-from coordinator_core.agent_pipe.model_tiers import model_for_tier
+from coordinator_core.agent_pipe.model_tiers import model_for_role
 
 PROVIDER_ENV = "COORDINATOR_REVIEWER_PROVIDER"
 WILDCARD = "*"
 
 OPUS_EQUIVALENT_MODELS: dict[str, str] = {
-    provider: model_for_tier(provider, "opus")
+    provider: model_for_role(provider, "reviewer")
     for provider in ("codex", "agy", "grok")
 }
 

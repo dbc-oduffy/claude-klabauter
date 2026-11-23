@@ -144,6 +144,11 @@ def _stub_src(monkeypatch, tmp_path):
     src.mkdir()
     _write_stubs(src)
     monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
+    # A hermetic skills source: the repo's own coordinator/skills need not exist (it is DoE's tree).
+    skills = tmp_path / "skills-src"
+    (skills / "required").mkdir(parents=True)
+    (skills / "required" / "SKILL.md").write_text("# required\n", encoding="utf-8")
+    monkeypatch.setattr(ui, "SKILLS_ROOT", skills)
 
 
 def _home(monkeypatch, tmp_path):

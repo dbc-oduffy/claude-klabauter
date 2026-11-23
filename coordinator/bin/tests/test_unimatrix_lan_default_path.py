@@ -47,6 +47,7 @@ def _registry_reads(roster, monkeypatch, tmp_path, runs):
     monkeypatch.setattr(roster, "proc_start", lambda pid: None)
     monkeypatch.setattr(roster, "write_json_atomic", lambda path, data: None)
     monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    monkeypatch.setattr(roster, "_signal_pid", lambda pid, sig: None)  # survivor SIGKILL must not reach a real pid
     monkeypatch.setattr(roster.signal, "signal", lambda *args: None)
     monkeypatch.setattr(roster.os, "listdir", observe_registry)
     for home, config in runs:

@@ -2520,6 +2520,38 @@ def test_resolve_key_tries_the_machine_local_key_of_each_matching_alias_before_s
                               via=via) == str(env.key)
 
 
+def test_ssh_identity_file_skips_pub_key_and_picks_next_private_key(env, tmp_path):
+    pub = tmp_path / "unimatrix-1p.pub"
+    pub.write_text("ssh-ed25519 AAAA test\n", encoding="utf-8")
+    priv = tmp_path / "unimatrix-priv"
+    priv.write_text("PRIVATE", encoding="utf-8")
+
+    def run(cmd, **_kw):
+        out = f"identityfile {pub}\nidentityfile {priv}\n"
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+
+    assert env.real_ssh_identity_file(env.roster, "machine-a-1p", run=run) == str(priv)
+
+    def run_pub_only(cmd, **_kw):
+        return subprocess.CompletedProcess(cmd, 0, f"identityfile {pub}\n", "")
+
+    assert env.real_ssh_identity_file(env.roster, "machine-a-1p", run=run_pub_only) is None
+
+
+def test_resolve_key_falls_back_to_via_alias_ssh_identity_file(env, tmp_path):
+    via_key = write_key(env.home / "via-macmini-key")
+    ssh_calls = []
+
+    def ssh(r, a):
+        ssh_calls.append(a)
+        return via_key if a == "macmini-lan" else None
+
+    via = lambda: iter(["example-operator@Mac-mini.local", "macmini-lan"])  # noqa: E731
+    got = env.al.resolve_key(env.roster, "example-operator@Mac-mini.local", lambda r, a: None, ssh, via=via)
+    assert got == via_key
+    assert ssh_calls == ["example-operator@Mac-mini.local", "macmini-lan"]
+
+
 def test_matching_aliases_lists_name_matches_before_known_host_key_matches(env):
     entries = [(["Mac-mini.local"], "ssh-ed25519 AAAAmini"), (["100.64.0.9"], "ssh-ed25519 AAAAmini")]
     hosts = {"other": "100.64.0.9", "macmini-lan": "mac-mini"}

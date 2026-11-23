@@ -132,6 +132,7 @@ def test_the_far_senders_mirror_row_survives_the_agy_face_reap(chain, capsys, fa
     roster = chain.roster
     mirror_row = next(d for d in roster.session_entries() if d.get("vendor") == family)
     chain.monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    chain.monkeypatch.setattr(roster, "_signal_pid", lambda pid, sig: None)  # survivor SIGKILL must not reach a real pid
     chain.monkeypatch.setattr(roster, "drop_session_files",
                               lambda pid: (chain.sessions / f"{pid}.json").unlink(missing_ok=True))
     roster.reap_unbacked_agy_faces(lambda *a: None)

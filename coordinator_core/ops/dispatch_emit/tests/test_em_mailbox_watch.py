@@ -52,3 +52,22 @@ def test_process_prints_the_line_and_exits_zero(tmp_path):
     )
     out, _ = proc.communicate(timeout=20)
     assert proc.returncode == 0 and out.strip() == "escalation"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_emitted_em_watch_runs_outside_the_engine_checkout(tmp_path):
+    import shlex
+
+    reply = _em_mailbox(tmp_path, "scratch")
+    Path(reply["em_mailbox"]).write_text("outside-escalation\n", encoding="utf-8")
+    outside = tmp_path / "consumer-repo"
+    outside.mkdir()
+    argv = shlex.split(reply["em_watch"])
+    proc = subprocess.Popen(
+        argv, cwd=outside, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    out, err = proc.communicate(timeout=20)
+    assert proc.returncode == 0, err
+    assert out.strip() == "outside-escalation"

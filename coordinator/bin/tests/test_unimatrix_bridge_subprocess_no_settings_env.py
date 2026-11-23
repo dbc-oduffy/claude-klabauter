@@ -70,14 +70,16 @@ def test_a_far_write_failure_is_a_failed_send_with_the_variable_unset(tmp_path):
     assert rows and all(r["ok"] is False for r in rows)
     assert "MissingSettingsError" not in json.dumps(rows)
     assert out["notices"] >= 1
-    assert len(out["client"]) == 1 and out["client"][0]["ok"] is False and "far write refused" in out["client"][0]["error"]
+    # Custody was taken before the far leg ran: the client gets no refusal line, the failure is the row + notice.
+    assert out["client"] == []
+    assert any("far write refused" in (r.get("error") or "") for r in rows)
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_a_local_fault_reads_local_never_ssh_255_with_the_variable_unset(tmp_path):
     out, rows = run_driver(tmp_path, "local-fault")
-    assert out["client"][0]["ok"] is False and "255" not in json.dumps(out["client"])
+    assert out["client"] == []  # the channel fault is after custody: recorded as a failed row, never answered
     assert rows and all(r["ok"] is False for r in rows)
     text = json.dumps(rows)
     assert "local send-leg fault" in text and "255" not in text

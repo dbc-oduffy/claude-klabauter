@@ -550,7 +550,7 @@ def _quarantine_real_home(request: pytest.FixtureRequest, tmp_path_factory: pyte
     # Native sessions are real operator identity, just like the real home. Unit
     # fixtures must supply their own values rather than inherit the Codex/agy/grok
     # session running pytest (which can otherwise claim test writes as live work).
-    for name in ("CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID",
+    for name in ("CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID", "GROK_SESSION_ID",
                  "COORDINATOR_AGENT_VENDOR", "COORDINATOR_AGENT_MODEL", "COORDINATOR_AGENT_SESSION"):
         monkeypatch.delenv(name, raising=False)
 

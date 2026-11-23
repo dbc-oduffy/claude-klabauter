@@ -56,6 +56,26 @@ def test_a_re_emit_after_a_recorded_submission_mints_a_new_run_id(repo, capsys):
     assert len(_scripts(repo)) == 2
 
 
+def test_a_re_emit_after_runtime_scratch_artifacts_without_submission_mints_a_new_run_id(repo, capsys):
+    first = _emit(capsys, "What is X?")
+    run_dir = repo / RUN_DIR_ROOT / first["run_id"]
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "preflight.json").write_text('{"ok": true}\n', encoding="utf-8")
+    second = _emit(capsys, "What is X?")
+    assert second["run_id"] != first["run_id"]
+    assert len(_scripts(repo)) == 2
+
+
+def test_a_re_emit_after_a_closed_trail_without_submission_mints_a_new_run_id(repo, capsys):
+    first = _emit(capsys, "What is X?")
+    trail = repo / "docs" / "research" / "topic" / "2026-11-23-topic" / "trail.yaml"
+    trail.parent.mkdir(parents=True, exist_ok=True)
+    trail.write_text(f'run_id: "{first["run_id"]}"\n', encoding="utf-8")
+    second = _emit(capsys, "What is X?")
+    assert second["run_id"] != first["run_id"]
+    assert len(_scripts(repo)) == 2
+
+
 def test_a_different_ask_gets_its_own_script(repo, capsys):
     a = _emit(capsys, "What is X?")
     b = _emit(capsys, "What is Y?")

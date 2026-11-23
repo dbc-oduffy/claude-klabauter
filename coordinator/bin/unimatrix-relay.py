@@ -239,19 +239,18 @@ def alive(pid):
         return False
 
 
-_LIVENESS = []
+def _core_module(subname):
+    bin_dir = os.path.dirname(os.path.abspath(__file__))
+    if "_unimatrix" not in sys.modules and os.path.isdir(os.path.join(bin_dir, "_unimatrix")):
+        if bin_dir not in sys.path:
+            sys.path.insert(0, bin_dir)
+    import importlib
+    return importlib.import_module(f"_unimatrix.{subname}")
 
 
 def _liveness():
-    """The spawn-free liveness module beside this script, loaded by path on first use."""
-    if not _LIVENESS:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "unimatrix_liveness", Path(__file__).resolve().parent / "unimatrix-liveness.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _LIVENESS.append(mod)
-    return _LIVENESS[0]
+    """The spawn-free liveness module, loaded via _unimatrix.proc."""
+    return _core_module("proc")
 
 
 def mirror_orphaned(d):

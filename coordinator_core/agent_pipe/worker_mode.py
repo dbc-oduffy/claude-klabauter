@@ -25,6 +25,11 @@ from pathlib import Path
 from typing import Callable, Iterator, Mapping, NamedTuple, Optional
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.agent_pipe.model_tiers import (
+    GROK_EXECUTE_EFFORT,
+    ModelSlotBlocked,
+    model_for_role,
+)
 
 WORKER_ENV = "COORDINATOR_AGENT_WORKER"
 
@@ -51,19 +56,27 @@ def lock_and_gitdir_add_dir_argv(repo=None) -> list[str]:
 
 
 class _WorkerArgv(Mapping):
-    """WORKER_ARGV view: static agent flags, with the codex writable roots resolved on each read."""
+    """WORKER_ARGV view: static agent flags, the executor model resolved through model_for_role, and the codex writable roots, all on each read.
+
+    Reading an agent whose executor slot is unverified (None) raises ModelSlotBlocked; membership and iteration never do.
+    """
 
     _STATIC: dict[str, tuple[str, ...]] = {
         "codex": ("--sandbox", "workspace-write", "--ask-for-approval", "never"),
         "grok": ("--always-approve",),
         "agy": ("--dangerously-skip-permissions",),
     }
+    _TAIL: dict[str, tuple[str, ...]] = {"grok": ("--reasoning-effort", GROK_EXECUTE_EFFORT)}
 
     def __getitem__(self, agent: str) -> tuple[str, ...]:
-        base = self._STATIC[agent]
+        flags = self._STATIC[agent]
+        argv = (*flags, "--model", model_for_role(agent, "executor"), *self._TAIL.get(agent, ()))
         if agent != "codex":
-            return base
-        return (*base, *settings_home_add_dir_argv(), *lock_and_gitdir_add_dir_argv())
+            return argv
+        return (*argv, *settings_home_add_dir_argv(), *lock_and_gitdir_add_dir_argv())
+
+    def __contains__(self, agent: object) -> bool:
+        return agent in self._STATIC
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._STATIC)
@@ -75,9 +88,9 @@ class _WorkerArgv(Mapping):
 WORKER_ARGV: Mapping[str, tuple[str, ...]] = _WorkerArgv()
 
 WORKER_ARGV_SOURCE: dict[str, str] = {
-    "codex": "verified: `codex --help` on codex-cli 0.167.0 (-s/--sandbox, -a/--ask-for-approval never, --add-dir <DIR> additional writable directory)",
-    "grok": "verified official CLI permissions reference: https://docs.x.ai/build/features/permissions (2026-11-07)",
-    "agy": "verified official CLI reference: https://antigravity.google/docs/cli/reference/ (2026-11-07)",
+    "codex": "verified: `codex --help` on codex-cli 0.167.0 (-s/--sandbox, -a/--ask-for-approval never, -m/--model, --add-dir <DIR> additional writable directory)",
+    "grok": "grok --help and grok models 2026-11-23: --always-approve, --model, --reasoning-effort; execute role is grok-4.7-build-fast at medium",
+    "agy": "verified official CLI reference: https://antigravity.google/docs/cli/reference/ (2026-11-07); --model from the executor slot (gemini-4-hydrogen-medium)",
 }
 
 _PROTECTED_BRANCHES = frozenset({"main", "master"})
@@ -141,6 +154,10 @@ def preflight(
         return Preflight(False, f"unknown worker agent: {agent!r}")
     if start_dir is not None and is_engine_repo(start_dir):
         return Preflight(False, "worker target is the claude-klabauter engine repo: workers do not land engine changes")
+    try:
+        model_for_role(agent, "executor")
+    except ModelSlotBlocked as exc:
+        return Preflight(False, str(exc))
     try:
         from coordinator_core.ops.dispatch_emit import admission
 

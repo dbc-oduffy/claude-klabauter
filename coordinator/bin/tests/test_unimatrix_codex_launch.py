@@ -26,6 +26,15 @@ contract = _load("unimatrix-peer-contract.py", "unimatrix_peer_contract_t")
 SOCK = "/home/u/.codex/app-server-control/app-server-control.sock"  # abs-path-ok: synthetic socket path fixture, never opened
 
 
+def test_standard_launch_model_is_the_codex_em_role_model_not_a_literal():
+    from coordinator_core.agent_pipe.model_tiers import model_for_role
+
+    em = model_for_role("codex", "em")
+    assert not hasattr(launch, "STANDARD_MODEL")
+    assert launch.select_model(["--", "x"]) == (["--model", em, "--", "x"], em)
+    assert launch.select_model(["-m", "mine"]) == (["-m", "mine"], None)
+
+
 def test_tui_argv_attaches_remote_unix_socket_and_passes_args():
     assert launch.tui_argv("/bin/codex", SOCK, ["-m", "x"]) == [
         "/bin/codex", "--remote", f"unix://{SOCK}", "-m", "x"]

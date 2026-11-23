@@ -44,3 +44,13 @@ def test_own_session_real_walk_from_a_child_process_finds_the_registered_ancesto
             f"p=m.own_session(r'{home}');print(p['target'] if p else '')")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
     assert out.stdout.strip() == SID
+
+
+def test_own_session_real_walk_from_a_child_process_finds_the_registered_ancestor(tmp_path: Path) -> None:
+    home = registry(tmp_path, [{"session_id": SID, "pid": os.getpid(), "cwd": str(tmp_path)}])
+    code = ("import importlib.util,sys;"
+            f"s=importlib.util.spec_from_file_location('g',r'{BIN / 'unimatrix-peer-grok.py'}');"
+            "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+            f"p=m.own_session(r'{home}');print(p['target'] if p else '')")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert out.stdout.strip() == SID

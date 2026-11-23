@@ -188,10 +188,10 @@ def test_router_and_cli_list_vendor_box_and_cwd_without_changing_names(tmp_path:
     lines = capsys.readouterr().out.splitlines()
     remote = next(line for line in lines if line.startswith("remote-codex\t"))
     cols = remote.split("\t")
-    assert cols[:2] == ["remote-codex", "macmini"] and cols[3:] == ["codex", "session"]
+    assert cols[:2] == ["remote-codex", "macmini"] and cols[3:5] == ["codex", "session"]  # then PENDING
     assert response["details"]["remote-codex"]["cwd"] == "/work/repo"
     local = next(line for line in lines if line.startswith("local-peer\t")).split("\t")
-    assert local[3:] == ["codex", "ready"]
+    assert local[3:5] == ["codex", "ready"]
 
 
 def test_box_key_folds_case_user_and_domain_but_keeps_an_address_whole() -> None:

@@ -24,7 +24,7 @@ from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.locked_write import held_lock
 
 _RMW_TIMEOUT = 0.25
-PROVIDERS = ("codex", "agy")
+PROVIDERS = ("codex", "agy", "grok")
 
 
 def registry_dir(directory: Path | None = None, *, provider: str = "codex") -> Path:
@@ -58,6 +58,8 @@ def _sid(value) -> str:
 _ADDRESS = re.compile(r"[a-z0-9][a-z0-9-]{0,19}-codex-[a-z0-9][a-z0-9-]{0,11}-([1-9][0-9]{0,18})")
 _AGY_ADDRESS = re.compile(r"[a-z0-9][a-z0-9-]{0,19}-agy-[a-z0-9][a-z0-9-]{0,11}-([1-9][0-9]{0,18})")
 _AGY_ROUTER_NAME = re.compile(r"agy-[A-Za-z0-9._-]{1,60}")
+_GROK_ADDRESS = re.compile(r"[a-z0-9][a-z0-9-]{0,19}-grok-[a-z0-9][a-z0-9-]{0,11}-([1-9][0-9]{0,18})")
+_GROK_ROUTER_NAME = re.compile(r"grok-[A-Za-z0-9._-]{1,60}")
 _MAX_SEQUENCE = (1 << 63) - 1
 
 
@@ -72,6 +74,8 @@ def _valid_address_name(name: object, provider: str) -> bool:
         return _ADDRESS.fullmatch(name) is not None
     if provider == "agy":
         return _AGY_ADDRESS.fullmatch(name) is not None or _AGY_ROUTER_NAME.fullmatch(name) is not None
+    if provider == "grok":
+        return _GROK_ADDRESS.fullmatch(name) is not None or _GROK_ROUTER_NAME.fullmatch(name) is not None
     return False
 
 
@@ -85,9 +89,9 @@ def _retained_address(row, sid, provider: str = "codex"):
 def _allocate_address(directory: Path, cwd: str, *, provider: str = "codex", preferred_name: str | None = None) -> dict:
     """Caller holds record lock; sequence lock is always acquired second."""
     box = socket.gethostname()
-    if provider == "agy" and _valid_address_name(preferred_name, "agy"):
+    if provider in ("agy", "grok") and _valid_address_name(preferred_name, provider):
         return {"address_version": 1, "name": preferred_name, "box": box}
-    pattern = _AGY_ADDRESS if provider == "agy" else _ADDRESS
+    pattern = _AGY_ADDRESS if provider == "agy" else (_GROK_ADDRESS if provider == "grok" else _ADDRESS)
     counter = directory / ".alias-sequence"
     with held_lock(counter, timeout=_RMW_TIMEOUT, holder_label="external-registry-alias-sequence"):
         try:
@@ -156,9 +160,23 @@ def _find_agy_host(parents):
     return daemon
 
 
+def _is_grok_host(process) -> bool:
+    """True for the Grok CLI exe (`grok`, `grok.exe`, the versioned binary the symlink targets, or `node .../grok*`)."""
+    try:
+        stem = process.name().lower().removesuffix(".exe")
+        if stem == "grok" or stem.startswith("grok-"):
+            return True
+        if stem != "node":
+            return False
+        argv = process.cmdline()
+    except Exception:
+        return False
+    return len(argv) > 1 and "grok" in Path(str(argv[1]).replace("\\", "/")).name.lower()
+
+
 def register_current(payload: dict, directory: Path | None = None, *,
                      host_pid: int | None = None, env: "Mapping[str, str] | None" = None) -> dict:
-    """The sole external binding constructor; only observed Codex or Agy ancestors qualify.
+    """The sole external binding constructor; only observed Codex, Agy, or Grok ancestors qualify.
 
     `host_pid` is the process whose ancestors are searched (default: this process) and
     `env` the environment classified against (default: `os.environ`); the warm engine
@@ -183,6 +201,10 @@ def register_current(payload: dict, directory: Path | None = None, *,
         host = _find_agy_host(parents)
         if host is None:
             raise ValueError("no observed Agy ancestor")
+    elif provider == "grok":
+        host = next((p for p in parents if _is_grok_host(p)), None)
+        if host is None:
+            raise ValueError("no observed Grok ancestor")
     else:
         host = None
         for process in parents:
@@ -208,7 +230,7 @@ def register_current(payload: dict, directory: Path | None = None, *,
         if isinstance(turn, str) and turn.strip():
             evidence["turn_id"] = turn
         record["session_start_model_evidence"] = evidence
-    from coordinator_core.session.agent_role import classify, observed_agy_launch, observed_cli_launch
+    from coordinator_core.session.agent_role import classify, observed_agy_launch, observed_cli_launch, observed_grok_launch
     try:
         argv = host.cmdline()
     except (AttributeError, psutil.Error):
@@ -216,6 +238,9 @@ def register_current(payload: dict, directory: Path | None = None, *,
     if provider == "agy":
         classify_payload = {**payload, "session_id": sid}
         record["role"] = classify(classify_payload, environ, **observed_agy_launch(argv))
+    elif provider == "grok":
+        classify_payload = {**payload, "session_id": sid}
+        record["role"] = classify(classify_payload, environ, **observed_grok_launch(argv))
     else:
         if argv and Path(argv[0].replace("\\", "/")).stem.lower() == "node":
             argv = argv[1:]  # the launcher script stands in for the codex binary at argv[0]
@@ -273,7 +298,7 @@ def register_current(payload: dict, directory: Path | None = None, *,
         if _retained_address(prior, sid, provider=provider):
             record.update({field:prior[field] for field in ("address_version", "name", "box")})
         else:
-            preferred = payload.get("name") if provider == "agy" else None
+            preferred = payload.get("name") if provider in ("agy", "grok") else None
             record.update(_allocate_address(destination, cwd, provider=provider, preferred_name=preferred))
         atomic_write_bytes(destination / f"{sid}.json", (json.dumps(record) + "\n").encode("utf-8"))
     # The same constructor that all other session writers use remains the only
@@ -324,12 +349,12 @@ def is_ended(session_id: str, directory: Path | None = None) -> bool:
         return False
 
 
-def _verified_row(session_id, directory: Path, provider: "str | tuple[str, ...]") -> dict | None:
+def _verified_row(session_id, directory: Path, provider: str | tuple[str, ...]) -> dict | None:
     try:
         sid = _sid(session_id)
-        providers = (provider,) if isinstance(provider, str) else tuple(provider)
+        allowed = (provider,) if isinstance(provider, str) else tuple(provider)
         row = json.loads((directory / f"{sid}.json").read_text(encoding="utf-8"))
-        if not isinstance(row, dict) or row.get("schema_version") != 1 or row.get("provider") not in providers or row.get("session_id") != sid:
+        if not isinstance(row, dict) or row.get("schema_version") != 1 or row.get("provider") not in allowed or row.get("session_id") != sid:
             return None
         if "ended_at" in row:
             return None
@@ -351,18 +376,13 @@ def _verified_row(session_id, directory: Path, provider: "str | tuple[str, ...]"
 def lookup(session_id: str, directory: Path | None = None) -> dict | None:
     """Return one birth-verified binding; malformed/dead/reused PIDs are absent."""
     try:
-        sid = _sid(session_id)
         for folder in _search_dirs(directory):
-            row = _lookup_in_dir(sid, folder)
+            row = _verified_row(session_id, folder, PROVIDERS)
             if row is not None:
                 return row
         return None
     except Exception:
         return None
-
-
-def _lookup_in_dir(sid: str, folder: Path) -> dict | None:
-    return _verified_row(sid, folder, PROVIDERS)
 
 
 def claude_registry_dir(directory: Path | None = None) -> Path:
@@ -456,7 +476,7 @@ def preserve_task_title(session_id: str, title: str, directory: Path | None = No
         if not path.is_file():
             continue
         with held_lock(path, timeout=_RMW_TIMEOUT, holder_label="external-registry-task-title"):
-            row = _lookup_in_dir(sid, folder)
+            row = _verified_row(sid, folder, PROVIDERS)
             if row is None:
                 continue
             original = row.get("original_task_title")
@@ -475,7 +495,7 @@ def snapshot(directory: Path | None = None) -> dict[str, dict]:
             if not folder.is_dir():
                 continue
             for path in folder.glob("*.json"):
-                row = _lookup_in_dir(path.stem, folder)
+                row = _verified_row(path.stem, folder, PROVIDERS)
                 if row is not None:
                     result[row["session_id"]] = row
     except Exception:

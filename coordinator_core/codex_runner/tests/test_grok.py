@@ -63,6 +63,7 @@ def test_review_ok_returns_findings_with_provenance_and_read_only_argv(env):
 def test_build_argv_never_contains_auto_approve_and_refuses_it():
     argv = grok.build_argv(["grok"], "p", session_id="s")
     assert argv[:3] == ["grok", "-p", "p"] and "--always-approve" not in argv
+    assert argv.count("--model") == 1 and argv[argv.index("--model") + 1] == "grok-4.7"
     assert argv[argv.index("-s") + 1] == "s" and argv[argv.index("--max-turns") + 1] == str(grok.GROK_MAX_TURNS)
     assert [argv[i + 1] for i, a in enumerate(argv) if a == "--deny"] == list(grok.DENY_RULES)
     with pytest.raises(ValueError):

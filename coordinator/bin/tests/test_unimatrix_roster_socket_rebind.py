@@ -31,6 +31,7 @@ def roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(mod, "alias_duplicate", lambda *a, **k: False)
     monkeypatch.setattr(mod, "rename_live_mirror", lambda *a, **k: None)
     monkeypatch.setattr(mod, "crossed_mirrors", lambda *a, **k: [])
+    monkeypatch.setattr(mod, "bridge_unlisted", lambda pid: False)  # these pins are about the socket, not the registry row
     mod.unmirrored, mod.mirrored = [], []
     monkeypatch.setattr(mod, "unmirror", lambda pid: mod.unmirrored.append(pid))
 

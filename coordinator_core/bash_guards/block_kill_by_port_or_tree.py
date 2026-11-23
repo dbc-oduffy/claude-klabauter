@@ -81,6 +81,7 @@ _PY_SINK = re.compile(r"\bos\.kill(?:pg)?\s*\(|\.(?:kill|terminate)\s*\(\s*\)|\b
 _PY_NAMED = re.compile(r"\b(?:pkill|killall)\b|Stop-Process\s+(?:\S+\s+)*?-n(?:ame)?\b", re.I)
 _PY_ARG_BOUND = r"(?:^|[\s\"',\[(])"
 _PY_TREE = re.compile(_PY_ARG_BOUND + r"[/-]{1,2}t(?=$|[\s\"',\])])", re.I)
+_PY_OWN_PID = re.compile(r"[/-]{1,2}pid[\"',\s]+(?:str\(\s*)?[A-Za-z_]\w*\.pid\b", re.I)
 _PY_NAME = re.compile(_PY_ARG_BOUND + r"[/-]{1,2}(?:im|fi)(?=$|[\s\"',\])])", re.I)
 
 _QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
@@ -260,7 +261,8 @@ def _scan_shell(text: str) -> tuple[str | None, list[str]]:
 def _scan_python(text: str) -> str | None:
     for m in re.finditer(r"taskkill", text, re.I):
         rest = text[m.end():m.end() + 300].split("\n", 1)[0]
-        if _PY_TREE.search(rest):
+        # Trap: `/T /PID <child>.pid` reaps the script's own Popen; only without a lookup in the file.
+        if _PY_TREE.search(rest) and not (_PY_OWN_PID.search(rest) and not _SOURCE.search(text)):
             return _TREE_LABEL
         if _PY_NAME.search(rest):
             return "taskkill selecting by image name or filter"

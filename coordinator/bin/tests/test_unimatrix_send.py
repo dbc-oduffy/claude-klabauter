@@ -1,5 +1,6 @@
 """unimatrix-send.py points at SendMessage when the router is unreachable."""
 import importlib.util
+import re
 import tempfile
 from pathlib import Path
 
@@ -95,6 +96,14 @@ def _run(monkeypatch, resp, argv):
     return us.main(argv), fake
 
 
+def test_held_tty_write_does_not_send_again(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(us, "_deliver_held_grok", lambda name, text: {"ok": True, "written": True, "msg_id": "m"})
+    rc, fake = _run(monkeypatch, {"ok": True, "msg_id": "router", "written": True}, ["--to", "x", "hi"])
+    cap = capsys.readouterr()
+    assert rc == 0 and cap.out.strip() == "sent to x" and cap.err == ""
+    assert fake.reqs == []
+
+
 def test_send_prints_sent_only_when_written(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "x", "hi"])
     assert rc == 0 and "sent to x" in capsys.readouterr().out
@@ -124,6 +133,7 @@ def test_own_target_prefers_codex_and_agy_env_over_grok() -> None:
     boom = lambda: "grok-sid"
     assert us.own_target({"CODEX_THREAD_ID": "t"}, grok=boom) == "t"
     assert us.own_target({"ANTIGRAVITY_CONVERSATION_ID": "c"}, grok=boom) == "c"
+    assert us.own_target({"UNIMATRIX_GROK_SESSION_ID": "g-env"}, grok=boom) == "g-env"
     assert us.own_target({}, grok=boom) == "grok-sid"
     assert us.own_target({}, grok=lambda: "") == ""
 
@@ -138,6 +148,8 @@ def test_grok_shell_send_carries_its_session_id_as_sender_target(monkeypatch: py
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
     monkeypatch.delenv("UNIMATRIX_PEER_NAME", raising=False)
+    for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "UNIMATRIX_GROK_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
     rc, fake = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "x", "hi"])
     assert rc == 0 and fake.reqs[0]["as_target"] == sid and fake.reqs[0]["as"] == "cli"
 
@@ -147,6 +159,8 @@ def test_non_grok_shell_send_has_empty_sender_target(monkeypatch: pytest.MonkeyP
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
     monkeypatch.delenv("UNIMATRIX_PEER_NAME", raising=False)
+    for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "UNIMATRIX_GROK_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
     rc, fake = _run(monkeypatch, {"ok": True, "msg_id": "m"}, ["--to", "x", "hi"])
     assert fake.reqs[0]["as_target"] == ""
 
@@ -282,7 +296,7 @@ def test_send_to_a_mirror_with_no_recorded_outcome_is_undelivered_and_exits_one(
     rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
     cap = capsys.readouterr()
     assert rc == 1 and "sent to" not in cap.out
-    assert "undelivered: fe: no far ingest ack within" in cap.err and "receiver enqueue: unknown" in cap.err
+    assert "unconfirmed: fe: no far ingest ack within" in cap.err and "receiver enqueue: unknown" in cap.err
     assert "`receipts fe " in cap.err
 
 
@@ -401,3 +415,32 @@ def test_a_row_from_an_older_bridge_prints_box_unknown(monkeypatch: pytest.Monke
     monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"ok": True})
     rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
     assert rc == 0 and "sent to fe [box unknown]" in capsys.readouterr().out
+
+
+def test_settle_wait_outlasts_the_bridges_far_leg() -> None:
+    bridge = (Path(us.__file__).parent / "unimatrix-bridge.py").read_text(encoding="utf-8")
+    leg = int(re.search(r"\.run\(command, data, timeout=(\d+)\)", bridge).group(1))
+    assert us.RELAY_SETTLE_SECONDS > leg
+
+
+def test_own_session_name_is_the_ancestor_session_and_cli_send_carries_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    parents = {50: 40, 40: 30, 30: 1}
+    entries = [{"name": "coordinator-content-repo-3b", "pid": 30}, {"name": "other", "pid": 99}]
+    assert us.own_session_name(entries, parents.get, 50) == "coordinator-content-repo-3b"
+    assert us.own_session_name(entries, parents.get, 1) == ""
+    monkeypatch.setattr(us, "own_session_name", lambda: "coordinator-content-repo-3b")
+    monkeypatch.setattr(us, "own_target", lambda: "")
+    rc, fake = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
+    assert fake.reqs[0]["as_session"] == "coordinator-content-repo-3b"
+
+
+def test_mirror_label_is_stable_across_ssh_alias_generations_and_old_name_stays_an_alias() -> None:
+    roster = us._sibling("unimatrix-roster.py", "unimatrix_roster_label_t")
+    contract = us._sibling("unimatrix-peer-contract.py", "unimatrix_contract_label_t")
+    assert roster.labelled("coordinator-content-repo-3b", "Mac-mini.local") == roster.labelled("coordinator-content-repo-3b", "u@Mac-mini") == "coordinator-content-repo-3b.Mac-mini"
+    row = {"name": "coordinator-content-repo-3b.Mac-mini", "unimatrixRemote": "Mac-mini"}
+    assert "coordinator-content-repo-3b.Mac-mini.local" in contract.mirror_addresses(row)
+    assert "coordinator-content-repo-3b.Mac-mini" in contract.mirror_addresses({**row, "name": "coordinator-content-repo-3b.Mac-mini.local"})
+    bridge = us._sibling("unimatrix-bridge.py", "unimatrix_bridge_label_t")
+    assert bridge._roster_wrote_name("coordinator-content-repo-3b.Mac-mini", "coordinator-content-repo-3b", "Mac-mini.local")
+    assert bridge._roster_wrote_name("coordinator-content-repo-3b.Mac-mini.local", "coordinator-content-repo-3b", "Mac-mini.local")

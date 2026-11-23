@@ -267,3 +267,21 @@ def test_crash_trigger_words_match_the_module_constant():
     from coordinator_core.bash_guards import dispatch
 
     assert dispatch._CRASH_TRIGGER_SUBSTRINGS[guard.GUARD_NAME] == guard.COMMAND_WORDS
+
+
+def test_a_script_reaping_its_own_popen_tree_is_allowed(tmp_path):
+    body = (
+        "import subprocess\n"
+        "proc = subprocess.Popen(['pytest'])\n"
+        "subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)])\n"
+    )
+    _write(tmp_path, "run-tests.py", body)
+    assert denied("python3 run-tests.py a.py -q", tmp_path) is None
+
+
+def test_a_script_tree_kill_of_a_foreign_or_looked_up_pid_still_denies(tmp_path):
+    _write(tmp_path, "a.py", "import subprocess\nsubprocess.run(['taskkill', '/T', '/PID', '4242'])\n")
+    _write(tmp_path, "b.py", "import subprocess, psutil\nfor p in psutil.process_iter():\n"
+           "    subprocess.run(['taskkill', '/T', '/PID', str(p.pid)])\n")
+    assert denied("python a.py", tmp_path)
+    assert denied("python b.py", tmp_path)

@@ -20,6 +20,13 @@ def test_exact_entry_maps_to_opus_equivalent(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("provider", ["codex", "agy", "grok"])
+def test_reviewer_model_is_the_role_resolution(provider):
+    from coordinator_core.agent_pipe.model_tiers import model_for_role
+
+    assert OPUS_EQUIVALENT_MODELS[provider] == model_for_role(provider, "reviewer")
+
+
 def test_unlisted_agent_stays_claude(monkeypatch):
     monkeypatch.setenv(PROVIDER_ENV, "coordinator:staff-eng=codex")
     assert resolve_reviewer_provider("coordinator:other") is None

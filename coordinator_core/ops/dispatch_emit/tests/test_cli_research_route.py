@@ -120,12 +120,13 @@ def test_a_notebooklm_sizing_with_no_notebooks_derives_one_per_question(repo, ca
     assert bound["notebooklm"]["notebooks"] == ("A", "B")
 
 
-def test_a_notebooklm_sizing_with_no_notebooks_and_no_questions_names_both_routes(repo, capsys):
-    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube")
+def test_a_notebooklm_sizing_with_no_notebooks_and_no_questions_defaults_to_notebook_a(repo, capsys):
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm")
     capsys.readouterr()
-    assert cli_module.main(["--from-sizing", rel]) == cli_module.EXIT_DATA_ERROR
-    err = capsys.readouterr().err
-    assert "--research-target notebooklm=" in err and "--list notebooks=" in err
+    code, reply = _run(capsys, ["--from-sizing", rel])
+    assert code == cli_module.EXIT_OK and reply["ok"]
+    nlm = next(s for s in reply["segments"] if s["pipeline"] == "notebooklm")
+    assert nlm["lists"] == {"notebooks": ["A"]}
 
 
 def test_a_given_notebook_list_wins_over_the_derived_one(repo):
@@ -265,14 +266,23 @@ def test_a_flag_reaches_the_pipeline_that_declares_it_and_an_unclaimed_one_is_re
     assert any("--flag nope" in r for r in exc.value.reasons)
 
 
-def test_every_segments_refusals_arrive_together(repo):
+def test_every_segments_refusals_arrive_together(repo, monkeypatch):
+    monkeypatch.setattr(op_module, "_pipeline_content_root", _real_content_root)
     rel = _write_sizing(
-        repo, "--research-class", "corpus", "--research-source", "web", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube",
+        repo, "--research-class", "corpus", "--research-source", "web", "--research-source", "notebooklm",
     )
     with pytest.raises(op_module.PipelineEmitRefused) as exc:
-        op_module._research_route_setup({"flags": {"nope": "1"}}, repo, rel, None)
+        op_module._research_route_setup({"lists": {"topics": ["BAD"]}, "flags": {"nope": "1"}}, repo, rel, None)
     reasons = exc.value.reasons
-    assert any("needs its notebooks" in r for r in reasons) and any("--flag nope" in r for r in reasons)
+    assert any("--list topics=BAD" in r for r in reasons) and any("--flag nope" in r for r in reasons)
+
+
+def test_notebooklm_source_alone_emits_with_default_notebook_a(repo, monkeypatch):
+    monkeypatch.setattr(op_module, "_pipeline_content_root", _real_content_root)
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm")
+    ctx, _, _ = op_module._research_route_setup({}, repo, rel, None)
+    nlm = next(s for s in ctx["shape"]["segments"] if s["pipeline"] == "notebooklm")
+    assert nlm["lists"] == {"notebooks": ["A"]}
 
 
 def test_sizing_questions_seed_web_topics(repo, monkeypatch):

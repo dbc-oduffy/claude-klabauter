@@ -104,6 +104,18 @@ def test_missing_cli_exits_127(repo, stub_wm):
 def test_each_cli_gets_its_own_argv(repo, stub_wm, agent):
     rc, calls, _ = _run(repo, stub_wm, agent=agent)
     assert rc == 0 and calls[0][1] == [f"/bin/{agent}", *wm.WORKER_ARGV[agent]]
+    if agent == "agy":
+        argv = calls[0][1]
+        assert argv[argv.index("--model") + 1] == "gemini-4-hydrogen-medium"
+
+
+def test_agy_executor_slot_unverified_is_blocked_not_spawned(repo, stub_wm, monkeypatch):
+    from coordinator_core.agent_pipe import model_tiers
+    from coordinator_core.agent_pipe.model_tiers import ModelSlotBlocked
+
+    monkeypatch.setitem(model_tiers.PROVIDER_TIER_MODELS["agy"], "sonnet", None)
+    with pytest.raises(ModelSlotBlocked, match="agy"):
+        wm.WORKER_ARGV["agy"]
 
 
 def test_session_and_run_reach_preflight(repo, stub_wm):
