@@ -1079,6 +1079,15 @@ def test_siblings_are_executed_once_per_process(monkeypatch):
     assert pre.load_sibling("unimatrix-roster") is pre.load_sibling("unimatrix-roster")
 
 
+@posix_rewrite
+def test_leg_with_missing_absolute_endpoint_is_not_current(home, ls_server):
+    write_leg(home, pid=os.getpid(), agy_pid=1234, ls=ls_server)
+    path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
+    missing = str(home / "gone.sock")
+    path.write_text(json.dumps(dict(json.loads(path.read_text()), endpoint=missing)))
+    assert pre.leg_current(CONV, 1234) is False
+    Path(missing).write_text("")
+    assert pre.leg_current(CONV, 1234) is True
 def test_decide_rewrites_allow_when_leg_not_current(home, monkeypatch):
     stub_guard(monkeypatch, {"decision": "allow", "reason": "advisory"})
     monkeypatch.setattr(pre, "launch_prefix", lambda conv, agy_pid: ("START", "; "))

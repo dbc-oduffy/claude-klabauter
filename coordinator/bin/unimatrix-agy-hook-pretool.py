@@ -288,17 +288,18 @@ def agy_print_mode(agy_pid, read=None) -> bool:
     return any(_is_print_line(read(c)) for c in child_pids(agy_pid))
 
 
+def _core_module(subname):
+    bin_dir = os.path.dirname(os.path.abspath(__file__))
+    if "_unimatrix" not in sys.modules and os.path.isdir(os.path.join(bin_dir, "_unimatrix")):
+        if bin_dir not in sys.path:
+            sys.path.insert(0, bin_dir)
+    import importlib
+    return importlib.import_module(f"_unimatrix.{subname}")
+
+
 def pid_alive(pid):
-    """True while `pid` runs. os.kill(pid, 0) means CTRL_C_EVENT on Windows, so ask the roster helper there."""
-    if os.name == "nt":
-        return bool(load_sibling("unimatrix-roster").pid_alive(pid))
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    """True while `pid` runs (delegated to spawn-free _unimatrix.proc.pid_alive)."""
+    return _core_module("proc").pid_alive(pid)
 
 
 def ls_reachable(addr):
@@ -320,6 +321,9 @@ def leg_current(conv, agy_pid, state=None):
         return False
     if rec.get("mode", "live") != "live":
         return False  # a pending leg only queues; the first run_command relaunches it live
+    ep = rec.get("endpoint")
+    if os.name != "nt" and isinstance(ep, str) and os.path.isabs(ep) and not os.path.exists(ep):
+        return False
     return agy_pid is not None and rec.get("agy_pid") == agy_pid and ls_reachable(rec.get("ls_address"))
 
 

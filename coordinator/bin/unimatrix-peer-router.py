@@ -94,19 +94,28 @@ def _roster():
     return _sibling("unimatrix-roster.py", "unimatrix_roster")
 
 
+def _core_module(subname):
+    bin_dir = os.path.dirname(os.path.abspath(__file__))
+    if "_unimatrix" not in sys.modules and os.path.isdir(os.path.join(bin_dir, "_unimatrix")):
+        if bin_dir not in sys.path:
+            sys.path.insert(0, bin_dir)
+    import importlib
+    return importlib.import_module(f"_unimatrix.{subname}")
+
+
 def _liveness():
     """The liveness module (codex_holder_live), loaded on first use."""
-    return _sibling("unimatrix-liveness.py", "unimatrix_liveness")
+    return _core_module("proc")
 
 
 def _contract():
     """The peer contract module, loaded on first use."""
-    return _sibling("unimatrix-peer-contract.py", "unimatrix_peer_contract")
+    return _core_module("protocol")
 
 
 def _transport():
     """The local transport module (sockets, named pipes, process locks), loaded on first use."""
-    return _sibling("unimatrix-local-transport.py", "unimatrix_local_transport")
+    return _core_module("transport")
 
 
 def __getattr__(name):
@@ -744,13 +753,15 @@ def default_adapters() -> dict:
 
     async def agy(peer, text):
         m = mod("unimatrix-peer-agy.py", "agy")
-        return await m.agy_turn(m.leg_endpoint(peer["target"]), m.transcript_path(peer["target"]), text)
+        return await m.agy_turn(m.leg_endpoint(peer["target"]), m.transcript_path(peer["target"]), text,
+                                wait_reply=not bool(peer.get("deliver_only")))
 
     async def grok(peer, text):
         m = mod("unimatrix-peer-grok.py", "grok")
         if not peer.get("cwd"):
             return "delivery failed: grok peer has no cwd to pin the resume to"
-        return await m.grok_turn(peer["target"], peer["cwd"], text, runner=m.subprocess.run)
+        return await m.deliver(peer["target"], peer["cwd"], text, runner=m.subprocess.run,
+                               home=peer.get("grok_home"))
 
     return {"codex": codex, "agy": agy, "grok": grok}
 
@@ -919,8 +930,13 @@ class Router:
         if self.codex_locks_dir:
             scans.append(lambda tn, tt: load_lock_peers(self.codex_locks_dir, "codex", tn, tt))
         if self.grok_home:
-            grok = _sibling("unimatrix-peer-grok.py", "unimatrix_peer_grok")
-            scans.append(lambda tn, tt: grok.discover_peers(self.grok_home, _roster().pid_alive, tn, tt))
+            def grok_scan(tn, tt):
+                grok = _sibling("unimatrix-peer-grok.py", "unimatrix_peer_grok")
+                found = grok.discover_peers(self.grok_home, _roster().pid_alive, tn, tt)
+                for peer in found:
+                    peer["grok_home"] = self.grok_home
+                return found
+            scans.append(grok_scan)
         for scan in scans:
             for peer in scan(names | set(live), targets):
                 prior = owned.get(peer['target'])
@@ -1269,6 +1285,10 @@ class Router:
             peer = picked or peer
             # A peer's own shell knows its thread/conversation id, not the name the router gave it.
             sender = by_target.get(req.get("as_target")) or str(req.get("as") or "cli")
+            as_session = req.get("as_session")
+            if (sender not in self.peers and not req.get("as_target") and isinstance(as_session, str) and as_session
+                    and self.resolve_sender(as_session)):
+                sender = as_session  # the calling session's roster name: a reply to the stamped `from` reaches it
             reply_to = None
             as_target = req.get("as_target")
             if sender not in self.peers and isinstance(as_target, str) and as_target:
@@ -1292,7 +1312,13 @@ class Router:
                 return {"ok": False, "error": "empty or acknowledgement text is not delivered"}
             if self.peer_stale(peer):
                 return {"ok": False, "error": STALE_CODEX_ERROR}
-            reply = await self.turn(peer, wrap_inbound(sender, text, reply_to))
+            deliver_only = sender in self.peers and self.peers[peer].get("vendor") == "agy"
+            reply = await self.turn(peer, wrap_inbound(sender, text, reply_to), deliver_only=deliver_only)
+            if isinstance(reply, dict) and reply.get("user_message_chunk") is True:
+                return {"ok": True, "user_message_chunk": True, "session_id": reply.get("session_id"),
+                        "msg_id": reply.get("msg_id")}
+            if isinstance(reply, dict) and reply.get("written") is True and "reply" not in reply:
+                return {"ok": True, "written": True, "msg_id": reply.get("msg_id")}
             if reply == HELD_REPLY:
                 return {"ok": True, "held": True, **self.codex_pending(peer)}
             if not_delivered(reply):
@@ -1480,7 +1506,7 @@ class Router:
                 box["inflight"] = None
                 self._flush_held(peer)
 
-    async def turn(self, peer, text, addressed=None) -> str:
+    async def turn(self, peer, text, addressed=None, deliver_only=False) -> str:
         """One adapter turn for `peer` under its lock; a failure becomes the reply text.
 
         `addressed`, when given, collects the names the peer sent to by its own addressed send
@@ -1511,6 +1537,8 @@ class Router:
                         return 'delivery failed: Codex target is not an independently sendable root'
                 if p["vendor"] == "codex" and not p.get("tui") and self.thread_held(p["target"]):
                     p = {**p, "tui": True}
+                if deliver_only and p["vendor"] == "agy":
+                    p = {**p, "deliver_only": True}
                 if p["vendor"] == "codex":
                     msg_id = uuid.uuid4().hex[:12]
                     named = re.match(r"\[([^\]\n]+)\] ", text)  # wrap_inbound's `[sender] ` head
@@ -1925,7 +1953,7 @@ class Router:
             ep_owners.setdefault(ep, set()).add(owner)
             (exact if e.get("name") == name else aliases).add(ep)
             rows_by_ep[ep] = e
-            if e.get("unimatrixFarName") or e.get("unimatrixRemote"):
+            if e.get("unimatrixFarName") or e.get("unimatrixRemote") or e.get("macSocketPath"):
                 far_eps.add(ep)
         if refused_identity:
             self.last_refusal = "refused identity"
@@ -1954,6 +1982,12 @@ class Router:
             return
         addressed = set()
         reply = await self.turn(peer, wrap_inbound(sender_name, body), addressed)
+        if isinstance(reply, dict) and reply.get("user_message_chunk") is True:
+            self.log("CHUNK", peer, reply.get("session_id"))
+            return
+        if isinstance(reply, dict) and reply.get("written") is True:
+            self.log("HELD-WROTE", peer, reply.get("msg_id"))
+            return
         if reply == HELD_REPLY:
             return  # the coalesced item's reply is harvested and logged by the outbox, not routed back
         if not sender_ep:
@@ -2080,6 +2114,12 @@ def cmd_send(argv):
         return 1
     if "reply" in resp:
         print(resp["reply"])
+        return 0
+    if resp.get("user_message_chunk") is True:
+        print(f"user_message_chunk {resp.get('session_id')}")
+        return 0
+    if resp.get("written") is True:
+        print(f"sent to {a.peer}")
         return 0
     delivered = ", ".join(f"{k}={resp[k]}" for k in ("msg_id", "sender") if k in resp)
     print(f"delivered to {a.peer}" + (f" ({delivered})" if delivered else "") + "; the router returned no reply field")

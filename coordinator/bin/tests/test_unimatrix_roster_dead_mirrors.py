@@ -34,6 +34,8 @@ def roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
     mod.killed = []
     monkeypatch.setattr(mod, "tree_kill_many", lambda pids: mod.killed.extend(pids))
+    # The post-reap SIGKILL of a survivor must never reach a real pid: the "own bridge" rows record os.getpid().
+    monkeypatch.setattr(mod, "_signal_pid", lambda pid, sig: None)
     mod.sess = sess
     return mod
 

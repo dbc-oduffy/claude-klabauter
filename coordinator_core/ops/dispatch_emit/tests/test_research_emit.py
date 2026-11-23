@@ -265,9 +265,20 @@ def test_gate_binds_the_scope_and_scout_halts_and_fans_workers_over_the_scope_re
     assert scope.halts_unless_count.equals == "notebooks"
     assert manifest.schemas[scope.schema]["required"] == ["strategy_path", "worker_count", "notebooks"]
     assert scout.halts_unless_nonempty == "usable_sources"
-    assert "403" in manifest.schemas[scout.schema]["properties"]["usable_sources"]["items"]["properties"]["ref"]["description"]
+    ref_desc = manifest.schemas[scout.schema]["properties"]["usable_sources"]["items"]["properties"]["ref"]["description"]
+    assert "403" in ref_desc
+    assert "existing_notebook:<notebook_id>" in ref_desc
     assert (workers.fan_out.source, workers.fan_out.field) == ("scope", "notebooks")
     assert not workers.fan_out.over_inputs
+
+
+def test_gate_omits_scout_usable_sources_halt_when_all_notebooks_are_existing():
+    manifest = re_.gate_notebooklm(load_manifest(CONTENT, "notebooklm"), all_existing=True)
+    scope, scout, workers = (_stage(manifest, s) for s in ("scope", "scout", "workers"))
+    assert scope.halts_unless_count.fields == ("worker_count", "notebooks")
+    assert scout.halts_unless_nonempty is None
+    assert scout.schema is None
+    assert (workers.fan_out.source, workers.fan_out.field) == ("scope", "notebooks")
 
 
 @pytest.mark.parametrize("missing", ["scope", "scout", "workers", "sweep"])

@@ -2455,11 +2455,10 @@ def build_research_block(
 ) -> tuple[Optional[dict[str, Any]], list[str]]:
     """The sizing-object `research:` block from the --research-* flag values, with
     one refusal string per bad value. `(None, [])` when no research flag was given.
-    A notebooklm source or target is refused unless `notebooklm_needs` (a subset of
-    `NOTEBOOKLM_NEEDS`) names why, or a seed already routes to notebooklm; a notebooklm target
-    ref must be a notebook id or alias (no whitespace, no `?`). The needs are written to the
-    block as `notebooklm_need`, first-seen order; `notebooklm_vetted` (an amend of a record that
-    already picks notebooklm) waives the gate.
+    `--research-source notebooklm` alone is valid (the pipeline creates its own notebooks from
+    questions/topics); `--research-target notebooklm=<ref>` is optional for naming or reusing
+    notebooks (no whitespace, no `?`), and `--research-notebooklm-need` is optional metadata
+    (a subset of `NOTEBOOKLM_NEEDS`, written as `notebooklm_need` in first-seen order when given).
     `question_targets` are raw `<n>=<source>[:<ref>]` strings, split on the first `=` and
     then the first `:` so a ref holding a colon stays intact. `seeds` are raw `<kind>=<url>`
     strings split on the first `=`; repeats of a (kind, url) pair are dropped."""
@@ -2578,15 +2577,6 @@ def build_research_block(
         elif need not in ordered_needs:
             ordered_needs.append(need)
     picks_notebooklm = "notebooklm" in ordered_sources or any(t["source"] == "notebooklm" for t in parsed_targets)
-    if picks_notebooklm and not ordered_needs and not notebooklm_vetted and not any(
-        rc.SEED_KIND_SOURCE.get(s["kind"]) == "notebooklm" for s in parsed_seeds
-    ):
-        errors.append(
-            "notebooklm is a specialized tool, picked only for podcast, YouTube or Google-search sources: "
-            f"name the need with --research-notebooklm-need {'|'.join(NOTEBOOKLM_NEEDS)}, "
-            "or research with --research-source repo (code on disk: --research-primary repo with "
-            "--research-target repo=<path>) or --research-source web"
-        )
     if ordered_needs and not picks_notebooklm:
         errors.append("--research-notebooklm-need needs --research-source notebooklm or a notebooklm target")
     if primary == "repo" and not (

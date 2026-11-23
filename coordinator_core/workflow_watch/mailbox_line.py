@@ -11,6 +11,12 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
+
+if __package__ in (None, ""):
+    _engine_root = str(Path(__file__).resolve().parents[2])
+    if _engine_root not in sys.path:
+        sys.path.insert(0, _engine_root)
 
 from coordinator_core.workflow_watch.tail import TailReader
 

@@ -27,19 +27,42 @@ def _busy() -> dict[str, float]:
 
 def test_argv_table_covers_the_three_clis_with_a_source_each() -> None:
     assert set(wm.WORKER_ARGV) == {"codex", "grok", "agy"} == set(wm.WORKER_ARGV_SOURCE)
+    from coordinator_core.agent_pipe.model_tiers import GROK_EXECUTE_EFFORT, model_for_role
+
     assert wm.WORKER_ARGV["codex"] == (
-        "--sandbox", "workspace-write", "--ask-for-approval", "never", "--add-dir", str(settings_home()),
+        "--sandbox", "workspace-write", "--ask-for-approval", "never",
+        "--model", model_for_role("codex", "executor"), "--add-dir", str(settings_home()),
         *wm.lock_and_gitdir_add_dir_argv(),
     )
+    assert wm.WORKER_ARGV["codex"][5] == "gpt-6.2-sol"
     assert "danger-full-access" not in wm.WORKER_ARGV["codex"]
-    assert wm.WORKER_ARGV["grok"] == ("--always-approve",) and "--add-dir" not in wm.WORKER_ARGV["agy"]
+    assert wm.WORKER_ARGV["grok"] == (
+        "--always-approve", "--model", model_for_role("grok", "executor"),
+        "--reasoning-effort", GROK_EXECUTE_EFFORT,
+    )
+
+
+def test_agy_worker_argv_carries_the_executor_model() -> None:
+    argv = wm.WORKER_ARGV["agy"]
+    assert argv[argv.index("--model") + 1] == "gemini-4-hydrogen-medium"
+    assert "--add-dir" not in argv
+
+
+def test_agy_worker_argv_raises_blocked_naming_the_slot_and_never_runs_another_tier(monkeypatch) -> None:
+    from coordinator_core.agent_pipe import model_tiers
+    from coordinator_core.agent_pipe.model_tiers import ModelSlotBlocked
+
+    monkeypatch.setitem(model_tiers.PROVIDER_TIER_MODELS["agy"], "sonnet", None)
+    assert "agy" in wm.WORKER_ARGV
+    with pytest.raises(ModelSlotBlocked, match="agy has no verified sonnet slot for role executor"):
+        wm.WORKER_ARGV["agy"]
 
 
 def test_codex_worker_settings_home_root_follows_the_resolver(tmp_path, monkeypatch):
     home = tmp_path / "sh"
     home.mkdir()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
-    assert ("--add-dir", str(settings_home())) == wm.WORKER_ARGV["codex"][4:6]
+    assert ("--add-dir", str(settings_home())) == wm.WORKER_ARGV["codex"][6:8]
     assert wm.settings_home_add_dir_argv() == ["--add-dir", str(settings_home())]
 
 
@@ -93,7 +116,17 @@ def test_busy_box_refused_with_reason(configured) -> None:
 def test_unconfigured_admission_admits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(admission.DISABLE_ENV, raising=False)
     monkeypatch.setattr(admission, "_load_thresholds_with_missing", lambda start: (None, ["cpu_load_max"]))
-    assert wm.preflight("agy", read_load=_busy, box_holder=lambda: None).ok
+    assert wm.preflight("codex", read_load=_busy, box_holder=lambda: None).ok
+
+
+def test_agy_executor_is_blocked_naming_the_slot_and_never_falls_back(configured, monkeypatch) -> None:
+    from coordinator_core.agent_pipe import model_tiers
+
+    assert wm.preflight("agy", read_load=_quiet, box_holder=lambda: None).ok
+    monkeypatch.setitem(model_tiers.PROVIDER_TIER_MODELS["agy"], "sonnet", None)
+    r = wm.preflight("agy", read_load=_quiet, box_holder=lambda: None)
+    assert not r.ok and "BLOCKED" in r.reason and "agy" in r.reason and "sonnet" in r.reason
+    assert wm.preflight("grok", read_load=_quiet, box_holder=lambda: None).ok
 
 
 def test_live_holder_requires_ids(configured) -> None:

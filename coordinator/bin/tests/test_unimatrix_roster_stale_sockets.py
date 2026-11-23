@@ -32,6 +32,7 @@ def roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> "ModuleType":
     monkeypatch.setattr(mod, "LOOPBACK_SOCKS", str(socks))
     monkeypatch.setattr(mod, "_is_win", lambda platform=None: False)
     monkeypatch.setattr(mod, "tree_kill_many", lambda pids: None)
+    monkeypatch.setattr(mod, "_signal_pid", lambda pid, sig: None)  # survivor SIGKILL must not reach a real pid
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
     mod.sess, mod.socks = sess, socks
     return mod

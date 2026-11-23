@@ -48,15 +48,22 @@ _GROK_OPS = ("engine_ask.submit", "workflow.fire", "workflow.fire_status", "work
              "workflow.revise")
 
 
-def _grok_head(platform="linux", settings_home=None) -> list[str]:
+def _grok_head(platform="linux", settings_home=None, *, model=True, effort=True) -> list[str]:
     exe = Path(settings_home or Path.home() / ".coordinator-claude-settings") / "bin" / (
         "coordinator-invoke.exe" if platform == "win32" else "coordinator-invoke")
     bin_dir = exe.parent
     suffix = ".exe" if platform == "win32" else ""
     workers = [a for n in ("sizing-assemble", "coordinator-doc-new")
                for a in ("--allow", f"Bash({bin_dir / (n + suffix)}:*)")]
-    return ["--permission-mode", "auto",
+    from coordinator_core.agent_pipe.model_tiers import GROK_EM_EFFORT, model_for_role
+
+    body = ["--permission-mode", "auto",
             *[a for op in _GROK_OPS for a in ("--allow", f"Bash({exe} {op}:*)")], *workers]
+    if model:
+        body += ["--model", model_for_role("grok", "em")]
+    if effort:
+        body += ["--reasoning-effort", GROK_EM_EFFORT]
+    return body
 
 
 def test_grok_workers_may_run_only_named_engine_executables() -> None:
@@ -110,7 +117,7 @@ EXEC_FAMILIES = tuple(f for f in hel.FAMILIES if f != "claude")
 def test_launched_em_passes_require_fire_authority(family, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, env = _run(family, extra=["-m", "x"])
     assert rc == 0
-    head = {"codex": _add_dir(), "grok": _grok_head(), "agy": _agy_head()}.get(family, [])
+    head = {"codex": _add_dir(), "grok": _grok_head(model=False), "agy": _agy_head()}.get(family, [])
     assert calls == [(f"/bin/{family}", [f"/bin/{family}", *head, "-m", "x"])]
     assert g.headless_em_grant_matches(env, env[hel.SESSION_ENV], family)
     caller = _fire(monkeypatch, env)
@@ -651,7 +658,7 @@ def test_grok_launch_defaults_auto_with_absolute_path_allow_per_engine_op(platfo
 
 
 def test_grok_callers_permission_mode_and_allow_are_kept_not_doubled() -> None:
-    mine = _grok_head()[-1]
+    mine = next(a for a in reversed(_grok_head()) if a.startswith("Bash("))
     rc, calls, _ = _run("grok", extra=["--permission-mode", "plan", "--allow", mine])
     argv = calls[0][1]
     assert rc == 0 and argv.count("--permission-mode") == 1 and "auto" not in argv

@@ -142,11 +142,11 @@ def console_python():
     return found
 
 
-def spawn(cmd):
+def spawn(cmd, stderr=None):
     """Start a child that can be tree-killed later: its own process group off Windows."""
     if sys.platform == "win32":
-        return subprocess.Popen(cmd, creationflags=no_window())
-    return subprocess.Popen(cmd, start_new_session=True)
+        return subprocess.Popen(cmd, stderr=stderr, creationflags=no_window())
+    return subprocess.Popen(cmd, stderr=stderr, start_new_session=True)
 
 
 TASKKILL_ARGV_BUDGET = 8000
@@ -209,39 +209,21 @@ def _signal_pid(pid, sig):
         pass
 
 
+def _core_module(subname):
+    bin_dir = os.path.dirname(os.path.abspath(__file__))
+    if "_unimatrix" not in sys.modules and os.path.isdir(os.path.join(bin_dir, "_unimatrix")):
+        if bin_dir not in sys.path:
+            sys.path.insert(0, bin_dir)
+    import importlib
+    return importlib.import_module(f"_unimatrix.{subname}")
+
+
 def pid_alive(pid):
-    if sys.platform == "win32":
-        import ctypes
-        from ctypes import wintypes
-        k32 = ctypes.windll.kernel32
-        k32.OpenProcess.restype = wintypes.HANDLE
-        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not h:
-            return False
-        code = wintypes.DWORD()
-        ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
-        k32.CloseHandle(h)
-        return bool(ok) and code.value == STILL_ACTIVE
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-_LIVENESS = []
+    return _core_module("proc").pid_alive(pid)
 
 
 def _liveness():
-    if not _LIVENESS:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("unimatrix_liveness", HERE / "unimatrix-liveness.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _LIVENESS.append(mod)
-    return _LIVENESS[0]
+    return _core_module("proc")
 
 
 _CODEX_HOOK = []
@@ -351,18 +333,9 @@ def supervisor_fields():
     return {"unimatrixRosterPid": pid, "unimatrixRosterProcStart": proc_start(pid)}
 
 
-_CONTRACT = []
-
-
 def _contract():
-    """The peer contract module (box_id, BOX_FIELD), loaded by path on first use."""
-    if not _CONTRACT:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("unimatrix_peer_contract", HERE / "unimatrix-peer-contract.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _CONTRACT.append(mod)
-    return _CONTRACT[0]
+    """The peer contract module (box_id, BOX_FIELD), loaded via _unimatrix.protocol."""
+    return _core_module("protocol")
 
 
 def _ps_lstart(pid):
@@ -405,7 +378,7 @@ def pid_domain(platform=None):
     plat = platform or sys.platform
     if plat == "win32":
         return f"win32:{socket.gethostname().lower()}"
-    return "darwin" if plat == "darwin" else _liveness().linux_pid_domain()
+    return "darwin" if plat == "darwin" else linux_pid_domain()
 
 
 def local_endpoint(far_socket, platform=None):
@@ -823,6 +796,15 @@ def box_label(remote):
     return str(remote).rpartition("@")[2]
 
 
+def stable_label(remote):
+    """`box_label` without a trailing mDNS `.local`, the label a mirror name carries.
+
+    Trap: the ssh alias differs by supervisor generation (`Mac-mini.local`, then `Mac-mini`); a name built
+    from the raw alias changes on every box restart and breaks each cached address."""
+    label = box_label(remote)
+    return label[:-len(".local")] if label.lower().endswith(".local") and len(label) > len(".local") else label
+
+
 def box_key(remote):
     """Identity of the box behind an ssh alias: `box_label` lower-cased, cut at its first dot and
     stripped of a trailing `-lan`, so `machine-b`, `Machine-b.local` and `machine-b-lan` are one box
@@ -849,7 +831,7 @@ def labelled(name, remote):
     """The name, a dot, then the box, for a mirror's session name; idempotent, so a re-mirror never stacks labels."""
     if not isinstance(name, str) or not name:
         return name
-    return f"{bare_name(name)}{LABEL_SEP}{box_label(remote)}"
+    return f"{bare_name(name)}{LABEL_SEP}{stable_label(remote)}"
 
 
 def mirror_scan_key(remote, far_sock):
@@ -917,7 +899,7 @@ def mirror_name(name, remote, far_sock=None, scan=None):
     label separator, so a raw dotted name would be cut at its first dot and collide."""
     if not isinstance(name, str) or not name:
         return name
-    if LABEL_SEP in name and not name.endswith(LABEL_SEP + box_label(remote)):
+    if LABEL_SEP in name and not name.endswith((LABEL_SEP + box_label(remote), LABEL_SEP + stable_label(remote))):
         name = name.replace(LABEL_SEP, "-")
     bare = bare_name(name)
     if scan is None:
@@ -956,8 +938,8 @@ def pushed_from(d, remote):
     box = d.get(_contract().BOX_FIELD)
     if box:
         return box == _contract().box_id(remote)
-    label = re.sub(r"[^A-Za-z0-9_-]+", "-", box_label(remote)).strip("-")
-    return str(d.get("name") or "").endswith(LABEL_SEP + label)
+    return any(str(d.get("name") or "").endswith(LABEL_SEP + re.sub(r"[^A-Za-z0-9_-]+", "-", lab).strip("-"))
+               for lab in {box_label(remote), stable_label(remote)})
 
 
 def superseded_inbound(far_rows, remote):
@@ -1209,7 +1191,7 @@ def reap_orphaned_mirrors(remote, say, unbacked=False, keep=(), bridges=None):
     for _, pid, d in owners:
         if (d.get("pid") != pid or pid in keep
                 or not (mirror_orphaned(d) or (unbacked and (mirror_unbacked(d) or mirror_ghost(d, entries))))
-                or box_label(d.get("unimatrixRemote") or "") != box_label(remote)):
+                or stable_label(d.get("unimatrixRemote") or "") != stable_label(remote)):
             continue
         if isinstance(d.get("procStart"), str) and d["procStart"] and entry_live(d):
             to_kill.append(pid)
@@ -1332,8 +1314,6 @@ def reap_stale_sockets(owners, keep, readable, say):
     legs = live_agy_leg_sockets()
     if legs is None:
         return
-
-
     held |= _non_session_held_sockets()
     for f in socks:
         full = os.path.join(LOOPBACK_SOCKS, f)
@@ -1434,7 +1414,7 @@ def session_identity(entry, box=None):
 
 
 def mirror_identity(entry, remote):
-    out = session_identity(entry, box_label(remote))
+    out = session_identity(entry, stable_label(remote))
     if entry.get("pidDomain"):
         out["farPidDomain"] = entry["pidDomain"]
     return out
@@ -1445,9 +1425,9 @@ def remote_mirrors(entries, remote=None):
     entries = list(entries)
     if not remote:
         return entries
-    want = box_label(remote)
+    want = stable_label(remote)
     matches = [entry for entry in entries
-               if box_label(entry.get("unimatrixRemote") or entry.get(_contract().BOX_FIELD)
+               if stable_label(entry.get("unimatrixRemote") or entry.get(_contract().BOX_FIELD)
                             or entry.get("box") or "") == want]
     if matches:
         return matches
@@ -1467,7 +1447,7 @@ def mirror_entry_name(entry, remote, far_sock=None, scan=None):
         vendor, target = legacy.groups()
         cwd = str(entry.get("cwd") or "").replace("\\", "/").rstrip("/")
         repo = re.sub(r"[^A-Za-z0-9_-]+", "-", cwd.rsplit("/", 1)[-1]).strip("-") or "session"
-        box = re.sub(r"[^A-Za-z0-9_-]+", "-", str(entry.get("box") or box_label(remote))).strip("-").lower()
+        box = re.sub(r"[^A-Za-z0-9_-]+", "-", str(entry.get("box") or stable_label(remote))).strip("-").lower()
         short = hashlib.sha256(target.lower().encode()).hexdigest()[:10]
         name = f"{vendor.lower()}-{repo}-{short}-on-{box or 'unknown'}"
     name = mirror_name(name, remote, mirror_scan_key(remote, far_sock), scan)

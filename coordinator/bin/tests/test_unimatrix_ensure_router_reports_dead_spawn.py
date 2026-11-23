@@ -21,6 +21,7 @@ def test_ensure_router_names_why_the_spawned_router_exited(tmp_path, monkeypatch
         "import sys\nsys.stderr.write('AttributeError: boom in start\\n')\nsys.exit(3)\n", encoding="utf-8")
     monkeypatch.setattr(mod, "HERE", tmp_path)
     monkeypatch.setattr(mod, "_roster", lambda: roster)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(roster, "delivery_settings_home", lambda: tmp_path)
     monkeypatch.setattr(roster, "console_python", lambda: sys.executable)
     monkeypatch.setattr(mod, "router_answers", lambda ctl: False)

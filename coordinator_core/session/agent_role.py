@@ -145,6 +145,36 @@ def observed_agy_launch(argv):
     return {"native_main": role == "em", "exec_worker": False, "native_role": role}
 
 
+_GROK_HEADLESS_FLAGS = frozenset({"-p", "--print", "--prompt"})
+_GROK_NON_INTERACTIVE_SUBCOMMANDS = frozenset({"login", "logout", "help", "version", "mcp", "config"})
+
+
+def observed_grok_audience(argv):
+    """Classify observed Grok CLI argv: interactive `grok` is 'em'; headless -p/--print or utility subcommands are 'unknown'."""
+    if not isinstance(argv, (list, tuple)) or not argv or not all(isinstance(arg, str) for arg in argv):
+        return "unknown"
+    for arg in argv[1:]:
+        if arg == "--":
+            break
+        key, _, _ = arg.partition("=")
+        if key in _GROK_HEADLESS_FLAGS or arg in ("-h", "--help", "-v", "--version"):
+            return "unknown"
+    for arg in argv[1:]:
+        if arg == "--":
+            break
+        if arg.startswith("-"):
+            continue
+        if arg in _GROK_NON_INTERACTIVE_SUBCOMMANDS:
+            return "unknown"
+        break
+    return "em"
+
+
+def observed_grok_launch(argv):
+    role = observed_grok_audience(argv)
+    return {"native_main": role == "em", "exec_worker": False, "native_role": role}
+
+
 def native_launch():
     """Observed native ancestry only; never infer a role from a PID alone."""
     try:

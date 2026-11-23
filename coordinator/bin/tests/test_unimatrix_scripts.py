@@ -289,7 +289,7 @@ def test_relay_inbox_default_invocation_mints_the_socket_after_a_reboot(monkeypa
     monkeypatch.setattr(relay, "entries", lambda: iter([(7, corpse, "7.k.key")]))
     monkeypatch.setattr(relay, "proc_start", lambda pid: "new")
     seen = {}
-    monkeypatch.setattr(relay, "serve", lambda srv, fd, out: seen.update(sock=(socks / "unimatrix-far-1.sock").exists()))
+    monkeypatch.setattr(relay, "serve", lambda srv, fd, out, name=None: seen.update(sock=(socks / "unimatrix-far-1.sock").exists()))
     stdin = tmp_path / "stdin"
     stdin.write_text(json.dumps({"cwd": "/w"}) + "\nkeybody\n", encoding="utf-8")
     monkeypatch.setattr(relay.sys, "stdin", stdin.open("r", encoding="utf-8"))
@@ -372,7 +372,7 @@ def test_relay_rewrites_the_reply_address_inside_message_content(monkeypatch):
 
 def test_relay_inbox_serve_returns_on_stdin_eof(monkeypatch):
     relay = load("relay")
-    monkeypatch.setattr(relay.select, "select", lambda r, w, x: ([42], [], []))
+    monkeypatch.setattr(relay.select, "select", lambda r, w, x, timeout=None: ([42], [], []))
     monkeypatch.setattr(relay.os, "read", lambda fd, n: b"")
     relay.serve(object(), 42, None)
 

@@ -2105,12 +2105,33 @@ def build_plan(permission_mode: str | None, hosts: tuple[str, ...] = ("claude",)
         env["host_plugins"] = {"grok": grok}
         if grok["present"] is not True:
             env["track_steps"] = ["grok_plugin_install", *env["track_steps"]]
+    channel_checkout = _registry_flat().get("repos.claude_klabauter")
+    channel_branch = None
+    if channel_checkout:
+        git_dir = Path(channel_checkout) / ".git"
+        try:
+            if git_dir.is_file():
+                git_dir = (Path(channel_checkout) / git_dir.read_text(encoding="utf-8").strip().removeprefix("gitdir: ")).resolve()
+            head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+            channel_branch = head.removeprefix("ref: refs/heads/") if head.startswith("ref: refs/heads/") else f"detached@{head[:7]}"
+        except OSError:
+            pass
     return {
         "backup": {**backup_block(_fresh_plan_id()),
                    "on_codex_runtime_enrol": [str(path) for _, path in _codex_backup_covers()]},
         "schema": SCHEMA,
         "orientation": ORIENTATION,
         "environment": env,
+        "engine_channel": {
+            "checkout": channel_checkout,
+            "checkout_branch": channel_branch,
+            "engine_target": env["engine_target"],
+            "governs": ("engine.target" if env["engine_target"] else
+                        "checkout_branch" if channel_branch else None),
+            "mismatch": bool(env["engine_target"] and channel_branch
+                             and env["engine_target"] != channel_branch),
+            "note": "engine.target governs routing when set; reported only, never changed by this plan",
+        },
         "answers_shape": answers_shape(),
         "registry_hygiene": registry_hygiene_report(),
         "engine_channel": engine_channel(),
@@ -2198,6 +2219,43 @@ def record_withheld(reason: str, blocking: tuple, ctx: Ctx) -> dict:
     return {"written": False, "recorded": rc == 0, "detail": detail if rc == 0 else f"{detail}; withheld record failed (exit {rc})"}
 
 
+def _read_withheld(ctx: Ctx) -> dict | None:
+    """The persisted withheld-run record, or None (absent, or the engine root does not resolve)."""
+    root = ctx.engine_root
+    if not root:
+        ok, found = _engine_root()
+        root = found if ok else ""
+    if not root:
+        return None
+    inserted = root not in sys.path
+    if inserted:
+        sys.path.insert(0, root)
+    try:
+        import importlib
+        return importlib.import_module("coordinator_core.ops.coordinator_setup_state").read_setup_withheld()
+    except Exception:
+        return None
+    finally:
+        if inserted and root in sys.path:
+            sys.path.remove(root)
+
+
+def _receipt_after_only_run(results: list[dict], ctx: Ctx) -> dict:
+    """The receipt for a `--only` run. When it re-ran every step an earlier run withheld on and none
+    failed, setup concludes (the verifier need not repeat the whole install); a failing re-run, or one
+    that skipped a withheld step, leaves the earlier record as it was."""
+    prior = _read_withheld(ctx)
+    if prior is None:
+        return record_withheld("--only run", tuple(sorted(r["id"] for r in results)), ctx)
+    ran = {r["id"] for r in results}
+    still = [r["id"] for r in results if r["status"] in (FAILED, BLOCKED)]
+    unrun = sorted(set(prior.get("blocking_steps") or ()) - ran)
+    if still or unrun:
+        why = f"still failing: {', '.join(still)}" if still else f"withheld steps not re-run: {', '.join(unrun)}"
+        return {"written": False, "recorded": False, "detail": f"withheld record left as is; {why}"}
+    return record_concluded(results, set(), ctx)
+
+
 #: The command the closing NEXT line names; the same command scripts/setup.py closes with.
 UNIMATRIX_INSTALL_COMMAND = "python3 coordinator/bin/unimatrix-install.py --install"
 
@@ -2254,7 +2312,7 @@ def execute(answers: dict, only: set[str] | None = None, permission_mode: str | 
     counts = {k: sum(1 for r in results if r["status"] == k) for k in (RAN, SKIPPED, INHERITED, FAILED, BLOCKED)}
     if receipt is None:
         receipt = (record_concluded(results, {s.id for s in steps if s.optional}, ctx) if not only
-                   else record_withheld("--only run", tuple(sorted(only)), ctx))
+                   else _receipt_after_only_run(results, ctx))
     return {
         "schema": "coordinator-install-result/1",
         "backup": backup,

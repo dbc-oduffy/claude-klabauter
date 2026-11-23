@@ -25,7 +25,8 @@ def test_grok_stdin_prints_name_context_and_spend(tmp_path):
                "auto_compact_threshold_percent": 80, "cost": {"total_cost_usd": 2}}
     done = run("grok", json.dumps(payload), tmp_path)
     assert done.returncode == 0
-    assert done.stdout.strip() == "grok-one · ▰▰▱▱▱ 40% ctx · ~$2.00"
+    assert done.stdout.strip() == "grok-one · ## 50% ctx · ~$2.00"
+    assert "unknown" not in done.stdout and "▰" not in done.stdout and "▱" not in done.stdout
 
 
 def test_agy_stdin_prints_unknown_context(tmp_path):

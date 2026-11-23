@@ -496,15 +496,19 @@ def test_notebooklm_id_or_alias_ref_passes_the_ref_check() -> None:
     assert block["targets"] == [{"source": "notebooklm", "ref": "my-alias_01"}]
 
 
-def test_notebooklm_without_a_named_need_is_refused_pointing_at_repo_and_web(
+def test_notebooklm_source_or_target_alone_is_valid_without_need(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    for flags in (("--research-source", "notebooklm"), ("--research-target", "notebooklm=alias1")):
-        code, doc = _run(repo, "--research-class", "corpus", *flags)
-        assert code == sa.EXIT_USAGE
-        assert "research" not in doc
-        err = capsys.readouterr().err
-        assert "specialized tool" in err and "repo" in err and "web" in err
+    code, doc = _run(repo, "--research-class", "corpus", "--research-source", "notebooklm")
+    assert code == sa.EXIT_OK, capsys.readouterr().err
+    assert doc["research"]["sources"] == ["notebooklm"]
+    assert "notebooklm_need" not in doc["research"]
+    assert validate_frontmatter(doc, _SCHEMA) == []
+
+    code, doc = _run(repo, "--research-class", "corpus", "--research-target", "notebooklm=alias1")
+    assert code == sa.EXIT_OK, capsys.readouterr().err
+    assert doc["research"]["targets"] == [{"source": "notebooklm", "ref": "alias1"}]
+    assert validate_frontmatter(doc, _SCHEMA) == []
 
 
 def test_notebooklm_with_a_named_need_writes_the_need_into_a_schema_valid_record(repo: Path) -> None:
@@ -535,7 +539,7 @@ def test_built_block_with_a_need_validates_and_the_schema_refuses_a_bad_need() -
     assert schema["properties"]["research"]["properties"]["notebooklm_need"]["minItems"] == 1
 
 
-def test_amend_of_a_notebooklm_record_needs_no_second_need_but_a_new_pick_does(
+def test_amend_of_a_notebooklm_record_keeps_optional_need_and_repicking_notebooklm_without_need_succeeds(
     repo: Path, capsys
 ) -> None:
     _run(repo, "--research-class", "corpus", "--research-source", "notebooklm",
@@ -546,8 +550,9 @@ def test_amend_of_a_notebooklm_record_needs_no_second_need_but_a_new_pick_does(
     kept = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
     assert kept["research"]["notebooklm_need"] == ["podcast"]
     assert sa.main(["--amend-research", rel, "--research-source", "web"]) == sa.EXIT_OK
-    assert sa.main(["--amend-research", rel, "--research-source", "notebooklm"]) == sa.EXIT_BUSINESS_FAIL
-    assert "specialized tool" in capsys.readouterr().err
+    assert sa.main(["--amend-research", rel, "--research-source", "notebooklm"]) == sa.EXIT_OK
+    repicked = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
+    assert repicked["research"]["sources"] == ["notebooklm"]
 
 
 @pytest.mark.parametrize(

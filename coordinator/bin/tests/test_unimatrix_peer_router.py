@@ -315,6 +315,34 @@ def test_peer_to_peer_send_returns_labelled_reply_on_the_connection(box):
     run(go())
 
 
+def test_peer_to_agy_send_delivers_without_waiting_for_final_reply(box):
+    async def go():
+        seen = []
+
+        async def agy(peer, text):
+            seen.append((peer.get("deliver_only"), text))
+            if peer.get("deliver_only"):
+                return {"written": True, "msg_id": "agy-msg-1"}
+            return "full reply"
+
+        async def codex(peer, text):
+            return "codex reply"
+
+        r = make_router(box, {"agy": agy, "codex": codex})
+        await r.start()
+        try:
+            resp = await asyncio.to_thread(pr.request_line, r.ctl,
+                                           {"op": "send", "as": "codex-a", "to": "agy-a", "text": "ping"})
+            assert resp == {"ok": True, "written": True, "msg_id": "agy-msg-1"}
+            cli_resp = await asyncio.to_thread(pr.request_line, r.ctl,
+                                               {"op": "send", "as": "cli", "to": "agy-a", "text": "cli ping"})
+            assert cli_resp["ok"] is True and cli_resp["reply"] == "[agy-a] full reply"
+            assert [flag for flag, _ in seen] == [True, None]
+        finally:
+            await r.stop()
+    run(go())
+
+
 def test_frame_from_a_registered_peer_gets_no_reply_back(box):
     async def go():
         log = []
@@ -733,7 +761,7 @@ def _box_slug():
     return re.sub(r"[^A-Za-z0-9_-]+", "-", pr._contract().box_id(socket.gethostname())).strip("-")
 
 
-def test_default_adapters_grok_delivers_by_cwd_pinned_resume(monkeypatch):
+def test_default_adapters_grok_delivers_by_cwd_pinned_resume(monkeypatch, tmp_path):
     assert "grok" in pr.default_adapters()
 
     class Proc:
@@ -742,10 +770,16 @@ def test_default_adapters_grok_delivers_by_cwd_pinned_resume(monkeypatch):
 
     argvs = []
     real = pr._load("unimatrix-peer-grok.py", "unimatrix_peer_grok_probe")
+    real.mark_resumable(tmp_path, "sid-1", "/w/repo")
+    updates = real.session_updates_path(tmp_path, "/w/repo", "sid-1")
+    updates.parent.mkdir(parents=True)
+    updates.write_text(json.dumps({"params": {"update": {"sessionUpdate": "user_message_chunk",
+                                                         "content": {"type": "text", "text": "ping"}}}}) + "\n")
     monkeypatch.setattr(real.subprocess, "run", lambda argv, **kw: argvs.append((argv, kw)) or Proc())
     monkeypatch.setattr(pr, "_load", lambda filename, modname: real)
-    reply = run(pr.default_adapters()["grok"]({"target": "sid-1", "cwd": "/w/repo"}, "ping"))
-    assert reply == "grok said hi"
+    peer = {"target": "sid-1", "cwd": "/w/repo", "grok_home": str(tmp_path)}
+    reply = run(pr.default_adapters()["grok"](peer, "ping"))
+    assert reply["user_message_chunk"] is True and reply["session_id"] == "sid-1"
     argv, kw = argvs[0]
     assert argv[argv.index("--cwd") + 1] == "/w/repo" and "--add-dir" not in argv and kw["cwd"] == "/w/repo"
 
@@ -1530,7 +1564,8 @@ def test_list_shows_per_peer_readiness_leg_present_or_not(box, capsys, monkeypat
     assert run(go()) == 0
     lines = capsys.readouterr().out.splitlines()
     assert not any(line.startswith("agy-a\t") for line in lines)  # no leg: not reachable, so not listed
-    assert any([line.split("\t")[0], line.split("\t")[3]] == ["codex-a", "codex"] and line.endswith("\tready") for line in lines)
+    rows = [line.split("\t") for line in lines if line.count("\t") >= 4]
+    assert any([r[0], r[3], r[4]] == ["codex-a", "codex", "ready"] for r in rows)
 
 
 def test_scanner_repair_respawns_missing_face_and_restarts_exited_face_only(box):

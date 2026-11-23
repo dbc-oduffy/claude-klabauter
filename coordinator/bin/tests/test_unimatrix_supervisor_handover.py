@@ -109,6 +109,7 @@ def _stub_main_deps(monkeypatch, bridges_killed):
     monkeypatch.setattr(roster, "sync", lambda *a, **k: None)
     monkeypatch.setattr(roster, "reap_unbacked_agy_faces", lambda *a, **k: None)
     monkeypatch.setattr(roster, "tree_kill_many", lambda pids: bridges_killed.append(list(pids)))
+    monkeypatch.setattr(roster, "_signal_pid", lambda pid, sig: None)  # survivor SIGKILL must not reach a real pid
 
 
 def _argv(tmp_path):

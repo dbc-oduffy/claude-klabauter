@@ -286,6 +286,7 @@ def test_headless_exec_failure_raises_and_timeout_yields_no_reply(tmp_path, monk
 def test_a_live_queue_is_not_replaced_by_exec_and_a_tui_held_thread_never_execs(tmp_path, monkeypatch):
     calls = stub_codex_run(monkeypatch, tmp_path, queue_rc=0)
     monkeypatch.setattr(pcx.sys, "platform", "win32")
+    monkeypatch.setattr(pcx.shutil, "which", lambda *a, **k: None)  # 3.15 which() needs _winapi under win32
     monkeypatch.setattr(pcx, "RolloutTail", lambda thread_id: (_ for _ in ()).throw(ValueError("no baseline")))
     assert asyncio.run(pcx.codex_turn("s", "thr-1", "x")) == pcx.NO_REPLY
     assert [a for a, _ in calls if "exec" in a] == []
@@ -466,6 +467,7 @@ def test_windows_headless_turn_runs_on_a_stdio_child_that_registers_a_face_not_c
     FakeDaemon.instances = []
     monkeypatch.setattr(pcx, "StdioClient", StdioDaemon)
     monkeypatch.setattr(pcx.sys, "platform", "win32")
+    monkeypatch.setattr(pcx.shutil, "which", lambda *a, **k: None)  # 3.15 which() needs _winapi under win32
     faces = []
     monkeypatch.setattr(pcx, "register_face", lambda tid, pid: faces.append((tid, pid)))
     assert asyncio.run(pcx.codex_turn(str(tmp_path / "nope.sock"), "thr-1", "hello")) == "hi there"
@@ -483,6 +485,7 @@ def test_windows_headless_turn_resumes_a_thread_that_has_a_rollout(tmp_path, mon
     FakeDaemon.instances = []
     monkeypatch.setattr(pcx, "StdioClient", StdioDaemon)
     monkeypatch.setattr(pcx.sys, "platform", "win32")
+    monkeypatch.setattr(pcx.shutil, "which", lambda *a, **k: None)  # 3.15 which() needs _winapi under win32
     asyncio.run(pcx.codex_turn(str(tmp_path / "nope.sock"), "thr-1", "hello"))
     d = FakeDaemon.instances[0]
     assert [c[0] for c in d.calls] == ["initialize", "thread/resume", "turn/start"]
@@ -550,6 +553,7 @@ def test_windows_headless_turn_still_replies_when_the_thread_is_unbound(tmp_path
     stub_codex_run(monkeypatch, tmp_path)
     monkeypatch.setattr(pcx, "StdioClient", StdioDaemon)
     monkeypatch.setattr(pcx.sys, "platform", "win32")
+    monkeypatch.setattr(pcx.shutil, "which", lambda *a, **k: None)  # 3.15 which() needs _winapi under win32
 
     def unbound(tid, pid):
         raise RuntimeError("unbound")

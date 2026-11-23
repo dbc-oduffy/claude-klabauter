@@ -363,3 +363,27 @@ def test_main_wrong_argc_exits_with_usage_and_prints_reply_on_two(monkeypatch, c
     monkeypatch.setattr(agy, "transcript_path", lambda c: f"tr-{c}")
     assert agy.main(["c1", "hi"]) == 0
     assert capsys.readouterr().out.strip() == "reply:ep-c1:tr-c1:hi"
+
+
+def test_turn_with_wait_reply_false_returns_written_receipt_without_waiting(env):
+    transcript, make = env
+    fake = make({"ok": True})
+    out = asyncio.run(agy.agy_turn("leg.sock", transcript, "hello", timeout=30, interval=30, wait_reply=False))
+    assert isinstance(out, dict) and out["written"] is True and out["msg_id"]
+    assert fake.seen == ["hello"]
+
+
+def test_leg_rebinds_when_its_unix_socket_is_unlinked(monkeypatch, tmp_path):
+    t, sock = run_leg_with_parent(monkeypatch, tmp_path, os.getpid())
+    assert sock.exists()
+    os.unlink(sock)
+    assert not sock.exists()
+    deadline = time.monotonic() + 5
+    while not sock.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert sock.exists() and t.is_alive()
+    c = socket.socket(socket.AF_UNIX)
+    c.connect("pend.sock")
+    c.sendall(b'{"text": "after-rebind"}\n')
+    assert json.loads(c.recv(4096))["queued"] is True
+    c.close()

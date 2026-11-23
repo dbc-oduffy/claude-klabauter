@@ -129,3 +129,29 @@ def test_cli_sender_is_the_inherited_codex_target_never_a_hand_signed_name(monke
     monkeypatch.setenv("UNIMATRIX_PEER_NAME", "group-em-09")
     assert send.main(["--to", "mac-peer", "message"]) == 0
     assert requests[-1]["as_target"] == "inherited-thread" and requests[-1]["as"] == "cli"
+
+
+def test_cli_send_from_a_session_stamps_its_routable_name_on_a_mirror_target(tmp_path: Path) -> None:
+    """The delivered `from` is `<session>.<box>` (replyable), never the face name or the bare `cli`."""
+    sessions = tmp_path / "sessions"
+    write_session(sessions, "mirror.json", "mac-peer", router.endpoint_path("mac-mirror", tmp_path),
+                  macSocketPath="/tmp/cc-socks/mac-peer.sock", farPid=80954)
+    write_session(sessions, "caller.json", "coordinator-content-repo-3b", router.endpoint_path("caller", tmp_path))
+    r = router.Router([], sessions_dir=sessions, state_dir=tmp_path / "state", endpoint_dir=tmp_path)
+    delivered = []
+
+    async def face(source, to):
+        return "unimatrix-transport-abc-on-box"
+
+    async def deliver(peer, endpoint, frame):
+        delivered.append(frame)
+
+    r._transport_face, r._deliver_as_peer = face, deliver
+    r.endpoint_of = lambda name: "/tmp/face.sock"
+    reply = asyncio.run(r._dispatch({"op": "send", "as": "cli", "as_session": "coordinator-content-repo-3b",
+                                     "to": "mac-peer", "text": "hello"}))
+    assert reply["ok"], reply
+    content = delivered[0]["message"]["content"]
+    box = router._contract().local_box()
+    assert f'from="coordinator-content-repo-3b.{box}"' in content
+    assert "[coordinator-content-repo-3b via Unimatrix transport]" in content

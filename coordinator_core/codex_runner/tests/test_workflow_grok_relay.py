@@ -55,6 +55,43 @@ def _allow(argv):
     return argv[argv.index("--allow") + 1]
 
 
+def test_grok_stage_maps_sonnet_tier_and_named_effort(tmp_path, stub):
+    seen, box = stub
+    box["STUB_ENVELOPE"] = json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"})
+    workflow.run_agent(
+        "relay it",
+        {"schema": _SCHEMA, "model": "sonnet", "effort": "medium"},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", backend="grok", parent_session_id="sid",
+    )
+    argv, = seen
+    assert argv[argv.index("--model") + 1] == "grok-4.7-build-fast"
+    assert argv[argv.index("--reasoning-effort") + 1] == "medium"
+    assert "--no-subagents" in argv
+    receipt = json.loads((tmp_path / "art/process.json").read_text(encoding="utf-8"))
+    assert receipt["requested_model"] == "grok-4.7-build-fast"
+    assert receipt["requested_effort"] == "medium"
+    assert "search_replace" in (tmp_path / "art/prompt.txt").read_text(encoding="utf-8")
+
+
+def test_grok_stage_rejects_an_unknown_effort(tmp_path, stub):
+    with pytest.raises(workflow.AgentFailed, match="reasoning effort"):
+        workflow.run_agent(
+            "relay it", {"schema": _SCHEMA, "effort": "ultra"},
+            repo_root=tmp_path, artifact_dir=tmp_path / "art", backend="grok", parent_session_id="sid",
+        )
+
+
+def test_grok_stage_leaves_model_and_effort_to_the_cli_when_omitted(tmp_path, stub):
+    seen, box = stub
+    box["STUB_ENVELOPE"] = json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"})
+    workflow.run_agent(
+        "relay it", {"schema": _SCHEMA},
+        repo_root=tmp_path, artifact_dir=tmp_path / "art", backend="grok", parent_session_id="sid",
+    )
+    argv, = seen
+    assert "--model" not in argv and "--reasoning-effort" not in argv
+
+
 def test_grok_sizing_uses_native_progress_and_reads_terminal_result(tmp_path, stub):
     seen, box = stub
     box["STUB_ENVELOPE"] = "\n".join(json.dumps(event) for event in (

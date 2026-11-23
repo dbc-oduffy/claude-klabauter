@@ -324,6 +324,18 @@ def test_agy_face_with_a_held_presence_lock_is_backed_despite_a_dead_pid(tmp_pat
     assert lv.agy_face_unbacked(face, home) is True
 
 
+@pytest.mark.parametrize("mirror_field", [
+    {"unimatrixRemote": "example-operator@machine-b"},
+    {"macSocketPath": "/tmp/cc-socks/cc-msg-far.sock"},
+    {"unimatrixMirror": True},
+])
+def test_agy_face_unbacked_ignores_remote_mirrors(tmp_path: Path, mirror_field: dict) -> None:
+    home = _agy_home(tmp_path, 2_000_000_000)
+    row = {"name": "agy-remote-on-machine-b.machine-b-lan", "vendor": "agy",
+           "unimatrixRouterPid": 7, **mirror_field}
+    assert lv.agy_face_unbacked(row, home) is False
+
+
 def _peer_home(tmp_path, rows, legs=()):
     base = tmp_path / "unimatrix"
     (base / "agy-legs").mkdir(parents=True)

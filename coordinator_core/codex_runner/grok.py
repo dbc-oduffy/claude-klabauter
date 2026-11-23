@@ -10,6 +10,7 @@ No login probe runs outside this detached worker.
 """
 from __future__ import annotations
 
+from coordinator_core.agent_pipe.model_tiers import model_for_role
 from coordinator_core.codex_runner.identity_env import provider_identity_env
 
 import json
@@ -86,9 +87,14 @@ def resolve_grok() -> list[str]:
 
 
 def build_argv(
-    prefix: list[str], prompt: str, session_id: Optional[str] = None, max_turns: int = GROK_MAX_TURNS
+    prefix: list[str], prompt: str, session_id: Optional[str] = None, max_turns: int = GROK_MAX_TURNS,
+    model: Optional[str] = None,
 ) -> list[str]:
-    """The grok spawn argv: one-shot streaming-json in read-only tool allowlist; auto-approve flags are refused."""
+    """The grok spawn argv: one-shot streaming-json in read-only tool allowlist; auto-approve flags are refused.
+
+    `model` None selects the reviewer-role id (this argv is read-only). A caller that already chose a model passes it once.
+    """
+    chosen = model_for_role("grok", "reviewer") if model is None else model
     argv = [
         *prefix, "-p", prompt,
         "--output-format", "streaming-json",
@@ -97,6 +103,8 @@ def build_argv(
         "--max-turns", str(max_turns),
         "-s", session_id or str(uuid.uuid4()),
     ]
+    if chosen:
+        argv += ["--model", chosen]
     for rule in DENY_RULES:
         argv += ["--deny", rule]
     bad = [f for f in FORBIDDEN_FLAGS if f in argv]

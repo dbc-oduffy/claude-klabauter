@@ -75,14 +75,12 @@ def _drop_ask_parent(doc: dict) -> None:
 
 
 def notebooklm_targets_or_halt(research: Mapping) -> tuple[list[dict], Optional[str]]:
-    """Return `(targets, halt_reason)`; exactly one side is meaningful.
+    """Return `(targets, None)` — a notebooklm source never requires pre-existing notebook IDs.
 
     A research block whose `sources` omit notebooklm, or that already carries notebooklm targets, returns
-    its `targets` unchanged with `None`. A notebooklm source with no notebooklm target derives one target
-    per `questions` entry (the scout's topic areas, de-duplicated, in order) appended to the existing
-    targets. With no questions either, returns `([], reason)` naming the missing targets.
-
-    Trap: only `questions` count as topic areas; a bare `intent` is not split into targets."""
+    its `targets` unchanged. A notebooklm source with no notebooklm target derives one target per
+    `questions` entry (de-duplicated, in order), or defaults to one fresh notebook slot `A` so the
+    pipeline creates its own notebook via `notebook_create`, `source_add` and `research_start`."""
     targets = [dict(t) for t in research.get("targets") or () if isinstance(t, Mapping)]
     if _NOTEBOOKLM not in (research.get("sources") or ()):
         return targets, None
@@ -97,7 +95,4 @@ def notebooklm_targets_or_halt(research: Mapping) -> tuple[list[dict], Optional[
             derived.append({"source": _NOTEBOOKLM, "ref": ref})
     if derived:
         return targets + derived, None
-    return [], (
-        "research names a notebooklm source but no notebooklm targets and no topic areas to derive "
-        "them from: supply research.targets entries {source: notebooklm, ref: <notebook>}"
-    )
+    return targets + [{"source": _NOTEBOOKLM, "ref": "A"}], None

@@ -98,6 +98,14 @@ def test_codex_argv_carries_model_flag_before_prompt(monkeypatch):
     ]
 
 
+def test_grok_named_review_carries_one_model(monkeypatch):
+    monkeypatch.setattr("coordinator_core.codex_runner.grok.resolve_grok", lambda: ["grok"])
+    argv = reviewer_run._grok_argv("P", "grok-4.5")
+    assert argv.count("--model") == 1
+    assert argv[argv.index("--model") + 1] == "grok-4.5"
+    assert "--no-subagents" in argv
+
+
 def test_agy_argv_carries_model_flag(monkeypatch):
     argv = reviewer_run._agy_argv("P", "gem-x")
     assert argv[-2:] == ["--model", "gem-x"] and "P" in argv

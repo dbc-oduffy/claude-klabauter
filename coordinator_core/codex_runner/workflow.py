@@ -40,7 +40,7 @@ from coordinator_core import tenant_priority
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
 from coordinator_core.agent_pipe.agy import family_stage_argv
-from coordinator_core.agent_pipe.model_tiers import model_for_tier
+from coordinator_core.agent_pipe.model_tiers import GROK_EFFORTS, model_for_tier
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV
 from coordinator_core.ops.workflow_fire.headless_agents import fill_omitted_nullable, unwrap_rpc_envelope
 from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
@@ -623,6 +623,36 @@ def _codex_effort(options: dict, model: str | None, env: dict) -> str | None:
     return effort
 
 
+def _grok_model(options: dict) -> str | None:
+    """Native Grok id for a Workflow tier, or an explicit grokModel. Omitted tier keeps the CLI default."""
+    explicit = options.get("grokModel")
+    if explicit is not None:
+        if not isinstance(explicit, str) or not explicit.strip():
+            raise AgentFailed("grokModel must be a non-empty native model ID")
+        return explicit
+    tier = options.get("model")
+    if tier is None:
+        return None
+    if not isinstance(tier, str) or not tier.strip():
+        raise AgentFailed("model must be an explicit known Workflow tier")
+    model = model_for_tier("grok", tier)
+    if not model:
+        raise AgentFailed(f"no verified Grok model mapping for Workflow tier {tier!r}")
+    return model
+
+
+def _grok_effort(options: dict) -> str | None:
+    """Pass a named reasoning effort through. Omitted effort is not invented."""
+    effort = options.get("effort")
+    if effort is None:
+        return None
+    if not isinstance(effort, str) or effort not in GROK_EFFORTS:
+        raise AgentFailed(
+            "effort must be a Grok reasoning effort: none, minimal, low, medium, high, xhigh, max"
+        )
+    return effort
+
+
 def _family_event_model(event: dict) -> str | None:
     """Model a grok/agy event reports about itself, from the event or its init/result/session payload."""
     for holder in (event, event.get("init"), event.get("session"), event.get("result"), event.get("step_update")):
@@ -907,21 +937,29 @@ def _operation_allow(options: dict) -> list[str]:
             for flag in ("--allowedTools", f"Bash({word} {op_id}:*)")]
 
 
-def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None) -> list[str]:
+def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None,
+                 model: str | None = None, effort: str | None = None) -> list[str]:
     """Write-capable argv for a grok/agy stage (prompt via file for grok, stdin for agy).
 
     Never carries grok.FORBIDDEN_FLAGS; the agy arm delegates to family_stage_argv (single builder)
     and runs unrestricted (--dangerously-skip-permissions, no sandbox, shell and file permission
-    granted) per PM ruling. The stage model is left to the CLI default because Workflow tiers do not
-    map to these families. A grok op-relay or commit-stage child gets only a coordinator-invoke allow rule.
+    granted) per PM ruling. A grok stage with a Workflow tier gets that tier's native model and,
+    when set, its reasoning effort. A tier with no effort uses the role effort (low, medium, high).
+    Omitted model and effort stay with the CLI. Stages stay
+    single-agent. A grok op-relay or commit-stage child gets only a coordinator-invoke allow rule.
     """
     try:
         if backend == "grok":
             allow = _RELAY_ALLOW if agent_type in _INVOKE_ONLY_AGENT_TYPES else "Bash"
             output_format = "streaming-json" if agent_type == "coordinator:sizing-scout" else "json"
-            return [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
+            argv = [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
                     "--output-format", output_format, "--permission-mode", "acceptEdits",
                     "--allow", allow, "--no-subagents", "--no-auto-update"]
+            if model:
+                argv += ["--model", model]
+            if effort:
+                argv += ["--reasoning-effort", effort]
+            return argv
         return family_stage_argv(resolve_agy(), log_file=str(artifact_dir / _AGY_LOG_NAME))
     except (GrokUnavailable, AgyUnavailable) as exc:
         raise AgentFailed(f"{backend} executable unavailable: {exc}") from exc
@@ -1188,6 +1226,12 @@ def run_agent(
             "the action, not a requirement to discover those tools. Keep the same file scope "
             "and all write evidence requirements. Do not edit when the stage is read-only.\n\n"
         ) + full_prompt
+    elif backend == "grok":
+        full_prompt = (
+            "Grok stage tools: search_replace or write for file edits; run_terminal_command for commands. "
+            "Edit, Write, Bash, and Agent in the brief name the action. Subagents are off. "
+            "coordinator-invoke only when the brief names that command.\n\n"
+        ) + full_prompt
     full_prompt = with_worker_preamble(backend, full_prompt)
     if run_id:
         from coordinator_core.ops.dispatch_emit import engine_identity
@@ -1283,7 +1327,9 @@ def run_agent(
             argv += ["--model", str(options["model"])]
         argv += _operation_allow(options)
     elif backend in _FAMILY_BACKENDS:
-        argv = _family_argv(backend, artifact_dir, options.get("agentType"))
+        family_model = _grok_model(options) if backend == "grok" else None
+        family_effort = _grok_effort(options) if backend == "grok" else None
+        argv = _family_argv(backend, artifact_dir, options.get("agentType"), family_model, family_effort)
     else:
         raise AgentFailed(f"unknown agent backend: {backend}")
     stdin_text = full_prompt
@@ -1325,7 +1371,8 @@ def run_agent(
     finally:
         if backend == "codex":
             writeback_codex_auth(env)
-    _save_process(artifact_dir, proc, backend, options, model if backend == "codex" else options.get("model"),
+    _save_process(artifact_dir, proc, backend, options,
+                  model if backend == "codex" else family_model if backend == "grok" else options.get("model"),
                   broker_root_session_id=parent_session_id, broker_request_id=request_id,
                   broker_fire_id=fire_id)
     if proc.returncode != 0:

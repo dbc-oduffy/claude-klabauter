@@ -307,3 +307,22 @@ def test_verify_runs_from_an_installed_copy_with_no_lib_dir(keys, tmp_path, monk
     assert not (installed / "lib").exists() and "cli_shared" not in sys.modules
     with pytest.raises(inst.MembershipError, match="does not verify"):
         inst.verify_snapshot(snap, sig, keys["other"][1])
+
+
+def test_desktop_notify_skips_osascript_under_ssh_or_no_notify_env(monkeypatch):
+    import sys
+
+    calls = []
+    monkeypatch.setattr(M.shutil, "which", lambda cmd: "/usr/bin/osascript" if cmd == "osascript" else None)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(M.subprocess, "run", lambda *a, **k: calls.append(a))
+
+    monkeypatch.setenv("SSH_CONNECTION", "192.168.0.1 12345 192.168.0.2 22")
+    monkeypatch.delenv("COORDINATOR_NO_DESKTOP_NOTIFY", raising=False)
+    assert M._desktop_notify("title", "msg", run=lambda *a, **k: calls.append(a)) is False
+    assert calls == []
+
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.setenv("COORDINATOR_NO_DESKTOP_NOTIFY", "1")
+    assert M._desktop_notify("title", "msg", run=lambda *a, **k: calls.append(a)) is False
+    assert calls == []

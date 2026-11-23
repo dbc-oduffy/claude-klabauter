@@ -128,6 +128,7 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     # server spawner's would stamp a stranger's vendor on the caller's commit.
     _entry("CODEX_THREAD_ID", CALLER),
     _entry("ANTIGRAVITY_CONVERSATION_ID", CALLER),
+    _entry("GROK_SESSION_ID", CALLER),
     _entry("CLAUDECODE", CALLER),
     _entry("COORDINATOR_AGENT_VENDOR", CALLER),
     _entry("COORDINATOR_AGENT_MODEL", CALLER),

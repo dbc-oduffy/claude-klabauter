@@ -124,6 +124,7 @@ def test_forwarding_set_is_exactly_the_named_entries():
         # Commit provenance detection names: per-caller facts.
         "CODEX_THREAD_ID",
         "ANTIGRAVITY_CONVERSATION_ID",
+        "GROK_SESSION_ID",
         "CLAUDECODE",
         "COORDINATOR_AGENT_VENDOR",
         "COORDINATOR_AGENT_MODEL",
@@ -194,6 +195,7 @@ def test_per_caller_facts_are_exactly_the_caller_mode_entries():
         "COORDINATOR_AGENT_TYPE_HOST",
         "CODEX_THREAD_ID",
         "ANTIGRAVITY_CONVERSATION_ID",
+        "GROK_SESSION_ID",
         "CLAUDECODE",
         "COORDINATOR_AGENT_VENDOR",
         "COORDINATOR_AGENT_MODEL",

@@ -1149,7 +1149,8 @@ CLAUDE_SESSION_ENV_PRECEDENCE = (
     "CLAUDE_CODE_SESSION_ID",
 )
 NATIVE_SESSION_ENV_PRECEDENCE = (
-    "CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID", "COORDINATOR_AGENT_SESSION",
+    "CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID", "GROK_SESSION_ID",
+    "COORDINATOR_AGENT_SESSION",
 )
 # An explicit coordinator identity wins; a native session wins over inherited Claude
 # launcher variables. Keep native read slots separate from the legacy write slots below:
@@ -1170,7 +1171,7 @@ def canonical_session_env_value(name: str, value: str, *, vendor: Optional[str] 
         return value
     import uuid
 
-    kind = {"CODEX_THREAD_ID": "codex", "ANTIGRAVITY_CONVERSATION_ID": "agy"}.get(name)
+    kind = {"CODEX_THREAD_ID": "codex", "ANTIGRAVITY_CONVERSATION_ID": "agy", "GROK_SESSION_ID": "grok"}.get(name)
     kind = kind or vendor or os.environ.get("COORDINATOR_AGENT_VENDOR", "external")
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"klabauter:session:{kind}:{value}"))
 

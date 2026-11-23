@@ -108,26 +108,21 @@ def test_a_notebooklm_segment_without_notebooks_derives_them_from_the_questions(
 def test_corpus_default_lists_derive_one_notebook_per_question():
     assert re_.corpus_default_lists("notebooklm", ["q"] * 3) == {"notebooks": ("A", "B", "C")}
     assert re_.corpus_default_lists("notebooklm", ["q"] * 30)["notebooks"] == tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    assert re_.corpus_default_lists("notebooklm", []) == {}
+    assert re_.corpus_default_lists("notebooklm", []) == {"notebooks": ("A",)}
 
 
-def test_a_notebooklm_segment_without_notebooks_or_questions_still_refuses(repo):
-    rel = _seeded_sizing(repo, [("doc", URL_C)], "--research-source", "notebooklm", "--research-notebooklm-need", "youtube")
-    with pytest.raises(PipelineEmitRefused) as exc:
-        _setup(repo, rel)
-    assert any(
-        "pipeline 'notebooklm' needs its notebooks: record them on the sizing with "
-        "sizing-assemble --research-target notebooklm=<letter or id>, or pass --list notebooks=A,B" in r
-        for r in exc.value.reasons
-    )
+def test_a_notebooklm_segment_alone_defaults_to_notebook_a(repo):
+    rel = _seeded_sizing(repo, [], "--research-source", "notebooklm")
+    ctx = _setup(repo, rel)
+    nlm = next(i for m, i, _ in ctx["segments"] if m.pipeline == "notebooklm")
+    assert nlm.lists["notebooks"] == ("A",)
 
 
-def test_video_seed_without_notebooks_refuses_naming_the_seed_and_the_clearing_flag(repo):
+def test_video_seed_without_explicit_notebooks_defaults_to_notebook_a(repo):
     rel = _seeded_sizing(repo, [("video", URL_B)])
-    with pytest.raises(PipelineEmitRefused) as exc:
-        _setup(repo, rel)
-    text = " ".join(exc.value.reasons)
-    assert "needs its notebooks" in text and f"video={URL_B}" in text and "--clear-research-seeds" in text
+    ctx = _setup(repo, rel)
+    nlm = next(i for m, i, _ in ctx["segments"] if m.pipeline == "notebooklm")
+    assert nlm.lists["notebooks"] == ("A",)
 
 
 def test_the_emit_spawns_no_subprocess(repo, monkeypatch):

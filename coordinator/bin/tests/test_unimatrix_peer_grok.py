@@ -82,7 +82,8 @@ def test_argv_is_cwd_pinned_without_add_dir_or_fork(tmp_path: Path) -> None:
     assert argv[argv.index("--cwd") + 1] == str(tmp_path)
     assert argv[argv.index("-r") + 1] == SID
     assert "--add-dir" not in argv and "--fork-session" not in argv
-    assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+    assert "--always-approve" in argv
+    assert "--permission-mode" not in argv
 
 
 def run_turn(runner, tmp_path, timeout: int = 5):
@@ -98,6 +99,7 @@ def test_turn_returns_reply_and_pins_cwd(tmp_path: Path) -> None:
 
     assert run_turn(runner, tmp_path) == "pong"
     assert seen["cwd"] == str(tmp_path)
+    assert seen["env"]["UNIMATRIX_GROK_SESSION_ID"] == SID
     assert "--cwd" in seen["argv"] and "--add-dir" not in seen["argv"]
 
 
@@ -141,3 +143,96 @@ def test_own_session_empty_registry_never_walks_processes(tmp_path: Path) -> Non
 
 def test_real_parent_pid_finds_this_processes_parent() -> None:
     assert pg.parent_pid(os.getpid()) == os.getppid()
+
+
+def _chunk(text):
+    return json.dumps({"method": "session/update", "params": {"update": {
+        "sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": text}}}})
+
+
+def test_held_live_grok_submits_text_and_does_not_resume_headless(tmp_path: Path) -> None:
+    home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": str(tmp_path), "tty": "/dev/ttys004"}])
+    seen = []
+
+    def submit(tty, text):
+        seen.append((tty, text))
+
+    def runner(argv, **kw):
+        raise AssertionError("resume")
+
+    result = asyncio.run(pg.deliver(SID, str(tmp_path), "hello from peer", home=home, binary="grok",
+                                    runner=runner, is_live_grok=lambda pid: pid == 4242, submit=submit))
+    assert seen == [("/dev/ttys004", "hello from peer")]
+    assert result["ok"] is True and result["written"] is True and result["msg_id"]
+
+
+def test_marked_session_resumes_even_when_its_grok_is_live(tmp_path: Path) -> None:
+    cwd = str(tmp_path)
+    home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": cwd, "tty": "/dev/ttys004"}])
+    pg.mark_resumable(home, SID, cwd)
+    path = pg.session_updates_path(home, cwd, SID)
+    path.parent.mkdir(parents=True)
+    path.write_text(_chunk("hello from peer") + "\n", encoding="utf-8")
+
+    def submit(tty, text):
+        raise AssertionError("tty submit")
+
+    seen = {}
+
+    def runner(argv, **kw) -> "CompletedProcess[str]":
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"text": "pong"}), "")
+
+    result = asyncio.run(pg.deliver(SID, cwd, "hello from peer", home=home, binary="grok",
+                                    runner=runner, is_live_grok=lambda pid: pid == 4242, submit=submit))
+    assert result["user_message_chunk"] is True and result["session_id"] == SID
+    argv = seen["argv"]
+    assert argv[argv.index("-r") + 1] == SID
+    assert "-p" in argv and "--always-approve" in argv
+
+
+def test_resumable_session_receipt_is_the_user_message_chunk(tmp_path: Path) -> None:
+    cwd = str(tmp_path)
+    home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": cwd}])
+    pg.mark_resumable(home, SID, cwd)
+    path = pg.session_updates_path(home, cwd, SID)
+    path.parent.mkdir(parents=True)
+    path.write_text(_chunk("hello from peer") + "\n", encoding="utf-8")
+    seen = {}
+
+    def submit(tty, text):
+        raise AssertionError("tty submit")
+
+    def runner(argv, **kw) -> "CompletedProcess[str]":
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"text": "pong"}), "")
+
+    result = asyncio.run(pg.deliver(SID, cwd, "hello from peer", home=home, binary="grok",
+                                    runner=runner, submit=submit))
+    assert result["user_message_chunk"] is True and result["session_id"] == SID and result["msg_id"]
+    argv = seen["argv"]
+    assert argv[argv.index("-r") + 1] == SID
+    assert "--always-approve" in argv
+    assert "--permission-mode" not in argv
+    assert "--add-dir" not in argv and "--fork-session" not in argv
+
+
+def test_resume_without_a_chunk_is_not_receipt(tmp_path: Path) -> None:
+    cwd = str(tmp_path)
+    home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": cwd}])
+    pg.mark_resumable(home, SID, cwd)
+
+    def runner(argv, **kw) -> "CompletedProcess[str]":
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"text": "pong"}), "")
+
+    assert asyncio.run(pg.deliver(SID, cwd, "hi", home=home, binary="grok", runner=runner)) == (
+        "delivery failed: no user_message_chunk")
+
+
+def test_record_launch_marks_the_session_the_stdout_names(tmp_path: Path) -> None:
+    argv = pg.launch_argv("grok", str(tmp_path), "open")
+    assert "--dangerously-skip-permissions" in argv and "-r" not in argv and "--fork-session" not in argv
+    assert pg.record_launch(tmp_path, json.dumps({"sessionId": SID}), str(tmp_path)) == SID
+    assert pg.is_resumable(tmp_path, SID)
+    assert pg.record_launch(tmp_path, "{}", str(tmp_path)) is None
+

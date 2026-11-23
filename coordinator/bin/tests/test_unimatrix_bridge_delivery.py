@@ -545,3 +545,17 @@ def test_a_route_marked_unavailable_by_select_route_is_refused_before_any_dial(b
                             lambda *a: subprocess.CompletedProcess([], 0, b"", b""))
     send(bridge)
     assert dialled == []
+
+
+def test_delivery_status_handles_relay_in_rows_without_ts_or_target(bridge):
+    path = bridge.deliveries_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"ok": True, "at": 1700000000, "name": "relay-in-peer"}) + "\n"
+        + json.dumps({"ok": False, "error": "timeout"}) + "\n",
+        encoding="utf-8",
+    )
+    lines = bridge.delivery_status()
+    assert len(lines) == 2
+    assert lines[0] == "delivered 2023-11-14T22:13:20Z relay-in-peer"
+    assert lines[1] == "FAILED    ? ?: timeout"

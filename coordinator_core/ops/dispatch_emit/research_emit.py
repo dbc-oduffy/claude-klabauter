@@ -29,11 +29,13 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping, Optional, Sequence
 
 from coordinator_core.ops import _research_contract as rc
+from coordinator_core.ops import _research_trail
+from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER, FanOut, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs,
 )
 
-__all__ = ["bind_seed_briefs", "REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "WEBSEARCH_BUDGET", "live_research_runs", "websearch_budget_warning", "bind_context", "bind_output_paths", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask", "research_block"]
+__all__ = ["bind_seed_briefs", "REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "notebook_slot_map", "notebooks_roster", "probe_allowlist", "ask_digest", "run_id_for", "WEBSEARCH_BUDGET", "live_research_runs", "websearch_budget_warning", "bind_context", "bind_output_paths", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask", "research_block"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -60,10 +62,13 @@ REPO_COMPARE_PIPELINE = "repo-compare"
 
 # The corpus scope templates fix these shapes: the repo scope defines exactly four chunks A-D
 # (spanning every target, by the repos' architecture, not one per target) and assigns them to
-# two Haiku scouts; the web scope defaults to four topics a-d. A caller's --list overrides.
+# two Haiku scouts; the web scope defaults to four topics a-d; notebooklm defaults to one fresh
+# notebook A (created by the pipeline via notebook_create/source_add/research_start). A caller's
+# --list or --research-target overrides.
 CORPUS_DEFAULT_LISTS: dict[str, dict[str, tuple[str, ...]]] = {
     "repo": {"chunks": ("A", "B", "C", "D"), "haiku_scouts": ("1", "2")},
     "web": {"topics": ("a", "b", "c", "d")},
+    "notebooklm": {"notebooks": ("A",)},
 }
 
 
@@ -109,21 +114,83 @@ def ask_digest(root: Path, parts: Mapping[str, object]) -> str:
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:DIGEST_LEN]
 
 
-def run_id_for(root: Path, run_dir_root: str, prefix: str, digest: str, now: str) -> str:
-    """The run id for the ask `digest`: the newest unlaunched script already emitted for it, else a fresh id.
+_EMIT_FILES = frozenset({ASK_FILE, BRIEF_FILE})
+_MAIL_DIR = "mail"
 
-    A re-emit of one ask reuses its script's run id, so it rewrites that script instead of
-    writing a sibling. A script whose run dir holds a `submission.json` has launched; reusing its
-    id would collide with the run's token, submission and briefs, so a fresh id is minted.
+
+def _is_empty_em_mailbox(entry: Path) -> bool:
+    """True when `entry` is the emit-time `mail/` dir holding only an empty `em.jsonl`."""
+    from coordinator_core.ops.dispatch_emit.chatty import EM_MAILBOX
+
+    try:
+        children = list(entry.iterdir())
+    except OSError:
+        return False
+    if not children:
+        return True
+    if len(children) != 1 or children[0].name != EM_MAILBOX or not children[0].is_file():
+        return False
+    try:
+        return children[0].stat().st_size == 0
+    except OSError:
+        return False
+
+
+def _run_dir_has_runtime_artifacts(run_dir: Path) -> bool:
+    """True when `run_dir` holds any file or subdir beyond emit-time ask.md / brief.md / empty mail/em.jsonl."""
+    if not run_dir.is_dir():
+        return False
+    try:
+        entries = list(run_dir.iterdir())
+    except OSError:
+        return False
+    for entry in entries:
+        if entry.is_dir():
+            if entry.name == _MAIL_DIR:
+                if not _is_empty_em_mailbox(entry):
+                    return True
+                continue
+            try:
+                children = list(entry.iterdir())
+            except OSError:
+                return True
+            if not children or any(c.is_dir() or c.name != BRIEF_FILE for c in children):
+                return True
+        elif entry.name not in _EMIT_FILES:
+            return True
+    return False
+
+
+def _run_id_used(root: Path, base: Path, run_id: str) -> bool:
+    """True when `run_id` has already launched, produced runtime scratch artifacts, or closed a trail."""
+    run_dir = base / run_id
+    if (run_dir / SUBMISSION_FILE).exists() or (run_dir / HALTED_FILE).exists():
+        return True
+    if _run_dir_has_runtime_artifacts(run_dir):
+        return True
+    if safe_id(run_id) and _research_trail.locate_trail(root, run_id) is not None:
+        return True
+    return False
+
+
+def run_id_for(root: Path, run_dir_root: str, prefix: str, digest: str, now: str) -> str:
+    """The run id for the ask `digest`: the newest unlaunched, unclosed script already emitted for it, else a fresh id.
+
+    A re-emit of one ask reuses its script's run id only while the run is still unlaunched and
+    unclosed, so it rewrites that script instead of writing a sibling. Once a run has launched
+    (`submission.json`, `halted.json`, or any runtime scratch artifact beyond emit-time briefs)
+    or closed (a `trail.yaml` under `docs/research/`), reusing its id would overwrite the prior
+    run's scratch dir and collide in `research.close` instead of filing under `-v2`, so a fresh
+    id is minted.
     """
     base = root / run_dir_root
     found = sorted(base.glob(f"{prefix}*-{digest}{SCRIPT_SUFFIX}"), key=lambda p: p.stat().st_mtime, reverse=True)
     for script in found:
         run_id = script.name[: -len(SCRIPT_SUFFIX)]
-        if not (base / run_id / SUBMISSION_FILE).exists():
+        if not _run_id_used(root, base, run_id):
             return run_id
     fresh, bump = f"{prefix}{now}-{digest}", 0
-    while (base / fresh / SUBMISSION_FILE).exists() or (base / f"{fresh}{SCRIPT_SUFFIX}").exists():
+    while (base / f"{fresh}{SCRIPT_SUFFIX}").exists() or _run_id_used(root, base, fresh):
         bump += 1
         fresh = f"{prefix}{now}{bump}-{digest}"
     return fresh
@@ -511,27 +578,94 @@ def bind_output_paths(root: Path, scratch_rel: str, brief_rel: str) -> str:
     return brief_rel if brief_rel in own else f"{base}/{BRIEF_FILE}"
 
 
+_NOTEBOOK_LETTER_RE = re.compile(r"^[A-Z]$")
+
+
+def _slot_letter(index: int) -> str:
+    """0 -> 'A', ..., 25 -> 'Z', 26 -> 'AA', ... for deterministic notebook section letters."""
+    chars: list[str] = []
+    n = index
+    while True:
+        chars.append(chr(ord("A") + (n % 26)))
+        n = n // 26 - 1
+        if n < 0:
+            break
+    return "".join(reversed(chars))
+
+
+def notebook_slot_map(
+    targets: Sequence[Mapping[str, str]],
+    given: Sequence[str] = (),
+    questions: Sequence[str] = (),
+) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+    """Return `(letters, existing_id_bindings)` for the notebooklm segment.
+
+    Worker and brief templates key sections on single uppercase letters (`## Notebook A`, ...).
+    Any non-letter `--research-target notebooklm=<id>` (e.g. a NotebookLM UUID) is therefore mapped
+    1:1 to a deterministic uppercase letter slot and returned in `existing_id_bindings` as
+    `(letter, existing_id)` so workers dispatch on letters while knowing which existing notebook to
+    read and query. Single-letter targets (`A`-`Z`) stay unmapped fresh-notebook slots.
+    `given` (`--list notebooks=...`) wins as the roster, pairing 1:1 with non-letter targets when
+    their counts match. With neither `given` nor targets, defaults to one letter per question or `('A',)`.
+    """
+    nb_refs = [str(t["ref"]) for t in targets if t.get("source") == _NOTEBOOKLM_PIPELINE and t.get("ref")]
+    if given:
+        roster = tuple(str(g) for g in given)
+        non_letter = [r for r in nb_refs if not _NOTEBOOK_LETTER_RE.fullmatch(r)]
+        if len(non_letter) == len(roster):
+            bindings = tuple(zip(roster, non_letter))
+        elif len(nb_refs) == len(roster):
+            bindings = tuple((slot, ref) for slot, ref in zip(roster, nb_refs) if not _NOTEBOOK_LETTER_RE.fullmatch(ref))
+        else:
+            bindings = ()
+        return roster, bindings
+    if nb_refs:
+        reserved = {r for r in nb_refs if _NOTEBOOK_LETTER_RE.fullmatch(r)}
+        used = set(reserved)
+        roster_list: list[str] = []
+        bindings_list: list[tuple[str, str]] = []
+        next_idx = 0
+        for ref in nb_refs:
+            if _NOTEBOOK_LETTER_RE.fullmatch(ref):
+                roster_list.append(ref)
+            else:
+                while _slot_letter(next_idx) in used:
+                    next_idx += 1
+                letter = _slot_letter(next_idx)
+                next_idx += 1
+                used.add(letter)
+                roster_list.append(letter)
+                bindings_list.append((letter, ref))
+        return tuple(roster_list), tuple(bindings_list)
+    return corpus_default_lists(_NOTEBOOKLM_PIPELINE, questions).get(_NOTEBOOKS_LIST, ()), ()
+
+
 def notebooks_roster(
     targets: Sequence[Mapping[str, str]], given: Sequence[str], questions: Sequence[str]
 ) -> tuple[str, ...]:
-    """The notebooks the notebooklm segment will fan out over, by the precedence the emit binds them.
+    """The notebook letter slots the notebooklm segment will fan out over, by emit precedence.
 
-    `given` (a `--list notebooks=` override) wins, then the `targets` whose source is notebooklm,
-    then the per-question defaults.
+    `given` (a `--list notebooks=` override) wins, then 1:1 letter slots for `targets` whose source
+    is notebooklm (UUIDs/IDs mapped to `A`, `B`, ...), then the per-question / single-notebook defaults.
     """
-    if given:
-        return tuple(given)
-    refs = tuple(t["ref"] for t in targets if t.get("source") == _NOTEBOOKLM_PIPELINE)
-    return refs or corpus_default_lists(_NOTEBOOKLM_PIPELINE, questions).get(_NOTEBOOKS_LIST, ())
+    return notebook_slot_map(targets, given, questions)[0]
 
 
-def bind_notebooks_roster(root: Path, scratch_rel: str, brief_rel: str, roster: Sequence[str]) -> str:
+def bind_notebooks_roster(
+    root: Path,
+    scratch_rel: str,
+    brief_rel: str,
+    roster: Sequence[str],
+    existing_ids: Sequence[tuple[str, str]] = (),
+) -> str:
     """State the notebooks roster as a hard constraint on the scope stage; return the brief members read.
 
     The scope stage's `worker_count` and `notebooks` must equal the roster or the run halts, so the
-    brief says so. An empty roster leaves the brief unchanged. An ask or brief file under `scratch_rel`
-    gains the section in place; any other brief (a sizing) is never edited: `<scratch>/brief.md`
-    points at it and carries the section.
+    brief says so. When `existing_ids` binds letters to existing NotebookLM notebook IDs, emit the
+    1:1 mapping and instruct scope, scout and workers to read and query those existing notebooks
+    rather than recreating them. An empty roster leaves the brief unchanged. An ask or brief file
+    under `scratch_rel` gains the section in place; any other brief (a sizing) is never edited:
+    `<scratch>/brief.md` points at it and carries the section.
     """
     if not roster:
         return brief_rel
@@ -540,8 +674,24 @@ def bind_notebooks_roster(root: Path, scratch_rel: str, brief_rel: str, roster: 
         f"{_ROSTER_HEADING}\n\nThis run's notebooks roster has {len(roster)} "
         f"{'entry' if len(roster) == 1 else 'entries'}: {', '.join(f'`{n}`' for n in roster)}. "
         f"The scope stage must return `worker_count` = {len(roster)} and `notebooks` listing exactly "
-        "these entries; do not merge, drop or add notebooks. A scope reply that disagrees halts the run.\n"
+        "these entries; do not merge, drop or add notebooks. A scope reply that disagrees halts the run. "
+        "Letter slots (`A`, `B`, ...) without a bound ID create fresh notebooks from the run's questions and topics "
+        "(`notebook_create`, `source_add`, `research_start`); explicit existing notebook IDs are optional reuse targets.\n"
     )
+    if existing_ids:
+        rows = "".join(f"- Notebook `{letter}` -> existing notebook ID `{nb_id}`\n" for letter, nb_id in existing_ids)
+        section += (
+            "\n### Existing notebook IDs (reuse — do NOT recreate)\n\n"
+            f"{rows}\n"
+            "- **Scope:** in each bound `## Notebook <letter>` section, write plain `Source strategy: existing_notebook` "
+            "and plain `Notebook ID: <uuid>` copied from the table above; its already-ingested sources are the sources "
+            "(no fresh scouting or `research_start` is owed).\n"
+            "- **Scout:** do NOT search for fresh sources and do NOT call `notebook_get` (scout has no NotebookLM MCP tools); "
+            "record the bound `Notebook ID: <uuid>` under `## Sources for Notebook <letter>` as reused (`existing_notebook`), "
+            "and if returning `usable_sources`, emit `{notebook: \"<letter>\", ref: \"existing_notebook:<uuid>\"}`.\n"
+            "- **Worker:** do NOT call `notebook_create` for a bound existing notebook; use the bound `Notebook ID` "
+            "directly, read its already-ingested sources via `notebook_get` / `source_get_content`, and query it via `notebook_query`.\n"
+        )
     own = {f"{base}/{ASK_FILE}", f"{base}/{BRIEF_FILE}"}
     if brief_rel in own:
         target = root / brief_rel
@@ -581,7 +731,10 @@ _SCOUT_SCHEMA = {
                         "description": (
                             "A source is usable only when its content was fetched. A 403 or other error "
                             "page, an empty page or a login wall is not usable. A notebook whose strategy "
-                            "says research_start contributes one entry with ref research_start."
+                            "says research_start contributes one entry with ref research_start. "
+                            "A notebook whose strategy says existing_notebook needs no fresh scouting and "
+                            "contributes one entry with ref existing_notebook:<notebook_id> (workers read "
+                            "its already-ingested sources via notebook_get)."
                         ),
                     },
                 },
@@ -598,9 +751,13 @@ def halt_legs(pipelines: Sequence[str]) -> dict[str, str]:
     return {}
 
 
-def gate_notebooklm(manifest: Manifest) -> Manifest:
+def gate_notebooklm(manifest: Manifest, *, all_existing: bool = False) -> Manifest:
     """The notebooklm manifest with the scope count gate, the scout usable-sources gate and workers fanned over strategy.md's notebooks.
 
+    When `all_existing` is true (every notebook in the roster is bound to an existing NotebookLM ID),
+    the scout stage has no fresh notebooks to scout and no NotebookLM MCP tools, so the inline scout
+    schema and `halts_unless_nonempty="usable_sources"` gate are omitted; `source-gate` validates the
+    bound `Notebook ID` lines in `strategy.md` and workers read and query the existing notebooks directly.
     A stage that already declares a schema or halt keeps it. Refuses a manifest lacking any of the
     stage ids scope, scout, workers and sweep, naming the missing ones.
     """
@@ -621,11 +778,12 @@ def gate_notebooklm(manifest: Manifest) -> Manifest:
             if stage.halts_unless_count is None:
                 stage = replace(stage, halts_unless_count=HaltCount(("worker_count", "notebooks"), "notebooks"))
         elif stage.id == "scout":
-            if stage.schema is None:
-                schemas["<inline:scout>"] = _SCOUT_SCHEMA
-                stage = replace(stage, schema="<inline:scout>")
-            if stage.halts_unless_nonempty is None:
-                stage = replace(stage, halts_unless_nonempty="usable_sources")
+            if not all_existing:
+                if stage.schema is None:
+                    schemas["<inline:scout>"] = _SCOUT_SCHEMA
+                    stage = replace(stage, schema="<inline:scout>")
+                if stage.halts_unless_nonempty is None:
+                    stage = replace(stage, halts_unless_nonempty="usable_sources")
         elif stage.id == "workers":
             stage = replace(stage, fan_out=FanOut(kind=FAN_OUT_OVER, source="scope", field="notebooks"))
         stages.append(stage)
@@ -879,9 +1037,10 @@ def segments_for(
                 ])
             lists[_ROSTER_LIST] = tuple(roster)
         elif pipeline == _NOTEBOOKLM_PIPELINE:
-            refs = tuple(t["ref"] for t in targets if t.get("source") == _NOTEBOOKLM_PIPELINE)
-            if refs:
-                lists[_NOTEBOOKS_LIST] = refs
+            if any(t.get("source") == _NOTEBOOKLM_PIPELINE and t.get("ref") for t in targets):
+                roster, _ = notebook_slot_map(targets)
+                if roster:
+                    lists[_NOTEBOOKS_LIST] = roster
         if pipeline == REPO_PIPELINE and repo_segments:
             for key, key_brief in repo_segments:
                 segments.append((pipeline, PipelineInputs(

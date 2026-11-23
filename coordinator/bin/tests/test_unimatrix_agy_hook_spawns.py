@@ -64,7 +64,11 @@ def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
                        input=json.dumps(run_payload()), capture_output=True, text=True,
                        env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
     out = json.loads(r.stdout)
-    assert r.returncode == 0 and out["decision"] == "allow" and "overwrite" not in out
+    assert r.returncode == 0 and out["decision"] == "allow"
+    if os.name == "nt":
+        assert "overwrite" not in out
+    else:
+        assert "overwrite" in out
 
 
 def hook(stdin, home):

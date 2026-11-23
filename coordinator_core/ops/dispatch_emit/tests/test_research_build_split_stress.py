@@ -161,14 +161,10 @@ def test_notebooklm_targets_derive_or_halt(repo, with_questions):
     _put(repo, research)
     v = gate(repo, REL, writes=WRITES)
     assert v.arm is None and v.halt["kind"] == "research"
-    if with_questions:
-        s = v.halt["split"]
-        doc = yaml.safe_load((repo / s["research"]["sizing"]).read_text(encoding="utf-8"))
-        assert [t["ref"] for t in doc["research"]["targets"]] == ["why?"]
-        assert _status(repo, s["build"]["run_id"]) == "unbound"
-    else:
-        assert "notebooklm targets" in v.halt["reason"] and "split" not in v.halt
-        assert [p.name for p in (repo / "state" / "sizings").iterdir()] == [Path(REL).name]
+    s = v.halt["split"]
+    doc = yaml.safe_load((repo / s["research"]["sizing"]).read_text(encoding="utf-8"))
+    assert [t["ref"] for t in doc["research"]["targets"]] == (["why?"] if with_questions else ["A"])
+    assert _status(repo, s["build"]["run_id"]) == "unbound"
 
 
 def test_build_doc_route_follows_its_tshirt_and_research_doc_keeps_its_route():
