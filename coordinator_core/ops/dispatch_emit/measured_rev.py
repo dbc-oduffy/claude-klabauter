@@ -322,9 +322,10 @@ class MeasureUnavailable(OSError):
 def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
     """Recorded paths whose worktree blob no longer matches the record, plus each `removed` path
     that exists again. `[]` when `run_dir` holds no record. Hash-only: spawns nothing and reads
-    no object. A None read of a path that still exists is re-read once; still None raises
-    `MeasureUnavailable` (an OSError, so fail-closed callers stay safe). A path gone from the
-    worktree is drift. Raises OSError/ValueError on an unreadable or malformed record; callers fail closed."""
+    no object. A None bounded read of a path that still exists is re-read by the unbounded
+    in-process reader (a dropped deadline is never an answer); only a path that reader also
+    cannot hash raises `MeasureUnavailable` (an OSError, so fail-closed callers stay safe). A
+    path gone from the worktree is drift. Raises OSError/ValueError on an unreadable or malformed record; callers fail closed."""
     record = Path(run_dir) / MEASURED_REV_RECORD
     if not record.is_file():
         return []
@@ -338,7 +339,7 @@ def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
     for p, sha in blobs.items():
         got = commit.checkin_blob_sha(root, p)
         if got is None and os.path.lexists(root / p):
-            got = commit.checkin_blob_sha(root, p)
+            got = commit._checkin_blob_sha_read(root, p)
             if got is None and os.path.lexists(root / p):
                 unavailable.append(p)
                 continue

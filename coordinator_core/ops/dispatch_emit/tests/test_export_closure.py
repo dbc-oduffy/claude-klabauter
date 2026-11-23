@@ -179,6 +179,70 @@ def test_bare_dotted_submodule_and_every_package_init_are_in_the_closure(repo: P
     assert f"{lib}/likeness/pipeline/unrelated.py" not in c.paths
 
 
+def _commit(repo: Path, msg: str) -> None:
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", msg)
+
+
+def test_a_prompt_file_the_code_under_test_names_rides_the_closure(repo: Path) -> None:
+    _write(repo, "prompts/extract_v1.txt", "p")
+    _write(repo, "prompts/other_v1.txt", "q")
+    _write(repo, "pkg/loader.py", 'from pathlib import Path\nP = Path(__file__).parent.parent / "prompts" / "extract_v1.txt"\n')
+    _write(repo, "pkg/tests/test_load.py", "from pkg import loader\n")
+    _commit(repo, "prompt")
+    c = ec.test_closure(repo, [], ["pytest", "pkg/tests/test_load.py"])
+    assert c.paths is not None and "prompts/extract_v1.txt" in c.paths
+    assert "prompts/other_v1.txt" not in c.paths
+
+
+def test_a_slash_literal_matches_only_that_tracked_path(repo: Path) -> None:
+    _write(repo, "prompts/a.txt", "p")
+    _write(repo, "elsewhere/a.txt", "q")
+    _write(repo, "pkg/tests/test_open.py", 'open("prompts/a.txt")\n')
+    _commit(repo, "slash")
+    c = ec.test_closure(repo, [], ["pytest", "pkg/tests/test_open.py"])
+    assert c.paths is not None and "prompts/a.txt" in c.paths and "elsewhere/a.txt" not in c.paths
+
+
+def test_source_relative_enumeration_leaves_the_closure_unproven(repo: Path) -> None:
+    _write(repo, "pkg/walker.py", "from pathlib import Path\nFILES = list(Path(__file__).parent.parent.rglob('*.txt'))\n")
+    _write(repo, "pkg/tests/test_walk.py", "from pkg import walker\n")
+    _commit(repo, "walk")
+    c = ec.test_closure(repo, [], ["pytest", "pkg/tests/test_walk.py"])
+    assert c.paths is None and "pkg/walker.py" in c.note and c.seeds == ("pkg/tests/test_walk.py",)
+
+
+def test_unreferenced_tracked_data_under_a_closure_package_rides_the_closure(repo: Path) -> None:
+    _write(repo, "pkg/templates/unnamed.tmpl", "t")
+    _write(repo, "pkg/notes.json", "{}")
+    _write(repo, "pkg/other/__init__.py", "")
+    _write(repo, "pkg/other/blob.json", "{}")
+    _write(repo, "other/data.json", "{}")
+    _commit(repo, "pkg data")
+    c = ec.test_closure(repo, [], [SEED])
+    assert c.paths is not None
+    assert {"pkg/templates/unnamed.tmpl", "pkg/notes.json"} <= c.paths
+    assert not {"pkg/other/blob.json", "other/data.json"} & c.paths
+
+
+def test_data_beside_a_closure_module_in_a_namespace_dir_rides_the_closure(repo: Path) -> None:
+    _write(repo, "ns/helper.py", "X = 1\n")
+    _write(repo, "ns/fixture.json", "{}")
+    _write(repo, "ns/deep/fixture2.json", "{}")
+    _write(repo, "ns2/fixture3.json", "{}")
+    _commit(repo, "ns")
+    c = ec.test_closure(repo, ["ns/helper.py"], [SEED])
+    assert c.paths is not None and "ns/helper.py" in c.paths
+    assert {"ns/fixture.json", "ns/deep/fixture2.json"} <= c.paths
+    assert "ns2/fixture3.json" not in c.paths
+
+
+def test_enumeration_on_a_tmp_dir_alone_stays_scoped(repo: Path) -> None:
+    _write(repo, "pkg/tests/test_tmp.py", "def test_a(tmp_path):\n    list(tmp_path.glob('*'))\n")
+    _commit(repo, "tmp")
+    assert ec.test_closure(repo, [], ["pytest", "pkg/tests/test_tmp.py"]).paths is not None
+
+
 def test_pytest_plugins_reads_a_bare_string_and_ignores_other_names() -> None:
     assert ec._pytest_plugins('pytest_plugins = "a.b"\nother = ["c.d"]\n') == ["a.b"]
     assert ec._pytest_plugins("x = 1\n") == []

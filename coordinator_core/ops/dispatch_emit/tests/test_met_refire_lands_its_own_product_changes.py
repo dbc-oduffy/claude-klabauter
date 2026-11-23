@@ -38,7 +38,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SID = "11111111-2222-3333-4444-555555555555"
 _REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0, "wave_reviews": [WAVE_REVIEW]}
-_MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+_MET = {"items": [{"id": "R1", "status": "met", "wired": True, "evidence": "refire lands a.py"}]}
 _MET_FOREIGN = {"items": [{"id": "R1", "status": "met", "wired": True, "met_by": "f" * 40}]}
 
 B = "README.md"

@@ -44,7 +44,7 @@ def test_list_without_router_lists_sessions_dir_and_succeeds(monkeypatch: pytest
         rc = us.main(["--list", "--endpoint-dir", d])
     cap = capsys.readouterr()
     rows = _rows(cap.out)
-    assert rc == 0 and cap.out.split("\n")[0] == "NAME\tBOX\tTHIS-BOX\tVENDOR\tSTATE"
+    assert rc == 0 and cap.out.split("\n")[0] == "NAME\tBOX\tTHIS-BOX\tVENDOR\tSTATE\tPENDING"
     assert [r[0] for r in rows] == ["mac-claude", "codex-x", "dp-claude"]
     assert [r[3] for r in rows] == ["claude", "codex", "claude"]
     assert rows[2][1] == "machine-b" and rows[0][1] == rows[1][1] != "machine-b"
@@ -60,7 +60,7 @@ def test_list_on_windows_uses_router_when_available(monkeypatch: pytest.MonkeyPa
                         "agents": [{"name": "codex-x", "box": "machine-a", "vendor": "codex", "this_box": True}]})
     monkeypatch.setattr(us, "_router", lambda: fake)
     rc = us.main(["--list"])
-    assert rc == 0 and "codex-x\tmachine-a\tyes\tcodex\tready" in capsys.readouterr().out
+    assert rc == 0 and "codex-x\tmachine-a\tyes\tcodex\tready\t" in capsys.readouterr().out
 
 
 def test_session_entries_reads_live_pid_entries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -169,10 +169,28 @@ def test_list_prints_agents_rows_with_box_and_vendor(monkeypatch: pytest.MonkeyP
                        {"name": "sess", "box": "machine-b", "vendor": "claude", "this_box": True}]}
     rc, fake = _run(monkeypatch, resp, ["--list"])
     out = capsys.readouterr().out.split("\n")
-    assert out[0] == "NAME\tBOX\tTHIS-BOX\tVENDOR\tSTATE"
-    assert rc == 0 and out[1:3] == ["p\tmac\tno\tcodex\tready", "sess\tmachine-b\tyes\tclaude\tsession"]
+    assert out[0] == "NAME\tBOX\tTHIS-BOX\tVENDOR\tSTATE\tPENDING"
+    assert rc == 0 and out[1:3] == ["p\tmac\tno\tcodex\tready\t-", "sess\tmachine-b\tyes\tclaude\tsession\t-"]
     assert "stale" not in "".join(out) and "q" not in out
     assert fake.reqs[0]["as"] == "cli"
+
+
+def test_list_renders_each_codex_peers_pending_count_and_oldest_age(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    resp = {"ok": True, "peers": ["cx", "idle"], "reachable": ["cx", "idle", "sess"],
+            "agents": [{"name": "cx", "box": "mac", "vendor": "codex"}, {"name": "idle", "box": "mac", "vendor": "codex"},
+                       {"name": "sess", "box": "mac", "vendor": "claude"}],
+            "codex_pending": {"cx": {"pending": 7, "oldest_age_s": 125.4, "failed": []},
+                              "idle": {"pending": 0, "oldest_age_s": 0.0, "failed": []}}}
+    rc, _ = _run(monkeypatch, resp, ["--list"])
+    out = capsys.readouterr().out.split("\n")
+    assert rc == 0 and [row.split("\t")[5] for row in out[1:4]] == ["7, oldest 2m05s", "0", "-"]
+
+
+def test_send_the_router_held_prints_held_not_sent_and_exits_zero(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    rc, _ = _run(monkeypatch, {"ok": True, "held": True, "pending": 4, "oldest_age_s": 42.0, "failed": []}, ["--to", "cx", "hi"])
+    cap = capsys.readouterr()
+    assert rc == 0 and cap.out.strip() == "held for cx: 4 pending, oldest 42s"
+    assert "sent to" not in cap.out and cap.err == ""
 
 
 def test_as_flag_is_rejected_as_unknown_argument(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -187,7 +205,7 @@ def test_list_marks_a_router_stale_agent_row_stale(monkeypatch: pytest.MonkeyPat
                        {"name": "q", "box": "mac", "vendor": "codex", "stale": False}]}
     rc, _ = _run(monkeypatch, resp, ["--list"])
     out = capsys.readouterr().out.split("\n")
-    assert rc == 0 and out[1:3] == ["p\tmac\t-\tcodex\tstale", "q\tmac\t-\tcodex\tready"]
+    assert rc == 0 and out[1:3] == ["p\tmac\t-\tcodex\tstale\t-", "q\tmac\t-\tcodex\tready\t-"]
 
 
 def test_send_the_router_refuses_exits_nonzero_with_nothing_sent(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -200,7 +218,7 @@ def test_list_from_older_router_renders_dashes(monkeypatch: pytest.MonkeyPatch, 
     resp = {"ok": True, "peers": ["p"], "reachable": ["p", "sess"]}
     rc, _ = _run(monkeypatch, resp, ["--list"])
     out = capsys.readouterr().out.split("\n")
-    assert rc == 0 and out[1:3] == ["p\t-\t-\t-\tready", "sess\t-\t-\t-\tsession"]
+    assert rc == 0 and out[1:3] == ["p\t-\t-\t-\tready\t-", "sess\t-\t-\t-\tsession\t-"]
 
 
 def test_list_without_reachable_field_fails(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -264,7 +282,18 @@ def test_send_to_a_mirror_with_no_recorded_outcome_is_undelivered_and_exits_one(
     rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
     cap = capsys.readouterr()
     assert rc == 1 and "sent to" not in cap.out
-    assert "undelivered: fe: no far ingest ack within" in cap.err and "outcome is unknown" in cap.err
+    assert "undelivered: fe: no far ingest ack within" in cap.err and "receiver enqueue: unknown" in cap.err
+    assert "`receipts fe " in cap.err
+
+
+def test_a_refused_row_says_not_enqueued_and_an_unconfirmed_row_says_unknown(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(us, "_is_mirror", lambda n: True)
+    for row, state in (({"ok": False, "error": "relay: target mismatch"}, "not enqueued"),
+                       ({"ok": False, "error": "ssh exit 255: x; far write unconfirmed; check", "unconfirmed": True}, "unknown")):
+        monkeypatch.setattr(us, "relay_outcome", lambda n, since, row=row: row)
+        rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
+        assert rc == 1 and f"receiver enqueue: {state}" in capsys.readouterr().err
+    assert us.enqueue_state({"ok": True}) == "enqueued" and us.enqueue_state(None) == "unknown"
 
 
 def test_hostless_mirror_rows_still_count_as_mirrors(monkeypatch: pytest.MonkeyPatch) -> None:

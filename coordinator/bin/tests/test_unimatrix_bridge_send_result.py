@@ -103,14 +103,14 @@ def test_a_mirror_whose_name_disagrees_with_its_far_name_is_refused_naming_name_
 def test_every_send_records_its_outcome_and_a_failure_notifies_the_sender(env, monkeypatch: pytest.MonkeyPatch, returncode, ok) -> None:
     bridge, deliveries = env
     events, rows, _ = drive(bridge, deliveries, monkeypatch, returncode)
-    assert events == ["write", ("close", 0)]  # the client is answered at custody, before any verdict row
+    assert events == [("close", 0)]  # custody closes silently, before any verdict row
     assert [r["ok"] for r in rows] == [ok]
     assert isinstance(rows[0]["ms"], int)
     assert ("error" in rows[0]) == (not ok)
     assert bool(bridge.notices) == (not ok)
 
 
-def test_sender_is_answered_before_the_ssh_leg_runs_and_the_answer_is_accepted(env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_custody_closes_silently_before_the_ssh_leg_runs_and_writes_nothing(env, monkeypatch: pytest.MonkeyPatch) -> None:
     bridge, deliveries = env
     events = []
 
@@ -122,17 +122,17 @@ def test_sender_is_answered_before_the_ssh_leg_runs_and_the_answer_is_accepted(e
     conn = Conn(events, deliveries)
     bridge.serve_one(conn)
     # The second ssh is the `receipts` reconcile a reply-less exit 0 earns.
-    assert events == ["write", ("close", 0), "ssh", "ssh"]
-    assert conn.replies == [{"ok": True, "accepted": True}]
+    assert events == [("close", 0), "ssh", "ssh"]
+    assert conn.replies == []  # silence is acceptance: nothing is written on custody
 
 
-def test_a_far_leg_slower_than_the_client_deadline_is_answered_accepted_and_a_later_failure_still_lands(env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_far_leg_slower_than_the_client_deadline_is_closed_silently_and_a_later_failure_still_lands(env, monkeypatch: pytest.MonkeyPatch) -> None:
     bridge, deliveries = env
     answered, release = threading.Event(), threading.Event()
 
     class SlowConn(Conn):
-        def write(self, data) -> None:
-            super().write(data)
+        def close(self) -> None:
+            super().close()
             answered.set()
 
     def run(argv, **kw):
@@ -145,7 +145,7 @@ def test_a_far_leg_slower_than_the_client_deadline_is_answered_accepted_and_a_la
     worker.start()
     try:
         assert answered.wait(5), "client verdict waited on the far ssh leg"
-        assert conn.replies == [{"ok": True, "accepted": True}]
+        assert conn.replies == []
         assert not deliveries.exists() and bridge.notices == []
     finally:
         release.set()
@@ -153,7 +153,7 @@ def test_a_far_leg_slower_than_the_client_deadline_is_answered_accepted_and_a_la
     rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
     assert [r["ok"] for r in rows] == [False] and "Connection timed out" in rows[0]["error"]
     assert bridge.notices == [rows[0]["error"]]
-    assert conn.replies == [{"ok": True, "accepted": True}]  # the failure is never a second answer
+    assert conn.replies == []  # the failure is never an answer
 
 
 def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch: pytest.MonkeyPatch) -> None:

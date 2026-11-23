@@ -3896,3 +3896,11 @@ def test_launcher_sac_blocked_is_false_off_windows(monkeypatch):
     monkeypatch.setattr(ui.sys, "platform", "linux")
     monkeypatch.setitem(sys.modules, "winreg", _fake_winreg(1))
     assert ui.launcher_sac_blocked() is False
+
+
+def test_rendered_doctrine_binds_skills_root_and_leaves_no_token(tmp_path):
+    skills = tmp_path / "plugin" / "skills"
+    block = ui.render_peer_doctrine(tmp_path, skills_root=skills)
+    assert f"`{skills}/<name>/SKILL.md`" in block
+    assert not re.search(r"\{[A-Z_]+\}", block)
+    assert f"`{ui.SKILLS_ROOT}`" in ui.render_peer_doctrine(tmp_path)

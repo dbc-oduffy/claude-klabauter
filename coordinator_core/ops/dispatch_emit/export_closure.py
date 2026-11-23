@@ -167,6 +167,69 @@ def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -
     return reach
 
 
+_STRING_LITERAL_RE = re.compile(r"""["']([^"'\\\n]{3,200})["']""")
+_ENUMERATES_RE = re.compile(r"\.(?:rglob|glob|iterdir|scandir)\(|os\.(?:listdir|walk)\(")
+_SOURCE_RELATIVE_RE = re.compile(r"__file__|\.parents\[|\.parent\.parent")
+
+
+def _data_reach(root: Path, py_paths: Collection[str], tracked: Collection[str]) -> tuple:
+    """`(data, unproven)`: tracked non-Python files a closure module names by a string literal (a full
+    tracked path, a path suffix, or a bare file name), and the first closure module that enumerates a
+    directory relative to its own source tree, whose reads no literal bounds.
+
+    Trap: the literal may be only the file name (`Path(__file__).parent.parent / "prompts" / "x.txt"`),
+    so a name with an extension matches by basename; over-including only widens the mirror."""
+    by_base: dict = {}
+    for p in tracked:
+        if not p.endswith(".py"):
+            by_base.setdefault(p.rpartition("/")[2], []).append(p)
+    data: Set[str] = set()
+    unproven = ""
+    for rel in sorted(py_paths):
+        if not rel.endswith(".py"):
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for lit in _STRING_LITERAL_RE.findall(text):
+            lit = lit.replace("\\", "/")
+            while lit.startswith("./"):
+                lit = lit[2:]
+            base = lit.rpartition("/")[2]
+            if "." not in base:
+                continue
+            for p in by_base.get(base, ()):
+                if "/" not in lit or p == lit or p.endswith("/" + lit):
+                    data.add(p)
+        if not unproven and _ENUMERATES_RE.search(text) and _SOURCE_RELATIVE_RE.search(text):
+            unproven = rel
+    return data, unproven
+
+
+def _package_data(py_paths: Collection[str], tracked: Collection[str]) -> Set[str]:
+    """Tracked non-Python files under each directory holding a closure module (a package or a namespace
+    directory without `__init__.py`), nested non-package directories included.
+
+    Trap: a nested package is its own boundary; its data rides only when the closure reaches one of its
+    modules, so a sibling package's data never widens the mirror. The repo root is never a wanted dir."""
+    inits = {p[: -len("__init__.py")].rstrip("/") for p in tracked if p.endswith("__init__.py")}
+    wanted = {d for d in (p.rpartition("/")[0] for p in py_paths if p.endswith(".py")) if d}
+    if not wanted:
+        return set()
+    boundary = inits | wanted
+    out: Set[str] = set()
+    for p in tracked:
+        if p.endswith(".py"):
+            continue
+        d = p.rpartition("/")[0]
+        while d and d not in boundary:
+            d = d.rpartition("/")[0]
+        if d in wanted:
+            out.add(p)
+    return out
+
+
 def test_closure(root: Path | str, declared: Sequence[str], argv: Sequence[str]) -> Closure:
     """The closure of the test files `argv` and `declared` name, or `paths=None` with a note when no
     test seed exists or `argv` names a directory (whose tests the closure cannot enumerate)."""
@@ -191,4 +254,7 @@ def test_closure(root: Path | str, declared: Sequence[str], argv: Sequence[str])
     # imports as a namespace package and `from pkg import sub` fails at collection (036bcf).
     for rel in list(paths):
         paths |= test_reach._package_inits(rel, tracked)
-    return Closure(frozenset(paths), tuple(seeds), "")
+    data, unproven = _data_reach(root, paths, tracked)
+    if unproven:
+        return Closure(None, tuple(seeds), f"{unproven} enumerates files relative to its source tree; closure unproven, full fill")
+    return Closure(frozenset(paths | data | _package_data(paths, tracked)), tuple(seeds), "")

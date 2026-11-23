@@ -658,32 +658,6 @@ def _peer_only_after_checkpoint(
         return set()
 
 
-def _withhold_importers_of_withheld(root: Path, product: list, removed: list, owner: dict, withheld: dict) -> bool:
-    """Withhold, to a fixpoint, each chunk whose landing ``.py`` imports a name only a withheld path
-    binds (reason ``import-closure-untracked``); True when any chunk was added. A finding that names
-    no withheld path stays provenance. Bounded by the chunk count; zero spawns per pass."""
-    from coordinator_core.ops.dispatch_emit import landing_integrity
-
-    changed = False
-    for _ in range(len({*owner.values()}) + 1):
-        live = [p for p in product if p not in withheld]
-        found = landing_integrity.withheld_closure_findings(
-            root, live, [p for p in removed if p not in withheld], withheld=sorted(withheld))
-        bad = {
-            owner[f.path] for f in found
-            if f.path in owner and owner[f.path] not in {owner[p] for p in withheld if p in owner}
-            and any(f"; {w} is " in (f.detail or "") for w in withheld)
-        }
-        if not bad:
-            return changed
-        withheld.update({
-            p: landing_integrity.IMPORT_CLOSURE_UNTRACKED
-            for p in product + removed if p not in withheld and owner.get(p) in bad
-        })
-        changed = True
-    return changed
-
-
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -880,10 +854,13 @@ def _land(
         own_changed = own_differ | own_gone
     _withhold_run_dirt(withheld, run_written, own_changed, set(paths) | set(deleted))
     from coordinator_core.ops.dispatch_emit.halted_record_eviction import IMPORT_RISK_UNSCANNED, plan_tree_eviction
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import changed_python_paths
 
+    # One ``*.py`` status read, only when a changed run-owned .py could reach the import scan.
+    python_dirt = changed_python_paths(root) if any(p.endswith(".py") for p in own_changed) else None
     eviction = plan_tree_eviction(
         root, record_dir_rel, run_written, own_changed, [*run_written, *owner, *declared], withheld, paths, run_id,
-        halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
+        python_dirt=python_dirt, halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
     )
 
     if not paths and not deleted:

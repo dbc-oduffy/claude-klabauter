@@ -172,6 +172,9 @@ def skills_root(tmp_path: Path) -> Path:
     for name in ("alpha", "beta"):
         (root / name).mkdir(parents=True)
         (root / name / "SKILL.md").write_text(f"# {name}\n")
+    (root / "gamma").mkdir()
+    (root / "gamma" / "SKILL.md").write_text("# gamma\n")
+    (root / "codex-core-skills.txt").write_text("# core\nalpha\n\nbeta  # resident\n", encoding="utf-8")
     (root / "notaskill").mkdir()
     (root / "notaskill" / "README.md").write_text("x")
     (root / "loose.md").write_text("x")
@@ -184,7 +187,45 @@ def test_codex_skills_one_entry_per_skill_dir(tmp_path: Path, skills_root) -> No
     assert (dest / "alpha" / "SKILL.md").read_text() == "# alpha\n"
     assert (dest / "beta" / "SKILL.md").is_file()
     assert not (dest / "notaskill").exists()
+    assert not (dest / "gamma").exists()
     assert ds.seed_codex_skills(dest, skills_root) == ["alpha", "beta"]
+
+
+def test_codex_core_list_change_prunes_managed_non_core_and_keeps_foreign(tmp_path: Path, skills_root) -> None:
+    dest = tmp_path / "skills"
+    (dest / "mine").mkdir(parents=True)
+    (dest / "mine" / "SKILL.md").write_text("user skill")
+    (skills_root / "codex-core-skills.txt").write_text("alpha\nbeta\ngamma\n")
+    assert ds.seed_codex_skills(dest, skills_root) == ["alpha", "beta", "gamma"]
+    (skills_root / "codex-core-skills.txt").write_text("alpha\n")
+    assert ds.seed_codex_skills(dest, skills_root) == ["alpha"]
+    assert not (dest / "beta").exists() and not (dest / "gamma.coordinator-managed").exists()
+    assert (dest / "mine" / "SKILL.md").read_text() == "user skill"
+    assert ds.seed_codex_skills(dest, skills_root) == ["alpha"]
+
+
+def test_codex_listed_name_without_skill_dir_is_ignored_but_broken_dir_raises(tmp_path: Path, skills_root) -> None:
+    dest = tmp_path / "skills"
+    (skills_root / "codex-core-skills.txt").write_text("alpha\nnoskilldir\n")
+    assert ds.seed_codex_skills(dest, skills_root) == ["alpha"]
+    (skills_root / "codex-core-skills.txt").write_text("alpha\nnotaskill\n")
+    with pytest.raises(ValueError, match="notaskill"):
+        ds.seed_codex_skills(dest, skills_root)
+    assert (dest / "alpha" / "SKILL.md").is_file()
+
+
+def test_codex_without_core_list_seeds_every_skill(tmp_path: Path, skills_root) -> None:
+    dest = tmp_path / "skills"
+    (skills_root / "codex-core-skills.txt").unlink()
+    assert ds.seed_codex_skills(dest, skills_root) == ["alpha", "beta", "gamma"]
+
+
+@pytest.mark.parametrize("bad", ["..", "../x", "a/b", "a\\b"])
+def test_codex_core_list_rejects_path_like_names(tmp_path: Path, skills_root, bad) -> None:
+    (skills_root / "codex-core-skills.txt").write_text(f"alpha\n{bad}\n")
+    with pytest.raises(ValueError, match="bare skill dir names"):
+        ds.seed_codex_skills(tmp_path / "skills", skills_root)
+    assert not (tmp_path / "skills" / "alpha").exists()
 
 
 def test_codex_refresh_keeps_current_links_and_repairs_drift(tmp_path, skills_root, monkeypatch):
@@ -337,8 +378,7 @@ def test_codex_reseed_prunes_removed_skill_but_keeps_foreign(tmp_path: Path, ski
     (dest / "mine").mkdir(parents=True)
     (dest / "mine" / "SKILL.md").write_text("user skill")
     ds.seed_codex_skills(dest, skills_root)
-    import shutil
-    shutil.rmtree(skills_root / "beta")
+    (skills_root / "codex-core-skills.txt").write_text("alpha\n")
     assert ds.seed_codex_skills(dest, skills_root) == ["alpha"]
     assert not (dest / "beta").exists() and not (dest / "beta.coordinator-managed").exists()
     assert (dest / "alpha" / "SKILL.md").is_file()
@@ -364,6 +404,7 @@ def klabauter_mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> "tuple[
     spec.loader.exec_module(mod)
     (mod.SKILLS_ROOT / "required").mkdir(parents=True)
     (mod.SKILLS_ROOT / "required" / "SKILL.md").write_text("# required\n", encoding="utf-8")
+    (mod.SKILLS_ROOT / "codex-core-skills.txt").write_text("required\n", encoding="utf-8")
     return mod, home
 
 
@@ -470,6 +511,16 @@ def test_beside_install_rung_still_resolves_without_pointer(tmp_path: Path, klab
     (plugin / "global-doctrine" / "CLAUDE.md").write_text("x", encoding="utf-8")
     root, rung, _ = mod.resolve_doctrine(plugin)
     assert root == plugin.parent / "plug" and rung == "--plugin-root"
+
+
+def test_rendered_peer_doctrine_binds_skills_root_and_leaves_no_token(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("unimatrix_install_for_seed_test", BIN / "unimatrix-install.py")
+    ui = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ui)
+    skills = tmp_path / "plugin" / "skills"
+    block = ui.render_peer_doctrine(tmp_path, skills_root=skills)
+    assert f"`{skills}/<name>/SKILL.md`" in block
+    assert "{SKILLS_ROOT}" not in block and "{SEND}" not in block and "{INVOKE}" not in block
 
 
 def test_main_is_a_refusing_library_entrypoint(capsys: pytest.CaptureFixture[str]) -> None:

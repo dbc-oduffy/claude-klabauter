@@ -1871,9 +1871,15 @@ def cmd_restart_box(alias, wait=STOP_WAIT_SECONDS, link=link_peer, spawn=detache
                 pass
     link(roster, alias, resolve_key(roster, alias), say, spawn=spawn)
     counts = {}
-    for t in _box_supervisors(roster, sdir, alias, hosts, alive):
-        counts[t["role"]] = counts.get(t["role"], 0) + 1
     bad = False
+    final = _box_supervisors(roster, sdir, alias, hosts, alive)
+    for t in final:
+        counts[t["role"]] = counts.get(t["role"], 0) + 1
+    final_pids = {t["pid"] for t in final}
+    for t in targets:  # a count of one is not a handover when the one is a process that was asked to leave
+        if t["pid"] in final_pids or probe_alive(t["pid"]):
+            say(f"restart-box: {alias} old {t['role']} supervisor pid {t['pid']} is still running")
+            bad = True
     for role, _ in SUPERVISORS:
         if counts.get(role, 0) != 1:
             say(f"restart-box: {alias} has {counts.get(role, 0)} live {role} supervisors after handover")

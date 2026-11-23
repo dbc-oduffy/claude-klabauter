@@ -327,6 +327,21 @@ def test_restore_for_run_writes_only_the_record_runs_write_set(tmp_path: Path) -
     assert _refusals(rec) == {"u.py": "outside-own-paths"}
 
 
+def test_restore_for_run_refuses_the_path_head_changed_and_restores_the_unchanged_one(tmp_path: Path) -> None:
+    repo, rec, withheld = _evicted_world(tmp_path)
+    _declare(repo, RUN, ["t.py", "u.py"])
+    (repo / "t.py").write_bytes(b"a = 2\n")  # HEAD moves t.py past the recorded run base ...
+    _git(repo, "add", "t.py")
+    _git(repo, "commit", "-q", "-m", "B")
+    (repo / "t.py").write_bytes(b"a = 1\n")  # ... while the working file still holds the old bytes
+    out = hte.restore_for_run(repo, rec, RUN)
+    assert out["refused"] == {"t.py": "older-than-head"}
+    assert out["restored"] == ["u.py"]
+    assert (repo / "t.py").read_bytes() == b"a = 1\n"
+    assert (repo / "u.py").read_bytes() == withheld
+    assert _refusals(rec) == {"t.py": "older-than-head"}
+
+
 def test_restore_for_run_with_an_unreadable_record_writes_nothing(tmp_path: Path) -> None:
     repo, rec, _ = _evicted_world(tmp_path)
     out = hte.restore_for_run(repo, rec, RUN)

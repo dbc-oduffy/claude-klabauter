@@ -180,6 +180,20 @@ def test_receipts_mode_returns_the_sessions_rows_since_the_timestamp(relay):
     assert [r["digest"] for r in got["rows"]] == [hashlib.sha256(b"new").hexdigest()]
 
 
+def test_receipts_resolve_by_every_id_the_roster_prints(relay, monkeypatch):
+    monkeypatch.setattr(relay, "local_box", lambda: "mini")
+    monkeypatch.setattr(relay, "_REACHED", {"pid": 4242, "name": "fe", "session": SID})
+    relay.record_receipt(SID, b"hello\n", now=2000)
+    monkeypatch.setattr(relay, "_REACHED", {"pid": 9, "name": "zed", "session": "other-session"})
+    relay.record_receipt("other-session", b"x\n", now=2000)
+    for ident in (SID, "fe", "fe.mini", "4242"):
+        assert [r["session"] for r in relay.receipts(ident, 0.0)["rows"]] == [SID], ident
+    assert relay.receipts("nobody", 0.0)["rows"] == [] and relay.receipts("4243", 0.0)["rows"] == []
+    assert relay.parse_mode("receipts fe.mini 0") == ("receipts", ("fe.mini", 0.0))
+    assert relay.parse_mode("receipts 4242 0") == ("receipts", ("4242", 0.0))
+    assert "roster prints" in relay.__doc__
+
+
 def test_receipts_with_no_file_is_an_empty_ok_reply(relay):
     assert relay.receipts(SID, 0.0) == {"ok": True, "rows": []}
 
@@ -201,4 +215,4 @@ def test_main_receipts_mode_prints_the_rows_and_usage_names_it(relay, monkeypatc
     monkeypatch.setenv("SSH_ORIGINAL_COMMAND", "bogus")
     with pytest.raises(SystemExit) as ex:
         relay.main()
-    assert "receipts <session-id> <since>" in str(ex.value)
+    assert "receipts <session-id|name|ref|pid> <since>" in str(ex.value)

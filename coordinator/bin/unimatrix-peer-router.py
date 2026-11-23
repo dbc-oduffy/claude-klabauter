@@ -33,6 +33,7 @@ import socket
 import stat
 import sys
 import time
+import uuid
 from pathlib import Path
 
 READY_SECONDS = 15
@@ -428,6 +429,8 @@ SEND_SCRIPT = "unimatrix-send.py"
 STALE_CODEX_ERROR = "Codex peer is stale: no live attached process"
 NO_REPLY_MARKERS = {"[unimatrix-peer-codex] no reply before timeout",
                     "[unimatrix-peer-grok] no reply before timeout"}
+HELD_REPLY = "[unimatrix-router] held behind an unechoed Codex item"
+STRANDED_REPLY = "[unimatrix-peer-codex] queued item stranded"  # unimatrix-peer-codex.py STRANDED
 NOT_DELIVERED_PREFIXES = ("[unimatrix-peer-agy] not delivered", "[unimatrix-peer-agy] delivery failed",
                           "delivery failed:")
 
@@ -737,7 +740,7 @@ def default_adapters() -> dict:
     async def codex(peer, text):
         m = mod("unimatrix-peer-codex.py", "codex")
         return await m.codex_turn(m.socket_path(), peer["target"], text, tui_held=bool(peer.get("tui")),
-                                  on_queued=peer.get("on_queued"))
+                                  on_queued=peer.get("on_queued"), on_echoed=peer.get("on_echoed"))
 
     async def agy(peer, text):
         m = mod("unimatrix-peer-agy.py", "agy")
@@ -781,6 +784,7 @@ class Router:
         self.adapters = adapters or default_adapters()
         self.ready_seconds = ready_seconds
         self.locks = {n: asyncio.Lock() for n in self.peers}
+        self.outbox = {}  # Codex peer name -> {"inflight": item|None, "held": [msg], "failed": [msg id], "p": peer row}
         self.ctl = endpoint_path(ROUTER_ENDPOINT_SEED, self.endpoint_dir)
         self.log_path = os.path.join(self.state_dir, "unimatrix-peer-router.log")
         self.faces = {}  # peer name -> Popen
@@ -1010,6 +1014,7 @@ class Router:
                     await self._stop_face(name)
                 self.peers.pop(name, None)
                 self.locks.pop(name, None)
+                self.outbox.pop(name, None)
                 continue
             self.log("adopted", name)
 
@@ -1019,6 +1024,7 @@ class Router:
             await self._stop_face(name)
         self.peers.pop(name, None)
         self.locks.pop(name, None)
+        self.outbox.pop(name, None)
         self.discovered.discard(name)
         self.log("retired", name)
 
@@ -1233,7 +1239,9 @@ class Router:
             ready = await asyncio.to_thread(self.peer_readiness)
             reachable, agents = await asyncio.to_thread(self.roster_rows, str(req.get("as") or "cli"), ready)
             return {"ok": True, "peers": sorted(listed), "reachable": reachable, "sessions": sessions,
-                    "details": details, "ready": ready, "agents": agents}
+                    "details": details, "ready": ready, "agents": agents,
+                    "codex_pending": {n: self.codex_pending(n) for n, p in listed.items()
+                                      if p.get("vendor") == "codex"}}
         if op == "send":
             peer, text = req.get("to"), req.get("text")
             by_target = {p.get("target"): n for n, p in self.peers.items()}
@@ -1285,6 +1293,8 @@ class Router:
             if self.peer_stale(peer):
                 return {"ok": False, "error": STALE_CODEX_ERROR}
             reply = await self.turn(peer, wrap_inbound(sender, text, reply_to))
+            if reply == HELD_REPLY:
+                return {"ok": True, "held": True, **self.codex_pending(peer)}
             if not_delivered(reply):
                 return {"ok": False, "error": str(reply).strip()}
             return {"ok": True, "reply": _contract().label(peer, reply)}
@@ -1394,11 +1404,88 @@ class Router:
                 out[m["name"]] = m
         return out
 
-    async def turn(self, peer, text, addressed=None):
+    def codex_pending(self, peer) -> dict:
+        """What the Codex peer's outbox holds: messages queued or held and not yet echoed, the oldest's age, failures."""
+        box = self.outbox.get(peer) or {}
+        inflight = box.get("inflight")
+        msgs = (inflight["msgs"] if inflight else []) + box.get("held", [])
+        oldest = min((m["received"] for m in msgs), default=None)
+        return {"pending": len(msgs), "oldest_age_s": round(time.time() - oldest, 1) if oldest else 0.0,
+                "failed": list(box.get("failed", []))}
+
+    def _coalesce(self, msgs) -> str:
+        """One queue item from held messages, oldest first, each headed with its sender and send time."""
+        n = len(msgs)
+        parts = [f"[{n} message{'s' if n != 1 else ''} arrived while you were mid-turn; oldest first]"]
+        for i, m in enumerate(msgs, 1):
+            when = time.strftime("%H:%M:%S", time.localtime(m["received"]))
+            parts.append(f"--- {i}/{n} from {m['sender']} at {when} ---\n{m['text']}")
+        return "\n\n".join(parts)
+
+    def _on_echo(self, peer, item) -> None:
+        """The adapter saw `item` start as a Codex turn: log each message, then flush what was held."""
+        box = self.outbox.get(peer)
+        if box is None or item["echoed"]:
+            return
+        item["echoed"] = True
+        now = time.time()
+        for m in item["msgs"]:
+            self.log("INJECTED", peer, m["id"], time.strftime("echo=%H:%M:%S", time.localtime(now)),
+                     f"latency_s={now - m['received']:.1f}")
+        if box["inflight"] is item:
+            box["inflight"] = None
+        self._flush_held(peer)
+
+    def _flush_held(self, peer) -> None:
+        """Enqueue everything held for `peer` as ONE item, as a router-owned task; a no-op while an item is unechoed."""
+        box = self.outbox.get(peer)
+        if box is None or box["inflight"] is not None or not box["held"]:
+            return
+        msgs, box["held"] = box["held"], []
+        item = {"msgs": msgs, "text": self._coalesce(msgs), "echoed": False}
+        box["inflight"] = item
+        task = asyncio.get_running_loop().create_task(self._flush_task(peer, item))
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def _flush_task(self, peer, item) -> None:
+        ids = ",".join(m["id"] for m in item["msgs"])
+        try:
+            reply = await self._run_codex_item(peer, item)
+        except Exception as e:
+            self.log("TURN-FAILED", peer, type(e).__name__, e)
+            return
+        self.log("HARVESTED", peer, ids, str(reply).strip()[:200])  # held senders get no routed reply
+
+    async def _run_codex_item(self, peer, item, on_queued=None) -> str:
+        """Run `item` through the Codex adapter; a stranded item is enqueued once more, a second miss is recorded.
+
+        When the adapter returns without the echo having been seen (socket turn, exec fallback, no
+        rollout), inflight is cleared and the held messages flush so the peer never wedges."""
+        box = self.outbox[peer]
+        p = {**box["p"], "on_queued": on_queued, "on_echoed": lambda: self._on_echo(peer, item)}
+        try:
+            reply = await self.adapters["codex"](p, item["text"])
+            if reply == STRANDED_REPLY and not item["echoed"]:
+                self.log("STRANDED", peer, ",".join(m["id"] for m in item["msgs"]), "re-enqueue")
+                reply = await self.adapters["codex"](p, item["text"])
+                if reply == STRANDED_REPLY and not item["echoed"]:
+                    ids = [m["id"] for m in item["msgs"]]
+                    self.log("STRAND-FAILED", peer, ",".join(ids))
+                    box["failed"] = (box["failed"] + ids)[-20:]
+                    return "delivery failed: queued item stranded twice and was not delivered"
+            return reply
+        finally:
+            if box["inflight"] is item:
+                box["inflight"] = None
+                self._flush_held(peer)
+
+    async def turn(self, peer, text, addressed=None) -> str:
         """One adapter turn for `peer` under its lock; a failure becomes the reply text.
 
         `addressed`, when given, collects the names the peer sent to by its own addressed send
-        during this turn, so the caller can skip the harvested reply for those.
+        during this turn, so the caller can skip the harvested reply for those. A Codex peer with an
+        unechoed item in its queue holds the message instead and returns HELD_REPLY.
         """
         p = self.peers[peer]
         lock = self.locks[peer]
@@ -1425,7 +1512,21 @@ class Router:
                 if p["vendor"] == "codex" and not p.get("tui") and self.thread_held(p["target"]):
                     p = {**p, "tui": True}
                 if p["vendor"] == "codex":
-                    p = {**p, "on_queued": release}
+                    msg_id = uuid.uuid4().hex[:12]
+                    named = re.match(r"\[([^\]\n]+)\] ", text)  # wrap_inbound's `[sender] ` head
+                    msg = {"id": msg_id, "sender": named.group(1) if named else "unknown",
+                           "received": time.time(), "text": text}
+                    self.log("INBOUND", peer, msg_id, f"from={msg['sender']}",
+                             time.strftime("received=%H:%M:%S", time.localtime(msg["received"])))
+                    box = self.outbox.setdefault(peer, {"inflight": None, "held": [], "failed": [], "p": p})
+                    box["p"] = p
+                    if box["inflight"] is not None:
+                        box["held"].append(msg)
+                        self.log("HELD", peer, msg_id, f"pending={self.codex_pending(peer)['pending']}")
+                        return HELD_REPLY
+                    item = {"msgs": [msg], "text": text, "echoed": False}
+                    box["inflight"] = item
+                    return await self._run_codex_item(peer, item, on_queued=release)
                 return await self.adapters[p["vendor"]](p, text)
             except Exception as e:
                 self.log("TURN-FAILED", peer, type(e).__name__, e)
@@ -1853,6 +1954,8 @@ class Router:
             return
         addressed = set()
         reply = await self.turn(peer, wrap_inbound(sender_name, body), addressed)
+        if reply == HELD_REPLY:
+            return  # the coalesced item's reply is harvested and logged by the outbox, not routed back
         if not sender_ep:
             return
         if sender_name in addressed:

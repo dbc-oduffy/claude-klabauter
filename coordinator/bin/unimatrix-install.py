@@ -2705,10 +2705,12 @@ def reap_stale_relays(dest_dir, ps=None, kill=None):
     return [s.pid for s in groups[rs.STALE]], [s.pid for s in groups[rs.MISMATCHED]], failed
 
 
-def render_peer_doctrine(dest_dir, template=None):
-    """Return the managed block: the doctrine template with {SEND} bound to the installed send command."""
+def render_peer_doctrine(dest_dir, template=None, skills_root=None):
+    """Return the managed block: the doctrine template with {SEND}, {INVOKE} and {SKILLS_ROOT} bound.
+
+    {SKILLS_ROOT} is the installed plugin skills tree (the module SKILLS_ROOT when `skills_root` is None)."""
     body = Path(template or PEER_DOCTRINE_TEMPLATE).read_text(encoding="utf-8").strip("\n")
-    body = body.replace("{SEND}", _hook_command(dest_dir, SEND_SCRIPT)).replace("{INVOKE}", _quote_argv([invoke_launcher_path()]))
+    body = body.replace("{SEND}", _hook_command(dest_dir, SEND_SCRIPT)).replace("{INVOKE}", _quote_argv([invoke_launcher_path()])).replace("{SKILLS_ROOT}", str(Path(skills_root or SKILLS_ROOT)))
     return f"{DOCTRINE_BEGIN}\n{body}\n{DOCTRINE_END}\n"
 
 
@@ -2977,7 +2979,7 @@ def enroll_codex_runtime(engine_root, *, consent=False, check=False, dest_dir=No
             return 7
         plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
         template = Path(plugin_root) / "templates" / "unimatrix" / "peer-doctrine.md" if plugin_root else None
-        peer_block = render_peer_doctrine(dest, template)
+        peer_block = render_peer_doctrine(dest, template, Path(plugin_root) / "skills" if plugin_root else None)
         if check:
             print("Codex runtime: native trust not probed (read-only)", file=out)
             return 0
@@ -3437,7 +3439,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
                     missing.append("agy plugin registration")
                     print(f"WARN: agy plugin not registered: {exc}", file=out)
     try:
-        block = render_peer_doctrine(dest)
+        block = render_peer_doctrine(dest, skills_root=skills_root)
     except (OSError, ValueError) as exc:
         block = None
         print(f"WARN: peer doctrine not installed: {exc}", file=out)
