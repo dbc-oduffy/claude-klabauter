@@ -825,3 +825,29 @@ class TestResetTargetComesFromSubcommandPosition:
 
     def test_an_unrecognized_global_flag_still_fails_closed(self):
         assert _git_argv_subcommand_position(["git", "--not-a-real-flag", "reset"]) is None
+
+
+class TestCheck2PytestArgvIsNotAPush:
+    """Recurrence (warp f06ae1 test leg): `python -m pytest -rfE ... -k push`
+    over a path containing `git` was denied as a forcing push -- `-rfE` is
+    pytest's report flag, matched by the `-f`-bearing short-flag regex, and
+    `-m` hid the pytest head from the confirmed-non-git check."""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "python -m pytest -rfE -p no:cacheprovider coordinator_core/git/tests/test_x.py -k " + "push",
+            "python3 -m pytest -q -rf coordinator_core/git/tests/test_x.py --deselect git::" + "push",
+            "pytest -rfE coordinator_core/git/tests/test_x.py -k " + "push",
+        ],
+    )
+    def test_pytest_invocation_is_allowed(self, cmd):
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
+
+    def test_force_push_chained_after_pytest_still_denies(self):
+        cmd = "python -m pytest -rfE x.py && git " + "push" + " origin main --" + "force"
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
+
+    def test_deny_message_names_the_matched_forcing_token(self):
+        out = check_destructive_git_orphan("git " + "push" + " -f origin main")
+        assert "forcing form '-f'" in out.summary

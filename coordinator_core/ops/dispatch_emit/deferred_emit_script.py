@@ -120,7 +120,15 @@ const HANDOVER_WAIT_CAP_S = 30;
 function _isHandover(r) {
   return !!r && _blankPath(r.path) && (r.status === 'handover_pending' || (typeof r.error === 'string' && r.error.indexOf('handover_pending') !== -1));
 }
+// Trap: a -32004 reply means the warm client timed out while the engine may have finished the mint and the script write; its
+// error text names the re-send, which a live run holding the same ask or sizing answers with that run, never a second mint.
+const INDETERMINATE_MAX_RESENDS = 2;
+function _isIndeterminate(r) {
+  return !!r && _blankPath(r.path) && typeof r.error === 'string'
+    && (r.error.indexOf('-32004') !== -1 || r.error.indexOf('warm dispatch indeterminate') !== -1 || r.error.indexOf('resend_returns_existing_run') !== -1);
+}
 let reply;
+let _resends = 0;
 for (let attempt = 1; attempt <= HANDOVER_MAX_ATTEMPTS; attempt++) {
   // Trap: a headless runner supplies engineOp and calls the op in-process; the agent relay is the harness path.
   reply = typeof engineOp === 'function'
@@ -129,6 +137,11 @@ for (let attempt = 1; attempt <= HANDOVER_MAX_ATTEMPTS; attempt++) {
       EMIT_PROMPT,
       { label: 'deferred-emit', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
     );
+  if (_isIndeterminate(reply) && _resends < INDETERMINATE_MAX_RESENDS) {
+    _resends++;
+    attempt--;
+    continue;
+  }
   if (!_isHandover(reply) || attempt === HANDOVER_MAX_ATTEMPTS) break;
   const waitS = (typeof reply.retry_after === 'number' && reply.retry_after > 0) ? Math.min(reply.retry_after, HANDOVER_WAIT_CAP_S) : HANDOVER_WAIT_FALLBACK_S;
   await new Promise((res) => setTimeout(res, waitS * 1000));

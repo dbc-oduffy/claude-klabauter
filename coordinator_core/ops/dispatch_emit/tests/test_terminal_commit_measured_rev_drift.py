@@ -39,7 +39,7 @@ def _record(root) -> None:
     path = measured_rev_record_path(root, RUN)
     path.write_text(json.dumps({
         "sha": "s", "base_sha": "b", "paths": ["a.txt"], "removed": [],
-        "blobs": {"a.txt": commit.checkin_blob_sha(root, "a.txt")},
+        "blobs": {"a.txt": commit._checkin_blob_sha_read(root, "a.txt")},
     }), encoding="utf-8")
 
 

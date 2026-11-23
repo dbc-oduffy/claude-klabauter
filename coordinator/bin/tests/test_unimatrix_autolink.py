@@ -2643,3 +2643,20 @@ def test_lan_route_with_no_address_list_spawns_no_verify_and_a_failure_reads_as_
     def boom(name):
         raise OSError("reader")
     assert env.al.lan_route(env.roster, "kim@machine-a", str(env.key), far=far, read_key=boom) is None
+
+
+def test_restart_box_old_supervisor_back_alive_is_not_handed_over_and_is_named(env):
+    add_key(env)
+    _seed_box(env)
+    rig = _RestartRig(env)
+
+    def link_revives_old(roster, alias, key, say, spawn):
+        env.live.update({500, 501})  # the old pair outlives the stop; nothing new is spawned
+        return None
+
+    rig.link = link_revives_old
+    rc, out = rig.run()
+    assert rc == 1
+    assert "restart-box: machine-a old bridge supervisor pid 500 is still running" in out
+    assert "restart-box: machine-a old inbox supervisor pid 501 is still running" in out
+    assert not any("handed over" in line for line in out)

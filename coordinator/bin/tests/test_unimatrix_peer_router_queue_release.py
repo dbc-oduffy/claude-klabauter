@@ -30,7 +30,7 @@ def _router(adapter, tmp_path, monkeypatch):
     return r
 
 
-def test_second_message_is_enqueued_while_the_first_still_awaits_its_reply(tmp_path, monkeypatch):
+def test_second_message_is_held_without_waiting_on_the_first_reply_then_coalesced_on_echo(tmp_path, monkeypatch):
     async def go():
         enqueued, gate = [], asyncio.Event()
 
@@ -38,18 +38,18 @@ def test_second_message_is_enqueued_while_the_first_still_awaits_its_reply(tmp_p
             enqueued.append(text)
             peer["on_queued"]()
             await gate.wait()
-            return f"reply {text}"
+            peer["on_echoed"]()
+            return f"reply {len(enqueued)}"
 
         r = _router(codex, tmp_path, monkeypatch)
-        first = asyncio.create_task(r.turn("codex-a", "one"))
-        second = asyncio.create_task(r.turn("codex-a", "two"))
-        for _ in range(50):
-            await asyncio.sleep(0.01)
-            if len(enqueued) == 2:
-                break
-        assert enqueued == ["one", "two"]
+        first = asyncio.create_task(r.turn("codex-a", pr.wrap_inbound("a", "one")))
+        second = asyncio.create_task(r.turn("codex-a", pr.wrap_inbound("b", "two")))
+        assert await asyncio.wait_for(second, 1) == pr.HELD_REPLY  # the first reply is still pending
+        assert len(enqueued) == 1 and "one" in enqueued[0]
         gate.set()
-        assert await first == "reply one" and await second == "reply two"
+        assert await first == "reply 1"
+        await asyncio.gather(*r.tasks)
+        assert len(enqueued) == 2 and "from b" in enqueued[1] and "two" in enqueued[1]
         assert not r.locks["codex-a"].locked() and "codex-a" not in r.addressed
 
     asyncio.run(go())

@@ -766,7 +766,28 @@ def _seg_confirmed_not_git_invocation(seg: str) -> bool:
     if not tokens:
         return False
     head = _normalize_executable_basename(tokens[0])
-    return head in _CHECK2_SAFE_NONSPAWNING_HEADS
+    return head in _CHECK2_SAFE_NONSPAWNING_HEADS or _is_pytest_argv(tokens, head)
+
+
+_PYTEST_HEADS = frozenset({"pytest", "py.test"})
+_PYTHON_HEAD_RE = re.compile(r"^(python|python3|py)(\d+(\.\d+)*)?$")
+
+
+def _is_pytest_argv(tokens: List[str], head: str) -> bool:
+    """True for `pytest ...` / `python -m pytest ...` argv. Its flags are
+    pytest's (`-rfE`, `-k push`), never git's, and the argv text cannot
+    itself launch a push. A `-c` before `-m` means inline code, which stays
+    ambiguous (scripted spawn)."""
+    if head in _PYTEST_HEADS:
+        return True
+    if not _PYTHON_HEAD_RE.match(head):
+        return False
+    for idx, tok in enumerate(tokens[1:], start=1):
+        if tok == "-c":
+            return False
+        if tok == "-m":
+            return idx + 1 < len(tokens) and tokens[idx + 1] in _PYTEST_HEADS
+    return False
 
 
 _RESET_MODE_FLAGS = ("--hard", "--soft", "--mixed", "--keep", "--merge")
@@ -1234,7 +1255,9 @@ def check_destructive_git_orphan(
         _resolved_subcommand = _seg_resolved_git_subcommand(seg_check2)
         if _resolved_subcommand is not None:
             _is_push_candidate = _resolved_subcommand == "push"
-        elif _seg_confirmed_not_git_invocation(seg_check2):
+        elif _seg_confirmed_not_git_invocation(seg_check2) or _seg_confirmed_not_git_invocation(seg):
+            # `seg` too: the free-text strip above drops `-m` (and its operand),
+            # which erases the `python -m pytest` evidence from `seg_check2`.
             # Positionally confirmed non-git, non-spawning head (`test -f
             # .../push-failures.log`, `rm -f push.log`, `grep -f
             # patterns-push.txt`) -- P2/P3 fix, see
@@ -1245,13 +1268,15 @@ def check_destructive_git_orphan(
         else:
             _is_push_candidate = bool(re.search(r"\bpush\b", seg_check2))
         if _is_push_candidate:
-            if re.search(
+            _force_m = re.search(
                 r"(--force([^-=]|$)|(^|\s)-[a-zA-Z]*f[a-zA-Z]*(\s|$)|(^|[\s\"'])\+\S+)",
                 _seg_forcing_form_scan_text(seg_check2),
-            ):
+            )
+            if _force_m:
+                _force_tok = _force_m.group(0).strip(" \t\"'") or "--force"
                 return _alt_record(
                     "deny", "destructive-git-orphan",
-                    "BLOCKED: this 'git push' uses a forcing form (--force / -f / "
+                    "BLOCKED: this 'git push' uses forcing form '" + _force_tok + "' (--force / -f / "
                     "+refspec) that rewrites remote history and can drop commits "
                     "existing only on the remote (a concurrent push you have not "
                     "fetched). --force-with-lease refuses the push if the remote "
@@ -1260,7 +1285,7 @@ def check_destructive_git_orphan(
                     (_offer("git push <remote> <branch> --force-with-lease", "the remote and branch"),),
                     _ORPHAN_ENV, **_ORPHAN_KW,
                     em_text=(
-                        "BLOCKED: this 'git push' uses a forcing form (--force / -f / "
+                        "BLOCKED: this 'git push' uses forcing form '" + _force_tok + "' (--force / -f / "
                         "+refspec) that rewrites remote history and can drop commits "
                         "existing only on the remote (a concurrent push you have not "
                         "fetched).\n\n"

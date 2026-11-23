@@ -40,10 +40,12 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     mark the sending box's mirror of <name> stale until that epoch; the router's
                     agent listing shows it as stale. `inbox <name>` clears the mark.
   source            print this file, so far boxes can vendor the current relay.
-  receipts <session-id> <since>
+  receipts <id> <since>
                     print {"ok": true, "rows": [...]}: this box's delivery receipts (session, sha256
-                    digest of the line, at/ts) for the session since that epoch. `send-session` appends one
-                    per line it wrote; the message text is never stored.
+                    digest of the line, at/ts) for the session since that epoch. <id> is any id the
+                    roster prints for the session: session id, name, `<name>.<box>` ref, or pid.
+                    `send-session` appends one per line it wrote; the message text is never stored.
+                    A row for the message is the receiver's proof it was enqueued.
   grant <grantee> <note> <ttl> <repo>
                     read the issuer's signed grant envelope (one JSON line on stdin) and hand
                     it to suite_grant.receive_relayed_grant; prints its JSON reply, exit 0 only
@@ -858,7 +860,7 @@ def record_receipt(session_id, line, now=None):
     import time
     stamp = time.time() if now is None else now
     digest = hashlib.sha256(line.rstrip(b"\n")).hexdigest()
-    row = {"session": session_id, "digest": digest, "at": stamp, "box": _own_box(), "ref": shown_ref(_REACHED.get("name")),
+    row = {"session": session_id, "digest": digest, "at": stamp, "box": _own_box(), "ref": shown_ref(_REACHED.get("name")), "name": _REACHED.get("name"), "pid": _REACHED.get("pid"),
            "ts": datetime.fromtimestamp(stamp, timezone.utc).astimezone().isoformat(timespec="seconds")}
     data = (json.dumps(row) + "\n").encode("utf-8")
     path = receipts_path()
@@ -911,7 +913,10 @@ def _trim_receipts(path):
 
 
 def receipts(session_id, since):
-    """`receipts <session-id> <since>`: this box's receipt rows for the session at or after epoch `since`."""
+    """`receipts <id> <since>`: this box's receipt rows at or after epoch `since` for `id`.
+
+    `id` is any identifier the roster prints for the session: its session id, its name, its shown
+    `<name>.<box>` ref, or its pid. Rows written before name and pid were recorded match by session or ref."""
     try:
         lines = receipts_path().read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -922,7 +927,11 @@ def receipts(session_id, since):
             row = json.loads(raw)
         except ValueError:
             continue
-        if isinstance(row, dict) and row.get("session") == session_id and (row.get("at") or 0) >= since:
+        if not isinstance(row, dict) or (row.get("at") or 0) < since:
+            continue
+        pid = row.get("pid")
+        if session_id in (row.get("session"), row.get("name"), row.get("ref")) or (
+                isinstance(pid, int) and session_id == str(pid)):
             rows.append(row)
     return {"ok": True, "rows": rows}
 
@@ -2132,7 +2141,7 @@ def main() -> None:
         sys.exit(0 if reply.get("ok") is True and reply.get("authorized_keys") != "admin_keys_unwritable" else 1)
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
-        sys.exit("usage: roster | capabilities | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "
+        sys.exit("usage: roster | capabilities | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id|name|ref|pid> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "
                  "grant <grantee> <note> <ttl> <repo> | revoke <grantee> | keypin <box_id> | freshness | membership get | membership put")
     mode, arg = parsed
     if mode == "membership":

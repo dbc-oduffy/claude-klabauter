@@ -556,3 +556,66 @@ def test_windows_headless_turn_still_replies_when_the_thread_is_unbound(tmp_path
 
     monkeypatch.setattr(pcx, "register_face", unbound)
     assert asyncio.run(pcx.codex_turn(str(tmp_path / "nope.sock"), "thr-1", "hello")) == "hi there"
+
+
+class _Done:
+    returncode, stderr = 0, ""
+
+
+def _scripted_tail(monkeypatch, polls):
+    """queue_turn against a fake rollout: each poll of the tail yields the next list of rows."""
+    batches = iter(polls)
+
+    class Tail:
+        def __init__(self, thread_id):
+            pass
+
+        def rows(self):
+            return iter(next(batches, []))
+
+    monkeypatch.setattr(pcx, "codex_binary", lambda: "codex")
+    monkeypatch.setattr(pcx, "RolloutTail", Tail)
+    monkeypatch.setattr(pcx.subprocess, "run", lambda *a, **k: _Done())
+
+
+def _user(text):
+    return {"type": "response_item", "payload": {"type": "message", "role": "user",
+                                                 "content": [{"type": "input_text", "text": text}]}}
+
+
+def _final(text):
+    return {"type": "response_item", "payload": {"type": "message", "role": "assistant", "phase": "final_answer",
+                                                 "content": [{"type": "output_text", "text": text}]}}
+
+
+def _event(kind):
+    return {"type": "event_msg", "payload": {"type": kind}}
+
+
+def test_queue_turn_signals_on_echoed_once_when_the_queued_text_starts(monkeypatch):
+    _scripted_tail(monkeypatch, [[_event("task_complete")], [_user("hello m"), _final("done")]])
+    echoed = []
+    out = asyncio.run(pcx.queue_turn("thr-1", "m", interval=0, on_echoed=lambda: echoed.append(1)))
+    assert out == "done" and echoed == [1]
+
+
+def test_queue_turn_reports_stranded_when_a_turn_ended_and_the_item_never_started(monkeypatch):
+    monkeypatch.setattr(pcx, "STRAND_GRACE_SECONDS", 0)
+    _scripted_tail(monkeypatch, [[_event("turn_aborted")], []])
+    echoed = []
+    out = asyncio.run(pcx.queue_turn("thr-1", "m", interval=0, on_echoed=lambda: echoed.append(1)))
+    assert out == pcx.STRANDED and not echoed
+
+
+def test_queue_turn_behind_a_long_turn_is_not_stranded(monkeypatch):
+    monkeypatch.setattr(pcx, "STRAND_GRACE_SECONDS", 0)
+    _scripted_tail(monkeypatch, [[_final("working")], [], []])  # no turn boundary: still queued behind the turn
+    out = asyncio.run(pcx.queue_turn("thr-1", "m", timeout=0.05, interval=0.01))
+    assert out == pcx.NO_REPLY
+
+
+def test_a_foreign_turn_after_the_boundary_defers_the_strand_verdict(monkeypatch):
+    monkeypatch.setattr(pcx, "STRAND_GRACE_SECONDS", 0)
+    _scripted_tail(monkeypatch, [[_event("task_complete"), _user("pm typed this")], [], []])
+    out = asyncio.run(pcx.queue_turn("thr-1", "m", timeout=0.05, interval=0.01))
+    assert out == pcx.NO_REPLY

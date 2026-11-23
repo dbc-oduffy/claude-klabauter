@@ -1,85 +1,76 @@
-"""A halt landing commits only run docs; the importer-of-withheld cascade names `import-closure-untracked`."""
+"""The default halt path scans imports of a changed run-owned ``.py`` and parks its blob."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from coordinator_core.ops.dispatch_emit import land_run_halt, landing_integrity
+from coordinator_core.ops.dispatch_emit import halt_tree_evict, halted_record_commit
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.halted_record_eviction import EVICTED_PARKED, IMPORT_RISK_UNSCANNED
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import repo as product_repo  # noqa: F401
-from coordinator_core.ops.dispatch_emit.tests import test_land_run_halt_record as halt
-from coordinator_core.ops.dispatch_emit.tests.test_land_run_halt_record import repo as halt_repo  # noqa: F401
+from coordinator_core.ops.dispatch_emit.tests.test_land_run_halt_record import (  # noqa: F401
+    LEDGER,
+    PASSING,
+    RUN,
+    _call,
+    _git,
+    _record,
+    _write,
+    repo,
+)
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-REASON = landing_integrity.IMPORT_CLOSURE_UNTRACKED
-
-
-def _author(root, rel: str, text: str) -> None:
-    (root / rel).parent.mkdir(parents=True, exist_ok=True)
-    (root / rel).write_text(text, encoding="utf-8", newline="\n")
-
-
-def _callee_chunk_withheld_by_the_integrity_pass(root) -> None:
-    halt._record(root)
-    halt._chunks(root, {"C1": ["a.py"], "C2": ["pkg/b.py", "broken.py"]})
-    _author(root, "a.py", "from pkg.b import f\n")
-    _author(root, "pkg/__init__.py", "")
-    _author(root, "pkg/b.py", "def f():\n    return 1\n")
-    _author(root, "broken.py", "def (:\n")
+OWN = "pkg/own.py"
+PEER = "pkg/peer_importer.py"
 
 
-def test_importer_of_a_chunk_the_integrity_pass_withholds_is_withheld(halt_repo):
-    repo = halt_repo
-    _callee_chunk_withheld_by_the_integrity_pass(repo)
-
-    out = halt._call(repo, halt.LEDGER, **halt.PASSING)
-
-    for p in ("a.py", "pkg/b.py", "broken.py"):
-        assert out["withheld"][p] == land_run_halt.HALT_RECORD_ONLY, out
-    names = halt._names(repo, out["sha"])
-    assert not {"a.py", "pkg/b.py", "broken.py"} & set(names), names
-    assert any(n.endswith("/halted.json") for n in names), names
-
-
-def test_cascade_withholds_the_importer_of_a_withheld_callee_by_reason(halt_repo):
-    repo = halt_repo
-    _callee_chunk_withheld_by_the_integrity_pass(repo)
-    withheld = {"pkg/b.py": "peer-held", "broken.py": REASON}
-    owner = {"a.py": "C1", "pkg/b.py": "C2", "broken.py": "C2"}
-
-    changed = land_run_halt._withhold_importers_of_withheld(repo, ["a.py", "pkg/b.py", "broken.py"], [], owner, withheld)
-
-    assert changed is True and withheld["a.py"] == REASON, withheld
+@pytest.fixture
+def halted_py(repo, monkeypatch):
+    """OWN changes its binding surface against HEAD; only measured-rev.json names it as the run's."""
+    _write(repo, OWN, "V = 0\n")
+    _write(repo, PEER, "X = 0\n")
+    _git(repo, "add", "pkg")
+    _git(repo, "commit", "-q", "-m", "seed pkg")
+    head_blob = _git(repo, "rev-parse", f"HEAD:{OWN}").strip()
+    _write(repo, OWN, "V = 1\nNEW = 2\n")
+    _record(repo)
+    _write(
+        repo, f"{RECORD_DIR_ROOT}/{RUN}/manifest.json",
+        json.dumps({"rows": [], "doc_writes": [], "write_baseline": {OWN: head_blob}}),
+    )
+    _write(repo, f"{RECORD_DIR_ROOT}/{RUN}/measured-rev.json", json.dumps({"paths": [OWN], "removed": []}))
+    monkeypatch.setattr(halted_record_commit, "_run_written", lambda *_a, **_k: [])
+    return repo
 
 
-def test_cascade_pass_is_a_no_op_when_no_finding_names_a_withheld_path(halt_repo):
-    repo = halt_repo
-    _author(repo, "a.py", "from wt_pkg.mod import X\n")
-    _author(repo, "wt_pkg/__init__.py", "")
-    _author(repo, "wt_pkg/mod.py", "X = 1\n")
-    withheld = {"other.py": "peer-held"}
-
-    changed = land_run_halt._withhold_importers_of_withheld(repo, ["a.py"], [], {"a.py": "C1"}, withheld)
-
-    assert changed is False and withheld == {"other.py": "peer-held"}
+def _blob_names(root) -> list:
+    blobs = root / RECORD_DIR_ROOT / RUN / halt_tree_evict.BLOBS_DIR
+    return sorted(p.name for p in blobs.iterdir()) if blobs.is_dir() else []
 
 
-def test_halt_landing_withholds_an_importer_and_its_callee_chunk_alike(halt_repo):
-    repo = halt_repo
-    halt._record(repo)
-    halt._chunks(repo, {"C1": ["a.py"], "C2": ["pkg/b.py"]})
-    _author(repo, "a.py", "from pkg.b import f\n")
-    _author(repo, "pkg/__init__.py", "")
-    _author(repo, "pkg/b.py", "def f():\n    return 1\n")
+def test_a_changed_py_is_parked_and_scanned_not_left_unscanned(halted_py):
+    out = _call(halted_py, LEDGER, **PASSING)
 
-    out = halt._call(repo, halt.LEDGER, **halt.PASSING)
+    assert out["withheld"][OWN] == EVICTED_PARKED
+    assert IMPORT_RISK_UNSCANNED not in out["withheld"].values()
+    assert out["evicted"] == [OWN]
+    assert (halted_py / OWN).read_text(encoding="utf-8") == "V = 0\n"
+    assert len(_blob_names(halted_py)) == 1
 
-    assert out["committed"] is True, out
-    assert out["withheld"]["a.py"] == land_run_halt.HALT_RECORD_ONLY, out
-    assert out["withheld"]["pkg/b.py"] == land_run_halt.HALT_RECORD_ONLY, out
-    assert not {"a.py", "pkg/b.py"} & set(halt._names(repo, out["sha"]))
+
+def test_a_dirty_importer_outside_the_parked_set_keeps_the_py_in_the_tree(halted_py):
+    _write(halted_py, PEER, "from pkg.own import NEW\n")
+
+    out = _call(halted_py, LEDGER, **PASSING)
+
+    assert IMPORT_RISK_UNSCANNED not in (out.get("withheld") or {}).values()
+    assert (halted_py / OWN).read_text(encoding="utf-8") == "V = 1\nNEW = 2\n"
+    assert _blob_names(halted_py) == []
 
 
 def test_product_landing_carries_an_importer_with_a_name_in_a_landing_chunk(product_repo):

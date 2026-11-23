@@ -387,15 +387,20 @@ def relay_send(conn) -> None:
     """Relay one client's message lines; answer the client when the bridge takes custody, not after the far leg.
 
     Custody is the point just before the far ssh run: frames parsed, mirror validated, nothing refused.
-    There the client gets `{"ok": true, "accepted": true}` and its connection closes, so a far leg slower
-    than the client's wait window never reads as a failed send. A refusal or local fault before custody
-    answers `{"ok": false, "error": ...}`. A far failure after custody is never an answer: it lands as a
-    deliveries row and the sender's failure notice (`_record_outcome`), and the bridge never resends."""
+    There the connection closes having written nothing: silence is acceptance, as on the router faces
+    (`unimatrix-peer-router.py` on_conn), because the client reads any written line as a refusal. A refusal
+    or local fault before custody writes one `{"ok": false, "error": ...}` line. A far failure after custody
+    is never an answer: it lands as a deliveries row and the sender's failure notice (`_record_outcome`),
+    and the bridge never resends."""
     buf = b""
     while chunk := conn.read():
         buf += chunk
     _verdict.errors = []
     _verdict.answered = False
+
+    def accept() -> None:
+        _verdict.answered = True
+        conn.close()
 
     def answer(reply) -> None:
         _verdict.answered = True
@@ -406,7 +411,7 @@ def relay_send(conn) -> None:
         conn.close()
 
     try:
-        _relay_deliver(buf, on_custody=lambda: answer({"ok": True, "accepted": True}))
+        _relay_deliver(buf, on_custody=accept)
         if not _verdict.answered:
             errors = [e for e in _verdict.errors if e]
             answer({"ok": False, "error": (errors[0] if errors else "nothing to send")[-300:]})
@@ -702,7 +707,7 @@ def pump_sock_to_local(conn, s):
 
 def serve_one(conn) -> None:
     if cfg.port is None:
-        relay_send(conn)  # answers and closes conn after the verdict
+        relay_send(conn)  # closes conn at custody (silent) or after a refusal line
         return
     s = socket.create_connection((LOOPBACK, cfg.port))
     t = threading.Thread(target=pump_sock_to_local, args=(conn, s), daemon=True)
@@ -741,7 +746,7 @@ def _name_routed(msg, src):
     return msg
 
 
-def localize_from(data):
+def localize_from(data) -> tuple:
     # The local inbox drops a message whose `from` is not an address registered on
     # this box, so a far socket path is swapped for its mirror's local endpoint.
     # Returns (bytes, inject port of the mirror's bridge or None).
@@ -759,6 +764,10 @@ def localize_from(data):
         return data, None  # already localized: a mirror of this box owns the address
     m = mirror_for(src, entries)
     if not m:
+        m = _reply_mirror(msg, entries)
+        if m:
+            m = {**m, "injectPort": None}  # served by the box's reply inbox, not a session bridge
+    if not m:
         log.write(f"no mirror for sender {src}\n")
         named = _name_routed(msg, src)
         return (head + json.dumps(named).encode() + b"\n" if named else data), None
@@ -768,6 +777,33 @@ def localize_from(data):
         content = msg["message"]["content"]
         msg["message"]["content"] = content.replace(f'from="uds:{src}"', f'from="uds:{local}"', 1)
     return head + json.dumps(msg).encode() + b"\n", m.get("injectPort")
+
+
+def _reply_mirror(msg, entries) -> "dict | None":
+    """The local mirror a reply to an unmatched far sender can use, else None.
+
+    The mirror of the same session by `from-name` (the far socket can be a cc-msg path no mirror
+    lists); failing that, the sending box's single reply-inbox mirror, the one address that routes
+    back to that box. Several candidates are ambiguous and give None."""
+    body = msg.get("message")
+    found = re.search(r'from-name="([^"]+)"', body["content"]) if (
+        isinstance(body, dict) and isinstance(body.get("content"), str)) else None
+    remote = getattr(cfg, "remote", None)
+    mirrors = _roster().remote_mirrors(entries, remote)
+    if found:
+        name, label = found.group(1), _roster().box_label(remote) if remote else None
+        want = f"{name}.{label}" if label else name
+        named = [d for d in mirrors if d.get(FAR_SOCKET_FIELD) and d.get("messagingSocketPath")
+                 and (d.get("name") == want or d.get("unimatrixFarName") == name)]
+        if len(named) == 1:
+            return named[0]
+    if remote:
+        label = _roster().box_label(remote)
+        replies = [d for d in entries if d.get("unimatrixMirror") and d.get("unimatrixReplyInbox") is True
+                   and d.get("messagingSocketPath") and d.get("unimatrixClient") == label]
+        if len(replies) == 1:
+            return replies[0]
+    return None
 
 
 def serve_return(c):
