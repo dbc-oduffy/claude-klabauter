@@ -147,7 +147,7 @@ import posixpath
 import re
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, NamedTuple, Optional
+from typing import Any, Iterator, Mapping, NamedTuple, Optional
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -519,6 +519,106 @@ def unlanded_plan_edges(
         hold = resolve_plan_edge(owner, edge, repo_root, plan_cache).hold
         held = held or hold
     return held
+
+
+UPSTREAM_UNEXECUTED = "unexecuted"
+UPSTREAM_HALTED = "halted"
+UPSTREAM_DANGLING = "dangling"
+
+
+def _edge_scopes(text: str) -> "Iterator[tuple[str, str, Any]]":
+    """``(scope, owner, edges)`` per ``depends_on_plan`` list of a plan: its frontmatter (scope
+    ``plan``) and each spine row not yet coded."""
+    yield "plan", "plan frontmatter", frontmatter_plan_edges(text)
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    loaded = load_rows(text)
+    if loaded.status is LocateStatus.LOCATED:
+        for row in loaded.rows:
+            if isinstance(row, dict) and row.get("depends_on_plan"):
+                if row.get("disposition") in ("coded", "done"):
+                    continue
+                yield str(row.get("id")), f"row {row.get('id')!r}", row["depends_on_plan"]
+
+
+def _plan_key(raw, repo_root: Path) -> str:
+    """``raw`` as a repo-relative posix plan path (an absolute path under ``repo_root`` is relativised)."""
+    text = str(raw or "").replace("\\", "/")
+    try:
+        return Path(text).relative_to(repo_root.as_posix()).as_posix() if Path(text).is_absolute() else text
+    except ValueError:
+        return text
+
+
+def _halted_runs_by_plan(repo_root: Path) -> dict:
+    """``{plan key: first halted run id}`` over one listing of the record root. A run binds to a plan
+    by its run-stage ``plan_path``, else by its halt marker's plan field; only halted runs are read."""
+    import os
+
+    from coordinator_core.ops import warp_run_deliverable as wrd
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_FIELD, RECORD_DIR_ROOT, read_run_stage
+    from coordinator_core.ops.dispatch_emit.run_dir_stat_cache import record_dir
+
+    bound: dict = {}
+    try:
+        with os.scandir(repo_root / RECORD_DIR_ROOT) as it:
+            names = sorted(e.name for e in it if e.is_dir())
+    except OSError:
+        return bound
+    for name in names:
+        if not wrd._halted(repo_root, name):
+            continue
+        plan = (read_run_stage(repo_root, name) or {}).get("plan_path")
+        if not plan:
+            try:
+                plan = (halted_run.read_strict_run(record_dir(repo_root, name)) or {}).get(HALT_PLAN_FIELD)
+            except (ValueError, OSError):
+                plan = None
+        if plan:
+            bound.setdefault(_plan_key(plan, repo_root), name)
+    return bound
+
+
+def upstream_chunk_holds(repo_root: Path, plan_path: Path) -> list:
+    """One entry per ``depends_on_plan`` edge of ``plan_path`` (frontmatter, or a row not yet coded)
+    that holds or dangles: ``{scope, plan, chunk|status, state, detail}``, ``state`` one of
+    ``unexecuted``, ``halted`` (a record dir bound to the predecessor plan carries a halted marker;
+    adds ``run``) or ``dangling``. Empty when every edge is satisfied. In-process reads only; the
+    record root is scanned once, and only when a chunk edge holds."""
+    root = Path(repo_root)
+    cache: dict = {}
+    found: list = []
+    for scope, owner, edges in _edge_scopes(Path(plan_path).read_text(encoding="utf-8")):
+        if not edges:
+            continue
+        if not isinstance(edges, list):
+            found.append({
+                "scope": scope, "plan": "", "state": UPSTREAM_DANGLING,
+                "detail": f"{owner} depends_on_plan is {edges!r}, not a list",
+            })
+            continue
+        for edge in edges:
+            ident = {"plan": str((edge or {}).get("plan") or "") if isinstance(edge, dict) else ""}
+            if isinstance(edge, dict) and edge.get("chunk"):
+                ident["chunk"] = str(edge["chunk"])
+            elif isinstance(edge, dict) and edge.get("status"):
+                ident["status"] = str(edge["status"])
+            try:
+                hold = resolve_plan_edge(owner, edge, root, cache).hold
+            except SpineReadError as exc:
+                found.append({"scope": scope, **ident, "state": UPSTREAM_DANGLING, "detail": str(exc)})
+                continue
+            if hold is not None:
+                found.append({"scope": scope, **ident, "state": UPSTREAM_UNEXECUTED, "detail": hold})
+    if any("chunk" in h for h in found if h["state"] == UPSTREAM_UNEXECUTED):
+        halted = _halted_runs_by_plan(root)
+        for h in found:
+            run = halted.get(_plan_key(h["plan"], root)) if h["state"] == UPSTREAM_UNEXECUTED and "chunk" in h else None
+            if run:
+                h["state"], h["run"] = UPSTREAM_HALTED, run
+                h["detail"] += f"; its run {run} halted"
+    return found
 
 
 @functools.lru_cache(maxsize=64)

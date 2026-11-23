@@ -8,6 +8,8 @@ import time
 from coordinator_core.ops.dispatch_emit import abandoned_runs, halted_run, minted_run, run_token
 
 RUN = "ask-20261102T120000-abcdef"
+DRIVER_B = "22222222-2222-4222-8222-222222222222"
+DRIVER_C = "33333333-3333-4333-8333-333333333333"
 
 
 def _repo(tmp_path, stage="minted", script=True):
@@ -74,6 +76,57 @@ def test_start_writes_nothing_into_the_run_dir(tmp_path):
     before = sorted(p.name for p in rdir.iterdir())
     _call(tmp_path, "start")
     assert sorted(p.name for p in rdir.iterdir()) == before
+
+
+def test_start_fires_a_reader_holding_staged_twin_behind_a_reader_free_run_script(tmp_path):
+    _repo(tmp_path)
+    twin_rel = f"scratch/warp/{RUN}.staged-{'a' * 64}.workflow.mjs"
+    (tmp_path / twin_rel).write_text("await workflow(args)\n", encoding="utf-8")
+    out = _call(tmp_path, "start")
+    assert out["ok"] is True
+    assert out["script_path"] == twin_rel
+    assert out["run_script"] == f"scratch/warp/{RUN}.workflow.mjs"
+
+
+def _drivers(rdir):
+    return json.loads((rdir / "run-stage.json").read_text(encoding="utf-8")).get("driver_session_ids")
+
+
+def test_start_records_the_caller_as_a_driver_once(tmp_path):
+    from coordinator_core.session.core import session_identity_override, warm_served_request
+
+    rdir = _repo(tmp_path)
+    with warm_served_request():
+        with session_identity_override(DRIVER_B):
+            assert _call(tmp_path, "start")["ok"] is True
+            assert _call(tmp_path, "start")["ok"] is True
+        assert _drivers(rdir) == [DRIVER_B]
+        with session_identity_override(DRIVER_C):
+            _call(tmp_path, "start")
+    assert _drivers(rdir) == [DRIVER_B, DRIVER_C]
+    assert json.loads((rdir / "run-stage.json").read_text(encoding="utf-8"))["stage"] == "minted"
+
+
+def test_start_with_no_resolved_session_records_no_driver(tmp_path, monkeypatch):
+    from coordinator_core.session.core import warm_served_request
+
+    for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "COORDINATOR_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "spawner-env")
+    rdir = _repo(tmp_path)
+    with warm_served_request():
+        assert _call(tmp_path, "start")["ok"] is True
+    assert _drivers(rdir) is None
+
+
+def test_a_refused_start_records_no_driver(tmp_path):
+    from coordinator_core.session.core import session_identity_override, warm_served_request
+
+    rdir = _repo(tmp_path, script=False)
+    with warm_served_request():
+        with session_identity_override(DRIVER_B):
+            assert _call(tmp_path, "start")["ok"] is False
+    assert _drivers(rdir) is None
 
 
 def test_both_actions_refuse_a_run_past_minted(tmp_path):

@@ -2026,12 +2026,6 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
 
     checkpoint_stamp: dict = {}
     with ledger.phase("post_land_reply"):
-        # Mark the repo for the next push sweep: mark only, never push.
-        # `sys.modules` gate: importing the cadence here would charge a cold commit its import graph.
-        cadence = sys.modules.get("coordinator_core.warm.push_cadence")
-        if cadence is not None:
-            cadence.note_commit(worktree_root)
-
         if "Checkpoint-Plan: " in message:
             # Literal mirrors checkpoint_stamp.CHECKPOINT_NOT_LANDED_TRAILER: that module is imported lazily.
             if "\nCheckpoint-Not-Landed: " in message:

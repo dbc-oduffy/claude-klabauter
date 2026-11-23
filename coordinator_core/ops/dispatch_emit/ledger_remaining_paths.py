@@ -370,6 +370,7 @@ def derive_ledger_rows(
                 "id": rid,
                 "title": (GAP_TITLE_PREFIX + title_step if title_step else f"Serve revise note for {item}") + suffix,
                 "change_kind": "code-edit",
+                "agent_type": "coordinator:executor",
                 "writes": part,
                 "register_rows": [item],
                 "disposition": "open",

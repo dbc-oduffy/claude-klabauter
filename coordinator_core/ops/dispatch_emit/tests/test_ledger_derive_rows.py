@@ -167,6 +167,30 @@ def test_note_only_item_derives_from_serving_writes(tmp_path):
     assert under == [] and rows[0]["writes"] == ["a/x.py"]
 
 
+def test_derived_rows_carry_executor_agent_type_and_keep_it_under_a_matching_class(tmp_path):
+    from coordinator_core.ops.dispatch_emit.agent_route import RouteTable, WorkClass, resolve_agent_type
+    from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+
+    _touch(tmp_path, "a/x.py")
+    table = RouteTable(
+        default_agent_type="coordinator:executor",
+        work_classes=(WorkClass(id="spec", agent_type="spec:agent", on_mismatch="redirect", keywords=("revise",)),),
+    )
+    gap, _ = derive_ledger_rows({"R1": {"remaining": ["edit a/x.py"]}}, [], ["R1"], {}, [], tmp_path)
+    note, _ = derive_ledger_rows({}, ["finish the gate"], ["R1"], {"R1": ["a/x.py"]}, [], tmp_path)
+    for r in gap + note:
+        assert r["agent_type"] == "coordinator:executor"
+    row = note[0]
+    def _wave_row(agent_type):
+        return WaveRow(
+            row["id"], row["title"], "s", tuple(row["writes"]), [], [],
+            body=row["body"], agent_type=agent_type, change_kind=row["change_kind"])
+
+    assert resolve_agent_type(_wave_row(row["agent_type"]), table) is None
+    decision = resolve_agent_type(_wave_row(None), table)
+    assert decision is not None and decision.agent_type == "spec:agent"
+
+
 def test_mixed_plan_body_and_ordinary_item_splits_into_dispatchable_siblings(tmp_path):
     from types import SimpleNamespace
 

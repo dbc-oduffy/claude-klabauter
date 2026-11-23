@@ -138,7 +138,11 @@ from coordinator_core.ops.ceremony.push_ceiling import (
     resolve_push_ceiling,
 )
 from coordinator_core.ops.fleet._memo_resolver import RegistryReadError, read_registry_repos
-from coordinator_core.ops.push_outstanding import push_outstanding, resolve_push_remote
+from coordinator_core.ops.push_outstanding import (
+    owned_push_remote,
+    push_outstanding,
+    resolve_push_remote,
+)
 from coordinator_core.push_hold import read_compile_hold, read_hold
 from coordinator_core.session.day_branch_cut_lock import record_is_stale
 from coordinator_core.warm import engine_converge, telemetry
@@ -165,6 +169,8 @@ __all__ = [
     "note_foreign_delivery",
     "foreign_deliveries",
     "note_commit",
+    "take_due_repos",
+    "DUE_SWEEP_MIN_GAP_SECS",
     "reset_cadence_for_test",
 ]
 
@@ -225,6 +231,12 @@ FOREIGN_PUSH_MAX_REJECTS = 3
 #: happens on the cadence (DR-329). Guarded by `_cadence_lock`.
 _due_repos: "set[Path]" = set()
 
+#: A due repo is not swept by the due arm again within this gap of its last sweep.
+DUE_SWEEP_MIN_GAP_SECS = 15.0
+
+#: Sweep clock reading of each repo's last sweep. Guarded by `_cadence_lock`.
+_due_swept_at: "dict[Path, float]" = {}
+
 #: Per-repo push-failure backoff: `[consecutive_failed_sweeps, sweeps_left_to_skip]`.
 #: Without it a repo that fails every tick is re-pushed every tick and logs a
 #: `push-failures.log` row each time. Guarded by `_cadence_lock`.
@@ -259,6 +271,7 @@ def reset_cadence_for_test() -> None:
         _last_sweep_monotonic = None
         _foreign_deliveries.clear()
         _due_repos.clear()
+        _due_swept_at.clear()
         _backoff.clear()
         _publish_retired_at.clear()
 
@@ -532,8 +545,11 @@ def _declined_as_held_clone(root: Path) -> bool:
 
 # No `drain_pending_push` call in this module; see its docstring's DOES NOT
 # DRAIN section for why.
-def _sweep_one(repo_root: Union[str, Path]) -> str:
+def _sweep_one(repo_root: Union[str, Path], scope_gate: bool = False) -> str:
     """Returns "pushed", "skipped" or "failed" for the sweep telemetry row.
+
+    `scope_gate` (the due arm only) skips anything but an owned work/* branch
+    on an owned remote; the 600s full sweep keeps its wider scope.
 
     Push exactly one repo -- declining outright if another sweeper
     already holds this repo's lock. The per-repo bound is enforced by
@@ -555,6 +571,11 @@ def _sweep_one(repo_root: Union[str, Path]) -> str:
     if _declined_by_compile_hold(root):
         return "skipped"
     branch = head_branch(root)
+    if scope_gate:
+        if branch is None or not branch_gate(branch)[0]:
+            return "skipped"
+        if owned_push_remote(root, branch)[0] is None:
+            return "skipped"
     if _declined_by_branch_hold(root, branch):
         return "skipped"
     sha = head_sha(root) if branch is not None else None
@@ -596,6 +617,18 @@ def note_commit(repo_root: Union[str, Path]) -> None:
         entry = _backoff.get(Path(repo_root))
         if entry is not None:
             entry[1] = 0
+
+
+def take_due_repos(clock: Callable[[], float] = time.monotonic) -> "list[Path]":
+    """Due repos whose last sweep is `DUE_SWEEP_MIN_GAP_SECS` or more ago (or
+    never). Read-only: the sweep records and clears them."""
+    now = clock()
+    with _cadence_lock:
+        return sorted(
+            root
+            for root in _due_repos
+            if root not in _due_swept_at or now - _due_swept_at[root] >= DUE_SWEEP_MIN_GAP_SECS
+        )
 
 
 def _backed_off_now(root: Path) -> bool:
@@ -959,10 +992,15 @@ def sweep_repos(
     per_repo_budget_secs: Optional[float] = None,
     allow_extended_first: bool = False,
     clock: Callable[[], float] = time.monotonic,
+    due_only: bool = False,
 ) -> None:
     """Push every ahead repo in `repos` inside one call, concurrently, then
     the named-branch arm. Never raises: every per-repo step is caught inside
     `_sweep_one`, and a worker exception counts as "failed".
+
+    `due_only` (the 15s due arm) runs only the per-repo push legs, scope-gated
+    to owned work/* branches on owned remotes; the foreign, memo and
+    publish-retire legs keep their 600s cadence.
 
     CLASSIFY (zero spawns). Backed-off repos and repos with nothing
     outstanding (`push_sweep_order.is_ahead` False) are skipped without
@@ -1026,7 +1064,8 @@ def sweep_repos(
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=len(admitted), thread_name_prefix="push-sweep"
         ) as pool:
-            futures = {root: pool.submit(_sweep_one, root) for root in admitted}
+            extra = (True,) if due_only else ()
+            futures = {root: pool.submit(_sweep_one, root, *extra) for root in admitted}
         for root, future in futures.items():
             try:
                 results[root] = future.result()
@@ -1036,11 +1075,21 @@ def sweep_repos(
         result = results[root]
         with _cadence_lock:
             _due_repos.discard(root)
+            _due_swept_at[root] = clock()
         _note_sweep_result(root, result)
         {"pushed": pushed, "failed": failed}.get(result, skipped).append(root)
-    _sweep_foreign(deadline=deadline, clock=clock)
-    _sweep_memo_push_pending(ordered, deadline=deadline, clock=clock)
-    _sweep_publish_retire(ordered, deadline=deadline, clock=clock)
+    if due_only:
+        # Repos the arm looked at but did not admit (nothing ahead, backed off)
+        # are not re-taken inside the gap; not_reached ones keep leading.
+        with _cadence_lock:
+            for root in ordered:
+                if root not in admitted and root not in not_reached:
+                    _due_repos.discard(root)
+                    _due_swept_at[root] = clock()
+    else:
+        _sweep_foreign(deadline=deadline, clock=clock)
+        _sweep_memo_push_pending(ordered, deadline=deadline, clock=clock)
+        _sweep_publish_retire(ordered, deadline=deadline, clock=clock)
     with _cadence_lock:
         streaks = {root: _backoff[root][0] for root in backed_off if root in _backoff}
     telemetry.record_sweep(
@@ -1094,6 +1143,9 @@ def on_idle_tick(
     except Exception:  # noqa: BLE001 -- convergence scheduling must never break the tick
         pass
     if not _sweep_due(clock=clock, interval_secs=interval_secs):
+        due = take_due_repos(clock)
+        if due:
+            sweep_fn(due, total_ceiling_secs=total_ceiling_secs, clock=clock, due_only=True)
         return False
     sweep_fn(
         served_repos(),

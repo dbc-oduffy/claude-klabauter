@@ -4410,10 +4410,14 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     land_deadline.mark("land_run.superseded_scan")
     superseded: tuple = ()
     if artifacts is not None and sizing_for_credit:
-        superseded, extra_changed = _superseded(root, art_run_id, sizing_for_credit, artifacts, run_token)
+        with land_deadline.excepted():
+            superseded, extra_changed = _superseded(
+                root, art_run_id, sizing_for_credit, artifacts, run_token, land_deadline.SUPERSEDED_SCAN_SECS,
+            )
         if superseded:
             artifacts = artifacts.with_superseded(superseded, RECORD_DIR_ROOT)
             changed |= extra_changed
+    land_deadline.mark("land_run.landable")
     art_landable = None
     if artifacts is not None:
         landable = run_artifacts.landable(
@@ -4442,6 +4446,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     try:
         em_withheld.update(param_withholds(params))
         em_withheld.update(unexecuted_withholds(root, request, manifest.rows if manifest is not None else ()))
+        upstream_held = upstream_withholds(root, request)
+        em_withheld.update(upstream_held)
         carried_paths = review_carried_withholds(request)
         em_withheld.update(carried_paths)
     except ValueError as exc:
@@ -4489,7 +4495,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             _own_inherited(p) and inherited[p] == ORIGIN_PREDECESSOR_WITHHELD
             and em_withheld[p] == own_halt_reason.get(p)
         ):
-            withhold_reason[p] = REVIEW_CARRIED_REASON if p in carried_paths else "withheld"
+            withhold_reason[p] = (
+                REVIEW_CARRIED_REASON if p in carried_paths
+                else f"{UPSTREAM_WITHHOLD_REASON}: {em_withheld[p]}" if p in upstream_held
+                else "withheld"
+            )
         elif p in foreign_held:
             withhold_reason[p] = f"withheld by {foreign_held[p]}"
         elif p in footprint_breach and not _own_inherited(p) and p not in measured_carries:
@@ -6253,9 +6263,12 @@ def _sizing_stamp_floor(sizing_name: str) -> str:
     return day.strftime("%Y%m%d") + "T000000-000000"
 
 
-def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) -> tuple:
+def _superseded(
+    root: Path, run_id: str, sizing_rel: str, artifacts, run_token, cap_secs: Optional[float] = None,
+) -> tuple:
     """``(superseded run ids, their changed record files)``: dirty record dirs of earlier runs bound to
-    ``sizing_rel``. A record-dir listing finds the earlier same-sizing dirs; one scoped in-process status
+    ``sizing_rel``. Past ``cap_secs`` wall seconds (checked between run.json reads and before the status)
+    it returns ``(), set()``; the one status read, once begun, is not interrupted. A record-dir listing finds the earlier same-sizing dirs; one scoped in-process status
     runs over those only, for a run id that carries a stamp tail; a gap in that status skips the scan.
     Trap: test_land_run_off_commit_path spies only on the two corpus scans it names, not on this one."""
     import os
@@ -6266,6 +6279,7 @@ def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) 
         return (), set()
     from coordinator_core.git.scoped_worktree_status import scoped_worktree_status
 
+    stop_at = None if cap_secs is None else land_deadline._now() + cap_secs
     live = {str(r["run_id"]) for r in run_token.held_records(root) if isinstance(r.get("run_id"), str)}
     try:
         listing = [e.name for e in os.scandir(root / RECORD_DIR_ROOT) if e.is_dir()]
@@ -6280,6 +6294,8 @@ def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) 
         tail = run_artifacts._STAMP_TAIL.search(n)
         if tail is None or tail.group(0) >= mine or tail.group(0) < floor:
             continue
+        if stop_at is not None and land_deadline._now() >= stop_at:
+            return (), set()
         try:
             with open(f"{base}{n}{os.sep}run.json", "rb") as fh:
                 raw = fh.read()
@@ -6288,7 +6304,7 @@ def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) 
         if needle in raw or not needle.isascii():
             candidates.append(f"{RECORD_DIR_ROOT}/{n}/run.json")
     bound = run_artifacts.superseded_runs(root, run_id, sizing_rel, candidates, live_run_ids=live)
-    if not bound:
+    if not bound or (stop_at is not None and land_deadline._now() >= stop_at):
         return (), set()
     snap = scoped_worktree_status(root, [], [f"{RECORD_DIR_ROOT}/{n}" for n in bound], [])
     if snap is None:
@@ -6313,6 +6329,39 @@ def unexecuted_withholds(root: Path, request, staged_rows) -> dict:
         return {}
     text = upr.message(ids)
     return {p: text for c in request.chunks for p in c.paths}
+
+
+#: The withhold reason code of a product path held back by an unexecuted or halted upstream plan chunk.
+UPSTREAM_WITHHOLD_REASON = "upstream-chunk-unexecuted"
+
+
+def upstream_withholds(root: Path, request) -> dict[str, str]:
+    """``{path: message}`` for every request chunk's product path while the run's plan holds an upstream chunk.
+
+    A hold is a declared ``depends_on_plan`` edge whose chunk is not coded (state unexecuted, halted
+    or dangling). A plan-frontmatter edge withholds every chunk's paths; a row edge only its own
+    chunk's (the hold's ``scope`` is the row id). No plan_path, an unreadable plan or an unparsable edge list adds nothing.
+    """
+    if not request.plan_path:
+        return {}
+    from coordinator_core.ops.dispatch_emit.spine_read import upstream_chunk_holds
+
+    try:
+        holds = upstream_chunk_holds(root, root / request.plan_path)
+    except (OSError, ValueError):
+        return {}
+    if not holds:
+        return {}
+    named = "; ".join(
+        " ".join(filter(None, (
+            "upstream chunk", h["plan"], h.get("chunk") or h.get("status"), "is", h["state"],
+            f"(run {h['run']})" if h.get("run") else None,
+        )))
+        for h in holds
+    )
+    text = f"{named}: dependent product withheld. Instead: land or re-fire the upstream chunk."
+    scopes = {h["scope"] for h in holds}
+    return {p: text for c in request.chunks if "plan" in scopes or c.id in scopes for p in c.paths}
 
 
 def _read_text_or_none(path: Path) -> Optional[str]:

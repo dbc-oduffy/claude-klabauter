@@ -327,6 +327,12 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         ("release",),
     ),
     # Enrolled on a measured-empty reachable spawn set (2026-11-21).
+    # Enrolled on a measured-empty reachable spawn set (2026-11-23): marker and stage reads, journal
+    # stats and atomic writes; `write_halt_marker`'s resume-build spawn is never reached.
+    "dispatch.retract_staged_stall": (
+        "coordinator_core/ops/dispatch_emit/staged_stall_retract.py",
+        ("_handler",),
+    ),
     "groupem.capacity_admit": (
         "coordinator_core/ops/group_em_fleet_capacity.py",
         ("_groupem_capacity_admit",),

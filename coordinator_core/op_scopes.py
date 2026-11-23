@@ -918,6 +918,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.checkpoint_reds":                 "common_dir",
     # dispatch.adopt_orphaned_run — MUTATING: re-homes a dead session's run dir under the caller.
     "dispatch.adopt_orphaned_run":              "common_dir",
+    # dispatch.retract_staged_stall — MUTATING: lifts a false staged_stall halt in the caller's own record dir.
+    "dispatch.retract_staged_stall":            "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
     "workflow.revise":                          "common_dir",
     # workflow.cancel — marks a warp run cancelled in the caller's own worktree's record dir and live-run index.

@@ -35,26 +35,9 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.frontmatter.body_blocks import LocateStatus
-from coordinator_core.ops.dispatch_emit.spine_read import (
-    SpineReadError,
-    frontmatter_plan_edges,
-    unlanded_plan_edges,
-)
-from coordinator_core.ops.plan_tasks_render import load_rows
+from coordinator_core.ops.dispatch_emit.spine_read import upstream_chunk_holds
 
 GENERATES: list = []
-
-
-def _scopes(text: str):
-    yield "plan", "plan frontmatter", frontmatter_plan_edges(text)
-    loaded = load_rows(text)
-    if loaded.status is LocateStatus.LOCATED:
-        for row in loaded.rows:
-            if isinstance(row, dict) and row.get("depends_on_plan"):
-                if row.get("disposition") in ("coded", "done"):
-                    continue
-                yield str(row.get("id")), f"row {row.get('id')!r}", row["depends_on_plan"]
 
 
 @register_op("plan.cross_plan_gate")
@@ -78,15 +61,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     holds: list = []
     dangling: list = []
-    cache: dict = {}
-    for scope, owner, edges in _scopes(path.read_text(encoding="utf-8")):
-        try:
-            detail = unlanded_plan_edges(owner, edges, root, cache)
-        except SpineReadError as exc:
-            dangling.append({"scope": scope, "detail": str(exc)})
-            continue
-        if detail is not None:
-            holds.append({"scope": scope, "detail": detail})
+    by_scope: dict = {}
+    for entry in upstream_chunk_holds(root, path):
+        by_scope.setdefault(entry["scope"], []).append(entry)
+    for scope, entries in by_scope.items():
+        bad = next((e for e in entries if e["state"] == "dangling"), None)
+        if bad is not None:
+            dangling.append({"scope": scope, "detail": bad["detail"]})
+        else:
+            holds.append({"scope": scope, "detail": entries[0]["detail"]})
     return {
         "plan": path.relative_to(root).as_posix() if path.is_relative_to(root) else path.as_posix(),
         "satisfied": not holds and not dangling,

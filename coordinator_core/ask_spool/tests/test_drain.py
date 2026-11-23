@@ -581,6 +581,78 @@ def test_a_refire_whose_holder_re_minted_after_its_halt_still_coalesces_and_is_w
     assert _withdrawn(tmp_path, sid)["superseded_by"] == run_id
 
 
+def _at_minted(root, run_id, age_s, *, quiet=True):
+    """The run's stage record at `minted`, stamped `age_s` ago; `quiet` ages every artifact the activity walk sees."""
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, write_run_stage_at
+
+    then = time.time() - age_s
+    rec = record_dir(root, run_id)
+    rec.mkdir(parents=True, exist_ok=True)
+    write_run_stage_at(rec, "minted", now=datetime.fromtimestamp(then, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    if quiet:
+        scratch = root / "scratch" / "warp" / run_id
+        for path in (*scratch.iterdir(), scratch):
+            os.utime(path, (then, then))
+
+
+def _chained_child(root, parent, age_s):
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, write_run_stage_at
+
+    then = time.time() - age_s
+    child = root / RECORD_DIR_ROOT / "warp-child-20261122T140000-abcdef"
+    child.mkdir(parents=True)
+    (child / "run.json").write_text(json.dumps({"chain_parent": parent}), encoding="utf-8")
+    write_run_stage_at(child, "staged", now=datetime.fromtimestamp(then, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    for path in (*child.iterdir(), child):
+        os.utime(path, (then, then))
+
+
+STALE_S = drain.MINTED_DISPATCH_DEADLINE_SECONDS + 3600
+
+
+def test_a_refire_of_a_sizing_whose_live_token_holder_is_stuck_at_minted_mints_and_is_not_withdrawn(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    run_id = "ask-20261104T150000-aaaabb"
+    _live_refire(tmp_path, run_id)
+    _at_minted(tmp_path, run_id, STALE_S)
+    sid = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 1 and counts["minted"] == 1 and counts["withdrawn"] == 0 and counts["coalesced"] == 0
+    assert not os.path.exists(record.entry_path(str(tmp_path), sid, record.WITHDRAWN_SUFFIX))
+
+
+def test_a_duplicate_refire_beside_a_stuck_minted_holder_mints_once_and_dedupes_onto_it(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    run_id = "ask-20261104T150000-aaaabc"
+    _live_refire(tmp_path, run_id)
+    _at_minted(tmp_path, run_id, STALE_S)
+    _spool_sizing(tmp_path, "tuA")
+    _spool_sizing(tmp_path, "tuB")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 1 and counts["minted"] == 1 and counts["withdrawn"] == 0 and counts["coalesced"] == 1
+
+
+@pytest.mark.parametrize("age_s,child_age_s", [(10, None), (STALE_S, 30)])
+def test_a_fresh_minted_holder_or_one_with_an_active_chained_child_still_supersedes(tmp_path, age_s, child_age_s):
+    _write_sizing(tmp_path, plan=None)
+    run_id = "ask-20261104T150000-aaaabd"
+    _live_refire(tmp_path, run_id)
+    _at_minted(tmp_path, run_id, age_s)
+    if child_age_s is not None:
+        _chained_child(tmp_path, run_id, child_age_s)
+    sid = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 0 and counts["withdrawn"] == 1 and counts["minted"] == 0
+    assert _withdrawn(tmp_path, sid)["superseded_by"] == run_id
+
+
 def test_spool_of_a_sizing_whose_old_run_holds_no_live_token_still_mints(tmp_path):
     _write_sizing(tmp_path, plan=None)
     _live_refire(tmp_path, "ask-20261104T150000-eeeeee", live=False)
@@ -672,6 +744,21 @@ def test_a_halted_or_failed_run_recording_the_same_ask_never_supersedes_and_the_
     for sid in (sid_halted, sid_failed):
         assert not os.path.exists(record.entry_path(str(tmp_path), sid, record.WITHDRAWN_SUFFIX))
     assert _withdrawn(tmp_path, sid_live)["superseded_by"] == live
+
+
+def test_a_bare_ask_whose_same_ask_run_is_stuck_at_minted_fires_while_a_fresh_one_supersedes(tmp_path):
+    stuck, fresh = "ask-20261104T160020-aaaaaa", "ask-20261104T160021-bbbbbb"
+    _token_of_ask(tmp_path, stuck, "stuck ask text", session="other")
+    _token_of_ask(tmp_path, fresh, "fresh ask text", session="other")
+    _at_minted(tmp_path, stuck, STALE_S)
+    _at_minted(tmp_path, fresh, 10)
+    sid_stuck = _spool_ask(tmp_path, "tuS", "stuck ask text")
+    sid_fresh = _spool_ask(tmp_path, "tuF", "fresh ask text")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 1 and counts["minted"] == 1 and counts["withdrawn"] == 1, counts
+    assert not os.path.exists(record.entry_path(str(tmp_path), sid_stuck, record.WITHDRAWN_SUFFIX))
+    assert _withdrawn(tmp_path, sid_fresh)["superseded_by"] == fresh
 
 
 def _withdrawn(root, sid):
@@ -927,3 +1014,65 @@ def test_two_identical_bare_entries_fire_once_and_the_second_is_marked_a_duplica
     (dup,) = [h for h in heads if "coalesced_into" in h]
     (first,) = [h for h in heads if "coalesced_into" not in h]
     assert dup["coalesced_into"] == first["run_id"] == dup["run_id"]
+
+
+def _script(root, run_id):
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+    path = root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("// script", encoding="utf-8")
+
+
+class _ScriptingEngine(Engine):
+    def __call__(self, payload):
+        envelope = super().__call__(payload)
+        _script(self.root, f"ask-20261104T14{self.calls:04d}-{self.calls:06x}")
+        return envelope
+
+
+def test_drain_fires_a_run_it_minted_once_and_never_again(tmp_path):
+    sid = _spool(tmp_path)
+    fired = []
+
+    def fire(root, run_id):
+        fired.append(run_id)
+        return {"fire_id": "f1", "state": "running"}
+
+    drain.run(str(tmp_path), evaluate=_ScriptingEngine(tmp_path), fire=fire)
+    drain.run(str(tmp_path), evaluate=_ScriptingEngine(tmp_path), fire=fire)
+    assert len(fired) == 1
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert header["fired"] == "f1"
+
+
+def test_a_fire_that_exits_before_execution_is_typed_and_retried_by_the_next_drain(tmp_path):
+    sid = _spool(tmp_path)
+    answers = [{"fire_id": "f1", "state": "exited", "execution_started": False}, {"fire_id": "f2", "state": "running"}]
+
+    def fire(root, run_id):
+        return answers.pop(0)
+
+    engine = _ScriptingEngine(tmp_path)
+    drain.run(str(tmp_path), evaluate=engine, fire=fire)
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert "exited before execution" in header["fire_failed"] and header["fire_attempts"] == 1 and "fired" not in header
+    drain.run(str(tmp_path), evaluate=engine, fire=fire)
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert header["fired"] == "f2" and "fire_failed" not in header
+
+
+def test_exhausted_fire_attempts_halt_with_the_typed_cause_not_a_bare_abandon(tmp_path):
+    sid = _spool(tmp_path)
+
+    def fire(root, run_id):
+        raise RuntimeError("no child")
+
+    engine = _ScriptingEngine(tmp_path)
+    for _ in range(drain.FIRE_ATTEMPT_CAP):
+        drain.run(str(tmp_path), evaluate=engine, fire=fire)
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert header["fire_attempts"] == drain.FIRE_ATTEMPT_CAP and header["fire_failed"].startswith("fire_preflight_failed")
+    called = []
+    drain._fire_minted(str(tmp_path), lambda r, i: called.append(i), time.time())
+    assert not called

@@ -20,7 +20,8 @@ with no token, ``run-not-found``.
 A run is startable or abandonable only while it is minted-only (``halted_run._is_shell``: no halt
 marker, progress record absent or at ``minted``); a run past ``minted`` is refused. In-process file
 reads only on the refusal path; ``start`` also writes one ``scratch/warp/defer-*.workflow.mjs`` file
-(``dry_run`` does not apply to it); no git spawn.
+(``dry_run`` does not apply to it) and appends the caller's session to run-stage ``driver_session_ids``
+when one resolves; no git spawn.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.halted_run import _is_shell, is_unstarted_mint_halt, write_halt_marker
-from coordinator_core.ops.dispatch_emit.nested_run_contract import RUN_SCRIPT_SUFFIX
+from coordinator_core.ops.dispatch_emit.nested_run_contract import RUN_SCRIPT_SUFFIX, staged_twin_rel
 
 OP_NAME = "dispatch.minted_run"
 ACTION_START = "start"
@@ -94,7 +95,7 @@ def start_args(repo_root: Path, run_id: str) -> dict:
 
 
 def holds_workflow_reader(repo_root: Path, script_rel: str) -> bool:
-    """True when the run script calls ``workflow()`` itself (an emit without ``launcher_child``: its stage reader).
+    """True when the script calls ``workflow()`` itself (an emit without ``launcher_child``: its stage reader).
     Trap: a launcher child holds no ``workflow(`` bytes, so only a script that does must be started top-level;
     a wrapper starting it as a child would put that call at a second nesting level."""
     try:
@@ -103,17 +104,53 @@ def holds_workflow_reader(repo_root: Path, script_rel: str) -> bool:
         return False
 
 
+def reader_script_rel(repo_root: Path, run_id: str, script_rel: str) -> Optional[str]:
+    """Repo-relative script that must be fired top-level because it holds a ``workflow()`` reader: the run script itself,
+    else the newest staged twin of the run that does; None when neither holds one.
+    Trap: a reader-holding twin behind a reader-free run script is reached by firing the twin with the run's args,
+    never the run script, which would end at ``stage_pending`` with nothing starting the twin."""
+    if holds_workflow_reader(repo_root, script_rel):
+        return script_rel
+    try:
+        twins = sorted(repo_root.glob(staged_twin_rel(run_id, "*")), key=lambda t: t.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    for twin in twins:
+        rel = twin.relative_to(repo_root).as_posix()
+        if holds_workflow_reader(repo_root, rel):
+            return rel
+    return None
+
+
+def _record_caller_as_driver(repo_root: Path, run_id: str) -> None:
+    """Append the calling session to the run's ``driver_session_ids`` so the staged-stall scan reads its journals.
+    Trap: no resolved session means no write (a warm engine must never record its spawner's id); an absent
+    run-stage record or a failed write never fails the start."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_driver_session_at
+    from coordinator_core.session.core import carried_session_id, in_warm_served_request, resolve_session_id
+
+    session_id = carried_session_id() or ("" if in_warm_served_request() else resolve_session_id())
+    if not session_id:
+        return
+    try:
+        record_driver_session_at(repo_root / RECORD_DIR_ROOT / run_id, session_id)
+    except (ValueError, OSError):
+        return
+
+
 def _start(repo_root: Path, run_id: str) -> dict:
     """The stage-loop start script for the run: ``script_path`` is that script, ``run_script`` the run's own.
-    A run script holding its own ``workflow()`` reader is the start script itself, fired with ``fire_args``.
+    A run whose script (or staged twin) holds its own ``workflow()`` reader is the start script itself, fired with ``fire_args``.
     Trap: firing a launcher-child ``run_script`` directly ends at ``stage_pending`` with nothing starting the staged twin."""
     from coordinator_core.hooks.submit_engine_ask import write_direct_start_script
 
     args = start_args(repo_root, run_id)
     if not args["ok"]:
         return args
-    if holds_workflow_reader(repo_root, args["script_path"]):
-        out = reply(run_id, ACTION_START, fire_args=args["fire_args"], script_path=args["script_path"])
+    _record_caller_as_driver(repo_root, run_id)
+    reader = reader_script_rel(repo_root, run_id, args["script_path"])
+    if reader is not None:
+        out = reply(run_id, ACTION_START, fire_args=args["fire_args"], script_path=reader)
         out["run_script"] = args["script_path"]
         return out
     script = write_direct_start_script(repo_root, run_id, args["script_path"], args["fire_args"])

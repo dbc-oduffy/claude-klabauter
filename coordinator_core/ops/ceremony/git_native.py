@@ -4417,6 +4417,10 @@ def commit_scoped(
     if not result.ok:
         _restore_pages(root, prior, list(prior))
         return result
+    # Mark only, never push; the `sys.modules` gate keeps a cold commit off the cadence import graph.
+    cadence = sys.modules.get("coordinator_core.warm.push_cadence")
+    if cadence is not None:
+        cadence.note_commit(root)
     head = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
     if facts:
         try:

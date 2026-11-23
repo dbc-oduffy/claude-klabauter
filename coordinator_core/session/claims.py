@@ -3918,11 +3918,16 @@ def list_claims_by_session(sid: str, cwd: Optional[str] = None) -> List[Tuple[st
 
 
 def list_claims_by_session_checked(
-    sid: str, cwd: Optional[str] = None
+    sid: str,
+    cwd: Optional[str] = None,
+    *,
+    classes: "Optional[Tuple[str, ...]]" = None,
 ) -> "Tuple[List[Tuple[str, str]], List[str]]":
     """Return ``([(class_, basename), ...], errors)`` for every claim dir under this
     repo's ``<sessions_dir>`` whose recorded ``session_id`` == ``sid``, across
-    all four claim classes (``_CLAIM_SUBDIRS``: handoff, memo, plan, row). Reads the CLAIM-RECORD STORE
+    all four claim classes (``_CLAIM_SUBDIRS``: handoff, memo, plan, row) or only
+    the claim subdirs named by ``classes`` (e.g. ``("handoff-claims",)``; only
+    those class dirs are scanned). Reads the CLAIM-RECORD STORE
     directly (the ``session_id`` file inside each ``<class>-claims/<basename>/``
     dir) — NEVER the ``claimed_by``/``consumed_by`` frontmatter mirror. An
     unreadable or absent ``session_id`` file is "not a match", not an error —
@@ -3984,7 +3989,9 @@ def list_claims_by_session_checked(
             f"for cwd={cwd!r}"
         ]
     base_path = Path(base)
-    for class_ in _CLAIM_SUBDIRS:
+    if classes is not None and not set(classes) <= set(_CLAIM_SUBDIRS):
+        raise ValueError(f"unknown claim classes {sorted(set(classes) - set(_CLAIM_SUBDIRS))!r}")
+    for class_ in (_CLAIM_SUBDIRS if classes is None else classes):
         for claim_name, held_sid in claim_holders(base_path / class_):
             if held_sid == sid:
                 matches.append((class_, claim_name))

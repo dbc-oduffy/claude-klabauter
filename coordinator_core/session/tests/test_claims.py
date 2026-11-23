@@ -1971,6 +1971,40 @@ class TestListClaimsBySessionChecked:
         assert matches == [("handoff-claims", "h1.md")]
         assert errors == []
 
+    def test_classes_keyword_scans_only_named_class_dirs(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        _make_claim(repo, "handoff", "h1.md", session_id="me-sid")
+        _make_claim(repo, "memo", "m1.md", session_id="me-sid")
+        _make_claim(repo, "plan", "p1", session_id="me-sid")
+        scanned: list = []
+        real = claims.claim_holders
+        monkeypatch.setattr(
+            claims, "claim_holders", lambda d: (scanned.append(Path(d).name), real(d))[1]
+        )
+        matches, errors = claims.list_claims_by_session_checked(
+            "me-sid", cwd=str(repo), classes=("handoff-claims",)
+        )
+        assert matches == [("handoff-claims", "h1.md")]
+        assert errors == []
+        assert scanned == ["handoff-claims"]
+
+        scanned.clear()
+        matches, _ = claims.list_claims_by_session_checked("me-sid", cwd=str(repo))
+        assert scanned == ["handoff-claims", "memo-claims", "plan-claims", "row-claims"]
+        assert len(matches) == 3
+
+    def test_unknown_class_name_raises_value_error(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _make_claim(repo, "handoff", "h1.md", session_id="me-sid")
+        with pytest.raises(ValueError, match="unknown claim classes"):
+            claims.list_claims_by_session_checked(
+                "me-sid", cwd=str(repo), classes=("handoff",)
+            )
+        with pytest.raises(ValueError, match="unknown claim classes"):
+            claims.list_claims_by_session_checked(
+                "me-sid", cwd=str(repo), classes=("handoff-claims", "bogus")
+            )
+
 
 class TestMyAgentTouched:
     def _make_agent(self, repo, aid, em_sid, paths):
