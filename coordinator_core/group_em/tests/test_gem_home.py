@@ -349,3 +349,15 @@ def test_ensure_home_refuses_checkout(env, tmp_path):
     with pytest.raises(gem_home.HomeRefused):
         gem_home.ensure_home()
     assert not (checkout / "h").exists()
+
+
+def test_refresh_never_drops_a_gitignore_line(migrate_env, tmp_path):
+    tpl = tmp_path / "tpl.md"
+    tpl.write_text("seed", encoding="utf-8")
+    home = gem_home.ensure_home(template=tpl)
+    seeded = [".secrets/", "scratch/", "state/group-em-watch*", "custom-rule", "!keep"]
+    (home / ".gitignore").write_text("\n".join(seeded), encoding="utf-8")  # no trailing newline
+    gem_home.ensure_home(template=tpl, refresh=True)
+    lines = (home / ".gitignore").read_text().splitlines()
+    assert lines[: len(seeded)] == seeded
+    assert set(gem_home._IGNORED) <= set(lines)

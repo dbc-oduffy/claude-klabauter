@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 import os
+import sys
 import re
 import shlex
 import shutil
@@ -202,3 +203,108 @@ def interpreter_clause(repo_root: Union[str, Path, None]) -> str:
         "Run no tests. Report status: error, tests_run: 0 and a summary starting "
         f"`{DEFECT_PREFIX}`. That is a resolution defect, not a test failure."
     )
+
+
+# --- pytest capability of the chosen runner -------------------------------------------------------------
+# A resolved pin proves the file exists, not that it can run the suite: a pin (or `sys.executable`) that
+# lacks pytest ends a leg as "ran zero tests". Probe only the candidate actually chosen, cache the answer per
+# box keyed by (realpath, mtime, size), so a steady state costs no spawn. A classifier is never a pin.
+_PROBE_TIMEOUT_S = 5
+_CAPABILITY_FILE = "pytest-capable-interpreters.json"
+NO_PYTEST_REMEDY = "install pytest there (`<python> -m pip install pytest`) or point `targeted_test_python` at an interpreter that has it"
+
+
+def _capability_cache_path() -> Path:
+    from coordinator_core._settings_home import settings_home
+
+    return settings_home() / "cache" / _CAPABILITY_FILE
+
+
+def _identity(command: str) -> Optional[str]:
+    try:
+        real = os.path.realpath(command)
+        st = os.stat(real)
+    except OSError:
+        return None
+    return f"{real}|{st.st_mtime_ns}|{st.st_size}"
+
+
+def _probe_pytest(command: str) -> bool:
+    if os.path.realpath(command) == os.path.realpath(sys.executable):
+        import importlib.util
+
+        return importlib.util.find_spec("pytest") is not None
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    try:
+        done = subprocess.run([command, "-c", "import pytest"], capture_output=True, timeout=_PROBE_TIMEOUT_S,
+                              **no_console_creationflags())
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+@functools.lru_cache(maxsize=64)
+def _imports_pytest(command: str) -> bool:
+    """True when `command` imports pytest: in-process memo, then the per-box file cache, then one probe."""
+    ident = _identity(command)
+    if ident is None:
+        return False
+    import json
+
+    try:
+        path: Optional[Path] = _capability_cache_path()
+    except (OSError, ImportError, RuntimeError):
+        path = None
+    table: object = {}
+    if path is not None:
+        try:
+            table = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            table = {}
+    if isinstance(table, dict) and ident in table:
+        return bool(table[ident])
+    ok = _probe_pytest(command)
+    if path is not None and isinstance(table, dict):
+        table[ident] = ok
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(table), encoding="utf-8")
+        except OSError:
+            pass
+    return ok
+
+
+def _fallback_candidates() -> list:
+    """Interpreters to try after the pin: this process's, then PATH's python3/python and `~/.local/bin`."""
+    out: list = [sys.executable]
+    for name in ("python3", "python"):
+        for search in (None, str(Path.home() / ".local" / "bin")):
+            hit = shutil.which(name, path=search)
+            if hit:
+                out.append(hit)
+    return out
+
+
+def resolve_test_runner_python(repo_root: Union[str, Path]) -> TargetedPython:
+    """`resolve_targeted_test_python` whose command is also able to import pytest.
+
+    A pin that cannot is replaced, in order, by this process's interpreter and then the PATH ones, with source
+    `pytest-fallback`; none importing pytest is a defect naming the pin, the probed set and the remedy. An
+    unpinned repo or an unresolved pin is returned as-is (the caller's own fallback and defect path apply)."""
+    pin = resolve_targeted_test_python(repo_root)
+    if not pin.command or pin.defect is not None or pin.source == SOURCE_NONE or _imports_pytest(pin.command):
+        return pin
+    tried = [pin.command]
+    seen = {os.path.normcase(os.path.realpath(pin.command))}
+    for cand in _fallback_candidates():
+        key = os.path.normcase(os.path.realpath(cand))
+        if key in seen:
+            continue
+        seen.add(key)
+        tried.append(cand)
+        if _imports_pytest(cand):
+            return TargetedPython(cand, "pytest-fallback", None)
+    return TargetedPython(pin.command, pin.source, f"it cannot import pytest and no other interpreter on this host can (tried {', '.join(tried)}); {NO_PYTEST_REMEDY}")

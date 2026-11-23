@@ -90,6 +90,10 @@ def shape_codex_child(
         for name in ("TEMP", "TMP"):
             env[_key(env, name) or name] = str(tmp)
     if writable_root is not None:
+        # Every codex SessionStart/Stop hook classifies the child from this env; a root `codex exec`
+        # with no marker is read as a human EM and handed EM doctrine. An explicit non-em role wins.
+        if env.get("COORDINATOR_AGENT_ROLE") in (None, "", "em"):
+            env["COORDINATOR_AGENT_ROLE"] = "worker"
         _isolate_codex_home(env, Path(writable_root), os.environ if environ is None else environ, worker=True)
     check_pwsh_launchable(env)
     return env

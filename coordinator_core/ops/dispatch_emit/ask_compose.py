@@ -1802,6 +1802,17 @@ def _measured_instruction_js(repo_root: Optional[str]) -> str:
     return _cat("First run `", "js:(" + command + ")", "`; it returns a candidate commit sha. ")
 
 
+def _export_argv_shape(repo_root: Optional[str]) -> str:
+    """The argv shape an `--export-run --` command takes: interpreter, `-m pytest`, then the targets. Trap: the
+    runner is an LLM that copies the `test_leg_run` shape (targets only after `--`); the export runs the argv
+    verbatim, so a bare test path is exec'd (WinError 193)."""
+    from coordinator_core.ops.dispatch_emit.interpreter_pin import resolve_targeted_test_python
+
+    pin = resolve_targeted_test_python(repo_root) if repo_root else None
+    py = pin.command if pin and pin.command and pin.defect is None else "python3"
+    return f"`{py} -m pytest <the scoped test targets>`"
+
+
 def _test_instruction_js(
     review_edits_base: str, repo_root: Optional[str] = None, export_command: Optional[str] = None
 ) -> str:
@@ -1823,7 +1834,8 @@ def _test_instruction_js(
         return _cat(
             "js:" + _measured_instruction_js(repo_root),
             "Then run every scoped test target through this export "
-            "command, appending the test runner argv after the `--`; it runs that argv with a clean export "
+            "command, appending the WHOLE test command after the `--` (" + _export_argv_shape(repo_root) + "; the "
+            "targets alone are no command and fail to start on Windows); it runs that argv with a clean export "
             "(HEAD plus the run's declared paths, none of the shared worktree's other changes) as the working "
             f"directory and removes the export itself:\n\n{export_command}\n\n"
             f"Set {MEASURED_REV_ENV} to the sha in the test process environment. If the op or the export command "

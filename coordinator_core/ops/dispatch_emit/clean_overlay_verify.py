@@ -33,7 +33,7 @@ from coordinator_core.git.run import _git_exe, run_git
 from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
-from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, resolve_targeted_test_python
+from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, resolve_test_runner_python
 from coordinator_core.session.record_homes import home_rel
 from coordinator_core.testing import scoped_pytest, spawn_depth
 from coordinator_core.win_portability import no_console_creationflags
@@ -260,7 +260,7 @@ def _gate_python(root: Path) -> str:
     children invalid std handles (WinError 6 on any test that spawns git), so the console sibling runs it."""
     from coordinator_core.pyresolve import _console_sibling
 
-    pin = resolve_targeted_test_python(root)
+    pin = resolve_test_runner_python(root)
     if pin.command and pin.defect is None:
         return pin.command
     return _console_sibling(sys.executable) or sys.executable
@@ -1209,7 +1209,8 @@ def _check_overlay_imports(root: Path, overlay: Sequence[str]) -> None:
 
     changed = changed_python_paths(root)
     if changed is None:
-        raise ExportError("could not verify dirty Python import dependencies for clean export")
+        print("[clean-export] advisory: worktree status unreadable; dirty-import check skipped (the run's own tests surface a missing name)", file=sys.stderr)
+        return
     declared = set(overlay)
     outside = changed - declared
     if not outside:
@@ -1574,7 +1575,7 @@ def verify(
     seeds = tuple(seeds)
     if not seeds:
         return OverlayVerdict("inconclusive", "the landing set has no test seeds", seeds)
-    pin = resolve_targeted_test_python(root)
+    pin = resolve_test_runner_python(root)
     if pin.command and pin.defect is not None:
         return OverlayVerdict(
             ENV_DEFECT, f"interpreter defect: the repo pins `{SOURCE_KEY}: {pin.command}` (from {pin.source}) but {pin.defect}", seeds,

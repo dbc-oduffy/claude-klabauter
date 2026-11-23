@@ -537,7 +537,7 @@ def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "t
         script = declared.split()[0]
         if Path(script).is_absolute() or ".." in re.split(r"[\/]", script) or not (root / script).is_file():
             return f"{ti.LAUNCHER_KEY} {declared!r} is not a repo-relative file that exists"
-        pin = ti.resolve_targeted_test_python(root)
+        pin = ti.resolve_test_runner_python(root)
         python = pin.command if pin.command and pin.defect is None else sys.executable
         return [python, *_cap_workers(_drop_marker_filter(shlex.split(declared)), cap)], groups
     resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(config))

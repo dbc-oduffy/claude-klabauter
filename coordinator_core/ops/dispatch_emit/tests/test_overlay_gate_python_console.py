@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def _no_pin(monkeypatch) -> None:
-    monkeypatch.setattr(cov, "resolve_targeted_test_python", lambda root: SimpleNamespace(command=None, defect=None))
+    monkeypatch.setattr(cov, "resolve_test_runner_python", lambda root: SimpleNamespace(command=None, defect=None))
 
 
 # Trap: _console_sibling joins with ntpath, so on a POSIX host the sibling is a backslash path that never exists.
@@ -34,6 +34,6 @@ def test_a_console_engine_interpreter_is_used_as_is(tmp_path: Path, monkeypatch:
 
 def test_a_resolved_pin_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        cov, "resolve_targeted_test_python", lambda root: SimpleNamespace(command="C:/pinned/python.exe", defect=None)
+        cov, "resolve_test_runner_python", lambda root: SimpleNamespace(command="C:/pinned/python.exe", defect=None)
     )
     assert cov._gate_python(tmp_path) == "C:/pinned/python.exe"

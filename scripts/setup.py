@@ -3875,6 +3875,32 @@ GROUP_EM_ARMING_NOTE = (
 )
 
 
+def _read_home_gitignore(module: "types.ModuleType") -> "list[str]":
+    """The group-em home's `.gitignore` lines before a refresh; [] when absent or unresolvable."""
+    try:
+        return (module.resolve_home() / ".gitignore").read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+
+
+def _restore_gitignore_lines(home: Path, before: "list[str]") -> None:
+    """Append back any pre-refresh `.gitignore` line the refresh dropped. DoE's `_gem_home` owns the
+    refresh and this repo cannot edit it; a refresh may add lines, never remove one."""
+    if not before:
+        return
+    path = Path(home) / ".gitignore"
+    try:
+        now = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        now = ""
+    have = set(now.splitlines())
+    lost = [ln for ln in before if ln not in have]
+    if lost:
+        lead = "\n" if now and not now.endswith("\n") else ""
+        with path.open("a", encoding="utf-8", newline="") as fh:
+            fh.write(lead + "\n".join(lost) + "\n")
+
+
 def refresh_group_em_home(repo_root: Path, args: Args) -> None:
     """Redeploy the shipped group-em CLAUDE.md template into the group-em home on every run.
 
@@ -3899,7 +3925,9 @@ def refresh_group_em_home(repo_root: Path, args: Args) -> None:
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
+        before = _read_home_gitignore(module)
         home = module.ensure_home(refresh=True)
+        _restore_gitignore_lines(home, before)
     except Exception as exc:  # advisory phase -- never fails the install
         print(f"WARN [group-em] refresh skipped ({type(exc).__name__}: {exc})")
         return

@@ -9,8 +9,13 @@ SOURCES = frozenset({"startup", "resume", "clear", "compact", "fork"})
 
 
 def _engine_issued_contract(env) -> bool:
-    """True when env carries what `independent_child_env` stamps on an engine child."""
-    return bool(env.get(ROLE_ENV) or env.get("COORDINATOR_PARENT_SESSION_ID"))
+    """True when env marks a `codex exec` as delegated, never a human-launched root.
+
+    `independent_child_env` stamps ROLE/PARENT on engine children. A bare `codex exec` run from a
+    Claude agent's Bash (the family-stage-runner on non-Windows) carries neither, but inherits
+    CLAUDECODE; without it that exec classifies as a root EM and codex refuses worker tasks.
+    """
+    return bool(env.get(ROLE_ENV) or env.get("COORDINATOR_PARENT_SESSION_ID") or env.get("CLAUDECODE"))
 
 
 def classify(payload, env, *, native_main: bool = False, exec_worker: bool = False, native_role=None):
