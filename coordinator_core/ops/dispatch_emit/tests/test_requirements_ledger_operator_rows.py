@@ -43,7 +43,7 @@ def _write(repo: Path, rel: str, text: str) -> None:
 def test_judge_classifies_an_operator_withheld_row_awaiting_operator_with_its_command():
     ledger = rl.Ledger((rl.Item("R1", "a", "pm", "t"), rl.Item("R2", "b", "pm", "t")), False)
     verdict = {"items": [
-        {"id": "R1", "status": "met", "wired": True},
+        {"id": "R1", "status": "met", "met_by": "a.py", "wired": True},
         {"id": "R2", "status": "not_met", "withheld_by": "C2"},
     ]}
     result = rl.judge(ledger, verdict, operator={"C2": COMMAND})
@@ -105,7 +105,7 @@ def repo(tmp_path, monkeypatch):
 
 def test_delivered_row_commits_and_the_operator_row_reads_awaiting_operator_with_its_command(repo):
     verdict = {"items": [
-        {"id": "R1", "status": "met", "wired": True},
+        {"id": "R1", "status": "met", "met_by": "a.py", "wired": True},
         {"id": "R2", "status": "not_met", "withheld_by": "C2"},
     ]}
     params = {

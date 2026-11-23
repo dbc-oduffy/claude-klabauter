@@ -21,7 +21,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 def _call(repo, **extra) -> dict:
     params = {
         "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED, "session_id": _SID,
-        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]}, **extra,
+        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}, **extra,
     }
     return terminal_commit._handler(params, repo_root=repo / ".git")
 

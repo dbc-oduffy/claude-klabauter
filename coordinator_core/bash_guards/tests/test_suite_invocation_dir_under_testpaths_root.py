@@ -41,6 +41,16 @@ def _track(repo) -> None:
     _PATCH[-1].setattr(git_state, "read_index_paths", lambda _repo: snapshot)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_leg_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Leg 0 (the shared test-run verdict) admits and the ceiling reads healthy: this file judges
+    the directory legs. Leg 0 itself is pinned in test_check_test_suite_invocation.py."""
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    monkeypatch.setattr(adm, "over_admit_ceiling", lambda payload: None)
+    monkeypatch.setattr(adm, "test_run_verdict", lambda *a, **k: adm.TestRunVerdict(True))
+
+
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (tmp_path / "pyproject.toml").write_text(

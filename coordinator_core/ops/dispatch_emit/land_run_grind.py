@@ -58,6 +58,12 @@ CLOSED_BY_FIX = "fix"
 #: Reply key listing the ``closed_by: fix`` rows refused for want of a landed sha.
 CLOSE_REFUSED_KEY = "close_refused"
 
+#: ``grind`` key carrying the run clone's root; each landed path's bytes then come from that clone.
+WORK_ROOT_KEY = "work_root"
+
+#: ``dropped``/``stranded`` reason of a path whose main-worktree copy a peer dirtied while the run edited its clone.
+DROP_PEER_DIRTY_IN_MAIN = "peer-dirty-in-main"
+
 #: Drops that never hold a row open: a ledger-root path is evidence, not product, and an unseen deletion is already true.
 _NON_PRODUCT_DROPS = frozenset({DROP_LEDGER_ROOT, DROP_UNSEEN_DELETION})
 
@@ -105,6 +111,25 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict, ledger_pat
 
     ``ledger_paths`` are the run's own manifest-named ledger-root files: the ones still changed ride
     in the same commit, except a landed row's ledger, which settle unlinks. They never hold a row."""
+    reply = _commit_grind_rows_once(main_root, repo_root, params, ledger_paths)
+    _reap_clone(main_root, params, reply)
+    return reply
+
+
+def _reap_clone(main_root: Path, params: dict, reply: dict) -> None:
+    """Remove the run's clone once a call carrying ``grind.work_root`` has landed its commit."""
+    grind = params.get(GRIND_COMMIT_PARAM)
+    run_id = params.get("run_id")
+    if not (isinstance(grind, dict) and grind.get(WORK_ROOT_KEY) and reply.get("committed") is True):
+        return
+    if isinstance(run_id, str) and safe_id(run_id):
+        from coordinator_core.bug_blitz import worker_clone
+
+        worker_clone.reap(main_root, run_id)
+
+
+def _commit_grind_rows_once(main_root: Path, repo_root: Path, params: dict, ledger_paths: Sequence[str]) -> dict:
+    """``commit_grind_rows`` without the clone reap: ``land_green_rows`` reaps once after its last row."""
     grind = params.get(GRIND_COMMIT_PARAM)
     if _wants_per_row(grind):
         return land_green_rows(main_root, repo_root, params, ledger_paths)
@@ -135,7 +160,7 @@ def land_green_rows(main_root: Path, repo_root: Path, params: dict, ledger_paths
     refused: list = []
     error: Optional[dict] = None
     for row in grind["rows"]:
-        reply = commit_grind_rows(
+        reply = _commit_grind_rows_once(
             main_root, repo_root, {**params, GRIND_COMMIT_PARAM: {**base_grind, "rows": [row]}}, ledger_paths,
         )
         for key in ("dropped", "stranded", "rows", UNLANDED_KEY, "reopened"):
@@ -301,12 +326,59 @@ def _is_run_evidence(path: str, profile: str, run_id: str) -> bool:
     return path.startswith(prefix) and ".." not in path[len(prefix):].split("/")
 
 
+class _CloneView:
+    """The run clone's bytes for ``paths`` against HEAD, read in-process: ``blobs`` (checkin form; None = absent
+    in the clone), ``head`` (``{path: (mode, sha)}``) and ``changed`` (paths whose clone bytes differ from HEAD)."""
+
+    def __init__(self, main_root: Path, clone: Path, paths: Sequence[str]) -> None:
+        from coordinator_core.bug_blitz import worker_clone
+        from coordinator_core.git.git_state import head_blobs
+
+        self.main_root = main_root
+        self.head = head_blobs(main_root, list(paths))
+        self.blobs: dict = {}
+        self.changed: set = set()
+        for p, raw in worker_clone.carried_blobs(clone, list(paths)).items():
+            data = None if raw is None else grind_landing_select._checkin(main_root, p, raw)
+            self.blobs[p] = data
+            if raw is None:
+                if p in self.head:
+                    self.changed.add(p)
+            elif data is None or p not in self.head or _blob_sha(data) != self.head[p][1]:
+                self.changed.add(p)  # a check-in form git cannot reproduce counts as changed and drops as missing
+
+    def main_matches_head(self, p: str) -> bool:
+        """True when main's copy of ``p`` is absent (and HEAD lacks it) or equals the pre-land HEAD blob."""
+        target = self.main_root / p
+        if not target.exists():
+            return p not in self.head
+        try:
+            return p in self.head and _blob_sha(grind_landing_select._checkin(self.main_root, p, target.read_bytes()) or b"\0") == self.head[p][1]
+        except OSError:
+            return False
+
+
+def _blob_sha(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\x00" + data).hexdigest()
+
+
 def _land(
     main_root: Path, repo_root: Path, grind: dict, deliverable_id: object, run_id: str,
     ledger_paths: Sequence[str] = (),
 ) -> dict:
     from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths, hash_worktree_blobs_via_spawn
     from coordinator_core.ops.dispatch_emit.worktree_snapshot import worktree_snapshot
+
+    clone: Optional[Path] = None
+    if grind.get(WORK_ROOT_KEY) is not None:
+        from coordinator_core.bug_blitz import worker_clone
+
+        named = grind[WORK_ROOT_KEY]
+        clone = worker_clone.clone_root(main_root, run_id)
+        if clone is None or not isinstance(named, str) or Path(named).resolve() != clone.resolve():
+            return _error(f"params.grind.{WORK_ROOT_KEY} is not run {run_id}'s clone", refused="work-root")
 
     dropped: list = []
     plans: list = []
@@ -332,10 +404,21 @@ def _land(
     }
     ledger_extra = [p for p in dict.fromkeys(ledger_paths) if p.startswith(LEDGER_ROOT) and p not in settled]
     literals = [p for _row, paths, deleted in plans for p in paths + deleted] + ledger_extra
-    snapshot = worktree_snapshot(main_root, literals, [], []) if literals else None
-    if literals and snapshot is None:
-        return _error("git status over the grind rows failed", dropped=dropped, stranded=[], rows=[])
-    changed = snapshot.changed if snapshot is not None else set()
+    view: Optional[_CloneView] = None
+    if clone is not None:
+        view = _CloneView(main_root, clone, literals)
+        changed = view.changed
+    else:
+        snapshot = worktree_snapshot(main_root, literals, [], []) if literals else None
+        if literals and snapshot is None:
+            return _error("git status over the grind rows failed", dropped=dropped, stranded=[], rows=[])
+        changed = snapshot.changed if snapshot is not None else set()
+
+    def is_file(p: str) -> bool:
+        return view.blobs.get(p) is not None if view is not None else (main_root / p).is_file()
+
+    def deletion_already_true(p: str) -> bool:
+        return p not in view.head if view is not None else not (main_root / p).exists()
 
     staged: list = []
     for row, paths, deleted in plans:
@@ -344,15 +427,18 @@ def _land(
         for p in paths:
             if p in deleted or p not in changed:
                 continue
-            if (main_root / p).is_file():
+            if is_file(p):
                 live.append(p)
             else:
                 dropped.append({"row_id": row_id, "path": p, "reason": DROP_MISSING})
         removed = []
         for p in deleted:
             if p in changed:
-                removed.append(p)
-            elif not (main_root / p).exists():
+                if view is not None and not view.main_matches_head(p):
+                    dropped.append({"row_id": row_id, "path": p, "reason": DROP_PEER_DIRTY_IN_MAIN})
+                else:
+                    removed.append(p)
+            elif deletion_already_true(p):
                 continue  # absent from HEAD (unchanged) and from the worktree: the deletion is already true
             else:
                 dropped.append({"row_id": row_id, "path": p, "reason": DROP_UNSEEN_DELETION})
@@ -366,7 +452,7 @@ def _land(
                 owners[p] = [row["row_id"]]
             elif row["row_id"] not in rows_of:
                 rows_of.append(row["row_id"])
-    sel = grind_landing_select.select(main_root, run_id, owners) if owners else None
+    sel = grind_landing_select.select(main_root, run_id, owners) if owners and view is None else None
 
     selected: list = []
     for row, live, removed in staged:
@@ -394,21 +480,34 @@ def _land(
             commit_files += live
             commit_deleted += removed
     commit_deleted = list(dict.fromkeys(commit_deleted))
-    ledger_riders = [p for p in ledger_extra if landing and p in changed and (main_root / p).is_file()]
+    ledger_riders = [p for p in ledger_extra if landing and p in changed and is_file(p)]
     commit_files = list(dict.fromkeys(commit_files + ledger_riders))
     stranded = [dict(d) for d in dropped]
     unlanded = [
         {"row_id": i, "reason": "a declared product path was dropped from the landing; the row stays open"}
         for i in sorted(held)
     ]
-    reopened = _reopen_held_rows(main_root, repo_root, [(r, p, d) for r, p, d in plans if r["row_id"] in held])
+    reopened = (
+        [] if view is not None
+        else _reopen_held_rows(main_root, repo_root, [(r, p, d) for r, p, d in plans if r["row_id"] in held])
+    )
     base = {"dropped": dropped, "stranded": stranded, "rows": [], UNLANDED_KEY: unlanded, "reopened": reopened}
     if not landing:
         return {"committed": False, "sha": None, "nothing_to_commit": True, **base}
 
+    supplied: Optional[dict] = sel.supplied_blobs if sel is not None else None
+    landed_text = sel.landed_text if sel is not None else None
+    if view is not None:
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.git.git_objects import write_object
+
+        common = resolve_git_common_dir(main_root)
+        supplied = {p: write_object(common, b"blob", view.blobs[p]) for p in commit_files}
+        landed_text = landing_integrity.committed_image_text(
+            main_root, {**{p: view.blobs[p] for p in commit_files}, **{p: None for p in commit_deleted}},
+        )
     findings = landing_integrity.import_closure_findings(
-        main_root, commit_files, commit_deleted,
-        landed_text=sel.landed_text if sel is not None else None,
+        main_root, commit_files, commit_deleted, landed_text=landed_text,
     )
     if findings:
         return _error(
@@ -423,6 +522,21 @@ def _land(
         grind, landing, len(commit_deleted), stranded, deliverable_id,
         code_landed=bool(review_floor.code_paths(commit_files + commit_deleted)),
     )
+    # A deletion main still holds clean must leave the worktree first: `commit_paths` refuses a declared
+    # deletion of a present file. The bytes come back if the commit does not land.
+    unlinked: dict = {}
+    if view is not None:
+        for p in commit_deleted:
+            target = main_root / p
+            if target.is_file():
+                unlinked[p] = target.read_bytes()
+                target.unlink()
+
+    def _restore() -> None:
+        for p, data in unlinked.items():
+            (main_root / p).parent.mkdir(parents=True, exist_ok=True)
+            (main_root / p).write_bytes(data)
+
     try:
         outcome = commit_paths(
             main_root,
@@ -430,15 +544,26 @@ def _land(
             message,
             deleted_paths=commit_deleted,
             declared_reverts=commit_deleted,
-            supplied_blobs=sel.supplied_blobs if sel is not None else None,
+            supplied_blobs=supplied,
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=main_root),
         )
     except NothingToCommit:
+        _restore()
         return {"committed": False, "sha": None, "nothing_to_commit": True, **base}
     except CommitRefused as err:
+        _restore()
         return _error(str(err), refused="commit-refused", **base)
+    except BaseException:
+        _restore()
+        raise
 
     sha = outcome.sha
+    if view is not None:
+        owner_of = {p: r["row_id"] for r, live, _removed in selected for p in live}
+        stranded += [
+            {"row_id": owner_of.get(p, ""), "path": p, "reason": DROP_PEER_DIRTY_IN_MAIN}
+            for p in outcome.left_alone if p in (supplied or {})
+        ]
     rows = [{"row_id": r["row_id"], "outcome": r["outcome"], "sha": sha} for r in landing]
     settle_error = None
     try:

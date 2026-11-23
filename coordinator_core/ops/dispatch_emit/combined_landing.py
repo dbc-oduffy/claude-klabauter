@@ -341,3 +341,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         else:
             landed.append({"run_id": run_id, **_close_landed(root, run_id, sha, None)})
     return {"ok": True, "sha": sha, "committed": sorted(declared), "landed": landed, "partial": partial}
+
+
+def classify(root: Path, run_id: str, declared: set) -> tuple[Optional[str], list]:
+    """Public seam of ``_classify`` for the joint land: ``(refusal, withheld paths outside declared)``."""
+    return _classify(root, run_id, declared)
+
+
+def land_combined(params: dict, repo_root: Path) -> dict:
+    """Public seam of ``_handler`` for the joint land: commit the staged index and credit ``params["run_ids"]``."""
+    return _handler(params, repo_root)

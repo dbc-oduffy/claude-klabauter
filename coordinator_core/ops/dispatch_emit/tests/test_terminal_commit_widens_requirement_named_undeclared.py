@@ -19,7 +19,7 @@ OTHER = "other.py"
 
 
 def _call(repo, *ids):
-    verdict = {"items": [{"id": i, "status": "met", "wired": True} for i in ids or ("R1",)]}
+    verdict = {"items": [{"id": i, "status": "met", "met_by": "a.py", "wired": True} for i in ids or ("R1",)]}
     return terminal_commit._handler(
         {
             "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED,

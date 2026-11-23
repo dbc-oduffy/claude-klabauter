@@ -98,6 +98,7 @@ class RunnerRecord:
     failing_ids: tuple[str, ...] = ()
     process_s: float = 0.0
     foreign_holders: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    base_sha: str = ""
 
     def to_json(self) -> dict:
         """JSON-ready dict in schema field order."""
@@ -110,6 +111,7 @@ class RunnerRecord:
             "exit_code": self.exit_code,
             "failing_ids": list(self.failing_ids),
             "foreign_holders": {p: list(h) for p, h in self.foreign_holders},
+            "base_sha": self.base_sha,
             "process_s": self.process_s,
         }
 

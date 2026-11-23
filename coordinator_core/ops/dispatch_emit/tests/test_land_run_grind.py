@@ -379,6 +379,112 @@ def test_land_green_rows_refuses_malformed_params(repo) -> None:
     assert out["committed"] is False and out["refused"] == "grind-params"
 
 
+@pytest.fixture
+def clone_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A clean repo plus its run clone: `(main, clone)`; main's tracked files equal HEAD."""
+    import tempfile
+
+    from coordinator_core.bug_blitz import worker_clone
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    _git(["init", "-q"], root)
+    _git(["config", "user.email", "t@example.com"], root)
+    _git(["config", "user.name", "t"], root)
+    for name in ("a.py", "b.py", "gone.py"):
+        (root / name).write_text("x = 1\n", encoding="utf-8")
+    _git(["add", "."], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+    return root, worker_clone.provision(root, RUN, is_live=lambda _r, _i: False)
+
+
+def _clone_call(root: Path, clone: Path, rows, **extra) -> dict:
+    return _call(root, rows, grind={"work_root": str(clone)}, **extra)
+
+
+def test_clone_run_lands_the_clones_bytes_and_leaves_main_untouched_until_then(clone_repo) -> None:
+    root, clone = clone_repo
+    (clone / "a.py").write_text("x = 'fixed'\n", encoding="utf-8")
+    (clone / "new.py").write_text("y = 1\n", encoding="utf-8")
+    assert (root / "a.py").read_text(encoding="utf-8") == "x = 1\n" and not (root / "new.py").exists()
+    head = _git(["rev-parse", "HEAD"], root).strip()
+    out = _clone_call(root, clone, [_row("r1", ["a.py", "new.py"])])
+    assert out["committed"] is True and out["stranded"] == []
+    assert _git(["rev-list", "--count", f"{head}..HEAD"], root).strip() == "1"
+    assert _head_files(root) == {"a.py", "new.py"}
+    assert _git(["show", "HEAD:a.py"], root) == "x = 'fixed'\n"
+    assert (root / "a.py").read_text(encoding="utf-8") == "x = 'fixed'\n"
+    assert (root / "new.py").read_text(encoding="utf-8") == "y = 1\n"
+    assert _status(root) == {}
+
+
+def test_clone_run_does_not_overwrite_a_path_a_peer_dirtied_in_main(clone_repo) -> None:
+    root, clone = clone_repo
+    (clone / "a.py").write_text("x = 'fixed'\n", encoding="utf-8")
+    (clone / "b.py").write_text("x = 'fixed b'\n", encoding="utf-8")
+    write_seen_by_git(root / "b.py", "x = 'peer'\n")
+    out = _clone_call(root, clone, [_row("r1", ["a.py", "b.py"])])
+    assert out["committed"] is True
+    assert _git(["show", "HEAD:b.py"], root) == "x = 'fixed b'\n"
+    assert (root / "b.py").read_text(encoding="utf-8") == "x = 'peer'\n"
+    assert [(s["path"], s["reason"]) for s in out["stranded"]] == [("b.py", "peer-dirty-in-main")]
+    assert (root / "a.py").read_text(encoding="utf-8") == "x = 'fixed'\n"
+
+
+def test_clone_run_lands_a_deletion_main_still_holds_clean(clone_repo) -> None:
+    root, clone = clone_repo
+    (clone / "gone.py").unlink()
+    out = _clone_call(root, clone, [_row("r1", [], deleted=["gone.py"])])
+    assert out["committed"] is True and not (root / "gone.py").exists()
+    assert "gone.py" not in _git(["ls-tree", "-r", "--name-only", "HEAD"], root).split()
+
+
+def test_clone_run_holds_a_deletion_of_a_file_a_peer_dirtied_in_main(clone_repo) -> None:
+    root, clone = clone_repo
+    (clone / "gone.py").unlink()
+    write_seen_by_git(root / "gone.py", "x = 'peer'\n")
+    head = _git(["rev-parse", "HEAD"], root)
+    out = _clone_call(root, clone, [_row("r1", [], deleted=["gone.py"])])
+    assert out["committed"] is False and _git(["rev-parse", "HEAD"], root) == head
+    assert [(d["path"], d["reason"]) for d in out["dropped"]] == [("gone.py", "peer-dirty-in-main")]
+    assert (root / "gone.py").read_text(encoding="utf-8") == "x = 'peer'\n"
+
+
+def test_clone_run_reaps_the_clone_after_the_landing_and_keeps_it_when_nothing_landed(clone_repo) -> None:
+    from coordinator_core.bug_blitz import worker_clone
+
+    root, clone = clone_repo
+    assert _clone_call(root, clone, [_row("r1", ["a.py"])])["committed"] is False
+    assert worker_clone.clone_root(root, RUN) is not None
+    (clone / "a.py").write_text("x = 'fixed'\n", encoding="utf-8")
+    assert _clone_call(root, clone, [_row("r1", ["a.py"])])["committed"] is True
+    assert worker_clone.clone_root(root, RUN) is None and not clone.exists()
+
+
+def test_clone_run_per_row_lands_each_row_then_reaps_once(clone_repo) -> None:
+    from coordinator_core.bug_blitz import worker_clone
+
+    root, clone = clone_repo
+    (clone / "a.py").write_text("x = 'a'\n", encoding="utf-8")
+    (clone / "b.py").write_text("x = 'b'\n", encoding="utf-8")
+    out = _call(root, [_row("r1", ["a.py"]), _row("r2", ["b.py"])], grind={"work_root": str(clone), "per_row": True})
+    assert [c["row_id"] for c in out["commits"]] == ["r1", "r2"]
+    assert _git(["show", "HEAD:b.py"], root) == "x = 'b'\n"
+    assert worker_clone.clone_root(root, RUN) is None
+
+
+def test_a_work_root_that_is_not_the_runs_clone_is_refused_before_any_write(clone_repo, tmp_path: Path) -> None:
+    root, clone = clone_repo
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    (other / "a.py").write_text("x = 'evil'\n", encoding="utf-8")
+    head = _git(["rev-parse", "HEAD"], root)
+    out = _call(root, [_row("r1", ["a.py"])], grind={"work_root": str(other)})
+    assert out["committed"] is False and out["refused"] == "work-root"
+    assert _git(["rev-parse", "HEAD"], root) == head and (root / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+
+
 def _fix_row(row_id, paths):
     return {**_row(row_id, paths), "closed_by": "fix"}
 

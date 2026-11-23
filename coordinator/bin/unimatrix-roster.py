@@ -295,7 +295,16 @@ def entry_listed(d):
     never rewritten, so a flag set while its holder was briefly unproven would otherwise hide a live
     session from every remote box for good."""
     return (entry_live(d) and not mirror_orphaned(d) and not mirror_unbacked(d)
-            and not _liveness().agy_face_unbacked(d) and not _liveness().codex_face_unbacked(d))
+            and not local_agy_face_unbacked(d) and not _liveness().codex_face_unbacked(d))
+
+
+def local_agy_face_unbacked(d) -> bool:
+    """True for an agy router face on this box whose agy process is gone. A far mirror copies the far
+    face's vendor and router pid but has no peers.json row here, so it is never this box's face: its
+    far session's liveness is `mirror_unbacked`'s question."""
+    if isinstance(d, dict) and (d.get(FAR_SOCKET_FIELD) or d.get("unimatrixMirror")):
+        return False
+    return _liveness().agy_face_unbacked(d)
 
 
 def far_codex_unbacked(entry):
@@ -1361,7 +1370,7 @@ def reap_unbacked_agy_faces(say) -> None:
         except (OSError, ValueError):
             continue
         pid = int(m.group(1))
-        if (not isinstance(d, dict) or d.get("pid") != pid or not liveness.agy_face_unbacked(d)
+        if (not isinstance(d, dict) or d.get("pid") != pid or not local_agy_face_unbacked(d)
                 or liveness.stamp_fresh(d, "startedAt", AGY_FACE_GRACE_SECONDS)):
             continue
         if isinstance(d.get("procStart"), str) and d["procStart"] and entry_live(d):
@@ -1534,7 +1543,7 @@ def mirror(row, cfg, say, scan=None):
     sess = sessions_dir()
     write_json_atomic(os.path.join(sess, f"{b.pid}.json"), d)
     write_peer_key(os.path.join(sess, key_name(b.pid, endpoint)),
-                   local_peer_key(row["key"], d["procStart"], d["pidDomain"]))
+                   local_peer_key("", d["procStart"], d["pidDomain"]))  # a far key is never adopted
     say(f"mirror {e.get('name')} {far_sock} -> bridge {b.pid} {endpoint}")
     return b
 
@@ -1573,7 +1582,7 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
         return
     if not isinstance(d, dict):
         return
-    refresh_mirror_key(d, row.get("key", ""))
+    refresh_mirror_key(d, "")
     updates = {}
     if d.get("unimatrixRemote") != cfg.remote:
         updates["unimatrixRemote"] = cfg.remote

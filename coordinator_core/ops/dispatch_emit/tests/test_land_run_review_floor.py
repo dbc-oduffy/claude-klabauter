@@ -29,7 +29,7 @@ PLAN = "docs/plans/p.md"
 REPORT = "reports/X1.md"
 CODE = "coordinator_core/mod.py"
 DOC = "docs/" "wiki/note.md"
-VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:

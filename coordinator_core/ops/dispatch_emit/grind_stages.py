@@ -263,6 +263,12 @@ _JUDGE_AGAINST_HEAD_CLAUSE = (
     "peers share this checkout."
 )
 
+#: A run anchored on its own clone (`WORK_ROOT`): no peer holds the tree the agent edits.
+_JUDGE_IN_CLONE_CLAUSE = "Your clone holds only HEAD plus this run's edits: judge a file by its content there."
+
+#: Run-clone expression `grind_compose` binds from the fire-time `args.work_root`; equal to `REPO_ROOT` when absent.
+WORK_ROOT_JS = "WORK_ROOT"
+
 
 SIDECAR_WORKFLOW = "grind"
 
@@ -371,6 +377,11 @@ _FOREIGN_UNCOMMITTED_CLAUSE = (
     "in `evidence`."
 )
 
+_BASE_SHA_CLAUSE = (
+    "A `passed` outcome, and any NOT_REPRODUCED or already-fixed verdict resting on it, quotes "
+    "the record's `base_sha` in `evidence`: it names the commit the verdict judged."
+)
+
 #: Outcomes that force a verify `fail`; `passed` and `nothing-to-run` keep the agent verdict.
 RUNNER_FAIL_OUTCOMES: tuple[str, ...] = tuple(
     o for o in RUNNER_OUTCOMES if o not in ("passed", "nothing-to-run")
@@ -451,15 +462,36 @@ _REPO_ANCHOR_PARTS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _preamble_parts(preamble_expr: Optional[str]) -> list[tuple[str, str]]:
+def _repo_anchor_parts(repo_root_js: str) -> list[tuple[str, str]]:
+    """`_REPO_ANCHOR_PARTS` over ``repo_root_js``: the worker's cwd is the run clone when a stage is anchored on it."""
+    if repo_root_js == "REPO_ROOT":
+        return list(_REPO_ANCHOR_PARTS)
+    return [_REPO_ANCHOR_PARTS[0], ("expr", repo_root_js), _REPO_ANCHOR_PARTS[2]]
+
+
+def _judge_parts(repo_root_js: str, before: str, after: str) -> list[tuple[str, str]]:
+    """``before`` + the judge-against-HEAD clause + ``after``. Over a stage anchored on a run clone
+    (``repo_root_js`` other than `REPO_ROOT`) the clause is picked at run time: the clone's own wording when
+    the fire args supplied a clone, the shared-checkout wording when `WORK_ROOT` fell back to `REPO_ROOT`."""
+    if repo_root_js == "REPO_ROOT":
+        return [("lit", before + _JUDGE_AGAINST_HEAD_CLAUSE + after)]
+    clause = (
+        f"({repo_root_js} !== REPO_ROOT ? {_js_string_literal(_JUDGE_IN_CLONE_CLAUSE)}"
+        f" : {_js_string_literal(_JUDGE_AGAINST_HEAD_CLAUSE)})"
+    )
+    return [("lit", before), ("expr", clause), ("lit", after)]
+
+
+def _preamble_parts(preamble_expr: Optional[str], repo_root_js: str = "REPO_ROOT") -> list[tuple[str, str]]:
     """The run-wide posture block, as ``_join_prompt_parts`` parts
     prepended ahead of a stage's own prompt text -- a bare runtime
     expression (``PREAMBLE``, the const ``grind_compose.py`` declares ONCE
     when ``--preamble`` is given), never the literal text inlined here.
     Empty when ``preamble_expr`` is ``None``."""
+    anchor = _repo_anchor_parts(repo_root_js)
     if not preamble_expr:
-        return list(_REPO_ANCHOR_PARTS)
-    return [("expr", preamble_expr), ("lit", "\n\n"), *_REPO_ANCHOR_PARTS]
+        return anchor
+    return [("expr", preamble_expr), ("lit", "\n\n"), *anchor]
 
 
 def _list_parts(files: Sequence[str], files_js: Optional[str]) -> list[tuple[str, str]]:
@@ -494,7 +526,7 @@ def compose_triage_call(
     rows_part: tuple[str, str] = ("expr", rows_js) if rows_js else ("lit", "[]")
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     parts: list[tuple[str, str]] = [
-        *_preamble_parts(preamble_expr),
+        *_preamble_parts(preamble_expr, repo_root_js),
         ("lit", "You are the triage stage. Your rows (row_id/path/digest) are: "),
         rows_part,
         ("lit", ". Run `" + ASSEMBLE_CMD + " grind-row check --manifest "),
@@ -558,10 +590,11 @@ def compose_triage_call(
         batch_id_part,
         ("lit", ".json. Triage depth for this batch is '"),
         depth_part,
-        ("lit", "'. " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE),
     ]
-    if targeted_runner:
-        parts[-1] = ("lit", "'. ")
+    if not targeted_runner:
+        parts.extend(_judge_parts(repo_root_js, "'. ", " " + _NO_STAGING_CLAUSE))
+    else:
+        parts.append(("lit", "'. "))
         parts.append((
             "lit",
             "To learn whether a row's defect is already fixed, run its tests only through ",
@@ -577,10 +610,10 @@ def compose_triage_call(
         ))
         parts.append((
             "lit",
-            " and cite its `outcome` in `evidence`: `passed` means the defect is already fixed; "
-            "`failed` means it is live. Run no other test command. ",
+            " and cite its `outcome` and, for `passed`, its `base_sha` in `evidence`: `passed` means the defect is "
+            "already fixed at that sha; `failed` means it is live. Run no other test command. ",
         ))
-        parts.append(("lit", _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE))
+        parts.extend(_judge_parts(repo_root_js, "", " " + _NO_STAGING_CLAUSE))
     row_schema = {
         "type": "object",
         "required": list(TRIAGE_RECORD_FIELDS) + ["has_tradeoff", "ruling_on_tradeoff"],
@@ -654,7 +687,7 @@ def compose_refute_close_call(
     profile_dir_part: tuple[str, str] = _shq_part(profile_dir_js) if profile_dir_js else ("lit", _shq_literal(profile_dir))
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     parts: list[tuple[str, str]] = [
-        *_preamble_parts(preamble_expr),
+        *_preamble_parts(preamble_expr, repo_root_js),
         ("lit", "You are the refute-close stage. Your close proposals (row_id/path/digest/evidence/origin) are: "),
         proposals_part,
         (
@@ -688,9 +721,9 @@ def compose_refute_close_call(
             "as the row_id exactly as given in the proposals above, never the "
             "row's path -- e.g. {\"row\": \"row3\", \"new_path\": \"archive/2026-09/row3.yaml\"}. "
             "Each proposal also carries its own `origin` -- where it came from -- "
-            "for your own reference; it does not change how you judge it. "
-            + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE,
+            "for your own reference; it does not change how you judge it. ",
         ),
+        *_judge_parts(repo_root_js, "", " " + _NO_STAGING_CLAUSE),
     ]
     schema = {
         "type": "object",
@@ -764,7 +797,7 @@ def compose_size_call(
     ``_sizeChainTemplate``/``_sizeAssembleWhen`` must be in scope), whose exit
     code it returns beside its sizing fields."""
     parts: list[tuple[str, str]] = [
-        *_preamble_parts(preamble_expr),
+        *_preamble_parts(preamble_expr, repo_root_js),
         (
             "lit",
             "Size the work of resolving one backlog row, afresh. Judge first; "
@@ -779,10 +812,9 @@ def compose_size_call(
         (
             "lit",
             ". " + SCOUT_RETURN_CLAUSE + " Name the row's path in premise_evidence, so "
-            "the sizing records the row it came from. "
-            + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE
-            + " Your closing act, once your fields are settled: ",
+            "the sizing records the row it came from. ",
         ),
+        *_judge_parts(repo_root_js, "", " " + _NO_STAGING_CLAUSE + " Your closing act, once your fields are settled: "),
         ("expr", "_sizeAssembleWhen()"),
         (
             "lit",
@@ -945,7 +977,7 @@ def compose_fix_call(
         "] plus `ledger:"
     )
     parts: list[tuple[str, str]] = [
-        *_preamble_parts(preamble_expr),
+        *_preamble_parts(preamble_expr, repo_root_js),
         ("lit", "You are the fix stage for row "),
         row_id_part,
         ("lit", ". You hold the lock on ["),
@@ -1042,6 +1074,8 @@ def compose_fix_call(
             " -- never any other test command. The tests pass when its `outcome` is `passed` "
             "or `nothing-to-run`; on any other outcome they do not pass, so do not close the row. "
             + _FOREIGN_UNCOMMITTED_CLAUSE
+            + " "
+            + _BASE_SHA_CLAUSE
             + " Before reporting NOT_REPRODUCED, run it again with the same arguments and "
             "`--committed-head` (judges committed HEAD, no uncommitted file counts): report "
             "NOT_REPRODUCED only when that `outcome` is `passed`; `failed` means the defect is "
@@ -1056,7 +1090,7 @@ def compose_fix_call(
     if ruling_note_js:
         parts.append(("expr", ruling_note_js))
     parts.extend(_declared_delete_clause_parts(fix_run_id_part, row_id_part))
-    parts.append(("lit", " " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE))
+    parts.extend(_judge_parts(repo_root_js, " ", " " + _NO_STAGING_CLAUSE))
     schema = {
         "type": "object",
         "required": ["outcome", "has_tradeoff", "ruling_on_tradeoff"],
@@ -1134,7 +1168,7 @@ def compose_verify_agent_call(
     carry ``covered_by`` (``path:line``), the structured "already covered" outcome. ``hand_back`` (routing only)
     runs the call on ``ROUTING_VERIFY_HAND_BACK_MODEL`` instead of the agent type's pinned model."""
     head: list[tuple[str, str]] = [
-        *_preamble_parts(preamble_expr),
+        *_preamble_parts(preamble_expr, repo_root_js),
         ("lit", "You are the verify stage for row "),
         ("expr", row_id_js) if row_id_js else ("lit", "<row id>"),
         ("lit", " at "),
@@ -1304,7 +1338,7 @@ def compose_verify_routing_batch_call(
         "fixPlan: r.fixPlan, digest: r.digest})).join('\\n')"
     )
     parts: list[tuple[str, str]] = [
-        *_preamble_parts(preamble_expr),
+        *_preamble_parts(preamble_expr, repo_root_js),
         (
             "lit",
             "You are the routing verify stage for a batch of rows. No fix has run for any of them and none is "
@@ -1457,7 +1491,7 @@ def compose_verify_op_call(
     (``reject_reason_js`` is an optional runtime expression naming why), returning `undo`."""
     if reject_paths_js:
         reject_parts: list[tuple[str, str]] = [
-            *_REPO_ANCHOR_PARTS,
+            *_repo_anchor_parts(repo_root_js),
             ("lit", "This row is rejected. Skip the verify op: do not run it. "),
         ]
         if reject_reason_js:
@@ -1786,6 +1820,50 @@ def _piece_blocks_part(enc_js: str, file_js: str) -> tuple[str, str]:
         "expr",
         f"({enc_js}).replace(/.{{1,{_PIECE_CHARS}}}/g, "
         f"c => '```\\nprintf %s ' + c + ' >> ' + ({file_js}) + '\\n```\\n')",
+    )
+
+
+def compose_work_clone_call(
+    *,
+    models: Optional[Mapping[str, str]] = None,
+    label: str,
+    phase_title: str,
+    agent_type_host: Optional[str] = None,
+    run_key: str = DEFAULT_RUN_KEY,
+    work_root_js: str = WORK_ROOT_JS,
+) -> str:
+    """The run's one worker-clone provision: a Bash-only call to `targeted-test-run provision`, fired once before
+    the first stage reads `work_root_js`. Returns `exit_code` and `stderr` of that command; the script throws on a
+    non-zero exit, so no stage edits the shared checkout when the clone cannot be made."""
+    parts: list[tuple[str, str]] = [
+        *_REPO_ANCHOR_PARTS,
+        ("lit", "Run exactly this one command as ONE Bash call, with no wrapper and no edit to it:\n```\n"
+                + RUNNER_CMD + " provision --repo "),
+        _shq_part("REPO_ROOT"),
+        ("lit", " --run-id "),
+        _shq_part("RUN_ID"),
+        ("lit", " --work-root "),
+        _shq_part(work_root_js),
+        ("lit", "\n```\nReturn its exit code as `exit_code` and its stderr verbatim as `stderr`. "
+                "Do not retry or repair it. " + _NO_STAGING_CLAUSE),
+    ]
+    schema = {
+        "type": "object",
+        "required": ["exit_code"],
+        "properties": {"exit_code": {"type": "integer"}, "stderr": {"type": "string"}},
+    }
+    return _agent_call(
+        _join_prompt_parts(parts),
+        stage="ledger-sweep",
+        models=models,
+        label=label,
+        phase_title=phase_title,
+        agent_type=GENERAL_PURPOSE_AGENT_TYPE,
+        agent_type_host=agent_type_host,
+        run_key=run_key,
+        effort="low",
+        schema=schema,
+        is_expr=True,
     )
 
 

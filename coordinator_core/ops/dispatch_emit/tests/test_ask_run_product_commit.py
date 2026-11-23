@@ -118,7 +118,7 @@ def _request(repo: Path, docs: tuple = ()) -> None:
 def _call(repo: Path, **extra) -> dict:
     params = {
         "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED, "session_id": _SID,
-        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]}, **extra,
+        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}, **extra,
     }
     return land_run._handler(params, repo_root=repo / ".git")
 
@@ -234,13 +234,13 @@ def test_a_revision_the_checker_never_saw_refuses_the_commit(repo) -> None:
 
 def test_an_inessential_unmet_item_passes_without_all_of_pm_ask(repo) -> None:
     rl.revise(repo, RUN, verbatim="nice to have: a changelog line")
-    verdict = {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "not_met", "essential": False}]}
+    verdict = {"items": [{"id": "R1", "status": "met", "evidence": "verified"}, {"id": "R2", "status": "not_met", "essential": False}]}
     assert _call(repo, ledger_verdict=verdict)["committed"] is True
 
 
 def test_all_of_pm_ask_set_mid_run_makes_every_item_mandatory(repo) -> None:
     rl.revise(repo, RUN, verbatim="nice to have: a changelog line", all_of_pm_ask=True)
-    verdict = {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "not_met", "essential": False}]}
+    verdict = {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}, {"id": "R2", "status": "not_met", "essential": False}]}
     out = _call(repo, ledger_verdict=verdict)
     assert out["refused"] == "ledger-unmet" and out["all_of_pm_ask"] is True
 
@@ -460,7 +460,8 @@ def test_the_printed_terminal_commit_params_carry_the_ledger_verdict_top_level(r
         "conflicts": [],
     }
     assert "ledger_verdict" not in params["inline_review"]
-    out = _call(repo, **{k: v for k, v in params.items() if k in ("ledger_verdict",)})
+    verdict = {**params["ledger_verdict"], "items": [{**i, "met_by": "a.py"} for i in params["ledger_verdict"]["items"]]}
+    out = _call(repo, ledger_verdict=verdict)
     assert out["committed"] is True, out
 
 

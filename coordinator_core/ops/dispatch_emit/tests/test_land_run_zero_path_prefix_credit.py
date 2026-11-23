@@ -31,7 +31,7 @@ REPORT_X2 = "reports/X2.md"
 PRODUCT = "exp/r5/a.txt"
 PREFIX = "docs/decisions/"
 DRS = (PREFIX + "DR-1.md", PREFIX + "DR-2.md")
-VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:

@@ -77,7 +77,7 @@ def _sizings(root) -> list:
 
 def _met_out_of_band(root) -> None:
     rl.apply_verdict(
-        root, SIZING, {"items": [{"id": "R1", "status": "met", "wired": True, **WIRED_EVIDENCE}]},
+        root, SIZING, {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True, **WIRED_EVIDENCE}]},
         run_id="oob", sha="b" * 7
     )
 
@@ -126,7 +126,7 @@ def test_row_met_out_of_band_resumes_the_same_sizing_and_the_new_run_commits(hal
     assert _sizings(halted) == before
 
     token = _second_run(halted)
-    out = _commit(halted, token, {"items": [{"id": "R1", "status": "met", "wired": True, **WIRED_EVIDENCE}]})
+    out = _commit(halted, token, {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True, **WIRED_EVIDENCE}]})
     assert out["committed"] is True, out
     assert out["rows_coded"] == {PLAN: ["C1"]}, out.get("rows_coded")
     assert "disposition: coded" in (halted / PLAN).read_text(encoding="utf-8")

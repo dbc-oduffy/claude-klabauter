@@ -89,7 +89,20 @@ ORIGIN_RELAYED = "relayed"
 #: Rulings written before the ruling stopped minting a row end in a revision row id instead.
 REVISE_REF = "workflow.revise"
 OUT_OF_SCOPE_REF = "out_of_scope"
-STATUSES = ("met", "not_met", "drifted", "superseded", "post_commit")
+STATUSES = ("met", "not_met", "drifted", "superseded", "post_commit", "departed", "deferred")
+#: Verdict-item key carrying why a `departed` row was deliberately not done; blank or absent fails.
+DEPARTURE_REASON_KEY = "departure_reason"
+#: Verdict-item keys of a `deferred` row: who deferred it, why, and the run ids it waits on; each is required.
+DEFERRER_KEY = "deferred_by"
+DEFERRAL_REASON_KEY = "deferral_reason"
+BLOCKING_RUNS_KEY = "blocking_run_ids"
+#: Head of the `ruling.ref` a `deferred` verdict writes: `<DEFERRED_REF>:<deferrer>:<run id>,<run id>...`.
+#: The ruling schema has no deferrer or run-id field, so the ref carries them; `ruling.quote` is the reason.
+DEFERRED_REF = "ledger.deferred"
+#: Verdict-item key naming the evidence a `met` row stands on, beside `met_by`.
+EVIDENCE_KEY = "evidence"
+#: Origins whose words are the PM's (or a relay/revision of them): a `met` there needs evidence.
+PM_SOURCED_ORIGINS = (ORIGIN_PM_VERBATIMS, ORIGIN_RELAYED, ORIGIN_ASK, ORIGIN_REVISION)
 #: Acts the terminal commit's landing performs itself: the run's consumed baton archived and the
 #: plan stamped implemented, and each bug row the spine says to close closed with the landing sha.
 LIFECYCLE_ACTS: tuple[str, ...] = ("baton_archive", "plan_implemented", bug_close.ACT)
@@ -2496,6 +2509,17 @@ def _hand_built(row: Mapping) -> bool:
     return row.get(rr.JUDGE_EVIDENCE_ENTRY_POINT) == rr.EVIDENCE_HAND_BUILT
 
 
+def _names_evidence(row: Mapping) -> bool:
+    """True when a verdict item names `met_by` (string or list) or `evidence` with non-blank text."""
+    met_by = row.get("met_by")
+    if isinstance(met_by, str):
+        met_by = [met_by]
+    if any(isinstance(m, str) and m.strip() for m in met_by or ()):
+        return True
+    evidence = row.get(EVIDENCE_KEY)
+    return isinstance(evidence, str) and bool(evidence.strip())
+
+
 def _roots_read(row: Mapping) -> list[str]:
     value = row.get("root_read")
     if isinstance(value, str):
@@ -2656,6 +2680,7 @@ def judge(
             "reason": empty_register_refusal(ledger.sizing_rel) if ledger.sizing_rel else EMPTY_REGISTER_REASON,
         })
     open_rows: list[dict] = []
+    departures: list[dict] = []
     for row in rows:
         rid = row.get("id") if isinstance(row, Mapping) else None
         if not isinstance(rid, str):
@@ -2716,6 +2741,34 @@ def judge(
             failures.append({"id": item.id, "reason": f"status {status!r} is not one of {STATUSES}"})
         elif status == "drifted":
             failures.append({"id": item.id, "reason": "drifted: lost or reinterpreted in transit"})
+        elif status == "departed":
+            why = row.get(DEPARTURE_REASON_KEY)
+            why = why.strip() if isinstance(why, str) else ""
+            if design:
+                failures.append({"id": item.id, "reason": "a design row is met only on its evidence, never departed"})
+            elif not why:
+                failures.append({"id": item.id, "reason": "departed without a recorded reason"})
+            else:
+                open_rows.append({"id": item.id, "reason": f"departed: {why}", "departed": True})
+                departures.append({"id": item.id, "reason": why})
+        elif status == "deferred":
+            who, why, blocking = _deferral_fields(row)
+            missing = [k for k, v in ((DEFERRER_KEY, who), (DEFERRAL_REASON_KEY, why), (BLOCKING_RUNS_KEY, blocking)) if not v]
+            if design:
+                failures.append({"id": item.id, "reason": "a design row is met only on its evidence, never deferred"})
+            elif missing:
+                failures.append({"id": item.id, "reason": f"deferred without {', '.join(missing)}"})
+            else:
+                open_rows.append({
+                    "id": item.id, "reason": f"deferred by {who}: {why} (blocked by {','.join(blocking)})",
+                    "deferred": True, DEFERRER_KEY: who, BLOCKING_RUNS_KEY: blocking,
+                })
+        elif status == "met":
+            if not design and item.origin in PM_SOURCED_ORIGINS and not _names_evidence(row):
+                failures.append({
+                    "id": item.id,
+                    "reason": "met without evidence: name met_by or evidence, or judge it departed with a reason",
+                })
         elif status == "superseded":
             later = row.get("superseded_by")
             target = next((i for i in ledger.items if i.id == later), None)
@@ -2790,6 +2843,8 @@ def judge(
         unknown = [rid for rid in unknown if rid not in fabricated]
     open_rows.extend(dict(w) for w in ledger.withheld)
     result = {"pass": not failures, "failures": failures, "open": open_rows}
+    if departures:
+        result["departures"] = departures
     if unknown:
         result["advisory"] = [{"id": rid, "reason": f"{NOT_A_ROW_REASON}: ignored, never judged"} for rid in unknown]
     if review_verdicts is not None:

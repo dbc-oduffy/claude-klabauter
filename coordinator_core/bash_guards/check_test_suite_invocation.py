@@ -2,66 +2,60 @@
 hard-deny guard for **test-breadth invocation authority** (DoE's DR-088, layers
 2, 3, 5 and 6 of the six-layer test-breadth ladder).
 
-Ordered deny legs over one shared classifier -- identity, THEN authority,
+Ordered deny legs over one shared classifier -- test-run verdict, identity, THEN authority,
 THEN resource; a caller with no standing to run a suite at all is told so
 before it is ever told to wait for the machine. The resource rung has two
 halves, because the ladder's two tiers have two different bounds: ONE
 suite-shaped run at a time machine-wide (leg 3), and K scoped runs at a time
 machine-wide (leg 0.5):
 
-  0. PRECISION leg (layer 3, R9, fail-OPEN without a cwd) -- a NON-suite-shaped
-     (Tier T) command issued by a SUBAGENT is denied when it names a DIRECTORY
-     positional. DR-088 § Decision always defined Tier T as the files,
-     directories, or node ids the caller *"authored or touched"*; the
-     mechanism enforced path-scoped and silently dropped the relevance half,
-     so ``pytest tests/workstate_store/`` from an executor that touched three
-     files in it passed as a scoped run over 87 files it never touched. For a
-     dispatched caller, Tier T is file-and-node-id precision. For a caller
-     with no agent_id (the top-level EM) a pytest directory strictly under a
-     testpaths root is Tier T while the tracked test files (``test_*.py`` /
-     ``*_test.py``) under all such directories in the invocation sum to at
-     most ``_DIR_TEST_FILE_THRESHOLD`` (50); above that, or when the count
-     cannot be computed, it is suite-shaped and needs a live Tier-U grant and
-     with-suite-mutex. The count is one in-process read of ``.git/index``
-     (zero git spawns, ``_tracked_test_file_count``). A testpaths root, ``.``
-     or an ancestor is broad before any count; an EM directory outside the
-     roots, an EM glob, and every JS/node-runner directory stay suite-shaped.
-     Runs only when the command is NOT suite-shaped, so it is strictly
-     additive: it never restates a deny the identity leg below owns with a
-     better diagnosis. Ruled by DoE 2026-07-28
-     (``cross-repo/inbox/2026-07-28-coordinator-content-repo-em-dr088-tier-t-relevance-
-     ruling.md``); DoE refused a breadth/test-count term in the same ruling
-     (R8) -- a rule the classifier cannot evaluate without collecting is not
-     a rule.
+  0. VERDICT leg (PM ruling, run warp-2026-11-22-97b2e0-1-subagent-test-run-
+     block, ledger R1 and R7; fail-CLOSED on identity and scope, fail-OPEN on
+     an unreadable reading, DR-402) -- every command whose segment runs pytest
+     calls ``_test_run_admission.test_run_verdict``, the one verdict the
+     heavy-admission guard shares. A SUBAGENT other than ``coordinator:test-
+     runner`` is refused every pytest shape, a single node id included; the
+     test-runner is admitted only for test files or node ids in its session's
+     touch record, with no directory, bare run, or ``-n`` workers. Every
+     caller, the EM included, is refused while the box is below its RAM floor
+     or held by another session. The verdict runs first for a subagent's
+     non-suite-shaped command (a suite-shaped one is refused by the identity
+     leg below with its own diagnosis) and for the EM before the grant leg,
+     where only the ceiling applies. A deny returns through ``_deny``.
+
+  0.1. PRECISION leg (layer 3, R9, fail-OPEN without a cwd) -- reached only by
+     an admitted test-runner or a non-pytest runner: a NON-suite-shaped (Tier
+     T) command issued by a SUBAGENT is denied when it names a DIRECTORY
+     positional. For a caller with no agent_id (the top-level EM) a pytest
+     directory strictly under a testpaths root is Tier T while the tracked
+     test files (``test_*.py`` / ``*_test.py``) under all such directories in
+     the invocation sum to at most ``_DIR_TEST_FILE_THRESHOLD`` (50); above
+     that, or when the count cannot be computed, it is suite-shaped and needs
+     a live Tier-U grant and with-suite-mutex. The count is one in-process
+     read of ``.git/index`` (zero git spawns, ``_tracked_test_file_count``). A
+     testpaths root, ``.`` or an ancestor is broad before any count; an EM
+     directory outside the roots, an EM glob, and every JS/node-runner
+     directory stay suite-shaped. Runs only when the command is NOT
+     suite-shaped, so it never restates a deny the identity leg below owns.
+     DoE refused a breadth/test-count term (R8, 2026-07-28) -- a rule the
+     classifier cannot evaluate without collecting is not a rule.
 
   0.5. TIER-T CONCURRENCY leg (the resource half of Tier T, fail-OPEN on
-     infra) -- a SCOPED (Tier T) command issued by a SUBAGENT is ALLOWED with
-     an ``updatedInput`` rewrite routing it through ``with-tier-t-slot``, the
-     wrapper that takes one slot of the machine-wide K-slot semaphore in
+     infra) -- a scoped command from a SUBAGENT that leg 0 has admitted (the
+     test-runner on touched files) is ALLOWED with an ``updatedInput``
+     rewrite routing it through ``with-tier-t-slot``, the wrapper that takes
+     one slot of the machine-wide K-slot semaphore in
      ``coordinator_core.testing.tier_t_slots`` and BLOCKS until one is free. K
      is per-machine, derived fresh from the same ``derive_worker_cap()``
      formula that bounds xdist workers. A CHAINED command degrades to an
      advisory rather than a rewrite (BX-12's single-segment rule -- never
      substitute a chain this guard did not parse).
 
-     THIS LEG NEVER DENIES, and that is not a stylistic choice. It is the
-     property that keeps it a resource control rather than an authority one.
-     The first implementation DID deny, and turned 29 existing assertions red
-     in one run -- assertions pinning "a subagent's scoped run is allowed",
-     i.e. the carve-out itself. They were right and the leg was wrong: a
-     control that expresses itself as a refusal IS an authority control, no
-     matter what its docstring claims, and narrowing Tier T is another plane's
-     ruling to change (R9), not this repo's. A guard cannot say "wait" -- but
-     it can hand back a command that waits.
-
-     So this does NOT narrow the Tier-T carve-out in the negative spec below,
-     and must never be "simplified" into something that does: file- and
-     node-id-scoped invocations remain permitted for everyone, always. The leg
-     asks only HOW MANY may run at once -- a resource question, not an
-     authority one. The distinction is the whole design: leg 0 bounds what a single
-     dispatched caller may name, the mutex leg (3) bounds concurrency for
-     suite-shaped commands only, and between them Tier T had an authority bound
-     and no resource bound at any N.
+     This leg itself never denies: it is a resource control, and who may run
+     is leg 0's answer. A guard cannot say "wait" -- but it can hand back a
+     command that waits. Between leg 0's authority bound, this leg's
+     concurrency bound and the mutex leg (3) for suite-shaped commands, a
+     scoped run has both bounds.
 
      The incident, stated correctly because the obvious reading is wrong: on
      2026-09-20 a ``/bug-blitz`` over an 876-record backlog took the box to a
@@ -78,14 +72,14 @@ machine-wide (leg 0.5):
 
      The EM's file- and node-id-scoped runs are not rewritten, matching this
      leg's subagent-only scope: a single session cannot fan out, so they are
-     already serial. The EM's directory runs are judged by leg 0's threshold above.
+     already serial. The EM's directory runs are judged by leg 0.1's threshold above.
 
   1. IDENTITY leg (layer 3, fail-CLOSED) -- a *suite-shaped* test command
-     issued by a SUBAGENT is denied. Tier T (a path/node-id-scoped invocation
-     naming what the caller actually touched) stays ungated for the EM and,
-     subject to leg 0's precision narrowing, for subagents;
-     Tier F/U (the repo's configured fast/full command, or any unscoped
-     runner invocation) is reserved for the top-level EM. The incident this
+     issued by a SUBAGENT is denied. Tier T (a path/node-id-scoped invocation)
+     stays ungated by this leg for the EM; for a subagent leg 0 already
+     answered it, so only the test-runner on touched files reaches here as
+     Tier T. Tier F/U (the repo's configured fast/full command, or any
+     unscoped runner invocation) is reserved for the top-level EM. The incident this
      exists for: a fan-out wave in which every dispatched agent runs the
      whole suite concurrently -- 10+ minutes each, N of them, degrading the
      machine. Runs FIRST: a subagent is denied on identity alone, regardless
@@ -196,18 +190,16 @@ Negative spec -- what this guard deliberately does NOT do:
   - It does NOT raw-substring-match ``agent_id`` against the stdin JSON. A
     nested ``tool_response.agent_id`` would false-positive on main-loop calls;
     only the TOP-LEVEL dict key is read.
-  - It does NOT deny FILE- or NODE-ID-scoped invocations ON AUTHORITY
-    GROUNDS. ``pytest path/test_x.py``, ``pytest path/test_x.py::test_case``
-    and the BARE form ``pytest -k expr`` (no positional at all) are Tier T and
-    are allowed for everyone, always -- a node id stays permitted for a subagent regardless
-    of its touched set, which is what keeps pre-existing-failure verification
-    (re-running the one failing test you did not author) legal under leg 0.
-    Leg 0.5 does not change this and is NOT an exception to it: a scoped run
-    from a subagent is still ALLOWED -- it is merely rewritten to route
-    through ``with-tier-t-slot`` so the box can bound how many execute at
-    once, and the wrapper waits rather than refusing. Anyone reading this bullet as "Tier T is
-    unconditionally unmediated" and deleting leg 0.5 on that basis reopens the
-    2026-09-20 incident: the carve-out is about AUTHORITY, and always was.
+  - It does NOT admit a subagent's FILE- or NODE-ID-scoped pytest on the
+    strength of its scope. ``pytest path/test_x.py`` and ``pytest
+    path/test_x.py::test_case`` are refused to every subagent except
+    ``coordinator:test-runner``, which is admitted for test files in its
+    session's touch record only (PM ruling, run warp-2026-11-22-97b2e0-1-
+    subagent-test-run-block, ledger R1 and R7). The EM's scoped runs stay
+    allowed, subject to the ceiling. Admitted runs still route through
+    ``with-tier-t-slot`` (leg 0.5): deleting it reopens the 2026-09-20
+    incident. The exemption reads ``agent_type`` and fails closed: an absent
+    type is not the test-runner, so a Workflow agent is refused.
     ``-k``/``--lf`` alongside a positional that names a ``testpaths`` root
     (``pytest tests/ -k expr`` where ``testpaths = ["tests"]``) is NOT Tier
     T -- see the 2026-08-14 classifier correction below.
@@ -1836,6 +1828,13 @@ _PY_SCOPED_ALTERNATIVES = (
 )
 
 
+#: The only route a dispatched subagent is admitted on: the test-runner agent,
+#: handed the touched node ids. Offered in place of any runner command.
+_SUBAGENT_TEST_RUNNER_OFFER = (
+    "  dispatch coordinator:test-runner with the touched test node ids\n"
+)
+
+
 def _scoped_alternatives_block(detected: str) -> str:
     """Ecosystem-aware primary suggestion triple for a `detected` label --
     the fix for F15 (GH #71: "suggests pytest in a TypeScript/vitest repo")."""
@@ -2582,7 +2581,7 @@ def _deny_reason_subagent(
     _override_line = ""
     return (
         "Full-suite subagent runs are denied (concurrency). Use instead:\n"
-        + _scoped_alternatives_block(detected)
+        + _SUBAGENT_TEST_RUNNER_OFFER
         + _override_line
         + "  Detected: %s\n"
         "  Command:  %s\n\n"
@@ -3774,6 +3773,32 @@ def _invokes_suite_cli(cmd: str, dialect: Optional[_Dialect]) -> Optional[str]:
 
 
 
+def _pytest_argvs(segments_argv: Sequence[Sequence[str]]) -> List[List[str]]:
+    """The segments that run pytest as their command (`pytest ...`, `python -m pytest ...`)."""
+    from coordinator_core.bash_guards._heavy_command_class import _pytest_args
+
+    return [list(argv) for argv in segments_argv if _pytest_args(argv) is not None]
+
+
+def _test_run_refusal(
+    payload: Dict[str, Any],
+    pytest_argvs: Sequence[Sequence[str]],
+    cwd: Optional[str],
+    is_subagent: bool,
+) -> Optional[Any]:
+    """The deny record when the shared test-run verdict refuses this pytest run, else None."""
+    from coordinator_core.bash_guards._test_run_admission import test_run_verdict
+
+    verdict = test_run_verdict(payload, pytest_argvs, cwd or os.getcwd(), is_subagent=is_subagent)
+    if verdict.allowed:
+        return None
+    return _deny(
+        "%s -- %s" % (verdict.fact, verdict.remedy),
+        _SCOPED_RUN_OFFER, "the test path", "a test run",
+        em_override=not is_subagent,
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     token = _STRICT_DIRS.set(not _caller_is_subagent(payload))
     try:
@@ -3887,6 +3912,12 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 _SCOPED_RUN_OFFER, "the test path", "an uncountable test run",
             )
 
+    pytest_argvs = _pytest_argvs(segments_argv)
+    if pytest_argvs and (not is_subagent or detected is None):
+        refusal = _test_run_refusal(payload, pytest_argvs, cwd, is_subagent)
+        if refusal is not None:
+            return refusal
+
     # R9 (DR-088 amendment, 2026-07-28) -- sited above the ``detected is
     # None`` return below, because a Tier-T command is by definition not
     # suite-shaped and so never reaches the identity leg at all; that
@@ -3917,34 +3948,10 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 _SCOPED_RUN_OFFER, "the test file", "a directory-wide test run",
             )
 
-        # TIER-T CONCURRENCY leg (layer 6's missing half, fail-OPEN on infra)
-        # -- a dispatched caller's SCOPED test run is denied unless it routes
-        # through `with-tier-t-slot`, which takes one slot of the machine-wide
-        # K-slot semaphore and WAITS when all K are taken.
-        #
-        # Sited here, inside the `is_subagent and detected is None` branch and
-        # after the precision leg, because those two conditions are exactly
-        # this leg's subject: a caller with no suite authority running a
-        # command no suite classifier can see. It is strictly additive in the
-        # same sense leg 0 is -- it can only reach commands every other leg
-        # allows -- and it never restates a deny another leg owns with a worse
-        # diagnosis (a suite-shaped subagent command is an identity problem and
-        # the identity leg below says so).
-        #
-        # WHY THIS IS NOT A NARROWING OF THE TIER-T CARVE-OUT, which would be
-        # out of this repo's authority to make: the negative spec above still
-        # holds unchanged -- file- and node-id-scoped invocations remain
-        # permitted for everyone, always, and DoE's R9 ruling that a node id
-        # stays legal for a subagent regardless of its touched set is untouched.
-        # Nothing here asks whether the caller MAY run this. It asks only how
-        # many may run AT ONCE, which is a resource question the ladder had no
-        # answer to at any N: leg 0 gives Tier T an authority bound, the mutex
-        # leg covers only suite-shaped commands, and the gap between them is
-        # where 2026-09-20's incident went through -- hundreds of individually
-        # legal scoped runs from one fan-out, every one of them correctly
-        # allowed, together taking the box to a 15-minute load average of 17.83.
-        # The EM is deliberately unaffected: one session cannot fan out, and its
-        # scoped runs are serial by construction.
+        # TIER-T CONCURRENCY leg (fail-OPEN on infra): a scoped run that leg 0
+        # admitted (the test-runner on touched files) is rewritten through
+        # `with-tier-t-slot`, which waits for one of the machine-wide K slots.
+        # It never denies; the EM is unaffected (one session cannot fan out).
         if _command_wrapped_in_tier_t_slot(cmd, dialect) is False:
             verdict = _tier_t_slot_verdict(cmd, dialect, segments_argv)
             if verdict is not None:
@@ -4134,7 +4141,7 @@ def _remediation_text(
     return (
         "Scope this to what was actually touched instead of the whole "
         "suite:\n"
-        + _scoped_alternatives_block(detected) + "\n"
+        + _SUBAGENT_TEST_RUNNER_OFFER + "\n"
         "Unscoped/full-suite runs require a Tier-U grant and are reserved "
         "for the top-level EM -- never a dispatched subagent or a bare "
         "dispatch-brief instruction."

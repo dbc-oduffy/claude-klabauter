@@ -48,7 +48,7 @@ SIZING = "state/sizings/20260101-a.yaml"
 PLAN = "docs/plans/p.md"
 REPORT = "reports/C1.md"
 CRLF = "\r\n"
-_MET = {"items": [{"id": "R1", "status": "met", "wired": True}, {"id": "R2", "status": "met", "wired": True}]}
+_MET = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}, {"id": "R2", "status": "met", "met_by": "a.py", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:

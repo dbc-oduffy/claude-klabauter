@@ -443,8 +443,6 @@ def roster(mirrors=False):
             continue  # never re-export a far session we are only mirroring, whichever OS made the entry
         if codex_export_refused(d, codex_cache):
             continue
-        with open(os.path.join(os.path.expanduser(SESS), key), encoding="utf-8") as fh:
-            body = fh.read()
         exported = {**d, **helpers.session_identity(d)}
         if reply_inbox:
             # Advertise the hosted endpoint, not a remotely supplied mirror. Leaving
@@ -452,7 +450,9 @@ def roster(mirrors=False):
             for field in ("unimatrixMirror", "unimatrixRemoteSocket", "unimatrixClient"):
                 exported.pop(field, None)
             exported.update(vendor="transport", box=local_box())
-        rows.append((pid, exported, {"entry": exported, "key_name": key, "key": body, **fields}))
+        # `key` stays as an empty string for one release so an old receiver indexing row["key"] mints a
+        # local token instead of KeyError-ing; a key body never leaves this box.
+        rows.append((pid, exported, {"entry": exported, "key_name": key, "key": "", **fields}))
     holders = {}
     for pid, exported, _ in rows:
         if exported.get("messagingSocketPath") is not None:

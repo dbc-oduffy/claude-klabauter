@@ -32,7 +32,7 @@ def _halted_co_tenant(root: Path, run_id: str) -> bool:
     return str(marker.get("halted") or "").startswith(_CO_TENANT_PREFIX)
 
 
-def _needs(root: Path, run_id: str) -> tuple:
+def needs(root: Path, run_id: str) -> tuple:
     """The runs `run_id` is waiting on, sorted."""
     from coordinator_core.ops.dispatch_emit import co_tenant_owner
 
@@ -57,7 +57,7 @@ def cycle_through(root: Path, needer: str, owner: str) -> Optional[tuple]:
     if not needer or not owner or needer == owner:
         return None
     seen = {needer, owner}
-    stack: list = [((needer, owner), iter(_needs(root, owner)))]
+    stack: list = [((needer, owner), iter(needs(root, owner)))]
     while stack:
         path, edges = stack[-1]
         for nxt in edges:
@@ -65,7 +65,7 @@ def cycle_through(root: Path, needer: str, owner: str) -> Optional[tuple]:
                 return path
             if nxt not in seen:
                 seen.add(nxt)
-                stack.append(((*path, nxt), iter(_needs(root, nxt))))
+                stack.append(((*path, nxt), iter(needs(root, nxt))))
                 break
         else:
             stack.pop()

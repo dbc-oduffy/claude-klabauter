@@ -394,6 +394,8 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_ledger import (  # noqa:
     _verdicts_section,
     _write_note_verdicts,
     _awaiting_operator,
+    _ledger_departures,
+    _requirement_trailers,
     _ledger_gate,
     met_row_files,
     _ledger_writeback,
@@ -3528,10 +3530,7 @@ def _terminal_commit_inner(
     if resolves is not None:
         trailers.append(f"Resolves-Sizing: {resolves['id']} {resolves['tshirt']}")
     trailers.extend(f"Review-Residue: {p}" for p in review_land)
-    trailers.extend(
-        "Requirement-Open: " + " ".join((str(row["id"]) + " " + str(row["reason"])).split())
-        for row in open_rows
-    )
+    trailers.extend(_requirement_trailers(open_rows))
     trailers.extend(
         f"Verified-Only: {rid} -- {' '.join(ev['command'].split())} -> {' '.join(ev['observed'].split())}"
         for rid, ev in sorted(verified_only_rows(params.get(TERMINAL_RESUME_LEDGER_PARAM)).items())
@@ -4529,6 +4528,9 @@ def _terminal_commit_inner(
         pending_operator = _awaiting_operator(open_rows)
         if pending_operator:
             reply["awaiting_operator"] = pending_operator
+        departures = _ledger_departures(open_rows)
+        if departures:
+            reply["ledger_departures"] = departures
         not_stamped = _ledger_not_stamped_reason(ledger, params.get("ledger_verdict"), open_rows)
         if withheld_product:
             reply["exit_criterion_not_stamped"] = (

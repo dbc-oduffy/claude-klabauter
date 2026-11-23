@@ -73,7 +73,7 @@ _DISK = {
     "run_dir": "d", "plan_id": "p", "rows": _ROWS, "review_declared_paths": [_A, _A_TEST, _B],
     "test_targets": [], "marker_path": "m", "head_sha": "c" * 40,
 }
-_MET = {"id": "R1", "status": "met", "wired": True}
+_MET = {"id": "R1", "status": "met", "met_by": "a.py", "wired": True}
 _DONE = {"status": "DONE", "paths": [_A], "reason": "fixed", "needs_paths": []}
 
 _NODE_PROGRAM = (
@@ -263,7 +263,7 @@ _FIX_B = {"status": "DONE", "paths": [_B], "reason": "fixed"}
 
 
 def _row_met(rid: str) -> dict:
-    return {"id": rid, "status": "met", "wired": True}
+    return {"id": rid, "status": "met", "met_by": "a.py", "wired": True}
 
 
 def _ledger_run(monkeypatch, replies: dict) -> dict:

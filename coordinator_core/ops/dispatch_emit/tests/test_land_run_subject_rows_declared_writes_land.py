@@ -43,7 +43,7 @@ CODE_ONE = "coordinator_core/one.py"
 CODE_TWO = "coordinator_core/two.py"
 CODE_THREE = "coordinator_core/three.py"
 DOC = "docs/" "wiki/note.md"
-VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 MET = {"status": "met", "observation": "obs", "sidecar": "j.md"}
 
 

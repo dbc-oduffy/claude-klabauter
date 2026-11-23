@@ -31,7 +31,7 @@ DLV = "dlv-alpha-aaaaaa"
 NODE = "tests/test_a.py::test_x"
 F = "pkg/shared.py"
 T = "tests/test_new.py"
-VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:

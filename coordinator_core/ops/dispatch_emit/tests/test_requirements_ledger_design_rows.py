@@ -42,7 +42,7 @@ def run(tmp_path: Path):
 
 
 def _verdict(ledger, design, **item):
-    items = [{"id": i.id, "status": "met"} for i in ledger.items if i is not design]
+    items = [{"id": i.id, "status": "met", "met_by": "a.py"} for i in ledger.items if i is not design]
     items.append({"id": design.id, **item})
     return {"items": items}
 

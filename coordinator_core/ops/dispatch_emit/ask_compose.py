@@ -216,6 +216,8 @@ from coordinator_core.ops.dispatch_emit.judgment_halt import pull_split_prompt, 
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import strip_comment_lines as _strip_comment_lines
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
+    DEPARTURE_REASON_KEY,
+    EVIDENCE_KEY,
     HandoverPending,
     LEDGER_VIEW_FILE,
     NOTES_FILE,
@@ -1166,6 +1168,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "remaining": {"type": "array", "items": _STR},
                     "evidence": _STR,
                     "met_by": {"type": ["string", "array"], "items": _STR},
+                    DEPARTURE_REASON_KEY: _STR,
                     GAPS_CLOSED_FIELD: {"type": "array", "items": _obj(["gap", "how"], {"gap": _STR, "how": _STR})},
                     "anchor": _STR,
                 },
@@ -1207,6 +1210,9 @@ _LEDGER_ITEMS_RULES = (
     "'met', set met_by to the repo-relative path of the senior-front-end review file of its board, "
     "or of its ratification file; a design-registry item judged 'met' with no met_by is 'not_met'. "
     "On every item copy its anchor from the ledger row into anchor. "
+    "Status 'departed' when the change deliberately does not do what the item asks, with departure_reason "
+    "saying why; a departure lands and is shown to the EM, a blank reason is refused. A PM-sourced item "
+    "judged 'met' names met_by (or evidence), else it is refused. "
 )
 _LEDGER_SIZE_RULE = (
     "For any size requirement (shrink, hold, byte or line cap), compare the LF-normalized committed or "
@@ -2329,10 +2335,12 @@ _TEST_RAN_JS = (
 
 #: `zero_run_cause` values a co-tenant clean-export refusal reports (`clean_overlay_verify` prints them); the
 #: wait cause halts `co_tenant_wait`, never `test_infra_failure`. The three cause strings mirror
-#: `co_tenant_owner.PARKED`, `.CAUSE_HALTED_OWNER`; keep them equal.
+#: `co_tenant_owner.PARKED`, `.CAUSE_HALTED_OWNER`; keep them equal (the cycle cause is mirrored below).
 CO_TENANT_WAIT_CAUSE = "co-tenant-wait"
 CO_TENANT_WAIT_HALT = "co_tenant_wait"
 CO_TENANT_HALTED_CAUSE = "co_tenant_dependency_on_halted_run"
+#: Mirrors `co_tenant_cycle.CAUSE_CYCLE`: runs that each need a path another of them holds; keep equal.
+CO_TENANT_CYCLE_CAUSE = "co_tenant_cycle"
 
 #: A test leg owed by the manifest whose verdict is absent, has no sidecar, or reads not_run never
 #: reaches the commit as passed. `TEST_GUARD` is substituted with the leg's own owed-condition.
@@ -2359,8 +2367,10 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "const _rvCause = (typeof _rvt.zero_run_cause === 'string') ? _rvt.zero_run_cause : ''; "
         "const _rvWait = _rvCause === " + json.dumps(CO_TENANT_WAIT_CAUSE) + "; "
         "const _rvHalted = _rvCause === " + json.dumps(CO_TENANT_HALTED_CAUSE) + "; "
+        "const _rvCycle = _rvCause === " + json.dumps(CO_TENANT_CYCLE_CAUSE) + "; "
         "const _rvCo = (_rvt.co_tenant && typeof _rvt.co_tenant === 'object') ? _rvt.co_tenant : {}; "
         "const _rvOwner = String(_rvCo.owner ?? 'an unattributed run'); "
+        "const _rvCyc = (Array.isArray(_rvCo.cycle) && _rvCo.cycle.length) ? _rvCo.cycle.map(String) : [_runId, _rvOwner]; "
         "const _rvMod = String(_rvCo.module ?? _rvCo.symbol ?? 'an unlanded module'); "
         "_halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
         "...(_testResult?.tests_run === 0 ? { halted: 'test_infra_failure' } : {}), "
@@ -2375,12 +2385,15 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "&& typeof _testResult?.import_error?.source_path === 'string') "
         "? 'Land the uncommitted ' + _testResult.import_error.source_path + ' first, then refire: ' "
         ": 'Refire to re-run the test leg: ') + " + _refire_js(sizing_rel) + " }; "
-        "if (_rvWait || _rvHalted) { _halted = { ..._halted, halted: _rvWait ? " + json.dumps(CO_TENANT_WAIT_HALT)
+        "if (_rvWait || _rvHalted || _rvCycle) { _halted = { ..._halted, halted: _rvCycle ? " + json.dumps(CO_TENANT_CYCLE_CAUSE)
+        + " : _rvWait ? " + json.dumps(CO_TENANT_WAIT_HALT)
         + " : " + json.dumps(CO_TENANT_HALTED_CAUSE) + ", "
-        "detail: _rvWait ? 'the test leg parked behind ' + _rvOwner + ', which owns ' + _rvMod "
+        "detail: _rvCycle ? 'the clean export needs ' + _rvMod + ' from ' + _rvOwner + ', which waits on this run (cycle: ' "
+        "+ _rvCyc.join(' -> ') + '); the run did not run its tests' : _rvWait ? 'the test leg parked behind ' + _rvOwner + ', which owns ' + _rvMod "
         "+ ' that the clean export needs; the run did not run its tests' "
         ": 'the clean export needs ' + _rvMod + ' from halted run ' + _rvOwner + '; the run did not run its tests', "
-        "next_action: _rvWait ? 'auto-refires when ' + _rvOwner + ' lands' "
+        "next_action: _rvCycle ? 'Joint-land the cycle: ' + String(_rvCo.remedy ?? ('coordinator-invoke dispatch.land_run ' "
+        "+ JSON.stringify({ joint: _rvCyc }))) : _rvWait ? 'auto-refires when ' + _rvOwner + ' lands' "
         ": 'Refire the owner first: ' + String(_rvCo.owner_refire ?? _rvOwner) + '; then ' + " + _refire_js(sizing_rel) + " }; } }"
     )
 
@@ -7955,6 +7968,8 @@ def compose_ask_script(
         "...(i.withheld_by ? { withheld_by: i.withheld_by } : {}), "
         "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}), "
         "...(i.met_by ? { met_by: i.met_by } : {}), "
+        f"...(i.{EVIDENCE_KEY} ? {{ {EVIDENCE_KEY}: i.{EVIDENCE_KEY} }} : {{}}), "
+        f"...(i.{DEPARTURE_REASON_KEY} ? {{ {DEPARTURE_REASON_KEY}: i.{DEPARTURE_REASON_KEY} }} : {{}}), "
         "...(i.root_read != null ? { root_read: i.root_read } : {}), "
         "...(i.originals_read != null ? { originals_read: i.originals_read } : {}), "
         "...(i.capture_harvested_at ? { capture_harvested_at: i.capture_harvested_at } : {}), "

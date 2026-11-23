@@ -39,7 +39,23 @@ def test_mode_of_raises_on_ambiguous_mix(params):
 
 
 def test_every_non_product_mode_has_a_module_and_product_does_not():
-    assert set(c.MODE_MODULES) == {"halted", "grind", "fanout"}
+    assert set(c.MODE_MODULES) == {"halted", "grind", "fanout", "joint"}
+    assert c.MODE_MODULES["joint"] == "coordinator_core.ops.dispatch_emit.land_run_joint"
+
+
+@pytest.mark.parametrize(
+    "params,mode",
+    [({"joint": ["a", "b"]}, "joint"), ({"joint": []}, "product"), ({"joint": "a"}, "product"), ({"joint": ["a", ""]}, "product")],
+)
+def test_mode_of_joint_shapes(params, mode):
+    assert c.mode_of(params) == mode
+
+
+@pytest.mark.parametrize("other", [_HALTED, _FANOUT, _GRIND])
+def test_mode_of_raises_when_joint_combines_with_another_mode(other):
+    with pytest.raises(c.ModeAmbiguous) as exc:
+        c.mode_of({"joint": ["a", "b"], **other})
+    assert exc.value.refused == "mode-ambiguous"
 
 
 def test_op_name_matches_registered_literal():

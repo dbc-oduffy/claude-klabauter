@@ -2102,7 +2102,7 @@ _TERMINAL_COMMIT_JS = (
     "  if (!RUN_TOKEN) { _failAll('no run token in the fire args: the terminal commit cannot run' + SETTLE_HINT); return; }\n"
     "  const _halted = _haltReason();\n"
     "  const _params = { script_path: SCRIPT_PATH, run_id: RUN_ID, run_token: RUN_TOKEN, "
-    "grind: { profile: PROFILE_NAME, rows: queued, halted: _halted, per_row: true } };\n"
+    "grind: { profile: PROFILE_NAME, rows: queued, halted: _halted, per_row: true, ...(WORK_ROOT !== REPO_ROOT ? { work_root: WORK_ROOT } : {}) } };\n"
     "  const _size = JSON.stringify(JSON.stringify(_params)).length;\n"
     "  if (_size > PARAMS_BUDGET) { _failAll(`terminal commit params are ${_size} bytes escaped, over the ${PARAMS_BUDGET} the spawn transcript can carry; the rows stay on disk` + SETTLE_HINT); return; }\n"
     "  let reply;\n"
@@ -2239,7 +2239,7 @@ def _with_sizing_exists_check(size_raw: str) -> str:
             "\n\nWhen that command exits 0 and its stdout is not " + json.dumps(SIZE_SKIPPED_MESSAGE)
             + ", run this as a second Bash call, replacing <name> as above: `test -f "
         )
-        + r" + _shq(REPO_ROOT.replace(/\/+$/, '') + '/' + _sizingPathFor('<name>', row.rowId)) + "
+        + r" + _shq(WORK_ROOT.replace(/\/+$/, '') + '/' + _sizingPathFor('<name>', row.rowId)) + "
         + json.dumps(
             "`. If it fails, return exit_code 1 and stderr 'exit 0 but no sizing file at ' followed by that path; "
             "otherwise return the chain's exit code as stated."
@@ -2281,7 +2281,7 @@ def _compose_split_call(
         "c => '```\\nprintf %s ' + _shq(c) + ' >> ' + _shq(_file) + '\\n```\\n')"
     )
     parts: list[tuple[str, str]] = [
-        *stages._preamble_parts(preamble_expr),
+        *stages._preamble_parts(preamble_expr, stages.WORK_ROOT_JS),
         (
             "lit",
             f"The Bash tool drops any command longer than {stages.BASH_COMMAND_CAP} characters, so the items "
@@ -2298,7 +2298,7 @@ def _compose_split_call(
         ("lit", " --items-file "),
         ("expr", "_shq(_file)"),
         ("lit", " --repo-root "),
-        stages._shq_part("REPO_ROOT"),
+        stages._shq_part(stages.WORK_ROOT_JS),
         (
             "lit",
             "\n```\nReturn `split` as outcome and the `children` array of the last command's JSON output "
@@ -2697,6 +2697,8 @@ def compose_grind_script(
     # Every stage's cwd, `--repo-root` and commit `--repo` bind here, never to the
     # firing session's ambient cwd.
     lines.append("const REPO_ROOT = args.repo_root;")
+    # The run clone the worker stages edit and test in; absent, they work in REPO_ROOT as before.
+    lines.append(f"const {stages.WORK_ROOT_JS} = args.work_root || REPO_ROOT;")
     lines.append(stages.SIZE_ASSEMBLE_JS)
     lines.append(_SIZE_PATH_JS)
     # The commit-failed hand-back names the runnable settle-run spelling, not the
@@ -2804,7 +2806,7 @@ def compose_grind_script(
         batch_id_js="batchId", triage_depth_js="TRIAGE_DEPTH_BY_KEY[batchKey]",
         rows_js="JSON.stringify(rowsData)", script_path_js="SCRIPT_PATH", run_id_js="RUN_ID",
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
-        targeted_runner=targeted_runner,
+        targeted_runner=targeted_runner, repo_root_js=stages.WORK_ROOT_JS,
     )
     lines.append(
         "async function _triageCall(batchId, batchKey, rowIds) {\n"
@@ -2828,7 +2830,7 @@ def compose_grind_script(
         row_js="{ row_id: row.rowId, path: row.path, digest: row.digest }",
         evidence_js="row.evidence", fix_plan_js="row.fixPlan",
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
-        retry_js="retry",
+        retry_js="retry", repo_root_js=stages.WORK_ROOT_JS,
     )
     size_raw = _with_sizing_exists_check(size_raw)
     lines.append("async function _sizeCall(row, retry) {\n" + _indent_block(_capture(size_raw, "size"), "  ") + "\n}")
@@ -2839,7 +2841,7 @@ def compose_grind_script(
             label="close", phase_title="Grind", profile=profile.name,
             profile_dir_js="PROFILE_DIR",
             proposals_js="JSON.stringify(proposals)", run_id_js="RUN_ID", agent_type_host=agent_type_host, run_key=run_key,
-            preamble_expr=preamble_expr,
+            preamble_expr=preamble_expr, repo_root_js=stages.WORK_ROOT_JS,
         )
         lines.append(
             _CLOSE_DEFER_JS
@@ -2863,7 +2865,7 @@ def compose_grind_script(
         ruling_note_js="(row.rulingNote || '')",
         profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
         run_id_js="RUN_ID", agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
-        targeted_runner=targeted_runner,
+        targeted_runner=targeted_runner, repo_root_js=stages.WORK_ROOT_JS,
     )
     lines.append("async function _fixCall(row) {\n" + _indent_block(_capture(fix_raw, "fix"), "  ") + "\n}")
 
@@ -2884,7 +2886,7 @@ def compose_grind_script(
         label="verify-op", phase_title="Grind", run_dir=run_dir_s,
         agent_type_host=agent_type_host, run_key=run_key,
         reject_paths_js="_undoPaths(row)",
-        reject_reason_js="row.undoReason",
+        reject_reason_js="row.undoReason", repo_root_js=stages.WORK_ROOT_JS,
     )
     lines.append(
         "async function _rejectUndoCall(row) {\n" + _indent_block(_capture(reject_raw, "verify"), "  ") + "\n}"
@@ -2947,12 +2949,13 @@ def compose_grind_script(
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
         final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
-        digest_js="row.digest",
+        digest_js="row.digest", repo_root_js=stages.WORK_ROOT_JS,
     )
     batch_kw: dict[str, Any] = dict(
         models=stage_models, phase_title="Grind", rows_js="rows",
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
+        repo_root_js=stages.WORK_ROOT_JS,
     )
     verify_routing_raw = stages.compose_verify_routing_batch_call(label="verify-routing", **batch_kw)
     verify_routing_hand_back_raw = stages.compose_verify_routing_batch_call(
@@ -2990,6 +2993,7 @@ def compose_grind_script(
         row_id_js="row.rowId", row_path_js="row.path",
         final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
         digest_js="row.digest", profile=profile.name, run_id_js="RUN_ID",
+        repo_root_js=stages.WORK_ROOT_JS,
     )
     lines.append(
         "async function _verifyCall(row, rows) {\n"
@@ -3064,6 +3068,18 @@ def compose_grind_script(
     )
     once_per_run_legs.append(terminal_commit_text)
     lines.append(terminal_commit_text)
+
+    work_clone_raw = stages.compose_work_clone_call(
+        models=stage_models, label="work-clone", phase_title="Grind",
+        agent_type_host=agent_type_host, run_key=run_key,
+    )
+    work_clone_text = (
+        "async function _provisionWorkClone() {\n"
+        + _indent_block(_capture(work_clone_raw, "work-clone"), "  ")
+        + "\n}"
+    )
+    once_per_run_legs.append(work_clone_text)
+    lines.append(work_clone_text)
 
     lines.append(
         "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, total_tokens: _spentTotal(), total_basis: 'output*ratio', agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nlet _reviewState = 'not-run';\nlet _reviewVerdictsRecord = null;\nfunction _runCostRecord() {\n  return { review_state: _reviewState, review_verdicts: _reviewVerdictsRecord, profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), handed_back: _handedBack, halted: _haltReason() !== null, halted_reason: _haltReason(), terminal_commit_dropped: _terminalCommitDropped };\n}\nfunction _declaredWrites() {\n  const out = [];\n  for (const r of Object.keys(_rows)) { if (_rows[r].origin) out.push(_rows[r].path); if (_rows[r].sizingPath) out.push(_rows[r].sizingPath); }\n  return Array.from(new Set(out));\n}"
@@ -3459,7 +3475,17 @@ def compose_grind_script(
         "  delete _admitted[batchState.id];\n"
         "  _gateTick();\n"
         "}\n"
+        "let _workCloneReady = false;\n"
+        "async function _ensureWorkClone() {\n"
+        "  if (WORK_ROOT === REPO_ROOT || _workCloneReady) return;\n"
+        "  const _clone = await _provisionWorkClone();\n"
+        "  if (!_clone || _clone.exit_code !== 0) {\n"
+        "    throw new Error('worker clone not provisioned at ' + WORK_ROOT + (_clone && _clone.stderr ? ': ' + _clone.stderr : '') + ': the run edits no shared checkout');\n"
+        "  }\n"
+        "  _workCloneReady = true;\n"
+        "}\n"
         "async function runGrind() {\n"
+        "  await _ensureWorkClone();\n"
         "  _grindOpen = true;\n"
         "  try { await new Promise((resolve) => { _gateResolve = resolve; _gateTick(); }); }\n"
         "  finally { _grindOpen = false; }\n"

@@ -21,7 +21,7 @@ LEG = "peer_hunk_gate.co_declared_peer_holds"
 def _call(repo) -> dict:
     params = {
         "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED, "session_id": _SID,
-        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]},
+        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]},
     }
     return terminal_commit._handler(params, repo_root=repo / ".git")
 

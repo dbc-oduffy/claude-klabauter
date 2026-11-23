@@ -30,7 +30,7 @@ PLAN = "docs/plans/p.md"
 REPORT = "reports/X1.md"
 WRITES = ("exp/r4/a.txt", "docs/research/r4/b.txt", "docs/research/r4/c.txt")
 PRODUCT = [WRITES[0]]  # review.prep slice_files never list a docs/research path
-VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:

@@ -1106,6 +1106,7 @@ def review_reverify(
         )
         skip = set(pre_existing) | set(owned_red) | set(not_base_red) | set(renamed_node)
         peer_dirt: List[str] = []
+        export_own: Set[str] = set()
         if export_failing_path:
             export_red = _read_base_export(repo_root, export_failing_path)
             if export_red is None:
@@ -1113,6 +1114,7 @@ def review_reverify(
             else:
                 peer_dirt = sorted(n for n in ids if n not in skip and n not in export_red)
                 skip |= set(peer_dirt)
+                export_own = {n for n in ids if n not in skip and n in export_red}
         base_measured = (failing_at_base is not None or bool(base_export_path)) and not base_unmeasured
         base_green = {n for n in ids if base_measured and n not in skip}
         flaky = _rerun_alone(repo_root, [n for n in ids if n not in skip])
@@ -1122,6 +1124,7 @@ def review_reverify(
         pre_existing, owned_red, not_base_red, renamed_node, skip, base_green = [], [], [], [], set(), set()
         peer_dirt = []
         flaky = []
+        export_own = set()
         ruled = {}
     foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
     foreign_node = {n for n in ids if n not in skip and n not in base_green and _node_file(n) in foreign_set}
@@ -1143,7 +1146,7 @@ def review_reverify(
             implicated.setdefault(target, []).append(node)
         if not targets and node not in already:
             unattributed.append(node)
-        if not targets and node not in base_green and _sibling_caused(repo_root, node, sibling_py):
+        if not targets and node not in base_green and node not in export_own and _sibling_caused(repo_root, node, sibling_py):
             foreign_ids.append(node)
 
     if probe == "open":
@@ -1210,7 +1213,7 @@ def review_reverify(
         if targets and targets <= fenced and node not in unattributed and node not in already:
             unattributed.append(node)
     unattributed.extend(n for n in not_base_red if n not in unattributed)
-    candidates = [n for n in unattributed if n not in not_base_red]
+    candidates = [n for n in unattributed if n not in not_base_red and n not in export_own]
     if cause_files is None and candidates:
         cause_files = _derive_cause_files(repo_root, candidates, failing_output)
     sibling_owned, foreign_red = _sibling_owned(

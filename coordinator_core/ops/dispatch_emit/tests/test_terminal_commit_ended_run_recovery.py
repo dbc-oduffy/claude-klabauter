@@ -32,7 +32,7 @@ def _recorded_output(repo) -> str:
         "script_path": "run.mjs",
         "incomplete_chunks": [],
         "inline_review": _REVIEWED,
-        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]},
+        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]},
         "session_id": _SID,
         "held": [],
         "halted": {"halted": "commit", "error": _CAS_ERROR},
@@ -83,7 +83,7 @@ def test_a_stale_run_token_is_refused_and_the_error_names_the_recovery_flag(repo
     params = json.dumps({
         "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED,
         "session_id": _SID, "run_id": "run1", "run_token": "stale-token",
-        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]},
+        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]},
     })
     envelope, stderr, code = _fire(repo, params)
     out = _result(envelope)

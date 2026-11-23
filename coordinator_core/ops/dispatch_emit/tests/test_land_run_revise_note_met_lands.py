@@ -44,14 +44,14 @@ def _land(root, token: str, items: list) -> dict:
     )
 
 
-R1_MET = {"id": "R1", "status": "met", "wired": True}
+R1_MET = {"id": "R1", "status": "met", "met_by": "a.py", "wired": True}
 
 
 def test_a_revise_note_judged_met_as_n1_lands(repo):  # noqa: F811
     token = _stage(repo, CODE)
     _note(repo)
 
-    out = _land(repo, token, [R1_MET, {"id": "N1", "status": "met"}])
+    out = _land(repo, token, [R1_MET, {"id": "N1", "status": "met", "met_by": "a.py"}])
 
     assert out.get("committed") is True and out.get("refused") is None, out
 
@@ -70,7 +70,7 @@ def test_a_foreign_id_lands_with_an_advisory(repo):  # noqa: F811
     token = _stage(repo, CODE)
     _note(repo)
 
-    out = _land(repo, token, [R1_MET, {"id": "N1", "status": "met"}, {"id": "N2", "status": "met"}])
+    out = _land(repo, token, [R1_MET, {"id": "N1", "status": "met", "met_by": "a.py"}, {"id": "N2", "status": "met", "met_by": "a.py"}])
 
     assert out.get("committed") is True and out.get("refused") is None, out
     assert out["ledger_advisory"] == ["verdict ids that are not register rows were ignored: N2"]
@@ -79,7 +79,7 @@ def test_a_foreign_id_lands_with_an_advisory(repo):  # noqa: F811
 def test_a_note_id_with_no_note_stored_refuses(repo):  # noqa: F811
     token = _stage(repo, CODE)
 
-    out = _land(repo, token, [R1_MET, {"id": "N1", "status": "met"}])
+    out = _land(repo, token, [R1_MET, {"id": "N1", "status": "met", "met_by": "a.py"}])
 
     assert out.get("refused") == "ledger-unmet", out
     assert "N1: " + rl.NOT_A_ROW_REASON in out["error"]

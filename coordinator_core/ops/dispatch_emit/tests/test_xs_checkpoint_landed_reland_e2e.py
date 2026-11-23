@@ -33,7 +33,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 PRODUCT = "a.py"
 FOREIGN = "coordinator/tests/test_foreign_shape.py"
 FOREIGN_BYTES = "def test_a():\n"
-_MET_EVIDENCED = {"items": [{"id": "R1", "status": "met", "wired": True, "command": "pytest -q", "observed": "1 passed"}]}
+_MET_EVIDENCED = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True, "command": "pytest -q", "observed": "1 passed"}]}
 
 
 @pytest.fixture(autouse=True)

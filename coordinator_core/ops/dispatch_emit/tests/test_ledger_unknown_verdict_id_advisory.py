@@ -42,7 +42,7 @@ def test_judge_passes_met_rows_plus_an_unregistered_x1_and_names_it(tmp_path: Pa
     ledger = _ledger(tmp_path)
     assert [i.id for i in ledger.items] == ["R1", "R2"]
 
-    got = rl.judge(ledger, {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "met"}, X1]})
+    got = rl.judge(ledger, {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}, {"id": "R2", "status": "met", "met_by": "a.py"}, X1]})
 
     assert got["pass"] is True and got["failures"] == []
     assert [a["id"] for a in got["advisory"]] == ["X1"]
@@ -50,14 +50,14 @@ def test_judge_passes_met_rows_plus_an_unregistered_x1_and_names_it(tmp_path: Pa
 
 
 def test_judge_without_unknown_ids_carries_no_advisory(tmp_path: Path) -> None:
-    got = rl.judge(_ledger(tmp_path), {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "met"}]})
+    got = rl.judge(_ledger(tmp_path), {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}, {"id": "R2", "status": "met", "met_by": "a.py"}]})
 
     assert got["pass"] is True and "advisory" not in got and rl.advisory_text(got) is None
 
 
 def test_an_unmet_register_row_still_fails_beside_an_unregistered_id(tmp_path: Path) -> None:
     got = rl.judge(
-        _ledger(tmp_path), {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "not_met"}, X1]},
+        _ledger(tmp_path), {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}, {"id": "R2", "status": "not_met"}, X1]},
     )
 
     assert got["pass"] is False

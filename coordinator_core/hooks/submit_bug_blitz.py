@@ -252,6 +252,22 @@ def _not_run_line(accounts: list) -> str:
     return f"{len(rest)} of {len(accounts)} targets not run: {named}."
 
 
+def _work_root(root: Path, run_id: str) -> str:
+    """Where the run's worker clone lives, computed with no spawn and no disk write; "" when it has no safe path.
+    The clone is not provisioned here (a checkout would breach this hook's process budget): the fire args carry
+    this path and the composed script's first call provisions it (`targeted-test-run provision`)."""
+    from coordinator_core import temp_layout
+    from coordinator_core.bug_blitz.worker_clone import CLONES_DIRNAME
+    from coordinator_core.ops._path_guard import safe_id
+
+    if not safe_id(run_id):
+        return ""
+    try:
+        return (temp_layout.coordinator_temp_root(root) / CLONES_DIRNAME / run_id).as_posix()
+    except ValueError:
+        return ""
+
+
 def _write_decisions(
     run_dir: Path,
     parsed: Optional[ParseResult],
@@ -259,8 +275,10 @@ def _write_decisions(
     target_ref: str,
     baseline_dirty: list[str],
     accounts: Optional[list] = None,
+    work_root: str = "",
 ) -> None:
     record = {
+        "work_root": work_root,
         BASELINE_DIRTY_KEY: baseline_dirty,
         "commit_authority": {"basis": "submission"},
         "suite": "not-run (targeted-runner)",
@@ -401,9 +419,12 @@ def _evaluate(
         mint_run_parent(root, stamp, label="bug-blitz")
     except (OSError, ValueError):
         pass  # best-effort: a missing parent record only leaves workflow.revise refusing this run id
+    work_root = _work_root(root, stamp)
     try:
         accounts = _account(Path(script), parsed, minted)
-        _write_decisions(Path(script).parent, parsed, minted, target_raw, _baseline_dirty(root, session_id), accounts)
+        _write_decisions(
+            Path(script).parent, parsed, minted, target_raw, _baseline_dirty(root, session_id), accounts, work_root,
+        )
     except OSError as exc:
         return _refuse(f"decisions.json not written: {exc}")
 
@@ -413,6 +434,8 @@ def _evaluate(
         "profile_dir": params["profile_dir"],
         "repo_root": root.as_posix(),
     }
+    if work_root:
+        fire_args["work_root"] = work_root
     try:
         from coordinator_core.ops.dispatch_emit import run_token
 
