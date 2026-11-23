@@ -1436,8 +1436,11 @@ class TestTestRunnerVerdict:
         host.avail = 1
         assert self._run("pytest tests/test_a.py", tmp_path) is None
 
+    def test_an_untouched_target_is_admitted(self, host, verdict_env, tmp_path):
+        # A target missing from the touch record is recoverable work: advisory, never a deny.
+        assert not _is_deny(self._run("python -m pytest tests/test_other.py", tmp_path))
+
     @pytest.mark.parametrize("cmd", [
-        "python -m pytest tests/test_other.py",
         "python -m pytest tests",
         "python -m pytest",
         "python -m pytest -k foo",

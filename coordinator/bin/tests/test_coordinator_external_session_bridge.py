@@ -120,20 +120,26 @@ def test_hit_writes_op_output_and_sends_env_event_and_pid(engine, tmp_path):
     assert isinstance(params["caller_pid"], int) and params["caller_pid"] > 0
 
 
-def test_no_server_is_loud_empty_object_exit_zero(engine, tmp_path):
+def _degraded(stdout: str) -> bool:
+    """A miss answers the typed advisory, never a silent `{}`: the operator must see the hook degraded."""
+    out = json.loads(stdout)
+    return list(out) == ["systemMessage"] and out["systemMessage"].startswith("coordinator-external-session: degraded: ")
+
+
+def test_no_server_is_a_typed_advisory_exit_zero(engine, tmp_path):
     root, _ = engine
     proc = run_bridge(root, cwd=tmp_path)
     assert proc.returncode == 0
-    assert json.loads(proc.stdout) == {}
+    assert _degraded(proc.stdout)
     assert "external session context unavailable" in proc.stderr
 
 
-def test_error_response_is_loud_empty_object(engine, tmp_path):
+def test_error_response_is_a_typed_advisory(engine, tmp_path):
     root, token = engine
     server = FakeServer(root, token, {"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "no op"}})
     proc = run_bridge(root, cwd=tmp_path)
     server.thread.join(5)
-    assert proc.returncode == 0 and json.loads(proc.stdout) == {}
+    assert proc.returncode == 0 and _degraded(proc.stdout)
     assert "external session context unavailable" in proc.stderr
 
 
@@ -142,7 +148,7 @@ def test_silent_server_misses_within_the_hook_deadline(engine, tmp_path):
     server = FakeServer(root, token, None)
     proc = run_bridge(root, cwd=tmp_path)
     server.thread.join(10)
-    assert proc.returncode == 0 and json.loads(proc.stdout) == {}
+    assert proc.returncode == 0 and _degraded(proc.stdout)
     assert "external session context unavailable" in proc.stderr
     import importlib.util
     spec = importlib.util.spec_from_file_location("coordinator_external_session_bridge", BRIDGE)
@@ -152,11 +158,11 @@ def test_silent_server_misses_within_the_hook_deadline(engine, tmp_path):
 
 
 @pytest.mark.parametrize("argv_event,stdin", [("NotAnEvent", "{}"), ("Stop", "[]"), ("Stop", "not json")])
-def test_bad_input_is_loud_empty_object(engine, tmp_path, argv_event, stdin):
+def test_bad_input_is_a_typed_advisory(engine, tmp_path, argv_event, stdin):
     root, _ = engine
     proc = subprocess.run([sys.executable, str(BRIDGE), "--event", argv_event, "--engine-root", str(root)],
                           input=stdin, capture_output=True, text=True, cwd=tmp_path, timeout=30)
-    assert proc.returncode == 0 and json.loads(proc.stdout) == {}
+    assert proc.returncode == 0 and _degraded(proc.stdout)
     assert "external session context unavailable" in proc.stderr
 
 
@@ -165,6 +171,6 @@ def test_bridge_imports_no_coordinator_core_module(engine, tmp_path):
     proc = subprocess.run(
         [sys.executable, "-X", "importtime", str(BRIDGE), "--event", "Stop", "--engine-root", str(root)],
         input="{}", capture_output=True, text=True, cwd=tmp_path, timeout=30)
-    assert json.loads(proc.stdout) == {}
+    assert _degraded(proc.stdout)
     imported = [line.rpartition("|")[2].strip() for line in proc.stderr.splitlines() if "|" in line]
     assert [name for name in imported if name.startswith("coordinator_core")] == []

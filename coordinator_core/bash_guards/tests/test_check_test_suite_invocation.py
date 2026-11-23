@@ -370,11 +370,25 @@ def test_test_runner_touched_file_admitted_through_the_slot_wrapper(repo, free_m
     assert "with-tier-t-slot" in json.dumps(hso)
 
 
+@pytest.mark.parametrize("command", [
+    "pytest coordinator_core/frontmatter/tests/test_other.py",
+    "pytest coordinator_core/frontmatter/tests/test_x.py coordinator_core/frontmatter/tests/test_other.py::test_a",
+])
+def test_test_runner_untouched_target_is_admitted_with_an_advisory(
+    repo, free_mutex, real_verdict, monkeypatch, capsys, command
+):
+    """A target missing from the touch record (a file a subagent wrote and committed) is recoverable work:
+    the scope leg logs an advisory and admits, never denies."""
+    (repo / ".git").mkdir()
+    _touch_record(monkeypatch, _TOUCHED_TEST)
+    out = _enveloped(guard.check)(
+        _payload(command, repo, agent_id=_AGENT_ID, extra={"agent_type": _TEST_RUNNER}))
+    assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
+    assert "not in this session's touched test files; scope leg allows" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("command, fragment", [
-    ("pytest coordinator_core/frontmatter/tests/test_other.py", "not in this session's touched test files"),
     ("pytest -n 2 coordinator_core/frontmatter/tests/test_x.py", "-n workers refused"),
-    ("pytest coordinator_core/frontmatter/tests/test_x.py coordinator_core/frontmatter/tests/test_other.py",
-     "not in this session's touched test files"),
     # suite-shaped: the identity leg denies these before the scope leg is reached
     ("pytest coordinator_core/frontmatter/tests/", ""),
     ("pytest", ""),
