@@ -393,7 +393,7 @@
       "name": "ceremony__commit_v2"
     },
     {
-      "description": "``ceremony.hand_land``: land named paths on HEAD through ``commit_paths``, so a hand-land cannot skip the worktree sync.\n\nParams: ``repo_root`` (string, optional: the repo to land in; defaults to the dispatching worktree's main root),\n``paths`` (list of repo-relative path strings, required), ``message`` (string, required; the op appends a\n``Hand-Landed: true`` trailer), ``expect_head`` (string, optional: a full or abbreviated HEAD sha; a HEAD that\ndoes not start with it refuses with nothing moved).\n\nThe commit, the ref CAS and the 3-way sync of each landed path into the worktree are ``commit_paths``'s; this op\nadds no commit-tree or update-ref of its own. A keyed dispatch also gets the durable land record ``land_run``\nwrites, advanced ``committing`` then ``committed``.\n\nReply: ``{ok, sha, rebased, sync_refused}``; a non-empty ``sync_refused`` adds ``sync_incomplete: true`` and\n``worktree_sync_refused`` (the landing stands, those paths stay byte-intact); ``ownerless`` names landed paths no run\nmanifest declares (advisory); ``stranded`` names ``[{path, kind, reason, run_id}]``, the recorded sibling paths of a\nhalted run (``touched-blobs.json``) the landing leaves behind (advisory: the landing stands). Refusal:\n``{ok: false, error, refused}``.",
+      "description": "``ceremony.hand_land``: land named paths on HEAD through ``commit_paths``, so a hand-land cannot skip the worktree sync.\n\nParams: ``repo_root`` (string, optional: the repo to land in; defaults to the dispatching worktree's main root),\n``paths`` (list of repo-relative path strings, required), ``message`` (string, required; the op appends a\n``Hand-Landed: true`` trailer), ``expect_head`` (string, optional: a full or abbreviated HEAD sha; a HEAD that\ndoes not start with it refuses with nothing moved).\n\nThe commit, the ref CAS and the 3-way sync of each landed path into the worktree are ``commit_paths``'s; this op\nadds no commit-tree or update-ref of its own. A keyed dispatch also gets the durable land record ``land_run``\nwrites, advanced ``committing`` then ``committed``.\n\nBefore any commit the op refuses, with nothing moved, ``raw_kept_blob`` (a path whose worktree bytes are a halted\nrun's raw ``kept.json`` image while its ``withheld-own-delta.json`` holds a different own-delta blob) and\n``uncommitted_import`` (a landing ``.py`` importing a ``coordinator_core`` name that resolves only uncommitted).\n\nReply: ``{ok, sha, rebased, sync_refused}``; a non-empty ``sync_refused`` adds ``sync_incomplete: true`` and\n``worktree_sync_refused`` (the landing stands, those paths stay byte-intact); ``ownerless`` names landed paths no run\nmanifest declares (advisory); ``gate_unverified`` names a pre-commit gate that could not run and so allowed\n(advisory); ``stranded`` names ``[{path, kind, reason, run_id}]``, the recorded sibling paths of a\nhalted run (``touched-blobs.json``) the landing leaves behind (advisory: the landing stands). Refusal:\n``{ok: false, error, refused}``.",
       "inputSchema": {
         "type": "object"
       },
@@ -1732,7 +1732,7 @@
       "name": "dispatch__measured_rev"
     },
     {
-      "description": "JSON-RPC \"dispatch.minted_run\": start or abandon one minted-only run.\n\n``dispatch.minted_run``: start or abandon a run left at stage ``minted``.\n\nParams: ``{run_id: str, action: \"start\" | \"abandon\", dry_run?: bool}``.\nReply: ``{ok, run_id, action, fire_args | null, landed_sha | null, refusal | null}``; a refusal\ncarries ``ok: false`` and a one-line ``refusal`` naming the cause. ``start`` returns ``script_path``, a\nstage-loop start script under ``scratch/warp``: fire that path with no args (it carries\n``repoRoot``/``runToken`` and follows ``stage_pending`` into the staged twin); ``fire_args`` is null and\n``run_script`` names the run's own script, which is never fired directly. A run script that holds its own\n``workflow()`` reader is the exception: ``script_path`` is that script and ``fire_args`` its args, fired\ntop-level so the reader is the only nesting level. ``abandon`` writes the halt\nmarker, discards the run token and lands the record through ``abandoned_runs`` (``run_ids=[run_id]``).\nThe reap holds a run younger than its quiet window, so a fresh abandon replies ``landed_sha: null`` and\n``note`` names the reap's skip reason; the halt marker still blocks any start.\n\n``abandon`` on an id with no run dir (announced, never written) only discards its token and replies\nok; with no token either it refuses ``run-not-found``, and ``start`` on it always refuses.\n\nA run is startable or abandonable only while it is minted-only (``halted_run._is_shell``: no halt\nmarker, progress record absent or at ``minted``); a run past ``minted`` is refused. In-process file\nreads only on the refusal path; ``start`` also writes one ``scratch/warp/defer-*.workflow.mjs`` file\n(``dry_run`` does not apply to it); no git spawn.",
+      "description": "JSON-RPC \"dispatch.minted_run\": start or abandon one minted-only run.\n\n``dispatch.minted_run``: start or abandon a run left at stage ``minted``.\n\nParams: ``{run_id: str, action: \"start\" | \"abandon\", dry_run?: bool}``.\nReply: ``{ok, run_id, action, fire_args | null, landed_sha | null, refusal | null}``; a refusal\ncarries ``ok: false`` and a one-line ``refusal`` naming the cause. ``start`` returns ``script_path``, a\nstage-loop start script under ``scratch/warp``: fire that path with no args (it carries\n``repoRoot``/``runToken`` and follows ``stage_pending`` into the staged twin); ``fire_args`` is null and\n``run_script`` names the run's own script, which is never fired directly. A run script that holds its own\n``workflow()`` reader is the exception: ``script_path`` is that script and ``fire_args`` its args, fired\ntop-level so the reader is the only nesting level. ``abandon`` writes the halt\nmarker, discards the run token and lands the record through ``abandoned_runs`` (``run_ids=[run_id]``).\nThe reap holds a run younger than its quiet window, so a fresh abandon replies ``landed_sha: null`` and\n``note`` names the reap's skip reason; the halt marker still blocks any start.\n\n``abandon`` on an id with no run dir (announced, never written) only discards its token and replies\nok; with no token either it refuses ``run-not-found``. ``start`` on it always refuses: with a minted token it\nrefuses ``never-created`` (reply ``cause: never_created``) naming the ``dispatch.emit`` refire and the abandon;\nwith no token, ``run-not-found``.\n\nA run is startable or abandonable only while it is minted-only (``halted_run._is_shell``: no halt\nmarker, progress record absent or at ``minted``); a run past ``minted`` is refused. In-process file\nreads only on the refusal path; ``start`` also writes one ``scratch/warp/defer-*.workflow.mjs`` file\n(``dry_run`` does not apply to it) and appends the caller's session to run-stage ``driver_session_ids``\nwhen one resolves; no git spawn.",
       "inputSchema": {
         "type": "object"
       },
@@ -1963,11 +1963,57 @@
       "name": "engine__registration_completeness"
     },
     {
-      "description": "Submit one ask or sizing through the shared gates; see the module docstring for the wire contract.\n\ncoordinator_core.ops.engine_ask_submit -- JSON-RPC \"engine_ask.submit\": the engine-ask door for a\ncaller with no Workflow tool (Codex).\n\nWire params: `ask` xor `sizing`; `ask_source` (\"pm\" | \"relayed\", required with `ask`); `session_id`,\n`caller` (identity string) and absolute `cwd`, all required. A launcher-spawned headless EM may omit\nthem: with `session_id` absent, `COORDINATOR_SESSION_ID` from the caller env is taken only when the\nheadless-EM grant binds it (`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN`), `caller` defaults to `<family>-em`\nfrom that grant and `cwd` to the op's repo root; an unbound env session id is refused as absent. Optional\n`repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,\n`em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and\n`fire` (bool, default true: hand the run to `workflow.fire` with `expected=<sha256>`; false mints without starting),\n`executor` (headless by default, or claude), and `backend` (codex by default; claude, grok or agy opt-in).\nCompletion defaults to the submitting session UUID; notify_to explicitly overrides it.\nAn empty params object reads the object in `.coordinator-local/em-submit.json` under the repo; a missing file\nis created as an empty-ask scaffold and refused as `bad-request` naming that path, a non-object file likewise. Non-empty params are used as given.\n\nReply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when\n`fire` is not false) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that\nis refused or raises after a successful submit keeps the run handle and adds `fire_error` naming the cause.\n\nSpec backlink: docs/plans/2026-11/2026-11-07-7402bb-2-engine-ask-op-side-submit.md § C1",
+      "description": "Submit one ask or sizing through the shared gates; see the module docstring for the wire contract.\n\ncoordinator_core.ops.engine_ask_submit -- JSON-RPC \"engine_ask.submit\": the engine-ask door for a\ncaller with no Workflow tool (Codex).\n\nWire params: `ask` xor `sizing`; `ask_source` (\"pm\" | \"relayed\", required with `ask`); `session_id`,\n`caller` (identity string) and absolute `cwd`, all required. A launcher-spawned headless EM may omit\nthem: with `session_id` absent, `COORDINATOR_SESSION_ID` from the caller env is taken only when the\nheadless-EM grant binds it (`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN`), `caller` defaults to `<family>-em`\nfrom that grant and `cwd` to the op's repo root; a native Codex thread may supply its own registered EM identity when the launcher id is absent. Optional\n`repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,\n`em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and\n`fire` (bool, default true: hand the run to `workflow.fire` with `expected=<sha256>`; false mints without starting),\n`executor` (headless by default, or claude), and `backend` (codex by default; claude, grok or agy opt-in).\nCompletion defaults to the submitting session UUID; notify_to explicitly overrides it.\nAn empty params object reads the object in `.coordinator-local/em-submit.json` under the repo; a missing file\nis created as an empty-ask scaffold and refused as `bad-request` naming that path, a non-object file likewise. Non-empty params are used as given.\n\nReply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when\n`fire` is not false) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that\nis refused or raises after a successful submit keeps the run handle and adds `fire_error` naming the cause.\n\nSpec backlink: docs/plans/2026-11/2026-11-07-7402bb-2-engine-ask-op-side-submit.md § C1",
       "inputSchema": {
         "type": "object"
       },
       "name": "engine_ask__submit"
+    },
+    {
+      "description": "Apply one Codex lifecycle event: registry side effect, then the hook output for it.\n\nSessionEnd unregisters the thread; a top-level SessionStart registers it; SessionStart and\nSubagentStart render session context; every other event goes to the Codex lifecycle\nhandler. Returns `{\"output\": <hook envelope>, \"notices\": [<stderr lines>]}`; a registry\nfailure is a notice, never a lost context result.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "caller_pid": {
+            "description": "The bridge's own pid; the Codex host is found among its ancestors.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The bridge process environment; the context functions read this, never the engine's.",
+            "type": "object"
+          },
+          "event": {
+            "enum": [
+              "SessionStart",
+              "SessionEnd",
+              "SubagentStart",
+              "UserPromptSubmit",
+              "PostToolUse",
+              "Stop",
+              "SubagentStop",
+              "PreCompact",
+              "PostCompact"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "description": "The hook payload Codex wrote to the bridge's stdin.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "event",
+          "payload",
+          "env",
+          "caller_pid"
+        ],
+        "type": "object"
+      },
+      "name": "external_session__handle"
     },
     {
       "description": "JSON-RPC \"external_workspace.rehydrate\": params `key` xor `all_missing`.\n\nReturns {\"key\", \"path\", \"url\", \"ref\", \"action\"} with action \"cloned\", \"reset\" or \"noop\" for\n`key`; {\"missing\": [{key, path, url, ref}, ...]} for `all_missing`, with nothing cloned.",

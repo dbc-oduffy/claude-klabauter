@@ -37,6 +37,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "box_memory.register": "coordinator_core.ops.box_memory_admit",
     "box_memory.release": "coordinator_core.ops.box_memory_admit",
     "codex_status.snapshot": "coordinator_core.ops.codex_status",
+    "external_session.handle": "coordinator_core.ops.external_session",
     "ping":                                   "coordinator_core.ops.ping",
     "spawn_orphans.reap":                     "coordinator_core.ops.spawn_orphan_reap",
     "invoke.from_argv":                       "coordinator_core.ops.invoke_from_argv",

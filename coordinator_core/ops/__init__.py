@@ -97,6 +97,7 @@ _logger = _logging.getLogger(__name__)
 _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.box_memory_admit", 'registers "box_memory.admit", "box_memory.register", "box_memory.release"'),
     ("coordinator_core.ops.codex_status", 'registers "codex_status.snapshot"'),
+    ("coordinator_core.ops.external_session", 'registers "external_session.handle"'),
     ("coordinator_core.ops.ping", 'registers "ping"'),
     ("coordinator_core.ops.spawn_orphan_reap", 'registers "spawn_orphans.reap"'),
     ("coordinator_core.ops.remote_engine_handle", 'registers "remote_engine.handle"'),

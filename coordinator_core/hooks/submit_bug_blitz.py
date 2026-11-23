@@ -106,18 +106,21 @@ def _check_args(args: Any) -> tuple[Optional[dict], Optional[str]]:
 
 def _branch_refusal(root: Path) -> Optional[str]:
     # Remedy leads: the harness clips a deny reason to ~80 chars.
-    # Same oracle as day_branch_assert: any work/* branch is a work branch. The
-    # date-shape oracle refused suffixed day branches (work/m/2026-10-29b) that
-    # every other guard admits.
-    from coordinator_core.daily_branch import is_work_branch
+    # The grind lands by commit on the checked-out branch, so only the two shapes where that
+    # commit is unrecoverable or unreachable refuse: the default branch (a land there is a
+    # merge to main) and a detached HEAD. Any other branch, work/* or a stamp branch like
+    # <owner>/<box>/<topic>, is legitimate; day_branch_assert only warns on non-work/* too.
     from coordinator_core.git.git_state import head_branch
 
     branch = head_branch(root)
     if not branch or branch == "HEAD":
         return "Check out the day branch: HEAD is detached."
-    if not is_work_branch(branch):
-        return f"Check out a work/* branch: {branch} is not one."
+    if branch in _DEFAULT_BRANCHES:
+        return f"Check out a work branch: {branch} is the default branch."
     return None
+
+
+_DEFAULT_BRANCHES = frozenset({"main", "master"})
 
 
 def _default_resolve(raw: str, root: Path) -> TargetSpec:
