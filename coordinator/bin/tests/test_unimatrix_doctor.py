@@ -162,12 +162,15 @@ def box(tmp_path, monkeypatch):
 
     b.relay_line = relay_line
 
-    def seed_live(remote):
+    def seed_live(remote, stem=None, box_stamp=None):
+        """Seed a live pair where autolink writes it: `record_path`'s `link_key` stem, or an explicit `stem`."""
         b.sdir.mkdir(parents=True, exist_ok=True)
-        slug = remote.replace("@", "_at_")
+        stem = stem or al.slug(al.link_key(remote))
         b.live.update({7001, 7002})
-        (b.sdir / f"autolink-{slug}.json").write_text(json.dumps(
-            {"bridge": {"pid": 7001, "procStart": "start-7001"}, "inbox": {"pid": 7002, "procStart": "start-7002"}}))
+        rec = {"bridge": {"pid": 7001, "procStart": "start-7001"}, "inbox": {"pid": 7002, "procStart": "start-7002"}}
+        if box_stamp:
+            rec["box"] = box_stamp
+        (b.sdir / f"autolink-{stem}.json").write_text(json.dumps(rec))
 
     b.seed_live = seed_live
     return b
@@ -456,6 +459,30 @@ def test_each_far_box_prints_a_bridge_and_an_inbox_line_with_pid_when_alive_and_
     dead = [l for l in out.splitlines() if l.startswith("problem: bishop:") and "supervisor" in l]
     assert len(dead) == 2 and all("is not alive (" in l and "remedy:" in l for l in dead)
     assert any("bridge" in l for l in dead) and any("inbox" in l for l in dead)
+
+
+def test_member_whose_live_pair_is_recorded_under_the_link_key_is_alive_not_dead(box):
+    """Autolink names the record by `link_key` (user lowered, `.local` stripped); the doctor must read that name."""
+    snap = box.adopt("me", "Machine-a")
+    box.net.peer_snapshot = {"kim@Machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@Machine-a.local")
+    assert (box.sdir / "autolink-kim_at_machine_a.json").is_file()
+    rc, out = box.main()
+    problems = [l for l in out.splitlines() if l.startswith("problem:") and "supervisor" in l]
+    assert not problems
+    assert "Machine-a: bridge supervisor (unimatrix-roster.py) alive, pid 7001" in out
+    assert "Machine-a: no live link path" not in out
+
+
+def test_member_whose_live_pair_is_recorded_under_a_bare_alias_of_the_same_box_is_alive(box):
+    """`gipsy-lan` (ssh alias, stamped box gipsy) serves member `kim@gipsy.local`: same box, so same supervisors."""
+    snap = box.adopt("me", "gipsy")
+    box.net.peer_snapshot = {"kim@gipsy.local": peer_blob(box, snap)}
+    box.seed_live("kim@gipsy.local", stem="gipsy-lan", box_stamp="gipsy")
+    rc, out = box.main()
+    assert not [l for l in out.splitlines() if l.startswith("problem:") and "supervisor" in l]
+    assert "gipsy: inbox supervisor (unimatrix-mirror-all.py) alive, pid 7002" in out
+    assert "gipsy: no live link path" not in out
 
 
 def test_unset_python_pin_is_a_problem_line_and_a_set_one_is_silent(box, monkeypatch):

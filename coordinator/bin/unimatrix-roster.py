@@ -376,6 +376,22 @@ def proc_start(pid, platform=None):
         return _ps_lstart(pid)
 
 
+def linux_pid_domain(read=None):
+    """The Linux harness's pidDomain: `linux:<machine-id>:<pid namespace link>` (e.g. `linux:ab12..:pid:[4026531836]`).
+
+    `read` is (path) -> text, for tests. Falls back to the bare `linux` label when either part is unreadable."""
+    def default(path):
+        if path.startswith("/proc/"):
+            return os.readlink(path)
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    read = read or default
+    try:
+        return f"linux:{read('/etc/machine-id').strip()}:{read('/proc/self/ns/pid').strip()}"
+    except OSError:
+        return "linux"
+
+
 def pid_domain(platform=None):
     plat = platform or sys.platform
     if plat == "win32":

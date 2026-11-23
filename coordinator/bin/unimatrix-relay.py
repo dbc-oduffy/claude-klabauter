@@ -1100,15 +1100,53 @@ def release(sock_path, our_ino, others):
             pass
 
 
-def serve(srv, stdin_fd, out):
-    """Forward each message delivered to `srv` to `out`; return when stdin hits EOF."""
+# The near client sends `PING_LINE` every HEARTBEAT_SECONDS. A relay that has seen one holds its mirrors only
+# while the stream stays fresh: a dead TCP path (sleep, cable, crash) never delivers stdin EOF, and an
+# unreaped mirror socket accepts a send whose message nobody will read. A near client that never pings
+# (older code) is never leased out.
+PING_LINE = b'{"op":"ping"}\n'
+LEASE_SECONDS = 90
+
+
+def _lease_timeout(last, lease, clock):
+    return None if last is None else max(0.0, last + lease - clock())
+
+
+def _heartbeat_seen(chunk, last, clock):
+    """New lease stamp after a stdin chunk: armed by a ping, refreshed by any traffic once armed."""
+    return clock() if (last is not None or b'"ping"' in chunk) else None
+
+
+def record_mirror_forward(name, buf, ok=True, error=None):
+    """The outbound row for one message a mirror socket took: digest and target only, never the text."""
+    row = {"side": "mirror-out", "ok": ok, "written": ok, "reached": name,
+           "digest": hashlib.sha256(buf).hexdigest()[:16]}
+    if error:
+        row["error"] = error
+    record_delivery(row)
+
+
+def serve(srv, stdin_fd, out, name=None, lease=LEASE_SECONDS, clock=None):
+    """Forward each message delivered to `srv` to `out`; return when stdin hits EOF or the lease lapses."""
+    import time
+    clock = clock or time.monotonic
+    last = None
+
+    def emit(buf):
+        out.write(buf)
+        out.flush()
+        record_mirror_forward(name, buf)
     while True:
-        ready, _, _ = select.select([srv, stdin_fd], [], [])
+        ready, _, _ = select.select([srv, stdin_fd], [], [], _lease_timeout(last, lease, clock))
+        if not ready:
+            return
         if stdin_fd in ready:
-            if not os.read(stdin_fd, 4096):
+            chunk = os.read(stdin_fd, 4096)
+            if not chunk:
                 return
+            last = _heartbeat_seen(chunk, last, clock) or last
             continue
-        forward_one(srv, lambda buf: (out.write(buf), out.flush()))
+        forward_one(srv, emit)
 
 
 def forward_one(srv, emit):
@@ -1220,7 +1258,7 @@ def inbox(name, export_reply=False):
     key_body = sys.stdin.readline().rstrip("\n")
     m = register_name(name, raw, key_body, export_reply=export_reply)
     try:
-        serve(m.srv, sys.stdin.fileno(), sys.stdout.buffer)
+        serve(m.srv, sys.stdin.fileno(), sys.stdout.buffer, name=name)
     finally:
         m.release()
 
@@ -1254,6 +1292,7 @@ def _mux_apply(frame, mirrors, out):
 
 def _wrap_line(name, out):
     def emit(buf):
+        record_mirror_forward(name, buf)
         for line in buf.splitlines():
             try:
                 frame = json.loads(line)
@@ -1263,19 +1302,24 @@ def _wrap_line(name, out):
     return emit
 
 
-def serve_mux(stdin_fd, out):
-    """Serve every registered name's socket and the add/drop frame stream; return at stdin EOF.
+def serve_mux(stdin_fd, out, lease=LEASE_SECONDS, clock=None):
+    """Serve every registered name's socket and the add/drop frame stream; return at stdin EOF or lease lapse.
 
     Single-threaded: a sender that holds a connection open stalls every name and the frame stream."""
-    mirrors, pending = {}, b""
+    import time
+    clock = clock or time.monotonic
+    mirrors, pending, last = {}, b"", None
     try:
         while True:
             socks = {m.srv: n for n, m in mirrors.items()}
-            ready, _, _ = select.select([*socks, stdin_fd], [], [])
+            ready, _, _ = select.select([*socks, stdin_fd], [], [], _lease_timeout(last, lease, clock))
+            if not ready:
+                return
             if stdin_fd in ready:
                 chunk = os.read(stdin_fd, 65536)
                 if not chunk:
                     return
+                last = _heartbeat_seen(chunk, last, clock) or last
                 pending += chunk
                 *lines, pending = pending.split(b"\n")
                 for line in lines:

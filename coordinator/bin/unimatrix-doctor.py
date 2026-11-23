@@ -534,11 +534,35 @@ def check_target(remote, name, host, key, ctx, peer_epoch_check, outbound=None):
     return probs
 
 
+def supervisor_record(al, roster, remote):
+    """The live supervisor entry per role for the box `remote` names.
+
+    Autolink keys a record by `link_key`, one file per spelling, and a bare ssh alias (`gipsy-lan`) serves the
+    same box as the member `user@gipsy.local`; the member's own file can be absent while the alias's holds the
+    live pair. Reads the canonical record first and falls back to every record of the same box_key."""
+    sdir = al.state_dir(roster)
+    rec = al.read_record(al.record_path(sdir, remote))
+    if al.pair_live(roster, rec):
+        return rec
+    out = dict(rec)
+    try:
+        box = al.box_key(roster, remote, {})
+        others = al.group_records(roster, sdir).get(box, [])
+    except (OSError, subprocess.SubprocessError):
+        return out
+    for path in others:
+        for role, _ in al.SUPERVISORS:
+            entry = al.read_record(path).get(role) or {}
+            if not al.supervisor_live(roster, out.get(role) or {}) and al.supervisor_live(roster, entry):
+                out[role] = entry
+    return out
+
+
 def supervisor_lines(name, remote, ctx):
     """(problems, infos) for one far box: one line per supervisor role. Autolink runs one bridge and one inbox
     supervisor per far box, so N far boxes show N of each; a live one reports its recorded pid."""
     al, roster = ctx["autolink"], ctx["roster"]
-    rec = al.read_record(al.state_dir(roster) / f"autolink-{al.slug(remote)}.json")
+    rec = supervisor_record(al, roster, remote)
     probs, infos = [], []
     for role, script in al.SUPERVISORS:
         entry = rec.get(role) or {}
@@ -707,7 +731,7 @@ def diagnose(ctx):
         sp, si = supervisor_lines(box, remote, ctx)
         probs.extend(sp)
         notes.extend(si)
-        rec = al.read_record(al.state_dir(roster) / f"autolink-{al.slug(remote)}.json")
+        rec = supervisor_record(al, roster, remote)
         if not all(al.supervisor_live(roster, rec.get(role) or {}) for role, _ in al.SUPERVISORS):
             probs.append(f"{box}: no live link path: this box holds no live link to a signed member")
     aliases = al.far_boxes_status(roster)[0] if status == "none" else []

@@ -428,3 +428,30 @@ def test_main_performs_no_archival_in_a_real_git_worktree(tmp_path: Path, monkey
         ["git", "log", "--oneline"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     )
     assert len(log.stdout.strip().splitlines()) == 1
+
+
+def test_open_memo_only_on_fetched_sibling_work_ref_is_surfaced_unread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    inbox = repo / "state" / "cross-repo" / "inbox"
+    inbox.mkdir(parents=True)
+
+    def git(*a: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *a], check=True,
+                       **no_console_passthrough_kwargs())
+
+    git("init", "-b", "work/me/2026-11-22")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    _write_memo(inbox, "sibling.md", "created: 2026-11-20\nfrom: gipsy\ntitle: Pairing gaps\nstatus: open")
+    git("add", "-A")
+    git("commit", "-m", "sibling")
+    git("update-ref", "refs/remotes/origin/work/gipsy/2026-11-20", "HEAD")
+    git("rm", "-q", "state/cross-repo/inbox/sibling.md")
+    git("commit", "-m", "mine")
+    monkeypatch.delenv("CROSS_REPO_INBOX_DIR", raising=False)
+    monkeypatch.chdir(repo)
+    rc, out = _run({"MOCK_TODAY": "2026-11-22"}, monkeypatch)
+    assert rc == 0
+    assert "from gipsy: Pairing gaps [UNREAD on work/gipsy/2026-11-20]" in out

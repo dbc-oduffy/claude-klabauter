@@ -213,3 +213,50 @@ def test_client_decide_is_not_gated_on_the_server_counter(tmp_path: Path) -> Non
     svc.mkdir()
     hang_restart.note_progress()
     assert hang_restart.decide(svc, server_pid=1, source="client-unanswering") == "restart"
+
+
+def test_progress_stops_excusing_a_stall_episode_after_the_grace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-11-22 22:52-22:57Z: guard ops kept completing while accept stalled, so every burst read
+    as progress and the wedged server lived 5 minutes. Past the grace, the burst restarts it."""
+    monkeypatch.setattr(hang_restart, "_progress_excused_since", {})
+    clock = [1000.0]
+    monkeypatch.setattr(hang_restart.time, "monotonic", lambda: clock[0])
+    stall = _stall_dir(tmp_path)
+    exits: list = []
+
+    def burst() -> str:
+        hang_restart.note_progress()
+        verdict = None
+        for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+            verdict = hang_restart.note_stall(stall, exit_fn=exits.append)
+        return verdict
+
+    assert burst() == "suppressed"
+    clock[0] += hang_restart.PROGRESS_GRACE_SECS / 2
+    assert burst() == "suppressed"
+    assert exits == []
+    clock[0] += hang_restart.PROGRESS_GRACE_SECS
+    assert burst() == "restart"
+    assert len(exits) == 1
+
+
+def test_a_new_stall_episode_gets_a_fresh_grace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hang_restart, "_progress_excused_since", {})
+    clock = [1000.0]
+    monkeypatch.setattr(hang_restart.time, "monotonic", lambda: clock[0])
+    stall = _stall_dir(tmp_path)
+    exits: list = []
+
+    def burst() -> str:
+        hang_restart.note_progress()
+        verdict = None
+        for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+            verdict = hang_restart.note_stall(stall, exit_fn=exits.append)
+        return verdict
+
+    assert burst() == "suppressed"
+    clock[0] += hang_restart.HANG_WINDOW_SECS * 3
+    assert burst() == "suppressed"
+    assert exits == []
