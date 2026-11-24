@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -102,6 +103,39 @@ def test_raised_failure_removes_dir(round_env) -> None:
     with pytest.raises(RuntimeError):
         _mod._cmd_round(round_env.args)
     assert _round_dirs(round_env.root) == []
+
+
+def test_publish_timeout_keeps_dir_and_names_progress(round_env, capsys) -> None:
+    def _timeout():
+        (round_env.seen["tmp"] / "publish-progress.json").write_text("{}", encoding="utf-8")
+        raise subprocess.TimeoutExpired(["publish.py"], 1)
+
+    round_env.seen["action"] = _timeout
+    with pytest.raises(subprocess.TimeoutExpired):
+        _mod._cmd_round(round_env.args)
+    kept = round_env.seen["tmp"]
+    assert (kept / "publish-progress.json").is_file()
+    err = capsys.readouterr().err
+    assert str(kept) in err and "publish-progress.json" in err
+
+
+def test_kept_timeout_dir_reaped_once_pid_dead(round_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    dead = round_env.root / "percolate-round-999999-abc"
+    dead.mkdir()
+    monkeypatch.setattr(_mod, "_pid_is_alive", lambda pid: False)
+    round_env.seen["action"] = lambda: 0
+    assert _mod._cmd_round(round_env.args) == 0
+    assert not dead.exists()
+
+
+def test_reaper_setup_failure_logs_typed_advisory_and_never_raises(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    def _broken():
+        raise ImportError("no temp_layout")
+
+    monkeypatch.setattr(_mod, "_temp_layout", _broken)
+    _mod._reap_dead_round_tempdirs()
+    err = capsys.readouterr().err
+    assert "advisory" in err and "ImportError" in err and "no temp_layout" in err
 
 
 @pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="POSIX signals")

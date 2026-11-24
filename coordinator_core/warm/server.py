@@ -6526,6 +6526,16 @@ class _ServerContext:
         try:
             import importlib
 
+            stranded_wait = importlib.import_module("coordinator_core.ops.dispatch_emit.stranded_wait")
+            if stranded_wait.on_idle_tick(self.served_repos()):
+                idle.mark_invocation()
+        except Exception:  # noqa: BLE001 -- no stranded-wait failure may escape the tick
+            import logging
+
+            logging.getLogger(__name__).warning("stranded-wait tick failed", exc_info=True)
+        try:
+            import importlib
+
             maintenance_tick = importlib.import_module("coordinator_core.git.maintenance_tick")
             if maintenance_tick.on_idle_tick(self.served_repos()):
                 idle.mark_invocation()

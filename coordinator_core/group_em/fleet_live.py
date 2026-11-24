@@ -3,33 +3,64 @@
 ``FIELDS`` is the per-box key set every row carries, in render order. A row's ``state`` is one of
 ``STATES``. Maxima fields survive an unreachable box (carried from a last-known record, with
 ``maxima_source`` naming where they came from); current-use fields are ``None`` there, never stale.
+The per-box last-known cache (``read_last_known`` / ``write_last_known``) lives at
+``LAST_KNOWN_PATH`` (resolved lazily; ``last_known_path()``).
 ``gpus[]`` rows are the ``gpu_sample`` shape (``index, name, vram_total_mib, vram_used_mib,
 util_pct``); ``disks[]`` rows are ``{mount, total_gb, free_gb, floor_gb}``.
 """
 
 from __future__ import annotations
 
+import json
+import re
+import socket
+from pathlib import Path
 from typing import Any, Optional
+
+from coordinator_core._settings_home import settings_home
+from coordinator_core.atomic_replace import atomic_write_bytes
 
 STATE_OK = "ok"
 STATE_TIMED_OUT = "timed_out"
 STATE_UNREACHABLE = "unreachable"
 STATE_ERROR = "error"
-STATES = (STATE_OK, STATE_TIMED_OUT, STATE_UNREACHABLE, STATE_ERROR)
+STATE_OP_MISSING = "op_missing"
+STATE_BUSY = "busy"
+STATES = (STATE_OK, STATE_TIMED_OUT, STATE_UNREACHABLE, STATE_ERROR, STATE_OP_MISSING, STATE_BUSY)
 
+IDENTITY_FIELDS = ("alias", "os")
 MAXIMA_FIELDS = ("cores", "cpu_model", "ram_total_mb", "commit_limit_mb", "gpus", "disks")
 USE_FIELDS = (
+    "cpu_pct",
     "load5",
     "ram_free_mb",
     "commit_used_mb",
     "vram_used_mib",
+    "gpu_util_pct",
     "sessions",
+    "jobs",
     "gpu_slot_holder",
     "editor_slot_holder",
     "top_cpu",
     "top_ram",
 )
-FIELDS = ("box", "state") + MAXIMA_FIELDS + USE_FIELDS + ("maxima_source",)
+FIELDS = (
+    ("box",) + IDENTITY_FIELDS + ("state",) + MAXIMA_FIELDS + USE_FIELDS
+    + ("maxima_source", "sampled_at", "last_seen")
+)
+
+LAST_KNOWN_RELPATH = Path("group-em") / "fleet-capacity-cache.json"
+
+
+def last_known_path(home: Optional[Path] = None) -> Path:
+    """Stable per-box last-known cache path under settings_home(); DoE's render reads it."""
+    return (Path(home) if home is not None else settings_home()) / LAST_KNOWN_RELPATH
+
+
+def __getattr__(name: str) -> Path:
+    if name == "LAST_KNOWN_PATH":
+        return last_known_path()
+    raise AttributeError(name)
 
 _GPU_USE_KEYS = ("vram_used_mib", "util_pct")
 _DISK_USE_KEYS = ("free_gb",)
@@ -71,6 +102,9 @@ def timed_out_row(box: str, last_known: Optional[dict] = None, *, state: str = S
     """
     row = empty_row(box, state if state in STATES else STATE_TIMED_OUT)
     lk = last_known if isinstance(last_known, dict) else {}
+    for f in IDENTITY_FIELDS:
+        row[f] = lk.get(f)
+    row["last_seen"] = lk.get("last_seen") if lk.get("last_seen") is not None else lk.get("sampled_at")
     carried = False
     for f in MAXIMA_FIELDS:
         v = lk.get(f)
@@ -94,4 +128,250 @@ def normalize_row(box: str, raw: Optional[dict]) -> dict:
     row["box"] = box
     if row["state"] not in STATES:
         row["state"] = STATE_OK
+    if row["state"] == STATE_OK and row["last_seen"] is None:
+        row["last_seen"] = row["sampled_at"]
     return row
+
+
+def _label(host: object) -> Optional[str]:
+    """First DNS label of an ssh host (``user@`` stripped, lowercased); None for an IP literal or empty."""
+    if not isinstance(host, str):
+        return None
+    h = host.rsplit("@", 1)[-1].strip().lower()
+    if not h or h.startswith("[") or re.fullmatch(r"[\d.]+", h):
+        return None
+    return h.split(".", 1)[0] or None
+
+
+def box_alias(record: Optional[dict], local_hostname: Optional[str] = None) -> str:
+    """Friendly name for a registry ``record``: its ``alias``, else the transport host's first DNS
+    label, else the local hostname's (a record with no ssh transport is this box)."""
+    rec = record if isinstance(record, dict) else {}
+    alias = rec.get("alias")
+    if isinstance(alias, str) and alias.strip():
+        return alias.strip().lower()
+    t = rec.get("transport")
+    if isinstance(t, dict) and t.get("kind") == "ssh":
+        name = _label(t.get("host"))
+        if name:
+            return name
+    return _label(local_hostname if local_hostname is not None else socket.gethostname()) or "local"
+
+
+def maxima_record(row: dict) -> dict:
+    """The persistable last-known record of an ``ok`` ``row``: identity, maxima and ``last_seen``."""
+    rec = {f: row.get(f) for f in IDENTITY_FIELDS + MAXIMA_FIELDS}
+    rec["gpus"] = _max_gpus(rec["gpus"])
+    rec["disks"] = _max_disks(rec["disks"])
+    rec["last_seen"] = row.get("last_seen") if row.get("last_seen") is not None else row.get("sampled_at")
+    return rec
+
+
+def read_last_known(path: Optional[Path] = None) -> dict:
+    """``{box: maxima record}`` from the cache; a missing, unreadable or malformed file reads as ``{}``."""
+    try:
+        data = json.loads(Path(path if path is not None else last_known_path()).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, dict)}
+
+
+def write_last_known(boxes: dict, path: Optional[Path] = None) -> None:
+    """Atomically replace the cache with ``boxes`` (``{box: maxima record}``)."""
+    target = Path(path if path is not None else last_known_path())
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(target, (json.dumps(boxes, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+
+
+DEFAULT_TIMEOUT_S = 8.0
+CAPACITY_OP = "groupem.capacity_local"
+_BUSY_REASONS = ("box_busy", "rate_limited", "box_lock_unavailable")
+_TIMEOUT_GRACE = 1.1
+
+
+def _state_for_failure(res: dict) -> tuple:
+    """``(state, reason)`` for a non-ok ``invoke_remote`` reply."""
+    reason = str(res.get("reason") or "unknown")
+    if reason == "ssh_timeout":
+        return STATE_TIMED_OUT, reason
+    if reason in _BUSY_REASONS:
+        return STATE_BUSY, reason
+    stderr = str(res.get("stderr") or "").lower()
+    if reason == "remote_error" or (
+        reason.startswith("ssh_exit_") and ("method not found" in stderr or "method-not-found" in stderr)
+    ):
+        return STATE_OP_MISSING, reason
+    return STATE_UNREACHABLE, reason
+
+
+def _far_row(record: dict, timeout: float, invoke: Any) -> dict:
+    """One far box's raw outcome: ``{"_row": raw}`` or ``{"_fail": state, "reason": str}``."""
+    res = invoke(record, CAPACITY_OP, {}, timeout=timeout)
+    if not isinstance(res, dict) or not res.get("ok"):
+        state, reason = _state_for_failure(res if isinstance(res, dict) else {})
+        return {"_fail": state, "reason": reason}
+    reply = res.get("reply")
+    raw = reply.get("row") if isinstance(reply, dict) else None
+    if not isinstance(raw, dict):
+        err = reply.get("error") if isinstance(reply, dict) else None
+        return {"_fail": STATE_ERROR, "reason": str(err or "bad_reply")}
+    return {"_row": raw}
+
+
+def _local_row(local_sample: Any) -> dict:
+    if local_sample is None:
+        from coordinator_core.group_em import capacity_probe
+
+        local_sample = capacity_probe.sample
+    raw = local_sample()
+    if not isinstance(raw, dict):
+        return {"_fail": STATE_ERROR, "reason": "bad_sample"}
+    return {"_row": raw}
+
+
+def gather(boxes: Optional[list] = None, timeout: float = DEFAULT_TIMEOUT_S, invoke: Any = None,
+           local_sample: Any = None, cache_path: Optional[Path] = None, local_id: Optional[str] = None,
+           now: Optional[float] = None) -> list:
+    """One live row per registered box plus this box, fetched in parallel; never drops a box, never raises.
+
+    The local box samples in-process; each far box is asked ``groupem.capacity_local`` through
+    ``box_transport.invoke_remote`` (``invoke`` overrides it) on its own thread, so the call returns
+    within about one ``timeout``. A box that does not answer in time is ``timed_out``; a refusal by a
+    concurrent call is ``busy``; a stamp without the op is ``op_missing``; any other failure is
+    ``unreachable``. Non-ok rows carry the box's last-known maxima and ``last_seen`` from the cache plus
+    a ``reason`` key; ok rows refresh the cache (the only write).
+    """
+    import time
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    from coordinator_core.group_em import box_registry
+
+    if invoke is None:
+        from coordinator_core.group_em import box_transport
+
+        invoke = box_transport.invoke_remote
+    try:
+        records = list(boxes) if boxes is not None else box_registry.read_boxes()
+        local = local_id if local_id is not None else box_registry.local_box_id()
+    except Exception:  # noqa: BLE001 - degrade to the local box alone
+        records, local = [], local_id or "local"
+    records = [r for r in records if isinstance(r, dict) and isinstance(r.get("box_id"), str)]
+    if not any(r["box_id"] == local for r in records):
+        records.append({"box_id": local})
+    cache = read_last_known(cache_path)
+    stamp = time.time() if now is None else now
+    pool = ThreadPoolExecutor(max_workers=max(1, len(records)))
+    futures = {}
+    for rec in records:
+        if rec["box_id"] == local:
+            futures[rec["box_id"]] = pool.submit(_local_row, local_sample)
+        else:
+            futures[rec["box_id"]] = pool.submit(_far_row, rec, timeout, invoke)
+    wait(list(futures.values()), timeout=timeout * _TIMEOUT_GRACE)
+    pool.shutdown(wait=False, cancel_futures=True)
+    rows, fresh = [], dict(cache)
+    for rec in records:
+        box_id, fut = rec["box_id"], futures[rec["box_id"]]
+        if not fut.done():
+            out: dict = {"_fail": STATE_TIMED_OUT, "reason": "timeout"}
+        else:
+            try:
+                out = fut.result()
+            except Exception as exc:  # noqa: BLE001 - one box never sinks the call
+                out = {"_fail": STATE_ERROR, "reason": f"{type(exc).__name__}: {exc}"}
+        raw = out.get("_row")
+        if isinstance(raw, dict):
+            row = normalize_row(box_id, {**raw, "state": STATE_OK})
+            if row["sampled_at"] is None:
+                row["sampled_at"] = stamp
+            row["last_seen"] = row["sampled_at"]
+            if not row["alias"]:
+                row["alias"] = box_alias(rec)
+            fresh[box_id] = maxima_record(row)
+        else:
+            lk = cache.get(box_id)
+            row = timed_out_row(box_id, lk, state=out["_fail"],
+                                maxima_source="last_known" if lk else None)
+            row["alias"] = row["alias"] or box_alias(rec)
+            row["reason"] = out["reason"]
+        rows.append(row)
+    if fresh != cache:
+        try:
+            write_last_known(fresh, cache_path)
+        except OSError:
+            pass  # best-effort: the rows are still returned; only last-known persistence is lost
+    return sorted(rows, key=lambda r: (str(r["alias"]), r["box"]))
+
+
+_DOWN = (STATE_TIMED_OUT, STATE_UNREACHABLE)
+_LABEL = {STATE_TIMED_OUT: "UNREACHABLE (timed out)", STATE_UNREACHABLE: "UNREACHABLE",
+          STATE_OP_MISSING: "OP-MISSING", STATE_BUSY: "BUSY", STATE_ERROR: "ERROR"}
+
+
+def _gb(mb: Any) -> str:
+    return "?" if not isinstance(mb, (int, float)) else f"{mb / 1024:.0f}"
+
+
+def _age(then: Any, now: float) -> str:
+    if then is None:
+        return "never"
+    if not isinstance(then, (int, float)):
+        return str(then)
+    s = max(0, int(now - then))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if s >= size:
+            return f"{s // size}{unit}"
+    return f"{s}s"
+
+
+def _max_text(row: dict) -> str:
+    gpus = [g for g in (row.get("gpus") or []) if isinstance(g, dict)]
+    gpu = ", ".join(f"{g.get('name') or '?'} {_gb(g.get('vram_total_mib'))}G" for g in gpus) or "no gpu"
+    cores = row.get("cores")
+    return f"{cores if cores is not None else '?'}c {_gb(row.get('ram_total_mb'))}G ram {gpu}"
+
+
+def _num(v: Any, suffix: str = "") -> str:
+    if v is None:
+        return "?"
+    return f"{v:.0f}{suffix}" if isinstance(v, (int, float)) else str(v)
+
+
+def _now_text(row: dict) -> str:
+    vram = row.get("vram_used_mib")
+    commit = f"{_gb(row.get('commit_used_mb'))}/{_gb(row.get('commit_limit_mb'))}G"
+    jobs = row.get("jobs")
+    return (f"cpu {_num(row.get('cpu_pct'), '%')} free {_gb(row.get('ram_free_mb'))}G commit {commit} "
+            f"vram {'?' if vram is None else _gb(vram)}G gpu {_num(row.get('gpu_util_pct'), '%')} "
+            f"sess {_num(row.get('sessions'))} jobs {len(jobs) if isinstance(jobs, list) else '?'}")
+
+
+def render(snapshot: list, now: Optional[float] = None) -> str:
+    """The compact table: ``FLEET CAPACITY`` then one line per row (never dropped); a non-ok box prints
+    ``unknown (<reason>)`` for NOW and its last-seen age; a ``power it on?`` line follows per down box."""
+    import time
+
+    stamp = time.time() if now is None else now
+    lines = ["FLEET CAPACITY"]
+    for row in snapshot:
+        head = f"{row.get('alias') or row.get('box')} {row.get('os') or '?'}"
+        if row.get("state") == STATE_OK:
+            tail = f"NOW {_now_text(row)} | {_age(row.get('sampled_at'), stamp)} ago"
+        else:
+            label = _LABEL.get(row.get("state"), str(row.get("state")).upper())
+            tail = (f"{label} NOW unknown ({row.get('reason') or row.get('state')}) | "
+                    f"last seen {_age(row.get('last_seen'), stamp)} ago")
+        known = row.get("cores") is not None or row.get("ram_total_mb") is not None
+        lines.append(f"{head} | MAX {_max_text(row) if known else 'unknown'} | {tail}")
+    lines.extend(power_on_items(snapshot))
+    return "\n".join(lines)
+
+
+def power_on_items(snapshot: list) -> list:
+    """One ``power it on?`` line per UNREACHABLE (unreachable or timed-out) box, for the G-EM to raise
+    with the PM; busy and op-missing boxes are up and get none."""
+    return [f"power it on? {r.get('alias') or r.get('box')} is UNREACHABLE (last seen "
+            f"{r.get('last_seen') if r.get('last_seen') is not None else 'never'})"
+            for r in snapshot if r.get("state") in _DOWN]

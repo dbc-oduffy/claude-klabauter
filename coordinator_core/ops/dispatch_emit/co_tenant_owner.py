@@ -40,7 +40,60 @@ def _halted_marker(root: Path, run_id: str) -> Optional[dict]:
         marker = halted_run.read_strict(record_dir(root, run_id))
     except (ValueError, OSError):
         return None
-    return marker if marker and marker.get("status") == halted_run.STATUS_HALTED else None
+    return marker if marker and marker.get("status") in (halted_run.STATUS_HALTED, halted_run.STATUS_SUPERSEDED) else None
+
+
+def _launcherless_halted(root: Path, run_id: str) -> bool:
+    """A run whose token is live but whose halt marker is written and which holds no launcher escrow: nothing
+    will end it, so a wait behind it never wakes."""
+    return run_token.escrowed(root, run_id) is None and _halted_marker(root, run_id) is not None
+
+
+def _proceeded_without(root: Path, run_id: str) -> frozenset:
+    record = stage_wait.read(root, run_id) or {}
+    held = record.get("proceeded_without")
+    return frozenset(x for x in held if isinstance(x, str)) if isinstance(held, list) else frozenset()
+
+
+_STAMP = re.compile(r"\d{8}T\d{6}")
+
+
+def _landed_successor(root: Path, run_id: str, sizing_rel: object) -> Optional[str]:
+    """A later run of `run_id`'s sizing whose run-stage reads `landed`, else None: its record dirs are
+    `warp-<sizing stem>-<stamp>-<hex>` or `ask-<stamp>-<sizing hex>` with a stamp past `run_id`'s. One
+    directory listing, one stage read per name match; no spawn."""
+    if not isinstance(sizing_rel, str) or not sizing_rel:
+        return None
+    rel = sizing_rel.replace("\\", "/")
+    stem = PurePosixPath(rel).stem
+    hexes = run_lineage.sizing_hexes([rel])
+    mine = (_STAMP.findall(run_id) or [""])[-1]
+    try:
+        with os.scandir(record_dir(root, run_id).parent) as it:
+            names = sorted(e.name for e in it)
+    except (OSError, ValueError):
+        return None
+    for name in names:
+        stamp = (_STAMP.findall(name) or [""])[-1]
+        if name == run_id or not stamp or stamp <= mine:
+            continue
+        if not (name.startswith(f"warp-{stem}-") or (name.startswith("ask-") and name.rsplit("-", 1)[-1] in hexes)):
+            continue
+        if (ask_contract.read_run_stage(root, name) or {}).get("stage") == "landed":
+            return name
+    return None
+
+
+def _halted_age_s(root: Path, run_id: str) -> Optional[int]:
+    """Seconds since `run_id` halted: its index entry's write time, else its `halted.json` mtime; None when neither reads."""
+    entry = halted_withheld_index.entries(root).get(run_id)
+    at_ns = entry.at_ns if entry and entry.at_ns else 0
+    if not at_ns:
+        try:
+            at_ns = (record_dir(root, run_id) / halted_run.HALTED_FILE).stat().st_mtime_ns
+        except (OSError, ValueError):
+            return None
+    return max(0, int(time.time() - at_ns / 1e9))
 
 
 _STAMP = re.compile(r"\d{8}T\d{6}")
@@ -99,14 +152,15 @@ def owner_of(root: Path, path: str, *, exclude_run_id: str, include_waiting: boo
     root = Path(root)
     path = _norm(path)
     live = live_run_writes.overlaps([path], _live_footprints(root, exclude_run_id))
+    skipped = _proceeded_without(root, exclude_run_id)
     candidates = sorted(
         rid for rid in live
-        if rid != exclude_run_id and run_token.is_live(root, rid)
+        if rid != exclude_run_id and rid not in skipped and run_token.is_live(root, rid)
         and (include_waiting or exclude_run_id not in ((stage_wait.read(root, rid) or {}).get("blockers") or ()))
     )
     halted: dict[str, tuple] = {}
     for rid, entry in halted_withheld_index.entries(root).items():
-        if rid == exclude_run_id or rid in live or not _names(path, (*entry.paths, *entry.declared)):
+        if rid == exclude_run_id or rid in live or rid in skipped or not _names(path, (*entry.paths, *entry.declared)):
             continue
         covers = _names(path, entry.paths) or _names(path, tuple(co_tenant_kept.kept_paths(root, rid)))
         halted[rid] = (1 if covers else 0, entry.at_ns)
@@ -125,6 +179,8 @@ def owner_of(root: Path, path: str, *, exclude_run_id: str, include_waiting: boo
 
 
 def _park_behind(root: Path, run_id: str, owner: str, exc) -> bool:
+    if _launcherless_halted(root, owner):
+        return False
     record = run_token._read_rec(root, run_id) or {}
     parked = stage_wait.park(
         root, run_id, [owner], [exc.peer],
@@ -160,7 +216,7 @@ def resolve(root: Path, run_id: str, exc) -> dict:
             }
         if found["state"] == "live" and _park_behind(root, run_id, found["run_id"], exc):
             return {"parked": PARKED, "owner": found["run_id"], **named}
-        if found["state"] == "halted":
+        if found["state"] == "halted" or (found["state"] == "live" and _launcherless_halted(root, found["run_id"])):
             action = (_halted_marker(root, found["run_id"]) or {}).get(halted_run.HALT_NEXT_ACTION_FIELD)
             call = action.get("call") if isinstance(action, dict) else None
             return {

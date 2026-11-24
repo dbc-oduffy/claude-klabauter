@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
+import types
 
 from coordinator_core.bash_guards import _platform_verdict as pv
 from pathlib import Path
@@ -102,13 +103,13 @@ def test_low_level_verdict_default_is_not_baked_in_at_import_time(monkeypatch: p
 
 
 def test_sniff_widens_to_cygwin_and_msys_sys_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Stub the module's own os/sys bindings: patching the global os.name / sys.platform
+    # leaks into concurrent threads and breaks them under load.
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: None)
-    monkeypatch.setattr(os, "name", "posix")
-    for plat in ("cygwin", "msys"):
-        monkeypatch.setattr(sys, "platform", plat)
-        assert pv._sniff_host_is_windows() is True
-    monkeypatch.setattr(sys, "platform", "linux")
-    assert pv._sniff_host_is_windows() is False
+    for plat, expected in (("cygwin", True), ("msys", True), ("linux", False)):
+        monkeypatch.setattr(pv, "os", types.SimpleNamespace(name="posix"))
+        monkeypatch.setattr(pv, "sys", types.SimpleNamespace(platform=plat))
+        assert pv._sniff_host_is_windows() is expected
 
 
 def test_declared_registry_value_wins_over_sniffing(monkeypatch: pytest.MonkeyPatch) -> None:

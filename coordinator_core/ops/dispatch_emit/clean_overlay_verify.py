@@ -53,6 +53,7 @@ STALL_RETRY_SCALE_MAX = 8.0
 # length tracks interpreter start under peer load, not test progress, so it is never measured against the stall window.
 PYTEST_STARTUP_S = 120
 IMPORTER_CAP = 25
+_NOTE_FAILING_IDS = 8
 _PYTEST_FAILED = 1
 _PYTEST_INTERRUPTED = 2
 _PYTEST_NO_TESTS = 5
@@ -1641,10 +1642,12 @@ def verify(
             bad = [r for r in runs if r.returncode != 0 and not hygiene_only_exit(r.returncode, r.stdout + r.stderr)]
             if pin.source != SOURCE_KEY and any(_MODULE_MISSING in r.stdout + r.stderr for r in bad):
                 notes = "; ".join(n for n in (f"ModuleNotFoundError under an undeclared interpreter: {REMEDY}", notes) if n)
+            ids = tuple(dict.fromkeys(i for r in runs for i in failing_ids(r.stdout + r.stderr)))
             if notes:
                 tail = f"{notes}: {tail}"
+                if ids:
+                    tail = f"failing: {', '.join(ids[:_NOTE_FAILING_IDS])}; {tail}"
             at_base: frozenset = frozenset()
-            ids = tuple(dict.fromkeys(i for r in runs for i in failing_ids(r.stdout + r.stderr)))
             collected = any(collection_error(r.returncode, r.stdout + r.stderr) for r in bad)
             failed = collected or any(r.returncode == _PYTEST_FAILED for r in bad)
             if ran.returncode == _PYTEST_NO_TESTS:

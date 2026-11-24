@@ -2469,7 +2469,7 @@
       "name": "groupem__enter"
     },
     {
-      "description": "JSON-RPC \"groupem.fleet_capacity\" handler: every box's measured capacity.\n\nReturns:\n    {\"local_box_id\", \"boxes\": [{box_id, os, arch, gpus | gpu_unavailable, ram_total_mb,\n    ram_avail_mb, cores, cores_physical, load_pct, jobs, age_s, stale}, ...]} or {\"error\": str}.\n    A box with no fresh sample reads ``stale: true`` with its ``age_s`` (None when never\n    stamped) and no measured fields. This box's stale sample is re-stamped in-process first.",
+      "description": "JSON-RPC \"groupem.fleet_capacity\" handler: every box's measured capacity, maxima and live use.\n\nParams:\n    local_only (bool, optional) -- sample this box only (no ssh); default fans out to every box.\n    timeout (number > 0, optional) -- per-box seconds; default 8, clamped under the ipc backstop.\n\nReturns:\n    {\"local_box_id\", \"boxes\": [{box_id, os, arch, gpus | gpu_unavailable, ram_total_mb,\n    ram_avail_mb, cores, cores_physical, load_pct, jobs, age_s, stale}, ...],\n    \"live\": [fleet_live row per box: alias, os, state, maxima, current use, sampled_at, last_seen],\n    \"table\": str (``fleet_live.render``), \"power_on\": [str per UNREACHABLE box]} or {\"error\": str}.\n    A box with no fresh sample reads ``stale: true`` with its ``age_s`` (None when never\n    stamped) and no measured fields. This box's stale sample is re-stamped in-process first.\n    A box that times out, is unreachable or lacks the op keeps its last-known maxima in ``live``.",
       "inputSchema": {
         "type": "object"
       },
@@ -4707,6 +4707,50 @@
         "type": "object"
       },
       "name": "run__engine_identity"
+    },
+    {
+      "description": "JSON-RPC \"run.hold\": params `run_id`, `session_id`, `pm_turn_ref`/`release_condition` (set),\n`clear`, `continue_held`, `repo_root` (optional).\n\nReturns {\"run_id\", \"state\", ...}; state is \"held\", \"cleared\", \"absent\" (clear with no hold),\nor \"held_by_other\" with the held reply in `reply` when a non-holder cleared without the continue.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "clear": {
+            "description": "Remove the hold instead of setting it.",
+            "type": "boolean"
+          },
+          "continue_held": {
+            "description": "The run id, to clear a hold another session owns.",
+            "type": "string"
+          },
+          "pm_turn_ref": {
+            "description": "The PM turn that holds the run; required to set.",
+            "type": "string"
+          },
+          "release_condition": {
+            "description": "What releases the hold; required to set.",
+            "type": "string"
+          },
+          "repo_root": {
+            "description": "Repo holding the run; default the caller's worktree.",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "The warp run to hold or release.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "session_id": {
+            "description": "The calling session; the holder when setting.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "session_id"
+        ],
+        "type": "object"
+      },
+      "name": "run__hold"
     },
     {
       "description": "JSON-RPC \"run.paths_trash\": params `run_id`, `chunk_id`, `paths` (list of str).\n\ncoordinator_core.ops.run_paths_trash -- op \"run.paths_trash\": delete a chunk's declared paths\nanywhere in the repo by trash-then-prune, without a shell remove.\n\nReuses scratch.delete's manifest lookup, index check, link check and tombstone dir\n(``scratch/.deleted/``); only the path-scope rule differs. Each admitted path is moved with one\n``os.rename``; the detached prune pass reclaims the bytes. No process is spawned and no tree is\nwalked.",

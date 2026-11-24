@@ -95,8 +95,10 @@ def entry_live(d) -> bool:
 
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in ("park", "release"):
+        return _park_cmd(args[0], args[1:])
     if not args or args[0] != "codex-probe":
-        print("usage: unimatrix-liveness.py codex-probe [--peers FILE] [--locks-dir DIR]", file=sys.stderr)
+        print(_USAGE, file=sys.stderr)
         return 2
     opts = {"--peers": _get(_paths, "state_dir")() / "peers.json", "--locks-dir": _get(_proc, "codex_locks_dir")()}
     rest = args[1:]
@@ -111,8 +113,33 @@ def main(argv=None) -> int:
     return 0
 
 
+_USAGE = ("usage: unimatrix-liveness.py codex-probe [--peers FILE] [--locks-dir DIR]\n"
+          "       unimatrix-liveness.py park ALIAS [--reason TEXT]   hold ALIAS out of autolink until released\n"
+          "       unimatrix-liveness.py release ALIAS               end the park (backoff record is kept)")
+
+
+def _park_cmd(verb, rest) -> int:
+    reason = None
+    if verb == "park" and len(rest) == 3 and rest[1] == "--reason":
+        reason = rest[2]
+    elif len(rest) != 1:
+        print(_USAGE, file=sys.stderr)
+        return 2
+    alias = rest[0]
+    sdir = _get(_paths, "state_dir")()
+    if verb == "park":
+        _get(_proc, "park")(sdir, alias, reason)
+        print(f"parked {alias}: autolink skips it until `release {alias}`")
+        return 0
+    if _get(_proc, "release")(sdir, alias):
+        print(f"released {alias}")
+        return 0
+    print(f"{alias} is not parked", file=sys.stderr)
+    return 1
+
+
 if __name__ == "__main__":
     if any(_a in ("-h", "--help") for _a in sys.argv[1:]):
-        print("usage: unimatrix-liveness [-h]\nunimatrix peer liveness probe")
+        print(_USAGE + "\nunimatrix peer liveness probe")
         raise SystemExit(0)
     sys.exit(main())

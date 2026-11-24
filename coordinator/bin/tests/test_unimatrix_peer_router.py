@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -608,6 +609,66 @@ def test_router_registers_a_leg_that_appears_after_start_without_peers_json(box)
     run(go())
 
 
+def _queue_files(tmp_path, monkeypatch, **sessions):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    qdir = tmp_path / "unimatrix" / "queue"
+    qdir.mkdir(parents=True)
+    for sid, body in sessions.items():
+        (qdir / f"{sid}.jsonl").write_text(body)
+        (qdir / f"{sid}.drain.lock").write_text("")
+    return pr._sibling("unimatrix-relay.py", "unimatrix_relay")
+
+
+@portable
+def test_queue_drain_runs_the_relay_drain_only_for_sessions_with_queued_lines(tmp_path, monkeypatch):
+    relay = _queue_files(tmp_path, monkeypatch, sidfull='{"id": "1"}\n', sidempty="")
+    drained = []
+    monkeypatch.setattr(relay, "drain", lambda sid: drained.append(sid) or {"ok": True})
+    assert pr._drain_queued_sessions() == []
+    assert drained == ["sidfull"]
+
+
+@portable
+def test_queue_drain_error_for_one_session_never_skips_the_next(tmp_path, monkeypatch):
+    relay = _queue_files(tmp_path, monkeypatch, sida='{"id": "1"}\n', sidb='{"id": "2"}\n')
+    drained = []
+
+    def drain(sid):
+        drained.append(sid)
+        if sid == "sida":
+            raise OSError("boom")
+        return {"ok": False, "error": "no unique live local session"}
+
+    monkeypatch.setattr(relay, "drain", drain)
+    assert pr._drain_queued_sessions() == [("sida", "OSError: boom")]
+    assert drained == ["sida", "sidb"]
+
+
+@portable
+def test_scan_tick_drains_queues_and_a_drain_fault_never_stops_the_scan(tmp_path, monkeypatch):
+    async def go():
+        r = pr.Router([], sessions_dir=tmp_path, state_dir=tmp_path, endpoint_dir=tmp_path, adapters=echo_adapters())
+        monkeypatch.setattr(pr, "LEG_SCAN_SECONDS", 0.01)
+        ticks = []
+
+        async def noop(*a):
+            return None
+
+        def drain():
+            ticks.append(1)
+            if len(ticks) == 1:
+                raise RuntimeError("first tick faults")
+            return [("sidx", "OSError: x")]
+
+        monkeypatch.setattr(pr, "_drain_queued_sessions", drain)
+        for name in ("check_control_socket", "refresh_discovered", "_repair_faces"):
+            monkeypatch.setattr(r, name, noop)
+        task = asyncio.ensure_future(r._scan_discovered())
+        await until(lambda: len(ticks) >= 3)
+        task.cancel()
+    run(go())
+
+
 def hold(path):
     """Take the flock a Codex/agy process holds on its lock file; returns the fd to close."""
     import fcntl
@@ -806,7 +867,7 @@ def test_default_adapters_reload_an_adapter_whose_source_changed_and_keep_an_unc
     def edited_stat(self, *a, **kw):
         st = real_stat(self, *a, **kw)
         if self == src:
-            return os.stat_result((*st[:8], st.st_atime, st.st_mtime + 5, *st[10:]))
+            return types.SimpleNamespace(st_mtime_ns=st.st_mtime_ns + 5_000_000_000, st_size=st.st_size)
         return st
 
     monkeypatch.setattr(Path, "stat", edited_stat)
@@ -1836,7 +1897,8 @@ def test_shutdown_op_replies_then_serve_returns_with_lease_free_and_files_gone()
             served = asyncio.create_task(pr.serve(r))
             await until(lambda: (state / "router.pid.json").exists() and r.server is not None)
             rec = json.loads((state / "router.pid.json").read_text())
-            assert rec == {"pid": os.getpid(), "procStart": pr._roster().proc_start(os.getpid())}
+            assert rec == {"pid": os.getpid(), "procStart": pr._roster().proc_start(os.getpid()),
+                           "codeDigest": pr.code_digest()}
             resp = await asyncio.to_thread(pr.request_line, r.ctl, {"op": "shutdown"})
             assert resp == {"ok": True, "pid": os.getpid(), "stopping": True}
             await asyncio.wait_for(served, 10)
@@ -2222,3 +2284,82 @@ def test_an_unreadable_peers_file_adopts_nothing_and_keeps_existing_peers(tmp_pa
         await r.refresh_discovered()
         assert list(r.peers) == ["codex-a"]
     run(go())
+
+
+def test_shutdown_drains_an_in_flight_send_before_the_router_stops(box):
+    release = asyncio.Event()
+
+    async def slow_codex(peer, text):
+        await release.wait()
+        return "late reply"
+
+    async def go():
+        r = make_router(box, {"codex": slow_codex, "agy": echo_adapters()["agy"]})
+        served = asyncio.create_task(pr.serve(r))
+        await until(lambda: r.server is not None and (box / "state" / "router.pid.json").exists())
+        send = asyncio.create_task(asyncio.to_thread(
+            pr.request_line, r.ctl, {"op": "send", "as": "cli", "to": "codex-a", "text": "hello"}))
+        await until(lambda: r.inflight > 0)
+        stop = await asyncio.to_thread(pr.request_line, r.ctl, {"op": "shutdown"})
+        assert stop["ok"] is True
+        await asyncio.sleep(0.3)
+        assert not served.done() and not send.done()
+        release.set()
+        resp = await asyncio.wait_for(send, 10)
+        await asyncio.wait_for(served, 10)
+        return resp
+    resp = run(go())
+    assert resp["ok"] is True and "late reply" in resp["reply"]
+
+
+def test_restart_verb_refreshes_installed_copies_from_the_stamp_then_restarts(tmp_path, capsys):
+    stamp, dest = tmp_path / "stamp", tmp_path / "dest"
+    stamp.mkdir()
+    (stamp / "unimatrix-peer-router.py").write_text("# stamp router bytes\n", encoding="utf-8")
+    (stamp / "unimatrix-install.py").write_text(
+        "import shutil\n"
+        "def install_scripts(src, dest):\n"
+        "    dest.mkdir(parents=True, exist_ok=True)\n"
+        "    shutil.copy2(src / 'unimatrix-peer-router.py', dest / 'unimatrix-peer-router.py')\n"
+        "    return ['unimatrix-peer-router.py']\n"
+        "def restart_installed_router(dest, say):\n"
+        "    assert (dest / 'unimatrix-peer-router.py').read_bytes() == (dest.parent / 'stamp' / 'unimatrix-peer-router.py').read_bytes()\n"
+        "    return {'stopped': 'handshake', 'old_pid': 1, 'new_pid': 2}\n", encoding="utf-8")
+    assert pr.main(["--restart", "--from", str(stamp), "--dest", str(dest)]) == 0
+    assert "old pid 1 new pid 2" in capsys.readouterr().out
+    assert (dest / "unimatrix-peer-router.py").read_bytes() == (stamp / "unimatrix-peer-router.py").read_bytes()
+
+
+def test_restart_verb_without_an_installer_beside_it_refuses_and_names_from(tmp_path, capsys):
+    assert pr.main(["--restart", "--from", str(tmp_path)]) == 2
+    assert "--from" in capsys.readouterr().err
+
+
+@portable
+def test_serve_waits_for_a_pending_delivery_task_after_shutdown():
+    root = Path(tempfile.mkdtemp(prefix="pr-", dir="/tmp" if os.name != "nt" else None))
+    for sub in ("sessions", "eps", "state"):
+        (root / sub).mkdir()
+    try:
+        async def go():
+            r = pr.Router([], sessions_dir=root / "sessions", state_dir=root / "state", endpoint_dir=root / "eps")
+            served = asyncio.create_task(pr.serve(r))
+            await until(lambda: r.server is not None and (root / "state" / "router.pid.json").exists())
+            release = asyncio.Event()
+            t = asyncio.create_task(release.wait())
+            r.tasks.add(t)
+            t.add_done_callback(r.tasks.discard)
+            await asyncio.to_thread(pr.request_line, r.ctl, {"op": "shutdown"})
+            await asyncio.sleep(0.3)
+            assert not served.done() and not t.done()
+            release.set()
+            await asyncio.wait_for(served, 10)
+            assert t.done() and not t.cancelled()
+        run(go())
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_code_digest_equals_the_installers_router_closure_digest():
+    installer = pr._sibling("unimatrix-install.py", "unimatrix_install")
+    assert pr.code_digest() == installer.router_closure_digest(pr.here())

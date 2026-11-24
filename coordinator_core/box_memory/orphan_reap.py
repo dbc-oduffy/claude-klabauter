@@ -10,10 +10,16 @@ from __future__ import annotations
 
 import os
 import signal
-from typing import Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence
 
 from coordinator_core.box_memory import ReapPrimitives
-from coordinator_core.box_memory.pressure import is_aged_orphan
+from coordinator_core.box_memory.pressure import (
+    MIN_ORPHAN_CPU_S,
+    is_aged,
+    is_aged_orphan,
+    is_python_name,
+    is_stdin_python,
+)
 
 
 def select(census: Sequence, primitives: Optional[ReapPrimitives] = None,
@@ -25,6 +31,69 @@ def select(census: Sequence, primitives: Optional[ReapPrimitives] = None,
         return []
     by_pid = {r.pid: r for r in census}
     return [r for r in census if is_aged_orphan(r, by_pid, primitives, now)]
+
+
+def _stdin_python_reads(census: Sequence, primitives: ReapPrimitives,
+                        now: Optional[int] = None) -> List[tuple]:
+    """`(row, cpu_s, command_line)` per hit, so a caller reuses the reads that selected it."""
+    out: List[tuple] = []
+    for row in census or ():
+        if not is_python_name(row.name) or not is_aged(row, now):
+            continue
+        cpu = primitives.cpu_time_s(row.pid)
+        if cpu is None or cpu < MIN_ORPHAN_CPU_S:
+            continue
+        cmd = primitives.command_line(row.pid)
+        if is_stdin_python(row, cmd):
+            out.append((row, cpu, cmd))
+    return out
+
+
+def select_stdin_python(census: Sequence, primitives: ReapPrimitives,
+                        now: Optional[int] = None) -> List:
+    """Python rows reading their script from stdin (`python -`), aged at least `MIN_ORPHAN_AGE_S`, with
+    CPU time at least `MIN_ORPHAN_CPU_S`. Cheap gates run first: `command_line` is read only for python
+    rows past the age and CPU gates; an unreadable CPU time or command line is not selected.
+    Neither a dead parent nor a missing claude ancestor gates: a live call looks the same."""
+    return [row for row, _, _ in _stdin_python_reads(census, primitives, now)]
+
+
+def _claude_ancestor(row, by_pid: dict) -> Any:
+    """The nearest claude-named ancestor reached by ppid, or None (broken chain, reused pid, cycle)."""
+    from coordinator_core.bash_guards._session_census import _is_claude
+
+    node = row
+    for _ in range(64):
+        parent = by_pid.get(node.ppid)
+        if parent is None or parent.pid == node.pid or parent.ctime > node.ctime:
+            return None
+        if _is_claude(parent.name):
+            return parent
+        node = parent
+    return None
+
+
+def reap_stdin_python(census: Sequence, primitives: ReapPrimitives,
+                      now: Optional[int] = None) -> List[dict]:
+    """Flag each `select_stdin_python` hit over the caller's `census` (never a second table read).
+
+    Returns `{pid, ctime, cmdline, cpu_s, session, action}` per hit, `action` always "flagged": a
+    heredoc python of an ended tool call is indistinguishable from a live background one, so nothing
+    is terminated and nothing is sent (reporting is the caller's). `session` is `{claude_pid,
+    claude_ctime}` when the ppid chain reaches a claude, else None."""
+    by_pid = {r.pid: r for r in census or ()}
+    hits: List[dict] = []
+    for row, cpu, cmd in _stdin_python_reads(census, primitives, now):
+        claude = _claude_ancestor(row, by_pid)
+        hits.append({
+            "pid": row.pid,
+            "ctime": row.ctime,
+            "cmdline": cmd,
+            "cpu_s": cpu,
+            "session": {"claude_pid": claude.pid, "claude_ctime": claude.ctime} if claude else None,
+            "action": "flagged",
+        })
+    return hits
 
 
 def protected_pids(self_pid: Optional[int] = None) -> frozenset:

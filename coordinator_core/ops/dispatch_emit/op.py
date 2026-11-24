@@ -1132,10 +1132,11 @@ def _inherited_stop_after(root: Path, run_id: str, chain_parent: Optional[str], 
         if not rid:
             continue
         try:
-            marker = _halted_run._read(record_dir(root, rid))
+            rd = record_dir(root, rid)
+            marker = _halted_run._read(rd)
         except ValueError:
             continue
-        if marker and marker.get("halted") == HALT_PARKED:
+        if (marker and marker.get("halted") == HALT_PARKED) or (rd / "manifest.json").is_file():
             continue
         if lineage_stop_after(root, rid) == STOP_AFTER_PLAN:
             return STOP_AFTER_PLAN

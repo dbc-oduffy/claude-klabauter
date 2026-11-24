@@ -246,3 +246,47 @@ def test_owner_consumed_between_attribution_and_park_leaves_no_orphan(repo, monk
     out = co_tenant_owner.resolve(repo, WAITER, _exc())
     assert out["cause"] == "co_tenant_dependency" and out["owner"] is None
     assert stage_wait.read(repo, WAITER) is None
+
+
+def _halt_as(repo: Path, run_id: str, status: str, sizing: str = SIZING) -> None:
+    rd = repo / "state" / "warp" / run_id
+    rd.mkdir(parents=True, exist_ok=True)
+    marker = {"status": status, "sizing_rel": sizing, "run_artifacts": {"withheld": {PEER: "kept"}}}
+    (rd / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
+
+
+def test_superseded_marker_with_landed_successor_is_still_no_owner(repo) -> None:
+    _halt_as(repo, OWNER, "superseded")
+    successor = "ask-20261121T110000-aaaaaa"
+    _stage(repo, successor, "landed")
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["state"] is None
+
+
+def test_live_launcherless_halt_marked_owner_gets_the_halted_cause_not_a_park(repo) -> None:
+    _live(repo, OWNER)
+    _halt_as(repo, OWNER, "halted")
+    out = co_tenant_owner.resolve(repo, WAITER, _exc())
+    assert out["cause"] == "co_tenant_dependency_on_halted_run" and out["owner"] == OWNER
+    assert "parked" not in out and stage_wait.read(repo, WAITER) is None
+
+
+def test_live_owner_without_a_halt_marker_still_parks(repo) -> None:
+    _live(repo, OWNER)
+    assert co_tenant_owner.resolve(repo, WAITER, _exc())["parked"] == "co-tenant-wait"
+
+
+def test_proceeded_without_run_is_not_returned_as_owner(repo) -> None:
+    _live(repo, OWNER)
+    _halt_as(repo, KIN, "halted")
+    stage_wait.park(repo, WAITER, [KIN], [PEER])
+    path = stage_wait._path(repo, WAITER)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["proceeded_without"] = [OWNER, KIN]
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+
+
+def test_absent_proceeded_without_changes_nothing(repo) -> None:
+    _live(repo, OWNER)
+    stage_wait.park(repo, WAITER, [OWNER], [PEER])
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER, include_waiting=True)["run_id"] == OWNER

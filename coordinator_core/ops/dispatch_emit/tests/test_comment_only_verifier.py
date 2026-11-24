@@ -99,8 +99,24 @@ def test_does_not_walk_up(tmp_path):
     assert declared_verifier(child) is None
 
 
-def test_exit_zero_true(repo):
+def _verdict_without_timeout(monkeypatch):
+    """Route the verifier spawn through without its wall-clock timeout, so a verdict test never
+    depends on interpreter start-up speed; returns the list of spawn calls."""
+    calls = []
+    real = subprocess.run
+
+    def untimed(*a, **k):
+        calls.append(a)
+        k.pop("timeout", None)
+        return real(*a, **k)
+
+    monkeypatch.setattr(cov.subprocess, "run", untimed)
+    return calls
+
+
+def test_exit_zero_true(repo, monkeypatch):
     root, decl = repo
+    _verdict_without_timeout(monkeypatch)
     assert verify_pairs(root, decl, _PAIRS, ()) is True
 
 
@@ -165,14 +181,7 @@ def test_cmd_suffix_false_no_spawn(repo, monkeypatch):
 
 def test_one_spawn_for_three_pairs(repo, monkeypatch):
     root, decl = repo
-    calls = []
-    real = subprocess.run
-
-    def counting(*a, **k):
-        calls.append(a)
-        return real(*a, **k)
-
-    monkeypatch.setattr(cov.subprocess, "run", counting)
+    calls = _verdict_without_timeout(monkeypatch)
     assert verify_pairs(root, decl, _PAIRS, ()) is True
     assert len(calls) == 1
 
@@ -183,8 +192,9 @@ def test_undecodable_bytes_false_no_spawn(repo, monkeypatch):
     assert verify_pairs(root, decl, [("a.ts", b"\xff", b"x")], ()) is False
 
 
-def test_crlf_folded_before_send(repo):
+def test_crlf_folded_before_send(repo, monkeypatch):
     root, decl = repo
+    _verdict_without_timeout(monkeypatch)
     (root / "v.py").write_text(
         "import sys, json\nd = json.load(sys.stdin)\n"
         "sys.exit(1 if any('\\r' in p['before'] + p['after'] for p in d['pairs']) else 0)\n",
@@ -212,6 +222,7 @@ def test_verifier_not_in_head_false_no_spawn(repo, monkeypatch):
 
 def test_untracked_local_md_allowed_edited_tracked_refused(repo, monkeypatch):
     root, decl = repo
+    _verdict_without_timeout(monkeypatch)
     _write_md(root, '["x"]', '[".ts"]')
 
     def head(r, paths):
@@ -233,8 +244,9 @@ def test_untracked_local_md_allowed_edited_tracked_refused(repo, monkeypatch):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_real_repo_head_check(tmp_path):
-    (tmp_path / "v.py").write_text(_VERIFIER, encoding="utf-8")
+def test_real_repo_head_check(tmp_path, monkeypatch):
+    _verdict_without_timeout(monkeypatch)
+    (tmp_path / "v.py").write_bytes(_VERIFIER.encode("utf-8"))
     env = {
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@t", "PATH": __import__("os").environ["PATH"],
@@ -245,5 +257,5 @@ def test_real_repo_head_check(tmp_path):
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     decl = VerifierDecl(argv=(sys.executable, "v.py"), suffixes=frozenset({".ts"}))
     assert verify_pairs(tmp_path, decl, _PAIRS, ()) is True
-    (tmp_path / "v.py").write_text(_VERIFIER + "# edited\n", encoding="utf-8")
+    (tmp_path / "v.py").write_bytes((_VERIFIER + "# edited\n").encode("utf-8"))
     assert verify_pairs(tmp_path, decl, _PAIRS, ()) is False

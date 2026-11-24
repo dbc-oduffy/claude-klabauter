@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Collection, Optional, Sequence
 
 from coordinator_core.ops._path_guard import safe_id
-from coordinator_core.ops.dispatch_emit import halted_run, run_token
+from coordinator_core.ops.dispatch_emit import halted_run, run_hold, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     PLAN_STARTED_FIELD,
     RECORD_DIR_ROOT,
@@ -38,10 +38,11 @@ SCAN_BUDGET_SECONDS = 0.2
 
 
 def _closable(wt: Path, run_id: str, marker: dict, now: float) -> bool:
-    """A halted `abandoned_at_minted` marker (the caller filtered on both) with nothing withheld, no
+    """A halted `abandoned_at_minted` marker (the caller filtered on both) with no `held.json` (a hold is
+    not a death verdict), nothing withheld, no
     live token when its Workflow started (`plan_started_at`; a token is minted before the Workflow and
     says nothing of a never-started mint) and no activity within `MINTED_STALE_SECONDS`."""
-    if halted_run._withheld_of(marker):
+    if halted_run._withheld_of(marker) or run_hold.read_hold(record_dir(wt, run_id)) is not None:
         return False
     stage = read_run_stage(wt, run_id) or {}
     if stage.get(PLAN_STARTED_FIELD) and run_token.is_live(wt, run_id):

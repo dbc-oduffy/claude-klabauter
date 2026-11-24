@@ -323,7 +323,21 @@ def test_interrupted_run_releases_lock(tmp_path):
     import signal as _signal
 
     if sys.platform == "win32":
-        proc.send_signal(_signal.CTRL_BREAK_EVENT)
+        # The wrapper may own a console this process is not attached to (a
+        # console-less pytest spawns it windowless), so the event is sent from a
+        # helper that attaches to the wrapper's console first.
+        helper = (
+            "import ctypes, sys\n"
+            "k = ctypes.windll.kernel32\n"
+            "k.FreeConsole()\n"
+            "assert k.AttachConsole(int(sys.argv[1]))\n"
+            "k.SetConsoleCtrlHandler(None, True)\n"
+            "assert k.GenerateConsoleCtrlEvent(1, int(sys.argv[1]))\n"
+        )
+        subprocess.run(
+            [sys.executable, "-c", helper, str(proc.pid)],
+            check=True, timeout=15, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
     else:
         proc.send_signal(_signal.SIGINT)
     proc.wait(timeout=20)
@@ -1121,7 +1135,7 @@ def test_ceiling_dumps_the_tree_before_it_kills(tmp_path):
     proc = mock.Mock()
     proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
     with mock.patch.object(wrapper, "_dump_process_tree", lambda p: order.append("dump")), \
-         mock.patch.object(wrapper, "_kill_process_tree", lambda p: order.append("kill") or 1):
+         mock.patch.object(wrapper, "_kill_process_tree", lambda p, *_: order.append("kill") or 1):
         assert wrapper._wait_interruptible(proc, max_runtime=0.01) == 124
     assert order == ["dump", "kill"]
 
@@ -1172,7 +1186,7 @@ def test_kill_message_says_advancing_when_tree_cpu_grew(capsys):
     cpu = iter([1.0, 9.0])
     with mock.patch.object(wrapper, "_tree_cpu_secs", lambda p: next(cpu)), \
          mock.patch.object(wrapper, "_dump_process_tree", lambda p: None), \
-         mock.patch.object(wrapper, "_kill_process_tree", lambda p: 1):
+         mock.patch.object(wrapper, "_kill_process_tree", lambda p, *_: 1):
         assert wrapper._wait_interruptible(proc, max_runtime=0.3) == 124
     err = capsys.readouterr().err
     assert "STILL ADVANCING" in err and "cannot tell" not in err
@@ -1184,7 +1198,7 @@ def test_kill_message_says_not_advancing_when_tree_cpu_flat(capsys):
     proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
     with mock.patch.object(wrapper, "_tree_cpu_secs", lambda p: 3.0), \
          mock.patch.object(wrapper, "_dump_process_tree", lambda p: None), \
-         mock.patch.object(wrapper, "_kill_process_tree", lambda p: 1):
+         mock.patch.object(wrapper, "_kill_process_tree", lambda p, *_: 1):
         assert wrapper._wait_interruptible(proc, max_runtime=0.3) == 124
     assert "NOT advancing" in capsys.readouterr().err
 
@@ -1324,7 +1338,7 @@ def test_posix_child_gets_its_own_process_group():
 def test_interrupt_path_kills_the_whole_child_tree(monkeypatch):
     module = _load_wrapper_module()
     killed = []
-    monkeypatch.setattr(module, "_kill_process_tree", lambda p: killed.append(p) or 1)
+    monkeypatch.setattr(module, "_kill_process_tree", lambda p, *_: killed.append(p) or 1)
     process = mock.Mock(pid=5)
     process.poll.return_value = 0
     ps_process = mock.Mock()
@@ -1512,7 +1526,7 @@ def test_ceiling_is_derived_from_the_log_count_not_the_fixed_fallback(tmp_path, 
     proc = mock.Mock()
     proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
     with mock.patch.object(module, "_dump_process_tree", lambda p: None), \
-         mock.patch.object(module, "_kill_process_tree", lambda p: 1):
+         mock.patch.object(module, "_kill_process_tree", lambda p, *_: 1):
         started = time.monotonic()
         assert module._wait_interruptible(
             proc, max_runtime=3600.0, log_path=str(log), derive_ceiling=True
@@ -1521,7 +1535,7 @@ def test_ceiling_is_derived_from_the_log_count_not_the_fixed_fallback(tmp_path, 
     assert "derived from 400 collected tests" in capsys.readouterr().err
 
     with mock.patch.object(module, "_dump_process_tree", lambda p: None), \
-         mock.patch.object(module, "_kill_process_tree", lambda p: 1):
+         mock.patch.object(module, "_kill_process_tree", lambda p, *_: 1):
         module._wait_interruptible(proc, max_runtime=0.3, log_path=str(log), derive_ceiling=False)
     assert "derived from" not in capsys.readouterr().err
 
@@ -1532,7 +1546,7 @@ def test_ceiling_hit_is_a_defect_report_naming_the_missing_junit(tmp_path, capsy
     proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
     junit = tmp_path / "never.xml"
     with mock.patch.object(module, "_dump_process_tree", lambda p: None), \
-         mock.patch.object(module, "_kill_process_tree", lambda p: 1):
+         mock.patch.object(module, "_kill_process_tree", lambda p, *_: 1):
         assert module._wait_interruptible(proc, max_runtime=0.01, junit_path=str(junit)) == 124
     err = capsys.readouterr().err
     assert "with-suite-mutex: this is a defect" in err
@@ -1575,3 +1589,100 @@ def test_main_derives_the_ceiling_only_when_no_max_runtime_is_given(tmp_path, mo
     assert module.main(["--max-runtime", "50", "--", *child]) == 0
     assert module.main(["--max-runtime", str(module._DEFAULT_MAX_RUNTIME_SECS), "--", *child]) == 0
     assert seen == [True, False, False]
+
+
+def _write_record(repo: Path, collection: str, slot: str, outcome: str, duration) -> None:
+    rec = repo / ".coordinator-local" / "suite-runs" / collection
+    rec.mkdir(parents=True, exist_ok=True)
+    (rec / f"{slot}.json").write_text(json.dumps({"outcome": outcome, "duration_s": duration}))
+
+
+def test_record_wall_is_the_longest_completed_run_and_ignores_timeouts(tmp_path):
+    module = _load_wrapper_module()
+    repo = tmp_path / "repo"
+    rec = repo / ".coordinator-local" / "suite-runs" / "c"
+    assert module._record_wall_secs(rec) is None
+    _write_record(repo, "c", "current", "pass", 3.0)
+    _write_record(repo, "c", "previous", "fail", 3400.0)
+    assert module._record_wall_secs(rec) == 3400.0
+    _write_record(repo, "c", "previous", "timeout", 9999.0)
+    assert module._record_wall_secs(rec) == 3.0
+    _write_record(repo, "c", "current", "pass", "bad")
+    assert module._record_wall_secs(rec) is None
+
+
+def test_record_ceiling_has_headroom_a_floor_and_a_hard_cap():
+    module = _load_wrapper_module()
+    wall = 3420.0
+    ceiling = module._record_ceiling_secs(wall)
+    assert wall < ceiling < module._RECORD_CEILING_CAP_SECS
+    assert ceiling == module._CEILING_BASE_SECS + wall * module._RECORD_HEADROOM
+    assert module._record_ceiling_secs(1.0) == module._CEILING_MIN_SECS
+    assert module._record_ceiling_secs(10**9) == module._RECORD_CEILING_CAP_SECS
+
+
+def test_default_run_with_a_recorded_wall_time_states_a_record_derived_ceiling(tmp_path):
+    repo = _make_repo(tmp_path)
+    env = _base_env(tmp_path / "home")
+    _write_record(repo, "suitea", "current", "pass", 3420.0)
+    result = _run_in(repo, ["--collection", "suitea", "--", sys.executable, "-c", "pass"], env=env)
+    err = result.stderr.decode()
+    assert result.returncode == 0
+    assert "max-runtime ceiling 5430s (derived from the last recorded 3420s run of collection suitea)" in err
+
+
+def test_no_record_keeps_the_fixed_default_and_explicit_max_runtime_beats_the_record(tmp_path):
+    repo = _make_repo(tmp_path)
+    env = _base_env(tmp_path / "home")
+    bare = _run_in(repo, ["--collection", "none", "--", sys.executable, "-c", "pass"], env=env)
+    assert "max-runtime ceiling 2700s;" in bare.stderr.decode()
+    _write_record(repo, "suiteb", "current", "pass", 3420.0)
+    explicit = _run_in(
+        repo, ["--collection", "suiteb", "--max-runtime", "123", "--", sys.executable, "-c", "pass"],
+        env=env,
+    )
+    err = explicit.stderr.decode()
+    assert "max-runtime ceiling 123s;" in err and "derived from" not in err
+
+
+def test_repo_declaration_beats_the_record(tmp_path):
+    repo = _make_repo(tmp_path)
+    env = _base_env(tmp_path / "home")
+    _declare_ceiling(repo, '{"max_runtime_secs": 1111}')
+    _write_record(repo, "suitec", "current", "pass", 3420.0)
+    result = _run_in(repo, ["--collection", "suitec", "--", sys.executable, "-c", "pass"], env=env)
+    err = result.stderr.decode()
+    assert "max-runtime ceiling 1111s;" in err and "derived from" not in err
+
+
+def test_ceiling_kill_names_the_junit_fate_and_the_partial_log_kept(tmp_path, capsys):
+    module = _load_wrapper_module()
+    log = tmp_path / "run-1.log.tmp"
+    log.write_bytes(
+        b"[gw0] [ 97%] PASSED tests/a.py::ok\n"
+        b"[gw1] [ 98%] FAILED tests/a.py::bad\n"
+        b"ERROR tests/b.py::worse\n"
+    )
+    proc = mock.Mock()
+    proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
+    junit = tmp_path / "never.xml"
+    with mock.patch.object(module, "_dump_process_tree", lambda p: None), \
+         mock.patch.object(module, "_kill_process_tree", lambda p, *_: 1):
+        assert module._wait_interruptible(
+            proc, max_runtime=0.01, junit_path=str(junit), log_path=str(log)
+        ) == module._MAX_RUNTIME_EXIT_CODE
+    err = capsys.readouterr().err
+    assert "No junit was written" in err and str(junit) in err
+    assert "Partial output kept" in err and "current.log" in err
+    assert "reached 98%" in err
+    assert "2 failure line(s) already printed" in err
+    assert "tests/a.py::bad" in err and "tests/b.py::worse" in err
+
+
+def test_partial_report_without_a_log_or_failures_says_so(tmp_path):
+    module = _load_wrapper_module()
+    assert "No suite-run log was kept" in module._partial_report(None)
+    log = tmp_path / "run.log.tmp"
+    log.write_bytes(b"....\n")
+    report = module._partial_report(str(log))
+    assert "no percentage was printed" in report and "no failure lines were printed" in report

@@ -124,3 +124,20 @@ def test_non_artefact_production_is_not_a_seam():
 def test_empty_inputs():
     assert unowned_seams([]) == []
     assert unowned_seams([None, ""], None) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A stale box reading must never count as free capacity.",
+        "The G-EM never uses the cached banner to route a booking.",
+        "The checker must not read box-specs.json.",
+    ],
+    ids=["gerund-subject", "negated-use", "negated-read"],
+)
+def test_a_prohibition_or_a_noun_use_is_not_a_producer_only_clause(text):
+    assert producer_only_clause(text) is None
+
+
+def test_a_negation_elsewhere_in_the_clause_does_not_excuse_a_real_wire_clause():
+    assert producer_only_clause("nothing is lost and the loader feeds the fitter") == "feeds the fitter"

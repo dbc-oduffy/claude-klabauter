@@ -1,4 +1,4 @@
-"""orphan_reap: the dead-parent rule and the reap loop, against a fake census."""
+"""orphan_reap: the dead-parent rule, the reap loop and the stdin-python flag class, against a fake census."""
 
 import pytest
 
@@ -203,3 +203,65 @@ def test_reap_skips_ancestor_of_self(monkeypatch: pytest.MonkeyPatch) -> None:
     killed = []
     assert orphan_reap.reap(FakePrims(rows), terminate=killed.append) == [13]
     assert killed == [13]
+
+
+class CpuPrims(FakePrims):
+    def __init__(self, rows, cpu, cmdlines) -> None:
+        super().__init__(rows)
+        self.cpu = cpu
+        self.cmdlines = cmdlines
+        self.cmd_reads = []
+
+    def cpu_time_s(self, pid):
+        return self.cpu.get(pid)
+
+    def command_line(self, pid):
+        self.cmd_reads.append(pid)
+        return self.cmdlines.get(pid)
+
+
+def _stdin_census():
+    from coordinator_core.box_memory import pressure
+
+    old = _NOW - 7200 * _UNIT
+    young = _NOW - 60 * _UNIT
+    rows = [
+        ProcRow(1, 0, old - 10, "claude.exe"),
+        ProcRow(2, 1, old - 5, "bash.exe"),
+        ProcRow(10, 2, old, "python.exe"),       # aged, hot, stdin, claude reachable
+        ProcRow(11, 998, old, "python.exe"),     # aged, hot, stdin, orphaned chain
+        ProcRow(12, 2, young, "python.exe"),     # live child: young
+        ProcRow(13, 2, old, "python.exe"),       # aged but under the CPU gate
+        ProcRow(14, 2, old, "python.exe"),       # aged, hot, script file
+        ProcRow(15, 2, old, "python.exe"),       # cpu unreadable
+        ProcRow(16, 2, old, "node.exe"),         # not python
+    ]
+    hot = pressure.MIN_ORPHAN_CPU_S
+    cpu = {10: hot, 11: hot + 1, 12: hot * 9, 13: hot - 1, 14: hot, 16: hot}
+    cmd = {pid: "python -I -" for pid in (10, 11, 12, 13, 15, 16)}
+    cmd[14] = "python job.py"
+    return rows, CpuPrims(rows, cpu, cmd)
+
+
+def test_stdin_python_aged_hot_is_flagged_live_child_and_others_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    _units(monkeypatch)
+    rows, prims = _stdin_census()
+    assert [r.pid for r in orphan_reap.select_stdin_python(rows, prims, now=_NOW)] == [10, 11]
+    hits = orphan_reap.reap_stdin_python(rows, prims, now=_NOW)
+    assert [(h["pid"], h["action"]) for h in hits] == [(10, "flagged"), (11, "flagged")]
+    assert hits[0]["session"] == {"claude_pid": 1, "claude_ctime": rows[0].ctime}
+    assert hits[1]["session"] is None
+    assert hits[0]["cmdline"] == "python -I -" and hits[0]["cpu_s"] >= 600
+
+
+def test_stdin_python_reads_command_line_only_past_age_and_cpu_gates(monkeypatch: pytest.MonkeyPatch) -> None:
+    _units(monkeypatch)
+    rows, prims = _stdin_census()
+    orphan_reap.select_stdin_python(rows, prims, now=_NOW)
+    assert sorted(prims.cmd_reads) == [10, 11, 14]
+
+
+def test_stdin_python_empty_or_unreadable_census_is_empty() -> None:
+    prims = CpuPrims([], {}, {})
+    assert orphan_reap.select_stdin_python(None, prims) == []
+    assert orphan_reap.reap_stdin_python([], prims) == []

@@ -1431,8 +1431,11 @@ def save_prev_parked(
     load: Optional[dict[str, Any]] = None,
     memory: Optional[dict[str, Any]] = None,
     links: Optional[dict[str, str]] = None,
+    orphans: Optional[dict[str, bool]] = None,
 ) -> bool:
     payload: dict[str, Any] = {"parked": dict(parked)}
+    if orphans is not None:
+        payload["orphans"] = dict(orphans)
     if links is not None:
         payload["links"] = dict(links)
     if memory is not None:
@@ -1581,8 +1584,128 @@ def _reap_orphans() -> list:
     return list(orphan_reap.reap(HostPrimitives) or [])
 
 
+_CENSUS_UNREAD = object()
+_EPOCH_MATCH_S = 2
+
+
+def _ctime_epoch_s(ctime: int) -> Optional[int]:
+    """`ProcRow.ctime` as Unix epoch seconds; None where the unit is not wall-clock (Linux ticks since boot)."""
+    from coordinator_core.bash_guards._host_probe import ctime_units_per_second
+    from coordinator_core.box_memory.pressure import _FILETIME_EPOCH_OFFSET_S
+
+    if sys.platform == "win32":
+        return int(ctime / ctime_units_per_second()) - _FILETIME_EPOCH_OFFSET_S
+    if sys.platform == "darwin":
+        return int(ctime / ctime_units_per_second())
+    return None
+
+
+def _session_for_claude(repo_root: str, claude_pid: int, claude_ctime: int) -> Optional[str]:
+    """The live session id whose `meta.json` `stable_pid` and start epoch match this claude, else None.
+
+    Archived sessions share a claude pid across resume, so only live (non-dot) directories are scanned.
+    """
+    epoch = _ctime_epoch_s(claude_ctime)
+    if epoch is None:
+        return None
+    from coordinator_core.session import core
+
+    root = core.sessions_dir(repo_root)
+    if not root or not os.path.isdir(root):
+        return None
+    for name in os.listdir(root):
+        if name.startswith("."):
+            continue
+        try:
+            with open(os.path.join(root, name, "meta.json"), "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+            if int(meta.get("stable_pid") or 0) != claude_pid:
+                continue
+            if abs(int(meta.get("stable_pid_start_epoch") or 0) - epoch) <= _EPOCH_MATCH_S:
+                return name
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return None
+
+
+def _orphan_line(hit: dict, owner: Optional[str]) -> str:
+    cmd = " ".join(str(hit.get("cmdline") or "").split())[:200]
+    cpu = hit.get("cpu_s")
+    mins = f"{cpu / 60.0:.1f}" if isinstance(cpu, (int, float)) else "?"
+    return (
+        f"ORPHAN possibly-orphaned stdin python pid={hit.get('pid')} cmdline={cmd!r} "
+        f"cpu_min={mins} action={hit.get('action')} owner={owner or 'unresolved'}"
+    )
+
+
+def _stdin_python_tick(
+    repo_root: str, emit: Callable[[str], None], census: Any
+) -> Optional[dict[str, bool]]:
+    """Run `orphan_reap.reap_stdin_python` over this tick's census; one `ORPHAN` line and, when the
+    owning session resolves, one inbox line per not-yet-reported hit. Returns the (pid, ctime) record to
+    persist, pruned to the processes still in the census, or None when the class could not run.
+
+    Reads no second census and spawns nothing. Never raises.
+    """
+    try:
+        if not census:
+            return None
+        from coordinator_core.box_memory import orphan_reap
+
+        prev = _load_prev_record(repo_root).get("orphans")
+        prev = prev if isinstance(prev, dict) else {}
+        live = {f"{r.pid}:{r.ctime}" for r in census}
+        record = {k: True for k in prev if k in live}
+        for hit in orphan_reap.reap_stdin_python(census, _host_primitives()):
+            key = f"{hit['pid']}:{hit['ctime']}"
+            record[key] = True
+            if key in prev:
+                continue
+            owner = None
+            try:
+                claude = hit.get("session")
+                if claude:
+                    owner = _session_for_claude(repo_root, claude["claude_pid"], claude["claude_ctime"])
+            except Exception:
+                owner = None
+            line = _orphan_line(hit, owner)
+            emit(line)
+            if owner:
+                try:
+                    from coordinator_core.group_em import box_send
+
+                    box_send.send(box_registry.local_box_id(), owner, line)
+                except Exception:
+                    pass
+        return record
+    except Exception:
+        return None
+
+
+def _held_runs_tick(repo_root: str, emit: Callable[[str], None]) -> None:
+    """One `HELD <run_id> by <holder> until <release>` line per run whose record dir holds `held.json`.
+
+    One glob over the warp home, one open per hit; no git, no spawn. Never raises.
+    """
+    try:
+        import glob
+        from pathlib import Path
+
+        from coordinator_core.ops.dispatch_emit import run_hold
+        from coordinator_core.session import record_homes
+
+        pattern = os.path.join(glob.escape(record_homes.home_dir(repo_root, "warp")), "*", run_hold.HELD_FILE)
+        for path in sorted(glob.glob(pattern)):
+            run_dir = Path(path).parent
+            hold = run_hold.read_hold(run_dir)
+            if hold is not None:
+                emit(f"HELD {run_dir.name} by {hold.holder_session} until {hold.release_condition}")
+    except Exception:
+        return
+
+
 def _memory_tick(
-    repo_root: str, emit: Callable[[str], None]
+    repo_root: str, emit: Callable[[str], None], census: Any = _CENSUS_UNREAD
 ) -> Optional[dict[str, bool]]:
     """Emit `MEMORY` lines on a pressure TRANSITION (low available RAM, grep storm), each naming its
     remedy; reap dead-parent grep/find while either holds. Returns the flags to persist, or None.
@@ -1602,7 +1725,8 @@ def _memory_tick(
         verdict = pressure.classify(reading, floor) if floor else pressure.UNKNOWN
         low = was_low if verdict == pressure.UNKNOWN else verdict == pressure.LOW
 
-        census = _process_census()
+        if census is _CENSUS_UNREAD:
+            census = _process_census()
         count = pressure.storm_count(census, _host_primitives()) if census is not None else None
         storming = was_storm if count is None else count >= pressure.DEFAULT_STORM_THRESHOLD
 
@@ -1802,7 +1926,13 @@ def tick_once(
     # today; see `test_gone_emits_even_when_persistence_raises` below, which
     # pins that emission does not depend on persistence succeeding).
     load_state = _load_alarm_tick(repo_root, emit)
-    memory_state = _memory_tick(repo_root, emit)
+    try:
+        census = _process_census()
+    except Exception:
+        census = None
+    memory_state = _memory_tick(repo_root, emit, census)
+    orphan_state = _stdin_python_tick(repo_root, emit, census)
+    _held_runs_tick(repo_root, emit)
     capacity_tick()
     prior_links = _load_prev_record(repo_root).get("links")
     link_state = link_tick(prior_links if isinstance(prior_links, dict) else None, emit)
@@ -1813,6 +1943,7 @@ def tick_once(
         load=load_state,
         memory=memory_state,
         links=link_state,
+        orphans=orphan_state,
     )
     watch_heartbeat.stamp(
         repo_root,

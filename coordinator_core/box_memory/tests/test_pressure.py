@@ -82,3 +82,23 @@ def test_remedy_text(tmp_path: Path) -> None:
     assert "unavailable" in p.remedy_text(p.KIND_LOW_MEMORY, tmp_path / "nope")
     storm = p.remedy_text(p.KIND_GREP_STORM)
     assert "reap" in storm and "30 min" in storm
+
+
+@pytest.mark.parametrize("cmdline", [
+    "python -", "python3 -I -", r'"C:\Python313\python.exe" -I -', "python.exe -u -",
+    "python -W ignore -", "/usr/bin/python3.12 -B -",
+])
+def test_is_stdin_python_true_for_dash_script_slot(cmdline) -> None:
+    assert p.is_stdin_python(SimpleNamespace(name="python.exe"), cmdline)
+
+
+@pytest.mark.parametrize("cmdline", [
+    "python script.py", "python -c print(1)", "python -m pytest -", "python -I script.py -",
+    "python", None, "",
+])
+def test_is_stdin_python_false_for_other_script_slots(cmdline) -> None:
+    assert not p.is_stdin_python(SimpleNamespace(name="python.exe"), cmdline)
+
+
+def test_is_stdin_python_false_for_non_python_image() -> None:
+    assert not p.is_stdin_python(SimpleNamespace(name="bash.exe"), "python -")

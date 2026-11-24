@@ -58,3 +58,29 @@ def test_real_live_pipeline_with_dead_parent_is_not_reaped_until_aged(monkeypatc
     assert killed == []
     aged = row.ctime + 31 * 60 * per_s
     assert orphan_reap.reap(Prims, terminate=killed.append, self_pid=-1, now=aged) == [child_pid]
+
+
+def test_stdin_python_class_spawns_no_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    def boom(*a, **k):
+        raise AssertionError("stdin-python selection spawned a process")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(subprocess, "run", boom)
+    old = _NOW - 7200 * _UNIT
+    rows = [ProcRow(10, 999, old, "python.exe"), ProcRow(11, 999, old, "python.exe")]
+
+    class Prims:
+        @staticmethod
+        def cpu_time_s(pid):
+            return 900.0 if pid == 10 else None
+
+        @staticmethod
+        def command_line(pid):
+            return "python -I -"
+
+    from coordinator_core.bash_guards import _host_probe
+
+    monkeypatch.setattr(_host_probe, "ctime_units_per_second", lambda: _UNIT)
+    assert [h["pid"] for h in orphan_reap.reap_stdin_python(rows, Prims, now=_NOW)] == [10]
