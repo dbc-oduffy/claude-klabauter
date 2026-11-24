@@ -30,6 +30,21 @@ _LOCK_REL = Path("node_modules") / ".package-lock.json"
 _ALERT_SENDER = None
 
 
+def _is_throwaway_root(root: Path) -> bool:
+    """True for a root under the OS temp dir: a pytest `tmp_path`, a session scratchpad, a probe repo.
+
+    Trap: the pytest guard alone misses a one-off probe script, and the Group EM is box-wide, so a fixture
+    root still resolves a live holder and a fixture flag reached the PM route (G-EM, 2026-11-24)."""
+    import tempfile
+
+    bases = {tempfile.gettempdir(), *(os.environ.get(k) for k in ("TEMP", "TMP", "TMPDIR"))}
+    try:
+        here = Path(root).resolve()
+        return any(here.is_relative_to(Path(b).resolve()) for b in bases if b)
+    except OSError:
+        return False
+
+
 def _check_package(pkg_dir: Path) -> dict | None:
     lock = pkg_dir / _LOCK_REL
     try:
@@ -104,7 +119,7 @@ def _alert_text(run_id: str, splits: list[dict]) -> str:
 def send_live_gem(root: Path, text: str) -> bool:
     """Send `text` to the live Group EM; True when handed off, False without a live holder. Never raises.
 
-    Skipped under pytest unless `_ALERT_SENDER` is set, so a fixture halt never starts a real process."""
+    Skipped under pytest or for a temp-dir root unless `_ALERT_SENDER` is set, so a fixture never reaches the PM route."""
     try:
         from coordinator_core.group_em import nomination
 
@@ -117,7 +132,7 @@ def send_live_gem(root: Path, text: str) -> bool:
         if _ALERT_SENDER is not None:
             _ALERT_SENDER(name, text)
             return True
-        if os.environ.get("PYTEST_CURRENT_TEST"):
+        if os.environ.get("PYTEST_CURRENT_TEST") or _is_throwaway_root(root):
             return False
         from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 

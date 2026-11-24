@@ -1417,6 +1417,8 @@ _PARAM_FIELDS = (
     Field("all_of_pm_ask", "bool"),
     Field("launcher_child", "bool"),
     Field("abandon_run", "str"),
+    # A fresh refire of a cancelled, closed or superseded run: the hook passes it through; see `_terminal_under_fresh`.
+    Field("fresh", "bool"),
     Field("chained_from", "str"),
     Field("required_reviewers", "str_list"),
     Field("hold_rows", "str_list"),
