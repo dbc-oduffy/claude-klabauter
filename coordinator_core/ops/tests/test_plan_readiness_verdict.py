@@ -33,7 +33,13 @@ _SPINE = """- id: C1
 """
 
 
-def _plan(root: Path, statement: str = "the op reports per class") -> Path:
+_WIRED_STATEMENT = (
+    '"`coordinator-invoke plan.readiness_verdict` reports per class; '
+    '`python -m pytest coordinator_core/ops/tests/test_plan_readiness_verdict.py` passes"'
+)
+
+
+def _plan(root: Path, statement: str = _WIRED_STATEMENT) -> Path:
     (root / "docs" / "plans").mkdir(parents=True)
     (root / REL).write_text(
         "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
@@ -439,7 +445,7 @@ def _corrects_plan(root: Path, corrects: str, fixer_disposition: str = "open", r
         "census:\n  - question: q\n    command: grep -c a b\n    result: '1'\n"
         "capabilities: []\nanchor_premises: []\n"
         f"{corrects}"
-        "prime_exit_criterion:\n  statement: the op reports per class\n"
+        f"prime_exit_criterion:\n  statement: {_WIRED_STATEMENT}\n"
         "  derived_from: state/sizings/2026-10-15-fixture.yaml\n"
         f"  falsifier:\n    how: run it\n    baseline_output: out\n    baseline_ref: {ref}\n"
         "    expected_when_true: ok\n"
@@ -1174,9 +1180,13 @@ def test_r34_fix_row_answer_stays_ready(tmp_path):
     assert _r34(tmp_path, {"kind": "fix-row", "row": "C9"}, spine=spine)["verdict"] == "ready"
 
 
-def test_r34_gem_scope_ruling_answer_stays_ready(tmp_path):
+def test_r34_gem_scope_ruling_answer_no_longer_clears(tmp_path):
     (tmp_path / "ruling.md").write_text("ruling", encoding="utf-8")
-    assert _r34(tmp_path, {"kind": "gem-scope-ruling", "ref": "ruling.md"})["verdict"] == "ready"
+    out = _r34(tmp_path, {"kind": "gem-scope-ruling", "ref": "ruling.md"})
+    assert out["verdict"] == "pulled"
+    instruction = out["mechanical_repairs"][0]["instruction"]
+    assert "kind: fix-row" in instruction
+    assert "kind: gem-scope-ruling" not in instruction and "G-EM" not in instruction
 
 
 def test_r34_untagged_row_is_not_judged(tmp_path):

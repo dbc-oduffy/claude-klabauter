@@ -1823,6 +1823,7 @@ def tick_once(
         subscribed_peers=len(cur_parked),
         writer_session_id=caller_session_id,
     )
+    _stamp_box_heartbeat()
     _prune_spool(repo_root)
     return 0
 
@@ -2044,6 +2045,7 @@ def main(
                 holder_name=holder_name,
                 writer_session_id=caller_session_id,
             )
+            _stamp_box_heartbeat()
             if not stamped:
                 # ITEM 1 (the memo's gated ask): DISPLACED-WATCH TEARDOWN.
                 # A same-holder writer or `tick_source` mismatch is the same
@@ -2126,6 +2128,32 @@ def _open_run_records(admission_file: str) -> Optional[list]:
     return list(open_runs.values())
 
 
+def _stamp_box_heartbeat() -> None:
+    """Write this box's heartbeat each tick: `remote_box_rows` on every other box reads it as this box's liveness.
+
+    Trap: before this, only tests stamped it, so every box read every other as unreachable."""
+    from coordinator_core.group_em import box_heartbeat
+
+    box_heartbeat.stamp()
+
+
+def _settings_home_path() -> Optional[str]:
+    """This box's settings home, the root every registry row names for its box; None when unresolvable."""
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        return str(settings_home())
+    except Exception:  # noqa: BLE001 -- the status line never raises
+        return None
+
+
+def _resolved(root: object) -> Optional[str]:
+    """Case-folded absolute form of a registry root for same-path comparison; None for a non-path."""
+    if not isinstance(root, str) or not root:
+        return None
+    return os.path.normcase(os.path.abspath(os.path.expanduser(root)))
+
+
 def remote_box_rows(directory=None) -> list:
     """Per registered non-local box: its heartbeat liveness and open runs (START without END, last 64 KiB).
 
@@ -2133,6 +2161,7 @@ def remote_box_rows(directory=None) -> list:
     session_id/run None. ``reachable`` is False when its heartbeat record cannot be read. Never raises,
     and never feeds `_current_agents`: an unreachable box must not report peers gone.
     """
+    import platform
     from pathlib import Path
 
     from coordinator_core.group_em import box_heartbeat
@@ -2143,9 +2172,18 @@ def remote_box_rows(directory=None) -> list:
         local = box_registry.local_box_id()
     except Exception:
         return rows
+    home = _resolved(_settings_home_path())
+    host = platform.node().split(".")[0].lower()
     for box in boxes:
         box_id = box.get("box_id")
         if box_id in (box_registry.LOCAL_BOX_ID, local):
+            continue
+        if home is not None and _resolved(box.get("root")) == home:
+            # A row rooted at this box's own home is this box under its hostname, or a misregistration:
+            # reading its heartbeat would report a far box through this box's files.
+            if str(box_id).lower() != host:
+                rows.append({"box_id": box_id, "session_id": None, "run": None, "live": False,
+                             "reachable": False, "misregistered": True})
             continue
         try:
             beat = box_heartbeat.read(box)
@@ -2239,6 +2277,9 @@ def box_line(census: Optional[dict]) -> str:
     for row in census.get("remote_boxes") or []:
         by_box.setdefault(row["box_id"], []).append(row)
     for box_id, rows in by_box.items():
+        if rows[0].get("misregistered"):
+            line += f"\n  box {box_id}: MISREGISTERED (registry root is this box's settings home)"
+            continue
         if not rows[0].get("reachable", True):
             line += f"\n  box {box_id}: unreachable"
             continue

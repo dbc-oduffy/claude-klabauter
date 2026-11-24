@@ -1439,7 +1439,7 @@ _UNTYPED_PARAM_KEYS = frozenset({
     "ask", "appetite", "name", "description", "force", "research", "subjects", "topic_slug",
     "scout_mode", "scout_questions", "lanes", "lane_count", "hot_files", "resume_missing",
     "cloud_spawn", "cross_repo_approved", "reserved_run_id", "chatty", "max_rows", "skip_landed",
-    "landed_rows", "auto_split", "sibling", "local_only", "out_path", "session_id", "repo_root",
+    "landed_rows", "owed_test_rows", "auto_split", "sibling", "local_only", "out_path", "session_id", "repo_root",
     "_caller_cwd", "preminted_run_id", "chain_parent", "whole_set_probe", "takeover",
 })
 
@@ -3638,6 +3638,7 @@ def _dispatch_emit_body(
                 script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
                 findings_out=plan_findings,
                 landed_rows=frozenset(params["landed_rows"]) if params.get("landed_rows") is not None else None,
+                owed_test_rows=frozenset(params.get("owed_test_rows") or ()),
                 review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
                 run_base_sha=params.get("run_base_sha"),
                 review_carried_paths=tuple(params.get("review_carried_paths") or ()),

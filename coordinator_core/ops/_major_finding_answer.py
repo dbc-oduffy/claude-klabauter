@@ -1,9 +1,9 @@
 """Which major default-path or user-visible review findings lack a clearing answer.
 
 Ledger rows may carry ``severity``, ``scope`` and ``answered_by``. A row with ``severity: major`` and
-a scope in ``MAJOR_SCOPES`` is answered only by a fix row (an open/coded spine row) or a G-EM scope
-ruling (an existing repo-relative file). Any other answer, a disclosure or a PM waiver included, or
-none, leaves it unanswered. Rows lacking either tag are not judged.
+a scope in ``MAJOR_SCOPES`` is answered only by a fix row (an open/coded spine row). Any other answer,
+a disclosure, a PM waiver or a ruling file included, or none, leaves it unanswered. Rows lacking either
+tag are not judged.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 MAJOR_SCOPES = frozenset({"default-path", "user-visible"})
-CLEARING_KINDS = ("fix-row", "gem-scope-ruling")
+CLEARING_KINDS = ("fix-row",)
 LIVE_DISPOSITIONS = frozenset({"open", "coded"})
 
 
@@ -35,35 +35,18 @@ def _fix_row_clears(answer: dict, spine_rows: Optional[list]) -> bool:
     )
 
 
-def _ruling_clears(answer: dict, repo_root: Optional[Path]) -> bool:
-    ref = answer.get("ref")
-    if repo_root is None or not isinstance(ref, str) or not ref.strip():
-        return False
-    rel = Path(ref.strip())
-    if rel.is_absolute() or rel.anchor or ".." in rel.parts:
-        return False
-    try:
-        return (Path(repo_root) / rel).is_file()
-    except OSError:
-        return False
-
-
-def _answered(row: dict, spine_rows: Optional[list], repo_root: Optional[Path]) -> bool:
+def _answered(row: dict, spine_rows: Optional[list]) -> bool:
     answer = row.get("answered_by")
-    if not isinstance(answer, dict):
-        return False
-    kind = answer.get("kind")
-    if kind == "fix-row":
-        return _fix_row_clears(answer, spine_rows)
-    if kind == "gem-scope-ruling":
-        return _ruling_clears(answer, repo_root)
-    return False
+    return isinstance(answer, dict) and answer.get("kind") == "fix-row" and _fix_row_clears(answer, spine_rows)
 
 
-def unanswered(rows: list, spine_rows: Optional[list], repo_root: Optional[Path]) -> list:
-    """The major default-path or user-visible rows in ``rows`` with no clearing answer."""
+def unanswered(rows: list, spine_rows: Optional[list], repo_root: Optional[Path] = None) -> list:
+    """The major default-path or user-visible rows in ``rows`` with no clearing answer.
+
+    ``repo_root`` is accepted for caller compatibility and is unused.
+    """
     return [
         row
         for row in rows or []
-        if isinstance(row, dict) and _is_major(row) and not _answered(row, spine_rows, repo_root)
+        if isinstance(row, dict) and _is_major(row) and not _answered(row, spine_rows)
     ]

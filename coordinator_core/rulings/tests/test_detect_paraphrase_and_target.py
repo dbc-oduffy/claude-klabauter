@@ -130,6 +130,8 @@ def test_paraphrased_deferral_is_seen(tmp_path, phrase):
         "The owner field is set from the record.",
         "Leave the buffer alone; plan.prep_gate is unchanged.",
         'The "open question" heading is removed from plan.prep_gate docs.',
+        "## Open questions\n\n- does plan.prep_gate block at 1 mm?",
+        "## Open questions\n\n- plan.prep_gate item list",
     ],
 )
 def test_ordinary_prose_is_not_a_deferral(tmp_path, text):

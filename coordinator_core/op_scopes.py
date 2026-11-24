@@ -756,6 +756,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # scratch.remove — "show_top": roots are the calling repo's scratch/. proc.stop_own_child — "none": judged on the process table.
     "scratch.remove":                         "show_top",
     "proc.stop_own_child":                    "none",
+    # run.hold — "show_top", MUTATING: the holding session sets or clears its run's hold record.
+    "run.hold":                               "show_top",
     "cartography.count_references":           "none",
     "doctrine.assert_cross_reference_counts": "common_dir",
     "percolate.check_inverse_drift":          "none",

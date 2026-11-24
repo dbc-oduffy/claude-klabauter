@@ -130,6 +130,16 @@ def _blank_quoted(paragraph: str) -> str:
     return _QUOTED_RE.sub(lambda m: " " * len(m.group(0)), paragraph)
 
 
+_HEADING_RE = re.compile(r"^[ \t]*#{1,6}[ \t].*$", re.MULTILINE)
+
+
+def _blank_headings(paragraph: str) -> str:
+    """`paragraph` with markdown heading lines blanked (offsets kept): a heading such as
+    `## Open questions` titles a section and defers nothing; the questions under it are scanned
+    as their own paragraphs."""
+    return _HEADING_RE.sub(lambda m: " " * len(m.group(0)), paragraph)
+
+
 def _paragraphs(text: str) -> list[str]:
     return [p for p in re.split(r"\n\s*\n", text) if p.strip()]
 
@@ -269,7 +279,7 @@ def detect(text: str, rulings: Iterable[Ruling], root: Path) -> dict:
     deferred: list[str] = []
     unnamed: list[str] = []
     for para in _paragraphs(text):
-        phrases = list(DEFER_RE.finditer(_blank_quoted(para)))
+        phrases = list(DEFER_RE.finditer(_blank_headings(_blank_quoted(para))))
         if not phrases:
             continue
         if "?" not in para:
