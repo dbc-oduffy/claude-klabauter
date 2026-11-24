@@ -111,11 +111,9 @@ Consumes (orchestrates, reimplements none):
     coordinator_core.frontmatter.schema_validate.parse_frontmatter
         -> reads each candidate sidecar's `status:` frontmatter field to
            classify it foldable vs. preserved (blocked/thrashing).
-    baton-chain-closure / plan-reversibility-eligibility (plugin-local,
-    docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
-    cli.md, P036-T4)
-        -> d-baton-chain-closure's and d-plan-reversibility-eligibility's
-           directives[].cli. Both resolve through
+    baton-chain-closure (plugin-local, docs/plans/2026-09-07-directive-
+    resolution-reaches-a-plugin-local-cli.md, P036-T4)
+        -> d-baton-chain-closure's directives[].cli. Resolves through
            `workstream_complete.apply._PLUGIN_CLI_SCRIPT_ROOT` (T2), never
            this module's own engine root — this module only names the
            argv the § Approach table specifies.
@@ -159,10 +157,10 @@ Negative-spec:
     3. Was `d-reconcile-completion-commits`'s `RECONCILE_ENTRY_PATH_TOKEN`
        wiring — removed along with the directive (completion.
        reconcile_commits kill, 2026-08-23); see Design note 3 above.
-    4. `build_directives`'s two demonstration-directive appends (P036-T4)
-       are unconditional here — `__init__.py`'s own `_plugin_cli_reachable()`
+    4. `build_directives`'s demonstration-directive append (P036-T4)
+       is unconditional here — `__init__.py`'s own `_plugin_cli_reachable()`
        filter, keyed on each directive's `cli` name against
-       `_PLUGIN_LOCAL_CLI_HAND_RUN`, decides whether either reaches the
+       `_PLUGIN_LOCAL_CLI_HAND_RUN`, decides whether it reaches the
        assembled `directives[]` on an unresolvable box (T3). This module
        never re-derives that filter.
 """
@@ -172,7 +170,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional
 
-from coordinator_core.completion_record_integrity import _find_archived_plan
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.workstream_complete.decision_keys import COMPLETION_KEY_ALIASES
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
@@ -186,14 +183,10 @@ from coordinator_core.workstream_complete.directives_session_hygiene import AFTE
 _COMPLETE_ENTRY_CLI = "coordinator-complete-entry"
 _FOLD_EXECUTION_RECORD_CLI = "coordinator-fold-execution-record"
 
-#: P036-T4 (docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-cli.md,
-#: § Approach's demonstration-directive table): the two plugin-local barewords. Each is
-#: also a literal member of `workstream_complete.apply._PLUGIN_LOCAL_CLIS` (T2) and of
-#: `CONSUMES_MANIFEST` (T1b) and `ASSEMBLER_DISPATCHABLE["workstream_complete"]`
-#: (`coordinator_core.authz.dispatchable`, this same row) — the single-oracle rule this
-#: module's other CLI-name constants already follow.
+#: The plugin-local bareword; also a literal member of
+#: `workstream_complete.apply._PLUGIN_LOCAL_CLIS`, `CONSUMES_MANIFEST` and
+#: `ASSEMBLER_DISPATCHABLE["workstream_complete"]`.
 _BATON_CHAIN_CLOSURE_CLI = "baton-chain-closure"
-_PLAN_REVERSIBILITY_ELIGIBILITY_CLI = "plan-reversibility-eligibility"
 
 #: The `decisions` keys `build_directives` below reads — declared once so a
 #: caller (`__init__.py`'s `preflight.decisions_template` composition) can
@@ -205,11 +198,6 @@ _KEY_NATURE = "nature"
 _KEY_PLAN_SLUG = "plan_slug"
 _KEY_PLAN_PATH = "plan_path"
 _KEY_FOLD_DESC = "fold_desc"
-#: P036-T4: the B10 leg's build-time gate reads this key, matching the name
-#: `__init__.py`'s own `_FIELD_NAME_MAP` already publishes it under
-#: ("governing_plan_path": "preflight.governing_plan_resolution.path") — never a
-#: second name for the same value.
-_KEY_GOVERNING_PLAN_PATH = "governing_plan_path"
 #: The completion entry's authored title, written into the entry
 #: `d-complete-entry` scaffolds by `apply._fill_completion_entry_surfaces`.
 _KEY_TITLE = "title"
@@ -227,7 +215,6 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_PLAN_SLUG,
     _KEY_PLAN_PATH,
     _KEY_FOLD_DESC,
-    _KEY_GOVERNING_PLAN_PATH,
     _KEY_TITLE,
     _KEY_REVIEW_NOTE_DECISIONS,
 )
@@ -436,9 +423,8 @@ def build_baton_chain_closure_directive(
     ordinary open chain, which would route a healthy close to `degraded`
     every time (§ Approach, exit-code note). `best_effort: true` because the
     producer lives in a sibling DoE clone that may be unreachable; per the §
-    Approach table this leg carries no build-time admission gate of its own
-    (contrast `build_plan_reversibility_eligibility_directive` below) — the
-    reachability filter is applied by the caller, not here. Returns `None`
+    Approach table this leg carries no build-time admission gate of its own —
+    the reachability filter is applied by the caller, not here. Returns `None`
     when `handoff_path` is empty: `signal` requires the positional."""
     if not handoff_path:
         return None
@@ -448,48 +434,6 @@ def build_baton_chain_closure_directive(
     # Held until after the close commit: the chain's tip is stamped terminal
     # by the ship step, which runs later than this builder's own position.
     directive[AFTER_CLOSE_COMMIT_KEY] = True
-    return directive
-
-
-def _current_plan_path(plan_path: str, repo_root: Path) -> str:
-    """`plan_path` unchanged while the file exists; else the archived copy
-    (stamp-implemented moves a plan out of `docs/plans/`), in the same form
-    (relative stays repo-relative, absolute stays absolute). Unchanged when
-    no archived copy exists either."""
-    p = Path(plan_path)
-    if (p if p.is_absolute() else repo_root / p).exists():
-        return plan_path
-    found = _find_archived_plan(repo_root, p.stem)
-    if found is None:
-        return plan_path
-    return str(found if p.is_absolute() else found.relative_to(repo_root).as_posix())
-
-
-def build_plan_reversibility_eligibility_directive(
-    *,
-    plan_path: str,
-    repo_root: Path,
-) -> Optional[dict[str, Any]]:
-    """B10: the plan-reversibility eligibility read the doctrine mandates
-    against the governing plan. Gated on a resolved governing plan (§
-    Approach table) — returns `None`, never a directive with an empty
-    positional, when `plan_path` is falsy; this is a hard gate, not a
-    best-effort pass-through of an empty argument (§ Approach, eng-director
-    F2). The exit code IS the verdict (`0` eligible, `1` ineligible) rather
-    than an error signal — `verdict_exit_codes: [1]` makes apply land the
-    ineligible answer like an eligible one, and the captured `--json`
-    document (not the exit code) is what a `next_move` reading consults.
-    `best_effort: true` still degrades any other non-zero exit (e.g. `2`,
-    an unreadable plan)."""
-    if not plan_path:
-        return None
-    plan_path = _current_plan_path(plan_path, repo_root)
-    args = [plan_path, "--json", "--repo-root", str(repo_root)]
-    directive = _directive(
-        "d-plan-reversibility-eligibility", _PLAN_REVERSIBILITY_ELIGIBILITY_CLI, args
-    )
-    directive["best_effort"] = True
-    directive["verdict_exit_codes"] = [1]
     return directive
 
 
@@ -543,21 +487,13 @@ def build_directives(
         if fold_directive is not None:
             directives.append(fold_directive)
 
-    # P036-T4's two demonstration directives — unconditional here (§ Approach
-    # table: B11 "no gate", B10 "gated on a resolved governing plan" only).
-    # `__init__.py`'s own reachability filter, keyed on `cli` name, decides
-    # whether either actually reaches `directives[]` on an unresolvable box.
+    # Unconditional here; `__init__.py`'s reachability filter, keyed on `cli`
+    # name, decides whether it reaches `directives[]` on an unresolvable box.
     baton_closure_directive = build_baton_chain_closure_directive(
         repo_root=repo_root, handoff_path=consumed_handoff
     )
     if baton_closure_directive is not None:
         directives.append(baton_closure_directive)
-    reversibility_directive = build_plan_reversibility_eligibility_directive(
-        plan_path=str(decisions.get(_KEY_GOVERNING_PLAN_PATH) or ""),
-        repo_root=repo_root,
-    )
-    if reversibility_directive is not None:
-        directives.append(reversibility_directive)
 
     return directives
 

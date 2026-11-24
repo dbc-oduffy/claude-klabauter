@@ -4,6 +4,27 @@
   "cache_read_mult": 0.1,
   "cache_write_mult": 1.25,
   "models": {
+    "gpt-6.2-astra": {
+      "input": 8.0,
+      "output": 40.0,
+      "cache_read": 0.4,
+      "cache_creation": 10.0,
+      "fast_multiplier": 2.0,
+      "ultrafast_multiplier": 3.0,
+      "long_prompt_tier": {
+        "prompt_tokens_over": 272000,
+        "input": 16.0,
+        "output": 60.0,
+        "cache_read": 0.8,
+        "cache_creation": 20.0
+      },
+      "provenance": {
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "verified_at": "2026-11-20",
+        "basis": "API-equivalent estimate; current Ultrafast rate; not an invoice",
+        "effective_from": null
+      }
+    },
     "claude-opus-5-5": {
       "input": 4.0,
       "output": 20.0,
@@ -152,6 +173,42 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3.8-flash",
         "verified_at": "2026-11-16",
         "basis": "API list prices, Standard paid tier, per 1M tokens; output includes thinking",
+        "effective_from": null
+      }
+    },
+    "gemini-4-carbon": {
+      "input": 4.0,
+      "output": 20.0,
+      "cache_read": 0.2,
+      "cache_creation": 4.0,
+      "provenance": {
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-4-carbon",
+        "verified_at": "2026-11-23",
+        "basis": "API list prices, Standard paid tier ($4/$20; $2/$10 intro thru 2026-11-30), per 1M tokens; 95% cache read discount; output includes thinking",
+        "effective_from": null
+      }
+    },
+    "gemini-4-neon": {
+      "input": 3.0,
+      "output": 15.0,
+      "cache_read": 0.15,
+      "cache_creation": 3.0,
+      "provenance": {
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-4-neon",
+        "verified_at": "2026-11-23",
+        "basis": "API list prices, Standard paid tier, per 1M tokens; 95% cache read discount; output includes thinking",
+        "effective_from": null
+      }
+    },
+    "gemini-4-hydrogen": {
+      "input": 1.5,
+      "output": 7.5,
+      "cache_read": 0.15,
+      "cache_creation": 1.5,
+      "provenance": {
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-4-hydrogen",
+        "verified_at": "2026-11-23",
+        "basis": "API list prices, Standard paid tier flat across 1M context, per 1M tokens; output includes thinking",
         "effective_from": null
       }
     }

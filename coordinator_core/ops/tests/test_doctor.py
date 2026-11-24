@@ -37,6 +37,35 @@ _DOCTOR = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin" / "doctor.py"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def test_default_doctor_names_runnable_registry_repair_for_missing_root(monkeypatch, tmp_path, capsys):
+    from coordinator_core.ops import doctor
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    pointer = tmp_path / "settings" / "machine-local" / "registry.local.toml"
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(pointer.parent))
+
+    def engine():
+        if not pointer.is_file():
+            raise RuntimeError("no engine pointer")
+        import tomllib
+        return tomllib.loads(pointer.read_text())["repos.claude_klabauter"]
+
+    monkeypatch.setattr("coordinator_core.engine_root.coordinator_engine_root", engine)
+    # Keep the production entry/report, isolating unrelated host probes.
+    monkeypatch.setattr(doctor, "run_doctor", lambda **kw: (
+        doctor.DoctorReport(layers=[doctor._check_sibling_resolution()]), []))
+    assert doctor.main([]) == 1
+    out = capsys.readouterr().out
+    repair = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin" / "machine-local.py"
+    assert str(repair) in out and str(pointer) in out
+    result = subprocess.run(
+        [sys.executable, str(repair), "set", "repos.claude_klabauter", str(_CLAUDE_KLABAUTER_ROOT)],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        env=dict(os.environ, MACHINE_LOCAL_REGISTRY_DIR=str(pointer.parent)), creationflags=_NO_WINDOW)
+    assert result.returncode == 0, result.stderr
+    doctor.main([])
+    assert "engine root did not resolve" not in capsys.readouterr().out
+
+
 def _write_hooks(checkout: Path, command: str) -> None:
     hooks_dir = checkout / "coordinator" / "hooks"
     (hooks_dir / "scripts").mkdir(parents=True, exist_ok=True)
@@ -155,6 +184,7 @@ def _run_doctor(checkout: Path, *args: str) -> subprocess.CompletedProcess:
         env=dict(
             os.environ,
             MACHINE_LOCAL_REPOS_CONTENT_ROOT=str(checkout),
+            CLAUDE_PLUGIN_ROOT=str(checkout / "coordinator"),
             REPO_PROJECT_MAKIMA=str(_CLAUDE_KLABAUTER_ROOT),
             COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT),
             # Empty machine-local registry: the git-hook currency layer otherwise
@@ -813,6 +843,7 @@ def test_a_healthy_install_exits_zero_and_a_double_delivered_hook_exits_one(chec
             REPO_PROJECT_MAKIMA=str(_CLAUDE_KLABAUTER_ROOT),
             COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT),
             COORDINATOR_SETTINGS_HOME=str(checkout.parent / "settings-home"),
+            CLAUDE_PLUGIN_ROOT=str(checkout / "coordinator"),
             MACHINE_LOCAL_REGISTRY_DIR=str(checkout.parent / "settings-home" / "machine-local"),
             CLAUDE_CONFIG_DIR=str(config),
         ),

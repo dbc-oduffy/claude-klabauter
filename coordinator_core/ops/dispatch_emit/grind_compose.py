@@ -435,7 +435,7 @@ _UNDO_FAILED_HEAD = "undo-failed: verify rejected the fix twice and its edits ma
 _UNDO_FAILED_TAIL = " -- the row stays open; restore the touched files by hand"
 _NOT_UNDONE_PEER = "not undone (a peer's edits sit on these paths)"
 _NOT_UNDONE_OUT_OF_ROOT = "not undone (outside repo_root, left dirty)"
-_PRE_FIX_FENCE_HEAD = "no fix applied, declared or widened files outside repo_root (route the need via cross-repo-memo; the G-EM decides a cross-repo change): "
+_PRE_FIX_FENCE_HEAD = "no fix applied, declared or widened files outside repo_root (route the need via cross-repo-memo to the owning repo): "
 _HISTORICAL_UNDO_FAILED_HEAD = "undo-failed: the fix wrote historical records and its edits may remain in the tree"
 _COVERED_UNDO_FAILED_HEAD = "undo-failed: the row was found already covered and its fix edits may remain in the tree"
 
@@ -1138,7 +1138,7 @@ def run_admission(
             _handback_row(
                 row,
                 "needs-judgment",
-                "fix touched files outside repo_root (ownership is the check; the G-EM decides a cross-repo commit; left uncommitted): "
+                "fix touched files outside repo_root (ownership is the check; route via cross-repo-memo to the owning repo; left uncommitted): "
                 + ", ".join(escaped),
             )
             return
@@ -3289,7 +3289,7 @@ def compose_grind_script(
         "    await _handBackRow(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;\n"
         "  }\n"
         "  const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));\n"
-        "  if (_escaped.length) { await _handBackRow(rowId, 'needs-judgment', 'fix touched files outside repo_root (ownership is the check; the G-EM decides a cross-repo commit; left uncommitted): ' + _escaped.join(', ')); return; }\n"
+        "  if (_escaped.length) { await _handBackRow(rowId, 'needs-judgment', 'fix touched files outside repo_root (ownership is the check; route via cross-repo-memo to the owning repo; left uncommitted): ' + _escaped.join(', ')); return; }\n"
         "  const _written = (result.touched_files || []).concat(result.created_files || []);\n"
         "  const _historical = _historicalPaths(_written);\n"
         "  if (_historical.length) {\n"

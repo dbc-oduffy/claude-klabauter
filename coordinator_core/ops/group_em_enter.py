@@ -157,8 +157,8 @@ Negative-spec:
       above -- a refusal is direction-class and reaches the human via the
       passed-through `superseded_incumbent`, never retried or swallowed
       here, and never disguised as an empty/absent-but-keyed result.
-    - Never resolves GATE 1 / GATE 2. `digest["gate_declaration_required"]`
-      is carried through from `build_send_digest` unmodified.
+    - Carries no gate or ruling obligation: the digest is stripped of
+      `gate_declaration_required`, and a refusal names no PM decision.
     - Never re-arms the watch it reports on, and never dispatches a watcher.
       `watch_liveness` is read-only like every other leg; the remedy it
       carries is a command for the EM to run, never one this op runs.
@@ -308,9 +308,12 @@ def _run_digest(
     except Exception:  # noqa: BLE001
         pass
     try:
-        return group_em_send_pass.build_send_digest(repo_root, roster, caller_session_id), None
+        digest = group_em_send_pass.build_send_digest(repo_root, roster, caller_session_id)
     except Exception as exc:  # noqa: BLE001
         return None, _leg_error(exc)
+    if isinstance(digest, dict):
+        digest.pop("gate_declaration_required", None)
+    return digest, None
 
 
 def _run_baseline(
@@ -363,8 +366,8 @@ def _run_teammates(
     clock) and for why the fleet watcher is reported ahead of the assistant.
 
     TOP-LEVEL, NOT INSIDE `digest`. This carries the same shape as
-    `digest["gate_declaration_required"]` -- a standing per-tick obligation
-    the EM cannot discharge by ignoring -- but it is a property of the
+    a standing per-tick obligation the EM cannot discharge by ignoring --
+    but it is a property of the
     SESSION, not of the send pass, and it must remain visible on a tick whose
     digest leg failed. Folding it into `build_send_digest`'s return would
     make the one obligation that says "you are running this mode with no
@@ -470,9 +473,8 @@ def _standing_message(nomination: dict, session_id: str) -> str:
 
 def build_standing(nomination: Optional[dict], session_id: Optional[str], error: Optional[str]) -> dict:
     """The `standing` payload leg: ``{claimed, message, session_id, record, source}`` plus
-    ``displaced_holder``/``displaced_holder_live`` when a takeover happened (and
-    ``needs_pm_decision`` when not claimed). `record` is the nomination verdict verbatim.
-    `group-em-autofire.py` reads `claimed`, `message` and `needs_pm_decision`."""
+    ``displaced_holder``/``displaced_holder_live`` when a takeover happened. `record` is the
+    nomination verdict verbatim. `group-em-autofire.py` reads `claimed` and `message`."""
     nom = nomination if isinstance(nomination, dict) else {}
     claimed = bool(nom.get("claimed"))
     standing: dict[str, Any] = {
@@ -485,11 +487,6 @@ def build_standing(nomination: Optional[dict], session_id: Optional[str], error:
     if nom.get("displaced_holder"):
         standing["displaced_holder"] = nom["displaced_holder"]
         standing["displaced_holder_live"] = bool(nom.get("displaced_holder_live"))
-    if not claimed:
-        standing["needs_pm_decision"] = (
-            f"nomination was not claimed ({error or 'refused'}) -- this is not a "
-            "standing-ownership problem"
-        )
     return standing
 
 
@@ -525,8 +522,8 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     against `roster` -- see module docstring's `roster_excluded` paragraph.
     `teammates` carries `dispatch_required` plus per-agent `present` flags
     for the Group-EM's two standing teammates (fleet watcher first, then the
-    assistant) -- the `gate_declaration_required` shape for an obligation
-    that is a property of the SESSION rather than of one send. Like the
+    assistant) -- an obligation that is a property of the SESSION rather
+    than of one send. Like the
     other post-Group-EM legs it is OMITTED on a refused Group-EM: a session with
     no standing to hold the Group-EM owes no teammates.
     `watch_liveness` answers the OTHER half of the same obligation: whether the

@@ -23,6 +23,177 @@ launch = _load("unimatrix-codex-launch.py", "unimatrix_codex_launch")
 hook = _load("unimatrix-codex-hook-sessionstart.py", "unimatrix_codex_hook")
 contract = _load("unimatrix-peer-contract.py", "unimatrix_peer_contract_t")
 
+
+def test_standard_launch_overrides_ambient_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text('model = "gpt-6-luna"\n')
+    (tmp_path / "models_cache.json").write_text(json.dumps({"models": [{"slug": "gpt-6.2-astra"}]}))
+    args, expected = launch.select_model(["--profile", "fast"])
+    assert args == ["--profile", "fast", "--model", "gpt-6.2-astra"]
+    assert expected == "gpt-6.2-astra"
+
+
+@pytest.mark.parametrize("catalog", [None, "invalid json", '{"models": [{"slug": "gpt-6-luna"}]}'])
+def test_cold_or_stale_catalog_does_not_claim_astra_unavailable(tmp_path, monkeypatch, catalog):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    if catalog is not None:
+        (tmp_path / "models_cache.json").write_text(catalog)
+    assert launch.select_model([]) == (["--model", "gpt-6.2-astra"], "gpt-6.2-astra")
+
+
+def test_model_selection_precedes_prompt_separator(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "models_cache.json").write_text('{"models": [{"slug": "gpt-6.2-astra"}]}')
+    assert launch.select_model(["--", "--model", "example"])[0] == [
+        "--model", "gpt-6.2-astra", "--", "--model", "example"]
+
+
+@pytest.mark.parametrize("args", [["-m", "worker"], ["--model=worker"], ["-c", 'model="worker"']])
+def test_deliberate_model_overrides_remain_explicit(args):
+    assert launch.select_model(args) == (args, None)
+
+
+@pytest.mark.parametrize("observed", ["gpt-6.2-astra", "gpt-6-luna", None])
+def test_startup_verification_uses_native_metadata(tmp_path, monkeypatch, observed):
+    monkeypatch.setenv("COORDINATOR_CODEX_EXPECTED_MODEL", "gpt-6.2-astra")
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(json.dumps({"type": "session_meta", "payload": {"id": "session"}}) + "\n" +
+                          json.dumps({"type": "turn_context", "payload": {"turn_id": "current", "model": observed}}) + "\n")
+    payload = {"session_id": "session", "turn_id": "current", "transcript_path": str(transcript)}
+    if observed == "gpt-6.2-astra":
+        assert "observed gpt-6.2-astra" in hook.verify_startup_model(payload)
+    elif observed:
+        with pytest.raises(RuntimeError, match="startup model"):
+            hook.verify_startup_model(payload)
+    else:
+        assert "deferred" in hook.verify_startup_model(payload)
+
+
+def test_startup_verification_refuses_other_session_transcript(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_CODEX_EXPECTED_MODEL", "gpt-6.2-astra")
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": "other-session", "model": "gpt-6.2-astra"}}) + "\n")
+    assert "deferred" in hook.verify_startup_model({
+        "session_id": "session", "turn_id": "current", "transcript_path": str(transcript)})
+
+
+@pytest.mark.parametrize("previous,current", [("gpt-6-luna", "gpt-6.2-astra"),
+                                               ("gpt-6.2-astra", "gpt-6-luna")])
+def test_current_turn_after_long_initial_rows(tmp_path, monkeypatch, previous, current):
+    monkeypatch.setenv("COORDINATOR_CODEX_EXPECTED_MODEL", "gpt-6.2-astra")
+    transcript = tmp_path / "rollout.jsonl"
+    rows = [
+        {"type": "session_meta", "payload": {"id": "session", "padding": "x" * 160000}},
+        {"type": "turn_context", "payload": {"turn_id": "old", "model": previous}},
+        {"type": "response_item", "payload": {"padding": "x" * 1200000}},
+        {"type": "turn_context", "payload": {"turn_id": "current", "model": current}},
+    ]
+    transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    payload = {"session_id": "session", "turn_id": "current", "transcript_path": str(transcript)}
+    if current == "gpt-6.2-astra":
+        assert "observed gpt-6.2-astra" in hook.verify_startup_model(payload)
+    else:
+        with pytest.raises(hook.StartupModelError, match="startup model gpt-6-luna"):
+            hook.verify_startup_model(payload)
+
+
+def test_resume_defers_historical_model_until_current_evidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_CODEX_EXPECTED_MODEL", "gpt-6.2-astra")
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": "session", "model": "gpt-6-luna"}}) + "\n" + json.dumps({
+            "type": "turn_context", "payload": {"turn_id": "old", "model": "gpt-6.2-astra"}}) + "\n")
+    payload = {"session_id": "session", "turn_id": "new", "transcript_path": str(transcript)}
+    assert "deferred" in hook.verify_startup_model(payload)
+    with transcript.open("a") as stream:
+        stream.write(json.dumps({"type": "turn_context", "payload": {
+            "turn_id": "new", "model": "gpt-6.2-astra"}}) + "\n")
+    assert "observed" in hook.verify_startup_model(payload)
+    payload.pop("turn_id")
+    assert "deferred" in hook.verify_startup_model(payload)
+
+
+@pytest.mark.parametrize("inherited_expectation", [True, False])
+def test_existing_server_native_payload_model_wins_over_history(monkeypatch, inherited_expectation):
+    if inherited_expectation:
+        monkeypatch.setenv("COORDINATOR_CODEX_EXPECTED_MODEL", "gpt-6.2-astra")
+    else:
+        monkeypatch.delenv("COORDINATOR_CODEX_EXPECTED_MODEL", raising=False)
+    status = hook.verify_startup_model({
+        "session_id": "existing", "turn_id": "new", "model": "gpt-6.2-astra"})
+    assert "observed gpt-6.2-astra" in status
+    assert ("launch expectation unavailable" in status) is not inherited_expectation
+
+
+@pytest.mark.parametrize("branch", ["existing-server", "no-server", "windows"])
+def test_main_selects_astra_on_every_standard_branch(tmp_path, monkeypatch, branch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setenv("COORDINATOR_CODEX_EXPECTED_MODEL", "")
+    (tmp_path / "models_cache.json").write_text('{"models": [{"slug": "gpt-6.2-astra"}]}')
+    (tmp_path / "config.toml").write_text('model = "gpt-6-luna"\n[profiles.fast]\nmodel = "gpt-6-luna"\n')
+    monkeypatch.setattr(launch.shutil, "which", lambda n: "codex.exe")
+    monkeypatch.setattr(launch, "Path", type(tmp_path))
+    import coordinator_core.codex_runner.codex_spawn_env
+    seen = []
+    monkeypatch.setattr(launch.os, "execv", lambda p, argv: seen.append(argv))
+    def call(argv, **kw):
+        assert not kw.get("creationflags", 0) & getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        seen.append(argv)
+        return 0
+    monkeypatch.setattr(launch.subprocess, "call", call)
+    monkeypatch.setattr(launch.os, "name", "nt" if branch == "windows" else "posix")
+    def daemon(*args):
+        pytest.fail("standard session must not depend on shared server environment")
+    monkeypatch.setattr(launch, "ensure_daemon", daemon)
+    launch.main(["--profile", "fast"])
+    assert seen[0][-2:] == ["--model", "gpt-6.2-astra"]
+    assert "--remote" not in seen[0]
+    assert os.environ["COORDINATOR_CODEX_EXPECTED_MODEL"] == "gpt-6.2-astra"
+
+
+def test_native_unavailable_astra_failure_is_propagated(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setenv("COORDINATOR_CODEX_EXPECTED_MODEL", "")
+    monkeypatch.setattr(launch.shutil, "which", lambda n: "codex")
+    import coordinator_core.codex_runner.codex_spawn_env
+    monkeypatch.setattr(launch.os, "name", "nt")
+    calls = []
+    monkeypatch.setattr(launch.subprocess, "call", lambda argv, **kw: calls.append(argv) or 1)
+    assert launch.main([]) == 1
+    assert calls == [["codex", "--model", "gpt-6.2-astra"]]
+    assert "codex login" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("remote", [["--remote", "unix:///existing.sock"],
+                                   ["--remote=unix:///existing.sock"]])
+@pytest.mark.parametrize("model", [[], ["-m", "worker"]])
+def test_explicit_remote_attachment_preserves_endpoint_and_model(monkeypatch, remote, model):
+    monkeypatch.setattr(launch.shutil, "which", lambda n: "/bin/codex")
+    monkeypatch.setattr(launch.os, "name", "posix")
+    monkeypatch.setattr(launch, "ensure_daemon", lambda *a: pytest.fail("explicit endpoint is caller-owned"))
+    seen = []
+    monkeypatch.setattr(launch.os, "execv", lambda p, argv: seen.append(argv))
+    assert launch.main([*remote, *model]) == 0
+    selected = model or ["--model", "gpt-6.2-astra"]
+    assert seen == [["/bin/codex", *remote, *selected]]
+    assert os.environ.get(launch.EXPECTED_MODEL_ENV) == (None if model else "gpt-6.2-astra")
+
+
+def test_hook_main_reports_startup_mismatch(monkeypatch, capsys):
+    import io
+    monkeypatch.setenv("COORDINATOR_CODEX_EXPECTED_MODEL", "gpt-6.2-astra")
+    monkeypatch.setattr(hook.sys, "stdin", io.StringIO('{"model": "gpt-6-luna"}'))
+    monkeypatch.setattr(hook.sys, "argv", ["hook"])
+    assert hook.main() == 1
+    assert "setup failed: startup model gpt-6-luna" in capsys.readouterr().out
+
+
+def test_hook_run_reports_verified_startup_and_leaves_workers_alone(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_CODEX_EXPECTED_MODEL", "gpt-6.2-astra")
+    assert "observed gpt-6.2-astra" in hook.run({"model": "gpt-6.2-astra"})["systemMessage"]
+    assert hook.verify_startup_model({"agent_id": "worker", "model": "gpt-6-luna"}) is None
+
 SOCK = "/home/u/.codex/app-server-control/app-server-control.sock"  # abs-path-ok: synthetic socket path fixture, never opened
 
 

@@ -1936,12 +1936,17 @@ def _process_token_is_restricted() -> bool:
 
 
 def _record_restricted_token_denial(exc: PermissionError) -> None:
-    """Name the cause of a winerror-5 pipe denial when the caller's token is
+    """Record a Darwin EPERM or name a winerror-5 pipe denial when the caller's token is
     restricted, so the COLD line says why instead of citing a respawn that
     never happened. A non-restricted denial records nothing (still "someone
     else's pipe"). First reason wins; never overwrites."""
     global _cold_reason
-    if _cold_reason is not None or getattr(exc, "winerror", None) != 5:
+    if _cold_reason is not None:
+        return
+    if sys.platform == "darwin" and exc.errno == errno.EPERM:
+        _cold_reason = "warm Unix socket connect denied (EPERM)"
+        return
+    if getattr(exc, "winerror", None) != 5:
         return
     if not _process_token_is_restricted():
         return

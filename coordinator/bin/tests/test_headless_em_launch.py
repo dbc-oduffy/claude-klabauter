@@ -677,6 +677,21 @@ def test_codex_and_grok_launch_never_get_an_agy_mode() -> None:
         assert rc == 0 and "--mode" not in calls[0][1]
 
 
+def test_codex_child_gets_physical_engine_override_paths(tmp_path: Path) -> None:
+    mirror = tmp_path / "published"
+    mirror.mkdir()
+    alias = tmp_path / "engine"
+    try:
+        alias.symlink_to(mirror, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+    overrides = dict(COORDINATOR_ENGINE_ROOT=str(alias), COORDINATOR_DOOR_ENGINE_ROOT=str(alias))
+    rc, _, child = _run("codex", env=overrides)
+    assert rc == 0
+    assert {name: child[name] for name in overrides} == dict.fromkeys(overrides, str(mirror.resolve()))
+    assert overrides["COORDINATOR_ENGINE_ROOT"] == str(alias)
+
+
 def test_codex_cwd_becomes_the_working_dir_flag() -> None:
     rc, calls, _ = _run("codex", env={"PATH": "x"}, extra=["exec", "do it"], cwd="repo/sub")
     assert rc == 0 and calls[0][1] == ["/bin/codex", "exec", *_add_dir(), "-C", "repo/sub", "do it"]

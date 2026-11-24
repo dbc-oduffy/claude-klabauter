@@ -253,3 +253,118 @@ def test_snapshot_without_a_usable_limit_renders_context_unknown(tmp_path, monke
     value = _snapshot_with_config(tmp_path, monkeypatch, config)
     assert "before_compact_percent" not in value and "configured" not in value["context_basis"]
     assert "ctx" not in value["text"] and value["text"].count("unknown") == 1 and value["text"].startswith("unregistered ·")
+
+
+def test_snapshot_uses_selected_profile_limit(tmp_path, monkeypatch):
+    value = _snapshot_with_config(tmp_path, monkeypatch,
+        "profile = 'work'\nmodel_auto_compact_token_limit = 100000\n"
+        "[profiles.work]\nmodel_auto_compact_token_limit = 380000\n")
+    assert value["before_compact_percent"] == pytest.approx(value["remaining_percent"] - 20)
+
+
+def test_observed_session_limit_overrides_ambient_config(tmp_path, monkeypatch):
+    from coordinator_core.codex_status.__main__ import snapshot
+    _snapshot_with_config(tmp_path, monkeypatch, "model_auto_compact_token_limit = 100000\n")
+    path = tmp_path / "root.jsonl"
+    current = context("observed")
+    current["payload"]["model_auto_compact_token_limit"] = 380000
+    with path.open('a') as out:
+        out.write(''.join(json.dumps(e) + '\n' for e in [current, usage(1000, 500, 100)]))
+    value = snapshot({"session_id": ROOT, "rollouts": [str(path)]})
+    assert value["before_compact_percent"] == pytest.approx(value["remaining_percent"] - 20)
+    assert "observed" in value["context_basis"]
+
+
+def test_configured_limit_without_usage_stays_unknown(tmp_path, monkeypatch):
+    from coordinator_core.codex_status.__main__ import snapshot
+    _snapshot_with_config(tmp_path, monkeypatch, "model_auto_compact_token_limit = 380000\n")
+    other = "01a1b63c-040a-76f2-a9b9-929d9a0d0100"
+    value = snapshot({"session_id": other})
+    assert "before_compact_percent" not in value
+
+
+@pytest.mark.parametrize('version,expected', [('0.171.0', True), ('other', False)])
+def test_inherited_model_limit_requires_matching_runtime_version(tmp_path, monkeypatch, version, expected):
+    from coordinator_core.codex_status.__main__ import snapshot
+    _snapshot_with_config(tmp_path, monkeypatch, "model = 'gpt-6.1-sol'\n")
+    catalog = {'client_version': version, 'models': [
+        {'slug': 'gpt-6.1-sol', 'auto_compact_token_limit': 380000}]}
+    (tmp_path / 'codex' / 'models_cache.json').write_text(json.dumps(catalog))
+    path = tmp_path / 'runtime.jsonl'
+    meta = metadata(ROOT)
+    meta['payload']['cli_version'] = '0.171.0'
+    write(path, [meta, context('runtime'), usage(1000, 500, 100)])
+    value = snapshot({'session_id': ROOT, 'rollouts': [str(path)]})
+    assert ('before_compact_percent' in value) == expected
+    if expected:
+        assert 'runtime model default' in value['context_basis']
+
+
+@pytest.mark.parametrize('configured,raw,expected', [(None, 272000, 244800),
+    (200000, 272000, 200000), (300000, 272000, 244800), (None, 100000, 90000)])
+def test_runtime_raw_window_compaction_and_overrides(tmp_path, monkeypatch, configured, raw, expected):
+    from coordinator_core.codex_status.__main__ import snapshot
+    _snapshot_with_config(tmp_path, monkeypatch, 'model = "gpt-6-luna"\n')
+    catalog = {'client_version': '0.171.0', 'models': [{'slug': 'gpt-6.2-astra',
+        'context_window': 272000, 'effective_context_window_percent': 95}]}
+    (tmp_path / 'codex' / 'models_cache.json').write_text(json.dumps(catalog))
+    meta = metadata(ROOT)
+    meta['payload']['cli_version'] = '0.171.0'
+    turn = context('astra', 'gpt-6.2-astra')
+    turn['payload']['model_context_window'] = raw
+    if configured is not None:
+        turn['payload']['model_auto_compact_token_limit'] = configured
+    observed = usage(1000, 500, 100)
+    observed['payload']['info']['model_context_window'] = raw * 95 // 100
+    path = tmp_path / 'astra.jsonl'
+    write(path, [meta, turn, observed])
+    result = snapshot({'session_id': ROOT, 'rollouts': [str(path)]})
+    assert result['auto_compact_token_limit'] == expected
+    assert result['before_compact_percent'] == pytest.approx(100 * (expected - 1100) / (raw * .95))
+    assert result['model'] == 'gpt-6.2-astra'
+
+
+@pytest.mark.parametrize('version,model', [('0.172.0', 'gpt-6.2-astra'), ('0.171.0', 'absent')])
+def test_raw_window_fallback_requires_version_and_observed_model(tmp_path, monkeypatch, version, model):
+    from coordinator_core.codex_status.__main__ import _auto_compact_limit
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path))
+    (tmp_path / 'models_cache.json').write_text(json.dumps({'client_version': version,
+        'models': [{'slug': 'gpt-6.2-astra', 'context_window': 272000,
+                    'effective_context_window_percent': 95}]}))
+    assert _auto_compact_limit({'model': model, 'cli_version': version}) == (None, None)
+
+
+@pytest.mark.parametrize('catalog', [None, '{invalid', '{}'])
+@pytest.mark.parametrize('version,model,configured,expected', [
+    ('0.171.0', 'gpt-6.2-astra', None, 244800),
+    ('0.171.0', 'gpt-6.2-astra', 200000, 200000),
+    ('0.171.0', 'gpt-6.2-astra', 300000, 244800),
+    ('0.172.0', 'gpt-6.2-astra', None, None),
+    ('0.171.0', None, None, None),
+    ('0.171.0', 'unknown', None, None),
+])
+def test_observed_raw_window_resolves_without_catalog(tmp_path, monkeypatch, catalog, version, model, configured, expected):
+    from coordinator_core.codex_status.__main__ import snapshot
+    monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path / 'settings'))
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'codex'))
+    home = tmp_path / 'codex'
+    home.mkdir()
+    if catalog is not None:
+        (home / 'models_cache.json').write_text(catalog)
+    meta = metadata(ROOT)
+    meta['payload']['cli_version'] = version
+    turn = context('observed-raw', model)
+    turn['payload']['model_context_window'] = 272000
+    if configured is not None:
+        turn['payload']['model_auto_compact_token_limit'] = configured
+    observed = usage(1000, 500, 100)
+    observed['payload']['info']['model_context_window'] = 258400
+    path = tmp_path / 'raw.jsonl'
+    write(path, [meta, turn, observed])
+    value = snapshot({'session_id': ROOT, 'rollouts': [str(path)]})
+    assert value.get('auto_compact_token_limit') == expected
+    if expected is not None:
+        assert value['before_compact_percent'] == pytest.approx(100 * (expected - 1100) / 258400)
+        assert 'observed raw context window' in value['context_basis']
+    else:
+        assert 'before_compact_percent' not in value

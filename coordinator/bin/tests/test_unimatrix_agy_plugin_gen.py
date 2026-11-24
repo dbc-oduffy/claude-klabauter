@@ -152,7 +152,7 @@ def test_claude_only_tool_names_are_rewritten_in_matchers(plugin, tmp_path: Path
     report = gen.generate(plugin, out, "agy")
     pre = json.loads((out / "hooks.json").read_text(encoding="utf-8"))["pre-tool-use"]["PreToolUse"]
     assert [g["matcher"] for g in pre] == [
-        "view_file|grep_search|find_by_name",
+        "read_file|grep_search|find_by_name",
         "write_file|edit_file|multi_replace_file_content|notebook_edit",
         "write_file|edit_file|multi_replace_file_content|run_command|PowerShell"]
     for g in pre:
@@ -250,7 +250,12 @@ def test_rules_written_at_table_path_and_unknown_surface_reported(plugin, tmp_pa
     out = tmp_path / "out"
     report = gen.generate(plugin, out, "agy")
     rules = gen.load_table()["agy"]["rules_path"]
-    assert (out / rules).read_bytes() == b"---\ntrigger: always_on\n---\n# doctrine\n\n- rule\n"
+    text = (out / rules).read_text(encoding="utf-8")
+    assert text.startswith("---\ntrigger: always_on\n---\n# doctrine\n\n- rule\n")
+    assert "## Agy Tool & Surface Mapping" in text
+    assert "`Read` -> `read_file`" in text
+    assert "`SendMessage` -> `unimatrix-send.py`" in text
+    assert len(text.encode("utf-8")) <= gen.load_table()["agy"]["max_text_bytes"]
     assert ("surface", "extras") in _unmapped(report)
     assert json.loads((out / "UNMAPPED.json").read_text(encoding="utf-8"))["unmapped"] == report["unmapped"]
 

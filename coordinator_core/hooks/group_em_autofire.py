@@ -39,7 +39,7 @@ false), or the op's own `nomination_error` leg, each produce their own
 NEGATIVE SPEC (unchanged from DoE source):
   - Never passes a supersede/incumbent-override signal — taking the role
     from a live peer is direction-class and belongs to a human.
-  - Never sends to a peer. It assembles; `gate1`/`gate2` stay unresolved.
+  - Never sends to a peer. It assembles; the banner carries no gate or ruling line.
   - Never blocks. Any failure degrades to silence.
 
 `render_watch_line`/`_watch_module` (DoE's separate watch-liveness render)
@@ -67,7 +67,6 @@ from coordinator_core.warm.entry_seam import reentrant_dispatch
 
 _GROUP_EM_COMMAND_NAMES = {"group-em"}
 _CONTEXT_BUDGET_CHARS = 10_000
-_PM_CALL_DEFAULT = "resolving this is the PM's call"
 
 
 def render_additional_context(payload: dict) -> str:
@@ -84,11 +83,9 @@ def render_additional_context(payload: dict) -> str:
 
     if not isinstance(nomination, dict) or not nomination.get("claimed"):
         message = (nomination or {}).get("message") or "nomination refused"
-        pm_call = (nomination or {}).get("needs_pm_decision") or _PM_CALL_DEFAULT
         return (
             "## Group EM entry: REFUSED\n\n"
             f"{message}\n\n"
-            f"{pm_call}\n\n"
             "No roster or digest was built. Entry is last-writer-wins and vacates any incumbent "
             "before re-entering, so a refusal that reaches here is NOT a standing-ownership "
             "problem -- do not reach for an override. Something else refused."
@@ -162,15 +159,13 @@ def render_additional_context(payload: dict) -> str:
     if watch_liveness:
         lines.append(f"Watch liveness: {watch_liveness}")
 
-    gate_line = "gate1/gate2 UNRESOLVED: declare per send; never loop-send entries."
     arm_line = "ARM NOW: CronCreate ~23min recur (off :00/:30) + Monitor poller."
-    lines += [arm_line, gate_line]
+    lines.append(arm_line)
 
     text = "\n".join(lines)
     if len(text) > _CONTEXT_BUDGET_CHARS:
-        tail = f"{arm_line}\n\n{gate_line}"
-        keep = max(0, _CONTEXT_BUDGET_CHARS - len(tail) - 24)
-        text = text[:keep] + "\n... (truncated)\n\n" + tail
+        keep = max(0, _CONTEXT_BUDGET_CHARS - len(arm_line) - 24)
+        text = text[:keep] + "\n... (truncated)\n\n" + arm_line
     return text
 
 

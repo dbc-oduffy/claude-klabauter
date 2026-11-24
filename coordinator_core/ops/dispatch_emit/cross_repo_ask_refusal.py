@@ -1,6 +1,6 @@
 """Pure predicate: should engine-ask refuse a run rooted in a repo other than the session's.
 
-The verdict is an assent check (G-EM group-em-b7): a peer-repo run is refused
+The verdict is an assent check (group-em-b7): a peer-repo run is refused
 unless the PM's assent is recorded as `approved`. It does not read the
 write-bump guard's arming, so an unanchored or stood-down session is refused too.
 

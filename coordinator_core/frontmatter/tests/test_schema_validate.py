@@ -4561,19 +4561,10 @@ _QUEUE_SCHEMA_PINS = {
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
 #
-_QUEUE_SCHEMA_AHEAD_PINS: dict = {
-    'sizing-object': {
-        'doe_ref': '6a6ec5c06ae54d3af52d713011f9197a6d7810d7',
-        'reason': (
-            '1.55.0 top-level `family` routing key is claude-klabauter-first (family sizings could not '
-            'author a plan without it), awaiting DoE canonical-first landing'
-        ),
-        'provenance': (
-            'goal 1a family runs 2026-11-18 (sizings 1a-codex/agy/grok, halted on doc-new refusal); '
-            'memo to coordinator-content-repo-em (topic sizing-object-family)'
-        ),
-    },
-}
+# sizing-object occupied this until DoE adopted 1.55.0 (`family`) at 3abb06109a;
+# the entry is gone and sizing-object is an ordinary HEAD byte-pin again, which
+# stays red until bin/claude-klabauter-revendor-schema.py re-vendors DoE's 1.55.0 bytes.
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
 
 # A claude-klabauter-first widening held under a version DoE has RESERVED and not yet
 # landed. The schema is byte-pinned to DoE HEAD while that holds; a worktree

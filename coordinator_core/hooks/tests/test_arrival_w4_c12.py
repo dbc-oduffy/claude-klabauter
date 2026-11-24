@@ -207,6 +207,19 @@ def test_group_em_autofire_render_refused_nomination() -> None:
     assert "busy" in text
 
 
+def test_group_em_autofire_banners_carry_no_gate_or_pm_decision_line() -> None:
+    refused = gea.render_additional_context(
+        {"nomination": {"claimed": False, "message": "busy", "needs_pm_decision": "PM must rule"}}
+    )
+    claimed = gea.render_additional_context(
+        {"nomination": {"claimed": True, "message": "claimed"}, "roster": [], "digest": {}}
+    )
+    assert "ARM NOW" in claimed and "Roster:" in claimed
+    for text in (refused.lower(), claimed.lower()):
+        for word in ("gate1", "gate2", "pm must rule", "pm's call"):
+            assert word not in text, word
+
+
 def test_group_em_autofire_never_raises_on_malformed_payload() -> None:
     resp = gea._handler({"command_name": None})
     assert resp == {}

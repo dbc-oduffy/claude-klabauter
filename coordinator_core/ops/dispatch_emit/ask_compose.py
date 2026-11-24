@@ -7283,6 +7283,7 @@ def compose_ask_script(
         "Your brief is the file ",
         "js:r.brief_path",
         f" -- read it completely, then execute it as written.\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE}{ledger_clause_base}{notes_block}{session_tail}",
+        "js:(_widenOf[r.id] ? _widenText(_widenOf[r.id]) : '')",
         "js:" + _row_sidecar_js(run_id, _lit(build_work_label(''))),
     )
     work_label = _lit(build_work_label(''))

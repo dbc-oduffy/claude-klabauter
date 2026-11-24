@@ -17,6 +17,7 @@ from coordinator_core.agent_pipe.agy import AgyAdapter
 from coordinator_core.agent_pipe.model_tiers import model_for_role
 
 MODEL_ENV = "COORDINATOR_AGY_MODEL"
+DEFAULT_MODEL = "gemini-4-carbon"
 
 REPLY_INSTRUCTION = (
     "\n\nReply protocol: every message you write in your response is relayed to the session "

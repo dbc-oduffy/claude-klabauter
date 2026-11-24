@@ -52,6 +52,43 @@ def test_recorded_native_exec_shape_has_thread_and_cache_usage_only(tmp_path: Pa
         assert observed[field] == "unknown"
 
 
+@pytest.mark.parametrize('invalid', [None, 'identity', 'pid', 'parent', 'role', 'resume', 'conflict', 'unknown', 'reroute', 'oversize'])
+def test_process_joins_only_same_worker_native_startup_model(tmp_path, invalid):
+    sample = complete_receipt()
+    child = sample['native_thread_id']
+    events = [{'type': 'thread.started', 'thread_id': child},
+              {'type': 'turn.completed', 'usage': sample['usage_events'][0]}]
+    (tmp_path / 'stdout.jsonl').write_text('\n'.join(map(json.dumps, events)))
+    record = {'schema_version': 1, 'provider': 'codex', 'session_id': child, 'pid': 12,
+              'parent_session_id': sample['broker_root_session_id'], 'role': 'workflow-agent',
+              'session_start_model': 'gpt-6-luna',
+              'session_start_model_evidence': {'source': 'session_start_payload', 'session_source': 'startup'}}
+    if invalid in ('identity', 'pid', 'parent', 'role', 'unknown'):
+        key, value = {'identity': ('session_id', sample['broker_root_session_id']),
+                      'pid': ('pid', 13), 'parent': ('parent_session_id', None),
+                      'role': ('role', 'em'), 'unknown': ('session_start_model', 'unknown')}[invalid]
+        record[key] = value
+    elif invalid == 'resume':
+        record['session_start_model_evidence']['session_source'] = 'resume'
+    elif invalid == 'conflict':
+        record['session_start_model_conflict'] = True
+    elif invalid == 'reroute':
+        record['session_start_model_initial'] = 'gpt-6.2-astra'
+    elif invalid == 'oversize':
+        record['padding'] = 'x' * (64 * 1024)
+    directory = Path(os.environ['COORDINATOR_SETTINGS_HOME']) / 'host-sessions' / 'codex'
+    directory.mkdir(parents=True)
+    (directory / f'{child}.json').write_text(json.dumps(record))
+    receipt = workflow._save_process(tmp_path, SimpleNamespace(pid=12, returncode=0), 'codex', {}, 'requested-astra',
+        broker_root_session_id=sample['broker_root_session_id'], broker_request_id=1, broker_fire_id='fire-a')
+    assert receipt['model'] == ('unknown' if invalid else 'gpt-6-luna')
+    assert receipt['usage_observations'][0]['model'] == receipt['model']
+    rows = [json.loads(line) for line in Path(receipt['canonical_usage']['path']).read_text().splitlines()]
+    assert rows[0]['payload']['model'] == (None if invalid else 'gpt-6-luna')
+    if not invalid:
+        assert rows[0]['payload']['model_evidence']['source'] == 'session_start_payload'
+
+
 def test_identical_unidentified_turn_counters_are_not_guessed_duplicates(tmp_path: Path) -> None:
     path = tmp_path / "stdout.jsonl"
     event = {"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 5}}
@@ -110,6 +147,105 @@ def test_canonical_usage_subtracts_cached_and_does_not_double_reasoning(tmp_path
     assert payload['request_id'] == 'fire-a:1'
     assert payload['model'] is None and payload['effort'] is None and payload['service_tier'] is None
     assert 'native_turn_id' not in payload and 'native_total_usage' not in payload
+
+
+def test_exec_thread_totals_resume_replay_and_fresh_child(tmp_path):
+    receipt = complete_receipt()
+    unit = dict(input_tokens=12400, cached_input_tokens=2000, cache_write_input_tokens=400, output_tokens=1000)
+    receipt.update(usage_events=[unit], usage_observations=[{'model': 'gpt-6-astra'}])
+    first = workflow._append_canonical_usage(receipt)
+    assert first['status'] == 'appended'
+    receipt.update(broker_request_id=2, usage_events=[{k: 2*v for k, v in unit.items()}])
+    assert workflow._append_canonical_usage(receipt)['status'] == 'appended'
+    assert workflow._append_canonical_usage(receipt)['status'] == 'duplicate'
+    receipt.update(broker_request_id=3, usage_events=[unit])
+    assert workflow._append_canonical_usage(receipt)['status'] == 'incomplete'
+    receipt['native_thread_id'] = '00000000-0000-4000-8000-000000000001'
+    assert workflow._append_canonical_usage(receipt)['status'] == 'appended'
+    rows = [json.loads(line)['payload'] for line in Path(first['path']).read_text().splitlines()]
+    assert len(rows) == 3
+    assert all(r['usage'] == dict(input_tokens=10000, output_tokens=1000,
+                                  cache_read_input_tokens=2000, cache_creation_input_tokens=400) for r in rows)
+
+
+def test_multiple_turns_keep_individual_tier_thresholds_and_service_tier(tmp_path):
+    receipt = complete_receipt()
+    receipt.update(model='gpt-6.1-sol', service_tier='priority')
+    receipt['usage_events'] *= 2
+    receipt['usage_events'] = [{**usage, 'input_tokens': 200000, 'cached_input_tokens': 60000}
+                               for usage in receipt['usage_events']]
+    result = workflow._append_canonical_usage(receipt)
+    events = [json.loads(line) for line in Path(result['path']).read_text().splitlines()]
+    assert len(events) == 2
+    assert len({e['payload']['request_id'] for e in events}) == 2
+    assert all(e['payload']['service_tier'] == 'priority' for e in events)
+    assert all(e['payload']['usage']['input_tokens'] == 140000 for e in events)
+    from coordinator_core.codex_status.model import empty, ingest, summary
+    state = empty(receipt['broker_root_session_id'])
+    for event in events:
+        ingest(state, event, {})
+    assert summary(state)['usd'] == pytest.approx(2 * (.28 + .006 + .00012) * 2)
+    assert workflow._append_canonical_usage(receipt)['status'] == 'duplicate'
+
+
+def test_event_provenance_retains_observed_service_tier(tmp_path):
+    path = tmp_path / 'stdout.jsonl'
+    path.write_text(json.dumps({'type': 'session.configured', 'session': {
+        'model': 'gpt-6.1-sol', 'service_tier': 'ultrafast'}}))
+    assert workflow._event_provenance(path, 'codex')['service_tier'] == 'ultrafast'
+
+
+def test_workflow_production_path_records_start_and_terminal_usage(tmp_path, monkeypatch):
+    receipt = complete_receipt()
+    events = [
+        {'type': 'thread.started', 'thread_id': receipt['native_thread_id'], 'model': 'gpt-6.1-sol'},
+        {'type': 'turn.completed', 'usage': receipt['usage_events'][0]}]
+    def execute(argv, prompt, *, stdout, **kwargs):
+        stdout.write(('\n'.join(map(json.dumps, events)) + '\n').encode())
+        Path(argv[argv.index('-o') + 1]).write_text('done')
+        return SimpleNamespace(pid=12, returncode=0)
+    monkeypatch.setattr(workflow, '_run_admitted', execute)
+    monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-fixture'])
+    monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
+    monkeypatch.setattr(workflow, 'shape_codex_child', lambda *a, **kw: None)
+    from coordinator_core.warm import sandboxed_spawn
+    monkeypatch.setattr(sandboxed_spawn, 'caller_is_sandboxed', lambda: False)
+    parent = receipt['broker_root_session_id']
+    assert workflow.run_agent('work', {}, repo_root=tmp_path, artifact_dir=tmp_path / 'art',
+        parent_session_id=parent, fire_id='fire-a', request_id=1) == 'done'
+    from coordinator_core.codex_status.__main__ import snapshot
+    value = snapshot({'session_id': parent})
+    assert value['coverage']['workflows']
+    assert value['execution_inventory']['expected'] == 1
+    assert value['priced_events'] == 1
+
+
+def test_execution_telemetry_lock_failure_preserves_worker_result(monkeypatch):
+    from coordinator_core.locked_write import LockTimeout
+    def fail(*a, **kw):
+        raise LockTimeout('locked')
+    monkeypatch.setattr(workflow, 'held_lock', fail)
+    receipt = complete_receipt()
+    workflow._record_execution(receipt['broker_root_session_id'], 'fire', 1, 'started')
+
+
+def test_resumed_request_preserves_first_turn_identity(tmp_path):
+    receipt = complete_receipt()
+    first = workflow._append_canonical_usage(receipt)
+    receipt['usage_events'] *= 2
+    second = workflow._append_canonical_usage(receipt)
+    assert first['status'] == second['status'] == 'appended'
+    events = [json.loads(line) for line in Path(second['path']).read_text().splitlines()]
+    assert [e['payload']['request_id'] for e in events] == ['fire-a:1', 'fire-a:1:turn:1']
+
+
+def test_conflicting_legacy_aggregate_does_not_append_duplicate_spend(tmp_path):
+    receipt = complete_receipt()
+    first = workflow._append_canonical_usage(receipt)
+    receipt['usage_events'][0]['input_tokens'] += 10
+    second = workflow._append_canonical_usage(receipt)
+    assert second['status'] == 'failed' and 'different counters' in second['reason']
+    assert len(Path(first['path']).read_text().splitlines()) == 1
 
 
 def test_save_process_twice_produces_one_usage_event(tmp_path: Path) -> None:

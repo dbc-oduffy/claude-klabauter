@@ -1975,7 +1975,7 @@ def _evaluate_foreign_repo_candidate(
             "  has no reader on this host either — so enforcing it would "
             "forbid the only correct\n"
             "  move available. The boundary itself is unchanged: a cross-repo "
-            "commit is decided by the G-EM (ownership is the check),\n"
+            "commit is checked by ownership,\n"
             "  and this stand-down is recorded in this "
             "session's overrides.log.\n"
             "  If this host DOES carry a fleet, say so with "

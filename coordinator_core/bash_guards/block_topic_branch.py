@@ -191,7 +191,7 @@ def _record(summary: str, em_text: str, *members: Any) -> Any:
 def _escalation(report_what: str) -> Any:
     from coordinator_core.guard_messages.alternative_record import EscalationRoute
 
-    return EscalationRoute(report_what=report_what, authorize_what="the Group EM granting an exception")
+    return EscalationRoute(report_what=report_what, authorize_what="the PM granting an exception")
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

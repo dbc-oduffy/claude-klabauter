@@ -46,8 +46,7 @@ def _first_cut_resolved(root, source):
     assert _resolve(root, ["A2"])["exit_code"] == 0
 
 
-@pytest.mark.parametrize("prior,new", [("g-em", "g-em"), ("g-em", "uhura"), ("uhura", "g-em"), ("g-em", "apm"),
-                                       ("apm", "apm"), ("pm", "pm")])
+@pytest.mark.parametrize("prior,new", [("uhura", "uhura"), ("uhura", "apm"), ("apm", "apm"), ("pm", "pm")])
 def test_widening_accepted_keeps_prior_in_history_and_resolve_accepts(root, prior, new):
     _first_cut_resolved(root, prior)
     prior_record = _block(root)["signoff"]
@@ -65,12 +64,12 @@ def _resolve_widened_ok(root):
 
 
 def test_widening_names_the_block_approver(root):
-    _first_cut_resolved(root, "g-em")
-    _sign(root, "g-em", WIDE)
-    assert _block(root)["approver"] == "G-EM"
+    _first_cut_resolved(root, "uhura")
+    _sign(root, "uhura", WIDE)
+    assert _block(root)["approver"] == "Uhura"
 
 
-@pytest.mark.parametrize("prior,new", [("apm", "g-em"), ("apm", "uhura"), ("pm", "g-em"), ("pm", "apm")])
+@pytest.mark.parametrize("prior,new", [("apm", "uhura"), ("pm", "uhura"), ("pm", "apm")])
 def test_lower_class_resign_refused_bytes_unchanged(root, prior, new):
     _first_cut_resolved(root, prior)
     before = _text(root)
@@ -81,21 +80,21 @@ def test_lower_class_resign_refused_bytes_unchanged(root, prior, new):
 
 
 def test_resign_without_cut_set_or_adding_nothing_refused(root):
-    _first_cut_resolved(root, "g-em")
+    _first_cut_resolved(root, "uhura")
     before = _text(root)
     with pytest.raises(ValueError, match="must widen"):
-        _sign(root, "g-em")
+        _sign(root, "uhura")
     with pytest.raises(ValueError, match="must widen"):
-        _sign(root, "g-em", CUT)
+        _sign(root, "uhura", CUT)
     assert _text(root) == before
 
 
 def test_resign_over_unresolved_prior_cut_refused_naming_resolve(root):
     _with_ruled_out(root)
-    _sign(root, "g-em", CUT)
+    _sign(root, "uhura", CUT)
     before = _text(root)
     with pytest.raises(ValueError, match="resolve"):
-        _sign(root, "g-em", WIDE)
+        _sign(root, "uhura", WIDE)
     assert _text(root) == before
 
 
@@ -103,15 +102,15 @@ def test_rank_refusal_wins_over_unresolved_cut(root):
     _with_ruled_out(root)
     _sign(root, "apm", CUT)
     with pytest.raises(ValueError, match="lower-class"):
-        _sign(root, "g-em", WIDE)
+        _sign(root, "uhura", WIDE)
 
 
 def test_pm_countersign_over_unresolved_delegated_cut_still_written(root):
     _with_ruled_out(root)
-    _sign(root, "g-em", CUT)
+    _sign(root, "uhura", CUT)
     _sign(root, "pm", WIDE)
     block = _block(root)
-    assert block["signoff"]["source"] == "pm" and block["signoff"]["history"][-1]["source"] == "g-em"
+    assert block["signoff"]["source"] == "pm" and block["signoff"]["history"][-1]["source"] == "uhura"
 
 
 def test_pm_widening_keeps_prior_pm_record_with_ruling_ref(root):

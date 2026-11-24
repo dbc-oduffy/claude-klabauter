@@ -378,6 +378,20 @@ def test_headless_session_gets_no_turn_budget_nudge(env, via):
     assert nb.advisory_text(env.params(**extra)) == ""
 
 
+def test_live_gem_session_is_never_nudged_but_other_sessions_are(env, monkeypatch):
+    from coordinator_core.bash_guards import _gem_cross_repo_commit as gcc
+
+    monkeypatch.setattr(gcc, "session_holds_live_gem_standing", lambda sid, root: sid == SID)
+    env.turns(12)
+    assert nb.advisory_text(env.params()) == ""
+    env.phase = ers.RoutePhase(ers.PHASE_LANDED_GREEN, "run-1")
+    env.turns(8)
+    assert nb.advisory_text(env.params()) == ""
+    monkeypatch.setattr(gcc, "session_holds_live_gem_standing", lambda sid, root: False)
+    env.phase = ers.RoutePhase(ers.PHASE_UNFIRED)
+    assert "turns before the first engine-ask" in nb.advisory_text(env.params())
+
+
 @pytest.mark.parametrize("via", ["env", "transcript"])
 def test_interactive_session_still_gets_turn_budget_nudge(env, via):
     extra = {}

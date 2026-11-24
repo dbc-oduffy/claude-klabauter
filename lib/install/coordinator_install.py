@@ -484,6 +484,9 @@ OPTIONAL_EXTRAS: tuple[Extra, ...] = (
     Extra("open_claude_home", "Open ~/.claude in your file manager?",
           "nothing opens; browse to ~/.claude yourself to edit CLAUDE.md.",
           "open", "skip"),
+    Extra("agy_runtime", "Enrol the Antigravity (agy) runtime for coordinator sessions?",
+          "Agy hooks, plugin, status line and MCP registration are left unchanged.",
+          "enrol", "skip", step="agy_runtime"),
 )
 
 
@@ -610,10 +613,9 @@ def build_decisions(permission_mode: str | None = None) -> list[Decision]:
             ("write", "skip"), "skip", "optional",
         ),
         Decision(
-            "agy_runtime",
-            "Use the Antigravity (agy) CLI as a runtime for agent-pipe delivery on this machine?",
-            "Recorded as an answer for the agent to carry; installs nothing. The default follows whether `agy` is on PATH.",
-            ("use", "skip"), "use" if shutil.which("agy") else "skip", "optional",
+            "agy_runtime", extra_prompt("agy_runtime"),
+            "Enrol the installed Antigravity (agy) CLI with owned hooks, strict-valid agy-plugin, status line, and example-retrieval-repo MCP; no binary is downloaded. Requires explicit consent.",
+            ("enrol", "skip"), "skip", "optional",
         ),
         Decision(
             "codex_runtime", extra_prompt("codex_runtime"),
@@ -749,6 +751,33 @@ def step_codex_runtime(ctx: Ctx) -> StepResult:
         return _fail("load", str(exc), retryable=True)
     detail = (proc.stdout + proc.stderr).strip()
     return StepResult(RAN, detail) if proc.returncode == 0 else _fail("load", f"Codex enrollment exited {proc.returncode}: {detail}")
+
+
+def step_agy_runtime(ctx: Ctx) -> StepResult:
+    """Enrol only an explicitly consented Agy runtime after successful base installation."""
+    try:
+        if not agy_runtime_requested(ctx.answers):
+            return StepResult(SKIPPED, "Agy runtime skipped")
+    except ValueError as exc:
+        return _fail("host", str(exc))
+    if ctx.required_engine_failures:
+        return _fail("load", "required prerequisite failed: " + "; ".join(ctx.required_engine_failures) +
+                     "; Agy runtime not enrolled")
+    if ctx.engine_deps_failed or ctx.substrate_failed:
+        return _fail("load", "base/substrate failed; Agy runtime not enrolled")
+    script, why = _engine_setup_script()
+    if script is None:
+        return _fail("artifact", why)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script), "--host", "agy", "--enroll-runtime"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=dict(os.environ, CLAUDE_PLUGIN_ROOT=str(plugin_root())),
+            timeout=60, creationflags=_no_console())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fail("load", str(exc), retryable=True)
+    detail = (proc.stdout + proc.stderr).strip()
+    return StepResult(RAN, detail) if proc.returncode == 0 else _fail("load", f"Agy enrollment exited {proc.returncode}: {detail}")
 
 
 def _read_json(path: Path) -> dict:
@@ -1566,15 +1595,18 @@ STEPS: tuple[Step, ...] = (
     Step("repo_home", step_repo_home, exempt="advisory: shortcuts and Dev Drive note for repo_home", optional=True),
     Step("codex_runtime", step_codex_runtime, exempt="operator choice: Codex runtime enrolment through the strict setup path",
          risky=True, optional=True),
+    Step("agy_runtime", step_agy_runtime, exempt="operator choice: Agy runtime enrolment through the strict setup path",
+         risky=True, optional=True),
     Step("open_claude_home", step_open_claude_home, exempt="presentation only", optional=True),
 )
 
 STEP_DECISION = {"orientation": "orientation", "claude_md_seed": "posture", "claude_home_repo": "track_claude_home", "settings_env": "settings_env", "posture": "posture",
+                 "codex_runtime": "codex_runtime", "agy_runtime": "agy_runtime",
                  "machine_profile": "machine_profile", "guard_level": "guard_level",
                  "forwarder_route": "forwarder_route",
                  "context7": "context7", "notebooklm": "notebooklm", "status_lines": "status_lines",
                  "hooks_marker": "hooks_marker", "coordinator_currency": "coordinator_currency",
-                 "codex_runtime": "codex_runtime", "open_claude_home": "open_claude_home"}
+                 "open_claude_home": "open_claude_home"}
 
 
 # --------------------------------------------------------------------------- drift check
@@ -2017,6 +2049,10 @@ def answers_shape() -> dict:
                 "enrol": "Requires consent.codex_runtime to be literal true. Missing or false consent reports FAILED (exit 1) before setup writes.",
                 "skip": "Omits Codex runtime enrollment. No consent is required.",
             },
+            "agy_runtime": {
+                "enrol": "Requires consent.agy_runtime to be literal true. Missing or false consent refuses the install before setup writes.",
+                "skip": "Omits Agy runtime enrollment. No consent is required.",
+            },
             "other_risky_steps": "Missing or false consent skips the step.",
             "risky_step_ids": risky,
             "example": {sid: True for sid in risky},
@@ -2295,7 +2331,7 @@ def execute(answers: dict, only: set[str] | None = None, permission_mode: str | 
         declined = answers.get(STEP_DECISION.get(step.id, "")) == "skip"
         try:
             probe = _INHERITED_PROBES.get(step.id)
-            if step.risky and not declined and consent.get(step.id) is not True and not (probe and probe()) and step.id != "codex_runtime":
+            if step.risky and not declined and consent.get(step.id) is not True and not (probe and probe()) and step.id not in ("codex_runtime", "agy_runtime"):
                 res = StepResult(SKIPPED, "consent required", f"re-run with consent.{step.id}=true")
             else:
                 res = step.fn(ctx)
@@ -2498,6 +2534,26 @@ def ask_codex_runtime(stdin, stdout) -> dict:
     decision = next(d for d in build_decisions() if d.id == "codex_runtime")
     choice = _ask_decision(decision, stdin, stdout, "skip") or "skip"
     return {"codex_runtime": choice, "consent": {"codex_runtime": choice == "enrol"}}
+
+
+def agy_runtime_requested(answers: dict) -> bool:
+    """Validate the shared enrol/skip decision without prompting or writing."""
+    choice = answers.get("agy_runtime", "skip")
+    if choice not in ("enrol", "skip"):
+        raise ValueError("agy_runtime must be enrol or skip")
+    if choice == "skip":
+        return False
+    consent = answers.get("consent")
+    if not isinstance(consent, dict) or consent.get("agy_runtime") is not True:
+        raise ValueError("consent.agy_runtime must be true")
+    return True
+
+
+def ask_agy_runtime(stdin, stdout) -> dict:
+    """Collect a single Agy runtime decision for the manifest-driven public wrapper."""
+    decision = next(d for d in build_decisions() if d.id == "agy_runtime")
+    choice = _ask_decision(decision, stdin, stdout, "skip") or "skip"
+    return {"agy_runtime": choice, "consent": {"agy_runtime": choice == "enrol"}}
 
 
 def main(argv: list[str] | None = None) -> int:

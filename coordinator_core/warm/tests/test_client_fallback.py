@@ -20,6 +20,7 @@ Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C15
 
 from __future__ import annotations
 
+import errno
 import io
 import json
 import os
@@ -506,6 +507,17 @@ def test_restricted_token_pipe_denial_names_the_cause_and_never_spawns(
     assert reason is not None
     assert "restricted" in reason and "token" in reason
     assert "winerror 5" in reason
+
+
+def test_darwin_unix_socket_eperm_survives_warm_only_dispatch(monkeypatch):
+    def denied(endpoint):
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(client.sys, "platform", "darwin")
+    monkeypatch.setattr(client, "_open_pipe", denied)
+    assert client.try_warm_dispatch_no_spawn(_MSG) is None
+    assert client.last_cold_reason() == "warm Unix socket connect denied (EPERM)"
+    assert not client.spawn_wanted()
 
 
 def test_unrestricted_winerror_5_denial_records_no_reason(monkeypatch: pytest.MonkeyPatch) -> None:

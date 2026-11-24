@@ -184,7 +184,7 @@ def test_a_grouping_this_op_signs_passes_the_grouping_check(root, source) -> Non
     assert _grouping_signoff_error("spun_off", _fm(root)["grouping_approvals"]["spun_off"]) is None
 
 
-@pytest.mark.parametrize("source,approver", [("g-em", "G-EM"), ("uhura", "Uhura")])
+@pytest.mark.parametrize("source,approver", [("uhura", "Uhura")])
 def test_grouping_delegate_role_signoff(root, source, approver) -> None:
     from coordinator_core.frontmatter.schema_validate import _grouping_signoff_error
     from coordinator_core.ops.signoff_digest import _bucket
@@ -213,8 +213,39 @@ def test_grouping_delegate_role_signoff(root, source, approver) -> None:
 
 def test_delegate_role_on_rows_refused(root) -> None:
     with pytest.raises(ValueError, match="grouping only"):
-        mod._handler({"plan_path": "docs/plans/p.md", "target": {"rows": ["A1"]}, "source": "g-em",
+        mod._handler({"plan_path": "docs/plans/p.md", "target": {"rows": ["A1"]}, "source": "uhura",
                       "approver": "x", "ruling": "ok", "ruling_ref": "docs/plans/p.md"}, root)
+
+
+@pytest.mark.parametrize("target", [{"grouping": "spun_off"}, {"rows": ["A1"]}])
+def test_g_em_source_refused_and_writes_nothing(root, target) -> None:
+    before = _text(root)
+    with pytest.raises(ValueError, match="source"):
+        mod._handler({"plan_path": "docs/plans/p.md", "target": target, "source": "g-em",
+                      "approver": "group-em-44", "ruling": "ok", "ruling_ref": "docs/plans/p.md"}, root)
+    assert _text(root) == before
+
+
+def test_historic_g_em_grouping_record_still_reads_and_pm_countersigns(root) -> None:
+    from coordinator_core.frontmatter.schema_validate import _grouping_signoff_error
+
+    hist = {"source": "g-em", "approver": "group-em-44", "ruling": "spin it off",
+            "ruling_ref": "docs/plans/p.md", "on": "2026-10-09"}
+    p = root / "docs/plans/p.md"
+    p.write_text(_text(root).replace(
+        "  spun_off:\n    status: pending\n    approver: null\n",
+        "  spun_off:\n    status: approved\n    approver: G-EM\n    approved_at: 2026-10-09\n"
+        "    pm_utterance: spin it off\n    digest: PLACEHOLDER\n    signoff:\n"
+        + "".join(f"      {k}: {v}\n" for k, v in hist.items()), 1), encoding="utf-8")
+    assert "PLACEHOLDER" in _text(root)
+    from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
+
+    p.write_text(_text(root).replace("PLACEHOLDER", compute_grouping_digest(list(_rows(root).values()), "spun_off")),
+                 encoding="utf-8")
+    assert _grouping_signoff_error("spun_off", _fm(root)["grouping_approvals"]["spun_off"]) is None
+    _call(root, {"grouping": "spun_off"}, pm_quote="countersigned")
+    block = _fm(root)["grouping_approvals"]["spun_off"]
+    assert block["signoff"]["source"] == "pm" and block["signoff"]["history"] == [hist]
 
 
 def test_delegate_role_requires_approver(root) -> None:
@@ -272,11 +303,11 @@ def test_empty_grouping_refused_without_cut_set_and_hint_names_route(root) -> No
 
 def test_cut_set_signoff_then_resolve_accepts_exactly_that_set(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _with_ruled_out(root)
-    res = _call(root, {"grouping": "ruled_out"}, source="g-em", cut_set=CUT, approver="group-em-44",
+    res = _call(root, {"grouping": "ruled_out"}, source="uhura", cut_set=CUT, approver="uhura-44",
                 ruling="close A2", ruling_ref="docs/plans/p.md")
     assert res["applied"] is True
     block = _fm(root)["grouping_approvals"]["ruled_out"]
-    assert block["status"] == "approved" and block["approver"] == "G-EM"
+    assert block["status"] == "approved" and block["approver"] == "Uhura"
     assert "A2" not in [i for i, r in _rows(root).items() if r.get("disposition") == "wont_do"]
     refused = _resolve(root, ["A1", "A2"])
     assert refused["exit_code"] != 0 and "different cut-set" in str(refused), refused

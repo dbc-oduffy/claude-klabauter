@@ -99,6 +99,8 @@ def make_server(thread_id, calls, big=False, fail_resume=False, hang=False):
 
 
 def run_against(tmp_path, coro_factory, **server_kw):
+    if sys.platform == "win32":
+        pytest.skip("asyncio unix-socket streams are unavailable on Windows")
     calls = []
     # tmp_path overflows the ~104-byte AF_UNIX path limit on macOS, so the socket gets a short dir.
     with tempfile.TemporaryDirectory(dir="/tmp", prefix="cx") as d:
@@ -145,6 +147,8 @@ def fake_codex(tmp_path, monkeypatch, exit_code=0, reply="queued-reply", phase="
                prior_turn=None, echo=True):
     """CODEX_HOME in tmp_path with a rollout holding one old reply, and a fake `codex` that logs argv
     and appends a new assistant row to that rollout."""
+    if sys.platform == "win32":
+        pytest.skip("fixture uses a POSIX shell launcher")
     home = tmp_path / "home"
     day = home / "sessions" / "2026" / "11" / "04"
     day.mkdir(parents=True)
@@ -351,6 +355,120 @@ def test_main_wrong_argc_exits_with_usage_and_prints_reply_on_two(monkeypatch, c
     monkeypatch.setattr(pcx, "socket_path", lambda: "/x.sock")
     assert pcx.main(["t1", "hello"]) == 0
     assert capsys.readouterr().out.strip() == "reply:t1:hello"
+
+
+@pytest.mark.parametrize("system,arch,triple,package,exe", [
+    ("darwin", "arm64", "aarch64-apple-darwin", "darwin-arm64", "codex"),
+    ("linux", "x86_64", "x86_64-unknown-linux-musl", "linux-x64", "codex"),
+    ("win32", "AMD64", "x86_64-pc-windows-msvc", "win32-x64", "codex.exe"),
+])
+@pytest.mark.parametrize("layout", ["nested", "hoisted"])
+def test_queue_resolves_package_native_with_stripped_path(
+        tmp_path, monkeypatch, system, arch, triple, package, exe, layout):
+    root = tmp_path / "node_modules" / "@openai" / "codex"
+    wrapper = root / "bin" / "codex.js"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("#!/usr/bin/env node\n")
+    selected = tmp_path / "codex.cmd" if system == "win32" else wrapper
+    if system == "win32":
+        selected.touch()
+    elif os.name != "nt":
+        selected = tmp_path / "codex"
+        selected.symlink_to(wrapper)
+    package_parent = root / "node_modules" / "@openai" if layout == "nested" else root.parent
+    native = package_parent / f"codex-{package}" / "vendor" / triple / "bin" / exe
+    native.parent.mkdir(parents=True)
+    native.write_text("native fixture")
+    native.chmod(0o755)
+    monkeypatch.setattr(pcx.sys, "platform", system)
+    monkeypatch.setattr(pcx.platform, "machine", lambda: arch)
+    monkeypatch.delenv("CODEX_BIN", raising=False)
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(pcx, "recorded_binary", lambda: str(selected))
+    monkeypatch.setattr(pcx, "rollout_path", lambda _: None)
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(pcx.subprocess, "run", run)
+    message = "space ; $(echo unsafe) & 'quoted'"
+    assert asyncio.run(pcx.queue_turn("thread", message)) == pcx.NO_REPLY
+    assert calls == [[str(native), "--remote", "unix://", "queue", "--thread", "thread", "--message", message]]
+    native.unlink()
+    with pytest.raises(RuntimeError, match="CODEX_BIN"):
+        pcx.codex_binary()
+    native.write_text("native fixture")
+    native.chmod(0o755)
+    other = root / "vendor" / triple / "bin" / exe
+    other.parent.mkdir(parents=True)
+    other.write_text("ambiguous")
+    with pytest.raises(RuntimeError, match="CODEX_BIN"):
+        pcx.codex_binary()
+    monkeypatch.setenv("CODEX_BIN", str(native))
+    assert pcx.codex_binary() == str(native)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable fixture")
+def test_queue_executes_packaged_native_without_node(tmp_path, monkeypatch):
+    root = tmp_path / "node_modules" / "@openai" / "codex"
+    wrapper = root / "bin" / "codex.js"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("#!/usr/bin/env node\n")
+    launcher = tmp_path / "codex"
+    launcher.symlink_to(wrapper)
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.delenv("CODEX_BIN", raising=False)
+    monkeypatch.setattr(pcx, "recorded_binary", lambda: str(launcher))
+    monkeypatch.setattr(pcx, "rollout_path", lambda _: None)
+    arch = "aarch64" if pcx.platform.machine() == "arm64" else "x86_64"
+    triple = f"{arch}-apple-darwin" if sys.platform == "darwin" else f"{arch}-unknown-linux-musl"
+    native = root / "vendor" / triple / "bin" / "codex"
+    native.parent.mkdir(parents=True)
+    log = tmp_path / "args.json"
+    native.write_text(f"#!{sys.executable}\nimport json,sys\nopen({str(log)!r}, 'w').write(json.dumps(sys.argv[1:]))\n")
+    native.chmod(0o755)
+    message = "hello ; $(nope) & spaces"
+    assert asyncio.run(pcx.queue_turn("thread", message)) == pcx.NO_REPLY
+    assert json.loads(log.read_text()) == ["--remote", "unix://", "queue", "--thread", "thread", "--message", message]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX execute permission")
+def test_queue_rejects_nonexecutable_packaged_native(tmp_path, monkeypatch):
+    root = tmp_path / "node_modules" / "@openai" / "codex"
+    wrapper = root / "bin" / "codex.js"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("#!/usr/bin/env node\n")
+    native = root / "vendor" / "aarch64-apple-darwin" / "bin" / "codex"
+    native.parent.mkdir(parents=True)
+    native.write_text("not executable")
+    native.chmod(0o644)
+    monkeypatch.setattr(pcx.sys, "platform", "darwin")
+    monkeypatch.setattr(pcx.platform, "machine", lambda: "arm64")
+    monkeypatch.setenv("CODEX_BIN", str(wrapper))
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(pcx, "rollout_path", lambda _: None)
+    with pytest.raises(RuntimeError, match="not executable.*repair.*CODEX_BIN"):
+        asyncio.run(pcx.queue_turn("thread", "message"))
+
+
+@pytest.mark.parametrize("configured,on_path,recorded,expected", [
+    ("explicit native", "explicit native", "recorded native", "explicit native"),
+    ("explicit native", None, "recorded native", "explicit native"),
+    (None, "path native", "recorded native", "path native"),
+    (None, None, "recorded native", "recorded native"),
+    (None, None, None, "codex"),
+])
+def test_codex_binary_preserves_selection_precedence(
+        monkeypatch, configured, on_path, recorded, expected):
+    if configured:
+        monkeypatch.setenv("CODEX_BIN", configured)
+    else:
+        monkeypatch.delenv("CODEX_BIN", raising=False)
+    monkeypatch.setattr(pcx.shutil, "which", lambda _: on_path)
+    monkeypatch.setattr(pcx, "recorded_binary", lambda: recorded)
+    assert pcx.codex_binary() == expected
 
 
 class FakeDaemon:

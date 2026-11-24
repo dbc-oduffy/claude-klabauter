@@ -750,6 +750,50 @@ def test_sessionstart_without_worker_marker_adds_no_pointer(home, monkeypatch, c
     assert [s["systemMessage"]["systemMessage"] for s in steps] == [sess.NOTE]
 
 
+def test_sessionstart_injects_repo_claude_md_from_root_and_subdir(home, tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    sub = repo / "a" / "b"
+    (repo / ".git").mkdir(parents=True)
+    sub.mkdir(parents=True)
+    (repo / "CLAUDE.md").write_text("# Root Standing\nBe concise.\n", encoding="utf-8")
+    (sub / "CLAUDE.md").write_text("# Subdir Standing\nLocal rule.\n", encoding="utf-8")
+    monkeypatch.delenv(_worker_env(), raising=False)
+    monkeypatch.setattr(sess, "register", lambda *a: True)
+    monkeypatch.setattr(sess.json, "load", lambda f: {"cwd": str(sub)})
+    assert sess.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    steps = out["injectSteps"]
+    assert len(steps) == 2
+    assert steps[0]["systemMessage"]["systemMessage"] == sess.NOTE
+    msg = steps[1]["systemMessage"]["systemMessage"]
+    assert "metadata" not in steps[1]["systemMessage"]
+    assert f"[Project standing conventions: {(repo / 'CLAUDE.md').resolve()}]" in msg
+    assert f"[Project standing conventions: {(sub / 'CLAUDE.md').resolve()}]" in msg
+    assert msg.index("Be concise.") < msg.index("Local rule.")
+
+
+def test_sessionstart_missing_claude_md_injects_nothing_extra(home, tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "empty_repo"
+    (repo / ".git").mkdir(parents=True)
+    monkeypatch.delenv(_worker_env(), raising=False)
+    monkeypatch.setattr(sess, "register", lambda *a: True)
+    monkeypatch.setattr(sess.json, "load", lambda f: {"cwd": str(repo)})
+    assert sess.main() == 0
+    steps = json.loads(capsys.readouterr().out)["injectSteps"]
+    assert [s["systemMessage"]["systemMessage"] for s in steps] == [sess.NOTE]
+
+
+def test_sessionstart_oversize_claude_md_truncates_on_line_boundary(tmp_path):
+    repo = tmp_path / "big_repo"
+    (repo / ".git").mkdir(parents=True)
+    lines = [f"line-{i:03d}: " + ("x" * 80) for i in range(50)]
+    (repo / "CLAUDE.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    capped = sess._repo_claude_md(str(repo), max_bytes=600)
+    assert capped is not None
+    assert len(capped.encode("utf-8")) <= 600
+    assert capped.endswith("x" * 80)
+
+
 def test_sessionstart_script_hardcodes_no_home_path():
     text = (BIN / "unimatrix-agy-hook-sessionstart.py").read_text()
     assert "/Users/" not in text

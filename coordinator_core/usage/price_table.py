@@ -70,6 +70,17 @@ RATE_PROVENANCE["gpt-6.2-sol"].update(
     source="https://developers.openai.com/api/docs/pricing", verified_at="2026-11-19",
 )
 
+PRICES["gpt-6.2-astra"] = {
+    "input": 8.0, "output": 40.0, "cache_read_mult": 0.05,
+    "tier_prompt_tokens": 272_000, "tier_input": 16.0, "tier_output": 60.0,
+    "fast_multiplier": 2.0, "ultrafast_multiplier": 3.0,
+}
+RATE_PROVENANCE["gpt-6.2-astra"] = {
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "verified_at": "2026-11-20", "basis": "API-equivalent estimate; current Ultrafast rate; not an invoice",
+    "effective_from": None,
+}
+
 # Gemini 3.8 Flash standard paid tier through 2026-12-31; Google schedules $1.50/$7.50 (cache read
 # $0.15) from 2027-01-01. Re-check the pricing page then. Cache writes carry no surcharge.
 PRICES["gemini-3.8-flash"] = {"input": 0.75, "output": 3.75, "cache_read_mult": 0.1, "cache_write_mult": 1.0}
@@ -79,7 +90,26 @@ RATE_PROVENANCE["gemini-3.8-flash"] = {
     "effective_from": None,  # The page states the rate for a window ending 2026-12-31, not its start.
 }
 
-_GEMINI_EFFORT = r"-(?:minimal|low|medium|high)"
+# Gemini 4 family verified 2026-11-23: Carbon $4/$20 standard ($2/$10 intro thru 2026-11-30, 95% cache read
+# discount), Neon $3/$15 standard (95% cache read discount), Hydrogen $1.50/$7.50 flat across 1M context.
+for _gmodel, _ginput, _goutput, _gcache_mult, _gbasis in (
+    ("gemini-4-carbon", 4.0, 20.0, 0.05,
+     "API list prices, Standard paid tier ($4/$20; $2/$10 intro thru 2026-11-30), per 1M tokens; 95% cache read discount; output includes thinking"),
+    ("gemini-4-neon", 3.0, 15.0, 0.05,
+     "API list prices, Standard paid tier, per 1M tokens; 95% cache read discount; output includes thinking"),
+    ("gemini-4-hydrogen", 1.5, 7.5, 0.1,
+     "API list prices, Standard paid tier flat across 1M context, per 1M tokens; output includes thinking"),
+):
+    PRICES[_gmodel] = {
+        "input": _ginput, "output": _goutput,
+        "cache_read_mult": _gcache_mult, "cache_write_mult": 1.0,
+    }
+    RATE_PROVENANCE[_gmodel] = {
+        "source": f"https://ai.google.dev/gemini-api/docs/pricing#{_gmodel}",
+        "verified_at": "2026-11-23", "basis": _gbasis, "effective_from": None,
+    }
+
+_GEMINI_EFFORT = r"-(?:minimal|low|medium|high|xhigh|max)"
 
 
 def model_family(model: str | None) -> str | None:

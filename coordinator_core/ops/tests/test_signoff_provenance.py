@@ -44,24 +44,38 @@ def test_countersign_refuses_pm_prior():
 
 
 def _gem(on="2026-10-09"):
-    return sp.build_signoff("g-em", "ruled", "ref/x.md", on, approver="group-em-44")
+    return sp.build_signoff("uhura", "ruled", "ref/x.md", on, approver="uhura-44")
+
+
+def test_g_em_is_never_a_writable_source():
+    with pytest.raises(ValueError, match="historic-read only"):
+        sp.build_signoff("g-em", "ruled", "ref/x.md", "2026-10-09", approver="group-em-44")
+    assert "g-em" not in sp.WRITABLE_SOURCES and "g-em" in sp.DELEGATED_SOURCES
+
+
+def test_historic_g_em_record_still_reads_and_may_be_replaced():
+    rec = {"source": "g-em", "approver": "group-em-44", "ruling": "ruled", "ruling_ref": "ref/x.md",
+           "on": "2026-10-09"}
+    sig = sp.read_grouping({"status": "approved", "signoff": rec})
+    assert sig.source == "g-em" and sig.words == "ruled" and not sig.unrecorded
+    assert sp.may_resign("g-em", "uhura") and sp.may_resign("g-em", "apm") and not sp.may_resign("g-em", "g-em")
+    assert sp.countersign(rec, "pm says", "2026-10-10")["history"] == [rec]
 
 
 def test_rank_table_and_may_resign():
-    assert sp.SOURCE_RANK == {"pm": 3, "apm": 2, "g-em": 1, "uhura": 1}
+    assert sp.SOURCE_RANK == {"pm": 3, "apm": 2, "uhura": 1}
     known = list(sp.SOURCE_RANK)
     for p in known:
         for n in known:
             assert sp.may_resign(p, n) == (sp.SOURCE_RANK[n] >= sp.SOURCE_RANK[p])
-    assert sp.may_resign("g-em", "uhura") and sp.may_resign("uhura", "g-em")
-    assert not sp.may_resign("apm", "g-em") and not sp.may_resign("pm", "apm")
+    assert not sp.may_resign("apm", "uhura") and not sp.may_resign("pm", "apm")
     assert not sp.may_resign("ceo", "pm") and not sp.may_resign("pm", "ceo")
     assert not sp.may_resign(None, "pm")
 
 
 def test_supersede_flattens_history_and_leaves_prior_unmutated():
     first = _gem()
-    second = sp.supersede(first, sp.build_signoff("g-em", "wider", "ref/y.md", "2026-10-10", approver="group-em-44"))
+    second = sp.supersede(first, sp.build_signoff("uhura", "wider", "ref/y.md", "2026-10-10", approver="uhura-44"))
     assert second["history"] == [first]
     third_prior = dict(second)
     snapshot = {**second, "history": list(second["history"])}

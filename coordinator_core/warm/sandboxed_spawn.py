@@ -7,6 +7,7 @@ probe; `forward_spawn_to_warm` is the one-shot warm dispatch, with no server spa
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any
 
@@ -76,7 +77,21 @@ def _process_token_is_restricted() -> bool:
 
 
 def caller_is_sandboxed() -> bool:
-    """True when this process holds a restricted token."""
+    """Detect a restricted Windows token or a Codex command running under macOS Seatbelt."""
+    if sys.platform == "darwin" and os.environ.get("CODEX_SANDBOX") == "seatbelt":
+        import ctypes
+
+        try:
+            check = ctypes.CDLL("/usr/lib/libsandbox.1.dylib").sandbox_check
+            check.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int)
+            check.restype = ctypes.c_int
+            # A null operation asks whether this PID is sandboxed, without testing a particular right.
+            result = check(os.getpid(), None, 0)
+        except (AttributeError, OSError) as exc:
+            raise SandboxedSpawnRefused("could not determine Codex Seatbelt status") from exc
+        if result < 0:
+            raise SandboxedSpawnRefused("could not determine Codex Seatbelt status")
+        return bool(result)
     return _process_token_is_restricted()
 
 
@@ -100,9 +115,11 @@ def forward_spawn_to_warm(op: str, params: dict, repo: str) -> dict:
     )
     missed = client.spawn_wanted()
     if reply is None:
+        reason = _cold_reason(bool(missed))
+        advice = "; publish/restart the warm engine" if reason == "no_server" else ""
         raise SandboxedSpawnRefused(
             "child would spawn inside the codex sandbox without network; "
-            f"warm engine unreachable: {_cold_reason(bool(missed))}; publish/restart the warm engine"
+            f"warm engine unreachable: {reason}{advice}"
         )
     error = reply.get("error")
     if isinstance(error, dict):

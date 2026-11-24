@@ -280,9 +280,9 @@ REASON_RATE_LIMITED = "rate-limited"
 #: these omissions degrades into "the agent knows less"; both degrade into "the
 #: agent does the wrong thing, confidently". Without out-of-work detection those
 #: peers arrive as ESCALATE and the watcher nudges a session that has genuinely
-#: run out, which no nudge fixes and only the Group-EM can answer. Without the
+#: run out, which no nudge fixes and only the Group-EM can route. Without the
 #: Group-EM's offer log, suppression vanishes and the watcher re-nudges peers the
-#: Group-EM answered an hour ago -- the exact thing the two-session-id split
+#: Group-EM routed an hour ago -- the exact thing the two-session-id split
 #: exists to prevent. So the affected peers become `UNKNOWN` instead, which
 #: routes to REPORT IT: the correct action under partial information, and
 #: omission stays impossible.

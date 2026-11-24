@@ -138,8 +138,8 @@ def _agy_launch_args(extra, cwd, environ=None) -> list[str]:
     """`extra` led by one `--add-dir` per workspace root and `--mode accept-edits`.
 
     agy's workspace is its add-dirs, not `--cwd`, and a `read_file` outside it is auto-denied headless.
-    Roots: the launch cwd, `~/.coordinator`, and `agy_grant_guard.grant_dirs` (the generated plugin skills,
-    the only outside subtree a stage was measured reading). Never the settings home or engine root whole.
+    Roots: the launch cwd, `~/.coordinator`, `<machine lock root>`, and `agy_grant_guard.grant_dirs`
+    (the generated plugin skills). Never the settings home or engine root whole.
     `--dangerously-skip-permissions` is dropped; a caller's own `--mode` and any dir it already granted are
     kept, never doubled.
 
@@ -147,16 +147,22 @@ def _agy_launch_args(extra, cwd, environ=None) -> list[str]:
     the stage (`agy_grant_tamper`). When agy ships read-only grants, switch to them and drop the hash guard.
     """
     from coordinator_core import agy_grant_guard
+    from coordinator_core.locked_write import _machine_lock_dir
 
     rest = [a for a in extra if a != "--dangerously-skip-permissions"]
     head = []
     granted = {rest[i + 1] for i, a in enumerate(rest[:-1]) if a == "--add-dir"}
-    roots = [cwd or os.getcwd(), str(Path.home() / ".coordinator"),
-             *map(str, agy_grant_guard.grant_dirs(environ))]
+    roots = [
+        cwd or os.getcwd(),
+        str(Path.home() / ".coordinator"),
+        str(_machine_lock_dir().parent),
+        *map(str, agy_grant_guard.grant_dirs(environ)),
+    ]
     for d in roots:
         if d not in granted:
             granted.add(d)
             head += ["--add-dir", d]
+            granted.add(d)
     if not any(a == "--mode" or a.startswith("--mode=") for a in rest):
         head += ["--mode", "accept-edits"]
     return [*head, *rest]
@@ -418,6 +424,15 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
     else:
         cmd = [cli, *extra]
     child = {SESSION_ENV: sid, HEADLESS_EM_TOKEN_ENV: token, PROVIDER_ENV: family}
+    if family == "codex":
+        # A restricted child can read the physical engine but lack traversal of its launcher-side alias.
+        for key in ("COORDINATOR_ENGINE_ROOT", "COORDINATOR_DOOR_ENGINE_ROOT"):
+            root = environ.get(key)
+            if root and os.path.isabs(root):
+                try:
+                    child[key] = os.path.realpath(root, strict=True)
+                except OSError:
+                    pass  # Preserve the configured override for normal discovery diagnostics.
     if family == "codex" and platform == "win32":
         from coordinator_core.codex_runner.codex_spawn_env import place_installed_pwsh
         path_key = next((k for k in environ if k.upper() == "PATH"), None)

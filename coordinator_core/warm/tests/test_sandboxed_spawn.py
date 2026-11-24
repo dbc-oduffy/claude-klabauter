@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.warm import client, sandboxed_spawn as ss
@@ -63,11 +70,14 @@ def test_dispatching_door_spawns_on_the_same_miss(monkeypatch, _isolate):
     assert _isolate == [1]
 
 
-def test_miss_prefers_permanent_cold_reason(monkeypatch):
-    monkeypatch.setattr(client, "_cold_reason", "pipe open denied (winerror 5)")
+@pytest.mark.parametrize("reason", ["pipe open denied (winerror 5)", "warm Unix socket connect denied (EPERM)"])
+def test_miss_prefers_permanent_cold_reason(monkeypatch, reason):
+    monkeypatch.setattr(client, "_cold_reason", reason)
     _dispatch(monkeypatch, None)
-    with pytest.raises(ss.SandboxedSpawnRefused, match="winerror 5"):
+    with pytest.raises(ss.SandboxedSpawnRefused) as exc:
         ss.forward_spawn_to_warm("workflow.fire", {}, "r")
+    assert reason in str(exc.value)
+    assert "restart" not in str(exc.value)
 
 
 def test_miss_with_warm_disabled_says_so(monkeypatch):
@@ -108,3 +118,22 @@ def test_probe_is_a_bool_and_false_off_windows(monkeypatch):
     assert isinstance(ss._process_token_is_restricted(), bool)
     monkeypatch.setattr(ss.sys, "platform", "linux")
     assert ss._process_token_is_restricted() is False
+
+@pytest.mark.spawns_process
+@pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("sandbox-exec"), reason="Darwin Seatbelt")
+def test_native_seatbelt_marker_requires_a_sandboxed_process(tmp_path):
+    marker = tmp_path / "seatbelt-control"
+    marker.write_text("readable outside the test sandbox", encoding="utf-8")
+    probe = [sys.executable, "-c",
+             "from coordinator_core.warm.sandboxed_spawn import caller_is_sandboxed;"
+             "print(caller_is_sandboxed())"]
+    env = dict(os.environ, CODEX_SANDBOX="seatbelt")
+    root = Path(ss.__file__).resolve().parents[2]
+    stock = subprocess.check_output(probe, cwd=root, env=env, text=True)
+    if stock.strip() == "True":
+        pytest.skip("parent already runs under Seatbelt")
+
+    profile = "(version 1)(allow default)(deny file-read* (literal " + json.dumps(str(marker)) + "))"
+    sandboxed = subprocess.check_output(["sandbox-exec", "-p", profile, *probe], cwd=root, env=env, text=True)
+    assert stock.strip() == "False"
+    assert sandboxed.strip() == "True"

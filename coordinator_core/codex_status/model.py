@@ -25,11 +25,13 @@ def configure(row, model, effort, speed, observed_at):
     if model and model != row.get("model"):
         row.pop("window", None)
         row.pop("used", None)
+        row.pop("auto_compact_limit", None)
+        row.pop("raw_context_window", None)
     row.update(model=model, effort=effort, speed=speed, configuration_at=stamp)
 
 
 def empty(root: str) -> dict:
-    return {"version": 2, "root": root, "threads": {}, "seen": {}, "files": {},
+    return {"version": 3, "root": root, "threads": {}, "seen": {}, "files": {},
             "coverage": {"subagents": False, "workflows": False}, "warnings": []}
 
 
@@ -141,11 +143,33 @@ def observe_usage(state: dict, sid: str, turn_id: str | None, usage: dict, obser
 def ingest(state: dict, event: dict, source: dict) -> None:
     kind, payload = event.get("type"), event.get("payload") or {}
     method, params = event.get("method"), event.get("params") or {}
+    if kind == "coordinator_execution":
+        parent, request = payload.get("parent_session_id"), payload.get("request_id")
+        if not isinstance(parent, str) or not isinstance(request, str):
+            warn(state, "workflow execution lacks parent/request identity")
+            return
+        key = json.dumps([parent, request])
+        execution = state.setdefault("executions", {}).setdefault(key, {
+            "parent": parent, "request_id": request})
+        if payload.get("phase") == "started":
+            execution["started"] = True
+        elif payload.get("phase") == "completed":
+            ids = payload.get("usage_request_ids", [])
+            if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
+                warn(state, "workflow terminal receipt has invalid usage identities")
+                return
+            execution.update(terminal=True, session_id=payload.get("session_id"),
+                             usage_status=payload.get("usage_status"),
+                             usage_request_ids=ids)
+        return
     if kind == "coordinator_usage":
         sid, request = payload.get("session_id"), payload.get("request_id")
         if not isinstance(sid, str) or not isinstance(request, str) or payload.get("usage_format") != "coordinator-canonical-v1":
             warn(state, "workflow usage lacks actual identity or canonical counter format")
             return
+        sources = source.setdefault("usage_thread_ids", [])
+        if sid not in sources:
+            sources.append(sid)
         row = thread(state, sid)
         attach_parent(state, row, payload.get("parent_session_id"))
         configure(row, payload.get("model"), payload.get("effort"), payload.get("service_tier"), event.get("timestamp"))
@@ -155,6 +179,7 @@ def ingest(state: dict, event: dict, source: dict) -> None:
             key = hashlib.sha256(json.dumps([native_turn, counts(native_total)], sort_keys=True).encode()).hexdigest()
         else:
             key = hashlib.sha256(json.dumps([sid, request, payload.get("provider")]).encode()).hexdigest()
+        state.setdefault("usage_requests", {})[json.dumps([sid, request])] = key
         if key in state["seen"]:
             return
         usage = payload.get("usage")
@@ -209,6 +234,7 @@ def ingest(state: dict, event: dict, source: dict) -> None:
             parent = (payload["source"].get("subagent", {}).get("thread_spawn", {}).get("parent_thread_id"))
         attach_parent(state, owner, parent or source.get("parent_override"))
         owner["cwd"] = payload.get("cwd")
+        owner["cli_version"] = payload.get("cli_version")
         return
     if method == "thread/started":
         metadata = params.get("thread", {})
@@ -240,6 +266,17 @@ def ingest(state: dict, event: dict, source: dict) -> None:
         model = payload.get("model")
         source.update(model=model, effort=payload.get("effort"), speed=payload.get("service_tier"))
         configure(owner, model, payload.get("effort"), payload.get("service_tier"), event.get("timestamp"))
+        if owner.get("configuration_at") == epoch(event.get("timestamp")):
+            owner.pop("auto_compact_limit", None)
+            owner.pop("raw_context_window", None)
+            raw = payload.get("model_context_window")
+            if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+                owner["raw_context_window"] = raw
+            limit = payload.get("model_auto_compact_token_limit")
+            if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+                owner["auto_compact_limit"] = limit
+            if isinstance(payload.get("profile"), str):
+                owner["profile"] = payload["profile"]
         source["turn_id"] = payload.get("turn_id")
     elif kind == "event_msg" and payload.get("type") == "token_count" and isinstance(payload.get("info"), dict):
         observe_usage(state, sid, source.get("turn_id"), payload["info"], event.get("timestamp"), source.get("model"), source.get("speed"))
@@ -283,13 +320,41 @@ def summary(state: dict, alias: str | None = None) -> dict:
     remaining = None
     if root.get("window") and root.get("used") is not None:
         remaining = max(0, min(100, 100 * (1 - root["used"] / root["window"])))
+    executions = [e for e in state.get("executions", {}).values() if e["parent"] in included]
+    requests = state.get("usage_requests", {})
+    missing_terminal = [e["request_id"] for e in executions if not e.get("terminal")]
+    missing_usage = [e["request_id"] for e in executions if not (
+        e.get("started") and e.get("terminal") and e.get("usage_status") in {"appended", "duplicate"}
+        and e.get("session_id") in included and e.get("usage_request_ids")
+        and all(requests.get(json.dumps([e["session_id"], request])) in state["seen"]
+                for request in e["usage_request_ids"]))]
+    covered = {json.dumps([e.get("session_id"), request]) for e in executions
+               for request in e.get("usage_request_ids", [])}
+    untracked = [key for key in requests if json.loads(key)[0] in included and key not in covered]
+    coverage = dict(state["coverage"])
+    registered = state.get("registered_inventory", {})
+    expected = registered.get("expected", {})
+    workflow_sessions = {e.get("session_id") for e in executions
+                         if e["request_id"] not in missing_usage}
+    if registered:
+        coverage["subagents"] = bool(registered.get("complete") and state.get("backlog_complete")
+            and included <= set(expected) | workflow_sessions
+            and all(sid in included and thread(state, sid).get("observations")
+                    and (sid == state["root"] or record.get("ended"))
+                    and record.get("transcript_path") in state["files"]
+                    for sid, record in expected.items()))
+    if executions:
+        coverage["workflows"] = bool(not missing_usage and not untracked and state.get("backlog_complete"))
     return {"session_id": state["root"], "alias": alias, "model": root.get("model"),
             "effort": root.get("effort"), "remaining_percent": remaining,
             "context_window": root.get("window"), "captured_at": root.get("usage_at"),
             "context_basis": "observed model context window; not an independently observed compaction threshold",
             "usd": sum(max(r["native_usd"] + r["joined_canonical_usd"], r["canonical_usd"]) for r in rows), "priced_events": sum(r.get("priced_events", 0) for r in rows),
             "unpriced_events": sum(r["unpriced_events"] for r in rows), "threads": len(rows),
-            "coverage": state["coverage"], "warnings": warnings,
+            "coverage": coverage, "warnings": warnings,
+            "execution_inventory": {"expected": len(executions), "missing_terminal": missing_terminal,
+                                    "missing_usage": missing_usage, "untracked_usage": untracked},
+            "registered_inventory": registered,
             "backlog_complete": state.get("backlog_complete", False),
             "rate_provenance": {m: RATE_PROVENANCE.get(model_family(m), {"basis": "legacy engine price table" if model_family(m) else "unpriced; no known model rate"})
                                 for m in {model for r in rows for model in [r.get("model"), *r.get("observed_models", [])]} if m}}

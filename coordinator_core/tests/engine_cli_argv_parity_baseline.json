@@ -635,14 +635,6 @@
       "undeclared_required": []
     },
     {
-      "module": "coordinator_core/workstream_complete/directives_completion.py",
-      "directive_id": "d-plan-reversibility-eligibility",
-      "cli": "plan-reversibility-eligibility",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
       "module": "coordinator_core/workstream_complete/directives_lessons_plan.py",
       "directive_id": "",
       "cli": "coordinator-lesson-add",

@@ -16,11 +16,11 @@ BYTE_BUDGET = 4 * 1024 * 1024
 def load(path: Path, root: str) -> dict:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
-        if (state.get("version") == 2 and state.get("root") == root
+        if (state.get("version") == 3 and state.get("root") == root
                 and all(isinstance(state.get(k), dict) for k in ("threads", "seen", "files", "coverage"))
                 and isinstance(state.get("warnings"), list)):
             return state
-        if state.get("version") == 1 and state.get("root") == root and isinstance(state.get("files"), dict):
+        if state.get("version") in (1, 2) and state.get("root") == root and isinstance(state.get("files"), dict):
             migrated = empty(root)
             migrated["files"] = {p: {"offset": 0, "parent_override": row.get("parent_override")}
                                  for p, row in state["files"].items() if isinstance(row, dict)}
@@ -76,7 +76,8 @@ def rewind_for_repricing(state: dict) -> None:
     if not sids:
         return
     for source in state["files"].values():
-        if source.get("thread_id") in sids and source.get("offset") and not source.get("repricing"):
+        owned = {source["thread_id"]} if source.get("thread_id") else set(source.get("usage_thread_ids", sids))
+        if owned & sids and source.get("offset") and not source.get("repricing"):
             source.update(offset=0, repricing=True)
             source.pop("skip_line", None)
 
@@ -221,13 +222,23 @@ def registered_paths(directory: Path, root: str, state: dict | None = None) -> t
     rows = []
     budget = BYTE_BUDGET
     complete = True
+    bindings = {}
     try:
         for index, file in enumerate(directory.glob("*.json")):
             if index >= 512:
                 complete = False
                 break
             try:
-                row = json.loads(file.read_text(encoding="utf-8"))
+                with file.open('rb') as handle:
+                    raw_record = handle.read(min(budget, 64 * 1024) + 1)
+                budget -= len(raw_record)
+                if len(raw_record) > 64 * 1024 or budget < 0:
+                    complete = False
+                    break
+                row = json.loads(raw_record)
+                if row.get("schema_version") == 1 and row.get("provider") == "codex":
+                    sid = str(uuid.UUID(row.get("session_id")))
+                    bindings[sid] = row
                 raw = row.get("transcript_path")
                 if row.get("schema_version") == 1 and row.get("provider") == "codex" and isinstance(raw, str) and Path(raw).is_absolute():
                     if budget <= 0:
@@ -249,17 +260,25 @@ def registered_paths(directory: Path, root: str, state: dict | None = None) -> t
                     if parent is None and isinstance(metadata.get("source"), dict):
                         parent = metadata["source"].get("subagent", {}).get("thread_spawn", {}).get("parent_thread_id")
                     rows.append((path, metadata["id"], parent))
-            except (OSError, ValueError, AttributeError):
+            except (OSError, ValueError, AttributeError, TypeError):
                 complete = False
     except OSError:
         return [], False
     selected = {root}
     while True:
         added = {sid for _, sid, parent in rows if parent in selected}
+        added |= {sid for sid, row in bindings.items() if row.get("parent_session_id") in selected}
         if added <= selected:
             break
         selected |= added
     if state is not None:
+        state["registered_inventory"] = {"complete": complete and root in bindings,
+            "expected": {sid: {"ended": isinstance(row.get("ended_at"), (int, float))
+                and not isinstance(row.get("ended_at"), bool),
+                "transcript_path": row.get("transcript_path")} for sid, row in bindings.items() if sid in selected}}
+        for sid, row in bindings.items():
+            if sid in selected and row.get("parent_session_id"):
+                attach_parent(state, thread(state, sid), row["parent_session_id"])
         for path, sid, parent in rows:
             if sid in selected:
                 source = state["files"].setdefault(str(path.resolve()), {"offset": 0})

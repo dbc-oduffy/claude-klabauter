@@ -436,16 +436,9 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "review-brightline-gate",
     "freeze-review-diff",
     "classify-dispatch-shape",
-    # Plugin-local barewords (docs/plans/2026-09-07-directive-resolution-
-    # reaches-a-plugin-local-cli.md, T1b): added here only. No payload, no
-    # gate, no `next_move` builder yet -- those land in T3, in this same
-    # file. Known intermediate red until T4/T5 land (see this constant's
-    # own docstring above): `test_every_manifest_entry_is_named_by_at_least_
-    # one_directive` refuses these two rows until then. Do not "fix" that by
-    # deleting either row or widening `_DISPATCHED_WORKER_ONLY_MANIFEST_
-    # MEMBERS`.
+    # Plugin-local bareword (docs/plans/2026-09-07-directive-resolution-
+    # reaches-a-plugin-local-cli.md, T1b).
     "baton-chain-closure",
-    "plan-reversibility-eligibility",
     # Stranded-run superseding review (docs/plans/2026-10-01-completion-
     # receipts.md, C10): the record writer prints its path on line one for
     # the `{d-record-superseding-review.entry_path}` token; `review-stamp`
@@ -1432,7 +1425,7 @@ def _lesson_capture_route_payload() -> dict[str, Any]:
     }
 
 
-#: The two plugin-local barewords T1b added to `CONSUMES_MANIFEST` and T2
+#: The plugin-local bareword T1b added to `CONSUMES_MANIFEST` and T2
 #: hand-typed into `workstream_complete.apply._PLUGIN_LOCAL_CLIS` (docs/
 #: plans/2026-09-07-directive-resolution-reaches-a-plugin-local-cli.md,
 #: T3) -- keyed here to their own per-step hand-run command line for
@@ -1446,17 +1439,13 @@ def _lesson_capture_route_payload() -> dict[str, Any]:
 #: in DoE's tree, not the ceremony's.
 _PLUGIN_LOCAL_CLI_HAND_RUN: dict[str, str] = {
     "baton-chain-closure": "baton-chain-closure.py --repo <repo_root> signal <handoff-path>",
-    "plan-reversibility-eligibility": (
-        "plan-reversibility-eligibility.py <governing-plan-path> --json --repo-root <repo_root>"
-    ),
 }
 
 
 def _plugin_cli_reachable() -> bool:
     """Whether the second, DoE-anchored `coordinator/bin` root resolves --
-    the single verdict both plugin-local barewords share (a root either
-    has `coordinator/bin` or it does not; there is no per-script partial
-    case, AC6). Deferred import: `cli_dispatch` does not import this
+    the single verdict the plugin-local bareword shares (a root either
+    has `coordinator/bin` or it does not, AC6). Deferred import: `cli_dispatch` does not import this
     module, so no cycle, but the import stays local here to mirror
     `_plugin_cli_resolution_payload`'s own deferred imports rather than
     adding a third module-scope import for a two-line function."""
@@ -1839,7 +1828,7 @@ def build_directives(
         decisions=effective_decisions,
     )
     # T3 (docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
-    # cli.md): emission gating for the two plugin-local barewords lives
+    # cli.md): emission gating for the plugin-local bareword lives
     # HERE, not in `directives_completion.py` -- on an unresolvable second
     # root, no plugin-local directive reaches `directives[]` (AC6), by
     # filtering this builder's own return rather than threading a

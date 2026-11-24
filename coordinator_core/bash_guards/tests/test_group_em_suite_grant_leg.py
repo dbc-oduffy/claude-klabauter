@@ -54,7 +54,7 @@ def test_expired_group_em_grant_is_denied_with_both_remedy_lines(repo, monkeypat
     reason = _reason(_enveloped(guard.check)(_payload(_FULL, repo)))
     assert "with-suite-mutex -- python -m pytest" in reason
     assert "without an authorization grant" in reason
-    assert 'tier-u-grant-cli group-em-grant <session> "<ruling>"' in reason
+    assert 'tier-u-grant-cli group-em-grant <session> "<reason>"' in reason
     assert "tier-u-grant-cli grant pm" not in reason
 
 
@@ -64,7 +64,7 @@ def test_no_live_local_holder_names_the_cross_box_form(repo, monkeypatch: pytest
     for holder in (None, {"live": False}):
         monkeypatch.setattr(nomination, "box_holder", lambda *a, _h=holder, **k: _h)
         reason = _reason(_enveloped(guard.check)(_payload(_FULL, repo)))
-        assert 'group-em-grant box-abc123:<session> "<ruling>"' in reason
+        assert 'group-em-grant box-abc123:<session> "<reason>"' in reason
         assert 'group-em-grant <session>' not in reason
         assert "ask the PM" not in reason
 

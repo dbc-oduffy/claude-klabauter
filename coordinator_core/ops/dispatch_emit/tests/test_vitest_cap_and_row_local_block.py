@@ -82,11 +82,12 @@ _HARNESS = r"""
   const logs = [];
   const log = (m) => logs.push(m);
 %(helper)s
+  %(prompt_builder)s
   const prompts = [];
   const replies = %(replies)s;
   const run = (id) => async () => {
     const n = prompts.filter((p) => p.id === id).length;
-    prompts.push({ id, widen: _widenText(_widenOf[id] || '') });
+    prompts.push({ id, widen: %(worker_prompt)s });
     return replies[id][Math.min(n, replies[id].length - 1)];
   };
   const _rows = {};
@@ -103,13 +104,14 @@ _BLOCK = "BLOCKED: x\nROW-LOCAL-BLOCK: %s"
 _ROW = "_rows.A = _runRow('A', [], null, run('A'), { title: 't', paths: ['a.py'], declared: [] });"
 
 
-def _go(replies, rows=_ROW):
+def _go(replies, rows=_ROW, *, prompt_builder="", worker_prompt="_widenText(_widenOf[id] || '')"):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
     proc = subprocess.run(
         [node, "-"],
-        input=_HARNESS % {"helper": emit._run_row_helper_js(), "rows": rows, "replies": json.dumps(replies)},
+        input=_HARNESS % {"helper": emit._run_row_helper_js(), "rows": rows, "replies": json.dumps(replies),
+                          "prompt_builder": prompt_builder, "worker_prompt": worker_prompt},
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         **no_console_creationflags(),
     )
@@ -156,3 +158,20 @@ def test_a_stop_rule_reply_still_halts_without_widening():
 
 def test_executor_brief_asks_for_the_exact_in_ask_path():
     assert "re-dispatches the row once" in emit._stop_rule_clause()
+
+def test_ordinary_ask_retry_names_extra_path_only_for_the_blocked_row():
+    from .test_ask_compose import _compose as compose_ask
+
+    script = compose_ask()
+    # Reuse the actual prompt and its literal pool from the ordinary ask composer.
+    declarations = [line for line in script.splitlines() if line.lstrip().startswith(
+        ("const _PF", "const _agentHead =", "const _rowPrompt =", "const _briefPrecedenceTail =")
+    )]
+    builder = "const _agentDefsClause = () => '';\n" + "\n".join(declarations)
+    rows = _ROW + "_rows.B = _runRow('B', [_rows.A], null, run('B'), {paths:['b.py']});"
+    path = "pkg/helper.py"
+    out = _go({"A": [_BLOCK % path, "DONE: a"], "B": ["DONE: b"]}, rows,
+              prompt_builder=builder, worker_prompt="_rowPrompt({id, brief_path: id + '.md'})")
+    assert out["calls"] == ["A", "A", "B"], out["halted"]
+    assert [path in p["widen"] for p in out["prompts"]] == [False, True, False]
+    assert all(p["id"] + ".md" in p["widen"] for p in out["prompts"])

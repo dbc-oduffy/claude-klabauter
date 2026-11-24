@@ -286,3 +286,25 @@ def test_reset_hard_of_a_governed_path_still_denies() -> None:
 def test_checkout_and_restore_of_a_governed_path_still_deny() -> None:
     assert guard.is_denied_bash_write("git checkout -- state/sizings/a.yaml", SIZING_IDS) is True
     assert guard.is_denied_bash_write("git restore state/sizings/a.yaml", SIZING_IDS) is True
+
+
+def test_unimatrix_send_with_governed_filename_in_quoted_prose_is_admitted() -> None:
+    cmd_single = (
+        "/opt/homebrew/opt/python@3.15/bin/python3.15 "
+        "'/Users/example-operator/.coordinator-claude-settings/unimatrix/unimatrix-send.py' "
+        "--to peer-a 'Loaded `CLAUDE.md` and `AGENTS.md` cleanly'"
+    )
+    cmd_double = (
+        "/opt/homebrew/opt/python@3.15/bin/python3.15 "
+        "'/Users/example-operator/.coordinator-claude-settings/unimatrix/unimatrix-send.py' "
+        '--to peer-a "Loaded CLAUDE.md and AGENTS.md cleanly"'
+    )
+    assert guard.is_denied_bash_write(cmd_single, ("claude.md", "agents.md")) is False
+    assert guard.is_denied_bash_write(cmd_double, ("claude.md", "agents.md")) is False
+
+
+def test_unimatrix_send_with_redirect_or_substitution_or_tee_still_denies() -> None:
+    ids = ("claude.md",)
+    assert guard.is_denied_bash_write("python3 unimatrix-send.py --to peer 'hi' > CLAUDE.md", ids) is True
+    assert guard.is_denied_bash_write('python3 unimatrix-send.py --to peer "$(echo x > CLAUDE.md)"', ids) is True
+    assert guard.is_denied_bash_write("python3 unimatrix-send.py --to peer 'hi' | tee CLAUDE.md", ids) is True

@@ -822,6 +822,58 @@ def _box_slug():
     return re.sub(r"[^A-Za-z0-9_-]+", "-", pr._contract().box_id(socket.gethostname())).strip("-")
 
 
+def _dead_pid():
+    import subprocess
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
+
+
+def test_grok_registry_lists_live_entry_as_peer_and_none_for_dead_pid(box):
+    async def go():
+        home = box / "grok"
+        home.mkdir()
+        repo = box / "myrepo"
+        (repo / ".git").mkdir(parents=True)
+        sid = "0123abcd-1111-2222-3333-444455556666"
+        rows = [{"session_id": sid, "cwd": str(repo), "pid": os.getpid()},
+                {"session_id": "dead0000-1111", "cwd": str(repo), "pid": _dead_pid()}]
+        (home / "active_sessions.json").write_text(json.dumps(rows), encoding="utf-8")
+        r = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters(), grok_home=home)
+        await r.start()
+        try:
+            want = f"grok-myrepo-0123abcd-on-{_box_slug()}"
+            assert list(r.peers) == [want]
+            assert r.peers[want]["vendor"] == "grok" and r.peers[want]["target"] == sid
+            assert r.peers[want]["cwd"] == str(repo) and want in r.faces
+            (home / "active_sessions.json").write_text("[]", encoding="utf-8")
+            await r.refresh_discovered()
+            assert r.peers == {}
+        finally:
+            await r.stop()
+    run(go())
+
+
+def test_live_discovered_scans_grok_registry(tmp_path):
+    home = tmp_path / "grok"
+    home.mkdir()
+    (tmp_path / "proj" / ".git").mkdir(parents=True)
+    sid = "feedbeef-1111-2222-3333-444455556666"
+    rows = [{"session_id": sid, "cwd": str(tmp_path / "proj"), "pid": os.getpid()},
+            {"session_id": "dead0000-1111", "cwd": str(tmp_path / "proj"), "pid": _dead_pid()}]
+    (home / "active_sessions.json").write_text(json.dumps(rows), encoding="utf-8")
+
+    async def go():
+        return pr.Router([], sessions_dir=tmp_path / "s", state_dir=tmp_path / "st",
+                         endpoint_dir=tmp_path / "e", grok_home=home)._live_discovered()
+
+    live = run(go())
+    assert list(live) == [f"grok-proj-feedbeef-on-{_box_slug()}"]
+    peer = next(iter(live.values()))
+    assert peer["vendor"] == "grok" and peer["target"] == sid and peer["cwd"] == str(tmp_path / "proj")
+
+
 def test_default_adapters_grok_delivers_by_cwd_pinned_resume(monkeypatch, tmp_path):
     assert "grok" in pr.default_adapters()
 
@@ -1205,6 +1257,8 @@ def test_peer_send_to_unknown_session_fails_and_other_senders_turn_still_replies
         try:
             bad = await r._dispatch({"op": "send", "as": "codex-a", "to": "nobody", "text": "hi"})
             assert bad["ok"] is False
+            self_send = await r._dispatch({"op": "send", "as": "codex-a", "to": "codex-a", "text": "hi"})
+            assert self_send["ok"] is False and "cannot send to self" in self_send["error"]
             post_frame(r.endpoint_of("codex-a"), frame_to(box, s.path, "em", "question"))
             await until(lambda: len(s.frames) == 1)
             assert "\n[reply] codex-a: " in s.contents()[0]
@@ -1560,6 +1614,81 @@ def test_send_cli_resolves_own_target_from_host_env():
     assert m.own_target({}) == ""
 
 
+@portable
+@pytest.mark.parametrize("binding", ["live", "missing", "ambiguous", "stale"])
+def test_claude_shell_binding_is_verified_before_naming_reply_address(dirs, monkeypatch, binding):
+    row = {"name": "claude-em", "sessionId": "native-session", "pid": os.getpid(),
+           "messagingSocketPath": "/s/em.sock", "vendor": "claude"}
+    if binding != "missing":
+        (dirs / "sessions" / "one.json").write_text(json.dumps(row))
+    if binding == "ambiguous":
+        (dirs / "sessions" / "two.json").write_text(json.dumps({**row, "messagingSocketPath": "/s/other.sock"}))
+    if binding == "stale":
+        monkeypatch.setattr(pr._liveness(), "entry_live", lambda row: False)
+    seen = []
+    r = make_router(dirs, echo_adapters(seen))
+    result = run(r._dispatch({"op": "send", "as": "cli", "as_target": "native-session",
+                              "to": "codex-a", "text": "nonce-shell"}))
+    if binding == "live":
+        assert result["ok"]
+        assert "[claude-em] nonce-shell" in seen[0][1]
+        assert "--to claude-em" in seen[0][1]
+    else:
+        assert not result["ok"]
+        assert "sender" in result["error"]
+        assert seen == []
+
+
+@portable
+def test_unbound_cli_does_not_advertise_a_reply_address(dirs):
+    seen = []
+    r = make_router(dirs, echo_adapters(seen))
+    result = run(r._dispatch({"op": "send", "as": "cli", "to": "codex-a", "text": "nonce"}))
+    assert result["ok"]
+    assert "--to cli" not in seen[0][1]
+    assert "No verified reply address" in seen[0][1]
+
+
+def test_claude_shell_recipient_can_reply_to_verified_identity(box):
+    async def go():
+        receiver = FakeSender(str(box / "claude.sock"))
+        row = {"name": "claude-em", "sessionId": "native-session", "pid": os.getpid(),
+               "messagingSocketPath": receiver.path, "vendor": "claude"}
+        (box / "sessions" / "claude.json").write_text(json.dumps(row))
+        seen = []
+        r = make_router(box, echo_adapters(seen))
+        await r.start()
+        try:
+            result = await r._dispatch({"op": "send", "as": "cli", "as_target": "native-session",
+                                        "to": "agy-a", "text": "nonce-shell"})
+            assert result["ok"] and "--to claude-em" in seen[0][1]
+            reply = await r._dispatch({"op": "send", "as_target": "conv-1", "as": "cli",
+                                       "to": "claude-em", "text": "reply-nonce-shell"})
+            assert reply["ok"] and reply["written"]
+            await until(lambda: receiver.frames)
+            assert "reply-nonce-shell" in receiver.contents()[0]
+            assert "agy-a" in json.dumps(receiver.frames[0])
+        finally:
+            receiver.close()
+            await r.stop()
+    run(go())
+
+
+@portable
+def test_router_send_cli_carries_claude_session_binding(monkeypatch):
+    import types
+    requests = []
+    monkeypatch.delenv("UNIMATRIX_PEER_NAME", raising=False)
+    sibling = pr._sibling
+    monkeypatch.setattr(pr, "_sibling", lambda filename, modname:
+                        types.SimpleNamespace(own_target=lambda: "native-session")
+                        if filename == "unimatrix-send.py" else sibling(filename, modname))
+    monkeypatch.setattr(pr, "request_line", lambda endpoint, request:
+                        (requests.append(request) or {"ok": True, "reply": "delivered"}))
+    assert pr.cmd_send(["agy-a", "nonce"]) == 0
+    assert requests[0]["as_target"] == "native-session"
+
+
 def test_codex_timeout_marker_is_not_forwarded_as_a_reply(box):
     async def go():
         async def busy(peer, text):
@@ -1585,7 +1714,7 @@ def _send_module():
     return m
 
 
-def test_not_delivered_send_exits_nonzero_with_reason_and_delivered_exits_zero(box, capsys):
+def test_not_delivered_send_exits_nonzero_with_reason_and_delivered_exits_zero(box, capsys, monkeypatch):
     no_leg = ("[unimatrix-peer-agy] not delivered: this agy conversation has no leg endpoint.")
 
     async def agy(peer, text):
@@ -1599,6 +1728,7 @@ def test_not_delivered_send_exits_nonzero_with_reason_and_delivered_exits_zero(b
             resp = await r._dispatch({"op": "send", "to": "agy-a", "text": "hello"})
             assert resp["ok"] is False and "not delivered" in resp["error"]
             m = _send_module()
+            monkeypatch.setattr(m, "own_target", lambda: "")
             base = ["--endpoint-dir", str(box / "eps")]
             bad = await asyncio.to_thread(m.main, base + ["--to", "agy-a", "hello"])
             good = await asyncio.to_thread(m.main, base + ["--to", "codex-a", "hello"])
@@ -1689,15 +1819,53 @@ def face_reply(endpoint, frame):
     return buf
 
 
+@pytest.mark.parametrize("replace_at_start", [False, True])
+def test_dead_holder_row_gets_no_face_even_with_its_lock_held_and_is_not_listed(box, monkeypatch, replace_at_start):
+    async def go():
+        cx = box / "cx"
+        peers = [{"name": "codex-dead", "vendor": "codex", "target": THR_HELD, "codexPid": _dead_pid()},
+                 {"name": "codex-live", "vendor": "codex", "target": THR_OTHER, "codexPid": os.getpid()}]
+        fd = hold(cx / f"{THR_HELD}.lock")
+        r = holder_router(box, monkeypatch, peers, cx)
+        if replace_at_start:
+            registry = box / "peers.json"
+            registry.write_text(json.dumps([
+                {**peers[0], "codexPid": os.getpid()},
+                {**peers[1], "codexPid": _dead_pid()},
+            ]), encoding="utf-8")
+            r.peers_file = registry
+        await r.start()
+        try:
+            await r.refresh_discovered()
+            live_name = "codex-dead" if replace_at_start else "codex-live"
+            dead_name = "codex-live" if replace_at_start else "codex-dead"
+            assert sorted(r.faces) == [live_name] and r.discovered == set()
+            resp = await r._dispatch({"op": "list"})
+            assert resp["peers"] == [live_name] and dead_name not in resp["ready"]
+            assert [a["name"] for a in resp["agents"]] == [live_name] and "stale" not in resp["agents"][0]
+            bad = await r._dispatch({"op": "send", "to": dead_name, "text": "hello there"})
+            assert bad["ok"] is False
+            good = await r._dispatch({"op": "send", "to": live_name, "text": "hello there"})
+            assert good["ok"] is True
+        finally:
+            os.close(fd)
+            await r.stop()
+    run(go())
+
+
 def test_holder_dying_after_start_stops_the_face_on_the_next_refresh(box, monkeypatch):
     import subprocess
 
     async def go():
         cx = box / "cx"
-        holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         peers = [{"name": "codex-a", "vendor": "codex", "target": THR_HELD, "codexPid": holder.pid}]
+        registry = box / "peers.json"
+        registry.write_text(json.dumps(peers), encoding="utf-8")
         fd = hold(cx / f"{THR_HELD}.lock")
         r = holder_router(box, monkeypatch, peers, cx)
+        r.peers_file = registry
         await r.start()
         try:
             assert "codex-a" in r.faces
@@ -1710,6 +1878,11 @@ def test_holder_dying_after_start_stops_the_face_on_the_next_refresh(box, monkey
             await r._repair_faces()
             assert "codex-a" not in r.faces
             assert (await r._dispatch({"op": "list"}))["peers"] == []
+            registry.write_text(json.dumps([{**peers[0], "codexPid": os.getpid()}]), encoding="utf-8")
+            await r.refresh_discovered()
+            assert r.endpoint_of("codex-a") == ep and os.path.exists(ep)
+            assert "codex-a" in r.faces and "codex-a" not in r.dead_holders
+            assert (await r._dispatch({"op": "send", "to": "codex-a", "text": "collaborate"}))["ok"]
         finally:
             holder.kill()
             os.close(fd)
@@ -1751,6 +1924,100 @@ def test_peers_file_codex_row_without_a_holder_keeps_its_face_but_is_stale(box, 
         finally:
             await r.stop()
     run(go())
+
+
+@portable
+@pytest.mark.parametrize("initial_live", [False, True])
+def test_fixed_codex_holder_refresh_recovers_default_send(tmp_path, monkeypatch, initial_live):
+    async def go():
+        registry = tmp_path / "peers.json"
+        peer = {"name": "codex-a", "vendor": "codex", "target": THR_HELD,
+                "codexPid": os.getpid() if initial_live else 99999999,
+                "codexProcStart": "old-start"}
+        registry.write_text(json.dumps([peer]), encoding="utf-8")
+        live_birth = ["old-start" if initial_live else "new-start"]
+        monkeypatch.setattr(pr._liveness(), "codex_holder_live", lambda row:
+                            None if "codexPid" not in row else row["codexPid"] == os.getpid()
+                            and row.get("codexProcStart") == live_birth[0])
+        r = pr.Router([dict(peer)], sessions_dir=tmp_path / "sessions", peers_file=registry)
+        spawned, stopped, turns = [], [], []
+
+        async def spawn(name):
+            spawned.append(name)
+            r.faces[name] = object()
+
+        async def stop(name):
+            stopped.append(name)
+            r.faces.pop(name, None)
+
+        async def turn(name, text):
+            turns.append((name, text))
+            return "collaboration received"
+
+        monkeypatch.setattr(r, "_spawn_face", spawn)
+        monkeypatch.setattr(r, "_stop_face", stop)
+        monkeypatch.setattr(r, "turn", turn)
+        endpoint = r.endpoint_of("codex-a")
+        r.faces["codex-a"] = object()
+        await r.refresh_discovered()
+        assert stopped == ([] if initial_live else ["codex-a"])
+        assert r.peer_stale("codex-a") is (not initial_live)
+        assert (await r._dispatch({"op": "send", "to": "codex-a", "text": "collaborate"}))["ok"] is initial_live
+
+        fresh = {**peer, "codexPid": os.getpid(), "codexProcStart": "new-start"}
+        live_birth[0] = "new-start"
+        registry.write_text(json.dumps([fresh]), encoding="utf-8")
+        await r.refresh_discovered()
+        assert not r.peer_stale("codex-a") and "codex-a" not in r.dead_holders
+        assert spawned == ([] if initial_live else ["codex-a"])
+        assert r.endpoint_of("codex-a") == endpoint
+        assert r.discovered == set() and r.peers["codex-a"]["target"] == THR_HELD
+        assert (await r._dispatch({"op": "send", "to": "codex-a", "text": "collaborate"}))["ok"]
+        assert len(turns) == 1 + int(initial_live)
+        await r.refresh_discovered()
+        assert spawned == ([] if initial_live else ["codex-a"])
+        registry.write_text("{", encoding="utf-8")
+        await r.refresh_discovered()
+        assert not r.peer_stale("codex-a")
+
+        registry.write_text("[]", encoding="utf-8")
+        await r.refresh_discovered()
+        assert r.peer_stale("codex-a")
+        assert "codexPid" not in r.peers["codex-a"]
+        assert not (await r._dispatch({"op": "send", "to": "codex-a", "text": "absent"}))["ok"]
+        registry.write_text(json.dumps([fresh]), encoding="utf-8")
+        await r.refresh_discovered()
+        assert not r.peer_stale("codex-a")
+        assert r.endpoint_of("codex-a") == endpoint
+        assert spawned == ([] if initial_live else ["codex-a"])
+        assert registry.read_text(encoding="utf-8") == json.dumps([fresh])
+
+        for row in ({**fresh, "target": THR_OTHER},
+                    {k: v for k, v in fresh.items() if not k.startswith("codex")},
+                    {**fresh, "codexPid": 99999999}):
+            registry.write_text(json.dumps([row]), encoding="utf-8")
+            await r.refresh_discovered()
+            assert r.peer_stale("codex-a")
+            assert not (await r._dispatch({"op": "send", "to": "codex-a", "text": "collaborate"}))["ok"]
+        assert len(turns) == 1 + int(initial_live)
+    run(go())
+
+
+@portable
+@pytest.mark.parametrize("custom", [False, True])
+def test_serve_retains_its_peers_registry_for_holder_refresh(tmp_path, monkeypatch, custom):
+    registry = tmp_path / "peers.json"
+    registry.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(pr, "default_peers_file", lambda: registry)
+    seen = []
+
+    async def serve(router):
+        seen.append(Path(router.peers_file))
+
+    monkeypatch.setattr(pr, "serve", serve)
+    assert pr.cmd_serve(["--peers", str(registry)] if custom else []) == 0
+    assert seen == [registry]
+
 
 
 def test_user_frame_to_a_live_holder_face_gets_no_reply_line(box, monkeypatch):
