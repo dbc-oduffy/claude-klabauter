@@ -3453,7 +3453,13 @@ def _resume_route(
             root, halted_id, session_id or None, (payload.get("tool_input") or {}).get("args"), sizing_rel
         )
     except resume_gate.ResumeRefused as exc:
-        return _refuse(str(exc)), None
+        if not _fresh_flag(payload.get("tool_input") or {}):
+            return _refuse(str(exc)), None
+        if exc.reason != resume_gate.REFUSE_FOREIGN_DRIVER:
+            # Trap: the gate's refusal names `args.fresh` as its remedy; refusing a fresh refire here loops.
+            # A cancelled, closed or superseded run is already terminal, so nothing is retired: the plain emit mints.
+            params["fresh"] = True
+            return None, None
     params.pop("takeover", None)
     if session_id:
         # Invariant: run-stage.json names the session executing the run; a refire resumes it here, so

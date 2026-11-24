@@ -2798,8 +2798,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "924ac66a3c9a8b227bf6b28e1dabef5ade00faff",
-    "coordinator_core/_engine_stamp": "e0cb7fbcebeff577f15a4aba719d3b71d3fee9bb",
+    "coordinator_core/_engine_published_at": "73293d1c55e32aabc15a3d39c2f9092996157405",
+    "coordinator_core/_engine_stamp": "687bcf181692aea8c00f8e1d24faebb489334546",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5365,7 +5365,7 @@
     "coordinator_core/hooks/subagent_zero_tool_use_resolve.py": "61333c61b4e7e0f929e6019bf5f334aca2ef34af",
     "coordinator_core/hooks/subagent_zero_tool_use_surface.py": "4d6e4132b94630139e96f7ad11e277c239caa868",
     "coordinator_core/hooks/submit_bug_blitz.py": "cc9a4269972d4af898c86767be6577787728ce8f",
-    "coordinator_core/hooks/submit_engine_ask.py": "b45272234b18cfbe158dfa598992042417fc5e8c",
+    "coordinator_core/hooks/submit_engine_ask.py": "9eea886b5db55a125f9b169b873909e1ddb36151",
     "coordinator_core/hooks/suggest_sonnet_research.py": "164e1eee86c32df38894a53ed42dfc805f76842e",
     "coordinator_core/hooks/support/__init__.py": "93b1799d1ad2e6d4712c9b10fca16f242d46bdd9",
     "coordinator_core/hooks/support/bin_impl_drift.py": "8ad2ef312ecf588f2e24f85e852c141aeb158462",
@@ -5606,7 +5606,7 @@
     "coordinator_core/hooks/tests/test_submit_engine_ask_fan_prefire_checks.py": "bb95c9072a6d02dcd4c85440c43928371e05b487",
     "coordinator_core/hooks/tests/test_submit_engine_ask_fan_sizing_stall.py": "a0e139f468e9f717820924fb850686da8a36c0ec",
     "coordinator_core/hooks/tests/test_submit_engine_ask_fresh_refire.py": "b8c75bbdff277778266c1c7138a03940b4855b08",
-    "coordinator_core/hooks/tests/test_submit_engine_ask_fresh_refire_e2e.py": "45115d8990adc78a2a92a76415538894173502bf",
+    "coordinator_core/hooks/tests/test_submit_engine_ask_fresh_refire_e2e.py": "77419aae20edf908aa5c233f936d3959415ee3fc",
     "coordinator_core/hooks/tests/test_submit_engine_ask_group_join.py": "219c6c5d33ec7e265d6394456c8718fbddf68c85",
     "coordinator_core/hooks/tests/test_submit_engine_ask_halted_indeterminate_budget.py": "2f8eb5dd89b8c2c7ca6944b536ada5f451dd152d",
     "coordinator_core/hooks/tests/test_submit_engine_ask_halted_refire.py": "720df1faf072b90a9902405132ac001915c00549",
@@ -5634,7 +5634,7 @@
     "coordinator_core/hooks/tests/test_submit_engine_ask_registry_key_repo.py": "f32c7ce38f05358815f10bdd84147a84324fc1aa",
     "coordinator_core/hooks/tests/test_submit_engine_ask_research_sizing.py": "6563a29738625416476d84c3f8b6d71b1c545aa3",
     "coordinator_core/hooks/tests/test_submit_engine_ask_reserved_id_resume.py": "496267a3c8fc550a2d27c549a176b9d39c9da6cc",
-    "coordinator_core/hooks/tests/test_submit_engine_ask_resume_gate.py": "156feed0eb468b26bf3f9e21a91bfe6db0f04f0f",
+    "coordinator_core/hooks/tests/test_submit_engine_ask_resume_gate.py": "d9625b90b8ce55a7959aa54ac29998acf4bb54cd",
     "coordinator_core/hooks/tests/test_submit_engine_ask_resume_in_place.py": "6f990f5b47e983626d5e3796b0105997e01e6205",
     "coordinator_core/hooks/tests/test_submit_engine_ask_resume_record.py": "3b452dbf5cfc78695102cd0bf9f2c04d8eeae9d0",
     "coordinator_core/hooks/tests/test_submit_engine_ask_resume_run_token.py": "a8e611ac99116ee56596b56c9a3d61f31813d62e",
@@ -6718,7 +6718,7 @@
     "coordinator_core/ops/dispatch_emit/objective_check.py": "1462ba7e270818c7aa68fc19b2f69a40c14b0a58",
     "coordinator_core/ops/dispatch_emit/objective_contract.py": "d72710bdb06a1bfaee28ca9df1d90843683f0379",
     "coordinator_core/ops/dispatch_emit/objective_write.py": "f7b1a994cb556dd7a81f95b2080373fea01451b3",
-    "coordinator_core/ops/dispatch_emit/op.py": "284d72b4eccb1faa0d762c558507f1b02d86459c",
+    "coordinator_core/ops/dispatch_emit/op.py": "2ceb432523c3a8bc6824de491783e7fb6365b183",
     "coordinator_core/ops/dispatch_emit/orphan_adopt.py": "73f34f28943e14a3d6f82cb70f74b639be118573",
     "coordinator_core/ops/dispatch_emit/overlay_verify_measure.py": "57b2275910d28d1bc6e159122949a3c7e2ac1094",
     "coordinator_core/ops/dispatch_emit/owed_leg_queue.py": "715163ef2084b0092f289116fc90fc445b223b45",
@@ -13793,5 +13793,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "9e6e23632d14a155d3ee6bc2b50012f0335a65eb"
+  "source_head": "7fe49e2be42294ca77011098d78e1554fcfcfcb1"
 }
