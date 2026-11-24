@@ -619,14 +619,13 @@ def readiness_verdict(
             notes.append(f"coverage verdict {coverage.get('verdict')!r} carries no findings")
     for review in reviews:
         read = _ledger_read(review, repo_root)
-        # A verified major default-path finding with no fix row or G-EM scope ruling pulls under any review verdict.
+        # A verified major default-path finding with no fix row pulls under any review verdict.
         for row in unanswered(read[1] if read is not None else [], spine_rows, repo_root):
             repairs.append(_repair(
                 MAJOR_FINDING_KIND, str(row.get("id") or "?"),
                 "answer this major default-path finding with a fix row in the plan's spine "
-                "(answered_by: {kind: fix-row, row: <id>}) or a G-EM scope ruling "
-                "(answered_by: {kind: gem-scope-ruling, ref: <repo-relative file>}); "
-                "a disclosure does not clear it",
+                "(answered_by: {kind: fix-row, row: <id>}); a PM decision lands as a fix row "
+                "or a ruled_out disposition; a disclosure or ruling file does not clear it",
             ))
         if _clear(review.get("verdict")):
             continue

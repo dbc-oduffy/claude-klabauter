@@ -20,7 +20,7 @@ def _row(answered_by=None, **kw):
 
 def test_constants() -> None:
     assert MAJOR_SCOPES == frozenset({"default-path", "user-visible"})
-    assert CLEARING_KINDS == ("fix-row", "gem-scope-ruling")
+    assert CLEARING_KINDS == ("fix-row",)
 
 
 def test_absent_and_disclosure_stay_unanswered(tmp_path: Path) -> None:
@@ -45,19 +45,15 @@ def test_fix_row_clears_only_for_live_spine_row(tmp_path: Path) -> None:
     assert unanswered([row], None, tmp_path) == [row]
 
 
-def test_gem_ruling_clears_only_for_existing_repo_relative_file(tmp_path: Path) -> None:
+def test_gem_scope_ruling_never_clears_even_for_an_existing_file(tmp_path: Path) -> None:
     (tmp_path / "state").mkdir()
     (tmp_path / "state" / "ruling.md").write_text("ruling")
-    ok = _row({"kind": "gem-scope-ruling", "ref": "state/ruling.md"})
-    assert unanswered([ok], SPINE, tmp_path) == []
-    bad = [
+    rows = [
+        _row({"kind": "gem-scope-ruling", "ref": "state/ruling.md"}),
         _row({"kind": "gem-scope-ruling", "ref": "state/missing.md"}),
-        _row({"kind": "gem-scope-ruling", "ref": str(tmp_path / "state" / "ruling.md")}),
-        _row({"kind": "gem-scope-ruling", "ref": "state/../state/ruling.md"}),
-        _row({"kind": "gem-scope-ruling", "ref": "state"}),
     ]
-    assert unanswered(bad, SPINE, tmp_path) == bad
-    assert unanswered([ok], SPINE, None) == [ok]
+    assert unanswered(rows, SPINE, tmp_path) == rows
+    assert unanswered(rows, SPINE, None) == rows
 
 
 def test_non_major_rows_untouched(tmp_path: Path) -> None:

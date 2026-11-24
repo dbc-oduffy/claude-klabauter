@@ -147,12 +147,12 @@ def test_discharge_writes_key_and_leaves_plan_bytes(tmp_path):
     assert EM_DISCHARGE_KEY == "em_discharged"
 
 
-def test_plan_moved_after_minting_discharges_at_its_written_path_only(tmp_path):
+def test_plan_cited_at_a_shard_path_discharges_at_its_written_flat_path(tmp_path):
     repo, plan = _plan(tmp_path)
     minted = plan.parent / "2026-11" / plan.name
-    refused = _call(repo, minted)
-    assert refused["exit_code"] != 0 and "plan not found" in str(refused)
-    assert _call(repo, plan)["applied"] is True
+    assert _call(repo, minted)["applied"] is True
+    assert set(read_em_discharges(plan)) == {"E1"}
+    assert not minted.parent.exists()
 
 
 @pytest.mark.parametrize("sidecar_text, found", [
@@ -481,3 +481,71 @@ def test_ue_report_omitting_a_declared_criterion_test_is_refused_and_records_not
     assert read_em_discharges(plan) == {}
     accepted = _call(repo, plan, ue_report={"index_json": str(index), "tests": ["Proj.A", "Proj.B"]})
     assert accepted["exit_code"] == 0 and accepted["applied"] is True, accepted
+
+
+def test_executor_evidence_only_refused_when_no_write_changed_against_head(tmp_path):
+    import subprocess
+
+    repo, plan = _writes_plan(tmp_path, "[one.py]")
+    (repo / "one.py").write_text("x", encoding="utf-8")
+    for args in (["add", "one.py"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "w"]):
+        subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True)
+    result = _call(repo, plan, id="X1", evidence="pytest ok")
+    assert result["exit_code"] == 1 and "unchanged" in str(result), result
+
+
+def test_executor_commit_and_evidence_discharge_still_closes(tmp_path):
+    import subprocess
+
+    repo, plan = _writes_plan(tmp_path, "[one.py]")
+    (repo / "one.py").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "one.py"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "w"],
+                   cwd=str(repo), check=True, capture_output=True)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True).stdout.strip()
+    result = _call(repo, plan, id="X1", commit=sha, evidence="pytest ok")
+    assert result["exit_code"] == 0 and read_em_discharges(plan)["X1"]["commit"] == sha, result
+
+
+def _writes_plan(tmp_path: Path, writes: str):
+    repo, plan = _plan(tmp_path)
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            "  body: |\n    Code.\n", f"  writes: {writes}\n  body: |\n    Code.\n", 1
+        ),
+        encoding="utf-8",
+        newline="",
+    )
+    return repo, plan
+
+
+def test_executor_evidence_only_discharge_when_every_write_is_on_disk(tmp_path):
+    from coordinator_core.ops.plan_tasks_mutate import em_discharge_closes
+
+    repo, plan = _writes_plan(tmp_path, "[a/one.py, two.py]")
+    (repo / "a").mkdir()
+    (repo / "a" / "one.py").write_text("x", encoding="utf-8")
+    (repo / "two.py").write_text("y", encoding="utf-8")
+    result = _call(repo, plan, id="X1", evidence="pytest 20 passed (EM-run)")
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    entry = read_em_discharges(plan)["X1"]
+    assert "commit" not in entry and entry["writes_verified"] is True
+    assert em_discharge_closes({"id": "X1"}, entry) is True
+
+
+@pytest.mark.parametrize("writes", ["[a/one.py, missing.py]", "[]", "[../outside.py]"])
+def test_executor_evidence_only_refused_when_a_write_is_absent_or_undeclared(tmp_path, writes):
+    repo, plan = _writes_plan(tmp_path, writes)
+    (repo / "a").mkdir()
+    (repo / "a" / "one.py").write_text("x", encoding="utf-8")
+    (repo.parent / "outside.py").write_text("z", encoding="utf-8")
+    result = _call(repo, plan, id="X1", evidence="pytest ok")
+    assert result["exit_code"] == 1 and result["applied"] is False, result
+    assert not evidence_sidecar_path(plan).exists()
+
+
+def test_writes_verified_entry_without_evidence_does_not_close():
+    from coordinator_core.ops.plan_tasks_mutate import em_discharge_closes
+
+    assert em_discharge_closes({"id": "X1"}, {"writes_verified": True}) is False
+    assert em_discharge_closes({"id": "X1"}, {"writes_verified": True, "evidence": " "}) is False
