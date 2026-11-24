@@ -188,3 +188,42 @@ def test_detached_entry_reads_the_stdin_payload_and_runs_the_refresh(monkeypatch
     monkeypatch.setattr(hook, "handle", lambda p, event: seen.append((p, event)) or {"updated": True})
     assert hook.main(["--event", "PostCompact"]) == 0
     assert seen == [(payload, "PostCompact")] and capsys.readouterr().out.strip() == "{}"
+
+
+def test_cold_proxy_handshake_is_not_cut_off_at_200ms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cold proxy needs ~0.6s to upgrade; the 0.2s bound made every refresh fail unseen. Fakes _connect: does not cover the interactive-TUI namespace return."""
+    from coordinator_core.agent_pipe.codex_app_server import AppServerUnreachable
+    class Connection:
+        def request(self, method, params, deadline):
+            if method == "thread/loaded/list":
+                return {"data": [SID]}
+            if method == "thread/read":
+                return {"thread": {"id": SID, "cwd": str(tmp_path), "name": "Original"}}
+            return {}
+    def connect(argv, *, experimental=False, timeout=15.0):
+        if timeout < 0.6:
+            raise AppServerUnreachable(-1, "no upgrade reply from the app-server")
+        return contextlib.nullcontext(Connection())
+    monkeypatch.setattr(hook.codex_app_server, "_connect", connect)
+    monkeypatch.setattr(hook.CodexAdapter, "proxy_argv", lambda self: ["native"])
+    monkeypatch.setattr(hook.external_registry, "preserve_task_title",
+                        lambda sid, title: {"session_id": sid, "original_task_title": title}, raising=False)
+    assert hook.apply_title(value(), str(tmp_path))["updated"] is True
+
+
+def test_refresh_outcome_reason_is_persisted_never_swallowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    snap = {**value(), "cache_path": str(tmp_path / "cache.json")}
+    monkeypatch.setattr(hook, "snapshot", lambda p: snap)
+    def refuse(v, cwd):
+        raise RuntimeError("no upgrade reply from the app-server")
+    monkeypatch.setattr(hook, "apply_title", refuse)
+    result = hook.handle({"session_id": SID, "cwd": str(tmp_path)}, "Stop")
+    assert result["updated"] is False
+    logged = json.loads((tmp_path / "settings" / "state" / "codex-status" / f"{SID}.last-refresh.json").read_text())
+    assert logged["updated"] is False and logged["event"] == "Stop"
+    assert logged["reason"] == "RuntimeError: no upgrade reply from the app-server"
+    monkeypatch.setattr(hook, "apply_title", lambda v, cwd: {"updated": False, "reason": "thread is not in this loaded app-server namespace"})
+    hook.handle({"session_id": SID, "cwd": str(tmp_path)}, "Stop")
+    logged = json.loads((tmp_path / "settings" / "state" / "codex-status" / f"{SID}.last-refresh.json").read_text())
+    assert logged["reason"] == "thread is not in this loaded app-server namespace"

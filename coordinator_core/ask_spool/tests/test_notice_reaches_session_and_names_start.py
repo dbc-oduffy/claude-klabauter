@@ -75,6 +75,19 @@ def test_unstarted_mint_names_its_workflow_script(tmp_path: Path) -> None:
     assert script.as_posix() in text.replace("\\\\", "/")
 
 
+def test_unstarted_mint_start_is_never_a_bare_workflow_call(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _script(root)
+    _stage(root, "minted")
+    _write_notice(root, status="minted", unstarted=True)
+
+    text = _advise(root)
+
+    assert ", args: <fire_args of dispatch.minted_run " in text
+    assert f'"run_id":"{_RUN}","action":"start"' in text
+    assert '.workflow.mjs"})' not in text
+
+
 def test_a_found_run_gets_no_start_pointer(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _script(root)

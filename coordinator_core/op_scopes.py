@@ -28,6 +28,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "box_memory.admit": "none",
     "box_memory.register": "none",
     "box_memory.release": "none",
+    "codex_status.refresh": "none",
     "codex_status.snapshot": "none",
     "external_session.handle": "none",
     "goal.append":                           "common_dir",

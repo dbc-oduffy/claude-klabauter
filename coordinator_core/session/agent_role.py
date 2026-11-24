@@ -4,8 +4,18 @@ from __future__ import annotations
 import uuid
 
 ROLE_ENV = "COORDINATOR_AGENT_ROLE"
+WORKER_MARKER_ENV = "COORDINATOR_AGENT_WORKER"
+_TRUE = ("1", "true", "yes")
 ROLES = frozenset({"em", "worker", "workflow-agent", "reviewer", "unknown"})
 SOURCES = frozenset({"startup", "resume", "clear", "compact", "fork"})
+
+
+def explicit_worker_marker(env) -> bool:
+    """True when env carries the worker marker or a non-`em` role; the one marker set for every refusal surface."""
+    if str(env.get(WORKER_MARKER_ENV, "")).lower() in _TRUE:
+        return True
+    role = env.get(ROLE_ENV)
+    return bool(role) and role != "em"
 
 
 def _engine_issued_contract(env) -> bool:
@@ -193,7 +203,7 @@ def native_launch():
         pass
     return observed_cli_launch([])
 
-def role_for_caller(caller_env, session_id):
+def role_for_caller(caller_env, session_id) -> str:
     """Return caller authority from carried env plus its own validated host row.
 
     Explicit non-EM markers always win over any parent/daemon EM identity.
@@ -202,7 +212,7 @@ def role_for_caller(caller_env, session_id):
     A workflow-agent still needs the engine's assigned-script delegation gate.
     """
     env = caller_env or {}
-    if str(env.get("COORDINATOR_AGENT_WORKER", "")).lower() in ("1", "true", "yes"):
+    if str(env.get(WORKER_MARKER_ENV, "")).lower() in _TRUE:
         return "worker"
     explicit = env.get(ROLE_ENV)
     if explicit and explicit != "em":
@@ -210,9 +220,30 @@ def role_for_caller(caller_env, session_id):
     from coordinator_core.session import external_registry
     row = external_registry.lookup(session_id) or external_registry.lookup_claude(session_id)
     if not isinstance(row, dict) or row.get("session_id") != session_id:
-        return "unknown"
+        return _harness_em_or_unknown(env, session_id)
     role = row.get("role", "unknown")
     return role if isinstance(role, str) and role in ROLES else "unknown"
+
+
+def _harness_em_or_unknown(env, session_id) -> str:
+    """Claude-harness rung: `em` only for a live top-level harness session with no engine contract.
+
+    A subagent shares its parent's session id, so the registry cannot tell them
+    apart; only the worker marker (stamped by the Bash hook) does, and it is
+    refused before this rung.
+    """
+    if explicit_worker_marker(env):
+        return "worker"
+    if env.get("COORDINATOR_PARENT_SESSION_ID"):
+        return "unknown"
+    try:
+        from coordinator_core.session import core, harness_registry
+        record = harness_registry.lookup(session_id)
+        if record is None or getattr(record, "provider", "claude") != "claude":
+            return "unknown"
+        return "em" if core.stable_pid_alive(record.pid, stored_start_epoch=repr(record.start_epoch)) else "unknown"
+    except (ImportError, AttributeError, OSError, ValueError, TypeError):
+        return "unknown"
 
 
 role_for_event = classify

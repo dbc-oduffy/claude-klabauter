@@ -9,6 +9,10 @@ With `--touched <path>` (repeatable; the landing's changed files) the leg runs t
 and the direct importers of each touched module in the shared-clone mirror at `--head-sha` (default HEAD),
 re-runs the reds at `--base-sha`, and reports `new_red`: red post-land, not red at base.
 
+Without `--touched` the targets run in the same mirror at HEAD plus the run-owned blobs, never in the live
+checkout, so another session's uncommitted edit cannot change the verdict (`own_tree`; `own_tree_skipped` when
+the mirror cannot be prepared and the leg runs in place).
+
 Usage: python -m coordinator_core.ops.test_leg_run [--base-sha <sha>] [--head-sha <sha>]
        [--base-export-out <path>] [--budget-s N] [--touched <path>]... [--repo-root <path>] --out <path> -- <ids and test files...>
 
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import json
 import os
 import re
@@ -76,12 +81,15 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--budget-s", type=float)
     p.add_argument("--touched", action="append", default=[])
     p.add_argument("--repo-root")
+    p.add_argument("--run-id")
     p.add_argument("--out", required=True)
     return p
 
 
 # (stderr, stdout) of each `_pytest` child since the last `_cwd_phase` start; the CLI runs one phase at a time.
 _RAW: list[tuple[str, str]] = []
+#: Mirror worktrees (as `str`) the current leg runs pytest in; `_pytest` resolves `coordinator_core` from them alone.
+_MIRRORS: set[str] = set()
 
 
 def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str]]:
@@ -93,11 +101,14 @@ def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[s
     """
     if remaining <= 0:
         raise subprocess.TimeoutExpired("pytest", 0)
+    env = dict(os.environ, PYTHONIOENCODING=_PYTEST_ENCODING)
+    if cwd in _MIRRORS:
+        env = cov._mirror_env(env, Path(cwd))
     with tempfile.TemporaryDirectory(prefix="test-leg-ids-") as holder:
         id_file = _write_ids(Path(holder), targets)
         proc = subprocess.run([sys.executable, "-c", _IDS_RUNNER, str(id_file), *_PYTEST], cwd=cwd,
                               capture_output=True, encoding=_PYTEST_ENCODING, errors="replace", timeout=remaining,
-                              env=dict(os.environ, PYTHONIOENCODING=_PYTEST_ENCODING),
+                              env=env,
                               **no_console_creationflags())
     _RAW.append((proc.stderr, proc.stdout))
     stderr_lines = (
@@ -536,12 +547,13 @@ def _merge_phases(rc1: int, lines1: list[str], rc2: int, lines2: list[str]) -> t
 
 
 def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], head_sha: Optional[str],
-            base_export_out: Optional[str], left, exported: dict) -> None:
-    """Rerun `reds` alone and measure them at `base_sha`, folding into `result`; `exported` accumulates the
-    measures so the base export file always holds every phase settled so far. Raises TimeoutExpired."""
+            base_export_out: Optional[str], left, exported: dict, run_cwd: Optional[str] = None) -> None:
+    """Rerun `reds` alone (in `run_cwd`, default `cwd`) and measure them at `base_sha` from `cwd`, folding into
+    `result`; `exported` accumulates the measures so the base export file always holds every phase settled so
+    far. Raises TimeoutExpired."""
     if not reds:
         return
-    rc, lines = _pytest(list(reds), cwd, left())
+    rc, lines = _pytest(list(reds), run_cwd or cwd, left())
     again = _reds(lines)
     if rc in (0, 1):
         result["passed_alone"].extend(n for n in reds if n not in again)
@@ -609,19 +621,47 @@ def _own_import_error(result: dict, root: Path) -> None:
         err["run_id"] = max(owners)[1]
 
 
-def _run_blob_paths(root: Path, exclude: str) -> list[str]:
-    """Paths whose worktree bytes are still a blob some run record under `state/warp` wrote, `exclude` left out."""
+def _run_blob_paths(root: Path, exclude: str, run_id: Optional[str] = None) -> list[str]:
+    """Paths whose worktree bytes are still a blob a run record under `state/warp` wrote, `exclude` left out;
+    with `run_id` only that run's record counts, so a peer run's uncommitted blob never reaches the leg."""
     from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
 
     owned: dict[str, None] = {}
-    for _run_id, _dir, _mtime, rec in stranded_sibling.read_records(root / "state" / "warp"):
+    for rid, _dir, _mtime, rec in stranded_sibling.read_records(root / "state" / "warp"):
+        if run_id is not None and rid != run_id:
+            continue
         for path, entry in rec.items():
             if path != exclude and entry.get("run") and kept_work.fingerprint(root, path) == entry["run"]:
                 owned[path] = None
     return list(owned)
 
 
-def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[str], root: Path, left) -> None:
+def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], result: dict,
+              run_id: Optional[str] = None) -> str:
+    """The directory the no-touched leg runs pytest in: the shared-clone mirror at `head_sha` (default HEAD) plus
+    the run-owned blobs, held under `stack`, so another session's uncommitted edit in `root` never reaches the
+    verdict. A non-git `root` has no foreign dirt to exclude and runs in place; a mirror that cannot be prepared
+    runs in place too, noted as `own_tree_skipped` (the leg never refuses over it). `own_tree` records the
+    commit and the overlaid paths."""
+    if not (root / ".git").exists():
+        return str(root)
+    try:
+        mroot = stack.enter_context(cov._mirror_lock(root, "test-leg-run"))
+        sha = cov._commit_sha(root, head_sha or "HEAD")
+        overlay = _run_blob_paths(root, "", run_id)
+        dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay)
+    except (cov.ExportError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        stack.close()
+        result["own_tree_skipped"] = f"{type(exc).__name__}: {exc}"[:300]
+        return str(root)
+    _MIRRORS.add(str(dest))
+    stack.callback(_MIRRORS.discard, str(dest))
+    result["own_tree"] = {"at": sha, "overlaid": overlay}
+    return str(dest)
+
+
+def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[str], root: Path, left,
+                      run_id: Optional[str] = None) -> None:
     """A zero-run caused by an import error in a file no run owns says nothing about the run's own change: re-run
     `targets` on the `base_sha` export overlaid with the run-owned blobs (the foreign file at its base bytes) and
     fold that verdict into `result`. Any failure to measure there keeps the cwd verdict, noted as
@@ -634,7 +674,7 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
     try:
         if left() <= 0:
             raise subprocess.TimeoutExpired("pytest", 0)
-        overlay = _run_blob_paths(root, err["path"])
+        overlay = _run_blob_paths(root, err["path"], run_id)
         with cov._mirror_lock(root, "test-leg-run") as mroot:
             dest = cov._prepare_guarded(root, mroot, cov._commit_sha(root, base_sha), cov._no_leg, overlay)
             present, _absent = _partition(targets, dest)
@@ -683,10 +723,12 @@ def _stamp_slow(result: dict, slow: list[dict]) -> None:
 
 
 def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
-        base_export_out: Optional[str], budget_s: float, cwd: str, touched: Sequence[str] = ()) -> dict:
+        base_export_out: Optional[str], budget_s: float, cwd: str, touched: Sequence[str] = (),
+        run_id: Optional[str] = None) -> dict:
     """The `test`-shaped verdict for `targets`; `over_budget` true when the deadline expired. With `touched`
     (the landing's changed paths) the leg runs in the shared-clone mirror instead of `cwd` and adds `new_red`,
-    `importer_targets`, `targets_run`; `head_sha` is then the post-land rev (default HEAD)."""
+    `importer_targets`, `targets_run`; `head_sha` is then the post-land rev (default HEAD). `run_id` limits the run-owned overlay to that run's
+    record; None overlays every run record."""
     started = time.monotonic()
 
     def left() -> float:
@@ -697,6 +739,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
                     "not_a_test": []}
     phase_one: Optional[tuple[int, list[str], str]] = None
     unreached: list[str] = []
+    stack = contextlib.ExitStack()
     try:
         if touched:
             try:
@@ -712,14 +755,15 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
             return result
-        targets, result["not_a_test"] = _split_not_a_test(targets, Path(cwd))
+        run_cwd = _own_tree(stack, Path(cwd), head_sha, result, run_id)
+        targets, result["not_a_test"] = _split_not_a_test(targets, Path(run_cwd))
         if not targets:
             _tally(result, 5, ())
             result["over_budget"] = False
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
             return result
-        present, absent = _partition(targets, Path(cwd))
+        present, absent = _partition(targets, Path(run_cwd))
         if absent:
             result["missing_targets"] = absent
         if not present:
@@ -739,16 +783,16 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         red_non: list[str] = []
         exported: dict = {}
         batch: dict = {}
-        rc, lines, reds, stderr, stdout = _cwd_phase(first, cwd, left_first, all_reds, shown, red_non, batch)
+        rc, lines, reds, stderr, stdout = _cwd_phase(first, run_cwd, left_first, all_reds, shown, red_non, batch)
         result["pytest_phases"] = [{"exit_code": rc, "stderr": stderr[-4096:],
                                     "stdout": stdout[-_PYTEST_STDOUT_LIMIT:], "encoding": _PYTEST_ENCODING}]
         phase_one = (rc, lines, stderr)
         unreached = _files(second)
         if reds and _can_reconcile_reds(rc, lines):
-            _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported)
+            _settle(result, reds, cwd, base_sha, head_sha, base_export_out, left_first, exported, run_cwd)
         if second:
             try:
-                rc2, lines2, reds2, stderr2, stdout2 = _cwd_phase(second, cwd, left, all_reds, shown, red_non, batch)
+                rc2, lines2, reds2, stderr2, stdout2 = _cwd_phase(second, run_cwd, left, all_reds, shown, red_non, batch)
             except subprocess.TimeoutExpired:
                 result[ltt.IMPORTER_OVERRUN_KEY] = True
                 result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(second)
@@ -760,7 +804,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
                 reds = [*reds, *reds2]
                 try:
                     if reds2 and _can_reconcile_reds(rc2, lines2):
-                        _settle(result, reds2, cwd, base_sha, head_sha, base_export_out, left, exported)
+                        _settle(result, reds2, cwd, base_sha, head_sha, base_export_out, left, exported, run_cwd)
                 except subprocess.TimeoutExpired:
                     result[ltt.IMPORTER_OVERRUN_KEY] = True
                     result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(reds2)
@@ -784,7 +828,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             _stamp_slow(result, batch["slow"])
         if result.get(IMPORT_ERROR_KEY):
             _own_import_error(result, Path(cwd))
-            _overlay_fallback(result, present, base_sha, Path(cwd), left)
+            if "own_tree" not in result:
+                _overlay_fallback(result, present, base_sha, Path(cwd), left, run_id)
     except subprocess.TimeoutExpired as exc:
         result["status_after"] = "fail"
         credit = getattr(exc, "credit", None)
@@ -815,7 +860,12 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         if touched:
             result.setdefault("new_red", [])
         _tally(result, 2, ())
-    _name_foreign_dependency(result, Path(cwd))
+    finally:
+        stack.close()
+    if "own_tree" in result:
+        result.pop(_MISSING_KEY, None)
+    else:
+        _name_foreign_dependency(result, Path(cwd))
     _own_import_error(result, Path(cwd))
     result["elapsed_s"] = round(time.monotonic() - started, 3)
     result["budget_s"] = budget_s
@@ -852,6 +902,16 @@ def _derive_targets(base_sha: str, head_sha: Optional[str], cwd: str) -> list[st
         return list(reverify_scope.select_tests(Path(cwd), base_sha, head_sha or "HEAD")["tests"])
     except ValueError:
         return []
+
+
+def _run_id(args) -> Optional[str]:
+    """`--run-id`, else the `--out` directory's name when it holds a touched-blobs record (the run's own dir)."""
+    if args.run_id:
+        return args.run_id
+    from coordinator_core.ops.dispatch_emit import stranded_sibling
+
+    out_dir = Path(args.out).resolve().parent
+    return out_dir.name if (out_dir / stranded_sibling.TOUCHED_FILE).is_file() else None
 
 
 def main(argv: list[str]) -> int:
@@ -893,7 +953,8 @@ def main(argv: list[str]) -> int:
         print(json.dumps(refused))
         return EXIT_USAGE
     result = run(targets, base_sha=args.base_sha, head_sha=args.head_sha,
-                 base_export_out=args.base_export_out, budget_s=budget_s, cwd=cwd, touched=args.touched)
+                 base_export_out=args.base_export_out, budget_s=budget_s, cwd=cwd, touched=args.touched,
+                 run_id=_run_id(args))
     if derived:
         result["derived_targets"] = targets
     body = json.dumps(result)

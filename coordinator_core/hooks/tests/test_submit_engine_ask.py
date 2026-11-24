@@ -2050,7 +2050,7 @@ def _direct_start_root(tmp_path: Path, monkeypatch, body: str):
     (tmp_path / rel).write_text(body, encoding="utf-8")
     fire = {"repoRoot": "/r", "runToken": "tok"}
     monkeypatch.setattr(minted_run, "is_minted_only", lambda path: True)
-    monkeypatch.setattr(minted_run, "start_args", lambda root, run_id: {"ok": True, "script_path": rel, "fire_args": fire})
+    monkeypatch.setattr(minted_run, "start_args", lambda root, run_id, **_kw: {"ok": True, "script_path": rel, "fire_args": fire})
     return rel, fire
 
 

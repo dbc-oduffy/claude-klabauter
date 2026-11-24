@@ -339,7 +339,7 @@ _REASK_REPLY_LIMIT = 20000
 
 def _reask_unparsable(exc, last, prompt, options, schema, repo_root, artifact_dir, backend, timeout_s,
                       on_spawn, parent_session_id) -> Any:
-    """One bounded repair re-ask for a reply that is not JSON; a second failure raises, never loops."""
+    """One bounded repair re-ask for a reply that is not JSON or not schema-valid; a second failure raises, never loops."""
     try:
         text = last.read_text(encoding="utf-8")
     except OSError:
@@ -347,11 +347,21 @@ def _reask_unparsable(exc, last, prompt, options, schema, repo_root, artifact_di
     failure = AgentFailed(f"{backend} returned no schema-valid result: {exc}")
     if not text or len(text) > _REASK_REPLY_LIMIT:
         raise failure from exc
-    repair = (
-        "Repair JSON syntax in the following data. Do not run any tools or repeat the operation. "
-        "Return the complete original reply with only JSON punctuation or whitespace repaired.\n"
-        + json.dumps({"diagnostic": str(exc)[:400], "reply": text}, ensure_ascii=False)
-    )
+    if isinstance(exc, jsonschema.ValidationError):
+        repair = (
+            "The following reply is valid JSON but fails the required JSON Schema. Do not run any tools or "
+            "repeat the operation. Return the complete corrected reply, conforming to the schema, as one raw "
+            "JSON value; keep every correct member and add or fix only what the validation error names.\n"
+            + json.dumps({"validation_error": exc.message[:400],
+                          "path": "/".join(str(p) for p in exc.absolute_path) or "(root)",
+                          "reply": text}, ensure_ascii=False)
+        )
+    else:
+        repair = (
+            "Repair JSON syntax in the following data. Do not run any tools or repeat the operation. "
+            "Return the complete original reply with only JSON punctuation or whitespace repaired.\n"
+            + json.dumps({"diagnostic": str(exc)[:400], "reply": text}, ensure_ascii=False)
+        )
     try:
         return run_agent(repair, {k: v for k, v in options.items() if k != "agentType"}, repo_root=repo_root,
                          artifact_dir=Path(artifact_dir) / "reply-reask", backend=backend, timeout_s=timeout_s,
@@ -483,7 +493,8 @@ def run_agent(
             value = fill_omitted_nullable(unwrap_rpc_envelope(value, schema), schema)
             jsonschema.validate(value, schema)
     except (OSError, ValueError, KeyError, jsonschema.ValidationError) as exc:
-        if isinstance(exc, json.JSONDecodeError) and backend == "codex" and schema is not None and not _reask:
+        if (isinstance(exc, (json.JSONDecodeError, jsonschema.ValidationError))
+                and backend == "codex" and schema is not None and not _reask):
             return _reask_unparsable(exc, last, prompt, options, schema, repo_root, artifact_dir, backend, timeout_s,
                                      on_spawn, parent_session_id)
         if denial:
