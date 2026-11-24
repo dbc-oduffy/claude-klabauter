@@ -141,6 +141,7 @@ const ABANDON_IDS = [];
 const LEGS = {};
 const STARTED = {};
 const THREW = {};
+const LAUNCH = { cause: null };
 const TWIN_PREFIX = __TWIN_PREFIX__;
 const TWIN_MIDDLE = __TWIN_MIDDLE__;
 const TWIN_SUFFIX = __TWIN_SUFFIX__;
@@ -409,14 +410,23 @@ async function _guardedChild(child, emitted) {
   }
 }
 
+// Trap: parallel() itself rejecting, or resolving to anything but one entry per thunk, must not end the launcher before _settleRuns names every child.
 async function _startAll() {
-  return parallel(CHILDREN.map((child, i) => () => _guardedChild(child, EMITTED[i])));
+  try {
+    const out = await parallel(CHILDREN.map((child, i) => () => _guardedChild(child, EMITTED[i])));
+    if (Array.isArray(out)) return out;
+    LAUNCH.cause = 'the parallel settle returned no entry list';
+  } catch (e) {
+    LAUNCH.cause = 'the parallel settle threw: ' + String(e && e.message ? e.message : e);
+  }
+  return [];
 }
 
 // A child with no entry, or one whose entry carries no status, whose start never returned is not_started, naming the leg it last entered; a child whose start returned and then threw stays failed.
 function _settleRuns(settled) {
+  const entries = Array.isArray(settled) ? settled : [];
   return CHILDREN.map((child, i) => {
-    const s = settled[i];
+    const s = entries[i];
     if (s !== null && s !== undefined && typeof s === 'object' && typeof s.status === 'string') return s;
     if (STARTED[child.run_id]) {
       const cause = Object.prototype.hasOwnProperty.call(THREW, child.run_id) ? ': ' + THREW[child.run_id] : '';
@@ -425,7 +435,7 @@ function _settleRuns(settled) {
     const leg = LEGS[child.run_id] || 'emit';
     const how = Object.prototype.hasOwnProperty.call(THREW, child.run_id)
       ? 'threw before its start returned: ' + THREW[child.run_id]
-      : 'settled without a start';
+      : (LAUNCH.cause !== null ? 'ended before its start returned: ' + LAUNCH.cause : 'settled without a start');
     return { run_id: child.run_id, status: 'not_started', reason: leg + ' leg ' + how };
   });
 }

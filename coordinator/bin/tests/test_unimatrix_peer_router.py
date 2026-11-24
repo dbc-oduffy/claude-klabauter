@@ -2393,6 +2393,21 @@ def test_short_machine_a_alias_resolves_current_mirror_and_refuses_collision(dir
 
 
 @portable
+def test_name_dot_box_id_resolves_a_mirror_labelled_by_address_and_stays_ambiguous_on_collision(dirs):
+    row = {"name": "agent-a.192-168-0-192", "unimatrixBox": "Machine-a", "unimatrixRemote": "192.168.0.192",
+           "pid": os.getpid(), "messagingSocketPath": "/s/machine-a.sock", "sessionId": "first"}
+    (dirs / "sessions" / "far.json").write_text(json.dumps(row))
+    router = pr.Router([], sessions_dir=dirs / "sessions", state_dir=dirs / "state", endpoint_dir=dirs / "eps", adapters={})
+    assert router.resolve_sender("agent-a.machine-a") == "/s/machine-a.sock"
+    assert router.resolve_sender("agent-a.192-168-0-192") == "/s/machine-a.sock"
+    assert router.resolve_sender("agent-a.otherbox") == ""
+    second = {**row, "name": "agent-a.192-168-0-192", "messagingSocketPath": "/s/other.sock", "sessionId": "second"}
+    (dirs / "sessions" / "far2.json").write_text(json.dumps(second))
+    assert router.resolve_sender("agent-a.machine-a") == ""
+    assert "ambiguous" in router.last_refusal
+
+
+@portable
 def test_two_null_target_rows_for_one_session_on_one_endpoint_still_resolve(tmp_path):
     r = _two_null_target_rows_on_one_endpoint(tmp_path, "sid-live", "sid-live")
     assert r.resolve_sender("dup") == "/s/one.sock"

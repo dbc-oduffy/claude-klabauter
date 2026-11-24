@@ -491,6 +491,45 @@ def test_carry_gate_unparseable_frontmatter_refuses(tmp_path: Path) -> None:
     assert any("unparseable carried_items" in line for line in outcome.diagnostics)
 
 
+def test_carry_gate_scaffold_readme_is_not_a_handoff(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "state/handoffs/README.md", "# handoffs\n\nplain prose\n")
+    outcome = carry_gate(repo, gate_paths=["state/handoffs/README.md"])
+    assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
+    # A real handoff with the same body still refuses.
+    _seed_file(repo, "state/handoffs/2026-08-10-readme-body.md", "# handoffs\n\nplain prose\n")
+    refused = carry_gate(
+        repo,
+        gate_paths=["state/handoffs/README.md", "state/handoffs/2026-08-10-readme-body.md"],
+    )
+    assert refused.passed is False
+    assert not any(line.startswith("state/handoffs/README.md") for line in refused.diagnostics)
+
+
+def test_fresh_repo_setup_scaffold_lands_whole_through_commit_v2(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ops import repo_setup
+    from coordinator_core.ops.ceremony import commit_v2
+
+    if repo_setup._plugin_root() is None:
+        pytest.skip("engine-plane manifest root not resolvable; repo.setup cannot seed the scaffold")
+    monkeypatch.setattr(repo_setup, "_machine_profile", lambda: "author")
+    repo = _init_repo(tmp_path)
+    repo_setup.handle({"root": str(repo)})
+    readme = "state/handoffs/README.md"
+    paths = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=str(repo), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout.split()
+    assert readme in paths
+    result = commit_v2._handler({"paths": paths, "message": "scaffold\n"}, repo_root=repo / ".git")
+    assert result["committed"] is True, result
+    landed = subprocess.run(
+        ["git", "ls-tree", "-r", "HEAD", "--name-only"],
+        cwd=str(repo), capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout.split()
+    assert readme in landed
+
+
 def test_carry_gate_only_filters_handoff_paths(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_handoff(repo, "state/handoffs/2026-08-10-g.md", "")

@@ -17,6 +17,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
+_REAL_RUN_ID = checkpoint_hunks.checkpoint_run_id
 SELF = "cko-self"
 PLAN = "state/mise-inventory/run.spine.md"
 BASE_TEXT = "".join(f"line{i}\n" for i in range(1, 11))
@@ -157,6 +158,50 @@ def test_checkpoint_without_the_id_list_and_unresolved_run_never_commits_whole(r
     assert "run unresolved" in result["error"]
     assert _git(["rev-parse", "HEAD"], repo).strip() == head
     assert "FOREIGN" in (repo / "shared.txt").read_text()
+
+
+def test_plan_reemit_run_lands_its_wave_checkpoint(repo, monkeypatch):
+    """A plan re-emit's live token binds no sizing; the run resolves through its emission receipt."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    _edit_shared(repo)
+    script = "scratch/gnmi-reemit.workflow.mjs"
+    (repo / "scratch").mkdir()
+    (repo / f"{script}.emitted.json").write_text(json.dumps({"plan_relpath": PLAN}), encoding="utf-8")
+    run_token.mint(repo, "warp-reemit-1", script, session_id=SELF)
+    monkeypatch.setattr(checkpoint_hunks, "checkpoint_run_id", _REAL_RUN_ID)
+    monkeypatch.setattr(
+        run_hunk_claims, "own_hunks",
+        lambda r, run, path, hunks, holders: HunkSplit(own=[h for h in hunks if h.old_start == 2]),
+    )
+
+    result = _call(repo, _params_no_ids(repo, ["shared.txt"]))
+
+    assert result["committed"] is True, result
+    landed = _git(["show", "HEAD:shared.txt"], repo)
+    assert "OWN" in landed and "FOREIGN" not in landed
+
+
+def test_run_of_another_plan_still_withholds_the_checkpoint(repo, monkeypatch):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    _edit_shared(repo)
+    script = "scratch/other.workflow.mjs"
+    (repo / "scratch").mkdir()
+    (repo / f"{script}.emitted.json").write_text(json.dumps({"plan_relpath": "docs/plans/other.md"}), encoding="utf-8")
+    run_token.mint(repo, "warp-other-1", script, session_id=SELF)
+    monkeypatch.setattr(checkpoint_hunks, "checkpoint_run_id", _REAL_RUN_ID)
+    head = _git(["rev-parse", "HEAD"], repo).strip()
+
+    result = _call(repo, _params_no_ids(repo, ["shared.txt"]))
+
+    assert result.get("committed") is not True
+    assert "run unresolved" in result["error"]
+    assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
 def test_withheld_file_names_the_foreign_hunk(repo, monkeypatch):

@@ -93,6 +93,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
     carry_gate,
     residue_gate,
     split_process_paths,
+    _PROCESS_PREFIXES,
     claude_md_budget_gate,
     declared_deletion_gate,
     files_present,
@@ -2063,6 +2064,12 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         }
     if process_sha is not None:
         result["process_sha"] = process_sha
+        result["split_reason"] = (
+            f"landed as two commits: product {sha}, then process files {process_sha} "
+            f"(subject suffixed '{_PROCESS_SUBJECT_SUFFIX.strip()}'), because process paths "
+            f"({', '.join(_PROCESS_PREFIXES)}) never ride in a product "
+            "commit on a non-DoE repo. Pass one_commit=true for a single commit."
+        )
     merge_parent = next((o.merge_parent for o in outcomes if o.merge_parent), None)
     if merge_parent is not None:
         result["merge_parent"] = merge_parent

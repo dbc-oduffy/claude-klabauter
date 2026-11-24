@@ -599,7 +599,7 @@ def declared_deletion_gate(
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
 
-_HANDOFF_PATH_RE = re.compile(r"^state/handoffs/[^/]+\.md$")
+_HANDOFF_PATH_RE = re.compile(r"^state/handoffs/(?!README\.md$)[^/]+\.md$")
 
 _CARRY_GATE_RESTAGE_HINT = (
     "carry_gate: refused paths are left UNSTAGED -- fix the carried_items "

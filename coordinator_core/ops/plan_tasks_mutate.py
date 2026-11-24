@@ -10,8 +10,8 @@ refusing an ungated closed disposition — D4); plus `reopen` (id, disposition_d
 `depends-on` (id, action, chunk, gate_kind?, note?), `evidence-append` (id, text),
 `em-discharge` (id, text, commit?, evidence?, ue_report? — records an em-performed row as done in
 `<plan-stem>.evidence.yaml` under `em_discharged`, leaving the spine row as is),
-`premise-record` (id, verdict, ref), `note` (id, text) and `clear-gate` (id, owner_repo?, evidence?,
-condition?, gate_index?). Zero-spawn hot-path: validates
+`premise-record` (id, verdict, ref), `note` (id, text) and `clear-gate` (id?, owner_repo?, evidence?,
+condition?, gate_index?; no id targets a row-less plan-level frontmatter gate). Zero-spawn hot-path: validates
 rows in-process against the vendored `_PLAN_TASKS_SCHEMA`
 (coordinator_core.frontmatter.schema_validate) — no runtime shell-out to DoE's
 schema-cli.js.
@@ -1718,6 +1718,9 @@ def _clear_gate(
     unique prefix) or ``gate_index`` (1-based over row-level then frontmatter
     entries, as the refusal lists them) selects one.
 
+    With no ``task_id`` the target is a plan-level gate: a frontmatter entry
+    carrying no ``row`` (same owner_repo, evidence and selection rules).
+
     Refuses empty evidence, an unknown row, no matching gate, and an
     unresolved selection. An already-cleared gate is a no-op (applied False).
     """
@@ -1726,8 +1729,7 @@ def _clear_gate(
     except _PathNotContained as exc:
         return _err(f"clear-gate: {exc}")
 
-    if not task_id:
-        return _err("clear-gate: 'id' is required")
+    plan_level = not task_id
     if not owner_repo:
         return _err("clear-gate: 'owner_repo' is required")
     if not evidence:
@@ -1737,35 +1739,46 @@ def _clear_gate(
         )
 
     _state: dict = {"applied": False, "message": "", "warnings": []}
-    gate_label = f"{task_id!r} gate owner_repo={owner_repo!r}"
+    gate_label = (
+        f"plan-level gate owner_repo={owner_repo!r}"
+        if plan_level
+        else f"{task_id!r} gate owner_repo={owner_repo!r}"
+    )
 
     def mutate(old_text: str) -> str:
-        result = locate_fenced_block(old_text)
-        if result.status is LocateStatus.MALFORMED:
-            raise MutateAbort(
-                "clear-gate: task spine is malformed (multiple 'yaml plan-tasks' fences, "
-                "or a fence not directly under the '## Tasks' heading)"
+        result = None
+        rows: list = []
+        original_rows: list = []
+        plan_created = None
+        governed = False
+        row_hits: list = []
+        if not plan_level:
+            result = locate_fenced_block(old_text)
+            if result.status is LocateStatus.MALFORMED:
+                raise MutateAbort(
+                    "clear-gate: task spine is malformed (multiple 'yaml plan-tasks' fences, "
+                    "or a fence not directly under the '## Tasks' heading)"
+                )
+            if result.status is LocateStatus.ABSENT:
+                raise MutateAbort("clear-gate: task spine is absent — no gate to clear")
+
+            plan_fm = parse_frontmatter(old_text).get("frontmatter")
+            plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
+            governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
+
+            rows = _parse_rows_or_abort(result.body, "clear-gate")
+            original_rows = copy.deepcopy(rows)
+            row = next(
+                (r for r in rows if isinstance(r, dict) and r.get("id") == task_id), None
             )
-        if result.status is LocateStatus.ABSENT:
-            raise MutateAbort("clear-gate: task spine is absent — no gate to clear")
+            if row is None:
+                raise MutateAbort(f"clear-gate: task id not found: {task_id!r}")
 
-        plan_fm = parse_frontmatter(old_text).get("frontmatter")
-        plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
-        governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
-
-        rows = _parse_rows_or_abort(result.body, "clear-gate")
-        original_rows = copy.deepcopy(rows)
-        row = next(
-            (r for r in rows if isinstance(r, dict) and r.get("id") == task_id), None
-        )
-        if row is None:
-            raise MutateAbort(f"clear-gate: task id not found: {task_id!r}")
-
-        row_gates = row.get("external_gate")
-        row_hits = [
-            g for g in (row_gates if isinstance(row_gates, list) else [])
-            if _gate_matches(g, owner_repo)
-        ]
+            row_gates = row.get("external_gate")
+            row_hits = [
+                g for g in (row_gates if isinstance(row_gates, list) else [])
+                if _gate_matches(g, owner_repo)
+            ]
 
         from coordinator_core.frontmatter.primitives import rebuild, split_frontmatter
 
@@ -1784,7 +1797,10 @@ def _clear_gate(
                 if (
                     isinstance(item, list) and item
                     and _gate_matches(item[0], owner_repo)
-                    and item[0].get("row") == task_id
+                    and (
+                        not item[0].get("row") if plan_level
+                        else item[0].get("row") == task_id
+                    )
                 ):
                     fm_hits.append((start, end, indent, item[0]))
 
@@ -3081,7 +3097,8 @@ async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
                    default | epistemic-premise), note (optional) — adds or
                    removes one depends_on edge; refuses unknown row/target,
                    self-edge, duplicate, absent edge and cycles.
-        clear-gate : id (str), owner_repo (str), evidence (str, non-empty),
+        clear-gate : id (str; omit to clear a row-less plan-level frontmatter
+                   gate), owner_repo (str), evidence (str, non-empty),
                    condition (str, optional) | gate_index (int, optional,
                    1-based) — sets cleared: true + closure_evidence on the
                    one matching external_gate entry (row-level, or

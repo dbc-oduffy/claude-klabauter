@@ -33,6 +33,30 @@ def _sizing_plan(root: Path, sizing_rel: object) -> str:
     return _norm(plan) if isinstance(plan, str) else ""
 
 
+def _receipt_plan(root: Path, script_path: object) -> str:
+    """The plan a plan-route emit recorded in `<script>.emitted.json` (`plan_relpath`), "" when the
+    script has no readable receipt or it names no plan. One small file read, no spawn."""
+    import json
+
+    if not isinstance(script_path, str) or not script_path:
+        return ""
+    try:
+        receipt = json.loads(Path(f"{root / script_path}.emitted.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    plan = receipt.get("plan_relpath") if isinstance(receipt, dict) else None
+    return _norm(plan) if isinstance(plan, str) else ""
+
+
+def _record_plan(root: Path, record: dict) -> str:
+    """The plan a live run works: its bound sizing's plan, else (a plan re-emit binds no sizing) the
+    plan its emission receipt names."""
+    from coordinator_core.ops import warp_run_deliverable
+
+    sizing_rel = record.get("sizing_rel") or warp_run_deliverable.record_sizing_rel(root, record["run_id"])
+    return _sizing_plan(root, sizing_rel) or _receipt_plan(root, record.get("script_path"))
+
+
 def _message_plan(message: str) -> str:
     from coordinator_core.git.checkpoint_guard import _PLAN_RE
 
@@ -55,7 +79,6 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
         if len(requested) > 1 or requested == [""]:
             return None
         from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches
-        from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import run_token
 
         root = Path(root)
@@ -64,9 +87,7 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
             for record in run_token.live_records(root)
             if record.get("session_id") == session_id
             and (not requested or record["run_id"] == requested[0])
-            and (own := _sizing_plan(
-                root, record.get("sizing_rel") or warp_run_deliverable.record_sizing_rel(root, record["run_id"])
-            ))
+            and (own := _record_plan(root, record))
             and checkpoint_plan_matches(plan, own)
         ]
         return found[0] if len(found) == 1 else None

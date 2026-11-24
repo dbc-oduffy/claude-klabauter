@@ -110,6 +110,26 @@ def test_run_resolves_when_the_token_record_omits_its_sizing(tmp_path: Path) -> 
     assert ch.checkpoint_run_id(tmp_path, MSG, "s9") is None
 
 
+def _reemit_run(root: Path, run_id: str, plan: str, *, session: str = "s1") -> None:
+    import json
+
+    script = f"scratch/{run_id}.workflow.mjs"
+    (root / "scratch").mkdir(exist_ok=True)
+    (root / f"{script}.emitted.json").write_text(json.dumps({"plan_relpath": plan}), encoding="utf-8")
+    run_token.mint(root, run_id, script, session_id=session)
+
+
+def test_plan_reemit_run_without_a_sizing_resolves_through_its_emission_receipt(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    _reemit_run(tmp_path, "warp-reemit", PLAN)
+    _reemit_run(tmp_path, "warp-other-plan", "docs/plans/other.md")
+    _reemit_run(tmp_path, "warp-peer", PLAN, session="s2")
+    assert ch.checkpoint_run_id(tmp_path, MSG, "s1") == "warp-reemit"
+    assert ch.checkpoint_run_id(tmp_path, MSG, "s2") == "warp-peer"
+    assert ch.checkpoint_run_id(tmp_path, MSG, "s9") is None
+    assert ch.checkpoint_run_id(tmp_path, MSG.replace(PLAN, "docs/plans/none.md"), "s1") is None
+
+
 def test_run_unresolved_when_two_token_less_sizing_runs_match(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _live_run(tmp_path, "ask-1", "state/sizings/a.yaml", PLAN, in_token=False)

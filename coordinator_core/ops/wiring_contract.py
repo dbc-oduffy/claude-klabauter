@@ -1,15 +1,17 @@
 """Judge a plan's optional `wiring:` list: which declared parts are not delivered.
 
-Pure functions; the only IO is one `Path.is_file()` per part's `built_path`.
-An absent `wiring:` key is legacy and never refused. A `runs_evidence` entry is a
-`{path, sha, dirty}` mapping (`evidence_entry`) and counts only when its sha is the
-delivered sha and its tree was clean.
+IO: one `Path.is_file()` per part's `built_path`, and at most one `git log` per distinct
+evidence sha that is not the delivered sha. An absent `wiring:` key is legacy and never
+refused. A `runs_evidence` entry is a `{path, sha, dirty}` mapping (`evidence_entry`) and
+counts only when its tree was clean and its sha is the delivered sha or an ancestor of it
+with no change under the part's `built_path` or `consumes` paths since.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.run_truth_contract import STATUS_UNWIRED
 
@@ -25,6 +27,10 @@ REASON_EVIDENCE_SHA_MISMATCH = "evidence-sha-mismatch"
 REASON_EVIDENCE_DIRTY = "evidence-dirty-tree"
 REASON_EVIDENCE_SHA_MISSING = "evidence-sha-missing"
 REASON_UNFED_CONSUMES = "unfed-consumes"
+REASON_NOT_ANCESTOR = "not-an-ancestor-of-head"
+REASON_COVERED_CHANGED = "covered-paths-changed"
+
+_SHA_RE = re.compile(r"[0-9a-fA-F]{4,64}")
 
 SEAM_KEYS = ("consumes", "produces", "consumes_external")
 
@@ -95,7 +101,12 @@ def unconsumed_produces(fm: Mapping[str, Any]) -> list[tuple[str, str]]:
     return out
 
 
-def _verdict(part: Any, repo_root: Path, delivered_sha: Optional[str]) -> dict:
+def _verdict(
+    part: Any,
+    repo_root: Path,
+    delivered_sha: Optional[str],
+    ancestry: Optional[dict] = None,
+) -> dict:
     if not isinstance(part, Mapping):
         return {"id": "?", "status": "malformed", "reason": "part-not-a-mapping"}
     pid = str(part.get("id", "?"))
@@ -121,7 +132,8 @@ def _verdict(part: Any, repo_root: Path, delivered_sha: Optional[str]) -> dict:
     evidence = part.get("runs_evidence")
     if not isinstance(evidence, list) or not evidence:
         return {"id": pid, "status": STATUS_UNWIRED, "reason": REASON_STUB_ONLY}
-    reasons = [_entry_reason(e, delivered_sha) for e in evidence]
+    covered = [built, *(_seam_list(part, "consumes") or [])]
+    reasons = [_entry_reason(e, delivered_sha, repo_root, covered, ancestry) for e in evidence]
     if "" in reasons:
         return {"id": pid, "status": STATUS_WIRED, "reason": ""}
     # First non-stub failure names the cause; all-stub stays the stub reason.
@@ -134,8 +146,59 @@ def evidence_entry(path: str, sha: str, dirty: bool) -> dict:
     return {"path": path, "sha": sha, "dirty": dirty}
 
 
-def _entry_reason(entry: Any, delivered_sha: Optional[str]) -> str:
-    """'' when the entry counts, else the reason it does not."""
+def _changed_since(
+    repo_root: Path, sha: str, head: str, cache: dict
+) -> Optional[tuple[bool, list[str]]]:
+    """`(is_ancestor, paths changed sha..head)` from one `git log`, memoised per sha in `cache`.
+
+    None when git cannot answer (unknown sha, not a repo). One spawn covers every part's
+    covered paths; the caller filters the returned names.
+    """
+    if sha in cache:
+        return cache[sha]
+    result = None
+    if _SHA_RE.fullmatch(sha):
+        from coordinator_core.ops.ceremony import git_native
+
+        r = git_native._git(
+            [
+                "-c", "core.quotepath=false", "log", "--left-right", "--no-renames",
+                "--name-only", "--format=%x01%m", f"{sha}...{head}", "--",
+            ],
+            cwd=repo_root,
+        )
+        if r.ok:
+            ancestor, changed, side = True, [], ""
+            for line in r.stdout.splitlines():
+                if line.startswith("\x01"):
+                    side = line[1:]
+                    ancestor = ancestor and side != "<"
+                elif line and side == ">":
+                    changed.append(line)
+            result = (ancestor, changed)
+    cache[sha] = result
+    return result
+
+
+def _covered_changes(covered: list[str], changed: list[str]) -> list[str]:
+    """The changed paths equal to or under a covered path, sorted and de-duplicated."""
+    roots = [c.replace("\\", "/").strip().rstrip("/") for c in covered if isinstance(c, str)]
+    roots = [r for r in roots if r]
+    return sorted({n for n in changed if any(n == r or n.startswith(r + "/") for r in roots)})
+
+
+def _entry_reason(
+    entry: Any,
+    delivered_sha: Optional[str],
+    repo_root: Optional[Path] = None,
+    covered: Sequence[str] = (),
+    ancestry: Optional[dict] = None,
+) -> str:
+    """'' when the entry counts, else the reason it does not.
+
+    A sha other than `delivered_sha` counts when it is an ancestor of it and no covered path
+    changed between them; sha == delivered_sha costs no git spawn.
+    """
     if not isinstance(entry, Mapping):
         if isinstance(entry, str) and not is_stub_evidence(entry):
             return REASON_EVIDENCE_SHA_MISSING
@@ -147,7 +210,19 @@ def _entry_reason(entry: Any, delivered_sha: Optional[str]) -> str:
     if not isinstance(sha, str) or not sha:
         return REASON_EVIDENCE_SHA_MISSING
     if delivered_sha is not None and sha != delivered_sha:
-        return REASON_EVIDENCE_SHA_MISMATCH
+        answer = (
+            _changed_since(repo_root, sha, delivered_sha, ancestry if ancestry is not None else {})
+            if repo_root is not None
+            else None
+        )
+        if answer is None:
+            return REASON_EVIDENCE_SHA_MISMATCH
+        is_ancestor, changed = answer
+        if not is_ancestor:
+            return f"{REASON_EVIDENCE_SHA_MISMATCH} ({REASON_NOT_ANCESTOR})"
+        hits = _covered_changes(list(covered), changed)
+        if hits:
+            return f"{REASON_COVERED_CHANGED}: {', '.join(hits)}"
     if entry.get("dirty") is not False:
         return REASON_EVIDENCE_DIRTY
     return ""
@@ -165,7 +240,8 @@ def part_verdicts(
     if not isinstance(wiring, list):
         return []
     root = Path(repo_root)
-    return [_verdict(p, root, delivered_sha) for p in wiring]
+    ancestry: dict = {}
+    return [_verdict(p, root, delivered_sha, ancestry) for p in wiring]
 
 
 def refusal(

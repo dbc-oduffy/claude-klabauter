@@ -188,6 +188,9 @@ def _log_spawn_failure(repo_root: str, script_path: str, args: Sequence[str], ex
 
 _LIVE_TREE_ENV_VARS = ("COORDINATOR_ENGINE_ROOT",)
 
+# Directory containing the `coordinator_core` package this module was imported from.
+_ENGINE_ROOT = str(Path(__file__).resolve().parents[3])
+
 
 def _canonical(path: str) -> str:
     return os.path.normcase(os.path.realpath(path))
@@ -206,9 +209,15 @@ def _warm_spawn_refused_for_test(resolved_path: Path) -> bool:
 
 
 def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
-    """Build the detached child's environment: `PYTHONPATH` with `repo_root` PREPENDED
-    ahead of anything already there, everything else inherited from this process's own
-    `os.environ`.
+    """Build the detached child's environment: `PYTHONPATH` with the launching engine's own
+    package root (`_ENGINE_ROOT`) PREPENDED, then `repo_root` (when it is a different tree),
+    then anything already there; everything else inherited from this process's own `os.environ`.
+
+    The engine root leads so `import coordinator_core` in the child resolves the engine that
+    launched it, never the served repo's copy: a served tree mid-edit, or lacking a symbol the
+    engine needs, must not break the engine's own child. `repo_root` stays on the path (after
+    the engine) for its non-`coordinator_core` modules, and remains the child's cwd/argument.
+    The `PathFinder`-before-editable-finder reasoning below holds for the engine root.
 
     Mirrors `auto_push._respawn_env`'s `_claude_klabauter_package_root()` injection -- the SAME
     defect class, the SAME proven fix. That precedent's own docstring names it exactly:
@@ -254,9 +263,9 @@ def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     this function's parent-dies/child-persists boundary is where the value
     stops being true.
 
-    Pins `_LIVE_TREE_ENV_VARS` to `repo_root` when the parent carries one naming a different
-    tree: the child runs `repo_root`'s script, so an inherited override pointing at the
-    publishing process's working tree makes every hook in the child's engine raise a
+    Pins `_LIVE_TREE_ENV_VARS` to `_ENGINE_ROOT` when the parent carries one naming a different
+    tree: the child imports `_ENGINE_ROOT`'s `coordinator_core`, so an inherited override pointing
+    at any other working tree makes every hook in the child's engine raise a
     provenance divergence. An unset variable stays unset; unrelated variables are untouched.
     """
     env = dict(os.environ)
@@ -268,10 +277,13 @@ def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     scrub_test_env(env)
     for var in _LIVE_TREE_ENV_VARS:
         inherited = env.get(var)
-        if inherited and _canonical(inherited) != _canonical(repo_root):
-            env[var] = repo_root
+        if inherited and _canonical(inherited) != _canonical(_ENGINE_ROOT):
+            env[var] = _ENGINE_ROOT
     existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = repo_root + (os.pathsep + existing if existing else "")
+    roots = [_ENGINE_ROOT]
+    if _canonical(repo_root) != _canonical(_ENGINE_ROOT):
+        roots.append(repo_root)
+    env["PYTHONPATH"] = os.pathsep.join(roots + ([existing] if existing else []))
     if env_extra:
         env.update(env_extra)
     return env
@@ -338,6 +350,10 @@ def spawn_detached(
     """
     args = list(args) if args is not None else []
     resolved_path = Path(repo_root) / script_path
+    if not Path(script_path).is_absolute():
+        engine_copy = Path(_ENGINE_ROOT) / script_path
+        if engine_copy.is_file():
+            resolved_path = engine_copy
     script_path = str(resolved_path)
     if _warm_spawn_refused_for_test(resolved_path):
         return False

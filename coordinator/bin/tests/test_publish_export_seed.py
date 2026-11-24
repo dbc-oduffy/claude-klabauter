@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -83,6 +84,7 @@ def test_seeded_export_matches_a_full_archive_and_leaves_the_cache_untouched(tmp
 
     base = tmp_path / "cache"
     _archive(repo, sha1, base / sha1)
+    publish._write_export_marker(base / sha1, sha1)
     before = _tree(base / sha1)
     staging = base / "staging"
     staging.mkdir()
@@ -95,6 +97,82 @@ def test_seeded_export_matches_a_full_archive_and_leaves_the_cache_untouched(tmp
     _archive(repo, sha2, expected)
     assert _tree(staging) == _tree(expected)
     assert _tree(base / sha1) == before
+
+
+def _engine_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run(repo, "init", "-q")
+    sha1 = _commit(repo, {
+        "coordinator_core/__init__.py": "",
+        "coordinator/lib/percolate/__init__.py": "P1\n",
+        "coordinator/lib/other.py": "O\n",
+    }, "one")
+    sha2 = _commit(repo, {"coordinator/lib/other.py": "O2\n"}, "two")
+    return repo, sha1, sha2
+
+
+def _managed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    base = tmp_path / "managed" / "claude-klabauter-publish-engine"
+    monkeypatch.setattr(publish, "_engine_export_base", lambda: base)
+    return base
+
+
+def test_export_writes_a_marker_and_reuses_a_valid_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    publish._bootstrap_engine()
+    repo, sha1, _ = _engine_repo(tmp_path)
+    base = _managed(monkeypatch, tmp_path)
+    dest = publish._export_engine_at_ref(repo, sha1)
+    assert dest == base / sha1
+    assert publish._export_is_complete(dest, sha1)
+    (dest / "sentinel").write_text("kept", encoding="utf-8")
+    assert publish._export_engine_at_ref(repo, sha1) == dest
+    assert (dest / "sentinel").exists()
+
+
+def test_export_missing_percolate_is_neither_reused_nor_seeded_from(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    publish._bootstrap_engine()
+    repo, sha1, sha2 = _engine_repo(tmp_path)
+    base = _managed(monkeypatch, tmp_path)
+    first = publish._export_engine_at_ref(repo, sha1)
+    shutil.rmtree(first / "coordinator" / "lib" / "percolate")
+
+    assert not publish._export_is_complete(first, sha1)
+    second = publish._export_engine_at_ref(repo, sha2)
+    assert (second / "coordinator" / "lib" / "percolate" / "__init__.py").read_text(encoding="utf-8") == "P1\n"
+    assert not (base / sha1).exists()
+
+    third = publish._export_engine_at_ref(repo, sha1)
+    assert (third / "coordinator" / "lib" / "percolate").is_dir()
+    assert publish._export_is_complete(third, sha1)
+
+
+def test_export_with_emptied_files_below_a_directory_is_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    publish._bootstrap_engine()
+    repo, sha1, _ = _engine_repo(tmp_path)
+    _managed(monkeypatch, tmp_path)
+    first = publish._export_engine_at_ref(repo, sha1)
+    assert publish._export_is_complete(first, sha1)
+    (first / "coordinator" / "lib" / "percolate" / "__init__.py").unlink()
+
+    assert not publish._export_is_complete(first, sha1)
+
+
+def test_markerless_and_staging_dirs_are_never_seed_candidates(tmp_path: Path) -> None:
+    repo, sha1, sha2 = _engine_repo(tmp_path)
+    base = tmp_path / "cache"
+    _archive(repo, sha1, base / sha1)  # markerless
+    _archive(repo, sha1, base / f"{sha1[:12]}-abcd1234")
+    staging = base / "staging"
+    staging.mkdir()
+
+    def git(*_args: str) -> "subprocess.CompletedProcess[bytes]":
+        raise AssertionError("no git call without a valid cached export")
+
+    assert publish._seed_export_from_cache(git, base, sha2, staging) is False
+    assert list(staging.iterdir()) == []
+    assert not (base / sha1).exists()
+    assert (base / f"{sha1[:12]}-abcd1234").exists()
 
 
 def test_no_cached_export_means_no_seed(tmp_path: Path) -> None:

@@ -297,6 +297,45 @@ def test_unlinked_and_ambiguous_plan_fields_are_present_as_null_or_filled(root) 
     assert batons["none"]["unlinked_plan_claim"] is None and batons["none"]["ambiguous_plan_link"] is None
 
 
+def _stamped_plan(root, name, *, body_after="") -> None:
+    from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
+
+    plan(root, name, status="approved", deliverable_id="d1", title="t")
+    path = root / "docs/plans" / f"{name}.md"
+    stamped = stamp_approved_body_sha(path.read_text(encoding="utf-8"))
+    path.write_text(stamped + body_after, encoding="utf-8")
+
+
+def test_approved_plan_with_changed_body_needs_plan_and_names_the_remedy(root) -> None:
+    _stamped_plan(root, "p", body_after="edited after approval\n")
+    baton(root, "a", deliverable_id="d1")
+    a = by_id(gate_v2.compute_gate_report(root))["a"]
+    assert a["needs_plan"] is True
+    assert "plan body changed since approval" in a["approved_body_drift"]
+    assert "re-run plan review" in a["approved_body_drift"]
+
+
+def test_approved_plan_with_unchanged_body_has_no_drift(root) -> None:
+    _stamped_plan(root, "p")
+    baton(root, "a", deliverable_id="d1")
+    a = by_id(gate_v2.compute_gate_report(root))["a"]
+    assert a["needs_plan"] is False and a["approved_body_drift"] is None
+
+
+def test_changed_body_does_not_re_queue_an_execution_authorized_baton(root) -> None:
+    _stamped_plan(root, "p", body_after="edited after approval\n")
+    baton(root, "a", deliverable_id="d1", execution_authorized_by="pm")
+    a = by_id(gate_v2.compute_gate_report(root))["a"]
+    assert a["needs_plan"] is False and a["approved_body_drift"] is not None
+
+
+def test_unclaimed_unstamped_approved_plan_is_not_drift(root) -> None:
+    plan(root, "p", status="approved", deliverable_id="d1", title="t")
+    baton(root, "a", deliverable_id="d1")
+    a = by_id(gate_v2.compute_gate_report(root))["a"]
+    assert a["needs_plan"] is False and a["approved_body_drift"] is None
+
+
 def test_unlinked_claim_names_the_one_step_that_refused_it(root) -> None:
     plan(root, "other", status="deferred", deliverable_id="d-plan", title="t")
     (root / "docs/plans/review.md").write_text(_fm(kind="staff-eng-review", plan="x", status="draft"), encoding="utf-8")

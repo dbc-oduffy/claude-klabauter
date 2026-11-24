@@ -14,6 +14,7 @@ from coordinator_core.ops.tests.test_plan_status_transition_goal_refusal import 
     _head_sha,
     _init_repo,
     _land_the_shipping_chunk,
+    _run_git,
     _seed_goal_plan,
     _stamp,
 )
@@ -118,6 +119,50 @@ def test_absent_wiring_is_legacy_pass(tmp_path):
     plan = _plan(tmp_path, "")
     assert _stamp(plan) in (0, 2)
     assert "status: implemented" in plan.read_text(encoding="utf-8")
+
+
+def _commit_file(root: Path, name: str, text: str) -> None:
+    (root / name).write_text(text, encoding="utf-8")
+    _run_git(["add", name], root)
+    _run_git(["commit", "-q", "-m", f"touch {name}"], root)
+
+
+_CONSUMING_PART = (
+    "wiring:\n  - id: e1\n    status: wired\n    built_path: built.py\n"
+    "    consumes: [input.json]\n    consumes_external: [input.json]\n"
+    f"    runs_evidence: [{_entry()}]\n"
+)
+
+
+def test_ancestor_evidence_with_unrelated_later_commit_stamps(tmp_path):
+    plan = _plan(tmp_path, _CONSUMING_PART)
+    _commit_file(tmp_path, "unrelated.txt", "foreign")
+    assert _stamp(plan) in (0, 2)
+    assert "status: implemented" in plan.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("changed", ["built.py", "input.json"])
+def test_ancestor_evidence_with_changed_covered_path_refuses_naming_it(
+    tmp_path, capsys, changed
+):
+    plan = _plan(tmp_path, _CONSUMING_PART)
+    _commit_file(tmp_path, changed, "changed after the evidence run\n")
+    assert _stamp(plan) != 0
+    assert f"covered-paths-changed: {changed}" in capsys.readouterr().err
+    assert "status: implemented" not in plan.read_text(encoding="utf-8")
+
+
+def test_non_ancestor_evidence_refuses(tmp_path, capsys):
+    plan = _plan(tmp_path, _CONSUMING_PART)
+    _run_git(["checkout", "-q", "-b", "side", "HEAD~1"], tmp_path)
+    _commit_file(tmp_path, "side.txt", "side")
+    side_sha = _head_sha(tmp_path)
+    _run_git(["checkout", "-q", "-"], tmp_path)
+    text = plan.read_text(encoding="utf-8")
+    plan.write_text(text.replace(_head_sha(tmp_path), side_sha), encoding="utf-8")
+    assert _stamp(plan) != 0
+    assert "evidence-sha-mismatch" in capsys.readouterr().err
+    assert "status: implemented" not in plan.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(

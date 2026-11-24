@@ -132,7 +132,7 @@ def test_every_start_passes_script_path_only(tmp_path: Path) -> None:
 
 def test_children_run_under_parallel_with_isolated_failure(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
-    assert "return parallel(CHILDREN.map(" in script
+    assert "await parallel(CHILDREN.map(" in script
     assert "_guardedChild(child, EMITTED[i])" in script
     assert "status: 'emit_refused'" in script  # a refused emit is that child's entry, never a throw
 
@@ -881,6 +881,50 @@ def test_a_child_that_settled_to_null_without_a_start_is_not_started_naming_its_
     first, second = runs
     assert first == {"run_id": "ask-r1", "status": "not_started", "reason": "emit leg settled without a start"}
     assert second == {"run_id": "ask-r2", "status": "failed", "error": "child threw"}  # a start that returned stays failed
+
+
+def _three_ready_one_starts(tmp_path: Path, parallel_js: str) -> list:
+    """Run _startAll then _settleRuns for three ready children where only ask-r1 ever starts."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    ids = ("ask-r1", "ask-r2", "ask-r3")
+    _, script = _write(tmp_path, ids=ids)
+    body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
+    code = (
+        "const agent = async () => ({});\n"
+        "const workflow = async (o) => ({ done: true });\n"
+        f"const parallel = {parallel_js};\n" + body
+        + "\n_startAll().then((s) => console.log(JSON.stringify(_settleRuns(s))));\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "parallel_js",
+    [
+        # only the first thunk runs; the harness hands back a one-entry list
+        "async (fns) => [await fns[0]()]",
+        # the harness ends the whole settle after the first child
+        "async (fns) => { await fns[0](); throw new Error('launcher ended'); }",
+        # the harness resolves to no list at all
+        "async (fns) => { await fns[0](); return undefined; }",
+    ],
+)
+def test_three_ready_runs_where_only_the_first_starts_name_the_other_two_not_started(tmp_path: Path, parallel_js: str) -> None:
+    runs = _three_ready_one_starts(tmp_path, parallel_js)
+    assert [r["run_id"] for r in runs] == ["ask-r1", "ask-r2", "ask-r3"]
+    assert runs[0]["status"] in ("ok", "failed")  # its start returned: never not_started
+    for r in runs[1:]:
+        assert r["status"] == "not_started"
+        assert r["reason"].startswith("emit leg ")
 
 
 @pytest.mark.spawns_process

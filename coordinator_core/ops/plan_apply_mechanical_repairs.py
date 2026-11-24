@@ -11,6 +11,11 @@ Repair kinds (entries are `{kind, target, instruction}`):
     (rr.claim_rows_plan_text) and every claimed row gains its pin (rr.repin_plan_text).
   - uncheckable-to-falsifier-row: an execution-time falsifier row is appended to the plan-tasks
     spine (`target` is the anchor id, `instruction` its claim).
+  - anchor-check-corrected: anchor `target`'s `check.command` becomes `command` only after the new
+    command parses (`_anchor_check.evaluable`), runs in-process (no shell) and meets the anchor's
+    expect; a miss is skipped, never written, with the observed output and the correct form, so the
+    anchor stays open for a later repair. The write is re-read from disk to confirm it landed; no
+    commit is involved, so an untracked plan carries it.
 
 Invariants:
   - an unknown kind, or a repair whose edit cannot be made, is returned in `skipped` with a
@@ -52,6 +57,7 @@ _PARAMS_HINT = (
 )
 _PLANS_REL = ("docs", "plans")
 _REGISTER_KINDS = frozenset({REPAIR_REGISTER_PIN, REPAIR_REGISTER_UNCLAIMED})
+REPAIR_ANCHOR_CHECK = "anchor-check-corrected"
 _SPINE_OPEN = re.compile(r"^```yaml\s+plan-tasks\s*$")
 
 
@@ -160,10 +166,94 @@ def _add_falsifier(text: str, repair: dict) -> str:
     return "\n".join(lines)
 
 
+def _anchor_entry(fm: Any, anchor_id: str) -> Optional[dict]:
+    entries = fm.get("anchor_premises") if isinstance(fm, dict) else None
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict) and str(entry.get("id") or "").strip() == anchor_id:
+            return entry
+    return None
+
+
+def _command_in(text: str, anchor_id: str) -> Optional[str]:
+    """The `check.command` the plan's frontmatter declares for `anchor_id`, else None."""
+    try:
+        fm = yaml.safe_load(_frontmatter(text) or "")
+    except yaml.YAMLError:
+        return None
+    check = (_anchor_entry(fm, anchor_id) or {}).get("check")
+    command = check.get("command") if isinstance(check, dict) else None
+    return command if isinstance(command, str) else None
+
+
+def _fix_anchor_check(text: str, repair: dict, worktree: Path) -> str:
+    """Swap an anchor's `check.command` for `repair["command"]` once the new command has run in-process
+    (`_anchor_check`, no shell) at the ref the prep gate reads and met the anchor's own expect."""
+    from coordinator_core.ops import _anchor_check, _anchor_premise
+    from coordinator_core.ops.dispatch_emit.ask_contract import premise_ref
+
+    anchor_id = str(repair.get("target") or "").strip()
+    command = repair.get("command")
+    if not anchor_id or not isinstance(command, str) or not command.strip():
+        raise _Skip("anchor-check repair needs target (anchor id) and command")
+    command = command.strip()
+    refusal = _anchor_check.evaluable(command)
+    if refusal is not None:
+        raise _Skip(
+            f"repaired check for {anchor_id} is not evaluable in-process ({refusal}); "
+            f"rewrite it as {_anchor_check.GRAMMAR}"
+        )
+    frontmatter = _frontmatter(text)
+    try:
+        fm = yaml.safe_load(frontmatter or "")
+    except yaml.YAMLError as exc:
+        raise _Skip(f"plan frontmatter does not parse: {exc}") from exc
+    entry = _anchor_entry(fm, anchor_id) or {}
+    check = entry.get("check")
+    if not isinstance(check, dict) or not isinstance(check.get("command"), str):
+        raise _Skip(f"plan declares no anchor {anchor_id} with a check command")
+    old, expect = check["command"], str(check.get("expect") or "")
+    if repair.get("expect") is not None and str(repair["expect"]).strip() != expect.strip():
+        raise _Skip(f"anchor {anchor_id} expect is not repairable here (declared {expect!r})")
+    if command == old.strip():
+        raise _Skip(f"anchor {anchor_id} check command already is the repaired command")
+
+    anchor = {"id": anchor_id, "claim": str(entry.get("claim") or ""), "check": {"command": command, "expect": expect}}
+    base_ref = premise_ref(worktree, fm.get("sizing_object") if isinstance(fm, dict) else None)
+    blobs = _anchor_premise._blobs_for([anchor], fm, worktree, base_ref)
+    result = _anchor_premise._evaluate(anchor, fm, worktree, base_ref, blobs)
+    if result.outcome != "held":
+        observed = str(result.observed or "").strip()
+        if result.outcome != "unevaluable":
+            observed = " then ".join(observed.split())
+        observed = observed or "none"
+        form = f"; rewrite it as {_anchor_check.GRAMMAR}" if result.outcome == "unevaluable" else ""
+        raise _Skip(
+            f"repaired check for {anchor_id} fails its own expect ({result.outcome}): "
+            f"observed {observed}, expected {expect}{form}"
+        )
+
+    head = len("---\n") + len(frontmatter or "")
+    forms = (
+        (old, command),
+        (old.replace("\\", "\\\\").replace('"', '\\"'), command.replace("\\", "\\\\").replace('"', '\\"')),
+        (old.replace("'", "''"), command.replace("'", "''")),
+    )
+    for raw_old, raw_new in forms:
+        at = text.find(raw_old, 0, head)
+        if at < 0:
+            continue
+        candidate = text[:at] + raw_new + text[at + len(raw_old):]
+        if _command_in(candidate, anchor_id) == command:
+            return candidate
+    raise _Skip(f"anchor {anchor_id} check command is not a literal span of the plan frontmatter")
+
+
 def _apply(text: str, repair: Any, worktree: Path) -> str:
     if not isinstance(repair, dict):
         raise _Skip("repair is not an object")
     kind = repair.get("kind")
+    if kind == REPAIR_ANCHOR_CHECK:
+        return _fix_anchor_check(text, repair, worktree)
     if kind == REPAIR_CITATION:
         return _fix_citation(text, repair)
     if kind in _REGISTER_KINDS:
@@ -226,7 +316,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except OSError as exc:
         return _err(f"plan unreadable: {exc}")
 
-    state: dict = {"applied": [], "skipped": []}
+    state: dict = {"applied": [], "skipped": [], "anchor": {}}
 
     def mutate(old_text: str) -> str:
         applied: list[dict] = []
@@ -243,6 +333,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 skipped.append({**ref, "reason": str(exc)})
             else:
                 applied.append(ref)
+                if ref["kind"] == REPAIR_ANCHOR_CHECK:
+                    state["anchor"][str(ref["target"]).strip()] = str(repair["command"]).strip()
         state["applied"], state["skipped"] = applied, skipped
         if text == old_text.replace("\r\n", "\n"):
             return old_text
@@ -260,6 +352,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _err(f"apply_mechanical_repairs: {type(exc).__name__}: {exc}")
 
     applied, skipped = state["applied"], state["skipped"]
+    if state["anchor"]:
+        try:
+            on_disk = p.read_text(encoding="utf-8").replace("\r\n", "\n")
+        except (OSError, UnicodeDecodeError) as exc:
+            return _err(f"plan unreadable after the repair: {exc}")
+        for anchor_id, command in state["anchor"].items():
+            if _command_in(on_disk, anchor_id) != command:
+                return _err(f"repaired check for {anchor_id} is not on disk after the write: {plan_rel}")
     return {
         "exit_code": 0,
         "ok": True,

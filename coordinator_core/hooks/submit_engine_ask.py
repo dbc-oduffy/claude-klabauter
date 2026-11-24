@@ -2177,7 +2177,8 @@ def _fan_tail(root: Path, reply: Mapping[str, Any], started: Sequence[str], laun
     parent = _read_parent(root, str(reply["parent_id"]))
     runs = parent.runs if parent else ()
     frozen = FanoutReply(parent_id=str(reply["parent_id"]), runs=runs).to_json()
-    parts = [f"Reply: {json.dumps(frozen)}.", f"Started: {', '.join(started)}."]
+    handoff = "Handed to the launcher" if launcher else "Started"
+    parts = [f"Reply: {json.dumps(frozen)}.", f"{handoff}: {', '.join(started)}."]
     waiting = [f"{r.run_id} ({r.status})" for r in runs if r.run_id not in started and r.status != "ready"]
     if waiting:
         parts.append(
@@ -2185,9 +2186,9 @@ def _fan_tail(root: Path, reply: Mapping[str, Any], started: Sequence[str], laun
         )
     if launcher:
         parts.append(
-            "The launcher's completion is your one wake; it carries each run's result, an emit "
-            "refused at a child's start is named there with its reason, and a run that never started "
-            "is named `not_started` with the leg it stopped at."
+            "The launcher's completion is your one wake and the record of which runs started; it carries "
+            "each run's result, an emit refused at a child's start is named there with its reason, and a "
+            "run that never started is named `not_started` with the leg it stopped at."
         )
     else:
         parts.append("Each run's completion is its own wake.")

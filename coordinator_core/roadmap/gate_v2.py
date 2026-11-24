@@ -55,7 +55,7 @@ BATON_REPORT_KEYS = frozenset({
     "id", "path", "title", "stub_id", "status", "deployment_state", "candidate",
     "plan", "needs_plan", "execution_authorized", "sized", "sizing_objects",
     "planning_gate", "execution_gate", "unlinked_plan_claim", "ambiguous_plan_link",
-    "held", "waiting_on_execution",
+    "held", "waiting_on_execution", "approved_body_drift",
 })
 
 # Nested shapes: counts{candidates,planning_open,execution_open,unschedulable};
@@ -363,6 +363,7 @@ class _Gate:
         self.landed: Dict[str, Optional[dict]] = {}
         self.links: Dict[str, Tuple[Optional[dict], Optional[dict]]] = {}
         self.infos: Dict[str, _Info] = {}
+        self.drift: Dict[str, Optional[str]] = {}
         self._tracked: Any = False
         self._plans: Optional[_PlanIndexFast] = None
         self._arch_sizings: Optional[Dict[str, str]] = None
@@ -634,6 +635,25 @@ def _plan_approved(g: _Gate, plan: dict) -> bool:
     return bool(entry["approved"])
 
 
+def _approved_body_drift(g: _Gate, plan: dict) -> Optional[str]:
+    """``check_approved_body``'s message when an approved plan's body changed since approval, else
+    None. One body read per plan, memoised; callers gate it to plans already counted approved."""
+    path = plan["path"]
+    if path in g.drift:
+        return g.drift[path]
+    from coordinator_core.frontmatter.primitives import APPROVED_BODY_CHANGED, check_approved_body
+
+    msg: Optional[str] = None
+    try:
+        state, message = check_approved_body((g.root / path).read_text(encoding="utf-8"))
+        if state == APPROVED_BODY_CHANGED:
+            msg = message
+    except (OSError, UnicodeDecodeError):
+        pass
+    g.drift[path] = msg
+    return msg
+
+
 def _disposition(g: _Gate, rec: Optional[_Rec]) -> str:
     """Requirement 4: unresolved | unplanned | plan-drafted | plan-approved | coded."""
     if rec is None:
@@ -837,6 +857,7 @@ def _info(g: _Gate, rec: _Rec) -> _Info:
         waiting = g.sizing_routes[key] in _NO_PLAN_ROUTES
     candidate = state == "candidate" and not waiting and _shipped(g, rec) is None
     plan_approved = plan is not None and _plan_approved(g, plan)
+    drift = _approved_body_drift(g, plan) if candidate and plan_approved else None
     gp = _s(fm.get("governing_plan"))
     row = {
         "id": _baton_ids(fm, rec.stem)[0],
@@ -847,7 +868,7 @@ def _info(g: _Gate, rec: _Rec) -> _Info:
         "deployment_state": _s(fm.get("deployment_state")),
         "candidate": candidate,
         "plan": plan,
-        "needs_plan": candidate and not plan_approved and not exec_auth,
+        "needs_plan": candidate and (not plan_approved or drift is not None) and not exec_auth,
         "execution_authorized": exec_auth,
         "sized": bool(resolved),
         "sizing_objects": resolved,
@@ -857,6 +878,7 @@ def _info(g: _Gate, rec: _Rec) -> _Info:
         "ambiguous_plan_link": ambiguity,
         "held": state == "held",
         "waiting_on_execution": waiting,
+        "approved_body_drift": drift,
     }
     info = _Info(rec, row, planning, execution, unresolved)
     g.infos[rec.rel] = info

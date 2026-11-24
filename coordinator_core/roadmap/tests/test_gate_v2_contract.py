@@ -17,7 +17,7 @@ def test_baton_keys_equal_requirement_9():
     assert gate_v2.BATON_REPORT_KEYS == frozenset(
         "id path title stub_id status deployment_state candidate plan needs_plan "
         "execution_authorized sized sizing_objects planning_gate execution_gate "
-        "unlinked_plan_claim ambiguous_plan_link held waiting_on_execution".split()
+        "unlinked_plan_claim ambiguous_plan_link held waiting_on_execution approved_body_drift".split()
     )
 
 
