@@ -1918,6 +1918,11 @@ def _no_ambient_plugin_root(request: pytest.FixtureRequest, monkeypatch: pytest.
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
 
 
+# An unhoisted, unstaged script is a shape production never emits; only these literal-text modules lift the
+# runner cap, never dispatch_emit-wide (emit.py and ask_roadmap.py share it, and cap tests expect the refusal).
+_LITERAL_TEXT_MODULES = frozenset({"test_ask_compose.py", "test_ask_compose_prompt_fragments.py"})
+
+
 @pytest.fixture(autouse=True)
 def _unhoisted_ask_scripts(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Composer tests assert on literal script text; hoisting is pinned by test_ask_compose_prompt_fragments."""
@@ -1926,6 +1931,10 @@ def _unhoisted_ask_scripts(request: pytest.FixtureRequest, monkeypatch: pytest.M
     from coordinator_core.ops.dispatch_emit import prompt_fragments
 
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
+    if request.node.path.name in _LITERAL_TEXT_MODULES:
+        from coordinator_core.ops.dispatch_emit import emit
+
+        monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9)
 
 
 @pytest.fixture(autouse=True)

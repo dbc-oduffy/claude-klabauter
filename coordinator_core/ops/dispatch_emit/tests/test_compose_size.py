@@ -24,6 +24,14 @@ def test_cap_refusal_without_components_still_states_the_cap() -> None:
     assert cap_refusal(7, 5, []).endswith("5-byte cap: 7 bytes")
 
 
+def test_ask_script_ceiling_is_ninety_percent_and_below_the_runner_cap() -> None:
+    from coordinator_core.ops.dispatch_emit import emit
+    from coordinator_core.ops.dispatch_emit.compose_size import ASK_SCRIPT_CEILING_BYTES
+
+    assert ASK_SCRIPT_CEILING_BYTES == 471859
+    assert ASK_SCRIPT_CEILING_BYTES < emit._WORKFLOW_SCRIPT_BYTE_CAP
+
+
 def test_probe_prints_json_and_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
     import pytest
 

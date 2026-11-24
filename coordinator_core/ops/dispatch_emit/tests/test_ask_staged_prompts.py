@@ -147,3 +147,88 @@ def test_emit_writes_each_staged_body_beside_the_ask_text(tmp_path: Path, monkey
     assert {f"{n}.md" for n in _STAGED_NAMES} <= written
     verify = (prompts / "verify.md").read_text(encoding="utf-8")
     assert "\r" not in verify and "You are the run's one closing agent" in verify
+
+
+def test_decode_is_memoised_and_still_refuses_an_unknown_escape() -> None:
+    ask_staged_prompts._decode.cache_clear()
+    assert ask_staged_prompts._decode("a\\nb") == "a\nb"
+    assert ask_staged_prompts._decode("a\\nb") == "a\nb"
+    assert ask_staged_prompts._decode.cache_info().hits == 1
+    assert ask_staged_prompts._decode("a\\xb") is None
+    assert ask_staged_prompts._decode("a\\xb") is None
+
+
+def _pointer(name: str) -> str:
+    return stage(name, "", {}, record_dir="rec")
+
+
+def test_a_static_template_literal_is_staged_and_spliced_back_as_a_pointer() -> None:
+    sink: dict[str, str] = {}
+    out = stage_literal_runs("`" + _BIG + "`", "p", _stager(sink))
+    assert sink == {"p": _BIG}
+    assert out == "`${" + _pointer("p") + "}`"
+
+
+def test_a_template_splits_at_its_substitutions_and_each_large_static_run_is_staged() -> None:
+    small = "tiny "
+    sink: dict[str, str] = {}
+    js = "x = `" + _BIG + "${dyn}" + small + "${other}" + _BIG + "B`"
+    out = stage_literal_runs(js, "p", _stager(sink))
+    assert sink == {"p": _BIG, "p-2": _BIG + "B"}
+    assert "${dyn}" + small + "${other}" in out and _BIG[:30] not in out
+
+
+def test_template_escapes_are_decoded_and_the_staged_text_is_the_runtime_text() -> None:
+    raw = ("a \\`tick\\` and \\${not} and back\\\\slash\\nnext line. " * 20)
+    expected = "a `tick` and ${not} and back\\slash\nnext line. " * 20
+    sink: dict[str, str] = {}
+    stage_literal_runs("`" + raw + "`", "p", _stager(sink))
+    assert sink == {"p": expected}
+
+
+def test_a_substitution_holding_quotes_or_a_nested_template_does_not_end_the_run() -> None:
+    sink: dict[str, str] = {}
+    expr = "${f('}`' + `n${g({a: 1})}` + \"{\")}"
+    js = "`" + _BIG + expr + _BIG + "`"
+    out = stage_literal_runs(js, "p", _stager(sink))
+    assert sink == {"p": _BIG, "p-2": _BIG}
+    assert expr in out
+
+
+def test_a_template_run_with_an_undecoded_escape_stays_inline() -> None:
+    sink: dict[str, str] = {}
+    for bad in ("\\u00e9", "\\x41", "\\\n", "\\r"):
+        js = "`" + "x" * MIN_STAGE_BYTES + bad + "`"
+        assert stage_literal_runs(js, "p", _stager(sink)) == js
+    assert sink == {}
+
+
+def test_a_tagged_template_stays_inline_and_an_untagged_one_after_a_keyword_is_staged() -> None:
+    for tag in ("String.raw", "tag", "f(1)", "a[0]"):
+        sink: dict[str, str] = {}
+        js = tag + "`" + _BIG + "`"
+        assert stage_literal_runs(js, "p", _stager(sink)) == js
+        assert sink == {}
+    for pre in ("return ", "x = ", "f(", "typeof "):
+        sink = {}
+        stage_literal_runs(pre + "`" + _BIG + "`", "p", _stager(sink))
+        assert sink == {"p": _BIG}
+
+
+def test_a_template_run_below_the_floor_stays_inline() -> None:
+    sink: dict[str, str] = {}
+    js = "`" + "s" * (MIN_STAGE_BYTES - 1) + "${a}`"
+    assert stage_literal_runs(js, "p", _stager(sink)) == js
+    assert sink == {}
+
+
+def test_an_unbalanced_code_fence_line_beside_a_substitution_stays_inline() -> None:
+    fence = "\\`\\`\\`"
+    sink: dict[str, str] = {}
+    out = stage_literal_runs("`${a}" + fence + " close\n" + _BIG + "`", "p", _stager(sink))
+    assert sink == {"p": _BIG}
+    assert out == "`${a}" + fence + " close\n${" + _pointer("p") + "}`"
+    sink = {}
+    out = stage_literal_runs("`" + _BIG + "\nopen " + fence + "py${a}`", "p", _stager(sink))
+    assert sink == {"p": _BIG + "\n"}
+    assert out == "`${" + _pointer("p") + "}open " + fence + "py${a}`"

@@ -17,10 +17,11 @@ coordinator_core/conftest.py dispatch_emit autouse fixtures:
 from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import ask_compose, emit, prompt_fragments
+from coordinator_core.ops.dispatch_emit.compose_size import ASK_SCRIPT_CEILING_BYTES
 from coordinator_core.subagent_sandbox.provision_report import resolve_plugin_root
 import pytest
 
-_CEILING = int(0.90 * emit._WORKFLOW_SCRIPT_BYTE_CAP)
+_CEILING = ASK_SCRIPT_CEILING_BYTES
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 # Resolved at import, before the per-test home quarantine hides the real plugin install.
 _PLUGIN_ROOT = resolve_plugin_root()

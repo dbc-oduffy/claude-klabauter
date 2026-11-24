@@ -53,7 +53,7 @@ import json
 import os
 import re
 from pathlib import Path, PurePosixPath
-from typing import Collection, Iterable, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Collection, Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core import ipc as _ipc
@@ -346,6 +346,8 @@ def _dispatch_admitted(mode: str, root: Path, repo_root: Path, params: dict, bud
     while True:
         try:
             with land_deadline.scope(budget_secs=budget):
+                if mode == "halted":
+                    return _dispatch_halted_bounded(root, repo_root, params)
                 reply = _dispatch_mode(mode, root, repo_root, params)
                 if mode == "product" and isinstance(reply, dict) and reply.get("committed") is True:
                     land_leg_record.write(
@@ -361,6 +363,99 @@ def _dispatch_admitted(mode: str, root: Path, repo_root: Path, params: dict, bud
                 retried = True
                 continue
             return _halt_or_park(mode, root, params, exc)
+
+
+if TYPE_CHECKING:
+    from coordinator_core.bounded_io import IoIndeterminate
+
+HALT_READ_REFUSED = "halt-read-indeterminate"
+
+
+def _dispatch_halted_bounded(root: Path, repo_root: Path, params: dict) -> dict:
+    """The halted landing with every file read bounded; a read that stalls ends it as a typed
+    retry-safe reply (`_halt_read_reply`), never an op timeout. HEAD is read at entry so the reply
+    can tell a stall before any ref moved from one after."""
+    from coordinator_core.bounded_io import IoIndeterminate
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.git.git_state import head_sha
+
+    head_before: Optional[str] = None
+    started = False
+    with call_io_scope.bounded_reads():
+        try:
+            head_before = head_sha(root, fresh=True)
+            started = True
+            return _dispatch_mode("halted", root, repo_root, params)
+        except IoIndeterminate as exc:
+            return _halt_read_reply(root, params, exc, head_before, started)
+
+
+def _head_after_stall(root: Path) -> Optional[str]:
+    """HEAD now, or None when it cannot be read inside the bounded scope: unknown is never "unmoved"."""
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.git.git_state import head_sha
+
+    try:
+        with call_io_scope.bounded_reads():
+            return head_sha(root, fresh=True) or None
+    except Exception:  # noqa: BLE001 -- an unreadable HEAD stays unknown
+        return None
+
+
+def _halt_read_reply(root: Path, params: dict, exc: "IoIndeterminate", head_before: Optional[str], started: bool = True) -> dict:
+    """The reply for a halted landing whose file read stalled (`exc` is a `bounded_io.IoIndeterminate`).
+
+    HEAD unchanged since entry (or the stall was the entry HEAD read, `started` False):
+    `land_deadline.parked_fields`-shaped not-started answer, token live.
+    HEAD moved or unreadable: a commit may exist, so never not-started; a moved HEAD whose commit
+    carries this run's halt subject is reconciled as landed, else the re-send reconciles."""
+    now = _head_after_stall(root) if started else head_before
+    stalled = {
+        "refused": HALT_READ_REFUSED, "retry_safe": True, "stalled_path": exc.path,
+        "stalled_ms": exc.waited_ms, "next_action": "re-send the same dispatch.land_run",
+    }
+    if not started or (now is not None and now == head_before):
+        return {
+            "committed": False, "sha": None, "status": "not-started", "parked": True,
+            "step": HALT_READ_REFUSED, "bound_by": "halt-read-deadline", "left_secs": None, "spent_by": None,
+            "legs": [],
+            "error": f"{HALT_READ_REFUSED}: read of {exc.path} stalled {exc.waited_ms}ms; parked, not started: nothing committed.",
+            **stalled,
+        }
+    landed = _halt_commit_on_head(root, params, now) if now is not None else None
+    if landed is not None:
+        return landed
+    return {
+        "committed": False, "sha": None, "status": "unknown", "parked": False,
+        "error": f"{HALT_READ_REFUSED}: read of {exc.path} stalled {exc.waited_ms}ms; a commit may exist.",
+        **stalled,
+    }
+
+
+def _halt_commit_on_head(root: Path, params: dict, head: str) -> Optional[dict]:
+    """The landed reply (through `land_run_halt._reconcile_landing`) when HEAD is this run's halt
+    record commit, else None."""
+    run_id, token = params.get("run_id"), params.get("run_token")
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
+
+    halted = params.get(HALTED_RECORD_PARAM)
+    try:
+        from coordinator_core.git import call_io_scope, commit_walk
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.ops.dispatch_emit import land_run_halt
+
+        with call_io_scope.bounded_reads():
+            meta = commit_walk.commit_meta(resolve_git_common_dir(root), head)
+        subject = ((meta or {}).get("message") or "").split("\n", 1)[0]
+        if not (isinstance(run_id, str) and run_id and token is not None and isinstance(halted, dict)
+                and subject == f"warp: record halted {run_id} run artifacts"):
+            return None
+        return land_run_halt._reconcile_landing(
+            root, run_id, token, params.get("script_path"), halted,
+            {"committed": True, "sha": head, "error": None, "refused": None, "paths": []},
+        )
+    except Exception:  # noqa: BLE001 -- an unreconciled answer falls back to the retry-safe reply
+        return None
 
 
 def _halt_or_park(mode: str, root: Path, params: dict, exc: land_deadline.LandDeadlineExceeded) -> dict:
@@ -3262,10 +3357,48 @@ def _recorded_post_checkpoint(
     return out
 
 
+def _stamp_ancestry_gate(root: Path, branch: str, token_state: dict) -> Optional[dict]:
+    """Merge the live stamp source into HEAD when the branch lacks it; the typed refusal dict when the
+    merge cannot be made. Outcomes ride ``token_state`` (``stamp_merge``, ``stamp_advisories``) so
+    `_land_product` attaches them to every reply, a later refusal included. Never raises."""
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.ops.dispatch_emit import land_stamp_ancestry as stamp_gate
+
+    try:
+        stamp = stamp_gate.live_stamp_sha()
+    except Exception:  # noqa: BLE001 -- an unreadable stamp lands with the advisory
+        stamp = None
+    verdict = stamp_gate.check(root, stamp)
+    unknown_reason = None
+    if verdict.state == stamp_gate.UNKNOWN:
+        unknown_reason = "live stamp source unresolved" if not stamp else f"{stamp} is not an object in this repo"
+    elif verdict.state == stamp_gate.BEHIND:
+        out = stamp_gate.merge_stamp(root, stamp, branch)
+        if out.get("merged"):
+            call_io_scope.invalidate(call_io_scope.HEAD_NAMESPACE)
+            token_state["stamp_merge"] = {"sha": out["sha"], "merged": True, "merge_commit": out["merge_commit"]}
+        elif out.get("refused"):
+            return _error(
+                out["message"], refused=out["refused"], stamp_sha=out["stamp_sha"], remedy=out["remedy"],
+                detail=out["detail"],
+            )
+        else:
+            unknown_reason = out.get("reason") or "stamp merge trial could not run"
+    if unknown_reason is not None:
+        token_state["stamp_advisories"] = [f"stamp-ancestry-unknown: {unknown_reason}"]
+    return None
+
+
 def _land_product(root: Path, repo_root: Path, params: dict, token_state: dict) -> dict:
     """Land one run's product; see the module. ``token_state`` carries the claimed run token."""
     stranded: dict = {}
     reply = _land_inner(root, repo_root, params, stranded, token_state)
+    stamp_merge = token_state.pop("stamp_merge", None)
+    stamp_advisories = token_state.pop("stamp_advisories", None)
+    if stamp_merge is not None:
+        reply = {**reply, "stamp_merge": stamp_merge}
+    if stamp_advisories:
+        reply = {**reply, "advisories": [*(reply.get("advisories") or []), *stamp_advisories]}
     close = token_state.pop("since_halt_close", None)
     if close is not None:
         if reply.get("committed"):
@@ -3355,23 +3488,23 @@ def _post_land_commit(
         ident = {f"GIT_{k}_{f}": v for k in ("AUTHOR", "COMMITTER") for f, v in (("NAME", "land-gate"), ("EMAIL", "land-gate@localhost"))}
         env = {**os.environ, **ident, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
 
-        def g(args: list, stdin: Optional[str] = None) -> str:
-            out = cov._run([git, *args], root, cov.TEST_TIMEOUT_S, env=env, stdin_text=stdin)
+        def g(args: list, stdin: Optional[str] = None, n_paths: int = 0) -> str:
+            out = cov._run([git, *args], root, cov.export_step_timeout_s(n_paths), env=env, stdin_text=stdin)
             if out.returncode:
                 raise cov.ExportError(f"git {args[0]} failed: {out.stderr.strip()[-300:]}")
             return out.stdout.strip()
 
-        g(["read-tree", head])
+        g(["read-tree", head], n_paths=len(touched))
         supplied = [p for p in touched if p in blobs]
         worktree = [p for p in touched if p not in blobs and (root / p).is_file()]
         gone = [*deleted, *(p for p in touched if p not in blobs and not (root / p).is_file())]
         if supplied:
-            g(["update-index", "-z", "--add", "--index-info"], "".join(f"100644 {blobs[p]}\t{p}\0" for p in supplied))
+            g(["update-index", "-z", "--add", "--index-info"], "".join(f"100644 {blobs[p]}\t{p}\0" for p in supplied), len(supplied))
         if worktree:
-            g(["update-index", "-z", "--add", "--replace", "--stdin"], "".join(f"{p}\0" for p in worktree))
+            g(["update-index", "-z", "--add", "--replace", "--stdin"], "".join(f"{p}\0" for p in worktree), len(worktree))
         if gone:
-            g(["update-index", "-z", "--force-remove", "--stdin"], "".join(f"{p}\0" for p in gone))
-        tree = g(["write-tree"])
+            g(["update-index", "-z", "--force-remove", "--stdin"], "".join(f"{p}\0" for p in gone), len(gone))
+        tree = g(["write-tree"], n_paths=len(touched))
         return g(["commit-tree", "--no-gpg-sign", tree, "-p", head, "-m", "land-gate post-land tree"])
 
 
@@ -3388,7 +3521,7 @@ def _tests_could_run(root: Path, head: str, py: Sequence[str]) -> bool:
     if not stems:
         return False
     argv = [cov._git_exe(), "grep", "-l", "-q", "-w", "-F", *(a for s in stems for a in ("-e", s)), head, "--", *_TEST_GLOBS]
-    return cov._run(argv, root, cov.TEST_TIMEOUT_S).returncode != 1
+    return cov._run(argv, root, cov.export_step_timeout_s(len(py))).returncode != 1
 
 
 def _on_warm_request_path() -> bool:
@@ -3405,7 +3538,6 @@ def _new_red_gate(
     otherwise `new_red` (node ids red post-land and green at the tip, normalized), `pre_existing`,
     `importer_targets`, `targets_run`, and `advisory` when the leg could not measure (clone, timeout,
     interpreter): an unmeasured landing proceeds, never refuses. A bulk test, outside the op budget."""
-    from coordinator_core.ops import test_leg_run
     from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 
     py = sorted({p.replace("\\", "/") for p in (*touched, *deleted) if p.endswith(".py")})
@@ -3422,6 +3554,8 @@ def _new_red_gate(
             if not _tests_could_run(root, head, py):
                 return {}
             post = _post_land_commit(root, head, touched, deleted, blobs)
+            from coordinator_core.ops import test_leg_run
+
             result = test_leg_run.run(
                 [], base_sha=head, head_sha=post, base_export_out=None, budget_s=_NEW_RED_BUDGET_S,
                 cwd=str(root), touched=py,
@@ -3472,13 +3606,40 @@ def _split_reach_dirt(
     return {p: b for p, b in reach_dirt.items() if p not in foreign}, foreign
 
 
-def _red_is_foreign_runs(failing: Sequence[str], foreign: dict) -> bool:
-    """True when a red overlay verdict names failing nodes and every one sits in a file another run holds
-    (``foreign`` maps path to holder, ``unattributed`` excluded): the test is that run's uncommitted work,
-    not this landing's. One failing node outside such a file keeps the refusal."""
+def _failing_reach_dirt(root: Path, failing: Sequence[str], landing: Sequence[str]) -> dict:
+    """``{failing test file: its reach dirt}`` for the failing nodes' python files outside the landing set: the
+    uncommitted tracked paths each file can read (in-process reads, run only on a red verdict)."""
+    from coordinator_core.ops.dispatch_emit.landing_reach import foreign_dirt, reach_paths
+
+    landed = {p.replace("\\", "/") for p in landing}
+    files = sorted(
+        {str(n).replace("\\", "/").split("::", 1)[0] for n in failing if str(n)} - landed
+    )
+    reach = {f: reach_paths(root, [f]) for f in files if f.endswith(".py")}
+    dirt = foreign_dirt(root, set().union(*reach.values()) if reach else (), landing)
+    return {f: {p: dirt[p] for p in r if p in dirt} for f, r in reach.items()}
+
+
+def _red_is_foreign_runs(
+    failing: Sequence[str], foreign: dict, failing_reach: Optional[dict] = None, landing: Sequence[str] = (),
+) -> bool:
+    """True when a red overlay verdict names failing nodes and every one is another run's doing: its file is
+    one another run holds (``foreign`` maps path to holder, ``unattributed`` excluded), or it is outside the
+    landing set and its reach dirt (``failing_reach``) is wholly claimed by other runs. One failing node
+    outside both, or reaching a path no run claims, keeps the refusal."""
     files = {str(n).replace("\\", "/").split("::", 1)[0] for n in failing}
     held = {p for p, h in foreign.items() if h and h != "unattributed"}
-    return bool(files) and files <= held
+    landed = {p.replace("\\", "/") for p in landing}
+
+    def _foreign_file(f: str) -> bool:
+        if f in held:
+            return True
+        if failing_reach is None or f in landed:
+            return False
+        dirt = failing_reach.get(f) or {}
+        return bool(dirt) and all(p in held for p in dirt)
+
+    return bool(files) and all(_foreign_file(f) for f in files)
 
 
 def _overlay_refusal_text(
@@ -4237,6 +4398,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             behind.refusal, refused="land-ref-behind-upstream", ahead=behind.ahead, behind=behind.behind,
             upstream=behind.upstream,
         )
+
+    # ---- stamp ancestry: after every cheap refusal, so no refusal follows the merge commit it may make
+    stamp_refusal = _stamp_ancestry_gate(root, observed_branch, token_state)
+    if stamp_refusal is not None:
+        return stamp_refusal
 
     # ---- bookkeeping record and evidence rows, written before the commit so they ride it
     objective_gate: Optional[dict] = None
@@ -5450,11 +5616,28 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 and isinstance(inline_review, dict) and _reverify_passed(inline_review.get("reverify"))
             )
             foreign_red = overlay.red and _red_is_foreign_runs(overlay.failing, reach_dirt_foreign)
+            if overlay.red and overlay.failing and not foreign_red:
+                landing_set = [
+                    *(p for p in commit_set if p not in non_product),
+                    *(p for p in commit_deleted if p not in set(art_deleted)),
+                ]
+                failing_reach = _failing_reach_dirt(root, overlay.failing, landing_set)
+                fresh = {p: b for d in failing_reach.values() for p, b in d.items() if p not in reach_dirt_foreign}
+                if fresh:
+                    unattributed, attributed = _split_reach_dirt(
+                        root, fresh, art_run_id, request.plan_path, session_id, rid, script_path,
+                        run_base=run_base if isinstance(run_base, str) else None,
+                        minted_before=own_seniority, self_sessions=_firing_sessions(root, rid, session_id),
+                    )
+                    reach_dirt_foreign.update(attributed)
+                    reach_dirt_foreign.update({p: "unattributed" for p in unattributed})
+                foreign_red = _red_is_foreign_runs(overlay.failing, reach_dirt_foreign, failing_reach, landing_set)
             if overlay.verdict in ("pre_existing", "missing", clean_overlay_verify.ENV_DEFECT) or timed_out_reverified or foreign_red:
                 reach_dirt_overlay["advisory"] = (
                     f"clean-overlay verdict {overlay.verdict}"
                     f"{' (timed out; the run reverify passed)' if timed_out_reverified else ''}"
-                    f"{' (every failing node is another run uncommitted test)' if foreign_red else ''}: {overlay.detail}"
+                    f"{' (every failing node is another run uncommitted work; claimant run ' + ', '.join(sorted({str(h) for h in reach_dirt_foreign.values() if h and h != 'unattributed'})) + ')' if foreign_red else ''}"
+                    f": {overlay.detail}"
                 )
                 # The landing is recoverable so it proceeds, but unverified: the trailer is what a release
                 # gate reads to list the commits the full-tree regate alone covers.
@@ -5601,7 +5784,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 root, overlap_paths, _attempt, lambda r: isinstance(r, CommitRefused)
             )
             if isinstance(outcome, CommitRefused):
-                if overlap:
+                if overlap == "ref-moved-overlap":
                     _remove(root, receipt_paths)
                     return _error(f"{outcome} {_OVERLAP_REMEDY}", refused=overlap)
                 raise outcome
@@ -6279,9 +6462,10 @@ def _superseded(
     root: Path, run_id: str, sizing_rel: str, artifacts, run_token, cap_secs: Optional[float] = None,
 ) -> tuple:
     """``(superseded run ids, their changed record files)``: dirty record dirs of earlier runs bound to
-    ``sizing_rel``. Past ``cap_secs`` wall seconds (checked between run.json reads and before the status)
-    it returns ``(), set()``; the one status read, once begun, is not interrupted. A record-dir listing finds the earlier same-sizing dirs; one scoped in-process status
+    ``sizing_rel``. A record-dir listing finds the earlier same-sizing dirs; one scoped in-process status
     runs over those only, for a run id that carries a stamp tail; a gap in that status skips the scan.
+    Past ``cap_secs`` wall seconds (checked between run.json reads and before the status) it returns
+    ``(), set()``; the one status read, once begun, is not interrupted.
     Trap: test_land_run_off_commit_path spies only on the two corpus scans it names, not on this one."""
     import os
 

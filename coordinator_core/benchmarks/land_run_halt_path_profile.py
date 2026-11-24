@@ -5,13 +5,19 @@ knobs), resolved through the op registry, over a fixture repo whose `state/warp`
 `ask-*` run dirs: mostly stale, plus a handful of fresh token-live runs and fresh halted runs that
 withhold dirty paths. Process time is this process plus descendants (`commit_leg_profile._ChildMeter`);
 wall clock is never recorded. One JSON row per N:
-`{axis, run_dirs, process_time_ms, spawns, outcome, committed, attribution}`.
+`{axis, run_dirs, process_time_ms, spawns, outcome, committed, reply_returned, withheld_paths,
+stall_ms, retry_safe, attribution}`.
 
     python coordinator_core/benchmarks/land_run_halt_path_profile.py [--run-dirs N ...] [--attribute]
+        [--withheld-paths N] [--stall-ms M]
 
 `--run-dirs` repeats; the default is `1000` and `5000`. `--attribute` adds a cProfile top-15 of
-`coordinator_core` functions per row. Exit 2 when any row is over `BAR_MS` (DR-344), else 0. The
-fixture lives under `<repo>/scratch/` and is removed on exit; the settings home is pinned inside it.
+`coordinator_core` functions per row. `--withheld-paths N` declares N extra dirty paths on the target
+run's chunk (one row, at `WITHHELD_RUN_DIRS` run dirs unless `--run-dirs` is given). `--stall-ms M` blocks
+the first halt-path file read M ms (in-process monkeypatch of the read primitives, never in prod code);
+`reply_returned` is true when the call answered a dict before that stall ended. Exit 2 when any row is
+over `BAR_MS` (DR-344), else 0. The fixture lives under `<repo>/scratch/` and is removed on exit; the
+settings home is pinned inside it.
 """
 
 from __future__ import annotations
@@ -23,10 +29,13 @@ import os
 import pstats
 import subprocess
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Generator
 
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
@@ -47,11 +56,13 @@ TARGET_SUFFIX = "aaaaaa"
 STALE_SIZING = "state/sizings/stale.yaml"
 WARMUP_RUN_DIRS = 5
 TOP_FUNCTIONS = 15
+WITHHELD_RUN_DIRS = 30
 
 
 @dataclass
 class HaltRow:
-    """One measured N."""
+    """One measured N. `reply_returned`: a dict reply came back before the injected stall ended (no
+    stall: any dict reply)."""
 
     axis: str
     run_dirs: int
@@ -60,6 +71,10 @@ class HaltRow:
     outcome: str = ""
     committed: bool = False
     attribution: dict = field(default_factory=dict)
+    reply_returned: bool = False
+    withheld_paths: int = 0
+    stall_ms: int = 0
+    retry_safe: bool = False
 
 
 def _git(root: Path, *args: str) -> None:
@@ -118,9 +133,10 @@ def _fresh_runs(root: Path) -> None:
         halted_run.record_withheld(record_dir, withheld)
 
 
-def build_fixture(workdir: Path, run_dirs: int) -> tuple:
+def build_fixture(workdir: Path, run_dirs: int, withheld_paths: int = 0) -> tuple:
     """A git repo `workdir/repo` with `run_dirs` stale run dirs, the fresh runs, the withheld index built,
-    and the target run's record dir, script and one done chunk. Returns `(root, run_id, params)`."""
+    and the target run's record dir, script and one done chunk that also declares `withheld_paths`
+    untracked dirty files the halt probes and withholds. Returns `(root, run_id, params)`."""
     from coordinator_core.ops.dispatch_emit import halted_withheld_index
     from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT, RUN_DIR_ROOT
     from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
@@ -145,8 +161,11 @@ def build_fixture(workdir: Path, run_dirs: int) -> tuple:
     _write(root, f"{RUN_DIR_ROOT}/{run_id}/submission.json", json.dumps({"submitted_at": time.time() - 60.0}))  # `register_gate.run_started_at`: the window `_run_written` reads touch records from
     _write(root, "product/done.py", "DONE = 1\n")
     _write(root, "reports/C1.md", "DONE: C1\n")
+    extra = tuple(f"withheld/w{i:04d}.py" for i in range(withheld_paths))
+    for rel in extra:
+        _write(root, rel, f"VALUE = {rel!r}\n")
     marker = render_marker(CommitRequest(
-        chunks=(ChunkCommit(id="C1", title="C1", paths=("product/done.py",), report="reports/C1.md"),),
+        chunks=(ChunkCommit(id="C1", title="C1", paths=("product/done.py", *extra), report="reports/C1.md"),),
         session_id=None, repo_root=None, plan_path=None,
     ))
     _write(root, "run.mjs", f"{marker}\n")
@@ -207,7 +226,64 @@ def _top_functions(prof: cProfile.Profile) -> list:
             for ct, fn, nc, tt in rows[:TOP_FUNCTIONS]]
 
 
-def measure(root: Path, params: dict, run_dirs: int, *, attribute: bool = False) -> HaltRow:
+class _Stall:
+    """The one-shot stall: `end` is the monotonic moment the blocked read releases, None until it fires."""
+
+    def __init__(self, stall_ms: int) -> None:
+        self.stall_ms = stall_ms
+        self.end: "float | None" = None
+        self.path = ""
+        self._lock = threading.Lock()
+
+    def fire(self, path: object) -> None:
+        with self._lock:
+            if self.end is not None:
+                return
+            self.end = time.monotonic() + self.stall_ms / 1000.0
+            self.path = str(path)
+        time.sleep(self.stall_ms / 1000.0)
+
+
+@contextmanager
+def stalled_first_read(stall_ms: int) -> Generator["_Stall | None"]:
+    """Block the first halt-path file read `stall_ms` ms by wrapping the read primitives in-process
+    (`call_io_scope._read`, `bounded_io._read_registered`, `Path.read_bytes`); a bounded read stalls on
+    its worker thread, an unbounded one on the caller. Yields the `_Stall`, None when `stall_ms` is 0."""
+    if stall_ms <= 0:
+        yield None
+        return
+    from coordinator_core import bounded_io
+    from coordinator_core.git import call_io_scope
+
+    stall = _Stall(stall_ms)
+    real_read, real_registered, real_path_read = call_io_scope._read, bounded_io._read_registered, Path.read_bytes
+
+    def read(path: str, bounded: bool = False) -> "bytes | None":
+        if not bounded and call_io_scope._BOUNDED_DEADLINE.get() is None:  # a bounded read reaches `_read_registered` on its worker
+            stall.fire(path)
+        return real_read(path, bounded)
+
+    def registered(path: str) -> "bytes | None":
+        stall.fire(path)
+        return real_registered(path)
+
+    def path_read(self: Path) -> bytes:
+        stall.fire(self)
+        return real_path_read(self)
+
+    patches = ((call_io_scope, "_read", read, real_read), (bounded_io, "_read_registered", registered, real_registered),
+               (Path, "read_bytes", path_read, real_path_read))
+    for owner, name, new, _old in patches:
+        setattr(owner, name, new)
+    try:
+        yield stall
+    finally:
+        for owner, name, _new, old in patches:
+            setattr(owner, name, old)
+
+
+def measure(root: Path, params: dict, run_dirs: int, *, attribute: bool = False, stall_ms: int = 0,
+            withheld_paths: int = 0) -> HaltRow:
     """Run the halt land once and return its row; a raised op is a row (`outcome` `raised:<Type>`)."""
     from coordinator_core.ops.dispatch_emit import halted_withheld_index
 
@@ -223,25 +299,32 @@ def measure(root: Path, params: dict, run_dirs: int, *, attribute: bool = False)
     meter = _ChildMeter()
     result, error = None, ""
     subprocess.Popen.__init__ = popen_init
-    meter.start()
-    cpu0 = time.process_time()
-    try:
-        if prof is not None:
-            prof.enable()
+    with stalled_first_read(stall_ms) as stall:
+        meter.start()
+        cpu0 = time.process_time()
         try:
-            result = _call_halt(root, params)
-        finally:
             if prof is not None:
-                prof.disable()
-    except BaseException as exc:  # noqa: BLE001 -- a raised op is a row, not a crash of the harness
-        error = type(exc).__name__
-    finally:
-        own_ms = (time.process_time() - cpu0) * 1000.0
-        total_ms = round(own_ms + meter.stop_ms(), 3)
-        subprocess.Popen.__init__ = real_init
+                prof.enable()
+            try:
+                result = _call_halt(root, params)
+            finally:
+                if prof is not None:
+                    prof.disable()
+        except BaseException as exc:  # noqa: BLE001 -- a raised op is a row, not a crash of the harness
+            error = type(exc).__name__
+        finally:
+            returned_at = time.monotonic()
+            own_ms = (time.process_time() - cpu0) * 1000.0
+            total_ms = round(own_ms + meter.stop_ms(), 3)
+            subprocess.Popen.__init__ = real_init
     reply = result if isinstance(result, dict) else {}
     outcome = f"raised:{error}" if error else (reply.get("refused") or ("committed" if reply.get("committed") else "not-committed"))
-    row = HaltRow(AXIS, run_dirs, total_ms, spawns[0], str(outcome), reply.get("committed") is True)
+    in_time = stall is None or stall.end is None or returned_at < stall.end
+    row = HaltRow(AXIS, run_dirs, total_ms, spawns[0], str(outcome), reply.get("committed") is True,
+                  reply_returned=bool(reply) and in_time, withheld_paths=withheld_paths, stall_ms=stall_ms,
+                  retry_safe=reply.get("retry_safe") is True)
+    if stall is not None and stall.path:
+        row.attribution["stalled_read"] = stall.path
     if reply.get("error"):
         row.attribution["error"] = str(reply["error"])[:300]
     if prof is not None:
@@ -249,9 +332,10 @@ def measure(root: Path, params: dict, run_dirs: int, *, attribute: bool = False)
     return row
 
 
-def profile_run_dirs(run_dirs: int, scratch: Path, *, attribute: bool) -> HaltRow:
+def profile_run_dirs(run_dirs: int, scratch: Path, *, attribute: bool, withheld_paths: int = 0,
+                     stall_ms: int = 0) -> HaltRow:
     """Build a fixture of `run_dirs` stale dirs under `scratch`, warm the engine on a tiny one, then
-    measure one halt land on the real one."""
+    measure one halt land on the real one (the warm-up never stalls)."""
     from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
     from coordinator_core.temp_layout import mkdtemp_in
 
@@ -260,8 +344,9 @@ def profile_run_dirs(run_dirs: int, scratch: Path, *, attribute: bool) -> HaltRo
         workdir = mkdtemp_in("lrhp-", scratch)
         try:
             with fixture_settings_home(workdir):
-                root, _run_id, params = build_fixture(workdir, count)
-                one = measure(root, params, count, attribute=attribute and measured)
+                root, _run_id, params = build_fixture(workdir, count, withheld_paths if measured else 0)
+                one = measure(root, params, count, attribute=attribute and measured,
+                              stall_ms=stall_ms if measured else 0, withheld_paths=withheld_paths if measured else 0)
                 if measured:
                     row = one
         finally:
@@ -274,6 +359,10 @@ def main(argv: list) -> int:
     ap.add_argument("--run-dirs", type=int, action="append", metavar="N",
                     help=f"stale `state/warp` run dirs in the fixture; repeatable (default {list(DEFAULT_RUN_DIRS)})")
     ap.add_argument("--attribute", action="store_true", help="cProfile top-15 coordinator_core functions per row")
+    ap.add_argument("--withheld-paths", type=int, metavar="N",
+                    help=f"dirty paths the target chunk declares; one row at {WITHHELD_RUN_DIRS} run dirs unless --run-dirs")
+    ap.add_argument("--stall-ms", type=int, default=0, metavar="M",
+                    help="block the first halt-path file read M ms (in-process seam)")
     args = ap.parse_args(argv)
     declare_benchmark_origin()
     os.environ["COORDINATOR_SESSION_ID"] = SELF
@@ -281,7 +370,10 @@ def main(argv: list) -> int:
     os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
     scratch = _REPO / "scratch"
     scratch.mkdir(exist_ok=True)
-    rows = [profile_run_dirs(n, scratch, attribute=args.attribute) for n in (args.run_dirs or DEFAULT_RUN_DIRS)]
+    shaped = args.withheld_paths is not None or args.stall_ms > 0
+    sizes = args.run_dirs or ((WITHHELD_RUN_DIRS,) if shaped else DEFAULT_RUN_DIRS)
+    rows = [profile_run_dirs(n, scratch, attribute=args.attribute, withheld_paths=args.withheld_paths or 0,
+                             stall_ms=args.stall_ms) for n in sizes]
     print(json.dumps([asdict(r) for r in rows], indent=1))
     over = [r for r in rows if r.process_time_ms > BAR_MS]
     if over:

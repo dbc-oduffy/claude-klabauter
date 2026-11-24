@@ -188,6 +188,9 @@ def test_overlay_runs_pytest_under_the_repo_pinned_interpreter(tmp_path, monkeyp
     shim.parent.mkdir()
     shim.write_text("#!/bin/sh\n", encoding="utf-8")
     shim.chmod(0o755)
+    from coordinator_core.ops.dispatch_emit import interpreter_pin
+
+    monkeypatch.setattr(interpreter_pin, "_imports_pytest", lambda command: True)
 
     assert _pytest_argv_head(monkeypatch, root, head, shim) == str(shim)
 
@@ -339,9 +342,9 @@ def test_the_mirror_fill_runs_under_the_overlay_bound_not_the_2s_plumbing_budget
     monkeypatch.setattr(cov, "_run", spy)
     assert cov.verify(root, "run1", head, [READER]).verdict == "green"
     for verb in ("ls-tree", "update-index", "checkout-index"):
-        assert ([verb], cov.TEST_TIMEOUT_S) in seen, (verb, seen)
-    assert not [s for s in seen if s[0] in (["checkout"], ["read-tree"]) and s[1] != cov.TEST_TIMEOUT_S]
-    assert not [s for s in seen if s[0] in (["ls-tree"], ["update-index"], ["checkout-index"]) and s[1] != cov.TEST_TIMEOUT_S]
+        assert [s for s in seen if s[0] == [verb]], (verb, seen)
+    bounded = [s for s in seen if s[0] in (["checkout"], ["read-tree"], ["ls-tree"], ["update-index"], ["checkout-index"])]
+    assert bounded and all(s[1] >= cov.TEST_TIMEOUT_S and s[1] != 2 for s in bounded), bounded
 
 
 def _pytest_calls(monkeypatch, tmp_path, run_ids):
@@ -504,6 +507,50 @@ def _two_commits(tmp_path, base_data: str, head_data: str, second_data: str = "o
     return root, base, _git(root, "rev-parse", "HEAD").strip()
 
 
+@pytest.mark.parametrize("shape", ["posix", "windows"])
+def test_a_seed_the_run_deleted_leaves_the_seed_set_and_a_never_tracked_seed_stays(tmp_path, shape):
+    root, base = _repo(tmp_path)
+    (root / READER).unlink()
+    seed = READER if shape == "posix" else READER.replace("/", "\\")
+
+    assert cov.live_seeds(root, [seed], base) == []
+    assert cov.live_seeds(root, [seed, "t/test_never.py"], base) == ["t/test_never.py"]
+    assert cov.live_seeds(root, [seed], None) == [seed]
+
+
+def test_main_greens_a_landing_set_whose_every_seed_the_run_deleted(tmp_path, capsys):
+    root, base = _repo(tmp_path)
+    _git(root, "rm", "-q", READER)
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "delete reader")
+    head = _git(root, "rev-parse", "HEAD").strip()
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    record = measured_rev_record_path(root, "run-del")
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({"sha": head, "base_sha": base, "paths": [READER]}), encoding="utf-8")
+
+    assert cov.main(["--run-id", "run-del", "--repo-root", str(root)]) == 0
+    assert "overlay verdict: green" in capsys.readouterr().out
+    assert json.loads(cov.verdict_path(root, "run-del").read_text(encoding="utf-8"))["verdict"] == "green"
+
+
+def test_main_stays_inconclusive_for_a_landing_set_with_no_test_seeds(tmp_path):
+    root, base = _repo(tmp_path)
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    record = measured_rev_record_path(root, "run-none")
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({"sha": base, "base_sha": base, "paths": ["t/data.txt"]}), encoding="utf-8")
+
+    assert cov.main(["--run-id", "run-none", "--repo-root", str(root)]) == 2
+
+
+def test_a_present_seed_is_kept(tmp_path):
+    root, base = _repo(tmp_path)
+
+    assert cov.live_seeds(root, [READER], base) == [READER]
+
+
 def test_a_red_over_the_importer_cap_leads_with_the_failing_id_before_the_cap_note(tmp_path):
     root, base = _repo(tmp_path, data="bad\n")
     _write(root, "t/widget.py", "X = 1\n")
@@ -572,7 +619,7 @@ def test_a_timed_out_overlay_checkout_is_named_with_its_budget_never_silent(tmp_
     monkeypatch.setattr(cov, "_run", slow)
     out = cov.verify(root, "run1", head, [READER])
     assert out.verdict == "inconclusive"
-    assert f"timed out after {cov.TEST_TIMEOUT_S}s" in out.detail and f"{cov.TEST_TIMEOUT_S} seconds" in out.detail, out.detail
+    assert "timed out after " in out.detail and " seconds" in out.detail and cov.EXPORT_TIMEOUT_ENV in out.detail, out.detail
 
 
 def _clone_dests(monkeypatch):
@@ -868,6 +915,18 @@ def test_a_stale_inflight_marker_is_replaced_and_spawns_again(tmp_path):
         )
 
     assert len(spawned) == 1
+
+
+def test_the_inflight_ttl_outlasts_the_largest_scaled_export_step_and_holds_a_younger_live_marker(tmp_path):
+    assert cov.INFLIGHT_TTL_S >= 3 * cov.export_step_timeout_s(cov.INFLIGHT_PATH_BOUND)
+    assert cov.INFLIGHT_TTL_S > 3 * cov.TEST_TIMEOUT_S
+    marker = cov._inflight_path(tmp_path, "run1")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(str(os.getpid()), encoding="ascii")
+    young = time.time() - 3 * cov.TEST_TIMEOUT_S - 60
+    os.utime(marker, (young, young))
+
+    assert cov._inflight_held(marker)
 
 
 def test_a_failed_spawn_releases_the_inflight_marker(tmp_path):
@@ -1865,7 +1924,7 @@ def test_no_touched_module_means_the_seeds_alone_and_a_runaway_importer_set_is_c
 
 def test_verify_timeout_detail_names_the_timeout_and_its_budget(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
-    monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 7)
+    monkeypatch.setenv(cov.EXPORT_TIMEOUT_ENV, "7")
 
     def slow(argv, cwd, timeout, **kw):
         raise subprocess.TimeoutExpired(argv, timeout)
@@ -1873,7 +1932,7 @@ def test_verify_timeout_detail_names_the_timeout_and_its_budget(tmp_path, monkey
     monkeypatch.setattr(cov, "_run", slow)
     out = cov.verify(root, "run1", head, [READER])
 
-    assert out.verdict == "inconclusive" and "timed out after 7s" in out.detail, out.detail
+    assert out.verdict == "inconclusive" and "timed out after 7" in out.detail, out.detail
 
 
 def test_the_base_rerun_moves_the_mirror_by_index_info_never_a_second_full_checkout(tmp_path, monkeypatch):
@@ -1956,17 +2015,52 @@ def test_the_verify_argv_deselects_the_four_slow_tiers_before_the_targets(tmp_pa
     assert argv[argv.index("--basetemp") + 2:] == [READER]
 
 
-def test_the_xdist_worker_count_is_host_derived_bounded_and_serial_when_unsafe(tmp_path, monkeypatch):
-    monkeypatch.setattr(cov.os, "cpu_count", lambda: 24)
-    assert cov.xdist_workers(sys.executable, 2) == 2
-    assert cov.xdist_workers(sys.executable, 50) == cov.XDIST_MAX_WORKERS
-    assert cov.xdist_workers(sys.executable, 1) == 0
-    assert cov.xdist_workers("some/other/python", 5) == 0
-    monkeypatch.setattr(cov.os, "cpu_count", lambda: 4)
-    assert cov.xdist_workers(sys.executable, 5) == 0
-    monkeypatch.setattr(cov.os, "cpu_count", lambda: 8)
+def _n_values(argv):
+    return [argv[i + 1] for i, a in enumerate(argv) if a == "-n"]
+
+
+def test_the_verify_argv_over_many_targets_pins_zero_workers_when_xdist_is_importable(tmp_path, monkeypatch):
+    monkeypatch.setattr(cov.os, "cpu_count", lambda: 64)
+    targets = [f"t/test_{i}.py" for i in range(50)]
+    monkeypatch.setattr(cov.importlib.util, "find_spec", lambda name: object())
+    argv = cov._pytest_argv(tmp_path, tmp_path, tmp_path / "bt", targets)
+
+    assert _n_values(argv) == ["0"] and argv.index("-n") < argv.index("--rootdir")
+    assert not any(a.startswith("-n") and a != "-n" for a in argv) and "no:xdist" not in argv
+    assert argv[argv.index("--basetemp") + 2:] == targets
+
+
+def test_the_verify_argv_carries_no_worker_flag_when_xdist_is_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(cov.importlib.util, "find_spec", lambda name: None)
     argv = cov._pytest_argv(tmp_path, tmp_path, tmp_path / "bt", [READER, _SECOND])
-    assert argv[argv.index("-n") + 1] == "2" and argv.index("-n") < argv.index("--rootdir")
+
+    assert _n_values(argv) == [] and "no:xdist" not in argv
+
+
+def test_verify_at_default_arguments_runs_serially_and_asks_no_grant(tmp_path, monkeypatch):
+    root, _head = _repo(tmp_path)
+    _write(root, "t/test_one.py", "def test_a():\n    assert True\n")
+    _write(root, "t/test_two.py", "def test_b():\n    assert True\n")
+    head = _commit_all(root, "two files")
+    spawned = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout, **kw):
+        spawned.append(list(argv))
+        return real(argv, cwd, timeout, **kw)
+
+    monkeypatch.setattr(cov, "_run", spy)
+
+    out = cov.verify(root, "run1", head, ["t/test_one.py", "t/test_two.py"])
+
+    assert out.verdict == "green", out
+    pytest_argvs = [a for a in spawned if "pytest" in a]
+    assert pytest_argvs and all(all(int(v) == 0 for v in _n_values(a)) for a in pytest_argvs)
+    assert not any("admit" in " ".join(a) or "lease" in " ".join(a) or "grant" in " ".join(a) for a in spawned)
+
+
+def test_the_worker_fan_out_helpers_are_gone():
+    assert not hasattr(cov, "xdist_workers") and not hasattr(cov, "XDIST_MAX_WORKERS")
 
 
 def test_a_changed_test_selects_only_that_test_and_any_code_outside_a_test_keeps_the_file_whole():
@@ -1996,20 +2090,48 @@ def test_verify_runs_only_the_touched_tests_of_a_touched_file_not_the_whole_file
     assert cov.verify(root, "run2", head, ["t/test_pair.py"], touched=["t/test_pair.py"]).verdict == "red"
 
 
-def test_verify_never_runs_a_slow_tier_test_and_a_land_of_only_such_tests_is_green_with_a_note(tmp_path):
+def test_verify_skips_a_slow_tier_test_beside_a_fast_one_but_runs_a_land_of_only_such_tests(tmp_path):
     root, _head = _repo(tmp_path)
     _write(root, "t/test_tiers.py", "import pytest\n\n\n@pytest.mark.cadence\ndef test_slow():\n    assert False\n")
     head = _commit_all(root, "cadence only")
     out = cov.verify(root, "run1", head, ["t/test_tiers.py"])
-    assert out.verdict == "green" and "excluded tier" in out.detail, out
+    assert out.verdict == "red" and "excluded tier" in out.detail and out.failing == ("t/test_tiers.py::test_slow",), out
+    assert len(out.argv) == 2 and "-m ''" in out.argv[1] and "--rootdir" in out.argv[1] and "not cadence" in out.argv[0], out.argv
     for tier in cov.TIER_EXCLUDED:
         _write(root, "t/test_tiers.py", f"import pytest\n\n\n@pytest.mark.{tier}\ndef test_slow():\n    assert False\n\n\ndef test_fast():\n    assert True\n")
         head = _commit_all(root, tier)
         assert cov.verify(root, f"run-{tier}", head, ["t/test_tiers.py"]).verdict == "green", tier
 
 
-def test_verify_runs_two_or_more_targets_under_xdist_and_still_reports_the_red(tmp_path, monkeypatch):
-    pytest.importorskip("xdist")
+_SLOW_ONLY = "import pytest\n\npytestmark = [pytest.mark.slow, pytest.mark.cadence]\n\n\ndef test_slow_passes():\n    assert True\n"
+
+
+def test_a_slow_marked_scoped_file_under_an_addopts_marker_filter_runs_and_reports_pass(tmp_path):
+    root, _head = _repo(tmp_path)
+    _write(root, "pytest.ini", "[pytest]\nmarkers =\n    slow\n    cadence\naddopts = -m 'not slow'\n")
+    _write(root, "t/test_slow_only.py", _SLOW_ONLY)
+    head = _commit_all(root, "slow only")
+
+    out = cov.verify(root, "run1", head, ["t/test_slow_only.py"])
+
+    assert out.verdict == "green" and "1 passed" in out.detail, out
+    assert "excluded tier" in out.detail and "0 selected" not in out.detail, out
+
+
+def test_a_plan_row_marker_replaces_the_override_and_the_rerun_outcome_is_the_verdict(tmp_path):
+    root, _head = _repo(tmp_path)
+    _write(root, "t/test_slow_only.py", "import pytest\n\npytestmark = pytest.mark.cadence\n\n\ndef test_bad():\n    assert False\n")
+    head = _commit_all(root, "cadence failing")
+
+    out = cov.verify(root, "run1", head, ["t/test_slow_only.py"], marker="cadence")
+
+    assert out.verdict == "red" and out.failing == ("t/test_slow_only.py::test_bad",), out
+    assert out.argv[-1].count("-m cadence") == 1, out.argv
+    wrong = cov.verify(root, "run2", head, ["t/test_slow_only.py"], marker="not cadence")
+    assert wrong.verdict == cov.ENV_DEFECT, wrong
+
+
+def test_verify_runs_two_or_more_targets_serially_and_still_reports_the_red(tmp_path, monkeypatch):
     monkeypatch.setattr(cov.os, "cpu_count", lambda: 16)
     root, base, head = _two_commits(tmp_path, "ok\n", "broken\n")
     seen = _argv_spy(monkeypatch)
@@ -2017,7 +2139,7 @@ def test_verify_runs_two_or_more_targets_under_xdist_and_still_reports_the_red(t
     out = cov.verify(root, "run1", head, [READER, _SECOND], base_sha=base)
 
     assert out.verdict == "red" and out.failing == (f"{READER}::test_reads_data",), out
-    assert seen[0][seen[0].index("-n") + 1] == "2"
+    assert all(v == "0" for a in seen for v in _n_values(a))
 
 
 _WINERR5 = (

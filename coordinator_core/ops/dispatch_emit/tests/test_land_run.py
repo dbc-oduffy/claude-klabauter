@@ -636,3 +636,58 @@ def test_land_with_an_up_to_date_ahead_or_untracked_land_ref_commits(product_rep
     out = _upstream_land(product_repo, monkeypatch, local=local, remote=0, tracked=tracked)
 
     assert out["committed"] is True, out
+
+
+def _wired_landing(tmp_path, monkeypatch, command: str) -> tuple[dict, dict]:
+    """Drive land_run's post-landing writeback with one `wired: true` verdict item citing `command`."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl, run_landing, wired_check
+
+    rel = "state/sizings/2026-11/s.yaml"
+    (tmp_path / "state" / "sizings" / "2026-11").mkdir(parents=True)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "ok.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    (tmp_path / "bad.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
+    row = {"id": "R1", "source_text": "wire it", "anchor": "wire it", "surface": "cli", "status": "open",
+           "claimed_by": ["docs/plans/p.md"], "wired": False, "met_by": []}
+    (tmp_path / rel).write_text(yaml.safe_dump({
+        "schema": "sizing-object", "intent": "x", "estimate": {"tshirt": "S", "provisional": True},
+        "route": "dispatch", "detents": [], "fork": None, "xl_exit": None, "status": "sized",
+        "premise": {"provenance": "not-applicable", "evidence": "fixture"},
+        "requirement_register": {"rows": [row]},
+    }, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(wired_check.census, "tracked_targets", lambda root, cands: frozenset(c for c in cands if c.endswith(".py")))
+    monkeypatch.setattr(rl, "WIRED_RERUN_BUDGET_S", 30.0)
+    book = SimpleNamespace(receipts=[], receipt_error=None, review_land=None, resolves=None, onboarded=False,
+                           ledger=SimpleNamespace(sizing_rel=rel))
+    verdict = {"items": [{"id": "R1", "status": "met", "wired": True, "command": command, "observed": "ran"}]}
+    out = run_landing._after_landing(
+        tmp_path, {"ledger_verdict": verdict, "inline_review": None}, SimpleNamespace(plan_path=None), book,
+        {}, set(), [], "abc1234", "run-1")
+    return out, rr.read_register((tmp_path / rel).read_text(encoding="utf-8")).rows[0]
+
+
+def test_land_reports_a_failing_wired_command_as_demoted_and_writes_the_row_partial(tmp_path, monkeypatch) -> None:
+    out, row = _wired_landing(tmp_path, monkeypatch, "python bad.py")
+
+    assert out["wired_demoted"] == [{"id": "R1", "command": "python bad.py", "reason": "exit 3"}]
+    assert row["wired"] is False and row["status"] == "partial"
+
+
+def test_land_keeps_a_passing_wired_command_wired_and_met(tmp_path, monkeypatch) -> None:
+    out, row = _wired_landing(tmp_path, monkeypatch, "python ok.py")
+
+    assert "wired_demoted" not in out
+    assert row["wired"] is True and row["status"] == "met"
+
+
+@pytest.mark.parametrize("command", ["python -m pytest ok.py", "coordinator-invoke dispatch.land_run"])
+def test_land_demotes_an_inadmissible_wired_command_without_running_it(tmp_path, monkeypatch, command) -> None:
+    out, row = _wired_landing(tmp_path, monkeypatch, command)
+
+    assert out["wired_demoted"][0]["reason"] == "not-rerunnable-at-land"
+    assert row["wired"] is False and row["status"] == "partial"

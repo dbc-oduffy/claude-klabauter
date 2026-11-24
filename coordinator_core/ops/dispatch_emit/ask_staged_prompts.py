@@ -11,10 +11,11 @@ leaves the run inline rather than guessing its text.
 
 from __future__ import annotations
 
+import functools
 import re
 from typing import Callable
 
-from coordinator_core.ops.dispatch_emit.prompt_fragments import _scan_literals
+from coordinator_core.ops.dispatch_emit.prompt_fragments import _scan, _scan_literals, string_end
 from coordinator_core.ops.workflow_fire.worker_preamble import bind_engine_commands, needs_binding
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -50,6 +51,7 @@ def stage(name: str, text: str, sink: dict[str, str], *, record_dir: str) -> str
     )
 
 
+@functools.lru_cache(maxsize=4096)
 def _decode(content: str) -> str | None:
     """The text a single-quoted literal's escaped ``content`` denotes, or None on an escape not decoded."""
     for m in _ESC.finditer(content):
@@ -74,9 +76,9 @@ def _code_span_edges(js: str, run: list[tuple[int, int]], text: str) -> tuple[in
     return lead, max(lead, tail)
 
 
-def _literal_runs(js: str) -> list[list[tuple[int, int]]]:
+def _literal_runs(js: str, literals: list[tuple[int, int]] | None = None) -> list[list[tuple[int, int]]]:
     """Runs of single-quoted literals joined by ` + `, as span lists."""
-    spans = [(s, e) for s, e in _scan_literals(js) if js[s] == "'"]
+    spans = [(s, e) for s, e in (_scan_literals(js) if literals is None else literals) if js[s] == "'"]
     runs: list[list[tuple[int, int]]] = []
     for span in spans:
         if runs and js[runs[-1][-1][1] : span[0]] == _JOIN:
@@ -109,17 +111,131 @@ def bind_script_literals(js: str) -> str:
     return "".join(out)
 
 
-def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
-    """``js`` with each large run of adjacent single-quoted literals replaced by its pointer literal.
+_TEMPLATE_ESCAPES = {"\\": "\\", "`": "`", "$": "$", "{": "{", "n": "\n", "t": "\t"}
 
-    A run is literals joined by ` + `; double-quoted literals (JSON schemas) are never staged. The
-    first run is staged as ``name``, later ones as ``name-2``, ``name-3`` in script order.
+
+def _template_decode(raw: str) -> str | None:
+    """The text a template literal's static ``raw`` segment denotes, or None on a raw CR or an escape not decoded."""
+    if "\r" in raw:
+        return None
+    for m in _ESC.finditer(raw):
+        if m.group(1) not in _TEMPLATE_ESCAPES:
+            return None
+    return _ESC.sub(lambda m: _TEMPLATE_ESCAPES[m.group(1)], raw)
+
+
+def _template_encode(text: str) -> str:
+    """``text`` as the raw body of a template literal."""
+    return text.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+
+
+def _skip_template(js: str, i: int) -> int:
+    """Index just past the template literal whose body starts at ``i``, or -1 when unterminated."""
+    n = len(js)
+    while i < n:
+        c = js[i]
+        if c == "\\":
+            i += 2
+        elif c == "`":
+            return i + 1
+        elif c == "$" and js.startswith("{", i + 1):
+            i = _skip_expr(js, i + 2)
+            if i < 0:
+                return -1
+        else:
+            i += 1
+    return -1
+
+
+def _skip_expr(js: str, i: int) -> int:
+    """Index just past the `}` closing the `${` expression whose body starts at ``i``, or -1 when unmatched."""
+    n, depth = len(js), 0
+    while i < n:
+        c = js[i]
+        if c in "'\"":
+            i = string_end(js, i + 1, c) + 1
+        elif c == "`":
+            i = _skip_template(js, i + 1)
+            if i < 0:
+                return -1
+        elif c == "{":
+            depth, i = depth + 1, i + 1
+        elif c == "}":
+            if depth == 0:
+                return i + 1
+            depth, i = depth - 1, i + 1
+        else:
+            i += 1
+    return -1
+
+
+def _template_segments(js: str, start: int, end: int) -> list[tuple[int, int]] | None:
+    """Raw spans of the static segments of the template ``js[start:end]``, split at each `${...}`; None when unparseable."""
+    segs: list[tuple[int, int]] = []
+    i, seg_a, stop = start + 1, start + 1, end - 1
+    while i < stop:
+        c = js[i]
+        if c == "\\":
+            i += 2
+        elif c == "$" and js.startswith("{", i + 1):
+            segs.append((seg_a, i))
+            i = _skip_expr(js, i + 2)
+            if i < 0 or i > stop:
+                return None
+            seg_a = i
+        else:
+            i += 1
+    segs.append((seg_a, stop))
+    return segs
+
+
+def _top_level_templates(dead: list[tuple[int, int]], js: str) -> list[tuple[int, int]]:
+    """Template literal spans not nested inside another template's `${}`, in script order."""
+    out: list[tuple[int, int]] = []
+    reach = 0
+    for s, e in sorted(dead):
+        if s < reach:
+            continue
+        reach = e
+        if js[s] == "`" and not _is_tagged(js, s):
+            out.append((s, e))
+    return out
+
+
+_KEYWORDS_BEFORE_TEMPLATE = frozenset(
+    {"return", "typeof", "case", "yield", "await", "in", "of", "else", "do", "void", "delete", "new", "throw", "instanceof"}
+)
+
+
+def _is_tagged(js: str, start: int) -> bool:
+    """True when the backtick at ``start`` follows an expression, making it a tagged template whose
+    cooked/raw semantics splicing ``${pointer}`` would change."""
+    i = start
+    while i > 0 and js[i - 1].isspace():
+        i -= 1
+    if i == 0:
+        return False
+    prev = js[i - 1]
+    if prev in ")]":
+        return True
+    if prev.isalnum() or prev in "_$":
+        j = i
+        while j > 0 and (js[j - 1].isalnum() or js[j - 1] in "_$"):
+            j -= 1
+        return js[j:i] not in _KEYWORDS_BEFORE_TEMPLATE
+    return False
+
+
+def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
+    """``js`` with each large static run replaced by its pointer literal.
+
+    A run is single-quoted literals joined by ` + `, or the static text of a template literal between its
+    `${}` expressions (spliced back as `${pointer}`); double-quoted literals (JSON schemas) are never
+    staged. The first run is staged as ``name``, later ones as ``name-2``, ``name-3`` in script order.
     """
-    runs = _literal_runs(js)
-    out: list[str] = []
-    last = 0
-    staged = 0
-    for run in runs:
+    literals, dead = _scan(js)
+    edits: list[tuple[int, int, Callable[[str], str]]] = []
+    for run in _literal_runs(js, literals):
         texts = [_decode(js[s + 1 : e - 1]) for s, e in run]
         if any(t is None for t in texts):
             continue
@@ -128,13 +244,43 @@ def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
         body = text[lead:tail]
         if len(body.encode("utf-8")) < MIN_STAGE_BYTES and not needs_binding(body):
             continue
-        staged += 1
-        out.append(js[last : run[0][0]])
-        parts = [_js_string_literal(text[:lead])] if lead else []
-        parts.append(stager(name if staged == 1 else f"{name}-{staged}", body))
-        if tail < len(text):
-            parts.append(_js_string_literal(text[tail:]))
-        out.append(_JOIN.join(parts))
-        last = run[-1][1]
+
+        def build(nm: str, text=text, lead=lead, tail=tail, body=body) -> str:
+            parts = [_js_string_literal(text[:lead])] if lead else []
+            parts.append(stager(nm, body))
+            if tail < len(text):
+                parts.append(_js_string_literal(text[tail:]))
+            return _JOIN.join(parts)
+
+        edits.append((run[0][0], run[-1][1], build))
+    for ts, te in _top_level_templates(dead, js):
+        segs = _template_segments(js, ts, te)
+        for a, b in segs or ():
+            text = _template_decode(js[a:b])
+            if text is None:
+                continue
+            lead, tail = 0, len(text)
+            if text.count("`") % 2:
+                if a > ts + 1:
+                    eol = text.find("\n", text.index("`"))
+                    lead = len(text) if eol < 0 else eol + 1
+                if b < te - 1:
+                    tail = text.rfind("\n", 0, text.rindex("`")) + 1
+                tail = max(lead, tail)
+            body = text[lead:tail]
+            if len(body.encode("utf-8")) < MIN_STAGE_BYTES:
+                continue
+
+            def build_t(nm: str, text=text, lead=lead, tail=tail, body=body) -> str:
+                return _template_encode(text[:lead]) + "${" + stager(nm, body) + "}" + _template_encode(text[tail:])
+
+            edits.append((a, b, build_t))
+    edits.sort(key=lambda t: t[0])
+    out: list[str] = []
+    last = 0
+    for k, (s, e, make) in enumerate(edits, 1):
+        out.append(js[last:s])
+        out.append(make(name if k == 1 else f"{name}-{k}"))
+        last = e
     out.append(js[last:])
     return "".join(out)

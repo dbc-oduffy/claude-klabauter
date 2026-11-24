@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from coordinator_core.ops.dispatch_emit import agent_body_dedupe, ask_compose, emit, prompt_fragments
+from coordinator_core.ops.dispatch_emit import agent_body_dedupe, ask_compose, prompt_fragments
+from coordinator_core.ops.dispatch_emit.compose_size import ASK_SCRIPT_CEILING_BYTES
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 import pytest
 
-_CEILING = int(0.90 * emit._WORKFLOW_SCRIPT_BYTE_CAP)
+_CEILING = ASK_SCRIPT_CEILING_BYTES
 
 
 _STUB_KW = dict(

@@ -1,5 +1,6 @@
 """Two native Codex sessions, one running a workflow: each snapshot row carries only its own thread tree's usage."""
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,8 @@ def _usage(total):
 
 
 def _rollout(home: Path, sid: str, tokens: int) -> Path:
-    path = home / "sessions" / "2026" / "11" / "22" / f"rollout-2026-11-22T00-00-00-{sid}.jsonl"
+    now = datetime.now(timezone.utc)
+    path = home / "sessions" / now.strftime("%Y/%m/%d") / f"rollout-{now:%Y-%m-%dT%H-%M-%S}-{sid}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [
         {"type": "session_meta", "timestamp": "2026-11-22T00:00:00Z", "payload": {"id": sid, "cwd": "/w"}},

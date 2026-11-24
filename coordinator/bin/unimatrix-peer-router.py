@@ -2199,7 +2199,9 @@ class Router:
                 refused_identity = True
                 continue
             owned_alias = owned_alias or name in _contract().projected_addresses(e)
-            owner = (e.get('vendor'), e.get('target') or e.get('sessionId') or ep)
+            # A Claude Code row carries no vendor; a relay-pushed mirror of the same session must not
+            # read as a second owner beside the bridge mirror that stamps vendor "claude".
+            owner = (e.get('vendor') or 'claude', e.get('target') or e.get('sessionId') or ep)
             owners.add(owner)
             ep_owners.setdefault(ep, set()).add(owner)
             (exact if e.get("name") == name else aliases).add(ep)
@@ -2221,7 +2223,8 @@ class Router:
             # is one address, not ambiguity: prefer the bridge mirror, then the exact name.
             matches = {min(matches, key=lambda ep: (not rows_by_ep[ep].get("unimatrixFarName"), ep not in exact, ep))}
         if len(matches) > 1:
-            self.last_refusal = f"ambiguous: {len(matches)} live sessions carry this name"
+            named = ", ".join(sorted(f"{rows_by_ep[ep].get('name')}@{ep}" for ep in matches))
+            self.last_refusal = f"ambiguous: {len(matches)} live sessions carry this name: {named}"
             return ""  # An exact name never beats a far alias: both are live carriers of the address.
         self.last_resolved_far = bool(matches) and matches <= far_eps
         if matches:

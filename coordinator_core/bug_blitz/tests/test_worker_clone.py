@@ -182,3 +182,68 @@ def test_provision_spawn_count_and_process_time(repo: Path, monkeypatch: pytest.
     record_property("provision_git_spawns", len(calls))
     assert (clone / "a.txt").is_file()
     assert calls == ["rev-parse", "clone", "checkout"]
+
+
+def _write_cone(repo: Path, run_id: str, text: str) -> None:
+    d = worker_clone.run_dir(repo, run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / worker_clone.CONE_FILE).write_text(text, encoding="utf-8")
+
+
+def test_read_cone_absent_is_empty_and_entries_are_normalised(tmp_path: Path) -> None:
+    assert worker_clone.read_cone(tmp_path) == ()
+    (tmp_path / worker_clone.CONE_FILE).write_text("\nsub/\r\n pkg\\inner \nsub\n\n", encoding="utf-8")
+    assert worker_clone.read_cone(tmp_path) == ("sub", "pkg/inner")
+
+
+@pytest.mark.parametrize("bad", ["../x", "a/../b", "-flag", "/abs", "a:b"])
+def test_read_cone_refuses_an_entry_outside_the_repo(tmp_path: Path, bad: str) -> None:
+    (tmp_path / worker_clone.CONE_FILE).write_text(f"sub\n{bad}\n", encoding="utf-8")
+    with pytest.raises(worker_clone.WorkerCloneError, match="repo-relative"):
+        worker_clone.read_cone(tmp_path)
+
+
+def test_provision_with_a_cone_checks_out_only_the_cone_and_root_files(repo: Path) -> None:
+    (repo / "other").mkdir()
+    (repo / "other" / "c.txt").write_bytes(b"gamma\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "more")
+    _write_cone(repo, "run-1", "sub\n")
+    clone = worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert (clone / "sub" / "b.txt").is_file()
+    assert (clone / "a.txt").is_file()  # root files are always in a cone
+    assert not (clone / "other").exists()
+    assert worker_clone.base_sha(clone) == _git(repo, "rev-parse", "HEAD")
+
+
+def test_provision_with_an_empty_cone_file_checks_out_everything(repo: Path) -> None:
+    _write_cone(repo, "run-1", "\n")
+    clone = worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert (clone / "sub" / "b.txt").is_file() and (clone / "a.txt").is_file()
+
+
+def test_provision_with_a_cone_adds_one_sparse_checkout_spawn_and_no_timeout(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_cone(repo, "run-1", "sub\n")
+    calls: list = []
+    real = worker_clone.run_git
+    monkeypatch.setattr(worker_clone, "run_git", lambda *a, **k: (calls.append((a[0][0], sorted(k))), real(*a, **k))[1])
+    worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert [c[0] for c in calls] == ["rev-parse", "clone", "sparse-checkout", "checkout"]
+    assert all("timeout" not in c[1] for c in calls)
+
+
+def test_a_failed_sparse_checkout_leaves_no_clone(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_cone(repo, "run-1", "sub\n")
+    real = worker_clone.run_git
+
+    def fail(argv, **kw):
+        if argv[0] == "sparse-checkout":
+            return type("R", (), {"returncode": 1, "timed_out": False, "stderr": "boom", "stdout": ""})()
+        return real(argv, **kw)
+
+    monkeypatch.setattr(worker_clone, "run_git", fail)
+    with pytest.raises(worker_clone.WorkerCloneError, match="sparse-checkout of sub failed: boom"):
+        worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert not (worker_clone._clones_dir(repo) / "run-1").exists()

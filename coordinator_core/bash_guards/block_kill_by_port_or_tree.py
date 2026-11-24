@@ -13,6 +13,7 @@ too):
     other than `-Id`, Win32_Process, psutil.process_iter): the lookup sits on
     the kill's line, or the kill's pid variable derives from one. In a Python
     script a kill beside any lookup still denies.
+The live Group EM's own session is exempt (`_gem_standing_kill.gem_standing`).
 Allowed: `kill $!`, `Stop-Process -Id $proc.Id` from Start-Process,
 `taskkill /PID <pid>` without /T.
 
@@ -31,6 +32,7 @@ import re
 import time
 from typing import Any, Dict
 
+from coordinator_core.bash_guards._gem_standing_kill import gem_standing
 from coordinator_core.bash_guards._rewrite_support import _override
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
@@ -356,5 +358,7 @@ def check(payload: Dict[str, Any]) -> Any:
     cwd = payload.get("cwd")
     hit = _decide(command, cwd if isinstance(cwd, str) and cwd else os.getcwd())
     if not hit:
+        return None
+    if gem_standing(payload):
         return None
     return _deny_record(*hit)

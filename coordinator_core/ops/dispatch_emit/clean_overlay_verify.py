@@ -113,11 +113,17 @@ def stall_retry_window() -> float:
     """The no-output window of the one retry after a stall: `PYTEST_STALL_S` times the 1-minute load per core,
     clamped to `[STALL_RETRY_SCALE_MIN, STALL_RETRY_SCALE_MAX]`. `os.getloadavg` is POSIX-only, so a host
     without it (Windows) gets the minimum scale. Never below `PYTEST_STALL_S`."""
+    return PYTEST_STALL_S * _load_scale()
+
+
+def _load_scale() -> float:
+    """The 1-minute load per core clamped to `[STALL_RETRY_SCALE_MIN, STALL_RETRY_SCALE_MAX]`; the minimum
+    where `os.getloadavg` is absent (Windows)."""
     try:
         per_core = os.getloadavg()[0] / (os.cpu_count() or 1)
     except (AttributeError, OSError):
         per_core = 0.0
-    return PYTEST_STALL_S * min(STALL_RETRY_SCALE_MAX, max(STALL_RETRY_SCALE_MIN, per_core))
+    return min(STALL_RETRY_SCALE_MAX, max(STALL_RETRY_SCALE_MIN, per_core))
 
 
 _RESULT_LINE_RE = re.compile(r"^[.FEsxX]+(?:\s+\[\s*\d+%\])?$")
@@ -139,15 +145,18 @@ _now = time.monotonic  # the stall clock's seam: tests swap it to cross a stall 
 def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedProcess:
     """Drain `proc`'s stdout and stderr on reader threads until it exits; any new output, or a change in the
     tree's CPU time (`close.tree_cpu_s`, where readable), resets the stall clock.
-    A silence of `stall_s` (`PYTEST_STARTUP_S` if longer, before the first byte) with an idle tree closes the
+    A silence of `stall_s` (`collect_startup_s()` if longer, before the first byte) with an idle tree closes the
     tree and raises `PytestStalled`. Output is read in whatever chunks the pipe
-    holds (pytest `-q` prints dots with no newline), so a slow test file that keeps reporting never stalls."""
+    holds (pytest `-q` prints dots with no newline), so a slow test file that keeps reporting never stalls.
+    Collection prints no count to a pipe, so tree CPU is the collect-progress signal: a collecting tree burns
+    CPU and keeps extending the window. Where `tree_cpu_s` is absent or returns None the window is wall-clock."""
     import threading
 
     arrived: list = []
     streams: tuple = ([], [])
     clock = [_now()]
     started = clock[0]
+    startup_s = collect_startup_s()
 
     def drain(index: int, pipe) -> None:
         try:
@@ -182,7 +191,7 @@ def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedPro
                         if last_cpu is not None and cpu != last_cpu:
                             clock[0] = _now()
                         last_cpu = cpu
-                window = stall_s if arrived else max(stall_s, PYTEST_STARTUP_S)
+                window = stall_s if arrived else max(stall_s, startup_s)
                 if _now() - clock[0] >= window:
                     progress = _last_progress(b"".join(arrived))
                     close()
@@ -196,7 +205,7 @@ def _watched(proc, close, argv: list, stall_s: float) -> subprocess.CompletedPro
     return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
-_PLAIN_GIT = frozenset({"ls-tree", "update-index", "diff-tree", "write-tree", "add"})
+_PLAIN_GIT = frozenset({"ls-tree", "update-index", "diff-tree", "write-tree", "add", "grep"})
 
 
 def _plain_git_args(args: Sequence[str]) -> bool:
@@ -205,7 +214,7 @@ def _plain_git_args(args: Sequence[str]) -> bool:
 
 
 def _run(
-    argv: list, cwd: Path, timeout: Optional[int], env: Optional[dict] = None, stdin_text: Optional[str] = None,
+    argv: list, cwd: Path, timeout: Optional[float], env: Optional[dict] = None, stdin_text: Optional[str] = None,
     *, stall_s: Optional[float] = None,
 ) -> subprocess.CompletedProcess:
     """Run `argv` in a capped job (a killpg session off Windows); the tree is closed on every exit, so a
@@ -427,6 +436,21 @@ _SETUP_HEAD_LINES = 6
 _SETUP_CAUSE_LINES = 6
 
 
+_CONFTEST_LOAD_RE = re.compile(r"^ImportError while loading conftest '.+'\.?$", re.MULTILINE)
+_CONFTEST_SPAN_LINES = 30
+
+
+def _conftest_load_error(output: str) -> str:
+    """The `ImportError while loading conftest '<path>'` header and its first `E` cause lines (pytest exit 4, no
+    `ERROR collecting` section), naming the conftest that zeroed the run; `""` when `output` holds none."""
+    head = _CONFTEST_LOAD_RE.search(output)
+    if head is None:
+        return ""
+    span = output[head.start():].splitlines()[:_CONFTEST_SPAN_LINES]
+    cause = [ln for ln in span[1:] if ln.startswith("E ")][:_SETUP_CAUSE_LINES]
+    return "first setup ERROR: " + " | ".join(ln.strip() for ln in (span[0], *cause))[:_OUTPUT_TAIL]
+
+
 def first_setup_error(output: str) -> str:
     """The head of the first `ERROR at setup of` or `ERROR collecting` traceback in `output`: its header, its
     first lines and its `E` cause lines, so a verdict detail cut to the output tail still names the failure
@@ -434,7 +458,7 @@ def first_setup_error(output: str) -> str:
     output = output.replace("\r\n", "\n")
     start = _SETUP_ERROR_RE.search(output)
     if start is None:
-        return ""
+        return _conftest_load_error(output)
     end = _SECTION_END_RE.search(output, start.end())
     section = output[start.start():end.start() if end else len(output)].strip().splitlines()
     cause = [ln for ln in section[_SETUP_HEAD_LINES:] if ln.startswith("E ")][:_SETUP_CAUSE_LINES]
@@ -443,6 +467,8 @@ def first_setup_error(output: str) -> str:
 
 #: Zero-run cause for a pytest run whose every outcome is a setup error (no test completed): the harness, not a test, failed.
 ZERO_RUN_TEST_INFRA = "test_infra_failure"
+#: Re-runs of a 0-test `test_infra_failure` outcome (retest_targeted pass, test_leg_run leg); a second one is reported.
+TEST_INFRA_RETRY_LIMIT = 1
 #: Stderr prefix of the one typed line `--export-run` prints for a co-tenant refusal; the verify halt routes on it.
 CO_TENANT_LINE = "co_tenant_dependency"
 _SUMMARY_COUNTS_RE = re.compile(r"^\W*((?:\d+ [a-z]+(?:, )?)+) in \d+(?:\.\d+)?s", re.MULTILINE)
@@ -468,6 +494,54 @@ def infra_setup_error(output: str) -> str:
         return found
     line = _SETUP_ERROR_LINE_RE.search(text)
     return f"first setup ERROR: {line.group(1).strip()}"[:_OUTPUT_TAIL] if line else ""
+
+
+def completed_a_test(output: str) -> bool:
+    """True when pytest's terminal summary in `output` counts a passed, failed, xfailed or xpassed test."""
+    text = output.replace("\r\n", "\n")
+    return any(
+        kind in _COMPLETED_KINDS and int(n)
+        for body in _SUMMARY_COUNTS_RE.findall(text)
+        for n, kind in re.findall(r"(\d+) ([a-z]+)", body)
+    )
+
+
+_PROCESS_ARGV_CAP = 1500
+_UNRUN_FILES_CAP = 12
+
+
+def process_facts(proc: "subprocess.CompletedProcess", cwd: object, files: Optional[Sequence[str]] = None) -> str:
+    """The pytest process behind a zero-test or process-error verdict as one `pytest process:` clause: its exit
+    code, interpreter (argv[0]), cwd and argv, plus (when `files` is given) the test files that never ran. A
+    halt detail carrying it lets a refire start from the failing command instead of guessing."""
+    raw = proc.args if isinstance(proc.args, (list, tuple)) else [proc.args]
+    argv = [str(a) for a in raw]
+    text = (
+        f"pytest process: exit={proc.returncode}; interpreter={argv[0] if argv else ''}; cwd={cwd}; "
+        f"argv={shlex.join(argv)[:_PROCESS_ARGV_CAP]}"
+    )
+    if files is None:
+        return text
+    named = list(dict.fromkeys(str(f).split("::", 1)[0] for f in files))
+    shown = ", ".join(named[:_UNRUN_FILES_CAP]) + (f" (+{len(named) - _UNRUN_FILES_CAP} more)" if len(named) > _UNRUN_FILES_CAP else "")
+    return f"{text}; unrun test files: {shown or 'none named'}"
+
+
+_MISSING_FILE_RE = re.compile(r"^E?\s*(?:\w+\.)*FileNotFoundError:.*?(['\"])(.+?)\1\s*$", re.MULTILINE)
+
+
+def mirror_gap(output: str, dest: Path, tracked: Collection[str]) -> str:
+    """The repo-relative tracked paths a `FileNotFoundError` in `output` names that `dest` (the mirror worktree)
+    does not hold, as a `mirror gap` text; `""` when no missing path is both tracked and absent from the mirror
+    (a file the code itself failed to create is not a gap). `tracked` is the index view already in hand."""
+    base = dest.resolve().as_posix().rstrip("/").lower() + "/"
+    gaps: list = []
+    for match in _MISSING_FILE_RE.finditer(output.replace("\r\n", "\n")):
+        raw = match.group(2).replace("\\\\", "/").replace("\\", "/")
+        rel = raw[len(base):] if raw.lower().startswith(base) else raw.removeprefix("./")
+        if rel in tracked and not (dest / rel).exists() and rel not in gaps:
+            gaps.append(rel)
+    return f"mirror gap: tracked path(s) absent from the mirror: {', '.join(gaps)}" if gaps else ""
 
 
 LegHook = Callable[[str], ContextManager]
@@ -633,16 +707,19 @@ def _mirror_lock(root: Path, label: str = "clean-overlay") -> Iterator[Path]:
 
 def reset_mirror(root: Path) -> None:
     """Delete every slot of the repo's mirror pool, each under its own lock, so the next verify is a cold build
-    (the measurement harness). A slot held past `TEST_TIMEOUT_S` is an `ExportError`."""
+    (the measurement harness). A slot held past `export_step_timeout_s()` is an `ExportError`."""
     for slot in range(MIRROR_SLOTS):
         mroot = mirror_root(root, slot)
         if not mroot.exists():
             continue
+        wait = export_step_timeout_s()
         try:
-            with held_lock(mroot, timeout=TEST_TIMEOUT_S, holder_label="clean-overlay-reset"):
+            with held_lock(mroot, timeout=wait, holder_label="clean-overlay-reset"):
                 _drop(mroot)
         except LockTimeout as exc:
-            raise ExportError(f"clean mirror busy: slot {slot} was not free within {TEST_TIMEOUT_S}s: {exc}") from exc
+            raise ExportError(
+                f"clean mirror busy: slot {slot} was not free within {wait:g}s ({EXPORT_TIMEOUT_ENV} sets it): {exc}"
+            ) from exc
 
 
 def _read_head(root: Path) -> str:
@@ -728,7 +805,7 @@ def _ls_tree(dest: Path, sha: str, paths: Sequence[str]) -> list:
     for batch in batches:
         if not batch:
             continue
-        out = _run([_git_exe(), "ls-tree", "-r", "-z", sha, "--", *batch], dest, TEST_TIMEOUT_S)
+        out = _run([_git_exe(), "ls-tree", "-r", "-z", sha, "--", *batch], dest, export_step_timeout_s(len(batch)))
         if out.returncode:
             raise _MirrorStale(f"ls-tree {sha[:12]} failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}")
         for rec in out.stdout.split("\0"):
@@ -745,7 +822,8 @@ def _stage_and_write(dest: Path, put: Sequence[tuple]) -> None:
     if not put:
         return
     recs = "".join(f"{mode} {oid}\t{p}\0" for p, mode, oid in put)
-    _must(_run([_git_exe(), "update-index", "-z", "--add", "--index-info"], dest, TEST_TIMEOUT_S, stdin_text=recs))
+    budget = export_step_timeout_s(len(put))
+    _must(_run([_git_exe(), "update-index", "-z", "--add", "--index-info"], dest, budget, stdin_text=recs))
     names = [p for p, _, _ in put]
     for p in names:
         target = dest / p
@@ -756,7 +834,7 @@ def _stage_and_write(dest: Path, put: Sequence[tuple]) -> None:
                 break
             if anc.is_file():
                 anc.unlink()
-    _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, TEST_TIMEOUT_S, stdin_text="".join(f"{p}\0" for p in names)))
+    _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, budget, stdin_text="".join(f"{p}\0" for p in names)))
 
 
 def _fill(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str]] = None) -> int:
@@ -770,10 +848,10 @@ def _fill(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str]] 
         _stage_and_write(dest, put)
         _state_write(mroot, sha, frozenset(closure))
         return len(put)
-    out = _run([_git_exe(), "read-tree", "-m", "-u", sha], dest, TEST_TIMEOUT_S)
+    out = _run([_git_exe(), "read-tree", "-m", "-u", sha], dest, export_step_timeout_s())
     if out.returncode:
         raise ExportError(f"overlay checkout failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}")
-    listing = _run([_git_exe(), "ls-tree", "-r", "--name-only", "-z", sha], dest, TEST_TIMEOUT_S)
+    listing = _run([_git_exe(), "ls-tree", "-r", "--name-only", "-z", sha], dest, export_step_timeout_s())
     _state_write(mroot, sha, None)
     return _written(listing.stdout.split("\0")) if not listing.returncode else 0
 
@@ -824,7 +902,7 @@ def _apply_diff(dest: Path, raw: str, closure: Optional[Collection[str]] = None)
         else:
             return None
     if gone:
-        _must(_run([_git_exe(), "update-index", "-z", "--force-remove", "--stdin"], dest, TEST_TIMEOUT_S, stdin_text="".join(f"{p}\0" for p in gone)))
+        _must(_run([_git_exe(), "update-index", "-z", "--force-remove", "--stdin"], dest, export_step_timeout_s(len(gone)), stdin_text="".join(f"{p}\0" for p in gone)))
         for p in gone:
             try:
                 (dest / p).unlink()
@@ -832,11 +910,11 @@ def _apply_diff(dest: Path, raw: str, closure: Optional[Collection[str]] = None)
                 pass
     if put:
         recs = "".join(f"{mode} {oid}\t{p}\0" for p, mode, oid in put)
-        _must(_run([_git_exe(), "update-index", "-z", "--add", "--index-info"], dest, TEST_TIMEOUT_S, stdin_text=recs))
+        _must(_run([_git_exe(), "update-index", "-z", "--add", "--index-info"], dest, export_step_timeout_s(len(put)), stdin_text=recs))
         hidden = [] if closure is not None else [p for p, _, _ in put if p.startswith(_SPARSE_EXCLUDE)]
         shown = [p for p, _, _ in put if p not in hidden]
         if hidden:
-            _must(_run([_git_exe(), "update-index", "-z", "--skip-worktree", "--stdin"], dest, TEST_TIMEOUT_S, stdin_text="".join(f"{p}\0" for p in hidden)))
+            _must(_run([_git_exe(), "update-index", "-z", "--skip-worktree", "--stdin"], dest, export_step_timeout_s(len(hidden)), stdin_text="".join(f"{p}\0" for p in hidden)))
         for p in shown:
             target = dest / p
             if target.is_dir():
@@ -847,7 +925,7 @@ def _apply_diff(dest: Path, raw: str, closure: Optional[Collection[str]] = None)
                 if anc.is_file():
                     anc.unlink()
         if shown:
-            _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, TEST_TIMEOUT_S, stdin_text="".join(f"{p}\0" for p in shown)))
+            _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, export_step_timeout_s(len(shown)), stdin_text="".join(f"{p}\0" for p in shown)))
     return [*gone, *(p for p, _, _ in put)]
 
 
@@ -865,7 +943,7 @@ def _advance(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str
     old = _state_read(mroot)
     if old is None:
         raise _MirrorStale("mirror state unknown")
-    diff = _run([_git_exe(), "diff-tree", "-r", "--raw", "-z", "--no-renames", old, sha], dest, TEST_TIMEOUT_S)
+    diff = _run([_git_exe(), "diff-tree", "-r", "--raw", "-z", "--no-renames", old, sha], dest, export_step_timeout_s())
     if diff.returncode:
         raise _MirrorStale(f"diff-tree {old[:12]}..{sha[:12]} failed: {diff.stderr.strip()[-_OUTPUT_TAIL:]}")
     if not diff.stdout.strip("\0"):
@@ -875,7 +953,7 @@ def _advance(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str
     if names is None:
         if closure is not None:
             raise _MirrorStale(f"non-plain-file change {old[:12]}..{sha[:12]} in a scoped mirror")
-        moved = _run([_git_exe(), "read-tree", "-m", "-u", old, sha], dest, TEST_TIMEOUT_S)
+        moved = _run([_git_exe(), "read-tree", "-m", "-u", old, sha], dest, export_step_timeout_s())
         if moved.returncode:
             raise _MirrorStale(f"read-tree {old[:12]}..{sha[:12]} failed: {moved.stderr.strip()[-_OUTPUT_TAIL:]}")
         names = [t for t in diff.stdout.split("\0") if t and not t.startswith(":")]
@@ -960,12 +1038,11 @@ def _overlay(
             out.write_bytes(data)
     names = [rel for rel, _ in todo]
     for i in range(0, len(names), _ADD_BATCH):
-        added = _run(
-            [_git_exe(), "--literal-pathspecs", "add", "-f", "-A", "--", *names[i:i + _ADD_BATCH]], dest, TEST_TIMEOUT_S,
-        )
+        batch = names[i:i + _ADD_BATCH]
+        added = _run([_git_exe(), "--literal-pathspecs", "add", "-f", "-A", "--", *batch], dest, export_step_timeout_s(len(batch)))
         if added.returncode:
             raise _MirrorStale(f"staging the overlay failed: {added.stderr.strip()[-_OUTPUT_TAIL:]}")
-    tree = _run([_git_exe(), "write-tree"], dest, TEST_TIMEOUT_S)
+    tree = _run([_git_exe(), "write-tree"], dest, export_step_timeout_s(len(names)))
     at = tree.stdout.strip()
     if tree.returncode or not _FULL_SHA.fullmatch(at):
         raise _MirrorStale(f"recording the overlay tree failed: {tree.stderr.strip()[-_OUTPUT_TAIL:]}")
@@ -1120,7 +1197,9 @@ def _prepare_guarded(
         _check_overlay_imports(root, overlay)
         return _prepare(root, mroot, sha, leg, overlay, closure)
     except subprocess.TimeoutExpired as exc:
-        raise ExportError(f"clean export timed out after {TEST_TIMEOUT_S}s: {exc}") from exc
+        raise ExportError(
+            f"clean export timed out after {_timeout_text(exc)} ({EXPORT_TIMEOUT_ENV} sets the step budget): {exc}"
+        ) from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise ExportError(f"clean export did not complete: {type(exc).__name__}: {exc}") from exc
 
@@ -1161,11 +1240,10 @@ def _seed_data(root: Path, seeds: Sequence[str]) -> frozenset:
     dirs = {PurePosixPath(s).parent.as_posix() for s in seeds}
     prefixes = tuple(f"{d}/" for d in dirs if d != ".")
     at_root = "." in dirs
-    tracked = test_reach._tracked(root)
-    under = [p for p in tracked if p.startswith(prefixes)] if prefixes else []
-    if at_root:
-        under.extend(p for p in tracked if "/" not in p)
-    return frozenset(p for p in under if not p.endswith(".py"))
+    return frozenset(
+        p for p in test_reach._tracked(root)
+        if not p.endswith(".py") and (p.startswith(prefixes) or (at_root and "/" not in p))
+    )
 
 
 @contextmanager
@@ -1255,18 +1333,6 @@ def _clean_submodule(root: Path, package: str, name: str, changed: Collection[st
     )
 
 
-def _clean_submodule(root: Path, package: str, name: str, changed: Collection[str]) -> bool:
-    """`from package import name` where `name` is a submodule on disk with no dirt: the export holds it at its
-    HEAD bytes, so the dirty package `__init__` never had to define it.
-
-    Trap: without this, any dirt in a package `__init__` refused every importer of a sibling submodule
-    (bf2f0d f4e08e: `from coordinator_core.ops import method_step` read as a name ops/__init__.py lacks)."""
-    stem = package.replace(".", "/") + "/" + name
-    return any(
-        rel not in changed and (root / rel).is_file() for rel in (f"{stem}.py", f"{stem}/__init__.py")
-    )
-
-
 def _mirror_env(env: dict, dest: Path) -> dict:
     """`env` with `coordinator_core` resolved from the mirror alone: PYTHONPATH is the mirror root (the caller's
     repo is not on it), and no bytecode is written, so a same-size same-second edit never runs a stale module."""
@@ -1296,6 +1362,44 @@ def export_run_stall_s() -> float:
     except ValueError:
         value = 0.0
     return value if value > 0 else float(PYTEST_STALL_S)
+
+
+EXPORT_TIMEOUT_ENV = "COORDINATOR_EXPORT_TIMEOUT_S"
+COLLECT_STARTUP_ENV = "COORDINATOR_COLLECT_STARTUP_S"
+# Seconds of git work per exported path under load. Sized from the 1416-file export, whose git steps
+# (ls-tree, update-index, checkout-index, add) ran ~60-80s of process time together on a loaded box: 0.05s * 1416 = 71s.
+EXPORT_STEP_S_PER_PATH = 0.05
+
+
+def _positive_env_float(name: str) -> float:
+    """`name` parsed as a positive float; 0.0 when unset, unparsable or non-positive."""
+    raw = os.environ.get(name, "").strip()
+    try:
+        value = float(raw) if raw else 0.0
+    except ValueError:
+        return 0.0
+    return value if 0 < value < float("inf") else 0.0
+
+
+def export_step_timeout_s(n_paths: int = 0) -> float:
+    """How long one export git step may take for `n_paths`: `COORDINATOR_EXPORT_TIMEOUT_S` when positive, else
+    `TEST_TIMEOUT_S` times the load scale plus `EXPORT_STEP_S_PER_PATH` per path. The path term carries the
+    budget where the load term is inert (Windows). Never below `TEST_TIMEOUT_S` except by the env override."""
+    override = _positive_env_float(EXPORT_TIMEOUT_ENV)
+    if override:
+        return override
+    return max(float(TEST_TIMEOUT_S), TEST_TIMEOUT_S * _load_scale() + EXPORT_STEP_S_PER_PATH * max(0, n_paths))
+
+
+def _timeout_text(exc: subprocess.TimeoutExpired) -> str:
+    """The budget `exc` expired at, as `<seconds>s`."""
+    return f"{float(exc.timeout):g}s" if isinstance(exc.timeout, (int, float)) else "its budget"
+
+
+def collect_startup_s() -> float:
+    """The silence allowed before pytest's first byte: `COORDINATOR_COLLECT_STARTUP_S` when positive, else
+    `PYTEST_STARTUP_S`."""
+    return _positive_env_float(COLLECT_STARTUP_ENV) or float(PYTEST_STARTUP_S)
 
 
 def run_in_export(root: Path, run_id: str, paths: Sequence[str], argv: Sequence[str]) -> subprocess.CompletedProcess:
@@ -1330,7 +1434,7 @@ def _with_importers(dest: Path, seeds: tuple, touched: Sequence[str], sha: Optio
         _git_exe(), "grep", "-l", "-z", "-w", "-F", *(a for s in stems for a in ("-e", s)),
         *([sha] if sha else []), "--", ":(glob)**/test_*.py", ":(glob)**/*_test.py",
     ]
-    found = _run(argv, dest, TEST_TIMEOUT_S)
+    found = _run(argv, dest, export_step_timeout_s())
     if found.returncode not in (0, 1):
         return seeds, "importer scan failed: ran the touched tests only"
     prefix = f"{sha}:" if sha else ""
@@ -1401,7 +1505,6 @@ def _run_pytest_retrying(argv: list, dest: Path, env: dict) -> subprocess.Comple
 
 
 TIER_EXCLUDED = ("cadence", "complete", "pending_fix", "designed_red")
-XDIST_MAX_WORKERS = 4
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 _DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
 
@@ -1411,26 +1514,24 @@ def tier_marker_expr() -> str:
     return " and ".join(f"not {m}" for m in TIER_EXCLUDED)
 
 
-def xdist_workers(py: str, units: int) -> int:
-    """The `-n` worker count for `units` pytest targets, 0 for serial. Derived from the host (a quarter of its
-    logical cores, at most `XDIST_MAX_WORKERS`) and from `units`; serial when under two workers would result or
-    when `py` is not this interpreter (a pinned gate interpreter's xdist is not probed)."""
-    if units < 2 or py != sys.executable or importlib.util.find_spec("xdist") is None:
-        return 0
-    workers = min(units, XDIST_MAX_WORKERS, (os.cpu_count() or 1) // 4)
-    return workers if workers >= 2 else 0
+def _xdist_known_present(py: str) -> bool:
+    """True only when `py` is this engine's own interpreter (or its console sibling) and xdist is importable here;
+    a pinned gate interpreter's xdist is not probed, and `-n` to one without it is a pytest usage error (exit 4)."""
+    from coordinator_core.pyresolve import _console_sibling
+
+    return py in {sys.executable, _console_sibling(sys.executable)} and importlib.util.find_spec("xdist") is not None
 
 
 def _pytest_argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str], marker: Optional[str] = None) -> list:
     """`--rootdir` is the symlink-resolved mirror: pytest roots node ids at the realpath of each test file, so a
     rootdir behind a symlink (macOS /var -> /private/var) loses the prefix match and every id becomes a file-less
     `../../..::name`. Every flag precedes `--rootdir`; the targets follow `--basetemp`. `marker` replaces the tier
-    `-m` expression (the empty string selects every marker)."""
+    `-m` expression (the empty string selects every marker). Never a worker count above 0: when xdist is importable
+    `-n 0` overrides a consumer addopts `-n`; `-p no:xdist` would make that addopts an unrecognized argument."""
     py = _gate_python(root)
-    workers = xdist_workers(py, len(targets))
     return [
         py, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", tier_marker_expr() if marker is None else marker,
-        *(["-n", str(workers)] if workers else []), "--rootdir", str(dest.resolve()),
+        *(["-n", "0"] if _xdist_known_present(py) else []), "--rootdir", str(dest.resolve()),
         "--basetemp", str(basetemp), *targets,
     ]
 
@@ -1487,7 +1588,7 @@ def narrow_touched_tests(root: Path, dest: Path, base: Optional[str], post: str,
     files = [t for t in dict.fromkeys(targets) if t in rels and _is_test_path(t) and t.endswith(".py")]
     if not files or not base or base == post:
         return tuple(targets)
-    out = _run([_git_exe(), "diff", "-U0", "--no-color", "--no-ext-diff", base, post, "--", *files], root, TEST_TIMEOUT_S)
+    out = _run([_git_exe(), "diff", "-U0", "--no-color", "--no-ext-diff", base, post, "--", *files], root, export_step_timeout_s(len(files)))
     if out.returncode != 0:
         return tuple(targets)
     per_file: dict = {}
@@ -1540,19 +1641,13 @@ def _tier_empty_as_green(proc: subprocess.CompletedProcess) -> subprocess.Comple
 def _settle_empty_collection(
     root: Path, dest: Path, basetemp: Path, run_seeds: Sequence[str], seeds: Sequence[str], env: dict, proc: subprocess.CompletedProcess,
 ) -> subprocess.CompletedProcess:
-    """`proc` unchanged unless it is an exit 5 whose output names no deselection: xdist workers deselect silently, so
-    the run is repeated serially (the tier line then shows) and, if still empty, over the whole `seeds` instead of
-    the narrowed `run_seeds`. An exit 5 that survives both returns with `_EMPTY_CAUSE` appended to its output."""
+    """`proc` unchanged unless it is an exit 5 whose output names no deselection: the run is
+    repeated over the whole `seeds` instead of the narrowed `run_seeds`. An exit 5 that survives returns with
+    `_EMPTY_CAUSE` appended to its output."""
     if proc.returncode != _PYTEST_NO_TESTS or "deselected" in proc.stdout + proc.stderr:
         return proc
-    first = _pytest_argv(root, dest, basetemp, run_seeds)
-    tries = [first] if "-n" in first else []
     if tuple(run_seeds) != tuple(seeds):
-        tries.append(_pytest_argv(root, dest, basetemp, seeds))
-    for argv in tries:
-        if "-n" in argv:
-            del argv[argv.index("-n"):argv.index("-n") + 2]
-        proc = _run_pytest_retrying(argv, dest, env)
+        proc = _run_pytest_retrying(_pytest_argv(root, dest, basetemp, seeds), dest, env)
         if proc.returncode != _PYTEST_NO_TESTS or "deselected" in proc.stdout + proc.stderr:
             return proc
     return subprocess.CompletedProcess(proc.args, proc.returncode, proc.stdout + _EMPTY_CAUSE, proc.stderr)
@@ -1563,7 +1658,7 @@ def verify(
     leg: LegHook = _no_leg, touched: Sequence[str] = (), marker: Optional[str] = None,
 ) -> OverlayVerdict:
     """Advance `root`'s persistent mirror to `candidate_sha`, run pytest over `seeds` there with `coordinator_core`
-    resolved from the mirror, then a second pytest over the test files that mention a `touched` module (the
+    resolved from the mirror (pytest runs the scoped files in sequence in one process, no workers, no grant), then a second pytest over the test files that mention a `touched` module (the
     importer shard), and hold the mirror lock across pytest and the base re-run. Each pytest run has no total
     wall: it continues while its output advances and ends after `PYTEST_STALL_S` of silence, then is re-run
     once under `stall_retry_window()`. An importer shard that stalls twice or does not complete is a note on the
@@ -1654,7 +1749,7 @@ def verify(
                 return OverlayVerdict(
                     ENV_DEFECT,
                     f"engine fault: pytest exit 5 over {len(seeds)} non-empty seed(s) ({', '.join(seeds)}); "
-                    f"{_EMPTY_CAUSE.strip()}: {tail}",
+                    f"{_EMPTY_CAUSE.strip()}; {process_facts(ran, dest, seeds)}: {tail}",
                     seeds, argv=tuple(launched),
                 )
             if bad:
@@ -1670,10 +1765,14 @@ def verify(
                     return OverlayVerdict(
                         ENV_DEFECT,
                         f"verify could not run: a repo guard ended pytest (exit {bad[0].returncode}) before any test ran under "
-                        f"{pin.command or 'the undeclared gate interpreter'}; {REMEDY}: {tail}",
+                        f"{pin.command or 'the undeclared gate interpreter'}; {REMEDY}; {process_facts(bad[0], dest, seeds)}: {tail}",
                         seeds, argv=tuple(launched),
                     )
             infra = infra_setup_error(full) if failed else ""
+            if failed and not infra:
+                from coordinator_core.ops.dispatch_emit import test_reach
+
+                infra = mirror_gap(full, dest, test_reach._tracked(root))
             if failed and ids and not infra and isinstance(base_sha, str) and base_sha and base_sha != sha:
                 at_base = _base_failing(dest, mroot, root, run_id, base_sha, ids, leg)
     except CoTenantDependency as exc:
@@ -1686,7 +1785,7 @@ def verify(
     except ExportError as exc:
         return OverlayVerdict("inconclusive", str(exc), seeds, argv=tuple(launched))
     except subprocess.TimeoutExpired as exc:
-        why = str(exc) if isinstance(exc, PytestStalled) else f"overlay verify timed out after {TEST_TIMEOUT_S}s: {type(exc).__name__}: {exc}"
+        why = str(exc) if isinstance(exc, PytestStalled) else f"overlay verify timed out after {_timeout_text(exc)}: {type(exc).__name__}: {exc}"
         return OverlayVerdict("inconclusive", why, seeds, timed_out=in_seeds, argv=tuple(launched))
     except (OSError, subprocess.SubprocessError) as exc:
         return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds, argv=tuple(launched))
@@ -1713,11 +1812,20 @@ def verify(
             )
         setup = infra or first_setup_error(full)
         body = f"test collection failed: {tail}" if collected else tail
+        facts = process_facts(bad[0], dest, seeds) if not completed_a_test(full) else ""
         return OverlayVerdict(
-            "red", f"{setup}; {body}" if setup else body, seeds, failing=ids, argv=argv,
+            "red", "; ".join(p for p in (setup, facts, body) if p), seeds, failing=ids, argv=argv,
             cause=ZERO_RUN_TEST_INFRA if infra else "",
         )
-    return OverlayVerdict("inconclusive", f"pytest exit {bad[0].returncode}: {tail}", seeds, argv=argv)
+    if not completed_a_test(full):
+        return OverlayVerdict(
+            "red",
+            "; ".join(p for p in ("pytest process error: no test ran", first_setup_error(full), process_facts(bad[0], dest, seeds), tail) if p),
+            seeds, argv=argv, cause=ZERO_RUN_TEST_INFRA,
+        )
+    return OverlayVerdict(
+        "inconclusive", f"pytest exit {bad[0].returncode}: {process_facts(bad[0], dest)}: {tail}", seeds, argv=argv,
+    )
 
 
 def overlay_candidate(measured: dict) -> Optional[str]:
@@ -1991,7 +2099,13 @@ REVERIFY_RESUME_DELAY_SECS = 30.0
 
 
 INFLIGHT_FILE = "overlay-inflight"
-INFLIGHT_TTL_S = 3 * TEST_TIMEOUT_S
+#: Path count the in-flight marker's TTL budgets for: a step of this many paths is the largest the marker must outlive.
+INFLIGHT_PATH_BOUND = 5000
+#: Load- and clock-independent upper bound (scale at its maximum), so an import under a quiet box never undercuts a later loaded step.
+INFLIGHT_TTL_S = 3 * max(
+    TEST_TIMEOUT_S * STALL_RETRY_SCALE_MAX + EXPORT_STEP_S_PER_PATH * INFLIGHT_PATH_BOUND,
+    _positive_env_float(EXPORT_TIMEOUT_ENV),
+)
 
 
 def _inflight_path(root: Path, run_id: str) -> Path:
@@ -2019,7 +2133,7 @@ def _inflight_held(path: Path) -> bool:
     pid that is alive, or no pid yet and younger than `INFLIGHT_START_GRACE_S`. A dead pid, a pidless
     marker past the grace, and any marker older than `INFLIGHT_TTL_S` (pid reuse bound) are not held."""
     age = time.time() - path.stat().st_mtime
-    if age >= INFLIGHT_TTL_S:
+    if age >= max(INFLIGHT_TTL_S, 3 * _positive_env_float(EXPORT_TIMEOUT_ENV)):
         return False
     try:
         pid = int(path.read_text(encoding="ascii").strip() or 0)
@@ -2116,6 +2230,21 @@ def _manifest_declared_paths(manifest: Path) -> Optional[list]:
     return declared
 
 
+def live_seeds(root: Path, seeds: Sequence[str], base_sha: Optional[str]) -> list:
+    """`seeds` without the files the run deleted (in `base_sha`'s tree, gone from `root`'s worktree, not
+    renamed): a deleted test file is no seed. A seed absent for any other reason stays, so its absence is judged."""
+    from coordinator_core.ops.dispatch_emit.landing_dropped_targets import run_deleted_targets_since
+
+    absent = [s for s in seeds if not (root / s).exists()]
+    if not absent or not base_sha:
+        return list(seeds)
+    try:
+        gone = set(run_deleted_targets_since(root, _commit_sha(root, base_sha), absent))
+    except (ExportError, OSError):
+        return list(seeds)
+    return [s for s in seeds if s not in gone]
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Verify-stage entry: read the run's `measured-rev.json`, run the overlay over the landing set's test
     seeds and write the verdict. Exit 0 on green, 1 on red, 2 when inconclusive or unmeasured.
@@ -2184,11 +2313,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
     _record_child_pid(root, args.run_id)
     try:
-        outcome = name_peer_owners(
-            verify(
-                root, args.run_id, sha, seeds_for_landing(root, paths), base_sha=measured.get("base_sha"), touched=paths,
-            ), measured,
-        )
+        landing_seeds = seeds_for_landing(root, paths)
+        live = live_seeds(root, landing_seeds, measured.get("base_sha"))
+        if landing_seeds and not live:
+            verdict = OverlayVerdict("green", "every test seed of the landing set was deleted by the run", ())
+        else:
+            verdict = verify(
+                root, args.run_id, sha, live, base_sha=measured.get("base_sha"), touched=paths,
+            )
+        outcome = name_peer_owners(verdict, measured)
         written = write_verdict(root, args.run_id, measured, outcome)
     finally:
         _release_inflight(root, args.run_id)

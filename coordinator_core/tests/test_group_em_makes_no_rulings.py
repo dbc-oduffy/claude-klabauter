@@ -136,9 +136,6 @@ def test_approve_for_execution_scripts_are_absent(stem: str) -> None:
     assert present == []
 
 
-_DECIDER_PATTERNS = (re.compile(r"(?i)G-EM decides"), re.compile(r"group-em-grant .*<ruling>"))
-
-
 _KILL = "taskkill /T /F /PID 48920"
 
 
@@ -159,6 +156,11 @@ def _kill_verdict(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, session_id: s
     items = result if isinstance(result, list) else ([result] if result else [])
     return any(((i or {}).get("hookSpecificOutput") or i or {}).get("permissionDecision") in ("deny", "ask")
                or (i or {}).get("decision") == "block" for i in items)
+
+
+def test_gem_break_glass_kill_is_still_never_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Removing rulings leaves the G-EM's resource-saving break-glass (process kills) intact.
+    assert _kill_verdict(monkeypatch, tmp_path, "S-gem") is False
 
 
 def test_gem_break_glass_ssh_is_still_never_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

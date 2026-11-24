@@ -13,6 +13,9 @@ GROK_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "
 # Headless EM plans at high. A worker that executes passes medium itself.
 GROK_EM_EFFORT = "high"
 GROK_EXECUTE_EFFORT = "medium"
+# Canonical `agy --effort` levels (`agy --help`: low|medium|high|xhigh|max).
+AGY_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+AGY_EM_EFFORT = "high"
 PROVIDER_TIER_MODELS: dict[str, dict[str, str | None]] = {
     "codex": dict(zip(TIERS, ("gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra", None, None))),
     "agy": dict(zip(TIERS, ("gemini-4-hydrogen", "gemini-4-neon", "gemini-4-carbon", None, None))),

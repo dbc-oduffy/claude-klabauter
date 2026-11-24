@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.landing_retest import _retest_record, run_base_for
 
@@ -34,12 +34,25 @@ def _classify_dropped(
 ) -> tuple[list[str], dict[str, str]]:
     dropped = [d for d in (record.get("dropped") or []) if isinstance(d, str)]
     base = run_base_for(worktree_root, run_id, params) if dropped else None
-    if not base:
+    return _classify_targets(worktree_root, base, dropped)
+
+
+def run_deleted_targets_since(
+    worktree_root: Path, base_sha: Optional[str], targets: Sequence[str]
+) -> list[str]:
+    """The `targets` present at `base_sha`, gone from `worktree_root`, and not renamed."""
+    return _classify_targets(worktree_root, base_sha, targets)[0]
+
+
+def _classify_targets(
+    worktree_root: Path, base: Optional[str], targets: Sequence[str]
+) -> tuple[list[str], dict[str, str]]:
+    if not base or not targets:
         return [], {}
     from coordinator_core.git.git_state import read_tree_spine
     from coordinator_core.git.ref_cas_retry import _root_tree
 
-    files = {d: d.split("::")[0].replace("\\", "/") for d in dropped}
+    files = {d: d.split("::")[0].replace("\\", "/") for d in targets}
     tree = _root_tree(worktree_root, base)
     spine = read_tree_spine(worktree_root, list(files.values()), root_tree_sha=tree) if tree else None
     if spine is None:

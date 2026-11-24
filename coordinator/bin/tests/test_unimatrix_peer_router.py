@@ -79,6 +79,12 @@ def dirs(tmp_path):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _isolated_mirror_markers(tmp_path, monkeypatch):
+    # The class default reads the box's live /tmp/cc-socks; real markers there leak foreign rows into every roster.
+    monkeypatch.setattr(pr.Router, "mirror_stale_dir", str(tmp_path / "mirror-stale"))
+
+
 @pytest.fixture
 def box():
     d = Path(tempfile.mkdtemp(prefix="pr-", dir="/tmp"))  # AF_UNIX path limit
@@ -880,27 +886,23 @@ def test_live_discovered_scans_grok_registry(tmp_path):
     assert peer["vendor"] == "grok" and peer["target"] == sid and peer["cwd"] == str(tmp_path / "proj")
 
 
-def test_default_adapters_grok_delivers_by_cwd_pinned_resume(monkeypatch, tmp_path):
+def test_default_adapters_grok_delivers_to_the_agent_inbox(monkeypatch, tmp_path):
     assert "grok" in pr.default_adapters()
-
-    class Proc:
-        returncode = 0
-        stdout = json.dumps({"text": "grok said hi"})
 
     argvs = []
     real = pr._load("unimatrix-peer-grok.py", "unimatrix_peer_grok_probe")
     real.mark_resumable(tmp_path, "sid-1", "/w/repo")
-    updates = real.session_updates_path(tmp_path, "/w/repo", "sid-1")
-    updates.parent.mkdir(parents=True)
-    updates.write_text(json.dumps({"params": {"update": {"sessionUpdate": "user_message_chunk",
-                                                         "content": {"type": "text", "text": "ping"}}}}) + "\n")
-    monkeypatch.setattr(real.subprocess, "run", lambda argv, **kw: argvs.append((argv, kw)) or Proc())
+    inbox = real.AgentInbox(tmp_path, "sid-1")
+    inbox.start()
+    monkeypatch.setattr(real.subprocess, "run", lambda argv, **kw: argvs.append((argv, kw)) or (_ for _ in ()).throw(AssertionError("resume")))
     monkeypatch.setattr(pr, "_load", lambda filename, modname: real)
     peer = {"target": "sid-1", "cwd": "/w/repo", "grok_home": str(tmp_path)}
-    reply = run(pr.default_adapters()["grok"](peer, "ping"))
-    assert reply["user_message_chunk"] is True and reply["session_id"] == "sid-1"
-    argv, kw = argvs[0]
-    assert argv[argv.index("--cwd") + 1] == "/w/repo" and "--add-dir" not in argv and kw["cwd"] == "/w/repo"
+    try:
+        reply = run(pr.default_adapters()["grok"](peer, "ping"))
+    finally:
+        inbox.stop()
+    assert reply["written"] is True and reply["channel"] == "agent-inbox" and argvs == []
+    assert inbox.lines == ["UNIMATRIX-AGENT-MAIL ping"]
 
 
 @portable

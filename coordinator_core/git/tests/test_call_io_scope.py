@@ -248,6 +248,64 @@ def test_bounded_read_outside_scope_and_absent(tmp_path: Path) -> None:
     assert cis.read_bytes(tmp_path / "missing", bounded=True) is None
 
 
+def test_bounded_reads_scope_stall_raises_uncached_and_outside_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.bounded_io import IoIndeterminate
+
+    f = tmp_path / "run.json"
+    f.write_bytes(b"{}")
+    release = threading.Event()
+    _stall_reads(monkeypatch, release)
+    try:
+        with cis.call_io_scope():
+            with cis.bounded_reads(deadline_secs=0.05):
+                with pytest.raises(IoIndeterminate):
+                    cis.read_bytes(f)
+                release.set()
+                time.sleep(0.2)
+                assert cis.read_bytes(f) == b"{}"
+                assert cis.read_bytes(tmp_path / "missing") is None
+    finally:
+        release.set()
+    assert cis.read_bytes(f) == b"{}"
+
+
+def test_bounded_reads_uses_bounded_io_only_inside(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import bounded_io
+
+    calls = []
+    real = bounded_io.read_bytes_bounded
+    monkeypatch.setattr(
+        bounded_io, "read_bytes_bounded", lambda p, deadline=0.25: (calls.append(deadline), real(p))[1]
+    )
+    f = tmp_path / "x"
+    f.write_bytes(b"ab")
+    assert cis.read_bytes(f) == b"ab"
+    assert calls == []
+    with cis.bounded_reads(0.07):
+        assert cis.read_bytes(f) == b"ab"
+        assert cis.bounded_path_read(f) == b"ab"
+    assert calls == [0.07, 0.07]
+    assert cis.read_bytes(f) == b"ab"
+    assert len(calls) == 2
+
+
+def test_bounded_path_read_stall_and_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.bounded_io import IoIndeterminate
+
+    f = tmp_path / "x"
+    f.write_bytes(b"ab")
+    assert cis.bounded_path_read(tmp_path / "missing") is None
+    release = threading.Event()
+    _stall_reads(monkeypatch, release)
+    try:
+        with pytest.raises(IoIndeterminate):
+            cis.bounded_path_read(f, deadline_secs=0.05)
+    finally:
+        release.set()
+
+
 def test_unbounded_read_never_touches_bounded_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import bounded_io
 

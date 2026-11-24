@@ -58,7 +58,10 @@ def test_both_doors_answer_hook_mode_post_delivery_with_the_hook_envelope(source
 def test_the_engine_failure_builder_is_a_pass_not_a_deny_and_one_line(source):
     text = source.read_text(encoding="utf-8")
     start = text.index("static int door_engine_failure_allow_envelope(")
-    body = re.sub(r'"\s*\n\s*"', "", text[start: text.index("\n}\n", start)])
+    assert "build_hook_engine_failure_allow_envelope(out, detail, event_name)" in text[start: text.index("\n}\n", start)]
+    core = (_DOOR_DIR / "door_core.c").read_text(encoding="utf-8")
+    start = core.index("int build_hook_engine_failure_allow_envelope(")
+    body = re.sub(r'"\s*\n\s*"', "", core[start: core.index("\n}\n", start)])
     assert "permissionDecision" not in body
     assert "guard not evaluated, command allowed." in body
 
@@ -258,11 +261,16 @@ def test_a_wedged_engine_denies_git_push_and_passes_a_commit_message_that_mentio
 
 
 @pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
-def test_both_doors_bound_the_advisory_detail_so_the_suffix_survives(source):
+def test_neither_door_clips_the_advisory_detail(source):
     text = source.read_text(encoding="utf-8")
     start = text.index("static int emit_hook_post_delivery(")
     body = text[start: text.index("\n}\n", start)]
-    assert 'snprintf(detail, sizeof detail, "%.200s"' in body
+    assert "%.200s" not in body
+    assert "char detail[" not in body
+    core = (_DOOR_DIR / "door_core.c").read_text(encoding="utf-8")
+    builder = core[core.index("int build_hook_engine_failure_allow_envelope("):]
+    builder = builder[: builder.index("\n}\n")]
+    assert "%.200s" not in builder and "char text[" not in builder
 
 
 @pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
