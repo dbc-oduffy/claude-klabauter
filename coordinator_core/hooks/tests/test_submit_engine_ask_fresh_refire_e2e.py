@@ -105,3 +105,25 @@ def test_default_refire_under_the_same_stamp_resumes_the_run_and_emits_nothing(
     assert _hso(out)["permissionDecision"] == "allow"
     assert emit.calls == []
     assert json.loads((rd / "halted.json").read_text(encoding="utf-8"))["status"] == "halted"
+
+
+def test_fresh_refire_of_a_cancelled_run_reaches_the_emit_with_fresh_and_the_emit_mints_beside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """holo-5e 5d606f, 2026-11-23: a workflow.cancel'd run refused `fresh: true` three times with its own remedy."""
+    from coordinator_core.ops.dispatch_emit import op
+
+    root, rd = _run_repo(tmp_path, status="halted")
+    _put(rd / "halted.json", {**json.loads((rd / "halted.json").read_text(encoding="utf-8")), "halted": "cancelled"})
+    monkeypatch.setattr(hrr, "engine_sha", lambda: OLD)
+    monkeypatch.setattr(mod, "_spawn_recompose", lambda r, run_id: pytest.fail("a terminal run must not recompose"))
+    emit = _Emit()
+
+    out = mod.evaluate(_payload(root, {"sizing": SIZING_REL, "fresh": True}), emit=emit)
+
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert len(emit.calls) == 1
+    params, _ = emit.calls[0]
+    assert params.get("fresh") is True and params.get("resume_run_id") is None
+    assert op._terminal_under_fresh(root, RUN, params) is True
+    assert op._terminal_under_fresh(root, RUN, {}) is False
