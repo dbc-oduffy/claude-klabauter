@@ -20,10 +20,19 @@ from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.ops.baton_close_report_contract import (
     OP_KEY,
     SCHEMA_VERSION,
+    Evidence,
+    EvidenceClass,
+    NoEvidenceReason,
     ResidueReason,
     Verdict,
 )
-from coordinator_core.ops.baton_close_report_decide import decide, evidence_ship_ref
+from coordinator_core.ops.baton_close_plan_delivery import PlanDeliveryCache
+from coordinator_core.ops.baton_close_report_decide import (
+    STATUS_MISSING,
+    STATUS_UNREADABLE,
+    decide,
+    evidence_ship_ref,
+)
 from coordinator_core.ops.baton_close_report_readers import read_baton_headers, successor_index
 from coordinator_core.ops.baton_close_report_targets import target_evidence
 from coordinator_core.ops.deliverable_cascade import _LIVE_DEPLOYMENT_STATES, handoff_state_refusal
@@ -37,6 +46,17 @@ _NO_SHA_DETAIL = "no delivery commit in the evidence that justifies this close"
 def _norm(rel: str) -> str:
     rel = rel.strip().replace("\\", "/")
     return rel[2:] if rel.startswith("./") else rel
+
+
+def _coded_plan(plans: PlanDeliveryCache, items: list[Evidence]) -> tuple[str, str] | None:
+    """(plan path, last commit) of the first cited plan whose dispatchable rows are all coded, else None."""
+    for item in items:
+        if item["class"] != EvidenceClass.PLAN.value or item["target_status"] in (None, STATUS_MISSING, STATUS_UNREADABLE):
+            continue
+        delivery = plans.get(item["target_path"])
+        if delivery is not None and not delivery.open_rows and delivery.ship_ref:
+            return item["target_path"], delivery.ship_ref
+    return None
 
 
 def _state_refusal(worktree_root: str, rel: str, header: dict) -> str | None:
@@ -56,11 +76,13 @@ def _state_refusal(worktree_root: str, rel: str, header: dict) -> str | None:
 
 @register_op("baton.close_report")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """Report closable batons, residue and the no-evidence count for one repo.
+    """Report closable batons, residue and the no-evidence batons for one repo.
 
     Optional param `handoff` (repo-relative path) narrows the report to that one baton.
-    Returns {exit_code, schema_version, op, batons_scanned, no_evidence, closable, residue,
-    scan_incomplete}; `scan_incomplete` is true when the handoffs directory is missing.
+    Returns {exit_code, schema_version, op, batons_scanned, no_evidence, no_evidence_batons,
+    closable, residue, scan_incomplete}; `no_evidence_batons` names each no-evidence baton with
+    a reason (nothing_cited, targets_not_done or acs_all_ticked) and `no_evidence` is its length;
+    `scan_incomplete` is true when the handoffs directory is missing.
     """
     return await asyncio.to_thread(_run, params, repo_root)
 
@@ -80,7 +102,8 @@ def _run(params: dict, repo_root: Optional[Path]) -> dict:
 
     closable: list[dict] = []
     residue: list[dict] = []
-    no_evidence = 0
+    no_evidence_batons: list[dict] = []
+    plans: PlanDeliveryCache | None = None
     scanned = 0
 
     for rel in unreadable:
@@ -121,15 +144,31 @@ def _run(params: dict, repo_root: Optional[Path]) -> dict:
                  "conflict": verdict[3], "detail": detail}
             )
         else:
-            no_evidence += 1
+            reason, detail = verdict[1], None
+            if reason == NoEvidenceReason.TARGETS_NOT_DONE.value:
+                if plans is None:
+                    plans = PlanDeliveryCache(worktree_root)
+                coded = _coded_plan(plans, evidence.get(rel, []))
+                if coded is not None:
+                    reason = NoEvidenceReason.ACS_ALL_TICKED.value
+                    detail = (
+                        f"every dispatchable row of {coded[0]} is coded (last commit {coded[1]}) "
+                        f"but its status is not terminal; closing needs the plan implemented"
+                    )
+            no_evidence_batons.append(
+                {"handoff_path": rel, "reason": reason, "evidence": evidence.get(rel, []),
+                 "conflict": None, "detail": detail}
+            )
 
     residue.sort(key=lambda item: item["handoff_path"])
+    no_evidence_batons.sort(key=lambda item: item["handoff_path"])
     return {
         "exit_code": 0,
         "schema_version": SCHEMA_VERSION,
         "op": OP_KEY,
         "batons_scanned": scanned,
-        "no_evidence": no_evidence,
+        "no_evidence": len(no_evidence_batons),
+        "no_evidence_batons": no_evidence_batons,
         "closable": closable,
         "residue": residue,
         "scan_incomplete": scan_incomplete,

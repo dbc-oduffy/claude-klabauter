@@ -401,3 +401,30 @@ def test_target_evidence_open_non_spinoff_gets_no_run_item(tmp_path: Path) -> No
     _w(tmp_path, "state/warp/r1/run.json", json.dumps({"sizing_rel": "state/sizings/s.yaml"}))
     got = _run(tmp_path, sizing_object="state/sizings/s.yaml", kind="build")
     assert all(i["class"] != "run" for i in got)
+
+
+def _ac(tmp_path: Path, body: str) -> list[list[str]]:
+    _w(tmp_path, "state/handoffs/b.md", "---\nstatus: open\n---\n" + body)
+    return t._ac_citations(str(tmp_path), "state/handoffs/b.md")
+
+
+def test_ac_citations_reads_the_ac_section_only(tmp_path: Path) -> None:
+    body = (
+        "## Todo\n- [ ] later\n\n## Acceptance Criteria\n"
+        "- [x] AC-1 shipped in b96a0a2 and 2aef656\n- [X] AC-2 `c02cce8`\n\n## Notes\n- [ ] unrelated\n"
+    )
+    assert _ac(tmp_path, body) == [["b96a0a2", "2aef656"], ["c02cce8"]]
+
+
+def test_ac_citations_refuses_partial_sha_less_and_fenced(tmp_path: Path) -> None:
+    assert _ac(tmp_path, "## ACs\n- [x] one b96a0a2\n- [ ] two 2aef656\n") == []
+    assert _ac(tmp_path, "## ACs\n- [x] one b96a0a2\n- [x] two effaced\n") == []
+    assert _ac(tmp_path, "## ACs\n```\n- [x] one b96a0a2\n```\n") == []
+
+
+def test_ac_citations_falls_back_to_ac_labelled_lines(tmp_path: Path) -> None:
+    assert _ac(tmp_path, "- [x] AC-1 done 22daee2\n- [x] chore\n") == [["22daee2"]]
+
+
+def test_resolve_commits_without_a_repo_resolves_nothing(tmp_path: Path) -> None:
+    assert t._resolve_commits(str(tmp_path), {"b96a0a2"}) == {}

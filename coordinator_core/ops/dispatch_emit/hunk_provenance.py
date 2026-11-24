@@ -227,6 +227,19 @@ class RunInvariants:
 
         return self._once("predecessor_touched", build)
 
+    def own_touched(self) -> frozenset:
+        """Paths this run's own `measured-touched.json` names (its last measurement); empty when unreadable."""
+
+        def build() -> frozenset:
+            from coordinator_core.ops.dispatch_emit import measured_rev
+
+            try:
+                return frozenset(str(p).replace("\\", "/") for p in measured_rev.touched_paths(self.root, self.run_id))
+            except Exception:  # noqa: BLE001 -- unreadable evidence is none
+                return frozenset()
+
+        return self._once("own_touched", build)
+
 
 _ACTIVE: ContextVar[Optional[RunInvariants]] = ContextVar("hunk_provenance_invariants", default=None)
 # `_peer_split`'s batch: `paths` it classifies; `holds` / `halted` the one lazy `co_declared_peer_holds` /
@@ -580,6 +593,8 @@ def _peer_split_paths(
             continue
         if owner is None and _predecessor_measured(root, run_id, path):
             continue
+        if owner is not None and _own_measured_past_finished(root, run_id, own_plan, path, owner):
+            continue
         owner = owner or UNKNOWN_OWNER
         blob = None
         if head_bytes is not None:
@@ -614,6 +629,18 @@ def _predecessor_measured(root: Path, run_id: str, path: str) -> bool:
     this run's inherited work. False on any read failure."""
     try:
         return _declares(root, run_id, path) and path in _inv(root, run_id).predecessor_touched()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _own_measured_past_finished(root: Path, run_id: str, own_plan: Optional[str], path: str, owner: str) -> bool:
+    """A declared `path` this run's own measurement covered whose only named owner is a finished run (not live,
+    not a halted run still withholding the path): its hunks are the run's inherited work, not a live peer's.
+    False on any read failure."""
+    try:
+        if not (_declares(root, run_id, path) and path in _inv(root, run_id).own_touched()):
+            return False
+        return _non_live(root, owner) and _halted_holder(root, run_id, own_plan, path) != owner
     except Exception:  # noqa: BLE001
         return False
 

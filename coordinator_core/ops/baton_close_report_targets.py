@@ -1,7 +1,7 @@
 """Done-ness of the plan, sizing, roadmap and goal records that open batons cite.
 
 Each distinct target is read once, header bytes only, `status:` taken by line scan. No YAML
-parse, no subprocess, no write.
+parse, no subprocess, no write. A plan-less baton's AC shas resolve by reading the object store.
 
 Plans are also read plan to baton, from the same one pass over docs/plans that resolves
 `plan_id`, plus one pass over archive/specs for plans the stamp archived. Join rules:
@@ -11,11 +11,15 @@ docs/plans/2026-10-21-close-report-plan-backlink-sizing-join-cascade-msg-4734e5.
 
 from __future__ import annotations
 
+import mmap
 import os
 import re
+import struct
 from pathlib import Path
 
 from coordinator_core.ops.baton_close_report_contract import (
+    AC_LIST_ALL_TICKED,
+    AC_LIST_FIELD,
     REVERSE_FIELD_DELIVERABLE,
     REVERSE_FIELD_PREDECESSOR,
     REVERSE_FIELD_SIZING,
@@ -49,6 +53,16 @@ _PREDECESSOR_RE = re.compile(r"^predecessor_handoff:[ \t]*(.*)$")
 _GOAL_ID_RE = re.compile(r"^id:[ \t]*(.*)$")
 _SIZING_OBJECT_RE = re.compile(r"^sizing_object:[ \t]*(.*)$")
 _HANDOFFS = Path(home_dir("", "handoffs")).as_posix()
+_BODY_BYTES = 262144
+_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*)$")
+_AC_HEADING_RE = re.compile(r"(?i:acceptance)|\bACs?\b")
+_AC_LABEL_RE = re.compile(r"^\W*AC[- ]?\d")
+_CHECKBOX_RE = re.compile(r"^[ \t]*[-*][ \t]+\[([ xX])\][ \t]*(.*)$")
+# Hex run of 7-40 with at least one digit, so prose like "effaced" is never a sha.
+_SHA_TOKEN_RE = re.compile(r"(?<![0-9A-Za-z_./-])(?=[0-9a-f]*\d)[0-9a-f]{7,40}(?![0-9A-Za-z_])")
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_IDX_V2_HEADER = b"\xfftOc\x00\x00\x00\x02"
+_IDX_NAMES_AT = 8 + 256 * 4
 _BATON_PATH_RE = re.compile(re.escape(_HANDOFFS) + r"/[^\s\"',()#]+\.md")
 
 
@@ -451,6 +465,7 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
         if d:
             carriers[d] = carriers.get(d, 0) + 1
     runs = run_claims(worktree_root, headers, cache)
+    candidates: dict[str, list[list[str]]] = {}
     for rel, h in headers.items():
         items: list[Evidence] = []
         gp = h.get("governing_plan")
@@ -503,4 +518,162 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
                 items.append(it)
         if items:
             out[rel] = items
+        else:
+            cited = _ac_citations(worktree_root, rel)
+            if cited:
+                candidates[rel] = cited
+    if candidates:
+        resolved = _resolve_commits(worktree_root, {t for c in candidates.values() for ln in c for t in ln})
+        for rel, cited in candidates.items():
+            item = _ac_list_item(rel, cited, resolved)
+            if item is not None:
+                out[rel] = [item]
     return out
+
+
+def _ac_citations(root: str, rel: str) -> list[list[str]]:
+    """Sha-like tokens per AC line of a baton whose whole AC list is ticked, else [].
+
+    The AC list is the checkboxes under an `Acceptance`/`AC` heading, else the checkboxes whose
+    text starts `AC-<n>`. One unticked or token-less line, or no list at all, yields [].
+    """
+    full = _safe_join(root, rel)
+    try:
+        data = _read_prefix(full, _BODY_BYTES) if full else b""
+    except OSError:
+        return []
+    if b"[x]" not in data and b"[X]" not in data:
+        return []
+    section: list[tuple[bool, str]] = []
+    labelled: list[tuple[bool, str]] = []
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    start = 0
+    if lines and lines[0].strip() == "---":
+        start = next((i + 1 for i in range(1, len(lines)) if lines[i].strip() == "---"), 0)
+    level: int | None = None
+    fenced = False
+    for line in lines[start:]:
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        h = _HEADING_RE.match(line)
+        if h:
+            depth = len(h.group(1))
+            if level is not None and depth <= level:
+                level = None
+            if level is None and _AC_HEADING_RE.search(h.group(2)):
+                level = depth
+            continue
+        box = _CHECKBOX_RE.match(line)
+        if not box:
+            continue
+        entry = (box.group(1) != " ", box.group(2))
+        if level is not None:
+            section.append(entry)
+        elif _AC_LABEL_RE.match(box.group(2)):
+            labelled.append(entry)
+    acs = section or labelled
+    if not acs or not all(ticked for ticked, _ in acs):
+        return []
+    cited = [_SHA_TOKEN_RE.findall(text) for _, text in acs]
+    return cited if all(cited) else []
+
+
+def _object_dirs(root: str) -> list[Path]:
+    """The object directory of `root`'s repo, following a worktree `.git` file to its common dir."""
+    git = Path(root) / ".git"
+    try:
+        if git.is_file():
+            text = git.read_text(encoding="utf-8").strip()
+            if not text.startswith("gitdir:"):
+                return []
+            git = (Path(root) / text[7:].strip()).resolve()
+            common = git / "commondir"
+            if common.is_file():
+                git = (git / common.read_text(encoding="utf-8").strip()).resolve()
+        objects = git / "objects"
+        return [objects] if objects.is_dir() else []
+    except OSError:
+        return []
+
+
+def _packed_matches(idx: Path, prefix: str) -> set[str]:
+    """Full shas starting `prefix` in one v2 pack `.idx`; a malformed or unreadable index yields none."""
+    found: set[str] = set()
+    try:
+        with open(idx, "rb") as fh:
+            data = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+    except (OSError, ValueError):
+        return found
+    try:
+        if data[:8] != _IDX_V2_HEADER or len(data) < _IDX_NAMES_AT:
+            return found
+        count = struct.unpack_from(">I", data, 8 + 255 * 4)[0]
+        target = bytes.fromhex(prefix.ljust(40, "0"))
+        first = target[0]
+        lo = struct.unpack_from(">I", data, 8 + (first - 1) * 4)[0] if first else 0
+        hi = struct.unpack_from(">I", data, 8 + first * 4)[0]
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if data[_IDX_NAMES_AT + mid * 20:_IDX_NAMES_AT + mid * 20 + 20] < target:
+                lo = mid + 1
+            else:
+                hi = mid
+        while lo < count and len(found) < 2:
+            sha = bytes(data[_IDX_NAMES_AT + lo * 20:_IDX_NAMES_AT + lo * 20 + 20]).hex()
+            if not sha.startswith(prefix):
+                break
+            found.add(sha)
+            lo += 1
+    except (struct.error, ValueError):
+        return set()
+    finally:
+        data.close()
+    return found
+
+
+def _resolve_commits(root: str, tokens: set[str]) -> dict[str, str]:
+    """Full sha per token that names exactly one object in the repo's loose or pack store.
+
+    Reads the object directory and pack indexes directly, so no process is spawned. The object
+    type is not read: an AC cites commits, and an unresolvable or ambiguous token is not evidence.
+    """
+    dirs = _object_dirs(root)
+    if not dirs:
+        return {}
+    packs = [i for d in dirs for i in sorted((d / "pack").glob("pack-*.idx"))] if dirs else []
+    out: dict[str, str] = {}
+    for tok in sorted(tokens):
+        found: set[str] = set()
+        for d in dirs:
+            try:
+                found.update(tok[:2] + n for n in os.listdir(d / tok[:2]) if (tok[:2] + n).startswith(tok))
+            except OSError:
+                pass
+        for idx in packs:
+            found |= _packed_matches(idx, tok)
+        if len(found) == 1:
+            (full,) = found
+            if _FULL_SHA_RE.fullmatch(full):
+                out[tok] = full
+    return out
+
+
+def _ac_list_item(rel: str, cited: list[list[str]], resolved: dict[str, str]) -> Evidence | None:
+    """Done AC_LIST item when every AC line cites a resolving commit; `ship_ref` is the last one cited."""
+    ship_ref = None
+    for tokens in cited:
+        hits = [resolved[t] for t in tokens if t in resolved]
+        if not hits:
+            return None
+        ship_ref = hits[-1]
+    return {
+        "class": EvidenceClass.AC_LIST.value,
+        "field": AC_LIST_FIELD,
+        "target_path": rel,
+        "target_status": AC_LIST_ALL_TICKED,
+        "done": True,
+        "ship_ref": ship_ref,
+    }

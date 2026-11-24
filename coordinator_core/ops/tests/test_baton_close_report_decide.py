@@ -52,9 +52,9 @@ NONE_STATUS = _e("goal", None, False)
 @pytest.mark.parametrize(
     "status,evidence,successor,expected",
     [
-        ("open", [], False, ("no_evidence",)),
-        ("open", [], True, ("no_evidence",)),
-        ("claimed", [], False, ("no_evidence",)),
+        ("open", [], False, ("no_evidence", "nothing_cited")),
+        ("open", [], True, ("no_evidence", "nothing_cited")),
+        ("claimed", [], False, ("no_evidence", "nothing_cited")),
         ("open", [DONE], False, ("closable",)),
         ("open", [DONE, DONE2], False, ("closable",)),
         ("open", [DONE, MISSING], False, ("closable",)),
@@ -68,7 +68,7 @@ NONE_STATUS = _e("goal", None, False)
         ("open", [NONE_STATUS, MISSING], False, ("residue", "target_unstatused")),
         ("open", [UNREAD, NONE_STATUS], False, ("residue", "target_unreadable")),
         ("open", [MISSING, UNREAD], False, ("residue", "target_unreadable")),
-        ("open", [OPEN], False, ("no_evidence",)),
+        ("open", [OPEN], False, ("no_evidence", "targets_not_done")),
         ("open", [OPEN, MISSING], False, ("residue", "target_missing")),
         # precedence
         ("claimed", [DONE], True, ("residue", "claimed")),
@@ -111,8 +111,8 @@ def _hk(kind, did, status: str = "open") -> dict:
         ("spinoff", "dlv-x", "open", True, [DONE], ("residue", "live_successor")),
         ("spinoff", "dlv-x", "open", False, [DONE, OPEN], ("residue", "evidence_conflict")),
         # no done evidence: unchanged
-        ("spinoff", "x", "open", False, [], ("no_evidence",)),
-        ("spinoff", "x", "open", False, [OPEN], ("no_evidence",)),
+        ("spinoff", "x", "open", False, [], ("no_evidence", "nothing_cited")),
+        ("spinoff", "x", "open", False, [OPEN], ("no_evidence", "targets_not_done")),
         ("spinoff", "x", "open", False, [MISSING], ("residue", "target_missing")),
     ],
 )
@@ -180,7 +180,7 @@ def test_spinoff_parent_join_still_refused_beside_an_ended_run():
 def test_ended_or_live_run_never_contradicts():
     assert decide(_h(), [DONE, RUN_ENDED], False)[0] == "closable"
     assert decide(_h(), [DONE, RUN_LIVE_ITEM], False)[0] == "closable"
-    assert decide(_h(), [RUN_ENDED], False) == ("no_evidence",)
+    assert decide(_h(), [RUN_ENDED], False) == ("no_evidence", "targets_not_done")
 
 
 def test_claimed_released_when_every_naming_run_ended():
@@ -304,7 +304,7 @@ def test_state_refusal_with_done_evidence_is_not_advanceable():
 
 
 def test_state_refusal_without_done_evidence_changes_nothing():
-    assert decide(_h(), [OPEN], False, STATE_REFUSAL) == ("no_evidence",)
+    assert decide(_h(), [OPEN], False, STATE_REFUSAL) == ("no_evidence", "targets_not_done")
     assert decide(_h(), [MISSING], False, STATE_REFUSAL)[:2] == ("residue", "target_missing")
 
 

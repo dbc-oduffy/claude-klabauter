@@ -46,6 +46,10 @@ ARRIVED = "arrived"
 QUEUED = "queued-then-delivered"
 MISSING = "missing"
 
+# ssh's own connect-timeout stderr; the runner's TimeoutExpired (a hung command) never matches, so a probe is not resent.
+_CONNECT_TIMEOUT = re.compile(r"(?:Connection|Operation) timed out|Connection timeout", re.I)
+RETRY_NOTE = "ssh retried once after connect timeout"
+
 READ_KEY = object()  # main(required=READ_KEY) reads REQUIRED_KEY; an explicit set or None (every box) skips the read
 
 # Registry fields that mark a mirror of a far session; the router and relay exclude the same set.
@@ -172,18 +176,24 @@ def probe_box(member: dict, target: tuple[str, str], *, run_ssh: Any, fetch_rece
         # A far box may know this box under another label (an address, `<box>-lan`): fall back to the bare name.
         command += f" || {'s' if send_command is None else base} --to {shlex.quote(name)} {text}"
     res = run_ssh(member, key, command)
+    retried = False
+    if res.returncode == 255 and _CONNECT_TIMEOUT.search(_text(res.stderr)):
+        retried = True
+        res = run_ssh(member, key, command)
     if res.returncode == 255:
-        return box, MISSING, "ssh", _text(res.stderr).strip()[:200] or "ssh failed"
+        detail = _text(res.stderr).strip()[:200] or "ssh failed"
+        return box, MISSING, "ssh", detail + (f"; {RETRY_NOTE}" if retried else "")
     send_failed = res.returncode != 0
     polls = max(1, int(timeout // interval)) if interval > 0 else 1
     for n in range(polls):
         if _digests(fetch_receipts(sid, since)) - baseline:
-            return box, (ARRIVED if n == 0 else QUEUED), "relay-in", ""
+            return box, (ARRIVED if n == 0 else QUEUED), "relay-in", RETRY_NOTE if retried else ""
         if n + 1 < polls:
             sleep(interval)
+    tail = f"; {RETRY_NOTE}" if retried else ""
     if send_failed:
-        return box, MISSING, "send", (_text(res.stderr) or _text(res.stdout)).strip()[:200] or f"rc {res.returncode}"
-    return box, MISSING, "relay-in", f"no receipt for {sid} within {timeout:g}s"
+        return box, MISSING, "send", ((_text(res.stderr) or _text(res.stdout)).strip()[:200] or f"rc {res.returncode}") + tail
+    return box, MISSING, "relay-in", f"no receipt for {sid} within {timeout:g}s{tail}"
 
 
 def run_gate(members: Any, target: tuple[str, str], *, run_ssh: Any, fetch_receipts: Any, route_for: Any, out: Any,
@@ -202,7 +212,8 @@ def run_gate(members: Any, target: tuple[str, str], *, run_ssh: Any, fetch_recei
             _, status, hop, detail = probe_box({**m, "alias": route[0]}, target, run_ssh=run_ssh,
                                                fetch_receipts=fetch_receipts, key=route[1], **kw)
         needed = required is None or _fold(box) in required
-        line = f"{box}: {status}" + (f" (hop {hop}{': ' + detail if detail else ''})" if status == MISSING else "")
+        line = f"{box}: {status}" + (f" (hop {hop}{': ' + detail if detail else ''})" if status == MISSING
+                                     else f" ({detail})" if detail else "")
         print(line + ("" if needed else " [not required]") if status == MISSING else line, file=out)
         if status == MISSING and needed:
             missing.append(box)

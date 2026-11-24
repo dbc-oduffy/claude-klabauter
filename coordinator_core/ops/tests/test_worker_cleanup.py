@@ -72,6 +72,15 @@ class _FakeProc:
     def __init__(self, table, pid, ppid, name, created):
         self._table, self.pid, self._ppid, self._name, self._created = table, pid, ppid, name, created
         self.stopped = False
+        self.env = {}
+        self.env_error = None
+        self.env_reads = 0
+
+    def environ(self):
+        self.env_reads += 1
+        if self.env_error:
+            raise self.env_error
+        return self.env
 
     def name(self):
         return self._name
@@ -390,6 +399,111 @@ def test_no_agent_session_ancestor_refuses_without_a_root_pid(tmp_path):
     ps.add(34, 30, "python.exe", 103.0)
     out = wc.stop_own_child(34, caller_pid=30, ps=ps, repo_root=tmp_path)
     assert "no agent-session" in out["refused"] and not ps.procs[34].stopped
+
+
+def _env_ask(ps, pid=60, session="sessA"):
+    return wc.stop_own_child(pid, caller_pid=30, ps=ps, caller_session_id=session)
+
+
+def test_env_marker_naming_the_callers_session_admits_an_orphan(ledger_home):
+    ps = _em_world()
+    ps.procs[60].env = {"COORDINATOR_SESSION_ID": "sessA"}
+    assert _env_ask(ps) == {"stopped": 60}
+    assert ps.procs[60].stopped and ps.procs[60].env_reads == 1
+
+
+def test_env_marker_of_another_session_keeps_the_original_refusal(ledger_home):
+    ps = _em_world()
+    ps.procs[60].env = {"COORDINATOR_SESSION_ID": "sessB"}
+    assert "not a descendant" in _env_ask(ps)["refused"]
+    assert not ps.procs[60].stopped
+
+
+def test_env_without_a_session_variable_keeps_the_original_refusal(ledger_home):
+    ps = _em_world()
+    ps.procs[60].env = {"PATH": "x"}
+    assert "not a descendant" in _env_ask(ps)["refused"]
+    assert not ps.procs[60].stopped
+
+
+def test_env_access_denied_refuses_cleanly(ledger_home):
+    ps = _em_world()
+    ps.procs[60].env_error = ps.AccessDenied()
+    assert _env_ask(ps) == {"refused": "access denied"}
+    assert not ps.procs[60].stopped
+    ps.procs[60].env_error = psutil.AccessDenied(60)
+    assert wc._env_admits(ps.procs[60], "sessA", root=ps.procs[10]) == (False, "access denied")
+
+
+def test_env_target_exiting_mid_check_refuses_without_raising(ledger_home):
+    ps = _em_world()
+    for exc in (psutil.NoSuchProcess(60), psutil.ZombieProcess(60)):
+        ps.procs[60].env_error = exc
+        assert wc._env_admits(ps.procs[60], "sessA") == (False, "")
+    assert not ps.procs[60].stopped
+
+
+def test_env_admission_is_skipped_without_a_caller_session(ledger_home):
+    ps = _em_world()
+    ps.procs[60].env = {"COORDINATOR_SESSION_ID": "sessA"}
+    for session in (None, ""):
+        assert wc._env_admits(ps.procs[60], session) == (False, "")
+    assert ps.procs[60].env_reads == 0
+
+
+def test_env_admission_never_overrides_a_foreign_ledger_or_reused_pid_refusal(ledger_home):
+    ps = _em_world()
+    ps.procs[60].env = {"COORDINATOR_SESSION_ID": "sessA"}
+    _ledgered("sessB")
+    assert "another session's spawn ledger" in _env_ask(ps)["refused"]
+    _ledgered("sessA", created=5.0)
+    assert "pid reused" in _env_ask(ps)["refused"]
+    assert not ps.procs[60].stopped and ps.procs[60].env_reads == 0
+
+
+def test_env_admission_never_reaches_an_agent_session_target(ledger_home):
+    ps = _session_world()
+    for p in (32, 33, 40):
+        ps.procs[p].env = {"COORDINATOR_SESSION_ID": "sessA"}
+    for pid in (32, 33, 40):
+        assert "refused" in _env_ask(ps, pid)
+    assert not any(ps.procs[p].stopped for p in (32, 33, 40))
+    assert all(ps.procs[p].env_reads == 0 for p in (32, 33, 40))
+
+
+def test_a_session_process_beside_the_root_is_not_admitted_by_environment(ledger_home, tmp_path):
+    ps = _serve_world()
+    ps.add(70, 1, "claude.exe", 120.0).env = {"COORDINATOR_SESSION_ID": "sessA"}
+    assert "refused" in wc.stop_own_child(70, caller_pid=30, ps=ps, repo_root=tmp_path, caller_session_id="sessA")
+    assert not ps.procs[70].stopped and ps.procs[70].env_reads == 0
+
+
+def test_env_session_resolves_by_precedence_not_one_variable(ledger_home):
+    ps = _em_world()
+    ps.procs[60].env = {"CLAUDE_CODE_SESSION_ID": "sessA", "COORDINATOR_SESSION_ID": "sessB"}
+    assert "refused" in _env_ask(ps) and not ps.procs[60].stopped
+    assert _env_ask(ps, session="sessB") == {"stopped": 60}
+    ps = _em_world()
+    ps.procs[60].env = {"CLAUDE_CODE_SESSION_ID": "sessA"}
+    assert _env_ask(ps) == {"stopped": 60}
+
+
+def test_env_native_session_id_is_canonicalised_like_a_request_env(ledger_home):
+    from coordinator_core.session.core import canonical_session_env_value
+
+    ps = _em_world()
+    ps.procs[60].env = {"CODEX_THREAD_ID": "opaque-thread", "COORDINATOR_AGENT_VENDOR": "codex"}
+    canon = canonical_session_env_value("CODEX_THREAD_ID", "opaque-thread", vendor="codex")
+    assert _env_ask(ps, session="opaque-thread").get("refused")
+    assert _env_ask(ps, session=canon) == {"stopped": 60}
+
+
+def test_env_admission_never_admits_the_serving_engine_or_its_ancestors(ledger_home):
+    ps = _em_world()
+    for pid in (os.getpid(), os.getppid()):
+        ps.add(pid, 4242, "python.exe", 111.0).env = {"COORDINATOR_SESSION_ID": "sessA"}
+        assert wc._env_admits(ps.procs[pid], "sessA") == (False, "")
+        assert "refused" in _env_ask(ps, pid) and ps.procs[pid].env_reads == 0
 
 
 def test_clause_invocations_are_not_dangerous_shapes():

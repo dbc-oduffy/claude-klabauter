@@ -214,6 +214,48 @@ def test_run_mode_compose_embeds_the_guard_before_the_slices_guard_and_paths_mod
     assert "_foreignPrepName" not in dict(_compose())["Review wave"]
 
 
+_SIBLING_A = "ask-20261124T195842-45c335"
+_SIBLING_B = "ask-20261124T195842-bdb8b7"
+
+
+def _reply_file(text: str) -> str:
+    found = re.findall(r"`([^`\s]*\.review-prep-reply\.json)`", text)
+    assert len(found) == 1
+    return found[0]
+
+
+def test_sibling_run_instructions_name_distinct_run_scoped_reply_files():
+    from coordinator_core.ops.review_mint.execute_review import _wave_prep_instruction
+    from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+    base = "a" * 40
+    files = {}
+    for run in (_SIBLING_A, _SIBLING_B):
+        text = _wave_prep_instruction("m", base, "p", None, grouped=False, run_id=run)
+        files[run] = _reply_file(text)
+        assert files[run] == f"{run_prep_slice_prefix(run, base)}.review-prep-reply.json"
+        assert "redirected to a file under your scratchpad" not in text
+    assert files[_SIBLING_A] != files[_SIBLING_B]
+
+
+def test_grouped_instruction_reply_file_carries_the_group_index_placeholder():
+    from coordinator_core.ops.review_mint.execute_review import _wave_prep_instruction
+    from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+    base = "a" * 40
+    text = _wave_prep_instruction("m", base, "p", None, grouped=True, run_id=_SIBLING_A)
+    assert _reply_file(text) == f"{run_prep_slice_prefix(_SIBLING_A, base)}-g<group_index>.review-prep-reply.json"
+
+
+def test_non_sha_base_falls_back_to_the_sanitised_run_id_and_paths_mode_uses_its_slice_prefix():
+    from coordinator_core.ops.review_mint.execute_review import _wave_prep_instruction
+
+    text = _wave_prep_instruction("m", "<base>", "p", None, grouped=False, run_id="ask x/1")
+    assert _reply_file(text) == "ask-x-1.review-prep-reply.json"
+    text = _wave_prep_instruction("m", "b", "plan-abc-prep", None, grouped=False, paths_literal="[]")
+    assert _reply_file(text) == "plan-abc-prep.review-prep-reply.json"
+
+
 def test_wave_prep_instruction_refuses_run_id_with_paths_literal():
     from coordinator_core.ops.review_mint.execute_review import _wave_prep_instruction
 

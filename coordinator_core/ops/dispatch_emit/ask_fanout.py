@@ -39,6 +39,9 @@ Negative spec:
     no `pm_verbatims`, and the turn log is never read for it, whatever its text.
   - Only an explicit `source: pm` item carries the session's recorded PM turn; when the session records
     none the submission is refused before any write. The log is read once, and only for a pm item.
+  - A pm item matching no session turn is also accepted when the top-level `baton` (a path under the
+    repo) carries its text and that baton's `origin_session` pm_turns log holds it as the PM's own words;
+    caller text and baton prose alone never qualify.
   - Does NOT call the `sizing.intake_mint` handler (it refuses a second mint for one PM turn).
   - Does NOT spawn a process (no git). Records are staged under STAGING_REL and published by rename once
     all are written, so a fan-out cut off mid-write leaves nothing under the sizings or parent homes.
@@ -385,6 +388,51 @@ def _verbatim_turns(parent: Optional[Mapping], sid: Optional[str], cwd: str) -> 
 
 def _norm(text: str) -> str:
     return " ".join(text.split())
+
+
+def _baton_origin_turns(params: Mapping, worktree: Path, cwd: str) -> tuple[str, list[dict]]:
+    """(baton body, origin-session PM turns) for the baton the call names; `("", [])` when none is named.
+
+    The proof of PM provenance is the baton's `origin_session` pm_turns log (live, else archived), never
+    the baton's own prose or caller text. A missing, uncontained, unparsable or log-less baton yields no turns."""
+    rel = params.get("baton")
+    if not isinstance(rel, str) or not rel.strip():
+        return "", []
+    path = contained_path(worktree / rel.strip(), [worktree])
+    if path is None or not path.is_file():
+        return "", []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return "", []
+    head, sep, body = text.removeprefix("---").partition("\n---") if text.startswith("---") else ("", "", text)
+    try:
+        front = yaml.safe_load(head) if sep else None
+    except yaml.YAMLError:
+        return "", []
+    origin = front.get("origin_session") if isinstance(front, Mapping) else None
+    if not isinstance(origin, str) or not safe_id(origin):
+        return "", []
+    log = baton_pm_turns.log_path(origin, cwd)
+    if log is None:
+        return "", []
+    if not log.is_file():
+        log = baton_pm_turns.archived_log_path(origin, cwd) or log
+    if not log.is_file():
+        return "", []
+    turns = [{"turn": t["turn"], "ts": t.get("ts"), "prompt": t["prompt"]} for t in baton_pm_turns._load(log)]
+    return body, turns
+
+
+def _baton_proven_verbatim(ask: str, body: str, origin_turns: list[dict]) -> Optional[dict]:
+    """The PM verbatim row for an `ask` the baton body carries and an origin-session turn holds as its own
+    words; None otherwise. The row has no `turn` index: that numbers the origin log, not this session's."""
+    if not origin_turns or _norm(ask) not in _norm(body):
+        return None
+    for entry in reversed(origin_turns):
+        if baton_pm_turns.is_turn_excerpt(ask, entry["prompt"]):
+            return {"text": ask, "ts": entry.get("ts")}
+    return None
 
 
 def _matching_turn(ask: str, recorded: list[dict]) -> Optional[dict]:
@@ -907,8 +955,15 @@ def _fanout(
     log_cwd = params.get("session_root") or cwd
     pm_items = [i for i, sl in enumerate(slices) if sl.source == ASK_SOURCE_PM]
     parent_turns, recorded = _verbatim_turns(parent_doc, sid, log_cwd) if parent_rel is not None or pm_items else ([], [])
+    baton_read: Optional[tuple[str, list[dict]]] = None
     for i in pm_items:
         if not parent_turns and not _slice_turns(slices[i], recorded):
+            if baton_read is None:
+                baton_read = _baton_origin_turns(params, worktree, str(log_cwd))
+            proven = _baton_proven_verbatim(slices[i].ask, *baton_read)
+            if proven is not None:
+                recorded = [proven, *recorded]
+                continue
             raise _Refused(
                 f"asks[{i}]: source pm, but its text holds no PM turn this session recorded. "
                 "Accepted pm shape: ask = the recorded PM turn verbatim, optionally with slice text "

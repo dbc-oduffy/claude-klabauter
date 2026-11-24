@@ -80,6 +80,11 @@ def test_report_end_to_end(tmp_path: Path) -> None:
         "missing.md": "target_missing",
     }
     assert rep["no_evidence"] == 2  # bare.md and notyet.md; closed.md is not live
+    assert [(i["handoff_path"], i["reason"]) for i in rep["no_evidence_batons"]] == [
+        ("state/handoffs/bare.md", "nothing_cited"),
+        ("state/handoffs/notyet.md", "targets_not_done"),
+    ]
+    assert len(rep["no_evidence_batons"]) == rep["no_evidence"]
     assert rep["batons_scanned"] == 7
 
 
@@ -434,6 +439,33 @@ def test_legacy_plan_without_spine_is_no_evidence_sha(tmp_path: Path) -> None:
     assert item["reason"] == "no_evidence_sha" and item["detail"]
 
 
+def test_no_evidence_names_each_baton_with_a_reason(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/live.md", "---\nstatus: reviewed\n---\n")
+    _write(root, "docs/plans/ticked.md", _plan("landed"))
+    _write(root, "state/handoffs/a-bare.md", _baton())
+    _write(root, "state/handoffs/b-notdone.md", _baton(extra="governing_plan: docs/plans/live.md\n"))
+    _write(root, "state/handoffs/c-ticked.md", _baton(extra="governing_plan: docs/plans/ticked.md\n"))
+    rep = _run(root)
+    items = rep["no_evidence_batons"]
+    assert [i["handoff_path"] for i in items] == [
+        "state/handoffs/a-bare.md", "state/handoffs/b-notdone.md", "state/handoffs/c-ticked.md",
+    ]
+    assert [i["reason"] for i in items] == ["nothing_cited", "targets_not_done", "acs_all_ticked"]
+    assert len(items) == rep["no_evidence"] == 3
+    assert items[2]["detail"] and "docs/plans/ticked.md" in items[2]["detail"] and _SHA in items[2]["detail"]
+    assert items[0]["detail"] is None and items[1]["detail"] is None
+    assert rep["closable"] == [] and rep["residue"] == []
+
+
+def test_decided_batons_are_not_listed_as_no_evidence(tmp_path: Path) -> None:
+    _fixture(tmp_path)
+    rep = _run(tmp_path)
+    listed = {i["handoff_path"] for i in rep["no_evidence_batons"]}
+    assert not listed & {c["handoff_path"] for c in rep["closable"]}
+    assert not listed & {r["handoff_path"] for r in rep["residue"]}
+
+
 def test_planning_run_is_not_done_evidence(tmp_path: Path) -> None:
     root = _reverse_root(tmp_path)
     _write(root, "state/handoffs/s.md", _baton(extra=f"kind: spinoff\nsizing_object: {_SIZING}\n"))
@@ -441,3 +473,80 @@ def test_planning_run_is_not_done_evidence(tmp_path: Path) -> None:
     _write(root, "docs/plans/exec.md", _plan("reviewed"))
     rep = _run(root)
     assert rep["closable"] == []
+
+
+def _git(root: Path, *args: str) -> str:
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t"}
+    return subprocess.run(["git", *args], cwd=root, env=env, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _git_root(tmp_path: Path, commits: int = 3) -> tuple[Path, list[str]]:
+    _git(tmp_path, "init", "-q")
+    shas = []
+    for i in range(commits):
+        _write(tmp_path, f"f{i}.txt", str(i))
+        _git(tmp_path, "add", f"f{i}.txt")
+        _git(tmp_path, "commit", "-q", "-m", f"c{i}")
+        shas.append(_git(tmp_path, "rev-parse", "HEAD"))
+    return tmp_path, shas
+
+
+def _ac_baton(lines: list[str], heading: str = "## Acceptance criteria") -> str:
+    return _baton() + f"\n{heading}\n" + "\n".join(lines) + "\n"
+
+
+def test_plan_less_baton_with_all_acs_ticked_and_shas_is_closable(tmp_path: Path) -> None:
+    root, shas = _git_root(tmp_path)
+    lines = [f"- [x] AC-{i} done (`{s[:12]}`)" for i, s in enumerate(shas)]
+    _write(root, "state/handoffs/b.md", _ac_baton(lines))
+    rep = _run(root)
+    (item,) = rep["closable"]
+    assert item["handoff_path"] == "state/handoffs/b.md"
+    assert item["ship_ref"] == shas[-1]
+    assert item["evidence"][0]["class"] == "ac_list" and item["evidence"][0]["done"] is True
+    assert rep["no_evidence"] == 0 and rep["residue"] == []
+
+
+@pytest.mark.parametrize("case", ["partial", "sha_less", "unresolvable", "no_ac_list", "unrelated_box"])
+def test_ac_list_negative_cases_stay_no_evidence(tmp_path: Path, case: str) -> None:
+    root, shas = _git_root(tmp_path, commits=2)
+    a, b = shas[0][:12], shas[1][:12]
+    if case == "partial":
+        body = _ac_baton([f"- [x] AC-1 ({a})", f"- [ ] AC-2 ({b})"])
+    elif case == "sha_less":
+        body = _ac_baton([f"- [x] AC-1 ({a})", "- [x] AC-2 done without a commit"])
+    elif case == "unresolvable":
+        body = _ac_baton([f"- [x] AC-1 ({a})", "- [x] AC-2 (deadbe1)"])
+    elif case == "no_ac_list":
+        body = _baton() + "\n## Notes\nnothing ticked\n"
+    else:
+        body = _baton() + f"\n## Todo\n- [x] tidy up ({a})\n"
+    _write(root, "state/handoffs/b.md", body)
+    rep = _run(root)
+    assert rep["closable"] == [] and rep["residue"] == []
+    (item,) = rep["no_evidence_batons"]
+    assert item["handoff_path"] == "state/handoffs/b.md" and item["reason"] == "nothing_cited"
+
+
+def test_ac_list_does_not_override_a_cited_plan(tmp_path: Path) -> None:
+    root, shas = _git_root(tmp_path, commits=1)
+    _write(root, "docs/plans/live.md", "---\nstatus: reviewed\n---\n")
+    _write(root, "state/handoffs/b.md", _baton(extra="governing_plan: docs/plans/live.md\n")
+           + f"\n## Acceptance criteria\n- [x] AC-1 ({shas[0][:12]})\n")
+    rep = _run(root)
+    assert rep["closable"] == []
+    assert [i["reason"] for i in rep["no_evidence_batons"]] == ["targets_not_done"]
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_ac_list_sha_resolution_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packed: bool) -> None:
+    root, shas = _git_root(tmp_path)
+    if packed:
+        _git(root, "gc", "-q", "--prune=now")
+    _write(root, "state/handoffs/a.md", _ac_baton([f"- [x] AC-{i} ({s[:12]})" for i, s in enumerate(shas)]))
+    calls: list[object] = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: calls.append(a))
+    rep = _run(root)
+    assert [c["ship_ref"] for c in rep["closable"]] == [shas[-1]] and calls == []

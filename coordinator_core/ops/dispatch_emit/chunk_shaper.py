@@ -135,10 +135,19 @@ def _rewire(rows: list, inner: set, merged_id: str) -> list:
     return out
 
 
+def _lane(row: EmitterRow) -> str:
+    # Deferred: emit imports this module lazily, so a top-level import here would cycle.
+    from coordinator_core.ops.dispatch_emit.emit import derived_agent_lane
+
+    return derived_agent_lane(row)
+
+
 def _candidate(a: EmitterRow, b: EmitterRow) -> bool:
     if not (_mergeable(a) and _mergeable(b)):
         return False
     if (a.agent_type, a.agent_model) != (b.agent_type, b.agent_model):
+        return False
+    if _lane(a) != _lane(b):
         return False
     if min(work_estimate(a), work_estimate(b)) >= ORIENTATION_TOKENS_PER_SPAWN:
         return False
@@ -154,6 +163,8 @@ def _disjoint_candidate(a: EmitterRow, b: EmitterRow, wave_of: dict) -> bool:
     if getattr(a, "disjoint_parallel", False) or getattr(b, "disjoint_parallel", False):
         return False
     if (a.agent_type, a.agent_model) != (b.agent_type, b.agent_model):
+        return False
+    if _lane(a) != _lane(b):
         return False
     if _writes_share(a, b) or _ordered(a, b):
         return False

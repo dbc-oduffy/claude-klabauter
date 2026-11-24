@@ -1114,6 +1114,7 @@ _COMMIT_SCHEMA = _obj(
         "already_landed": {"type": ["boolean", "null"]},
         "error": {"type": ["string", "null"]},
         "refused": {"type": ["string", "null"]},
+        "refire_futile": {"type": ["boolean", "null"]},
         "sizing_shipped": {"type": ["object", "null"]},
         "close": {"type": ["object", "null"]},
         "fanout": {"type": ["object", "null"]},
@@ -1125,6 +1126,15 @@ _COMMIT_SCHEMA = _obj(
         "remedy_step": {"type": ["object", "null"]},
         "awaiting": {"type": ["object", "null"]},
     },
+)
+# A ledger-unmet commit refusal a refire reproduces routes to the landed close, never a refire; spelling
+# matches halt_refire's `_emptyPrepLandedExit`.
+_REFIRE_FUTILE_EXIT_JS = (
+    "if (_commit?.refire_futile === true && _halted && typeof _halted === 'object') { _halted.next_action = { "
+    f"kind: {json.dumps(_halt_refire.EXIT_KIND)}, route: {json.dumps(_halt_refire.ROUTE_LANDED)}, "
+    "call: 'dispatch.record_halted_run_landed {run_id: ' + _runId + ', sha: <landing sha>}', "
+    "reason: 'The ledger rows are met but no declared product path changed since the halt commit: a refire reproduces "
+    "the refusal. Commit the withheld declared paths by hand, then record the run landed with that commit sha.' }; } "
 )
 _RETEST_SCHEMA = _obj(["status"], {"status": _STR, "detail": {"type": ["string", "null"]}})
 _DOC_PATHS_JS = (
@@ -2675,11 +2685,21 @@ def _usage_limit_resume_text(halted_expr: str) -> str:
     )
 
 
+# A landed-route exit is not a legacy next_action to rewrite into a refire envelope: reported as already a
+# refire, `_refireNextAction` leaves it as the commit halt set it.
+_LEGACY_KEEPING_LANDED_EXIT_JS = (
+    "((_halted.next_action && typeof _halted.next_action === 'object' && "
+    f"_halted.next_action.kind === {json.dumps(_halt_refire.EXIT_KIND)} && "
+    f"_halted.next_action.route === {json.dumps(_halt_refire.ROUTE_LANDED)}) "
+    f"? {{ kind: {json.dumps(_halt_refire.REFIRE_KIND)} }} : _halted.next_action)"
+)
+
+
 def _refire_next_action_helper_js(sizing_rel: Optional[str]) -> str:
     """`_refireNextAction()`: finalises `_halted.next_action` into the one-refire envelope before `_halted` leaves the script."""
     return _halt_refire.refire_next_action_js(
         call_js=f"(_hk === {_lit(HALT_USAGE_LIMIT)} ? {_usage_limit_resume_text('_halted')} : {_refire_js(sizing_rel)})",
-        legacy_js="_halted.next_action",
+        legacy_js=_LEGACY_KEEPING_LANDED_EXIT_JS,
         kind_js="_halted.halted",
         detail_js="(typeof _legacy.detail === 'string' ? _legacy.detail : null)",
     )
@@ -9647,6 +9667,7 @@ def _append_docs_and_commit(
         + _COMMIT_LEDGER_FIELDS_JS +
         "reason: " + _COMMIT_HALT_REASON_WITH_LEDGER_JS + ", "
         "plan: _planRel ?? null, sizing: _sizingRel ?? null, run_id: _runId }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") +
+        _REFIRE_FUTILE_EXIT_JS +
         "if (_incompleteChunks.length === 0) { _nextAction.params.halted = _halted; _reviseAndRefire = null; } "
         f"else {{ _nextAction = {REVISE_NEXT_ACTION_JS}; _reviseAndRefire = _mkRevise(); }} }}"
     )

@@ -148,6 +148,7 @@ _INSTALLED_PLUGINS_REL = ("plugins", "installed_plugins.json")
 _HOOKS_JSON_REL = ("hooks", "hooks.json")
 _EFFECTIVE_DELIVERY_REL = ("hooks", "effective-delivery.json")
 _SCRIPT_TOKEN_RE = re.compile(r"(\S*\.(?:py|sh|mjs|js))\b")
+_QUOTED_SCRIPT_TOKEN_RE = re.compile(r"""(["'])([^"'&|;]*\.(?:py|sh|mjs|js))\1""")
 _TAIL_KEY_RE = re.compile(r"(?:^|/)([^/]+/[^/]+)$")
 
 # Box-drawing banner border width -- single source of truth for the five
@@ -218,8 +219,11 @@ def _extract_script_token(command: str) -> Optional[str]:
     """
     if not isinstance(command, str):
         return None
+    quoted = _QUOTED_SCRIPT_TOKEN_RE.search(command)
+    if quoted:
+        return quoted.group(2)
     match = _SCRIPT_TOKEN_RE.search(command)
-    return match.group(1) if match else None
+    return match.group(1).lstrip("\"'") if match else None
 
 
 def _resolve_script_token(token: str, content_root: Optional[str]) -> Optional[Path]:
