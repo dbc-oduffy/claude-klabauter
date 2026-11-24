@@ -58,6 +58,7 @@ from coordinator_core.ops.dispatch_emit import ask_gate as _ask_gate  # noqa: F4
 from coordinator_core.ops.dispatch_emit.sizing_fire import DATE_HEAD_PATTERN, PLAN_PATH_JS, RESUME_LEDGER_HALT_BLOCKING_FIELD
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS, SINCE_HALT_CREDIT_JS
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
+from coordinator_core.ops.dispatch_emit.ledger_test_freshness import TESTS_RAN_AT_KEY
 from coordinator_core.ops.dispatch_emit.phase_ledger import RESUME_PHASES_FIELD
 from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
     IMPORTER_OVERRUN_KEY,
@@ -208,6 +209,7 @@ from coordinator_core.ops.dispatch_emit.rag_use import (
     touches_ue_path,
 )
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
+from coordinator_core.ops.dispatch_emit.executor_economy import CLAIM_ROWS_OP
 from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, STAGE_REFUSAL_PREFIX, next_action as _design_next_action
@@ -1189,6 +1191,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "remaining": {"type": "array", "items": _STR},
                     "requirement": _STR,
                     "evidence": _STR,
+                    TESTS_RAN_AT_KEY: _STR,
                     "met_by": {"type": ["string", "array"], "items": _STR},
                     DEPARTURE_REASON_KEY: _STR,
                     GAPS_CLOSED_FIELD: {"type": "array", "items": _obj(["gap", "how"], {"gap": _STR, "how": _STR})},
@@ -1236,6 +1239,9 @@ _LEDGER_ITEMS_RULES = (
     "Status 'departed' when the change deliberately does not do what the item asks, with departure_reason "
     "saying why; a departure lands and is shown to the EM, a blank reason is refused. A PM-sourced item "
     "judged 'met' names met_by (or evidence), else it is refused. "
+    "On every item judged 'met', re-run the tests covering the files it touched after your last edit and set "
+    + TESTS_RAN_AT_KEY + " to that run's finish time (ISO-8601 UTC); an earlier run, or an existing test not "
+    "re-run, is not evidence and the item is 'not_met'. "
 )
 _LEDGER_SIZE_RULE = (
     "For any size requirement (shrink, hold, byte or line cap), compare the LF-normalized committed or "
@@ -3202,6 +3208,8 @@ _LEDGER_RECOVER_JS = r"""
     const _recoveryCap = __CAP__;
     const _fpPosix = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
     const _fpOwns = (r, p) => (r.writes ?? []).map(_fpPosix).includes(p) || (r.writes_under ?? []).some((d) => p.startsWith(_fpPosix(d).replace(/\/+$/, '') + '/'));
+    const _fpDir = (p) => p.slice(0, p.lastIndexOf('/') + 1);
+    const _fpBeside = (r, p) => (r.writes ?? []).map(_fpPosix).some((w) => _fpDir(w) === _fpDir(p));
     const _ownReport = (cid, p) => p.startsWith('.coordinator-local/subagent-share/dispatch-reports/') && p.split('/').pop() === String(cid) + '.md';
     const _fpOf = (row, failed) => {
       const out = [];
@@ -3289,6 +3297,7 @@ _LEDGER_RECOVER_JS = r"""
         for (const c of open) beforeKeys[c] = _remKeys(c);
         const fixed = await parallel(open.map((cid) => () => _fixOne(cid)));
         if (_halted) return;
+        const _admitted = new Set();
         open.forEach((cid, k) => {
           const st = rec[cid]; const r = fixed[k]; st.attempts = attempt;
           const _lw = _lwAttempt[cid] ?? null;
@@ -3309,6 +3318,15 @@ _LEDGER_RECOVER_JS = r"""
             return;
           }
           const blockedNeeds = r.status === 'BLOCKED' ? (Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p)) : [];
+          const _admit = blockedNeeds.length > 0 && !outside.length && blockedNeeds.every((p) => _fpBeside(row, p) && !mrows.some((x) => _fpOwns(x, p)) && classifyBlock('ROW-LOCAL-BLOCK: ' + p, []).widen === p);
+          if (_admit) {
+            st.footprint = [...st.footprint, ...blockedNeeds];
+            st.widened = [...new Set([...(st.widened ?? []), ...blockedNeeds])];
+            for (const p of blockedNeeds) _widened.push({ row: cid, path: p });
+            _admitted.add(cid);
+            st.last_reason = _liveNote('admitted beside the row writes and retried: ' + blockedNeeds.join(', '));
+            return;
+          }
           if (outside.length || blockedNeeds.length) st.paths = [...new Set([...st.paths, ...outside, ...blockedNeeds])];
           st.last_reason = _liveNote(String(r.reason ?? ''));
           if (r.status === 'BLOCKED') st.status = 'blocked';
@@ -3326,7 +3344,7 @@ _LEDGER_RECOVER_JS = r"""
             st.status = 'blocked';
           }
         }
-        const stillOpen = open.filter((c) => rec[c].status === 'open');
+        const stillOpen = open.filter((c) => rec[c].status === 'open' && !_admitted.has(c));
         if (!stillOpen.length) continue;
         const ids = [...new Set(stillOpen.flatMap((c) => rec[c].rows))];
         const files = [...new Set(stillOpen.flatMap((c) => rec[c].footprint))];
@@ -5349,6 +5367,9 @@ def compose_ask_script(
         else _unique_stager(lambda name, text: _stage_prompt(name, text, staged_out, record_dir=record_abs), staged_out)
     )
     _ACTIVE_STAGER.set(stager)
+    if stager is not None:
+        blitz_fn = _stage_expr(blitz_fn, "plan-blitz", stager)
+        rb_fn = _stage_expr(rb_fn, "roadmap-blitz", stager)
     parent_copy = run_parent_copy_rel(run_id)
     manifest_rel = f"{record_dir}/manifest.json"
     anchor = _ANCHOR_CLAUSE.format(root=repo_root)
@@ -6349,7 +6370,7 @@ def compose_ask_script(
     # author, review wave or scoped test runs, and execution is skipped by `_resumeLedger`.
     # A resume at M+ whose still-blocking rows owe work keeps its arm: the re-plan leg below adds rows
     # for that work and only those rows are staged and dispatched. Any other ledger resume takes the XS tail.
-    # The re-plan leg is composed only when `fold_stage`; a stop_after compose never reaches it.
+    # A stop_after compose runs the re-plan leg only to claim unclaimed register rows before the park.
     _rl0 = f"_gate.{RESUME_LEDGER_KEY}"
     b.append("  let _ledgerExec = false;")
     b.append("  let _xsTail = false;")
@@ -6396,7 +6417,7 @@ def compose_ask_script(
             f"{{ if ({_RESUME_PLAN_SHAPE_JS}(_gate.resume_plan)) {{ _planRel = _gate.resume_plan; }} else {{ {_resume_plan_halt_js('_gate')} }} }}"
         )
     late_replan_call: Optional[str] = None
-    if fold_stage:
+    if fold_stage or stop_after:
         # A ledger verdict carries the gate op's own stage of the resumed plan as `manifest`; the re-plan
         # agent stages the plan itself over exactly the rows it added, so no standalone stage leg runs.
         def _ledger_replan_prompt(rl: str, unlanded: str) -> str:
@@ -6433,31 +6454,59 @@ def compose_ask_script(
                 "remove any existing row: the rows that landed stay landed." + _EDIT_IN_PLACE_NO_REREAD,
                 _carried_outputs_part("_planRel"),
                 " Return the plan's repo-relative "
-                "path as plan_rel and the ids of exactly the rows you added as added_rows. Commit nothing. "
-                f"As your very last act, when you added at least one row, run `{_INVOKE} {OP_ASK_STAGE} '<params>'{_repo_flag(repo_root)}` "
-                "once, <params> being the JSON object ",
-                "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, "
-                "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, ledger_resume: true, "
-                f"...(({rl}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length ? {{ claim_register_rows: true }} : {{}}), "
-                "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
-                " with only_rows set to the ids of exactly the rows you added",
-                f"js:({unlanded}.length ? ' together with these unlanded rows: ' + JSON.stringify({unlanded}) : '')",
-                ", and return its JSON reply "
-                "verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). When you added no row, "
-                f"stage nothing and return stage_reply null.{session_tail}",
+                "path as plan_rel and the ids of exactly the rows you added as added_rows. Commit nothing. ",
+                *(
+                    (
+                        "The plan parks after this leg and is never staged. As your very last act, when you added at "
+                        f"least one row, run `{_INVOKE} {CLAIM_ROWS_OP} '<params>'{_repo_flag(repo_root)}` once, "
+                        "<params> being the JSON object ",
+                        "js:JSON.stringify({ plan: _planRel, rows: "
+                        f"({rl}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []) }})",
+                        ", and return stage_reply null. When you added no row, claim nothing and return "
+                        f"stage_reply null.{session_tail}",
+                    )
+                    if not fold_stage else (
+                        f"As your very last act, when you added at least one row, run `{_INVOKE} {OP_ASK_STAGE} '<params>'{_repo_flag(repo_root)}` "
+                        "once, <params> being the JSON object ",
+                        "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, "
+                        "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, ledger_resume: true, "
+                        f"...(({rl}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length ? {{ claim_register_rows: true }} : {{}}), "
+                        "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
+                        " with only_rows set to the ids of exactly the rows you added",
+                        f"js:({unlanded}.length ? ' together with these unlanded rows: ' + JSON.stringify({unlanded}) : '')",
+                        ", and return its JSON reply "
+                        "verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). When you added no row, "
+                        f"stage nothing and return stage_reply null.{session_tail}",
+                    )
+                ),
             )
 
         replan_prompt = _ledger_replan_prompt(_rl0, "_ledgerUnlanded")
-        late_replan_call = _agent(
-            _ledger_replan_prompt("_lateLedger", "_lateKeep"), label="ledger-late", phase="plan",
-            agent_type=stage_types["plan"], agent_model=stage_models["plan"], schema=_REPLAN_STAGED_SCHEMA,
-            effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
-        )
+        if fold_stage:
+            late_replan_call = _agent(
+                _ledger_replan_prompt("_lateLedger", "_lateKeep"), label="ledger-late", phase="plan",
+                agent_type=stage_types["plan"], agent_model=stage_models["plan"], schema=_REPLAN_STAGED_SCHEMA,
+                effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
+            )
         replan_call = _agent(
             replan_prompt, label="ledger-replan", phase="plan", agent_type=stage_types["plan"],
             agent_model=stage_models["plan"], schema=_REPLAN_STAGED_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
         )
-        b.append(
+        if not fold_stage:
+            # The park never stages: the re-plan leg serves and claims every unclaimed register row before it fires.
+            b.append(
+                f"  if (_ledgerOwes && ({_rl0}?.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0) {{ "
+                "let _parkReplanned = null; let _parkTry = 0; "
+                f"do {{ _parkReplanned = await {replan_call}; _parkTry++; "
+                "_ledgerAdded = (Array.isArray(_parkReplanned?.added_rows) ? _parkReplanned.added_rows : [])"
+                ".filter((s) => typeof s === 'string' && s.trim()); } "
+                f"while (!_ledgerAdded.length && _parkTry < {MAX_IN_RUN_REMEDY_ATTEMPTS}); "
+                f"if (!_ledgerAdded.length) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+                f"reason: {_lit(REGISTER_ROWS_UNCLAIMED_REFUSAL)} + ': register row(s) ' + JSON.stringify({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD}) "
+                f"+ ' still unclaimed after {MAX_IN_RUN_REMEDY_ATTEMPTS} in-run re-plan attempts', sizing: _sizingRel, run_id: _runId }}; }} }}"
+            )
+        else:
+            b.append(
             "  if (_ledgerOwes && !_stageRefusal) { const _gateStaged = _stagedManifest; const _gateGap = _relayGap; "
             "const _gateDisk = _diskHalt; _stagedManifest = null; _relayGap = null; _diskHalt = null; "
             f"const _unclaimedOwed = ({_rl0}?.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0; "
@@ -6479,7 +6528,7 @@ def compose_ask_script(
             "cover the work', sizing: _sizingRel, run_id: _runId }; } } }"
         )
 
-        if blitz_fn:
+        if blitz_fn and fold_stage:
             # The one stage leg of the plan-blitz arm: it runs only when readyOp never ran, and the
             # sidecar it names is paged and verified like any other stage reply.
             blitz_read_prompt = _cat(
@@ -7038,7 +7087,8 @@ def compose_ask_script(
         b.append(
             f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && _planRel) {{ _halted = {{ halted: {_lit(HALT_PARKED)}, "
             "reason: 'parked after plan: stop_after=plan', "
-            f"plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: {parked_next_action_js('_planRel')} }}; }}"
+            f"plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: {parked_next_action_js('_planRel')} "
+            f"+ ' Call ' + {_refire_js(sizing_rel)} }}; }}"
         )
         b.append(
             f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
@@ -7283,6 +7333,7 @@ def compose_ask_script(
         "Your brief is the file ",
         "js:r.brief_path",
         f" -- read it completely, then execute it as written.\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE}{ledger_clause_base}{notes_block}{session_tail}",
+        "js:(_widenOf[r.id] ? _widenText(_widenOf[r.id]) : '')",
         "js:" + _row_sidecar_js(run_id, _lit(build_work_label(''))),
     )
     work_label = _lit(build_work_label(''))
@@ -9800,7 +9851,28 @@ def _halt_record_commit_fn(
         prompt, label="halt-commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
         schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
-    return f"  async function _commitHaltRecord() {{ _refireNextAction(); return await {call}; }}"
+    return (
+        f"  async function _commitHaltRecord() {{ _refireNextAction(); return await {call}; }}\n"
+        + _halt_record_no_token_fn(script_path)
+    )
+
+
+def _halt_record_no_token_fn(script_path: Optional[str]) -> str:
+    """`async function _recordHaltNoToken()`: a halt with no run token records itself through one direct
+    `engineOp` call to `dispatch.terminal_commit` in `halted_by` mode, which writes `halted.json` and lands
+    the record dir without a token or an agent leg. Returns the op's reply, or null where the runner has no
+    `engineOp` or the call throws (the watcher's run-end marker then stays the fallback)."""
+    return (
+        "  async function _recordHaltNoToken() {\n"
+        "    if (typeof engineOp !== 'function') return null;\n"
+        "    try {\n"
+        "      const _r = await engineOp('dispatch.terminal_commit', { "
+        f"script_path: {_lit(script_path or '')}, run_id: _runId, {HALTED_RECORD_PARAM}: _halted, "
+        f"{_CONSUMED_RETURNS_PARAM}: _consumedReturns, doc_paths: {_DOC_PATHS_JS} }});\n"
+        "      return (_r && typeof _r === 'object') ? _r : null;\n"
+        "    } catch (e) { return null; }\n"
+        "  }"
+    )
 
 
 def _append_split_stage(b: list[str]) -> None:
@@ -9867,4 +9939,7 @@ def _append_halt_record_commit(b: list[str]) -> None:
         + hijack_test_js("_hjT")
         + f") _haltCommit = {{ ..._haltCommit, hijacked: '{HIJACK_HALT_REASON}: ' + _hjT }}; }}"
     )
+    b.append("  }")
+    b.append("  else if (_halted && !_RUN_TOKEN && !(_commit && _commit.committed === true)) {")
+    b.append("    _haltCommit = await _recordHaltNoToken();")
     b.append("  }")

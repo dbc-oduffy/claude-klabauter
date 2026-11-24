@@ -677,6 +677,21 @@ def test_codex_and_grok_launch_never_get_an_agy_mode() -> None:
         assert rc == 0 and "--mode" not in calls[0][1]
 
 
+def test_codex_child_gets_physical_engine_override_paths(tmp_path: Path) -> None:
+    mirror = tmp_path / "published"
+    mirror.mkdir()
+    alias = tmp_path / "engine"
+    try:
+        alias.symlink_to(mirror, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+    overrides = dict(COORDINATOR_ENGINE_ROOT=str(alias), COORDINATOR_DOOR_ENGINE_ROOT=str(alias))
+    rc, _, child = _run("codex", env=overrides)
+    assert rc == 0
+    assert {name: child[name] for name in overrides} == dict.fromkeys(overrides, str(mirror.resolve()))
+    assert overrides["COORDINATOR_ENGINE_ROOT"] == str(alias)
+
+
 def test_codex_cwd_becomes_the_working_dir_flag() -> None:
     rc, calls, _ = _run("codex", env={"PATH": "x"}, extra=["exec", "do it"], cwd="repo/sub")
     assert rc == 0 and calls[0][1] == ["/bin/codex", "exec", *_add_dir(), "-C", "repo/sub", "do it"]
@@ -784,3 +799,59 @@ def test_diagnostic_install_rejects_peer_writable_members(home, unsafe):
     member.chmod(member.stat().st_mode | 0o020)
     with pytest.raises(PermissionError, match="unsafe"):
         hel._diagnostic_install(os.environ)
+
+
+@pytest.mark.parametrize("case", ["registered", "unregistered", "indeterminate", "wrong_digest", "missing_handle", "script_outside_repo"])
+def test_resume_mint_uses_existing_authority_and_exact_fire(case, tmp_path, monkeypatch, capsys):
+    import hashlib
+    from types import SimpleNamespace
+    from coordinator_core.invoke import __main__ as invoke
+
+    root = tmp_path.resolve() / "issued"
+    rid = "ask-fixture"
+    script = root / "scratch/warp" / (rid + ".workflow.mjs")
+    script.parent.mkdir(parents=True)
+    script.write_text("// fixture")
+    if case == "script_outside_repo":
+        outside = tmp_path / "outside.mjs"
+        script.rename(outside)
+        try:
+            script.symlink_to(outside)
+        except OSError as exc:
+            pytest.skip(f"file symlink unavailable: {exc}")
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    stage = root / "state/warp" / rid / "run-stage.json"
+    stage.parent.mkdir(parents=True)
+    stage.write_text(json.dumps({"stage": "minted"}))
+    args = {"repoRoot": str(root)}
+    mint = dict(run_id=rid, script_path=str(script), sha256=digest, fire_args=args,
+                fire_error="SandboxedSpawnRefused: warm_disabled")
+    if case == "indeterminate":
+        mint["fire"] = {"state": "indeterminate"}
+    receipt = root / "submit.json"
+    receipt.write_text(json.dumps({"jsonrpc": "2.0", "result": mint}))
+    if case != "unregistered":
+        monkeypatch.setattr(authority, "require_fire_authority", lambda *a, **kw: SimpleNamespace(role="em", session_id="registered"))
+    calls = []
+    fid = "b" * 32
+    def dispatch(argv, cwd):
+        calls.append((argv[0], json.loads(argv[1]), cwd))
+        return json.dumps({"result": {} if case == "missing_handle" else {"fire_id": fid}}), "", 0
+    monkeypatch.setattr(invoke, "_dispatch_argv", dispatch)
+    monkeypatch.setattr(g, "write_headless_em_grant", lambda *a: pytest.fail("unexpected grant creation"))
+    monkeypatch.chdir(root)
+    resolve = Path.resolve
+    def restricted_resolve(path, *args, **kwargs):
+        if path == root:
+            raise PermissionError("ancestor metadata unavailable")
+        return resolve(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "resolve", restricted_resolve)
+    code = hel.resume_mint(receipt, "0" * 64 if case == "wrong_digest" else digest, root)
+    assert (code == 0) == (case == "registered")
+    if case in ("registered", "missing_handle"):
+        assert calls == [("workflow.fire", dict(run_id=rid, script_path=str(script), expected=digest,
+                         args=args, backend="codex", executor="headless", caller_session_id="registered"), str(root))]
+    else:
+        assert not calls
+    if case == "registered":
+        assert json.loads(capsys.readouterr().out)["result"]["fire_id"] == fid

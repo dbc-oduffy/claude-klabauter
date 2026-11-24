@@ -105,13 +105,24 @@ def test_registry_key_unresolved_is_a_defect_where_example_retrieval_repo_is_reg
     assert result == "publish-repo-bundle: defect -- unset, but repos.project_rag is registered"
 
 
-def _calls_recorder(monkeypatch, tool, results):
-    """Feeds successive `_run_and_wait` calls the given (code, stdout, stderr)
-    tuples in order, and records the argv each call was made with."""
-    calls: list[list[str]] = []
+_NOT_LANDED = (0, json.dumps({"land": {"verdict": "local_index_present"}}), "")
+
+
+def _calls_recorder(monkeypatch, tool, results, pull=_NOT_LANDED):
+    """Feeds successive rebuild/publish `_run_and_wait` calls the given (code, stdout,
+    stderr) tuples in order, and records the argv each of those calls was made with.
+    A `pull-repo-bundle` call is answered by `pull` and recorded in `calls.pulls`."""
+    class _Calls(list):
+        pulls: list[list[str]]
+
+    calls = _Calls()
+    calls.pulls = []
     iterator = iter(results)
 
     def fake(argv, cwd, timeout):
+        if argv[1] == "pull-repo-bundle":
+            calls.pulls.append(argv)
+            return pull
         calls.append(argv)
         return next(iterator)
 
@@ -173,6 +184,82 @@ def test_happy_path_runs_rebuild_then_publish_with_right_argv(tool, monkeypatch,
     assert record["exit_code"] == 0
     assert record["head"] == "deadbeef"
     assert record["line"] == "publish-repo-bundle: published"
+
+
+def _landed(verdict):
+    return (0, "noise line\n" + json.dumps({"land": {"verdict": verdict}}), "")
+
+
+def test_pull_landed_ends_run_without_rebuild_or_publish_and_records_it(tool, monkeypatch, tmp_path, fake_cli):
+    repo_root = tmp_path / "target-repo"
+    repo_root.mkdir()
+    calls = _calls_recorder(monkeypatch, tool, [], pull=_landed("landed"))
+    monkeypatch.setattr(tool, "_git_common_dir", lambda root: tmp_path / "common")
+    monkeypatch.setattr(tool, "_current_head", lambda root: "deadbeef")
+
+    result = tool.run("handoff", repo_root, cli_override=str(fake_cli))
+
+    assert calls == []  # no scip-rebuild, no publish-repo-bundle
+    assert calls.pulls == [[str(fake_cli), "pull-repo-bundle", "--project-root", str(repo_root), "--json"]]
+    assert result.startswith("publish-repo-bundle: landed")
+    record = json.loads((hub_for_common(tmp_path / "common") / "publish-repo-bundle-last.json").read_text("utf-8"))
+    assert record["exit_code"] == 0
+    assert record["head"] == "deadbeef"
+    assert record["line"] == result
+
+
+@pytest.mark.parametrize(
+    "pull",
+    [
+        _landed("local_index_present"),
+        _landed("unknown_keep_local"),
+        _landed("some_future_verdict"),
+        (1, "", "ERROR: pull-repo-bundle failed: boom"),
+        (4, "", "no target repo"),
+        (2, "", "invalid choice: 'pull-repo-bundle'"),
+        (None, "", ""),
+        (0, "not json at all", ""),
+        (0, "", ""),
+    ],
+)
+def test_pull_not_landed_falls_through_to_rebuild_then_publish(tool, monkeypatch, tmp_path, fake_cli, pull):
+    repo_root = tmp_path / "target-repo"
+    repo_root.mkdir()
+    calls = _calls_recorder(monkeypatch, tool, [(0, "", ""), (0, "", "")], pull=pull)
+    monkeypatch.setattr(tool, "_git_common_dir", lambda root: tmp_path / "common")
+    monkeypatch.setattr(tool, "_current_head", lambda root: "deadbeef")
+
+    result = tool.run("handoff", repo_root, cli_override=str(fake_cli))
+
+    assert len(calls.pulls) == 1
+    assert [c[1] for c in calls] == ["scip-rebuild", "publish-repo-bundle"]
+    assert result == "publish-repo-bundle: published"
+
+
+def test_pull_landed_is_read_from_pretty_printed_json(tool, monkeypatch, tmp_path, fake_cli):
+    repo_root = tmp_path / "target-repo"
+    repo_root.mkdir()
+    pretty = (0, json.dumps({"land": {"verdict": "landed"}}, indent=2), "")
+    calls = _calls_recorder(monkeypatch, tool, [], pull=pretty)
+    monkeypatch.setattr(tool, "_git_common_dir", lambda root: tmp_path / "common")
+    monkeypatch.setattr(tool, "_current_head", lambda root: "deadbeef")
+
+    result = tool.run("handoff", repo_root, cli_override=str(fake_cli))
+
+    assert calls == []
+    assert result.startswith("publish-repo-bundle: landed")
+
+
+def test_pull_passes_repo_slug_through(tool, monkeypatch, tmp_path, fake_cli):
+    repo_root = tmp_path / "target-repo"
+    repo_root.mkdir()
+    calls = _calls_recorder(monkeypatch, tool, [], pull=_landed("landed"))
+    monkeypatch.setattr(tool, "_git_common_dir", lambda root: tmp_path / "common")
+    monkeypatch.setattr(tool, "_current_head", lambda root: "deadbeef")
+
+    tool.run("handoff", repo_root, cli_override=str(fake_cli), repo_slug="acme/widgets")
+
+    assert calls.pulls[0][-2:] == ["--repo", "acme/widgets"]
 
 
 def test_repo_slug_passed_through_only_when_given(tool, monkeypatch, tmp_path, fake_cli):

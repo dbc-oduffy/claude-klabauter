@@ -537,6 +537,69 @@ def pre_invocation_reply(payload) -> dict:
     return {"injectSteps": [{"systemMessage": {"systemMessage": t}} for t in texts]} if texts else {}
 
 
+def _lifecycle_reply(event: str, payload, engine_root=None) -> dict:
+    """Adapt an agy PostToolUse/Stop payload onto `codex_lifecycle.handle`, stashing advisories for PreInvocation."""
+    if not isinstance(payload, dict):
+        return {}
+    conv = payload.get("conversationId") or os.environ.get("ANTIGRAVITY_CONVERSATION_ID") or ""
+    root = None
+    if engine_root:
+        cand = Path(engine_root)
+        if cand.is_absolute():
+            root = cand
+    if root is None:
+        env_root = os.environ.get("COORDINATOR_ENGINE_ROOT")
+        if env_root and Path(env_root).is_absolute():
+            root = Path(env_root)
+    if root is None or not (root / "coordinator_core").is_dir():
+        return {}
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        from coordinator_core.host_hooks.agy_adapter import AgyAdapter, stash_advisory
+        from coordinator_core.host_hooks.codex_lifecycle import handle
+
+        host_event = AgyAdapter().adapt_event(payload, event=event)
+        engine_payload = {
+            **dict(host_event.metadata),
+            "hook_event_name": event,
+            "session_id": host_event.session_id or conv or None,
+            "cwd": host_event.cwd or None,
+            "tool_name": host_event.tool_name,
+            "tool_input": dict(host_event.tool_input),
+        }
+        if event == "Stop":
+            for key in ("last_assistant_message", "lastAssistantMessage", "response", "text"):
+                val = payload.get(key)
+                if isinstance(val, str) and val.strip():
+                    engine_payload["last_assistant_message"] = val
+                    break
+            if payload.get("stop_hook_active") or payload.get("stopHookActive"):
+                engine_payload["stop_hook_active"] = True
+        verdict = handle(engine_payload, dict(os.environ))
+        if not isinstance(verdict, dict) or not verdict:
+            return {}
+        if event == "Stop" and verdict.get("decision") == "block" and verdict.get("reason"):
+            return {"decision": "block", "reason": str(verdict["reason"])}
+        nested = verdict.get("hookSpecificOutput") if isinstance(verdict.get("hookSpecificOutput"), dict) else {}
+        text = nested.get("additionalContext") or verdict.get("additionalContext") or verdict.get("systemMessage") or ""
+        if isinstance(text, str) and text.strip() and isinstance(conv, str) and CONV_RE.match(conv):
+            stash_advisory(conv, text.strip())
+    except Exception:
+        return {}
+    return {}
+
+
+def _lifecycle_main(event: str, argv) -> int:
+    try:
+        out = _lifecycle_reply(event, json.loads(sys.stdin.read()), engine_root_arg(argv))
+    except Exception:
+        out = {}
+    print(json.dumps(out))
+    sys.stdout.flush()
+    return 0
+
+
 def _pre_invocation_main() -> int:
     try:
         out = pre_invocation_reply(json.loads(sys.stdin.read()))
@@ -574,6 +637,8 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:2] == ["--event", "PreInvocation"]:
         return _pre_invocation_main()
+    if len(argv) >= 2 and argv[0] == "--event" and argv[1] in ("PostToolUse", "Stop"):
+        return _lifecycle_main(argv[1], argv)
     result = {}
     worker = threading.Thread(target=_answer, args=(argv, result), daemon=True)
     worker.start()

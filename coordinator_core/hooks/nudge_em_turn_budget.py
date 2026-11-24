@@ -132,6 +132,14 @@ def _in_general_work_root(payload: dict) -> bool:
         return False
 
 
+def _is_live_gem(sid: str, root: str) -> bool:
+    """True for the live Group EM session: it makes no asks, so it is never nudged to fire one.
+    Trap: any failure reads as not-the-G-EM, so the nudge stands."""
+    from coordinator_core.bash_guards import _gem_cross_repo_commit
+
+    return bool(_gem_cross_repo_commit.session_holds_live_gem_standing(sid, root))
+
+
 def _advisory(params: dict) -> str:
     from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
     from coordinator_core.session import em_turn_count as etc
@@ -153,7 +161,7 @@ def _advisory(params: dict) -> str:
         return ""
     from coordinator_core.hooks.support.turn_intent import headless_session
 
-    if headless_session(payload):
+    if headless_session(payload) or _is_live_gem(sid, root):
         return ""
     path = etc.state_path(root, sid)
     before = etc.load_state(path, transcript)

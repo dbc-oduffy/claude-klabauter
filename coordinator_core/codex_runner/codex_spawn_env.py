@@ -68,6 +68,7 @@ def shape_codex_child(
     env: dict[str, str],
     *,
     writable_root: str | os.PathLike[str] | None,
+    worker_home_root: Path | None = None,
     environ: Mapping[str, str] | None = None,
     windows: bool | None = None,
 ) -> dict[str, str]:
@@ -94,7 +95,7 @@ def shape_codex_child(
         # with no marker is read as a human EM and handed EM doctrine. An explicit non-em role wins.
         if env.get("COORDINATOR_AGENT_ROLE") in (None, "", "em"):
             env["COORDINATOR_AGENT_ROLE"] = "worker"
-        _isolate_codex_home(env, Path(writable_root), os.environ if environ is None else environ, worker=True)
+        _isolate_codex_home(env, worker_home_root or Path(writable_root), os.environ if environ is None else environ, worker=True)
     check_pwsh_launchable(env)
     return env
 

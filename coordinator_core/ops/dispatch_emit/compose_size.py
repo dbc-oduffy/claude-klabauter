@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
+# The headroom every composed ask arm is pinned to; the runner cap itself stays `emit._WORKFLOW_SCRIPT_BYTE_CAP`.
+ASK_SCRIPT_CEILING_BYTES = int(0.90 * 524288)
+
 
 def component_sizes(parts: Mapping[str, str]) -> list[tuple[str, int]]:
     """`(name, utf-8 byte count)` per part, largest first; ties keep name order."""

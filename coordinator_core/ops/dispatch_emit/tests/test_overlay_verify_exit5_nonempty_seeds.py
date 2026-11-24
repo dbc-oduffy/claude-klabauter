@@ -1,11 +1,8 @@
-"""The e78426 shape: seeds holding real tests that the land tier markers deselect, run under xdist (whose workers
-deselect silently, so the output carries no `deselected` line). The overlay must classify that as the tier
-exclusion it is, and a pytest exit 5 that stays empty over non-empty seeds is a named engine fault, never an
+"""The e78426 shape: seeds holding real tests that the land tier markers deselect. The overlay must classify that
+as the tier exclusion it is, and a pytest exit 5 that stays empty over non-empty seeds is a named engine fault, never an
 inconclusive landing refusal."""
 
 from __future__ import annotations
-
-import importlib.util
 
 import pytest
 
@@ -34,14 +31,7 @@ def _commit(root, files):
     return _git(root, "rev-parse", "HEAD").strip()
 
 
-def _force_xdist(monkeypatch):
-    if importlib.util.find_spec("xdist") is None:
-        pytest.skip("pytest-xdist not installed")
-    monkeypatch.setattr(cov, "xdist_workers", lambda py, units: 2)
-
-
-def test_tier_excluded_seeds_under_xdist_are_the_tier_green_not_an_inconclusive_refusal(tmp_path, monkeypatch):
-    _force_xdist(monkeypatch)
+def test_tier_excluded_seeds_are_the_tier_green_not_an_inconclusive_refusal(tmp_path):
     root, _ = _repo(tmp_path)
     seeds = ["t/test_own_run.py", "t/test_guard.py"]
     head = _commit(root, {
@@ -55,8 +45,7 @@ def test_tier_excluded_seeds_under_xdist_are_the_tier_green_not_an_inconclusive_
     assert "excluded tier" in out.detail, out
 
 
-def test_a_seed_that_collects_nothing_even_serial_is_a_named_engine_fault_not_a_refusal(tmp_path, monkeypatch):
-    _force_xdist(monkeypatch)
+def test_a_seed_that_collects_nothing_is_a_named_engine_fault_not_a_refusal(tmp_path):
     root, _ = _repo(tmp_path)
     seeds = ["t/test_empty_a.py", "t/test_empty_b.py"]
     head = _commit(root, {s: "def helper():\n    return 1\n" for s in seeds})

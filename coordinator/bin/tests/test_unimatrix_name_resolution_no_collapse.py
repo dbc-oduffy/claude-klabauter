@@ -58,3 +58,22 @@ def test_labelled_mirrors_and_exact_names_still_resolve_each_to_its_own_session(
     assert (r.resolve_sender(FAR_A), r.resolve_sender(FAR_B)) == ("ep-a", "ep-b")
     assert r.resolve_sender(FAR_A + ".machine-a") == "ep-a"
     assert r.resolve_sender(NEAR) == ""
+
+
+def test_bridge_and_relay_mirrors_of_one_session_resolve_despite_vendor_stamp(tmp_path):
+    # Mac-mini 2026-11-24: the bridge mirror stamps vendor "claude", the relay-pushed mirror of the same
+    # session carries none; the two rows must read as one owner, not "ambiguous: 2 live sessions".
+    sid = "217c73d7-2e34-4008-bb67-298d4f9c067a"
+    write_session(tmp_path, "a.json", NEAR + ".machine-a", "bridge-ep", sessionId=sid, vendor="claude",
+                  unimatrixFarName=NEAR, **MIRROR)
+    write_session(tmp_path, "b.json", NEAR + ".machine-a", "relay-ep", sessionId=sid,
+                  unimatrixMirrorName=NEAR, unimatrixMirror=True, unimatrixBox="machine-a")
+    assert make_router(tmp_path).resolve_sender(NEAR) == "bridge-ep"
+
+
+def test_two_sessions_on_one_name_refuse_and_name_both_candidates(tmp_path):
+    write_session(tmp_path, "a.json", NEAR, "ep-1", sessionId="s1")
+    write_session(tmp_path, "b.json", NEAR, "ep-2", sessionId="s2")
+    r = make_router(tmp_path)
+    assert r.resolve_sender(NEAR) == ""
+    assert "ep-1" in r.last_refusal and "ep-2" in r.last_refusal

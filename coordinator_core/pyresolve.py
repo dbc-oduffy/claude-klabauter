@@ -38,6 +38,7 @@ import ntpath
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core._claude_klabauter_root import (
@@ -301,6 +302,60 @@ def resolve_machine_python_bin(prefer_windowless: bool = True) -> Tuple[str, Lis
     if _is_windows():
         return _resolve_windows(prefer_windowless=prefer_windowless)
     return _resolve_non_windows()
+
+
+def pytest_python(root) -> str:
+    """The interpreter every engine pytest leg runs under: the repo's pinned test-runner python, else the
+    engine's own console interpreter, else the first discovered candidate that imports pytest; the engine's own
+    when none does. The one definition the clean-overlay gate and the review test leg share.
+    Trap: under the pythonw engine `sys.executable` is windowless, and a windowless pytest hands its own
+    children invalid std handles (WinError 6 on any test that spawns git), so the console sibling runs it."""
+    from coordinator_core.ops.dispatch_emit import interpreter_pin as pin_mod
+
+    pin = pin_mod.resolve_test_runner_python(root)
+    if pin.command and pin.defect is None:
+        return pin.command
+    own = _console_sibling(sys.executable) or sys.executable
+    # An unpinned repo skips the pin's pytest probe; the engine's own interpreter may lack pytest.
+    if pin_mod._imports_pytest(own):
+        return own
+    return next((c for c in pin_mod._fallback_candidates() if pin_mod._imports_pytest(c)), own)
+
+
+ENGINE_ROOT_ENV = "COORDINATOR_ENGINE_ROOT"
+
+
+def engine_root_unresolved_message() -> str:
+    """The named remedy for a launch that can resolve no engine root."""
+    return ("coordinator engine root unresolved: COORDINATOR_ENGINE_ROOT is unset or invalid and "
+            "repos.claude_klabauter is not registered. Fetch claude-klabauter, then: machine-local set repos.claude_klabauter <its checkout>")
+
+
+def engine_root(env=None) -> str:
+    """The engine checkout a child launch must import `coordinator_core` from, never an inherited guess: a
+    valid `COORDINATOR_ENGINE_ROOT` in `env` (default `os.environ`), else the checkout this running module lives
+    in (no spawn), else the machine-local `repos.claude_klabauter` entry (the published mirror; never a claude-klabauter tree). Raises `RuntimeError`
+    (`engine_root_unresolved_message`) when none holds a `coordinator_core` package."""
+    env = os.environ if env is None else env
+
+    def holds_engine(path: str) -> bool:
+        return bool(path) and os.path.isdir(os.path.join(path, "coordinator_core"))
+
+    for cand in ((env.get(ENGINE_ROOT_ENV) or "").strip(), str(Path(__file__).resolve().parent.parent)):
+        if holds_engine(cand):
+            return cand
+    registered = (_machine_local_get("repos.claude_klabauter") or "").strip()
+    if holds_engine(registered):
+        return registered
+    raise RuntimeError(engine_root_unresolved_message())
+
+
+def with_engine_root(env) -> dict:
+    """`env` as a dict with `COORDINATOR_ENGINE_ROOT` set to `engine_root(env)`: a foreign-repo launch whose
+    inherited variable is unset or empty still imports `coordinator_core`."""
+    out = dict(env)
+    out[ENGINE_ROOT_ENV] = engine_root(out)
+    return out
 
 
 def _prepend_path(bin_path: str) -> None:

@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.landing_retest import _retest_record, run_base_for
 
@@ -34,7 +34,20 @@ def _classify_dropped(
 ) -> tuple[list[str], dict[str, str]]:
     dropped = [d for d in (record.get("dropped") or []) if isinstance(d, str)]
     base = run_base_for(worktree_root, run_id, params) if dropped else None
-    if not base:
+    return _classify_at_base(worktree_root, base, dropped)
+
+
+def run_deleted_targets_since(worktree_root: Path, base: Optional[str], targets: Sequence[str]) -> list[str]:
+    """The ``targets`` (paths or ``path::node`` ids) whose file is present in commit ``base``'s tree, gone
+    from ``worktree_root`` and whose base blob sits at no other path: the files a run deleted. A renamed
+    file, an unreadable base or no ``base`` yields nothing, so an absent target stays absent (fail closed)."""
+    return _classify_at_base(worktree_root, base, [t for t in targets if isinstance(t, str)])[0]
+
+
+def _classify_at_base(
+    worktree_root: Path, base: Optional[str], dropped: Sequence[str]
+) -> tuple[list[str], dict[str, str]]:
+    if not base or not dropped:
         return [], {}
     from coordinator_core.git.git_state import read_tree_spine
     from coordinator_core.git.ref_cas_retry import _root_tree

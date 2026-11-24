@@ -345,7 +345,10 @@ def _check_sibling_resolution() -> Layer:
     except RuntimeError as exc:
         status = "broken"
         # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1)
-        findings.append(Finding("broken", f"engine root did not resolve: {exc}"))
+        from coordinator_core._settings_home import settings_home
+        repair = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "machine-local.py"
+        registry = Path(os.environ.get("MACHINE_LOCAL_REGISTRY_DIR") or settings_home() / "machine-local") / "registry.local.toml"
+        findings.append(Finding("broken", f'engine root did not resolve: {exc}; repair: "{sys.executable}" "{repair}" set repos.claude_klabauter "<stamped-engine-checkout>" (registry: {registry})'))
         claude_klabauter_root = None
     else:
         if not os.path.isdir(os.path.join(claude_klabauter_root, "coordinator_core")):
@@ -1289,6 +1292,68 @@ def _fix_box_identity(fix_report: List[str]) -> None:
     fix_report.append(f"--fix: minted box identity {box_id} in {home / 'state' / 'group-em' / 'box.json'}.")
 
 
+def _check_agy_runtime() -> Layer:
+    """Read-only Agy runtime check: hooks.json, strict-valid agy-plugin (version + skills), and MCP entry.
+
+    Quiet (OK with no findings) on boxes where Agy is neither installed nor enrolled.
+    """
+    name = "Agy runtime (hooks + plugin + MCP)"
+    from coordinator_core._settings_home import home_dir, settings_home
+
+    gemini_cfg = home_dir() / ".gemini" / "config"
+    hooks_path = gemini_cfg / "hooks.json"
+    mcp_path = gemini_cfg / "mcp_config.json"
+    plugin_tree = settings_home() / "unimatrix" / "agy-plugin"
+
+    enrolled = hooks_path.is_file() or plugin_tree.is_dir()
+    if not enrolled and shutil.which("agy") is None:
+        return Layer(name, "ok", [])
+    if not enrolled:
+        return Layer(name, "ok", [])
+
+    findings: List[Finding] = []
+    if not hooks_path.is_file():
+        findings.append(Finding("broken", f"agy hooks.json missing at {hooks_path}; run setup.py --host agy --enroll-runtime."))
+    else:
+        try:
+            hooks_doc = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            findings.append(Finding("broken", f"agy hooks.json unreadable/unparseable ({exc})."))
+        else:
+            entry = hooks_doc.get("unimatrix-agy-leg") if isinstance(hooks_doc, dict) else None
+            if not isinstance(entry, dict) or not {"PreToolUse", "SessionStart", "PreInvocation"} <= set(entry):
+                findings.append(Finding("broken", f"agy hooks.json at {hooks_path} lacks unimatrix-agy-leg hook events."))
+
+    pjson = plugin_tree / "plugin.json"
+    if not pjson.is_file():
+        findings.append(Finding("broken", f"agy-plugin missing plugin.json at {pjson}; re-run --host agy --enroll-runtime."))
+    else:
+        try:
+            manifest = json.loads(pjson.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            findings.append(Finding("broken", f"agy-plugin plugin.json unreadable/unparseable ({exc})."))
+        else:
+            if not isinstance(manifest, dict) or not manifest.get("version"):
+                findings.append(Finding("broken", f"agy-plugin plugin.json at {pjson} has no version (fails `agy plugin validate --strict`)."))
+            skills_dir = plugin_tree / "skills"
+            if not skills_dir.is_dir() or not any(skills_dir.iterdir()):
+                findings.append(Finding("broken", f"agy-plugin at {plugin_tree} has 0 skills (generated from wrong plugin root?)."))
+
+    if not mcp_path.is_file():
+        findings.append(Finding("broken", f"agy mcp_config.json missing at {mcp_path}; run setup.py --host agy --enroll-runtime."))
+    else:
+        try:
+            mcp_doc = json.loads(mcp_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            findings.append(Finding("broken", f"agy mcp_config.json unreadable/unparseable ({exc})."))
+        else:
+            servers = mcp_doc.get("mcpServers") if isinstance(mcp_doc, dict) else None
+            if not isinstance(servers, dict) or "project-rag" not in servers:
+                findings.append(Finding("broken", f"agy mcp_config.json at {mcp_path} lacks example-retrieval-repo entry."))
+
+    return Layer(name, "broken" if findings else "ok", findings)
+
+
 def run_doctor(
     fix: bool = False, kept_blobs_root: Optional[Path] = None
 ) -> tuple[DoctorReport, List[str]]:
@@ -1305,6 +1370,7 @@ def run_doctor(
     report.layers.append(_check_install_drift())
     report.layers.append(_check_spotlight_exclusion())
     report.layers.append(_check_box_identity())
+    report.layers.append(_check_agy_runtime())
     from coordinator_core.ops.doctor_release_age import _check_release_age
 
     report.layers.append(_check_release_age())

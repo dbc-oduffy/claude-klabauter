@@ -51,12 +51,12 @@ local-cli.md, AC15): `_all_emittable_directive_clis` monkeypatches
 `wsc._plugin_cli_reachable` to `True` unconditionally — the same
 `monkeypatch.setattr` shape this sweep already uses for
 `_lesson_capture_reachable`/`compute_session_shape_gate` — so the two
-plugin-local barewords (`baton-chain-closure`, `plan-reversibility-
-eligibility`) are always in the emitted set, on every box, regardless of
+plugin-local bareword (`baton-chain-closure`) is always in the emitted
+set, on every box, regardless of
 whether this box's own DoE ladder resolves. Without this axis,
 `test_every_manifest_entry_is_named_by_at_least_one_directive` would fail
 FOREVER on a box with no DoE clone (the fleet floor and the measured cloud
-container) the moment those two names joined `CONSUMES_MANIFEST` — a
+container) the moment that name joined `CONSUMES_MANIFEST` — a
 `cadence`-gate red weeks later, not a wave-window one. The prior revision
 of this plan's own risk record read the `coordinator-lesson-add`/
 `coordinator-queue-append` prose above as an existing machine-state
@@ -162,13 +162,6 @@ def _rich_decisions(*, governing_plan_slug: bool, review_present: bool, tmp_path
             }
         ],
         "plan_path": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",
-        # AC15's plugin-root sweep axis needs `build_plan_reversibility_
-        # eligibility_directive` to actually fire (gated on a resolved
-        # governing plan path, § Approach table) -- `directives_completion.
-        # _KEY_GOVERNING_PLAN_PATH`, a key this sweep did not previously
-        # supply (a genuine new conditional axis, per module docstring's
-        # Coverage caveat, not something `_plugin_cli_reachable` alone
-        # could paper over).
         "governing_plan_path": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",
         "orientation_cache_exists": True,
         "pinboard_note": "contract-test pinboard note",
@@ -267,9 +260,10 @@ def test_every_manifest_entry_is_named_with_the_plugin_ladder_unresolvable(
         lambda: None,
     )
     emitted = _all_emittable_directive_clis(monkeypatch, tmp_path)
-    for name in ("baton-chain-closure", "plan-reversibility-eligibility"):
-        assert name in wsc.CONSUMES_MANIFEST
-        assert name in emitted
+    assert "baton-chain-closure" in wsc.CONSUMES_MANIFEST
+    assert "baton-chain-closure" in emitted
+    assert "plan-reversibility-eligibility" not in wsc.CONSUMES_MANIFEST
+    assert "plan-reversibility-eligibility" not in emitted
 
 
 def test_dispatched_worker_only_exemption_set_stays_empty() -> None:

@@ -402,7 +402,121 @@ BIN_TEST = "coordinator/bin/tests/test_bin_tool.py"
 def test_the_pytest_child_has_no_shell_and_uses_the_running_interpreter(repo, tmp_path, monkeypatch):
     seen = _spawns(monkeypatch)
     _main(["--", PASS_ID], tmp_path / "o.json")
-    assert seen[0][0] == sys.executable and seen[0][1:3] == ["-m", "pytest"]
+    from coordinator_core import pyresolve
+
+    assert seen[0][0] == pyresolve.pytest_python(Path.cwd()) and seen[0][1:3] == ["-m", "pytest"]
+
+
+def test_a_pytest_less_engine_interpreter_still_runs_the_leg_under_a_pytest_importing_one(repo, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit import interpreter_pin as ip
+
+    real = sys.executable
+    fake = str(tmp_path / "no-pytest" / "python.exe")
+    monkeypatch.setattr(sys, "executable", fake)
+    monkeypatch.setattr(ip, "resolve_test_runner_python", lambda root: SimpleNamespace(command=None, defect=None))
+    monkeypatch.setattr(ip, "_imports_pytest", lambda cmd: cmd == real)
+    monkeypatch.setattr(ip, "_fallback_candidates", lambda: [fake, real])
+    _code, data = _main(["--", PASS_ID], tmp_path / "o.json")
+    assert (data["tests_run"], data["status"], data["status_after"]) == (1, "pass", "pass")
+    assert data["interpreter"] == real and "zero_run_cause" not in data
+
+
+@pytest.fixture
+def git_repo(tmp_path, monkeypatch):
+    """A committed repo (a passing HEAD test) whose mirror Temp is private to the test."""
+    import tempfile
+
+    (tmp_path / "systemp").mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    root = tmp_path / "grepo"
+    (root / "pkg").mkdir(parents=True)
+    (root / "tests").mkdir()
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "pkg" / "mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "tests" / "test_mod.py").write_text("from pkg.mod import VALUE\n\ndef test_value():\n    assert VALUE == 1\n", encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "base")
+    monkeypatch.chdir(root)
+    return root
+
+
+ENGINE_ROOT_PROBE = ("import os\n\ndef test_engine_root():\n"
+                     "    root = os.environ.get('COORDINATOR_ENGINE_ROOT', '')\n"
+                     "    assert root and os.path.isdir(os.path.join(root, 'coordinator_core'))\n")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("state", ["unset", "empty"])
+def test_a_foreign_repo_launch_with_no_engine_root_gets_the_engine_root_and_a_pytest_interpreter(
+        git_repo, tmp_path, monkeypatch, state):
+    from coordinator_core import pyresolve
+
+    (git_repo / "tests" / "test_probe.py").write_text(ENGINE_ROOT_PROBE, encoding="utf-8")
+    _git(git_repo, "add", "-A")
+    _git(git_repo, "commit", "-q", "-m", "probe")
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    if state == "empty":
+        monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "")
+    envs: list[dict] = []
+    real = subprocess.run
+
+    def spy(argv, *a, **kw):
+        envs.append(kw.get("env") or {})
+        return real(argv, *a, **kw)
+
+    monkeypatch.setattr(tlr.subprocess, "run", spy)
+    _code, data = _main(["--", "tests/test_probe.py"], tmp_path / "o.json")
+    assert (data["tests_run"], data["status"], data["status_after"]) == (1, "pass", "pass")
+    assert data["interpreter"] == pyresolve.pytest_python(git_repo)
+    assert any(e.get("COORDINATOR_ENGINE_ROOT") == pyresolve.engine_root({}) for e in envs)
+
+
+def test_engine_root_refuses_with_a_named_remedy_when_nothing_resolves(tmp_path, monkeypatch):
+    from coordinator_core import pyresolve
+
+    monkeypatch.setattr(pyresolve, "_machine_local_get", lambda key: None)
+    monkeypatch.setattr(pyresolve, "__file__", str(tmp_path / "pyresolve.py"))
+    with pytest.raises(RuntimeError, match="machine-local set repos.claude_klabauter"):
+        pyresolve.engine_root({"COORDINATOR_ENGINE_ROOT": ""})
+
+
+def test_engine_root_keeps_a_valid_inherited_value(tmp_path):
+    from coordinator_core import pyresolve
+
+    (tmp_path / "coordinator_core").mkdir()
+    assert pyresolve.engine_root({"COORDINATOR_ENGINE_ROOT": str(tmp_path)}) == str(tmp_path)
+
+
+UNTRACKED = "tests/test_untracked_new.py"
+
+
+@pytest.mark.spawns_process
+def test_an_untracked_target_the_run_wrote_is_run_not_missing_target(git_repo, tmp_path):
+    (git_repo / UNTRACKED).write_text("def test_new():\n    assert True\n", encoding="utf-8")
+    _code, data = _main(["--", UNTRACKED], tmp_path / "o.json")
+    assert "missing_targets" not in data and data.get("zero_run_cause") != ltt.ZERO_RUN_MISSING_TARGET
+    assert (data["tests_run"], data["status"], data["status_after"]) == (1, "pass", "pass")
+    assert UNTRACKED in data["own_tree"]["overlaid"]
+
+
+@pytest.mark.spawns_process
+def test_an_untracked_target_is_run_on_the_clone_leg_too(git_repo, tmp_path):
+    (git_repo / UNTRACKED).write_text("def test_new():\n    assert True\n", encoding="utf-8")
+    head = _git(git_repo, "rev-parse", "HEAD")
+    _code, data = _main(["--head-sha", head, "--touched", "pkg/mod.py", "--", UNTRACKED], tmp_path / "o.json")
+    assert "missing_targets" not in data and data.get("zero_run_cause") != ltt.ZERO_RUN_MISSING_TARGET
+    assert data["tests_run"] >= 1 and data["status_after"] == "pass"
+
+
+@pytest.mark.spawns_process
+def test_a_target_in_neither_head_nor_the_worktree_is_still_missing_target(git_repo, tmp_path):
+    _code, data = _main(["--", "tests/test_nowhere.py"], tmp_path / "o.json")
+    assert data["zero_run_cause"] == ltt.ZERO_RUN_MISSING_TARGET
+    assert data["missing_targets"] == ["tests/test_nowhere.py"]
 
 
 OVERFLOW = 32 * 1024
@@ -751,3 +865,14 @@ def test_an_own_tree_zero_run_never_names_a_dirty_root_file_as_the_foreign_depen
     assert "own_tree" in data and data["tests_run"] == 0
     assert data.get(ltt.ZERO_RUN_CAUSE_KEY) != ltt.ZERO_RUN_FOREIGN_DEPENDENCY
     assert "_missing_import" not in data
+
+
+def test_engine_root_never_reads_the_claude_klabauter_registry_key(tmp_path, monkeypatch):
+    from coordinator_core import pyresolve
+
+    asked = []
+    monkeypatch.setattr(pyresolve, "_machine_local_get", lambda key: asked.append(key))
+    monkeypatch.setattr(pyresolve, "__file__", str(tmp_path / "pyresolve.py"))
+    with pytest.raises(RuntimeError):
+        pyresolve.engine_root({"COORDINATOR_ENGINE_ROOT": ""})
+    assert asked == ["repos.claude_klabauter"]

@@ -221,7 +221,6 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator/bin/percolate-preflight-scratch-publish.py:83` | PROSE-ONLY | `machine-local repos.claude_klabauter -> raise) and returns <claude_klabauter_root>/coordinator.` |
 | `coordinator/bin/percolate-preflight-scratch-publish.py:128` | - | `f"checkout root ({exc}). Set repos.claude_klabauter in the machine-local registry, "` |
 | `coordinator/bin/percolate-round.py:686` | PROSE-ONLY | `# claude-klabauter against a dispatch root of claude-klabauter).` |
-| `coordinator/bin/plan-reversibility-eligibility.py:49` | PROSE-ONLY | `touching that schema at all trips `claude-klabauter`'s byte-for-byte `check_schema_drift(ref="HEAD")`` |
 | `coordinator/bin/pre_commit_corpus_artifact_guard.py:24` | PROSE-ONLY | `fleet's standing ruling that structural bash is a defect (claude-klabauter CLAUDE.md §` |
 | `coordinator/bin/probe-onboarding-currency.py:20` | PROSE-ONLY | `coordinator-content-repo into claude-klabauter while coordinator-schema-version stayed behind` |
 | `coordinator/bin/publish.py:5271` | - | `return "_engine_forward" in text and "Edit in claude-klabauter" in text` |

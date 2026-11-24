@@ -491,7 +491,7 @@ static int parse_result_object(cursor_t *c, result_fields_t *rf) {
 }
 
 
-static int parse_error_object(cursor_t *c, long *code_out, int *have_code_out) {
+static int parse_error_object(cursor_t *c, long *code_out, int *have_code_out, buf_t *msg_out) {
     skip_ws(c);
     if (c->p >= c->end || *c->p != '{') return 0;
     c->p++;
@@ -511,6 +511,11 @@ static int parse_error_object(cursor_t *c, long *code_out, int *have_code_out) {
             free(key.data);
             if (!parse_json_int(c, code_out)) return 0;
             *have_code_out = 1;
+        } else if (msg_out && key.len == 7 && memcmp(key.data, "message", 7) == 0 &&
+                   c->p < c->end && *c->p == '"') {
+            free(key.data);
+            msg_out->len = 0;
+            if (!parse_json_string(c, msg_out)) return 0;
         } else {
             free(key.data);
             if (!skip_json_value(c)) return 0;
@@ -521,6 +526,13 @@ static int parse_error_object(cursor_t *c, long *code_out, int *have_code_out) {
 int parse_response_envelope(
     const char *json, size_t len, result_fields_t *rf,
     int *have_error_out, long *error_code_out
+) {
+    return parse_response_envelope_msg(json, len, rf, have_error_out, error_code_out, NULL);
+}
+
+int parse_response_envelope_msg(
+    const char *json, size_t len, result_fields_t *rf,
+    int *have_error_out, long *error_code_out, buf_t *error_message_out
 ) {
     memset(rf, 0, sizeof(*rf));
     *have_error_out = 0;
@@ -549,7 +561,7 @@ int parse_response_envelope(
         if (key.len == 5 && memcmp(key.data, "error", 5) == 0) {
             free(key.data);
             
-            parse_error_object(&c, error_code_out, have_error_out);
+            parse_error_object(&c, error_code_out, have_error_out, error_message_out);
             return 0;
         }
         if (key.len == 6 && memcmp(key.data, "result", 6) == 0) {
@@ -822,6 +834,27 @@ int door_invocation_is_replay_safe(
     return 0;
 }
 
+/* Hook ops whose cold re-verdict may follow a delivered-but-unanswered call.
+ * The re-verdict of a listed op runs in the guard chain's verdict-only mode
+ * (COORDINATOR_GUARD_VERDICT_ONLY=1, dispatch.py `evaluate_payload_json`), so
+ * a cold re-run appends no claims, chain-arrival or fire-counter rows: the
+ * DR-402 irreversible-harm membership claim at this site. Keep this name and
+ * spelling exact; the parity test parses it textually. */
+static const char *const door_hook_reverdict_cold_ops[] = {
+    "hooks.preuse_bash_dispatch",
+};
+
+#define DOOR_HOOK_REVERDICT_COLD_OPS_COUNT \
+    (sizeof(door_hook_reverdict_cold_ops) / sizeof(door_hook_reverdict_cold_ops[0]))
+
+int door_hook_op_reverdicts_cold(const char *op) {
+    if (op == NULL) return 0;
+    for (size_t i = 0; i < DOOR_HOOK_REVERDICT_COLD_OPS_COUNT; i++) {
+        if (strcmp(op, door_hook_reverdict_cold_ops[i]) == 0) return 1;
+    }
+    return 0;
+}
+
 int door_hook_event_name(const char *json, size_t len, buf_t *out) {
     return door_json_top_string(json, len, "hook_event_name", out);
 }
@@ -967,23 +1000,34 @@ int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *
 }
 
 int build_hook_engine_failure_allow_envelope(buf_t *out, const char *detail, const char *event_name) {
-    char text[384];
-    snprintf(text, sizeof text,
-             "coordinator: engine failed (%.200s); guard not evaluated, command allowed.",
-             (detail && *detail) ? detail : "no detail");
-    int ok = 1;
+    buf_t text;
+    if (!buf_init(&text, 512)) return 0;
+    int ok = buf_append_cstr(&text, "coordinator: engine failed (");
+    ok &= buf_append_cstr(&text, (detail && *detail) ? detail : "no detail");
+    ok &= buf_append_cstr(&text, "); guard not evaluated, command allowed.");
     ok &= buf_append_cstr(out, "{\"systemMessage\":\"");
-    ok &= buf_append_json_escaped(out, text, strlen(text));
+    ok &= buf_append_json_escaped(out, text.data, text.len);
     ok &= buf_append_cstr(out, "\",\"suppressOutput\":false");
     if (event_name && *event_name && strcmp(event_name, "SessionEnd") != 0) {
         ok &= buf_append_cstr(out, ",\"hookSpecificOutput\":{\"hookEventName\":\"");
         ok &= buf_append_json_escaped(out, event_name, strlen(event_name));
         ok &= buf_append_cstr(out, "\",\"additionalContext\":\"");
-        ok &= buf_append_json_escaped(out, text, strlen(text));
+        ok &= buf_append_json_escaped(out, text.data, text.len);
         ok &= buf_append_cstr(out, "\"}");
     }
     ok &= buf_append_cstr(out, "}\n");
+    free(text.data);
     return ok;
+}
+
+void door_format_server_error_detail(char *dst, size_t cap, long code, const buf_t *message) {
+    size_t n = message ? message->len : 0;
+    if (n > DOOR_SERVER_ERROR_MESSAGE_MAX) n = DOOR_SERVER_ERROR_MESSAGE_MAX;
+    if (n == 0) {
+        snprintf(dst, cap, "server error %ld", code);
+        return;
+    }
+    snprintf(dst, cap, "server error %ld: %.*s", code, (int)n, message->data);
 }
 
 /* Repo root for a spool write: the nearest ancestor of the payload's `cwd`

@@ -3,15 +3,16 @@ coordinator_core.ops.plan_signoff — JSON-RPC "plan.signoff".
 
 Purpose: the sanctioned writer of who signed off a plan's spine rows (`pm_approved` +
 `signoff`) or a `grouping_approvals.<g>` block, PM-verified or delegated to the APM, or (a
-grouping only, DR-399) given by a G-EM or Uhura.
+grouping only, DR-399) given by Uhura. A G-EM stamp is no authority: source g-em is refused,
+and g-em records already on disk read as historic.
 
 Wire params:
     plan_path (str, required)  — plan path, repo-relative or absolute, under docs/plans/.
     target (dict, required)    — {"rows": [ids]} or {"grouping": name}.
-    source (str, required)     — "pm" | "apm" | "g-em" | "uhura" (the last two: grouping only).
+    source (str, required)     — "pm" | "apm" | "uhura" (uhura: grouping only).
     pm_quote (str)             — source pm: the PM's verbatim words.
     apm_ruling, ruling_ref     — source apm: the ruling text and where it is recorded.
-    approver, ruling, ruling_ref — source g-em or uhura: the session name, the ruling text and
+    approver, ruling, ruling_ref — source uhura: the session name, the ruling text and
                                  where it is recorded.
     digest (str, optional)     — grouping only: must equal a fresh recompute.
     cut_set (dict, optional)   — grouping only: {"rows": [ids], "disposition": d}; signs the
@@ -27,7 +28,7 @@ Negative-spec:
   - A pm sign-off over an existing delegated one writes a countersign (the delegated record
     moves into `history`).
   - A re-sign of an approved grouping needs a source of the same or higher class
-    (pm > apm > g-em = uhura) AND a cut_set that strictly widens the approved set; the prior
+    (pm > apm > uhura) AND a cut_set that strictly widens the approved set; the prior
     record moves into `history`. A lower class, a non-widening re-sign, or a prior cut still
     unresolved on disk is refused. Row sign-offs are never re-signed.
   - A delegated ruling naming an irreversible or external act is refused (stays the PM's).
@@ -79,8 +80,9 @@ from coordinator_core.ops.signoff_provenance import (
 )
 
 #: The grouping block's `approver` per signoff source; schema_validate matches it case-blind.
-_BLOCK_APPROVER = {SOURCE_PM: "PM", SOURCE_APM: "APM", SOURCE_GEM: "G-EM", SOURCE_UHURA: "Uhura"}
-_DELEGATE_WORDS = {SOURCE_APM: "apm_ruling", SOURCE_GEM: "ruling", SOURCE_UHURA: "ruling"}
+_BLOCK_APPROVER = {SOURCE_PM: "PM", SOURCE_APM: "APM", SOURCE_UHURA: "Uhura"}
+_DELEGATE_WORDS = {SOURCE_APM: "apm_ruling", SOURCE_UHURA: "ruling"}
+#: Names every source a prior record may carry, the historic g-em included.
 _NAMES = {SOURCE_PM: "the PM", SOURCE_APM: "the APM", SOURCE_GEM: "a G-EM", SOURCE_UHURA: "Uhura"}
 
 _PLAN_SCHEMA = Path(__file__).resolve().parent.parent / "frontmatter" / "schemas" / "plan.schema.json"
@@ -251,7 +253,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not isinstance(raw_plan, str) or not raw_plan.strip():
         raise ValueError("plan_path must be a non-empty string")
     if source not in _BLOCK_APPROVER:
-        raise ValueError("source must be 'pm', 'apm', 'g-em' or 'uhura'")
+        raise ValueError("source must be 'pm', 'apm' or 'uhura'; g-em is historic-read only")
     if not isinstance(target, dict) or sum(k in target for k in ("rows", "grouping")) != 1:
         raise ValueError("target must be exactly one of {rows: [ids]} or {grouping: name}")
     ids = target.get("rows")
@@ -275,9 +277,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             raise ValueError("cut_set must be {rows: [distinct ids], disposition: str}")
     on = params.get("on") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    if source in (SOURCE_GEM, SOURCE_UHURA) and grouping is None:
+    if source == SOURCE_UHURA and grouping is None:
         raise ValueError(f"a {source} sign-off applies to a grouping only (DR-399)")
-    approver = params.get("approver") if source in (SOURCE_GEM, SOURCE_UHURA) else None
+    approver = params.get("approver") if source == SOURCE_UHURA else None
     if source in DELEGATED_SOURCES:
         key = _DELEGATE_WORDS[source]
         words, ref = params.get(key), params.get("ruling_ref")

@@ -5,11 +5,12 @@ the readers that normalise each, the PM countersign, and APM admissibility. No I
 The pinned shape (contract quoted to DoE):
 
     signoff:
-      source: pm | apm | g-em | uhura  # pm = the PM personally verified; the rest are delegated
+      source: pm | apm | uhura  # pm = the PM personally verified; the rest are delegated
+                                # (g-em: historic records read, never written)
       pm_quote: "<PM verbatim>" # source pm only
       apm_ruling: "<APM verbatim ruling>"   # source apm only
-      approver: "<session name>"            # source g-em or uhura only (DR-399, groupings only)
-      ruling: "<G-EM or Uhura verbatim ruling>"  # source g-em or uhura only
+      approver: "<session name>"            # source uhura (or a historic g-em record) only
+      ruling: "<Uhura verbatim ruling>"     # source uhura (or a historic g-em record) only
       ruling_ref: "<run id or repo-relative path where the ruling is recorded>"  # delegated only, required
       on: YYYY-MM-DD
       history:                  # any source: the records a superseding re-sign replaced
@@ -37,17 +38,22 @@ from coordinator_core.ops.sizing_acceptance import (
     acceptance_words,
 )
 
+#: Historic-read only: a G-EM stamp is no authority, so it is never written; records already on
+#: disk still read.
 SOURCE_GEM = "g-em"
 SOURCE_UHURA = "uhura"
-#: Every source that is not the PM: signed without human verification.
+#: Every source that is not the PM: signed without human verification (g-em: historic reads).
 DELEGATED_SOURCES = (SOURCE_APM, SOURCE_GEM, SOURCE_UHURA)
+#: The sources a new record may carry.
+WRITABLE_SOURCES = (SOURCE_PM, SOURCE_APM, SOURCE_UHURA)
 
-#: The APM outranks G-EM and Uhura because its signing surface is a strict superset (rows and
-#: groupings vs groupings only, DR-399); G-EM and Uhura are co-equal (DR-399).
-SOURCE_RANK = {SOURCE_PM: 3, SOURCE_APM: 2, SOURCE_GEM: 1, SOURCE_UHURA: 1}
+#: The APM outranks Uhura because its signing surface is a strict superset (rows and groupings
+#: vs groupings only, DR-399).
+SOURCE_RANK = {SOURCE_PM: 3, SOURCE_APM: 2, SOURCE_UHURA: 1}
 
 __all__ = [
-    "SOURCE_PM", "SOURCE_APM", "SOURCE_GEM", "SOURCE_UHURA", "DELEGATED_SOURCES", "SOURCE_RANK",
+    "SOURCE_PM", "SOURCE_APM", "SOURCE_GEM", "SOURCE_UHURA", "DELEGATED_SOURCES", "WRITABLE_SOURCES",
+    "SOURCE_RANK",
     "may_resign", "supersede", "Signoff", "build_signoff", "countersign", "apm_admissible",
     "read_row", "read_grouping", "read_sizing_accepted", "read_exec_stamp",
 ]
@@ -65,7 +71,7 @@ SURFACE_EXEC = "exec-auth"
 class Signoff:
     """`source` is pm, a delegated source, or None when the surface is approved but
     `unrecorded`. `history` holds the records any superseding re-sign replaced, on any source. `approver` is the
-    G-EM or Uhura session name."""
+    Uhura (or historic G-EM) session name."""
 
     source: str | None
     words: str | None
@@ -95,10 +101,10 @@ def _clean(name: str, value: Any) -> str:
 def build_signoff(source: str, words: str, ruling_ref: str | None, on: str,
                   approver: str | None = None) -> dict:
     """The pinned record. Refuses an unknown source, a delegated record without `ruling_ref`,
-    a g-em or uhura record without `approver`, an absolute `ruling_ref`, and a newline in any
-    value."""
-    if source not in (SOURCE_PM, *DELEGATED_SOURCES):
-        raise ValueError(f"source must be one of pm, apm, g-em, uhura, got {source!r}")
+    an uhura record without `approver`, an absolute `ruling_ref`, and a newline in any value.
+    A g-em record is refused: historic records read, none are written."""
+    if source not in WRITABLE_SOURCES:
+        raise ValueError(f"source must be one of pm, apm, uhura (g-em is historic-read only), got {source!r}")
     words = _clean("words", words)
     on = _clean("on", on)
     if ruling_ref is not None:
@@ -109,9 +115,9 @@ def build_signoff(source: str, words: str, ruling_ref: str | None, on: str,
         if ruling_ref is None:
             raise ValueError("an apm signoff requires ruling_ref")
         return {"source": SOURCE_APM, "apm_ruling": words, "ruling_ref": ruling_ref, "on": on}
-    if source in (SOURCE_GEM, SOURCE_UHURA):
+    if source == SOURCE_UHURA:
         if ruling_ref is None:
-            raise ValueError(f"a {source} signoff requires ruling_ref")
+            raise ValueError("an uhura signoff requires ruling_ref")
         return {"source": source, "approver": _clean("approver", approver), "ruling": words,
                 "ruling_ref": ruling_ref, "on": on}
     record: dict = {"source": SOURCE_PM, "pm_quote": words, "on": on}
@@ -122,7 +128,10 @@ def build_signoff(source: str, words: str, ruling_ref: str | None, on: str,
 
 def may_resign(prior_source: Any, new_source: Any) -> bool:
     """True when a `new_source` signer may replace a `prior_source` approval: rank(new) >=
-    rank(prior). An unknown source on either side is False."""
+    rank(prior). An unknown source on either side is False. A historic g-em prior carries no
+    authority: any writable signer may replace it."""
+    if prior_source == SOURCE_GEM:
+        return new_source in SOURCE_RANK
     prior_rank = SOURCE_RANK.get(prior_source)
     new_rank = SOURCE_RANK.get(new_source)
     return prior_rank is not None and new_rank is not None and new_rank >= prior_rank
@@ -131,7 +140,7 @@ def may_resign(prior_source: Any, new_source: Any) -> bool:
 def supersede(prior: dict, record: dict) -> dict:
     """A copy of `record` whose `history` is the prior's history plus the prior itself (minus
     its own `history`), so history stays flat. `prior` is not mutated."""
-    if not isinstance(prior, dict) or prior.get("source") not in SOURCE_RANK:
+    if not isinstance(prior, dict) or prior.get("source") not in (*SOURCE_RANK, SOURCE_GEM):
         raise ValueError("supersede needs a prior signoff record with a known source")
     out = dict(record)
     out["history"] = [*(prior.get("history") or []), {k: v for k, v in prior.items() if k != "history"}]

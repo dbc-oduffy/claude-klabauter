@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "HEAD_NAMESPACE",
+    "HALT_READ_DEADLINE_SECS",
+    "bounded_reads",
+    "bounded_path_read",
     "call_io_scope",
     "scope_open",
     "read_bytes",
@@ -67,11 +70,49 @@ def scope_open() -> bool:
     return _SCOPE.get() is not None
 
 
-def _read(path: str, bounded: bool = False) -> Optional[bytes]:
-    if bounded:  # lazy: bounded_io pulls threading, which the cold-import ceiling excludes
-        from coordinator_core.bounded_io import read_bytes_bounded
+#: Per-read deadline inside ``bounded_reads()``. Answers: how long may one halt-commit file read
+#: stall before the op parks retry-safe instead of holding the 10s ``LAND_BUDGET_SECS``? A halt
+#: path makes many reads in sequence, so each gets the 500ms brightline's half (the
+#: ``bounded_io.READ_DEADLINE_SECS`` value), never a share of the land budget.
+HALT_READ_DEADLINE_SECS = 0.25
 
-        return read_bytes_bounded(path)
+#: Deadline seconds while a ``bounded_reads()`` block is open, else ``None``.
+_BOUNDED_DEADLINE: "contextvars.ContextVar[Optional[float]]" = contextvars.ContextVar(
+    "_call_io_scope_bounded_deadline", default=None
+)
+
+
+class bounded_reads:
+    """Within this block every ``read_bytes`` is bounded and raises ``IoIndeterminate`` on a stall.
+
+    The raise is never cached (a later read of the path retries). Absent files still read as
+    ``None``. Orthogonal to ``call_io_scope``: it bounds reads with or without a cache scope open.
+    """
+
+    __slots__ = ("_deadline", "_token")
+
+    def __init__(self, deadline_secs: float = HALT_READ_DEADLINE_SECS) -> None:
+        self._deadline = deadline_secs
+
+    def __enter__(self) -> None:
+        self._token = _BOUNDED_DEADLINE.set(self._deadline)
+
+    def __exit__(self, *exc_info: object) -> None:
+        _BOUNDED_DEADLINE.reset(self._token)
+
+
+def bounded_deadline() -> Optional[float]:
+    """The deadline seconds of the open ``bounded_reads()`` block, else ``None``."""
+    return _BOUNDED_DEADLINE.get()
+
+
+def _read(path: str, bounded: bool = False) -> Optional[bytes]:
+    deadline = _BOUNDED_DEADLINE.get()
+    if bounded or deadline is not None:
+        # lazy: bounded_io pulls threading, which the cold-import ceiling excludes
+        from coordinator_core.bounded_io import READ_DEADLINE_SECS, read_bytes_bounded
+
+        return read_bytes_bounded(path, deadline=READ_DEADLINE_SECS if deadline is None else deadline)
     try:
         with open(path, "rb") as fh:
             return fh.read()
@@ -79,13 +120,29 @@ def _read(path: str, bounded: bool = False) -> Optional[bytes]:
         return None
 
 
+def bounded_path_read(path, *, deadline_secs: Optional[float] = None) -> Optional[bytes]:
+    """Uncached bounded bytes of ``path``, or ``None`` when absent; never reads unbounded.
+
+    For callers that read via ``Path.read_bytes``/``stat`` today. Uses the open
+    ``bounded_reads`` deadline, else ``deadline_secs``, else ``HALT_READ_DEADLINE_SECS``.
+    Raises ``IoIndeterminate`` on a stall.
+    """
+    from coordinator_core.bounded_io import read_bytes_bounded
+
+    deadline = deadline_secs if deadline_secs is not None else _BOUNDED_DEADLINE.get()
+    return read_bytes_bounded(
+        os.fspath(path), deadline=HALT_READ_DEADLINE_SECS if deadline is None else deadline
+    )
+
+
 def read_bytes(path, *, bounded: bool = False) -> Optional[bytes]:
     """Bytes of ``path``, or ``None`` when absent.
 
     Inside a scope the first read per path is cached (absence included); any other
     ``OSError`` propagates and is never cached. Outside a scope every call reads.
-    ``bounded=True`` reads through ``bounded_io.read_bytes_bounded`` (a worker thread per read:
-    for hot marker files only); its ``IoIndeterminate`` propagates and is never cached.
+    ``bounded=True`` (or an open ``bounded_reads()``) reads through
+    ``bounded_io.read_bytes_bounded`` (a worker thread per read: for hot marker files only);
+    its ``IoIndeterminate`` propagates and is never cached.
     """
     key = os.fspath(path)
     scope = _SCOPE.get()

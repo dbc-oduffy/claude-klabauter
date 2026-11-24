@@ -157,3 +157,34 @@ def test_gpt_62_sol_prices_cached_input_at_list_and_has_provenance(pt):
 
 def test_sonnet_prices_at_list(pt):
     assert pt.estimate_usd("claude-sonnet-5-5", {"input_tokens": 1_000_000, "output_tokens": 1_000_000}) == 12.0
+
+
+@pytest.mark.parametrize('tier,mult', [(None, 1), ('fast', 2), ('ultrafast', 3)])
+@pytest.mark.parametrize('prompt', [272000, 272001])
+def test_astra_current_rates_and_complete_request_threshold(pt, tier, mult, prompt):
+    usage = {'input_tokens': prompt - 100000, 'cache_read_input_tokens': 100000,
+             'output_tokens': 1000}
+    inp, out, cache = (8, 40, .4) if prompt == 272000 else (16, 60, .8)
+    assert pt.estimate_usd('gpt-6.2-astra', usage, tier) == pytest.approx(
+        ((prompt - 100000) * inp + 100000 * cache + 1000 * out) * mult / 1e6)
+    assert pt.estimate_usd('gpt-6.2-astra', usage, 'unknown') is None
+    assert pt.estimate_usd('gpt-6.2-astra-mini', usage) is None
+    assert _json_table()['models']['gpt-6.2-astra']['ultrafast_multiplier'] == 3
+
+
+def test_gemini_4_family_prices_efforts_and_provenance(pt):
+    u = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert pt.estimate_usd("gemini-4-carbon", u) == pytest.approx(24.0)
+    assert pt.estimate_usd("gemini-4-carbon", {"cache_read_input_tokens": 1_000_000}) == pytest.approx(0.2)
+    assert pt.estimate_usd("gemini-4-neon", u) == pytest.approx(18.0)
+    assert pt.estimate_usd("gemini-4-neon", {"cache_read_input_tokens": 1_000_000}) == pytest.approx(0.15)
+    assert pt.estimate_usd("gemini-4-hydrogen", u) == pytest.approx(9.0)
+    assert pt.estimate_usd("gemini-4-hydrogen", {"cache_read_input_tokens": 1_000_000}) == pytest.approx(0.15)
+    for raw, fam in (
+        ("Gemini 4 Carbon (High)", "gemini-4-carbon"),
+        ("gemini-4-neon-xhigh", "gemini-4-neon"),
+        ("gemini-4-hydrogen-max", "gemini-4-hydrogen"),
+    ):
+        assert pt.model_family(raw) == fam
+    for key in ("gemini-4-carbon", "gemini-4-neon", "gemini-4-hydrogen"):
+        assert pt.RATE_PROVENANCE[key]["verified_at"] == "2026-11-23"

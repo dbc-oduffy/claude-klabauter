@@ -334,7 +334,7 @@ def test_a_server_minus_32004_envelope_reaches_the_caller_verbatim(tmp_path: Pat
 
 
 @WINDOWS_ONLY
-def test_a_server_error_other_than_minus_32004_still_gets_the_door_generic_text(tmp_path: Path) -> None:
+def test_a_server_error_other_than_minus_32004_forwards_the_server_message(tmp_path: Path) -> None:
     root = make_stub_engine_root(tmp_path)
     door = _install_door_as(root, _UNDECLARED_BASENAME)
     reply = b'{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"x"}}\n'
@@ -345,7 +345,8 @@ def test_a_server_error_other_than_minus_32004_still_gets_the_door_generic_text(
     finally:
         server.close()
 
-    assert b"does not prove the op was never dispatched" in proc.stdout
+    assert b"server error -32603: x" in proc.stdout
+    assert b"does not prove the op was never dispatched" not in proc.stdout
 
 
 def test_the_posix_door_passes_a_server_minus_32004_through():

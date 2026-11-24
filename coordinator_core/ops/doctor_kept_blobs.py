@@ -230,8 +230,8 @@ def recover(
     transcript's Write/Edit/MultiEdit calls on the path from a historical base. A replayed blob is
     classified against HEAD; a blob no replay reproduces is lost and no replayed bytes are written.
 
-    Bulk remediation verb under the DR-344 bulk-transfer carve-out, granted by G-EM ruling (a)
-    (group-em-44, PM-delegated, 2026-10-25): the all-transcript scan is not held to the 500ms bar.
+    Bulk remediation verb under the DR-344 bulk-transfer carve-out, PM-delegated carve-out
+    (group-em-44, 2026-10-25): the all-transcript scan is not held to the 500ms bar.
     Run it once per incident, explicitly; it is never reachable from a hook,
     the sweep or the doctor default. Transcripts stream one at a time. `scan`, when given, receives
     {roots, transcripts, window} of what was scanned.
@@ -304,8 +304,8 @@ def recover(
 def _recover_op(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Handler body for `doctor.recover_kept_blobs`: params `repo_root` (else the envelope's), `base_sha`.
 
-    Bulk remediation under the DR-344 bulk-transfer carve-out, granted by G-EM ruling (a)
-    (group-em-44, PM-delegated, 2026-10-25); the 500ms bar does not govern it;
+    Bulk remediation under the DR-344 bulk-transfer carve-out, PM-delegated carve-out
+    (group-em-44, 2026-10-25); the 500ms bar does not govern it;
     explicit invocation only. The result's `scanned` = {roots, transcripts, window}.
     """
     raw = params.get("repo_root") if isinstance(params, dict) else None

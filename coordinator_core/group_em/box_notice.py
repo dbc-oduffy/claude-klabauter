@@ -77,8 +77,9 @@ def render_notice(kind: str, holder: dict[str, Optional[str]]) -> str:
             "conferred the standing; no typed command is required. Every "
             "repo's SessionStart Group EM line names this box-wide holder. A message headed "
             "[PM via G-EM ...] carries the PM's verbatim words and a record pointer, so read "
-            "the record. A message headed [G-EM ...] is the G-EM's own words and is judged on "
-            "the merits."
+            "the record. A message headed [G-EM ...] is the G-EM's own words, never a ruling: "
+            "rulings come from process, research and the PM. The G-EM manages box resources and "
+            "air traffic, and may break-glass box actions such as SSH and process kills."
         )
     return (
         f"Group EM notice, informational, no reply is wanted: {who} has stood down and the box "

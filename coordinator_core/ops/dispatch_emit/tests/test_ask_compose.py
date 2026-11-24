@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 pytestmark = pytest.mark.complete
 
+
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _RUN_ID = "run-1"
 # repo_root is the fake "REPO", so head_sha cannot supply the base the run-prep review needs.
@@ -316,6 +317,12 @@ def test_the_verdict_follows_the_verify_agents_own_scoped_test_run():
     assert "Run the scoped test targets: [" in script and "_manifest.test_targets" in script
     assert "_testLeg" not in script and "await _testLeg" not in script
     assert script.count("_testResult = _verify.test") == 1 and "_testResult = await agent(" not in script
+    assert script.count("_verify = await _runVerify();") == 2
+    flat = ask_compose._LEDGER_ITEMS_RULES.replace("\n", " ")
+    assert "set tests_ran_at to that run's finish time (ISO-8601 UTC)" in flat
+    assert "an earlier run, or an existing test not re-run, is not evidence and the item is 'not_met'" in flat
+    assert ask_compose.TESTS_RAN_AT_KEY == "tests_ran_at"
+    assert ask_compose._LEDGER_CHECK_SCHEMA["properties"]["items"]["items"]["properties"]["tests_ran_at"] == ask_compose._STR
 
 
 def test_a_merged_leg_that_returns_no_test_leaves_the_result_unread_and_no_target_stays_degraded():
@@ -532,49 +539,6 @@ def test_the_presized_gate_agent_stages_inside_the_one_gate_op(monkeypatch):
     assert "stage_act: true, gated: _gated" in gate
 
 
-@pytest.mark.spawns_process
-def test_presized_headless_gate_passes_host_evidence_to_review(monkeypatch):
-    import json
-    import shutil
-    import subprocess
-
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node not on PATH")
-    script = _presized(monkeypatch)
-    unwrap, evidence, gate, receipt, review = [
-        next(line for line in script.splitlines() if marker in line)
-        for marker in (
-            "const _gateUnwrap = ", "let _gateEvidence = ", "let _gate = ",
-            "if (!_gateEvidence && !_halted && _hostGateUsed)", "JSON.stringify(_gateEvidence)",
-        )
-    ]
-    program = """
-      const calls = [];
-      const engineOp = async (op, args) => {
-        calls.push([op, args]);
-        return op === 'gate.host_run' ? {arm: 's', halt: null} : {stage: 'gate', run_id: 'own'};
-      };
-      engineOp.directRun = true;
-      const _RUN_TOKEN = 'token', _sizingRel = 'sizing.yaml', _runId = 'own', _writes = [];
-      const _gated = [], _crossRepoApproved = false, _SESSION_ID = 'sid', REPO_ROOT = 'repo';
-      let _hostGateUsed = false;
-      const _halted = null;
-      const _reviewOuterAgent = (prompt) => prompt;
-    """
-    program += unwrap + "\n" + evidence + "\n" + gate + "\n" + receipt + "\n" + review + "\n"
-    program += "console.log(JSON.stringify([calls, _gate.arm, agent('review', {})])); }"
-    completed = subprocess.run(
-        [node, "--input-type=module", "-e", program], capture_output=True, text=True, check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    calls, arm, prompt = json.loads(completed.stdout)
-    assert [call[0] for call in calls] == ["gate.host_run", "gate.host_receipt"]
-    assert calls[0][1]["run_id"] == "own" and calls[0][1]["stage_act"] is True
-    assert calls[0][1]["require_live_token"] is True
-    assert arm == "s" and 'Host gate receipt: {"stage":"gate","run_id":"own"}' in prompt
-
-
 def test_the_gate_reply_schemas_carry_the_stage_reply(monkeypatch):
     assert "stage_reply" in ask_compose._GATE_STAGED_SCHEMA["properties"]
     assert "stage_reply" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
@@ -660,6 +624,17 @@ def test_the_m_plus_spine_review_carries_the_falsifier_clause_on_both_paths(monk
     for script in scripts:
         assert "author the baseline falsifier" in _agent_prompt(script, "plan-review")
         assert "_planFalsifier = _asPlanFalsifier(_spineReview?.falsifier);" in script
+
+
+def test_every_readiness_running_leg_reads_the_reply_whole(monkeypatch):
+    scripts = [_compose(**_JUDGE_KW), _presized(monkeypatch, arm="m_plus", **_JUDGE_KW)]
+    seen = 0
+    for script in scripts:
+        for label in ("plan-review", "plan-revise", "plan-patch"):
+            if f"label: '{label}'" in script:
+                seen += 1
+                assert ask_compose._WHOLE_REPLY_SENTENCE in _agent_prompt(script, label)
+    assert seen, "no composed script carries a readiness-running leg"
 
 
 def test_folded_scripts_validate_with_zero_errors(monkeypatch):
@@ -1179,24 +1154,87 @@ def test_family_attempt_normalizes_vendor_model_to_string_or_null_and_fallback_k
     assert "_fam.model" not in js
 
 
-def test_composed_ask_reverify_uses_the_dispatch_snapshot_session():
-    session_id = "d7b9dc1a-1455-43e8-922f-87e734b5634e"
-    script = _compose(session_id=session_id).replace(chr(92), "")
-    commands = re.findall(r"review\.reverify '({.*?})'([^\x60]*?)\x60", script)
-    assert len(commands) == 4
-    for payload, flags in commands:
-        assert f'"session_id":"{session_id}"' in payload
-        assert f'"base":"{_FAKE_BASE_SHA}"' in payload
-        assert f'"slice_prefix":"manifest-{_RUN_ID}-{_FAKE_BASE_SHA[:12]}-prep"' in payload
-        assert " --repo " in flags
+_BASE_REL = "docs/plans/2026-10-29-fixture.md"
+_BASE_SIZING = "state/sizings/2026-10-29-baseref.yaml"
 
 
-def test_verify_tests_routes_manifest_scope_to_native_host():
-    script = _compose()
-    assert "engineOp.directRun && !_lateIds.length && !_verifyLateIds.length" in script
-    assert "engineOp('verify.host_test_leg'" in script
-    assert "targets: _manifest.test_targets ?? []" in script
-    assert "coordinator_core.ops.test_leg_run" in script
+def _refire_world(tmp_path, *, marked):
+    """A repo whose base commit holds `needle` in a.py; the worktree (HEAD) already dropped it, as a refire's does."""
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+            check=True, capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout.strip()
+
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "a.py").write_text("needle\n", encoding="utf-8")
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    sha = git("rev-parse", "HEAD")
+    (tmp_path / "a.py").write_text("gone\n", encoding="utf-8")
+    (tmp_path / _BASE_REL).write_text(
+        "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-29\n"
+        f"sizing_object: {_BASE_SIZING}\n"
+        "anchor_premises:\n  - id: AP1\n    claim: a.py holds the needle\n    check:\n"
+        "      command: grep -c -F needle a.py\n      expect: '1'\n---\n\n# Fixture\n",
+        encoding="utf-8",
+    )
+    if marked:
+        run_dir = tmp_path / RECORD_DIR_ROOT / "ask-20261029T000000-abc123"
+        run_dir.mkdir(parents=True)
+        (run_dir / "base_ref.json").write_text(json.dumps({"base_ref": sha}), encoding="utf-8")
+        (run_dir / "run.json").write_text(json.dumps({"sizing_rel": _BASE_SIZING}), encoding="utf-8")
+    return sha
+
+
+@pytest.mark.spawns_process
+def test_preblitz_scan_reads_the_run_base_on_a_refire(tmp_path):
+    _refire_world(tmp_path, marked=True)
+    assert ask_compose.preblitz_anchor_lines(str(tmp_path), _BASE_REL) == []
+
+
+@pytest.mark.spawns_process
+def test_preblitz_scan_with_no_run_marker_reads_head_not_the_tree(tmp_path):
+    _refire_world(tmp_path, marked=False)
+    assert ask_compose.preblitz_anchor_lines(str(tmp_path), _BASE_REL) == []
+
+
+@pytest.mark.spawns_process
+def test_preblitz_scan_with_no_run_marker_does_not_count_uncommitted_dirt_as_landed(tmp_path):
+    _refire_world(tmp_path, marked=False)
+    (tmp_path / "a.py").write_text("other\n", encoding="utf-8")
+    import subprocess
+
+    commit = subprocess.run(
+        ["git", "-C", str(tmp_path), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "drop"],
+        capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert commit.returncode == 0
+    (tmp_path / "a.py").write_text("needle\n", encoding="utf-8")
+    assert ask_compose.preblitz_anchor_lines(str(tmp_path), _BASE_REL) == []
+    from coordinator_core.ops import _anchor_premise
+    from coordinator_core.ops.dispatch_emit.ask_contract import UNCOMMITTED_NOT_LANDED, premise_ref
+    from coordinator_core.ops.plan_readiness_verdict import _plan_inputs
+
+    text = (tmp_path / _BASE_REL).read_text(encoding="utf-8")
+    fm = _plan_inputs(text)[6]
+    anchors, _ = _anchor_premise.parse_anchors(fm, tmp_path)
+    verdicts = _anchor_premise.anchor_verdicts(anchors, [], [], text, tmp_path, premise_ref(tmp_path, fm.get("sizing_object")))
+    assert verdicts[0]["verdict"] == "UNRESOLVED" and UNCOMMITTED_NOT_LANDED in verdicts[0]["observed"]
+
+
+@pytest.mark.spawns_process
+def test_em_brief_block_reads_the_run_base_on_a_refire(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_stage import em_brief_block
+
+    sha = _refire_world(tmp_path, marked=True)
+    (tmp_path / "a.py").unlink()
+    sizing = {"em_analysis": {"em_brief": "the fix lives in a.py"}}
+    assert "CONTRADICTED" in em_brief_block(sizing, tmp_path)
+    assert "CONTRADICTED" not in em_brief_block(sizing, tmp_path, sha)
 
 
 def test_ledger_verdict_relay_carries_the_evidence_and_the_departure_reason():

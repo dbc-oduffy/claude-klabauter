@@ -25,8 +25,21 @@ def engine_module_command(module: str, repo_root: str, args: str = "", *, portab
     engine_root = Path(__file__).resolve().parents[3].as_posix()
     if shell is not None:
         if portable:
+            # Trap: an agent shell often inherits no COORDINATOR_ENGINE_ROOT and its cwd (a consumer repo)
+            # holds no coordinator_core, so with no fallback runpy dies ModuleNotFoundError and the leg
+            # zero-runs. The fallback reads machine-local repos.claude_klabauter by one `machine-local get`,
+            # spent only on that path. Never repos.claude_klabauter: the resolved root is the published mirror,
+            # never an unpublished claude-klabauter tree (DoE engine-root rule). No host path is baked into the text.
             bootstrap = (
-                "import os,runpy,sys;root=os.environ.get('COORDINATOR_ENGINE_ROOT');module=sys.argv.pop(1);"
+                "import os,runpy,sys,shutil,subprocess as s,importlib.util as u;"
+                "root=os.environ.get('COORDINATOR_ENGINE_ROOT');module=sys.argv.pop(1);"
+                "ml=not root and not u.find_spec('coordinator_core') and shutil.which('machine-local');"
+                "root=root or ml and next((v for v in [s.run([ml,'get','repos.claude_klabauter'],"
+                "capture_output=True,text=True).stdout.strip()] "
+                "if v and os.path.isdir(os.path.join(v,'coordinator_core'))),None);"
+                "root or u.find_spec('coordinator_core') or sys.exit('coordinator engine root unresolved for '+module+"
+                "': COORDINATOR_ENGINE_ROOT is unset and machine-local has no repos.claude_klabauter. "
+                "Fetch claude-klabauter, then: machine-local set repos.claude_klabauter <its checkout>');"
                 "path=os.path.join(root,*module.split('.'))+'.py' if root else None;"
                 "root and (os.path.isabs(root) and os.path.isfile(path) or "
                 "sys.exit('Invalid COORDINATOR_ENGINE_ROOT for '+module+': '+root));"

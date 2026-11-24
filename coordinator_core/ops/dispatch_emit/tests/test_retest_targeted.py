@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -55,10 +57,11 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _repo_template) -> Pat
     return root
 
 
-def _task_output(tmp_path: Path, baseline=None) -> Path:
+def _task_output(tmp_path: Path, baseline=None, **extra) -> Path:
     params = {
         "run_id": RUN_ID,
         "targeted_tests": {"status": "fail", "tests_failed": 1, "baseline": baseline},
+        **extra,
     }
     out = tmp_path / "task.output"
     out.write_text(json.dumps({"next_action": {"params": params}}), encoding="utf-8")
@@ -724,8 +727,8 @@ def test_poll_wait_blocks_until_the_verdict_then_returns_its_code(
 
     monkeypatch.setattr(retest_targeted.time, "sleep", fake_sleep)
     args = ["--from-task-output", str(_task_output(tmp_path)), "--repo-root", str(repo), "--poll", "--wait"]
-    assert retest_targeted.main(args) == 0
-    assert sleeps == [2.0, 2.0]
+    assert retest_targeted.main(args, wait_budget_secs=None) == 0
+    assert sleeps == [0.5, 0.5]
 
     path.write_text(json.dumps({"status": "running", "deadline": future}), encoding="utf-8")
     sleeps.clear()
@@ -734,12 +737,41 @@ def test_poll_wait_blocks_until_the_verdict_then_returns_its_code(
         path.write_text(json.dumps({"status": "running", "deadline": "2000-01-01T00:00:00+00:00"}), encoding="utf-8")
 
     monkeypatch.setattr(retest_targeted.time, "sleep", abandon)
-    assert retest_targeted.main(args) == 2
+    assert retest_targeted.main(args, wait_budget_secs=None) == 2
     assert "retest-abandoned" in capsys.readouterr().out
 
     path.write_text(json.dumps({"status": "fail"}), encoding="utf-8")
     monkeypatch.setattr(retest_targeted.time, "sleep", lambda s: pytest.fail("terminal verdict must not sleep"))
     assert retest_targeted.main(args) == 1
+
+
+def test_warm_poll_wait_issues_bounded_polls_and_returns_running(
+    repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    path = li.fresh_verdict_path(repo, RUN_ID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"status": "running", "deadline": future}), encoding="utf-8")
+    clock = [0.0]
+    sleeps: list[float] = []
+
+    def fake_sleep(secs: float) -> None:
+        sleeps.append(secs)
+        clock[0] += secs
+
+    monkeypatch.setattr(retest_targeted.time, "sleep", fake_sleep)
+    monkeypatch.setattr(retest_targeted.time, "monotonic", lambda: clock[0])
+    args = ["--from-task-output", str(_task_output(tmp_path)), "--repo-root", str(repo), "--poll", "--wait"]
+
+    assert retest_targeted.main(args) == 3
+    assert sleeps and max(sleeps) <= retest_targeted.WARM_WAIT_BUDGET_SECS
+    assert sum(sleeps) <= retest_targeted.WARM_WAIT_BUDGET_SECS
+
+    path.write_text(json.dumps({"status": "pass"}), encoding="utf-8")
+    sleeps.clear()
+    assert retest_targeted.main(args) == 0 and sleeps == []
 
 
 @pytest.mark.parametrize("cmd, expected", [
@@ -917,9 +949,10 @@ def test_aggregate_fail_then_crash_keeps_failed_ids_and_names_both(repo, tmp_pat
     assert "failing session(s)" in rec["reason"] and "rootx/test_rootx.py" in rec["reason"]
 
 
-def test_aggregate_no_tests_then_pass_is_pass(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [5, 0, 5])
-    assert rc == 0 and rec["status"] == "pass"
+def test_aggregate_no_tests_beside_a_pass_is_typed_test_infra_never_a_pass(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [5, 0, 5, 5, 0, 5] * 2)
+    assert rc == 2 and rec["status"] == "error" and rec["zero_run_cause"] == "test_infra_failure"
+    assert "2 of 3" in rec["reason"] and rec["retried"] is True
 
 
 def test_aggregate_all_no_tests_is_no_tests(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1477,13 +1510,51 @@ def test_drop_marker_filter_both_spellings_and_keeps_long_options():
     assert out == ["scripts/run.py", "-q", "--maxfail=1"]
 
 
-def test_owned_id_deselected_by_config_ran_zero_times_fails_as_unverified(repo, tmp_path):
+def test_owned_id_deselected_by_config_reruns_under_an_overriding_marker_and_passes(repo, tmp_path):
     _slow_repo(repo, addopts="addopts = -m \"not slow\"\n")
     _declare(repo, targeted_test_launcher="scripts/run.py -q")
     rc, record = _slow_verdict(repo, tmp_path)
-    assert rc == 1 and record["status"] == "fail"
-    assert record["failed_tests"] == ["test_slow.py::test_owned"]
-    assert "ran 0 times" in record["reason"]
+    assert rc == 0 and record["status"] == "pass"
+    assert "zero_run_cause" not in record
+    assert any(a.endswith(" -m ''") or " -m '' " in a for a in record["argv"])
+
+
+def test_plan_row_marker_overrides_the_rerun_expression(repo, tmp_path):
+    _slow_repo(repo, addopts="addopts = -m \"not slow\"\n")
+    _declare(repo, targeted_test_launcher="scripts/run.py -q")
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path, test_marker="slow")), "--tests", "test_slow.py::test_owned",
+         "--repo-root", str(repo), "--detached-child"],
+    )
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert rc == 0 and record["status"] == "pass"
+    assert any(" -m slow " in a for a in record["argv"])
+
+
+def test_rerun_marker_that_still_deselects_the_owned_id_fails_as_unverified(repo, tmp_path):
+    _slow_repo(repo, addopts="addopts = -m \"not slow\"\n")
+    _declare(repo, targeted_test_launcher="scripts/run.py -q")
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path, test_marker="not slow")), "--tests", "test_slow.py::test_owned",
+         "--repo-root", str(repo), "--detached-child"],
+    )
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert rc == 1 and record["status"] == "fail" and "ran 0 times" in record["reason"]
+
+
+def test_session_collecting_nothing_is_not_rerun(repo, tmp_path):
+    _slow_repo(repo)
+    _declare(repo, targeted_test_launcher="scripts/run.py -q")
+    log = tmp_path / "pass.log"
+    calls: list[list[str]] = []
+
+    def run(argv, cwd, *, log=None, **_kw) -> int:
+        calls.append(argv)
+        log.write_text("no tests ran in 0.01s\n", encoding="utf-8")
+        return 5
+
+    status, _reason, codes, _used = retest_targeted._run_pass(run, repo, ["test_slow.py::test_owned"], log, time.monotonic() + 60)
+    assert status == retest_targeted.NO_TESTS_STATUS and codes == [5] and len(calls) == 1
 
 
 def test_owned_id_that_ran_never_pays_the_collect_session(repo, tmp_path, monkeypatch):
@@ -1494,11 +1565,11 @@ def test_owned_id_that_ran_never_pays_the_collect_session(repo, tmp_path, monkey
     assert rc == 0 and record["status"] == "pass"
 
 
-def test_fast_test_cmd_arm_owned_id_deselected_by_config_fails_as_unverified(repo, tmp_path, monkeypatch):
+def test_fast_test_cmd_arm_owned_id_deselected_by_config_reruns_and_passes(repo, tmp_path, monkeypatch):
     _slow_repo(repo, addopts="addopts = -m \"not slow\"\n")
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "python3 -m pytest -q -m 'not slow'")
     rc, record = _slow_verdict(repo, tmp_path)
-    assert rc == 1 and record["status"] == "fail" and record["failed_tests"] == ["test_slow.py::test_owned"]
+    assert rc == 0 and record["status"] == "pass"
 
 
 def _failure_log(tmp_path, section: str, message: str = "") -> Path:
@@ -1545,23 +1616,373 @@ def test_peer_held_reds_looks_up_at_most_the_cap_and_keeps_a_held_path_within_it
     assert out == {"test_a.py::t0": [paths[0]]}
 
 
-def test_missing_plugin_options_retry_without_them_and_pass(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """pytest rejecting `--timeout`/`-n` for an absent plugin must not halt the landing: the session reruns without them."""
-    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q --timeout=300 -n 3 --dist=loadfile")
-    seen = []
+def test_all_setup_error_session_is_typed_test_infra_failure_with_first_error_and_argv(repo, tmp_path: Path) -> None:
+    def run(argv, cwd, *, log=None, **_kw) -> int:
+        retest_targeted._LAUNCHED_ARGV.append("pytest --basetemp /runs/x/bt test_a.py")
+        log.write_text(
+            "____ ERROR at setup of test_a ____\nE   PermissionError: [WinError 5] Access is denied\n"
+            "ERROR test_a.py::test_a - PermissionError: [WinError 5] Access is denied\n248 errors in 7.78s\n",
+            encoding="utf-8",
+        )
+        return 1
 
-    def run(argv, cwd, *, log, append: bool = False, **_kw) -> int:
-        seen.append(list(argv))
-        if any(a.startswith("--timeout") or a in ("-n", "--dist=loadfile") for a in argv):
-            with open(log, "a" if append else "w", encoding="utf-8") as fh:
-                fh.write("pytest: error: unrecognized arguments: --timeout=300 -n 3 --dist=loadfile\n")
-            return 4
-        return 0
-
-    rc = retest_targeted.main(
+    retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
         run=run,
     )
-    assert rc == 0, seen
-    assert li.fresh_targeted_verdict(repo, RUN_ID)["status"] == "pass"
-    assert "3" not in seen[-1] and "test_a.py" in seen[-1]
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert record["zero_run_cause"] == "test_infra_failure" and "WinError 5" in record["first_setup_error"]
+    assert record["reason"] and record["argv"] == ["pytest --basetemp /runs/x/bt test_a.py"] * 2
+    assert record["retried"] is True
+
+
+def _exit_with(code: int, text: str = ""):
+    def run(argv, cwd, *, log=None, **_kw) -> int:
+        log.write_text(text, encoding="utf-8")
+        return code
+
+    return run
+
+
+def _infra_record(repo, tmp_path: Path, run) -> dict:
+    retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=run,
+    )
+    return json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("code", [4, 120])
+def test_infra_exit_without_junit_is_typed_test_infra_failure_with_argv_and_cwd(repo, tmp_path: Path, code: int) -> None:
+    record = _infra_record(repo, tmp_path, _exit_with(code, "ERROR: file or directory not found: caae30\n"))
+    assert record["status"] == "error" and record["zero_run_cause"] == "test_infra_failure"
+    session = record["infra_session"]
+    assert session["rc"] == code and session["cwd"] == str(repo) and session["argv"].endswith("test_a.py")
+    assert str(repo) in record["reason"] and f"exited {code}" in record["reason"]
+
+
+@pytest.mark.parametrize("text, named", [
+    ("UnicodeEncodeError: 'charmap' codec can't encode character\n", "cp1252 encode failure"),
+    ("BrokenPipeError: [Errno 32] Broken pipe\n", "pipe closed early"),
+    ("", "stream cause unrecorded"),
+])
+def test_exit_120_reason_names_the_stream_cause(repo, tmp_path: Path, text: str, named: str) -> None:
+    record = _infra_record(repo, tmp_path, _exit_with(120, text))
+    assert named in record["reason"] and named in record["infra_session"]["detail"]
+
+
+def _counting(codes: list):
+    calls: list = []
+
+    def run(argv, cwd, *, log=None, **_kw) -> int:
+        calls.append(argv)
+        log.write_text("", encoding="utf-8")
+        return codes[min(len(calls), len(codes)) - 1]
+
+    return run, calls
+
+
+def test_a_zero_test_infra_pass_is_rerun_once_and_a_passing_rerun_stands(repo, tmp_path: Path) -> None:
+    run, calls = _counting([120, 0])
+    record = _infra_record(repo, tmp_path, run)
+    assert len(calls) == 2 and record["status"] == "pass" and "zero_run_cause" not in record
+    assert record["retried"] is True and record["retry_limit"] == retest_targeted.TEST_INFRA_RETRY_LIMIT
+    assert "exited 120" in record["retry_first_reason"]
+
+
+def test_a_second_zero_test_infra_outcome_is_recorded_not_retried_again(repo, tmp_path: Path) -> None:
+    run, calls = _counting([120])
+    record = _infra_record(repo, tmp_path, run)
+    assert len(calls) == 1 + retest_targeted.TEST_INFRA_RETRY_LIMIT == 2
+    assert record["status"] == "error" and record["zero_run_cause"] == "test_infra_failure" and record["retried"] is True
+    assert record["infra_session"]["rc"] == 120
+
+
+def test_exit4_usage_error_naming_no_setup_error_is_not_rerun(repo, tmp_path: Path) -> None:
+    run, calls = _counting([4])
+    record = _infra_record(repo, tmp_path, run)
+    assert len(calls) == 1 and "retried" not in record
+    assert record["status"] == "error" and record["zero_run_cause"] == "test_infra_failure"
+    assert record["infra_session"]["rc"] == 4
+
+
+def test_exit4_conftest_load_error_of_a_peers_file_is_rerun_once_and_a_clean_rerun_stands(repo, tmp_path: Path) -> None:
+    calls: list = []
+
+    def run(argv, cwd, *, log=None, **_kw) -> int:
+        calls.append(argv)
+        if len(calls) == 1:
+            log.write_text("ImportError while loading conftest 'tests/conftest.py'.\nE   NameError: name 'contextmanager' is not defined\n", encoding="utf-8")
+            return 4
+        log.write_text("", encoding="utf-8")
+        return 0
+
+    record = _infra_record(repo, tmp_path, run)
+    assert len(calls) == 2 and record["status"] == "pass" and record["retried"] is True
+    assert "tests/conftest.py" in record["retry_first_reason"]
+
+
+@pytest.mark.parametrize("code", [1, 126, 3])
+def test_a_pass_that_is_not_zero_test_infra_is_not_rerun(repo, tmp_path: Path, code: int) -> None:
+    run, calls = _counting([code])
+    record = _infra_record(repo, tmp_path, run)
+    assert len(calls) == 1 and "retried" not in record
+
+
+@pytest.mark.parametrize("code", [2, 126, 3])
+def test_other_nonzero_exits_are_not_typed_infra(repo, tmp_path: Path, code: int) -> None:
+    record = _infra_record(repo, tmp_path, _exit_with(code))
+    assert "zero_run_cause" not in record or record["zero_run_cause"] != "test_infra_failure"
+    assert "infra_session" not in record
+
+
+def test_exit4_missing_plugin_stays_the_provisioning_defect_untyped(repo, tmp_path: Path) -> None:
+    record = _infra_record(repo, tmp_path, _exit_with(4, "pytest: error: unrecognized arguments: --timeout=300\n"))
+    assert "provisioning defect" in record["reason"] and "infra_session" not in record
+
+
+def test_isolated_body_refuses_a_run_suffix_base_typed_infra_with_cwd(tmp_path: Path) -> None:
+    base_file = tmp_path / "scratch" / "warp" / "r1" / "run-base"
+    base_file.parent.mkdir(parents=True)
+    base_file.write_text("caae30\n", encoding="utf-8")
+    out = tmp_path / "r.json"
+    rc = retest_targeted._isolated_body(tmp_path, out, tmp_path / "l.log", "r1", {}, ["a.py"], [], "", None, None, None)
+    record = json.loads(out.read_text(encoding="utf-8"))
+    assert rc == 2 and record["status"] == "error" and record["zero_run_cause"] == "test_infra_failure"
+    assert "caae30" in record["reason"] and str(tmp_path) in record["reason"]
+    assert record["isolated_export"]["cwd"] == str(tmp_path)
+
+
+def test_an_ordinary_red_is_not_typed_infra(repo, tmp_path: Path) -> None:
+    def run(argv, cwd, *, log=None, **_kw) -> int:
+        log.write_text("FAILED test_a.py::test_a - assert 0\n1 failed in 0.1s\n", encoding="utf-8")
+        return 1
+
+    retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=run,
+    )
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert "zero_run_cause" not in record and "first_setup_error" not in record and record["argv"] == []
+
+
+def test_isolated_body_clears_process_global_session_state_on_direct_call(tmp_path: Path) -> None:
+    retest_targeted._LAUNCHED_ARGV.append("stale argv")
+    retest_targeted._INFRA_SESSIONS.append({"cwd": "stale", "argv": "x", "rc": 4, "detail": ""})
+    out = tmp_path / "r.json"
+    retest_targeted._isolated_body(tmp_path, out, tmp_path / "l.log", "r1", {}, ["a.py"], [], "", None, None, None)
+    assert "stale argv" not in retest_targeted._LAUNCHED_ARGV
+    assert not any(s["cwd"] == "stale" for s in retest_targeted._INFRA_SESSIONS)
+
+
+def _dead_pid() -> int:
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "pass"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    proc.wait()
+    return proc.pid
+
+
+def _running(repo: Path, log_text: str, pid=None) -> Path:
+    from coordinator_core.ops.dispatch_emit import landing_retest
+
+    path = landing_retest.fresh_verdict_path(repo, RUN_ID)
+    log = path.with_suffix(".log")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(log_text, encoding="utf-8")
+    record = {"run_id": RUN_ID, "status": "running", "tests": ["test_a.py"], "log": str(log),
+              "at": "2026-11-21T20:00:00+00:00", "deadline": "2999-01-01T00:00:00+00:00"}
+    if pid is not None:
+        record["pid"] = pid
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return path
+
+
+def _poll(repo: Path, tmp_path: Path, *extra: str) -> int:
+    return retest_targeted.main(
+        ["--poll", *extra, "--from-task-output", str(_task_output(tmp_path)), "--repo-root", str(repo)],
+        wait_budget_secs=2.0,
+    )
+
+
+def test_dead_pid_and_complete_log_finalises_a_pass(repo, tmp_path: Path) -> None:
+    path = _running(repo, "1 passed in 0.1s\n", pid=_dead_pid())
+    assert _poll(repo, tmp_path) == 0
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["status"] == "pass" and record["tests"] == ["test_a.py"] and "covered" in record
+
+
+def test_witness_shape_running_without_pid_and_complete_log_resumes_a_wait(repo, tmp_path: Path) -> None:
+    path = _running(repo, "FAILED test_a.py::test_a - boom\n1 failed in 0.1s\n")
+    assert _poll(repo, tmp_path, "--wait") == 1
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["status"] == "fail" and record["failed_tests"] == ["test_a.py::test_a"]
+
+
+def test_dead_pid_without_a_summary_is_an_error_not_running(repo, tmp_path: Path) -> None:
+    path = _running(repo, "collecting ...\n", pid=_dead_pid())
+    assert _poll(repo, tmp_path) == 2
+    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "error"
+
+
+def test_zero_items_is_a_typed_test_infra_error_never_a_pass(repo, tmp_path: Path) -> None:
+    path = _running(repo, "no tests ran in 0.01s\n", pid=_dead_pid())
+    assert _poll(repo, tmp_path) == 2
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["status"] == "error" and record["zero_run_cause"] == "test_infra_failure"
+
+
+def test_live_pid_with_a_complete_log_stays_running(repo, tmp_path: Path) -> None:
+    import os
+
+    path = _running(repo, "1 passed in 0.1s\n", pid=os.getpid())
+    assert _poll(repo, tmp_path) == 3
+    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "running"
+
+
+def test_child_stamps_its_pid_and_a_child_that_raises_seals_an_error(repo, tmp_path: Path) -> None:
+    import os
+
+    path = _running(repo, "")
+    seen = []
+
+    def run(argv, cwd, **_kw):
+        seen.append(json.loads(path.read_text(encoding="utf-8")).get("pid"))
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        retest_targeted.main(
+            ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+            run=run,
+        )
+    assert seen == [os.getpid()]
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["status"] == "error" and "boom" in record["reason"]
+
+
+_GATE_LOG = "=== FAILURES ===\n___ test_the_live_gate_is_green ___\n\nE   AssertionError: missing pkg/peer_mod.py\n\n=== short test summary info ===\nFAILED {id} - x\n1 failed in 0.1s\n"
+_GATE = "gate/test_gate.py::test_the_live_gate_is_green"
+
+
+def _classify(tmp_path: Path, monkeypatch, head_red=None, named="pkg/peer_mod.py"):
+    log = tmp_path / "r.log"
+    log.write_text(_GATE_LOG.replace("pkg/peer_mod.py", named).format(id=_GATE), encoding="utf-8")
+    monkeypatch.setattr(retest_targeted, "_landing_paths", lambda *_a: (["pkg/mine.py"], "manifest"))
+    out = retest_targeted._classify_reds(tmp_path, RUN_ID, {}, log, [_GATE], head_red)
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests
+
+    return out, landing_targeted_tests.failed_targeted_tests({"status": "fail", **out})
+
+
+def test_a_red_naming_no_run_path_is_foreign_and_does_not_block(tmp_path: Path, monkeypatch) -> None:
+    out, gate = _classify(tmp_path, monkeypatch)
+    assert out["node_verdicts"] == {_GATE: "foreign"} and gate == ([], "pre-existing-only")
+
+
+def test_a_red_at_head_is_pre_existing_and_does_not_block(tmp_path: Path, monkeypatch) -> None:
+    out, gate = _classify(tmp_path, monkeypatch, head_red=lambda ids: set(ids))
+    assert out["node_verdicts"] == {_GATE: "pre_existing"} and gate == ([], "pre-existing-only")
+
+
+def test_a_red_naming_a_run_path_stays_caused_and_blocks(tmp_path: Path, monkeypatch) -> None:
+    out, gate = _classify(tmp_path, monkeypatch, named="pkg/mine.py")
+    assert out == {} and gate[1] != "pre-existing-only"
+
+
+_EMPTY_AND_PASSING = "no tests ran in 0.01s\n3 passed in 0.2s\n"
+
+
+def test_replay_7c5da5_children_exited_record_running_poll_finalises_and_land_resumes(repo, tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    path = _running(repo, _EMPTY_AND_PASSING)
+    findings, check = li._landing_test_gate_body(repo, {}, RUN_ID)
+    assert check == "retest-running" and [ltt.finding_reason(f) for f in findings] == ["retest-pending"]
+    assert [e["reason"] for e in ltt.advisory_entries(findings)] == ["retest-pending"]
+
+    assert _poll(repo, tmp_path, "--wait") == 2
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["status"] == "error" and record["zero_run_cause"] == "test_infra_failure"
+    assert "collected 0 items" in record["reason"]
+    assert ltt.failed_targeted_tests(record)[1] == "failed"
+
+    _running(repo, "3 passed in 0.2s\n")
+    assert _poll(repo, tmp_path, "--wait") == 0
+    findings, check = li._landing_test_gate_body(repo, {}, RUN_ID)
+    assert check != "retest-running" and not any(ltt.finding_reason(f) == "retest-pending" for f in findings)
+
+
+def test_an_empty_chunk_beside_a_finished_one_types_test_infra_but_a_red_stays_a_fail(tmp_path: Path) -> None:
+    log = tmp_path / "p.log"
+    assert retest_targeted._zero_run_cause("error", [0, 5], log, True) == "test_infra_failure"
+    assert retest_targeted._zero_run_cause("fail", [1, 5], log, True) is None
+
+
+def test_a_dead_child_pid_is_not_a_pending_land_remainder_retest() -> None:
+    from coordinator_core.ops.dispatch_emit import land_remainder_verify as lrv
+
+    assert lrv._child_may_be_alive({}) is True
+    assert lrv._child_may_be_alive({"pid": _dead_pid()}) is False
+    import os
+
+    assert lrv._child_may_be_alive({"pid": os.getpid()}) is True
+
+
+def _rootdir_runner(repo: Path, seen: list, collects_absolute: bool):
+    """Fake launcher whose session rootdir is a sub-directory: it collects 0 items for a repo-root-relative id
+    and, when ``collects_absolute``, runs an absolute one."""
+    def run(argv, cwd, *, log=None, timeout=None, append: bool = False):
+        seen.append(argv)
+        header = f"rootdir: {repo / 'sub'}, configfile: pytest.ini\n"
+        ran = collects_absolute and Path(argv[-1].partition("::")[0]).is_absolute()
+        body = "1 passed in 0.1s\n" if ran else "no tests ran in 0.01s\n"
+        with open(log, "ab" if append else "wb") as fh:
+            fh.write((header + body).encode())
+        return 0 if ran else 5
+    return run
+
+
+def _retest_node(repo: Path, tmp_path: Path, run) -> tuple[int, dict]:
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py::t", "--repo-root", str(repo), "--detached-child"],
+        run=run,
+    )
+    return rc, json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+
+
+def test_a_node_id_the_subdir_rootdir_cannot_collect_is_retried_as_an_absolute_path(repo, tmp_path: Path) -> None:
+    seen: list = []
+    rc, rec = _retest_node(repo, tmp_path, _rootdir_runner(repo, seen, True))
+    assert rc == 0 and rec["status"] == "pass"
+    assert seen[0][-1] == "test_a.py::t" and Path(seen[1][-1].partition("::")[0]) == repo / "test_a.py"
+
+
+def test_a_session_with_the_repo_root_rootdir_is_not_retried(repo, tmp_path: Path) -> None:
+    seen: list = []
+
+    def run(argv, cwd, *, log=None, timeout=None, append: bool = False):
+        seen.append(argv)
+        with open(log, "ab" if append else "wb") as fh:
+            fh.write(f"rootdir: {repo}\nno tests ran in 0.01s\n".encode())
+        return 5
+
+    _rc, rec = _retest_node(repo, tmp_path, run)
+    assert len(seen) == 1 and seen[0][-1] == "test_a.py::t" and rec["status"] == "no-tests"
+
+
+def test_named_node_ids_collecting_nothing_in_every_session_are_typed_test_infra_never_a_pass(repo, tmp_path: Path) -> None:
+    rc, rec = _retest_node(repo, tmp_path, _rootdir_runner(repo, [], False))
+    assert rc == 2 and rec["status"] == "error" and rec["zero_run_cause"] == "test_infra_failure"
+    assert "collected 0 items" in rec["reason"]
+
+
+def test_the_ask_shape_zero_items_then_one_passed_polls_a_typed_verdict_at_once(repo, tmp_path: Path) -> None:
+    log = (
+        "rootdir: /repo/sub\nconfigfile: pytest.ini\n3 workers [0 items]\n\n"
+        "=========================== no tests ran in 17.51s ============================\n"
+        "3 workers [1 item]\n\n======================== 1 passed in 135.47s (0:02:15) ========================\n"
+    )
+    path = _running(repo, log)
+    assert _poll(repo, tmp_path) == 2
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["status"] == "error" and record["zero_run_cause"] == "test_infra_failure"

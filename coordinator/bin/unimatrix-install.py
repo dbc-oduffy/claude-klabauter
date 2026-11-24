@@ -301,12 +301,13 @@ ROUTER_RESTART_REFUSED_RC = 8
 
 
 def router_closure_digest(src_dir):
-    """sha256 over the sorted (name, bytes) of the router's script closure in src_dir; None without the router script."""
+    """sha256 over the sorted (name, bytes) of the router's script closure and lib/*.py in src_dir; None without the router script."""
     root = Path(src_dir)
     if not (root / ROUTER_SCRIPT).is_file():
         return None
+    names = sorted(script_closure(root, ROUTER_SCRIPT)) + [f"lib/{p.name}" for p in sorted((root / "lib").glob("*.py"))]
     h = hashlib.sha256()
-    for name in sorted(script_closure(root, ROUTER_SCRIPT)):
+    for name in sorted(names):
         try:
             data = (root / name).read_bytes()
         except OSError:
@@ -1179,16 +1180,19 @@ def _hook_group(dest_dir, script_name, matcher=None, args=()):
 
 
 def agy_hook_entry(dest_dir, engine_root=None):
-    """Our hooks.json value: a shell-and-edit-tool PreToolUse hook, a SessionStart hook and a PreInvocation hook (delivers the PreToolUse advisories) running installed scripts.
+    """Our hooks.json value: PreToolUse, PostToolUse, SessionStart, PreInvocation, and Stop hooks running installed scripts.
 
-    agy groups only tool events under matcher/hooks; SessionStart takes bare handlers, and agy
-    rejects the whole file ("command hook must specify 'command'") when it is grouped. The
-    PreToolUse group is the single merged hook; `--engine-root` is how it finds the Klabauter guard.
+    agy groups only tool events (PreToolUse, PostToolUse) under matcher/hooks; non-tool events
+    (SessionStart, PreInvocation, Stop) take bare handlers, and agy rejects the whole file
+    ("command hook must specify 'command'") when a non-tool event is grouped.
     """
+    eng = _engine_args(engine_root)
     return {
-        "PreToolUse": [_hook_group(dest_dir, AGY_HOOK_SCRIPT, AGY_TOOL_MATCHER, _engine_args(engine_root))],
-        "SessionStart": [_hook_handler(dest_dir, AGY_SESSIONSTART_SCRIPT)],
+        "PreToolUse": [_hook_group(dest_dir, AGY_HOOK_SCRIPT, AGY_TOOL_MATCHER, eng)],
+        "PostToolUse": [_hook_group(dest_dir, AGY_HOOK_SCRIPT, AGY_TOOL_MATCHER, ("--event", "PostToolUse", *eng))],
+        "SessionStart": [_hook_handler(dest_dir, AGY_SESSIONSTART_SCRIPT, *eng)],
         "PreInvocation": [_hook_handler(dest_dir, AGY_HOOK_SCRIPT, "--event", "PreInvocation")],
+        "Stop": [_hook_handler(dest_dir, AGY_HOOK_SCRIPT, "--event", "Stop", *eng)],
     }
 
 
@@ -1988,6 +1992,13 @@ def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=Non
 AGY_ALLOW_RULE = "command(coordinator-invoke engine_ask.submit)"
 AGY_LEGACY_ALLOW_RULE = "command(coordinator-invoke *)"
 AGY_PRIOR_ALLOW_RULE = "command(coordinator-invoke engine_ask.submit --params-file .coordinator-local/em-submit.json)"
+AGY_ENGINE_OPS = (
+    "engine_ask.submit",
+    "workflow.fire",
+    "workflow.fire_status",
+    "workflow.fire_wait",
+    "workflow.revise",
+)
 
 
 def invoke_launcher_path():
@@ -1995,10 +2006,25 @@ def invoke_launcher_path():
     return str(settings_home() / "bin" / ("coordinator-invoke.exe" if sys.platform == "win32" else "coordinator-invoke"))
 
 
+def safe_commit_launcher_path():
+    """The box's absolute settings-home coordinator-safe-commit launcher."""
+    return str(settings_home() / "bin" / ("coordinator-safe-commit.exe" if sys.platform == "win32" else "coordinator-safe-commit"))
+
+
 def agy_absolute_allow_rule():
     """The submit grant naming coordinator-invoke by its settings-home path, for hosts where the bare name does not resolve."""
     exe = invoke_launcher_path()
     return AGY_ALLOW_RULE.replace("command(coordinator-invoke ", f"command({exe} ", 1)
+
+
+def agy_absolute_allow_rules(dest_dir=None) -> list[str]:
+    """Full coordinator allowlist for agy `permissions.allow`: engine ops, safe-commit, and unimatrix-send."""
+    exe = invoke_launcher_path()
+    send_script = (Path(dest_dir) if dest_dir else settings_home() / "unimatrix") / SEND_SCRIPT
+    rules = [f"command({exe} {op})" for op in AGY_ENGINE_OPS]
+    rules.append(f"command({safe_commit_launcher_path()})")
+    rules.append(f"command({_console_python()} {send_script})")
+    return rules
 
 
 def launcher_sac_blocked() -> bool:
@@ -2020,28 +2046,47 @@ AGY_TOOL_PERMISSION_KEY = "toolPermission"
 AGY_BYPASS_VALUE = "always-proceed"
 
 
-def seed_agy_allow_rule(config_path, *, uninstall=False, rule=None) -> str:
-    """Own one entry in agy's `permissions.allow`, so a headless `agy --print` can run the coordinator door.
+def seed_agy_allow_rule(config_path, *, uninstall=False, rule=None, rules=None) -> str:
+    """Own coordinator entries in agy's `permissions.allow`, so a headless `agy --print` can run coordinator doors.
 
-    `rule` is the grant to write (default: the absolute-path line). Every form this installer has written,
-    the bare and legacy-wildcard lines included, is owned and migrated or removed; operator entries are
-    never touched. A `toolPermission: always-proceed` value, which approves everything regardless of
-    mode, is removed and its prior value kept in the ownership record for uninstall to restore. The
-    record also keeps the pre-install text: an untouched file returns byte for byte; a file edited since
-    is repaired structurally.
+    When `rules` is given, own that list; else when `rule` is given, own `[rule]`; else default to
+    `agy_absolute_allow_rules()`. Every legacy single-rule form this installer has written is also
+    recognized as owned and migrated or removed; operator entries are never touched. A
+    `toolPermission: always-proceed` value is removed and its prior value kept in the ownership record
+    for uninstall to restore.
     """
-    rule = rule or agy_absolute_allow_rule()
-    owned = (
-        AGY_ALLOW_RULE, agy_absolute_allow_rule(), AGY_LEGACY_ALLOW_RULE, AGY_PRIOR_ALLOW_RULE,
-        AGY_PRIOR_ALLOW_RULE.replace("command(coordinator-invoke ", f"command({invoke_launcher_path()} ", 1),
-    )
+    if rules is not None:
+        target_rules = list(dict.fromkeys(rules))
+    elif rule is not None:
+        target_rules = [rule]
+    else:
+        target_rules = agy_absolute_allow_rules()
     path = Path(config_path)
     state_path = path.with_name(".coordinator-allow-rule-agy.json")
+    prior_state = _host_status_state(state_path) if state_path.exists() else None
+    prior_managed = []
+    if isinstance(prior_state, dict):
+        prev_allow = (prior_state.get("managed") or {}).get("allow")
+        if isinstance(prev_allow, list):
+            prior_managed = [r for r in prev_allow if isinstance(r, str)]
+        elif isinstance(prev_allow, str):
+            prior_managed = [prev_allow]
+    owned = list(dict.fromkeys([
+        AGY_ALLOW_RULE,
+        agy_absolute_allow_rule(),
+        AGY_LEGACY_ALLOW_RULE,
+        AGY_PRIOR_ALLOW_RULE,
+        AGY_PRIOR_ALLOW_RULE.replace("command(coordinator-invoke ", f"command({invoke_launcher_path()} ", 1),
+        *prior_managed,
+        *target_rules,
+    ]))
+    owned_set = set(owned)
+    target_set = set(target_rules)
     text = path.read_bytes().decode("utf-8") if path.exists() else None
     if uninstall:
         if not state_path.exists():
             return "absent"
-        state = _host_status_state(state_path)
+        state = prior_state or _host_status_state(state_path)
         if text is None:
             state_path.unlink()
             return "absent"
@@ -2054,10 +2099,10 @@ def seed_agy_allow_rule(config_path, *, uninstall=False, rule=None) -> str:
             data = json.loads(text)
             perms = data.get("permissions") if isinstance(data, dict) else None
             allow = perms.get("allow") if isinstance(perms, dict) else None
-            if not isinstance(allow, list) or not any(r in allow for r in owned):
+            if not isinstance(allow, list) or not any(r in allow for r in owned_set):
                 state_path.unlink()
                 return "absent"
-            allow[:] = [r for r in allow if r not in owned]
+            allow[:] = [r for r in allow if r not in owned_set]
             if not allow:
                 del perms["allow"]
             if not perms:
@@ -2077,24 +2122,26 @@ def seed_agy_allow_rule(config_path, *, uninstall=False, rule=None) -> str:
     allow = perms.setdefault("allow", [])
     if not isinstance(allow, list):
         raise ValueError("agy settings permissions.allow must be a list")
-    stale = state_path.exists() and any(r in allow for r in owned if r != rule)
+    stale = state_path.exists() and any(r in allow for r in owned_set if r not in target_set)
+    missing_rules = any(r not in allow for r in target_rules)
     bypass = data.get(AGY_TOOL_PERMISSION_KEY) == AGY_BYPASS_VALUE
-    if rule in allow and not stale and not bypass:
+    if not missing_rules and not stale and not bypass:
         return "present"
     if stale:
-        allow[:] = [r for r in allow if r not in owned or r == rule]
-    if rule not in allow:
-        allow.append(rule)
+        allow[:] = [r for r in allow if r not in owned_set or r in target_set]
+    for r in target_rules:
+        if r not in allow:
+            allow.append(r)
     if bypass:
         del data[AGY_TOOL_PERMISSION_KEY]
     replacement = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {"version": 1, "host": "agy", "existed": text is not None, "before": text or "",
-              "after": replacement, "managed": {"allow": rule}}
+              "after": replacement, "managed": {"allow": target_rules}}
     if bypass:
         record["managed"][AGY_TOOL_PERMISSION_KEY] = AGY_BYPASS_VALUE
-    if state_path.exists() and (stale or bypass):
-        prior = _host_status_state(state_path)
+    if state_path.exists() and (stale or bypass or missing_rules):
+        prior = prior_state or _host_status_state(state_path)
         record["existed"], record["before"] = prior["existed"], prior["before"]
         carried = prior["managed"].get(AGY_TOOL_PERMISSION_KEY)
         if carried is not None:
@@ -2663,17 +2710,43 @@ def _plugin_gen():
     return mod
 
 
+def _resolve_agy_plugin_root(explicit_plugin_root=None):
+    """Resolve the Claude plugin source root for agy-plugin generation:
+    explicit --plugin-root -> PLUGIN_ROOT (if it already carries .claude-plugin/plugin.json or is absent) ->
+    CLAUDE_PLUGIN_ROOT -> content-root pointer (coordinator-content-repo/coordinator or flat published coordinator-claude) ->
+    PLUGIN_ROOT fallback."""
+    if explicit_plugin_root:
+        return Path(explicit_plugin_root)
+    if not PLUGIN_ROOT.is_dir() or (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").is_file():
+        return PLUGIN_ROOT
+    env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if env_root:
+        cand = Path(env_root)
+        if cand.is_dir() and (cand / ".claude-plugin" / "plugin.json").is_file():
+            return cand
+    pointer, _ = _content_root_pointer()
+    if pointer:
+        ptr = Path(pointer)
+        for cand in (ptr / "coordinator", ptr):
+            if (cand / ".claude-plugin" / "plugin.json").is_file():
+                return cand
+    return PLUGIN_ROOT
+
+
 def _write_agy_plugin_tree(args, out, dest=None):
-    """Generate the agy plugin tree from --plugin-root (or PLUGIN_ROOT) into --out (or <dest>/agy-plugin).
+    """Generate the agy plugin tree from --plugin-root (or resolved content root) into --out (or <dest>/agy-plugin).
 
     `dest` defaults to <settings home>/unimatrix. True when written; a generator OSError/ValueError
     prints WARN and returns False, never raises.
     """
-    plugin_root = Path(args.plugin_root) if args.plugin_root else PLUGIN_ROOT
-    tree = Path(args.out) if args.out else (dest or settings_home() / "unimatrix") / AGY_PLUGIN_TREE_DIR
-    if not args.out and not plugin_root.is_dir():
+    plugin_root = _resolve_agy_plugin_root(getattr(args, "plugin_root", None))
+    tree = Path(args.out) if getattr(args, "out", None) else (dest or settings_home() / "unimatrix") / AGY_PLUGIN_TREE_DIR
+    if not getattr(args, "out", None) and not plugin_root.is_dir():
         print(f"NOTE: agy plugin tree skipped: plugin root {plugin_root} not found (name one with --plugin-root)", file=out)
         return True
+    if not (plugin_root / ".claude-plugin" / "plugin.json").is_file():
+        print(f"NOTE: agy plugin source {plugin_root} has no .claude-plugin/plugin.json; "
+              f"pass --plugin-root <DoE/coordinator> for a strict-valid plugin", file=out)
     try:
         report = _plugin_gen().generate(plugin_root, tree, "agy")
     except (OSError, ValueError) as exc:
@@ -2947,6 +3020,79 @@ def enroll_codex_runtime(engine_root, *, consent=False, check=False, dest_dir=No
     return 0
 
 
+def enroll_agy_runtime(engine_root, *, consent=False, check=False, dest_dir=None, out=None, plugin_root=None):
+    """Shared strict Agy runtime enrollment/update: return zero only for a ready runtime.
+
+    Check mode is read-only; consent must be the literal boolean True for writes.
+    """
+    out = out or sys.stdout
+    if not check and consent is not True:
+        print("Agy runtime: consent.agy_runtime must be true", file=out)
+        return 2
+    root = Path(engine_root)
+    dest = Path(dest_dir) if dest_dir else settings_home() / "unimatrix"
+    hp = agy_hooks_path()
+    pj = agy_plugins_path()
+    settings = agy_settings_path()
+    from coordinator_core.install import host_install_agy
+    if not host_present("agy"):
+        print("Agy runtime: agy CLI absent; install Antigravity then rerun coordinator-install", file=out)
+        return 7
+    ready, note = external_session_capability(str(root))
+    if not ready:
+        print(f"Agy runtime: lifecycle unavailable: {note}", file=out)
+        return 7
+    try:
+        data = _load_hooks(hp)
+        want = agy_hook_entry(dest, str(root))
+        hooks_drift = data.get(AGY_HOOK_KEY) != want
+        tree = dest / AGY_PLUGIN_TREE_DIR
+        pjson = tree / "plugin.json"
+        plugin_ok = False
+        if pjson.is_file():
+            try:
+                loaded = json.loads(pjson.read_text(encoding="utf-8"))
+                plugin_ok = isinstance(loaded, dict) and bool(loaded.get("version"))
+            except (OSError, ValueError):
+                plugin_ok = False
+        mcp = host_install_agy.apply(check=True)
+        print(f"Agy runtime: hooks={'drift' if hooks_drift else 'current'} plugin={'current' if plugin_ok else 'drift'} mcp={mcp.mcp}", file=out)
+        if mcp.mcp not in ("current", "present", "would-write"):
+            return 7
+        if check:
+            return 0
+        install_scripts(root / "coordinator" / "bin", dest)
+        state = seed_agy_hook(hp, dest, str(root))
+        print(f"Agy runtime: hooks={state}", file=out)
+        seed_host_status_line(settings, "agy", engine_root=str(root), dest_dir=dest)
+        if not launcher_sac_blocked():
+            seed_agy_allow_rule(settings, rules=agy_absolute_allow_rules(dest))
+        _seed_agy_config(hp.with_name("config.json"), out)
+        resolved_plugin = _resolve_agy_plugin_root(plugin_root)
+        ns = types.SimpleNamespace(plugin_root=str(resolved_plugin), out=str(tree))
+        if not _write_agy_plugin_tree(ns, out, dest):
+            print("Agy runtime: plugin tree generation failed", file=out)
+            return 7
+        seed_agy_plugin(pj, tree)
+        seed_peer_doctrine(agy_rules_path(), render_peer_doctrine(dest))
+        missing = _seed_standing_doctrine(
+            out, False, True, None, agy_rules_path(),
+            None, hp.with_name("skills.json"),
+            str(resolved_plugin), resolved_plugin / "skills",
+        )
+        if missing:
+            print(f"Agy runtime: incomplete: {', '.join(missing)}", file=out)
+            return 7
+        mcp = host_install_agy.apply()
+        if mcp.mcp not in ("written", "current", "present"):
+            return 7
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"Agy runtime: {exc}", file=out)
+        return 7
+    print("Agy runtime ready", file=out)
+    return 0
+
+
 def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
          codex_hooks=None, codex_trust=None, codex_rules=None, agy_rules=None, codex_exec_rule=None,
          agy_skills_json=None, codex_skills=None, agent_dir=None, schtasks=None, pair_run=None,
@@ -3044,10 +3190,21 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     args = ap.parse_args(argv)
     if args.enroll_runtime:
         root, provenance = resolve_engine_root()
+        target_hosts = [h.strip() for h in (args.hosts or "codex").split(",") if h.strip()]
         if not root:
-            print(f"Codex runtime: engine unresolved ({provenance})", file=out)
+            print(f"Runtime enrollment: engine unresolved ({provenance})", file=out)
             return 7
-        return enroll_codex_runtime(root, consent=True, check=args.check, dest_dir=dest_dir, out=out)
+        rc = 0
+        for host in target_hosts:
+            if host == "codex":
+                rc = rc or enroll_codex_runtime(root, consent=True, check=args.check, dest_dir=dest_dir, out=out)
+            elif host == "agy":
+                rc = rc or enroll_agy_runtime(root, consent=True, check=args.check, dest_dir=dest_dir, out=out,
+                                              plugin_root=args.plugin_root)
+            else:
+                print(f"Runtime enrollment: unsupported host {host!r} (expected codex or agy)", file=out)
+                return 2
+        return rc
     skills_root = Path(args.plugin_root) / "skills" if args.plugin_root else SKILLS_ROOT
     if args.openssh_receive:
         if sys.platform != "win32":
@@ -3356,9 +3513,9 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             if (sac_blocked or launcher_sac_blocked)():
                 print("agy allow rule skipped: Smart App Control blocks the coordinator-invoke forwarder", file=out)
             else:
-                agy_rule = agy_absolute_allow_rule()
-                print(f"agy allow rule {seed_agy_allow_rule(agy_status, rule=agy_rule)} in {agy_status}", file=out)
-                print(f"agy allow rule granted: {agy_rule}", file=out)
+                agy_rules = agy_absolute_allow_rules(dest)
+                print(f"agy allow rule {seed_agy_allow_rule(agy_status, rules=agy_rules)} in {agy_status}", file=out)
+                print(f"agy allow rule granted: {agy_rules[0]}", file=out)
         except (OSError, ValueError) as exc:
             missing.append("agy allow rule")
             print(f"WARN: agy allow rule not installed: {exc}", file=out)

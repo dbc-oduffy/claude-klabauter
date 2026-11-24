@@ -474,7 +474,7 @@ def enforce_tier_u_gate(
             "exemption for Tier F.\n\n"
             f"{remediation}\n\n"
             "Ask the live Group EM: "
-            "tier-u-grant-cli group-em-grant <this session> \"<ruling>\"\n\n"
+            "tier-u-grant-cli group-em-grant <this session> \"<reason>\"\n\n"
             "Unsure which session this is, or whether it is still live? "
             "session.whoami_live answers both in one call."
         )
@@ -520,7 +520,7 @@ def enforce_tier_u_gate(
         "string -- see DR-088 R6), or (c) run the suite through a granted "
         "ceremony.\n"
         "Or ask the live Group EM: "
-        "tier-u-grant-cli group-em-grant <this session> \"<ruling>\"\n\n"
+        "tier-u-grant-cli group-em-grant <this session> \"<reason>\"\n\n"
         "Unsure which session this is, or whether it is still live? "
         "session.whoami_live answers both in one call."
     )

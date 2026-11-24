@@ -44,6 +44,8 @@ The provider binary and the named persona definition must be available in the wo
 `agent_pipe.model_tiers` records supported model routing roles and their sources. Codex uses Luna
 for the fast role, Sol for workhorse and Astra for frontier. Terra's quality tier is unknown.
 Grok routing roles, checked against `grok models` on 2026-11-23: `grok-4.5` fast, `grok-4.7-build-fast` workhorse, `grok-4.7` frontier. A headless EM and `grok-coordinator` plan on the frontier id at high effort. An autonomous worker executes on the workhorse id at medium effort. A workflow stage passes its own tier and effort through. A tier with no effort uses low, medium, or high for fast, workhorse, and frontier. Omitted model and effort stay with the CLI. `grok-4.6` is the previous generation and is not a routing tier. The old `grok-build` alias stays unattributed so historical receipts are not treated as frontier. Fable and Mythos stay unset.
+
+Agy routing roles, verified on `agy 1.5.15` on 2026-11-23: `gemini-4-hydrogen` fast, `gemini-4-neon` workhorse, `gemini-4-carbon` frontier, with reasoning effort passed separately via `--effort`. `agy-coordinator` (and alias `coordinator-agy`) launches `agy` with coordinator EM defaults (`--dangerously-skip-permissions`, frontier model, high effort) via `os.execvp` on POSIX while leaving bare `agy` unchanged; native Unimatrix hooks handle live peer delivery.
 No Fable/Mythos equivalent is asserted, and registry roles are operational selections rather than measured quality equivalence. DeepSeek
 uses the documented Flash/Pro API IDs; this registry does not provide a DeepSeek execution adapter.
 See [engine ask route](codex-engine-ask-route.md) for the complete ask-to-workflow path and

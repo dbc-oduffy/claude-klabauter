@@ -138,6 +138,30 @@ def test_own_target_prefers_codex_and_agy_env_over_grok() -> None:
     assert us.own_target({}, grok=lambda: "") == ""
 
 
+@pytest.mark.parametrize("key", ["CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"])
+def test_claude_shell_supplies_native_identity_for_router_verification(monkeypatch, key):
+    for name in ("CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID",
+                 "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(key, "native-claude-session")
+    monkeypatch.setattr(us, "_grok_target", lambda: "")
+    rc, router = _run(monkeypatch, {"ok": True, "msg_id": "m"}, ["--to", "x", "nonce"])
+    assert rc == 0
+    assert router.reqs[0]["as_target"] == "native-claude-session"
+    assert router.reqs[0]["as"] == "cli"
+
+
+@pytest.mark.parametrize("binding", ["missing", "ambiguous", "stale"])
+def test_claude_shell_does_not_claim_delivery_for_refused_binding(monkeypatch, capsys, binding):
+    monkeypatch.setattr(us, "own_target", lambda: "native-session")
+    rc, router = _run(monkeypatch, {"ok": False, "error": f"{binding} sender binding"},
+                      ["--to", "x", "nonce"])
+    captured = capsys.readouterr()
+    assert rc == 1 and "sent to" not in captured.out
+    assert binding in captured.err
+    assert router.reqs[0]["as_target"] == "native-session"
+
+
 def test_grok_shell_send_carries_its_session_id_as_sender_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     import json
     import os

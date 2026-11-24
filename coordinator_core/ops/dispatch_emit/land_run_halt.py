@@ -16,7 +16,9 @@ from __future__ import annotations
 import json
 from functools import partial
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence, TypeVar
+
+T = TypeVar("T")
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops._path_guard import contained_path, safe_id
@@ -63,26 +65,88 @@ def _error(message: str, **extra: object) -> dict:
 # ---- reading the tree in process --------------------------------------------------------------
 
 
-def _worktree_blob_sha(root: Path, rel: str) -> Optional[str]:
-    from coordinator_core.ops.dispatch_emit.land_run import _worktree_blob
+def _stat_and_blob(root: Path, rel: str, want_blob: bool) -> tuple[bool, Optional[str]]:
+    """``(is_regular_file, check-in blob id or None)`` for ``root/rel``: one stat, then the hash only
+    when ``want_blob`` and the path is a file. Runs on a ``bounded_io`` worker."""
+    import os
+    from stat import S_ISREG
 
-    return _worktree_blob(root, rel)
+    from coordinator_core.git.commit import _checkin_blob_sha_read
+
+    try:
+        if not S_ISREG(os.stat(root / rel).st_mode):
+            return False, None
+    except OSError:
+        return False, None
+    return True, _checkin_blob_sha_read(root, rel) if want_blob else None
+
+
+def _watched(body: Callable[[Callable[[str], None]], T]) -> T:
+    """``body(tick)`` on ONE worker thread, however many reads it makes (a thread per read costs
+    more than the 500ms bar over thousands). ``tick(path)`` runs before each read; no tick for a
+    halt read deadline raises ``bounded_io.IoIndeterminate`` naming the path in flight (a stalled
+    path is neither absent nor changed). The stalled worker is left to return late."""
+    import contextvars
+    import threading
+    import time
+
+    from coordinator_core.bounded_io import IoIndeterminate
+    from coordinator_core.git import call_io_scope
+
+    deadline = call_io_scope.bounded_deadline()
+    deadline = call_io_scope.HALT_READ_DEADLINE_SECS if deadline is None else deadline
+    ctx = contextvars.copy_context()
+    t0 = time.monotonic()
+    last = [t0]
+    inflight = [""]
+    done = threading.Event()
+    out: list = []
+
+    def tick(path: str) -> None:
+        inflight[0] = path
+        last[0] = time.monotonic()
+
+    def work() -> None:
+        try:
+            out.append((True, ctx.run(body, tick)))
+        except BaseException as exc:  # noqa: BLE001 -- handed to the caller's thread
+            out.append((False, exc))
+        finally:
+            done.set()
+
+    threading.Thread(target=work, daemon=True, name="halt-watched-reads").start()
+    while True:
+        left = deadline - (time.monotonic() - last[0])
+        if left <= 0 and not done.is_set():
+            raise IoIndeterminate(inflight[0], int((time.monotonic() - last[0]) * 1000))
+        if done.wait(max(left, 0)):
+            break
+    ok, value = out[0]
+    if not ok:
+        raise value
+    return value
 
 
 def _differs(root: Path, entries: dict, rels: Sequence[str]) -> tuple[set, set]:
     """``(differ, gone)`` over ``rels`` against ``entries`` (``{rel: (mode, sha)}`` of a tree):
     ``differ`` are files on disk absent from the tree or with other bytes; ``gone`` are tree entries
-    missing on disk."""
-    differ: set = set()
-    gone: set = set()
-    for rel in rels:
-        entry = entries.get(rel)
-        if (root / rel).is_file():
-            if entry is None or _worktree_blob_sha(root, rel) != entry[1]:
-                differ.add(rel)
-        elif entry is not None:
-            gone.add(rel)
-    return differ, gone
+    missing on disk. One bounded stat per path (and one bounded hash when the tree names it);
+    ``IoIndeterminate`` escapes on a stalled path."""
+    def scan(tick: Callable[[str], None]) -> tuple[set, set]:
+        differ: set = set()
+        gone: set = set()
+        for rel in rels:
+            entry = entries.get(rel)
+            tick(str(root / rel))
+            is_file, blob = _stat_and_blob(root, rel, entry is not None)
+            if is_file:
+                if entry is None or blob != entry[1]:
+                    differ.add(rel)
+            elif entry is not None:
+                gone.add(rel)
+        return differ, gone
+
+    return _watched(scan)
 
 
 def _entries_at(root: Path, tree_sha: Optional[str], rels: Sequence[str]) -> Optional[dict]:
@@ -429,6 +493,7 @@ def _superseded_candidates(root: Path, run_id: str, sizing_rel: Optional[str]) -
     import os
     from pathlib import PurePosixPath
 
+    from coordinator_core import bounded_io
     from coordinator_core.ops.dispatch_emit.land_run import _sizing_stamp_floor
     from coordinator_core.ops.dispatch_emit.run_artifacts import _STAMP_TAIL
 
@@ -440,26 +505,31 @@ def _superseded_candidates(root: Path, run_id: str, sizing_rel: Optional[str]) -
     needle = sizing_path.name.encode("utf-8")
     floor = _sizing_stamp_floor(sizing_path.name)
     base = root / RECORD_DIR_ROOT
-    names = []
-    try:
-        with os.scandir(base) as it:
-            for entry in it:
-                if not entry.name.startswith((warp_prefix, "ask-")) or entry.name == run_id:
-                    continue
-                tail = _STAMP_TAIL.search(entry.name)
-                if not tail or not floor <= tail.group(0) < mine.group(0) or not entry.is_dir():
-                    continue
-                if not entry.name.startswith(warp_prefix) and needle.isascii():
-                    try:
-                        raw = (base / entry.name / "run.json").read_bytes()
-                    except OSError:
+    def scan(tick: Callable[[str], None]) -> list:
+        names = []
+        try:
+            with os.scandir(base) as it:
+                for entry in it:
+                    if not entry.name.startswith((warp_prefix, "ask-")) or entry.name == run_id:
                         continue
-                    if needle not in raw:
+                    tail = _STAMP_TAIL.search(entry.name)
+                    if not tail or not floor <= tail.group(0) < mine.group(0) or not entry.is_dir():
                         continue
-                names.append(entry.name)
-    except OSError:
-        return []
-    return sorted(names)
+                    if not entry.name.startswith(warp_prefix) and needle.isascii():
+                        run_json = str(base / entry.name / "run.json")
+                        tick(run_json)
+                        try:
+                            raw = bounded_io._read_registered(run_json)
+                        except OSError:  # IoIndeterminate is no OSError: a stall escapes
+                            continue
+                        if raw is None or needle not in raw:
+                            continue
+                    names.append(entry.name)
+        except OSError:
+            return []
+        return sorted(names)
+
+    return _watched(scan)
 
 
 # ---- the landing ------------------------------------------------------------------------------
@@ -853,19 +923,14 @@ def _land(
         own_differ, own_gone = _differs(root, written_entries, run_written)
         own_changed = own_differ | own_gone
     _withhold_run_dirt(withheld, run_written, own_changed, set(paths) | set(deleted))
-    from coordinator_core.ops.dispatch_emit.halted_record_eviction import IMPORT_RISK_UNSCANNED, plan_tree_eviction
-    from coordinator_core.ops.dispatch_emit.worktree_snapshot import changed_python_paths
+    from coordinator_core.ops.dispatch_emit.halted_record_eviction import plan_tree_eviction
 
-    # One ``*.py`` status read, only when a changed run-owned .py could reach the import scan.
-    python_dirt = changed_python_paths(root) if any(p.endswith(".py") for p in own_changed) else None
     eviction = plan_tree_eviction(
-        root, record_dir_rel, run_written, own_changed, [*run_written, *owner, *declared], withheld, paths, run_id,
-        python_dirt=python_dirt, halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
+        root, record_dir_rel, run_written, own_changed, [*run_written, *owner, *declared], withheld, paths,
+        halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
     )
 
     if not paths and not deleted:
-        if IMPORT_RISK_UNSCANNED in withheld.values():
-            record_withheld(root / record_dir_rel, withheld)
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
@@ -895,11 +960,11 @@ def _land(
         try:
             eviction.apply()
         except OSError as exc:
-            return _error(f"evicting unimportable run bytes failed: {exc}", **base)
+            return _error(f"recording parked run bytes failed: {exc}", **base)
         kept_reply = {
             **kept_reply,
             "evicted": eviction.evicted,
-            **({"unimportable_unowned": eviction.unowned} if eviction.unowned else {}),
+            **({"unimportable": eviction.unimportable} if eviction.unimportable else {}),
         }
     left = dispatch_abandon.remaining()
     if left is not None and left - dispatch_abandon.REPLY_MARGIN_SECS <= 0:

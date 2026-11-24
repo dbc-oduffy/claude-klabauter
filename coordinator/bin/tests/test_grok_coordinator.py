@@ -37,6 +37,19 @@ def test_headless_argv_is_one_turn_without_resume():
     assert "-r" not in argv and "--fork-session" not in argv
 
 
+def test_strip_coordinator_is_not_forwarded():
+    assert gc.strip_coordinator(["--coordinator", "--cwd", "/tmp/work"]) == ["--cwd", "/tmp/work"]
+    assert "--coordinator" not in gc.interactive_argv("grok", gc.strip_coordinator(["--coordinator"]))
+
+
+def test_stop_hook_file_names_the_script(tmp_path):
+    path = gc.ensure_stop_hook(tmp_path, command="/engine/bin/unimatrix-grok-stop.py")
+    body = path.read_text(encoding="utf-8")
+    assert path.parent.name == "hooks"
+    assert "/engine/bin/unimatrix-grok-stop.py" in body
+    assert "Stop" in body
+
+
 def test_session_for_pid_matches_only_the_child():
     rows = [{"session_id": "aaa", "pid": 5}, {"session_id": "bbb", "pid": 9}]
     assert gc.session_for_pid(rows, 9)["session_id"] == "bbb"

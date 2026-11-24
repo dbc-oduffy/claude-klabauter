@@ -1186,23 +1186,7 @@ static int emit_indeterminate(const char *detail) {
 /* One-line allow advisory for a post-delivery engine failure of a
  * non-irreversible payload; never carries a permissionDecision. */
 static int door_engine_failure_allow_envelope(buf_t *out, const char *detail, const char *event_name) {
-    char text[384];
-    snprintf(text, sizeof text,
-             "coordinator: engine failed (%s); guard not evaluated, command allowed.",
-             (detail && *detail) ? detail : "no detail");
-    int ok = 1;
-    ok &= buf_append_cstr(out, "{\"systemMessage\":\"");
-    ok &= buf_append_json_escaped(out, text, strlen(text));
-    ok &= buf_append_cstr(out, "\",\"suppressOutput\":false");
-    if (event_name && *event_name && strcmp(event_name, "SessionEnd") != 0) {
-        ok &= buf_append_cstr(out, ",\"hookSpecificOutput\":{\"hookEventName\":\"");
-        ok &= buf_append_json_escaped(out, event_name, strlen(event_name));
-        ok &= buf_append_cstr(out, "\",\"additionalContext\":\"");
-        ok &= buf_append_json_escaped(out, text, strlen(text));
-        ok &= buf_append_cstr(out, "\"}");
-    }
-    ok &= buf_append_cstr(out, "}\n");
-    return ok;
+    return build_hook_engine_failure_allow_envelope(out, detail, event_name);
 }
 
 /* Hook mode, any post-delivery engine failure of a non-irreversible payload:
@@ -1210,9 +1194,7 @@ static int door_engine_failure_allow_envelope(buf_t *out, const char *detail, co
  * advisory. The twin of door.c's. */
 static int emit_hook_post_delivery(const char *full_detail) {
     buf_t event, out;
-    /* Bounded so the advisory's trailing "command allowed." survives its fixed buffer. */
-    char detail[201];
-    snprintf(detail, sizeof detail, "%.200s", full_detail ? full_detail : "");
+    const char *detail = full_detail ? full_detail : "";
     const char *event_name = NULL;
     int have_event = buf_init(&event, 32);
     if (have_event && g_hook_payload &&
@@ -1246,6 +1228,9 @@ static int emit_hook_post_delivery(const char *full_detail) {
 }
 
 static int fall_through(int argc, char **argv, const char *engine_root);
+static int
+hook_fall_through(int argc, char **argv, const char *engine_root,
+                  int budget_ms, const char *post_detail);
 
 /* Every post-delivery failure of the warm read; the twin of door.c's. */
 static int emit_post_delivery_failure(const char *detail, int argc, char **argv,
@@ -1258,6 +1243,13 @@ static int emit_post_delivery_failure(const char *detail, int argc, char **argv,
         return emit_hook_deny(reason);
     }
     if (g_precheck_armed && emit_precheck_if_matched()) return 0;
+    if (g_door_hook_mode && door_hook_op_reverdicts_cold(g_hook_op)) {
+        int budget = remaining_ms(g_call_started_ms, DOOR_HOOK_LIVE_READ_MS);
+        if (budget > 0) {
+            door_log_fail_open("re-verdict cold after a delivered call with no usable answer");
+            return hook_fall_through(argc, argv, engine_root, budget, detail);
+        }
+    }
     if (g_door_hook_mode) return emit_hook_post_delivery(detail);
     if (door_invocation_is_replay_safe(door_entrypoint_basename(), argc, (const char *const *)argv)) {
         fprintf(stderr,
@@ -1532,7 +1524,13 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
     free(child_env);
 }
 
-static int hook_fall_through(int argc, char **argv, const char *engine_root) {
+/* `budget_ms` bounds the cold child's run. `post_detail` is NULL on the
+ * pre-delivery path; non-NULL marks the post-delivery re-verdict of a delivered
+ * call: the child then runs in the guard chain's verdict-only mode
+ * (COORDINATOR_GUARD_VERDICT_ONLY=1, so a re-run appends no bookkeeping) and
+ * every no-verdict exit reports the post-delivery cause instead. */
+static int hook_fall_through(int argc, char **argv, const char *engine_root,
+                             int budget_ms, const char *post_detail) {
     if (emit_precheck_if_matched()) return 0;
 
     (void)argc;
@@ -1540,18 +1538,22 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
 
     char script_path[PATH_MAX];
     if (resolve_fallback_script(engine_root, script_path) != 0) {
+        if (post_detail) return emit_hook_post_delivery(post_detail);
         if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and no cold entrypoint resolved");
     }
+    if (post_detail) setenv("COORDINATOR_GUARD_VERDICT_ONLY", "1", 1);
 
     int in_pipe[2], out_pipe[2];
     if (pipe(in_pipe) != 0) {
+        if (post_detail) return emit_hook_post_delivery(post_detail);
         if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
     if (pipe(out_pipe) != 0) {
         close(in_pipe[0]);
         close(in_pipe[1]);
+        if (post_detail) return emit_hook_post_delivery(post_detail);
         if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
@@ -1580,11 +1582,12 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     if (rc != 0) {
         close(in_pipe[1]);
         close(out_pipe[0]);
+        if (post_detail) return emit_hook_post_delivery(post_detail);
         if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
-    
+
     if (g_hook_payload_len > 0) {
         write_all_fd(in_pipe[1], g_hook_payload, g_hook_payload_len);
     }
@@ -1596,7 +1599,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     long long cold_started = monotonic_ms();
     int cold_timed_out = 0;
     for (;;) {
-        int budget = remaining_ms(cold_started, door_hook_read_deadline_ms());
+        int budget = remaining_ms(cold_started, budget_ms);
         if (budget == 0) { cold_timed_out = 1; break; }
         struct pollfd pfd;
         pfd.fd = out_pipe[0];
@@ -1629,6 +1632,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
             door_irreversible_deny_reason(reason, sizeof reason, "cold guard gave no verdict within the hook deadline");
             return emit_hook_deny(reason);
         }
+        if (post_detail) return emit_hook_post_delivery(post_detail);
         if (advisory) { door_log_fail_open("cold guard gave no verdict within the hook deadline"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict in time");
     }
@@ -1644,6 +1648,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     }
     if (!answered || i == verdict.len) {
         if (verdict_ok) free(verdict.data);
+        if (post_detail) return emit_hook_post_delivery(post_detail);
         if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict");
     }
@@ -1654,7 +1659,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
 
 static int fall_through(int argc, char **argv, const char *engine_root) {
     if (g_door_hook_mode) {
-        return hook_fall_through(argc, argv, engine_root);
+        return hook_fall_through(argc, argv, engine_root, door_hook_read_deadline_ms(), NULL);
     }
 
     char script_path[PATH_MAX];
@@ -2246,8 +2251,11 @@ int main(int argc, char **argv) {
         result_fields_t rf;
         int have_error = 0;
         long error_code = 0;
-        int success = parse_response_envelope(resp.data, line_len, &rf,
-                                              &have_error, &error_code);
+        buf_t error_message = {0};
+        int have_error_message = buf_init(&error_message, 128);
+        int success = parse_response_envelope_msg(resp.data, line_len, &rf,
+                                                  &have_error, &error_code,
+                                                  have_error_message ? &error_message : NULL);
         if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE &&
             !g_precheck_armed && !g_door_hook_mode) {
             write_all_fd(STDOUT_FILENO, resp.data, line_len);
@@ -2255,12 +2263,14 @@ int main(int argc, char **argv) {
             free(resp.data);
             free(rf.stdout_buf.data);
             free(rf.stderr_buf.data);
+            free(error_message.data);
             free(engine_root);
             return 1;
         }
         free(resp.data);
 
         if (success) {
+            free(error_message.data);
             free(engine_root);
             if (rf.stdout_buf.len) write_all_fd(STDOUT_FILENO, rf.stdout_buf.data, rf.stdout_buf.len);
             if (rf.stderr_buf.len) write_all_fd(STDERR_FILENO, rf.stderr_buf.data, rf.stderr_buf.len);
@@ -2272,16 +2282,22 @@ int main(int argc, char **argv) {
         free(rf.stderr_buf.data);
 
         if (have_error && is_provably_undispatched(error_code)) {
-            
+            free(error_message.data);
             int rc = fall_through(argc, argv, engine_root);
             free(engine_root);
             return rc;
         }
+        char server_detail[DOOR_SERVER_ERROR_DETAIL_CAP];
+        if (have_error) {
+            door_format_server_error_detail(server_detail, sizeof server_detail, error_code,
+                                            error_message.data ? &error_message : NULL);
+        }
         int rc = emit_post_delivery_failure(
             have_error
-                ? "server returned an error that does not prove the op was never dispatched"
+                ? server_detail
                 : "response was not a well-formed success or recognised error envelope",
             argc, argv, engine_root);
+        free(error_message.data);
         free(engine_root);
         return rc;
     }

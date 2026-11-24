@@ -263,6 +263,62 @@ def test_prefilter_p50_under_5ms(tmp_path):
     assert statistics.median(samples) < 5
 
 
+def _as_gem(monkeypatch, holder="S1"):
+    from coordinator_core.group_em import nomination
+
+    monkeypatch.setattr(nomination, "identify", lambda root: {"state": "live", "holder": {"session_id": holder}})
+
+
+@pytest.mark.parametrize("command", [
+    "Get-CimInstance Win32_Process -Filter 'ProcessId=48920'; Stop-Process -Id 48920 -Force",
+    "taskkill /PID 4242 /T /F",
+    "taskkill /IM node.exe /F",
+    "pkill -f derive",
+])
+def test_live_gem_session_kill_is_allowed_and_others_still_denied(tmp_path, monkeypatch, command):
+    _as_gem(monkeypatch)
+    ident = {"session_id": "S1"}
+    assert denied(command, tmp_path, **ident) is None
+    assert denied(command, tmp_path, session_id="S2")
+    assert denied(command, tmp_path, session_id="S1", agent_id="a1")
+    assert denied(command, tmp_path)
+
+
+def test_gem_save_box_prefix_does_not_exempt_a_non_gem_kill(tmp_path, monkeypatch):
+    _as_gem(monkeypatch, holder="S2")
+    command = "gem-save-box 1; taskkill /T /PID 4"
+    assert denied(command, tmp_path, session_id="S1")
+    assert denied(command, tmp_path, session_id="S2") is None
+
+
+_GEM_SAVE_BOX_COMMANDS = [
+    "python tools/gem-save-box/gem_save_box.py survey --help",
+    "python tools/gem-save-box/gem_save_box.py kill --pid 4242 --reason runaway",
+]
+
+
+@pytest.mark.parametrize("command", _GEM_SAVE_BOX_COMMANDS)
+def test_gem_save_box_runs_through_the_real_hook_for_the_gem_only(tmp_path, monkeypatch, command):
+    import json
+
+    from coordinator_core.bash_guards import dispatch
+
+    _as_gem(monkeypatch)
+    tool = tmp_path / "tools" / "gem-save-box"
+    tool.mkdir(parents=True)
+    (tool / "gem_save_box.py").write_text(
+        "import os\nimport psutil\nfor p in psutil.process_iter():\n    p.kill()\nos.kill(4242, 9)\n"
+    )
+
+    def run(**ident):
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path), **ident}
+        return dispatch.evaluate_payload_json(json.dumps(payload))
+
+    assert run(session_id="S1") is None
+    assert run(session_id="S2")
+    assert run(session_id="S1", agent_id="a1")
+
+
 def test_crash_trigger_words_match_the_module_constant():
     from coordinator_core.bash_guards import dispatch
 
@@ -285,3 +341,9 @@ def test_a_script_tree_kill_of_a_foreign_or_looked_up_pid_still_denies(tmp_path)
            "    subprocess.run(['taskkill', '/T', '/PID', str(p.pid)])\n")
     assert denied("python a.py", tmp_path)
     assert denied("python b.py", tmp_path)
+
+
+def test_denial_remedy_names_the_own_tree_route(tmp_path):
+    reason = denied("kill $(pgrep -f pytest)", tmp_path)
+    assert "coordinator-invoke proc.stop_own_child" in reason
+    assert "your own process tree" in reason

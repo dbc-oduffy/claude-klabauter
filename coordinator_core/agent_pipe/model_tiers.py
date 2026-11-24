@@ -8,14 +8,17 @@ from __future__ import annotations
 
 TIERS = ("haiku", "sonnet", "opus", "fable", "mythos")
 # Canonical `grok --reasoning-effort` levels. A named stage effort is kept.
-# A tier with no effort uses the role effort below.
+# A workflow stage that omits effort does not receive one.
 GROK_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
-# Headless EM plans. An autonomous worker executes. A workflow tier with no effort uses the same pair.
+# Headless EM plans at high. A worker that executes passes medium itself.
 GROK_EM_EFFORT = "high"
 GROK_EXECUTE_EFFORT = "medium"
+# Canonical `agy --effort` levels (`agy --help`: low|medium|high|xhigh|max).
+AGY_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+AGY_EM_EFFORT = "high"
 PROVIDER_TIER_MODELS: dict[str, dict[str, str | None]] = {
     "codex": dict(zip(TIERS, ("gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra", None, None))),
-    "agy": dict(zip(TIERS, ("gemini-3.8-flash-medium", "gemini-4-hydrogen-medium", "gemini-4-argon-high", None, None))),
+    "agy": dict(zip(TIERS, ("gemini-4-hydrogen", "gemini-4-neon", "gemini-4-carbon", None, None))),
     "grok": dict(zip(TIERS, ("grok-4.5", "grok-4.7-build-fast", "grok-4.7", None, None))),
     "mistral": dict(zip(TIERS, ("mistral-small-2603", "mistral-large-4", "mistral-large-4", None, None))),
     "deepseek": dict(zip(TIERS, ("deepseek-flash", "deepseek-flash", "deepseek-v4-pro", None, None))),
@@ -23,7 +26,7 @@ PROVIDER_TIER_MODELS: dict[str, dict[str, str | None]] = {
 
 MODEL_SOURCES = {
     "codex": "Codex native catalog IDs pinned by enrollment contract 2026-11-20: gpt-6.2-astra frontier, gpt-6.2-sol workhorse, gpt-6-luna fast",
-    "agy": "https://antigravity.google/docs/cli/headless/; https://antigravity.google/blog/gemini-4-argon-in-google-antigravity; https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-hydrogen/ ; https://antigravity.google/docs/models/ (Hydrogen is the default Antigravity executor; `agy models` on mac-mini 2026-11-23 lists gemini-4-hydrogen-medium)",
+    "agy": "Gemini 4 catalog IDs verified 2026-11-23 on agy 1.5.15 (effort passed separately via --effort): gemini-4-carbon frontier (opus), gemini-4-neon workhorse (sonnet), gemini-4-hydrogen fast (haiku); https://antigravity.google/docs/cli/headless/",
     "grok": "grok models on this host 2026-11-23 (default grok-4.7; also grok-4.7-build-fast, grok-4.6, grok-4.5); https://docs.x.ai/developers/models/grok-4.7",
     "mistral": "https://docs.mistral.ai/models/mistral-large-4-0; https://docs.mistral.ai/models/mistral-small-4-0-26-03; operational routing roles, verified 2026-11-07",
     "deepseek": "https://api-docs.deepseek.com/quick_start/pricing; operational routing roles, not measured quality equivalence",
@@ -45,10 +48,11 @@ DEPRECATED_MODELS = {
 _EXPLICIT_STANDARD = frozenset({
     ("codex", "gpt-6.1-sol"),
     ("codex", "gpt-6-sol"), ("codex", "gpt-5.6-sol"), ("codex", "gpt-5.6-luna"),
+    ("agy", "gemini-3.8-flash"), ("agy", "gemini-3.8-flash-medium"),
     # Previous generation. Selectable, not a routing tier.
     ("grok", "grok-4.6"),
 })
-_EXPLICIT_FRONTIER = frozenset({("codex", "gpt-6-astra"), ("agy", "gemini-4-argon"), ("grok", "grok-4.7")})
+_EXPLICIT_FRONTIER = frozenset({("codex", "gpt-6-astra"), ("agy", "gemini-4-argon"), ("agy", "gemini-4-argon-high"), ("grok", "grok-4.7")})
 
 
 def model_for_tier(provider: str, tier: str) -> str | None:

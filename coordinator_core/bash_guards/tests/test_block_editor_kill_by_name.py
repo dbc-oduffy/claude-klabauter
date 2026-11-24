@@ -87,5 +87,16 @@ def test_script_with_pid_kill_allowed(tmp_path: Path) -> None:
     assert _enveloped(guard.check)(_payload(f"bash {script.as_posix()}")) is None
 
 
+def test_live_gem_session_may_name_kill_an_editor(monkeypatch, tmp_path: Path) -> None:
+    from coordinator_core.group_em import nomination
+
+    monkeypatch.setattr(nomination, "identify", lambda root: {"state": "live", "holder": {"session_id": "S1"}})
+    base = {"cwd": str(tmp_path)}
+    for cmd in ("taskkill /F /IM UnrealEditor.exe", "Stop-Process -Name UnrealEditor"):
+        assert _enveloped(guard.check)(_payload(cmd, session_id="S1", **base)) is None
+        assert _enveloped(guard.check)(_payload(cmd, session_id="S2", **base)) is not None
+        assert _enveloped(guard.check)(_payload(cmd, session_id="S1", agent_id="a1", **base)) is not None
+
+
 def test_missing_script_allowed() -> None:
     assert _enveloped(guard.check)(_payload("bash /nonexistent/w.sh")) is None

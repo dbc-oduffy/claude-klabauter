@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import emit
-from coordinator_core.ops.dispatch_emit.compose_size_probe import CEILING_RATIO, compose_bytes, parse_cap_refusal
+from coordinator_core.ops.dispatch_emit.compose_size import ASK_SCRIPT_CEILING_BYTES
+from coordinator_core.ops.dispatch_emit.compose_size_probe import compose_bytes, parse_cap_refusal
 from coordinator_core.ops.dispatch_emit.tests.test_ask_roadmap_fanout_e2e import (
     _RB_TEXT,
     _compose_in_run,
@@ -20,7 +20,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_roadmap_fanout_e2e import
 
 pytestmark = pytest.mark.complete
 
-_CEILING = int(CEILING_RATIO * emit._WORKFLOW_SCRIPT_BYTE_CAP)
+_CEILING = ASK_SCRIPT_CEILING_BYTES
 
 
 def _measure(repo, which: str) -> dict:

@@ -75,7 +75,7 @@
       {"kind": "literal", "line": "  # per-row: do <- open/coded; spun_off <- spun_off; defer <- backlogged;"},
       {"kind": "literal", "line": "  # ruled_out <- wont_do. A row may not CLOSE into a gated grouping until that"},
       {"kind": "literal", "line": "  # grouping's block reads `approved`. Flipping one needs three things together:"},
-      {"kind": "literal", "line": "  # `approver` (PM, G-EM, or Uhura handle), `pm_utterance` (their verbatim words —"},
+      {"kind": "literal", "line": "  # `approver` (PM, APM, or Uhura handle), `pm_utterance` (their verbatim words —"},
       {"kind": "literal", "line": "  # testimonial, never inferred or backfilled from disk), and a `digest` recomputed"},
       {"kind": "literal", "line": "  # over the CURRENT membership of that grouping (schema_validate.py's"},
       {"kind": "literal", "line": "  # compute_grouping_digest). Adding a row to an approved grouping invalidates the"},

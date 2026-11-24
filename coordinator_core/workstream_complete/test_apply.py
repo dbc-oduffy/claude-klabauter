@@ -1877,42 +1877,6 @@ def test_best_effort_directive_alone_reaches_success_not_partial_mutation(
     assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
 
 
-def test_verdict_exit_code_lands_and_threads_stdout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A declared verdict exit (plan-reversibility-eligibility's `1` with
-    `eligible: false` JSON) is a landed answer, not a failure; an undeclared
-    non-zero exit from the same directive still fails."""
-    verdict_json = '{"eligible": false}\n'
-
-    def verdict_main(argv: list[str]) -> int:
-        print(verdict_json, end="")
-        return 1
-
-    def unreadable_main(argv: list[str]) -> int:
-        return 2
-
-    modules = {
-        "plan-reversibility-eligibility": _fake_module(verdict_main, "fake_verdict"),
-        "coordinator-fold-execution-record": _fake_module(unreadable_main, "fake_unreadable"),
-    }
-    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
-
-    verdict = _directive("d_verdict", "plan-reversibility-eligibility")
-    verdict["verdict_exit_codes"] = [1]
-    consumer = _directive("d_consumer", "coordinator-fold-execution-record")
-    consumer["args"] = ["{d_verdict.entry_path}"]
-    unreadable = _directive("d_unreadable", "coordinator-fold-execution-record")
-    unreadable["verdict_exit_codes"] = [1]
-    exit_code, report = ws_apply._execute_directives([verdict, consumer, unreadable], [], {})
-
-    assert "d_verdict" in report["landed"]
-    assert [e["id"] for e in report["failed"]] == ["d_consumer", "d_unreadable"]
-    consumer_error = report["failed"][0]["error"]
-    assert "unresolved" not in consumer_error and '{"eligible": false}' in consumer_error
-    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)
-
-
 def test_non_best_effort_nonzero_exit_is_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2797,13 +2761,12 @@ def test_completion_entry_landing_is_unverified_not_failed_when_unreadable() -> 
 
 
 def test_plugin_local_clis_is_a_closed_hand_literal_set() -> None:
-    """AC4: `_PLUGIN_LOCAL_CLIS` is exactly the two named barewords, a
-    `frozenset` (immutable — no runtime widening), and both are
-    `CONSUMES_MANIFEST` members (§ Four questions, 4)."""
+    """AC4: `_PLUGIN_LOCAL_CLIS` is exactly the one named bareword, a
+    `frozenset` (immutable — no runtime widening), and a
+    `CONSUMES_MANIFEST` member (§ Four questions, 4)."""
     assert isinstance(ws_apply._PLUGIN_LOCAL_CLIS, frozenset)
-    assert ws_apply._PLUGIN_LOCAL_CLIS == frozenset(
-        {"baton-chain-closure", "plan-reversibility-eligibility"}
-    )
+    assert ws_apply._PLUGIN_LOCAL_CLIS == frozenset({"baton-chain-closure"})
+    assert "plan-reversibility-eligibility" not in CONSUMES_MANIFEST
     assert ws_apply._PLUGIN_LOCAL_CLIS <= set(CONSUMES_MANIFEST)
 
 
@@ -3110,7 +3073,7 @@ def test_no_plugin_local_member_appears_in_any_callable_keyed_cli_dispatch_table
 # `_PLUGIN_LOCAL_CLIS` member (§ census, § Anti-scope).
 # ---------------------------------------------------------------------------
 
-_DOE_SCRIPT_NAMES = ("baton-chain-closure", "plan-reversibility-eligibility", "uhura-mode")
+_DOE_SCRIPT_NAMES = ("baton-chain-closure", "uhura-mode")
 
 
 def _resolve_live_plugin_root() -> Optional[Path]:
@@ -3175,9 +3138,9 @@ def test_consumed_handoff_ship_directive_threads_sha_flag() -> None:
 
     sha = "a" * 40
     (with_sha,) = dml.build_consumed_handoff_ship_directives(["state/handoffs/h.md"], sha=sha)
-    assert with_sha["args"] == ["ship-handoff", "state/handoffs/h.md", "--sha", sha]
+    assert with_sha["args"] == ["ship-handoff", "state/handoffs/h.md", "--no-archive", "--sha", sha]
     (without,) = dml.build_consumed_handoff_ship_directives(["state/handoffs/h.md"])
-    assert without["args"] == ["ship-handoff", "state/handoffs/h.md"]
+    assert without["args"] == ["ship-handoff", "state/handoffs/h.md", "--no-archive"]
 
 
 # ---------------------------------------------------------------------------

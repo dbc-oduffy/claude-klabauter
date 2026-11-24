@@ -78,6 +78,7 @@ def test_real_base_measure_fills_pre_existing_and_writes_the_export(repo, tmp_pa
     _git(repo, "commit", "-q", "-m", "base")
     base = _git(repo, "rev-parse", "HEAD")
     (repo / "pkg" / "__init__.py").write_text("VALUE = 3\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-a", "-m", "change")
     export = tmp_path / "export.txt"
     _code, data = _main(["--base-sha", base, "--base-export-out", str(export), "--", "tests"], tmp_path / "o.json")
     assert sorted(data["failing"]) == ["tests/test_a.py::test_red_at_base", "tests/test_b.py::test_green_at_base"]
@@ -184,14 +185,15 @@ def _committed_engine_with_dirty_worktree(root: Path) -> str:
     return _git(root, "rev-parse", "HEAD")
 
 
-def test_a_foreign_import_error_reruns_the_targets_on_the_base_export_and_reports_tests_run(landing, tmp_path):
+def test_foreign_dirt_in_the_live_checkout_never_reaches_the_verdict(landing, tmp_path):
     root, _base = landing
     base = _committed_engine_with_dirty_worktree(root)
 
     _code, data = _main(["--base-sha", base, "--", "tests/test_dirty.py"], tmp_path / "o.json")
 
     assert data["tests_run"] > 0 and data["status"] == "pass"
-    assert data["overlay_rerun"]["from"] == "coordinator_core/dirty.py"
+    assert data["own_tree"]["overlaid"] == []
+    assert "overlay_rerun" not in data
     assert data.get("zero_run_cause") != ltt.ZERO_RUN_IMPORT_ERROR
 
 
@@ -258,7 +260,6 @@ def test_clone_leg_over_only_slow_tier_tests_passes_instead_of_failing_on_exit_5
 
 
 def test_clone_leg_runs_the_targets_when_an_importer_fails_to_collect(landing, tmp_path, monkeypatch):
-    monkeypatch.setattr(cov, "xdist_workers", lambda _py, _units: 0)  # a serial run aborts at a collection error
     root, _base = landing
     base = _land(root, "tests/test_broken_importer.py", "import nonexistent_dep_xyz  # mod\n\n\ndef test_x():\n    pass\n")
     post = _land(root, "pkg/mod.py", "VALUE = 1\n# landed\n")

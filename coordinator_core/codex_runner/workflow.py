@@ -6,6 +6,9 @@ configured default. Caller identity is lineage, never a child's own session ID.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+import sys
+import tempfile
 import json
 import hashlib
 import stat
@@ -23,6 +26,7 @@ from typing import Any, Callable
 
 import jsonschema
 
+from coordinator_core.codex_runner.capture_provider import spawn_collector
 from coordinator_core.codex_runner.agy import AgyUnavailable, resolve_agy
 from coordinator_core.codex_runner.grok import GrokUnavailable, resolve_grok
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
@@ -543,6 +547,48 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
         _cleanup(capacity.release_spawn, key, supervisor_pid, host=host)
 
 
+@contextmanager
+def _provider_stream(env, backend, repo, stderr, fire_id, request_id, attempt, on_spawn):
+    destination = os.environ.get("COORDINATOR_PROVIDER_EVIDENCE_DIR")
+    if backend != "codex" or not destination:
+        yield env, stderr, on_spawn
+        return
+    root = Path(destination)
+    if not root.is_absolute() or not root.is_dir() or root.resolve().is_relative_to(repo):
+        raise AgentFailed("Provider evidence requires an existing host directory outside the worker checkout")
+    folder = Path(stderr.name).parent
+    stage = folder.name if folder.parent.name == "agents" else f"{folder.parent.name}/{folder.name}"
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb") as reader, os.fdopen(write_fd, "wb") as writer, tempfile.NamedTemporaryFile(
+        dir=root, prefix="worker-", suffix=".jsonl", delete=False
+    ) as evidence:
+        collector = None
+        identity = {}
+
+        def start_collector(pid):
+            nonlocal collector
+            identity.update(fire_id=fire_id, stage=stage, pid=pid)
+            header = dict(identity, type="worker.capture", request_id=request_id, attempt=attempt,
+                          usage_home=env.get("CODEX_HOME"), artifact_dir=str(folder))
+            evidence.write((json.dumps(header) + "\n").encode())
+            evidence.flush()
+            collector = spawn_collector(identity, reader, evidence)
+            if on_spawn:
+                on_spawn(pid)
+
+        try:
+            yield dict(env, RUST_LOG="tungstenite::protocol=trace,codex_api::sse::responses=trace"), writer, start_collector
+        finally:
+            writer.close()
+            if collector is not None:
+                try:
+                    collector.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    collector.terminate()
+                    collector.wait()
+                evidence.write((json.dumps(dict(identity, type="worker.capture_end", collector_exit=collector.returncode)) + "\n").encode())
+
+
 def _persona(agent_type: str | None) -> str:
     if not agent_type or agent_type == "general-purpose":
         return ""
@@ -724,7 +770,7 @@ def _event_provenance(path: Path, backend: str) -> dict:
     result: dict = {
         "native_thread_id": "unknown", "native_turn_id": "unknown",
         "native_total_usage": "unknown", "model": "unknown", "effort": "unknown",
-        "usage": "unknown", "observed_turn_usage_total": "unknown",
+        "usage": "unknown", "observed_turn_usage_total": "unknown", "service_tier": None,
     }
     usages = []
     try:
@@ -754,7 +800,8 @@ def _event_provenance(path: Path, backend: str) -> dict:
                 pass
         if kind in ("thread.started", "turn.started", "session.configured", "system"):
             payload = event.get("session") if isinstance(event.get("session"), dict) else event
-            for target, names in (("model", ("model",)), ("effort", ("reasoning_effort", "model_reasoning_effort", "effort"))):
+            for target, names in (("model", ("model",)), ("effort", ("reasoning_effort", "model_reasoning_effort", "effort")),
+                                  ("service_tier", ("service_tier",))):
                 for name in names:
                     value = payload.get(name)
                     if isinstance(value, str) and value.strip():
@@ -762,6 +809,10 @@ def _event_provenance(path: Path, backend: str) -> dict:
                         break
         if (kind == "turn.completed" or backend == "claude") and isinstance(event.get("usage"), dict):
             usages.append(event["usage"])
+            result.setdefault("usage_observations", []).append({
+                "usage": event["usage"], "model": event.get("model", result["model"]),
+                "effort": result["effort"], "service_tier": event.get("service_tier", result["service_tier"]),
+                "native_turn_id": event.get("turn_id"), "native_total_usage": event.get("total_token_usage")})
     if usages:
         # Preserve the event shapes (including cache counters) and sum numeric
         # token counters across completed turns without inventing missing fields.
@@ -774,6 +825,45 @@ def _event_provenance(path: Path, backend: str) -> dict:
         result["observed_turn_usage_total"] = totals
         result["usage_events"] = usages
     return result
+
+
+def _join_startup_model(receipt: dict) -> None:
+    """Bind model-free exec usage to the same worker's native startup observation."""
+    if receipt.get('backend') != 'codex':
+        return
+    try:
+        sid = str(uuid.UUID(receipt['native_thread_id']))
+        path = settings_home() / 'host-sessions' / 'codex' / f'{sid}.json'
+        with path.open('rb') as stream:
+            raw = stream.read(64 * 1024 + 1)
+        if len(raw) > 64 * 1024:
+            return
+        record = json.loads(raw)
+        evidence = record.get('session_start_model_evidence', {})
+        model = record.get('session_start_model')
+        if (record.get('schema_version') != 1 or record.get('provider') != 'codex'
+                or record.get('session_id') != sid or record.get('pid') != receipt.get('pid')
+                or record.get('parent_session_id') != receipt.get('broker_root_session_id')
+                or record.get('role') != 'workflow-agent'
+                or evidence.get('source') != 'session_start_payload'
+                or evidence.get('session_source') != 'startup'
+                or record.get('session_start_model_conflict') is True
+                or not isinstance(model, str) or not model.strip() or model == 'unknown'
+                or record.get('session_start_model_initial', model) != model):
+            return
+        observations = receipt.get('usage_observations', [])
+        if any(row.get('model') not in (None, 'unknown', model)
+               for row in [receipt, *observations]):
+            return
+        # The process receipt and canonical accounting consumer retain the evidence source.
+        receipt['model_evidence'] = {'session_id': sid, 'registry_path': str(path), **evidence}
+        if receipt.get('model') in (None, 'unknown'):
+            receipt['model'] = model
+        for observation in observations:
+            if observation.get('model') in (None, 'unknown'):
+                observation['model'] = model
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return
 
 
 def _append_canonical_usage(receipt: dict) -> dict:
@@ -796,53 +886,102 @@ def _append_canonical_usage(receipt: dict) -> dict:
         return {'status': 'incomplete', 'reason': 'native usage events unavailable'}
     cached_key, written_key = ('cached_input_tokens', 'cache_write_input_tokens') if backend == 'codex' else (
         'cache_read_input_tokens', 'cache_creation_input_tokens')
-    totals = dict.fromkeys(('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'), 0)
-    for usage in events:
+    records = []
+    stable_request = f'{fire}:{request}'
+    observations = receipt.get('usage_observations', [])
+    for index, usage in enumerate(events):
+        observation = observations[index] if index < len(observations) else receipt
         keys = ('input_tokens', 'output_tokens', cached_key, written_key)
         if not isinstance(usage, dict) or any(
             isinstance(usage.get(key), bool) or not isinstance(usage.get(key), int) or usage[key] < 0
             for key in keys
         ):
             return {'status': 'incomplete', 'reason': 'native usage counters missing or invalid'}
-        uncached = usage['input_tokens'] - usage[cached_key] if backend == 'codex' else usage['input_tokens']
+        uncached = usage['input_tokens'] - usage[cached_key] - usage[written_key] if backend == 'codex' else usage['input_tokens']
         if uncached < 0:
             return {'status': 'incomplete', 'reason': 'native cache count exceeds input'}
-        totals['input_tokens'] += uncached
-        # Native output_tokens already includes reasoning tokens.
-        totals['output_tokens'] += usage['output_tokens']
-        totals['cache_read_input_tokens'] += usage[cached_key]
-        totals['cache_creation_input_tokens'] += usage[written_key]
-    stable_request = f'{fire}:{request}'
-    payload = {
-        'session_id': child, 'parent_session_id': parent, 'request_id': stable_request,
-        'provider': backend, 'model': None if receipt.get('model') == 'unknown' else receipt.get('model'),
-        'effort': None if receipt.get('effort') == 'unknown' else receipt.get('effort'),
-        'service_tier': None, 'usage_format': 'coordinator-canonical-v1', 'usage': totals,
-    }
-    # Only native evidence can join canonical and native accounting streams.
-    if isinstance(receipt.get('native_turn_id'), str) and receipt['native_turn_id'] != 'unknown':
-        payload['native_turn_id'] = receipt['native_turn_id']
-    if isinstance(receipt.get('native_total_usage'), dict):
-        payload['native_total_usage'] = receipt['native_total_usage']
-    event = {'type': 'coordinator_usage', 'timestamp': datetime.now(timezone.utc).isoformat(), 'payload': payload}
+        totals = {'input_tokens': uncached, 'output_tokens': usage['output_tokens'],
+                  'cache_read_input_tokens': usage[cached_key], 'cache_creation_input_tokens': usage[written_key]}
+        payload = {
+            'session_id': child, 'parent_session_id': parent,
+            'request_id': stable_request if index == 0 else f'{stable_request}:turn:{index}',
+            'provider': backend, 'model': None if observation.get('model') == 'unknown' else observation.get('model'),
+            'effort': None if observation.get('effort') == 'unknown' else observation.get('effort'),
+            'service_tier': observation.get('service_tier'), 'usage_format': 'coordinator-canonical-v1', 'usage': totals,
+        }
+        # Codex exec's successful completion reports the thread's lifetime counters.
+        # Keep the observation alongside its charge so retries can compare the
+        # original counters even after a later request has advanced the thread.
+        if backend == 'codex' and observations and len(events) == 1:
+            payload['exec_thread_total'] = totals.copy()
+        if receipt.get('model_evidence'):
+            payload['model_evidence'] = receipt['model_evidence']
+        # Only native evidence can join canonical and native accounting streams.
+        if isinstance(observation.get('native_turn_id'), str) and observation['native_turn_id'] != 'unknown':
+            payload['native_turn_id'] = observation['native_turn_id']
+        if isinstance(observation.get('native_total_usage'), dict):
+            payload['native_total_usage'] = observation['native_total_usage']
+        records.append({'type': 'coordinator_usage', 'timestamp': datetime.now(timezone.utc).isoformat(), 'payload': payload})
     try:
         path = (settings_home() / 'state' / 'codex-usage' / f'{parent}.jsonl').resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
-        with held_lock(path, timeout=2.0):
+        with held_lock(path, timeout=0.05):
             with path.open('a+', encoding='utf-8', newline='\n') as stream:
                 stream.seek(0)
-                for line in stream:
+                prior = stream.read(4 * 1024 * 1024 + 1)
+                if len(prior) > 4 * 1024 * 1024:
+                    raise ValueError('usage ledger exceeds bounded duplicate-check budget')
+                seen = {}
+                for line in prior.splitlines(keepends=True):
                     if not line.endswith('\n'):
                         raise ValueError('usage ledger has an incomplete final line')
                     previous = json.loads(line)
                     previous_payload = previous.get('payload', {}) if isinstance(previous, dict) else {}
-                    if isinstance(previous, dict) and previous.get('type') == 'coordinator_usage' and previous_payload.get('request_id') == stable_request:
-                        return {'status': 'duplicate', 'path': str(path), 'request_id': stable_request}
-                stream.write(json.dumps(event, ensure_ascii=False) + '\n')
+                    if isinstance(previous, dict) and previous.get('type') == 'coordinator_usage':
+                        seen[(previous_payload.get('session_id'), previous_payload.get('request_id'))] = previous_payload
+                child_history = [p for (sid, _), p in seen.items() if sid == child]
+                for event in records:
+                    payload = event['payload']
+                    prior_payload = seen.get((child, payload['request_id']))
+                    original = payload.get('exec_thread_total', payload['usage'])
+                    if prior_payload and prior_payload.get('exec_thread_total', prior_payload.get('usage')) != original:
+                        raise ValueError('existing request has different counters; legacy aggregate or conflicting replay')
+                    if not prior_payload and child_history and 'exec_thread_total' in payload:
+                        previous_total = child_history[-1].get('exec_thread_total')
+                        if not previous_total or any(original[k] < previous_total[k] for k in original):
+                            return {'status': 'incomplete', 'reason': 'Codex thread has no comparable previous total'}
+                        payload['usage'] = {k: value - previous_total[k] for k, value in original.items()}
+                missing = [event for event in records if (child, event['payload']['request_id']) not in seen]
+                for event in missing:
+                    stream.write(json.dumps(event, ensure_ascii=False) + '\n')
                 stream.flush()
-        return {'status': 'appended', 'path': str(path), 'request_id': stable_request}
+                os.fsync(stream.fileno())
+        return {'status': 'appended' if missing else 'duplicate', 'path': str(path), 'request_id': stable_request,
+                'request_ids': [event['payload']['request_id'] for event in records]}
     except Exception as exc:
         return {'status': 'failed', 'reason': f'{type(exc).__name__}: {exc}'}
+
+
+def _record_execution(parent, fire, request, phase, *, receipt=None) -> None:
+    """Persist expected execution and terminal accounting evidence in the parent's journal."""
+    try:
+        parent = str(uuid.UUID(parent))
+        if not isinstance(fire, str) or not fire or isinstance(request, bool) or not isinstance(request, (str, int)):
+            return
+        payload = {'parent_session_id': parent, 'request_id': f'{fire}:{request}', 'phase': phase}
+        if receipt is not None:
+            usage = receipt.get('canonical_usage', {})
+            payload.update(session_id=receipt.get('native_thread_id'), usage_status=usage.get('status'),
+                           usage_request_ids=usage.get('request_ids', []))
+        path = settings_home() / 'state' / 'codex-usage' / f'{parent}.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with held_lock(path, timeout=0.05):
+            with path.open('a', encoding='utf-8', newline='\n') as stream:
+                stream.write(json.dumps({'type': 'coordinator_execution', 'payload': payload}) + '\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+    except Exception:
+        return
 
 
 _FAMILY_BACKENDS = ("grok", "agy")
@@ -937,16 +1076,45 @@ def _operation_allow(options: dict) -> list[str]:
             for flag in ("--allowedTools", f"Bash({word} {op_id}:*)")]
 
 
+def _agy_model(options: dict) -> str | None:
+    """Native Agy id for a Workflow tier, or an explicit agyModel. Omitted tier keeps the CLI default."""
+    explicit = options.get("agyModel")
+    if explicit is not None:
+        if not isinstance(explicit, str) or not explicit.strip():
+            raise AgentFailed("agyModel must be a non-empty native model ID")
+        return explicit
+    tier = options.get("model")
+    if tier is None:
+        return None
+    if not isinstance(tier, str) or not tier.strip():
+        raise AgentFailed("model must be an explicit known Workflow tier")
+    model = model_for_tier("agy", tier)
+    if not model:
+        raise AgentFailed(f"no verified Agy model mapping for Workflow tier {tier!r}")
+    return model
+
+
+def _agy_effort(options: dict) -> str | None:
+    """Pass a named Agy reasoning effort through. Omitted effort is not invented."""
+    effort = options.get("effort")
+    if effort is None:
+        return None
+    if not isinstance(effort, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", effort):
+        raise AgentFailed("effort must be a non-empty native reasoning effort name")
+    return effort
+
+
 def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None,
                  model: str | None = None, effort: str | None = None) -> list[str]:
     """Write-capable argv for a grok/agy stage (prompt via file for grok, stdin for agy).
 
     Never carries grok.FORBIDDEN_FLAGS; the agy arm delegates to family_stage_argv (single builder)
     and runs unrestricted (--dangerously-skip-permissions, no sandbox, shell and file permission
-    granted) per PM ruling. A grok stage with a Workflow tier gets that tier's native model and,
-    when set, its reasoning effort. A tier with no effort uses the role effort (low, medium, high).
-    Omitted model and effort stay with the CLI. Stages stay
-    single-agent. A grok op-relay or commit-stage child gets only a coordinator-invoke allow rule.
+    granted) per PM ruling. For agy, `model` and `effort` pass through `--model` / `--effort`
+    matching Codex's separation of model and effort. A grok stage with a Workflow tier gets that
+    tier's native model and, when set, its reasoning effort. Omitted model and effort stay with the
+    CLI. Stages stay single-agent. A grok op-relay or commit-stage child gets only a
+    coordinator-invoke allow rule.
     """
     try:
         if backend == "grok":
@@ -960,7 +1128,12 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
             if effort:
                 argv += ["--reasoning-effort", effort]
             return argv
-        return family_stage_argv(resolve_agy(), log_file=str(artifact_dir / _AGY_LOG_NAME))
+        return family_stage_argv(
+            resolve_agy(),
+            log_file=str(artifact_dir / _AGY_LOG_NAME),
+            model=model,
+            effort=effort,
+        )
     except (GrokUnavailable, AgyUnavailable) as exc:
         raise AgentFailed(f"{backend} executable unavailable: {exc}") from exc
 
@@ -1026,7 +1199,7 @@ def _grok_cancellation(stdout: Path, stderr: Path) -> str | None:
 
 
 def _save_process(artifact_dir: Path, proc, backend: str, options: dict, requested_model,
-                  *, broker_root_session_id=None, broker_request_id=None, broker_fire_id=None) -> None:
+                  *, broker_root_session_id=None, broker_request_id=None, broker_fire_id=None) -> dict:
     if broker_root_session_id is None:
         try:
             admission = json.loads((artifact_dir / "admission.json").read_text(encoding="utf-8"))
@@ -1043,11 +1216,13 @@ def _save_process(artifact_dir: Path, proc, backend: str, options: dict, request
         "broker_request_id": broker_request_id, "broker_fire_id": broker_fire_id,
         **_event_provenance(artifact_dir / "stdout.jsonl", backend),
     }
+    _join_startup_model(receipt)
     receipt['canonical_usage'] = _append_canonical_usage(receipt)
     private_audit = artifact_dir / 'private-cli.json'
     if private_audit.exists():
         receipt['private_cli'] = _private_json(private_audit, 1024*1024)
     (artifact_dir / "process.json").write_text(json.dumps(receipt), encoding="utf-8")
+    return receipt
 
 
 def _write_commit_params(repo_root: Path, prompt: str) -> None:
@@ -1292,8 +1467,22 @@ def run_agent(
         if private_settings is not None:
             env.update(private_settings[0])
             (artifact_dir / 'private-cli.json').write_text(json.dumps(private_settings[2]), encoding='utf-8')
+        capture_root = os.environ.get("COORDINATOR_PROVIDER_EVIDENCE_DIR")
+        worker_home_root = None
+        if capture_root:
+            root = Path(capture_root)
+            policy_file = os.environ.get("COORDINATOR_CODEX_WORKER_POLICY_FILE")
+            if not root.is_absolute() or not root.is_dir() or root.resolve().is_relative_to(repo_root) or not policy_file:
+                raise AgentFailed("Persistent attribution requires a restricted worker and private evidence directory")
+            rules = json.loads(Path(policy_file).read_bytes())
+            if rules.get(str(root.resolve())) != "deny" or any(
+                Path(path).is_absolute() and Path(path).resolve().is_relative_to(root.resolve()) and access != "deny"
+                for path, access in rules.items()
+            ):
+                raise AgentFailed("Worker policy must deny the provider evidence directory and descendants")
+            worker_home_root = Path(tempfile.mkdtemp(prefix="native-", dir=root))
         try:
-            shape_codex_child(env, writable_root=repo_root)
+            shape_codex_child(env, writable_root=repo_root, worker_home_root=worker_home_root)
         except SandboxSetupRefused as exc:
             raise AgentFailed(str(exc)) from exc
         if _gate_reask:
@@ -1309,6 +1498,8 @@ def run_agent(
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
             if native_schema is not None:
                 argv += ["--output-schema", str(schema_path)]
+        if worker_home_root is not None:
+            argv.remove("--ephemeral")
         model = _codex_model(options)
         if model is not None:
             argv += ["--model", model]
@@ -1327,8 +1518,8 @@ def run_agent(
             argv += ["--model", str(options["model"])]
         argv += _operation_allow(options)
     elif backend in _FAMILY_BACKENDS:
-        family_model = _grok_model(options) if backend == "grok" else None
-        family_effort = _grok_effort(options) if backend == "grok" else None
+        family_model = _agy_model(options) if backend == "agy" else _grok_model(options) if backend == "grok" else None
+        family_effort = _agy_effort(options) if backend == "agy" else _grok_effort(options) if backend == "grok" else None
         argv = _family_argv(backend, artifact_dir, options.get("agentType"), family_model, family_effort)
     else:
         raise AgentFailed(f"unknown agent backend: {backend}")
@@ -1345,16 +1536,19 @@ def run_agent(
             raise AgentFailed(f"stallWindowS must be a number: {exc}") from exc
     started = time.monotonic()
     try:
+        _record_execution(parent_session_id or os.environ.get('COORDINATOR_SESSION_ID') or os.environ.get('CODEX_THREAD_ID'),
+                          fire_id, request_id, 'started')
         for attempt in range(STALL_RETRIES + 1):
             with (artifact_dir / "stdout.jsonl").open("wb") as out, (artifact_dir / "stderr.txt").open("wb") as err:
                 try:
-                    proc = _run_admitted(
-                        argv, stdin_text, env=env, repo_root=repo_root, artifact_dir=artifact_dir,
-                        backend=backend, options=options, parent_session_id=parent_session_id,
-                        timeout_s=max(timeout_s - (time.monotonic() - started), 1e-3), on_spawn=on_spawn,
-                        stdout=out, stderr=err, request_id=request_id, fire_id=fire_id,
-                        on_native_thread=on_native_thread, stall_window_s=stall_window_s,
-                    )
+                    with _provider_stream(env, backend, repo_root, err, fire_id, request_id, attempt, on_spawn) as (child_env, child_err, child_spawn):
+                        proc = _run_admitted(
+                            argv, stdin_text, env=child_env, repo_root=repo_root, artifact_dir=artifact_dir,
+                            backend=backend, options=options, parent_session_id=parent_session_id,
+                            timeout_s=max(timeout_s - (time.monotonic() - started), 1e-3), on_spawn=child_spawn,
+                            stdout=out, stderr=child_err, request_id=request_id, fire_id=fire_id,
+                            on_native_thread=on_native_thread, stall_window_s=stall_window_s,
+                        )
                     break
                 except StageStalled as exc:
                     if attempt >= STALL_RETRIES:
@@ -1371,10 +1565,11 @@ def run_agent(
     finally:
         if backend == "codex":
             writeback_codex_auth(env)
-    _save_process(artifact_dir, proc, backend, options,
-                  model if backend == "codex" else family_model if backend == "grok" else options.get("model"),
+    requested_model = model if backend == "codex" else (family_model if backend in ("agy", "grok") and family_model is not None else options.get("model"))
+    receipt = _save_process(artifact_dir, proc, backend, options, requested_model,
                   broker_root_session_id=parent_session_id, broker_request_id=request_id,
                   broker_fire_id=fire_id)
+    _record_execution(receipt.get('broker_root_session_id'), fire_id, request_id, 'completed', receipt=receipt)
     if proc.returncode != 0:
         raise AgentFailed(f"{backend} agent exited {proc.returncode}; see {artifact_dir / 'stderr.txt'}")
     text = None

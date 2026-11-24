@@ -1395,7 +1395,7 @@ def _derive_landing_sha(root: Path, run_id: str) -> tuple[Optional[str], Optiona
     """``(the run's base sha, None)`` once ``_in_run_unclean`` passes, else ``(None, refusal)``.
 
     A clean write set is unchanged between the run base and HEAD, so the base is the only sha this run
-    can name; an older commit that touched the paths is not this run's (G-EM ruling, 2026-11-17).
+    can name; an older commit that touched the paths is not this run's (landed-work attribution rule, 2026-11-17).
     """
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract
 

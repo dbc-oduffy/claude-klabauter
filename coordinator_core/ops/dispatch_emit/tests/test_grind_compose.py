@@ -1920,7 +1920,7 @@ def test_declared_file_outside_repo_root_hands_back_before_the_fix_agent_runs(es
     assert seen == []
     hb = [h for h in result["handed_back"] if h["type"] == "needs-judgment"]
     assert len(hb) == 1 and escaping in hb[0]["reason"] and "no fix applied" in hb[0]["reason"]
-    assert "a/ok.py" not in hb[0]["reason"].split("cross-repo change): ")[1]
+    assert "a/ok.py" not in hb[0]["reason"].split("to the owning repo): ")[1]
 
 
 def test_in_root_declared_files_still_reach_the_fix_agent() -> None:

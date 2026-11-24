@@ -132,7 +132,7 @@ def test_undeliverable_turn_spawns_only_the_headless_resume_and_never_a_keystrok
         return subprocess.CompletedProcess(argv, 1, "", "busy")
 
     assert run_turn(runner, tmp_path) == pg.NO_REPLY
-    assert len(spawned) == 1 and spawned[0][:2] == ["grok", "-p"]
+    assert len(spawned) == 1 and spawned[0][0] == "grok" and "-p" in spawned[0]
     assert not any(tok in " ".join(spawned[0]).lower() for tok in ("osascript", "send-keys", "tmux"))
 
 
@@ -181,83 +181,84 @@ def _chunk(text):
         "sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": text}}}})
 
 
-def test_held_live_grok_submits_text_and_does_not_resume_headless(tmp_path: Path) -> None:
+def test_peer_text_is_not_typed_and_not_resumed_as_the_user(tmp_path: Path) -> None:
     home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": str(tmp_path), "tty": "/dev/ttys004"}])
-    seen = []
+    pg.mark_resumable(home, SID, str(tmp_path))
 
     def submit(tty, text):
-        seen.append((tty, text))
+        raise AssertionError("tty")
 
     def runner(argv, **kw):
         raise AssertionError("resume")
 
     result = asyncio.run(pg.deliver(SID, str(tmp_path), "hello from peer", home=home, binary="grok",
                                     runner=runner, is_live_grok=lambda pid: pid == 4242, submit=submit))
-    assert seen == [("/dev/ttys004", "hello from peer")]
-    assert result["ok"] is True and result["written"] is True and result["msg_id"]
+    assert result == pg.NOT_LISTENING
 
 
-def test_marked_session_resumes_even_when_its_grok_is_live(tmp_path: Path) -> None:
+def test_marked_session_is_not_resumed_as_the_user(tmp_path: Path) -> None:
     cwd = str(tmp_path)
     home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": cwd, "tty": "/dev/ttys004"}])
     pg.mark_resumable(home, SID, cwd)
-    path = pg.session_updates_path(home, cwd, SID)
-    path.parent.mkdir(parents=True)
-    path.write_text(_chunk("hello from peer") + "\n", encoding="utf-8")
 
     def submit(tty, text):
         raise AssertionError("tty submit")
 
-    seen = {}
-
-    def runner(argv, **kw) -> "CompletedProcess[str]":
-        seen["argv"] = argv
-        return subprocess.CompletedProcess(argv, 0, json.dumps({"text": "pong"}), "")
+    def runner(argv, **kw):
+        raise AssertionError("resume")
 
     result = asyncio.run(pg.deliver(SID, cwd, "hello from peer", home=home, binary="grok",
                                     runner=runner, is_live_grok=lambda pid: pid == 4242, submit=submit))
-    assert result["user_message_chunk"] is True and result["session_id"] == SID
-    argv = seen["argv"]
-    assert argv[argv.index("-r") + 1] == SID
-    assert "-p" in argv and "--always-approve" in argv
+    assert result == pg.NOT_LISTENING
 
 
-def test_resumable_session_receipt_is_the_user_message_chunk(tmp_path: Path) -> None:
+def test_listening_session_receives_agent_mail_without_a_user_turn(tmp_path: Path) -> None:
     cwd = str(tmp_path)
-    home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": cwd}])
+    home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": cwd, "tty": "/dev/ttys004"}])
     pg.mark_resumable(home, SID, cwd)
-    path = pg.session_updates_path(home, cwd, SID)
-    path.parent.mkdir(parents=True)
-    path.write_text(_chunk("hello from peer") + "\n", encoding="utf-8")
-    seen = {}
-
-    def submit(tty, text):
-        raise AssertionError("tty submit")
-
-    def runner(argv, **kw) -> "CompletedProcess[str]":
-        seen["argv"] = argv
-        return subprocess.CompletedProcess(argv, 0, json.dumps({"text": "pong"}), "")
-
-    result = asyncio.run(pg.deliver(SID, cwd, "hello from peer", home=home, binary="grok",
-                                    runner=runner, submit=submit))
-    assert result["user_message_chunk"] is True and result["session_id"] == SID and result["msg_id"]
-    argv = seen["argv"]
-    assert argv[argv.index("-r") + 1] == SID
-    assert "--always-approve" in argv
-    assert "--permission-mode" not in argv
-    assert "--add-dir" not in argv and "--fork-session" not in argv
+    seen = []
+    inbox = pg.AgentInbox(home, SID, on_line=seen.append)
+    inbox.start()
+    try:
+        result = asyncio.run(pg.deliver(SID, cwd, "[example-game-workbench-repo-fe] ping", home=home,
+                                        binary="grok",
+                                        runner=lambda *a, **k: (_ for _ in ()).throw(AssertionError("resume")),
+                                        submit=lambda *a, **k: (_ for _ in ()).throw(AssertionError("tty"))))
+    finally:
+        inbox.stop()
+    assert result["written"] is True and result["channel"] == "agent-inbox"
+    assert seen == ["UNIMATRIX-AGENT-MAIL [example-game-workbench-repo-fe] ping"]
+    assert list((home / "unimatrix-inbox" / SID / "pending").glob("*.json")) == []
 
 
-def test_resume_without_a_chunk_is_not_receipt(tmp_path: Path) -> None:
-    cwd = str(tmp_path)
-    home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": cwd}])
-    pg.mark_resumable(home, SID, cwd)
+def test_peer_turn_is_argv_only_when_the_announcement_is_present(tmp_path: Path) -> None:
+    seen = []
 
-    def runner(argv, **kw) -> "CompletedProcess[str]":
-        return subprocess.CompletedProcess(argv, 0, json.dumps({"text": "pong"}), "")
+    def runner(argv, **kw):
+        seen.append(argv)
+        return type("P", (), {"returncode": 0})()
 
-    assert asyncio.run(pg.deliver(SID, cwd, "hi", home=home, binary="grok", runner=runner)) == (
-        "delivery failed: no user_message_chunk")
+    text = "[example-game-repo] ping\n\nFrom agent example-game-repo, not the PM."
+    assert pg.submit_peer_turn(SID, str(tmp_path), text, binary="grok", runner=runner) is None
+    assert seen and seen[0][seen[0].index("-p") + 1] == text
+    assert "-r" in seen[0] and "osascript" not in seen[0]
+    assert pg.submit_peer_turn(SID, str(tmp_path), "ping", binary="grok", runner=runner).startswith("delivery failed")
+    assert len(seen) == 1
+
+
+def test_stop_hook_blocks_only_a_finished_turn(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GROK_SESSION_ID", raising=False)
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "unimatrix-grok-stop.py"
+    spec = importlib.util.spec_from_file_location("unimatrix_grok_stop", path)
+    stop = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stop)
+    pg.append_shown(tmp_path, SID, "UNIMATRIX-AGENT-MAIL [example-game-repo] ping")
+    assert stop.decide({"promptId": "p1", "session_id": SID}, home=tmp_path)["decision"] == "block"
+    assert stop.decide({"promptId": "p2", "session_id": SID}, home=tmp_path) is None
+    pg.append_shown(tmp_path, SID, "UNIMATRIX-AGENT-MAIL kept")
+    assert stop.decide({"session_id": SID}, home=tmp_path) is None
+    assert pg.take_shown(tmp_path, SID) == "UNIMATRIX-AGENT-MAIL kept"
 
 
 def test_record_launch_marks_the_session_the_stdout_names(tmp_path: Path) -> None:

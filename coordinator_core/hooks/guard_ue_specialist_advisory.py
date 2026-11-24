@@ -8,8 +8,8 @@ Forwarder contract. `evaluate(payload, env=None, repo_root=None) -> dict` is the
 registered op and the seam a thin external hook script forwards to. It returns `{}` (no advisory) or
 a PreToolUse `additionalContext` envelope. A non-Agent tool, a non-UE repo, no installed example-game-repo
 manifest, a example-game-repo/game-dev `subagent_type`, a specialist missing from the installed roster, a
-prompt whose declared writes (`declared_writes`) are all docs/tests/yaml and any internal error all
-return `{}`. No subprocess; the table and roster come from agent_route's
+prompt whose declared writes (`declared_writes`) are all docs/tests/yaml/`.py`, a pytest/Python-only prompt with no UE path
+and any internal error all return `{}`. No subprocess; the table and roster come from agent_route's
 memoised `_plugin_table`.
 """
 
@@ -43,6 +43,30 @@ def declared_writes(prompt: str) -> list[str]:
         elif inside and (m := _BULLET_PATH_RE.match(line)):
             out.append(m.group(1))
     return out
+
+
+_PYTHON_CUE_RE = re.compile(r"\b(pytest|py\.test)\b", re.IGNORECASE)
+_UE_PATH_SEGMENTS = frozenset({"content", "source", "plugins", "config", "saved"})
+_UE_PATH_SUFFIXES = (".uasset", ".umap", ".ubulk", ".uexp", ".uplugin", ".uproject", ".cpp", ".h", ".cs")
+
+
+def _is_ue_path(path: str) -> bool:
+    p = path.replace("\\", "/").lower()
+    return p.endswith(_UE_PATH_SUFFIXES) or any(s in _UE_PATH_SEGMENTS for s in p.split("/")[:-1])
+
+
+def _is_python_only(prompt: str, writes: list[str]) -> bool:
+    """True for a pytest/Python-only brief: no UE path anywhere, and either every declared write is a
+    `.py` file (docs/tests/yaml are handled by the caller) or, with none declared, the brief names
+    pytest or a `.py` path (a bare "python" is not a cue: UE briefs run python in the editor)."""
+    if any(_is_ue_path(w) for w in writes):
+        return False
+    if writes:
+        return all(w.lower().endswith(".py") for w in writes)
+    tokens = _path_tokens(prompt)
+    if any(_is_ue_path(t) for t in tokens):
+        return False
+    return bool(_PYTHON_CUE_RE.search(prompt)) or any(t.lower().endswith(".py") for t in tokens)
 
 
 def _message(subagent_type: str, class_id: str, specialist: str) -> str:
@@ -86,7 +110,8 @@ def _evaluate(params: dict, repo_root) -> dict:
     if table is None or not roster:
         return no_advisory()
 
-    if agent_route.writes_are_docs_tests_yaml(declared_writes(prompt)):
+    writes = declared_writes(prompt)
+    if agent_route.writes_are_docs_tests_yaml(writes) or _is_python_only(prompt, writes):
         return no_advisory()
 
     cls = agent_route.match_work_class(

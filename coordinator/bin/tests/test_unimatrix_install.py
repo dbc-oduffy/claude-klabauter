@@ -2693,7 +2693,7 @@ def test_tui_status_lines_keep_user_customised_lines(monkeypatch, tmp_path):
     rc, out = _tui_main(tmp_path, "--install")
     assert rc == 0 and "agy status line retained-customized" in out and "grok status line retained-customized" in out
     agy_data = json.loads(agy.read_text())
-    assert agy_data["statusLine"] == {"command": "my-line"} and agy_data["permissions"]["allow"] == [ui.agy_absolute_allow_rule()]
+    assert agy_data["statusLine"] == {"command": "my-line"} and agy_data["permissions"]["allow"] == ui.agy_absolute_allow_rules(tmp_path / "dest")
     assert grok.read_text() == mine_grok
     rc, out = _tui_main(tmp_path, "--uninstall")
     assert "agy status line absent" in out and agy.read_text() == mine_agy and grok.read_text() == mine_grok
@@ -2920,7 +2920,8 @@ def test_default_install_grants_agy_only_the_exact_submit_command(monkeypatch, t
     assert rc == 0
     allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
     launcher = str(ui.settings_home() / "bin" / ("coordinator-invoke.exe" if sys.platform == "win32" else "coordinator-invoke"))
-    assert allow == [f"command({launcher} engine_ask.submit)"]
+    assert allow == ui.agy_absolute_allow_rules(tmp_path / "dest")
+    assert f"command({launcher} engine_ask.submit)" in allow
     assert Path(launcher).is_absolute() and not any("*" in rule for rule in allow)
 
 
@@ -2933,7 +2934,7 @@ def test_agy_allow_rule_installs_once_keeps_operator_entries_and_uninstall_resto
     rc, out = _tui_main(tmp_path, "--install")
     assert rc == 0 and "agy allow rule updated" in out
     allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
-    assert allow == [mine, ui.agy_absolute_allow_rule()]
+    assert allow == [mine, *ui.agy_absolute_allow_rules(tmp_path / "dest")]
     once = agy.read_bytes()
     rc, out = _tui_main(tmp_path, "--install")
     assert "agy allow rule present" in out and agy.read_bytes() == once
@@ -2969,7 +2970,7 @@ def test_agy_allow_rule_reinstall_migrates_legacy_wildcard_and_uninstall_removes
     rc, out = _tui_main(tmp_path, "--install")
     assert rc == 0 and "agy allow rule updated" in out
     allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
-    assert allow == [mine, ui.agy_absolute_allow_rule()]
+    assert allow == [mine, *ui.agy_absolute_allow_rules(tmp_path / "dest")]
     once = agy.read_bytes()
     rc, out = _tui_main(tmp_path, "--install")
     assert "agy allow rule present" in out and agy.read_bytes() == once
@@ -2978,7 +2979,7 @@ def test_agy_allow_rule_reinstall_migrates_legacy_wildcard_and_uninstall_removes
 
     agy.write_bytes(json.dumps({"permissions": {"allow": [mine, legacy]}}).encode("utf-8"))
     _tui_main(tmp_path, "--install")
-    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, legacy, ui.agy_absolute_allow_rule()]
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, legacy, *ui.agy_absolute_allow_rules(tmp_path / "dest")]
     _tui_main(tmp_path, "--uninstall")
 
     _tui_main(tmp_path, "--install")
@@ -2997,10 +2998,11 @@ def test_agy_allow_rule_default_grants_absolute_line_and_reports_it(monkeypatch,
     _, agy, _ = _tui_home(monkeypatch, tmp_path)
     agy.parent.mkdir(parents=True)
     absolute = ui.agy_absolute_allow_rule()
+    expected = ui.agy_absolute_allow_rules(tmp_path / "dest")
     rc, out = _tui_main(tmp_path, "--install")
     assert rc == 0 and f"agy allow rule granted: {absolute}" in out
     allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
-    assert allow == [absolute] and ui.AGY_ALLOW_RULE not in allow
+    assert allow == expected and ui.AGY_ALLOW_RULE not in allow
     # agy `permissions.allow` entries have the form `command(<cmd>)`.
     inner = allow[0][len("command("):-1]
     assert Path(inner.split(" ", 1)[0]).is_absolute()
@@ -3016,7 +3018,7 @@ def test_agy_allow_rule_is_the_advisory_command_and_prior_forms_are_owned(monkey
     _tui_main(tmp_path, "--install")
     agy.write_text(json.dumps({"permissions": {"allow": [mine, ui.AGY_PRIOR_ALLOW_RULE]}}), encoding="utf-8")
     _tui_main(tmp_path, "--install")
-    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, ui.agy_absolute_allow_rule()]
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, *ui.agy_absolute_allow_rules(tmp_path / "dest")]
     assert ui.AGY_PRIOR_ALLOW_RULE not in json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
 
 
@@ -3028,15 +3030,16 @@ def test_agy_allow_rule_migrates_bare_and_legacy_lines_to_absolute_and_uninstall
     before = json.dumps({"permissions": {"allow": [mine]}}).encode("utf-8")
     agy.write_bytes(before)
     absolute = ui.agy_absolute_allow_rule()
+    expected = ui.agy_absolute_allow_rules(tmp_path / "dest")
     assert absolute != ui.AGY_ALLOW_RULE and str(ui.settings_home() / "bin" / "coordinator-invoke") in absolute
     rc, out = _tui_main(tmp_path, "--install")
     assert rc == 0 and f"agy allow rule granted: {absolute}" in out
-    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, absolute]
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, *expected]
     data = json.loads(agy.read_text(encoding="utf-8"))
     data["permissions"]["allow"] = [mine, legacy, ui.AGY_ALLOW_RULE]
     agy.write_text(json.dumps(data), encoding="utf-8")
     _tui_main(tmp_path, "--install")
-    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, absolute]
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine, *expected]
     _tui_main(tmp_path, "--install")
     rc, _ = _tui_main(tmp_path, "--uninstall")
     assert rc == 0 and agy.read_bytes() == before
@@ -3054,7 +3057,7 @@ def test_install_removes_always_proceed_and_uninstall_restores_the_file_byte_for
     rc, out = _tui_main(tmp_path, "--install")
     data = json.loads(agy.read_text(encoding="utf-8"))
     assert rc == 0 and "toolPermission" not in data and "always-proceed" not in agy.read_text(encoding="utf-8")
-    assert data["permissions"]["allow"] == [ui.agy_absolute_allow_rule()] and data["theme"] == "dark"
+    assert data["permissions"]["allow"] == ui.agy_absolute_allow_rules(tmp_path / "dest") and data["theme"] == "dark"
     once = agy.read_bytes()
     rc, out = _tui_main(tmp_path, "--install")
     assert "agy allow rule present" in out and agy.read_bytes() == once
@@ -3088,6 +3091,22 @@ def test_uninstall_after_edit_restores_the_recorded_always_proceed_and_keeps_ope
     rc, out = _tui_main(tmp_path, "--uninstall")
     after = json.loads(agy.read_text(encoding="utf-8"))
     assert rc == 0 and after == {"permissions": {"allow": ["command(keep me)"]}, **_BYPASS}
+
+
+def test_agy_allow_rules_seeds_all_seven_entries_and_uninstall_removes_all(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    dest = tmp_path / "dest"
+    expected = ui.agy_absolute_allow_rules(dest)
+    assert len(expected) == 7
+    assert any("coordinator-safe-commit" in r for r in expected)
+    assert any("unimatrix-send.py" in r for r in expected)
+    for op in ui.AGY_ENGINE_OPS:
+        assert any(op in r for r in expected)
+    assert ui.seed_agy_allow_rule(agy, rules=expected) == "created"
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == expected
+    assert ui.seed_agy_allow_rule(agy, rules=expected) == "present"
+    assert ui.seed_agy_allow_rule(agy, uninstall=True) == "restored"
+    assert not agy.exists()
 
 
 def test_install_leaves_a_non_bypass_tool_permission_untouched(monkeypatch, tmp_path):

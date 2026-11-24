@@ -343,9 +343,7 @@ _CLI_SCRIPT_ROOT = resolve_cli_script_root()
 #: (`coordinator_core/workstream_complete/__init__.py`, "Plugin-local
 #: barewords"). No glob, no listing: membership picks the prefix, and
 #: only membership.
-_PLUGIN_LOCAL_CLIS: frozenset[str] = frozenset(
-    {"baton-chain-closure", "plan-reversibility-eligibility"}
-)
+_PLUGIN_LOCAL_CLIS: frozenset[str] = frozenset({"baton-chain-closure"})
 
 #: The SECOND, DoE-anchored `coordinator/bin` root (docs/plans/2026-09-07-
 #: directive-resolution-reaches-a-plugin-local-cli.md, T1/T2) —
@@ -1163,11 +1161,6 @@ def _execute_directives(
     the exit-code ladder reads `failed` only, never `degraded`, by
     construction.
 
-    Verdict exit codes: a directive carrying `verdict_exit_codes: [n, ...]`
-    treats those non-zero exits as a successful answer, not a failure -- the
-    directive lands and its stdout threads downstream exactly as exit 0
-    would. Any other non-zero exit is still `failed`/`degraded`.
-
     Inter-directive arg-token threading (module docstring, deviation 3):
     `stdout_by_id` accumulates the captured stdout of every directive that
     LANDED this pass (exit 0), keyed by directive id — mirrors `workday_
@@ -1384,9 +1377,7 @@ def _execute_directives(
             f"{directive['id']} exited {result.get('exit_code', 0)} "
             f"in {time.monotonic() - started:.1f}s"
         )
-        if result.get("exit_code", 0) != 0 and result.get("exit_code") not in (
-            directive.get("verdict_exit_codes") or ()
-        ):
+        if result.get("exit_code", 0) != 0:
             error = f"{directive['cli']} exited {result['exit_code']} (args={result.get('args', [])})"
             exit_class_note = describe_exit_class(
                 CliExitClass(result.get("exit_class", CliExitClass.RETURNED.value))

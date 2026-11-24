@@ -2963,11 +2963,11 @@ def _group_em_grant_line() -> str:
     if live:  # same-box route
         return (
             "\nOr the live Group EM runs: "
-            "tier-u-grant-cli group-em-grant <session> \"<ruling>\""
+            "tier-u-grant-cli group-em-grant <session> \"<reason>\""
         )
     return (
         "\nOr a Group EM runs, on its own box: "
-        "tier-u-grant-cli group-em-grant %s:<session> \"<ruling>\"" % box_id
+        "tier-u-grant-cli group-em-grant %s:<session> \"<reason>\"" % box_id
     )
 
 

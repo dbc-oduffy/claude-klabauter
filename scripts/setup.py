@@ -2647,7 +2647,16 @@ def _unset_content_root_registration(
             file=sys.stderr,
         )
         return {}
+    # The installer's alias can be outside a restricted worker's readable roots.
+    # Store the physical directory while preserving any distinct operator selection.
+    try:
+        physical_root = coord_path.resolve(strict=True)
+    except OSError:
+        return {}
     if (existing or "").strip():
+        if (coord_source.rung is CoordSourceRung.FLAG
+                and Path(existing.strip()) == coord_path and coord_path != physical_root):
+            return {_CONTENT_ROOT_ANCHOR_KEY: str(physical_root)}
         # Only a root evidenced or explicitly named as a DoE tree repairs a value that is not one.
         stale = (
             coord_source.rung
@@ -2655,8 +2664,8 @@ def _unset_content_root_registration(
             and _is_doe_tree(coord_path)
             and not _is_doe_tree(Path(existing.strip()))
         )
-        return {_CONTENT_ROOT_ANCHOR_KEY: str(coord_path)} if stale else {}
-    return {_CONTENT_ROOT_ANCHOR_KEY: str(coord_path)}
+        return {_CONTENT_ROOT_ANCHOR_KEY: str(physical_root)} if stale else {}
+    return {_CONTENT_ROOT_ANCHOR_KEY: str(physical_root)}
 
 
 def register_claude_klabauter_root(
@@ -5786,15 +5795,21 @@ def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, chec
     if not args.hosts:
         return 0
     if args.enroll_runtime:
-        if args.hosts != ["codex"]:
-            print("ERROR: --enroll-runtime requires --host codex", file=sys.stderr)
+        if not args.hosts or any(h not in ("codex", "agy") for h in args.hosts):
+            print("ERROR: --enroll-runtime requires --host codex and/or agy", file=sys.stderr)
             return 1
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "_setup_codex_runtime", claude_klabauter_root_resolved / "coordinator" / "bin" / "unimatrix-install.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module.enroll_codex_runtime(claude_klabauter_root_resolved, consent=True, check=check)
+        rc = 0
+        for host in args.hosts:
+            if host == "codex":
+                rc = rc or module.enroll_codex_runtime(claude_klabauter_root_resolved, consent=True, check=check)
+            elif host == "agy":
+                rc = rc or module.enroll_agy_runtime(claude_klabauter_root_resolved, consent=True, check=check)
+        return rc
     print()
     print("--- Install: foreign hosts ---")
     try:
@@ -5878,8 +5893,8 @@ def main(argv: list[str]) -> int:
         print(HELP_TEXT, end="")
         return 0
 
-    if args.enroll_runtime and args.hosts != ["codex"]:
-        print("ERROR: --enroll-runtime requires --host codex", file=sys.stderr)
+    if args.enroll_runtime and (not args.hosts or any(h not in ("codex", "agy") for h in args.hosts)):
+        print("ERROR: --enroll-runtime requires --host codex and/or agy", file=sys.stderr)
         return 1
 
     if args.preflight:

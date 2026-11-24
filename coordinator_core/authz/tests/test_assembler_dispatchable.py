@@ -146,19 +146,19 @@ class TestDefaultDenyControl:
 
 class TestPluginLocalBarewordsPresent:
     """docs/plans/2026-09-07-directive-resolution-reaches-a-plugin-local-
-    cli.md, T5: the two `workstream_complete.apply._PLUGIN_LOCAL_CLIS`
-    members are present in `ASSEMBLER_DISPATCHABLE["workstream_complete"]`,
-    the mapping stays a hand-literal set (unaffected by this pair's
-    presence), and default-deny still holds for everything else."""
+    cli.md, T5: the `workstream_complete.apply._PLUGIN_LOCAL_CLIS`
+    member is present in `ASSEMBLER_DISPATCHABLE["workstream_complete"]`,
+    the mapping stays a hand-literal set, and default-deny still holds for
+    everything else, including the retired approve-for-execution script."""
 
-    def test_the_two_plugin_local_barewords_are_admitted(self) -> None:
-        for name in ("baton-chain-closure", "plan-reversibility-eligibility"):
-            assert _is_dispatchable("workstream_complete", name) is True
+    def test_the_plugin_local_bareword_is_admitted(self) -> None:
+        assert _is_dispatchable("workstream_complete", "baton-chain-closure") is True
+        assert _is_dispatchable("workstream_complete", "plan-reversibility-eligibility") is False
 
     def test_mapping_stays_a_hand_literal_frozenset_per_assembler(self) -> None:
         entry = ASSEMBLER_DISPATCHABLE["workstream_complete"]
         assert isinstance(entry, frozenset)
-        assert {"baton-chain-closure", "plan-reversibility-eligibility"} <= set(entry)
+        assert "baton-chain-closure" in entry
 
 
 # The mixed-end-state discriminator (plan § The discriminator for the mixed end

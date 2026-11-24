@@ -99,7 +99,8 @@ def _drain_queued_sessions() -> list:
 
     The relay is loaded in-process by path (no process per session); one session's failure never skips the next."""
     relay = _sibling("unimatrix-relay.py", "unimatrix_relay")
-    queue = relay._relay_queue()
+    get_queue = getattr(relay, "_relay_queue", None)
+    queue = get_queue() if callable(get_queue) else None
     if queue is None:
         return []
     failures = []
@@ -531,22 +532,27 @@ def not_delivered(reply):
     return str(reply or "").lstrip().startswith(NOT_DELIVERED_PREFIXES)
 
 
-def wrap_inbound(sender, body, reply_to=None):
+def wrap_inbound(sender, body, reply_to=None) -> str:
     """What a peer sees: `[<sender>] <body>` plus a trailer naming the sender and the exact reply command.
 
     `reply_to` overrides the --to address when the sender itself cannot be queued (a Codex v2 sub-agent).
     """
+    if sender == "cli" and not reply_to:
+        return f"[cli] {body}\n\nNo verified reply address; ask the sender to use native SendMessage."
     # Run through the interpreter, never the exec bit: Windows has none (check_posix_exec_assumptions).
     if sys.platform == "win32":
         # PowerShell call-operator form; a peer driving a POSIX shell on Windows cannot run it.
         quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+        # Paths may carry spaces and are always quoted; a PowerShell-safe address stays bare, as shlex.quote leaves it.
+        quote_address = lambda value: (
+            str(value) if re.fullmatch(r"[A-Za-z0-9_.:/][A-Za-z0-9_.:/-]*", str(value)) else quote(value))
         send = f"& {quote(sys.executable)} {quote(here() / SEND_SCRIPT)}"
     else:
-        quote = shlex.quote
+        quote = quote_address = shlex.quote
         send = f"{quote(sys.executable)} {quote(str(here() / SEND_SCRIPT))}"
     return (f"[{sender}] {body}\n\nFrom agent {sender}, not the PM. "
             f"Never answer them in plain text to the human at your keyboard. "
-            f"Reply to them with: {send} --to {quote(str(reply_to or sender))} '<your reply>'")
+            f"Reply to them with: {send} --to {quote_address(str(reply_to or sender))} '<your reply>'")
 
 
 def routable_from(frame, name):
@@ -970,11 +976,26 @@ class Router:
         return live is not True
 
     async def _drop_dead_holders(self):
-        """Stop the face of every peers-file Codex row whose recorded holder is gone.
+        """Refresh fixed Codex holders, recovering live faces and stopping dead ones.
 
         The row stays in `self.peers` so discovery still treats its target as taken; peers.json is
         never rewritten. A row with no recorded holder is unknown, not dead, and keeps its face.
         """
+        if self.peers_file is not None:
+            try:
+                rows = await asyncio.to_thread(_contract().load_peers, self.peers_file)
+            except (OSError, ValueError, _contract().PeerConfigError) as exc:
+                self.log("HOLDER-REFRESH-FAILED", type(exc).__name__, exc)
+            else:
+                current = {(p["name"], p["vendor"], p["target"]): p for p in rows}
+                for name, peer in self.peers.items():
+                    if peer.get("vendor") != "codex" or name in self.discovered:
+                        continue
+                    row = current.get((name, "codex", peer["target"]), {})
+                    for key in ("codexPid", "codexProcStart"):
+                        peer.pop(key, None)
+                        if key in row:
+                            peer[key] = row[key]
         for name, peer in list(self.peers.items()):
             if peer.get("vendor") == "agy" and self.legs_dir and name not in self.discovered:
                 if leg_target_live(self.legs_dir, peer.get("target")):
@@ -987,8 +1008,17 @@ class Router:
                     await self._stop_face(name)
                 self.log("leg-gone", name)
                 continue
-            if (peer.get("vendor") != "codex" or name in self.discovered or name in self.dead_holders
-                    or _liveness().codex_holder_live(peer) is not False):
+            if peer.get("vendor") != "codex" or name in self.discovered:
+                continue
+            live = _liveness().codex_holder_live(peer)
+            if live is True and name in self.dead_holders:
+                self.dead_holders.discard(name)
+                try:
+                    await self._spawn_face(name)
+                except Exception as exc:
+                    self.log("FACE-REPAIR-FAILED", name, type(exc).__name__, exc)
+                continue
+            if live is not False or name in self.dead_holders:
                 continue
             self.dead_holders.add(name)
             if name in self.faces:
@@ -1485,6 +1515,10 @@ class Router:
                 if root:
                     reply_to = by_target.get(root) or root
                     sender = f"codex-{as_target}"
+                else:
+                    sender = await asyncio.to_thread(self.shell_sender, as_target)
+                    if not sender:
+                        return {"ok": False, "error": "no unique live sender binding; use native SendMessage"}
             if peer not in self.peers and isinstance(peer, str):
                 if not isinstance(text, str) or is_ack(text):
                     return {"ok": False, "error": "empty or acknowledgement text is not delivered"}
@@ -1495,6 +1529,8 @@ class Router:
                 return await self._transport_send_to_session(sender, peer, text)
             if peer not in self.peers:
                 return {"ok": False, "error": f"no peer named {peer}", "peers": sorted(self.peers)}
+            if sender == peer:
+                return {"ok": False, "error": f"cannot send to self ({peer})"}
             if not isinstance(text, str) or is_ack(text):
                 return {"ok": False, "error": "empty or acknowledgement text is not delivered"}
             if self.peer_stale(peer):
@@ -1519,7 +1555,7 @@ class Router:
             try:
                 return await asyncio.to_thread(
                     request_line, face, {"op": "rotate", "grace_s": req.get("grace_s", 120)}, 15,
-                    _roster().authenticated_data(face, b""))
+                    _roster().authenticated_data(face, b"", self.sessions_dir))
             except (OSError, ValueError) as exc:
                 return {"ok": False, "error": f"face unreachable: {exc}"}
         if op == "resolve":
@@ -2035,7 +2071,7 @@ class Router:
         face = self.endpoint_of(peer)
         response = await asyncio.to_thread(request_line, face,
             {"op": "deliver", "endpoint": endpoint, "frame": frame}, 15,
-            _roster().authenticated_data(face, b""))
+            _roster().authenticated_data(face, b"", self.sessions_dir))
         if not response.get("ok"):
             raise OSError(response.get("error", "face delivery failed"))
 
@@ -2114,6 +2150,22 @@ class Router:
             return None
         return codex_root_parent(ident, lookup) or ""
 
+    def shell_sender(self, session_id):
+        """Return the unique live local session name bound to a shell's native session ID."""
+        matches = set()
+        for row in self._session_rows():
+            if (row.get("sessionId") != session_id or not _liveness().entry_live(row)
+                    or row.get("unimatrixRemote") or row.get("macSocketPath")
+                    or row.get("unimatrixRouterPid")):
+                continue
+            name, endpoint = row.get("name"), row.get("messagingSocketPath")
+            if isinstance(name, str) and name and isinstance(endpoint, str) and endpoint:
+                matches.add((name, endpoint))
+        if len(matches) != 1:
+            return ""
+        name, endpoint = matches.pop()
+        return name if self.resolve_sender(name) == endpoint else ""
+
     def resolve_sender(self, name, fallback=""):
         """Current messaging endpoint of the live roster session called `name`, else `fallback`.
 
@@ -2150,7 +2202,9 @@ class Router:
                 refused_identity = True
                 continue
             owned_alias = owned_alias or name in _contract().projected_addresses(e)
-            owner = (e.get('vendor'), e.get('target') or e.get('sessionId') or ep)
+            # A Claude Code row carries no vendor; a relay-pushed mirror of the same session must not
+            # read as a second owner beside the bridge mirror that stamps vendor "claude".
+            owner = (e.get('vendor') or 'claude', e.get('target') or e.get('sessionId') or ep)
             owners.add(owner)
             ep_owners.setdefault(ep, set()).add(owner)
             (exact if e.get("name") == name else aliases).add(ep)
@@ -2172,7 +2226,8 @@ class Router:
             # is one address, not ambiguity: prefer the bridge mirror, then the exact name.
             matches = {min(matches, key=lambda ep: (not rows_by_ep[ep].get("unimatrixFarName"), ep not in exact, ep))}
         if len(matches) > 1:
-            self.last_refusal = f"ambiguous: {len(matches)} live sessions carry this name"
+            named = ", ".join(sorted(f"{rows_by_ep[ep].get('name')}@{ep}" for ep in matches))
+            self.last_refusal = f"ambiguous: {len(matches)} live sessions carry this name: {named}"
             return ""  # An exact name never beats a far alias: both are live carriers of the address.
         self.last_resolved_far = bool(matches) and matches <= far_eps
         if matches:
@@ -2305,8 +2360,10 @@ def cmd_send(argv):
     p.add_argument("text", nargs="+")
     a = p.parse_args(argv)
     ctl = endpoint_path(ROUTER_ENDPOINT_SEED, a.endpoint_dir)
+    target = _sibling("unimatrix-send.py", "unimatrix_send_router").own_target() if a.as_name == "cli" else ""
     try:
-        resp = request_line(ctl, {"op": "send", "as": a.as_name, "to": a.peer, "text": " ".join(a.text)})
+        resp = request_line(ctl, {"op": "send", "as": a.as_name, "as_target": target,
+                                  "to": a.peer, "text": " ".join(a.text)})
     except PermissionError as e:
         print(f"connect to router socket {ctl} denied by the caller's sandbox, not a router fault: {e}; "
               "allow the socket path or run the send unsandboxed", file=sys.stderr)

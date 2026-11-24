@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -102,7 +103,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(cr, "_actual_loe", lambda r, s: "S")
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     return root
 
@@ -232,10 +233,28 @@ def test_a_revision_the_checker_never_saw_refuses_the_commit(repo) -> None:
     assert out["ledger_failures"] == [{"id": "R2", "reason": "unjudged (arrived after the check, or skipped)"}]
 
 
+_INESSENTIAL_VERDICT = {
+    "items": [{"id": "R1", "status": "met", "evidence": "verified"}, {"id": "R2", "status": "not_met", "essential": False}]
+}
+
+
 def test_an_inessential_unmet_item_passes_without_all_of_pm_ask(repo) -> None:
+    # A PM-verbatim row forces all_of_pm_ask; re-anchor the seeded row to the raw ask so none is held.
+    text = (repo / SIZING).read_text(encoding="utf-8")
+    reanchored, n = re.subn(r"(anchor:\s*['\"]?)pm_verbatims", r"\1ask", text)
+    assert n == 1, text
+    _write(repo, SIZING, reanchored)
+    # bind persisted all_of_pm_ask=true for the held PM row; an explicit false is the later stamp.
+    rl.revise(repo, RUN, all_of_pm_ask=False)
     rl.revise(repo, RUN, verbatim="nice to have: a changelog line")
-    verdict = {"items": [{"id": "R1", "status": "met", "evidence": "verified"}, {"id": "R2", "status": "not_met", "essential": False}]}
-    assert _call(repo, ledger_verdict=verdict)["committed"] is True
+    out = _call(repo, ledger_verdict=_INESSENTIAL_VERDICT)
+    assert out["committed"] is True, out
+
+
+def test_an_inessential_unmet_item_is_refused_while_a_pm_verbatim_row_is_held(repo) -> None:
+    rl.revise(repo, RUN, verbatim="nice to have: a changelog line")
+    out = _call(repo, ledger_verdict=_INESSENTIAL_VERDICT)
+    assert out["refused"] == "ledger-unmet" and out["all_of_pm_ask"] is True, out
 
 
 def test_all_of_pm_ask_set_mid_run_makes_every_item_mandatory(repo) -> None:
@@ -431,16 +450,17 @@ def _composed_digest(ledger_js: str) -> dict:
         pytest.skip("node not on PATH")
     script = _compose()
     start = script.index("function _terminalCommitCli")
-    stop = script.index("get terminal_commit_cli", script.index("  return { arm:"))
+    ret = script.rindex("return { arm:")
+    stop = script.index("get terminal_commit_cli", ret)
     stop = script.index("};", stop) + 2
     stubs = (
         "const _manifest={plan_id:'p'}, _incompleteChunks=[], _notStarted=[], _planHeld={}, _verifications=[], "
         "_reviewIntegration={fixes_applied:0,sidecar_path:'x'}, _reviewReverify=null, _reviewPrep={slices:[1]}, _reviewWave=[], "
         "_deliveryVerdict=null, _deliveryNotRun=null, _waveNotRun=[], _ragDegraded=[], _checkpointFixIds=[], _haltCommit=null, _commitHaltRecord=async () => null, _testResult=null, _halted=null, _splitExit=null, _viaRoadmap=false, _RUN_TOKEN=null, "
         "_sizingRel='s', _planRel=null, _resumeLedger=false, REPO_ROOT='/r', _gate={arm:'xs'}, _runId='r', _heldBy=[], _unansweredBriefs=[], "
-        f"_stoppedBy=[], _rows={{}}, _haltedByHold=false, _consumedReturns={{}}, _alreadyDelivered=null, _blockedChunks=[], _recoveryWithheld=[], _docs=null, _commit=null, _refireNextAction=() => {{}}, _haltNextActionText=() => '', _terminalCommitParamsBlock=(p) => JSON.stringify(p), _falsifierResult=null, _falsifierSpec=null, _memoCloseOnly=false, _preHaltCredit=false, log=() => {{}}; let _nextAction=null; const _ledger={ledger_js};\n"
+        f"_stoppedBy=[], _rows={{}}, _haltedByHold=false, _consumedReturns={{}}, _alreadyDelivered=null, _blockedChunks=[], _recoveryWithheld=[], _docs=null, _commit=null, _refireNextAction=() => {{}}, _haltNextActionText=() => '', _owedHandback=() => '', _refireCmd=() => '', _terminalCommitParamsBlock=(p) => JSON.stringify(p), _falsifierResult=null, _falsifierSpec=null, _memoCloseOnly=false, _preHaltCredit=false, log=() => {{}}; let _nextAction=null; const _ledger={ledger_js};\n"
     )
-    body = script[start:stop].replace("  return { arm:", "  const _out = { arm:", 1)
+    body = script[start:ret] + script[ret:stop].replace("return { arm:", "const _out = { arm:", 1)
     prog = f"(async () => {{\n{stubs}{body}\nconsole.log(JSON.stringify(_out));\n}})();"
     run = subprocess.run([node, "-"], input=prog, capture_output=True, text=True, **no_console_creationflags())
     assert run.returncode == 0, run.stderr

@@ -16,6 +16,7 @@ from coordinator_core.ops._path_guard import safe_id
 
 CLONES_DIRNAME = "bug-blitz-clones"
 BASE_FILE = "blitz-base"
+CONE_FILE = "blitz-cone.txt"
 # A clone provisioned this recently is kept by the sibling sweep whatever the liveness predicate says: the
 # run's stage record may not exist yet.
 FRESH_S = 900.0
@@ -34,6 +35,34 @@ def _checked(run_id: str) -> str:
     if not isinstance(run_id, str) or not safe_id(run_id):
         raise InvalidRunId(f"run_id {run_id!r} is not a safe path component")
     return run_id
+
+
+def run_dir(repo_root: Path | str, run_id: str) -> Path:
+    """The run's scratch directory under `repo_root`, where the submit hook writes `CONE_FILE`."""
+    from coordinator_core.bug_blitz.contract import SCRATCH_ROOT
+
+    return Path(repo_root) / SCRATCH_ROOT / run_id
+
+
+def read_cone(run_dir: Path | str) -> tuple[str, ...]:
+    """The run's sparse-cone directories (one repo-relative directory per line of `<run_dir>/CONE_FILE`), in file
+    order without duplicates; empty when the file is absent or blank (full checkout). An absolute, climbing or
+    option-shaped entry raises `WorkerCloneError`."""
+    try:
+        text = (Path(run_dir) / CONE_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return ()
+    out: list = []
+    for line in text.splitlines():
+        entry = line.strip().replace("\\", "/").strip("/")
+        if not entry:
+            continue
+        rel = Path(entry)
+        if rel.is_absolute() or ".." in rel.parts or entry.startswith("-") or ":" in entry:
+            raise WorkerCloneError(f"cone entry {line.strip()!r} is not a repo-relative directory")
+        if entry not in out:
+            out.append(entry)
+    return tuple(out)
 
 
 def _clones_dir(repo_root: Path | str) -> Path:
@@ -110,11 +139,14 @@ def provision(
     fresh_s: float = FRESH_S,
 ) -> Path:
     """The run's clone: `clone --shared --no-checkout` of `repo_root`'s HEAD, checked out detached at that sha,
-    its sha recorded in `<clone>/.git/blitz-base`. Idempotent per `run_id`. Also reaps sibling clones whose run
+    its sha recorded in `<clone>/.git/blitz-base`. The run's cone list (`read_cone`) narrows the checkout to those
+    top-level directories plus root files; an empty list checks out the whole tree. Idempotent per `run_id`.
+    Also reaps sibling clones whose run
     is no longer live (`is_live(repo_root, id)`, default: the run's owner record). Raises `InvalidRunId` for an
     unsafe `run_id` before touching disk, `WorkerCloneError` when git fails."""
     _checked(run_id)
     root = Path(repo_root)
+    dirs = read_cone(run_dir(root, run_id))
     existing = clone_root(root, run_id)
     _reap_dead_siblings(root, run_id, is_live or _default_live, fresh_s)
     if existing is not None:
@@ -131,6 +163,11 @@ def provision(
         if clone.returncode:
             why = "timed out" if clone.timed_out else clone.stderr.strip()[-_TAIL:]
             raise WorkerCloneError(f"run {run_id}: clone failed: {why}")
+        if dirs:
+            cone = run_git(["sparse-checkout", "set", "--cone", *dirs], cwd=str(dest))
+            if cone.returncode:
+                why = "timed out" if cone.timed_out else cone.stderr.strip()[-_TAIL:]
+                raise WorkerCloneError(f"run {run_id}: sparse-checkout of {', '.join(dirs)} failed: {why}")
         out = run_git(["checkout", "-q", "--detach", sha], cwd=str(dest))
         if out.returncode:
             why = "timed out" if out.timed_out else out.stderr.strip()[-_TAIL:]

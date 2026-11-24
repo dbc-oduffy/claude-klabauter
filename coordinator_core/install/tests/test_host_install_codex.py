@@ -60,6 +60,15 @@ def test_foreign_keys_preserved_and_block_appended(tmp_path: Path) -> None:
     assert text.endswith(hic.render_block("http://127.0.0.1:8767/mcp"))
 
 
+def test_mcp_only_apply_preserves_ambient_luna_and_profile(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    cfg.parent.mkdir(parents=True)
+    original = 'model = "gpt-6-luna"\n[profiles.fast]\nmodel = "gpt-6-luna"\n'
+    cfg.write_text(original)
+    assert hic.apply(tmp_path, _env(tmp_path)).mcp == hic.MCP_WRITTEN
+    assert cfg.read_text().startswith(original)
+
+
 def test_foreign_equivalent_http_entry_is_present_and_untouched(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     cfg.parent.mkdir(parents=True)

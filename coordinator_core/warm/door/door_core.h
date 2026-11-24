@@ -91,6 +91,23 @@ int parse_response_envelope(
     int *have_error_out, long *error_code_out
 );
 
+/* `parse_response_envelope` that also captures the error object's `message`
+ * string (decoded, NOT NUL-terminated) into `*error_message_out`, a buf_t the
+ * caller `buf_init`s and frees; NULL captures nothing. */
+int parse_response_envelope_msg(
+    const char *json, size_t len, result_fields_t *rf,
+    int *have_error_out, long *error_code_out, buf_t *error_message_out
+);
+
+/* ipc's caller-facing message cap (`ipc._CALLER_FACING_MESSAGE_MAX_LEN`): a
+ * server message is forwarded whole up to it. */
+#define DOOR_SERVER_ERROR_MESSAGE_MAX 2000
+#define DOOR_SERVER_ERROR_DETAIL_CAP (DOOR_SERVER_ERROR_MESSAGE_MAX + 64)
+
+/* Writes "server error <code>: <message>" (message bounded by
+ * DOOR_SERVER_ERROR_MESSAGE_MAX; "server error <code>" when empty) into `dst`. */
+void door_format_server_error_detail(char *dst, size_t cap, long code, const buf_t *message);
+
 /* =========================================================================
  * Caller-declared stdin payload -- bounded, mode-gated, shared verbatim by
  * both transport legs. Spec backlink:
@@ -314,6 +331,13 @@ int door_basename_is_install_class(const char *basename);
  * argv the door cannot read. Exact `strcmp`, as above. */
 int door_invocation_is_replay_safe(
     const char *basename, int argc, const char *const *argv);
+
+/* Hook ops that re-run their guard chain cold, in verdict-only mode, after a
+ * delivered call went unanswered. Source of truth is
+ * `door_hook_reverdict_cold_ops` in `door_core.c`;
+ * `test_hook_reverdict_cold_table_parity.py` links it to the registered ops.
+ * Returns 1 for a listed op; 0 on NULL. Exact `strcmp`. */
+int door_hook_op_reverdicts_cold(const char *op);
 
 
 int door_hook_event_name(const char *json, size_t len, buf_t *out);

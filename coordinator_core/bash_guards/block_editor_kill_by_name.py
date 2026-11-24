@@ -14,7 +14,8 @@ allowed. A launched `.sh`/`.ps1`/`.py`/`.cmd`/`.bat` script that exists on
 disk is read and held to the same check, so a name-kill loop cannot hide in
 a watchdog script.
 
-No override.
+No override. The live Group EM's own session is exempt
+(`_gem_standing_kill.gem_standing`).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
     resolve_command_positions,
     token_matches_binary,
 )
+from coordinator_core.bash_guards._gem_standing_kill import gem_standing
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
@@ -186,5 +188,7 @@ def check(payload: Dict[str, Any]) -> Any:
     if offence is None and any(sfx in cmd.lower() for sfx in _SCRIPT_SUFFIXES):
         offence = _script_offence(cmd.replace("\r", ""), payload.get("cwd"))
     if offence is None:
+        return None
+    if gem_standing(payload):
         return None
     return _deny_record(offence)

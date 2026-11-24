@@ -3953,7 +3953,7 @@ def _grouping_signoff_error(grouping: str, block: dict) -> ErrorDict | None:
             'field': field,
             'error': (
                 f'grouping {grouping!r} carries a signoff that is not a record '
-                f'with source pm, apm, g-em or uhura'
+                f'with source pm, apm or uhura (g-em reads as a historic record)'
             ),
             'hint': _GROUPING_APPROVAL_HINT,
         }
@@ -3963,7 +3963,7 @@ def _grouping_signoff_error(grouping: str, block: dict) -> ErrorDict | None:
             'error': f'grouping {grouping!r} has a {sig.source} signoff without ruling_ref',
             'hint': _GROUPING_APPROVAL_HINT,
         }
-    # approver is a free-form handle (plan.signoff writes PM/APM/G-EM/Uhura); only case is ignored.
+    # approver is a free-form handle (plan.signoff writes PM/APM/Uhura; a G-EM record is historic, read never written); only case is ignored.
     approver = block.get('approver')
     if not isinstance(approver, str) or approver.strip().casefold() != sig.source:
         return {

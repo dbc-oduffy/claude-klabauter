@@ -63,3 +63,16 @@ def test_missing_cache_counters_are_unknown_not_zero():
             "last": {"input_tokens": 10, "output_tokens": 20}})
     ingest(state, record(), {})
     assert summary(state)["priced_events"] == 1
+
+
+def test_legacy_cache_replays_sources_to_build_execution_inventory(tmp_path):
+    import json
+    from coordinator_core.codex_status.collect import load
+    path = tmp_path / 'legacy.json'
+    state = empty('root')
+    state['version'] = 2
+    state['files']['owned.jsonl'] = {'offset': 1234, 'parent_override': 'root'}
+    path.write_text(json.dumps(state))
+    migrated = load(path, 'root')
+    assert migrated['version'] == 3
+    assert migrated['files']['owned.jsonl'] == {'offset': 0, 'parent_override': 'root'}

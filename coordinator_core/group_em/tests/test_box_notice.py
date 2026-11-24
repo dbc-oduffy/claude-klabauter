@@ -49,6 +49,16 @@ def test_ended_notice_text_is_pinned() -> None:
     )
 
 
+def test_entered_notice_says_the_gem_makes_no_rulings() -> None:
+    text = box_notice.render_notice(
+        box_notice.NOTICE_ENTERED, {"sessionId": "sid-me", "name": "coordinator-content-repo-9"}
+    )
+
+    assert "never a ruling" in text
+    assert "break-glass" in text
+    assert "judged on" not in text
+
+
 def test_unnamed_holder_notice_uses_session_id_and_asks_nothing() -> None:
     for kind in (box_notice.NOTICE_ENTERED, box_notice.NOTICE_ENDED):
         text = box_notice.render_notice(kind, {"sessionId": "sid-me", "name": None})

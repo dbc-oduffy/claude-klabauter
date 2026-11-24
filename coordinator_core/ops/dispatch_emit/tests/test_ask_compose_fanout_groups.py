@@ -63,6 +63,7 @@ const _runRow = (id, deps, scope, run, commit) => (async () => { const r = await
 const _commitWave = async () => {};
 const _waves = [...new Set(_manifest.rows.map((r) => r.wave))];
 const _rows = {};
+const _widenOf = {};
 async function main() {
 %(block)s
   const settled = {};

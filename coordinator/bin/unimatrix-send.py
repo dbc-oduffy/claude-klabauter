@@ -7,8 +7,9 @@ the sender, never with plain text to the human at the keyboard.
     unimatrix-send.py --to <peer-name> 'Reviewed the plan: two issues, ...'
     unimatrix-send.py --list
 
-The sender is identified from the shell this runs in: CODEX_THREAD_ID (Codex) or
-ANTIGRAVITY_CONVERSATION_ID (agy) names the session, or a Grok session whose registry pid is an
+The sender is identified from the shell this runs in: CODEX_THREAD_ID (Codex),
+ANTIGRAVITY_CONVERSATION_ID (agy), or CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID names the session,
+or a Grok session whose registry pid is an
 ancestor of this shell; the router maps it to that peer's roster name and stamps the frame with
 that name and its box, so nothing is signed by hand. Reads no token and puts no credential in argv.
 """
@@ -250,26 +251,6 @@ def _deliver_held_grok(name, text):
         return asyncio.run(m.deliver(peer["target"], peer["cwd"], text))
     except (OSError, subprocess.SubprocessError) as e:
         return f"delivery failed: {e}"
-
-
-def own_session_name(entries=None, parent_of=None, start=None, max_depth: int = 16):
-    """Roster name of the live session whose pid is an ancestor of this shell, else ''.
-
-    The router stamps a CLI send with this name so a reply to the message's `from` reaches the sender."""
-    try:
-        by_pid = {e["pid"]: e["name"] for e in (_session_entries() if entries is None else entries)}
-        step = parent_of or _sibling("unimatrix-peer-grok.py", "unimatrix_peer_grok_send").parent_pid
-        pid, seen = os.getpid() if start is None else start, set()
-        for _ in range(max_depth):
-            if pid in by_pid:
-                return by_pid[pid]
-            if pid is None or pid in seen:
-                return ""
-            seen.add(pid)
-            pid = step(pid)
-    except Exception:
-        pass
-    return ""
 
 
 def own_session_name(entries=None, parent_of=None, start=None, max_depth: int = 16):

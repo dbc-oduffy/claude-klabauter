@@ -25,7 +25,7 @@ from coordinator_core.ipc import register_op
 
 _REMEDIATION = (
     "[cross-repo boundary] crossed the claude-klabauter repo line -- no commit permission "
-    "survives it; the G-EM decides a cross-repo commit. Scoped commits only, never "
+    "survives it; a cross-repo commit is checked by ownership. Scoped commits only, never "
     "`-A`/`.`/`-a`."
 )
 

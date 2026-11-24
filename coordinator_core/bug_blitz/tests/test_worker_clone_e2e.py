@@ -196,6 +196,52 @@ def test_the_runner_provisions_exactly_the_clone_the_fire_args_name(blitz: Path,
     assert (clone / MOD).read_text(encoding="utf-8") == "def add(a, b):\n    return a - b\n"
 
 
+def _cone_repo(root: Path, run_id: str, cone: str) -> None:
+    """A repo whose test imports a sibling package, plus a directory no test needs; `cone` is the run's cone file."""
+    for pkg, body in (("lib_e2e", "VALUE = 7\n"), ("unrelated_e2e", "X = 1\n")):
+        (root / pkg).mkdir()
+        (root / pkg / "__init__.py").write_text(body, encoding="utf-8")
+    (root / "conftest.py").write_text("", encoding="utf-8")
+    (root / "pkg_e2e" / "test_sibling.py").write_text(
+        "from lib_e2e import VALUE\n\n\ndef test_value():\n    assert VALUE == 7\n", encoding="utf-8"
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "sibling")
+    run_dir = worker_clone.run_dir(root, run_id)
+    run_dir.mkdir(parents=True)
+    (run_dir / worker_clone.CONE_FILE).write_text(cone, encoding="utf-8")
+
+
+def _import_in(clone: Path) -> subprocess.CompletedProcess:
+    import sys
+
+    return subprocess.run(
+        [sys.executable, "-c", "from lib_e2e import VALUE; print(VALUE)"], cwd=clone, capture_output=True, text=True,
+        **no_console_creationflags(),
+    )
+
+
+def test_the_cone_holds_every_named_directory_so_a_sibling_import_resolves(blitz: Path, capsys: pytest.CaptureFixture) -> None:
+    _cone_repo(blitz, RUN_ID, "pkg_e2e\nlib_e2e\n")
+    code = targeted_run.main(["provision", "--repo", str(blitz), "--run-id", RUN_ID, "--work-root",
+                              str(worker_clone._clones_dir(blitz) / RUN_ID)])
+    assert code == 0, capsys.readouterr().err
+    clone = worker_clone.clone_root(blitz, RUN_ID)
+    assert clone is not None
+    assert (clone / "conftest.py").is_file() and (clone / "pyproject.toml").is_file()
+    assert (clone / "pkg_e2e" / "test_sibling.py").is_file() and not (clone / "unrelated_e2e").exists()
+    done = _import_in(clone)
+    assert done.returncode == 0 and done.stdout.strip() == "7", done.stderr
+
+
+def test_a_cone_missing_the_imported_directory_fails_the_import_naming_it(blitz: Path) -> None:
+    _cone_repo(blitz, RUN_ID, "pkg_e2e\n")
+    clone = worker_clone.provision(blitz, RUN_ID)
+    assert not (clone / "lib_e2e").exists()
+    done = _import_in(clone)
+    assert done.returncode != 0 and "lib_e2e" in done.stderr  # the missing import names the directory to add
+
+
 def test_the_runner_refuses_an_unsafe_run_id_without_touching_disk(blitz: Path, capsys: pytest.CaptureFixture) -> None:
     code = targeted_run.main(["provision", "--repo", str(blitz), "--run-id", "../x", "--work-root", str(blitz / "x")])
     assert code == 1 and "not a safe path component" in capsys.readouterr().err

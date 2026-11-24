@@ -5,8 +5,10 @@ from coordinator_core.agent_pipe.model_tiers import model_for_tier, model_tier
 def test_catalogued_codex_roles_and_unknown_terra():
     assert model_for_tier("codex", "opus") == "gpt-6.2-astra"
     assert model_for_tier("codex", "sonnet") == "gpt-6.2-sol"
+    assert model_for_tier("codex", "haiku") == "gpt-6-luna"
     assert model_tier("codex", "gpt-6.2-astra") == "frontier"
     assert model_tier("codex", "gpt-6-astra") == "frontier"
+    assert model_tier("codex", "gpt-6.2-sol") == "standard"
     assert model_tier("codex", "gpt-6.1-sol") == "standard"
     assert model_tier("codex", "gpt-6.1-terra") == "unknown"
 
@@ -56,11 +58,11 @@ def test_reviewer_and_em_follow_opus_slot():
         assert model_for_role("claude", role) == "opus"
 
 
-def test_agy_executor_is_the_verified_hydrogen_slot():
+def test_agy_executor_is_the_verified_neon_slot():
     from coordinator_core.agent_pipe.model_tiers import MODEL_SOURCES, model_for_role
-    assert model_for_role("agy", "executor") == "gemini-4-hydrogen-medium"
-    assert "introducing-gemini-4-hydrogen" in MODEL_SOURCES["agy"]
-    assert "antigravity.google/docs/models" in MODEL_SOURCES["agy"]
+    assert model_for_role("agy", "executor") == "gemini-4-neon"
+    assert "gemini-4-neon" in MODEL_SOURCES["agy"]
+    assert "antigravity.google/docs/cli/headless" in MODEL_SOURCES["agy"]
 
 
 def test_unverified_executor_slot_blocked_naming_slot_without_fallback(monkeypatch):
@@ -72,7 +74,7 @@ def test_unverified_executor_slot_blocked_naming_slot_without_fallback(monkeypat
         model_for_role("agy", "executor")
     assert "BLOCKED" in str(exc.value) and "agy" in str(exc.value) and "sonnet" in str(exc.value)
     assert (exc.value.family, exc.value.tier) == ("agy", "sonnet")
-    assert model_for_role("agy", "reviewer") == "gemini-4-argon-high"
+    assert model_for_role("agy", "reviewer") == "gemini-4-carbon"
 
 
 def test_unknown_role_or_family_is_a_value_error():
@@ -91,3 +93,14 @@ def test_current_mistral_routing_avoids_deprecated_medium():
     assert model_for_tier("mistral", "opus") == "mistral-large-4"
     assert DEPRECATED_MODELS["mistral-medium-3-5"]["replacement"] == "mistral-large-4"
     assert model_tier("mistral", "mistral-large-4") == "frontier"
+
+
+def test_catalogued_agy_gemini4_roles_and_legacy_attribution():
+    assert model_for_tier("agy", "opus") == "gemini-4-carbon"
+    assert model_for_tier("agy", "sonnet") == "gemini-4-neon"
+    assert model_for_tier("agy", "haiku") == "gemini-4-hydrogen"
+    assert model_tier("agy", "gemini-4-carbon") == "frontier"
+    assert model_tier("agy", "gemini-4-neon") == "standard"
+    assert model_tier("agy", "gemini-4-hydrogen") == "standard"
+    assert model_tier("agy", "gemini-4-argon") == "frontier"
+    assert model_tier("agy", "gemini-3.8-flash") == "standard"

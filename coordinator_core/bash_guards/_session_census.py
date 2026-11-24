@@ -40,7 +40,8 @@ def _stem(name: str) -> str:
 
 
 def _is_claude(name: str) -> bool:
-    return _stem(name).startswith("claude")
+    stem = _stem(name)
+    return stem == "agy" or stem.startswith(("claude", "codex", "agy-", "agy_", "antigravity"))
 
 
 def _is_session_host(name: str) -> bool:

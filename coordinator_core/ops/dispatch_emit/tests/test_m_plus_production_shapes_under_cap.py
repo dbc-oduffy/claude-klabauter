@@ -12,11 +12,11 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose, emit, prompt_fragments
+from coordinator_core.ops.dispatch_emit.compose_size import ASK_SCRIPT_CEILING_BYTES
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_script_size_budget import _SIZING_REL, _write_sizing
 from coordinator_core.ops.dispatch_emit.tests.test_ask_script_byte_headroom import _PLUGIN_ROOT, _padded_plan_blitz_text
 
-_MARGIN = 4096
-_LIMIT = 524288 - _MARGIN
+_LIMIT = ASK_SCRIPT_CEILING_BYTES
 
 
 @pytest.fixture
@@ -44,11 +44,11 @@ def test_a_known_m_plus_parent_carries_plan_blitz_under_the_cap(tmp_path, _produ
     n = len(script.encode("utf-8"))
     assert sink, "the stager is on in production: a staged script holds at least one prompt pointer"
     assert "async function planBlitz(" in script
-    assert n <= _LIMIT, f"m_plus parent is {n} bytes; limit is {_LIMIT} (cap less {_MARGIN})"
+    assert n <= _LIMIT, f"m_plus parent is {n} bytes; limit is {_LIMIT} (shared ask ceiling)"
 
 
 def test_an_m_plus_chain_hop_child_carries_plan_blitz_under_the_cap(tmp_path, _production_inputs):
     script, _ = staged_m_plus(tmp_path, launcher_child=True, chain_hop=True, in_run_commit=True)
     n = len(script.encode("utf-8"))
     assert "async function planBlitz(" in script
-    assert n <= _LIMIT, f"m_plus chain child is {n} bytes; limit is {_LIMIT} (cap less {_MARGIN})"
+    assert n <= _LIMIT, f"m_plus chain child is {n} bytes; limit is {_LIMIT} (shared ask ceiling)"

@@ -16,17 +16,54 @@ from .render import render, registered_alias, NATIVE_FOOTER
 from coordinator_core.tui_status.grok import before_compact
 
 
-def _auto_compact_limit() -> int | None:
-    """Configured `model_auto_compact_token_limit` from Codex config.toml; None when absent or unreadable."""
+def _auto_compact_limit(row: dict | None = None) -> tuple[int | None, str | None]:
+    """Resolve an observed session limit, selected profile, or version-matched model default."""
     import tomllib
+    row = row or {}
+    def valid(value):
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+    limit = row.get("auto_compact_limit")
+    basis = "observed session model_auto_compact_token_limit" if valid(limit) else None
+    raw_window = row.get("raw_context_window")
     home = os.environ.get("CODEX_HOME")
-    path = (Path(home) if home else Path.home() / ".codex") / "config.toml"
+    base = Path(home) if home else Path.home() / ".codex"
     try:
-        with path.open("rb") as handle:
-            limit = tomllib.load(handle).get("model_auto_compact_token_limit")
-    except (OSError, tomllib.TOMLDecodeError):
-        return None
-    return limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None
+        with (base / "config.toml").open("rb") as handle:
+            config = tomllib.loads(handle.read(256 * 1024).decode("utf-8"))
+        profile = row.get("profile", config.get("profile"))
+        selected = config.get("profiles", {}).get(profile, {}) if isinstance(profile, str) else {}
+        if not valid(limit):
+            limit = selected.get("model_auto_compact_token_limit", config.get("model_auto_compact_token_limit"))
+            if valid(limit):
+                basis = f"configured model_auto_compact_token_limit={limit} (profile={profile})"
+        raw_window = row.get("raw_context_window", selected.get("model_context_window", config.get("model_context_window")))
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    try:
+        with (base / "models_cache.json").open("rb") as handle:
+            catalog = json.loads(handle.read(1024 * 1024))
+        if row.get("cli_version") and catalog.get("client_version") == row["cli_version"]:
+            for model in catalog.get("models", []):
+                if model.get("slug") != row.get("model"):
+                    continue
+                raw = raw_window if valid(raw_window) else model.get("context_window")
+                default = model.get("auto_compact_token_limit")
+                if row["cli_version"] == "0.171.0" and valid(raw):
+                    default = min(default, raw * 9 // 10) if valid(default) else raw * 9 // 10
+                if valid(default):
+                    resolved = min(limit, default) if valid(limit) else default
+                    return resolved, f"runtime model default ({row['cli_version']}, {model['slug']}); {basis or 'resolved raw context window'}"
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    observed_raw = row.get("raw_context_window")
+    observed_model = row.get("model")
+    if (row.get("cli_version") == "0.171.0" and valid(observed_raw)
+            and isinstance(observed_model, str) and observed_model.strip()
+            and observed_model != "unknown"):
+        default = observed_raw * 9 // 10
+        resolved = min(limit, default) if valid(limit) else default
+        return resolved, f"runtime model default (0.171.0, {observed_model}); observed raw context window; {basis or 'native default'}"
+    return (limit, basis) if valid(limit) else (None, None)
 
 
 def snapshot(params: dict) -> dict:
@@ -48,12 +85,18 @@ def _advance_descendant_journals(state: dict, sid: str, budget: int) -> None:
     """
     journals = settings_home() / "state" / "codex-usage"
     read = {sid}
+    complete = state.get("backlog_complete", True)
     while True:
         pending = [t for t in descendants(state) - read if (journals / f"{t}.jsonl").is_file()]
         read |= descendants(state)
         if not pending:
+            state["backlog_complete"] = complete
             return
-        advance(state, [journals / f"{t}.jsonl" for t in pending], byte_budget=budget)
+        paths = [journals / f"{t}.jsonl" for t in pending]
+        # A journal first registered by this refresh was unread when the refresh began.
+        fresh = any(str(p.resolve()) not in state["files"] for p in paths)
+        advance(state, paths, byte_budget=budget)
+        complete = complete and state["backlog_complete"] and not fresh
 
 
 def _snapshot_locked(params, sid, cache) -> dict:
@@ -83,9 +126,14 @@ def _snapshot_locked(params, sid, cache) -> dict:
     # A producer may supply a durable native event journal from workflows whose
     # backend persisted the actual child UUID, parent UUID and observed usage.
     paths.extend(Path(journal) for journal in params.get("event_journals", []))
-    owned_journal = settings_home() / "state" / "codex-usage" / f"{sid}.jsonl"
-    if owned_journal.is_file():
-        paths.append(owned_journal)
+    for owned_sid in descendants(state):
+        try:
+            owned_sid = str(uuid.UUID(owned_sid))
+        except (ValueError, TypeError, AttributeError):
+            continue
+        owned_journal = settings_home() / "state" / "codex-usage" / f"{owned_sid}.jsonl"
+        if owned_journal.is_file():
+            paths.append(owned_journal)
     # Presence is evidence of observed records, never proof of workflow coverage.
     budget = params.get("byte_budget", 4 * 1024 * 1024)
     advance(state, list(dict.fromkeys(paths)), byte_budget=budget)
@@ -98,13 +146,14 @@ def _snapshot_locked(params, sid, cache) -> dict:
         state["coverage"] = {key: data.get("coverage", {}).get(key) is True for key in ("subagents", "workflows")}
     save(cache, state)
     value = summary(state, registered_alias(sid))
-    limit = _auto_compact_limit()
+    limit, basis = _auto_compact_limit(state["threads"].get(sid))
     window = value.get("context_window")
     if limit and isinstance(window, (int, float)) and not isinstance(window, bool) and window > 0:
         before = before_compact(value.get("remaining_percent"), 100 * limit / window)
         if before is not None:
             value["before_compact_percent"] = before
-            value["context_basis"] = f"configured model_auto_compact_token_limit={limit}"
+            value["context_basis"] = basis
+            value["auto_compact_token_limit"] = limit
     value["text"] = render(value)
     value["native_footer_items"] = NATIVE_FOOTER
     value["cache_path"] = str(cache)

@@ -205,8 +205,8 @@ def _compose_arm(arm: Optional[str], staged: bool, plan_blitz_text: str, patches
     return script, sink
 
 
-def measure(literals: bool = True) -> dict:
-    """Totals, `asb.stage_bytes` split, staged-sink bytes and bare-relayed base for both arms, unstaged and staged."""
+def measure(literals: bool = True, pad_blitz: int = 0) -> dict:
+    """Totals, `asb.stage_bytes` split, staged-sink bytes and bare-relayed base for both arms, unstaged and staged; `ceiling_table` under `ceiling_arms`."""
     from coordinator_core.ops.dispatch_emit import ask_stage_budget as asb
     from coordinator_core.warm.caller_context import resolve_caller_context
     from coordinator_core.ops.dispatch_emit.tests.test_ask_script_byte_headroom import _padded_plan_blitz_text
@@ -242,6 +242,7 @@ def measure(literals: bool = True) -> dict:
                 arm_out[shape] = row
             out["arms"][arm_key] = arm_out
         out["production_m_plus"] = production_m_plus(padded)
+        out["ceiling_arms"] = ceiling_table(padded, pad_blitz)
         out["bare_relayed_base"] = _bare_relayed_base(patches)
         out["budgets"] = {k: dict(v) for k, v in asb.STAGE_BUDGETS.items()}
         out["checks"] = {
@@ -284,6 +285,70 @@ def production_m_plus(padded: str) -> dict:
                 "total": total,
                 "stages": asb.stage_bytes(script, wrapped),
                 "within_cap_less_4096": total <= 524288 - 4096,
+            }
+    return out
+
+
+def _margin_row(total: int, ceiling: int) -> dict:
+    return {"total": total, "ceiling": ceiling, "margin": ceiling - total, "within_ceiling": total <= ceiling}
+
+
+def _m_plus_parent_total(tmp: Path, text: str, **kw) -> int:
+    from coordinator_core.ops.dispatch_emit import ask_compose
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_script_size_budget import _SIZING_REL
+
+    script = ask_compose.compose_ask_script(
+        repo_root=str(tmp), prompt=None, sizing_rel=_SIZING_REL, run_id="run-1", session_id=None,
+        script_path="scratch/warp/x.mjs", plan_blitz_text=text, staged_out={}, **kw,
+    )
+    return _size(script)
+
+
+def ceiling_table(padded: str, pad_blitz: int = 0) -> dict:
+    """Total, ceiling and margin of every production arm, staged and hoisted: bare, relayed, m_plus parent, chain-hop child, m_plus with an EM brief.
+
+    The m_plus shapes compose as `test_m_plus_production_shapes_under_cap.staged_m_plus` does. A nonzero `pad_blitz`
+    appends that many bytes to the installed plan-blitz text as a template literal (the asset's dominant prose form;
+    a single-quoted pad would stage by construction) and reports the m_plus parent's delta over the installed text."""
+    from coordinator_core.ops.dispatch_emit import ask_compose
+    from coordinator_core.ops.dispatch_emit.ask_brief import EmBrief
+    from coordinator_core.ops.dispatch_emit.compose_size import ASK_SCRIPT_CEILING_BYTES as ceiling
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_script_size_budget import _write_sizing
+    from coordinator_core.temp_layout import managed_temp_dir
+
+    arms: dict = {}
+    p = _Patches()
+    try:
+        script, _ = _compose_arm(None, True, "", p)
+        arms["bare"] = _margin_row(_size(script), ceiling)
+        sink: dict = {}
+        script = ask_compose.compose_ask_script(
+            repo_root=str(_REPO_ROOT), prompt=_BARE_ASK, sizing_rel=None, run_id="ask-probe-000000", session_id=None,
+            ask_source="relayed", staged_out=sink,
+        )
+        arms["relayed"] = _margin_row(_size(script), ceiling)
+    finally:
+        p.undo()
+    shapes = (
+        ("m_plus_parent", {}),
+        ("m_plus_chain_child", {"launcher_child": True, "chain_hop": True, "in_run_commit": True}),
+        ("m_plus_em_brief", {"em_brief": EmBrief(text="Frame: probe brief", source="inline", context=())}),
+    )
+    out: dict = {"ceiling": ceiling, "arms": arms}
+    with managed_temp_dir("ask-bytes-probe-ceiling-") as tmp:
+        _write_sizing(Path(tmp))
+        for name, kw in shapes:
+            arms[name] = _margin_row(_m_plus_parent_total(Path(tmp), padded, **kw), ceiling)
+        if pad_blitz > 0:
+            from coordinator_core.ops.dispatch_emit.ask_plan_blitz import load_plan_blitz_text
+
+            installed = load_plan_blitz_text()
+            more = installed + "\nconst __pad_more = `" + "x" * max(pad_blitz - 24, 0) + "`;\n"
+            base_total = _m_plus_parent_total(Path(tmp), installed)
+            grown = _m_plus_parent_total(Path(tmp), more)
+            out["pad_blitz"] = {
+                "bytes": _size(more) - _size(installed), "m_plus_parent_base": base_total,
+                "m_plus_parent_padded": grown, "delta": grown - base_total, "margin": ceiling - grown,
             }
     return out
 
@@ -386,7 +451,8 @@ def main(argv: list[str]) -> int:
     if "--literal-delta" in argv:
         print(json.dumps(literal_delta()))
         return 0
-    print(json.dumps(measure(literals="--no-literals" not in argv)))
+    pad = int(argv[argv.index("--pad-blitz") + 1]) if "--pad-blitz" in argv else 0
+    print(json.dumps(measure(literals="--no-literals" not in argv, pad_blitz=pad)))
     return 0
 
 

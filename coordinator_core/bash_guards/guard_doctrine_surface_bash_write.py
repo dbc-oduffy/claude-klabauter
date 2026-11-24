@@ -1867,6 +1867,43 @@ def _is_claude_md_grant_read_shape(segment: str) -> bool:
     return not _has_write_marker(_strip_quoted_spans(without_heredocs))
 
 
+_PYTHON_VERSIONED_BASENAME_RE = re.compile(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?$")
+_UNIMATRIX_SEND_FLAGS = frozenset({"-u", "-B", "-E", "-I", "-s", "-S", "-O", "-OO"})
+_SINGLE_QUOTED_SPAN_RE = re.compile(r"'[^']*'")
+
+
+def _is_unimatrix_send_read_shape(segment: str) -> bool:
+    """Python running unimatrix-send.py with no redirects, substitutions, or write pipes."""
+    without_heredocs = _strip_heredoc_bodies(segment)
+    unquoted = _strip_quoted_spans(without_heredocs)
+    if _has_write_marker(unquoted) or ">" in unquoted or "|" in unquoted:
+        return False
+    without_single_quotes = _SINGLE_QUOTED_SPAN_RE.sub(" ", without_heredocs)
+    if any(tok in without_single_quotes for tok in ("$(", "`", "<(", ">(")):
+        return False
+    try:
+        tokens = shlex.split(without_heredocs, posix=True)
+    except ValueError:
+        return False
+    idx = 0
+    while idx < len(tokens) and _ASSIGN_RE.match(tokens[idx]):
+        idx += 1
+    if idx >= len(tokens):
+        return False
+    py_base = _command_token_basename(tokens[idx]).lower()
+    if not _PYTHON_VERSIONED_BASENAME_RE.fullmatch(py_base):
+        return False
+    idx += 1
+    while idx < len(tokens) and tokens[idx] in _UNIMATRIX_SEND_FLAGS:
+        idx += 1
+    if idx >= len(tokens):
+        return False
+    script = tokens[idx]
+    if script.startswith("-"):
+        return False
+    return os.path.basename(script.replace("\\", "/")).lower() == "unimatrix-send.py"
+
+
 def _split_top_level_segments(cmd: str) -> "list[str]":
     segments: "list[str]" = []
     current: "list[str]" = []
@@ -2478,6 +2515,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             or _is_commit_cli_argument_shape(segment)
             or _is_claim_release_shape(segment)
             or _is_claude_md_grant_read_shape(segment)
+            or _is_unimatrix_send_read_shape(segment)
             or _is_interpreter_read_shape(segment, identifiers_lower)
             or _is_assignment_captured_substitution_read_shape(segment, identifiers_lower)
             or _is_fetch_to_ungoverned_file_shape(segment, cmd, identifiers_lower)

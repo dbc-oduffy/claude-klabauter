@@ -349,6 +349,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/group_em_fleet_capacity.py",
         ("_groupem_idle_capacity_watch",),
     ),
+    "groupem.fleet_book": (
+        "coordinator_core/ops/group_em_fleet_book.py",
+        ("_groupem_fleet_book",),
+    ),
     "rulings.coverage": (
         "coordinator_core/ops/rulings/coverage.py",
         ("_handler",),
@@ -2778,6 +2782,37 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`prefix_resolve`); the attribution is itself asserted on every run.",
     ),
     (
+        "dispatch.record_halted_run_landed",
+        "coordinator_core/ops/dispatch_emit/pending_oracle.py",
+        "closing_check_passes",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        # `halted_run_landed._oracle_gate` runs each stamped pending-oracle row's closing check once per
+        # landing call, before `_standing_halt_problem`; a marker with no pending row spawns nothing here.
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/dispatch_emit/tests/test_halted_run_landed_pending_oracle.py",
+        executed="Counted under `test_a_landing_spawns_one_closing_check_per_pending_row`: `subprocess.run` "
+        "wrapped around `op._handler`, two pending rows on one marker, `len(seen) == 2` filtered to "
+        "`argv0 == sys.executable`, again 2 on the crediting call; `test_a_landing_with_no_pending_row_"
+        "spawns_no_closing_check` asserts `seen == []`.",
+    ),
+    (
+        "dispatch.ask_gate",
+        "coordinator_core/ops/dispatch_emit/pending_oracle.py",
+        "closing_check_passes",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        # `ask_gate._credit_split_predecessors` calls `halted_run_landed._handler`, which reaches the same
+        # `_oracle_gate`; a predecessor whose marker carries no pending row spawns nothing here.
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/dispatch_emit/tests/test_halted_run_landed_pending_oracle.py",
+        executed="Counted under `test_a_landed_under_credit_spawns_one_closing_check_per_pending_row`: "
+        "`subprocess.run` wrapped, `_handler` called with `landed_under` as `_credit_split_predecessors` "
+        "calls it, one stamped pending row, `len(seen) == 1` filtered to `argv0 == sys.executable`.",
+    ),
+    (
         "workflow.revise",
         "coordinator_core/git/run.py",
         "run_git",
@@ -2791,6 +2826,21 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         executed="Measured 2026-11-03: attributed by stack to git/run.py::run_git under "
         "`test_closing_on_a_full_sha_spawns_exactly_the_one_ancestry_check` (`assert len(spawns) == "
         "budget[\"ancestry_check\"]`, the figure the manifest pins for the shared verifier).",
+    ),
+    (
+        "workflow.revise",
+        "coordinator_core/ops/dispatch_emit/wired_check.py",
+        "rerun_wired_check",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        # `ledger_verdict` -> `apply_verdict` re-runs each distinct `wired: true` command once, only
+        # in the census.screen read-only single-stage form, before the register lock is taken.
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/ops/dispatch_emit/tests/test_requirements_ledger_wired_evidence.py",
+        executed="Counted under `test_a_landing_spawns_exactly_one_process_per_distinct_command`: "
+        "`subprocess.run` substituted around `apply_verdict`, three items citing one command, "
+        "`len(spawns) == 1`, argv `[sys.executable, 'ok.py']`.",
     ),
     (
         "hooks.submit_bug_blitz",
@@ -8018,7 +8068,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # and 2-5ms wall (Popen only, nothing waited on), skipped under pytest: EXECUTED, off the op's
     # process time. `rollback_check._git`: 2 spawns, 156-188ms process, executed only under the
     # opt-in `detect_rollback` leg.
-    "dispatch.terminal_commit": 10,
+    # 10 -> 11: `wired_check.rerun_wired_check`, reached via `terminal_commit_ledger._ledger_writeback ->
+    # apply_verdict`; one spawn per distinct `wired: true` command, census.screen read-only form only,
+    # inside one aggregate 300ms budget; pytest and pipelines demote unspawned.
+    "dispatch.terminal_commit": 11,
     # Static reachability, not the runtime ceiling. A landing runs at most 2 spawns (the budget test's
     # per-shape ceilings): `git hash-object --stdin-paths` through run_git, only for a filter- or
     # attribute-pinned path `commit_paths` cannot hash in process, and the one detached close-job
@@ -8124,6 +8177,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Enrolled 2026-10-26: halted-run supersede/combined-landing ops, pinned at measured reachable counts.
     "dispatch.close_halted_run_superseded": 1,
     "dispatch.close_halted_run_rejected": 1,
+    # Enrolled 2026-11-24: plan-base rebind, one git site (`_resolve_stamp`: rev-parse HEAD or ancestry rev-list).
+    "dispatch.rebind_plan_base": 1,
     "dispatch.land_combined_index": 2,
     # dispatch.test_leg: one reachable git site (`_committed_at`, committer time of run_base_sha); constant per call.
     "dispatch.test_leg": 1,
