@@ -23,6 +23,10 @@ class ReapPrimitives(Protocol):
 
     def snapshot(self) -> Optional[Sequence]: ...
 
+    def cpu_time_s(self, pid: int) -> Optional[float]: ...
+
+    def command_line(self, pid: int) -> Optional[str]: ...
+
 
 SelectFn = Callable[[Sequence, ReapPrimitives], List]
 ReapFn = Callable[[ReapPrimitives], List[int]]

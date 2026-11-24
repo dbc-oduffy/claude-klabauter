@@ -1840,6 +1840,11 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
         stopped = _landed_run_stop(root, params["run_id"])
         if stopped is not None:
             return stopped.to_json()
+        from coordinator_core.ops.dispatch_emit import upstream_behind
+
+        behind = upstream_behind.check(root)
+        if behind.refusal is not None:
+            return _refuse(behind.refusal).to_json()
     declared = [w for w in params.get("declared_writes") or [] if isinstance(w, str) and w.strip()]
     if declared:
         writes = list(dict.fromkeys([*writes, *declared]))

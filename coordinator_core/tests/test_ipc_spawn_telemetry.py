@@ -110,12 +110,11 @@ def test_declare_benchmark_origin_does_not_overwrite_existing(monkeypatch):
     assert os.environ[op_latency.ORIGIN_ENV] == "already-set-by-caller"
 
 
-def test_declare_benchmark_origin_sets_when_absent():
+def test_declare_benchmark_origin_sets_when_absent(monkeypatch):
     import os
 
-    os.environ.pop(op_latency.ORIGIN_ENV, None)
-    try:
-        declare_benchmark_origin()
-        assert os.environ[op_latency.ORIGIN_ENV] == op_latency.BENCHMARK
-    finally:
-        os.environ.pop(op_latency.ORIGIN_ENV, None)
+    # setenv-then-delenv records the prior state so teardown removes what declare_benchmark_origin wrote.
+    monkeypatch.setenv(op_latency.ORIGIN_ENV, "placeholder")
+    monkeypatch.delenv(op_latency.ORIGIN_ENV)
+    declare_benchmark_origin()
+    assert os.environ[op_latency.ORIGIN_ENV] == op_latency.BENCHMARK

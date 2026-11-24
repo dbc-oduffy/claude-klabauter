@@ -504,6 +504,25 @@ def _two_commits(tmp_path, base_data: str, head_data: str, second_data: str = "o
     return root, base, _git(root, "rev-parse", "HEAD").strip()
 
 
+def test_a_red_over_the_importer_cap_leads_with_the_failing_id_before_the_cap_note(tmp_path):
+    root, base = _repo(tmp_path, data="bad\n")
+    _write(root, "t/widget.py", "X = 1\n")
+    extra = cov.IMPORTER_CAP + 5
+    for i in range(extra):
+        _write(root, f"t/test_imp_{i:03d}.py", f"import widget\n\n\ndef test_imp_{i}():\n    assert widget\n")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "importers")
+    head = _git(root, "rev-parse", "HEAD").strip()
+
+    out = cov.verify(root, "run1", head, [READER], touched=["t/widget.py"])
+
+    assert out.verdict == "red", out
+    assert out.detail.startswith(f"failing: {READER}::test_reads_data"), out.detail
+    assert out.detail.index("failing:") < out.detail.index("importer cap")
+    assert f"importer cap {cov.IMPORTER_CAP}: 5 importing test file(s) not run" in out.detail
+    assert out.failing == (f"{READER}::test_reads_data",)
+
+
 def test_a_red_that_fails_identically_at_base_is_pre_existing_and_names_the_ids(tmp_path):
     root, base, head = _two_commits(tmp_path, "broken\n", "broken\n")
 

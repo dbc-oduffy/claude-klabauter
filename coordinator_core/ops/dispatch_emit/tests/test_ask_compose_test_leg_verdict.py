@@ -27,7 +27,7 @@ _SIZING = "state/sizings/x.yaml"
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _script(monkeypatch) -> str:
+def _script(monkeypatch, **extra) -> str:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
     return compose_ask_script(
         repo_root="REPO",
@@ -38,6 +38,7 @@ def _script(monkeypatch) -> str:
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]),
         plan_blitz_text="stub",
         **REVIEW_KW,
+        **extra,
     )
 
 
@@ -211,6 +212,38 @@ def _run_at_base(test_result: str, reverify: str) -> dict:
     return json.loads(out)
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "test_result, reverify",
+    [
+        ("null", "{ status_after: 'fail', failing: ['a::t1'], owned_red: ['a::t1'] }"),
+        ("null", "{ status_after: 'fail', failing: ['a::t1'], peer_dirt: ['a::t1'] }"),
+        ("{ status: 'error', sidecar_path: 'a.md', pre_existing: ['a::t1'] }",
+         "{ status_after: 'fail', failing: ['a::t1'] }"),
+        ("{ status: 'error', sidecar_path: 'a.md', failing_at_base: ['a::t1'] }",
+         "{ status_after: 'fail', failing: ['a::t1'] }"),
+    ],
+)
+def test_id_measured_red_at_base_is_never_listed_as_not_red_at_the_run_base(test_result, reverify):
+    halted = _run_at_base(test_result, reverify)
+    assert halted["halted"] == "test_verdict_empty"
+    assert halted["failing"] == []
+    assert "not red at the run base" not in halted["detail"]
+    assert "all pre-existing" in halted["detail"] and "a::t1" in halted["detail"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_id_with_no_at_base_measurement_stays_listed_as_not_red_at_the_run_base():
+    halted = _run_at_base(
+        "{ status: 'error', sidecar_path: 'a.md', failing_at_base: ['a::t1'] }",
+        "{ status_after: 'fail', failing: ['a::t1', 'b::t2'], owned_red: ['c::t3'] }",
+    )
+    assert halted["failing"] == ["b::t2"]
+    assert "not red at the run base: b::t2" in halted["detail"]
+
+
 _CO_TENANT = "co_tenant: { owner: 'run-7', module: 'coordinator_core/ops/run_order.py'%s }"
 
 
@@ -224,7 +257,7 @@ def test_co_tenant_wait_halts_co_tenant_wait_naming_owner_and_module():
     )
     assert halted["halted"] == "co_tenant_wait" != "test_infra_failure"
     assert "run-7" in halted["detail"] and "coordinator_core/ops/run_order.py" in halted["detail"]
-    assert halted["next_action"] == "auto-refires when run-7 lands"
+    assert halted["next_action"] == "the engine refires run-7 first, then this run (stranded-wait sweep)"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
@@ -249,6 +282,71 @@ def test_unrelated_zero_run_cause_still_halts_the_empty_verdict_kind():
     # A zero-run no co-tenant caused is a test-infra failure; only the co-tenant causes keep their own halt kinds.
     assert halted["halted"] == "test_infra_failure"
     assert halted["next_action"].startswith("Refire to re-run the test leg")
+
+
+_OVER_BUDGET = (
+    "{ status: 'error', leg_type: 'test_infra', sidecar_path: 'a.md', summary: 'timeout: 540s', "
+    "over_budget: true, elapsed_s: 541.2, budget_s: 540, tests_run: 155, tests_failed: 0, "
+    "slow_targets: [{ file: 'test_map_gate_v1_offline.py', seconds: 374 }], "
+    "unrun_targets: ['u1.py', 'u2.py', 'u3.py', 'u4.py'] }"
+)
+
+
+def test_test_result_schema_keeps_every_field_the_over_budget_halt_reads():
+    props = ask_compose._test_result_schema()["properties"]
+    for key in ("over_budget", "elapsed_s", "budget_s", "slow_targets", "unrun_targets", "summary",
+                "failing_detail", "error", "stderr_tail", "tests_run", "tests_failed"):
+        assert key in props
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_leg_budget_timeout_halts_test_leg_over_budget_naming_its_measurements():
+    halted = _run_at_base(_OVER_BUDGET, "null")
+    assert halted["halted"] == "test_leg_over_budget"
+    detail = halted["detail"]
+    for named in ("timeout: 540s", "elapsed 541.2s of 540s budget", "test_map_gate_v1_offline.py (374s)", "u1.py, u2.py, u3.py, u4.py",
+                  "tests_run 155 / tests_failed 0"):
+        assert named in detail
+    assert "errored without a failing id" not in detail
+    assert halted["next_action"].startswith("Refire to re-run the test leg")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "result, carried",
+    [
+        ("{ status: 'error', sidecar_path: 'a.md', summary: 'test leg spawn failed: OSError: boom' }", "OSError: boom"),
+        ("{ status: 'error', sidecar_path: 'a.md', over_budget: false, "
+         "failing_detail: [{ node_id: 'pytest', message: 'pytest exit 2 with no failing id' }] }", "pytest exit 2"),
+        ("{ status: 'error', sidecar_path: 'a.md', error: 'Traceback: KeyError x' }", "KeyError x"),
+        ("{ status: 'errored', sidecar_path: 'a.md', stderr_tail: ['line one', 'last stderr line'] }", "last stderr line"),
+    ],
+)
+def test_other_errored_leg_carries_its_cause_and_stays_test_verdict_empty(result, carried):
+    halted = _run_at_base(result, "null")
+    assert halted["halted"] == "test_verdict_empty"
+    assert carried in halted["detail"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_errored_leg_with_no_cause_fields_still_names_the_absence():
+    halted = _run_at_base("{ status: 'error', sidecar_path: 'a.md' }", "null")
+    assert halted["halted"] == "test_verdict_empty"
+    assert "carried no summary, failing_detail message, error or stderr tail" in halted["detail"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("result", [
+    "{ status: 'error', sidecar_path: 'a.md', over_budget: false, tests_run: 5, summary: 's' }",
+    "{ status: 'pass', sidecar_path: 'a.md', over_budget: true, tests_run: 5 }",
+])
+def test_only_an_errored_over_budget_verdict_halts_test_leg_over_budget(result):
+    halted = _run_at_base(result, "null")
+    assert halted is None or halted["halted"] != "test_leg_over_budget"
 
 
 def test_export_test_instruction_tells_the_leg_to_report_the_co_tenant_line():
@@ -301,3 +399,155 @@ def test_composed_ledger_normaliser_runs_the_stall_coercion(monkeypatch):
 
 def test_usage_limit_halt_still_names_journal_replay():
     assert "resumeFromRunId" in _usage_limit_helper_js()
+
+
+def test_composed_script_never_refires_a_zero_test_infra_verdict(monkeypatch):
+    script = _script(monkeypatch)
+    for gone in ("_tiN", "refiring the verify leg"):
+        assert gone not in script
+    assert 'halted: "test_infra_failure"' in script
+    assert "TEST_GUARD" not in script
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov, halted_record_eviction as hre
+
+    assert ask_compose.TEST_INFRA_CAUSE == cov.ZERO_RUN_TEST_INFRA == hre.TEST_INFRA_HALT
+    assert not hasattr(ask_compose, "TEST_INFRA_REFIRE_LIMIT")
+
+
+_SESSION = (
+    ", infra_session: { argv: ['py', '-m', 'pytest', 'tests/semantic/test_symbol_name_index.py'], "
+    "cwd: 'the-tree', interpreter: 'the-python', exit_code: 4 }, "
+    "first_setup_error: 'ImportError while loading tests/conftest.py: NameError: name contextmanager is not defined'"
+)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_a_zero_test_infra_verdict_halts_test_infra_failure_naming_its_cause_and_routes_to_a_fix():
+    halted = _run_at_base(_ZERO % ("test_infra_failure", _SESSION), "null")
+    assert halted["halted"] == "test_infra_failure"
+    for named in ("ran zero tests (test_infra_failure)", "NameError: name contextmanager is not defined",
+                  "tests/semantic/test_symbol_name_index.py", "cwd the-tree", "interpreter the-python", "exit_code 4"):
+        assert named in halted["detail"]
+    assert halted["next_action"].startswith("Fix the cause named in detail first")
+    assert fire_command(_SIZING) in halted["next_action"].replace('\\"', '"')
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_a_zero_test_infra_verdict_without_a_session_halts_naming_the_absence():
+    halted = _run_at_base(_ZERO % ("test_infra_failure", ""), "null")
+    assert halted["halted"] == "test_infra_failure"
+    assert "carried no pytest session" in halted["detail"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("held", [
+    "{ status: 'error', sidecar_path: 'a.md', tests_run: 3, zero_run_cause: 'test_infra_failure' }",
+    "{ status: 'error', sidecar_path: 'a.md', tests_run: 0, zero_run_cause: 'co-tenant-wait' }",
+])
+def test_only_a_zero_test_infra_verdict_halts_test_infra_failure(held):
+    halted = _run_at_base(held, "null")
+    assert halted is None or halted["halted"] != "test_infra_failure"
+
+
+_LEDGER_HARNESS = """
+let _ledger = %s; const _reqText = %s;
+%s
+%s
+let _commit = %s, _blkIds = %s, _emptyVerdict = false, _missingIds = [];
+const _halted = %s;
+console.log(JSON.stringify({ halted_by: _halted }));
+"""
+
+_UNMET_ITEMS = (
+    "{ items: [{ id: 'R1', status: 'not_met', root_read: ['coordinator_core/x.py'], "
+    "evidence: 'x.py has no halt cause', remaining: ['halt detail still bare'] }, { id: 'R2', status: 'met' }] }"
+)
+_REQ_TEXT = "{ R1: 'A test-leg error must carry its stderr tail', N1: 'Widen to the ledger halt' }"
+_COMMIT_FIELDS = ask_compose._COMMIT_LEDGER_FIELDS_JS + "reason: " + ask_compose._COMMIT_HALT_REASON_WITH_LEDGER_JS
+
+
+def _node_halted_by(ledger: str, req_text: str, commit: str, blk_ids: str, halted: str) -> dict:
+    import json
+
+    out = subprocess.run(
+        [shutil.which("node"), "-"],
+        input=_LEDGER_HARNESS % (ledger, req_text, ask_compose.UNMET_ROWS_DETAIL_JS,
+                                 ask_compose.COMMIT_LEDGER_DETAIL_JS, commit, blk_ids, halted),
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout.strip()
+    return json.loads(out)["halted_by"]
+
+
+def _ledger_halt(kind: str, ledger: str = _UNMET_ITEMS, req_text: str = _REQ_TEXT) -> dict:
+    commit = "{ refused: 'ledger-unmet', error: 'the requirements are not met: R1: not met' }"
+    halted = {
+        "commit": "{ halted: 'commit', " + _COMMIT_FIELDS + " }",
+        "ledger-check": "{ halted: 'ledger-check', " + ask_compose.LEDGER_CHECK_DETAIL_JS + " }",
+    }[kind]
+    return _node_halted_by(ledger, req_text, commit, "['R1']", halted)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("kind", ["commit", "ledger-check"])
+def test_an_unmet_ledger_row_halts_naming_requirement_evidence_and_gap(kind):
+    from coordinator_core.ops.dispatch_emit.ask_contract import halted_record_message
+
+    halted_by = _ledger_halt(kind)
+    for field in ("detail", "reason") if kind == "commit" else ("detail",):
+        text = halted_by[field]
+        assert "R1" in text
+        assert "A test-leg error must carry its stderr tail" in text
+        assert "root_read coordinator_core/x.py" in text and "x.py has no halt cause" in text
+        assert "halt detail still bare" in text
+        assert "R2" not in text
+    assert "A test-leg error must carry its stderr tail" in halted_record_message("r", halted_by)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_a_bare_not_met_detail_is_refused():
+    detail = _ledger_halt("commit", ledger="{ items: [] }", req_text="{}")["detail"]
+    assert detail != "R1: not met"
+    assert "requirement text not in the ledger view" in detail
+    assert "evidence checked: none recorded by the verify leg" in detail
+    assert "remaining gap: the verdict named no remaining line (not met)" in detail
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_the_verify_items_own_requirement_text_serves_a_row_the_ledger_view_lacked():
+    ledger = "{ items: [{ id: 'R1', status: 'not_met', requirement: 'late row first line\\nsecond', remaining: ['g'] }] }"
+    assert "late row first line" in _ledger_halt("ledger-check", ledger=ledger, req_text="{}")["detail"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_a_non_ledger_commit_refusal_keeps_its_own_reason_and_no_detail():
+    halted_by = _node_halted_by(
+        "null", "{}", "{ refused: 'blob-drift', error: 'x moved' }", "[]", "{ halted: 'commit', " + _COMMIT_FIELDS + " }"
+    )
+    assert halted_by["reason"] == "blob-drift: x moved" and halted_by["detail"] is None
+
+
+def test_requirement_first_lines_reads_register_rows_and_revise_notes():
+    view = (
+        "## R1 (relayed)\n\n> first line of R1\n> second\n\n## Revise notes\n\n"
+        "run-x-20261122T093412-72f584 N1 at 2026-11-22T10:11:20Z:\n\n> Widen to the commit-leg halt\n"
+    )
+    assert ask_compose.requirement_first_lines(view) == {"R1": "first line of R1", "N1": "Widen to the commit-leg halt"}
+
+
+def test_composed_script_wires_the_unmet_row_detail_into_both_halts(monkeypatch):
+    # The commit halt exists only in a script that lands its own terminal commit.
+    script = _script(monkeypatch, in_run_commit=True).replace("\r", "")
+    assert ask_compose.LEDGER_CHECK_DETAIL_JS in script
+    assert _COMMIT_FIELDS in script
+    assert script.index("const _unmetRowsDetail") < script.index("halted: 'ledger-check'")
+    commit_at = script.index("_halted = { halted: 'commit', refused:")
+    assert commit_at < script.index(_COMMIT_FIELDS) < script.index("run_id: _runId };", commit_at)
+    ledger_at = script.index("_halted = { halted: 'ledger-check', ")
+    assert ledger_at < script.index(ask_compose.LEDGER_CHECK_DETAIL_JS, ledger_at)
+    assert "halted_by: _halted" in script[commit_at:]

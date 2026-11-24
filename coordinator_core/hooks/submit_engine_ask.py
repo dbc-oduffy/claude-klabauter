@@ -1126,8 +1126,9 @@ def _direct_start(root: Path, run_id: str, deadline: float) -> Optional[dict]:
         reply = minted_run.start_args(root, run_id)
         if not (isinstance(reply, dict) and reply.get("ok") and reply.get("script_path")):
             return None
-        if minted_run.holds_workflow_reader(root, reply["script_path"]):
-            return {"scriptPath": str(root / reply["script_path"]), "args": reply.get("fire_args") or {}}
+        reader = minted_run.reader_script_rel(root, run_id, reply["script_path"])
+        if reader is not None:
+            return {"scriptPath": str(root / reader), "args": reply.get("fire_args") or {}}
         return {"scriptPath": str(write_direct_start_script(root, run_id, reply["script_path"], reply.get("fire_args") or None))}
 
     new_input = _quick(start, deadline)
@@ -1193,7 +1194,7 @@ def _reader_holding_runs(root: Path, run_ids: Sequence[str]) -> list:
         if not minted_run.is_minted_only(root / RECORD_DIR_ROOT / rid):
             continue
         reply = minted_run.start_args(root, rid)
-        if isinstance(reply, dict) and reply.get("ok") and reply.get("script_path") and minted_run.holds_workflow_reader(root, reply["script_path"]):
+        if isinstance(reply, dict) and reply.get("ok") and reply.get("script_path") and minted_run.reader_script_rel(root, rid, reply["script_path"]) is not None:
             out.append(rid)
     return out
 
@@ -1505,7 +1506,10 @@ const OP = __OP__;
 const START_SCHEMA = {
   type: 'object',
   required: ['ok', 'script_path'],
-  properties: { ok: { type: 'boolean' }, script_path: { type: 'string' }, refusal: { type: 'string' } },
+  properties: {
+    ok: { type: 'boolean' }, script_path: { type: 'string' }, run_script: { type: 'string' },
+    fire_args: { type: ['object', 'null'] }, refusal: { type: 'string' },
+  },
 };
 """ + _STAGE_LOOP_JS + r"""const results = [];
 for (const rid of RUN_IDS) {
@@ -1513,18 +1517,32 @@ for (const rid of RUN_IDS) {
   const reply = await agent(
     __AUTHORITY__
     + ' Run `' + INVOKE + ' --repo "' + REPO_ROOT + '" ' + OP + " '" + params + "'` once, with the command word exactly as written, and "
-    + 'return ok, script_path and refusal from its JSON reply verbatim. When the command is denied or fails, '
+    + 'return ok, script_path, run_script, fire_args and refusal from its JSON reply verbatim (omit run_script or fire_args when the reply has none). When the command is denied or fails, '
     + "return ok false, script_path as an empty string and the command's error text verbatim in refusal. "
     + 'If you do not run the command for any reason, put that reason verbatim in refusal the same way.',
     { label: 'minted-start', phase: 'start', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: START_SCHEMA },
   );
-  const path = (reply && reply.ok === true && typeof reply.script_path === 'string') ? _normPath(reply.script_path) : '';
-  // Trap: the relay can mis-copy; the script path must be this run's own script.
-  if (path === '' || path.split('/').pop() !== rid + RUN_SCRIPT_SUFFIX) {
+  const ownBase = rid + RUN_SCRIPT_SUFFIX;
+  const _norm = (p) => (typeof p === 'string' && p !== '') ? _normPath(p) : '';
+  const sp = (reply && reply.ok === true) ? _norm(reply.script_path) : '';
+  const rs = (reply && reply.ok === true) ? _norm(reply.run_script) : '';
+  // Trap: the relay can mis-copy; the path started must be this run's own script. The op's start script for a reader-free run is a wrapper that calls workflow() itself, so this script starts the run script (run_script) through its own stage loop.
+  // A reader-holding staged twin of this run is also its own script.
+  const _own = (p) => { const b = p.split('/').pop(); return b === ownBase || (b.startsWith(rid + '.staged-') && b.endsWith(RUN_SCRIPT_SUFFIX)); };
+  const path = _own(sp) ? sp : (rs.split('/').pop() === ownBase ? rs : '');
+  if (path === '') {
     return {
       status: 'failed', run_id: rid,
       error: 'minted run ' + rid + ' did not start (' + ((reply && reply.refusal) || 'the op returned no run script') + '); start or abandon it with ' + OP + ' {"run_id":"' + rid + '","action":"start|abandon"}',
     };
+  }
+  // Trap: a run script that holds its own workflow() stage reader (the op replies with fire_args) is refused at a second nesting level under this script, so it is handed back to be fired top-level.
+  if (reply.fire_args !== null && typeof reply.fire_args === 'object') {
+    results.push({
+      status: 'start_handoff', run_id: rid, script_path: path, fire_args: reply.fire_args,
+      note: 'run ' + rid + ' holds its own stage reader, which cannot run below this script; fire it top-level with Workflow({scriptPath: script_path, args: fire_args})',
+    });
+    continue;
   }
   const started = await _startLoop(path);
   if (!started.ok) return { status: 'failed', run_id: rid, error: started.error };

@@ -594,6 +594,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "scratchpad.sweep":                       "coordinator_core.ops.scratchpad_sweep",
     "scratch.delete":                         "coordinator_core.ops.scratch_delete",
     "ask_spool.withdraw":                     "coordinator_core.ops.ask_spool_withdraw",
+    "run.hold":                               "coordinator_core.ops.run_hold_op",
     "external_workspace.rehydrate":           "coordinator_core.ops.external_workspace_rehydrate",
     "scratch.record_run_path":                "coordinator_core.ops.scratch_record",
     "scratch.keep":                           "coordinator_core.ops.scratch_record",

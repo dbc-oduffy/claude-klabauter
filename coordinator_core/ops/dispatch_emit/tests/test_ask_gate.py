@@ -625,3 +625,81 @@ def test_resume_reuses_every_open_sibling_row_of_a_split_ledger_item(tmp_path: P
     monkeypatch.setattr(lrp, "plan_rows_serving", lambda *_a, **_k: [])
     out = ask_gate._derive_resume_rows(tmp_path, "docs/plans/p.md", {"blocking": ["LR1"]})
     assert out == ["LR1", "LR1-2"]
+
+
+_UP_RUN = "warp-2026-10-01-gate-20261027T142436-989a2d"
+
+
+def _fire(repo) -> dict:
+    from coordinator_core.ops.dispatch_emit import ask_gate
+
+    _put(repo, tshirt="S", route="spec-dispatch")
+    return ask_gate._handler({"sizing_path": REL, "run_id": _UP_RUN}, repo)
+
+
+def _base(repo: Path) -> Path:
+    """A per-test directory beside the repo for the origin and its clones (`repo.parent` is shared)."""
+    base = repo.parent / f"{repo.name}-base"
+    base.mkdir(exist_ok=True)
+    return base
+
+
+def _upstream_world(repo: Path):
+    from coordinator_core.ops.dispatch_emit.tests import test_upstream_behind as ub
+
+    ub.git(repo, "init", "-q")
+    ub.commit(repo, "seed")
+    return ub, ub.give_upstream(repo, _base(repo))
+
+
+def _land_ref_refusal(out: dict) -> str:
+    reason = (out.get("halt") or {}).get("reason", "")
+    return reason if reason.startswith("land ref ") else ""
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_fire_refuses_a_land_ref_behind_its_upstream_with_unique_commits_naming_the_counts(repo) -> None:
+    ub, origin = _upstream_world(repo)
+    ub.commit(repo, "local-1")
+    ub.origin_advances(repo, origin, _base(repo), "o1")
+    ub.origin_advances(repo, origin, _base(repo), "o2")
+    head = ub.git(repo, "rev-parse", "HEAD")
+
+    out = _fire(repo)
+
+    assert out["halt"]["kind"] == "refusal", out
+    assert "1 ahead of and 2 behind" in _land_ref_refusal(out), out
+    assert ub.git(repo, "rev-parse", "HEAD") == head
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_fire_fast_forwards_a_land_ref_behind_its_upstream_with_no_unique_commits(repo) -> None:
+    ub, origin = _upstream_world(repo)
+    ub.origin_advances(repo, origin, _base(repo), "o1")
+    tip = ub.git(repo, "rev-parse", "refs/remotes/origin/" + ub.git(repo, "branch", "--show-current"))
+
+    out = _fire(repo)
+
+    assert _land_ref_refusal(out) == "", out
+    assert ub.git(repo, "rev-parse", "HEAD") == tip
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize("has_upstream", [True, False])
+def test_fire_with_an_up_to_date_or_untracked_land_ref_does_not_touch_head(repo, has_upstream) -> None:
+    from coordinator_core.ops.dispatch_emit.tests import test_upstream_behind as ub
+
+    if has_upstream:
+        ub, _origin = _upstream_world(repo)
+    else:
+        ub.git(repo, "init", "-q")
+        ub.commit(repo, "seed")
+    head = ub.git(repo, "rev-parse", "HEAD")
+
+    out = _fire(repo)
+
+    assert _land_ref_refusal(out) == "", out
+    assert ub.git(repo, "rev-parse", "HEAD") == head

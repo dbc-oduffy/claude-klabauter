@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 
@@ -161,7 +162,7 @@ def _submitted_run(root, script_path: str):
     return None if found is None else found[:2]
 
 
-def _submitted_launch(root, script_path: str):
+def _submitted_launch(root, script_path: str) -> tuple[str, str | None, float] | None:
     """(run_id, sizing_rel, submitted_at) of the newest submission under `root` naming `script_path`, else None."""
     from pathlib import Path
 
@@ -177,7 +178,53 @@ def _submitted_launch(root, script_path: str):
         at = at if isinstance(at, (int, float)) else 0.0
         if best is None or at >= best[0]:
             best = (at, str(rec.get("run_id") or sub.parent.name), rec.get("sizing_rel") or None)
-    return None if best is None else (best[1], best[2], best[0])
+    return _deferred_start_launch(root, script_path) if best is None else (best[1], best[2], best[0])
+
+
+_DEFER_PARAMS_FILE_RE = re.compile(r'^const PARAMS_FILE = ("(?:[^"\\]|\\.)*");$', re.MULTILINE)
+_DEFER_RUN_IDS_RE = re.compile(r"^const RUN_IDS = (\[[^\n]*\]);$", re.MULTILINE)
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _deferred_start_launch(root, script_path: str) -> tuple[str, str | None, float] | None:
+    """(run_id, sizing_rel, submitted_at) of the run a deferred or minted start script started, else None.
+
+    A defer script is named by no submission; the run is the `preminted_run_id` of the params file the script
+    names, or an id of the minted-start script's `RUN_IDS`; its submission carries the sizing. One script read
+    and one params read, no directory scan. A `RUN_IDS` of several ids names the first whose run-stage.json is
+    still `staged`: the script can end unrecorded after the others started cleanly, and those are never halted."""
+    from pathlib import Path
+
+    from coordinator_core import warp_live  # lazy: warp_live -> dispatch_emit -> this package
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    try:
+        script = Path(script_path)
+        if not script.name.startswith("defer-") or not script.name.endswith(".workflow.mjs"):
+            return None
+        script = script if script.is_absolute() else Path(root) / script
+        text = script.read_text(encoding="utf-8")
+        match = _DEFER_PARAMS_FILE_RE.search(text)
+        if match:
+            params = json.loads(Path(json.loads(match.group(1))).read_text(encoding="utf-8"))
+            ids = [params.get("preminted_run_id")] if isinstance(params, dict) else []
+        else:
+            ids_match = _DEFER_RUN_IDS_RE.search(text)
+            ids = json.loads(ids_match.group(1)) if ids_match else []
+        ids = [i for i in ids if isinstance(i, str) and _RUN_ID_RE.match(i)] if isinstance(ids, list) else []
+        if len(ids) > 1:
+            ids = [i for i in ids if (ask_contract.read_run_stage(Path(root), i) or {}).get("stage") == "staged"][:1]
+        if not ids:
+            return None
+        run_id = ids[0]
+        rec = warp_live._read_json(Path(root) / warp_live.RUN_DIR_ROOT / run_id / warp_live.SUBMISSION_FILE)
+        if not rec:
+            return None
+        at = rec.get("submitted_at")
+        return run_id, rec.get("sizing_rel") or None, at if isinstance(at, (int, float)) else 0.0
+    except Exception as exc:
+        print(f"advisory: deferred start launch unresolved for {script_path}: {exc!r}", file=sys.stderr)
+        return None
 
 
 def _park_halt_writes(base, run_id: str, marker, script_path: str | None) -> dict | None:

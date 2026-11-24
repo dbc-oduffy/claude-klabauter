@@ -13,11 +13,36 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import ipc
-from coordinator_core.group_em import box_registry, capacity_admit, capacity_record, job_peaks
+from coordinator_core.group_em import (
+    box_registry,
+    box_transport,
+    capacity_admit,
+    capacity_probe,
+    capacity_record,
+    fleet_live,
+    job_peaks,
+)
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops import group_em_fleet_capacity as op
 
 _OPS = ("fleet_capacity", "capacity_admit", "capacity_place", "idle_capacity_watch")
+
+_LIVE_SAMPLE = {
+    "os": "Windows",
+    "cores": 24,
+    "ram_total_mb": 131072,
+    "commit_limit_mb": 150000,
+    "ram_free_mb": 50000,
+    "commit_used_mb": 60000,
+    "cpu_pct": 5.0,
+    "sessions": 3,
+    "jobs": [],
+    "sampled_at": 1000.0,
+}
+
+
+def _far_unreachable(box: dict, op_name: str, params: dict, runner=None, *, timeout: float) -> dict:
+    return {"ok": False, "state": "unknown", "reason": "ssh_unreachable"}
 
 
 def _call(name: str, params: dict) -> dict:
@@ -47,6 +72,8 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     h.mkdir()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(h))
     monkeypatch.setattr(op, "_refresh_local", lambda: False)
+    monkeypatch.setattr(capacity_probe, "sample", lambda *a, **k: dict(_LIVE_SAMPLE))
+    monkeypatch.setattr(box_transport, "invoke_remote", _far_unreachable)
     box_registry.ensure_identity(h)
     assert capacity_record.stamp(_sample(), h)
     job_peaks.record("fits", {"vram_mib": 20000, "ram_mb": 4000, "cores": 2}, h)
@@ -78,6 +105,96 @@ def test_fleet_capacity_reports_local_measured_fields(home: Path) -> None:
     assert row["gpus"][0]["vram_total_mib"] == 32768 and row["gpus"][0]["vram_used_mib"] == 6144
     assert row["ram_total_mb"] == 131072 and row["ram_avail_mb"] == 50000 and row["cores"] == 24
     assert "age_s" in row and "jobs" in row
+
+
+def _far_ok(calls: list):
+    def invoke(box: dict, op_name: str, params: dict, runner=None, *, timeout: float) -> dict:
+        calls.append((box["box_id"], op_name, timeout))
+        return {"ok": True, "reply": {"row": {**_LIVE_SAMPLE, "os": "Linux", "cores": 8, "sessions": 1}}}
+
+    return invoke
+
+
+def test_fleet_capacity_fans_out_one_capacity_local_invoke_per_far_box(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    peer = _peer(tmp_path, _sample(os_name="Linux"))
+    calls: list = []
+    monkeypatch.setattr(box_transport, "invoke_remote", _far_ok(calls))
+    out = _call("fleet_capacity", {})
+    assert [(c[0], c[1]) for c in calls] == [(peer, "groupem.capacity_local")]
+    assert {b["box_id"] for b in out["boxes"]} == {out["local_box_id"], peer}
+    assert [r["state"] for r in out["live"]] == ["ok", "ok"]
+    assert {r["os"] for r in out["live"]} == {"Windows", "Linux"}
+    assert all(r["alias"] for r in out["live"])
+    assert out["table"].startswith("FLEET CAPACITY") and len(out["table"].splitlines()) == 3
+    assert out["power_on"] == []
+    assert fleet_live.read_last_known(fleet_live.last_known_path(home)).keys() == {out["local_box_id"], peer}
+
+
+def test_fleet_capacity_unreachable_box_keeps_last_known_maxima_and_a_power_on_item(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    peer = _peer(tmp_path, _sample(os_name="Linux"))
+    monkeypatch.setattr(box_transport, "invoke_remote", _far_ok([]))
+    _call("fleet_capacity", {})
+    monkeypatch.setattr(box_transport, "invoke_remote", _far_unreachable)
+    out = _call("fleet_capacity", {})
+    row = next(r for r in out["live"] if r["box"] == peer)
+    assert row["state"] == "unreachable" and row["cores"] == 8 and row["last_seen"] == 1000.0
+    assert row["cpu_pct"] is None and row["maxima_source"] == "last_known"
+    assert len(out["power_on"]) == 1 and "UNREACHABLE" in out["power_on"][0]
+    assert any("UNREACHABLE" in line and "unknown (ssh_unreachable)" in line for line in out["table"].splitlines())
+    assert len(out["live"]) == 2
+
+
+def test_fleet_capacity_a_hung_box_times_out_without_blocking_the_rest(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    peer = _peer(tmp_path, _sample(os_name="Linux"))
+
+    def hang(box: dict, op_name: str, params: dict, runner=None, *, timeout: float) -> dict:
+        time.sleep(3)
+        return {"ok": True, "reply": {"row": dict(_LIVE_SAMPLE)}}
+
+    monkeypatch.setattr(box_transport, "invoke_remote", hang)
+    t0 = time.monotonic()
+    out = _call("fleet_capacity", {"timeout": 0.3})
+    assert time.monotonic() - t0 < 2.0
+    states = {r["box"]: r["state"] for r in out["live"]}
+    assert states[peer] == "timed_out" and states[out["local_box_id"]] == "ok"
+
+
+def test_fleet_capacity_local_only_makes_no_remote_call(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _peer(tmp_path, _sample(os_name="Linux"))
+    calls: list = []
+    monkeypatch.setattr(box_transport, "invoke_remote", _far_ok(calls))
+    out = _call("fleet_capacity", {"local_only": True})
+    assert calls == []
+    assert [r["box"] for r in out["live"]] == [out["local_box_id"]] and out["live"][0]["state"] == "ok"
+    assert len(out["boxes"]) == 2
+
+
+def test_fleet_capacity_per_box_timeout_default_and_clamp_sit_under_the_ipc_backstop(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _peer(tmp_path, _sample(os_name="Linux"))
+    calls: list = []
+    monkeypatch.setattr(box_transport, "invoke_remote", _far_ok(calls))
+    _call("fleet_capacity", {})
+    _call("fleet_capacity", {"timeout": 100000})
+    default, clamped = calls[0][2], calls[1][2]
+    backstop = ipc._timeout_for("groupem.fleet_capacity")
+    assert default == op._PER_BOX_TIMEOUT_S == 8.0
+    assert default < backstop and clamped < backstop and clamped * 1.1 < backstop
+    assert _call("fleet_capacity", {"timeout": 1})["live"]
+
+
+@pytest.mark.parametrize("params", [{"local_only": "yes"}, {"timeout": 0}, {"timeout": -1}, {"timeout": "5"}, {"timeout": True}])
+def test_fleet_capacity_bad_params_return_error(home: Path, params: dict) -> None:
+    assert "error" in op._groupem_fleet_capacity(params)
 
 
 def test_fleet_capacity_stale_peer_has_no_made_up_zero(home: Path, tmp_path: Path) -> None:

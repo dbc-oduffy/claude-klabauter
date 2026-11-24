@@ -60,3 +60,36 @@ def test_heartbeat_is_silent_before_the_interval_and_names_progress_after():
     now[0] = 40.0
     tick(50, 100)
     assert out.getvalue().count("[progress]") == 1
+
+
+def test_the_gate_heartbeat_refreshes_the_rounds_progress_file(tmp_path, monkeypatch):
+    """A gate that only prints looks like a hang to the driving round's stall watchdog,
+    which reads only `--progress-file`."""
+    import json
+
+    progress = tmp_path / "publish-progress.json"
+    monkeypatch.setattr(publish, "_PROGRESS_FILE", [progress])
+    now = [0.0]
+    tick = publish._gate_heartbeat("row live identifiers", out=io.StringIO(), clock=lambda: now[0])
+    tick(1, 10)
+    first = json.loads(progress.read_text(encoding="utf-8"))
+    assert first["phase"] == "gate" and first["gate"] == "row live identifiers" and first["done"] == 1
+    now[0] = 6.0
+    tick(7, 10)
+    assert json.loads(progress.read_text(encoding="utf-8"))["done"] == 7
+
+
+def test_the_gate_file_list_comes_from_the_index_not_a_walk(tmp_path):
+    """Untracked trees under the source (scratch, caches) are never walked."""
+    import subprocess
+
+    src = tmp_path / "src"
+    src.mkdir()
+    subprocess.run(["git", "init", "-q", str(src)], check=True)
+    (src / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (src / "scratch").mkdir()
+    (src / "scratch" / "big.py").write_text("y = 2\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(src), "add", "a.py"], check=True)
+    rkl = types.SimpleNamespace(list_files=lambda _d: (_ for _ in ()).throw(AssertionError("walked")))
+    files = publish._row_payload_files(types.SimpleNamespace(source_dir=src, allowlist=""), rkl)
+    assert [rel for rel, _ in files] == ["a.py"]

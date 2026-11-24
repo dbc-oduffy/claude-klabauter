@@ -1,6 +1,9 @@
 """``dispatch.commit_merge``: commits an already-resolved two-parent merge without touching unrelated shared-index state.
 
-Params: ``{theirs_ref, resolved_dir, conflicted: [repo-relative path], message, expected_head}``.
+Params: ``{theirs_ref, resolved_dir, conflicted: [repo-relative path], message, expected_head, merge_base?}``.
+``merge_base`` (a commit) overrides git's computed base: re-doing a merge whose earlier commit already
+lists ``theirs`` as a parent (an "ours" carry that dropped its files) has ``theirs`` as the computed
+base, so without the override git finds nothing to merge.
 The merge tree is computed by ``merge-tree --write-tree`` and completed in a private index with the
 bytes found under ``resolved_dir`` for each conflicted path; the commit has parents ``[HEAD, theirs]``.
 The shared index and worktree are synced to the new commit BEFORE ``update-ref`` moves HEAD (a CAS on
@@ -91,9 +94,10 @@ def _norm_conflicted(value) -> Optional[list]:
     return sorted(out)
 
 
-def _merge_tree(repo: _Repo, old: str, theirs: str):
+def _merge_tree(repo: _Repo, old: str, theirs: str, base: Optional[str] = None):
     """``(tree, conflicted names)`` of merging ``theirs`` into ``old``; ``None`` when git cannot compute it."""
-    res = repo.git(["merge-tree", "--write-tree", "--name-only", "-z", old, theirs], binary=True)
+    pinned = [f"--merge-base={base}"] if base else []
+    res = repo.git(["merge-tree", "--write-tree", "--name-only", "-z", *pinned, old, theirs], binary=True)
     if res.returncode not in (0, 1):
         return None
     parts = res.stdout_bytes.split(b"\0")
@@ -307,6 +311,9 @@ def commit_merge(root: Path, params: dict) -> dict:
     theirs_ref, message, expected = params.get("theirs_ref"), params.get("message"), params.get("expected_head")
     resolved_dir = params.get("resolved_dir")
     conflicted = _norm_conflicted(params.get("conflicted"))
+    base_ref = params.get("merge_base")
+    if base_ref is not None and (not isinstance(base_ref, str) or not base_ref or base_ref.startswith("-")):
+        return _refuse("bad-params", "merge_base must be a commit ref")
     if (not isinstance(theirs_ref, str) or not theirs_ref or theirs_ref.startswith("-")
             or not isinstance(message, str) or not message.strip()
             or not isinstance(expected, str) or not _SHA.match(expected)
@@ -320,15 +327,17 @@ def commit_merge(root: Path, params: dict) -> dict:
         return _refuse("bad-params", "resolved_dir is outside the repo")
 
     repo = _Repo(root)
-    heads = repo.git(["rev-parse", "--path-format=absolute", "--git-common-dir", "HEAD", f"{theirs_ref}^{{commit}}"])
+    refs = ["--git-common-dir", "HEAD", f"{theirs_ref}^{{commit}}"] + ([f"{base_ref}^{{commit}}"] if base_ref else [])
+    heads = repo.git(["rev-parse", "--path-format=absolute", *refs])
     lines = heads.stdout.splitlines()
-    if not heads.ok or len(lines) != 3:
-        return _refuse("bad-params", "cannot resolve HEAD and theirs_ref")
+    if not heads.ok or len(lines) != len(refs):
+        return _refuse("bad-params", "cannot resolve HEAD, theirs_ref and merge_base")
     git_common, old, theirs = Path(lines[0]), lines[1], lines[2]
+    base = lines[3] if base_ref else None
     if old != expected:
         return _refuse("head-moved", {"expected": expected, "actual": old})
 
-    computed = _merge_tree(repo, old, theirs)
+    computed = _merge_tree(repo, old, theirs, base)
     if computed is None:
         return _refuse("bad-params", "merge-tree could not compute the merge")
     tree, actual = computed

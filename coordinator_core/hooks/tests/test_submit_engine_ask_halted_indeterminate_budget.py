@@ -44,13 +44,18 @@ REASONS = {
 class _Stall:
     """A leg that blocks past the budget; teardown releases it so no thread outlives the test."""
 
-    def __init__(self) -> None:
+    def __init__(self, hold_s: float = HOLD_S) -> None:
         self.event = threading.Event()
         self.entered = threading.Event()
+        self.returned = threading.Event()
+        self.hold_s = hold_s
 
     def block(self, *args, **kwargs):
         self.entered.set()
-        self.event.wait(HOLD_S)
+        try:
+            self.event.wait(self.hold_s)
+        finally:
+            self.returned.set()
         raise OSError("stall released")
 
 
@@ -58,8 +63,8 @@ class _Stall:
 def stalls():
     made: list[_Stall] = []
 
-    def make() -> _Stall:
-        made.append(_Stall())
+    def make(hold_s: float = HOLD_S) -> _Stall:
+        made.append(_Stall(hold_s))
         return made[-1]
 
     yield make
@@ -353,9 +358,9 @@ def test_overrun_refire_answers_a_named_refusal_with_every_caller_leg_healthy(tm
     assert elapsed < mod._caller_budget_s()
 
 
-def _overrun_ask_route(mp, stalls):
+def _overrun_ask_route(mp, stalls, hold_s: float = HOLD_S):
     """A plain `{ask}` whose worker outlasts the answer deadline with no resume: the spool leg answers."""
-    trigger = stalls()
+    trigger = stalls(hold_s)
     mp.setattr(warp_live, "run_for_ask", trigger.block)
     return trigger
 
@@ -365,9 +370,12 @@ _SPOOL_NAMES = ("budget", "stalled", "spooled")
 
 def test_overrun_ask_is_spooled_inside_the_budget(tmp_path, monkeypatch, stalls):
     root = _repo(tmp_path, monkeypatch, marker=False)
-    _overrun_ask_route(monkeypatch, stalls)
-    envelope, elapsed = _drive(root, {"ask": "do x"})
-    assert elapsed < mod._caller_budget_s()
+    stall = _overrun_ask_route(monkeypatch, stalls, hold_s=60.0)
+    cpu_started = time.process_time()
+    envelope, _elapsed = _drive(root, {"ask": "do x"})
+    # Answered while the leg was still held: the deadline fired, not the leg's own return; and CPU stays under the bar.
+    assert stall.entered.is_set() and not stall.returned.is_set()
+    assert time.process_time() - cpu_started < 0.5
     hso = envelope["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow" and "SPOOLED as" in hso["additionalContext"]
 

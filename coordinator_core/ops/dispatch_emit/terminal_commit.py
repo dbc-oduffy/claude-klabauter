@@ -1016,6 +1016,36 @@ def _undeclared_dirty(
 from coordinator_core.ops.dispatch_emit.own_drift import _own_drift_actuals, _own_record_dir  # noqa: E402,F401
 
 
+_CROSS_REPO_OUTBOX_RELDIR = "state/cross-repo/outbox"
+
+
+def _receipted_memo_drafts(worktree_root: Path, paths: Sequence[str]) -> set[str]:
+    """The ``paths`` that are an outbox memo draft (canonical, legacy or ``state/cross-repo/outbox``
+    root) whose topic has a sent receipt under the canonical or legacy outbox: memo.send moved the
+    draft there, so its absence is a delivered write, not a missing one."""
+    from coordinator_core.ops.dispatch_emit.memo_rows import memo_receipt_exists
+    from coordinator_core.ops.fleet._memo_compose import _TOPIC_SLUG_RE
+    from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
+    from coordinator_core.session.machinery_paths import LEGACY_MEMO_OUTBOX_RELDIR
+
+    out: set = set()
+    prefix = _CROSS_REPO_OUTBOX_RELDIR + "/"
+    for p in paths:
+        posix = p.replace("\\", "/")
+        topic = memo_outbox_topic(posix)
+        if topic is None and posix.startswith(prefix):
+            leaf = posix[len(prefix):]
+            stem = leaf[: -len(".md")] if leaf.endswith(".md") and "/" not in leaf else ""
+            topic = stem if _TOPIC_SLUG_RE.match(stem) else None
+        if topic is None:
+            continue
+        if memo_receipt_exists(worktree_root, topic) or (
+            worktree_root / LEGACY_MEMO_OUTBOX_RELDIR / "sent" / f"{topic}.md"
+        ).is_file():
+            out.add(p)
+    return out
+
+
 def _delivered_rows_missing_writes(
     worktree_root: Path, chunks: Sequence[ChunkCommit], absent_untracked: set, report_cache: dict,
 ) -> dict:
@@ -3038,7 +3068,7 @@ def _terminal_commit_inner(
         missing_new = _delivered_rows_missing_writes(
             worktree_root,
             [c for c in done_chunks + partial_chunks if c.id not in caller_listed_incomplete],
-            set(absent_from_head), report_cache,
+            set(absent_from_head) - _receipted_memo_drafts(worktree_root, absent_from_head), report_cache,
         )
         if missing_new:
             shown = "; ".join(f"{cid}: {', '.join(paths)}" for cid, paths in sorted(missing_new.items()))

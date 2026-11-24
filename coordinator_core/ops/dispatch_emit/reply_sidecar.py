@@ -103,19 +103,32 @@ READER_ROOT = "scratch/stage-readers"
 # The Workflow runner's script-size limit; not ours to raise.
 READER_MAX_BYTES = 524288
 
+#: Script args a start loop passes: the loop-host flag, and the verified reply texts it already read, keyed by handle sha256.
+LOOP_HOST_ARG = "_stage_loop_host"
+PRE_READ_ARG = "_stage_reply_texts"
+
 # Trap: depends on _verifyReplyText, so VERIFY_REPLY_JS must be emitted ahead of this block.
+# A script a start loop started cannot call workflow() for the reader (one nesting level), so under the loop-host flag
+# it returns `{ defer: h }` (neither `manifest` nor `fail`) and the loop reads at its own depth.
 READ_STAGE_SIDECAR_JS = """
 async function _readStageSidecar(h, root) {
   if (h === null || typeof h !== 'object') return { fail: 'handle is not an object' };
   if (typeof h.path !== 'string' || h.path === '') return { fail: 'handle path is not a non-empty string' };
   if (typeof h.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(h.sha256)) return { fail: 'handle sha256 is not 64 lowercase hex' };
   if (typeof h.bytes !== 'number' || !Number.isInteger(h.bytes) || h.bytes < 0) return { fail: 'handle bytes is not a non-negative integer' };
-  const reader = String(root) + '/' + 'scratch/stage-readers/' + h.sha256 + '.js';
+  const _a = (typeof args === 'object' && args !== null) ? args : {};
+  const _pre = (_a.__PRE_READ__ !== null && typeof _a.__PRE_READ__ === 'object') ? _a.__PRE_READ__[h.sha256] : undefined;
   let text;
-  try {
-    text = await workflow({ scriptPath: reader });
-  } catch (e) {
-    return { fail: 'reader ' + reader + ' did not run: ' + String(e && e.message ? e.message : e) };
+  if (typeof _pre === 'string') {
+    text = _pre;
+  } else {
+    if (_a.__LOOP_HOST__ === true) return { defer: h };
+    const reader = String(root) + '/' + '__READER_ROOT__/' + h.sha256 + '.js';
+    try {
+      text = await workflow({ scriptPath: reader });
+    } catch (e) {
+      return { fail: 'reader ' + reader + ' did not run: ' + String(e && e.message ? e.message : e) };
+    }
   }
   const bad = _verifyReplyText(text, h);
   if (bad !== null) return { fail: bad };
@@ -125,7 +138,7 @@ async function _readStageSidecar(h, root) {
     return { fail: 'reply text is not valid JSON' };
   }
 }
-"""
+""".replace("__PRE_READ__", PRE_READ_ARG).replace("__LOOP_HOST__", LOOP_HOST_ARG).replace("__READER_ROOT__", READER_ROOT)
 
 class ReplySidecarError(ValueError):
     """A handle or its sidecar failed verification (message starts with ``RELAY_CORRUPT_HEAD``), or ``StagedTwinOverCapError``."""

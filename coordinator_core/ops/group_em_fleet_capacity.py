@@ -8,8 +8,13 @@ run a job now, and alert when a priority job waits while a capable box idles.
 
 Negative-spec:
     - Never raises: an invalid param or I/O failure is `{"error": ...}`.
-    - Spawns nothing and makes no network call: every read is a stamped record under a box root;
-      `groupem.capacity_admit` writes its grant and wait ledgers under the target box's root.
+    - `groupem.fleet_capacity` fans out fleet-wide by default: one `groupem.capacity_local` invoke per
+      far box through `box_transport.invoke_remote` (one ssh each, in parallel, per-box timeout
+      `_PER_BOX_TIMEOUT_S` = 8s, clamped under the `ipc._timeout_for` backstop); `local_only` samples
+      this box in-process and makes no network call. Its only extra write is the per-box last-known
+      cache. The other three ops spawn nothing and make no network call: every read is a stamped
+      record under a box root; `groupem.capacity_admit` writes its grant and wait ledgers under the
+      target box's root.
     - No reply carries a slot or job count; a refusal names a measured axis or the missing
       measurement (`no_measured_peak`, `no_fresh_sample`).
     - Registration in `op_scopes.py`, `authz/classification.py` and the spawn audit is owned
@@ -28,6 +33,13 @@ from coordinator_core.group_em import box_registry, capacity_admit, capacity_rec
 from coordinator_core.ipc import register_op
 
 _PEAK_AXES = ("ram_mb", "vram_mib", "cores")
+_PER_BOX_TIMEOUT_S = 8.0
+
+
+def _timeout_ceiling(ipc_module) -> float:
+    """Largest per-box timeout whose fan-out (timeout x gather grace) still ends inside the op backstop."""
+    backstop = ipc_module._timeout_for("groupem.fleet_capacity")
+    return max(1.0, (backstop - 2.0) / 1.1)
 
 
 def _str(p: dict, key: str) -> Optional[str]:
@@ -133,18 +145,44 @@ def _fleet_row(box: dict, local_id: str) -> dict:
 
 @register_op("groupem.fleet_capacity")
 def _groupem_fleet_capacity(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "groupem.fleet_capacity" handler: every box's measured capacity.
+    """JSON-RPC "groupem.fleet_capacity" handler: every box's measured capacity, maxima and live use.
+
+    Params:
+        local_only (bool, optional) -- sample this box only (no ssh); default fans out to every box.
+        timeout (number > 0, optional) -- per-box seconds; default 8, clamped under the ipc backstop.
 
     Returns:
         {"local_box_id", "boxes": [{box_id, os, arch, gpus | gpu_unavailable, ram_total_mb,
-        ram_avail_mb, cores, cores_physical, load_pct, jobs, age_s, stale}, ...]} or {"error": str}.
+        ram_avail_mb, cores, cores_physical, load_pct, jobs, age_s, stale}, ...],
+        "live": [fleet_live row per box: alias, os, state, maxima, current use, sampled_at, last_seen],
+        "table": str (``fleet_live.render``), "power_on": [str per UNREACHABLE box]} or {"error": str}.
         A box with no fresh sample reads ``stale: true`` with its ``age_s`` (None when never
         stamped) and no measured fields. This box's stale sample is re-stamped in-process first.
+        A box that times out, is unreachable or lacks the op keeps its last-known maxima in ``live``.
     """
+    p = params if isinstance(params, dict) else {}
+    local_only = p.get("local_only", False)
+    if not isinstance(local_only, bool):
+        return {"error": "local_only must be bool"}
+    timeout = p.get("timeout")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0):
+        return {"error": "timeout must be a positive number"}
     try:
+        from coordinator_core import ipc
+        from coordinator_core.group_em import fleet_live
+
         home = settings_home()
         local = box_registry.local_box_id(home)
-        return {"local_box_id": local, "boxes": [_fleet_row(b, local) for b in _boxes(home)]}
+        boxes = _boxes(home)
+        per_box = min(float(timeout) if timeout is not None else _PER_BOX_TIMEOUT_S, _timeout_ceiling(ipc))
+        live = fleet_live.gather([] if local_only else boxes, timeout=per_box, local_id=local)
+        return {
+            "local_box_id": local,
+            "boxes": [_fleet_row(b, local) for b in boxes],
+            "live": live,
+            "table": fleet_live.render(live),
+            "power_on": fleet_live.power_on_items(live),
+        }
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
         return {"error": f"{type(exc).__name__}: {exc}"}
 

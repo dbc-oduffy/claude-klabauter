@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import types
 
 import pytest
 
 import coordinator_core.ipc as ipc
 from coordinator_core.bash_guards import dispatch as chain
+from coordinator_core.bash_guards import leg_attribution
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.hooks import preuse_bash_dispatch  # noqa: F401  (registers the op)
 from pathlib import Path
@@ -54,13 +56,19 @@ def test_forced_slow_guard_is_named_in_the_row_through_to_thread(tmp_path: Path,
     assert len(rows) == 1
     row = rows[0]
     assert row["measurement_scope"] == ipc.MEASUREMENT_SCOPE_PER_OP_HANDLER
-    assert [leg["name"] for leg in row["legs"]][0] == "slow-guard"
-    assert row["legs"][0]["ms"] >= 50.0
-    assert row["handler_thread_ms"] >= row["legs"][0]["ms"]
+    slow = next((leg for leg in row["legs"] if leg["name"] == "slow-guard"), None)
+    assert slow is not None
+    assert slow["ms"] >= 50.0
+    assert row["handler_thread_ms"] >= slow["ms"]
 
 
 def test_fast_call_carries_handler_thread_ms_and_no_legs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(chain, "_build_guard_chain", _one_guard(lambda: None))
+    # The leg floor is wall-time: freeze the wall clock so a scheduler stall cannot cross it.
+    monkeypatch.setattr(
+        leg_attribution, "time",
+        types.SimpleNamespace(thread_time=time.thread_time, perf_counter=lambda: 0.0),
+    )
     rows = _call(tmp_path, monkeypatch)
     assert len(rows) == 1
     assert "legs" not in rows[0]
