@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import test_leg_run as tlr
+from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
 
 FAIL_ID = "tests/test_a.py::test_fails"
@@ -667,3 +668,86 @@ def test_an_over_cap_importer_stays_in_phase_two_through_tripwires_not_selected(
     first, second = tlr._split_phases([PASS_ID, *pool], BASE, None, str(repo))
     assert first == [PASS_ID, *pool[cap:]] and second == pool[:cap]
 
+
+def _git(repo: Path, *args: str) -> str:
+    out = subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                         capture_output=True, text=True, check=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return out.stdout.strip()
+
+
+@pytest.fixture
+def dirty_repo(tmp_path, monkeypatch):
+    """A committed repo whose `pkg/mod.py` imports and passes at HEAD; the mirror's system Temp is private to the test."""
+    import tempfile
+
+    (tmp_path / "systemp").mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    root = tmp_path / "repo"
+    (root / "pkg").mkdir(parents=True)
+    (root / "tests").mkdir()
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "pkg" / "mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "tests" / "test_mod.py").write_text(
+        "from pkg.mod import VALUE\n\ndef test_value():\n    assert VALUE == 1\n", encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "base")
+    monkeypatch.chdir(root)
+    return root
+
+
+@pytest.mark.spawns_process
+def test_a_foreign_uncommitted_edit_never_changes_the_no_touched_verdict(dirty_repo, tmp_path):
+    (dirty_repo / "pkg" / "mod.py").write_text("from pkg.absent import VALUE\n", encoding="utf-8")
+    code, data = _main(["--", "tests/test_mod.py"], tmp_path / "o.json")
+    assert code == 0 and (data["status"], data["status_after"], data["tests_run"]) == ("pass", "pass", 1)
+    assert data["own_tree"]["overlaid"] == [] and "own_tree_skipped" not in data
+    assert (dirty_repo / "pkg" / "mod.py").read_text(encoding="utf-8") == "from pkg.absent import VALUE\n"
+
+
+@pytest.mark.spawns_process
+def test_a_run_owned_uncommitted_edit_is_in_the_no_touched_verdict(dirty_repo, tmp_path):
+    from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
+
+    (dirty_repo / "pkg" / "mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    blob = kept_work.fingerprint(dirty_repo, "pkg/mod.py")
+    stranded_sibling.write(dirty_repo / "state" / "warp" / "run-mine", {"pkg/mod.py": {"base": None, "run": blob}})
+    _code, data = _main(["--", "tests/test_mod.py"], tmp_path / "o.json")
+    assert data["own_tree"]["overlaid"] == ["pkg/mod.py"]
+    assert data["status_after"] == "fail" and data["failing"] == ["tests/test_mod.py::test_value"]
+
+
+@pytest.mark.spawns_process
+def test_a_red_settles_in_the_own_tree_so_foreign_dirt_cannot_pass_it_alone(dirty_repo, tmp_path):
+    (dirty_repo / "tests" / "test_mod.py").write_text(
+        "from pkg.mod import VALUE\n\ndef test_value():\n    assert VALUE == 2\n", encoding="utf-8")
+    _git(dirty_repo, "add", "-A")
+    _git(dirty_repo, "commit", "-q", "-m", "red")
+    (dirty_repo / "pkg" / "mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _code, data = _main(["--", "tests/test_mod.py"], tmp_path / "o.json")
+    assert data["status_after"] == "fail" and data["failing"] == ["tests/test_mod.py::test_value"]
+    assert data["passed_alone"] == [] and data["own_tree"]["overlaid"] == []
+
+
+def test_a_mirror_that_cannot_be_prepared_runs_in_place_and_is_noted_never_refused(dirty_repo, tmp_path, monkeypatch):
+    def busy(*a, **k):
+        raise cov.ExportError("clean mirror busy")
+
+    monkeypatch.setattr(cov, "_mirror_lock", busy)
+    _code, data = _main(["--", "tests/test_mod.py"], tmp_path / "o.json")
+    assert data["status_after"] == "pass" and "own_tree" not in data
+    assert "clean mirror busy" in data["own_tree_skipped"]
+
+
+@pytest.mark.spawns_process
+def test_an_own_tree_zero_run_never_names_a_dirty_root_file_as_the_foreign_dependency(dirty_repo, tmp_path):
+    (dirty_repo / "tests" / "test_mod.py").write_text("from pkg.mod import helper\n", encoding="utf-8")
+    _git(dirty_repo, "add", "tests/test_mod.py")
+    _git(dirty_repo, "commit", "-q", "-m", "importer")
+    (dirty_repo / "pkg" / "mod.py").write_text("VALUE = 1\ndef helper():\n    pass\n", encoding="utf-8")
+    _code, data = _main(["--", "tests/test_mod.py"], tmp_path / "o.json")
+    assert "own_tree" in data and data["tests_run"] == 0
+    assert data.get(ltt.ZERO_RUN_CAUSE_KEY) != ltt.ZERO_RUN_FOREIGN_DEPENDENCY
+    assert "_missing_import" not in data

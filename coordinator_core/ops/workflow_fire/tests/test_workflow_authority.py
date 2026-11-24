@@ -172,6 +172,43 @@ def test_submitted_session_that_is_not_the_invoker_is_refused(monkeypatch: pytes
                                          submitted_session_id='someone-elses-em')
 
 
+@pytest.fixture
+def live_claude_em(monkeypatch: pytest.MonkeyPatch) -> str:
+    from types import SimpleNamespace
+    from coordinator_core.session import external_registry, harness_registry
+    sid = '00000000-0000-4000-8000-0000000000c2'
+    monkeypatch.setattr(core, 'attributable_session_id', lambda *a: sid)
+    monkeypatch.setattr(external_registry, 'lookup', lambda s: None)
+    monkeypatch.setattr(harness_registry, 'lookup',
+                        lambda s: SimpleNamespace(pid=4242, start_epoch=1.0) if s == sid else None)
+    monkeypatch.setattr(core, 'stable_pid_alive', lambda pid, **kw: True)
+    return sid
+
+
+def test_claude_em_fires_native_codex_headless(live_claude_em) -> None:
+    with core.warm_served_request(), bind_caller_env({}):
+        principal = authority.require_fire_authority('unused.mjs', None, cwd=None, native=True, backend='codex')
+    assert principal.role == 'em' and principal.session_id == live_claude_em
+    assert authority.fire_record_caller_session_id(principal) == live_claude_em
+
+
+@pytest.mark.parametrize('env', [{'COORDINATOR_AGENT_WORKER': '1'}, {'COORDINATOR_AGENT_ROLE': 'worker'}])
+def test_worker_marked_claude_session_is_still_refused(live_claude_em, env) -> None:
+    with core.warm_served_request(), bind_caller_env(env):
+        with pytest.raises(ValueError, match='verified EM'):
+            authority.require_fire_authority('unused.mjs', None, cwd=None, native=True, backend='codex')
+
+
+@pytest.mark.parametrize('env,expected', [
+    ({'COORDINATOR_AGENT_WORKER': 'yes'}, True),
+    ({'COORDINATOR_AGENT_ROLE': 'reviewer'}, True),
+    ({'COORDINATOR_AGENT_ROLE': 'em'}, False),
+    ({}, False),
+])
+def test_refusal_surface_shares_the_role_source_marker_set(env, expected) -> None:
+    assert authority._explicit_worker_marker(env) is expected is agent_role.explicit_worker_marker(env)
+
+
 def test_token_forwarded_via_caller_env_reaches_fire_authority(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.ops.workflow_fire import headless_em_grant as grant
     monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path))

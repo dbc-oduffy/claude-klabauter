@@ -19,7 +19,8 @@ with no token, ``run-not-found``.
 
 A run is startable or abandonable only while it is minted-only (``halted_run._is_shell``: no halt
 marker, progress record absent or at ``minted``); a run past ``minted`` is refused. In-process file
-reads only on the refusal path; ``start`` also writes one ``scratch/warp/defer-*.workflow.mjs`` file
+reads only on the refusal path; ``start`` waits up to ``SCRIPT_WAIT_SECS`` for a script an emit is still writing,
+mints and escrows a run token when none is escrowed, and also writes one ``scratch/warp/defer-*.workflow.mjs`` file
 (``dry_run`` does not apply to it) and appends the caller's session to run-stage ``driver_session_ids``
 when one resolves; no git spawn.
 """
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -80,15 +82,57 @@ def is_minted_only(run_dir: Path) -> bool:
     return run_dir.is_dir() and _is_shell(run_dir)
 
 
-def start_args(repo_root: Path, run_id: str) -> dict:
-    """``fire_args`` and ``script_path`` of the run's own script. Reads only: the script file's existence and the token escrow."""
+SCRIPT_WAIT_SECS = 5.0
+SCRIPT_POLL_SECS = 0.1
+
+
+def _wait_for_script(script: Path) -> bool:
+    """True once ``script`` is a file, polling up to ``SCRIPT_WAIT_SECS``: an emit still writing lands it within seconds."""
+    deadline = time.monotonic() + SCRIPT_WAIT_SECS
+    while not script.is_file():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(SCRIPT_POLL_SECS)
+    return True
+
+
+def _start_token(repo_root: Path, run_id: str, script_rel: str) -> Optional[str]:
+    """The run's escrowed token, else a fresh one bound to ``script_rel`` and escrowed; None when no mint can bind.
+    Trap: the commit leg presents ``script_rel`` to ``run_token.admits``, so the mint binds to the run script path;
+    ``carry_prior`` keeps a token a running script already holds."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    token = run_token.escrowed(repo_root, run_id)
+    if token:
+        return token
+    prior = run_token._read_rec(repo_root, run_id) or {}
+    try:
+        token = run_token.mint(
+            repo_root, run_id, script_rel, session_id=prior.get("session_id"),
+            sizing_rel=prior.get("sizing_rel"), carry_prior=True,
+        )
+    except (OSError, ValueError):
+        return None
+    run_token.escrow(repo_root, run_id, token)
+    return token
+
+
+def start_args(repo_root: Path, run_id: str, *, wait: bool = True, mint: bool = True) -> dict:
+    """``fire_args`` and ``script_path`` of the run's own script, waiting up to ``SCRIPT_WAIT_SECS`` for an emit still
+    writing it. Carries ``runToken``: the escrowed token, else one minted and escrowed here.
+    A predicate caller passes ``wait=False, mint=False``: no sleep, no token write, the escrowed token only."""
     from coordinator_core.ops.dispatch_emit import run_token
 
     script_rel = f"{RUN_DIR_ROOT}/{run_id}{RUN_SCRIPT_SUFFIX}"
-    if not (repo_root / script_rel).is_file():
-        return reply(run_id, ACTION_START, refusal=f"{REFUSAL_NO_SCRIPT}: no {script_rel}; abandon the run instead")
+    present = _wait_for_script(repo_root / script_rel) if wait else (repo_root / script_rel).is_file()
+    if not present:
+        return reply(run_id, ACTION_START, refusal=(
+            f"{REFUSAL_NO_SCRIPT}: no {script_rel} after {SCRIPT_WAIT_SECS:g}s; "
+            f"retry the start if the emit is still running, else abandon: {OP_NAME} "
+            f'{{"run_id":"{run_id}","action":"abandon"}}'
+        ))
     fire_args = {"repoRoot": repo_root.as_posix()}
-    token = run_token.escrowed(repo_root, run_id)
+    token = _start_token(repo_root, run_id, script_rel) if mint else run_token.escrowed(repo_root, run_id)
     if token:
         fire_args["runToken"] = token
     return reply(run_id, ACTION_START, fire_args=fire_args, script_path=script_rel)

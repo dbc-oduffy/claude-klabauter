@@ -43,20 +43,68 @@ def test_start_returns_fire_args_and_escrowed_token(tmp_path):
     assert "Starts a minted run through the stage loop" in text and run_rel in text and token in text
 
 
-def test_start_without_escrow_still_returns_repo_root(tmp_path):
+def test_start_without_escrow_mints_a_token_bound_to_the_run_script(tmp_path):
     _repo(tmp_path)
     out = _call(tmp_path, "start")
     assert out["ok"] is True
-    assert out["run_script"] == f"scratch/warp/{RUN}.workflow.mjs"
+    run_rel = f"scratch/warp/{RUN}.workflow.mjs"
+    assert out["run_script"] == run_rel
+    token = run_token.escrowed(tmp_path, RUN)
+    assert token
     text = (tmp_path / out["script_path"]).read_text(encoding="utf-8")
-    assert tmp_path.as_posix() in text and "runToken" not in text.split("repoRoot", 1)[1].split("}", 1)[0]
+    assert tmp_path.as_posix() in text and token in text
+    assert run_token.admits(tmp_path, RUN, token, run_rel)
+    assert not run_token.admits(tmp_path, RUN, token, "scratch/warp/other.workflow.mjs")
+
+
+def test_a_second_start_reuses_the_minted_token(tmp_path):
+    _repo(tmp_path)
+    first = minted_run.start_args(tmp_path, RUN)["fire_args"]["runToken"]
+    assert minted_run.start_args(tmp_path, RUN)["fire_args"]["runToken"] == first
 
 
 def test_start_args_is_the_raw_run_script_reply(tmp_path):
     _repo(tmp_path)
     out = minted_run.start_args(tmp_path, RUN)
-    assert out["fire_args"] == {"repoRoot": tmp_path.as_posix()}
+    assert out["fire_args"]["repoRoot"] == tmp_path.as_posix()
+    assert run_token.TOKEN_RE.match(out["fire_args"]["runToken"])
     assert out["script_path"] == f"scratch/warp/{RUN}.workflow.mjs"
+
+
+def test_a_predicate_start_args_neither_waits_nor_mints(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    monkeypatch.setattr(minted_run.time, "sleep", lambda _s: (_ for _ in ()).throw(AssertionError("slept")))
+    out = minted_run.start_args(tmp_path, RUN, wait=False, mint=False)
+    assert out["fire_args"] == {"repoRoot": tmp_path.as_posix()}
+    assert run_token.escrowed(tmp_path, RUN) is None
+    (tmp_path / "scratch" / "warp" / f"{RUN}.workflow.mjs").unlink()
+    assert minted_run.start_args(tmp_path, RUN, wait=False)["ok"] is False
+
+
+def test_start_waits_for_an_emit_still_writing_the_script(tmp_path, monkeypatch):
+    _repo(tmp_path, script=False)
+    scr = tmp_path / "scratch" / "warp" / f"{RUN}.workflow.mjs"
+    scr.parent.mkdir(parents=True)
+    calls = []
+
+    def land_on_second_poll(_secs):
+        calls.append(1)
+        if len(calls) == 2:
+            scr.write_text("// script\n", encoding="utf-8")
+
+    monkeypatch.setattr(minted_run.time, "sleep", land_on_second_poll)
+    out = _call(tmp_path, "start")
+    assert out["ok"] is True and len(calls) == 2
+
+
+def test_a_script_that_never_lands_refuses_naming_retry_not_abandon_first(tmp_path, monkeypatch):
+    _repo(tmp_path, script=False)
+    monkeypatch.setattr(minted_run, "SCRIPT_WAIT_SECS", 0.0)
+    out = _call(tmp_path, "start")
+    assert out["ok"] is False
+    assert out["refusal"].startswith(minted_run.REFUSAL_NO_SCRIPT)
+    assert "retry the start" in out["refusal"]
+    assert not out["refusal"].endswith("abandon the run instead")
 
 
 def test_start_with_no_stage_file_is_allowed(tmp_path):
@@ -64,7 +112,8 @@ def test_start_with_no_stage_file_is_allowed(tmp_path):
     assert _call(tmp_path, "start")["ok"] is True
 
 
-def test_start_refuses_when_the_script_is_missing(tmp_path):
+def test_start_refuses_when_the_script_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(minted_run, "SCRIPT_WAIT_SECS", 0.0)
     _repo(tmp_path, script=False)
     out = _call(tmp_path, "start")
     assert out["ok"] is False and out["fire_args"] is None
@@ -397,3 +446,9 @@ def test_live_chained_child_is_found_when_its_id_omits_the_ask_hash(tmp_path, mo
     (tmp_path / "state" / "warp" / other / "run-stage.json").write_text(json.dumps({"stage": "executing", "session_id": "s"}), encoding="utf-8")
     _owner(monkeypatch, True)
     assert minted_run.live_chained_child(tmp_path, RUN) == other
+
+
+def test_the_script_wait_fits_inside_the_op_invocation_budget():
+    from coordinator_core import ipc
+
+    assert minted_run.SCRIPT_WAIT_SECS < ipc._timeout_for(minted_run.OP_NAME)

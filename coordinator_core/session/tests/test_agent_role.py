@@ -42,6 +42,71 @@ def test_explicit_em_marker_alone_does_not_establish_native_main():
     assert classify({"hook_event_name":"SessionStart", "source":"startup", "session_id":"e29b1cb1-ddaa-44fe-9918-ece1b81fd341"}, {"COORDINATOR_AGENT_ROLE":"em"}) == "unknown"
 
 
+@pytest.fixture
+def harness_row(monkeypatch):
+    """A live top-level Claude harness row for SID and no Codex external row."""
+    from types import SimpleNamespace
+    from coordinator_core.session import core, external_registry, harness_registry
+    monkeypatch.setattr(external_registry, 'lookup', lambda sid: None)
+    monkeypatch.setattr(harness_registry, 'lookup',
+                        lambda sid: SimpleNamespace(pid=4242, start_epoch=1.0) if sid == SID else None)
+    monkeypatch.setattr(core, 'stable_pid_alive', lambda pid, **kw: True)
+
+
+@pytest.mark.parametrize('env,expected', [
+    ({}, 'em'),
+    ({'COORDINATOR_AGENT_WORKER': '1'}, 'worker'),
+    ({'COORDINATOR_AGENT_WORKER': 'true', 'COORDINATOR_AGENT_ROLE': 'em'}, 'worker'),
+    ({'COORDINATOR_AGENT_ROLE': 'worker'}, 'worker'),
+    ({'COORDINATOR_PARENT_SESSION_ID': SID}, 'unknown'),
+    ({'COORDINATOR_AGENT_ROLE': 'em'}, 'em'),
+])
+def test_live_harness_row_is_positive_em_evidence_unless_marked(harness_row, env, expected):
+    from coordinator_core.session.agent_role import role_for_caller
+    assert role_for_caller(env, SID) == expected
+
+
+def test_absent_harness_row_or_dead_pid_is_unknown(harness_row, monkeypatch):
+    from coordinator_core.session import core
+    from coordinator_core.session.agent_role import role_for_caller
+    assert role_for_caller({}, '00000000-0000-4000-8000-0000000000ff') == 'unknown'
+    monkeypatch.setattr(core, 'stable_pid_alive', lambda pid, **kw: False)
+    assert role_for_caller({}, SID) == 'unknown'
+
+
+def test_codex_external_record_in_harness_snapshot_is_not_claude_em(harness_row, monkeypatch):
+    from types import SimpleNamespace
+    from coordinator_core.session import harness_registry
+    from coordinator_core.session.agent_role import role_for_caller
+    monkeypatch.setattr(harness_registry, 'lookup',
+                        lambda sid: SimpleNamespace(pid=1, start_epoch=1.0, provider='codex'))
+    assert role_for_caller({}, SID) == 'unknown'
+
+
+def test_warm_served_request_carries_worker_marker(harness_row):
+    from coordinator_core.session.agent_role import role_for_caller
+    from coordinator_core.session.caller_env import bind_caller_env, effective_caller_env
+    with bind_caller_env({'COORDINATOR_AGENT_WORKER': '1'}):
+        assert role_for_caller(effective_caller_env(), SID) == 'worker'
+    with bind_caller_env({}):
+        assert role_for_caller(effective_caller_env(), SID) == 'em'
+
+
+def test_worker_marker_is_a_caller_mode_forwarding_entry():
+    from coordinator_core.warm.env_forwarding import CALLER, FORWARDING_SET
+    from coordinator_core.session.agent_role import WORKER_MARKER_ENV
+    assert (WORKER_MARKER_ENV, CALLER) in [tuple(e) for e in FORWARDING_SET]
+
+
+@pytest.mark.parametrize('env,expected', [
+    ({'COORDINATOR_AGENT_WORKER': 'yes'}, True), ({'COORDINATOR_AGENT_WORKER': '0'}, False),
+    ({'COORDINATOR_AGENT_ROLE': 'reviewer'}, True), ({'COORDINATOR_AGENT_ROLE': 'em'}, False), ({}, False),
+])
+def test_explicit_worker_marker(env, expected):
+    from coordinator_core.session.agent_role import explicit_worker_marker
+    assert explicit_worker_marker(env) is expected
+
+
 EXEC = ['codex', 'exec', '-']
 CONTRACTS = [{'COORDINATOR_AGENT_ROLE': 'worker'}, {'COORDINATOR_AGENT_ROLE': 'reviewer'},
              {'COORDINATOR_PARENT_SESSION_ID': SID}, {'COORDINATOR_AGENT_ROLE': 'em'}]

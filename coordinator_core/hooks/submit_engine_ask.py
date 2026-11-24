@@ -1123,7 +1123,7 @@ def _direct_start(root: Path, run_id: str, deadline: float) -> Optional[dict]:
 
         if not minted_run.is_minted_only(root / RECORD_DIR_ROOT / run_id):
             return None
-        reply = minted_run.start_args(root, run_id)
+        reply = minted_run.start_args(root, run_id, wait=False)
         if not (isinstance(reply, dict) and reply.get("ok") and reply.get("script_path")):
             return None
         reader = minted_run.reader_script_rel(root, run_id, reply["script_path"])
@@ -1193,7 +1193,7 @@ def _reader_holding_runs(root: Path, run_ids: Sequence[str]) -> list:
     for rid in run_ids:
         if not minted_run.is_minted_only(root / RECORD_DIR_ROOT / rid):
             continue
-        reply = minted_run.start_args(root, rid)
+        reply = minted_run.start_args(root, rid, wait=False, mint=False)
         if isinstance(reply, dict) and reply.get("ok") and reply.get("script_path") and minted_run.reader_script_rel(root, rid, reply["script_path"]) is not None:
             out.append(rid)
     return out
@@ -1540,7 +1540,7 @@ for (const rid of RUN_IDS) {
   if (reply.fire_args !== null && typeof reply.fire_args === 'object') {
     results.push({
       status: 'start_handoff', run_id: rid, script_path: path, fire_args: reply.fire_args,
-      note: 'run ' + rid + ' holds its own stage reader, which cannot run below this script; fire it top-level with Workflow({scriptPath: script_path, args: fire_args})',
+      note: 'run ' + rid + ' holds its own stage reader, which cannot run below this script; fire it top-level with Workflow({scriptPath: script_path, args: fire_args}); fire_args carries repoRoot and runToken, pass it whole',
     });
     continue;
   }

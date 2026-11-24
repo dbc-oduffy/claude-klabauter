@@ -324,6 +324,9 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/host_hooks/agy_adapter.py': ('outside-repo', 'advisory .txt files under <settings-home>/unimatrix/agy-advisories/<conversation>, never the repo: stash_advisory'),
+    'coordinator_core/bug_blitz/worker_clone.py': ('git-internal', 'the base-sha marker <clone>/.git/blitz-base inside a throwaway shared clone under coordinator_temp_root(), never the source repo or state/: provision'),
+    'coordinator_core/codex_status/hook.py': ('outside-repo', 'last-refresh outcome json under <settings-home>/state/codex-status, never the repo: record_result'),
+    'coordinator_core/ops/dispatch_emit/interpreter_pin.py': ('outside-repo', 'per-box pytest-capability cache json under <settings-home>/cache, never the repo: _imports_pytest'),
     'coordinator_core/jobs/job_record.py': ('outside-repo', 'job record json (tmp + os.replace) under <settings-home>/jobs, never the repo: write_record'),
     'coordinator_core/percolate/bench_shadow_discard.py': ('outside-repo', 'bench file trees and stale shadow entries under coordinator_temp_root(), deleted before exit: main'),
     'coordinator_core/percolate/shadow_store.py': ('outside-repo','materialized publish trees, COMPLETE markers and eviction renames under coordinator_temp_root()/publish-shadow-store, never a clone: ShadowStore'),

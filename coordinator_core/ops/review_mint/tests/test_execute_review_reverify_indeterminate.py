@@ -235,7 +235,7 @@ def test_reverify_test_leg_runs_pinned_module_from_product_cwd(monkeypatch, tmp_
     assert Path(cwd) == product
     assert argv == [
         "--base-sha", "abc123", "--head-sha", "HEAD", "--base-export-out", "scratch/base.txt",
-        "--out", "scratch/result.json", "--", "tests/test_sample.py",
+        "--repo-root", product.as_posix(), "--out", "scratch/result.json", "--", "tests/test_sample.py",
     ]
 
 

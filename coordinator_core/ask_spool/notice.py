@@ -189,7 +189,11 @@ def run_disposition(repo_root: str, run_id: str, spool_id: Optional[str] = None)
 
 
 def _start_call(repo_root: Optional[str], run_id: str) -> Optional[str]:
-    """`Workflow({scriptPath: ...})` for the run's emitted script, None when the repo root or the script is absent."""
+    """`Workflow({scriptPath: ..., args: ...})` for the run's emitted script, None when the repo root or the script is absent.
+
+    `args` names the `dispatch.minted_run` start whose reply `fire_args` carries `repoRoot` and `runToken`:
+    a start without them halts the run at its commit stage ("no run token"). Rendering mints nothing.
+    """
     if not repo_root:
         return None
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
@@ -197,7 +201,11 @@ def _start_call(repo_root: Optional[str], run_id: str) -> Optional[str]:
     script = os.path.join(repo_root, RUN_DIR_ROOT, run_id + ".workflow.mjs")
     if not os.path.isfile(script):
         return None
-    return "Workflow({scriptPath: %s})" % json.dumps(script.replace("\\", "/"))
+    start = json.dumps({"run_id": run_id, "action": "start"}, separators=(",", ":"))
+    return "Workflow({scriptPath: %s, args: <fire_args of dispatch.minted_run %s>})" % (
+        json.dumps(script.replace("\\", "/")),
+        start,
+    )
 
 
 def _line(n: dict, repo_root: Optional[str] = None) -> str:

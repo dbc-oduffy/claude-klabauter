@@ -79,6 +79,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "box_memory.admit": OpClass.MUTATING,  # Writes the admission-file reservation.
     "box_memory.register": OpClass.MUTATING,  # Writes the admission-file reservation.
     "box_memory.release": OpClass.MUTATING,  # Removes the admission-file reservation.
+    "codex_status.refresh": OpClass.MUTATING,  # Acks at once; the worker writes the status cache and the thread title.
     "codex_status.snapshot": OpClass.MUTATING,  # Derived status cache only; no routing/UI writes.
     "external_session.handle": OpClass.MUTATING,  # Writes the external-session registry row on SessionStart/SessionEnd.
     "ping": OpClass.COMPUTE_ONLY,

@@ -95,10 +95,8 @@ def require_fire_authority(script_path: str, expected: str | None, *, cwd: str |
 
 
 def _explicit_worker_marker(env: dict) -> bool:
-    if str(env.get('COORDINATOR_AGENT_WORKER', '')).lower() in ('1', 'true', 'yes'):
-        return True
-    role = env.get('COORDINATOR_AGENT_ROLE')
-    return bool(role) and role != 'em'
+    from coordinator_core.session.agent_role import explicit_worker_marker
+    return explicit_worker_marker(env)
 
 
 def _legacy_registry_em(caller: Principal) -> bool:

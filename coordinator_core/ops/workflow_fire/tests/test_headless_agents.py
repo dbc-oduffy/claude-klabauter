@@ -766,6 +766,21 @@ def test_headless_parse_failure_twice_raises_after_one_reask(tmp_path: Path, mon
     assert count.read_text() == "2"
 
 
+def test_schema_invalid_reply_gets_one_reask_naming_the_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    count = _counting_cli(tmp_path, monkeypatch, ['{"arm": "a"}', '{"arm": "a", "n": 1}'])
+    got = headless_agents.run_agent("x", {"schema": _ARM_SCHEMA}, repo_root=tmp_path, artifact_dir=tmp_path / "a")
+    assert got == {"arm": "a", "n": 1} and count.read_text() == "2"
+    repair = (tmp_path / "a" / "reply-reask" / "prompt.txt").read_text(encoding="utf-8")
+    assert "'n' is a required property" in repair and "conforming to the schema" in repair
+
+
+def test_schema_invalid_reply_twice_raises_after_one_reask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    count = _counting_cli(tmp_path, monkeypatch, ['{"arm": "a"}'])
+    with pytest.raises(headless_agents.AgentFailed, match="one repair re-ask also failed"):
+        headless_agents.run_agent("x", {"schema": _ARM_SCHEMA}, repo_root=tmp_path, artifact_dir=tmp_path / "a")
+    assert count.read_text() == "2"
+
+
 def test_live_fire_53662a32_malformed_reply_is_reasked_once_then_halts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     schema = json.loads((_FIXTURES / "53662a32-schema.json").read_text(encoding="utf-8"))
     bad = (_FIXTURES / "53662a32-last.json").read_text(encoding="utf-8")
