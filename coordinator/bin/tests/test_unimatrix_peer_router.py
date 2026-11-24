@@ -1647,6 +1647,19 @@ def test_claude_shell_binding_is_verified_before_naming_reply_address(dirs, monk
         assert seen == []
 
 
+@pytest.mark.parametrize("address,expected", [
+    ("claude-em", "--to claude-em "),
+    ("it's em", "--to 'it''s em' "),
+    ("-x", "--to '-x' "),
+    ("@x", "--to '@x' "),
+])
+def test_win32_reply_trailer_quotes_the_address_only_when_unsafe(monkeypatch, address, expected):
+    monkeypatch.setattr(pr.sys, "platform", "win32")
+    trailer = pr.wrap_inbound("codex-a", "body", reply_to=address)
+    assert expected in trailer
+    assert f"& '{pr.sys.executable}'" in trailer
+
+
 @portable
 def test_unbound_cli_does_not_advertise_a_reply_address(dirs):
     seen = []

@@ -223,7 +223,7 @@ def test_timed_out_run_in_background_is_recorded_as_before_and_never_reaped(seam
     p["tool_input"]["command"] = "grep -rn x ."
     rec._handler({"payload": p})
     assert store.read_record("bgto1").mark == _MARK + _MS * 10_000
-    assert snaps == [] and kill.calls == []
+    assert len(snaps) <= 1 and kill.calls == []
 
 
 @pytest.mark.parametrize(
@@ -298,3 +298,211 @@ def test_cost_zero_spawns_and_under_bar(monkeypatch: pytest.MonkeyPatch, capsys:
     with capsys.disabled():
         print(f"\nrecorder mean process time: {mean_ms:.2f} ms over {BATCH} writes")
     assert mean_ms < BAR_MS
+
+
+# --- spawn-ledger capture -------------------------------------------------------------------
+
+from coordinator_core.ops import _spawn_ledger as ledger  # noqa: E402
+
+_CTIME = _MARK - _S // 10
+
+
+class _Cmd:
+    def __init__(self, table: dict) -> None:
+        self.table = table
+
+    def command_line(self, pid, ctime):
+        return self.table.get(pid)
+
+
+@pytest.fixture
+def ledger_seams(monkeypatch: pytest.MonkeyPatch):
+    snaps = []
+    state = {
+        "rows": [
+            _LIVE,
+            ProcRow(7624, 999, _CTIME, "nohup.exe"),
+            ProcRow(13912, 7624, _CTIME + 1, "python.exe"),
+        ],
+        "cmd": {7624: "nohup python loop.py", 13912: "python.exe loop.py"},
+    }
+
+    def snapshot():
+        snaps.append(1)
+        return state["rows"]
+
+    monkeypatch.setattr(rec, "_snapshot", snapshot)
+    monkeypatch.setattr(rec, "_kill", state_kill := _Cmd(state["cmd"]))
+    monkeypatch.setattr(rec, "_filetime_now", lambda: _MARK)
+    monkeypatch.setattr(ledger, "_reap", lambda _d: None)  # synthetic pids are not live
+    monkeypatch.setattr(rec, "_create_time", lambda pid: {7624: 1000.5, 13912: 1000.75}.get(pid))
+    return snaps, state, state_kill
+
+
+def _fg(command: str, **over):
+    return _payload(
+        tool_input={"command": command}, tool_response={"stdout": ""}, agent_id="subA", **over
+    )
+
+
+def test_nohup_launch_writes_ledger_row_per_corroborated_pid(ledger_seams) -> None:
+    snaps, _, _ = ledger_seams
+    assert rec._handler({"payload": _fg("nohup python loop.py &")}) == {}
+    assert len(snaps) == 1
+    wrapper, child = ledger.read_row("sess1", 7624), ledger.read_row("sess1", 13912)
+    assert (wrapper.create_time, wrapper.agent_id) == (1000.5, "subA")
+    assert (child.create_time, child.session_id, child.argv) == (1000.75, "sess1", ["python", "loop.py"])
+    assert ledger.read_row("other", 13912) is None
+
+
+def test_background_nohup_launch_is_ledgered_too(ledger_seams) -> None:
+    p = _fg("nohup python loop.py &")
+    p["tool_input"]["run_in_background"] = True
+    p["tool_response"] = {"backgroundTaskId": "bg9"}
+    rec._handler({"payload": p})
+    assert ledger.read_row("sess1", 13912) is not None
+    assert store.read_record("bg9") is not None
+
+
+def test_no_detach_shape_takes_no_snapshot_and_writes_no_row(ledger_seams) -> None:
+    snaps, _, _ = ledger_seams
+    rec._handler({"payload": _fg("python loop.py")})
+    assert snaps == [] and ledger.read_row("sess1", 13912) is None
+
+
+def test_opaque_detach_writes_no_row(ledger_seams) -> None:
+    snaps, _, _ = ledger_seams
+    rec._handler({"payload": _fg("eval $CMD &")})
+    assert snaps == [] and ledger.read_row("sess1", 13912) is None
+
+
+def test_uncorroborated_command_writes_no_row(ledger_seams) -> None:
+    rec._handler({"payload": _fg("nohup other.py &")})
+    assert ledger.read_row("sess1", 13912) is None
+
+
+def test_ambiguous_window_writes_no_row(ledger_seams) -> None:
+    _, state, _ = ledger_seams
+    state["rows"] = [*state["rows"], ProcRow(8000, 999, _CTIME + 2, "python.exe")]
+    state["cmd"][8000] = "python loop.py"
+    rec._handler({"payload": _fg("nohup python loop.py &")})
+    assert ledger.read_row("sess1", 13912) is None and ledger.read_row("sess1", 8000) is None
+
+
+def test_unreadable_cmdline_writes_no_row(ledger_seams) -> None:
+    _, state, _ = ledger_seams
+    del state["cmd"][13912]
+    rec._handler({"payload": _fg("nohup python loop.py &")})
+    assert ledger.read_row("sess1", 7624) is None
+
+
+def test_vanished_pid_writes_no_row(ledger_seams, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(rec, "_create_time", lambda pid: None)
+    rec._handler({"payload": _fg("nohup python loop.py &")})
+    assert ledger.read_row("sess1", 13912) is None
+
+
+def test_root_outside_window_writes_no_row(ledger_seams) -> None:
+    _, state, _ = ledger_seams
+    state["rows"] = [_LIVE, ProcRow(7624, 999, _CTIME - 60 * _S, "nohup.exe"),
+                     ProcRow(13912, 7624, _CTIME - 60 * _S + 1, "python.exe")]
+    rec._handler({"payload": _fg("nohup python loop.py &")})
+    assert ledger.read_row("sess1", 13912) is None
+
+
+def test_foreground_duration_widens_window_to_call_start(ledger_seams) -> None:
+    _, state, _ = ledger_seams
+    old = _CTIME - 30 * _S
+    state["rows"] = [_LIVE, ProcRow(7624, 999, old, "nohup.exe"), ProcRow(13912, 7624, old + 1, "python.exe")]
+    rec._handler({"payload": _fg("nohup python loop.py &")})
+    assert ledger.read_row("sess1", 13912) is None
+    p = _fg("nohup python loop.py &")
+    p["tool_response"] = {"durationMs": 40_000}
+    rec._handler({"payload": p})
+    assert ledger.read_row("sess1", 13912) is not None
+
+
+def test_ledger_failure_never_denies_or_raises(ledger_seams, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ledger, "write_row", lambda r: (_ for _ in ()).throw(RuntimeError("disk")))
+    assert rec._handler({"payload": _fg("nohup python loop.py &")}) == {}
+
+
+def test_invalid_session_id_writes_no_row(ledger_seams) -> None:
+    snaps, _, _ = ledger_seams
+    rec._handler({"payload": _fg("nohup python loop.py &", session_id="../x")})
+    assert snaps == []
+
+
+def _bg(command: str, **over):
+    return _payload(
+        tool_input={"command": command, "run_in_background": True},
+        tool_response={"backgroundTaskId": "bg9"},
+        agent_id="subA",
+        **over,
+    )
+
+
+def _pytest_rows(*pids: int) -> dict:
+    return {
+        "rows": [_LIVE, *[ProcRow(p, 1, _CTIME + i, "python.exe") for i, p in enumerate(pids)]],
+        "cmd": {p: "python.exe -m pytest tests/test_x.py -q" for p in pids},
+    }
+
+
+def _set(state: dict, new: dict) -> None:
+    state["rows"] = new["rows"]
+    state["cmd"].clear()
+    state["cmd"].update(new["cmd"])
+
+
+@pytest.fixture
+def _any_pid_create_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(rec, "_create_time", lambda pid: 2000.0 + pid)
+
+
+def test_run_in_background_non_orphan_launch_writes_one_row(ledger_seams, _any_pid_create_time) -> None:
+    _, state, _ = ledger_seams
+    _set(state, _pytest_rows(5100))
+    rec._handler({"payload": _bg("python -m pytest tests/test_x.py -q")})
+    row = ledger.read_row("sess1", 5100)
+    assert row is not None
+    assert (row.session_id, row.agent_id, row.create_time) == ("sess1", "subA", 7100.0)
+
+
+def test_run_in_background_ledgers_wrapped_child_once_not_per_chain_link(
+    ledger_seams, _any_pid_create_time
+) -> None:
+    _, state, _ = ledger_seams
+    state["rows"] = [_LIVE, ProcRow(5200, 1, _CTIME, "bash.exe"), ProcRow(5201, 5200, _CTIME + 1, "python.exe")]
+    state["cmd"].clear()
+    state["cmd"].update({5200: "bash.exe -c pytest -q", 5201: "python.exe -m pytest -q"})
+    rec._handler({"payload": _bg("python -m pytest -q")})
+    assert ledger.read_row("sess1", 5201) is not None
+
+
+def test_run_in_background_two_matching_subtrees_write_nothing(ledger_seams, _any_pid_create_time) -> None:
+    _, state, _ = ledger_seams
+    _set(state, _pytest_rows(5100, 5101))
+    rec._handler({"payload": _bg("python -m pytest tests/test_x.py -q")})
+    assert ledger.read_row("sess1", 5100) is None and ledger.read_row("sess1", 5101) is None
+
+
+def test_run_in_background_uncorroborated_process_writes_nothing(ledger_seams, _any_pid_create_time) -> None:
+    _, state, _ = ledger_seams
+    _set(state, _pytest_rows(5100))
+    rec._handler({"payload": _bg("python -m pytest tests/test_other.py -q")})
+    assert ledger.read_row("sess1", 5100) is None
+
+
+def test_foreground_non_orphan_process_is_still_not_ledgered(ledger_seams, _any_pid_create_time) -> None:
+    _, state, _ = ledger_seams
+    _set(state, _pytest_rows(5100))
+    rec._handler({"payload": _fg("python -m pytest tests/test_x.py -q &")})
+    assert ledger.read_row("sess1", 5100) is None
+
+
+def test_ledger_capture_is_windows_only(ledger_seams, monkeypatch: pytest.MonkeyPatch) -> None:
+    snaps, _, _ = ledger_seams
+    monkeypatch.setattr(rec.sys, "platform", "linux")
+    rec._handler({"payload": _fg("nohup python loop.py &")})
+    assert snaps == []

@@ -6,6 +6,9 @@ configured default. Caller identity is lineage, never a child's own session ID.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+import sys
+import tempfile
 import json
 import hashlib
 import stat
@@ -23,6 +26,7 @@ from typing import Any, Callable
 
 import jsonschema
 
+from coordinator_core.codex_runner.capture_provider import spawn_collector
 from coordinator_core.codex_runner.agy import AgyUnavailable, resolve_agy
 from coordinator_core.codex_runner.grok import GrokUnavailable, resolve_grok
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
@@ -541,6 +545,48 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
                      broker_root_session_id=sid, broker_request_id=request_id, broker_fire_id=fire_id)
             _cleanup(admission_post.post, "END", sid, pids=[proc.pid], run=key)
         _cleanup(capacity.release_spawn, key, supervisor_pid, host=host)
+
+
+@contextmanager
+def _provider_stream(env, backend, repo, stderr, fire_id, request_id, attempt, on_spawn):
+    destination = os.environ.get("COORDINATOR_PROVIDER_EVIDENCE_DIR")
+    if backend != "codex" or not destination:
+        yield env, stderr, on_spawn
+        return
+    root = Path(destination)
+    if not root.is_absolute() or not root.is_dir() or root.resolve().is_relative_to(repo):
+        raise AgentFailed("Provider evidence requires an existing host directory outside the worker checkout")
+    folder = Path(stderr.name).parent
+    stage = folder.name if folder.parent.name == "agents" else f"{folder.parent.name}/{folder.name}"
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb") as reader, os.fdopen(write_fd, "wb") as writer, tempfile.NamedTemporaryFile(
+        dir=root, prefix="worker-", suffix=".jsonl", delete=False
+    ) as evidence:
+        collector = None
+        identity = {}
+
+        def start_collector(pid):
+            nonlocal collector
+            identity.update(fire_id=fire_id, stage=stage, pid=pid)
+            header = dict(identity, type="worker.capture", request_id=request_id, attempt=attempt,
+                          usage_home=env.get("CODEX_HOME"), artifact_dir=str(folder))
+            evidence.write((json.dumps(header) + "\n").encode())
+            evidence.flush()
+            collector = spawn_collector(identity, reader, evidence)
+            if on_spawn:
+                on_spawn(pid)
+
+        try:
+            yield dict(env, RUST_LOG="tungstenite::protocol=trace,codex_api::sse::responses=trace"), writer, start_collector
+        finally:
+            writer.close()
+            if collector is not None:
+                try:
+                    collector.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    collector.terminate()
+                    collector.wait()
+                evidence.write((json.dumps(dict(identity, type="worker.capture_end", collector_exit=collector.returncode)) + "\n").encode())
 
 
 def _persona(agent_type: str | None) -> str:
@@ -1421,8 +1467,22 @@ def run_agent(
         if private_settings is not None:
             env.update(private_settings[0])
             (artifact_dir / 'private-cli.json').write_text(json.dumps(private_settings[2]), encoding='utf-8')
+        capture_root = os.environ.get("COORDINATOR_PROVIDER_EVIDENCE_DIR")
+        worker_home_root = None
+        if capture_root:
+            root = Path(capture_root)
+            policy_file = os.environ.get("COORDINATOR_CODEX_WORKER_POLICY_FILE")
+            if not root.is_absolute() or not root.is_dir() or root.resolve().is_relative_to(repo_root) or not policy_file:
+                raise AgentFailed("Persistent attribution requires a restricted worker and private evidence directory")
+            rules = json.loads(Path(policy_file).read_bytes())
+            if rules.get(str(root.resolve())) != "deny" or any(
+                Path(path).is_absolute() and Path(path).resolve().is_relative_to(root.resolve()) and access != "deny"
+                for path, access in rules.items()
+            ):
+                raise AgentFailed("Worker policy must deny the provider evidence directory and descendants")
+            worker_home_root = Path(tempfile.mkdtemp(prefix="native-", dir=root))
         try:
-            shape_codex_child(env, writable_root=repo_root)
+            shape_codex_child(env, writable_root=repo_root, worker_home_root=worker_home_root)
         except SandboxSetupRefused as exc:
             raise AgentFailed(str(exc)) from exc
         if _gate_reask:
@@ -1438,6 +1498,8 @@ def run_agent(
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
             if native_schema is not None:
                 argv += ["--output-schema", str(schema_path)]
+        if worker_home_root is not None:
+            argv.remove("--ephemeral")
         model = _codex_model(options)
         if model is not None:
             argv += ["--model", model]
@@ -1479,13 +1541,14 @@ def run_agent(
         for attempt in range(STALL_RETRIES + 1):
             with (artifact_dir / "stdout.jsonl").open("wb") as out, (artifact_dir / "stderr.txt").open("wb") as err:
                 try:
-                    proc = _run_admitted(
-                        argv, stdin_text, env=env, repo_root=repo_root, artifact_dir=artifact_dir,
-                        backend=backend, options=options, parent_session_id=parent_session_id,
-                        timeout_s=max(timeout_s - (time.monotonic() - started), 1e-3), on_spawn=on_spawn,
-                        stdout=out, stderr=err, request_id=request_id, fire_id=fire_id,
-                        on_native_thread=on_native_thread, stall_window_s=stall_window_s,
-                    )
+                    with _provider_stream(env, backend, repo_root, err, fire_id, request_id, attempt, on_spawn) as (child_env, child_err, child_spawn):
+                        proc = _run_admitted(
+                            argv, stdin_text, env=child_env, repo_root=repo_root, artifact_dir=artifact_dir,
+                            backend=backend, options=options, parent_session_id=parent_session_id,
+                            timeout_s=max(timeout_s - (time.monotonic() - started), 1e-3), on_spawn=child_spawn,
+                            stdout=out, stderr=child_err, request_id=request_id, fire_id=fire_id,
+                            on_native_thread=on_native_thread, stall_window_s=stall_window_s,
+                        )
                     break
                 except StageStalled as exc:
                     if attempt >= STALL_RETRIES:

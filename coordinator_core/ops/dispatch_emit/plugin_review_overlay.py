@@ -32,6 +32,24 @@ def _fallback_root(key: str, install: Path, home: Path) -> Optional[Path]:
     return next((t for t in tries if t.is_dir()), None)
 
 
+def _marketplace_entry_root(key: str, path: Path) -> Path:
+    """`path` itself, or `path/<source>` when `path` is a marketplace root (no `plugin.json`, a
+    `marketplace.json` entry named for the key's plugin half) and that source is a directory."""
+    claude = path / ".claude-plugin"
+    if (claude / "plugin.json").is_file():
+        return path
+    try:
+        entries = json.loads((claude / "marketplace.json").read_text(encoding="utf-8")).get("plugins")
+        plugin = key.partition("@")[0]
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and entry.get("name") == plugin and isinstance(entry.get("source"), str):
+                source = path / entry["source"]
+                return source if source.is_dir() and source.resolve().is_relative_to(path.resolve()) else path
+    except (OSError, ValueError, AttributeError):
+        pass
+    return path
+
+
 def installed_plugin_roots(home: Optional[Path] = None, extra: Iterable[str] = ()) -> list[Path]:
     """`extra`, `$COORDINATOR_PLUGIN_ROOTS`, then `installed_plugins.json` install paths; deduplicated existing dirs."""
     home = home or _claude_home()
@@ -44,7 +62,7 @@ def installed_plugin_roots(home: Optional[Path] = None, extra: Iterable[str] = (
                 if not (isinstance(install, dict) and install.get("installPath")):
                     continue
                 path = Path(install["installPath"])
-                real = path if path.is_dir() else _fallback_root(str(key), path, home)
+                real = _marketplace_entry_root(str(key), path) if path.is_dir() else _fallback_root(str(key), path, home)
                 if real is not None:
                     candidates.append(real)
     except (OSError, ValueError, AttributeError):

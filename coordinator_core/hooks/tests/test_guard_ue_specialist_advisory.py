@@ -156,6 +156,35 @@ def test_ue_content_writes_still_get_advisory(world, writes) -> None:
     assert f"route to {SPECIALIST}" in _text(out)
 
 
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "add a pytest for the metahuman helmet exporter in coordinator_core/tests/test_x.py",
+        "refactor the metahuman python parser in scripts/parse_hero.py",
+        "fix the metahuman helmet trail\n\n## Files you may write\n\n- `scripts/trail.py`\n",
+    ],
+)
+def test_pytest_and_python_only_briefs_get_no_advisory(world, prompt) -> None:
+    assert guard.evaluate(_payload(world["repo"], prompt=prompt)) == {}
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "fix the metahuman helmet; run python in the editor on Content/MetaHumans/Hero.uasset",
+        "python script plus Source/Game/Hero.cpp metahuman change",
+        "fix the metahuman helmet trail\n\n## Files you may write\n\n- `scripts/trail.py`\n- `Content/Hero.uasset`\n",
+    ],
+)
+def test_python_cue_with_ue_path_still_gets_advisory(world, prompt) -> None:
+    assert f"route to {SPECIALIST}" in _text(guard.evaluate(_payload(world["repo"], prompt=prompt)))
+
+
+def test_pathless_ue_brief_with_bare_python_cue_still_gets_advisory(world) -> None:
+    prompt = "run python via execute_python_code to fix the metahuman material"
+    assert f"route to {SPECIALIST}" in _text(guard.evaluate(_payload(world["repo"], prompt=prompt)))
+
+
 def test_declared_writes_reads_only_the_heading_section() -> None:
     prompt = "- `Elsewhere/a.uasset`\n## Files you may write\n- `a.md`\n- not a path\n## Next\n- `b.uasset`\n"
     assert guard.declared_writes(prompt) == ["a.md"]

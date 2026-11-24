@@ -40,7 +40,7 @@ from coordinator_core.ops import reverify_base_measure, reverify_scope
 from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
 from coordinator_core.ops.review_reverify import _RED_LINE
-from coordinator_core import temp_layout
+from coordinator_core import pyresolve, temp_layout
 from coordinator_core.testing import leg_batch, scoped_pytest
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -90,6 +90,27 @@ def _parser() -> argparse.ArgumentParser:
 _RAW: list[tuple[str, str]] = []
 #: Mirror worktrees (as `str`) the current leg runs pytest in; `_pytest` resolves `coordinator_core` from them alone.
 _MIRRORS: set[str] = set()
+#: The run's repo root, set by `run`; the interpreter pin is read from it, never from a mirror.
+_LEG_ROOT: list[Path] = []
+#: The interpreter the last pytest of this leg ran under; `_tally` records it as `interpreter`.
+_RAN_PY: list[str] = []
+
+
+def _python(root: Path) -> str:
+    """The interpreter every pytest of this leg runs under: the shared resolver the clean-overlay gate uses,
+    so an engine interpreter without pytest never zeroes the leg."""
+    return pyresolve.pytest_python(root)
+
+
+def _live_only(root: Path, dest: Path, targets: Sequence[str]) -> list[str]:
+    """Repo-relative file parts of `targets` that are files in the live `root` but absent from the mirror `dest`:
+    an untracked file the run wrote, which a HEAD mirror cannot hold until it is overlaid."""
+    out: dict[str, None] = {}
+    for t in targets:
+        path = _file_part(t)
+        if path and not t.startswith("-") and (root / path).is_file() and not (dest / path).exists():
+            out[path] = None
+    return list(out)
 
 
 def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str]]:
@@ -101,12 +122,14 @@ def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[s
     """
     if remaining <= 0:
         raise subprocess.TimeoutExpired("pytest", 0)
-    env = dict(os.environ, PYTHONIOENCODING=_PYTEST_ENCODING)
+    env = pyresolve.with_engine_root(dict(os.environ, PYTHONIOENCODING=_PYTEST_ENCODING))
     if cwd in _MIRRORS:
         env = cov._mirror_env(env, Path(cwd))
+    py = _RAN_PY[0] if _RAN_PY else _python(_LEG_ROOT[0] if _LEG_ROOT else Path(cwd))
+    _RAN_PY[:] = [py]
     with tempfile.TemporaryDirectory(prefix="test-leg-ids-") as holder:
         id_file = _write_ids(Path(holder), targets)
-        proc = subprocess.run([sys.executable, "-c", _IDS_RUNNER, str(id_file), *_PYTEST], cwd=cwd,
+        proc = subprocess.run([py, "-c", _IDS_RUNNER, str(id_file), *_PYTEST], cwd=cwd,
                               capture_output=True, encoding=_PYTEST_ENCODING, errors="replace", timeout=remaining,
                               env=env,
                               **no_console_creationflags())
@@ -331,6 +354,8 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
     run_n = counts["passed"] + counts["failed"] + counts["xfailed"] + counts["xpassed"]
     result["tests_run"] = run_n
     result["tests_failed"] = counts["failed"]
+    if _RAN_PY:
+        result["interpreter"] = _RAN_PY[0]
     if result.get("status_after") == "pass" and run_n:
         result["status"] = "pass"
     else:
@@ -362,7 +387,7 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
     result[ltt.ZERO_RUN_CAUSE_KEY] = cause
     result["status"] = "error"
     # Names where pytest ran: interpreter and process cwd, no spawn.
-    result["interpreter"], result["cwd"] = sys.executable, os.getcwd()
+    result["interpreter"], result["cwd"] = (_RAN_PY[0] if _RAN_PY else sys.executable), os.getcwd()
     no_module = next((ln.strip() for ln in lines if _IMPORT_FAIL.match(ln.strip())), None)
     if no_module:
         result["import_error_text"] = no_module
@@ -380,6 +405,7 @@ def _argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str]) -> lis
     """The clone leg's pytest argv with `targets` moved to `basetemp.parent/ids.txt` (the per-run holder, removed
     with the run): `_IDS_RUNNER` takes the flags `cov._pytest_argv` built and reads the ids from that file."""
     argv = cov._pytest_argv(root, dest, basetemp, targets)
+    _RAN_PY[:] = [argv[0]]
     argv.insert(argv.index("--rootdir"), "--continue-on-collection-errors")
     flags = argv[3:len(argv) - len(targets)]
     id_file = _write_ids(basetemp.parent, targets)
@@ -436,6 +462,9 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
     with cov._mirror_lock(root, "test-leg-run") as mroot:
         post = cov._commit_sha(root, post_rev)
         dest = cov._prepare_guarded(root, mroot, post, cov._no_leg)
+        live = _live_only(root, dest, targets)
+        if live:
+            dest = cov._prepare_guarded(root, mroot, post, cov._no_leg, live)
         rels = [t.replace("\\", "/") for t in touched]
         own = [t for t in rels if cov._is_test_path(t) and (dest / t).is_file()]
         targets, not_a_test = _split_not_a_test(targets, dest)
@@ -461,7 +490,7 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
             return out
         try:
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"test-leg-{os.getpid()}")
-            env = cov._mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest)
+            env = cov._mirror_env(pyresolve.with_engine_root(scoped_pytest.tmp_env(os.environ, tmp)), dest)
             if left() <= 0:
                 raise subprocess.TimeoutExpired("pytest", 0)
             ran, overrun = _run_phased(root, dest, basetemp, picked, importers, env, left)
@@ -637,7 +666,7 @@ def _run_blob_paths(root: Path, exclude: str, run_id: Optional[str] = None) -> l
 
 
 def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], result: dict,
-              run_id: Optional[str] = None) -> str:
+              run_id: Optional[str] = None, targets: Sequence[str] = ()) -> str:
     """The directory the no-touched leg runs pytest in: the shared-clone mirror at `head_sha` (default HEAD) plus
     the run-owned blobs, held under `stack`, so another session's uncommitted edit in `root` never reaches the
     verdict. A non-git `root` has no foreign dirt to exclude and runs in place; a mirror that cannot be prepared
@@ -650,6 +679,10 @@ def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], 
         sha = cov._commit_sha(root, head_sha or "HEAD")
         overlay = _run_blob_paths(root, "", run_id)
         dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay)
+        live = _live_only(root, dest, targets)
+        if live:
+            overlay = [*overlay, *live]
+            dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay)
     except (cov.ExportError, OSError, ValueError, subprocess.SubprocessError) as exc:
         stack.close()
         result["own_tree_skipped"] = f"{type(exc).__name__}: {exc}"[:300]
@@ -676,12 +709,16 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
             raise subprocess.TimeoutExpired("pytest", 0)
         overlay = _run_blob_paths(root, err["path"], run_id)
         with cov._mirror_lock(root, "test-leg-run") as mroot:
-            dest = cov._prepare_guarded(root, mroot, cov._commit_sha(root, base_sha), cov._no_leg, overlay)
+            base_rev = cov._commit_sha(root, base_sha)
+            dest = cov._prepare_guarded(root, mroot, base_rev, cov._no_leg, overlay)
+            live = _live_only(root, dest, targets)
+            if live:
+                dest = cov._prepare_guarded(root, mroot, base_rev, cov._no_leg, [*overlay, *live])
             present, _absent = _partition(targets, dest)
             if not present:
                 return
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"test-leg-{os.getpid()}")
-            env = cov._mirror_env(scoped_pytest.tmp_env(os.environ, tmp), dest)
+            env = cov._mirror_env(pyresolve.with_engine_root(scoped_pytest.tmp_env(os.environ, tmp)), dest)
             ran = cov._tier_empty_as_green(cov._run_pytest_retrying(_argv(root, dest, basetemp, present), dest, env))
     except (cov.ExportError, subprocess.SubprocessError, OSError) as exc:
         result["overlay_rerun_skipped"] = f"{type(exc).__name__}: {exc}"[:300]
@@ -730,6 +767,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
     `importer_targets`, `targets_run`; `head_sha` is then the post-land rev (default HEAD). `run_id` limits the run-owned overlay to that run's
     record; None overlays every run record."""
     started = time.monotonic()
+    _LEG_ROOT[:] = [Path(cwd)]
+    _RAN_PY.clear()
 
     def left() -> float:
         return budget_s - (time.monotonic() - started)
@@ -755,7 +794,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
             return result
-        run_cwd = _own_tree(stack, Path(cwd), head_sha, result, run_id)
+        run_cwd = _own_tree(stack, Path(cwd), head_sha, result, run_id, targets)
         targets, result["not_a_test"] = _split_not_a_test(targets, Path(run_cwd))
         if not targets:
             _tally(result, 5, ())

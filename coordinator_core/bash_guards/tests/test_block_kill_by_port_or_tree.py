@@ -341,3 +341,9 @@ def test_a_script_tree_kill_of_a_foreign_or_looked_up_pid_still_denies(tmp_path)
            "    subprocess.run(['taskkill', '/T', '/PID', str(p.pid)])\n")
     assert denied("python a.py", tmp_path)
     assert denied("python b.py", tmp_path)
+
+
+def test_denial_remedy_names_the_own_tree_route(tmp_path):
+    reason = denied("kill $(pgrep -f pytest)", tmp_path)
+    assert "coordinator-invoke proc.stop_own_child" in reason
+    assert "your own process tree" in reason

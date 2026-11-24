@@ -532,7 +532,7 @@ def not_delivered(reply):
     return str(reply or "").lstrip().startswith(NOT_DELIVERED_PREFIXES)
 
 
-def wrap_inbound(sender, body, reply_to=None):
+def wrap_inbound(sender, body, reply_to=None) -> str:
     """What a peer sees: `[<sender>] <body>` plus a trailer naming the sender and the exact reply command.
 
     `reply_to` overrides the --to address when the sender itself cannot be queued (a Codex v2 sub-agent).
@@ -543,13 +543,16 @@ def wrap_inbound(sender, body, reply_to=None):
     if sys.platform == "win32":
         # PowerShell call-operator form; a peer driving a POSIX shell on Windows cannot run it.
         quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+        # Paths may carry spaces and are always quoted; a PowerShell-safe address stays bare, as shlex.quote leaves it.
+        quote_address = lambda value: (
+            str(value) if re.fullmatch(r"[A-Za-z0-9_.:/][A-Za-z0-9_.:/-]*", str(value)) else quote(value))
         send = f"& {quote(sys.executable)} {quote(here() / SEND_SCRIPT)}"
     else:
-        quote = shlex.quote
+        quote = quote_address = shlex.quote
         send = f"{quote(sys.executable)} {quote(str(here() / SEND_SCRIPT))}"
     return (f"[{sender}] {body}\n\nFrom agent {sender}, not the PM. "
             f"Never answer them in plain text to the human at your keyboard. "
-            f"Reply to them with: {send} --to {quote(str(reply_to or sender))} '<your reply>'")
+            f"Reply to them with: {send} --to {quote_address(str(reply_to or sender))} '<your reply>'")
 
 
 def routable_from(frame, name):

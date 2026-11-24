@@ -85,12 +85,18 @@ def _advance_descendant_journals(state: dict, sid: str, budget: int) -> None:
     """
     journals = settings_home() / "state" / "codex-usage"
     read = {sid}
+    complete = state.get("backlog_complete", True)
     while True:
         pending = [t for t in descendants(state) - read if (journals / f"{t}.jsonl").is_file()]
         read |= descendants(state)
         if not pending:
+            state["backlog_complete"] = complete
             return
-        advance(state, [journals / f"{t}.jsonl" for t in pending], byte_budget=budget)
+        paths = [journals / f"{t}.jsonl" for t in pending]
+        # A journal first registered by this refresh was unread when the refresh began.
+        fresh = any(str(p.resolve()) not in state["files"] for p in paths)
+        advance(state, paths, byte_budget=budget)
+        complete = complete and state["backlog_complete"] and not fresh
 
 
 def _snapshot_locked(params, sid, cache) -> dict:
