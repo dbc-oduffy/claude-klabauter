@@ -20,6 +20,9 @@ A tripwire, not a judge. Limits, stated so a caller never over-reads a pass:
   - silent_override_negation: a scope-hit paragraph's sentence that does not cite the ruling id,
     holds >=70% of a ruling sentence's content words, and has the opposite negation polarity.
     Both silent-override checks are lexical overlap: a paraphrase sharing no content word passes.
+  - Scope-out: a line citing a ruling id that scopes it out of the run ("out of scope", "not in
+    scope", "excluded", "do not touch") with no other negation is neither a contradiction nor a
+    deferral of that ruling; a line that also overrides or rejects it is not a scope-out.
   - Clearance: only `pm_turn: <ref> <YYYY-MM-DD> <ruling-id>` clears, and only that id: the date
     must be after the ruling's `recorded` (an empty `recorded` sets no lower bound) and <ref> must
     be an existing repo-relative file inside the root. Unnamed deferrals are never cleared.
@@ -105,6 +108,30 @@ def _prose_negation(line: str) -> bool:
 
 def _cites_id(line: str, rid: str) -> bool:
     return re.search(rf"(?<![A-Za-z0-9._-]){re.escape(rid)}(?![A-Za-z0-9_-])", line) is not None
+
+
+_SCOPE_OUT_RE = re.compile(
+    r"\bout[\s-]of[\s-]scope\b|\bnot\s+in\s+scope\b|\boutside\s+(?:the\s+|this\s+)?(?:scope|plan|run|ask)\b"
+    r"|\bscop(?:e|es|ed|ing)\s+(?:\w+\s+)?out\b|\bexcluded\b"
+    r"|\b(?:do|does|will)\s+not\s+(?:touch|cover|address|include|handle)\b"
+    r"|\bnot\s+part\s+of\s+(?:this|the)\s+(?:plan|run|ask)\b",
+    re.IGNORECASE,
+)
+
+
+def _scope_out(line: str) -> bool:
+    """`line` scopes something out of the run and says nothing else negative: a scope-out phrase
+    whose own negation ("not in scope") is its only one. A line that also overrides, rejects or
+    drops keeps its negation and is not a scope-out."""
+    if not _SCOPE_OUT_RE.search(line):
+        return False
+    return not _prose_negation(_SCOPE_OUT_RE.sub(lambda m: " " * len(m.group(0)), line))
+
+
+def _scoped_out_ids(paragraph: str, rulings: list[Ruling]) -> set[str]:
+    """Ids of `rulings` cited on a scope-out line of `paragraph`."""
+    lines = [ln for ln in paragraph.splitlines() if _scope_out(ln)]
+    return {r.id for r in rulings if any(_cites_id(ln, r.id) for ln in lines)}
 
 
 def _scope_hit(paragraph: str, ruling: Ruling) -> bool:
@@ -279,13 +306,19 @@ def detect(text: str, rulings: Iterable[Ruling], root: Path) -> dict:
     deferred: list[str] = []
     unnamed: list[str] = []
     for para in _paragraphs(text):
-        phrases = list(DEFER_RE.finditer(_blank_headings(_blank_quoted(para))))
+        scoped_out = _scoped_out_ids(para, accepted)
+        rest = "\n".join(ln for ln in para.splitlines() if not (scoped_out and _scope_out(ln)))
+        phrases = [
+            m
+            for m in DEFER_RE.finditer(_blank_headings(_blank_quoted(para)))
+            if not (scoped_out and _scope_out(_line_of(para, m.start())))
+        ]
         if not phrases:
             continue
         if "?" not in para:
             unnamed.extend(_line_of(para, m.start()) for m in phrases)
         for r in accepted:
-            if r.id not in deferred and r.id not in cleared and _scope_hit(para, r):
+            if r.id not in deferred and r.id not in cleared and _scope_hit(rest if r.id in scoped_out else para, r):
                 deferred.append(r.id)
 
     contradicted: list[str] = []
@@ -307,7 +340,7 @@ def detect(text: str, rulings: Iterable[Ruling], root: Path) -> dict:
                 continue
             if explicit and explicit.group(1).strip().rstrip(".,;") == r.id:
                 _flag(r.id, "explicit_contradicts")
-            elif _prose_negation(line) and (
+            elif _prose_negation(line) and not _scope_out(line) and (
                 _cites_id(line, r.id) or (_norm(r.text) and _norm(r.text) in nline)
             ):
                 _flag(r.id, "cited_with_negation")
