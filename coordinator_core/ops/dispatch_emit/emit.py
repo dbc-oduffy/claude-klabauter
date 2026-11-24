@@ -1421,6 +1421,21 @@ def _is_immutable_body_path(path: str) -> bool:
     return bool(_PLAN_BODY_RE.search(str(normalized)))
 
 
+def derived_agent_lane(row) -> str:
+    """The lane ``_row_agent_type`` would route ``row`` to, without its refusals.
+
+    Explicit override, else enricher when any declared write is an immutable body,
+    else executor. The chunk shaper keys merge candidacy on this so it never fuses
+    rows whose lanes differ.
+    """
+    if row.agent_type:
+        return row.agent_type
+    writes = row.writes if isinstance(row.writes, list) else []
+    if any(_is_immutable_body_path(p) for p in writes):
+        return _ENRICHER_AGENT_TYPE
+    return _EXECUTOR_AGENT_TYPE
+
+
 def _row_agent_type(row: WaveRow) -> str:
     """Derive a wave row's ``agentType``, honouring an explicit override.
 

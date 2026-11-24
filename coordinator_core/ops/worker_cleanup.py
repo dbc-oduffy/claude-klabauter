@@ -25,6 +25,10 @@ Invariants:
   then its row is deleted. `caller_session_id` is client-stamped and, unlike `caller_pid`, not rebound from
   the transport (`warm.server._bind_trusted_caller_pid`), so it is trusted on the caller's word; empty is refused,
   a create_time mismatch (reused pid) deletes the row and refuses, and a row of another session refuses.
+- When the ledger adds nothing (empty refusal), a pid whose inherited environment names `caller_session_id`
+  (first non-empty `SESSION_ENV_PRECEDENCE` name, resolved as `warm.caller_context` does) is stopped: a child
+  inherits it through every shell hop, so it outlives the shell. Never consulted for a pid under another agent
+  session, a session process, the serving engine and its ancestors, or one that started before the worker root; one `environ()` read, AccessDenied refuses.
 - A record is refused for a pid older than the root or under any agent session (`codex`, `claude`)
   other than the root; record dirs of dead roots are reaped on the next record. Within those bounds a
   record is trusted on the caller's word.
@@ -219,6 +223,48 @@ def _ledger_admits(target: Any, caller_session_id: Any) -> tuple[bool, str]:
     return True, ""
 
 
+def _serving_engine_pids() -> set:
+    """The engine process serving this call and its ancestors; the warm server inherits the session env
+    of whichever session spawned it and is shared by every peer, so its env names no one caller."""
+    import psutil
+
+    pids = {os.getpid()}
+    try:
+        pids.update(p.pid for p in psutil.Process().parents())
+    except psutil.Error:
+        pass
+    return pids
+
+
+def _env_admits(target: Any, caller_session_id: Any, root: Any = None) -> tuple[bool, str]:
+    """(admitted, refusal): admitted when the session id in `target`'s inherited environment, resolved
+    as `warm.caller_context` resolves a request env, equals `caller_session_id`. A child inherits it
+    through every shell and launcher hop, so it survives an exited parent. One `environ()` read; an
+    unstamped or empty session, a scrubbed env, the serving engine (or its ancestors) and a pid that started
+    before the worker root (a shared daemon the session merely inherited) admit nothing."""
+    import psutil
+    from coordinator_core.session.core import SESSION_ENV_PRECEDENCE, canonical_session_env_value
+
+    if not isinstance(caller_session_id, str) or not caller_session_id:
+        return False, ""
+    if target.pid in _serving_engine_pids():
+        return False, ""
+    if root is None or target.create_time() < root.create_time():
+        return False, ""
+    try:
+        env = target.environ()
+    except psutil.AccessDenied:
+        return False, "access denied"
+    except psutil.NoSuchProcess:
+        return False, ""
+    vendor = env.get("COORDINATOR_AGENT_VENDOR", "external")
+    for name in SESSION_ENV_PRECEDENCE:
+        value = env.get(name)
+        if value:
+            return canonical_session_env_value(name, value, vendor=vendor) == caller_session_id, ""
+    return False, ""
+
+
 def stop_own_child(
     pid: Any, caller_pid: Any, root_pid: Any = None, ps: Any = None, record: bool = False, repo_root: Any = None,
     caller_session_id: Any = None,
@@ -227,7 +273,8 @@ def stop_own_child(
 
     Owned = a strict descendant of the worker root, or a pid recorded under that root (same
     create_time) by an earlier `record=True` call, or, when neither admits, a pid in the caller
-    session's spawn ledger with its recorded create_time, whatever its current parent.
+    session's spawn ledger with its recorded create_time, whatever its current parent, or, when
+    the ledger has nothing to say, a pid whose inherited environment names the caller's session.
     `record=True` records `pid` and stops nothing: `{"recorded": pid}`.
     """
     if ps is None:
@@ -246,17 +293,23 @@ def stop_own_child(
         if record:
             return _record(ps.Process(pid), root_proc, repo_root, ps) if root_proc else {"refused": why}
         target = ps.Process(pid)
+        other_session = False
         if root_proc is None:
             reason = why
         else:
             under, reason = _descends_from(ps, pid, root_proc)
+            other_session = bool(reason)
             if not under and not reason:
                 reason = _recorded_refusal(target, root_proc, repo_root)
         ledgered = False
         if reason:
             ledgered, ledger_reason = _ledger_admits(target, caller_session_id)
             if not ledgered:
-                return {"refused": ledger_reason or reason}
+                if ledger_reason or other_session or _is_session(target):
+                    return {"refused": ledger_reason or reason}
+                env_ok, env_reason = _env_admits(target, caller_session_id, root_proc)
+                if not env_ok:
+                    return {"refused": env_reason or reason}
         target.terminate()
         try:
             target.wait(_GRACE_S)
@@ -291,7 +344,8 @@ def _stop_handler(params: dict, repo_root=None) -> dict:
 
     `caller_session_id` is client-stamped too. `record: true` records `pid` as the caller's own
     launch instead of stopping it. A pid the root and record paths refuse is stopped when the
-    caller's session ledgered it (same create_time)."""
+    caller's session ledgered it (same create_time), else when its inherited environment names that
+    session (survives an exited shell or launcher hop)."""
     return stop_own_child(
         params.get("pid"), params.get("caller_pid"), params.get("root_pid"),
         record=params.get("record") is True, repo_root=repo_root,

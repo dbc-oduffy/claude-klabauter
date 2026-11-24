@@ -933,6 +933,15 @@ def _wave_prep_instruction(
     group_args = ',"group_index":<group_index>,"group_count":<group_count>' if grouped else ""
     group_note = " Pass the `group_index:` and `group_count:` values given below." if grouped else ""
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
+    if run_id is not None:
+        reply_stem = (
+            run_prep_slice_prefix(run_id, base_ref)
+            if re.fullmatch(r"[0-9a-fA-F]{40}", base_ref or "")
+            else re.sub(r"[^A-Za-z0-9_.-]", "-", run_id)
+        )
+    else:
+        reply_stem = prep_slice_id
+    reply_file = f"{reply_stem}{'-g<group_index>' if grouped else ''}.review-prep-reply.json"
     return (
         f"First, run this run's review prep as ONE engine call, never your own freeze, grouping or "
         f"claim check: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
@@ -950,7 +959,8 @@ def _wave_prep_instruction(
         f"the same call (it reads the stored record), up to {_PREP_INDETERMINATE_RETRIES} times; if it "
         f"still errors, return `prep` as `{{\"error\": \"<the verbatim error message>\", \"slices\": []}}`. "
         f"The reply is large: when the shell cut its output short, re-run the same call with its output "
-        f"redirected to a file under your scratchpad and Read that file whole. Never complete, abbreviate "
+        f"redirected to `{reply_file}` in your scratchpad and Read exactly that file whole, never "
+        f"another reply file. Never complete, abbreviate "
         f"or range a `slices` list you did not see in full."
     )
 

@@ -24,6 +24,8 @@ class EvidenceClass(str, Enum):
     GOAL = "goal"
     SUCCESSOR = "successor"
     RUN = "run"
+    # A baton's own AC checkbox list, every line ticked and citing a commit that resolves.
+    AC_LIST = "ac_list"
 
 
 class ResidueReason(str, Enum):
@@ -44,6 +46,14 @@ class ResidueReason(str, Enum):
     NOT_ADVANCEABLE = "not_advanceable"
     # Done evidence carries no delivery commit to stamp as shipped_in.
     NO_EVIDENCE_SHA = "no_evidence_sha"
+
+
+class NoEvidenceReason(str, Enum):
+    NOTHING_CITED = "nothing_cited"
+    # Cited targets were read and none is done: nothing contradicts, nothing proves.
+    TARGETS_NOT_DONE = "targets_not_done"
+    # A cited plan has every dispatchable row coded with a commit but a non-terminal status.
+    ACS_ALL_TICKED = "acs_all_ticked"
 
 
 class Verdict(str, Enum):
@@ -105,12 +115,23 @@ class ResidueItem(TypedDict):
     conflict: ConflictNote | None
 
 
+class NoEvidenceItem(TypedDict):
+    """Residue-item shape for a baton the report could not decide; `reason` is a NoEvidenceReason value."""
+
+    handoff_path: str
+    reason: str
+    evidence: list[Evidence]
+    conflict: ConflictNote | None
+    detail: str | None
+
+
 class CloseReport(TypedDict):
     exit_code: int
     schema_version: int
     op: str
     batons_scanned: int
     no_evidence: int
+    no_evidence_batons: list[NoEvidenceItem]
     closable: list[ClosableItem]
     residue: list[ResidueItem]
     scan_incomplete: bool
@@ -136,6 +157,9 @@ REVERSE_FIELD_PREDECESSOR = "plan.predecessor_handoff"
 REVERSE_FIELD_SIZING = "plan.sizing_object"
 # Conflict rule: a done governing_plan outranks an inferred sizing-join leg.
 CONFLICT_RULE_OWN_PLAN = "the baton's own governing_plan is done; a sizing-join leg is inferred and yields to it"
+# AC-list evidence: `field` and `target_status` of the item built from a baton's own ticked list.
+AC_LIST_FIELD = "baton.acs"
+AC_LIST_ALL_TICKED = "all_ticked"
 # Run-evidence `field` values: how a run was joined to the baton.
 RUN_FIELD_BATON = "run.baton"
 RUN_FIELD_SIZING = "run.sizing_rel"
@@ -151,6 +175,7 @@ REPORT_KEYS = (
     "op",
     "batons_scanned",
     "no_evidence",
+    "no_evidence_batons",
     "closable",
     "residue",
     "scan_incomplete",

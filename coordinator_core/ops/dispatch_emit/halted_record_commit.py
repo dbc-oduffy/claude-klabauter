@@ -764,6 +764,71 @@ def _supply(worktree_root: Path, path: str, res: dict, supplied: dict) -> bool:
     return True
 
 
+def _measured_own_split(
+    worktree_root: Path, run_id: str, path: str, read_failures: Optional[dict] = None
+) -> Optional[dict]:
+    """`own_hunk_candidate`-shaped `{"bytes", "excluded"}` (or a `refused` row) for `path` when the run's
+    measured write (its `touched-blobs.json` run blob) lacks a hunk another run recorded: that hunk stays
+    out of the blob even though the run's whole-image `kept.json` blob or print carries it (a peer's hunk
+    in the tree at the halt rides into both). None when the run recorded no measured blob, no peer hunk
+    is in the tree, or the evidence cannot be read: the caller keeps its own verdict, and an unreadable
+    evidence failure is written to `read_failures[path]` so the whole-file fallback is visible."""
+    try:
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.git.git_objects import read_object
+        from coordinator_core.git.git_state import head_blobs
+        from coordinator_core.ops.dispatch_emit import kept_work, own_hunk_candidate as ohc, stranded_sibling
+        from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        measured = (stranded_sibling.read(record_dir(worktree_root, run_id)).get(path) or {}).get("run")
+        if not measured:
+            return None
+        common = resolve_git_common_dir(worktree_root)
+        entry = head_blobs(worktree_root, [path]).get(path)
+        stored = read_object(common, entry[1]) if entry else None
+        tree = kept_work.checkin_form(worktree_root, path, (worktree_root / path).read_bytes())
+        if entry and stored is None:
+            if read_failures is not None:
+                read_failures[path] = "HEAD blob unreadable"
+            return None
+        if tree is None:
+            return None
+        head = stored[1] if stored else b""
+        head_keys, tree_keys = ohc._key(head), ohc._key(tree)
+        hunks = rhc.changed_opcodes(head_keys, tree_keys)
+        if not hunks or rhc.exceeds_match_bound(head_keys, tree_keys):
+            return None
+        own = ohc._blocks(worktree_root, common, path, head_keys, [measured])
+        peers = ohc._peer_owners(worktree_root, common, run_id, path, head_keys)
+        h_lines, t_lines = head.splitlines(True), tree.splitlines(True)
+        out: list = []
+        excluded: list = []
+        pos = 0
+        taken = 0
+        for _tag, i1, i2, j1, j2 in hunks:
+            block = (tuple(head_keys[i1:i2]), tuple(tree_keys[j1:j2]))
+            out += h_lines[pos:i1]
+            if block in peers and block not in own:
+                out += h_lines[i1:i2]
+                excluded.append({"lines": ohc._lines(j1 + 1, j2, j2 == j1), "owner": peers[block]})
+            else:
+                out += t_lines[j1:j2]
+                taken += 1
+            pos = i2
+        out += h_lines[pos:]
+        if not excluded:
+            return None
+        if not taken:
+            first = excluded[0]
+            return {"refused": ohc.NO_EVIDENCE, "lines": first["lines"], "owner": first["owner"], "foreign": excluded}
+        return {"bytes": b"".join(out), "excluded": excluded}
+    except Exception as exc:  # noqa: BLE001 -- unreadable evidence keeps the caller's verdict, recorded
+        if read_failures is not None:
+            read_failures[path] = f"{type(exc).__name__}: {exc}"
+        return None
+
+
 def _peer_hunks_excluded(worktree_root: Path, run_id: str, paths: list, supplied: dict) -> tuple:
     """`(refused, {"foreign_hunks": {...}})` over `paths` the run declares: a hunk another run recorded
     is left out of the path's own-hunks-only blob (added to `supplied`, the peer hunk stays dirty in the
@@ -771,10 +836,19 @@ def _peer_hunks_excluded(worktree_root: Path, run_id: str, paths: list, supplied
     changes nothing."""
     refused: list = []
     named: dict = {}
+    read_failures: dict = {}
     for path in paths:
         if path in supplied:
             continue
         res = _candidate_for(worktree_root, run_id, path, declared=True)
+        if res and "bytes" in res and res.get("excluded") == []:
+            # The whole tree read as the run's own: a credited path (print, kept blob) whose peer hunk rode in.
+            res = _measured_own_split(worktree_root, run_id, path, read_failures) or res
+        if res.get("error"):
+            # Unreadable evidence is not a peer hunk: re-read it to record the typed failure, keep the whole-file credit.
+            _measured_own_split(worktree_root, run_id, path, read_failures)
+            read_failures.setdefault(path, f"candidate evidence error: {res['error']}")
+            continue
         # A file past the match bound is judged by `hunk_provenance.unproduced_hunks` (anchored diff) before
         # this pass; `candidate` can only refuse it as coarse, which would strip a run's own large edit.
         if not res or ("excluded" in res and not res["excluded"]) or res.get("refused") == "coarse":
@@ -783,7 +857,12 @@ def _peer_hunks_excluded(worktree_root: Path, run_id: str, paths: list, supplied
         named[path] = hunks
         if "bytes" not in res or not _supply(worktree_root, path, res, supplied):
             refused.append(path)
-    return refused, ({"foreign_hunks": named} if named else {})
+    reply: dict = {}
+    if named:
+        reply["foreign_hunks"] = named
+    if read_failures:
+        reply["own_split_read_failed"] = read_failures
+    return refused, reply
 
 
 def _land(
@@ -1167,6 +1246,7 @@ def _land(
         foreign_hunks_reply = {
             "foreign_hunks": {**foreign_hunks_reply.get("foreign_hunks", {}), **peer_reply.get("foreign_hunks", {})},
             **({"foreign_hunk_findings": finding_details} if finding_details else {}),
+            **({"own_split_read_failed": peer_reply["own_split_read_failed"]} if "own_split_read_failed" in peer_reply else {}),
         } if (foreign_hunks_reply or peer_reply or finding_details) else {}
         product = [p for p in product if p not in withheld]
     from coordinator_core.ops.dispatch_emit import own_hunk_candidate

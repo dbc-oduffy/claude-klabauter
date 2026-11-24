@@ -30,7 +30,10 @@ from coordinator_core.ops.dispatch_emit.halt_landing import (
 from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import (
     cited_at_or_before,
     landed_met_credit,
+    met_by_paths_at_head_credit,
+    refire_futile_fields,
     CITED_DETAIL_KEY,
+    PATH_CREDIT_DETAIL_KEY,
     verified_post_commit_credit,
 )
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -350,6 +353,12 @@ def _unchanged_since_halt_failures(
             outcome = f"git-exit-{result.returncode}"
     landed = landed_met_credit(worktree_root, items, judged, detail)
     judged = [i for i in judged if i not in landed]
+    if judged and outcome == "unchanged" and paths and (detail is None or CITED_DETAIL_KEY not in detail):
+        probe: dict = {}
+        by_path = met_by_paths_at_head_credit(worktree_root, items, judged, paths, probe)
+        if by_path and detail is not None and probe:
+            detail.update(probe)
+        judged = [i for i in judged if i not in by_path]
     if not judged:
         return []
     if detail is not None:
@@ -622,6 +631,11 @@ def _ledger_gate(
         stale = [*stale, *blocking_rows_downgraded(resume_ledger, result)]
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
+    if result["pass"] and since_halt.get(PATH_CREDIT_DETAIL_KEY) and since_halt.get("landed_sha"):
+        return {
+            "committed": True, "sha": since_halt["landed_sha"], "already_landed": True,
+            "paths": since_halt["landed_paths"], "since_halt": since_halt,
+        }, ledger, []
     if result["pass"]:
         dirt = _pre_existing_dirt_refusal(
             worktree_root, _readable_manifest(manifest_path), verdict, ledger, plan_rel, run_dir
@@ -651,6 +665,7 @@ def _ledger_gate(
         message,
         refused="ledger-unmet",
         ledger_failures=result["failures"],
+        **refire_futile_fields(result["failures"]),
         ledger_items=len(ledger.items),
         all_of_pm_ask=ledger.all_of_pm_ask,
         awaiting_operator=_awaiting_operator(result["open"]),

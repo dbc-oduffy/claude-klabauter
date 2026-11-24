@@ -6,10 +6,12 @@ terminal_commit._unchanged_since_halt_failures each repeat the landing-sha rule 
 cited sha, else base); change both together."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 from coordinator_core.git.run import run_git
+from coordinator_core.ops.dispatch_emit.ask_contract import UNCHANGED_SINCE_HALT_REASON
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import sha_tokens
 
 MAX_CITED: int = 8
@@ -116,6 +118,99 @@ def landed_met_credit(
         return frozenset(rid for rid, sha in cited.items() if sha in changed)
     except Exception:
         return frozenset()
+
+
+PATH_CREDIT_DETAIL_KEY: str = "path_credit"
+_PATH_END = r"(?![\w/-]|\.\w)"
+
+
+def _named_declared(text: str, declared: Sequence[str]) -> list[str]:
+    """The declared paths `text` names, an `@sha` or `:line` suffix after the path ignored."""
+    norm = re.sub(r"(?<![\w.])\./", "", text.replace("\\", "/"))
+    return [
+        p for p in declared
+        if re.search(r"(?<![\w/.-])" + re.escape(p) + _PATH_END, norm)
+    ]
+
+
+def met_by_paths_at_head_credit(
+    root: Path,
+    items: Sequence[object],
+    ids: Iterable[str],
+    declared_paths: Sequence[str],
+    detail: Optional[dict] = None,
+) -> frozenset[str]:
+    """The subset of `ids` whose met verdict item has a met_by naming at least one declared product
+    path, every named path being a file that is tracked and byte-identical between HEAD and the
+    worktree, with a commit at HEAD that last changed them (the landing). Two git spawns over the
+    union of every row's named paths (status, then log), none when no row names a path. When every
+    id is credited, `detail` receives landed_sha, landed_paths, CITED_DETAIL_KEY and
+    PATH_CREDIT_DETAIL_KEY, so `halt_landing.since_halt_close` reads the rows as landed; a partial
+    credit leaves `detail` alone (a row without evidence must not ride another's close). Never
+    raises; a git failure credits nothing."""
+    try:
+        wanted = [str(i) for i in ids]
+        declared = [p for p in dict.fromkeys(declared_paths) if isinstance(p, str) and p]
+        if not wanted or not declared:
+            return frozenset()
+        named: dict[str, list[str]] = {}
+        for item in items:
+            if not isinstance(item, dict) or item.get("status") != "met":
+                continue
+            rid = str(item.get("id"))
+            if rid not in wanted or rid in named:
+                continue
+            met_by = item.get("met_by")
+            text = " ".join(str(m) for m in met_by) if isinstance(met_by, (list, tuple)) else str(met_by or "")
+            hit = _named_declared(text, declared)
+            if hit:
+                named[rid] = hit
+        union = sorted({p for hits in named.values() for p in hits})
+        if not union:
+            return frozenset()
+        cwd = str(root)
+        status = run_git(
+            ["--no-optional-locks", "--literal-pathspecs", "status", "--porcelain", "-z",
+             "--untracked-files=all", "--ignored=matching", "--", *union],
+            cwd=cwd,
+        )
+        if status.returncode != 0:
+            return frozenset()
+        dirty = {
+            entry[3:].replace("\\", "/") for entry in status.stdout.split("\0") if len(entry) > 3
+        }
+        clean = {
+            p for p in union
+            if p not in dirty and ((Path(root) / p).is_file() or (Path(root) / p).is_symlink())
+        }
+        credited_rows = {rid: hits for rid, hits in named.items() if all(p in clean for p in hits)}
+        paths = sorted({p for hits in credited_rows.values() for p in hits})
+        if not paths:
+            return frozenset()
+        log = run_git(
+            ["--literal-pathspecs", "log", "-1", "--format=%H", "HEAD", "--", *paths], cwd=cwd,
+        )
+        sha = log.stdout.strip()
+        if log.returncode != 0 or len(sha) != 40:
+            return frozenset()
+        if isinstance(detail, dict) and set(credited_rows) == set(wanted):
+            detail.setdefault("landed_sha", sha)
+            detail.setdefault("landed_paths", paths)
+            cited = detail.setdefault(CITED_DETAIL_KEY, {})
+            for rid in credited_rows:
+                cited.setdefault(rid, sha)
+            detail[PATH_CREDIT_DETAIL_KEY] = {rid: sha for rid in credited_rows}
+        return frozenset(credited_rows)
+    except Exception:
+        return frozenset()
+
+
+def refire_futile_fields(failures: Sequence[object]) -> dict:
+    """`{"refire_futile": True}` when every ledger failure is the unchanged-since-halt refusal (a refire
+    reproduces it), else `{}`; spread into the refused reply."""
+    if failures and all(isinstance(f, dict) and f.get("reason") == UNCHANGED_SINCE_HALT_REASON for f in failures):
+        return {"refire_futile": True}
+    return {}
 
 
 def verified_post_commit_credit(

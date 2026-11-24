@@ -93,6 +93,48 @@ def test_an_ssh_failure_is_missing_at_the_ssh_hop_and_every_missing_box_is_named
     assert "mini" in err and "example-fleet" in err
 
 
+TIMEOUT_ERR = b"ssh: connect to host 192.168.0.116 port 22: Connection timed out"
+
+
+def _flaky_ssh(failures, stderr=TIMEOUT_ERR):
+    calls = []
+
+    def run_ssh(member, key, command):
+        calls.append(command)
+        if len(calls) <= failures:
+            return subprocess.CompletedProcess([command], 255, b"", stderr)
+        return subprocess.CompletedProcess([command], 0, b"sent", b"")
+    return run_ssh, calls
+
+
+def test_one_ssh_connect_timeout_is_retried_once_and_noted_on_the_box_line():
+    run_ssh, calls = _flaky_ssh(1)
+    out = io.StringIO()
+    missing = gate.run_gate([{"box": "mini"}], ("n", SID), run_ssh=run_ssh, route_for=route, out=out,
+                            fetch_receipts=lambda s, t: [{"digest": "d"}] if len(calls) > 1 else [])
+    assert missing == [] and len(calls) == 2
+    assert out.getvalue().strip() == f"mini: arrived ({gate.RETRY_NOTE})"
+
+
+def test_a_box_that_times_out_twice_still_fails_after_exactly_one_retry():
+    run_ssh, calls = _flaky_ssh(5)
+    out = io.StringIO()
+    missing = gate.run_gate([{"box": "mini"}], ("n", SID), run_ssh=run_ssh, route_for=route, out=out,
+                            fetch_receipts=lambda s, t: [])
+    assert missing == ["mini"] and len(calls) == 2
+    assert "mini: missing (hop ssh: " in out.getvalue() and gate.RETRY_NOTE in out.getvalue()
+
+
+@pytest.mark.parametrize("stderr", [b"Connection refused", b"TimeoutExpired: timed out after 60 seconds",
+                                    b"Permission denied (publickey)"])
+def test_only_an_ssh_connect_timeout_is_retried(stderr):
+    run_ssh, calls = _flaky_ssh(5, stderr)
+    _, status, hop, detail = gate.probe_box({"box": "mini"}, ("n", SID), run_ssh=run_ssh,
+                                            fetch_receipts=lambda s, t: [], key="k")
+    assert (status, hop, len(calls)) == (gate.MISSING, "ssh", 1)
+    assert gate.RETRY_NOTE not in detail
+
+
 @pytest.mark.parametrize("member_box,label", [("Machine-b", "machine-b"), ("Mac-mini", "mac-mini")])
 def test_deployed_relay_shaped_rows_arrive_for_a_mixed_case_member(member_box, label):
     deployed = {"session": SID, "digest": "probe-d", "at": 100.0, "box": "machine-a", "ref": "n.machine-a",

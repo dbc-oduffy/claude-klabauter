@@ -1392,6 +1392,15 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     # measure. See `_CALLER_CWD_FIELD` in coordinator_core.ipc for the reader.
     msg["_caller_cwd"] = cwd
     if args.op == "proc.stop_own_child":
+        # Trap: caller_session_id is trusted by the ledger and environment admissions, so it is
+        # stamped from the real caller's identity, never taken from client params.
+        from coordinator_core.session.core import resolve_session_id as _resolve_sid
+
+        _caller_sid = _resolve_sid()
+        if _caller_sid:
+            params["caller_session_id"] = _caller_sid
+        else:
+            params.pop("caller_session_id", None)
         # Trap: the engine may be warm in another process; only the client knows the worker chain.
         if allow_warm:
             params["caller_pid"] = os.getpid()

@@ -433,6 +433,23 @@ _CONFTEST_LOAD_RE = re.compile(r"^ImportError while loading conftest '.+'\.?$", 
 _CONFTEST_SPAN_LINES = 30
 
 
+_RAISED_RE = re.compile(r"^E\s+([A-Za-z_][\w.]*(?:Error|Exception|Exit|Warning))\b")
+
+
+def _raised_class(span: Sequence[str]) -> str:
+    """The exception class of the last `E   <Class>: ...` line of a traceback span, `""` when none: the class
+    the traceback raised, whatever header pytest framed it under (`ImportError while importing test module`
+    heads an `AttributeError` raised at import time)."""
+    found = [m.group(1) for m in map(_RAISED_RE.match, span) if m]
+    return found[-1] if found else ""
+
+
+def _setup_text(parts: Sequence[str], span: Sequence[str]) -> str:
+    raised = _raised_class(span)
+    lead = f"raised {raised} | " if raised else ""
+    return "first setup ERROR: " + (lead + " | ".join(ln.strip() for ln in parts))[:_OUTPUT_TAIL]
+
+
 def _conftest_load_error(output: str) -> str:
     """The `ImportError while loading conftest '<path>'` header and its first `E` cause lines (pytest exit 4, no
     `ERROR collecting` section), naming the conftest that zeroed the run; `""` when `output` holds none."""
@@ -441,7 +458,7 @@ def _conftest_load_error(output: str) -> str:
         return ""
     span = output[head.start():].splitlines()[:_CONFTEST_SPAN_LINES]
     cause = [ln for ln in span[1:] if ln.startswith("E ")][:_SETUP_CAUSE_LINES]
-    return "first setup ERROR: " + " | ".join(ln.strip() for ln in (span[0], *cause))[:_OUTPUT_TAIL]
+    return _setup_text((span[0], *cause), span)
 
 
 def first_setup_error(output: str) -> str:
@@ -455,7 +472,7 @@ def first_setup_error(output: str) -> str:
     end = _SECTION_END_RE.search(output, start.end())
     section = output[start.start():end.start() if end else len(output)].strip().splitlines()
     cause = [ln for ln in section[_SETUP_HEAD_LINES:] if ln.startswith("E ")][:_SETUP_CAUSE_LINES]
-    return "first setup ERROR: " + " | ".join(ln.strip() for ln in (*section[:_SETUP_HEAD_LINES], *cause))[:_OUTPUT_TAIL]
+    return _setup_text((*section[:_SETUP_HEAD_LINES], *cause), section)
 
 
 #: Zero-run cause for a pytest run whose every outcome is a setup error (no test completed): the harness, not a test, failed.

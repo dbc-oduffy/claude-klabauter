@@ -17,6 +17,7 @@ from coordinator_core.ops.baton_close_report_contract import (
     ConflictNote,
     Evidence,
     EvidenceClass,
+    NoEvidenceReason,
     ResidueReason,
     Verdict,
 )
@@ -144,7 +145,9 @@ def decide(
     has_live_successor: bool,
     state_refusal: str | None = None,
 ) -> tuple:
-    """Return ("closable", evidence, conflict), ("residue", reason, evidence, conflict) or ("no_evidence",).
+    """Return ("closable", evidence, conflict), ("residue", reason, evidence, conflict) or ("no_evidence", reason).
+
+    A no_evidence `reason` is NoEvidenceReason nothing_cited or targets_not_done.
 
     `conflict` is a ConflictNote when done and contradicting evidence coexist, else None.
     Precedence: nothing cited, claimed-with-done (not when every run naming the baton has
@@ -157,7 +160,7 @@ def decide(
     done one.
     """
     if not evidence:
-        return (Verdict.NO_EVIDENCE.value,)
+        return (Verdict.NO_EVIDENCE.value, NoEvidenceReason.NOTHING_CITED.value)
     kinds = [_kind(e) for e in evidence]
     any_done = "done" in kinds
     conflict = _conflict_note(evidence, kinds) if any_done and "contradicts" in kinds else None
@@ -187,4 +190,4 @@ def decide(
         return (Verdict.RESIDUE.value, ResidueReason.TARGET_UNSTATUSED.value, evidence, None)
     if "missing" in kinds:
         return (Verdict.RESIDUE.value, ResidueReason.TARGET_MISSING.value, evidence, None)
-    return (Verdict.NO_EVIDENCE.value,)
+    return (Verdict.NO_EVIDENCE.value, NoEvidenceReason.TARGETS_NOT_DONE.value)

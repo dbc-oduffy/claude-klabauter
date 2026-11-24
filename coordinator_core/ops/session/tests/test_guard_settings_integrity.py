@@ -443,3 +443,27 @@ def test_flat_mirror_install_is_silent_even_with_unreachable_key(tmp_path):
     _write_settings(config_dir, {"coordinator-claude@local": True})
 
     assert evaluate_settings_integrity(config_dir) == ""
+
+
+@pytest.mark.parametrize(
+    "command, expected",
+    [
+        ('python3 "/opt/bh/hooks/scripts/r.py"', "/opt/bh/hooks/scripts/r.py"),
+        ("python3 'C:/a b/hooks/scripts/r.py' --x", "C:/a b/hooks/scripts/r.py"),
+        ("python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/r.py --x", "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/r.py"),
+        ("python3 /abs/hooks/scripts/r.py", "/abs/hooks/scripts/r.py"),
+    ],
+)
+def test_extract_script_token_strips_quotes_keeps_absolute(command, expected):
+    assert _gsi._extract_script_token(command) == expected
+
+
+def test_quoted_absolute_script_resolves_unmangled_and_stays_absolute(tmp_path):
+    script = tmp_path / "hooks" / "scripts" / "r.py"
+    token = _gsi._extract_script_token(f'python3 "{script}"')
+    assert token == str(script)
+    resolved = _gsi._resolve_script_token(token, None)
+    assert resolved == script and resolved.is_absolute()
+    key_map = _gsi._tail_keys_map([f'python3 "{script}"'], None)
+    assert key_map == {"scripts/r.py": {str(script.resolve())}}
+    assert '"' not in next(iter(key_map["scripts/r.py"]))

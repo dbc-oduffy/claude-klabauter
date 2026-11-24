@@ -210,14 +210,14 @@
       "timeout_s": 30.0
     },
     {
-      "description": "Report closable batons, residue and the no-evidence count for one repo.\n\nOptional param `handoff` (repo-relative path) narrows the report to that one baton.\nReturns {exit_code, schema_version, op, batons_scanned, no_evidence, closable, residue,\nscan_incomplete}; `scan_incomplete` is true when the handoffs directory is missing.",
+      "description": "Report closable batons, residue and the no-evidence batons for one repo.\n\nOptional param `handoff` (repo-relative path) narrows the report to that one baton.\nReturns {exit_code, schema_version, op, batons_scanned, no_evidence, no_evidence_batons,\nclosable, residue, scan_incomplete}; `no_evidence_batons` names each no-evidence baton with\na reason (nothing_cited, targets_not_done or acs_all_ticked) and `no_evidence` is its length;\n`scan_incomplete` is true when the handoffs directory is missing.",
       "module": "coordinator_core.ops.baton_close_report",
       "name": "baton.close_report",
       "op_class": "compute_only",
       "params_schema": {
         "type": "object"
       },
-      "summary": "Report closable batons, residue and the no-evidence count for one repo.",
+      "summary": "Report closable batons, residue and the no-evidence batons for one repo.",
       "timeout_s": 30.0
     },
     {

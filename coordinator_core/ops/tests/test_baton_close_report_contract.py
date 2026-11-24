@@ -15,8 +15,9 @@ def test_op_key_and_version():
 
 def test_evidence_class_members():
     assert {m.value for m in c.EvidenceClass} == {
-        "plan", "sizing", "roadmap", "goal", "successor", "run",
+        "plan", "sizing", "roadmap", "goal", "successor", "run", "ac_list",
     }
+    assert (c.AC_LIST_FIELD, c.AC_LIST_ALL_TICKED) == ("baton.acs", "all_ticked")
 
 
 def test_run_constants_and_conflict_note():
@@ -45,6 +46,17 @@ def test_ship_ref_and_deployment_state_are_optional_keys():
     assert "ship_ref" in c.Evidence.__optional_keys__
     assert "NotRequired[" in str(c.BatonHeader.__annotations__["deployment_state"])
     assert "ship_ref" in c.EVIDENCE_KEYS and "deployment_state" in c.HEADER_KEYS
+
+
+def test_no_evidence_reason_members_and_item_shape():
+    assert {m.value for m in c.NoEvidenceReason} == {
+        "nothing_cited", "targets_not_done", "acs_all_ticked",
+    }
+    assert set(c.NoEvidenceItem.__annotations__) == {
+        "handoff_path", "reason", "evidence", "conflict", "detail",
+    }
+    assert "no_evidence_batons" in c.REPORT_KEYS
+    assert c.REPORT_KEYS.index("no_evidence_batons") == c.REPORT_KEYS.index("no_evidence") + 1
 
 
 def test_verdict_members():

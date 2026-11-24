@@ -1996,11 +1996,18 @@ def _unchanged_since_halt(
                 if landed:
                     detail["landed_sha"] = landed
                     detail["landed_paths"] = list(paths)
-    from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import landed_met_credit
+    from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import (
+        CITED_DETAIL_KEY,
+        landed_met_credit,
+        met_by_paths_at_head_credit,
+    )
 
     if not exclude:  # a footprint breach is dirty work: a cited commit never credits it
         landed = landed_met_credit(root, items, judged, detail)
         judged = [i for i in judged if i not in landed]
+        if judged and paths and outcome == "unchanged" and CITED_DETAIL_KEY not in detail:
+            # Rows stay refused here: with detail filled, since_halt_close turns them into the close.
+            met_by_paths_at_head_credit(root, items, judged, paths, detail)
     if not judged:
         return []
     detail.update(base=base, base_source=source if base else None, outcome=outcome)
@@ -2103,6 +2110,7 @@ def _ledger_gate(
     halt. A run emitted without a ledger is not gated. ``recovery_reasons`` is ``{chunk: reason}`` of the
     chunks ``recovery.json`` backs (``_recovery_backing``): they extend ``gated`` and their open rows carry
     that reason. ``advisories`` (out-param) receives the judge's ignored-verdict-id advisory line."""
+    from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import refire_futile_fields
     from coordinator_core.ops.dispatch_emit import requirements_ledger
     from coordinator_core.ops.dispatch_emit.engine_owned_rows import routed_roots
 
@@ -2288,6 +2296,7 @@ def _ledger_gate(
             {"id": r["id"], "row": r["row"], "command": r["command"]} for r in result["open"] if "command" in r
         ],
         **({"since_halt": since_halt} if since_halt else {}),
+        **refire_futile_fields(result["failures"]),
     ), ledger, []
 
 
