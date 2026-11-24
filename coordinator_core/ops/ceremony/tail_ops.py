@@ -393,7 +393,6 @@ def fire_tracker_and_roadmap_detached(
           store -- reuses `detached_spawn.spawn_detached` verbatim (C5 remit).
     """
     result: TailResult = _empty_result()
-    bin_dir = Path(worktree_root, "coordinator", "bin")
     repo_root_str = str(worktree_root)
 
     roadmap_ids = _consumed_handoff_roadmap_ids(worktree_root, consumed_handoff_paths)
@@ -401,7 +400,8 @@ def fire_tracker_and_roadmap_detached(
         result["skipped"].append(f"detached_fire:{_ROADMAP_CALLOUT_CLI_SCRIPT}:no-roadmap-id")
     if roadmap_ids:
         # One spawn for all ids: the CLI takes many ids, so spawn count is O(1) in N.
-        callout_script = str(bin_dir / _ROADMAP_CALLOUT_CLI_SCRIPT)
+        # Repo-relative: spawn_detached prefers the engine's own copy of the script.
+        callout_script = f"coordinator/bin/{_ROADMAP_CALLOUT_CLI_SCRIPT}"
         spawned = spawn_detached(
             repo_root_str, callout_script, ["--root", repo_root_str, *roadmap_ids]
         )

@@ -20,8 +20,9 @@ restores bytes older than HEAD. With no HEAD the baseline is always the snapshot
 anchor tree is unreadable, revert mode returns ``error`` and writes nothing (fail closed); list mode
 keeps the snapshot baseline and adds ``"head_unreadable": true``.
 
-List mode (no ``failing``): ``{"edited", "created", "foreign", "outside_declared", "owned", "tripwires",
-"tripwires_not_selected", "notice", "snapshot", "error"}``,
+List mode (no ``failing``): ``{"edited", "created", "foreign", "outside_declared", "scope_files", "owned",
+"tripwires", "tripwires_not_selected", "notice", "snapshot", "error"}`` (``scope_files``: the snapshot manifest's
+files, the prep's frozen review scope),
 plus ``head_unreadable`` when applicable. When review changed nothing (``edited`` and ``created`` both
 empty), they are derived from the run diff instead: manifest paths whose bytes differ from the ``base``
 commit's blob (``edited``) or that base lacks (``created``), using HEAD instead for paths moved
@@ -203,7 +204,7 @@ def _rerun_alone(repo_root: Path, ids: List[str]) -> List[str]:
     from coordinator_core.ops import test_leg_run
 
     try:
-        rc, lines, _stderr, _stdout = test_leg_run._pytest(runnable, str(repo_root), _FLAKY_RERUN_BUDGET_S)
+        rc, lines = test_leg_run._pytest(runnable, str(repo_root), _FLAKY_RERUN_BUDGET_S)
     except Exception:  # noqa: BLE001 -- unmeasured is not flaky
         return []
     if rc not in (0, 1):
@@ -313,6 +314,44 @@ def _created(
     else:
         outside_sink.extend(sorted(outside))
     return sorted(out), sorted(foreign)
+
+
+_PRE_REVIEW_SUFFIX = ".pre-review"
+
+
+def own_written_paths(repo_root: Path, run_id: str, base: Optional[str], sessions: List[str]) -> List[str]:
+    """Sorted paths the run's own review prep snapshots classify as its own writes (``_created``'s ``created``
+    plus ``outside_declared``) over every run-mode snapshot of ``run_id`` in each of ``sessions``' share dirs:
+    the canonical prefix for ``base``, plus any ``manifest-<run id>-*-prep`` snapshot. A sibling-declared or
+    foreign path is never here. Spawn-free; an unreadable snapshot or record contributes nothing, and a
+    path escaping the worktree empties the answer."""
+    from coordinator_core.ops.review_slice_id import RUN_PREP_PLAN_STEM, run_prep_slice_prefix
+
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "-", run_id)
+    found: Set[str] = set()
+    for session in sorted({s for s in sessions if s}):
+        if "/" in session or "\\" in session or ".." in session:
+            continue
+        share = Path(share_dir(str(repo_root), session))
+        snapshots: Dict[Path, str] = {}
+        if base:
+            prefix = run_prep_slice_prefix(run_id, base)
+            snapshots[pre_review_dir(share, prefix)] = prefix
+        try:
+            for snap in share.glob(f"{RUN_PREP_PLAN_STEM}-{safe}-*-prep{_PRE_REVIEW_SUFFIX}"):
+                snapshots.setdefault(snap, snap.name[: -len(_PRE_REVIEW_SUFFIX)])
+        except OSError:
+            pass
+        for snap, prefix in snapshots.items():
+            manifest = _read_manifest(snap)
+            if manifest is None:
+                continue
+            outside: List[str] = []
+            created, _foreign = _created(repo_root, session, manifest, share, prefix, outside_sink=outside)
+            found.update(created)
+            found.update(outside)
+    rels = sorted(found)
+    return rels if _contained(repo_root, rels) else []
 
 
 def _run_agents(
@@ -1053,6 +1092,7 @@ def review_reverify(
             "created": created,
             "foreign": foreign,
             "outside_declared": outside,
+            "scope_files": sorted(set(rels)),
             "owned": picked["owned"],
             "tripwires": picked["tripwires"],
             "tripwires_not_selected": picked["tripwires_not_selected"],

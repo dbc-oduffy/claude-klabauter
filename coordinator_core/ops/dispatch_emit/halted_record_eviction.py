@@ -148,6 +148,12 @@ class TreeEviction:
     def evicted(self) -> list:
         return sorted(p for p in self.head_blobs if p not in self.refused)
 
+    @property
+    def unimportable(self) -> list:
+        """Evicted paths the halt import check judged broken (withheld ``EVICTED_NOT_IMPORTABLE``):
+        a reply diagnostic read by ``land_run_halt`` and ``halted_record_commit``."""
+        return sorted(p for p in self.evicted if (self.withheld or {}).get(p) == EVICTED_NOT_IMPORTABLE)
+
     def kept_view(self, withheld: dict) -> dict:
         """``withheld`` with each evicted path back at its pre-eviction reason, so a kept chunk stays kept."""
         return {**withheld, **self.origin}

@@ -119,7 +119,11 @@ def test_three_file_absence_premise(root, sep):
 
 @pytest.mark.parametrize("sep", ["&&", ";"])
 def test_absence_premise_names_missing_file(root, sep):
-    r = evaluate(f"grep -c nomatch a.txt {sep} grep -c nomatch gone.txt", "0 then 0", root)
+    cmd = f"grep -c nomatch a.txt {sep} grep -c nomatch gone.txt"
+    assert evaluate(cmd, "0 then 0", root)["state"] == "MATCH"
+    r = evaluate(cmd, "0 then >=1", root)
+    assert r["state"] == "MISMATCH" and "gone.txt" in r["detail"] and r["observed"] == "0\n0"
+    r = evaluate(cmd, "0", root)
     assert r["state"] == "MISMATCH" and "gone.txt" in r["detail"]
 
 
@@ -154,9 +158,43 @@ def test_file_over_one_mib_is_evaluated(root):
     assert not hasattr(_anchor_check, "MAX_BYTES")
 
 
-def test_missing_file_is_mismatch(root):
-    r = evaluate("grep -c foo nope.txt", "0", root)
-    assert r["state"] == "MISMATCH" and r["observed"] == ""
+@pytest.mark.parametrize("cmd", [
+    "grep -c foo nope.txt", "grep -c -F foo nope.txt", "grep -c -E 'foo|bar' nope.txt",
+    'grep -c -e "" nope.txt',
+])
+def test_missing_path_absence_claim_holds(root, cmd):
+    r = evaluate(cmd, "0", root)
+    assert r["state"] == "MATCH" and r["observed"] == "0"
+    assert evaluate(cmd, "<1", root)["state"] == "MATCH"
+
+
+@pytest.mark.parametrize("expect", ["1", ">=1", ">0"])
+def test_missing_path_with_positive_expect_stays_mismatch(root, expect):
+    r = evaluate("grep -c -F foo nope.txt", expect, root)
+    assert r["state"] == "MISMATCH" and "nope.txt" in r["detail"]
+    assert "no such file" in r["detail"]
+
+
+def test_missing_path_at_ref_absence_holds_and_positive_expect_mismatches(root):
+    # The relayed shape: `git grep -c -e "" HEAD -- <missing>` expect 0.
+    cmd = 'git grep -c -e "" HEAD -- gone.py'
+    blobs = {("HEAD", "gone.py"): None}
+    r = evaluate(cmd, "0", root, None, blobs)
+    assert r["state"] == "MATCH" and r["observed"] == "0"
+    r = evaluate(cmd, ">=1", root, None, blobs)
+    assert r["state"] == "MISMATCH" and "no such file at HEAD: gone.py" in r["detail"]
+
+
+def test_ref_less_git_grep_stays_not_evaluable_and_grammar_teaches_the_form(root):
+    cmd = "git grep -c PAT -- a.txt"
+    r = evaluate(cmd, "0", root)
+    assert r["state"] == "NOT_EVALUABLE" and "<ref> -- <path>" in r["detail"]
+    assert _anchor_check.evaluable(cmd) is not None
+    assert _anchor_check.evaluable("git grep -c PAT HEAD -- a.txt") is None
+    assert _anchor_check.evaluable("grep -c -F PAT a.txt") is None
+    g = _anchor_check.GRAMMAR
+    assert "grep -c [-F|-E] PAT FILE" in g and "REF -- FILE" in g and "expect 0" in g
+    assert "\n" not in g
 
 
 @pytest.mark.parametrize(
@@ -269,6 +307,31 @@ def test_evaluable_accepts_grep_stages():
 def test_evaluable_refuses_with_detail():
     assert _anchor_check.evaluable("ls -d bin | wc -l") == "unsupported shell operator '|'"
     assert _anchor_check.evaluable("wc -l x") == "only grep stages are evaluable"
+
+
+@pytest.mark.parametrize(
+    "cmd,want",
+    [
+        ("grep -c a...b f", "a...b"),
+        ("grep -c -E a...b f", "a...b"),
+        ("grep -ci a...b f", "a...b"),
+        ("git grep -c a...b HEAD -- f", "a...b"),
+        ("grep -c -e ok -e x...y f", "x...y"),
+        ("grep -c ok f && grep -c a...b g", "a...b"),
+        ("grep -c a....b f", "a....b"),
+        ("grep -c -F a...b f", None),
+        ("grep -c 'a\\.\\.\\.b' f", None),
+        ('grep -c "a\\.\\.\\.b" f', None),
+        ("grep -c 'a\\...b' f", None),
+        ("grep -c a\\.\\.\\.b f", "a...b"),
+        ("grep -c a.*b f", None),
+        ("grep -c a..b f", None),
+        ("grep -c -F -e a...b f", None),
+        ("find . | wc -l", None),
+    ],
+)
+def test_elided_pattern(cmd, want):
+    assert _anchor_check.elided_pattern(cmd) == want
 
 
 def test_grammar_names_grep_c():

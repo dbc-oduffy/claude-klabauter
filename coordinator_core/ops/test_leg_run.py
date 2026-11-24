@@ -102,13 +102,50 @@ def _python(root: Path) -> str:
     return pyresolve.pytest_python(root)
 
 
-def _live_only(root: Path, dest: Path, targets: Sequence[str]) -> list[str]:
-    """Repo-relative file parts of `targets` that are files in the live `root` but absent from the mirror `dest`:
-    an untracked file the run wrote, which a HEAD mirror cannot hold until it is overlaid."""
+def _declared_writes(root: Path, run_id: Optional[str]) -> list[str]:
+    """The paths the run's own manifest declares writing (row writes, doc writes, write baseline); empty with no
+    `run_id` or an unreadable manifest, so a peer's file the manifest does not name never reaches the mirror."""
+    if not run_id:
+        return []
+    try:
+        from coordinator_core.ops.dispatch_emit import stranded_sibling
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+        from coordinator_core.ops.dispatch_emit.halted_record_request import _manifest_doc
+
+        return sorted(stranded_sibling._declared_paths(_manifest_doc(record_dir(root, run_id))))
+    except (OSError, ValueError):
+        return []
+
+
+def _declared_overlay(root: Path, run_id: Optional[str]) -> tuple[list[str], dict[str, bytes]]:
+    """`(paths, overrides)` the mirror carries for the run: its declared writes plus its own written paths
+    (`cov.own_delta`), each at its worktree bytes, and a path a live peer run also declared at HEAD plus only
+    this run's own hunks (`overrides`). A shared path with no splittable own hunks is left out, so it stays at
+    HEAD, never with the peer's hunks. Empty with no `run_id` or an unreadable delta."""
+    if not run_id:
+        return [], {}
+    try:
+        from coordinator_core.ops.dispatch_emit import review_edits
+
+        paths, overrides = cov.own_delta(root, run_id, _declared_writes(root, run_id))
+        sibling = {review_edits.norm(p) for p in review_edits.live_sibling_declared(root, run_id)}
+    except Exception:  # noqa: BLE001 -- the overlay only widens the mirror; an unreadable delta leaves HEAD
+        return [], {}
+    kept = [p for p in dict.fromkeys(paths) if review_edits.norm(p) not in sibling or p in overrides]
+    return kept, dict(overrides)
+
+
+def _live_only(root: Path, dest: Path, targets: Sequence[str], declared: Sequence[str] = ()) -> list[str]:
+    """Repo-relative file parts of `targets`, then the run's `declared` writes, that are files in the live `root`
+    but absent from the mirror `dest`: an untracked file the run wrote (a test or the source module it imports),
+    which a HEAD mirror cannot hold until it is overlaid."""
     out: dict[str, None] = {}
     for t in targets:
         path = _file_part(t)
         if path and not t.startswith("-") and (root / path).is_file() and not (dest / path).exists():
+            out[path] = None
+    for path in declared:
+        if path and not path.startswith("-") and (root / path).is_file() and not (dest / path).exists():
             out[path] = None
     return list(out)
 
@@ -453,7 +490,7 @@ def _can_reconcile_reds(rc: int, lines: Sequence[str]) -> bool:
 
 
 def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], post_rev: str, root: Path,
-               left) -> dict:
+               left, run_id: Optional[str] = None) -> dict:
     """The new-red verdict: touched-file tests, `targets` and the direct importers of each touched module run in
     the shared-clone mirror at `post_rev`; the red ids, normalized by `failing_ids`, are re-run at `base_sha` in
     the same mirror. `new_red` is red post-land and not red at base; an unmeasured base excuses nothing.
@@ -461,10 +498,11 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
     run_holder = None
     with cov._mirror_lock(root, "test-leg-run") as mroot:
         post = cov._commit_sha(root, post_rev)
-        dest = cov._prepare_guarded(root, mroot, post, cov._no_leg)
+        owned, overrides = _declared_overlay(root, run_id)
+        dest = cov._prepare_guarded(root, mroot, post, cov._no_leg, owned, None, overrides or None)
         live = _live_only(root, dest, targets)
         if live:
-            dest = cov._prepare_guarded(root, mroot, post, cov._no_leg, live)
+            dest = cov._prepare_guarded(root, mroot, post, cov._no_leg, [*owned, *live], None, overrides or None)
         rels = [t.replace("\\", "/") for t in touched]
         own = [t for t in rels if cov._is_test_path(t) and (dest / t).is_file()]
         targets, not_a_test = _split_not_a_test(targets, dest)
@@ -666,7 +704,7 @@ def _run_blob_paths(root: Path, exclude: str, run_id: Optional[str] = None) -> l
 
 
 def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], result: dict,
-              run_id: Optional[str] = None, targets: Sequence[str] = ()) -> str:
+              run_id: Optional[str] = None, targets: Sequence[str] = (), declared_run: Optional[str] = None) -> str:
     """The directory the no-touched leg runs pytest in: the shared-clone mirror at `head_sha` (default HEAD) plus
     the run-owned blobs, held under `stack`, so another session's uncommitted edit in `root` never reaches the
     verdict. A non-git `root` has no foreign dirt to exclude and runs in place; a mirror that cannot be prepared
@@ -677,12 +715,13 @@ def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], 
     try:
         mroot = stack.enter_context(cov._mirror_lock(root, "test-leg-run"))
         sha = cov._commit_sha(root, head_sha or "HEAD")
-        overlay = _run_blob_paths(root, "", run_id)
-        dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay)
+        owned, overrides = _declared_overlay(root, declared_run)
+        overlay = list(dict.fromkeys([*_run_blob_paths(root, "", run_id), *owned]))
+        dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay, None, overrides or None)
         live = _live_only(root, dest, targets)
         if live:
             overlay = [*overlay, *live]
-            dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay)
+            dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay, None, overrides or None)
     except (cov.ExportError, OSError, ValueError, subprocess.SubprocessError) as exc:
         stack.close()
         result["own_tree_skipped"] = f"{type(exc).__name__}: {exc}"[:300]
@@ -694,7 +733,7 @@ def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], 
 
 
 def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[str], root: Path, left,
-                      run_id: Optional[str] = None) -> None:
+                      run_id: Optional[str] = None, declared_run: Optional[str] = None) -> None:
     """A zero-run caused by an import error in a file no run owns says nothing about the run's own change: re-run
     `targets` on the `base_sha` export overlaid with the run-owned blobs (the foreign file at its base bytes) and
     fold that verdict into `result`. Any failure to measure there keeps the cwd verdict, noted as
@@ -707,13 +746,14 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
     try:
         if left() <= 0:
             raise subprocess.TimeoutExpired("pytest", 0)
-        overlay = _run_blob_paths(root, err["path"], run_id)
+        owned, overrides = _declared_overlay(root, declared_run)
+        overlay = list(dict.fromkeys([*_run_blob_paths(root, err["path"], run_id), *(p for p in owned if p != err["path"])]))
         with cov._mirror_lock(root, "test-leg-run") as mroot:
             base_rev = cov._commit_sha(root, base_sha)
-            dest = cov._prepare_guarded(root, mroot, base_rev, cov._no_leg, overlay)
+            dest = cov._prepare_guarded(root, mroot, base_rev, cov._no_leg, overlay, None, overrides or None)
             live = _live_only(root, dest, targets)
             if live:
-                dest = cov._prepare_guarded(root, mroot, base_rev, cov._no_leg, [*overlay, *live])
+                dest = cov._prepare_guarded(root, mroot, base_rev, cov._no_leg, [*overlay, *live], None, overrides or None)
             present, _absent = _partition(targets, dest)
             if not present:
                 return
@@ -761,11 +801,13 @@ def _stamp_slow(result: dict, slow: list[dict]) -> None:
 
 def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         base_export_out: Optional[str], budget_s: float, cwd: str, touched: Sequence[str] = (),
-        run_id: Optional[str] = None) -> dict:
+        run_id: Optional[str] = None, declared_run: Optional[str] = None) -> dict:
     """The `test`-shaped verdict for `targets`; `over_budget` true when the deadline expired. With `touched`
     (the landing's changed paths) the leg runs in the shared-clone mirror instead of `cwd` and adds `new_red`,
     `importer_targets`, `targets_run`; `head_sha` is then the post-land rev (default HEAD). `run_id` limits the run-owned overlay to that run's
-    record; None overlays every run record."""
+    record; None overlays every run record. The untracked paths the manifest of `declared_run` (default `run_id`)
+    declares are overlaid too, sources and tests alike."""
+    decl = declared_run or run_id
     started = time.monotonic()
     _LEG_ROOT[:] = [Path(cwd)]
     _RAN_PY.clear()
@@ -782,7 +824,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
     try:
         if touched:
             try:
-                result.update(_clone_leg(list(targets), list(touched), base_sha, head_sha or "HEAD", Path(cwd), left))
+                result.update(_clone_leg(
+                    list(targets), list(touched), base_sha, head_sha or "HEAD", Path(cwd), left, decl))
             except cov.ExportError as exc:
                 result["summary"] = f"clone unavailable: {exc}"
                 result["failing_detail"] = [{"node_id": "test_leg_run", "message": result["summary"]}]
@@ -794,7 +837,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
             return result
-        run_cwd = _own_tree(stack, Path(cwd), head_sha, result, run_id, targets)
+        run_cwd = _own_tree(stack, Path(cwd), head_sha, result, run_id, targets, decl)
         targets, result["not_a_test"] = _split_not_a_test(targets, Path(run_cwd))
         if not targets:
             _tally(result, 5, ())
@@ -868,7 +911,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         if result.get(IMPORT_ERROR_KEY):
             _own_import_error(result, Path(cwd))
             if "own_tree" not in result:
-                _overlay_fallback(result, present, base_sha, Path(cwd), left, run_id)
+                _overlay_fallback(result, present, base_sha, Path(cwd), left, run_id, decl)
     except subprocess.TimeoutExpired as exc:
         result["status_after"] = "fail"
         credit = getattr(exc, "credit", None)
@@ -953,6 +996,15 @@ def _run_id(args) -> Optional[str]:
     return out_dir.name if (out_dir / stranded_sibling.TOUCHED_FILE).is_file() else None
 
 
+def _declared_run(args) -> Optional[str]:
+    """The run whose manifest declares the writes the overlay carries: `--run-id`, else the `--out` directory's
+    name when it holds a manifest. Kept apart from `_run_id`, which also narrows the recorded-blob overlay."""
+    if args.run_id:
+        return args.run_id
+    out_dir = Path(args.out).resolve().parent
+    return out_dir.name if (out_dir / "manifest.json").is_file() else None
+
+
 def main(argv: list[str]) -> int:
     argv = list(argv)
     if "--" not in argv:
@@ -993,7 +1045,7 @@ def main(argv: list[str]) -> int:
         return EXIT_USAGE
     result = run(targets, base_sha=args.base_sha, head_sha=args.head_sha,
                  base_export_out=args.base_export_out, budget_s=budget_s, cwd=cwd, touched=args.touched,
-                 run_id=_run_id(args))
+                 run_id=_run_id(args), declared_run=_declared_run(args))
     if derived:
         result["derived_targets"] = targets
     body = json.dumps(result)

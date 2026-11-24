@@ -416,6 +416,14 @@ def _ledger_rows(text: str) -> list:
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
 
+def _slash_path(path: str) -> str:
+    """``path`` with forward slashes and no leading ``./``: the key form a pin and a ledger row share."""
+    norm = path.replace("\\", "/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    return norm
+
+
 def _applied_fix_rows(text: str) -> list:
     """``[(file, row)]`` for each verified ledger row whose status is ``applied`` (a row with no
     status is applied) and that changed text. A ``handed-to-em``, ``open``, rejected or suspended
@@ -428,7 +436,7 @@ def _applied_fix_rows(text: str) -> list:
             continue
         f = row.get("file")
         if isinstance(f, str) and f:
-            out.append((f.replace("\\", "/"), row))
+            out.append((_slash_path(f), row))
     return out
 
 
@@ -439,7 +447,7 @@ def _applied_row_paths(text: str) -> list:
     for row in _ledger_rows(text):
         f = row.get("file")
         if row.get("verified") is True and (row.get("status") or "applied") == "applied" and isinstance(f, str) and f:
-            out.append(f.replace("\\", "/"))
+            out.append(_slash_path(f))
     return out
 
 
@@ -640,7 +648,7 @@ def verdict_judged_shas(worktree_root: Path, inline_review: object) -> dict:
 def _worktree_relative(worktree_root: Path, path: str) -> str:
     """``path`` as a forward-slash worktree-relative key; an absolute path under the root is
     relativised, any other path is only slash-normalised."""
-    norm = path.replace("\\", "/")
+    norm = _slash_path(path)
     root = str(worktree_root).replace("\\", "/").rstrip("/")
     if norm.lower().startswith(root.lower() + "/"):
         return norm[len(root) + 1:]
@@ -881,10 +889,10 @@ def _carries_applied_fix(target: Path, rows: Sequence) -> bool:
         body = target.read_bytes().decode("utf-8").replace("\r\n", "\n")
     except (OSError, UnicodeDecodeError):
         return False
-    for before, after in rows:
-        after, before = after.replace("\r\n", "\n"), before.replace("\r\n", "\n")
+    norm = [(b.replace("\r\n", "\n"), a.replace("\r\n", "\n")) for b, a in rows]
+    for i, (before, after) in enumerate(norm):
         if after:
-            if after not in body:
+            if after not in body and not any(after in later for later, _ in norm[i + 1:]):
                 return False
         elif before in body:
             return False

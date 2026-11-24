@@ -26,14 +26,14 @@ import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Callable, Collection, ContextManager, Iterator, Optional, Sequence
+from typing import Callable, Collection, ContextManager, Iterator, Mapping, Optional, Sequence
 
 from coordinator_core import temp_layout
 from coordinator_core.git.run import _git_exe, run_git
 from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
-from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, _fallback_candidates, _imports_pytest, resolve_test_runner_python
+from coordinator_core.ops.dispatch_emit.interpreter_pin import REMEDY, SOURCE_KEY, resolve_test_runner_python
 from coordinator_core.session.record_homes import home_rel
 from coordinator_core.testing import scoped_pytest, spawn_depth
 from coordinator_core.win_portability import no_console_creationflags
@@ -263,19 +263,12 @@ def _run(
 
 
 def _gate_python(root: Path) -> str:
-    """The interpreter the repo's test gate pins (same ladder as `retest_targeted`), read from the live
-    repo's coordinator.local.md; `sys.executable` when none is pinned or the pin does not resolve.
-    `verify` never reaches the unresolved-pin fallback: it returns an environment defect first.
-    Trap: under the pythonw engine `sys.executable` is windowless; a windowless pytest hands its own
-    children invalid std handles (WinError 6 on any test that spawns git), so the console sibling runs it."""
-    from coordinator_core.pyresolve import _console_sibling
+    """The interpreter the repo's test gate pins (same ladder as `retest_targeted`), via the shared
+    `coordinator_core.pyresolve.pytest_python` the review test leg also uses.
+    `verify` never reaches the unresolved-pin fallback: it returns an environment defect first."""
+    from coordinator_core.pyresolve import pytest_python
 
-    pin = resolve_test_runner_python(root)
-    if pin.command and pin.defect is None:
-        return pin.command
-    own = _console_sibling(sys.executable) or sys.executable
-    # An unpinned repo skips the pin's pytest probe; the engine's own interpreter may lack pytest.
-    return own if _imports_pytest(own) else next((c for c in _fallback_candidates() if _imports_pytest(c)), own)
+    return pytest_python(root)
 
 
 ENV_DEFECT = "environment_defect"
@@ -816,6 +809,14 @@ def _ls_tree(dest: Path, sha: str, paths: Sequence[str]) -> list:
     return found
 
 
+def _raw_checkout_env() -> dict:
+    """The environment a mirror checkout runs in: `core.autocrlf=false`, so a HEAD-seeded path lands as its raw
+    blob bytes (LF), never through the box's checkout smudge, matching the override and overlay writes."""
+    raw = os.environ.get("GIT_CONFIG_COUNT", "0") or "0"
+    n = int(raw) if raw.isdigit() else 0
+    return {**os.environ, "GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "core.autocrlf", f"GIT_CONFIG_VALUE_{n}": "false"}
+
+
 def _stage_and_write(dest: Path, put: Sequence[tuple]) -> None:
     """Index `put` (`(path, mode, oid)`) by `update-index --index-info` and write them by `checkout-index`:
     two spawns, whatever the count. A directory or file in a path's way is removed first."""
@@ -834,7 +835,7 @@ def _stage_and_write(dest: Path, put: Sequence[tuple]) -> None:
                 break
             if anc.is_file():
                 anc.unlink()
-    _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, budget, stdin_text="".join(f"{p}\0" for p in names)))
+    _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, budget, _raw_checkout_env(), "".join(f"{p}\0" for p in names)))
 
 
 def _fill(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str]] = None) -> int:
@@ -848,7 +849,7 @@ def _fill(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str]] 
         _stage_and_write(dest, put)
         _state_write(mroot, sha, frozenset(closure))
         return len(put)
-    out = _run([_git_exe(), "read-tree", "-m", "-u", sha], dest, export_step_timeout_s())
+    out = _run([_git_exe(), "read-tree", "-m", "-u", sha], dest, export_step_timeout_s(), _raw_checkout_env())
     if out.returncode:
         raise ExportError(f"overlay checkout failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}")
     listing = _run([_git_exe(), "ls-tree", "-r", "--name-only", "-z", sha], dest, export_step_timeout_s())
@@ -925,7 +926,7 @@ def _apply_diff(dest: Path, raw: str, closure: Optional[Collection[str]] = None)
                 if anc.is_file():
                     anc.unlink()
         if shown:
-            _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, export_step_timeout_s(len(shown)), stdin_text="".join(f"{p}\0" for p in shown)))
+            _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, export_step_timeout_s(len(shown)), _raw_checkout_env(), "".join(f"{p}\0" for p in shown)))
     return [*gone, *(p for p, _, _ in put)]
 
 
@@ -953,7 +954,7 @@ def _advance(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str
     if names is None:
         if closure is not None:
             raise _MirrorStale(f"non-plain-file change {old[:12]}..{sha[:12]} in a scoped mirror")
-        moved = _run([_git_exe(), "read-tree", "-m", "-u", old, sha], dest, export_step_timeout_s())
+        moved = _run([_git_exe(), "read-tree", "-m", "-u", old, sha], dest, export_step_timeout_s(), _raw_checkout_env())
         if moved.returncode:
             raise _MirrorStale(f"read-tree {old[:12]}..{sha[:12]} failed: {moved.stderr.strip()[-_OUTPUT_TAIL:]}")
         names = [t for t in diff.stdout.split("\0") if t and not t.startswith(":")]
@@ -1007,9 +1008,10 @@ def _expand_dirs(root: Path, rels: Sequence[str]) -> tuple:
 
 def _overlay(
     root: Path, dest: Path, mroot: Path, sha: str, rels: Sequence[str],
-    closure: Optional[Collection[str]] = None,
+    closure: Optional[Collection[str]] = None, overrides: Optional[Mapping[str, bytes]] = None,
 ) -> tuple:
-    """Put the worktree bytes of each declared path of `root` into the mirror, staging only the paths whose bytes
+    """Put the worktree bytes of each declared path of `root` into the mirror (a path in `overrides` takes those
+    bytes instead: HEAD plus the run's own hunks), staging only the paths whose bytes
     differ (a path absent from the worktree is a deletion); nothing else of the worktree is read. On a full
     mirror, paths under its sparse-excluded trees are skipped. Returns `(paths written, the mirror's new tree
     sha)`; no write leaves the state at `sha`. A scoped mirror's recorded tree holds only its closure, which
@@ -1019,7 +1021,11 @@ def _overlay(
         if closure is None and rel.startswith(_SPARSE_EXCLUDE):
             continue
         src, out = root / rel, dest / rel
-        if src.is_file():
+        if overrides and rel in overrides:
+            data = overrides[rel]
+            if not (out.is_file() and out.read_bytes() == data):
+                todo.append((rel, data))
+        elif src.is_file():
             data = src.read_bytes()
             if not (out.is_file() and out.read_bytes() == data):
                 todo.append((rel, data))
@@ -1150,8 +1156,9 @@ def _reject_removed_imports(
 
 def _prepare(
     root: Path, mroot: Path, sha: str, leg: LegHook, overlay: Sequence[str] = (), closure: Optional[Collection[str]] = None,
+    overrides: Optional[Mapping[str, bytes]] = None,
 ) -> Path:
-    """The mirror worktree at commit `sha` plus the `overlay` paths' worktree bytes, under the held lock. A first
+    """The mirror worktree at commit `sha` plus the `overlay` paths' worktree bytes (`overrides` bytes where given), under the held lock. A first
     use clones (leg "clone") and fills; later uses advance by `_advance` (leg "checkout", which also covers the
     overlay and reports `files_written`). A `closure` scopes the mirror to those tracked paths: a cold fill and a
     warm advance write only them, a warm mirror missing some of them gains them (`_extend`), and a full mirror
@@ -1176,7 +1183,7 @@ def _prepare(
                     written = _advance(dest, mroot, sha, have) + _extend(dest, mroot, sha, have, closure)
                 at = sha
                 if overlay:
-                    wrote, at = _overlay(root, dest, mroot, sha, overlay, closure)
+                    wrote, at = _overlay(root, dest, mroot, sha, overlay, closure, overrides)
                     written += wrote
                 _note(extra, files_written=written)
         except _MirrorStale as exc:
@@ -1191,11 +1198,12 @@ def _prepare(
 
 def _prepare_guarded(
     root: Path, mroot: Path, sha: str, leg: LegHook, overlay: Sequence[str] = (), closure: Optional[Collection[str]] = None,
+    overrides: Optional[Mapping[str, bytes]] = None,
 ) -> Path:
     """`_prepare` with a timeout or OS failure named as an `ExportError`."""
     try:
         _check_overlay_imports(root, overlay)
-        return _prepare(root, mroot, sha, leg, overlay, closure)
+        return _prepare(root, mroot, sha, leg, overlay, closure, overrides)
     except subprocess.TimeoutExpired as exc:
         raise ExportError(
             f"clean export timed out after {_timeout_text(exc)} ({EXPORT_TIMEOUT_ENV} sets the step budget): {exc}"
@@ -1249,8 +1257,10 @@ def _seed_data(root: Path, seeds: Sequence[str]) -> frozenset:
 @contextmanager
 def clean_export(
     root: Path, run_id: str, paths: Sequence[str], leg: LegHook = _no_leg, argv: Sequence[str] = (),
+    overrides: Optional[Mapping[str, bytes]] = None,
 ) -> Iterator[Path]:
-    """Yield the mirror worktree at HEAD plus the worktree bytes of the declared `paths` only, never any other
+    """Yield the mirror worktree at HEAD plus the worktree bytes of the declared `paths` only (`overrides` bytes
+    for a path shared with a peer), never any other
     worktree dirt: a peer's dirty file exports at its HEAD bytes. A dirty Python overlay needing a name absent from that HEAD copy raises `CoTenantDependency`. With the test command
     `argv` the worktree holds only that command's test closure (see `_closure_for`); without it, every tracked
     path. The mirror lock is held until the `with` exits; the mirror persists. Raises `ExportError` (a timeout
@@ -1258,7 +1268,7 @@ def clean_export(
     rels = _expand_dirs(root, _declared(paths))
     closure = _closure_for(root, rels, argv)
     with _mirror_lock(root, f"clean-export {run_id}") as mroot:
-        yield _prepare_guarded(root, mroot, _commit_sha(root, "HEAD"), leg, rels, closure)
+        yield _prepare_guarded(root, mroot, _commit_sha(root, "HEAD"), leg, rels, closure, overrides)
 
 
 def _head_sources(root: Path, rels: Collection[str]) -> dict[str, Optional[bytes]]:
@@ -1402,14 +1412,16 @@ def collect_startup_s() -> float:
     return _positive_env_float(COLLECT_STARTUP_ENV) or float(PYTEST_STARTUP_S)
 
 
-def run_in_export(root: Path, run_id: str, paths: Sequence[str], argv: Sequence[str]) -> subprocess.CompletedProcess:
+def run_in_export(
+    root: Path, run_id: str, paths: Sequence[str], argv: Sequence[str], overrides: Optional[Mapping[str, bytes]] = None,
+) -> subprocess.CompletedProcess:
     """Run `argv` in the clean export of `paths` (cwd and PYTHONPATH the mirror) under the mirror lock; the lock
     is held across the command. `ExportError` when the export fails; `PytestStalled` (a `TimeoutExpired`) after
     `export_run_stall_s()` of silence.
 
     Trap: no total wall. A flat cap halted every run whose test leg is legitimately longer (example-game-repo 2da5dc needs
     ~660s); the stall watchdog fails only a command that stops making progress."""
-    with clean_export(root, run_id, paths, argv=argv) as dest:
+    with clean_export(root, run_id, paths, argv=argv, overrides=overrides) as dest:
         return _run(list(argv), dest, None, env=_mirror_env(dict(os.environ), dest), stall_s=export_run_stall_s())
 
 
@@ -2230,6 +2242,74 @@ def _manifest_declared_paths(manifest: Path) -> Optional[list]:
     return declared
 
 
+def _own_written(root: Path, run_id: str) -> list:
+    """The paths the run's own review agents wrote that `review_reverify` classes as own (`created`,
+    `outside_declared`), read from the run's pre-review snapshots; [] when no session or snapshot answers."""
+    from coordinator_core.ops import review_reverify
+    from coordinator_core.ops.dispatch_emit import land_run
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import pinned_run_base
+    from coordinator_core.session.core import resolve_session_id
+
+    sessions = land_run._firing_sessions(root, run_id, resolve_session_id(str(root)) or None)
+    return review_reverify.own_written_paths(root, run_id, pinned_run_base(root, run_id), sorted(sessions))
+
+
+def own_hunk_overrides(root: Path, run_id: str, paths: Sequence[str]) -> dict:
+    """`{path: bytes}` of HEAD plus only the run's own hunks, for each of `paths` whose worktree also carries a
+    peer's hunks (`checkpoint_hunks.checkpoint_own_blobs`). A path it cannot split, or wholly the run's own, is
+    absent. Never raises: an unreadable blob or attribution leaves the path out."""
+    if not paths:
+        return {}
+    try:
+        from coordinator_core.git.checkpoint_hunks import checkpoint_own_blobs
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.git.git_objects import read_object
+
+        blobs, _withheld = checkpoint_own_blobs(root, run_id, list(paths))
+        common = resolve_git_common_dir(root)
+        out: dict = {}
+        for rel, sha in blobs.items():
+            obj = read_object(common, sha)
+            if obj is not None and obj[0] == "blob":
+                out[rel] = obj[1]
+        return out
+    except Exception as exc:  # noqa: BLE001 -- an unsplit path falls back to its HEAD bytes
+        print(f"[clean-export] advisory: own hunks not split ({type(exc).__name__}: {exc})", file=sys.stderr)
+        return {}
+
+
+def own_delta(root: Path, run_id: str, seed: Sequence[str]) -> tuple:
+    """`(paths, overrides)`: `seed` plus the run's own delta it lacks (the manifest's `review_declared_paths`
+    and `_own_written`), and `{path: bytes}` for each of those paths another live run also declared, at HEAD
+    plus only the run's own hunks (`own_hunk_overrides`). Such an added path with no splittable own hunks is
+    left out, so it reaches the mirror at HEAD; a shared `seed` path with none stays and reaches it at its
+    worktree bytes, peer hunks included. Every other path reaches the mirror at its
+    worktree bytes, so a test the run created or a symbol it added is there when the command collects. Never
+    raises: an own-write set that cannot be read leaves `seed` as it was, with an advisory."""
+    from coordinator_core.ops.dispatch_emit import review_edits
+
+    have = {review_edits.norm(p) for p in seed}
+    try:
+        manifest = _manifest_declared_paths(measured_rev_record_path(root, run_id).with_name("manifest.json")) or []
+        extra = [p for p in (*manifest, *_own_written(root, run_id)) if review_edits.norm(p) not in have]
+        if not extra and not seed:
+            return list(seed), {}
+        sibling = {review_edits.norm(p) for p in review_edits.live_sibling_declared(root, run_id)}
+    except Exception as exc:  # the own delta only widens the seed; an unreadable source never refuses the export
+        print(f"[clean-export] advisory: run's own delta not read ({type(exc).__name__}: {exc}); declared paths only", file=sys.stderr)
+        return list(seed), {}
+    wanted = list(dict.fromkeys(review_edits.norm(p) for p in extra))
+    shared = [p for p in (*(review_edits.norm(s) for s in seed), *wanted) if p in sibling]
+    split = own_hunk_overrides(root, run_id, list(dict.fromkeys(shared)))
+    kept = [p for p in wanted if p not in sibling or p in split]
+    return [*seed, *kept], {p: split[p] for p in dict.fromkeys(shared) if p in split}
+
+
+def run_own_delta(root: Path, run_id: str, seed: Sequence[str]) -> list:
+    """The paths of `own_delta`: `seed` plus the run's own delta it lacks."""
+    return own_delta(root, run_id, seed)[0]
+
+
 def live_seeds(root: Path, seeds: Sequence[str], base_sha: Optional[str]) -> list:
     """`seeds` without the files the run deleted (in `base_sha`'s tree, gone from `root`'s worktree, not
     renamed): a deleted test file is no seed. A seed absent for any other reason stays, so its absence is judged."""
@@ -2248,7 +2328,8 @@ def live_seeds(root: Path, seeds: Sequence[str], base_sha: Optional[str]) -> lis
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Verify-stage entry: read the run's `measured-rev.json`, run the overlay over the landing set's test
     seeds and write the verdict. Exit 0 on green, 1 on red, 2 when inconclusive or unmeasured.
-    `--export-run -- <argv>` instead runs `argv` in the clean export (HEAD plus the run's declared paths) under
+    `--export-run -- <argv>` instead runs `argv` in the clean export (HEAD plus the run's own delta: its
+    declared paths and the own-written paths `run_own_delta` adds, never a peer's declared path) under
     the mirror lock and exits with its status; a failed export or a timed-out command exits 2 with the cause
     on stderr."""
     from coordinator_core.ops.dispatch_emit.landing_reach import seeds_for_landing
@@ -2288,7 +2369,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     paths = measured.get("paths") or []
     if args.export_run:
         try:
-            ran = run_in_export(root, args.run_id, paths, command)
+            delta, overrides = own_delta(root, args.run_id, paths)
+            ran = run_in_export(root, args.run_id, delta, command, overrides)
         except CoTenantDependency as exc:
             from coordinator_core.ops.dispatch_emit import co_tenant_owner
 

@@ -20,8 +20,8 @@ Wire params:
                                tree (precedence: a git-grep stage's own ref > a claim's
                                ``baseline_ref`` > this). Absent, the newest ``base_ref.json`` run
                                marker of the plan's ``sizing_object`` applies (written by
-                               ``workflow.revise base_ref``); neither, the tree is read. The reply
-                               carries ``anchor_base_ref: {ref, source: param|run}`` when one applies.
+                               ``workflow.revise base_ref``); neither, ``HEAD`` is read. The reply
+                               carries ``anchor_base_ref: {ref, source: param|run|head}`` when anchors exist.
     premise  (object, optional) — {rows: [{verdict, citation, ...}]}; verdict is RESOLVES |
                                   UNRESOLVED | CONTRADICTED | UNCHECKABLE. Only UNRESOLVED and
                                   CONTRADICTED rows pull; UNCHECKABLE is a note on a ready reply.
@@ -412,6 +412,9 @@ _REGISTER_APPLIER_KINDS = frozenset({REGISTER_ROWS_UNCLAIMED_KIND, _premise_repa
 MAJOR_FINDING_KIND = "major-finding-needs-fix-row"
 
 
+_ANCHOR_FIX_KIND = "anchor-check-corrected"  # == plan_apply_mechanical_repairs.REPAIR_ANCHOR_CHECK
+
+
 def _repair(kind: str, target: str, instruction: str) -> dict:
     return {"kind": kind[:100], "target": target[:300], "instruction": instruction[:_INSTRUCTION_MAX]}
 
@@ -580,7 +583,8 @@ def readiness_verdict(
     if prep_gate.get("verdict") not in _PREP_VERDICTS_COMPUTED:
         substantive.append(f"prep gate verdict {prep_gate.get('verdict')}")
     for name, cls in (prep_gate.get("classes") or {}).items():
-        if cls.get("status") == "PASS":
+        # ANCHOR repairs are offered once, by the anchor-premise lane below (which validates them).
+        if cls.get("status") == "PASS" or name == "ANCHOR":
             continue
         if cls.get("mechanical") and cls.get("repair"):
             repairs.append(_repair(str(cls.get("kind") or name), name, cls["repair"]))
@@ -745,6 +749,11 @@ def readiness_verdict(
     if engine_checked:
         notes.append(f"{engine_checked} anchor premise(s) resolved by in-process check")
     unevaluable = _anchor_premise.unevaluable_anchors(anchor_verdicts or []) + refused
+    cause = (
+        "; " + "; ".join(f"anchor {i} not evaluable: {d[:120]}" for i, d in unevaluable)
+        if unevaluable and not checker_ran
+        else ""
+    )
     if unevaluable and checker_ran:
         notes.append(
             "anchor check not evaluable in-process, not blocking (premise-checker ran, no blocking row): "
@@ -754,8 +763,11 @@ def readiness_verdict(
         for anchor_id, detail in unevaluable:
             repairs.append(_repair(
                 "anchor-check-not-evaluable", anchor_id,
-                f"rewrite anchor {anchor_id}'s check in the in-process form ({_anchor_check.GRAMMAR}); "
-                f"it was not evaluable: {detail[:200]}",
+                f"rewrite anchor {anchor_id}'s check in the in-process form ({_anchor_check.GRAMMAR}) and "
+                f"apply it as repair kind {_ANCHOR_FIX_KIND} (target, command); a command the engine "
+                "cannot run is skipped, not written, and this anchor is offered again. A git grep stage "
+                "ends `<ref> -- <path>` (never ref-less); an absence claim is expect 0. "
+                f"It was not evaluable: {detail[:200]}",
             ))
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
@@ -785,10 +797,10 @@ def readiness_verdict(
         reason = "prep gate failure needs judgment: " + "; ".join(substantive)
     elif judgment:
         verdict, pull_class, repairs = "judgment", "none", []
-        reason = counts + "; ".join(judgment)
+        reason = counts + "; ".join(judgment) + cause
     elif repairs:
         verdict, pull_class = "pulled", "mechanical"
-        reason = f"{len(repairs)} mechanical repair(s) apply in one revise"
+        reason = f"{len(repairs)} mechanical repair(s) apply in one revise" + cause
     else:
         verdict, pull_class = "ready", "none"
         blocking_findings = advisory_findings = 0
@@ -812,11 +824,12 @@ def readiness_verdict(
 
 def _resolve_base_ref(param: Any, root: Path, sizing_rel: Any) -> Optional[dict]:
     """``{ref, source}`` for the ref anchor checks read: the ``base_ref`` param (source ``param``), else
-    the newest run marker of the plan's sizing (source ``run``); None reads the tree. No git spawn."""
+    the newest run marker of the plan's sizing (source ``run``), else ``HEAD`` (source ``head``): the live
+    tree is never read as landed. No git spawn."""
     if isinstance(param, str) and param.strip():
         return {"ref": param.strip(), "source": "param"}
     marked = ask_contract.run_base_ref(root, sizing_rel)
-    return {"ref": marked, "source": "run"} if marked else None
+    return {"ref": marked, "source": "run"} if marked else {"ref": "HEAD", "source": "head"}
 
 
 _ANCHOR_FINDING = re.compile(r"anchor-premise-[A-Za-z]+: (\S+) -- ")

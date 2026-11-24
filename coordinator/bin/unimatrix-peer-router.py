@@ -138,6 +138,27 @@ def _contract():
     return _core_module("protocol")
 
 
+def _box_id_aliases(row) -> list:
+    """`<stem>.<box id>` for a far mirror whose label is not the box id (an address label such as
+    `name.192-168-0-192`), so `<name>.machine-a` reaches it. Empty for a row with no far markers or box."""
+    if not isinstance(row, dict) or not any(row.get(k) for k in ("unimatrixRemote", "macSocketPath", "unimatrixBox", "unimatrixFarName")):
+        return []
+    own = row.get("name")
+    if not isinstance(own, str) or "." not in own:
+        return []
+    stem = own.partition(".")[0]
+    far = row.get("unimatrixFarName")
+    stems = {stem, *([far.partition(".")[0]] if isinstance(far, str) and far else [])}
+    boxes = set()
+    for key in ("unimatrixBox", "box", "unimatrixRemote"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            boxid = _contract().box_id(value)
+            if boxid and not _contract().is_ip_literal(boxid):
+                boxes.add(boxid)
+    return [f"{s}.{b}" for s in sorted(stems) for b in sorted(boxes)]
+
+
 def _transport():
     """The local transport module (sockets, named pipes, process locks), loaded on first use."""
     return _core_module("transport")
@@ -2189,7 +2210,8 @@ class Router:
                     e = json.load(fh)
             except (OSError, ValueError):
                 continue
-            if (not isinstance(e, dict) or name not in [*_contract().mirror_addresses(e), *_contract().projected_addresses(e)]
+            if (not isinstance(e, dict) or name not in [*_contract().mirror_addresses(e), *_contract().projected_addresses(e),
+                                                        *_box_id_aliases(e)]
                     or name in self.peers or name in self.transport_sources):
                 continue
             ep, pid = e.get("messagingSocketPath"), e.get("pid")

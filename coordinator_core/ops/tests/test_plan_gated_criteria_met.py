@@ -136,6 +136,36 @@ def test_non_ancestor_sha_refused(repo):
         _run(root, [{"brightline": "multi-os-first-class", "evidence": side}])
 
 
+def test_ref_text_evidence_sha_and_path_flip_in_one_call(repo):
+    root, commits = repo
+    sha = _sha(root)
+    r = _run(root, [{"brightline": "multi-os-first-class", "evidence": {"ref": sha[:12], "text": "ran on win and mac"}},
+                    {"brightline": "no-single-machine-assumptions", "evidence": {"ref": "x.txt", "text": "no abs paths"}}])
+    assert r["committed"] and commits == ["docs/plans/p.md"]
+    text = (root / "docs/plans/p.md").read_text()
+    assert text.count("met: true") == 2 and "met: false" not in text
+    assert f"{sha[:12]} — ran on win and mac" in text and "x.txt — no abs paths" in text
+    again = _run(root, [{"brightline": "multi-os-first-class", "evidence": {"ref": sha[:12], "text": "ran on win and mac"}}])
+    assert again["changed"] == [] and len(commits) == 1
+
+
+@pytest.mark.parametrize("ev", [
+    {"ref": "missing.txt", "text": "why"},
+    {"ref": "deadbeefdeadbeef", "text": "why"},
+    {"ref": "x.txt", "text": ""},
+    {"ref": "x.txt", "text": "   "},
+    {"ref": "", "text": "why"},
+    {"ref": "x.txt"},
+    {"text": "why"},
+    {"ref": "x.txt", "text": "y" * 1100},
+])
+def test_bad_ref_text_evidence_refused_nothing_written(repo, ev):
+    root, commits = repo
+    with pytest.raises(ValueError):
+        _run(root, [{"brightline": "multi-os-first-class", "evidence": ev}])
+    assert (root / "docs/plans/p.md").read_text() == PLAN and not commits
+
+
 def test_idempotent_rerun_writes_and_commits_nothing(repo):
     root, commits = repo
     rows = [{"brightline": "multi-os-first-class", "evidence": "x.txt"}]

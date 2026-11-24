@@ -240,7 +240,7 @@ def _stamp_coded_commit(
         message += "\n\narchived (moved under archive/): " + ", ".join(archive_deleted)
     if trailers:
         message += "\n\n" + "\n".join(trailers)
-    params: dict = {"paths": paths, "message": message}
+    params: dict = {"paths": paths, "message": message, "drop_ignored": True}
     if archive_deleted:
         params["deleted_paths"] = archive_deleted
     if snapshot is not None and not uncovered:
@@ -271,7 +271,9 @@ def _stamp_coded_commit(
         if overlap:
             lead = f"retry: ref moved onto a stamped path ({overlap}); "
         return {"coded_stamp_error": f"{lead}coded-stamp commit did not land: {detail!r}"}
-    out = {"rows_coded": rows_coded, "coded_sha": reply.get("sha"), "_committed": paths, **lost_receipt}
+    left_out = {str(p).replace("\\", "/") for p in reply.get("dropped_ignored") or ()}
+    carried = [p for p in paths if p.replace("\\", "/") not in left_out]
+    out = {"rows_coded": rows_coded, "coded_sha": reply.get("sha"), "_committed": carried, **lost_receipt}
     if flip_result is not None:
         out["_flip"] = flip_result
     if archived:

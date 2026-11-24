@@ -123,7 +123,7 @@ def _argv_env_flags(repo_root: str, script: str, **kw):
 def test_site_free_off_keeps_argv_and_env(repo_root: str, existing_script: str) -> None:
     argv, env, _, _ = _argv_env_flags(repo_root, existing_script)
     assert argv == [detached_spawn._resolve_python_exe(), str(Path(repo_root) / existing_script), "a"]
-    assert env["PYTHONPATH"].split(os.pathsep)[0] == repo_root
+    assert env["PYTHONPATH"].split(os.pathsep)[:2] == [detached_spawn._ENGINE_ROOT, repo_root]
 
 
 def test_site_free_on_adds_S_and_purelib_but_not_I(repo_root: str, existing_script: str) -> None:
@@ -134,7 +134,7 @@ def test_site_free_on_adds_S_and_purelib_but_not_I(repo_root: str, existing_scri
     assert argv[1] == "-S" and "-I" not in argv
     assert (flags, nss) == (off[2], off[3])
     parts = env["PYTHONPATH"].split(os.pathsep)
-    assert parts[0] == repo_root
+    assert parts[:2] == [detached_spawn._ENGINE_ROOT, repo_root]
     assert sysconfig.get_paths()["purelib"] in parts
 
 
@@ -207,19 +207,58 @@ def test_resolves_script_against_repo_root_not_caller_cwd(
 
 
 def test_child_env_carries_repo_root_on_pythonpath(repo_root: str, existing_script: str) -> None:
-    """THE OTHER HALF of the fix -- `_child_env`'s own docstring: resolving
-    the script path alone still imports the WRONG `coordinator_core` inside
-    the child (confirmed live against this box's ambient editable-install
-    pin). `PYTHONPATH` must carry `repo_root` PREPENDED, not merely present,
-    ahead of anything the parent process already had set."""
+    """`PYTHONPATH` carries the engine root first, then `repo_root`, then whatever the
+    parent already had set."""
     with mock.patch.dict(detached_spawn.os.environ, {"PYTHONPATH": "/pre-existing"}, clear=False), \
          mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
         detached_spawn.spawn_detached(repo_root, existing_script)
 
     _, kwargs = mock_popen.call_args
-    pythonpath = kwargs["env"]["PYTHONPATH"]
-    assert pythonpath.startswith(repo_root)
-    assert "/pre-existing" in pythonpath
+    assert kwargs["env"]["PYTHONPATH"].split(os.pathsep) == [
+        detached_spawn._ENGINE_ROOT, repo_root, "/pre-existing"
+    ]
+    assert kwargs["cwd"] == repo_root
+
+
+def test_engine_root_as_repo_root_is_not_duplicated(existing_script: str) -> None:
+    with mock.patch.dict(detached_spawn.os.environ, {"PYTHONPATH": ""}, clear=False), \
+         mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
+        detached_spawn.spawn_detached(detached_spawn._ENGINE_ROOT, str(Path(__file__).resolve()))
+
+    assert mock_popen.call_args[1]["env"]["PYTHONPATH"] == detached_spawn._ENGINE_ROOT
+
+
+def test_served_repo_lacking_an_engine_symbol_cannot_shadow_the_engine(tmp_path: Path) -> None:
+    """Guard: a served tree whose `coordinator_core` lacks a symbol the engine needs
+    (the half-edited `stage_family_binding` witness) must not be what the child imports."""
+    shadow = tmp_path / "coordinator_core" / "ops" / "ceremony"
+    shadow.mkdir(parents=True)
+    for pkg in (tmp_path / "coordinator_core", tmp_path / "coordinator_core" / "ops", shadow):
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (shadow / "detached_spawn.py").write_text("# lacks spawn_detached\n", encoding="utf-8")
+    # Outside the served root: a script's own directory is sys.path[0] and would win by itself.
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "probe.py"
+    script.write_text(
+        "import sys\n"
+        "from coordinator_core.ops.ceremony import detached_spawn as m\n"
+        "open(sys.argv[1], 'w').write('ok' if hasattr(m, 'spawn_detached') else 'shadowed')\n",
+        encoding="utf-8",
+    )
+    marker = tmp_path / "marker"
+    real_popen = subprocess.Popen
+    procs: list = []
+
+    def capture(*a, **k):
+        p = real_popen(*a, **k)
+        procs.append(p)
+        return p
+
+    with mock.patch.object(detached_spawn.subprocess, "Popen", side_effect=capture):
+        assert detached_spawn.spawn_detached(str(tmp_path), str(script), [str(marker)])
+    assert procs[0].wait(timeout=60) == 0
+    assert marker.read_text() == "ok"
 
 
 def test_hook_scoped_boot_wait_is_scrubbed_from_the_child(
@@ -278,7 +317,7 @@ def test_pytest_markers_are_scrubbed_from_the_child(
     assert env["SOME_UNRELATED_VAR"] == "keep-me"
     assert parent_value == "9"
 
-def test_divergent_live_tree_override_is_pinned_to_repo_root(
+def test_divergent_live_tree_override_is_pinned_to_engine_root(
     repo_root: str, existing_script: str, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     other = str(tmp_path_factory.mktemp("other-tree"))
@@ -290,20 +329,20 @@ def test_divergent_live_tree_override_is_pinned_to_repo_root(
         detached_spawn.spawn_detached(repo_root, existing_script)
 
     env = mock_popen.call_args.kwargs["env"]
-    assert env["COORDINATOR_ENGINE_ROOT"] == repo_root
+    assert env["COORDINATOR_ENGINE_ROOT"] == detached_spawn._ENGINE_ROOT
 
 
 def test_matching_or_unset_engine_root_is_left_alone(
     repo_root: str, existing_script: str
 ) -> None:
     with mock.patch.dict(
-        detached_spawn.os.environ, {"COORDINATOR_ENGINE_ROOT": repo_root}, clear=False
+        detached_spawn.os.environ, {"COORDINATOR_ENGINE_ROOT": detached_spawn._ENGINE_ROOT}, clear=False
     ), mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
         os_environ = detached_spawn.os.environ
         os_environ.pop("CLAUDE_KLABAUTER_ROOT", None)
         detached_spawn.spawn_detached(repo_root, existing_script)
     env = mock_popen.call_args.kwargs["env"]
-    assert env["COORDINATOR_ENGINE_ROOT"] == repo_root
+    assert env["COORDINATOR_ENGINE_ROOT"] == detached_spawn._ENGINE_ROOT
     assert "CLAUDE_KLABAUTER_ROOT" not in env
 
 

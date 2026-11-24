@@ -172,6 +172,32 @@ def test_a_never_reading_pipe_replies_delivered_unconfirmed_through_send_batch(r
     assert reply["ok"] is True and reply["advisory"].startswith("delivered-unconfirmed")
 
 
+def deliveries(relay):
+    return [json.loads(x) for x in relay.deliveries_path().read_text(encoding="utf-8").splitlines()]
+
+
+def test_every_relay_in_row_names_the_sender_box(relay, monkeypatch, capsys):
+    monkeypatch.setitem(relay._PEER, "box", "mini")
+    lines = [b'{"m":"a"}\n', b'{"m":"b"}\n']
+    run_batch(relay, monkeypatch, capsys, lines, lambda p, l: None)
+    got = deliveries(relay)
+    assert [r["sender_box"] for r in got] == ["mini", "mini"]
+
+
+def test_a_refused_target_row_still_names_the_sender_box(relay, monkeypatch):
+    monkeypatch.setitem(relay._PEER, "box", "mini")
+    relay.record_delivery({"ok": False, "error": "target mismatch"})
+    (row,) = deliveries(relay)
+    assert row["sender_box"] == "mini" and "sender_name" in row
+
+
+def test_main_pins_the_forced_commands_peer_as_the_sender_box(relay, monkeypatch, capsys):
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", f"receipts {SID} 0")
+    monkeypatch.setattr(relay.sys, "argv", ["unimatrix-relay.py", "--peer", "mini"])
+    relay.main()
+    assert relay._PEER["box"] == "mini"
+
+
 def test_receipts_mode_returns_the_sessions_rows_since_the_timestamp(relay):
     relay.record_receipt(SID, b"old\n", now=1000)
     relay.record_receipt(SID, b"new\n", now=2000)
@@ -193,6 +219,84 @@ def test_receipts_resolve_by_every_id_the_roster_prints(relay, monkeypatch):
     assert relay.parse_mode("receipts fe.mini 0") == ("receipts", ("fe.mini", 0.0))
     assert relay.parse_mode("receipts 4242 0") == ("receipts", ("4242", 0.0))
     assert "roster prints" in relay.__doc__
+
+
+def test_an_inbound_receipt_names_the_normalised_sender_box_and_the_session(relay):
+    entry = {"sessionId": SID, "name": "fe", "pid": 4242}
+    digest = relay.record_inbound_receipt(entry, b"frame\n", "example-operator@Mac-mini.local")
+    assert digest == hashlib.sha256(b"frame").hexdigest()
+    (row,) = relay.receipts("fe", 0.0)["rows"]
+    assert (row["session"], row["sender_box"], row["pid"], row["digest"]) == (SID, "mac-mini", 4242, digest)
+    assert relay.receipts(SID, 0.0)["rows"] == [row] and relay.receipts("4242", 0.0)["rows"] == [row]
+
+
+def test_an_inbound_receipt_never_raises_and_skips_an_entry_with_no_session(relay, monkeypatch):
+    assert relay.record_inbound_receipt({"pid": 1}, b"x\n", "far") is None
+    assert relay.record_inbound_receipt("not-an-entry", b"x\n", "far") is None
+    assert not relay.receipts_path().exists()
+    monkeypatch.setattr(relay, "record_receipt", lambda *a, **k: (_ for _ in ()).throw(OSError("full")))
+    assert relay.record_inbound_receipt({"sessionId": SID}, b"x\n", "far") is None
+
+
+@pytest.fixture
+def inbox(relay, tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("unimatrix_inbox_receipt_t", BIN / "unimatrix-inbox.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "77.json").write_text(json.dumps({"sessionId": SID, "name": "fe", "pid": 77}), encoding="utf-8")
+    monkeypatch.setattr(mod, "SESSIONS", str(sessions))
+    monkeypatch.setattr(mod, "log", io.StringIO())
+    monkeypatch.setattr(mod, "localize", lambda frame, line, box=None: line)
+    return mod
+
+
+FRAME = {"from": "uds:/far", "message": "m"}
+LINE = json.dumps(FRAME).encode() + b"\n"
+
+
+def test_a_mux_frame_delivered_to_a_local_session_is_receipted_with_its_sender_box(inbox, relay, monkeypatch):
+    monkeypatch.setattr(inbox, "write_local", lambda endpoint, data: None)
+    inbox.deliver_frame(FRAME, LINE, b"", "/ep", "Mac-mini.local", pid=77)
+    (row,) = relay.receipts(SID, 0.0)["rows"]
+    assert row["sender_box"] == "mac-mini" and row["digest"] == hashlib.sha256(LINE.rstrip(b"\n")).hexdigest()
+
+
+def test_a_frame_the_session_refused_leaves_no_receipt_and_still_fails_the_mirror(inbox, relay, monkeypatch):
+    def refuse(endpoint, data):
+        raise OSError("gone")
+
+    failed = []
+    monkeypatch.setattr(inbox, "write_local", refuse)
+    inbox.deliver_frame(FRAME, LINE, b"", "/ep", "Mac-mini.local", on_fail=failed.append, pid=77)
+    assert failed and relay.receipts(SID, 0.0)["rows"] == []
+
+
+def test_a_bridge_handoff_is_receipted_only_when_it_connects(inbox, relay, monkeypatch):
+    import socket as _socket
+    sent = []
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def sendall(self, data):
+            sent.append(data)
+
+    monkeypatch.setattr(inbox.socket, "create_connection", lambda addr: Conn())
+    inbox.deliver_frame(FRAME, LINE, b"", None, "gipsy", pid=77)
+    assert [r["sender_box"] for r in relay.receipts(SID, 0.0)["rows"]] == ["gipsy"] and sent
+
+    def down(addr):
+        raise _socket.error("refused")
+
+    monkeypatch.setattr(inbox.socket, "create_connection", down)
+    inbox.deliver_frame(FRAME, LINE, b"", None, "gipsy", pid=77)
+    assert len(relay.receipts(SID, 0.0)["rows"]) == 1
 
 
 def test_receipts_with_no_file_is_an_empty_ok_reply(relay):

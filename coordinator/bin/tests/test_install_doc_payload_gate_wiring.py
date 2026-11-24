@@ -150,6 +150,90 @@ class TestEndOfRunInstallDocPayloadCheckLeg:
         assert ok is False
 
 
+def _write_link_tree(root: Path, *, ship_directory_md: bool) -> None:
+    (root / ".git").mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        "# Readme\n\nSee [the map](coordinator_core/DIRECTORY.md).\n", encoding="utf-8"
+    )
+    if ship_directory_md:
+        (root / "coordinator_core").mkdir(exist_ok=True)
+        (root / "coordinator_core" / "DIRECTORY.md").write_text("# map\n", encoding="utf-8")
+
+
+def _engine_row(tmp_path: Path, repo_root: Path):
+    src = tmp_path / "engine-src"
+    src.mkdir(exist_ok=True)
+    (src / "DIRECTORY.md").write_text("# map\n", encoding="utf-8")
+    return publish.ResolvedTarget(
+        name="claude-klabauter", mode="mirror", source_dir=src, dest_dir=repo_root / "coordinator_core"
+    )
+
+
+class TestInstallDocSkippedRowAttribution:
+    def test_finding_under_skipped_row_names_that_row(self, tmp_path, capsys):
+        repo_root = tmp_path / "repo"
+        _write_link_tree(repo_root, ship_directory_md=False)
+        row = _engine_row(tmp_path, repo_root)
+
+        ok = publish.dispatch_end_of_run_install_doc_payload_check(
+            [repo_root],
+            target_filtered=False,
+            rows_by_repo_root={repo_root: [row]},
+            skipped_row_names=["claude-klabauter"],
+        )
+        assert ok is False
+        err = capsys.readouterr().err
+        assert "coordinator_core/DIRECTORY.md" in err
+        assert "caused by row 'claude-klabauter'" in err
+
+    def test_unrelated_finding_is_not_attributed_and_still_fails(self, tmp_path, capsys):
+        repo_root = tmp_path / "repo"
+        _write_link_tree(repo_root, ship_directory_md=False)
+        (repo_root / "README.md").write_text(
+            "# Readme\n\nSee [gone](docs/nothing.md).\n", encoding="utf-8"
+        )
+        row = _engine_row(tmp_path, repo_root)
+
+        ok = publish.dispatch_end_of_run_install_doc_payload_check(
+            [repo_root],
+            target_filtered=False,
+            rows_by_repo_root={repo_root: [row]},
+            skipped_row_names=["claude-klabauter"],
+        )
+        assert ok is False
+        err = capsys.readouterr().err
+        assert "docs/nothing.md" in err
+        assert "caused by row" not in err
+
+    def test_row_not_skipped_is_not_blamed(self, tmp_path, capsys):
+        repo_root = tmp_path / "repo"
+        _write_link_tree(repo_root, ship_directory_md=False)
+        row = _engine_row(tmp_path, repo_root)
+
+        ok = publish.dispatch_end_of_run_install_doc_payload_check(
+            [repo_root],
+            target_filtered=False,
+            rows_by_repo_root={repo_root: [row]},
+            skipped_row_names=[],
+        )
+        assert ok is False
+        assert "caused by row" not in capsys.readouterr().err
+
+    def test_all_rows_synced_tree_with_directory_md_passes_clean(self, tmp_path, capsys):
+        repo_root = tmp_path / "repo"
+        _write_link_tree(repo_root, ship_directory_md=True)
+        row = _engine_row(tmp_path, repo_root)
+
+        ok = publish.dispatch_end_of_run_install_doc_payload_check(
+            [repo_root],
+            target_filtered=False,
+            rows_by_repo_root={repo_root: [row]},
+            skipped_row_names=[],
+        )
+        assert ok is True
+        assert capsys.readouterr().err == ""
+
+
 class _StubClaudeKlabauter:
 
     def resolve_target(self, store, name):

@@ -7,6 +7,7 @@ Run (from repo root):
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -187,6 +188,136 @@ def test_crlf_is_kept(repo):
     assert len(out["applied"]) == 2
     raw = plan.read_bytes()
     assert raw.count(b"\r\n") == raw.count(b"\n")
+
+
+_NEEDLE_PATH = "scratch/harness/run_fit.py"
+_ANCHOR_FM = (
+    "anchor_premises:\n"
+    "  - id: P3\n"
+    "    claim: the harness script names the needle\n"
+    '    check: {command: "grep -c -F needle scratch/harness/run_fit.py | wc -l", expect: "1"}\n'
+)
+
+
+def _git_repo(tmp_path: Path) -> Path:
+    """A real repo whose HEAD holds the needle file; the plan written after the commit stays untracked."""
+    (tmp_path / "scratch" / "harness").mkdir(parents=True)
+    (tmp_path / _NEEDLE_PATH).write_text("a needle here\n", encoding="utf-8", newline="\n")
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    for args in (("init", "-q"), ("add", _NEEDLE_PATH), ("commit", "-q", "-m", "base")):
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+            check=True,
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    return tmp_path
+
+
+def _anchor_repair(command: str, **extra) -> dict:
+    return {"kind": "anchor-check-corrected", "target": "P3", "command": command, **extra}
+
+
+def _declared_command(plan: Path) -> str:
+    return _fm(plan)["anchor_premises"][0]["check"]["command"]
+
+
+def test_anchor_check_repair_that_meets_its_expect_lands_on_an_untracked_plan(tmp_path):
+    repo = _git_repo(tmp_path)
+    plan = _seed(repo, _plan(_ANCHOR_FM))
+    command = f'git grep -c -F "needle" HEAD -- {_NEEDLE_PATH}'
+    out = _run(repo, [_anchor_repair(command)])
+    assert out["ok"] is True and out["skipped"] == []
+    assert [a["kind"] for a in out["applied"]] == ["anchor-check-corrected"]
+    assert _declared_command(plan) == command
+    assert _fm(plan)["anchor_premises"][0]["check"]["expect"] == "1"
+    untracked = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "--others", "--exclude-standard", _PLAN_REL],
+        capture_output=True, text=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert untracked.stdout.strip() == _PLAN_REL
+
+
+def test_a_missing_path_cannot_meet_a_presence_expect_and_the_repair_is_rejected(tmp_path):
+    repo = _git_repo(tmp_path)
+    plan = _seed(repo, _plan(_ANCHOR_FM))
+    before = plan.read_bytes()
+    out = _run(repo, [_anchor_repair('git grep -c -e "" HEAD -- scratch/harness/absent_fit.py')])
+    assert out["applied"] == []
+    reason = out["skipped"][0]["reason"]
+    assert "fails its own expect" in reason and "expected 1" in reason
+    assert plan.read_bytes() == before
+
+
+def test_a_missing_path_absence_claim_repair_is_written(tmp_path):
+    repo = _git_repo(tmp_path)
+    fm = _ANCHOR_FM.replace('expect: "1"', 'expect: "0"')
+    plan = _seed(repo, _plan(fm))
+    command = 'git grep -c -e "" HEAD -- scratch/harness/absent_fit.py'
+    out = _run(repo, [_anchor_repair(command)])
+    assert out["skipped"] == [] and [a["kind"] for a in out["applied"]] == ["anchor-check-corrected"]
+    assert _declared_command(plan) == command
+
+
+def test_a_ref_less_git_grep_repair_is_not_written_and_its_refusal_names_the_form(tmp_path):
+    repo = _git_repo(tmp_path)
+    plan = _seed(repo, _plan(_ANCHOR_FM))
+    before = plan.read_bytes()
+    out = _run(repo, [_anchor_repair(f"git grep -c -F needle -- {_NEEDLE_PATH}")])
+    assert out["applied"] == []
+    reason = out["skipped"][0]["reason"]
+    assert "not evaluable in-process" in reason and "<ref> -- <path>" in reason
+    assert "grep -c [-E|-F]" in reason
+    assert plan.read_bytes() == before
+
+
+def test_a_bad_first_repair_does_not_stick_and_a_later_valid_repair_lands(tmp_path):
+    repo = _git_repo(tmp_path)
+    plan = _seed(repo, _plan(_ANCHOR_FM))
+    original = _declared_command(plan)
+    bad = _run(repo, [_anchor_repair(f"git grep -c -F needle -- {_NEEDLE_PATH}")])
+    assert bad["applied"] == [] and _declared_command(plan) == original
+    plain = f"grep -c -F needle {_NEEDLE_PATH}"
+    good = _run(repo, [_anchor_repair(plain)])
+    assert good["skipped"] == [] and _declared_command(plan) == plain
+
+
+def test_a_bad_repair_and_a_valid_repair_in_one_call_land_only_the_valid_one(tmp_path):
+    repo = _git_repo(tmp_path)
+    plan = _seed(repo, _plan(_ANCHOR_FM))
+    good = f'git grep -c -F "needle" HEAD -- {_NEEDLE_PATH}'
+    out = _run(repo, [_anchor_repair(f"git grep -c -F needle -- {_NEEDLE_PATH}"), _anchor_repair(good)])
+    assert len(out["skipped"]) == 1 and len(out["applied"]) == 1
+    assert _declared_command(plan) == good
+
+
+def test_a_repair_with_a_wrong_count_names_the_observed_count(tmp_path):
+    repo = _git_repo(tmp_path)
+    plan = _seed(repo, _plan(_ANCHOR_FM))
+    before = plan.read_bytes()
+    out = _run(repo, [_anchor_repair(f"git grep -c -F absent_text HEAD -- {_NEEDLE_PATH}")])
+    assert out["applied"] == []
+    assert "observed 0, expected 1" in out["skipped"][0]["reason"]
+    assert plan.read_bytes() == before
+
+
+def test_a_repair_the_shell_free_runner_cannot_run_is_rejected_with_its_cause(tmp_path):
+    repo = _git_repo(tmp_path)
+    plan = _seed(repo, _plan(_ANCHOR_FM))
+    before = plan.read_bytes()
+    out = _run(repo, [_anchor_repair(f"git rev-list --count HEAD -- {_NEEDLE_PATH} | wc -l")])
+    assert out["applied"] == []
+    assert "unsupported shell operator '|'" in out["skipped"][0]["reason"]
+    assert plan.read_bytes() == before
+
+
+def test_anchor_check_repair_for_an_undeclared_anchor_is_skipped(tmp_path):
+    repo = _git_repo(tmp_path)
+    plan = _seed(repo, _plan(_ANCHOR_FM))
+    before = plan.read_bytes()
+    out = _run(repo, [_anchor_repair("grep -c -F needle x.py", target="P9")])
+    assert out["applied"] == [] and "declares no anchor P9" in out["skipped"][0]["reason"]
+    assert plan.read_bytes() == before
 
 
 @pytest.mark.parametrize(

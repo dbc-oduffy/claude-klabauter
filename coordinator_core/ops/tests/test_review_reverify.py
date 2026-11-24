@@ -93,6 +93,28 @@ def _revert(root, failing, **kw):
     return rr.review_reverify(root, base=BASE, slice_prefix=PREFIX, session_id=SESSION, failing=failing, **kw)
 
 
+def test_snapshot_is_found_under_the_resolved_session_key(world, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, _orig, _ = world
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", SESSION)
+    out = rr.review_reverify(root, base=BASE, slice_prefix=PREFIX)
+    assert out["error"] is None
+    assert out["snapshot"].endswith(f"{SESSION}/{PREFIX}.pre-review/manifest.json")
+
+
+def test_snapshot_is_not_found_under_another_sessions_key(world, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, _orig, _ = world
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-other")
+    out = rr.review_reverify(root, base=BASE, slice_prefix=PREFIX)
+    assert out["error"] == f"no pre-review snapshot for {PREFIX}"
+
+
+def test_explicit_session_id_wins_over_the_resolved_one(world, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, _orig, _ = world
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-other")
+    out = rr.review_reverify(root, base=BASE, slice_prefix=PREFIX, session_id=SESSION)
+    assert out["error"] is None
+
+
 def test_list_mode_reports_modified_deleted_and_created(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
@@ -104,6 +126,7 @@ def test_list_mode_reports_modified_deleted_and_created(world, monkeypatch: pyte
     assert out["edited"] == ["pkg/mod.py", "pkg/other.py"]
     assert out["created"] == ["tests/test_new.py"]
     assert out["snapshot"].endswith(f"{PREFIX}.pre-review/manifest.json")
+    assert "pkg/mod.py" in out["scope_files"]
 
 
 def _ledger(monkeypatch, *rows) -> list[str]:

@@ -16,6 +16,9 @@ from typing import Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
 
 GRAMMAR: str = (
     '[git] grep -c [-E|-F] (PATTERN | -e PATTERN ...) [REF --] FILE [&&|; grep ...]; '
+    'plain form `grep -c [-F|-E] PAT FILE`, git form `git grep -c [-F|-E] PAT HEAD -- FILE` '
+    '(a git grep always ends `REF -- FILE`); absence of a path: the same command on that path '
+    'with expect 0 (a missing path counts 0); '
     'expect N|>=N|<=N|>N|<N|"N then M"'
 )
 
@@ -123,7 +126,8 @@ def _parse_stage(words: List[str]) -> Stage:
         raise _NotEvaluable("E and F are mutually exclusive")
     ref: Optional[str] = None
     if git:
-        if len(rest) < 3 or rest[-2] != "--":
+        # Trap: `git grep -c PAT -- f` parses PAT as the ref; with no -e the pattern needs its own slot.
+        if len(rest) < (3 if patterns else 4) or rest[-2] != "--":
             raise _NotEvaluable("a git grep stage ends with `<ref> -- <path>`")
         ref = rest[-3]
         if not _valid_ref(ref):
@@ -311,7 +315,7 @@ def blob_pairs(command: str, base_ref: Optional[str] = None) -> List[Tuple[str, 
         stages = _parse_stages(command)
     except _NotEvaluable:
         return []
-    return [(ref or base_ref, _rel(f)) for _, _, f, ref in stages if (ref or base_ref)]
+    return [(r, _rel(f)) for _, _, f, ref in stages if (r := ref or base_ref)]
 
 
 def read_at_ref(
@@ -388,6 +392,39 @@ def evaluable(command: str) -> Optional[str]:
     return None
 
 
+def _has_elision(pattern: str) -> bool:
+    """Three consecutive unescaped `.`; a backslash escapes the next character."""
+    run = i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\":
+            run = 0
+            i += 2
+            continue
+        run = run + 1 if ch == "." else 0
+        if run == 3:
+            return True
+        i += 1
+    return False
+
+
+def elided_pattern(command: str) -> Optional[str]:
+    """The first pattern (any stage, any -e) of a non-F stage holding an unescaped `...`, else None.
+    A regex `...` is exactly three characters, so it is an elision slip, not the wildcard its
+    author meant. None too when the command is NOT_EVALUABLE."""
+    try:
+        stages = _parse_stages(command)
+    except _NotEvaluable:
+        return None
+    for mode, patterns, _path, _ref in stages:
+        if mode[0] == "F":
+            continue
+        for pattern in patterns:
+            if _has_elision(pattern):
+                return pattern
+    return None
+
+
 def evaluate(
     command: str,
     expect: str,
@@ -398,11 +435,12 @@ def evaluate(
     """{"state": "MATCH" | "MISMATCH" | "NOT_EVALUABLE", "observed": str, "detail": str}.
     No spawn, no walk; reads only the files the command names, under repo_root.
     observed is the printed counts, one per line. Every stage runs and reports its count, 0
-    included (grep's exit 1 on zero matches is a result, not a failure); a missing file ends
-    the chain.
+    included (grep's exit 1 on zero matches is a result, not a failure); a missing file (or a
+    path with no blob at the ref) counts 0, so an absence claim holds and any other expect is a
+    MISMATCH whose detail names the missing file.
     A stage's effective ref is its own `git grep` ref, else base_ref, else none (the tree). A
-    ref-read stage counts over blobs[(ref, path)] (from `read_at_ref`): None -> MISMATCH "no such
-    file at <ref>"; a key absent from blobs -> NOT_EVALUABLE "base ref <ref> unreadable"."""
+    ref-read stage counts over blobs[(ref, path)] (from `read_at_ref`): None counts 0 ("no such
+    file at <ref>" in a MISMATCH detail); a key absent from blobs -> NOT_EVALUABLE "base ref <ref> unreadable"."""
     try:
         stages = _parse_stages(command)
         wants = _parse_expect(expect)
@@ -412,6 +450,7 @@ def evaluate(
         ]
         counts: List[int] = []
         lower: List[bool] = []
+        missing: Dict[int, str] = {}
         lane = _Lane()
         for idx, (regexes, path, ref, rel) in enumerate(plan):
             stop = _stop_for(wants, idx, len(plan))
@@ -425,7 +464,8 @@ def evaluate(
                 n = None if blob is None else _count_bytes(regexes, blob, stop, lane)
                 gone = f"no such file at {ref}: {path.name}"
             if n is None:
-                return _result("MISMATCH", _observed(counts, lower), gone)
+                missing[idx] = gone
+                n = 0
             counts.append(n)
             lower.append(stop is not None and n >= stop)
     except _NotEvaluable as exc:
@@ -434,9 +474,15 @@ def evaluate(
     if len(wants) == len(counts) and all(_holds(o, w, c) for (o, w), c in zip(wants, counts)):
         return _result("MATCH", observed, "")
     detail = f"expected {expect!r}"
+    named = False
     if len(wants) == len(counts):
-        for (o, w), c, lb, (_, path, _, _) in zip(wants, counts, lower, plan):
+        for idx, ((o, w), c, lb, (_, path, _, _)) in enumerate(zip(wants, counts, lower, plan)):
             if not _holds(o, w, c):
-                detail += f"; {path.name} counted {'>=' if lb else ''}{c}"
+                detail += f"; {missing[idx]}" if idx in missing else (
+                    f"; {path.name} counted {'>=' if lb else ''}{c}"
+                )
+                named = idx in missing
                 break
+    if missing and not named:
+        detail += "; " + "; ".join(missing.values())
     return _result("MISMATCH", observed, detail)

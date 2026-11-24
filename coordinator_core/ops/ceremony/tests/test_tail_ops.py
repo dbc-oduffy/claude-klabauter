@@ -394,6 +394,15 @@ def test_fire_tracker_and_roadmap_detached_spawns_per_roadmap_callout(tmp_path):
     assert f"detached_fire:refresh-roadmap-callout.py:goal-example" in result["acted"]
 
 
+def test_roadmap_callout_spawns_repo_relative_script_so_engine_copy_wins(tmp_path):
+    rel_path = _write_handoff(tmp_path, "2026-07-23-r.md", "goal-example")
+    with patch.object(tail_ops, "spawn_detached", return_value=True) as mock_spawn:
+        tail_ops.fire_tracker_and_roadmap_detached(tmp_path, [rel_path])
+    script = mock_spawn.call_args.args[1]
+    assert script == "coordinator/bin/refresh-roadmap-callout.py"
+    assert not Path(script).is_absolute()
+
+
 def test_fire_tracker_and_roadmap_detached_no_roadmap_ids_is_clean_skip(tmp_path):
     worktree_root = tmp_path
     rel_path = _write_handoff(worktree_root, "2026-07-23-a.md", None)

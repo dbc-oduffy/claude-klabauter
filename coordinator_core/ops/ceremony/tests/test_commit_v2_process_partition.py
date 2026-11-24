@@ -82,6 +82,43 @@ def test_mixed_call_lands_product_then_process(tmp_path):
     assert _git(["rev-parse", f"{result['sha']}^"], repo).strip() == base
 
 
+def test_mixed_receipt_states_the_two_commit_split_and_why(tmp_path):
+    repo = _repo(tmp_path)
+
+    result = _call(repo, _mixed(repo))
+
+    reason = result["split_reason"]
+    assert "two commits" in reason
+    assert result["sha"] in reason and result["process_sha"] in reason
+    assert "one_commit" in reason
+
+
+def test_one_commit_call_carries_no_split_reason(tmp_path):
+    repo = _repo(tmp_path)
+    params = _mixed(repo)
+    params["one_commit"] = True
+
+    result = _call(repo, params)
+
+    assert result["committed"] is True, result
+    assert "process_sha" not in result
+    assert "split_reason" not in result
+
+
+def test_unborn_branch_mixed_first_commit_is_two_commits_and_says_so(tmp_path):
+    repo = tmp_path / "unborn"
+    repo.mkdir()
+    _git(["init", "-q"], repo)
+    _git(["config", "user.email", "t@t.example"], repo)
+    _git(["config", "user.name", "t"], repo)
+
+    result = _call(repo, _mixed(repo))
+
+    assert result["committed"] is True, result
+    assert result["sha"] != result["process_sha"]
+    assert "split_reason" in result
+
+
 def test_pure_product_lands_one_commit(tmp_path):
     repo = _repo(tmp_path)
     _write(repo, "src/app.py")

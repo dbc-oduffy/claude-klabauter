@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 from pathlib import Path
 
@@ -9,6 +11,7 @@ pytestmark = pytest.mark.complete
 
 from coordinator_core.ops import wiring_contract as wc
 from coordinator_core.ops.dispatch_emit.run_truth_contract import STATUS_UNWIRED
+from coordinator_core.win_portability import no_console_creationflags
 
 H = "a" * 40
 _REAL = "state/warp/run/receipts/r.json"
@@ -189,6 +192,128 @@ def test_one_good_entry_outweighs_a_stale_one(tmp_path: Path) -> None:
         wc.evidence_entry(_REAL, H, False),
     ]
     assert _one(tmp_path, runs_evidence=ev)["status"] == "wired"
+
+
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(root), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+
+def _commit(root: Path, name: str, text: str) -> str:
+    target = root / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    _git(root, "add", name)
+    _git(root, "commit", "-q", "-m", f"touch {name}")
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _ancestry_repo(root: Path) -> str:
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@t")
+    _git(root, "config", "user.name", "test")
+    _commit(root, "x.py", "v1")
+    _commit(root, "inputs/in.json", "v1")
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _anc_verdict(root: Path, evidence_sha: str, **over) -> dict:
+    head = _git(root, "rev-parse", "HEAD")
+    part = _part(
+        root,
+        consumes=["inputs/in.json"],
+        consumes_external=["inputs/in.json"],
+        runs_evidence=[wc.evidence_entry(_REAL, evidence_sha, False)],
+        **over,
+    )
+    return wc.part_verdicts({"wiring": [part]}, root, head)[0]
+
+
+def test_ancestor_sha_with_unrelated_later_commits_counts(tmp_path: Path) -> None:
+    evidence_sha = _ancestry_repo(tmp_path)
+    _commit(tmp_path, "unrelated/a.txt", "foreign")
+    _commit(tmp_path, "unrelated/b.txt", "foreign")
+    v = _anc_verdict(tmp_path, evidence_sha)
+    assert (v["status"], v["reason"]) == ("wired", "")
+
+
+def test_ancestor_sha_with_changed_built_path_or_input_is_refused_naming_paths(
+    tmp_path: Path,
+) -> None:
+    evidence_sha = _ancestry_repo(tmp_path)
+    _commit(tmp_path, "x.py", "v2")
+    _commit(tmp_path, "inputs/in.json", "v2")
+    _commit(tmp_path, "unrelated/a.txt", "foreign")
+    v = _anc_verdict(tmp_path, evidence_sha)
+    assert v["status"] == STATUS_UNWIRED
+    assert v["reason"] == "covered-paths-changed: inputs/in.json, x.py"
+
+
+def test_changed_consumes_directory_input_is_refused(tmp_path: Path) -> None:
+    evidence_sha = _ancestry_repo(tmp_path)
+    _commit(tmp_path, "inputs/deep/new.json", "v1")
+    part = _part(
+        tmp_path,
+        consumes=["inputs"],
+        consumes_external=["inputs"],
+        runs_evidence=[wc.evidence_entry(_REAL, evidence_sha, False)],
+    )
+    head = _git(tmp_path, "rev-parse", "HEAD")
+    v = wc.part_verdicts({"wiring": [part]}, tmp_path, head)[0]
+    assert v["reason"] == "covered-paths-changed: inputs/deep/new.json"
+
+
+def test_non_ancestor_sha_is_refused(tmp_path: Path) -> None:
+    base = _ancestry_repo(tmp_path)
+    _git(tmp_path, "checkout", "-q", "-b", "side")
+    side_sha = _commit(tmp_path, "unrelated/side.txt", "side")
+    _git(tmp_path, "checkout", "-q", "-")
+    _commit(tmp_path, "unrelated/main.txt", "main")
+    v = _anc_verdict(tmp_path, side_sha)
+    assert v["status"] == STATUS_UNWIRED
+    assert v["reason"].startswith("evidence-sha-mismatch")
+    assert base != side_sha
+
+
+def test_dirty_ancestor_evidence_is_still_refused(tmp_path: Path) -> None:
+    evidence_sha = _ancestry_repo(tmp_path)
+    _commit(tmp_path, "unrelated/a.txt", "foreign")
+    head = _git(tmp_path, "rev-parse", "HEAD")
+    ev = [wc.evidence_entry(_REAL, evidence_sha, True)]
+    v = wc.part_verdicts({"wiring": [_part(tmp_path, runs_evidence=ev)]}, tmp_path, head)[0]
+    assert v["reason"] == "evidence-dirty-tree"
+
+
+def test_sha_equal_to_head_spawns_no_git(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ops.ceremony import git_native
+
+    def _boom(*a, **k):
+        raise AssertionError("git spawned for sha == HEAD")
+
+    monkeypatch.setattr(git_native, "_git", _boom)
+    assert _one(tmp_path)["status"] == "wired"
+
+
+def test_distinct_sha_costs_one_spawn_across_parts(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ops.ceremony import git_native
+
+    evidence_sha = _ancestry_repo(tmp_path)
+    _commit(tmp_path, "unrelated/a.txt", "foreign")
+    head = _git(tmp_path, "rev-parse", "HEAD")
+    real, calls = git_native._git, []
+
+    def _counting(*a, **k):
+        calls.append(a)
+        return real(*a, **k)
+
+    monkeypatch.setattr(git_native, "_git", _counting)
+    ev = [wc.evidence_entry(_REAL, evidence_sha, False)]
+    parts = [_part(tmp_path, id=f"p{i}", runs_evidence=ev) for i in range(3)]
+    verdicts = wc.part_verdicts({"wiring": parts}, tmp_path, head)
+    assert [v["status"] for v in verdicts] == ["wired"] * 3
+    assert len(calls) == 1
 
 
 def _seam(tmp_path, *parts):

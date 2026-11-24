@@ -7,10 +7,12 @@ Purpose: the writer of a plan's ``gated_exit_criteria[*].met`` close-out flip. S
 
 Wire params:
     plan (str, required)  — plan path, repo-relative or absolute, inside the worktree.
-    rows (list, required) — ``[{"brightline": <name>, "evidence": <sha | path>[+<sha | path>...]}]``.
-        Evidence is a 7-40 hex commit sha reachable from HEAD (one batched
+    rows (list, required) — ``[{"brightline": <name>, "evidence": <ev>}]`` where ``<ev>`` is
+        ``<sha | path>[+<sha | path>...]`` or ``{"ref": <sha | path>[+...], "text": <rationale>}``.
+        A ref is a 7-40 hex commit sha reachable from HEAD (one batched
         ``rev-list --no-walk <shas> --not HEAD`` for all sha rows), else a
-        repo-relative path that exists.
+        repo-relative path that exists. The object form stores ``"<ref> — <text>"`` as the
+        row's ``evidence`` (schema: one string, max 1024 chars); empty ref or text is refused.
 
 Reply: ``{"plan", "changed": [brightline, ...], "committed": bool, "message"}``.
     A plan absent from HEAD replies ``committed: false`` with the flip on disk; any other
@@ -140,11 +142,26 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not isinstance(raw_rows, list) or not raw_rows:
         raise ValueError("rows must be a non-empty list of {brightline, evidence}")
     rows: List[Dict[str, str]] = []
+    stored: Dict[str, str] = {}
     for r in raw_rows:
-        if not (isinstance(r, dict) and isinstance(r.get("brightline"), str) and r["brightline"].strip()
-                and isinstance(r.get("evidence"), str) and r["evidence"].strip()):
+        if not (isinstance(r, dict) and isinstance(r.get("brightline"), str) and r["brightline"].strip()):
             raise ValueError("each row needs a non-empty string brightline and evidence")
-        rows.append({"brightline": r["brightline"].strip(), "evidence": r["evidence"].strip()})
+        name = r["brightline"].strip()
+        ev = r.get("evidence")
+        if isinstance(ev, dict):
+            ref, text = ev.get("ref"), ev.get("text")
+            if not (isinstance(ref, str) and ref.strip() and isinstance(text, str) and text.strip()):
+                raise ValueError(f"evidence for {name} needs a non-empty string ref and text")
+            ref, text = ref.strip(), text.strip()
+            value = f"{ref} — {text}"
+            if len(value) > _EVIDENCE_MAX:
+                raise ValueError(f"evidence for {name} exceeds {_EVIDENCE_MAX} chars")
+        elif isinstance(ev, str) and ev.strip():
+            ref = value = ev.strip()
+        else:
+            raise ValueError("each row needs a non-empty string brightline and evidence")
+        rows.append({"brightline": name, "evidence": ref})
+        stored[name] = value
 
     worktree_root = Path(main_worktree_root(repo_root))
     plan_path = Path(raw_plan.strip())
@@ -155,7 +172,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     rel = plan_path.resolve().relative_to(worktree_root.resolve()).as_posix()
 
     _check_evidence(rows, worktree_root)
-    evidence = {r["brightline"]: r["evidence"] for r in rows}
+    evidence = stored
 
     def mutate(old_text: str) -> str:
         split = split_frontmatter(old_text)

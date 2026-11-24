@@ -847,6 +847,19 @@ def test_anchor_without_a_screenable_check_pulls_as_unchecked(tmp_path, block):
     assert (repair["kind"], repair["target"]) == ("anchor-check-not-evaluable", "AP1")
 
 
+def test_unevaluable_anchor_repair_hint_names_the_form_the_applier_kind_and_re_offer(tmp_path):
+    from coordinator_core.ops import _anchor_check
+    from coordinator_core.ops.plan_apply_mechanical_repairs import REPAIR_ANCHOR_CHECK
+
+    block = "anchor_premises:\n  - id: AP1\n    claim: c\n    check: {command: 'python -c 1', expect: '1'}\n"
+    reply = op._handler({"plan": REL}, _anchor_plan(tmp_path, block))
+    (repair,) = reply["mechanical_repairs"]
+    text = repair["instruction"]
+    assert _anchor_check.GRAMMAR in text and f"repair kind {REPAIR_ANCHOR_CHECK}" in text
+    assert "<ref> -- <path>" in text and "expect 0" in text and "offered again" in text
+    assert op._ANCHOR_FIX_KIND == REPAIR_ANCHOR_CHECK
+
+
 def test_r32_anchor_with_an_unevaluable_check_does_not_block_in_the_checker_lane(tmp_path):
     reply = op._handler({"plan": REL, "premise": {"rows": []}}, _anchor_plan(tmp_path, _AP1))
     assert _anchor_rulings(reply) == []

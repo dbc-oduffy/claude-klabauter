@@ -2071,6 +2071,8 @@ def test_a_launcher_tail_tells_the_agent_an_unstarted_child_is_named_not_started
     monkeypatch.setattr(mod, "_read_parent", lambda root, parent_id: None)
     launcher = mod._fan_tail(tmp_path, {"parent_id": "ask-parent-1"}, ["ask-1"], launcher=True)
     assert "`not_started`" in launcher and "refused at a child's start" in launcher
+    assert "Started:" not in launcher and "Handed to the launcher: ask-1." in launcher
+    assert "Started: ask-1." in mod._fan_tail(tmp_path, {"parent_id": "ask-parent-1"}, ["ask-1"], launcher=False)
     assert "not_started" not in mod._fan_tail(tmp_path, {"parent_id": "ask-parent-1"}, ["ask-1"], launcher=False)
 
 
