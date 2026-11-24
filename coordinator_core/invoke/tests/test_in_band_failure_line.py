@@ -53,3 +53,27 @@ def test_fire_wait_nonzero_exit_fails_process_and_names_result_reason():
 
 def test_zero_exit_code_returns_none():
     assert line({"result": {"exit_code": 0, "error": "x"}}, "op.x", "") is None
+
+
+def test_submit_launch_error_preserves_minted_handoff(monkeypatch, tmp_path):
+    import json
+    from coordinator_core.invoke.__main__ import _dispatch_argv
+
+    result = {"run_id": "ask-fixture", "script_path": "task.mjs", "sha256": "a" * 64}
+    envelope = {"jsonrpc": "2.0", "id": 1, "result": result}
+    monkeypatch.setattr("coordinator_core.warm.settings.is_warm_enabled", lambda: True)
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", lambda msg: envelope)
+
+    for fields, expected_exit in [
+        ({}, 0),
+        ({"fire": {"fire_id": "b" * 32}}, 0),
+        ({"fire_error": "warm engine unreachable"}, 1),
+        ({"fire_error": "dispatch indeterminate", "fire": {"state": "indeterminate"}}, 1),
+    ]:
+        envelope["result"] = {**result, **fields}
+        stdout, stderr, code = _dispatch_argv(["engine_ask.submit", "{}", "--repo", str(tmp_path)], str(tmp_path))
+        assert stdout, stderr
+        assert json.loads(stdout)["result"] == envelope["result"]
+        assert code == expected_exit
+        if expected_exit:
+            assert result["run_id"] in stderr and fields["fire_error"] in stderr

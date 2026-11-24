@@ -99,7 +99,8 @@ def _drain_queued_sessions() -> list:
 
     The relay is loaded in-process by path (no process per session); one session's failure never skips the next."""
     relay = _sibling("unimatrix-relay.py", "unimatrix_relay")
-    queue = relay._relay_queue()
+    get_queue = getattr(relay, "_relay_queue", None)
+    queue = get_queue() if callable(get_queue) else None
     if queue is None:
         return []
     failures = []
@@ -1551,7 +1552,7 @@ class Router:
             try:
                 return await asyncio.to_thread(
                     request_line, face, {"op": "rotate", "grace_s": req.get("grace_s", 120)}, 15,
-                    _roster().authenticated_data(face, b""))
+                    _roster().authenticated_data(face, b"", self.sessions_dir))
             except (OSError, ValueError) as exc:
                 return {"ok": False, "error": f"face unreachable: {exc}"}
         if op == "resolve":
@@ -2067,7 +2068,7 @@ class Router:
         face = self.endpoint_of(peer)
         response = await asyncio.to_thread(request_line, face,
             {"op": "deliver", "endpoint": endpoint, "frame": frame}, 15,
-            _roster().authenticated_data(face, b""))
+            _roster().authenticated_data(face, b"", self.sessions_dir))
         if not response.get("ok"):
             raise OSError(response.get("error", "face delivery failed"))
 

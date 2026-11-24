@@ -2647,7 +2647,16 @@ def _unset_content_root_registration(
             file=sys.stderr,
         )
         return {}
+    # The installer's alias can be outside a restricted worker's readable roots.
+    # Store the physical directory while preserving any distinct operator selection.
+    try:
+        physical_root = coord_path.resolve(strict=True)
+    except OSError:
+        return {}
     if (existing or "").strip():
+        if (coord_source.rung is CoordSourceRung.FLAG
+                and Path(existing.strip()) == coord_path and coord_path != physical_root):
+            return {_CONTENT_ROOT_ANCHOR_KEY: str(physical_root)}
         # Only a root evidenced or explicitly named as a DoE tree repairs a value that is not one.
         stale = (
             coord_source.rung
@@ -2655,8 +2664,8 @@ def _unset_content_root_registration(
             and _is_doe_tree(coord_path)
             and not _is_doe_tree(Path(existing.strip()))
         )
-        return {_CONTENT_ROOT_ANCHOR_KEY: str(coord_path)} if stale else {}
-    return {_CONTENT_ROOT_ANCHOR_KEY: str(coord_path)}
+        return {_CONTENT_ROOT_ANCHOR_KEY: str(physical_root)} if stale else {}
+    return {_CONTENT_ROOT_ANCHOR_KEY: str(physical_root)}
 
 
 def register_claude_klabauter_root(

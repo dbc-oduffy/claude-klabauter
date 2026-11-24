@@ -4,6 +4,7 @@
 Usage: headless-em-launch.py <codex|agy|grok|claude> [--session-id ID] [--prepare-only] [--native-executable PATH]
        [--name NAME] [--resume ID] [--cwd DIR] [-- cli args...]
        headless-em-launch.py --exit-check --session-id ID [--cwd DIR]
+       headless-em-launch.py --resume-mint SUBMIT_REPLY --expected SHA256 --cwd DIR
        (--help prints this text)
 
 Without --native-executable the CLI is resolved from PATH (on Windows a .exe as-is, or codex's npm shim
@@ -19,6 +20,8 @@ codex, agy and grok run as a supervised child (POSIX): when it exits 0 while a r
 neither landed nor halted, one stderr line per run names its fire_wait command and the launcher exits 3;
 a non-zero child code is returned as is (a signal death as 128+signum). Codex exec --json also
 propagates a failed engine_ask.submit command reported by the native child. A check that itself fails exits 3.
+--resume-mint uses the current registered host EM to fire a saved submit reply once, pinned by the
+operator-supplied digest. It prints the workflow.fire reply, including the fire ID for workflow.fire_wait.
 --exit-check runs only that check (0 clean, 3 open runs or an unchecked exit): the Windows path, whose
 --prepare-only JSON names its argv as "exit_check".
 
@@ -462,6 +465,71 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
     return gate if code == 0 else code
 
 
+def resume_mint(receipt: Path, expected: str, cwd: Path) -> int:
+    """Resume a saved Codex submit from an existing EM. The caller supplies the trusted digest."""
+    from coordinator_core.invoke.__main__ import _dispatch_argv
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit.op import guard_against_fired_drift
+    from coordinator_core.ops.workflow_fire.authority import require_fire_authority
+
+    try:
+        marker = _worker_marker(os.environ)
+        if marker:
+            raise ValueError(f"worker cannot resume a host EM mint ({marker})")
+        # getcwd already identifies the physical working directory. Rewalking
+        # its ancestors can require metadata access outside the issued workspace.
+        current = Path.cwd()
+        in_workspace = cwd.absolute() == current
+        repo = current if in_workspace else cwd.resolve(strict=True)
+        reply = json.loads(receipt.read_bytes())
+        mint = reply.get("result")
+        if reply.get("jsonrpc") != "2.0" or not isinstance(mint, dict) or "error" in reply:
+            raise ValueError("expected the original JSON-RPC submit reply")
+        if mint.get("fire") is not None or mint.get("refused"):
+            raise ValueError("submit already has a fire disposition; reconcile the original request")
+        error = mint.get("fire_error")
+        if error is not None and not (isinstance(error, str) and error.startswith("SandboxedSpawnRefused:")):
+            raise ValueError("submit dispatch is unconfirmed; reconcile before starting")
+        run_id = mint.get("run_id")
+        if not isinstance(run_id, str) or not safe_id(run_id):
+            raise ValueError("invalid minted run ID")
+        relative_script = Path("scratch", "warp", run_id + ".workflow.mjs")
+        script = (relative_script if in_workspace else repo / relative_script).resolve(strict=True)
+        if not script.is_relative_to(repo) or str(script) != mint.get("script_path"):
+            raise ValueError("script differs from the selected repository and run")
+        if not re.fullmatch(r"[0-9a-f]{64}", expected) or mint.get("sha256") != expected:
+            raise ValueError("submit digest differs from the selected digest")
+        guard_against_fired_drift(script, expected)
+        stage = json.loads((repo / "state" / "warp" / run_id / "run-stage.json").read_bytes())
+        if stage.get("stage") != "minted":
+            raise ValueError("run has advanced; reconcile the original fire")
+        args = mint.get("fire_args", {})
+        if not isinstance(args, dict) or args.get("repoRoot", str(repo)) != str(repo):
+            raise ValueError("minted workflow arguments name a different repository")
+        principal = require_fire_authority(str(script), expected, cwd=str(repo), native=True, backend="codex")
+        if principal.role != "em" or not principal.session_id:
+            raise ValueError("resume requires a registered host EM")
+    except (OSError, ValueError, RuntimeError, AttributeError) as exc:
+        print(f"headless-em-launch: {exc}", file=sys.stderr)
+        return REFUSED
+
+    params = dict(run_id=run_id, script_path=str(script), expected=expected, args=args,
+                  backend="codex", executor="headless", caller_session_id=principal.session_id)
+    stdout, stderr, code = _dispatch_argv(["workflow.fire", json.dumps(params), "--repo", str(repo)], str(repo))
+    sys.stdout.write(stdout)
+    sys.stderr.write(stderr)
+    if code:
+        return code
+    try:
+        fire = json.loads(stdout)["result"]
+        if isinstance(fire, dict) and re.fullmatch(r"[0-9a-f]{32}", str(fire.get("fire_id", ""))):
+            return 0
+    except (KeyError, TypeError, ValueError):
+        pass
+    print("headless-em-launch: workflow.fire returned no fire ID; reconcile the saved run", file=sys.stderr)
+    return REFUSED
+
+
 def main(argv=None, **kw):
     import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
     from cc_invoke import ensure_engine_on_path, place_engine_root_on_path
@@ -477,6 +545,15 @@ def main(argv=None, **kw):
         args, extra = args[:i], args[i + 1:]
     else:
         extra = []
+    if "--resume-mint" in args:
+        parser = argparse.ArgumentParser(prog="headless-em-launch")
+        parser.add_argument("--resume-mint", required=True, type=Path)
+        parser.add_argument("--expected", required=True)
+        parser.add_argument("--cwd", required=True, type=Path)
+        ns = parser.parse_args(args)
+        if extra:
+            parser.error("--resume-mint takes no child command")
+        return resume_mint(ns.resume_mint, ns.expected, ns.cwd)
     if "--exit-check" in args:
         ck = argparse.ArgumentParser(prog="headless-em-launch", add_help=False)
         ck.add_argument("--exit-check", action="store_true")

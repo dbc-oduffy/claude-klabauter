@@ -132,10 +132,14 @@ def frame_to(box_dir, from_ep, from_name, text):
     return pr._contract().build_frame(from_ep, from_name, text)
 
 
-def post_frame(endpoint, frame):
+def post_frame(endpoint, frame, sessions_dir=None):
+    data = (json.dumps(frame) + "\n").encode()
+    sdir = sessions_dir or (Path(endpoint).parent.parent / "sessions")
+    if sdir.is_dir():
+        data = pr._roster().authenticated_data(endpoint, data, sdir)
     s = socket.socket(socket.AF_UNIX)
     s.connect(endpoint)
-    s.sendall((json.dumps(frame) + "\n").encode())
+    s.sendall(data)
     s.close()
 
 
@@ -616,14 +620,16 @@ def _queue_files(tmp_path, monkeypatch, **sessions):
     for sid, body in sessions.items():
         (qdir / f"{sid}.jsonl").write_text(body)
         (qdir / f"{sid}.drain.lock").write_text("")
-    return pr._sibling("unimatrix-relay.py", "unimatrix_relay")
+    relay = pr._sibling("unimatrix-relay.py", "unimatrix_relay")
+    monkeypatch.setattr(relay, "_relay_queue", lambda: type("Q", (), {"queue_dir": staticmethod(lambda: qdir)})(), raising=False)
+    return relay
 
 
 @portable
 def test_queue_drain_runs_the_relay_drain_only_for_sessions_with_queued_lines(tmp_path, monkeypatch):
     relay = _queue_files(tmp_path, monkeypatch, sidfull='{"id": "1"}\n', sidempty="")
     drained = []
-    monkeypatch.setattr(relay, "drain", lambda sid: drained.append(sid) or {"ok": True})
+    monkeypatch.setattr(relay, "drain", lambda sid: drained.append(sid) or {"ok": True}, raising=False)
     assert pr._drain_queued_sessions() == []
     assert drained == ["sidfull"]
 
@@ -639,7 +645,7 @@ def test_queue_drain_error_for_one_session_never_skips_the_next(tmp_path, monkey
             raise OSError("boom")
         return {"ok": False, "error": "no unique live local session"}
 
-    monkeypatch.setattr(relay, "drain", drain)
+    monkeypatch.setattr(relay, "drain", drain, raising=False)
     assert pr._drain_queued_sessions() == [("sida", "OSError: boom")]
     assert drained == ["sida", "sidb"]
 
@@ -1279,7 +1285,7 @@ def test_peers_json_codex_thread_held_by_a_tui_routes_to_the_queue_not_the_daemo
         locks = box / "cx"
         fd = hold(locks / f"{THR_1}.lock")
         (locks / f"{THR_2}.lock").write_text("")
-        peers = PEERS + [{"name": "codex-b", "vendor": "codex", "target": THR_2, "codexPid": os.getpid()}]
+        peers = PEERS + [{"name": "codex-b", "vendor": "codex", "target": THR_2, "codexPid": os.getppid()}]
         r = pr.Router(peers, sessions_dir=box / "sessions", state_dir=box / "state", endpoint_dir=box / "eps",
                       adapters={"codex": codex, "agy": codex}, codex_locks_dir=locks)
         await r.start()
@@ -1806,11 +1812,15 @@ def holder_router(box, monkeypatch, peers, locks=None):
                      adapters=echo_adapters(), codex_locks_dir=locks)
 
 
-def face_reply(endpoint, frame):
+def face_reply(endpoint, frame, sessions_dir=None):
+    data = (json.dumps(frame) + "\n").encode()
+    sdir = sessions_dir or (Path(endpoint).parent.parent / "sessions")
+    if sdir.is_dir():
+        data = pr._roster().authenticated_data(endpoint, data, sdir)
     s = socket.socket(socket.AF_UNIX)
     s.settimeout(10)
     s.connect(endpoint)
-    s.sendall((json.dumps(frame) + "\n").encode())
+    s.sendall(data)
     s.shutdown(socket.SHUT_WR)
     buf = b""
     while chunk := s.recv(65536):
@@ -1950,7 +1960,7 @@ def test_fixed_codex_holder_refresh_recovers_default_send(tmp_path, monkeypatch,
             stopped.append(name)
             r.faces.pop(name, None)
 
-        async def turn(name, text):
+        async def turn(name, text, **_kw):
             turns.append((name, text))
             return "collaboration received"
 
@@ -1969,13 +1979,13 @@ def test_fixed_codex_holder_refresh_recovers_default_send(tmp_path, monkeypatch,
         registry.write_text(json.dumps([fresh]), encoding="utf-8")
         await r.refresh_discovered()
         assert not r.peer_stale("codex-a") and "codex-a" not in r.dead_holders
-        assert spawned == ([] if initial_live else ["codex-a"])
+        assert spawned == ["codex-a"]
         assert r.endpoint_of("codex-a") == endpoint
         assert r.discovered == set() and r.peers["codex-a"]["target"] == THR_HELD
         assert (await r._dispatch({"op": "send", "to": "codex-a", "text": "collaborate"}))["ok"]
         assert len(turns) == 1 + int(initial_live)
         await r.refresh_discovered()
-        assert spawned == ([] if initial_live else ["codex-a"])
+        assert spawned == ["codex-a"]
         registry.write_text("{", encoding="utf-8")
         await r.refresh_discovered()
         assert not r.peer_stale("codex-a")
@@ -1989,7 +1999,7 @@ def test_fixed_codex_holder_refresh_recovers_default_send(tmp_path, monkeypatch,
         await r.refresh_discovered()
         assert not r.peer_stale("codex-a")
         assert r.endpoint_of("codex-a") == endpoint
-        assert spawned == ([] if initial_live else ["codex-a"])
+        assert spawned == ["codex-a", "codex-a"]
         assert registry.read_text(encoding="utf-8") == json.dumps([fresh])
 
         for row in ({**fresh, "target": THR_OTHER},

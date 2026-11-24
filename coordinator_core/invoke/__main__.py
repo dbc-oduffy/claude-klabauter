@@ -833,6 +833,9 @@ def _in_band_failure_line(response: dict, method: object, prior_stderr: str) -> 
     result = response.get("result")
     if not isinstance(result, dict):
         return None
+    fire_error = _submit_fire_error(method, result)
+    if fire_error:
+        return f"[invoke] {method} launch unconfirmed for run {result.get('run_id')}: {fire_error}"
     refused = _refusal_code(result) if method in _REFUSAL_FAILS_PROCESS else None
     if refused is not None:
         reason = result.get("reason")
@@ -867,6 +870,15 @@ _IN_BAND_EXIT_FAILS_PROCESS = frozenset({"memo.send", "workflow.fire_wait"})
 _REFUSAL_FAILS_PROCESS = frozenset({"engine_ask.submit"})
 
 
+def _submit_fire_error(method: object, result: object) -> Optional[str]:
+    """Preserve a minted handoff on stdout while signalling launch failure."""
+    if method == "engine_ask.submit" and isinstance(result, dict):
+        error = result.get("fire_error")
+        if isinstance(error, str) and error.strip():
+            return error.strip()
+    return None
+
+
 def _refusal_code(result: object) -> Optional[str]:
     """The `refused` code of a gate-refusal result (`{"refused": code, "reason": ...}`), else None.
 
@@ -891,11 +903,13 @@ def _exit_code_for_response(
     2 — 'error' present and error.code == structural_pin_error_code (STRUCTURAL_PIN_ERROR)
         — a structurally-wedged contract-pin failure; see the module docstring's
         "Exit codes" section for why this is distinct from the generic exit 1.
-    1 — any other 'error' (generic/transient op-level error).
+    1 — any other error, including a submit that minted but reported a fire error.
     """
     error = response.get("error")
     if error is None:
         result = response.get("result")
+        if _submit_fire_error(method, result):
+            return 1
         if method in _REFUSAL_FAILS_PROCESS and _refusal_code(result) is not None:
             return 1
         if method in _IN_BAND_EXIT_FAILS_PROCESS:

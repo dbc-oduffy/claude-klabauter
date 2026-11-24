@@ -4642,6 +4642,24 @@ def test_f21_content_root_rewrites_a_stale_oss_content_root(setup_mod, monkeypat
     assert pending == {"repos.content_root": str(doe)}
 
 
+@pytest.mark.parametrize("already_seeded", [False, True])
+def test_register_content_root_uses_physical_directory(setup_mod, monkeypatch, tmp_path, already_seeded):
+    import coordinator_core.machine_resolver as mr
+
+    _repo, doe, _oss = _f20_box(setup_mod, monkeypatch, tmp_path)
+    alias = tmp_path / "installer-alias"
+    try:
+        alias.symlink_to(doe, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+    monkeypatch.setattr(mr, "registry_get", lambda key: str(alias) if already_seeded else None)
+    args = _override_args(setup_mod)
+    args.coordinator_root = str(alias)
+    coord_path, source = setup_mod._resolve_coordinator_claude_root(_repo, args)
+    pending = setup_mod._unset_content_root_registration(coord_path, source, doe)
+    assert pending == {"repos.content_root": str(doe.resolve())}
+
+
 def test_f21_stale_repair_leaves_deliberate_values_alone(setup_mod, monkeypatch, tmp_path):
     import coordinator_core.machine_resolver as mr
 

@@ -301,12 +301,13 @@ ROUTER_RESTART_REFUSED_RC = 8
 
 
 def router_closure_digest(src_dir):
-    """sha256 over the sorted (name, bytes) of the router's script closure in src_dir; None without the router script."""
+    """sha256 over the sorted (name, bytes) of the router's script closure and lib/*.py in src_dir; None without the router script."""
     root = Path(src_dir)
     if not (root / ROUTER_SCRIPT).is_file():
         return None
+    names = sorted(script_closure(root, ROUTER_SCRIPT)) + [f"lib/{p.name}" for p in sorted((root / "lib").glob("*.py"))]
     h = hashlib.sha256()
-    for name in sorted(script_closure(root, ROUTER_SCRIPT)):
+    for name in sorted(names):
         try:
             data = (root / name).read_bytes()
         except OSError:
