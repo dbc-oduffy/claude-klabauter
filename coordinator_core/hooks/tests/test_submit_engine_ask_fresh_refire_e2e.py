@@ -127,3 +127,11 @@ def test_fresh_refire_of_a_cancelled_run_reaches_the_emit_with_fresh_and_the_emi
     assert params.get("fresh") is True and params.get("resume_run_id") is None
     assert op._terminal_under_fresh(root, RUN, params) is True
     assert op._terminal_under_fresh(root, RUN, {}) is False
+
+
+def test_the_emit_param_gate_accepts_the_fresh_flag_the_hook_passes_through():
+    """holo-5e 2026-11-24: the hook let `fresh` through and dispatch.emit refused it as an unknown param."""
+    from coordinator_core.ops.dispatch_emit import op
+
+    assert op._unknown_param_refusal({"from_sizing": "s.yaml", "fresh": True}) is None
+    assert "fresh" in {f.name for f in op._PARAM_FIELDS}

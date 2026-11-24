@@ -185,6 +185,7 @@ def test_real_alert_spawns_unimatrix_send_with_sender_target_and_text(tmp_path, 
     calls = []
     monkeypatch.setattr(hst, "_ALERT_SENDER", None)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(hst, "_is_throwaway_root", lambda root: False)
     monkeypatch.setattr(detached_spawn, "spawn_detached", lambda *a, **k: calls.append(a))
     _stub_identify(monkeypatch, {"state": "live", "holder": {"name": "group-em-1"}})
     hst.alert_live_gem(tmp_path, "ask-1", SPLITS)
@@ -192,3 +193,20 @@ def test_real_alert_spawns_unimatrix_send_with_sender_target_and_text(tmp_path, 
     assert script.endswith("unimatrix-send.py") and os.path.isfile(script)
     assert argv[:2] == ["--to", "group-em-1"]
     assert "LIVE BREAKAGE" in argv[2] and "ask-1" in argv[2] and len(argv) == 3
+
+
+def test_a_probe_outside_pytest_with_a_temp_root_sends_nothing(tmp_path, monkeypatch):
+    """G-EM 2026-11-24: a one-off probe wrote a pending-oracle flag in a scratchpad repo and it reached the G-EM."""
+    from coordinator_core.ops.ceremony import detached_spawn
+    from coordinator_core.ops.dispatch_emit import pending_oracle
+
+    calls = []
+    monkeypatch.setattr(hst, "_ALERT_SENDER", None)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(detached_spawn, "spawn_detached", lambda *a, **k: calls.append(a))
+    _stub_identify(monkeypatch, {"state": "live", "holder": {"name": "group-em-1"}})
+    (tmp_path / ".git").mkdir()
+    entry = {"owner": "o", "closing_check": {"command": ["x"], "expect": "y"}, "requester_citation": "q"}
+    assert pending_oracle.write_pm_flag(tmp_path, "run1", "R1", entry).is_file()
+    assert hst.send_live_gem(tmp_path, "hello") is False
+    assert calls == []
