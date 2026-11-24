@@ -1549,6 +1549,16 @@ def _land_committed(record_dir: Path) -> bool:
     return isinstance(doc, dict) and doc.get("outcome") in land_leg_record.COMMITTED_OUTCOMES
 
 
+def _name_halt(out: dict, halt: dict) -> dict:
+    """Name the halt just recorded for a run that ended without a marker: ``halted`` and ``halt_reason`` on an ok reply, and the kind in a not-applicable ``close`` detail."""
+    if not out.get("ok"):
+        return out
+    close = out.get("close")
+    if isinstance(close, dict) and close.get("status") == "not-applicable":
+        close = {**close, "detail": f"{close.get('detail')}; the run halted {halt['halted']}: {halt['reason']}"}
+    return {**out, "halted": halt["halted"], "halt_reason": halt["reason"], **({"close": close} if close is not None else {})}
+
+
 def _record_solo(
     root: Path, run_id: str, shas: list, session_id: Optional[str] = None, in_run: bool = False,
     met_by: Optional[dict] = None, landed_under: Optional[str] = None, foreign: frozenset = frozenset(),
@@ -1560,7 +1570,9 @@ def _record_solo(
     replies ``_close_landed``'s not-applicable close. ``landed_under`` admits a marker-less run whose
     work the named run already landed: no git read, the named run's landed sha is the credit.
     A marker-less run whose record dir holds a committed land record (``_land_committed``) is closed
-    the same way against the verified sha; with no commit and no record the "never ran" refusal stands.
+    the same way against the verified sha. A marker-less run past stage ``minted`` ran and halted unrecorded:
+    ``halted_run.record_unrecorded_halt`` writes its marker (after the sha verifies, and never while the run token is live) and the halted branch records it landed, naming the
+    halt (``_name_halt``). A run that never left ``minted`` (or has no record) keeps the "never ran" refusal.
     """
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
@@ -1599,7 +1611,21 @@ def _record_solo(
                     "credited_from": "land-legs.json",
                 })
             return {"ok": True, "run_id": run_id, "sha": sha, "written": bool(credited), **echo, **_close_landed(root, run_id, sha, session_id)}
-        return closed if closed is not None else _refuse(f"{run_id} has no sibling status or halt record; it never ran")
+        if closed is not None:
+            return closed
+        halt = halted_run.unrecorded_halt(root, run_id, record_dir)
+        if halt is None:
+            return _refuse(f"{run_id} has no sibling status or halt record; it never ran")
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        if run_token.is_live(root, run_id):
+            return _refuse(f"{run_id} still holds a live run token; it has not ended, so no halt is recorded")
+        _, problem, _ = _verify(root, run_id, shas, met_by, foreign, dropped)
+        if problem:
+            return _refuse(problem)
+        if not halted_run.record_unrecorded_halt(record_dir, halt):
+            return _refuse(f"{run_id}: the halt marker could not be written")
+        return _name_halt(_record_solo(root, run_id, shas, session_id, in_run, met_by, landed_under, foreign, dropped), halt)
     status = marker.get("status")
     if status == halted_run.STATUS_LANDED:
         landed = marker.get("sha")

@@ -242,3 +242,12 @@ def test_start_script_refusal_names_the_run_and_the_op_and_starts_nothing(tmp_pa
 def test_start_script_refuses_a_path_that_is_not_the_runs_own_script(tmp_path):
     got = _run_start_script(tmp_path, [RUN_ID], [{"ok": True, "script_path": "scratch/warp/ask-other.workflow.mjs"}], [])
     assert got["out"]["status"] == "failed" and _starts(got) == []
+
+
+@pytest.mark.spawns_process
+def test_start_handoff_hands_back_fire_args_with_runToken_whole(tmp_path):
+    path = f"scratch/warp/{RUN_ID}.workflow.mjs"
+    fire = {"repoRoot": "C:/repo", "runToken": "tok-1"}
+    got = _run_start_script(tmp_path, [RUN_ID], [{"ok": True, "script_path": path, "fire_args": fire}], [])
+    assert got["out"]["status"] == "start_handoff" and got["out"]["fire_args"] == fire
+    assert _starts(got) == []

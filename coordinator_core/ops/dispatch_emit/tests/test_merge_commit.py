@@ -386,3 +386,30 @@ def test_one_successful_call_stays_under_the_process_time_bar(tmp_path):
     assert out["ok"] is True, out
     child_ms = ((after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)) * 1000
     assert child_ms < 500, child_ms
+
+
+def test_merge_base_redoes_a_merge_an_ours_carry_already_recorded(tmp_path):
+    root, conflicted, params = _build(tmp_path)
+    base = _git(["merge-base", "HEAD", "theirs"], root).strip()
+    tree = _git(["rev-parse", "HEAD^{tree}"], root).strip()
+    carry = _git(["commit-tree", tree, "-p", "HEAD", "-p", "theirs", "-m", "ours carry"], root).strip()
+    _git(["update-ref", "refs/heads/main", carry], root)
+    params["expected_head"] = carry
+
+    assert _call(root, params)["refused"] == "conflict-set-changed"
+    out = _call(root, {**params, "merge_base": base})
+
+    assert out["ok"] is True, out
+    assert _git(["show", "HEAD:added.txt"], root) == "new on theirs\n"
+    assert _git(["show", "HEAD:clean.txt"], root) == "from theirs\n"
+    for name in conflicted:
+        assert _git(["show", f"HEAD:{name}"], root) == f"resolved {name}\n"
+    assert _git(["status", "--porcelain", "--untracked-files=no"], root) == ""
+
+
+def test_merge_base_that_does_not_resolve_refuses_bad_params(tmp_path):
+    root, _conflicted, params = _build(tmp_path)
+    head = _head(root)
+    assert _call(root, {**params, "merge_base": "no-such-ref"})["refused"] == "bad-params"
+    assert _call(root, {**params, "merge_base": "-x"})["refused"] == "bad-params"
+    assert _head(root) == head

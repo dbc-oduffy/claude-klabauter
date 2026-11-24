@@ -3306,3 +3306,124 @@ def test_capacity_sample_spawns_no_child(capacity_home: Path, monkeypatch: pytes
     monkeypatch.setattr(subprocess, "Popen", boom)
     monkeypatch.setattr(subprocess, "run", boom)
     assert watch._capacity_sample()["gpus"] == _FAKE_GPU["gpus"]
+
+
+class _Row:
+    def __init__(self, pid, name, ppid=999_999_999, ctime=_AGED_CTIME) -> None:
+        self.pid, self.name, self.ppid, self.ctime = pid, name, ppid, ctime
+
+
+class _StdinHost:
+    """Primitives double: pid 50 is a hot orphan python, pid 51 a live child under the CPU gate."""
+
+    cpu = {50: 3600.0, 51: 5.0}
+    cmd = {50: "python -I -", 51: "python -I -"}
+
+    @classmethod
+    def cpu_time_s(cls, pid):
+        return cls.cpu.get(pid)
+
+    @classmethod
+    def command_line(cls, pid):
+        return cls.cmd.get(pid)
+
+    @staticmethod
+    def creation_time(pid):
+        return None
+
+
+def _stdin_python_tick_run(tmp_path, monkeypatch, rows, owner=None, sent=None):
+    from coordinator_core.bash_guards import _host_probe
+    from coordinator_core.box_memory import pressure
+    from coordinator_core.group_em import box_send
+
+    monkeypatch.setattr(_host_probe, "ctime_units_per_second", lambda: _UNIT)
+    monkeypatch.setattr(pressure, "now_ctime", lambda: _NOW)
+    monkeypatch.setattr(watch, "_host_primitives", lambda: _StdinHost)
+    monkeypatch.setattr(watch, "_read_memory", lambda: _Reading(9000))
+    monkeypatch.setattr(watch, "_memory_floor_mb", lambda: 4096)
+    monkeypatch.setattr(watch, "_process_census", lambda: list(rows))
+    monkeypatch.setattr(watch, "_session_for_claude", lambda *a: owner)
+    monkeypatch.setattr(
+        box_send, "send", lambda box, sid, text, **k: sent.append((box, sid, text)) or {"sent": True}
+    )
+    stream = io.StringIO()
+    with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
+        assert watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=stream) == 0
+    return [l for l in stream.getvalue().splitlines() if l.startswith("ORPHAN")]
+
+
+def test_tick_once_stdin_python_hit_is_reported_to_owning_session_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [_Row(50, "python.exe", ppid=7), _Row(7, "claude.exe", ctime=_AGED_CTIME - 1)]
+    sent: list = []
+    lines = _stdin_python_tick_run(tmp_path, monkeypatch, rows, owner="sess-1", sent=sent)
+    assert len(lines) == 1
+    assert "pid=50" in lines[0] and "cpu_min=60.0" in lines[0] and "action=flagged" in lines[0]
+    assert "owner=sess-1" in lines[0]
+    assert len(sent) == 1 and sent[0][1] == "sess-1" and "pid=50" in sent[0][2]
+    assert _stdin_python_tick_run(tmp_path, monkeypatch, rows, owner="sess-1", sent=sent) == []
+    assert len(sent) == 1
+
+
+def test_tick_once_stdin_python_unresolved_owner_emits_line_and_sends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list = []
+    lines = _stdin_python_tick_run(tmp_path, monkeypatch, [_Row(50, "python.exe")], owner=None, sent=sent)
+    assert len(lines) == 1 and "owner=unresolved" in lines[0]
+    assert sent == []
+
+
+def test_tick_once_stdin_python_live_child_under_cpu_gate_is_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list = []
+    assert _stdin_python_tick_run(tmp_path, monkeypatch, [_Row(51, "python.exe")], owner="s", sent=sent) == []
+    assert sent == []
+
+
+def test_tick_once_stdin_python_record_is_pruned_when_process_leaves_census(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list = []
+    _stdin_python_tick_run(tmp_path, monkeypatch, [_Row(50, "python.exe")], sent=sent)
+    assert list(watch._load_prev_record(str(tmp_path))["orphans"]) == [f"50:{_AGED_CTIME}"]
+    _stdin_python_tick_run(tmp_path, monkeypatch, [_Row(52, "node.exe")], sent=sent)
+    assert watch._load_prev_record(str(tmp_path))["orphans"] == {}
+
+
+def test_tick_once_stdin_python_runs_without_memory_pressure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list = []
+    called: list = []
+    monkeypatch.setattr(watch, "_reap_orphans", lambda: called.append(1) or [])
+    assert len(_stdin_python_tick_run(tmp_path, monkeypatch, [_Row(50, "python.exe")], sent=sent)) == 1
+    assert called == []
+
+
+def test_tick_once_stdin_python_failure_never_fails_the_wake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.box_memory import orphan_reap
+
+    monkeypatch.setattr(orphan_reap, "reap_stdin_python", mock.Mock(side_effect=RuntimeError("x")))
+    assert _stdin_python_tick_run(tmp_path, monkeypatch, [_Row(50, "python.exe")], sent=[]) == []
+
+
+def _held_tick_lines(root: Path) -> list:
+    """The `HELD` lines one tick over `root` emits."""
+    stream = io.StringIO()
+    with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
+        assert watch.tick_once(str(root), caller_session_id="w", group_em_session_id="c", stream=stream) == 0
+    return [l for l in stream.getvalue().splitlines() if l.startswith("HELD")]
+
+
+def test_tick_once_emits_one_held_line_per_held_run_and_none_for_an_unheld_halted_run(tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit import run_hold
+
+    warp = tmp_path / "state" / "warp"
+    for name in ("ask-held", "ask-halted"):
+        (warp / name).mkdir(parents=True)
+    (warp / "ask-halted" / "halted.json").write_text("{}", encoding="utf-8")
+    run_hold.write_hold(warp / "ask-held", run_hold.HeldRun("S", "PM turn 9", "tool gap closes", "t"))
+    assert _held_tick_lines(tmp_path) == ["HELD ask-held by S until tool gap closes"]
+
+
+def test_tick_once_held_step_never_fails_the_wake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.ops.dispatch_emit import run_hold
+
+    monkeypatch.setattr(run_hold, "read_hold", mock.Mock(side_effect=RuntimeError("x")))
+    (tmp_path / "state" / "warp" / "r").mkdir(parents=True)
+    (tmp_path / "state" / "warp" / "r" / "held.json").write_text("{}", encoding="utf-8")
+    assert _held_tick_lines(tmp_path) == []

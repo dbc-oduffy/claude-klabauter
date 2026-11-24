@@ -272,6 +272,26 @@ def own_session_name(entries=None, parent_of=None, start=None, max_depth: int = 
     return ""
 
 
+def own_session_name(entries=None, parent_of=None, start=None, max_depth: int = 16):
+    """Roster name of the live session whose pid is an ancestor of this shell, else ''.
+
+    The router stamps a CLI send with this name so a reply to the message's `from` reaches the sender."""
+    try:
+        by_pid = {e["pid"]: e["name"] for e in (_session_entries() if entries is None else entries)}
+        step = parent_of or _sibling("unimatrix-peer-grok.py", "unimatrix_peer_grok_send").parent_pid
+        pid, seen = os.getpid() if start is None else start, set()
+        for _ in range(max_depth):
+            if pid in by_pid:
+                return by_pid[pid]
+            if pid is None or pid in seen:
+                return ""
+            seen.add(pid)
+            pid = step(pid)
+    except Exception:
+        pass
+    return ""
+
+
 def _unreachable_why(e, ctl) -> str:
     """The OSError text; a missing/refused endpoint (WinError 2 on a named pipe, ENOENT/ECONNREFUSED on a socket) is named as the router not running."""
     if isinstance(e, (FileNotFoundError, ConnectionRefusedError)):

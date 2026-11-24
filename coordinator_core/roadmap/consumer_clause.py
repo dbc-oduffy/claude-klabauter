@@ -44,18 +44,32 @@ def _clauses(statement: object) -> list[str]:
     return _CLAUSE_SPLIT.split(text)
 
 
+# A wire verb right after a negation ("never reads", "must not use") forbids a use, and one right
+# before a modal or copula ("a reading must never ...", "use is ...") is a noun: neither claims a
+# consumer exists, so neither is a producer-only wiring clause.
+_NEGATION_BEFORE = re.compile(
+    r"(?:^|\s)(?:never|not|no|nor|cannot|can't|don't|doesn't|won't)\s+$", re.IGNORECASE
+)
+_NOUN_AFTER = re.compile(
+    r"^\s+(?:must|should|shall|may|might|can|could|will|would|is|are|was|were|has|have)(?!\w)", re.IGNORECASE
+)
+
+
 def producer_only_clause(statement: object) -> Optional[str]:
     """Return the offending wire-verb phrase of the first producer-only clause, else None.
 
     A clause with a wire verb passes when it carries a backticked command or a
     `<command> reports|shows|prints|returns|logs` wording; quoted text is a mention.
-    Trap: any unbackticked use/read/feed clause is flagged, wiring or not.
+    A negated verb or a verb used as a noun subject is not a wiring claim.
     """
     for clause in _clauses(statement):
         if _BACKTICKED.search(clause) or _REPORTS.search(_QUOTED.sub(" ", clause)):
             continue
-        m = _VERB_PHRASE.search(_QUOTED.sub(" ", clause))
-        if m:
+        text = _QUOTED.sub(" ", clause)
+        for m in _VERB_PHRASE.finditer(text):
+            verb_end = m.start() + len(m.group(0).split()[0])
+            if _NEGATION_BEFORE.search(text[: m.start()]) or _NOUN_AFTER.match(text[verb_end:]):
+                continue
             return m.group(0).rstrip(".,;:")
     return None
 

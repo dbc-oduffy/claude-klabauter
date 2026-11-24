@@ -99,6 +99,7 @@ def test_forwarding_set_is_exactly_the_named_entries():
         "COORDINATOR_SETTINGS_HOME",
         "COORDINATOR_AGENT_PROVIDER",
         "COORDINATOR_AGENT_ROLE",
+        "COORDINATOR_AGENT_WORKER",
         "COORDINATOR_PARENT_SESSION_ID",
         "COORDINATOR_WORKFLOW_AGENT_TYPE",
         "COORDINATOR_WORKFLOW_AGENT_LABEL",
@@ -186,6 +187,7 @@ def test_per_caller_facts_are_exactly_the_caller_mode_entries():
     assert caller_entries == [
         "COORDINATOR_AGENT_PROVIDER",
         "COORDINATOR_AGENT_ROLE",
+        "COORDINATOR_AGENT_WORKER",
         "COORDINATOR_PARENT_SESSION_ID",
         "COORDINATOR_WORKFLOW_AGENT_TYPE",
         "COORDINATOR_WORKFLOW_AGENT_LABEL",

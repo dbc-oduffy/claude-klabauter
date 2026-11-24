@@ -162,3 +162,18 @@ def test_non_ask_route_refuses_marked_chain_parent(repo) -> None:
     with pytest.raises(ValueError, match="stop_after"):
         _refuse_non_ask_chain_parent({"chain_parent": parent, "target_root": str(repo)})
     _refuse_non_ask_chain_parent({"chain_parent": "ask-20261104T170113-bbbbbb", "target_root": str(repo)})
+
+
+def test_a_staged_halted_run_inherits_no_park_so_its_resume_executes(repo) -> None:
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN, record_dir
+    from coordinator_core.ops.dispatch_emit.op import _inherited_stop_after
+
+    staged = _marked_parent(repo, "warp-2026-11-04-slice-20261104T170159-9a73a4")
+    rd = record_dir(repo, staged)
+    halted_run._write(rd, {"halted": "dependents_unstarted"})
+    assert hrr.inherited_stop_after(repo, rd) == STOP_AFTER_PLAN
+    (rd / "manifest.json").write_text("{}", encoding="utf-8")
+    assert hrr.inherited_stop_after(repo, rd) is None
+    assert _inherited_stop_after(repo, "warp-2026-11-04-slice-20261104T171000-eeeeee", None, staged) is None

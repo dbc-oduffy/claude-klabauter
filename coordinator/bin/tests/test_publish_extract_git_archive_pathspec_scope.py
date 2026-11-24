@@ -239,33 +239,112 @@ def test_root_tracked_at_sha_but_absent_from_working_tree_is_still_covered(tmp_p
     )
 
 
-def test_foreign_toplevel_is_not_scoped_and_does_not_fail_loud(tmp_path):
-    root = tmp_path / "throwaway-repo"
-    root.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True, creationflags=_NO_WINDOW)
-    subprocess.run(
-        ["git", "-C", str(root), "config", "user.email", "c5-test@claude-klabauter.test"],
-        check=True,
-        creationflags=_NO_WINDOW,
-    )
-    subprocess.run(
-        ["git", "-C", str(root), "config", "user.name", "C5 Test"],
-        check=True,
-        creationflags=_NO_WINDOW,
-    )
-    subprocess.run(
-        ["git", "-C", str(root), "config", "commit.gpgsign", "false"],
-        check=True,
-        creationflags=_NO_WINDOW,
-    )
-    (root / "file.txt").write_bytes(b"hello\n")
-    subprocess.run(["git", "-C", str(root), "add", "file.txt"], check=True, creationflags=_NO_WINDOW)
-    subprocess.run(
-        ["git", "-C", str(root), "commit", "-q", "-m", "init"], check=True, creationflags=_NO_WINDOW
-    )
+def _foreign_repo_with_two_dirs(tmp_path):
+    """An own repo (the caller makes it `_REPO_ROOT`) and a foreign repo tracking `declared/` and `other/`."""
+    own = tmp_path / "own-repo"
+    foreign = tmp_path / "foreign-repo"
+    own_sha = _init_repo(own, "own.txt")
+    assert own_sha is not None
+    _init_repo(foreign, "declared/a.txt")
+    (foreign / "other").mkdir()
+    (foreign / "other" / "b.txt").write_bytes(b"y\n")
+    subprocess.run(["git", "-C", str(foreign), "add", "other"], check=True, creationflags=_NO_WINDOW)
+    subprocess.run(["git", "-C", str(foreign), "commit", "-q", "-m", "more"], check=True, creationflags=_NO_WINDOW)
+    return own, foreign
 
-    pathspec = publish._required_pathspec_for_toplevel(root)
-    assert pathspec == ()
+
+def test_foreign_toplevel_with_a_declared_root_is_scoped_to_it(tmp_path, monkeypatch):
+    publish._bootstrap_engine()
+    own, foreign = _foreign_repo_with_two_dirs(tmp_path)
+    declared = foreign / "declared"
+    monkeypatch.setattr(publish, "_REPO_ROOT", own)
+    monkeypatch.setattr(
+        publish, "load_targets", lambda *a, **k: [f"declared|copy|{declared}|{tmp_path / 'dest'}"]
+    )
+    monkeypatch.setattr(publish, "_all_inject_srcs_resolved", lambda *a, **k: [])
+
+    pathspec = publish._required_pathspec_for_toplevel(foreign)
+
+    assert pathspec == (":(literal)declared",)
+
+    sha = publish._git_rev_parse(foreign, "HEAD")
+    shadow = publish._extract_git_archive(foreign, sha)
+    try:
+        assert (shadow / "declared" / "a.txt").is_file()
+        assert not (shadow / "other").exists()
+    finally:
+        import shutil
+
+        shutil.rmtree(shadow, ignore_errors=True)
+
+
+def test_foreign_toplevel_with_no_coverage_is_unscoped_and_does_not_fail_loud(tmp_path, monkeypatch):
+    publish._bootstrap_engine()
+    own, foreign = _foreign_repo_with_two_dirs(tmp_path)
+    monkeypatch.setattr(publish, "_REPO_ROOT", own)
+    monkeypatch.setattr(publish, "load_targets", lambda *a, **k: [])
+    monkeypatch.setattr(publish, "_all_inject_srcs_resolved", lambda *a, **k: [])
+
+    assert publish._required_pathspec_for_toplevel(foreign) == ()
+    with pytest.raises(publish.GitMaterializeError):
+        publish._required_pathspec_for_toplevel(own)
+
+
+def test_toplevel_rooted_row_is_scoped_to_its_allowlist_entries(tmp_path, monkeypatch):
+    publish._bootstrap_engine()
+    own, foreign = _foreign_repo_with_two_dirs(tmp_path)
+    (foreign / "INSTALL.md").write_bytes(b"doc\n")
+    subprocess.run(["git", "-C", str(foreign), "add", "INSTALL.md"], check=True, creationflags=_NO_WINDOW)
+    subprocess.run(["git", "-C", str(foreign), "commit", "-q", "-m", "doc"], check=True, creationflags=_NO_WINDOW)
+    monkeypatch.setattr(publish, "_REPO_ROOT", own)
+    monkeypatch.setattr(
+        publish, "load_targets",
+        lambda *a, **k: [f"install|flat-mirror|{foreign}|{tmp_path / 'dest'}||INSTALL.md"],
+    )
+    monkeypatch.setattr(publish, "_all_inject_srcs_resolved", lambda *a, **k: [])
+
+    assert publish._required_pathspec_for_toplevel(foreign) == (":(literal)INSTALL.md",)
+
+
+def test_toplevel_rooted_row_archives_only_its_files(tmp_path, monkeypatch):
+    publish._bootstrap_engine()
+    own, foreign = _foreign_repo_with_two_dirs(tmp_path)
+    (foreign / "INSTALL.md").write_bytes(b"doc\n")
+    subprocess.run(["git", "-C", str(foreign), "add", "INSTALL.md"], check=True, creationflags=_NO_WINDOW)
+    subprocess.run(["git", "-C", str(foreign), "commit", "-q", "-m", "doc"], check=True, creationflags=_NO_WINDOW)
+    monkeypatch.setattr(publish, "_REPO_ROOT", own)
+    monkeypatch.setattr(
+        publish, "load_targets",
+        lambda *a, **k: [f"install|flat-mirror|{foreign}|{tmp_path / 'dest'}||INSTALL.md"],
+    )
+    monkeypatch.setattr(publish, "_all_inject_srcs_resolved", lambda *a, **k: [])
+
+    sha = publish._git_rev_parse(foreign, "HEAD")
+    shadow = publish._extract_git_archive(foreign, sha)
+    try:
+        assert sorted(p.name for p in shadow.rglob("*") if p.is_file()) == ["INSTALL.md"]
+    finally:
+        import shutil
+
+        shutil.rmtree(shadow, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    ["", "||*.md", "||INSTALL.md|decl=" + "x", "||missing.md"],
+    ids=["no-allowlist", "glob", "source-map", "untracked-inclusion"],
+)
+def test_toplevel_rooted_row_with_unenumerable_allowlist_is_refused_naming_the_row(
+    tmp_path, monkeypatch, tail
+):
+    publish._bootstrap_engine()
+    own, foreign = _foreign_repo_with_two_dirs(tmp_path)
+    monkeypatch.setattr(publish, "_REPO_ROOT", own)
+    monkeypatch.setattr(publish, "_all_inject_srcs_resolved", lambda *a, **k: [])
+    row = f"wholetree|flat-mirror|{foreign}|{tmp_path / 'dest'}{tail}"
+    monkeypatch.setattr(publish, "load_targets", lambda *a, **k: [row])
+    with pytest.raises(publish.PathspecNotEnumerableError, match="wholetree"):
+        publish._required_pathspec_for_toplevel(foreign)
 
 
 def test_scoped_extraction_covers_fewer_files_than_full_tree():

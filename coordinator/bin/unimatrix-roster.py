@@ -49,7 +49,7 @@ def sessions_dir():
     """Claude Code's session registry: `$CLAUDE_CONFIG_DIR/sessions`, else `~/.claude/sessions`.
 
     It belongs to the Claude config dir, never the settings home: settings homes on one box share it
-    (G-EM ruling 2026-11-20, plan row C0-R)."""
+    (plan row C0-R, 2026-11-20)."""
     config = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
     return os.path.join(config, "sessions") if config else os.path.expanduser("~/.claude/sessions")
 
@@ -318,9 +318,34 @@ def mirror_ghost(d, rows):
         (transport_row(d) and not d.get("unimatrixReplyInbox")) or far_codex_unbacked(d) or far_duplicate(d, rows))
 
 
-def listed_row(d, rows=()):
+_SUPERSEDED_TTL_SECONDS = 1.0
+_SUPERSEDED = None
+
+
+def codex_superseded_faces(rows) -> dict:
+    """{id(face): surviving face} over `rows`, computed once per listing and memoized on the rows' shape.
+
+    The memo expires after `_SUPERSEDED_TTL_SECONDS`: holder liveness changes without the rows changing, so a
+    caller reusing one rows list must not read a stale survivor map."""
+    global _SUPERSEDED
+    sig = tuple((id(r), r.get("startedAt"), r.get("pid"), r.get("target")) for r in rows if isinstance(r, dict))
+    memo = _SUPERSEDED
+    now = time.monotonic()
+    if memo is None or memo[0] != sig or memo[1] is not rows or now - memo[3] > _SUPERSEDED_TTL_SECONDS:
+        memo = (sig, rows, _liveness().codex_superseded_faces([r for r in rows if isinstance(r, dict)]), now)
+        _SUPERSEDED = memo
+    return memo[2]
+
+
+def codex_superseded(d, rows) -> bool:
+    """True for a local Codex face another face of the same holder (pid+start, else thread) outranks."""
+    return isinstance(d, dict) and d.get("vendor") == "codex" and id(d) in codex_superseded_faces(rows)
+
+
+def listed_row(d, rows=()) -> bool:
     """The one listing predicate: a live peer shown once. `rows` is every session entry the listing covers."""
-    return entry_listed(d) and not transport_row(d) and not mirror_ghost(d, rows)
+    return (entry_listed(d) and not transport_row(d) and not mirror_ghost(d, rows)
+            and not codex_superseded(d, rows))
 
 
 def far_seen_fields():
@@ -378,7 +403,9 @@ def pid_domain(platform=None):
     plat = platform or sys.platform
     if plat == "win32":
         return f"win32:{socket.gethostname().lower()}"
-    return "darwin" if plat == "darwin" else linux_pid_domain()
+    if plat == "darwin":
+        return "darwin"
+    return linux_pid_domain() if platform is None else "linux"
 
 
 def local_endpoint(far_socket, platform=None):

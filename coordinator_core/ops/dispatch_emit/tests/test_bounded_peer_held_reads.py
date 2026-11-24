@@ -1,4 +1,5 @@
 """Stalled or oversize engine reads fail fast to a safe default on the peer-held and orphan-gate paths."""
+import os
 import time
 
 import pytest
@@ -86,13 +87,27 @@ def test_token_dir_scan_opens_nothing_when_unchanged(tmp_path: Path, monkeypatch
 
     for i in range(20):
         (tmp_path / f"r{i}.json").write_text('{"run_id": "r%d"}' % i, encoding="utf-8")
+    def _converged(expected: int) -> list:
+        # A cold batch read that overruns its deadline under load omits files; re-listing converges.
+        for _ in range(50):
+            records = run_token._cached_records(tmp_path)
+            if len(records) == expected:
+                return records
+        raise AssertionError(f"token dir never converged to {expected} records")
+
     run_token._RECORD_CACHE.clear()
-    assert len(run_token._cached_records(tmp_path)) == 20
-    calls = []
+    _converged(20)
+    opened: list = []
+    real_batch = run_token._read_batch
     with monkeypatch.context() as m:
-        m.setattr(run_token, "_read", lambda p: calls.append(p))
+        m.setattr(run_token, "_read_batch", lambda keys: opened.extend(keys) or real_batch(keys))
+        m.setattr(run_token, "_read", lambda p: opened.append(p))
         assert len(run_token._cached_records(tmp_path)) == 20
-    assert calls == []
-    (tmp_path / "r3.json").write_text('{"run_id": "r3", "x": 11111}', encoding="utf-8")
+    assert opened == []
+    target = tmp_path / "r3.json"
+    before_ns = target.stat().st_mtime_ns
+    target.write_text('{"run_id": "r3", "x": 11111}', encoding="utf-8")
+    os.utime(target, ns=(before_ns + 1_000_000_000, before_ns + 1_000_000_000))
+    _converged(20)
     got = dict(run_token._cached_records(tmp_path))
     assert got["r3"]["x"] == 11111

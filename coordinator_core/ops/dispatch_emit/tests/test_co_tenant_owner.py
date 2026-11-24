@@ -246,3 +246,105 @@ def test_owner_consumed_between_attribution_and_park_leaves_no_orphan(repo, monk
     out = co_tenant_owner.resolve(repo, WAITER, _exc())
     assert out["cause"] == "co_tenant_dependency" and out["owner"] is None
     assert stage_wait.read(repo, WAITER) is None
+
+
+def _halt_as(repo: Path, run_id: str, status: str, sizing: str = SIZING) -> None:
+    rd = repo / "state" / "warp" / run_id
+    rd.mkdir(parents=True, exist_ok=True)
+    marker = {"status": status, "sizing_rel": sizing, "run_artifacts": {"withheld": {PEER: "kept"}}}
+    (rd / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
+
+
+def test_superseded_marker_with_landed_successor_is_still_no_owner(repo) -> None:
+    _halt_as(repo, OWNER, "superseded")
+    successor = "ask-20261121T110000-aaaaaa"
+    _stage(repo, successor, "landed")
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["state"] is None
+
+
+def test_live_launcherless_halt_marked_owner_gets_the_halted_cause_not_a_park(repo) -> None:
+    _live(repo, OWNER)
+    _halt_as(repo, OWNER, "halted")
+    out = co_tenant_owner.resolve(repo, WAITER, _exc())
+    assert out["cause"] == "co_tenant_dependency_on_halted_run" and out["owner"] == OWNER
+    assert "parked" not in out and stage_wait.read(repo, WAITER) is None
+
+
+def test_live_owner_without_a_halt_marker_still_parks(repo) -> None:
+    _live(repo, OWNER)
+    assert co_tenant_owner.resolve(repo, WAITER, _exc())["parked"] == "co-tenant-wait"
+
+
+def test_proceeded_without_run_is_not_returned_as_owner(repo) -> None:
+    _live(repo, OWNER)
+    _halt_as(repo, KIN, "halted")
+    stage_wait.park(repo, WAITER, [KIN], [PEER])
+    path = stage_wait._path(repo, WAITER)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["proceeded_without"] = [OWNER, KIN]
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+
+
+STRANDED = "warp-x-bbbbbb-20261123T063338-a99119"
+
+
+def _declare(repo: Path, run_id: str, declared, sizing: str = OWNER_SIZING, at_ns: int | None = None) -> None:
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+    halted_withheld_index.add_run(repo, run_id, (), sizing_rel=sizing, declared=declared, at_ns=at_ns)
+
+
+def test_stranded_staged_run_without_marker_or_launcher_is_the_halted_owner_with_a_refire(repo) -> None:
+    _declare(repo, STRANDED, ("coordinator_core/ops/dispatch_emit",))
+    _stage(repo, STRANDED, "staged")
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": STRANDED, "state": "halted"}
+    out = co_tenant_owner.resolve(repo, WAITER, _exc())
+    assert out["cause"] == "co_tenant_dependency_on_halted_run" and out["owner"] == STRANDED
+    assert STRANDED in out["owner_refire"] and OWNER_SIZING in out["owner_refire"]
+    assert stage_wait.read(repo, WAITER) is None
+
+
+def test_staged_run_with_a_live_token_is_not_stranded(repo) -> None:
+    _declare(repo, STRANDED, ("coordinator_core/ops/dispatch_emit",))
+    _stage(repo, STRANDED, "staged")
+    run_token.mint(repo, STRANDED, "s.mjs", marker=True, session_id="sess", sizing_rel=OWNER_SIZING)
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["run_id"] is None
+
+
+def test_unmarked_run_not_staged_is_not_an_owner(repo) -> None:
+    _declare(repo, STRANDED, ("coordinator_core/ops/dispatch_emit",))
+    _stage(repo, STRANDED, "executing")
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["run_id"] is None
+
+
+def test_declared_only_halt_older_than_the_path_dirt_is_never_the_owner(repo) -> None:
+    peer_file = repo / PEER
+    peer_file.parent.mkdir(parents=True)
+    peer_file.write_text("x", encoding="utf-8")
+    _halt_bound(repo, OWNER)
+    marker = repo / "state" / "warp" / OWNER / "halted.json"
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    data["run_artifacts"] = {"withheld": {}}
+    marker.write_text(json.dumps(data), encoding="utf-8")
+    _declare(repo, OWNER, ("coordinator_core/ops/dispatch_emit",), at_ns=peer_file.stat().st_mtime_ns - 10**9)
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+    _declare(repo, OWNER, ("coordinator_core/ops/dispatch_emit",), at_ns=peer_file.stat().st_mtime_ns + 10**9)
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": OWNER, "state": "halted"}
+
+
+def test_withholding_halt_older_than_the_path_dirt_is_still_the_owner(repo) -> None:
+    peer_file = repo / PEER
+    peer_file.parent.mkdir(parents=True)
+    peer_file.write_text("x", encoding="utf-8")
+    _halt_bound(repo, OWNER)
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["state"] == "halted"
+    old = time.time_ns() + 10**10
+    os.utime(peer_file, ns=(old, old))
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": OWNER, "state": "halted"}
+
+
+def test_absent_proceeded_without_changes_nothing(repo) -> None:
+    _live(repo, OWNER)
+    stage_wait.park(repo, WAITER, [OWNER], [PEER])
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER, include_waiting=True)["run_id"] == OWNER

@@ -222,10 +222,14 @@ def fingerprint_of(root: Union[str, Path], plan_rel: Optional[str], sizing_rel: 
 
 def inherited_stop_after(root: Union[str, Path], record_dir: Union[str, Path]) -> Optional[str]:
     """`plan` when the halted run's lineage still owes a park; None once the run's own halt is the park
-    (a deliberate resume of a parked run stages) or no ancestor carries one. Spawns nothing."""
+    (a deliberate resume of a parked run stages), the run has already staged (its `manifest.json`
+    exists, so the plan stage is behind it and a resume can only execute), or no ancestor carries
+    one. Spawns nothing."""
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PARKED, lineage_stop_after
 
+    if (Path(record_dir) / "manifest.json").is_file():
+        return None
     marker = halted_run._read(Path(record_dir))
     if marker and marker.get("halted") == HALT_PARKED:
         return None

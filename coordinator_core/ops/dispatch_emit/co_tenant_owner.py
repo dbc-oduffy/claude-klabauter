@@ -40,7 +40,19 @@ def _halted_marker(root: Path, run_id: str) -> Optional[dict]:
         marker = halted_run.read_strict(record_dir(root, run_id))
     except (ValueError, OSError):
         return None
-    return marker if marker and marker.get("status") == halted_run.STATUS_HALTED else None
+    return marker if marker and marker.get("status") in (halted_run.STATUS_HALTED, halted_run.STATUS_SUPERSEDED) else None
+
+
+def _launcherless_halted(root: Path, run_id: str) -> bool:
+    """A run whose token is live but whose halt marker is written and which holds no launcher escrow: nothing
+    will end it, so a wait behind it never wakes."""
+    return run_token.escrowed(root, run_id) is None and _halted_marker(root, run_id) is not None
+
+
+def _proceeded_without(root: Path, run_id: str) -> frozenset:
+    record = stage_wait.read(root, run_id) or {}
+    held = record.get("proceeded_without")
+    return frozenset(x for x in held if isinstance(x, str)) if isinstance(held, list) else frozenset()
 
 
 _STAMP = re.compile(r"\d{8}T\d{6}")
@@ -72,9 +84,8 @@ def _landed_successor(root: Path, run_id: str, sizing_rel: object) -> Optional[s
     return None
 
 
-def _halted_age_s(root: Path, run_id: str) -> Optional[int]:
-    """Seconds since `run_id` halted: its index entry's write time, else its `halted.json` mtime; None when neither reads."""
-    entry = halted_withheld_index.entries(root).get(run_id)
+def _halted_age_s(root: Path, run_id: str, entry) -> Optional[int]:
+    """Seconds since `run_id` halted: its index `entry`'s write time, else its `halted.json` mtime; None when neither reads."""
     at_ns = entry.at_ns if entry and entry.at_ns else 0
     if not at_ns:
         try:
@@ -84,6 +95,43 @@ def _halted_age_s(root: Path, run_id: str) -> Optional[int]:
     return max(0, int(time.time() - at_ns / 1e9))
 
 
+def _stranded(root: Path, run_id: str) -> bool:
+    """A run with no halt marker whose stage reads `staged` and which holds no live token or launcher escrow:
+    nothing will end it, so it is attributed like a halted run."""
+    if (ask_contract.read_run_stage(root, run_id) or {}).get("stage") != "staged":
+        return False
+    return run_token.escrowed(root, run_id) is None and not run_token.is_live(root, run_id)
+
+
+def _halt_predates_dirt(root: Path, run_id: str, entry, path: str) -> bool:
+    """True when `run_id` halted before `path` was last written in the worktree, so its halt cannot have left
+    that dirt; False when either time is unreadable."""
+    halted_ns = entry.at_ns if entry and entry.at_ns else 0
+    if not halted_ns:
+        try:
+            halted_ns = (record_dir(root, run_id) / halted_run.HALTED_FILE).stat().st_mtime_ns
+        except (OSError, ValueError):
+            return False
+    try:
+        return halted_ns < (root / path).stat().st_mtime_ns
+    except OSError:
+        return False
+
+
+def _refire_call(root: Path, run_id: str, entry) -> Optional[str]:
+    """The refire call of `run_id`'s halt marker; a stranded run, which has none, gets an engine-ask resume of its sizing."""
+    marker = _halted_marker(root, run_id)
+    if marker is None:
+        if not (entry and entry.sizing_rel):
+            return None
+        return ask_contract.refire_next_action_for(
+            "stranded_staged", run_id=run_id, sizing_rel=entry.sizing_rel, detail="stranded staged run: resume it",
+        ).get("call")
+    action = marker.get(halted_run.HALT_NEXT_ACTION_FIELD)
+    call = action.get("call") if isinstance(action, dict) else None
+    return call if isinstance(call, str) else None
+
+
 def _names(path: str, held: tuple) -> bool:
     """True when `held` (repo-relative paths) holds `path` itself or a directory containing it."""
     return bool(live_run_writes.overlaps([path], {"_": frozenset(held)}))
@@ -91,22 +139,25 @@ def _names(path: str, held: tuple) -> bool:
 
 def owner_of(root: Path, path: str, *, exclude_run_id: str, include_waiting: bool = False) -> dict:
     """`{run_id, state}` of the run holding `path` uncommitted: state "live" (a run with a live token whose
-    staged footprint names it), else "halted" (a halted record whose withheld or declared paths name it;
-    a run withholding it or keeping it outranks one that only declares it, then the most recently
-    halted), else `{run_id: None, state: None}`. `exclude_run_id`, its chain kin and a live
+    staged footprint names it), else "halted" (a halted record, or a stranded `staged` run with no halt
+    marker and no live launcher, whose withheld or declared paths name it; a run withholding it or keeping
+    it outranks one that only declares it, then the most recently halted; a marked run that only declares
+    it and halted before the path's worktree mtime is never the owner), else `{run_id: None, state: None}`.
+    `exclude_run_id`, its chain kin and a live
     run already parked behind `exclude_run_id` are never the owner, unless `include_waiting`: `resolve` keeps
     that run so the two-run wait cycle is named instead of read as no owner."""
     root = Path(root)
     path = _norm(path)
     live = live_run_writes.overlaps([path], _live_footprints(root, exclude_run_id))
+    skipped = _proceeded_without(root, exclude_run_id)
     candidates = sorted(
         rid for rid in live
-        if rid != exclude_run_id and run_token.is_live(root, rid)
+        if rid != exclude_run_id and rid not in skipped and run_token.is_live(root, rid)
         and (include_waiting or exclude_run_id not in ((stage_wait.read(root, rid) or {}).get("blockers") or ()))
     )
     halted: dict[str, tuple] = {}
     for rid, entry in halted_withheld_index.entries(root).items():
-        if rid == exclude_run_id or rid in live or not _names(path, (*entry.paths, *entry.declared)):
+        if rid == exclude_run_id or rid in live or rid in skipped or not _names(path, (*entry.paths, *entry.declared)):
             continue
         covers = _names(path, entry.paths) or _names(path, tuple(co_tenant_kept.kept_paths(root, rid)))
         halted[rid] = (1 if covers else 0, entry.at_ns)
@@ -114,17 +165,28 @@ def owner_of(root: Path, path: str, *, exclude_run_id: str, include_waiting: boo
     for rid in candidates:
         if rid not in kin:
             return {"run_id": rid, "state": "live"}
+    entries = halted_withheld_index.entries(root)
     for rid in sorted(halted, key=lambda r: (halted[r], r), reverse=True):
-        marker = _halted_marker(root, rid) if rid not in kin else None
-        if marker is None:
+        if rid in kin:
             continue
-        entry = halted_withheld_index.entries(root).get(rid)
-        if _landed_successor(root, rid, marker.get("sizing_rel") or (entry.sizing_rel if entry else None)) is None:
+        entry = entries.get(rid)
+        marker = _halted_marker(root, rid)
+        if marker is None:
+            if not _stranded(root, rid):
+                continue
+            sizing_rel = entry.sizing_rel if entry else None
+        else:
+            if not halted[rid][0] and _halt_predates_dirt(root, rid, entry, path):
+                continue
+            sizing_rel = marker.get("sizing_rel") or (entry.sizing_rel if entry else None)
+        if _landed_successor(root, rid, sizing_rel) is None:
             return {"run_id": rid, "state": "halted"}
     return {"run_id": None, "state": None}
 
 
 def _park_behind(root: Path, run_id: str, owner: str, exc) -> bool:
+    if _launcherless_halted(root, owner):
+        return False
     record = run_token._read_rec(root, run_id) or {}
     parked = stage_wait.park(
         root, run_id, [owner], [exc.peer],
@@ -160,13 +222,12 @@ def resolve(root: Path, run_id: str, exc) -> dict:
             }
         if found["state"] == "live" and _park_behind(root, run_id, found["run_id"], exc):
             return {"parked": PARKED, "owner": found["run_id"], **named}
-        if found["state"] == "halted":
-            action = (_halted_marker(root, found["run_id"]) or {}).get(halted_run.HALT_NEXT_ACTION_FIELD)
-            call = action.get("call") if isinstance(action, dict) else None
+        if found["state"] == "halted" or (found["state"] == "live" and _launcherless_halted(root, found["run_id"])):
+            entry = halted_withheld_index.entries(root).get(found["run_id"])
             return {
                 "cause": CAUSE_HALTED_OWNER, "owner": found["run_id"], "chain": [run_id, found["run_id"]],
-                "owner_halted_age_s": _halted_age_s(root, found["run_id"]),
-                "owner_refire": call if isinstance(call, str) else None, **named,
+                "owner_halted_age_s": _halted_age_s(root, found["run_id"], entry),
+                "owner_refire": _refire_call(root, found["run_id"], entry), **named,
             }
         if found["state"] is None:
             break

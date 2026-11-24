@@ -628,6 +628,10 @@ def _agent(
     judge = (schema.get("properties") or {}).get("judge")
     if isinstance(judge, _JudgeSchemaRef):
         schema_js = schema_js.replace(json.dumps(judge, sort_keys=True), _JUDGE_SCHEMA_VAR, 1)
+    owed_items = (schema.get("properties") or {}).get("items")
+    if isinstance(owed_items, _OwedItemsSchemaRef):
+        dumped = json.dumps(owed_items, sort_keys=True)
+        schema_js = schema_js.replace(dumped, f"_verifyItemsSchema({dumped})", 1)
     gate_opt = f"gateManifestRunId: {_lit(gate_manifest_run)}, " if gate_manifest_run else ""
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
@@ -895,6 +899,11 @@ _PLAN_FOLLOW_JS = (
 )
 #: Appended to the prompts of legs that run the readiness op on a plan an earlier leg touched.
 _MOVED_PLAN_SENTENCE = " A plan moved to docs/plans/<YYYY-MM>/ is the same plan: use the moved path as plan_rel."
+#: Appended to every prompt that has an agent run `plan.readiness_verdict`: the verdict fields lead the reply.
+_WHOLE_REPLY_SENTENCE = (
+    " Read each `plan.readiness_verdict` reply whole: never pipe, tail, head or slice it, because "
+    "verdict, pull_class, reason, prep_gate and blocking lead the reply and a clipped head loses them."
+)
 #: Inserted ahead of the readiness-op sentence in the review and revise prompts.
 _ANCHOR_PREMISES_SENTENCE = (
     "Declare `anchor_premises:` in the plan's frontmatter: each premise the route rests on "
@@ -1142,6 +1151,18 @@ def _test_result_schema() -> dict:
     }
     schema["properties"]["zero_run_cause"] = _STR
     schema["properties"]["co_tenant"] = {"type": "object"}
+    schema["properties"]["infra_session"] = {"type": "object"}
+    schema["properties"]["first_setup_error"] = _STR
+    schema["properties"].update(
+        over_budget={"type": "boolean"},
+        elapsed_s={"type": "number"},
+        budget_s={"type": "number"},
+        slow_targets={"type": "array"},
+        unrun_targets={"type": "array"},
+        failing_detail={"type": "array"},
+        error={"type": ["string", "object"]},
+        stderr_tail={"type": ["string", "array"]},
+    )
     return schema
 _LEDGER_CHECK_SCHEMA = _obj(
     ["items"],
@@ -1166,6 +1187,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "stall_only": {"type": "boolean"},
                     "post_commit_acts": {"type": "array", "items": {"type": "string", "enum": list(POST_COMMIT_ACTS)}},
                     "remaining": {"type": "array", "items": _STR},
+                    "requirement": _STR,
                     "evidence": _STR,
                     "met_by": {"type": ["string", "array"], "items": _STR},
                     DEPARTURE_REASON_KEY: _STR,
@@ -1204,7 +1226,8 @@ _LEDGER_ITEMS_RULES = (
     "stall_only true on the item; otherwise 'not_met'. A 'not_met' item blocks "
     "the close whatever its essential flag (the gate resets it to true); when the ledger "
     "says all_of_pm_ask yes, every item is mandatory. evidence is one "
-    "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
+    "or two sentences naming the file or behaviour. On every 'not_met' item return requirement (the first line of "
+    "its text in the ledger) and remaining: each "
     "part of the item not yet true, naming a post-commit act exactly (" + ", ".join(POST_COMMIT_ACTS) + ") "
     "and any other gap in plain words. On a design-registry item (anchor design-registry:<id>) judged "
     "'met', set met_by to the repo-relative path of the senior-front-end review file of its board, "
@@ -1296,15 +1319,40 @@ RESEARCH_HANDOFF_JS = (
 )
 #: Marker a ledger-check halt names when the verify leg returned no verdict twice; never a `not_met`.
 VERIFY_LEG_EMPTY = "verify-leg-empty"
-#: JS re-asking `_runVerify` once when its items list came back empty while ledger rows are owed
-#: (a ledger id list that is non-empty once the late ids join it); all-ruled-out stays a pass.
+#: Status a ledger-check halt gives an owed row the verify reply held no item for, while other rows have items.
+VERIFY_ITEM_MISSING = "verify-item-missing"
+#: The ledger rows the verify leg owes an item for: the stage's ledger ids plus the late ids; empty when
+#: no id is on record or all are ruled out. Read at call time, so a late id joins the next ask.
+VERIFY_OWED_IDS_JS = (
+    "const _vOwedIds = () => { const _b = _manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids : "
+    f"(_gate.{RESUME_LEDGER_KEY}?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null); "
+    "return Array.isArray(_b) ? [...new Set([..._b, ..._verifyLateIds])] : []; };"
+)
+#: Builds the verify reply's `items` schema from the owed list: minItems and one `contains` per owed id.
+#: Trap: the reply check in `VERIFY_EMPTY_RETRY_JS` and the ledger halt is authoritative; this schema only tells the verifier.
+VERIFY_ITEMS_SCHEMA_JS = (
+    "const _verifyItemsSchema = (_s) => { const _o = _vOwedIds(); return _o.length ? { ..._s, minItems: _o.length, "
+    "allOf: _o.map((id) => ({ contains: { type: 'object', properties: { id: { const: id } }, required: ['id'] } })) } : _s; };"
+)
+#: JS re-asking `_runVerify` once when the reply holds no item for some owed ledger row (an empty list is
+#: the whole-list case), naming the missing ids in `_vMissing`; all-ruled-out stays a pass. `judge.status`
+#: never stands in for a row.
 VERIFY_EMPTY_RETRY_JS = (
-    "{ const _vBase = _manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids : "
-    f"(_gate.{RESUME_LEDGER_KEY}?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null);\n"
-    "      const _vOwed = Array.isArray(_vBase) ? [...new Set([..._vBase, ..._verifyLateIds])] : [];\n"
-    "      if (!_halted && _vOwed.length && _verify && Array.isArray(_verify.items) && _verify.items.length === 0) "
-    "{ log('verify leg returned an empty items list for owed rows ' + _vOwed.join(', ') + ': re-asking once'); "
-    "_verify = await _runVerify(); } }"
+    "{ const _vOwed = _vOwedIds();\n"
+    "      const _vHave = new Set(Array.isArray(_verify?.items) ? _verify.items.map((i) => i && i.id) : []);\n"
+    "      const _vGap = _vOwed.filter((id) => !_vHave.has(id));\n"
+    "      if (!_halted && _vGap.length && _verify && Array.isArray(_verify.items)) "
+    "{ log('verify leg returned no item for owed rows ' + _vGap.join(', ') + ': re-asking once'); "
+    "_vMissing = '\\n\\nRE-ASK: the previous reply held no item in items for owed ledger row(s) ' + _vGap.join(', ') "
+    "+ '. Return one item for EACH of these ids; judge.status is a whole-run verdict and never stands in for a row.'; "
+    "_verify = await _runVerify(); } }\n"
+    f"    {{ const _vLanded = _gate?.{RESUME_LEDGER_KEY}?.{RESUME_LEDGER_LANDED_MET_BY_FIELD} ?? {{}};\n"
+    "      if (!_halted && _verify && Array.isArray(_verify.items)) { "
+    "const _vHeld = new Set(_verify.items.map((i) => i && i.id)); "
+    "_vOwedIds().filter((id) => !_vHeld.has(id) && typeof _vLanded[id] === 'string' && _vLanded[id])"
+    ".forEach((id) => { log('verify leg returned no item for ' + id + ' after one re-ask: resolved from its landed commit ' + _vLanded[id]); "
+    "_verify.items.push({ id, status: 'met', met_by: [_vLanded[id]], "
+    "evidence: 'landed at ' + _vLanded[id] + ': the verify leg returned no item after one re-ask; credited from the commit that carries the row' }); }); } }"
 )
 RESEARCH_HANDOFF_NEXT_ACTION_JS = (
     "{ kind: 'fire_research', op: null, params: { run_id: _runId, sizing: _sizingRel, fire: _halted.fire } }"
@@ -1575,6 +1623,8 @@ _STAGED_RESUME_JS = (
     "return (r && typeof r === 'object' && typeof r.arm === 'string') ? r : null; })();\n"
 )
 _ADOPT_STAGE_REPLY_TAIL_JS = (
+    # A start loop reads the reply at its own depth: the script hands the handle back (`_stagePending`) instead of halting.
+    "    if (got.defer) { if (!_stagePending) _stagePending = { handle: got.defer, read_deferred: true }; return; }\n"
     f"    if (got.fail) {{ if (!_diskHalt) _diskHalt = {_js_string_literal(_STAGE_SIDECAR_HALT)} + got.fail; return; }}\n"
     "    const gap = _wholeManifestGap(got.manifest);\n"
     "    if (gap) { if (!_relayGap) _relayGap = gap; return; }\n"
@@ -1812,6 +1862,28 @@ def _export_argv_shape(repo_root: Optional[str]) -> str:
     py = pin.command if pin and pin.command and pin.defect is None else "python3"
     return f"`{py} -m pytest <the scoped test targets>`"
 
+#: Cause a verify verdict carries when `dispatch.measured_rev` stayed -32004 after the one reconcile;
+#: `_TEST_UNPROVEN_CAUSE_JS` renders it.
+MEASURED_REV_32004_CAUSE = "measured_rev -32004"
+_MEASURED_REV_32004_CLAUSE = (
+    "A -32004 from the measured-rev op is not a refusal: follow the -32004 reconcile contract "
+    "(docs/wiki/reconcile-policy.md; measured_rev is its named re-run carve-out, so a reconcile state of "
+    "unknowable with reason killed also licenses exactly one re-run). If it persists "
+    "after that, or error.data has no reconcile_command, report status error with tests_run 0 and zero_run_cause "
+    f"'{MEASURED_REV_32004_CAUSE}'; never fall back to the working tree. "
+)
+
+
+def _export_argv_shape(repo_root: Optional[str]) -> str:
+    """The argv shape an `--export-run --` command takes: interpreter, `-m pytest`, then the targets. Trap: the
+    runner is an LLM that copies the `test_leg_run` shape (targets only after `--`); the export runs the argv
+    verbatim, so a bare test path is exec'd (WinError 193)."""
+    from coordinator_core.ops.dispatch_emit.interpreter_pin import resolve_targeted_test_python
+
+    pin = resolve_targeted_test_python(repo_root) if repo_root else None
+    py = pin.command if pin and pin.command and pin.defect is None else "python3"
+    return f"`{py} -m pytest <the scoped test targets>`"
+
 
 def _test_instruction_js(
     review_edits_base: str, repo_root: Optional[str] = None, export_command: Optional[str] = None
@@ -1843,6 +1915,7 @@ def _test_instruction_js(
             "cause; never fall back to the working tree. "
             "On a `co_tenant_dependency: {...}` line, return `zero_run_cause` set to its `parked` or `cause` value "
             "and `co_tenant` set to the parsed object. "
+            + _MEASURED_REV_32004_CLAUSE
             + "Run the scoped test targets: [",
             "js:(_manifest.test_targets ?? []).join(', ')",
             "]. "
@@ -1858,7 +1931,8 @@ def _test_instruction_js(
         f"Run every scoped test target in the working tree with "
         f"{MEASURED_REV_ENV} set to that sha in the test process environment. "
         "If the op refuses, report the refusal as a red verify result; never fall back to the working tree. "
-        "Run the scoped test targets: [",
+        + _MEASURED_REV_32004_CLAUSE
+        + "Run the scoped test targets: [",
         "js:(_manifest.test_targets ?? []).join(', ')",
         "]. "
         + _emit._review_edits_clause(review_edits_base)
@@ -1939,7 +2013,7 @@ def _test_blockers_js(
 #: Joins the deferred review re-verify promise; the reused path keeps its already-bound value.
 _JOIN_REVERIFY_JS = (
     "(_reviewReused ? Promise.resolve(_reviewReverify) : (_reviewReverifyP ?? Promise.resolve(null)).catch((e) => { "
-    "const _m = String((e && e.message) ?? e); if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } "
+    "const _m = _errLimitText(e) ?? String((e && e.message) ?? e); if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } "
     "else { log('review re-verify leg threw: ' + _m); } return null; }))"
 )
 
@@ -2328,12 +2402,30 @@ def _criterion_blocker_halt_js(sizing_rel: Optional[str]) -> str:
 _TEST_UNPROVEN_CAUSE_FN = (
     "    const _testUnproven = () => { const _r = _testResult; "
     "const _ids = (Array.isArray(_r.failing_ids) ? _r.failing_ids : []).filter((x) => typeof x === 'string' && x.trim()); "
+    "const _err = ['error', 'errored'].includes(_r.status); "
+    "if (_err && _r.over_budget === true && !_ids.length) { "
+    "const _n = (v) => (Array.isArray(v) ? v : []); "
+    "const _slow = _n(_r.slow_targets).map((s) => (s && typeof s === 'object') "
+    "? String(s.file ?? s.node_id ?? '?') + (s.seconds !== undefined ? ' (' + s.seconds + 's)' : '') : String(s)); "
+    "const _unrun = _n(_r.unrun_targets).map(String); "
+    "return 'test leg over budget (' + ((typeof _r.summary === 'string' && _r.summary) ? _r.summary : 'timeout') + ')' "
+    "+ ((typeof _r.elapsed_s === 'number' && typeof _r.budget_s === 'number') ? '; elapsed ' + _r.elapsed_s + 's of ' + _r.budget_s + 's budget' : '') "
+    "+ '; slowest targets: ' + (_slow.length ? _slow.join(', ') : 'none named') "
+    "+ '; unrun targets: ' + (_unrun.length ? _unrun.join(', ') : 'none') "
+    "+ '; tests_run ' + (_r.tests_run ?? '?') + ' / tests_failed ' + (_r.tests_failed ?? '?'); } "
     "if (typeof _r.tests_run === 'number' && _r.tests_run === 0) "
-    "return 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : '') "
+    "return (_r.zero_run_cause === '" + MEASURED_REV_32004_CAUSE + "') ? '" + MEASURED_REV_32004_CAUSE + "; 0 tests ran' : 'ran zero tests' + ((typeof _r.zero_run_cause === 'string' && _r.zero_run_cause) ? ' (' + _r.zero_run_cause + ')' : '') "
     "+ ((_r.import_error && typeof _r.import_error === 'object' && typeof _r.import_error.path === 'string') "
     "? ': ' + (typeof _r.import_error.symbol === 'string' ? \"'\" + _r.import_error.symbol + \"' defined only in uncommitted \" : '') + _r.import_error.path + ' (run ' + (_r.import_error.run_id || 'unowned') + ')' : ''); "
     "if (_ids.length) return ''; "
-    "if (['error', 'errored'].includes(_r.status)) return 'errored without a failing id'; "
+    "if (_err) { "
+    "const _why = [(typeof _r.summary === 'string' ? _r.summary : ''), "
+    "...(Array.isArray(_r.failing_detail) ? _r.failing_detail : []).map((d) => String((d && d.message) ?? '')), "
+    "(typeof _r.error === 'string' ? _r.error : (_r.error && typeof _r.error === 'object' ? String(_r.error.message ?? '') : '')), "
+    "(typeof _r.stderr_tail === 'string' ? _r.stderr_tail : (Array.isArray(_r.stderr_tail) ? _r.stderr_tail.join('\\n') : ''))]"
+    ".map((x) => x.trim()).filter((x, i, a) => x && a.indexOf(x) === i); "
+    "return 'errored without a failing id: ' + (_why.length ? _why.join(' | ').slice(0, 1500) "
+    ": 'the verdict carried no summary, failing_detail message, error or stderr tail'); } "
     "return ''; };\n"
 )
 _TEST_UNPROVEN_CAUSE_JS = "_testUnproven()"
@@ -2354,6 +2446,14 @@ CO_TENANT_HALTED_CAUSE = "co_tenant_dependency_on_halted_run"
 #: Mirrors `co_tenant_cycle.CAUSE_CYCLE`: runs that each need a path another of them holds; keep equal.
 CO_TENANT_CYCLE_CAUSE = "co_tenant_cycle"
 
+#: The halt kind of a test leg that errored on its own budget (`over_budget` true); its detail names the
+#: summary, slow and unrun targets and tests_run/tests_failed.
+TEST_LEG_OVER_BUDGET_HALT = "test_leg_over_budget"
+
+#: Mirrors `clean_overlay_verify.ZERO_RUN_TEST_INFRA` and `halted_record_eviction.TEST_INFRA_HALT`; keep equal.
+#: A 0-test verdict with this cause halts `test_infra_failure` and is never refired: a rerun repeats the cause.
+TEST_INFRA_CAUSE = "test_infra_failure"
+
 #: A test leg owed by the manifest whose verdict is absent, has no sidecar, or reads not_run never
 #: reaches the commit as passed. `TEST_GUARD` is substituted with the leg's own owed-condition.
 def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
@@ -2373,9 +2473,15 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "? _reviewReverify : {}; "
         "const _rvl = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
         "const _rvt = (_testResult && typeof _testResult === 'object') ? _testResult : {}; "
-        "const _rvx = new Set([..._rvl(_rvh.pre_existing), ..._rvl(_rvh.kept)]); "
+        "const _rvb = (_rvt.baseline && typeof _rvt.baseline === 'object') ? _rvt.baseline : {}; "
+        "const _rvid = (e) => (e && typeof e === 'object') ? String(e.id) : String(e); "
+        "const _rvAtBase = [..._rvl(_rvh.pre_existing), ..._rvl(_rvh.owned_red), ..._rvl(_rvh.peer_dirt), "
+        "...(Array.isArray(_rvt.pre_existing) ? _rvt.pre_existing : []).map(_rvid), "
+        "...(Array.isArray(_rvt.failing_at_base) ? _rvt.failing_at_base : []).map(_rvid), "
+        "...(Array.isArray(_rvb.pre_existing) ? _rvb.pre_existing : []).map(_rvid)]; "
+        "const _rvx = new Set([..._rvAtBase, ..._rvl(_rvh.kept)]); "
         "const _rvFail = [...new Set(_rvl(_rvh.failing))].filter((n) => !_rvx.has(n)); "
-        "const _rvPre = _rvl(_rvh.pre_existing); "
+        "const _rvPre = [...new Set(_rvAtBase)]; "
         "const _rvCause = (typeof _rvt.zero_run_cause === 'string') ? _rvt.zero_run_cause : ''; "
         "const _rvWait = _rvCause === " + json.dumps(CO_TENANT_WAIT_CAUSE) + "; "
         "const _rvHalted = _rvCause === " + json.dumps(CO_TENANT_HALTED_CAUSE) + "; "
@@ -2397,6 +2503,20 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "&& typeof _testResult?.import_error?.source_path === 'string') "
         "? 'Land the uncommitted ' + _testResult.import_error.source_path + ' first, then refire: ' "
         ": 'Refire to re-run the test leg: ') + " + _refire_js(sizing_rel) + " }; "
+        "if (_rvt.over_budget === true && ['error', 'errored'].includes(_rvt.status) && !_rvWait && !_rvHalted && !_rvCycle "
+        "&& typeof _rvt.sidecar_path === 'string' && _rvt.sidecar_path.trim() "
+        "&& !(Array.isArray(_rvt.failing_ids) && _rvt.failing_ids.some((x) => typeof x === 'string' && x.trim()))) "
+        "{ _halted = { ..._halted, halted: " + json.dumps(TEST_LEG_OVER_BUDGET_HALT) + " }; } "
+        "if (_rvCause === " + json.dumps(TEST_INFRA_CAUSE) + " && _rvt.tests_run === 0 && _halted.halted === "
+        + json.dumps(TEST_INFRA_CAUSE) + ") { "
+        "const _rvIs = (_rvt.infra_session && typeof _rvt.infra_session === 'object') ? _rvt.infra_session : {}; "
+        "const _rvSess = ['argv', 'cwd', 'interpreter', 'exit_code'].filter((k) => _rvIs[k] !== undefined && _rvIs[k] !== null)"
+        ".map((k) => k + ' ' + (typeof _rvIs[k] === 'object' ? JSON.stringify(_rvIs[k]) : String(_rvIs[k]))); "
+        "const _rvSetup = (typeof _rvt.first_setup_error === 'string') ? _rvt.first_setup_error.trim() : ''; "
+        "_halted = { ..._halted, halted: " + json.dumps(TEST_INFRA_CAUSE) + ", "
+        "detail: _halted.detail + (_rvSetup ? '; first setup error: ' + _rvSetup.slice(0, 1500) : '') "
+        "+ (_rvSess.length ? '; pytest session: ' + _rvSess.join(', ') : '; the verdict carried no pytest session (argv, cwd, interpreter, exit code)'), "
+        "next_action: 'Fix the cause named in detail first (a rerun repeats it), then refire: ' + " + _refire_js(sizing_rel) + " }; } "
         "if (_rvWait || _rvHalted || _rvCycle) { _halted = { ..._halted, halted: _rvCycle ? " + json.dumps(CO_TENANT_CYCLE_CAUSE)
         + " : _rvWait ? " + json.dumps(CO_TENANT_WAIT_HALT)
         + " : " + json.dumps(CO_TENANT_HALTED_CAUSE) + ", "
@@ -2405,7 +2525,7 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "+ ' that the clean export needs; the run did not run its tests' "
         ": 'the clean export needs ' + _rvMod + ' from halted run ' + _rvOwner + '; the run did not run its tests', "
         "next_action: _rvCycle ? 'Joint-land the cycle: ' + String(_rvCo.remedy ?? ('coordinator-invoke dispatch.land_run ' "
-        "+ JSON.stringify({ joint: _rvCyc }))) : _rvWait ? 'auto-refires when ' + _rvOwner + ' lands' "
+        "+ JSON.stringify({ joint: _rvCyc }))) : _rvWait ? 'the engine refires ' + _rvOwner + ' first, then this run (stranded-wait sweep)' "
         ": 'Refire the owner first: ' + String(_rvCo.owner_refire ?? _rvOwner) + '; then ' + " + _refire_js(sizing_rel) + " }; } }"
     )
 
@@ -2475,7 +2595,7 @@ def _wave_tests_green_js(
         f"{_emit._model_opt(_emit._TEST_AGENT_TYPE)}, effort: {_js_string_literal(_MECHANICAL_EFFORT)}, schema: _ROW_VERIFY_SCHEMA }}\n"
         "      );\n"
         "    } catch (e) {\n"
-        "      if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return false; }\n"
+        "      if (_errLimitText(e) !== null) { _haltOnUsageLimit(e); return false; }\n"
         "      r = null;\n"
         "    }\n"
         "    const status = (r && r.status) || null;\n"
@@ -2503,8 +2623,8 @@ def _usage_limit_helper_js() -> str:
     return (
         f"  const _USAGE_LIMIT_RE = {_USAGE_LIMIT_RE};\n"
         "  function _haltOnUsageLimit(e) {\n"
-        "    const msg = String((e && (e.message ?? e)) ?? '');\n"
-        "    if (!_USAGE_LIMIT_RE.test(msg)) throw e;\n"
+        "    const msg = _errLimitText(e);\n"
+        "    if (msg === null) throw e;\n"
         f"    const _rm = {_USAGE_LIMIT_RESET_RE}.exec(msg);\n"
         f"    _halted = {{ halted: {_lit(HALT_USAGE_LIMIT)}, run_id: _runId, detail: msg.slice(0, 300), "
         "reset: _rm ? _rm[1].trim() : null, reset_zone: _rm && _rm[2] ? _rm[2].trim() : null, "
@@ -2519,12 +2639,22 @@ def _usage_limit_helper_js() -> str:
         "    }\n"
         "    return null;\n"
         "  }\n"
+        "  function _errLimitText(e) { return _limitTextIn(e?.message, e?.cause?.message, e?.cause, e?.raw, e?.output, e); }\n"
         "  function _usageHalted(e) {\n"
-        "    if (!_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) return false;\n"
+        "    if (_errLimitText(e) === null) return false;\n"
         "    _haltOnUsageLimit(e);\n"
         "    return true;\n"
         "  }\n"
         + RECOVERED_COMMIT_HELPER_JS
+    )
+
+
+def _verify_tests_catch_js() -> str:
+    """The verify-tests leg's catch: a limit refusal rethrows to the verify catch, any other throw nulls the result."""
+    return (
+        "catch (e) { if (_errLimitText(e) !== null) throw e; "
+        "log('verify-tests leg threw: ' + String((e && e.message) ?? e)); "
+        f"{_VERIFY_TEST_RESULT_VAR} = null; }}"
     )
 
 
@@ -2825,7 +2955,7 @@ def _acceptance_decls_js(rows: list[dict], call: str) -> str:
         "return { row_id: row.row_id, register_rows: row.register_rows, command: row.command, exit: hit ? hit.exit : undefined }; });\n"
         f"  const _runAcceptance = async () => {{ if ({_ACCEPT_RESULTS_VAR} !== null) return; "
         f"try {{ {_ACCEPT_RESULTS_VAR} = _acceptOf(await {call}); }} catch (e) {{ "
-        "if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) throw e; "
+        "if (_errLimitText(e) !== null) throw e; "
         f"log('verify-acceptance leg threw: ' + String((e && e.message) ?? e)); {_ACCEPT_RESULTS_VAR} = _acceptOf(null); }} }};\n"
         + "  " + DEMOTE_RED_JS.replace("\n", "\n  ").rstrip(" ")
     )
@@ -2881,12 +3011,15 @@ def _verify_call(
         "\n\n(3) VERDICT. Once the test result is in, read it before you rule: a failing or degraded "
         "result is evidence for the verdict, never the verdict itself. ",
         *verdict_parts,
+        "js:(_vOwedIds().length ? ' OWED ROWS: items holds one entry for EACH of these ledger ids: ' + _vOwedIds().join(', ') "
+        "+ '. A judge verdict, met or not, never stands in for a row; a reply missing one is a schema violation and is re-asked.' : '')",
         "\n\nReturn one object: "
         + return_test
         + ("`judge` (the criterion verdict fields the judge brief above names, its status included), " if judged else "")
         + "`items`, `all_of_pm_ask` and `conflicts` (the ledger verdict), and `doc_paths`, `note_path` and "
         "`stale_docs` (step 2).",
         "js:_vNudge",
+        "js:_vMissing",
     )
     return _agent(
         prompt, label=ASK_VERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
@@ -2940,7 +3073,7 @@ def _overlay_verify_call(*, head: str, anchor: str, repo_root: str, run_id: str)
 _OVERLAY_FOLD_JS = (
     f"    if (!_halted && _testWanted && _verify && ({_VERIFY_TEST_RESULT_VAR} || _verify.test)) {{\n"
     "      let _ov = null; let _ovThrew = '';\n"
-    "      try { _ov = await __OVERLAY__; } catch (e) { const _m = String((e && e.message) ?? e); "
+    "      try { _ov = await __OVERLAY__; } catch (e) { const _m = _errLimitText(e) ?? String((e && e.message) ?? e); "
     "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { _ovThrew = _m; log('overlay-verify leg threw: ' + _m); } }\n"
     "      let _ovHead = null;\n"
     "      if (_ov && _ov.exit_code === 1) { _ovHead = 'clean-overlay verdict red: ' + (_ov.detail ?? ''); }\n"
@@ -2970,14 +3103,23 @@ class _JudgeSchemaRef(dict):
     """A judge verdict schema that `_agent` serializes as `_JUDGE_SCHEMA`; the composer declares that const once."""
 
 
-def _verify_schema(judge_schema: Optional[dict]) -> dict:
+class _OwedItemsSchemaRef(dict):
+    """The verify reply's `items` schema that `_agent` wraps in `_verifyItemsSchema(...)`, which adds the owed-row requirement at fire time."""
+
+
+def _verify_schema(judge_schema: Optional[dict], *, owed_items: bool = False) -> dict:
     """The merged leg's result schema: `ask_contract.ASK_VERIFY_RETURN_KEYS`, with the test result
-    and the judge verdict nested because their `status` keys collide."""
+    and the judge verdict nested because their `status` keys collide.
+
+    With ``owed_items`` the `items` schema requires an item per owed ledger id at fire time
+    (`VERIFY_ITEMS_SCHEMA_JS`); only a call site inside the verify block, where that helper is in scope, may set it."""
     properties = {
         "test": _test_result_schema(),
         **_LEDGER_CHECK_SCHEMA["properties"],
         **_DOCS_SCHEMA["properties"],
     }
+    if owed_items:
+        properties["items"] = _OwedItemsSchemaRef(properties["items"])
     required = ["items"]
     if judge_schema is not None:
         properties["judge"] = _JudgeSchemaRef(judge_schema)
@@ -3336,6 +3478,7 @@ def _ledger_recover_js(
 
 _REMNANT_COMPLETE_JS = r"""
     const _remnantComplete = async () => {
+      __OWEDHELPERS__
       if (_gate.arm === __XS__ || _halted) return;
       const rulable = _manifest?.rulable_ids ?? _gate.__RL__?.rulable_ids ?? [];
       const heldIds = [...(_manifest.gated ?? []), ...(_manifest.slot_withheld ?? [])].map((g) => String(g.id)).concat((_manifest.held_ids ?? []).map(String));
@@ -3491,7 +3634,8 @@ def _remnant_complete_js(
         docs_js,
         "\n\n(3) VERDICT. Once the test result is in, read it before you rule. Re-run each item's checks first: ",
         "js:JSON.stringify(rmItems.map((i) => ({ id: i.id, checks: i.checks })))",
-        ". Then rule the whole run again. ",
+        ". Then rule the whole run again. `items` holds one entry for EACH ledger row, not only the items above; "
+        "a whole-run verdict never stands in for a row. ",
         *verdict_parts,
         "\n\nReturn one object: `test`, " + ("`judge`, " if judged else "") + "`items`, `all_of_pm_ask` and `conflicts`, "
         "`doc_paths`, `note_path` and `stale_docs`, and `delivery` ({verdict: PASS or FAIL, reason}) ruled on the "
@@ -3530,6 +3674,7 @@ def _remnant_complete_js(
         .replace("__TEST__", _emit._TEST_RESULT_VAR)
         .replace("__FV__", fv if judged else "null")
         .replace("__REMNANTCALL__", leg_call)
+        .replace("__OWEDHELPERS__", f"{VERIFY_OWED_IDS_JS} {VERIFY_ITEMS_SCHEMA_JS}")
         .replace("__REVERIFYCALL__", reverify_call)
         .replace("__RECORDCALL__", record_call)
         .replace("__DOCSWANTED__", docs_wanted)
@@ -3558,6 +3703,77 @@ _COMMIT_HALT_REASON_JS = (
     "([_commit?.refused, _commit?.error].filter((x) => x !== null && x !== undefined && String(x).trim() !== '')"
     ".map((x) => String(x).trim()).join(': ').slice(0, 600) || null)"
 )
+#: One row's halt line: id, requirement first line, evidence checked, remaining gap. Trap: reads `_ledger` and
+#: `_reqText` at call time; `whyOf(id)` is the refusal's own reason, used only when the verdict named no gap.
+UNMET_ROWS_DETAIL_JS = (
+    "const _unmetRowsDetail = (ids, whyOf) => [...new Set(ids)].map((id) => {\n"
+    "    const it = (_ledger?.items ?? []).find((x) => x && x.id === id) ?? {};\n"
+    "    const req = String(_reqText[id] ?? it.requirement ?? '').split('\\n')[0].trim() || 'requirement text not in the ledger view';\n"
+    "    const read = it.root_read == null ? '' : 'root_read ' + [].concat(it.root_read).join(', ');\n"
+    "    const ev = [read, it.evidence ? 'evidence ' + String(it.evidence).trim() : ''].filter(Boolean).join('; ') "
+    "|| 'none recorded by the verify leg';\n"
+    "    const rem = Array.isArray(it.remaining) ? it.remaining.map(String).filter(Boolean) : [];\n"
+    "    const why = String(whyOf(id) ?? '').trim();\n"
+    "    const gap = rem.length ? rem.join(' | ') : 'the verdict named no remaining line' + (why ? ' (' + why + ')' : '');\n"
+    "    return id + ' \"' + req + '\": evidence checked: ' + ev + '; remaining gap: ' + gap;\n"
+    "  }).join('; ');"
+)
+#: The commit leg's `ledger-unmet` refusal text names its rows `id: reason; id: reason`; this rebuilds each row's
+#: full detail from the run's own verdict, or '' for any other refusal.
+COMMIT_LEDGER_DETAIL_JS = (
+    "const _commitLedgerDetail = (c) => {\n"
+    "    if (c?.refused !== 'ledger-unmet') return '';\n"
+    "    const why = {};\n"
+    "    for (const seg of String(c.error ?? '').replace(/^[^:]*not met:\\s*/, '').split(/;\\s*/)) {\n"
+    "      const at = seg.indexOf(': ');\n"
+    "      if (at < 1) continue;\n"
+    "      for (const id of seg.slice(0, at).split(/,\\s*/)) if (/^[A-Za-z][\\w.-]*$/.test(id)) why[id] = seg.slice(at + 2);\n"
+    "    }\n"
+    "    const ids = Object.keys(why).length ? Object.keys(why)\n"
+    "      : (_ledger?.items ?? []).filter((i) => i && ['not_met', 'drifted', 'inconclusive'].includes(i.status)).map((i) => i.id);\n"
+    "    return _unmetRowsDetail(ids, (id) => why[id]);\n"
+    "  };"
+)
+#: The ledger-check halt's `detail` and `reason` fields (`reason` is what lands in halted.json): one entry per blocking row id.
+_LEDGER_CHECK_ROWS_JS = (
+    "_unmetRowsDetail(_blkIds, (id) => _emptyVerdict ? 'verify-leg-empty' "
+    ": (_missingIds.includes(id) ? 'verify-item-missing' : '')) || null"
+)
+LEDGER_CHECK_DETAIL_JS = f"detail: {_LEDGER_CHECK_ROWS_JS}, reason: {_LEDGER_CHECK_ROWS_JS}"
+#: Commit halt fields for an in-run `ledger-unmet` refusal: the per-row detail leads `reason` and rides in `detail`.
+_COMMIT_LEDGER_FIELDS_JS = (
+    "detail: _commitLedgerDetail(_commit) || null, "
+)
+_COMMIT_HALT_REASON_WITH_LEDGER_JS = (
+    "(_commitLedgerDetail(_commit) ? ('ledger-unmet: ' + _commitLedgerDetail(_commit)).slice(0, 2000) : "
+    + _COMMIT_HALT_REASON_JS + ")"
+)
+
+
+def requirement_first_lines(ledger_view: str) -> dict[str, str]:
+    """`{row id: first line of its text}` from a run's requirements.md view: `## <id> (<origin>)` rows and
+    `<run> <id> at <time>:` revise notes, each followed by its `> ` quote. Pure; {} when none parse."""
+    out: dict[str, str] = {}
+    row_id: Optional[str] = None
+    for line in ledger_view.splitlines():
+        head = re.match(r"^## (\S+) \(", line) or re.match(r"^\S+ (N\d+) at \S+:\s*$", line)
+        if head:
+            row_id = head.group(1)
+        elif row_id and line.startswith(">"):
+            out.setdefault(row_id, line[1:].strip())
+            row_id = None
+    return out
+
+
+def _requirement_texts_at_compose(ledger_path: str) -> dict[str, str]:
+    """`requirement_first_lines` of the ledger view on disk now, {} when absent: a row added later reaches the
+    halt through the verify item's `requirement` instead."""
+    try:
+        return requirement_first_lines(Path(ledger_path).read_text(encoding="utf-8"))
+    except OSError:
+        return {}
+
+
 _GATE_HALT_CAUSE_JS = "(_gate.halt ? 'gate halt: ' + String(_gate.halt.kind ?? _gate.halt.reason ?? 'halt') : 'apm ruling carried no foldable arm (non-XS arm or resume_plan)')"
 
 
@@ -3725,6 +3941,7 @@ def preblitz_anchor_lines(repo_root: str, plan_rel: Optional[str]) -> list[str]:
 
 def _preblitz_anchor_lines(repo_root: str, plan_rel: str) -> list[str]:
     from coordinator_core.ops import _anchor_premise, _brief_premise
+    from coordinator_core.ops.dispatch_emit.ask_contract import premise_ref
     from coordinator_core.ops.plan_readiness_verdict import _plan_inputs
 
     root = Path(repo_root)
@@ -3732,7 +3949,7 @@ def _preblitz_anchor_lines(repo_root: str, plan_rel: str) -> list[str]:
         text = (root / plan_rel).read_text(encoding="utf-8")
         fm = _plan_inputs(text)[6]
         anchors, _defects = _anchor_premise.parse_anchors(fm, root)
-        verdicts = _anchor_premise.anchor_verdicts(anchors, [], [], text, root)
+        verdicts = _anchor_premise.anchor_verdicts(anchors, [], [], text, root, premise_ref(root, fm.get("sizing_object")))
     except (OSError, ValueError, KeyError, TypeError):
         return []
     claims = {a["id"]: a["claim"] for a in anchors}
@@ -4252,7 +4469,7 @@ def _routed_row_js(work_label: str, exec_phase: str) -> str:
 
 
 def _family_enabled(repo_root: str, sizing_rel: Optional[str]) -> bool:
-    """True unless the run's sizing is readable now and names neither the stage-family binding nor a
+    """True unless the run's sizing is readable now and names neither `stage_families` nor a
     `family`. Must accept every opt-in `ask_stage.stage` routes on: a row staged to the family runner
     without this leg is parsed as an executor reply and halts for want of a status line.
     The manifest is staged at run time, so the script cannot see a row's `family` at compose time;
@@ -4449,7 +4666,7 @@ _OBJECTIVE_JS = r"""
     if (r && typeof r.cost_usd === 'number') _objSpend += r.cost_usd;
     if (r && typeof r.tokens === 'number') { _objTokens += r.tokens; _objWindowTokens += r.tokens; }
   };
-  const _objCaught = (e) => { if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) _haltOnUsageLimit(e); return null; };
+  const _objCaught = (e) => { if (_errLimitText(e) !== null) _haltOnUsageLimit(e); return null; };
   async function _objCheck(n, iteration) {
     _objWaveMax = Math.max(_objWaveMax, n);
     const cmd = _objCmd(__OPCHECK__, { run_id: _runId, wave: n, iteration, spend_usd: _objSpend, diff_range: _runBase, plan_path: _planRel ?? '', check_cost_usd: 0, check_llm_calls: 0 });
@@ -5275,6 +5492,9 @@ def compose_ask_script(
             head=head, anchor=anchor, script_path=script_path, repo_root=repo_root, run_id=run_id,
         ))
     b.append("  let _ledger = null;")
+    b.append(f"  const _reqText = {json.dumps(_requirement_texts_at_compose(ledger_abs))};")
+    b.append(f"  {UNMET_ROWS_DETAIL_JS}")
+    b.append(f"  {COMMIT_LEDGER_DETAIL_JS}")
     b.append(f"  const _pmVerbatimIds = {json.dumps(_pm_verbatim_row_ids(repo_root, sizing_rel))};")
     b.append(f"  const _pmUnruledIds = {json.dumps(_pm_unruled_row_ids(repo_root, sizing_rel))};")
     b.append("  let _consumedReturns = {};")
@@ -6400,6 +6620,7 @@ def compose_ask_script(
             "(ids from this vocabulary, empty when none: "
             + ", ".join(sorted(signal_selects))
             + ") and return them as review_signals."
+            + _WHOLE_REPLY_SENTENCE
             + _MOVED_PLAN_SENTENCE
             + ledger_clause,
             _LEDGER_SERVE_SENTENCE,
@@ -6591,6 +6812,7 @@ def compose_ask_script(
             "alongside plan_rel. Also return that reply's rulings, blocking_findings and "
             "split_recommended verbatim; when the pull's coverage or reviews still stand unanswered "
             "after your repairs, take them from the run that carried those values instead."
+            + _WHOLE_REPLY_SENTENCE
             + _MOVED_PLAN_SENTENCE,
             "js:_pullData()",
             ledger_clause,
@@ -6617,6 +6839,7 @@ def compose_ask_script(
             "re-run the op with the plan alone and return that reply's pull_class and verdict "
             "alongside plan_rel (the plan's repo-relative path, unchanged). Also return that reply's "
             "rulings, blocking_findings and split_recommended verbatim."
+            + _WHOLE_REPLY_SENTENCE
             + _MOVED_PLAN_SENTENCE,
             "js:_pullData()",
             ledger_clause,
@@ -6907,10 +7130,9 @@ def compose_ask_script(
         "  let _stageHalt = _stageRefusal ? 'stage refused: ' + _stageRefusal : "
         "(_diskHalt ?? (_relayGap ? 'stage manifest relay is not whole: ' + _relayGap : null));"
     )
-    if launcher_child:
-        b.append(
-            f"  if (_stagePending && !_stagedManifest) {{ return {{ {STAGE_PENDING_KEY}: _stagePending }}; }}"
-        )
+    b.append(
+        f"  if (_stagePending && !_stagedManifest) {{ return {{ {STAGE_PENDING_KEY}: _stagePending }}; }}"
+    )
     b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
     if launcher_child:
         b.append(_SLIM_MANIFEST_HALT_JS)
@@ -7017,7 +7239,7 @@ def compose_ask_script(
         f"    try {{ const _r = await {late_read_call}; "
         f"return (Array.isArray(_r?.{LATE_ROWS_FIELD}) ? _r.{LATE_ROWS_FIELD} : [])"
         ".filter((s) => typeof s === 'string' && s.trim()); }\n"
-        "    catch (e) { const _m = String((e && e.message) ?? e); "
+        "    catch (e) { const _m = _errLimitText(e) ?? String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('late-rows read threw: ' + _m); } return []; }\n"
         "  };"
     )
@@ -7476,7 +7698,7 @@ def compose_ask_script(
         docs_parts=docs_parts,
         verdict_parts=verdict_parts,
         judged=judged,
-        schema=_verify_schema(judge_brief[1] if judged else None),
+        schema=_verify_schema(judge_brief[1] if judged else None, owed_items=True),
         run_id=run_id,
         stager=stager,
         test_result_var=_VERIFY_TEST_RESULT_VAR,
@@ -7524,16 +7746,15 @@ def compose_ask_script(
         f"    let {_VERIFY_TEST_RESULT_VAR} = null;",
         # The tests leg runs first and its result rides the verify prompt; a throw there that is not a usage
         # limit leaves the result null, so the empty-verdict halt below owns it.
-        f"    const _vAsk = () => {verify_call}; let _vNudge = ''; let _vRe = false;",
+        f"    {VERIFY_OWED_IDS_JS} {VERIFY_ITEMS_SCHEMA_JS}",
+        f"    let _vNudge = ''; let _vMissing = ''; let _vRe = false; const _vAsk = () => {verify_call};",
         f"    const _runVerify = async () => {{ try {{ _vNudge = ''; _vRe = false; {_VERIFY_TEST_RESULT_VAR} = null; "
-        f"if (_testWanted) {{ try {{ {_VERIFY_TEST_RESULT_VAR} = await {verify_tests_call}; }} catch (e) {{ "
-        f"if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) throw e; log('verify-tests leg threw: ' + String((e && e.message) ?? e)); "
-        f"{_VERIFY_TEST_RESULT_VAR} = null; }} }} "
+        f"if (_testWanted) {{ try {{ {_VERIFY_TEST_RESULT_VAR} = await {verify_tests_call}; }} {_verify_tests_catch_js()} }} "
         + ("await _runAcceptance(); " if accept_rows else "")
         + "try { _verify = await _vAsk(); } catch (e) { _verify = await _recoverStructuredReply(e, () => { _vRe = true; _vNudge = "
         + _lit(_VERIFY_REASK.replace("__DIR__", _sidecar.sidecar_dir("ask", run_id, ASK_VERIFY_LABEL))) + "; return _vAsk(); }); } "
         f"if (_verify && {_VERIFY_TEST_RESULT_VAR} && typeof {_VERIFY_TEST_RESULT_VAR}.status === 'string') _verify.test = {_VERIFY_TEST_RESULT_VAR}; "
-        "} catch (e) { const _m = String((e && e.message) ?? e); "
+        "} catch (e) { const _m = _errLimitText(e) ?? String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); "
         + _VERIFY_REPLY_MISSING_JS.replace("__REFIRE__", _refire_js(sizing_rel)).replace("__DIR__", _sidecar.sidecar_dir("ask", run_id, ASK_VERIFY_LABEL))
         + " } _verify = null; } return _verify; };",
@@ -7605,7 +7826,7 @@ def compose_ask_script(
         f"      if (_leg && _leg.action === {_lit(LEG_REFUSE)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
         f"reason: {_lit(LEG_REFUSAL_HEAD)} + (_leg.reason ?? ''), sizing: _sizingRel, run_id: _runId, {HALT_PLAN_FIELD}: _planRel }}; }}\n"
         f"      else if (_leg && _leg.action === {_lit(LEG_SKIP)}) {{ log('ledger-remaining leg skipped: ' + (_leg.reason ?? '')); }}\n"
-        f"      else if (!_allLandedResume || _reviseNoted || _revisedRows) {{ try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        f"      else if (!_allLandedResume || _reviseNoted || _revisedRows) {{ try {{ await {remaining_call}; }} catch (e) {{ const _m = _errLimitText(e) ?? String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('ledger-remaining leg threw: ' + _m); } } }\n"
         "    }"
     ]
@@ -7747,7 +7968,7 @@ def compose_ask_script(
                 judged=judged, test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
                 docs_parts=docs_parts,
                 verdict_parts=verdict_parts,
-                schema=_verify_schema(judge_brief[1] if judged else None), repo_root=repo_root,
+                schema=_verify_schema(judge_brief[1] if judged else None, owed_items=True), repo_root=repo_root,
             )
         )
     # `out_of_scope` accepts only register rows still open at stage; any other blocking id is named
@@ -7761,8 +7982,10 @@ def compose_ask_script(
         "&& Array.isArray(_withheldIds) && _withheldIds.length > 0;\n"
         "    const _emptyVerdict = !!_ledger && (_ledger.items ?? []).length === 0 && !_allRuledOut;\n"
         "    const _owedIds = _emptyVerdict && Array.isArray(_ledgerIds) ? _ledgerIds : [];\n"
-        "    const _blkIds = (_emptyVerdict ? _owedIds : (_ledger ? _ledgerBlocking(_ledger) : []))"
-        ".map((i) => (i && typeof i === 'object') ? i.id : i).filter(Boolean);\n"
+        "    const _haveIds = new Set((_ledger?.items ?? []).map((i) => i && i.id));\n"
+        "    const _missingIds = (_ledger && Array.isArray(_ledgerIds)) ? _ledgerIds.filter((id) => !_haveIds.has(id)) : [];\n"
+        "    const _blkIds = [...new Set([...(_emptyVerdict ? _owedIds : (_ledger ? _ledgerBlocking(_ledger) : []))"
+        ".map((i) => (i && typeof i === 'object') ? i.id : i).filter(Boolean), ..._missingIds])];\n"
         "    const _blkRulable = _blkIds.filter((id) => _rulable.includes(id));\n"
         "    const _blkForeign = _blkIds.filter((id) => !_rulable.includes(id));\n"
         "    const _blkPmUnruled = _blkRulable.filter((id) => _pmUnruledIds.includes(id));\n"
@@ -7787,16 +8010,18 @@ def compose_ask_script(
         "    const _blkItems = (_emptyVerdict || !_ledger) ? [] : _ledgerBlocking(_ledger);\n"
         "    const _allOwed = _blkItems.length > 0 "
         "&& _blkItems.every((i) => Array.isArray(i.owed_by) && i.owed_by.length > 0 && i.owed_by.every((id) => _owedById.has(id))) "
-        "&& _blockedChunks.length === 0 && _incompleteChunks.every((id) => _owedById.has(id));\n"
+        "&& _missingIds.length === 0 && _blockedChunks.length === 0 && _incompleteChunks.every((id) => _owedById.has(id));\n"
         "    const _owedNamed = [...new Set(_blkItems.flatMap((i) => i.owed_by ?? []))]"
         ".map((id) => id + ' (' + (_owedById.get(id)?.reason ?? '') + '): ' + (_owedById.get(id)?.detail ?? ''));"
     )
     b.append(
-        "    if (!_halted && (!_ledger || _emptyVerdict || _ledgerBlocking(_ledger).length)) "
+        "    if (!_halted && (!_ledger || _emptyVerdict || _missingIds.length || _ledgerBlocking(_ledger).length)) "
         "{ _halted = { halted: 'ledger-check', "
-        f"items: _emptyVerdict ? _owedIds.map((id) => ({{ id, status: {_lit(VERIFY_LEG_EMPTY)}, evidence: {_lit(VERIFY_LEG_EMPTY + ': no verdict after one re-ask; an engine failure, the row was not judged')} }})) "
-        ": (_ledger ? _ledgerBlocking(_ledger) : []), "
+        f"{LEDGER_CHECK_DETAIL_JS}, "
+        f"items: _emptyVerdict ? _owedIds.map((id) => ({{ id, status: {_lit(VERIFY_LEG_EMPTY)}, evidence: {_lit(VERIFY_LEG_EMPTY + ': schema violation, the verify reply held no item for this owed row after one re-ask; an engine failure, the row was not judged and judge.status never credits it')} }})) "
+        f": (_ledger ? [..._ledgerBlocking(_ledger), ..._missingIds.map((id) => ({{ id, status: {_lit(VERIFY_ITEM_MISSING)}, evidence: {_lit(VERIFY_ITEM_MISSING + ': schema violation, the verify reply held no item for this owed row after one re-ask; the row was not judged and judge.status never credits it')} }}))] : []), "
         f"...(_emptyVerdict ? {{ {VERIFY_LEG_EMPTY.replace('-', '_')}: true }} : {{}}), "
+        f"...(_missingIds.length ? {{ missing_item_ids: _missingIds }} : {{}}), "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
         f"{HALT_PLAN_FIELD}: _planRel, {SELF_CORRECTION_FIELD}: _ledgerSc, "
         "next_action: _allOwed ? 'Everything left is EM or operator work: ' + _owedNamed.join('; ') "
@@ -7806,20 +8031,23 @@ def compose_ask_script(
         "+ (_blkRulableOk.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulableOk.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row.' "
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
-        ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none after one re-ask (verify-leg-empty: an engine failure, the code was not judged red)' : '') + ' block the commit.' "
+        ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none after one re-ask (verify-leg-empty: a schema violation, an engine failure; the code was not judged red and judge.status never credits a row)' : (_missingIds.length ? ' lack a verify item (' + " + _lit(VERIFY_ITEM_MISSING) + " + ': schema violation after one re-ask; judge.status never credits a row)' : '')) + ' block the commit.' "
         ": !_ledger ? 'The verify leg returned no items list, so the ledger holds no verdict: the refire re-runs the verify leg.' "
-        ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: the refire re-runs the verify leg.') "
+        ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: an engine failure, not a judged verdict.') "
         "+ _pmRemedy "
         "+ (_blkRulableOk.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulableOk.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' "
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
         f"+ (_lateUnplanned.length ? ' ' + {_lit(REGISTER_ROWS_UNCLAIMED_REFUSAL)} + ': register row(s) ' + _lateUnplanned.join(', ') "
         f"+ ' still have no plan row after the in-run re-plan: add one with plan.tasks.mutate verb add-task (register_rows naming the id), then re-fire.' : '') "
-        "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not open register rows (met, waived or ruled out at stage), so the ledger cannot rule them out of scope: re-fire to re-judge them. "
+        "+ ((_blkForeign.length && !_emptyVerdict) ? ' ' + _blkForeign.join(', ') + ' are not open register rows (met, waived or ruled out at stage), so the ledger cannot rule them out of scope: re-fire to re-judge them. "
         f"A ruling that is not yet a row is recorded with workflow.revise run_id ' + _runId + ' verbatim + from + {CLAIM_PARAM}: true, which claims it and resumes at the ledger check.' : '') "
         "+ _addTaskRemedy "
-        "+ (_blkIds.length ? ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
-        "+ 'and work committed at or before the halt meets a row when the verdict met_by names that commit.' : '')) }; }"
+        "+ ((_emptyVerdict || (_missingIds.length && !_ledgerBlocking(_ledger).length)) ? ' Firing the same sizing again re-asks the same verify leg and returns the same empty verdict. "
+        "If a commit carries a row\\'s work, record it: ' + " + _lit(_HALTED_ROUTE_OP) + " + ' {run_id: ' + _runId + ', sha: <the commit that carries the work>}; "
+        "otherwise report the verify-leg engine failure and stop.' "
+        ": (_blkIds.length ? ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
+        "+ 'and work committed at or before the halt meets a row when the verdict met_by names that commit.' : ''))) }; }"
     )
     b.append("  }")
     b.append("  }")
@@ -9365,7 +9593,8 @@ def _append_docs_and_commit(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "
         "already_landed: _commit?.already_landed ?? null, "
         "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null, "
-        "reason: " + _COMMIT_HALT_REASON_JS + ", "
+        + _COMMIT_LEDGER_FIELDS_JS +
+        "reason: " + _COMMIT_HALT_REASON_WITH_LEDGER_JS + ", "
         "plan: _planRel ?? null, sizing: _sizingRel ?? null, run_id: _runId }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") +
         "if (_incompleteChunks.length === 0) { _nextAction.params.halted = _halted; _reviseAndRefire = null; } "
         f"else {{ _nextAction = {REVISE_NEXT_ACTION_JS}; _reviseAndRefire = _mkRevise(); }} }}"

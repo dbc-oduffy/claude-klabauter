@@ -676,6 +676,20 @@ def _is_halt_resume_hint(root: Path, reserved: object, sizing_doc: Optional[dict
     return reserved == halted_run_for(root, sizing_rel)
 
 
+def _terminal_under_fresh(root: Path, run_id: Optional[str], params: dict) -> bool:
+    """True when `params.fresh` is true and `run_id` is cancelled, closed or superseded: the emit mints fresh with
+    it as predecessor. Trap: rebinding gates the resume, whose refusal names `fresh` as its remedy, so a loop."""
+    if params.get("fresh") is not True or not isinstance(run_id, str) or not run_id:
+        return False
+    from coordinator_core.ops.dispatch_emit import resume_gate
+
+    try:
+        resume_gate.check_resume(root, run_id, None, None)
+    except resume_gate.ResumeRefused as exc:
+        return exc.reason != resume_gate.REFUSE_FOREIGN_DRIVER
+    return False
+
+
 def _closed_for_fresh_refire(root: Path, run_id: Optional[str]) -> bool:
     """True when `run_id` ran under a different engine stamp than the running one and was just closed as
     superseded-by-refire, so the emit mints fresh instead of rebinding onto it. An unstamped run, an unknown
@@ -1118,10 +1132,11 @@ def _inherited_stop_after(root: Path, run_id: str, chain_parent: Optional[str], 
         if not rid:
             continue
         try:
-            marker = _halted_run._read(record_dir(root, rid))
+            rd = record_dir(root, rid)
+            marker = _halted_run._read(rd)
         except ValueError:
             continue
-        if marker and marker.get("halted") == HALT_PARKED:
+        if (marker and marker.get("halted") == HALT_PARKED) or (rd / "manifest.json").is_file():
             continue
         if lineage_stop_after(root, rid) == STOP_AFTER_PLAN:
             return STOP_AFTER_PLAN
@@ -1403,6 +1418,8 @@ _PARAM_FIELDS = (
     Field("all_of_pm_ask", "bool"),
     Field("launcher_child", "bool"),
     Field("abandon_run", "str"),
+    # A fresh refire of a cancelled, closed or superseded run: the hook passes it through; see `_terminal_under_fresh`.
+    Field("fresh", "bool"),
     Field("chained_from", "str"),
     Field("required_reviewers", "str_list"),
     Field("hold_rows", "str_list"),
@@ -1423,7 +1440,7 @@ _UNTYPED_PARAM_KEYS = frozenset({
     "ask", "appetite", "name", "description", "force", "research", "subjects", "topic_slug",
     "scout_mode", "scout_questions", "lanes", "lane_count", "hot_files", "resume_missing",
     "cloud_spawn", "cross_repo_approved", "reserved_run_id", "chatty", "max_rows", "skip_landed",
-    "landed_rows", "auto_split", "sibling", "local_only", "out_path", "session_id", "repo_root",
+    "landed_rows", "owed_test_rows", "auto_split", "sibling", "local_only", "out_path", "session_id", "repo_root",
     "_caller_cwd", "preminted_run_id", "chain_parent", "whole_set_probe", "takeover",
 })
 
@@ -2980,9 +2997,13 @@ def _dispatch_emit_body(
             if chain_parent is not None and halted_id == chain_parent:
                 halted_id = None  # a successor never rebinds onto the run it chains from
             closed_halt = None  # the halt this refire closed as superseded-by-refire: still its predecessor
-            if halted_id and _closed_for_fresh_refire(ask_root, halted_id):
+            if halted_id and (
+                _closed_for_fresh_refire(ask_root, halted_id) or _terminal_under_fresh(ask_root, halted_id, params)
+            ):
                 closed_halt, halted_id = halted_id, None
-            if preferred_ask and _closed_for_fresh_refire(ask_root, preferred_ask):
+            if preferred_ask and (
+                _closed_for_fresh_refire(ask_root, preferred_ask) or _terminal_under_fresh(ask_root, preferred_ask, params)
+            ):
                 closed_halt, preferred_ask = preferred_ask, None
             if halted_id:
                 inherited_base = _recorded_run_base(ask_root, halted_id) or halted_run_base(
@@ -2992,7 +3013,9 @@ def _dispatch_emit_body(
                 resumes_ask = preferred_ask or halted_ask_run_for(ask_root, sizing_rel)
                 if chain_parent is not None and resumes_ask == chain_parent:
                     resumes_ask = None
-                if resumes_ask and _closed_for_fresh_refire(ask_root, resumes_ask):
+                if resumes_ask and (
+                    _closed_for_fresh_refire(ask_root, resumes_ask) or _terminal_under_fresh(ask_root, resumes_ask, params)
+                ):
                     closed_halt, resumes_ask = closed_halt or resumes_ask, None
                 if resumes_ask:
                     _gate_resume(ask_root, resumes_ask, params, sizing_rel)
@@ -3616,6 +3639,7 @@ def _dispatch_emit_body(
                 script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
                 findings_out=plan_findings,
                 landed_rows=frozenset(params["landed_rows"]) if params.get("landed_rows") is not None else None,
+                owed_test_rows=frozenset(params.get("owed_test_rows") or ()),
                 review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
                 run_base_sha=params.get("run_base_sha"),
                 review_carried_paths=tuple(params.get("review_carried_paths") or ()),

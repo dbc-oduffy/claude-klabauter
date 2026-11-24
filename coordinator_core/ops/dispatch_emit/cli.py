@@ -1350,6 +1350,48 @@ def _incomplete_chunks_of(run_path: str) -> "Optional[frozenset]":
     return None
 
 
+_PYTEST_OWED_REASON_RE = re.compile(
+    r"only coordinator:test-runner runs pytest|owed to coordinator:test-runner|check-test-suite-invocation"
+)
+_PYTEST_OWED_KINDS = frozenset({"partial", "gate_owed"})
+
+
+def _deviation_lists(node: object, depth: int = 0):
+    """Every ``deviations`` list a run digest carries, wherever the task-output envelope nests it."""
+    if depth > 6:
+        return
+    if isinstance(node, dict):
+        listed = node.get("deviations")
+        if isinstance(listed, list):
+            yield listed
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                yield from _deviation_lists(value, depth + 1)
+    elif isinstance(node, list):
+        for value in node:
+            if isinstance(value, (dict, list)):
+                yield from _deviation_lists(value, depth + 1)
+
+
+def _pytest_owed_rows_of(run_path: str) -> frozenset:
+    """Rows the task output records as unfinished only because the guard refused the executor's own
+    pytest run (or its acceptance is owed to the test-runner): the row's edits landed on disk, so a
+    refire runs its tests in a test-runner leg. Empty for a git-log dump or an unreadable file."""
+    try:
+        data = json.loads(Path(run_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    owed: set = set()
+    for listed in _deviation_lists(data):
+        for dev in listed:
+            if not isinstance(dev, dict) or dev.get("kind") not in _PYTEST_OWED_KINDS:
+                continue
+            text = f"{dev.get('reason') or ''}\n{dev.get('anchor') or ''}"
+            if isinstance(dev.get("chunk"), str) and _PYTEST_OWED_REASON_RE.search(text):
+                owed.add(dev["chunk"])
+    return frozenset(owed)
+
+
 def _spine_rows_done_per_task_output(plan_path: str, run_path: str) -> frozenset:
     """Spine rows the task output's `incomplete_chunks` does not list; empty for a git-log dump or
     when the list names no row of this spine (coded stamps land on source plans, not the spine)."""
@@ -2169,6 +2211,10 @@ def _main(argv: "list[str]") -> int:
             landed_from_run = set(landed_rows_from_text(run_text))
             if args.plan and not args.inventory:
                 landed_from_run |= _spine_rows_done_per_task_output(args.plan, args.only_incomplete)
+            owed_tests = _pytest_owed_rows_of(args.only_incomplete)
+            if owed_tests:
+                params["owed_test_rows"] = sorted(owed_tests)
+                landed_from_run |= owed_tests
             params["landed_rows"] = sorted(landed_from_run)
         if args.only is not None:
             refusal = _only_subset_holds(args, params, repo_root)

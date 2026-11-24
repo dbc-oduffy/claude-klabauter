@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from pathlib import Path
@@ -61,10 +62,29 @@ def _gate(requires: str, blocks: str | None = None) -> str:
     return f"  external_gate:\n    - owner_repo: other\n      requires: {requires}\n{b}".rstrip("\n")
 
 
-def test_landed_work_gate_withholds_row_into_manifest(tmp_path: Path) -> None:
-    start = time.process_time()
-    reply = _stage(tmp_path, _plan(_gate("landed-work")))
-    assert (time.process_time() - start) * 1000 < 500
+def test_landed_work_gate_withholds_row_into_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    spawns: list = []
+    real_popen = subprocess.Popen
+
+    def _counting_popen(*a, **k):
+        spawns.append(a)
+        return real_popen(*a, **k)
+
+    monkeypatch.setattr(subprocess, "Popen", _counting_popen)
+    plan = _plan(_gate("landed-work"))
+    runs = iter(range(10_000))
+
+    def _fresh_stage() -> None:
+        sub = tmp_path / f"run{next(runs)}"
+        sub.mkdir()
+        _stage(sub, plan)
+
+    figure = in_process_time_ms(_fresh_stage, _clock=time.thread_time)
+    assert spawns == []
+    assert figure["process_time_ms"] < 500
+    reply = _stage(tmp_path, plan)
     assert "error" not in reply
     assert [r["id"] for r in reply["rows"]] == ["U1", "T1"]
     assert [(g["id"], g["reason"]) for g in reply["gated"]] == [("G1", "external_gate")]

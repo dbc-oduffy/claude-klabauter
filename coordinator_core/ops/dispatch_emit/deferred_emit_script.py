@@ -170,6 +170,10 @@ const TWIN_MIDDLE = __TWIN_MIDDLE__;
 const TWIN_SUFFIX = __TWIN_SUFFIX__;
 const RUN_SCRIPT_SUFFIX = __RUN_SCRIPT_SUFFIX__;
 const START_ARGS = __START_ARGS__;
+const LOOP_HOST_ARG = __LOOP_HOST_ARG__;
+const PRE_READ_ARG = __PRE_READ_ARG__;
+const READER_ROOT = __READER_ROOT__;
+__VERIFY_REPLY_JS__
 function _normPath(p) {
   const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
   return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : REPO_ROOT + '/' + s.replace(/^\.\//, '');
@@ -178,11 +182,16 @@ function _normPath(p) {
 async function _startLoop(firstPath) {
   let path = firstPath;
   let lastSha = null;
+  // Trap: a staged twin this loop starts runs at depth 1 and cannot call workflow() for its stage reply; it defers the handle (`read_deferred`), and this loop reads it here and restarts the twin with the verified text. Run scripts get no flag.
+  const preRead = {};
   if (typeof firstPath !== 'string' || !firstPath.endsWith('.mjs')) return { ok: false, error: 'refusing to start a non-script path: ' + String(firstPath) };
   for (let round = 0; round <= MAX_STAGE_ROUNDS; round++) {
+    const callArgs = { ...(START_ARGS === null ? {} : START_ARGS) };
+    if (path.indexOf('.staged-') !== -1) callArgs[LOOP_HOST_ARG] = true;
+    if (Object.keys(preRead).length > 0) callArgs[PRE_READ_ARG] = { ...preRead };
     const result = round === 0 && !_hostRootStarted && typeof engineOp === 'function' && typeof engineOp.hostWorkflow === 'function'
       ? (_hostRootStarted = true, await engineOp.hostWorkflow(path))
-      : START_ARGS === null ? await workflow({ scriptPath: path }) : await workflow({ scriptPath: path, args: START_ARGS });
+      : await workflow({ scriptPath: path, args: callArgs });
     const pending = (result !== null && typeof result === 'object') ? result.__PENDING_KEY__ : null;
     if (!pending) return { ok: true, result: result };
     if (round >= MAX_STAGE_ROUNDS) return { ok: false, error: 'stage_pending after ' + MAX_STAGE_ROUNDS + ' stage rounds' };
@@ -197,6 +206,24 @@ async function _startLoop(firstPath) {
       const sha = pending.handle && typeof pending.handle === 'object' ? pending.handle.sha256 : undefined;
       if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) return { ok: false, error: 'stage_pending handle sha256 is not 64 lowercase hex' };
       twinRel = TWIN_PREFIX + stem + TWIN_MIDDLE + sha + TWIN_SUFFIX;
+    }
+    if (path === REPO_ROOT + '/' + twinRel && pending.read_deferred === true) {
+      const h = pending.handle;
+      if (h === null || typeof h !== 'object' || typeof h.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(h.sha256) || typeof h.bytes !== 'number' || !Number.isInteger(h.bytes) || h.bytes < 0) {
+        return { ok: false, error: 'stage_pending handle is not a {path, sha256, bytes} handle' };
+      }
+      if (typeof preRead[h.sha256] === 'string') return { ok: false, error: 'stage_pending repeated for a handle already supplied' };
+      const reader = REPO_ROOT + '/' + READER_ROOT + '/' + h.sha256 + '.js';
+      let text;
+      try {
+        text = await workflow({ scriptPath: reader });
+      } catch (e) {
+        return { ok: false, error: 'stage reply sidecar does not match its handle: reader ' + reader + ' did not run: ' + String(e && e.message ? e.message : e) };
+      }
+      const bad = _verifyReplyText(text, h);
+      if (bad !== null) return { ok: false, error: 'stage reply sidecar does not match its handle: reader ' + reader + ' returned a reply that fails verification: ' + bad };
+      preRead[h.sha256] = text;
+      continue;
     }
     if (lastSha === twinRel) return { ok: false, error: 'stage_pending repeated for a handle already supplied' };
     lastSha = twinRel;
@@ -282,6 +309,14 @@ return (r !== null && typeof r === 'object') ? { ...r, chained_from: ASK_RUN_ID 
 """
 _DEFERRED_START_JS = _STAGE_LOOP_JS + r"""const ASK_RUN_ID = reply.run_id;
 const ASK_SCRIPT_PATH = scriptPath;
+// Trap: a script (or staged twin) holding its own workflow() stage reader is refused at depth 2 under this script, so it is handed back to be fired top-level.
+const READER_HANDOFF = __READER_HANDOFF__;
+if (READER_HANDOFF !== null) {
+  return {
+    status: 'start_handoff', run_id: ASK_RUN_ID, script_path: _normPath(READER_HANDOFF), fire_args: reply.fire_args || {},
+    note: 'run ' + ASK_RUN_ID + ' holds its own stage reader, which cannot run below this script; fire it top-level with Workflow({scriptPath: script_path, args: fire_args})',
+  };
+}
 const first = await _startLoop(ASK_SCRIPT_PATH);
 """ + _CHAIN_FOLLOW_JS
 
@@ -308,9 +343,14 @@ def _stage_loop_values(start_args: Optional[dict] = None) -> dict:
 
     from coordinator_core.ops.dispatch_emit.fan_launcher import MAX_STAGE_ROUNDS, _twin_affixes
     from coordinator_core.ops.dispatch_emit.nested_run_contract import RUN_SCRIPT_SUFFIX, STAGE_PENDING_KEY
+    from coordinator_core.ops.dispatch_emit.reply_sidecar import LOOP_HOST_ARG, PRE_READ_ARG, READER_ROOT, VERIFY_REPLY_JS
 
     prefix, middle, suffix = _twin_affixes()
     return {
+        "__LOOP_HOST_ARG__": json.dumps(LOOP_HOST_ARG),
+        "__PRE_READ_ARG__": json.dumps(PRE_READ_ARG),
+        "__READER_ROOT__": json.dumps(READER_ROOT),
+        "__VERIFY_REPLY_JS__": VERIFY_REPLY_JS,
         "__MAX_ROUNDS__": str(MAX_STAGE_ROUNDS),
         "__TWIN_PREFIX__": json.dumps(prefix),
         "__TWIN_MIDDLE__": json.dumps(middle),
@@ -368,6 +408,19 @@ def _deferral_branch(params: dict, branch: Optional[str]) -> str:
     return "premint" if params.get("preminted_run_id") else "overrun"
 
 
+def _reader_handoff(root: Path, params: dict) -> Optional[str]:
+    """Repo-relative script of the preminted run that already holds a `workflow()` reader (see `minted_run.reader_script_rel`), else None.
+    Trap: a workflow script has no filesystem, so the decision is taken here and baked in; a run emitted fresh as a launcher child holds none."""
+    from coordinator_core.ops.dispatch_emit import minted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import RUN_SCRIPT_SUFFIX
+
+    run_id = params.get("preminted_run_id")
+    if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_id):
+        return None
+    return minted_run.reader_script_rel(root, run_id, f"{RUN_DIR_ROOT}/{run_id}{RUN_SCRIPT_SUFFIX}")
+
+
 def write_deferred_script(root: Path, params: dict, *, branch: Optional[str] = None) -> Path:
     """A script under `scratch/warp/` that re-runs `dispatch.emit(params)` through an op-relay agent and starts what it emits.
 
@@ -407,6 +460,7 @@ def write_deferred_script(root: Path, params: dict, *, branch: Optional[str] = N
         start_values = {
             **_stage_loop_values(),
             **_chain_follow_values(carry_file),
+            "__READER_HANDOFF__": json.dumps(_reader_handoff(root, params)),
         }
         start = re.sub("|".join(start_values), lambda m: start_values[m.group(0)], _DEFERRED_START_JS)
     params_json = json.dumps(params, default=str, ensure_ascii=True)

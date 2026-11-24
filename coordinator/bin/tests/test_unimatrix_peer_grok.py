@@ -113,6 +113,37 @@ def test_turn_timeout_nonzero_and_garbage_return_no_reply(tmp_path: Path) -> Non
     assert run_turn(lambda a, **k: (_ for _ in ()).throw(FileNotFoundError()), tmp_path) == pg.NO_REPLY
 
 
+KEYSTROKE_PRIMITIVES = ("osascript", "send-keys", "send_keys", "tmux", "keystroke", "system events", "tiocsti",
+                        "import pty", "pty.", "pexpect", "xdotool", "sendkeys", "writeconsoleinput")
+
+
+def test_no_peer_adapter_or_router_types_into_a_tui() -> None:
+    for path in sorted(BIN.glob("unimatrix-peer-*.py")):
+        src = path.read_text(encoding="utf-8").lower()
+        hits = [p for p in KEYSTROKE_PRIMITIVES if p in src]
+        assert not hits, f"{path.name} carries keystroke injection: {hits}"
+
+
+def test_undeliverable_turn_spawns_only_the_headless_resume_and_never_a_keystroke(tmp_path: Path) -> None:
+    spawned = []
+
+    def runner(argv, **kw) -> "CompletedProcess[str]":
+        spawned.append(list(argv))
+        return subprocess.CompletedProcess(argv, 1, "", "busy")
+
+    assert run_turn(runner, tmp_path) == pg.NO_REPLY
+    assert len(spawned) == 1 and spawned[0][:2] == ["grok", "-p"]
+    assert not any(tok in " ".join(spawned[0]).lower() for tok in ("osascript", "send-keys", "tmux"))
+
+
+def test_router_refuses_a_grok_peer_without_cwd_instead_of_typing(tmp_path: Path) -> None:
+    router_spec = importlib.util.spec_from_file_location("unimatrix_peer_router_x", BIN / "unimatrix-peer-router.py")
+    router = importlib.util.module_from_spec(router_spec)
+    router_spec.loader.exec_module(router)
+    reply = asyncio.run(router.default_adapters()["grok"]({"target": SID, "vendor": "grok"}, "hi"))
+    assert reply.startswith("delivery failed:")
+
+
 def test_own_session_matches_an_ancestor_pid_to_the_registry_pid(tmp_path: Path) -> None:
     home = registry(tmp_path, [{"session_id": SID, "pid": 100, "cwd": str(tmp_path)}])
     parents = {900: 500, 500: 100, 100: 1}

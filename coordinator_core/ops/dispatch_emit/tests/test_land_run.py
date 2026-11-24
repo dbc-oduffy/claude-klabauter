@@ -584,3 +584,55 @@ def test_red_is_foreign_runs_refuses_a_mixed_own_and_foreign_failing_set() -> No
     assert land_run._red_is_foreign_runs(["tests/test_peer.py::test_a", "tests/test_own.py::test_b"], foreign) is False
     assert land_run._red_is_foreign_runs(["tests/test_dirt.py::test_c"], foreign) is False
     assert land_run._red_is_foreign_runs([], foreign) is False
+
+
+def _upstream_land(repo, monkeypatch, *, local: int, remote: int, tracked: bool = True) -> dict:
+    """Land a declared write on *repo* after `local` unique commits and `remote` origin commits."""
+    from coordinator_core.ops.dispatch_emit import land_stamp_ancestry
+    from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as p
+    from coordinator_core.ops.dispatch_emit.tests import test_upstream_behind as ub
+
+    monkeypatch.setattr(land_stamp_ancestry, "live_stamp_sha", lambda: None)
+    origin = ub.give_upstream(repo, repo.parent) if tracked else None
+    for n in range(local):
+        ub.commit(repo, f"local-{n}")
+    for n in range(remote):
+        ub.origin_advances(repo, origin, repo.parent, f"o{n}")
+    p._author(repo, "src/a.py", "a = 1\n")
+    p._declare(repo, "src/a.py")
+    p._record_dir(repo)
+    return p._land(repo)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_land_refuses_a_land_ref_behind_its_upstream_with_unique_commits_naming_the_counts(product_repo, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit.tests import test_upstream_behind as ub
+
+    out = _upstream_land(product_repo, monkeypatch, local=1, remote=2)
+
+    assert out["committed"] is False and out["refused"] == "land-ref-behind-upstream", out
+    assert (out["ahead"], out["behind"]) == (1, 2)
+    assert "1 ahead of and 2 behind" in out["error"] and out["upstream"] in out["error"]
+    assert ub.git(product_repo, "log", "-1", "--format=%s") == "local-0"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_land_fast_forwards_a_land_ref_behind_its_upstream_then_commits_on_the_tip(product_repo, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit.tests import test_upstream_behind as ub
+
+    out = _upstream_land(product_repo, monkeypatch, local=0, remote=2)
+
+    assert out["committed"] is True, out
+    assert (product_repo / "o1").is_file()
+    assert ub.git(product_repo, "log", "-1", "--format=%s", "HEAD~1") == "o1"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize("tracked,local", [(True, 0), (True, 2), (False, 0)])
+def test_land_with_an_up_to_date_ahead_or_untracked_land_ref_commits(product_repo, monkeypatch, tracked, local) -> None:
+    out = _upstream_land(product_repo, monkeypatch, local=local, remote=0, tracked=tracked)
+
+    assert out["committed"] is True, out

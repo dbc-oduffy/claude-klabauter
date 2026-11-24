@@ -20,6 +20,12 @@ from coordinator_core.group_em.atomic_record import holder_lock
 from coordinator_core._settings_home import settings_home
 
 EVENTS = ("Stop", "SubagentStop", "PostCompact")
+# TRAP: a cold proxy spawn plus upgrade/initialize measures ~0.6s on Windows; a 0.2s handshake
+# never completes ("no upgrade reply") and the title silently never lands. This runs off the
+# hook's wait (warm op thread or detached child), so the bound can cover a cold spawn; the
+# worst case is HANDSHAKE_TIMEOUT_S + REQUEST_TIMEOUT_S, enforced by _connect and the request deadline.
+HANDSHAKE_TIMEOUT_S = 5.0
+REQUEST_TIMEOUT_S = 2.0
 
 
 def status_title(value: dict) -> str:
@@ -34,8 +40,8 @@ def apply_title(value: dict, cwd: str) -> dict:
     if preserve is None:
         return {"updated": False, "reason": "owned original-task preservation API is unavailable"}
     argv = CodexAdapter().proxy_argv()
-    with codex_app_server._connect(argv, timeout=0.2) as connection:
-        deadline = time.monotonic() + 0.2
+    with codex_app_server._connect(argv, timeout=HANDSHAKE_TIMEOUT_S) as connection:
+        deadline = time.monotonic() + REQUEST_TIMEOUT_S
         loaded = connection.request("thread/loaded/list", {"limit": 256}, deadline) or {}
         if sid not in loaded.get("data", []):
             return {"updated": False, "reason": "thread is not in this loaded app-server namespace"}
@@ -54,8 +60,29 @@ def apply_title(value: dict, cwd: str) -> dict:
     return {"updated": True, "title": title}
 
 
+def record_result(sid: object, event: str, result: dict) -> None:
+    """Persist the last refresh outcome (reason included) so a failed title is never invisible."""
+    try:
+        key = str(uuid.UUID(sid)) if isinstance(sid, str) else None
+        if key is None:
+            return
+        directory = settings_home() / "state" / "codex-status"
+        directory.mkdir(parents=True, exist_ok=True)
+        entry = {"event": event, "at": time.time(), "updated": bool(result.get("updated")),
+                 "reason": result.get("reason"), "title": result.get("title")}
+        (directory / f"{key}.last-refresh.json").write_text(json.dumps(entry), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 -- diagnostics never fail the refresh
+        print(f"codex status: refresh outcome not recorded: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 def handle(payload: dict, event: str) -> dict:
-    """Lifecycle launcher API: consumes supplied data, emits no hook stdout."""
+    """Run one status refresh and record its outcome; emits no hook stdout."""
+    result = _handle(payload, event)
+    record_result(payload.get("session_id") if isinstance(payload, dict) else None, event, result)
+    return result
+
+
+def _handle(payload: dict, event: str) -> dict:
     if event not in EVENTS:
         return {"updated": False, "reason": "not a status refresh event"}
     try:

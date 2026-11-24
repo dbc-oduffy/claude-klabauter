@@ -9,6 +9,9 @@ when its record or lock goes; a peers.json entry wins a name or target clash.
       records in <settings home>/unimatrix/agy-legs are rescanned every few seconds.
   unimatrix-peer-router.py send [--as NAME] <peer> <text...>
       Ask a peer a question through the running router; prints the labelled reply.
+  unimatrix-peer-router.py --restart [--from SRC_DIR] [--dest DIR]
+      Refresh the installed scripts from SRC_DIR (default: this script's directory, which must hold
+      unimatrix-install.py), then drain and replace the running router on the refreshed code.
 
 The harness keys a registry entry and its key file by pid, so one process cannot hold M
 entries. The router therefore spawns one minimal registration child ("face") per peer: the
@@ -23,6 +26,7 @@ Windows uses current-user-only named pipes; POSIX uses private Unix sockets.
 import argparse
 import asyncio
 import errno
+import hashlib
 import importlib.util
 import json
 import os
@@ -32,6 +36,7 @@ import shlex
 import socket
 import stat
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -89,6 +94,25 @@ def _sibling(filename, modname):
     return _SIBLINGS[modname]
 
 
+def _drain_queued_sessions() -> list:
+    """Run the relay's local `drain` for each session with a non-empty queue file; returns `(session, error)` pairs.
+
+    The relay is loaded in-process by path (no process per session); one session's failure never skips the next."""
+    relay = _sibling("unimatrix-relay.py", "unimatrix_relay")
+    queue = relay._relay_queue()
+    if queue is None:
+        return []
+    failures = []
+    for path in sorted(queue.queue_dir().glob("*.jsonl")):
+        try:
+            if path.stat().st_size == 0:
+                continue
+            relay.drain(path.stem)  # {"ok": False} (no unique live local session): the lines stay queued
+        except Exception as e:
+            failures.append((path.stem, f"{type(e).__name__}: {e}"))
+    return failures
+
+
 def _roster():
     """The unimatrix-roster module, loaded on first use."""
     return _sibling("unimatrix-roster.py", "unimatrix_roster")
@@ -122,6 +146,37 @@ def __getattr__(name):
     if name == "PipeServer":
         return _transport().PipeServer
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+_ROUTER_NAME = "unimatrix-peer-router.py"
+_SCRIPT_REF = re.compile(r"unimatrix-[a-z0-9-]+\.py")
+DRAIN_SECONDS = 30
+
+
+def code_digest(root=None):
+    """sha256 over the router's script closure and lib/*.py in `root`, the same bytes the installer digests.
+
+    Recorded in router.pid.json at start so an installer can tell a router started on older code from the
+    installed copy. Mirrors unimatrix-install.py router_closure_digest."""
+    root = Path(root) if root else here()
+    seen, todo = set(), [_ROUTER_NAME]
+    while todo:
+        name = todo.pop()
+        if name in seen or name == "unimatrix-install.py":
+            continue
+        seen.add(name)
+        path = root / name
+        if path.is_file():
+            todo.extend(_SCRIPT_REF.findall(path.read_text(encoding="utf-8")))
+    names = sorted(seen) + [f"lib/{p.name}" for p in sorted((root / "lib").glob("*.py"))]
+    h = hashlib.sha256()
+    for name in sorted(names):
+        try:
+            data = (root / name).read_bytes()
+        except OSError:
+            continue
+        h.update(name.encode("utf-8") + b"\0" + data + b"\0")
+    return h.hexdigest()
 
 
 def default_peers_file():
@@ -566,16 +621,17 @@ def _private_dir(path):
     os.makedirs(path, mode=0o700, exist_ok=True)
 
 
-def request_line(endpoint, request, timeout=SEND_TIMEOUT):
-    """Send one JSON line to a local endpoint and return the one-line JSON answer."""
+def request_line(endpoint, request, timeout=SEND_TIMEOUT, prefix=b"") -> dict:
+    """Send one JSON line (after optional raw `prefix` lines, e.g. an auth frame) and return the one-line JSON answer."""
+    payload = prefix + (json.dumps(request) + "\n").encode("utf-8")
     if _transport().is_pipe(endpoint):
-        raw = _transport().pipe_exchange(endpoint, (json.dumps(request) + "\n").encode("utf-8"), timeout)
+        raw = _transport().pipe_exchange(endpoint, payload, timeout)
         return json.loads(raw.split(b"\n", 1)[0] or b'{"ok":false,"error":"closed"}')
     s = socket.socket(socket.AF_UNIX)
     s.settimeout(timeout)
     try:
         s.connect(endpoint)
-        s.sendall((json.dumps(request) + "\n").encode("utf-8"))
+        s.sendall(payload)
         s.shutdown(socket.SHUT_WR)
         buf = b""
         while b"\n" not in buf:
@@ -591,6 +647,16 @@ def request_line(endpoint, request, timeout=SEND_TIMEOUT):
 async def start_private_server(handler, endpoint):
     """Serve `handler` on a private local endpoint (current-user-only pipe or 0600 socket)."""
     return await _transport().start_server(handler, endpoint, FRAME_LIMIT)
+
+
+def _no_pause() -> None:
+    """Default for ROTATE_PAUSE_HOOK."""
+
+
+# Called between "face accepted {old,new}" and "key file replaced"; tests swap it to pause there.
+ROTATE_PAUSE_HOOK = _no_pause
+
+MAX_GRACE_S = 3600
 
 
 class Registration:
@@ -609,6 +675,8 @@ class Registration:
         self.endpoint = endpoint
         self.sessions_dir = sessions_dir
         self.token = secrets.token_hex(16)
+        self._previous = (None, 0.0)  # (old token, monotonic deadline)
+        self._rotate_lock = threading.Lock()
         self.entry = os.path.join(sessions_dir, f"{self.pid}.json")
         self.key = os.path.join(sessions_dir, _roster().key_name(self.pid, endpoint))
         now = int(time.time() * 1000)
@@ -631,14 +699,50 @@ class Registration:
                 raise _contract().PeerConfigError('face does not match engine-owned Codex address')
             self.data.update(address, target=peer['target'], aliases=list(peer.get('aliases', [])), nameSource='engine')
 
-    def write(self):
+    def _key_data(self) -> dict:
+        return {"peerToken": self.token, ("procStartFt" if sys.platform == "win32" else "procStart"): self.data["procStart"],
+                "pidDomain": self.data["pidDomain"]}
+
+    def write(self) -> None:
         _private_dir(self.sessions_dir)
-        fd = os.open(self.key, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"peerToken": self.token, ("procStartFt" if sys.platform == "win32" else "procStart"): self.data["procStart"],
-                       "pidDomain": self.data["pidDomain"]}, f)
-            f.write("\n")
+        _roster().write_peer_key(self.key, self._key_data())
         _roster().write_json_atomic(self.entry, self.data)
+
+    def accepts(self, token) -> bool:
+        """True for the current token, or the previous one until its monotonic grace deadline."""
+        if not isinstance(token, str):
+            return False
+        if secrets.compare_digest(token.encode("utf-8"), self.token.encode("utf-8")):
+            return True
+        previous, deadline = self._previous
+        return (previous is not None and time.monotonic() < deadline
+                and secrets.compare_digest(token.encode("utf-8"), previous.encode("utf-8")))
+
+    def rotate(self, grace_s) -> float:
+        """Mint a new token, accept {old,new} first, then replace the key file; returns the wall-clock grace deadline.
+
+        The old token stays accepted until `grace_s` after the file replacement, so a sender
+        holding either file state is never refused before grace ends.
+        """
+        with self._rotate_lock:
+            old, old_previous = self.token, self._previous
+            self._previous = (old, float("inf"))
+            self.token = secrets.token_hex(16)
+            try:
+                ROTATE_PAUSE_HOOK()
+                for attempt in range(5):
+                    try:
+                        _roster().write_peer_key(self.key, self._key_data())
+                        break
+                    except PermissionError:  # Windows: a reader holds the key open for a moment
+                        if attempt == 4:
+                            raise
+                        time.sleep(0.02)
+            except BaseException:
+                self.token, self._previous = old, old_previous
+                raise
+            self._previous = (old, time.monotonic() + grace_s)
+            return time.time() + grace_s
 
     def remove(self):
         for p in (self.entry, self.key):
@@ -681,13 +785,42 @@ async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=Fa
             raw = await reader.read()
             if not raw.strip():
                 return  # liveness probe
-            for line in raw.splitlines():
+            lines = raw.splitlines()
+            try:
+                lead = json.loads(lines[0])
+            except ValueError:
+                lead = None
+            if isinstance(lead, dict) and lead.get("type") == "auth":
+                token, lines = lead.get("token"), lines[1:]
+            else:
+                token = getattr(reader, "auth_token", None)  # a pipe transport consumes the auth frame and exposes it here
+            if not reg.accepts(token):
+                # Silence is acceptance, so a refusal must be written.
+                try:
+                    writer.write((json.dumps({"ok": False, "error": "not delivered: auth"}) + "\n").encode("utf-8"))
+                    await writer.drain()
+                except OSError:
+                    pass
+                return
+            for line in lines:
                 try:
                     frame = json.loads(line)
                 except ValueError:
                     continue
                 if not isinstance(frame, dict):
                     continue
+                if frame.get("op") == "rotate":
+                    grace = frame.get("grace_s")
+                    try:
+                        if isinstance(grace, bool) or not isinstance(grace, (int, float)) or not 0 <= grace <= MAX_GRACE_S:
+                            raise ValueError(f"grace_s must be a number in [0, {MAX_GRACE_S}]")
+                        until = await asyncio.to_thread(reg.rotate, grace)
+                        response = {"ok": True, "grace_until": until}
+                    except (OSError, ValueError) as exc:
+                        response = {"ok": False, "error": f"rotate failed: {exc}"}
+                    writer.write((json.dumps(response) + "\n").encode("utf-8"))
+                    await writer.drain()
+                    return
                 if frame.get("op") == "deliver":
                     # The receiving harness checks the connecting PID against the
                     # registration for frame.from, so the registered face must write.
@@ -814,9 +947,11 @@ class Router:
         self.lease = None  # open router.lock handle, locked for the router lifetime
         self.stop_requested = asyncio.Event()  # set by the shutdown op and by stop signals; serve waits on it
         self.pid_file = None  # router.pid.json path, set only while this router owns the lease
+        self.inflight = 0  # control requests being served; a drain waits for them
         self.ctl_ino = None  # inode of the control socket this router bound; None on a pipe
         self.bound_faces = set()  # face endpoints whose child registration reached ready
         self.dead_holders = set()  # Codex peers whose recorded holder is gone: no face, not listed
+        self.superseded = {}  # Codex peer name -> name of the face of the same holder that replaced it
 
     def peer_stale(self, name) -> bool:
         """True for a Codex peer without a live attached holder: dead (False) or unrecorded (None).
@@ -859,6 +994,30 @@ class Router:
             if name in self.faces:
                 await self._stop_face(name)
             self.log("holder-gone", name)
+        await self._retire_superseded_faces()
+
+    async def _retire_superseded_faces(self) -> None:
+        """Keep one face per Codex holder: the other peers' faces are stopped, or never spawned.
+
+        The survivor is the least name, so it is the same face every tick and across its own re-registration.
+        The child's own exit unlinks its entry; an external unlink would race the face's rewrite. A superseded
+        name revives only once its survivor is no longer a live peer of this router: a survivor mid-restart
+        keeps its place, so no other face shows in the gap."""
+        faces = [{"name": n, "vendor": "codex", "target": p.get("target")} for n, p in self.peers.items()
+                 if p.get("vendor") == "codex" and n not in self.discovered
+                 and (n not in self.dead_holders or n in self.superseded)]
+        by_id = _liveness().codex_survivors(faces, list(self.peers.values()))
+        for face in faces:
+            name, survivor = face["name"], by_id.get(id(face))
+            if survivor is None:
+                if self.superseded.pop(name, None) is not None:
+                    self.dead_holders.discard(name)
+            elif name not in self.dead_holders:
+                self.dead_holders.add(name)
+                self.superseded[name] = survivor["name"]
+                if name in self.faces:
+                    await self._stop_face(name)
+                self.log("face-superseded", name, "by", survivor["name"])
 
     def log(self, *a):
         try:
@@ -895,8 +1054,13 @@ class Router:
                 self.lease = None
                 raise RuntimeError("peer router already owns the local endpoint")
             self.pid_file = os.path.join(self.state_dir, "router.pid.json")
+            try:
+                digest = code_digest()
+            except (OSError, UnicodeDecodeError):
+                digest = None
             _roster().write_json_atomic(self.pid_file, {"pid": os.getpid(),
-                                                         "procStart": _roster().proc_start(os.getpid())})
+                                                         "procStart": _roster().proc_start(os.getpid()),
+                                                         "codeDigest": digest})
             self.server = await self._bind_control()
             self.ctl_ino = self._ctl_inode()
             await asyncio.to_thread(self._reconcile_orphan_faces)
@@ -1053,6 +1217,11 @@ class Router:
                 await self._repair_faces()
             except Exception as e:
                 self.log("DISCOVER-SCAN-FAILED", type(e).__name__, e)
+            try:
+                for failure in await asyncio.to_thread(_drain_queued_sessions):
+                    self.log("QUEUE-DRAIN-FAILED", *failure)
+            except Exception as e:
+                self.log("QUEUE-DRAIN-FAILED", type(e).__name__, e)
 
     async def _repair_faces(self):
         """Restart each peer face whose child exited; spawn one that is missing after a failed restart."""
@@ -1209,7 +1378,25 @@ class Router:
 
     # -- routing
 
+    async def drain(self, timeout=DRAIN_SECONDS):
+        """Stop accepting control connections, then wait for in-flight requests and delivery tasks; False on timeout."""
+        if self.server is not None:
+            self.server.close()
+        deadline = time.monotonic() + timeout
+        while self.inflight > 0 or self.tasks:
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return True
+
     async def _on_ctl(self, reader, writer):
+        self.inflight += 1
+        try:
+            await self._serve_ctl(reader, writer)
+        finally:
+            self.inflight -= 1
+
+    async def _serve_ctl(self, reader, writer):
         try:
             line = await reader.readline()
             resp = await self._dispatch(json.loads(line)) if line.strip() else {"ok": True}
@@ -1324,6 +1511,17 @@ class Router:
             if not_delivered(reply):
                 return {"ok": False, "error": str(reply).strip()}
             return {"ok": True, "reply": _contract().label(peer, reply)}
+        if op == "rotate":
+            peer = req.get("peer")
+            if not isinstance(peer, str) or peer not in self.peers:
+                return {"ok": False, "error": f"no router-owned peer named {peer}"}
+            face = self.endpoint_of(peer)
+            try:
+                return await asyncio.to_thread(
+                    request_line, face, {"op": "rotate", "grace_s": req.get("grace_s", 120)}, 15,
+                    _roster().authenticated_data(face, b""))
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": f"face unreachable: {exc}"}
         if op == "resolve":
             return await asyncio.to_thread(self.resolve_relay_target, req.get("name"))
         if op == "shutdown":
@@ -1832,10 +2030,12 @@ class Router:
         except Exception as exc:
             self.log("TRANSPORT-RETURN-FAILED", transport, type(exc).__name__)
 
-    async def _deliver_as_peer(self, peer, endpoint, frame):
+    async def _deliver_as_peer(self, peer, endpoint, frame) -> None:
         """Send through the registered face so the OS client PID matches frame.from."""
-        response = await asyncio.to_thread(request_line, self.endpoint_of(peer),
-            {"op": "deliver", "endpoint": endpoint, "frame": frame}, 15)
+        face = self.endpoint_of(peer)
+        response = await asyncio.to_thread(request_line, face,
+            {"op": "deliver", "endpoint": endpoint, "frame": frame}, 15,
+            _roster().authenticated_data(face, b""))
         if not response.get("ok"):
             raise OSError(response.get("error", "face delivery failed"))
 
@@ -2092,6 +2292,7 @@ async def serve(router):
     _transport().install_stop_handlers(router.stop_requested)
     try:
         await router.stop_requested.wait()
+        await router.drain()
     finally:
         await router.stop()
 
@@ -2152,6 +2353,34 @@ def cmd_face(argv):
     return 0
 
 
+def cmd_restart(argv):
+    p = argparse.ArgumentParser(prog="unimatrix-peer-router.py --restart")
+    p.add_argument("--restart", action="store_true")
+    p.add_argument("--from", dest="src", default=None, help="stamp scripts directory holding unimatrix-install.py")
+    p.add_argument("--dest", default=None, help="installed unimatrix directory (default: <settings home>/unimatrix)")
+    a = p.parse_args(argv)
+    src = Path(a.src) if a.src else here()
+    if not (src / "unimatrix-install.py").is_file():
+        print(f"no unimatrix-install.py in {src}; pass --from <stamp scripts directory>", file=sys.stderr)
+        return 2
+    spec = importlib.util.spec_from_file_location("unimatrix_install_stamp", src / "unimatrix-install.py")
+    installer = importlib.util.module_from_spec(spec)
+    keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        spec.loader.exec_module(installer)
+        dest = Path(a.dest) if a.dest else _roster().delivery_settings_home() / "unimatrix"
+        copied = installer.install_scripts(src, dest)
+        print(f"refreshed {len(copied)} scripts into {dest} from {src}")
+        res = installer.restart_installed_router(dest, print) or {}
+    except Exception as e:
+        print(f"router restart failed: {e}", file=sys.stderr)
+        return 1
+    finally:
+        sys.dont_write_bytecode = keep
+    print(f"router restarted: {res.get('stopped')} old pid {res.get('old_pid')} new pid {res.get('new_pid')}")
+    return 0
+
+
 def cmd_serve(argv):
     p = argparse.ArgumentParser(prog="unimatrix-peer-router.py")
     p.add_argument("--peers", default=None, help="peers.json (default: <settings home>/unimatrix/peers.json)")
@@ -2180,6 +2409,8 @@ def main(argv=None):
         return cmd_face(argv[1:])
     if argv and argv[0] == "send":
         return cmd_send(argv[1:])
+    if "--restart" in argv:
+        return cmd_restart(argv)
     return cmd_serve(argv)
 
 

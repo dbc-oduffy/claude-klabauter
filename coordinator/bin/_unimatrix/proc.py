@@ -20,6 +20,7 @@ CACHE_NAME = "autolink-boxes.json"
 CACHE_MAX_AGE = 24 * 3600
 BACKOFF_BASE = 60
 BACKOFF_CAP = 3600
+KEYLESS_CAP = 6 * 3600
 ROLES = ("bridge", "inbox")
 STILL_ACTIVE = 259
 _PROC_PIDTBSDINFO = 3
@@ -360,29 +361,88 @@ def codex_holder_live(row):
     return agy_presence_held(target, presence_dir=code_home / "thread-writer-locks")
 
 
-def codex_face_holder(d, home=None):
-    """'live' | 'dead' | 'unknown' for a local Codex peer face's recorded holder; else None."""
-    sid = d.get("sessionId") if isinstance(d, dict) else None
-    if (not isinstance(sid, str) or not sid.startswith("peer-") or d.get("vendor") != "codex"
-            or d.get("unimatrixMirror") or d.get("macSocketPath") or d.get("unimatrixRemote")):
-        return None
+def _codex_peer_rows(home=None) -> "list | None":
+    """The `peers.json` rows as a list; None when the file is unreadable or not a row list."""
     try:
         data = json.loads((state_dir(home) / "peers.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     rows = data.get("peers") if isinstance(data, dict) else data
-    if not isinstance(rows, list):
-        return None
+    return rows if isinstance(rows, list) else None
+
+
+def _codex_peer_row(d, rows) -> "dict | None":
     target = d.get("target")
-    row = next(
-        (r for r in rows if isinstance(r, dict) and r.get("vendor") == "codex"
-         and (r.get("target") == target if isinstance(target, str) else r.get("name") == d.get("name"))),
-        None,
-    )
+    return next((r for r in rows or () if isinstance(r, dict) and r.get("vendor") == "codex"
+                 and (r.get("target") == target if isinstance(target, str) else r.get("name") == d.get("name"))),
+                None)
+
+
+def codex_face_holder(d, home=None, peers=False) -> "str | None":
+    """'live' | 'dead' | 'unknown' for a local Codex peer face's recorded holder; None when `d` is not
+    a local Codex peer face or its `peers.json` row cannot be found or read (nothing provable).
+    Trap: reads and parses `peers.json` on every call unless `peers` (a `_codex_peer_rows` result) is given."""
+    sid = d.get("sessionId") if isinstance(d, dict) else None
+    if (not isinstance(sid, str) or not sid.startswith("peer-") or d.get("vendor") != "codex"
+            or d.get("unimatrixMirror") or d.get("macSocketPath") or d.get("unimatrixRemote")):
+        return None
+    row = _codex_peer_row(d, _codex_peer_rows(home) if peers is False else peers)
     if row is None:
         return None
     verdict = codex_holder_live(row)
     return "unknown" if verdict is None else ("live" if verdict else "dead")
+
+
+def codex_holder_key(d, peers) -> "tuple | None":
+    """Identity of the Codex session a local face fronts: ("pid", codexPid, codexProcStart) from its
+    `peers.json` row, else ("target", thread id), else ("name", name). None for a non-local or non-Codex
+    entry and for a face with none of the three (such faces are never collapsed)."""
+    if (not isinstance(d, dict) or d.get("vendor") != "codex" or d.get("unimatrixMirror") or d.get("macSocketPath")
+            or d.get("unimatrixRemote")):
+        return None
+    row = _codex_peer_row(d, peers) or {}
+    pid = row.get("codexPid")
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        return ("pid", pid, row.get("codexProcStart"))
+    target = d.get("target")
+    if isinstance(target, str) and target:
+        return ("target", target)
+    name = d.get("name")
+    return ("name", name) if isinstance(name, str) and name else None
+
+
+def _face_rank(e) -> tuple:
+    """Survivor order: a sessionId face before a `peer-<name>-<pid>` transport face, then least name.
+
+    Neither the pid nor `startedAt` is in it: both change when a face re-registers."""
+    sid = e.get("sessionId")
+    return (isinstance(sid, str) and sid.startswith("peer-"), str(e.get("name")), str(sid))
+
+
+def codex_survivors(faces, peers) -> dict:
+    """{id(face): surviving face} for every face that shares a holder key with the survivor of its key.
+
+    Survivor per key: `_face_rank` least, so the same face is kept every tick and across its own
+    re-registration. A face with no pid, thread or name is never collapsed."""
+    groups = {}
+    for e in faces:
+        key = codex_holder_key(e, peers)
+        if key is not None:
+            groups.setdefault(key, []).append(e)
+    out = {}
+    for group in groups.values():
+        best = min(group, key=_face_rank)
+        out.update({id(e): best for e in group if e is not best})
+    return out
+
+
+def codex_superseded_faces(rows, home=None, now=None) -> dict:
+    """{id(face): surviving face} for every live, backed local Codex face another face of its holder outranks.
+
+    Reads `peers.json` once for the whole `rows` set."""
+    peers = _codex_peer_rows(home)
+    return codex_survivors([e for e in rows if entry_live(e)
+                            and not codex_holder_unbacked(codex_face_holder(e, home, peers), e, now)], peers)
 
 
 def codex_holder_unbacked(state, d, now=None):
@@ -508,18 +568,74 @@ def backoff_until(sdir, alias):
     return float(until) if isinstance(until, (int, float)) and not isinstance(until, bool) else 0.0
 
 
-def note_probe(sdir, alias, ok, now=None) -> None:
-    path = _backoff_path(sdir, alias)
-    if ok:
+def _store_record(path, rec) -> None:
+    """Write `rec` atomically, or remove the file when `rec` is empty."""
+    if not rec:
         try:
             path.unlink()
         except FileNotFoundError:
             pass
         return
-    now = time.time() if now is None else now
-    prior = read_record(path).get("failures")
-    failures = (prior if isinstance(prior, int) and not isinstance(prior, bool) and prior > 0 else 0) + 1
-    delay = min(BACKOFF_BASE * 2 ** (failures - 1), BACKOFF_CAP)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({"failures": failures, "until": now + delay}), encoding="utf-8")
+    tmp.write_text(json.dumps(rec), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _park_fields(rec) -> dict:
+    return {k: rec[k] for k in ("parked", "parkedAt", "reason") if k in rec} if rec.get("parked") is True else {}
+
+
+def _charge(sdir, alias, now, base, cap) -> None:
+    """Double the alias's backoff delay; a recorded `until` that is later is kept, and a park is carried over."""
+    path = _backoff_path(sdir, alias)
+    now = time.time() if now is None else now
+    rec = read_record(path)
+    prior = rec.get("failures")
+    failures = (prior if isinstance(prior, int) and not isinstance(prior, bool) and prior > 0 else 0) + 1
+    until = now + min(base * 2 ** min(failures - 1, 40), cap)
+    held = rec.get("until")
+    if isinstance(held, (int, float)) and not isinstance(held, bool):
+        until = max(until, float(held))
+    _store_record(path, {"failures": failures, "until": until, **_park_fields(rec)})
+
+
+def note_probe(sdir, alias, ok, now=None) -> None:
+    """Record a probe outcome: success removes the backoff, failure doubles it (60s base, 3600s cap).
+
+    A PM-held park survives both outcomes; a recorded `until` later than the computed one is never shortened."""
+    if ok:
+        path = _backoff_path(sdir, alias)
+        _store_record(path, _park_fields(read_record(path)))
+        return
+    _charge(sdir, alias, now, BACKOFF_BASE, BACKOFF_CAP)
+
+
+def note_keyless(sdir, alias, now=None) -> None:
+    """Charge a far box that has no local key: the same doubling from 60s, bounded by KEYLESS_CAP."""
+    _charge(sdir, alias, now, BACKOFF_BASE, KEYLESS_CAP)
+
+
+def is_parked(sdir, alias) -> bool:
+    """True while a PM-held park is recorded for `alias`; only `release` ends it."""
+    return read_record(_backoff_path(sdir, alias)).get("parked") is True
+
+
+def park(sdir, alias, reason=None, now=None) -> None:
+    """Hold `alias` out of every autolink pass, the boot and restart passes included, until `release`."""
+    path = _backoff_path(sdir, alias)
+    rec = read_record(path)
+    rec.update({"parked": True, "parkedAt": time.time() if now is None else now})
+    if reason:
+        rec["reason"] = reason
+    Path(sdir).mkdir(parents=True, exist_ok=True)
+    _store_record(path, rec)
+
+
+def release(sdir, alias) -> bool:
+    """End a park; the rest of the backoff record stays. False when `alias` was not parked."""
+    path = _backoff_path(sdir, alias)
+    rec = read_record(path)
+    if rec.get("parked") is not True:
+        return False
+    _store_record(path, {k: v for k, v in rec.items() if k not in ("parked", "parkedAt", "reason")})
+    return True

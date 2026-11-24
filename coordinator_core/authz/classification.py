@@ -79,6 +79,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "box_memory.admit": OpClass.MUTATING,  # Writes the admission-file reservation.
     "box_memory.register": OpClass.MUTATING,  # Writes the admission-file reservation.
     "box_memory.release": OpClass.MUTATING,  # Removes the admission-file reservation.
+    "codex_status.refresh": OpClass.MUTATING,  # Acks at once; the worker writes the status cache and the thread title.
     "codex_status.snapshot": OpClass.MUTATING,  # Derived status cache only; no routing/UI writes.
     "external_session.handle": OpClass.MUTATING,  # Writes the external-session registry row on SessionStart/SessionEnd.
     "ping": OpClass.COMPUTE_ONLY,
@@ -4602,6 +4603,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "scratch.delete": OpClass.MUTATING,
     # ask_spool.withdraw — MUTATING: renames one pending spool entry to .withdrawn and rewrites its header.
     "ask_spool.withdraw": OpClass.MUTATING,
+    # run.hold — MUTATING: writes or removes a run's held.json in its record dir.
+    "run.hold": OpClass.MUTATING,
     # scratch.record_run_path, scratch.keep — MUTATING: write the run's scratch-ledger.json and
     # scratch/.kept-index.json (ops/scratch_record.py); neither deletes a path.
     "scratch.record_run_path": OpClass.MUTATING,

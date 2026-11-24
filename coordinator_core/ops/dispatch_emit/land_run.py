@@ -4229,6 +4229,15 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             deliverable_id_marker=None, deliverable_id_plan=plan_id,
         )
 
+    from coordinator_core.ops.dispatch_emit import upstream_behind
+
+    behind = upstream_behind.check(root)
+    if behind.refusal is not None:
+        return _error(
+            behind.refusal, refused="land-ref-behind-upstream", ahead=behind.ahead, behind=behind.behind,
+            upstream=behind.upstream,
+        )
+
     # ---- bookkeeping record and evidence rows, written before the commit so they ride it
     objective_gate: Optional[dict] = None
     if not anchor_only:

@@ -1300,6 +1300,59 @@ def mark_landed(record_dir: Path, sha: str, *, without_verdict: bool = False) ->
     return True
 
 
+#: `halted` kind of a run that ran and ended with no halt record; mirrors `commit_stage_halt.HALT_UNRECORDED_END`.
+UNRECORDED_END_HALT = "run-ended-unrecorded"
+#: `zero_run_cause` a test-leg verdict reports -> the `halted` kind the run's script halts with; mirrors `ask_compose`'s co-tenant halts.
+CO_TENANT_HALT_BY_CAUSE = {
+    "co_tenant_dependency_on_halted_run": "co_tenant_dependency_on_halted_run",
+    "co-tenant-wait": "co_tenant_wait",
+    "co_tenant_cycle": "co_tenant_cycle",
+}
+_CAUSE_EVIDENCE_FILES = ("overlay-verdict.json", "test-leg.json")
+
+
+def _unrecorded_halt_kind(record_dir: Path) -> tuple[str, str]:
+    """(halted kind, reason) for a ran run with no marker: a co-tenant `zero_run_cause` in the run's test-leg
+    verdicts names that halt, else `UNRECORDED_END_HALT`."""
+    for name in _CAUSE_EVIDENCE_FILES:
+        try:
+            doc = json.loads((record_dir / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        kind = CO_TENANT_HALT_BY_CAUSE.get(doc.get("zero_run_cause")) if isinstance(doc, dict) else None
+        if kind:
+            return kind, f"the test leg ran no tests: {doc['zero_run_cause']}; the run ended with no halt record"
+    return UNRECORDED_END_HALT, "run ended with no halt record (a halt whose commit stage could not record it, e.g. no run token)"
+
+
+def unrecorded_halt(repo_root: Path, run_id: str, record_dir: Path) -> Optional[dict]:
+    """The halt a run that ran but ended with no marker would be recorded under: `{halted, reason, sizing_rel}`, else None. Writes nothing.
+
+    A run ran when its `run-stage.json` left `minted`; one at `minted`, `landed` or with no stage file never
+    ran or already closed, and a present marker is never overwritten.
+    """
+    record_dir = Path(record_dir)
+    if (record_dir / HALTED_FILE).exists():
+        return None
+    try:
+        stage = json.loads((record_dir / "run-stage.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(stage, dict) or stage.get("stage") in (None, "minted", "landed"):
+        return None
+    kind, reason = _unrecorded_halt_kind(record_dir)
+    return {"halted": kind, "reason": reason, "sizing_rel": bound_sizing_rel(repo_root, run_id)}
+
+
+def record_unrecorded_halt(record_dir: Path, halt: dict) -> bool:
+    """Write the `halted` marker for an `unrecorded_halt` result; False when the write failed. `_write` alone: no resume build."""
+    try:
+        _write(Path(record_dir), {"status": STATUS_HALTED, "halted": halt["halted"], "sizing_rel": halt["sizing_rel"], "reason": halt["reason"]})
+    except OSError:
+        return False
+    return True
+
+
 def reopen_red(record_dir: Path, sha: str, reds: list) -> Path:
     """Reopen a run whose post-land tripwire re-run went red: a `landed` or absent marker becomes `halted` /
     `HALT_POST_LAND_TRIPWIRE_RED` at `sha` carrying `reds`; any other status is kept and only gains `reds`.

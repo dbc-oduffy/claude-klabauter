@@ -64,6 +64,17 @@ def test_marker_with_withheld_paths_stays_halted(repo):
     assert _status(rdir) == "halted"
 
 
+def test_held_abandoned_marker_is_never_closed_and_closes_once_released(repo):
+    from coordinator_core.ops.dispatch_emit import run_hold
+
+    rdir = _abandoned(repo, "ask-20261101T000000-444444")
+    run_hold.write_hold(rdir, run_hold.HeldRun("sess-1", "pm turn 9", "tool gap closes"))
+    assert amc.close_abandoned(repo, NOW) == []
+    assert _status(rdir) == "halted"
+    run_hold.clear_hold(rdir)
+    assert amc.close_abandoned(repo, NOW) == ["ask-20261101T000000-444444"]
+
+
 def test_other_halt_kinds_are_left_alone(repo):
     rdir = record_dir(repo, "ask-20261101T000000-cccccc")
     rdir.mkdir(parents=True)

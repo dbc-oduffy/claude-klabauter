@@ -1,7 +1,8 @@
 """Read-only census of halted, abandoned and parked runs: cause and green-code per run, rolled up by cause.
 
 `classify(run_dir)` -> `{cause, green, evidence}`; `census(warp_root)` -> rows `{cause, runs, green}` plus a
-population count that equals the sum of `runs`; `main()` prints that JSON. The cause is one of the R1 strand
+population count that equals the sum of `runs`, plus a `held` list; `main()` prints that JSON. A run dir
+holding `held.json` is cause `held` ahead of every halt or stage cause. The cause is one of the R1 strand
 causes (`STRAND_CAUSES`), else the run's own halt kind from `halt_remedy_class.HALT_REMEDY` (or the raw kind
 string when unregistered), else `other`. Population: run dirs holding `halted.json`, union run dirs whose
 `run-stage.json` stage or status is abandoned or parked. Pure file reads: no git, no subprocess.
@@ -21,6 +22,7 @@ from typing import Any, Optional
 
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import HALT_REMEDY
 from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE
+from coordinator_core.ops.dispatch_emit.run_hold import HELD_FILE, read_hold
 
 RUN_STAGE_FILE = "run-stage.json"
 RUN_OUTCOME_FILE = "run-outcome.json"
@@ -32,6 +34,7 @@ MINI_WARP_ROOT_KEY = "mini_warp_root"
 CENSUS_ROOTS_FILE = "machine-local/census-roots.json"
 
 CAUSE_OTHER = "other"
+CAUSE_HELD = "held"
 CAUSE_RESOLVED = "resolved"
 CAUSE_UNREADABLE = "unreadable"
 ABANDONED_STAGES = frozenset({"abandoned", "parked"})
@@ -143,11 +146,16 @@ def _cause(marker: dict, stage: str) -> tuple:
 
 
 def _scan(run_dir: Any) -> Optional[tuple]:
-    """`(cause, kind, status, stage, green, signals)` for a member dir, None for a non-member.
+    """`(cause, kind, status, stage, green, signals, hold)` for a member dir, None for a non-member.
 
+    A run dir holding a readable `held.json` is cause `held` and member regardless of its halt or stage;
+    `hold` is its `HeldRun`, else None.
     Opens `halted.json` once, `run-stage.json` only when membership or the cause needs it, and the
     three green-signal files only for a run that is neither resolved nor never-green.
     """
+    hold = read_hold(Path(run_dir))
+    if hold is not None:
+        return CAUSE_HELD, "", "", "", False, [], hold
     raw = _read_bytes(os.path.join(run_dir, HALTED_FILE))
     marker = _decode(raw)
     stage = None
@@ -157,7 +165,7 @@ def _scan(run_dir: Any) -> Optional[tuple]:
             return None
     status = marker.get("status") if isinstance(marker.get("status"), str) else ""
     if marker and status and status != "halted":
-        return CAUSE_RESOLVED, marker.get("halted") or "", status, stage or "", False, []
+        return CAUSE_RESOLVED, marker.get("halted") or "", status, stage or "", False, [], None
     kind = marker.get("halted") if isinstance(marker.get("halted"), str) else ""
     cause = None
     text = _text(marker)
@@ -170,14 +178,26 @@ def _scan(run_dir: Any) -> Optional[tuple]:
     if cause is None:
         cause = kind or (stage if stage in ABANDONED_STAGES else CAUSE_OTHER)
     if cause in NEVER_GREEN_CAUSES:
-        return cause, kind, status, stage or "", False, []
+        return cause, kind, status, stage or "", False, [], None
     green, signals = _green(run_dir)
-    return cause, kind, status, stage or "", green, signals
+    return cause, kind, status, stage or "", green, signals, None
 
 
 def classify(run_dir: Any) -> dict:
     """`{cause, green, evidence}` for one run dir; never raises on unreadable records."""
     run_dir = Path(run_dir)
+    hold = read_hold(run_dir)
+    if hold is not None:
+        return {
+            "cause": CAUSE_HELD,
+            "green": False,
+            "evidence": {
+                "halt_kind": "", "status": "", "stage": "", "remedy_class": None, "registered": False,
+                "handled": False, "signals": [], "withheld_paths": 0, "reason": "",
+                "holder_session": hold.holder_session, "pm_turn_ref": hold.pm_turn_ref,
+                "release_condition": hold.release_condition,
+            },
+        }
     marker = _obj(run_dir / HALTED_FILE)
     stage = _stage(run_dir)
     status = marker.get("status") if isinstance(marker.get("status"), str) else ""
@@ -207,14 +227,17 @@ def classify(run_dir: Any) -> dict:
 
 
 def is_member(run_dir: Path) -> bool:
-    """True when the dir holds `halted.json` or its run stage is abandoned or parked."""
-    return (run_dir / HALTED_FILE).is_file() or _stage(run_dir) in ABANDONED_STAGES
+    """True when the dir holds `held.json` or `halted.json`, or its run stage is abandoned or parked."""
+    return (run_dir / HELD_FILE).is_file() or (run_dir / HALTED_FILE).is_file() or _stage(run_dir) in ABANDONED_STAGES
 
 
 def census(warp_root: Any) -> dict:
-    """`{population, rows: [{cause, runs, green}], handled, unreadable}` over every member dir of `warp_root`."""
+    """`{population, rows: [{cause, runs, green}], held, handled, unreadable}` over every member dir of `warp_root`.
+
+    `held` lists `{run_id, holder_session, release_condition}` per held run, sorted by run id."""
     root = Path(warp_root)
     rows: dict = {}
+    held: list = []
     population = 0
     try:
         with os.scandir(root) as it:
@@ -226,12 +249,16 @@ def census(warp_root: Any) -> dict:
         if scanned is None:
             continue
         cause, green = scanned[0], scanned[4]
+        if scanned[6] is not None:
+            held.append({"run_id": entry.name, "holder_session": scanned[6].holder_session,
+                         "release_condition": scanned[6].release_condition})
         row = rows.setdefault(cause, {"cause": cause, "runs": 0, "green": 0})
         row["runs"] += 1
         row["green"] += 1 if green else 0
         population += 1
     ordered = sorted(rows.values(), key=lambda r: (-r["green"], -r["runs"], r["cause"]))
-    return {"population": population, "rows": ordered, "handled": sorted(HANDLED_CAUSES)}
+    return {"population": population, "rows": ordered, "held": sorted(held, key=lambda h: h["run_id"]),
+            "handled": sorted(HANDLED_CAUSES)}
 
 
 def settings_home() -> Path:

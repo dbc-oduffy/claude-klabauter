@@ -48,6 +48,29 @@ def test_unregistered_kind_and_registered_kind_evidence(tmp_path):
     assert hsc.classify(_run(tmp_path, "u", {"status": "halted", "halted": "weird-kind"}))["cause"] == "weird-kind"
 
 
+def _hold(d):
+    from coordinator_core.ops.dispatch_emit import run_hold
+
+    run_hold.write_hold(d, run_hold.HeldRun("sess-9", "pm turn 9", "tool gap closes"))
+
+
+def test_held_run_is_cause_held_not_abandoned_and_listed_with_holder_and_release(tmp_path):
+    d = _run(tmp_path, "held1", {"status": "halted", "halted": "abandoned_at_minted", "reason": "abandoned"})
+    _hold(d)
+    _hold(_run(tmp_path, "held-only"))
+    _run(tmp_path, "plain", {"status": "halted", "halted": "abandoned_at_minted", "reason": "abandoned"})
+    assert hsc.classify(d)["cause"] == "held" and hsc.classify(d)["green"] is False
+    assert hsc.is_member(tmp_path / "held-only")
+    result = hsc.census(tmp_path)
+    assert result["held"] == [
+        {"run_id": "held-only", "holder_session": "sess-9", "release_condition": "tool gap closes"},
+        {"run_id": "held1", "holder_session": "sess-9", "release_condition": "tool gap closes"},
+    ]
+    by_cause = {r["cause"]: r["runs"] for r in result["rows"]}
+    assert by_cause == {"held": 2, "abandoned_at_minted": 1}
+    assert result["population"] == 3
+
+
 def test_population_sum_mixes_halted_abandoned_parked_and_non_halted(tmp_path):
     _run(tmp_path, "h1", {"status": "halted", "halted": "commit"})
     _run(tmp_path, "h2", {"status": "resumed", "halted": "commit"})

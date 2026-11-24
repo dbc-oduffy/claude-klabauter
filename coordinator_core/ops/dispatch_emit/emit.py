@@ -505,6 +505,12 @@ _ENRICHER_AGENT_TYPE = "coordinator:enricher"
 #: be done by the only agent permitted to write the row's paths.
 _EXECUTION_TIER_CHANGE_KINDS = frozenset({"verification"})
 _TEST_AGENT_TYPE = "coordinator:test-runner"
+#: An executor reply naming the identity leg's refusal of its own pytest run (the guard text in
+#: `bash_guards/_test_run_admission.py`) or its acceptance owed to the test-runner: the row's
+#: only undone act is a test leg, so the runner books it gate-owed.
+_OWED_PYTEST_LEG_JS_RE = (
+    r"/^[^\x22\x27`]*?(?:only coordinator:test-runner runs pytest|owed to coordinator:test-runner)/i"
+)
 _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 
 #: Appended once to every emitted agent prompt that names a ``bin/coordinator-invoke`` command;
@@ -2391,7 +2397,11 @@ def _footprint_miss_clause(leg_writes: Sequence[str] = ()) -> str:
         f"`{report_line(KIND_OUTSIDE_FOOTPRINT, '<first failing test>')}` in your "
         "summary and nothing else undone. A failure inside your footprint is never "
         "this case. Copy that `gate-blocker:` line verbatim as the second line of "
-        "your reply, under the status line."
+        "your reply, under the status line. If a guard refuses your own pytest run (only "
+        "coordinator:test-runner runs pytest in a subagent), run nothing around it: when your "
+        "edits are complete return PARTIAL with the report line "
+        f"`{report_line(KIND_GUARD_DENIED, '<test node ids> (check-test-suite-invocation)')}` "
+        "as the second line; a coordinator:test-runner leg runs those tests."
     )
 
 
@@ -5283,6 +5293,20 @@ def _run_row_helper_js(
         "    const m = _GATE_OWED_RE.exec(t);\n"
         "    return m ? 'gate-blocker: ' + m[1].toLowerCase() + m[2] : null;\n"
         "  }\n"
+        f"  const _OWED_PYTEST_LEG_RE = {_OWED_PYTEST_LEG_JS_RE};\n"
+        # A reply that leaves only its pytest acceptance owed to the test-runner without the marker
+        # line is booked as the same gate-owed row: its dependents release and the checkpoint's
+        # test-runner leg (or, once checkpointed, a refire's carried-owed leg) runs the row's tests.
+        # Line-wise and quote-free before the phrase, so a reply quoting the instruction is not
+        # booked; `t` may be a JSON-stringified reply, whose newlines are the two characters \n.
+        "  function _pytestLegOwed(t) {\n"
+        "    return String(t).split(/\\\\n|\\n/).some((l) => _OWED_PYTEST_LEG_RE.test(l.replace(/^[\\s\"]+/, '')));\n"
+        "  }\n"
+        "  function _gateOwedOrPytestOf(t) {\n"
+        "    const m = _gateOwedOf(t);\n"
+        "    if (m || _DEP_BLOCKED_RE.test(t)) return m;\n"
+        "    return _pytestLegOwed(t) ? 'gate-blocker: guard-denied: pytest owed to coordinator:test-runner' : null;\n"
+        "  }\n"
         # One line of why a row did not finish: the status line's own text, else
         # the first other non-status line; '' when the reply has neither.
         f"  const _REASON_STATUS_RE = {_REASON_STATUS_LINE_JS_RE};\n"
@@ -5370,7 +5394,7 @@ def _run_row_helper_js(
         "      const r = results[i];\n"
         "      const t = JSON.stringify(r ?? null);\n"
         "      const settled = typeof r === 'string' && r.startsWith('ROUTED-OUT:');\n"
-        "      const _o = r != null ? _gateOwedOf(t) : null;\n"
+        "      const _o = r != null ? _gateOwedOrPytestOf(t) : null;\n"
         "      if (_o && _owedReleases(_o, id)) continue;\n"
         "      if (_o && await _owedDischarged(_o, id, _rowIdOf.get(deps[i]))) continue;\n"
         "      if (r != null && Object.hasOwn(_acceptPartial, _rowIdOf.get(deps[i])) && _DEP_PARTIAL_RE.test(t) && !_DEP_BLOCKED_RE.test(t)) continue;\n"
@@ -5522,8 +5546,8 @@ def _run_row_helper_js(
         "      } catch (e) {}\n"
         "    }\n"
         "    let incomplete = false;\n"
-        f"    if ({_NON_DONE_STATUS_JS_RE}.test(_text)) {{\n"
-        "      const _owed = _gateOwedOf(_text);\n"
+        f"    if ({_NON_DONE_STATUS_JS_RE}.test(_text) || (_pytestLegOwed(_text) && !{_BLOCKED_STATUS_JS_RE}.test(_text))) {{\n"
+        "      const _owed = _gateOwedOrPytestOf(_text);\n"
         f"      if (_owed) {{ {GATE_OWED_VAR}[id] = _owed; }}\n"
         f"      else if (_reaskPartial) {{ {CHUNK_REASON_VAR}[id] = _reasonOf(result); }}\n"
         "      else {\n"
@@ -5718,6 +5742,19 @@ class SeamLeg(NamedTuple):
 
 
 _SEAM_TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
+
+
+def _owed_test_scope(paths: Sequence[str], repo_root: Optional[str | Path]) -> list[str]:
+    """The test files that retest a row owing its pytest acceptance: the row's own declared test
+    files, else the existing candidate tests of its writes."""
+    tests = [p for p in paths if _SEAM_TEST_FILE_RE.search(p)]
+    if tests or repo_root is None:
+        return tests
+    return [
+        t
+        for t in candidate_test_additions(list(paths), Path(repo_root))
+        if (Path(repo_root) / t).exists()
+    ]
 
 
 def _plan_of(row_plan: Optional[str], plan_path: Optional[str]) -> Optional[str]:
@@ -7269,18 +7306,16 @@ def compose_script(
             seam_leg = seam_leg._replace(own_tests=own_tests)
         owed_scope: dict = {}
         for rid, paths in row_own_writes.items():
-            tests = [p for p in paths if p not in gitignored and _SEAM_TEST_FILE_RE.search(p)]
-            if not tests:
-                tests = [
-                    t
-                    for t in candidate_test_additions(
-                        [p for p in paths if p not in gitignored],
-                        Path(repo_root) if repo_root is not None else None,
-                    )
-                    if repo_root is not None and (Path(repo_root) / t).exists()
-                ]
+            tests = _owed_test_scope([p for p in paths if p not in gitignored], repo_root)
             if tests:
                 owed_scope[rid] = tests
+        for rid, cmds in (carried_gate_owed or {}).items():
+            if rid not in owed_scope:
+                carried_tests = [
+                    tok for cmd in cmds for tok in cmd.split() if _SEAM_TEST_FILE_RE.search(tok)
+                ]
+                if carried_tests:
+                    owed_scope[rid] = carried_tests
         body_blocks.append(
             _checkpoint_commit_js(
                 agent_type_host,
@@ -8921,6 +8956,7 @@ def emit_script(
     script_path: Optional[str] = None,
     findings_out: Optional[list] = None,
     landed_rows: Optional[frozenset] = None,
+    owed_test_rows: frozenset = frozenset(),
     review_only_rows: Optional[frozenset] = None,
     review_carried_paths: Sequence[str] = (),
     run_base_sha: Optional[str] = None,
@@ -9094,6 +9130,12 @@ def emit_script(
             )
             landed_rows = landed_rows | (trailer_landed & spine_ids)
             carried_gate_owed = tuple(sorted(trailer_owed & spine_ids))
+        # A halted run's row that owes only its pytest acceptance (no checkpoint recorded it) is
+        # carried owed: its tests run in a test-runner leg, never an executor refire.
+        owed_here = frozenset(owed_test_rows) & {r.id for r in rows}
+        if owed_here:
+            landed_rows = landed_rows | owed_here
+            carried_gate_owed = tuple(sorted(set(carried_gate_owed) | owed_here))
         # A landed id this spine does not carry (a no-hunk DONE row closed elsewhere, or a row of
         # another plan in a mixed run) has nothing to drop here; it is skipped, not refused.
         landed_rows = landed_rows & ({r.id for r in rows} | set(closed_ids))
@@ -9218,13 +9260,16 @@ def emit_script(
         leg_writes=tuple(leg_writes) or _recorded_leg_writes(script_path, repo_root),
     )
 
-    carried_owed_gates = {
-        r.id: cmds
-        for r in pre_drop_rows
-        if r.id in carried_gate_owed
-        for cmds in [_row_build_gate_commands(r, plan_context.row_build_gates)]
-        if cmds
-    }
+    carried_owed_gates = {}
+    for r in pre_drop_rows:
+        if r.id not in carried_gate_owed:
+            continue
+        cmds = _row_build_gate_commands(r, plan_context.row_build_gates)
+        if not cmds:
+            tests = _owed_test_scope(commit_pathspec_or_none([r]) or (), repo_root)
+            cmds = [f"python -m pytest {' '.join(tests)}"] if tests else []
+        if cmds:
+            carried_owed_gates[r.id] = cmds
 
     deliverable_id = _plan_deliverable_id(plan_text) if plan_text else None
     plan_id = _plan_id(plan_text) if plan_text else None

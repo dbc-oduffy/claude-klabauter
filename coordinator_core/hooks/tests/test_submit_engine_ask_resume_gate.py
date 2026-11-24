@@ -53,6 +53,21 @@ def test_a_cancelled_run_is_refused_with_the_fresh_alternative(tmp_path, monkeyp
     assert result is None and "cancelled" in _refusal(envelope) and "fresh" in _refusal(envelope)
 
 
+@pytest.mark.parametrize("fields", [{"halted": "cancelled"}, {"status": "superseded"}, {"status": "closed"}])
+def test_a_fresh_refire_of_a_terminal_run_mints_instead_of_refusing(tmp_path, monkeypatch, fields):
+    root = _repo(tmp_path, stamp=None)
+    _set_marker(root, **fields)
+    envelope, result, _ = _drive(root, monkeypatch, "s1", fresh=True)
+    assert (envelope, result) == (None, None)
+
+
+def test_a_fresh_refire_of_a_foreign_driven_run_is_not_refused(tmp_path, monkeypatch):
+    root = _repo(tmp_path, stamp=None)
+    _stage(root, "other")
+    envelope, _, _ = _drive(root, monkeypatch, "s1", fresh=True)
+    assert envelope is None or envelope["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+
 @pytest.mark.parametrize("status", ["superseded", "closed"])
 def test_a_superseded_or_closed_run_is_refused(tmp_path, status):
     root = _repo(tmp_path, stamp=None)

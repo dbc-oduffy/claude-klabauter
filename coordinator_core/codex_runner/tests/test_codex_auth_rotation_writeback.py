@@ -139,28 +139,46 @@ def test_concurrent_writebacks_never_expose_a_partial_auth_json(tmp_path):
         os.utime(auth, (2_000_000.0 + i, 2_000_000.0 + i))
         envs.append(env)
     stop = threading.Event()
+    reader_started = threading.Event()
     torn: list[str] = []
+    reads = [0]
+    barrier = threading.Barrier(len(envs) * 3)
+    errors: list[BaseException] = []
 
     def reader() -> None:
         while not stop.is_set():
             try:
                 json.loads((real / "auth.json").read_text(encoding="utf-8"))
+                reads[0] += 1
             except json.JSONDecodeError as e:
                 torn.append(str(e))
             except OSError:
                 pass
+            reader_started.set()
+
+    def writer(env: dict[str, str]) -> None:
+        try:
+            barrier.wait(timeout=60)
+            cse.writeback_codex_auth(env, {})
+        except BaseException as e:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(e)
 
     t = threading.Thread(target=reader)
     t.start()
+    writers = [threading.Thread(target=writer, args=(e,)) for e in envs for _ in range(3)]
     try:
-        writers = [threading.Thread(target=cse.writeback_codex_auth, args=(e, {})) for e in envs for _ in range(3)]
+        assert reader_started.wait(timeout=60)
         for w in writers:
             w.start()
         for w in writers:
-            w.join()
+            w.join(timeout=120)
+            assert not w.is_alive()
     finally:
         stop.set()
-        t.join()
+        t.join(timeout=60)
+    assert not t.is_alive()
+    assert errors == []
+    assert reads[0] >= 1
     assert torn == []
     assert json.loads((real / "auth.json").read_text(encoding="utf-8"))["refresh_token"] == "x" * 200_000
     assert [p.name for p in real.iterdir()] == ["auth.json"]

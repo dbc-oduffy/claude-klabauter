@@ -1310,15 +1310,18 @@ _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 
 def em_discharge_closes(row: dict, entry: object) -> bool:
     """True when a recorded discharge closes ``row``: the row is em-performed, or ``entry`` is a
-    dict carrying a non-empty ``commit`` and a non-empty ``evidence``."""
+    dict carrying a non-empty ``evidence`` and either a non-empty ``commit`` or
+    ``writes_verified: true`` (the discharge found every declared write on disk)."""
     from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
 
     if row_is_em_performed(row):
         return True
     return (
         isinstance(entry, dict)
-        and isinstance(entry.get("commit"), str)
-        and bool(entry["commit"].strip())
+        and (
+            (isinstance(entry.get("commit"), str) and bool(entry["commit"].strip()))
+            or entry.get("writes_verified") is True
+        )
         and isinstance(entry.get("evidence"), str)
         and bool(entry["evidence"].strip())
     )
@@ -1349,6 +1352,43 @@ def _commit_resolves(common_dir: Path, commit: str) -> Optional[str]:
     result = run_git(["-C", str(common_dir), "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"])
     resolved = result.stdout.strip().lower()
     return resolved if result.returncode == 0 and _FULL_SHA.fullmatch(resolved) else None
+
+
+def _writes_absent(row: dict, worktree: Path) -> list:
+    """Declared ``writes`` paths of ``row`` not present under ``worktree``; a row declaring no
+    writes, or a path escaping the worktree, reads as absent."""
+    writes = row.get("writes")
+    if not isinstance(writes, list) or not writes:
+        return ["<no declared writes>"]
+    root = worktree.resolve()
+    absent = []
+    for w in writes:
+        if not isinstance(w, str) or not w.strip():
+            absent.append(repr(w))
+            continue
+        target = (root / w.strip()).resolve()
+        if root not in target.parents or not target.exists():
+            absent.append(w)
+    return absent
+
+
+def _writes_unchanged(row: dict, worktree: Path) -> list:
+    """Declared ``writes`` paths of ``row`` with no uncommitted change against HEAD (modified,
+    added or untracked); every path reads as unchanged when git cannot answer. A modify-in-place
+    row passes only through its own diff, so an evidence string alone never closes it."""
+    from coordinator_core.git.run import run_git
+
+    writes = [w.strip().replace("\\", "/").removeprefix("./") for w in row.get("writes") or [] if isinstance(w, str) and w.strip()]
+    result = run_git(
+        ["-C", str(worktree), "status", "--porcelain", "-z", "--untracked-files=all", "--", *writes]
+    )
+    if result.returncode != 0:
+        return list(writes)
+    changed = {e[3:].replace("\\", "/") for e in result.stdout.split("\0") if len(e) > 3 and e[2] == " "}
+    return [
+        w for w in writes
+        if not any(c == w.rstrip("/") or c.startswith(w.rstrip("/") + "/") for c in changed)
+    ]
 
 
 def _ue_report_evidence(ue_report: object, worktree: Path) -> "str | dict":
@@ -1441,10 +1481,25 @@ def _em_discharge(
             return ue_evidence
         evidence_s = f"{evidence_s}; {ue_evidence}" if evidence_s else ue_evidence
     executor_row = not row_is_em_performed(row)
-    if executor_row and not (commit_s and evidence_s):
+    writes_verified = False
+    if executor_row and evidence_s and not commit_s:
+        absent = _writes_absent(row, worktree)
+        if absent:
+            return _err(
+                f"em-discharge: row {row_id!r} is not performer: em; evidence without 'commit' "
+                f"needs every declared write on disk; absent: {absent}"
+            )
+        unchanged = _writes_unchanged(row, worktree)
+        if unchanged:
+            return _err(
+                f"em-discharge: row {row_id!r} is not performer: em; evidence without 'commit' "
+                f"needs every declared write changed against HEAD; unchanged: {unchanged}"
+            )
+        writes_verified = True
+    elif executor_row and not (commit_s and evidence_s):
         return _err(
             f"em-discharge: row {row_id!r} is not performer: em; "
-            "an executor row needs both 'commit' and 'evidence'"
+            "an executor row needs 'evidence' and either 'commit' or declared writes on disk"
         )
 
     from coordinator_core.ops.dispatch_emit.spine_read import (
@@ -1463,7 +1518,7 @@ def _em_discharge(
         return _err(f"em-discharge: row {row_id!r} is execution_mode: operator; the operator releases it")
     if (row.get("disposition") or "open") != "open":
         return _err(f"em-discharge: row {row_id!r} disposition is {row.get('disposition')!r}, not open")
-    if executor_row:
+    if executor_row and not writes_verified:
         resolved = _commit_resolves(repo_root, commit_s)
         if resolved is None:
             return _err(
@@ -1482,6 +1537,8 @@ def _em_discharge(
     }
     if commit_s:
         entry["commit"] = commit_s
+    if writes_verified:
+        entry["writes_verified"] = True
     if evidence_s:
         entry["evidence"] = relativize_text(evidence_s, [(str(worktree), "")])
     state = {"applied": False}

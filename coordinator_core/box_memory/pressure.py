@@ -21,9 +21,14 @@ KIND_GREP_STORM = "grep-storm"
 
 DEFAULT_STORM_THRESHOLD = 8
 MIN_ORPHAN_AGE_S = 30 * 60
+MIN_ORPHAN_CPU_S = 10 * 60
 _FILETIME_EPOCH_OFFSET_S = 11_644_473_600
 
 _SEARCH_NAME = re.compile(r"(?:grep|egrep|fgrep|find|rg|xargs)(?:\.exe)?", re.IGNORECASE)
+_PYTHON_NAME = re.compile(r"python(?:3(?:\.\d+)?)?(?:\.exe)?", re.IGNORECASE)
+_ARGV_TOKEN = re.compile(r'"[^"]*"|\S+')
+# Interpreter options that take a following argument when written bare (`-W ignore`, `-X dev`).
+_ARG_OPTS = frozenset({"-W", "-X"})
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BIN_DIR = _REPO_ROOT / "coordinator" / "bin"
 
@@ -40,6 +45,43 @@ def classify(reading, floor_mb: float) -> str:
 def is_search_name(name) -> bool:
     """True for a grep/find/rg/xargs process name or path."""
     return bool(_SEARCH_NAME.fullmatch(str(name).replace("\\", "/").rsplit("/", 1)[-1]))
+
+
+def is_python_name(name) -> bool:
+    """True for a python/python3[.N][.exe] process name or path."""
+    return bool(_PYTHON_NAME.fullmatch(str(name).replace("\\", "/").rsplit("/", 1)[-1]))
+
+
+def is_stdin_python(row, cmdline) -> bool:
+    """True for a python image whose script slot is `-` (script read from stdin): `python -`,
+    `python3 -I -`, `python.exe -u -`. `-c` and `-m` name their own program and never match; an
+    absent or unparsable `cmdline` is False."""
+    if not is_python_name(getattr(row, "name", "")) or not cmdline:
+        return False
+    argv = [t.strip('"') for t in _ARGV_TOKEN.findall(str(cmdline))][1:]
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "-":
+            return True
+        if not tok.startswith("-"):
+            return False
+        if tok == "--" or tok.startswith(("--", "-c", "-m")):
+            return False
+        i += 2 if tok in _ARG_OPTS else 1
+    return False
+
+
+def is_aged(row, now: Optional[int] = None) -> bool:
+    """True when `row`'s age (`now` minus ctime, `ProcRow.ctime` units) is at least
+    `MIN_ORPHAN_AGE_S`; an unreadable or zero ctime reads as young."""
+    ctime = getattr(row, "ctime", 0)
+    if not (ctime and ctime > 0):
+        return False
+    from coordinator_core.bash_guards._host_probe import ctime_units_per_second
+
+    current = now_ctime() if now is None else now
+    return current - ctime >= MIN_ORPHAN_AGE_S * ctime_units_per_second()
 
 
 def now_ctime() -> int:

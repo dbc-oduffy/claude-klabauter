@@ -408,6 +408,7 @@ def _verdict():
         _VERDICT = threading.local()
     return _VERDICT
 
+
 #: Win32 pipe errors for a client that left before the verdict: broken pipe, no process on the other end, pipe closing.
 _PIPE_GONE_WINERRORS = (109, 232, 233)
 
