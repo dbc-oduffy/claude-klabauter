@@ -74,6 +74,10 @@ def require_fire_authority(script_path: str, expected: str | None, *, cwd: str |
         raise ValueError('The submitted session must match the actual invoking session.')
     if caller.role == 'unknown' and _legacy_registry_em(caller):
         caller = caller._replace(role='em')
+    if caller.role == 'unknown':
+        caller = _adopt_interactive_agy(caller)
+    if caller.role == 'unknown':
+        caller = _adopt_interactive_grok(caller)
     if caller.role == 'em':
         return caller
     if caller.role == 'workflow-agent':
@@ -118,6 +122,53 @@ def _legacy_registry_em(caller: Principal) -> bool:
         return agent_role.classify(payload, caller.env, **agent_role.observed_cli_launch(argv)) == 'em'
     except Exception:
         return False
+
+
+def _adopt_interactive_agy(caller: Principal) -> Principal:
+    """Resolve an interactive Agy EM whose SessionStart registration never landed or was recorded unknown.
+
+    Only a caller whose carried `ANTIGRAVITY_CONVERSATION_ID` is its own session id qualifies; the
+    role is then re-derived through `role_for_caller` from a row built off the observed live `agy`
+    process, so a headless `-p` run, a worker marker or a dead process stays unresolved."""
+    from coordinator_core.session import core
+    sid, env = caller.session_id, caller.env
+    if not sid or _explicit_worker_marker(env) or env.get('COORDINATOR_PARENT_SESSION_ID'):
+        return caller
+    conv = env.get('ANTIGRAVITY_CONVERSATION_ID')
+    if not conv or core.canonical_session_env_value('ANTIGRAVITY_CONVERSATION_ID', conv) != sid:
+        return caller
+    try:
+        from coordinator_core.session import agent_role, external_registry
+        if external_registry.adopt_agy_leg(sid, env) is None:
+            return caller
+        role = agent_role.role_for_caller(env, sid)
+    except (ImportError, OSError, ValueError, TypeError):
+        return caller
+    return caller._replace(role=role) if role == 'em' else caller
+
+
+def _adopt_interactive_grok(caller: Principal) -> Principal:
+    """Resolve an interactive Grok EM whose SessionStart registration never landed.
+
+    Only a caller whose carried `GROK_SESSION_ID` is its own session id qualifies; the role is then
+    re-derived through `role_for_caller` from a row built off the live `grok` process named by Grok's
+    own `active_sessions.json`, so a headless `-p` run, a worker marker, a parent-session marker or a
+    dead process stays unresolved."""
+    from coordinator_core.session import core
+    sid, env = caller.session_id, caller.env
+    if not sid or _explicit_worker_marker(env) or env.get('COORDINATOR_PARENT_SESSION_ID'):
+        return caller
+    raw = env.get('GROK_SESSION_ID')
+    if not raw or core.canonical_session_env_value('GROK_SESSION_ID', raw) != sid:
+        return caller
+    try:
+        from coordinator_core.session import agent_role, external_registry
+        if external_registry.adopt_grok_session(sid, env) is None:
+            return caller
+        role = agent_role.role_for_caller(env, sid)
+    except (ImportError, OSError, ValueError, TypeError):
+        return caller
+    return caller._replace(role=role) if role == 'em' else caller
 
 
 def _grant_verified_headless_em(caller: Principal) -> bool:

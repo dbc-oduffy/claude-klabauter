@@ -31,6 +31,46 @@ def test_observed_grok_audience_distinguishes_interactive_vs_headless():
     assert agent_role.observed_grok_audience([]) == "unknown"
 
 
+def test_adopt_grok_session_writes_a_row_only_for_a_live_interactive_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+    import psutil
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    monkeypatch.delenv("COORDINATOR_AGENT_WORKER", raising=False)
+    monkeypatch.delenv("COORDINATOR_AGENT_ROLE", raising=False)
+    monkeypatch.setattr(core, "stable_pid_alive", lambda *a, **k: True)
+    monkeypatch.setattr(core, "ensure_session", lambda *a, **k: None)
+    home = tmp_path / "grok-home"
+    home.mkdir()
+    (home / "active_sessions.json").write_text(
+        json.dumps([{"session_id": SID_GROK, "pid": 77, "cwd": str(tmp_path)}]), encoding="utf-8")
+
+    def host(argv):
+        proc = _proc("grok", argv, pid=77)
+        proc.is_running = lambda: True
+        monkeypatch.setattr(psutil, "Process", lambda pid: proc)
+
+    host(["grok", "-p", "task"])
+    assert registry.adopt_grok_session(SID_GROK, {}, grok_home_dir=home) is None
+    assert registry.lookup(SID_GROK) is None
+    host(["grok", "--dangerously-skip-permissions"])
+    row = registry.adopt_grok_session(SID_GROK, {}, grok_home_dir=home)
+    assert row is not None and row["provider"] == "grok" and row["role"] == "em" and row["pid"] == 77
+    assert agent_role.role_for_caller({}, SID_GROK) == "em"
+    assert registry.adopt_grok_session("00000000-0000-4000-8000-000000000001", {}, grok_home_dir=home) is None
+
+
+def test_main_accepts_provider_grok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    import io
+    import json
+
+    seen = []
+    monkeypatch.setattr(registry, "register_current", lambda payload, *a, **k: seen.append(payload))
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": SID_GROK, "cwd": str(tmp_path)})))
+    assert registry.main(["--event", "SessionStart", "--provider", "grok"]) == 0
+    assert seen and seen[0]["provider"] == "grok"
+
+
 def test_grok_register_lookup_snapshot_and_unregister(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import psutil
 

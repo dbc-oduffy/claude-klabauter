@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.hooks.tests.test_submit_engine_ask_real_emit import repo  # noqa: F401
 from coordinator_core.ops.workflow_fire import fire
 
 
@@ -55,6 +56,43 @@ def test_refire_starts_a_new_fire_past_an_ended_one(target) -> None:
     again = fire.fire_workflow(str(script), expected=digest, refire=True)
     assert again["fire_id"] != previous["fire_id"] and not again.get("already_fired")
     assert len(started) == 2
+
+
+def test_authority_refused_mint_keeps_its_run_and_fires_later_from_a_verified_em(repo, monkeypatch) -> None:
+    import json
+
+    from coordinator_core.invoke.__main__ import _dispatch_argv
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.workflow_fire import authority, headless
+    from coordinator_core.ops.workflow_fire.op import _workflow_fire
+    from coordinator_core.session import external_registry
+
+    root = repo
+    sid = "11111111-2222-3333-4444-555555555555"
+    monkeypatch.setattr(authority, "caller_principal", lambda *a: authority.Principal(sid, "unknown", {}))
+    monkeypatch.setattr(external_registry, "lookup", lambda s: None)
+    started = []
+    monkeypatch.setattr(headless, "start", lambda *a, **kw: started.append((a, kw)) or {"fire_id": "later"})
+    params = {"ask": "add an offline fixture", "ask_source": "relayed", "caller": "grok-em",
+              "session_id": sid, "cwd": str(root), "backend": "grok"}
+    stdout, _, _ = _dispatch_argv(
+        ["engine_ask.submit", json.dumps(params), "--repo", str(root), "--bare"], str(root.parent), allow_warm=False)
+    refused = json.loads(stdout)
+    assert "verified EM" in refused["fire_error"] and not started
+    script = Path(refused["script_path"])
+    assert script.is_file()
+    assert hashlib.sha256(script.read_bytes()).hexdigest() == refused["sha256"]
+    # A raw ask mints deferred: the refused mint's start args are its deferred script and the run's token marker;
+    # the run dir and run script land only when that script runs.
+    assert run_token._read_rec(root, refused["run_id"]) is not None
+
+    monkeypatch.setattr(authority, "caller_principal", lambda *a: authority.Principal(sid, "em", {}))
+    fire_params = {"script_path": str(script), "expected": refused["sha256"], "executor": "headless",
+                   "backend": "grok", "caller_session_id": sid, "run_id": refused["run_id"]}
+    if refused.get("fire_args"):
+        fire_params["args"] = refused["fire_args"]
+    fired = _workflow_fire(fire_params, root)
+    assert fired["fire_id"] == "later" and len(started) == 1
 
 
 def test_refire_never_duplicates_a_live_fire(target) -> None:

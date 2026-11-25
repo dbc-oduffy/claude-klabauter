@@ -175,12 +175,14 @@ def _is_grok_host(process) -> bool:
 
 
 def register_current(payload: dict, directory: Path | None = None, *,
-                     host_pid: int | None = None, env: "Mapping[str, str] | None" = None) -> dict:
+                     host_pid: int | None = None, env: "Mapping[str, str] | None" = None,
+                     host_process=None) -> dict:
     """The sole external binding constructor; only observed Codex, Agy, or Grok ancestors qualify.
 
     `host_pid` is the process whose ancestors are searched (default: this process) and
     `env` the environment classified against (default: `os.environ`); the warm engine
-    passes its caller's, since its own describe the server.
+    passes its caller's, since its own describe the server. `host_process` names an already
+    observed Agy CLI process (agy only) and replaces the ancestor search.
     """
     _require_thread_lifecycle(payload)
     import psutil
@@ -196,13 +198,16 @@ def register_current(payload: dict, directory: Path | None = None, *,
     cwd = payload.get("cwd")
     if not isinstance(cwd, str) or not Path(cwd).is_absolute():
         raise ValueError("cwd must be absolute")
-    parents = list(psutil.Process(os.getpid() if host_pid is None else host_pid).parents())
+    if host_process is not None and provider not in ("agy", "grok"):
+        raise ValueError("host_process is only accepted for provider agy or grok")
+    parents = [] if host_process is not None else list(
+        psutil.Process(os.getpid() if host_pid is None else host_pid).parents())
     if provider == "agy":
-        host = _find_agy_host(parents)
+        host = host_process if host_process is not None else _find_agy_host(parents)
         if host is None:
             raise ValueError("no observed Agy ancestor")
     elif provider == "grok":
-        host = next((p for p in parents if _is_grok_host(p)), None)
+        host = host_process if host_process is not None else next((p for p in parents if _is_grok_host(p)), None)
         if host is None:
             raise ValueError("no observed Grok ancestor")
     else:
@@ -309,6 +314,73 @@ def register_current(payload: dict, directory: Path | None = None, *,
     except (OSError, ValueError):
         pass  # Non-git working directories still have valid host bindings.
     return record
+
+
+def adopt_agy_leg(session_id: str, env: "Mapping[str, str] | None" = None, directory: Path | None = None,
+                  *, legs_dir: Path | None = None) -> dict | None:
+    """Bind an Agy conversation whose SessionStart registration never landed, from observed evidence.
+
+    The evidence is the conversation's leg record (written by the SessionStart hook from the
+    agy.exe ancestor it observed) plus that pid still being a live `agy` CLI that predates the
+    record. The role is classified from the process's own argv, so a headless `-p` run stays
+    `unknown`. Returns the row, or None when the evidence does not hold.
+    """
+    import psutil
+    try:
+        sid = _sid(session_id)
+        path = (legs_dir if legs_dir is not None else settings_home() / "unimatrix" / "agy-legs") / f"{sid}.json"
+        leg = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(leg, dict):
+            return None
+        pid, cwd = leg.get("agy_pid"), leg.get("cwd")
+        if (leg.get("conversation") != sid or isinstance(pid, bool)
+                or not isinstance(pid, int) or pid <= 0 or not isinstance(cwd, str) or not Path(cwd).is_absolute()):
+            return None
+        host = psutil.Process(pid)
+        if host.name().lower().removesuffix(".exe") != "agy" or host.create_time() > path.stat().st_mtime:
+            return None
+        payload = {"session_id": sid, "cwd": cwd, "provider": "agy", "hook_event_name": "SessionStart",
+                   "source": "startup"}
+        return register_current(payload, directory, env=dict(env or {}), host_process=host)
+    except (psutil.Error, OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def adopt_grok_session(session_id: str, env: "Mapping[str, str] | None" = None, directory: Path | None = None,
+                       *, grok_home_dir: Path | None = None) -> dict | None:
+    """Bind an interactive Grok session whose SessionStart registration never landed, from observed evidence.
+
+    The evidence is the session's live row in Grok's own `active_sessions.json` plus that pid still
+    being a Grok host whose argv classifies `em`. A headless `-p` run, a utility subcommand or a dead
+    pid leaves no row. Returns the row, or None when the evidence does not hold.
+    """
+    import psutil
+    try:
+        from coordinator_core.session import core
+        from coordinator_core.session.agent_role import observed_grok_audience
+        sid = _sid(session_id)
+        home = grok_home_dir if grok_home_dir is not None else Path(os.environ.get("GROK_HOME") or Path.home() / ".grok")
+        rows = json.loads((home / "active_sessions.json").read_text(encoding="utf-8"))
+        if not isinstance(rows, list):
+            return None
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("session_id"), str):
+                continue
+            if core.canonical_session_env_value("GROK_SESSION_ID", row["session_id"]) != sid:
+                continue
+            pid, cwd = row.get("pid"), row.get("cwd")
+            if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 or not isinstance(cwd, str) \
+                    or not Path(cwd).is_absolute():
+                return None
+            host = psutil.Process(pid)
+            if not host.is_running() or not _is_grok_host(host) or observed_grok_audience(host.cmdline()) != "em":
+                return None
+            payload = {"session_id": sid, "cwd": cwd, "provider": "grok", "hook_event_name": "SessionStart",
+                       "source": "startup"}
+            return register_current(payload, directory, env=dict(env or {}), host_process=host)
+        return None
+    except (psutil.Error, OSError, ValueError, TypeError, AttributeError, ImportError):
+        return None
 
 
 def unregister(session_id: str, directory: Path | None = None, *, payload: dict | None = None) -> None:
@@ -506,12 +578,14 @@ def snapshot(directory: Path | None = None) -> dict[str, dict]:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event", choices=("SessionStart", "SessionEnd"), required=True)
-    parser.add_argument("--provider", choices=("codex", "claude"), default="codex")
+    parser.add_argument("--provider", choices=("codex", "claude", "grok"), default="codex")
     args = parser.parse_args(argv)
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
             raise ValueError("hook payload must be an object")
+        if args.provider == "grok":
+            payload = {**payload, "provider": "grok"}
         claude = args.provider == "claude"
         if args.event == "SessionStart":
             (register_claude_current if claude else register_current)(payload)

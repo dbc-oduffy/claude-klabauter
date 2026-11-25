@@ -206,9 +206,25 @@ def _pid_is_a_forwarder(pid: int) -> "Optional[bool]":
         verdict = _pid_is_a_forwarder_posix(pid)
     if verdict is not None:
         return verdict
-    if _port_owner_pid() != pid:
+    if _port_owner_pid() != pid and not _pid_listens_on(pid):
         return None
     return True if _port_answers_as_forwarder(pid) else None
+
+
+def _pid_listens_on(pid: int, port: int = _FIXED_PORT) -> bool:
+    """True when `pid` itself holds a LISTEN socket on `port`.
+
+    Trap: macOS refuses the box-wide socket table (`psutil.net_connections`) without root, so
+    `_port_owner_pid` reads None there even while the forwarder listens; one process's own
+    sockets stay readable for a same-user pid."""
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        conns = proc.net_connections(kind="tcp") if hasattr(proc, "net_connections") else proc.connections(kind="tcp")
+        return any(c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port == port for c in conns)
+    except Exception:
+        return False
 
 
 def _restart_command() -> str:
@@ -229,9 +245,15 @@ def _pid_is_a_forwarder_posix(pid: int) -> "Optional[bool]":
     cmdline_path = Path("/proc") / str(pid) / "cmdline"
     try:
         raw = cmdline_path.read_bytes()
+        argv_text = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
     except Exception:
-        return None
-    argv_text = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        # macOS has no /proc: without this the forwarder was never confirmed there.
+        try:
+            import psutil
+
+            argv_text = " ".join(psutil.Process(pid).cmdline())
+        except Exception:
+            return None
     return bool(_FORWARDER_ARGV_RE.search(argv_text))
 
 
