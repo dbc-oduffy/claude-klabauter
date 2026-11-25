@@ -651,6 +651,31 @@ def test_a_pending_agy_leg_can_send_bound_from_its_leg_record(tmp_path):
 
 
 @portable
+def test_a_dead_holder_agy_peer_replies_through_a_transport_face_not_its_stopped_face(tmp_path):
+    """An agy peer whose leg dropped to pending is a dead holder with its face stopped; its reply to a
+    Claude session must not go through that missing face endpoint (WinError 2 on machine-a)."""
+    (tmp_path / "sessions").mkdir()
+    agy_peer = {"name": "agy-conv-g", "vendor": "agy", "target": "conv-g"}
+    r = pr.Router([agy_peer], sessions_dir=tmp_path / "sessions", state_dir=tmp_path / "state",
+                  adapters=echo_adapters())
+    r.dead_holders.add("agy-conv-g")
+    routes = []
+
+    async def via_face(sender, to, text):
+        routes.append("face")
+        return {"ok": False, "error": "face gone"}
+
+    async def via_transport(sender, to, text):
+        routes.append(("transport", sender, to))
+        return {"ok": True, "written": True}
+
+    r._peer_send_to_session, r._transport_send_to_session = via_face, via_transport
+    resp = run(r._dispatch({"op": "send", "to": "coordinator-content-repo-b9", "text": "reply from agy",
+                            "as": "cli", "as_target": "conv-g"}))
+    assert resp.get("ok") is True and routes == [("transport", "agy-conv-g", "coordinator-content-repo-b9")], (resp, routes)
+
+
+@portable
 def test_unstarted_router_lists_a_pending_leg_pending_and_a_send_to_it_answers_queued(tmp_path):
     queued = "[unimatrix-peer-agy] queued: the agy leg is not live; the message is spooled"
     seen = []
