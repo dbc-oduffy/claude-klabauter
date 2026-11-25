@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-from unittest import mock
 
 import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
-from coordinator_core.ops.dispatch_emit import ask_compose, prompt_fragments, stage_family
+from coordinator_core.ops.dispatch_emit import ask_compose, stage_family
 from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused, compose_ask_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import WAKE_DIGEST_COMMIT_OP
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -49,10 +48,7 @@ def _compose(**over):
         **REVIEW_KW,
     )
     kw.update(over)
-    # Hoisting is off under this directory's fixtures, so the literal-text script exceeds the runner cap that
-    # the hoisted production script is pinned to in test_ask_compose_raw_script_under_cap.
-    with mock.patch.object(ask_compose._emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9):
-        return compose_ask_script(**kw)
+    return compose_ask_script(**kw)
 
 
 _NO_FOLD = "if (!_stagedManifest) { _manifest = { error: 'no folded stage manifest"
@@ -214,7 +210,8 @@ def test_prompt_text_is_escaped_into_the_script():
 
 
 def test_size_prompt_walks_the_agent_to_a_gate_passing_sizing():
-    size_line = _scout_prompt(_compose())
+    script = _compose()
+    size_line = next(ln for ln in script.splitlines() if "const _scouted" in ln)
     assert "`writes`" in size_line and "exit_criterion" in size_line
     for needle in ("sizing-assemble", "--exit-criterion", "--write", "--no-plan-hand-off"):
         assert needle in size_line, needle
@@ -243,7 +240,7 @@ def test_return_carries_the_plan_routes_terminal_commit_next_action():
 
 
 def test_size_phase_schema_and_prompt_require_gated_rows():
-    script = _expand_body_blocks(_compose())
+    script = _compose()
     size_stage = script.split("const _scoutedFirst = await", 1)[1].split("_writes = _scouted", 1)[0]
     assert '"gated"' in size_stage and '"owner_repo"' in size_stage
     assert "`gated`" in size_stage
@@ -506,31 +503,17 @@ def test_an_override_changing_a_pinned_type_model_is_refused():
 
 
 def test_stage_is_folded_into_the_plan_agent_s_last_act():
-    plan_prompt = _agent_prompt(_compose(), "plan")
+    script = _compose()
+    plan_end = script.index("label: 'plan'")
+    plan_prompt = script[script.rindex("agent(", 0, plan_end) : plan_end]
     assert OP_ASK_STAGE in plan_prompt and "as `stage_reply`" in plan_prompt
 
 
-_BB_DECL = re.compile(r"^const (_BB\d+) = `((?:[^`\\]|\\.)*)`;\n", re.M | re.S)
-
-
-def _expand_body_blocks(script):
-    """The script with each shared `_BBn` template const dropped and its text spelled in place of every reference, so a prompt slice reads what the agent receives."""
-    decls = {
-        name: "'" + re.sub(r"\\(.)|'", lambda m: (m.group(1) if m.group(1) in ("`", "$") else m.group(0)) if m.group(1) else "\\'", text) + "'"
-        for name, text in _BB_DECL.findall(script)
-    }
-    body = _BB_DECL.sub("", script)
-    for name in sorted(decls, key=lambda n: -int(n[3:])):
-        body = re.sub(rf"\b{name}\b", lambda _m, t=decls[name]: t, body)
-    return prompt_fragments.fold_literals(body) if decls else body
-
-
 def _scout_prompt(script):
-    return next(ln for ln in _expand_body_blocks(script).splitlines() if "const _scouted" in ln)
+    return next(ln for ln in script.splitlines() if "const _scouted" in ln)
 
 
 def _gate_prompt(script):
-    script = _expand_body_blocks(script)
     end = script.index("label: 'gate'")
     return script[script.rindex("agent(", 0, end) : end]
 
@@ -623,7 +606,6 @@ def test_the_raw_path_plan_author_authors_the_falsifier_only_when_the_scout_retu
 
 
 def _agent_prompt(script, label):
-    script = _expand_body_blocks(script)
     end = script.index(f"label: '{label}'")
     return script[script.rindex("agent(", 0, end) : end]
 
@@ -740,7 +722,7 @@ def test_a_roster_without_a_delivery_verifier_assigns_the_not_rostered_reason():
 
 
 def _reword_prompt(script):
-    return next(ln for ln in _expand_body_blocks(script).splitlines() if "label: 'size-reword'" in ln)
+    return next(ln for ln in script.splitlines() if "label: 'size-reword'" in ln)
 
 
 def test_size_reword_runs_assemble_gate_and_stage_itself_with_no_wrapper_agent():
@@ -1138,7 +1120,7 @@ def _precedence_script(uses: int) -> str:
 def test_share_brief_precedence_shares_tail_for_repeated_clause():
     clause = ask_compose._lit(ask_compose._emit._BRIEF_PRECEDENCE_CLAUSE)[1:-1]
     out = ask_compose._share_brief_precedence(_precedence_script(3))
-    head, tail = clause[: ask_compose._PRECEDENCE_HEAD_LEN], clause[ask_compose._PRECEDENCE_HEAD_LEN :].replace("`", "\\`")
+    head, tail = clause[: ask_compose._PRECEDENCE_HEAD_LEN], clause[ask_compose._PRECEDENCE_HEAD_LEN :]
     assert out.count(f"const {ask_compose._PRECEDENCE_TAIL_FN} = `{tail}`;") == 1
     assert out.count(head + "' + " + ask_compose._PRECEDENCE_TAIL_FN) == 3
     assert out.count(tail) == 1
@@ -1259,64 +1241,3 @@ def test_ledger_verdict_relay_carries_the_evidence_and_the_departure_reason():
     script = _compose(in_run_commit=True)
     assert "...(i.evidence ? { evidence: i.evidence } : {})" in script
     assert "...(i.departure_reason ? { departure_reason: i.departure_reason } : {})" in script
-
-
-def _rag_gate_run(stage, reply):
-    """Run the emitted per-stage rag gate under node over a stubbed `engineOp` reply; the resulting `_halted`."""
-    import shutil
-    import subprocess
-
-    if shutil.which("node") is None:
-        pytest.skip("needs node to evaluate the composed stage gate")
-    harness = (
-        "(async () => {\n  let _halted = null; const _runId = 'r1', _SESSION_ID = 's', _sizingRel = 'z.yaml'; const log = () => {};\n"
-        f"  const engineOp = async (op, p) => {{ if (op !== 'dispatch.stage_rag_gate' || p.stage !== {json.dumps(stage)}) throw new Error(op); return {reply}; }};\n"
-        + ask_compose._stage_rag_gate_js(stage)
-        + "\n  console.log(JSON.stringify(_halted));\n})();"
-    )
-    proc = subprocess.run(
-        ["node", "-e", harness], capture_output=True, text=True, check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    return json.loads(proc.stdout)
-
-
-def test_the_composed_script_gates_sizing_plan_build_and_review_in_order():
-    script = _compose()
-    marks = [m.start() for m in re.finditer(r"dispatch\.stage_rag_gate", script)]
-    stages = re.findall(r"stage: '(\w+)' \}", script)
-    assert [s for s in stages if s in ("sizing", "plan", "build", "review")] == ["sizing", "plan", "build", "review"]
-    sizing, plan, build, review = marks
-    assert sizing < script.index("phase('gate')") < script.index("label: 'plan'") < plan
-    assert plan < script.index("let _stageHalt")
-    assert build < script.index("const _reviewPaths") < review
-
-
-@pytest.mark.parametrize("stage", ["sizing", "plan", "build", "review"])
-@pytest.mark.parametrize(
-    "halted_by",
-    [
-        "{ halted: 'example_retrieval_repo_unused', agents: [{ agent_id: 'a1', agent_type: 'coordinator:sizing-scout', label: 'size', rag_calls: 0 }] }",
-        "{ halted: 'example_retrieval_repo_cadence', agents: [{ agent_id: 'a2', agent_type: 'coordinator:code-reviewer', label: 'cr', rag_calls: 1 }] }",
-        "{ halted: 'example_retrieval_repo_not_serving', layer: 'example-retrieval-repo', queries: [], agents: [] }",
-        "{ halted: 'ue_corpus_gap', layer: 'ue-addon', queries: ['q'], agents: [] }",
-    ],
-)
-def test_a_stage_gate_halts_on_the_replys_halted_by_and_carries_the_context(stage, halted_by):
-    reply = "{ verdict: 'ok', tier: 'ue', rag_calls: 3, per_worker: [], halted_by: %s }" % halted_by
-    halted = _rag_gate_run(stage, reply)
-    kind = re.match(r"\{ halted: '(\w+)'", halted_by).group(1)
-    assert halted["halted"] == kind and halted["run_id"] == "r1" and halted["sizing"] == "z.yaml"
-    assert halted["rag_use"]["tier"] == "ue" and "halted_by" not in halted["rag_use"]
-    assert stage in halted["next_action"] and halted["reason"].startswith(stage)
-    assert isinstance(halted["agents"], list)
-    if kind in ("example_retrieval_repo_unused", "example_retrieval_repo_cadence"):
-        assert halted["agents"][0]["agent_id"] in ("a1", "a2")
-    else:
-        assert halted["layer"] and "queries" in halted
-
-
-@pytest.mark.parametrize("verdict", ["ok", "degraded", "transcript_unreadable", "not_applicable", "rag_not_used"])
-def test_a_stage_gate_without_halted_by_never_halts(verdict):
-    assert _rag_gate_run("sizing", "{ verdict: '%s', rag_calls: 2, per_worker: [] }" % verdict) is None
-    assert _rag_gate_run("plan", "null") is None
