@@ -2221,13 +2221,13 @@ def _evaluate_payload_json_budgeted(
                     file=sys.stderr,
                 )
                 try:
-                    _record_deny_fire(name, session_id, True, cwd)
+                    _record_deny_fire(name, session_id, True, cwd, cmd)
                 except Exception:
                     pass
                 continue
             if _is_hard_deny_envelope and not _suppressed:
                 try:
-                    _record_deny_fire(name, session_id, False, cwd)
+                    _record_deny_fire(name, session_id, False, cwd, cmd)
                 except Exception:
                     pass
             if _is_hard_deny_envelope and not _suppressed:

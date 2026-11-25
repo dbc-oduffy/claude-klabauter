@@ -1,4 +1,4 @@
-"""Behavior pins for the agy leg on Windows: named-pipe listener, msvcrt spool lock, non-lsof LS discovery,
+"""Behavior pins for the agy leg on Windows: named-pipe listener, msvcrt spool lock,
 and the SessionStart peer binding."""
 import types
 import importlib.util
@@ -166,27 +166,8 @@ def test_session_gone_on_windows_does_not_signal_the_process(spool, monkeypatch)
     assert leg.session_gone() is True
 
 
-@needs_win
-def test_nt_listener_ports_include_a_loopback_listener_of_this_pid():
-    srv = socket.socket()
-    srv.bind(("127.0.0.1", 0))
-    srv.listen(1)
-    try:
-        port = srv.getsockname()[1]
-        assert port in launch.nt_loopback_listener_ports(os.getpid())
-        assert port not in launch.nt_loopback_listener_ports(4294967)
-        assert launch.discover_ls_address(os.getpid()).startswith("127.0.0.1:")
-    finally:
-        srv.close()
-
-
-def test_discover_ls_address_on_nt_takes_the_lowest_port_without_lsof(monkeypatch):
-    monkeypatch.setattr(launch.os, "name", "nt")
-    monkeypatch.setattr(launch, "nt_loopback_listener_ports", lambda pid: [50321, 50100] if pid == 42 else [])
-    monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: pytest.fail("spawned a process"))
-    assert launch.discover_ls_address(42) == "127.0.0.1:50100"
-    assert launch.discover_ls_address(43) is None
-    assert launch.discover_ls_address(0) is None
+def test_launch_has_no_port_scrape():
+    assert not hasattr(launch, "discover_ls_address") and not hasattr(launch, "nt_loopback_listener_ports")
 
 
 def test_leg_stamps_its_proc_start_into_its_own_record_only(tmp_path, monkeypatch):
@@ -200,6 +181,79 @@ def test_leg_stamps_its_proc_start_into_its_own_record_only(tmp_path, monkeypatc
     rec.write_text(json.dumps({"pid": os.getpid(), "conversation": CONV}))
     leg.stamp_proc_start()
     assert json.loads(rec.read_text())["procStart"] == leg._roster().proc_start(os.getpid())
+
+
+@pytest.fixture
+def pending_leg(spool, tmp_path, monkeypatch):
+    """A pending leg whose record sits beside its log, with the language server's send stubbed."""
+    for name in ("ANTIGRAVITY_CSRF_TOKEN", "ANTIGRAVITY_LS_ADDRESS"):
+        monkeypatch.setenv(name, "")  # registers the restore for what promote_if_handed sets
+        monkeypatch.delenv(name)
+    monkeypatch.setattr(leg, "_PENDING", True)
+    sent = []
+    monkeypatch.setattr(leg, "send", lambda t: sent.append(t) or {"ok": True})
+    rec = tmp_path / "leg.json"
+    rec.write_text(json.dumps({"pid": os.getpid(), "agy_pid": 77, "endpoint": "ep", "procStart": "ps1",
+                               "mode": "pending", "cwd": str(Path.home() / ".gemini" / "config")}))
+    return types.SimpleNamespace(rec=rec, promote=tmp_path / f"{CONV}.promote.json", sent=sent)
+
+
+def hand(p, **body):
+    p.promote.write_text(json.dumps({"ls_address": "127.0.0.1:5001", "csrf_token": "tok",
+                                     "cwd": "/work/repo", **body}))
+
+
+def test_pending_leg_promotes_in_place_and_drains(pending_leg, spool, monkeypatch):
+    leg.enqueue("queued-before")
+    hand(pending_leg)
+    assert leg.promote_if_handed() is True
+    rec = json.loads(pending_leg.rec.read_text())
+    assert (rec["mode"], rec["ls_address"]) == ("live", "127.0.0.1:5001")
+    assert (rec["pid"], rec["agy_pid"], rec["endpoint"], rec["procStart"]) == (os.getpid(), 77, "ep", "ps1")
+    assert rec["cwd"] == "/work/repo"  # the record's cwd lay under the agy config home
+    assert not pending_leg.promote.exists()
+    assert pending_leg.sent == ["queued-before"] and spool.read_text() == ""
+    assert leg._PENDING is False and os.environ["ANTIGRAVITY_CSRF_TOKEN"] == "tok"
+    log_text = Path(os.environ["AGY_LEG_LOG"]).read_text()
+    assert log_text.count("promoted") == 1 and "tok" not in log_text
+    assert leg.respond(b'{"text": "now"}\n') and pending_leg.sent[-1] == "now"
+
+
+def test_promotion_keeps_a_record_cwd_outside_the_agy_config_home(pending_leg):
+    rec = json.loads(pending_leg.rec.read_text())
+    rec["cwd"] = "/launch/dir"
+    pending_leg.rec.write_text(json.dumps(rec))
+    hand(pending_leg)
+    assert leg.promote_if_handed() is True
+    assert json.loads(pending_leg.rec.read_text())["cwd"] == "/launch/dir"
+
+
+@pytest.mark.parametrize("content", ["{not json", "[]", json.dumps({"ls_address": "a"}),
+                                     json.dumps({"ls_address": "", "csrf_token": "t"})])
+def test_malformed_promote_file_is_ignored_and_the_leg_stays_pending(pending_leg, content):
+    pending_leg.promote.write_text(content)
+    assert leg.promote_if_handed() is False
+    assert leg._PENDING is True and "ANTIGRAVITY_CSRF_TOKEN" not in os.environ
+    assert json.loads(pending_leg.rec.read_text())["mode"] == "pending"
+    assert leg.respond(b'{"text": "x"}\n') == b'{"ok": true, "queued": true}\n'
+
+
+def test_live_leg_deletes_a_promote_file_naming_its_own_address_and_repromotes_a_new_one(pending_leg):
+    hand(pending_leg)
+    assert leg.promote_if_handed() is True
+    before = pending_leg.rec.read_text()
+    hand(pending_leg)  # same ls_address: delete, no action
+    assert leg.promote_if_handed() is False
+    assert not pending_leg.promote.exists() and pending_leg.rec.read_text() == before
+    hand(pending_leg, ls_address="127.0.0.1:6002", csrf_token="tok2")  # agy restarted its language server
+    assert leg.promote_if_handed() is True
+    rec = json.loads(pending_leg.rec.read_text())
+    assert rec["ls_address"] == "127.0.0.1:6002" and rec["pid"] == os.getpid()
+    assert os.environ["ANTIGRAVITY_CSRF_TOKEN"] == "tok2"
+
+
+def test_no_promote_file_means_no_change(pending_leg):
+    assert leg.promote_if_handed() is False and leg._PENDING is True
 
 
 def test_sessionstart_register_upserts_an_agy_peer_row(tmp_path, monkeypatch):

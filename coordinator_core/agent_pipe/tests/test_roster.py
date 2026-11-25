@@ -102,6 +102,28 @@ def test_peers_rows_unknown_vendor_or_malformed_are_ignored(tmp_path: Path) -> N
     assert roster.resolve("a") is None
 
 
+@pytest.mark.parametrize("provider", ["agy", "grok", "codex"])
+def test_registered_session_resolves_to_its_provider_kind(provider, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.agent_pipe.codex import CodexAdapter
+    from coordinator_core.session import external_registry
+
+    monkeypatch.setattr(CodexAdapter, "proxy_argv", lambda self: ["codex", "proxy"])
+    row = {"provider": provider, "session_id": "sid-1"}
+    monkeypatch.setattr(external_registry, "lookup", lambda name: row if name == "sid-1" else None)
+    monkeypatch.setattr(external_registry, "snapshot", lambda: {"sid-1": row})
+    b = roster.resolve("sid-1")
+    assert b["kind"] == provider and b["id"] == "sid-1"
+    assert (b["argv"] == ["codex", "proxy"]) == (provider == "codex")
+    assert roster.list()["sid-1"]["kind"] == provider
+
+
+def test_registered_session_without_known_provider_stays_codex(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.session import external_registry
+
+    monkeypatch.setattr(external_registry, "lookup", lambda name: {"session_id": "s"})
+    assert roster.resolve("s")["kind"] == "codex"
+
+
 def test_bridge_message_line_labels_and_drops_none() -> None:
     m = BridgeMessage("m1", "em", "claude", "cx", "hi\nthere", "2026-11-04T00:00:00Z", origin="bridge", label="from em (claude)")
     d = json.loads(m.to_json_line())

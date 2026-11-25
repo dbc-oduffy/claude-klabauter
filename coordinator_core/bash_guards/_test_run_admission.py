@@ -2,7 +2,8 @@
 heavy-admission guard. Spawn-free: payload fields, the session touch record and the two readings
 guard_heavy_command_admission already takes (RAM floor, box hold).
 
-Legs run in order: identity (a subagent other than the test-runner or the executor is refused every pytest shape),
+Legs run in order: identity (a subagent other than the test-runner or the executor is refused every pytest shape;
+a caller with no agent_type is admitted only inside the engine's `clean_overlay_verify --export-run --` wrapper),
 scope (the test-runner or executor names test files or node ids, no workers; an untouched target is an advisory), ceiling (every caller,
 the EM included, while the box is below its RAM floor or held by another session). A reading that
 cannot be taken allows and logs an advisory (DR-402); the identity leg reads payload fields only and
@@ -100,6 +101,29 @@ def scoped_leg_argv(python: str, targets: Sequence[str]) -> List[str]:
     """The argv a run's own scoped test leg executes: `<python> -m pytest <targets>`. The one shape the
     emitter's leg prompt names and this guard admits; a leg shape change lands here."""
     return [python, "-m", "pytest", *targets]
+
+
+#: Module stem of the engine's clean-export runner; `engine_command.OVERLAY_VERIFY_MODULE` ends with it.
+_EXPORT_RUN_STEM = "clean_overlay_verify"
+_EXPORT_RUN_FLAG = "--export-run"
+
+
+def is_engine_export_run(argv: Sequence[str]) -> bool:
+    """True when `argv` is the engine's own export wrapper around a test command: `clean_overlay_verify`
+    (module, or script path) with `--export-run`, then `--`, then the command. The leg shape both
+    `scoped_leg_argv` and the emitter's verify prompt produce; the scope leg still bounds what follows."""
+    if "--" not in argv:
+        return False
+    head = argv[: list(argv).index("--")]
+    if _EXPORT_RUN_FLAG not in head:
+        return False
+    for tok in head:
+        name = _unquote(tok).replace("\\", "/").rsplit("/", 1)[-1]
+        if name.endswith(".py"):
+            name = name[:-3]
+        if name.rsplit(".", 1)[-1] == _EXPORT_RUN_STEM:
+            return True
+    return False
 
 
 def _git_root(start: str) -> Optional[str]:
@@ -238,7 +262,10 @@ def test_run_verdict(
     if not pytest_argvs:
         return _ALLOW
     if is_subagent:
-        if payload.get("agent_type") not in SCOPED_RUN_TYPES:
+        agent_type = payload.get("agent_type")
+        # A caller with no agent_type (a workflow-phase agent) is admitted only through the engine's export wrapper.
+        export_only = not agent_type and all(is_engine_export_run(a) for a in pytest_argvs)
+        if agent_type not in SCOPED_RUN_TYPES and not export_only:
             return _deny(LEG_IDENTITY, "only coordinator:test-runner runs pytest in a subagent (the executor's row gate: named test files only)")
         for argv in pytest_argvs:
             verdict = _scope_verdict(payload, _pytest_arg_list(argv), cwd)

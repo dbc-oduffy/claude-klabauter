@@ -341,9 +341,9 @@ def _touch_record(monkeypatch, *paths):
 
 
 @pytest.mark.parametrize("command", _PYTEST_SHAPES)
-@pytest.mark.parametrize("extra", [{"agent_type": "coordinator:executor"}, {}])
+@pytest.mark.parametrize("extra", [{"agent_type": "coordinator:code-reviewer"}, {}])
 def test_subagent_pytest_refused_even_when_scoped(repo, free_mutex, real_verdict, command, extra):
-    """Any subagent but the test-runner is refused pytest, a Workflow agent (no agent_type) included."""
+    """Any subagent but the test-runner and the executor is refused pytest, a Workflow agent (no agent_type) included."""
     result = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID, extra=extra))
     assert "only coordinator:test-runner runs pytest" in _reason(result)
 

@@ -98,6 +98,7 @@ from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 _COUNTS_FILENAME = "advisory-fire-counts.jsonl"
 _DENY_COUNTS_FILENAME = "deny-fire-counts.jsonl"
+_COMMAND_MAX_CHARS = 2000
 
 MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
@@ -139,10 +140,30 @@ def record_advisory_fire(guard_name: str, session_id: str, cwd: Optional[str] = 
     _append_bounded(path, record)
 
 
+def _bound_command(command: object) -> str:
+    """The refused command as one string, cut to `_COMMAND_MAX_CHARS`."""
+    if isinstance(command, (list, tuple)):
+        text = " ".join(str(part) for part in command)
+    else:
+        text = str(command)
+    if len(text) > _COMMAND_MAX_CHARS:
+        return text[:_COMMAND_MAX_CHARS] + "...[truncated]"
+    return text
+
+
 def record_deny_fire(
-    guard_name: str, session_id: str, cleared: bool, cwd: Optional[str] = None
+    guard_name: str,
+    session_id: str,
+    cleared: bool,
+    cwd: Optional[str] = None,
+    command: object = None,
 ) -> None:
     """Append one `{"guard", "session", "at", "cleared"}` record for a hard-deny firing.
+
+    A non-empty `command` (the refused command string or argv list) adds a
+    `"command"` key, cut to `_COMMAND_MAX_CHARS`; absent, the record keeps its
+    four-key shape. Only the bash-guard dispatch passes it; write-guard deny
+    records stay four-key.
 
     The deny-path mirror of `record_advisory_fire` above (see module
     docstring's DENY-PATH COUNTER paragraph) — written to a sibling
@@ -177,4 +198,6 @@ def record_deny_fire(
         "at": datetime.now(timezone.utc).isoformat(),
         "cleared": bool(cleared),
     }
+    if command:
+        record["command"] = _bound_command(command)
     _append_bounded(path, record)

@@ -21,7 +21,7 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import PackReadDeadline, retry_past_stall
 from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_PM, HALT_PLAN_FIELD, RUN_DIR_ROOT, record_dir
-from coordinator_core.ops.dispatch_emit.ask_staged_prompts import bind_script_literals
+from coordinator_core.ops.dispatch_emit.ask_staged_prompts import PROMPTS_DIR, bind_script_literals
 
 COMPOSED_SCRIPT_FILE = "resume-script.workflow.mjs"
 REFUSAL_BACKOFF_S = 300
@@ -71,7 +71,7 @@ def build(root, run_id: str) -> Optional[dict]:
     has no `halted` marker naming a sizing. A gate refusal is recorded as the verdict (no script)."""
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.emission_receipt import _load_review_inputs
-    from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit, _installed_plugin_root
+    from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit, _installed_plugin_root, _write_staged_prompt
     from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
     from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
@@ -138,6 +138,11 @@ def build(root, run_id: str) -> Optional[dict]:
             restore_evicted_run=(resume is None or not resume.incomplete)
             and (rd / EVICTED_FILE).is_file() and (rd / WITHHELD_OWN_DELTA_FILE).is_file(),
         )
+        if fragments:
+            staged_dir = rd / PROMPTS_DIR
+            staged_dir.mkdir(parents=True, exist_ok=True)
+            for name, text in fragments.items():
+                _write_staged_prompt(staged_dir / f"{name}.md", text.encode("utf-8"))
         target = rd / COMPOSED_SCRIPT_FILE
         atomic_write_bytes(target, bind_script_literals(script).encode("utf-8"))
         from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt

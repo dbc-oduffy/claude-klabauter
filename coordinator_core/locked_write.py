@@ -543,6 +543,15 @@ def _machine_lock_dir() -> Path:
 # Past this the anchor check falls back to abspath, which cannot see symlink/junction nesting.
 _ANCHOR_REALPATH_DEADLINE_SECS = 0.15
 
+# WHY 256: the warm engine is long-lived, so the memo must not grow with every
+# distinct (target, lock_dir) ever locked; one entry is two short path tuples,
+# and 256 covers the working set of a busy fire while capping memory.
+_ANCHOR_MEMO_MAX = 256
+# A plain dict is insertion-ordered, so pop+reinsert is the LRU touch; each op is
+# GIL-atomic and a lost race only costs one redundant resolve. No threading/collections
+# import: the cold-start module count is ceilinged.
+_anchor_memo: "dict[tuple[str, str], tuple[Path, Path]]" = {}
+
 
 def _assert_anchor_outside_target(target: Path, lock_dir: Path) -> None:
     """Reject an anchor whose sidecar directory would live inside *target*.
@@ -560,12 +569,27 @@ def _assert_anchor_outside_target(target: Path, lock_dir: Path) -> None:
     def _resolve(resolver) -> "tuple[Path, Path]":
         return (Path(resolver(str(target))), Path(resolver(str(lock_dir))))
 
-    resolved = run_bounded(
-        f"anchor_realpath:{target}|{lock_dir}",
-        lambda: _resolve(os.path.realpath),
-        deadline=_ANCHOR_REALPATH_DEADLINE_SECS,
-        default=None,
-    )
+    # A successful resolution is memoised per process. A junction/symlink
+    # created after the first resolution is not re-seen: the anchor sidecar
+    # location for a given (target, lock_dir) is fixed when first locked, so a
+    # later re-link would be a separate hazard this check never covered at
+    # write time. A stalled (None) result is never cached, so a recovered
+    # filesystem is re-resolved on the next call.
+    key = (os.path.abspath(str(target)), os.path.abspath(str(lock_dir)))
+    resolved = _anchor_memo.pop(key, None)
+    if resolved is not None:
+        _anchor_memo[key] = resolved
+    else:
+        resolved = run_bounded(
+            f"anchor_realpath:{target}|{lock_dir}",
+            lambda: _resolve(os.path.realpath),
+            deadline=_ANCHOR_REALPATH_DEADLINE_SECS,
+            default=None,
+        )
+        if resolved is not None:
+            _anchor_memo[key] = resolved
+            while len(_anchor_memo) > _ANCHOR_MEMO_MAX:
+                _anchor_memo.pop(next(iter(_anchor_memo)), None)
     if resolved is None:
         import sys
 

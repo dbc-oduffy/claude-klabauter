@@ -5,6 +5,7 @@ No git spawn: HEAD is read in-process by ``git_state.head_sha``.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Optional
@@ -29,7 +30,7 @@ def started_stamp(repo_root, head_rev: Optional[str]) -> tuple[str, Optional[str
     """`(measured_at, head_sha)` to take BEFORE the leg runs.
 
     `head_rev` None or "HEAD" measures the working tree's HEAD (read in-process); any other value is the
-    resolved commit the leg measures and is stamped as given.
+    full commit sha the leg measures and is stamped as given; a ref name never equals HEAD, so it reads stale.
     """
     measured_at = datetime.now(timezone.utc).isoformat()
     if head_rev is None or head_rev == "HEAD":
@@ -107,8 +108,15 @@ def halt_stamp(record_dir, manifest: Optional[Mapping] = None) -> dict:
     """`{measured_at, head_sha, current_head, stale}` for the leg in `record_dir` (`<root>/<RECORD_DIR_ROOT>/<run_id>`).
 
     One leg read; a missing leg gives null stamps and `stale: True`. A record dir outside that layout reads as no leg.
+    A `manifest` of None is read from the record dir's `manifest.json` (unreadable reads as no manifest), so the
+    own-diff mtime check applies to a halt payload built without one.
     """
     record_dir = Path(record_dir)
+    if manifest is None:
+        try:
+            manifest = json.loads((record_dir / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            manifest = None
     depth = len(Path(RECORD_DIR_ROOT).parts)
     root = record_dir.parents[depth] if len(record_dir.parents) > depth else None
     record = landing_integrity.test_leg_record(root, record_dir.name) if root is not None else None
