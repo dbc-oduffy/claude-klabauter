@@ -73,6 +73,56 @@ def test_doe_shaped_tree_places_through_the_seam_before_and_after_the_stem_rewri
         assert str(root / "coordinator" / "hooks" / "scripts") not in sys.path
 
 
+def _twin_env(tmp_path, monkeypatch, doe_text, plug_text, doe_lists, plug_lists):
+    import hashlib
+
+    from coordinator_core.group_em import gem_home, session_registry
+
+    settings, reg, elsewhere = tmp_path / "settings", tmp_path / "registry", tmp_path / "elsewhere"
+    for d in (settings, reg, elsewhere):
+        d.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    for k in ("MACHINE_LOCAL_COORDINATOR_GROUP_EM_HOME", "MACHINE_LOCAL_COORDINATOR_GENERAL_WORK_HOME"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(gem_home.shutil, "which", lambda name: None)
+    monkeypatch.setattr(gem_home, "gem_holder", lambda: None)
+    monkeypatch.setattr(session_registry, "read_rows", lambda *a, **k: [])
+    monkeypatch.chdir(elsewhere)
+    paths = []
+    for name, text, lists in (("doe", doe_text, doe_lists), ("plug", plug_text, plug_lists)):
+        tpl = tmp_path / name / "templates" / "group-em-home" / "home-CLAUDE.md"
+        tpl.parent.mkdir(parents=True)
+        tpl.write_text(text, encoding="utf-8")
+        (tpl.parent / gem_home.KNOWN_VERSIONS_MANIFEST).write_text(
+            "".join(f"{hashlib.sha256(t.encode('utf-8')).hexdigest()} c\n" for t in lists), encoding="utf-8"
+        )
+        paths.append(tpl)
+    (reg / "registry.toml").write_text(
+        f'[repos]\ncontent_root = "{(tmp_path / "doe").as_posix()}"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "plug"))
+    mod = _load(_SCRIPT, "gemh_twins")
+    monkeypatch.setattr(mod, "_ensure_tail", lambda gem, report, args: 0)
+    return mod, gem_home.ensure_home_report(template=paths[0])["home"], *paths
+
+
+def test_ensure_refresh_takes_newer_plugin_template_and_prints_lag_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    mod, home, doe, plug = _twin_env(tmp_path, monkeypatch, "v1", "v2", (), ("v1", "v2"))
+    assert mod.main(["ensure", "--refresh"]) == 0
+    err = capsys.readouterr().err
+    assert (home / "CLAUDE.md").read_text(encoding="utf-8") == "v2"
+    assert str(doe) in err and str(plug) in err and "lags" in err
+
+
+def test_ensure_refresh_refuses_diverged_templates_nonzero_and_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    mod, home, _doe, _plug = _twin_env(tmp_path, monkeypatch, "a", "b", ("a",), ("b",))
+    (home / "CLAUDE.md").write_bytes(b"keep me")
+    assert mod.main(["ensure", "--refresh"]) == 6
+    assert (home / "CLAUDE.md").read_bytes() == b"keep me"
+    assert "diverged" in capsys.readouterr().err
+
+
 def test_ensure_refresh_saves_diverged_copy_then_replaces_claude_md(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.group_em import gem_home, session_registry
 
