@@ -139,6 +139,63 @@ def test_agy_without_preferred_name_allocates_sequence_address(tmp_path: Path, m
     assert re.fullmatch(r"claude-klabauter-agy-[a-z0-9-]+-[1-9][0-9]*", rec["name"])
 
 
+_LAUNCHES = {
+    "windows": ("agy.exe", ["agy.exe", "--dangerously-skip-permissions"]),
+    "macos": ("agy", ["agy", "--dangerously-skip-permissions"]),
+}
+
+
+def _leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, argv, *, pid: int = 501, created: float = 1.0):
+    import psutil
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    monkeypatch.delenv("COORDINATOR_AGENT_WORKER", raising=False)
+    monkeypatch.delenv("COORDINATOR_AGENT_ROLE", raising=False)
+    monkeypatch.setattr(core, "stable_pid_alive", lambda *a, **k: True)
+    monkeypatch.setattr(core, "ensure_session", lambda *a, **k: None)
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    legs = tmp_path / "unimatrix" / "agy-legs"
+    legs.mkdir(parents=True)
+    (legs / f"{SID_AGY}.json").write_text(
+        '{"pid": 9, "conversation": "%s", "agy_pid": %d, "cwd": %s}' % (SID_AGY, pid, __import__("json").dumps(str(cwd))),
+        encoding="utf-8")
+    host = SimpleNamespace(pid=pid, name=lambda: name, cmdline=lambda: list(argv), create_time=lambda: created)
+    monkeypatch.setattr(psutil, "Process", lambda p: host)
+    return legs
+
+
+@pytest.mark.parametrize("shape", ["windows", "macos"])
+def test_adopt_agy_leg_binds_an_interactive_conversation_whose_hook_never_registered(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str) -> None:
+    name, argv = _LAUNCHES[shape]
+    _leg(tmp_path, monkeypatch, name, argv)
+    assert registry.lookup(SID_AGY) is None
+    assert agent_role.role_for_caller({}, SID_AGY) == "unknown"
+    row = registry.adopt_agy_leg(SID_AGY, {})
+    assert row is not None and row["provider"] == "agy" and row["role"] == "em" and row["pid"] == 501
+    assert agent_role.role_for_caller({}, SID_AGY) == "em"
+
+
+@pytest.mark.parametrize("name,argv,created", [
+    ("agy", ["agy", "-p", "do work"], 1.0),            # headless run is classified unknown, never em
+    ("python", ["python"], 1.0),                        # pid reused by a non-agy process
+    ("agy", ["agy"], 4102444800.0),                     # process born after the leg record: reused pid
+])
+def test_adopt_agy_leg_refuses_unobserved_or_headless_evidence(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name, argv, created) -> None:
+    _leg(tmp_path, monkeypatch, name, argv, created=created)
+    row = registry.adopt_agy_leg(SID_AGY, {})
+    assert row is None or row["role"] != "em"
+    assert agent_role.role_for_caller({}, SID_AGY) != "em"
+
+
+def test_adopt_agy_leg_without_a_leg_record_registers_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    assert registry.adopt_agy_leg(SID_AGY, {}) is None
+    assert registry.lookup(SID_AGY) is None
+
+
 def test_agy_register_without_agy_ancestor_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import psutil
 

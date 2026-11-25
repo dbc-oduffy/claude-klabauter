@@ -26,6 +26,7 @@ def test_interactive_argv_skips_permissions_and_sets_em_defaults():
 def test_interactive_argv_respects_caller_overrides():
     argv = ac.interactive_argv("agy", ["--model", "gemini-4-neon", "--effort=medium", "--mode", "plan"])
     assert "--dangerously-skip-permissions" not in argv
+    assert argv[argv.index("--mode") + 1] == "plan"
     assert argv.count("--model") == 1
     assert argv[argv.index("--model") + 1] == "gemini-4-neon"
     assert "--effort" not in argv
@@ -33,8 +34,22 @@ def test_interactive_argv_respects_caller_overrides():
 
     sandbox_argv = ac.interactive_argv("agy", ["--model=gemini-4-hydrogen", "--sandbox"])
     assert "--dangerously-skip-permissions" not in sandbox_argv
+    assert "--sandbox" in sandbox_argv
     assert "--model" not in sandbox_argv
     assert "--model=gemini-4-hydrogen" in sandbox_argv
+
+
+@pytest.mark.parametrize("extra", [[], ["--add-dir", "/w"], ["--dangerously-skip-permissions"]])
+def test_default_launch_argv_carries_the_bypass_flag_exactly_once(extra):
+    for argv in (ac.interactive_argv("agy", extra), ac.headless_argv("agy", "hi", extra)):
+        assert argv.count("--dangerously-skip-permissions") == 1
+
+
+@pytest.mark.parametrize("extra", [["--mode", "plan"], ["--mode=accept-edits"], ["--sandbox"]])
+def test_explicit_mode_or_sandbox_passes_through_without_the_bypass_flag(extra):
+    for argv in (ac.interactive_argv("agy", extra), ac.headless_argv("agy", "hi", extra)):
+        assert "--dangerously-skip-permissions" not in argv
+        assert all(a in argv for a in extra)
 
 
 def test_headless_argv_is_one_turn_without_resume():

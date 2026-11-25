@@ -83,7 +83,7 @@ def _agy_skills(settings_home=None) -> str:
 
 def _agy_head(cwd=None, settings_home=None) -> list[str]:
     return ["--add-dir", cwd or os.getcwd(), "--add-dir", str(Path.home() / ".coordinator"),
-            "--add-dir", _agy_skills(settings_home), "--mode", "accept-edits"]
+            "--add-dir", _agy_skills(settings_home), "--dangerously-skip-permissions"]
 
 
 def _run(family="codex", env=None, **kw):
@@ -605,11 +605,18 @@ def test_agy_prepare_without_cwd_grants_the_launchers_cwd(capsys) -> None:
     assert argv[1:3] == ["--add-dir", os.getcwd()]
 
 
-def test_agy_strips_the_bypass_flag_and_keeps_a_callers_mode(capsys) -> None:
-    argv = _agy_prepare(capsys, ["--dangerously-skip-permissions", "--mode", "plan", "-p", "hi"], cwd="w")
+@pytest.mark.parametrize("extra", [["-p", "hi"], ["--dangerously-skip-permissions", "-p", "hi"]])
+def test_default_agy_launch_carries_the_bypass_flag_once(capsys, extra) -> None:
+    argv = _agy_prepare(capsys, extra, cwd="w")
+    assert argv.count("--dangerously-skip-permissions") == 1
+    assert "--mode" not in argv and argv[-2:] == ["-p", "hi"]
+
+
+@pytest.mark.parametrize("mode", [["--mode", "plan"], ["--mode=accept-edits"], ["--sandbox"]])
+def test_agy_callers_explicit_mode_is_kept_without_the_bypass_flag(capsys, mode) -> None:
+    argv = _agy_prepare(capsys, [*mode, "-p", "hi"], cwd="w")
     assert "--dangerously-skip-permissions" not in argv
-    assert argv.count("--mode") == 1 and argv[argv.index("--mode") + 1] == "plan"
-    assert argv[-2:] == ["-p", "hi"]
+    assert all(a in argv for a in mode) and argv[-2:] == ["-p", "hi"]
 
 
 def test_agy_dirs_already_passed_are_not_doubled(capsys) -> None:

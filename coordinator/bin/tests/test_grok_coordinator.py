@@ -50,6 +50,24 @@ def test_stop_hook_file_names_the_script(tmp_path):
     assert "Stop" in body
 
 
+def test_register_host_binding_adopts_the_session_through_the_engine(monkeypatch):
+    from coordinator_core.session import external_registry
+
+    seen = []
+    monkeypatch.setattr(external_registry, "adopt_grok_session",
+                        lambda sid, env=None, *a, **k: seen.append((sid, env)) or {"role": "em"})
+    sid = "01a21334-b3fa-70b0-b317-abd3a378a142"
+    assert gc.register_host_binding(sid) is True
+    assert seen == [(sid, {"GROK_SESSION_ID": sid})]
+
+
+def test_register_host_binding_is_false_without_evidence(monkeypatch):
+    from coordinator_core.session import external_registry
+
+    monkeypatch.setattr(external_registry, "adopt_grok_session", lambda *a, **k: None)
+    assert gc.register_host_binding("01a21334-b3fa-70b0-b317-abd3a378a142") is False
+
+
 def test_session_for_pid_matches_only_the_child():
     rows = [{"session_id": "aaa", "pid": 5}, {"session_id": "bbb", "pid": 9}]
     assert gc.session_for_pid(rows, 9)["session_id"] == "bbb"

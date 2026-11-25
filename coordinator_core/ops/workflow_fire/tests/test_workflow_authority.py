@@ -209,6 +209,122 @@ def test_refusal_surface_shares_the_role_source_marker_set(env, expected) -> Non
     assert authority._explicit_worker_marker(env) is expected is agent_role.explicit_worker_marker(env)
 
 
+_AGY_SID = '5f30ae34-9887-4080-8d72-e61aaac0cedb'
+
+
+@pytest.fixture
+def agy_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """An interactive agy conversation with a leg record but no registry row."""
+    import json
+    import psutil
+    from types import SimpleNamespace
+    monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path))
+    for var in ('COORDINATOR_AGENT_WORKER', 'COORDINATOR_AGENT_ROLE'):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(core, 'attributable_session_id', lambda *a: _AGY_SID)
+    monkeypatch.setattr(core, 'stable_pid_alive', lambda *a, **k: True)
+    monkeypatch.setattr(core, 'ensure_session', lambda *a, **k: None)
+    (tmp_path / 'work').mkdir()
+    legs = tmp_path / 'unimatrix' / 'agy-legs'
+    legs.mkdir(parents=True)
+    (legs / f'{_AGY_SID}.json').write_text(
+        json.dumps({'conversation': _AGY_SID, 'agy_pid': 501, 'cwd': str(tmp_path / 'work')}), encoding='utf-8')
+
+    def host(name, argv):
+        proc = SimpleNamespace(pid=501, name=lambda: name, cmdline=lambda: list(argv), create_time=lambda: 1.0)
+        monkeypatch.setattr(psutil, 'Process', lambda p: proc)
+    return host
+
+
+def _agy_fire(env):
+    with core.warm_served_request(), bind_caller_env(env):
+        return authority.require_fire_authority('unused.mjs', None, cwd=None, native=True, backend='codex')
+
+
+@pytest.mark.parametrize('name,argv', [
+    ('agy.exe', ['agy.exe', '--dangerously-skip-permissions']),
+    ('agy', ['agy', '--dangerously-skip-permissions']),
+])
+def test_interactive_agy_session_without_a_registry_row_fires_as_em(agy_leg, name, argv) -> None:
+    agy_leg(name, argv)
+    principal = _agy_fire({'ANTIGRAVITY_CONVERSATION_ID': _AGY_SID})
+    assert principal.role == 'em' and principal.session_id == _AGY_SID
+    assert authority.fire_record_caller_session_id(principal) == _AGY_SID
+
+
+@pytest.mark.parametrize('name,argv,env', [
+    ('agy', ['agy', '-p', 'task'], {'ANTIGRAVITY_CONVERSATION_ID': _AGY_SID}),                 # headless run
+    ('agy', ['agy'], {}),                                                                       # session id not carried as agy's own
+    ('agy', ['agy'], {'ANTIGRAVITY_CONVERSATION_ID': '00000000-0000-4000-8000-000000000001'}),  # another conversation
+    ('agy', ['agy'], {'ANTIGRAVITY_CONVERSATION_ID': _AGY_SID, 'COORDINATOR_AGENT_WORKER': '1'}),
+    ('agy', ['agy'], {'ANTIGRAVITY_CONVERSATION_ID': _AGY_SID, 'COORDINATOR_PARENT_SESSION_ID': 'p'}),
+])
+def test_agy_caller_without_verified_interactive_evidence_is_still_refused(agy_leg, name, argv, env) -> None:
+    agy_leg(name, argv)
+    with pytest.raises(ValueError, match='verified EM'):
+        _agy_fire(env)
+
+
+_GROK_SID = '01a21334-b3fa-70b0-b317-abd3a378a142'
+
+
+@pytest.fixture
+def grok_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """An interactive grok session listed in active_sessions.json with no host-sessions row."""
+    import json
+    import psutil
+    from types import SimpleNamespace
+    home = tmp_path / 'grok-home'
+    home.mkdir()
+    monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path))
+    monkeypatch.setenv('GROK_HOME', str(home))
+    for var in ('COORDINATOR_AGENT_WORKER', 'COORDINATOR_AGENT_ROLE'):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(core, 'attributable_session_id', lambda *a: _GROK_SID)
+    monkeypatch.setattr(core, 'stable_pid_alive', lambda *a, **k: True)
+    monkeypatch.setattr(core, 'ensure_session', lambda *a, **k: None)
+    (tmp_path / 'work').mkdir()
+    (home / 'active_sessions.json').write_text(
+        json.dumps([{'session_id': _GROK_SID, 'pid': 601, 'cwd': str(tmp_path / 'work')}]), encoding='utf-8')
+
+    def host(name, argv, running=True):
+        proc = SimpleNamespace(pid=601, name=lambda: name, cmdline=lambda: list(argv), create_time=lambda: 1.0,
+                               is_running=lambda: running)
+        monkeypatch.setattr(psutil, 'Process', lambda p: proc)
+    return host
+
+
+def _grok_fire(env):
+    with core.warm_served_request(), bind_caller_env(env):
+        return authority.require_fire_authority('unused.mjs', None, cwd=None, native=True, backend='codex')
+
+
+@pytest.mark.parametrize('name,argv', [
+    ('grok', ['/opt/grok/bin/grok', '--dangerously-skip-permissions', '--model', 'grok-4']),
+    ('grok.exe', ['grok.exe', '--dangerously-skip-permissions']),
+])
+def test_interactive_grok_session_without_a_registry_row_fires_as_em(grok_session, name, argv) -> None:
+    grok_session(name, argv)
+    principal = _grok_fire({'GROK_SESSION_ID': _GROK_SID})
+    assert principal.role == 'em' and principal.session_id == _GROK_SID
+    assert authority.fire_record_caller_session_id(principal) == _GROK_SID
+
+
+@pytest.mark.parametrize('name,argv,env,running', [
+    ('grok', ['grok', '-p', 'task'], {'GROK_SESSION_ID': _GROK_SID}, True),                    # headless run
+    ('grok', ['grok'], {}, True),                                                              # session id not carried as grok's own
+    ('grok', ['grok'], {'GROK_SESSION_ID': '00000000-0000-4000-8000-000000000001'}, True),     # another session
+    ('grok', ['grok'], {'GROK_SESSION_ID': _GROK_SID, 'COORDINATOR_AGENT_WORKER': '1'}, True),
+    ('grok', ['grok'], {'GROK_SESSION_ID': _GROK_SID, 'COORDINATOR_PARENT_SESSION_ID': 'p'}, True),
+    ('grok', ['grok'], {'GROK_SESSION_ID': _GROK_SID}, False),                                 # dead process
+    ('bash', ['bash'], {'GROK_SESSION_ID': _GROK_SID}, True),                                  # pid is not a grok host
+])
+def test_grok_caller_without_verified_interactive_evidence_is_still_refused(grok_session, name, argv, env, running) -> None:
+    grok_session(name, argv, running)
+    with pytest.raises(ValueError, match='verified EM'):
+        _grok_fire(env)
+
+
 def test_token_forwarded_via_caller_env_reaches_fire_authority(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.ops.workflow_fire import headless_em_grant as grant
     monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path))
