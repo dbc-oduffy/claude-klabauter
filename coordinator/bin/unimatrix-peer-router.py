@@ -1673,10 +1673,16 @@ class Router:
             return address
         return next(iter(matches), None)
 
-    def peer_readiness(self):
-        """peer name -> True when a send can reach it now; an agy peer is ready only while its leg endpoint exists."""
+    def peer_readiness(self) -> dict:
+        """peer name -> True when a send can reach it now; an agy peer is ready only while its leg endpoint exists.
+
+        The ListAgents liveness gates apply on every platform: an agy peer `agy_peer_rows_orphaned`
+        reports, or a Codex peer whose `codex_holder_live` is False, is never ready. An unrecorded
+        Codex holder (None) is unknown, not dead, and keeps its row.
+        """
         ready = {}
         metadata = codex_thread_metadata(self.codex_home) if any(p.get('vendor') == 'codex' for p in self.peers.values()) else {}
+        orphaned = self._orphaned_agy_targets() if any(p.get('vendor') == 'agy' for p in self.peers.values()) else set()
         for name, p in self.peers.items():
             if name in self.dead_holders:
                 continue
@@ -1684,8 +1690,20 @@ class Router:
             if p.get("vendor") == "agy" and os.name != "nt":
                 m = _sibling("unimatrix-peer-agy.py", "unimatrix_peer_agy_ready")
                 ok = os.path.exists(m.leg_endpoint(p["target"]))
+            if p.get("vendor") == "agy" and p.get("target") in orphaned:
+                ok = False
+            if ok and p.get("vendor") == "codex" and _liveness().codex_holder_live(p) is False:
+                ok = False
             ready[name] = ok
         return ready
+
+    @staticmethod
+    def _orphaned_agy_targets() -> set:
+        """Targets of the agy peers.json rows ListAgents drops as orphaned; empty when the probe cannot read."""
+        try:
+            return {target for _, target in _liveness().agy_peer_rows_orphaned()}
+        except OSError:
+            return set()
 
     def roster_rows(self, sender="cli", ready=None) -> tuple:
         """(reachable names, one {name, box, vendor} row per reachable name).

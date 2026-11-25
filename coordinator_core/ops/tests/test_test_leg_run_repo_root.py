@@ -90,3 +90,13 @@ def test_the_verify_tests_leg_pins_the_runs_repo(tmp_path, monkeypatch):
         base_sha="a" * 40,
     )
     assert f'--repo-root "{tmp_path.as_posix()}"' in "".join(prompts)
+
+
+def test_the_review_reverify_test_leg_clause_names_the_run_so_its_own_source_is_overlaid():
+    """The leg's `--out` is under `scratch/`, so only `--run-id` lets it find the run record and overlay the run's
+    own tracked source; without it a run's new test cannot import the names it tests (run a01353)."""
+    from coordinator_core.ops.review_mint.execute_review import _test_leg_clause
+
+    named = _test_leg_clause("a" * 40, "scratch/b.txt", "scratch/t.json", run_id="warp-x-1")
+    assert "--run-id warp-x-1 " in named
+    assert "--run-id" not in _test_leg_clause("a" * 40, "scratch/b.txt", "scratch/t.json")

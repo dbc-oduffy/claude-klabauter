@@ -2835,6 +2835,52 @@ def test_serve_waits_for_a_pending_delivery_task_after_shutdown():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _liveness_fixture(tmp_path, monkeypatch):
+    """A settings home with a dead and a live agy row, a CODEX_HOME, and a router over those peers plus two Codex peers."""
+    settings, codex_home = tmp_path / "settings", tmp_path / "codex"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "agy" / "brain"))
+    (codex_home / "thread-writer-locks").mkdir(parents=True)
+    state = settings / "unimatrix"
+    state.mkdir(parents=True)
+    agy_dead = {"name": "agy-dead", "vendor": "agy", "target": "conv-dead"}
+    agy_live = {"name": "agy-live", "vendor": "agy", "target": "conv-live"}
+    (state / "peers.json").write_text(json.dumps([agy_dead, agy_live]))
+    write_leg(state / "agy-legs", "conv-live")
+    write_leg(state / "agy-legs", "conv-dead", pid=DEAD_AGY_PID, proc_start=None, agy_pid=DEAD_AGY_PID)
+    cx_dead = {"name": "codex-dead", "vendor": "codex", "target": THR_2, "codexPid": DEAD_AGY_PID}
+    cx_live = {"name": "codex-live", "vendor": "codex", "target": THR_1, "codexPid": os.getpid()}
+    (tmp_path / "sessions").mkdir()
+    endpoint = tmp_path / "leg.sock"
+    endpoint.write_bytes(b"")
+    real_sibling = pr._sibling
+    monkeypatch.setattr(pr, "_sibling", lambda f, m, *a, **k: types.SimpleNamespace(leg_endpoint=lambda target: str(endpoint)) if m == "unimatrix_peer_agy_ready" else real_sibling(f, m))
+    return pr.Router([agy_dead, agy_live, cx_dead, cx_live], sessions_dir=tmp_path / "sessions",
+                     state_dir=tmp_path / "state", adapters={})
+
+
+@portable
+def test_roster_rows_drop_an_orphaned_agy_peer_and_a_dead_holder_codex_peer(tmp_path, monkeypatch):
+    r = _liveness_fixture(tmp_path, monkeypatch)
+    assert r.peer_readiness() == {"agy-dead": False, "agy-live": True, "codex-dead": False, "codex-live": True}
+    reachable, rows = r.roster_rows("cli")
+    assert reachable == ["agy-live", "codex-live"]
+    assert sorted(row["name"] for row in rows) == ["agy-live", "codex-live"]
+
+
+@portable
+def test_roster_rows_keep_an_agy_peer_whose_session_is_live_and_a_codex_peer_with_no_recorded_holder(tmp_path, monkeypatch):
+    r = _liveness_fixture(tmp_path, monkeypatch)
+    r.peers["codex-new"] = {"name": "codex-new", "vendor": "codex", "target": THR_1}
+    held = _hold_presence("conv-dead")
+    try:
+        ready = r.peer_readiness()
+    finally:
+        held.close()
+    assert ready["agy-dead"] is True and ready["codex-new"] is True and ready["codex-dead"] is False
+
+
 def test_code_digest_equals_the_installers_router_closure_digest():
     installer = pr._sibling("unimatrix-install.py", "unimatrix_install")
     assert pr.code_digest() == installer.router_closure_digest(pr.here())
