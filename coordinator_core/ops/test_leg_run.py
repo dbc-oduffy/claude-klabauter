@@ -273,7 +273,8 @@ def _reds(lines: list[str]) -> dict[str, str]:
     return reds
 
 
-_SECTION = re.compile(r"^_{3,} (.+?) _{3,}$")
+_SECTION = re.compile(r"^_+ (.+?) _+$")
+_COLLECTING = "ERROR collecting "
 _PLAIN_ERR = re.compile(r"^\S+:\d+: \w")
 _EXCEPTION_LINE = re.compile(r"^(?:\w+\.)*\w*(?:Error|Exception|Unresolved)(?::|$)")
 
@@ -310,6 +311,13 @@ def _split_not_a_test(nodes: Sequence[str], root: Optional[Path] = None) -> tupl
     return tests, non
 
 
+def _same_file(path: str, shown: str) -> bool:
+    """True when a `ERROR collecting` title path names `path`: pytest prints the title relative to its rootdir
+    (`bash_guards/tests/x.py` under `coordinator_core`) while the node id carries the repo-relative path."""
+    shown = shown.replace("\\", "/").strip()
+    return bool(path) and bool(shown) and (path == shown or path.endswith("/" + shown) or shown.endswith("/" + path))
+
+
 def _section_line(lines: Sequence[str], node: str) -> str:
     """The first `E   ` line (else the first `file:line: Error` line) of `node`'s traceback section, or ""."""
     leaf = node.split("::")[-1]
@@ -321,7 +329,7 @@ def _section_line(lines: Sequence[str], node: str) -> str:
         if hit:
             title = hit.group(1)
             inside = (title == leaf or title.endswith("." + leaf)
-                      or (title.startswith("ERROR collecting") and path in title.replace("\\", "/")))
+                      or (title.startswith(_COLLECTING) and _same_file(path, title[len(_COLLECTING):])))
             continue
         if raw.startswith("====") or raw.startswith("----"):
             inside = False
@@ -337,17 +345,27 @@ def _section_line(lines: Sequence[str], node: str) -> str:
 
 
 def _detail(text: str, ids: Sequence[str]) -> dict[str, str]:
-    """Red id -> non-empty message: the summary line's text, else the id's traceback assertion line, else a
-    statement that pytest printed none. Summary keys are matched after stripping, as `failing_ids` strips ids."""
+    """Red id -> non-empty message: the summary line's text (the id's traceback line when pytest cut the summary
+    with "..."), else the id's traceback assertion line, else a statement that pytest printed none. Summary keys are matched after stripping, as `failing_ids` strips ids."""
     lines = text.splitlines()
     reds = {k.strip(): v for k, v in _reds(lines).items()}
     out: dict[str, str] = {}
     for i in ids:
-        msg = reds.get(i.strip(), "").strip() or _section_line(lines, i)
+        msg = reds.get(i.strip(), "").strip()
+        if not msg or msg.endswith("..."):  # pytest cuts a summary line to the terminal width with "..."
+            msg = _section_line(lines, i) or msg
         if re.search(r"\bSettingsKeyUnresolved:", msg):
             msg = f"environment: machine-local settings key unreadable ({msg})"
-        out[i] = msg or "FAILED; pytest printed no exception or assertion detail"
+        out[i] = msg or cov.collection_traceback(text) or "FAILED; pytest printed no exception or assertion detail"
     return out
+
+
+def _no_id_message(rc: object, text: str, tail: str = "") -> str:
+    """`pytest exit <rc> with no failing id`, then pytest's collection traceback (stdout's ERRORS section) when
+    the output holds one, then `tail`."""
+    message = f"pytest exit {rc} with no failing id"
+    found = cov.kept_collection_traceback(text, tail).rstrip("\n")
+    return "\n".join(part for part in (message, found, tail) if part)
 
 
 # An xfailed/xpassed test ran to its expected outcome; a leg whose only test is xfail-marked is not empty.
@@ -471,8 +489,10 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
         return
     result["status_after"] = "fail"
     if not result.get("failing_detail"):
+        message = f"ran zero tests ({cause})"
+        found = cov.collection_traceback("\n".join(lines))
         result["failing_detail"] = [
-            {"node_id": "test_leg_run", "message": f"ran zero tests ({cause})"},
+            {"node_id": "test_leg_run", "message": f"{message}\n{found}" if found else message},
         ]
 
 
@@ -592,7 +612,7 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
         new_red = _stamp_leaks(out, leaks)
         out["new_red"] = new_red
     elif ran.returncode not in (0, 1) and not ids and not cov.hygiene_only_exit(ran.returncode, text):
-        out["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {ran.returncode} with no failing id"}]
+        out["failing_detail"] = [{"node_id": "pytest", "message": _no_id_message(ran.returncode, text)}]
         out["status_after"] = "fail"
     else:
         out["status_after"] = "fail" if new_red else "pass"
@@ -699,11 +719,22 @@ def _name_foreign_dependency(result: dict, root: Path) -> None:
     if source is None:
         return
     result[ltt.ZERO_RUN_CAUSE_KEY] = ltt.ZERO_RUN_FOREIGN_DEPENDENCY
+    result["failing"] = []
+    if "new_red" in result:
+        result["new_red"] = []
     result[IMPORT_ERROR_KEY] = {"path": source, "run_id": None, "symbol": symbol, "module": module,
                                 "source_path": source}
     result["failing_detail"] = [{"node_id": "test_leg_run", "message":
                                  f"ran zero tests (uncommitted-foreign-dependency): '{symbol}' is imported from "
                                  f"'{module}' but defined only in uncommitted {source}"}]
+
+
+def _imports_from_overlaid_target(result: dict, targets: Sequence[str]) -> bool:
+    """True when a target file the mirror overlaid from the run's own uncommitted bytes is what failed to import:
+    its missing name can live only in a peer's uncommitted worktree code. A committed importer failing in the mirror
+    is a committed break, never a peer's dirt."""
+    overlaid = {p.replace("\\", "/") for p in (result.get("own_tree") or {}).get("overlaid", [])}
+    return any(t.split("::", 1)[0].replace("\\", "/") in overlaid for t in targets)
 
 
 def _own_import_error(result: dict, root: Path) -> None:
@@ -741,6 +772,33 @@ def _run_blob_paths(root: Path, exclude: str, run_id: Optional[str] = None) -> l
     return list(owned)
 
 
+def _recorded_sources(root: Path, run_id: Optional[str]) -> tuple[list[str], dict[str, bytes]]:
+    """`(paths, overrides)`: paths `run_id`'s own record lists as touched (`touched-blobs.json`, the run's blob
+    differing from its base) or withheld (the halt index entry) whose worktree file exists, at their worktree
+    bytes even when the path is tracked at HEAD and the record blob no longer matches. A path a live peer run
+    also declared stays in, at HEAD plus only the run's own hunks (`overrides`, `cov.own_hunk_overrides`), or
+    at its worktree bytes when the hunks cannot be split: it is the run's own write, never dropped to HEAD.
+    Spawn-free; empty with no `run_id` or an unreadable record."""
+    if not run_id:
+        return [], {}
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_withheld_index, review_edits, stranded_sibling
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        listed = [p for p, e in stranded_sibling.read(record_dir(root, run_id)).items() if e.get("run") != e.get("base")]
+        entry = halted_withheld_index.run_entry(root, run_id)
+        if entry is not None:
+            listed.extend(entry.paths)
+        sibling = {review_edits.norm(p) for p in review_edits.live_sibling_declared(root, run_id)}
+        out = (review_edits.norm(p) for p in listed)
+        paths = [p for p in dict.fromkeys(out)
+                 if p and not p.startswith("-") and not review_edits.out_of_worktree(p) and (root / p).is_file()]
+        shared = [p for p in paths if p in sibling]
+        return paths, (cov.own_hunk_overrides(root, run_id, shared) if shared else {})
+    except Exception:  # noqa: BLE001 -- the record only widens the mirror; an unreadable one leaves HEAD
+        return [], {}
+
+
 def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], result: dict,
               run_id: Optional[str] = None, targets: Sequence[str] = (), declared_run: Optional[str] = None) -> str:
     """The directory the no-touched leg runs pytest in: the shared-clone mirror at `head_sha` (default HEAD) plus
@@ -754,7 +812,9 @@ def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], 
         mroot = stack.enter_context(cov._mirror_lock(root, "test-leg-run"))
         sha = cov._commit_sha(root, head_sha or "HEAD")
         owned, overrides = _declared_overlay(root, declared_run)
-        overlay = list(dict.fromkeys([*_run_blob_paths(root, "", run_id), *owned]))
+        recorded, recorded_overrides = _recorded_sources(root, declared_run)
+        overrides = {**recorded_overrides, **overrides}
+        overlay = list(dict.fromkeys([*_run_blob_paths(root, "", run_id), *owned, *recorded, *overrides]))
         dest = _prepare_live(root, mroot, sha, overlay, overrides)
         live = _live_only(root, dest, targets, _reviewed_scope(root, declared_run))
         if live:
@@ -785,7 +845,10 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
         if left() <= 0:
             raise subprocess.TimeoutExpired("pytest", 0)
         owned, overrides = _declared_overlay(root, declared_run)
-        overlay = list(dict.fromkeys([*_run_blob_paths(root, err["path"], run_id), *(p for p in owned if p != err["path"])]))
+        recorded, recorded_overrides = _recorded_sources(root, declared_run)
+        overrides = {k: v for k, v in {**recorded_overrides, **overrides}.items() if k != err["path"]}
+        overlay = list(dict.fromkeys([*_run_blob_paths(root, err["path"], run_id),
+                                      *(p for p in [*owned, *recorded, *overrides] if p != err["path"])]))
         with cov._mirror_lock(root, "test-leg-run") as mroot:
             base_rev = cov._commit_sha(root, base_sha)
             dest = _prepare_live(root, mroot, base_rev, overlay, overrides)
@@ -816,7 +879,7 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
     elif ids or (ran.returncode not in (0, 5) and not red_non):
         result["status_after"] = "fail"
         if not ids:
-            result["failing_detail"] = [{"node_id": "pytest", "message": f"pytest exit {ran.returncode} with no failing id"}]
+            result["failing_detail"] = [{"node_id": "pytest", "message": _no_id_message(ran.returncode, text)}]
     else:
         result["status_after"] = "pass"
     result["overlay_rerun"] = {"from": err["path"], "overlaid": overlay}
@@ -930,7 +993,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
                     result[ltt.TRIPWIRES_NOT_RUN_KEY] = _files(reds2)
         result["not_a_test"].extend(n for n in dict.fromkeys(red_non) if n not in result["not_a_test"])
         result["failing"] = list(reds)
-        result["failing_detail"] = [{"node_id": n, "message": all_reds[n].strip() or shown[n]} for n in reds]
+        result["failing_detail"] = [{"node_id": n, "message": shown.get(n) or all_reds[n].strip()} for n in reds]
         if rc == 0 or (red_non and not reds and rc == 1):
             result["status_after"] = "pass"
         elif not reds:
@@ -938,9 +1001,8 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             if leaks:
                 _stamp_leaks(result, leaks)
             else:
-                message = f"pytest exit {rc} with no failing id"
-                if rc not in (0, 1) and lines:
-                    message += "\n" + "\n".join(lines)[-2000:]
+                joined = "\n".join(lines)
+                message = _no_id_message(rc, joined, joined[-2000:] if rc not in (0, 1) and lines else "")
                 result["failing_detail"] = [{"node_id": "pytest", "message": message}]
         result["over_budget"] = False
         _tally(result, rc, lines, stderr)
@@ -982,7 +1044,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         _tally(result, 2, ())
     finally:
         stack.close()
-    if "own_tree" in result:
+    if "own_tree" in result and not _imports_from_overlaid_target(result, targets):
         result.pop(_MISSING_KEY, None)
     else:
         _name_foreign_dependency(result, Path(cwd))
