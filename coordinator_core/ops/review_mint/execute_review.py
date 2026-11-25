@@ -1147,11 +1147,14 @@ def _test_leg_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
 
 def _test_leg_clause(
     base_ref: str, export_path: str, json_path: str, repo_root: Optional[str] = None, *, shell: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> str:
     """Step 2's single engine command running the pytest targets, base measure included; the base
     arguments are omitted when the base is the unset placeholder. ``repo_root`` pins the leg to the run's
     repo: the bound engine command starts in the agent's cwd, which for a consumer-repo run can be the
-    engine clone, whose tree lacks the targets. ``shell`` defaults to the host's native shell."""
+    engine clone, whose tree lacks the targets. ``shell`` defaults to the host's native shell. ``run_id`` names the run
+    to the leg: its `--out` sits under `scratch/`, so without it the leg cannot find the run record and the mirror
+    overlays none of the run's own source, leaving its new tests unable to import what they test."""
     from coordinator_core.ops.dispatch_emit.engine_command import engine_module_command
 
     shell = shell or ("powershell" if os.name == "nt" else "bash")
@@ -1164,6 +1167,8 @@ def _test_leg_clause(
     )
     if repo_root:
         base += f'--repo-root "{Path(repo_root).as_posix()}" '
+    if run_id:
+        base += f"--run-id {run_id} "
     command = engine_module_command(
         "coordinator_core.ops.test_leg_run", repo_root or ".", f"{base}--out {json_path} --",
         portable=True, shell=shell,
@@ -1298,7 +1303,7 @@ def _reverify_phase(
     base_path_arg = "" if base_ref == "run_base_sha" else f',"base_export_path":"{export_path}"'
     test_leg = _test_leg_clause(
         base_ref, export_path, _test_leg_file(run_key, run_id, prep_slice_id), repo_root,
-        shell="powershell" if os.name == "nt" else "bash",
+        shell="powershell" if os.name == "nt" else "bash", run_id=run_id,
     )
     from coordinator_core.ops.reverify_scope import TRIPWIRE_BOUND
 

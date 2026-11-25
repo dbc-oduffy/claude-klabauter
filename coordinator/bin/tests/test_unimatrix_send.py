@@ -324,6 +324,61 @@ def test_list_never_calls_a_mirror_only_route_ready(monkeypatch: pytest.MonkeyPa
     assert rc == 0 and rows == {"p": "ready", "m": "mirror-only", "live": "session"}
 
 
+def test_list_offers_no_dead_agy_or_codex_peer_from_the_routers_own_roster(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    import json
+    import os
+    import types
+
+    router_spec = importlib.util.spec_from_file_location("unimatrix_peer_router_send_t", Path(__file__).resolve().parents[1] / "unimatrix-peer-router.py")
+    pr = importlib.util.module_from_spec(router_spec)
+    router_spec.loader.exec_module(pr)
+    root_row = {"cwd": "/w", "source": "cli", "thread_source": "user", "agent_path": None}
+
+    class _AnyRoot(dict):
+        def get(self, key, default=None):
+            return root_row
+
+    monkeypatch.setattr(pr, "codex_thread_metadata", lambda home: _AnyRoot())
+    settings, codex_home = tmp_path / "settings", tmp_path / "codex"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "agy" / "brain"))
+    (codex_home / "thread-writer-locks").mkdir(parents=True)
+    (settings / "unimatrix").mkdir(parents=True)
+    agy_dead = {"name": "agy-dead", "vendor": "agy", "target": "conv-dead"}
+    agy_live = {"name": "agy-live", "vendor": "agy", "target": "conv-live"}
+    (settings / "unimatrix" / "peers.json").write_text(json.dumps([agy_dead, agy_live]))
+    legs = settings / "unimatrix" / "agy-legs"
+    legs.mkdir()
+    live_stamp = pr._roster().proc_start(os.getpid())
+    (legs / "conv-live.json").write_text(json.dumps({"pid": os.getpid(), "procStart": live_stamp, "conversation": "conv-live"}))
+    cx_dead = {"name": "codex-dead", "vendor": "codex", "target": "t-dead", "codexPid": 2 ** 22 + 12345}
+    cx_live = {"name": "codex-live", "vendor": "codex", "target": "t-live", "codexPid": os.getpid()}
+    endpoint = tmp_path / "leg.sock"
+    endpoint.write_bytes(b"")
+    real_sibling = pr._sibling
+    monkeypatch.setattr(pr, "_sibling", lambda f, m, *a, **k: types.SimpleNamespace(leg_endpoint=lambda target: str(endpoint)) if m == "unimatrix_peer_agy_ready" else real_sibling(f, m))
+    (tmp_path / "sessions").mkdir()
+    router = pr.Router([agy_dead, agy_live, cx_dead, cx_live], sessions_dir=tmp_path / "sessions",
+                       state_dir=tmp_path / "state", adapters={})
+    ready = router.peer_readiness()
+    reachable, agents = router.roster_rows("cli", ready)
+    resp = {"ok": True, "peers": list(router.peers), "reachable": reachable, "ready": ready, "agents": agents}
+    rc, _ = _run(monkeypatch, resp, ["--list"])
+    rows = {r[0]: r[4] for r in _rows(capsys.readouterr().out)}
+    assert rc == 0 and rows == {"agy-live": "ready", "codex-live": "ready"}
+
+
+def test_list_prints_pending_for_an_agy_row_whose_leg_is_not_live_and_ready_for_a_live_one(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    resp = {"ok": True, "peers": ["agy-live", "cx"], "reachable": ["agy-live", "agy-pend", "cx"],
+            "agents": [{"name": "agy-live", "box": "machine-a", "vendor": "agy", "this_box": True},
+                       {"name": "agy-pend", "box": "machine-a", "vendor": "agy", "this_box": True, "leg_mode": "pending"},
+                       {"name": "cx", "box": "machine-a", "vendor": "codex", "this_box": True}]}
+    rc, _ = _run(monkeypatch, resp, ["--list"])
+    rows = {r[0]: r[4] for r in _rows(capsys.readouterr().out)}
+    assert rc == 0 and rows == {"agy-live": "ready", "agy-pend": "pending", "cx": "ready"}
+
+
 def test_send_over_a_mirror_only_forward_says_mirrored_not_delivered_and_no_reached(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(us, "_is_mirror", lambda n: True)
     monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"side": "mirror-out", "ok": True, "transport": "push", "reached": "fe"})
