@@ -2673,6 +2673,38 @@ def _compute_commit_message(kind: str, basename: str, landed: list[str]) -> str:
     return f"baton-assemble apply: {kind} {basename} ({summary})"
 
 
+_SCAFFOLD_BODY_PLACEHOLDER_RE = re.compile(
+    r"^\s*<!--\s*(?:Replace with\b|What did you learn that you'd resent re-deriving\?)",
+    re.MULTILINE,
+)
+
+
+def _unfilled_scaffold_reasons(root: Path, artifact_rel_path: str) -> list[str]:
+    """Why a minted handoff still reads as the raw scaffold: placeholder
+    title or summary, or a section left as the scaffold's HTML-comment
+    prompt. Empty when the file is unreadable or filled in -- an unreadable
+    path is not evidence of a scaffold, so the commit proceeds as before."""
+    if not artifact_rel_path:
+        return []
+    path = Path(artifact_rel_path)
+    if not path.is_absolute():
+        path = root / path
+    try:
+        split = split_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return []
+    if split is None:
+        return []
+    reasons: list[str] = []
+    for key in ("title", "summary"):
+        value = read_fm_field_unquoted(split.fm_text, key)
+        if value and value.startswith("PLACEHOLDER"):
+            reasons.append(f"{key} is still the scaffold placeholder")
+    if _SCAFFOLD_BODY_PLACEHOLDER_RE.search(split.body_with_leading_newline):
+        reasons.append("body still holds the scaffold's HTML-comment placeholders")
+    return reasons
+
+
 def _scoped_commit(repo_root: Path, artifact_rel_path: str, kind: str, basename: str, landed: list[str]) -> Optional[str]:
     message = _compute_commit_message(kind, basename, landed)
     return apply_base.scoped_commit(repo_root, artifact_rel_path, message, _run_git)
@@ -3073,7 +3105,28 @@ def apply(
         report["gates"] = {"repo_identity": repo_identity_gate}
 
         commits = _collect_directive_commits(report)
-        if exit_code in (APPLY_EXIT_OK, apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT):
+        unfilled = (
+            _unfilled_scaffold_reasons(root, committed_artifact_path)
+            if kind == "handoff" and committed_path_is_run_authored
+            else []
+        )
+        if unfilled and exit_code in (APPLY_EXIT_OK, apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT):
+            report["commit_sha"] = None
+            report["commit_withheld"] = {
+                "path": committed_artifact_path,
+                "reasons": unfilled,
+                "next": (
+                    "fill the title/summary/sections, then commit: "
+                    f'coordinator-safe-commit "<subject>" -- {committed_artifact_path}'
+                ),
+            }
+            print(
+                f"baton-assemble apply: commit withheld for {committed_artifact_path} -- "
+                f"{'; '.join(unfilled)}. Fill it in, then: "
+                f'coordinator-safe-commit "<subject>" -- {committed_artifact_path}',
+                file=sys.stderr,
+            )
+        elif exit_code in (APPLY_EXIT_OK, apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT):
             try:
                 report["commit_sha"] = _scoped_commit(
                     root, committed_artifact_path, kind, basename, report.get("landed", [])

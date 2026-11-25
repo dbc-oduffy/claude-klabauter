@@ -161,6 +161,12 @@ def _is_scratch_path(p: str) -> bool:
     return p.startswith(_SCRATCH_PREFIX) and "\\" not in p and posixpath.normpath(p) == p
 
 
+def _non_canonical_scratch(raw: dict) -> list:
+    """Marker-spelled withheld paths that name ``scratch/`` yet are not canonical (``scratch//x``, ``scratch/./x``).
+    Trap: the withheld index normalizes them, so the index read alone would close them as scratch-abandoned."""
+    return sorted(p for p in raw if not _is_scratch_path(p) and posixpath.normpath(p.replace("\\", "/")).startswith(_SCRATCH_PREFIX))
+
+
 def _classify_paths(paths: list, touched: dict, head: dict, keep: dict, base: dict, anchor: str, unkept: frozenset = frozenset()) -> tuple:
     """``(dispositions, unclassified)``: ``{path: {disposition, blob|sha|reason}}`` for the classified paths and
     ``["path (reason)", ...]`` for the rest. ``head``/``base`` map a path to its blob id at HEAD / the halt anchor
@@ -511,6 +517,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _refuse(f"{run_id} has a live successor {successor}; wait for it or stop it")
     if not withheld:
         return _close_withholding_nothing(root, record, marker, run_id, params)
+    odd = _non_canonical_scratch(halted_run._withheld_of(marker))
+    if odd:
+        return _refuse_unclassified([f"{p} (non-normalized scratch/ spelling; record it as {posixpath.normpath(p.replace(chr(92), '/'))})" for p in odd])
     plan = halted_hold_release._kept_plan(record) or _prints_plan(record, withheld)
     if plan is None:
         if not any((record / f).exists() for f in (kept_work.KEPT_FILE, WITHHELD_PRINTS_FILE)):

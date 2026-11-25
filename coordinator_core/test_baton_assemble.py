@@ -5373,6 +5373,11 @@ class _ReplayHarness:
         self.fail_at: str | None = None
         self.d1_title: str | None = None
         self.d1_body: str | None = None
+        # A first-attempt run that no directive fails mints a FINISHED handoff
+        # (real title/summary/body): `apply` withholds the commit of a raw
+        # scaffold. A run with `fail_at` set keeps the pristine scaffold the
+        # compensator tests need. Set False to exercise the withheld path.
+        self.fill_scaffold = True
         self._install_fakes()
 
     def _install_fakes(self) -> None:
@@ -5396,15 +5401,30 @@ class _ReplayHarness:
                     (a[len(prefix):] or None for a in args if a.startswith(prefix)), None
                 )
 
+            finished = (
+                self.fill_scaffold
+                and self.fail_at is None
+                and self.d1_body is None
+                and len(self.d1_calls) == 1
+            )
             _render_real_scaffold(
                 repo_root / out,
                 doc_type=_flag("type") or "handoff",
-                title=_flag("title") or self.d1_title,
+                title=_flag("title") or self.d1_title or ("Filled handoff title" if finished else None),
                 predecessor=_flag("predecessor"),
                 predecessor_id=_flag("predecessor-id"),
                 deliverable_id=_flag("deliverable-id"),
-                body=self.d1_body,
+                body="## What Was Accomplished\n\nReal operator prose.\n" if finished else self.d1_body,
             )
+            if finished:
+                target = repo_root / out
+                target.write_text(
+                    target.read_text(encoding="utf-8").replace(
+                        "PLACEHOLDER — replace with one-line session summary (≤140 chars)",
+                        "a real one-line session summary",
+                    ),
+                    encoding="utf-8",
+                )
             return {"cli": "coordinator-doc-new", "args": args}
 
         def _noop(name):
@@ -8748,3 +8768,140 @@ class TestHandoffPhaseStampCarriesRestampQuartet:
             "execution_restamped_note",
         ):
             assert f"{field}:" not in handoff_fm
+
+
+class TestApplyWithholdsTheCommitOfAnUnfilledScaffold:
+    """`apply handoff` mints a scaffold and then commits it; a scaffold that
+    still carries the placeholder summary or the HTML-comment section prompts
+    must never land in history -- the operator fills it, then commits it."""
+
+    def test_raw_scaffold_is_written_but_not_committed(self, tmp_path, monkeypatch):
+        harness = _ReplayHarness(tmp_path, monkeypatch)
+        harness.fill_scaffold = False
+        exit_code, report = harness.run()
+
+        assert exit_code == ba_apply.APPLY_EXIT_OK, report
+        assert report["commit_sha"] is None
+        withheld = report["commit_withheld"]
+        assert any("summary" in r for r in withheld["reasons"])
+        assert any("HTML-comment" in r for r in withheld["reasons"])
+        assert "coordinator-safe-commit" in withheld["next"]
+        successor = harness.continued_into()
+        assert successor and withheld["path"] == successor
+        assert all(c["directive_id"] is not None for c in report["commits"])
+        # Present on disk, untracked: never committed with placeholder text.
+        status = _git(harness.repo, "status", "--porcelain", "--", successor)
+        assert status.stdout.startswith("??")
+        log = _git(harness.repo, "log", "--format=%H", "--", successor)
+        assert log.stdout.strip() == ""
+
+    def test_a_filled_handoff_still_commits(self, tmp_path, monkeypatch):
+        harness = _ReplayHarness(tmp_path, monkeypatch)
+        exit_code, report = harness.run()
+
+        assert exit_code == ba_apply.APPLY_EXIT_OK, report
+        assert report["commit_sha"]
+        assert "commit_withheld" not in report
+
+    def test_reasons_helper_reads_each_placeholder_kind_and_passes_a_filled_file(
+        self, tmp_path
+    ):
+        raw = tmp_path / "raw.md"
+        _render_real_scaffold(raw)
+        reasons = ba_apply._unfilled_scaffold_reasons(tmp_path, "raw.md")
+        assert any(r.startswith("title") for r in reasons)
+        assert any(r.startswith("summary") for r in reasons)
+        assert any("HTML-comment" in r for r in reasons)
+
+        done = tmp_path / "done.md"
+        _render_real_scaffold(
+            done, title="Real title", body="## What Was Accomplished\n\nProse.\n"
+        )
+        done.write_text(
+            done.read_text(encoding="utf-8").replace(
+                "PLACEHOLDER — replace with one-line session summary (≤140 chars)",
+                "a real summary",
+            ),
+            encoding="utf-8",
+        )
+        assert ba_apply._unfilled_scaffold_reasons(tmp_path, "done.md") == []
+        assert ba_apply._unfilled_scaffold_reasons(tmp_path, "missing.md") == []
+
+
+class TestBriefHandoffNamesTemplateAndApplyLine:
+    """The `brief handoff` CLI door tells the operator where the decisions
+    file goes and what to run next -- on stderr, so the stdout JSON envelope
+    stays byte-stable."""
+
+    @staticmethod
+    def _fake_brief(monkeypatch, judgment_points):
+        class _Result:
+            decision_object = {"judgment_points": judgment_points, "directives": []}
+            exit_code = 0
+
+        monkeypatch.setattr(ba, "brief", lambda *a, **k: _Result())
+
+    def test_main_brief_handoff_prints_template_path_and_apply_line(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        points = ba._build_judgment_points("handoff")
+        self._fake_brief(monkeypatch, points)
+        monkeypatch.setattr(ba, "resolve_repo_root", lambda *a, **k: tmp_path)
+        monkeypatch.setattr(ba, "_resolve_current_session_id", lambda: "sid-1")
+
+        rc = ba.main(["brief", "handoff", "--title", "Ship the thing"])
+
+        err = capsys.readouterr().err
+        template = tmp_path / ".coordinator-local" / "subagent-share" / "sid-1" / "handoff-decisions.json"
+        assert rc == 0
+        assert str(template) in err
+        assert "baton-assemble" in err and "apply" in err and "--decisions-file" in err
+        assert "--session-id" in err and "sid-1" in err
+        assert "Ship the thing" in err
+        import json as _json
+
+        written = _json.loads(template.read_text(encoding="utf-8"))
+        assert set(written) == {p["id"] for p in points}
+        assert all(v["disposition"].startswith("<") for v in written.values())
+
+    def test_an_existing_decisions_file_is_never_overwritten(self, tmp_path, monkeypatch, capsys):
+        template = tmp_path / ".coordinator-local" / "subagent-share" / "sid-1" / "handoff-decisions.json"
+        template.parent.mkdir(parents=True)
+        template.write_text('{"mine": {"disposition": "x"}}', encoding="utf-8")
+        self._fake_brief(monkeypatch, ba._build_judgment_points("handoff"))
+        monkeypatch.setattr(ba, "resolve_repo_root", lambda *a, **k: tmp_path)
+        monkeypatch.setattr(ba, "_resolve_current_session_id", lambda: "sid-1")
+
+        ba.main(["brief", "handoff"])
+
+        assert template.read_text(encoding="utf-8") == '{"mine": {"disposition": "x"}}'
+
+    def test_unresolved_sid_never_advertises_a_shared_stale_template(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        stale = tmp_path / ".coordinator-local" / "handoff-decisions.json"
+        stale.parent.mkdir(parents=True)
+        stale.write_text('{"old": {"disposition": "x"}}', encoding="utf-8")
+        self._fake_brief(monkeypatch, ba._build_judgment_points("handoff"))
+        monkeypatch.setattr(ba, "resolve_repo_root", lambda *a, **k: tmp_path)
+        monkeypatch.setattr(ba, "_resolve_current_session_id", lambda: None)
+
+        ba.main(["brief", "handoff"])
+
+        err = capsys.readouterr().err
+        assert str(stale) not in err
+        assert stale.read_text(encoding="utf-8") == '{"old": {"disposition": "x"}}'
+        assert len(list(stale.parent.glob("handoff-decisions-*.json"))) == 1
+
+    def test_spinoff_brief_prints_no_handoff_apply_advice(self, tmp_path, monkeypatch, capsys):
+        self._fake_brief(monkeypatch, [])
+        monkeypatch.setattr(ba, "resolve_repo_root", lambda *a, **k: tmp_path)
+
+        ba.main(["brief", "spinoff", "some-slug"])
+
+        assert "apply with" not in capsys.readouterr().err
+
+    def test_command_line_rendering_is_host_correct(self):
+        argv = ["baton-assemble", "apply", "handoff", "--title", "a b"]
+        assert ba._render_command_line(argv, "nt") == '& "baton-assemble" apply handoff --title "a b"'
+        assert ba._render_command_line(argv, "posix") == "baton-assemble apply handoff --title 'a b'"

@@ -1369,6 +1369,66 @@ class TestReleaseArtifact:
         assert parsed["plan"]["path"] == "docs/plans/p-peer.md"
 
 
+def _load_session_claim_cli():
+    import importlib.machinery
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "session-claim-cli.py"
+    loader = importlib.machinery.SourceFileLoader("session_claim_cli_ra", str(path))
+    spec = importlib.util.spec_from_loader("session_claim_cli_ra", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+class TestReleaseArtifactCliSessionId:
+    """`session-claim-cli release-artifact --session-id <sid>` routes the sid to
+    `claims.release_artifact`'s `my_sid`; the positional form is unchanged."""
+
+    def _cli(self, monkeypatch):
+        cli = _load_session_claim_cli()
+        monkeypatch.setattr(cli, "_import_module", lambda: claims)
+        return cli
+
+    def test_session_id_flag_releases_that_sessions_claim(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch, "me-sid")
+        monkeypatch.chdir(repo)
+        _make_claim(repo, "memo", "ra1", session_id="flag-sid")
+        cli = self._cli(monkeypatch)
+        rc = cli.main(["release-artifact", "memo", "ra1", "--session-id", "flag-sid"])
+        assert rc == 0
+        assert not _claim_dir(repo, "memo", "ra1").exists()
+
+    def test_session_id_flag_other_sid_leaves_claim(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch, "me-sid")
+        monkeypatch.chdir(repo)
+        _make_claim(repo, "memo", "ra2", session_id="flag-sid")
+        cli = self._cli(monkeypatch)
+        rc = cli.main(["release-artifact", "memo", "ra2", "--session-id=someone-else"])
+        assert rc == 0
+        assert _claim_dir(repo, "memo", "ra2").is_dir()
+
+    def test_positional_form_still_releases_own_claim(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch, "me-sid")
+        monkeypatch.chdir(repo)
+        _make_claim(repo, "memo", "ra3", session_id="me-sid")
+        cli = self._cli(monkeypatch)
+        rc = cli.main(["release-artifact", "memo", "ra3", str(repo)])
+        assert rc == 0
+        assert not _claim_dir(repo, "memo", "ra3").exists()
+
+    def test_session_id_flag_without_value_is_usage_error(self, tmp_path, monkeypatch):
+        cli = self._cli(monkeypatch)
+        assert cli.main(["release-artifact", "memo", "ra4", "--session-id"]) == 2
+
+    def test_unknown_flag_still_usage_error(self, tmp_path, monkeypatch):
+        cli = self._cli(monkeypatch)
+        assert cli.main(["release-artifact", "memo", "ra5", "--repo", "x"]) == 2
+
+
 # ---------------------------------------------------------------------------
 # clear_claim_if_dead (1097-1157)
 # ---------------------------------------------------------------------------

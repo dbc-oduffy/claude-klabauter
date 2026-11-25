@@ -6101,6 +6101,98 @@ def _usage_help(prog: str) -> int:
     return EXIT_OK
 
 
+_DECISIONS_TEMPLATE_NAME = "handoff-decisions.json"
+_PS_BARE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_./:\\=+-]+$")
+_SAFE_SESSION_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _render_command_line(argv: list[str], host: str) -> str:
+    """One host-correct shell line running `argv`: PowerShell when `host` is
+    `nt` (call operator, double-quoting only tokens that need it), else a
+    POSIX `shlex.join`. Pure."""
+    import shlex
+
+    if host != "nt":
+        return shlex.join(argv)
+
+    def _quote(token: str) -> str:
+        return '"' + re.sub(r'([`"$])', r"`\1", token) + '"'
+
+    head, *rest = argv
+    return "& " + " ".join(
+        [_quote(head), *(t if _PS_BARE_TOKEN_RE.match(t) else _quote(t) for t in rest)]
+    )
+
+
+def _write_decisions_template(path: Path, judgment_points: list[dict[str, Any]]) -> bool:
+    """Write the fill-in decisions file for `judgment_points` at `path`, unless
+    one is already there (it may hold the operator's answers). Each value
+    lists the legal dispositions in angle brackets so an unedited template
+    is refused downstream instead of silently answering a gate. Fail-open:
+    returns whether `path` now exists."""
+    if path.exists():
+        return True
+    template: dict[str, Any] = {}
+    for point in judgment_points:
+        if not isinstance(point, dict) or not point.get("id"):
+            continue
+        values = [
+            d["value"]
+            for d in point.get("dispositions") or []
+            if isinstance(d, dict) and isinstance(d.get("value"), str)
+        ]
+        template[point["id"]] = {"disposition": "<" + " | ".join(values or ["decide"]) + ">"}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(template, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def _print_handoff_apply_advice(
+    decision_object: dict[str, Any], artifact_path: str, title: Optional[str]
+) -> None:
+    """stderr advisory after `brief handoff`: the decisions-template path and
+    the rendered `baton-assemble apply handoff` line. stderr, not a JSON key,
+    so the stdout envelope stays byte-stable for its golden. Never raises."""
+    try:
+        root = resolve_repo_root()
+        sid = _resolve_current_session_id()
+        if root is not None and sid and _SAFE_SESSION_SEGMENT_RE.match(sid) and sid not in (".", ".."):
+            template_path = (
+                root / ".coordinator-local" / "subagent-share" / sid / _DECISIONS_TEMPLATE_NAME
+            )
+        else:
+            import time
+
+            unkeyed = f"handoff-decisions-{os.getpid()}-{int(time.time())}.json"
+            template_path = (root if root is not None else Path()) / ".coordinator-local" / unkeyed
+        points = decision_object.get("judgment_points") or []
+        written = (
+            _write_decisions_template(template_path, points) if root is not None and points else False
+        )
+        argv = ["baton-assemble", "apply", "handoff"]
+        if artifact_path:
+            argv.append(artifact_path)
+        argv += ["--session-id", sid or "<session-id>"]
+        if points:
+            argv += ["--decisions-file", str(template_path)]
+        argv += ["--title", title or "<one line naming the work>"]
+        if points:
+            print(
+                f"baton-assemble: decisions template: {template_path}"
+                + ("" if written else " (not written; create it by hand)"),
+                file=sys.stderr,
+            )
+        print(
+            f"baton-assemble: apply with: {_render_command_line(argv, os.name)}",
+            file=sys.stderr,
+        )
+    except Exception:  # noqa: BLE001 -- advisory only; never fail a computed brief
+        return
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         return _usage("baton-assemble")
@@ -6234,6 +6326,8 @@ def main(argv: list[str]) -> int:
         return EXIT_USAGE
 
     print(json.dumps(result.decision_object, indent=2))
+    if kind == "handoff":
+        _print_handoff_apply_advice(result.decision_object, artifact_path, title)
     return result.exit_code
 
 

@@ -2403,7 +2403,12 @@ def own_hunk_overrides(root: Path, run_id: str, paths: Sequence[str]) -> dict:
             obj = read_object(common, sha)
             if obj is not None and obj[0] == "blob":
                 out[rel] = obj[1]
-        return out
+        try:
+            heads = _head_sources(root, list(out)) if out else {}
+        except Exception:  # noqa: BLE001 -- HEAD unreadable: keep every own blob rather than drop them all
+            heads = {}
+        # Own hunks that reduce a diffed path to HEAD's bytes would put the pre-edit source in the mirror.
+        return {rel: data for rel, data in out.items() if heads.get(rel) != data}
     except Exception as exc:  # noqa: BLE001 -- an unsplit path falls back to its HEAD bytes
         print(f"[clean-export] advisory: own hunks not split ({type(exc).__name__}: {exc})", file=sys.stderr)
         return {}
@@ -2424,17 +2429,28 @@ def own_delta(root: Path, run_id: str, seed: Sequence[str]) -> tuple:
     from coordinator_core.ops.dispatch_emit import review_edits
 
     have = {review_edits.norm(p) for p in seed}
-    try:
-        manifest = _manifest_declared_paths(measured_rev_record_path(root, run_id).with_name("manifest.json")) or []
-        owned = [*manifest, *_own_write_set(root, run_id), *_own_written(root, run_id)]
-        snapshot = _snapshot_scope(root, run_id)
-        extra = [p for p in (*owned, *snapshot) if review_edits.norm(p) not in have]
-        if not extra and not seed:
-            return list(seed), {}
-        sibling = {review_edits.norm(p) for p in review_edits.live_sibling_declared(root, run_id)}
-    except Exception as exc:  # the own delta only widens the seed; an unreadable source never refuses the export
-        print(f"[clean-export] advisory: run's own delta not read ({type(exc).__name__}: {exc}); declared paths only", file=sys.stderr)
+
+    def read(label: str, source) -> list:
+        # One unreadable source never discards what the others name: the run's declared source must not drop to HEAD with it.
+        try:
+            return list(source())
+        except Exception as exc:  # the own delta only widens the seed; an unreadable source never refuses the export
+            print(f"[clean-export] advisory: run's own delta not read ({label}: {type(exc).__name__}: {exc}); that source skipped", file=sys.stderr)
+            return []
+
+    manifest = read("manifest", lambda: _manifest_declared_paths(measured_rev_record_path(root, run_id).with_name("manifest.json")) or [])
+    owned = [*manifest, *read("write set", lambda: _own_write_set(root, run_id)), *read("own written", lambda: _own_written(root, run_id))]
+    snapshot = read("snapshot", lambda: _snapshot_scope(root, run_id))
+    extra = [p for p in (*owned, *snapshot) if review_edits.norm(p) not in have]
+    if not extra and not seed:
         return list(seed), {}
+    try:
+        sibling = {review_edits.norm(p) for p in review_edits.live_sibling_declared(root, run_id)}
+    except Exception as exc:  # peers unknown: only paths the run itself owns join, never a snapshot-only path
+        print(f"[clean-export] advisory: peer declarations not read ({type(exc).__name__}: {exc}); own paths only", file=sys.stderr)
+        sibling = set()
+        snapshot = []
+        extra = [p for p in owned if review_edits.norm(p) not in have]
     # The review snapshot measures dirt, it does not declare ownership: a snapshot-only path a peer declared
     # is the peer's and stays at HEAD. A path the run itself declared or wrote stays even when shared.
     declared = {review_edits.norm(p) for p in owned}

@@ -1421,19 +1421,19 @@ def _load_hooks(path):
     return data
 
 
-def seed_agy_hook(hooks_path, dest_dir, engine_root=None):
+def seed_agy_hook(hooks_path, dest_dir, engine_root=None) -> str:
     """Point our key at this install; return "created", "added", "updated" or "present".
 
     A value we wrote earlier (it carries PreToolUse or SessionStart) is replaced only when its argv
     differs (a missing event, a script path or the engine root from an older install); a working
-    entry is never re-rendered for its interpreter or quoting. A re-render takes the `unimatrix.python`
-    pin, else the existing entry's interpreter, and keeps the existing quoting form. A hand-customised
-    value and every other key in the file are left byte-identical.
+    entry is never re-rendered for its interpreter or quoting. A re-render keeps the existing entry's
+    interpreter while that file exists (neither the `unimatrix.python` pin nor PATH moves it) and its
+    quoting form; a fresh install, or a dead existing interpreter, takes the running console python.
+    A hand-customised value and every other key in the file are left byte-identical.
     """
     path = Path(hooks_path)
     existed = path.exists()
     data = _load_hooks(path)
-    pin = _pin_value()
     if AGY_HOOK_KEY in data:
         entry = data[AGY_HOOK_KEY]
         ours = isinstance(entry, dict) and ("PreToolUse" in entry or "SessionStart" in entry)
@@ -1442,13 +1442,13 @@ def seed_agy_hook(hooks_path, dest_dir, engine_root=None):
         first = _first_command(entry)
         old_words = _command_words(first) if first else None
         dead = bool(old_words) and _interpreter_dead(old_words[0])
-        want = agy_hook_entry(dest_dir, engine_root, pin or (None if dead else old_words[0] if old_words else None))
+        want = agy_hook_entry(dest_dir, engine_root, None if dead else old_words[0] if old_words else None)
         if not dead and _agy_entry_current(entry, want):
             return "present"
-        data[AGY_HOOK_KEY] = _restyle_entry(entry, want, bool(pin) or dead)
+        data[AGY_HOOK_KEY] = _restyle_entry(entry, want, dead)
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         return "updated"
-    data[AGY_HOOK_KEY] = agy_hook_entry(dest_dir, engine_root, pin)
+    data[AGY_HOOK_KEY] = agy_hook_entry(dest_dir, engine_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return "added" if existed else "created"
