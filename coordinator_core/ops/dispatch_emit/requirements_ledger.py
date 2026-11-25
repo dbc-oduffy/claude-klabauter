@@ -53,6 +53,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit import bug_close, external_original, review_floor, run_token
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
+from coordinator_core.ops.dispatch_emit.ledger_test_freshness import stale_tests_refusal
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.corpus_fallback import fallback_refusal
 from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER, read_em_brief, read_em_context_paths
@@ -72,6 +73,8 @@ CHAIN_PARENT_FIELD = "chain_parent"
 #: run.json key a chain parent records for the newest run that continues it, so a revise on the
 #: ask run reaches the warp run.
 CONTINUED_BY_FIELD = "continued_by"
+#: run.json key naming the walled or halted run a fresh id was minted to replace.
+SUPERSEDES_FIELD = "supersedes"
 #: run.json key: UTC second of the last explicit set of `all_of_pm_ask` (revise or emit flag); the
 #: latest one across a run's lineage is the value every run in it reads.
 ALL_OF_AT_FIELD = "all_of_pm_ask_at"
@@ -80,7 +83,7 @@ ALL_OF_AT_FIELD = "all_of_pm_ask_at"
 #: No engine reader yet: the sizing agent's validity check is the intended consumer (speculative).
 SIZING_STAMP_FIELD = "sizing_stamp"
 EARLIER_SIZINGS_FIELD = "earlier_sizings"
-#: Most `resumed_from` hops `carried_notes` follows.
+#: Most lineage hops (`resumed_from`, `chain_parent`, `supersedes`) `carried_notes` follows.
 CARRIED_HOP_CAP = 16
 LEDGER_VIEW_FILE = "requirements.md"
 ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_REVISION = "pm_verbatims", "ask", "revision"
@@ -135,6 +138,7 @@ _PARAMS = (
     Field("add_paths", "list"),
     Field("widened", "list"),
     Field("credit_chunks", "list"),
+    Field("order_rows", "list"),
     Field("owned_red", "list"),
     Field("pre_existing", "list"),
     Field("retract_note", "dict"),
@@ -143,12 +147,16 @@ _PARAMS = (
     Field("stop_after", "str"),
     Field("base_ref", "str"),
     Field("from", "str"),
+    Field("origin", "str"),
+    Field("turn", "dict"),
     Field(CLAIM_PARAM, "bool"),
     Field("halted", "dict"),
     Field("inline_review", "dict"),
     Field("ledger_verdict", "dict"),
     Field("objective_loop", "dict"),
 )
+#: `workflow.revise` `origin` value: the verbatim is the PM's own words, cited by `turn`.
+PM_ORIGIN_PARAM = "pm"
 #: Separator between a revision anchor's UTC stamp and the peer session that sent it.
 SENDER_SEP = " from "
 _SIZING_SCHEMA = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas" / "sizing-object.schema.json"
@@ -292,6 +300,34 @@ def _revision_anchor(at: str, sender: object) -> str:
     return f"{ORIGIN_REVISION}@{at}" + (SENDER_SEP + who if who else "")
 
 
+#: `retract_row` key: the EM drops any row not in `GARBAGE_PROTECTED_ORIGINS` (a revision row, engine- or
+#: EM-written: origin is the only discriminator the engine holds), of any status or claim, with no PM verbatim.
+GARBAGE_KEY = "engine_garbage"
+#: Origins `engine_garbage` never drops: the PM's words, the raw ask and its relay.
+GARBAGE_PROTECTED_ORIGINS = (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED)
+_ERROR_CODE_RE = re.compile(r'"code"\s*:\s*(-32\d{3})')
+
+
+def error_envelope_code(text: str) -> Optional[int]:
+    """The JSON-RPC error code when `text` is an error envelope (a JSON object whose `error` holds an
+    integer `code`, with or without a `"jsonrpc"` marker; or text embedding a `"jsonrpc"` object with `"error"`
+    and a `-32xxx` code), else None."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict) and isinstance(err.get("code"), int) and not isinstance(err.get("code"), bool):
+            return err["code"]
+        return None
+    if '"jsonrpc"' in text and re.search(r'"error"\s*:\s*\{', text):
+        found = _ERROR_CODE_RE.search(text)
+        if found:
+            return int(found.group(1))
+    return None
+
+
 RULING_ID_RE = re.compile(r"\bJ\d+\b")
 
 
@@ -318,13 +354,17 @@ def read_run(dir_: Path) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _write_run(dir_: Path, data: dict) -> None:
+def _write_run(dir_: Path, data: dict, *, was: Optional[str] = None) -> None:
+    """Write run.json and mirror its `sizing_rel` into the bound-run index (`halted_run.bound_runs`); `was` is the
+    sizing a rebind moved the run off."""
     from coordinator_core.atomic_replace import atomic_write_bytes
+    from coordinator_core.ops.dispatch_emit import halted_run
 
     Path(dir_).mkdir(parents=True, exist_ok=True)
     atomic_write_bytes(
         Path(dir_) / RUN_FILE, (json.dumps(data, sort_keys=True) + "\n").encode("utf-8"), preserve_mode=False
     )
+    halted_run.track_run_binding(Path(dir_), data.get("sizing_rel"), was=was)
 
 
 def _inbox(dir_: Path) -> list[dict]:
@@ -448,8 +488,58 @@ def path_tokens(text: str) -> list[str]:
     return out
 
 
-def _paths_named(repo_root: Path, notes: Iterable[str]) -> list[str]:
-    """Repo files the notes name; a token with no word character ("-", "...") is never a path."""
+class _TrackedIndex:
+    """The tracked path set, read from the git index at most once and only on first use; an unreadable
+    index is the empty set."""
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._paths: Optional[frozenset] = None
+
+    def paths(self) -> frozenset:
+        if self._paths is None:
+            from coordinator_core.git.git_state import read_index_paths
+
+            try:
+                self._paths = frozenset(read_index_paths(self._root))
+            except (OSError, ValueError):  # IndexParseError is a ValueError; no index, no suffix resolution
+                self._paths = frozenset()
+        return self._paths
+
+
+def _resolve_in_tree(
+    root: Path, token: str, tracked: "_TrackedIndex", *, new_file: bool = False,
+) -> Optional[str]:
+    """The one repo-relative file `token` names: the exact root-relative file, else the single tracked path
+    ending in `/<token>`; None for an ambiguous, unmatched or non-path-shaped token, never a guessed root path.
+    With `new_file`, a token no tracked path matches by suffix still resolves to itself when its parent
+    directory holds tracked files at the root (a file the run will create); an ambiguous token never does."""
+    from coordinator_core.ops.dispatch_emit.design_conformance import _contained_file
+
+    tok = token.strip().replace("\\", "/").removeprefix("./")
+    if not tok:
+        return None
+    found = _contained_file(root, tok)
+    if found is not None:
+        return found.relative_to(root).as_posix()
+    if tok.startswith("/") or ".." in tok.split("/") or not ("/" in tok or "." in tok):
+        return None
+    if tok in tracked.paths():
+        return tok
+    hits = [p for p in tracked.paths() if p.endswith("/" + tok)]
+    if len(hits) == 1:
+        return hits[0]
+    parent = tok.rpartition("/")[0]
+    if new_file and not hits and parent and any(p.startswith(parent + "/") for p in tracked.paths()):
+        return tok
+    return None
+
+
+def _paths_named(
+    repo_root: Path, notes: Iterable[str], *, tracked: Optional["_TrackedIndex"] = None,
+) -> list[str]:
+    """Repo files the notes name; a token with no word character ("-", "...") is never a path. With `tracked`,
+    a token that is not an existing root-relative file also resolves by a unique tracked-path suffix."""
     from coordinator_core.ops.dispatch_emit.design_conformance import _contained_file
 
     root = Path(repo_root).resolve()
@@ -458,11 +548,12 @@ def _paths_named(repo_root: Path, notes: Iterable[str]) -> list[str]:
         for token in path_tokens(note):
             if not any(ch.isalnum() or ch == "_" for ch in token):
                 continue
-            found = _contained_file(root, token)
-            if found is None:
-                continue
-            rel = found.relative_to(root).as_posix()
-            if rel not in out:
+            if tracked is not None:
+                rel = _resolve_in_tree(root, token, tracked)
+            else:
+                found = _contained_file(root, token)
+                rel = None if found is None else found.relative_to(root).as_posix()
+            if rel is not None and rel not in out:
                 out.append(rel)
     return out
 
@@ -652,15 +743,17 @@ def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> li
     except ValueError:
         marker = None
     is_halted = marker is not None and marker.get("status") == halted_run.STATUS_HALTED
-    explicit = _paths_named(root, [m.group(1) for m in _WIDEN_TO.finditer(note.replace("\\", "/"))])
-    cited = _paths_named(root, clauses)
+    tracked = _TrackedIndex(root)
+    explicit = _paths_named(root, [m.group(1) for m in _WIDEN_TO.finditer(note.replace("\\", "/"))], tracked=tracked)
+    cited = _paths_named(root, clauses, tracked=tracked)
     wanted = list(dict.fromkeys([*[p for p in cited if not _is_force_loaded(p)], *explicit]))
     if is_halted and clauses:
         correction = marker.get("self_correction")
         needs = correction.get("needs_paths") if isinstance(correction, dict) else None
         for raw in needs if isinstance(needs, list) else ():
-            if isinstance(raw, str) and raw.strip():
-                wanted.append(raw.strip().replace("\\", "/").removeprefix("./"))
+            resolved = _resolve_in_tree(root, raw, tracked, new_file=True) if isinstance(raw, str) else None
+            if resolved is not None:
+                wanted.append(resolved)
     sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
     return paths_outside_footprint(root, dir_, sizing_rel, wanted)
 
@@ -954,15 +1047,56 @@ def ruled_out_ids(rows: Sequence[Mapping]) -> tuple[str, ...]:
     return tuple(str(r.get(rr.ROW_ID)) for r in rows if _withheld_revision(r))
 
 
+def _blocking_runs(value: object) -> list[str]:
+    """The non-blank run ids of a verdict item's `blocking_run_ids` (a list, or one string)."""
+    raw = [value] if isinstance(value, str) else value if isinstance(value, (list, tuple)) else []
+    return [r.strip() for r in raw if isinstance(r, str) and r.strip()]
+
+
+def _deferral_fields(row: Mapping) -> tuple[str, str, list[str]]:
+    """`(deferrer, reason, blocking run ids)` of a `deferred` verdict item; blank or absent is `""`/`[]`."""
+    who, why = row.get(DEFERRER_KEY), row.get(DEFERRAL_REASON_KEY)
+    return (
+        " ".join(who.replace(":", " ").split()) if isinstance(who, str) else "",
+        why.strip() if isinstance(why, str) else "",
+        _blocking_runs(row.get(BLOCKING_RUNS_KEY)),
+    )
+
+
+def _deferral_ruling(deferrer: str, reason: str, blocking: Sequence[str], on: str) -> dict:
+    """The `ruling` a `deferred` verdict leaves on its register row."""
+    who = " ".join(deferrer.replace(":", " ").split())
+    return {
+        rr.RULING_SOURCE: "apm", rr.RULING_QUOTE: reason,
+        rr.RULING_REF: f"{DEFERRED_REF}:{who}:{','.join(blocking)}", rr.RULING_ON: on,
+    }
+
+
+def _deferral_reason(row: Mapping) -> Optional[str]:
+    """The open-row reason of a register row deferred by a `deferred` verdict (`_deferral_ruling`), else None."""
+    ruling = row.get(rr.ROW_RULING)
+    if row.get(rr.ROW_STATUS) != rr.STATUS_DEFERRED or not isinstance(ruling, Mapping):
+        return None
+    ref, quote = ruling.get(rr.RULING_REF), ruling.get(rr.RULING_QUOTE)
+    head, _, rest = ref.partition(":") if isinstance(ref, str) else ("", "", "")
+    if head != DEFERRED_REF:
+        return None
+    who, _, blocking = rest.partition(":")
+    return f"deferred by {who}: {quote} (blocked by {blocking})"
+
+
 def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str]) -> Ledger:
     items = []
     withheld = []
     for row in rows:
         if row.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED):
             revision = _withheld_revision(row)
+            deferral = _deferral_reason(row)
             if revision:
                 reason = "withheld by out-of-scope ruling" if revision == OUT_OF_SCOPE_REF else f"withheld by revision {revision}"
                 withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": reason})
+            elif deferral:
+                withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": deferral})
             continue
         origin, at = _origin(row.get(rr.ROW_ANCHOR))
         anchor = row.get(rr.ROW_ANCHOR)
@@ -1055,10 +1189,12 @@ def _file_key(path: Path) -> Optional[tuple[int, int]]:
 def _mutate_register(
     root: Path, sizing_rel: str, edit, *, unrelated: Sequence[Mapping] = (),
     snapshot: Optional[tuple[Sequence[Mapping], Optional[tuple[int, int]]]] = None,
+    extra_sources: Sequence[Mapping] = (),
 ) -> list[dict]:
     """Apply `edit(rows) -> rows | None` to the sizing's register under the file lock; None or an
     unchanged list writes nothing. `unrelated` entries (`{turn, reason}`) join the register's
-    `unrelated_turns` when rows were written. Returns the rows on disk afterwards.
+    `unrelated_turns` when rows were written. `extra_sources` (`{doc, ref}`) join its `sources`
+    by `doc` when absent, and alone make the write happen. Returns the rows on disk afterwards.
 
     `snapshot` is `(rows, file key)` of a register this call already parsed: when the sizing file still
     has that key and `edit` leaves those rows unchanged, nothing is read, locked or written and the
@@ -1084,9 +1220,12 @@ def _mutate_register(
         out["rows"] = rows
         listed = {e.get("turn") for e in raw.get(rr.UNRELATED_TURNS_KEY) or [] if isinstance(e, dict)}
         fresh = [e for e in unrelated if e["turn"] not in listed]
-        if new_rows is None or (new_rows == rows and not fresh):
-            return old
         sources = [s for s in raw.get(rr.SOURCES_KEY) or [] if isinstance(s, dict)]
+        held_docs = {s.get("doc") for s in sources}
+        fresh_sources = [dict(s) for s in extra_sources if s.get("doc") and s.get("doc") not in held_docs]
+        if new_rows is None or (new_rows == rows and not fresh and not fresh_sources):
+            return old
+        sources.extend(fresh_sources)
         if not any(s.get("doc") == sizing_rel for s in sources):
             sources.append({"doc": sizing_rel, "ref": "pm_verbatims, ask, workflow.revise"})
         block = {**raw, rr.SOURCES_KEY: sources, rr.ROWS_KEY: new_rows}
@@ -1248,13 +1387,14 @@ def _append_rows(
     root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turns: Optional[Mapping[int, str]] = None,
     withhold: Optional[Mapping] = None,
     plan_rows: Sequence[tuple[str, str]] = (), reuse: Optional[dict] = None, retract_row: Optional[str] = None,
-    snapshot: Optional[tuple[Sequence[Mapping], Optional[tuple[int, int]]]] = None,
+    snapshot: Optional[tuple[Sequence[Mapping], Optional[tuple[int, int]]]] = None, garbage: bool = False,
 ) -> list[dict]:
     """Append one open row per `(text, anchor)`; a PM-word or ask row already on the register
     (same verbatim text) is not added twice, a revision always is, unless `reuse` is a dict: then a
     revision whose text equals a live (open, partial or met) revision row adds nothing and
     `reuse["id"]` receives that row's id. `retract_row` (a row id) deletes that row in the same
-    write, refusing unless it is an open, unclaimed revision row. `drop_turns` (`{turn: text}`)
+    write, refusing unless it is an open, unclaimed revision row; with `garbage` it drops any row
+    whose origin is not in `GARBAGE_PROTECTED_ORIGINS`, whatever its status or claim. `drop_turns` (`{turn: text}`)
     removes the open, unclaimed rows derived from those PM turns and lists them in
     `unrelated_turns`. `withhold` (`{"ids": [...], "run_id", "verbatim"}`) defers the named rows
     with a ruling quoting the verbatim, in the same register write; it appends no row itself, and
@@ -1296,7 +1436,17 @@ def _append_rows(
                     and r.get(rr.ROW_STATUS) == rr.STATUS_OPEN and not r.get(rr.ROW_CLAIMED_BY)
                 )
             ]
-        if retract_row is not None:
+        if retract_row is not None and garbage:
+            target = by_id.get(retract_row)
+            if target is None:
+                raise MutateAbort(f"retract_row names no register row: {retract_row}")
+            if _origin(target.get(rr.ROW_ANCHOR))[0] in GARBAGE_PROTECTED_ORIGINS:
+                raise MutateAbort(
+                    f"retract_row {retract_row} is a {_origin(target.get(rr.ROW_ANCHOR))[0]} row: engine_garbage drops "
+                    "only a non-PM revision row; a PM requirement is ruled out by the PM"
+                )
+            rows = [r for r in rows if str(r.get(rr.ROW_ID)) != retract_row]
+        elif retract_row is not None:
             target = by_id.get(retract_row)
             if target is None:
                 raise MutateAbort(f"retract_row names no register row: {retract_row}")
@@ -1318,6 +1468,14 @@ def _append_rows(
             t = text.strip()
             if reuse is not None and t in live_revisions and anchor.startswith(ORIGIN_REVISION + "@"):
                 reuse["id"] = live_revisions[t]
+                continue
+            if reuse is not None and anchor == ORIGIN_PM_VERBATIMS and t in have:
+                # `workflow.revise` origin pm: the PM's words already held become the PM-origin row
+                # (a revision row of the same text is re-anchored), and that row is the one reported.
+                held_row = next(r for r in rows if str(r.get(rr.ROW_TEXT) or "").strip() == t)
+                if _origin(held_row.get(rr.ROW_ANCHOR))[0] == ORIGIN_REVISION:
+                    held_row[rr.ROW_ANCHOR] = ORIGIN_PM_VERBATIMS
+                reuse["id"] = str(held_row.get(rr.ROW_ID))
                 continue
             if not t or (method_step.split_anchor(anchor)[0] in (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED) and t in have):
                 continue
@@ -1403,28 +1561,41 @@ def _all_of_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def _predecessors(repo_root: Path, run_id: str, own: Mapping) -> list[tuple[str, dict]]:
-    """`(run id, run.json)` of the runs linked to `own` (`CHAIN_PARENT_FIELD`, `RESUMED_FROM_FIELD`
-    and the successor a chain parent records, `CARRIED_HOP_CAP` hops, cycle-safe, run.json reads
-    only); an unrecorded run is skipped."""
-    found: list[tuple[str, dict]] = []
+_ALL_OF_LINKS = (RESUMED_FROM_FIELD, CHAIN_PARENT_FIELD, SUPERSEDES_FIELD, CONTINUED_BY_FIELD)
+_NOTE_LINKS = (RESUMED_FROM_FIELD, CHAIN_PARENT_FIELD, SUPERSEDES_FIELD)
+
+
+def _linked_runs(
+    repo_root: Path, run_id: str, own: Mapping, keys: Sequence[str]
+) -> list[tuple[str, Optional[dict]]]:
+    """`(run id, run.json or None)` of the runs reachable from `own` over the `keys` link fields,
+    nearest first, `CARRIED_HOP_CAP` hops, cycle-safe. An unrecorded run (no run.json) is listed
+    with None and not followed."""
+    found: list[tuple[str, Optional[dict]]] = []
     seen = {run_id}
     frontier = [own]
     for _ in range(CARRIED_HOP_CAP):
         nxt = []
         for rec in frontier:
-            for key in (RESUMED_FROM_FIELD, CHAIN_PARENT_FIELD, CONTINUED_BY_FIELD):
+            for key in keys:
                 pid = rec.get(key)
                 if isinstance(pid, str) and safe_id(pid) and pid not in seen:
                     seen.add(pid)
                     prior = read_run(run_dir(repo_root, pid))
+                    found.append((pid, prior))
                     if prior is not None:
-                        found.append((pid, prior))
                         nxt.append(prior)
         if not nxt:
             break
         frontier = nxt
     return found
+
+
+def _predecessors(repo_root: Path, run_id: str, own: Mapping) -> list[tuple[str, dict]]:
+    """`(run id, run.json)` of the runs linked to `own` (`CHAIN_PARENT_FIELD`, `RESUMED_FROM_FIELD`,
+    `SUPERSEDES_FIELD` and the successor a chain parent records, `CARRIED_HOP_CAP` hops,
+    cycle-safe, run.json reads only); an unrecorded run is skipped."""
+    return [(pid, rec) for pid, rec in _linked_runs(repo_root, run_id, own, _ALL_OF_LINKS) if rec is not None]
 
 
 def lineage_all_of(repo_root: Path, run_id: str, own: Mapping) -> tuple[bool, str]:
@@ -1609,11 +1780,12 @@ def _write_view(
 
 def start(
     repo_root: Path, run_id: str, *, all_of_pm_ask: bool = False, resumed_from: Optional[str] = None,
-    session_id: Optional[str] = None, chain_parent: Optional[str] = None,
+    session_id: Optional[str] = None, chain_parent: Optional[str] = None, supersedes: Optional[str] = None,
 ) -> Path:
     """Make the run ledger-bearing (emit time). Returns the run dir. `resumed_from` names the halted
     run this one resumes; omitted, a rebound run keeps the link its run.json already carries.
-    `chain_parent` names the ask run this one continues. `all_of_pm_ask` true is an explicit set
+    `chain_parent` names the ask run this one continues; `supersedes` the walled or halted run this
+    fresh id replaces (its all_of_pm_ask and notes are read through the link). `all_of_pm_ask` true is an explicit set
     stamped now; the run otherwise reads its lineage's value (`lineage_all_of`).
     `session_id` is the submitting caller, recorded on the minted stage (`write_run_stage_at`).
 
@@ -1641,6 +1813,12 @@ def start(
         data[RESUMED_FROM_FIELD] = resumed_from
     elif isinstance(prior.get(RESUMED_FROM_FIELD), str):
         data[RESUMED_FROM_FIELD] = prior[RESUMED_FROM_FIELD]
+    if supersedes is not None:
+        if not safe_id(supersedes) or supersedes == run_id:
+            raise LedgerRefused(f"supersedes {supersedes!r} is not a safe run id distinct from {run_id!r}")
+        data[SUPERSEDES_FIELD] = supersedes
+    elif isinstance(prior.get(SUPERSEDES_FIELD), str):
+        data[SUPERSEDES_FIELD] = prior[SUPERSEDES_FIELD]
     own = {**data, "all_of_pm_ask": bool(prior.get("all_of_pm_ask"))}
     if all_of_pm_ask:
         own["all_of_pm_ask"], own[ALL_OF_AT_FIELD] = True, _all_of_stamp()
@@ -1667,20 +1845,13 @@ def _note_entries(dir_: Path, run_id: str) -> list[dict]:
 
 
 def carried_notes(repo_root: Path, run_id: str) -> list[dict]:
-    """`{id, note, at, run, retracted}` entries of this run's `NOTES_FILE` and of its `resumed_from`
-    chain (each predecessor's `resumed_from`, cycle-safe, at most `CARRIED_HOP_CAP` hops),
-    retracted ones included, oldest first, de-duplicated on (note, at)."""
+    """`{id, note, at, run, retracted}` entries of this run's `NOTES_FILE` and of the runs it links to
+    (`resumed_from`, `chain_parent` and `supersedes`, followed transitively, cycle-safe, at most
+    `CARRIED_HOP_CAP` hops), retracted ones included, oldest first, de-duplicated on (note, at)."""
     own_dir = run_dir(repo_root, run_id)
     entries = _note_entries(own_dir, run_id)
-    visited = {run_id}
-    cur_dir = own_dir
-    for _ in range(CARRIED_HOP_CAP):
-        prev = (read_run(cur_dir) or {}).get(RESUMED_FROM_FIELD)
-        if not (isinstance(prev, str) and safe_id(prev)) or prev in visited:
-            break
-        visited.add(prev)
-        cur_dir = run_dir(repo_root, prev)
-        entries = _note_entries(cur_dir, prev) + entries
+    for pid, _rec in _linked_runs(repo_root, run_id, read_run(own_dir) or {}, _NOTE_LINKS):
+        entries = _note_entries(run_dir(repo_root, pid), pid) + entries
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
     for e in sorted(entries, key=lambda e: e["at"]):
@@ -1689,6 +1860,155 @@ def carried_notes(repo_root: Path, run_id: str) -> list[dict]:
             seen.add(key)
             out.append(e)
     return out
+
+
+_ANCHOR_TURN = re.compile(r"\bturn (\d+)\b")
+
+
+def _register_claims(root: Path, run_id: str) -> Optional[dict]:
+    """What the run's bound sizing holds of the PM's register: `{rel, verbatims [(label, turn, text)],
+    rows, sources, unrelated (turns), texts (normalised row and PM-word texts), docs}`; None when
+    the run is unbound or its sizing cannot be read."""
+    import yaml
+
+    run = read_run(run_dir(root, run_id)) or {}
+    rel = run.get("sizing_rel")
+    if not (isinstance(rel, str) and rel):
+        return None
+    try:
+        text = _sizing_path(root, rel).read_text(encoding="utf-8")
+        sizing = _yaml_safe_load(text)
+    except (OSError, LedgerRefused, yaml.YAMLError):
+        return None
+    sizing = sizing if isinstance(sizing, dict) else {}
+    register = rr.read_register(text)
+    raw = register.raw if register is not None else {}
+    rows = [r for r in (register.rows if register is not None else []) if isinstance(r, dict)]
+    sources = [s for s in raw.get(rr.SOURCES_KEY) or [] if isinstance(s, dict) and s.get("doc")]
+    unrelated = {e.get("turn") for e in raw.get(rr.UNRELATED_TURNS_KEY) or [] if isinstance(e, dict)}
+    verbatims: list[tuple[str, Optional[int], str]] = []
+    for item in sizing.get("pm_verbatims") or []:
+        words = item.get("text") if isinstance(item, Mapping) else None
+        if isinstance(words, str) and words.strip():
+            turn = _int_turn(item.get("turn"))
+            verbatims.append((f"pm_verbatims turn {turn}" if turn is not None else ORIGIN_PM_VERBATIMS, turn, words.strip()))
+    if not verbatims:
+        verbatims = [(ORIGIN_PM_VERBATIMS, None, words) for words in pm_words(sizing)]
+    return {
+        "rel": rel, "verbatims": verbatims, "rows": rows, "sources": sources, "unrelated": unrelated,
+        "texts": {_norm(r.get(rr.ROW_TEXT) or "") for r in rows} | {_norm(w) for _, _, w in verbatims},
+        "docs": {s["doc"] for s in sources},
+    }
+
+
+def _row_turn(row: Mapping) -> Optional[int]:
+    found = _ANCHOR_TURN.search(str(row.get(rr.ROW_ANCHOR) or ""))
+    return int(found.group(1)) if found else None
+
+
+def _owed_from(pred: Mapping, succ: Mapping) -> tuple[list[tuple[str, Optional[int], str]], list[dict], list[dict]]:
+    """The `(verbatims, rows, sources)` of `pred` that `succ` lacks, compared by normalised text (rows
+    and PM words) or doc. A turn either register lists as unrelated is no one's words to carry."""
+    skip = pred["unrelated"] | succ["unrelated"]
+    held = set(succ["texts"])
+    waived = {_norm(words) for _, turn, words in pred["verbatims"] if turn in skip}
+    rows: list[dict] = []
+    for row in pred["rows"]:
+        key = _norm(row.get(rr.ROW_TEXT) or "")
+        if key and key not in held and key not in waived and _row_turn(row) not in skip:
+            held.add(key)
+            rows.append(row)
+    verbatims = []
+    for label, turn, words in pred["verbatims"]:
+        key = _norm(words)
+        if key not in held and turn not in skip:
+            held.add(key)
+            verbatims.append((label, turn, words))
+    sources = [s for s in pred["sources"] if s["doc"] not in succ["docs"]]
+    return verbatims, rows, sources
+
+
+def _carry_register(root: Path, from_run: str, to_run: str) -> tuple[list[str], Optional[list[dict]]]:
+    """`carry_register` plus the register rows on disk afterwards (None when no register was written)."""
+    if not (safe_id(from_run) and safe_id(to_run)) or from_run == to_run:
+        return [], None
+    dest = run_dir(root, to_run)
+    run = read_run(dest)
+    if run is None:
+        return [], None
+    copied: list[str] = []
+    on_disk: Optional[list[dict]] = None
+    if not any(run.get(k) == from_run for k in _ALL_OF_LINKS):
+        if not isinstance(run.get(SUPERSEDES_FIELD), str):
+            _write_run(dest, {**run, SUPERSEDES_FIELD: from_run})
+        else:  # SUPERSEDES_FIELD is one id: a further source hands its flag over by value
+            source = read_run(run_dir(root, from_run)) or {}
+            src_value, src_at = lineage_all_of(root, from_run, source)
+            value, at = _latest_all_of([run, {"all_of_pm_ask": src_value, ALL_OF_AT_FIELD: src_at}])
+            if value != bool(run.get("all_of_pm_ask")) or (at and run.get(ALL_OF_AT_FIELD) != at):
+                _write_run(dest, {**run, "all_of_pm_ask": value, **({ALL_OF_AT_FIELD: at} if at else {})})
+    pred, succ = _register_claims(root, from_run), _register_claims(root, to_run)
+    if pred is not None and succ is not None:
+        verbatims, owed_rows, owed_sources = _owed_from(pred, succ)
+
+        def edit(rows: list[dict]) -> list[dict]:
+            used = {str(r.get(rr.ROW_ID)) for r in rows}
+            have = {_norm(r.get(rr.ROW_TEXT) or "") for r in rows}
+            made: list[dict] = []
+            for row in owed_rows:
+                made.append({**row, rr.ROW_CLAIMED_BY: []})
+            for label, turn, words in verbatims:
+                made.append({
+                    rr.ROW_TEXT: words, rr.ROW_ANCHOR: label, rr.ROW_SURFACE: ROW_SURFACE,
+                    rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
+                })
+            out = list(rows)
+            copied.clear()
+            for row in made:
+                if _norm(row[rr.ROW_TEXT]) in have:
+                    continue
+                have.add(_norm(row[rr.ROW_TEXT]))
+                new_id = _next_id(out, used)
+                used.add(new_id)
+                out.append({**row, rr.ROW_ID: new_id})
+                copied.append(new_id)
+            return out
+
+        if owed_rows or verbatims or owed_sources:
+            on_disk = _mutate_register(root, succ["rel"], edit, extra_sources=owed_sources)
+            copied.extend(f"source:{s['doc']}" for s in owed_sources)
+    moved = carry_notes(root, [from_run], to_run)
+    copied.extend(str(e["id"]) for e in moved)
+    _write_view(root, dest, to_run, on_disk)
+    return copied, on_disk
+
+
+def carry_register(repo_root: Path, from_run: str, to_run: str) -> list[str]:
+    """Copy the PM's register of `from_run` onto `to_run`'s bound sizing: every `pm_verbatims` turn, register
+    row and `sources` doc it lacks (by normalised text, or doc), and the live notes `to_run` does not
+    already read through its lineage; links `to_run` to `from_run` (`SUPERSEDES_FIELD`) when no link names it,
+    so all_of_pm_ask resolves across. A run without a bound sizing copies notes only. Returns what was
+    copied: new row ids, `source:<doc>`, note ids. Idempotent."""
+    return _carry_register(Path(repo_root), from_run, to_run)[0]
+
+
+def register_shrinks(repo_root: Path, from_run: str, to_run: str) -> list[str]:
+    """What `from_run`'s register holds that `to_run`'s lacks, as `pm_verbatims turn <n>`, row ids of
+    `from_run` and `source <doc>`; [] when either run has no readable bound sizing (nothing to compare).
+    Run it after `carry_register`: a mint is shrinking only when this is non-empty then."""
+    root = Path(repo_root)
+    if not (safe_id(from_run) and safe_id(to_run)) or from_run == to_run:
+        return []
+    pred, succ = _register_claims(root, from_run), _register_claims(root, to_run)
+    if pred is None or succ is None:
+        return []
+    verbatims, rows, sources = _owed_from(pred, succ)
+    held = {_norm(w) for _, _, w in verbatims}
+    return [
+        *(label for label, _, _ in verbatims),
+        *(str(r.get(rr.ROW_ID)) for r in rows if _norm(r.get(rr.ROW_TEXT) or "") not in held),
+        *(f"source {s['doc']}" for s in sources),
+    ]
 
 
 def _seedable_words(sizing: Mapping, foreign: Mapping[int, str]) -> list[str]:
@@ -1900,7 +2220,10 @@ def bind(
             fresh = asked and text.strip() not in held
             entries.append((text, f"{ORIGIN_REVISION}@{_now()}" if fresh else origin))
     queued = _inbox(dir_)
-    entries.extend((e["text"], _revision_anchor(str(e.get("at") or _now()), e.get("from"))) for e in queued)
+    entries.extend(
+        (e["text"], ORIGIN_PM_VERBATIMS if e.get("origin") == PM_ORIGIN_PARAM else _revision_anchor(str(e.get("at") or _now()), e.get("from")))
+        for e in queued
+    )
     on_disk: Optional[list[dict]] = None
     if entries or foreign or plan_rows:
         parsed_rows = _parsed_register_rows(register)
@@ -1915,7 +2238,10 @@ def bind(
         updated = {**run, "sizing_rel": sizing_rel, SIZING_STAMP_FIELD: stamp}
         if rebinding:
             updated[EARLIER_SIZINGS_FIELD] = _earlier_with(run, bound, drop=sizing_rel)
-        _write_run(dir_, updated)
+        _write_run(dir_, updated, was=bound if rebinding else None)
+        superseded = run.get(SUPERSEDES_FIELD)
+        if isinstance(superseded, str) and safe_id(superseded):
+            on_disk = _carry_register(root, superseded, run_id)[1] or on_disk
     if queued:
         (dir_ / INBOX_FILE).unlink(missing_ok=True)
     return _write_view(root, dir_, run_id, on_disk if on_disk is not None else _parsed_register_rows(register))
@@ -1985,10 +2311,13 @@ def revise(
     outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
     claim: bool = False, owned_red: Sequence = (), pre_existing: Sequence = (), add_paths: Sequence = (), retract_row: Optional[dict] = None,
     widened: Sequence = (), accept_partial: Sequence = (), ledger_verdict: Optional[dict] = None,
-    base_ref: Optional[str] = None,
+    base_ref: Optional[str] = None, order_rows: Optional[Sequence] = None,
+    origin: Optional[str] = None, turn: Optional[Mapping] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
-    run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
+    run's sizing is bound, else a queued revision `bind` folds in. `origin="pm"` with a cited `turn`
+    (`{session, ts}`) re-carries the PM's own words: the row (or queued revision) is PM-origin
+    (`pm_verbatims`), never a `revision` row; `origin` pm without a `verbatim` and a turn refuses. `note` is free text that is
     not a requirement: it is persisted to `NOTES_FILE` and adds no row or queued revision. Any non-empty `verbatim`
     is a requirement and always adds a row: free text belongs in `note`. `out_of_scope` ids are deferred
     in the same register write as the revision row, the verbatim being their ruling; it needs that
@@ -2017,6 +2346,9 @@ def revise(
     `credit_chunks` (`[{chunk, evidence}]`, `run_credit.validate` before any write) marks stranded
     chunks complete: recorded to the run's `credit.jsonl`, same preconditions and effects as
     `withhold_paths`; the re-fired terminal commit re-grades the named chunks.
+    `order_rows` (chunk ids, `run_order.validate` before any write; each must be a row of the bound
+    plan's spine, else it refuses) rules which rows a refire schedules first: recorded to the run's
+    `order.jsonl`, same preconditions and effects as `credit_chunks`; `[]` clears the order.
     `build_only=True` rules the research half done or abandoned: it removes the bound sizing's `research`
     block (`_research_sizing.drop_research_block`) so the ask gate stops reading it as a research sizing.
     It needs an emitted run bound to a sizing (else it refuses and writes nothing), adds no row, and
@@ -2037,13 +2369,19 @@ def revise(
     entry, mints nothing and returns that row's id. `retract_row` (`{row_id, reason}`) deletes one
     open, unclaimed revision row of the bound sizing's register (not claimed by a plan either),
     adds no row, refuses otherwise with nothing written, and alone satisfies the non-empty
-    precondition; the same verbatim sent afterwards mints a fresh row.
+    precondition; the same verbatim sent afterwards mints a fresh row. `retract_row.engine_garbage=true`
+    (the EM's drop of an engine-written row, reason required, no PM verbatim) deletes the row whatever
+    its status or claim, but never a `GARBAGE_PROTECTED_ORIGINS` row (PM, ask or relayed words).
+    A `verbatim` that is a JSON-RPC error envelope (`error_envelope_code`) refuses before any write.
     `claim=True` records a ruling as work: it needs a non-empty `verbatim` (the row it mints), an
     emitted run bound to a sizing, and a sizing whose `plan:` edge names a plan whose
     `register_claims.sizing` is that sizing, else it refuses with nothing written. After the row is
     minted it appends the id to the plan's `register_claims.rows` with its pin (an id already
     claimed is left as is) and adds the id to `ruled` on the plan's ledger-halt pointer when one
     exists. `outcome["claimed"]` receives `[id]`. It cannot combine with `out_of_scope`, which adds no row.
+    A `verbatim` naming live plan-spine rows by id (`C2 must also ...`) binds its minted row to them: the id
+    joins those rows' `register_rows` and the plan's `register_claims.rows` (`_bind_to_named_rows`), and
+    `outcome["claimed"]` receives `[id]`; a plan that cannot take the claim leaves the row unclaimed.
     Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
     named = [str(i) for i in out_of_scope]
@@ -2072,6 +2410,14 @@ def revise(
             credit_entries = run_credit.validate(credit_chunks)
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
+    order_entries: Optional[list[str]] = None
+    if order_rows is not None:
+        from coordinator_core.ops.dispatch_emit import run_order
+
+        try:
+            order_entries = run_order.validate(order_rows)
+        except ValueError as exc:
+            raise LedgerRefused(str(exc)) from exc
     red_entries: list[dict] = []
     if owned_red:
         try:
@@ -2093,6 +2439,7 @@ def revise(
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
     row_retraction: Optional[str] = None
+    row_garbage = False
     if retract_row is not None:
         rid = retract_row.get("row_id") if isinstance(retract_row, dict) else None
         why = retract_row.get("reason") if isinstance(retract_row, dict) else None
@@ -2103,6 +2450,15 @@ def revise(
         if text or named:
             raise LedgerRefused("retract_row cannot combine with verbatim or out_of_scope")
         row_retraction = rid.strip()
+        garbage_flag = retract_row.get(GARBAGE_KEY)
+        if garbage_flag is not None and not isinstance(garbage_flag, bool):
+            raise LedgerRefused(f"retract_row.{GARBAGE_KEY} must be a boolean")
+        row_garbage = bool(garbage_flag)
+    if text and (envelope := error_envelope_code(text)) is not None:
+        raise LedgerRefused(
+            f"verbatim is a JSON-RPC error payload (code {envelope}), not a requirement: nothing recorded. "
+            "Fix the failed call and resend the words, or send the text as `note`"
+        )
     if stop_after is not None and stop_after != STOP_AFTER_PLAN:
         raise LedgerRefused(f"stop_after takes only {STOP_AFTER_PLAN!r}, got {stop_after!r}")
     if base_ref is not None and (not isinstance(base_ref, str) or not base_ref.strip() or base_ref != base_ref.strip() or any(c.isspace() for c in base_ref)):
@@ -2110,14 +2466,28 @@ def revise(
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
         and not accept_entries and not red_entries and not pre_entries and not build_only and stop_after is None and retraction is None and not add_paths
-        and not widened and row_retraction is None and not ledger_verdict and base_ref is None
+        and not widened and row_retraction is None and not ledger_verdict and base_ref is None and order_entries is None
     ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
-            "accept_partial, credit_chunks, retract_note, retract_row, build_only, stop_after, base_ref, ledger_verdict, or a combination"
+            "accept_partial, credit_chunks, order_rows, retract_note, retract_row, build_only, stop_after, base_ref, ledger_verdict, or a combination"
         )
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
+    if origin is not None and origin != PM_ORIGIN_PARAM:
+        raise LedgerRefused(f"origin takes only {PM_ORIGIN_PARAM!r}, got {origin!r}")
+    if turn is not None and origin is None:
+        raise LedgerRefused(f"turn is the citation of origin {PM_ORIGIN_PARAM!r}: send both or neither")
+    if origin is not None:
+        if not text:
+            raise LedgerRefused(f"origin {PM_ORIGIN_PARAM!r} needs a non-empty verbatim: the PM's words are the row")
+        if named:
+            raise LedgerRefused(f"origin {PM_ORIGIN_PARAM!r} cannot combine with out_of_scope: a ruling out adds no row")
+        if not (
+            isinstance(turn, Mapping)
+            and all(isinstance(turn.get(k), str) and turn[k].strip() for k in ("session", "ts"))
+        ):
+            raise LedgerRefused(f"origin {PM_ORIGIN_PARAM!r} needs a cited turn {{session, ts}}: the PM's words carry their turn")
     if len(text.encode("utf-8")) > VERBATIM_BYTE_CAP:
         raise LedgerRefused(f"verbatim exceeds {VERBATIM_BYTE_CAP} bytes")
     root = Path(repo_root)
@@ -2126,7 +2496,7 @@ def revise(
     verbatim_only = not (
         named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
         or stop_after or retraction is not None or row_retraction is not None or claim or accept_entries
-        or add_paths or widened or ledger_verdict or base_ref
+        or add_paths or widened or ledger_verdict or base_ref or order_entries is not None
     )
     if (
         (text or has_note) and str(run_id).startswith("ask-")
@@ -2138,7 +2508,7 @@ def revise(
         if isinstance(warp, str) and warp and warp != run_id and read_run(run_dir(root, warp)) is not None:
             if outcome is not None:
                 outcome["executing_run"] = warp
-            return revise(root, warp, verbatim=verbatim, note=note, sender=sender, outcome=outcome)
+            return revise(root, warp, verbatim=verbatim, note=note, sender=sender, outcome=outcome, origin=origin, turn=turn)
     if (
         run is not None and isinstance(run.get("sizing_rel"), str) and (text or has_note)
         and verbatim_only
@@ -2150,7 +2520,7 @@ def revise(
         if executing is not None:
             if outcome is not None:
                 outcome["executing_run"] = executing
-            return revise(root, executing, verbatim=verbatim, note=note, sender=sender, outcome=outcome)
+            return revise(root, executing, verbatim=verbatim, note=note, sender=sender, outcome=outcome, origin=origin, turn=turn)
     _refuse_additions(root, dir_, run_id, run, add_paths, outcome)
     if widened and run is not None:
         _stamp_widened_rows(root, dir_, run_id, run, widened, outcome)
@@ -2168,11 +2538,11 @@ def revise(
                 raise LedgerRefused(f"research pipeline run {run_id!r} is finished: revision not delivered")
             if (
                 named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
-                or stop_after or retraction is not None or claim or accept_entries or base_ref
+                or stop_after or retraction is not None or claim or accept_entries or base_ref or order_entries is not None
             ):
                 raise LedgerRefused(
                     f"{run_id!r} is a research pipeline run: it takes only a verbatim or note revision, "
-                    "not out_of_scope, all_of_pm_ask, withhold_paths, credit_chunks, build_only, stop_after, base_ref, "
+                    "not out_of_scope, all_of_pm_ask, withhold_paths, credit_chunks, order_rows, build_only, stop_after, base_ref, "
                     "retract_note or claim"
                 )
             try:
@@ -2210,11 +2580,11 @@ def revise(
         if blitz_script is not None and blitz_revisions is not None:
             if (
                 named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
-                or stop_after or retraction is not None or claim or accept_entries or base_ref
+                or stop_after or retraction is not None or claim or accept_entries or base_ref or order_entries is not None
             ):
                 raise LedgerRefused(
                     f"{run_id!r} is a bug-blitz run: it takes only a verbatim or note revision, "
-                    "not out_of_scope, all_of_pm_ask, withhold_paths, credit_chunks, build_only, stop_after, base_ref, "
+                    "not out_of_scope, all_of_pm_ask, withhold_paths, credit_chunks, order_rows, build_only, stop_after, base_ref, "
                     "retract_note or claim"
                 )
             try:
@@ -2245,6 +2615,7 @@ def revise(
         if (
             named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
             or stop_after or retraction is not None or row_retraction is not None or accept_entries or base_ref
+            or order_entries is not None
         ):
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
@@ -2293,6 +2664,18 @@ def revise(
             raise LedgerRefused(
                 f"note {retraction['note_id']} of run {run_id!r} was already retracted at {held['retracted']['at']}"
             )
+    if order_entries:
+        spine = {str(r.get("id")) for r in _plan_rows(root, run.get("sizing_rel")) if isinstance(r, Mapping)}
+        absent = [c for c in order_entries if c not in spine]
+        if absent and len(absent) == len(order_entries):
+            raise LedgerRefused(
+                f"order_rows names {', '.join(absent)}: not a row of the run's plan spine"
+                + ("" if spine else " (the run's sizing names no readable plan spine)")
+            )
+        if absent:
+            order_entries = [c for c in order_entries if c in spine]
+            if outcome is not None:
+                outcome["order_refused"] = absent
     if stop_after and (dir_ / "manifest.json").exists():
         raise LedgerRefused(f"the run has staged; stop_after={STOP_AFTER_PLAN} can no longer park it")
     if withheld_entries:
@@ -2317,7 +2700,7 @@ def revise(
         if not run.get("sizing_rel"):
             raise LedgerRefused("retract_row needs a run bound to a sizing: a queued revision holds no row yet")
         _, plan_path, _ = _sizing_plan(root, run["sizing_rel"])
-        if plan_path is not None:
+        if plan_path is not None and not row_garbage:
             from coordinator_core.ops.dispatch_emit import revise_absorb
 
             plan_text = plan_path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
@@ -2389,6 +2772,10 @@ def revise(
         run_accept_partial.record(dir_, accept_entries, _now())
     if credit_entries:
         run_credit.record(dir_, credit_entries, _now())
+    if order_entries is not None:
+        from coordinator_core.ops.dispatch_emit import run_order
+
+        run_order.record(dir_, order_entries, _now())
     if red_entries:
         from coordinator_core.atomic_append import append_line
 
@@ -2403,7 +2790,9 @@ def revise(
             append_line(dir_ / PRE_EXISTING_FILE, (json.dumps({**e, "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"))
         declare_write(dir_ / PRE_EXISTING_FILE)
     if row_retraction is not None:
-        _append_rows(root, run["sizing_rel"], [], retract_row=row_retraction)
+        _append_rows(root, run["sizing_rel"], [], retract_row=row_retraction, garbage=row_garbage)
+        if row_garbage:
+            _release_garbage_claim(root, run["sizing_rel"], row_retraction)
     if named:
         _append_rows(root, run["sizing_rel"], [], withhold=withhold)
     elif text:
@@ -2411,20 +2800,23 @@ def revise(
         if run.get("sizing_rel"):
             reused: dict = {}
             rows = _append_rows(
-                root, run["sizing_rel"], [(text, _revision_anchor(at, sender))], withhold=withhold, reuse=reused,
+                root, run["sizing_rel"], [(text, ORIGIN_PM_VERBATIMS if origin else _revision_anchor(at, sender))],
+                withhold=withhold, reuse=reused,
             )
             added = reused.get("id") or (str(rows[-1].get(rr.ROW_ID)) if rows else None)
             if claim_plan is not None and added:
                 _claim_ruling(root, run["sizing_rel"], claim_plan, run_id, added)
                 if outcome is not None:
                     outcome["claimed"] = [added]
+            if added:
+                _bind_to_named_rows(root, run["sizing_rel"], claim_plan, run_id, added, text, outcome)
         else:
             from coordinator_core.atomic_append import append_line
 
             who = _clean_sender(sender)
             queued_at = next((n for n, e in enumerate(_inbox(dir_)) if e["text"].strip() == text), None)
             if queued_at is None:
-                entry = {"text": text, "at": at, **({"from": who} if who else {})}
+                entry = {"text": text, "at": at, **({"from": who} if who else {}), **({"origin": origin, "turn": dict(turn)} if origin else {})}
                 append_line(dir_ / INBOX_FILE, (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
                 declare_write(dir_ / INBOX_FILE)
                 queued_at = len(_inbox(dir_)) - 1
@@ -2449,9 +2841,47 @@ def _claiming_plan(root: Path, sizing_rel: str) -> tuple[str, Path]:
     return edge, plan
 
 
-def _claim_ruling(root: Path, sizing_rel: str, plan: tuple[str, Path], run_id: str, row_id: str) -> None:
-    """Claim the freshly minted `row_id` on `plan` (rows + pin, one `locked_rmw`, CRLF kept) and add
-    it to `ruled` on the plan's ledger-halt pointer. A failure names the minted row so
+def _bind_to_named_rows(
+    root: Path, sizing_rel: str, claim_plan: Optional[tuple[str, Path]], run_id: str, row_id: str, text: str,
+    outcome: Optional[dict],
+) -> None:
+    """Bind the minted `row_id` to the live plan-spine rows `text` names by id: it joins their
+    `register_rows` and the plan's `register_claims.rows`, so no row of the revision stays unclaimed.
+    Best effort: a plan that cannot take the claim leaves the row unclaimed and the reply's
+    `unclaimed_rows` warning stands and `outcome["claim_stranded"]` makes the reply's warning name the
+    stranded row; nothing is refused. `outcome["claimed"]` receives `[row_id]`."""
+    named = [
+        r for r in _plan_rows(root, sizing_rel)
+        if isinstance(r, Mapping) and r.get("id") and r.get("disposition") not in rr._NON_CLAIMING_DISPOSITIONS
+        and re.search(rf"(?<![\w-]){re.escape(str(r['id']))}(?![\w-])", text)
+    ]
+    if not named:
+        return
+    from coordinator_core.ops import plan_tasks_mutate
+
+    try:
+        plan = claim_plan or _claiming_plan(root, sizing_rel)
+        updates = [
+            {"id": str(r["id"]), "register_rows": [*(r.get("register_rows") or []), row_id]}
+            for r in named if row_id not in (r.get("register_rows") or [])
+        ]
+        if updates and not plan_tasks_mutate._stamp(plan[0], updates, root, root).get("applied"):
+            return
+        if claim_plan is None:
+            _claim_ruling(root, sizing_rel, plan, run_id, row_id, ruled=False)
+    except (LedgerRefused, OSError) as exc:
+        if outcome is not None:
+            outcome["claim_stranded"] = str(exc) if row_id in str(exc) else f"row {row_id} was minted but not claimed: {exc}"
+        return
+    if outcome is not None:
+        outcome["claimed"] = [row_id]
+
+
+def _claim_ruling(
+    root: Path, sizing_rel: str, plan: tuple[str, Path], run_id: str, row_id: str, ruled: bool = True,
+) -> None:
+    """Claim the freshly minted `row_id` on `plan` (rows + pin, one `locked_rmw`, CRLF kept) and, when
+    `ruled`, add it to `ruled` on the plan's ledger-halt pointer. A failure names the minted row so
     `plan.claim_register_rows` can finish the claim."""
     import dataclasses
 
@@ -2483,11 +2913,88 @@ def _claim_ruling(root: Path, sizing_rel: str, plan: tuple[str, Path], run_id: s
     except (OSError, LockTimeout, MutateAbort) as exc:
         raise LedgerRefused(f"{exc}; {stranded}") from exc
     declare_write(plan_path)
+    if not ruled:
+        return
     pointer = ledger_halt_path(root, plan_rel)
     halt = read_ledger_halt(pointer)
     if halt is not None and halt.halted == LEDGER_HALT_KIND and halt.sizing_rel == sizing_rel and row_id not in halt.ruled:
         write_ledger_halt(pointer, dataclasses.replace(halt, ruled=(*halt.ruled, row_id)))
         declare_write(pointer)
+
+
+def _release_rows_text(plan_text: str, row_id: str, register: rr.Register) -> str:
+    """`plan_text` with `row_id` removed from `register_claims.rows` (one flow-style line) and the
+    pins recomputed; the text unchanged when the plan does not claim it."""
+    import yaml
+
+    from coordinator_core.ops.dispatch_emit import revise_absorb
+
+    nl = "\r\n" if "\r\n" in plan_text else "\n"
+    lines = plan_text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        raise ValueError("plan has no frontmatter")
+    fm_end = next((i for i in range(1, len(lines)) if lines[i].rstrip("\r\n") == "---"), None)
+    if fm_end is None:
+        raise ValueError("plan frontmatter is not closed")
+    claims = (yaml.safe_load("".join(lines[1:fm_end])) or {}).get("register_claims")
+    if not isinstance(claims, dict):
+        return plan_text
+    current = [str(i) for i in (claims.get(rr.ROWS_KEY) or [])]
+    if row_id not in current:
+        return plan_text
+    head = next(
+        (i for i in range(1, fm_end) if re.match(r"register_claims:\s*(#.*)?$", lines[i].rstrip("\r\n"))), None
+    )
+    if head is None:
+        raise ValueError("register_claims is not a block mapping")
+    claims_end = rr._sub_block_end(lines, head, fm_end)
+    child = next((rr._indent_of(lines[i]) for i in range(head + 1, claims_end) if lines[i].strip()), 2)
+    key_re = re.compile(r"^ {%d}rows:" % child)
+    at = next((i for i in range(head + 1, claims_end) if key_re.match(lines[i])), None)
+    if at is None:
+        raise ValueError("register_claims carries no rows key")
+    kept = [i for i in current if i != row_id]
+    lines[at:rr._sub_block_end(lines, at, claims_end)] = [f"{' ' * child}{rr.ROWS_KEY}: {json.dumps(kept)}{nl}"]
+    new_text, _ = rr.repin_plan_text("".join(lines), register)
+    return new_text
+
+
+def _release_garbage_claim(root: Path, sizing_rel: str, row_id: str) -> None:
+    """Strip the dropped `row_id` from the sizing plan's `register_claims.rows` and pins and from every
+    spine row's `register_rows`, so the plan names no dead register row. A plan that cannot take the
+    release refuses, naming the dropped row."""
+    from coordinator_core.locked_write import LockTimeout, locked_rmw
+    from coordinator_core.ops import plan_tasks_mutate
+
+    plan_rel, plan_path, _ = _sizing_plan(root, sizing_rel)
+    if plan_path is None or plan_rel is None:
+        return
+    stranded = f"row {row_id} was dropped but {plan_rel} still names it: remove it from register_claims.rows"
+    try:
+        register = rr.read_register(_sizing_path(root, sizing_rel).read_text(encoding="utf-8"))
+        if register is None:
+            return
+        crlf = b"\r\n" in plan_path.read_bytes()
+
+        def mutate(old_text: str) -> str:
+            try:
+                new_text = _release_rows_text(old_text.replace("\r\n", "\n"), row_id, register)
+            except ValueError as exc:
+                raise MutateAbort(str(exc)) from exc
+            return new_text.replace("\n", "\r\n") if crlf else new_text
+
+        locked_rmw(plan_path, mutate, repo_root=root)
+        updates = [
+            {"id": str(r["id"]), "register_rows": [i for i in r["register_rows"] if i != row_id]}
+            for r in _plan_rows(root, sizing_rel)
+            if isinstance(r, Mapping) and r.get("id") and isinstance(r.get("register_rows"), list)
+            and row_id in r["register_rows"]
+        ]
+        if updates:
+            plan_tasks_mutate._stamp(plan_rel, updates, root, root)
+    except (OSError, LockTimeout, MutateAbort) as exc:
+        raise LedgerRefused(f"{exc}; {stranded}") from exc
+    declare_write(plan_path)
 
 
 def normalize_verdict(verdict: object) -> object:
@@ -2580,6 +3087,23 @@ def _criterion_credited(plan_text: Optional[str]) -> frozenset[str]:
     return frozenset(claimed) | frozenset(rr.spine_claimants(spine))
 
 
+def _spine_writes(plan_text: str, item_id: str, all_rows: bool) -> list[str]:
+    """`writes` of the live spine rows claiming `item_id` through `register_rows`; every live row's
+    when `all_rows` (a criterion-credited item). A wont_do/backlogged/spun_off row is not live."""
+    spine = _spine_rows(plan_text.replace("\r\n", "\n")) or []
+    out: list[str] = []
+    for srow in spine:
+        if not isinstance(srow, Mapping) or srow.get("disposition") in rr._NON_CLAIMING_DISPOSITIONS:
+            continue
+        claimed = srow.get("register_rows")
+        if not all_rows and not (isinstance(claimed, (list, tuple)) and item_id in map(str, claimed)):
+            continue
+        writes = srow.get("writes")
+        if isinstance(writes, (list, tuple)):
+            out.extend(str(w) for w in writes if isinstance(w, str) and w)
+    return out
+
+
 class AfterPublishCommand(str):
     """An owed em-performed row's detail: `judge` lists the row it withholds open as
     `owed-after-publish <id>` where a plain operator command reads `awaiting_operator <id>`."""
@@ -2647,7 +3171,9 @@ def judge(
     `all_of_pm_ask` is set or the row is essential (the default), else it passes listed open as
     `non-essential`; `post_commit` passes only when
     `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS` (commit, sha_reply,
-    sha_memo, baton_archive, plan_implemented, bug_close).
+    sha_memo, baton_archive, plan_implemented, bug_close); `deferred` passes only with non-blank
+    `deferred_by`, `deferral_reason` and `blocking_run_ids` (a list or one string), listed open as
+    `deferred: True`; a design row never defers.
 
     A register row the verdict omits is judged as the `criterion` item when that item is `met` and
     `plan_text` maps the row (spine `register_rows` or `register_claims.rows`); every other omitted row
@@ -2780,6 +3306,14 @@ def judge(
                     "id": item.id,
                     "reason": "met without evidence: name met_by or evidence, or judge it departed with a reason",
                 })
+            if repo_root is not None and plan_text:
+                stale = stale_tests_refusal(
+                    Path(repo_root),
+                    _spine_writes(plan_text, item.id, all_rows=by_id.get(item.id) is None),
+                    row,
+                )
+                if stale is not None:
+                    failures.append({"id": item.id, "reason": stale})
         elif status == "superseded":
             later = row.get("superseded_by")
             target = next((i for i in ledger.items if i.id == later), None)
@@ -2871,21 +3405,56 @@ def advisory_text(result: Mapping) -> Optional[str]:
     return f"verdict ids that are not register rows were ignored: {', '.join(ids)}" if ids else None
 
 
-def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id: str, sha: str) -> list[dict]:
-    """Write a passed verdict onto the register once the commit `sha` landed: met and wired ->
+#: Aggregate process-time budget (seconds) for every wired re-run of one landing.
+WIRED_RERUN_BUDGET_S = 0.3
+
+
+def _rerun_wired_commands(repo_root: Path, items: Iterable[Mapping]) -> dict[str, dict]:
+    """`{command: rerun_wired_check result}` for each distinct command a `wired: true` item cites.
+    The runs share `WIRED_RERUN_BUDGET_S`: each gets the time remaining, and once it is spent every
+    further command is demoted unspawned. Runs before the register lock is taken."""
+    from coordinator_core.ops.dispatch_emit import wired_check
+
+    results: dict[str, dict] = {}
+    deadline = time.perf_counter() + WIRED_RERUN_BUDGET_S
+    for item in items:
+        evidence = rr.wired_evidence(item) if item.get("wired") is True else None
+        if evidence is None or evidence["command"] in results:
+            continue
+        remaining = deadline - time.perf_counter()
+        results[evidence["command"]] = (
+            wired_check.rerun_wired_check(repo_root, evidence["command"], remaining)
+            if remaining > 0 else {"passed": False, "reason": wired_check.NOT_RERUNNABLE, "output": ""}
+        )
+    return results
+
+
+def apply_verdict(
+    repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id: str, sha: str,
+    wired_demoted: Optional[list] = None,
+) -> list[dict]:
+    """Write a passed verdict onto the register once the commit `sha` landed. A `wired: true` item
+    stands only when its `command` re-ran at `repo_root` and exited 0 (`wired_check`); otherwise it
+    lands unwired and `wired_demoted`, when given, receives `{id, command, reason}` per such row.
+    Met and wired ->
     `met` with `<run_id>@<sha>` in met_by; met alone, or met whose `evidence_entry_point` is
     `hand-built-fixture` (no met_by entry) -> `partial`; superseded -> `waived` with the
     PM's superseding words as the ruling. A `post_commit` item whose acts are within
     `{commit, sha_reply, baton_archive, plan_implemented, bug_close}` is written as `met` (the landed commit
     is the act, and the landing performs the lifecycle acts); one naming
-    `sha_memo` is `partial`, the engine sending no memo. A `not_met` item whose `remaining` is only
+    `sha_memo` is `partial`, the engine sending no memo. A `deferred` item with all three deferral fields
+    is `deferred` with a `ledger.deferred:<deferrer>:<run ids>` ruling (reason as quote); the next run lists
+    the row open. A `not_met` item whose `remaining` is only
     post-commit acts reads as `post_commit` (`normalize_verdict`). Every judged row gets
     `last_progress_at`."""
     verdict = normalize_verdict(verdict)
     judged = {str(r.get("id")): r for r in verdict.get("items") or [] if isinstance(r, Mapping)}
     stamp = _now()
+    reruns = _rerun_wired_commands(Path(repo_root), judged.values())
+    demoted: list[dict] = []
 
     def edit(rows: list[dict]) -> list[dict]:
+        demoted.clear()
         text_of = {str(r.get(rr.ROW_ID)): str(r.get(rr.ROW_TEXT) or "") for r in rows}
         for row in rows:
             got = judged.get(str(row.get(rr.ROW_ID)))
@@ -2894,6 +3463,12 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
             status = got.get("status")
             evidence = rr.wired_evidence(got)
             wired = got.get("wired") is True and evidence is not None
+            if wired and status in ("met", "post_commit") and not reruns[evidence["command"]]["passed"]:
+                wired = False
+                demoted.append({
+                    "id": str(row.get(rr.ROW_ID)), "command": evidence["command"],
+                    "reason": reruns[evidence["command"]]["reason"],
+                })
             memo_owed = status == "post_commit" and "sha_memo" in (got.get("post_commit_acts") or [])
             if status == "post_commit" and not memo_owed:
                 status = "met"
@@ -2916,12 +3491,19 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
                     rr.RULING_SOURCE: "pm", rr.RULING_QUOTE: text_of[str(got["superseded_by"])],
                     rr.RULING_REF: str(got["superseded_by"]), rr.RULING_ON: stamp[:10],
                 }
+            elif status == "deferred" and all(_deferral_fields(got)):
+                who, why, blocking = _deferral_fields(got)
+                row[rr.ROW_STATUS] = rr.STATUS_DEFERRED
+                row[rr.ROW_RULING] = _deferral_ruling(who, why, blocking, stamp[:10])
             else:
                 continue
             row[rr.ROW_LAST_PROGRESS_AT] = stamp
         return rows
 
-    return _mutate_register(Path(repo_root), sizing_rel, edit)
+    rows = _mutate_register(Path(repo_root), sizing_rel, edit)
+    if wired_demoted is not None:
+        wired_demoted.extend(demoted)
+    return rows
 
 
 def close_dischargeable(item: Mapping) -> bool:
@@ -3097,6 +3679,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             owned_red=params.get("owned_red") or (), pre_existing=params.get("pre_existing") or (), add_paths=params.get("add_paths") or (),
             retract_row=params.get("retract_row"), widened=params.get("widened") or (),
             accept_partial=params.get("accept_partial") or (), ledger_verdict=params.get("ledger_verdict"),
+            order_rows=params.get("order_rows"), origin=params.get("origin"), turn=params.get("turn"),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -3106,7 +3689,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             (f"revision appended to {outcome['pipeline_revisions']}",), (), params["run_id"],
             run_id=executing or params["run_id"], delivered=True, revisions=outcome["pipeline_revisions"],
             run_live=True if executing else None, item=None,
-            mailed_stages=outcome.get("mailed_stages", []),
+            mailed_stages=outcome.get("mailed_stages", []), **_unapplied_fields(params),
             **({"requested_run_id": params["run_id"]} if executing else {}),
             **({"warning": "revision not mailed to: " + ", ".join(outcome["unreached_stages"])}
                if outcome.get("unreached_stages") else {}),
@@ -3124,7 +3707,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             held_refused, params["run_id"],
             run_id=params["run_id"], item=added, items=len(ledger.items),
             all_of_pm_ask=False, sizing=None, ledger=None, run_live=False, held=True,
-            **_conflict_fields(outcome.get("canvas_conflicts")),
+            **_conflict_fields(outcome.get("canvas_conflicts")), **_unapplied_fields(params),
             note=(
                 "run not emitted yet: the note is queued for the run's start and is read at its first emit."
                 if outcome.get("note_queued") and not added
@@ -3141,8 +3724,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if verdict_refused:
             widen_refused.append({"input": "ledger_verdict", "reason": verdict_refused})
     halted_run.mark_revised(dir_, _now())
-    halted = halted_run.revised_halt(dir_) is not None
-    live = _run_driven(root, params["run_id"], ledger.sizing_rel, halted, run_token)
+    resumed_live = _resumer_driving(root, params["run_id"], dir_, halted_run)
+    halted = halted_run.revised_halt(dir_) is not None and not resumed_live
+    live = resumed_live or _run_driven(root, params["run_id"], ledger.sizing_rel, halted, run_token)
     unproven = (
         not live and not halted and _own_token_unproven(root, params["run_id"], run_token)
     )
@@ -3196,6 +3780,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.ops.dispatch_emit import run_credit
 
         out["credit_chunks"] = run_credit.validate(params["credit_chunks"])
+    if params.get("order_rows") is not None:
+        from coordinator_core.ops.dispatch_emit import run_order
+
+        out["order_rows"] = run_order.validate(params["order_rows"])
+    out.update(_unapplied_fields(params))
     if params.get("owned_red"):
         out["owned_red"] = validate_owned_red(params["owned_red"])
     if params.get("pre_existing"):
@@ -3209,6 +3798,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["withheld"] = [w["id"] for w in ledger.withheld if w["id"] in named]
     plan_rel, drifted = pinned_plan_drift(root, ledger.sizing_rel)
     warnings = [_conflict_warning(outcome["canvas_conflicts"])] if outcome.get("canvas_conflicts") else []
+    if outcome.get("claim_stranded"):
+        warnings.append(outcome["claim_stranded"])
     if drifted:
         out["pin_drift"] = drifted
         warnings.append(
@@ -3236,6 +3827,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                    ": add a row whose register_rows names them (next.call).")
             )
     refused: list[dict] = list(widen_refused)
+    if outcome.get("order_refused"):
+        out["order_rows"] = [c for c in out.get("order_rows", []) if c not in outcome["order_refused"]]
+        refused.append({"input": "order_rows", "reason": f"not a row of the run's plan spine: {', '.join(outcome['order_refused'])}"})
     if params.get("build_only") and not outcome.get("research_dropped"):
         refused.append({"input": "build_only", "reason": "the bound sizing holds no research block to remove"})
     if warnings:
@@ -3286,6 +3880,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["note_mints_no_row"] = "note stored as context; it mints no register row: send it as verbatim to bind it"
     applied = [f"row {added}"] if added else []
     applied += [k for k in _APPLIED_KEYS if out.get(k)]
+    if out.get("order_rows") == []:
+        applied.append("order_rows")
     if landed_sha:
         applied.append("ledger_verdict")
     note_refused = outcome.get("note_refused")
@@ -3334,7 +3930,23 @@ def _land_on_verdict(
     return full, None
 
 
-_APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "base_ref", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "pre_existing", "retracted_note", "retracted_row", "withheld")
+_APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "base_ref", "withhold_paths", "accept_partial", "credit_chunks", "order_rows", "owned_red", "pre_existing", "retracted_note", "retracted_row", "withheld")
+_ORDERING_WORDS = re.compile(r"order|ahead of|before|first|priorit", re.IGNORECASE)
+_CHUNK_ID_TOKEN = re.compile(r"\b[A-Za-z]{1,3}\d{1,3}(?:-?[A-Za-z]{1,2})?\b")
+
+
+def _unapplied_fields(params: Mapping) -> dict:
+    """`{unapplied: [{kind: ordering, text, use: order_rows}]}` for a `note` or `verbatim` that names an
+    order over a chunk id when the call sent no `order_rows`; `{}` otherwise. Detection only: the text
+    is never parsed into an order."""
+    if params.get("order_rows") is not None:
+        return {}
+    found = [
+        {"kind": "ordering", "text": text, "use": "order_rows"}
+        for text in (params.get("note"), params.get("verbatim"))
+        if isinstance(text, str) and _ORDERING_WORDS.search(text) and _CHUNK_ID_TOKEN.search(text)
+    ]
+    return {"unapplied": found} if found else {}
 
 
 def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> dict:
@@ -3589,13 +4201,15 @@ def _sizing_shipped(root: Path, sizing_rel: Optional[str]) -> bool:
 def _run_driven(root: Path, run_id: str, sizing_rel: Optional[str], halted: bool, run_token) -> bool:
     """True when any Workflow drives the run: a fresh stage receipt, an unredeemed run token, or
     another run's unredeemed token for the run's sizing (a refire carries its own run id). A halted
-    run's own stage receipt and token do not count: the receipt is its last fire's and nothing reads
-    the token. Token-dir reads only: no spawn."""
+    run is never driven: its receipt is its last fire's, nothing reads its token, and a sibling's
+    briefs are not its own. Token-dir reads only: no spawn."""
     from coordinator_core.warm import live_runs
 
-    if not halted and live_runs.run_is_live(root, run_id):
+    if halted:
+        return False
+    if live_runs.run_is_live(root, run_id):
         return True
-    if not halted and run_token.is_live(root, run_id) and not _token_not_a_runner(root, run_id):
+    if run_token.is_live(root, run_id) and not _token_not_a_runner(root, run_id):
         return True
     if not sizing_rel:
         return False
@@ -3609,6 +4223,14 @@ def _run_driven(root: Path, run_id: str, sizing_rel: Optional[str], halted: bool
         )
     except OSError:
         return False
+
+
+def _resumer_driving(root: Path, run_id: str, dir_: Path, halted_run) -> bool:
+    """True when the run's marker is `resumed` and a live headless fire executes it: the resume is driving
+    the run, so it is live, not halted. Registry and marker reads only; a marker that is not `resumed`
+    answers False."""
+    marker = halted_run._read(dir_)
+    return bool(marker) and marker.get("status") == halted_run.STATUS_RESUMED and halted_run.fire_live(root, run_id)
 
 
 def _token_not_a_runner(root: Path, run_id: str) -> bool:

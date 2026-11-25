@@ -22,6 +22,15 @@ RUN = "ask-20261013T000000-abc123"
 REL = "state/sizings/2026-10-13-ledger.yaml"
 
 
+@pytest.fixture(autouse=True)
+def _wired_commands_pass(monkeypatch):
+    """The verdict's `wired` commands are placeholders; `apply_verdict` would demote them unrerunnable."""
+    monkeypatch.setattr(
+        rl, "_rerun_wired_commands",
+        lambda repo_root, items: {i["command"]: {"passed": True, "reason": "", "output": ""} for i in items if i.get("command")},
+    )
+
+
 @pytest.mark.parametrize("successor_state", [None, "running", "exited"])
 def test_fire_exit_reconciles_staged_child_and_checks_live_intake_successor(
     tmp_path, monkeypatch, successor_state
@@ -346,6 +355,12 @@ def test_a_non_essential_item_passes_and_is_listed_open_when_no_pm_words_are_hel
     verdict = _verdict(("R1", "met"), ("R2", "not_met", {"essential": False}), ("R3", "met"))
     out = rl.judge(ledger, verdict)
     assert out["pass"] is True and out["open"] == [{"id": "R2", "reason": "non-essential"}]
+    _revise(run[0], all_of_pm_ask=True)
+    out = rl.judge(_ledger(run), verdict)
+    assert not out["pass"] and "all_of_pm_ask" in out["failures"][0]["reason"]
+    _revise(run[0], all_of_pm_ask=True)
+    out = rl.judge(_ledger(run), verdict)
+    assert not out["pass"] and "all_of_pm_ask" in out["failures"][0]["reason"]
 
 
 def test_not_met_defaults_to_essential(run):
