@@ -636,6 +636,21 @@ def test_list_reports_a_pending_agy_leg_pending_a_live_one_ready_and_a_send_answ
 
 
 @portable
+def test_a_pending_agy_leg_can_send_bound_from_its_leg_record(tmp_path):
+    """A CLI agy session's leg stays pending (no credential handoff); its outbound send binds the sender
+    from the leg record by conversation id, not from a live session row it never has."""
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-pend", mode="pending")
+    (tmp_path / "sessions").mkdir()
+    r = pr.Router(PEERS[:1], sessions_dir=tmp_path / "sessions", state_dir=tmp_path / "state",
+                  adapters=echo_adapters(), legs_dir=legs)
+    r._live_discovered()
+    resp = run(r._dispatch({"op": "send", "to": "codex-a", "text": "reply from agy",
+                            "as": "cli", "as_target": "conv-pend"}))
+    assert resp.get("ok") is True, resp
+
+
+@portable
 def test_unstarted_router_lists_a_pending_leg_pending_and_a_send_to_it_answers_queued(tmp_path):
     queued = "[unimatrix-peer-agy] queued: the agy leg is not live; the message is spooled"
     seen = []
