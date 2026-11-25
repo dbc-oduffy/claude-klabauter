@@ -5,8 +5,8 @@ agy's SessionStart env carries only ANTIGRAVITY_CONVERSATION_ID, not ANTIGRAVITY
 comes up live through the declared agy sidecar (unimatrix-agy-sidecar.py): this hook hands it the
 conversation id (never a token), and the sidecar starts the leg with the credentials agy gave it, whose
 drain delivers the spool. Only when no live sidecar answers does the leg start pending (the belt): it
-binds its endpoint and queues peer messages, a sidecar that comes up later makes it live, else the first
-run_command through the PreToolUse hook's rewrite (unimatrix-agy-hook-pretool.py) relaunches it live.
+binds its endpoint and queues peer messages, a sidecar that comes up later makes it live, and the
+PreInvocation spool (unimatrix-agy-hook-pretool.py) delivers a pending leg's messages at the next turn.
 
 Reads the payload's `conversationId`, takes the agy pid from the nearest agy.exe ancestor of this hook
 (agy launches hooks through a short-lived intermediate process, so getppid() is never used; none found
@@ -15,8 +15,6 @@ the leg record, then the conversation is upserted into peers.json (register_peer
 does). Where the env does carry the address and token the leg starts live here.
 
 Always exits 0. Prints one JSON object: a plain systemMessage noting registration when a leg record exists afterwards, else `{}`.
-While the leg is pending a further note tells the agent to run FIRST_ACTION_COMMAND as its first action: that run_command goes through the
-PreToolUse rewrite (unimatrix-agy-hook-pretool.py), which hands the shell's credentials to the leg and brings it live. A live leg gets no note.
 
 unimatrix-agy-hook-launch.py and unimatrix-roster.py are resolved beside this file.
 """
@@ -29,9 +27,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 VENDOR = "agy"
 NOTE = "Registered with the unimatrix peer router: Claude/Codex peers can message this session."
-# The pending leg's promotion rides the PreToolUse rewrite of the agent's first run_command (the shell
-# alone carries the LS address and CSRF token). Valid in PowerShell and sh; no `$`, backtick, `%`, `^`.
-FIRST_ACTION_COMMAND = "echo unimatrix-leg-ready"
 
 
 def load_sibling(name):
@@ -75,7 +70,7 @@ def register(payload, agy_pid, engine_root=None) -> bool:
             handed = bool(sidecar.handoff(conv, cwd, agy_pid, roster.settings_home(), roster.pid_alive))
         except FileNotFoundError:  # no sidecar module beside this hook: the pending-leg belt applies
             handed = False
-    if not handed:  # the sidecar was not up: a pending leg, made live later by the sidecar or the first run_command
+    if not handed:  # the sidecar was not up: a pending leg, made live later by the sidecar
         launch.start({"conversationId": conv, "agyPid": agy_pid, "cwd": cwd}, roster, state)
     registered = isinstance(conv, str) and bool(launch.CONV_RE.match(conv)) and (state / f"{conv}.json").is_file()
     if registered:
@@ -217,28 +212,10 @@ def _repo_claude_md(cwd, max_bytes=24000):
     return encoded[:max_bytes].decode("utf-8", errors="ignore").rstrip("\r\n") or None
 
 
-def leg_pending(conv) -> bool:
-    """True when `conv`'s leg record exists and reads mode pending (never raises, never spawns)."""
-    try:
-        if not isinstance(conv, str) or not load_sibling("unimatrix-agy-hook-launch").CONV_RE.match(conv):
-            return False
-        state = load_sibling("unimatrix-roster").settings_home() / "unimatrix" / "agy-legs"
-        return json.loads((state / f"{conv}.json").read_text(encoding="utf-8")).get("mode") == "pending"
-    except Exception:
-        return False
-
-
-def first_action_note(command=FIRST_ACTION_COMMAND) -> str:
-    """The plain-text instruction that makes the agent's first run_command the pending leg's promotion."""
-    return (f"Unimatrix peer messaging: before any other tool, run exactly this command as your first action, "
-            f"with no changes: {command}")
-
-
-def reply(registered, worker_pointer=None, failure=None, repo_doctrine=None, first_action=False) -> dict:
+def reply(registered, worker_pointer=None, failure=None, repo_doctrine=None) -> dict:
     # Trap: agy (observed 2026-11-04) panics "cannot convert string to message" on a SessionStart
     # systemMessage carrying metadata.user_markdown, despite its own docs; notes go as plain text.
-    notes = (([NOTE] if registered else []) + ([first_action_note()] if first_action else [])
-             + [n for n in (worker_pointer, failure, repo_doctrine) if n])
+    notes = ([NOTE] if registered else []) + [n for n in (worker_pointer, failure, repo_doctrine) if n]
     return {"injectSteps": [{"systemMessage": {"systemMessage": n}} for n in notes]} if notes else {}
 
 
@@ -321,8 +298,7 @@ def main(argv=None) -> int:
             registered = register(payload, agy_pid, root) if root is not None else register(payload, agy_pid)
         except Exception as exc:  # the session still starts; the cause rides as a note, as the Codex hook does
             registered, failure = False, f"unimatrix: peer registration failed: {exc}"
-        conv = payload.get("conversationId") or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
-        out = reply(registered, pointer, failure, repo_doctrine, first_action=bool(registered) and leg_pending(conv))
+        out = reply(registered, pointer, failure, repo_doctrine)
     except Exception:
         out = {}
     print(json.dumps(out))

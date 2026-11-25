@@ -3,8 +3,6 @@ import importlib.util
 import io
 import json
 import os
-import shlex
-import shutil
 import signal
 import socket
 import subprocess
@@ -30,7 +28,6 @@ def load(name):
 pre = load("unimatrix-agy-hook-pretool")
 launch = load("unimatrix-agy-hook-launch")
 CONV = "0cf351a3-6538-4a9b-814c-52b1b75a596c"
-posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="asserts the sh (nohup) prefix; nt writes the promote file")
 
 
 class _NtOs:
@@ -43,37 +40,14 @@ class _NtOs:
         return getattr(os, attr)
 
 
-class _PosixOs(_NtOs):
-    name = "posix"
-
-
 def as_windows(monkeypatch, mod):
     monkeypatch.setattr(mod, "os", _NtOs())
-
-
-REAL_ENSURE = pre.ensure_pending_leg
-
-
-@pytest.fixture(autouse=True)
-def leg_starts(monkeypatch):
-    """Every ensure_pending_leg call, recorded and not run: a real run would start a leg process."""
-    calls = []
-    monkeypatch.setattr(pre, "ensure_pending_leg", lambda conv, agy_pid, state=None: calls.append((conv, agy_pid)))
-    return calls
 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     return tmp_path
-
-
-REAL_CMDLINE = pre.process_cmdline
-
-
-@pytest.fixture(autouse=True)
-def interactive_agy(monkeypatch):
-    monkeypatch.setattr(pre, "process_cmdline", lambda pid: "agy chat")
 
 
 @pytest.fixture
@@ -96,20 +70,32 @@ def write_leg(home, *, pid, agy_pid, ls, conv=CONV):
         {"pid": pid, "conversation": conv, "endpoint": "x.sock", "ls_address": ls, "agy_pid": agy_pid}))
 
 
-@posix_rewrite
-def test_no_leg_rewrites_with_detached_launch_and_asks(home):
-    out = pre.decide(run_payload(), 4242)
-    assert out["decision"] in ("allow", "ask")
-    new = out["overwrite"]["CommandLine"]
-    assert new.endswith("ls -la")
-    assert str(pre.LAUNCH) in new and CONV in new and "4242" in new
-    assert "nohup" in new and "/Users/" not in new.replace(str(pre.LAUNCH), "").replace(sys.executable, "")
-
-
 def test_current_leg_leaves_command_alone(home, ls_server, monkeypatch):
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
     stub_guard(monkeypatch, {"decision": "ask"})
     assert_bare_ask(pre.decide(run_payload(), 4242))
+
+
+def _record_spawns(monkeypatch):
+    started = []
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda *a, **k: started.append(a))
+    monkeypatch.setattr(pre.subprocess, "run", lambda *a, **k: started.append(a))
+    return started
+
+
+@pytest.mark.parametrize("os_name", ["nt", "posix"])
+@pytest.mark.parametrize("guard_answer", [{"decision": "ask"}, {"decision": "allow", "reason": "advisory"}])
+def test_pending_leg_run_command_passes_through_unrewritten(home, monkeypatch, os_name, guard_answer):
+    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=None)
+    path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
+    path.write_text(json.dumps(dict(json.loads(path.read_text()), mode="pending")))
+    monkeypatch.setattr(pre, "os", type("_Os", (_NtOs,), {"name": os_name})())
+    started = _record_spawns(monkeypatch)
+    stub_guard(monkeypatch, guard_answer)
+    out = pre.decide(run_payload(), 4242)
+    assert "overwrite" not in out
+    assert out == guard_answer
+    assert started == []
 
 
 def assert_bare_ask(out):
@@ -120,29 +106,6 @@ def assert_bare_ask(out):
 def assert_fail_open(out):
     """The no-verdict answer: an allow whose reason keeps the fail-open benchmarks' marker."""
     assert out["decision"] == "allow" and "guard did not run" in out["reason"] and "overwrite" not in out
-
-
-@posix_rewrite
-def test_stale_leg_by_agy_pid_is_rewritten(home, ls_server):
-    write_leg(home, pid=os.getpid(), agy_pid=1111, ls=ls_server)
-    assert "overwrite" in pre.decide(run_payload(), 4242)
-
-
-@posix_rewrite
-def test_stale_leg_with_unreachable_ls_is_rewritten(home):
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    addr = f"127.0.0.1:{s.getsockname()[1]}"
-    s.close()
-    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=addr)
-    assert "overwrite" in pre.decide(run_payload(), 4242)
-
-
-@posix_rewrite
-def test_dead_leg_pid_is_rewritten(home, ls_server, monkeypatch):
-    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    assert "overwrite" in pre.decide(run_payload(), 4242)
 
 
 @pytest.mark.parametrize("payload", [
@@ -175,12 +138,9 @@ def test_guard_deny_returned_unchanged_without_overwrite(home, monkeypatch):
     assert seen[0][1] == "/engine" and CONV in seen[0][0]
 
 
-@posix_rewrite
-def test_guard_ask_with_reason_and_stale_leg_is_one_ask_with_reason_and_overwrite(home, monkeypatch):
+def test_guard_ask_with_reason_and_no_leg_is_the_guards_answer_unchanged(home, monkeypatch):
     stub_guard(monkeypatch, {"decision": "ask", "reason": "guard says look"})
-    out = pre.decide(run_payload(), 4242)
-    assert out["decision"] == "ask" and "guard says look" in out["reason"]
-    assert "unimatrix" in out["reason"] and out["overwrite"]["CommandLine"].endswith("ls -la")
+    assert pre.decide(run_payload(), 4242) == {"decision": "ask", "reason": "guard says look"}
 
 
 def test_guard_ask_with_current_leg_keeps_guard_reason_without_overwrite(home, ls_server, monkeypatch):
@@ -195,10 +155,9 @@ def test_guard_down_current_leg_allows_without_overwrite(home, ls_server):
     assert out["decision"] == "allow" and "overwrite" not in out
 
 
-def test_guard_down_stale_leg_allows_without_rewrite(home):
+def test_guard_down_no_leg_allows_without_rewrite(home):
     out = pre.decide(run_payload(), 4242, str(home / "no-engine"))
-    assert out["decision"] == "allow"
-    assert "overwrite" in out  # nt too: the start rides the run_command shell, which holds the token
+    assert out["decision"] == "allow" and "overwrite" not in out
 
 
 def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
@@ -211,12 +170,7 @@ def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
 @pytest.mark.parametrize("answer", [{"decision": "allow"}, {"decision": "allow", "reason": "ok"}])
 def test_guard_allow_answer_stays_allow_and_never_becomes_ask(home, monkeypatch, tool, answer):
     stub_guard(monkeypatch, answer)
-    out = pre.decide(run_payload(name=tool), 4242)
-    assert out["decision"] == "allow"
-    if tool == "write_file":
-        assert out == answer
-    elif os.name != "nt":
-        assert "overwrite" in out
+    assert pre.decide(run_payload(name=tool), 4242) == answer
 
 
 def test_unloadable_guard_fails_open_to_allow(home, monkeypatch):
@@ -257,10 +211,9 @@ def test_exact_peer_reply_is_allowed_without_rewrite(home, ls_server, monkeypatc
         assert out["decision"] == "allow" and "overwrite" not in out
 
 
-@posix_rewrite
 @pytest.mark.parametrize("guard_answer", [{"decision": "ask"}, {"decision": "allow"}])
 @pytest.mark.parametrize("pending", [False, True])
-def test_exact_peer_reply_with_missing_or_pending_leg_allows_and_bootstraps(
+def test_exact_peer_reply_with_missing_or_pending_leg_allows_without_rewrite(
     home, ls_server, monkeypatch, guard_answer, pending
 ):
     if pending:
@@ -268,12 +221,8 @@ def test_exact_peer_reply_with_missing_or_pending_leg_allows_and_bootstraps(
         path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
         path.write_text(json.dumps(dict(json.loads(path.read_text()), mode="pending")))
     stub_guard(monkeypatch, guard_answer)
-    cmd = f"{PY} {SEND} --to peer hi"
-    out = pre.decide(run_payload(cmd=cmd), 4242)
-    assert out["decision"] == "allow"
-    assert "overwrite" in out
-    assert str(pre.LAUNCH) in out["overwrite"]["CommandLine"]
-    assert out["overwrite"]["CommandLine"].endswith(cmd)
+    out = pre.decide(run_payload(cmd=f"{PY} {SEND} --to peer hi"), 4242)
+    assert out == {"decision": "allow"}
 
 
 @pytest.mark.parametrize("tmpl", [
@@ -322,7 +271,7 @@ def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
     out = json.loads(r.stdout)
     reap_leg(home)
     assert r.returncode == 0 and out["decision"] == "allow"
-    assert "overwrite" in out  # nt too: the promote file is written by the run_command shell, which holds the token
+    assert "overwrite" not in out
 
 
 def _terminate(pid):
@@ -399,150 +348,15 @@ def test_unrunnable_guard_through_main_fails_open(home, monkeypatch, capsys):
     assert_fail_open(json.loads(capsys.readouterr().out))
 
 
-def test_guard_deny_and_bootstrap_ask_survive_through_main(home, monkeypatch, capsys):
+def test_guard_deny_and_ask_survive_through_main_unchanged(home, monkeypatch, capsys):
     stub_guard(monkeypatch, {"decision": "deny", "reason": "blocked"})
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
     assert pre.main() == 0
     assert json.loads(capsys.readouterr().out) == {"decision": "deny", "reason": "blocked"}
     stub_guard(monkeypatch, {"decision": "ask"})
-    monkeypatch.setattr(pre, "launch_prefix", lambda conv, agy_pid: ("START", "; "))
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
     assert pre.main() == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out["decision"] == "ask" and out["overwrite"]["CommandLine"] == "START; ls -la"
-
-
-def test_windows_prefix_writes_the_promote_file_and_spawns_nothing(home, monkeypatch):
-    as_windows(monkeypatch, pre)
-    monkeypatch.setattr(pre, "_console_python", lambda: r"C:\Program Files\Py's\python.exe")
-    start, sep = pre.launch_prefix(CONV, 4242)
-    final = str(home / "unimatrix" / "agy-legs" / f"{CONV}.promote.json")
-    assert sep == "; " and start.startswith("try {") and start.endswith("} catch {}")
-    assert f"$f = '{final}'" in start
-    assert start.index(".tmp'") < start.index("SetAccessRuleProtection") < start.index("WriteAllText") < start.index("Move-Item -LiteralPath $t -Destination $f -Force")
-    assert "WindowsIdentity]::GetCurrent().User, 'FullControl'" in start
-    assert "$env:ANTIGRAVITY_LS_ADDRESS" in start and "$env:ANTIGRAVITY_CSRF_TOKEN" in start
-    for banned in ("Start-Process", "nohup", "python", str(pre.LAUNCH), "unimatrix-agy-hook-launch", "Start-Job"):
-        assert banned not in start
-
-
-def test_windows_run_command_is_rewritten_with_the_handoff_prefix_and_the_hook_ensures_the_leg(home, monkeypatch, leg_starts):
-    as_windows(monkeypatch, pre)
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    popen = []
-    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: popen.append(cmd))
-    stub_guard(monkeypatch, {"decision": "ask"})
-    out = pre.decide(run_payload(cmd="Get-ChildItem | Select-Object -First 1"), 4242)
-    line = out["overwrite"]["CommandLine"]
-    assert line.startswith("try {") and "Start-Process" not in line and f"{CONV}.promote.json" in line
-    assert line.endswith("} catch {}; Get-ChildItem | Select-Object -First 1")
-    assert leg_starts == [(CONV, 4242)] and popen == []
-
-
-def test_windows_live_pid_pending_leg_gets_the_handoff_prefix(home, ls_server, monkeypatch):
-    as_windows(monkeypatch, pre)
-    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
-    path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
-    path.write_text(json.dumps(dict(json.loads(path.read_text()), mode="pending", ls_address=None)))
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: True)
-    stub_guard(monkeypatch, {"decision": "ask"})
-    line = pre.decide(run_payload(), 4242)["overwrite"]["CommandLine"]
-    assert f"{CONV}.promote.json" in line and "Start-Process" not in line
-
-
-def test_windows_does_not_rewrite_when_leg_current(home, ls_server, monkeypatch, leg_starts):
-    as_windows(monkeypatch, pre)
-    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: True)
-    stub_guard(monkeypatch, {"decision": "ask"})
-    assert pre.decide(run_payload(), 4242) == {"decision": "ask"}
-    assert leg_starts == []
-
-
-def test_posix_rewrite_never_calls_the_windows_leg_start(home, monkeypatch, leg_starts):
-    monkeypatch.setattr(pre, "os", _PosixOs())
-    stub_guard(monkeypatch, {"decision": "ask"})
-    assert pre.decide(run_payload(), 4242)["overwrite"]["CommandLine"].startswith("(nohup ")
-    assert leg_starts == []
-
-
-def test_posix_prefix_is_the_unchanged_detached_sh_start(monkeypatch):
-    monkeypatch.setattr(pre, "os", _PosixOs())
-    monkeypatch.setattr(pre, "_console_python", lambda: "/usr/bin/python3")
-    start, sep = pre.launch_prefix(CONV, 7)
-    argv = ["/usr/bin/python3", str(pre.LAUNCH), "--conversation", CONV, "--agy-pid", "7"]
-    assert start == f"(nohup {' '.join(shlex.quote(a) for a in argv)} >/dev/null 2>&1 &)" and sep == "; "
-
-
-class _FakeLaunch:
-    def __init__(self):
-        self.calls = []
-
-    def start(self, req, roster, state):
-        self.calls.append((req, roster, state))
-
-
-def _ensure_world(monkeypatch, fake):
-    monkeypatch.setattr(pre, "load_sibling", lambda name: fake if name == "unimatrix-agy-hook-launch" else "roster")
-
-
-def test_ensure_starts_the_pending_leg_from_the_hook_when_no_record(home, monkeypatch):
-    fake = _FakeLaunch()
-    _ensure_world(monkeypatch, fake)
-    REAL_ENSURE(CONV, 4242)
-    assert fake.calls == [({"conversationId": CONV, "agyPid": 4242}, "roster", home / "unimatrix" / "agy-legs")]
-
-
-def test_ensure_starts_the_leg_when_the_recorded_pid_is_dead(home, ls_server, monkeypatch):
-    write_leg(home, pid=999999, agy_pid=4242, ls=ls_server)
-    fake = _FakeLaunch()
-    _ensure_world(monkeypatch, fake)
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    REAL_ENSURE(CONV, 4242)
-    assert len(fake.calls) == 1
-
-
-def test_ensure_leaves_a_live_pid_leg_alone_pending_or_live(home, ls_server, monkeypatch):
-    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
-    fake = _FakeLaunch()
-    _ensure_world(monkeypatch, fake)
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: True)
-    REAL_ENSURE(CONV, 4242)
-    assert fake.calls == []
-
-
-def test_ensure_never_raises_when_the_start_fails(home, monkeypatch):
-    monkeypatch.setattr(pre, "load_sibling", lambda name: 1 / 0)
-    REAL_ENSURE(CONV, 4242)
-
-
-@pytest.mark.skipif(os.name != "nt" or not (shutil.which("powershell") or shutil.which("pwsh")),
-                    reason="runs the real PowerShell prefix")
-def test_windows_prefix_runs_in_powershell_and_lands_the_promote_file(home, monkeypatch):
-    prefix, _ = pre.launch_prefix(CONV, 4242)
-    env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS="127.0.0.1:5555", ANTIGRAVITY_CSRF_TOKEN="tok-123")
-    shell = shutil.which("powershell") or shutil.which("pwsh")
-    r = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", f"{prefix}; 'ran'"], env=env,
-                       cwd=str(home), capture_output=True, text=True, timeout=60,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    folder = home / "unimatrix" / "agy-legs"
-    body = json.loads((folder / f"{CONV}.promote.json").read_bytes().decode("utf-8"))
-    assert "ran" in r.stdout and r.stdout.count("tok-123") == 0
-    assert body == {"ls_address": "127.0.0.1:5555", "csrf_token": "tok-123", "cwd": str(home)}
-    assert [p.name for p in folder.iterdir()] == [f"{CONV}.promote.json"]
-    assert not (folder / f"{CONV}.promote.json").read_bytes().startswith(b"\xef\xbb\xbf")
-
-
-@pytest.mark.skipif(os.name != "nt" or not (shutil.which("powershell") or shutil.which("pwsh")),
-                    reason="runs the real PowerShell prefix")
-def test_windows_prefix_without_a_token_writes_nothing_and_the_command_still_runs(home):
-    prefix, _ = pre.launch_prefix(CONV, 4242)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ANTIGRAVITY_")}
-    shell = shutil.which("powershell") or shutil.which("pwsh")
-    r = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", f"{prefix}; 'ran'"], env=env,
-                       cwd=str(home), capture_output=True, text=True, timeout=60,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    assert "ran" in r.stdout and not (home / "unimatrix" / "agy-legs" / f"{CONV}.promote.json").exists()
+    assert json.loads(capsys.readouterr().out) == {"decision": "ask"}
 
 
 @pytest.mark.parametrize("tmpl,expected", [
@@ -798,42 +612,23 @@ def _main_texts(monkeypatch, capsys, payload):
     return [s["systemMessage"]["systemMessage"] for s in json.loads(capsys.readouterr().out).get("injectSteps", [])]
 
 
-def test_sessionstart_with_a_pending_leg_instructs_the_fixed_first_action(home, monkeypatch, capsys):
+def test_sessionstart_with_a_pending_leg_adds_no_first_action_note(home, monkeypatch, capsys):
     monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
     monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
     texts = _main_texts(monkeypatch, capsys, {"conversationId": CONV})
     assert json.loads(record_path(home).read_text())["mode"] == "pending"
-    instruction = [t for t in texts if sess.FIRST_ACTION_COMMAND in t]
-    assert len(instruction) == 1 and "first action" in instruction[0] and "before any other tool" in instruction[0]
-    assert not any(c in sess.FIRST_ACTION_COMMAND for c in pre.UNSAFE_SHELL_TEXT)
+    assert texts == [sess.NOTE]
 
 
-def test_sessionstart_with_a_live_leg_gives_no_first_action_instruction(home, agy_env, monkeypatch, capsys):
+def test_sessionstart_with_a_live_leg_gives_only_the_registration_note(home, agy_env, monkeypatch, capsys):
     texts = _main_texts(monkeypatch, capsys, {"conversationId": CONV})
     assert json.loads(record_path(home).read_text()).get("mode", "live") == "live"
     assert texts == [sess.NOTE]
 
 
-def test_sessionstart_unregistered_gives_no_first_action_instruction(home, monkeypatch, capsys):
+def test_sessionstart_unregistered_gives_no_note(home, monkeypatch, capsys):
     monkeypatch.setattr(sess, "register", lambda *a: False)
     assert _main_texts(monkeypatch, capsys, {}) == []
-
-
-@posix_rewrite
-def test_first_action_command_is_rewritten_with_the_launcher_start_on_posix(home, monkeypatch):
-    stub_guard(monkeypatch, {"decision": "ask"})
-    out = pre.decide(run_payload(cmd=sess.FIRST_ACTION_COMMAND), 4242)
-    new = out["overwrite"]["CommandLine"]
-    assert new.endswith("; " + sess.FIRST_ACTION_COMMAND) and "nohup" in new and str(pre.LAUNCH) in new
-
-
-def test_first_action_command_is_rewritten_with_the_promote_prefix_on_nt(home, monkeypatch):
-    as_windows(monkeypatch, pre)
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    stub_guard(monkeypatch, {"decision": "ask"})
-    line = pre.bootstrap_rewrite(run_payload(cmd=sess.FIRST_ACTION_COMMAND), 4242)["overwrite"]["CommandLine"]
-    assert line == f"{pre.promote_prefix(CONV)}; {sess.FIRST_ACTION_COMMAND}"
-    assert f"{CONV}.promote.json" in line
 
 
 def _vendor_pair(tmp_path):
@@ -1057,14 +852,6 @@ def test_a_stale_claim_and_the_spool_claimed_in_one_clock_tick_both_survive(home
     assert sorted(t.split("\n")[1] for t in texts) == ["fresh", "lost"]
 
 
-def test_pending_leg_is_never_current_for_the_pretool_rewrite(home, ls_server):
-    write_leg(home, pid=os.getpid(), agy_pid=1234, ls=ls_server)
-    path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
-    assert pre.leg_current(CONV, 1234) is True
-    path.write_text(json.dumps(dict(json.loads(path.read_text()), mode="pending")))
-    assert pre.leg_current(CONV, 1234) is False
-
-
 @pytest.mark.parametrize("payload", [None, [], {}, {"conversationId": "../evil"}, {"conversationId": 5}])
 def test_sessionstart_bad_payload_starts_nothing(home, agy_env, monkeypatch, payload):
     monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
@@ -1218,14 +1005,10 @@ def test_ancestor_walk_resolves_the_daemon_without_stderr(daemon, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_ancestor_walk_prefers_the_cli_over_a_nearer_daemon_and_reads_print_mode():
+def test_ancestor_walk_prefers_the_cli_over_a_nearer_daemon():
     tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (2895, "cmd.exe"), 2895: (AGY_PID, "agy-daemon.exe"),
             AGY_PID: (1, "agy.exe")}
-    pid = pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID)
-    assert pid == AGY_PID
-    lines = {AGY_PID: "agy.exe -p hi", 2895: "agy-daemon.exe"}
-    assert pre.agy_print_mode(pid, read=lines.get) is True
-    assert pre.agy_print_mode(2895, read=lines.get) is False
+    assert pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID) == AGY_PID
 
 
 def test_ancestor_walk_refuses_look_alike_names(capsys):
@@ -1275,16 +1058,6 @@ def test_pretool_main_uses_the_ancestor_not_getppid(home, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
     pre.main()
     assert seen == [AGY_PID]
-
-
-def test_leg_with_no_agy_pid_is_never_current(home, ls_server):
-    write_leg(home, pid=os.getpid(), agy_pid=None, ls=ls_server)
-    assert pre.leg_current(CONV, None) is False
-
-
-def test_launcher_argv_omits_agy_pid_when_none():
-    assert "--agy-pid" not in pre.launcher_argv(CONV, None)
-    assert pre.launcher_argv(CONV, 5)[-2:] == ["--agy-pid", "5"]
 
 
 def _sess_with_tree(monkeypatch, tree, payload):
@@ -1344,98 +1117,6 @@ def test_agy_leg_log_path_resolves_at_call_time(tmp_path, monkeypatch):
     assert "hello-late" in (tmp_path / "late.log").read_text()
 
 
-PRINT_LINES = ['agy -p="Run exactly: git grep x" --output-format json', "agy.exe --print hi", "agy --print=hi", "agy -p hi"]
-
-
-@pytest.mark.parametrize("line", PRINT_LINES)
-def test_print_mode_passes_ask_through_with_no_overwrite_and_no_spawn(home, monkeypatch, line):
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    monkeypatch.setattr(pre, "process_cmdline", lambda pid: line)
-    spawned = []
-    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd))
-    stub_guard(monkeypatch, {"decision": "ask"})
-    out = pre.decide(run_payload(cmd="git grep -n x -- coordinator/tests"), 4242)
-    assert out == {"decision": "ask"} and "overwrite" not in out
-    assert spawned == []
-
-
-DAEMON_PID, CLI_PID = 2895, 3001
-
-
-def _daemon_world(monkeypatch, cli_line, *, spawned=None):
-    """A hook parented by the agy daemon: the walk yields the daemon pid, the headless/interactive CLI is the
-    daemon's child. Source: observed 2026-11-16 (hooks run under agy's daemon pid, not the CLI process)."""
-    lines = {DAEMON_PID: "agy-daemon --serve", CLI_PID: cli_line}
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    monkeypatch.setattr(pre, "process_cmdline", lines.get)
-    monkeypatch.setattr(pre, "child_pids", lambda pid: [CLI_PID] if pid == DAEMON_PID else [])
-    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd) if spawned is not None else None)
-    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (DAEMON_PID, "cmd.exe"), DAEMON_PID: (1, "agy-daemon.exe")}
-    pid = pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID)
-    assert pid == DAEMON_PID
-    return pid
-
-
-def test_headless_cli_under_a_daemon_parented_hook_gets_no_rewrite_through_decide(home, monkeypatch, capsys):
-    spawned = []
-    pid = _daemon_world(monkeypatch, 'agy -p="Run exactly: git grep x" --output-format json', spawned=spawned)
-    stub_guard(monkeypatch, {"decision": "ask"})
-    out = pre.decide(run_payload(cmd="git grep -n x -- coordinator/tests"), pid)
-    assert out == {"decision": "ask"} and "overwrite" not in out
-    assert spawned == [] and capsys.readouterr().err == ""
-
-
-@posix_rewrite
-def test_interactive_cli_under_a_daemon_parented_hook_still_rewrites_through_decide(home, monkeypatch):
-    pid = _daemon_world(monkeypatch, "agy chat")
-    stub_guard(monkeypatch, {"decision": "ask"})
-    assert "overwrite" in pre.decide(run_payload(cmd="ls -la"), pid)
-
-
-def test_print_mode_reads_the_cli_children_of_the_daemon_not_the_daemon_alone(monkeypatch):
-    _daemon_world(monkeypatch, "agy.exe --print hi")
-    assert pre.agy_print_mode(DAEMON_PID) is True
-    monkeypatch.setattr(pre, "process_cmdline", {DAEMON_PID: "agy-daemon", CLI_PID: "agy chat"}.get)
-    assert pre.agy_print_mode(DAEMON_PID) is False
-
-
-@pytest.mark.skipif(os.name == "nt", reason="child_pids reads the NT snapshot on Windows")
-def test_child_pids_on_macos_reads_one_ps_table(monkeypatch):
-    monkeypatch.setattr(pre.sys, "platform", "darwin")
-    monkeypatch.setattr(pre.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout="  1 0\n 30 2895\n 31 2895\n 40 31\n junk\n", stderr=""))
-    assert pre.child_pids(2895) == [30, 31]
-
-    def boom(*a, **kw):
-        raise OSError("no ps")
-
-    monkeypatch.setattr(pre.subprocess, "run", boom)
-    assert pre.child_pids(2895) == []
-
-
-@posix_rewrite
-def test_interactive_agy_still_rewrites_and_unreadable_cmdline_is_not_print_mode(home, monkeypatch):
-    assert "overwrite" in pre.decide(run_payload(), 4242)
-    monkeypatch.setattr(pre, "process_cmdline", lambda pid: None)
-    assert "overwrite" in pre.decide(run_payload(), 4242)
-    assert pre.agy_print_mode(None, read=lambda pid: "agy -p x") is False
-
-
-@posix_rewrite
-def test_no_rewrite_text_carries_a_json_literal_or_unquoted_payload(home):
-    new = pre.decide(run_payload(cmd="git grep -n zzz -- README.md; New-Item x"), 4242)["overwrite"]["CommandLine"]
-    prefix, _, rest = new.partition("; git grep")
-    assert rest == " -n zzz -- README.md; New-Item x"
-    bare = prefix.replace("/dev/null", "")  # the redirect target is a path, not a JSON null
-    assert not any(tok in bare for tok in ('{"', "false", "true", "null", "<stdin>"))
-    import shlex
-    shlex.split(prefix)
-
-
-def test_process_cmdline_reads_a_real_process():
-    line = REAL_CMDLINE(os.getpid())
-    assert line and ("python" in line.lower() or "pytest" in line.lower())
-
-
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked guard holds the hook before the wall answers, a wait CPU time cannot see")
 def test_blocked_guard_answers_fail_open_within_the_wall_and_records_hook_wall(home, monkeypatch, capsys):
     import threading
@@ -1474,24 +1155,6 @@ def test_prompt_guard_does_not_trip_the_wall(home, monkeypatch, capsys):
 def test_siblings_are_executed_once_per_process(monkeypatch):
     monkeypatch.setattr(pre, "_SIBLINGS", {})
     assert pre.load_sibling("unimatrix-roster") is pre.load_sibling("unimatrix-roster")
-
-
-@posix_rewrite
-def test_leg_with_missing_absolute_endpoint_is_not_current(home, ls_server):
-    write_leg(home, pid=os.getpid(), agy_pid=1234, ls=ls_server)
-    path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
-    missing = str(home / "gone.sock")
-    path.write_text(json.dumps(dict(json.loads(path.read_text()), endpoint=missing)))
-    assert pre.leg_current(CONV, 1234) is False
-    Path(missing).write_text("")
-    assert pre.leg_current(CONV, 1234) is True
-def test_decide_rewrites_allow_when_leg_not_current(home, monkeypatch):
-    stub_guard(monkeypatch, {"decision": "allow", "reason": "advisory"})
-    monkeypatch.setattr(pre, "launch_prefix", lambda conv, agy_pid: ("START", "; "))
-    out = pre.decide(run_payload(), 4242)
-    assert out["decision"] == "allow"
-    assert out["overwrite"]["CommandLine"] == "START; ls -la"
-    assert "advisory" in out["reason"]
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS libproc")
