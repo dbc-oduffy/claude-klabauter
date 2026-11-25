@@ -865,6 +865,63 @@ def test_an_engine_refusal_still_denies_with_its_own_text(tmp_path: Path) -> Non
     assert "boom" in _hso(out)["permissionDecisionReason"]
 
 
+@pytest.mark.parametrize("items", [1, 2])
+def test_a_baton_on_an_asks_submission_reaches_the_fanout_verbatim(tmp_path: Path, items: int) -> None:
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")][:items])
+    asks = [{"ask": "x", "source": "pm"}, {"ask": "y", "source": "pm"}][:items]
+    out = mod.evaluate(_payload(root, {"asks": asks, "baton": " state/handoffs/b.md "}), emit=_Emit(), fanout=fan)
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert fan.calls[0][0]["baton"] == "state/handoffs/b.md"
+
+
+def test_a_workflow_call_with_a_baton_reaches_the_real_fanout_and_stamps_the_ask_pm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yaml
+
+    from coordinator_core.ops import baton_pm_turns as PT
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+    from coordinator_core.session_baton import store
+
+    root = _repo(tmp_path)
+    (tmp_path / "hub" / "origin-sid").mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
+    words = "please spin off blender-example-game-repo out of the guts of unreal-example-game-repo and own the Blender MCP"
+    assert PT.append_turn(f"{words}. Also do other things.", session_id="origin-sid")["ok"]
+    baton = root / "state" / "handoffs" / "spinoff.md"
+    baton.parent.mkdir(parents=True)
+    front = yaml.safe_dump({"handoff_id": "hnd-x", "kind": "spinoff", "origin_session": "origin-sid"})
+    baton.write_text(f'---\n{front}---\nPM (verbatim): "{words}"\n', encoding="utf-8", newline="\n")
+    seen: list = []
+
+    def real_fanout(params: dict, root_: Path) -> dict:
+        out = ask_fanout.fanout(params, root_)
+        seen.append(out)
+        return out
+
+    args = {"asks": [{"ask": words, "source": "pm", "writes": ["a.py"]}], "baton": "state/handoffs/spinoff.md"}
+    out = mod.evaluate(_payload(root, args), emit=_Emit(), fanout=real_fanout)
+    assert seen and seen[0].get("exit_code", 0) == 0, seen
+    assert _hso(out)["permissionDecision"] == "allow"
+    doc = yaml.safe_load((root / seen[0]["ready"][0]["sizing"]).read_text(encoding="utf-8"))
+    assert doc["pm_verbatims"][0]["text"] == words
+    assert "relayed_text" not in doc["em_analysis"]
+
+    seen.clear()
+    args["asks"][0]["ask"] = "an invented instruction the PM never gave anyone"
+    refused = _hso(mod.evaluate(_payload(root, args), emit=_Emit(), fanout=real_fanout))
+    assert refused["permissionDecision"] == "deny"
+    assert "holds no PM turn this session recorded" in refused["permissionDecisionReason"]
+
+
+def test_a_baton_without_asks_or_not_a_path_is_refused_by_name(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    for args in ({"ask": "x", "baton": "b.md"}, {"asks": [{"ask": "x"}], "baton": 3}):
+        reason = _hso(mod.evaluate(_payload(root, args), emit=_Emit(), fanout=_Fanout([])))["permissionDecisionReason"]
+        assert "baton" in reason
+
+
 def test_a_relayed_sender_reaches_the_fanout_and_must_be_a_string(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])

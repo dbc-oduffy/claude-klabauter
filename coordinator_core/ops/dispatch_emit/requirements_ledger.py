@@ -2945,6 +2945,48 @@ def post_commit_owed(verdict: Mapping, sha: str, discharged: Collection[str] = (
     return owed
 
 
+#: Raw-text routes: `<file param>` names a UTF-8 file whose text becomes the inline `<field>`. Kept out
+#: of `_PARAMS`, like the `notes` alias, because the `--help` epilog lists every `_PARAMS` field.
+_FILE_ROUTES = (("note_file", "note"), ("verbatim_file", "verbatim"))
+
+
+def _read_verbatim_files(params: dict, repo_root: Path) -> tuple[dict, Optional[dict]]:
+    """Replace `note_file` / `verbatim_file` in `params` by the file's text as `note` / `verbatim`.
+
+    The text is decoded from bytes and never passed through json or newline translation, so a
+    Windows path's `\\r` / `\\n` sequences and any CR in the file reach the store exactly as written.
+    Returns `(params, None)` or `(params, {"error": ...})`.
+    """
+    if not isinstance(params, dict) or not any(key in params for key, _ in _FILE_ROUTES):
+        return params, None
+    out = dict(params)
+    for key, field in _FILE_ROUTES:
+        if key not in out:
+            continue
+        named = out.pop(key)
+        if not isinstance(named, str) or not named.strip():
+            return params, {"error": f"workflow.revise params.{key} must be a non-empty path string"}
+        inline = [f for f in ((field, "notes") if field == "note" else (field,)) if out.get(f) is not None]
+        if inline:
+            return params, {"error": f"workflow.revise takes `{key}` or `{inline[0]}`, not both"}
+        path = Path(named)
+        if not path.is_absolute():
+            path = main_worktree_root(repo_root) / path
+        try:
+            raw = path.read_bytes()
+            text = raw.decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return params, {"error": f"workflow.revise params.{key}: cannot read {named!r} as UTF-8 text: {exc}"}
+        if len(raw) > VERBATIM_BYTE_CAP + 2:
+            return params, {"error": f"workflow.revise params.{key}: {named!r} exceeds {VERBATIM_BYTE_CAP} bytes"}
+        for tail in ("\r\n", "\n"):
+            if text.endswith(tail):
+                text = text[: -len(tail)]
+                break
+        out[field] = text
+    return out, None
+
+
 @register_op("workflow.revise")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str, a requirement), `note` (str, free
@@ -2960,7 +3002,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     as `accept_partial`),
     `credit_chunks` (list of `{chunk, evidence}`: stranded chunks the EM rules complete, recorded to
     the run's `credit.jsonl` for the re-fired terminal commit to re-grade; needs an emitted run, no
-    sizing, adds no row; replied as `credit_chunks`), `retract_note` (`{note_id, reason}`: withdraws
+    sizing, adds no row; replied as `credit_chunks`), `order_rows` (list of chunk ids: the rows a refire
+    schedules first, each a row of the bound plan's spine, recorded to the run's `order.jsonl`; `[]`
+    clears; needs an emitted run, adds no row; replied as `order_rows`; a `note` or `verbatim` naming an
+    order with no `order_rows` replies `unapplied: [{kind: ordering, text, use: order_rows}]`), `retract_note` (`{note_id, reason}`: withdraws
     one of the run's notes as applied by hand, appended to the run's `notes.jsonl` and never deleted;
     needs an emitted run, no sizing, adds no row; replied as `retracted_note`), `retract_row`
     (`{row_id, reason}`: deletes one open, unclaimed revision row of the bound sizing's register;
@@ -2979,9 +3024,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `add_paths` (list of repo-relative path strings: write paths the run was not sized for, widening
     the plan by an engine-written row; needs a run bound to a sizing with a readable plan; replied as
     `footprint_widened`),
+    `origin` (str, only "pm", needs `verbatim` and `turn` `{session, ts}`: the verbatim is the PM's words
+    re-carried by the EM; it mints a `pm_verbatims` row, never a `revision` row; refused without a turn),
     `claim` (bool, needs `verbatim` and a run bound to a sizing whose plan claims it: the minted row is
     claimed on the plan with its pin and added to `ruled` on the plan's ledger-halt pointer in the
-    same call; replied as `claimed: [id]`).
+    same call; replied as `claimed: [id]`),
+    `note_file` / `verbatim_file` (str, a path, repo-relative or absolute, to a UTF-8 text file: its
+    bytes, one trailing newline stripped, become `note` / `verbatim` and are never JSON-decoded;
+    refused beside the inline field it stands for).
+    Pass any `note` or `verbatim` holding a backslash (a Windows path: a `\\r` or `\\n` in it is a path
+    separator, and inline JSON decodes it to CR or LF) through `note_file` / `verbatim_file`.
 
     Appends a stamped revision row to the run's requirements (its sizing's requirement_register),
     which every later stage of the run reads at its start. Replies `{ok, run_id, item, items,
@@ -3003,6 +3055,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     if repo_root is None:
         return {"error": "workflow.revise requires repo_root"}
+    params, refused = _read_verbatim_files(params, Path(repo_root))
+    if refused is not None:
+        return refused
     if "notes" in params:
         if "note" in params:
             return {"error": "workflow.revise takes `note`; `notes` is its alias, send one of them"}

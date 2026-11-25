@@ -569,7 +569,7 @@ class TestForeignRedOverlay:
         result = _foreign_red_land(halted, monkeypatch, ["{f}::test_peer"])
 
         assert result["committed"] is True, result
-        assert "another run uncommitted test" in result["clean_overlay_verify"]["advisory"]
+        assert "every failing node is another run uncommitted work" in result["clean_overlay_verify"]["advisory"]
 
     def test_a_red_overlay_with_one_failing_node_outside_the_peer_file_still_refuses(self, halted, monkeypatch) -> None:
         result = _foreign_red_land(halted, monkeypatch, ["{f}::test_peer", "t/test_own.py::test_own"])
@@ -662,7 +662,7 @@ def _wired_landing(tmp_path, monkeypatch, command: str) -> tuple[dict, dict]:
     }, sort_keys=False), encoding="utf-8")
     monkeypatch.setattr(wired_check.census, "tracked_targets", lambda root, cands: frozenset(c for c in cands if c.endswith(".py")))
     monkeypatch.setattr(rl, "WIRED_RERUN_BUDGET_S", 30.0)
-    book = SimpleNamespace(receipts=[], receipt_error=None, review_land=None, resolves=None, onboarded=False,
+    book = SimpleNamespace(receipts=[], receipt_error=None, review_land=None, resolves=None, onboarded=False, outcome_run=None,
                            ledger=SimpleNamespace(sizing_rel=rel))
     verdict = {"items": [{"id": "R1", "status": "met", "wired": True, "command": command, "observed": "ran"}]}
     out = run_landing._after_landing(

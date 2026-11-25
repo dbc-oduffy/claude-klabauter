@@ -1387,7 +1387,9 @@ _LEDGER_CLAUSE = (
     "a peer session sent through workflow.revise (the row names its sender in `from`) is a ledger "
     "item with the same authority as an EM revision. Carry every item into what you hand on. Its "
     "`## Revise notes` section holds the EM's accepted revise notes: binding EM context, never "
-    "unconfirmed; act on each live note, and not on a retracted one."
+    "unconfirmed; act on each live note, and not on a retracted one. Narrowing a run to its own "
+    "hunks narrows what the run commits and measures, never the working tree; never remove or "
+    "revert a hunk this run did not author."
 )
 #: `_LEDGER_CLAUSE` for a relayed ask: the ledger's ask item is an EM's relay, not the PM's words.
 _RELAYED_LEDGER_CLAUSE = _LEDGER_CLAUSE.replace(
@@ -1931,6 +1933,8 @@ def _test_instruction_js(
             "cause; never fall back to the working tree. "
             "On a `co_tenant_dependency: {...}` line, return `zero_run_cause` set to its `parked` or `cause` value "
             "and `co_tenant` set to the parsed object. "
+            "On an `own_delta_missing:` line, return `zero_run_cause` `own_delta_missing` and name the run and "
+            "path it carries; never call it a peer's work. "
             + _MEASURED_REV_32004_CLAUSE
             + "Run the scoped test targets: [",
             "js:(_manifest.test_targets ?? []).join(', ')",

@@ -30,6 +30,9 @@ for a landed or running run). A bare string `args` is the ask.
 A sizing carrying a non-empty `research` block is emitted on the research route (`from_sizing`,
 with `context` paths as the route's `context`; `brief`/`brief_file` are refused there); any other
 sizing takes the plan chain (`ask` + `sizing_path`); only the plan chain echoes inherited revisions.
+Optional `baton` (a repo path, `asks` only) rides to the fan-out verbatim: an `asks` item marked `source: "pm"`
+whose text the baton carries and its `origin_session` pm_turns log holds as the PM's words is stamped pm; a
+`baton` beside `ask`/`sizing`, or a non-string one, is refused naming it.
 Refusals deny with the engine's own reason; a submission for a sizing a live run is already
 working denies naming that run (`coordinator_core.warp_live`).
 
@@ -88,7 +91,7 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
-    "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
+    "ask", "asks", "baton", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
     "em_rationale", "em_size", "family", "fresh", "join", "repo", "resume_in_place", "resume_run_id", "route_preference", "sender", "takeover",
     "sizing",
     "source", "stop_after", "supersedes", "writes",
@@ -111,6 +114,20 @@ def _em_size_param(tool_input: Mapping[str, Any], multi_ask: bool) -> tuple[Opti
     if multi_ask:
         return None, "em_size rides one run, not a set of sibling runs. Submit each ask on its own."
     return size, None
+
+
+def _baton_param(tool_input: Mapping[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """(baton path or None, refusal) for the optional `args.baton`: the repo path of a spinoff baton whose
+    `origin_session` pm_turns log proves a `source: pm` asks item. Rides `asks` only; the fan-out does the proof."""
+    args = tool_input.get("args")
+    value = args.get("baton") if isinstance(args, dict) else None
+    if value is None:
+        return None, None
+    if not isinstance(value, str) or not value.strip():
+        return None, "baton must be a repo path (a non-empty string)."
+    if not (isinstance(args, dict) and "asks" in args):
+        return None, "baton rides an asks submission: submit `asks: [{ask, source: \"pm\"}]` beside it."
+    return value.strip(), None
 
 
 def _family_refusal(where: str, value: Any) -> Optional[str]:
@@ -2143,6 +2160,31 @@ def _supersedes(tool_input: Mapping[str, Any]) -> tuple[Optional[str], Optional[
     return value.strip(), None
 
 
+def _void_unstarted_refire(root: Path, sizing_rel: str, named: object) -> bool:
+    """True when a `superseded-by-refire` close of `sizing_rel` whose successor never launched was voided;
+    best-effort, False on any read or write failure."""
+    from coordinator_core.ops.dispatch_emit.halted_run import void_unstarted_supersede
+
+    try:
+        return void_unstarted_supersede(root, sizing_rel, named) is not None
+    except (OSError, ValueError):
+        return False
+
+
+def _stamp_refire_successor(root: Path, retired: Sequence[str], run_id: str) -> None:
+    """Name the minted `run_id` in each retired run's `superseded-by-refire` evidence, so a plain refire can
+    void the close if `run_id`'s script never launches. Best-effort: a run left unstamped stays superseded."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.halted_run import stamp_refire_successor
+
+    for source in dict.fromkeys(retired):
+        if source != run_id:
+            try:
+                stamp_refire_successor(record_dir(root, source), run_id)
+            except (OSError, ValueError):
+                pass
+
+
 def _carry_retired_revisions(root: Path, retired: Sequence[str], run_id: str) -> str:
     """Carry the notes and queued revisions of each retired halted run into the fresh `run_id`, and
     answer the reply sentence naming them and their source run; "" when nothing moved or the carry failed."""
@@ -3022,6 +3064,8 @@ def _multi_root_asks(
         fan_params: dict = {"asks": fan_items[key], "session_id": session_id or ""}
         if own is not None and root.resolve() != own.resolve():
             fan_params["session_root"] = str(own)
+        if isinstance(call_args.get("baton"), str) and call_args["baton"].strip():
+            fan_params["baton"] = call_args["baton"].strip()
         if isinstance(call_args.get("sender"), str):
             fan_params["sender"] = call_args["sender"]
         if call_args.get("confirm_split") is True:
@@ -3785,6 +3829,9 @@ def _evaluate(
         return _refuse(chatty_why)
     if call_chatty is True and asks is not None and len(asks) > 1:
         return _refuse("chatty is not carried by a multi-item asks fan-out; submit one ask per chatty run.")
+    baton, baton_refusal = _baton_param(payload["tool_input"])
+    if baton_refusal:
+        return _refuse(baton_refusal)
     em_size, em_size_refusal = _em_size_param(payload["tool_input"], asks is not None and len(asks) > 1)
     if em_size_refusal:
         return _refuse(em_size_refusal)
@@ -3807,7 +3854,7 @@ def _evaluate(
             asks = [{**item, "stop_after": item.get("stop_after", call_stop)} for item in asks]
         if call_family is not None:
             asks = [{**item, "family": item.get("family", call_family)} for item in asks]
-        if len(asks) == 1 and join is None and not (
+        if len(asks) == 1 and join is None and baton is None and not (
             asks[0].get("sender") or asks[0].get("relayed_text") or payload["tool_input"]["args"].get("sender")
         ):
             ask, source = asks[0]["ask"], asks[0].get("source")
@@ -3944,6 +3991,8 @@ def _evaluate(
             fan_params["session_root"] = session_root
         if join is not None:
             fan_params["join"] = join
+        if baton is not None:
+            fan_params["baton"] = baton
         if isinstance(payload["tool_input"]["args"].get("sender"), str):
             fan_params["sender"] = payload["tool_input"]["args"]["sender"]
         if payload["tool_input"]["args"].get("confirm_split") is True:
@@ -4059,6 +4108,17 @@ def _evaluate(
             )
             if not isinstance(stranded, str):
                 stranded = None
+            if (live or stranded) and not _fresh_flag(payload["tool_input"]):
+                # Trap: a refire's successor that never launched holds a token and reads live; the plain refire voids it.
+                if _void_unstarted_refire(root, sizing_rel, _resume_run_id(payload["tool_input"])):
+                    live = warp_live.live_run_for_sizing(
+                        root, sizing_rel, session_id=session_id, transcript_path=transcript
+                    )
+                    stranded = _bounded_call(
+                        ("runner_less", str(root), sizing_rel), lambda: _runner_less_run(root, sizing_rel, live)
+                    )
+                    if not isinstance(stranded, str):
+                        stranded = None
             if stranded:
                 import time
 
@@ -4212,6 +4272,8 @@ def _evaluate(
     except OSError:
         pass  # liveness then reads the run token alone
 
+    if retired:
+        _stamp_refire_successor(root, retired, str(run_id))
     carried_note = _carry_retired_revisions(root, retired, str(run_id)) if retired else ""
     marked = ""
     if supersedes:

@@ -28,7 +28,7 @@ _SCAN_PATTERNS = ("terminal_commit*.py", "land_run*.py", "run_landing.py", "halt
 #: ``refused=`` expressions fed by a runtime value; a new one must be classed here deliberately.
 _DYNAMIC_REFUSED = frozenset({
     "exc.reason", "self.refused", "exc.kind", "type(exc).__name__", "first.reason",
-    "exc.refused", "code", "overlap", "error.get('refused')", "refused_code(shipped_reply_field)",
+    "exc.refused", "code", "overlap", "error.get('refused')", "refused_code(shipped_reply_field)", "out['refused']",
     "ls.SECRET_IN_DIFF", "_secrets.SECRET_IN_DIFF", "PACK_READ_STALL_HALT_KIND",
 })
 
@@ -55,6 +55,7 @@ _PINS = {
     "empty-subject": _TESTS + "test_terminal_commit_partial_rows.py",
     "blob-drift": _TESTS + "test_land_run_product.py",
     "own-hunk-head-moved": _THIS,
+    "stamp-merge-conflict": _TESTS + "test_land_stamp_ancestry.py",
     "commit-set-not-recorded-hunks": _TESTS + "test_land_run_recorded_hunks_exact.py",
     "no-close-job": _TESTS + "test_land_run_reclose.py",
     "close-job-plan-mismatch": _TESTS + "test_land_run_reclose.py",
@@ -88,6 +89,9 @@ _PINS = {
     "index-lock-busy": _THIS,
     "head-unreadable": _THIS,
     "dispatch-abandoned": _THIS,
+    "work-root": _TESTS + "test_land_run_grind.py",
+    "halted-by-malformed-json": _TESTS + "test_halted_record_commit.py",
+    "land-ref-behind-upstream": _TESTS + "test_land_run.py",
 }
 
 
@@ -240,7 +244,7 @@ def test_record_dir_escapes_refuses_with_its_registered_reason(tmp_path, monkeyp
     monkeypatch.setattr(halted_record_commit, "halted_naming_existing_plan", lambda *a, **k: {})
     monkeypatch.setattr(halted_record_commit, "contained_path", lambda *a, **k: None)
     reply = halted_record_commit._commit_halted_record(
-        tmp_path, tmp_path, {halted_record_commit.HALTED_RECORD_PARAM: "x", "run_id": "run-1"},
+        tmp_path, tmp_path, {halted_record_commit.HALTED_RECORD_PARAM: {}, "run_id": "run-1"},
     )
     assert reply.get("refused") == "record-dir-escapes"
     assert reg.LAND_REFUSAL_REGISTRY["record-dir-escapes"].harm in dr.IRREVERSIBLE_CLASSES

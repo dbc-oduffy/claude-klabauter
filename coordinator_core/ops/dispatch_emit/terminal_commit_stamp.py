@@ -24,6 +24,41 @@ from coordinator_core.ops.dispatch_emit.worktree_snapshot import (
 _PYTEST_NODE = re.compile(r"[\w./-]+\.py::[\w.\[\]-]+(?:::[\w.\[\]-]+)*")
 
 
+def review_rows_not_held(held: object, rows: list) -> list:
+    """``rows`` minus those an evidence sidecar's ``reviews:`` list (``held``) already holds: a
+    multiset match on ``REVIEW_ROW_FIELDS``, ``recorded_at`` ignored, so each held row cancels one
+    firing and a replayed landing appends nothing it already wrote. A non-list ``held`` dedupes nothing."""
+    import collections
+
+    from coordinator_core.ops.criterion_evidence import REVIEW_ROW_FIELDS
+
+    if not isinstance(held, list):
+        return list(rows)
+
+    def key(row: object) -> Optional[tuple]:
+        return tuple(row.get(f) for f in REVIEW_ROW_FIELDS) if isinstance(row, dict) else None
+
+    seen = collections.Counter(k for k in map(key, held) if k is not None)
+    fresh: list = []
+    for row in rows:
+        k = key(row)
+        if k is not None and seen[k] > 0:
+            seen[k] -= 1
+            continue
+        fresh.append(row)
+    return fresh
+
+
+def review_rows_not_in_sidecar(raw: Optional[str], rows: list) -> list:
+    """``rows`` minus those the evidence sidecar text ``raw`` already holds; a missing, unreadable
+    or malformed sidecar dedupes nothing."""
+    try:
+        doc = _yaml_load(raw) if raw else None
+    except Exception:  # noqa: BLE001 -- the writer reports an unreadable sidecar
+        return list(rows)
+    return review_rows_not_held(doc.get("reviews") if isinstance(doc, dict) else None, list(rows))
+
+
 def _archive_in_run(worktree_root: Path, repo_root: Path, rels: tuple) -> tuple:
     """Rename the run's shipped sizing (``rels[0]``) and consumed baton (``rels[1:]``) under
     ``archive/`` in-process, through the sweep families' own classification. Returns

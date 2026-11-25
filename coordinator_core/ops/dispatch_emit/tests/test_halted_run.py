@@ -137,9 +137,90 @@ def test_mark_superseded_by_refire_closes_a_halted_or_resumed_marker(tmp_path: P
     assert data["status"] == hr.STATUS_SUPERSEDED and data["halted"] == "x" and data[hr.HALT_ENGINE_FIELD] == ENGINE_A
     assert data[hr.SUPERSEDED_EVIDENCE_FIELD] == {
         "kind": hr.SUPERSEDED_BY_REFIRE, "prior_engine": ENGINE_A, "engine": ENGINE_B,
-        "at": "2026-11-18T00:00:00Z", "kept_credit": False,
+        "at": "2026-11-18T00:00:00Z", "kept_credit": False, "prior_status": prior,
     }
     assert hr.halted_run_for(tmp_path, SIZING) is None
+
+
+def _successor(root: Path, run_id: str, *, started: bool = False, stage: str = "minted") -> Path:
+    from coordinator_core.ops.dispatch_emit.ask_contract import stamp_plan_phase_at, write_run_stage_at
+
+    rd = root / RECORD_DIR_ROOT / run_id
+    rd.mkdir(parents=True, exist_ok=True)
+    write_run_stage_at(rd, stage)
+    if started:
+        assert stamp_plan_phase_at(rd) is True
+    return rd
+
+
+SUCCESSOR = "ask-20261016T030000-cccccc"
+
+
+def _refire_closed(root: Path, prior: str, *, successor: object = SUCCESSOR) -> Path:
+    d = _dir(root, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    if prior == "resumed":
+        hr.mark_resumed(d)
+    assert hr.mark_superseded_by_refire(d, prior_engine=None, engine=ENGINE_B, at="t", successor=successor) is True
+    return d
+
+
+@pytest.mark.parametrize("prior", ["halted", "resumed"])
+def test_an_unlaunched_successor_voids_the_refire_close_and_the_prior_run_resumes(tmp_path: Path, prior) -> None:
+    d = _refire_closed(tmp_path, prior)
+    srd = _successor(tmp_path, SUCCESSOR)
+    assert hr._read(d)["superseded_evidence"]["successor"] == SUCCESSOR
+    assert hr.halted_run_for(tmp_path, SIZING) is None
+
+    assert hr.halted_run_to_resume(tmp_path, SIZING) == d.name
+
+    data = json.loads((d / hr.HALTED_FILE).read_text())
+    assert data["status"] == hr.STATUS_HALTED and hr.SUPERSEDED_EVIDENCE_FIELD not in data
+    assert data[hr.VOIDED_SUPERSEDE_FIELD]["kind"] == hr.SUPERSEDED_BY_REFIRE
+    assert data[hr.VOIDED_SUPERSEDE_FIELD]["prior_status"] == prior
+    assert hr.halted_run_for(tmp_path, SIZING) == d.name
+    retired = json.loads((srd / hr.HALTED_FILE).read_text())
+    assert retired["status"] == hr.STATUS_SUPERSEDED and retired["superseded_by"] == d.name
+
+
+def test_a_started_or_staged_successor_keeps_the_refire_close(tmp_path: Path) -> None:
+    d = _refire_closed(tmp_path, "halted")
+    _successor(tmp_path, SUCCESSOR, started=True)
+    assert hr.void_unstarted_supersede(tmp_path, SIZING) is None
+    assert hr.halted_run_to_resume(tmp_path, SIZING) is None
+    assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
+    _successor(tmp_path, SUCCESSOR, stage="staged")
+    assert hr.void_unstarted_supersede(tmp_path, SIZING) is None
+    assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
+
+
+def test_a_refire_close_with_no_successor_or_no_successor_record_stays_superseded(tmp_path: Path) -> None:
+    d = _refire_closed(tmp_path, "halted", successor=None)
+    assert hr.halted_run_to_resume(tmp_path, SIZING) is None
+    assert hr.stamp_refire_successor(d, SUCCESSOR) is True
+    assert hr.stamp_refire_successor(d, "ask-other") is False  # stamp-once
+    assert hr.halted_run_to_resume(tmp_path, SIZING) is None  # the named successor has no run-stage record
+    assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
+
+
+def test_a_newer_halted_run_other_than_the_successor_blocks_the_void(tmp_path: Path) -> None:
+    d = _refire_closed(tmp_path, "halted")
+    _successor(tmp_path, SUCCESSOR)
+    newer = _dir(tmp_path, "20261016T020000-bbbbbb")
+    hr.write_halt_marker(newer, halted="x", sizing_rel=SIZING)
+
+    assert hr.void_unstarted_supersede(tmp_path, SIZING) is None
+    assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
+    assert hr.halted_run_to_resume(tmp_path, SIZING) == newer.name
+
+
+def test_a_marker_that_is_not_a_refire_close_is_never_voided(tmp_path: Path) -> None:
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    assert hr.mark_superseded(d, hr._read(d), {"kind": "other", "successor": SUCCESSOR}) is True
+    _successor(tmp_path, SUCCESSOR)
+    assert hr.void_unstarted_supersede(tmp_path, SIZING, d.name) is None
+    assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
 
 
 def test_mark_superseded_by_refire_refuses_every_other_status(tmp_path: Path) -> None:

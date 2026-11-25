@@ -524,6 +524,11 @@ NOT_DELIVERED_PREFIXES = ("[unimatrix-peer-agy] not delivered", "[unimatrix-peer
 _MIRROR_MARKERS = ("unimatrixRemote", "macSocketPath", "unimatrixMirror", "farPid")
 
 
+def _push_only_mirror(entry) -> bool:
+    """True for a relay-pushed mirror row: a socket forwarding onto the far relay's push channel, no bridge behind it."""
+    return bool(entry.get("unimatrixMirror")) and not (entry.get("unimatrixRemote") or entry.get("macSocketPath"))
+
+
 def _far_alias_is_stale(entry):
     """True when `entry` is a Claude mirror registered under another far session's name.
 
@@ -745,6 +750,29 @@ class Registration:
         return (previous is not None and time.monotonic() < deadline
                 and secrets.compare_digest(token.encode("utf-8"), previous.encode("utf-8")))
 
+    def refusal(self, token) -> str:
+        """The refusal text for a rejected `token`: which side's authorization failed, and the command that clears it."""
+        try:
+            raw = Path(self.key).read_text(encoding="utf-8").strip()
+            try:
+                parsed = json.loads(raw)
+                on_disk = parsed.get("peerToken") if isinstance(parsed, dict) else None
+            except ValueError:
+                on_disk = raw
+        except OSError:
+            on_disk = None
+        if not isinstance(token, str) or not token:
+            side = ("sender side: no token presented; the router could not read this face's key "
+                    f"under {self.sessions_dir}")
+        elif not isinstance(on_disk, str) or not on_disk:
+            side = f"face side: key file {self.key} is unreadable"
+        elif not secrets.compare_digest(on_disk.encode("utf-8"), self.token.encode("utf-8")):
+            side = f"face side: key file {self.key} disagrees with the live token"
+        else:
+            side = "sender side: the token held is stale (rotated or from an older face)"
+        return (f"not delivered: auth ({side}); clear: "
+                f'"{sys.executable}" "{here() / _ROUTER_NAME}" --restart')
+
     def rotate(self, grace_s) -> float:
         """Mint a new token, accept {old,new} first, then replace the key file; returns the wall-clock grace deadline.
 
@@ -824,7 +852,7 @@ async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=Fa
             if not reg.accepts(token):
                 # Silence is acceptance, so a refusal must be written.
                 try:
-                    writer.write((json.dumps({"ok": False, "error": "not delivered: auth"}) + "\n").encode("utf-8"))
+                    writer.write((json.dumps({"ok": False, "error": reg.refusal(token)}) + "\n").encode("utf-8"))
                     await writer.drain()
                 except OSError:
                     pass
@@ -1617,14 +1645,17 @@ class Router:
             ready[name] = ok
         return ready
 
-    def roster_rows(self, sender="cli", ready=None):
+    def roster_rows(self, sender="cli", ready=None) -> tuple:
         """(reachable names, one {name, box, vendor} row per reachable name).
+
+        A name backed only by relay-pushed mirror rows carries `mirror_only: True`: no live session is
+        evidenced behind it, so a listing never calls it ready.
 
         Reachable: a peer that is ready, or an external roster session whose registered endpoint
         exists; never `sender` itself. This is the set a send from `sender` can resolve now.
         """
         ready = self.peer_readiness() if ready is None else ready
-        entries = {}
+        entries, backed = {}, set()
         try:
             files = os.listdir(self.sessions_dir)
         except FileNotFoundError:
@@ -1642,6 +1673,8 @@ class Router:
                     or entry.get("unimatrixTransport") or not isinstance(entry.get("pid"), int)
                     or not _roster().pid_alive(entry["pid"]) or not self.external_codex_sendable(entry)):
                 continue
+            if not _push_only_mirror(entry):
+                backed.add(name)
             if name in entries and (entry.get("startedAt") or 0) < (entries[name].get("startedAt") or 0):
                 continue
             entries[name] = entry
@@ -1655,7 +1688,8 @@ class Router:
         box = contract.local_box()
         rows = [{"name": n, "box": box, "vendor": self.peers[n]["vendor"], "this_box": True,
                  **({"stale": True} if self.peer_stale(n) else {})} if n in self.peers
-                else contract.agent_row(entries[n], box) for n in sorted(names)]
+                else {**contract.agent_row(entries[n], box),
+                      **({"mirror_only": True} if n not in backed else {})} for n in sorted(names)]
         for n, marker in sorted(self.stale_mirror_markers().items()):
             if n != sender and n not in names:
                 names.add(n)

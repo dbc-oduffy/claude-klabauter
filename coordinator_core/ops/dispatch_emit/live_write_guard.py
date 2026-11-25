@@ -12,7 +12,7 @@ keep every foreign hunk, or a refusal; same attribution, same zero-spawn rule.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 UNATTRIBUTED = "unattributed"
 
@@ -141,8 +141,8 @@ def _clash(a: tuple[int, int], b: tuple[int, int]) -> bool:
 
 def merge_or_refuse(
     root, run_id: Optional[str], rel: str, new_bytes: bytes, *,
-    base_blob_sha: Optional[str] = None, live_bytes: Optional[bytes] = None,
-):
+    base_blob_sha: Optional[str] = None, live_bytes: Optional[bytes] = None, peers: Sequence[str] = (),
+) -> tuple[Optional[bytes], Optional[str]]:
     """`(bytes, None)` to write, or `(None, refusal)` with live left untouched.
 
     3-way merge on lines, in process: base is HEAD, ours is the live file, theirs is `new_bytes`.
@@ -157,18 +157,22 @@ def merge_or_refuse(
     `live_bytes`, when given, is the ours side instead of the file on disk (the bytes a writer already
     replaced, e.g. a leg's pre-write snapshot). Attribution runs on those bytes (`_own_in_bytes`): a hunk
     only `run_id`'s baseline delta explains is its own earlier work and yields to `new_bytes`; every other hunk
-    is foreign, and one `new_bytes` already contains is kept, not a clash."""
+    is foreign, and one `new_bytes` already contains is kept, not a clash.
+
+    `peers` (with `live_bytes`) are run ids whose baseline delta over `live_bytes` also explains a hunk, even
+    where the claim scan on the file now on disk names none (a leg's write dropped the hunk that made the peer
+    a dirty claimant). A hunk such a delta reaches is foreign, and a refusal over it names that run."""
     path = str(rel)
     try:
-        return _merge(Path(root), run_id, path, new_bytes, base_blob_sha, live_bytes)
+        return _merge(Path(root), run_id, path, new_bytes, base_blob_sha, live_bytes, tuple(peers))
     except Exception as exc:  # noqa: BLE001 -- unknown claim is a refusal, never a blind write
         return None, f"write to {path} refused: merge failed ({type(exc).__name__}); live left untouched."
 
 
 def _merge(
     root: Path, run_id: Optional[str], path: str, new_bytes: bytes, base_blob_sha: Optional[str],
-    live_override: Optional[bytes] = None,
-):
+    live_override: Optional[bytes] = None, peers: Sequence[str] = (),
+) -> tuple[Optional[bytes], Optional[str]]:
     from coordinator_core.git import git_state
     from coordinator_core.ops.dispatch_emit import run_hunk_claims, sibling_claims
 
@@ -195,8 +199,11 @@ def _merge(
         return new_bytes, None
     holder = sibling_claims.sibling_run_claims(root, run_id, [rel]).get(rel)
     hunks = _as_hunks(rel, live_ops)
+    owners_by_hunk: dict[int, str] = {}
     if live_override is not None:
-        own = _own_in_bytes(root, run_id, rel, live, hunks, holder)
+        holders = [holder] if holder else []
+        holders += [p for p in peers if p and p != holder]
+        own, owners_by_hunk = _own_in_bytes(root, run_id, rel, live, hunks, holders)
         unattributed = {id(h) for h in hunks if id(h) not in own}
     else:
         split = run_hunk_claims.own_hunks(root, run_id or "", rel, hunks, {holder: True} if holder else {})
@@ -208,7 +215,7 @@ def _merge(
     foreign: list[tuple[int, int, list[bytes], str]] = []
     for hunk, (_t, i1, i2, j1, j2) in zip(hunks, live_ops):
         if id(hunk) not in own:
-            owner = UNATTRIBUTED if (id(hunk) in unattributed or not holder) else holder
+            owner = owners_by_hunk.get(id(hunk)) or (UNATTRIBUTED if (id(hunk) in unattributed or not holder) else holder)
             foreign.append((i1, i2, live[j1:j2], owner))
     clashing: list[str] = []
     kept: list[tuple[int, int, list[bytes], str]] = []
@@ -219,7 +226,7 @@ def _merge(
         elif not (len(hit) == 1 and (hit[0] == ((i1, i2), text) or (text and _contains(hit[0][1], text)))):
             clashing.append(owner)
     if clashing:
-        named = holder if holder in clashing else UNATTRIBUTED
+        named = next((o for o in clashing if o != UNATTRIBUTED), UNATTRIBUTED)
         return None, (
             f"write to {rel} overlaps {len(clashing)} unlanded hunk(s) held by {named}; "
             "live left untouched. Rebuild on live HEAD or land by commit."
@@ -237,12 +244,15 @@ def _merge(
     return b"".join(out), None
 
 
-def _own_in_bytes(root: Path, run_id: Optional[str], rel: str, live: list[bytes], hunks, holder: Optional[str]) -> set[int]:
-    """Ids of `hunks` (live-vs-HEAD over the `live` bytes, not the file on disk) that only `run_id`'s baseline
-    delta explains: its own earlier edits. A hunk a peer holder's delta also reaches, one the run's write print
-    does not vouch for, or any unreadable input is not own (unknown holds)."""
+def _own_in_bytes(
+    root: Path, run_id: Optional[str], rel: str, live: list[bytes], hunks, holders: Sequence[str],
+) -> tuple[set[int], dict[int, str]]:
+    """`(own ids, owner by hunk id)` over `hunks` (live-vs-HEAD over the `live` bytes, not the file on disk).
+    Own: only `run_id`'s baseline delta explains the hunk, its own earlier edit. A hunk any peer holder's delta
+    also reaches (the first such holder is its owner), one the run's write print does not vouch for, or any
+    unreadable input is not own (unknown holds)."""
     if not run_id:
-        return set()
+        return set(), {}
     try:
         from coordinator_core.git.git_dir import resolve_git_common_dir
         from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
@@ -250,23 +260,41 @@ def _own_in_bytes(root: Path, run_id: Optional[str], rel: str, live: list[bytes]
         common = resolve_git_common_dir(root)
         mine = rhc._claimant_delta(root, common, run_id, rel, live, absent_claims_all=True)
         if not mine:
-            return set()
-        theirs = rhc._claimant_delta(root, common, holder, rel, live, coarse_ok=True) if holder else None
+            return set(), {}
+        theirs = [(h, rhc._claimant_delta(root, common, h, rel, live, coarse_ok=True)) for h in holders]
         foreign = rhc._foreign_spans(root, common, run_id, rel, live)
         if foreign is None:
-            return set()
+            return set(), {}
 
         def reaches(spans, lo, hi) -> bool:
             return any(a <= hi and lo <= b for a, b in spans or [])
 
         out: set[int] = set()
+        owners: dict[int, str] = {}
         for h in hunks:
             lo, hi = rhc._new_span(h)
-            if reaches(mine, lo, hi) and not reaches(theirs, lo, hi) and not reaches(foreign, lo, hi):
+            holder = next((who for who, spans in theirs if reaches(spans, lo, hi)), None)
+            if holder:
+                owners[id(h)] = holder
+            elif reaches(mine, lo, hi) and not reaches(foreign, lo, hi):
                 out.add(id(h))
-        return out
+        return out, owners
     except Exception:  # noqa: BLE001 -- unknown holds: the hunk stays foreign
-        return set()
+        return set(), {}
+
+
+def _declaring_peers(root: Path, run_id: Optional[str], rel: str) -> list[str]:
+    """Unlanded runs other than `run_id` and its own earlier attempts whose manifest declares `rel`: the runs
+    whose recorded delta may sit in a file a leg has just rewritten. Unlike `sibling_run_claims` this does not
+    read the tree's dirt, which is exactly what a dropped hunk erased. Zero spawns; unknown yields none."""
+    try:
+        from coordinator_core.ops.dispatch_emit import run_hunk_claims, sibling_claims
+
+        declared = [r for r in sibling_claims._unlanded_run_ids(root, run_id) if r != run_id and sibling_claims._declares(root, r, rel)]
+        kin = run_hunk_claims.own_lineage(root, run_id or "", {r: False for r in declared}) if run_id else set()
+        return [r for r in declared if r not in kin]
+    except Exception:  # noqa: BLE001 -- unknown peers: the claim scan alone decides
+        return []
 
 
 def _pre_leg_bytes(root: Path, sha: str, post: bytes) -> Optional[bytes]:
@@ -321,7 +349,7 @@ def restore_after_leg(root, snapshot, run_id: Optional[str], record_dir) -> dict
         pre = _pre_leg_bytes(root, sha, post) if sha else None
         if pre is None or pre == post:
             continue
-        merged, refusal = merge_or_refuse(root, run_id, rel, post, live_bytes=pre)
+        merged, refusal = merge_or_refuse(root, run_id, rel, post, live_bytes=pre, peers=_declaring_peers(root, run_id, rel))
         if refusal is not None:
             reason = f"{refusal} The pre-leg bytes are kept as blob {sha.removeprefix('raw:')}."
             tree_write_fence.record_refusal(record_dir, rel, reason, run_id)
