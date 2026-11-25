@@ -1635,6 +1635,49 @@ def _premintable(params: dict, sizing_rel: Optional[str], asks: Optional[list], 
     )
 
 
+def _unfired_holder(root: Path, ask: str) -> Optional[str]:
+    """The newest unfired minted run (script written, inside the resend window) holding this raw `ask`."""
+    import time
+
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.op import _UNFIRED_RESEND_WINDOW_SECS, _script_written
+
+    digest = normalized_ask_hash(ask)
+    held = [r for r in run_token.held_records(root) if isinstance(r.get("run_id"), str) and r.get("ask_sha256") == digest]
+    if not held:
+        return None
+    dirs = warp_live._launch_dirs(None)
+    now = time.time()
+    for record in sorted(held, key=lambda r: float(r.get("minted_at") or 0), reverse=True):
+        minted = record.get("minted_at")
+        if (
+            isinstance(minted, (int, float)) and now - minted <= _UNFIRED_RESEND_WINDOW_SECS
+            and _script_written(root, record)
+            and warp_live._unfired(root, record, dirs)
+        ):
+            return record["run_id"]
+    return None
+
+
+def _folds_into(root: Path, ask: str, listed: bool = False) -> Optional[str]:
+    """The run id `dispatch.emit` folds a raw `ask` into (an unfired minted run or a live one holding the
+    same ask), else None; a stalled or failed read is None. Trap: a premint answers with a fresh id the
+    deferred emit then discards for this holder, so its `workflow.revise` hint names an unknown run.
+    `listed`: the refire-join already listed `run_for_ask` this submit (a live holder was denied there),
+    so only the unfired-holder check runs and no second listing is made."""
+    from coordinator_core.ops.dispatch_emit.op import _resend_holder
+
+    def _find() -> Optional[str]:
+        return _unfired_holder(root, ask) if listed else _resend_holder(root, None, ask)
+
+    try:
+        found = _bounded_call(("folds-into", str(root), normalized_ask_hash(ask), listed), _find)
+    except Exception:  # noqa: BLE001 - a guard that cannot run allows (the premint then proceeds as before)
+        return None
+    return found if isinstance(found, str) else None
+
+
 def _premint_marker(params: dict, root: Path, run_id: Optional[str] = None) -> dict:
     """Mint the run id (`run_id` when the caller chose it first) and publish its run-token marker (the one
     record write before the answer). A marker whose deferred script never runs is reaped by the token TTL."""
@@ -4033,7 +4076,9 @@ def _evaluate(
             else None
         )
         held = None
+        ask_listed = False
         if pointer is None or pointer.is_file():  # a premintable ask no premint holds has no run to join: no listing
+            ask_listed = True
             with warp_live.listing_scope():
                 held = warp_live.run_for_ask(
                     root, normalized_ask_hash(ask), session_id=session_id, transcript_path=transcript
@@ -4196,7 +4241,12 @@ def _evaluate(
         )
         if resume_envelope is not None:
             return resume_envelope
-    if result is None and emit is None and _premintable(params, sizing_rel, asks, supersedes):
+    if (
+        result is None
+        and emit is None
+        and _premintable(params, sizing_rel, asks, supersedes)
+        and _folds_into(root, params["ask"], ask_listed) is None  # a fold answers inline, naming the run it folded into
+    ):
         minted = None
         from coordinator_core.ops.dispatch_emit import run_token as _rt
 
