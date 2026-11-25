@@ -142,6 +142,7 @@ def _clash(a: tuple[int, int], b: tuple[int, int]) -> bool:
 def merge_or_refuse(
     root, run_id: Optional[str], rel: str, new_bytes: bytes, *,
     base_blob_sha: Optional[str] = None, live_bytes: Optional[bytes] = None, peers: Sequence[str] = (),
+    run_priors: Sequence[bytes] = (),
 ) -> tuple[Optional[bytes], Optional[str]]:
     """`(bytes, None)` to write, or `(None, refusal)` with live left untouched.
 
@@ -161,17 +162,21 @@ def merge_or_refuse(
 
     `peers` (with `live_bytes`) are run ids whose baseline delta over `live_bytes` also explains a hunk, even
     where the claim scan on the file now on disk names none (a leg's write dropped the hunk that made the peer
-    a dirty claimant). A hunk such a delta reaches is foreign, and a refusal over it names that run."""
+    a dirty claimant). A hunk such a delta reaches is foreign, and a refusal over it names that run.
+
+    `run_priors` (with `live_bytes`) are the pre-write bytes of earlier legs of `run_id` that wrote `rel`. A hunk
+    their delta over `live_bytes` reaches is the run's own when no peer delta and no write-print difference reaches
+    it either, even where the run's baseline delta explains nothing. Path membership alone never qualifies."""
     path = str(rel)
     try:
-        return _merge(Path(root), run_id, path, new_bytes, base_blob_sha, live_bytes, tuple(peers))
+        return _merge(Path(root), run_id, path, new_bytes, base_blob_sha, live_bytes, tuple(peers), tuple(run_priors))
     except Exception as exc:  # noqa: BLE001 -- unknown claim is a refusal, never a blind write
         return None, f"write to {path} refused: merge failed ({type(exc).__name__}); live left untouched."
 
 
 def _merge(
     root: Path, run_id: Optional[str], path: str, new_bytes: bytes, base_blob_sha: Optional[str],
-    live_override: Optional[bytes] = None, peers: Sequence[str] = (),
+    live_override: Optional[bytes] = None, peers: Sequence[str] = (), run_priors: Sequence[bytes] = (),
 ) -> tuple[Optional[bytes], Optional[str]]:
     from coordinator_core.git import git_state
     from coordinator_core.ops.dispatch_emit import run_hunk_claims, sibling_claims
@@ -203,7 +208,7 @@ def _merge(
     if live_override is not None:
         holders = [holder] if holder else []
         holders += [p for p in peers if p and p != holder]
-        own, owners_by_hunk = _own_in_bytes(root, run_id, rel, live, hunks, holders)
+        own, owners_by_hunk = _own_in_bytes(root, run_id, rel, live, hunks, holders, run_priors)
         unattributed = {id(h) for h in hunks if id(h) not in own}
     else:
         split = run_hunk_claims.own_hunks(root, run_id or "", rel, hunks, {holder: True} if holder else {})
@@ -246,11 +251,14 @@ def _merge(
 
 def _own_in_bytes(
     root: Path, run_id: Optional[str], rel: str, live: list[bytes], hunks, holders: Sequence[str],
+    run_priors: Sequence[bytes] = (),
 ) -> tuple[set[int], dict[int, str]]:
     """`(own ids, owner by hunk id)` over `hunks` (live-vs-HEAD over the `live` bytes, not the file on disk).
-    Own: only `run_id`'s baseline delta explains the hunk, its own earlier edit. A hunk any peer holder's delta
-    also reaches (the first such holder is its owner), one the run's write print does not vouch for, or any
-    unreadable input is not own (unknown holds)."""
+    Own: only `run_id`'s baseline delta explains the hunk, its own earlier edit; or, when that delta is absent or
+    does not reach it, an earlier leg of the run introduced it (`run_priors`: that leg's pre-write bytes differ from
+    `live` there) and every peer delta is readable and misses it. A hunk any peer holder's delta also reaches (the
+    first such holder is its owner), one the run's write print does not vouch for, or any unreadable input is not
+    own (unknown holds)."""
     if not run_id:
         return set(), {}
     try:
@@ -259,12 +267,16 @@ def _own_in_bytes(
 
         common = resolve_git_common_dir(root)
         mine = rhc._claimant_delta(root, common, run_id, rel, live, absent_claims_all=True)
-        if not mine:
-            return set(), {}
         theirs = [(h, rhc._claimant_delta(root, common, h, rel, live, coarse_ok=True)) for h in holders]
         foreign = rhc._foreign_spans(root, common, run_id, rel, live)
         if foreign is None:
             return set(), {}
+        earlier: list[tuple[int, int]] = []
+        if all(spans is not None for _who, spans in theirs):
+            for prior in run_priors:
+                old = prior.splitlines(keepends=True)
+                if not rhc.exceeds_match_bound(old, live):
+                    earlier += rhc._delta_spans(old, live)
 
         def reaches(spans, lo, hi) -> bool:
             return any(a <= hi and lo <= b for a, b in spans or [])
@@ -276,7 +288,7 @@ def _own_in_bytes(
             holder = next((who for who, spans in theirs if reaches(spans, lo, hi)), None)
             if holder:
                 owners[id(h)] = holder
-            elif reaches(mine, lo, hi) and not reaches(foreign, lo, hi):
+            elif (reaches(mine, lo, hi) or reaches(earlier, lo, hi)) and not reaches(foreign, lo, hi):
                 out.add(id(h))
         return out, owners
     except Exception:  # noqa: BLE001 -- unknown holds: the hunk stays foreign
@@ -315,6 +327,27 @@ def _pre_leg_bytes(root: Path, sha: str, post: bytes) -> Optional[bytes]:
     return pre
 
 
+def _earlier_legs(snapshot: Path) -> list[dict]:
+    """The sibling `live-*.json` snapshots beside `snapshot` (the run's other legs): `{"before", "written"}` for each
+    one that measured writes. Unreadable files are skipped; unknown attributes nothing."""
+    import json
+
+    out: list[dict] = []
+    try:
+        names = sorted(p for p in snapshot.parent.glob("live-*.json") if p.name != snapshot.name)
+    except OSError:
+        return out
+    for p in names:
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+            before, written = doc.get("before"), doc.get("live_tree_writes")
+        except (OSError, ValueError):
+            continue
+        if isinstance(before, dict) and isinstance(written, list):
+            out.append({"before": {str(k): v for k, v in before.items() if v}, "written": {str(w) for w in written}})
+    return out
+
+
 def restore_after_leg(root, snapshot, run_id: Optional[str], record_dir) -> dict:
     """Put back the foreign hunks a leg's own tool write dropped from the paths `snapshot` measured as written.
 
@@ -340,6 +373,7 @@ def restore_after_leg(root, snapshot, run_id: Optional[str], record_dir) -> dict
     except Exception:  # noqa: BLE001 -- unknown claim: nothing is excused
         held = {}
     peer_held = [r for r in written if held.get(sibling_claims._norm(r))]
+    earlier: Optional[list[dict]] = None
     for rel in written:
         sha = str(before.get(rel) or "")
         try:
@@ -349,7 +383,12 @@ def restore_after_leg(root, snapshot, run_id: Optional[str], record_dir) -> dict
         pre = _pre_leg_bytes(root, sha, post) if sha else None
         if pre is None or pre == post:
             continue
-        merged, refusal = merge_or_refuse(root, run_id, rel, post, live_bytes=pre, peers=_declaring_peers(root, run_id, rel))
+        if earlier is None:
+            earlier = _earlier_legs(Path(snapshot))
+        priors = [b for b in (_pre_leg_bytes(root, str(d["before"][rel]), post) for d in earlier if rel in d["written"] and d["before"].get(rel)) if b is not None]
+        merged, refusal = merge_or_refuse(
+            root, run_id, rel, post, live_bytes=pre, peers=_declaring_peers(root, run_id, rel), run_priors=priors,
+        )
         if refusal is not None:
             reason = f"{refusal} The pre-leg bytes are kept as blob {sha.removeprefix('raw:')}."
             tree_write_fence.record_refusal(record_dir, rel, reason, run_id)

@@ -50,6 +50,45 @@ def test_stalled_deny_counter_write_drops_within_the_deadline(tmp_path: Path, mo
         release.set()
 
 
+def _read_records(tmp_path: Path, sid: str) -> list[dict]:
+    from coordinator_core import guard_advisory_counter as gac
+
+    path = Path(share_dir(str(tmp_path), sid)) / gac._DENY_COUNTS_FILENAME
+    return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_refused_argv_lands_in_the_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import guard_advisory_counter as gac
+
+    monkeypatch.setattr(gac, "resolve_git_root_cheap", lambda cwd=None: str(tmp_path))
+    gac.record_deny_fire("g", "sid-argv", False, command=["python", "-m", "pytest", "a_test.py"])
+    gac.record_deny_fire("g", "sid-argv", False, command="pytest b_test.py")
+    recs = _read_records(tmp_path, "sid-argv")
+    assert recs[0]["command"] == "python -m pytest a_test.py"
+    assert recs[1]["command"] == "pytest b_test.py"
+
+
+def test_record_without_command_keeps_four_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import guard_advisory_counter as gac
+
+    monkeypatch.setattr(gac, "resolve_git_root_cheap", lambda cwd=None: str(tmp_path))
+    gac.record_deny_fire("g", "sid-nocmd", True)
+    gac.record_deny_fire("g", "sid-nocmd", True, command="")
+    for rec in _read_records(tmp_path, "sid-nocmd"):
+        assert set(rec) == {"guard", "session", "at", "cleared"}
+
+
+def test_oversized_command_is_truncated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import guard_advisory_counter as gac
+
+    monkeypatch.setattr(gac, "resolve_git_root_cheap", lambda cwd=None: str(tmp_path))
+    gac.record_deny_fire("g", "sid-big", False, command="x" * 50000)
+    (rec,) = _read_records(tmp_path, "sid-big")
+    assert len(rec["command"]) < gac._COMMAND_MAX_CHARS + 50
+    assert rec["command"].startswith("x" * 100)
+    assert rec["command"].endswith("...[truncated]")
+
+
 _DENY_RECORD = AlternativeRecord(
     "deny",
     "hard-deny for testing",
@@ -102,7 +141,8 @@ class TestUnclearedHardDenyProducesOneRecord:
         lines = path.read_text(encoding="utf-8").strip("\n").splitlines()
         assert len(lines) == 1
         record = json.loads(lines[0])
-        assert set(record.keys()) == {"guard", "session", "at", "cleared"}
+        assert set(record.keys()) == {"guard", "session", "at", "cleared", "command"}
+        assert record["command"] == "echo hi"
         assert record["guard"] == "block-stash-destruction"
         assert record["session"] == "sess-c6-bash-deny"
         assert record["cleared"] is False

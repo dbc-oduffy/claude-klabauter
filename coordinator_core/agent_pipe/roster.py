@@ -85,7 +85,14 @@ def _external_binding(name: str) -> Optional[dict]:
     row = external_registry.lookup(name)
     if row is None:
         return None
-    return {"kind": KIND_CODEX, "id": row["session_id"], "token": None, "argv": None}
+    return _owned_binding(row)
+
+
+def _owned_binding(row: dict) -> dict:
+    """Binding for a registry row; its `provider` is the kind (codex when absent or not a delivery kind)."""
+    provider = row.get("provider")
+    kind = provider if provider in KINDS else KIND_CODEX
+    return {"kind": kind, "id": row["session_id"], "token": None, "argv": None}
 
 
 def resolve(name: str) -> Optional[dict]:
@@ -104,6 +111,5 @@ def resolve(name: str) -> Optional[dict]:
 def list() -> dict:  # noqa: A001 - public roster verb
     """Every binding, name -> binding; roster.json entries shadow peers.json rows (peer codex argv left None)."""
     from coordinator_core.session import external_registry
-    owned = {sid: {"kind": KIND_CODEX, "id": sid, "token": None, "argv": None}
-             for sid in external_registry.snapshot()}
+    owned = {sid: _owned_binding(row) for sid, row in external_registry.snapshot().items()}
     return {**owned, **_peer_bindings(), **{k: dict(v) for k, v in _load().items() if isinstance(v, dict)}}

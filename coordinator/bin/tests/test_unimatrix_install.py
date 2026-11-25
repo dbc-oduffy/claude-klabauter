@@ -175,6 +175,7 @@ def test_range_constant_and_scripts():
         "unimatrix-peer-agy.py",
         "unimatrix-peer-grok.py",
         "unimatrix-agy-leg.py",
+        "unimatrix-agy-sidecar.py",
         "unimatrix-peer-router.py",
         "unimatrix-agy-hook-pretool.py",
         "unimatrix-agy-hook-launch.py",
@@ -574,6 +575,99 @@ def test_agy_seed_upgrades_entry_lacking_sessionstart(tmp_path):
     assert ui.seed_agy_hook(hp, tmp_path) == "present"
 
 
+_INTERP_A = "/opt/a/python3"
+_INTERP_B = "/opt/b/python3"
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_interpreters_are_live(monkeypatch):
+    real = ui._interpreter_dead
+    monkeypatch.setattr(ui, "_interpreter_dead", lambda w: w not in (_INTERP_A, _INTERP_B) and real(w))
+
+
+def test_agy_seed_heals_an_entry_naming_a_deleted_interpreter_and_keeps_a_live_one(tmp_path, monkeypatch):
+    live = tmp_path / "live-python"
+    live.write_text("", encoding="utf-8")
+    dead = (tmp_path / "gone" / "python").as_posix()
+    monkeypatch.setattr(ui, "_console_python", lambda: live.as_posix())
+    hp = tmp_path / "hooks.json"
+    hp.write_text(json.dumps({ui.AGY_HOOK_KEY: ui.agy_hook_entry(tmp_path, "/e", dead)}), encoding="utf-8")
+    assert ui.seed_agy_hook(hp, tmp_path, "/e") == "updated"
+    commands = _agy_commands(json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY])
+    assert commands and all(c.startswith(live.as_posix() + " ") for c in commands)
+    assert ui.seed_agy_hook(hp, tmp_path, "/e") == "present"
+
+
+def _agy_commands(entry):
+    out = []
+
+    def walk(v):
+        if isinstance(v, dict):
+            if isinstance(v.get("command"), str):
+                out.append(v["command"])
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    walk(entry)
+    return out
+
+
+def _double_quoted(entry):
+    return json.loads(json.dumps(entry).replace("'", '\\"'))
+
+
+def test_agy_seed_keeps_a_working_entry_byte_identical_when_the_process_resolves_another_interpreter(tmp_path, monkeypatch):
+    hp = tmp_path / "hooks.json"
+    hp.write_text(json.dumps({ui.AGY_HOOK_KEY: _double_quoted(ui.agy_hook_entry(tmp_path, "/e", _INTERP_A))}, indent=2) + "\n",
+                  encoding="utf-8")
+    before = hp.read_bytes()
+    monkeypatch.setattr(ui, "_console_python", lambda: _INTERP_B)
+    assert ui.seed_agy_hook(hp, tmp_path, "/e") == "present"
+    assert hp.read_bytes() == before
+
+
+def test_agy_seed_argv_change_keeps_existing_interpreter_and_quoting_form(tmp_path, monkeypatch):
+    hp = tmp_path / "hooks.json"
+    hp.write_text(json.dumps({ui.AGY_HOOK_KEY: _double_quoted(ui.agy_hook_entry(tmp_path, "/e/old", _INTERP_A))}), encoding="utf-8")
+    monkeypatch.setattr(ui, "_console_python", lambda: _INTERP_B)
+    assert ui.seed_agy_hook(hp, tmp_path, "/e/new") == "updated"
+    commands = _agy_commands(json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY])
+    assert commands and all("'" not in c and c.startswith(_INTERP_A + " ") for c in commands)
+    assert any('"/e/new"' in c for c in commands) and not any("/e/old" in c for c in commands)
+    assert ui.seed_agy_hook(hp, tmp_path, "/e/new") == "present"
+
+
+def test_agy_seed_pin_wins_on_a_rerender_but_never_rewrites_an_equivalent_entry(tmp_path, monkeypatch):
+    hp = tmp_path / "hooks.json"
+    hp.write_text(json.dumps({ui.AGY_HOOK_KEY: ui.agy_hook_entry(tmp_path, "/e/old", _INTERP_A)}), encoding="utf-8")
+    monkeypatch.setattr(ui, "_pin_value", lambda: "/opt/pin/python3")  # abs-path-ok: synthetic pin, never opened
+    before = hp.read_bytes()
+    assert ui.seed_agy_hook(hp, tmp_path, "/e/old") == "present" and hp.read_bytes() == before
+    assert ui.seed_agy_hook(hp, tmp_path, "/e/new") == "updated"
+    commands = _agy_commands(json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY])
+    assert commands and all(c.startswith("/opt/pin/python3 ") for c in commands)
+
+
+def test_agy_entry_currency_ignores_interpreter_and_quoting_but_not_a_missing_event(tmp_path):
+    want = ui.agy_hook_entry(tmp_path, "/e", _INTERP_B)
+    assert ui._agy_entry_current(_double_quoted(ui.agy_hook_entry(tmp_path, "/e", _INTERP_A)), want)
+    old = ui.agy_hook_entry(tmp_path, "/e", _INTERP_A)
+    del old["SessionStart"]
+    assert not ui._agy_entry_current(old, want)
+    assert not ui._agy_entry_current(None, want)
+
+
+def test_skills_root_resolves_the_pointers_coordinator_skills_dir(tmp_path, monkeypatch):
+    pointer = tmp_path / "doe"
+    (pointer / "coordinator" / "skills").mkdir(parents=True)
+    monkeypatch.setattr(ui, "_content_root_pointer", lambda: (str(pointer), ["pointer-file"]))
+    found, detail = ui.resolve_skills_root()
+    assert found == pointer / "coordinator" / "skills" and detail == str(found)
+
+
 def test_codex_hooks_path_honours_codex_home(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "ch"))
     assert ui.codex_hooks_path() == tmp_path / "ch" / "hooks.json"
@@ -758,6 +852,22 @@ def test_codex_enrollment_without_plugin_root_finds_skills_beside_install(runtim
     assert ui.enroll_codex_runtime(root, consent=True, out=out) == 0
     assert (Path.home() / ".agents" / "skills" / "one" / "SKILL.md").exists()
     assert "Codex runtime ready" in out.getvalue()
+
+
+def test_codex_enrollment_installs_skills_from_the_pointers_coordinator_skills_without_warn(runtime_box, monkeypatch):
+    root, _ = runtime_box
+    monkeypatch.setattr(ui, "_seed_standing_doctrine", _REAL_SEED_STANDING_DOCTRINE)
+    _klabauter_layout(runtime_box[0].parent, monkeypatch, with_skills=False)
+    doe = runtime_box[0].parent / "doe"
+    (doe / "coordinator" / "skills" / "one").mkdir(parents=True)
+    (doe / "coordinator" / "skills" / "one" / "SKILL.md").write_text("required")
+    monkeypatch.setattr(ui, "_content_root_pointer", lambda: (str(doe), ["pointer-file"]))
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", runtime_box[0].parent / "no-doctrine-beside-install")
+    out = io.StringIO()
+    assert ui._seed_standing_doctrine(out, True, False, root / "c-rules", root / "a-rules", Path.home() / ".agents" / "skills",
+                                      root / "skills.json") == ["codex coordinator doctrine"]
+    assert "skills not installed" not in out.getvalue()
+    assert (Path.home() / ".agents" / "skills" / "one" / "SKILL.md").exists()
 
 
 def test_skills_root_miss_names_every_candidate_and_a_named_plugin_root_is_unchanged(runtime_box, monkeypatch):
@@ -2378,6 +2488,42 @@ def test_seed_agy_plugin_is_idempotent_and_preserves_other_entries(tmp_path):
     assert ui.unseed_agy_plugin(pj, tree) == "removed"
     assert ui.unseed_agy_plugin(pj, tree) == "absent"
     assert len(json.loads(pj.read_text(encoding="utf-8"))["entries"]) == 2
+
+
+def test_agy_sidecar_declaration_is_an_argv_that_needs_no_shell_quoting(tmp_path):
+    dest = tmp_path / "dir with space" / "unimatrix"
+    decl = ui.agy_sidecar_declaration(dest)
+    assert decl["restart_policy"] == "always" and decl["display_name"] and decl["description"]
+    assert decl["command"] == str(ui._console_python()) and os.path.isabs(decl["command"])
+    assert decl["args"] == [str(dest / "unimatrix-agy-sidecar.py")]  # one argument, spaces and backslashes intact
+    assert json.loads(json.dumps(decl)) == decl
+    assert all(k == k.lower() for k in decl)  # snake_case only
+
+
+def test_seed_agy_sidecar_is_idempotent_leaves_other_sidecars_and_uninstalls(tmp_path):
+    root = tmp_path / "config" / "sidecars"
+    other = root / "mine" / "sidecar.json"
+    other.parent.mkdir(parents=True)
+    other.write_text("{}", encoding="utf-8")
+    dest = tmp_path / "dest"
+    assert ui.seed_agy_sidecar(root, dest) == "created"
+    assert ui.seed_agy_sidecar(root, dest) == "present"
+    written = root / ui.AGY_SIDECAR_ID / "sidecar.json"
+    assert json.loads(written.read_text(encoding="utf-8")) == ui.agy_sidecar_declaration(dest)
+    assert ui.seed_agy_sidecar(root, tmp_path / "moved") == "updated"
+    assert ui.unseed_agy_sidecar(root) == "removed" and ui.unseed_agy_sidecar(root) == "absent"
+    assert not (root / ui.AGY_SIDECAR_ID).exists() and other.read_text(encoding="utf-8") == "{}"
+
+
+def test_agy_install_writes_the_sidecar_and_uninstall_removes_it(monkeypatch, tmp_path):
+    plugin = _engine_tree_and_plugin(monkeypatch, tmp_path)
+    dest = tmp_path / "dest"
+    home, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "agy", "--plugin-root", str(plugin)))
+    written = home / ".gemini" / "config" / "sidecars" / ui.AGY_SIDECAR_ID / "sidecar.json"
+    assert json.loads(written.read_text(encoding="utf-8")) == ui.agy_sidecar_declaration(dest), out
+    assert (dest / "unimatrix-agy-sidecar.py").is_file()
+    assert ui.main(["--uninstall", "--hosts", "agy"], dest_dir=dest, out=io.StringIO()) == 0
+    assert not written.exists()
 
 
 def test_seed_agy_plugin_refuses_a_corrupt_file_untouched(tmp_path):

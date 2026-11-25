@@ -3,6 +3,9 @@ import importlib.util
 import io
 import json
 import os
+import shlex
+import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -26,7 +29,7 @@ def load(name):
 pre = load("unimatrix-agy-hook-pretool")
 launch = load("unimatrix-agy-hook-launch")
 CONV = "0cf351a3-6538-4a9b-814c-52b1b75a596c"
-posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="asserts the sh (nohup) prefix; nt uses Start-Process")
+posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="asserts the sh (nohup) prefix; nt writes the promote file")
 
 
 class _NtOs:
@@ -39,8 +42,23 @@ class _NtOs:
         return getattr(os, attr)
 
 
+class _PosixOs(_NtOs):
+    name = "posix"
+
+
 def as_windows(monkeypatch, mod):
     monkeypatch.setattr(mod, "os", _NtOs())
+
+
+REAL_ENSURE = pre.ensure_pending_leg
+
+
+@pytest.fixture(autouse=True)
+def leg_starts(monkeypatch):
+    """Every ensure_pending_leg call, recorded and not run: a real run would start a leg process."""
+    calls = []
+    monkeypatch.setattr(pre, "ensure_pending_leg", lambda conv, agy_pid, state=None: calls.append((conv, agy_pid)))
+    return calls
 
 
 @pytest.fixture
@@ -301,8 +319,34 @@ def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
                        input=json.dumps(run_payload()), capture_output=True, text=True,
                        env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
     out = json.loads(r.stdout)
+    reap_leg(home)
     assert r.returncode == 0 and out["decision"] == "allow"
-    assert "overwrite" in out  # nt too: the start rides the run_command shell, which holds the token
+    assert "overwrite" in out  # nt too: the promote file is written by the run_command shell, which holds the token
+
+
+def _terminate(pid):
+    """End a pid the test's hook subprocess started; it left the test's process tree, so os.kill would trip the suite's foreign-kill tripwire."""
+    if os.name == "nt":
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        h = k32.OpenProcess(0x0001, False, int(pid))  # PROCESS_TERMINATE
+        if h:
+            k32.TerminateProcess(h, 1)
+            k32.CloseHandle(h)
+        return
+    os.kill(pid, signal.SIGTERM)
+
+
+def reap_leg(home):
+    """Terminate the leg the hook process started under `home` (nt only); no record is a no-op."""
+    try:
+        pid = int(json.loads((home / "unimatrix" / "agy-legs" / f"{CONV}.json").read_text())["pid"])
+        _terminate(pid)
+    except (OSError, ValueError, KeyError):
+        pass
 
 
 def hook(stdin, home):
@@ -367,18 +411,21 @@ def test_guard_deny_and_bootstrap_ask_survive_through_main(home, monkeypatch, ca
     assert out["decision"] == "ask" and out["overwrite"]["CommandLine"] == "START; ls -la"
 
 
-def test_windows_prefix_is_a_hidden_start_process_of_the_launcher(monkeypatch):
+def test_windows_prefix_writes_the_promote_file_and_spawns_nothing(home, monkeypatch):
     as_windows(monkeypatch, pre)
     monkeypatch.setattr(pre, "_console_python", lambda: r"C:\Program Files\Py's\python.exe")
     start, sep = pre.launch_prefix(CONV, 4242)
-    assert sep == "; "
-    assert start.startswith("Start-Process -WindowStyle Hidden -FilePath 'C:\\Program Files\\Py''s\\python.exe' -ArgumentList ")
-    assert f"'--conversation','{CONV}','--agy-pid','4242'" in start
-    assert pre._ps_quote(str(pre.LAUNCH)) in start
-    assert "nohup" not in start
+    final = str(home / "unimatrix" / "agy-legs" / f"{CONV}.promote.json")
+    assert sep == "; " and start.startswith("try {") and start.endswith("} catch {}")
+    assert f"$f = '{final}'" in start
+    assert start.index(".tmp'") < start.index("SetAccessRuleProtection") < start.index("WriteAllText") < start.index("Move-Item -LiteralPath $t -Destination $f -Force")
+    assert "WindowsIdentity]::GetCurrent().User, 'FullControl'" in start
+    assert "$env:ANTIGRAVITY_LS_ADDRESS" in start and "$env:ANTIGRAVITY_CSRF_TOKEN" in start
+    for banned in ("Start-Process", "nohup", "python", str(pre.LAUNCH), "unimatrix-agy-hook-launch", "Start-Job"):
+        assert banned not in start
 
 
-def test_windows_run_command_is_rewritten_with_the_start_in_the_agy_shell(home, monkeypatch):
+def test_windows_run_command_is_rewritten_with_the_handoff_prefix_and_the_hook_ensures_the_leg(home, monkeypatch, leg_starts):
     as_windows(monkeypatch, pre)
     monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
     popen = []
@@ -386,22 +433,115 @@ def test_windows_run_command_is_rewritten_with_the_start_in_the_agy_shell(home, 
     stub_guard(monkeypatch, {"decision": "ask"})
     out = pre.decide(run_payload(cmd="Get-ChildItem | Select-Object -First 1"), 4242)
     line = out["overwrite"]["CommandLine"]
-    assert line.startswith("Start-Process -WindowStyle Hidden ") and line.endswith("; Get-ChildItem | Select-Object -First 1")
-    assert popen == []  # the hook process has no token: it never starts the launcher itself
+    assert line.startswith("try {") and "Start-Process" not in line and f"{CONV}.promote.json" in line
+    assert line.endswith("} catch {}; Get-ChildItem | Select-Object -First 1")
+    assert leg_starts == [(CONV, 4242)] and popen == []
 
 
-def test_windows_does_not_rewrite_when_leg_current(home, ls_server, monkeypatch):
+def test_windows_live_pid_pending_leg_gets_the_handoff_prefix(home, ls_server, monkeypatch):
+    as_windows(monkeypatch, pre)
+    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
+    path = home / "unimatrix" / "agy-legs" / f"{CONV}.json"
+    path.write_text(json.dumps(dict(json.loads(path.read_text()), mode="pending", ls_address=None)))
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: True)
+    stub_guard(monkeypatch, {"decision": "ask"})
+    line = pre.decide(run_payload(), 4242)["overwrite"]["CommandLine"]
+    assert f"{CONV}.promote.json" in line and "Start-Process" not in line
+
+
+def test_windows_does_not_rewrite_when_leg_current(home, ls_server, monkeypatch, leg_starts):
     as_windows(monkeypatch, pre)
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
     monkeypatch.setattr(pre, "pid_alive", lambda pid: True)
     stub_guard(monkeypatch, {"decision": "ask"})
     assert pre.decide(run_payload(), 4242) == {"decision": "ask"}
+    assert leg_starts == []
 
 
-def test_posix_prefix_still_rewrites(monkeypatch):
-    monkeypatch.setattr(pre.os, "name", "posix")
+def test_posix_rewrite_never_calls_the_windows_leg_start(home, monkeypatch, leg_starts):
+    monkeypatch.setattr(pre, "os", _PosixOs())
+    stub_guard(monkeypatch, {"decision": "ask"})
+    assert pre.decide(run_payload(), 4242)["overwrite"]["CommandLine"].startswith("(nohup ")
+    assert leg_starts == []
+
+
+def test_posix_prefix_is_the_unchanged_detached_sh_start(monkeypatch):
+    monkeypatch.setattr(pre, "os", _PosixOs())
+    monkeypatch.setattr(pre, "_console_python", lambda: "/usr/bin/python3")
     start, sep = pre.launch_prefix(CONV, 7)
-    assert start.startswith("(nohup ") and sep == "; "
+    argv = ["/usr/bin/python3", str(pre.LAUNCH), "--conversation", CONV, "--agy-pid", "7"]
+    assert start == f"(nohup {' '.join(shlex.quote(a) for a in argv)} >/dev/null 2>&1 &)" and sep == "; "
+
+
+class _FakeLaunch:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, req, roster, state):
+        self.calls.append((req, roster, state))
+
+
+def _ensure_world(monkeypatch, fake):
+    monkeypatch.setattr(pre, "load_sibling", lambda name: fake if name == "unimatrix-agy-hook-launch" else "roster")
+
+
+def test_ensure_starts_the_pending_leg_from_the_hook_when_no_record(home, monkeypatch):
+    fake = _FakeLaunch()
+    _ensure_world(monkeypatch, fake)
+    REAL_ENSURE(CONV, 4242)
+    assert fake.calls == [({"conversationId": CONV, "agyPid": 4242}, "roster", home / "unimatrix" / "agy-legs")]
+
+
+def test_ensure_starts_the_leg_when_the_recorded_pid_is_dead(home, ls_server, monkeypatch):
+    write_leg(home, pid=999999, agy_pid=4242, ls=ls_server)
+    fake = _FakeLaunch()
+    _ensure_world(monkeypatch, fake)
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
+    REAL_ENSURE(CONV, 4242)
+    assert len(fake.calls) == 1
+
+
+def test_ensure_leaves_a_live_pid_leg_alone_pending_or_live(home, ls_server, monkeypatch):
+    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
+    fake = _FakeLaunch()
+    _ensure_world(monkeypatch, fake)
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: True)
+    REAL_ENSURE(CONV, 4242)
+    assert fake.calls == []
+
+
+def test_ensure_never_raises_when_the_start_fails(home, monkeypatch):
+    monkeypatch.setattr(pre, "load_sibling", lambda name: 1 / 0)
+    REAL_ENSURE(CONV, 4242)
+
+
+@pytest.mark.skipif(os.name != "nt" or not (shutil.which("powershell") or shutil.which("pwsh")),
+                    reason="runs the real PowerShell prefix")
+def test_windows_prefix_runs_in_powershell_and_lands_the_promote_file(home, monkeypatch):
+    prefix, _ = pre.launch_prefix(CONV, 4242)
+    env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS="127.0.0.1:5555", ANTIGRAVITY_CSRF_TOKEN="tok-123")
+    shell = shutil.which("powershell") or shutil.which("pwsh")
+    r = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", f"{prefix}; 'ran'"], env=env,
+                       cwd=str(home), capture_output=True, text=True, timeout=60,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    folder = home / "unimatrix" / "agy-legs"
+    body = json.loads((folder / f"{CONV}.promote.json").read_bytes().decode("utf-8"))
+    assert "ran" in r.stdout and r.stdout.count("tok-123") == 0
+    assert body == {"ls_address": "127.0.0.1:5555", "csrf_token": "tok-123", "cwd": str(home)}
+    assert [p.name for p in folder.iterdir()] == [f"{CONV}.promote.json"]
+    assert not (folder / f"{CONV}.promote.json").read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+@pytest.mark.skipif(os.name != "nt" or not (shutil.which("powershell") or shutil.which("pwsh")),
+                    reason="runs the real PowerShell prefix")
+def test_windows_prefix_without_a_token_writes_nothing_and_the_command_still_runs(home):
+    prefix, _ = pre.launch_prefix(CONV, 4242)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ANTIGRAVITY_")}
+    shell = shutil.which("powershell") or shutil.which("pwsh")
+    r = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", f"{prefix}; 'ran'"], env=env,
+                       cwd=str(home), capture_output=True, text=True, timeout=60,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert "ran" in r.stdout and not (home / "unimatrix" / "agy-legs" / f"{CONV}.promote.json").exists()
 
 
 @pytest.mark.parametrize("tmpl,expected", [
@@ -592,6 +732,87 @@ def test_sessionstart_with_only_conversation_id_registers_a_pending_leg(home, mo
     # The LS address comes only from the sidecar's ANTIGRAVITY_LS_ADDRESS; no port is guessed.
     assert (rec["mode"], rec["pid"], rec["ls_address"]) == ("pending", 31337, None)
     assert out["injectSteps"][0]["systemMessage"] == {"systemMessage": sess.NOTE}
+
+
+def _vendor_pair(tmp_path):
+    here, eng = tmp_path / "vendored", tmp_path / "engine"
+    (eng / "coordinator" / "bin" / "lib").mkdir(parents=True)
+    (here / "lib").mkdir(parents=True)
+    return here, eng, eng / "coordinator" / "bin"
+
+
+def test_refresh_replaces_stale_pretool_and_nested_siblings(tmp_path):
+    here, eng, src = _vendor_pair(tmp_path)
+    for rel in ("unimatrix-agy-hook-pretool.py", "unimatrix-host-guard.py", "lib/helper.py"):
+        (src / rel).write_bytes(b"new " + rel.encode())
+        (here / rel).write_bytes(b"stale")
+    assert sess._refresh_vendored(here, eng) == 3
+    for rel in ("unimatrix-agy-hook-pretool.py", "unimatrix-host-guard.py", "lib/helper.py"):
+        assert (here / rel).read_bytes() == (src / rel).read_bytes()
+    assert not [p for p in here.rglob("*") if p.name.endswith(".refresh")]
+
+
+def test_refresh_leaves_identical_copy_and_engineless_file_untouched(tmp_path):
+    here, eng, src = _vendor_pair(tmp_path)
+    (src / "same.py").write_bytes(b"same")
+    (here / "same.py").write_bytes(b"same")
+    os.utime(here / "same.py", (1_000_000, 1_000_000))
+    (here / "local-only.py").write_bytes(b"mine")
+    (here / "__pycache__").mkdir()
+    (here / "__pycache__" / "x.pyc").write_bytes(b"c")
+    (src / "__pycache__").mkdir()
+    (src / "__pycache__" / "x.pyc").write_bytes(b"other")
+    assert sess._refresh_vendored(here, eng) == 0
+    assert (here / "same.py").stat().st_mtime == 1_000_000
+    assert (here / "local-only.py").read_bytes() == b"mine"
+    assert (here / "__pycache__" / "x.pyc").read_bytes() == b"c"
+    assert not (here / "missing-in-vendor.py").exists()
+
+
+@pytest.mark.parametrize("root", [None, "", "tmpdir-missing"])
+def test_refresh_without_usable_engine_root_is_a_noop(tmp_path, root):
+    here = tmp_path / "vendored"
+    here.mkdir()
+    (here / "a.py").write_bytes(b"keep")
+    arg = str(tmp_path / "absent") if root == "tmpdir-missing" else root
+    assert sess._refresh_vendored(here, arg) == 0
+    assert (here / "a.py").read_bytes() == b"keep"
+
+
+def test_refresh_swaps_by_os_replace_so_a_reader_never_sees_partial(tmp_path, monkeypatch):
+    here, eng, src = _vendor_pair(tmp_path)
+    (src / "a.py").write_bytes(b"NEW-CONTENT")
+    (here / "a.py").write_bytes(b"old")
+    seen = []
+    real = os.replace
+
+    def spy(s, d):
+        seen.append((Path(s).read_bytes(), Path(d).read_bytes(), Path(s).parent == Path(d).parent))
+        return real(s, d)
+
+    monkeypatch.setattr(sess.os, "replace", spy)
+    assert sess._refresh_vendored(here, eng) == 1
+    assert seen == [(b"NEW-CONTENT", b"old", True)]
+
+
+def test_refresh_failure_is_silent_and_removes_the_temp(tmp_path, monkeypatch):
+    here, eng, src = _vendor_pair(tmp_path)
+    (src / "a.py").write_bytes(b"new")
+    (here / "a.py").write_bytes(b"old")
+    monkeypatch.setattr(sess.os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError("busy")))
+    assert sess._refresh_vendored(here, eng) == 0
+    assert (here / "a.py").read_bytes() == b"old"
+    assert [p.name for p in here.iterdir()] == ["a.py", "lib"]
+
+
+def test_main_with_engine_root_refreshes_before_registering(tmp_path, monkeypatch, capsys):
+    here, eng, src = _vendor_pair(tmp_path)
+    (src / "a.py").write_bytes(b"new")
+    (here / "a.py").write_bytes(b"old")
+    monkeypatch.setattr(sess, "HERE", here)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+    assert sess.main(["--engine-root", str(eng)]) == 0
+    assert (here / "a.py").read_bytes() == b"new"
 
 
 def test_stashed_pretool_advisories_are_injected_once_at_preinvocation(home, capsys, monkeypatch):
@@ -876,7 +1097,9 @@ def test_sessionstart_with_no_agy_ancestor_records_none(home, agy_env, monkeypat
 
 
 @pytest.mark.parametrize("payload,expected", [
-    ({"cwd": "/c", "workspacePaths": ["/w"]}, "/c"),
+    ({"cwd": "/c", "workspacePaths": ["/w"]}, "/w"),
+    ({"cwd": "/c"}, "/c"),
+    ({"cwd": "/c", "workspacePaths": []}, "/c"),
     ({"cwd": "", "workspacePaths": ["/w"]}, "/w"),
     ({"workspacePaths": ["/w", "/v"]}, "/w"),
     ({"workspacePaths": []}, None),

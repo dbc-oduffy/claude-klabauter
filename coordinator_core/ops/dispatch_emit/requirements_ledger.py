@@ -21,6 +21,7 @@ delivery verifier, the terminal judge and the falsifier, never a stand-in for an
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -207,6 +208,7 @@ class Ledger:
     all_of_pm_ask: bool
     sizing_rel: Optional[str] = None
     withheld: tuple[dict, ...] = ()
+    run_id: Optional[str] = None
 
     def to_json(self) -> dict:
         return {"items": [i.to_json() for i in self.items], "all_of_pm_ask": self.all_of_pm_ask}
@@ -1627,17 +1629,20 @@ def read_ledger(repo_root: Path, dir_: Path, *, register_rows: Optional[Sequence
     if run is None:
         return None
     all_of = lineage_all_of(repo_root, Path(dir_).name, run)[0]
+    own_id = Path(dir_).name
     sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
     if not sizing_rel:
-        return _queued_ledger(dir_, all_of)
+        return dataclasses.replace(_queued_ledger(dir_, all_of), run_id=own_id)
     if register_rows is not None:
-        return _ledger_of(register_rows, all_of, sizing_rel)
+        return dataclasses.replace(_ledger_of(register_rows, all_of, sizing_rel), run_id=own_id)
     try:
         text = _sizing_path(repo_root, sizing_rel).read_text(encoding="utf-8")
     except OSError as exc:
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
     register = rr.read_register(text)
-    return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel)
+    return dataclasses.replace(
+        _ledger_of(register.rows if register is not None else [], all_of, sizing_rel), run_id=own_id,
+    )
 
 
 RULINGS_HEADING = "## Accepted PM rulings (applicable)"
@@ -3136,7 +3141,7 @@ def judge(
     repo_root: Optional[Path] = None, plan_text: Optional[str] = None,
     wave_reviews: Sequence[Mapping] = (), noted_paths: Sequence[str] = (),
     code_paths: Sequence[str] = (), review_verdicts: Optional[int] = None,
-    note_ids: Collection[str] = (), mended: Collection[str] = (),
+    note_ids: Collection[str] = (), mended: Collection[str] = (), run_id: Optional[str] = None,
 ) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
     `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
@@ -3197,6 +3202,7 @@ def judge(
     is a register row and fails `UNJUDGED_REASON` through the item loop); an `N<k>` id when the run
     stores no note fails `NOT_A_ROW_REASON`.
     A `superseded` item may name a live note id as its `superseded_by`.
+    A `met` item's test freshness reads the run's own test-leg record (`run_id`, else `ledger.run_id`).
     Any other unregistered id is ignored and listed in the result's `advisory`
     (`[{id, reason}]`, present only when non-empty): it never fails the verdict."""
     floor = review_floor.floor_reason(list(code_paths), review_verdicts or 0)
@@ -3311,6 +3317,7 @@ def judge(
                     Path(repo_root),
                     _spine_writes(plan_text, item.id, all_rows=by_id.get(item.id) is None),
                     row,
+                    run_id or ledger.run_id,
                 )
                 if stale is not None:
                     failures.append({"id": item.id, "reason": stale})

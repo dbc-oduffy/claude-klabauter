@@ -1,11 +1,13 @@
 """Ledger test-freshness check: a `met` item needs a test run stamped after its writes' last edit.
 
-Stat-only, no spawn: the verify leg runs the tests and stamps `tests_ran_at`; this module
-compares that stamp with the newest st_mtime among the row's writes.
+Stat and hash reads only, no spawn: the stamp is the item's `tests_ran_at` or the run's own test-leg
+`measured_at`, compared with the newest st_mtime among the row's writes; an mtime past the stamp is an
+edit only when the file's bytes differ from the run's `measured-rev.json`.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,10 +73,73 @@ def _parse_aware(stamp: object) -> Optional[datetime]:
     return moment if moment.tzinfo is not None else None
 
 
-def stale_tests_refusal(repo_root: Path, writes: Sequence[str], item: Mapping) -> Optional[str]:
-    """Refusal reason when `item` lacks a valid `tests_ran_at` at or after its writes' last edit; None otherwise.
+def _files_newer(repo_root: Path, paths: Sequence[str], after: float) -> list[str]:
+    """Repo-relative (posix) files among `paths` (a directory by its files) whose st_mtime is past `after`."""
+    out: list[str] = []
+    root = Path(repo_root)
+    for rel in paths:
+        target = root / rel
+        try:
+            if not target.is_dir():
+                if target.stat().st_mtime > after:
+                    out.append(str(rel).replace("\\", "/"))
+                continue
+        except OSError:
+            continue
+        stack = [str(target)]
+        while stack:
+            try:
+                with os.scandir(stack.pop()) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(entry.path)
+                            elif entry.stat().st_mtime > after:
+                                out.append(os.path.relpath(entry.path, root).replace("\\", "/"))
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+    return out
 
-    None also when no write exists. A naive stamp is refused, never assumed UTC.
+
+def _leg_measured_at(repo_root: Path, run_id: Optional[str]) -> Optional[datetime]:
+    """The run's own test-leg `measured_at` (UTC), None when the run has no leg record or no usable stamp."""
+    from coordinator_core.ops.dispatch_emit import landing_integrity, test_leg_freshness
+
+    record = landing_integrity.test_leg_record(Path(repo_root), run_id)
+    return _parse_aware(test_leg_freshness.leg_stamp(record)["measured_at"])
+
+
+def _changed_since_leg(repo_root: Path, run_id: Optional[str], leg_at: datetime, newer: Sequence[str]) -> Optional[str]:
+    """First of `newer` whose content is not what the run's `measured-rev.json` recorded, else None.
+
+    The record counts only when it predates the leg's measurement start (its blobs are then what the
+    leg ran against); a path the record does not name, a missing or later record, or an unreadable
+    hash is not provably unchanged.
+    """
+    from coordinator_core.git import commit
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    try:
+        record = measured_rev_record_path(Path(repo_root), run_id or "")
+        if record.stat().st_mtime > leg_at.timestamp():
+            return newer[0]
+        blobs = json.loads(record.read_text(encoding="utf-8")).get("blobs") or {}
+        return next((rel for rel in newer if blobs.get(rel) != commit.checkin_blob_sha(Path(repo_root), rel)), None)
+    except (OSError, ValueError, AttributeError):
+        return newer[0]
+
+
+def stale_tests_refusal(
+    repo_root: Path, writes: Sequence[str], item: Mapping, run_id: Optional[str] = None,
+) -> Optional[str]:
+    """Refusal reason when no test run is stamped at or after the content of the row's writes; None otherwise.
+
+    The stamp is the later of the item's `tests_ran_at` and the `run_id` run's test-leg `measured_at`.
+    A write whose mtime is past the stamp still passes while its bytes equal the run's measured-rev
+    record (a peer's touch is not an edit); content that differs from it is refused. None also when no
+    write exists. A naive stamp is refused, never assumed UTC.
     """
     newest = _newest_write(repo_root, writes)
     if newest is None:
@@ -82,15 +147,26 @@ def stale_tests_refusal(repo_root: Path, writes: Sequence[str], item: Mapping) -
     edited = datetime.fromtimestamp(newest[0], tz=timezone.utc)
     raw = item.get(TESTS_RAN_AT_KEY)
     ran = _parse_aware(raw)
-    if ran is None:
+    leg_at = _leg_measured_at(repo_root, run_id)
+    stamp = max((s for s in (ran, leg_at) if s is not None), default=None)
+    if stamp is None:
         shown = "absent" if raw in (None, "") else f"unusable ({raw!r})"
         return (
             f"{STALE_TESTS_REASON}: {TESTS_RAN_AT_KEY} {shown}; "
             f"newest write {newest[1]} edited {edited.isoformat()}"
         )
-    if ran < edited:
+    if stamp >= edited:
+        return None
+    if leg_at is None:
         return (
             f"{STALE_TESTS_REASON}: newest write {newest[1]} edited {edited.isoformat()}, "
-            f"{TESTS_RAN_AT_KEY} {ran.isoformat()}"
+            f"{TESTS_RAN_AT_KEY} {stamp.isoformat()}"
         )
-    return None
+    newer = _files_newer(repo_root, writes, stamp.timestamp())
+    changed = _changed_since_leg(repo_root, run_id, leg_at, newer) if newer else None
+    if changed is None:
+        return None
+    return (
+        f"{STALE_TESTS_REASON}: {changed} changed after the test leg measured it; "
+        f"newest write {newest[1]} edited {edited.isoformat()}, test leg {leg_at.isoformat()}"
+    )
