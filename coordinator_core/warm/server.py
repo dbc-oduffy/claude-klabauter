@@ -192,6 +192,7 @@ import sys
 import collections
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple, Optional
 
@@ -707,6 +708,39 @@ def _hook_lane_budget_secs(method: Any) -> float:
     """The hook-lane wall-clock cut for `method`: `_SUBMIT_ASK_LANE_BUDGET_SECS` for the submit op, else
     `_HOOK_LANE_BUDGET_SECS`."""
     return _SUBMIT_ASK_LANE_BUDGET_SECS if method == _SUBMIT_ASK_OP else _HOOK_LANE_BUDGET_SECS
+
+
+def _hook_originated_budget_secs(msg: Any, eff: Any) -> Optional[float]:
+    """The caller's hook deadline for an `invoke.from_argv` frame the door sent for a hook (the
+    `hook-run` entrypoint, or a payload carrying `hook_event_name`), else None. Applies whatever
+    lane the op classifies into: an op the lane tables miss would otherwise wait the 30s mutation
+    deadline on a wedged worker while the door's hook read deadline is long spent."""
+    if not isinstance(msg, Mapping) or msg.get("method") != "invoke.from_argv":
+        return None
+    params = msg.get("params")
+    if not isinstance(params, Mapping):
+        return None
+    if params.get("entrypoint") == _HOOK_RUN_ENTRYPOINT or "hook_event_name" in params:
+        return _hook_lane_budget_secs(eff)
+    return None
+
+
+def _hook_timeout_response(msg: dict, secs: float) -> dict:
+    """The `invoke.from_argv` result for a read-only hook op whose worker outran the caller's hook
+    deadline: exit 0 with the not-evaluated notice on stderr, so the door relays an allow that says
+    so instead of the -32004 it fails open on silently."""
+    return {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "result": {
+            "stdout": "",
+            "stderr": (
+                f"hook-timeout: warm engine hook op gave no answer within {secs:g}s -- "
+                f"allowed, not evaluated; its worker was replaced\n"
+            ),
+            "exit_code": 0,
+        },
+    }
 
 #: Extra seconds a hook-lane op on a slow-probing drive (io-wait) is held past `_HOOK_LANE_BUDGET_SECS`
 #: for its verdict; 4.0 + 3.0 stays inside the door's 8 s read deadline. Never applies to a healthy drive.
@@ -2408,6 +2442,8 @@ def _write_stall_record(
                 except OSError:
                     pass
         threads = _render_all_thread_stacks()
+        if _WORKER_STALL_DIR is None:
+            threads += _collect_worker_stacks(stall_dir)
         stall_dir = Path(stall_dir)
         stall_dir.mkdir(parents=True, exist_ok=True)
         probe = _fs_probe_ms(stall_dir)
@@ -3610,6 +3646,182 @@ def _prune_worker_stderr_logs(stderr_dir) -> None:
         pass
 
 
+_WORKER_STACKS_DIRNAME = "worker-stacks"
+
+#: Longest the server waits, in total, for the live workers to append their stacks to a stall record.
+WORKER_STACK_WAIT_SECS = 0.25
+
+#: Module-level so the file outlives `_arm_worker_stack_dump`'s frame.
+_WORKER_STACK_FILE = None
+
+#: Live pools the server dispatches into; weak, so a retired pool drops out by itself.
+_STACK_POOLS: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def _worker_stack_path(stall_dir, pid: int) -> Path:
+    return Path(stall_dir) / _WORKER_STACKS_DIRNAME / f"{pid}.txt"
+
+
+def _worker_stack_event_name(pid: int) -> str:
+    return f"Local\\claude-klabauter-warm-worker-stacks-{pid}"
+
+
+def _worker_stack_event_loop(fh, handle) -> None:
+    """Windows: append this worker's stacks to `fh` each time the server signals `handle`.
+
+    Trap: a Python thread needs the GIL to render, so a worker wedged inside a C call that never
+    releases it answers nothing; the server's record then names that worker as unanswering.
+    """
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+    while kernel32.WaitForSingleObject(handle, 0xFFFFFFFF) == 0:
+        try:
+            fh.write(f"worker-pid: {os.getpid()}\n{_render_all_thread_stacks()}")
+            fh.flush()
+        except Exception:  # noqa: BLE001 -- a failed dump never stops the worker
+            pass
+
+
+def _arm_worker_stack_dump(stall_dir) -> None:
+    """Let the server pull this worker's every-thread stack on demand.
+
+    POSIX: `faulthandler.register(SIGUSR1)` into `<stall_dir>/worker-stacks/<pid>.txt`, a C-level
+    handler that needs no GIL. Windows has no such signal, so a daemon thread waits on a named
+    event (`_worker_stack_event_name`) the server sets. Best-effort and never raises.
+    """
+    global _WORKER_STACK_FILE
+    if not stall_dir:
+        return
+    fh = None
+    try:
+        path = _worker_stack_path(stall_dir, os.getpid())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(path, "a", buffering=1, encoding="utf-8", newline="\n")
+        if sys.platform == "win32":
+            import ctypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateEventW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_wchar_p]
+            kernel32.CreateEventW.restype = ctypes.c_void_p
+            handle = kernel32.CreateEventW(None, False, False, _worker_stack_event_name(os.getpid()))
+            if not handle:
+                raise OSError("CreateEventW failed")
+            threading.Thread(
+                target=_worker_stack_event_loop, args=(fh, handle), name="warm-pool-stack-dump", daemon=True
+            ).start()
+        else:
+            faulthandler.register(signal.SIGUSR1, file=fh, all_threads=True, chain=False)
+    except Exception:  # noqa: BLE001 -- diagnostics must never stop a worker booting
+        if fh is not None:
+            fh.close()
+        return
+    _WORKER_STACK_FILE = fh
+
+
+def _signal_worker_stack(pid: int) -> bool:
+    """Ask worker `pid` (a child of a live pool) to append its stacks. False when it cannot be reached."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenEventW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
+            kernel32.OpenEventW.restype = ctypes.c_void_p
+            kernel32.SetEvent.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            handle = kernel32.OpenEventW(0x0002, False, _worker_stack_event_name(pid))  # EVENT_MODIFY_STATE
+            if not handle:
+                return False
+            try:
+                return bool(kernel32.SetEvent(handle))
+            finally:
+                kernel32.CloseHandle(handle)
+        os.kill(pid, signal.SIGUSR1)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _register_stack_pool(pool) -> None:
+    """Make `pool`'s workers reachable by `_collect_worker_stacks`."""
+    try:
+        _STACK_POOLS.add(pool)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _collect_worker_stacks(stall_dir, wait: float = WORKER_STACK_WAIT_SECS) -> str:
+    """Every live pool worker's stack, pulled now, as one `--- pool workers ---` block.
+
+    Only workers that are children of a registered live pool are signalled (a recycled pid is never
+    a target); one that appends nothing within `wait` in total is named as unanswering. Consumes
+    each stack file it reads and removes files of workers no live pool holds. Never raises.
+    """
+    try:
+        live: dict = {}
+        for pool in list(_STACK_POOLS):
+            for pid, proc in list((getattr(pool, "_processes", None) or {}).items()):
+                try:
+                    if proc.is_alive():
+                        live[int(pid)] = proc
+                except Exception:  # noqa: BLE001
+                    continue
+        lines = ["--- pool workers ---\n"]
+        pending: dict = {}
+        for pid in sorted(live):
+            path = _worker_stack_path(stall_dir, pid)
+            try:
+                size = path.stat().st_size
+            except OSError:
+                lines.append(f"worker-pid: {pid}\nno stack file: worker never armed its dump\n\n")
+                continue
+            if _signal_worker_stack(pid):
+                pending[pid] = size
+            else:
+                lines.append(f"worker-pid: {pid}\nstack request could not be delivered\n\n")
+        deadline = time.monotonic() + wait
+        grown: set = set()
+        while len(grown) < len(pending) and time.monotonic() < deadline:
+            for pid, size in pending.items():
+                try:
+                    if pid not in grown and _worker_stack_path(stall_dir, pid).stat().st_size > size:
+                        grown.add(pid)
+                except OSError:
+                    pass
+            if len(grown) < len(pending):
+                time.sleep(0.01)
+        if grown:
+            time.sleep(0.03)  # the faulthandler handler writes in several chunks
+        for pid, size in pending.items():
+            path = _worker_stack_path(stall_dir, pid)
+            if pid not in grown:
+                lines.append(f"worker-pid: {pid}\nno answer within {wait:.2f}s (wedged holding the GIL or in a C call)\n\n")
+                continue
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(size)
+                    text = fh.read().decode("utf-8", errors="replace")
+                lines.append(f"worker-pid: {pid}\n{text}\n")
+                with open(path, "r+b") as fh:
+                    fh.truncate(0)
+            except OSError:
+                lines.append(f"worker-pid: {pid}\nstack file unreadable\n\n")
+        try:
+            for stale in (Path(stall_dir) / _WORKER_STACKS_DIRNAME).glob("*.txt"):
+                if stale.stem.isdigit() and int(stale.stem) not in live:
+                    stale.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if len(lines) == 1:
+            lines.append("no live pool workers\n")
+        return "".join(lines)
+    except Exception as exc:  # noqa: BLE001 -- diagnostics never stop an op
+        return f"--- pool workers ---\nunavailable: {exc!r}\n"
+
+
 def _describe_exit(exitcode: int) -> str:
     if exitcode < 0:
         try:
@@ -4164,6 +4376,7 @@ def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None, pr
 
     install_console_less_spawn_default()
     _bind_worker_stderr_log(stderr_dir)
+    _arm_worker_stack_dump(stall_dir)
     _log_priority_boost("worker", boosted)
     threading.Thread(
         target=_exit_with_parent,
@@ -5413,6 +5626,7 @@ class _ServerContext:
                         initializer=_worker_process_init,
                         initargs=(str(stderr_dir), str(self._stall_dir), forward_queue, True),
                     )
+                    _register_stack_pool(self._dispatch_pool)
         return self._dispatch_pool
 
     def _ensure_guard_pool(self) -> "concurrent.futures.ProcessPoolExecutor":
@@ -5436,6 +5650,7 @@ class _ServerContext:
                         initializer=_worker_process_init,
                         initargs=(str(stderr_dir), str(self._stall_dir), forward_queue),
                     )
+                    _register_stack_pool(self._guard_pool)
         return self._guard_pool
 
     def _drop_pool(self, pool: Any) -> bool:
@@ -6039,6 +6254,9 @@ class _ServerContext:
             _deadline = _withdrawal_deadline_secs(_method, msg)
             if _guard_class and isinstance(_eff, str) and _eff.startswith(_HOOK_LANE_PREFIXES):
                 _deadline = min(_deadline, _hook_lane_budget_secs(_eff))
+            _hook_secs = _hook_originated_budget_secs(msg, _eff)
+            if _hook_secs is not None:
+                _deadline = min(_deadline, _hook_secs)
             _queued_secs = _connection_queue_wait_secs(getattr(_REQUEST_STAMP, "value", None))
             _deadline = max(0.0, _deadline - _queued_secs)
             if _queued_secs > 0.0 and _deadline <= 0.0:
@@ -6209,6 +6427,17 @@ class _ServerContext:
                     _release_slot()
                     self._take_recycled(future)
                     return _machine_local_timeout_response(msg, _ml_secs)
+                if _hook_secs is not None and not _op_may_mutate(_eff):
+                    # A started read-only hook op never mutates: only the overdue worker is
+                    # replaced, and the typed result is a verdict the door relays, never -32004.
+                    if not self._terminate_overdue_bounded(pool, claim, dispatch_key, future):
+                        if dispatch_key is not None:
+                            _ack_store.mark_withdrawn(dispatch_key)
+                        if not _guard_class:
+                            self._abandon_stuck_pool(pool, future)
+                    _release_slot()
+                    self._take_recycled(future)
+                    return _hook_timeout_response(msg, _hook_secs)
                 # The task STARTED and is still running: genuinely
                 # indeterminate. `ipc._timeout_error_envelope` classifies via
                 # the same fail-closed `_op_may_mutate` the BrokenProcessPool
@@ -6220,7 +6449,9 @@ class _ServerContext:
                 # half-applied, which is why the reply stays indeterminate and the
                 # stamp reads `killed`: reconcile against real state.
                 envelope = _timeout_error_envelope(
-                    msg.get("method"), _POOL_RESULT_DEADLINE_SECS, msg.get("id")
+                    msg.get("method"),
+                    _hook_secs if _hook_secs is not None else _POOL_RESULT_DEADLINE_SECS,
+                    msg.get("id"),
                 )
                 data = (envelope.get("error") or {}).get("data")
                 if isinstance(data, dict) and dispatch_ack.abandon_import_phase(

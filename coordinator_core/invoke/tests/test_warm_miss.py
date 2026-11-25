@@ -132,6 +132,77 @@ def test_allow_unstamped_carve_out_goes_cold_quietly(client, monkeypatch, capsys
     assert capsys.readouterr().err == ""
 
 
+def test_call_after_a_stop_respawns_and_the_wait_serves_it(client, monkeypatch, tmp_path, capsys):
+    """After `warm-engine-stop` the next miss spawns a server and the wait returns its answer,
+    never a cold fall-through. The spawn goes through the real `_spawn_once` gate."""
+    pytest.importorskip("psutil")
+    from coordinator_core.invoke.warm_miss import settle_warm_miss
+    from coordinator_core.warm import pair_stop
+
+    root = tmp_path / "engine"
+    root.mkdir()
+    monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(tmp_path / "runtime"))
+    monkeypatch.delenv("COORDINATOR_WARM_SERVER_AUTOSTART", raising=False)
+    monkeypatch.setattr(client, "_engine_clone_root", lambda: root)
+    monkeypatch.setattr(client, "_live_tree_cold", False)
+    monkeypatch.setattr(client, "_spawned_this_process", False)
+    assert pair_stop.stop_warm_pair(root).ok()
+
+    spawns: list = []
+    monkeypatch.setattr(
+        client, "spawn_detached", lambda r, script, args=None, **kw: spawns.append((r, script)) or True
+    )
+    polls: list = []
+
+    def fake(msg, read_deadline_secs=None):
+        client._spawn_once()
+        polls.append(msg)
+        return {"jsonrpc": "2.0", "id": 1, "result": "ok"} if len(polls) >= 3 else None
+
+    monkeypatch.setattr(client, "try_warm_dispatch", fake)
+    response = settle_warm_miss(MSG)
+    assert response is not None and response["result"] == "ok"
+    assert spawns == [(str(root), client.SERVER_ENTRY_SCRIPT)]
+    assert "ENGINE UNREACHABLE" not in capsys.readouterr().err
+
+
+HOOK_MSG = {"jsonrpc": "2.0", "id": 1, "method": "hooks.preuse_bash_dispatch", "params": {}}
+
+
+def test_hook_method_never_waits_even_with_a_nonzero_env(client, monkeypatch, capsys):
+    from coordinator_core.invoke.warm_miss import settle_warm_miss
+
+    monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "2")
+    monkeypatch.setattr(
+        client, "try_warm_dispatch", lambda *a, **k: pytest.fail("must not poll")
+    )
+    assert settle_warm_miss(HOOK_MSG) is None
+    err = capsys.readouterr().err
+    assert "waiting up to" not in err
+    assert "never waits on the respawn" in err
+
+
+def test_hook_stdin_mode_env_never_waits(client, monkeypatch):
+    from coordinator_core.invoke.warm_miss import _warm_boot_wait_deadline, settle_warm_miss
+
+    monkeypatch.delenv("COORDINATOR_WARM_BOOT_WAIT_SECS", raising=False)
+    monkeypatch.setenv("COORDINATOR_DOOR_STDIN_MODE", "hook")
+    assert _warm_boot_wait_deadline() == 0.0
+    monkeypatch.setattr(
+        client, "try_warm_dispatch", lambda *a, **k: pytest.fail("must not poll")
+    )
+    assert settle_warm_miss(MSG) is None
+
+
+def test_op_door_still_waits_the_default(monkeypatch):
+    from coordinator_core.invoke.warm_miss import WARM_BOOT_WAIT_SECS, _warm_boot_wait_deadline
+
+    monkeypatch.delenv("COORDINATOR_WARM_BOOT_WAIT_SECS", raising=False)
+    monkeypatch.delenv("COORDINATOR_DOOR_STDIN_MODE", raising=False)
+    assert _warm_boot_wait_deadline("invoke.from_argv") == WARM_BOOT_WAIT_SECS
+    assert _warm_boot_wait_deadline() == WARM_BOOT_WAIT_SECS
+
+
 def test_main_reexports_moved_names():
     import coordinator_core.invoke.__main__ as m
     import coordinator_core.invoke.warm_miss as w

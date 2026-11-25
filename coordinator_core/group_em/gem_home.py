@@ -11,9 +11,11 @@ Also carries the G-EM memo identity: the home signs as SENDER_ID and receives at
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from coordinator_core import machine_resolver
@@ -31,6 +33,9 @@ REMOTE_URL_KEY = "coordinator.group_em_home_remote_url"
 REMOTE_BRANCH_KEY = "coordinator.group_em_home_remote_branch"
 REMOTE_DECLINED_KEY = "coordinator.group_em_home_remote_declined"
 DEFAULT_REMOTE_BRANCH = "main"
+SEEDED_RECORD = ".coordinator-local/home-CLAUDE.last-seeded.md"
+DIVERGED_DIR = ".coordinator-local/diverged-home-CLAUDE"
+KNOWN_VERSIONS_MANIFEST = "home-CLAUDE.known-versions.sha256"
 OPT_OUTS = ("gh-absent", "gh-unauthenticated", "declined")
 # Per-box runtime the home never commits; `state/cross-repo/` stays tracked (the memo inbox).
 _IGNORED = (
@@ -252,6 +257,25 @@ def _attach_remote(home: Path, url: str) -> None:
     run_git(["checkout", "-q", "-B", branch, "--track", f"origin/{branch}"], cwd=cwd)
 
 
+def _text_hash(text: str) -> str:
+    """sha256 of `text` as UTF-8 with CRLF normalised to LF (the manifest's hash basis)."""
+    return hashlib.sha256(text.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+
+
+def _known_version_hashes(src: Path) -> set[str]:
+    """Hashes of every shipped template version, from `KNOWN_VERSIONS_MANIFEST` beside `src`
+    (`<sha256> <commit>` lines, `#` comments). A missing or unreadable manifest is an empty set."""
+    try:
+        lines = (src.parent / KNOWN_VERSIONS_MANIFEST).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return set()
+    return {
+        parts[0].lower()
+        for ln in lines
+        if (parts := ln.split()) and not ln.lstrip().startswith("#")
+    }
+
+
 def ensure_home_outcome(template: Path | None = None, refresh: bool = False) -> tuple[Path, str]:
     """`ensure_home_report` narrowed to `(home, seed)` for callers that ignore the remote."""
     rep = ensure_home_report(template, refresh)
@@ -261,12 +285,18 @@ def ensure_home_outcome(template: Path | None = None, refresh: bool = False) -> 
 def ensure_home_report(template: Path | None = None, refresh: bool = False) -> dict:
     """Migrate a legacy home when safe, then create the home, `git init` it, attach the recorded
     remote when the home has no commits, add `state/`, write the ignore list, seed CLAUDE.md when
-    absent (or on refresh, which overwrites it).
+    absent (or on refresh, which always writes the current template; a CLAUDE.md that equals
+    none of the template, the last-seeded copy at `<home>/` + `SEEDED_RECORD` or a prior shipped
+    version in the `KNOWN_VERSIONS_MANIFEST` beside the template is first saved under
+    `DIVERGED_DIR`).
 
-    Returns `{home, seed, remote, remote_opt_out}`. The template defaults to `default_template()`.
-    `seed` is one of seeded, kept (CLAUDE.md present, no refresh), no-template (none resolved or
-    not a file; nothing written). `remote` is the recorded URL or None; with no URL,
-    `remote_opt_out` names why (see `remote_status`) and the home stays local-only."""
+    Returns `{home, seed, remote, remote_opt_out}`, plus `diverged_copy` when replaced-diverged.
+    The template defaults to `default_template()`. `seed` is one of seeded, kept (CLAUDE.md
+    present, no refresh), replaced-diverged (refresh replaced a locally edited CLAUDE.md after
+    saving it), kept-diverged (the save failed, so the edited CLAUDE.md is left in place; the one
+    departure from "refresh always writes"), no-template (none resolved or not a file; nothing
+    written). `remote` is the recorded URL or None; with no URL, `remote_opt_out` names why
+    (see `remote_status`) and the home stays local-only."""
     migrate_legacy_home()
     home = resolve_home()
     home.mkdir(parents=True, exist_ok=True)
@@ -289,9 +319,49 @@ def ensure_home_report(template: Path | None = None, refresh: bool = False) -> d
     if not refresh and seed.exists():
         report["seed"] = "kept"
         return report
-    seed.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-    report["seed"] = "seeded"
+    text = src.read_text(encoding="utf-8")
+    record = home / SEEDED_RECORD
+    if refresh and seed.exists():
+        try:
+            current = seed.read_text(encoding="utf-8")
+            known = {text}
+            if record.is_file():
+                known.add(record.read_text(encoding="utf-8"))
+            prior = _known_version_hashes(src)
+        except (OSError, UnicodeDecodeError):
+            current, known, prior = None, set(), set()
+        if current is not None and _text_hash(current) in prior:
+            known.add(current)
+        if current is not None and current not in known:
+            saved = _save_diverged(home, seed, current)
+            if saved is not None:
+                report["seed"] = "replaced-diverged"
+                report["diverged_copy"] = saved
+            else:
+                report["seed"] = "kept-diverged"
+                return report
+    seed.write_text(text, encoding="utf-8")
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(text, encoding="utf-8")
+    if report["seed"] != "replaced-diverged":
+        report["seed"] = "seeded"
     return report
+
+
+def _save_diverged(home: Path, seed: Path, current: str) -> Path | None:
+    """Copy a locally edited home CLAUDE.md to `DIVERGED_DIR/<first 16 hex of its hash>.md`,
+    written only when absent, and name the copy on stderr. None when the copy cannot be written
+    (the caller then leaves the edited file in place)."""
+    dest = home / DIVERGED_DIR / f"{_text_hash(current)[:16]}.md"
+    try:
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(seed.read_bytes())
+    except OSError as exc:
+        print(f"group-em home: kept {seed}, not replaced: it differs from every known template version and saving its copy to {dest} failed ({exc})", file=sys.stderr)
+        return None
+    print(f"group-em home: CLAUDE.md differed from every known template version; saved to {dest}", file=sys.stderr)
+    return dest
 
 
 _receiver_ids_cache: frozenset[str] | None = None

@@ -84,29 +84,10 @@ def _requirement(p: dict) -> tuple:
 
 
 def _boxes(home: Path) -> list[dict]:
-    """Registered boxes plus this box, one row per ``box_id``."""
-    boxes = [dict(b) for b in box_registry.read_boxes()]
-    local = box_registry.local_box_id(home)
-    home_root = str(Path(home).resolve())
+    """Registered boxes plus this box, one row per physical box (``fleet_live.registered_boxes``)."""
+    from coordinator_core.group_em import fleet_live
 
-    def _is_local(b: dict) -> bool:
-        if b.get("box_id") == local:
-            return True
-        try:
-            return str(Path(str(b.get("root"))).resolve()) == home_root
-        except (OSError, ValueError):
-            return False
-
-    found = False
-    for b in boxes:
-        if _is_local(b):
-            if b.get("box_id") != local:
-                b["registered_as"] = b.get("box_id")
-                b["box_id"] = local
-            found = True
-    if not found:
-        boxes.append({"box_id": local, "root": str(home)})
-    return boxes
+    return fleet_live.registered_boxes(home)
 
 
 def _by_local_id(rows: list[dict], alias: dict) -> list[dict]:
@@ -128,12 +109,13 @@ def _refresh_local() -> bool:
 
 
 def _fleet_row(box: dict, local_id: str) -> dict:
-    row = capacity_record.read(box)
+    # A far POSIX root is not absolute here; opening it would resolve under this drive and read this box's stamp.
+    readable = Path(str(box.get("root"))).is_absolute()
+    row = capacity_record.read(box) if readable else {"box_id": box.get("box_id"), "stale": True, "age_s": None}
     refreshed = False
     if row.get("stale") is not False and box.get("box_id") == local_id and _refresh_local():
         row, refreshed = capacity_record.read(box), True
-    if row.get("box_id") is None:
-        row["box_id"] = box.get("box_id")
+    row["box_id"] = box.get("box_id")
     if row.get("stale") is False:
         row["cores"] = row.get("cores_logical") or row.get("cores_physical")
         if "gpus" not in row and "gpu_unavailable" not in row:
@@ -173,7 +155,7 @@ def _groupem_fleet_capacity(params: dict, repo_root: Optional[Path] = None) -> d
 
         home = settings_home()
         local = box_registry.local_box_id(home)
-        boxes = _boxes(home)
+        boxes = fleet_live.known_boxes(home)
         per_box = min(float(timeout) if timeout is not None else _PER_BOX_TIMEOUT_S, _timeout_ceiling(ipc))
         live = fleet_live.gather([] if local_only else boxes, timeout=per_box, local_id=local)
         return {

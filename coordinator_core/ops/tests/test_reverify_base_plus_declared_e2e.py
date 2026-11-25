@@ -122,8 +122,9 @@ def _measure_files(root: Path, base: str) -> tuple[str, str]:
     return "scratch/base.txt", "scratch/export.txt"
 
 
-def test_without_the_measurements_the_reds_are_neither_pre_existing_nor_peer_dirt(world) -> None:
+def test_without_the_measurements_the_reds_are_neither_pre_existing_nor_peer_dirt(world, monkeypatch) -> None:
     root, base = world
+    monkeypatch.setattr(rr, "_measure_at_base", lambda *_a, **_k: (set(), set(), None))
     out = _reverify(root, base)
     assert out["pre_existing"] == [] and out["peer_dirt"] == []
     assert out["foreign_red"] == {PEER: ["tests/test_peer.py"]}

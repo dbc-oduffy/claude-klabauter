@@ -14,9 +14,20 @@ import pytest
 
 pytestmark = [pytest.mark.complete, pytest.mark.spawns_process, pytest.mark.cadence]
 
+def _can_mint_encrypted_key() -> bool:
+    """True when the packages `unimatrix-passphrase.mint_key` serialises with import: a spec alone is not enough
+    (a stray `bcrypt` directory has a spec and no `kdf`)."""
+    try:
+        from bcrypt import kdf  # noqa: F401
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 needs_cryptography = pytest.mark.skipif(
-    importlib.util.find_spec("cryptography") is None or importlib.util.find_spec("bcrypt") is None,
-    reason="optional cryptography/bcrypt packages absent; encrypted key minting needs both",
+    not _can_mint_encrypted_key(),
+    reason="optional cryptography/bcrypt packages not importable; encrypted key minting needs both",
 )
 
 _SRC = Path(__file__).resolve().parents[1] / "unimatrix-install.py"
@@ -48,6 +59,12 @@ def _engine(monkeypatch, tmp_path):
     (package.parent / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(root), "published-target"))
     return root
+
+
+@pytest.fixture(autouse=True)
+def _shared_item_box(monkeypatch):
+    # The box's one passphrase item is titled `unimatrix-<local_box()>`; pin the box id so item titles are fixed.
+    monkeypatch.setattr(ui._sibling("unimatrix-passphrase.py"), "_local_box", lambda: "me")
 
 
 @pytest.fixture(autouse=True)
@@ -145,9 +162,11 @@ def _stub_src(monkeypatch, tmp_path):
     _write_stubs(src)
     monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
     # A hermetic skills source: the repo's own coordinator/skills need not exist (it is DoE's tree).
-    skills = tmp_path / "skills-src"
+    # Trap: resolve_skills_root searches `<SKILLS_ROOT.parent>/skills`, so the dir must be named `skills`.
+    skills = tmp_path / "skills"
     (skills / "required").mkdir(parents=True)
     (skills / "required" / "SKILL.md").write_text("# required\n", encoding="utf-8")
+    (skills / "codex-core-skills.txt").write_text("required\n", encoding="utf-8")
     monkeypatch.setattr(ui, "SKILLS_ROOT", skills)
 
 
@@ -310,7 +329,6 @@ class _PairBox:
     def __init__(self, store=None, op_missing=False, items=None, vault="Vault"):
         self.store, self.calls = dict(store or {}), []
         self.op_missing, self.items, self.vault = op_missing, dict(items or {}), vault
-        self.fail_edit = False
 
     def _op(self, argv, done):
         if self.op_missing:
@@ -321,16 +339,6 @@ class _PairBox:
         if argv[1:3] == ["item", "create"]:
             title = next(a for a in argv if a.startswith("--title="))[len("--title="):]
             self.items[title] = "generated-pass-" + title
-            return done()
-        if argv[1:3] == ["item", "delete"]:
-            return done() if self.items.pop(argv[3], None) is not None else done(1, "", "isn't an item")
-        if argv[1:3] == ["item", "edit"]:
-            if self.fail_edit:
-                return done(1, "", "boom")
-            title = next(a for a in argv if a.startswith("--title="))[len("--title="):]
-            if title in self.items:
-                raise AssertionError("retitle would collapse two items")
-            self.items[title] = self.items.pop(argv[3])
             return done()
         raise AssertionError(argv)
 
@@ -393,10 +401,10 @@ def test_pair_default_mints_a_passphrase_encrypted_key_from_the_1password_item(m
     refs = []
     priv, body = ui.pair_key("far-1", run=box, on_mint=refs.append)
     assert priv == home / ".secrets" / "ssh" / "unimatrix-far-1" and _passphrase().is_encrypted(priv)
-    assert refs == ["op://Vault/unimatrix-far-1/password"] and box.items == {"unimatrix-far-1": "generated-pass-unimatrix-far-1"}
+    assert refs == ["op://Vault/unimatrix-me/password"] and box.items == {"unimatrix-me": "generated-pass-unimatrix-me"}
     assert box.store == {"unimatrix.keys.far-1": str(priv)}
     assert not [c for c in box.calls if c[0] == "ssh-keygen"]
-    secret = box.items["unimatrix-far-1"]
+    secret = box.items["unimatrix-me"]
     assert not [c for c in box.calls if any(secret in a for a in c)]
     assert not [p for p in home.rglob("*") if p.is_file() and secret.encode() in p.read_bytes()]
     first = priv.read_bytes()
@@ -433,57 +441,54 @@ def test_pair_default_with_locked_1password_refuses_typed(monkeypatch, tmp_path)
     assert "REFUSE: 1password_locked" in buf.getvalue()
 
 
-@needs_cryptography
-def test_pair_remint_removes_old_pair_and_item_then_mints_encrypted(monkeypatch, tmp_path):
-    home = _pair_home(monkeypatch, tmp_path)
-    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
+def _remint_box(home, monkeypatch):
+    box = _PairBox(items={"unimatrix-me": "old-secret"})
     key = home / ".secrets" / "ssh" / "unimatrix-far-1"
     key.parent.mkdir(parents=True)
     key.write_text("OLD", encoding="utf-8")
     Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
     box.store["unimatrix.keys.far-1"] = str(key)
+    return box, key
+
+
+@needs_cryptography
+def test_pair_remint_replaces_the_pair_under_the_same_shared_item(monkeypatch, tmp_path):
+    box, key = _remint_box(_pair_home(monkeypatch, tmp_path), monkeypatch)
     refs = []
     priv, body = ui.pair_key("far-1", run=box, remint=True, on_mint=refs.append)
     assert priv == key and body != "OLDBODY" and _passphrase().is_encrypted(key)
-    assert box.items == {"unimatrix-far-1": "generated-pass-unimatrix-far-1.new"}
-    assert refs == ["op://Vault/unimatrix-far-1/password"]
+    assert box.items == {"unimatrix-me": "old-secret"}
+    assert refs == ["op://Vault/unimatrix-me/password"]
     assert not list(key.parent.glob("*.new*"))
-    ops = [(c[2], next((a for a in c if a.startswith("--title=")), c[3])) for c in box.calls
-           if c[0] == "op" and c[1] == "item"]
-    assert ops == [("create", "--title=unimatrix-far-1.new"), ("delete", "unimatrix-far-1"),
-                   ("edit", "--title=unimatrix-far-1")]
+    assert not [c for c in box.calls if c[0] == "op" and c[1] == "item"]
 
 
 @needs_cryptography
-def test_pair_remint_writes_new_key_and_item_before_deleting_the_superseded_ones(monkeypatch, tmp_path):
-    home = _pair_home(monkeypatch, tmp_path)
-    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
-    key = home / ".secrets" / "ssh" / "unimatrix-far-1"
-    key.parent.mkdir(parents=True)
-    key.write_text("OLD", encoding="utf-8")
-    Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
-    box.store["unimatrix.keys.far-1"] = str(key)
+def test_pair_remint_mints_the_new_key_under_the_existing_passphrase(monkeypatch, tmp_path):
+    box, key = _remint_box(_pair_home(monkeypatch, tmp_path), monkeypatch)
     mod = _passphrase()
     seen = []
-    real_mint, real_delete = mod.mint_key, mod.delete_item
-    monkeypatch.setattr(mod, "mint_key", lambda p, c, pw: (seen.append(("mint", Path(p).name,
-                        key.read_text(encoding="utf-8"), dict(box.items))), real_mint(p, c, pw))[1])
-    monkeypatch.setattr(mod, "delete_item", lambda a, run=None: (seen.append(("delete", a,
-                        _passphrase().is_encrypted(key), dict(box.items))), real_delete(a, run))[1])
+    real_mint = mod.mint_key
+    monkeypatch.setattr(mod, "mint_key", lambda p, c, pw: (seen.append((Path(p).name, pw, key.read_text(encoding="utf-8"))),
+                                                          real_mint(p, c, pw))[1])
     ui.pair_key("far-1", run=box, remint=True)
-    assert seen[0][:3] == ("mint", "unimatrix-far-1.new", "OLD")
-    assert set(seen[0][3]) == {"unimatrix-far-1", "unimatrix-far-1.new"}
-    assert seen[1][:3] == ("delete", "far-1", True) and set(seen[1][3]) == {"unimatrix-far-1", "unimatrix-far-1.new"}
+    assert seen == [("unimatrix-far-1.new", "old-secret", "OLD")]
+
+
+@needs_cryptography
+def test_two_link_keys_on_one_box_share_one_item_ref_and_create_no_per_alias_item(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    box = _PairBox()
+    refs = []
+    ui.pair_key("far-1", run=box, on_mint=refs.append)
+    ui.pair_key("far-2", run=box, on_mint=refs.append)
+    assert refs == ["op://Vault/unimatrix-me/password"] * 2
+    assert list(box.items) == ["unimatrix-me"]
+    assert len([c for c in box.calls if c[:3] == ["op", "item", "create"]]) == 1
 
 
 def test_pair_remint_failing_before_the_new_key_is_written_keeps_the_superseded_key_and_item(monkeypatch, tmp_path):
-    home = _pair_home(monkeypatch, tmp_path)
-    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
-    key = home / ".secrets" / "ssh" / "unimatrix-far-1"
-    key.parent.mkdir(parents=True)
-    key.write_text("OLD", encoding="utf-8")
-    Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
-    box.store["unimatrix.keys.far-1"] = str(key)
+    box, key = _remint_box(_pair_home(monkeypatch, tmp_path), monkeypatch)
     mod = _passphrase()
 
     def boom(p, c, pw):
@@ -494,17 +499,11 @@ def test_pair_remint_failing_before_the_new_key_is_written_keeps_the_superseded_
     with pytest.raises(RuntimeError, match="mint failed"):
         ui.pair_key("far-1", run=box, remint=True)
     assert key.read_text(encoding="utf-8") == "OLD" and Path(str(key) + ".pub").is_file()
-    assert box.items == {"unimatrix-far-1": "old-secret"} and not list(key.parent.glob("*.new*"))
+    assert box.items == {"unimatrix-me": "old-secret"} and not list(key.parent.glob("*.new*"))
 
 
 def test_pair_remint_with_locked_1password_keeps_the_superseded_key_and_item(monkeypatch, tmp_path):
-    home = _pair_home(monkeypatch, tmp_path)
-    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
-    key = home / ".secrets" / "ssh" / "unimatrix-far-1"
-    key.parent.mkdir(parents=True)
-    key.write_text("OLD", encoding="utf-8")
-    Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
-    box.store["unimatrix.keys.far-1"] = str(key)
+    box, key = _remint_box(_pair_home(monkeypatch, tmp_path), monkeypatch)
     mod = _passphrase()
 
     def locked(alias, run=None):
@@ -514,31 +513,7 @@ def test_pair_remint_with_locked_1password_keeps_the_superseded_key_and_item(mon
     with pytest.raises(mod.OnePasswordLocked):
         ui.pair_key("far-1", run=box, remint=True)
     assert key.read_text(encoding="utf-8") == "OLD" and Path(str(key) + ".pub").is_file()
-    assert box.items == {"unimatrix-far-1": "old-secret"}
-
-
-def _remint_box(home, monkeypatch):
-    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
-    key = home / ".secrets" / "ssh" / "unimatrix-far-1"
-    key.parent.mkdir(parents=True)
-    key.write_text("OLD", encoding="utf-8")
-    Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
-    box.store["unimatrix.keys.far-1"] = str(key)
-    return box, key
-
-
-@needs_cryptography
-def test_pair_remint_failing_to_delete_the_superseded_item_names_the_new_item_and_remint(monkeypatch, tmp_path):
-    box, key = _remint_box(_pair_home(monkeypatch, tmp_path), monkeypatch)
-    mod = _passphrase()
-
-    def locked(alias, run=None):
-        raise mod.OnePasswordLocked("1password_locked: test")
-
-    monkeypatch.setattr(mod, "delete_item", locked)
-    with pytest.raises(RuntimeError, match=r"new key is in place.*unimatrix-far-1\.new.*re-run --remint"):
-        ui.pair_key("far-1", run=box, remint=True)
-    assert mod.is_encrypted(key)
+    assert box.items == {"unimatrix-me": "old-secret"}
 
 
 @needs_cryptography
@@ -571,7 +546,7 @@ def test_file_key_default_is_encrypted_and_remint_with_no_op_refuses(monkeypatch
     buf = io.StringIO()
     box = _PairBox()
     assert ui.main(["--file-key"], out=buf, pair_run=box) == 0
-    assert "passphrase: op://Vault/unimatrix-file/password" in buf.getvalue()
+    assert "passphrase: op://Vault/unimatrix-me/password" in buf.getvalue()
     assert _passphrase().is_encrypted(home / ".secrets" / "ssh" / "unimatrix-file")
     keygens = [c for c in box.calls if c[0] == "ssh-keygen"]
     assert len(keygens) == 1 and keygens[0][1] == "-lf"
@@ -901,8 +876,9 @@ def test_lifecycle_launcher_never_imports_ambient_module_for_stale_engine(tmp_pa
                           input="{}", text=True, capture_output=True, timeout=3,
                           env=dict(os.environ, PYTHONPATH=str(ambient)),
                           creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
-    assert proc.returncode == 0 and json.loads(proc.stdout) == {}
-    assert "lacks session.external_registry" in proc.stderr
+    assert proc.returncode == 0
+    assert "degraded" in json.loads(proc.stdout)["systemMessage"]
+    assert "external session context unavailable" in proc.stderr
     assert "AMBIENT MODULE LOADED" not in proc.stderr
 
 

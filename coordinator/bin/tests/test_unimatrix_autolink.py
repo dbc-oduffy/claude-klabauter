@@ -822,7 +822,7 @@ def test_test_home_refuses_an_ssh_config_key_outside_the_home(env, tmp_path):
 
 def test_test_home_refuses_the_default_key_when_the_settings_home_is_unset(env, monkeypatch):
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME")
-    with pytest.raises(env.roster.MissingSettingsError, match="COORDINATOR_SETTINGS_HOME"):
+    with pytest.raises(RuntimeError, match="test home refuses real key_path"):
         env.roster.default_key()
 
 
@@ -2228,10 +2228,11 @@ class _RestartRig:
     def link(self, roster, alias, key, say, spawn):
         return self.e.al.link_peer(roster, alias, key, say, spawn=spawn, probe_fn=ok)
 
-    def run(self, alias="machine-a"):
+    def run(self, alias="machine-a", refresh=lambda sdir, say: True):
+        """The installed-copy refresh is a no-op unless a test names one (None runs the production default)."""
         out = []
         rc = self.e.al.cmd_restart_box(alias, link=self.link, spawn=self.spawn, sleep=self.sleep, say=out.append,
-                                       roster=self.e.roster)
+                                       roster=self.e.roster, refresh=refresh)
         return rc, out
 
 
@@ -2317,6 +2318,108 @@ def test_restart_box_hands_over_a_box_with_no_record_from_its_stamps_alone(env):
     assert sorted(Path(c[1]).name for c in rig.spawned) == ["unimatrix-mirror-all.py", "unimatrix-roster.py"]
 
 
+def _stale_install(env):
+    """An installed copy one release behind: the autolink script differs from the vendored bytes."""
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    (env.sdir / "unimatrix-autolink.py").write_text("# pre-roll code\n", encoding="utf-8")
+
+
+def test_restart_box_refreshes_a_stale_installed_copy_by_default(env):
+    add_key(env)
+    _seed_box(env)
+    _stale_install(env)
+    rc, out = _RestartRig(env).run(refresh=None)
+    assert rc == 0, out
+    assert (env.sdir / "unimatrix-autolink.py").read_bytes() == (BIN / "unimatrix-autolink.py").read_bytes()
+    assert any(line.startswith("restart-box: refreshed ") for line in out)
+
+
+def test_restart_box_restarts_a_stale_router_on_the_installed_closure(env):
+    add_key(env)
+    _seed_box(env)
+    _stale_install(env)
+    inst = load("unimatrix-install")
+    (env.sdir / "router").mkdir()
+    (env.sdir / "router" / "router.pid.json").write_text(json.dumps({"pid": 1, "codeDigest": "old"}))
+    restarted = []
+
+    def restart(dest, say):
+        restarted.append(inst.router_closure_digest(dest))
+        return {"stopped": "handshake", "old_pid": 1, "new_pid": 2}
+    refresh = lambda sdir, say: env.al.refresh_installed_copy(sdir, say, router_live=lambda d: True, restart_router=restart)
+    rc, out = _RestartRig(env).run(refresh=refresh)
+    assert rc == 0, out
+    assert restarted == [inst.router_closure_digest(env.sdir)] and restarted != [None]
+    assert "restart-box: router restarted: handshake old pid 1 new pid 2" in out
+
+
+def test_restart_box_defers_the_router_restart_while_another_box_link_is_mid_spawn(env):
+    add_key(env)
+    _seed_box(env)
+    _stale_install(env)
+    (env.sdir / "router").mkdir()
+    (env.sdir / "router" / "router.pid.json").write_text(json.dumps({"pid": 1, "codeDigest": "old"}))
+    (env.sdir / "autolink-otherbox.lock").write_text("")
+    restarted = []
+
+    def refresh(sdir, say):
+        return env.al.refresh_installed_copy(
+            sdir, say, own_lock=sdir / "autolink-machine-a.lock", router_live=lambda d: True,
+            restart_router=lambda d, s: restarted.append(d))
+    rc, _ = _RestartRig(env).run(refresh=refresh)
+    assert rc == 0 and len(restarted) == 1  # an injected restart_router is the caller's: no deferral wraps it
+
+    def refresh_default(sdir, say):
+        return env.al.refresh_installed_copy(sdir, say, own_lock=sdir / "autolink-machine-a.lock", router_live=lambda d: True)
+    _stale_install(env)
+    rc, out = _RestartRig(env).run(refresh=refresh_default)
+    assert any("router restart deferred: link mid-spawn (autolink-otherbox.lock)" in line for line in out)
+    assert not any("router restarted" in line for line in out)
+    (env.sdir / "autolink-otherbox.lock").unlink()
+    assert env.al._links_mid_spawn(env.sdir, env.sdir / "autolink-machine-a.lock") == []
+
+
+def test_restart_box_with_nothing_changed_installs_and_restarts_nothing(env):
+    add_key(env)
+    _seed_box(env)
+    inst = load("unimatrix-install")
+    inst.install_scripts(BIN, env.sdir)
+    (env.sdir / "router").mkdir()
+    (env.sdir / "router" / "router.pid.json").write_text(json.dumps({"codeDigest": inst.router_closure_digest(env.sdir)}))
+    restarted = []
+    refresh = lambda sdir, say: env.al.refresh_installed_copy(
+        sdir, say, router_live=lambda d: True, restart_router=lambda d, s: restarted.append(d))
+    rc, out = _RestartRig(env).run(refresh=refresh)
+    assert rc == 0 and restarted == []
+    assert not any("refreshed" in line or "router restarted" in line for line in out)
+
+
+def test_restart_box_held_box_lock_neither_installs_nor_restarts(env):
+    add_key(env)
+    _seed_box(env)
+    _stale_install(env)
+    (env.sdir / "autolink-machine-a.lock").write_text("")
+    calls = []
+    rc, out = _RestartRig(env).run(refresh=lambda sdir, say: calls.append(sdir) or True)
+    assert rc == 1 and calls == [] and out == ["restart-box: link for machine-a mid-spawn"]
+    rc, out = _RestartRig(env).run(refresh=None)
+    assert rc == 1 and (env.sdir / "unimatrix-autolink.py").read_text(encoding="utf-8") == "# pre-roll code\n"
+
+
+def test_restart_box_names_a_failed_refresh_and_still_hands_the_box_over_with_rc_1(env):
+    add_key(env)
+    _seed_box(env)
+
+    class Refusing:
+        def refresh_installed_copy(self, *a, **k):
+            raise FileNotFoundError("vendored scripts missing")
+    rc, out = _RestartRig(env).run(refresh=lambda sdir, say: env.al.refresh_installed_copy(sdir, say, installer=Refusing()))
+    assert rc == 1
+    assert any("installed copy not refreshed: FileNotFoundError" in line for line in out)
+    assert "restart-box: machine-a handed over, one live supervisor per role" not in out
+    assert len(list(env.sdir.glob("supervisor-9*.json"))) == 2
+
+
 def test_restart_box_is_dispatched_from_main(env, monkeypatch):
     seen = []
     monkeypatch.setattr(env.al, "cmd_restart_box", lambda alias: seen.append(alias) or 0)
@@ -2350,7 +2453,7 @@ def test_run_summary_names_an_unreachable_alias_as_pending_and_a_keyless_one_as_
     bad = lambda roster, alias, key, remote=None: "rc=255"  # noqa: E731
     down = env.al.run(roster=env.roster, boxes=["machine-a"], spawn=Spawner(), probe_fn=bad)
     assert down == [{"alias": "machine-a", "roles_started": [], "reason": "unreachable: rc=255"}]
-    assert down.pending == ["machine-a"] and env.al.spawn_lines(down) == []
+    assert down.pending == ["machine-a"] and env.al.spawn_lines(down) == ["no supervisors spawned: machine-a (unreachable: rc=255)"]
     keyless = env.al.run(roster=env.roster, boxes=["nokey"], spawn=Spawner(), probe_fn=ok,
                          key_fn=lambda r, a: str(tmp_path / "absent"))
     assert keyless == [{"alias": "nokey", "roles_started": [], "reason": "no relay key"}] and keyless.pending == []
@@ -2677,6 +2780,135 @@ def test_lan_route_with_no_address_list_spawns_no_verify_and_a_failure_reads_as_
     assert env.al.lan_route(env.roster, "kim@machine-a", str(env.key), far=far, read_key=boom) is None
 
 
+def keyless_pass(env, now):
+    sp = Spawner()
+    summary = env.al.link_pass(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=boom, now=now)
+    assert sp.cmds == []
+    return summary[0]["reason"]
+
+
+def test_keyless_far_box_backs_off_with_a_growing_delay_and_is_said_once(env):
+    live = env.al._liveness()
+    assert keyless_pass(env, 1000.0) == "no relay key"
+    first = live.backoff_until(env.sdir, "machine-a")
+    assert first == 1000.0 + 60
+    assert keyless_pass(env, 1030.0) == "probe backoff"
+    assert keyless_pass(env, first + 1) == "no relay key"
+    assert live.backoff_until(env.sdir, "machine-a") == first + 1 + 120
+    assert len([ln for ln in log_lines(env) if "no Unimatrix-Zero key" in ln]) == 2
+
+
+def test_keyless_backoff_is_bounded(env):
+    live = env.al._liveness()
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    for i in range(30):
+        live.note_keyless(env.sdir, "machine-a", 0.0)
+    assert live.backoff_until(env.sdir, "machine-a") == live.KEYLESS_CAP
+
+
+def test_a_later_recorded_until_is_never_shortened_by_a_keyless_charge(env):
+    live = env.al._liveness()
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    stopgap = 1000.0 + 30 * 86400
+    (env.sdir / "autolink-machine-a.backoff.json").write_text(json.dumps({"until": stopgap}), encoding="utf-8")
+    assert keyless_pass(env, 1000.0 + 3600) == "probe backoff"
+    assert live.backoff_until(env.sdir, "machine-a") == stopgap
+    live.note_keyless(env.sdir, "machine-a", 1000.0 + 3600)
+    live.note_probe(env.sdir, "machine-a", False, 1000.0 + 3600)
+    assert live.backoff_until(env.sdir, "machine-a") == stopgap
+    assert not (env.sdir / "autolink.log").exists()
+
+
+def test_a_parked_alias_is_skipped_silently_survives_probe_success_and_is_freed_only_by_release(env):
+    add_key(env)
+    live = env.al._liveness()
+    live.park(env.sdir, "machine-a", "assimilate later", 1000.0)
+    sp = Spawner()
+    for now in (1000.0, 1000.0 + 10 * 86400):
+        summary = env.al.link_pass(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=boom, now=now)
+        assert summary[0]["reason"] == "parked" and summary.pending == []
+    assert sp.cmds == []
+    assert not (env.sdir / "autolink.log").exists() or "machine-a" not in (env.sdir / "autolink.log").read_text()
+    live.note_probe(env.sdir, "machine-a", True, 2000.0)
+    live.note_probe(env.sdir, "machine-a", False, 2000.0)
+    assert live.is_parked(env.sdir, "machine-a")
+    assert env.al.link_pass(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=boom, ignore_backoff=True)[0]["reason"] == "parked"
+    assert live.release(env.sdir, "machine-a") is True
+    assert live.release(env.sdir, "machine-a") is False
+    assert not live.is_parked(env.sdir, "machine-a")
+    env.al.link_pass(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok, now=1000.0 + 10 * 86400 + 1)
+    assert len(sp.cmds) == 2
+
+
+def test_park_and_release_verbs_are_reachable_from_the_liveness_cli(env, capsys):
+    live = env.al._liveness()
+    cli = load("unimatrix-liveness")
+    assert cli.main(["park", "kim@box", "--reason", "later"]) == 0
+    assert live.is_parked(env.sdir, "kim@box")
+    assert cli.main(["release", "kim@box"]) == 0
+    assert not live.is_parked(env.sdir, "kim@box") and not (env.sdir / "autolink-kim_at_box.backoff.json").exists()
+    assert cli.main(["release", "kim@box"]) == 1
+    assert cli.main(["park"]) == 2
+
+
+HOST_KEY_WHY = "rc=255: Host key verification failed."
+
+
+def _down_probe(roster, alias, key, remote=None):
+    return HOST_KEY_WHY
+
+
+def test_restart_box_host_key_failure_is_one_named_line_and_spawns_nothing(env):
+    add_key(env)
+    _seed_box(env)
+    rig = _RestartRig(env)
+    rig.link = lambda roster, alias, key, say, spawn: env.al.link_peer(
+        roster, alias, key, say, spawn=spawn, probe_fn=_down_probe, stable_fn=lambda a: None,
+        lan_fn=lambda *a: None, mdns_fn=lambda n: [], alias_fn=lambda: [])
+    rc, out = rig.run()
+    assert rc == 1 and rig.spawned == []
+    assert out == ["far box machine-a unreachable: " + HOST_KEY_WHY,
+                   "restart-box: machine-a: host key verification failed; nothing spawned (re-pin the host key for machine-a)"]
+
+
+def test_restart_box_stops_an_unrecorded_twin_so_one_supervisor_per_role_remains(env):
+    add_key(env)
+    _seed_box(env)
+    rig = _RestartRig(env)
+
+    def link_with_twin(roster, alias, key, say, spawn):
+        started = env.al.link_peer(roster, alias, key, say, spawn=spawn, probe_fn=ok)
+        env.live.add(950)
+        (env.sdir / "supervisor-950.json").write_text(json.dumps(
+            {"pid": 950, "procStart": "start-950", "remote": alias, "role": "bridge"}))
+        return started
+
+    rig.link = link_with_twin
+    rc, out = rig.run()
+    assert rc == 0, out
+    assert 950 not in env.live and 950 in {r["pid"] for r in rig.stops}
+    rec = json.loads((env.sdir / "autolink-machine-a.json").read_text())
+    assert rec["bridge"]["pid"] in env.live and rec["inbox"]["pid"] in env.live
+
+
+def test_restart_box_twin_that_ignores_the_stop_request_fails_the_verb(env):
+    add_key(env)
+    _seed_box(env)
+    rig = _RestartRig(env)
+
+    def link_with_twin(roster, alias, key, say, spawn):
+        started = env.al.link_peer(roster, alias, key, say, spawn=spawn, probe_fn=ok)
+        env.live.add(950)
+        (env.sdir / "supervisor-950.json").write_text(json.dumps(
+            {"pid": 950, "procStart": "start-950", "remote": alias, "role": "bridge"}))
+        rig.honour = False
+        return started
+
+    rig.link = link_with_twin
+    rc, out = rig.run()
+    assert rc == 1 and "restart-box: machine-a has 2 live bridge supervisors after handover" in out
+
+
 def test_restart_box_old_supervisor_back_alive_is_not_handed_over_and_is_named(env):
     add_key(env)
     _seed_box(env)
@@ -2692,3 +2924,309 @@ def test_restart_box_old_supervisor_back_alive_is_not_handed_over_and_is_named(e
     assert "restart-box: machine-a old bridge supervisor pid 500 is still running" in out
     assert "restart-box: machine-a old inbox supervisor pid 501 is still running" in out
     assert not any("handed over" in line for line in out)
+
+
+def _link_down(env, remote, since="2020-01-01T00:00:00Z"):
+    path = env.roster.link_state_path(remote)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"alias": remote, "state": "down", "since": since, "reason": "x"}), encoding="utf-8")
+
+
+def _stale_pass(env, sp, now):
+    return env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok, now=now, lan_fn=lambda *a: None)
+
+
+def test_alive_supervisors_with_a_down_link_are_asked_to_stop_then_relinked_next_pass(env):
+    add_key(env)
+    _seed_box(env)
+    _link_down(env, "machine-a")
+    sp = Spawner()
+    later = time.time() + env.al.STALE_LINK_SECONDS + 10
+    summary = _stale_pass(env, sp, later)
+    assert sp.cmds == [] and summary[0]["reason"] == "stale link; supervisors asked to stop"
+    assert summary.pending == ["machine-a"]
+    asked = {json.loads(p.read_text())["pid"] for p in env.sdir.glob("stop-*.json")}
+    assert asked == {500, 501}
+    assert "link machine-a down" in log_lines(env)[-1] and "relinks next pass" in log_lines(env)[-1]
+    env.live.difference_update({500, 501})
+    _stale_pass(env, sp, later + 1)
+    assert len(sp.cmds) == 2
+
+
+def test_a_young_supervisor_pair_with_a_down_link_is_given_the_window_to_recover(env):
+    add_key(env)
+    _seed_box(env)
+    _link_down(env, "machine-a")
+    sp = Spawner()
+    summary = _stale_pass(env, sp, time.time() + 10)
+    assert list(summary) == [] and not list(env.sdir.glob("stop-*.json")) and sp.cmds == []
+
+
+def test_a_recently_down_link_and_an_up_link_are_never_stale(env):
+    add_key(env)
+    _seed_box(env)
+    later = time.time() + env.al.STALE_LINK_SECONDS + 10
+    assert list(_stale_pass(env, Spawner(), later)) == []
+    _link_down(env, "machine-a", since=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(later - 20)))
+    assert list(_stale_pass(env, Spawner(), later)) == [] and not list(env.sdir.glob("stop-*.json"))
+
+
+def test_stale_check_reads_the_link_state_of_the_remote_the_supervisor_was_started_with(env):
+    add_key(env)
+    _seed_box(env)
+    for pid in (500, 501):
+        stamp = env.sdir / f"supervisor-{pid}.json"
+        stamp.write_text(json.dumps({"pid": pid, "procStart": f"start-{pid}", "remote": "kim@machine-a.local"}))
+    _link_down(env, "kim@machine-a.local")
+    summary = _stale_pass(env, Spawner(), time.time() + env.al.STALE_LINK_SECONDS + 10)
+    assert [s["reason"] for s in summary] == ["stale link; supervisors asked to stop"]
+
+
+def test_an_address_answer_keeps_the_logical_peer_so_mirror_names_carry_the_box_id(env):
+    add_key(env)
+    sp = Spawner()
+    answered = []
+
+    def probe_fn(roster, alias, key, remote=None):
+        answered.append(remote or alias)
+        return None if remote == "kim@192.0.2.9" else "rc=255: No route to host"
+
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=probe_fn, lan_fn=lambda *a: None,
+               stable_fn=lambda a: "kim@192.0.2.9")
+    assert "kim@192.0.2.9" in answered
+    assert remotes(sp) == {"machine-a"} and len(sp.cmds) == 2
+    stamps = [json.loads(p.read_text())["remote"] for p in env.sdir.glob("supervisor-*.json")]
+    assert stamps and set(stamps) == {"machine-a"}
+    assert "supervisors keep machine-a so mirror names carry the box id" in (env.sdir / "autolink.log").read_text()
+    bridge = load("unimatrix-bridge")
+    name = env.roster.labelled("far-session", sp.cmds[0][sp.cmds[0].index("--remote") + 1])
+    assert name == "far-session.machine-a" and bridge._roster_wrote_name(name, "far-session", "machine-a")
+    assert not bridge._roster_wrote_name("far-session.192.0.2.9", "far-session", "machine-a")
+
+
+def test_a_hostname_stable_answer_still_dials_its_own_name(env):
+    add_key(env)
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=stale_ip_probe({"kim@machine-a.local"}),
+               lan_fn=lambda *a: None, stable_fn=lambda a: "kim@machine-a.local")
+    assert remotes(sp) == {"kim@machine-a.local"}
+
+
+def test_a_pass_that_started_nothing_prints_one_summary_line_naming_each_alias_and_reason(env):
+    add_key(env)
+    out = []
+    summary = env.al.link_pass(out=out.append, roster=env.roster, boxes=["machine-a"], spawn=Spawner(),
+                               probe_fn=_down_probe, stable_fn=lambda a: None, lan_fn=lambda *a: None,
+                               mdns_fn=lambda n: [], alias_fn=lambda: [])
+    assert out == ["no supervisors spawned: machine-a (unreachable: " + HOST_KEY_WHY + ")"] and summary.pending == ["machine-a"]
+
+
+def test_the_unlinked_summary_line_stays_silent_for_a_parked_alias_and_a_started_pair(env):
+    spawn_summary = env.al.LinkSummary()
+    spawn_summary.add("a", [], "parked", retry=False)
+    assert env.al.spawn_lines(spawn_summary) == []
+    spawn_summary.add("b", ["bridge", "inbox"], None)
+    spawn_summary.add("c", [], "unreachable: x")
+    assert env.al.spawn_lines(spawn_summary) == ["spawned bridge+inbox pair for b"]
+
+
+def test_boot_prints_the_unlinked_line_only_from_the_last_pass(env, monkeypatch):
+    summary = env.al.LinkSummary()
+    summary.add("machine-a", [], "unreachable: x")
+    monkeypatch.setattr(env.al, "run", lambda **kw: summary)
+    ticks = iter([0, 10, 20, 700])
+    out = []
+    assert env.al.cmd_boot(sleep=lambda s: None, clock=lambda: next(ticks), out=out.append) == 0
+    assert out == ["no supervisors spawned: machine-a (unreachable: x)"]
+
+
+def test_boot_never_prints_an_unlinked_line_for_a_box_a_later_poll_links(env, monkeypatch):
+    passes = []
+
+    def run(**kw):
+        passes.append(1)
+        s = env.al.LinkSummary()
+        if len(passes) < 2:
+            s.add("machine-a", [], "unreachable: x")
+        else:
+            s.add("machine-a", ["bridge", "inbox"], None)
+        return s
+
+    monkeypatch.setattr(env.al, "run", run)
+    out = []
+    assert env.al.cmd_boot(sleep=lambda s: None, clock=lambda: 0, out=out.append) == 0
+    assert out == ["spawned bridge+inbox pair for machine-a"]
+
+
+def _stamp_pair(e, remote, pids=(600, 601)):
+    e.sdir.mkdir(parents=True, exist_ok=True)
+    for role, pid in zip(("bridge", "inbox"), pids):
+        e.live.add(pid)
+        (e.sdir / f"supervisor-{pid}.json").write_text(json.dumps(
+            {"pid": pid, "procStart": f"start-{pid}", "remote": remote, "role": role}))
+
+
+@pytest.mark.parametrize("remote", ["example-operator@Mac-mini.local", "example-operator@mac-mini", "Mac-mini.local", "MAC-MINI"])
+def test_restart_box_matches_a_supervisor_whatever_the_remote_spelling(env, monkeypatch, remote):
+    add_key(env)
+    monkeypatch.setenv("UNIMATRIX_TEST_ALLOWED_BOXES", "machine-a a@b fallbackbox Mac-mini")
+    # The bare alias resolves to an address, so box_key("Mac-mini") alone never equals the stamp's host key.
+    monkeypatch.setattr(env.al, "ssh_hostname", lambda roster, alias, run=None: "192.168.1.9" if alias == "Mac-mini" else None)
+    _stamp_pair(env, remote)
+    rig = _RestartRig(env)
+    rc, out = rig.run("Mac-mini")
+    assert sorted(r["pid"] for r in rig.stops) == [600, 601], out
+    assert not any("no live supervisors" in line for line in out)
+
+
+def test_restart_box_with_no_matching_supervisor_says_none_found_and_spawns_nothing(env):
+    add_key(env)
+    _stamp_pair(env, "example-operator@other-box.local")
+    rig = _RestartRig(env)
+    rc, out = rig.run("Mac-mini")
+    assert rc == 1 and rig.spawned == [] and rig.stops == []
+    assert any("no live supervisors found for Mac-mini" in line for line in out)
+    assert not any("handed over" in line for line in out)
+
+
+class _FakeInstall:
+    """Stands in for unimatrix-install: records calls and clears markers through the real marker shape."""
+
+    def __init__(self, sdir, trust=(True, "trusted 1 hook(s)"), agy_rc=0):
+        self.sdir, self.trust, self.agy_rc = sdir, trust, agy_rc
+        self.trust_calls, self.agy_calls = [], []
+
+    def codex_hooks_path(self):
+        return self.sdir / "codex-hooks.json"
+
+    def trust_codex_hook(self, hp, timeout=30, *, dest_dir=None):
+        self.trust_calls.append((hp, dest_dir))
+        return self.trust
+
+    def enroll_agy_runtime(self, root, *, consent=False, check=False, dest_dir=None, out=None):
+        self.agy_calls.append((root, consent, dest_dir))
+        print("Agy runtime ready" if not self.agy_rc else "Agy runtime: refused", file=out)
+        return self.agy_rc
+
+    def record_deferred_hosts(self, dest, deferred, cleared=()):
+        data = json.loads((Path(dest) / "deferred-hosts.json").read_text(encoding="utf-8"))
+        for h in cleared:
+            data["hosts"].pop(h, None)
+        (Path(dest) / "deferred-hosts.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def _marker(env, hosts):
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    (env.sdir / "deferred-hosts.json").write_text(json.dumps({"version": 1, "hosts": hosts}), encoding="utf-8")
+
+
+def _marked_hosts(env):
+    return json.loads((env.sdir / "deferred-hosts.json").read_text(encoding="utf-8"))["hosts"]
+
+
+def _replay(env, fake, present, clone_bin=None, say=None):
+    env.al._REPLAY_TRIED.clear()
+    loads = []
+    cleared = env.al.replay_deferred_hosts(
+        env.roster, which=lambda n: f"/bin/{n}" if n in present else None,
+        load_install=lambda: loads.append(1) or fake,
+        clone_bin=clone_bin or (lambda home: Path("/clone/coordinator/bin")), say=say or (lambda s: None))
+    return cleared, loads
+
+
+def test_replay_with_codex_arrived_trusts_once_leaves_agy_deferred_and_clears_codex(env):
+    _marker(env, {"codex": {"actions": ["codex-hook-trust"]}, "agy": {"actions": ["agy-plugin-install"]}})
+    fake = _FakeInstall(env.sdir)
+    cleared, loads = _replay(env, fake, {"codex"})
+    assert cleared == ["codex"] and len(fake.trust_calls) == 1 and fake.agy_calls == []
+    assert fake.trust_calls[0][1] == env.sdir
+    assert list(_marked_hosts(env)) == ["agy"]
+
+
+def test_replay_with_no_marker_imports_and_spawns_nothing(env, monkeypatch):
+    monkeypatch.setattr(env.al.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    fake = _FakeInstall(env.sdir)
+    cleared, loads = _replay(env, fake, {"codex", "agy"})
+    assert cleared == [] and loads == [] and fake.trust_calls == []
+
+
+def test_replay_with_marker_but_no_arrived_cli_never_loads_install(env):
+    _marker(env, {"codex": {"actions": ["codex-hook-trust"]}})
+    fake = _FakeInstall(env.sdir)
+    cleared, loads = _replay(env, fake, set())
+    assert cleared == [] and loads == [] and "codex" in _marked_hosts(env)
+
+
+def test_replay_agy_enrolls_with_consent_from_the_clone_root_and_clears(env):
+    _marker(env, {"agy": {"actions": ["agy-plugin-install"]}})
+    fake = _FakeInstall(env.sdir)
+    cleared, _ = _replay(env, fake, {"agy"})
+    assert cleared == ["agy"] and _marked_hosts(env) == {}
+    root, consent, dest = fake.agy_calls[0]
+    assert Path(root) == Path("/clone") and consent is True and dest == env.sdir
+
+
+def test_replay_failure_keeps_the_entry_and_prints_one_stderr_line(env, capsys):
+    _marker(env, {"codex": {"actions": ["codex-hook-trust"]}})
+    fake = _FakeInstall(env.sdir, trust=(False, "codex hook trust failed: boom"))
+    cleared, _ = _replay(env, fake, {"codex"})
+    err = capsys.readouterr().err.strip().splitlines()
+    assert cleared == [] and "codex" in _marked_hosts(env)
+    assert len(err) == 1 and "retried next login" in err[0] and "boom" in err[0]
+
+
+def test_replay_agy_refusal_keeps_the_entry(env, capsys):
+    _marker(env, {"agy": {"actions": ["agy-plugin-install"]}})
+    fake = _FakeInstall(env.sdir, agy_rc=7)
+    cleared, _ = _replay(env, fake, {"agy"})
+    assert cleared == [] and "agy" in _marked_hosts(env)
+    assert len(capsys.readouterr().err.strip().splitlines()) == 1
+
+
+def test_replay_tries_a_host_once_per_process(env):
+    _marker(env, {"codex": {"actions": ["codex-hook-trust"]}})
+    fake = _FakeInstall(env.sdir, trust=(False, "nope"))
+    env.al._REPLAY_TRIED.clear()
+    for _ in range(3):
+        env.al.replay_deferred_hosts(env.roster, which=lambda n: "/bin/codex", load_install=lambda: fake, say=lambda s: None)
+    assert len(fake.trust_calls) == 1
+
+
+def test_link_pass_replays_before_linking_through_the_production_entry(env, monkeypatch):
+    _marker(env, {"codex": {"actions": ["codex-hook-trust"]}})
+    fake = _FakeInstall(env.sdir)
+    env.al._REPLAY_TRIED.clear()
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda n: "/bin/codex" if n == "codex" else None)
+    monkeypatch.setattr(env.al, "_load_install", lambda: fake)
+    monkeypatch.setattr(env.al, "refresh_installed_copies", lambda *a, **k: [])
+    out = []
+    env.al.link_pass(out=out.append, roster=env.roster, boxes=["machine-a"], spawn=Spawner(), probe_fn=ok)
+    assert len(fake.trust_calls) == 1 and _marked_hosts(env) == {}
+    assert any("codex CLI arrived" in line for line in out)
+
+
+def test_agy_replay_over_staged_hooks_leaves_exactly_one_sessionstart_registration(env, tmp_path):
+    inst = load("unimatrix-install")
+    hp = tmp_path / "agy" / "hooks.json"
+    hp.parent.mkdir()
+    root = tmp_path / "clone"
+    assert inst.seed_agy_hook(hp, env.sdir, str(root)) == "created"  # the pre-stage leg
+
+    class _Enrolling(_FakeInstall):
+        def enroll_agy_runtime(self, root, *, consent=False, check=False, dest_dir=None, out=None):
+            inst.seed_agy_hook(hp, dest_dir, str(root))  # the replay's real hook step
+            return super().enroll_agy_runtime(root, consent=consent, dest_dir=dest_dir, out=out)
+
+    _marker(env, {"agy": {"actions": ["agy-plugin-install"]}})
+    cleared, _ = _replay(env, _Enrolling(env.sdir), {"agy"})
+    data = json.loads(hp.read_text(encoding="utf-8"))
+    starts = [h for h in data[inst.AGY_HOOK_KEY]["SessionStart"] if inst.AGY_SESSIONSTART_SCRIPT in h["command"]]
+    registered = [k for k, v in data.items() if isinstance(v, dict) and "SessionStart" in v]
+    assert cleared == ["agy"] and len(starts) == 1 and registered == [inst.AGY_HOOK_KEY]
+
+
+def test_replay_marker_name_and_actions_mirror_the_installers(env):
+    inst = load("unimatrix-install")
+    assert env.al.DEFERRED_HOSTS_FILE == inst.DEFERRED_HOSTS_FILE
+    assert set(env.al.HOST_REPLAYS) == {"codex-hook-trust", "agy-plugin-install"}

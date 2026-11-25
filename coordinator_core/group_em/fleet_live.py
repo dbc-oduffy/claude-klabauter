@@ -185,6 +185,100 @@ def write_last_known(boxes: dict, path: Optional[Path] = None) -> None:
     atomic_write_bytes(target, (json.dumps(boxes, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
+def _host_label(record: dict) -> Optional[str]:
+    t = record.get("transport")
+    return _label(t.get("host")) if isinstance(t, dict) and t.get("kind") == "ssh" else None
+
+
+def _root_is_this_home(root: object, home_root: str) -> bool:
+    """A registry root names this box only when it is an absolute path HERE and resolves to ``home``;
+    a far POSIX root resolves under the current drive on Windows and must not match."""
+    try:
+        path = Path(str(root))
+        return path.is_absolute() and str(path.resolve()) == home_root
+    except (OSError, ValueError):
+        return False
+
+
+def registered_boxes(home: Optional[Path] = None) -> list:
+    """Registered boxes plus this box, one record per physical box, never a name list.
+
+    A record whose id is the local id or whose root is this home is rewritten to the local id
+    (``registered_as`` keeps the registry id); records sharing a transport host or a folded id
+    collapse to the freshest ``registered_at``, the losers' ids kept under ``aliases``.
+    """
+    from coordinator_core.group_em import box_registry
+
+    base = Path(home) if home is not None else settings_home()
+    local = box_registry.local_box_id(base)
+    home_root = str(base.resolve())
+    records = [dict(b) for b in box_registry.read_boxes(base / "state" / "group-em")]
+    merged: dict = {}
+    for rec in records:
+        if rec.get("box_id") == local or _root_is_this_home(rec.get("root"), home_root):
+            if rec.get("box_id") != local:
+                rec["registered_as"] = rec.get("box_id")
+                rec["box_id"] = local
+            key = ("local",)
+        else:
+            key = ("host", _host_label(rec)) if _host_label(rec) else ("id", box_registry.fold_box_id(rec["box_id"]))
+        kept = merged.get(key)
+        if kept is None:
+            merged[key] = rec
+            continue
+        newer, older = (rec, kept) if rec.get("registered_at", 0) > kept.get("registered_at", 0) else (kept, rec)
+        newer["aliases"] = sorted({*newer.get("aliases", []), *older.get("aliases", []), older["box_id"]}
+                                  - {newer["box_id"]})
+        merged[key] = newer
+    out = list(merged.values())
+    if ("local",) not in merged:
+        out.append({"box_id": local, "root": str(base)})
+    return out
+
+
+BOX_SPECS_RELPATH = Path("state") / "box-specs.json"
+
+
+def box_specs_roster(home: Optional[Path] = None) -> list:
+    """Peer names SessionStart BOX SPECS reads: ``peers`` of ``<home>/state/box-specs.json``, else the
+    keys of its ``boxes``. A file read; a missing or malformed file reads as ``[]``."""
+    try:
+        data = json.loads(((Path(home) if home is not None else settings_home()) / BOX_SPECS_RELPATH).read_text("utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    names = data.get("peers")
+    if not isinstance(names, list):
+        names = list(data.get("boxes") or []) if isinstance(data.get("boxes"), dict) else []
+    return [n for n in names if isinstance(n, str) and n.strip()]
+
+
+def _names_of(rec: dict) -> set:
+    from coordinator_core.group_em import box_registry
+
+    raw = [rec.get("box_id"), rec.get("registered_as"), rec.get("alias"), _host_label(rec), *(rec.get("aliases") or [])]
+    return {box_registry.fold_box_id(n) for n in raw if isinstance(n, str) and n}
+
+
+def known_boxes(home: Optional[Path] = None) -> list:
+    """``registered_boxes`` plus a ``roster_only`` record (no transport, ``alias`` = the roster name) for
+    every BOX SPECS peer no registry record or this host names; ``gather`` renders those UNREACHABLE."""
+    from coordinator_core.group_em import box_registry
+
+    out = registered_boxes(home)
+    known = set().union(*(_names_of(r) for r in out))
+    host = _label(socket.gethostname())
+    if host:
+        known.add(host)
+    for name in box_specs_roster(home):
+        key = box_registry.fold_box_id(name.strip())
+        if key not in known:
+            known.add(key)
+            out.append({"box_id": name.strip(), "alias": key, "roster_only": True})
+    return out
+
+
 DEFAULT_TIMEOUT_S = 8.0
 CAPACITY_OP = "groupem.capacity_local"
 _BUSY_REASONS = ("box_busy", "rate_limited", "box_lock_unavailable")
@@ -208,6 +302,8 @@ def _state_for_failure(res: dict) -> tuple:
 
 def _far_row(record: dict, timeout: float, invoke: Any) -> dict:
     """One far box's raw outcome: ``{"_row": raw}`` or ``{"_fail": state, "reason": str}``."""
+    if record.get("roster_only"):
+        return {"_fail": STATE_UNREACHABLE, "reason": "no_route"}
     res = invoke(record, CAPACITY_OP, {}, timeout=timeout)
     if not isinstance(res, dict) or not res.get("ok"):
         state, reason = _state_for_failure(res if isinstance(res, dict) else {})
@@ -236,6 +332,9 @@ def gather(boxes: Optional[list] = None, timeout: float = DEFAULT_TIMEOUT_S, inv
            now: Optional[float] = None) -> list:
     """One live row per registered box plus this box, fetched in parallel; never drops a box, never raises.
 
+    ``boxes=None`` reads the registry plus the BOX SPECS roster through ``known_boxes`` (one record per
+    physical box); a ``roster_only`` record has no route and is ``unreachable`` without an invoke.
+
     The local box samples in-process; each far box is asked ``groupem.capacity_local`` through
     ``box_transport.invoke_remote`` (``invoke`` overrides it) on its own thread, so the call returns
     within about one ``timeout``. A box that does not answer in time is ``timed_out``; a refusal by a
@@ -253,11 +352,15 @@ def gather(boxes: Optional[list] = None, timeout: float = DEFAULT_TIMEOUT_S, inv
 
         invoke = box_transport.invoke_remote
     try:
-        records = list(boxes) if boxes is not None else box_registry.read_boxes()
+        records = list(boxes) if boxes is not None else known_boxes()
         local = local_id if local_id is not None else box_registry.local_box_id()
     except Exception:  # noqa: BLE001 - degrade to the local box alone
         records, local = [], local_id or "local"
-    records = [r for r in records if isinstance(r, dict) and isinstance(r.get("box_id"), str)]
+    uniq: dict = {}
+    for r in records:
+        if isinstance(r, dict) and isinstance(r.get("box_id"), str):
+            uniq.setdefault(r["box_id"], r)
+    records = list(uniq.values())
     if not any(r["box_id"] == local for r in records):
         records.append({"box_id": local})
     cache = read_last_known(cache_path)
@@ -296,6 +399,7 @@ def gather(boxes: Optional[list] = None, timeout: float = DEFAULT_TIMEOUT_S, inv
                                 maxima_source="last_known" if lk else None)
             row["alias"] = row["alias"] or box_alias(rec)
             row["reason"] = out["reason"]
+        row["box_id"] = box_id
         rows.append(row)
     if fresh != cache:
         try:

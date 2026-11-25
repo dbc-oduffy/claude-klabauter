@@ -104,6 +104,49 @@ def test_stall_after_the_commit_moved_a_ref_never_answers_not_started(repo, monk
     assert again.get("committed") is True or again.get("already_landed") is True, again
 
 
+def test_a_275ms_read_lands_the_halt_commit_instead_of_parking(repo, monkeypatch):
+    from coordinator_core import bounded_io
+
+    token = run_token.mint(repo, RUN, "run.mjs")
+    real = bounded_io._read_registered
+    slow: list = []
+
+    def slow_read(path):
+        if path.endswith((".json", ".mjs")):
+            slow.append(path)
+            time.sleep(0.275)
+        return real(path)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(bounded_io, "_read_registered", slow_read)
+        out = _op(repo, token)
+
+    assert slow, "no halt read went through the bounded reader"
+    assert out["committed"] is True and not out.get("parked")
+    assert out.get("refused") != "halt-read-indeterminate"
+
+
+def test_a_read_past_the_500ms_bar_still_parks(repo, monkeypatch):
+    from coordinator_core import bounded_io
+    from coordinator_core.git import call_io_scope
+
+    assert 0.275 < call_io_scope.HALT_READ_DEADLINE_SECS <= 0.5
+    token = run_token.mint(repo, RUN, "run.mjs")
+    real = bounded_io._read_registered
+
+    def wedged(path):
+        if path.endswith((".json", ".mjs")):
+            time.sleep(0.8)
+        return real(path)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(bounded_io, "_read_registered", wedged)
+        out = _op(repo, token)
+
+    assert out["committed"] is False and out["parked"] is True
+    assert out["refused"] == "halt-read-indeterminate" and out["retry_safe"] is True
+
+
 def test_unstalled_halted_land_is_unchanged(repo):
     token = run_token.mint(repo, RUN, "run.mjs")
     out = _op(repo, token)

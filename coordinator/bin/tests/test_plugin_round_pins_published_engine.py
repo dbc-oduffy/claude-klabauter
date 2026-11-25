@@ -47,6 +47,14 @@ publish._bootstrap_engine()
 from coordinator_core.git.git_state import format_source_sha_suffix  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _fresh_engine_toplevel_key():
+    """`_engine_toplevel_key` is process-cached; each test points `_REPO_ROOT` at its own tree."""
+    publish._engine_toplevel_key.cache_clear()
+    yield
+    publish._engine_toplevel_key.cache_clear()
+
+
 def _git(cwd: Path, *args: str) -> str:
     done = subprocess.run(
         ["git", "-C", str(cwd), *args],
@@ -180,12 +188,154 @@ def _gate(world: _World, rows, pin):
     return ok, out.getvalue(), err.getvalue()
 
 
-def test_baseline_shape_is_two_blocked_conditions(tmp_path, monkeypatch):
-    """Without the pin the gate refuses the same engine branch (the 2026-10-03 shape)."""
+def test_baseline_shape_refuses_no_upstream_but_not_dirt(tmp_path, monkeypatch):
+    """Without the pin the gate still refuses an upstream-less engine branch (the 2026-10-03
+    shape); the dirty tracked file is an advisory, never a refusal reason."""
     world = _World(tmp_path)
-    ok, _out, err = _gate(world, [world.plugin_row()], None)
+    ok, out, err = _gate(world, [world.plugin_row()], None)
     assert not ok
-    assert TRIPWIRE in err and "no upstream" in err and "dirty tracked" in err
+    assert TRIPWIRE in err and "no upstream" in err and "dirty tracked" not in err
+    assert "coordinator/bin/other.py" in out and "Advisory" in out
+
+
+def _pushed_content(tmp_path: Path) -> "tuple[Path, str]":
+    """Content repo whose HEAD is pushed to an upstream; returns (work tree, pushed sha)."""
+    bare = tmp_path / "content-remote.git"
+    subprocess.run(
+        ["git", "init", "-q", "--bare", "-b", "main", str(bare)],
+        check=True, capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    work = tmp_path / "pushed-content"
+    _init(work)
+    _write(work, "hooks/h.py", "pushed\n")
+    _write(work, "hooks/k.py", "k\n")
+    sha = _commit(work, "pushed")
+    _git(work, "remote", "add", "origin", str(bare))
+    _git(work, "push", "-q", "-u", "origin", "main")
+    return work, sha
+
+
+def test_dirty_tree_with_pushed_head_passes_with_one_advisory_and_ships_pushed_bytes(tmp_path, monkeypatch):
+    work, sha = _pushed_content(tmp_path)
+    _write(work, "hooks/h.py", "dirty edit\n")
+    _write(work, "hooks/k.py", "dirty k\n")
+    row = publish.ResolvedTarget(
+        name="coordinator-claude", mode="mirror", source_dir=work,
+        dest_dir=tmp_path / "plugin-dest", allowlist="hooks",
+    )
+    root = tmp_path / "gate-root"
+    err, out = io.StringIO(), io.StringIO()
+    ok = publish.dispatch_end_of_run_plugin_provenance_gate(
+        [root], rows_by_repo_root={root: [row]}, err=err, out=out,
+    )
+    assert ok, err.getvalue()
+    assert err.getvalue() == ""
+    advisories = [ln for ln in out.getvalue().splitlines() if "Advisory" in ln]
+    assert len(advisories) == 1
+    assert "hooks/h.py" in advisories[0] and "hooks/k.py" in advisories[0]
+
+    monkeypatch.setattr(publish, "_required_pathspec_for_toplevel", lambda *_a, **_k: ("hooks",))
+    shadow = publish._git_materialize_ref(work, ref=sha)
+    assert (shadow / "hooks" / "h.py").read_bytes() == b"pushed\n"
+    assert (work / "hooks" / "h.py").read_bytes() == b"dirty edit\n"
+
+
+def test_round_read_path_ships_pushed_bytes_from_a_dirty_root(tmp_path, monkeypatch):
+    """The round's own shadow materialisation (run_pre_sync_gates) hands back the pushed bytes."""
+    work, _sha = _pushed_content(tmp_path)
+    _write(work, "hooks/h.py", "dirty edit\n")
+    dest = tmp_path / "plugin-dest"
+    dest.mkdir()
+    row = publish.ResolvedTarget(
+        name="coordinator-claude", mode="mirror", source_dir=work, dest_dir=dest, allowlist="hooks",
+    )
+    monkeypatch.setattr(publish, "check_live_install_clobber", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "check_marketplace_version_regression", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "check_version_consistency", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "warn_machine_slug_net", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "_required_pathspec_for_toplevel", lambda *_a, **_k: ("hooks",))
+    out, err = io.StringIO(), io.StringIO()
+    result = publish.run_pre_sync_gates(
+        row, setup_dir=tmp_path, identity_file_exists=False, identity=None,
+        totals=publish.RunTotals(), dry_run=True, out=out, err=err,
+    )
+    assert result.proceed, err.getvalue()
+    assert result.source_dir != work
+    shadow_h = next(result.source_dir.rglob("h.py"))
+    assert shadow_h.read_bytes() == b"pushed\n"
+    assert (work / "hooks" / "h.py").read_bytes() == b"dirty edit\n"
+
+
+def test_whole_round_on_a_dirty_tree_gates_with_advisory_then_ships_pushed_bytes(tmp_path, monkeypatch):
+    """One dirty root through the round's gate and its pre-sync read: advisory, no refusal, pushed bytes."""
+    work, _sha = _pushed_content(tmp_path)
+    _write(work, "hooks/h.py", "dirty edit\n")
+    dest = tmp_path / "plugin-dest"
+    dest.mkdir()
+    row = publish.ResolvedTarget(
+        name="coordinator-claude", mode="mirror", source_dir=work, dest_dir=dest, allowlist="hooks",
+    )
+    root = tmp_path / "gate-root"
+    gate_err, gate_out = io.StringIO(), io.StringIO()
+    assert publish.dispatch_end_of_run_plugin_provenance_gate(
+        [root], rows_by_repo_root={root: [row]}, err=gate_err, out=gate_out,
+    ), gate_err.getvalue()
+    assert gate_err.getvalue() == ""
+    assert len([ln for ln in gate_out.getvalue().splitlines() if "Advisory" in ln]) == 1
+
+    monkeypatch.setattr(publish, "check_live_install_clobber", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "check_marketplace_version_regression", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "check_version_consistency", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "warn_machine_slug_net", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "_required_pathspec_for_toplevel", lambda *_a, **_k: ("hooks",))
+    out, err = io.StringIO(), io.StringIO()
+    result = publish.run_pre_sync_gates(
+        row, setup_dir=tmp_path, identity_file_exists=False, identity=None,
+        totals=publish.RunTotals(), dry_run=True, out=out, err=err,
+    )
+    assert result.proceed, err.getvalue()
+    assert next(result.source_dir.rglob("h.py")).read_bytes() == b"pushed\n"
+
+
+def test_advisory_line_is_capped_for_a_large_dirty_tree(tmp_path):
+    work, _sha = _pushed_content(tmp_path)
+    for i in range(publish._DIRTY_ADVISORY_MAX_PATHS + 5):
+        _write(work, f"hooks/many{i}.py", "x\n")
+    _commit(work, "many")
+    _git(work, "push", "-q")
+    for i in range(publish._DIRTY_ADVISORY_MAX_PATHS + 5):
+        _write(work, f"hooks/many{i}.py", "dirty\n")
+    row = publish.ResolvedTarget(
+        name="coordinator-claude", mode="mirror", source_dir=work,
+        dest_dir=tmp_path / "plugin-dest", allowlist="hooks",
+    )
+    root = tmp_path / "gate-root"
+    err, out = io.StringIO(), io.StringIO()
+    ok = publish.dispatch_end_of_run_plugin_provenance_gate(
+        [root], rows_by_repo_root={root: [row]}, err=err, out=out,
+    )
+    assert ok, err.getvalue()
+    advisories = [ln for ln in out.getvalue().splitlines() if "Advisory" in ln]
+    assert len(advisories) == 1
+    assert f"{publish._DIRTY_ADVISORY_MAX_PATHS + 5} dirty" in advisories[0]
+    assert "and 5 more" in advisories[0]
+    assert advisories[0].count("many") == publish._DIRTY_ADVISORY_MAX_PATHS
+
+
+def test_unpushed_head_still_refuses_even_when_clean(tmp_path):
+    work, _sha = _pushed_content(tmp_path)
+    _write(work, "hooks/h.py", "second\n")
+    _commit(work, "unpushed")
+    row = publish.ResolvedTarget(
+        name="coordinator-claude", mode="mirror", source_dir=work,
+        dest_dir=tmp_path / "plugin-dest", allowlist="hooks",
+    )
+    root = tmp_path / "gate-root"
+    err = io.StringIO()
+    ok = publish.dispatch_end_of_run_plugin_provenance_gate(
+        [root], rows_by_repo_root={root: [row]}, err=err, out=io.StringIO(),
+    )
+    assert not ok and TRIPWIRE in err.getvalue() and "1 commit(s) ahead" in err.getvalue()
 
 
 def test_seed_pins_engine_toplevel_to_stamped_sha_not_head(tmp_path, monkeypatch):
@@ -314,7 +464,9 @@ def test_gate_passes_engine_root_dirty_under_allowlist(tmp_path, monkeypatch):
     _push_engine_upstream(world, tmp_path)
     pin = _engine_pin(world, monkeypatch)
     before = _gate(world, [world.plugin_row()], None)
-    assert not before[0] and "other.py" in before[2]
+    assert before[0], before[2]
+    assert "dirty tracked" not in before[2]
+    assert "Advisory" in before[1] and "other.py" in before[1]
     ok, _out, err = _gate(world, [world.plugin_row()], pin)
     assert ok, err
 

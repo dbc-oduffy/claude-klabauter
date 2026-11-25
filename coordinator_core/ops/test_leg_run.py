@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -39,6 +40,7 @@ from typing import Optional, Sequence
 from coordinator_core.ops import reverify_base_measure, reverify_scope
 from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+from coordinator_core.ops.dispatch_emit import test_leg_freshness
 from coordinator_core.ops.review_reverify import _RED_LINE
 from coordinator_core import pyresolve, temp_layout
 from coordinator_core.testing import leg_batch, scoped_pytest
@@ -120,19 +122,31 @@ def _declared_writes(root: Path, run_id: Optional[str]) -> list[str]:
 def _declared_overlay(root: Path, run_id: Optional[str]) -> tuple[list[str], dict[str, bytes]]:
     """`(paths, overrides)` the mirror carries for the run: its declared writes plus its own written paths
     (`cov.own_delta`), each at its worktree bytes, and a path a live peer run also declared at HEAD plus only
-    this run's own hunks (`overrides`). A shared path with no splittable own hunks is left out, so it stays at
-    HEAD, never with the peer's hunks. Empty with no `run_id` or an unreadable delta."""
+    this run's own hunks (`overrides`). A shared path the run declared with no splittable own hunks reaches the
+    mirror at its worktree bytes (`cov.own_delta`), never HEAD or absent. Empty with no `run_id` or an
+    unreadable delta."""
     if not run_id:
         return [], {}
     try:
-        from coordinator_core.ops.dispatch_emit import review_edits
-
         paths, overrides = cov.own_delta(root, run_id, _declared_writes(root, run_id))
-        sibling = {review_edits.norm(p) for p in review_edits.live_sibling_declared(root, run_id)}
     except Exception:  # noqa: BLE001 -- the overlay only widens the mirror; an unreadable delta leaves HEAD
         return [], {}
-    kept = [p for p in dict.fromkeys(paths) if review_edits.norm(p) not in sibling or p in overrides]
-    return kept, dict(overrides)
+    return list(dict.fromkeys(paths)), dict(overrides)
+
+
+def _reviewed_scope(root: Path, run_id: Optional[str]) -> list[str]:
+    """Repo-relative paths the run's review prep snapshots froze (the reverify's `edited` source), minus any a
+    live peer run declared: a module the run created that no declared write names, which only the snapshot
+    manifest carries. Spawn-free; empty with no `run_id` or an unreadable snapshot or session set."""
+    if not run_id:
+        return []
+    try:
+        from coordinator_core.ops.dispatch_emit import review_edits
+
+        sibling = {review_edits.norm(p) for p in review_edits.live_sibling_declared(root, run_id)}
+        return [p for p in cov._snapshot_scope(root, run_id) if p not in sibling]
+    except Exception:  # noqa: BLE001 -- the scope only widens the mirror; an unreadable snapshot leaves HEAD
+        return []
 
 
 def _live_only(root: Path, dest: Path, targets: Sequence[str], declared: Sequence[str] = ()) -> list[str]:
@@ -148,6 +162,19 @@ def _live_only(root: Path, dest: Path, targets: Sequence[str], declared: Sequenc
         if path and not path.startswith("-") and (root / path).is_file() and not (dest / path).exists():
             out[path] = None
     return list(out)
+
+
+def _prepare_live(root: Path, mroot: Path, sha: str, overlay: Sequence[str],
+                  overrides: Optional[dict[str, bytes]]) -> Path:
+    """The mirror with `overlay` laid over `sha`, unguarded: the overlay is the run's own delta, and a peer's
+    dirty module it imports stays at HEAD, so `_check_overlay_imports` would refuse the very test whose import
+    is absent there. That absence surfaces as the leg's zero-run import-error verdict instead."""
+    try:
+        return cov._prepare(root, mroot, sha, cov._no_leg, overlay, None, overrides or None)
+    except subprocess.TimeoutExpired as exc:
+        raise cov.ExportError(f"clean export timed out: {exc}") from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise cov.ExportError(f"clean export did not complete: {type(exc).__name__}: {exc}") from exc
 
 
 def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[str]]:
@@ -499,10 +526,10 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
     with cov._mirror_lock(root, "test-leg-run") as mroot:
         post = cov._commit_sha(root, post_rev)
         owned, overrides = _declared_overlay(root, run_id)
-        dest = cov._prepare_guarded(root, mroot, post, cov._no_leg, owned, None, overrides or None)
-        live = _live_only(root, dest, targets)
+        dest = _prepare_live(root, mroot, post, owned, overrides)
+        live = _live_only(root, dest, targets, _reviewed_scope(root, run_id))
         if live:
-            dest = cov._prepare_guarded(root, mroot, post, cov._no_leg, [*owned, *live], None, overrides or None)
+            dest = _prepare_live(root, mroot, post, [*owned, *live], overrides)
         rels = [t.replace("\\", "/") for t in touched]
         own = [t for t in rels if cov._is_test_path(t) and (dest / t).is_file()]
         targets, not_a_test = _split_not_a_test(targets, dest)
@@ -717,11 +744,11 @@ def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], 
         sha = cov._commit_sha(root, head_sha or "HEAD")
         owned, overrides = _declared_overlay(root, declared_run)
         overlay = list(dict.fromkeys([*_run_blob_paths(root, "", run_id), *owned]))
-        dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay, None, overrides or None)
-        live = _live_only(root, dest, targets)
+        dest = _prepare_live(root, mroot, sha, overlay, overrides)
+        live = _live_only(root, dest, targets, _reviewed_scope(root, declared_run))
         if live:
             overlay = [*overlay, *live]
-            dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay, None, overrides or None)
+            dest = _prepare_live(root, mroot, sha, overlay, overrides)
     except (cov.ExportError, OSError, ValueError, subprocess.SubprocessError) as exc:
         stack.close()
         result["own_tree_skipped"] = f"{type(exc).__name__}: {exc}"[:300]
@@ -750,10 +777,10 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
         overlay = list(dict.fromkeys([*_run_blob_paths(root, err["path"], run_id), *(p for p in owned if p != err["path"])]))
         with cov._mirror_lock(root, "test-leg-run") as mroot:
             base_rev = cov._commit_sha(root, base_sha)
-            dest = cov._prepare_guarded(root, mroot, base_rev, cov._no_leg, overlay, None, overrides or None)
-            live = _live_only(root, dest, targets)
+            dest = _prepare_live(root, mroot, base_rev, overlay, overrides)
+            live = _live_only(root, dest, targets, [p for p in _reviewed_scope(root, declared_run) if p != err["path"]])
             if live:
-                dest = cov._prepare_guarded(root, mroot, base_rev, cov._no_leg, [*overlay, *live], None, overrides or None)
+                dest = _prepare_live(root, mroot, base_rev, [*overlay, *live], overrides)
             present, _absent = _partition(targets, dest)
             if not present:
                 return
@@ -954,6 +981,66 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
     return result
 
 
+#: Result keys: `fixture_watch` maps a node id recorded failing to `{file, sha256, recorded_at}`; `flagged_fixture_edits`
+#: lists each later change to such a node's file. Both ride in `--out` and are read back from it by the next leg.
+FIXTURE_WATCH_KEY = "fixture_watch"
+FIXTURE_EDITS_KEY = "flagged_fixture_edits"
+
+
+def _file_sha(root: Path, rel: str) -> Optional[str]:
+    """sha256 of `rel` under `root`; None when absent or unreadable (a deleted test file reads as a change)."""
+    try:
+        return hashlib.sha256((root / rel).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _flag_fixture_edits(result: dict, prior: Optional[dict], root: Path, run_id: Optional[str],
+                        measured_at: str) -> None:
+    """Record the files of this leg's failing node ids and flag a recorded-failing id whose file changed since.
+
+    `prior` is the run's previous `--out` record: each `fixture_watch` entry whose file now hashes differently
+    is appended to `flagged_fixture_edits` (naming test, file and this leg), sticky across later legs. A flag is
+    advisory: status and verdict are untouched, and a hash is read per failing file only, no git spawn.
+    """
+    old = prior.get(FIXTURE_WATCH_KEY) if isinstance(prior, dict) else None
+    old = old if isinstance(old, dict) else {}
+    carried = prior.get(FIXTURE_EDITS_KEY) if isinstance(prior, dict) else None
+    edits = [e for e in carried if isinstance(e, dict)] if isinstance(carried, list) else []
+    failing = [n for n in result.get("failing", ()) if isinstance(n, str)]
+    watch: dict[str, dict] = {}
+    for node, entry in old.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("file"), str):
+            continue
+        now = _file_sha(root, entry["file"])
+        if now != entry.get("sha256"):
+            edits.append({"test": node, "file": entry["file"], "recorded_at": entry.get("recorded_at"),
+                          "recorded_sha256": entry.get("sha256"), "now_sha256": now,
+                          "now_failing": node in failing,
+                          "leg": {"run_id": run_id, "measured_at": measured_at}})
+        else:
+            watch[node] = entry
+    for node in failing:
+        path = _file_part(node)
+        if node not in watch and "::" in node and path.endswith(".py"):
+            sha = _file_sha(root, path)
+            if sha is not None:
+                watch[node] = {"file": path, "sha256": sha, "recorded_at": measured_at}
+    if watch:
+        result[FIXTURE_WATCH_KEY] = watch
+    if edits:
+        result[FIXTURE_EDITS_KEY] = edits
+
+
+def _prior_record(out: Path) -> Optional[dict]:
+    """The `--out` file's previous JSON object (the run's last leg), None when absent or unreadable."""
+    try:
+        data = json.loads(out.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _repo_root(start: Path) -> Path:
     """The nearest ancestor of `start` (itself included) holding a `.git` entry, else `start`. Targets are
     repo-relative, so a leg started below the root (an agent shell left in `coordinator/bin`) must still
@@ -1043,11 +1130,14 @@ def main(argv: list[str]) -> int:
         out.write_text(json.dumps(refused) + "\n", encoding="utf-8")
         print(json.dumps(refused))
         return EXIT_USAGE
+    measured_at, _ = test_leg_freshness.started_stamp(root, args.head_sha)
+    prior = _prior_record(Path(args.out))
     result = run(targets, base_sha=args.base_sha, head_sha=args.head_sha,
                  base_export_out=args.base_export_out, budget_s=budget_s, cwd=cwd, touched=args.touched,
                  run_id=_run_id(args), declared_run=_declared_run(args))
     if derived:
         result["derived_targets"] = targets
+    _flag_fixture_edits(result, prior, root, _run_id(args) or _declared_run(args), measured_at)
     body = json.dumps(result)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

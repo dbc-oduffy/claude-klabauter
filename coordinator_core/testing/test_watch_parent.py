@@ -111,3 +111,14 @@ def test_zombie_parent_counts_as_gone():
         assert fired.wait(max(0.1, deadline - time.time()))
     finally:
         child.wait()
+
+
+def test_a_patched_sys_platform_never_reads_a_live_ancestor_as_gone(monkeypatch):
+    # A suite that monkeypatches the shared sys.platform (the governor suite sets "linux") must not
+    # make the watcher take another OS's probe: that read every ancestor as gone and exited 137.
+    from coordinator_core.testing import watch_parent as wp
+
+    created = process_create_time(os.getpid())
+    for fake in ("linux", "darwin", "win32"):
+        monkeypatch.setattr(sys, "platform", fake)
+        assert wp._parent_alive(os.getpid(), created), fake

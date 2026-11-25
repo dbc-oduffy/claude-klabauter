@@ -833,6 +833,69 @@ def test_a_run_owned_uncommitted_edit_is_in_the_no_touched_verdict(dirty_repo, t
     assert data["status_after"] == "fail" and data["failing"] == ["tests/test_mod.py::test_value"]
 
 
+def _run_with_untracked_source(repo: Path, tmp_path: Path, declared: bool, run_id: str = "") -> dict:
+    """A run's new untracked source module imported by its new untracked test, plus a peer's untracked file."""
+    (repo / "pkg" / "newmod.py").write_text("NEW = 7\n", encoding="utf-8")
+    (repo / "pkg" / "peer.py").write_text("PEER = 1\n", encoding="utf-8")
+    (repo / "tests" / "test_new.py").write_text(
+        "from pkg.newmod import NEW\n\ndef test_new():\n    assert NEW == 7\n", encoding="utf-8")
+    argv = ["--", "tests/test_new.py"]
+    if declared:
+        manifest = repo / "state" / "warp" / "run-mine" / "manifest.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"rows": [{"id": "C1", "writes": ["pkg/newmod.py", "tests/test_new.py"]}]}),
+                            encoding="utf-8")
+    if declared or run_id:
+        argv = ["--run-id", "run-mine", *argv]
+    return _main(argv, tmp_path / "o.json")[1]
+
+
+@pytest.mark.spawns_process
+def test_a_runs_declared_untracked_source_module_is_overlaid_so_its_new_test_runs(dirty_repo, tmp_path):
+    data = _run_with_untracked_source(dirty_repo, tmp_path, declared=True)
+    assert set(data["own_tree"]["overlaid"]) == {"tests/test_new.py", "pkg/newmod.py"}
+    assert "pkg/peer.py" not in data["own_tree"]["overlaid"]
+    assert (data["status_after"], data["tests_run"]) == ("pass", 1)
+
+
+@pytest.mark.spawns_process
+def test_an_undeclared_untracked_source_module_stays_out_of_the_mirror(dirty_repo, tmp_path):
+    data = _run_with_untracked_source(dirty_repo, tmp_path, declared=False)
+    assert data["own_tree"]["overlaid"] == ["tests/test_new.py"]
+    assert data["tests_run"] == 0 and data["status_after"] != "pass"
+
+
+def _freeze_review_scope(repo: Path, monkeypatch, files: list[str], peer_declares: list[str] = ()) -> None:
+    """The run's review prep snapshot naming `files`, as `review.prep` leaves it, under a firing session."""
+    from coordinator_core.ops.dispatch_emit import land_run, review_edits
+    from coordinator_core.ops.review_slice_id import RUN_PREP_PLAN_STEM
+    from coordinator_core.session.machinery_paths import share_dir
+
+    snap = Path(share_dir(str(repo), "sess-1")) / f"{RUN_PREP_PLAN_STEM}-run-mine-abc123-prep.pre-review"
+    snap.mkdir(parents=True)
+    (snap / "manifest.json").write_text(json.dumps({"files": {f: "0" * 64 for f in files}}), encoding="utf-8")
+    monkeypatch.setattr(land_run, "_firing_sessions", lambda *a, **k: {"sess-1"})
+    monkeypatch.setattr(review_edits, "live_sibling_declared", lambda *a, **k: {p: "run-peer" for p in peer_declares})
+
+
+@pytest.mark.spawns_process
+def test_an_untracked_module_only_the_review_scope_names_is_overlaid_so_its_test_collects(
+        dirty_repo, tmp_path, monkeypatch):
+    _freeze_review_scope(dirty_repo, monkeypatch, ["pkg/newmod.py", "tests/test_new.py"])
+    data = _run_with_untracked_source(dirty_repo, tmp_path, declared=False, run_id="run-mine")
+    assert set(data["own_tree"]["overlaid"]) == {"tests/test_new.py", "pkg/newmod.py"}
+    assert "pkg/peer.py" not in data["own_tree"]["overlaid"]
+    assert (data["status_after"], data["tests_run"]) == ("pass", 1)
+
+
+@pytest.mark.spawns_process
+def test_a_review_scope_module_a_peer_run_declared_stays_out_of_the_mirror(dirty_repo, tmp_path, monkeypatch):
+    _freeze_review_scope(dirty_repo, monkeypatch, ["pkg/newmod.py", "tests/test_new.py"], ["pkg/newmod.py"])
+    data = _run_with_untracked_source(dirty_repo, tmp_path, declared=False, run_id="run-mine")
+    assert data["own_tree"]["overlaid"] == ["tests/test_new.py"]
+    assert data["tests_run"] == 0
+
+
 @pytest.mark.spawns_process
 def test_a_red_settles_in_the_own_tree_so_foreign_dirt_cannot_pass_it_alone(dirty_repo, tmp_path):
     (dirty_repo / "tests" / "test_mod.py").write_text(
@@ -876,3 +939,61 @@ def test_engine_root_never_reads_the_claude_klabauter_registry_key(tmp_path, mon
     with pytest.raises(RuntimeError):
         pyresolve.engine_root({"COORDINATOR_ENGINE_ROOT": ""})
     assert asked == ["repos.claude_klabauter"]
+
+
+def test_a_later_leg_that_edits_a_recorded_failing_tests_file_is_flagged_not_refused(repo, tmp_path):
+    out = tmp_path / "o.json"
+    _, first = _main(["--", "tests/test_a.py"], out)
+    assert first["failing"] == [FAIL_ID] and tlr.FIXTURE_EDITS_KEY not in first
+    assert first[tlr.FIXTURE_WATCH_KEY][FAIL_ID]["file"] == "tests/test_a.py"
+    (repo / "tests" / "test_a.py").write_text(
+        "def test_passes():\n    assert True\n\ndef test_fails():\n    assert 1 == 1\n", encoding="utf-8")
+    code, second = _main(["--", "tests/test_a.py"], out)
+    assert code == 0 and second["status_after"] == "pass" and second["failing"] == []
+    (flag,) = second[tlr.FIXTURE_EDITS_KEY]
+    assert flag["test"] == FAIL_ID and flag["file"] == "tests/test_a.py"
+    assert flag["leg"]["measured_at"] and flag["recorded_at"] == first[tlr.FIXTURE_WATCH_KEY][FAIL_ID]["recorded_at"]
+    assert flag["recorded_sha256"] != flag["now_sha256"] and flag["now_failing"] is False
+    _, third = _main(["--", "tests/test_a.py"], out)
+    assert third[tlr.FIXTURE_EDITS_KEY] == [flag]
+
+
+def test_an_unedited_recorded_failing_file_or_a_pass_without_edit_raises_no_flag(repo, tmp_path):
+    out = tmp_path / "o.json"
+    _main(["--", "tests/test_a.py"], out)
+    _, again = _main(["--", "tests/test_a.py"], out)
+    assert tlr.FIXTURE_EDITS_KEY not in again and FAIL_ID in again[tlr.FIXTURE_WATCH_KEY]
+    _, green = _main(["--", PASS_ID], out)
+    assert green["failing"] == [] and tlr.FIXTURE_EDITS_KEY not in green
+
+
+def test_an_edit_that_stays_red_is_flagged_once_and_rewatched_at_the_new_bytes(repo, tmp_path):
+    out = tmp_path / "o.json"
+    _main(["--", "tests/test_a.py"], out)
+    (repo / "tests" / "test_a.py").write_text(
+        "def test_passes():\n    assert True\n\ndef test_fails():\n    assert 1 == 3\n", encoding="utf-8")
+    _, second = _main(["--", "tests/test_a.py"], out)
+    assert [f["now_failing"] for f in second[tlr.FIXTURE_EDITS_KEY]] == [True]
+    assert second["status_after"] == "fail"
+    _, third = _main(["--", "tests/test_a.py"], out)
+    assert len(third[tlr.FIXTURE_EDITS_KEY]) == 1
+
+
+def test_fixture_edit_after_a_failing_record_is_flagged_across_intermediate_legs(tmp_path):
+    (tmp_path / "t.py").write_text("X = 0.4\n", encoding="utf-8")
+    node = "t.py::test_a"
+    leg1 = {"failing": [node]}
+    tlr._flag_fixture_edits(leg1, None, tmp_path, "r", "t1")
+    assert node in leg1[tlr.FIXTURE_WATCH_KEY] and tlr.FIXTURE_EDITS_KEY not in leg1
+    leg2 = {"failing": []}
+    tlr._flag_fixture_edits(leg2, leg1, tmp_path, "r", "t2")
+    assert node in leg2[tlr.FIXTURE_WATCH_KEY] and tlr.FIXTURE_EDITS_KEY not in leg2
+    (tmp_path / "t.py").write_text("X = 0.3\n", encoding="utf-8")
+    leg3 = {"failing": []}
+    tlr._flag_fixture_edits(leg3, leg2, tmp_path, "r", "t3")
+    (edit,) = leg3[tlr.FIXTURE_EDITS_KEY]
+    assert (edit["test"], edit["file"], edit["now_failing"]) == (node, "t.py", False)
+    leg4 = {"failing": []}
+    tlr._flag_fixture_edits(leg4, leg3, tmp_path, "r", "t4")
+    assert leg4[tlr.FIXTURE_EDITS_KEY] == leg3[tlr.FIXTURE_EDITS_KEY]
+    assert "status" not in leg4

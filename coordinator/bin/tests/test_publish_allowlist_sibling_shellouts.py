@@ -52,6 +52,12 @@ _EXPECTED_CALL_SITES = {
         "unimatrix-peer-contract.py",
         "unimatrix-roster.py",
     },
+    "unimatrix-peer-codex.py": {
+        "unimatrix-codex-hook-sessionstart.py",
+        "unimatrix-peer-contract.py",
+        "unimatrix-peer-router.py",
+        "unimatrix-roster.py",
+    },
     "workday-start-health-probes.py": {
         "coordinator-ceremony-hook.py",
         "klabauter-channel.py",
@@ -94,6 +100,12 @@ def _row_allowlist(row: str) -> "set[str]":
     return {e for e in entries if not e.startswith("!")}
 
 
+def _callee_file(name: str) -> str:
+    """A bare `_sibling("unimatrix-roster")` resolves to `unimatrix-roster.py`
+    (unimatrix-peer-codex.py's helper appends the suffix); the allowlist names files."""
+    return name if Path(name).suffix else name + ".py"
+
+
 def _sibling_call_sites() -> "dict[str, set[str]]":
     """Every `_sibling("<name>")` call site under `coordinator/bin/*.py`
     (non-recursive — `tests/` siblings are test fixtures, not shipped
@@ -101,7 +113,7 @@ def _sibling_call_sites() -> "dict[str, set[str]]":
     result: "dict[str, set[str]]" = {}
     for path in sorted(_BIN_DIR.glob("*.py")):
         text = path.read_text(encoding="utf-8")
-        names = set(_SIBLING_CALL_RE.findall(text))
+        names = {_callee_file(n) for n in _SIBLING_CALL_RE.findall(text)}
         if names:
             result[path.name] = names
     return result

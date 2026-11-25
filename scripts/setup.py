@@ -136,6 +136,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
+from typing import Optional, Sequence
 
 # Exit-code 93 is the agent-install contract's reserved code for the
 # --skip-dep-check / --accept-missing-deps-risk flag-pair violation.
@@ -428,12 +429,20 @@ def setup_invocation() -> str:
     return "python3 scripts/setup.py"
 
 
-#: Foreign-host ids `--host` accepts; mirrors coordinator_core.install.host_targets.HOSTS.
-FOREIGN_HOSTS = ("codex", "agy", "grok")
+def _load_host_registry() -> types.ModuleType:
+    """host_registry loaded by file path: stdlib-only, usable before the engine is importable."""
+    path = Path(__file__).resolve().parent.parent / "coordinator_core" / "install" / "host_registry.py"
+    spec = importlib.util.spec_from_file_location("_setup_host_registry", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load host registry from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclass resolution needs the module registered
+    spec.loader.exec_module(module)
+    return module
 
-#: Hosts this script reports on without writing an MCP entry: Grok's plugin and MCP wiring is
-#: installed by coordinator_install.py, which has no per-host writer in coordinator_core.install.
-REPORT_ONLY_HOSTS = ("grok",)
+
+#: Foreign-host ids `--host` accepts and the default run pre-stages: host_registry's FOREIGN.
+FOREIGN_HOSTS = _load_host_registry().FOREIGN
 
 
 WARM_CHOICES = ("on", "off")
@@ -3884,65 +3893,33 @@ GROUP_EM_ARMING_NOTE = (
 )
 
 
-def _read_home_gitignore(module: "types.ModuleType") -> "list[str]":
-    """The group-em home's `.gitignore` lines before a refresh; [] when absent or unresolvable."""
-    try:
-        return (module.resolve_home() / ".gitignore").read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return []
-
-
-def _restore_gitignore_lines(home: Path, before: "list[str]") -> None:
-    """Append back any pre-refresh `.gitignore` line the refresh dropped. DoE's `_gem_home` owns the
-    refresh and this repo cannot edit it; a refresh may add lines, never remove one."""
-    if not before:
-        return
-    path = Path(home) / ".gitignore"
-    try:
-        now = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        now = ""
-    have = set(now.splitlines())
-    lost = [ln for ln in before if ln not in have]
-    if lost:
-        lead = "\n" if now and not now.endswith("\n") else ""
-        with path.open("a", encoding="utf-8", newline="") as fh:
-            fh.write(lead + "\n".join(lost) + "\n")
-
-
 def refresh_group_em_home(repo_root: Path, args: Args) -> None:
-    """Redeploy the shipped group-em CLAUDE.md template into the group-em home on every run.
+    """Redeploy the shipped group-em CLAUDE.md template into the group-em home.
 
-    Calls DoE's `_gem_home.ensure_home(refresh=True)` in process (no interpreter spawn).
-    ADVISORY like its siblings: any failure prints WARN and returns.
+    Calls the engine's `gem_home.ensure_home_report(refresh=True)` in process (no interpreter
+    spawn); a CLAUDE.md matching no known template version is saved under the home's
+    `.coordinator-local/diverged-home-CLAUDE/` and then replaced. ADVISORY like its siblings: any
+    failure prints WARN and returns.
     """
     if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
         print("SKIP [group-em] COORDINATOR_DISABLE_MACHINE_MUTATION set")
         return
-    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
-    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
-    script = None if plugin_root is None else plugin_root / "hooks" / "scripts" / "_gem_home.py"
-    if script is None or not script.is_file():
-        print("SKIP [group-em] no _gem_home.py under the plugin root")
-        return
-    scripts_dir = str(script.parent)
-    added = scripts_dir not in sys.path
-    if added:
-        sys.path.insert(0, scripts_dir)  # _gem_home imports its sibling _engine_root
     try:
-        spec = importlib.util.spec_from_file_location("_setup_gem_home", script)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        before = _read_home_gitignore(module)
-        home = module.ensure_home(refresh=True)
-        _restore_gitignore_lines(home, before)
+        from coordinator_core.group_em import gem_home
+
+        report = gem_home.ensure_home_report(refresh=True)
     except Exception as exc:  # advisory phase -- never fails the install
         print(f"WARN [group-em] refresh skipped ({type(exc).__name__}: {exc})")
         return
-    finally:
-        if added and scripts_dir in sys.path:
-            sys.path.remove(scripts_dir)
+    home, seed = report["home"], report["seed"]
+    if seed == "replaced-diverged":
+        print(f"WARN [group-em] home CLAUDE.md matched no known template version; prior copy saved: {report.get('diverged_copy', '')}")
+    if seed == "kept-diverged":
+        print(f"WARN [group-em] home CLAUDE.md differs from every known template version and could not be saved; left unchanged: {home}")
+        return
+    if seed == "no-template":
+        print(f"SKIP [group-em] no CLAUDE.md template resolved; home unchanged: {home}")
+        return
     print(f"OK   [group-em] home refreshed from template: {home}")
     _note_change("group-em", f"home refreshed from template: {home}")
     print(GROUP_EM_ARMING_NOTE)
@@ -5784,17 +5761,21 @@ def _print_spotlight_advice(repo_root: Path, claude_klabauter_root_resolved: Pat
         print(f"[ADVISORY] {advice}")
 
 
-def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, check: bool = False) -> int:
-    """Opt-in step (`--host`): install example-retrieval-repo MCP wiring onto Codex / agy.
+def install_foreign_hosts(
+    claude_klabauter_root_resolved: Path, args: Args, check: bool = False, hosts: Optional[Sequence[str]] = None
+) -> int:
+    """Stage example-retrieval-repo wiring onto the foreign hosts: `--host` ids, or `hosts` (the default run's
+    every-registered-host pre-stage).
 
-    With --enroll-runtime, invoke the shared strict runtime installer and propagate failure.
-    Otherwise prints one `[host:<id>]` report line per host plus indented detail. ADVISORY: a host whose
-    binary is absent is reported under unreachable, any failure prints WARN, and nothing here
-    changes the exit status. check=True writes nothing.
+    With --enroll-runtime (and no `hosts`), invoke the shared strict runtime installer and propagate
+    failure. Otherwise prints one `[host:<id>]` report line per host plus indented detail. ADVISORY: a
+    host whose CLI is absent is staged and reported `deferred:`, any failure prints WARN, and nothing
+    here changes the exit status. check=True writes nothing.
     """
-    if not args.hosts:
+    targets = list(args.hosts if hosts is None else hosts)
+    if not targets:
         return 0
-    if args.enroll_runtime:
+    if args.enroll_runtime and hosts is None:
         if not args.hosts or any(h not in ("codex", "agy") for h in args.hosts):
             print("ERROR: --enroll-runtime requires --host codex and/or agy", file=sys.stderr)
             return 1
@@ -5815,20 +5796,17 @@ def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, chec
     try:
         if str(claude_klabauter_root_resolved) not in sys.path:
             sys.path.insert(0, str(claude_klabauter_root_resolved))
-        from coordinator_core.install import host_install_agy, host_install_codex
+        from coordinator_core.install import host_install_agy, host_install_codex, host_install_grok
         from coordinator_core.install.host_targets import plan
     except Exception as exc:  # noqa: BLE001 - advisory step never fails the install
         print(f"WARN [host] installer modules unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return
-    writers = {"codex": host_install_codex.apply, "agy": host_install_agy.apply}
-    for host in args.hosts:
-        if host in REPORT_ONLY_HOSTS:
-            binary = shutil.which(host)
-            print(f"[host:{host}] binary={binary or 'absent'} mcp=not-managed config=-")
-            print("  writes: nothing (no example-retrieval-repo MCP writer for this host; plugin install: coordinator_install.py)")
-            if binary is None:
-                print(f"  unreachable: {host} binary not found on PATH")
-            continue
+        return 0
+    writers = {
+        "codex": host_install_codex.apply,
+        "agy": host_install_agy.apply,
+        "grok": host_install_grok.apply,
+    }
+    for host in targets:
         try:
             hp = plan(host)
             result = writers[host](check=check)
@@ -5838,7 +5816,8 @@ def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, chec
             )
             verb = {"written": "writes", "would-write": "would write"}.get(str(result.mcp))
             if verb:
-                print(f"  {verb}: {result.config_path} (example-retrieval-repo MCP entry only; other keys kept)")
+                scope = "trusted_folders tables only; existing bytes kept" if host == "grok" else "example-retrieval-repo MCP entry only; other keys kept"
+                print(f"  {verb}: {result.config_path} ({scope})")
             else:
                 print(f"  writes: nothing (mcp {result.mcp})")
             for note in result.notes:
@@ -5846,10 +5825,12 @@ def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, chec
             for item in hp.unreachable:
                 print(f"  unreachable: {item}")
             if hp.binary is None:
-                print(f"  unreachable: {host} binary not found on PATH")
+                print(f"  deferred: {host} CLI not on PATH; staged, replayed at login once it appears")
         except Exception as exc:  # noqa: BLE001 - advisory step never fails the install
             print(f"[host:{host}] WARN could not report: {type(exc).__name__}: {exc}", file=sys.stderr)
     return 0
+
+
 def run_deps_only(args: Args) -> int:
     """`--deps-only`: provision the engine deps into the launching interpreter and exit.
 
@@ -6066,6 +6047,7 @@ def main(argv: list[str]) -> int:
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
         install_record_receipt(claude_klabauter_root_resolved)
         install_write_hook_plane_verdict(repo_root, claude_klabauter_root_resolved, args)
+        install_foreign_hosts(claude_klabauter_root_resolved, args, hosts=FOREIGN_HOSTS)
 
     if not args.register_only:
         _print_spotlight_advice(repo_root, claude_klabauter_root_resolved)

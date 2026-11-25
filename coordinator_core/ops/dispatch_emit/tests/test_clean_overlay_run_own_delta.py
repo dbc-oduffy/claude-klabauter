@@ -59,7 +59,8 @@ def _world(tmp_path, monkeypatch):
         "from src.mod import B\nfrom src.helper import C\n\n\ndef test_new():\n    assert (B, C) == (2, 3)\n",
         encoding="utf-8",
     )
-    (root / PEER).write_text("P = 99\n", encoding="utf-8")
+    # Exact bytes: write_text turns \n into \r\n on Windows, and the leg mirror is compared byte-for-byte.
+    (root / PEER).write_bytes(b"P = 99\n")
 
     record = cov.measured_rev_record_path(root, RUN).parent
     record.mkdir(parents=True)
@@ -155,14 +156,99 @@ def test_the_test_leg_mirror_carries_a_shared_path_at_head_plus_the_run_s_own_hu
     assert b"B = 2" in held["src/mod.py"] and held["src/helper.py"] and held["tests/test_new.py"]
 
 
-def test_the_test_leg_mirror_holds_an_unsplittable_shared_path_at_head_never_the_peer_bytes(tmp_path, monkeypatch):
+def test_the_test_leg_mirror_holds_an_unsplittable_shared_path_the_run_declares_at_worktree_bytes(tmp_path, monkeypatch):
     root = _world(tmp_path, monkeypatch)
     monkeypatch.setattr(cov, "own_hunk_overrides", lambda *_a, **_k: {})
 
     held = _leg_tree(root)
 
-    assert held[PEER] == b"P = 1\n"
+    assert held[PEER] == b"P = 99\n"
     assert b"B = 2" in held["src/mod.py"]
+
+
+def _snapshot_world(tmp_path, monkeypatch):
+    """`_world` plus a module the run created that no declared path and no review-agent write names, only the
+    review-prep snapshot's `files` (the reverify's `edited`), a peer-declared snapshot path, and an unowned stray."""
+    root = _world(tmp_path, monkeypatch)
+    monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {})
+    (root / "src" / "seam.py").write_text("S = 7\n", encoding="utf-8")
+    (root / "src" / "stray.py").write_text("Z = 0\n", encoding="utf-8")
+    (root / "tests" / "test_seam.py").write_text(
+        "from src.seam import S\n\n\ndef test_seam():\n    assert S == 7\n", encoding="utf-8",
+    )
+    base = _git(root, "rev-parse", "HEAD")
+    snap = pre_review_dir(Path(share_dir(str(root), SESSION)), run_prep_slice_prefix(RUN, base))
+    files = {p: "x" for p in ("src/mod.py", "src/seam.py", "tests/test_seam.py", PEER)}
+    (snap / "manifest.json").write_text(
+        json.dumps({"base": base, "files": files, "recorded_at": "2000-01-01T00:00:00Z"}), encoding="utf-8",
+    )
+    return root
+
+
+def test_an_untracked_module_only_the_review_snapshot_names_is_in_the_reverify_mirror_and_its_test_runs(tmp_path, monkeypatch):
+    root = _snapshot_world(tmp_path, monkeypatch)
+
+    got = cov.run_own_delta(root, RUN, ["tests/test_seam.py"])
+
+    assert "src/seam.py" in got
+    assert _main(root, sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_seam.py") == 0
+
+
+def test_an_unowned_untracked_module_and_a_peer_declared_snapshot_path_stay_out_of_the_reverify_mirror(tmp_path, monkeypatch):
+    root = _snapshot_world(tmp_path, monkeypatch)
+
+    got = cov.run_own_delta(root, RUN, ["tests/test_seam.py"])
+
+    assert "src/stray.py" not in got and PEER not in got
+    probe = "import importlib.util as u, sys; sys.exit(0 if u.find_spec('src.stray') is None else 3)"
+    assert _main(root, sys.executable, "-c", probe) == 0
+
+
+def test_an_untracked_module_named_only_by_the_widened_run_write_set_is_in_the_own_delta(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, record_dir
+
+    root = _world(tmp_path, monkeypatch)
+    monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {})
+    new = "tools/likeness/named_layer/gate.py"
+    (root / new).parent.mkdir(parents=True)
+    (root / new).write_text("G = 1\n", encoding="utf-8")
+    (root / "src" / "stray.py").write_text("Z = 0\n", encoding="utf-8")
+    base = record_dir(root, RUN)
+    base.mkdir(parents=True, exist_ok=True)
+    (base / LEG_FOOTPRINT_FILE).write_text(json.dumps({"writes": [new]}), encoding="utf-8")
+
+    paths, _ = cov.own_delta(root, RUN, ["src/mod.py"])
+
+    assert new in paths and "src/stray.py" not in paths and PEER not in paths
+
+
+def _widened_world(tmp_path, monkeypatch, writes):
+    from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, record_dir
+
+    root = _world(tmp_path, monkeypatch)
+    monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {})
+    base = record_dir(root, RUN)
+    base.mkdir(parents=True, exist_ok=True)
+    (base / LEG_FOOTPRINT_FILE).write_text(json.dumps({"writes": writes}), encoding="utf-8")
+    return root
+
+
+def test_a_peer_held_path_in_the_widened_write_set_with_no_own_hunks_stays_in_the_delta_at_worktree_bytes(tmp_path, monkeypatch):
+    root = _widened_world(tmp_path, monkeypatch, [PEER])
+    monkeypatch.setattr(cov, "own_hunk_overrides", lambda *_a, **_k: {})
+
+    paths, overrides = cov.own_delta(root, RUN, ["src/mod.py"])
+
+    assert PEER in paths and overrides == {}
+
+
+def test_a_peer_held_path_in_the_widened_write_set_reaches_the_mirror_at_the_run_s_own_hunks_only(tmp_path, monkeypatch):
+    root = _widened_world(tmp_path, monkeypatch, [PEER])
+    monkeypatch.setattr(cov, "own_hunk_overrides", lambda *_a, **_k: {PEER: b"P = 5\n"})
+
+    paths, overrides = cov.own_delta(root, RUN, ["src/mod.py"])
+
+    assert PEER in paths and overrides == {PEER: b"P = 5\n"}
 
 
 def test_an_unreadable_own_write_set_leaves_the_declared_seed_and_says_so(tmp_path, monkeypatch, capsys):

@@ -445,6 +445,13 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "validate-code-comparison-record.py",
     "warm-serve-partition.py",
     "workflow-watch.py",
+    # Arrived with the 787c239ef586 other-box absorb; none answers --help with exit 0.
+    "agy-coordinator.py",  # strips coordinator args, forwards the rest to the agy CLI
+    "grok-coordinator.py",  # strips coordinator args, forwards the rest to the grok CLI
+    "gem-save-box.py",  # staged for deletion by a peer
+    "model-for-role.py",  # --help prints usage, exits 2
+    "unimatrix-grok-listen.py",  # only --session-id <id>; anything else is a usage exit
+    "unimatrix-grok-stop.py",  # Stop hook: reads a JSON payload on stdin, no --help surface
 })
 
 

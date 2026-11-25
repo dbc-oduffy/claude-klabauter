@@ -183,6 +183,22 @@ def measure(sha: str, head_sha: Optional[str], ids: list[str], cwd: str,
     return {"red": sorted(red), "export": export, "runner_exit": runner_exit, "passed_at_base": passed}
 
 
+def measure_ids(sha: str, ids: list[str], cwd: str,
+                timeout_s: Optional[float] = None) -> tuple[set[str], set[str], Optional[str]]:
+    """``(red, green, error)`` for ``ids`` at ``sha``, from one batched `measure`. ``red``/``green`` hold the
+    asked ids; an id the base does not contain is in neither. A fault, timeout or non-"ok" export answers
+    ``error`` (a reason) with both sets empty: nothing was measured."""
+    try:
+        got = measure(sha, None, list(ids), cwd, timeout_s)
+    except Exception as exc:  # noqa: BLE001 -- unmeasured is a verdict, never a raise
+        return set(), set(), f"{type(exc).__name__}: {exc}"
+    if got["export"] != "ok":
+        return set(), set(), f"base export {got['export']}"
+    red_set = set(got["red"])
+    red = {i for i in ids if _is_red(i, red_set)}
+    return red, {i for i in got["passed_at_base"] if i not in red}, None
+
+
 def write_export(result: dict, path: Path) -> None:
     """Writes `measure`'s result to `path` as review.reverify's `base_export_path` file."""
     body = [f"FAILED {node}" for node in result["red"]]

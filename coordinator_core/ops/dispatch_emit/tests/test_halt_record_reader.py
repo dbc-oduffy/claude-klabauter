@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    RECORD_DIR_ROOT,
     halted_record_message,
     halted_run_id,
     read_halt_record,
@@ -66,6 +67,28 @@ def test_non_ledger_halt_answers_none(tmp_path: Path) -> None:
 
 def test_unsafe_run_id_answers_none(tmp_path: Path) -> None:
     assert read_halt_record(tmp_path, "../escape") is None
+
+
+def test_halt_marker_carries_the_test_legs_flagged_fixture_edits(tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    run_dir = tmp_path / RECORD_DIR_ROOT / "run-1"
+    run_dir.mkdir(parents=True)
+    flag = {"test": "t.py::test_x", "file": "t.py", "leg": {"run_id": "run-1", "measured_at": "2026-11-25T00:00:00+00:00"}}
+    (run_dir / "test-leg.json").write_text(json.dumps({"status_after": "pass", "flagged_fixture_edits": [flag]}), encoding="utf-8")
+    halted_run.write_halt_marker(run_dir, halted="criterion_not_met", sizing_rel=SIZING)
+    marker = json.loads((run_dir / "halted.json").read_text(encoding="utf-8"))
+    assert marker["status"] == "halted" and marker["fixture_edits"] == [flag]
+
+
+def test_halt_marker_without_flagged_edits_has_no_fixture_edits_field(tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    run_dir = tmp_path / RECORD_DIR_ROOT / "run-2"
+    run_dir.mkdir(parents=True)
+    (run_dir / "test-leg.json").write_text(json.dumps({"status_after": "fail"}), encoding="utf-8")
+    halted_run.write_halt_marker(run_dir, halted="criterion_not_met", sizing_rel=SIZING)
+    assert "fixture_edits" not in json.loads((run_dir / "halted.json").read_text(encoding="utf-8"))
 
 
 def test_malformed_blocking_is_none(tmp_path: Path) -> None:

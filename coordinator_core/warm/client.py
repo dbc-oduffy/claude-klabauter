@@ -704,6 +704,81 @@ def process_is_test_marked() -> bool:
     )
 
 
+#: Trailing path segments of the warm-pair entry scripts (server, supervisor, front door).
+_PAIR_ENTRY_TAILS = (
+    "coordinator_core/warm/server.py",
+    "coordinator_core/warm/supervisor.py",
+    "coordinator_core/warm/front_door.py",
+)
+
+_PUBLISH_MIRRORS_PREFIX = "publish.mirrors."
+_PUBLISH_MIRROR_PATH_SUFFIX = ".path"
+
+
+class PublishCloneRefusal(RuntimeError):
+    """A warm-pair spawn was refused because its root is a publish-only clone."""
+
+    def __init__(self, root: str, mirror_key: str) -> None:
+        self.root = root
+        self.mirror_key = mirror_key
+        super().__init__(
+            f"warm spawn refused: {root} is the publish clone for repos.{mirror_key}"
+            f" (publish.mirrors.{mirror_key}.path), never an engine host."
+            f" Engine clone: repos.{mirror_key}."
+        )
+
+
+def _same_dir(a: str, b: str) -> bool:
+    def norm(p: str) -> str:
+        try:
+            return os.path.normcase(os.path.realpath(p))
+        except (OSError, ValueError):
+            return os.path.normcase(os.path.normpath(p))
+
+    return norm(a) == norm(b)
+
+
+def publish_clone_mirror_key(repo_root: str) -> Optional[str]:
+    """The mirror key whose publish-only clone `repo_root` is, else None.
+
+    A root is a publish-only clone when the registry names it as `publish.mirrors.<key>.path`
+    and registers a different clone for `repos.<key>`. A mirror with no separate `repos.<key>`
+    is the box's only clone and is never refused. Registry read failure answers None.
+
+    Trap: the percolate round starts the successor pair in whatever dest root is stamped, so a
+    stamped publish clone hosted a server (pid 34276, 2026-11-24 17:35).
+    """
+    try:
+        from coordinator_core import machine_resolver
+
+        flat = machine_resolver.merged_flat_registry()
+    except Exception:  # noqa: BLE001 -- a registry fault must not block a legitimate spawn
+        return None
+    for key, value in flat.items():
+        if not (key.startswith(_PUBLISH_MIRRORS_PREFIX) and key.endswith(_PUBLISH_MIRROR_PATH_SUFFIX)):
+            continue
+        if not isinstance(value, str) or not value or not _same_dir(value, repo_root):
+            continue
+        name = key[len(_PUBLISH_MIRRORS_PREFIX) : -len(_PUBLISH_MIRROR_PATH_SUFFIX)]
+        engine_clone = flat.get(f"repos.{name}")
+        if isinstance(engine_clone, str) and engine_clone and not _same_dir(engine_clone, repo_root):
+            return name
+    return None
+
+
+def publish_clone_refusal(repo_root: str, script_path: str) -> Optional[PublishCloneRefusal]:
+    """The typed refusal for a warm-pair entry script spawned from a publish-only clone, else
+    None. Any other script, or any other root, is never refused. Never raises."""
+    try:
+        tail = os.path.normpath(str(script_path)).replace("\\", "/")
+        if not any(tail.endswith(t) for t in _PAIR_ENTRY_TAILS):
+            return None
+        key = publish_clone_mirror_key(str(repo_root))
+        return PublishCloneRefusal(str(repo_root), key) if key else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def spawn_detached(
     repo_root: str,
     script_path: str,
@@ -749,6 +824,11 @@ def spawn_detached(
     function-local import at `_spawn_once` would bypass every one of them
     and quietly spawn real detached processes during the suite.
     """
+    refusal = publish_clone_refusal(repo_root, script_path)
+    if refusal is not None:
+        sys.stderr.write(f"{refusal}\n")
+        return False
+
     from coordinator_core.ops.ceremony.detached_spawn import (
         spawn_detached as _spawn_detached_impl,
     )

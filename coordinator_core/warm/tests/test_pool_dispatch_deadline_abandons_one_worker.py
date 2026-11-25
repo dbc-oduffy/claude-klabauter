@@ -93,6 +93,36 @@ def _spawn(ctx, msg, results):
     return thread
 
 
+def test_a_timed_out_op_releases_its_gate_slot_and_the_next_mutating_op_completes(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "_dispatch_pool_size", lambda: 1)
+    ctx, old, fresh, retired = _rig(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        server,
+        "_withdrawal_deadline_secs",
+        lambda _method, msg: 0.6 if (msg.get("params") or {}).get("park") == "stuck" else 5.0,
+    )
+    try:
+        gate = ctx._admission_gate()
+        assert not server._is_light_mutating(_MUTATING)
+
+        timed_out = ctx._pool_dispatch_untimed(_msg(1, "stuck"))
+        assert "error" in timed_out and timed_out.get("id") == 1, timed_out
+        assert gate._heavy_held == 0, gate._heavy_held
+
+        waited = gate.acquire(True, 0.5)
+        assert waited is not None and waited < 0.5
+        gate.release()
+
+        out = ctx._pool_dispatch_untimed(_msg(2))
+        assert out.get("result") == {"ok": "plain"}, out
+        assert gate._heavy_held == 0
+    finally:
+        for ev in _EVENTS.values():
+            ev.set()
+        for pool in [old, *fresh]:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+
 def test_a_parked_op_times_out_alone_while_its_neighbour_and_a_later_dispatch_are_served(tmp_path, monkeypatch):
     ctx, old, fresh, retired = _rig(tmp_path, monkeypatch)
     stuck_out: list = []
@@ -122,3 +152,19 @@ def test_a_parked_op_times_out_alone_while_its_neighbour_and_a_later_dispatch_ar
             ev.set()
         for pool in [old, *fresh]:
             pool.shutdown(wait=False, cancel_futures=True)
+
+
+def test_slot_lease_grace_exceeds_the_longest_timeout_path_hold():
+    assert server._SLOT_LEASE_GRACE_SECS > server._HOOK_LANE_IO_HOLD_SECS
+
+
+def test_hook_originated_frames_take_the_hook_budget_and_other_frames_do_not():
+    hook = {"method": "invoke.from_argv", "params": {"entrypoint": "hook-run", "argv": ["x"]}}
+    event = {"method": "invoke.from_argv", "params": {"argv": ["x"], "hook_event_name": "PreToolUse"}}
+    plain = {"method": "invoke.from_argv", "params": {"argv": ["x"]}}
+    other_op = {"method": "ceremony.commit", "params": {"entrypoint": "hook-run"}}
+    assert server._hook_originated_budget_secs(hook, "x") == server._HOOK_LANE_BUDGET_SECS
+    assert server._hook_originated_budget_secs(event, "x") == server._HOOK_LANE_BUDGET_SECS
+    assert server._hook_originated_budget_secs(plain, "x") is None
+    assert server._hook_originated_budget_secs(other_op, "x") is None
+    assert server._hook_originated_budget_secs(None, "x") is None
