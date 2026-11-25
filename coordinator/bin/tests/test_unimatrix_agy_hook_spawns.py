@@ -2,7 +2,6 @@
 import importlib.util
 import json
 import os
-import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -25,21 +24,12 @@ def load(name):
 pre = load("unimatrix-agy-hook-pretool")
 launch = load("unimatrix-agy-hook-launch")
 CONV = "0cf351a3-6538-4a9b-814c-52b1b75a596c"
-posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="asserts the sh (nohup) prefix; nt writes the promote file")
 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     return tmp_path
-
-
-REAL_CMDLINE = pre.process_cmdline
-
-
-@pytest.fixture(autouse=True)
-def interactive_agy(monkeypatch):
-    monkeypatch.setattr(pre, "process_cmdline", lambda pid: "agy chat")
 
 
 def run_payload(*, conv=CONV, name="run_command", cmd="ls -la"):
@@ -66,7 +56,7 @@ def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
                        env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
     out = json.loads(r.stdout)
     assert r.returncode == 0 and out["decision"] == "allow"
-    assert "overwrite" in out  # nt too: the start rides the run_command shell, which holds the token
+    assert "overwrite" not in out
 
 
 def hook(stdin, home):
@@ -88,42 +78,12 @@ def test_entry_point_with_no_verdict_input_names_the_guard_did_not_run(home, std
     assert_fail_open(json.loads(r.stdout))
 
 
-def test_entry_point_rewrites_a_real_run_command(home):
-    try:
-        r = hook(json.dumps(run_payload()), home)
-        assert r.returncode == 0
-        out = json.loads(r.stdout)
-        assert "overwrite" in out
-        if os.name == "nt":
-            assert f"{CONV}.promote.json" in out["overwrite"]["CommandLine"]
-            assert "Start-Process" not in out["overwrite"]["CommandLine"]
-    finally:
-        _reap_leg(home)
-
-
-def _terminate(pid):
-    """End a pid the test's hook subprocess started; it left the test's process tree, so os.kill would trip the suite's foreign-kill tripwire."""
-    if os.name == "nt":
-        import ctypes
-        k32 = ctypes.windll.kernel32
-        k32.OpenProcess.restype = ctypes.c_void_p
-        k32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
-        k32.CloseHandle.argtypes = [ctypes.c_void_p]
-        h = k32.OpenProcess(0x0001, False, int(pid))  # PROCESS_TERMINATE
-        if h:
-            k32.TerminateProcess(h, 1)
-            k32.CloseHandle(h)
-        return
-    os.kill(pid, signal.SIGTERM)
-
-
-def _reap_leg(home):
-    """Terminate the pending leg the nt hook process started under the tmp settings home."""
-    try:
-        pid = int(json.loads((home / "unimatrix" / "agy-legs" / f"{CONV}.json").read_text())["pid"])
-        _terminate(pid)
-    except (OSError, ValueError, KeyError):
-        pass
+def test_entry_point_passes_a_real_run_command_through_unrewritten_and_starts_no_leg(home):
+    r = hook(json.dumps(run_payload()), home)
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["decision"] == "allow" and "overwrite" not in out
+    assert not (home / "unimatrix" / "agy-legs" / f"{CONV}.json").exists()
 
 
 # --- launcher -------------------------------------------------------------------------------

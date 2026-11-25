@@ -24,7 +24,6 @@ def load(name):
 
 sidecar = load("unimatrix-agy-sidecar")
 launch = load("unimatrix-agy-hook-launch")
-pretool = load("unimatrix-agy-hook-pretool")
 sess = load("unimatrix-agy-hook-sessionstart")
 
 
@@ -34,7 +33,7 @@ class FakeProc:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """Sidecar env as agy hands it: LS address (a real listener, so the pretool check can reach it) and token."""
+    """Sidecar env as agy hands it: LS address (a real listener) and token."""
     ls = socket.socket()
     ls.bind(("127.0.0.1", 0))
     ls.listen(4)
@@ -100,14 +99,6 @@ def test_a_started_leg_is_live_with_the_sidecar_env_address_and_the_token_only_i
     assert leg_env["ANTIGRAVITY_CSRF_TOKEN"] == TOKEN and leg_env["ANTIGRAVITY_CONVERSATION_ID"] == CONV
     assert TOKEN not in rec_path.read_text()
     assert all(TOKEN not in p.read_text(errors="replace") for p in tmp_path.rglob("*") if p.is_file())
-
-
-def test_pretool_reads_the_sidecar_record_as_a_current_leg(tmp_path, env):
-    hub, _ = make_hub(tmp_path)
-    hub.start_leg(CONV, str(tmp_path))
-    state = tmp_path / "unimatrix" / "agy-legs"
-    assert pretool.leg_current(CONV, 4242, state) is True
-    assert pretool.leg_current(CONV, 4243, state) is False  # another agy process's hook still relaunches
 
 
 def test_write_private_json_publishes_the_record_whole_with_no_temp_left(tmp_path):
