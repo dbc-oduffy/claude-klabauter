@@ -2500,12 +2500,60 @@ def test_codex_only_install_skips_claude_gate_even_with_claude_on_path(monkeypat
 def test_agy_config_seeded_empty_0600_only_when_absent(monkeypatch, tmp_path):
     home, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "agy"))
     cfg = home / ".gemini" / "config" / "config.json"
-    assert rc == 0 and cfg.read_text(encoding="utf-8").strip() == "{}"
+    assert rc == 0 and json.loads(cfg.read_text(encoding="utf-8")) == {"sidecars": {ui.AGY_SIDECAR_ID: {"enabled": True}}}
     if sys.platform != "win32":
         assert (cfg.stat().st_mode & 0o777) == 0o600
     cfg.write_text('{"mine": 1}', encoding="utf-8")
     rc = ui.main(["--install", "--hosts", "agy"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=io.StringIO())
-    assert rc == 0 and cfg.read_text(encoding="utf-8") == '{"mine": 1}'
+    assert rc == 0 and json.loads(cfg.read_text(encoding="utf-8")) == {"mine": 1, "sidecars": {ui.AGY_SIDECAR_ID: {"enabled": True}}}
+
+
+def test_seed_agy_sidecar_enabled_preserves_every_other_key_and_is_idempotent(tmp_path):
+    cfg = tmp_path / "config.json"
+    other = {"mine": [1, {"x": None}], "sidecars": {"theirs": {"enabled": True, "n": 2}}}
+    cfg.write_text(json.dumps(other), encoding="utf-8")
+    assert ui.seed_agy_sidecar_enabled(cfg) == "enabled"
+    got = json.loads(cfg.read_text(encoding="utf-8"))
+    assert got["mine"] == other["mine"] and got["sidecars"]["theirs"] == {"enabled": True, "n": 2}
+    assert got["sidecars"][ui.AGY_SIDECAR_ID] == {"enabled": True}
+    before = cfg.read_bytes()
+    assert ui.seed_agy_sidecar_enabled(cfg) == "present" and cfg.read_bytes() == before
+    cfg.write_text(json.dumps({"sidecars": {ui.AGY_SIDECAR_ID: {"enabled": False, "keep": 1}}}), encoding="utf-8")
+    assert ui.seed_agy_sidecar_enabled(cfg) == "enabled"
+    assert json.loads(cfg.read_text(encoding="utf-8"))["sidecars"][ui.AGY_SIDECAR_ID] == {"enabled": True, "keep": 1}
+    assert ui.seed_agy_sidecar_enabled(tmp_path / "new" / "config.json") == "created"
+
+
+def test_unseed_agy_sidecar_enabled_removes_only_our_key(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"mine": 1, "sidecars": {"theirs": {"enabled": True}, ui.AGY_SIDECAR_ID: {"enabled": True}}}), encoding="utf-8")
+    assert ui.unseed_agy_sidecar_enabled(cfg) == "removed"
+    assert json.loads(cfg.read_text(encoding="utf-8")) == {"mine": 1, "sidecars": {"theirs": {"enabled": True}}}
+    assert ui.unseed_agy_sidecar_enabled(cfg) == "absent"
+    cfg.write_text(json.dumps({"mine": 1, "sidecars": {ui.AGY_SIDECAR_ID: {"enabled": True}}}), encoding="utf-8")
+    assert ui.unseed_agy_sidecar_enabled(cfg) == "removed"
+    assert json.loads(cfg.read_text(encoding="utf-8")) == {"mine": 1}
+    assert ui.unseed_agy_sidecar_enabled(tmp_path / "none.json") == "absent"
+
+
+def test_agy_sidecar_enable_refuses_a_malformed_config_untouched(tmp_path):
+    cfg = tmp_path / "config.json"
+    for bad in ("{not json", "[1]", '{"sidecars": 3}'):
+        cfg.write_text(bad, encoding="utf-8")
+        with pytest.raises(ValueError):
+            ui.seed_agy_sidecar_enabled(cfg)
+        assert cfg.read_text(encoding="utf-8") == bad
+
+
+def test_agy_install_enables_the_sidecar_key_and_uninstall_removes_it(monkeypatch, tmp_path):
+    plugin = _engine_tree_and_plugin(monkeypatch, tmp_path)
+    dest = tmp_path / "dest"
+    home, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "agy", "--plugin-root", str(plugin)))
+    cfg = home / ".gemini" / "config" / "config.json"
+    assert json.loads(cfg.read_text(encoding="utf-8"))["sidecars"][ui.AGY_SIDECAR_ID] == {"enabled": True}, out
+    assert "agy sidecar enable key" in out
+    assert ui.main(["--uninstall", "--hosts", "agy"], dest_dir=dest, out=io.StringIO()) == 0
+    assert "sidecars" not in json.loads(cfg.read_text(encoding="utf-8"))
 
 
 def test_seed_agy_plugin_is_idempotent_and_preserves_other_entries(tmp_path):

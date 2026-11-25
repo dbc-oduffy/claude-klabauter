@@ -724,6 +724,61 @@ def test_sessionstart_spawns_leg_with_conversation_id_and_notes_visibly(home, ag
     assert msg == {"systemMessage": sess.NOTE}  # no metadata: agy panics on it at SessionStart
 
 
+@pytest.fixture
+def config_home(home, monkeypatch):
+    """A fake user home whose ~/.gemini is the agy config home; returns that config dir."""
+    fake = home / "fakehome"
+    cfg = fake / ".gemini" / "config"
+    cfg.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake))
+    return cfg
+
+
+def test_register_with_an_agy_1_5_17_payload_records_the_launch_dir_not_the_config_home(home, config_home, monkeypatch):
+    monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: FakeProc())
+    launch_dir = home / "work" / "repo"
+    launch_dir.mkdir(parents=True)
+    # agy 1.5.17: cwd is its config dir, the hook process runs there, and the launch dir is only the workspace path
+    payload = {"conversationId": CONV, "cwd": str(config_home), "workspacePaths": [str(launch_dir)]}
+    monkeypatch.chdir(config_home)
+    sess.register(payload, 5)
+    assert json.loads(record_path(home).read_text())["cwd"] == str(launch_dir)
+
+
+def test_pending_start_with_only_config_home_candidates_stores_no_cwd(home, config_home, monkeypatch):
+    monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
+    monkeypatch.setattr(launch.subprocess, "Popen", lambda cmd, **kw: FakeProc())
+    monkeypatch.chdir(config_home)
+    sess.register({"conversationId": CONV, "cwd": str(config_home / "sub")}, 5)
+    assert json.loads(record_path(home).read_text())["cwd"] is None
+
+
+def test_a_restart_keeps_the_recorded_launch_dir_when_the_new_request_has_only_the_config_home(home, config_home, monkeypatch):
+    monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
+    monkeypatch.setattr(launch.subprocess, "Popen", lambda cmd, **kw: FakeProc())
+    monkeypatch.chdir(config_home)
+    record_path(home).parent.mkdir(parents=True)
+    record_path(home).write_text(json.dumps({"pid": 4294967, "conversation": CONV, "endpoint": "e", "ls_address": None,
+                                              "agy_pid": 9, "mode": "pending", "cwd": str(home)}))
+    launch.start({"conversationId": CONV, "agyPid": 9, "cwd": str(config_home)}, launch.load_sibling("unimatrix-roster"),
+                 record_path(home).parent)
+    assert json.loads(record_path(home).read_text())["cwd"] == str(home)
+
+
+def test_a_config_home_cwd_already_on_a_current_record_is_replaced_by_the_launch_dir(home, config_home, agy_env, monkeypatch):
+    monkeypatch.setattr(launch.subprocess, "Popen", lambda *a, **k: pytest.fail("restarted a current leg"))
+    record_path(home).parent.mkdir(parents=True)
+    record_path(home).write_text(json.dumps({"pid": os.getpid(), "conversation": CONV, "endpoint": "e",
+                                              "ls_address": "localhost:5555", "agy_pid": 9, "mode": "live", "cwd": str(config_home)}))
+    launch.start({"conversationId": CONV, "agyPid": 9, "cwd": str(home)}, launch.load_sibling("unimatrix-roster"),
+                 record_path(home).parent)
+    assert json.loads(record_path(home).read_text())["cwd"] == str(home)
+
+
 def test_sessionstart_with_only_conversation_id_registers_a_pending_leg(home, monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
     monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
@@ -733,6 +788,52 @@ def test_sessionstart_with_only_conversation_id_registers_a_pending_leg(home, mo
     # The LS address comes only from the sidecar's ANTIGRAVITY_LS_ADDRESS; no port is guessed.
     assert (rec["mode"], rec["pid"], rec["ls_address"]) == ("pending", 31337, None)
     assert out["injectSteps"][0]["systemMessage"] == {"systemMessage": sess.NOTE}
+
+
+def _main_texts(monkeypatch, capsys, payload):
+    monkeypatch.setattr(sess.json, "load", lambda f: payload)
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: FakeProc())
+    monkeypatch.setattr(sess, "_repo_claude_md", lambda cwd: None)
+    assert sess.main() == 0
+    return [s["systemMessage"]["systemMessage"] for s in json.loads(capsys.readouterr().out).get("injectSteps", [])]
+
+
+def test_sessionstart_with_a_pending_leg_instructs_the_fixed_first_action(home, monkeypatch, capsys):
+    monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
+    texts = _main_texts(monkeypatch, capsys, {"conversationId": CONV})
+    assert json.loads(record_path(home).read_text())["mode"] == "pending"
+    instruction = [t for t in texts if sess.FIRST_ACTION_COMMAND in t]
+    assert len(instruction) == 1 and "first action" in instruction[0] and "before any other tool" in instruction[0]
+    assert not any(c in sess.FIRST_ACTION_COMMAND for c in pre.UNSAFE_SHELL_TEXT)
+
+
+def test_sessionstart_with_a_live_leg_gives_no_first_action_instruction(home, agy_env, monkeypatch, capsys):
+    texts = _main_texts(monkeypatch, capsys, {"conversationId": CONV})
+    assert json.loads(record_path(home).read_text()).get("mode", "live") == "live"
+    assert texts == [sess.NOTE]
+
+
+def test_sessionstart_unregistered_gives_no_first_action_instruction(home, monkeypatch, capsys):
+    monkeypatch.setattr(sess, "register", lambda *a: False)
+    assert _main_texts(monkeypatch, capsys, {}) == []
+
+
+@posix_rewrite
+def test_first_action_command_is_rewritten_with_the_launcher_start_on_posix(home, monkeypatch):
+    stub_guard(monkeypatch, {"decision": "ask"})
+    out = pre.decide(run_payload(cmd=sess.FIRST_ACTION_COMMAND), 4242)
+    new = out["overwrite"]["CommandLine"]
+    assert new.endswith("; " + sess.FIRST_ACTION_COMMAND) and "nohup" in new and str(pre.LAUNCH) in new
+
+
+def test_first_action_command_is_rewritten_with_the_promote_prefix_on_nt(home, monkeypatch):
+    as_windows(monkeypatch, pre)
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
+    stub_guard(monkeypatch, {"decision": "ask"})
+    line = pre.bootstrap_rewrite(run_payload(cmd=sess.FIRST_ACTION_COMMAND), 4242)["overwrite"]["CommandLine"]
+    assert line == f"{pre.promote_prefix(CONV)}; {sess.FIRST_ACTION_COMMAND}"
+    assert f"{CONV}.promote.json" in line
 
 
 def _vendor_pair(tmp_path):

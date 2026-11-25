@@ -33,7 +33,16 @@ from coordinator_core.ops.dispatch_emit import agent_body_dedupe as _agent_body_
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit import run_notes as _run_notes
 from coordinator_core.ops.dispatch_emit import compose_size as _compose_size
-from coordinator_core.ops.dispatch_emit.ask_staged_prompts import Stager, stage as _stage_prompt, stage_literal_runs
+from coordinator_core.ops.dispatch_emit import test_leg_freshness as _leg_freshness
+from coordinator_core.ops.dispatch_emit.ask_staged_prompts import (
+    Stager,
+    MIN_STAGE_BYTES,
+    PROMPTS_DIR,
+    decode_literal as _decode_literal,
+    literal_runs,
+    stage as _stage_prompt,
+    stage_literal_runs,
+)
 from coordinator_core.ops.dispatch_emit.fan_launcher import EMIT_RELAY_AUTHORITY, _twin_affixes
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
     CHAIN_HANDOFF_KEY,
@@ -59,6 +68,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import DATE_HEAD_PATTERN, PL
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS, SINCE_HALT_CREDIT_JS
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
 from coordinator_core.ops.dispatch_emit.ledger_test_freshness import TESTS_RAN_AT_KEY
+from coordinator_core.ops.dispatch_emit.halt_resume_record import RESUME_FILE
 from coordinator_core.ops.dispatch_emit.phase_ledger import RESUME_PHASES_FIELD
 from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
     IMPORTER_OVERRUN_KEY,
@@ -104,6 +114,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KEY,
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
+    RESUME_LEDGER_PIVOT_FIELD,
     RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_LANDED_MET_BY_FIELD,
     RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
@@ -153,6 +164,7 @@ from coordinator_core.ops.dispatch_emit.design_conformance import (
     DEFAULT_MET_BY_CLAUSE,
     DESIGN_BRIEF_KEY,
 )
+from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import EMPTY_STAGE_RESUME_FIELD
 from coordinator_core.ops.dispatch_emit.ledger_recovery import (
     LEDGER_FIX_LABEL,
     LEDGER_FIX_PHASE,
@@ -197,10 +209,16 @@ from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
 from coordinator_core.ops.dispatch_emit.family_invoke_record import INVOKE_MODULE as _FAMILY_INVOKE_MODULE
 from coordinator_core.ops.dispatch_emit import stage_family_binding as _stage_family_binding
 from coordinator_core.ops.dispatch_emit.pipeline_compose import FALLBACK_CAUSE_JS as _FALLBACK_CAUSE_JS
+from coordinator_core.ops.dispatch_emit import pipeline_compose as _pipeline_compose
+from coordinator_core.ops.dispatch_emit import rag_prefetch as _rag_prefetch
 from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_source
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
 from coordinator_core.ops.dispatch_emit.rag_use import (
     DEGRADED as RAG_DEGRADED,
+    HALT_EXAMPLE_RETRIEVAL_REPO_CADENCE,
+    HALT_EXAMPLE_RETRIEVAL_REPO_NOT_SERVING,
+    HALT_EXAMPLE_RETRIEVAL_REPO_UNUSED,
+    HALT_UE_CORPUS_GAP,
     NO_UE_PATHS_GAP,
     RAG_NOT_USED,
     RESTORE_MESSAGE,
@@ -670,6 +688,25 @@ _PULL_REVIEW_UNSAVEABLE_JS = (
     "|| (String(r.verdict ?? '').toUpperCase() === 'REJECTED' && r.premiseFailure != null "
     "&& (Array.isArray(r.premiseFailure) ? r.premiseFailure.length : String(r.premiseFailure).length) > 0)))"
 )
+#: JS predicate, true when a pulled review of the plan-blitz is a non-premise-check PIVOT: the PIVOT arm of
+#: `ask_contract.halt_carries_pivot`. Scope-safe where `_blitz` is not declared.
+_BLITZ_PIVOT_PULLED_JS = (
+    "(typeof _blitz !== 'undefined' && _blitz != null && "
+    "[...(_blitz.regate?.pulled ?? []), ...(_blitz.pulled ?? [])].some((p) => p && "
+    "(Array.isArray(p.reviews ?? p.reviewVerdicts) ? (p.reviews ?? p.reviewVerdicts) : [])"
+    ".some((r) => r && r.reviewer !== 'premise-check' && String(r.verdict ?? '').toUpperCase() === 'PIVOT')))"
+)
+#: Object-spread that marks a halt record `pivot: true` (`RESUME_LEDGER_PIVOT_FIELD`) while a pulled review is PIVOT.
+_PIVOT_HALT_SPREAD_JS = f"...({_BLITZ_PIVOT_PULLED_JS} ? {{ {RESUME_LEDGER_PIVOT_FIELD}: true }} : {{}}), "
+#: The pivot clause of the ledger-replan prompt, in place of `_LEDGER_REPLAN_ADD_ONLY_CLAUSE`.
+_LEDGER_REPLAN_PIVOT_CLAUSE = (
+    "The halted run's review was PIVOT: replan from scratch against that review and the ledger. Delete from the "
+    "spine every open, unlanded row the pivot supersedes, and add the rows the pivot calls for; never touch a "
+    "landed or coded row. Return the ids you deleted as retired_rows."
+)
+_LEDGER_REPLAN_ADD_ONLY_CLAUSE = (
+    "Do not edit, reopen or remove any existing row: the rows that landed stay landed."
+)
 #: The pulled entry's reason, coverage, reviews and gate report, appended to both pull-handling prompts.
 _PULL_DATA_JS = _cat(
     "\n\nPull reason:\n",
@@ -691,6 +728,45 @@ _CODE_REVIEW_AGENT_TYPE = "coordinator:code-reviewer"
 _DOCS_CHECKER_AGENT_TYPE = "coordinator:docs-checker"
 #: Named by string: the op registers in `docs_check_gate_op`, which composition never imports.
 _OP_DOCS_CHECK_RAG_GATE = "dispatch.docs_check_rag_gate"
+#: Named by string: the op registers in `stage_rag_gate_op`, which composition never imports.
+_OP_STAGE_RAG_GATE = "dispatch.stage_rag_gate"
+_STAGE_RAG_NEXT_ACTIONS = {
+    HALT_EXAMPLE_RETRIEVAL_REPO_UNUSED: "a gated agent made no example-retrieval-repo call; every sizing, plan, research and review agent must call it at least once",
+    HALT_EXAMPLE_RETRIEVAL_REPO_CADENCE: "a gated agent called example-retrieval-repo below the UE cadence; its calls must recur through the work",
+    HALT_EXAMPLE_RETRIEVAL_REPO_NOT_SERVING: "example-retrieval-repo is not serving; restore it before the re-run",
+    HALT_UE_CORPUS_GAP: "the ue-addon corpus answered empty for the run's UE queries; index it before the re-run",
+}
+
+
+def _stage_rag_gate_js(stage: str) -> str:
+    """JS gate over one stage, run once that stage's agents have settled and before the next dispatches.
+
+    `dispatch.stage_rag_gate` judges every gated agent of the run so far; its `halted_by`
+    (example_retrieval_repo_unused|example_retrieval_repo_cadence|example_retrieval_repo_not_serving|ue_corpus_gap) becomes `_halted`
+    with the reply's rag_use, run_id, sizing and a next_action carried. A verdict with no `halted_by`
+    (ok, degraded, transcript_unreadable, not_applicable) never halts: unknown is not zero. The op is
+    COMPUTE_ONLY and writes no record; a throw or a missing engineOp leaves `_ragUse` null.
+    """
+    actions = json.dumps({k: f"Re-run the {stage} stage: {v}." for k, v in _STAGE_RAG_NEXT_ACTIONS.items()})
+    return (
+        "  {\n"
+        "    let _ragUse = null;\n"
+        "    if (!_halted && _runId && typeof engineOp === 'function') {\n"
+        f"      try {{ _ragUse = await engineOp({_lit(_OP_STAGE_RAG_GATE)}, {{ run_id: _runId, session_id: _SESSION_ID, stage: {_lit(stage)} }}); }}\n"
+        "      catch (e) { log('stage rag gate threw: ' + String((e && e.message) ?? e)); }\n"
+        "      const _ragHalt = _ragUse && typeof _ragUse.halted_by === 'object' ? _ragUse.halted_by : null;\n"
+        "      if (_ragHalt && _ragHalt.halted) {\n"
+        "        const { halted_by: _ragDrop, ...rag_use } = _ragUse;\n"
+        f"        _halted = {{ ..._ragHalt, reason: {_lit(stage + ' stage: ')} + String(_ragHalt.halted), rag_use, "
+        f"run_id: _runId, sizing: _sizingRel, next_action: ({actions})[_ragHalt.halted] }};\n"
+        "      }\n"
+        "    }\n"
+        "  }"
+    )
+
+
+#: The build-wave gate: after the build wave settles, before review and land.
+_STAGE_RAG_GATE_JS = _stage_rag_gate_js("build")
 _STAGE_DEFAULTS = {
     "plan": _PLAN_AUTHOR_AGENT_TYPE,
     "plan_review": _PLAN_REVIEW_AGENT_TYPE,
@@ -797,6 +873,34 @@ def _ue_docs_checker(repo_root: str) -> tuple[bool, Optional[str]]:
         return True, _agent_route._model_of(_DOCS_CHECKER_AGENT_TYPE, _agent_route._Definitions())
     except _agent_route.RouteAdmissionError as exc:
         raise AskComposeRefused(f"stage agent routing refused: {exc}") from exc
+
+
+def _project_health_push_js(repo_root: Any) -> str:
+    """JS line pushing example-retrieval-repo's non-ok health entry for `repo_root` onto `_ragDegraded`, or "" when healthy.
+
+    The verdict is read once at compose time; a reader failure composes a `health_unreadable` entry.
+    """
+    from coordinator_core.ops.dispatch_emit import rag_health as _rag_health
+
+    try:
+        entry = _rag_health.repo_verdict(repo_root)
+    except Exception as exc:  # noqa: BLE001 - a reader failure is an entry, never a failed compose
+        entry = {
+            "source": _rag_health.SOURCE,
+            "verdict": "health_unreadable",
+            "lanes": [],
+            "reason": f"example-retrieval-repo health unreadable: {type(exc).__name__}: {exc}",
+            "stale_since": None,
+            "next_action": _rag_health.NEXT_ACTION,
+        }
+    if not entry:
+        return ""
+    return (
+        f"  _ragDegraded.push({{ source: {_lit(str(entry['source']))}, verdict: {_lit(str(entry['verdict']))}, "
+        f"lanes: {json.dumps(entry['lanes'])}, reason: {_lit(str(entry['reason']))}, "
+        f"stale_since: {_lit(str(entry['stale_since'])) if entry['stale_since'] else 'null'}, "
+        f"next_action: {_lit(str(entry['next_action']))} }});"
+    )
 
 
 def _docs_skip_js(label: str, indent: str) -> str:
@@ -951,6 +1055,10 @@ def _obj(required: list[str], properties: dict) -> dict:
 
 
 _STR = {"type": "string"}
+_RAG_PREFETCH_SCHEMA = _obj(["citations"], {"citations": _STR})
+#: `head` carries this where the opening `rag-prefetch` stage's block belongs: empty until that stage returns.
+_RAG_BLOCK_MARKER = f"{_emit._SHARED_PATH_MARKER_DELIM}{_pipeline_compose._RAG_SPLICE}{_emit._SHARED_PATH_MARKER_DELIM}"
+_OP_RUN_RAG_USE = "dispatch.run_rag_use"
 #: Worded positively: the refused spellings live only in suite_tier_refusal, never in a scout prompt.
 EXIT_CRITERION_RULES_CLAUSE = (
     " The exit_criterion names no test tier and no tier-valued argument; "
@@ -1165,6 +1273,7 @@ def _test_result_schema() -> dict:
     schema["properties"]["co_tenant"] = {"type": "object"}
     schema["properties"]["infra_session"] = {"type": "object"}
     schema["properties"]["first_setup_error"] = _STR
+    schema["properties"]["guard_refusal"] = _STR
     schema["properties"].update(
         over_budget={"type": "boolean"},
         elapsed_s={"type": "number"},
@@ -1266,14 +1375,15 @@ OWED_BY_DERIVE_JS = (
     "for (const i of (_ledger?.items ?? [])) {\n"
     "      if (!i || i.status !== 'not_met' || i.withheld_by || (Array.isArray(i.owed_by) && i.owed_by.length)) continue;\n"
     "      const rem = Array.isArray(i.remaining) ? i.remaining.map(String) : [];\n"
-    "      const owedIds = (_manifest?.owed ?? []).map((o) => String(o.id));\n"
+    "      const owedIds = [...(_manifest?.owed ?? []), ...(_manifest?.gated ?? []), ...(_manifest?.slot_withheld ?? [])]"
+    ".map((o) => String(o.id));\n"
     "      if (!rem.length || !owedIds.length) continue;\n"
     f"      const acts = {json.dumps(list(POST_COMMIT_ACTS))};\n"
     "      const named = new Set(); let ok = true;\n"
     "      for (const a of rem) {\n"
     "        if (acts.includes(a)) continue;\n"
     "        const hit = owedIds.filter((id) => ((a.trimStart().startsWith(id + ':') || "
-    "a.split(/[^A-Za-z0-9_]+/).includes(id)) && /\\b(EM|em-performed|em-run|em-discharge|operator|owed)\\b/i.test(a)));\n"
+    "a.split(/[^A-Za-z0-9_]+/).includes(id)) && /\\b(EM|em-performed|em-run|em_run|em-discharge|operator|owed|needs_slot|slot|external_gate|externally blocked)\\b/i.test(a)));\n"
     "        if (!hit.length) { ok = false; break; }\n"
     "        hit.forEach((id) => named.add(id));\n"
     "      }\n"
@@ -1285,7 +1395,8 @@ OWED_BY_DERIVE_JS = (
 _LEDGER_GATED_RULE = (
     ". An item whose only undelivered part is a gated chunk is 'not_met' with withheld_by set to "
     "that chunk id exactly; set withheld_by on no other item. An item whose only undelivered parts are "
-    "owed rows (the stage manifest's owed ids, named beside the gated chunks) is 'not_met' with owed_by set to exactly those row ids; an item with any other gap "
+    "owed rows (the stage manifest's owed ids, named beside the gated chunks; an em_run row blocked externally "
+    "or by needs_slot counts) is 'not_met' with owed_by set to exactly those row ids; an item with any other gap "
     "carries no owed_by. The commit stage runs after this check, so an uncommitted "
     "change is expected here and 'commit' alone in remaining is not a reason to block. Return "
     "all_of_pm_ask as the ledger states it, and list any in-repo memo or doctrine that conflicts "
@@ -1467,7 +1578,10 @@ _SPINE_REVIEW_STAGED_SCHEMA = _obj(
 #: The ledger-resume re-plan agent's return: the rows it added, and the stage it runs over exactly those.
 _REPLAN_STAGED_SCHEMA = _obj(
     ["plan_rel", "added_rows"],
-    {"plan_rel": _STR, "added_rows": {"type": "array", "items": _STR}, **_STAGE_REPLY_PROP},
+    {
+        "plan_rel": _STR, "added_rows": {"type": "array", "items": _STR},
+        "retired_rows": {"type": "array", "items": _STR}, **_STAGE_REPLY_PROP,
+    },
 )
 #: The pre-sized gate agent's return: the gate reply plus the stage it runs as its closing act.
 _GATE_STAGED_SCHEMA = {
@@ -1815,27 +1929,35 @@ def brief_clause_decl_js() -> str:
     return f"  const {_BRIEF_CLAUSE_VAR} = {_lit(_emit._BRIEF_PRECEDENCE_CLAUSE)};\n  const _clauseOuterAgent = agent;"
 
 
-def clause_shadow_parts(name: str) -> tuple[str, str]:
+#: Prefix a library stage's prompt with the run's rag block (empty until the opening prefetch returns).
+_RAG_PREFIX_JS = "(_ragBlock ? _ragBlock + '\\n\\n' : '')"
+
+
+def clause_shadow_parts(name: str, *, rag_block: bool = False) -> tuple[str, str]:
     """(open, close) lines around an `async function <name>` so it is defined inside a scope whose
-    `agent` prefixes the precedence clause onto every library prompt that lacks it. The function
+    `agent` prefixes the precedence clause onto every library prompt that lacks it, and with `rag_block`
+    the run's `_ragBlock` ahead of the prompt. The function
     stays its own script element between them (the hoister keys on it). Needs `brief_clause_decl_js`."""
+    rag = f"{_RAG_PREFIX_JS} + " if rag_block else ""
     return (
         f"  const {name} = (() => {{\n"
-        f"    const agent = (p, o) => _clauseOuterAgent({_CLAUSED_JS}(p), o);",
+        f"    const agent = (p, o) => _clauseOuterAgent({_CLAUSED_JS}({rag}p), o);",
         f"    return {name};\n"
         "  })();",
     )
 
 
-def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
+def _ledger_shadowed(blitz_fn: str, *, em_brief: bool, rag_block: bool = False) -> str:
     """`planBlitz` defined inside a scope whose `agent` prefixes the ledger clause, so every
-    plan-blitz prompt reads the requirements ledger first. An EM-brief shadow inside the function
+    plan-blitz prompt reads the requirements ledger first (and, with `rag_block`, the run's rag citations).
+    An EM-brief shadow inside the function
     calls `_askAgent`, rebound here to the ledger-prefixed agent: the brief and the ledger compose."""
     rebind = "    const _askAgent = agent;\n" if em_brief else ""
+    rag = f"{_RAG_PREFIX_JS} + " if rag_block else ""
     return (
         f"  const _outerAgent = (p, o) => _clauseOuterAgent({_CLAUSED_JS}(p), o);\n"
         f"  const {_PLAN_BLITZ_FN} = (() => {{\n"
-        f"    const agent = (p, o) => _outerAgent({_DESIGN_PREFIX_JS} + {_LEDGER_PREFIX_VAR} + {_AGENT_DEFS_FN}() + p, o);\n"
+        f"    const agent = (p, o) => _outerAgent({_DESIGN_PREFIX_JS} + {_LEDGER_PREFIX_VAR} + {_AGENT_DEFS_FN}() + {rag}p, o);\n"
         f"{rebind}{blitz_fn}\n"
         f"    return {_PLAN_BLITZ_FN};\n"
         "  })();"
@@ -1883,12 +2005,18 @@ def _export_argv_shape(repo_root: Optional[str]) -> str:
 #: Cause a verify verdict carries when `dispatch.measured_rev` stayed -32004 after the one reconcile;
 #: `_TEST_UNPROVEN_CAUSE_JS` renders it.
 MEASURED_REV_32004_CAUSE = "measured_rev -32004"
+#: `zero_run_cause` of a leg whose command a guard refused; it halts `GUARD_REFUSED_HALT`, never `test_infra_failure`.
+GUARD_REFUSED_CAUSE = "guard_refused"
+GUARD_REFUSED_HALT = "guard_refused"
 _MEASURED_REV_32004_CLAUSE = (
     "A -32004 from the measured-rev op is not a refusal: follow the -32004 reconcile contract "
     "(docs/wiki/reconcile-policy.md; measured_rev is its named re-run carve-out, so a reconcile state of "
     "unknowable with reason killed also licenses exactly one re-run). If it persists "
     "after that, or error.data has no reconcile_command, report status error with tests_run 0 and zero_run_cause "
     f"'{MEASURED_REV_32004_CAUSE}'; never fall back to the working tree. "
+    "If a guard denies any command you issue, stop: report status error with tests_run 0, "
+    f"zero_run_cause '{GUARD_REFUSED_CAUSE}' and guard_refusal set to the guard's name and denial text; "
+    "never reshape the denied command. "
 )
 
 
@@ -2135,7 +2263,7 @@ def _review_blocked_halt_js(
     if call_only:
         return call
     reverify_expr = (
-        "(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
+        f"(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object' && !{_LEG_STALE_JS}) "
         "? (() => { const _px = (p) => { let s = String(p).replace(/\\\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; }; "
         "const _fs = new Set([...(typeof _foreignReds !== 'undefined' ? _foreignReds : []), "
         "...(Array.isArray(_reviewReverify.flaky) ? _reviewReverify.flaky.map((f) => f && f.node_id) : [])].map(_px)); "
@@ -2195,7 +2323,7 @@ _REVIEW_RECOVER_JS = r"""
     if (_gate.arm === __XS__) return;
     const flaky = [];
     const gapsOf = () => {
-      const rv = (_reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null;
+      const rv = (_reviewReverify && typeof _reviewReverify === 'object' && !__LEGSTALE__) ? _reviewReverify : null;
       const excluded = new Set([...(rv?.pre_existing ?? []), ...(rv?.kept ?? []), ...(rv?.renamed_node ?? [])].map(String));
       const raw = rv?.failing;
       let failing = (rv && rv.status_after !== 'pass')
@@ -2273,6 +2401,7 @@ _REVIEW_RECOVER_JS = r"""
         const carried = (Array.isArray(_reviewReverify?.pre_existing) ? _reviewReverify.pre_existing : []).map(String);
         const measured = (Array.isArray(rv.test.pre_existing) ? rv.test.pre_existing : []).map(String);
         _reviewReverify = { ...rv.test, pre_existing: [...new Set([...measured, ...carried])] };
+        if (typeof _legStale !== 'undefined') _legStale = null;
       }
       if (rv && Array.isArray(rv.slices) && Array.isArray(_reviewWave)) {
         _reviewWave = _reviewWave.map((w) => {
@@ -2367,6 +2496,7 @@ def _review_recover_js(
         .replace("__PROGRESSED__", PROGRESSED_JS)
         .replace("__FLAKES__", CLASSIFY_FLAKES_JS)
         .replace("__XS__", _lit(ARM_XS))
+        .replace("__LEGSTALE__", _LEG_STALE_JS)
         .replace("__BLOCKED__", _BLOCKING_UNAPPLIED_JS)
         .replace("__FOREIGN__", FOREIGN_FIELD)
         .replace("__CAP__", str(SELF_CORRECTION_CAP))
@@ -2541,6 +2671,11 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "detail: _halted.detail + (_rvSetup ? '; first setup error: ' + _rvSetup.slice(0, 1500) : '') "
         "+ (_rvSess.length ? '; pytest session: ' + _rvSess.join(', ') : '; the verdict carried no pytest session (argv, cwd, interpreter, exit code)'), "
         "next_action: 'Fix the cause named in detail first (a rerun repeats it), then refire: ' + " + _refire_js(sizing_rel) + " }; } "
+        "if (_rvCause === " + json.dumps(GUARD_REFUSED_CAUSE) + " && _rvt.tests_run === 0) { "
+        "const _rvRef = (typeof _rvt.guard_refusal === 'string' && _rvt.guard_refusal.trim()) ? _rvt.guard_refusal.trim().slice(0, 1500) : ''; "
+        "_halted = { ..._halted, halted: " + json.dumps(GUARD_REFUSED_HALT) + ", "
+        "detail: 'the test leg ran zero tests: a guard refused its command' + (_rvRef ? ': ' + _rvRef : ' (the verdict named no guard refusal)'), "
+        "next_action: 'Fix the guard refusal named in detail first (a rerun repeats it), then refire: ' + " + _refire_js(sizing_rel) + " }; } "
         "if (_rvWait || _rvHalted || _rvCycle) { _halted = { ..._halted, halted: _rvCycle ? " + json.dumps(CO_TENANT_CYCLE_CAUSE)
         + " : _rvWait ? " + json.dumps(CO_TENANT_WAIT_HALT)
         + " : " + json.dumps(CO_TENANT_HALTED_CAUSE) + ", "
@@ -2734,6 +2869,17 @@ def _halt_next_action_text_helper_js(sizing_rel: Optional[str]) -> str:
     )
 
 
+_SIZING_PLAN_PATH_FN = "_sizingPlanPath"
+
+
+def _sizing_plan_path_js(cited_plan: Optional[str], sizing_rel: Optional[str]) -> str:
+    """JS: `_sizingPlanPath()`, the sizing's cited plan while `_sizingRel` is still the sizing it was read from, else `_planPathFor(_sizingRel)`."""
+    return (
+        f"  const {_SIZING_PLAN_PATH_FN} = () => ({json.dumps(cited_plan)} !== null && _sizingRel === {json.dumps(sizing_rel)}) "
+        f"? {json.dumps(cited_plan)} : _planPathFor(_sizingRel);"
+    )
+
+
 _PLAN_SLOT = "PLAN_PATH_SLOT_X"
 #: JS twin of `sizing_fire.flat_plan_edge`.
 _FLAT_PLAN_EDGE_JS = r"((p) => String(p).replace(/^(docs\/plans\/)\d{4}-\d{2}\//, '$1'))"
@@ -2744,7 +2890,7 @@ _FLAT_PLAN_EDGE_JS = r"((p) => String(p).replace(/^(docs\/plans\/)\d{4}-\d{2}\//
 #: disk access, so an engine-resumed plan (`_gate.resume_plan`) is kept as the engine located it.
 _LOCATE_LAMBDA_JS = (
     "(_pp) => (typeof _pp === 'string' && _sizingRel && !(typeof _gate !== 'undefined' && _gate && _gate.resume_plan === _pp) "
-    f"&& {_FLAT_PLAN_EDGE_JS}(_planPathFor(_sizingRel)) === {_FLAT_PLAN_EDGE_JS}(_pp)) ? _planPathFor(_sizingRel) : _pp"
+    f"&& {_FLAT_PLAN_EDGE_JS}({_SIZING_PLAN_PATH_FN}()) === {_FLAT_PLAN_EDGE_JS}(_pp)) ? {_SIZING_PLAN_PATH_FN}() : _pp"
 )
 
 
@@ -2859,10 +3005,71 @@ _VERIFY_TESTS_RAN = (
 VERIFY_TESTS_LABEL = "verify-tests"
 _VERIFY_TEST_RESULT_VAR = "_verifyTest"
 
+#: True when a reused review phase carries a reverify measured on older work; set from `_legStale`, cleared by a fresh reverify.
+_LEG_STALE_JS = (
+    "(typeof _legStale !== 'undefined' && _legStale && typeof _reviewReused !== 'undefined' && _reviewReused)"
+)
+
+
+def _run_resumed(repo_root: str, run_id: str, prior_run_ids: Sequence[str] = ()) -> bool:
+    """True when this script answers a halted run: a named predecessor, else a `halted.json` in the run's record dir."""
+    if prior_run_ids:
+        return True
+    from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE
+
+    try:
+        return (Path(repo_root) / RECORD_DIR_ROOT / run_id / HALTED_FILE).is_file()
+    except OSError:
+        return False
+
+
+def _judged_work_identity(repo_root: str, run_id: str, writes: Sequence[str], prior_run_ids: Sequence[str] = ()) -> dict:
+    """The work a refire's test leg judges: `{head, own_diff, stale}`, in-process, no spawn.
+
+    `head` is the tree's HEAD, `own_diff` a fingerprint of the own-diff paths' mtimes and sizes, `stale` the
+    `test_leg_freshness.is_stale` reason for the run's (else its newest predecessor's) leg, None when fresh.
+    Folded into the verify call's params, so a call recorded for older work never replays for this work.
+    """
+    root = Path(repo_root)
+    manifest = None
+    leg_run = run_id
+    for rid in (run_id, *reversed(tuple(prior_run_ids))):
+        try:
+            manifest = json.loads((root / RECORD_DIR_ROOT / rid / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        break
+    if not isinstance(manifest, dict):
+        manifest = None
+    own = list(_leg_freshness._own_diff_paths(manifest)) + [w for w in writes if isinstance(w, str) and w.strip()]
+    digest = hashlib.sha256()
+    for rel in sorted(set(own)):
+        relative = Path(rel)
+        if relative.is_absolute() or ".." in relative.parts:
+            continue
+        try:
+            st = (root / relative).stat()
+        except OSError:
+            continue
+        digest.update(f"{relative.as_posix()}\0{st.st_mtime_ns}\0{st.st_size}\n".encode("utf-8"))
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    for rid in (run_id, *reversed(tuple(prior_run_ids))):
+        if landing_integrity.test_leg_record(root, rid) is not None:
+            leg_run = rid
+            break
+    judged_manifest = {**(manifest or {}), "own_diff_paths": own}
+    return {
+        "head": head_sha(root),
+        "own_diff": digest.hexdigest()[:16],
+        "stale": _leg_freshness.is_stale(root, leg_run, judged_manifest),
+    }
+
 
 def _verify_tests_call(
     *, head: str, anchor: str, test_js: str, run_id: str, repo_root: str = "", out_path: str = "",
     base_sha: Optional[str] = None, stager: Optional[Stager] = None, agent_type_host: Optional[str] = None,
+    judged: Optional[dict] = None,
 ) -> str:
     """The verify stage's scoped-test leg: one haiku test-runner `agent(...)` call EXPRESSION, awaited before
     the verify agent, which receives its result inline.
@@ -2903,6 +3110,7 @@ def _verify_tests_call(
         "sidecar_path. Copy schema-valid baseline, baseline_method, build_clean, skipped, summary, "
         "importer_overrun, tripwires_not_run, and zero_run_cause when present. Keep diagnostic details in the receipt. "
         "Return only fields declared in the final-response schema; do not return the entire receipt.",
+        *([f"\n\nJudged work: {json.dumps(judged, sort_keys=True)}"] if judged else []),
     )
     return _agent(
         prompt, label=VERIFY_TESTS_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
@@ -3750,11 +3958,12 @@ _COMMIT_HALT_REASON_JS = (
     ".map((x) => String(x).trim()).join(': ').slice(0, 600) || null)"
 )
 #: One row's halt line: id, requirement first line, evidence checked, remaining gap. Trap: reads `_ledger` and
-#: `_reqText` at call time; `whyOf(id)` is the refusal's own reason, used only when the verdict named no gap.
+#: `_reqText` (empty at compose: the twin stays bounded) at call time; with no `it.requirement` the line names the
+#: ledger file via `_RUN_FILES`. `whyOf(id)` is the refusal's own reason, used only when the verdict named no gap.
 UNMET_ROWS_DETAIL_JS = (
     "const _unmetRowsDetail = (ids, whyOf) => [...new Set(ids)].map((id) => {\n"
     "    const it = (_ledger?.items ?? []).find((x) => x && x.id === id) ?? {};\n"
-    "    const req = String(_reqText[id] ?? it.requirement ?? '').split('\\n')[0].trim() || 'requirement text not in the ledger view';\n"
+    "    const req = String(_reqText[id] ?? it.requirement ?? '').split('\\n')[0].trim() || ('requirement text not in the verify item' + (typeof _RUN_FILES !== 'undefined' ? ' (read ' + _RUN_FILES.requirements + ')' : ''));\n"
     "    const read = it.root_read == null ? '' : 'root_read ' + [].concat(it.root_read).join(', ');\n"
     "    const ev = [read, it.evidence ? 'evidence ' + String(it.evidence).trim() : ''].filter(Boolean).join('; ') "
     "|| 'none recorded by the verify leg';\n"
@@ -3809,15 +4018,6 @@ def requirement_first_lines(ledger_view: str) -> dict[str, str]:
             out.setdefault(row_id, line[1:].strip())
             row_id = None
     return out
-
-
-def _requirement_texts_at_compose(ledger_path: str) -> dict[str, str]:
-    """`requirement_first_lines` of the ledger view on disk now, {} when absent: a row added later reaches the
-    halt through the verify item's `requirement` instead."""
-    try:
-        return requirement_first_lines(Path(ledger_path).read_text(encoding="utf-8"))
-    except OSError:
-        return {}
 
 
 _GATE_HALT_CAUSE_JS = "(_gate.halt ? 'gate halt: ' + String(_gate.halt.kind ?? _gate.halt.reason ?? 'halt') : 'apm ruling carried no foldable arm (non-XS arm or resume_plan)')"
@@ -3905,6 +4105,23 @@ def _static_plan_rel(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]
     except (SizingFireRefused, OSError, ValueError, KeyError):
         return None
     return rel if rel and (root / rel).is_file() else None
+
+
+def sizing_cited_plan(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
+    """The existing plan file the sizing's `plan:` edge names (a moved plan located), else None.
+
+    Never the slug path: a sizing that cites a differently named plan owns that plan, and a path
+    re-derived from the sizing's name does not exist.
+    """
+    if not sizing_rel:
+        return None
+    from coordinator_core.ops.dispatch_emit.sizing_fire import resolve_plan_edge
+
+    try:
+        edge = load_sizing(Path(repo_root), sizing_rel).get("plan")
+        return resolve_plan_edge(repo_root, edge) if isinstance(edge, str) and edge.strip() else None
+    except (SizingFireRefused, OSError, ValueError, KeyError):
+        return None
 
 
 def stale_resume_plan(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
@@ -4296,6 +4513,7 @@ def _phase_titles(
     review_titles: list[str],
     through_plan: bool = False,
     extra: Sequence[str] = (),
+    lead: Sequence[str] = (),
 ) -> list[str]:
     """One title per serial group, in run order: the contract phases and the review titles that an
     agent in this script carries, plus plan-blitz's own titles (DoE's, passed through).
@@ -4303,7 +4521,7 @@ def _phase_titles(
     Agents that run together carry one title (the verify leg), so a concurrent group reads as one
     row, and a title no agent carries is never listed.
     """
-    titles: list[str] = []
+    titles: list[str] = list(lead)
 
     def add(title: str) -> None:
         if title not in titles:
@@ -4525,7 +4743,7 @@ def _family_enabled(repo_root: str, sizing_rel: Optional[str]) -> bool:
         return True
     try:
         sizing = load_sizing(Path(repo_root), sizing_rel)
-        return bool((sizing or {}).get("family")) or _stage_family_binding.opted_in(sizing)
+        return bool((sizing or {}).get("family")) or _stage_family_binding.from_sizing(sizing) is not None
     except (SizingFireRefused, OSError, ValueError, KeyError):
         return True
 
@@ -5140,11 +5358,23 @@ _REVISE_RECEIPT_JS = r"""  const _reviseItemsOf = (t) => {
 """
 
 
-def _revise_checklist_js(notes: Sequence[dict], rows: Sequence[dict]) -> str:
+_REVISE_NOTES_STAGE = "revise-notes"
+# A staged ask carries the live notes as one prompt file, so every prompt names it instead of quoting each note.
+_REVISE_NOTES_POINTER = f"{_run_notes.HEADING}\n\nRead {{path}} in full: the EM's accepted revise notes, each binding EM context."
+
+
+def _revise_checklist_js(notes: Sequence[dict], rows: Sequence[dict], notes_staged: bool = False) -> str:
     """JS defining ``_reviseChecklist(r)``: the live notes plus each revise row ``r`` serves, or no manifest row claims.
 
     Each item is rendered by ``run_notes.checklist_block``; the JS only selects and joins. ``""`` when nothing is listed.
+    ``notes_staged`` renders a note's item as a pointer to its text in the staged revise-notes file, so the
+    script carries no per-note prose.
     """
+    if notes_staged:
+        notes = [
+            {**e, "note": f"the note quoted as `{e['run']} {e['id']}` in the revise-notes file named above"}
+            for e in notes
+        ]
     head = _run_notes.CHECKLIST_HEADING + "\n\n"
 
     def item_of(note: Sequence[dict], row: Sequence[dict]) -> str:
@@ -5403,11 +5633,20 @@ def compose_ask_script(
     anchor = _ANCHOR_CLAUSE.format(root=repo_root)
     brief_prefix = f"{_emit._SHARED_PATH_MARKER_DELIM}{EM_BRIEF_VAR}{_emit._SHARED_PATH_MARKER_DELIM}" if em_brief else ""
     _rag_line = _emit._example_retrieval_repo_brief_line(repo_root)
-    head = brief_prefix + _AGENT_DEFS_MARKER + _emit._BRIEF_PRECEDENCE_CLAUSE + (f"\n\n{_rag_line}" if _rag_line else "")
+    prefetch = _rag_prefetch.prefetch_applies(repo_root)
+    rag_block_marker = _RAG_BLOCK_MARKER if prefetch else ""
+    head = (
+        brief_prefix + _AGENT_DEFS_MARKER + _emit._BRIEF_PRECEDENCE_CLAUSE + (f"\n\n{_rag_line}" if _rag_line else "")
+        + rag_block_marker
+    )
     session_tail = _emit._dispatching_session_id_paragraph(session_id)
     _ue_clause = ue_engine_facts_clause(repo_root)
     ue_block = f"\n\n{_ue_clause}" if _ue_clause else ""
     _notes_text = _run_notes.brief_block(list(carried_notes)).rstrip("\n")
+    _notes_staged = stager is not None and len(_notes_text.encode("utf-8")) >= MIN_STAGE_BYTES
+    if stager is not None and _notes_staged:
+        stager(_REVISE_NOTES_STAGE, _notes_text)
+        _notes_text = _REVISE_NOTES_POINTER.format(path=f"{record_abs}/{PROMPTS_DIR}/{_REVISE_NOTES_STAGE}.md")
     notes_block = f"\n\n{_notes_text}" if _notes_text else ""
     if reviewer_fallbacks:
         notes_block += "\n\n## Reviewer routing fallback (name it in your run report)\n\n" + "\n".join(
@@ -5512,9 +5751,17 @@ def compose_ask_script(
     b.append(f"  const _crossRepoApproved = {'true' if cross_repo_approved else 'false'};")
     b.append("  let _planRel = null;")
     b.append("  " + PLAN_PATH_JS)
+    b.append(_sizing_plan_path_js(sizing_cited_plan(repo_root, sizing_rel), sizing_rel))
     b.append("  " + _PLAN_FOLLOW_JS)
     b.append("  let _gated = [];")
     b.append("  let _ragDegraded = [];")
+    b.append("  let _runRagUse = null;")
+    if prefetch:
+        b.append(f"  const _RAG_MARK = {json.dumps(_rag_prefetch.PREFETCH_BLOCK_MARK)};")
+        b.append(f"  const _RAG_CAP = {_rag_prefetch.PREFETCH_BLOCK_CHAR_CAP};")
+        b.append("  let _ragBlock = '';")
+        b.append("  " + _pipeline_compose._RAG_BOUND_JS.replace("\n", "\n  "))
+    b.append(_project_health_push_js(repo_root))
     b.append("  let _manifest = null;")
     b.append("  let _stagedManifest = null;")
     b.append(_ADMIT_MANIFEST_JS)
@@ -5541,7 +5788,8 @@ def compose_ask_script(
             head=head, anchor=anchor, script_path=script_path, repo_root=repo_root, run_id=run_id,
         ))
     b.append("  let _ledger = null;")
-    b.append(f"  const _reqText = {json.dumps(_requirement_texts_at_compose(ledger_abs))};")
+    b.append("  const _reqText = {};")
+    b.append(f"  const _RUN_FILES = {json.dumps({'requirements': ledger_rel, 'resume': f'{record_dir}/{RESUME_FILE}'})};")
     b.append(f"  {UNMET_ROWS_DETAIL_JS}")
     b.append(f"  {COMMIT_LEDGER_DETAIL_JS}")
     b.append(f"  const _pmVerbatimIds = {json.dumps(_pm_verbatim_row_ids(repo_root, sizing_rel))};")
@@ -5556,7 +5804,7 @@ def compose_ask_script(
         from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_DECLS, ROADMAP_STAGE_FN
 
         b.extend(ROADMAP_DECLS)
-        _rb_open, _rb_close = clause_shadow_parts(ROADMAP_STAGE_FN)
+        _rb_open, _rb_close = clause_shadow_parts(ROADMAP_STAGE_FN, rag_block=prefetch)
         if em_brief:
             _rb_open += "\n    const _askAgent = agent;"
         b.extend([_rb_open, rb_fn, _rb_close])
@@ -5572,7 +5820,7 @@ def compose_ask_script(
         f"{_lit(ledger_clause_text.format(ledger=ledger_abs) + (chr(10) * 2 + _notes_text if _notes_text else '') + chr(10) * 2 + source_memo_clause)};"
     )
     if blitz_fn:
-        b.append(_ledger_shadowed(blitz_fn, em_brief=bool(em_brief)))
+        b.append(_ledger_shadowed(blitz_fn, em_brief=bool(em_brief), rag_block=prefetch))
     runner_js = _row_runner_js()
     if em_brief:
         if runner_js.count(_ROW_VERIFY_PROMPT_OPEN) != 1:
@@ -5739,6 +5987,29 @@ def compose_ask_script(
             "    await _adoptStageReply({ manifest_handle: _STAGED_INLINE.full_handle ?? _STAGED_INLINE.handle });\n"
             "  }"
         )
+    if prefetch:
+        _prefetch_work = (
+            f"the accepted sizing at {sizing_rel}"
+            if sizing_rel and intake is None
+            else "the ask:\n" + (prompt or str((intake or {}).get("intent") or ""))
+        )
+        _prefetch_call = _agent(
+            prompt_of(_pipeline_compose._RAG_PREFETCH_TASK + _prefetch_work),
+            label=_pipeline_compose.RAG_PREFETCH_PHASE, phase=_pipeline_compose.RAG_PREFETCH_PHASE,
+            agent_type=_pipeline_compose.RAG_PREFETCH_AGENT_TYPE, schema=_RAG_PREFETCH_SCHEMA,
+            run_id=run_id, stage_as="rag-prefetch", stager=stager,
+        )
+        b.append(f"  phase({_lit(_pipeline_compose.RAG_PREFETCH_PHASE)});")
+        b.append(
+            ("  if (!_STAGED_RESUME) {\n" if launcher_child else "  {\n")
+            + "    try {\n"
+            f"      const _ragReply = await {_prefetch_call};\n"
+            "      _ragBlock = _ragBound(_ragReply?.citations ?? '');\n"
+            "    } catch (err) {\n"
+            "      log('rag-prefetch failed, run continues without the block: ' + String((err && err.message) ?? err));\n"
+            "    }\n"
+            "  }"
+        )
     if sized_in_run:
         if launcher_child:
             b.append("  let _scouted = null;")
@@ -5873,7 +6144,8 @@ def compose_ask_script(
             + near_ruling_block
             + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
             f"(`{_INVOKE} baton.pm_turns`) for the prior ones; the EM brief, when present, may note "
-            "which prior turns are pertinent."
+            "which prior turns are pertinent. The newest PM turn is the live chat, not this run's ask: "
+            "the run's recorded ask files (`state/warp/<run>/pm-intent.md`, `relayed-ask.md`, `requirements.md`) outrank it."
         )
         # The ask remains a dynamic operand outside the staged instructions.
         scout_ask = "js:(" + _cat(
@@ -6106,6 +6378,8 @@ def compose_ask_script(
         if launcher_child:
             b.append("  }")
 
+    if sized_in_run:
+        b.append(_stage_rag_gate_js("sizing"))
     b.append("  phase('gate');")
     _arms_js = (
         f"(_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
@@ -6408,6 +6682,8 @@ def compose_ask_script(
         f"&& _gate.{RESUME_PHASES_FIELD}.reuse.includes(n);\n"
         f"  const _phaseVerdict = (n) => _gate.{RESUME_PHASES_FIELD}?.verdicts?.[n] ?? null;"
     )
+    judged_identity = _judged_work_identity(repo_root, run_id, writes, prior_run_ids)
+    b.append(f"  let _legStale = {json.dumps(judged_identity['stale'])};")
     b.append(f"  const _resumeLedger = !_halted && !!{_rl0};")
     b.append(
         f"  const _ledgerUnlanded = _resumeLedger ? ({_rl0}.{RESUME_LEDGER_UNLANDED_FIELD} ?? []) : [];"
@@ -6418,15 +6694,16 @@ def compose_ask_script(
     b.append(
         f"  const _ledgerUnserved = _resumeLedger && (({_rl0}.{RESUME_LEDGER_UNSERVED_FIELD} ?? []).length > 0);"
     )
+    b.append(f"  const _pivotResume = _resumeLedger && {_rl0}.{RESUME_LEDGER_PIVOT_FIELD} === true;")
     b.append(
-        f"  const _ledgerOwes = (_resumeLedger && ((_gate.arm === {_lit(ARM_M_PLUS)}"
+        f"  const _ledgerOwes = _pivotResume || (_resumeLedger && ((_gate.arm === {_lit(ARM_M_PLUS)}"
         f" && (({_rl0}.blocking ?? [])"
         f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0)"
         f" && ({_rl0}.{RESUME_LEDGER_LEG_FIELD}?.action !== {_lit(LEG_SKIP)})))"
         f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0)) || _ledgerUnserved;"
     )
     b.append(
-        f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length || _ledgerDerived.length) {{ _ledgerExec = true; }} "
+        f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (!_pivotResume && (_ledgerUnlanded.length || _ledgerDerived.length)) {{ _ledgerExec = true; }} "
         "else if (!_ledgerOwes) { _xsTail = true; } "
         f"if (_gate.arm === {_lit(ARM_S)} && !_xsTail) {{ _gate = {{ ..._gate, resume_plan: _planRel }}; }} }}"
     )
@@ -6478,8 +6755,10 @@ def compose_ask_script(
                 "js:_planRel",
                 " IN PLACE with Edit -- never scaffold a new plan, never change its path -- adding one new row, "
                 "disposition open, per piece of owed work, each with bounded declared `writes` covering the "
-                "paths the work lies on and a done condition that is a runnable check. Do not edit, reopen or "
-                "remove any existing row: the rows that landed stay landed." + _EDIT_IN_PLACE_NO_REREAD,
+                "paths the work lies on and a done condition that is a runnable check. ",
+                f"js:({rl}?.{RESUME_LEDGER_PIVOT_FIELD} === true ? {_lit(_LEDGER_REPLAN_PIVOT_CLAUSE)} "
+                f": {_lit(_LEDGER_REPLAN_ADD_ONLY_CLAUSE)})",
+                _EDIT_IN_PLACE_NO_REREAD,
                 _carried_outputs_part("_planRel"),
                 " Return the plan's repo-relative "
                 "path as plan_rel and the ids of exactly the rows you added as added_rows. Commit nothing. ",
@@ -6498,10 +6777,14 @@ def compose_ask_script(
                         "once, <params> being the JSON object ",
                         "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, "
                         "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, ledger_resume: true, "
+                        f"...({rl}?.{RESUME_LEDGER_PIVOT_FIELD} === true ? {{ pivot_resume: true }} : {{}}), "
                         f"...(({rl}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length ? {{ claim_register_rows: true }} : {{}}), "
                         "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
                         " with only_rows set to the ids of exactly the rows you added",
                         f"js:({unlanded}.length ? ' together with these unlanded rows: ' + JSON.stringify({unlanded}) : '')",
+                        f"js:({rl}?.{RESUME_LEDGER_PIVOT_FIELD} === true ? ' (on this pivot resume, drop from that unlanded list "
+                        "every row you deleted and add the ids you deleted, which the stage reports retired; stage "
+                        "also when you only deleted rows)' : '')",
                         ", and return its JSON reply "
                         "verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). When you added no row, "
                         f"stage nothing and return stage_reply null.{session_tail}",
@@ -6543,9 +6826,11 @@ def compose_ask_script(
             "_ledgerAdded = (Array.isArray(_replanned?.added_rows) ? _replanned.added_rows : [])"
             ".filter((s) => typeof s === 'string' && s.trim()); } "
             f"while (!_ledgerAdded.length && _unclaimedOwed && _try < {MAX_IN_RUN_REMEDY_ATTEMPTS}); "
-            "if (_ledgerAdded.length) { _ledgerExec = true; "
+            "const _ledgerRetired = _pivotResume && Array.isArray(_replanned?.retired_rows) "
+            "? _replanned.retired_rows.filter((s) => typeof s === 'string' && s.trim()) : []; "
+            "if (_ledgerAdded.length || _ledgerRetired.length) { _ledgerExec = true; "
             "await _adoptStageReply(_replanned?.stage_reply); } "
-            "else { if (!_ledgerUnlanded.length) { _xsTail = true; } "
+            "else { if (!_ledgerUnlanded.length) { _xsTail = true; } else if (_pivotResume) { _ledgerExec = true; } "
             "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; "
             f"if (_unclaimedOwed && !_ledgerUnserved) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             f"reason: {_lit(REGISTER_ROWS_UNCLAIMED_REFUSAL)} + ': register row(s) ' + JSON.stringify({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD}) "
@@ -6630,7 +6915,7 @@ def compose_ask_script(
         "js:_sizingRel",
         f": scaffold it with `{DOC_NEW_CMD} --type plan --sizing-object <that sizing path> --title "
         "\"<title>\" --out ",
-        "js:_planPathFor(_sizingRel)",
+        f"js:{_SIZING_PLAN_PATH_FN}()",
         "` (that launcher, never `python3` on the "
         "script; never author the frontmatter block by hand), then change its existing `scope_mode:` line to `spec-dispatch`, derive its "
         "spine from the sizing, then FILL the "
@@ -7027,7 +7312,7 @@ def compose_ask_script(
 
         b.append(
             f"    if (!_planRel) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
-            f"reason: {_no_ready_reason_js('(_blitz?.regate ?? _blitz)?.pulled')}, blitz: _blitz, sizing: _sizingRel, run_id: _runId }};"
+            f"reason: {_no_ready_reason_js('(_blitz?.regate ?? _blitz)?.pulled')}, blitz: _blitz, {_PIVOT_HALT_SPREAD_JS}sizing: _sizingRel, run_id: _runId }};"
         )
         b.append(
             "    const _driftPull = [...(_blitz?.regate?.pulled ?? []), ...(_blitz?.pulled ?? [])].find((p) => p && p.planPath "
@@ -7064,13 +7349,13 @@ def compose_ask_script(
             f"    if (_replanCapped && !_pullSplit && !_halted.next_action) {{ _halted = {{ halted: {_lit(HALT_RESEARCH)}, "
             f"reason: 'plan pulled {REPLAN_ATTEMPT_CAP} times: research before another round', "
             "blocking: _pullFindings, plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
-            "fire: [_researchFire()], blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
+            "fire: [_researchFire()], blitz: _blitz, " + _PIVOT_HALT_SPREAD_JS + "sizing: _sizingRel, run_id: _runId }; }"
         )
         b.append(
             "    if (_pullSplit && !_halted.next_action) { _halted = { halted: "
             f"{_lit(HALT_SPLIT)}, reason: 'plan-blitz pulled the plan with ' + _pullBlocking + ' blocking findings: split into smaller batons', "
             "plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
-            "blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
+            "blitz: _blitz, " + _PIVOT_HALT_SPREAD_JS + "sizing: _sizingRel, run_id: _runId }; }"
         )
         b.append(
             "    else if (_pullPlan && !_halted.next_action) { _halted = { ..._halted, "
@@ -7111,6 +7396,7 @@ def compose_ask_script(
             stop_after=stop_after,
         ))
 
+    b.append(_stage_rag_gate_js("plan"))
     if stop_after:
         b.append(
             f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && _planRel) {{ _halted = {{ halted: {_lit(HALT_PARKED)}, "
@@ -7138,6 +7424,7 @@ def compose_ask_script(
                 carried=_carried_titles(b),
                 blitz_phases=blitz_phases,
                 review_titles=[],
+                lead=[_pipeline_compose.RAG_PREFETCH_PHASE] if prefetch else [],
                 through_plan=True,
             ),
             chatty=bool((plan_blitz_args or {}).get("chatty")),
@@ -7179,6 +7466,7 @@ def compose_ask_script(
         b.append("  let _falsifierSpec = null;")
     b.append("  let _allLanded = false;")
     b.append("  let _memoCloseOnly = false;")
+    b.append("  let _emptyStageResume = false;")
     b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")
     # Stage is folded into the last act of the agent that closes the gate, plan or plan-blitz ready
@@ -7257,6 +7545,15 @@ def compose_ask_script(
         f"&& !(_manifest.gated ?? []).length && Array.isArray(_manifest.{MEMO_CLOSE_KEY}) && _manifest.{MEMO_CLOSE_KEY}.length) "
         "{ _memoCloseOnly = true; _allLanded = true; _xsTail = true; }"
     )
+    # A resumed halted run that stages no row but has rulable ledger rows takes the verify-and-land tail:
+    # `land_run` credits rows whose met_by paths HEAD already holds (`met_by_paths_at_head_credit`) and an
+    # unmet row still refuses at the ledger gate.
+    b.append(
+        f"  if ({'true' if _run_resumed(repo_root, run_id, prior_run_ids) else 'false'} && !_manifest.error "
+        "&& !(_manifest.rows ?? []).length && !(_manifest.owed ?? []).length && !(_manifest.gated ?? []).length "
+        "&& !_allLanded && !_resumeLedger && Array.isArray(_manifest.rulable_ids) && _manifest.rulable_ids.length) "
+        "{ _emptyStageResume = true; _allLanded = true; _xsTail = true; }"
+    )
     b.append(
         f"  if (_manifest.error && /^(?:stage refused: )?{STAGE_REFUSAL_PREFIX}/.test(String(_manifest.error))) {{ _halted = {{ "
         f"halted: {_lit(HALT_DESIGN_REVIEW)}, kind: {_lit(HALT_DESIGN_REVIEW)}, reason: String(_manifest.error), "
@@ -7295,7 +7592,9 @@ def compose_ask_script(
     _prior_runs = tuple(dict.fromkeys(
         [*prior_run_ids, *(str(e["run"]) for e in carried_notes if e.get("run") and e["run"] != run_id)]
     ))
-    _checklist_js = _revise_checklist_js(carried_notes, _revise_register_rows(repo_root, run_id, _prior_runs))
+    _checklist_js = _revise_checklist_js(
+        carried_notes, _revise_register_rows(repo_root, run_id, _prior_runs), notes_staged=_notes_staged,
+    )
     if _checklist_js:
         b.append("  let _reviseGaps = [];")
     b.append("  let _lateIds = [];")
@@ -7356,7 +7655,7 @@ def compose_ask_script(
     if _checklist_js:
         b.append(_checklist_js)
     row_prompt = _cat(
-        f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(_emit._with_example_retrieval_repo_line(preamble, repo_root))}{ue_block}\n\n{anchor}\n\n",
+        f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(_emit._with_example_retrieval_repo_line(preamble, repo_root))}{rag_block_marker}{ue_block}\n\n{anchor}\n\n",
         *(["js:_reviseChecklist(r)"] if _checklist_js else []),
         "Your brief is the file ",
         "js:r.brief_path",
@@ -7525,6 +7824,7 @@ def compose_ask_script(
     )
     if objective_cfg is not None:
         b.append("  await _objectiveGate();")
+    b.append(_STAGE_RAG_GATE_JS)
 
     review_text = _single_exit_review(
         [
@@ -7613,6 +7913,7 @@ def compose_ask_script(
         + review_text + "\n  _footprintReviewed = true;\n  }"
     )
     b.append("  }")
+    b.append(_stage_rag_gate_js("review"))
     b.append(
         "  if (_reviewSeed.length && Array.isArray(_reviewWave)) { const _rerun = new Set(_reviewWave.filter(Boolean).map((w) => w.slice_id)); "
         "_reviewWave = [..._reviewSeed.filter((w) => !_rerun.has(w.slice_id)), ..._reviewWave]; }"
@@ -7785,6 +8086,7 @@ def compose_ask_script(
     verify_tests_call = _verify_tests_call(
         head=head, anchor=anchor, run_id=run_id, stager=stager, agent_type_host=agent_type_host,
         repo_root=repo_root, out_path=f"{record_abs}/test-leg.json", base_sha=run_base_sha,
+        judged=judged_identity,
         test_js=_test_instruction_js(
             run_base_sha or "HEAD", repo_root,
             export_command=engine_module_command(
@@ -7792,7 +8094,9 @@ def compose_ask_script(
             ),
         ),
     )
-    verify_host_params = json.dumps({"base": run_base_sha or "", "out_path": f"{record_dir}/test-leg.json"})
+    verify_host_params = json.dumps(
+        {"base": run_base_sha or "", "out_path": f"{record_dir}/test-leg.json", "judged": judged_identity}
+    )
     verify_tests_call = (
         "(typeof engineOp === 'function' && engineOp.directRun && !_lateIds.length && !_verifyLateIds.length"
         " ? engineOp('verify.host_test_leg', "
@@ -8016,7 +8320,8 @@ def compose_ask_script(
         "    const _ledgerBlocking = (l) => (l?.items ?? []).filter((i) => {\n"
         "      if (!i || _emContextIds.includes(i.id) || i.foreign_only === true) return false;\n"
         "      if (i.status === 'not_met' && Array.isArray(i.owed_by) && i.owed_by.length "
-        "&& i.owed_by.every((id) => (_manifest?.owed ?? []).some((o) => o.id === id))) return false;\n"
+        "&& i.owed_by.every((id) => [...(_manifest?.owed ?? []), ...(_manifest?.gated ?? []), ...(_manifest?.slot_withheld ?? [])]"
+        ".some((o) => o.id === id))) return false;\n"
         "      const rem = Array.isArray(i.remaining) ? i.remaining : [];\n"
         "      const status = i.status === 'not_met' && rem.length && rem.every((a) => _postCommitActs.includes(a)) "
         "? 'post_commit' : i.status;\n"
@@ -8101,7 +8406,7 @@ def compose_ask_script(
         f": (_ledger ? [..._ledgerBlocking(_ledger), ..._missingIds.map((id) => ({{ id, status: {_lit(VERIFY_ITEM_MISSING)}, evidence: {_lit(VERIFY_ITEM_MISSING + ': schema violation, the verify reply held no item for this owed row after one re-ask; the row was not judged and judge.status never credits it')} }}))] : []), "
         f"...(_emptyVerdict ? {{ {VERIFY_LEG_EMPTY.replace('-', '_')}: true }} : {{}}), "
         f"...(_missingIds.length ? {{ missing_item_ids: _missingIds }} : {{}}), "
-        f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
+        f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, {_PIVOT_HALT_SPREAD_JS}sizing: _sizingRel, run_id: _runId, "
         f"{HALT_PLAN_FIELD}: _planRel, {SELF_CORRECTION_FIELD}: _ledgerSc, "
         "next_action: _allOwed ? 'Everything left is EM or operator work: ' + _owedNamed.join('; ') "
         "+ '. Perform each, record it (em-performed: plan.tasks.mutate verb em-discharge; operator: verb resolve, "
@@ -8306,6 +8611,11 @@ def compose_ask_script(
         f"{{ _nextAction.params.{TERMINAL_RESUME_LEDGER_PARAM}.blocking = "
         f"_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_BLOCKING_FIELD}; }} }}"
     )
+    b.append(
+        f"  if (_nextAction.params && _emptyStageResume) {{ _nextAction.params.{TERMINAL_RESUME_LEDGER_PARAM} = "
+        f"{{ run_id: _runId, blocking: _manifest.rulable_ids, {RESUME_LEDGER_NOTES_FIELD}: [], "
+        f"{RESUME_LEDGER_REMAINING_FIELD}: {{}}, {EMPTY_STAGE_RESUME_FIELD}: true }}; }}"
+    )
     # A review agent may return a sidecar as an absolute Windows path; the commit command must carry
     # repo-relative forward slashes only, or a re-escaping commit agent corrupts the JSON.
     b.append(
@@ -8324,6 +8634,13 @@ def compose_ask_script(
             script_path=script_path,
         )
         _append_halt_record_commit(b)
+    b.append(
+        "  if (_runId && typeof engineOp === 'function') {\n"
+        f"    try {{ const _ru = await engineOp({_lit(_OP_RUN_RAG_USE)}, {{ run_id: _runId, session_id: _SESSION_ID, repo_root: REPO_ROOT }}); "
+        "_runRagUse = (_ru && typeof _ru.rag_use === 'object') ? _ru.rag_use : null; }\n"
+        "    catch (e) { log('run rag use threw: ' + String((e && e.message) ?? e)); }\n"
+        "  }"
+    )
     b.append("  _refireNextAction();")
     b.append(
         f"  return {{ arm: _gate.arm, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, {_ROUTE_VERDICT_KEY}: _gate?.{_ROUTE_VERDICT_KEY} ?? null, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
@@ -8339,7 +8656,7 @@ def compose_ask_script(
         f"owed_next_action: {_owed_handback_js(sizing_rel)} || _haltNextActionText() || null, "
         "blocked: _blockedChunks, held_by: _heldBy, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, halt_commit: _haltCommit, "
-        "rag_degraded: _ragDegraded, "
+        "rag_degraded: _ragDegraded, rag_use: _runRagUse, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration, reverify: _reviewReverify, "
         f"receipt: 'review: ' + {_VERDICT_COUNT_JS} + ' verdicts' }}, "
@@ -8371,6 +8688,7 @@ def compose_ask_script(
             carried=_carried_titles(b),
             blitz_phases=blitz_phases,
             review_titles=review_titles,
+            lead=[_pipeline_compose.RAG_PREFETCH_PHASE] if prefetch else [],
             extra=[
                 *(["xl-exit"] if accept_pending or sized_in_run else []),
                 *(["roadmap-blitz", *rb_phases] if rb_fn else []),
@@ -8793,8 +9111,32 @@ def _pure_research_chain_js(
         f"&& typeof {sibling} === 'string' && {sibling} !== '' "
         "&& Array.isArray(_halted.fire) && _halted.fire.length > 0"
     )
+    close_guard = f"typeof {sibling} === 'string' && {sibling} !== '' && {CLOSE_REFIRE_ADVANCES_JS}"
+    return "\n".join(
+        _research_leg_js(g, what=what, sibling=sibling, head=head, anchor=anchor, run_id=run_id,
+                         launcher_child=launcher_child, stop_after=stop_after, chain_final=chain_final)
+        for g, what in ((guard, "the research run"), (close_guard, "the next stage of the research run"))
+    )
+
+
+#: JS predicate: `_halted` is a research.close `criterion_not_met` halt whose refire `next_action.fire` advances the chain.
+#: `next_stage` must name a stage other than `closed_stage`: a refire that reruns the closed stage halts again forever,
+#: so a halt naming neither (or the same) stage returns to the caller unchained.
+CLOSE_REFIRE_ADVANCES_JS = (
+    f"(_halted?.halted === {_lit(HALT_CRITERION_NOT_MET)} && _halted.next_action !== null "
+    "&& typeof _halted.next_action === 'object' && typeof _halted.next_action.fire === 'string' "
+    "&& _halted.next_action.fire !== '' && typeof _halted.next_action.next_stage === 'string' "
+    "&& _halted.next_action.next_stage !== '' && _halted.next_action.next_stage !== _halted.closed_stage)"
+)
+
+
+def _research_leg_js(
+    guard: str, *, what: str, sibling: str, head: str, anchor: str, run_id: str, launcher_child: bool,
+    stop_after: Optional[str], chain_final: bool,
+) -> str:
+    """One chain leg over `guard`, in the final, launcher-child or in-run shape `_pure_research_chain_js` documents."""
     if chain_final:
-        return _chain_final_research_js(guard, "the research run")
+        return _chain_final_research_js(guard, what)
     if launcher_child:
         return (
             f"  if ({guard}) {{ return {{ {CHAIN_HANDOFF_KEY}: {_chain_emit_params_js(sibling, research=True, stop_after=stop_after)}, "
@@ -8806,7 +9148,7 @@ def _pure_research_chain_js(
             sizing_js=sibling, head=head, anchor=anchor, run_id=run_id, research=True, stop_after=stop_after,
             fallback_extra_js=f", sizing: {sibling}",
         ),
-        "    _halted = { ..._halted, chain_error: 'the research run did not chain in-run (' + _why + '): fire it from halted_by.fire' };",
+        f"    _halted = {{ ..._halted, chain_error: '{what} did not chain in-run (' + _why + '): fire it from halted_by.fire' }};",
         "  }",
     ]
     return "\n".join(lines)
@@ -9107,6 +9449,152 @@ def _share_pure_exprs(script: str) -> str:
     return script[:at] + "".join(decls) + script[at:]
 
 
+_BODY_BLOCK_FN = "_BB"
+#: Smallest decoded block (UTF-8 bytes) one `_BBn` const may name; under the stage floor because the unhoisted
+#: shape has no staging sink to fall back on.
+_BODY_BLOCK_MIN_BYTES = 200
+#: A body block ends at a newline or at a sentence end (`. `).
+_BODY_BOUNDARY = re.compile(r"(?<=\n)|(?<=\. )")
+_BODY_WORDS_BEFORE_OPERAND = frozenset({"return", "else", "case", "yield", "in", "of", "do", "throw"})
+
+
+def _body_literal(text: str) -> str:
+    """``text`` as a single-quoted literal, spelling `\\n`, `\\t` and `\\r` as the composer does."""
+    esc = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
+    return f"'{esc}'"
+
+
+def _body_template(text: str) -> str:
+    """``text`` as the body of a template literal.
+
+    Trap: a const that spells a single-quoted literal would be rewritten by `_hoist_invoke` into an operand declared
+    after it; a template is never touched there, so the const reads no later const.
+    """
+    esc = text.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+    return esc.replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
+
+
+def _body_operand_wrap(script: str, s: int, e: int, *, single: bool = False) -> Optional[bool]:
+    """Whether a `+` chain standing in for the run ``script[s:e]`` needs parentheses (True), none (False), or the run stays (None).
+
+    The chain binds like the run only beside a looser operator or a delimiter; an object key, and a run opening
+    a statement that would need the parentheses, are left alone. ``single`` is one bare name, which binds like the run anywhere a value stands.
+    """
+    i = s
+    while i > 0 and script[i - 1] in " \t\n":
+        i -= 1
+    prev = script[i - 1] if i else ""
+    j = e
+    while j < len(script) and script[j] in " \t\n":
+        j += 1
+    nxt = script[j : j + 2]
+    if prev and (prev.isalnum() or prev in "_$"):
+        k = i
+        while k > 0 and (script[k - 1].isalnum() or script[k - 1] in "_$"):
+            k -= 1
+        before_ok = script[k:i] in _BODY_WORDS_BEFORE_OPERAND
+    else:
+        before_ok = prev in "(,[={:?+&|>;}"
+    if nxt[:1] == ":" and prev in ("{", ","):
+        return None
+    after_ok = nxt[:1] in ",)]};:+" or nxt in ("&&", "||")
+    if single or (before_ok and after_ok):
+        return False
+    return None if prev in ";}" else True
+
+
+def _share_body_blocks(script: str) -> str:
+    """Declare each run of static body text that two or more single-quoted literal runs share once, as a `_BBn` template const ahead of the manifest marker line, and cut every copy to the name.
+
+    A run is cut into blocks at each newline and sentence end; adjacent blocks the script repeats the same number of
+    times are one unit, so a repeated paragraph costs one name. A unit shorter than `_BODY_BLOCK_MIN_BYTES`, one
+    whose saving is negative, and a run with an escape `_decode` does not know stay as written. The resolved string
+    of every run is unchanged; the pass reads no staging setting.
+
+    Trap: with the fragment hoist on, `hoist_repeated_fragments` runs after this pass and already names every
+    repeat; running first only pre-empts it with coarser blocks (the production m_plus arms grow), so the pass
+    is the unhoisted shape's hoist and returns the script untouched when `HOIST_ENABLED`.
+    """
+    marker = script.find(ASK_MANIFEST_MARKER)
+    if marker < 0 or _prompt_fragments.HOIST_ENABLED:
+        return script
+    at = script.rfind("\n", 0, marker) + 1
+    runs: list[tuple[int, int, list[str]]] = []
+    for run in literal_runs(script):
+        s, e = run[0][0], run[-1][1]
+        texts = [_decode_literal(script[a + 1 : b - 1]) for a, b in run]
+        if s < at or any(t is None for t in texts):
+            continue
+        text = "".join(texts)  # type: ignore[arg-type]
+        if len(text.encode("utf-8")) >= _BODY_BLOCK_MIN_BYTES:
+            runs.append((s, e, [c for c in _BODY_BOUNDARY.split(text) if c]))
+    chunk_n = Counter(c for _, _, cs in runs for c in cs)
+
+    def units(cs: list[str]) -> list[list[str]]:
+        out: list[list[str]] = []
+        for c in cs:
+            if out and chunk_n[out[-1][-1]] == chunk_n[c]:
+                out[-1].append(c)
+            else:
+                out.append([c])
+        return out
+
+    def worth(text: str, n: int) -> bool:
+        size = len(text.encode("utf-8"))
+        return size >= _BODY_BLOCK_MIN_BYTES and n >= 2 and n * (size - 13) - (size + 16) > 0
+
+    split = [(s, e, units(cs)) for s, e, cs in runs]
+    block_n = Counter("".join(u) for _, _, us in split for u in us if chunk_n[u[0]] >= 2)
+    picked = {t: n for t, n in block_n.items() if worth(t, n)}
+    left_n: Counter[str] = Counter()
+    for _, _, us in split:
+        for u in us:
+            if chunk_n[u[0]] >= 2 and "".join(u) not in picked:
+                left_n.update(u)
+    picked.update({t: n for t, n in left_n.items() if t not in picked and worth(t, n)})
+    if not picked:
+        return script
+    names = {
+        t: f"{_BODY_BLOCK_FN}{k}"
+        for k, t in enumerate(sorted(picked, key=lambda t: (-picked[t] * (len(t.encode("utf-8")) - 13), t)))
+    }
+    used: Counter[str] = Counter()
+    out: list[str] = []
+    last = 0
+    for s, e, us in split:
+        pieces: list[tuple[bool, str]] = []
+        for u in us:
+            whole = "".join(u)
+            parts = [whole] if whole in names else u if chunk_n[u[0]] >= 2 else [whole]
+            for part in parts:
+                if part in names:
+                    pieces.append((True, names[part]))
+                elif pieces and not pieces[-1][0]:
+                    pieces[-1] = (False, pieces[-1][1] + part)
+                else:
+                    pieces.append((False, part))
+        if not any(is_ref for is_ref, _ in pieces):
+            continue
+        expr = " + ".join(v if is_ref else _body_literal(v) for is_ref, v in pieces)
+        wrap = _body_operand_wrap(script, s, e, single=len(pieces) == 1)
+        if wrap is None:
+            continue
+        if wrap:
+            expr = f"({expr})"
+        used.update(v for is_ref, v in pieces if is_ref)
+        out.append(script[last:s])
+        out.append(expr)
+        last = e
+    if not out:
+        return script
+    out.append(script[last:])
+    decls = "".join(
+        f"const {name} = `{_body_template(text)}`;\n" for text, name in sorted(names.items(), key=lambda kv: kv[1]) if used[name]
+    )
+    body = "".join(out)
+    return body[:at] + decls + body[at:]
+
+
 _REFIRE_FN = "_refireCmd"
 
 
@@ -9168,7 +9656,7 @@ def _share_brief_precedence(script: str) -> str:
     """
     text = _lit(_emit._BRIEF_PRECEDENCE_CLAUSE)[1:-1]
     head, tail = text[:_PRECEDENCE_HEAD_LEN], text[_PRECEDENCE_HEAD_LEN:]
-    if "`" in tail or "${" in tail or "\\" in head:
+    if "${" in tail or "\\" in head:
         return script
     spans = [(s, e) for s, e in _prompt_fragments._scan_literals(script) if script[s] == "'" and text in script[s:e]]
     if len(spans) < 2:
@@ -9185,7 +9673,7 @@ def _share_brief_precedence(script: str) -> str:
     out.append(script[last:])
     body = "".join(out)
     at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
-    return body[:at] + f"const {_PRECEDENCE_TAIL_FN} = `{tail}`;\n" + body[at:]
+    return body[:at] + f"const {_PRECEDENCE_TAIL_FN} = `{tail.replace(chr(96), chr(92) + chr(96))}`;\n" + body[at:]
 
 
 _SLOT_MARK = "\u2063"
@@ -9425,6 +9913,7 @@ def _finish_script(
     script = _share_locate_plan(script)
     script = _share_regex_literals(script)
     script = _share_pure_exprs(script)
+    script = _share_body_blocks(script)
     script = _hoist_invoke(script)
     script = _hoist_stage(script)
     total = len(script.encode("utf-8"))

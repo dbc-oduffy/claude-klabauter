@@ -151,3 +151,68 @@ def test_reap_never_raises_when_the_peers_file_is_unreadable(user, tmp_path):
     peers_file(tmp_path).write_text("{not json")
     hook = sess.load_sibling("unimatrix-codex-hook-sessionstart")
     assert sess.reap_dead_peers(hook, peers_file(tmp_path)) == []
+
+
+router = load("unimatrix-peer-router")
+
+
+@pytest.fixture
+def live_agy(monkeypatch):
+    """Every leg record reads live, every agy session alive, every presence lock held."""
+    class Liveness:
+        @staticmethod
+        def agy_session_state(conv, rec):
+            return "alive"
+    monkeypatch.setattr(router, "leg_record_live", lambda rec: True)
+    monkeypatch.setattr(router, "lock_held", lambda path: True)
+    monkeypatch.setattr(router, "_liveness", lambda: Liveness)
+
+
+def discover(tmp_path):
+    presence = tmp_path / "presence"
+    presence.mkdir(exist_ok=True)
+    r = router.Router([], sessions_dir=tmp_path / "s", state_dir=tmp_path / "st", endpoint_dir=tmp_path / "e",
+                      adapters={"agy": None}, legs_dir=legs(tmp_path), presence_dir=presence)
+    return r._live_discovered()
+
+
+def agy_names(found):
+    return sorted(n for n, p in found.items() if p.get("target") == CONV)
+
+
+def test_a_leg_cwd_in_a_repo_names_exactly_one_face_stable_across_a_router_restart(user, tmp_path, live_agy):
+    repo = user / "projrepo"
+    (repo / ".git").mkdir(parents=True)
+    sub = repo / "scratch" / "agy-proof"
+    sub.mkdir(parents=True)
+    write_leg(tmp_path, CONV, cwd=str(sub))
+    (tmp_path / "presence").mkdir()
+    (tmp_path / "presence" / f"{CONV}.lock").write_text("")
+    first, second = agy_names(discover(tmp_path)), agy_names(discover(tmp_path))
+    assert len(first) == 1 and first[0].startswith("agy-projrepo-") and first[0].endswith("-on-" + router.readable_peer_name("agy", CONV).rsplit("-on-", 1)[1])
+    assert first == second
+
+
+@pytest.mark.parametrize("sub", ["config", ""])
+def test_a_config_home_cwd_never_names_a_face_agy_config(user, tmp_path, live_agy, sub):
+    cfg = user / ".gemini" / sub if sub else user / ".gemini"
+    write_leg(tmp_path, CONV, cwd=str(cfg))
+    found = discover(tmp_path)
+    assert len(agy_names(found)) == 1
+    name = agy_names(found)[0]
+    assert "config" not in name and name == router.readable_peer_name("agy", CONV)
+    assert "cwd" not in found[name]
+
+
+def test_a_config_home_name_matches_the_no_cwd_name_so_no_second_face_appears(user, tmp_path, live_agy):
+    write_leg(tmp_path, CONV, cwd=str(user / ".gemini" / "config"))
+    (tmp_path / "presence").mkdir()
+    (tmp_path / "presence" / f"{CONV}.lock").write_text("")
+    assert len(agy_names(discover(tmp_path))) == 1
+
+
+def test_the_config_home_rule_is_agy_only_and_a_path_boundary(user):
+    cfg = str(user / ".gemini" / "config")
+    assert router.readable_peer_name("codex", CONV, cfg).startswith("codex-config-")
+    sibling = str(user / ".gemini-other" / "x")
+    assert router.readable_peer_name("agy", CONV, sibling).startswith("agy-x-")

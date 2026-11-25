@@ -538,7 +538,10 @@ def _seg_excluding_freetext_operands(seg: str) -> str:
             continue
         if any(tok.startswith(flag + "=") for flag in _FREETEXT_OPERAND_FLAGS):
             continue
-        kept.append(tok)
+        # A whitespace-bearing token (`git -C "my repo" push`) re-quoted, so the
+        # joined text re-tokenizes to the same argv; unquoted, `-C`'s operand
+        # splits and the subcommand resolves to the path's second word.
+        kept.append(shlex.quote(tok) if any(ch.isspace() for ch in tok) else tok)
     return " ".join(kept)
 
 
@@ -642,6 +645,22 @@ def _seg_resolved_git_subcommand(seg: str) -> Optional[str]:
         return None
     position = _git_argv_subcommand_position(tokens)
     return None if position is None else tokens[position]
+
+
+_GIT_PUSH_ARGV_RE = re.compile(
+    r"(?<![\w.\-])git(?:\.exe)?\b"
+    r"(?:[\s'\",\[\]()]+(?:-[Cc][\s'\",]*?(?:\"[^\"]*\"|'[^']*'|[^\s'\",\]]+)|--?(?:no-pager|paginate|p|P|bare|no-optional-locks|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-advice)\b"
+    r"|--(?:git-dir|work-tree|namespace|exec-path|config-env|super-prefix|attr-source)(?:=|[\s'\",]+)(?:\"[^\"]*\"|'[^']*'|[^\s'\",\]]+)))*"
+    r"[\s'\",\[\]()]+push\b"
+)
+
+
+def _seg_has_git_push_argv(seg: str) -> bool:
+    """True when `seg` carries `git [global opts] push` as adjacent argv words
+    (shell text, a subprocess list or a one-string spawn). The fallback for a
+    segment whose subcommand cannot be resolved positionally: a bare `push` or
+    `+word` elsewhere (a `python -c` program, a test selector) is not a push."""
+    return _GIT_PUSH_ARGV_RE.search(seg) is not None
 
 
 def _seg_forcing_form_scan_text(seg: str) -> str:
@@ -953,6 +972,18 @@ def _reset_ref_moving_mode(seg: str):
     return "--mixed"
 
 
+_GIT_DIR_OPERAND_SPAN_RE = re.compile(r"""(?<![\w.\-])(-[Cc])([ \t]+)(["'])([^"']*)\3""")
+
+
+def _glue_git_dir_operand_span(m: "re.Match[str]") -> str:
+    """Rewrite a whitespace-bearing quoted `-C`/`-c` operand (`git -C "my repo"
+    push`) to one whitespace-free word, so `_strip_ws_quoted_spans` keeps the
+    operand and subcommand resolution still skips it; erased, `-C` swallows
+    `push` and a forcing push goes unseen."""
+    flag, gap, quote, span = m.groups()
+    return flag + gap + quote + re.sub(r"[ \t\n]", "_", span) + quote
+
+
 def check_destructive_git_orphan(
     cmd: str,
     session_id: str = "",
@@ -1007,6 +1038,7 @@ def check_destructive_git_orphan(
     # spans this scanner needs to track quote state across). See
     # `_strip_shell_comments_for_prose_scan` for why this cannot widen.
     cmd = _strip_shell_comments_for_prose_scan(cmd)
+    cmd = _GIT_DIR_OPERAND_SPAN_RE.sub(_glue_git_dir_operand_span, cmd)
     cmd = _strip_ws_quoted_spans(cmd)
     # Restore quote chars sentinel-protected by `_strip_heredoc_bodies_for_
     # prose_scan` for KEPT heredoc-body lines, now that the whitespace-quoted-
@@ -1246,12 +1278,12 @@ def check_destructive_git_orphan(
         #
         # `resolved is None` (unparseable segment, no command-position
         # `git`, or an unrecognized global flag) deliberately falls back to
-        # the plain `\bpush\b` word match rather than skipping CHECK 2 --
+        # the adjacent `git [global opts] push` argv match rather than skipping CHECK 2 --
         # this is what keeps `TestCheck2ScriptableHeredocSpawnDetection`
         # failing CLOSED: a heredoc body's mangled shlex tokens (`subprocess
         # .run(['git', 'push', ...])`) never resolve a clean `git` command
         # position, so `resolved` is `None` there and CHECK 2 still examines
-        # the segment via the original word-match path.
+        # the segment via the adjacent-argv match (`_seg_has_git_push_argv`).
         _resolved_subcommand = _seg_resolved_git_subcommand(seg_check2)
         if _resolved_subcommand is not None:
             _is_push_candidate = _resolved_subcommand == "push"
@@ -1266,7 +1298,7 @@ def check_destructive_git_orphan(
             # against this segment's free-text operands.
             _is_push_candidate = False
         else:
-            _is_push_candidate = bool(re.search(r"\bpush\b", seg_check2))
+            _is_push_candidate = _seg_has_git_push_argv(seg_check2)
         if _is_push_candidate:
             _force_m = re.search(
                 r"(--force([^-=]|$)|(^|\s)-[a-zA-Z]*f[a-zA-Z]*(\s|$)|(^|[\s\"'])\+\S+)",
