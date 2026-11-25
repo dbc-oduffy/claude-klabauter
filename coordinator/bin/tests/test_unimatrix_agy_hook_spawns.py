@@ -24,7 +24,7 @@ def load(name):
 pre = load("unimatrix-agy-hook-pretool")
 launch = load("unimatrix-agy-hook-launch")
 CONV = "0cf351a3-6538-4a9b-814c-52b1b75a596c"
-posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="the leg-start rewrite is POSIX only; nt passes through")
+posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="asserts the sh (nohup) prefix; nt uses Start-Process")
 
 
 @pytest.fixture
@@ -65,10 +65,7 @@ def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
                        env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
     out = json.loads(r.stdout)
     assert r.returncode == 0 and out["decision"] == "allow"
-    if os.name == "nt":
-        assert "overwrite" not in out
-    else:
-        assert "overwrite" in out
+    assert "overwrite" in out  # nt too: the start rides the run_command shell, which holds the token
 
 
 def hook(stdin, home):

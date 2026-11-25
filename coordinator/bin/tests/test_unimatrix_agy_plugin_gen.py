@@ -326,6 +326,17 @@ def test_every_text_file_is_lf_and_order_is_sorted(plugin, tmp_path: Path) -> No
     assert raw == json.dumps(json.loads(raw), indent=2, sort_keys=True) + "\n"
 
 
+def test_snippets_dir_ships_so_plugin_root_snippet_citations_resolve(plugin, tmp_path: Path) -> None:
+    (plugin / "snippets").mkdir()
+    (plugin / "snippets" / "resolve-coordinator-bin.md").write_bytes(b"# resolve\r\n")
+    out = tmp_path / "out"
+    report = gen.generate(plugin, out, "agy")
+    assert (out / "snippets" / "resolve-coordinator-bin.md").read_bytes() == b"# resolve\n"
+    assert "snippets/resolve-coordinator-bin.md" in report["written"]
+    assert ("surface", "snippets") not in _unmapped(report)
+    assert ("surface", "extras") in _unmapped(report)
+
+
 def test_symlinks_in_source_are_not_followed_or_created(plugin, tmp_path: Path) -> None:
     try:
         (plugin / "agents" / "link.md").symlink_to(plugin / "agents" / "a-opus.md")

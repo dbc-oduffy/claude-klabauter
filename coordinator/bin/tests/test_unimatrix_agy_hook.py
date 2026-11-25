@@ -26,7 +26,7 @@ def load(name):
 pre = load("unimatrix-agy-hook-pretool")
 launch = load("unimatrix-agy-hook-launch")
 CONV = "0cf351a3-6538-4a9b-814c-52b1b75a596c"
-posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="the leg-start rewrite is POSIX only; nt passes through")
+posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="asserts the sh (nohup) prefix; nt uses Start-Process")
 
 
 class _NtOs:
@@ -179,10 +179,7 @@ def test_guard_down_current_leg_allows_without_overwrite(home, ls_server):
 def test_guard_down_stale_leg_allows_without_rewrite(home):
     out = pre.decide(run_payload(), 4242, str(home / "no-engine"))
     assert out["decision"] == "allow"
-    if os.name == "nt":
-        assert "overwrite" not in out
-    else:
-        assert "overwrite" in out
+    assert "overwrite" in out  # nt too: the start rides the run_command shell, which holds the token
 
 
 def test_guard_runs_for_non_run_command_tools(home, monkeypatch):
@@ -305,10 +302,7 @@ def test_entry_point_with_missing_engine_root_allows_without_rewrite(home):
                        env=dict(os.environ, COORDINATOR_SETTINGS_HOME=str(home)))
     out = json.loads(r.stdout)
     assert r.returncode == 0 and out["decision"] == "allow"
-    if os.name == "nt":
-        assert "overwrite" not in out
-    else:
-        assert "overwrite" in out
+    assert "overwrite" in out  # nt too: the start rides the run_command shell, which holds the token
 
 
 def hook(stdin, home):
@@ -373,57 +367,35 @@ def test_guard_deny_and_bootstrap_ask_survive_through_main(home, monkeypatch, ca
     assert out["decision"] == "ask" and out["overwrite"]["CommandLine"] == "START; ls -la"
 
 
-def test_windows_adds_no_cmd_prefix_and_passes_command_through(home, monkeypatch):
+def test_windows_prefix_is_a_hidden_start_process_of_the_launcher(monkeypatch):
+    as_windows(monkeypatch, pre)
+    monkeypatch.setattr(pre, "_console_python", lambda: r"C:\Program Files\Py's\python.exe")
+    start, sep = pre.launch_prefix(CONV, 4242)
+    assert sep == "; "
+    assert start.startswith("Start-Process -WindowStyle Hidden -FilePath 'C:\\Program Files\\Py''s\\python.exe' -ArgumentList ")
+    assert f"'--conversation','{CONV}','--agy-pid','4242'" in start
+    assert pre._ps_quote(str(pre.LAUNCH)) in start
+    assert "nohup" not in start
+
+
+def test_windows_run_command_is_rewritten_with_the_start_in_the_agy_shell(home, monkeypatch):
     as_windows(monkeypatch, pre)
     monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: None)
-    assert pre.launch_prefix(CONV, 7) is None
+    popen = []
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: popen.append(cmd))
     stub_guard(monkeypatch, {"decision": "ask"})
-    assert pre.decide(run_payload(cmd="Get-ChildItem | Select-Object -First 1"), 4242) == {"decision": "ask"}
+    out = pre.decide(run_payload(cmd="Get-ChildItem | Select-Object -First 1"), 4242)
+    line = out["overwrite"]["CommandLine"]
+    assert line.startswith("Start-Process -WindowStyle Hidden ") and line.endswith("; Get-ChildItem | Select-Object -First 1")
+    assert popen == []  # the hook process has no token: it never starts the launcher itself
 
 
-def test_windows_spawns_launcher_detached_when_leg_not_current(home, monkeypatch):
-    as_windows(monkeypatch, pre)
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    calls = []
-    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: calls.append((cmd, kw)))
-    stub_guard(monkeypatch, {"decision": "ask"})
-    payload = run_payload(cmd="Get-ChildItem | Select-Object -First 1")
-    assert pre.decide(payload, 4242) == {"decision": "ask"}
-    assert payload["toolCall"]["args"]["CommandLine"] == "Get-ChildItem | Select-Object -First 1"
-    (cmd, kw), = calls
-    assert cmd == [sys.executable, str(pre.LAUNCH), "--conversation", CONV, "--agy-pid", "4242"]
-    assert kw["stdout"] is subprocess.DEVNULL and kw["stdin"] is subprocess.DEVNULL
-    want = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    assert kw["creationflags"] & want == want
-    assert not kw["creationflags"] & 0x8  # DETACHED_PROCESS: every descendant opens a visible console
-
-
-def test_windows_second_run_command_within_debounce_window_spawns_nothing(home, monkeypatch):
-    as_windows(monkeypatch, pre)
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    calls = []
-    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))
-    stub_guard(monkeypatch, {"decision": "ask"})
-    pre.decide(run_payload(), 4242)
-    pre.decide(run_payload(cmd="dir"), 4242)
-    assert len(calls) == 1
-    stamp = home / "unimatrix" / "agy-legs" / f"{CONV}.spawned"
-    old = stamp.stat().st_mtime - pre.SPAWN_DEBOUNCE_S - 1
-    os.utime(stamp, (old, old))
-    pre.decide(run_payload(cmd="dir"), 4242)
-    assert len(calls) == 2
-
-
-def test_windows_does_not_spawn_when_leg_current(home, ls_server, monkeypatch):
+def test_windows_does_not_rewrite_when_leg_current(home, ls_server, monkeypatch):
     as_windows(monkeypatch, pre)
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
     monkeypatch.setattr(pre, "pid_alive", lambda pid: True)
-    calls = []
-    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))
     stub_guard(monkeypatch, {"decision": "ask"})
     assert pre.decide(run_payload(), 4242) == {"decision": "ask"}
-    assert calls == []
 
 
 def test_posix_prefix_still_rewrites(monkeypatch):
@@ -503,15 +475,14 @@ def test_launcher_windows_detaches_by_creationflags(monkeypatch):
     assert kw == {"creationflags": 0x200 | 0x08000000}
 
 
-def test_launcher_without_token_starts_pending_leg_with_discovered_ls(home, monkeypatch):
+def test_launcher_without_token_starts_pending_leg_with_no_ls_address(home, monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
     monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "")
     calls = []
     monkeypatch.setattr(launch.subprocess, "Popen", lambda cmd, **kw: calls.append((cmd, kw)) or FakeProc())
-    monkeypatch.setattr(launch, "discover_ls_address", lambda pid: f"127.0.0.1:{pid}")
     assert launch.main(["--conversation", CONV, "--agy-pid", "4444"]) == 0
     rec = json.loads(record_path(home).read_text())
-    assert (rec["mode"], rec["ls_address"], rec["pid"]) == ("pending", "127.0.0.1:4444", 31337)
+    assert (rec["mode"], rec["ls_address"], rec["pid"]) == ("pending", None, 31337)
     assert "ANTIGRAVITY_CSRF_TOKEN" not in calls[0][1]["env"]
 
 
@@ -524,7 +495,6 @@ def test_launcher_with_token_and_ls_records_live_mode(home, agy_env, monkeypatch
 def test_pending_start_keeps_a_pending_leg_of_the_same_agy(home, monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
     monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
-    monkeypatch.setattr(launch, "discover_ls_address", lambda pid: None)
     record_path(home).parent.mkdir(parents=True)
     record_path(home).write_text(json.dumps(
         {"pid": os.getpid(), "conversation": CONV, "endpoint": "e", "ls_address": None, "agy_pid": 9, "mode": "pending"}))
@@ -551,45 +521,12 @@ def test_live_start_replaces_pending_leg_with_the_same_ls(home, agy_env, monkeyp
 
 def test_pending_start_never_downgrades_a_live_leg_of_the_same_agy(home, monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
-    monkeypatch.setattr(launch, "discover_ls_address", lambda pid: None)
     record_path(home).parent.mkdir(parents=True)
     record_path(home).write_text(json.dumps(
         {"pid": os.getpid(), "conversation": CONV, "endpoint": "e", "ls_address": "localhost:5555", "agy_pid": 9}))
     monkeypatch.setattr(launch.subprocess, "Popen", lambda *a, **k: pytest.fail("downgraded a live leg"))
     launch.main(["--conversation", CONV, "--agy-pid", "9"])
     assert "mode" not in json.loads(record_path(home).read_text())
-
-
-def _lsof(monkeypatch, stdout=None, exc=None):
-    def run(cmd, **kw):
-        assert cmd[0] == "lsof" and "-p" in cmd
-        if exc:
-            raise exc
-        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
-    monkeypatch.setattr(launch.subprocess, "run", run)
-
-
-def test_discover_ls_address_parses_loopback_listeners(monkeypatch):
-    if os.name == "nt":
-        monkeypatch.setattr(launch, "nt_loopback_listener_ports", lambda pid: [50321, 50100])
-    else:
-        _lsof(monkeypatch, "p42\nf10\nn127.0.0.1:50321\nf11\nn127.0.0.1:50100\nf12\nn*:8080\nf13\nn[::1]:9\n")
-    assert launch.discover_ls_address(42) == "127.0.0.1:50100"
-
-
-def test_discover_ls_address_is_none_without_lsof_or_listeners(monkeypatch):
-    _lsof(monkeypatch, exc=FileNotFoundError("lsof"))
-    assert launch.discover_ls_address(42) is None
-    _lsof(monkeypatch, "p42\nn*:8080\n")
-    assert launch.discover_ls_address(42) is None
-    _lsof(monkeypatch, "")
-    assert launch.discover_ls_address(None) is None
-
-
-def test_discover_ls_address_is_none_on_windows(monkeypatch):
-    as_windows(monkeypatch, launch)
-    monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: pytest.fail("ran lsof on Windows"))
-    assert launch.discover_ls_address(42) is None
 
 
 def test_launcher_rejects_unsafe_conversation_id(home, agy_env, monkeypatch):
@@ -650,22 +587,10 @@ def test_sessionstart_with_only_conversation_id_registers_a_pending_leg(home, mo
     monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)
     monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
     monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: FakeProc())
-    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
-        cmd, 0, stdout="p1\nn127.0.0.1:6001\n", stderr=""))
-    listener = None
-    agy_pid, port = 1, 6001
-    if os.name == "nt":  # the Windows leg reads the pid's real listener table
-        listener = socket.socket()
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        agy_pid, port = os.getpid(), listener.getsockname()[1]
-    try:
-        out = sess.reply(sess.register({"conversationId": CONV}, agy_pid))
-    finally:
-        if listener:
-            listener.close()
+    out = sess.reply(sess.register({"conversationId": CONV}, 1))
     rec = json.loads(record_path(home).read_text())
-    assert (rec["mode"], rec["pid"], rec["ls_address"]) == ("pending", 31337, f"127.0.0.1:{port}")
+    # The LS address comes only from the sidecar's ANTIGRAVITY_LS_ADDRESS; no port is guessed.
+    assert (rec["mode"], rec["pid"], rec["ls_address"]) == ("pending", 31337, None)
     assert out["injectSteps"][0]["systemMessage"] == {"systemMessage": sess.NOTE}
 
 
@@ -1076,19 +1001,20 @@ def test_process_cmdline_reads_a_real_process():
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked guard holds the hook before the wall answers, a wait CPU time cannot see")
 def test_blocked_guard_answers_fail_open_within_the_wall_and_records_hook_wall(home, monkeypatch, capsys):
     import threading
-    import time
     release = threading.Event()
-    monkeypatch.setattr(pre, "run_guard", lambda raw, root: release.wait(30) or dict(PASS_ASK))
+    guard_returned = threading.Event()
+    monkeypatch.setattr(pre, "run_guard", lambda raw, root: release.wait(30) or guard_returned.set() or dict(PASS_ASK))
     monkeypatch.setattr(pre, "HOOK_WALL_SECS", 0.3)
     exits = []
     monkeypatch.setattr(pre, "_hard_exit", exits.append)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload(name="read_file"))))
-    t0 = time.monotonic()
     try:
+        # The guard blocks until `release`, which only this test sets after main() returns: main()
+        # returning at all is the proof the join gave up at the wall, with no wall-clock assertion.
         assert pre.main() == 0
+        assert not guard_returned.is_set()  # main() answered while the guard was still blocked
     finally:
         release.set()
-    assert time.monotonic() - t0 < 0.3 + 0.2
     out = json.loads(capsys.readouterr().out)
     assert_fail_open(out)
     assert exits == [0]
@@ -1105,17 +1031,6 @@ def test_prompt_guard_does_not_trip_the_wall(home, monkeypatch, capsys):
     assert pre.main() == 0
     assert json.loads(capsys.readouterr().out)["decision"] == "deny"
     assert exits == [] and not (home / "host-hooks").exists()
-
-
-def test_windows_warm_decide_spawns_only_the_debounced_launcher(home, monkeypatch):
-    as_windows(monkeypatch, pre)
-    stub_guard(monkeypatch, {"decision": "ask"})
-    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
-    spawned = []
-    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd))
-    pre.decide(run_payload(), 4242)
-    pre.decide(run_payload(), 4242)
-    assert len(spawned) == 1 and Path(spawned[0][1]) == pre.LAUNCH
 
 
 def test_siblings_are_executed_once_per_process(monkeypatch):

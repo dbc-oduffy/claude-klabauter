@@ -25,6 +25,7 @@ def seams(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
     )
     monkeypatch.setattr(mod, "_pid_is_a_forwarder_posix", lambda pid: None)
     monkeypatch.setattr(mod, "_pid_is_a_forwarder_windows", lambda pid: None)
+    monkeypatch.setattr(mod, "_pid_listens_on", lambda pid, port=mod._FIXED_PORT: False)  # never the live socket table
     monkeypatch.setattr(mod, "_retire_stale_forwarder", lambda pid: calls["retired"].append(pid) or True)
     monkeypatch.setattr(
         mod, "_spawn_forwarder_detached", lambda p: calls.__setitem__("spawned", calls["spawned"] + 1) or True
