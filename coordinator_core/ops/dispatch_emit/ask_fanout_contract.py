@@ -314,8 +314,35 @@ def superseded_rel(run_id: str) -> str:
     return f"scratch/warp/{run_id}/superseded.json"
 
 
+def successor_never_started(root: Any, run_id: str) -> bool:
+    """True when *run_id*'s run-stage record exists and still reads ``minted`` with no ``plan_started_at``: its
+    script never launched. A run halted as minted-not-started counts too; an absent or unreadable record
+    answers False (unknown, never voided). One stat/read of the run's own records; no git, no spawn.
+
+    Trap: no liveness test. A minted run holds a token and a live owner for the runner grace, so ``run_is_live``
+    reads a never-launched successor as live in exactly the window a plain refire follows a failed launch."""
+    import json
+
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        return False
+    rd = ask_contract.record_dir(root, run_id)
+    try:
+        stage = json.loads((rd / ask_contract.RUN_STAGE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(stage, dict) or ask_contract.PLAN_STARTED_FIELD in stage:
+        return False
+    if (rd / halted_run.HALTED_FILE).exists():
+        return halted_run.is_unstarted_mint_halt(rd)
+    return stage.get("stage") in (None, "minted")
+
+
 def read_superseded_by(root: Any, run_id: str) -> Optional[str]:
-    """The run id *run_id*'s supersession marker names, None when absent or unreadable."""
+    """The run id *run_id*'s supersession marker names, None when absent, unreadable, or naming a
+    successor whose script never launched (the marker is kept; the supersession is void until it starts)."""
     import json
 
     try:
@@ -323,7 +350,9 @@ def read_superseded_by(root: Any, run_id: str) -> Optional[str]:
     except (OSError, ValueError):
         return None
     value = data.get(SUPERSEDED_BY_KEY) if isinstance(data, dict) else None
-    return value if isinstance(value, str) and value else None
+    if not (isinstance(value, str) and value) or successor_never_started(root, value):
+        return None
+    return value
 
 
 def ask_parent_marker(parent_id: str, run_id: str) -> str:

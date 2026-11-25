@@ -167,6 +167,9 @@ _CLASSES: dict = {
     "commit": _bug("refusal", _LI, _q("commit"), note="a commit failure passed through, not a rule"),
     "no-credited-chunk-landed": _bug("refusal", _LI, _q("no-credited-chunk-landed")),
     "own-hunk-head-moved": _harm("refusal", HEAD_INTEGRITY, _LI),
+    "stamp-merge-conflict": _harm(
+        "refusal", HEAD_INTEGRITY, _LI, "landing on a file set older than the live stamp reverts it"
+    ),
     "own-hunk-stage-refused": _bug("refusal", _LI, _q("own-hunk-stage-refused")),
     "commit-set-not-recorded-hunks": _harm("refusal", HEAD_INTEGRITY, _LI,
                                            "the commit would carry a hunk the run did not record or omit one it did; HEAD would hold a half-landed image"),
@@ -190,6 +193,12 @@ _CLASSES: dict = {
     "fanout-parent-sizing": _harm("refusal", MALFORMED_REQUEST, _e(_FANOUT, "_parent_mode")),
     "fanout-not-fired": _bug("refusal", _e(_FANOUT, "_land_and_fan_out"), _q("fanout-not-fired")),
     "grind-params": _harm("refusal", MALFORMED_REQUEST, _e("land_run_grind", "land_green_rows")),
+    "work-root": _harm("refusal", MALFORMED_REQUEST, _e("land_run_grind", "_land"),
+                       "the named work root is not the run's own clone"),
+    "halted-by-malformed-json": _harm("refusal", MALFORMED_REQUEST,
+                                      _e("halted_record_commit", "_commit_halted_record")),
+    "land-ref-behind-upstream": _harm("refusal", HEAD_INTEGRITY, _LI,
+                                      "a land ref diverged from its upstream would commit onto a history the publish rejects"),
     # -- Gates that stop a land from carrying bytes or paths nobody verified or owns.
     "landing-tree-differs-from-measured": _harm("refusal", HEAD_INTEGRITY, _LI,
                                                 "the landing tree is not the tree the verify measured"),
@@ -243,7 +252,7 @@ _CLASSES: dict = {
     "not-ledger-check-halt": _bug("withhold", _e("halted_record_commit", "withheld_cause"),
                                   _q("not-ledger-check-halt"), denies=False),
     "evicted-parked": _bug("withhold", _e("land_run_halt", "unexecuted_withholds"), "17193e",
-                           "the evicted C2 pin"),
+                           "a parked path: bytes recorded in the halted record, kept in the tree"),
     "evicted-not-importable": _bug("withhold", _e("land_run_halt", "unexecuted_withholds"), "17193e"),
     "run-dirt-uncommitted": _bug("withhold", _e("halted_record_eviction", "_withhold_run_dirt"),
                                  _q("run-dirt-uncommitted"), denies=False),

@@ -6404,6 +6404,19 @@ def _own_evidence_rows(done: list, evidence_path: str) -> set:
     return {c.id for c in done if c.paths and set(c.paths) <= {evidence_path}}
 
 
+def _firings_not_recorded(sidecar: Path, firings: list) -> list:
+    """``firings`` minus the rows the sidecar's ``reviews:`` already holds (multiset on the five
+    review fields), so a replayed landing appends nothing it already wrote. An unreadable or
+    malformed sidecar dedupes nothing."""
+    from coordinator_core.ops.dispatch_emit.terminal_commit_stamp import review_rows_not_in_sidecar
+
+    try:
+        raw = sidecar.read_text(encoding="utf-8") if sidecar.is_file() else None
+    except (OSError, ValueError):
+        return list(firings)
+    return review_rows_not_in_sidecar(raw, firings)
+
+
 def _append_evidence(root: Path, plan_path: str, firings: list) -> Optional[tuple]:
     """Append the review rows to the plan's evidence sidecar; ``(path, bytes before, bytes after)``
     when this call changed it. A failed append is not a refusal: the review record still lands."""
@@ -6417,6 +6430,9 @@ def _append_evidence(root: Path, plan_path: str, firings: list) -> Optional[tupl
         plan_pp = PurePosixPath(plan_path)
         ev_rel = str(plan_pp.with_name(plan_pp.stem + _EVIDENCE_SUFFIX))
         before = touch_record.compute_content_hash(root / ev_rel)
+        firings = _firings_not_recorded(root / ev_rel, firings)
+        if not firings:
+            return None
         written = _criterion_evidence_record({"plan_path": plan_path, "reviews": firings}, repo_root=root)
         if isinstance(written, dict) and written.get("error"):
             return None

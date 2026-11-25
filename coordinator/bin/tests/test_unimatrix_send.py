@@ -314,6 +314,43 @@ def test_send_to_a_mirror_the_relay_delivered_is_sent(monkeypatch: pytest.Monkey
     assert rc == 0 and "sent to fe" in capsys.readouterr().out
 
 
+def test_list_never_calls_a_mirror_only_route_ready(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    resp = {"ok": True, "peers": ["p"], "reachable": ["p", "m", "live"],
+            "agents": [{"name": "p", "box": "mac", "vendor": "codex"},
+                       {"name": "m", "box": "gipsy", "vendor": "claude", "mirror_only": True},
+                       {"name": "live", "box": "machine-a", "vendor": "claude"}]}
+    rc, _ = _run(monkeypatch, resp, ["--list"])
+    rows = {r[0]: r[4] for r in _rows(capsys.readouterr().out)}
+    assert rc == 0 and rows == {"p": "ready", "m": "mirror-only", "live": "session"}
+
+
+def test_send_over_a_mirror_only_forward_says_mirrored_not_delivered_and_no_reached(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(us, "_is_mirror", lambda n: True)
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"side": "mirror-out", "ok": True, "transport": "push", "reached": "fe"})
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True, "reached": "fe", "reached_box": "gipsy"},
+                 ["--to", "fe", "hi"])
+    cap = capsys.readouterr()
+    assert rc == 0 and "mirrored, not delivered: fe" in cap.out
+    assert "reached" not in cap.out and "sent to" not in cap.out
+
+
+def test_send_to_a_mirror_a_bridge_delivered_keeps_its_reached_note(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(us, "_is_mirror", lambda n: True)
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"ok": True, "box": "machine-a", "transport": "ssh"})
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True, "reached": "fe", "reached_box": "machine-a"},
+                 ["--to", "fe", "hi"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "sent to fe (reached fe on machine-a)" in out and "mirrored" not in out
+
+
+def test_send_whose_reader_had_not_drained_carries_the_relay_advisory(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(us, "_is_mirror", lambda n: True)
+    adv = "delivered-unconfirmed: write completed, reader had not drained within the flush deadline"
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"ok": True, "advisory": adv})
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
+    assert rc == 0 and f"sent to fe{us._route_note({})} [{adv}]" in capsys.readouterr().out
+
+
 def test_send_to_a_mirror_with_no_recorded_outcome_is_undelivered_and_exits_one(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(us, "_is_mirror", lambda n: True)
     monkeypatch.setattr(us, "relay_outcome", lambda n, since: None)

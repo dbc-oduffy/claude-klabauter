@@ -108,7 +108,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from coordinator_core.invoke.warm_miss import (  # noqa: F401 -- re-exported for existing importers
     WARM_BOOT_WAIT_SECS,
@@ -756,29 +756,37 @@ def _invalid_params_message(text: str, exc: json.JSONDecodeError) -> str:
     )
 
 
-# A backslash plus the escape JSON defines for it, else a lone backslash.
-_BACKSLASH_RE = re.compile(r'\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|\\')
+# A backslash plus the escape JSON defines for it, else a lone backslash. A single-letter
+# control escape followed by an ASCII alphanumeric is group 1: a path separator, not a control.
+_BACKSLASH_RE = re.compile(r'\\(?:([bfnrt])(?=[A-Za-z0-9])|["\\/bfnrt]|u[0-9a-fA-F]{4})|\\')
 
 
-def _loads_params(text: str):
+def _repair_backslash(m: "re.Match[str]") -> str:
+    # Trap: in a payload already carrying an invalid escape, a real `\n` before a letter (`a\nB`) reads as a path.
+    if len(m.group(0)) == 1 or m.group(1):
+        return "\\\\" + (m.group(1) or "")
+    return m.group(0)
+
+
+def _loads_params(text: str) -> Any:
     """json.loads `text`, tolerating lone backslashes in a Windows-path string value.
 
     Strict parse first, so valid JSON keeps its meaning byte-for-byte. Only when
-    that fails on an invalid escape is every backslash that does not start a
-    valid JSON escape doubled and the parse retried; any other failure, or a
-    retry that still fails, raises the ORIGINAL error. A path segment that
-    happens to spell a valid escape (`C:\\new`) is indistinguishable from the
-    escape and is read as JSON defines it, repaired retry included: in a value
-    with both `\\new` and `\\dev`, the first becomes a newline, the second stays literal.
+    that fails on an invalid escape does the repair retry run: the payload has
+    proved it carries unescaped paths, so every backslash that does not start a
+    valid JSON escape is doubled, and so is `\\b \\f \\n \\r \\t` directly followed by
+    an ASCII letter or digit (`\\research`, `\\new`), a path separator. `\\\\`, `\\"`,
+    `\\/`, `\\uXXXX` and a control escape followed by anything else keep their JSON
+    meaning. Any other failure, or a retry that still fails, raises the ORIGINAL
+    error. A strictly valid payload is never repaired, so a path made only of valid
+    escapes still decodes as JSON defines it.
     """
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
         if "escape" not in exc.msg:
             raise
-        repaired = _BACKSLASH_RE.sub(
-            lambda m: m.group(0) if len(m.group(0)) > 1 else "\\\\", text
-        )
+        repaired = _BACKSLASH_RE.sub(_repair_backslash, text)
         try:
             return json.loads(repaired)
         except json.JSONDecodeError:

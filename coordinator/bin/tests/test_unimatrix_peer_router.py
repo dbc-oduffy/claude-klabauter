@@ -1453,6 +1453,43 @@ def test_reachable_is_ready_peers_plus_sessions_with_an_existing_endpoint(box):
     run(go())
 
 
+def _mirror_row(box, file, name, sock_path, **extra):
+    (box / "sessions" / f"{file}.json").write_text(json.dumps(
+        {"name": name, "pid": os.getpid(), "messagingSocketPath": sock_path, "startedAt": 1, **extra}))
+
+
+def test_a_relay_pushed_mirror_with_no_bridge_is_listed_mirror_only_and_a_bridged_one_is_not(box):
+    async def go():
+        r = make_router(box, echo_adapters())
+        s1, s2 = FakeSender(str(box / "s1.sock")), FakeSender(str(box / "s2.sock"))
+        try:
+            _mirror_row(box, "push", "g-em.lan-a", s1.path, unimatrixMirror=True, unimatrixBox="boxa")
+            _mirror_row(box, "bridge", "g-em.lan-b", s2.path, unimatrixMirror=True, unimatrixBox="boxb",
+                        unimatrixRemote="me@boxb", macSocketPath="/far.sock")
+            rows = {a["name"]: a for a in (await r._dispatch({"op": "list", "as": "cli"}))["agents"]}
+            assert rows["g-em.lan-a"]["mirror_only"] is True
+            assert "mirror_only" not in rows["g-em.lan-b"] and "mirror_only" not in rows["codex-a"]
+        finally:
+            s1.close()
+            s2.close()
+    run(go())
+
+
+def test_a_name_with_a_bridge_row_beside_a_push_row_is_not_mirror_only(box):
+    async def go():
+        r = make_router(box, echo_adapters())
+        s1, s2 = FakeSender(str(box / "s1.sock")), FakeSender(str(box / "s2.sock"))
+        try:
+            _mirror_row(box, "push", "g-em.lan", s1.path, unimatrixMirror=True)
+            _mirror_row(box, "bridge", "g-em.lan", s2.path, unimatrixRemote="me@far", macSocketPath="/far.sock")
+            rows = {a["name"]: a for a in r.roster_rows("cli")[1]}
+            assert "mirror_only" not in rows["g-em.lan"]
+        finally:
+            s1.close()
+            s2.close()
+    run(go())
+
+
 def test_cli_send_to_a_session_name_writes_the_frame_and_reports_written(box):
     async def go():
         s = ReplyServer(str(box / "s.sock"))

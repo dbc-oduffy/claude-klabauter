@@ -79,13 +79,23 @@ _DEFAULT_PATTERN = "pipeline-default"
 _DEFAULT_PHASE_TITLE = "Run"
 
 
+# U+0001 is deliberately absent: it is the compose-time marker delimiter that
+# emit._resolve_markers_plus splits on BEFORE quoting, so it must pass through raw.
+# Notes are stripped of it where rendered (`run_notes.brief_block`, `checklist_block`).
+_JS_ESCAPES = {
+    **{c: f"\\u{c:04x}" for c in range(0x20) if c != 0x01},
+    ord("\\"): "\\\\",
+    ord("'"): "\\'",
+    ord("\n"): "\\n",
+    ord("\r"): "\\r",
+    0x2028: "\\u2028",
+    0x2029: "\\u2029",
+}
+
+
 def _js_string_literal(value: str) -> str:
-    escaped = (
-        value.replace("\\", "\\\\")
-        .replace("'", "\\'")
-        .replace("\n", "\\n")
-    )
-    return f"'{escaped}'"
+    """Single-quoted JS literal; no raw C0 control (bar U+0001), U+2028 or U+2029 survives."""
+    return f"'{value.translate(_JS_ESCAPES)}'"
 
 
 def _normalize_phases(phases: Optional[list]) -> list:

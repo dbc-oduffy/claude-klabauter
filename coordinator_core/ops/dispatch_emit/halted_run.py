@@ -846,7 +846,19 @@ def halted_run_to_resume(
     and cannot be told from the rest refuses with `AmbiguousHaltedRuns`.
     A refire's `run_id` (`halted_run_named`) is tried first, so a sizing path change cannot lose the run.
     Reads only this sizing's own runs: the `warp-<stem>-*` listing and the incrementally written index entries,
-    never every record dir. `build` is accepted for the hook's call and ignored: no index build exists."""
+    never every record dir. `build` is accepted for the hook's call and ignored: no index build exists.
+    When nothing is halted, a `superseded-by-refire` close whose successor never launched is voided first
+    (`void_unstarted_supersede`), so a plain refire after a failed launch resumes the prior run."""
+    found = _halted_run_to_resume(repo_root, sizing_rel, run_id=run_id, caller_session=caller_session)
+    if found is None and void_unstarted_supersede(repo_root, sizing_rel, run_id) is not None:
+        found = _halted_run_to_resume(repo_root, sizing_rel, run_id=run_id, caller_session=caller_session)
+    return found
+
+
+def _halted_run_to_resume(
+    repo_root: Path, sizing_rel: str, *, run_id: object = None, caller_session: Optional[str] = None
+) -> Optional[str]:
+    """`halted_run_to_resume` without the void of an unstarted refire's supersede."""
     if run_id is not None:
         named = halted_run_named(repo_root, run_id, sizing_rel)
         if named is not None:
@@ -907,8 +919,25 @@ def _successor_or_self(repo_root: Path, sizing_rel: str, picked: str) -> str:
         marker = _read(root / name)
         if marker is not None and marker.get("status") == STATUS_HALTED:
             return name
+        if _retired_for(marker, picked):
+            continue
         raise SupersededHaltedRun(_norm(sizing_rel), picked, name)
     return picked
+
+
+def _retired_for(marker: Optional[dict], run_id: str) -> bool:
+    """True when `marker` retires a never-launched shell in favour of `run_id` (`void_unstarted_supersede`): that
+    shell holds no work and is no successor of the run it was minted to replace."""
+    evidence = _superseded_evidence(marker, SUPERSEDED_BY_SUCCESSOR)
+    return evidence is not None and evidence.get("successor") == run_id
+
+
+def _superseded_evidence(marker: Optional[dict], kind: str) -> Optional[dict]:
+    """The evidence dict of a `superseded` marker when its `kind` matches, else None."""
+    if not marker or marker.get("status") != STATUS_SUPERSEDED:
+        return None
+    evidence = marker.get(SUPERSEDED_EVIDENCE_FIELD)
+    return evidence if isinstance(evidence, dict) and evidence.get("kind") == kind else None
 
 
 def _latest_revised(repo_root: Path, sizing_rel: str, runs: set, picked: str) -> str:
@@ -1403,21 +1432,125 @@ def ran_under_engine(record_dir: Path) -> Optional[str]:
     return value if isinstance(value, str) and _SHA40.fullmatch(value) else None
 
 
-def mark_superseded_by_refire(record_dir: Path, *, prior_engine: Optional[str], engine: Optional[str], at: str) -> bool:
+def mark_superseded_by_refire(
+    record_dir: Path, *, prior_engine: Optional[str], engine: Optional[str], at: str, successor: Optional[str] = None,
+) -> bool:
     """Rewrite a `halted` or `resumed` marker as `superseded` with evidence kind `superseded-by-refire`: a
     fresh refire closes the prior run and credits none of its kept chunks. False and no write for any other
-    status (landed, closed, superseded) or an absent marker."""
+    status (landed, closed, superseded) or an absent marker.
+
+    The evidence records `prior_status` (the status overwritten) and, when known, the `successor` run id; a
+    caller that mints the successor after this call stamps it with `stamp_refire_successor`. The pair lets
+    `void_unstarted_supersede` undo the close when the successor's script never launched."""
     marker = _read(Path(record_dir))
     if marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
         return False
     evidence = {
         "kind": SUPERSEDED_BY_REFIRE, "prior_engine": prior_engine, "engine": engine, "at": at, "kept_credit": False,
+        "prior_status": marker["status"],
     }
+    if successor:
+        evidence["successor"] = successor
     _write(Path(record_dir), {**marker, "status": STATUS_SUPERSEDED, SUPERSEDED_EVIDENCE_FIELD: evidence})
     _index_call("remove_run", record_dir)
     _live_index_drop(record_dir)
     _record_judge(record_dir)
     return True
+
+
+def _refire_evidence(marker: Optional[dict]) -> Optional[dict]:
+    """The `superseded-by-refire` evidence of a `superseded` marker, else None."""
+    return _superseded_evidence(marker, SUPERSEDED_BY_REFIRE)
+
+
+def stamp_refire_successor(record_dir: Path, successor: str) -> bool:
+    """Name `successor` in a `superseded-by-refire` marker that has none yet; False and no write for any other
+    marker, an unsafe id, or a marker already naming a successor."""
+    marker = _read(Path(record_dir))
+    evidence = _refire_evidence(marker)
+    if evidence is None or evidence.get("successor") or not isinstance(successor, str) or not safe_id(successor):
+        return False
+    _write(Path(record_dir), {**marker, SUPERSEDED_EVIDENCE_FIELD: {**evidence, "successor": successor}})
+    return True
+
+
+VOIDED_SUPERSEDE_FIELD = "voided_supersede"
+_VOID_SCAN_CAP = 3
+
+
+def _void_refire_supersede(root: Path, name: str, bound: dict) -> bool:
+    """Restore run `name` when its `superseded-by-refire` close names a successor whose script never launched.
+
+    The marker returns to `halted` (a `resumed` prior returns to `halted` too: the resumer it had was closed
+    by the refire), the evidence moves under `VOIDED_SUPERSEDE_FIELD`, and the never-started successor is
+    retired so it is not read as the run's successor. Skipped when a halted or resumed run other than the
+    successor is newer than `name`: that run, not this one, is the refire's target."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import successor_never_started
+
+    rd = root / RECORD_DIR_ROOT / name
+    marker = _read(rd)
+    evidence = _refire_evidence(marker)
+    successor = evidence.get("successor") if evidence else None
+    if (
+        evidence is None or not isinstance(successor, str) or not safe_id(successor) or successor == name
+        or evidence.get("prior_status") not in (STATUS_HALTED, STATUS_RESUMED)
+        or not isinstance(marker.get("sizing_rel"), str)
+    ):
+        return False
+    stamp = _run_stamp(name)
+    if any(
+        other != successor and _run_stamp(other) > stamp and (halt or {}).get("status") in (STATUS_HALTED, STATUS_RESUMED)
+        for other, halt in bound.items()
+    ):
+        return False
+    if not successor_never_started(root, successor):
+        return False
+    try:
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        run_token.consume(root, successor)  # the never-launched successor's token would read it live
+    except (OSError, ValueError):
+        return False  # a live token keeps the successor reading live: leave the close in place
+    restored = {k: v for k, v in marker.items() if k != SUPERSEDED_EVIDENCE_FIELD}
+    restored.update({"status": STATUS_HALTED, VOIDED_SUPERSEDE_FIELD: evidence})
+    _write(rd, restored)
+    _index_call("add_run", rd, halted_withheld(rd), sizing_rel=marker["sizing_rel"])
+    from datetime import datetime, timezone
+
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir as run_record_dir
+
+    srd = run_record_dir(root, successor)  # a minted run's record can sit under the scratch tree
+    if not mark_shell_superseded(srd, successor=name, sizing_rel=marker["sizing_rel"], at=at):
+        held = _read(srd)
+        if held is not None and held.get("status") == STATUS_HALTED:  # a minted-not-started halt
+            mark_superseded(
+                srd, held, {"kind": SUPERSEDED_BY_SUCCESSOR, "successor": name, "at": at, "kept_credit": False},
+            )
+    return True
+
+
+def void_unstarted_supersede(repo_root: Path, sizing_rel: str, run_id: object = None) -> Optional[str]:
+    """Undo the newest `superseded-by-refire` close of `sizing_rel` whose successor never launched; the run id
+    restored to `halted`, else None. `run_id`, when it names a run, is tried first. Reads the sizing's bound-run
+    listing and at most `_VOID_SCAN_CAP` superseded markers; no git, no subprocess."""
+    root = Path(repo_root)
+    names = []
+    if isinstance(run_id, str) and run_id.startswith(("warp-", "ask-")) and safe_id(run_id):
+        names.append(run_id)
+    if not names and not _bound_dir(root, _norm(str(sizing_rel))).is_dir():
+        # Trap: bound_runs back-fills by scanning every record dir; a superseded close is always written through
+        # _write, which fills the bound dir, so its absence means there is nothing to void and the scan is waste.
+        return None
+    bound = bound_runs(root, sizing_rel)
+    superseded = sorted(
+        (n for n, halt in bound.items() if n not in names and (halt or {}).get("status") == STATUS_SUPERSEDED),
+        key=_run_stamp, reverse=True,
+    )
+    for name in names + superseded[:_VOID_SCAN_CAP]:
+        if _void_refire_supersede(root, name, bound):
+            return name
+    return None
 
 
 SUPERSEDED_BY_SUCCESSOR = "superseded-by-successor"

@@ -195,6 +195,31 @@ def test_mark_superseded_writes_once_and_is_idempotent(tmp_path: Path) -> None:
     assert sh.mark_superseded(tmp_path, RUN, "ask-new")["written"] is False
 
 
+def _successor_stage(root, run_id, **stage) -> None:
+    _write(root, f"state/warp/{run_id}/run-stage.json", json.dumps(stage))
+
+
+def test_a_successor_that_never_launched_voids_the_supersession_until_it_starts(tmp_path: Path) -> None:
+    sh.mark_superseded(tmp_path, RUN, "ask-new")
+    _successor_stage(tmp_path, "ask-new", stage="minted")
+    assert c.read_superseded_by(tmp_path, RUN) is None
+    assert sh.supersede_refusal(tmp_path, RUN, "ask-other") is None  # the dead mark no longer holds the slice
+    assert (tmp_path / c.superseded_rel(RUN)).is_file()
+
+    _successor_stage(tmp_path, "ask-new", stage="minted", plan_started_at="2026-11-24T00:00:00Z")
+    assert c.read_superseded_by(tmp_path, RUN) == "ask-new"
+    assert "already superseded by ask-new" in sh.supersede_refusal(tmp_path, RUN, "ask-other")
+
+    _successor_stage(tmp_path, "ask-new", stage="staged")
+    assert c.read_superseded_by(tmp_path, RUN) == "ask-new"
+
+
+def test_a_successor_with_no_stage_record_keeps_the_supersession(tmp_path: Path) -> None:
+    sh.mark_superseded(tmp_path, RUN, "ask-new")
+    assert c.successor_never_started(tmp_path, "ask-new") is False
+    assert c.read_superseded_by(tmp_path, RUN) == "ask-new"
+
+
 @pytest.mark.parametrize("state", ["landed", "running"])
 def test_refuses_landed_or_running(tmp_path: Path, state) -> None:
     _write(tmp_path, c.status_rel(RUN), json.dumps({"status": state}))

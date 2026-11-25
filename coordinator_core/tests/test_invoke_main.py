@@ -619,11 +619,32 @@ def test_loads_params_valid_json_unchanged_and_malformed_still_raises():
         _loads_params('{"a":"F:\\dev" ')
 
 
-def test_loads_params_reads_valid_escape_segment_as_json_defines_it():
+def test_loads_params_repair_keeps_a_control_letter_path_segment_literal():
     from coordinator_core.invoke.__main__ import _loads_params
 
     parsed = _loads_params(r'{"a":"C:\new F:\dev"}')  # abs-path-ok: fixture literal
-    assert parsed["a"] == "C:\new F:\\dev"  # abs-path-ok: fixture literal
+    assert parsed["a"] == "C:\\new F:\\dev"  # abs-path-ok: fixture literal
+
+
+def test_loads_params_keeps_the_peers_path_with_every_backslash():
+    from coordinator_core.invoke.__main__ import _loads_params
+
+    raw = r'{"run_id":"x","note":"see x-data\research-scratch\a\src\nvdiffrast\run\tmp\bin\form"}'
+    parsed = _loads_params(raw)
+    assert parsed["note"] == "see x-data\\research-scratch\\a\\src\\nvdiffrast\\run\\tmp\\bin\\form"
+
+
+def test_loads_params_repair_keeps_json_meaning_of_a_control_escape_before_punctuation():
+    from coordinator_core.invoke.__main__ import _loads_params
+
+    parsed = _loads_params(r'{"p":"F:\dev","q":"line\n","r":"t\t x","s":"q\"u\/v\u0041"}')  # abs-path-ok: fixture literal
+    assert parsed == {"p": "F:\\dev", "q": "line\n", "r": "t\t x", "s": 'q"u/vA'}  # abs-path-ok: fixture literal
+
+
+def test_loads_params_strictly_valid_json_still_decodes_control_escapes():
+    from coordinator_core.invoke.__main__ import _loads_params
+
+    assert _loads_params(r'{"a":"x\new"}') == {"a": "x\new"}
 
 
 def test_positional_params_with_windows_path_dispatches():

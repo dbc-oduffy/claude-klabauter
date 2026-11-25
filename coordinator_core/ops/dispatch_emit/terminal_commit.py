@@ -795,6 +795,7 @@ def _land_own_left_behind(
         )
         if carry is None:
             return
+        carry.setdefault("drop_ignored", True)
         out = reentrant_dispatch("ceremony.commit_v2", {**carry, "session_id": session_id}, repo_root=repo_root)
     except Exception as exc:
         reply[own_carry.REPLY_KEY] = {"error": f"{type(exc).__name__}: {exc}"}
@@ -846,7 +847,7 @@ def _reland_late_artifacts(
     if not paths:
         return []
     params: dict = {
-        "paths": paths, "carry_stopped_runs": False,
+        "paths": paths, "carry_stopped_runs": False, "drop_ignored": True,
         "message": f"run artifacts written after the landing\n\nRun-Artifacts-Late-Of: {sha}\n",
     }
     if session_id:
@@ -1892,6 +1893,14 @@ def _stamp_on_refusal(params: dict, repo_root: Optional[Path], reply: dict) -> d
         return {"refusal_coded_stamp_error": f"{type(exc).__name__}: {exc}"}
 
 
+def _unrecorded_review_rows(worktree_root: Path, evidence_rel: str, rows: Sequence[dict]) -> list:
+    """The ``rows`` the evidence sidecar's ``reviews:`` list does not already hold (compared on
+    ``REVIEW_ROW_FIELDS``, ``recorded_at`` ignored), so a replayed landing appends none twice."""
+    from coordinator_core.ops.dispatch_emit.terminal_commit_stamp import review_rows_not_in_sidecar
+
+    return review_rows_not_in_sidecar(_read_rel(worktree_root, evidence_rel), list(rows))
+
+
 def _stamp_noop_done(
     worktree_root: Path, repo_root: Optional[Path], plan_path: Optional[str], session_id: Optional[str],
     done_chunks: list,
@@ -2570,7 +2579,7 @@ def _terminal_commit_inner(
             from coordinator_core.lifecycle import main_worktree_root as _mwr
 
             try:
-                # Trap: a token-released retry re-appends these rows; the writer has no dedupe key.
+                # Trap: a replay re-fires this block; the writer has no dedupe key, so rows are filtered here.
                 if _mwr(worktree_root).resolve() != worktree_root.resolve():
                     review_record_error = (
                         f"review rows not written: main worktree {_mwr(worktree_root)} "
@@ -2584,11 +2593,13 @@ def _terminal_commit_inner(
                     ev_before = _tr.compute_content_hash(worktree_root / ev_rel)
                     from coordinator_core.ops.criterion_evidence import REVIEW_ROW_FIELDS as _ROW_FIELDS
 
-                    written = _criterion_evidence_record(
-                        {"plan_path": request.plan_path,
-                         "reviews": [{k: row.get(k) for k in _ROW_FIELDS} for row in record["review_firings"]]},
-                        repo_root=worktree_root,
+                    new_rows = _unrecorded_review_rows(
+                        worktree_root, ev_rel,
+                        [{k: row.get(k) for k in _ROW_FIELDS} for row in record["review_firings"]],
                     )
+                    written = _criterion_evidence_record(
+                        {"plan_path": request.plan_path, "reviews": new_rows}, repo_root=worktree_root,
+                    ) if new_rows else None
                     if isinstance(written, dict) and written.get("error"):
                         review_record_error = str(written["error"])
                     else:
@@ -3801,7 +3812,10 @@ def _terminal_commit_inner(
             _remove(worktree_root, receipt_paths)
             if close_ctx is not None:
                 close_ctx.clear()
-            return _with_withheld(_naming_held(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})))
+            replayed: dict = {"committed": False, "nothing_to_commit": not sibling_paths}
+            if not rows_untouched and not foreign_repo:
+                replayed.update(_stamp_noop_done(worktree_root, repo_root, request.plan_path, session_id, done_chunks))
+            return _with_withheld(_naming_held(_with_siblings(replayed)))
 
     # A declared product path this commit stages that sits in no reviewed slice lands with an
     # `unreviewed` provenance row: a refusal would deny recoverable work.
@@ -3919,6 +3933,10 @@ def _terminal_commit_inner(
             reread_artifacts = owned.drop_expectations(expected, keep={note_committed})
         if expected:
             commit_params["expected_content_sha256"] = expected
+    if ignored_drop is None:
+        # The probe could not answer (a collapsed directory git did not report): commit_v2 probes and
+        # drops the ignored paths itself rather than refusing the whole landing.
+        commit_params["drop_ignored"] = True
     if ignored_drop is not None and set(all_paths) <= {*probe_paths, *receipt_paths, allowlist_path}:
         # The pre-commit probe answered for every path: none left is ignored.
         commit_params["ignored_untracked"] = []

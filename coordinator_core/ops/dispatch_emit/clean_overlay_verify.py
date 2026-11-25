@@ -582,6 +582,15 @@ class CoTenantDependency(ExportError):
         super().__init__(f"co_tenant_dependency: {importer} needs {needed} from {peer} ({why}; uncommitted in a peer session)")
 
 
+class OwnDeltaMissing(ExportError):
+    """The name a run's overlay needs is absent from a path in that run's own recorded write set: the run's own
+    delta is gone from the tree, which no peer's commit can supply. Typed and never parked behind a peer."""
+
+    def __init__(self, run_id: str, path: str, name: str) -> None:
+        self.run_id, self.path, self.name = run_id, path, name
+        super().__init__(f"own_delta_missing: run {run_id} recorded delta to {path} ({name}) is absent from the tree")
+
+
 class _MirrorStale(Exception):
     """The mirror's recorded state no longer matches its worktree; the caller rebuilds it once."""
 
@@ -1215,11 +1224,11 @@ def _prepare(
 
 def _prepare_guarded(
     root: Path, mroot: Path, sha: str, leg: LegHook, overlay: Sequence[str] = (), closure: Optional[Collection[str]] = None,
-    overrides: Optional[Mapping[str, bytes]] = None,
+    overrides: Optional[Mapping[str, bytes]] = None, *, run_id: str = "",
 ) -> Path:
     """`_prepare` with a timeout or OS failure named as an `ExportError`."""
     try:
-        _check_overlay_imports(root, overlay)
+        _check_overlay_imports(root, overlay, **({"run_id": run_id} if run_id else {}))
         return _prepare(root, mroot, sha, leg, overlay, closure, overrides)
     except subprocess.TimeoutExpired as exc:
         raise ExportError(
@@ -1285,7 +1294,7 @@ def clean_export(
     rels = _expand_dirs(root, _declared(paths))
     closure = _closure_for(root, rels, argv)
     with _mirror_lock(root, f"clean-export {run_id}") as mroot:
-        yield _prepare_guarded(root, mroot, _commit_sha(root, "HEAD"), leg, rels, closure, overrides)
+        yield _prepare_guarded(root, mroot, _commit_sha(root, "HEAD"), leg, rels, closure, overrides, run_id=run_id)
 
 
 def _head_sources(root: Path, rels: Collection[str]) -> dict[str, Optional[bytes]]:
@@ -1305,11 +1314,24 @@ def _head_sources(root: Path, rels: Collection[str]) -> dict[str, Optional[bytes
     return out
 
 
-def _check_overlay_imports(root: Path, overlay: Sequence[str]) -> None:
+def _own_write_set(root: Path, run_id: str) -> frozenset:
+    """The run's whole recorded write set, peer-held paths included (`run_write_set_full`, not the split
+    forms, which drop a shared path). Empty when `run_id` is unset or the record is unreadable."""
+    if not run_id:
+        return frozenset()
+    from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set_full
+
+    try:
+        return frozenset(run_write_set_full(root, run_id, "")[0])
+    except Exception:  # an unknown write set keeps the peer diagnosis
+        return frozenset()
+
+
+def _check_overlay_imports(root: Path, overlay: Sequence[str], *, run_id: str = "") -> None:
     """The export holds a peer's dirty module at its HEAD bytes, so a declared dirty Python file is refused only
     when it needs a name (or a whole module) that HEAD's copy of that peer module lacks: the run would test
     against code the landing commit never contains. Peer dirt the run does not reach never refuses.
-    Raises `CoTenantDependency`."""
+    Raises `CoTenantDependency`, or `OwnDeltaMissing` when the needed target is in `run_id`'s own write set."""
     if not any(rel.endswith(".py") for rel in overlay):
         return
     from coordinator_core.ops.dispatch_emit import test_reach
@@ -1337,14 +1359,19 @@ def _check_overlay_imports(root: Path, overlay: Sequence[str]) -> None:
     if not needs:
         return
     heads = _head_sources(root, {target for _, target, _, _ in needs})
+    own = _own_write_set(root, run_id)
     defined: dict[str, set[str]] = {}
     for rel, target, module, names in needs:
         data = heads[target]
         if data is None:
+            if target in own:
+                raise OwnDeltaMissing(run_id, target, module)
             raise CoTenantDependency(rel, target, module, "not in HEAD", module=module, missing="module")
         have = defined.setdefault(target, _defined_names(data))
         for name in names:
             if name not in have and modules.get(f"{module}.{name}") is None and not _clean_submodule(root, module, name, changed):
+                if target in own:
+                    raise OwnDeltaMissing(run_id, target, name)
                 raise CoTenantDependency(rel, target, name, "absent at HEAD", module=module, missing="symbol")
 
 
@@ -1811,6 +1838,8 @@ def verify(
         return OverlayVerdict(
             "inconclusive", str(exc), seeds, argv=tuple(launched), cause=resolved.get("parked") or resolved.get("cause") or "",
         )
+    except OwnDeltaMissing as exc:
+        return OverlayVerdict("inconclusive", str(exc), seeds, argv=tuple(launched), cause="own_delta_missing")
     except ExportError as exc:
         return OverlayVerdict("inconclusive", str(exc), seeds, argv=tuple(launched))
     except subprocess.TimeoutExpired as exc:
@@ -2393,6 +2422,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             resolved = {**co_tenant_owner.resolve(root, args.run_id, exc), "peer": exc.peer}
             print(f"{CO_TENANT_LINE}: {json.dumps(resolved, sort_keys=True)}", file=sys.stderr)
+            return 2
+        except OwnDeltaMissing as exc:
+            print(str(exc), file=sys.stderr)
             return 2
         except ExportError as exc:
             print(f"clean export failed: {exc}", file=sys.stderr)

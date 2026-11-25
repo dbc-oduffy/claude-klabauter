@@ -38,6 +38,7 @@ def test_a_pushed_mirror_forward_counts_as_the_outcome(tmp_path, monkeypatch):
         {"side": "mirror-out", "ok": True, "written": True, "reached": "claude-klabauter-0e", "at": 100}])
     outcome = send.relay_outcome("claude-klabauter-0e.machine-a", 50, wait=0)
     assert outcome and outcome["ok"] is True and outcome["transport"] == "push"
+    assert outcome["side"] == "mirror-out"  # the marker main() reads to say "mirrored, not delivered"
 
 
 def test_a_stale_or_foreign_pushed_forward_is_not_the_outcome(tmp_path, monkeypatch):

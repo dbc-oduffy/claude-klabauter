@@ -145,6 +145,40 @@ def test_missing_description_raises_value_error() -> None:
         _run(_workflow_scaffold({"name": "demo"}))
 
 
+def _js_decode(literal: str) -> str:
+    """Decode a single-quoted JS literal made only of the escapes `_js_string_literal` emits."""
+    body = literal[1:-1]
+    out, i = [], 0
+    while i < len(body):
+        c = body[i]
+        if c != "\\":
+            out.append(c)
+            i += 1
+        elif body[i + 1] == "u":
+            out.append(chr(int(body[i + 2 : i + 6], 16)))
+            i += 6
+        else:
+            out.append({"n": "\n", "r": "\r"}.get(body[i + 1], body[i + 1]))
+            i += 2
+    return "".join(out)
+
+
+@pytest.mark.parametrize("code", [c for c in range(0x20) if c != 0x01] + [0x2028, 0x2029])
+def test_js_string_literal_leaves_no_raw_control_char_and_round_trips(code: int) -> None:
+    from coordinator_core.ops.workflow_scaffold import _js_string_literal
+
+    value = f"a{chr(code)}b\\c'd"
+    literal = _js_string_literal(value)
+    assert chr(code) not in literal
+    assert _js_decode(literal) == value
+
+
+def test_js_string_literal_passes_the_marker_delimiter_through_raw() -> None:
+    from coordinator_core.ops.workflow_scaffold import _js_string_literal
+
+    assert _js_string_literal("a\x01b") == "'a\x01b'"
+
+
 # ---------------------------------------------------------------------------
 # (e) ROUND-TRIP drift guard (AC7) — via dispatch_message, the real C2<->C3
 # runtime coupling, not just an import of the handler.

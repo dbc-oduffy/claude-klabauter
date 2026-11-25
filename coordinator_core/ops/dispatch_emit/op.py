@@ -690,10 +690,11 @@ def _terminal_under_fresh(root: Path, run_id: Optional[str], params: dict) -> bo
     return False
 
 
-def _closed_for_fresh_refire(root: Path, run_id: Optional[str]) -> bool:
+def _closed_for_fresh_refire(root: Path, run_id: Optional[str], successor: Optional[str] = None) -> bool:
     """True when `run_id` ran under a different engine stamp than the running one and was just closed as
     superseded-by-refire, so the emit mints fresh instead of rebinding onto it. An unstamped run, an unknown
-    running engine, or a marker no longer halted or resumed answers False: the rebind stands."""
+    running engine, or a marker no longer halted or resumed answers False: the rebind stands.
+    `successor` is the run id this emit mints; the close records it so an unlaunched script voids the close."""
     if not isinstance(run_id, str) or not run_id:
         return False
     from coordinator_core.ops.dispatch_emit import halt_resume_record
@@ -704,7 +705,8 @@ def _closed_for_fresh_refire(root: Path, run_id: Optional[str]) -> bool:
     if not prior or not current or prior == current:
         return False
     return mark_superseded_by_refire(
-        rd, prior_engine=prior, engine=current, at=datetime.now(timezone.utc).isoformat(timespec="seconds")
+        rd, prior_engine=prior, engine=current, at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        successor=successor if successor != run_id else None,
     )
 
 
@@ -2978,9 +2980,10 @@ def _dispatch_emit_body(
             predecessor = halted_run_to_resume(
                 ask_root, sizing_rel, caller_session=_receipt_session_id(params) or None
             )
-            if predecessor != run_id and _closed_for_fresh_refire(ask_root, predecessor):
+            if predecessor != run_id and _closed_for_fresh_refire(ask_root, predecessor, run_id):
                 predecessor = None
             resumed_from = predecessor if predecessor != run_id else None
+            resumed_real = resumed_from
             if resumed_from is None:
                 resumed_from = notes_predecessor(ask_root, sizing_rel, exclude=run_id)
         elif sizing_rel:
@@ -2998,11 +3001,12 @@ def _dispatch_emit_body(
                 halted_id = None  # a successor never rebinds onto the run it chains from
             closed_halt = None  # the halt this refire closed as superseded-by-refire: still its predecessor
             if halted_id and (
-                _closed_for_fresh_refire(ask_root, halted_id) or _terminal_under_fresh(ask_root, halted_id, params)
+                _closed_for_fresh_refire(ask_root, halted_id, run_id) or _terminal_under_fresh(ask_root, halted_id, params)
             ):
                 closed_halt, halted_id = halted_id, None
             if preferred_ask and (
-                _closed_for_fresh_refire(ask_root, preferred_ask) or _terminal_under_fresh(ask_root, preferred_ask, params)
+                _closed_for_fresh_refire(ask_root, preferred_ask, run_id)
+                or _terminal_under_fresh(ask_root, preferred_ask, params)
             ):
                 closed_halt, preferred_ask = preferred_ask, None
             if halted_id:
@@ -3014,7 +3018,8 @@ def _dispatch_emit_body(
                 if chain_parent is not None and resumes_ask == chain_parent:
                     resumes_ask = None
                 if resumes_ask and (
-                    _closed_for_fresh_refire(ask_root, resumes_ask) or _terminal_under_fresh(ask_root, resumes_ask, params)
+                    _closed_for_fresh_refire(ask_root, resumes_ask, run_id)
+                    or _terminal_under_fresh(ask_root, resumes_ask, params)
                 ):
                     closed_halt, resumes_ask = closed_halt or resumes_ask, None
                 if resumes_ask:
