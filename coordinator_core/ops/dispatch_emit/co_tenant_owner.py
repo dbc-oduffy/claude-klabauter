@@ -55,11 +55,50 @@ def _proceeded_without(root: Path, run_id: str) -> frozenset:
     return frozenset(x for x in held if isinstance(x, str)) if isinstance(held, list) else frozenset()
 
 
+def work_landed_at_head(root: Path, run_id: str) -> bool:
+    """True when the run's declared write set (`review_declared_paths` plus row `writes` of its manifest) is
+    all clean in the working tree against HEAD and at least one path differs between the run's base and HEAD:
+    its work is committed, nothing of it is left uncommitted. False on an unreadable manifest, no recorded
+    base, an empty write set or any unreadable tree: nothing then proves the work landed. In-process object
+    reads only; no spawn."""
+    try:
+        import json
+
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.git.git_objects import read_object
+        from coordinator_core.git.git_state import _parse_tree_entries, head_sha
+        from coordinator_core.ops.dispatch_emit import ask_fanout_contract
+        from coordinator_core.ops.dispatch_emit.halted_run_landed import _clean_at_head, _manifest_write_set
+
+        doc = json.loads((record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8"))
+        paths = _manifest_write_set(doc)
+        base = ask_fanout_contract.pinned_run_base(root, run_id, doc)
+        head = head_sha(root)
+        if not paths or not base or not head:
+            return False
+        common = resolve_git_common_dir(root)
+        dirs: dict = {}
+
+        def _dir(tree_sha: str) -> Optional[dict]:
+            if tree_sha not in dirs:
+                got = read_object(common, tree_sha)
+                dirs[tree_sha] = _parse_tree_entries(got[1]) if got and got[0] == "tree" else None
+            return dirs[tree_sha]
+
+        clean = _clean_at_head(root, common, _dir, paths, head)
+        if clean != set(paths):
+            return False
+        return bool(clean - _clean_at_head(root, common, _dir, paths, base))
+    except Exception:  # noqa: BLE001 -- an unreadable record proves nothing landed
+        return False
+
+
 _STAMP = re.compile(r"\d{8}T\d{6}")
 
 
 def _landed_successor(root: Path, run_id: str, sizing_rel: object) -> Optional[str]:
-    """A later run of `run_id`'s sizing whose run-stage reads `landed`, else None: its record dirs are
+    """A later run of `run_id`'s sizing whose run-stage reads `landed`, or reads `halted` with its work landed
+    at HEAD (`work_landed_at_head`: a hand-landed run), else None: its record dirs are
     `warp-<sizing stem>-<stamp>-<hex>` or `ask-<stamp>-<sizing hex>` with a stamp past `run_id`'s. One
     directory listing, one stage read per name match; no spawn."""
     if not isinstance(sizing_rel, str) or not sizing_rel:
@@ -79,7 +118,8 @@ def _landed_successor(root: Path, run_id: str, sizing_rel: object) -> Optional[s
             continue
         if not (name.startswith(f"warp-{stem}-") or (name.startswith("ask-") and name.rsplit("-", 1)[-1] in hexes)):
             continue
-        if (ask_contract.read_run_stage(root, name) or {}).get("stage") == "landed":
+        stage = (ask_contract.read_run_stage(root, name) or {}).get("stage")
+        if stage == "landed" or (stage == "halted" and work_landed_at_head(root, name)):
             return name
     return None
 
