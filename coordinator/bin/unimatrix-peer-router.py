@@ -1531,7 +1531,7 @@ class Router:
         finally:
             writer.close()
 
-    async def _dispatch(self, req):
+    async def _dispatch(self, req) -> dict:
         op = req.get("op") if isinstance(req, dict) else None
         if op == "inbound":
             peer = req.get("peer")
@@ -1607,7 +1607,10 @@ class Router:
                     reply_to = by_target.get(root) or root
                     sender = f"codex-{as_target}"
                 else:
-                    sender = await asyncio.to_thread(self.shell_sender, as_target)
+                    # A pending agy leg is unlisted in self.peers, but the router owns its record: bind the
+                    # sender from it (conversation id == target) so CLI agy sessions can still send and reply.
+                    pending_self = next((n for n, p in self.pending_legs.items() if p.get("target") == as_target), None)
+                    sender = pending_self or await asyncio.to_thread(self.shell_sender, as_target)
                     if not sender:
                         return {"ok": False, "error": "no unique live sender binding; use native SendMessage"}
             pending = next((p for n, p in self.pending_legs.items() if peer in (n, p["target"])), None) \
