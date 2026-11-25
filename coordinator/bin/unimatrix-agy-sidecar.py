@@ -21,6 +21,7 @@ import os
 import secrets
 import socket
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -47,6 +48,15 @@ def credentials(env=None) -> "tuple | None":
     env = os.environ if env is None else env
     ls, token = env.get("ANTIGRAVITY_LS_ADDRESS"), env.get("ANTIGRAVITY_CSRF_TOKEN")
     return (ls, token) if ls and token else None
+
+
+def write_private_json(path, obj) -> None:
+    """Atomically publish `obj` at `path`, the temp file created 0600 so the nonce is never world-readable."""
+    tmp = Path(f"{path}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
 
 
 def handoff(conv, cwd, agy_pid, home, pid_alive, timeout=1.0) -> bool:
@@ -115,10 +125,14 @@ def serve(hub, srv, pid_alive) -> None:
         except socket.timeout:
             continue
         with conn:
-            conn.settimeout(5)
             buf = b""
+            deadline = time.monotonic() + 1.5  # one wall for the whole line: a per-recv timeout lets a dribbling client hold the single-threaded loop
             try:
                 while not buf.endswith(b"\n") and len(buf) < LINE_MAX:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        break
+                    conn.settimeout(left)
                     chunk = conn.recv(4096)
                     if not chunk:
                         break
@@ -129,6 +143,7 @@ def serve(hub, srv, pid_alive) -> None:
 
 
 def main(env=None) -> int:
+    """Run the sidecar. `env` only gates the credential check; legs inherit the real process env."""
     if credentials(env) is None:
         return 0
     launch = load_sibling("unimatrix-agy-hook-launch")
@@ -141,12 +156,8 @@ def main(env=None) -> int:
     record = record_dir(roster.settings_home()) / f"{agy_pid}.json"
     try:
         record.parent.mkdir(parents=True, exist_ok=True)
-        roster.write_json_atomic(str(record), {"pid": os.getpid(), "agy_pid": agy_pid,
-                                               "port": srv.getsockname()[1], "nonce": hub.nonce})
-        try:
-            os.chmod(record, 0o600)
-        except OSError:
-            pass
+        write_private_json(record, {"pid": os.getpid(), "agy_pid": agy_pid,
+                                    "port": srv.getsockname()[1], "nonce": hub.nonce})
         hub.upgrade_pending()
         serve(hub, srv, roster.pid_alive)
     finally:

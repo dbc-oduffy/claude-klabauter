@@ -539,6 +539,25 @@ def test_orphaned_leg_with_dead_agy_app_is_not_live_and_its_face_is_not_respawne
     run(go())
 
 
+def test_router_restart_registers_no_face_for_a_row_whose_leg_and_agy_pids_are_both_dead(box):
+    async def go():
+        legs = box / "legs"
+        static = {"name": "agy-both-dead", "vendor": "agy", "target": "conv-both-dead"}
+        write_leg(legs, "conv-both-dead", pid=DEAD_AGY_PID, agy_pid=DEAD_AGY_PID)
+        r = pr.Router([static], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters([]), legs_dir=legs)
+        await r.start()
+        try:
+            for _ in range(3):
+                await r.refresh_discovered()
+                await r._repair_faces()
+            assert "agy-both-dead" in r.dead_holders and "agy-both-dead" not in r.faces
+            assert list((box / "sessions").glob("*.json")) == []  # no registration, so no fresh startedAt
+        finally:
+            await r.stop()
+    run(go())
+
+
 @portable
 def test_leg_with_a_dead_agy_pid_keeps_its_peer_while_the_presence_lock_is_held(tmp_path):
     legs = tmp_path / "legs"
@@ -549,6 +568,118 @@ def test_leg_with_a_dead_agy_pid_keeps_its_peer_while_the_presence_lock_is_held(
     finally:
         held.close()
     assert pr.load_leg_peers(legs) == []
+
+
+@portable
+def test_pending_leg_gets_no_peer_and_is_not_target_live_but_live_or_absent_mode_is(tmp_path):
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-pending", mode="pending")
+    assert not pr.leg_record_live(json.loads((legs / "conv-pending.json").read_text()))
+    assert pr.load_leg_peers(legs) == []
+    assert not pr.leg_target_live(legs, "conv-pending")
+    write_leg(legs, "conv-pending", mode="live")
+    write_leg(legs, "conv-legacy")  # no mode field: reads live
+    assert sorted(p["target"] for p in pr.load_leg_peers(legs)) == ["conv-legacy", "conv-pending"]
+    assert pr.leg_target_live(legs, "conv-pending") and pr.leg_target_live(legs, "conv-legacy")
+
+
+@portable
+def test_pending_leg_with_a_live_process_fills_pending_out_never_the_peer_list(tmp_path):
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-pend", mode="pending")
+    write_leg(legs, "conv-pend-dead", pid=DEAD_AGY_PID, mode="pending")
+    write_leg(legs, "conv-pend-reused", proc_start="not-this-process-start", mode="pending")
+    write_leg(legs, "conv-live", mode="live")
+    pending = {}
+    assert [p["target"] for p in pr.load_leg_peers(legs, pending_out=pending)] == ["conv-live"]
+    assert {p["target"] for p in pending.values()} == {"conv-pend"}
+    assert [p["target"] for p in pr.load_leg_peers(legs)] == ["conv-live"]  # no pending_out: pending legs skipped as before
+
+
+def test_list_reports_a_pending_agy_leg_pending_a_live_one_ready_and_a_send_answers_queued(box, capsys, monkeypatch):
+    queued = "[unimatrix-peer-agy] queued: the agy leg is not live; the message is spooled"
+    seen = []
+
+    async def agy(peer, text):
+        seen.append((peer["name"], peer.get("deliver_only")))
+        return queued
+
+    async def go():
+        legs = box / "legs"
+        write_leg(legs, "conv-pend", mode="pending")
+        write_leg(legs, "conv-live", mode="live")
+        write_leg(legs, "conv-gone", pid=DEAD_AGY_PID, mode="pending")
+        r = pr.Router(PEERS[:1], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters={**echo_adapters(), "agy": agy}, legs_dir=legs)
+        await r.start()
+        try:
+            resp = await r._dispatch({"op": "list"})
+            pend, live = (pr.readable_peer_name("agy", c) for c in ("conv-pend", "conv-live"))
+            assert pend in resp["reachable"] and pend not in resp["peers"] and pend not in resp["ready"]
+            assert live in resp["reachable"] and live in resp["peers"]
+            rows = {row["name"]: row for row in resp["agents"]}
+            assert rows[pend]["leg_mode"] == "pending" and rows[pend]["vendor"] == "agy"
+            assert "leg_mode" not in rows[live] and "leg_mode" not in rows["codex-a"]
+            assert pr.readable_peer_name("agy", "conv-gone") not in resp["reachable"]
+            sent = await r._dispatch({"op": "send", "to": pend, "text": "hello", "as": "cli"})
+            assert sent["ok"] is True and "queued" in sent["reply"] and seen == [(pend, True)]
+            m = _send_module()
+            monkeypatch.setattr(m, "own_target", lambda: "")
+            rc = await asyncio.to_thread(m.main, ["--endpoint-dir", str(box / "eps"), "--list"])
+            return rc, pend, live
+        finally:
+            await r.stop()
+    rc, pend, live = run(go())
+    assert rc == 0
+    cells = {line.split("\t")[0]: line.split("\t")[4] for line in capsys.readouterr().out.splitlines() if line.count("\t") >= 4}
+    assert cells[pend] == "pending" and cells[live] == "ready" and cells["codex-a"] == "ready"
+
+
+@portable
+def test_unstarted_router_lists_a_pending_leg_pending_and_a_send_to_it_answers_queued(tmp_path):
+    queued = "[unimatrix-peer-agy] queued: the agy leg is not live; the message is spooled"
+    seen = []
+
+    async def agy(peer, text):
+        seen.append((peer["name"], peer.get("deliver_only")))
+        return queued
+
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-pend", mode="pending")
+    write_leg(legs, "conv-live", mode="live")
+    write_leg(legs, "conv-gone", pid=DEAD_AGY_PID, mode="pending")
+    (tmp_path / "sessions").mkdir()
+    r = pr.Router([], sessions_dir=tmp_path / "sessions", state_dir=tmp_path / "state",
+                  adapters={**echo_adapters(), "agy": agy}, legs_dir=legs)
+    live = r._live_discovered()
+    pend, up, gone = (pr.readable_peer_name("agy", c) for c in ("conv-pend", "conv-live", "conv-gone"))
+    assert list(live) == [up] and list(r.pending_legs) == [pend]
+    r.peers.update(live)
+    reachable, agents = r.roster_rows("cli", {up: True})
+    rows = {row["name"]: row for row in agents}
+    assert sorted(reachable) == sorted([pend, up]) and gone not in reachable
+    assert rows[pend]["leg_mode"] == "pending" and "leg_mode" not in rows[up]
+    sent = run(r._dispatch({"op": "send", "to": pend, "text": "hello", "as": "cli"}))
+    assert sent["ok"] is True and "queued" in sent["reply"] and seen == [(pend, True)]
+    assert run(r._dispatch({"op": "send", "to": pend, "text": "ok", "as": "cli"}))["ok"] is False  # an ack is never delivered
+
+
+def test_a_pending_leg_that_goes_live_leaves_the_pending_map_and_joins_the_peers(box):
+    async def go():
+        legs = box / "legs"
+        write_leg(legs, "conv-9", mode="pending")
+        r = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters([]), legs_dir=legs)
+        await r.start()
+        try:
+            name = pr.readable_peer_name("agy", "conv-9")
+            assert name in r.pending_legs and name not in r.peers
+            write_leg(legs, "conv-9", mode="live")
+            await r.refresh_discovered()
+            assert name in r.peers and name not in r.pending_legs
+        finally:
+            await r.stop()
+    run(go())
 
 
 @portable

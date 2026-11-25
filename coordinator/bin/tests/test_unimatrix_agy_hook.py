@@ -9,6 +9,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -795,7 +796,7 @@ def test_refresh_swaps_by_os_replace_so_a_reader_never_sees_partial(tmp_path, mo
     assert seen == [(b"NEW-CONTENT", b"old", True)]
 
 
-def test_refresh_failure_is_silent_and_removes_the_temp(tmp_path, monkeypatch):
+def test_refresh_failure_keeps_stdout_clean_names_stderr_and_removes_the_temp(tmp_path, monkeypatch, capsys):
     here, eng, src = _vendor_pair(tmp_path)
     (src / "a.py").write_bytes(b"new")
     (here / "a.py").write_bytes(b"old")
@@ -803,6 +804,19 @@ def test_refresh_failure_is_silent_and_removes_the_temp(tmp_path, monkeypatch):
     assert sess._refresh_vendored(here, eng) == 0
     assert (here / "a.py").read_bytes() == b"old"
     assert [p.name for p in here.iterdir()] == ["a.py", "lib"]
+    cap = capsys.readouterr()
+    assert cap.out == "" and "a.py" in cap.err and "busy" in cap.err
+
+
+def test_refresh_over_the_real_vendored_tree_stays_inside_the_process_time_bar(tmp_path):
+    install = load("unimatrix-install")
+    here = tmp_path / "vendored"
+    install.install_scripts(BIN, here)
+    engine_root = BIN.parents[1]
+    assert any(here.rglob("*.py"))
+    start = time.process_time()
+    assert sess._refresh_vendored(here, engine_root) == 0
+    assert time.process_time() - start < 0.5
 
 
 def test_main_with_engine_root_refreshes_before_registering(tmp_path, monkeypatch, capsys):
@@ -840,6 +854,106 @@ def test_preinvocation_never_delivers_another_conversations_advisory_or_fails_on
         assert pre.main(["--event", "PreInvocation"]) == 0
         assert json.loads(capsys.readouterr().out) == {}
     assert list((pre.advisory_dir() / "other-conv").glob("*.txt"))
+
+
+def _write_pending_leg(home, messages, mode="pending"):
+    d = home / "unimatrix" / "agy-legs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{CONV}.json").write_text(json.dumps({"pid": 1, "conversation": CONV, "mode": mode}))
+    (d / f"{CONV}.queue.jsonl").write_text("".join(json.dumps({"text": m}) + "\n" for m in messages))
+    return d
+
+
+def _preinvocation(monkeypatch, capsys, conv=CONV):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"conversationId": conv})))
+    assert pre.main(["--event", "PreInvocation"]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_pending_leg_spool_is_injected_once_with_the_sender_reply_command(home, capsys, monkeypatch):
+    d = _write_pending_leg(home, ["[from doe-b9 on machine-a · abc]\nhello", "[from 2d on machine-a · def]\nsecond"])
+    steps = _preinvocation(monkeypatch, capsys)["injectSteps"]
+    texts = [s["systemMessage"]["systemMessage"] for s in steps]
+    assert len(texts) == 2 and "hello" in texts[0] and "second" in texts[1]
+    assert "--to doe-b9" in texts[0] and str(pre.SEND_SCRIPT) in texts[0] and "--to 2d" in texts[1]
+    assert not list(d.glob(f"{CONV}.queue.claimed.*"))
+    assert (d / f"{CONV}.queue.jsonl").read_text() == ""  # fresh empty spool: an enqueue racing the claim reopens onto it
+    assert _preinvocation(monkeypatch, capsys) == {}
+
+
+def test_tool_hooks_leave_the_spool_for_the_next_preinvocation_and_every_hook_logs_its_event(home, capsys, monkeypatch):
+    d = _write_pending_leg(home, ["[from a on h · 1]\nx"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"conversationId": CONV})))
+    assert pre.main(["--event", "PostToolUse"]) == 0
+    assert json.loads(capsys.readouterr().out) == {}
+    monkeypatch.setattr(pre, "decide", lambda *a, **k: dict(pre.PASS))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
+    assert pre.main([]) == 0
+    capsys.readouterr()
+    assert (d / f"{CONV}.queue.jsonl").read_text() != ""
+    assert len(_preinvocation(monkeypatch, capsys)["injectSteps"]) == 1
+    events = [line.split()[-1] for line in (d / f"{CONV}.log").read_text().splitlines()]
+    assert events == ["PostToolUse", "PreToolUse", "PreInvocation"]
+
+
+def test_live_leg_spool_is_left_to_the_leg(home, capsys, monkeypatch):
+    d = _write_pending_leg(home, ["[from a on h · 1]\nx"], mode="live")
+    assert _preinvocation(monkeypatch, capsys) == {}
+    assert (d / f"{CONV}.queue.jsonl").read_text() != ""
+
+
+def test_a_claim_left_by_a_crash_is_emitted_once_when_stale_and_not_while_fresh(home, capsys, monkeypatch):
+    d = _write_pending_leg(home, [])
+    claim = d / f"{CONV}.queue.claimed.1-1.jsonl"
+    claim.write_text(json.dumps({"text": "[from a on h · 1]\nlost"}) + "\n")
+    born = claim.stat().st_mtime
+    now = [born + 1]
+
+    class _Clock:
+        """The hook's clock, injected so the claim's age never depends on process-wide time state."""
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+        @staticmethod
+        def time():
+            return now[0]
+
+    monkeypatch.setattr(pre, "time", _Clock())
+    assert _preinvocation(monkeypatch, capsys) == {}  # fresh: another hook may still be emitting it
+    now[0] = born + pre.CLAIM_STALE_SECS + 5
+    assert len(_preinvocation(monkeypatch, capsys)["injectSteps"]) == 1
+    assert _preinvocation(monkeypatch, capsys) == {} and not list(d.glob(f"{CONV}.queue.claimed.*"))
+
+
+def test_a_crash_before_the_claim_is_released_keeps_the_file(home, monkeypatch):
+    d = _write_pending_leg(home, ["[from a on h · 1]\nx"])
+    assert pre.pre_invocation_reply({"conversationId": CONV})["injectSteps"]
+    assert list(d.glob(f"{CONV}.queue.claimed.*"))
+    pre.release_claims()
+    assert not list(d.glob(f"{CONV}.queue.claimed.*"))
+
+
+def test_a_stale_claim_and_the_spool_claimed_in_one_clock_tick_both_survive(home, capsys, monkeypatch):
+    d = _write_pending_leg(home, ["[from a on h · 2]\nfresh"])
+    claim = d / f"{CONV}.queue.claimed.1-1.jsonl"
+    claim.write_text(json.dumps({"text": "[from a on h · 1]\nlost"}) + "\n")
+    born = claim.stat().st_mtime
+
+    class _FrozenTick:
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+        @staticmethod
+        def time():
+            return born + pre.CLAIM_STALE_SECS + 5
+
+        @staticmethod
+        def time_ns():
+            return 7
+
+    monkeypatch.setattr(pre, "time", _FrozenTick())
+    texts = [s["systemMessage"]["systemMessage"] for s in _preinvocation(monkeypatch, capsys)["injectSteps"]]
+    assert sorted(t.split("\n")[1] for t in texts) == ["fresh", "lost"]
 
 
 def test_pending_leg_is_never_current_for_the_pretool_rewrite(home, ls_server):

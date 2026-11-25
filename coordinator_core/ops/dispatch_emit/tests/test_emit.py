@@ -1904,15 +1904,22 @@ def test_blocked_prose_with_a_gate_does_not_raise(tmp_path: Path) -> None:
     emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_already_happened_prose_with_open_disposition_raises(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "body_line",
+    [
+        "IN FLIGHT: the memo is already out; this row only confirms receipt.",
+        "The memo was sent already -- for traceability only.",
+    ],
+)
+def test_open_row_body_prose_is_never_read_as_a_disposition(
+    tmp_path: Path, body_line: str
+) -> None:
+    """A row's body is narrative; only its `disposition` field says whether
+    it is dispatchable. Open-disposition status-marker prose must not refuse
+    the stage gate."""
     plan_path = tmp_path / "fixture.md"
-    plan_path.write_text(
-        _plan_with_row_body("The memo was sent already -- for traceability only."),
-        encoding="utf-8",
-    )
-    with pytest.raises(emit.DispatchGateViolation) as excinfo:
-        emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
-    assert "Check B" in str(excinfo.value)
+    plan_path.write_text(_plan_with_row_body(body_line), encoding="utf-8")
+    emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
 def test_already_happened_prose_with_coded_disposition_does_not_raise(tmp_path: Path) -> None:

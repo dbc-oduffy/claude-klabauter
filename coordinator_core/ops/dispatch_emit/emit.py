@@ -1016,14 +1016,8 @@ class DispatchGateViolation(ValueError):
 
 
 # Check B: prose asserting a state the row's own fields do not declare.
-# Restated to the letter from coordinator-content-repo ``emit-dispatch-workflow.py``
-# (``_BLOCKED_PROSE_PATTERNS`` / ``_ALREADY_HAPPENED_PROSE_PATTERNS`` /
-# ``_prose_contradicting_fields``), which is the SSOT for which phrases
-# qualify — see that module's own extended commentary (survived a 930-row
-# survey; several near-miss patterns were tried and removed there for firing
-# on ordinary plan prose) for why the roster is this narrow. Not restated a
-# second time here: a second copy of that reasoning is a second place it can
-# drift from the one the roster was actually tuned against.
+# A row's body is never matched against its `disposition`: that field alone
+# says whether the row is dispatchable.
 #
 # Check A (a declared, uncleared ``external_gate``) is NOT carried: DoE's own
 # module docstring records it verified, against claude-klabauter's own tree,
@@ -1044,11 +1038,6 @@ _BLOCKED_PROSE_PATTERNS = (
     re.compile(r"\bNOT SCHEDULABLE\b"),
 )
 
-_ALREADY_HAPPENED_PROSE_PATTERNS = (
-    re.compile(r"\bIN FLIGHT\s*[—\-:]"),
-    re.compile(r"\bfor traceability only\b", re.IGNORECASE),
-)
-
 # "Gate discharge claim" class: only `cleared: true` clears a gate
 # (`_uncleared_execution_gate`'s own negative spec), but a gate's
 # `condition`/`closure_evidence` prose can declare discharge in shout-case
@@ -1060,8 +1049,7 @@ _ALREADY_HAPPENED_PROSE_PATTERNS = (
 # the OBSERVED case hit (a gate whose prose said `SATISFIED`/`CLOSED` while
 # `cleared` stayed unset). Scoped to the gate's own `condition`/
 # `closure_evidence`, not the row `body`, so ordinary prose discussing gates
-# in the abstract never matches. Shout-case only, matching
-# `_ALREADY_HAPPENED_PROSE_PATTERNS`'s `IN FLIGHT`: a status-marker idiom,
+# in the abstract never matches. Shout-case only: a status-marker idiom,
 # never ordinary narration.
 _GATE_DISCHARGE_CLAIM_PATTERNS = (
     re.compile(r"\bGATE CLOSED\b"),
@@ -1100,13 +1088,6 @@ def _prose_contradicting_fields(raw_row: dict) -> Optional[tuple]:
             match = pattern.search(body)
             if match:
                 return ("blocked-prose-no-gate", match.group(0))
-
-    disposition = raw_row.get("disposition") or "open"
-    if disposition == "open":
-        for pattern in _ALREADY_HAPPENED_PROSE_PATTERNS:
-            match = pattern.search(body)
-            if match:
-                return ("already-happened-prose-open-disposition", match.group(0))
 
     return None
 
@@ -1190,7 +1171,7 @@ def check_unschedulable_rows(rows: list, raw_by_id: dict) -> None:
     offending row at once.
 
     ``raw_by_id`` maps ``row.id`` to its raw ``load_rows`` dict — the shape
-    Check B reads ``body``/``external_gate``/``disposition`` off of.
+    Check B reads ``body``/``external_gate`` off of.
 
     The ``gate-discharge-claim-uncleared`` class scans EVERY row in
     ``raw_by_id``, not only the dispatchable ``rows`` list: the row it exists
@@ -1228,23 +1209,13 @@ def check_unschedulable_rows(rows: list, raw_by_id: dict) -> None:
         if contradiction is None or contradiction[0] == "gate-discharge-claim-uncleared":
             continue
         kind, matched = contradiction
-        if kind == "blocked-prose-no-gate":
-            violations.append(
-                f"row {row.id}: Check B -- body prose ({matched!r}) asserts this "
-                f"chunk is blocked, but the row declares no external_gate. Fix: "
-                f"add an external_gate entry naming owner_repo and condition, set "
-                f"deferred: true, or reword the prose if the row is actually ready "
-                f"to dispatch."
-            )
-        else:
-            violations.append(
-                f"row {row.id}: Check B -- body prose ({matched!r}) asserts this "
-                f"row's action already happened, but disposition reads "
-                f"{raw.get('disposition', 'open')!r} (dispatchable). Fix: set "
-                f"disposition: coded with a disposition_ref naming the commit or "
-                f"send that already discharged it, or reword the prose if the row "
-                f"is genuinely still to be dispatched."
-            )
+        violations.append(
+            f"row {row.id}: Check B -- body prose ({matched!r}) asserts this "
+            f"chunk is blocked, but the row declares no external_gate. Fix: "
+            f"add an external_gate entry naming owner_repo and condition, set "
+            f"deferred: true, or reword the prose if the row is actually ready "
+            f"to dispatch."
+        )
     if violations:
         raise DispatchGateViolation("; ".join(violations))
 

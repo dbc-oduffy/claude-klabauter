@@ -23,6 +23,10 @@ object with `decision`.
 adapter stashed at PreToolUse (agy documents no `injectSteps` on a PreToolUse answer) and injects them as
 `systemMessage` steps; stash format is `coordinator_core/host_hooks/agy_adapter.py :: stash_advisory`.
 
+PreInvocation also drains a pending leg's `<conv>.queue.jsonl` (the leg's spool, claimed by atomic rename
+before emit and deleted after) into the same `injectSteps`, each message with its sender's reply command;
+a live leg's spool is left to the leg. Every hook invocation appends one `hook <event>` line to `<conv>.log`.
+
 A headless agy (`-p`/`--print` on the agy ancestor's command line) gets no rewrite and no launcher
 spawn: the guard's answer passes through so agy's own permissions.allow decides.
 
@@ -44,6 +48,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 HOOK_WALL_SECS = 1.0
@@ -539,11 +544,139 @@ def advisory_dir() -> Path:
     return settings_home() / "unimatrix" / "agy-advisories"
 
 
+CLAIM_STALE_SECS = 30
+SENDER_RE = re.compile(r"\[from ([A-Za-z0-9_.@-]+) on ")
+_CLAIM_SEQ = 0
+_CLAIMS = []  # claimed spool files already emitted by this process, unlinked by release_claims() after the reply is written
+
+
+def log_hook(conv, event, state=None) -> None:
+    """One `HH:MM:SS hook <event>` line in the conversation's leg log; never raises."""
+    try:
+        if isinstance(conv, str) and CONV_RE.match(conv):
+            folder = state or state_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            with open(folder / f"{conv}.log", "a", encoding="utf-8") as f:
+                f.write(time.strftime("%H:%M:%S ") + f"hook {event}\n")
+    except Exception:
+        pass
+
+
+def _leg_pending(conv, state) -> bool:
+    try:
+        return json.loads((state / f"{conv}.json").read_text(encoding="utf-8")).get("mode") == "pending"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _claim_path(state, conv) -> Path:
+    """A claim name no earlier claim in this process shares: time_ns alone repeats within one clock tick on Windows, and a repeat would overwrite a live claim."""
+    global _CLAIM_SEQ
+    _CLAIM_SEQ += 1
+    return state / f"{conv}.queue.claimed.{time.time_ns()}-{os.getpid()}-{_CLAIM_SEQ}.jsonl"
+
+
+def claim_spool(conv, state=None) -> list:
+    """Claimed spool files for `conv`: stale claims left by a crash, plus the spool itself when the leg record reads pending.
+
+    The spool (`<conv>.queue.jsonl`, the leg's own rule and line format) is renamed to a unique
+    `<conv>.queue.claimed.<ns>-<pid>.jsonl` before anything is emitted, so a second hook finds nothing to take.
+    A live leg owns its spool: it is never claimed here. A claim younger than CLAIM_STALE_SECS belongs to a
+    hook still emitting it."""
+    state = state or state_dir()
+    claimed = []
+    try:
+        for old in state.glob(f"{conv}.queue.claimed.*.jsonl"):
+            try:
+                if time.time() - old.stat().st_mtime < CLAIM_STALE_SECS:
+                    continue
+                mine = _claim_path(state, conv)
+                os.replace(old, mine)
+                claimed.append(mine)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    spool = state / f"{conv}.queue.jsonl"
+    if not _leg_pending(conv, state) or not spool.exists():
+        return claimed
+    mine = _claim_path(state, conv)
+    try:
+        if os.name == "nt":
+            with load_sibling("unimatrix-agy-leg").nt_spool_lock(str(spool)):
+                os.replace(spool, mine)
+                os.close(os.open(spool, os.O_WRONLY | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600))
+        else:
+            import fcntl
+            fd = os.open(spool, os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)  # an enqueue waiting on this lock reopens onto the fresh spool below
+                os.replace(spool, mine)
+                os.close(os.open(spool, os.O_WRONLY | os.O_CREAT, 0o600))
+            finally:
+                os.close(fd)
+        claimed.append(mine)
+    except (OSError, TimeoutError):
+        pass
+    return claimed
+
+
+def reply_hint(sender) -> str:
+    """The run_command that answers `sender` (the installed unimatrix-send.py, plain arguments)."""
+    prefix = [_console_python(), str(SEND_SCRIPT), "--to", sender]
+    quoted = subprocess.list2cmdline(prefix) if os.name == "nt" else " ".join(shlex.quote(a) for a in prefix)
+    return f"Reply to {sender}: run `{quoted} <your reply words>`"
+
+
+def spool_steps(conv, state=None) -> list:
+    """`injectSteps` entries for a pending leg's queued messages, each naming the sender's reply command; claims are released after the reply is written."""
+    steps = []
+    for path in claim_spool(conv, state):
+        try:
+            lines = path.read_bytes().splitlines()
+        except OSError:
+            continue
+        _CLAIMS.append(path)
+        for line in lines:
+            try:
+                text = json.loads(line)["text"]
+            except (ValueError, KeyError, TypeError):
+                continue
+            if not isinstance(text, str) or not text.strip():
+                continue
+            m = SENDER_RE.search(text)
+            if m:
+                text = f"{text}\n{reply_hint(m.group(1))}"
+            steps.append({"systemMessage": {"systemMessage": text}})
+    return steps
+
+
+def release_claims() -> None:
+    """Delete the claimed spool files this process emitted; a crash before this leaves them for the next hook."""
+    while _CLAIMS:
+        try:
+            _CLAIMS.pop().unlink()
+        except OSError:
+            pass
+
+
 def pre_invocation_reply(payload) -> dict:
-    """`injectSteps` carrying each distinct stashed advisory for the payload's conversation, then drained; {} when none."""
+    """`injectSteps` for a pending leg's queued messages, then each distinct stashed advisory for the payload's conversation, all drained; {} when none."""
     conv = payload.get("conversationId") if isinstance(payload, dict) else None
     if not isinstance(conv, str) or not CONV_RE.match(conv):
         return {}
+    log_hook(conv, "PreInvocation")
+    try:
+        queued = spool_steps(conv)
+    except Exception:
+        queued = []
+    reply = _advisory_reply(conv)
+    if queued:
+        reply = {"injectSteps": queued + reply.get("injectSteps", [])}
+    return reply
+
+
+def _advisory_reply(conv) -> dict:
     folder = advisory_dir() / conv
     texts = []
     try:
@@ -615,7 +748,10 @@ def _lifecycle_reply(event: str, payload, engine_root=None) -> dict:
 
 def _lifecycle_main(event: str, argv) -> int:
     try:
-        out = _lifecycle_reply(event, json.loads(sys.stdin.read()), engine_root_arg(argv))
+        payload = json.loads(sys.stdin.read())
+        if isinstance(payload, dict):
+            log_hook(payload.get("conversationId") or os.environ.get("ANTIGRAVITY_CONVERSATION_ID"), event)
+        out = _lifecycle_reply(event, payload, engine_root_arg(argv))
     except Exception:
         out = {}
     print(json.dumps(out))
@@ -630,6 +766,7 @@ def _pre_invocation_main() -> int:
         out = {}
     print(json.dumps(out))
     sys.stdout.flush()
+    release_claims()
     return 0
 
 
@@ -637,7 +774,10 @@ def _answer(argv, result) -> None:
     """Worker body: the decision into `result["out"]`; any failure is the fail-open allow."""
     try:
         raw = sys.stdin.read()
-        result["out"] = decide(json.loads(raw), agy_ancestor_pid(), engine_root_arg(argv), raw)
+        payload = json.loads(raw)
+        if isinstance(payload, dict):
+            log_hook(payload.get("conversationId"), "PreToolUse")
+        result["out"] = decide(payload, agy_ancestor_pid(), engine_root_arg(argv), raw)
     except Exception:
         result["out"] = dict(PASS)
 

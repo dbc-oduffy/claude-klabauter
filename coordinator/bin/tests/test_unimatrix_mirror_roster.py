@@ -748,6 +748,57 @@ def test_reap_unbacked_agy_faces_survives_a_failing_peer_row_drop(sessions, tmp_
     assert len(lines) == 1 and "locked" in lines[0]
 
 
+_DEAD_PID = 2_000_000_000
+
+
+def _dead_leg_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: dict) -> Path:
+    """Settings home whose peers.json holds one agy row per target and whose leg records are `rows` (target -> record or None)."""
+    home = tmp_path / "settings-home"
+    legs = home / "unimatrix" / "agy-legs"
+    legs.mkdir(parents=True)
+    (home / "unimatrix" / "peers.json").write_text(json.dumps(
+        [{"name": f"agy-{t}", "vendor": "agy", "target": t} for t in rows]))
+    for target, rec in rows.items():
+        if rec is not None:
+            (legs / f"{target}.json").write_text(json.dumps(rec))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "brain"))
+    return home / "unimatrix" / "peers.json"
+
+
+def test_reap_unbacked_agy_faces_reaps_a_fresh_face_only_when_both_pids_are_proven_dead(
+        sessions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    _dead_leg_home(tmp_path, monkeypatch, {
+        "both": {"pid": _DEAD_PID, "procStart": "x", "agy_pid": _DEAD_PID},
+        "agylive": {"pid": _DEAD_PID, "procStart": "x", "agy_pid": os.getpid()},
+        "norec": None,
+    })
+    fresh = {"vendor": "agy", "unimatrixRouterPid": 1, "startedAt": int(time.time() * 1000), "procStart": "x"}
+    for pid, target in ((999991, "both"), (999992, "agylive"), (999993, "norec")):
+        _put(sessions, f"{pid}.json", pid=pid, name=f"agy-{target}", **fresh)
+    lines = []
+    roster.reap_unbacked_agy_faces(lines.append)
+    assert sorted(p.name for p in sessions.iterdir()) == ["999992.json", "999993.json"]
+    assert any("agy-both" in line and "reaped unbacked agy face" in line for line in lines)
+
+
+def test_reap_unbacked_agy_faces_drops_a_peer_row_only_when_no_agy_session_is_live(
+        sessions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    peers = _dead_leg_home(tmp_path, monkeypatch, {
+        "both": {"pid": _DEAD_PID, "procStart": "x", "agy_pid": _DEAD_PID},
+        "agylive": {"pid": _DEAD_PID, "procStart": "x", "agy_pid": os.getpid()},
+    })
+    lines = []
+    roster.reap_unbacked_agy_faces(lines.append)
+    assert [r["name"] for r in json.loads(peers.read_text())] == ["agy-agylive"]
+    assert lines == ["reaped orphaned agy peer row agy-both (target both)"]
+
+
 def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid: int = 31339):
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "spawn", lambda cmd: FakeProc(pid))

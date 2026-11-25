@@ -86,6 +86,15 @@ def test_pretool_reads_the_sidecar_record_as_a_current_leg(tmp_path, env):
     assert pretool.leg_current(CONV, 4243, state) is False  # another agy process's hook still relaunches
 
 
+def test_write_private_json_publishes_the_record_whole_with_no_temp_left(tmp_path):
+    target = tmp_path / "rec.json"
+    sidecar.write_private_json(target, {"nonce": "n", "port": 7})
+    assert json.loads(target.read_text(encoding="utf-8")) == {"nonce": "n", "port": 7}
+    assert [p.name for p in tmp_path.iterdir()] == ["rec.json"]
+    if os.name != "nt":
+        assert target.stat().st_mode & 0o077 == 0
+
+
 def test_a_wrong_nonce_or_bad_conversation_id_starts_nothing(tmp_path, env):
     hub, _ = make_hub(tmp_path)
     for req in ({"nonce": "wrong", "conversationId": CONV}, {"nonce": "n0nce", "conversationId": "../x"},
