@@ -193,21 +193,76 @@ def _ensure_ignored(home: Path, entries: tuple[str, ...] = _IGNORED) -> None:
             fh.write(lead + "\n".join(missing) + "\n")
 
 
-def default_template() -> Path | None:
-    """The DoE-owned home-CLAUDE.md under the DoE content root, else None. Never raises."""
+class TemplateDiverged(Exception):
+    """The content-root and plugin templates differ and neither hash is in the other's manifest."""
+
+    def __init__(self, content: Path, content_hash: str, plugin: Path, plugin_hash: str) -> None:
+        self.content, self.content_hash = content, content_hash
+        self.plugin, self.plugin_hash = plugin, plugin_hash
+        super().__init__(
+            f"home template diverged: content root {content} ({content_hash[:12]}) and plugin "
+            f"{plugin} ({plugin_hash[:12]}) each lack the other's hash in their known-versions manifest"
+        )
+
+
+def _template_under(root) -> Path | None:
+    for base in (Path(root), Path(root) / "coordinator"):
+        cand = base / "templates" / "group-em-home" / "home-CLAUDE.md"
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _content_root_template() -> Path | None:
     try:
         from coordinator_core import content_root
 
         root = content_root.read_content_root()
     except Exception:
         return None
-    if not root:
+    return _template_under(root) if root else None
+
+
+def _plugin_template() -> Path | None:
+    """The template of the plugin the running hooks use (`CLAUDE_PLUGIN_ROOT`), else the
+    settings-home mirror."""
+    try:
+        return _template_under(os.environ.get("CLAUDE_PLUGIN_ROOT") or settings_home())
+    except Exception:
         return None
-    for base in (Path(root), Path(root) / "coordinator"):
-        cand = base / "templates" / "group-em-home" / "home-CLAUDE.md"
-        if cand.is_file():
-            return cand
-    return None
+
+
+def default_template() -> Path | None:
+    """The newer of the DoE content-root and installed-plugin home-CLAUDE.md, else the one that
+    exists, else None.
+
+    When both exist and differ, the newer is the one whose hash is absent from the other's
+    `KNOWN_VERSIONS_MANIFEST` while the other's hash is listed in its own; a lag line naming both
+    paths and hashes goes to stderr on every call. Raises `TemplateDiverged` when neither hash is
+    listed in the other's manifest."""
+    doe, plug = _content_root_template(), _plugin_template()
+    if doe is None or plug is None:
+        return doe or plug
+    try:
+        hd = _text_hash(doe.read_text(encoding="utf-8"))
+        hp = _text_hash(plug.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return doe
+    if hd == hp:
+        return doe
+    known_doe, known_plug = _known_version_hashes(doe), _known_version_hashes(plug)
+    if hp not in known_doe and hd in known_plug:
+        chosen, lagging, hc, hl = plug, doe, hp, hd
+    elif hd not in known_plug and hp in known_doe:
+        chosen, lagging, hc, hl = doe, plug, hd, hp
+    else:
+        raise TemplateDiverged(doe, hd, plug, hp)
+    print(
+        f"group-em home: template {chosen} ({hc}) chosen over {lagging} ({hl}); the latter lags "
+        f"(content root: {doe}, plugin: {plug})",
+        file=sys.stderr,
+    )
+    return chosen
 
 
 def ensure_home(template: Path | None = None, refresh: bool = False) -> Path:
@@ -312,12 +367,12 @@ def ensure_home_report(template: Path | None = None, refresh: bool = False) -> d
     (home / "state").mkdir(exist_ok=True)
     _ensure_ignored(home)
     report = {"home": home, "seed": "no-template", "remote": url, "remote_opt_out": opt_out}
-    src = template or default_template()
-    if src is None or not src.is_file():
-        return report
     seed = home / "CLAUDE.md"
     if not refresh and seed.exists():
         report["seed"] = "kept"
+        return report
+    src = template or default_template()
+    if src is None or not src.is_file():
         return report
     text = src.read_text(encoding="utf-8")
     record = home / SEEDED_RECORD

@@ -353,6 +353,8 @@ def _detail(text: str, ids: Sequence[str]) -> dict[str, str]:
 # An xfailed/xpassed test ran to its expected outcome; a leg whose only test is xfail-marked is not empty.
 _COUNT = re.compile(r"(\d+) (passed|failed|xfailed|xpassed)\b")
 _SUMMARY_TAIL = re.compile(r"\bin \d+(?:\.\d+)?s\b")
+_SKIPPED = re.compile(r"(\d+) skipped\b")
+_ERRORS = re.compile(r"\b\d+ errors?\b")
 _FRAME = re.compile(r"""^\s*(?:File ")?(\S+?\.py)(?:",\s*line |:)(\d+)\b""")
 _IMPORT_FAIL = re.compile(r"^(?:E\s+)?(?:ImportError|ModuleNotFoundError)\b")
 _ENGINE_PATH = re.compile(r"(?:^|/)(coordinator_core/.+\.py)$")
@@ -410,10 +412,13 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
         result["pytest_exit_code"] = rc
         result["pytest_stderr"] = stderr[-4096:]
     counts = {"passed": 0, "failed": 0, "xfailed": 0, "xpassed": 0}
+    skipped, errored = 0, False
     for raw in reversed(list(lines)):
         if _SUMMARY_TAIL.search(raw):
             for n, word in _COUNT.findall(raw):
                 counts[word] = int(n)
+            skipped = sum(int(n) for n in _SKIPPED.findall(raw))
+            errored = bool(_ERRORS.search(raw))
             break
     run_n = counts["passed"] + counts["failed"] + counts["xfailed"] + counts["xpassed"]
     result["tests_run"] = run_n
@@ -427,6 +432,12 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
     result.pop(ltt.ZERO_RUN_CAUSE_KEY, None)
     result.pop(IMPORT_ERROR_KEY, None)
     if run_n:
+        return
+    if skipped and rc in (0, 5) and not missing_only and not errored and not result.get("failing"):
+        # Selection skipped wholesale (e.g. a POSIX-only module on Windows): not-applicable, not an empty selection.
+        result.update(status="pass", status_after="pass", tests_skipped=skipped, selection_skipped=True)
+        if [d.get("node_id") for d in result.get("failing_detail") or []] == ["pytest"]:
+            result["failing_detail"] = []
         return
     if missing_only:
         cause = ltt.ZERO_RUN_MISSING_TARGET

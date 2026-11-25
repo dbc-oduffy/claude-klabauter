@@ -355,6 +355,51 @@ def test_successful_pytest_exit_without_completed_tests_is_infrastructure_error(
     assert data["failing_detail"] == [{"node_id": "test_leg_run", "message": "ran zero tests (empty-selection)"}]
 
 
+def _fresh():
+    return {"status_after": "fail", "failing": [], "failing_detail": []}
+
+
+@pytest.mark.parametrize("rc", [0, 5])
+def test_all_skipped_selection_is_not_applicable_not_empty_selection(rc):
+    result = _fresh()
+    tlr._tally(result, rc, ["1 skipped in 0.01s"])
+    assert result["status_after"] == "pass" and result["status"] == "pass"
+    assert result["tests_run"] == 0 and result["tests_skipped"] == 1 and result["selection_skipped"] is True
+    assert "zero_run_cause" not in result and not result["failing_detail"]
+
+
+def test_all_skipped_rc5_drops_the_synthesised_no_failing_id_detail():
+    result = {"status_after": "fail", "failing": [], "failing_detail": [{"node_id": "pytest", "message": "pytest exit 5"}]}
+    tlr._tally(result, 5, ["1 skipped in 0.01s"])
+    assert result["status_after"] == "pass" and result["failing_detail"] == []
+
+
+def test_nothing_collected_and_nothing_skipped_stays_empty_selection():
+    result = _fresh()
+    tlr._tally(result, 5, ["no tests ran in 0.01s"])
+    assert result["status_after"] == "fail" and result["zero_run_cause"] == ltt.ZERO_RUN_EMPTY
+    assert "selection_skipped" not in result
+
+
+def test_skipped_with_a_collection_error_is_not_not_applicable():
+    result = _fresh()
+    tlr._tally(result, 5, ["1 skipped, 1 error in 0.01s"])
+    assert result["status_after"] == "fail" and "selection_skipped" not in result
+
+
+def test_skipped_with_an_exit_code_outside_0_and_5_is_not_not_applicable():
+    result = _fresh()
+    tlr._tally(result, 2, ["1 skipped in 0.01s"])
+    assert result["status_after"] == "fail" and "selection_skipped" not in result
+
+
+def test_mixed_pass_and_skip_counts_only_the_passed():
+    result = {"status_after": "pass", "failing": [], "failing_detail": []}
+    tlr._tally(result, 0, ["2 passed, 3 skipped in 0.01s"])
+    assert (result["tests_run"], result["status"], result["status_after"]) == (2, "pass", "pass")
+    assert "selection_skipped" not in result and "zero_run_cause" not in result
+
+
 def test_a_leg_whose_only_test_is_a_strict_xfail_ran_one_test(repo, tmp_path):
     (repo / "tests" / "test_xf.py").write_text(
         "import pytest\n\n@pytest.mark.xfail(strict=True, reason='known')\ndef test_known():\n    assert 1 == 2\n",

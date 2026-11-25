@@ -394,7 +394,64 @@ def test_ensure_home_missing_template_skips_seed(migrate_env, tmp_path):
     assert not (home / "CLAUDE.md").exists()
 
 
-def test_default_template_resolves_from_mirror_shaped_content_root(migrate_env, env, tmp_path):
+def _twin_templates(env, tmp_path, monkeypatch, doe_text, plug_text, doe_lists=(), plug_lists=()):
+    """Content-root and plugin templates (plugin via CLAUDE_PLUGIN_ROOT) plus each manifest."""
+    import hashlib
+
+    _, _, write = env
+    paths = {}
+    for name, text, lists in (("doe", doe_text, doe_lists), ("plug", plug_text, plug_lists)):
+        tpl = tmp_path / name / "coordinator" / "templates" / "group-em-home" / "home-CLAUDE.md"
+        tpl.parent.mkdir(parents=True)
+        tpl.write_text(text, encoding="utf-8")
+        lines = "".join(f"{hashlib.sha256(t.encode('utf-8')).hexdigest()} c\n" for t in lists)
+        (tpl.parent / gem_home.KNOWN_VERSIONS_MANIFEST).write_text(lines, encoding="utf-8")
+        paths[name] = tpl
+    write(f'[repos]\ncontent_root = "{_toml_path(tmp_path / "doe")}"\n')
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "plug"))
+    return paths["doe"], paths["plug"]
+
+
+def test_default_template_plugin_newer_wins_and_names_the_lag(migrate_env, env, tmp_path, monkeypatch, capsys):
+    doe, plug = _twin_templates(env, tmp_path, monkeypatch, "v1", "v2", plug_lists=("v1", "v2"))
+    assert gem_home.default_template() == plug
+    err = capsys.readouterr().err
+    assert str(doe) in err and str(plug) in err and "lags" in err
+    assert gem_home._text_hash("v1") in err and gem_home._text_hash("v2") in err
+    home, outcome = gem_home.ensure_home_outcome()
+    assert outcome == "seeded" and (home / "CLAUDE.md").read_text() == "v2"
+
+
+def test_default_template_content_root_newer_wins(migrate_env, env, tmp_path, monkeypatch, capsys):
+    doe, _ = _twin_templates(env, tmp_path, monkeypatch, "v2", "v1", doe_lists=("v1", "v2"))
+    assert gem_home.default_template() == doe
+    assert "lags" in capsys.readouterr().err
+
+
+def test_default_template_identical_twins_print_no_lag_line(migrate_env, env, tmp_path, monkeypatch, capsys):
+    doe, _ = _twin_templates(env, tmp_path, monkeypatch, "v1", "v1")
+    assert gem_home.default_template() == doe
+    assert capsys.readouterr().err == ""
+
+
+def test_default_template_unlisted_twins_diverged(migrate_env, env, tmp_path, monkeypatch):
+    _twin_templates(env, tmp_path, monkeypatch, "a", "b", doe_lists=("a",), plug_lists=("b",))
+    with pytest.raises(gem_home.TemplateDiverged):
+        gem_home.default_template()
+
+
+def test_refresh_refuses_diverged_twins_and_leaves_claude_md(migrate_env, env, tmp_path, monkeypatch):
+    seed = tmp_path / "seed.md"
+    seed.write_text("old", encoding="utf-8")
+    home = gem_home.ensure_home(template=seed)
+    _twin_templates(env, tmp_path, monkeypatch, "a", "b")
+    with pytest.raises(gem_home.TemplateDiverged):
+        gem_home.ensure_home_report(refresh=True)
+    assert (home / "CLAUDE.md").read_text() == "old"
+
+
+def test_default_template_resolves_from_mirror_shaped_content_root(migrate_env, env, tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     _, _, write = env
     doe = tmp_path / "doe"
     tpl = doe / "coordinator" / "templates" / "group-em-home" / "home-CLAUDE.md"
