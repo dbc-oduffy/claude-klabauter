@@ -1633,7 +1633,9 @@ class Router:
                     return {"ok": False, "error": "empty or acknowledgement text is not delivered"}
                 if reply_to:
                     sender = reply_to
-                if sender in self.peers:
+                # A dead holder's face is stopped (an agy leg that dropped to pending), so its endpoint is
+                # gone: a send through it fails WinError 2. Its session still replies via a transport face.
+                if sender in self.peers and sender not in self.dead_holders:
                     return await self._peer_send_to_session(sender, peer, text)
                 return await self._transport_send_to_session(sender, peer, text)
             if peer not in self.peers:
