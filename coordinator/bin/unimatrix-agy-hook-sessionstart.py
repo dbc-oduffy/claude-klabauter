@@ -15,6 +15,8 @@ the leg record, then the conversation is upserted into peers.json (register_peer
 does). Where the env does carry the address and token the leg starts live here.
 
 Always exits 0. Prints one JSON object: a plain systemMessage noting registration when a leg record exists afterwards, else `{}`.
+While the leg is pending a further note tells the agent to run FIRST_ACTION_COMMAND as its first action: that run_command goes through the
+PreToolUse rewrite (unimatrix-agy-hook-pretool.py), which hands the shell's credentials to the leg and brings it live. A live leg gets no note.
 
 unimatrix-agy-hook-launch.py and unimatrix-roster.py are resolved beside this file.
 """
@@ -27,6 +29,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 VENDOR = "agy"
 NOTE = "Registered with the unimatrix peer router: Claude/Codex peers can message this session."
+# The pending leg's promotion rides the PreToolUse rewrite of the agent's first run_command (the shell
+# alone carries the LS address and CSRF token). Valid in PowerShell and sh; no `$`, backtick, `%`, `^`.
+FIRST_ACTION_COMMAND = "echo unimatrix-leg-ready"
 
 
 def load_sibling(name):
@@ -38,12 +43,7 @@ def load_sibling(name):
 
 def under_config_home(path) -> bool:
     """True when `path` is the agy config home (~/.gemini) or inside it: agy runs hooks there, so it is no launch dir."""
-    try:
-        home = os.path.normcase(os.path.abspath(Path.home() / ".gemini"))
-        target = os.path.normcase(os.path.abspath(path))
-        return target == home or target.startswith(home + os.sep)
-    except (OSError, ValueError, TypeError, RuntimeError):
-        return False
+    return load_sibling("unimatrix-agy-hook-launch").under_config_home(path)
 
 
 def payload_cwd(payload) -> "str | None":
@@ -217,10 +217,28 @@ def _repo_claude_md(cwd, max_bytes=24000):
     return encoded[:max_bytes].decode("utf-8", errors="ignore").rstrip("\r\n") or None
 
 
-def reply(registered, worker_pointer=None, failure=None, repo_doctrine=None) -> dict:
+def leg_pending(conv) -> bool:
+    """True when `conv`'s leg record exists and reads mode pending (never raises, never spawns)."""
+    try:
+        if not isinstance(conv, str) or not load_sibling("unimatrix-agy-hook-launch").CONV_RE.match(conv):
+            return False
+        state = load_sibling("unimatrix-roster").settings_home() / "unimatrix" / "agy-legs"
+        return json.loads((state / f"{conv}.json").read_text(encoding="utf-8")).get("mode") == "pending"
+    except Exception:
+        return False
+
+
+def first_action_note(command=FIRST_ACTION_COMMAND) -> str:
+    """The plain-text instruction that makes the agent's first run_command the pending leg's promotion."""
+    return (f"Unimatrix peer messaging: before any other tool, run exactly this command as your first action, "
+            f"with no changes: {command}")
+
+
+def reply(registered, worker_pointer=None, failure=None, repo_doctrine=None, first_action=False) -> dict:
     # Trap: agy (observed 2026-11-04) panics "cannot convert string to message" on a SessionStart
     # systemMessage carrying metadata.user_markdown, despite its own docs; notes go as plain text.
-    notes = ([NOTE] if registered else []) + [n for n in (worker_pointer, failure, repo_doctrine) if n]
+    notes = (([NOTE] if registered else []) + ([first_action_note()] if first_action else [])
+             + [n for n in (worker_pointer, failure, repo_doctrine) if n])
     return {"injectSteps": [{"systemMessage": {"systemMessage": n}} for n in notes]} if notes else {}
 
 
@@ -303,7 +321,8 @@ def main(argv=None) -> int:
             registered = register(payload, agy_pid, root) if root is not None else register(payload, agy_pid)
         except Exception as exc:  # the session still starts; the cause rides as a note, as the Codex hook does
             registered, failure = False, f"unimatrix: peer registration failed: {exc}"
-        out = reply(registered, pointer, failure, repo_doctrine)
+        conv = payload.get("conversationId") or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+        out = reply(registered, pointer, failure, repo_doctrine, first_action=bool(registered) and leg_pending(conv))
     except Exception:
         out = {}
     print(json.dumps(out))

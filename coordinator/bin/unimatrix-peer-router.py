@@ -283,7 +283,7 @@ def load_leg_peers(legs_dir, taken_names=(), taken_targets=(), pending_out=None)
         if name in taken_names:
             continue
         peer = {"name": name, "vendor": "agy", "target": conv}
-        if rec.get("cwd"):
+        if rec.get("cwd") and not under_agy_config_home(rec["cwd"]):
             peer["cwd"] = rec["cwd"]
         if pending:
             pending_out[name] = peer
@@ -302,9 +302,24 @@ def default_presence_dir() -> Path:
     return _liveness().agy_presence_dir()
 
 
-def readable_peer_name(vendor, target, cwd=None):
-    """Stable routing name carrying vendor, repository, session identity and box."""
+def under_agy_config_home(path) -> bool:
+    """True when `path` is the agy config home (~/.gemini) or inside it: agy runs hooks there, so it is no launch dir."""
+    try:
+        home = os.path.normcase(os.path.abspath(Path.home() / ".gemini"))
+        target = os.path.normcase(os.path.abspath(os.fsdecode(path)))
+        return target == home or target.startswith(home + os.sep)
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return False
+
+
+def readable_peer_name(vendor, target, cwd=None) -> str:
+    """Stable routing name carrying vendor, repository, session identity and box.
+
+    An agy cwd under the agy config home is no launch dir: it names the face as if no cwd were known.
+    """
     cwd = os.fsdecode(cwd) if isinstance(cwd, (str, os.PathLike)) else ""
+    if vendor == "agy" and cwd and under_agy_config_home(cwd):
+        cwd = ""
     def clean(value):
         return re.sub(r"[^A-Za-z0-9_-]+", "-", str(value)).strip("-")
     base = str(cwd or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]

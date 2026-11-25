@@ -284,6 +284,50 @@ def test_unrelated_zero_run_cause_still_halts_the_empty_verdict_kind():
     assert halted["next_action"].startswith("Refire to re-run the test leg")
 
 
+_GUARD_DENIAL = "guard-doctrine-surface-bash-write denied the dispatch.measured_rev command"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_a_guard_refused_zero_test_leg_halts_naming_the_refusal_not_test_infra_failure():
+    halted = _run_at_base(
+        "{ status: 'error', sidecar_path: 'a.md', tests_run: 0, zero_run_cause: '%s', guard_refusal: '%s' }"
+        % (ask_compose.GUARD_REFUSED_CAUSE, _GUARD_DENIAL),
+        "null",
+    )
+    assert halted["halted"] == ask_compose.GUARD_REFUSED_HALT != "test_infra_failure"
+    assert _GUARD_DENIAL in halted["detail"]
+    assert halted["next_action"].startswith("Fix the guard refusal named in detail first")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_a_guard_refusal_with_no_text_still_halts_guard_refused_naming_the_absence():
+    halted = _run_at_base(
+        "{ status: 'error', sidecar_path: 'a.md', tests_run: 0, zero_run_cause: 'guard_refused' }", "null"
+    )
+    assert halted["halted"] == "guard_refused" and "named no guard refusal" in halted["detail"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+def test_a_guard_cause_on_a_leg_that_ran_tests_is_not_a_guard_halt():
+    held = "{ status: 'fail', failing_ids: ['a::t1'], sidecar_path: 'a.md', tests_run: 3, zero_run_cause: 'guard_refused' }"
+    halted = _run_at_base(held, "null")
+    assert halted is None or halted["halted"] != "guard_refused"
+
+
+@pytest.mark.parametrize("export_command", [None, "EXPORT-CMD"])
+def test_test_instruction_tells_the_runner_to_report_a_guard_denial_as_its_own_cause(export_command):
+    text = ask_compose._test_instruction_js("a" * 40, None, export_command).replace("\\", "")
+    assert f"zero_run_cause '{ask_compose.GUARD_REFUSED_CAUSE}'" in text and "guard_refusal" in text
+    assert ask_compose.GUARD_REFUSED_CAUSE != ask_compose.TEST_INFRA_CAUSE
+
+
+def test_test_result_schema_keeps_the_guard_refusal_field():
+    assert "guard_refusal" in ask_compose._test_result_schema()["properties"]
+
+
 _OVER_BUDGET = (
     "{ status: 'error', leg_type: 'test_infra', sidecar_path: 'a.md', summary: 'timeout: 540s', "
     "over_budget: true, elapsed_s: 541.2, budget_s: 540, tests_run: 155, tests_failed: 0, "
@@ -511,7 +555,7 @@ def test_an_unmet_ledger_row_halts_naming_requirement_evidence_and_gap(kind):
 def test_a_bare_not_met_detail_is_refused():
     detail = _ledger_halt("commit", ledger="{ items: [] }", req_text="{}")["detail"]
     assert detail != "R1: not met"
-    assert "requirement text not in the ledger view" in detail
+    assert "requirement text not in the verify item" in detail
     assert "evidence checked: none recorded by the verify leg" in detail
     assert "remaining gap: the verdict named no remaining line (not met)" in detail
 

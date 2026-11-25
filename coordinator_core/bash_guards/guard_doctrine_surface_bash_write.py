@@ -727,8 +727,12 @@ _SED_INPLACE_RE = re.compile(r"\bsed\b.{0,120}?(-i\b|--in-place\b)", re.DOTALL)
 _PERL_INPLACE_RE = re.compile(r"\bperl\b.{0,120}?-i\b", re.DOTALL)
 _PERL_WRITE_OPEN_RE = re.compile(r"\bopen\s*\(\s*[\w$]+\s*,\s*['\"]\s*\+?>")
 _CP_MV_RE = re.compile(
-    r"(?:^|[|&;(]|\|\||&&)\s*(?:\w+=\S*\s+)*(?:sudo\s+|command\s+|env\s+)*"
+    r"(?:^|[|&;()]|\|\||&&)\s*(?:\w+=\S*\s+)*(?:sudo\s+|command\s+|env\s+)*"
     r"\b(cp|mv|install|dd|truncate)\b"
+)
+_SORT_OUTPUT_RE = re.compile(
+    r"(?:^|[|&;()]|\|\||&&)\s*(?:\w+=\S*\s+)*(?:sudo\s+|command\s+|env\s+)*"
+    r"sort\b[^;&|\n]*?\s(?:-[A-Za-z]*o|--output)"
 )
 _WRITE_MODE_OPEN_RE = re.compile(r"open\([^)]*['\"][wax]['\"]")
 _WRITE_METHOD_RE = re.compile(r"\.write(_text|_bytes)?\(")
@@ -811,6 +815,7 @@ def _has_non_redirect_write_marker(text: str) -> bool:
         _PERL_INPLACE_RE,
         _PERL_WRITE_OPEN_RE,
         _CP_MV_RE,
+        _SORT_OUTPUT_RE,
         _WRITE_MODE_OPEN_RE,
         _WRITE_METHOD_RE,
         _EX_ED_RE,
@@ -1373,7 +1378,8 @@ _BODY_OPEN_RE = re.compile(r"\bopen\s*\(\s*(?P<path>(['\"])[^'\"\n]*\2)?\s*(?P<r
 _BODY_PATH_SINK_RE = re.compile(
     r"\bPath\s*\(\s*(['\"])(?P<path>[^'\"\n]*)\1\s*\)\s*\.\s*write_(?:text|bytes)\s*\("
 )
-_BODY_UNRESOLVED_SINK_RE = re.compile(r"\.\s*(?:open|dump|touch|mkdir)\s*\(|\bos\s*\.\s*(?:open|fdopen)\s*\(")
+_BODY_UNRESOLVED_SINK_RE = re.compile(r"\.\s*(?:open|touch|mkdir)\s*\(|\bos\s*\.\s*(?:open|fdopen)\s*\(")
+_BODY_DUMP_RE = re.compile(r"\.\s*dump\s*\(")
 _BODY_ANY_WRITE_RE =re.compile(r"\.\s*write(?:_text|_bytes|lines)?\s*\(|\bprint\s*\([^)]*\bfile\s*=")
 
 
@@ -1384,6 +1390,10 @@ def _body_sinks_are_ungoverned(body: str, identifiers_lower: Tuple[str, ...]) ->
     whose sink is not a literal (variable path, ``.write`` on an unbound
     stream, shutil/os move) returns False."""
     if _PY_MOVE_SINK_RE.search(body) or _BODY_UNRESOLVED_SINK_RE.search(body):
+        return False
+    if _BODY_DUMP_RE.search(body) and not any(
+        _WRITE_MODE_RE.search(m.group("rest")) for m in _BODY_OPEN_RE.finditer(body)
+    ):
         return False
     resolved_writes = 0
     for match in _BODY_OPEN_RE.finditer(body):
@@ -1464,6 +1474,118 @@ def _blank_quoted_flag_value_mentions(
         return flag + match.group("sep") + "''"
 
     return _QUOTED_FLAG_VALUE_RE.sub(_blank, segment)
+
+
+#: Programs whose quoted operands are code, a destination, or a wrapped command,
+#: so a governed name inside one is never provably prose.
+_PROSE_OPERAND_UNSAFE_PROGRAMS = frozenset({
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "cmd", "pwsh", "powershell",
+    "eval", "exec", "xargs", "env", "sudo", "command", "nohup", "time", "timeout",
+    "nice", "stdbuf", "ssh", "find", "awk", "gawk", "mawk", "sed", "perl", "ruby",
+    "node", "deno", "bun", "php", "lua", "tee", "cp", "mv", "install", "dd",
+    "truncate", "ex", "ed", "vi", "vim", "nano", "patch", "rsync", "curl", "wget",
+    "touch", "ln", "tar", "unzip", "zip", "7z", "gzip", "gunzip", "git", "sort",
+    "uniq", "start", "invoke-expression", "iex",
+})
+_PROSE_FLAG_PREFIX_RE = re.compile(r"--?[\w-]+=")
+
+
+def _shell_word_spans(segment: str) -> "list[tuple[int, int]]":
+    """Quote- and escape-aware whitespace word spans; ``[]`` for an unclosed quote."""
+    spans: "list[tuple[int, int]]" = []
+    start: Optional[int] = None
+    quote: Optional[str] = None
+    i = 0
+    n = len(segment)
+    while i < n:
+        ch = segment[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            if start is None:
+                start = i
+            i += 2
+            continue
+        if ch in "'\"":
+            if start is None:
+                start = i
+            quote = ch
+        elif ch.isspace():
+            if start is not None:
+                spans.append((start, i))
+                start = None
+        elif start is None:
+            start = i
+        i += 1
+    if quote:
+        return []
+    if start is not None:
+        spans.append((start, n))
+    return spans
+
+
+def _prose_operands_are_data(words: "list[str]") -> bool:
+    """The command word runs a program whose quoted operands are inert text to
+    the shell and to the program: not a shell, interpreter payload, wrapper,
+    in-place editor or file-writing utility. A python run qualifies only as a
+    ``.py`` script run, never ``-c``/``-m``/stdin."""
+    idx = 0
+    while idx < len(words) and (_ASSIGN_RE.match(words[idx]) or words[idx] in ("&", ".")):
+        idx += 1
+    if idx >= len(words):
+        return False
+    prog = re.sub(r"\.exe\Z", "", _command_token_basename(words[idx].replace("\\", "/")).lower())
+    if prog in _PROSE_OPERAND_UNSAFE_PROGRAMS or _PS_WRITE_CMDLET_RE.search(prog):
+        return False
+    if _PYTHON_PROG_RE.match(prog):
+        idx += 1
+        while idx < len(words) and words[idx] in _PY_INTERP_FLAGS:
+            idx += 1
+        return idx < len(words) and words[idx].strip("'\"").lower().endswith(".py")
+    return True
+
+
+def _blank_prose_operand_mentions(segment: str, identifiers_lower: Tuple[str, ...]) -> str:
+    """``segment`` with each fully-quoted operand that names a governed identifier
+    and is free text (whitespace in it) or a JSON blob replaced by ``''``.
+
+    Such an operand is an argv mention, not a write target: the shell writes only
+    through redirects and writer commands, which stay in the text. Left alone: a
+    quoted operand without whitespace (a path), one carrying a live substitution,
+    one following a redirect operator, and every operand of a program
+    ``_prose_operands_are_data`` does not clear."""
+    if not _mentions_governed_identifier(segment, identifiers_lower):
+        return segment
+    spans = _shell_word_spans(segment)
+    words = [segment[s:e] for s, e in spans]
+    if not words or not _prose_operands_are_data(words):
+        return segment
+    out = segment
+    for pos in range(len(words) - 1, 0, -1):
+        raw = words[pos]
+        flag = _PROSE_FLAG_PREFIX_RE.match(raw)
+        body = raw[flag.end():] if flag else raw
+        if body[:1] not in ("'", '"') or not _mentions_governed_identifier(raw, identifiers_lower):
+            continue
+        if words[pos - 1][-1:] in (">", "<"):
+            continue
+        owner = flag.group(0).rstrip("=") if flag else words[pos - 1]
+        if _WRITE_FLAG_RE.fullmatch(owner) or _CODE_OR_DEST_FLAG_RE.fullmatch(owner):
+            continue
+        if re.sub(r"['\"]", "", _strip_quoted_spans(body)):
+            continue
+        inner = re.sub(r"['\"]", "", body)
+        if not (any(c.isspace() for c in inner) or inner.lstrip()[:1] in ("{", "[")):
+            continue
+        start, end = spans[pos]
+        out = out[: start + (flag.end() if flag else 0)] + "''" + out[end:]
+    return out
 
 
 def _blank_prose_literal_mentions(cmd: str, identifiers_lower: Tuple[str, ...]) -> str:
@@ -1955,11 +2077,28 @@ def _split_top_level_segments(cmd: str) -> "list[str]":
     return segments
 
 
+def _leading_assignment_text(segment: str) -> str:
+    """The leading ``NAME=value`` words of ``segment``: all of it for a bare
+    assignment, only the env prefix for ``NAME=v cmd ...`` -- the command's own
+    operands are not part of what the variable is bound to."""
+    spans = _shell_word_spans(segment)
+    if not spans:
+        return segment
+    end = 0
+    for start, stop in spans:
+        if not _ASSIGN_RE.match(segment[start:stop]):
+            return segment[:end]
+        end = stop
+    return segment
+
+
 def _has_var_assignment_indirection(
     segments: "list[str]", identifiers_lower: Tuple[str, ...]
 ) -> bool:
     for segment in segments:
-        if _ASSIGN_RE.match(segment) and _mentions_governed_identifier(segment, identifiers_lower):
+        if _ASSIGN_RE.match(segment) and _mentions_governed_identifier(
+            _leading_assignment_text(segment), identifiers_lower
+        ):
             return True
     return False
 
@@ -2129,11 +2268,16 @@ def _assignment_indirection_reaches_a_write(
 
 
 def _has_xargs_pipe_indirection(
-    segments: "list[str]", identifiers_lower: Tuple[str, ...]
+    segments: "list[str]",
+    identifiers_lower: Tuple[str, ...],
+    executable_segments: Optional["list[str]"] = None,
 ) -> bool:
+    """``executable_segments`` is ``segments`` with prose operands blanked: an
+    ``xargs`` word inside one is text, while the governed mention is still read
+    from ``segments`` (a piped-in name reaches the ``xargs`` stage)."""
     if not any(_mentions_governed_identifier(segment, identifiers_lower) for segment in segments):
         return False
-    return any(_XARGS_RE.search(segment) for segment in segments)
+    return any(_XARGS_RE.search(segment) for segment in (executable_segments or segments))
 
 
 _OS_EXEC_RE = re.compile(
@@ -2413,6 +2557,32 @@ def _neutralize_mention_only_python_substitutions(
     return _PY_C_DIRECT_RE.sub(_swap_direct, segment)
 
 
+_SINK_UNRESOLVED_CHARS = frozenset("$`*?[]{}~\"'%;&|<>()")
+_FD_DUP_RE = re.compile(r"\d?>&(?:\d+|-)(?![\w./$-])")
+_PS_IO_WRITE_RE = re.compile(r"WriteAll|StreamWriter|\[(?:system\.)?io\.file\]", re.IGNORECASE)
+_SINK_LEADING_KEYWORDS = frozenset({"do", "then", "else", "elif", "if", "while", "until", "!", "{", "time"})
+_SINK_BENIGN_WORDS = frozenset({"}", "done", "fi", "esac"})
+_SINK_LIST_HEADS = frozenset({"for", "case", "select"})
+_SINK_CWD_MOVERS = frozenset({"cd", "pushd", "popd", "set-location", "sl"})
+_SINK_READ_ONLY = (_READ_ONLY_PROGRAMS - {"cd"}) | frozenset({
+    "tac", "nl", "sleep", "date", "which", "read", ":", "sha256sum", "md5sum", "du",
+    "get-content", "gc", "get-childitem", "gci", "dir", "select-string", "sls",
+    "test-path", "get-item", "gi", "measure-object", "write-output", "write-host",
+    "resolve-path", "split-path", "join-path", "get-location", "get-command",
+    "get-date", "convertto-json", "select-object", "sort-object",
+})
+_FIND_ACTION_RE = re.compile(r"-(?:exec|execdir|ok|okdir|delete|fprint\w*|fls)\Z")
+_SED_EXEC_RE = re.compile(r"(?<![\w-])e\s+\S|/[gIimMp0-9]*e[gIimMp0-9]*(?:\s|;|}|$)")
+_PYTHON_PROG_RE = re.compile(r"python(?:\d+(?:\.\d+)*)?\Z")
+_PY_INTERP_FLAGS = frozenset({"-u", "-B", "-I", "-E", "-s", "-S", "-O", "-OO", "-q"})
+_PY_PAYLOAD_DYNAMIC_RE = re.compile(r"__import__|importlib|getattr|\beval\b|\bexec\b|compile\s*\(|ctypes")
+_PY_PATH_LITERAL_WRITE_RE = re.compile(
+    r"(?:pathlib\s*\.\s*)?Path\s*\(\s*(['\"])(?P<path>[^'\"\n]*)\1\s*\)\s*\.\s*write_(?:text|bytes)\s*\("
+)
+_SHELL_C_FLAG_RE = re.compile(r"-[A-Za-z]*c[A-Za-z]*\Z")
+_SCRIPT_INPLACE_FLAG_RE = re.compile(r"--?(?:in-?place|overwrite)(?:=.*)?\Z", re.IGNORECASE)
+
+
 _FETCH_COMMANDS = frozenset({"gh", "curl", "wget"})
 _OUTPUT_FLAG_RE = re.compile(r"(?<!\S)(?:-o|-O|--output|--output-document|--output-dir)(?![\w-])")
 
@@ -2443,6 +2613,292 @@ def _is_fetch_to_ungoverned_file_shape(
     return not _has_write_marker_for_point3(head, identifiers_lower) and not _has_indirection_marker(head)
 
 
+class _SinkClassifier:
+    """Sink-based read-only judgement. ``command_ok`` is True only when every
+    write sink of every segment resolves to a literal path and none lands on a
+    governed identifier; anything unresolvable is False, which leaves the
+    verdict to the fail-closed legs of ``is_denied_bash_write`` unchanged."""
+
+    def __init__(self, identifiers_lower: Tuple[str, ...]) -> None:
+        self.ids = identifiers_lower
+        self.moved = False
+        self.has_substitution = False
+
+    def sink_ok(self, raw: str) -> bool:
+        """A literal path that is not a governed surface or inside a governed home."""
+        target = _fold_literal_joins(raw.strip())
+        if target.lower() == "/dev/null":
+            return True
+        if not target or any(ch in _SINK_UNRESOLVED_CHARS for ch in target):
+            return False
+        path = target.replace("\\", "/").lower()
+        absolute = path.startswith("/") or bool(re.match(r"[a-z]:/", path))
+        if not absolute and self.moved:
+            return False
+        raw_parts = [part for part in path.split("/") if part not in ("", ".")]
+        if ".." in raw_parts:
+            return False
+        parts = [part.rstrip(". ") for part in raw_parts]
+        parts = [part for part in parts if part]
+        if not parts or ":" in parts[-1]:
+            return False
+        joined = "/".join(parts)
+        base = parts[-1]
+        for ident in self.ids:
+            if ident.endswith("/"):
+                if "/" + ident.lstrip("/") in "/" + joined + "/":
+                    return False
+            elif "/" not in ident:
+                if base == ident:
+                    return False
+            elif joined == ident or joined.endswith("/" + ident):
+                return False
+        return True
+
+    def command_ok(self, cmd: str, depth: int = 0) -> bool:
+        if depth > 4 or "<(" in cmd or ">(" in cmd:
+            return False
+        if _PS_WRITE_CMDLET_RE.search(cmd) or _PS_IO_WRITE_RE.search(cmd):
+            return False
+        if "<<" in cmd:
+            stripped = _without_data_heredocs(cmd)
+            if stripped is None:
+                return False
+            cmd = stripped
+        split = self._extract_substitutions(cmd)
+        if split is None:
+            return False
+        outer, inners = split
+        self.has_substitution = self.has_substitution or bool(inners)
+        if not all(self.command_ok(inner, depth + 1) for inner in inners):
+            return False
+        return all(
+            self._segment_ok(segment, depth)
+            for segment in _split_top_level_segments(outer)
+            if segment.strip()
+        )
+
+    @staticmethod
+    def _extract_substitutions(text: str) -> "Optional[tuple[str, list[str]]]":
+        out: "list[str]" = []
+        inners: "list[str]" = []
+        quote = ""
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch == "\\" and quote != "'":
+                out.append(text[i: i + 2])
+                i += 2
+                continue
+            if quote:
+                if ch == quote:
+                    quote = ""
+            elif ch in "'\"":
+                quote = ch
+            if quote != "'" and (ch == "`" or text.startswith("$(", i)):
+                if ch == "`":
+                    return None
+                span, consumed = _copy_command_substitution(text, i)
+                if not span.endswith(")"):
+                    return None
+                inners.append(span[2:-1])
+                out.append("x")
+                i += consumed
+                continue
+            out.append(ch)
+            i += 1
+        return "".join(out), inners
+
+    def _strip_redirects(self, text: str) -> Optional[str]:
+        """``text`` with every redirect removed once its target is judged; None
+        when a redirect lands on a governed or unresolvable target, or any
+        unquoted ``>``/``&`` is left that the redirect grammar did not read."""
+        mask = _unquoted_mask(text)
+        chars = list(text)
+        spans = [m.span() for m in _FD_DUP_RE.finditer(text) if mask[m.start()]]
+        for match in _ANY_REDIRECT_RE.finditer(text):
+            if not mask[match.start()]:
+                continue
+            target = match.group("dq") or match.group("sq") or match.group("bare") or ""
+            if not self.sink_ok(target):
+                return None
+            spans.append(match.span())
+        for start, end in spans:
+            for k in range(start, end):
+                chars[k] = " "
+        blanked = "".join(chars)
+        rest = _unquoted_mask(blanked)
+        if any(rest[k] and blanked[k] in ">&" for k in range(len(blanked))):
+            return None
+        return blanked
+
+    def _segment_ok(self, segment: str, depth: int) -> bool:
+        text = segment.strip()
+        if text.startswith("("):
+            return False
+        text = self._strip_redirects(text)
+        if text is None:
+            return False
+        if exceeds_tokenizable_ceiling(text):
+            return False
+        try:
+            words = shlex.split(text)
+        except ValueError:
+            return False
+        while words and _ASSIGN_RE.match(words[0]):
+            words = words[1:]
+        while words and words[0].lower() in _SINK_LEADING_KEYWORDS:
+            words = words[1:]
+        if not words or words[0] in _SINK_BENIGN_WORDS:
+            return True
+        if words[0] in _SINK_LIST_HEADS:
+            # A `case` arm (`pat) cmd`) shares the head segment with a command.
+            return ")" not in text
+        prog = re.sub(r"\.exe\Z", "", words[0].replace("\\", "/").rsplit("/", 1)[-1].lower())
+        sinky = "\\" not in text
+        if prog in _SINK_CWD_MOVERS:
+            self.moved = True
+            return True
+        if prog in _SINK_READ_ONLY:
+            return not (prog == "rg" and any(w.startswith("--pre") for w in words))
+        if prog == "command":
+            return words[1:2] in (["-v"], ["-V"])
+        if prog == "find":
+            return not any(_FIND_ACTION_RE.match(w) for w in words[1:])
+        if prog in ("sort", "uniq"):
+            return not any(w.startswith("--compress-program") for w in words) and all(
+                self.sink_ok(o) for o in _output_operands(words)
+            )
+        if prog == "git":
+            return not self.has_substitution and _is_git_read_shape(text)
+        if prog in ("awk", "gawk", "mawk"):
+            return not any(
+                any(ch in w for ch in ">|") or "system(" in w or "getline" in w or "inplace" in w
+                for w in words[1:]
+            )
+        if prog in ("sh", "bash", "zsh", "dash"):
+            if len(words) < 3 or not _SHELL_C_FLAG_RE.match(words[-2]):
+                return False
+            if not all(w.startswith("-") for w in words[1:-2]):
+                return False
+            return self.command_ok(words[-1], depth + 1)
+        if prog == "eval":
+            return len(words) == 2 and self.command_ok(words[1], depth + 1)
+        if prog in ("pwsh", "powershell"):
+            flags = [i for i, w in enumerate(words) if w.lower() in ("-command", "-c")]
+            return flags == [len(words) - 2] and self.command_ok(words[-1], depth + 1)
+        if prog == "xargs":
+            i = 1
+            while i < len(words) and words[i].startswith("-"):
+                i += 2 if words[i] in _XARGS_VALUE_FLAGS else 1
+            inner = words[i:]
+            if not inner:
+                return False
+            iprog = re.sub(r"\.exe\Z", "", inner[0].replace("\\", "/").rsplit("/", 1)[-1].lower())
+            return (
+                iprog in _SINK_READ_ONLY
+                and not (iprog == "rg" and any(w.startswith("--pre") for w in inner))
+            )
+        if not sinky:
+            return False
+        if prog == "tee":
+            return all(self.sink_ok(w) for w in words[1:] if not w.startswith("-"))
+        if prog in ("cp", "mv", "install"):
+            return (
+                not self.moved
+                and ".." not in text
+                and _cp_mv_lands_in_home(text, self.ids) is False
+            )
+        if prog == "sed":
+            return self._sed_ok(words)
+        if _PYTHON_PROG_RE.match(prog):
+            if words[1:2] == ["-c"]:
+                return len(words) == 3 and self._python_payload_ok(words[2])
+            i = 1
+            while i < len(words) and words[i] in _PY_INTERP_FLAGS:
+                i += 1
+            if i < len(words) and words[i].lower().endswith(".py"):
+                return self._script_ok(words[i + 1:])
+            return False
+        if words[0].lower().endswith(".py"):
+            return self._script_ok(words[1:])
+        return False
+
+    def _sed_ok(self, words: "list[str]") -> bool:
+        body = " ".join(words[1:])
+        if _SED_WRITE_SCRIPT_RE.search("sed " + body) or _SED_EXEC_RE.search(body):
+            return False
+        flags = [w for w in words[1:] if w.startswith("-")]
+        inplace = any(
+            w.startswith("--in-place") or (not w.startswith("--") and "i" in w[1:]) for w in flags
+        )
+        if not inplace:
+            return True
+        operands = [w for w in words[1:] if not w.startswith("-")]
+        if not any(
+            w in ("-e", "-f") or w.startswith(("--expression", "--file")) for w in flags
+        ):
+            operands = operands[1:]
+        return not self.moved and all(self.sink_ok(o) for o in operands)
+
+    def _script_ok(self, args: "list[str]") -> bool:
+        """A script run's sinks are the values of its output flags; a governed
+        path introduced by a subcommand or a flag is a read. A governed path
+        as the script's first operand is the file it acts on: unresolvable."""
+        if any(_SCRIPT_INPLACE_FLAG_RE.match(a) or a == "-i" for a in args) and any(
+            _mentions_governed_identifier(a, self.ids) for a in args
+        ):
+            return False
+        if args and not args[0].startswith("-") and _mentions_governed_identifier(args[0], self.ids):
+            return False
+        if any(
+            _mentions_governed_identifier(a, self.ids) and _has_non_redirect_write_marker(a)
+            for a in args
+        ):
+            return False
+        i = 0
+        while i < len(args):
+            flag, eq, value = args[i].partition("=")
+            i += 1
+            if flag == "-o" or _WRITE_FLAG_RE.fullmatch(flag):
+                if not eq:
+                    value = args[i] if i < len(args) and not args[i].startswith("-") else ""
+                    i += 1 if value else 0
+            elif flag.startswith("-o") and not flag.startswith("--") and not eq:
+                value = flag[2:]
+            else:
+                continue
+            if value and not self.sink_ok(value):
+                return False
+        return True
+
+    def _python_payload_ok(self, payload: str) -> bool:
+        if _has_os_exec_marker(payload) or _PY_PAYLOAD_DYNAMIC_RE.search(payload):
+            return False
+        if _PY_MOVE_SINK_RE.search(payload):
+            return False
+        blanked = list(_STD_STREAM_WRITE_RE.sub(lambda m: " " * len(m.group(0)), payload))
+        for start, end, args in _open_call_spans(payload):
+            if "," not in args or not _WRITE_MODE_RE.search(args[args.find(",") + 1:]):
+                continue
+            literal = _LITERAL_FIRST_ARG_RE.match(args)
+            if literal is None or not self.sink_ok(literal.group("path")):
+                return False
+            stop = end
+            chained = _TRAILING_WRITE_CALL_RE.match(payload[end:])
+            if chained is not None:
+                stop = end + chained.end()
+            for k in range(start, stop):
+                blanked[k] = " "
+        for match in _PY_PATH_LITERAL_WRITE_RE.finditer(payload):
+            if not self.sink_ok(match.group("path")):
+                return False
+            for k in range(match.start(), match.end()):
+                blanked[k] = " "
+        return not _has_non_redirect_write_marker("".join(blanked))
+
+
 def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     """The whole predicate, isolated from payload plumbing so it is directly
     unit-testable. ``identifiers_lower`` is the per-call resolved governed-
@@ -2464,6 +2920,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     assignment-captured-substitution carve-out."""
     if not identifiers_lower:
         return False
+    original = cmd
     if not _mentions_governed_identifier(cmd, identifiers_lower):
         expanded = _expand_local_assignments(cmd)
         if expanded == cmd or not _mentions_governed_identifier(
@@ -2474,7 +2931,10 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
         # this command writes, and the resolved form is what writes it.
         cmd = expanded
 
-    segments = _split_top_level_segments(cmd)
+    # Judged on the unexpanded text: a `$VAR` sink is unresolvable there.
+    if _SinkClassifier(identifiers_lower).command_ok(original):
+        return False
+
     quoted_heredoc_bodies = _quoted_heredoc_bodies(cmd)
 
     stripped_cmd = _strip_heredoc_bodies(cmd)
@@ -2493,7 +2953,12 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     if _has_stdin_program_unresolved_governed_write(cmd, identifiers_lower):
         return True
 
-    if _has_xargs_pipe_indirection(segments, identifiers_lower):
+    xargs_segments = _split_top_level_segments(_strip_data_heredoc_bodies(cmd))
+    if _has_xargs_pipe_indirection(
+        xargs_segments,
+        identifiers_lower,
+        [_blank_prose_operand_mentions(s, identifiers_lower) for s in xargs_segments],
+    ):
         return True
 
     data_stripped_segments = _split_top_level_segments(
@@ -2502,6 +2967,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     for segment in data_stripped_segments:
         segment = _neutralize_mention_only_python_substitutions(segment, identifiers_lower)
         segment = _blank_quoted_flag_value_mentions(segment, identifiers_lower)
+        segment = _blank_prose_operand_mentions(segment, identifiers_lower)
         if not _mentions_governed_identifier(segment, identifiers_lower):
             continue
         segment = _neutralize_home_path_operands(segment, identifiers_lower)
@@ -2843,6 +3309,37 @@ def _levelled_deny(
     return record if leveled == envelope else leveled
 
 
+#: The two launcher prefixes ``ask_compose._measured_instruction_js`` emits (bash
+#: and PowerShell), spelled out here rather than imported so the guard stays
+#: free of the dispatch_emit package; a drift test renders both from the source.
+_MEASURED_REV_INVOKE_PREFIXES = (
+    '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"',
+    "& (Join-Path $(if ($env:COORDINATOR_SETTINGS_HOME) { $env:COORDINATOR_SETTINGS_HOME } "
+    "else { Join-Path $HOME '.coordinator-claude-settings' }) 'bin/coordinator-invoke.exe')",
+)
+#: Operand forms the engine emits: a run of single-quoted spans (PowerShell
+#: ``''`` and bash ``'"'"'`` escapes both decompose into these), or a bare path.
+_MEASURED_REV_OPERAND = r"(?:'[^']*'|\"'\")+"
+_MEASURED_REV_REPO_OPERAND = r"(?:" + _MEASURED_REV_OPERAND + r"|[\w@%+=:,./\\-]+)"
+_MEASURED_REV_TAIL_RE = re.compile(
+    r" dispatch\.measured_rev " + _MEASURED_REV_OPERAND + r"(?: --repo " + _MEASURED_REV_REPO_OPERAND + r")?"
+)
+
+
+def _is_engine_measured_rev_invoke(cmd: str) -> bool:
+    """Is ``cmd`` exactly the ``dispatch.measured_rev`` invoke the engine tells
+    its test-leg runner to run: a fixed launcher prefix, the op, one
+    single-quoted params operand and an optional ``--repo`` operand, and nothing
+    else? Single-quoted operands execute nothing, so a governed name inside the
+    run's declared paths is data here; any chaining, redirect or extra word
+    falls out of this shape and is judged by the full predicate."""
+    text = cmd.strip()
+    for prefix in _MEASURED_REV_INVOKE_PREFIXES:
+        if text.startswith(prefix):
+            return _MEASURED_REV_TAIL_RE.fullmatch(text, len(prefix)) is not None
+    return False
+
+
 def check(
     payload: Dict[str, Any],
     governed_surfaces: Optional[List[str]],
@@ -2856,6 +3353,9 @@ def check(
     if not cmd:
         return None
     cmd = cmd.replace("\r", "")
+
+    if _is_engine_measured_rev_invoke(cmd):
+        return None
 
     if _sizing_write_denied(cmd) and not (
         _is_committed_blob_checkout(cmd)

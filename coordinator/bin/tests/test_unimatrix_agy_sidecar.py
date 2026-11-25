@@ -53,16 +53,40 @@ def make_hub(tmp_path, agy_pid=4242):
     return sidecar.Hub(launch, roster, agy_pid, "n0nce"), roster
 
 
-def test_credentials_need_both_variables():
-    assert sidecar.credentials({"ANTIGRAVITY_LS_ADDRESS": "h:1"}) is None
-    assert sidecar.credentials({"ANTIGRAVITY_CSRF_TOKEN": "t"}) is None
-    assert sidecar.credentials({"ANTIGRAVITY_LS_ADDRESS": "h:1", "ANTIGRAVITY_CSRF_TOKEN": "t"}) == ("h:1", "t")
-
-
 def test_main_without_credentials_starts_nothing_and_writes_no_record(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     assert sidecar.main({}) == 0
-    assert not (tmp_path / "unimatrix").exists()
+    assert not (tmp_path / "unimatrix" / "agy-sidecars").exists()
+    assert not (tmp_path / "unimatrix" / "agy-legs").exists()
+
+
+def test_main_without_credentials_appends_one_trace_line_naming_the_absent_variables_and_the_reason(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    assert sidecar.main({"ANTIGRAVITY_CSRF_TOKEN": TOKEN}) == 0
+    lines = (tmp_path / "unimatrix" / "agy-sidecars.log").read_text().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["has_ls_address"] is False and row["has_csrf_token"] is True
+    assert row["exit_reason"] == "no-credentials" and row["pid"] == os.getpid()
+    assert {"ppid", "agy_pid"} <= row.keys() and TOKEN not in lines[0]
+
+
+def test_trace_log_is_capped_to_its_newest_lines(tmp_path, monkeypatch):
+    monkeypatch.setattr(sidecar, "TRACE_MAX_BYTES", 1000)
+    monkeypatch.setattr(sidecar, "TRACE_KEEP", 3)
+    for i in range(40):
+        sidecar.trace_launch(tmp_path, i, {}, "no-credentials")
+    rows = [json.loads(x) for x in (tmp_path / "unimatrix" / "agy-sidecars.log").read_text().splitlines()]
+    pids = [r["agy_pid"] for r in rows]
+    log = tmp_path / "unimatrix" / "agy-sidecars.log"
+    assert 3 <= len(rows) < 40 and pids == list(range(40 - len(pids), 40))  # trimmed, and what is left is the newest, contiguous
+    assert log.stat().st_size <= 1000 + len(log.read_text().splitlines()[-1]) + 1  # never grows past the cap plus one line
+
+
+def test_ls_credentials_reads_env_and_needs_both():
+    assert launch.ls_credentials({"ANTIGRAVITY_LS_ADDRESS": "h:1"}) is None
+    assert launch.ls_credentials({"ANTIGRAVITY_CSRF_TOKEN": "t"}) is None
+    assert launch.ls_credentials({"ANTIGRAVITY_LS_ADDRESS": "h:1", "ANTIGRAVITY_CSRF_TOKEN": "t"}) == ("h:1", "t")
 
 
 def test_a_started_leg_is_live_with_the_sidecar_env_address_and_the_token_only_in_the_leg_env(tmp_path, env):
@@ -116,6 +140,20 @@ def test_upgrade_pending_makes_only_this_agy_process_pending_legs_live(tmp_path,
     assert [e["ANTIGRAVITY_CONVERSATION_ID"] for _, e in env] == [CONV]
     assert json.loads((state / f"{CONV}.json").read_text())["mode"] == "live"
     assert json.loads((state / f"{other}.json").read_text())["mode"] == "pending"
+
+
+def test_a_handoff_without_a_launch_dir_never_stores_the_sidecars_config_home_cwd(tmp_path, env, monkeypatch):
+    fake = tmp_path / "fakehome"
+    cfg = fake / ".gemini" / "config"
+    cfg.mkdir(parents=True)
+    monkeypatch.setattr(sidecar.Path, "home", classmethod(lambda cls: fake))
+    monkeypatch.chdir(cfg)  # agy starts its sidecar in the config home
+    hub, _ = make_hub(tmp_path)
+    assert hub.answer(json.dumps({"nonce": "n0nce", "conversationId": CONV, "cwd": str(cfg)}).encode()) == {"ok": True}
+    rec = json.loads((tmp_path / "unimatrix" / "agy-legs" / f"{CONV}.json").read_text())
+    assert rec["cwd"] is None
+    hub.answer(json.dumps({"nonce": "n0nce", "conversationId": CONV, "cwd": str(tmp_path)}).encode())
+    assert json.loads((tmp_path / "unimatrix" / "agy-legs" / f"{CONV}.json").read_text())["cwd"] == str(tmp_path)
 
 
 def serve_in_thread(hub, home, agy_pid, monkeypatch):

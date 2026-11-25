@@ -141,7 +141,7 @@ def inline_literal_runs(script: str, wrapped: dict[str, str], top: int = 30) -> 
     Skips runs inside the planBlitz and roadmapBlitz blocks. `undecodable_escape` marks a run the stager refuses
     for an escape it does not decode; `enclosing_function` is the nearest preceding `function NAME(` line."""
     from coordinator_core.ops.dispatch_emit import ask_stage_budget as asb
-    from coordinator_core.ops.dispatch_emit.ask_staged_prompts import _decode
+    from coordinator_core.ops.dispatch_emit.ask_staged_prompts import decode_literal as _decode
     from coordinator_core.ops.dispatch_emit.prompt_fragments import _scan_literals
 
     skip: list[tuple[int, int]] = []
@@ -243,6 +243,7 @@ def measure(literals: bool = True, pad_blitz: int = 0) -> dict:
             out["arms"][arm_key] = arm_out
         out["production_m_plus"] = production_m_plus(padded)
         out["ceiling_arms"] = ceiling_table(padded, pad_blitz)
+        out["in_run_commit_split"] = in_run_commit_split(plugin_root)
         out["bare_relayed_base"] = _bare_relayed_base(patches)
         out["budgets"] = {k: dict(v) for k, v in asb.STAGE_BUDGETS.items()}
         out["checks"] = {
@@ -286,6 +287,90 @@ def production_m_plus(padded: str) -> dict:
                 "stages": asb.stage_bytes(script, wrapped),
                 "within_cap_less_4096": total <= 524288 - 4096,
             }
+    return out
+
+
+_SPLIT_ASK = "ship the exporter and, separately, the dashboard"
+_SPLIT_BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
+SPLIT_SHAPES = ("production", "literal_text")
+
+
+def compose_in_run_commit_split(shape: str, plugin_root: Optional[str], patches, cap: int = 10**9) -> str:
+    """The in-run-commit split ask (`test_ask_bundle_split_e2e._script`'s relayed prompt, `in_run_commit=True`), runner cap lifted.
+
+    `production`: staged_out sink, hoisting on, installed plan-blitz. `literal_text`: hoisting off, no sink, stubbed
+    blitz stage and review kwargs exactly as `_script` composes it, the unhoisted shape the cap-exempt modules compose.
+    `patches` takes `setattr`/`setenv` (a `_Patches` or pytest's monkeypatch); box terms are masked as the
+    dispatch_emit test conftest masks them, since they are machine-local and would make the size vary per box."""
+    from coordinator_core import machine_resolver
+    from coordinator_core.bash_guards._heavy_admission_contract import KEY_VITEST_MAX_WORKERS
+    from coordinator_core.ops.dispatch_emit import ask_compose, emit, prompt_fragments
+    from coordinator_core.ops.dispatch_emit.cli import BOX_TERMS_KEY
+    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+
+    real = machine_resolver.registry_get
+    masked = {BOX_TERMS_KEY, KEY_VITEST_MAX_WORKERS}
+    patches.setattr(machine_resolver, "registry_get", lambda key: None if key in masked else real(key))
+    if shape == "production":
+        _fixture_stack(patches, plugin_root)
+        patches.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", cap)
+        return ask_compose.compose_ask_script(
+            repo_root=str(_REPO_ROOT), prompt=_SPLIT_ASK, sizing_rel=None, run_id="ask-probe-000000",
+            session_id=None, script_path="scratch/warp/x.mjs", ask_source="relayed", in_run_commit=True, staged_out={},
+        )
+    if shape != "literal_text":
+        raise ValueError(f"shape takes one of {SPLIT_SHAPES}, got {shape!r}")
+    patches.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
+    patches.setattr(prompt_fragments, "HOIST_ENABLED", False)
+    patches.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", cap)
+    return ask_compose.compose_ask_script(
+        repo_root="REPO", prompt=_SPLIT_ASK, sizing_rel=None, run_id="run-split-1", session_id=None,
+        wrap_stage=lambda text: (_SPLIT_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",
+        in_run_commit=True, **REVIEW_KW,
+    )
+
+
+def split_components(shape: str, plugin_root: Optional[str], total: int) -> list[tuple[str, int]]:
+    """`_body_components` of the split composition: recomposed with the cap one byte under `total`, so the refusal hands over the ranking."""
+    from coordinator_core.ops.dispatch_emit import ask_compose, compose_size
+
+    seen: list[tuple[str, int]] = []
+
+    def _grab(_total: int, _cap: int, components) -> str:
+        seen.extend(components)
+        return "captured"
+
+    p = _Patches()
+    try:
+        p.setattr(compose_size, "cap_refusal", _grab)
+        try:
+            compose_in_run_commit_split(shape, plugin_root, p, cap=total - 1)
+        except ask_compose.AskComposeRefused:
+            pass
+    finally:
+        p.undo()
+    return seen
+
+
+def in_run_commit_split(plugin_root: Optional[str], top: int = 5) -> dict:
+    """Total and margins of the `in_run_commit_split` arm in both shapes; the literal-text row also ranks its `_body_components`.
+
+    `margin_under_ceiling` reads `ASK_SCRIPT_CEILING_BYTES`; `margin_under_cap` reads `emit._WORKFLOW_SCRIPT_BYTE_CAP`."""
+    from coordinator_core.ops.dispatch_emit import emit
+    from coordinator_core.ops.dispatch_emit.compose_size import ASK_SCRIPT_CEILING_BYTES as ceiling
+
+    runner_cap = emit._WORKFLOW_SCRIPT_BYTE_CAP
+    out: dict = {}
+    for shape in SPLIT_SHAPES:
+        p = _Patches()
+        try:
+            total = _size(compose_in_run_commit_split(shape, plugin_root, p))
+        finally:
+            p.undo()
+        row = {"total": total, "ceiling": ceiling, "margin_under_ceiling": ceiling - total, "margin_under_cap": runner_cap - total}
+        if shape == "literal_text":
+            row["components"] = [{"name": n, "bytes": b} for n, b in split_components(shape, plugin_root, total)[:top]]
+        out[shape] = row
     return out
 
 
@@ -350,6 +435,45 @@ def ceiling_table(padded: str, pad_blitz: int = 0) -> dict:
                 "bytes": _size(more) - _size(installed), "m_plus_parent_base": base_total,
                 "m_plus_parent_padded": grown, "delta": grown - base_total, "margin": ceiling - grown,
             }
+    return out
+
+
+REFIRE_PRIOR_RUN_IDS = tuple(f"warp-2026-11-24-probe-run-{i}-20261125T0000{i:02d}-aaaaaa" for i in range(4))
+
+
+def refire_notes(count: int) -> list[dict]:
+    """`count` live carried revise notes of ~700 bytes each, pairwise distinct (the hoister dedupes identical prose), as `run_notes.entries` shapes them."""
+    return [
+        {
+            "id": f"N{i + 1}", "note": f"Note {i}: " + " ".join(f"w{(i * 7919 + j * 104729) % 99991}" for j in range(100)),
+            "at": "2026-11-25T21:00:09Z", "run": f"probe-run-{i % 4}", "retracted": None,
+        }
+        for i in range(count)
+    ]
+
+
+def refire_table(padded: str, counts: tuple[int, ...] = (1, 24)) -> dict:
+    """The m_plus refire resume script (chain-hop launcher child, in-run commit, 4 prior run ids) at each carried-note count.
+
+    Each row is a `_margin_row` plus `notes`; `per_note_delta` is the mean growth per note between the first and last count."""
+    from coordinator_core.ops.dispatch_emit import ask_compose
+    from coordinator_core.ops.dispatch_emit.compose_size import ASK_SCRIPT_CEILING_BYTES as ceiling
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_script_size_budget import _write_sizing
+    from coordinator_core.temp_layout import managed_temp_dir
+
+    out: dict = {"ceiling": ceiling, "arms": {}}
+    with managed_temp_dir("ask-bytes-probe-refire-") as tmp:
+        _write_sizing(Path(tmp))
+        for n in counts:
+            total = _m_plus_parent_total(
+                Path(tmp), padded, launcher_child=True, chain_hop=True, in_run_commit=True,
+                carried_notes=refire_notes(n), prior_run_ids=REFIRE_PRIOR_RUN_IDS, restore_evicted_run=True,
+            )
+            out["arms"][f"m_plus_refire_{n}_notes"] = {**_margin_row(total, ceiling), "notes": n}
+    lo, hi = counts[0], counts[-1]
+    if hi > lo:
+        a, b = out["arms"][f"m_plus_refire_{lo}_notes"], out["arms"][f"m_plus_refire_{hi}_notes"]
+        out["per_note_delta"] = (b["total"] - a["total"]) / (hi - lo)
     return out
 
 
@@ -450,6 +574,19 @@ def main(argv: list[str]) -> int:
         return 0
     if "--literal-delta" in argv:
         print(json.dumps(literal_delta()))
+        return 0
+    if "--pad-notes" in argv:
+        from coordinator_core.ops.dispatch_emit.tests.test_ask_script_byte_headroom import _padded_plan_blitz_text
+
+        p = _Patches()
+        try:
+            from coordinator_core.warm.caller_context import resolve_caller_context
+
+            _fixture_stack(p, resolve_caller_context().plugin_root)
+            n = int(argv[argv.index("--pad-notes") + 1])
+            print(json.dumps(refire_table(_padded_plan_blitz_text(), (1, n))))
+        finally:
+            p.undo()
         return 0
     pad = int(argv[argv.index("--pad-blitz") + 1]) if "--pad-blitz" in argv else 0
     print(json.dumps(measure(literals="--no-literals" not in argv, pad_blitz=pad)))

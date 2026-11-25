@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
 from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import (
     _expand_local_assignments,
     _local_assignment_values,
@@ -122,3 +123,59 @@ def test_quoted_assignment_values_are_unwrapped() -> None:
 
 def test_expansion_terminates_on_a_self_referential_assignment() -> None:
     assert _expand_local_assignments("A=$B; B=$A; echo x") is not None
+
+
+# -- the engine's own dispatch.measured_rev test-leg command is never denied ---
+
+_SURFACES = ["global-doctrine/" + _GOVERNED, _GOVERNED, "coordinator/snippets/em-operating-doctrine.md"]
+_RUN_ID = "warp-2026-11-24-ab7224-1-scaffold-port-20261124T190657-10f32f"
+
+
+def _measured_rev_command(powershell: bool, paths: "list[str]", repo: str) -> str:
+    """The command a test-leg runner executes, built from the engine's own
+    rendered launcher and quoting (``ask_compose._measured_instruction_js``)."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    prefix = ask_compose._measured_instruction_js(repo)
+    launcher = next(
+        p for p in guard._MEASURED_REV_INVOKE_PREFIXES if p in prefix.replace("\\'", "'")
+    )
+    params = json.dumps({"run_id": _RUN_ID, "paths": paths}, separators=(",", ":"))
+    esc = (lambda v: v.replace("'", "''")) if powershell else (lambda v: v.replace("'", "'\"'\"'"))
+    return f"{launcher} dispatch.measured_rev '{esc(params)}' --repo '{esc(repo)}'"
+
+
+def _check(cmd: str, tool: str = "Bash"):
+    return guard.check({"tool_name": tool, "tool_input": {"command": cmd}, "cwd": ""}, _SURFACES)
+
+
+@pytest.mark.parametrize("powershell", [False, True], ids=["bash-form", "powershell-form"])
+@pytest.mark.parametrize(
+    "paths",
+    [[], ["a/b.py"], [_GOVERNED, "state/sizings/x.yaml", "it's $(x).py"]],
+    ids=["no-paths", "plain-path", "governed-and-sizing-and-quote"],
+)
+def test_the_engines_measured_rev_command_is_allowed(
+    monkeypatch: pytest.MonkeyPatch, powershell: bool, paths: "list[str]"
+) -> None:
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    monkeypatch.setattr(ask_compose, "_VERIFIER_POWERSHELL", powershell)
+    cmd = _measured_rev_command(powershell, paths, "some/repo with space")
+    for tool in ("Bash", "PowerShell"):
+        assert _check(cmd, tool) is None
+
+
+@pytest.mark.parametrize("powershell", [False, True], ids=["bash-form", "powershell-form"])
+def test_the_measured_rev_carve_out_does_not_extend_to_a_real_write(
+    monkeypatch: pytest.MonkeyPatch, powershell: bool
+) -> None:
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    monkeypatch.setattr(ask_compose, "_VERIFIER_POWERSHELL", powershell)
+    cmd = _measured_rev_command(powershell, [_GOVERNED], "some/repo")
+    assert _check(cmd + " > " + _GOVERNED) is not None
+    assert _check(cmd + "; echo x > " + _GOVERNED) is not None
+    assert _check("echo x > " + _GOVERNED) is not None
