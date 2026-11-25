@@ -847,6 +847,17 @@ def _widen_footprint(
     reply = plan_tasks_mutate._add_task(plan_rel, task, root, root)
     if not reply.get("applied"):
         return False
+    # The run's manifest rows are frozen at staging, so the widen record is what carries these paths
+    # into the next `measured_rev._run_landing_paths` (a pre-widen `measured-touched.json` goes stale).
+    from coordinator_core.ops.dispatch_emit import in_run_widen
+
+    try:
+        home = run_dir(root, run_id)
+    except LedgerRefused:
+        home = None
+    if home is not None:
+        for p in paths:
+            in_run_widen.record_widen(home, row_id, p)
     if outcome is not None:
         outcome.setdefault("footprint_widened", []).append({"row": row_id, "paths": list(paths)})
     return True

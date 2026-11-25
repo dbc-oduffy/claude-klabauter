@@ -79,15 +79,19 @@ def _probe_darwin(pid: int) -> Optional[Tuple[float, bool]]:
     return sec + usec / 1e6, buf.raw[36] == 5  # SZOMB
 
 
+# Trap: bound once at import, never re-read per poll. Tests monkeypatch the shared `sys.platform`
+# (e.g. the governor suite sets "linux"); a watcher thread re-reading it took the wrong probe, saw
+# every ancestor as gone, and killed its own pytest tree with exit 137.
+_PLATFORM_PROBE = (
+    _probe_windows if sys.platform == "win32" else _probe_darwin if sys.platform == "darwin" else _probe_linux
+)
+
+
 def _probe(pid: int) -> Optional[Tuple[float, bool]]:
     """Return (create_time, is_zombie) for a live pid, else None."""
     if pid <= 0:
         return None
-    if sys.platform == "win32":
-        return _probe_windows(pid)
-    if sys.platform == "darwin":
-        return _probe_darwin(pid)
-    return _probe_linux(pid)
+    return _PLATFORM_PROBE(pid)
 
 
 def process_create_time(pid: int) -> Optional[float]:

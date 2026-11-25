@@ -61,6 +61,12 @@ def test_grok_is_a_host_and_its_neutral_fallback_is_empty_object() -> None:
     assert neutral_fallback("grok") == {}
 
 
+def test_host_constants_are_registry_foreign_ids() -> None:
+    from coordinator_core.host_hooks.contract import HOST_AGY, HOST_CODEX
+
+    assert {HOST_CODEX, HOST_AGY, HOST_GROK} <= set(HOSTS)
+
+
 def test_neutral_fallback_returns_fresh_dict() -> None:
     a = neutral_fallback("codex")
     a["x"] = 1

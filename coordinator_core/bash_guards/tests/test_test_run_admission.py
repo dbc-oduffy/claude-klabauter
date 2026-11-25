@@ -52,7 +52,7 @@ def _verdict(repo, payload, *args, is_subagent=True):
 
 # ------------------------------------------------------------------ identity
 
-@pytest.mark.parametrize("agent_type", ["coordinator:executor", None, "coordinator:reviewer"])
+@pytest.mark.parametrize("agent_type", [None, "coordinator:reviewer"])
 @pytest.mark.parametrize("args", [(TOUCHED,), (TOUCHED + "::test_x",), (), ("tests/",)])
 def test_non_test_runner_subagent_is_refused_every_shape(repo, monkeypatch, agent_type, args):
     _touched(monkeypatch, [TOUCHED])
@@ -60,6 +60,23 @@ def test_non_test_runner_subagent_is_refused_every_shape(repo, monkeypatch, agen
     assert not v.allowed
     assert v.leg == "identity"
     assert "test-runner" in v.remedy
+
+
+SPECIALIST = adm.EXECUTOR_TYPE
+
+
+def test_executor_runs_a_scoped_test_file(repo, monkeypatch):
+    _touched(monkeypatch, [TOUCHED])
+    p = _payload(SPECIALIST)
+    assert _verdict(repo, p, TOUCHED, "-q").allowed
+    assert _verdict(repo, p, UNTOUCHED).allowed
+
+
+@pytest.mark.parametrize("args", [(), ("-n", "4", TOUCHED)])
+def test_executor_still_refused_a_bare_or_worker_run(repo, monkeypatch, args):
+    _touched(monkeypatch, [TOUCHED])
+    v = _verdict(repo, _payload(SPECIALIST), *args)
+    assert not v.allowed and v.leg == "scope"
 
 
 def test_workflow_agent_without_agent_type_is_refused(repo, monkeypatch):
@@ -213,7 +230,7 @@ def test_unreadable_hold_allows_with_advisory(monkeypatch, capsys):
 def test_ceiling_only_after_identity_and_scope(repo, monkeypatch):
     _touched(monkeypatch, [TOUCHED])
     _low_ram(monkeypatch)
-    assert _verdict(repo, _payload("coordinator:executor"), TOUCHED).leg == "identity"
+    assert _verdict(repo, _payload("coordinator:reviewer"), TOUCHED).leg == "identity"
     assert _verdict(repo, _payload(adm.TEST_RUNNER_TYPE), UNTOUCHED).leg == "scope"
 
 
@@ -226,3 +243,34 @@ def test_verdict_spawns_no_process(repo, monkeypatch):
     _verdict(repo, _payload(adm.TEST_RUNNER_TYPE), TOUCHED)
     _verdict(repo, _payload("coordinator:executor"), TOUCHED)
     assert calls == []
+
+
+# ------------------------------------------------------------------ the clean-overlay leg's own argv
+
+def _leg_argv(tmp_path, targets):
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as leg
+
+    return leg._pytest_argv(tmp_path, tmp_path / "mirror", tmp_path / "bt", targets)
+
+
+@pytest.mark.parametrize("quote", ["", "'", '"'], ids=["bare", "single-quoted", "double-quoted"])
+@pytest.mark.parametrize("suffix", ["", "::test_a"], ids=["file", "node-id"])
+def test_clean_overlay_leg_argv_is_admitted(repo, monkeypatch, quote, suffix):
+    _touched(monkeypatch, [TOUCHED])
+    argv = _leg_argv(repo, [f"{quote}{TOUCHED}{suffix}{quote}", f"{quote}{UNTOUCHED}{quote}"])
+    assert adm.test_run_verdict(_payload(adm.TEST_RUNNER_TYPE), [argv], str(repo), is_subagent=True).allowed
+
+
+@pytest.mark.parametrize("target", ["'notes.txt'", "'tests/'", "notes.txt::t"])
+def test_clean_overlay_leg_argv_still_refuses_a_non_py_target(repo, monkeypatch, target):
+    _touched(monkeypatch, [TOUCHED])
+    v = adm.test_run_verdict(
+        _payload(adm.TEST_RUNNER_TYPE), [_leg_argv(repo, [target])], str(repo), is_subagent=True
+    )
+    assert not v.allowed and v.leg == "scope"
+
+
+def test_clean_overlay_leg_argv_still_refuses_a_bare_run(repo, monkeypatch):
+    _touched(monkeypatch, [TOUCHED])
+    v = adm.test_run_verdict(_payload(adm.TEST_RUNNER_TYPE), [_leg_argv(repo, [])], str(repo), is_subagent=True)
+    assert not v.allowed and v.leg == "scope"

@@ -60,6 +60,9 @@ HALT_RELEASED_FIELD = "released"
 HALT_NEXT_ACTION_FIELD = "next_action"
 HALT_POST_LAND_TRIPWIRE_RED = "post_land_tripwire_red"
 HALT_REFUSED_PATHS_FIELD = "refused_paths"
+#: Halt-record field carrying the test-leg's flagged fixture edits (key `HALT_FIXTURE_EDITS_KEY` in `test-leg.json`).
+HALT_FIXTURE_EDITS_FIELD = "fixture_edits"
+HALT_FIXTURE_EDITS_KEY = "flagged_fixture_edits"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
@@ -161,8 +164,23 @@ def read_strict_run(record_dir: Path) -> Optional[dict]:
         raise UnreadableHaltRecord(Path(record_dir).name, str(exc)) from exc
 
 
+def _fixture_edits(record_dir: Path) -> list:
+    """The run's `test-leg.json` `flagged_fixture_edits` (a later leg changed the file of a test an earlier leg
+    recorded failing); [] when the record is absent, unreadable or flags none. Advisory: never a refusal."""
+    try:
+        record = json.loads((Path(record_dir) / "test-leg.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    edits = record.get(HALT_FIXTURE_EDITS_KEY) if isinstance(record, dict) else None
+    return [e for e in edits if isinstance(e, dict)] if isinstance(edits, list) else []
+
+
 def _write(record_dir: Path, payload: dict) -> Path:
     target = record_dir / HALTED_FILE
+    if payload.get("status") == STATUS_HALTED:
+        edits = _fixture_edits(record_dir)
+        if edits:
+            payload = {**payload, HALT_FIXTURE_EDITS_FIELD: edits}
     atomic_write_bytes(target, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
     call_io_scope.invalidate(path=target)
     from coordinator_core.ops.dispatch_emit import halted_withheld_index

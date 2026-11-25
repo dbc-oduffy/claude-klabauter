@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -21,6 +24,7 @@ sys.modules[_spec.name] = gov  # dataclass resolution needs the module registere
 _spec.loader.exec_module(gov)
 
 P = gov.Proc
+_REAL_FIRE_CACHE_TRIM = gov.fire_cache_trim
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +69,56 @@ def _process_leg_off(monkeypatch):
     # Tests that wire no proc table would read the real box and could signal real processes.
     monkeypatch.setattr(gov, "PROC_CEILING", 0)
     monkeypatch.setattr(gov, "PROC_GROWTH", 0)
+
+
+@pytest.fixture(autouse=True)
+def real_signal_log(monkeypatch):
+    # Leaf sentinel: kill_tree/signal_tree bind to psutil.Process.kill/suspend/resume and os.kill, so
+    # trapping those covers def-time defaults, thaw_leftovers, main() and direct callers at once.
+    # A fake pid can alias a real process (the runner included). Any call that reaches a leaf fails the
+    # test at teardown; tests that need a kill inject their own kill_fn/signal_fn.
+    log: list[tuple] = []
+
+    import psutil  # hard dependency (owner_watchdog imports it); a missing one fails here by name
+
+    for meth in ("kill", "suspend", "resume", "terminate"):
+        monkeypatch.setattr(psutil.Process, meth, lambda self, _m=meth: log.append((_m, self.pid)))
+    monkeypatch.setattr(gov.os, "kill", lambda pid, sig: log.append(("os.kill", pid, sig)))
+    # The cache-trim leaf: `from file_cache_trim import fire_box_cache_trim` resolves through
+    # coordinator/bin/lib and fires the live BoxCacheTrim scheduled task, which can kill the runner.
+    # Pin an inert module in sys.modules (the import in fire_cache_trim then lands on it) and refuse any
+    # schtasks spawn; fire_trim_task binds subprocess.run at def time, so the module pin is the cover.
+    trap = types.ModuleType("file_cache_trim")
+    trap.fire_box_cache_trim = lambda *a, **kw: log.append(("fire_box_cache_trim",))
+    monkeypatch.setitem(sys.modules, "file_cache_trim", trap)
+    real_run = subprocess.run
+
+    def run_guard(args, *a, **kw):
+        argv = args if isinstance(args, (list, tuple)) else [args]
+        if argv and Path(str(argv[0])).stem.lower() == "schtasks":
+            log.append(("schtasks", tuple(argv)))
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", run_guard)
+    # Handed back to the test only for the sentinel's own proof; cleared there.
+    yield log
+    assert not log, f"a test reached a real signal leaf: {log}"
+
+
+@pytest.fixture(autouse=True)
+def _never_kill_a_real_tree(monkeypatch):
+    # A stuck-critical run reaches kill_engine_runaway, whose default kill_fn is the real kill_tree;
+    # tests that assert a kill inject their own.
+    real_run = gov.run
+
+    def run(args, *a, **kw):
+        kw.setdefault("kill_fn", lambda tree: None)
+        kw.setdefault("signal_fn", lambda tree, stop: None)
+        kw.setdefault("footprint_fn", lambda: {})
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(gov, "run", run)
 
 
 @pytest.fixture(autouse=True)
@@ -391,9 +445,15 @@ def test_task_never_fired_outside_a_critical_episode_or_off_win32(tmp_path, monk
     assert calls == []
 
 
-def test_task_absent_keeps_the_hint_line(tmp_path, monkeypatch):
+def test_task_absent_keeps_the_hint_line(tmp_path, monkeypatch, real_signal_log):
+    # The real function runs against the inert leaf (no task fires, no kill); its None is the absent path.
+    assert _REAL_FIRE_CACHE_TRIM(tmp_path) is None
+    assert [e[0] for e in real_signal_log] == ["fire_box_cache_trim"]
+    real_signal_log.clear()
+    monkeypatch.setattr(gov, "fire_cache_trim", _REAL_FIRE_CACHE_TRIM)
     lines = _stream([True, True], tmp_path, monkeypatch=monkeypatch)
     assert _fired(lines) == [] and len(_hints(lines)) == 1
+    real_signal_log.clear()
 
 
 def test_trim_error_falls_back_to_the_hint(tmp_path, monkeypatch):
@@ -1876,3 +1936,31 @@ def test_a_trim_that_does_not_fire_leaves_the_kill_unchanged(monkeypatch):
     monkeypatch.setattr(gov.sys, "platform", "win32")
     lines, killed = _stuck(PROCS + _PYTEST_TREE, trim_fn=lambda: None)
     assert killed == [[500, 501, 502]]
+
+def test_real_kill_tree_and_signal_tree_hit_the_sentinel_not_a_process(real_signal_log):
+    # The real functions are reachable only through the sentinel leaf; the autouse teardown fails any
+    # other test that leaves an entry behind.
+    # The runner's own pid exists, so psutil.Process(pid) resolves and the call reaches the leaf; a
+    # nonexistent pid raises NoSuchProcess first and the sentinel would prove nothing.
+    me = gov.os.getpid()
+    gov.kill_tree([me])
+    gov.signal_tree([me], True)
+    gov.signal_tree([me], False)
+    assert len(real_signal_log) == 3
+    real_signal_log.clear()
+
+
+def test_real_fire_cache_trim_and_schtasks_hit_the_sentinel_not_the_live_task(tmp_path, real_signal_log):
+    assert _REAL_FIRE_CACHE_TRIM is not gov.fire_cache_trim  # the autouse default is the absent stub
+    assert _REAL_FIRE_CACHE_TRIM(tmp_path) is None
+    subprocess.run(["schtasks", "/run", "/tn", "BoxCacheTrim"], capture_output=True, text=True)
+    assert [e[0] for e in real_signal_log] == ["fire_box_cache_trim", "schtasks"]
+    real_signal_log.clear()
+
+
+def test_def_time_default_signal_fn_of_thaw_leftovers_is_the_real_one_and_trapped(tmp_path, real_signal_log):
+    # Replacing the module attribute would not rebind this default; the leaf trap catches it anyway.
+    assert gov.thaw_leftovers.__defaults__[0] is gov.signal_tree
+    gov.signal_tree([gov.os.getpid()], False)
+    assert real_signal_log
+    real_signal_log.clear()

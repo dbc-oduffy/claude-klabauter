@@ -266,7 +266,126 @@ def test_ensure_home_seeds_and_is_idempotent(migrate_env, tmp_path):
     gem_home.ensure_home(template=tpl)
     assert (home / "CLAUDE.md").read_text() == "local edit"
     assert (home / ".gitignore").read_text().splitlines() == list(gem_home._IGNORED)
-    gem_home.ensure_home(template=tpl, refresh=True)
+    rep = gem_home.ensure_home_report(template=tpl, refresh=True)
+    assert rep["seed"] == "replaced-diverged"
+    assert (home / "CLAUDE.md").read_text() == "seed v2"
+    assert rep["diverged_copy"].read_bytes() == b"local edit"
+
+
+def test_refresh_overwrites_unedited_home_and_records_seed(migrate_env, tmp_path):
+    tpl = tmp_path / "tpl.md"
+    tpl.write_text("seed v1", encoding="utf-8")
+    home = gem_home.ensure_home(template=tpl)
+    record = home / gem_home.SEEDED_RECORD
+    assert record == home / ".coordinator-local" / "home-CLAUDE.last-seeded.md"
+    assert record.read_text() == "seed v1"
+    tpl.write_text("seed v2", encoding="utf-8")
+    rep = gem_home.ensure_home_report(template=tpl, refresh=True)
+    assert rep["seed"] == "seeded"
+    assert (home / "CLAUDE.md").read_text() == "seed v2"
+    assert record.read_text() == "seed v2"
+
+
+def test_refresh_diverged_saves_copy_then_replaces_and_is_idempotent(migrate_env, tmp_path, capsys):
+    tpl = tmp_path / "tpl.md"
+    tpl.write_text("seed v1", encoding="utf-8")
+    home = gem_home.ensure_home(template=tpl)
+    (home / "CLAUDE.md").write_bytes(b"PM-ruled content\n")
+    tpl.write_text("seed v2", encoding="utf-8")
+    capsys.readouterr()
+    rep = gem_home.ensure_home_report(template=tpl, refresh=True)
+    copy = rep["diverged_copy"]
+    assert rep["seed"] == "replaced-diverged" and rep["home"] == home
+    assert copy.parent == home / gem_home.DIVERGED_DIR and len(copy.stem) == 16
+    assert copy.read_bytes() == b"PM-ruled content\n"
+    assert str(copy) in capsys.readouterr().err
+    assert (home / "CLAUDE.md").read_text() == "seed v2"
+    assert (home / gem_home.SEEDED_RECORD).read_text() == "seed v2"
+    (home / "CLAUDE.md").write_bytes(b"PM-ruled content\n")
+    copy.write_bytes(b"sentinel")
+    tpl.write_text("seed v3", encoding="utf-8")
+    rep2 = gem_home.ensure_home_report(template=tpl, refresh=True)
+    assert rep2["diverged_copy"] == copy and copy.read_bytes() == b"sentinel"
+    assert (home / "CLAUDE.md").read_text() == "seed v3"
+
+
+def test_refresh_failed_diverged_save_keeps_edited_file(migrate_env, tmp_path, monkeypatch, capsys):
+    tpl = tmp_path / "tpl.md"
+    tpl.write_text("seed v1", encoding="utf-8")
+    home = gem_home.ensure_home(template=tpl)
+    (home / "CLAUDE.md").write_bytes(b"PM-ruled content\n")
+    tpl.write_text("seed v2", encoding="utf-8")
+
+    def _boom(self, *a, **k):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as m:
+        m.setattr(Path, "write_bytes", _boom)
+        capsys.readouterr()
+        rep = gem_home.ensure_home_report(template=tpl, refresh=True)
+    assert rep["seed"] == "kept-diverged" and "diverged_copy" not in rep
+    assert (home / "CLAUDE.md").read_bytes() == b"PM-ruled content\n"
+    assert (home / gem_home.SEEDED_RECORD).read_text() == "seed v1"
+    err = capsys.readouterr().err
+    assert str(home / "CLAUDE.md") in err and "not replaced" in err
+    rep2 = gem_home.ensure_home_report(template=tpl, refresh=True)
+    assert rep2["seed"] == "replaced-diverged"
+    assert (home / "CLAUDE.md").read_text() == "seed v2"
+
+
+def test_refresh_no_record_and_differs_is_saved_then_replaced(migrate_env, tmp_path):
+    tpl = tmp_path / "tpl.md"
+    tpl.write_text("seed v1", encoding="utf-8")
+    home = gem_home.ensure_home(template=tpl)
+    (home / gem_home.SEEDED_RECORD).unlink()
+    (home / "CLAUDE.md").write_text("old seed", encoding="utf-8")
+    rep = gem_home.ensure_home_report(template=tpl, refresh=True)
+    assert rep["seed"] == "replaced-diverged"
+    assert rep["diverged_copy"].read_text() == "old seed"
+    assert (home / "CLAUDE.md").read_text() == "seed v1"
+    assert "diverged_copy" not in gem_home.ensure_home_report(template=tpl, refresh=True)
+
+
+def _prior_version_setup(migrate_env, tmp_path, listed=True):
+    import hashlib
+
+    tpl = tmp_path / "tpl.md"
+    tpl.write_text("seed v2", encoding="utf-8")
+    prior = "seed v1\nline\n"
+    if listed:
+        digest = hashlib.sha256(prior.encode("utf-8")).hexdigest()
+        (tmp_path / gem_home.KNOWN_VERSIONS_MANIFEST).write_text(
+            f"# versions\n{digest} abc123\n", encoding="utf-8"
+        )
+    home = gem_home.ensure_home(template=tpl)
+    (home / gem_home.SEEDED_RECORD).unlink()
+    return tpl, home, prior
+
+
+@pytest.mark.parametrize("eol", ["\n", "\r\n"])
+def test_refresh_overwrites_home_equal_to_listed_prior_version(migrate_env, tmp_path, eol):
+    tpl, home, prior = _prior_version_setup(migrate_env, tmp_path)
+    (home / "CLAUDE.md").write_bytes(prior.replace("\n", eol).encode("utf-8"))
+    rep = gem_home.ensure_home_report(template=tpl, refresh=True)
+    assert rep["seed"] == "seeded"
+    assert (home / "CLAUDE.md").read_text() == "seed v2"
+    assert (home / gem_home.SEEDED_RECORD).read_text() == "seed v2"
+
+
+def test_refresh_edited_home_with_manifest_is_saved_then_replaced(migrate_env, tmp_path):
+    tpl, home, prior = _prior_version_setup(migrate_env, tmp_path)
+    edited = (prior + "local edit\n").encode("utf-8")
+    (home / "CLAUDE.md").write_bytes(edited)
+    rep = gem_home.ensure_home_report(template=tpl, refresh=True)
+    assert rep["seed"] == "replaced-diverged" and rep["diverged_copy"].read_bytes() == edited
+    assert (home / "CLAUDE.md").read_text() == "seed v2"
+
+
+def test_refresh_missing_manifest_prior_version_is_saved_then_replaced(migrate_env, tmp_path):
+    tpl, home, prior = _prior_version_setup(migrate_env, tmp_path, listed=False)
+    (home / "CLAUDE.md").write_bytes(prior.encode("utf-8"))
+    rep = gem_home.ensure_home_report(template=tpl, refresh=True)
+    assert rep["seed"] == "replaced-diverged" and rep["diverged_copy"].read_bytes() == prior.encode("utf-8")
     assert (home / "CLAUDE.md").read_text() == "seed v2"
 
 

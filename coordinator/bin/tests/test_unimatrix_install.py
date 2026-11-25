@@ -64,6 +64,7 @@ def _doctrine_beside_plugin(monkeypatch, tmp_path):
     skills = tmp_path / "std-doctrine" / "skills"
     (skills / "required").mkdir(parents=True)
     (skills / "required" / "SKILL.md").write_text("# required\n", encoding="utf-8")
+    (skills / "codex-core-skills.txt").write_text("required\n", encoding="utf-8")
     monkeypatch.setattr(ui, "SKILLS_ROOT", skills)
 
 
@@ -717,6 +718,7 @@ def test_runtime_skill_failure_withholds_ready_and_allows_retry(runtime_box, mon
     if failure == "conflict":
         (source / "one").mkdir()
         (source / "one" / "SKILL.md").write_text("required")
+        (source / "codex-core-skills.txt").write_text("one\n")
         (dest / "one").mkdir(parents=True)
         (dest / "one" / "SKILL.md").write_text("foreign")
     out = io.StringIO()
@@ -728,9 +730,47 @@ def test_runtime_skill_failure_withholds_ready_and_allows_retry(runtime_box, mon
     else:
         (source / "one").mkdir(parents=True)
         (source / "one" / "SKILL.md").write_text("required")
+        (source / "codex-core-skills.txt").write_text("one\n")
     out = io.StringIO()
     assert ui.enroll_codex_runtime(root, consent=True, out=out) == 0
     assert "Codex runtime ready" in out.getvalue()
+
+
+def _klabauter_layout(tmp_path, monkeypatch, with_skills):
+    """A klabauter-shaped engine: no <engine>/coordinator/skills; skills (when present) under templates/ beside it."""
+    klab = tmp_path / "klab"
+    monkeypatch.setattr(ui, "SKILLS_ROOT", klab / "coordinator" / "skills")
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.setattr(ui, "_content_root_pointer", lambda: (None, []))
+    skills = klab / "templates" / "skills"
+    if with_skills:
+        (skills / "one").mkdir(parents=True)
+        (skills / "one" / "SKILL.md").write_text("required")
+        (skills / "codex-core-skills.txt").write_text("one\n")
+    return skills
+
+
+def test_codex_enrollment_without_plugin_root_finds_skills_beside_install(runtime_box, monkeypatch):
+    root, _ = runtime_box
+    monkeypatch.setattr(ui, "_seed_standing_doctrine", _REAL_SEED_STANDING_DOCTRINE)
+    _klabauter_layout(runtime_box[0].parent, monkeypatch, with_skills=True)
+    out = io.StringIO()
+    assert ui.enroll_codex_runtime(root, consent=True, out=out) == 0
+    assert (Path.home() / ".agents" / "skills" / "one" / "SKILL.md").exists()
+    assert "Codex runtime ready" in out.getvalue()
+
+
+def test_skills_root_miss_names_every_candidate_and_a_named_plugin_root_is_unchanged(runtime_box, monkeypatch):
+    root, _ = runtime_box
+    skills = _klabauter_layout(runtime_box[0].parent, monkeypatch, with_skills=False)
+    found, detail = ui.resolve_skills_root()
+    assert found is None
+    assert str(skills) in detail and str(ui.SKILLS_ROOT) in detail and "pointer" in detail
+    monkeypatch.setattr(ui, "_seed_standing_doctrine", _REAL_SEED_STANDING_DOCTRINE)
+    out = io.StringIO()
+    assert ui.enroll_codex_runtime(root, consent=True, out=out) == 7
+    assert str(skills) in out.getvalue()
+    assert ui.resolve_skills_root("/named/plugin") == (Path("/named/plugin") / "skills", "--plugin-root /named/plugin")
 
 
 @pytest.mark.parametrize("command", [
@@ -1023,6 +1063,18 @@ def test_doctrine_reinstall_is_idempotent_and_keeps_foreign_text(tmp_path):
     assert p.read_text(encoding="utf-8").count(ui.DOCTRINE_BEGIN) == 1
 
 
+def test_rendered_doctrine_binds_skills_root_to_the_named_skills_tree_and_leaves_no_token(tmp_path):
+    skills = tmp_path / "plugin" / "skills"
+    block = ui.render_peer_doctrine(tmp_path, skills_root=skills)
+    assert f"The full skill catalog is `{skills}`" in block
+    assert f"read `{skills}/<name>/SKILL.md`" in block
+    assert not re.search(r"\{[A-Z_]+\}", block)
+
+
+def test_rendered_doctrine_defaults_skills_root_to_the_installers_skills_tree(tmp_path):
+    assert f"The full skill catalog is `{ui.SKILLS_ROOT}`" in ui.render_peer_doctrine(tmp_path)
+
+
 def test_doctrine_uninstall_removes_only_the_block(tmp_path):
     p = tmp_path / "AGENTS.md"
     p.write_text("before\n", encoding="utf-8")
@@ -1147,6 +1199,7 @@ def test_default_install_registers_guards_doctrine_and_skills(monkeypatch, tmp_p
     monkeypatch.setattr(ui, "doctrine_root", lambda: tmp_path / "doctrine-root")
     (tmp_path / "skills" / "one").mkdir(parents=True)
     (tmp_path / "skills" / "one" / "SKILL.md").write_text("# one\n", encoding="utf-8")
+    (tmp_path / "skills" / "codex-core-skills.txt").write_text("one\n", encoding="utf-8")
     monkeypatch.setattr(ui, "SKILLS_ROOT", tmp_path / "skills")
     home, rc, out = _default_install(monkeypatch, tmp_path)
     assert rc == 0 and "governance DEGRADED" not in out
@@ -1736,6 +1789,10 @@ def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
     # _seed() caches the doctrine-seed module from _BIN_DIR; load the real one before _BIN_DIR points at
     # the fake plugin, or this test passes only when an earlier test happened to load it.
     ui._seed()
+    # The full-install fixture spells out --hosts, which loads the host registry from beside the installer: an
+    # installed plugin carries it in lib/.
+    (bin_dir / "lib").mkdir()
+    shutil.copy2(ui._load_host_registry().__file__, bin_dir / "lib" / ui.HOST_REGISTRY_REL[-1])
     monkeypatch.setattr(ui, "_BIN_DIR", bin_dir)
     home, rc, out = _default_install(monkeypatch, tmp_path)
     assert rc == 7 and "governance DEGRADED: engine root unresolved (resolver failed: no engine root)" in out
@@ -2180,6 +2237,7 @@ def _engine_tree_and_plugin(monkeypatch, tmp_path):
     (doc / "rules" / "rules.md").write_text("- a rule\n", encoding="utf-8")
     (plugin / "skills" / "one").mkdir(parents=True)
     (plugin / "skills" / "one" / "SKILL.md").write_text("# one\n", encoding="utf-8")
+    (plugin / "skills" / "codex-core-skills.txt").write_text("one\n", encoding="utf-8")
     return plugin
 
 
@@ -2191,6 +2249,18 @@ def test_plugin_root_seeds_doctrine_and_skills_from_outside_the_engine_tree(monk
         assert "<!-- BEGIN coordinator-doctrine" in rules.read_text(encoding="utf-8")
     assert not (home / ".gemini" / "config" / "skills.json").exists()
     assert any((home / ".agents" / "skills").glob("*.coordinator-managed"))
+
+
+def test_install_binds_skills_root_to_the_plugin_skills_tree_and_a_reinstall_is_byte_identical(monkeypatch, tmp_path):
+    plugin = _engine_tree_and_plugin(monkeypatch, tmp_path)
+    argv = ("--install", "--hosts", "codex,agy", "--plugin-root", str(plugin))
+    home, rc, _ = _default_install(monkeypatch, tmp_path, argv)
+    agents = home / ".codex" / "AGENTS.md"
+    first = agents.read_text(encoding="utf-8")
+    assert rc == 0 and f"The full skill catalog is `{plugin / 'skills'}`" in first
+    assert not re.search(r"\{[A-Z_]+\}", first.split(ui.DOCTRINE_BEGIN, 1)[1])
+    assert ui.main(list(argv), version_text="2.1.316", dest_dir=tmp_path / "dest", out=io.StringIO()) == 0
+    assert agents.read_text(encoding="utf-8") == first
 
 
 def test_plugin_root_doctrine_found_in_the_root_itself(monkeypatch, tmp_path):
@@ -2230,6 +2300,7 @@ def test_flat_checkout_templates_doctrine_seeds_codex_and_agy(monkeypatch, tmp_p
     (flat / "coordinator").mkdir()
     (flat / "coordinator" / "skills" / "required").mkdir(parents=True)
     (flat / "coordinator" / "skills" / "required" / "SKILL.md").write_text("# required\n")
+    (flat / "coordinator" / "skills" / "codex-core-skills.txt").write_text("required\n")
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "none" / "coordinator")
     assert ui.doctrine_root(flat / "coordinator") == flat / "templates"
     assert ui.doctrine_root(flat) == flat / "templates"
@@ -2585,6 +2656,74 @@ def test_codex_footer_malformed_ownership_never_changes_config(tmp_path,state):
     assert cfg.read_bytes()==before
 
 
+@pytest.mark.parametrize('before,expected', [
+    ('', ['thread-name']),
+    ('[tui]\ntheme="custom"\n', ['thread-name']),
+    ('[tui]\nterminal_title = ["spinner", "project"]\n', ['spinner', 'project', 'thread-name']),
+    ('tui = { terminal_title = ["project"], theme = "x" }\n', ['project', 'thread-name']),
+    ('[tui]\nterminal_title = ["thread-name", "project"]\n', ['thread-name', 'project']),
+])
+def test_codex_terminal_title_seeds_keeps_user_entries_noop_and_restores(tmp_path, before, expected):
+    cfg = tmp_path / 'config.toml'; cfg.write_text(before, encoding='utf-8')
+    original = tomllib.loads(before)
+    assert ui.seed_codex_terminal_title(cfg) == ('present' if tomllib.loads(before).get('tui', {}).get('terminal_title') == expected else 'updated')
+    assert tomllib.loads(cfg.read_text())['tui']['terminal_title'] == expected
+    once = cfg.read_bytes()
+    assert ui.seed_codex_terminal_title(cfg) == 'present' and cfg.read_bytes() == once
+    ui.seed_codex_terminal_title(cfg, uninstall=True)
+    assert tomllib.loads(cfg.read_text()) == original
+
+
+def test_codex_terminal_title_uninstall_restores_bytes_and_retains_customized(tmp_path):
+    cfg = tmp_path / 'config.toml'
+    before = '# keep\n[tui]\ntheme="x" # c\nterminal_title = ["spinner", "project"]\n'
+    cfg.write_text(before)
+    assert ui.seed_codex_terminal_title(cfg) == 'updated'
+    assert ui.seed_codex_status_line(cfg) == 'updated'
+    assert ui.seed_codex_terminal_title(cfg, uninstall=True) == 'restored'
+    assert ui.seed_codex_status_line(cfg, uninstall=True) == 'restored'
+    assert cfg.read_text() == before
+    assert ui.seed_codex_terminal_title(cfg) == 'updated'
+    changed = cfg.read_text().replace('"spinner"', '"mine"')
+    cfg.write_text(changed)
+    assert ui.seed_codex_terminal_title(cfg, uninstall=True) == 'retained-customized'
+    assert cfg.read_text() == changed
+
+
+def test_codex_terminal_title_rejects_non_array_and_leaves_config(tmp_path):
+    cfg = tmp_path / 'config.toml'; cfg.write_text('[tui]\nterminal_title = "x"\n')
+    with pytest.raises(ValueError):
+        ui.seed_codex_terminal_title(cfg)
+    assert cfg.read_text() == '[tui]\nterminal_title = "x"\n'
+
+
+def test_codex_terminal_title_is_automatic_in_install_and_owned_uninstall(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    home = _home(monkeypatch, tmp_path)
+    cfg = home / '.codex' / 'config.toml'; cfg.parent.mkdir(parents=True)
+    before = 'model="keep"\n[tui]\nterminal_title=["project"]\n'
+    cfg.write_text(before)
+    output = io.StringIO()
+    assert ui.main(['--install', '--hosts', 'codex'], version_text='2.1.316', dest_dir=tmp_path / 'dest', out=output) == 0
+    assert 'codex terminal title updated' in output.getvalue()
+    assert tomllib.loads(cfg.read_text())['tui']['terminal_title'] == ['project', 'thread-name']
+    output = io.StringIO()
+    assert ui.main(['--uninstall', '--hosts', 'codex'], dest_dir=tmp_path / 'dest', out=output) == 0
+    assert 'codex terminal title restored' in output.getvalue()
+    assert tomllib.loads(cfg.read_text()) == tomllib.loads(before)
+
+
+@pytest.mark.parametrize('event', ['Stop', 'SubagentStop', 'PostCompact'])
+def test_title_refresh_rides_registered_lifecycle_handler(monkeypatch, tmp_path, event):
+    from coordinator_core.host_hooks import codex_lifecycle
+    command = ui.codex_hook_events(tmp_path, tmp_path / 'engine')[event]['hooks'][0]['command']
+    assert ui.EXTERNAL_SESSION_SCRIPT in command and '--event ' + event in _shown(command)
+    seen = []
+    monkeypatch.setattr(codex_lifecycle, 'refresh_status', lambda payload, name: seen.append(name))
+    codex_lifecycle.handle({'hook_event_name': event, 'session_id': 's'}, {})
+    assert seen == [event]
+
+
 def test_codex_install_scope_reports_local_tools_with_native_limits(monkeypatch,tmp_path):
     home,rc,output=_default_install(monkeypatch,tmp_path,('--install','--hosts','codex'))
     assert rc==0
@@ -2861,7 +3000,9 @@ def _handoff_install(monkeypatch, tmp_path, *, live=True, change=False, pid_json
         (tmp_path / "src" / ui.ROUTER_SCRIPT).write_text("# stub PipeServer v2\n", encoding="utf-8")
     if pid_json:
         (dest / "router").mkdir(exist_ok=True)
-        (dest / "router" / "router.pid.json").write_text('{"pid": 1, "procStart": "x"}', encoding="utf-8")
+        recorded = "0" * 64 if pid_json == "stale" else ui.router_closure_digest(dest)
+        (dest / "router" / "router.pid.json").write_text(
+            json.dumps({"pid": 1, "procStart": "x", "codeDigest": recorded}), encoding="utf-8")
     calls = []
 
     def restart(d, say):
@@ -2890,6 +3031,21 @@ def test_unchanged_closure_leaves_a_handshake_router_alone(monkeypatch, tmp_path
 def test_unchanged_closure_restarts_a_live_router_without_pid_record(monkeypatch, tmp_path):
     rc, out, calls = _handoff_install(monkeypatch, tmp_path)
     assert rc == 0 and len(calls) == 1 and "router restarted" in out
+
+
+def test_unchanged_closure_restarts_a_router_started_on_other_code(monkeypatch, tmp_path):
+    rc, out, calls = _handoff_install(monkeypatch, tmp_path, pid_json="stale")
+    assert rc == 0 and calls == [tmp_path / "d"] and "router restarted" in out
+
+
+def test_router_pid_record_without_a_code_digest_counts_as_stale(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    dest = tmp_path / "d"
+    assert _run(["--install"], "2.1.316", dest)[0] == 0
+    (dest / "router").mkdir(exist_ok=True)
+    (dest / "router" / "router.pid.json").write_text('{"pid": 1, "procStart": "x"}', encoding="utf-8")
+    assert ui.router_runs_stale_code(dest) is True
 
 
 def test_changed_closure_without_a_live_router_never_restarts(monkeypatch, tmp_path):
@@ -3359,7 +3515,7 @@ def test_custom_agent_dir_without_injected_launchctl_never_touches_launchd(tmp_p
     assert ui.register_login_agent(tmp_path, tmp_path)[0] == "updated"
 
 
-def test_grok_hook_skipped_while_only_a_grok_home_exists_and_seeded_once_grok_is_on_path(monkeypatch, tmp_path):
+def test_grok_hook_staged_while_only_a_grok_home_exists_and_marker_cleared_once_grok_is_on_path(monkeypatch, tmp_path):
     monkeypatch.setattr(ui, "host_present", _REAL_HOST_PRESENT)
     _stub_src(monkeypatch, tmp_path)
     home = _home(monkeypatch, tmp_path)
@@ -3368,15 +3524,17 @@ def test_grok_hook_skipped_while_only_a_grok_home_exists_and_seeded_once_grok_is
     (home / ".grok").mkdir(exist_ok=True)
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
-    assert "grok hook skipped" in buf.getvalue() and "grok hook created" not in buf.getvalue()
-    assert not (home / ".grok" / "hooks").exists()
+    assert "grok: CLI not on PATH; staged, deferred until it appears" in buf.getvalue()
+    assert "grok hook created" in buf.getvalue() and (home / ".grok" / "hooks" / "coordinator.json").is_file()
+    assert "grok" in ui.read_deferred_hosts(tmp_path / "d")
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "grok").write_text("#!/bin/sh\n")
     monkeypatch.setenv("PATH", str(bindir))
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok"], dest_dir=tmp_path / "d", out=buf) == 0
-    assert "grok hook created" in buf.getvalue() and (home / ".grok" / "hooks" / "coordinator.json").is_file()
+    assert "deferred until it appears" not in buf.getvalue()
+    assert ui.read_deferred_hosts(tmp_path / "d") == {} and not ui.deferred_hosts_path(tmp_path / "d").exists()
     assert not (home / ".grok" / "hooks.json").exists()
 
 
@@ -3411,46 +3569,105 @@ def _bare_env(monkeypatch, tmp_path):
     return home
 
 
-def test_install_with_every_host_absent_writes_nothing_for_any_host(monkeypatch, tmp_path):
+_ALL_HOSTS = ["--install", "--hosts", "codex,agy,grok"]
+
+
+def test_install_with_every_host_absent_stages_every_host_and_records_the_deferral(monkeypatch, tmp_path):
     _stub_src(monkeypatch, tmp_path)
     home = _bare_env(monkeypatch, tmp_path)
     buf = io.StringIO()
-    assert ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf) in (0, 7), buf.getvalue()
+    assert ui.main(_ALL_HOSTS, version_text="2.1.316", dest_dir=tmp_path / "d", out=buf) in (0, 7), buf.getvalue()
+    text = buf.getvalue()
     for host in ("codex", "agy", "grok"):
-        assert f"{host} hook skipped" in buf.getvalue()
-    assert not any((home / name).exists() for name in (".codex", ".gemini", ".grok", ".agents")), sorted(p.name for p in home.iterdir())
-    written = "\n".join(ln for ln in buf.getvalue().splitlines() if "skipped" not in ln)
-    for surface in ("status line", "peer doctrine", "coordinator doctrine", "send rule", "status footer"):
-        assert surface not in written
+        assert text.count(f"{host}: CLI not on PATH; staged, deferred until it appears") == 1
+    assert "hook skipped" not in text
+    assert (home / ".codex" / "hooks.json").is_file() and (home / ".codex" / "AGENTS.md").is_file()
+    assert (home / ".gemini" / "config" / "hooks.json").is_file() and (home / ".gemini" / "GEMINI.md").is_file()
+    assert (home / ".grok" / "hooks" / "coordinator.json").is_file()
+    assert (home / ".grok" / "rules" / "unimatrix-peer-doctrine.md").is_file()
+    assert "codex trust" not in text and "governance verification FAILED" not in text
+    marker = ui.read_deferred_hosts(tmp_path / "d")
+    assert sorted(marker) == ["agy", "codex", "grok"]
+    assert marker["codex"]["actions"] == ["codex-hook-trust"] and marker["agy"]["actions"] == ["agy-plugin-install"]
 
 
-def test_default_install_with_codex_and_grok_homes_but_not_on_path_writes_no_codex_or_grok_config(monkeypatch, tmp_path):
+def test_plain_install_names_no_host_so_stages_nothing_and_writes_no_marker(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    home = _bare_env(monkeypatch, tmp_path)
+    buf = io.StringIO()
+    ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf)
+    assert "deferred until it appears" not in buf.getvalue()
+    assert not any((home / name).exists() for name in (".codex", ".gemini", ".grok", ".agents"))
+    assert not ui.deferred_hosts_path(tmp_path / "d").exists()
+
+
+def test_install_with_codex_and_grok_homes_but_not_on_path_stages_them_and_defers(monkeypatch, tmp_path):
     _stub_src(monkeypatch, tmp_path)
     home = _bare_env(monkeypatch, tmp_path)
     (home / ".codex").mkdir()
     (home / ".grok").mkdir()
     buf = io.StringIO()
-    ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf)
-    assert "codex hook skipped" in buf.getvalue() and "grok hook skipped" in buf.getvalue()
-    assert "no codex home" not in buf.getvalue() and "no grok home" not in buf.getvalue()
-    assert sorted(p.name for p in (home / ".codex").iterdir()) == []
-    assert sorted(p.name for p in (home / ".grok").iterdir()) == []
+    ui.main(["--install", "--hosts", "codex,grok"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf)
+    assert "codex: CLI not on PATH" in buf.getvalue() and "grok: CLI not on PATH" in buf.getvalue()
+    assert (home / ".codex" / "hooks.json").is_file() and (home / ".grok" / "hooks" / "coordinator.json").is_file()
+    assert sorted(ui.read_deferred_hosts(tmp_path / "d")) == ["codex", "grok"]
 
 
-def test_install_seeds_only_the_present_host(monkeypatch, tmp_path):
+def test_install_defers_only_the_absent_host_and_never_runs_codex_trust_for_it(monkeypatch, tmp_path):
     _stub_src(monkeypatch, tmp_path)
     home = _bare_env(monkeypatch, tmp_path)
-    (home / ".grok").mkdir()
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "codex").write_text("#!/bin/sh\n")
     monkeypatch.setenv("PATH", str(bindir))
     buf = io.StringIO()
-    ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf)
+    ui.main(_ALL_HOSTS, version_text="2.1.316", dest_dir=tmp_path / "d", out=buf)
     assert (home / ".codex" / "hooks.json").is_file() and (home / ".codex" / "AGENTS.md").is_file()
-    assert not (home / ".grok" / "hooks").exists() and not (home / ".gemini").exists()
-    assert "codex hook skipped" not in buf.getvalue() and "agy hook skipped" in buf.getvalue()
-    assert "grok hook skipped" in buf.getvalue()
+    assert "codex: CLI not on PATH" not in buf.getvalue()
+    assert "agy: CLI not on PATH" in buf.getvalue() and "grok: CLI not on PATH" in buf.getvalue()
+    assert sorted(ui.read_deferred_hosts(tmp_path / "d")) == ["agy", "grok"]
+
+
+def test_absent_codex_never_calls_trust(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _bare_env(monkeypatch, tmp_path)
+    calls = []
+    ui.main(["--install", "--hosts", "codex"], version_text="2.1.316", dest_dir=tmp_path / "d", out=io.StringIO(),
+            codex_trust=lambda hp: calls.append(hp) or (True, "x"))
+    assert calls == []
+
+
+def test_deferred_marker_keeps_other_hosts_and_drops_cleared_ones(tmp_path):
+    ui.record_deferred_hosts(tmp_path, ["codex", "agy"])
+    ui.record_deferred_hosts(tmp_path, ["grok"], cleared=["codex"])
+    assert sorted(ui.read_deferred_hosts(tmp_path)) == ["agy", "grok"]
+    ui.record_deferred_hosts(tmp_path, [], cleared=["agy", "grok"])
+    assert ui.read_deferred_hosts(tmp_path) == {} and not ui.deferred_hosts_path(tmp_path).exists()
+
+
+def test_host_names_come_from_the_registry_not_a_literal():
+    registry = ui._load_host_registry()
+    assert ui.HOST_NAMES == registry.ids() == ("claude", "codex", "agy", "grok")
+
+
+def test_install_scripts_ships_the_host_registry_and_the_installed_copy_loads_it(tmp_path):
+    ui.install_scripts(ui._BIN_DIR, tmp_path)
+    shipped = tmp_path / "lib" / "host_registry.py"
+    assert shipped.is_file()
+    spec = importlib.util.spec_from_file_location("installed_ui_probe", tmp_path / "unimatrix-install.py")
+    installed = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(installed)  # import (--help) needs no registry
+    assert installed.HOST_NAMES == ui.HOST_NAMES
+
+
+def test_missing_host_registry_is_a_typed_refusal_at_use_not_at_import(tmp_path, monkeypatch):
+    monkeypatch.setattr(ui, "_BIN_DIR", tmp_path / "bin")
+    monkeypatch.setattr(ui, "HOST_REGISTRY_REL", ("nowhere", "host_registry.py"))
+    with pytest.raises(ui.HostRegistryUnavailable, match="host_registry.py not found"):
+        ui._load_host_registry()
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "codex"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf) == 2
+    assert "REFUSE: --hosts cannot be checked" in buf.getvalue()
 
 
 def test_host_present_reads_path_and_home(monkeypatch, tmp_path):
@@ -3918,12 +4135,24 @@ def test_launcher_sac_blocked_is_false_off_windows(monkeypatch):
     assert ui.launcher_sac_blocked() is False
 
 
-def test_rendered_doctrine_binds_skills_root_and_leaves_no_token(tmp_path):
-    skills = tmp_path / "plugin" / "skills"
-    block = ui.render_peer_doctrine(tmp_path, skills_root=skills)
-    assert f"`{skills}/<name>/SKILL.md`" in block
-    assert not re.search(r"\{[A-Z_]+\}", block)
-    assert f"`{ui.SKILLS_ROOT}`" in ui.render_peer_doctrine(tmp_path)
+def _router_module():
+    spec = importlib.util.spec_from_file_location("unimatrix_peer_router_for_digest", _SRC.parent / "unimatrix-peer-router.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_router_code_digest_equals_the_installers_closure_digest_and_tracks_lib(tmp_path):
+    router = _router_module()
+    (tmp_path / ui.ROUTER_SCRIPT).write_text("# r unimatrix-roster.py\n", encoding="utf-8")
+    (tmp_path / "unimatrix-roster.py").write_text("# roster\n", encoding="utf-8")
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "session_detach.py").write_text("# a\n", encoding="utf-8")
+    first = ui.router_closure_digest(tmp_path)
+    assert router.code_digest(tmp_path) == first
+    (tmp_path / "lib" / "session_detach.py").write_text("# b\n", encoding="utf-8")
+    assert ui.router_closure_digest(tmp_path) != first
+    assert router.code_digest(tmp_path) == ui.router_closure_digest(tmp_path)
 
 
 _REAL_PIN_VALUE = ui._pin_value

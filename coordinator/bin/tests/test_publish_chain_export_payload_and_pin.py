@@ -261,17 +261,19 @@ def test_provenance_gate_accepts_dirty_engine_tree_under_the_chain_export_pin(tm
     assert "dirty tracked" not in err and "no upstream" not in err
 
 
-def test_root_outside_the_pin_keeps_the_dirty_check(tmp_path, monkeypatch):
-    """The pin exempts only roots under the engine toplevel; a dirty content root still refuses."""
+def test_root_outside_the_pin_still_refuses_unpushed_head_and_reports_dirt_as_advisory(tmp_path, monkeypatch):
+    """The pin exempts only roots under the engine toplevel; an upstream-less content root still
+    refuses, and its dirty file is reported as an advisory, not a refusal reason."""
     world = _World(tmp_path)
     _patch_registry(monkeypatch, world)
     row = world.plugin_row(allowlist="bin,lib,hooks")
     pin, _pins, printed = _seed([row])
     assert pin is not None, f"published-engine pin not seeded from the chain export:\n{printed}"
     _write(world.content, "hooks/h.py", "dirty content\n")
-    ok, _out, err = _gate(world, [row], pin)
+    ok, out, err = _gate(world, [row], pin)
     assert not ok and TRIPWIRE in err
-    assert str(world.content) in err and "dirty tracked" in err
+    assert str(world.content) in err and "no upstream" in err and "dirty tracked" not in err
+    assert "Advisory" in out and "hooks/h.py" in out
     assert str(world.engine_coord) not in err
 
 

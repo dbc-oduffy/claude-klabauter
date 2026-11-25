@@ -100,6 +100,12 @@ Optional ``export_failing_path`` names a saved ``clean_overlay_verify --export-r
 from its reds (green with peer dirt removed) and not otherwise skipped lands in ``peer_dirt``, never reverted
 or ``unattributed``. A missing or invalid file sets ``export_unmeasured`` and classes nothing. ``peer_dirt``
 is merged into the record.
+A failing id in a write-set test file (manifest or edited, not created) that no base verdict covers
+(not in ``failing_at_base``, not ruled or recorded, and no ``base_export_path`` named, even an unreadable one) is measured at the run
+base in ONE batched export run (``reverify_base_measure.measure_ids``, needs a 40-hex base): red at base
+joins ``failing_at_base`` (so ``pre_existing``), green stays the run's own, and an unmeasurable base keeps
+the owned verdict and sets ``base_measure_error``. The reply carries ``base_measured_here``; the record
+keeps the verdicts under ``base_measured``.
 Optional ``run_key`` names a run whose ``owned_red.jsonl`` ids join ``failing_at_base``: a failing id
 recorded there (and not in ``failing_at_base``) is reported in the ``owned_red`` bucket, never reverted or
 ``unattributed``. The same ``run_key`` also names the EM's pre-existing ruling (``ruled_pre_existing``:
@@ -211,6 +217,34 @@ def _rerun_alone(repo_root: Path, ids: List[str]) -> List[str]:
         return []
     again = set(test_leg_run._reds(lines))
     return sorted(n for n in runnable if n not in again)
+
+
+#: Wall-clock cap on the one batched base export measuring the write-set reds nobody measured.
+_BASE_MEASURE_BUDGET_S = 240.0
+
+
+def _measure_at_base(
+    repo_root: Path, manifest: dict, base: str, prior: dict, nodes: List[str]
+) -> Tuple[Set[str], Set[str], Optional[str]]:
+    """``(red, green, error)`` for ``nodes`` at the run base: ONE batched export run for all of them, ids
+    already in the record's ``base_measured`` answered from it. ``error`` names why nothing was measured
+    (no 40-hex base, a fault, a timeout); the nodes then keep their owned verdict. Never raises."""
+    if not nodes:
+        return set(), set(), None
+    saved = prior.get("base_measured")
+    saved = saved if isinstance(saved, dict) else {}
+    red = {n for n in nodes if n in set(saved.get("red") or [])}
+    green = {n for n in nodes if n in set(saved.get("green") or [])}
+    todo = [n for n in nodes if n not in red and n not in green]
+    if not todo:
+        return red, green, None
+    sha = next((v for v in (manifest.get("base"), base) if _is_sha(v)), None)
+    if sha is None:
+        return red, green, "no 40-hex run base to measure at"
+    from coordinator_core.ops import reverify_base_measure
+
+    new_red, new_green, error = reverify_base_measure.measure_ids(sha, todo, str(repo_root), _BASE_MEASURE_BUDGET_S)
+    return red | new_red, green | new_green, error
 
 
 def _norm(path: str) -> str:
@@ -1133,9 +1167,17 @@ def review_reverify(
             except LedgerRefused as exc:
                 return _fail(f"run_key refused: {exc}", True)
             explicit_base |= set(ruled)
-        at_base = explicit_base | owned
         recorded_pre = {str(n) for n in prior["pre_existing"]}
         prior_red = already | recorded_pre
+        write_set = {*rels, *edited, *created_set} - created_set
+        to_measure = [
+            n for n in ids
+            if n not in explicit_base and n not in owned and n not in prior_red
+            and _node_file(n) in write_set and not base_export_path
+        ]
+        base_red, base_green_here, base_measure_error = _measure_at_base(repo_root, manifest, base, prior, to_measure)
+        explicit_base |= base_red
+        at_base = explicit_base | owned
         pre_existing = sorted(n for n in ids if n in explicit_base or n in prior_red)
         owned_red = sorted(n for n in ids if n in owned and n not in explicit_base and n not in prior_red)
         not_base_red = sorted(n for n in ids if n in vouched and n not in at_base and n not in prior_red)
@@ -1156,12 +1198,13 @@ def review_reverify(
                 skip |= set(peer_dirt)
                 export_own = {n for n in ids if n not in skip and n in export_red}
         base_measured = (failing_at_base is not None or bool(base_export_path)) and not base_unmeasured
-        base_green = {n for n in ids if base_measured and n not in skip}
+        base_green = {n for n in ids if (base_measured or n in base_green_here) and n not in skip}
         flaky = _rerun_alone(repo_root, [n for n in ids if n not in skip])
         skip |= set(flaky)
         base_green -= set(flaky)
     else:
         pre_existing, owned_red, not_base_red, renamed_node, skip, base_green = [], [], [], [], set(), set()
+        to_measure, base_red, base_green_here, base_measure_error = [], set(), set(), None
         peer_dirt = []
         flaky = []
         export_own = set()
@@ -1270,7 +1313,9 @@ def review_reverify(
         unattributed = [n for n in unattributed if n not in sibling_owned and n not in foreign_red]
     unmeasured: List[str] = []
     if base_unmeasured:
-        unmeasured, unattributed = sorted(set(unattributed)), []
+        measured_here = base_red | base_green_here
+        unmeasured = sorted(n for n in set(unattributed) if n not in measured_here)
+        unattributed = [n for n in unattributed if n in measured_here]
     refusal = _orphaned_importer(repo_root, plan, edited, created) or _dangling(repo_root, view, manifest, plan)
     if refusal:
         return _fail(refusal, True)
@@ -1337,6 +1382,13 @@ def review_reverify(
         "flaky": sorted(set(prior["flaky"]) | set(flaky)),
         "kept": [*prior["kept"], *kept],
     }
+    if base_red or base_green_here:
+        old = prior.get("base_measured")
+        old = old if isinstance(old, dict) else {}
+        merged["base_measured"] = {
+            "red": sorted({*(old.get("red") or []), *base_red}),
+            "green": sorted({*(old.get("green") or []), *base_green_here}),
+        }
     atomic_write_bytes(record_path, (json.dumps(merged, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     declare_write(record_path)
     return {
@@ -1359,6 +1411,8 @@ def review_reverify(
         "error": None,
         **({"base_unmeasured": base_unmeasured, "unmeasured": unmeasured} if base_export_path else {}),
         **({"export_unmeasured": export_unmeasured} if export_failing_path else {}),
+        **({"base_measured_here": sorted(base_red | base_green_here), "base_measure_error": base_measure_error}
+           if to_measure else {}),
     }
 
 

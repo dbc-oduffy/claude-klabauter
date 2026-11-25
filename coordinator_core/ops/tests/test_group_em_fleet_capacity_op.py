@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 
@@ -347,3 +348,32 @@ def test_admit_refusal_wait_row_carries_target_box_id(home: Path) -> None:
     assert out["grant"] is False
     rows = [json.loads(x) for x in capacity_admit.waits_path(home).read_text(encoding="utf-8").splitlines() if x]
     assert [r["box_id"] for r in rows if r["run"] == "w"] == [local]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the far POSIX root only differs from the local home on Windows")
+def test_a_far_posix_root_registered_beside_the_local_row_is_its_own_box(home: Path) -> None:
+    box_registry.register(home, {}, box_id="machine-a", transport={"kind": "ssh", "host": "u@machine-a.local"})
+    posix = "/" + "/".join(home.resolve().parts[1:])
+    box_registry.register(posix, {}, box_id="Mac-mini", transport={"kind": "ssh", "host": "u@Mac-mini.local"})
+    out = _call("fleet_capacity", {})
+    ids = [b["box_id"] for b in out["boxes"]]
+    assert sorted(ids) == sorted([out["local_box_id"], "Mac-mini"]) and len(set(ids)) == len(ids)
+    assert sorted(r["box"] for r in out["live"]) == sorted(ids)
+    mini = [r for r in out["live"] if r["box"] == "Mac-mini"][0]
+    assert mini["state"] == "unreachable"
+
+
+def test_fleet_capacity_lists_every_box_once_and_marks_the_unrouted_ones_unreachable(home: Path) -> None:
+    local = box_registry.local_box_id(home)
+    box_registry.register(home, {}, box_id="machine-a", transport={"kind": "ssh", "host": "u@machine-a.local"})
+    (home / "state" / "box-specs.json").write_text(
+        json.dumps({"peers": ["Machine-b", "gipsy-windows", "Machine-a"]}), "utf-8")
+    out = _call("fleet_capacity", {})
+    ids = [b["box_id"] for b in out["boxes"]]
+    assert sorted(ids) == sorted([local, "Machine-b", "gipsy-windows"]) and len(set(ids)) == len(ids)
+    assert sorted(r["box"] for r in out["live"]) == sorted(ids)
+    assert all(r["box_id"] == r["box"] for r in out["live"])
+    states = {r["box"]: r["state"] for r in out["live"]}
+    assert states == {local: "ok", "Machine-b": "unreachable", "gipsy-windows": "unreachable"}
+    assert len(out["power_on"]) == 2 and all("UNREACHABLE" in line for line in out["power_on"])
+    assert len(out["table"].splitlines()) == 1 + 3 + 2

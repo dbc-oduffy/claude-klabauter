@@ -97,6 +97,30 @@ def test_tiers_translated_and_unknown_model_dropped_and_reported(plugin, tmp_pat
     assert b"${PLUGIN_ROOT}/x" in t["agents/a-opus.md"] and b"CLAUDE_PLUGIN_ROOT" not in t["agents/a-opus.md"]
 
 
+def test_agent_tools_become_agy_native_names_and_unmapped_are_dropped_and_reported(plugin, tmp_path: Path) -> None:
+    claude = {"Bash", "PowerShell", "Read", "Grep", "Glob", "Edit", "ToolSearch", "mcp__project-rag__project_symbol"}
+    (plugin / "agents" / "b-inline.md").write_bytes(
+        b"---\nname: b-inline\ntools: [Read, Bash, PowerShell, ToolSearch, mcp__project-rag__project_symbol]\n---\nbody\n")
+    (plugin / "agents" / "b-csv.md").write_bytes(b"---\nname: b-csv\ntools: Read, Grep, Glob, Edit\nmodel: opus\n---\nbody\n")
+    (plugin / "agents" / "b-block.md").write_bytes(b"---\nname: b-block\ntools:\n  - Bash\n  - Write\n  - ToolSearch\nmodel: opus\n---\nbody\n")
+    (plugin / "agents" / "b-none.md").write_bytes(b"---\nname: b-none\ntools: [ToolSearch, PowerShell]\n---\nbody\n")
+    out = tmp_path / "out"
+    report = gen.generate(plugin, out, "agy")
+    t = _tree(out)
+    assert b"tools: [read_file]\n" in t["agents/a-opus.md"]
+    assert b"tools: [read_file, run_command]\n" in t["agents/b-inline.md"]
+    assert b"tools: [read_file, grep_search, find_by_name, edit_file]\n" in t["agents/b-csv.md"]
+    assert b"tools: [run_command, write_file]\nmodel: pro\n" in t["agents/b-block.md"]
+    assert b"tools:" not in t["agents/b-none.md"]
+    for rel, data in t.items():
+        if rel.startswith("agents/"):
+            (line,) = [ln for ln in data.decode().split("\n") if ln.startswith("tools:")] or [""]
+            assert not claude & set(re.findall(r"[\w-]+", line)), rel
+    reasons = {u["reason"] for u in report["unmapped"] if u["kind"] == "agent-tool"}
+    assert {"tool 'PowerShell' has no agy name; dropped", "tool 'ToolSearch' has no agy name; dropped"} <= reasons
+    assert not any("'Read'" in r or "'Bash'" in r for r in reasons)
+
+
 def test_null_tier_drops_model_and_reports(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     table = gen.load_table()
     table["agy"]["tiers"]["haiku"] = None

@@ -101,3 +101,11 @@ def test_a_shared_path_the_run_cannot_split_carries_no_override(mm_repo, monkeyp
     monkeypatch.setattr(checkpoint_hunks, "checkpoint_own_blobs", lambda *_a, **_k: ({}, [SHARED]))
 
     assert cov.own_hunk_overrides(mm_repo, RUN, [SHARED]) == {}
+
+
+def test_an_unsplittable_shared_path_the_run_declares_stays_in_the_delta_at_worktree_bytes(mm_repo, monkeypatch):
+    monkeypatch.setattr(cov, "own_hunk_overrides", lambda *_a, **_k: {})
+
+    paths, overrides = cov.own_delta(mm_repo, RUN, [])
+
+    assert paths == [SHARED] and overrides == {}

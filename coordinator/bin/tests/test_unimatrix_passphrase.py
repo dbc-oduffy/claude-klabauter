@@ -82,11 +82,15 @@ def home(tmp_path, monkeypatch):
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "_machine_local.py").write_text("# fixture", encoding="utf-8")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    # One passphrase item per box, titled `unimatrix-<local_box()>`: pin the box id so titles are fixed.
+    monkeypatch.setattr(pp, "_local_box", lambda: "x")
     return tmp_path
 
 
 def test_op_ref_uses_machine_local_vault(home):
-    assert pp.op_ref("far", FakeOp(vault="Infra")) == "op://Infra/unimatrix-far/password"
+    # The alias no longer selects the item: every link key on the box shares `unimatrix-<box>`.
+    assert pp.op_ref("far", FakeOp(vault="Infra")) == "op://Infra/unimatrix-x/password"
+    assert pp.op_ref(run=FakeOp(vault="Infra")) == "op://Infra/unimatrix-x/password"
 
 
 def test_op_ref_unset_vault_names_the_key(home):
@@ -141,16 +145,9 @@ def test_ensure_item_locked_raises(home):
         pp.ensure_item("x", FakeOp(signed_in=False))
 
 
-def test_delete_item_removes_and_tolerates_absent(home):
-    op = FakeOp(item_exists=True)
-    pp.delete_item("x", op)
-    assert op.exists is False
-    pp.delete_item("x", op)
-
-
-def test_delete_item_locked_raises(home):
-    with pytest.raises(pp.OnePasswordLocked):
-        pp.delete_item("x", FakeOp(signed_in=False))
+def test_shared_item_has_no_per_alias_delete():
+    # A shared box item outlives any one link key, so re-mint never deletes it.
+    assert not hasattr(pp, "delete_item")
 
 
 def test_askpass_env_carries_ref_not_value():

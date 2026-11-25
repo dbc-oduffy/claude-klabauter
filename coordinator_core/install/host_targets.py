@@ -16,9 +16,10 @@ from typing import Mapping, Optional
 
 from coordinator_core.codex_runner.resolve import CodexUnavailable, resolve_codex
 
-HOST_CODEX = "codex"
-HOST_AGY = "agy"
-HOSTS = (HOST_CODEX, HOST_AGY)
+from coordinator_core.install import host_registry
+
+HOSTS = host_registry.FOREIGN
+HOST_CODEX, HOST_AGY, HOST_GROK = "codex", "agy", "grok"
 
 #: Managed MCP server name both writers own.
 MCP_SERVER_NAME = "project-rag"
@@ -62,7 +63,7 @@ def _detect(host: str, env: Mapping[str, str], platform: Optional[str]) -> Optio
             return resolve_codex(platform, dict(env))[-1]  # argv is [node, codex_js] under fnm, else [codex]
         except CodexUnavailable:
             return shutil.which("codex", path=path)
-    return shutil.which("agy", path=path)
+    return shutil.which(host, path=path)
 
 
 def plan(
@@ -100,6 +101,28 @@ def plan(
                 f"{root / 'hooks.json'}: wiring is DoE's, never written here (hook-hash trust)",
                 "AGENTS.md doctrine delivery and per-host skill rendering (DoE-owned)",
                 "agent_id in hook payloads: no Codex subagent-identity analogue",
+            ),
+        )
+    if host == HOST_GROK:
+        root = Path(env["GROK_HOME"]) if env.get("GROK_HOME") else home / ".grok"
+        return HostPlan(
+            host=host,
+            binary=binary,
+            config_path=root / "config.toml",
+            hooks_path=root / "hooks" / "coordinator.json",
+            instructions_path=root / "AGENTS.md",
+            skills_dir=root / "skills",
+            changes=(
+                f"{root / 'trusted_folders.toml'} [folders.'<checkout>'] entry for the checkout",
+            ),
+            host_provides=(
+                "hooks/*.json Claude-shaped hook discovery",
+                "SKILL.md skills discovery under $GROK_HOME/skills",
+                "MCP stdio servers via [mcp_servers.*]",
+            ),
+            unreachable=(
+                f"{root / 'hooks' / 'coordinator.json'}: wiring is DoE's, never written here",
+                "AGENTS.md doctrine delivery and per-host skill rendering (DoE-owned)",
             ),
         )
     gemini = home / ".gemini"

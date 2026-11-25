@@ -2,8 +2,8 @@
 heavy-admission guard. Spawn-free: payload fields, the session touch record and the two readings
 guard_heavy_command_admission already takes (RAM floor, box hold).
 
-Legs run in order: identity (a subagent other than the test-runner is refused every pytest shape),
-scope (the test-runner names test files or node ids, no workers; an untouched target is an advisory), ceiling (every caller,
+Legs run in order: identity (a subagent other than the test-runner or the executor is refused every pytest shape),
+scope (the test-runner or executor names test files or node ids, no workers; an untouched target is an advisory), ceiling (every caller,
 the EM included, while the box is below its RAM floor or held by another session). A reading that
 cannot be taken allows and logs an advisory (DR-402); the identity leg reads payload fields only and
 always runs.
@@ -17,12 +17,16 @@ import sys
 from typing import Any, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 TEST_RUNNER_TYPE = "coordinator:test-runner"
+EXECUTOR_TYPE = "coordinator:executor"
+#: Subagent types admitted to pytest, each through the scope leg: the test-runner, and the executor's
+#: file-scoped row-gate fallback. Every other type is refused on identity.
+SCOPED_RUN_TYPES = frozenset({TEST_RUNNER_TYPE, EXECUTOR_TYPE})
 
 LEG_IDENTITY = "identity"
 LEG_SCOPE = "scope"
 LEG_CEILING = "ceiling"
 
-_REMEDY = "dispatch coordinator:test-runner with the touched test node ids"
+_REMEDY = "dispatch coordinator:test-runner (or run as the executor) with the touched test node ids"
 _ADVISORY_PREFIX = "test-run-admission advisory: "
 
 
@@ -82,6 +86,20 @@ def _has_workers(args: Sequence[str]) -> bool:
         return int(raw) > 0
     except ValueError:
         return True  # auto, logical, or unparseable: fans out or cannot be shown not to
+
+
+def _unquote(token: str) -> str:
+    """A target with its PowerShell/shell surrounding quote pair removed: a dialect that keeps the
+    quotes in argv still names the same file."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "'\"":
+        return token[1:-1]
+    return token
+
+
+def scoped_leg_argv(python: str, targets: Sequence[str]) -> List[str]:
+    """The argv a run's own scoped test leg executes: `<python> -m pytest <targets>`. The one shape the
+    emitter's leg prompt names and this guard admits; a leg shape change lands here."""
+    return [python, "-m", "pytest", *targets]
 
 
 def _git_root(start: str) -> Optional[str]:
@@ -181,14 +199,14 @@ def _scope_verdict(payload: Mapping[str, Any], args: Sequence[str], cwd: str) ->
     from coordinator_core.bash_guards._heavy_command_class import _pytest_targets
 
     if _has_workers(args):
-        return _deny(LEG_SCOPE, "the test-runner runs serially: -n workers refused")
-    targets = _pytest_targets(args)
+        return _deny(LEG_SCOPE, "a subagent test run is serial: -n workers refused")
+    targets = [_unquote(t) for t in _pytest_targets(args)]
     if not targets:
-        return _deny(LEG_SCOPE, "the test-runner names touched test files or node ids: a bare run refused")
+        return _deny(LEG_SCOPE, "a subagent test run names touched test files or node ids: a bare run refused")
     files = [t.split("::", 1)[0] for t in targets]
     bad = [t for t, f in zip(targets, files) if not f.lower().endswith(".py")]
     if bad:
-        return _deny(LEG_SCOPE, "the test-runner names test files, not %s" % bad[0])
+        return _deny(LEG_SCOPE, "a subagent test run names test files, not %s" % bad[0])
     repo_root = _git_root(cwd)
     read = _read_touched(payload, repo_root)
     if read is None:
@@ -220,8 +238,8 @@ def test_run_verdict(
     if not pytest_argvs:
         return _ALLOW
     if is_subagent:
-        if payload.get("agent_type") != TEST_RUNNER_TYPE:
-            return _deny(LEG_IDENTITY, "only coordinator:test-runner runs pytest in a subagent")
+        if payload.get("agent_type") not in SCOPED_RUN_TYPES:
+            return _deny(LEG_IDENTITY, "only coordinator:test-runner runs pytest in a subagent (the executor's row gate: named test files only)")
         for argv in pytest_argvs:
             verdict = _scope_verdict(payload, _pytest_arg_list(argv), cwd)
             if not verdict.allowed:

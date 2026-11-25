@@ -1,5 +1,11 @@
 """fleet_live record contract: field set, timed_out row, normalization."""
 
+import json
+import os
+
+import pytest
+
+from coordinator_core.group_em import box_registry
 from coordinator_core.group_em import fleet_live as fl
 
 LAST = {
@@ -200,3 +206,92 @@ def test_normalize_row():
     assert set(row) == set(fl.FIELDS) and row["cores"] == 4 and row["box"] == "b"
     assert fl.normalize_row("b", {"state": "weird"})["state"] == "ok"
     assert fl.normalize_row("b", None)["state"] == "error"
+
+
+def _home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    box_registry.ensure_identity(home)
+    return home
+
+
+def _reg(home, box_id, root, host, at):
+    box_registry.register(root, {}, directory=home / "state" / "group-em", box_id=box_id,
+                          transport={"kind": "ssh", "host": host})
+    path = home / "state" / "group-em" / "boxes" / f"{box_id}.json"
+    rec = json.loads(path.read_text("utf-8"))
+    rec["registered_at"] = at
+    path.write_text(json.dumps(rec), "utf-8")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="a POSIX root is absolute-and-resolvable only off Windows; the collision needs a drive")
+def test_far_posix_root_is_not_taken_for_this_box(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    local = box_registry.local_box_id(home)
+    _reg(home, "machine-a", str(home), "u@machine-a.local", 5)
+    _reg(home, "Mac-mini", "/" + "/".join(home.resolve().parts[1:]), "u@Mac-mini.local", 4)
+    boxes = fl.registered_boxes(home)
+    assert sorted(b["box_id"] for b in boxes) == sorted([local, "Mac-mini"])
+    assert [b["registered_as"] for b in boxes if b["box_id"] == local] == ["machine-a"]
+
+
+def test_alias_rows_of_one_host_collapse_to_the_freshest(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    _reg(home, "gipsy", str(tmp_path / "a"), "u@gipsy.lan", 1)
+    _reg(home, "gipsy-windows", str(tmp_path / "b"), "u@gipsy.lan", 9)
+    far = [b for b in fl.registered_boxes(home) if b["box_id"] != box_registry.local_box_id(home)]
+    assert [b["box_id"] for b in far] == ["gipsy-windows"] and far[0]["aliases"] == ["gipsy"]
+
+
+def test_gather_on_the_raw_registry_samples_the_local_box_once(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    local = box_registry.local_box_id(home)
+    _reg(home, "machine-a", str(home), "u@machine-a.local", 5)
+    samples = []
+    rows = fl.gather(timeout=1.0, invoke=lambda *a, **k: {"ok": False}, cache_path=tmp_path / "c" / "c.json",
+                     local_sample=lambda: samples.append(1) or _fresh(local), now=1000.0)
+    assert [r["box"] for r in rows] == [local] and len(samples) == 1
+
+
+def _specs(home, **data):
+    (home / "state").mkdir(exist_ok=True)
+    (home / "state" / "box-specs.json").write_text(json.dumps(data), "utf-8")
+
+
+def test_known_boxes_adds_each_box_specs_peer_once_and_folds_the_local_box(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    local = box_registry.local_box_id(home)
+    _reg(home, "machine-a", str(home), "u@machine-a.local", 5)
+    _reg(home, "Mac-mini", "/far/root", "u@Mac-mini.local", 4)
+    _specs(home, peers=["Machine-b", "mac-mini.local", "gipsy-windows", "Machine-a", "Machine-b"],
+           boxes={"gipsy": {}})
+    boxes = fl.known_boxes(home)
+    ids = [b["box_id"] for b in boxes]
+    assert sorted(ids) == sorted([local, "Mac-mini", "Machine-b", "gipsy-windows"])
+    assert len(set(ids)) == len(ids)
+    assert {b["box_id"]: b.get("roster_only") for b in boxes if b.get("roster_only")} == {
+        "Machine-b": True, "gipsy-windows": True}
+
+
+def test_box_specs_roster_falls_back_to_boxes_keys_and_missing_file_is_empty(tmp_path):
+    assert fl.box_specs_roster(tmp_path) == []
+    _specs(tmp_path, boxes={"a": {}, "b": {}})
+    assert fl.box_specs_roster(tmp_path) == ["a", "b"]
+    (tmp_path / "state" / "box-specs.json").write_text("{", "utf-8")
+    assert fl.box_specs_roster(tmp_path) == []
+
+
+def test_a_roster_box_with_no_route_is_an_unreachable_row_not_a_dropped_one(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    local = box_registry.local_box_id(home)
+    _specs(home, peers=["Machine-b"])
+    calls = []
+    rows = fl.gather(fl.known_boxes(home), timeout=1.0, invoke=lambda *a, **k: calls.append(a) or {"ok": True},
+                     cache_path=tmp_path / "c" / "c.json", local_sample=lambda: _fresh(local), local_id=local,
+                     now=1000.0)
+    by = _by(rows)
+    assert sorted(by) == sorted([local, "Machine-b"]) and calls == []
+    assert by["Machine-b"]["state"] == "unreachable" and by["Machine-b"]["alias"] == "machine-b"
+    assert by[local]["state"] == "ok"
+    assert fl.power_on_items(rows) == ["power it on? Machine-b is UNREACHABLE (last seen never)"]

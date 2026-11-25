@@ -2269,7 +2269,11 @@ _REVIEW_RECOVER_JS = r"""
         log('halt-reverify leg threw: ' + String((e && e.message) ?? e));
       }
       if (_halted) return;
-      if (rv && rv.test && typeof rv.test === 'object') _reviewReverify = rv.test;
+      if (rv && rv.test && typeof rv.test === 'object') {
+        const carried = (Array.isArray(_reviewReverify?.pre_existing) ? _reviewReverify.pre_existing : []).map(String);
+        const measured = (Array.isArray(rv.test.pre_existing) ? rv.test.pre_existing : []).map(String);
+        _reviewReverify = { ...rv.test, pre_existing: [...new Set([...measured, ...carried])] };
+      }
       if (rv && Array.isArray(rv.slices) && Array.isArray(_reviewWave)) {
         _reviewWave = _reviewWave.map((w) => {
           const s = w ? rv.slices.find((x) => x && x.slice_id === w.slice_id) : null;

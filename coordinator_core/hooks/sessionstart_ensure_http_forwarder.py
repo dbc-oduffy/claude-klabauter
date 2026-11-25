@@ -146,10 +146,74 @@ def _running_forwarder_record() -> "Optional[dict]":
 _FORWARDER_ARGV_RE = re.compile(r"""(?:^|[\s"'/\\])http_hook_forwarder\.py(?:["'\s]|$)""")
 
 
+def _port_owner_pid(port: int = _FIXED_PORT) -> "Optional[int]":
+    """Pid listening on `port`, or None when the socket table is unreadable
+    (psutil absent, AccessDenied on macOS without root) or nothing listens."""
+    try:
+        import psutil
+
+        for conn in psutil.net_connections(kind="tcp"):
+            if (
+                conn.status == psutil.CONN_LISTEN
+                and conn.laddr
+                and conn.laddr.port == port
+                and conn.pid
+            ):
+                return int(conn.pid)
+    except Exception:
+        return None
+    return None
+
+
+#: Mirrors `http_hook_forwarder.HOLDER_NAME` by value, not by import.
+_FORWARDER_HOLDER_NAME = "doe-http-hook-forwarder"
+_HEALTH_PROBE_TIMEOUT_SECS = 0.5
+
+
+def _port_answers_as_forwarder(pid: int, port: int = _FIXED_PORT) -> bool:
+    """True only when `GET /health` on the port names the forwarder holder and
+    does not contradict `pid` (an older forwarder may omit the pid field)."""
+    import http.client
+
+    conn = None
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=_HEALTH_PROBE_TIMEOUT_SECS)
+        conn.request("GET", "/health")
+        resp = conn.getresponse()
+        if resp.status != 200:
+            return False
+        payload = json.loads(resp.read(4096).decode("utf-8"))
+    except Exception:
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+    if not isinstance(payload, dict) or payload.get("holder") != _FORWARDER_HOLDER_NAME:
+        return False
+    reported = payload.get("pid")
+    return reported is None or reported == pid
+
+
 def _pid_is_a_forwarder(pid: int) -> "Optional[bool]":
+    """argv identity first. When argv is unreadable (Windows AccessDenied on a
+    non-child pid) the pid is confirmed only if it owns the forwarder port AND
+    that port answers the forwarder's own `/health` as the forwarder holder.
+    Port ownership alone, or any unreadable leg, stays None: a non-forwarder
+    squatting the port is never confirmed."""
     if os.name == "nt":
-        return _pid_is_a_forwarder_windows(pid)
-    return _pid_is_a_forwarder_posix(pid)
+        verdict = _pid_is_a_forwarder_windows(pid)
+    else:
+        verdict = _pid_is_a_forwarder_posix(pid)
+    if verdict is not None:
+        return verdict
+    if _port_owner_pid() != pid:
+        return None
+    return True if _port_answers_as_forwarder(pid) else None
+
+
+def _restart_command() -> str:
+    script = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "forwarder-restart.py"
+    return 'python "{0}"'.format(script)
 
 
 def _pid_is_a_forwarder_posix(pid: int) -> "Optional[bool]":
@@ -284,15 +348,14 @@ def _ensure_current_forwarder(forwarder_path: Path) -> "Optional[str]":
     if _pid_is_a_forwarder(pid) is not True:
         return (
             "resident forwarder runs superseded code (running {0}, on disk {1}); pid {2} "
-            "is unconfirmed as a forwarder -- restart it".format(
-                running, on_disk, pid
-            )
+            "is neither argv-confirmed nor the port-{3} owner answering /health as the forwarder -- retire and respawn it "
+            "with: {4}".format(running, on_disk, pid, _FIXED_PORT, _restart_command())
         )
     if not _retire_stale_forwarder(pid):
         return (
             "resident forwarder runs superseded code (running {0}, on disk {1}); pid {2} "
-            "could not be terminated -- restart it".format(
-                running, on_disk, pid
+            "could not be terminated -- retire and respawn it with: {3}".format(
+                running, on_disk, pid, _restart_command()
             )
         )
     if not _spawn_forwarder_detached(forwarder_path):

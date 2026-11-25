@@ -319,12 +319,29 @@ class MeasureUnavailable(OSError):
         super().__init__("worktree hash unavailable: " + ", ".join(self.paths))
 
 
+#: Caller-wait ceiling for the one re-read of a dropped hash; a read stalled past it is unavailable.
+REREAD_DEADLINE_SECS = 0.3
+
+
+def _reread_bounded(root: Path, rel: str) -> str | None:
+    """One more hash of `rel` under its own bounded key (the first read's key is stalled, so reusing it
+    would answer None at once); None when the read stalls past `REREAD_DEADLINE_SECS` or cannot hash."""
+    from coordinator_core.bounded_io import run_bounded
+
+    return run_bounded(
+        f"measured_rev_reread:{Path(root) / rel}",
+        lambda: commit._checkin_blob_sha_read(root, rel),
+        deadline=REREAD_DEADLINE_SECS,
+        default=None,
+    )
+
+
 def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
     """Recorded paths whose worktree blob no longer matches the record, plus each `removed` path
     that exists again. `[]` when `run_dir` holds no record. Hash-only: spawns nothing and reads
-    no object. A None bounded read of a path that still exists is re-read by the unbounded
-    in-process reader (a dropped deadline is never an answer); only a path that reader also
-    cannot hash raises `MeasureUnavailable` (an OSError, so fail-closed callers stay safe). A
+    no object. A None bounded read of a path that still exists is re-read once under a second
+    bound (a dropped deadline is never an answer); only a path that read also
+    cannot hash or stalls on raises `MeasureUnavailable` (an OSError, so fail-closed callers stay safe). A
     path gone from the worktree is drift. Raises OSError/ValueError on an unreadable or malformed record; callers fail closed."""
     record = Path(run_dir) / MEASURED_REV_RECORD
     if not record.is_file():
@@ -339,7 +356,7 @@ def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
     for p, sha in blobs.items():
         got = commit.checkin_blob_sha(root, p)
         if got is None and os.path.lexists(root / p):
-            got = commit._checkin_blob_sha_read(root, p)
+            got = _reread_bounded(root, p)
             if got is None and os.path.lexists(root / p):
                 unavailable.append(p)
                 continue

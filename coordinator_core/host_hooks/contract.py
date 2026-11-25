@@ -7,10 +7,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Protocol, runtime_checkable
 
-HOST_CODEX = "codex"
-HOST_AGY = "agy"
-HOST_GROK = "grok"
-HOSTS = (HOST_CODEX, HOST_AGY, HOST_GROK)
+from coordinator_core.install.host_registry import FOREIGN
+
+HOSTS = FOREIGN
+HOST_CODEX, HOST_AGY, HOST_GROK = "codex", "agy", "grok"
+assert {HOST_CODEX, HOST_AGY, HOST_GROK} <= set(HOSTS), "HOST_* constants must be registry FOREIGN ids"
 
 # A verdict is the engine's decision for one event: {"decision": "allow"|"deny"|"ask", "reason": str}.
 Verdict = Mapping[str, Any]

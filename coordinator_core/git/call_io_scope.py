@@ -72,9 +72,9 @@ def scope_open() -> bool:
 
 #: Per-read deadline inside ``bounded_reads()``. Answers: how long may one halt-commit file read
 #: stall before the op parks retry-safe instead of holding the 10s ``LAND_BUDGET_SECS``? A halt
-#: path makes many reads in sequence, so each gets the 500ms brightline's half (the
-#: ``bounded_io.READ_DEADLINE_SECS`` value), never a share of the land budget.
-HALT_READ_DEADLINE_SECS = 0.25
+#: path makes many reads in sequence, so each gets the 500ms brightline whole, never a share of the
+#: land budget; a 275ms read (a loaded box, not a wedged one) lands and a stall past 500ms parks.
+HALT_READ_DEADLINE_SECS = 0.5
 
 #: Deadline seconds while a ``bounded_reads()`` block is open, else ``None``.
 _BOUNDED_DEADLINE: "contextvars.ContextVar[Optional[float]]" = contextvars.ContextVar(

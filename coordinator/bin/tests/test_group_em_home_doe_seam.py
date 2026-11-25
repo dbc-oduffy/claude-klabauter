@@ -71,3 +71,39 @@ def test_doe_shaped_tree_places_through_the_seam_before_and_after_the_stem_rewri
         assert mod._place_engine_on_path() == str(_ENGINE)
         assert "engine_bootstrap" not in sys.modules
         assert str(root / "coordinator" / "hooks" / "scripts") not in sys.path
+
+
+def test_ensure_refresh_saves_diverged_copy_then_replaces_claude_md(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from coordinator_core.group_em import gem_home, session_registry
+
+    settings, reg, elsewhere = tmp_path / "settings", tmp_path / "registry", tmp_path / "elsewhere"
+    for d in (settings, reg, elsewhere):
+        d.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    for k in ("MACHINE_LOCAL_COORDINATOR_GROUP_EM_HOME", "MACHINE_LOCAL_COORDINATOR_GENERAL_WORK_HOME"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(gem_home.shutil, "which", lambda name: None)
+    monkeypatch.setattr(gem_home, "gem_holder", lambda: None)
+    monkeypatch.setattr(session_registry, "read_rows", lambda *a, **k: [])
+    monkeypatch.chdir(elsewhere)
+    tpl = tmp_path / "tpl.md"
+    tpl.write_text("seed v1", encoding="utf-8")
+    monkeypatch.setattr(gem_home, "default_template", lambda: tpl)
+    mod = _load(_SCRIPT, "gemh_diverged")
+    monkeypatch.setattr(mod, "_ensure_tail", lambda gem, report, args: 0)
+
+    home = gem_home.ensure_home_report()["home"]
+    tpl.write_text("seed v2", encoding="utf-8")
+    assert mod.main(["ensure", "--refresh"]) == 0
+    assert (home / "CLAUDE.md").read_text(encoding="utf-8") == "seed v2"
+    assert "differed" not in capsys.readouterr().err
+
+    (home / "CLAUDE.md").write_bytes(b"PM-ruled local content")
+    tpl.write_text("seed v3", encoding="utf-8")
+    assert mod.main(["ensure", "--refresh"]) == 0
+    err = capsys.readouterr().err
+    assert (home / "CLAUDE.md").read_text(encoding="utf-8") == "seed v3"
+    saved = list((home / gem_home.DIVERGED_DIR).glob("*.md"))
+    assert len(saved) == 1 and saved[0].read_bytes() == b"PM-ruled local content"
+    assert "differed" in err and str(saved[0]) in err

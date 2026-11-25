@@ -1,6 +1,6 @@
 """A run's whole write set, read once for review prep, the since-halt check and refire scope.
 
-Invariant: the set is the run's own declared, leg-footprint, credited-chunk and withheld paths,
+Invariant: the set is the run's own declared, leg-footprint, credited-chunk, EM-performed-row and withheld paths,
 minus scratch and minus any path `land_run._peer_held` reports held by a live peer (an
 unanswerable claim lookup holds nothing). A peer's bare declaration never drops a path this
 run's own checkpoint landed; a live touch claim still does. Never the tree. `run_write_set` spawns nothing; `unclaimed_dirty` spawns one git.
@@ -64,12 +64,19 @@ def _plan_rel(root: Path, manifest: dict, sizing_rel: Optional[str]) -> Optional
 
 
 def _credited_writes(root: Path, base: Path, manifest: dict, sizing_rel: Optional[str]) -> list:
+    return _plan_row_writes(root, base, manifest, sizing_rel, with_em=False)[0]
+
+
+def _plan_row_writes(root: Path, base: Path, manifest: dict, sizing_rel: Optional[str], *, with_em: bool) -> tuple:
+    """`(credited, em)` declared `writes` from one read of the run plan's spine: rows the run credited,
+    and (when `with_em`) rows `em_only_act.row_is_em_performed` holds EM-owned. A non-dispatchable row
+    contributes neither."""
     credits = run_credit.read([base])
     if sizing_rel:
         credits = {**run_credit.credits_for_sizing(root, sizing_rel), **credits}
     plan_rel = _plan_rel(root, manifest, sizing_rel)
-    if not credits or not plan_rel:
-        return []
+    if not (credits or with_em) or not plan_rel:
+        return [], []
     from coordinator_core.frontmatter.body_blocks import LocateStatus
     from coordinator_core.ops.dispatch_emit.spine_read import (
         NON_DISPATCHABLE_DISPOSITIONS,
@@ -80,19 +87,23 @@ def _credited_writes(root: Path, base: Path, manifest: dict, sizing_rel: Optiona
     try:
         text = (root / plan_rel).read_text(encoding="utf-8")
     except (OSError, ValueError):
-        return []
+        return [], []
     loaded = load_rows_memo(text)
     if loaded.status is not LocateStatus.LOCATED:
-        return []
-    out: list = []
+        return [], []
+    if with_em:
+        from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
+    credited: list = []
+    em: list = []
     for raw in loaded.rows:
         row = with_canonical_disposition(raw)
-        if not isinstance(row, dict) or row.get("id") not in credits:
+        if not isinstance(row, dict) or row.get("disposition") in NON_DISPATCHABLE_DISPOSITIONS:
             continue
-        if row.get("disposition") in NON_DISPATCHABLE_DISPOSITIONS:
-            continue
-        out += _str_list(row.get("writes"))
-    return out
+        if row.get("id") in credits:
+            credited += _str_list(row.get("writes"))
+        elif with_em and row_is_em_performed(row):
+            em += _str_list(row.get("writes"))
+    return credited, em
 
 
 def _without_peer_held(root: Path, ordered: list, own_session: str, run_id: str) -> tuple:
@@ -135,7 +146,7 @@ def _split_peer_held(root: Path, ordered: list, own_session: str, run_id: str) -
 
 def run_write_set(root: Path, run_id: str, own_session: str) -> tuple:
     """The run's write set, deduped in first-seen order: manifest `review_declared_paths`, the leg
-    footprint `writes` when present, the writes of credited plan rows, then `halted_withheld` and `withhold.jsonl` keys.
+    footprint `writes` when present, the writes of credited and EM-performed plan rows, then `halted_withheld` and `withhold.jsonl` keys.
     Scratch paths and paths a live peer holds (`land_run._peer_held`) are dropped; a dead or
     abandoned session's claim keeps the path. Empty when the record is unreadable."""
     return run_write_set_split(root, run_id, own_session)[0]
@@ -162,10 +173,12 @@ def run_write_set_full(root: Path, run_id: str, own_session: str) -> tuple:
         return (), {}
     footprint = _json_object(base / LEG_FOOTPRINT_FILE)
     sizing_rel = _sizing_rel(base)
+    credited, em_performed = _plan_row_writes(root, base, manifest, sizing_rel, with_em=True)
     raw = [
         *_str_list(manifest.get("review_declared_paths")),
         *(_str_list(footprint.get("writes")) if footprint else []),
-        *_credited_writes(root, base, manifest, sizing_rel),
+        *credited,
+        *em_performed,
         *halted_withheld(base),
         *run_withhold.read([base]),
     ]

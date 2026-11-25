@@ -32,9 +32,9 @@ from typing import Iterator, Optional, Tuple
 #: If boots slow past this bound, that is the defect to find; do not widen it.
 #:
 #: NEVER REACHABLE FROM A HOOK. This wait is for the op/CLI door, where a
-#: caller is already waiting on a result. A hook path must pass
-#: `COORDINATOR_WARM_BOOT_WAIT_SECS=0` in the child it spawns: hooks fire on
-#: the session and commit hot path where blocking is never acceptable.
+#: caller is already waiting on a result. `_warm_boot_wait_deadline` returns 0
+#: on a hook entry (`is_hook_entry`) by construction, env or no env: hooks fire
+#: on the session and commit hot path where blocking is never acceptable.
 #: -> state/bug-backlog/2026-08-26-sixteen-hundred-warm-misses-in-thirteen-seconds.yaml
 WARM_BOOT_WAIT_SECS = 2.0
 
@@ -55,10 +55,27 @@ _BOOT_POLL_MAX_SECS = 1.0
 _BOOT_POLL_GROWTH = 1.6
 
 
-def _warm_boot_wait_deadline() -> float:
+_HOOK_METHOD_PREFIX = "hooks."
+_STDIN_MODE_ENV = "COORDINATOR_DOOR_STDIN_MODE"
+
+
+def is_hook_entry(method: Optional[str] = None) -> bool:
+    """True on the hook/cold-guard entry: a `hooks.*` method, or a process the
+    door declared hook mode (`COORDINATOR_DOOR_STDIN_MODE=hook`). Keyed here so
+    the zero wait never depends on the door exporting a knob."""
+    if isinstance(method, str) and method.startswith(_HOOK_METHOD_PREFIX):
+        return True
+    return os.environ.get(_STDIN_MODE_ENV, "").strip() == "hook"
+
+
+def _warm_boot_wait_deadline(method: Optional[str] = None) -> float:
     """The configured bound, in seconds. Unset -> `WARM_BOOT_WAIT_SECS`;
     unparseable or negative -> the same default, since a malformed knob must
-    not silently turn the wait off -- that is what an explicit `0` is for."""
+    not silently turn the wait off -- that is what an explicit `0` is for.
+    A hook entry (`is_hook_entry`) is always 0, whatever the env says: the cold
+    guard returns its verdict at once and never sleeps on a respawn."""
+    if is_hook_entry(method):
+        return 0.0
     raw = os.environ.get("COORDINATOR_WARM_BOOT_WAIT_SECS")
     if raw is None or raw.strip() == "":
         return WARM_BOOT_WAIT_SECS
@@ -137,7 +154,7 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
         try_warm_dispatch,
     )
 
-    deadline_secs = _warm_boot_wait_deadline()
+    deadline_secs = _warm_boot_wait_deadline(msg.get("method"))
     if deadline_secs <= 0:
         return None, 0.0
 
@@ -237,6 +254,9 @@ def settle_warm_miss(msg: dict) -> Optional[dict]:
         why = reason or (
             f"no warm server answered within {waited:.1f}s of a respawn"
             if waited > 0
+            else "no warm server answered, and a hook entry never waits "
+            "on the respawn"
+            if is_hook_entry(msg.get("method"))
             else "no warm server answered, and the boot wait is off "
             "in this process"
         )

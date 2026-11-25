@@ -475,6 +475,35 @@ def first_setup_error(output: str) -> str:
     return _setup_text((*section[:_SETUP_HEAD_LINES], *cause), section)
 
 
+_COLLECTING_RE = re.compile(r"^_+ ERROR collecting (.+?) _+$", re.MULTILINE)
+
+
+def collection_traceback(output: str) -> str:
+    """The first `ERROR collecting` section of `output` whole (header, traceback frames, `E` lines), cut to
+    `_OUTPUT_TAIL` keeping its header and its end (the raising frame and the exception line); `""` when the
+    output holds no collection error. A further collection error adds a count line."""
+    text = output.replace("\r\n", "\n")
+    starts = list(_COLLECTING_RE.finditer(text))
+    if not starts:
+        return ""
+    end = _SECTION_END_RE.search(text, starts[0].end())
+    section = text[starts[0].start():end.start() if end else len(text)].strip()
+    if len(section) > _OUTPUT_TAIL:
+        head = section.splitlines()[0]
+        section = f"{head}\n...\n{section[-(_OUTPUT_TAIL - len(head) - 5):]}"
+    more = len(starts) - 1
+    return f"{section}\n(+{more} more collection error{'s' * (more > 1)})" if more else section
+
+
+def kept_collection_traceback(output: str, tail: str) -> str:
+    """`collection_traceback(output)` as a verdict-detail prefix (`"collection traceback:\\n<tb>\\n--\\n"`) when the
+    output tail `tail` does not already hold it whole; `""` when there is none or the tail carries it."""
+    found = collection_traceback(output)
+    if not found or found in tail.replace("\r\n", "\n"):
+        return ""
+    return f"collection traceback:\n{found}\n--\n"
+
+
 #: Zero-run cause for a pytest run whose every outcome is a setup error (no test completed): the harness, not a test, failed.
 ZERO_RUN_TEST_INFRA = "test_infra_failure"
 #: Re-runs of a 0-test `test_infra_failure` outcome (retest_targeted pass, test_leg_run leg); a second one is reported.
@@ -861,7 +890,7 @@ def _stage_and_write(dest: Path, put: Sequence[tuple]) -> None:
                 break
             if anc.is_file():
                 anc.unlink()
-    _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, budget, _raw_checkout_env(), "".join(f"{p}\0" for p in names)))
+    _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, budget, env=_raw_checkout_env(), stdin_text="".join(f"{p}\0" for p in names)))
 
 
 def _fill(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str]] = None) -> int:
@@ -875,7 +904,7 @@ def _fill(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str]] 
         _stage_and_write(dest, put)
         _state_write(mroot, sha, frozenset(closure))
         return len(put)
-    out = _run([_git_exe(), "read-tree", "-m", "-u", sha], dest, export_step_timeout_s(), _raw_checkout_env())
+    out = _run([_git_exe(), "read-tree", "-m", "-u", sha], dest, export_step_timeout_s(), env=_raw_checkout_env())
     if out.returncode:
         raise ExportError(f"overlay checkout failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}")
     listing = _run([_git_exe(), "ls-tree", "-r", "--name-only", "-z", sha], dest, export_step_timeout_s())
@@ -952,7 +981,7 @@ def _apply_diff(dest: Path, raw: str, closure: Optional[Collection[str]] = None)
                 if anc.is_file():
                     anc.unlink()
         if shown:
-            _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, export_step_timeout_s(len(shown)), _raw_checkout_env(), "".join(f"{p}\0" for p in shown)))
+            _must(_run([_git_exe(), "checkout-index", "-f", "-u", "-z", "--stdin"], dest, export_step_timeout_s(len(shown)), env=_raw_checkout_env(), stdin_text="".join(f"{p}\0" for p in shown)))
     return [*gone, *(p for p, _, _ in put)]
 
 
@@ -980,7 +1009,7 @@ def _advance(dest: Path, mroot: Path, sha: str, closure: Optional[Collection[str
     if names is None:
         if closure is not None:
             raise _MirrorStale(f"non-plain-file change {old[:12]}..{sha[:12]} in a scoped mirror")
-        moved = _run([_git_exe(), "read-tree", "-m", "-u", old, sha], dest, export_step_timeout_s(), _raw_checkout_env())
+        moved = _run([_git_exe(), "read-tree", "-m", "-u", old, sha], dest, export_step_timeout_s(), env=_raw_checkout_env())
         if moved.returncode:
             raise _MirrorStale(f"read-tree {old[:12]}..{sha[:12]} failed: {moved.stderr.strip()[-_OUTPUT_TAIL:]}")
         names = [t for t in diff.stdout.split("\0") if t and not t.startswith(":")]
@@ -1456,15 +1485,44 @@ def collect_startup_s() -> float:
     return _positive_env_float(COLLECT_STARTUP_ENV) or float(PYTEST_STARTUP_S)
 
 
+def argv_named_untracked(root: Path, argv: Sequence[str]) -> list:
+    """Repo-relative `.py` files `argv` names (node ids cut at `::`) that are files in the worktree and tracked
+    nowhere: a test the run wrote that no declared or own-written set carries reaches the mirror only through
+    the command that runs it. A tracked file is never named here (a peer's dirty tracked hunks stay at HEAD),
+    nor a path outside `root` or under the sparse-excluded trees. In process: one index read, no spawn."""
+    from coordinator_core.ops.dispatch_emit import test_reach
+    from coordinator_core.ops.dispatch_emit.export_closure import _norm
+
+    tracked = None
+    out: dict = {}
+    for token in argv:
+        if not token or token.startswith("-"):
+            continue
+        rel = _norm(token.split("::", 1)[0], root)
+        if not rel.endswith(".py") or rel.startswith(_SPARSE_EXCLUDE) or ".." in PurePosixPath(rel).parts:
+            continue
+        try:
+            if PureWindowsPath(rel).drive or rel.startswith("/") or not (root / rel).is_file():
+                continue
+        except (OSError, ValueError):
+            continue
+        if tracked is None:
+            tracked = test_reach._tracked(root)
+        if rel not in tracked:
+            out[rel] = None
+    return list(out)
+
+
 def run_in_export(
     root: Path, run_id: str, paths: Sequence[str], argv: Sequence[str], overrides: Optional[Mapping[str, bytes]] = None,
 ) -> subprocess.CompletedProcess:
-    """Run `argv` in the clean export of `paths` (cwd and PYTHONPATH the mirror) under the mirror lock; the lock
-    is held across the command. `ExportError` when the export fails; `PytestStalled` (a `TimeoutExpired`) after
-    `export_run_stall_s()` of silence.
+    """Run `argv` in the clean export of `paths` plus the untracked test files `argv` names (cwd and PYTHONPATH
+    the mirror) under the mirror lock; the lock is held across the command. `ExportError` when the export fails;
+    `PytestStalled` (a `TimeoutExpired`) after `export_run_stall_s()` of silence.
 
     Trap: no total wall. A flat cap halted every run whose test leg is legitimately longer (example-game-repo 2da5dc needs
     ~660s); the stall watchdog fails only a command that stops making progress."""
+    paths = list(dict.fromkeys([*paths, *argv_named_untracked(root, argv)]))
     with clean_export(root, run_id, paths, argv=argv, overrides=overrides) as dest:
         return _run(list(argv), dest, None, env=_mirror_env(dict(os.environ), dest), stall_s=export_run_stall_s())
 
@@ -1585,11 +1643,13 @@ def _pytest_argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str],
     `-m` expression (the empty string selects every marker). Never a worker count above 0: when xdist is importable
     `-n 0` overrides a consumer addopts `-n`; `-p no:xdist` would make that addopts an unrecognized argument."""
     py = _gate_python(root)
-    return [
-        py, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", tier_marker_expr() if marker is None else marker,
+    from coordinator_core.bash_guards._test_run_admission import scoped_leg_argv
+
+    return scoped_leg_argv(py, [
+        "-q", "-p", "no:cacheprovider", "-m", tier_marker_expr() if marker is None else marker,
         *(["-n", "0"] if _xdist_known_present(py) else []), "--rootdir", str(dest.resolve()),
         "--basetemp", str(basetemp), *targets,
-    ]
+    ])
 
 
 def _test_spans(source: str) -> Optional[list]:
@@ -1799,6 +1859,7 @@ def verify(
                 if ids:
                     tail = f"failing: {', '.join(ids[:_NOTE_FAILING_IDS])}; {tail}"
             at_base: frozenset = frozenset()
+            kept = kept_collection_traceback("".join(r.stdout + r.stderr for r in bad), tail)
             collected = any(collection_error(r.returncode, r.stdout + r.stderr) for r in bad)
             failed = collected or any(r.returncode == _PYTEST_FAILED for r in bad)
             if ran.returncode == _PYTEST_NO_TESTS:
@@ -1814,14 +1875,14 @@ def verify(
                     return OverlayVerdict(
                         ENV_DEFECT,
                         f"interpreter defect: {pin.command or 'the undeclared gate interpreter'} lacks module(s) {', '.join(absent)}"
-                        f"{' (the repo declares no resolvable pin)' if not pin.command else ''}: {tail}",
+                        f"{' (the repo declares no resolvable pin)' if not pin.command else ''}: {kept}{tail}",
                         seeds, argv=tuple(launched),
                     )
                 if pin.source != SOURCE_KEY and any(guard_exit(r.returncode, r.stdout + r.stderr) for r in bad):
                     return OverlayVerdict(
                         ENV_DEFECT,
                         f"verify could not run: a repo guard ended pytest (exit {bad[0].returncode}) before any test ran under "
-                        f"{pin.command or 'the undeclared gate interpreter'}; {REMEDY}; {process_facts(bad[0], dest, seeds)}: {tail}",
+                        f"{pin.command or 'the undeclared gate interpreter'}; {REMEDY}; {process_facts(bad[0], dest, seeds)}: {kept}{tail}",
                         seeds, argv=tuple(launched),
                     )
             infra = infra_setup_error(full) if failed else ""
@@ -1872,13 +1933,13 @@ def verify(
         body = f"test collection failed: {tail}" if collected else tail
         facts = process_facts(bad[0], dest, seeds) if not completed_a_test(full) else ""
         return OverlayVerdict(
-            "red", "; ".join(p for p in (setup, facts, body) if p), seeds, failing=ids, argv=argv,
+            "red", "; ".join(p for p in (setup, facts, f"{kept}{body}") if p), seeds, failing=ids, argv=argv,
             cause=ZERO_RUN_TEST_INFRA if infra else "",
         )
     if not completed_a_test(full):
         return OverlayVerdict(
             "red",
-            "; ".join(p for p in ("pytest process error: no test ran", first_setup_error(full), process_facts(bad[0], dest, seeds), tail) if p),
+            "; ".join(p for p in ("pytest process error: no test ran", first_setup_error(full), process_facts(bad[0], dest, seeds), f"{kept}{tail}") if p),
             seeds, argv=argv, cause=ZERO_RUN_TEST_INFRA,
         )
     return OverlayVerdict(
@@ -2300,6 +2361,30 @@ def _own_written(root: Path, run_id: str) -> list:
     return review_reverify.own_written_paths(root, run_id, pinned_run_base(root, run_id), sorted(sessions))
 
 
+def _snapshot_scope(root: Path, run_id: str) -> list:
+    """The paths the run's review-prep snapshots froze (their manifests' `files`, the reverify's `edited`
+    source): a module the run created that no declared write names reaches the mirror only through them.
+    [] when no session or snapshot answers; a path escaping the worktree is dropped."""
+    from coordinator_core.ops import review_reverify
+    from coordinator_core.ops.dispatch_emit import land_run, review_edits
+    from coordinator_core.ops.review_slice_id import RUN_PREP_PLAN_STEM
+    from coordinator_core.session.core import resolve_session_id
+    from coordinator_core.session.machinery_paths import share_dir
+
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "-", run_id)
+    out: dict[str, None] = {}
+    for session in sorted(s for s in land_run._firing_sessions(root, run_id, resolve_session_id(str(root)) or None) if s):
+        if re.search(r"[\\/]|\.\.", session):
+            continue
+        share = Path(share_dir(str(root), session))
+        for snap in share.glob(f"{RUN_PREP_PLAN_STEM}-{safe}-*-prep{review_reverify._PRE_REVIEW_SUFFIX}"):
+            for raw in (review_reverify._read_manifest(snap) or {}).get("files", ()):
+                path = review_edits.norm(raw)
+                if path and not review_edits.out_of_worktree(path):
+                    out[path] = None
+    return list(out)
+
+
 def own_hunk_overrides(root: Path, run_id: str, paths: Sequence[str]) -> dict:
     """`{path: bytes}` of HEAD plus only the run's own hunks, for each of `paths` whose worktree also carries a
     peer's hunks (`checkpoint_hunks.checkpoint_own_blobs`). A path it cannot split, or wholly the run's own, is
@@ -2327,28 +2412,36 @@ def own_hunk_overrides(root: Path, run_id: str, paths: Sequence[str]) -> dict:
 def own_delta(root: Path, run_id: str, seed: Sequence[str]) -> tuple:
     """`(paths, overrides)`: `seed` plus the run's own delta it lacks (the manifest's `review_declared_paths`
     and `_own_written`), and `{path: bytes}` for each of those paths another live run also declared, at HEAD
-    plus only the run's own hunks (`own_hunk_overrides`). Such an added path with no splittable own hunks is
-    left out, so it reaches the mirror at HEAD; a shared `seed` path with none stays and reaches it at its
-    worktree bytes, peer hunks included. Every other path reaches the mirror at its
+    plus only the run's own hunks (`own_hunk_overrides`). A shared path with no splittable own hunks (an
+    untracked new file has no HEAD blob to split) stays in `paths` and reaches the mirror at its worktree
+    bytes, peer hunks included; never HEAD or absent. A path only a peer declares is never added, so it stays
+    at HEAD. Every path reaches the mirror at its
     worktree bytes, so a test the run created or a symbol it added is there when the command collects. Never
-    raises: an own-write set that cannot be read leaves `seed` as it was, with an advisory."""
+    raises: an own-write set that cannot be read leaves `seed` as it was, with an advisory. The run's whole
+    recorded write set (`_own_write_set`: revise-widened and EM-row paths, untracked new modules included)
+    joins the delta too. The mirror's git HEAD is the clone base and stays stale by design; `state.json`
+    holds the advanced tree, so a HEAD that predates the run is not itself a missing-file cause."""
     from coordinator_core.ops.dispatch_emit import review_edits
 
     have = {review_edits.norm(p) for p in seed}
     try:
         manifest = _manifest_declared_paths(measured_rev_record_path(root, run_id).with_name("manifest.json")) or []
-        extra = [p for p in (*manifest, *_own_written(root, run_id)) if review_edits.norm(p) not in have]
+        owned = [*manifest, *_own_write_set(root, run_id), *_own_written(root, run_id)]
+        snapshot = _snapshot_scope(root, run_id)
+        extra = [p for p in (*owned, *snapshot) if review_edits.norm(p) not in have]
         if not extra and not seed:
             return list(seed), {}
         sibling = {review_edits.norm(p) for p in review_edits.live_sibling_declared(root, run_id)}
     except Exception as exc:  # the own delta only widens the seed; an unreadable source never refuses the export
         print(f"[clean-export] advisory: run's own delta not read ({type(exc).__name__}: {exc}); declared paths only", file=sys.stderr)
         return list(seed), {}
-    wanted = list(dict.fromkeys(review_edits.norm(p) for p in extra))
+    # The review snapshot measures dirt, it does not declare ownership: a snapshot-only path a peer declared
+    # is the peer's and stays at HEAD. A path the run itself declared or wrote stays even when shared.
+    declared = {review_edits.norm(p) for p in owned}
+    wanted = [p for p in dict.fromkeys(review_edits.norm(p) for p in extra) if p not in sibling or p in declared]
     shared = [p for p in (*(review_edits.norm(s) for s in seed), *wanted) if p in sibling]
     split = own_hunk_overrides(root, run_id, list(dict.fromkeys(shared)))
-    kept = [p for p in wanted if p not in sibling or p in split]
-    return [*seed, *kept], {p: split[p] for p in dict.fromkeys(shared) if p in split}
+    return [*seed, *wanted], {p: split[p] for p in dict.fromkeys(shared) if p in split}
 
 
 def run_own_delta(root: Path, run_id: str, seed: Sequence[str]) -> list:

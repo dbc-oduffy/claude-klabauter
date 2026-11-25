@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from coordinator_core.install import host_targets
+from coordinator_core.install import host_registry, host_targets
 from coordinator_core.install.host_targets import HOSTS, HostPlan, plan, resolve_home
 from pathlib import Path
 
@@ -23,7 +23,36 @@ def _env(tmp_path, **extra):
 
 
 def test_hosts_constant() -> None:
-    assert HOSTS == ("codex", "agy")
+    assert HOSTS == ("codex", "agy", "grok")
+    assert HOSTS == host_registry.FOREIGN
+    from coordinator_core.host_hooks import contract
+    assert contract.HOSTS == host_registry.FOREIGN
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_grok_paths_from_home(tmp_path: Path, platform) -> None:
+    p = plan("grok", tmp_path, _env(tmp_path), platform)
+    assert p.config_path == tmp_path / ".grok" / "config.toml"
+    assert p.hooks_path == tmp_path / ".grok" / "hooks" / "coordinator.json"
+    assert any("trusted_folders.toml" in c and "[folders.'<checkout>']" in c for c in p.changes)
+    assert p.host_provides and p.unreachable
+
+
+def test_grok_home_env_wins(tmp_path: Path) -> None:
+    gh = tmp_path / "elsewhere"
+    p = plan("grok", tmp_path, _env(tmp_path, GROK_HOME=str(gh)))
+    assert p.config_path == gh / "config.toml"
+    assert p.hooks_path == gh / "hooks" / "coordinator.json"
+
+
+def test_grok_binary_found_on_path(tmp_path: Path) -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / _exe_name("grok")
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    assert os.path.normcase(plan("grok", tmp_path, {"PATH": str(bindir)}).binary) == os.path.normcase(str(exe))
+    assert plan("grok", tmp_path, _env(tmp_path)).binary is None
 
 
 def test_unknown_host_rejected(tmp_path: Path) -> None:
@@ -63,7 +92,7 @@ def test_agy_paths_from_home(tmp_path: Path, platform) -> None:
     assert p.changes and p.host_provides and p.unreachable
 
 
-@pytest.mark.parametrize("host", ["codex", "agy"])
+@pytest.mark.parametrize("host", ["codex", "agy", "grok"])
 def test_plan_names_no_hooks_fragment(tmp_path: Path, host) -> None:
     p = plan(host, tmp_path, _env(tmp_path))
     assert not hasattr(p, "hooks_fragment")
