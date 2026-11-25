@@ -251,6 +251,72 @@ def test_a_peer_held_path_in_the_widened_write_set_reaches_the_mirror_at_the_run
     assert PEER in paths and overrides == {PEER: b"P = 5\n"}
 
 
+def test_an_unreadable_own_written_source_keeps_the_manifest_declared_source_in_the_mirror(tmp_path, monkeypatch, capsys):
+    root = _world(tmp_path, monkeypatch)
+
+    def broken(*_a, **_k):
+        raise OSError("no pre-review snapshot")
+
+    monkeypatch.setattr(cov, "_own_written", broken)
+
+    paths, _ = cov.own_delta(root, RUN, ["tests/test_new.py"])
+
+    assert "src/mod.py" in paths and PEER not in paths
+    assert "run's own delta not read" in capsys.readouterr().err
+
+
+def test_an_unreadable_peer_declaration_keeps_the_run_s_own_source_and_drops_a_snapshot_only_path(tmp_path, monkeypatch):
+    root = _snapshot_world(tmp_path, monkeypatch)
+
+    def broken(*_a, **_k):
+        raise OSError("sibling record unreadable")
+
+    monkeypatch.setattr(review_edits, "live_sibling_declared", broken)
+
+    paths, overrides = cov.own_delta(root, RUN, ["tests/test_seam.py"])
+
+    assert "src/mod.py" in paths and "src/seam.py" not in paths and PEER not in paths and overrides == {}
+
+
+def test_an_own_blob_equal_to_head_is_no_override_but_a_changed_blob_is_kept(tmp_path, monkeypatch):
+    from coordinator_core.git import checkpoint_hunks
+
+    root = _world(tmp_path, monkeypatch)
+    head_blob = _git(root, "rev-parse", "HEAD:src/mod.py")
+    proc = subprocess.run(
+        ["git", "-C", str(root), "hash-object", "-w", "--stdin"], input=b"A = 1\nB = 2\n", check=True,
+        capture_output=True, **no_console_creationflags(),
+    )
+    changed = proc.stdout.decode().strip()
+    monkeypatch.setattr(checkpoint_hunks, "checkpoint_own_blobs", lambda *_a, **_k: ({"src/mod.py": head_blob}, []))
+
+    assert cov.own_hunk_overrides(root, RUN, ["src/mod.py"]) == {}
+
+    monkeypatch.setattr(checkpoint_hunks, "checkpoint_own_blobs", lambda *_a, **_k: ({"src/mod.py": changed}, []))
+
+    assert cov.own_hunk_overrides(root, RUN, ["src/mod.py"]) == {"src/mod.py": b"A = 1\nB = 2\n"}
+
+
+def test_an_unreadable_head_keeps_every_own_blob_as_an_override(tmp_path, monkeypatch):
+    from coordinator_core.git import checkpoint_hunks
+
+    root = _world(tmp_path, monkeypatch)
+    head_blob = _git(root, "rev-parse", "HEAD:src/mod.py")
+    monkeypatch.setattr(checkpoint_hunks, "checkpoint_own_blobs", lambda *_a, **_k: ({"src/mod.py": head_blob}, []))
+
+    def _boom(*_a, **_k):
+        raise OSError("HEAD unreadable")
+
+    monkeypatch.setattr(cov, "_head_sources", _boom)
+
+    blob = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "blob", head_blob], check=True, capture_output=True,
+        **no_console_creationflags(),
+    ).stdout
+
+    assert cov.own_hunk_overrides(root, RUN, ["src/mod.py"]) == {"src/mod.py": blob}
+
+
 def test_an_unreadable_own_write_set_leaves_the_declared_seed_and_says_so(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path, monkeypatch)
 

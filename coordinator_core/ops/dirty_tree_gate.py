@@ -517,14 +517,14 @@ def main(argv: List[str]) -> int:
     )
     print(
         "  2. Peer file (live concurrent-EM session)   -> leave it untouched. Do NOT "
-        "commit it. Complete via explicit-path commit of ONLY your own "
-        "session's files (git add -- <your-paths> && git commit -m ... -- <your-paths>), "
+        "commit it. Complete via an explicit-path commit of ONLY your own "
+        "session's files: coordinator-safe-commit \"<subject>\" -- <your-paths>, "
         "skipping this gate's blanket pass for this run.",
         file=sys.stderr,
     )
     print(
-        "  3. Your own file (forgot to stage)          -> git add -- <path>, then "
-        "re-run this gate.",
+        "  3. Your own file (forgot to commit it)      -> coordinator-safe-commit "
+        "\"<subject>\" -- <path>, then re-run this gate.",
         file=sys.stderr,
     )
     print(

@@ -640,15 +640,33 @@ def test_agy_seed_argv_change_keeps_existing_interpreter_and_quoting_form(tmp_pa
     assert ui.seed_agy_hook(hp, tmp_path, "/e/new") == "present"
 
 
-def test_agy_seed_pin_wins_on_a_rerender_but_never_rewrites_an_equivalent_entry(tmp_path, monkeypatch):
-    hp = tmp_path / "hooks.json"
-    hp.write_text(json.dumps({ui.AGY_HOOK_KEY: ui.agy_hook_entry(tmp_path, "/e/old", _INTERP_A)}), encoding="utf-8")
+def test_agy_seed_rerender_keeps_the_existing_interpreter_over_a_pin_and_a_path_python(tmp_path, monkeypatch):
+    path_dir = tmp_path / "pathbin"
+    path_dir.mkdir()
+    fake = path_dir / ("python3.exe" if os.name == "nt" else "python3")
+    fake.write_text("", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(path_dir) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setattr(ui, "_console_python", lambda: shutil.which("python3") or fake.as_posix())
     monkeypatch.setattr(ui, "_pin_value", lambda: "/opt/pin/python3")  # abs-path-ok: synthetic pin, never opened
+    hp = tmp_path / "hooks.json"
+    old = ui.agy_hook_entry(tmp_path, "/e/old", _INTERP_A)
+    del old["PostToolUse"]
+    hp.write_text(json.dumps({ui.AGY_HOOK_KEY: old}), encoding="utf-8")
+    assert ui.seed_agy_hook(hp, tmp_path, "/e/old") == "updated"
+    entry = json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY]
+    assert "PostToolUse" in entry
+    commands = _agy_commands(entry)
+    assert commands and all(c.startswith(_INTERP_A + " ") for c in commands)
     before = hp.read_bytes()
     assert ui.seed_agy_hook(hp, tmp_path, "/e/old") == "present" and hp.read_bytes() == before
-    assert ui.seed_agy_hook(hp, tmp_path, "/e/new") == "updated"
+
+
+def test_agy_seed_fresh_install_writes_the_running_interpreter_not_the_pin(tmp_path, monkeypatch):
+    monkeypatch.setattr(ui, "_pin_value", lambda: "/opt/pin/python3")  # abs-path-ok: synthetic pin, never opened
+    hp = tmp_path / "hooks.json"
+    assert ui.seed_agy_hook(hp, tmp_path, "/e") == "created"
     commands = _agy_commands(json.loads(hp.read_text(encoding="utf-8"))[ui.AGY_HOOK_KEY])
-    assert commands and all(c.startswith("/opt/pin/python3 ") for c in commands)
+    assert commands and all(_fwd(sys.executable) in c and "/opt/pin" not in c for c in commands)
 
 
 def test_agy_entry_currency_ignores_interpreter_and_quoting_but_not_a_missing_event(tmp_path):

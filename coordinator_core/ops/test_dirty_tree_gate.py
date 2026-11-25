@@ -514,6 +514,26 @@ def test_parse_porcelain_paths_still_the_single_parser():
     assert hits == [str(root / "ops" / "dirty_tree_gate.py")], hits
 
 
+def test_manual_fallback_routes_through_safe_commit_not_bare_git(
+    tmp_path, isolated_plugin_root, capsys
+):
+    repo = _make_repo(tmp_path, "t-safe-commit")
+    (repo / "orphan.txt").write_text("orphaned content\n")
+
+    cwd = os.getcwd()
+    os.chdir(repo)
+    try:
+        rc = main(["--terminator", "handoff"])
+    finally:
+        os.chdir(cwd)
+    err = capsys.readouterr().err
+    assert rc == 3
+    assert "MANUAL FALLBACK" in err
+    assert "coordinator-safe-commit" in err
+    assert "git add" not in err
+    assert "git commit" not in err
+
+
 def test_refusal_text_never_offers_stash(tmp_path, isolated_plugin_root, capsys):
     repo = _make_repo(tmp_path, "t-nostash")
     (repo / "orphan.txt").write_text("orphaned content\n")
