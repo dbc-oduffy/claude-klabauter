@@ -231,8 +231,9 @@ def _refresh_vendored(here, engine_root) -> int:
     old or whole new file. A file with no engine counterpart is left alone; the set is `here`'s own
     contents, never the installer's closure. Never raises and never spawns; returns the count replaced.
 
-    Trap: a failed replace is silent, so a permanently failing refresh leaves the old copy running; the
-    cost is one size stat per file plus a full read of same-size files, unmeasured against the 500ms bar.
+    A failed replace is named on stderr (never stdout, which carries the hook reply) so a permanently
+    failing refresh is visible in the agy hook log. Cost: one size stat per file plus a full read of
+    same-size files; process time over the real vendored tree is pinned in test_unimatrix_agy_hook.py.
     A vendored hook that predates this function never refreshes itself: one installer run seeds it.
     """
     refreshed = 0
@@ -264,8 +265,11 @@ def _refresh_vendored(here, engine_root) -> int:
                     os.replace(tmp, dest)
                     tmp = None
                     refreshed += 1
-                except Exception:
-                    pass
+                except Exception as exc:
+                    try:
+                        print(f"unimatrix: vendored refresh of {fname} failed: {exc}", file=sys.stderr)
+                    except Exception:
+                        pass
                 finally:
                     if tmp is not None:
                         try:

@@ -324,6 +324,17 @@ def test_agy_face_with_a_held_presence_lock_is_backed_despite_a_dead_pid(tmp_pat
     assert lv.agy_face_unbacked(face, home) is True
 
 
+def test_agy_face_with_a_pending_leg_is_unbacked_but_live_or_absent_mode_is_backed(tmp_path: Path) -> None:
+    face = {"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}
+    home = _agy_home(tmp_path, None)
+    _write_leg(home, "conv-1", {"pid": 1, "agy_pid": os.getpid(), "mode": "pending"})
+    assert lv.agy_face_unbacked(face, home) is True
+    _write_leg(home, "conv-1", {"pid": 1, "agy_pid": os.getpid(), "mode": "live"})
+    assert lv.agy_face_unbacked(face, home) is False
+    _write_leg(home, "conv-1", {"pid": 1, "agy_pid": os.getpid()})
+    assert lv.agy_face_unbacked(face, home) is False
+
+
 @pytest.mark.parametrize("mirror_field", [
     {"unimatrixRemote": "example-operator@machine-b"},
     {"macSocketPath": "/tmp/cc-socks/cc-msg-far.sock"},

@@ -303,6 +303,28 @@ def test_a_queued_ack_returns_the_queued_notice_without_waiting_for_a_reply(env)
     assert out == agy.QUEUED
 
 
+def test_live_ack_returns_the_planner_response_the_transcript_gains(env):
+    transcript, make = env
+    fake = make({"ok": True, "status": 200}, lambda t: append(transcript, row("live answer")))
+    out = asyncio.run(agy.agy_turn("leg.sock", transcript, "ping", timeout=5, interval=0.02))
+    assert out == "live answer" and out != agy.QUEUED
+    assert fake.seen == ["ping"]
+
+
+def test_live_ack_with_wait_reply_false_returns_receipt_not_the_transcript_reply(env):
+    transcript, make = env
+    make({"ok": True}, lambda t: append(transcript, row("would-be reply")))
+    out = asyncio.run(agy.agy_turn("leg.sock", transcript, "ping", timeout=30, interval=30, wait_reply=False))
+    assert isinstance(out, dict) and out["written"] is True
+
+
+def test_queued_ack_with_wait_reply_false_still_reports_queued(env):
+    transcript, make = env
+    make({"ok": True, "queued": True})
+    out = asyncio.run(agy.agy_turn("leg.sock", transcript, "ping", timeout=30, interval=30, wait_reply=False))
+    assert out == agy.QUEUED
+
+
 @pytest.mark.parametrize("err", [FileNotFoundError(2, "No such file or directory"), ConnectionRefusedError()])
 def test_a_conversation_without_a_leg_gets_an_actionable_refusal(tmp_path, monkeypatch, err):
     def boom(*a, **k):
@@ -371,6 +393,33 @@ def test_turn_with_wait_reply_false_returns_written_receipt_without_waiting(env)
     out = asyncio.run(agy.agy_turn("leg.sock", transcript, "hello", timeout=30, interval=30, wait_reply=False))
     assert isinstance(out, dict) and out["written"] is True and out["msg_id"]
     assert fake.seen == ["hello"]
+
+
+@pytest.fixture
+def router_agy_adapter(env, monkeypatch):
+    """The router's production agy adapter, bound to this test's fake leg and transcript."""
+    transcript, make = env
+    router = load("unimatrix-peer-router")
+    monkeypatch.setattr(router, "_load", lambda filename, modname: agy)
+    monkeypatch.setattr(agy, "leg_endpoint", lambda conv: "leg.sock")
+    monkeypatch.setattr(agy, "transcript_path", lambda conv: transcript)
+    return router.default_adapters()["agy"], make, transcript
+
+
+def test_agy_to_agy_deliver_only_peer_gets_the_written_receipt_and_the_leg_gets_the_frame(router_agy_adapter):
+    adapter, make, transcript = router_agy_adapter
+    fake = make({"ok": True, "status": 200}, lambda t: append(transcript, row("would-be reply")))
+    out = asyncio.run(adapter({"target": "conv-b", "vendor": "agy", "deliver_only": True}, "[agy-a] ping"))
+    assert isinstance(out, dict) and out["written"] is True and out["msg_id"]
+    assert fake.seen == ["[agy-a] ping"]
+
+
+def test_agy_to_agy_deliver_only_peer_with_a_queued_ack_is_answered_queued(router_agy_adapter):
+    adapter, make, _ = router_agy_adapter
+    fake = make({"ok": True, "queued": True})
+    out = asyncio.run(adapter({"target": "conv-b", "vendor": "agy", "deliver_only": True}, "[agy-a] ping"))
+    assert out == agy.QUEUED
+    assert fake.seen == ["[agy-a] ping"]
 
 
 def test_leg_rebinds_when_its_unix_socket_is_unlinked(monkeypatch, tmp_path):

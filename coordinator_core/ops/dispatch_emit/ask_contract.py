@@ -1403,6 +1403,10 @@ def rearms_run_wall(prior: dict[str, Any] | None, stage: str) -> bool:
     return bool(prior) and stage in ("minted", "staged") and prior.get("stage") == "halted"
 
 
+#: run-stage.json key holding the session that first stamped the run; the resume gate counts it as an owner.
+SUBMITTER_FIELD = "submitter_session_id"
+
+
 def write_run_stage_at(
     record_path: Path, stage: str, *, steps_planned: int | None = None, now: str | None = None,
     warp_run: str | None = None, session_id: str | None = None,
@@ -1431,6 +1435,8 @@ def write_run_stage_at(
             None if in_warm_served_request() else resolve_session_id() or None
         )
         data["started_at"] = stamp
+        if data["session_id"]:
+            data[SUBMITTER_FIELD] = data["session_id"]
     if rearms_run_wall(prior, stage):
         data[WALL_START_FIELD] = stamp
     stage = _stage_after_mint_stamp(stage, prior)

@@ -113,6 +113,84 @@ def test_the_same_driver_resumes_without_a_log(tmp_path, monkeypatch):
     assert not (root / RECORD_DIR_ROOT / RUN / TAKEOVER_LOG).exists()
 
 
+def _stage_with(root, **fields):
+    (root / RECORD_DIR_ROOT / RUN / "run-stage.json").write_text(
+        json.dumps({"stage": "commit", **fields}), encoding="utf-8")
+
+
+@pytest.mark.parametrize("fields", [
+    {"session_id": "child", "submitter_session_id": "s1"},
+    {"session_id": "child", "adopted_from": ["s1"]},
+    {"session_id": "child", "driver_session_ids": ["child", "s1"]},
+])
+def test_the_submitter_of_a_child_driven_run_needs_no_takeover(tmp_path, fields):
+    root = _repo(tmp_path, stamp=None)
+    _stage_with(root, **fields)
+    assert check_resume(root, RUN, "s1", None) is None
+    assert not (root / RECORD_DIR_ROOT / RUN / TAKEOVER_LOG).exists()
+
+
+def test_a_third_session_is_still_refused_and_takeover_returns_the_prior_driver(tmp_path):
+    root = _repo(tmp_path, stamp=None)
+    _stage_with(root, session_id="child", submitter_session_id="s1", adopted_from=["s0"], driver_session_ids=["child"])
+    with pytest.raises(ResumeRefused) as exc:
+        check_resume(root, RUN, "third", None)
+    assert exc.value.reason == REFUSE_FOREIGN_DRIVER
+    assert check_resume(root, RUN, "third", "peer died") == "child"
+
+
+def test_the_first_run_stage_stamp_records_the_submitter(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage, stamp_run_stage
+
+    root = _repo(tmp_path, stamp=None)
+    (root / RECORD_DIR_ROOT / RUN / "run-stage.json").unlink(missing_ok=True)
+    stamp_run_stage(root, RUN, "minted", session_id="s1")
+    assert read_run_stage(root, RUN)["submitter_session_id"] == "s1"
+
+
+def test_a_legacy_record_without_a_submitter_admits_the_session_its_emission_receipt_names(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    root = _repo(tmp_path, stamp=None)
+    _stage_with(root, session_id="child")
+    monkeypatch.setattr(halted_run, "recorded_emitter", lambda r, run_id: "s1")
+    assert check_resume(root, RUN, "s1", None) is None
+    with pytest.raises(ResumeRefused) as exc:
+        check_resume(root, RUN, "third", None)
+    assert exc.value.reason == REFUSE_FOREIGN_DRIVER
+
+
+def test_every_session_the_stall_detector_reads_as_a_driver_is_an_owner_here():
+    from coordinator_core.ops.dispatch_emit.resume_gate import _owners
+    from coordinator_core.ops.dispatch_emit.staged_stall import _recorded_sessions
+
+    stage = {"session_id": "a", "adopted_from": ["b", "c"], "driver_session_ids": ["d", "e"]}
+    assert set(_recorded_sessions(stage)) <= _owners(stage)
+
+
+def test_the_first_stamp_of_a_served_request_records_the_carried_caller_as_submitter(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage, stamp_run_stage
+    from coordinator_core.session import core
+
+    root = _repo(tmp_path, stamp=None)
+    (root / RECORD_DIR_ROOT / RUN / "run-stage.json").unlink(missing_ok=True)
+    monkeypatch.setattr(core, "carried_session_id", lambda: "caller")
+    monkeypatch.setattr(core, "resolve_session_id", lambda *a, **k: "child-env")
+    stamp_run_stage(root, RUN, "minted")
+    stage = read_run_stage(root, RUN)
+    assert stage["submitter_session_id"] == stage["session_id"] == "caller"
+
+
+def test_takeover_recorded_is_true_only_after_a_takeover_row_is_logged(tmp_path):
+    from coordinator_core.ops.dispatch_emit.resume_gate import record_takeover, takeover_recorded
+
+    root = _repo(tmp_path, stamp=None)
+    rd = root / RECORD_DIR_ROOT / RUN
+    assert takeover_recorded(rd) is False
+    record_takeover(rd, "child", "s1", "peer died")
+    assert takeover_recorded(rd) is True
+
+
 def test_an_unrecorded_driver_is_not_refused(tmp_path, monkeypatch):
     root = _repo(tmp_path, stamp=None)
     envelope, result, _ = _drive(root, monkeypatch, "s1")

@@ -1460,6 +1460,29 @@ def test_interpreter_with_a_space_takes_its_short_form_and_is_quoted_only_withou
     assert ui._neutral_command([spaced, "x.py"]) == "\"/opt/Program Files/py/python.exe\" 'x.py'"
 
 
+class _OsName:
+    def __init__(self, name):
+        self.name = name
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+def test_quote_argv_is_list2cmdline_on_nt_and_shlex_elsewhere_with_no_single_quote_on_nt(monkeypatch):
+    argv = ["/opt/Program Files/py/python.exe", "/opt/a b/x.py", "--to", "it's"]
+    monkeypatch.setattr(ui, "os", _OsName("nt"))
+    nt = ui._quote_argv(argv)
+    assert nt == subprocess.list2cmdline(argv)
+    assert nt.startswith('"/opt/Program Files/py/python.exe" "/opt/a b/x.py" --to ') and "'" not in nt.replace("it's", "")
+    monkeypatch.setattr(ui, "os", _OsName("posix"))
+    assert ui._quote_argv(argv) == " ".join(shlex.quote(a) for a in argv)
+
+
+def test_agy_hook_commands_carry_no_backslash_on_any_os(tmp_path):
+    commands = _agy_commands(ui.agy_hook_entry(tmp_path, str(tmp_path / "eng")))
+    assert len(commands) == 5 and all("\\" not in c for c in commands)
+
+
 def test_tui_status_command_has_no_backslash_for_bash_to_strip(monkeypatch):
     monkeypatch.setattr(ui, "_console_python", lambda: "\\py\\python.exe")
     for root in ("\\eng\\root", None):

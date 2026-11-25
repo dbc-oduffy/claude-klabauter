@@ -1,8 +1,10 @@
 """Resume gate: the checks a refire of a halted run passes before it resumes that run, and the takeover log.
 
-A run that is cancelled, superseded or closed is refused; a run whose driver session (run-stage.json
-`session_id`) is not the caller's is refused unless the caller names a takeover reason. A run with no
-recorded driver is never refused. Marker and record reads only, no spawn.
+A run that is cancelled, superseded or closed is refused; a run whose recorded owners (run-stage.json
+`session_id`, `submitter_session_id`, `driver_session_ids`, `adopted_from`: the submitting session and the
+headless child it launched count as one owner; a record stamped before `submitter_session_id` existed adds the
+session its emission receipt names) do not include the caller is refused unless the caller names a takeover
+reason. A run with no recorded driver is never refused. Marker and record reads only, no spawn.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops.dispatch_emit import halted_run
-from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+from coordinator_core.ops.dispatch_emit.ask_contract import SUBMITTER_FIELD, read_run_stage
 from coordinator_core.ops.dispatch_emit.halted_hold_release import supersession_reason
 
 TAKEOVER_LOG = "takeover.jsonl"
@@ -39,6 +41,19 @@ def takeover_reason(args: object) -> Optional[str]:
     return text.strip() if isinstance(text, str) and text.strip() else None
 
 
+def _owners(stage: dict, root: Optional[Path] = None, run_id: Optional[str] = None) -> set:
+    """Every session a run-stage record names as an owner: `session_id`, `submitter_session_id`,
+    `driver_session_ids` and `adopted_from`. A legacy record (no `submitter_session_id`) with `root` and
+    `run_id` also counts the session its emission receipt names, the one that submitted it."""
+    out = {stage.get("session_id"), stage.get(SUBMITTER_FIELD)}
+    if not stage.get(SUBMITTER_FIELD) and root is not None and run_id:
+        out.add(halted_run.recorded_emitter(Path(root), run_id))
+    for key in ("driver_session_ids", "adopted_from"):
+        val = stage.get(key)
+        out.update(val if isinstance(val, list) else ())
+    return {s for s in out if isinstance(s, str) and s}
+
+
 def check_resume(root: Path, run_id: str, caller_session: Optional[str], takeover: Optional[str]) -> Optional[str]:
     """Refuse a resume of `run_id` or return the prior driver session when the caller takes the run over.
 
@@ -56,8 +71,9 @@ def check_resume(root: Path, run_id: str, caller_session: Optional[str], takeove
         raise ResumeRefused(REFUSE_CLOSED, f"Run {run_id} is closed. {fresh}")
     if marker.get("status") == halted_run.STATUS_SUPERSEDED or supersession_reason(Path(root), run_id):
         raise ResumeRefused(REFUSE_SUPERSEDED, f"Run {run_id} is superseded. {fresh}")
-    driver = (read_run_stage(Path(root), run_id) or {}).get("session_id")
-    if not isinstance(driver, str) or not driver or not caller_session or driver == caller_session:
+    stage = read_run_stage(Path(root), run_id) or {}
+    driver = stage.get("session_id")
+    if not isinstance(driver, str) or not driver or not caller_session or caller_session in _owners(stage, Path(root), run_id):
         return None
     if takeover:
         return driver
@@ -66,6 +82,11 @@ def check_resume(root: Path, run_id: str, caller_session: Optional[str], takeove
         f"Run {run_id} is driven by session {driver}. Pass `args.takeover: {{reason: \"<why>\"}}` to take it over, "
         "or fire the sizing fresh (`args.fresh: true`).",
     )
+
+
+def takeover_recorded(rd: Path) -> bool:
+    """True when `rd` (a run's record dir) holds a takeover log row."""
+    return (Path(rd) / TAKEOVER_LOG).is_file()
 
 
 def record_takeover(rd: Path, from_session: str, to_session: str, reason: str) -> None:
