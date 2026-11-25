@@ -348,3 +348,60 @@ def test_absent_proceeded_without_changes_nothing(repo) -> None:
     _live(repo, OWNER)
     stage_wait.park(repo, WAITER, [OWNER], [PEER])
     assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER, include_waiting=True)["run_id"] == OWNER
+
+
+LATER_SUCCESSOR = "warp-x-bbbbbb-20261124T110000-abcdef"
+
+
+def _git(root: Path, *args: str) -> str:
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    done = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *args],
+        cwd=str(root), check=True, capture_output=True, text=True, **no_console_creationflags(),
+    )
+    return done.stdout.strip()
+
+
+def _hand_landed_successor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, commit_work: bool = True) -> Path:
+    """A real repo: STRANDED staged with no halt record; SUCCESSOR run-stage `halted`, its manifest declaring a.txt,
+    which changed after the base. `commit_work` False leaves that change uncommitted."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    root = tmp_path / "gitrepo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "a.txt").write_text("a0", encoding="utf-8")
+    _git(root, "add", "a.txt")
+    _git(root, "commit", "-q", "-m", "base")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "a.txt").write_text("a1", encoding="utf-8")
+    if commit_work:
+        _git(root, "commit", "-q", "-am", "work")
+    _declare(root, STRANDED, ("coordinator_core/ops/dispatch_emit",))
+    _stage(root, STRANDED, "staged")
+    _stage(root, LATER_SUCCESSOR, "halted")
+    manifest = {"review_declared_paths": ["a.txt"], "head_sha": base}
+    (root / "state" / "warp" / LATER_SUCCESSOR / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return root
+
+
+def test_stranded_run_with_a_hand_landed_halted_successor_is_no_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _hand_landed_successor(tmp_path, monkeypatch)
+    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+    assert co_tenant_owner.resolve(root, WAITER, _exc())["cause"] == "co_tenant_dependency"
+
+
+def test_stranded_run_with_a_halted_successor_whose_work_is_uncommitted_stays_the_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _hand_landed_successor(tmp_path, monkeypatch, commit_work=False)
+    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER) == {"run_id": STRANDED, "state": "halted"}
+
+
+def test_stranded_run_with_a_halted_successor_that_changed_nothing_stays_the_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _hand_landed_successor(tmp_path, monkeypatch)
+    manifest = root / "state" / "warp" / LATER_SUCCESSOR / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["head_sha"] = _git(root, "rev-parse", "HEAD")
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER) == {"run_id": STRANDED, "state": "halted"}

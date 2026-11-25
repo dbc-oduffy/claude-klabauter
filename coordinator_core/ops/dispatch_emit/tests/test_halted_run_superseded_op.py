@@ -1033,3 +1033,54 @@ def test_zero_withheld_non_halted_run_refuses(unstarted) -> None:
     assert op._handler(params, root)["ok"] is True
     reply = op._handler(params, root)
     assert reply["ok"] is False and "superseded" in reply["error"]
+
+
+def _batoned(refused, *, commit_work: bool = True):
+    """The `refused` shape plus a run-baton.json and a manifest declaring a.txt, changed after the base."""
+    import json
+
+    root, record = refused
+    base = _commit(root, {"a.txt": "a0"}, date=PRE_HALT)
+    if commit_work:
+        _commit(root, {"a.txt": "a1"})
+    else:
+        (root / "a.txt").write_text("a1", encoding="utf-8")
+    (record / "run-baton.json").write_text("{}", encoding="utf-8")
+    (record / "manifest.json").write_text(json.dumps({"review_declared_paths": ["a.txt"], "head_sha": base}), encoding="utf-8")
+    return root, record
+
+
+def test_baton_holding_run_whose_declared_writes_landed_at_head_closes(refused) -> None:
+    root, record = _batoned(refused)
+    reply = _call(root)
+    assert reply["ok"] is True and reply["dispositions"] == {}
+    marker = halted_run._read(record)
+    assert marker["status"] == halted_run.STATUS_CLOSED and "landed at HEAD" in marker["closed"]["reason"]
+    assert ask_contract.read_run_stage(root, RUN)["stage"] == "halted"
+
+
+def test_baton_holding_run_with_uncommitted_declared_writes_still_refuses(refused) -> None:
+    root, record = _batoned(refused, commit_work=False)
+    reply = _call(root)
+    assert reply["ok"] is False and "may have written work" in reply["error"]
+    assert not (record / halted_run.HALTED_FILE).exists()
+
+
+def test_baton_holding_run_whose_declared_writes_never_changed_still_refuses(refused) -> None:
+    import json
+
+    root, record = _batoned(refused)
+    (record / "manifest.json").write_text(
+        json.dumps({"review_declared_paths": ["a.txt"], "head_sha": _head(root)}), encoding="utf-8",
+    )
+    assert _call(root)["ok"] is False
+    assert not (record / halted_run.HALTED_FILE).exists()
+
+
+def test_baton_holding_run_with_a_live_token_still_refuses_even_when_landed(refused) -> None:
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, record = _batoned(refused)
+    run_token.mint(root, RUN, "scratch/w.mjs", session_id="s")
+    reply = _call(root)
+    assert reply["ok"] is False and "may have written work" in reply["error"]

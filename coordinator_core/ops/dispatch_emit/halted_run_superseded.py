@@ -414,7 +414,7 @@ def _refused_at_stage(root: Path, record: Path, run_id: str) -> Optional[dict]:
     ``closed`` marker and stamps the run-stage ``halted``."""
     from datetime import datetime, timezone
 
-    from coordinator_core.ops.dispatch_emit import ask_stage_receipt, halted_run, kept_work
+    from coordinator_core.ops.dispatch_emit import ask_stage_receipt, co_tenant_owner, halted_run, halted_withheld_index, kept_work, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_BATON_FILE, read_run_stage
     from coordinator_core.ops.dispatch_emit.halted_hunk_attribution import _iso_epoch
     from coordinator_core.ops.dispatch_emit.halted_run_landed import _live_successor
@@ -425,8 +425,11 @@ def _refused_at_stage(root: Path, record: Path, run_id: str) -> Optional[dict]:
     if not stage or stage.get("stage") not in ("minted", "staged") or not (record / ask_stage_receipt.RECEIPT_NAME).is_file():
         return _refuse(f"{run_id} has no halt record and no staged-then-refused run record")
     wrote = [f for f in (kept_work.KEPT_FILE, WITHHELD_PRINTS_FILE, RUN_BATON_FILE) if (record / f).exists()]
+    landed = False
     if wrote:
-        return _refuse(f"{run_id} has no halt record and holds {wrote[0]}; it may have written work")
+        if run_token.is_live(root, run_id) or run_token._read_rec(root, run_id, claimed=True) is not None or not co_tenant_owner.work_landed_at_head(root, run_id):
+            return _refuse(f"{run_id} has no halt record and holds {wrote[0]}; it may have written work")
+        landed = True
     epoch = _iso_epoch(stage.get("last_activity_at"))
     now = datetime.now(timezone.utc)
     if epoch is None or now.timestamp() - epoch < UNLAUNCHED_GRACE_SECONDS:
@@ -437,9 +440,14 @@ def _refused_at_stage(root: Path, record: Path, run_id: str) -> Optional[dict]:
     at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     halted_run._write(record, {
         "status": halted_run.STATUS_CLOSED, "halted": run_id, "sizing_rel": None,
-        "closed": {"reason": "refused-at-stage: no halt record, nothing written", "at": at},
+        "closed": {
+            "reason": "no halt record, declared writes landed at HEAD" if landed else "refused-at-stage: no halt record, nothing written",
+            "at": at,
+        },
     })
     halted_run.stamp_run_stage_at(record, "halted")
+    if landed:
+        halted_withheld_index.remove_run(root, run_id)
     reply = {"ok": True, "run_id": run_id, "evidence": {}, "dispositions": {}, "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix()}
     return _land_closure(root, record, run_id, reply, OP_NAME, "superseded")
 
