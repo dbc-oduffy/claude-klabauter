@@ -231,6 +231,10 @@ def _installed_image_names(settings_home_bin: Path) -> "set[str]":
         return names
     if sys.platform == "win32":
         for entry in settings_home_bin.iterdir():
+            # door-w.exe is the windowless door the hook seam execs, not a
+            # forwarder for a CLI named "door-w": counting it is a false DEFECT.
+            if entry.name == door_install.WINDOWLESS_IMAGE_NAME:
+                continue
             if entry.is_file() and entry.suffix == ".exe":
                 names.add(entry.stem)
         return names
