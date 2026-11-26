@@ -168,6 +168,7 @@ def test_a_refused_qualified_name_falls_back_to_the_bare_name_in_one_ssh_call(tm
         pytest.skip("no bash on PATH")
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "unimatrix-send").write_text('case "$2" in *.*) echo refused >&2; exit 1;; esac\necho SENT "$2"\n')
+    (tmp_path / "bin" / "unimatrix-send").chmod(0o755)  # POSIX execs it directly: rc 126 without +x
     seen = []
 
     def run_ssh(member, key, command):
@@ -204,6 +205,7 @@ def test_the_far_snippet_runs_a_native_launcher_directly(tmp_path):
         pytest.skip("no bash on PATH")
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "unimatrix-send").write_text("echo NATIVE \"$@\"\n")
+    (tmp_path / "bin" / "unimatrix-send").chmod(0o755)  # POSIX execs it directly: rc 126 without +x
     res = subprocess.run([bash, "-c", f"{gate.far_send_command()} --to n.machine-a x"], capture_output=True, text=True,
                          env={**os.environ, "COORDINATOR_SETTINGS_HOME": tmp_path.as_posix()})
     assert res.returncode == 0, res.stderr

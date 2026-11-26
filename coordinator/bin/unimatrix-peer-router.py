@@ -324,6 +324,24 @@ def sweep_dead_leg_records(legs_dir) -> list:
     return removed
 
 
+def _stamp_leg_identity(path, rec, name, conv) -> None:
+    """Make a live or pending leg record carry the `name` its face answers to and its `conversation`.
+
+    Best effort and idempotent: a hook rewrite that drops the stamp is repaired on the next scan."""
+    if rec.get("name") == name and rec.get("conversation") == conv:
+        return
+    tmp = f"{path}.{os.getpid()}.id.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({**rec, "name": name, "conversation": conv}, fh, separators=(",", ":"))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def load_leg_peers(legs_dir, taken_names=(), taken_targets=(), pending_out=None) -> list:
     """Peers for every live agy leg record in `legs_dir`: name agy-<conversation>, target the conversation.
 
@@ -358,6 +376,7 @@ def load_leg_peers(legs_dir, taken_names=(), taken_targets=(), pending_out=None)
         name = readable_peer_name("agy", conv, rec.get("cwd"))
         if name in taken_names:
             continue
+        _stamp_leg_identity(os.path.join(legs_dir, f), rec, name, conv)
         peer = {"name": name, "vendor": "agy", "target": conv}
         if rec.get("cwd") and not under_agy_config_home(rec["cwd"]):
             peer["cwd"] = rec["cwd"]
@@ -638,6 +657,45 @@ _MIRROR_MARKERS = ("unimatrixRemote", "macSocketPath", "unimatrixMirror", "farPi
 def _push_only_mirror(entry) -> bool:
     """True for a relay-pushed mirror row: a socket forwarding onto the far relay's push channel, no bridge behind it."""
     return bool(entry.get("unimatrixMirror")) and not (entry.get("unimatrixRemote") or entry.get("macSocketPath"))
+
+
+def _session_ids(entry) -> frozenset:
+    """The identifiers a row can name its session by: target and sessionId, the latter also without its `peer-<vendor>-` prefix.
+
+    A bridge mirror copies the far row's target; a relay-pushed mirror of the same leg carries only the sessionId."""
+    ids = set()
+    for key in ("target", "sessionId"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            ids.add(value)
+            ids.add(re.sub(r"^peer-[a-z]+-", "", value))
+    return frozenset(ids)
+
+
+def _collapse_owners(carriers) -> list:
+    """(endpoint, owner) per carrier row, rows of one session sharing one owner.
+
+    Two rows are one session when they share an identifier and their stamped vendors agree or one row is
+    unstamped (a relay-pushed mirror carries none). Rows sharing no identifier stay distinct owners."""
+    parent = list(range(len(carriers)))
+
+    def find(i) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    vendors = {i: {v} if (v := carriers[i][1]) else set() for i in range(len(carriers))}
+    for i, (_, vendor_i, ids_i, owner_i) in enumerate(carriers):
+        for j in range(i):
+            _, vendor_j, ids_j, owner_j = carriers[j]
+            ri, rj = find(i), find(j)
+            if ri == rj:
+                continue
+            if owner_i == owner_j or (ids_i & ids_j and len(vendors[ri] | vendors[rj]) <= 1):
+                parent[ri] = rj
+                vendors[rj] |= vendors[ri]
+    return [(ep, carriers[find(i)][3]) for i, (ep, _, _, _) in enumerate(carriers)]
 
 
 def _far_alias_is_stale(entry):
@@ -1714,6 +1772,9 @@ class Router:
                 metadata = codex_thread_metadata(self.codex_home)
                 if not codex_is_sendable_root(metadata.get(self.peers[peer].get('target'), {})):
                     return {'ok': False, 'error': 'Codex target is not an independently sendable root'}
+            if handler == self.handle_pending_inbound:
+                refusal = await handler(peer, req["frame"])  # a face acks only a frame its leg queue took
+                return {"ok": False, "error": refusal} if refusal else {"ok": True}
             t = asyncio.create_task(handler(peer, req["frame"]))
             self.tasks.add(t)
             t.add_done_callback(self.tasks.discard)
@@ -2546,6 +2607,7 @@ class Router:
         """
         exact, aliases, owners, far_eps = set(), set(), set(), set()
         rows_by_ep, ep_owners = {}, {}
+        carriers = []
         owned_alias = False
         refused_identity = False
         self.last_refusal, self.last_resolved_far, self.last_resolved_row = "", False, None
@@ -2579,13 +2641,15 @@ class Router:
             owned_alias = owned_alias or name in _contract().projected_addresses(e)
             # A Claude Code row carries no vendor; a relay-pushed mirror of the same session must not
             # read as a second owner beside the bridge mirror that stamps vendor "claude".
-            owner = (e.get('vendor') or 'claude', e.get('target') or e.get('sessionId') or ep)
-            owners.add(owner)
-            ep_owners.setdefault(ep, set()).add(owner)
+            carriers.append((ep, e.get("vendor") or None, _session_ids(e),
+                             (e.get('vendor') or 'claude', e.get('target') or e.get('sessionId') or ep)))
             (exact if e.get("name") == name else aliases).add(ep)
             rows_by_ep[ep] = e
             if e.get("unimatrixFarName") or e.get("unimatrixRemote") or e.get("macSocketPath"):
                 far_eps.add(ep)
+        for ep, owner in _collapse_owners(carriers):
+            owners.add(owner)
+            ep_owners.setdefault(ep, set()).add(owner)
         if refused_identity:
             self.last_refusal = "refused identity"
             return ''  # Never retarget a refused local identity to another matching row/fallback.
@@ -2620,22 +2684,28 @@ class Router:
             return next(iter(matches))
         return fallback
 
-    async def handle_pending_inbound(self, peer, frame) -> None:
-        """A frame at a pending leg's face: spool it through the agy leg (deliver_only); no turn runs and no reply routes back."""
+    async def handle_pending_inbound(self, peer, frame) -> str:
+        """A frame at a pending leg's face: spool it through the agy leg (deliver_only); no turn runs and no reply routes back.
+
+        Returns "" when the frame was spooled or is a bare ack, else the refusal the sender must see."""
         pending = self.pending_legs.get(peer)
         if pending is None:
             self.log("PENDING-LEG-GONE", peer)
-            return
+            return f"no leg queue for {peer}: the pending leg is gone; message not delivered"
         _, sender_name, body = _contract().parse_inbound(frame)
         if is_ack(body) or body.lstrip().lower().startswith("[reply]"):
             self.log("DROPPED-ACK", sender_name, "->", peer)
-            return
+            return ""
         try:
             reply = await self.adapters["agy"]({**pending, "deliver_only": True}, wrap_inbound(sender_name, body))
         except Exception as exc:
             self.log("TURN-FAILED", peer, type(exc).__name__, exc)
-            return
-        self.log("PENDING-QUEUED" if not not_delivered(reply) else "PENDING-NOT-DELIVERED", peer, "<-", sender_name)
+            return f"delivery to {peer} failed: {exc}"
+        if not_delivered(reply):
+            self.log("PENDING-NOT-DELIVERED", peer, "<-", sender_name)
+            return str(reply).strip()
+        self.log("PENDING-QUEUED", peer, "<-", sender_name)
+        return ""
 
     async def handle_inbound(self, peer, frame) -> None:
         sender_ep, sender_name, body = _contract().parse_inbound(frame)
