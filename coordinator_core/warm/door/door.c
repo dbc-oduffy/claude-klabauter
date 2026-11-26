@@ -1533,8 +1533,14 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     ZeroMemory(&pi, sizeof(pi));
 
+    /* An interactive launcher (agy-coordinator, grok-coordinator, ...) execs a
+     * TUI that must draw on THIS console: CREATE_NO_WINDOW would hand the
+     * child a private hidden conhost the TUI renders into, invisible to the
+     * user. Keep CREATE_NO_WINDOW only for a windowless parent (hooks, detached
+     * callers), where it prevents a console flash. */
+    DWORD cold_flags = GetConsoleWindow() != NULL ? 0 : CREATE_NO_WINDOW;
     BOOL spawned = CreateProcessW(
-        NULL, cmdline_w, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+        NULL, cmdline_w, NULL, NULL, TRUE, cold_flags, NULL, NULL, &si, &pi);
     free(cmdline_w);
 
     if (!spawned) {
