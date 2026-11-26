@@ -1,6 +1,7 @@
 """unimatrix-send.py points at SendMessage when the router is unreachable."""
 import importlib.util
 import re
+import sys
 import tempfile
 from pathlib import Path
 
@@ -377,6 +378,30 @@ def test_list_prints_pending_for_an_agy_row_whose_leg_is_not_live_and_ready_for_
     rc, _ = _run(monkeypatch, resp, ["--list"])
     rows = {r[0]: r[4] for r in _rows(capsys.readouterr().out)}
     assert rc == 0 and rows == {"agy-live": "ready", "agy-pend": "pending", "cx": "ready"}
+
+
+def test_list_prints_pending_for_a_far_mirrored_pending_agy_row_projected_by_agent_row(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    bin_dir = Path(__file__).resolve().parents[1]
+    for mod in [m for m in sys.modules if m == "_unimatrix" or m.startswith("_unimatrix.")]:
+        monkeypatch.delitem(sys.modules, mod)
+    monkeypatch.syspath_prepend(str(bin_dir))
+    pkg_dir = bin_dir / "_unimatrix"
+    pkg_spec = importlib.util.spec_from_file_location("_unimatrix", pkg_dir / "__init__.py", submodule_search_locations=[str(pkg_dir)])
+    pkg = importlib.util.module_from_spec(pkg_spec)
+    monkeypatch.setitem(sys.modules, "_unimatrix", pkg)
+    pkg_spec.loader.exec_module(pkg)
+    spec = importlib.util.spec_from_file_location("unimatrix_peer_contract_send_t", bin_dir / "unimatrix-peer-contract.py")
+    contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(contract)
+    entry = {"pid": 1, "name": "agy-repo-abc-on-farbox.farbox", "unimatrixVendor": "agy",
+             "unimatrixBox": "farbox", "leg_mode": "pending"}
+    row = contract.agent_row(entry, "machine-a")
+    assert row["leg_mode"] == "pending" and row["this_box"] is False
+    assert "leg_mode" not in contract.agent_row({**entry, "leg_mode": "live"}, "machine-a")
+    resp = {"ok": True, "peers": [], "reachable": [row["name"]], "agents": [row]}
+    rc, _ = _run(monkeypatch, resp, ["--list"])
+    rows = {r[0]: (r[1], r[2], r[4]) for r in _rows(capsys.readouterr().out)}
+    assert rc == 0 and rows == {row["name"]: ("farbox", "no", "pending")}
 
 
 def test_send_over_a_mirror_only_forward_says_mirrored_not_delivered_and_no_reached(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

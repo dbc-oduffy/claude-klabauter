@@ -131,8 +131,9 @@ def test_cli_sender_is_the_inherited_codex_target_never_a_hand_signed_name(monke
     assert requests[-1]["as_target"] == "inherited-thread" and requests[-1]["as"] == "cli"
 
 
-def test_cli_send_from_a_session_stamps_its_routable_name_on_a_mirror_target(tmp_path: Path) -> None:
+def test_cli_send_from_a_session_stamps_its_routable_name_on_a_mirror_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The delivered `from` is `<session>.<box>` (replyable), never the face name or the bare `cli`."""
+    monkeypatch.setattr(router._transport(), "endpoint_exists", lambda ep: True)
     sessions = tmp_path / "sessions"
     write_session(sessions, "mirror.json", "mac-peer", router.endpoint_path("mac-mirror", tmp_path),
                   macSocketPath="/tmp/cc-socks/mac-peer.sock", farPid=80954)
@@ -157,8 +158,9 @@ def test_cli_send_from_a_session_stamps_its_routable_name_on_a_mirror_target(tmp
     assert "[coordinator-content-repo-3b via Unimatrix transport]" in content
 
 
-def test_cli_send_with_no_registered_session_stamps_the_transport_face_never_cli_box(tmp_path: Path) -> None:
+def test_cli_send_with_no_registered_session_stamps_the_transport_face_never_cli_box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A bare CLI has no `cli.<box>` row: the stamped `from` is the face that carries the frame."""
+    monkeypatch.setattr(router._transport(), "endpoint_exists", lambda ep: True)
     sessions = tmp_path / "sessions"
     write_session(sessions, "mirror.json", "mac-peer", router.endpoint_path("mac-mirror", tmp_path),
                   macSocketPath="/tmp/cc-socks/mac-peer.sock", farPid=80954)

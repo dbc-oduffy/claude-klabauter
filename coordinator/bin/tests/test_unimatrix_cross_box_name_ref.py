@@ -49,6 +49,12 @@ def eps(request: pytest.FixtureRequest) -> dict[str, str]:
     return STYLES[request.param]
 
 
+@pytest.fixture(autouse=True)
+def fixture_endpoints_exist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fixture pipe names have no server behind them; the router drops a row whose pipe is absent."""
+    monkeypatch.setattr(router._transport(), "endpoint_exists", lambda ep: True)
+
+
 def live_mirror_fields() -> dict:
     """The stamps a roster poll leaves on a mirror whose far session it confirmed this poll."""
     return {**router._roster().supervisor_fields(), "unimatrixFarSeen": int(time.time() * 1000)}
