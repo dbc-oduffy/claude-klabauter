@@ -1117,6 +1117,8 @@ REGISTER_ROWS_UNCLAIMED_REFUSAL = "REGISTER-ROWS-UNCLAIMED"
 ROWS_DROPPED_WITHOUT_REASON = "ROWS-DROPPED-WITHOUT-REASON"
 #: `resume_ledger` verdict key carrying the halted kind; absent means `LEDGER_HALT_KIND`.
 RESUME_LEDGER_KIND_FIELD = "kind"
+#: `resume_ledger` key (and top-level `halted.json` marker) set true when the halt was a PIVOT verdict.
+RESUME_LEDGER_PIVOT_FIELD = "pivot"
 #: The run's recorded review outcome, in its record dir; the source of a re-fire's `inline_review`.
 RUN_OUTCOME_FILE = "run-outcome.json"
 RUN_OUTCOME_KEYS = (
@@ -1145,6 +1147,46 @@ def empty_register_refusal(sizing_rel: Optional[str]) -> str:
         + EMPTY_REGISTER_REFUSAL_HEAD
         + (sizing_rel or _EMPTY_REGISTER_UNNAMED_SIZING)
         + EMPTY_REGISTER_REFUSAL_TAIL
+    )
+
+
+def _pivot_in_pulled(pulled: Any) -> bool:
+    """True when a pull entry in ``pulled`` holds a non-premise-check review whose verdict is PIVOT."""
+    if not isinstance(pulled, Sequence) or isinstance(pulled, (str, bytes)):
+        return False
+    for entry in pulled:
+        if not isinstance(entry, Mapping):
+            continue
+        reviews = entry.get("reviews")
+        if reviews is None:
+            reviews = entry.get("reviewVerdicts")
+        if not isinstance(reviews, Sequence) or isinstance(reviews, (str, bytes)):
+            continue
+        for r in reviews:
+            if (
+                isinstance(r, Mapping)
+                and r.get("reviewer") != "premise-check"
+                and str(r.get("verdict") if r.get("verdict") is not None else "").upper() == "PIVOT"
+            ):
+                return True
+    return False
+
+
+def halt_carries_pivot(halted: Mapping) -> bool:
+    """True when a `halted.json` record marks a PIVOT halt: its top-level `RESUME_LEDGER_PIVOT_FIELD`
+    is True, or `blitz.pulled[]` / `blitz.regate.pulled[]` holds a non-premise-check PIVOT review
+    (the PIVOT arm of `ask_compose._PULL_REVIEW_UNSAVEABLE_JS`). OK, BLOCKED, ABORT and
+    premise-check entries never qualify. Pure; a non-mapping is False."""
+    if not isinstance(halted, Mapping):
+        return False
+    if halted.get(RESUME_LEDGER_PIVOT_FIELD) is True:
+        return True
+    blitz = halted.get("blitz")
+    if not isinstance(blitz, Mapping):
+        return False
+    regate = blitz.get("regate")
+    return _pivot_in_pulled(blitz.get("pulled")) or (
+        isinstance(regate, Mapping) and _pivot_in_pulled(regate.get("pulled"))
     )
 
 

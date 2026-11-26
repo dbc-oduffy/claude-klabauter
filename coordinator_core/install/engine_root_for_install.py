@@ -57,9 +57,12 @@ NEGATIVE SPEC:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
+
+SCRATCH_DIRNAME = "scratch"
 
 EngineRootKind = Literal["published", "self-rooted", "none"]
 
@@ -81,6 +84,25 @@ _REMEDIATION = (
     "build.\n"
     "  Reference: coordinator_core/engine_root.py :: published_engine_mirror_path()"
 )
+
+
+def is_scratch_engine_root(root: "Path | str") -> bool:
+    """True when `root` sits inside a repo's `scratch/` dir: some ancestor named `scratch`
+    (case-folded on Windows) whose parent holds a `.git` entry.
+
+    A tree there is a disposable export, clone or arm; a door sidecar naming it pins every
+    session's engine to it. Pure path check on the resolved path: no spawn, never raises.
+    The `.git` requirement keeps a checkout that merely lives under a directory called
+    `scratch` from reading as scratch.
+    """
+    try:
+        resolved = Path(root).resolve()
+        for parent in resolved.parents:
+            if os.path.normcase(parent.name) == SCRATCH_DIRNAME and (parent.parent / ".git").exists():
+                return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return False
 
 
 def resolve_engine_root_for_install() -> InstallEngineRoot:

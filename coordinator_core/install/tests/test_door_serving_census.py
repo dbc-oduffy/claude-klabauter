@@ -342,3 +342,14 @@ def test_the_windows_arm_reads_the_suffix_on_every_host(monkeypatch, tmp_path):
 
     monkeypatch.setattr(dsc.sys, "platform", "win32")
     assert dsc._installed_image_names(settings_home_bin) == {"static-check"}
+
+
+def test_the_windowless_door_image_is_not_a_cli_image(monkeypatch, tmp_path):
+    """door-w.exe sits beside the forwarders but serves no CLI name; read as an
+    image it is a permanent false DEFECT on every Windows box."""
+    settings_home_bin = tmp_path / "settings-home" / "bin"
+    _touch(settings_home_bin / "static-check.exe")
+    _touch(settings_home_bin / dsc.door_install.WINDOWLESS_IMAGE_NAME)
+
+    monkeypatch.setattr(dsc.sys, "platform", "win32")
+    assert dsc._installed_image_names(settings_home_bin) == {"static-check"}
