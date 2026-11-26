@@ -9,6 +9,8 @@ Usage:
 Validates the old entry and its key file before stopping anything. The old bridge is
 tree-killed with the same helper unimatrix-roster.py uses.
 """
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json

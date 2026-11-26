@@ -5,6 +5,8 @@ and connects through asyncio's Proactor pipe transports, preserving the harness'
 protocol. No TCP listener, shell, authentication framing or extra proxy process is introduced.
 Stdlib-only and inert on import.
 """
+from __future__ import annotations
+
 import asyncio
 import errno
 import json

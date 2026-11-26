@@ -73,6 +73,8 @@ Wire facts this relies on (Claude Code 2.1.3xx, peerProtocol 1): a message is on
 JSON line per connection, sender writes and closes, receiver sends nothing back.
 A receiver only accepts a socket listed in ~/.claude/sessions with a key file.
 """
+from __future__ import annotations
+
 import base64
 import hashlib
 import json

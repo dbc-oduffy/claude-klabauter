@@ -3,3 +3,5 @@
 Vendored alongside coordinator/bin/unimatrix-*.py into <settings-home>/unimatrix/_unimatrix/.
 Inert on import: no I/O, no subprocess spawns, no coordinator_core imports.
 """
+from __future__ import annotations
+

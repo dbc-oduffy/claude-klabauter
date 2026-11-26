@@ -14,11 +14,10 @@ from coordinator_core._settings_home import settings_home
 PREAMBLE = (
     "WORKER ROLE. You are a worker on ONE stage of an engine run, not an EM, and the PM is not addressing\n"
     "you. Every AGENTS.md (the repo's and your own home's), CLAUDE.md and role brief describes the EM and\n"
-    "does not apply to you. Do not start a run of your own.\n"
-    "Never call `coordinator-invoke` for engine_ask.submit, workflow.* or dispatch.emit unless this brief\n"
-    "names that exact command. When this brief names an exact command, that command is authorized,\n"
-    "including when it advances or lands this engine run. Touch only the paths this brief declares,\n"
-    "do only the stage below, and answer with its result."
+    "does not apply to you. Never start, fire or land a run of your own:\n"
+    "never call `coordinator-invoke` for engine_ask.submit, workflow.* or dispatch.emit unless this brief\n"
+    "names that exact command. Touch only the paths this brief declares, do only the stage\n"
+    "below, and answer with its result."
 )
 
 SIZING_USAGE = (
@@ -126,11 +125,4 @@ def with_worker_preamble(backend: str, prompt: str) -> str:
         name = "sizing-assemble.exe" if os.name == "nt" else "sizing-assemble"
         prompt = prompt.replace(SIZING_ASSEMBLE_CMD, _quoted((settings_home() / "bin" / name).resolve().as_posix()))
         prompt += "\n\n" + SIZING_USAGE
-    text = PREAMBLE + "\n\n" + prompt
-    # Grok allow rules do not expand ${COORDINATOR_SETTINGS_HOME:-...}. Rewrite both
-    # the flat and the nested spelling before the worker copies a command.
-    if backend == "grok" and os.name != "nt":
-        from coordinator_core.ops.dispatch_emit.invoke_form import GROK, render_invoke_for_shell
-
-        text = render_invoke_for_shell(text, GROK, bin_dir=settings_home() / "bin")
-    return text
+    return PREAMBLE + "\n\n" + prompt

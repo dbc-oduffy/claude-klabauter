@@ -1,7 +1,10 @@
 """grok-coordinator launches grok as a child and does not shadow a bare grok."""
 
 import importlib.util
+import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -51,6 +54,38 @@ def test_stop_hook_file_names_the_script(tmp_path):
     assert path.parent.name == "hooks"
     assert "/engine/bin/unimatrix-grok-stop.py" in body
     assert "Stop" in body
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Grok runs Windows hooks through PowerShell")
+def test_windows_stop_hook_runs_without_a_py_file_association(tmp_path):
+    path = gc.ensure_stop_hook(tmp_path)
+    command = json.loads(path.read_text(encoding="utf-8"))["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert command.endswith(".cmd") and '"' not in command
+    shell = shutil.which("pwsh") or shutil.which("powershell")
+    if shell is None:
+        pytest.skip("no PowerShell on this box")
+    # Spawn it as Grok does: the command string through PowerShell, the hook payload on stdin.
+    proc = subprocess.run([shell, "-NoProfile", "-Command", command], input="{}",
+                          capture_output=True, text=True, timeout=60)
+    assert "file type" not in (proc.stdout + proc.stderr)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_tmp_sessions_sweep_removes_dead_empty_dirs_only(tmp_path):
+    root = tmp_path / "tmp" / "sessions"
+    (root / "dead" / "sub").mkdir(parents=True)
+    (root / "live").mkdir()
+    (root / "has-file").mkdir()
+    (root / "has-file" / "keep.txt").write_text("x")
+    assert gc.sweep_tmp_sessions(tmp_path / "work", {"live"}, drive_root=tmp_path) == 1
+    assert not (root / "dead").exists()
+    assert (root / "live").is_dir() and (root / "has-file" / "keep.txt").is_file()
+
+
+def test_tmp_sessions_sweep_removes_the_emptied_tmp_root(tmp_path):
+    (tmp_path / "tmp" / "sessions" / "dead").mkdir(parents=True)
+    gc.sweep_tmp_sessions(tmp_path, set(), drive_root=tmp_path)
+    assert not (tmp_path / "tmp").exists()
 
 
 def test_register_host_binding_adopts_the_session_through_the_engine(monkeypatch):

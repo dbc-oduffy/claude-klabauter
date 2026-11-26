@@ -45,7 +45,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -136,53 +135,6 @@ def _grok_launch_args(extra, environ, platform) -> list[str]:
                or a.startswith("--effort=") for a in extra):
         head += ["--reasoning-effort", GROK_EM_EFFORT]
     return [*head, *extra]
-
-
-# Fixed card. It does not name a task. The sealed prompt file is never the write target.
-GROK_XS_CARD = (
-    "Headless Grok EM. The EM token is already set; do not probe it. "
-    "A confident XS edit is at most 2 files and 30 lines, then coordinator-safe-commit. "
-    "Do not open the stop-rule file, the sizing skill, or the EM wiki, and do not leave the workspace, before that edit.\n\n"
-)
-
-
-def _write_grok_prompt(text: str) -> str:
-    """Write `text` to a new temp file and return its path. The caller keeps the source file."""
-    fd, name = tempfile.mkstemp(prefix="grok-em-prompt-", suffix=".txt")
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(text)
-    return name
-
-
-def _attach_grok_xs_card(extra) -> list[str]:
-    """Put the XS card in front of a grok prompt and pass it as `--prompt-file`.
-
-    `-p` and `--prompt-file` both land in a new temp file. The source file is only read.
-    Args with no prompt pass through, so a non-prompt grok launch is unchanged.
-    """
-    extra = list(extra)
-    out: list[str] = []
-    index = 0
-    while index < len(extra):
-        arg = extra[index]
-        if arg in ("-p", "--prompt") and index + 1 < len(extra):
-            out += ["--prompt-file", _write_grok_prompt(GROK_XS_CARD + extra[index + 1])]
-            index += 2
-            continue
-        if arg == "--prompt-file" and index + 1 < len(extra):
-            body = Path(extra[index + 1]).read_text(encoding="utf-8")
-            out += ["--prompt-file", _write_grok_prompt(GROK_XS_CARD + body)]
-            index += 2
-            continue
-        if arg.startswith("--prompt-file="):
-            body = Path(arg.split("=", 1)[1]).read_text(encoding="utf-8")
-            out.append("--prompt-file")
-            out.append(_write_grok_prompt(GROK_XS_CARD + body))
-            index += 1
-            continue
-        out.append(arg)
-        index += 1
-    return out
 
 
 def _agy_launch_args(extra, cwd, environ=None) -> list[str]:
@@ -466,12 +418,7 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
     if family == "codex":
         cmd = [cli, *_codex_writable_dirs(extra, cwd)]
     elif family == "grok":
-        try:
-            prompted = _attach_grok_xs_card(extra)
-        except OSError as exc:
-            print(f"headless-em-launch: refused: grok prompt: {exc}", file=sys.stderr)
-            return REFUSED
-        cmd = [cli, *_grok_launch_args(prompted, environ, platform)]
+        cmd = [cli, *_grok_launch_args(extra, environ, platform)]
     elif family == "agy":
         cmd = [cli, *_agy_launch_args(extra, cwd, environ)]
     elif family == "claude":

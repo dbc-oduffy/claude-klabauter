@@ -3,6 +3,8 @@
 Each host (Claude, Codex, Agy, Grok) implements discovery, delivery, own-session identification,
 and owned-endpoint enumeration behind one stdlib-only contract.
 """
+from __future__ import annotations
+
 from typing import Protocol, runtime_checkable
 
 

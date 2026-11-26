@@ -24,6 +24,8 @@ or replaced-code relay session, are problems too. The Windows
 administrators_authorized_keys file is the one read when sshd serves this account from it (Match Group administrators). Network probes are injectable (run=, resolve=,
 connect=); remote round trips are outside the 500ms bar, the local verify path is not.
 """
+from __future__ import annotations
+
 import base64
 import hashlib
 import importlib.util

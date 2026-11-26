@@ -7,6 +7,8 @@ events.log, verified.json (digest cache so an unchanged snapshot costs no spawn)
 Only a Signer signs, and only approve/revoke callers construct one. Verification needs the pinned public
 key and `ssh-keygen -Y verify`: no signer, no network, no 1Password.
 """
+from __future__ import annotations
+
 import base64
 import binascii
 import hashlib

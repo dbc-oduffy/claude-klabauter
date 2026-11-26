@@ -23,6 +23,8 @@ Leg record (STATE/<conversationId>.json, written by the launcher, read here and 
   {"pid": <leg pid>, "conversation": <id>, "endpoint": <leg socket>, "ls_address": "host:port",
    "agy_pid": <agy pid>, "mode": "pending" | "live"}   (mode absent reads as live)
 """
+from __future__ import annotations
+
 import importlib.util
 import json
 import os

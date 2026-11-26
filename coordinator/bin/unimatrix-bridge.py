@@ -23,6 +23,8 @@ The optional return leg runs in this same process on purpose: the local inbox
 only accepts writes from a process registered in ~/.claude/sessions, and this
 process is the one the mirrored entry vouches for.
 """
+from __future__ import annotations
+
 import argparse
 import hashlib
 import importlib.util

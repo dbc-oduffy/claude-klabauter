@@ -10,6 +10,8 @@ the file and directory are removed on every normal, error and KeyboardInterrupt 
 inherits this process's stdio, so a call with no remote command opens an interactive shell. Exit: ssh's own status; 2 for a
 refusal (unset variable, bad box, key not a private key, key file not restrictable) with no file left behind.
 """
+from __future__ import annotations
+
 import argparse
 import getpass
 import os

@@ -1,4 +1,6 @@
 """Uniform host adapter interface for Unimatrix peers (Claude, Codex, Agy, Grok)."""
+from __future__ import annotations
+
 from _unimatrix.adapters.base import HostAdapter
 
 __all__ = ["HostAdapter"]

@@ -3,6 +3,8 @@
 
 Thin inert CLI wrapper + re-export facade over `_unimatrix.protocol` and `_unimatrix.paths`.
 """
+from __future__ import annotations
+
 import importlib
 import os
 import socket  # noqa: F401 -- exposed for callers/tests patching socket.gethostname

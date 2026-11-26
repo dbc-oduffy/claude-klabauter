@@ -83,10 +83,3 @@ def test_the_em_section_applies_only_under_the_headless_em_token_or_an_interacti
     gate = em.index("`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN` is set")
     assert gate < em.index("A prompt that begins `WORKER ROLE`") < em.index("engine_ask.submit")
     assert "Any other prompt is a worker's, and nothing below applies." in em
-
-
-def test_confident_xs_states_the_bounds_and_does_not_send_the_model_to_open_them():
-    em = _em_section()
-    assert "at most 2 files and 30 lines" in em
-    assert "Do not open that file, the sizing skill, or the EM wiki" in em
-    assert "not required before a confident XS edit" in em

@@ -175,6 +175,7 @@ def test_range_constant_and_scripts():
         "unimatrix-peer-agy.py",
         "unimatrix-peer-grok.py",
         "unimatrix-agy-leg.py",
+        "unimatrix-agy-doorbell.py",
         "unimatrix-agy-sidecar.py",
         "unimatrix-peer-router.py",
         "unimatrix-agy-hook-pretool.py",
@@ -3181,6 +3182,26 @@ def test_tui_status_grok_windows_command_is_one_ps1_path_and_script_runs(monkeyp
     assert not (cfg.parent / ui.GROK_STATUS_SCRIPT).exists()
     cfg.write_text('[ui.status_line]\ntype = "command"\ncommand = "my-line"\n')
     assert ui.seed_host_status_line(cfg, "grok", engine_root=str(root), dest_dir=dest) == "retained-customized"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="spawns the installed status script as Grok does on Windows")
+def test_tui_status_grok_legacy_ps1_upgrades_to_a_directly_spawnable_script(monkeypatch, tmp_path):
+    """Grok 4.7 spawns `command` as one process image: a `.ps1` there is os error 193; ours must spawn."""
+    monkeypatch.setattr(ui, "_console_python", lambda: sys.executable)
+    root = _fake_engine(tmp_path)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    shutil.copy(ui._BIN_DIR / ui.TUI_STATUS_LAUNCHER, dest / ui.TUI_STATUS_LAUNCHER)
+    cfg = tmp_path / "grokhome" / "config.toml"
+    cfg.parent.mkdir()
+    legacy_script = cfg.parent / ui.GROK_LEGACY_STATUS_SCRIPTS[0]
+    legacy_script.write_text("old")
+    cfg.write_text('[ui.status_line]\ntype = "command"\ncommand = ' + json.dumps(legacy_script.as_posix()) + "\n")
+    assert ui.seed_host_status_line(cfg, "grok", engine_root=str(root), dest_dir=dest) == "updated"
+    cmd = tomllib.loads(cfg.read_text())["ui"]["status_line"]["command"]
+    assert cmd.endswith(ui.GROK_STATUS_SCRIPT) and not legacy_script.exists()
+    done = subprocess.run([cmd], input="{}", capture_output=True, text=True, timeout=60, cwd=tmp_path)
+    assert done.returncode == 0, done.stderr
 
 
 def test_tui_status_grok_legacy_command_in_toml_literal_string_is_replaced(monkeypatch, tmp_path):

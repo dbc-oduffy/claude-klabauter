@@ -21,6 +21,8 @@ Modes, read from argv or SSH_ORIGINAL_COMMAND (stdin is never read):
 Reply: one JSON line {"ok": true, "session_name", "session_id", "pid", "family"} (`pid` is null for claude:
 `claude --bg` owns the background process) or {"ok": false, "error"}; exit 0 only when ok.
 """
+from __future__ import annotations
+
 import json
 import ntpath
 import os

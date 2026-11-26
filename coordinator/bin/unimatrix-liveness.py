@@ -3,6 +3,8 @@
 
 Thin CLI wrapper + re-export facade over `_unimatrix.proc` and `_unimatrix.paths`.
 """
+from __future__ import annotations
+
 import importlib
 import os
 import sys

@@ -11,6 +11,8 @@ the agy 1.4.12 strict-validate relay; no agy doc on the build box). `agy plugin 
 file loads, not that a hook fires: ${PLUGIN_ROOT} expansion and a guard running need a live agy
 session, which nothing here covers.
 """
+from __future__ import annotations
+
 import json
 import os
 import posixpath

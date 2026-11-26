@@ -3,6 +3,8 @@
 
 Thin CLI wrapper + re-export facade over `_unimatrix.adapters.grok` and `_unimatrix.proc`.
 """
+from __future__ import annotations
+
 import asyncio
 import importlib
 import json

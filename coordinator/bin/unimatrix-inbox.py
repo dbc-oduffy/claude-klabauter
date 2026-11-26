@@ -30,6 +30,8 @@ that bridge's pid is the one the mirror vouches for.
 
 The session key goes to the far box over ssh stdin only, never argv or the log.
 """
+from __future__ import annotations
+
 import argparse
 import glob
 import importlib.util

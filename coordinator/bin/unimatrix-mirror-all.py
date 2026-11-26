@@ -15,6 +15,8 @@ sync starts none.
 Skipped names are mirrored by a client started elsewhere. Our own mirror entries
 (those carrying macSocketPath) are never exported back.
 """
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json

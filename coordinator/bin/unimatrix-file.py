@@ -12,6 +12,8 @@ missing file key exits 2 naming the path; messaging is unaffected.
 in the peer's drop dir for this box; get returns what this box put there. Both sides verify the
 sha256 manifest; any mismatch exits 1. An unknown peer exits 2 and names the known boxes.
 """
+from __future__ import annotations
+
 import argparse
 import hashlib
 import importlib.util

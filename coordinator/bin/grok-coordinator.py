@@ -101,16 +101,43 @@ def strip_coordinator(argv: list[str]) -> list[str]:
     return [arg for arg in argv if arg != "--coordinator"]
 
 
+STOP_HOOK_CMD = "unimatrix-grok-stop.cmd"
+
+
+def _write_if_changed(path: Path, text: str) -> None:
+    if not path.is_file() or path.read_text(encoding="utf-8") != text:
+        path.write_text(text, encoding="utf-8")
+
+
+def _console_python() -> str:
+    """The console interpreter: a `pythonw` parent would give the hook no stdin."""
+    exe = Path(sys.executable)
+    console = exe.with_name(exe.name.replace("pythonw", "python"))
+    return str(console if console.is_file() else exe)
+
+
 def ensure_stop_hook(home, command: str | None = None) -> Path:
-    """Write the Stop hook grok loads from `<grok home>/hooks`. Same bytes stay put."""
-    command = command or str(Path(__file__).resolve().parent / "unimatrix-grok-stop.py")
+    """Write the Stop hook grok loads from `<grok home>/hooks`. Same bytes stay put.
+
+    Trap: Grok on Windows runs a hook command through PowerShell, which opens a bare `.py` with its
+    file-type app and refuses it. A path-only `.cmd` beside the hook file runs the console python
+    on the script with stdin inherited; quoting stays inside the `.cmd`, never in `command`."""
+    hooks = Path(home) / "hooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    if command is None:
+        script = Path(__file__).resolve().parent / "unimatrix-grok-stop.py"
+        if os.name == "nt":
+            wrapper = hooks / STOP_HOOK_CMD
+            q = lambda v: '"' + str(v).replace("%", "%%") + '"'
+            _write_if_changed(wrapper, f"@echo off\r\n{q(_console_python())} {q(script)}\r\n")
+            command = str(wrapper)
+        else:
+            command = str(script)
     body = json.dumps({
         "hooks": {"Stop": [{"hooks": [{"type": "command", "command": command, "timeout": 5}]}]},
     }, indent=2) + "\n"
-    path = Path(home) / "hooks" / "unimatrix-agent-mail.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.is_file() or path.read_text(encoding="utf-8") != body:
-        path.write_text(body, encoding="utf-8")
+    path = hooks / "unimatrix-agent-mail.json"
+    _write_if_changed(path, body)
     return path
 
 
@@ -207,9 +234,55 @@ def bind_kill_on_close(pid: int) -> int | None:
     return job
 
 
+def _live_session_ids(home) -> set[str]:
+    try:
+        rows = json.loads((Path(home) / "active_sessions.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(r.get("session_id")) for r in rows if isinstance(r, dict) and r.get("session_id")}
+
+
+def sweep_tmp_sessions(cwd, live_ids: set[str], drive_root=None) -> int:
+    """Remove grok's empty per-session dirs at `<cwd drive>/tmp/sessions/<id>`; returns how many went.
+
+    Trap: grok writes a POSIX "/tmp/sessions/<sid>" for each session and subagent, and Windows resolves
+    it to the ROOT of the cwd's drive (D:\\tmp\\sessions\\...), never cleaning it. grok documents no
+    setting for that dir, so the launcher sweeps it. Only empty trees of dead ids are removed: rmdir
+    refuses a non-empty dir, so content grok wrote is never deleted."""
+    tmp = Path(drive_root or Path(cwd).anchor or "/") / "tmp"
+    root = tmp / "sessions"
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return 0
+    gone = 0
+    for entry in entries:
+        if entry.name in live_ids or not entry.is_dir(follow_symlinks=False):
+            continue
+        for dirpath, _dirs, _files in sorted(os.walk(entry.path, topdown=False), key=lambda w: -len(w[0])):
+            try:
+                os.rmdir(dirpath)
+            except OSError:
+                pass
+        gone += not os.path.exists(entry.path)
+    for d in (root, tmp):
+        try:
+            os.rmdir(d)  # only when nothing else lives there
+        except OSError:
+            break
+    return gone
+
+
 def run_interactive(extra: list[str]) -> int:
     mod = load_grok_adapter()
     ensure_stop_hook(mod.grok_home())
+    try:
+        return _run_interactive(mod, extra)
+    finally:
+        sweep_tmp_sessions(os.getcwd(), _live_session_ids(mod.grok_home()))
+
+
+def _run_interactive(mod, extra: list[str]) -> int:
     child = subprocess.Popen(interactive_argv(grok_binary(), extra))
     job = bind_kill_on_close(child.pid)  # the handle must outlive this call: closing it kills grok
     if job is None and os.name == "nt":
@@ -232,6 +305,7 @@ def run_headless(text: str) -> int:
                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     sys.stdout.write(proc.stdout or "")
     sys.stderr.write(proc.stderr or "")
+    sweep_tmp_sessions(cwd, _live_session_ids(mod.grok_home()))
     if proc.returncode == 0:
         mod.record_launch(mod.grok_home(), proc.stdout, cwd)
     return proc.returncode

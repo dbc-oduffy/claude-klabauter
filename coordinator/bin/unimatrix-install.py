@@ -6,6 +6,8 @@ VENDORED_SCRIPTS into <settings home>/unimatrix. Outside the range the gate refu
 `--force` downgrades the refusal to a warning. Stdlib only, portable across
 macOS, Windows and Linux.
 """
+from __future__ import annotations
+
 import argparse
 import getpass
 import hashlib
@@ -2194,20 +2196,24 @@ _TUI_STATUS_BOOT = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
                     f"runpy.run_module('{TUI_STATUS_MODULE}',run_name='__main__')")
 
 
-GROK_STATUS_SCRIPT = "coordinator-statusline.ps1"
+# Trap: Grok on Windows spawns `command` as one process image (a quote in it is error 123). A `.ps1`
+# image is error 193 ("not a valid Win32 application"); a `.cmd` is the one script form a direct
+# spawn runs, since the spawner routes `.cmd`/`.bat` through cmd.exe.
+GROK_STATUS_SCRIPT = "coordinator-statusline.cmd"
+# Earlier installs wrote these; still ours, so a re-install replaces the value and deletes the file.
+GROK_LEGACY_STATUS_SCRIPTS = ("coordinator-statusline.ps1",)
 
 
 def _grok_ps1_form(host) -> bool:
-    """True when this host's status line is a path-only `.ps1`: Grok on Windows starts `command` as one process image."""
+    """True when this host's status line is a path-only script: Grok on Windows starts `command` as one process image."""
     return host == "grok" and os.name == "nt"
 
 
 def _grok_status_script_text(engine_root, dest_dir=None) -> str:
-    """The `.ps1` body: stdin piped through the console python to the launcher, every path single-quoted."""
+    """The `.cmd` body: the console python runs the launcher; stdin is inherited, every path double-quoted."""
     launcher = (Path(dest_dir) if dest_dir else settings_home() / "unimatrix") / TUI_STATUS_LAUNCHER
-    q = lambda v: "'" + str(v).replace("'", "''") + "'"
-    return (f"$py = {q(_console_python())}\r\n$launcher = {q(launcher)}\r\n$root = {q(engine_root)}\r\n"
-            "$input | & $py $launcher $root 'grok'\r\n")
+    q = lambda v: '"' + str(v).replace("%", "%%") + '"'
+    return f"@echo off\r\n{q(_console_python())} {q(launcher)} {q(engine_root)} grok\r\n"
 
 
 def _tui_status_command(host, engine_root=None, dest_dir=None, config_dir=None) -> str:
@@ -2236,7 +2242,8 @@ def _status_command_ours(value, host) -> bool:
     except ValueError:
         return False
     argv = [a.strip('"') for a in argv]
-    if len(argv) == 1 and host == "grok" and Path(argv[0].replace("\\", "/")).name == GROK_STATUS_SCRIPT:
+    if len(argv) == 1 and host == "grok" and Path(argv[0].replace("\\", "/")).name in (
+            GROK_STATUS_SCRIPT, *GROK_LEGACY_STATUS_SCRIPTS):
         return True
     if argv[-3:] == ["-m", TUI_STATUS_MODULE, host]:
         return True
@@ -2329,7 +2336,8 @@ def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=Non
             tomllib.loads(replacement)
             _footer_write(path, replacement)
         state_path.unlink()
-        script.unlink(missing_ok=True)
+        for name in (GROK_STATUS_SCRIPT, *GROK_LEGACY_STATUS_SCRIPTS):
+            path.with_name(name).unlink(missing_ok=True)
         return "restored"
     current, wanted = _host_status_value(host, text, command)
     if current == wanted:
@@ -2359,6 +2367,8 @@ def seed_host_status_line(config_path, host, *, uninstall=False, engine_root=Non
     path.parent.mkdir(parents=True, exist_ok=True)
     if engine_root and _grok_ps1_form(host):
         _footer_write(script, _grok_status_script_text(engine_root, dest_dir))
+        for name in GROK_LEGACY_STATUS_SCRIPTS:
+            path.with_name(name).unlink(missing_ok=True)
     record = {"version": 1, "host": host, "existed": existed, "before": base, "after": replacement, "managed": wanted}
     _footer_write(state_path, json.dumps(record, ensure_ascii=False) + "\n")
     _footer_write(path, replacement)

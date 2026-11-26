@@ -11,6 +11,8 @@ no children times, so `spawns` (every subprocess.Popen) is the spawn measure the
 Phases nest (entry_live, codex_checks and json_load run inside the entries scan), so phase_ms entries
 overlap and their sum can exceed process_ms; `other` is clamped at zero and is not a residual.
 """
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json

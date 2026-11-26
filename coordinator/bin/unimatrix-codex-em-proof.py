@@ -8,6 +8,8 @@ out of the session's JSONL event stream. It writes an audit record (session id, 
 outcome) and exits 0 on pass, 1 on fail, 2 on a typed refusal, 127 when codex is not on PATH.
 A fail is a result: it is recorded once, never retried.
 """
+from __future__ import annotations
+
 import json
 import os
 import re

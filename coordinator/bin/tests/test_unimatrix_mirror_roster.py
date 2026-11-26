@@ -849,6 +849,28 @@ def test_reap_unbacked_agy_faces_reaps_a_pending_face_whose_leg_is_gone_or_not_p
     assert list(sessions.iterdir()) == []  # a leg that left pending no longer backs the pending face
 
 
+def test_pending_face_check_reads_each_unchanged_leg_record_once_and_never_a_log(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    roster = load("roster")
+    me = os.getpid()
+    name = _pending_face_home(tmp_path, monkeypatch, {"pid": me, "procStart": roster.proc_start(me), "agy_pid": me})
+    legs = tmp_path / "settings-home" / "unimatrix" / "agy-legs"
+    for i in range(40):
+        (legs / f"dead-{i}.json").write_text(json.dumps({"conversation": f"dead-{i}", "mode": "live"}))
+        (legs / f"dead-{i}.log").write_text("x" * 4096)
+    opened = []
+    real_open = open
+    monkeypatch.setattr(roster, "open", lambda path, *a, **k: opened.append(str(path)) or real_open(path, *a, **k),
+                        raising=False)
+    face = _old_pending_face(name)
+    for _ in range(25):  # one roster tick checks this once per row pair
+        roster.pending_agy_face_backed(face)
+    assert not any(p.endswith(".log") for p in opened)
+    assert len(opened) == 41  # every record parsed once across all 25 calls
+    (legs / "conv-pend.json").write_text(json.dumps({"conversation": "conv-pend", "mode": "live", "pid": me}))
+    assert roster.pending_agy_face_backed(face) is False  # a rewritten record is re-read
+
+
 def _far_pending_mirror(roster, **extra) -> dict:
     """A mirror row as `mirror()` writes it for a far agy face: bridge pid is this process, supervisor is this process."""
     me = os.getpid()

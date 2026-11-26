@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Print agent mail for one Grok session. A monitor reads each line; nothing is typed."""
+from __future__ import annotations
+
 import os
 import sys
 

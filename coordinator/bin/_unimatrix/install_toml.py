@@ -2,6 +2,8 @@
 
 Stdlib-only (uses tomllib), inert on import.
 """
+from __future__ import annotations
+
 import json
 import os
 import shutil

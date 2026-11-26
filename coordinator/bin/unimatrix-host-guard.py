@@ -27,6 +27,8 @@ row to host-guard-allows.jsonl beside it, from the shim's take_evaluation(); an 
 CLI: unimatrix-host-guard.py --host codex|agy|grok [--engine-root PATH]
   stdin: one hook payload. stdout: exactly one JSON line. stderr: `state`. Exit 0 always.
 """
+from __future__ import annotations
+
 import contextlib
 import io
 import json

@@ -144,7 +144,7 @@ from __future__ import annotations
 import functools
 import logging
 import posixpath
-from typing import Mapping, NamedTuple, Optional
+from typing import Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, EmitterRow
 
@@ -891,7 +891,65 @@ def _blocked_rows_last(
     ]
 
 
-def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
+def _prioritized(
+    rows: list[EmitterRow], preds: dict[str, set[str]], priority: Sequence[str]
+) -> list[EmitterRow]:
+    """``rows`` stable-reordered so each priority id (given order) and its
+    transitive predecessors come first; the rest keep input order. Ids absent
+    from ``rows`` are skipped. ``_topological_order`` takes the first ready row
+    in this order, so every edge still holds."""
+    by_id = {row.id: row for row in rows}
+    front: dict[str, None] = {}
+    for pid in priority:
+        if pid not in by_id:
+            continue
+        needed = {pid}
+        stack = [pid]
+        while stack:
+            for pred in preds.get(stack.pop(), ()):
+                if pred not in needed:
+                    needed.add(pred)
+                    stack.append(pred)
+        for row in rows:
+            if row.id in needed:
+                front.setdefault(row.id)
+    if not front:
+        return rows
+    return [by_id[rid] for rid in front] + [r for r in rows if r.id not in front]
+
+
+def priority_report(
+    rows: list[EmitterRow], priority: Sequence[str]
+) -> tuple[list[str], list[dict]]:
+    """``(applied, unhonoured)`` for a ``build_waves`` priority list.
+
+    ``applied`` is the priority ids (deduplicated, given order) that
+    ``build_waves`` schedules; ``unhonoured`` is ``[{id, reason}]`` for each id
+    absent from ``rows`` or held out of the wave graph.
+    """
+    present = {row.id for row in rows}
+    held = _compute_held_out(rows, _predecessors(rows)) if rows else {}
+    applied: list[str] = []
+    unhonoured: list[dict] = []
+    seen: set[str] = set()
+    for pid in priority:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        if pid not in present:
+            unhonoured.append(
+                {"id": pid, "reason": "not in this pass's row set"}
+            )
+        elif pid in held:
+            unhonoured.append({"id": pid, "reason": f"held out: {held[pid]}"})
+        else:
+            applied.append(pid)
+    return applied, unhonoured
+
+
+def build_waves(
+    rows: list[EmitterRow], priority: Sequence[str] = ()
+) -> list[list[WaveRow]]:
     provenance: dict[tuple[str, str], str] = {}
     full_preds = _predecessors(rows, provenance)
     _detect_cycle(full_preds, provenance)
@@ -901,7 +959,10 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
     rows = [row for row in rows if row.id not in held]
 
     preds = _predecessors(rows)
-    order = _topological_order(_blocked_rows_last(rows, preds), preds)
+    ordered_rows = _blocked_rows_last(rows, preds)
+    if priority:
+        ordered_rows = _prioritized(ordered_rows, preds, priority)
+    order = _topological_order(ordered_rows, preds)
 
     wave_of: dict[str, int] = {}
     waves: list[list[EmitterRow]] = []

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
-
 import yaml
 
-from coordinator_core.ops.dispatch_emit.ask_stage import _handler, _sizing_named_plan
+from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 
 RUN = "ask-20261112T000000-abc123"
@@ -74,31 +72,3 @@ def test_refuses_naming_both_when_neither_file_exists(tmp_path):
 def test_a_plan_with_an_unrelated_name_is_not_compared(tmp_path):
     reply = _stage(tmp_path, plan_path="docs/plans/2026-11-12-other.md", landed=("docs/plans/2026-11-12-other.md",))
     assert "error" not in reply
-
-
-def test_missing_caller_plan_stages_the_existing_sizing_plan(tmp_path):
-    """A caller path that is not in the repo stages the sizing's plan file."""
-    missing = "docs/plans/2026-11/2026-11-26-add-polygon-tally-82acbb.md"
-    reply = _stage(tmp_path, plan_path=missing, landed=(NAMED,))
-    assert "error" not in reply
-    assert _sizing_named_plan(tmp_path, missing, SIZING_REL) == NAMED
-
-
-def test_renamed_caller_paths_stage_the_run_record_sizing(tmp_path):
-    """Both caller paths missing: stage the sizing named on the run record."""
-    missing_plan = "docs/plans/2026-11/2026-11-26-add-polygon-tally-82acbb.md"
-    missing_sizing = "state/sizings/2026-11/2026-11-26-add-polygon-tally-82acbb.yaml"
-    (tmp_path / ".git").mkdir()
-    (tmp_path / SIZING_REL).parent.mkdir(parents=True)
-    (tmp_path / SIZING_REL).write_text(yaml.safe_dump(SIZING, sort_keys=False), encoding="utf-8")
-    (tmp_path / NAMED).parent.mkdir(parents=True)
-    (tmp_path / NAMED).write_text(PLAN, encoding="utf-8", newline="\n")
-    record = tmp_path / "state" / "warp" / RUN
-    record.mkdir(parents=True)
-    (record / "run.json").write_text(json.dumps({"sizing_rel": SIZING_REL}), encoding="utf-8")
-    reply = read_stage_reply(tmp_path, _handler(
-        {"run_id": RUN, "plan_path": missing_plan, "commit_sizing_path": missing_sizing},
-        repo_root=tmp_path,
-    ))
-    assert "error" not in reply
-    assert missing_plan not in str(reply)

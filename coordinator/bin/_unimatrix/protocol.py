@@ -3,6 +3,8 @@
 Defines the peers.json schema, cross-session frame build/parse, reply label, provenance stamp,
 and box/agent row helpers. Stdlib-only and inert on import.
 """
+from __future__ import annotations
+
 import json
 import re
 import uuid

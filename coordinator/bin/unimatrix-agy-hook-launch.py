@@ -13,6 +13,8 @@ Never fails the agent's command: every path exits 0 silently.
 unimatrix-agy-leg.py and unimatrix-roster.py are resolved beside this file, so it runs from
 coordinator/bin and from the installed <settings home>/unimatrix copy alike.
 """
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json

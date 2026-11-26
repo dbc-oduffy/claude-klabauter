@@ -74,6 +74,81 @@ def test_one_edited_file_refuses_naming_it_and_its_blob(tmp_path):
     assert HUNKS[0] not in reply["error"]
 
 
+def _peer_claims(tmp_path: Path, monkeypatch, *paths: str) -> None:
+    import time
+
+    from coordinator_core.ops.dispatch_emit import live_run_index, run_token
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    run_token.mint(tmp_path, "peer", "s.mjs", marker=True, session_id="sess-peer", sizing_rel=None)
+    live_run_index.stage(tmp_path, "peer", list(paths), time.time())
+
+
+def _notes(tmp_path: Path, run: str = RUN) -> list[dict]:
+    import json
+
+    f = tmp_path / "state/warp" / run / "notes.jsonl"
+    return [json.loads(x) for x in f.read_text(encoding="utf-8").splitlines()] if f.exists() else []
+
+
+def test_a_peer_edited_shared_path_stages_records_the_drift_and_stays_untouched(tmp_path, monkeypatch):
+    _plan(tmp_path)
+    _record(tmp_path, RUN)
+    _peer_claims(tmp_path, monkeypatch, HUNKS[1])
+    (tmp_path / HUNKS[1]).write_text("peer edit", encoding="utf-8")
+    reply = _stage(tmp_path)
+    assert "error" not in reply, reply
+    (chunk,) = _kept_review(_request(tmp_path))
+    assert tuple(chunk.paths) == (HUNKS[0], HUNKS[2])
+    assert (tmp_path / HUNKS[1]).read_text(encoding="utf-8") == "peer edit"
+    (note,) = [n for n in _notes(tmp_path) if n.get("kept_shared_drift")]
+    assert note["kept_shared_drift"] == HUNKS[1] and note["owner_run"] == "peer"
+
+
+def test_an_owned_path_drifting_still_refuses_beside_a_shared_one(tmp_path, monkeypatch):
+    _plan(tmp_path)
+    _record(tmp_path, RUN)
+    _peer_claims(tmp_path, monkeypatch, HUNKS[1])
+    (tmp_path / HUNKS[1]).write_text("peer edit", encoding="utf-8")
+    (tmp_path / HUNKS[2]).write_text("own drift", encoding="utf-8")
+    reply = _stage(tmp_path)
+    assert reply["error"].startswith("kept-hunks-drifted:")
+    assert HUNKS[2] in reply["error"] and HUNKS[1] not in reply["error"]
+
+
+def _halt_holding(tmp_path: Path, run: str, *paths: str) -> None:
+    import json
+
+    rd = tmp_path / "state" / "warp" / run
+    rd.mkdir(parents=True, exist_ok=True)
+    marker = {"status": "halted", "run_artifacts": {"withheld": {p: "kept" for p in paths}}}
+    (rd / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
+
+
+def test_a_halted_peer_holding_the_drifted_path_is_the_shared_owner(tmp_path):
+    _plan(tmp_path)
+    _record(tmp_path, RUN)
+    _halt_holding(tmp_path, "peer-halted", HUNKS[1])
+    (tmp_path / HUNKS[1]).write_text("peer edit", encoding="utf-8")
+    reply = _stage(tmp_path)
+    assert "error" not in reply, reply
+    (chunk,) = _kept_review(_request(tmp_path))
+    assert tuple(chunk.paths) == (HUNKS[0], HUNKS[2])
+    (note,) = [n for n in _notes(tmp_path) if n.get("kept_shared_drift")]
+    assert note["owner_run"] == "peer-halted"
+
+
+def test_drift_on_a_path_only_the_resumed_kept_run_holds_still_refuses(tmp_path):
+    _plan(tmp_path)
+    _record(tmp_path, KEPT_RUN)
+    _halt_holding(tmp_path, KEPT_RUN, HUNKS[1])
+    (tmp_path / HUNKS[1]).write_text("own drift", encoding="utf-8")
+    reply = _stage(tmp_path, kept_run=KEPT_RUN)
+    assert reply["error"].startswith("kept-hunks-drifted:")
+    assert HUNKS[1] in reply["error"]
+    assert not [n for n in _notes(tmp_path) if n.get("kept_shared_drift")]
+
+
 def test_a_recorded_path_absent_from_the_tree_refuses(tmp_path):
     _plan(tmp_path)
     _record(tmp_path, RUN)

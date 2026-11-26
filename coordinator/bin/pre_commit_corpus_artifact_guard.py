@@ -178,17 +178,46 @@ def _staged_paths() -> list[str]:
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
-def _staged_size(path: str) -> int | None:
-    """None is deliberately distinct from 0: an unmeasurable path is skipped rather than
+_BATCH_TIMEOUT_S = 120
+
+
+def _unmeasured(sizes: dict[str, int | None], reason: str) -> dict[str, int | None]:
+    """Fail open, but visibly: one batch failure skips every path's size check at once."""
+    print(f"[corpus-artifact-guard] size check skipped for {len(sizes)} staged path(s): {reason}.",
+          file=sys.stderr)
+    return sizes
+
+
+def _staged_sizes(paths: list[str]) -> dict[str, int | None]:
+    """Blob size per staged path from ONE `git cat-file --batch-check` spawn, whatever
+    the path count. None is deliberately distinct from 0: an unmeasurable path (missing
+    from the index, unparseable line, a failed or timed-out batch) is skipped rather than
     passed, so a concurrent index write on this shared tree never converts an oversized
-    blob into a silent pass."""
-    proc = _git(["cat-file", "-s", f":{path}"])
-    if proc.returncode != 0:
-        return None
+    blob into a silent pass. git answers one line per input line, in order."""
+    if not paths:
+        return {}
+    sizes: dict[str, int | None] = {path: None for path in paths}
     try:
-        return int(proc.stdout.strip())
-    except ValueError:
-        return None
+        proc = subprocess.run(
+            ["git", "cat-file", "--batch-check=%(objectsize)"],
+            input="".join(f":{path}\n" for path in paths).encode("utf-8"),
+            capture_output=True,
+            shell=False,
+            timeout=_BATCH_TIMEOUT_S,
+            **_NO_CONSOLE,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return _unmeasured(sizes, type(exc).__name__)
+    if proc.returncode != 0:
+        return _unmeasured(sizes, f"git cat-file exit {proc.returncode}")
+    lines = proc.stdout.decode("utf-8", errors="replace").splitlines()
+    if len(lines) != len(paths):
+        return _unmeasured(sizes, f"{len(lines)} answers for {len(paths)} paths")
+    for path, line in zip(paths, lines):
+        token = line.strip()
+        if token.isdigit():
+            sizes[path] = int(token)
+    return sizes
 
 
 def _max_bytes() -> int:
@@ -288,12 +317,17 @@ def main(argv: list[str] | None = None) -> int:
     corpus_hits: list[str] = []
     oversized: list[str] = []
 
+    measurable: list[str] = []
     for path in staged:
         normalized = path.replace("\\", "/")
         if any(normalized.startswith(p) for p in _CORPUS_PREFIXES):
             corpus_hits.append(path)
-            continue
-        size = _staged_size(path)
+        else:
+            measurable.append(path)
+
+    sizes = _staged_sizes(measurable)
+    for path in measurable:
+        size = sizes[path]
         if size is None or size <= max_bytes:
             continue
         size_mb = -(-size // (1024 * 1024))

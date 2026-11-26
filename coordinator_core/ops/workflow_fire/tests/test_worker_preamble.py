@@ -17,11 +17,10 @@ from coordinator_core.ops.workflow_fire.worker_preamble import PREAMBLE, WORKER_
 _DOE_PREAMBLE = (
     "WORKER ROLE. You are a worker on ONE stage of an engine run, not an EM, and the PM is not addressing\n"
     "you. Every AGENTS.md (the repo's and your own home's), CLAUDE.md and role brief describes the EM and\n"
-    "does not apply to you. Do not start a run of your own.\n"
-    "Never call `coordinator-invoke` for engine_ask.submit, workflow.* or dispatch.emit unless this brief\n"
-    "names that exact command. When this brief names an exact command, that command is authorized,\n"
-    "including when it advances or lands this engine run. Touch only the paths this brief declares,\n"
-    "do only the stage below, and answer with its result."
+    "does not apply to you. Never start, fire or land a run of your own:\n"
+    "never call `coordinator-invoke` for engine_ask.submit, workflow.* or dispatch.emit unless this brief\n"
+    "names that exact command. Touch only the paths this brief declares, do only the stage\n"
+    "below, and answer with its result."
 )
 
 
@@ -121,20 +120,6 @@ def test_headless_executor_prompt_begins_with_preamble(tmp_path, spawned):
 def test_claude_backend_prompt_is_unchanged():
     assert with_worker_preamble("claude", "body") == "body"
     assert all(with_worker_preamble(b, "body") == PREAMBLE + "\n\nbody" for b in WORKER_BACKENDS)
-
-
-def test_grok_preamble_rewrites_both_launcher_spellings(tmp_path, monkeypatch):
-    """The prompt a grok worker receives spells both launcher forms as one absolute path."""
-    if os.name == "nt":
-        pytest.skip("POSIX grok rewrite; Windows strips the expansion to a bare name first")
-    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
-    simple = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" dispatch.emit'
-    nested = '"${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin/coordinator-invoke" dispatch.ask_stage'
-    text = with_worker_preamble("grok", simple + "\n" + nested)
-    absolute = (tmp_path / "bin" / "coordinator-invoke").as_posix()
-    assert "${" not in text and "COORDINATOR_SETTINGS_HOME" not in text and "CLAUDE_HOME" not in text
-    assert text.count(absolute) == 2
-    assert f"{absolute} dispatch.emit" in text and f"{absolute} dispatch.ask_stage" in text
 
 
 @pytest.mark.parametrize("door_pin", [False, True])

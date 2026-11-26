@@ -11,6 +11,8 @@ skills at SKILL.md under each skill's folder in the home directory's .agents/ski
 (a copy where the symlink is refused) with a sibling `<skill>.coordinator-managed` marker that
 uninstall requires before removing anything.
 """
+from __future__ import annotations
+
 import json
 import os
 import shutil

@@ -15,6 +15,8 @@ The process exits, removing its record, when its agy process is gone.
 
 unimatrix-agy-hook-launch.py, unimatrix-agy-hook-pretool.py and unimatrix-roster.py are resolved beside this file.
 """
+from __future__ import annotations
+
 import importlib.util
 import json
 import os

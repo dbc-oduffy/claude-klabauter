@@ -15,6 +15,8 @@ Modes, read from SSH_ORIGINAL_COMMAND:
 A peer reads only what it put; put/get without `--peer` are refused. Caps: MAX_DROP_BYTES / MAX_DROP_FILES
 of unimatrix-relay.py.
 """
+from __future__ import annotations
+
 import json
 import os
 import shutil

@@ -18,6 +18,8 @@ Always exits 0. Prints one JSON object: a plain systemMessage noting registratio
 
 unimatrix-agy-hook-launch.py and unimatrix-roster.py are resolved beside this file.
 """
+from __future__ import annotations
+
 import importlib.util
 import json
 import os

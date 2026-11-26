@@ -4,6 +4,8 @@
 
 Thin CLI wrapper + re-export facade over `_unimatrix.adapters.agy`.
 """
+from __future__ import annotations
+
 import asyncio
 import importlib
 import importlib.util

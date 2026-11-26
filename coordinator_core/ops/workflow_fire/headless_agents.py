@@ -412,12 +412,6 @@ def run_agent(
             'Use Python or native PowerShell for file operations. Preserve all operation arguments and JSON payloads.\n\n'
         ) + full_prompt
     full_prompt = with_worker_preamble(backend, full_prompt)
-    if backend == "grok" and os.name != "nt":
-        from coordinator_core._settings_home import settings_home
-        from coordinator_core.ops.dispatch_emit.invoke_form import GROK, render_invoke_for_shell
-
-        # Grok allow rules do not expand ${COORDINATOR_SETTINGS_HOME:-$HOME/...}.
-        full_prompt = render_invoke_for_shell(full_prompt, GROK, bin_dir=settings_home() / "bin")
     native_schema = _codex_schema(schema) if schema is not None else None
     if backend == "codex" and schema is not None and native_schema is None:
         full_prompt += (
@@ -483,10 +477,7 @@ def run_agent(
     if denial and proc.returncode != 0:
         raise AgentPolicyDenied(denial)
     if proc.returncode != 0:
-        raise AgentFailed(
-            f"{backend} agent exited {proc.returncode}; see {artifact_dir / 'stderr.txt'} "
-            f"and {artifact_dir / 'stdout.jsonl'}"
-        )
+        raise AgentFailed(f"{backend} agent exited {proc.returncode}; see {artifact_dir / 'stderr.txt'}")
     try:
         if backend == "claude":
             envelope = json.loads((artifact_dir / "stdout.jsonl").read_text(encoding="utf-8"))

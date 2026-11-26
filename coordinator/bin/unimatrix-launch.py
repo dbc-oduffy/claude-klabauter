@@ -13,6 +13,8 @@ full-admin key needs; with no usable record it is the bare `launch <repo-key>` /
 forced-command key expects. On ok:true this prints the far session name and exits 0; on ok:false, an
 unparseable reply, a timeout or an ssh failure it prints the error to stderr and exits 1.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import ntpath

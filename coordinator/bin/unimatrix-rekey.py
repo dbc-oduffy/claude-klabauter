@@ -7,6 +7,8 @@
 - procStart: the harness writes it as a string and compares it as one, so a number
   fails the live-owner check that idle notices require.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import os

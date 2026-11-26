@@ -21,6 +21,8 @@ kept and reported as `unenrolled` events. Only a key the prior snapshot listed a
 Usage: unimatrix-pair.py pin <pubfile> | request [--box B] [--cidr C]... | approve <request-file|-> |
        revoke <box> | fetch <host>
 """
+from __future__ import annotations
+
 import argparse
 import base64
 import getpass

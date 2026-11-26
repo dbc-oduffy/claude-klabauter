@@ -9,6 +9,8 @@ re-arm line, then exits 0; agy's own task-finished wake turns that output into a
 
 Usage: unimatrix-agy-doorbell.py --conversation <id>
 """
+from __future__ import annotations
+
 import argparse
 import importlib
 import importlib.util

@@ -15,6 +15,8 @@ peer-registration failures remain advisory.
 register_peer() is the shared registration helper: it takes the vendor and target, so another
 vendor's SessionStart hook differs only in payload field names and vendor.
 """
+from __future__ import annotations
+
 import contextlib
 import importlib.util
 import json

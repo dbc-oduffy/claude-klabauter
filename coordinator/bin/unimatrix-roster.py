@@ -16,6 +16,8 @@ process-start stamp (a string), and a key file named <pid>.<sha256(endpoint)>.ke
 This module also carries the process and registry helpers that unimatrix-mirror-all.py
 and unimatrix-reshape.py share; they are importable without side effects.
 """
+from __future__ import annotations
+
 import argparse
 import copy
 import hashlib

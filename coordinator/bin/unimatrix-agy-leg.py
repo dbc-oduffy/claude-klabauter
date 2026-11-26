@@ -20,6 +20,8 @@ pid, unheld past the grace after the leg started).
 Usage (agy runs this): nohup python3 unimatrix-agy-leg.py <sock> > unimatrix-agy-leg.out 2>&1 &
 The log path is $AGY_LEG_LOG else <settings home>/unimatrix/agy-legs/<conversation id>.log.
 """
+from __future__ import annotations
+
 try:
     import fcntl
 except ImportError:  # Windows: the spool is locked through msvcrt on a sidecar file

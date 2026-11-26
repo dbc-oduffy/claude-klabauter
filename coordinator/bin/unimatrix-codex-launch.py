@@ -13,6 +13,8 @@ Socket: $CODEX_APP_SERVER_SOCK, else the Codex default. A default socket is brou
 `codex app-server daemon start`; an overridden one with a detached `codex app-server --listen
 unix://<sock>`. Registration happens in the SessionStart hook, not here.
 """
+from __future__ import annotations
+
 import importlib.util
 import os
 import shutil

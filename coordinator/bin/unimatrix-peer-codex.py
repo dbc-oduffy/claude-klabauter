@@ -5,6 +5,8 @@ Speaks the Codex app-server control protocol (JSON-RPC text frames over a WebSoc
 socket) with a minimal stdlib RFC 6455 client, so the vendored script carries no third-party
 dependency. Socket path: $CODEX_APP_SERVER_SOCK, else ~/.codex/app-server-control/app-server-control.sock.
 """
+from __future__ import annotations
+
 import asyncio
 import base64
 import importlib.util

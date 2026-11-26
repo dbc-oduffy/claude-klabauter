@@ -5,6 +5,8 @@ started, and never resumes `grok -p` or types into the TUI.
 
 Uses _unimatrix.proc.parent_pid (macOS libproc / Linux /proc / Windows Toolhelp) — zero `ps` spawns.
 """
+from __future__ import annotations
+
 import asyncio
 import functools
 import json

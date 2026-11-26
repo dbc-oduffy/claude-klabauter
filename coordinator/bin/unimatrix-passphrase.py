@@ -15,6 +15,8 @@ Feed, chosen by the Windows OpenSSH spike (docs/research/unimatrix-key-passphras
 
 Usage as the askpass program: `unimatrix-passphrase.py askpass [<ref>]` prints the passphrase to stdout.
 """
+from __future__ import annotations
+
 import base64
 import hashlib
 import os

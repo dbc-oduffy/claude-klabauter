@@ -46,6 +46,8 @@ far-address (stable fallback) answer is never handed to the supervisors as an IP
 stderr line `autolink failed: <Type>: <msg>` (plus `detached`'s nice-0 note) and the exit status is always 0
 (a refused `restart` is 1): a session start must not fail on it.
 """
+from __future__ import annotations
+
 import base64
 import calendar
 import fnmatch

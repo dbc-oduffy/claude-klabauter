@@ -5,6 +5,8 @@ The status-line command of agy and Grok runs from a cwd with no coordinator_core
 may not carry a space or quote inside any argument (agy's Windows statusline runner splits a `-c`
 one-liner), so the engine root rides in argv and is put on sys.path first.
 """
+from __future__ import annotations
+
 import runpy
 import sys
 

@@ -5,6 +5,8 @@ Stdlib-only and inert on import.
 - Linux: /proc/<pid>/stat + /proc/stat.
 - Windows: kernel32 OpenProcess/GetProcessTimes/GetExitCodeProcess/CreateToolhelp32Snapshot.
 """
+from __future__ import annotations
+
 import json
 import os
 import struct

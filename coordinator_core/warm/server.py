@@ -5511,6 +5511,8 @@ class _ServerContext:
         self._enqueue_stamps: "dict[int, tuple]" = {}
         self._busy_workers = InFlightCounter()
         self._listening_lock = threading.Lock()
+        self._listener_slots_lock = threading.Lock()
+        self._listener_slots = 0
         self._listening = True
         self._stopped = threading.Event()
         self._idle_watchdog_stop = threading.Event()
@@ -7301,6 +7303,19 @@ class _ServerContext:
                 target=self._accept_and_replenish, args=(extra_handle,), daemon=True
             ).start()
 
+    def _take_listener_slot(self) -> bool:
+        """Claim one of `PENDING_LISTENER_POOL_SIZE` connect-wait slots;
+        False when the pool is full, so the caller retires its thread."""
+        with self._listener_slots_lock:
+            if self._listener_slots >= PENDING_LISTENER_POOL_SIZE:
+                return False
+            self._listener_slots += 1
+            return True
+
+    def _release_listener_slot(self) -> None:
+        with self._listener_slots_lock:
+            self._listener_slots -= 1
+
     def _accept_and_replenish(self, handle: int) -> None:
         """Block for a connection on `handle`, then -- BEFORE handling that
         connection -- post a fresh instance's connect-wait on ITS OWN
@@ -7331,12 +7346,17 @@ class _ServerContext:
         threads without limit; `WORKER_POOL_SIZE`'s own constant docstring
         has the full accounting.
         """
+        if not self._take_listener_slot():
+            _close_handle(handle)
+            return
         try:
             _connect_pipe(handle)
         except OSError as exc:
             print(f"[warm-server] connect failed on pipe instance: {exc!r}", file=sys.stderr)
             _close_handle(handle)
             return
+        finally:
+            self._release_listener_slot()
 
         if not self._admit():
             _refuse_pipe_while_draining(handle, server_sha=self.version_state.server_sha)

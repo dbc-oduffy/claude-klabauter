@@ -302,6 +302,27 @@ def kept_post_checkpoint(root: Path, record_dir: Path) -> tuple[dict, list]:
     return holding, sorted(drifted)
 
 
+def shared_drift(root: Path, drifted: Iterable[str], run_id: str, kin: Iterable[str] = ()) -> dict[str, str]:
+    """``{rel: owner_run}`` for each drifted recorded path another run (live, or halted holding it) claims,
+    so its moved bytes are that run's edit, not this run's. ``run_id`` and ``kin`` (the resumed kept run)
+    never count as the other run. A path no other run claims is this run's own. Spawn-free."""
+    from coordinator_core.ops.dispatch_emit import co_tenant_owner
+
+    own = {run_id, *kin}
+    out: dict[str, str] = {}
+    for rel in drifted:
+        key = _norm(rel)
+        if key is None:
+            continue
+        try:
+            owner = co_tenant_owner.owner_of(root, key, exclude_run_id=run_id).get("run_id")
+        except (OSError, ValueError):
+            continue
+        if owner and owner not in own:
+            out[rel] = owner
+    return out
+
+
 def kept_fingerprints(record_dir: Path) -> dict[str, frozenset]:
     """Per normalised path, the union of every ``chunks[*].paths`` blob and every ``post_checkpoint`` blob.
 

@@ -13,6 +13,8 @@ or a Grok session whose registry pid is an
 ancestor of this shell; the router maps it to that peer's roster name and stamps the frame with
 that name and its box, so nothing is signed by hand. Reads no token and puts no credential in argv.
 """
+from __future__ import annotations
+
 import argparse
 import asyncio
 import importlib.util
