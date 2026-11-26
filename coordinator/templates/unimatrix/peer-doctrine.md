@@ -36,6 +36,7 @@ Hand-do work never while a run of the same ask is live: follow that run and send
 confident XS directly when the expected change fits both limits in
 `coordinator/contract/xs-stop-rule.json` (at most 2 files and 30 lines).
 Do not open that file, the sizing skill, or the EM wiki, and do not search outside the workspace, before that edit.
+The full-route wiki is not required before a confident XS edit.
 For XS changes where two inputs jointly set a boundary, test the public result on both sides and vary the second input so the boundary moves. If an input describes a range, check a large valid range with a small result before allocating storage proportional to the range.
 For other novel work from the PM, write the params
 (the PM's words verbatim, `ask_source: pm`, `session_id` from your family's session-id variable, `caller` naming your model family) to `.coordinator-local/em-submit.json` at the repo root,
