@@ -71,10 +71,11 @@ def test_invalid_board_is_refused_and_file_untouched(home):
     assert path.read_bytes() == before
 
 
-def test_missing_board_is_refused_without_creating_it(home):
+def test_missing_board_is_self_created(home):
     out = op._groupem_goal_board_refresh({})
-    assert out["ok"] is False
-    assert not (home / goal_board.BOARD_FILENAME).exists()
+    assert out["ok"] is True and out["errors"] == []
+    written = json.loads((home / goal_board.BOARD_FILENAME).read_text(encoding="utf-8"))
+    assert goal_board.validate(written) == []
 
 
 def test_home_refused_names_the_key(monkeypatch):

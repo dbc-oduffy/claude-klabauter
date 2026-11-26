@@ -72,6 +72,109 @@ def test_is_door_installed_does_not_raise_when_check_only_would() -> None:
     assert result is False
 
 
+def _place_current_door(bin_dst: Path) -> None:
+    """Stands the committed prebuilt (or a stand-in where none ships) at the door slot."""
+    target = bin_dst / door_install.DOOR_INSTALLED_NAME
+    if door_install._PREBUILT_DOOR_EXE.exists():
+        target.write_bytes(door_install._PREBUILT_DOOR_EXE.read_bytes())
+    else:
+        target.write_bytes(b"stand-in door binary")
+
+
+def _check_only_fixture(tmp_path: Path) -> "tuple[Path, Path]":
+    engine_root = tmp_path / "engine"
+    _stamp_engine_root(engine_root)
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    _place_current_door(bin_dst)
+    (bin_dst / door_build.SIDECAR_FILENAME).write_text("x", encoding="utf-8")
+    return bin_dst, engine_root
+
+
+_WIN_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="committed prebuilt oracle is Windows-only")
+
+
+@_WIN_ONLY
+def test_check_only_matching_images_report_present(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    bin_dst, engine_root = _check_only_fixture(tmp_path)
+    if door_install._PREBUILT_WINDOWLESS_EXE.exists():
+        door_install.windowless_image_path(bin_dst).write_bytes(door_install._PREBUILT_WINDOWLESS_EXE.read_bytes())
+
+    dest = door_install.install_door(bin_dst, engine_root, check_only=True)
+
+    assert dest == bin_dst / door_install.DOOR_INSTALLED_NAME
+    assert "present (no-op)" in capsys.readouterr().out
+
+
+@_WIN_ONLY
+def test_check_only_stale_main_image_raises_stale_naming_file_and_hashes(tmp_path: Path) -> None:
+    bin_dst, engine_root = _check_only_fixture(tmp_path)
+    stale = door_install._PREBUILT_DOOR_EXE.read_bytes() + b"older build"
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(stale)
+
+    with pytest.raises(door_install.DoorInstallError) as err:
+        door_install.install_door(bin_dst, engine_root, check_only=True)
+
+    msg = str(err.value)
+    assert "STALE" in msg
+    assert door_install.DOOR_INSTALLED_NAME in msg
+    assert hashlib.sha256(stale).hexdigest()[:12] in msg
+    assert hashlib.sha256(door_install._PREBUILT_DOOR_EXE.read_bytes()).hexdigest()[:12] in msg
+    assert (bin_dst / door_install.DOOR_INSTALLED_NAME).read_bytes() == stale
+
+
+@_WIN_ONLY
+def test_check_only_stale_windowless_image_raises_stale(tmp_path: Path) -> None:
+    if not door_install._PREBUILT_WINDOWLESS_EXE.exists():
+        pytest.skip("no committed door-w.exe")
+    bin_dst, engine_root = _check_only_fixture(tmp_path)
+    windowless = door_install.windowless_image_path(bin_dst)
+    windowless.write_bytes(door_install._PREBUILT_WINDOWLESS_EXE.read_bytes() + b"older build")
+
+    with pytest.raises(door_install.DoorInstallError, match="STALE") as err:
+        door_install.install_door(bin_dst, engine_root, check_only=True)
+
+    assert door_install.WINDOWLESS_IMAGE_NAME in str(err.value)
+    assert door_install.DOOR_INSTALLED_NAME not in str(err.value).split("(in ")[0]
+
+
+@_WIN_ONLY
+def test_check_only_accepts_a_compile_fresh_image_whose_sidecar_records_current_sources(tmp_path: Path) -> None:
+    bin_dst, engine_root = _check_only_fixture(tmp_path)
+    fresh = b"compile-fresh build"
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(fresh)
+    record = {
+        "image_sha256": hashlib.sha256(fresh).hexdigest(),
+        "sources": {p.name: door_build.source_sha256(p) for p in door_build.SOURCES},
+    }
+    door_install.installed_provenance_path(bin_dst).write_text(json.dumps(record), encoding="utf-8")
+
+    door_install.install_door(bin_dst, engine_root, check_only=True)
+
+
+@_WIN_ONLY
+def test_check_only_windowless_compile_fresh_passes_only_with_a_current_sidecar(tmp_path: Path) -> None:
+    bin_dst, engine_root = _check_only_fixture(tmp_path)
+    windowless = door_install.windowless_image_path(bin_dst)
+    fresh = b"compile-fresh door-w"
+    windowless.write_bytes(fresh)
+    sidecar = bin_dst / (door_install.WINDOWLESS_IMAGE_NAME + ".provenance.json")
+
+    with pytest.raises(door_install.DoorInstallError, match="STALE"):
+        door_install.install_door(bin_dst, engine_root, check_only=True)
+
+    sidecar.write_text(
+        json.dumps(
+            {
+                "image_sha256": hashlib.sha256(fresh).hexdigest(),
+                "sources": {p.name: door_build.source_sha256(p) for p in door_build.SOURCES},
+            }
+        ),
+        encoding="utf-8",
+    )
+    door_install.install_door(bin_dst, engine_root, check_only=True)
+
+
 def test_check_only_still_raises_on_absence(tmp_path: Path) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
@@ -87,6 +190,40 @@ def test_install_writes_sidecar_alongside_installed_name(tmp_path: Path) -> None
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
     engine_root = tmp_path / "engine"
+    _stamp_engine_root(engine_root)
+    bin_dst = tmp_path / "bin"
+
+    door_install.install_door(bin_dst, engine_root)
+
+    assert (bin_dst / door_build.SIDECAR_FILENAME).exists()
+
+
+def _scratch_engine_root(tmp_path: Path) -> Path:
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    root = tmp_path / "repo" / "scratch" / "arm-c1"
+    _stamp_engine_root(root)
+    return root
+
+
+def test_install_refuses_a_scratch_engine_root_and_writes_nothing(tmp_path: Path) -> None:
+    bin_dst = tmp_path / "bin"
+
+    with pytest.raises(door_install.ScratchEngineRootRefused):
+        door_install.install_door(bin_dst, _scratch_engine_root(tmp_path))
+
+    assert not bin_dst.exists()
+
+
+def test_scratch_refusal_is_a_door_install_error(tmp_path: Path) -> None:
+    with pytest.raises(door_install.DoorInstallError):
+        door_install.install_door(tmp_path / "bin", _scratch_engine_root(tmp_path))
+
+
+def test_install_still_accepts_a_non_scratch_engine_root(tmp_path: Path) -> None:
+    if not door_install._PREBUILT_DOOR_EXE.exists():
+        pytest.skip("no committed prebuilt door for this platform in this checkout")
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    engine_root = tmp_path / "repo" / "engine"
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"
 
@@ -144,7 +281,7 @@ def test_check_only_never_removes_shadowing_ps1_sibling(tmp_path: Path) -> None:
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"stand-in door binary")
+    _place_current_door(bin_dst)
     (bin_dst / door_build.SIDECAR_FILENAME).write_text("x", encoding="utf-8")
     shadow = bin_dst / f"{door_install.BARE_FORWARDER_NAME}.ps1"
     shadow.write_text("# generic .ps1 forwarder body\n", encoding="utf-8")
@@ -417,7 +554,7 @@ def test_install_door_check_only_sweeps_nothing(tmp_path: Path) -> None:
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"x")
+    _place_current_door(bin_dst)
     (bin_dst / door_build.SIDECAR_FILENAME).write_text("{}", encoding="utf-8")
     stale = bin_dst / "coordinator-invoke.exe.stale-1-1"
     stale.write_bytes(b"x")

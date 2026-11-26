@@ -144,6 +144,7 @@ from pathlib import Path
 from typing import Callable, Iterable, NamedTuple, Optional
 
 from coordinator_core._settings_home import FORBID_REAL_SETTINGS_HOME_ENV
+from coordinator_core.install.engine_root_for_install import is_scratch_engine_root
 from coordinator_core.warm.door import build as door_build
 from coordinator_core.warm.engine_root import is_engine_root
 
@@ -151,6 +152,7 @@ __all__ = [
     "BARE_FORWARDER_NAME",
     "DOOR_INSTALLED_NAME",
     "install_door",
+    "ScratchEngineRootRefused",
     "is_door_installed",
     "installed_provenance_path",
     "verify_installed_provenance",
@@ -224,6 +226,11 @@ def windowless_image_path(bin_dst: Path) -> Path:
 class DoorInstallError(RuntimeError):
     """Raised by `install_door()` on a fatal precondition -- an invalid
     `engine_root`, or (check-only mode) a stale/absent install."""
+
+
+class ScratchEngineRootRefused(DoorInstallError):
+    """`install_door()` was handed an engine root inside a repo's `scratch/` dir; the
+    sidecar it would write pins every session's engine to a disposable tree."""
 
 
 _FORBID_REAL_SETTINGS_HOME_ENV = FORBID_REAL_SETTINGS_HOME_ENV
@@ -1047,6 +1054,56 @@ def _decline_native_door(bin_dst: Path, why: str, *, degrade: bool) -> "DoorRout
     return exc
 
 
+def _raise_if_installed_images_stale(bin_dst: Path, dest_exe: Path) -> None:
+    """Raises `DoorInstallError` naming each installed image whose bytes differ
+    from the committed prebuilt (main door, and the windowless twin where one is
+    installed), with both short hashes. Writes nothing.
+
+    Windows only: POSIX ships no committed prebuilt (`_current_source_fingerprint`).
+    An image that is not the prebuilt's bytes still passes when its own
+    sidecar records this tree's current door sources (a compile-fresh install,
+    main door and windowless twin alike).
+    An unreadable prebuilt is no oracle: the presence verdict stands."""
+    if sys.platform != "win32":
+        return
+    pairs = [(dest_exe, _PREBUILT_DOOR_EXE)]
+    windowless = windowless_image_path(bin_dst)
+    if windowless.exists():
+        pairs.append((windowless, _PREBUILT_WINDOWLESS_EXE))
+    stale = []
+    for installed, prebuilt in pairs:
+        try:
+            expected = prebuilt.read_bytes()
+            actual = installed.read_bytes()
+        except OSError:
+            continue
+        if actual == expected:
+            continue
+        sidecar = (
+            installed_provenance_path(bin_dst)
+            if installed == dest_exe
+            else bin_dst / (WINDOWLESS_IMAGE_NAME + ".provenance.json")
+        )
+        try:
+            record = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            record = None
+        if (
+            isinstance(record, dict)
+            and record.get("image_sha256") == hashlib.sha256(actual).hexdigest()
+            and _recorded_sources_current(record)
+        ):
+            continue
+        stale.append(
+            f"{installed.name} {hashlib.sha256(actual).hexdigest()[:12]} != committed "
+            f"{prebuilt.name} {hashlib.sha256(expected).hexdigest()[:12]}"
+        )
+    if stale:
+        raise DoorInstallError(
+            "door_install: check failed -- STALE: " + "; ".join(stale) + f" (in {bin_dst}; would reinstall)"
+        )
+
+
 def install_door(
     bin_dst: Path,
     engine_root: Path,
@@ -1067,10 +1124,12 @@ def install_door(
 
     `check_only=True` verifies without writing: both the exe and its
     sidecar must already exist at `bin_dst`, mirroring the `check_only`
-    convention `substrate.py`'s own forwarder writers use. Does not
-    verify the exe's CONTENT against the prebuilt (that is
-    `rebuild_and_verify_prebuilt()`'s job, and is deliberately not paid
-    on every check-only call) -- only presence.
+    convention `substrate.py`'s own forwarder writers use. On Windows it
+    also compares the installed door (and `door-w.exe`, where installed)
+    against the committed prebuilt and raises `STALE` on a difference; it
+    does not rebuild (that is `rebuild_and_verify_prebuilt()`'s job).
+    A real install from an engine root under a repo `scratch/` dir raises
+    `ScratchEngineRootRefused` before writing.
 
     On a REAL install (`check_only=False`), also removes the
     `install_bin_forwarders`-written siblings that would shadow the door at
@@ -1116,11 +1175,19 @@ def install_door(
 
     if check_only:
         if dest_exe.exists() and dest_sidecar.exists():
+            _raise_if_installed_images_stale(bin_dst, dest_exe)
             print(f"[door-install] check: {dest_exe} present (no-op)")
             return dest_exe
         raise DoorInstallError(
             f"door_install: check failed -- {dest_exe} or {dest_sidecar} missing "
             "(would install)"
+        )
+
+    if is_scratch_engine_root(engine_root):
+        raise ScratchEngineRootRefused(
+            f"door_install: refusing to install from {engine_root}: it is inside a repo scratch/ "
+            "dir, so door.engine-root.txt would pin every session's engine to a disposable tree. "
+            "Run the installer from the published engine root."
         )
 
     _refuse_live_bin_under_test(bin_dst)

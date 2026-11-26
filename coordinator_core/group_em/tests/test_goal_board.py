@@ -180,10 +180,21 @@ def test_refresh_refuses_invalid_board_and_leaves_file_untouched(home):
     assert path.read_bytes() == before
 
 
-def test_refresh_refuses_missing_board_without_creating_it(home):
+def test_refresh_self_creates_a_missing_board(home):
+    path = home / goal_board.BOARD_FILENAME
+    result = goal_board.refresh(now=NOW, is_live=_all_live)
+    assert result["ok"] is True and result["errors"] == [] and result["flags"] == []
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert goal_board.validate(written) == []
+    assert written["board_as_of"] == "2026-11-11T10:00:00Z"
+    assert written["goals"] == [] and written["task_map"] == []
+
+
+def test_refresh_still_refuses_an_unreadable_board(home):
+    (home / goal_board.BOARD_FILENAME).mkdir()
     result = goal_board.refresh(now=NOW, is_live=_all_live)
     assert result["ok"] is False
-    assert not (home / goal_board.BOARD_FILENAME).exists()
+    assert result["errors"][0]["error"].startswith("cannot read board")
 
 
 def test_refresh_refuses_non_json_board_untouched(home):
