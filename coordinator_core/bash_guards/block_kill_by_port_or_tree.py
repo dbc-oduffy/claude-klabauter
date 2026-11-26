@@ -75,6 +75,7 @@ _SCRIPT_EXT = {"bash": (".sh", ".bash"), "sh": (".sh", ".bash"), "zsh": (".sh", 
                "dash": (".sh", ".bash"), "source": (".sh", ".bash"), ".": (".sh", ".bash", ".ps1"),
                "pwsh": (".ps1",), "powershell": (".ps1",), "python": (".py",), "python3": (".py",),
                "py": (".py",)}
+_INTERP_VALUE_FLAGS = {"-W", "-X", "-o", "-O", "--rcfile", "--init-file"}
 _SOURCE = re.compile(
     r"\bnetstat\b|\bGet-Net(?:TCP|UDP)Connection\b|\bOwningProcess\b|\blsof\b|\bpgrep\b|\bpidof\b"
     r"|\btasklist\b|\bGet-Process\b(?!\s+-(?:Id|InputObject)\b)|\bgps\b|\bWin32_Process\b|\bwmic\b"
@@ -174,9 +175,21 @@ def _script_arg(name: str, raw: str, args: list[str]) -> str | None:
         return raw if raw.lower().endswith(exts) and not raw.startswith("-") else None
     if name in ("python", "python3", "py") and any(a in ("-m", "-c") for a in args):
         return None
+    if name in ("pwsh", "powershell"):
+        for a in args:
+            if not a.startswith("-") and a.lower().endswith(_SCRIPT_EXT[name]):
+                return a
+        return None
+    # Trap: past the first positional every word is the script's own argv (a JSON note naming
+    # dispatch.py is data, not a script run).
+    skip = False
     for a in args:
-        if not a.startswith("-") and a.lower().endswith(_SCRIPT_EXT[name]):
-            return a
+        if skip:
+            skip = False
+        elif a in _INTERP_VALUE_FLAGS:
+            skip = True
+        elif not a.startswith("-"):
+            return a if a.lower().endswith(_SCRIPT_EXT[name]) else None
     return None
 
 

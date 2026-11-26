@@ -343,6 +343,26 @@ def test_a_script_tree_kill_of_a_foreign_or_looked_up_pid_still_denies(tmp_path)
     assert denied("python b.py", tmp_path)
 
 
+_REVISE = (
+    'python "$HOME/.coordinator-claude-settings/bin/coordinator-invoke" workflow.revise '
+    '\'{"run_id":"warp-d40d17-1","note":"EM: the uncommitted hunks in '
+    'coordinator_core/bash_guards/dispatch.py (_VERDICT_ONLY_ENV, _record_deny_fire) '
+    'C2 proceeds: cut the guard-chain eager imports, never by stashing"}\''
+)
+
+
+def test_a_script_name_in_a_json_argument_is_data_not_a_script_run(tmp_path):
+    (tmp_path / "coordinator_core" / "bash_guards").mkdir(parents=True)
+    _write(tmp_path / "coordinator_core" / "bash_guards", "dispatch.py", "import os\nos.system('pkill -f x')\n")
+    assert denied(_REVISE, tmp_path) is None
+    assert denied("python coordinator_core/bash_guards/dispatch.py", tmp_path)
+
+
+def test_a_real_taskkill_by_image_name_still_denies_beside_the_revise_command(tmp_path):
+    assert denied("taskkill /IM python.exe /F", tmp_path)
+    assert denied(_REVISE + " && taskkill /IM python.exe /F", tmp_path)
+
+
 def test_denial_remedy_names_the_own_tree_route(tmp_path):
     reason = denied("kill $(pgrep -f pytest)", tmp_path)
     assert "coordinator-invoke proc.stop_own_child" in reason

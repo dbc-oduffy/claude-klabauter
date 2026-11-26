@@ -23,6 +23,8 @@ A frame whose sender is itself a registered peer is answered to nobody, so two p
 ping-pong; the `send` path returns the reply on its own connection instead.
 Windows uses current-user-only named pipes; POSIX uses private Unix sockets.
 """
+from __future__ import annotations  # `--restart` runs under the box's PATH python3, which can be 3.9
+
 import argparse
 import asyncio
 import errno

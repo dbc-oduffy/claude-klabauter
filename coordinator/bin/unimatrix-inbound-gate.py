@@ -98,6 +98,9 @@ def local_target(entries: Any, name: str | None = None, session_id: str | None =
             if isinstance(e, dict) and isinstance(e.get("name"), str):
                 counts[e["name"]] = counts.get(e["name"], 0) + 1
         rows = [e for e in rows if counts[e["name"]] == 1] or rows
+        # An external-vendor leg (agy/grok/codex) is the wrong probe sink: far boxes carry extra mirror rows
+        # for it (2026-11-26: every probe refused "ambiguous" on an agy leg) and a pending leg may not listen.
+        rows.sort(key=lambda e: (e.get("vendor") not in (None, "claude"), bool(e.get("leg_mode"))))
     return (rows[0]["name"], rows[0]["sessionId"]) if rows else None
 
 

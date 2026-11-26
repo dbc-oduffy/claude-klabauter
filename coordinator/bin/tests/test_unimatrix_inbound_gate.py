@@ -189,6 +189,14 @@ def test_the_default_target_prefers_a_session_name_no_other_session_shares():
     assert gate.local_target(dup[:2]) == ("dup", "a")
 
 
+def test_the_default_target_prefers_a_claude_session_over_an_external_vendor_leg():
+    rows = [{"name": "agy-x-on-machine-a", "sessionId": "a", "vendor": "agy", "leg_mode": "pending"},
+            {"name": "grok-y", "sessionId": "b", "vendor": "grok"},
+            {"name": "em-z", "sessionId": "c"}]
+    assert gate.local_target(rows) == ("em-z", "c")
+    assert gate.local_target(rows[:2]) == ("grok-y", "b")
+
+
 def test_the_far_snippet_runs_a_native_launcher_directly(tmp_path):
     import shutil
     bash = shutil.which("bash")
