@@ -325,6 +325,20 @@ def test_queued_ack_with_wait_reply_false_still_reports_queued(env):
     assert out == agy.QUEUED
 
 
+def test_rung_ack_with_wait_reply_false_returns_receipt_carrying_the_ack_msg_id(env):
+    transcript, make = env
+    make({"ok": True, "queued": True, "rung": True, "msg_id": "abc123"})
+    out = asyncio.run(agy.agy_turn("leg.sock", transcript, "ping", timeout=30, interval=30, wait_reply=False))
+    assert out == {"written": True, "msg_id": "abc123"} and out != agy.QUEUED
+
+
+def test_rung_ack_with_wait_reply_awaits_the_transcript_reply(env):
+    transcript, make = env
+    make({"ok": True, "queued": True, "rung": True, "msg_id": "abc123"}, lambda t: append(transcript, row("rung answer")))
+    out = asyncio.run(agy.agy_turn("leg.sock", transcript, "ping", timeout=5, interval=0.02))
+    assert out == "rung answer"
+
+
 @pytest.mark.parametrize("err", [FileNotFoundError(2, "No such file or directory"), ConnectionRefusedError()])
 def test_a_conversation_without_a_leg_gets_an_actionable_refusal(tmp_path, monkeypatch, err):
     def boom(*a, **k):

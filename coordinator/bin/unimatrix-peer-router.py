@@ -214,6 +214,9 @@ def default_legs_dir():
     return _roster().delivery_settings_home() / "unimatrix" / "agy-legs"
 
 
+MAX_TRANSPORT_ORIGINS = 512
+
+
 def leg_record_live(rec) -> bool:
     """True only when the record's leg pid is alive and still the process that stamped `procStart`.
 
@@ -230,9 +233,33 @@ def _leg_process_matches(rec) -> bool:
     """True when the record's pid is alive and still the process that stamped `procStart`; mode is not read."""
     try:
         pid, stamp = int(rec["pid"]), rec.get("procStart")
-        return stamp is not None and _roster().pid_alive(pid) and _roster().proc_start(pid) == stamp
+        if not _roster().pid_alive(pid):
+            return False
+        if stamp is None:
+            return _leg_endpoint_listening(rec)
+        return _roster().proc_start(pid) == stamp
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
+
+
+def _leg_endpoint_listening(rec) -> bool:
+    """True when a POSIX leg record's unix-socket endpoint accepts a connection.
+
+    A leg started before it stamped `procStart` has no stamp to match; a live pid that also holds the
+    recorded listener is that leg (a recycled pid holds no such socket). Windows pipes are never probed.
+    """
+    ep = rec.get("endpoint")
+    if os.name == "nt" or not isinstance(ep, str) or not os.path.isabs(ep):
+        return False
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(0.2)
+    try:
+        s.connect(ep)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
 
 
 def leg_target_live(legs_dir, target):
@@ -247,6 +274,52 @@ def leg_target_live(legs_dir, target):
         return leg_record_live(rec) and _liveness().agy_session_state(target, rec) != "dead"
     except (OSError, ValueError, TypeError):
         return False
+
+
+def leg_target_pending(legs_dir, target) -> bool:
+    """True when `legs_dir` holds a `mode: pending` leg record for `target` with a matching live process and an agy session not read dead."""
+    try:
+        with open(os.path.join(legs_dir, f"{target}.json"), encoding="utf-8") as fh:
+            rec = json.load(fh)
+        return (rec.get("mode") == "pending" and _leg_process_matches(rec)
+                and _liveness().agy_session_state(target, rec) != "dead")
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def sweep_dead_leg_records(legs_dir) -> list:
+    """Unlink each leg record whose leg pid is gone or no longer the process that stamped `procStart`; returns the file names removed.
+
+    A record with no integer pid, or an unreadable one, is left alone. A live pid with no `procStart` is
+    a leg still starting, never swept.
+    """
+    removed = []
+    try:
+        names = sorted(os.listdir(legs_dir))
+    except OSError:
+        return removed
+    roster = _roster()
+    for f in names:
+        if not f.endswith(".json"):
+            continue
+        path = os.path.join(legs_dir, f)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                rec = json.load(fh)
+            pid, stamp = rec.get("pid"), rec.get("procStart")
+            if type(pid) is not int or pid <= 0:
+                continue
+            if roster.pid_alive(pid):
+                try:
+                    if stamp is None or roster.proc_start(pid) == stamp:
+                        continue
+                except OSError:
+                    pass  # a zombie or unreadable pid: not the stamped leg
+            os.unlink(path)
+            removed.append(f)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError):
+            continue
+    return removed
 
 
 def load_leg_peers(legs_dir, taken_names=(), taken_targets=(), pending_out=None) -> list:
@@ -874,7 +947,7 @@ async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=Fa
     if transport:
         reg.data.update(unimatrixTransport=True, vendor="transport")
 
-    async def on_conn(reader, writer):
+    async def on_conn(reader, writer) -> None:
         try:
             raw = await reader.read()
             if not raw.strip():
@@ -927,6 +1000,8 @@ async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=Fa
                         response = {"ok": True}
                     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
                         response = {"ok": False, "error": f"face delivery failed: {exc}"}
+                        if isinstance(exc, (FileNotFoundError, ConnectionRefusedError)):
+                            response["endpoint_missing"] = True
                     writer.write((json.dumps(response) + "\n").encode("utf-8"))
                     await writer.drain()
                     return
@@ -952,11 +1027,37 @@ async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=Fa
     reg.write()
     stop = asyncio.Event()
     _transport().install_stop_handlers(stop)
+    watcher = asyncio.create_task(_watch_owner(owner_pid, owner_start, stop)) if owner_pid and owner_start else None
     try:
         await stop.wait()
     finally:
+        if watcher:
+            watcher.cancel()
         server.close()
         reg.remove()
+
+
+OWNER_WATCH_S = 5.0
+
+
+def _owner_gone(owner_pid, owner_start) -> bool:
+    """True when the owner pid is dead or now belongs to a different process; an unreadable start is not gone."""
+    roster = _roster()
+    if not roster.pid_alive(owner_pid):
+        return True
+    start = roster.proc_start(owner_pid)
+    return start is not None and start != owner_start
+
+
+async def _watch_owner(owner_pid, owner_start, stop) -> None:
+    """Set `stop` once the owning router is gone, so the face leaves through its normal shutdown path."""
+    while not stop.is_set():
+        await asyncio.sleep(OWNER_WATCH_S)
+        try:
+            if await asyncio.to_thread(_owner_gone, owner_pid, owner_start):
+                stop.set()
+        except (OSError, ValueError):
+            continue
 
 
 # ------------------------------------------------------------------ router
@@ -1066,7 +1167,7 @@ class Router:
             return not self.thread_held(peer.get("target"))
         return live is not True
 
-    async def _drop_dead_holders(self):
+    async def _drop_dead_holders(self) -> None:
         """Refresh fixed Codex holders, recovering live faces and stopping dead ones.
 
         The row stays in `self.peers` so discovery still treats its target as taken; peers.json is
@@ -1092,6 +1193,9 @@ class Router:
                 if leg_target_live(self.legs_dir, peer.get("target")):
                     self.dead_holders.discard(name)
                     continue
+                if leg_target_pending(self.legs_dir, peer.get("target")):
+                    await self._demote_to_pending(name)
+                    continue
                 if name in self.dead_holders:
                     continue
                 self.dead_holders.add(name)
@@ -1116,6 +1220,21 @@ class Router:
                 await self._stop_face(name)
             self.log("holder-gone", name)
         await self._retire_superseded_faces()
+
+    async def _demote_to_pending(self, name) -> None:
+        """Hand a peers.json agy row whose leg now runs `pending` to the discovery path.
+
+        A fixed row wins its name and target, so left in `self.peers` it hides the pending leg from
+        `_live_discovered` and the leg gets no face. Dropped here, the next scan lists it pending and
+        spools through a pending face; a leg that turns live again is rediscovered as a live peer.
+        """
+        if name in self.faces:
+            await self._stop_face(name)
+        self.peers.pop(name, None)
+        self.locks.pop(name, None)
+        self.outbox.pop(name, None)
+        self.dead_holders.discard(name)
+        self.log("leg-pending", name)
 
     async def _retire_superseded_faces(self) -> None:
         """Keep one face per Codex holder: the other peers' faces are stopped, or never spawned.
@@ -1164,7 +1283,7 @@ class Router:
                 raise RuntimeError(f"{what} not ready within {self.ready_seconds}s")
             await asyncio.sleep(0.05)
 
-    async def start(self):
+    async def start(self) -> None:
         try:
             _private_dir(self.state_dir)
             if sys.platform != "win32":
@@ -1184,7 +1303,11 @@ class Router:
                                                          "codeDigest": digest})
             self.server = await self._bind_control()
             self.ctl_ino = self._ctl_inode()
+            self._load_transport_origins()
             await asyncio.to_thread(self._reconcile_orphan_faces)
+            if self.legs_dir:
+                for f in await asyncio.to_thread(sweep_dead_leg_records, self.legs_dir):
+                    self.log("leg-record-swept", f)
             await self._drop_dead_holders()
             for name in list(self.peers):
                 if name not in self.dead_holders:
@@ -1631,10 +1754,13 @@ class Router:
             if picked is None and refusal:
                 return {"ok": False, "error": refusal}
             peer = picked or peer
-            if isinstance(peer, str) and peer in self.transport_sources:
+            if isinstance(peer, str) and (peer in self.transport_sources or peer in self.transport_origins):
                 # A transport face is never a delivery target: a reply to it goes to the session it carried.
+                # A face a previous router carried is known only by its persisted origin, resolved live.
                 origin = self.transport_origins.get(peer) or self.transport_sources.get(peer)
-                if not (origin and self.transport_sources.get(peer)):
+                registered = self.transport_sources.get(peer) if peer in self.transport_sources \
+                    else (origin if origin and self.resolve_sender(origin) else None)
+                if not (origin and registered):
                     return {"ok": False, "error": f"{peer} is a transport face, not a session; its origin "
                             f"{origin or 'is unknown'} has no registered session to reply to"}
                 peer = origin
@@ -2069,13 +2195,39 @@ class Router:
             details[name] = {**_roster().session_identity(entry), "status": entry.get("status") or "unknown"}
         return details
 
+    def _transport_origins_path(self) -> str:
+        return os.path.join(self.state_dir, "transport-origins.json")
+
+    def _load_transport_origins(self) -> None:
+        """Re-read the face -> origin map a previous router wrote, so a reply to a face name sent before a restart still finds its origin."""
+        try:
+            with open(self._transport_origins_path(), encoding="utf-8") as fh:
+                saved = json.load(fh)
+        except (OSError, ValueError):
+            return
+        if isinstance(saved, dict):
+            for face, origin in saved.items():
+                if isinstance(face, str) and isinstance(origin, str) and origin:
+                    self.transport_origins.setdefault(face, origin)
+
+    def _save_transport_origins(self) -> None:
+        """Persist the face -> origin map, evicting the oldest entries past MAX_TRANSPORT_ORIGINS."""
+        while len(self.transport_origins) > MAX_TRANSPORT_ORIGINS:
+            del self.transport_origins[next(iter(self.transport_origins))]
+        try:
+            _roster().write_json_atomic(self._transport_origins_path(), dict(self.transport_origins))
+        except OSError as exc:
+            self.log("transport-origins-save-failed", type(exc).__name__)
+
     async def _transport_face(self, source, destination) -> str:
         """Lazily register a genuine transport sender for one source/destination conversation."""
         name = readable_peer_name("unimatrix", source + "\0" + destination, "transport")
         async with self.transport_lock:
             self.transport_sources[name] = source if self.resolve_sender(source) else None
             self.transport_targets[name] = destination
-            self.transport_origins[name] = source
+            if self.transport_origins.get(name) != source:
+                self.transport_origins[name] = source
+                self._save_transport_origins()
             process = self.faces.get(name)
             if process is not None and process.poll() is not None:
                 await self._stop_face(name)
@@ -2086,7 +2238,8 @@ class Router:
                 except BaseException:
                     self.transport_sources.pop(name, None)
                     self.transport_targets.pop(name, None)
-                    self.transport_origins.pop(name, None)
+                    if self.transport_origins.pop(name, None) is not None:
+                        self._save_transport_origins()
                     raise
         return name
 
@@ -2267,7 +2420,8 @@ class Router:
             {"op": "deliver", "endpoint": endpoint, "frame": frame}, 15,
             _roster().authenticated_data(face, b"", self.sessions_dir))
         if not response.get("ok"):
-            raise OSError(response.get("error", "face delivery failed"))
+            raise (FileNotFoundError if response.get("endpoint_missing") else OSError)(
+                response.get("error", "face delivery failed"))
 
     async def _peer_send_to_session(self, peer, to, text):
         """A peer's own addressed send to a Claude session `to`; marks the peer's open turn as answered."""
@@ -2381,11 +2535,12 @@ class Router:
                  and self.external_codex_sendable(r) and not _far_alias_is_stale(r)]
         return twins[0] if len(twins) == 1 else None
 
-    def resolve_sender(self, name, fallback="") -> str:
+    def resolve_sender(self, name, fallback="", exclude=()) -> str:
         """Current messaging endpoint of the live roster session called `name`, else `fallback`.
 
         Re-read on every reply, so a sender that restarted under a new pid/endpoint keeps its
-        name as its address. The router's own faces never match a Claude sender.
+        name as its address. The router's own faces never match a Claude sender. Rows whose
+        endpoint is in `exclude` (one a delivery just found missing) are skipped.
         """
         exact, aliases, owners, far_eps = set(), set(), set(), set()
         rows_by_ep, ep_owners = {}, {}
@@ -2409,7 +2564,7 @@ class Router:
                     or name in self.peers or name in self.transport_sources):
                 continue
             ep, pid = e.get("messagingSocketPath"), e.get("pid")
-            if not ep or not isinstance(pid, int) or not _roster().pid_alive(pid):
+            if not ep or ep in exclude or not isinstance(pid, int) or not _roster().pid_alive(pid):
                 continue
             if not _off_windows() and _transport().is_pipe(ep) and not _transport().endpoint_exists(ep):
                 continue  # a stale row's dead pipe must neither win nor make the live row ambiguous
@@ -2444,6 +2599,10 @@ class Router:
             # is one address, not ambiguity: prefer the bridge mirror, then the exact name.
             matches = {min(matches, key=lambda ep: (not rows_by_ep[ep].get("unimatrixFarName"), ep not in exact, ep))}
         if len(matches) > 1:
+            live = {ep for ep in matches if _transport().endpoint_exists(ep)}
+            if live and len(live) < len(matches):
+                matches = live  # a pre-compact row's dead socket never makes the live row ambiguous
+        if len(matches) > 1:
             named = ", ".join(sorted(f"{rows_by_ep[ep].get('name')}@{ep}" for ep in matches))
             self.last_refusal = f"ambiguous: {len(matches)} live sessions carry this name: {named}"
             return ""  # An exact name never beats a far alias: both are live carriers of the address.
@@ -2476,7 +2635,7 @@ class Router:
             return
         self.log("PENDING-QUEUED" if not not_delivered(reply) else "PENDING-NOT-DELIVERED", peer, "<-", sender_name)
 
-    async def handle_inbound(self, peer, frame):
+    async def handle_inbound(self, peer, frame) -> None:
         sender_ep, sender_name, body = _contract().parse_inbound(frame)
         if is_ack(body) or body.lstrip().lower().startswith("[reply]"):
             self.log("DROPPED-ACK", sender_name, "->", peer)
@@ -2516,13 +2675,30 @@ class Router:
             sender_ep = resolved
         p = self.peers[peer]
         box = _contract().local_box()
-        frame = _contract().build_frame(self.endpoint_of(peer), peer, f"[reply] {peer}: {str(reply).strip()}",
-                                        from_box=box)
-        if far:
-            frame = routable_from(frame, f"{peer}.{box}")
-        frame = _contract().stamp(frame, peer, p["vendor"], p["target"], os.getpid(), from_box=box)
+
+        def reply_frame(far) -> dict:
+            frame = _contract().build_frame(self.endpoint_of(peer), peer, f"[reply] {peer}: {str(reply).strip()}",
+                                            from_box=box)
+            if far:
+                frame = routable_from(frame, f"{peer}.{box}")
+            return _contract().stamp(frame, peer, p["vendor"], p["target"], os.getpid(), from_box=box)
+        frame = reply_frame(far)
         try:
             await self._deliver_as_peer(peer, sender_ep, frame)
+        except FileNotFoundError as e:
+            # The endpoint is gone (the session compacted or restarted onto a new one): ask the live
+            # listing once for the name's current endpoint; no second retry.
+            fresh = self.resolve_sender(sender_name, "", exclude=(sender_ep,))
+            if not fresh:
+                self.log("REPLY-NOT-DELIVERED", peer, "->", sender_name, type(e).__name__, e)
+                return
+            frame = reply_frame(self.last_resolved_far)
+            try:
+                await self._deliver_as_peer(peer, fresh, frame)
+            except Exception as e2:
+                self.log("POST-FAILED", peer, "->", sender_name, type(e2).__name__, e2)
+                return
+            self.log("REPLY-RE-RESOLVED", peer, "->", sender_name)
         except Exception as e:
             self.log("POST-FAILED", peer, "->", sender_name, type(e).__name__, e)
             return
