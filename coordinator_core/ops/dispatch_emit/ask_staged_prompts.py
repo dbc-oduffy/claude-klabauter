@@ -284,3 +284,8 @@ def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
         last = e
     out.append(js[last:])
     return "".join(out)
+
+
+# Public names for cross-module callers (ask_compose, the bytes probe).
+decode_literal = _decode
+literal_runs = _literal_runs

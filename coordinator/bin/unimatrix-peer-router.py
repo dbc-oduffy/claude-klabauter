@@ -177,7 +177,7 @@ _SCRIPT_REF = re.compile(r"unimatrix-[a-z0-9-]+\.py")
 DRAIN_SECONDS = 30
 
 
-def code_digest(root=None):
+def code_digest(root=None) -> str:
     """sha256 over the router's script closure and lib/*.py in `root`, the same bytes the installer digests.
 
     Recorded in router.pid.json at start so an installer can tell a router started on older code from the
@@ -193,6 +193,7 @@ def code_digest(root=None):
         if path.is_file():
             todo.extend(_SCRIPT_REF.findall(path.read_text(encoding="utf-8")))
     names = sorted(seen) + [f"lib/{p.name}" for p in sorted((root / "lib").glob("*.py"))]
+    names += sorted(p.relative_to(root).as_posix() for p in (root / "_unimatrix").rglob("*.py") if "__pycache__" not in p.parts)
     h = hashlib.sha256()
     for name in sorted(names):
         try:

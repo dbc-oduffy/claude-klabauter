@@ -41,6 +41,8 @@ BIN_TEMPLATE_PREFIX = "templates/bin/"
 
 _UNIMATRIX_DIR = "coordinator/bin"
 _UNIMATRIX_PREFIX = "unimatrix-"
+_UNIMATRIX_PKG_PREFIX = "coordinator/bin/_unimatrix/"
+UNIMATRIX_LIB_PREFIX = "coordinator/bin/lib/"
 
 FRESHNESS_RECORD_RELPATH = ("coordinator", "klabauter-freshness.json")
 
@@ -99,8 +101,16 @@ def stale_installs(
     )
 
 
-def installers_for(changed_paths: Iterable[str]) -> tuple[str, ...]:
-    """Installer names to re-run for repo-relative (posix) changed paths, stable order."""
+def installers_for(
+    changed_paths: Iterable[str], vendored_lib: Iterable[str] = ()
+) -> tuple[str, ...]:
+    """Installer names to re-run for repo-relative (posix) changed paths, stable order.
+
+    `vendored_lib` names the `coordinator/bin/lib/<name>` files the installer ships beside the
+    router: they are router code (the router digest covers lib/*.py), so a change to one refreshes
+    and restarts like a router script.
+    """
+    lib_paths = {f"{UNIMATRIX_LIB_PREFIX}{name}" for name in vendored_lib}
     unimatrix = bin_shims = currency = False
     for raw in changed_paths:
         path = str(raw).replace("\\", "/")
@@ -110,6 +120,10 @@ def installers_for(changed_paths: Iterable[str]) -> tuple[str, ...]:
             and pp.name.startswith(_UNIMATRIX_PREFIX)
             and pp.suffix == ".py"
         ):
+            unimatrix = True
+        if path.startswith(_UNIMATRIX_PKG_PREFIX) and pp.suffix == ".py":
+            unimatrix = True
+        if path in lib_paths:
             unimatrix = True
         if path.startswith(BIN_TEMPLATE_PREFIX):
             bin_shims = True
