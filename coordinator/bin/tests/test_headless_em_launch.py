@@ -652,7 +652,15 @@ def test_grok_launch_defaults_auto_with_absolute_path_allow_per_engine_op(platfo
     rc = hel.launch("grok", ["-p", "hi"], which=lambda n: None, environ=env, platform=platform,
                     prepare_only=True, native_executable="grok.exe", session_id="s1")
     argv = json.loads(capsys.readouterr().out)["argv"]
-    assert rc == 0 and argv == ["grok.exe", *_grok_head(platform, env[g.SETTINGS_HOME_KEY]), "-p", "hi"]
+    head = _grok_head(platform, env[g.SETTINGS_HOME_KEY])
+    assert rc == 0 and argv[:len(head) + 1] == ["grok.exe", *head]
+    assert argv[len(head) + 1] == "--prompt-file" and len(argv) == len(head) + 3
+    prompt = Path(argv[-1])
+    try:
+        assert prompt.read_text(encoding="utf-8") == hel.GROK_XS_CARD + "hi"
+    finally:
+        prompt.unlink(missing_ok=True)
+    assert "-p" not in argv
     assert argv[1:3] == ["--permission-mode", "auto"]
     rules = [argv[i + 1] for i, a in enumerate(argv) if a == "--allow"]
     assert len(rules) == len(_GROK_OPS) + 2
@@ -662,6 +670,28 @@ def test_grok_launch_defaults_auto_with_absolute_path_allow_per_engine_op(platfo
         assert Path(prefix).is_absolute() and Path(prefix).name.startswith("coordinator-invoke")
     assert not any("$HOME" in a or "~" in a for a in argv)
     assert not {"--always-approve", "--dangerously-skip-permissions", "--yolo"} & set(argv)
+
+
+def test_grok_prompt_file_keeps_the_sealed_bytes_and_codex_is_not_wrapped(tmp_path: Path, capsys) -> None:
+    sealed = tmp_path / "prompt.txt"
+    sealed.write_text("SEALED-BODY\n", encoding="utf-8")
+    before = sealed.read_bytes()
+    env = {"PATH": "x", g.SETTINGS_HOME_KEY: os.environ[g.SETTINGS_HOME_KEY], "HOME": str(tmp_path)}
+    rc = hel.launch("grok", ["--prompt-file", str(sealed)], which=lambda n: None, environ=env,
+                    platform="linux", prepare_only=True, native_executable="grok", session_id="s-card")
+    argv = json.loads(capsys.readouterr().out)["argv"]
+    assert rc == 0 and sealed.read_bytes() == before
+    wrapped = Path(argv[argv.index("--prompt-file") + 1])
+    assert wrapped != sealed
+    try:
+        assert wrapped.read_text(encoding="utf-8") == hel.GROK_XS_CARD + "SEALED-BODY\n"
+    finally:
+        wrapped.unlink(missing_ok=True)
+    rc = hel.launch("codex", ["exec", "-p", "hi"], which=lambda n: "/bin/codex", environ={"PATH": "x"},
+                    platform="linux", prepare_only=True, session_id="s-codex")
+    codex_argv = json.loads(capsys.readouterr().out)["argv"]
+    assert rc == 0 and codex_argv[codex_argv.index("-p") + 1] == "hi"
+    assert "--prompt-file" not in codex_argv
 
 
 def test_grok_callers_permission_mode_and_allow_are_kept_not_doubled() -> None:
