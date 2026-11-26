@@ -1351,6 +1351,47 @@ def test_transient_codex_peer_departure_emits_no_gone(key) -> None:
     assert emitted == []
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "coordinator-content-repo-codex-machine-a-2454",
+        "box-b:coordinator-content-repo-codex-machine-a-2455",
+        "coordinator-content-repo-agy-machine-a-7",
+        "coordinator-content-repo-grok-machine-a-12",
+    ],
+)
+def test_engine_worker_address_departure_emits_no_gone(key) -> None:
+    (_p, _d, _n, _io), emitted = _gone_poll(
+        prev_parked={key: False},
+        agents=[],
+        prev_names={key: {"name": "w", "last_seen": 1.0, "absent_ticks": 1}},
+    )
+    assert emitted == []
+
+
+@pytest.mark.parametrize("provider", ["codex", "agy", "grok"])
+def test_registry_minted_worker_address_is_transient(provider, tmp_path) -> None:
+    from coordinator_core.session import external_registry
+
+    name = external_registry._allocate_address(tmp_path, str(tmp_path / "Some Repo"), provider=provider)["name"]
+    assert external_registry._valid_address_name(name, provider)
+    assert watch._is_transient_worker_peer(name, "local-box")
+    assert watch._is_transient_worker_peer(f"box-b:{name}", "local-box")
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["3e0f6c1a-1111-4222-8333-444455556666", "claude-klabauter-em", "codex-lead", "coordinator-content-repo-codex-machine-a", "my-codex-box-x", "my-codex-box-0"],
+)
+def test_named_em_departure_still_emits_gone(key) -> None:
+    (_p, _d, _n, _io), emitted = _gone_poll(
+        prev_parked={key: False},
+        agents=[],
+        prev_names={key: {"name": "em", "last_seen": 1.0, "absent_ticks": 1}},
+    )
+    assert len(emitted) == 1 and f"[{key}]" in emitted[0]
+
+
 def test_named_session_departure_still_emits_gone_beside_a_transient_codex_peer() -> None:
     (_p, _d, _n, _io), emitted = _gone_poll(
         prev_parked={"peer-codex-codex-x-1": False, "peer-gone": False},

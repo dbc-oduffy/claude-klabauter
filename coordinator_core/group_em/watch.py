@@ -563,9 +563,17 @@ def _canonical_keys(prior: Optional[Mapping[str, Any]], local_id: str) -> dict[s
 _TRANSIENT_CODEX_PREFIX = "peer-codex-"
 
 
-def _is_transient_codex_peer(key: str, local_id: str) -> bool:
-    """True for a router-minted Codex subprocess peer: never addressable, so its departure is not a GONE event."""
-    return remote_identity.parse_key(key, local_id)[1].startswith(_TRANSIENT_CODEX_PREFIX)
+#: Engine-worker address `<repo>-<codex|agy|grok>-<box>-<n>` (the shape `session.external_registry` mints).
+_ENGINE_WORKER_ADDRESS = re.compile(r"[a-z0-9][a-z0-9-]*-(?:codex|agy|grok)-[a-z0-9][a-z0-9-]*-[1-9][0-9]*")
+
+
+def _is_transient_worker_peer(key: str, local_id: str) -> bool:
+    """True for a short-lived engine worker (router Codex peer or minted codex/agy/grok address): its departure is not a GONE event.
+
+    The roster row the watch reads carries no vendor field, so the marker is the id shape.
+    """
+    session_id = remote_identity.parse_key(key, local_id)[1]
+    return session_id.startswith(_TRANSIENT_CODEX_PREFIX) or _ENGINE_WORKER_ADDRESS.fullmatch(session_id) is not None
 
 
 def _box_of(key: str, local_id: str) -> str:
@@ -1299,7 +1307,7 @@ def poll_once(
     for session_id in gone(prev_parked, cur_parked, held, local_id):
         if session_id in (caller_session_id, group_em_session_id):
             continue
-        if _is_transient_codex_peer(session_id, local_id):
+        if _is_transient_worker_peer(session_id, local_id):
             continue
         prior = (prev_names or {}).get(session_id) or {}
         if prior.get("gone_reported"):

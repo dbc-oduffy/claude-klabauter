@@ -799,6 +799,90 @@ def test_reap_unbacked_agy_faces_drops_a_peer_row_only_when_no_agy_session_is_li
     assert lines == ["reaped orphaned agy peer row agy-both (target both)"]
 
 
+def _pending_face_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rec: dict) -> str:
+    """Settings home with an empty peers.json (a pending leg has no peers row) and one pending leg record; returns the face name."""
+    home = tmp_path / "settings-home"
+    legs = home / "unimatrix" / "agy-legs"
+    legs.mkdir(parents=True)
+    (home / "unimatrix" / "peers.json").write_text("[]")
+    (legs / "conv-pend.json").write_text(json.dumps({"conversation": "conv-pend", "mode": "pending", **rec}))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "brain"))
+    short = hashlib.sha256(b"conv-pend").hexdigest()[:10]
+    return f"agy-repo-{short}-on-aaa-near"
+
+
+def _old_pending_face(name: str) -> dict:
+    return {"vendor": "agy", "unimatrixRouterPid": 1, "procStart": "x", "leg_mode": "pending", "name": name,
+            "startedAt": int(time.time() * 1000) - 10 * 60 * 1000}
+
+
+def test_reap_unbacked_agy_faces_spares_a_pending_face_while_its_pending_leg_is_live(
+        sessions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    me = os.getpid()
+    name = _pending_face_home(tmp_path, monkeypatch, {"pid": me, "procStart": roster.proc_start(me), "agy_pid": me})
+    _put(sessions, "999971.json", pid=999971, **_old_pending_face(name))
+    lines = []
+    roster.reap_unbacked_agy_faces(lines.append)
+    assert [p.name for p in sessions.iterdir()] == ["999971.json"] and lines == []
+
+
+def test_reap_unbacked_agy_faces_reaps_a_pending_face_whose_leg_is_gone_or_not_pending(
+        sessions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    name = _pending_face_home(tmp_path, monkeypatch, {"pid": _DEAD_PID, "procStart": "x", "agy_pid": _DEAD_PID})
+    _put(sessions, "999972.json", pid=999972, **_old_pending_face(name))
+    lines = []
+    roster.reap_unbacked_agy_faces(lines.append)
+    assert list(sessions.iterdir()) == [] and any("reaped unbacked agy face" in line for line in lines)
+    me = os.getpid()
+    legs = tmp_path / "settings-home" / "unimatrix" / "agy-legs"
+    (legs / "conv-pend.json").write_text(json.dumps({"conversation": "conv-pend", "mode": "live", "pid": me,
+                                                     "procStart": roster.proc_start(me), "agy_pid": me}))
+    _put(sessions, "999973.json", pid=999973, **_old_pending_face(name))
+    roster.reap_unbacked_agy_faces(lines.append)
+    assert list(sessions.iterdir()) == []  # a leg that left pending no longer backs the pending face
+
+
+def _far_pending_mirror(roster, **extra) -> dict:
+    """A mirror row as `mirror()` writes it for a far agy face: bridge pid is this process, supervisor is this process."""
+    me = os.getpid()
+    return {"pid": me, "procStart": roster.proc_start(me), "vendor": "agy", "unimatrixVendor": "agy",
+            "name": "agy-repo-abc-on-farbox.farbox", "unimatrixRemote": "farbox", roster.FAR_SOCKET_FIELD: FAR_SOCK, "messagingSocketPath": "/tmp/x.sock",
+            "unimatrixBox": "farbox", **roster.supervisor_fields(), **roster.far_seen_fields(), **extra}
+
+
+def test_a_far_mirror_of_a_pending_face_is_listed_and_projects_leg_mode_pending(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
+    roster = load("roster")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(sessions.parent / "settings-home"))
+    pending = _far_pending_mirror(roster, leg_mode="pending")
+    live = _far_pending_mirror(roster, name="agy-live-on-farbox.farbox")
+    assert roster.listed_row(pending, [pending, live]) is True
+    assert roster.listed_row(live, [pending, live]) is True
+    assert roster.session_identity(pending)["leg_mode"] == "pending" and "leg_mode" not in roster.session_identity(live)
+
+
+def test_mirror_carries_a_far_faces_pending_leg_mode_and_a_refresh_follows_its_promotion(
+        sessions, monkeypatch: pytest.MonkeyPatch) -> None:
+    roster = load("roster")
+    cfg, entry = _mirror_one(roster, sessions, monkeypatch, "farbox",
+                             {"vendor": "agy", "leg_mode": "pending", "name": "agy-repo-abc-on-farbox"})
+    assert entry["leg_mode"] == "pending" and entry["vendor"] == "agy"
+    assert roster.session_identity({"vendor": "agy", "leg_mode": "pending"}, "farbox")["leg_mode"] == "pending"
+    assert "leg_mode" not in roster.session_identity({"vendor": "agy", "leg_mode": "live"}, "farbox")
+    live_row = {"entry": {"pid": 7, "name": "agy-repo-abc-on-farbox", "vendor": "agy", "messagingSocketPath": FAR_SOCK}}
+    roster.rename_live_mirror(31339, FAR_SOCK, live_row, cfg, lambda m: None, [])
+    assert "leg_mode" not in json.loads((sessions / "31339.json").read_text())
+    pend_row = {"entry": {**live_row["entry"], "leg_mode": "pending"}}
+    roster.rename_live_mirror(31339, FAR_SOCK, pend_row, cfg, lambda m: None, [])
+    assert json.loads((sessions / "31339.json").read_text())["leg_mode"] == "pending"
+
+
 def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid: int = 31339):
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "spawn", lambda cmd: FakeProc(pid))

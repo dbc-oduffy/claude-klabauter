@@ -3577,6 +3577,11 @@ def test_refresh_rewritten_stat_failure_never_ends_the_round(tmp_path, capsys, m
 
     monkeypatch.setattr(index_write, "_lock_held_open", lambda p: True)
     repo = _init_head_repo(tmp_path, {"same.md": "x\n"})
+    # `write_text` emits CRLF on Windows; pin LF bytes so the refresh reaches the lock on every host.
+    _git_head(repo, "config", "core.autocrlf", "false")
+    (repo / "same.md").write_bytes(b"x\n")
+    _git_head(repo, "add", "same.md")
+    _git_head(repo, "commit", "-q", "--amend", "--no-edit")
     os.utime(repo / "same.md", (1_000_000_000, 1_000_000_000))
     index_before = (repo / ".git" / "index").read_bytes()
     (repo / ".git" / "index.lock").write_bytes(b"")

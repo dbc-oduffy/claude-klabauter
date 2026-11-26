@@ -722,6 +722,74 @@ def test_a_pending_leg_that_goes_live_leaves_the_pending_map_and_joins_the_peers
     run(go())
 
 
+def _face_entries(box, name):
+    return [e for e in (json.loads(p.read_text()) for p in (box / "sessions").glob("*.json")) if e.get("name") == name]
+
+
+def test_a_pending_leg_has_a_face_row_the_mirror_exports_until_it_goes_live_or_gone(box, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(box))
+    spec = importlib.util.spec_from_file_location("unimatrix_mirror_all_c0", BIN / "unimatrix-mirror-all.py")
+    mirror_all = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mirror_all)
+
+    async def go():
+        legs = box / "legs"
+        write_leg(legs, "conv-p", mode="pending")
+        r = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters([]), legs_dir=legs)
+        await r.start()
+        try:
+            name = pr.readable_peer_name("agy", "conv-p")
+            (entry,) = _face_entries(box, name)
+            assert entry["vendor"] == "agy" and entry["leg_mode"] == "pending"
+            assert entry["messagingSocketPath"] == r.endpoint_of(name) and entry["pid"] != os.getpid()
+            assert name not in r.peers and name in r.pending_legs and name in r.pending_faces
+            assert name in mirror_all.live_sessions(set())
+            reachable, rows = r.roster_rows("cli", {})
+            assert reachable.count(name) == 1 and [x["name"] for x in rows].count(name) == 1
+            assert [x for x in rows if x["name"] == name][0]["leg_mode"] == "pending"
+
+            write_leg(legs, "conv-p", mode="live")  # promoted: the pending face yields its name and endpoint
+            await r.refresh_discovered()
+            (entry,) = _face_entries(box, name)
+            assert name in r.peers and not r.pending_faces and "leg_mode" not in entry
+
+            write_leg(legs, "conv-q", mode="pending")
+            await r.refresh_discovered()
+            other = pr.readable_peer_name("agy", "conv-q")
+            assert len(_face_entries(box, other)) == 1
+            write_leg(legs, "conv-q", pid=DEAD_AGY_PID, mode="pending")  # the leg is gone: its face retires
+            await r.refresh_discovered()
+            assert _face_entries(box, other) == [] and other not in r.faces
+        finally:
+            await r.stop()
+    run(go())
+
+
+def test_a_frame_at_a_pending_face_spools_through_the_leg_with_deliver_only(box):
+    seen = []
+
+    async def agy(peer, text):
+        seen.append((peer["name"], peer.get("deliver_only"), text))
+        return "[unimatrix-peer-agy] queued: the agy leg is not live; the message is spooled"
+
+    async def go():
+        legs = box / "legs"
+        write_leg(legs, "conv-p", mode="pending")
+        r = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters={**echo_adapters([]), "agy": agy}, legs_dir=legs)
+        await r.start()
+        try:
+            name = pr.readable_peer_name("agy", "conv-p")
+            post_frame(r.endpoint_of(name), pr._contract().build_frame(str(box / "far.sock"), "far-claude", "hello pending"))
+            await until(lambda: seen)
+            assert seen[0][:2] == (name, True) and "far-claude" in seen[0][2] and "hello pending" in seen[0][2]
+            assert name not in r.peers  # no live turn adapter path was opened for it
+        finally:
+            await r.stop()
+    run(go())
+
+
 @portable
 def test_agy_lock_peers_exist_only_while_the_presence_lock_is_held(tmp_path):
     d = tmp_path / "presence"
@@ -1416,6 +1484,36 @@ def test_transport_send_to_an_unknown_name_is_refused_not_routed_elsewhere(dirs,
     r, sent, _ = _transport_router(dirs, monkeypatch)
     resp = run(r._dispatch({"op": "send", "as": "cli", "to": "nobody", "text": "hello"}))
     assert resp["ok"] is False and "reached" not in resp and sent == []
+
+
+@portable
+def test_a_reply_to_a_transport_face_name_resolves_to_its_origin_session(dirs, monkeypatch):
+    r, sent, em_sock = _transport_router(dirs, monkeypatch)
+    routed = []
+
+    async def via_transport(sender, to, text):
+        routed.append((sender, to))
+        return {"ok": True, "written": True}
+    monkeypatch.setattr(r, "_transport_send_to_session", via_transport)
+    resp = run(r._dispatch({"op": "send", "as": "other", "to": "t", "text": "reply"}))
+    assert resp["ok"] is True and routed == [("other", "em")], (resp, routed)
+
+
+@portable
+def test_a_transport_face_whose_origin_has_no_registered_session_is_refused_naming_the_origin(dirs, monkeypatch):
+    r, sent, _ = _transport_router(dirs, monkeypatch)
+    r.transport_sources["u"], r.transport_origins["u"] = None, "cli"
+    resp = run(r._dispatch({"op": "send", "as": "other", "to": "u", "text": "reply"}))
+    assert resp["ok"] is False and "cli" in resp["error"] and "transport face" in resp["error"] and sent == []
+
+
+@portable
+def test_a_transport_face_is_never_a_delivery_target(dirs, monkeypatch):
+    r, sent, em_sock = _transport_router(dirs, monkeypatch)
+    monkeypatch.setattr(r, "_transport_face", lambda source, destination: asyncio.sleep(0, "transport-x"))
+    resp = run(r._dispatch({"op": "send", "as": "other", "to": "t", "text": "reply"}))
+    assert resp.get("ok") is True and sent and all(ep == em_sock for ep, _ in sent), (resp, sent)
+    assert r.endpoint_of("t") not in [ep for ep, _ in sent], sent
 
 
 @portable
