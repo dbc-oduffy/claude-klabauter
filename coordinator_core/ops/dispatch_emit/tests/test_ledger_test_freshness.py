@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -221,3 +222,70 @@ def test_halt_stamp_reads_the_record_dirs_manifest_for_the_own_diff_mtime_check(
     assert tlf.halt_stamp(run_dir)["stale"] is False
     _touch(tmp_path / "a.py", LEG + timedelta(minutes=1))
     assert tlf.halt_stamp(run_dir)["stale"] is True
+
+
+_JUDGE_PLAN = """---
+title: "plan"
+---
+
+## Tasks
+
+```yaml plan-tasks
+- id: C1
+  title: the work
+  writes:
+    - a.py
+  register_rows: ["R1"]
+  disposition: open
+```
+"""
+
+
+def _judge_relayed(tmp_path, ran):
+    """requirements_ledger.judge over a met verdict row as the emitted workflow relays it to the commit stage."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    ledger = rl.Ledger(
+        items=(rl.Item("R1", "text R1", "pm", "2026-11-16T00:00:00Z", anchor="pm_verbatims"),), all_of_pm_ask=False,
+    )
+    row = {"id": "R1", "status": "met", "evidence": "verified", "essential": True, "wired": False, TESTS_RAN_AT_KEY: ran}
+    return rl.judge(ledger, {"items": [row]}, repo_root=tmp_path, plan_text=_JUDGE_PLAN)
+
+
+def test_judge_credits_a_relayed_item_stamp_after_the_last_write_without_a_leg(tmp_path):
+    _touch(tmp_path / "a.py")
+    out = _judge_relayed(tmp_path, (EDIT + timedelta(minutes=1)).isoformat())
+    assert out["pass"] is True and out["failures"] == []
+
+
+def test_judge_refuses_a_relayed_item_stamp_before_the_last_write(tmp_path):
+    _touch(tmp_path / "a.py")
+    out = _judge_relayed(tmp_path, (EDIT - timedelta(minutes=1)).isoformat())
+    assert not out["pass"] and [f["reason"].startswith(STALE_TESTS_REASON) for f in out["failures"]] == [True]
+
+
+def test_the_emitted_verdict_relay_forwards_the_items_tests_ran_at():
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    fragment = ask_compose._tests_ran_at_relay_js()
+    assert fragment == f"...(i.{TESTS_RAN_AT_KEY} ? {{ {TESTS_RAN_AT_KEY}: i.{TESTS_RAN_AT_KEY} }} : {{}})"
+    source = Path(ask_compose.__file__).read_text(encoding="utf-8")
+    assert '{_tests_ran_at_relay_js()}, "' in source
+
+
+@pytest.mark.parametrize("red", ({"failing": ["t.py::test_x"]}, {"status_after": "fail"}, {"status": "error"}))
+def test_a_leg_that_recorded_itself_red_is_not_credited_as_a_stamp(tmp_path, red):
+    _touch(tmp_path / "a.py")
+    _record(tmp_path)
+    leg = tmp_path / RECORD_DIR_ROOT / RUN / "test-leg.json"
+    leg.write_text(json.dumps({"measured_at": LEG.isoformat(), **red}), encoding="utf-8")
+    reason = stale_tests_refusal(tmp_path, ["a.py"], {}, RUN)
+    assert reason is not None and reason.startswith(STALE_TESTS_REASON)
+
+
+def test_a_green_leg_record_is_still_credited(tmp_path):
+    _touch(tmp_path / "a.py")
+    _record(tmp_path)
+    leg = tmp_path / RECORD_DIR_ROOT / RUN / "test-leg.json"
+    leg.write_text(json.dumps({"measured_at": LEG.isoformat(), "status_after": "pass", "failing": []}), encoding="utf-8")
+    assert stale_tests_refusal(tmp_path, ["a.py"], {}, RUN) is None

@@ -379,6 +379,11 @@ SKILL_WEIGHT_HEADROOM_CLAUSE = (
 _REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration", INTEGRATION_NOT_RUN_VAR, "_reviewReverify", "_reviewReverifyP")
 
 
+def _tests_ran_at_relay_js() -> str:
+    """JS spread that forwards a ledger item's `tests_ran_at` stamp into the relayed verdict."""
+    return f"...(i.{TESTS_RAN_AT_KEY} ? {{ {TESTS_RAN_AT_KEY}: i.{TESTS_RAN_AT_KEY} }} : {{}})"
+
+
 class AskComposeRefused(ValueError):
     """The ask cannot be composed into a script; the message names the cause."""
 
@@ -8289,6 +8294,7 @@ def compose_ask_script(
         "...(i.met_by ? { met_by: i.met_by } : {}), "
         f"...(i.{EVIDENCE_KEY} ? {{ {EVIDENCE_KEY}: i.{EVIDENCE_KEY} }} : {{}}), "
         f"...(i.{DEPARTURE_REASON_KEY} ? {{ {DEPARTURE_REASON_KEY}: i.{DEPARTURE_REASON_KEY} }} : {{}}), "
+        f"{_tests_ran_at_relay_js()}, "
         "...(i.root_read != null ? { root_read: i.root_read } : {}), "
         "...(i.originals_read != null ? { originals_read: i.originals_read } : {}), "
         "...(i.capture_harvested_at ? { capture_harvested_at: i.capture_harvested_at } : {}), "

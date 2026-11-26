@@ -32,6 +32,7 @@ _ROUND_STEPS = [
     "inverse_drift",
     "parse",
     "step3_gate",
+    "commit_op",
     "commit",
     "engine_import_gate",
     "push",
@@ -138,9 +139,9 @@ def test_publish_row_reports_git_materialize_wall_seconds(monkeypatch, tmp_path,
     assert re.search(r"^  \[timing\] t: run_pre_sync_gates: git_materialize: \d+\.\d{3}s$", out, re.MULTILINE)
 
 
-def test_default_round_covers_every_named_phase_with_wall_seconds(_stubbed, tmp_path, monkeypatch, capsys):
-    """The round-owned phases (scan, commit, push) each emit a step line; commit-clone refresh and
-    git materialize are asserted by their own tests, and sync/compare is not covered here."""
+def test_default_round_emits_scan_commit_and_push_step_lines(_stubbed, tmp_path, monkeypatch, capsys):
+    """Only the round-owned phases (scan, commit, push) are asserted here; commit-clone refresh and
+    git materialize have their own tests, and sync/compare has none."""
     from pathlib import Path as _Path
 
     _stubbed._install_commit_pipeline_stub(monkeypatch)
@@ -150,6 +151,34 @@ def test_default_round_covers_every_named_phase_with_wall_seconds(_stubbed, tmp_
     steps = {m["step"]: float(m["wall"]) for m in _step_lines(capsys.readouterr().err)}
     for phase, step in _SIX_PHASE_ROUND_STEPS.items():
         assert step in steps, phase
+
+
+def test_commit_and_push_lines_carry_wall_cpu_and_spawns_and_the_commit_op_nests_in_commit(
+    _stubbed, tmp_path, monkeypatch, capsys
+):
+    """`commit_op` is the op's own work, reported beside the enclosing `commit` and never summed into it."""
+    from pathlib import Path as _Path
+
+    _stubbed._install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(_Path, "exists", lambda self: True)
+    _stubbed._run_round(tmp_path, monkeypatch)
+
+    lines = {m["step"]: m for m in _step_lines(capsys.readouterr().err)}
+    for step in ("commit", "commit_op", "push"):
+        assert lines[step]["spawns"] != "" and lines[step]["cpu_total"] != "", step
+    assert float(lines["commit_op"]["wall"]) <= float(lines["commit"]["wall"])
+
+
+def test_a_nested_sub_step_never_closes_the_open_step_or_enters_the_books(_stubbed, capsys):
+    mod = _stubbed._mod
+    timer = mod._RoundTimer("alpha")
+    timer.begin("outer")
+    with timer.sub("inner"):
+        pass
+    assert timer._open is not None and timer._open[0] == "outer"
+    assert timer._parts_spawns == 0 and timer._parts_cpu == 0.0
+    timer.close()
+    assert [m["step"] for m in _step_lines(capsys.readouterr().err)] == ["inner", "outer", "total"]
 
 
 def test_total_is_followed_by_the_unattributed_remainder(_stubbed, tmp_path, monkeypatch, capsys):

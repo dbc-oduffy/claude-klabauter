@@ -424,6 +424,14 @@ def write_leg(legs, conv, pid=None, proc_start="stamp", **extra):
     (legs / f"{conv}.json").write_text(json.dumps(rec))
 
 
+def _leg_listeners_exist(box, monkeypatch, *convs):
+    """POSIX readiness of an agy peer is `os.path.exists(leg_endpoint(target))`: point the endpoint at `box` and create it for `convs`."""
+    m = pr._sibling("unimatrix-peer-agy.py", "unimatrix_peer_agy_ready")
+    monkeypatch.setattr(m, "leg_endpoint", lambda conv, platform=None: str(box / f"agyleg-{conv}"))
+    for conv in convs:
+        (box / f"agyleg-{conv}").touch()
+
+
 @portable
 def test_leg_with_live_pid_and_mismatched_proc_start_is_skipped(tmp_path):
     write_leg(tmp_path, "conv-reused", proc_start="not-this-process-start")
@@ -609,6 +617,7 @@ def test_list_reports_a_pending_agy_leg_pending_a_live_one_ready_and_a_send_answ
         write_leg(legs, "conv-pend", mode="pending")
         write_leg(legs, "conv-live", mode="live")
         write_leg(legs, "conv-gone", pid=DEAD_AGY_PID, mode="pending")
+        _leg_listeners_exist(box, monkeypatch, "conv-live")
         r = pr.Router(PEERS[:1], sessions_dir=box / "sessions", state_dir=box / "state",
                       endpoint_dir=box / "eps", adapters={**echo_adapters(), "agy": agy}, legs_dir=legs)
         await r.start()
@@ -790,9 +799,10 @@ def test_a_frame_at_a_pending_face_spools_through_the_leg_with_deliver_only(box)
     run(go())
 
 
-def test_router_restart_re_registers_pending_and_live_legs_that_peers_json_rows_name_and_sweeps_a_dead_record(box):
+def test_router_restart_re_registers_pending_and_live_legs_that_peers_json_rows_name_and_sweeps_a_dead_record(box, monkeypatch):
     async def go():
         legs = box / "legs"
+        _leg_listeners_exist(box, monkeypatch, "conv-live")
         write_leg(legs, "conv-pend", mode="pending")
         write_leg(legs, "conv-live", mode="live")
         write_leg(legs, "conv-dead", pid=DEAD_AGY_PID, agy_pid=DEAD_AGY_PID, mode="live")
@@ -810,7 +820,7 @@ def test_router_restart_re_registers_pending_and_live_legs_that_peers_json_rows_
             assert entry["vendor"] == "agy" and entry["leg_mode"] == "pending"
             (entry,) = _face_entries(box, live)
             assert live in r.peers and live in r.faces and "leg_mode" not in entry
-            reachable, rows = r.roster_rows("cli", {})
+            reachable, rows = r.roster_rows("cli")
             assert pend in reachable and live in reachable
             assert [x for x in rows if x["name"] == pend][0]["leg_mode"] == "pending"
             assert "agy-session-dead" in r.dead_holders and _face_entries(box, "agy-session-dead") == []
@@ -880,7 +890,13 @@ def test_unstamped_pending_leg_holding_its_listener_gets_a_pending_face_on_route
         srv = socket.socket(socket.AF_UNIX)
         srv.bind(sock_path)
         srv.listen(4)
-        threading.Thread(target=lambda: [c.close() for c in iter(lambda: srv.accept()[0], None)], daemon=True).start()
+        def drain():
+            while True:
+                try:
+                    srv.accept()[0].close()
+                except OSError:  # srv closed under accept(): macOS raises ECONNABORTED
+                    return
+        threading.Thread(target=drain, daemon=True).start()
         write_leg(legs, "conv-old", proc_start=None, mode="pending", endpoint=sock_path)
         write_leg(legs, "conv-nosock", proc_start=None, mode="pending", endpoint=sock_path + ".gone")
         fixed = [{"name": "agy-session-old", "vendor": "agy", "target": "conv-old"}]
@@ -1882,8 +1898,13 @@ def test_reachable_is_ready_peers_plus_sessions_with_an_existing_endpoint(box):
 
 
 def _mirror_row(box, file, name, sock_path, **extra):
+    """A bridge mirror (far-socket or remote field) is listed only with a fresh far-seen stamp."""
+    seen = {"unimatrixFarSeen": int(time.time() * 1000)} if extra.get("macSocketPath") or extra.get("unimatrixRemote") else {}
+    if extra.get("macSocketPath"):
+        # A roster-made mirror names its live supervisor, else `mirror_orphaned` hides it from every listing.
+        seen.update(unimatrixRosterPid=os.getpid(), unimatrixRosterProcStart=pr._roster().proc_start(os.getpid()))
     (box / "sessions" / f"{file}.json").write_text(json.dumps(
-        {"name": name, "pid": os.getpid(), "messagingSocketPath": sock_path, "startedAt": 1, **extra}))
+        {"name": name, "pid": os.getpid(), "messagingSocketPath": sock_path, "startedAt": 1, **seen, **extra}))
 
 
 def test_a_relay_pushed_mirror_with_no_bridge_is_listed_mirror_only_and_a_bridged_one_is_not(box):

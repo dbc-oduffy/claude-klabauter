@@ -15,6 +15,7 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 TESTS_RAN_AT_KEY = "tests_ran_at"
 STALE_TESTS_REASON = "met without a test run after the last edit of its writes"
+_RED_STATUSES = ("fail", "error")
 
 
 def _newest_under(root: Path) -> Optional[Tuple[float, str]]:
@@ -104,10 +105,13 @@ def _files_newer(repo_root: Path, paths: Sequence[str], after: float) -> list[st
 
 
 def _leg_measured_at(repo_root: Path, run_id: Optional[str]) -> Optional[datetime]:
-    """The run's own test-leg `measured_at` (UTC), None when the run has no leg record or no usable stamp."""
+    """The run's own test-leg `measured_at` (UTC), None when the run has no leg record, no usable stamp, or a leg
+    that recorded itself red: the leg writer stamps every leg, so a stamp alone never vouches for a failing run."""
     from coordinator_core.ops.dispatch_emit import landing_integrity, test_leg_freshness
 
     record = landing_integrity.test_leg_record(Path(repo_root), run_id)
+    if record and (record.get("failing") or record.get("status_after", record.get("status")) in _RED_STATUSES):
+        return None
     return _parse_aware(test_leg_freshness.leg_stamp(record)["measured_at"])
 
 

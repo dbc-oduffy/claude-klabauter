@@ -51,20 +51,24 @@ def _pipe_roundtrip(leg_sock, text):
         return json.loads(pipe.readline() or b'{"ok":false,"body":"leg closed"}')
 
 
-def to_leg(leg_sock, text, timeout=40):
+def to_leg(leg_sock, text, timeout=40) -> dict:
     """Send one JSON line to the leg and return its one-line JSON answer."""
     if sys.platform == "win32" and str(leg_sock).startswith("\\\\"):
         box = {}
 
-        def run():
+        def run() -> None:
             try:
                 box["r"] = _pipe_roundtrip(leg_sock, text)
+            except FileNotFoundError as e:
+                box["gone"] = e
             except Exception as e:
                 box["r"] = {"ok": False, "body": f"leg error: {e}"}
 
         t = threading.Thread(target=run, daemon=True)
         t.start()
         t.join(timeout)
+        if "gone" in box:
+            raise box["gone"]  # same contract as the unix branch: agy_turn answers NO_LEG
         return box.get("r", {"ok": False, "body": "leg timed out"})
     s = socket.socket(socket.AF_UNIX)
     s.settimeout(timeout)
@@ -110,9 +114,11 @@ async def agy_turn(leg_sock, tpath, text, timeout=600, interval=1.0, sender=None
         return NO_LEG
     if not ack.get("ok"):
         return f"[unimatrix-peer-agy] delivery failed: {ack}"
-    if ack.get("queued"):
+    if ack.get("queued") and not ack.get("rung"):
         return QUEUED
     if not wait_reply:
+        if ack.get("rung") and ack.get("msg_id"):
+            return {"written": True, "msg_id": ack["msg_id"]}
         return {"written": True, "msg_id": str(uuid.uuid4())}
     return await await_reply(tpath, baseline, timeout, interval)
 

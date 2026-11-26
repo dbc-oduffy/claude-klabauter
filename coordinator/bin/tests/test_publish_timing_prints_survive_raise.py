@@ -118,20 +118,63 @@ def test_allowlist_span_prints_when_the_build_raises(monkeypatch, tmp_path):
     assert "[timing] t: run_pre_sync_gates: allowlist " in _gates(monkeypatch, tmp_path).getvalue()
 
 
-def test_git_archive_span_prints_when_the_spawn_raises(monkeypatch, tmp_path, capsys):
+def _stub_listing(monkeypatch) -> None:
     monkeypatch.setattr(publish, "_required_pathspec_for_toplevel", lambda toplevel, sha=None: ())
+    monkeypatch.setattr(publish, "_tracked_paths_at_sha", lambda toplevel, sha: {"f.txt"})
+
+
+def test_read_tree_span_prints_when_the_spawn_raises(monkeypatch, tmp_path, capsys):
+    _stub_listing(monkeypatch)
     monkeypatch.setattr(publish.subprocess, "run", _raise)
     with pytest.raises(_Boom):
         publish._extract_git_archive(tmp_path, "SHA")
-    assert "[timing] _extract_git_archive: git archive: " in capsys.readouterr().out
+    assert "[timing] _extract_git_archive: read-tree: " in capsys.readouterr().out
 
 
-def test_extractall_span_prints_when_the_archive_is_unreadable(monkeypatch, tmp_path, capsys):
-    """The stubbed `git archive` succeeds without writing, so the empty temp archive makes `tarfile.open` raise."""
-    monkeypatch.setattr(publish, "_required_pathspec_for_toplevel", lambda toplevel, sha=None: ())
-    monkeypatch.setattr(publish.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
-    with pytest.raises(publish.tarfile.TarError):
+def test_checkout_index_span_prints_when_the_checkout_fails(monkeypatch, tmp_path, capsys):
+    """The stubbed `read-tree` succeeds, the stubbed `checkout-index` exits non-zero."""
+    _stub_listing(monkeypatch)
+    monkeypatch.setattr(
+        publish.subprocess, "run",
+        lambda cmd, **k: subprocess.CompletedProcess(cmd, 1 if "checkout-index" in cmd else 0, "", b"boom" if "checkout-index" in cmd else ""),
+    )
+    with pytest.raises(publish.GitMaterializeError, match="boom"):
         publish._extract_git_archive(tmp_path, "SHA")
     out = capsys.readouterr().out
-    assert "[timing] _extract_git_archive: git archive: " in out
-    assert "[timing] _extract_git_archive: extractall: " in out
+    assert "[timing] _extract_git_archive: read-tree: " in out
+    assert "[timing] _extract_git_archive: checkout-index: " in out
+
+
+def test_a_phase_that_raises_still_lands_in_the_summary_with_total_cost_fields():
+    sink: list = []
+    with pytest.raises(_Boom):
+        with publish._time_phase(sink, "row", "boom_phase"):
+            raise _Boom("injected")
+    sink.append(("row", "REFUSED: legacy four-field row", 0.0, 0.0))
+    out = io.StringIO()
+    publish._print_round_timing_summary(sink, 0.0, out=out)
+    lines = out.getvalue().splitlines()
+    phase = next(ln for ln in lines if "row: boom_phase:" in ln)
+    assert " cpu_total=" in phase and " spawns=" in phase and " files=" in phase and " engine=" in phase
+    legacy = next(ln for ln in lines if "REFUSED: legacy" in ln)
+    assert "cpu_total=" not in legacy
+    assert any("round total:" in ln and "cpu_total=" in ln for ln in lines)
+    assert any("round: unattributed cpu_total=" in ln for ln in lines)
+
+
+@pytest.mark.parametrize("phase", ["dispatch_mirror_like", "dispatch_percolate_post_rsync"])
+def test_klabauter_phase_lines_report_wall_cpu_and_spawns(phase):
+    sink: list = []
+    with publish._time_phase(sink, "row", phase):
+        pass
+    out = io.StringIO()
+    publish._print_round_timing_summary(sink, 0.0, out=out)
+    line = next(ln for ln in out.getvalue().splitlines() if f"row: {phase}:" in ln)
+    assert "s wall / " in line and "s cpu" in line and " spawns=" in line and " cpu_total=" in line
+
+
+@pytest.mark.parametrize("phase", ["dispatch_mirror_like", "dispatch_percolate_post_rsync"])
+def test_the_row_loop_times_each_klabauter_phase_into_the_sink(phase):
+    """The wiring pin: the call the row loop makes sits inside a `_time_phase` of the same name."""
+    src = (_BIN_DIR / "publish.py").read_text(encoding="utf-8")
+    assert f'with _time_phase(timing_sink, target.name, "{phase}"):' in src
