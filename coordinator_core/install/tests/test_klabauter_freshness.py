@@ -54,6 +54,17 @@ def test_installers_for_map():
     ) == (kf.INSTALLER_UNIMATRIX, kf.INSTALLER_BIN_SHIMS, kf.INSTALLER_CURRENCY_CACHE)
 
 
+def test_installers_for_unimatrix_package_and_vendored_lib():
+    agy = "coordinator/bin/_unimatrix/adapters/agy.py"
+    assert kf.installers_for([agy]) == (kf.INSTALLER_UNIMATRIX, kf.INSTALLER_CURRENCY_CACHE)
+    assert kf.INSTALLER_UNIMATRIX not in kf.installers_for(["coordinator/bin/_unimatrix/README.md"])
+    mux = "coordinator/bin/lib/unimatrix_box_mux.py"
+    assert kf.INSTALLER_UNIMATRIX in kf.installers_for([mux], ["unimatrix_box_mux.py"])
+    # a lib file the installer does not ship is not router code
+    assert kf.INSTALLER_UNIMATRIX not in kf.installers_for([mux], ["other.py"])
+    assert kf.INSTALLER_UNIMATRIX not in kf.installers_for([mux])
+
+
 def test_engine_touching_paths_match_skew():
     assert kf.ENGINE_TOUCHING_PATHS == skew._ENGINE_TOUCHING_PATHS
 

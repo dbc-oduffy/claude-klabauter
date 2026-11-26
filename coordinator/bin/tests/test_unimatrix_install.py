@@ -4390,6 +4390,23 @@ def test_router_code_digest_equals_the_installers_closure_digest_and_tracks_lib(
     assert router.code_digest(tmp_path) == ui.router_closure_digest(tmp_path)
 
 
+def test_router_digest_covers_the_unimatrix_package_in_both_implementations(tmp_path):
+    router = _router_module()
+    (tmp_path / ui.ROUTER_SCRIPT).write_text("# r\n", encoding="utf-8")
+    agy = tmp_path / "_unimatrix" / "adapters" / "agy.py"
+    agy.parent.mkdir(parents=True)
+    agy.write_text("# a\n", encoding="utf-8")
+    first = ui.router_closure_digest(tmp_path)
+    assert router.code_digest(tmp_path) == first
+    agy.write_text("# b\n", encoding="utf-8")
+    second = ui.router_closure_digest(tmp_path)
+    assert second != first and router.code_digest(tmp_path) == second
+    cache = tmp_path / "_unimatrix" / "__pycache__"
+    cache.mkdir()
+    (cache / "junk.py").write_text("# c\n", encoding="utf-8")
+    assert ui.router_closure_digest(tmp_path) == second and router.code_digest(tmp_path) == second
+
+
 _REAL_PIN_VALUE = ui._pin_value
 
 

@@ -37,6 +37,7 @@ class FreshnessResult:
     installers_run: list = field(default_factory=list)
     installer_errors: dict = field(default_factory=dict)
     stale_installs: list = field(default_factory=list)
+    router: Optional[dict] = None  # restart result {"stopped", "old_pid", "new_pid"}; None when no restart ran
     surfaced: bool = False
     fetch_error: str = ""
 
@@ -178,15 +179,43 @@ def unimatrix_stale(checkout: Path, settings_home: Path) -> tuple:
         )
     except Exception:
         return ()
+    wanted += [
+        p.relative_to(src).as_posix()
+        for p in sorted((src / "_unimatrix").rglob("*.py"))
+        if "__pycache__" not in p.parts
+    ]
+    wanted += [f"lib/{n}" for n in module.VENDORED_LIB if (src / "lib" / n).is_file()]
     source = {n: d for n in wanted if (d := _digest(src / n)) is not None}
     installed = {n: _digest(dest / n) for n in source}
     return kf.stale_installs(source, installed)
 
 
-def _run_unimatrix(checkout: Path, settings_home: Path, engine_root: Optional[Path]) -> None:
+def _router_stale(checkout: Path, settings_home: Path) -> bool:
+    """True when a live installed router runs code other than the installed closure."""
+    dest = Path(settings_home) / UNIMATRIX_DEST_DIRNAME
+    if not dest.is_dir():
+        return False
+    try:
+        module = _load_unimatrix_installer(checkout)
+        return bool(module.router_runs_stale_code(dest) and module.router_is_live(dest))
+    except Exception:
+        return False
+
+
+def _vendored_lib(checkout: Path) -> tuple:
+    try:
+        return tuple(_load_unimatrix_installer(checkout).VENDORED_LIB)
+    except Exception:
+        return ()
+
+
+def _run_unimatrix(checkout: Path, settings_home: Path, engine_root: Optional[Path]) -> dict:
+    """Refresh the installed copy and restart a live router on other code: {"copied", "router"}."""
     module = _load_unimatrix_installer(checkout)
-    module.install_scripts(
-        Path(checkout) / "coordinator" / "bin", Path(settings_home) / UNIMATRIX_DEST_DIRNAME
+    return module.refresh_installed_copy(
+        Path(checkout) / "coordinator" / "bin",
+        Path(settings_home) / UNIMATRIX_DEST_DIRNAME,
+        lambda _line: None,
     )
 
 
@@ -202,7 +231,7 @@ def _run_currency_cache(checkout: Path, settings_home: Path, engine_root: Option
     skew.write_currency_cache(Path(engine_root or checkout), Path(checkout))
 
 
-DEFAULT_INSTALLERS: Mapping[str, Callable[[Path, Path, Optional[Path]], None]] = {
+DEFAULT_INSTALLERS: Mapping[str, Callable[[Path, Path, Optional[Path]], object]] = {
     kf.INSTALLER_UNIMATRIX: _run_unimatrix,
     kf.INSTALLER_BIN_SHIMS: _run_bin_shims,
     kf.INSTALLER_CURRENCY_CACHE: _run_currency_cache,
@@ -291,11 +320,16 @@ def apply_freshness(
             result.changed_paths = diff.stdout.split()
             result.moved = new_sha != snap.local_sha
             result.local_sha = new_sha
-            to_run = list(kf.installers_for(result.changed_paths))
+            lib = (
+                _vendored_lib(checkout)
+                if any(p.startswith(kf.UNIMATRIX_LIB_PREFIX) for p in result.changed_paths)
+                else ()
+            )
+            to_run = list(kf.installers_for(result.changed_paths, lib))
 
     if verdict.action != kf.ACTION_DEFERRED_LIVE_RUN and kf.INSTALLER_UNIMATRIX not in to_run:
         result.stale_installs = list(unimatrix_stale(checkout, settings_home))
-        if result.stale_installs:
+        if result.stale_installs or _router_stale(checkout, settings_home):
             to_run.insert(0, kf.INSTALLER_UNIMATRIX)
 
     for name in to_run:
@@ -303,7 +337,9 @@ def apply_freshness(
         if runner is None:
             continue
         try:
-            runner(checkout, settings_home, engine_root)
+            out = runner(checkout, settings_home, engine_root)
+            if name == kf.INSTALLER_UNIMATRIX and isinstance(out, dict):
+                result.router = out.get("router")
             result.installers_run.append(name)
         except Exception as exc:
             result.installer_errors[name] = f"{type(exc).__name__}: {exc}"
