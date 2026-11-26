@@ -201,6 +201,11 @@ def send(tmp_path, monkeypatch, relay, bridge, world, rows, to):
             return asyncio.run(r._dispatch(req))
 
     monkeypatch.setattr(send_cli, "_router", RouterOverDispatch)
+    for var in ("CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID", "UNIMATRIX_GROK_SESSION_ID",
+                "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)  # the sender is a bare CLI, not the session running pytest
+    monkeypatch.setattr(send_cli, "_grok_target", lambda: "")
+    monkeypatch.setattr(send_cli, "own_session_name", lambda *a, **k: "")
     run = Run()
     err = io.StringIO()
     with contextlib.redirect_stderr(err):

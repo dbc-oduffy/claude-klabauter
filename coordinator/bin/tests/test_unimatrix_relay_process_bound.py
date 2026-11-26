@@ -213,7 +213,7 @@ def test_the_mux_feed_sends_add_and_drop_frames_as_the_names_file_changes(tmp_pa
     _near_session(sessions, 101, "b", "/tmp/b.sock")
     names, out = tmp_path / "names.json", io.BytesIO()
     out.flush = lambda: None
-    feed = mod.MuxFeed(out, str(names))
+    feed = mod.MuxFeed(out, str(names), alive=lambda pid, stamp: True)
     names.write_text(json.dumps({"a": {"pid": 100, "endpoint": "/tmp/a.sock"},
                                  "b": {"pid": 101, "endpoint": "/tmp/b.sock"}}))
     assert feed.reconcile() and feed.reconcile()

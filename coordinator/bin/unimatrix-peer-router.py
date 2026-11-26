@@ -994,6 +994,9 @@ def sweep_pid_files(sessions_dir, pid):
 
 # ------------------------------------------------------------------ face (registration child)
 
+#: A face's router request deadline; the relay's ack read waits strictly longer (unimatrix-relay.py FACE_ACK_DEADLINE_S).
+FACE_ROUTER_REQUEST_S = 15
+
 async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=False, vendor=None, peer=None,
                    owner_pid=None, owner_start=None, leg_mode=None) -> None:
     """Register `name`, take inbound frames on `endpoint`, forward each to the router.
@@ -1068,17 +1071,20 @@ async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=Fa
                 if frame.get("type") == "user":
                     try:
                         answer = await asyncio.to_thread(request_line, forward,
-                                                         {"op": "inbound", "peer": name, "frame": frame}, 15)
+                                                         {"op": "inbound", "peer": name, "frame": frame},
+                                                         FACE_ROUTER_REQUEST_S)
                     except (OSError, ValueError) as exc:
                         answer = {"ok": False, "error": f"router unreachable: {exc}"}
-                    if isinstance(answer, dict) and answer.get("ok") is False:
-                        # Silence is acceptance; only a refusal is written back.
-                        try:
-                            writer.write((json.dumps({"ok": False, "error": answer.get("error", "not delivered")})
-                                          + "\n").encode("utf-8"))
-                            await writer.drain()
-                        except OSError:
-                            pass
+                    if not isinstance(answer, dict):
+                        answer = {"ok": False, "error": "router gave no answer"}
+                    elif answer.get("ok") is False:
+                        answer = {"ok": False, "error": answer.get("error", "not delivered")}
+                    try:  # the relay reads this line before it replies ok to its sender
+                        writer.write((json.dumps(answer) + "\n").encode("utf-8"))
+                        await writer.drain()
+                    except OSError:
+                        pass
+                    if answer.get("ok") is False:
                         return
         finally:
             writer.close()

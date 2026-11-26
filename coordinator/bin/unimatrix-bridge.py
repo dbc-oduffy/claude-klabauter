@@ -507,7 +507,16 @@ def _relay_deliver(buf, on_custody=None) -> None:
     started_wall = time.time()
     far_digest = hashlib.sha256(mine[FAR_SOCKET_FIELD].encode("utf-8")).hexdigest()[:16]
     name_digest = hashlib.sha256(far_name.encode("utf-8")).hexdigest()[:16]
-    r = _ssh_relay(f"send-session {far_pid} {far_digest} {name_digest} {far_sid}", b"".join(l + b"\n" for l in lines))
+    payload = b"".join(l + b"\n" for l in lines)
+    far_pid, far_sid = _RESTARTED_FACE.get((far_pid, far_digest), (far_pid, far_sid))
+    r = _ssh_relay(f"send-session {far_pid} {far_digest} {name_digest} {far_sid}", payload)
+    live = _restarted_face(r, far_pid, far_digest, far_name)
+    if live:
+        log.write(f"relay: far pid {far_pid} is gone; face restarted as pid {live[0]}\n")
+        _RESTARTED_FACE[(far_pid, far_digest)] = live
+        far_pid, far_sid = live
+        target = f"{mine.get('name') or far_pid} (pid {far_pid}, session {far_sid})"
+        r = _ssh_relay(f"send-session {far_pid} {far_digest} {name_digest} {far_sid}", payload)
     ms = round((time.monotonic() - started) * 1000)
     transport = getattr(r, "transport", "ssh")
     stderr = r.stderr.decode(errors="replace").strip()
@@ -561,6 +570,29 @@ def _relay_deliver(buf, on_custody=None) -> None:
             marked = True
         _record_outcome(line, target, ts, ms, error, box, transport, ref, reached=reached, reached_box=reached_box,
                         acked=ok, misdelivered=bool(error and reached), queued=queued)
+
+
+_RESTARTED_FACE = {}  # (stale far pid, far socket digest) -> (live pid, session id) until the roster sync rewrites the mirror
+
+
+def _restarted_face(r, far_pid, far_digest, far_name) -> "tuple[str, str] | None":
+    """(pid, session id) of the live face now at the mirror's far socket and name, when `r` is the far relay's
+    `no live session with pid` refusal for a pid that left; None otherwise.
+
+    That refusal is made before any message is read, so resending to the live face cannot double-deliver.
+    The face matches by far socket digest and name; a roster that cannot be read leaves the refusal standing."""
+    stderr = r.stderr.decode(errors="replace").strip()
+    if not r.returncode or _batch_replies(r.stdout) or not stderr.startswith(f"no live session with pid {far_pid}"):
+        return None
+    for row in _batch_replies(_ssh_relay("roster", b"").stdout):
+        e = row.get("entry")
+        if not isinstance(e, dict) or e.get("name") != far_name:
+            continue
+        sock, pid, sid = e.get("messagingSocketPath"), e.get("pid"), e.get("sessionId")
+        if (isinstance(sock, str) and hashlib.sha256(sock.encode("utf-8")).hexdigest()[:16] == far_digest
+                and isinstance(pid, int) and pid > 0 and str(pid) != far_pid and isinstance(sid, str) and sid):
+            return str(pid), sid
+    return None
 
 
 def _caps():

@@ -45,6 +45,20 @@ def test_malformed_grant_exits_with_usage(tmp_path):
     assert p.returncode != 0 and "usage:" in p.stderr and "grant" in p.stderr
 
 
+# A box with coordinator_core installed in site-packages still resolves the engine under `-I`;
+# the launcher makes `import coordinator_core` fail so the relay takes its door path everywhere.
+NO_ENGINE_LAUNCHER = (
+    "import runpy, sys\n"
+    "class _NoEngine:\n"
+    "    def find_spec(self, name, path=None, target=None):\n"
+    "        if name.split('.')[0] == 'coordinator_core':\n"
+    "            raise ModuleNotFoundError(name)\n"
+    "sys.meta_path.insert(0, _NoEngine())\n"
+    "script = sys.argv[1]\n"
+    "sys.argv = [script]\n"
+    "runpy.run_path(script, run_name='__main__')\n")
+
+
 def run_isolated_relay(tmp_path, door_body):
     """Run a lone copy of the relay under `-I` with no engine, no lib/, and a stub door."""
     shutil.copy(RELAY, tmp_path / "unimatrix-relay.py")
@@ -54,9 +68,10 @@ def run_isolated_relay(tmp_path, door_body):
         door.parent.mkdir(parents=True)
         door.write_text(door_body)
         door.chmod(0o755)
-    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "COORDINATOR_ENGINE_ROOT")}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PYTHONPATH", "COORDINATOR_ENGINE_ROOT", "COORDINATOR_ENGINE_SOURCE_ROOT")}
     env.update(SSH_ORIGINAL_COMMAND=CMD, COORDINATOR_SETTINGS_HOME=str(home))
-    return subprocess.run([sys.executable, "-I", str(tmp_path / "unimatrix-relay.py")], cwd=tmp_path,
+    return subprocess.run([sys.executable, "-I", "-c", NO_ENGINE_LAUNCHER, str(tmp_path / "unimatrix-relay.py")], cwd=tmp_path,
                           env=env, input=json.dumps(envelope()) + "\n", capture_output=True,
                           text=True, timeout=30)
 

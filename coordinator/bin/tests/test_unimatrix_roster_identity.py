@@ -3,6 +3,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import time
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
@@ -164,7 +165,9 @@ def test_router_and_cli_list_vendor_box_and_cwd_without_changing_names(tmp_path:
         {"pid": 102, "name": "remote-codex", "sessionId": "peer-codex-a-102", "box": "macmini",
          "macSocketPath": "/far.sock", "status": "idle", "cwd": "/work/repo",
          "unimatrixRemote": "user@macmini", "farPid": 7, "procStart": "start-102", "pidDomain": "domain",
-         "unimatrixVendor": "codex", "unimatrixBox": "macmini", "messagingSocketPath": str(tmp_path / "local.sock")},
+         "unimatrixVendor": "codex", "unimatrixBox": "macmini", "messagingSocketPath": str(tmp_path / "local.sock"),
+         "unimatrixFarSeen": int(time.time() * 1000), "unimatrixRosterPid": 102,
+         "unimatrixRosterProcStart": "start-102"},
         {"pid": 103, "name": "hidden-transport", "unimatrixTransport": True},
     ]
     (tmp_path / "local.sock").write_text("")
@@ -173,6 +176,8 @@ def test_router_and_cli_list_vendor_box_and_cwd_without_changing_names(tmp_path:
     monkeypatch.setattr(router._roster(), "pid_alive", lambda pid: True)
     monkeypatch.setattr(router._roster(), "proc_start", lambda pid: "start-102")
     monkeypatch.setattr(router._roster(), "pid_domain", lambda: "domain")
+    monkeypatch.setattr(router._roster()._liveness(), "pid_alive", lambda pid: True)
+    monkeypatch.setattr(router._roster()._liveness(), "proc_start", lambda pid: "start-102")
     monkeypatch.setattr(router, "codex_is_sendable_root", lambda metadata: True)
     r = router.Router([{"name": "local-peer", "vendor": "codex", "target": "root", "cwd": "/local",
                        "codexPid": os.getpid()}],

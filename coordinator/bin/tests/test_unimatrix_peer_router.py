@@ -2542,7 +2542,9 @@ def test_user_frame_to_a_live_holder_face_gets_no_reply_line(box, monkeypatch):
         try:
             raw = await asyncio.to_thread(face_reply, r.endpoint_of("codex-a"),
                                           frame_to(box, s.path, "em", "hello there"))
-            assert raw == b""
+            # Exactly one line, the router's own answer: the relay reads it before it replies ok to its sender.
+            lines = raw.splitlines()
+            assert len(lines) == 1 and json.loads(lines[0]).get("ok") is True, raw
             await until(lambda: log)
         finally:
             s.close()

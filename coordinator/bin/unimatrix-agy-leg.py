@@ -18,7 +18,7 @@ agy_session_state reads "dead" (presence lock unheld and $AGY_LEG_PARENT_PID, wh
 pid, unheld past the grace after the leg started).
 
 Usage (agy runs this): nohup python3 unimatrix-agy-leg.py <sock> > unimatrix-agy-leg.out 2>&1 &
-The log path is $AGY_LEG_LOG else unimatrix-agy-leg.log beside this script.
+The log path is $AGY_LEG_LOG else <settings home>/unimatrix/agy-legs/<conversation id>.log.
 """
 try:
     import fcntl
@@ -35,15 +35,22 @@ import time
 import types
 import urllib.error
 import urllib.request
+import uuid
 
 LOG = None  # explicit override; None resolves through log_path() at call time
 METHOD = "/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage"
 
 
-def log_path():
-    """The leg log: the LOG override, else $AGY_LEG_LOG, else unimatrix-agy-leg.log beside this script."""
-    return LOG or os.environ.get("AGY_LEG_LOG") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "unimatrix-agy-leg.log")
+def log_path() -> str:
+    """The leg log: the LOG override, else $AGY_LEG_LOG, else <settings home>/unimatrix/agy-legs/<conversation id>.log.
+
+    The default creates its parent directory; an unset settings home raises the roster's MissingSettingsError."""
+    explicit = LOG or os.environ.get("AGY_LEG_LOG")
+    if explicit:
+        return explicit
+    legs = _roster().settings_home() / "unimatrix" / "agy-legs"
+    legs.mkdir(parents=True, exist_ok=True)
+    return str(legs / f"{os.environ.get('ANTIGRAVITY_CONVERSATION_ID') or 'unimatrix-agy-leg'}.log")
 
 
 def log(*a):
@@ -125,12 +132,71 @@ def nt_spool_lock(path):
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def enqueue(text):
-    """Append one message to the spool as a single O_APPEND write of one newline-terminated line.
+def doorbell_dir() -> str:
+    """`<conv>.doorbell` beside the spool: the doorbell script's drop dir (AGY_LEG_SPOOL moves both)."""
+    return os.path.join(os.path.dirname(os.path.abspath(spool_path())),
+                        f"{os.environ['ANTIGRAVITY_CONVERSATION_ID']}.doorbell")
 
-    Raises OSError when the spool already holds SPOOL_MAX_BYTES, so the sender sees ok:false.
+
+def ring(msg_id, text) -> None:
+    """Drop `<id>.msg` (temp + os.replace) for an armed doorbell; best effort, the spool line is the backstop."""
+    ddir = doorbell_dir()
+    try:
+        os.makedirs(ddir, exist_ok=True)
+        tmp = os.path.join(ddir, f"{msg_id}.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"id": msg_id, "text": text}, f)
+        os.replace(tmp, os.path.join(ddir, f"{msg_id}.msg"))
+    except OSError as e:
+        log("ring-failed", str(e))
+
+
+def _marker_live(path, name, lv) -> bool:
+    """True when the `armed.<pid>` marker's pid is alive and, when the marker records a procStart, still has it."""
+    try:
+        pid = int(name[len("armed."):])
+    except ValueError:
+        return False
+    if not lv.pid_alive(pid):
+        return False
+    try:
+        with open(path, encoding="utf-8") as fh:
+            want = json.load(fh).get("procStart")
+    except (OSError, ValueError, AttributeError):
+        return True  # a legacy pid-only marker
+    if want is None:
+        return True
+    try:
+        return lv.proc_start(pid) == want
+    except OSError:
+        return True
+
+
+def doorbell_armed() -> bool:
+    """True when an `armed.<pid>` marker names a live doorbell process in this conversation's doorbell dir."""
+    ddir = doorbell_dir()
+    try:
+        names = os.listdir(ddir)
+    except OSError:
+        return False
+    lv = _liveness()
+    return any(n.startswith("armed.") and _marker_live(os.path.join(ddir, n), n, lv) for n in names)
+
+
+def enqueue(text) -> str:
+    """Append one message to the spool as a single O_APPEND write of one newline-terminated line, then ring.
+
+    The line carries a fresh uuid4-hex id, returned; the doorbell `.msg` shares it. Raises OSError when
+    the spool already holds SPOOL_MAX_BYTES, so the sender sees ok:false.
     """
-    line = (json.dumps({"text": text}) + "\n").encode()
+    msg_id = uuid.uuid4().hex
+    _append(json.dumps({"id": msg_id, "text": text}))
+    ring(msg_id, text)
+    return msg_id
+
+
+def _append(payload) -> None:
+    line = (payload + "\n").encode()
     try:
         full = os.path.getsize(spool_path()) + len(line) > SPOOL_MAX_BYTES
     except OSError:
@@ -281,9 +347,11 @@ def respond(buf) -> bytes:
         return b'{"ok":false,"body":"bad request"}\n'
     if _PENDING:
         try:
-            enqueue(text)
+            msg_id = enqueue(text)
         except OSError as e:
             return (json.dumps({"ok": False, "body": f"spool error: {e}"}) + "\n").encode()
+        if doorbell_armed():
+            return (json.dumps({"ok": True, "queued": True, "rung": True, "msg_id": msg_id}) + "\n").encode()
         return b'{"ok": true, "queued": true}\n'
     return (json.dumps(send(text)) + "\n").encode()
 

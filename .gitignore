@@ -153,3 +153,6 @@ desktop.ini
 
 # Tool caches (clangd writes .cache/clangd); ignored as standard in every repo.
 .cache/
+
+# Runtime logs: the agy leg writes coordinator/bin/unimatrix-agy-leg.log inside an installed clone (Mini, 2026-11-26).
+*.log
