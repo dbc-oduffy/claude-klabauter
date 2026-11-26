@@ -862,9 +862,11 @@ def _write_line(path, line) -> "str | None":
     but {"ok": true} raises FaceRefused; any other endpoint is write-only."""
     line = local_reply_address(line)
     face = bool(_REACHED.get("router_face"))
+    # Both transports authenticate: a POSIX router face refuses a frame with no auth header, and
+    # `recipient_token` returns None for a legacy Unix session with no key, which stays unauthenticated.
+    line = load_roster().authenticated_data(path, line, os.path.expanduser(SESS))
     if endpoint_kind() == "pipe":
         import win32file
-        line = load_roster().authenticated_data(path, line, os.path.expanduser(SESS))
         h = win32file.CreateFile(path, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
                                  0, None, win32file.OPEN_EXISTING, 0, None)
         try:
