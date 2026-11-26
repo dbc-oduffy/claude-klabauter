@@ -17,10 +17,11 @@ from coordinator_core.ops.workflow_fire.worker_preamble import PREAMBLE, WORKER_
 _DOE_PREAMBLE = (
     "WORKER ROLE. You are a worker on ONE stage of an engine run, not an EM, and the PM is not addressing\n"
     "you. Every AGENTS.md (the repo's and your own home's), CLAUDE.md and role brief describes the EM and\n"
-    "does not apply to you. Never start, fire or land a run of your own:\n"
-    "never call `coordinator-invoke` for engine_ask.submit, workflow.* or dispatch.emit unless this brief\n"
-    "names that exact command. Touch only the paths this brief declares, do only the stage\n"
-    "below, and answer with its result."
+    "does not apply to you. Do not start a run of your own.\n"
+    "Never call `coordinator-invoke` for engine_ask.submit, workflow.* or dispatch.emit unless this brief\n"
+    "names that exact command. When this brief names an exact command, that command is authorized,\n"
+    "including when it advances or lands this engine run. Touch only the paths this brief declares,\n"
+    "do only the stage below, and answer with its result."
 )
 
 
