@@ -1529,8 +1529,11 @@ def _classify_pytest(args: Sequence[str], testpaths: Sequence[str],
     if positionals:
         if _STRICT_DIRS.get() and _em_dirs_over_threshold(positionals, testpaths, cwd):
             return label
-        if any(_is_unscoped_directory(a, testpaths, cwd) for a in positionals):
+        bounded = _bounded_outside_dir(positionals, testpaths, cwd)
+        if any(a is not bounded and _is_unscoped_directory(a, testpaths, cwd) for a in positionals):
             return label
+        if bounded is not None:
+            return None
         return None if any(_is_real_scope(a, testpaths, cwd, True) for a in positionals) else label
     return None if scoped else label
 
@@ -1546,6 +1549,43 @@ def _is_unscoped_directory(arg: str, testpaths: Sequence[str], cwd: Optional[str
     if not norm or _has_glob_magic(norm) or not _names_directory(raw, norm, cwd):
         return False
     return not _is_real_scope(arg, testpaths, cwd, True)
+
+
+def _bounded_outside_dir(positionals: Sequence[str], testpaths: Sequence[str],
+                         cwd: Optional[str]) -> Optional[str]:
+    """The one plain directory positional outside every testpaths root that holds at most
+    ``_DIR_TEST_FILE_THRESHOLD`` tracked test files, when it is the only directory named; else
+    None. A root, an ancestor of one, ``.``, a glob, an escaping path, an uncountable directory
+    and any second directory positional all return None."""
+    if not cwd:
+        return None
+    dirs: List[str] = []
+    for a in positionals:
+        raw = a.replace("\\", "/")
+        norm = _norm_path(raw.split("::", 1)[0])
+        if "::" in raw or not norm or _has_glob_magic(norm):
+            continue
+        if _names_directory(raw, norm, cwd):
+            dirs.append(a)
+    if len(dirs) != 1:
+        return None
+    root = _cheap_repo_root(cwd)
+    if not root:
+        return None
+    try:
+        rel = os.path.relpath(os.path.join(cwd, _norm_path(dirs[0])), root).replace("\\", "/")
+    except ValueError:
+        return None
+    if rel in (".", "..") or rel.startswith("../"):
+        return None
+    for tp in testpaths:
+        tp = _norm_path(tp)
+        if rel == tp or rel.startswith(tp + "/") or tp.startswith(rel + "/"):
+            return None
+    if not os.path.isdir(os.path.join(root, rel)):
+        return None
+    count = _tracked_test_file_count([rel], root)
+    return dirs[0] if count and count <= _DIR_TEST_FILE_THRESHOLD else None
 
 
 def _single_dir_is_bounded(dir_args: Sequence[str], cwd: Optional[str],
