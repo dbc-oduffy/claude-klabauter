@@ -34,22 +34,45 @@ def test_task_repo_denies_an_outside_read_and_renders_it(tmp_path):
     assert match(_event(tmp_path, "grep", {"path": str(outside.parent), "pattern": "WORKER"}, repo))["permissionDecision"] == "deny"
 
 
-def test_unresolved_tmp_cwd_allows_an_in_repo_read() -> None:
-    """cwd `/tmp/<repo>` must allow `pkg/a.py` inside that repo."""
+def test_unresolved_tmp_cwd_allows_an_in_repo_read(monkeypatch) -> None:
+    """The grok hook entry allows `pkg/a.py` when cwd is unresolved `/tmp/<repo>`."""
+    from coordinator_core.host_hooks import shim
+
     repo = Path("/tmp") / f"task-repo-read-{uuid.uuid4().hex}"
     outside = Path("/tmp") / f"task-repo-outside-{uuid.uuid4().hex}"
     try:
         (repo / ".git").mkdir(parents=True)
-        inside = repo / "pkg" / "a.py"
-        inside.parent.mkdir()
-        inside.write_text("x\n", encoding="utf-8")
+        (repo / "pkg").mkdir()
+        (repo / "pkg" / "a.py").write_text("x\n", encoding="utf-8")
         outside.write_text("doctrine\n", encoding="utf-8")
         assert str(repo).startswith("/tmp/")
         assert repo.resolve() != repo
-        assert match(_event(repo, "read_file", {"target_file": str(inside)}, repo)) is None
-        assert match(_event(repo, "grep", {"path": str(inside), "pattern": "x"}, repo)) is None
-        denied = match(_event(repo, "read_file", {"target_file": str(outside)}, repo))
-        assert denied["permissionDecision"] == "deny"
+        dials = {"n": 0}
+
+        def fake_dial(request):
+            dials["n"] += 1
+            return {"result": {}}
+
+        monkeypatch.setattr(shim, "_dial", fake_dial)
+        allowed = shim.decide("grok", {
+            "hook_event_name": "PreToolUse",
+            "session_id": "s",
+            "cwd": str(repo),
+            "tool_name": "read_file",
+            "tool_input": {"target_file": "pkg/a.py"},
+        })
+        decision = (allowed.get("hookSpecificOutput") or {}).get("permissionDecision")
+        assert decision != "deny"
+        assert dials["n"] == 1
+        denied = shim.decide("grok", {
+            "hook_event_name": "PreToolUse",
+            "session_id": "s",
+            "cwd": str(repo),
+            "tool_name": "grep",
+            "tool_input": {"path": str(outside), "pattern": "x"},
+        })
+        assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert dials["n"] == 1
     finally:
         shutil.rmtree(repo, ignore_errors=True)
         outside.unlink(missing_ok=True)
