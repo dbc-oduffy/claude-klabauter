@@ -17,11 +17,20 @@ _REASON = "Read only files inside this repository."
 
 
 def _git_root(cwd: Path) -> Path | None:
+    """The git root of `cwd`, resolved like the read target.
+
+    macOS `/tmp` is a symlink to `/private/tmp`. An unresolved cwd and a
+    resolved target are not `relative_to` each other, so an in-repo read
+    would be denied.
+    """
     if not cwd.is_absolute():
         return None
     for candidate in (cwd, *cwd.parents):
         if (candidate / ".git").exists():
-            return candidate
+            try:
+                return candidate.resolve()
+            except OSError:
+                return None
     return None
 
 
