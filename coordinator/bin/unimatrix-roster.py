@@ -298,26 +298,55 @@ def pending_agy_face_backed(d) -> bool:
     name = d.get("name") if isinstance(d, dict) else None
     if not isinstance(name, str) or d.get("leg_mode") != "pending" or d.get("vendor") != "agy":
         return False
-    legs = delivery_settings_home() / "unimatrix" / "agy-legs"
     liveness = _liveness()
-    try:
-        files = sorted(os.listdir(legs))
-    except OSError:
-        return False
-    for f in files:
-        try:
-            with open(legs / f, encoding="utf-8") as fh:
-                rec = json.load(fh)
-        except (OSError, ValueError):
-            continue
-        conv = rec.get("conversation") if isinstance(rec, dict) else None
-        if (not isinstance(conv, str) or not conv or rec.get("mode") != "pending"
-                or f"-{hashlib.sha256(conv.encode()).hexdigest()[:10]}-on-" not in name
+    for conv, rec in _pending_leg_records(delivery_settings_home() / "unimatrix" / "agy-legs"):
+        if (f"-{hashlib.sha256(conv.encode()).hexdigest()[:10]}-on-" not in name
                 or not _pending_leg_holder_live(rec)):
             continue
         if liveness.agy_session_state(conv, rec) != "dead":
             return True
     return False
+
+
+_LEG_RECORDS = {}
+
+
+def _pending_leg_records(legs):
+    """[(conversation, record)] for every `mode: pending` leg record under `legs`, sorted by file name.
+
+    Trap: this runs once per listed row, and a listing's far-duplicate scan makes that once per row
+    pair, so an uncached read of every leg file per call spun the router and roster at ~25 MB/s on a
+    309-file agy-legs dir. One scandir per call; a file is re-parsed only when its (mtime, size)
+    changes. Only `.json` records are read: the `.log` files beside them are never records."""
+    try:
+        entries = sorted((e for e in os.scandir(legs) if e.name.endswith(".json")), key=lambda e: e.name)
+    except OSError:
+        return []
+    out, seen = [], set()
+    for e in entries:
+        path = e.path
+        seen.add(path)
+        try:
+            st = e.stat()
+        except OSError:
+            continue
+        key = (st.st_mtime_ns, st.st_size)
+        hit = _LEG_RECORDS.get(path)
+        if hit is None or hit[0] != key:
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    rec = json.load(fh)
+            except (OSError, ValueError):
+                rec = None
+            hit = (key, rec)
+            _LEG_RECORDS[path] = hit
+        rec = hit[1]
+        conv = rec.get("conversation") if isinstance(rec, dict) else None
+        if isinstance(conv, str) and conv and rec.get("mode") == "pending":
+            out.append((conv, rec))
+    for path in [p for p in _LEG_RECORDS if p not in seen and os.path.dirname(p) == os.fspath(legs)]:
+        del _LEG_RECORDS[path]
+    return out
 
 
 def _pending_leg_holder_live(rec) -> bool:
