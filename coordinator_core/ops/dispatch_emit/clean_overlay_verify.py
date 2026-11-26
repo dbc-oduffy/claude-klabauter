@@ -569,18 +569,30 @@ def process_facts(proc: "subprocess.CompletedProcess", cwd: object, files: Optio
 _MISSING_FILE_RE = re.compile(r"^E?\s*(?:\w+\.)*FileNotFoundError:.*?(['\"])(.+?)\1\s*$", re.MULTILINE)
 
 
-def mirror_gap(output: str, dest: Path, tracked: Collection[str]) -> str:
+_MISSING_MODULE_RE = re.compile(r"ModuleNotFoundError: No module named ['\"]([\w.]+)['\"]")
+
+
+def mirror_gap(output: str, dest: Path, tracked: Collection[str], root: Optional[Path] = None) -> str:
     """The repo-relative tracked paths a `FileNotFoundError` in `output` names that `dest` (the mirror worktree)
     does not hold, as a `mirror gap` text; `""` when no missing path is both tracked and absent from the mirror
-    (a file the code itself failed to create is not a gap). `tracked` is the index view already in hand."""
+    (a file the code itself failed to create is not a gap). `tracked` is the index view already in hand.
+    With `root` (the live worktree), a `ModuleNotFoundError` naming a module whose file exists in `root` but
+    not in `dest` is a gap too: a collection failure the mirror caused, not a verdict on the run."""
     base = dest.resolve().as_posix().rstrip("/").lower() + "/"
     gaps: list = []
-    for match in _MISSING_FILE_RE.finditer(output.replace("\r\n", "\n")):
+    text = output.replace("\r\n", "\n")
+    for match in _MISSING_FILE_RE.finditer(text):
         raw = match.group(2).replace("\\\\", "/").replace("\\", "/")
         rel = raw[len(base):] if raw.lower().startswith(base) else raw.removeprefix("./")
         if rel in tracked and not (dest / rel).exists() and rel not in gaps:
             gaps.append(rel)
-    return f"mirror gap: tracked path(s) absent from the mirror: {', '.join(gaps)}" if gaps else ""
+    if root is not None:
+        for match in _MISSING_MODULE_RE.finditer(text):
+            stem = match.group(1).replace(".", "/")
+            for rel in (f"{stem}.py", f"{stem}/__init__.py"):
+                if (root / rel).is_file() and not (dest / rel).exists() and rel not in gaps:
+                    gaps.append(rel)
+    return f"mirror gap: path(s) absent from the mirror: {', '.join(gaps)}" if gaps else ""
 
 
 LegHook = Callable[[str], ContextManager]
@@ -1356,6 +1368,17 @@ def _own_write_set(root: Path, run_id: str) -> frozenset:
         return frozenset()
 
 
+def _printed_writes(root: Path, run_id: str) -> list:
+    """The paths the run's agents wrote, from their per-write blob prints (`run_write_prints`): fix-leg and
+    undeclared writes, untracked non-test modules included, which no manifest or snapshot names. Scratch paths
+    drop; a deleted path (print None) stays, so its deletion reaches the mirror. [] with no record."""
+    if not run_id:
+        return []
+    from coordinator_core.ops.dispatch_emit import run_write_prints
+
+    return [p for p in (run_write_prints.read(root, run_id) or {}) if p and not p.startswith("scratch/")]
+
+
 def _check_overlay_imports(root: Path, overlay: Sequence[str], *, run_id: str = "") -> None:
     """The export holds a peer's dirty module at its HEAD bytes, so a declared dirty Python file is refused only
     when it needs a name (or a whole module) that HEAD's copy of that peer module lacks: the run would test
@@ -1485,7 +1508,7 @@ def collect_startup_s() -> float:
     return _positive_env_float(COLLECT_STARTUP_ENV) or float(PYTEST_STARTUP_S)
 
 
-def argv_named_untracked(root: Path, argv: Sequence[str]) -> list:
+def argv_named_untracked(root: Path, argv: Sequence[str], owned: Collection[str] = ()) -> list:
     """Repo-relative `.py` files `argv` names (node ids cut at `::`) that are files in the worktree and tracked
     nowhere: a test the run wrote that no declared or own-written set carries reaches the mirror only through
     the command that runs it. A tracked file is never named here (a peer's dirty tracked hunks stay at HEAD),
@@ -1510,7 +1533,55 @@ def argv_named_untracked(root: Path, argv: Sequence[str]) -> list:
             tracked = test_reach._tracked(root)
         if rel not in tracked:
             out[rel] = None
+    if out and owned and tracked is not None:
+        for rel in _untracked_imports(root, list(out), tracked, owned):
+            out[rel] = None
     return list(out)
+
+
+_UNTRACKED_IMPORT_CAP = 200
+
+
+def _untracked_imports(root: Path, seeds: Sequence[str], tracked: Collection[str], owned: Collection[str]) -> list:
+    """Repo `.py` files tracked nowhere that `seeds` import, transitively (each import resolved against the
+    directories above its importer; capped at `_UNTRACKED_IMPORT_CAP`), limited to the `owned` paths: a module
+    the run wrote beside its new test travels with the test, while a peer's untracked module stays out of the
+    mirror. A tracked, unowned or unreadable import is skipped."""
+    from coordinator_core.pyimports import collect_imports
+
+    found: dict = {}
+    todo = list(seeds)
+    seen = set(todo)
+    while todo and len(found) < _UNTRACKED_IMPORT_CAP:
+        cur = todo.pop()
+        try:
+            tree = ast.parse((root / cur).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+            continue
+        records, _ = collect_imports(tree)
+        parts = cur.split("/")[:-1]
+        for rec in records:
+            if rec.level:
+                if rec.level - 1 > len(parts):
+                    continue
+                anchors = ["/".join(parts[: len(parts) - (rec.level - 1)])]
+            else:
+                anchors = ["/".join(parts[:i]) for i in range(len(parts), -1, -1)]
+            base = rec.module or ""
+            mods = [base, *(f"{base}.{n}" if base else n for n in rec.names if n != "*")]
+            for anchor in anchors:
+                for mod in filter(None, mods):
+                    segs = mod.split(".")
+                    for i in range(1, len(segs) + 1):
+                        stem = "/".join(([anchor] if anchor else []) + segs[:i])
+                        for cand in (f"{stem}.py", f"{stem}/__init__.py"):
+                            if cand in seen or cand in tracked or cand not in owned or cand.startswith(_SPARSE_EXCLUDE):
+                                continue
+                            if (root / cand).is_file():
+                                seen.add(cand)
+                                found[cand] = None
+                                todo.append(cand)
+    return list(found)
 
 
 def run_in_export(
@@ -1522,7 +1593,8 @@ def run_in_export(
 
     Trap: no total wall. A flat cap halted every run whose test leg is legitimately longer (example-game-repo 2da5dc needs
     ~660s); the stall watchdog fails only a command that stops making progress."""
-    paths = list(dict.fromkeys([*paths, *argv_named_untracked(root, argv)]))
+    owned = frozenset([*_own_write_set(root, run_id), *_printed_writes(root, run_id)])
+    paths = list(dict.fromkeys([*paths, *argv_named_untracked(root, argv, owned)]))
     with clean_export(root, run_id, paths, argv=argv, overrides=overrides) as dest:
         return _run(list(argv), dest, None, env=_mirror_env(dict(os.environ), dest), stall_s=export_run_stall_s())
 
@@ -1889,7 +1961,7 @@ def verify(
             if failed and not infra:
                 from coordinator_core.ops.dispatch_emit import test_reach
 
-                infra = mirror_gap(full, dest, test_reach._tracked(root))
+                infra = mirror_gap(full, dest, test_reach._tracked(root), root)
             if failed and ids and not infra and isinstance(base_sha, str) and base_sha and base_sha != sha:
                 at_base = _base_failing(dest, mroot, root, run_id, base_sha, ids, leg)
     except CoTenantDependency as exc:
@@ -2439,7 +2511,11 @@ def own_delta(root: Path, run_id: str, seed: Sequence[str]) -> tuple:
             return []
 
     manifest = read("manifest", lambda: _manifest_declared_paths(measured_rev_record_path(root, run_id).with_name("manifest.json")) or [])
-    owned = [*manifest, *read("write set", lambda: _own_write_set(root, run_id)), *read("own written", lambda: _own_written(root, run_id))]
+    owned = [
+        *manifest, *read("write set", lambda: _own_write_set(root, run_id)),
+        *read("own written", lambda: _own_written(root, run_id)),
+        *read("write prints", lambda: _printed_writes(root, run_id)),
+    ]
     snapshot = read("snapshot", lambda: _snapshot_scope(root, run_id))
     extra = [p for p in (*owned, *snapshot) if review_edits.norm(p) not in have]
     if not extra and not seed:

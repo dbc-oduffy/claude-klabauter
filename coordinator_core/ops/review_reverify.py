@@ -54,7 +54,9 @@ in-footprint cause file, or no cause files leaves the node ``unattributed``. ``f
 footprint and dirty versus HEAD, whether or not a halt record holds it (unreadable record excepted): the
 failure is shared-tree contamination, evidence rather than a blocker; so is a node with no cause file in
 a test file outside the footprint that reaches no footprint path (``_reaches``: imports followed
-transitively, string literals, ``conftest.py``) and whose failure text names none; a node green at the run base
+transitively, string literals, ``conftest.py``) and whose failure text names none, and so is a node with
+no cause file whose test file reaches a path another halted run withholds and no footprint path
+(``_withheld_reach``; ``foreign_red_runs`` maps it to the holding run ids); a node green at the run base
 (``failing_at_base`` supplied) classes there only when every such cause file is untracked. Absent ``cause_files``
 they are derived (``_derive_cause_files``); a bare file name resolving nowhere falls back to the sole
 dirty tracked path of that basename. A failing node id's
@@ -100,6 +102,11 @@ Optional ``export_failing_path`` names a saved ``clean_overlay_verify --export-r
 from its reds (green with peer dirt removed) and not otherwise skipped lands in ``peer_dirt``, never reverted
 or ``unattributed``. A missing or invalid file sets ``export_unmeasured`` and classes nothing. ``peer_dirt``
 is merged into the record.
+Mirror-only red (revert mode): a failing id with an empty ``failing_output`` message (absent ``failing_output``
+counts as empty), or one in optional ``leg_passed`` (ids the run's own test leg passed), that passes when
+``_rerun_alone`` runs it in the real tree is a mirror artefact, not a verdict on the run: it lands in
+``mirror_only_red`` and, as ``{node: [its test file]}``, in ``foreign_red``, so it never blocks. A suspect id
+that is also red in the tree, or whose rerun could not run, classes nothing and keeps blocking.
 A failing id in a write-set test file (manifest or edited, not created) that no base verdict covers
 (not in ``failing_at_base``, not ruled or recorded, and no ``base_export_path`` named, even an unreadable one) is measured at the run
 base in ONE batched export run (``reverify_base_measure.measure_ids``, needs a 40-hex base): red at base
@@ -982,6 +989,84 @@ def _reaches(repo_root: Path, test_file: str, footprint: Set[str]) -> bool:
     return False
 
 
+def _reach_walk(repo_root: Path, test_file: str, named: List[str]) -> Optional[Tuple[Set[str], Set[str]]]:
+    """``(reached files, members of named that a reached file's string literal names)`` over the
+    import closure of ``test_file`` and the ``conftest.py`` above it. ``None`` when ``test_file`` is
+    unreadable or more than ``_REACH_CAP`` files are reached (fail closed)."""
+    parts = test_file.split("/")[:-1]
+    seeds = [test_file, *(f"{'/'.join(parts[:i])}/conftest.py".lstrip("/") for i in range(len(parts) + 1))]
+    todo = [s for s in dict.fromkeys(seeds) if s == test_file or (repo_root / s).is_file()]
+    seen: Set[str] = set()
+    literal: Set[str] = set()
+    while todo:
+        cur = todo.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        if len(seen) > _REACH_CAP:
+            return None
+        found = _import_targets(repo_root, cur)
+        if found is None:
+            if cur == test_file:
+                return None
+            continue
+        literal.update(_literal_named(repo_root, cur, named))
+        todo.extend(sorted(found - seen))
+    return seen, literal
+
+
+def _withheld_reach(
+    repo_root: Path, nodes: List[str], footprint: Set[str], failing_output: Optional[Dict[str, str]],
+    run_id: str, plan_path: str,
+) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
+    """``({node: [withheld paths]}, {node: [holding run ids]})`` for pathless nodes whose test file
+    reaches (imports, ``conftest.py``, string literals) a path another halted run withholds and reaches
+    no path of this run's ``footprint`` beyond the test file itself. Every reached withheld path must be
+    held by a readable foreign halt record; an unreadable record, a path this run edited, a failure text
+    naming a footprint path, or a capped walk leaves the node blocking."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+    from coordinator_core.ops.dispatch_emit.land_run import UNREADABLE_HALT_RECORD, foreign_halted_withheld
+
+    try:
+        index = set(halted_withheld_index.withheld_by_path(repo_root))
+    except Exception:  # noqa: BLE001 -- an unreadable index attributes nothing
+        return {}, {}
+    if not index:
+        return {}, {}
+    own = names_own_path_in_output(failing_output, nodes, sorted(footprint))
+    named = sorted(index | footprint)
+    hits_by_file: Dict[str, Optional[Set[str]]] = {}
+    found: Dict[str, Set[str]] = {}
+    for node in nodes:
+        test_file = _node_file(node)
+        if node in own or not test_file.endswith(".py") or not (repo_root / test_file).is_file():
+            continue
+        if test_file not in hits_by_file:
+            walked = _reach_walk(repo_root, test_file, named)
+            if walked is None:
+                hits_by_file[test_file] = None
+            else:
+                reached, literal = walked
+                touched = (reached | literal) - {test_file}
+                hits_by_file[test_file] = None if touched & footprint else (reached | literal) & index
+        hits = hits_by_file[test_file]
+        if hits:
+            found[node] = hits
+    if not found:
+        return {}, {}
+    held = foreign_halted_withheld(
+        repo_root, run_id or None, plan_path or None, sorted({p for hits in found.values() for p in hits}),
+    )
+    red: Dict[str, List[str]] = {}
+    runs: Dict[str, List[str]] = {}
+    for node, hits in sorted(found.items()):
+        holders = {p: held.get(p) for p in hits}
+        if all(h and h != UNREADABLE_HALT_RECORD for h in holders.values()):
+            red[node] = sorted(hits)
+            runs[node] = sorted({str(h) for h in holders.values()})
+    return red, runs
+
+
 def _unreachable_red(
     repo_root: Path, nodes: List[str], footprint: Set[str], failing_output: Optional[Dict[str, str]],
     base_green: Set[str],
@@ -1054,6 +1139,7 @@ def review_reverify(
     run_key: str = "",
     base_export_path: str = "",
     export_failing_path: str = "",
+    leg_passed: Optional[List[str]] = None,
 ) -> dict:
     """List the review edits since the snapshot, or (``failing`` given) invert the findings those
     tests implicate; ``probe`` opens or closes the pre-review probe. See the module docstring."""
@@ -1200,6 +1286,8 @@ def review_reverify(
         base_measured = (failing_at_base is not None or bool(base_export_path)) and not base_unmeasured
         base_green = {n for n in ids if (base_measured or n in base_green_here) and n not in skip}
         flaky = _rerun_alone(repo_root, [n for n in ids if n not in skip])
+        suspect = {n for n in ids if not str((failing_output or {}).get(n) or "").strip()} | set(leg_passed or [])
+        mirror_only = [n for n in flaky if n in suspect]
         skip |= set(flaky)
         base_green -= set(flaky)
     else:
@@ -1207,6 +1295,7 @@ def review_reverify(
         to_measure, base_red, base_green_here, base_measure_error = [], set(), set(), None
         peer_dirt = []
         flaky = []
+        mirror_only = []
         export_own = set()
         ruled = {}
     foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
@@ -1304,11 +1393,20 @@ def review_reverify(
         failing_output=failing_output,
     )
     rest = [n for n in candidates if n in unattributed and not (cause_files or {}).get(n)]
+    foreign_red_runs: Dict[str, List[str]] = {}
     if rest:
-        foreign_red = {
-            **foreign_red,
-            **_unreachable_red(repo_root, rest, {*rels, *created, *outside}, failing_output, base_green),
-        }
+        withheld_red, foreign_red_runs = _withheld_reach(
+            repo_root, rest, {*rels, *created, *outside}, failing_output, run_id, plan_path,
+        )
+        foreign_red = {**foreign_red, **withheld_red}
+        left = [n for n in rest if n not in withheld_red]
+        if left:
+            foreign_red = {
+                **foreign_red,
+                **_unreachable_red(repo_root, left, {*rels, *created, *outside}, failing_output, base_green),
+            }
+    if mirror_only:
+        foreign_red = {**foreign_red, **{n: [_node_file(n)] for n in mirror_only}}
     if sibling_owned or foreign_red:
         unattributed = [n for n in unattributed if n not in sibling_owned and n not in foreign_red]
     unmeasured: List[str] = []
@@ -1403,6 +1501,8 @@ def review_reverify(
         "ruled_pre_existing": {n: ruled[n] for n in pre_existing if n in ruled},
         "sibling_owned": sibling_owned,
         "foreign_red": foreign_red,
+        "mirror_only_red": mirror_only,
+        "foreign_red_runs": foreign_red_runs,
         "kept": kept,
         "foreign": foreign_ids,
         "passed_at_base": sorted(base_green - set(foreign_red)),
@@ -1487,4 +1587,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         run_key=str(params.get("run_key") or ""),
         base_export_path=base_export_path,
         export_failing_path=export_failing_path,
+        leg_passed=[str(i) for i in params["leg_passed"]] if isinstance(params.get("leg_passed"), list) else None,
     )

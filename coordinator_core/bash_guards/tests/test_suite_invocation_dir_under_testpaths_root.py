@@ -198,10 +198,16 @@ def test_root_and_ancestor_stay_denied_before_any_count(repo, root) -> None:
     assert _denied(repo, f"pytest {root}")
 
 
-def test_directory_outside_testpaths_stays_denied(repo) -> None:
-    _populate(repo, "elsewhere", 1)
+def test_directory_outside_testpaths_over_threshold_stays_denied(repo) -> None:
+    _populate(repo, "elsewhere", _T + 1)
     _track(repo)
     assert _denied(repo, "pytest elsewhere")
+
+
+def test_small_directory_outside_testpaths_is_admitted(repo) -> None:
+    _populate(repo, "elsewhere", 1)
+    _track(repo)
+    assert not _denied(repo, "pytest elsewhere")
 
 
 def test_glob_matching_several_files_is_still_judged_by_the_glob_rule(repo) -> None:
