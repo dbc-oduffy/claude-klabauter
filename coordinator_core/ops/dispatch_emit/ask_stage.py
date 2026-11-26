@@ -1190,6 +1190,38 @@ def _sizing_plan_edge(root: Path, sizing_rel: str) -> Optional[str]:
     raise AskStageError(f"PLAN-EDGE-DANGLING: {sizing_rel} has plan edge {edge!r}, but that file exists in no layout")
 
 
+def _sizing_file(root: Path, rel: str | None) -> str | None:
+    """`rel` when it is a file inside `root`, else None."""
+    if not isinstance(rel, str) or not rel.strip():
+        return None
+    rel = rel.strip().replace(chr(92), "/")
+    found = contained_path(root / rel, [root])
+    if found is None or not found.is_file():
+        return None
+    return rel
+
+
+def _recorded_sizing_rel(root: Path, run_id: str) -> str | None:
+    """The sizing path on this run's `run.json`, when that file exists.
+
+    A stage reader can rename both the plan and the sizing in the command it
+    copies. The run record still names the sizing that was submitted.
+    """
+    try:
+        record = record_dir(root, run_id)
+    except ValueError:
+        return None
+    path = record / "run.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    rel = data.get("sizing_rel") if isinstance(data, dict) else None
+    return _sizing_file(root, rel if isinstance(rel, str) else None)
+
+
 def _sizing_named_plan(root: Path, plan_rel: str, sizing_rel: str) -> str:
     """The plan path to stage when the caller path and the sizing-named path disagree.
 
@@ -1687,7 +1719,9 @@ def stage(
         _write(spine_path, spine_text)
         plan_path = spine_path
     else:
-        if commit_sizing_rel:
+        usable = _sizing_file(root, commit_sizing_rel) or _recorded_sizing_rel(root, run_id)
+        if usable is not None:
+            commit_sizing_rel = usable
             plan_rel = _sizing_named_plan(root, plan_rel, commit_sizing_rel)
         plan_path = contained_path(root / plan_rel, [root])
         if plan_path is None or not plan_path.is_file():
