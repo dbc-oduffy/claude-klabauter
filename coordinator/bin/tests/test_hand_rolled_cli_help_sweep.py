@@ -59,6 +59,8 @@ pytestmark = [
 # Every hand-rolled trampoline fixed by the 2026-08-14 publish-round chunk,
 # relative to coordinator/bin/, invoked as `python3 <file> --help`.
 _SWEPT_HELP_ENTRYPOINTS = (
+    "codex-coordinator.py",
+    "coordinator-codex.py",
     "box-launch-windowless.py",
     "seed-cross-session-inbound.py",
     "trim-file-cache.py",

@@ -790,6 +790,129 @@ def test_a_frame_at_a_pending_face_spools_through_the_leg_with_deliver_only(box)
     run(go())
 
 
+def test_router_restart_re_registers_pending_and_live_legs_that_peers_json_rows_name_and_sweeps_a_dead_record(box):
+    async def go():
+        legs = box / "legs"
+        write_leg(legs, "conv-pend", mode="pending")
+        write_leg(legs, "conv-live", mode="live")
+        write_leg(legs, "conv-dead", pid=DEAD_AGY_PID, agy_pid=DEAD_AGY_PID, mode="live")
+        (legs / "junk.json").write_text("{")
+        fixed = [{"name": "agy-session-pend", "vendor": "agy", "target": "conv-pend"},
+                 {"name": pr.readable_peer_name("agy", "conv-live"), "vendor": "agy", "target": "conv-live"},
+                 {"name": "agy-session-dead", "vendor": "agy", "target": "conv-dead"}]
+        r = pr.Router(fixed, sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters([]), legs_dir=legs)
+        await r.start()
+        try:
+            pend, live = pr.readable_peer_name("agy", "conv-pend"), pr.readable_peer_name("agy", "conv-live")
+            assert pend in r.pending_legs and pend in r.pending_faces and "agy-session-pend" not in r.peers
+            (entry,) = _face_entries(box, pend)
+            assert entry["vendor"] == "agy" and entry["leg_mode"] == "pending"
+            (entry,) = _face_entries(box, live)
+            assert live in r.peers and live in r.faces and "leg_mode" not in entry
+            reachable, rows = r.roster_rows("cli", {})
+            assert pend in reachable and live in reachable
+            assert [x for x in rows if x["name"] == pend][0]["leg_mode"] == "pending"
+            assert "agy-session-dead" in r.dead_holders and _face_entries(box, "agy-session-dead") == []
+            assert not (legs / "conv-dead.json").exists() and (legs / "junk.json").exists()
+            assert (legs / "conv-pend.json").exists() and (legs / "conv-live.json").exists()
+        finally:
+            await r.stop()
+    run(go())
+
+
+def test_a_live_peers_json_agy_row_whose_leg_drops_to_pending_is_listed_pending_not_dropped(box):
+    async def go():
+        legs = box / "legs"
+        name = pr.readable_peer_name("agy", "conv-flip")
+        write_leg(legs, "conv-flip", mode="live")
+        r = pr.Router([{"name": name, "vendor": "agy", "target": "conv-flip"}], sessions_dir=box / "sessions",
+                      state_dir=box / "state", endpoint_dir=box / "eps", adapters=echo_adapters([]), legs_dir=legs)
+        await r.start()
+        try:
+            assert name in r.peers and name in r.faces
+            write_leg(legs, "conv-flip", mode="pending")
+            await r.refresh_discovered()
+            assert name not in r.peers and name in r.pending_legs and name in r.pending_faces
+            assert name not in r.dead_holders
+            (entry,) = _face_entries(box, name)
+            assert entry["leg_mode"] == "pending"
+            reachable, rows = r.roster_rows("cli", {})
+            assert reachable.count(name) == 1 and [x["name"] for x in rows].count(name) == 1
+            write_leg(legs, "conv-flip", mode="live")
+            await r.refresh_discovered()
+            assert name in r.peers and name not in r.pending_legs and not r.pending_faces
+        finally:
+            await r.stop()
+    run(go())
+
+
+@portable
+def test_sweep_dead_leg_records_removes_only_records_whose_leg_pid_is_gone_or_replaced(tmp_path):
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-live")
+    write_leg(legs, "conv-unstamped", proc_start=None)  # a live pid still starting: kept
+    write_leg(legs, "conv-gone", pid=DEAD_AGY_PID)
+    write_leg(legs, "conv-reused", proc_start="not-this-process-start")
+    (legs / "junk.json").write_text("{")
+    assert sorted(pr.sweep_dead_leg_records(legs)) == ["conv-gone.json", "conv-reused.json"]
+    assert sorted(p.name for p in legs.iterdir()) == ["conv-live.json", "conv-unstamped.json", "junk.json"]
+    assert pr.sweep_dead_leg_records(tmp_path / "missing") == []
+
+
+def test_sweep_removes_a_record_whose_pid_start_cannot_be_read(tmp_path, monkeypatch):
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-zombie")
+    write_leg(legs, "conv-unstamped", proc_start=None)
+
+    def unreadable(pid):
+        raise OSError("zombie")
+    monkeypatch.setattr(pr._roster(), "proc_start", unreadable)
+    assert pr.sweep_dead_leg_records(legs) == ["conv-zombie.json"]
+    assert (legs / "conv-unstamped.json").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="unix-socket endpoint probe is POSIX-only")
+def test_unstamped_pending_leg_holding_its_listener_gets_a_pending_face_on_router_start(box):
+    async def go():
+        legs = box / "legs"
+        sock_path = tempfile.mkdtemp(prefix="agyleg") + "/leg.sock"
+        srv = socket.socket(socket.AF_UNIX)
+        srv.bind(sock_path)
+        srv.listen(4)
+        threading.Thread(target=lambda: [c.close() for c in iter(lambda: srv.accept()[0], None)], daemon=True).start()
+        write_leg(legs, "conv-old", proc_start=None, mode="pending", endpoint=sock_path)
+        write_leg(legs, "conv-nosock", proc_start=None, mode="pending", endpoint=sock_path + ".gone")
+        fixed = [{"name": "agy-session-old", "vendor": "agy", "target": "conv-old"}]
+        r = pr.Router(fixed, sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters([]), legs_dir=legs)
+        await r.start()
+        try:
+            old = pr.readable_peer_name("agy", "conv-old")
+            assert old in r.pending_legs and old in r.pending_faces
+            assert pr.readable_peer_name("agy", "conv-nosock") not in r.pending_legs
+            (entry,) = _face_entries(box, old)
+            assert entry["vendor"] == "agy" and entry["leg_mode"] == "pending"
+        finally:
+            await r.stop()
+            srv.close()
+    run(go())
+
+
+@portable
+def test_leg_target_pending_needs_pending_mode_a_matching_process_and_an_agy_session_not_dead(tmp_path):
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-p", mode="pending")
+    write_leg(legs, "conv-l", mode="live")
+    write_leg(legs, "conv-orphan", mode="pending", agy_pid=DEAD_AGY_PID)
+    write_leg(legs, "conv-reused", mode="pending", proc_start="not-this-process-start")
+    assert pr.leg_target_pending(legs, "conv-p")
+    assert not pr.leg_target_pending(legs, "conv-l")
+    assert not pr.leg_target_pending(legs, "conv-orphan")
+    assert not pr.leg_target_pending(legs, "conv-reused")
+    assert not pr.leg_target_pending(legs, "conv-absent")
+
+
 @portable
 def test_agy_lock_peers_exist_only_while_the_presence_lock_is_held(tmp_path):
     d = tmp_path / "presence"
@@ -1505,6 +1628,42 @@ def test_a_transport_face_whose_origin_has_no_registered_session_is_refused_nami
     r.transport_sources["u"], r.transport_origins["u"] = None, "cli"
     resp = run(r._dispatch({"op": "send", "as": "other", "to": "u", "text": "reply"}))
     assert resp["ok"] is False and "cli" in resp["error"] and "transport face" in resp["error"] and sent == []
+
+
+@portable
+def test_a_reply_to_a_transport_face_name_still_resolves_after_a_router_restart(dirs, monkeypatch):
+    r, sent, em_sock = _transport_router(dirs, monkeypatch)
+    monkeypatch.setattr(r, "_stop_face", lambda name: asyncio.sleep(0))
+    monkeypatch.setattr(r, "_spawn_face", lambda name: asyncio.sleep(0))
+    face = run(r._transport_face("em", "other"))
+    (dirs / "state").mkdir(exist_ok=True)
+    assert face != "t" and r.transport_origins[face] == "em"
+    reborn = pr.Router([], sessions_dir=dirs / "sessions", state_dir=dirs / "state", endpoint_dir=dirs / "eps",
+                       adapters={})
+    assert face not in reborn.transport_sources and face not in reborn.transport_origins
+    reborn._load_transport_origins()
+    routed = []
+
+    async def via_transport(sender, to, text):
+        routed.append((sender, to))
+        return {"ok": True, "written": True}
+    monkeypatch.setattr(reborn, "_transport_send_to_session", via_transport)
+    resp = run(reborn._dispatch({"op": "send", "as": "other", "to": face, "text": "reply"}))
+    assert resp["ok"] is True and routed == [("other", "em")], (resp, routed)
+    reborn.transport_origins[face] = "gone-session"
+    resp = run(reborn._dispatch({"op": "send", "as": "other", "to": face, "text": "reply"}))
+    assert resp["ok"] is False and "gone-session" in resp["error"] and routed == [("other", "em")]
+
+
+@portable
+def test_the_persisted_transport_origins_map_is_capped_oldest_first(dirs, monkeypatch):
+    r, _, _ = _transport_router(dirs, monkeypatch)
+    (dirs / "state").mkdir(exist_ok=True)
+    for i in range(pr.MAX_TRANSPORT_ORIGINS + 5):
+        r.transport_origins[f"face-{i}"] = "em"
+    r._save_transport_origins()
+    assert len(r.transport_origins) == pr.MAX_TRANSPORT_ORIGINS
+    assert "face-0" not in r.transport_origins and f"face-{pr.MAX_TRANSPORT_ORIGINS + 4}" in r.transport_origins
 
 
 @portable
@@ -3022,3 +3181,63 @@ def test_roster_rows_keep_an_agy_peer_whose_session_is_live_and_a_codex_peer_wit
 def test_code_digest_equals_the_installers_router_closure_digest():
     installer = pr._sibling("unimatrix-install.py", "unimatrix_install")
     assert pr.code_digest() == installer.router_closure_digest(pr.here())
+
+
+def _face_run(box, monkeypatch, owner_pid, owner_start, observe):
+    """Run a real in-process face owned by `owner_pid`; `observe(ep, pid_file)` runs while it is up and
+    returns whether the face should be asked to stop; returns (face exited on its own, ep, pid_file)."""
+    monkeypatch.setattr(pr, "OWNER_WATCH_S", 0.1)
+    ep = str(box / "eps" / "face-owner.sock")
+    pid_file = box / "sessions" / f"{os.getpid()}.json"
+
+    async def go():
+        task = asyncio.ensure_future(pr.run_face("face-owner", ep, str(box / "ctl.sock"), str(box / "sessions"),
+                                                 owner_pid=owner_pid, owner_start=owner_start))
+        await until(lambda: pid_file.exists() and os.path.exists(ep))
+        stop_it = await observe(task)
+        if stop_it:
+            os.kill(os.getpid(), __import__("signal").SIGTERM)
+        await asyncio.wait_for(task, 5)
+        return not stop_it
+
+    return run(go()), ep, pid_file
+
+
+def test_a_face_exits_and_cleans_up_when_its_owner_process_dies(box, monkeypatch):
+    owner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        start = pr._roster().proc_start(owner.pid)
+
+        async def observe(task):
+            await asyncio.sleep(0.4)
+            assert not task.done()  # live owner: still up
+            owner.kill()
+            owner.wait()
+            return False
+
+        exited, ep, pid_file = _face_run(box, monkeypatch, owner.pid, start, observe)
+    finally:
+        owner.kill()
+    assert exited and not pid_file.exists() and not os.path.exists(ep)
+
+
+def test_a_face_exits_when_its_owner_pid_is_alive_with_a_different_start(box, monkeypatch):
+    async def observe(task):
+        return False
+
+    exited, ep, pid_file = _face_run(box, monkeypatch, os.getpid(), "not-the-real-start", observe)
+    assert exited and not pid_file.exists() and not os.path.exists(ep)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="os.kill(SIGTERM) on Windows terminates the test process itself")
+def test_a_face_whose_owner_is_alive_with_matching_start_stays_up(box, monkeypatch):
+    async def observe(task):
+        await asyncio.sleep(0.6)
+        assert not task.done() and pid_alive_file()
+        return True
+
+    def pid_alive_file():
+        return (box / "sessions" / f"{os.getpid()}.json").exists()
+
+    exited, ep, pid_file = _face_run(box, monkeypatch, os.getpid(), pr._roster().proc_start(os.getpid()), observe)
+    assert not exited and not pid_file.exists()  # only the stop signal ended it
