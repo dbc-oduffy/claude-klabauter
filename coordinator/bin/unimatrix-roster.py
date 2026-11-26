@@ -312,13 +312,24 @@ def pending_agy_face_backed(d) -> bool:
             continue
         conv = rec.get("conversation") if isinstance(rec, dict) else None
         if (not isinstance(conv, str) or not conv or rec.get("mode") != "pending"
-                or not isinstance(rec.get("procStart"), str) or not rec["procStart"]
                 or f"-{hashlib.sha256(conv.encode()).hexdigest()[:10]}-on-" not in name
-                or not entry_live(rec)):
+                or not _pending_leg_holder_live(rec)):
             continue
         if liveness.agy_session_state(conv, rec) != "dead":
             return True
     return False
+
+
+def _pending_leg_holder_live(rec) -> bool:
+    """True when a pending leg record's pid is its process: the `procStart` stamp matches, or, for a
+    leg that never stamped one (the router lists it pending on the same rule), the pid is alive and
+    its POSIX unix-socket endpoint still exists. A stamp-less record on Windows is never live."""
+    stamp = rec.get("procStart")
+    if isinstance(stamp, str) and stamp:
+        return entry_live(rec)
+    ep = rec.get("endpoint")
+    return (not _is_win() and type(rec.get("pid")) is int and pid_alive(rec["pid"])
+            and isinstance(ep, str) and os.path.isabs(ep) and os.path.exists(ep))
 
 
 def far_codex_unbacked(entry):
@@ -1615,12 +1626,23 @@ def far_identity_crossed(d, row, sock):
     return not (isinstance(sid, str) and sid and sid == row["entry"].get("sessionId"))
 
 
-def rename_live_mirror(pid, sock, row, cfg, say, scan=None) -> None:
+def far_face_restarted(d, row, sock) -> bool:
+    """True when mirror record `d` is the same far face under a new far pid: socket and name unchanged, pid moved.
+
+    A face keeps its far socket and name across a router restart and mints a new pid and session id; a
+    different session on that socket shows as another name or socket (`far_identity_crossed`)."""
+    far_pid = row["entry"].get("pid")
+    return (isinstance(far_pid, int) and far_pid > 0 and d.get("farPid") != far_pid
+            and not far_identity_crossed(d, row, sock))
+
+
+def rename_live_mirror(pid, sock, row, cfg, say, scan=None, adopt_restart=False) -> None:
     """Refresh a live bridge's far identity when its stable remote socket is reused.
 
     The bridge's local pid/process identity stays its own. The relay destination must
     follow the remote process, which may restart without changing its socket or name.
-    Never writes `sessionId`: a changed far session is crossed (`crossed_mirrors`) and rebuilt.
+    Writes `sessionId` only with `adopt_restart` and only for a restarted face (`far_face_restarted`);
+    otherwise a changed far session is crossed (`crossed_mirrors`) and rebuilt.
     """
     name = row["entry"].get("name")
     path = os.path.join(sessions_dir(), f"{pid}.json")
@@ -1656,6 +1678,10 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None) -> None:
         if field in row["entry"] and d.get(field) != row["entry"][field]:
             updates[field] = row["entry"][field]
     far_pid = row["entry"].get("pid")
+    if adopt_restart and far_face_restarted(d, row, sock):
+        far_sid = row["entry"].get("sessionId")
+        if isinstance(far_sid, str) and far_sid and d.get("sessionId") != far_sid:
+            updates["sessionId"] = d["sessionId"] = far_sid
     if isinstance(far_pid, int) and far_pid > 0 and d.get("farPid") != far_pid:
         updates["farPid"] = far_pid
     for field, value in supervisor_fields().items():
@@ -1732,7 +1758,7 @@ ABSENT_POLLS_BEFORE_UNMIRROR = 2
 _ABSENT = {}  # far socket -> consecutive polls its row was missing from the far roster
 
 
-def sync(bridges, rows, cfg, say):
+def sync(bridges, rows, cfg, say) -> None:
     """One reconcile pass: `rows` is far socket -> roster row; `bridges` far socket -> Popen.
 
     A live bridge whose row is missing is kept for `ABSENT_POLLS_BEFORE_UNMIRROR` polls in a row: a far
@@ -1751,7 +1777,7 @@ def sync(bridges, rows, cfg, say):
         deaf = b and b.poll() is None and (bridge_deaf(b.pid, local_endpoint(f"{cfg.remote}:{sock}"))
                                            or bridge_unlisted(b.pid))
         if b and b.poll() is None and not deaf:
-            rename_live_mirror(b.pid, sock, row, cfg, say, scan)
+            rename_live_mirror(b.pid, sock, row, cfg, say, scan, adopt_restart=True)
             continue
         if deaf:
             say(f"bridge {b.pid} for {sock} lost its socket or registry entry; re-mirror")

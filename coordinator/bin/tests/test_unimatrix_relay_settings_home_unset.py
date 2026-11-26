@@ -167,6 +167,11 @@ def run_append_program(tmp_path, monkeypatch, capsys, *, groups, existing=None):
         (programdata / "ssh").mkdir(parents=True)
         (programdata / "ssh" / "administrators_authorized_keys").write_text(existing, encoding="utf-8")
     calls = []
+    import ctypes
+    import types
+    is_admin = "Administrators" in groups or "S-1-5-32-544" in groups
+    monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(
+        shell32=types.SimpleNamespace(IsUserAnAdmin=lambda: int(is_admin))), raising=False)
 
     def fake_run(argv, **kw):
         calls.append(list(argv))
@@ -179,10 +184,6 @@ def run_append_program(tmp_path, monkeypatch, capsys, *, groups, existing=None):
     except SystemExit:
         pass
     return capsys.readouterr().out.strip(), [c for c in calls if c[0] == "icacls"]
-
-
-
-
 
 
 def test_non_admin_windows_user_keeps_the_user_authorized_keys(tmp_path, monkeypatch, capsys):

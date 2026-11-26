@@ -594,7 +594,7 @@ def session_sock_dirs():
     return dirs
 
 
-def _session_path(pid, expected_digest=None, expected_name_digest=None, expected_session_id=None):
+def _session_path(pid, expected_digest=None, expected_name_digest=None, expected_session_id=None) -> str:
     """The live session's messaging endpoint for `pid`; exits when it is absent or not a session endpoint.
 
     With `expected_digest`, the endpoint must hash to it: a pid that now holds another session
@@ -656,7 +656,8 @@ def _session_path(pid, expected_digest=None, expected_name_digest=None, expected
     elif os.path.realpath(os.path.dirname(path)) not in session_sock_dirs() or not stat.S_ISSOCK(os.stat(path).st_mode):
         refuse(f"refusing non-session socket {path}")
     name = _exported_name(target)
-    _REACHED.update(pid=pid, name=name if isinstance(name, str) else None, session=target.get("sessionId"))
+    _REACHED.update(pid=pid, name=name if isinstance(name, str) else None, session=target.get("sessionId"),
+                    router_face=bool(target.get("unimatrixRouterPid")))
     return path
 
 
@@ -781,13 +782,86 @@ def _confirm_server(server_pid):
 
 FLUSH_UNCONFIRMED = "flush-unconfirmed"
 
+#: Margin over the face's own router request (unimatrix-peer-router.py FACE_ROUTER_REQUEST_S = 15s), so a
+#: router timeout reaches the sender as the face's ok:false line, never as a relay-side expiry.
+FACE_ROUTER_REQUEST_S = 15
+FACE_ACK_MARGIN_S = 5
+FACE_ACK_DEADLINE_S = FACE_ROUTER_REQUEST_S + FACE_ACK_MARGIN_S
+
+
+class FaceRefused(Exception):
+    """A router face answered ok:false, or gave no ack line, for a delivered frame."""
+
+
+def _face_ack(raw: bytes) -> None:
+    """Raise FaceRefused unless `raw` holds a first line that is the face's {"ok": true}."""
+    first = raw.split(b"\n", 1)[0].strip()
+    if not first:
+        raise FaceRefused("router face closed without an ack line: frame not confirmed queued")
+    try:
+        ack = json.loads(first)
+    except ValueError:
+        raise FaceRefused(f"router face ack is not JSON: {first[:120]!r}") from None
+    if not isinstance(ack, dict) or ack.get("ok") is not True:
+        raise FaceRefused(str(ack.get("error") or "router face refused the frame") if isinstance(ack, dict)
+                          else "router face ack is not an object")
+
+
+def _read_ack_socket(s) -> bytes:
+    """Half-close `s`, then read to the first newline or EOF within FACE_ACK_DEADLINE_S."""
+    import time
+    s.shutdown(socket.SHUT_WR)
+    end = time.monotonic() + FACE_ACK_DEADLINE_S
+    buf = b""
+    while b"\n" not in buf:
+        left = end - time.monotonic()
+        if left <= 0:
+            raise FaceRefused(f"router face gave no ack within {FACE_ACK_DEADLINE_S}s")
+        s.settimeout(left)
+        try:
+            chunk = s.recv(65536)
+        except socket.timeout:
+            raise FaceRefused(f"router face gave no ack within {FACE_ACK_DEADLINE_S}s") from None
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
+def _read_ack_pipe(win32file, h) -> bytes:
+    """Read the face's ack from byte-mode pipe `h` (no message end: stop at a newline, EOF, or the deadline)."""
+    import threading
+    box = {"buf": b""}
+
+    def work() -> None:
+        try:
+            while b"\n" not in box["buf"]:
+                _, data = win32file.ReadFile(h, 65536)
+                if not data:
+                    break
+                box["buf"] += bytes(data)
+        except BaseException as e:  # a broken pipe is the face's EOF; a short buf then fails _face_ack
+            box["err"] = e
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(FACE_ACK_DEADLINE_S)
+    if t.is_alive():
+        _cancel_thread_io(t)
+        t.join(0.05)
+        raise FaceRefused(f"router face gave no ack within {FACE_ACK_DEADLINE_S}s")
+    return box["buf"]
+
 
 def _write_line(path, line) -> "str | None":
     """Deliver one message line to the session endpoint `path` (pipe on Windows, unix socket elsewhere).
 
     Returns FLUSH_UNCONFIRMED when the write completed but the reader had not drained within the flush
-    deadline (delivered, unconfirmed); None otherwise. A failed write raises."""
+    deadline (delivered, unconfirmed); None otherwise. A failed write raises. When the endpoint is a
+    router face (`_REACHED["router_face"]`), the face's one ack line is read before returning and anything
+    but {"ok": true} raises FaceRefused; any other endpoint is write-only."""
     line = local_reply_address(line)
+    face = bool(_REACHED.get("router_face"))
     if endpoint_kind() == "pipe":
         import win32file
         line = load_roster().authenticated_data(path, line, os.path.expanduser(SESS))
@@ -800,7 +874,10 @@ def _write_line(path, line) -> "str | None":
                 _flush_bounded(lambda: win32file.FlushFileBuffers(h))
             except TimeoutError:
                 # The write completed; a busy reader just has not drained. Failing here invites a duplicate resend.
-                return FLUSH_UNCONFIRMED
+                if not face:
+                    return FLUSH_UNCONFIRMED
+            if face:
+                _face_ack(_read_ack_pipe(win32file, h))
         finally:
             win32file.CloseHandle(h)
         return None
@@ -809,6 +886,8 @@ def _write_line(path, line) -> "str | None":
         s.connect(path)
         _confirm_server(_socket_peer_pid(s))
         s.sendall(line)
+        if face:
+            _face_ack(_read_ack_socket(s))
     finally:
         s.close()
     return None
@@ -850,7 +929,7 @@ def send_batch(pid, expected_digest=None, expected_name_digest=None, expected_se
                     reply.update(reached=reached["name"], reached_session=reached["session"], reached_pid=pid,
                                  reached_box=_own_box(), reached_ref=shown_ref(reached["name"]))
                 reply["digest"] = record_receipt(expected_session_id, line)
-        except TargetMismatch as e:
+        except (TargetMismatch, FaceRefused) as e:
             reply = {"ok": False, "error": str(e)}
         except Exception as e:  # pywintypes.error is not an OSError subclass
             reply = {"ok": False, "error": f"{type(e).__name__}: {e}"}

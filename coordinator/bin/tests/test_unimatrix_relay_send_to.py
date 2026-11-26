@@ -116,7 +116,7 @@ def test_send_batch_without_digest_still_serves_by_pid(monkeypatch: pytest.Monke
     serve(monkeypatch, "pipe", PIPE_A, tmp_path)
     monkeypatch.setattr(R.sys, "stdin", _Stdin(b'{"a":1}\n'))
     R.send_batch(7)
-    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "written": True}
 
 
 def test_main_dispatches_send_to_with_the_digest(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,7 +166,7 @@ def test_send_named_matching_name_delivers(monkeypatch: pytest.MonkeyPatch, tmp_
                                    (8, {"messagingSocketPath": b, "name": "other"})], tmp_path)
     monkeypatch.setattr(R.sys, "stdin", _Stdin(b'{"a":1}\n'))
     R.send_batch(7, digest(a), ndigest("g"))
-    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "written": True}
     assert [p for p, _ in written] == [a]
 
 
