@@ -362,8 +362,10 @@ def load_leg_peers(legs_dir, taken_names=(), taken_targets=(), pending_out=None)
         try:
             with open(os.path.join(legs_dir, f), encoding="utf-8") as fh:
                 rec = json.load(fh)
-            conv = rec["conversation"]
-        except (OSError, ValueError, KeyError, TypeError):
+            # The file is named for its conversation; a record an older launch hook wrote carries no
+            # `conversation` key, and dropping it strands a live leg nameless across a router restart.
+            conv = rec.get("conversation") or f[:-len(".json")]
+        except (OSError, ValueError, TypeError, AttributeError):
             continue
         if not isinstance(conv, str) or not conv or conv in taken_targets:
             continue

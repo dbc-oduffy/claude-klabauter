@@ -604,6 +604,23 @@ def test_pending_leg_with_a_live_process_fills_pending_out_never_the_peer_list(t
     assert [p["target"] for p in pr.load_leg_peers(legs)] == ["conv-live"]  # no pending_out: pending legs skipped as before
 
 
+@portable
+def test_a_leg_record_with_no_conversation_key_is_loaded_under_its_file_stem(tmp_path):
+    """A record an older launch hook wrote has no `conversation`: its file name is the conversation."""
+    legs = tmp_path / "legs"
+    write_leg(legs, "conv-old-pend", mode="pending")
+    write_leg(legs, "conv-old-live", mode="live")
+    for conv in ("conv-old-pend", "conv-old-live"):
+        path = legs / f"{conv}.json"
+        rec = json.loads(path.read_text())
+        del rec["conversation"]
+        path.write_text(json.dumps(rec))
+    pending = {}
+    assert [p["target"] for p in pr.load_leg_peers(legs, pending_out=pending)] == ["conv-old-live"]
+    assert {p["target"] for p in pending.values()} == {"conv-old-pend"}
+    assert json.loads((legs / "conv-old-pend.json").read_text())["conversation"] == "conv-old-pend"
+
+
 def test_list_reports_a_pending_agy_leg_pending_a_live_one_ready_and_a_send_answers_queued(box, capsys, monkeypatch):
     queued = "[unimatrix-peer-agy] queued: the agy leg is not live; the message is spooled"
     seen = []
