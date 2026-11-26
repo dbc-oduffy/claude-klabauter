@@ -792,7 +792,14 @@ def _event_provenance(path: Path, backend: str) -> dict:
         if backend in _FAMILY_BACKENDS and result["model"] == "unknown":
             result["model"] = _family_event_model(event) or "unknown"
         kind = event.get("type")
-        identity = event.get("thread_id") if kind == "thread.started" else event.get("session_id") if backend == "claude" else None
+        if kind == "thread.started":
+            identity = event.get("thread_id")
+        elif backend == "claude":
+            identity = event.get("session_id")
+        elif backend == "grok":
+            identity = event.get("sessionId") or event.get("session_id")
+        else:
+            identity = None
         if isinstance(identity, str):
             try:
                 result["native_thread_id"] = str(uuid.UUID(identity))
@@ -807,7 +814,7 @@ def _event_provenance(path: Path, backend: str) -> dict:
                     if isinstance(value, str) and value.strip():
                         result[target] = value
                         break
-        if (kind == "turn.completed" or backend == "claude") and isinstance(event.get("usage"), dict):
+        if (kind == "turn.completed" or backend == "claude" or (backend == "grok" and kind == "usage")) and isinstance(event.get("usage"), dict):
             usages.append(event["usage"])
             result.setdefault("usage_observations", []).append({
                 "usage": event["usage"], "model": event.get("model", result["model"]),
@@ -882,7 +889,7 @@ def _append_canonical_usage(receipt: dict) -> dict:
         return {'status': 'incomplete', 'reason': 'stable broker fire/request identity unavailable'}
     backend = receipt.get('backend')
     events = receipt.get('usage_events')
-    if backend not in ('codex', 'claude') or not isinstance(events, list) or not events:
+    if backend not in ('codex', 'claude', 'grok') or not isinstance(events, list) or not events:
         return {'status': 'incomplete', 'reason': 'native usage events unavailable'}
     cached_key, written_key = ('cached_input_tokens', 'cache_write_input_tokens') if backend == 'codex' else (
         'cache_read_input_tokens', 'cache_creation_input_tokens')
