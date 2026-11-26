@@ -31,7 +31,12 @@ def _hide_child_consoles() -> None:
     Root of the PM-visible pointer flicker: Python's default spawn shows both, and the box
     runs thousands of bare git/python spawns a minute. Defaulting it here covers every
     engine process, CLI, hook body and test without touching each call site. Trap: a
-    caller that passes its own `startupinfo` or CREATE_NEW_CONSOLE / DETACHED_PROCESS keeps it."""
+    caller that passes its own `startupinfo` or CREATE_NEW_CONSOLE / DETACHED_PROCESS keeps it.
+
+    Invariant: a spawner that owns a console adds neither CREATE_NO_WINDOW nor SW_HIDE. Its
+    child inherits that console and opens no window anyway, and CREATE_NO_WINDOW there moves
+    the child onto a hidden console of its own: an interactive TUI (agy, grok) launched by a
+    coordinator python draws to nothing. Only the feedback cursor is suppressed."""
     import sys
 
     if sys.platform != "win32":
@@ -43,19 +48,37 @@ def _hide_child_consoles() -> None:
         return
     own_console = subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS
 
-    def init(self, *args, **kwargs):
+    def init(self, *args, **kwargs) -> None:
         flags = kwargs.get("creationflags", 0) or 0
         if not flags & own_console:
-            kwargs["creationflags"] = flags | subprocess.CREATE_NO_WINDOW
+            windowless = not _spawner_has_console()
+            if windowless:
+                kwargs["creationflags"] = flags | subprocess.CREATE_NO_WINDOW
             if kwargs.get("startupinfo") is None:
                 info = subprocess.STARTUPINFO()
-                info.dwFlags |= subprocess.STARTF_USESHOWWINDOW | 0x80  # STARTF_FORCEOFFFEEDBACK
-                info.wShowWindow = 0  # SW_HIDE
+                info.dwFlags |= 0x80  # STARTF_FORCEOFFFEEDBACK
+                if windowless:
+                    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    info.wShowWindow = 0  # SW_HIDE
                 kwargs["startupinfo"] = info
         real_init(self, *args, **kwargs)
 
     init._hides_consoles = True  # type: ignore[attr-defined]
     subprocess.Popen.__init__ = init  # type: ignore[method-assign]
+
+
+_get_console_window = None
+
+
+def _spawner_has_console() -> bool:
+    """Is this process attached to a visible console? Read per spawn: AllocConsole/FreeConsole
+    can change it. ctypes loads on the first spawn, never at import (hook import budget)."""
+    global _get_console_window
+    if _get_console_window is None:
+        import ctypes
+
+        _get_console_window = ctypes.windll.kernel32.GetConsoleWindow  # type: ignore[attr-defined]
+    return bool(_get_console_window())
 
 
 _hide_child_consoles()
