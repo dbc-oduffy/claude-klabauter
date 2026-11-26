@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import yaml
 
-from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.ask_stage import _handler, _sizing_named_plan
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 
 RUN = "ask-20261112T000000-abc123"
@@ -72,3 +72,11 @@ def test_refuses_naming_both_when_neither_file_exists(tmp_path):
 def test_a_plan_with_an_unrelated_name_is_not_compared(tmp_path):
     reply = _stage(tmp_path, plan_path="docs/plans/2026-11-12-other.md", landed=("docs/plans/2026-11-12-other.md",))
     assert "error" not in reply
+
+
+def test_missing_caller_plan_stages_the_existing_sizing_plan(tmp_path):
+    """A caller path that is not in the repo stages the sizing's plan file."""
+    missing = "docs/plans/2026-11/2026-11-26-add-polygon-tally-82acbb.md"
+    reply = _stage(tmp_path, plan_path=missing, landed=(NAMED,))
+    assert "error" not in reply
+    assert _sizing_named_plan(tmp_path, missing, SIZING_REL) == NAMED

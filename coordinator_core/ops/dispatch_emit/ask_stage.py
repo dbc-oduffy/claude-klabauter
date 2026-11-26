@@ -1191,25 +1191,32 @@ def _sizing_plan_edge(root: Path, sizing_rel: str) -> Optional[str]:
 
 
 def _sizing_named_plan(root: Path, plan_rel: str, sizing_rel: str) -> str:
-    """The plan path to stage when `plan_rel` and the sizing's own plan path share a file name but differ in directory.
+    """The plan path to stage when the caller path and the sizing-named path disagree.
 
-    Returns the sizing-named path when that file exists, else `plan_rel` when that file exists (the
-    plan stages where it was actually written, 664092bb10); raises AskStageError `PLAN-PATH-MISMATCH`
-    naming both only when neither exists. A matching path or a differently named plan is returned unchanged.
-    Trap: refusing an existing `plan_rel` denies recoverable work, an engine bug, never a guard."""
+    An existing caller path with a different file name is that plan. A missing caller
+    path uses the sizing-named file when that file exists, including when the names
+    differ. Same file name, different directory: the sizing-named file when it exists,
+    else the caller path where the plan was written. Neither file: `PLAN-PATH-MISMATCH`.
+    Trap: refusing an existing `plan_rel` denies recoverable work, an engine bug, never a guard.
+    """
     from coordinator_core.ops.dispatch_emit.sizing_fire import s_plan_path
 
     named = s_plan_path(sizing_rel)
     given = plan_rel.replace(chr(92), "/")
-    if given == named or PurePosixPath(given).name != PurePosixPath(named).name:
+    named_path = contained_path(root / named, [root])
+    given_path = contained_path(root / given, [root])
+    named_exists = named_path is not None and named_path.is_file()
+    given_exists = given_path is not None and given_path.is_file()
+    same_name = PurePosixPath(given).name == PurePosixPath(named).name
+    if given == named or (given_exists and not same_name):
         return plan_rel
-    found = contained_path(root / named, [root])
-    if found is not None and found.is_file():
+    if named_exists:
         return named
-    own = contained_path(root / given, [root])
-    if own is not None and own.is_file():
+    if given_exists:
         return plan_rel
-    raise AskStageError(f"PLAN-PATH-MISMATCH: plan_path {given!r} is not the sizing-named {named!r}, and neither file exists")
+    raise AskStageError(
+        f"PLAN-PATH-MISMATCH: plan_path {given!r} is not the sizing-named {named!r}, and neither file exists"
+    )
 
 
 def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence[str]) -> None:
