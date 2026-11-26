@@ -3194,6 +3194,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     No.
     #      Returns {"repos": {...}, "errors": [...]} only.
     # Spec: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md, chunk C5.
+    # groupem.roll_call / groupem.roll_call_reply -- MUTATING: each writes the roll-call record under
+    # the group-em home (cross-tree), sanctioned under DR-214's send-class lineage; roll_call also
+    # launches one detached delivery worker. groupem.roll_call_status only reads that record.
+    "groupem.roll_call": OpClass.MUTATING,
+    "groupem.roll_call_reply": OpClass.MUTATING,
+    "groupem.roll_call_status": OpClass.COMPUTE_ONLY,
     "fleet.work_state": OpClass.COMPUTE_ONLY,
     # fleet.record_history — COMPUTE_ONLY: fans records.history's own
     # derive_type_history() out across every registered active sibling (read

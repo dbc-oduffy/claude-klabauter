@@ -43,21 +43,46 @@ def apply_title(value: dict, cwd: str) -> dict:
     with codex_app_server._connect(argv, timeout=HANDSHAKE_TIMEOUT_S) as connection:
         deadline = time.monotonic() + REQUEST_TIMEOUT_S
         loaded = connection.request("thread/loaded/list", {"limit": 256}, deadline) or {}
-        if sid not in loaded.get("data", []):
-            return {"updated": False, "reason": "thread is not in this loaded app-server namespace"}
-        response = connection.request("thread/read", {"threadId": sid, "includeTurns": False}, deadline) or {}
+        loaded_ids = loaded.get("data", [])
+        thread = sid
+        if thread not in loaded_ids:
+            thread = value.get("thread_id")
+            if not isinstance(thread, str) or thread not in loaded_ids:
+                return {"updated": False, "reason": "thread is not in this loaded app-server namespace"}
+        response = connection.request("thread/read", {"threadId": thread, "includeTurns": False}, deadline) or {}
         actual = response.get("thread") or {}
-        if actual.get("id") != sid or not isinstance(actual.get("cwd"), str) or os.path.normcase(os.path.realpath(actual["cwd"])) != os.path.normcase(os.path.realpath(cwd)):
+        if actual.get("id") != thread or not isinstance(actual.get("cwd"), str) or os.path.normcase(os.path.realpath(actual["cwd"])) != os.path.normcase(os.path.realpath(cwd)):
             return {"updated": False, "reason": "thread identity/repository did not match the status event"}
         # The identity owner performs the atomic metadata update. A status title
-        # never becomes the source of truth for the task that was assigned.
+        # never becomes the source of truth for the task that was assigned. The registry is keyed
+        # by the hook session id, never the thread id.
         record = preserve(sid, actual.get("name"))
         if not isinstance(record, dict) or record.get("session_id") != sid or "original_task_title" not in record:
             return {"updated": False, "reason": "original task title was not durably preserved"}
         if actual.get("name") == title:
             return {"updated": False, "reason": "unchanged", "title": title}
-        connection.request("thread/name/set", {"threadId": sid, "name": title}, deadline)
+        connection.request("thread/name/set", {"threadId": thread, "name": title}, deadline)
     return {"updated": True, "title": title}
+
+
+def rollout_thread_id(transcript_path: object) -> str | None:
+    """Thread id a rollout carries: its session_meta `id`, else the filename's trailing UUID.
+
+    TRAP: under codex-cli 0.172 the hook payload session_id is not the app-server thread id.
+    """
+    if not isinstance(transcript_path, str) or not Path(transcript_path).is_absolute():
+        return None
+    try:
+        with open(transcript_path, encoding="utf-8") as handle:
+            meta = json.loads(handle.readline())
+        if meta.get("type") == "session_meta":
+            return str(uuid.UUID(meta["payload"]["id"]))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    try:
+        return str(uuid.UUID(Path(transcript_path).stem[-36:]))
+    except ValueError:
+        return None
 
 
 def record_result(sid: object, event: str, result: dict) -> None:
@@ -109,6 +134,9 @@ def _handle(payload: dict, event: str) -> dict:
         value = snapshot({"session_id": sid, "rollouts": paths})
         if ownership is not None:
             value["subagent_stop_ownership"] = ownership
+        thread_id = rollout_thread_id(payload.get("transcript_path"))
+        if thread_id and thread_id != sid:
+            value["thread_id"] = thread_id
         # A missing alias renders the `unregistered` label; a cwd or a guessed
         # UUID suffix is never substituted as a SendMessage identity.
         cache = Path(value["cache_path"])

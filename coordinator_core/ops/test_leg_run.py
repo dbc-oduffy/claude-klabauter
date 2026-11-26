@@ -1203,7 +1203,7 @@ def main(argv: list[str]) -> int:
         out.write_text(json.dumps(refused) + "\n", encoding="utf-8")
         print(json.dumps(refused))
         return EXIT_USAGE
-    measured_at, _ = test_leg_freshness.started_stamp(root, args.head_sha)
+    measured_at, head_at_start = test_leg_freshness.started_stamp(root, args.head_sha)
     prior = _prior_record(Path(args.out))
     result = run(targets, base_sha=args.base_sha, head_sha=args.head_sha,
                  base_export_out=args.base_export_out, budget_s=budget_s, cwd=cwd, touched=args.touched,
@@ -1227,3 +1227,6 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+    mirror = result.get("own_tree")
+    mirror_at = mirror.get("at") if isinstance(mirror, dict) else None
+    result.update(test_leg_freshness.stamp({}, measured_at=measured_at, head_sha=mirror_at or head_at_start))

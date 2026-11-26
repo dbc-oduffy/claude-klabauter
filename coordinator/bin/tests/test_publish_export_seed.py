@@ -5,6 +5,7 @@ Run: python -m pytest coordinator/bin/tests/test_publish_export_seed.py -q
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import io
 import shutil
@@ -63,7 +64,25 @@ def _archive(repo: Path, sha: str, dest: Path) -> None:
         tar.extractall(path=dest, filter="tar")
 
 
-def test_seeded_export_matches_a_full_archive_and_leaves_the_cache_untouched(tmp_path: Path) -> None:
+@contextlib.contextmanager
+def _no_tree_walk():
+    """os.walk/os.link are refused only inside the block: pytest's own teardown walks."""
+    def _refuse(*_a, **_k):
+        raise AssertionError("a seed must not walk or link the stored tree")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(publish.os, "walk", _refuse)
+        mp.setattr(publish.os, "link", _refuse)
+        yield
+
+
+def _dead_pid() -> int:
+    proc = subprocess.Popen([sys.executable, "-c", "pass"], creationflags=_NO_WINDOW)
+    proc.wait()
+    return proc.pid
+
+
+def _export_fixture(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _run(repo, "init", "-q")
@@ -81,22 +100,60 @@ def test_seeded_export_matches_a_full_archive_and_leaves_the_cache_untouched(tmp
         "coordinator_core/new/d.py": "D\n",
         "coordinator/lib/c.py": "C2\n",
     }, "two")
-
     base = tmp_path / "cache"
     _archive(repo, sha1, base / sha1)
     publish._write_export_marker(base / sha1, sha1)
-    before = _tree(base / sha1)
     staging = base / "staging"
     staging.mkdir()
 
     def git(*args: str) -> "subprocess.CompletedProcess[bytes]":
         return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, creationflags=_NO_WINDOW)
 
-    assert publish._seed_export_from_cache(git, base, sha2, staging) is True
+    return repo, sha1, sha2, base, staging, git
+
+
+def test_export_seed_claims_the_cached_export_without_walking_it(tmp_path: Path) -> None:
+    repo, sha1, sha2, base, staging, git = _export_fixture(tmp_path)
+    with _no_tree_walk():
+        assert publish._seed_export_from_cache(git, base, sha2, staging) is True
     expected = tmp_path / "expected"
     _archive(repo, sha2, expected)
     assert _tree(staging) == _tree(expected)
+    assert not (base / sha1).exists()
+    assert not (staging / "coordinator_core" / "gone.py").exists()
+
+
+def test_export_held_by_a_live_process_is_never_claimed(tmp_path: Path) -> None:
+    _repo, sha1, sha2, base, staging, git = _export_fixture(tmp_path)
+    publish._hold_tree(base / sha1)
+    before = _tree(base / sha1)
+
+    assert publish._seed_export_from_cache(git, base, sha2, staging) is False
     assert _tree(base / sha1) == before
+    assert list(staging.iterdir()) == []
+
+
+def test_export_hold_of_a_dead_process_does_not_block_and_is_stripped(tmp_path: Path) -> None:
+    repo, sha1, sha2, base, staging, git = _export_fixture(tmp_path)
+    (base / sha1 / f"{publish._HOLD_PREFIX}{_dead_pid()}").write_bytes(b"")
+
+    assert publish._seed_export_from_cache(git, base, sha2, staging) is True
+    assert not [p for p in staging.iterdir() if p.name.startswith(publish._HOLD_PREFIX)]
+    expected = tmp_path / "expected"
+    _archive(repo, sha2, expected)
+    assert _tree(staging) == _tree(expected)
+
+
+def test_export_seed_failure_after_the_claim_leaves_empty_staging(tmp_path: Path) -> None:
+    _repo, _sha1, sha2, base, staging, real_git = _export_fixture(tmp_path)
+
+    def git(*args: str) -> "subprocess.CompletedProcess[bytes]":
+        if args[0] == "archive":
+            return subprocess.CompletedProcess(args, 1, b"", b"boom")
+        return real_git(*args)
+
+    assert publish._seed_export_from_cache(git, base, sha2, staging) is False
+    assert staging.is_dir() and list(staging.iterdir()) == []
 
 
 def _engine_repo(tmp_path: Path) -> tuple[Path, str, str]:
@@ -207,20 +264,171 @@ def test_shadow_seeded_from_the_store_matches_a_full_archive(tmp_path: Path, mon
     (prev / COMPLETE_MARKER).write_text("k1", encoding="utf-8")
     (prev / publish._SHADOW_SOURCE_NAME).write_text(
         publish.json.dumps({"sha": sha1, "pathspec": pathspec, "withheld": False}), encoding="utf-8")
-    before = _tree(prev)
-
     class _Store:
         root = store_root
 
-    seeded = publish._seed_shadow_from_store(_Store(), repo, sha2, pathspec)
-    assert seeded is not None
-    expected = tmp_path / "expected"
-    _archive(repo, sha2, expected)
-    assert _tree(seeded) == _tree(expected)
-    assert _tree(prev) == before
-
-    # A different pathspec, or a withheld-overlay entry, never seeds.
+    # A different pathspec, or a withheld-overlay entry, never seeds and is never claimed.
     assert publish._seed_shadow_from_store(_Store(), repo, sha2, ["coordinator_core"]) is None
     (prev / publish._SHADOW_SOURCE_NAME).write_text(
         publish.json.dumps({"sha": sha1, "pathspec": pathspec, "withheld": True}), encoding="utf-8")
     assert publish._seed_shadow_from_store(_Store(), repo, sha2, pathspec) is None
+    assert prev.is_dir()
+    (prev / publish._SHADOW_SOURCE_NAME).write_text(
+        publish.json.dumps({"sha": sha1, "pathspec": pathspec, "withheld": False}), encoding="utf-8")
+
+    with _no_tree_walk():
+        seeded = publish._seed_shadow_from_store(_Store(), repo, sha2, pathspec)
+    assert seeded is not None
+    expected = tmp_path / "expected"
+    _archive(repo, sha2, expected)
+    assert _tree(seeded) == _tree(expected)
+    assert not prev.exists()
+    assert seeded.parent == tmp_path / "managed"
+
+
+def _shadow_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    publish._bootstrap_engine()
+    from coordinator_core import temp_layout
+    from coordinator_core.percolate.shadow_store import COMPLETE_MARKER
+
+    monkeypatch.setattr(temp_layout, "managed_tempdir", lambda: tmp_path / "managed")
+    (tmp_path / "managed").mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run(repo, "init", "-q")
+    sha1 = _commit(repo, {"coordinator_core/a.py": "A1\n", "coordinator_core/sub/gone.py": "x\n", "coordinator/lib/c.py": "C\n"}, "one")
+    sha2 = _commit(repo, {"coordinator_core/a.py": "A2\n", "coordinator_core/sub/gone.py": None, "coordinator_core/n.py": "N\n"}, "two")
+    pathspec = list(publish._SOURCE_REF_IMPORTED_PATHS)
+    store_root = tmp_path / "store"
+    prev = store_root / "entry1"
+    _archive(repo, sha1, prev)
+    (prev / COMPLETE_MARKER).write_text("k1", encoding="utf-8")
+    (prev / publish._SHADOW_SOURCE_NAME).write_text(
+        publish.json.dumps({"sha": sha1, "pathspec": pathspec, "withheld": False}), encoding="utf-8")
+
+    class _Store:
+        root = store_root
+
+    return repo, sha2, pathspec, prev, _Store()
+
+
+def test_shadow_held_by_a_live_process_is_never_claimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, sha2, pathspec, prev, store = _shadow_fixture(tmp_path, monkeypatch)
+    publish._hold_tree(prev)
+    before = _tree(prev)
+
+    assert publish._seed_shadow_from_store(store, repo, sha2, pathspec) is None
+    assert _tree(prev) == before
+
+    publish._release_tree(prev)
+    (prev / f"{publish._HOLD_PREFIX}{_dead_pid()}").write_bytes(b"")
+    seeded = publish._seed_shadow_from_store(store, repo, sha2, pathspec)
+    assert seeded is not None
+    assert not [p for p in seeded.iterdir() if p.name.startswith(publish._HOLD_PREFIX)]
+
+
+def test_shadow_hold_taken_between_check_and_claim_returns_the_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, sha2, pathspec, prev, store = _shadow_fixture(tmp_path, monkeypatch)
+    real_claim = publish._claim_tree
+    calls = []
+
+    def _claim_then_reader_holds(src: Path, dest: Path) -> bool:
+        ok = real_claim(src, dest)
+        if not calls:
+            publish._hold_tree(dest)
+        calls.append((src, dest))
+        return ok
+
+    monkeypatch.setattr(publish, "_claim_tree", _claim_then_reader_holds)
+
+    assert publish._seed_shadow_from_store(store, repo, sha2, pathspec) is None
+    assert (prev / publish._SHADOW_SOURCE_NAME).is_file()
+    assert list((tmp_path / "managed").iterdir()) == []
+
+
+def test_export_hold_taken_between_check_and_claim_returns_the_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _repo, sha1, sha2, base, staging, git = _export_fixture(tmp_path)
+    real_claim = publish._claim_tree
+    calls = []
+
+    def _claim_then_reader_holds(src: Path, dest: Path) -> bool:
+        ok = real_claim(src, dest)
+        if not calls:
+            publish._hold_tree(dest)
+        calls.append((src, dest))
+        return ok
+
+    monkeypatch.setattr(publish, "_claim_tree", _claim_then_reader_holds)
+
+    assert publish._seed_export_from_cache(git, base, sha2, staging) is False
+    assert (base / sha1 / "coordinator_core" / "a.py").read_text().strip() == "A1"
+    assert staging.is_dir() and list(staging.iterdir()) == []
+
+
+def test_export_failed_rollback_leaves_staging_empty_and_the_held_tree_aside(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _repo, sha1, sha2, base, staging, git = _export_fixture(tmp_path)
+    real_claim = publish._claim_tree
+    calls = []
+
+    def _claim_then_reader_holds_and_rollback_fails(src: Path, dest: Path) -> bool:
+        if calls:
+            return False
+        calls.append((src, dest))
+        ok = real_claim(src, dest)
+        publish._hold_tree(dest)
+        return ok
+
+    monkeypatch.setattr(publish, "_claim_tree", _claim_then_reader_holds_and_rollback_fails)
+
+    assert publish._seed_export_from_cache(git, base, sha2, staging) is False
+    assert staging.is_dir() and list(staging.iterdir()) == []
+    aside = [p for p in base.iterdir() if p.name.startswith("orphan-held-")]
+    assert len(aside) == 1 and (aside[0] / "coordinator_core" / "a.py").read_text().strip() == "A1"
+    assert not publish._EXPORT_SHA_RE.fullmatch(aside[0].name)
+
+
+def test_shadow_seed_prunes_emptied_directories_like_a_full_extraction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, sha2, pathspec, _prev, store = _shadow_fixture(tmp_path, monkeypatch)
+
+    seeded = publish._seed_shadow_from_store(store, repo, sha2, pathspec)
+    assert seeded is not None
+    assert not (seeded / "coordinator_core" / "sub").exists()
+
+
+def test_shadow_seed_failure_after_the_claim_leaves_nothing_behind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, sha2, pathspec, prev, store = _shadow_fixture(tmp_path, monkeypatch)
+
+    def _boom(*_a, **_k):
+        raise publish.GitMaterializeError("boom")
+
+    monkeypatch.setattr(publish, "_materialize_tree_paths", _boom)
+
+    assert publish._seed_shadow_from_store(store, repo, sha2, pathspec) is None
+    assert not prev.exists()
+    assert list((tmp_path / "managed").iterdir()) == []
+
+
+def test_the_adopted_seed_is_the_next_rounds_seed_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.percolate.shadow_store import ShadowStore
+
+    repo, sha2, pathspec, prev, _unused = _shadow_fixture(tmp_path, monkeypatch)
+    store = ShadowStore(repo, root=prev.parent)
+    sha3 = _commit(repo, {"coordinator_core/n.py": "N3\n"}, "three")
+
+    seeded = publish._seed_shadow_from_store(store, repo, sha2, pathspec)
+    assert seeded is not None and not prev.exists()
+    (seeded / publish._SHADOW_SOURCE_NAME).write_text(
+        publish.json.dumps({"sha": sha2, "pathspec": pathspec, "withheld": False}), encoding="utf-8")
+    key = store.key(repo, sha2, pathspec)
+    entry = store.adopt(key, seeded)
+    assert store.lookup(key) == entry and not seeded.exists()
+
+    again = publish._seed_shadow_from_store(store, repo, sha3, pathspec)
+    expected = tmp_path / "expected3"
+    _archive(repo, sha3, expected)
+    assert again is not None and _tree(again) == _tree(expected)
+    assert not entry.exists()
+
+
+def test_the_link_pool_is_gone() -> None:
+    assert not hasattr(publish, "_SHADOW_SEED_LINK_WORKERS")

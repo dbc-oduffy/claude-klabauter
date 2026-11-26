@@ -40,6 +40,71 @@ def test_metadata_title_write_requires_loaded_namespace_and_preserved_task(tmp_p
     assert calls[-1][1] == {"threadId": SID, "name": title}
 
 
+V4_SID = "345d8052-8f72-4f5b-8b78-308b0a58be24"
+V7_THREAD = "01a2159e-c31d-7c41-9af9-b219f2226404"
+
+
+def _connection(calls, loaded, tmp_path):
+    class Connection:
+        def request(self, method, params, deadline):
+            calls.append((method, params))
+            if method == "thread/loaded/list":
+                return {"data": loaded}
+            if method == "thread/read":
+                return {"thread": {"id": params["threadId"], "cwd": str(tmp_path), "name": "Original"}}
+            return {}
+    return Connection()
+
+
+def _patch_app_server(monkeypatch, connection):
+    monkeypatch.setattr(hook.codex_app_server, "_connect", lambda *a, **kw: contextlib.nullcontext(connection))
+    monkeypatch.setattr(hook.CodexAdapter, "proxy_argv", lambda self: ["native"])
+    monkeypatch.setattr(hook.external_registry, "preserve_task_title",
+                        lambda sid, title: {"session_id": sid, "original_task_title": title}, raising=False)
+
+
+def test_rollout_thread_id_reads_session_meta_then_filename(tmp_path: Path) -> None:
+    rollout = tmp_path / f"rollout-2026-11-26T02-10-55-{V7_THREAD}.jsonl"
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": V7_THREAD}}) + "\n", encoding="utf-8")
+    assert hook.rollout_thread_id(str(rollout)) == V7_THREAD
+    rollout.write_text("not json\n", encoding="utf-8")
+    assert hook.rollout_thread_id(str(rollout)) == V7_THREAD
+    assert hook.rollout_thread_id("relative.jsonl") is None
+    assert hook.rollout_thread_id(None) is None
+
+
+def test_v4_session_id_titles_the_thread_its_rollout_carries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    _patch_app_server(monkeypatch, _connection(calls, [V7_THREAD], tmp_path))
+    preserved = []
+    monkeypatch.setattr(hook.external_registry, "preserve_task_title",
+                        lambda sid, title: preserved.append(sid) or {"session_id": sid, "original_task_title": title}, raising=False)
+    result = hook.apply_title({**value(), "session_id": V4_SID, "thread_id": V7_THREAD}, str(tmp_path))
+    assert result["updated"] is True
+    assert [c[0] for c in calls] == ["thread/loaded/list", "thread/read", "thread/name/set"]
+    assert calls[-1][1]["threadId"] == V7_THREAD
+    assert preserved == [V4_SID]
+
+
+def test_v4_session_id_with_unloaded_rollout_thread_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    _patch_app_server(monkeypatch, _connection(calls, ["some-other-thread"], tmp_path))
+    result = hook.apply_title({**value(), "session_id": V4_SID, "thread_id": V7_THREAD}, str(tmp_path))
+    assert result["updated"] is False
+    assert [c[0] for c in calls] == ["thread/loaded/list"]
+
+
+def test_handle_resolves_thread_id_from_the_payload_transcript(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    rollout = tmp_path / f"rollout-2026-11-26T02-10-55-{V7_THREAD}.jsonl"
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": V7_THREAD}}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(hook, "snapshot", lambda p: {**value(), "session_id": V4_SID, "cache_path": str(tmp_path / "c.json")})
+    seen = []
+    monkeypatch.setattr(hook, "apply_title", lambda v, cwd: seen.append(v.get("thread_id")) or {"updated": False, "reason": "x"})
+    hook.handle({"session_id": V4_SID, "cwd": str(tmp_path), "transcript_path": str(rollout)}, "Stop")
+    assert seen == [V7_THREAD]
+
+
 def test_other_namespace_never_renames_or_starts_a_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     class Connection:

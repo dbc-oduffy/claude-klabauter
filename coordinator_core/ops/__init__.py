@@ -515,6 +515,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.group_em_goal_board_refresh", 'registers "groupem.goal_board_refresh"'),
     ("coordinator_core.ops.group_em_admission_post", 'registers "groupem.admission_post"'),
     ("coordinator_core.ops.group_em_slot_grant", 'registers "groupem.slot_grant", "groupem.slot_check"'),
+    ("coordinator_core.ops.group_em_roll_call", 'registers "groupem.roll_call", "groupem.roll_call_reply", "groupem.roll_call_status"'),
     ("coordinator_core.ops.runs_withheld_overlap", 'registers "runs.withheld_overlap"'),
     ("coordinator_core.ops.group_em_box_federation", 'registers "groupem.box_register", "groupem.box_place", "groupem.box_send", "groupem.box_roster"'),
     ("coordinator_core.ops.group_em_fleet_capacity", 'registers "groupem.fleet_capacity", "groupem.capacity_admit", "groupem.capacity_place", "groupem.idle_capacity_watch"'),

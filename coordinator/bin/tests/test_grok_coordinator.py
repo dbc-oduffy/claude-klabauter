@@ -1,7 +1,10 @@
 """grok-coordinator launches grok as a child and does not shadow a bare grok."""
 
 import importlib.util
+import os
 from pathlib import Path
+
+import pytest
 
 BIN = Path(__file__).resolve().parents[1] / "grok-coordinator.py"
 spec = importlib.util.spec_from_file_location("grok_coordinator", BIN)
@@ -66,6 +69,70 @@ def test_register_host_binding_is_false_without_evidence(monkeypatch):
 
     monkeypatch.setattr(external_registry, "adopt_grok_session", lambda *a, **k: None)
     assert gc.register_host_binding("01a21334-b3fa-70b0-b317-abd3a378a142") is False
+
+
+def test_run_interactive_binds_the_child_to_a_kill_on_close_job(monkeypatch, tmp_path):
+    bound = []
+    child = type("C", (), {"pid": 4242, "wait": lambda self: 3})()
+    monkeypatch.setattr(gc, "load_grok_adapter", lambda: type("M", (), {"grok_home": staticmethod(lambda: tmp_path / "home")}))
+    monkeypatch.setattr(gc, "grok_binary", lambda: "bin/grok.exe")
+    monkeypatch.setattr(gc, "_hold_inbox", lambda m, pid, stop: None)
+    monkeypatch.setattr(gc.subprocess, "Popen", lambda *a, **k: child)
+    monkeypatch.setattr(gc, "bind_kill_on_close", lambda pid: bound.append(pid))
+
+    assert gc.run_interactive([]) == 3
+    assert bound == [4242]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="job objects are Windows-only")
+def test_grok_child_dies_when_its_python_parent_is_killed(tmp_path):
+    """A hidden parent binds a hidden sleeper; killing the parent must take the sleeper with it."""
+    import subprocess
+    import sys
+    import time
+
+    hidden = subprocess.CREATE_NO_WINDOW
+    script = tmp_path / "parent.py"
+    script.write_text(
+        "import importlib.util, subprocess, sys, time\n"
+        f"s = importlib.util.spec_from_file_location('g', {str(BIN)!r})\n"
+        "g = importlib.util.module_from_spec(s); s.loader.exec_module(g)\n"
+        "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], creationflags=%d)\n"
+        "job = g.bind_kill_on_close(c.pid)\n"
+        "print(c.pid, job is not None, flush=True)\n"
+        "time.sleep(60)\n" % hidden,
+        encoding="utf-8",
+    )
+    parent = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, text=True, creationflags=hidden)
+    child_pid = None
+    try:
+        pid_text, bound = parent.stdout.readline().split()
+        child_pid = int(pid_text)
+        assert bound == "True"
+        parent.kill()
+        parent.wait()
+        deadline = time.time() + 10
+        while time.time() < deadline and _pid_alive(child_pid):
+            time.sleep(0.1)
+        assert not _pid_alive(child_pid)
+    finally:
+        parent.kill()
+        if child_pid and _pid_alive(child_pid):
+            subprocess.run(["taskkill", "/F", "/PID", str(child_pid)], capture_output=True, creationflags=hidden)
+
+
+def _pid_alive(pid: int) -> bool:
+    import ctypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = ctypes.c_void_p
+    handle = k32.OpenProcess(0x00100000, 0, pid)  # SYNCHRONIZE
+    if not handle:
+        return False
+    try:
+        return k32.WaitForSingleObject(ctypes.c_void_p(handle), 0) == 0x102  # WAIT_TIMEOUT
+    finally:
+        k32.CloseHandle(ctypes.c_void_p(handle))
 
 
 def test_session_for_pid_matches_only_the_child():

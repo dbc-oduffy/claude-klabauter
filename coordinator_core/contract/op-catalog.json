@@ -3523,6 +3523,39 @@
       "timeout_s": 30.0
     },
     {
+      "description": "JSON-RPC \"groupem.roll_call\" handler.\n\nParams (all optional):\n    caller_session_id (str) -- excluded from the addressees.\n    roll_call_id (str) -- defaults to a fresh `rc-<stamp>-<hex>`; an id already on disk\n        returns its record's addressees and launches nothing.\n    note (str) -- appended to the templated ask.\n    deadline_minutes (number > 0) -- reply deadline; default 60.\n    dry_run (bool) -- write the record, launch no worker, deliver nothing.\n    repo_root (str) -- repo whose peer roster is read; defaults to the process cwd.\n\nReturns: {roll_call_id, text, local: [{session_id, name}], far: [{key, box_id, name}],\nexcluded: [{key, reason}], record_path, deadline, dry_run, delivery} where `delivery` is the\nworker launch result (`{launched, pid | reason}`). The caller SendMessages `local` by name.",
+      "module": "coordinator_core.ops.group_em_roll_call",
+      "name": "groupem.roll_call",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"groupem.roll_call\" handler.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"groupem.roll_call_reply\" handler.\n\nParams: roll_call_id (str, required), session_key (str, required), goals (list, required):\none `{goal_id, target, measured_now, gap, next_lever, expected_gain, owner, eta (ISO date),\nblocked_on?: {what, owner, date}}` per goal; priority_goal_id (str, required; one of the\nreply's goal_ids, else refused); activity (any JSON, optional; log only).\n\nReturns the `upsert_reply` dict: `{ok, result: stored | unchanged, late}` or\n`{ok: False, reason: \"unknown_roll_call\"}`. A reply failing the per-goal check (missing field,\nTBD, no ISO ETA, blocked_on without owner and date) stores nothing and returns the typed\nrefusal `{ok: False, error: \"RollCallReplyRefused\", roll_call_id, session_key, refusals:\n[{goal_id, field, reason}]}` to the replying EM. A repeat of the same payload is a no-op; a\nreply past the record's deadline is stored `late: true`.",
+      "module": "coordinator_core.ops.group_em_roll_call",
+      "name": "groupem.roll_call_reply",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"groupem.roll_call_reply\" handler.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"groupem.roll_call_status\" handler.\n\nParams: roll_call_id (str, required).\n\nReturns the progress-to-goals brief `{ok, roll_call_id, deadline, goals, replied, missing,\ndeliveries}` (one `goals` row per goal; never per-EM activity) or\n`{ok: False, reason: \"unknown_roll_call\"}`. Reads one file; writes nothing.",
+      "module": "coordinator_core.ops.group_em_roll_call",
+      "name": "groupem.roll_call_status",
+      "op_class": "compute_only",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"groupem.roll_call_status\" handler.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC ``handoff.author_fork`` handler — create a fork handoff with provenance.\n\nMUTATING (writes one new ``state/handoffs/*.md`` file; DR-213 additive-create pattern).\nBlocking FS I/O wrapped in ``asyncio.to_thread``.\n\n``repo_root`` receives ``git_common_dir(caller_worktree)`` via\n``_OP_KEY_SCOPE: common_dir`` (ipc.py).  Handler calls ``main_worktree_root(repo_root)``\nto derive the caller's worktree root before any path construction.\n\nStamping mode: when ``params`` carries a ``handoff_path`` key, dispatch is\nrouted to ``_handle_stamp`` instead — see that function's docstring. That\nmode stamps the five ``origin_*`` fields onto an ALREADY-EXISTING file\nrather than authoring a new one (the spinoff d3 rewrite, ratified\n2026-07-27); it is a distinct contract, not a variant of the params below.\n\nRequired params (from-scratch author mode):\n    title  (str)  — title of the fork handoff (required for a meaningful artifact).\n\nOptional params:\n    branch         (str)       — branch context; default \"none\".\n    kind           (str)       — handoff kind; default \"fork-handoff\".\n    workstream     (str | null) — workstream slug; default null.\n    origin_plan_id (str | null) — explicit plan id; absent → auto-resolve or disambiguate.\n    origin_goal_id (list | null) — explicit goal id list; absent → auto-resolve or disambiguate.\n    match_text     (str)       — text used for candidate ranking when disambiguating;\n                                 defaults to ``title`` when absent.\n    body           (str)       — optional body text for the new handoff.\n\nReturns on success:\n    {\n        \"status\":        \"ok\",\n        \"handoff_path\":  str,         # absolute path to the new handoff file\n        \"handoff_id\":    str,         # filename stem\n        \"origin_session\": str | null,\n        \"origin_handoff\": str | null,\n        \"origin_handoff_id\": str | null,  # C2 ID-companion, same-baton-derived\n        \"origin_plan_id\": str | null,\n        \"origin_goal_id\": list[str] | null,\n    }\n\nReturns on disambiguation needed:\n    {\n        \"status\":     \"needs_disambiguation\",\n        \"candidates\": {\n            \"plans\": [{\"plan_id\": str, \"title\": str, \"score\": float}, ...],  # when plan ambiguous\n            \"goals\": [{\"goal_id\": str, \"title\": str, \"score\": float}, ...],  # when goal ambiguous\n        },\n    }\n\nReturns on error:\n    {\"exit_code\": 1, \"error\": str}\n\nNegative-spec:\n    - Does NOT enforce the PM spinoff gate — primitive; gate is skill-layer.\n    - Does NOT commit.\n    - Does NOT write outside state/handoffs/ in the caller's worktree.\n    - Does NOT overwrite an existing handoff file.\n    - Does NOT surface plan and goal ambiguity simultaneously — plan ambiguity is\n      resolved first; goal ambiguity is surfaced only after the plan is pinned.\n      A caller with both plan and goal ambiguous must invoke twice: first to resolve\n      plans (``candidates.plans`` returned), then again (with plan pinned) to resolve\n      goals (``candidates.goals`` returned).  Review: code-reviewer (F5).",
       "module": "coordinator_core.ops.handoff_author_fork",
       "name": "handoff.author_fork",

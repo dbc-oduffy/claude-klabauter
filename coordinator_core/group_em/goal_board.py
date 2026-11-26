@@ -123,12 +123,23 @@ def _refusal(path, field: str, error: str, hint: str) -> dict:
     }
 
 
+def _empty_board(now: datetime) -> dict:
+    return {
+        "schema": "fleet-goal-board",
+        "board_as_of": _format_ts(now),
+        "source_ref": "self-created by groupem.goal_board_refresh",
+        "goals": [],
+        "task_map": [],
+    }
+
+
 def refresh(now: Optional[datetime] = None, is_live: Optional[Callable[[str], bool]] = None) -> dict:
     """Validate the board in the group-em home, recompute its flags and rewrite it atomically.
 
-    Returns `{ok, path, flags, errors}`. Refusals (home inside a checkout, board absent or not
-    JSON, schema errors) return `ok: False` with `errors` and never touch the file. On success the
-    board's `board_as_of` becomes `now` and its `flags` become `[{kind, subject}]` per the schema.
+    Returns `{ok, path, flags, errors}`. An absent board is created empty (valid, no goals).
+    Refusals (home inside a checkout, board unreadable or not JSON, schema errors) return
+    `ok: False` with `errors` and never touch the file. On success the board's `board_as_of`
+    becomes `now` and its `flags` become `[{kind, subject}]` per the schema.
     """
     now = now or _utcnow()
     try:
@@ -140,6 +151,8 @@ def refresh(now: Optional[datetime] = None, is_live: Optional[Callable[[str], bo
         )
     try:
         board = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        board = _empty_board(now)
     except OSError as exc:
         return _refusal(path, "board", f"cannot read board: {exc.strerror or exc}",
                         "seed the board in the group-em home")
