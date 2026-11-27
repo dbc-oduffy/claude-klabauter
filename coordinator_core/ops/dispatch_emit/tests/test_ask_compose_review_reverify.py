@@ -78,7 +78,7 @@ def test_staged_review_reverify_body_leaves_the_script_and_lands_in_the_sink() -
     sink: dict[str, str] = {}
     script = _compose(staged_out=sink)
     assert "prompts/review-reverify.md in full" in script
-    assert "review.reverify" in sink["review-reverify"]
+    assert "review.reverify" in "".join(v for k, v in sink.items() if k.startswith("review-reverify"))
     assert "Re-verify the edits this run" not in script
     assert "Re-verify the edits this run" in _compose()
 
@@ -397,6 +397,125 @@ def test_green_non_pytest_reverify_with_empty_selection_is_credited(status_befor
 )
 def test_a_selected_or_explained_or_non_code_run_is_not_halted(reverify, manifest, code_owed):
     assert _tests_not_run(reverify, manifest, code_owed)["halted"] is None
+
+
+def _node_json(source: str):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    proc = subprocess.run([node, "-"], input=source, capture_output=True, text=True, timeout=30, **no_console_creationflags())
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+_FD_ERR = {"symbol": "decode_literal", "source_path": "pkg/lit.py"}
+
+
+def _review_zero_halt(cause: str, import_error: dict | None) -> dict:
+    reverify = {"tests_run": 0, "status_before": "indeterminate", "zero_run_cause": cause}
+    if import_error is not None:
+        reverify["import_error"] = import_error
+    return _node_json(
+        f"let _halted = null; const _runId = 'r'; const _sizingRel = null; let _reviewReverify = {json.dumps(reverify)};\n"
+        + ask_compose._review_test_infra_halt_js(None)
+        + "\nconsole.log(JSON.stringify(_halted));\n"
+    )
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_review_zero_run_foreign_dependency_halts_by_name_and_says_a_refire_repeats_it():
+    halted = _review_zero_halt(ask_compose.ZERO_RUN_FOREIGN_DEPENDENCY, _FD_ERR)
+
+    assert halted["halted"] == ask_compose.FOREIGN_DEPENDENCY_HALT != "test_infra_failure"
+    assert halted["next_action"].startswith("Land the uncommitted pkg/lit.py first, then refire: ")
+    assert "decode_literal" in halted["detail"] and "a refire repeats this halt" in halted["detail"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_review_zero_run_foreign_dependency_without_source_path_still_halts_by_name():
+    halted = _review_zero_halt(ask_compose.ZERO_RUN_FOREIGN_DEPENDENCY, None)
+
+    assert halted["halted"] == ask_compose.FOREIGN_DEPENDENCY_HALT
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize("cause", ["engine-root-unset", "import-error", "collection-failure"])
+def test_review_zero_run_with_any_other_cause_still_halts_test_infra_failure(cause):
+    assert _review_zero_halt(cause, _FD_ERR)["halted"] == "test_infra_failure"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize(
+    "cause, kind",
+    [(ask_compose.ZERO_RUN_FOREIGN_DEPENDENCY, ask_compose.FOREIGN_DEPENDENCY_HALT), ("collection-failure", "test_infra_failure")],
+)
+def test_verify_zero_run_routes_the_foreign_dependency_cause_only(cause, kind):
+    snippet = ask_compose._test_verdict_empty_halt_js(None).replace("TEST_GUARD", "true")
+    test_result = {"status": "error", "sidecar_path": "a.md", "tests_run": 0, "zero_run_cause": cause, "import_error": _FD_ERR}
+    halted = _node_json(
+        f"const _testRan = () => {ask_compose._TEST_RAN_JS};\n"
+        f"let _halted = null; const _runId = 'r'; const _sizingRel = null; let _testResult = {json.dumps(test_result)};\n"
+        + snippet + "\nconsole.log(JSON.stringify(_halted));\n"
+    )
+
+    assert halted["halted"] == kind
+    if kind == ask_compose.FOREIGN_DEPENDENCY_HALT:
+        assert halted["next_action"].startswith("Land the uncommitted pkg/lit.py first, then refire: ")
+        assert "a refire repeats this halt until pkg/lit.py lands" in halted["detail"]
+
+
+_RO_LEAD = "run-owned collection failure: tests/test_new.py; test collection failed: boom"
+
+
+def test_run_owned_collection_halt_constants_mirror_the_overlay_cause():
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    assert ask_compose.RUN_OWNED_COLLECTION_CAUSE == cov.ZERO_RUN_OWNED_COLLECTION
+    assert ask_compose.RUN_OWNED_COLLECTION_HALT != "test_infra_failure"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_review_zero_run_run_owned_collection_failure_halts_by_name_and_says_fix_the_file():
+    reverify = {"tests_run": 0, "status_before": "indeterminate", "zero_run_cause": ask_compose.RUN_OWNED_COLLECTION_CAUSE,
+                "reverify_error": _RO_LEAD}
+    halted = _node_json(
+        f"let _halted = null; const _runId = 'r'; const _sizingRel = null; let _reviewReverify = {json.dumps(reverify)};\n"
+        + ask_compose._review_test_infra_halt_js(None) + "\nconsole.log(JSON.stringify(_halted));\n"
+    )
+
+    assert halted["halted"] == ask_compose.RUN_OWNED_COLLECTION_HALT != "test_infra_failure"
+    assert "tests/test_new.py" in halted["detail"]
+    assert halted["next_action"].startswith("Fix tests/test_new.py so it collects, then refire: ")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_review_zero_run_run_owned_collection_failure_without_a_named_path_still_halts_by_kind():
+    halted = _review_zero_halt(ask_compose.RUN_OWNED_COLLECTION_CAUSE, None)
+
+    assert halted["halted"] == ask_compose.RUN_OWNED_COLLECTION_HALT
+    assert "the run-owned file named in detail" in halted["next_action"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_verify_zero_run_run_owned_collection_failure_routes_to_its_own_halt():
+    snippet = ask_compose._test_verdict_empty_halt_js(None).replace("TEST_GUARD", "true")
+    test_result = {"status": "error", "sidecar_path": "a.md", "tests_run": 0,
+                   "zero_run_cause": ask_compose.RUN_OWNED_COLLECTION_CAUSE, "first_setup_error": _RO_LEAD}
+    halted = _node_json(
+        f"const _testRan = () => {ask_compose._TEST_RAN_JS};\n"
+        f"let _halted = null; const _runId = 'r'; const _sizingRel = null; let _testResult = {json.dumps(test_result)};\n"
+        + snippet + "\nconsole.log(JSON.stringify(_halted));\n"
+    )
+
+    assert halted["halted"] == ask_compose.RUN_OWNED_COLLECTION_HALT
+    assert "tests/test_new.py" in halted["detail"] and halted["next_action"].startswith("Fix tests/test_new.py")
 
 
 def test_tests_not_run_check_follows_the_reconcile_in_the_script():

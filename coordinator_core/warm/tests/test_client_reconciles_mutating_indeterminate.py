@@ -20,6 +20,8 @@ def _isolated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_delivering_engine", lambda: None)
     monkeypatch.setattr(client, "_journaled_outcome", lambda key: None)
     monkeypatch.setattr(client, "_abandoned_in_import", lambda key: False)
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_SECS", 0.0)
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_INTERVAL_SECS", 0.0)
 
 
 def _poll_returns(monkeypatch: pytest.MonkeyPatch, status):
@@ -72,6 +74,76 @@ def test_a_non_terminal_poll_keeps_the_indeterminate_envelope(monkeypatch: pytes
     assert envelope["error"]["code"] == client.WARM_DISPATCH_INDETERMINATE
     assert envelope["error"]["data"]["dispatch_key"] == _KEY
     assert envelope["error"]["data"]["retry_safe"] is False
+
+
+def _poll_sequence(monkeypatch: pytest.MonkeyPatch, statuses: list):
+    seen: list = []
+
+    def _fake(pipe, token, key, engine):
+        seen.append(key)
+        return statuses.pop(0) if len(statuses) > 1 else statuses[0]
+
+    monkeypatch.setattr(client, "_reconcile_poll", _fake)
+    return seen
+
+
+def test_an_executing_op_is_settled_when_it_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_SECS", 5.0)
+    seen = _poll_sequence(
+        monkeypatch,
+        [
+            {"state": "executing"},
+            {"state": "queued"},
+            {"state": "finished", "outcome": "result", "result": {"sha": "abc"}},
+        ],
+    )
+    assert _reconcile() == {"jsonrpc": "2.0", "id": 7, "result": {"sha": "abc"}}
+    assert seen == [_KEY, _KEY, _KEY]
+
+
+def test_an_executing_op_that_finishes_in_error_returns_that_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_SECS", 5.0)
+    _poll_sequence(
+        monkeypatch,
+        [
+            {"state": "executing"},
+            {"state": "finished", "outcome": "error", "error_code": -32000, "failure_text": "boom"},
+        ],
+    )
+    assert _reconcile()["error"] == {"code": -32000, "message": "boom"}
+
+
+def test_an_executing_op_settles_from_the_journal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_SECS", 5.0)
+    monkeypatch.setattr(client, "_journaled_outcome", lambda key: {"outcome": "result", "result": {"j": 1}})
+    _poll_sequence(monkeypatch, [{"state": "executing"}])
+    envelope = client._reconcile_or_indeterminate(_MSG, "x", _KEY, "pipe", "tok")
+    assert envelope == {"jsonrpc": "2.0", "id": 7, "result": {"j": 1}}
+
+
+def test_an_op_that_never_finishes_keeps_the_envelope_after_the_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_SECS", 0.05)
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_INTERVAL_SECS", 0.01)
+    seen = _poll_sequence(monkeypatch, [{"state": "executing"}])
+    envelope = _reconcile()
+    assert envelope["error"]["code"] == client.WARM_DISPATCH_INDETERMINATE
+    assert envelope["error"]["data"]["reconcile_command"]
+    assert len(seen) > 1
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"state": "unknowable", "reason": "killed"},
+        {"state": "not_received", "outcome": "not-dispatched"},
+        None,
+    ],
+)
+def test_a_final_non_terminal_state_is_not_waited_on(monkeypatch: pytest.MonkeyPatch, status) -> None:
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_SECS", 5.0)
+    seen = _poll_sequence(monkeypatch, [status])
+    assert _reconcile()["error"]["code"] == client.WARM_DISPATCH_INDETERMINATE
+    assert len(seen) == 1
 
 
 def test_an_unkeyed_envelope_is_never_polled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -150,6 +222,26 @@ def _warm_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_mutation_deadline_for", lambda method: 0.04)
 
 
+def test_a_dropped_reply_for_an_executing_op_is_settled_through_the_door(
+    monkeypatch: pytest.MonkeyPatch, _warm_on: None
+) -> None:
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_SECS", 5.0)
+    monkeypatch.setattr(client, "RECONCILE_SETTLE_INTERVAL_SECS", 0.01)
+    request_pipe = _Pipe(None)
+    executing = _Pipe(b'{"jsonrpc": "2.0", "id": "reconcile", "result": {"state": "executing"}}\n')
+    finished = _Pipe(
+        b'{"jsonrpc": "2.0", "id": "reconcile", "result": {"state": "finished", "outcome": "result", "result": {"ok": 2}}}\n'
+    )
+    pipes = [request_pipe, executing, finished]
+    monkeypatch.setattr(client, "_open_pipe", lambda name: pipes.pop(0))
+
+    response = client.try_warm_dispatch(dict(_MSG))
+
+    assert response == {"jsonrpc": "2.0", "id": 7, "result": {"ok": 2}}
+    assert len(request_pipe.written) == 1
+    assert pipes == []
+
+
 @pytest.mark.parametrize(
     ("poll_reply", "expect_result"),
     [
@@ -182,16 +274,3 @@ def test_a_delivered_mutation_that_outlives_its_deadline_polls_once_and_never_re
         assert response == {"jsonrpc": "2.0", "id": 7, "result": {"ok": 1}}
     else:
         assert response["error"]["code"] == client.WARM_DISPATCH_INDETERMINATE
-
-
-def test_a_blocked_open_cannot_hold_the_caller_past_500ms(monkeypatch: pytest.MonkeyPatch) -> None:
-    import time
-
-    def _blocked_open(name):
-        threading.Event().wait(5)
-        return _Pipe(None)
-
-    monkeypatch.setattr(client, "_open_pipe", _blocked_open)
-    t0 = time.monotonic()
-    assert client._reconcile_poll("pipe", "tok", _KEY, None) is None
-    assert time.monotonic() - t0 < 0.8

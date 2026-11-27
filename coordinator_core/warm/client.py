@@ -425,8 +425,34 @@ def _replay_op_name(msg: dict) -> Any:
     return method
 
 
+#: Ops classed MUTATING as a whole whose no-write call shape is a read; a frame in that shape
+#: classifies as the paired name, which `_op_may_mutate` answers False for. Each entry is a
+#: (op, params keys that select a writing mode) pair; list mode is the call carrying none of them.
+_READ_MODE_OPS = {"review.reverify": ("failing", "probe")}
+
+#: Names `_classified_op_name` answers for a read-mode frame; never in `OP_CLASSIFICATION`.
+_READ_MODE_NAMES = frozenset(op + ".list" for op in _READ_MODE_OPS)
+
+
 def _classified_op_name(msg: dict) -> Any:
     """The name `_op_may_mutate` classifies for a frame: the op it runs, not its wrapper.
+
+    A frame running an op in `_READ_MODE_OPS` with none of its writing-mode keys in its params
+    answers `<op>.list`. An unreadable params object keeps the op name, so the whole-op
+    classification (MUTATING) still applies.
+    """
+    name = _wrapper_op_name(msg)
+    writing_keys = _READ_MODE_OPS.get(name) if isinstance(name, str) else None
+    if writing_keys is None:
+        return name
+    op, params = _frame_op_and_params(msg)
+    if op != name or not params or any(params.get(k) is not None for k in writing_keys):
+        return name
+    return name + ".list"
+
+
+def _wrapper_op_name(msg: dict) -> Any:
+    """The op name before read-mode refinement.
 
     A door-form frame answers `_replay_op_name(msg)`. An entrypoint frame answers
     `<entrypoint with - as _>.<argv[0]>`, the subcommand slot the entrypoint's `main` reads;
@@ -723,7 +749,7 @@ class PublishCloneRefusal(RuntimeError):
         self.mirror_key = mirror_key
         super().__init__(
             f"warm spawn refused: {root} is the publish clone for repos.{mirror_key}"
-            f" (publish.mirrors.{mirror_key}.path), never an engine host."
+            f" (a publish.mirrors.{mirror_key} path), never an engine host."
             f" Engine clone: repos.{mirror_key}."
         )
 
@@ -741,7 +767,7 @@ def _same_dir(a: str, b: str) -> bool:
 def publish_clone_mirror_key(repo_root: str) -> Optional[str]:
     """The mirror key whose publish-only clone `repo_root` is, else None.
 
-    A root is a publish-only clone when the registry names it as `publish.mirrors.<key>.path`
+    A root is a publish-only clone when the registry names it as a `publish.mirrors.<key>` path
     and registers a different clone for `repos.<key>`. A mirror with no separate `repos.<key>`
     is the box's only clone and is never refused. Registry read failure answers None.
 
@@ -996,11 +1022,40 @@ def _settings_configured_root() -> str:
 
 def _door_sidecar_root() -> str:
     """The root the installed door's `door.engine-root.txt` names (settings-home
-    `bin/`); empty when absent or unreadable."""
+    `bin/`); empty when absent or unreadable. A root inside a scratch tree draws a
+    once-per-process stderr advisory; the root is still returned, never refused."""
     try:
-        return (_settings_home() / "bin" / "door.engine-root.txt").read_text(encoding="utf-8").strip()
+        root = (_settings_home() / "bin" / "door.engine-root.txt").read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+    if root:
+        _warn_scratch_sidecar_once(root)
+    return root
+
+
+_scratch_sidecar_warned = False
+_scratch_sidecar_checked: set = set()
+
+
+def _warn_scratch_sidecar_once(root: str) -> None:
+    """Advisory only: never raises and never changes the root the caller uses."""
+    global _scratch_sidecar_warned
+    if _scratch_sidecar_warned or root in _scratch_sidecar_checked:
+        return
+    try:
+        from coordinator_core.install.engine_root_for_install import is_scratch_engine_root
+
+        _scratch_sidecar_checked.add(root)
+        if not is_scratch_engine_root(root):
+            return
+        _scratch_sidecar_warned = True
+        print(
+            f"[warm-client] door.engine-root.txt names a scratch tree ({root}): every session's "
+            "engine is pinned to it. Re-run the door installer from the published engine.",
+            file=sys.stderr,
+        )
+    except Exception:
+        return
 
 
 def _configured_root() -> str:
@@ -1251,7 +1306,7 @@ def _op_may_mutate(method: Any) -> bool:
     The reconcile poll itself is the one exception to fail-closed: it is never a mutation, so an
     unavailable table must not turn its unanswered read into a -32004 of its own.
     """
-    if method == _RECONCILE_POLL_METHOD:
+    if method == _RECONCILE_POLL_METHOD or method in _READ_MODE_NAMES:
         return False
     try:
         from coordinator_core.authz.classification import OpClass, classify
@@ -1712,6 +1767,17 @@ def _reconcile_poll_blocking(pipe: str, token: str, dispatch_key: str, engine: O
                 pass
 
 
+RECONCILE_SETTLE_SECS = 60.0
+RECONCILE_SETTLE_INTERVAL_SECS = 0.25
+RECONCILE_SETTLE_MAX_INTERVAL_SECS = 2.0
+
+
+def _still_running(status: Any) -> bool:
+    """True when `status` says the engine still holds the op (`queued` or `executing`): a later
+    poll can settle it. Every other state, and a failed poll, is final for the door."""
+    return isinstance(status, dict) and status.get("state") in ("queued", "executing")
+
+
 def _reconcile_or_indeterminate(
     msg: dict,
     detail: str,
@@ -1720,8 +1786,9 @@ def _reconcile_or_indeterminate(
     token: str,
     waited_secs: Optional[float] = None,
 ) -> dict:
-    """`_indeterminate_envelope`, unless one poll of `warm.request_status` reads a terminal outcome
-    for the keyed op: then that outcome is the reply. The op is never re-run."""
+    """`_indeterminate_envelope`, unless `warm.request_status` (re-read while the op is still
+    queued/executing, up to `RECONCILE_SETTLE_SECS`) or the dispatch journal reads a terminal
+    outcome for the keyed op: then that outcome is the reply. The op is never re-run."""
     envelope = _indeterminate_envelope(msg, detail, dispatch_key, waited_secs)
     error = envelope.get("error")
     data = error.get("data") if isinstance(error, dict) else None
@@ -1735,7 +1802,21 @@ def _reconcile_or_indeterminate(
     if error.get("code") != WARM_DISPATCH_INDETERMINATE or data.get("import_phase"):
         return envelope
     engine = {"pid": data["engine_pid"]} if isinstance(data.get("engine_pid"), int) else None
-    reply = _reconciled_reply(msg, _reconcile_poll(pipe, token, dispatch_key, engine))
+    status = _reconcile_poll(pipe, token, dispatch_key, engine)
+    reply = _reconciled_reply(msg, status)
+    deadline = time.monotonic() + RECONCILE_SETTLE_SECS
+    interval = RECONCILE_SETTLE_INTERVAL_SECS
+    while reply is None and _still_running(status):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(interval, remaining))
+        interval = min(interval * 2, RECONCILE_SETTLE_MAX_INTERVAL_SECS)
+        landed = _journaled_outcome(dispatch_key)
+        if isinstance(landed, dict) and landed.get("outcome") == "result" and landed.get("result") is not None:
+            return {"jsonrpc": "2.0", "id": msg.get("id"), "result": landed["result"]}
+        status = _reconcile_poll(pipe, token, dispatch_key, engine)
+        reply = _reconciled_reply(msg, status)
     return reply if reply is not None else envelope
 
 
@@ -1750,6 +1831,13 @@ _UNANSWERED_CHAIN_SECS = 120.0
 #: this reads as "no decision".
 _UNANSWERED_DEADLINE_SECS = 1.0
 _UNANSWERED_FILENAME = "unanswered.json"
+#: Key in the unanswered file: wall-clock epoch the engine reads unhealthy until (a live restart backoff).
+_UNHEALTHY_KEY = "unhealthy_until"
+#: `hang_restart.HANG_RESTART_LOG_FILENAME`, spelled here because importing `hang_restart` pulls
+#: `breadcrumb` onto the hot path; `test_client_cold_direct_while_reborn_unhealthy.py` pins them equal.
+_HANG_RESTART_LOG_FILENAME = "hang-restarts.log"
+#: In-process twin of `_UNHEALTHY_KEY`: `(token, until)` for a caller that outlives one call.
+_unhealthy_mark: Optional[tuple] = None
 
 
 def _unanswered_path() -> Path:
@@ -1794,6 +1882,7 @@ def _count_unanswered(token: str, now: float, started: Optional[float] = None) -
     """
     path = _unanswered_path()
     count = 1
+    unhealthy_until = None
     # Read-modify-write is unlocked: a concurrent caller can lose an increment, which only delays
     # the restart; a torn read falls back to 1.
     try:
@@ -1802,9 +1891,13 @@ def _count_unanswered(token: str, now: float, started: Optional[float] = None) -
             if started is not None and started < float(record["last"]):
                 return 0
             count = int(record["count"]) + 1
+            unhealthy_until = record.get(_UNHEALTHY_KEY)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass
-    path.write_text(json.dumps({"token": token, "count": count, "last": now}), encoding="utf-8")
+    fresh = {"token": token, "count": count, "last": now}
+    if isinstance(unhealthy_until, (int, float)) and not isinstance(unhealthy_until, bool):
+        fresh[_UNHEALTHY_KEY] = unhealthy_until
+    path.write_text(json.dumps(fresh), encoding="utf-8")
     return count
 
 
@@ -1814,6 +1907,58 @@ def _clear_unanswered() -> None:
         os.unlink(_unanswered_path())
     except OSError:
         pass
+
+
+def _mark_unhealthy_in_backoff(token: str) -> None:
+    """Mark the engine unhealthy until its restart backoff ends, when a restart sits inside one.
+
+    Called after an unanswered call is counted (run >= 1): the reborn engine left a call
+    unanswered while the restart log's last restart is still inside `hang_restart._gate`'s
+    backoff, so the next read-only call goes cold-direct (`_cold_direct_while_unhealthy`).
+    One tail read of the restart log, no spawn; the log's absence (no restart ever) returns
+    before `hang_restart` is imported. Writes the mark into the unanswered file and the process."""
+    global _unhealthy_mark
+    path = _unanswered_path()
+    if not (path.parent / _HANG_RESTART_LOG_FILENAME).exists():
+        return
+    from coordinator_core.warm import hang_restart
+
+    svc = path.parent
+    now = time.time()
+    lines = hang_restart._tail_lines(svc / hang_restart.HANG_RESTART_LOG_FILENAME)
+    reason, backoff = hang_restart._gate(svc, lines, now, hang_restart.RESTART_MIN_INTERVAL_SECS)
+    last, _ = hang_restart._last_line(lines, restart=True)
+    if reason != "backoff" or last is None or last + backoff <= now:
+        return
+    until = float(last + backoff)
+    _unhealthy_mark = (token, until)
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record[_UNHEALTHY_KEY] = until
+        path.write_text(json.dumps(record), encoding="utf-8")
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+
+
+def _cold_direct_while_unhealthy(token: str, msg: dict) -> bool:
+    """True when `msg` is a read-only op and the engine for `token` is marked unhealthy inside a
+    restart backoff: the caller goes cold before connecting. A mutating or unclassifiable op
+    never does (its reply stays `_reconcile_or_indeterminate`'s). No mark: one file read, no import."""
+    now = time.time()
+    mark = _unhealthy_mark
+    until = mark[1] if mark is not None and mark[0] == token else None
+    if until is None:
+        try:
+            record = json.loads(_unanswered_path().read_text(encoding="utf-8"))
+            if record.get("token") == token:
+                value = record.get(_UNHEALTHY_KEY)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    until = float(value)
+        except (OSError, ValueError, TypeError, AttributeError):
+            return False
+    if until is None or until <= now:
+        return False
+    return not _op_may_mutate(_classified_op_name(msg))
 
 
 def _request_restart(count: int) -> Optional[str]:
@@ -1856,7 +2001,13 @@ def _note_unanswered(token: str, started: Optional[float] = None) -> Optional[st
     one add nothing, so one delay seen by concurrent hooks never reaches K. Returns a note for the
     caller's text, or None for "no decision" (below K, a dead pid, any OSError or overrun). Never raises."""
     try:
-        count = _run_bounded(lambda: _count_unanswered(token, time.time(), started), _UNANSWERED_DEADLINE_SECS)
+        def _count_and_mark() -> int:
+            run = _count_unanswered(token, time.time(), started)
+            if run >= 1:
+                _mark_unhealthy_in_backoff(token)
+            return run
+
+        count = _run_bounded(_count_and_mark, _UNANSWERED_DEADLINE_SECS)
         if count is None or count < UNANSWERED_RESTART_K:
             return None
         note = _run_bounded(lambda: _request_restart(count), _UNANSWERED_DEADLINE_SECS)
@@ -2016,17 +2167,12 @@ def _process_token_is_restricted() -> bool:
 
 
 def _record_restricted_token_denial(exc: PermissionError) -> None:
-    """Record a Darwin EPERM or name a winerror-5 pipe denial when the caller's token is
+    """Name the cause of a winerror-5 pipe denial when the caller's token is
     restricted, so the COLD line says why instead of citing a respawn that
     never happened. A non-restricted denial records nothing (still "someone
     else's pipe"). First reason wins; never overwrites."""
     global _cold_reason
-    if _cold_reason is not None:
-        return
-    if sys.platform == "darwin" and exc.errno == errno.EPERM:
-        _cold_reason = "warm Unix socket connect denied (EPERM)"
-        return
-    if getattr(exc, "winerror", None) != 5:
+    if _cold_reason is not None or getattr(exc, "winerror", None) != 5:
         return
     if not _process_token_is_restricted():
         return
@@ -2109,6 +2255,9 @@ def _try_warm_dispatch_inner(
         # Unstamped clone: no server can exist for it and `_spawn_once` is
         # gated off, so everything below (identity, env, pipe open) is wasted.
         _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
+        return None
+    if _cold_direct_while_unhealthy(token, msg):
+        _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
         return None
     if _configured_root_is_foreign():
         # Decided before any connect: a foreign server has already executed
@@ -2604,6 +2753,23 @@ def _cli_user_sid() -> str:
         kernel32.CloseHandle(htoken)
 
 
+def _cli_owner_sid() -> str:
+    """Re-derivation of `election.engine_owner_sid()`: the owner-SID record
+    beside the door exe when it holds a well-formed SID, else the caller's own
+    SID. Stdlib only (no `re`) -- this path runs under `python -S -E`."""
+    try:
+        text = (
+            (Path(__file__).parent / "door" / "door.owner-sid.txt")
+            .read_text(encoding="utf-8")
+            .strip()
+        )
+    except (OSError, UnicodeDecodeError):
+        text = ""
+    if text.startswith("S-1-") and not text.strip("0123456789-S"):
+        return text
+    return _cli_user_sid()
+
+
 def _cli_engine_token(repo_root) -> str:
     """Re-derivation of `skew.compute_client_token`'s LIVE-WORKING-TREE
     branch only (stat pair of `.git/HEAD` and the ref it names) -- the
@@ -2648,7 +2814,7 @@ def _cli_pipe_name(repo_root) -> str:
     import hashlib
 
     clone_hash = hashlib.sha1(str(Path(repo_root).resolve()).encode("utf-8")).hexdigest()[:16]
-    sid = _cli_user_sid()
+    sid = _cli_owner_sid()
     token = _cli_engine_token(repo_root)
     return f"\\\\.\\pipe\\coordinator-core.{sid}.{clone_hash}.{token}"
 

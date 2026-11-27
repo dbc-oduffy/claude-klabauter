@@ -24,6 +24,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -56,6 +57,25 @@ def payload_cwd(payload) -> "str | None":
     return None
 
 
+def record_sidecar_miss(home, conv, agy_pid, reason, sidecar=None) -> None:
+    """Append one {ts, conversationId, agy_pid, reason} line to <home>/unimatrix/agy-sidecar-misses.log, trimmed by the sidecar's trace cap. Never raises."""
+    try:
+        max_bytes = getattr(sidecar, "TRACE_MAX_BYTES", 64 * 1024)
+        keep_lines = getattr(sidecar, "TRACE_KEEP", 200)
+        path = Path(home) / "unimatrix" / "agy-sidecar-misses.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        row = {"ts": time.time(), "conversationId": conv, "agy_pid": agy_pid, "reason": reason}
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        if path.stat().st_size > max_bytes:
+            keep = path.read_text(encoding="utf-8", errors="replace").splitlines()[-keep_lines:]
+            tmp = Path(f"{path}.{os.getpid()}.tmp")
+            tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+    except Exception:
+        pass
+
+
 def register(payload, agy_pid, engine_root=None) -> bool:
     """Start the leg for payload's conversation; True when a leg record for it exists afterwards."""
     if not isinstance(payload, dict):
@@ -67,11 +87,15 @@ def register(payload, agy_pid, engine_root=None) -> bool:
     cwd = payload_cwd(payload)
     handed = False
     if isinstance(agy_pid, int) and isinstance(conv, str) and launch.CONV_RE.match(conv):
+        sidecar = None
         try:
             sidecar = load_sibling("unimatrix-agy-sidecar")
-            handed = bool(sidecar.handoff(conv, cwd, agy_pid, roster.settings_home(), roster.pid_alive))
+            why = sidecar.handoff_why(conv, cwd, agy_pid, roster.settings_home(), roster.pid_alive)
         except FileNotFoundError:  # no sidecar module beside this hook: the pending-leg belt applies
-            handed = False
+            why = "no-module"
+        handed = why is None
+        if why is not None:
+            record_sidecar_miss(roster.settings_home(), conv, agy_pid, why, sidecar)
     if not handed:  # the sidecar was not up: a pending leg, made live later by the sidecar
         launch.start({"conversationId": conv, "agyPid": agy_pid, "cwd": cwd}, roster, state)
     registered = isinstance(conv, str) and bool(launch.CONV_RE.match(conv)) and (state / f"{conv}.json").is_file()

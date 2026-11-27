@@ -588,6 +588,53 @@ def python_pin_problems(ctx):
     return []
 
 
+AGY_SIDECAR_ID = "unimatrix-agy-leg"
+
+
+def _json_object(path) -> tuple:
+    """(object, None) for a JSON object file, (None, reason) when it is unreadable or not an object."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+    except (OSError, ValueError) as exc:
+        return None, str(exc)
+    return (data, None) if isinstance(data, dict) else (None, "not a JSON object")
+
+
+def agy_sidecar_problems(ctx) -> list:
+    """A problem line when the agy sidecar is declared and enabled yet `agy-sidecars.log` was never written; reads files only."""
+    cfg = Path(ctx.get("agy_config_dir") or Path.home() / ".gemini" / "config")
+    decl_path = cfg / "sidecars" / AGY_SIDECAR_ID / "sidecar.json"
+    if not decl_path.is_file():
+        return []
+    decl, why = _json_object(decl_path)
+    if decl is None:
+        return [f"agy sidecar declaration {decl_path} is unreadable ({why}); remedy: rerun unimatrix-install.py, then restart agy"]
+    config_path = cfg / "config.json"
+    if not config_path.is_file():
+        return []
+    config, why = _json_object(config_path)
+    if config is None:
+        return [f"agy config {config_path} is unreadable ({why}); remedy: fix or remove it, rerun unimatrix-install.py, then restart agy"]
+    sidecars = config.get("sidecars")
+    entry = sidecars.get(AGY_SIDECAR_ID) if isinstance(sidecars, dict) else None
+    if not (isinstance(entry, dict) and entry.get("enabled") is True):
+        return []
+    try:
+        log = ctx["roster"].settings_home() / "unimatrix" / "agy-sidecars.log"
+    except ctx["roster"].MissingSettingsError:
+        return []
+    if log.exists():
+        return []
+    command = decl.get("command")
+    args = decl.get("args")
+    script = args[0] if isinstance(args, list) and args else None
+    command_ok = isinstance(command, str) and os.path.isfile(command)
+    script_ok = isinstance(script, str) and os.path.isfile(script)
+    return [f"agy sidecar {AGY_SIDECAR_ID} is declared ({decl_path}) and enabled but left no launch trace ({log} absent); "
+            f"command {command} exists={command_ok}, script {script} exists={script_ok}; "
+            f"remedy: rerun unimatrix-install.py, then restart agy"]
+
+
 RESERVED_IPS_KEY = "unimatrix.reserved_ips"
 
 
@@ -717,6 +764,7 @@ def diagnose(ctx):
                                             script_dir=installed if installed.is_dir() else HERE))
     probs.extend(interpreter_split_problems(ctx))
     probs.extend(python_pin_problems(ctx))
+    probs.extend(agy_sidecar_problems(ctx))
     probs.extend(pwsh_alias_first_problems(ctx.get("environ", os.environ), ctx["platform"]))
 
     mine = {"epoch": epoch}
@@ -846,7 +894,7 @@ def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=sock
          authorized_keys=None, self_names=None, platform=None, out=None, roster=None,
          autolink=None, far_sshd_log=None, launchctl_list=None, relay_ps=None, environ=None, read_key=None,
          known_hosts=None, sessions_dir=None, deliveries=None, channel=None, sshd_config=None, programdata=None,
-         is_admin=None) -> int:
+         is_admin=None, agy_config_dir=None) -> int:
     out = out or sys.stdout
     al = autolink or _load("unimatrix_autolink", "unimatrix-autolink.py")
     roster = roster or al._roster()
@@ -872,7 +920,8 @@ def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=sock
            "authorized_keys": effective, "via_admin": via_admin, "relay": relay,
            "self_names": self_names, "far_sshd_log": far_sshd_log, "platform": plat,
            "launchctl_list": launchctl_list or run_launchctl_list, "relay_ps": relay_ps,
-           "environ": os.environ if environ is None else environ, "read_key": read_key, "known_hosts": known_hosts}
+           "environ": os.environ if environ is None else environ, "read_key": read_key, "known_hosts": known_hosts,
+           "agy_config_dir": agy_config_dir}
     probs, notes = diagnose(ctx)
     for p in probs:
         print(f"problem: {p}", file=out)

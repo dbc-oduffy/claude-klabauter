@@ -8,7 +8,7 @@ which hands them to the leg's env only. Without both variables this exits 0 and 
 pending leg and the in-turn queue drain stay in force.
 
 The SessionStart hook has no credentials, so it hands the conversation id (never a token) to this
-process over a loopback listener: `handoff()` reads STATE/agy-sidecars/<agy pid>.json for the port and a
+process over a loopback listener: `handoff_why()` reads STATE/agy-sidecars/<agy pid>.json for the port and a
 per-process nonce, and sends one JSON line {"nonce", "conversationId", "cwd"}. Pending legs this agy
 process already holds are upgraded once at start, for a SessionStart that ran before the sidecar did.
 The process exits, removing its record, when its agy process is gone.
@@ -56,27 +56,30 @@ def write_private_json(path, obj) -> None:
     os.replace(tmp, path)
 
 
-def handoff(conv, cwd, agy_pid, home, pid_alive, timeout=1.0) -> bool:
-    """Ask the sidecar of `agy_pid` to start `conv`'s leg live; True only on its ok answer.
-
-    False when no live sidecar record exists, the listener refuses, or the answer is not ok: the caller
-    then starts the pending leg itself.
-    """
+def handoff_why(conv, cwd, agy_pid, home, pid_alive, timeout=1.0) -> "str | None":
+    """Ask `agy_pid`'s sidecar to start `conv`'s leg live: None on ok, else no-record, dead-sidecar, refused or bad-answer."""
     try:
         rec = json.loads((record_dir(home) / f"{agy_pid}.json").read_text(encoding="utf-8"))
-        if not pid_alive(int(rec["pid"])):
-            return False
-        with socket.create_connection(("127.0.0.1", int(rec["port"])), timeout=timeout) as s:
-            s.sendall((json.dumps({"nonce": rec["nonce"], "conversationId": conv, "cwd": cwd}) + "\n").encode())
+        pid, port, nonce = int(rec["pid"]), int(rec["port"]), rec["nonce"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return "no-record"
+    if not pid_alive(pid):
+        return "dead-sidecar"
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as s:
+            s.sendall((json.dumps({"nonce": nonce, "conversationId": conv, "cwd": cwd}) + "\n").encode())
             buf = b""
             while not buf.endswith(b"\n") and len(buf) < LINE_MAX:
                 chunk = s.recv(4096)
                 if not chunk:
                     break
                 buf += chunk
-        return json.loads(buf).get("ok") is True
-    except (OSError, ValueError, KeyError, TypeError):
-        return False
+    except OSError:
+        return "refused"
+    try:
+        return None if json.loads(buf).get("ok") is True else "bad-answer"
+    except (ValueError, AttributeError):
+        return "bad-answer"
 
 
 class Hub:
@@ -163,18 +166,30 @@ def trace_launch(home, agy_pid, env, reason) -> None:
 
 def main(env=None) -> int:
     """Run the sidecar. `env` only gates the credential check; legs inherit the real process env."""
-    launch = load_sibling("unimatrix-agy-hook-launch")
-    roster = launch.load_sibling("unimatrix-roster")
-    agy_pid = load_sibling("unimatrix-agy-hook-pretool").agy_ancestor_pid() or os.getppid()
+    try:
+        launch = load_sibling("unimatrix-agy-hook-launch")
+        roster = launch.load_sibling("unimatrix-roster")
+        agy_pid = load_sibling("unimatrix-agy-hook-pretool").agy_ancestor_pid() or os.getppid()
+    except Exception:
+        # invariant: roster may be the import that failed, so its delivery_settings_home rule is inlined
+        key = os.environ.get("COORDINATOR_SETTINGS_HOME")
+        trace_launch(Path(key) if key and key.strip() else Path.home() / ".coordinator-claude-settings",
+                     os.getppid(), env, "import-failed")
+        return 1
+    try:
+        home = roster.settings_home()
+    except roster.MissingSettingsError:
+        trace_launch(roster.delivery_settings_home(), agy_pid, env, "missing-settings-home")
+        return 1
     has_creds = launch.ls_credentials(env) is not None
-    trace_launch(roster.settings_home(), agy_pid, env, "serving" if has_creds else "no-credentials")
+    trace_launch(home, agy_pid, env, "serving" if has_creds else "no-credentials")
     if not has_creds:
         return 0
     hub = Hub(launch, roster, agy_pid, secrets.token_hex(16))
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
     srv.listen(8)
-    record = record_dir(roster.settings_home()) / f"{agy_pid}.json"
+    record = record_dir(home) / f"{agy_pid}.json"
     try:
         record.parent.mkdir(parents=True, exist_ok=True)
         write_private_json(record, {"pid": os.getpid(), "agy_pid": agy_pid,

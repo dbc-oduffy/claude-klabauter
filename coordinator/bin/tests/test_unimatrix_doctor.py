@@ -134,6 +134,7 @@ def box(tmp_path, monkeypatch):
         kw.setdefault("launchctl_list", lambda: "")
         kw.setdefault("relay_ps", lambda: "")
         kw.setdefault("environ", {"PATH": ""})
+        kw.setdefault("agy_config_dir", tmp_path / "no-agy-config")
         kw.setdefault("is_admin", lambda: False)  # never read the real machine's administrator state or sshd_config
         rc = dr.main([], run=b.net.run, resolve=b.net.resolve, connect=b.net.connect, authorized_keys=b.ak,
                      self_names=kw.pop("self_names", {"me"}), out=out, roster=roster, autolink=al, **kw)

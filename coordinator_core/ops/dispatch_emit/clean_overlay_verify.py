@@ -497,6 +497,15 @@ def collection_traceback(output: str) -> str:
     return f"{section}\n(+{more} more collection error{'s' * (more > 1)})" if more else section
 
 
+def run_owned_collection_path(output: str, owned: Collection[str]) -> str:
+    """The first `ERROR collecting <path>` path in `output` that is in the run's write set `owned`; `""` when none."""
+    for name in _COLLECTING_RE.findall(output.replace("\r\n", "\n")):
+        rel = name.strip().replace("\\", "/")
+        if rel in owned:
+            return rel
+    return ""
+
+
 def kept_collection_traceback(output: str, tail: str) -> str:
     """`collection_traceback(output)` as a verdict-detail prefix (`"collection traceback:\\n<tb>\\n--\\n"`) when the
     output tail `tail` does not already hold it whole; `""` when there is none or the tail carries it."""
@@ -508,6 +517,7 @@ def kept_collection_traceback(output: str, tail: str) -> str:
 
 #: Zero-run cause for a pytest run whose every outcome is a setup error (no test completed): the harness, not a test, failed.
 ZERO_RUN_TEST_INFRA = "test_infra_failure"
+ZERO_RUN_OWNED_COLLECTION = "run_owned_collection_failure"
 #: Re-runs of a 0-test `test_infra_failure` outcome (retest_targeted pass, test_leg_run leg); a second one is reported.
 TEST_INFRA_RETRY_LIMIT = 1
 #: Stderr prefix of the one typed line `--export-run` prints for a co-tenant refusal; the verify halt routes on it.
@@ -1440,27 +1450,27 @@ _OVERLAID_NOTE_CAP = 8
 
 def own_untracked_writes(root: Path, run_id: str, sha: str) -> list:
     """The run's own write-set paths (`_own_write_set`, `_printed_writes`) that are files in the worktree,
-    tracked nowhere and absent from `sha`'s tree: new modules and tests the candidate commit does not carry,
-    which reach the mirror only as overlay. A tracked path is never named (a peer's dirty hunks stay at HEAD),
+    absent from HEAD (untracked or staged-new) and from `sha`'s tree: new modules and tests the candidate commit
+    does not carry, which reach the mirror only as overlay. A path HEAD holds is never named (a peer's dirty hunks stay at HEAD),
     nor a peer's untracked file the run did not write. [] with no run id or no readable write set."""
-    from coordinator_core.ops.dispatch_emit import test_reach
-
     try:
         owned = dict.fromkeys([*_own_write_set(root, run_id), *_printed_writes(root, run_id)])
     except (OSError, ValueError):  # an unreadable write record overlays nothing; any other error is a bug and surfaces
         return []
     wanted = []
-    tracked = None
     for rel in owned:
         parts = PurePosixPath(rel).parts
         if rel.startswith(_SPARSE_EXCLUDE) or ".." in parts or rel.startswith("/") or PureWindowsPath(rel).drive:
             continue
-        if not (root / rel).is_file():
-            continue
-        if tracked is None:
-            tracked = test_reach._tracked(root)
-        if rel not in tracked:
+        if (root / rel).is_file():
             wanted.append(rel)
+    if wanted:
+        from coordinator_core.git.git_state import head_blobs
+
+        # invariant: HEAD, not the index, decides "tracked": a staged-new file is in the index yet absent from
+        # HEAD and from `sha`, so the index view dropped the run's own new test and the mirror never held it
+        at_head = head_blobs(root, wanted)
+        wanted = [rel for rel in wanted if rel not in at_head]
     if not wanted:
         return []
     try:
@@ -2168,10 +2178,18 @@ def verify(
             )
         setup = infra or first_setup_error(full)
         body = f"test collection failed: {tail}" if collected else tail
-        facts = process_facts(bad[0], dest, seeds) if not completed_a_test(full) else ""
+        zero = not completed_a_test(full)
+        facts = process_facts(bad[0], dest, seeds) if zero else ""
+        own_path = ""
+        if collected and zero and not infra:
+            from coordinator_core.git.git_state import head_blobs
+
+            created = [p for p in owned if p not in head_blobs(root, sorted(owned))]
+            own_path = run_owned_collection_path(full, created)
+        lead = f"run-owned collection failure: {own_path}" if own_path else ""
         return OverlayVerdict(
-            "red", "; ".join(p for p in (setup, facts, f"{kept}{body}") if p), seeds, failing=ids, argv=argv,
-            cause=ZERO_RUN_TEST_INFRA if infra else "",
+            "red", "; ".join(p for p in (lead, setup, facts, f"{kept}{body}") if p), seeds, failing=ids, argv=argv,
+            cause=ZERO_RUN_TEST_INFRA if infra else ZERO_RUN_OWNED_COLLECTION if own_path else "",
         )
     if not completed_a_test(full):
         return OverlayVerdict(

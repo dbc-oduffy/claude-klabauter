@@ -2017,6 +2017,15 @@ GUARD_REFUSED_CAUSE = _emit.GUARD_REFUSED_CAUSE
 GUARD_REFUSED_HALT = _emit.GUARD_REFUSED_HALT
 #: Halt kind of a zero-run whose cause is `ZERO_RUN_FOREIGN_DEPENDENCY`: the fix is landing a peer's source, a refire repeats it.
 FOREIGN_DEPENDENCY_HALT = "uncommitted_foreign_dependency"
+#: invariant: equals `clean_overlay_verify.ZERO_RUN_OWNED_COLLECTION`.
+RUN_OWNED_COLLECTION_CAUSE = "run_owned_collection_failure"
+RUN_OWNED_COLLECTION_HALT = RUN_OWNED_COLLECTION_CAUSE
+#: trap: the path rides only the `run-owned collection failure: <path>` lead of the verdict detail; no verdict field carries it.
+_RUN_OWNED_PATH_JS = (
+    "((_s) => { const _m = /run-owned collection failure: ([^\\s;]+)/.exec([_s?.reverify_error, _s?.detail, _s?.first_setup_error, "
+    "...(Array.isArray(_s?.failing_detail) ? _s.failing_detail.map((d) => d && d.message) : [])]"
+    ".filter((x) => typeof x === 'string').join('\\n')); return _m ? _m[1] : 'the run-owned file named in detail'; })"
+)
 _MEASURED_REV_32004_CLAUSE = (
     "A -32004 from the measured-rev op is not a refusal: follow the -32004 reconcile contract "
     "(docs/wiki/reconcile-policy.md; measured_rev is its named re-run carve-out, so a reconcile state of "
@@ -2072,6 +2081,8 @@ def _test_instruction_js(
             "and `co_tenant` set to the parsed object. "
             "On an `own_delta_missing:` line, return `zero_run_cause` `own_delta_missing` and name the run and "
             "path it carries; never call it a peer's work. "
+            f"On a `run-owned collection failure: <path>` detail, return `zero_run_cause` `{RUN_OWNED_COLLECTION_CAUSE}` "
+            "and keep that lead in `reverify_error`. "
             + _MEASURED_REV_32004_CLAUSE
             + "Run the scoped test targets: [",
             "js:(_manifest.test_targets ?? []).join(', ')",
@@ -2195,6 +2206,12 @@ def _review_test_infra_halt_js(sizing_rel: Optional[str]) -> str:
         "+ (typeof _fdIe.symbol === 'string' && _fdIe.symbol ? \"'\" + _fdIe.symbol + \"' \" : 'a name ') + 'is defined only in uncommitted ' + _fdSrc "
         "+ '; a refire repeats this halt until it lands', "
         "next_action: 'Land the uncommitted ' + _fdSrc + ' first, then refire: ' + " + _refire_js(sizing_rel) + " }; } "
+        "else if (_reviewReverify.zero_run_cause === " + json.dumps(RUN_OWNED_COLLECTION_CAUSE) + ") "
+        "{ const _roP = " + _RUN_OWNED_PATH_JS + "(_reviewReverify); "
+        "_halted = { halted: " + json.dumps(RUN_OWNED_COLLECTION_HALT) + ", run_id: _runId, "
+        "detail: 'review reverify ran zero tests (' + _reviewReverify.zero_run_cause + '): ' + _roP "
+        "+ ' is a file this run wrote and it failed collection; a refire repeats this halt until it is fixed', "
+        "next_action: 'Fix ' + _roP + ' so it collects, then refire: ' + " + _refire_js(sizing_rel) + " }; } "
         "else { _halted = { halted: 'test_infra_failure', run_id: _runId, "
         "detail: 'review reverify ran zero tests (' + _reviewReverify.zero_run_cause + ')', "
         "next_action: 'Refire to re-run review verification: ' + " + _refire_js(sizing_rel) + " }; } }"
@@ -2700,6 +2717,11 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "const _fdSrc = (typeof _rvt.import_error?.source_path === 'string' && _rvt.import_error.source_path) ? _rvt.import_error.source_path : ''; "
         "_halted = { ..._halted, halted: " + json.dumps(FOREIGN_DEPENDENCY_HALT) + ", "
         "detail: _halted.detail + '; a refire repeats this halt' + (_fdSrc ? ' until ' + _fdSrc + ' lands' : '') }; } "
+        "if (_rvCause === " + json.dumps(RUN_OWNED_COLLECTION_CAUSE) + " && _rvt.tests_run === 0) { "
+        "const _roP = " + _RUN_OWNED_PATH_JS + "(_rvt); "
+        "_halted = { ..._halted, halted: " + json.dumps(RUN_OWNED_COLLECTION_HALT) + ", "
+        "detail: _halted.detail + '; ' + _roP + ' is a file this run wrote and it failed collection; a refire repeats this halt until it is fixed', "
+        "next_action: 'Fix ' + _roP + ' so it collects, then refire: ' + " + _refire_js(sizing_rel) + " }; } "
         "if (_rvCause === " + json.dumps(GUARD_REFUSED_CAUSE) + " && _rvt.tests_run === 0) { "
         "const _rvRef = (typeof _rvt.guard_refusal === 'string' && _rvt.guard_refusal.trim()) ? _rvt.guard_refusal.trim().slice(0, 1500) : ''; "
         "_halted = { ..._halted, halted: " + json.dumps(GUARD_REFUSED_HALT) + ", "

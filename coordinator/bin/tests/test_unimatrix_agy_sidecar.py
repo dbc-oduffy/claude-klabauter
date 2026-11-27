@@ -164,16 +164,68 @@ def serve_in_thread(hub, home, agy_pid, monkeypatch):
 def test_handoff_round_trip_starts_the_leg_and_a_missing_or_dead_sidecar_answers_false(tmp_path, env, monkeypatch):
     hub, roster = make_hub(tmp_path)
     home = tmp_path
-    assert sidecar.handoff(CONV, None, 4242, home, roster.pid_alive) is False  # no record
+    assert sidecar.handoff_why(CONV, None, 4242, home, roster.pid_alive) == "no-record"  # no record
     srv, alive, t = serve_in_thread(hub, home, 4242, monkeypatch)
     try:
-        assert sidecar.handoff(CONV, str(tmp_path), 4242, home, roster.pid_alive) is True
+        assert sidecar.handoff_why(CONV, str(tmp_path), 4242, home, roster.pid_alive) is None
         assert (tmp_path / "unimatrix" / "agy-legs" / f"{CONV}.json").is_file()
-        assert sidecar.handoff(CONV, None, 4242, home, lambda pid: False) is False  # sidecar pid dead
+        assert sidecar.handoff_why(CONV, None, 4242, home, lambda pid: False) == "dead-sidecar"  # sidecar pid dead
     finally:
         alive[0] = False
         t.join(5)
         srv.close()
+
+
+def test_handoff_why_names_each_way_a_handoff_fails_and_none_on_ok(tmp_path, env, monkeypatch):
+    hub, roster = make_hub(tmp_path)
+    assert sidecar.handoff_why(CONV, None, 4242, tmp_path, roster.pid_alive) == "no-record"
+    rec = sidecar.record_dir(tmp_path) / "4242.json"
+    rec.parent.mkdir(parents=True)
+    rec.write_text("{not json")
+    assert sidecar.handoff_why(CONV, None, 4242, tmp_path, roster.pid_alive) == "no-record"
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.close()
+    rec.write_text(json.dumps({"pid": os.getpid(), "agy_pid": 4242, "port": port, "nonce": "n0nce"}))
+    assert sidecar.handoff_why(CONV, None, 4242, tmp_path, lambda pid: False) == "dead-sidecar"
+    assert sidecar.handoff_why(CONV, None, 4242, tmp_path, lambda pid: True) == "refused"
+    live = tmp_path / "live"
+    srv2, alive, t = serve_in_thread(hub, live, 4343, monkeypatch)
+    try:
+        assert sidecar.handoff_why(CONV, str(tmp_path), 4343, live, lambda pid: True) is None
+        assert sidecar.handoff_why("../x", None, 4343, live, lambda pid: True) == "bad-answer"
+    finally:
+        alive[0] = False
+        t.join(5)
+        srv2.close()
+
+
+def test_a_sibling_import_failure_traces_import_failed_under_the_delivery_home_and_exits_nonzero(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    monkeypatch.setattr(sidecar, "load_sibling", lambda name: (_ for _ in ()).throw(ImportError(name)))
+    assert sidecar.main({}) == 1
+    rows = [json.loads(x) for x in (tmp_path / "unimatrix" / "agy-sidecars.log").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["exit_reason"] == "import-failed" and rows[0]["agy_pid"] == os.getppid()
+
+
+def test_an_import_failure_with_no_settings_home_traces_under_the_home_dir_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setattr(sidecar.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sidecar, "load_sibling", lambda name: (_ for _ in ()).throw(ImportError(name)))
+    assert sidecar.main({}) == 1
+    log = tmp_path / ".coordinator-claude-settings" / "unimatrix" / "agy-sidecars.log"
+    assert json.loads(log.read_text())["exit_reason"] == "import-failed"
+
+
+def test_main_without_a_settings_home_traces_missing_settings_home_and_exits_nonzero(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setattr(sidecar.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(launch.Path, "home", classmethod(lambda cls: tmp_path))
+    assert sidecar.main({"ANTIGRAVITY_LS_ADDRESS": "h:1", "ANTIGRAVITY_CSRF_TOKEN": TOKEN}) == 1
+    rows = [json.loads(x) for x in (tmp_path / ".coordinator-claude-settings" / "unimatrix" / "agy-sidecars.log").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["exit_reason"] == "missing-settings-home"
+    assert not (tmp_path / ".coordinator-claude-settings" / "unimatrix" / "agy-sidecars").exists()
 
 
 def test_sessionstart_hands_off_to_a_live_sidecar_and_starts_pending_only_without_one(tmp_path, monkeypatch):
@@ -184,11 +236,11 @@ def test_sessionstart_hands_off_to_a_live_sidecar_and_starts_pending_only_withou
     monkeypatch.setattr(launch.subprocess, "Popen", lambda cmd, **kw: spawned.append(kw["env"]) or FakeProc())
     side = sess.load_sibling("unimatrix-agy-sidecar")
     calls = []
-    monkeypatch.setattr(side, "handoff", lambda *a, **k: calls.append(a) or True)
+    monkeypatch.setattr(side, "handoff_why", lambda *a, **k: calls.append(a))
     monkeypatch.setattr(sess, "load_sibling", lambda name: side if name == "unimatrix-agy-sidecar" else load(name))
     sess.register({"conversationId": CONV, "cwd": str(tmp_path)}, 5)
     assert len(calls) == 1 and calls[0][:3] == (CONV, str(tmp_path), 5) and spawned == []  # the sidecar owns the start
-    monkeypatch.setattr(side, "handoff", lambda *a, **k: False)
+    monkeypatch.setattr(side, "handoff_why", lambda *a, **k: "no-record")
     sess.register({"conversationId": CONV, "cwd": str(tmp_path)}, 5)
     rec = json.loads((tmp_path / "unimatrix" / "agy-legs" / f"{CONV}.json").read_text())
     assert len(spawned) == 1 and rec["mode"] == "pending" and rec["ls_address"] is None
@@ -207,13 +259,13 @@ def test_main_binds_writes_its_record_answers_a_handoff_and_removes_the_record_o
         t = threading.Thread(target=real_serve, args=(hub, srv, lambda pid: not seen.get("done")), daemon=True)
         monkeypatch.setattr(sidecar, "POLL_SECS", 0.1)
         t.start()
-        seen["ok"] = sidecar.handoff(CONV, str(tmp_path), hub.agy_pid, tmp_path, lambda pid: True)
+        seen["ok"] = sidecar.handoff_why(CONV, str(tmp_path), hub.agy_pid, tmp_path, lambda pid: True)
         seen["done"] = True
         t.join(5)
 
     monkeypatch.setattr(sidecar, "serve", serve_once)
     assert sidecar.main() == 0
-    assert seen["ok"] is True and (tmp_path / "unimatrix" / "agy-legs" / f"{CONV}.json").is_file()
+    assert seen["ok"] is None and (tmp_path / "unimatrix" / "agy-legs" / f"{CONV}.json").is_file()
     assert [e["ANTIGRAVITY_CONVERSATION_ID"] for _, e in env] == [CONV]
     assert not (sidecar.record_dir(tmp_path) / f"{seen['agy_pid']}.json").exists()  # cleaned up
 

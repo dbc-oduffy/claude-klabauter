@@ -13,23 +13,16 @@ def _holds(directory: Path, pattern: str) -> bool:
 
 
 def declares_unreal_engine(repo_root) -> bool:
-    """True when `repo_root/coordinator.local.md` frontmatter declares `project_type: unreal-engine`.
+    """True when `coordinator_core.ue_project_detection.declared_ue` reads `repo_root` as Unreal Engine.
 
-    Any read or parse failure is False: an unreadable declaration never owes the signal.
+    No declaration or any read failure is False: an unreadable declaration never owes the signal.
     """
     try:
-        text = (Path(repo_root) / "coordinator.local.md").read_text(encoding="utf-8")
-        if not text.startswith("---"):
-            return False
-        parts = text.split("---", 2)
-        if len(parts) < 3:
-            return False
-        import yaml
+        from coordinator_core.ue_project_detection import declared_ue
 
-        fm = yaml.safe_load(parts[1])
+        return declared_ue(repo_root) is True
     except Exception:
         return False
-    return isinstance(fm, dict) and fm.get("project_type") == "unreal-engine"
 
 
 def ue_signal_for_writes(writes, repo_root) -> bool:
@@ -38,7 +31,7 @@ def ue_signal_for_writes(writes, repo_root) -> bool:
     Territory is: a `Plugins` path segment (case-insensitive, `\\` normalised), a .uplugin/.uproject
     file, an ancestor directory under `repo_root` holding a *.uplugin (catches a lowercase
     `control/plugin` tree), a `repo_root` that itself holds a *.uproject, or a `repo_root` whose
-    coordinator.local.md declares `project_type: unreal-engine`.
+    UE declaration (`declared_ue`) says unreal.
     """
     root = Path(repo_root)
     if _holds(root, "*.uproject") or declares_unreal_engine(root):
