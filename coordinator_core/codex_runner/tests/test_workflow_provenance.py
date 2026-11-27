@@ -424,6 +424,37 @@ def _run(tmp_path, backend, schema=_SCHEMA):
                               artifact_dir=tmp_path / 'art', backend=backend, parent_session_id='sid')
 
 
+def test_grok_worker_stream_joins_session_usage(tmp_path: Path) -> None:
+    """A grok stage stream names sessionId and per-turn usage, not a codex thread."""
+    child = "01a218c3-880e-7ca2-bff8-f613ba835762"
+    parent = "297d177f-957c-4221-bb61-50d53d2a8fea"
+    usage = {"input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 4,
+             "cache_creation_input_tokens": 0, "reasoning_tokens": 1}
+    path = tmp_path / "stdout.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in [
+        {"type": "usage", "usage": usage},
+        {"type": "end", "sessionId": child, "stopReason": "end_turn",
+         "modelUsage": {"grok-4.7-build-fast": {
+             "inputTokens": 10, "outputTokens": 2, "cacheReadInputTokens": 4,
+             "cacheCreationInputTokens": 0, "modelCalls": 1}}},
+    ]) + "\n", encoding="utf-8")
+    observed = workflow._event_provenance(path, "grok")
+    assert observed["native_thread_id"] == child
+    assert observed["model"] == "grok-4.7-build-fast"
+    assert observed["usage_events"] == [usage]
+    receipt = {**observed, "backend": "grok", "broker_root_session_id": parent,
+               "broker_fire_id": "fire-grok-attr", "broker_request_id": 1}
+    result = workflow._append_canonical_usage(receipt)
+    assert result["status"] == "appended"
+    payload = json.loads(Path(result["path"]).read_text().splitlines()[-1])["payload"]
+    assert payload["provider"] == "grok"
+    assert payload["session_id"] == child
+    assert payload["parent_session_id"] == parent
+    assert payload["model"] == "grok-4.7-build-fast"
+    assert payload["usage"] == {"input_tokens": 10, "output_tokens": 2,
+                                 "cache_read_input_tokens": 4, "cache_creation_input_tokens": 0}
+
+
 def test_grok_stage_spawns_resolved_binary_and_parses_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': '{"a": 1}', 'stopReason': 'end_turn'}, indent=2))
     assert _run(tmp_path, 'grok') == {'a': 1}

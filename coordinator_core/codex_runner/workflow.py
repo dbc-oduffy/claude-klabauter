@@ -792,7 +792,14 @@ def _event_provenance(path: Path, backend: str) -> dict:
         if backend in _FAMILY_BACKENDS and result["model"] == "unknown":
             result["model"] = _family_event_model(event) or "unknown"
         kind = event.get("type")
-        identity = event.get("thread_id") if kind == "thread.started" else event.get("session_id") if backend == "claude" else None
+        if kind == "thread.started":
+            identity = event.get("thread_id")
+        elif backend == "claude":
+            identity = event.get("session_id")
+        elif backend == "grok":
+            identity = event.get("sessionId") or event.get("session_id")
+        else:
+            identity = None
         if isinstance(identity, str):
             try:
                 result["native_thread_id"] = str(uuid.UUID(identity))
@@ -807,7 +814,7 @@ def _event_provenance(path: Path, backend: str) -> dict:
                     if isinstance(value, str) and value.strip():
                         result[target] = value
                         break
-        if (kind == "turn.completed" or backend == "claude") and isinstance(event.get("usage"), dict):
+        if (kind == "turn.completed" or backend == "claude" or (backend == "grok" and kind == "usage")) and isinstance(event.get("usage"), dict):
             usages.append(event["usage"])
             result.setdefault("usage_observations", []).append({
                 "usage": event["usage"], "model": event.get("model", result["model"]),
@@ -882,7 +889,7 @@ def _append_canonical_usage(receipt: dict) -> dict:
         return {'status': 'incomplete', 'reason': 'stable broker fire/request identity unavailable'}
     backend = receipt.get('backend')
     events = receipt.get('usage_events')
-    if backend not in ('codex', 'claude') or not isinstance(events, list) or not events:
+    if backend not in ('codex', 'claude', 'grok') or not isinstance(events, list) or not events:
         return {'status': 'incomplete', 'reason': 'native usage events unavailable'}
     cached_key, written_key = ('cached_input_tokens', 'cache_write_input_tokens') if backend == 'codex' else (
         'cache_read_input_tokens', 'cache_creation_input_tokens')
@@ -1350,6 +1357,48 @@ def _gate_reask_preserves_scalars(initial: str, retry: str) -> bool:
     return False
 
 
+def _loopback_provider_argv(endpoint: str) -> list[str]:
+    """Pin a credential-free local responder when the worker ignores user configuration."""
+    port = re.fullmatch(r"http://127[.]0[.]0[.]1:([1-9][0-9]{0,4})/v1", endpoint)
+    if not port or int(port[1]) > 65535:
+        raise AgentFailed("local fixture requires an IPv4 loopback endpoint")
+    return [
+        "-c", 'model_provider="local_fixture"',
+        "-c", 'model_providers.local_fixture.name="local_fixture"',
+        "-c", 'model_providers.local_fixture.wire_api="responses"',
+        "-c", "model_providers.local_fixture.base_url=" + json.dumps(endpoint),
+    ]
+
+
+def _budget_gateway_argv(capture_root: str | None, endpoint: str | None) -> list[str]:
+    """Bind a capped native worker to the assessor's HTTP listener before admitting its spawn."""
+    owner = os.environ.get("COORDINATOR_PAIR_BUDGET_ID")
+    path = Path(capture_root) / "budget-gateway.json" if capture_root else None
+    if owner is None and (path is None or not path.exists()):
+        return []
+    if not owner or path is None or not endpoint:
+        raise AgentFailed("capped worker requires its allocation, evidence directory and gateway")
+    import http.client
+    from urllib.parse import urlsplit
+
+    argv = _loopback_provider_argv(endpoint)
+    try:
+        binding = json.loads(path.read_bytes())
+        if binding != {"endpoint": endpoint, "allocation": owner}:
+            raise ValueError("gateway differs from issued allocation")
+        connection = http.client.HTTPConnection("127.0.0.1", urlsplit(endpoint).port, timeout=0.5)
+        try:
+            connection.request("HEAD", "/cap-ready")
+            response = connection.getresponse()
+            if response.status != 204 or response.getheader("X-Allocation") != owner:
+                raise ValueError("gateway did not confirm allocation")
+        finally:
+            connection.close()
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        raise AgentFailed(f"capped worker gateway unavailable: {exc}") from exc
+    return [*argv, "-c", "model_providers.local_fixture.supports_websockets=false"]
+
+
 def run_agent(
     prompt: str,
     options: dict[str, Any] | None,
@@ -1524,6 +1573,12 @@ def run_agent(
         if effort is not None:
             argv += ["-c", "model_reasoning_effort=" + json.dumps(effort)]
         argv += ["-"]
+        endpoint = os.environ.get("COORDINATOR_LOOPBACK_FIXTURE_URL")
+        budget_argv = _budget_gateway_argv(capture_root, endpoint)
+        if endpoint is not None:
+            if "COORDINATOR_CODEX_WORKER_POLICY_FILE" not in os.environ:
+                raise AgentFailed("local fixture requires a configured worker policy")
+            argv += budget_argv or _loopback_provider_argv(endpoint)
     elif backend == "claude":
         executable = shutil.which("claude", path=env.get("PATH"))
         if not executable:
