@@ -694,6 +694,18 @@ def test_grok_prompt_file_keeps_the_sealed_bytes_and_codex_is_not_wrapped(tmp_pa
     assert "--prompt-file" not in codex_argv
 
 
+def test_grok_cwd_becomes_the_working_dir_flag() -> None:
+    rc, calls, _ = _run("grok", extra=["x"], cwd="repo/sub")
+    argv = calls[0][1]
+    assert rc == 0 and argv.count("--cwd") == 1 and argv[argv.index("--cwd") + 1] == "repo/sub"
+
+
+def test_grok_caller_cwd_flag_is_not_doubled() -> None:
+    rc, calls, _ = _run("grok", extra=["--cwd", "mine", "x"], cwd="repo/sub")
+    argv = calls[0][1]
+    assert rc == 0 and argv.count("--cwd") == 1 and argv[argv.index("--cwd") + 1] == "mine"
+
+
 def test_grok_callers_permission_mode_and_allow_are_kept_not_doubled() -> None:
     mine = next(a for a in reversed(_grok_head()) if a.startswith("Bash("))
     rc, calls, _ = _run("grok", extra=["--permission-mode", "plan", "--allow", mine])

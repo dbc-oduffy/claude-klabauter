@@ -125,4 +125,11 @@ def with_worker_preamble(backend: str, prompt: str) -> str:
         name = "sizing-assemble.exe" if os.name == "nt" else "sizing-assemble"
         prompt = prompt.replace(SIZING_ASSEMBLE_CMD, _quoted((settings_home() / "bin" / name).resolve().as_posix()))
         prompt += "\n\n" + SIZING_USAGE
-    return PREAMBLE + "\n\n" + prompt
+    text = PREAMBLE + "\n\n" + prompt
+    # Grok allow rules do not expand ${COORDINATOR_SETTINGS_HOME:-...}. Rewrite both
+    # the flat and the nested spelling before the worker copies a command.
+    if backend == "grok" and os.name != "nt":
+        from coordinator_core.ops.dispatch_emit.invoke_form import GROK, render_invoke_for_shell
+
+        text = render_invoke_for_shell(text, GROK, bin_dir=settings_home() / "bin")
+    return text

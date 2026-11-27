@@ -122,6 +122,20 @@ def test_claude_backend_prompt_is_unchanged():
     assert all(with_worker_preamble(b, "body") == PREAMBLE + "\n\nbody" for b in WORKER_BACKENDS)
 
 
+def test_grok_preamble_rewrites_both_launcher_spellings(tmp_path, monkeypatch):
+    """The prompt a grok worker receives spells both launcher forms as one absolute path."""
+    if os.name == "nt":
+        pytest.skip("POSIX grok rewrite; Windows strips the expansion to a bare name first")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    simple = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" dispatch.emit'
+    nested = '"${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin/coordinator-invoke" dispatch.ask_stage'
+    text = with_worker_preamble("grok", simple + "\n" + nested)
+    absolute = (tmp_path / "bin" / "coordinator-invoke").as_posix()
+    assert "${" not in text and "COORDINATOR_SETTINGS_HOME" not in text and "CLAUDE_HOME" not in text
+    assert text.count(absolute) == 2
+    assert f"{absolute} dispatch.emit" in text and f"{absolute} dispatch.ask_stage" in text
+
+
 @pytest.mark.parametrize("door_pin", [False, True])
 def test_review_runner_reaches_installed_engine_without_python_on_path(tmp_path, monkeypatch, door_pin):
     from coordinator_core.ops.workflow_fire import worker_preamble

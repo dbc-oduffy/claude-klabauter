@@ -185,6 +185,16 @@ def _attach_grok_xs_card(extra) -> list[str]:
     return out
 
 
+def _grok_workdir_flag(extra: list[str], cwd: str | None) -> list[str]:
+    """Supervised grok inherits this process cwd. The launch directory becomes grok's `--cwd`.
+
+    A caller-supplied `--cwd` or `--cwd=PATH` is left as they wrote it.
+    """
+    if not cwd or "--cwd" in extra or any(str(item).startswith("--cwd=") for item in extra):
+        return []
+    return ["--cwd", cwd]
+
+
 def _agy_launch_args(extra, cwd, environ=None) -> list[str]:
     """`extra` led by one `--add-dir` per workspace root, then `--dangerously-skip-permissions` once unless the caller passed `--mode`/`--sandbox`.
 
@@ -471,7 +481,7 @@ def launch(family, extra, *, session_id=None, which=shutil.which, spawn=_spawn, 
         except OSError as exc:
             print(f"headless-em-launch: refused: grok prompt: {exc}", file=sys.stderr)
             return REFUSED
-        cmd = [cli, *_grok_launch_args(prompted, environ, platform)]
+        cmd = [cli, *_grok_launch_args(prompted, environ, platform), *_grok_workdir_flag(extra, cwd)]
     elif family == "agy":
         cmd = [cli, *_agy_launch_args(extra, cwd, environ)]
     elif family == "claude":

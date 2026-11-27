@@ -1118,10 +1118,27 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
     """
     try:
         if backend == "grok":
-            allow = _RELAY_ALLOW if agent_type in _INVOKE_ONLY_AGENT_TYPES else "Bash"
+            # acceptEdits still prompts for a shell command, and a headless run cannot
+            # ask. A general stage therefore uses bypassPermissions. An invoke-only
+            # child keeps one coordinator-invoke rule: the absolute launcher on POSIX,
+            # because the prompt rewrite expands ${COORDINATOR_SETTINGS_HOME:-...}/bin/<cli>
+            # and a bare-name rule does not match that path.
+            if agent_type in _INVOKE_ONLY_AGENT_TYPES:
+                permission_mode = "acceptEdits"
+                if os.name == "nt":
+                    allow = _RELAY_ALLOW
+                else:
+                    launcher = (settings_home() / "bin" / "coordinator-invoke").as_posix()
+                    allow = f"Bash({launcher}:*)"
+            elif os.name == "nt":
+                permission_mode = "acceptEdits"
+                allow = "Bash"
+            else:
+                permission_mode = "bypassPermissions"
+                allow = "Bash"
             output_format = "streaming-json" if agent_type == "coordinator:sizing-scout" else "json"
             argv = [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
-                    "--output-format", output_format, "--permission-mode", "acceptEdits",
+                    "--output-format", output_format, "--permission-mode", permission_mode,
                     "--allow", allow, "--no-subagents", "--no-auto-update"]
             if model:
                 argv += ["--model", model]
