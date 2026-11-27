@@ -609,15 +609,18 @@ def codex_cli_process(pid) -> bool:
 
 
 def codex_holder_live(row, pid_alive_fn=None, proc_start_fn=None, presence_held_fn=None,
-                      lock_pids_fn=None, cli_fn=None) -> "bool | None":
+                      lock_pids_fn=None, cli_fn=None, argv_fn=None) -> "bool | None":
     """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart`.
 
-    With the recorded holder dead, the thread's writer lock keeps the row live only while a codex CLI/TUI holds it."""
+    A recorded holder that is dead, or alive but an app-server, keeps the row live only while a codex CLI/TUI
+    holds the thread's writer lock."""
     pid = row.get("codexPid") if isinstance(row, dict) else None
     if not isinstance(pid, int) or isinstance(pid, bool):
         return None
     if not holder_proven_dead({"pid": pid, "procStart": row.get("codexProcStart")}, pid_alive_fn, proc_start_fn):
-        return True
+        argv = (argv_fn or _process_argv)(pid)
+        if not (argv and "app-server" in argv[1:]):
+            return True
     target = row.get("target")
     if row.get("vendor") != "codex" or not isinstance(target, str):
         return False

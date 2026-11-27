@@ -60,7 +60,7 @@ def codex_holder_live(row) -> "bool | None":
     """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart` (`_unimatrix.proc`)."""
     return _proc().codex_holder_live(
         row, *(_get(_proc, name) for name in ("pid_alive", "proc_start", "agy_presence_held",
-                                              "lock_holder_pids", "codex_cli_process")))
+                                              "lock_holder_pids", "codex_cli_process", "_process_argv")))
 
 
 def supervisor_live(rec) -> bool:

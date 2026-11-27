@@ -121,3 +121,36 @@ def test_an_unheld_lock_never_keeps_a_dead_holder_face_live_even_for_a_cli_class
         monkeypatch.setattr(mod, "agy_presence_held", lambda target, presence_dir=None: False)
     r, stopped = _drive_router(box, monkeypatch)
     assert stopped == [NAME] and not _listed(box)
+
+
+def _proc():
+    if str(BIN) not in sys.path:
+        sys.path.insert(0, str(BIN))
+    import importlib
+    return importlib.import_module("_unimatrix.proc")
+
+
+_LIVE_ROW = {"vendor": "codex", "target": THREAD, "codexPid": 4242, "codexProcStart": "s"}
+
+
+def _holder_live(argv, lock_held, lock_cli):
+    return _proc().codex_holder_live(
+        _LIVE_ROW, pid_alive_fn=lambda pid: True, proc_start_fn=lambda pid: "s",
+        presence_held_fn=lambda target, presence_dir=None: lock_held,
+        lock_pids_fn=lambda path: [4242], cli_fn=lambda pid: lock_cli, argv_fn=lambda pid: argv)
+
+
+def test_a_live_recorded_app_server_holder_does_not_keep_the_face_live() -> None:
+    assert _holder_live(["codex", "app-server", "--listen", "unix://"], True, False) is False
+
+
+def test_a_live_recorded_cli_holder_keeps_the_face_live() -> None:
+    assert _holder_live(["codex", "resume"], True, False) is True
+
+
+def test_a_live_recorded_holder_with_unreadable_argv_keeps_the_face_live() -> None:
+    assert _holder_live(None, False, False) is True
+
+
+def test_a_live_recorded_app_server_holder_defers_to_a_cli_lock_holder() -> None:
+    assert _holder_live(["codex", "app-server"], True, True) is True

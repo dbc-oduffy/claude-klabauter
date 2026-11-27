@@ -302,7 +302,7 @@ def test_agy_face_with_a_dead_or_absent_pid_and_no_lock_is_unbacked_past_grace(t
     face = {"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}
     old = int(time.time() - lv.AGY_SESSION_GRACE_SECONDS - 30) * 1000
     home = _agy_home(tmp_path, None)
-    _write_leg(home, "conv-1", {"pid": 1, "agy_pid": None, "startedAt": old})
+    _write_leg(home, "conv-1", {"pid": 2_000_000_000, "agy_pid": None, "startedAt": old})
     assert lv.agy_face_unbacked(face, home) is True
 
 
