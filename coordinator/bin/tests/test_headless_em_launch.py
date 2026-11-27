@@ -660,6 +660,7 @@ def test_grok_launch_defaults_auto_with_absolute_path_allow_per_engine_op(platfo
         body = prompt.read_text(encoding="utf-8")
         assert body == hel.GROK_XS_CARD + "hi"
         assert "Do not call engine_ask.submit for it." in body
+        assert "When the ask names the files to add in this workspace" in body
     finally:
         prompt.unlink(missing_ok=True)
     assert "-p" not in argv
