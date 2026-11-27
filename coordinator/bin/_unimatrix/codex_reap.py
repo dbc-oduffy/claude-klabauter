@@ -55,25 +55,40 @@ def _owned_by_root(proc, argv: list[str], root: Path) -> bool:
     return bool(home) and _under(home, root)
 
 
-def reap_codex_home(root: Path) -> list[int]:
+def _owned_procs(real: Path, since: float | None = None) -> list:
+    import psutil
+    me = os.getpid()
+    found = []
+    for proc in psutil.process_iter():
+        if proc.pid == me:
+            continue
+        try:
+            if since is not None and proc.create_time() < since:
+                continue
+            argv = proc.cmdline()
+            if _is_codex_target(argv) and _owned_by_root(proc, argv, real):
+                found.append(proc)
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
+            continue
+    return found
+
+
+def alive_under(root: Path) -> bool:
+    """True while any codex app-server / pid-update-loop process still resolves under `root`."""
+    real = _canon(str(root))
+    return real is not None and bool(_owned_procs(real))
+
+
+def reap_codex_home(root: Path, since: float | None = None) -> list[int]:
     """Kill every codex app-server / pid-update-loop process owned by `root`; return the pids that are gone.
 
+    `since` (epoch seconds) spares processes created earlier, so a live user daemon under a real CODEX_HOME survives.
     One in-process psutil enumeration, no child spawn. Processes it cannot read are skipped."""
     import psutil
     real = _canon(str(root))
     if real is None:
         return []
-    me = os.getpid()
-    victims = []
-    for proc in psutil.process_iter():
-        if proc.pid == me:
-            continue
-        try:
-            argv = proc.cmdline()
-            if _is_codex_target(argv) and _owned_by_root(proc, argv, real):
-                victims.append(proc)
-        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
-            continue
+    victims = _owned_procs(real, since)
     for proc in victims:
         try:
             proc.kill()

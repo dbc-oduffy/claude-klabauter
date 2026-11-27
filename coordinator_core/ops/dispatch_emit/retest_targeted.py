@@ -37,6 +37,7 @@ from coordinator_core.ops.dispatch_emit import landing_targeted_tests
 from coordinator_core.ops.dispatch_emit import red_attribution
 from coordinator_core.ops.review_test_blocker import ZERO_RAN_MESSAGE
 from coordinator_core.telemetry import host_sampler
+from coordinator_core.win_portability import no_console_creationflags
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -66,7 +67,11 @@ RETEST_CHILD_TIMEOUT_SECS = 1800.0
 _DEADLINE_GRACE_SECS = 60.0
 
 #: Sleep between ``--poll --wait`` reads of the record.
-_WAIT_INTERVAL_SECS = 2.0
+_WAIT_INTERVAL_SECS = 0.5
+
+#: Longest one warm-dispatched ``--poll --wait`` call may wait before returning 3 (still running);
+#: the cold ``python -m`` entry waits unbounded. A warm pool slot is held for the whole call.
+WARM_WAIT_BUDGET_SECS = 1.0
 
 #: ``run`` return value for a launcher killed at the timeout.
 LAUNCH_TIMED_OUT = "timed-out"
@@ -97,10 +102,15 @@ def _is_export_root(cwd: Path) -> bool:
     return False
 
 
+#: Shell-joined argv (with the per-run ``--basetemp``) of every session ``_run_argv`` launched in this process;
+#: ``main`` clears it and the retest record carries it as ``argv``.
+_LAUNCHED_ARGV: list[str] = []
+
+
 def _run_argv(
     argv: list[str], cwd: Path, *, log: Optional[Path] = None, timeout: Optional[float] = None,
     append: bool = False,
-):
+) -> "int | str":
     """Exit code, or ``LAUNCH_TIMED_OUT``. The child runs in a capped job (a killpg session off
     Windows); the timeout and the normal exit both close it, so no grandchild survives. The log is a
     file so a surviving grandchild never blocks this call."""
@@ -137,6 +147,7 @@ def _run_argv(
             at = argv.index("pytest") + 1
             argv = [*argv[:at], "--basetemp", str(basetemp), *argv[at:]]
             env = scoped_pytest.tmp_env(env, tmp)
+        _LAUNCHED_ARGV.append(shlex.join(argv))
         proc, close = spawn_in_capped_job(
             argv,
             popen_kwargs=dict(
@@ -334,6 +345,130 @@ _OPTION_PLUGINS = {"--timeout": "pytest-timeout", "--timeout-method": "pytest-ti
                    "--numprocesses": "pytest-xdist", "--dist": "pytest-xdist"}
 
 
+#: Importable top-level module of each plugin ``_OPTION_PLUGINS`` names.
+_PLUGIN_MODULES = {"pytest-timeout": "pytest_timeout", "pytest-xdist": "xdist"}
+_XDIST_SHORT = re.compile(r"-n(?:\d+|auto|logical)")
+
+
+def _addopts_text(root: Path) -> str:
+    """The ``addopts`` string of the config file pytest selects at ``root``: ``pytest.ini`` always, else the first
+    of pyproject.toml (``[tool.pytest.ini_options]``), tox.ini (``[pytest]``), setup.cfg (``[tool:pytest]``) that
+    holds its section, even without ``addopts``; ``""`` when none."""
+    import configparser
+
+    for name, section in (("pytest.ini", "pytest"), ("pyproject.toml", None), ("tox.ini", "pytest"), ("setup.cfg", "tool:pytest")):
+        path = root / name
+        try:
+            if section is None:
+                import tomllib
+
+                table = tomllib.loads(path.read_text(encoding="utf-8")).get("tool", {}).get("pytest", {}).get("ini_options")
+                if not isinstance(table, dict):
+                    continue
+                value = table.get("addopts")
+            else:
+                parser = configparser.ConfigParser(interpolation=None)
+                parser.read_string(path.read_text(encoding="utf-8"))
+                if name != "pytest.ini" and not parser.has_section(section):
+                    continue
+                value = parser.get(section, "addopts", fallback=None)
+        except (OSError, ValueError, configparser.Error):
+            continue
+        if isinstance(value, list):
+            value = " ".join(str(v) for v in value)
+        return value if isinstance(value, str) else ""
+    return ""
+
+
+def addopts_plugins(root: Path) -> list[str]:
+    """Sorted plugin names (``_OPTION_PLUGINS`` values) the repo's own ``addopts`` options need."""
+    try:
+        tokens = shlex.split(_addopts_text(root))
+    except ValueError:
+        return []
+    return sorted({
+        "pytest-xdist" if _XDIST_SHORT.fullmatch(t) else _OPTION_PLUGINS[t.split("=")[0]]
+        for t in tokens if _XDIST_SHORT.fullmatch(t) or t.split("=")[0] in _OPTION_PLUGINS
+    })
+
+
+_IMPORT_PROBE = ("import importlib.util, sys\n"
+                 "bad = []\n"
+                 "for m in sys.argv[1:]:\n"
+                 "    try:\n"
+                 "        ok = importlib.util.find_spec(m) is not None\n"
+                 "    except (ImportError, ValueError):\n"
+                 "        ok = False\n"
+                 "    if not ok:\n"
+                 "        bad.append(m)\n"
+                 "print(','.join(bad))\n")
+_PROBE_TIMEOUT_S = 15
+
+
+def _unimportable(interpreter: str, modules: Sequence[str]) -> Optional[list[str]]:
+    """The ``modules`` ``interpreter`` cannot import, in order; ``None`` when that interpreter cannot be run.
+    This process's own interpreter is answered in-process; any other costs one spawn."""
+    import importlib.util
+
+    if interpreter == sys.executable:
+        bad = []
+        for module in modules:
+            try:
+                found = importlib.util.find_spec(module) is not None
+            except (ImportError, ValueError):
+                found = False
+            if not found:
+                bad.append(module)
+        return bad
+    try:
+        proc = subprocess.run([interpreter, "-c", _IMPORT_PROBE, *modules], capture_output=True, text=True,
+                              timeout=_PROBE_TIMEOUT_S, **no_console_creationflags())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return [m for m in proc.stdout.strip().split(",") if m]
+
+
+def missing_addopts_plugins(root: Path, interpreter: Optional[str] = None) -> list[str]:
+    """The plugins ``addopts_plugins(root)`` names that ``interpreter`` (default: this process's) cannot import;
+    no spawn for this process's own interpreter, one for another. An interpreter that cannot be run lacks all.
+    Consumed by `test_leg_run` (preflight before any pytest); the retest session path stays post-hoc on
+    `_missing_plugin_defect` because its pytest runs in a detached session this module cannot preflight."""
+    plugins = addopts_plugins(root)
+    bad = _unimportable(interpreter or sys.executable, [_PLUGIN_MODULES[p] for p in plugins])
+    if bad is None:
+        return plugins
+    return [p for p in plugins if _PLUGIN_MODULES[p] in bad]
+
+
+_KNOWN_INTERPRETER_NAMES = ("python3.14", "python3.13", "python3.12", "python3.11", "python3")
+
+
+def known_interpreters() -> list[str]:
+    """Existing interpreters a leg may borrow, no venv created: ``~/.local/bin`` first, then ``PATH``, newest
+    version first; this process's interpreter excluded, duplicates (same real path) dropped."""
+    seen = {os.path.realpath(sys.executable)}
+    found: list[str] = []
+    for name in _KNOWN_INTERPRETER_NAMES:
+        for path in (str(Path.home() / ".local" / "bin"), None):
+            hit = shutil.which(name, path=path)
+            if hit and os.path.realpath(hit) not in seen:
+                seen.add(os.path.realpath(hit))
+                found.append(hit)
+    return found
+
+
+def interpreter_with_plugins(plugins: Sequence[str], candidates: Optional[Sequence[str]] = None) -> Optional[str]:
+    """The first of ``candidates`` (default ``known_interpreters()``) that imports pytest and every plugin in
+    ``plugins``; ``None`` when none does."""
+    modules = ["pytest", *(_PLUGIN_MODULES[p] for p in plugins)]
+    for candidate in (known_interpreters() if candidates is None else candidates):
+        if _unimportable(candidate, modules) == []:
+            return candidate
+    return None
+
+
 def _declared_spec(root: Path, plugin: str) -> str:
     """The ``plugin`` requirement as ``pyproject.toml`` declares it in a ``[project.optional-dependencies]``
     extra (the pytest-timeout entry with its minimum-version bound), else the bare name."""
@@ -368,37 +503,6 @@ def _missing_plugin_defect(log: Path, offset: int, root: Path) -> Optional[str]:
     specs = " ".join(f'"{_declared_spec(root, p)}"' for p in plugins)
     return (f"provisioning defect, not failed tests: pytest plugin(s) {', '.join(plugins)} not installed "
             f"(pytest rejected{match.group(1).rstrip()}); install with: {sys.executable} -m pip install {specs}")
-
-
-def _plugin_options_rejected(log: Path, offset: int) -> set:
-    """Plugin-owned option names (``_OPTION_PLUGINS``) pytest rejected as ``unrecognized arguments`` in
-    the output past ``offset``: the options a missing plugin leaves unparseable."""
-    try:
-        with open(log, "rb") as handle:
-            handle.seek(offset)
-            text = handle.read().decode("utf-8", errors="replace")
-    except OSError:
-        return set()
-    match = _UNRECOGNIZED_ARGS.search(text)
-    names = {t.split("=")[0] for t in match.group(1).split()} if match else set()
-    return {n for n in names if n in _OPTION_PLUGINS}
-
-
-def _without_options(argv: list, names: set) -> list:
-    """``argv`` minus each option in ``names`` and its value (``--opt=V`` or ``--opt V``). The test session
-    still runs, only without the missing plugin's timeout or parallelism: the outer launch deadline bounds it."""
-    out: list = []
-    skip = False
-    for tok in argv:
-        if skip:
-            skip = False
-        elif tok in names:
-            skip = True
-        elif tok.split("=")[0] in names and tok.startswith("--"):
-            continue
-        else:
-            out.append(tok)
-    return out
 
 
 def _scope_of(root: Path, test: str) -> str:
@@ -609,11 +713,6 @@ def _normalise_node_id(raw: str, rootdir: Path, root: Path) -> Optional[str]:
     return rel.as_posix() + sep + rest
 
 
-#: ``zero_run_cause`` of an export pass that failed with no parsable node id: infra, not a test verdict.
-NODELESS_FAIL_CAUSE = "no-failing-node-id"
-_NODE_FILE_HEAD = re.compile(r"^[^\s:]+\.py::")
-
-
 def _failed_node_ids(log: Path, root: Path) -> list[str]:
     """``root``-relative node ids from pytest ``FAILED``/``ERROR`` summary lines in ``log`` (the short
     summary prints them relative to the invocation dir, which is ``root``); a parametrised id keeps its
@@ -625,10 +724,7 @@ def _failed_node_ids(log: Path, root: Path) -> list[str]:
     except OSError:
         return []
     found = re.findall(r"^(?:FAILED|ERROR) (\S+::.+?)(?: - .*)?$", text, flags=re.MULTILINE)
-    # -v progress lines (``path.py::test FAILED  [ 50%]``) name the id when the short summary is off.
-    found += re.findall(r"^(\S+\.py::.+?) (?:FAILED|ERROR)\s*(?:\[\s*\d+%\])?\s*$", text, flags=re.MULTILINE)
-    # Trap: a captured-log line also starts ``ERROR ``; only a ``<file>.py::`` head is a node id.
-    ids = [f.rstrip() for f in found if _NODE_FILE_HEAD.match(f)]
+    ids = [f.rstrip() for f in found]
     return list(dict.fromkeys(_normalise_node_id(n, root, root) or n for n in ids))
 
 
@@ -646,7 +742,9 @@ _SUMMARY_LINE = re.compile(r"^\W*((?:\d+ [a-z]+(?:, )?)+) in [\d.]+s", re.MULTIL
 _RAN_KINDS = frozenset({"passed", "failed", "error", "errors", "skipped", "xfailed", "xpassed"})
 
 
-def _collect_ids(run, root: Path, tests: list[str], log: Path, deadline: float) -> "tuple[set[str], list[str]] | str":
+def _collect_ids(
+    run, root: Path, tests: list[str], log: Path, deadline: float, marker: Optional[str] = None,
+) -> "tuple[set[str], list[str]] | str":
     """``(ids, errored_files)``: the ``root``-relative node ids ``--collect-only`` finds for ``tests`` under
     ``root``, and the ``root``-relative files with a collection ERROR; a str reason when a session is
     broken or the printed ids cannot be mapped. ``-q`` collect-only prints no header, so each session is
@@ -659,6 +757,8 @@ def _collect_ids(run, root: Path, tests: list[str], log: Path, deadline: float) 
         return plan
     base, groups = plan
     quiet_free = [t for t in base if t not in _QUIET_FLAGS]  # a second -q prints ``path: N``, not node ids
+    if marker is not None:
+        quiet_free += ["-m", marker]
     log.write_bytes(b"")
     rcs: list = []
     for n, group in enumerate(groups):
@@ -708,10 +808,13 @@ def _ran_total(log: Path) -> Optional[int]:
     return total if seen else None
 
 
-def _deselected_total(log: Path) -> int:
-    """Sum of the ``N deselected`` counts over every pytest summary line in ``log``; 0 when none."""
+def _deselected_total(log: Path, offset: int = 0) -> int:
+    """Sum of the ``N deselected`` counts over every pytest summary line in ``log`` past byte ``offset``;
+    0 when none."""
     try:
-        text = log.read_text(encoding="utf-8", errors="replace")
+        with open(log, "rb") as handle:
+            handle.seek(offset)
+            text = handle.read().decode("utf-8", errors="replace")
     except OSError:
         return 0
     return sum(
@@ -720,14 +823,17 @@ def _deselected_total(log: Path) -> int:
     )
 
 
-def _zero_ran_owned(run, root: Path, tests: list[str], log: Path, deadline: float) -> list[str]:
+def _zero_ran_owned(
+    run, root: Path, tests: list[str], log: Path, deadline: float, marker: Optional[str] = None,
+) -> list[str]:
     """The named node ids in ``tests`` that ran 0 times. Only a log reporting deselection triggers a
-    ``--collect-only`` session; an id with no collected match (itself, ``id[...]`` or ``id::...``) was
-    deselected. Fail closed: when collection is unavailable every named node id is unproven."""
+    ``--collect-only`` session (under ``-m marker`` when a marker re-run happened); an id with no
+    collected match (itself, ``id[...]`` or ``id::...``) was deselected. Fail closed: when collection is
+    unavailable every named node id is unproven."""
     owned = [t for t in tests if "::" in t or t.endswith(".py")]
     if not owned or not _deselected_total(log):
         return []
-    collected = _collect_ids(run, root, tests, log.with_suffix(".collect.log"), deadline)
+    collected = _collect_ids(run, root, tests, log.with_suffix(".collect.log"), deadline, marker)
     if isinstance(collected, str):
         return owned
     ids = collected[0]
@@ -787,13 +893,190 @@ def _poll_command(flag: str, value: str) -> str:
     return f"{landing_targeted_tests.RETEST_LAUNCHER} --poll {flag} {json.dumps(value) if ' ' in value else value}"
 
 
-def _poll(path: Path, flag: str, value: str) -> int:
-    """Print the record's status line; 0 pass, 1 fail, 2 error/stale/absent/abandoned, 3 running."""
+def _pid_alive(pid: object) -> bool:
+    """True when ``pid`` names a live process; a missing or malformed pid reads dead."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    import psutil
+
+    return psutil.pid_exists(pid)
+
+
+def _stamp_pid(path: Path) -> None:
+    """The detached child records its own pid in the ``running`` record, so a poll can tell a dead child."""
+    record = _read_record(path)
+    if record and record.get("status") == landing_retest.RETEST_RUNNING:
+        record["pid"] = os.getpid()
+        _write_record(path, record)
+
+
+def _seal_if_running(path: Path, run_id: str, tests: list[str], reason: str) -> None:
+    """Replace a record still ``running`` with a terminal ``error`` carrying ``reason`` (the child's last act)."""
+    record = _read_record(path)
+    if record is None or record.get("status") != landing_retest.RETEST_RUNNING:
+        return
+    sealed = {"run_id": run_id, "status": "error", "tests": tests, "reason": reason,
+              "at": datetime.now(timezone.utc).isoformat()}
+    if record.get("log"):
+        sealed["log"] = record["log"]
+    _write_record(path, sealed)
+
+
+#: Record key mapping each failing node id to ``caused``, ``foreign`` or ``pre_existing``.
+NODE_VERDICTS_KEY = "node_verdicts"
+
+
+def _head_red_ids(run, root: Path, ids: Sequence[str], log: Path, deadline: float) -> set[str]:
+    """Of ``ids``, those red at a pure-HEAD export of ``root``. Any build or measure failure returns the empty
+    set, so every id reads ``foreign`` (not ``pre_existing``) in ``_classify_reds``: still non-blocking."""
+    from coordinator_core.ops.dispatch_emit import landing_export as le
+    from coordinator_core.testing import baseline_export
+
+    head_root = le.run_export_root(root, log.stem).with_name("export-head")
+    try:
+        le.build_head_export(root, head_root, [], None)
+        measured = _measure(run, head_root, list(ids), log.with_suffix(".head.log"), deadline)
+        return set(measured[1]) if measured else set()
+    except (le.LandingExportError, RuntimeError, OSError):
+        return set()
+    finally:
+        baseline_export.remove(head_root)
+
+
+def _classify_reds(
+    root: Path, run_id: str, params: dict, log: Path, ids: Sequence[str],
+    head_red: Optional[Callable[[Sequence[str]], set[str]]] = None,
+) -> dict:
+    """``{"baseline": ..., NODE_VERDICTS_KEY: ...}`` for the failing ``ids`` of a non-isolated retest, or ``{}``
+    when no verdict can be told. A node whose failure text names none of the run's landing paths and whose file
+    the run did not write is not the run's: ``pre_existing`` when ``head_red`` finds it red at HEAD, else
+    ``foreign`` (``undeclared-dirt``). Both are evidenced, so the landing reads them non-blocking; the rest stay
+    ``caused``. No landing path set (nothing to attribute against) classifies nothing."""
+    writes, _source = _landing_paths(root, run_id, params)
+    if not ids or not writes:
+        return {}
+    own = _names_own_path(log, ids, writes)
+    other = [i for i in ids if i not in own]
+    if not other:
+        return {}
+    at_head = head_red(other) if head_red is not None else set()
+    pre_existing = [i for i in other if i in at_head]
+    foreign = [i for i in other if i not in at_head]
+    caused = [i for i in ids if i in own]
+    verdicts = {**{i: "caused" for i in caused}, **{i: "foreign" for i in foreign},
+                **{i: "pre_existing" for i in pre_existing}}
+    baseline = {
+        "method": "retest-log", "caused": caused, "foreign": foreign, "pre_existing": pre_existing,
+        "foreign_reason": {i: landing_targeted_tests.UNDECLARED_DIRT for i in foreign},
+        "evidence": sorted([*foreign, *pre_existing]),
+    }
+    return {"baseline": baseline, NODE_VERDICTS_KEY: verdicts}
+
+
+def _summary_failures(log: Path) -> int:
+    """Failed plus errored counts over every pytest summary line of ``log``."""
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    return sum(
+        int(n) for body in _SUMMARY_LINE.findall(text)
+        for n, kind in re.findall(r"(\d+) ([a-z]+)", body) if kind in ("failed", "error", "errors")
+    )
+
+
+def _ran_count(log: Path) -> Optional[int]:
+    """``_ran_total``, with pytest's ``no tests ran in Ns`` closing line read as 0; None with no closing line."""
+    ran = _ran_total(log)
+    if ran is not None:
+        return ran
+    try:
+        return 0 if re.search(r"^\W*no tests ran in [\d.]+s", log.read_text(encoding="utf-8", errors="replace"), re.MULTILINE) else None
+    except OSError:
+        return None
+
+
+def _empty_chunks(log: Path) -> int:
+    """Count of pytest ``no tests ran in Ns`` closing lines in ``log``: sessions that collected 0 items."""
+    try:
+        return len(re.findall(r"^\W*no tests ran in [\d.]+s", log.read_text(encoding="utf-8", errors="replace"), re.MULTILINE))
+    except OSError:
+        return 0
+
+
+def _log_complete(log: Path) -> bool:
+    """True when ``log`` holds a pytest closing summary line."""
+    return _ran_count(log) is not None
+
+
+def _finalise_from_log(path: Path, record: dict, root: Path, run_id: str, params: dict) -> Optional[int]:
+    """Replace a ``running`` ``record`` whose child exited or died with a terminal verdict read from its log
+    (per-node ids from the FAILED/ERROR lines; no JUnit file is written by the launcher). ``fail`` for any
+    failing node, ``pass`` for a log that ran tests, ``error`` for no summary (child died) or zero items ran
+    (typed ``test_infra_failure``, never a pass). Returns the poll exit code, or None when the record was
+    already terminal or cannot be finalised (git unreadable)."""
+    from coordinator_core.git.git_state import head_sha
+
+    log = Path(str(record.get("log") or path.with_suffix(".log")))
+    tests = [str(t) for t in record.get("tests") or []]
+    ran = _ran_count(log)
+    ids = _failed_node_ids(log, root)
+    status, reason = "pass", ""
+    if ran is None:
+        status, reason = "error", "retest child exited without a pytest summary (died before finishing)"
+    elif ids or _summary_failures(log):
+        status = "fail"
+    elif ran == 0:
+        status, reason = "error", "retest ran 0 items"
+    elif empty := _empty_chunks(log):
+        status, reason = "error", f"{empty} retest chunk(s) collected 0 items (test_infra_failure)"
+    try:
+        covered, covered_source = _covered_set(root, run_id, params, covering_dirty_paths, [t.split("::")[0] for t in tests])
+    except RuntimeError:
+        return None
+    out = {
+        "run_id": run_id, "head": head_sha(root), "tests": tests,
+        "covered": landing_retest.landing_fingerprint(root, covered), "covered_source": covered_source,
+        "status": status, "at": datetime.now(timezone.utc).isoformat(), "log": str(log),
+        "finalised_by": "poll",
+    }
+    if reason:
+        out["reason"] = reason
+    if status == "error" and (ran == 0 or ran is not None and reason.endswith("(test_infra_failure)")):
+        from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+        out[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = cov.ZERO_RUN_TEST_INFRA
+    if status == "fail":
+        out[landing_retest.FAILED_TESTS_PARAM] = ids
+        out.update(_classify_reds(root, run_id, params, log, ids))
+    latest = _read_record(path)
+    if latest is not None and latest.get("status") != landing_retest.RETEST_RUNNING:
+        return None
+    _write_record(path, out)
+    print(f"{path} {status}" + (f": {reason}" if reason else ""))
+    return {"pass": 0, "fail": 1}.get(status, 2)
+
+
+def _poll(
+    path: Path, flag: str, value: str, root: Optional[Path] = None, run_id: str = "",
+    params: Optional[dict] = None,
+) -> int:
+    """Print the record's status line; 0 pass, 1 fail, 2 error/stale/absent/abandoned, 3 running. A
+    ``running`` record whose child pid is dead, or whose log is complete with no live child, is finalised
+    from the log first (``root`` given)."""
     record = _read_record(path)
     if record is None:
         print(f"{path} absent: no retest record; start one with {landing_targeted_tests.RETEST_LAUNCHER} --tests <files>")
         return 2
     status = record.get("status")
+    if status == landing_retest.RETEST_RUNNING and root is not None and not _pid_alive(record.get("pid")):
+        log = Path(str(record.get("log") or path.with_suffix(".log")))
+        if record.get("pid") is not None or _log_complete(log):
+            code = _finalise_from_log(path, record, root, run_id, params or {})
+            if code is not None:
+                return code
+            record = _read_record(path) or record
+            status = record.get("status")
     if status == landing_retest.RETEST_RUNNING:
         if retest_abandoned(record):
             print(f"{path} {landing_retest.RETEST_ABANDONED}: retest child abandoned past deadline")
@@ -853,6 +1136,12 @@ def _zero_run_cause(status: str, codes: list, log: Path, log_used: bool) -> Opti
     is budget exhaustion (session not launched or killed at the timeout) or a pytest collection failure."""
     if status == NO_TESTS_STATUS:
         return landing_targeted_tests.ZERO_RUN_EMPTY
+    if status == "error" and NO_TESTS_COLLECTED in codes and (
+        all(c == NO_TESTS_COLLECTED for c in codes) or any(c in (0, 1) for c in codes)
+    ):
+        from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+        return cov.ZERO_RUN_TEST_INFRA
     if status != "error" or any(c in (0, 1) for c in codes):
         return None
     if any(c in (_NOT_LAUNCHED, LAUNCH_TIMED_OUT) for c in codes):
@@ -862,14 +1151,190 @@ def _zero_run_cause(status: str, codes: list, log: Path, log_used: bool) -> Opti
     return None
 
 
-def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float):
+#: Launcher exits typed ``test_infra_failure`` when no test ran: 4 is pytest's usage error (a launcher base
+#: that is not a git sha, a bad argv); 120 is CPython's shutdown flush failure.
+INFRA_EXITS = (4, 120)
+
+#: ``{cwd, argv, rc, detail}`` of every INFRA_EXITS session ``_run_pass`` saw in this process.
+_INFRA_SESSIONS: list[dict] = []
+
+def __getattr__(name: str):
+    """``TEST_INFRA_RETRY_LIMIT``: re-runs of a pass whose outcome is a 0-test ``test_infra_failure``, the one
+    limit ``clean_overlay_verify`` holds for this module and ``test_leg_run``; a second such outcome is reported."""
+    if name == "TEST_INFRA_RETRY_LIMIT":
+        from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+        return cov.TEST_INFRA_RETRY_LIMIT
+    raise AttributeError(name)
+
+#: ``str(log)`` -> ``{limit, first_reason}`` of every pass ``_run_pass_retrying`` re-ran in this process.
+_RETRIED: dict[str, dict] = {}
+
+
+def _infra_exit_detail(rc: int, log: Path, offset: int) -> str:
+    """The cause named in the reason of an INFRA_EXITS session. Exit 120 reads the session's log tail
+    for the stream failure (cp1252 encode vs a pipe closed early). Exit 4 names the session's own first setup
+    or conftest-load error when its log holds one (a usage error is not always a bad launcher base)."""
+    try:
+        with log.open("rb") as fh:
+            fh.seek(max(offset, 0))
+            text = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        text = ""
+    if rc == 4:
+        from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+        named = cov.first_setup_error(text)
+        return f"test_infra_failure: pytest usage error, {named}" if named else (
+            "test_infra_failure: pytest usage error, launcher base or argv unusable"
+        )
+    low = text.lower()
+    if "unicodeencodeerror" in low or "cp1252" in low or "charmap" in low:
+        stream = "cp1252 encode failure"
+    elif "brokenpipeerror" in low or "broken pipe" in low or "errno 32" in low or "closed file" in low:
+        stream = "pipe closed early"
+    else:
+        stream = "stream cause unrecorded (pipe closed early or cp1252)"
+    return f"test_infra_failure: shutdown flush failure, {stream}"
+
+
+def _stamp_infra_exits(record: dict, codes: list, cwd: Path) -> None:
+    """For a pass with no finished session (no exit 0/1) holding an INFRA_EXITS session of ``cwd``: type the
+    record ``test_infra_failure`` and stamp the session's ``argv`` and ``cwd`` as ``infra_session``."""
+    if record.get(landing_targeted_tests.ZERO_RUN_CAUSE_KEY) or any(c in (0, 1) for c in codes):
+        return
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    mine = [s for s in _INFRA_SESSIONS if s["cwd"] == str(cwd)]
+    if mine:
+        record[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = cov.ZERO_RUN_TEST_INFRA
+        record["infra_session"] = mine[0]
+
+
+def _stamp_session_facts(record: dict, log: Path, log_used: bool, codes: list, cwd: Optional[Path] = None) -> None:
+    """Stamp the launched ``argv``; type an INFRA_EXITS pass; and, when a pytest session of ``log`` finished
+    (exit 1) having completed no test and reported only setup errors, ``zero_run_cause`` ``test_infra_failure``
+    plus the first setup error's text as ``first_setup_error`` (and as ``reason`` when the record has none)."""
+    record["argv"] = list(_LAUNCHED_ARGV)
+    if cwd is not None:
+        _stamp_infra_exits(record, codes, cwd)
+    if not (log_used and 1 in codes) or record.get(landing_targeted_tests.ZERO_RUN_CAUSE_KEY):
+        return
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    infra = cov.infra_setup_error(text)
+    if infra:
+        record[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = cov.ZERO_RUN_TEST_INFRA
+        record["first_setup_error"] = infra
+        record.setdefault("reason", f"ran zero tests ({cov.ZERO_RUN_TEST_INFRA}): {infra}")
+
+
+def _is_zero_test_infra(pass_result: "tuple[str, str, list, bool]", log: Path, cwd: Path) -> bool:
+    """True when ``pass_result`` would be recorded with ``zero_run_cause`` ``test_infra_failure`` (the record's own
+    typing, so the retry and the record never disagree)."""
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    status, _reason, codes, log_used = pass_result
+    probe: dict = {}
+    cause = _zero_run_cause(status, codes, log, log_used)
+    if cause:
+        probe[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = cause
+    _stamp_session_facts(probe, log, log_used, codes, cwd)
+    return probe.get(landing_targeted_tests.ZERO_RUN_CAUSE_KEY) == cov.ZERO_RUN_TEST_INFRA
+
+
+def _is_deterministic_usage_error(root: Path, log: Path) -> bool:
+    """True when this pass's only INFRA_EXITS session exited 4 and its log names no setup or conftest error:
+    a launcher base or argv the pytest rejects, which a re-run repeats. A named collection or conftest error
+    (a peer's file mid-edit) may clear, so it stays retryable."""
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    mine = [s for s in _INFRA_SESSIONS if s["cwd"] == str(root)]
+    if not mine or any(s["rc"] != 4 for s in mine):
+        return False
+    try:
+        return not cov.first_setup_error(log.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return True
+
+
+def _run_pass_retrying(
+    run, root: Path, tests: list[str], log_path: Path, deadline: float, marker: str = "",
+) -> "tuple[str, str, list, bool]":
+    """``_run_pass``, re-run up to ``TEST_INFRA_RETRY_LIMIT`` times while its outcome is a 0-test
+    ``test_infra_failure`` that is not a deterministic usage error, and the shared ``deadline`` has time left. A re-run overwrites ``log_path``; the
+    first outcome's reason is kept in ``_RETRIED`` for ``_stamp_retry``."""
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    limit = cov.TEST_INFRA_RETRY_LIMIT
+    result = _run_pass(run, root, tests, log_path, deadline, marker)
+    for _ in range(limit):
+        if (time.monotonic() >= deadline or not _is_zero_test_infra(result, log_path, root)
+                or _is_deterministic_usage_error(root, log_path)):
+            break
+        entry = _RETRIED.setdefault(str(log_path), {"limit": limit, "first_reason": result[1]})
+        _INFRA_SESSIONS[:] = [s for s in _INFRA_SESSIONS if s["cwd"] != str(root)]
+        result = _run_pass(run, root, tests, log_path, deadline, marker)
+        entry["attempts"] = entry.get("attempts", 0) + 1
+    return result
+
+
+def _stamp_retry(record: dict, log: Path) -> None:
+    """``retried: true`` plus the retry limit and the first attempt's reason on ``record`` when ``log``'s pass
+    was re-run; ``zero_run_cause`` is stamped by the caller from the final outcome and stays."""
+    entry = _RETRIED.get(str(log))
+    if entry:
+        record["retried"] = True
+        record["retry_limit"] = entry["limit"]
+        record["retry_first_reason"] = entry["first_reason"]
+
+
+def _row_marker(params: Mapping) -> str:
+    """The ``-m`` expression a plan row names in ``params["test_marker"]``; ``""`` (no marker filter) when none."""
+    named = params.get("test_marker")
+    return named.strip() if isinstance(named, str) else ""
+
+
+def _foreign_rootdir(log: Path, offset: int, root: Path) -> bool:
+    """True when the session output past ``offset`` names a pytest ``rootdir:`` other than ``root`` (a
+    sub-directory config root such as ``coordinator_core/pytest.ini``)."""
+    try:
+        with open(log, "rb") as handle:
+            handle.seek(offset)
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    found = _ROOTDIR_LINE.findall(text)
+    return bool(found) and os.path.normcase(os.path.realpath(found[-1])) != os.path.normcase(os.path.realpath(root))
+
+
+def _absolute_ids(root: Path, group: list[str]) -> list[str]:
+    """``group`` with each repo-root-relative file part made absolute: an absolute path collects under any
+    rootdir pytest picks, where a relative one is only as good as the invocation dir."""
+    out = []
+    for t in group:
+        file_part, sep, rest = t.partition("::")
+        out.append((root / file_part).as_posix() + sep + rest)
+    return out
+
+
+def _run_pass(
+    run, root: Path, tests: list[str], log_path: Path, deadline: float, marker: str = "",
+) -> "tuple[str, str, list, bool]":
     """One full pass of ``tests`` with cwd ``root`` under the shared ``deadline`` (monotonic):
-    ``(status, reason, codes, log_used)``."""
+    ``(status, reason, codes, log_used)``. A session that exits 5 with its log reporting deselection
+    (every collected id deselected by an ini ``addopts`` ``-m``) is re-run once with ``-m <marker>``,
+    which overrides that filter (``""`` selects every marker); a session collecting nothing stays 5."""
     plan = _launch_plan(root, tests)
     if isinstance(plan, str):
         return "error", plan, [], False
     base, groups = plan
     budget = RETEST_CHILD_TIMEOUT_SECS
+    reran = False
     codes: list = []
     failed_cmds: list[str] = []
     broken_msgs: list[str] = []
@@ -884,9 +1349,15 @@ def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float
             if not isinstance(kept, str) and kept[1] == groups and kept[0] != base:
                 argv = [*kept[0], *group]
                 rc, err = _run_session([*kept[0], *group], run, root, log_path, deadline, True)
-        if rc == 4 and err is None and (rejected := _plugin_options_rejected(log_path, offset)):
-            # A box without pytest-timeout/xdist must still judge the tests: retry once without those options.
-            argv = _without_options(argv, rejected)
+        if rc == NO_TESTS_COLLECTED and err is None and _deselected_total(log_path, offset):
+            offset = _log_size(log_path)
+            argv = [*base, "-m", marker, *group]
+            rc, err = _run_session(argv, run, root, log_path, deadline, True)
+            reran = True
+        if rc == NO_TESTS_COLLECTED and err is None and not _deselected_total(log_path, offset) \
+                and _foreign_rootdir(log_path, offset, root):
+            offset = _log_size(log_path)
+            argv = [*base, *_absolute_ids(root, group)]
             rc, err = _run_session(argv, run, root, log_path, deadline, True)
         codes.append(rc)
         cmd = shlex.join(argv)
@@ -902,6 +1373,10 @@ def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float
             failed_cmds.append(cmd)
         elif rc == 4 and (defect := _missing_plugin_defect(log_path, offset, root)):
             broken_msgs.append(f"{defect}: {cmd}")
+        elif rc in INFRA_EXITS:
+            detail = _infra_exit_detail(rc, log_path, offset)
+            _INFRA_SESSIONS.append({"cwd": str(root), "argv": cmd, "rc": rc, "detail": detail})
+            broken_msgs.append(f"launcher exited {rc} with no test results ({detail}) in cwd {root}: {cmd}")
         elif rc not in (0, NO_TESTS_COLLECTED):
             broken_msgs.append(f"launcher exited {rc} with no test results (denied, missing or crashed launcher): {cmd}")
     status, reason = "pass", ""
@@ -912,11 +1387,17 @@ def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float
             reason += "; failing session(s): " + ", ".join(failed_cmds)
     elif failed_cmds:
         status = "fail"
+    elif all(c == NO_TESTS_COLLECTED for c in codes) and any("::" in t for t in tests) and _foreign_rootdir(log_path, 0, root):
+        status = "error"
+        reason = f"every retest session collected 0 items from named node id(s) (test_infra_failure): {', '.join(tests)}"
     elif all(c == NO_TESTS_COLLECTED for c in codes):
         status = NO_TESTS_STATUS
         reason = f"launcher collected no tests from: {', '.join(tests)}"
+    elif NO_TESTS_COLLECTED in codes:
+        status = "error"
+        reason = f"{codes.count(NO_TESTS_COLLECTED)} of {len(codes)} retest chunk(s) collected 0 items (test_infra_failure)"
     if status in ("pass", NO_TESTS_STATUS):
-        unran = _zero_ran_owned(run, root, tests, log_path, deadline)
+        unran = _zero_ran_owned(run, root, tests, log_path, deadline, marker if reran else None)
         if unran:
             with log_path.open("a", encoding="utf-8") as fh:
                 fh.write("".join(f"\nFAILED {t} - {ZERO_RAN_MESSAGE}" for t in unran) + "\n")
@@ -1046,6 +1527,44 @@ def _overlay_sha(root: Path, run_id: str) -> Optional[str]:
     return sha if isinstance(sha, str) and sha else None
 
 
+def _untracked_at_overlay(root: Path, write_set: Sequence[str], overlay: str) -> list[str]:
+    """The ``write_set`` paths present as files in the worktree but absent from ``overlay``'s tree (the run's
+    own new files, never committed into the measured rev). Paths tracked at ``overlay`` stay off the list so
+    its split blobs are not replaced by peer-carrying worktree bytes. Object-store reads only; no git spawn."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.ops.dispatch_emit import landing_export as le
+
+    common = resolve_git_common_dir(root)
+    tree = le._commit_tree(common, overlay)
+    out: list[str] = []
+    for raw in write_set:
+        try:
+            rel = le._norm_landing(root, raw)
+        except le.LandingExportError:
+            continue
+        if (root / rel).is_file() and not le._tracked_at(common, tree, rel):
+            out.append(rel)
+    return out
+
+
+def _resolve_run_base(root: Path, run_id: str, params: dict) -> "tuple[Optional[str], Optional[str]]":
+    """``(base, refusal)``: the run's recorded base as a sha the launcher can clone, or ``(raw, reason)`` when
+    it cannot. A sha-shaped base passes as is; any other value (a run-suffixed ref) is resolved to its commit
+    sha by one ``git rev-parse``; one that names no commit, or leads with ``-``, is refused with the cwd. No
+    recorded base is ``(None, None)``: the export then clones HEAD."""
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    raw = landing_retest.run_base_for(root, run_id, params) or None
+    if raw is None or landing_retest._SHA_RE.match(raw):
+        return raw, None
+    try:
+        if raw.startswith("-"):
+            raise cov.ExportError(f"{raw!r} is an option, not a ref")
+        return cov._commit_sha(root, raw), None
+    except (cov.ExportError, OSError) as exc:
+        return raw, f"run base {raw!r} is not a git sha and does not resolve to one ({exc}); refusing the launch in cwd {root}"
+
+
 def _isolated_body(
     root: Path, path: Path, log_path: Path, run_id: str, params: dict, tests: list[str],
     dropped: list[str], drop_note: str, run, dirty, head_sha,
@@ -1055,18 +1574,29 @@ def _isolated_body(
     is the export's. A failed export build is ``error``, never a live-only run."""
     from coordinator_core.ops.dispatch_emit import landing_export as le
 
+    _LAUNCHED_ARGV.clear()
+    _INFRA_SESSIONS.clear()
+    _RETRIED.clear()
     deadline = time.monotonic() + RETEST_CHILD_TIMEOUT_SECS
     path.parent.mkdir(parents=True, exist_ok=True)
     now = lambda: datetime.now(timezone.utc).isoformat()  # noqa: E731
 
-    def _fail(reason: str, meta: dict) -> int:
-        _write_record(path, {
+    def _fail(reason: str, meta: dict, cause: Optional[str] = None) -> int:
+        record = {
             "run_id": run_id, "status": "error", "tests": tests, "reason": reason,
             "isolated_export": meta, "at": now(),
-        })
+        }
+        if cause:
+            record[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = cause
+        _write_record(path, record)
         print(f"{path} error: {reason}")
         return 2
 
+    run_base, refusal = _resolve_run_base(root, run_id, params)
+    if refusal is not None:
+        from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+        return _fail(refusal, {"run_base": run_base, "cwd": str(root)}, cov.ZERO_RUN_TEST_INFRA)
     meta: dict = {}
     try:
         write_set, source = _landing_paths(root, run_id, params)
@@ -1086,7 +1616,10 @@ def _isolated_body(
         overlay = _overlay_sha(root, run_id)
         if overlay:
             meta["overlay_sha"] = overlay
-            meta["head"] = le.build_head_export(root, export_root, [], overlay).head_sha
+            untracked = _untracked_at_overlay(root, write_set, overlay)
+            if untracked:
+                meta["untracked_overlaid"] = untracked
+            meta["head"] = le.build_head_export(root, export_root, untracked, overlay).head_sha
         else:
             meta["head"] = le.build_head_export(root, export_root, write_set).head_sha
     except RuntimeError as exc:
@@ -1095,15 +1628,16 @@ def _isolated_body(
         return _fail(f"isolated export failed: {exc}", meta)
 
     export_log = path.with_suffix(".export.log")
-    status, reason, codes, export_log_used = _run_pass(run, export_root, tests, export_log, deadline)
-    live_status, live_reason, live_codes, live_log_used = _run_pass(run, root, tests, log_path, deadline)
+    marker = _row_marker(params)
+    status, reason, codes, export_log_used = _run_pass_retrying(run, export_root, tests, export_log, deadline, marker)
+    live_status, live_reason, live_codes, live_log_used = _run_pass_retrying(run, root, tests, log_path, deadline, marker)
     baseline: dict = {}
     reverify_ids = _reverify_failing_ids(params)
     export_red = status == "fail" and export_log_used and 1 in codes and bool(_failed_node_ids(export_log, export_root))
     if export_red or (status == "pass" and reverify_ids):
         baseline = _head_baseline(
             root, run, tests, export_root, export_log, path.with_suffix(".head.log"), deadline,
-            landing_retest.run_base_for(root, run_id, params) or None, meta["head"], write_set,
+            run_base, meta["head"], write_set,
             reverify_ids, export_passed=not export_red,
         )
         if export_red:
@@ -1355,6 +1889,20 @@ def _names_own_path(log: Path, nodes: Sequence[str], write_set: Sequence[str]) -
     return red_attribution.names_own_path(text, nodes, write_set)
 
 
+def classify_real_tree_reds(
+    log: Path, root: Path, write_set: Sequence[str],
+) -> "tuple[list[str], list[str]]":
+    """``(own, foreign)`` node ids of the FAILED/ERROR lines in a real-tree pytest ``log``: an id in a
+    ``write_set`` test file or whose failure text names a ``write_set`` path is the run's own; any other red is a
+    peer's dirt (the rule ``_write_dual`` applies to a live-only red). An empty ``write_set`` names no
+    owner, so every red stays own: ownership is never granted away without a record."""
+    ids = _failed_node_ids(log, root)
+    if not write_set:
+        return ids, []
+    mine = _names_own_path(log, ids, write_set)
+    return [i for i in ids if i in mine], [i for i in ids if i not in mine]
+
+
 _SECTION_HEAD = re.compile(r"^_{2,} (.+?) _{2,}$", re.MULTILINE)
 _SUMMARY_HEAD = re.compile(r"^=+ short test summary info =+$", re.MULTILINE)
 _PATH_TOKEN = re.compile(r"(?<![\w./\\-])((?:[\w.-]+/)+[\w.-]+\.\w+)")
@@ -1392,8 +1940,9 @@ def _peer_held_reds(
     root: Path, export_root: Path, export_log: Path, run_id: str, write_set: Sequence[str], ids: Sequence[str],
 ) -> dict[str, list[str]]:
     """``{id: [peer-held paths]}`` for each of ``ids`` whose failure text names a path outside ``write_set``
-    that a live peer run holds (one claim lookup over every named path) and names none of ``write_set``: a
-    red on the run's own paths stays the run's. Empty when nothing is named or held. No git spawn per id.
+    that a live peer run holds (one claim lookup over every named path), or whose test file or named path is a
+    declared write of a run parked behind ``run_id`` (``_parked_waiter_paths``), and names none of ``write_set``:
+    a red on the run's own paths stays the run's. Empty when nothing is named or held. No git spawn per id.
     Trap: only ``E`` lines and the FAILED message name paths; a peer-held path only in an assertion message with
     no own path named reads foreign."""
     from coordinator_core.ops.dispatch_emit.run_write_set import _split_peer_held
@@ -1401,11 +1950,65 @@ def _peer_held_reds(
     own = {str(w).replace("\\", "/") for w in write_set}
     named = _named_paths(export_log, (export_root, root), ids)
     candidates = sorted({p for paths in named.values() for p in paths} - own)[:_MAX_NAMED_PATHS]
-    if not candidates:
-        return {}
-    held = _split_peer_held(root, candidates, "", run_id)[1]
-    out = {i: sorted(p for p in paths if p in held) for i, paths in named.items() if not paths & own}
-    return {i: hit for i, hit in out.items() if hit}
+    held = _split_peer_held(root, candidates, "", run_id)[1] if candidates else {}
+    waiting_all = _parked_waiter_paths(root, run_id)
+    waiting = waiting_all - own
+    ranges_by_file: dict[str, str] = {}
+    out: dict[str, list[str]] = {}
+    for i, paths in named.items():
+        test_file = i.replace("\\", "/").partition("::")[0]
+        if test_file in own and test_file in waiting_all and not (paths & own) - {test_file}:
+            if _red_on_unproduced_hunk(root, run_id, test_file, i, ranges_by_file):
+                out[i] = [test_file]
+                continue
+        if paths & own:
+            continue
+        hit = {p for p in paths if p in held} | {p for p in {*paths, test_file} if p in waiting}
+        if hit:
+            out[i] = sorted(hit)
+    return out
+
+
+def _red_on_unproduced_hunk(
+    root: Path, run_id: str, test_file: str, node_id: str, ranges_by_file: dict[str, str],
+) -> bool:
+    """True when ``node_id``'s parameter id (else ``def <test name>``) sits in a hunk of the shared ``test_file``
+    that ``run_id`` did not produce (``hunk_provenance._unproduced``): the parked waiter's hunk, not the run's.
+    False when provenance is unreadable. Trap: attribution is textual, so a param id repeated in the run's own
+    hunk of the same file reads as the waiter's only when the unproduced lines carry it."""
+    from coordinator_core.ops.dispatch_emit import hunk_provenance
+
+    try:
+        if test_file not in ranges_by_file:
+            with hunk_provenance.invariants_scope(root, run_id):
+                ranges_by_file[test_file] = hunk_provenance._unproduced(root, run_id, test_file)[0]
+        ranges = ranges_by_file[test_file]
+        lines = (root / test_file).read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:  # noqa: BLE001 -- unreadable provenance never reclassifies
+        return False
+    text = ""
+    for part in ranges.split(","):
+        first, _dash, last = part.strip().partition("-")
+        if first.isdigit():
+            text += "\n".join(lines[int(first) - 1:int(last or first)]) + "\n"
+    leaf = node_id.replace("\\", "/").partition("::")[2].rpartition("::")[2]
+    name, bracket, param = leaf.partition("[")
+    token = param[:-1] if bracket and param.endswith("]") else f"def {name}"
+    return bool(token) and (token in text if bracket else re.search(rf"{re.escape(token)}\(", text) is not None)
+
+
+def _parked_waiter_paths(root: Path, run_id: str) -> set[str]:
+    """Declared write paths of the runs parked behind ``run_id`` (``halted_hold_release._parked_behind``): a
+    waiter minted after the run holds nothing against it, so its attributed hunk is not the run's. Empty when
+    nothing waits. One write-set read per waiter."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+    from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set_full
+
+    out: set[str] = set()
+    for waiter in halted_hold_release._parked_behind(root, run_id):
+        if waiter != run_id:
+            out.update(str(p).replace("\\", "/") for p in run_write_set_full(root, waiter, "")[0])
+    return out
 
 
 def _write_dual(
@@ -1433,11 +2036,6 @@ def _write_dual(
         "live": {"status": live_status, "failed_tests": live_failed},
     }
     record.update(baseline or {})
-    if status == "fail" and export_log_used and not export_failed:
-        # A failing verdict names its node ids; with none parsable it is infra, never a test failure.
-        status = record["status"] = record["export"]["status"] = "error"
-        reason = (reason + "; " if reason else "") + "pytest failed but the log names no failing node id"
-        record[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = NODELESS_FAIL_CAUSE
     measured_baseline = record.get("baseline")
     if isinstance(measured_baseline, dict) and measured_baseline.get("caused") and export_log_used:
         peer = _peer_held_reds(
@@ -1449,6 +2047,7 @@ def _write_dual(
             measured_baseline["foreign_reason"] = {
                 **measured_baseline.get("foreign_reason", {}), **{n: landing_targeted_tests.PEER_HELD_PATH for n in peer},
             }
+            measured_baseline["evidence"] = sorted({*measured_baseline.get("evidence", []), *peer})
     if isinstance(measured_baseline, dict) and export_log_used and _ran_total(export_log) is not None:
         live_only = [n for n in live_failed if n not in export_failed and n not in measured_baseline.get("foreign", [])]
         own = _names_own_path(log_path, live_only, meta["write_set"])
@@ -1471,6 +2070,9 @@ def _write_dual(
     cause = _zero_run_cause(status, codes, export_log, export_log_used)
     if cause:
         record[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = cause
+    _stamp_session_facts(record, export_log, export_log_used, codes, Path(meta["root"]))
+    _stamp_retry(record, export_log)
+    _stamp_retry(record["live"], log_path)
     if status in ("fail", "error") and export_failed:
         record[landing_retest.FAILED_TESTS_PARAM] = export_failed
     if dropped:
@@ -1489,8 +2091,15 @@ def main(
     run: Callable[..., "int | str | None"] = _run_argv,
     dirty: Callable[[Path], list[str]] = covering_dirty_paths,
     spawn: Optional[Callable[..., bool]] = None,
+    wait_budget_secs: Optional[float] = WARM_WAIT_BUDGET_SECS,
 ) -> int:
+    """Entry for both the cold ``python -m`` and the warm ``--retest-targeted`` route. With ``--poll
+    --wait`` the wait is capped at ``wait_budget_secs`` (None: unbounded, cold only); a capped wait
+    that sees ``running`` returns 3 so the caller re-polls."""
     from coordinator_core.git.git_state import head_sha
+    _LAUNCHED_ARGV.clear()
+    _INFRA_SESSIONS.clear()
+    _RETRIED.clear()
     ap = argparse.ArgumentParser(prog="retest_targeted")
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--from-task-output")
@@ -1519,10 +2128,16 @@ def main(
 
     path = landing_retest.fresh_verdict_path(root, run_id)
     if args.poll:
-        code = _poll(path, *_input_pair(args))
+        code = _poll(path, *_input_pair(args), root=root, run_id=run_id, params=params)
+        limit = None if wait_budget_secs is None else time.monotonic() + wait_budget_secs
         while args.wait and code == 3:
-            time.sleep(_WAIT_INTERVAL_SECS)
-            code = _poll(path, *_input_pair(args))
+            step = _WAIT_INTERVAL_SECS
+            if limit is not None:
+                step = min(step, limit - time.monotonic())
+                if step <= 0:
+                    break
+            time.sleep(step)
+            code = _poll(path, *_input_pair(args), root=root, run_id=run_id, params=params)
         return code
 
     tests = _with_invariants(root, _tests_to_run(args.tests, params), dirty, run_id, params)
@@ -1545,12 +2160,24 @@ def main(
     if not args.detached_child:
         return _start_detached(args, root, path, log_path, run_id, tests, spawn or spawn_detached, dropped)
 
+    _stamp_pid(path)
+    try:
+        code = _child(args, root, path, log_path, run_id, params, tests, dropped, drop_note, run, dirty, head_sha)
+    except BaseException as exc:
+        _seal_if_running(path, run_id, tests, f"retest child died: {type(exc).__name__}: {exc}")
+        raise
+    _seal_if_running(path, run_id, tests, "retest child exited without writing a verdict")
+    return code
+
+
+def _child(args, root, path, log_path, run_id, params, tests, dropped, drop_note, run, dirty, head_sha) -> int:
+    """The detached child's work: run ``tests`` and write the terminal record (isolated or live-tree)."""
     if args.isolated_export:
         return _isolated_child(root, path, log_path, run_id, params, tests, dropped, drop_note, run, dirty, head_sha)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    status, reason, codes, log_used = _run_pass(
-        run, root, tests, log_path, time.monotonic() + RETEST_CHILD_TIMEOUT_SECS,
+    status, reason, codes, log_used = _run_pass_retrying(
+        run, root, tests, log_path, time.monotonic() + RETEST_CHILD_TIMEOUT_SECS, _row_marker(params),
     )
 
     test_files = [t.split("::")[0] for t in tests]
@@ -1579,8 +2206,17 @@ def main(
     cause = _zero_run_cause(status, codes, log_path, log_used)
     if cause:
         record[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = cause
+    _stamp_session_facts(record, log_path, log_used, codes, root)
+    _stamp_retry(record, log_path)
     if log_used and status in ("fail", "error") and 1 in codes:
-        record[landing_retest.FAILED_TESTS_PARAM] = _failed_node_ids(log_path, root)
+        failed = _failed_node_ids(log_path, root)
+        record[landing_retest.FAILED_TESTS_PARAM] = failed
+        if status == "fail":
+            deadline = time.monotonic() + RETEST_CHILD_TIMEOUT_SECS
+            record.update(_classify_reds(
+                root, run_id, params, log_path, failed,
+                lambda ids: _head_red_ids(run, root, ids, log_path, deadline),
+            ))
     if dropped:
         record["dropped"] = dropped
         record["note"] = drop_note
@@ -1592,4 +2228,4 @@ def main(
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(wait_budget_secs=None))

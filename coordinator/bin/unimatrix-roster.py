@@ -872,6 +872,8 @@ def parse_args(argv) -> argparse.Namespace:
     p.add_argument("--remote", required=True, help="ssh alias of the far box on the LAN (tried first)")
     p.add_argument("--tunnel-remote", default=None, help=f"ssh alias over the tunnel, used only when --remote does not answer (default: ${TUNNEL_ENV})")
     p.add_argument("--key", default=None)
+    p.add_argument("--supervisor", type=int, default=None,
+                   help="pid this roster exits with; unset, the roster outlives its launcher (autolink detaches it)")
     a = p.parse_args(argv)
     a.key_defaulted = not a.key
     if not a.key:
@@ -1014,16 +1016,40 @@ def mirror_name(name, remote, far_sock=None, scan=None):
     return bare_name(name)
 
 
-def inbound_names():
+def inbound_names() -> set:
     """Names a far box already reaches us by: live local entries its own relay holds (`unimatrixMirror`).
 
     The far box's inbox relay already gives such a session a local socket, so mirroring it again
     from here would list the one far session twice under one name. An inbox mirror with no peer key
     is not listable by the harness, so it never stands in for the far roster row."""
+    return {bare_name(d.get("name")) for d in _inbound_mirrors()}
+
+
+def _inbound_mirrors() -> list:
+    """The listable relay-pushed mirror entries on this box: live, listed and keyed."""
     rows = session_entries()
     sess = sessions_dir()
-    return {bare_name(d.get("name")) for d in rows
-            if d.get("unimatrixMirror") and listed_row(d, rows) and _has_peer_key(sess, d)}
+    return [d for d in rows if d.get("unimatrixMirror") and listed_row(d, rows) and _has_peer_key(sess, d)]
+
+
+def pushed_from_other_box(d, remote) -> bool:
+    """True when pushed mirror `d` is positively attributed to a box other than `remote`: a differing box
+    stamp, else a differing `<bare>.<box>` label. An entry naming no box is never foreign."""
+    box = d.get(_contract().BOX_FIELD)
+    if box:
+        return box != _contract().box_id(remote)
+    label = str(d.get("name") or "").partition(LABEL_SEP)[2]
+    return bool(label) and not pushed_from(d, remote)
+
+
+def other_box_only_names(remote) -> set:
+    """Bare names that only pushed mirrors from boxes other than `remote` hold.
+
+    Trap: session names are numbered per box, so another box's pushed mirror can carry the same bare
+    name as one of `remote`'s sessions; it must not shadow that session's own far row."""
+    held = _inbound_mirrors()
+    mine = {bare_name(d.get("name")) for d in held if not pushed_from_other_box(d, remote)}
+    return {bare_name(d.get("name")) for d in held if pushed_from_other_box(d, remote)} - mine
 
 
 def _has_peer_key(sess, d) -> bool:
@@ -1090,10 +1116,11 @@ def prune_superseded_inbound(far_rows, remote, say):
         say(f"unlist pushed mirror {d.get('name')} session {d.get('sessionId')}: the far box lists another session under that name")
 
 
-def far_rows(fetched, remote, skip, say, keep=()):
+def far_rows(fetched, remote, skip, say, keep=()) -> dict:
     """The far rows worth mirroring after the superseded pushed mirrors of this box are dropped."""
     prune_superseded_inbound(fetched, remote, say)
-    return mirrorable(fetched, skip, inbound_names(), keep)
+    inbound = inbound_names() - other_box_only_names(remote)
+    return mirrorable(fetched, skip, inbound, keep)
 
 
 def mirrorable(rows, skip, inbound, keep=()):
@@ -1262,6 +1289,27 @@ def unmirror(pid):
     drop_session_files(pid)
 
 
+_SESSION_JSON = {}
+_SESSION_JSON_MAX = 4096
+
+
+def read_session_json(path) -> object:
+    """Parsed JSON of a registry file, re-read only when its mtime or size changed: an idle poll reads no byte.
+
+    Raises what open/json.load raise. Callers treat the result as read-only."""
+    st = os.stat(path)
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _SESSION_JSON.get(path)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if len(_SESSION_JSON) >= _SESSION_JSON_MAX:
+        _SESSION_JSON.clear()
+    _SESSION_JSON[path] = (stamp, data)
+    return data
+
+
 def reap_orphaned_mirrors(remote, say, unbacked=False, keep=(), bridges=None):
     """Remove this far box's mirrors whose roster supervisor is gone, stopping a bridge that is still its process.
 
@@ -1285,8 +1333,7 @@ def reap_orphaned_mirrors(remote, say, unbacked=False, keep=(), bridges=None):
             continue
         path = os.path.join(sessions_dir(), f)
         try:
-            with open(path, encoding="utf-8") as fh:
-                d = json.load(fh)
+            d = read_session_json(path)
         except (OSError, ValueError):
             readable = False
             continue
@@ -1452,8 +1499,7 @@ def reap_unbacked_agy_faces(say) -> None:
         if not m:
             continue
         try:
-            with open(os.path.join(sessions_dir(), f), encoding="utf-8") as fh:
-                d = json.load(fh)
+            d = read_session_json(os.path.join(sessions_dir(), f))
         except (OSError, ValueError):
             continue
         pid = int(m.group(1))
@@ -1911,9 +1957,27 @@ def require_relay_key(cfg) -> None:
         raise MissingRelayKeyError(f"missing-relay-key: no unimatrix-zero relay key at {cfg.key}; install it or pass --key")
 
 
+def supervisor_record(pid, say) -> dict | None:
+    """`{pid, procStart}` for the `--supervisor` pid, read once at startup; None when none was named.
+
+    A named pid whose start cannot be read records no procStart, so `supervisor_live` reads it as gone."""
+    if pid is None:
+        return None
+    start = guarded(say, "supervisor start", proc_start, pid, default=None)
+    return {"pid": pid, "procStart": start}
+
+
 def main(argv=None) -> None:
     cfg = parse_args(sys.argv[1:] if argv is None else argv)
     require_relay_key(cfg)
+    lock = _core_module("singleton").hold("roster", cfg.remote)
+    try:
+        _serve(cfg)
+    finally:
+        lock.close()
+
+
+def _serve(cfg) -> None:
     skip = set(cfg.skip)
     log = open(cfg.log, "a", encoding="utf-8", buffering=1)
 
@@ -1929,6 +1993,7 @@ def main(argv=None) -> None:
     export_settings_home()
     stamp_supervisor(cfg.remote, "bridge")
     own_start = guarded(say, "own start", proc_start, os.getpid(), default=None)
+    sup = supervisor_record(cfg.supervisor, say)
     bridges = {}
     link_path = link_state_path(cfg.remote)
     # No record yet: None, so the first poll writes one and the G-EM watch sees a new box's first state.
@@ -1939,6 +2004,11 @@ def main(argv=None) -> None:
         while True:
             if own_start is not None and stop_requested(own_start):
                 say("STOPPED-BY-REQUEST")
+                clear_stop(os.getpid())
+                break
+            if sup is not None and not _liveness().supervisor_live(sup):
+                say(f"SUPERVISOR-GONE pid {sup['pid']}; exiting")
+                _core_module("singleton").log_owner_gone(sup["pid"], "roster")
                 clear_stop(os.getpid())
                 break
             ok, why = guarded(say, "link probe", link_probe, cfg.remote, cfg.tunnel_remote,

@@ -62,6 +62,17 @@ def test_reaps_argv_path_under_root_and_spares_decoy(tmp_path, procs):
     assert decoy.poll() is None
 
 
+def test_alive_under_sees_owned_daemon_and_not_a_decoy_root(tmp_path, procs):
+    root = tmp_path / "scratch"
+    inside = _spawn([str(_stub(root / "home" / ".codex")), "app-server", "--managed-daemon"])
+    procs.append(inside)
+
+    assert codex_reap.alive_under(root) is True
+    assert codex_reap.alive_under(tmp_path / "elsewhere") is False
+    codex_reap.reap_codex_home(root)
+    assert codex_reap.alive_under(root) is False
+
+
 def test_reaps_pid_update_loop_marker(tmp_path, procs):
     root = tmp_path / "scratch"
     loop = _spawn([str(_stub(root / "home" / ".codex")), "pid-update-loop"])

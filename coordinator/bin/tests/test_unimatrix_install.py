@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -1841,6 +1842,105 @@ def test_trust_refuses_a_hooks_file_without_both_handlers(monkeypatch, tmp_path)
     assert not ok and "exactly one" in note
 
 
+_DAEMON_FORKING_CODEX = '''
+import json, os, subprocess, sys
+cfg = json.load(open(os.environ["STUB_CFG"]))
+flags = {"creationflags": 0x8 | 0x200} if os.name == "nt" else {"start_new_session": True}
+daemon = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(60)", "codex", "app-server", "--managed-daemon", os.environ["CODEX_HOME"]],
+    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **flags)
+open(cfg["pidfile"], "w").write(str(daemon.pid))
+if cfg["mode"] == "die":
+    sys.exit(0)
+trusted = {}
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    res = {}
+    if msg["method"] == "hooks/list":
+        res = {"data": [{"hooks": [dict(r, trustedHash=trusted[r["key"]]) if r["key"] in trusted else r for r in cfg["rows"]]}]}
+    elif msg["method"] == "config/value/write":
+        trusted[msg["params"]["keyPath"].split('"')[1]] = msg["params"]["value"]
+    print(json.dumps({"id": msg["id"], "result": res}), flush=True)
+'''
+
+
+def _daemon_pids_under(home):
+    psutil = pytest.importorskip("psutil")
+    found = []
+    for p in psutil.process_iter():
+        try:
+            if str(home) in " ".join(p.cmdline()) or p.environ().get("CODEX_HOME") == str(home):
+                found.append(p.pid)
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
+            continue
+    return found
+
+
+@pytest.mark.parametrize("mode", ["ok", "die"])
+def test_trust_reaps_the_codex_daemon_left_under_its_codex_home(monkeypatch, tmp_path, mode):
+    psutil = pytest.importorskip("psutil")
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    chp = home / "hooks.json"
+    ui.seed_codex_hook(chp, tmp_path, str(tmp_path))
+    data = _hooks_file(chp)
+    handlers = [(event, handler["command"]) for event, groups in data["hooks"].items()
+                for group in groups for handler in group.get("hooks", [])]
+    rows = [{"key": f"k{i}", "eventName": event[0].lower() + event[1:], "command": command,
+             "sourcePath": str(chp), "enabled": True, "currentHash": f"h{i}"}
+            for i, (event, command) in enumerate(handlers)]
+    stub = tmp_path / "codex_stub.py"
+    stub.write_text(_DAEMON_FORKING_CODEX, encoding="utf-8")
+    pidfile = tmp_path / "daemon.pid"
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"pidfile": str(pidfile), "mode": mode, "rows": rows}), encoding="utf-8")
+    monkeypatch.setenv("STUB_CFG", str(cfg))
+    monkeypatch.setattr(ui.shutil, "which", lambda n: sys.executable)
+    real_popen = ui.subprocess.Popen
+    monkeypatch.setattr(ui.subprocess, "Popen", lambda argv, **k: real_popen([sys.executable, str(stub), *argv[1:]], **k))
+    tripwire = sys.modules["coordinator_core.conftest"]
+    own_tree = tripwire._is_own_process_tree
+    monkeypatch.setattr(
+        tripwire, "_is_own_process_tree",
+        lambda pid: own_tree(pid) or (pidfile.exists() and pid == int(pidfile.read_text(encoding="utf-8"))))
+    try:
+        ok, note = ui.trust_codex_hook(chp, dest_dir=tmp_path)
+        assert ok is (mode == "ok"), note
+        assert pidfile.exists()
+        daemon = int(pidfile.read_text(encoding="utf-8"))
+        assert not psutil.pid_exists(daemon)
+        assert _daemon_pids_under(home) == []
+    finally:
+        if pidfile.exists() and psutil.pid_exists(int(pidfile.read_text(encoding="utf-8"))):
+            psutil.Process(int(pidfile.read_text(encoding="utf-8"))).kill()
+
+
+def test_trust_reap_failure_never_raises_out(monkeypatch, tmp_path):
+    calls = []
+
+    def boom(root, since=None):
+        calls.append((root, since))
+        raise RuntimeError("enumeration failed")
+
+    monkeypatch.setattr(ui, "reap_codex_home", boom)
+    (ok, note), _ = _trust_with(monkeypatch, tmp_path)
+    assert ok, note
+    assert len(calls) == 1
+
+
+def test_trust_reap_spares_daemons_older_than_the_call(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(ui, "reap_codex_home", lambda root, since=None: calls.append((root, since)) or [])
+    before = time.time()
+    (ok, note), _ = _trust_with(monkeypatch, tmp_path)
+    assert ok, note
+    assert len(calls) == 1
+    root, since = calls[0]
+    assert root == tmp_path and since is not None and before - 5 <= since <= time.time()
+
+
 @pytest.mark.parametrize("trust_result", [
     (False, "codex not on PATH; hook stays untrusted until reviewed in /hooks"),
     (False, "codex did not discover the pretooluse handler (features.hooks disabled?)"),
@@ -3328,6 +3428,44 @@ def test_restart_refusal_exits_8_and_keeps_the_copy(monkeypatch, tmp_path):
     assert rc == 8 and len(calls) == 1
     assert "REFUSE: router restart failed: lease pid 7 still held" in out
     assert (tmp_path / "d" / ui.ROUTER_SCRIPT).read_text(encoding="utf-8") == "# stub PipeServer v2\n"
+
+
+def _proc_update_install(monkeypatch, tmp_path, *, change_proc):
+    """Install, record a live router's codeDigest of that install, optionally change the engine's _unimatrix/proc.py,
+    reinstall with a live-router stand-in (the restart itself is stubbed: this pins the install's handoff decision). Returns (rc, out, restart calls, dest)."""
+    src = _stub_src(monkeypatch, tmp_path)
+    (src / "_unimatrix").mkdir()
+    proc_src = src / "_unimatrix" / "proc.py"
+    proc_src.write_text("def codex_holder_live():\n    return False\n", encoding="utf-8")
+    _home(monkeypatch, tmp_path)
+    dest = tmp_path / "d"
+    assert _run(["--install"], "2.1.316", dest)[0] == 0
+    (dest / "router").mkdir(exist_ok=True)
+    (dest / "router" / "router.pid.json").write_text(
+        json.dumps({"pid": 1, "procStart": "x", "codeDigest": ui.router_closure_digest(dest)}), encoding="utf-8")
+    if change_proc:
+        proc_src.write_text("def codex_holder_live():\n    return True\n", encoding="utf-8")
+    calls = []
+
+    def restart(d, say):
+        calls.append(d)
+        return {"stopped": "handshake", "old_pid": 11, "new_pid": 22}
+
+    buf = io.StringIO()
+    rc = ui.main(["--install"], version_text="2.1.316", dest_dir=dest, out=buf, hooks_path=tmp_path / "h.json",
+                 router_live=lambda d: True, restart_router=restart)
+    return rc, buf.getvalue(), calls, dest
+
+
+def test_install_hands_a_live_router_off_when_only_unimatrix_proc_changed(monkeypatch, tmp_path):
+    rc, out, calls, dest = _proc_update_install(monkeypatch, tmp_path, change_proc=True)
+    assert rc == 0 and calls == [dest] and "router restarted: handshake old pid 11 new pid 22" in out
+    assert "return True" in (dest / "_unimatrix" / "proc.py").read_text(encoding="utf-8")
+
+
+def test_install_leaves_a_live_router_alone_when_unimatrix_proc_is_unchanged(monkeypatch, tmp_path):
+    rc, out, calls, _ = _proc_update_install(monkeypatch, tmp_path, change_proc=False)
+    assert rc == 0 and calls == [] and "router restarted" not in out
 
 
 def test_router_closure_digest_tracks_closure_bytes(tmp_path):

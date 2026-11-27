@@ -148,7 +148,7 @@ def mark_stale(name, state, until, box):
 # Every verb parse_mode accepts; a sender probes this list instead of guessing a far mirror's version.
 CAPABILITIES = ["roster", "source", "specs", "capabilities", "send", "send-batch", "send-to", "send-named",
                 "send-session", "receipts", "inbox-mux", "inbox", "reply-inbox", "mirror-stale",
-                "membership", "grant", "revoke", "keypin", "roster-mirrors", "freshness"]
+                "membership", "grant", "revoke", "keypin", "roster-mirrors", "freshness", "reap-scratch"]
 
 
 def parse_mode(original_command) -> "tuple | None":
@@ -166,6 +166,8 @@ def parse_mode(original_command) -> "tuple | None":
         return "specs", None
     if cmd == ["freshness"]:
         return "freshness", None
+    if cmd == ["reap-scratch"]:
+        return "reap-scratch", None
     if len(cmd) == 2 and cmd[0] == "send" and cmd[1].isdigit():
         return "send", int(cmd[1])
     if len(cmd) == 2 and cmd[0] == "send-batch" and cmd[1].isdigit():
@@ -1512,6 +1514,72 @@ def freshness(run=None, box_id=None):
         return {"ok": False, "reason": f"freshness_failed:{type(exc).__name__}"}
 
 
+def _scratch_roots() -> "list[Path]":
+    """This checkout's scratch/ plus machine-local paths.scratch_root/<repo name> when that key is set."""
+    repo = Path(__file__).resolve().parents[2]
+    roots = [repo / "scratch"]
+    try:
+        from coordinator_core import machine_resolver
+        configured = machine_resolver.registry_get("paths.scratch_root")
+    except Exception:
+        configured = None
+    if configured:
+        roots.append(Path(configured) / repo.name)
+    return roots
+
+
+def _codex_legs(root) -> "list[Path]":
+    """Leg dirs under `root`: the parent of each `home` dir holding `codex` or `.codex`, at any depth."""
+    legs = []
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        try:
+            entries = [e for e in os.scandir(cur) if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            continue
+        for e in entries:
+            if e.name == "home" and any(os.path.isdir(os.path.join(e.path, n)) for n in ("codex", ".codex")):
+                if Path(cur) != root:
+                    legs.append(Path(cur))
+            elif e.name not in (".git", "node_modules"):
+                stack.append(e.path)
+    return legs
+
+
+def reap_scratch(roots=None, reap=None, alive_under=None, remove=None) -> dict:
+    """The `reap-scratch` mode's reply: {"ok", "killed", "removed"}; takes no caller input.
+
+    Reaps codex processes under each codex-home leg dir in the scratch roots and removes a leg dir only when
+    it killed something and no matching process survives. Never raises.
+    """
+    try:
+        if reap is None:
+            reap = _core_module("codex_reap").reap_codex_home
+        alive_under = alive_under or _core_module("codex_reap").alive_under
+        if remove is None:
+            import shutil
+            remove = shutil.rmtree
+    except Exception as exc:
+        return {"ok": False, "reason": f"reaper_unavailable:{type(exc).__name__}"}
+    killed, removed, seen = [], [], set()
+    try:
+        for root in (_scratch_roots() if roots is None else roots):
+            for leg in _codex_legs(Path(os.path.realpath(root))):
+                if leg in seen:
+                    continue
+                seen.add(leg)
+                gone = reap(leg)
+                killed.extend(gone)
+                if gone and not alive_under(leg):
+                    remove(leg, ignore_errors=True)
+                    if not leg.exists():
+                        removed.append(str(leg))
+    except Exception as exc:
+        return {"ok": False, "reason": f"reap_failed:{type(exc).__name__}", "killed": killed, "removed": removed}
+    return {"ok": True, "killed": killed, "removed": removed}
+
+
 def receive_revoke():
     """The engine's arrival check for a relayed revoke; the engine is resolved lazily."""
     try:
@@ -2305,6 +2373,10 @@ def main() -> None:
         sys.exit(0 if reply.get("ok") is True else 1)
     if mode == "freshness":
         reply = freshness()
+        print(json.dumps(reply))
+        sys.exit(0 if reply.get("ok") is True else 1)
+    if mode == "reap-scratch":
+        reply = reap_scratch()
         print(json.dumps(reply))
         sys.exit(0 if reply.get("ok") is True else 1)
     if mode == "mirror-stale":

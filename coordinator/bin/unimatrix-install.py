@@ -1709,6 +1709,7 @@ from _unimatrix.install_toml import (  # noqa: E402, F401
     _toml_inline,
     seed_codex_status_line,
 )
+from _unimatrix.codex_reap import reap_codex_home  # noqa: E402
 
 
 def _tui_field_edit(text, value, field) -> str:
@@ -3252,7 +3253,7 @@ def resolve_engine_root():
                   "run: machine-local set repos.claude_klabauter <published klabauter root>")
 
 
-def trust_codex_hook(hooks_path, timeout=30, *, dest_dir=None):
+def trust_codex_hook(hooks_path, timeout=30, *, dest_dir=None) -> tuple[bool, str]:
     """Mark our Codex SessionStart hook trusted in config.toml via `codex app-server`.
 
     Codex runs a user hook only after its content hash is recorded under hooks.state; the app-server
@@ -3266,6 +3267,7 @@ def trust_codex_hook(hooks_path, timeout=30, *, dest_dir=None):
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    started = time.time() - 1.0
     try:
         proc = subprocess.Popen(
             [exe, "app-server", "--listen", "stdio://"],
@@ -3352,6 +3354,10 @@ def trust_codex_hook(hooks_path, timeout=30, *, dest_dir=None):
         timer.cancel()
         proc.kill()
         proc.wait()
+        try:
+            reap_codex_home(hooks_file.parent, since=started)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def enroll_codex_runtime(engine_root, *, consent=False, check=False, dest_dir=None, out=None):
